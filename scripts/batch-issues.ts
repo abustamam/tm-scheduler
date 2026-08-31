@@ -159,6 +159,13 @@ function buildFanIn(files: string[]): Map<string, number> {
 
 // ---- issues ------------------------------------------------------------------
 
+/**
+ * How many issues and PRs to fetch. Named rather than inlined so the cap check
+ * below compares against the same number the request used — a drift between
+ * those two is a truncation warning that can never fire.
+ */
+const ISSUE_FETCH_LIMIT = 200;
+
 type RawIssue = {
 	number: number;
 	title: string;
@@ -173,7 +180,7 @@ function fetchIssues(): RawIssue[] {
 		"--state",
 		"open",
 		"--limit",
-		"200",
+		String(ISSUE_FETCH_LIMIT),
 		"--json",
 		"number,title,body,labels",
 	];
@@ -183,7 +190,32 @@ function fetchIssues(): RawIssue[] {
 		maxBuffer: 32 * 1024 * 1024,
 	});
 	const all = JSON.parse(out) as RawIssue[];
-	return explicit ? all.filter((i) => explicit.includes(i.number)) : all;
+
+	// The fetch cap is silent by default: `gh` returns exactly `--limit` rows and
+	// says nothing, while the header below still prints a confident total. A
+	// backlog at the cap is a plan missing whatever fell off the end.
+	if (all.length >= ISSUE_FETCH_LIMIT) {
+		console.log(
+			`⚠️  Fetched exactly ${ISSUE_FETCH_LIMIT} issues — the cap. There are\n` +
+				`    probably more, and they are NOT in the plan below. Narrow with\n` +
+				`    --label, or raise the limit in fetchIssues().\n`,
+		);
+	}
+
+	if (!explicit) return all;
+
+	// An explicitly requested number that `gh` did not return lands nowhere in
+	// the report otherwise — not even in NEEDS A FILE PATH — so a transposed
+	// digit silently produces a plan one issue short.
+	const found = new Set(all.map((i) => i.number));
+	const absent = explicit.filter((n) => !found.has(n));
+	if (absent.length > 0) {
+		console.log(
+			`⚠️  Requested but not found among open issues: ${absent.join(", ")}.\n` +
+				`    Closed, mistyped, or beyond the fetch cap. They are not planned.\n`,
+		);
+	}
+	return all.filter((i) => explicit.includes(i.number));
 }
 
 // ---- claims -----------------------------------------------------------------
@@ -193,7 +225,7 @@ function fetchIssues(): RawIssue[] {
  *
  * Two signals, and both are load-bearing. GitHub's own closing link is the
  * authoritative one, but it exists only when the PR body used a closing
- * keyword — MEASURED here 2026-08-31, only 4 of the last 10 merged PRs carry
+ * keyword — MEASURED here 2026-08-31, only 3 of the last 10 merged PRs carry
  * one. Reading the branch name catches the rest; reading only the branch name
  * would miss a PR whose branch was named thematically but whose body does say
  * "Closes #N".
@@ -207,7 +239,7 @@ function fetchPullRequestClaims(): IssueClaim[] {
 			"--state",
 			"open",
 			"--limit",
-			"200",
+			String(ISSUE_FETCH_LIMIT),
 			"--json",
 			"number,headRefName,closingIssuesReferences",
 		],
@@ -286,11 +318,20 @@ function gatherClaims(): { claims: IssueClaim[]; skipped: string[] } {
 
 const citable = [
 	...CITED_ROOTS.flatMap((r) => {
+		// A root this checkout simply does not have is expected and fine.
 		try {
-			return walk(r);
+			statSync(r);
 		} catch {
 			return [];
 		}
+		// It EXISTS, so any failure inside the walk is a broken graph rather than
+		// an empty one, and must not degrade to `[]`. Swallowing it here would
+		// defeat `buildFanIn`'s guard: that only fires when the map is TOTALLY
+		// empty, so losing one root while another still populates the map leaves
+		// a confident-looking plan whose SERIAL section was computed from a
+		// crippled import graph — the exact silent-wrongness this tool exists to
+		// prevent, and the shape CLAUDE.md documents throughout.
+		return walk(r);
 	}),
 	...existingRootFiles(),
 ];

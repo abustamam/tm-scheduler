@@ -542,6 +542,14 @@ export function importCandidates(fromDir: string, spec: string): string[] {
 		return []; // a package, not a file in this repo
 	}
 
+	// Containment. `join`/`normalize` collapse `..`, so BOTH branches can climb
+	// above the repo root — `#/../../../../etc/passwd` escapes just as a deep
+	// relative specifier does, which makes the "maps to src/*" claim above false
+	// without this line. Nothing outside the tree is ever a real import target,
+	// and letting one through would put a `statSync` on a path outside the repo
+	// and a phantom key in the fan-in map.
+	if (base.startsWith("..")) return [];
+
 	return [
 		base,
 		`${base}.ts`,

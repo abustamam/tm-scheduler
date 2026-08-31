@@ -968,6 +968,37 @@ describe("importCandidates", () => {
 		);
 	});
 
+	/**
+	 * `join`/`normalize` collapse `..`, so both branches could climb above the
+	 * repo root — the alias branch too, despite reading as a fixed `src/` prefix.
+	 * Found by the pre-landing adversarial pass. Stat-only and not reachable from
+	 * a working tree today (an import that escapes would not build), but the
+	 * containment claim in the docstring has to be true, and a phantom key in the
+	 * fan-in map is a silently wrong edge.
+	 */
+	test("a relative specifier cannot escape the repo root", () => {
+		expect(
+			importCandidates("src/routes/a/b/c", "../../../../../../etc/passwd"),
+		).toEqual([]);
+	});
+
+	test("an alias specifier cannot escape the repo root either", () => {
+		expect(
+			importCandidates("src/anything", "#/../../../../etc/passwd"),
+		).toEqual([]);
+		expect(
+			importCandidates("src/anything", "@/../../../../etc/passwd"),
+		).toEqual([]);
+	});
+
+	test("a relative specifier that stays inside still resolves", () => {
+		// The containment check must not over-reject: climbing within the tree is
+		// ordinary and every `../` import in the repo depends on it.
+		expect(importCandidates("src/routes/admin", "../../lib/dcp")).toContain(
+			"src/lib/dcp.ts",
+		);
+	});
+
 	test("covers both TypeScript extensions", () => {
 		const candidates = importCandidates("src/routes", "#/lib/thing");
 		expect(candidates).toContain("src/lib/thing.ts");
