@@ -183,6 +183,11 @@ function toRow(
 	bound: AgendaSlot[],
 	index: number,
 	total: number,
+	/** EVERY slot on the meeting, not just this row's. A detail token names
+	 *  other roles — "Introduces the {role:table_topics_master}" sits on a
+	 *  Toastmaster row — so resolving against `bound` alone silently produces
+	 *  "Introduces the " for every cross-role cue on the sheet. */
+	allSlots: AgendaSlot[],
 ): AgendaRow | null {
 	const label = capChars(row.label, MAX_TEMPLATE_LABEL_CHARS);
 	// Cap BEFORE resolving: the cap bounds what an officer TYPED, and resolution
@@ -190,7 +195,7 @@ function toRow(
 	// Capping afterwards would truncate people's names instead of the input.
 	const detail = resolveDetailTokens(
 		capChars(row.detail ?? "", MAX_TEMPLATE_DETAIL_CHARS),
-		bound,
+		allSlots,
 		// A materialized beat's `{roles}` always carries its own group, so there
 		// is no Beat-side list to fall back to. An officer who types a bare
 		// `{roles}` by hand gets nothing, which is honest.
@@ -318,7 +323,7 @@ export function buildTemplateRowsWithSource(
 					0,
 					MAX_ROLE_REPEAT_SLOTS,
 				);
-				const emitted = toRow(row, rolesByKey, owned, 0, 0);
+				const emitted = toRow(row, rolesByKey, owned, 0, 0, slots);
 				if (emitted) {
 					out.push({
 						row: emitted,
@@ -328,7 +333,7 @@ export function buildTemplateRowsWithSource(
 					});
 				}
 			} else {
-				const emitted = toRow(row, rolesByKey, [], 0, 0);
+				const emitted = toRow(row, rolesByKey, [], 0, 0, slots);
 				if (emitted) {
 					out.push({
 						row: emitted,
@@ -361,7 +366,14 @@ export function buildTemplateRowsWithSource(
 				// Bind the ROLE-owning row to this iteration's slot; the others in
 				// the block (a minute of silence) own no slot and repeat as-is.
 				const bound = blockRow.roleKey === repeatKey ? [s] : [];
-				const emitted = toRow(blockRow, rolesByKey, bound, n, repeated.length);
+				const emitted = toRow(
+					blockRow,
+					rolesByKey,
+					bound,
+					n,
+					repeated.length,
+					slots,
+				);
 				if (emitted) {
 					out.push({
 						row: emitted,
