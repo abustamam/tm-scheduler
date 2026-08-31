@@ -1081,6 +1081,11 @@ export const meetingTemplateBeats = pgTable(
 		// The single squishy beat, if the template has one. At most one per
 		// template — validated on write, not enforced by the database.
 		flex: boolean("flex").notNull().default(false),
+		/** Renders as the indented "X introduces Y" elbow and gets its own slide in
+		 *  the projected deck. Carried so an adopted standard agenda keeps the 4
+		 *  hand-offs the code path emits (5 on the GE variant) — without this,
+		 *  adoption silently drops them from both surfaces. Spec D8. */
+		handoff: boolean("handoff").notNull().default(false),
 		// Timer-card marks in minutes, all three or none. `real`, not `numeric`:
 		// drizzle's `numeric` returns a STRING unless a mode flag converts it, and
 		// this schema uses `numeric` nowhere. Marks need fractions (the evaluation

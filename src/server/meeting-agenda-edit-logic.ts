@@ -25,6 +25,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
+import { materialiseRunOfShow } from "#/lib/agenda-materialise";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import {
 	isMeetingLocked,
@@ -72,6 +73,7 @@ export type AgendaDraftRow = {
 	 * that looks fine.
 	 */
 	flex: boolean;
+	handoff: boolean;
 	markGreen: number | null;
 	markYellow: number | null;
 	markRed: number | null;
@@ -126,10 +128,63 @@ function agendaEditable(status: string): boolean {
 }
 
 /**
- * This meeting's editable agenda, or null when it has none.
+ * Build this meeting its own editable copy of the standard agenda, once.
  *
- * Null means STANDARD: a meeting with `template_id IS NULL` renders the
- * code-derived `RUN_OF_SHOW`, which this editor deliberately does not touch.
+ * In a TRANSACTION with a re-read under `FOR UPDATE`: two officers opening the
+ * editor in the same second would otherwise both see a null `template_id` and
+ * mint two private templates, and the loser's rows become orphans no surface
+ * ever shows.
+ *
+ * No `role_definitions` are materialised, unlike a contest conversion. The
+ * standard flow binds its beats to the club's EXISTING roles by key, so private
+ * copies would detach this meeting's slots from the club roster — the opposite
+ * of what an ordinary meeting wants.
+ */
+async function materialiseForMeeting(
+	meetingId: string,
+	clubId: string,
+	geIntroducesFunctionaries: boolean,
+): Promise<string> {
+	return await database.transaction(async (tx) => {
+		const [locked] = await tx
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, meetingId))
+			.for("update")
+			.limit(1);
+		if (locked?.templateId) return locked.templateId;
+
+		const seeds = materialiseRunOfShow(geIntroducesFunctionaries);
+		const [tpl] = await tx
+			.insert(meetingTemplates)
+			.values({
+				clubId,
+				meetingId,
+				key: `meeting-${meetingId}`,
+				name: "Standard meeting",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!tpl) throw new Error("Failed to create the agenda copy.");
+
+		await tx
+			.insert(meetingTemplateBeats)
+			.values(seeds.map((seed) => ({ ...seed, templateId: tpl.id })));
+		await tx
+			.update(meetings)
+			.set({ templateId: tpl.id })
+			.where(eq(meetings.id, meetingId));
+		return tpl.id;
+	});
+}
+
+/**
+ * This meeting's editable agenda, or null when the meeting does not exist.
+ *
+ * Null used to mean STANDARD — a meeting with `template_id IS NULL` rendered
+ * the code-derived `RUN_OF_SHOW` and this editor deliberately did not touch it.
+ * Since #622 a standard meeting is MATERIALIZED into its own private copy on
+ * first load (see `materialiseForMeeting` above), so the only null left is a
+ * meeting id that matches no row.
  *
  * `meeting.templateId` is read here WITHOUT requiring it to be the meeting's
  * own private copy (`meeting_templates.meeting_id = meetingId`). A meeting
@@ -141,8 +196,9 @@ function agendaEditable(status: string): boolean {
  * meeting, which in production is all of them. Reading it directly is safe
  * either way: `meeting.templateId` is not caller-supplied, it is the meeting's
  * OWN pointer, and the content is exactly what the meeting page already
- * renders. `ensureAgendaDraft` still forks a private copy, just on the first
- * WRITE rather than the first read.
+ * renders. For a meeting pointing at a SHARED template, `ensureAgendaDraft`
+ * still forks a private copy on the first WRITE; a standard meeting gets its
+ * copy earlier, on this read.
  */
 export async function loadAgendaDraft(
 	meetingId: string,
@@ -150,6 +206,7 @@ export async function loadAgendaDraft(
 	const [meeting] = await database
 		.select({
 			templateId: meetings.templateId,
+			clubId: meetings.clubId,
 			status: meetings.status,
 			scheduledAt: meetings.scheduledAt,
 			lengthMinutes: meetings.lengthMinutes,
@@ -163,12 +220,23 @@ export async function loadAgendaDraft(
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	if (!meeting?.templateId) return null;
+	if (!meeting) return null;
+	// An ordinary meeting has no template until someone edits it. Building the
+	// copy HERE rather than refusing is what makes the whole calendar editable —
+	// before #622 this returned null and the route redirected away, so the
+	// agenda editor reached only the meetings someone had converted.
+	const templateId =
+		meeting.templateId ??
+		(await materialiseForMeeting(
+			meetingId,
+			meeting.clubId,
+			meeting.geIntroducesFunctionaries,
+		));
 
 	const [tpl] = await database
 		.select({ id: meetingTemplates.id, name: meetingTemplates.name })
 		.from(meetingTemplates)
-		.where(eq(meetingTemplates.id, meeting.templateId))
+		.where(eq(meetingTemplates.id, templateId))
 		.limit(1);
 	// Only reachable if the pointer is corrupt: `meetings.template_id` is ON
 	// DELETE RESTRICT against `meeting_templates`, so the row a live pointer
@@ -189,6 +257,7 @@ export async function loadAgendaDraft(
 				// See `AgendaDraftRow.flex` — load-bearing for the client's
 				// `applyFlex`, not just for the editor's pin control.
 				flex: meetingTemplateBeats.flex,
+				handoff: meetingTemplateBeats.handoff,
 				markGreen: meetingTemplateBeats.markGreen,
 				markYellow: meetingTemplateBeats.markYellow,
 				markRed: meetingTemplateBeats.markRed,
@@ -1073,6 +1142,7 @@ export async function addAgendaRow(input: {
 			roleKey: row.roleKey,
 			repeatsRoleKey: row.repeatsRoleKey,
 			flex: row.flex,
+			handoff: row.handoff,
 			markGreen: row.markGreen,
 			markYellow: row.markYellow,
 			markRed: row.markRed,
@@ -1095,6 +1165,7 @@ export async function updateAgendaRow(input: {
 			| "roleKey"
 			| "repeatsRoleKey"
 			| "flex"
+			| "handoff"
 			| "markGreen"
 			| "markYellow"
 			| "markRed"

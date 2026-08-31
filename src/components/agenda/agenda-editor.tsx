@@ -92,6 +92,7 @@ export type RowPatch = Partial<
 		| "roleKey"
 		| "repeatsRoleKey"
 		| "flex"
+		| "handoff"
 		| "markGreen"
 		| "markYellow"
 		| "markRed"
@@ -729,6 +730,7 @@ function AgendaTableRow({
 							roleKey: snapshot.roleKey,
 							repeatsRoleKey: snapshot.repeatsRoleKey,
 							flex: snapshot.flex,
+							handoff: snapshot.handoff,
 							markGreen: snapshot.markGreen,
 							markYellow: snapshot.markYellow,
 							markRed: snapshot.markRed,

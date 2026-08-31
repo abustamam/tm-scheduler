@@ -131,13 +131,23 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 
 ## Agenda templates
 
-- **`scripts/resync-template-roles.ts` is specified but not written.** Materialization is
-  copy-once, so editing `src/lib/contest-template.ts` never reaches a club that has already run a
-  contest — the same contract `ROLE_TEMPLATE` has. The escape hatch should resolve a template by
-  key, diff each materialized `role_definitions` row against the seed, print `club → role.field:
-  current ⇒ seed`, and write nothing without `--apply`. Never touch a row whose key is absent
-  from the seed: a club may have added its own.
-  **Priority:** P3
+- **`scripts/resync-template-roles.ts` is specified but not written, and #622 makes it the only
+  recovery path from copy-once drift.** Materialization is copy-once, so editing
+  `src/lib/contest-template.ts` never reaches a club that has already run a contest — the same
+  contract `ROLE_TEMPLATE` has. The escape hatch should resolve a template by key, diff each
+  materialized `role_definitions` row against the seed, print `club → role.field: current ⇒ seed`,
+  and write nothing without `--apply`. Never touch a row whose key is absent from the seed: a club
+  may have added its own.
+  **Re-scoped P3 → P2 by plan-eng-review on 2026-08-25.** This entry was P3 while drift reached
+  only clubs that had run a contest. #622 extends copy-once materialization to the WHOLE agenda of
+  any club that edits an ordinary meeting, and the drift is no longer limited to role definitions —
+  it covers every beat. Measured: `agenda-runsheet.ts` took 27 commits in six months and **15 of
+  them changed beat content** (roughly one every 12 days), including "close on announcements →
+  guest comments → adjourn" and "the deck and the run sheet book the same minutes". An adopted club
+  receives none of them. #622's spec accepts that deliberately (R1) and makes the adopt action say
+  so out loud, which is defensible only while a recovery path exists — and this script is it. It is
+  writable today and would serve the existing contest case immediately, independently of #622.
+  **Priority:** P2
 
 - **`meeting_templates.meeting_id` is ON DELETE CASCADE, but the cascade cannot fire for any
   private copy a real conversion produced.** Every conversion materializes `role_definitions`
@@ -226,6 +236,13 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   seeded template whose size the seed fixes. Turning an officer-authored private copy into a
   source makes this an officer-sized read. Cap it in that change, not before, and cap it at the
   seam the way `loadTemplateBeats` already does rather than at the writer alone.
+  **HALF DONE in v1.27.0.0 (622a).** The BEATS read is now bounded at `MAX_TEMPLATE_BEATS + 1` and
+  REFUSES past the cap rather than truncating — a copy that silently drops rows hands a club a
+  permanently shorter agenda it never authored, which is the one place truncation is worse than an
+  error. `meeting_template_roles` is still uncapped. Note the trigger is 622b, not 622a: a private
+  per-meeting copy still cannot be a source, so every source remains a seeded template until
+  "save as club template" lands. The beats half was done early because 622a was already in that
+  file; finish the roles half in 622b.
   **Priority:** P3
 
 - **`defaultCount` is unenforced after a re-point, and `slotsAdded` over-reports.**

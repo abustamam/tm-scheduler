@@ -206,6 +206,7 @@ const mcfRows: TimelineRow[] = [
 		minutes: 5,
 		marks: { green: 1, yellow: 1.5, red: 2 },
 		flex: true,
+		handoff: false,
 		time: "7:21",
 	},
 	{
@@ -746,6 +747,7 @@ function hostileTemplateRows(
 			roleKey: roles[i % roles.length]?.key ?? null,
 			repeatsRoleKey: null,
 			flex: false,
+			handoff: false,
 			markGreen: null,
 			markYellow: null,
 			markRed: null,

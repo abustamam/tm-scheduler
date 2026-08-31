@@ -1578,7 +1578,7 @@ function roleHolderNames(key: string, slots: AgendaSlot[]): string | null {
  *  ONE pass. Order inside the alternation is irrelevant; what matters is that
  *  there is only one pass. */
 const DETAIL_TOKEN_RE =
-	/\{roles\}|\{awards\}|\{role:([a-z_]+)\}|\{names:([a-z_]+)\}/g;
+	/\{roles(?::([a-zA-Z]+))?\}|\{awards\}|\{role:([a-z_]+)\}|\{names:([a-z_]+)\}/g;
 
 /**
  * Resolve a beat's detail tokens against the roles the club runs (#367, #372,
@@ -1604,14 +1604,36 @@ const DETAIL_TOKEN_RE =
  * An unrecognised role key is left VERBATIM rather than blanked, so a typo shows
  * up on the page as `{role:tymer}` instead of quietly dropping the cue.
  */
-function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
-	if (!beat.detail.includes("{")) return beat.detail;
-	return beat.detail.replace(
+export function resolveDetailTokens(
+	detail: string,
+	slots: AgendaSlot[],
+	/** The `{roles}` list when the token carries no group of its own. Lazy so a
+	 *  detail with no tokens costs nothing. */
+	bareRoles: () => string[],
+): string {
+	if (!detail.includes("{")) return detail;
+	return detail.replace(
 		DETAIL_TOKEN_RE,
-		(whole, roleKey?: string, namesKey?: string) => {
+		(whole, rolesGroup?: string, roleKey?: string, namesKey?: string) => {
 			if (whole === AWARDS_TOKEN) return joinRoleNames(awardLabels(slots));
-			if (whole === ROLES_TOKEN)
-				return joinRoleNames(groupRoleNames(beat, slots));
+			if (whole.startsWith("{roles")) {
+				// A group INSIDE the token is how a materialized beat carries what
+				// `requiresGroup` carries on a Beat — spec D1 drops the gating
+				// fields, so without this the list has nothing to resolve against.
+				// An unknown group falls back rather than throwing: the token is
+				// officer-editable text.
+				const names =
+					rolesGroup != null && rolesGroup in GROUP_SLOTS
+						? [
+								...new Set(
+									GROUP_SLOTS[rolesGroup as RoleGroup](slots).map(
+										(sl) => sl.roleName,
+									),
+								),
+							]
+						: bareRoles();
+				return joinRoleNames(names);
+			}
 			// `{names:…}` resolves to "" for a role nobody holds BY DESIGN (#585),
 			// so the empty case cannot be treated as a miss the way `{role:…}`
 			// treats one. `roleHolderNames` separates the two: `null` is an
@@ -1620,6 +1642,12 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 			if (namesKey != null) return roleHolderNames(namesKey, slots) ?? whole;
 			return roleKey != null ? (clubRoleName(roleKey, slots) ?? whole) : whole;
 		},
+	);
+}
+
+function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
+	return resolveDetailTokens(beat.detail, slots, () =>
+		groupRoleNames(beat, slots),
 	);
 }
 

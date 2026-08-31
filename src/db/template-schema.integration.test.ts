@@ -483,4 +483,35 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 				.where(eq(meetingTemplates.id, t.id)),
 		).toEqual([]);
 	});
+
+	it("carries handoff on a template beat, defaulting false", async () => {
+		// An adopted standard agenda has 4 hand-offs (5 on the GE variant), and
+		// they drive both the printed elbow and the projected deck's cue slides.
+		// Without a column to hold the flag, adoption drops all of them.
+		const templateId = await makeTemplate("handoff-col");
+		const [plain] = await testDb
+			.insert(meetingTemplateBeats)
+			.values({
+				templateId,
+				sortOrder: 0,
+				kind: "role",
+				label: "Prepared speech",
+				minutes: 7,
+			})
+			.returning({ handoff: meetingTemplateBeats.handoff });
+		expect(plain?.handoff).toBe(false);
+
+		const [flagged] = await testDb
+			.insert(meetingTemplateBeats)
+			.values({
+				templateId,
+				sortOrder: 1,
+				kind: "role",
+				label: "Introduces the speakers",
+				minutes: 0,
+				handoff: true,
+			})
+			.returning({ handoff: meetingTemplateBeats.handoff });
+		expect(flagged?.handoff).toBe(true);
+	});
 });

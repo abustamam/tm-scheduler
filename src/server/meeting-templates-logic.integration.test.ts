@@ -50,6 +50,7 @@ const mine = (names: string[]) => names.filter((n) => n.includes(RUN));
 const { listRoleDefinitions } = await import("./role-definitions-logic");
 
 const {
+	copyTemplateForMeeting,
 	listAvailableTemplates,
 	loadTemplateContent,
 	materializeTemplateRoles,
@@ -319,6 +320,30 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 		 * reach a renderer), with a fixture that overruns it. Delete either
 		 * `.limit()` and this fails with 205/45 instead of 200/40.
 		 */
+		it("REFUSES to copy an oversized template rather than truncating it", async () => {
+			// The load seam truncates, because a renderer must produce something.
+			// A COPY must not: silently dropping rows would hand the club a
+			// permanently shortened agenda it never authored, and #622 makes an
+			// officer-authored template a legal copy source for the first time.
+			const id = await makeContestTemplate();
+			await testDb.insert(meetingTemplateBeats).values(
+				Array.from({ length: MAX_TEMPLATE_BEATS + 3 }, (_, i) => ({
+					templateId: id,
+					sortOrder: 100 + i,
+					kind: "event" as const,
+					label: `Filler ${i}`,
+					minutes: 1,
+				})),
+			);
+			await expect(
+				copyTemplateForMeeting(testDb, {
+					sourceTemplateId: id,
+					clubId: club.clubId,
+					meetingId: club.meetingId,
+				}),
+			).rejects.toThrow(/too large/i);
+		});
+
 		it("truncates an oversized template at the load seam, in sort order", async () => {
 			const id = await makeContestTemplate();
 			// makeContestTemplate seeds 2 beats / 2 roles; overrun both caps.

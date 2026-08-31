@@ -34,6 +34,7 @@ function beat(
 		roleKey: null,
 		repeatsRoleKey: null,
 		flex: false,
+		handoff: false,
 		markGreen: null,
 		markYellow: null,
 		markRed: null,
@@ -497,6 +498,7 @@ describe("buildTemplateRows", () => {
 					label: "X",
 					roleKey: "contest_chair",
 					flex: true,
+					handoff: false,
 				}),
 			],
 			ROLES,
@@ -855,5 +857,29 @@ describe("buildTemplateRowsWithSource", () => {
 		expect(buildTemplateRows(beats, ROLES, slots)).toEqual(
 			buildTemplateRowsWithSource(beats, ROLES, slots).map((e) => e.row),
 		);
+	});
+
+	it("resolves detail tokens instead of printing them", () => {
+		// Storing detail as plain text is what would have made an adopted agenda
+		// print a literal {role:general_evaluator}. The template path now speaks the
+		// same token vocabulary the printed row always has.
+		const beats = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Chair",
+				roleKey: "contest_chair",
+				detail: "Introduces the {role:general_evaluator}",
+				handoff: true,
+			}),
+		];
+		const slots = [
+			slot("contest_chair", "Contest Chair", 0),
+			slot("general_evaluator", "General Evaluator", 0),
+		];
+		const rows = buildTemplateRows(beats, ROLES, slots);
+		expect(rows[0]?.detail).not.toContain("{");
+		expect(rows[0]?.detail).toContain("General Evaluator");
+		expect(rows[0]?.handoff).toBe(true);
 	});
 });

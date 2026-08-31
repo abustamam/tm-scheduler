@@ -39,10 +39,11 @@ export const Route = createFileRoute(
 		const draft = await getAgendaDraft({
 			data: { meetingId: params.meetingId },
 		});
-		// Null means STANDARD (no template) — this editor has nothing to edit.
-		// A shared-template meeting returns a normal draft (see
-		// `loadAgendaDraft`'s docblock); this redirect is the standard-meeting
-		// case only.
+		// Null now means the meeting does not exist. It used to mean STANDARD —
+		// no template, nothing for this editor to edit — but since #622 a
+		// standard meeting is materialized into its own copy on first load, so
+		// that case returns a normal draft like any other. The redirect stays as
+		// the not-found path.
 		if (!draft) {
 			throw redirect({
 				to: "/club/$clubId/meeting/$meetingId",
@@ -88,6 +89,17 @@ function AgendaEditorRoute() {
 					Edit agenda
 				</h1>
 				<p className="text-muted-foreground text-sm">{draft.templateName}</p>
+				{draft.templateName === "Standard meeting" ? (
+					// Adoption is copy-once (spec D1/R1): 15 of the last 27 commits to the
+					// run of show changed beat content, and an adopted club receives none
+					// of them. Accepting that silently would be the invisible authoring
+					// D1 rejects, so the trade is stated where it is made.
+					<p className="mt-2 rounded-md border border-dashed p-3 text-muted-foreground text-sm">
+						<strong className="font-medium">This agenda is now yours.</strong>{" "}
+						Improvements we make to the standard agenda will not reach it — edit
+						it here instead.
+					</p>
+				) : null}
 			</div>
 
 			<AgendaEditor

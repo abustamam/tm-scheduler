@@ -1,0 +1,1 @@
+ALTER TABLE "meeting_template_beats" ADD COLUMN "handoff" boolean DEFAULT false NOT NULL;

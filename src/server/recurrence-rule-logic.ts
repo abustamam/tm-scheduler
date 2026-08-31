@@ -124,7 +124,13 @@ export async function findPristineEmptyMeetingIds(
 				!claimedSet.has(m.id) &&
 				!declinedSet.has(m.id) &&
 				// A templated meeting is not an empty shell, whatever its content
-				// fields say — somebody deliberately reshaped it into a contest.
+				// fields say. Until #622 that meant "somebody deliberately reshaped
+				// it into a contest"; it now ALSO means "somebody edited its
+				// agenda", because the first edit of an ordinary meeting
+				// materializes a private copy. Both are content, and this predicate
+				// already declines to prune a meeting with content of any kind — a
+				// theme, a Word of the Day, a claimed slot. The set this clause
+				// excludes is therefore much larger than it was, by design.
 				// It also can't be safely deleted even if it looked pristine:
 				// `meeting_templates.meeting_id` cascades from `meetings`, but the
 				// materialized `role_definitions` pointing at that private template
