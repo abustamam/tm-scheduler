@@ -2,6 +2,17 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.26.1.0] - 2026-08-31
+
+### Added
+
+- **`bun run batch:issues` groups the open backlog into waves that parallel agents can take without colliding.** Batching issues by theme is what lets two agents build the same fix at once, because theme tracks which files a change touches and files are what actually conflict. This reads the paths the issue bodies already cite, runs anything that touches a widely-imported file one at a time, packs the rest into waves that share no file, and holds back anything an open PR or a live worktree already names. On the current backlog it separates two issues that both edit the club-logo seam and would otherwise have been handed out together. Output is a plan — nothing is assigned or started. The batching rules live in `src/lib/issue-batching.ts` with 85 tests; the command itself is `scripts/batch-issues.ts`.
+- **A `dispatching-issue-waves` project skill explains how to act on that plan.** It covers what each section of the report requires, the loop of re-planning between waves rather than executing a stale printout, and when a trailing wave exists only because of the per-wave cap and can be merged into the one before it.
+
+### Changed
+
+- **Branch names now put the issue number last** (`fix-dialog-scroll-619`), because the branch name is what tells the batcher an issue is already being worked. CLAUDE.md documents the convention and the three ways of getting it wrong — two that make a branch claim nothing, one that makes it wrongly claim an unrelated issue.
+
 ## [1.26.0.1] - 2026-08-28
 
 ### Fixed
