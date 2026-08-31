@@ -88,6 +88,17 @@ function AgendaEditorRoute() {
 					Edit agenda
 				</h1>
 				<p className="text-muted-foreground text-sm">{draft.templateName}</p>
+				{draft.templateName === "Standard meeting" ? (
+					// Adoption is copy-once (spec D1/R1): 15 of the last 27 commits to the
+					// run of show changed beat content, and an adopted club receives none
+					// of them. Accepting that silently would be the invisible authoring
+					// D1 rejects, so the trade is stated where it is made.
+					<p className="mt-2 rounded-md border border-dashed p-3 text-muted-foreground text-sm">
+						<strong className="font-medium">This agenda is now yours.</strong>{" "}
+						Improvements we make to the standard agenda will not reach it — edit
+						it here instead.
+					</p>
+				) : null}
 			</div>
 
 			<AgendaEditor
