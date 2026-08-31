@@ -25,6 +25,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
+import { materialiseRunOfShow } from "#/lib/agenda-materialise";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import {
 	isMeetingLocked,
@@ -145,12 +146,63 @@ function agendaEditable(status: string): boolean {
  * renders. `ensureAgendaDraft` still forks a private copy, just on the first
  * WRITE rather than the first read.
  */
+/**
+ * Build this meeting its own editable copy of the standard agenda, once.
+ *
+ * In a TRANSACTION with a re-read under `FOR UPDATE`: two officers opening the
+ * editor in the same second would otherwise both see a null `template_id` and
+ * mint two private templates, and the loser's rows become orphans no surface
+ * ever shows.
+ *
+ * No `role_definitions` are materialised, unlike a contest conversion. The
+ * standard flow binds its beats to the club's EXISTING roles by key, so private
+ * copies would detach this meeting's slots from the club roster — the opposite
+ * of what an ordinary meeting wants.
+ */
+async function materialiseForMeeting(
+	meetingId: string,
+	clubId: string,
+	geIntroducesFunctionaries: boolean,
+): Promise<string> {
+	return await database.transaction(async (tx) => {
+		const [locked] = await tx
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, meetingId))
+			.for("update")
+			.limit(1);
+		if (locked?.templateId) return locked.templateId;
+
+		const seeds = materialiseRunOfShow(geIntroducesFunctionaries);
+		const [tpl] = await tx
+			.insert(meetingTemplates)
+			.values({
+				clubId,
+				meetingId,
+				key: `meeting-${meetingId}`,
+				name: "Standard meeting",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!tpl) throw new Error("Failed to create the agenda copy.");
+
+		await tx
+			.insert(meetingTemplateBeats)
+			.values(seeds.map((seed) => ({ ...seed, templateId: tpl.id })));
+		await tx
+			.update(meetings)
+			.set({ templateId: tpl.id })
+			.where(eq(meetings.id, meetingId));
+		return tpl.id;
+	});
+}
+
 export async function loadAgendaDraft(
 	meetingId: string,
 ): Promise<AgendaDraft | null> {
 	const [meeting] = await database
 		.select({
 			templateId: meetings.templateId,
+			clubId: meetings.clubId,
 			status: meetings.status,
 			scheduledAt: meetings.scheduledAt,
 			lengthMinutes: meetings.lengthMinutes,
@@ -164,12 +216,23 @@ export async function loadAgendaDraft(
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	if (!meeting?.templateId) return null;
+	if (!meeting) return null;
+	// An ordinary meeting has no template until someone edits it. Building the
+	// copy HERE rather than refusing is what makes the whole calendar editable —
+	// before #622 this returned null and the route redirected away, so the
+	// agenda editor reached only the meetings someone had converted.
+	const templateId =
+		meeting.templateId ??
+		(await materialiseForMeeting(
+			meetingId,
+			meeting.clubId,
+			meeting.geIntroducesFunctionaries,
+		));
 
 	const [tpl] = await database
 		.select({ id: meetingTemplates.id, name: meetingTemplates.name })
 		.from(meetingTemplates)
-		.where(eq(meetingTemplates.id, meeting.templateId))
+		.where(eq(meetingTemplates.id, templateId))
 		.limit(1);
 	// Only reachable if the pointer is corrupt: `meetings.template_id` is ON
 	// DELETE RESTRICT against `meeting_templates`, so the row a live pointer

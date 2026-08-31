@@ -10,6 +10,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	clubs,
 	meetings,
 	meetingTemplateBeats,
 	meetingTemplateRoles,
@@ -353,10 +354,16 @@ describe.skipIf(!hasTestDb)("loadAgendaDraft", () => {
 		expect(draft?.editable).toBe(true);
 	});
 
-	it("returns null for a standard meeting", async () => {
-		// A meeting with no template reads the code-derived RUN_OF_SHOW and is
-		// out of scope for this editor by design.
-		expect(await loadAgendaDraft(club.meetingId)).toBeNull();
+	it("MATERIALISES a standard meeting rather than refusing it", async () => {
+		// This asserted `toBeNull()` until #622. A meeting with no template used
+		// to read the code-derived RUN_OF_SHOW and be out of scope for the
+		// editor; it now gets its own editable copy on first load, which is the
+		// whole point of 622a. Kept (rather than deleted) so the contract change
+		// is visible in the file that pinned the old one.
+		const draft = await loadAgendaDraft(club.meetingId);
+		expect(draft).not.toBeNull();
+		expect(draft?.templateId).toBeTruthy();
+		if (draft?.templateId) madeTemplates.push(draft.templateId);
 	});
 
 	it("loads a draft from a shared-template pointer, and forks a private copy on the first write", async () => {
@@ -3612,3 +3619,68 @@ describe.skipIf(!hasTestDb)(
 		});
 	},
 );
+
+describe.skipIf(!hasTestDb)("materialise on first edit", () => {
+	it("turns a standard meeting into an editable draft", async () => {
+		// Before #622 this returned null and the route redirected away, so the
+		// agenda editor reached only meetings someone had converted — 1 of 12 in
+		// the dev database.
+		const draft = await loadAgendaDraft(club.meetingId);
+		expect(draft).not.toBeNull();
+		expect(draft?.rows.filter((r) => r.kind === "section")).toHaveLength(5);
+
+		const [m] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		expect(m?.templateId).not.toBeNull();
+		if (m?.templateId) madeTemplates.push(m.templateId);
+	});
+
+	it("is IDEMPOTENT — a second load reuses the same template and row ids", async () => {
+		const first = await loadAgendaDraft(club.meetingId);
+		const second = await loadAgendaDraft(club.meetingId);
+		expect(second?.templateId).toBe(first?.templateId);
+		// Row ids must be stable too: the editor keys React state and its
+		// `confirmed` refs on them, so a fresh id set would read as every row
+		// changing at once.
+		expect(second?.rows.map((r) => r.id)).toEqual(first?.rows.map((r) => r.id));
+		if (first?.templateId) madeTemplates.push(first.templateId);
+	});
+
+	it("uses the CLUB's GE variant, not the frozen default", async () => {
+		await testDb
+			.update(clubs)
+			.set({ geIntroducesFunctionaries: true })
+			.where(eq(clubs.id, club.clubId));
+
+		const draft = await loadAgendaDraft(club.meetingId);
+		// 23 beats + 5 bands on this variant, 22 + 5 on the other. Reading the
+		// RUN_OF_SHOW const instead of building for the club fails HERE (R5).
+		expect(draft?.rows).toHaveLength(28);
+		const [m] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		if (m?.templateId) madeTemplates.push(m.templateId);
+	});
+
+	it("carries the hand-offs and leaves detail tokens to render time", async () => {
+		await testDb
+			.update(clubs)
+			.set({ geIntroducesFunctionaries: true })
+			.where(eq(clubs.id, club.clubId));
+		const draft = await loadAgendaDraft(club.meetingId);
+		expect(draft?.rows.filter((r) => r.handoff)).toHaveLength(5);
+		// Stored verbatim; `buildTemplateRows` resolves them per render against
+		// whoever holds the role that week.
+		expect(
+			draft?.rows.some((r) => /\{names:[a-z_]+\}/.test(r.detail ?? "")),
+		).toBe(true);
+		const [m] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		if (m?.templateId) madeTemplates.push(m.templateId);
+	});
+});
