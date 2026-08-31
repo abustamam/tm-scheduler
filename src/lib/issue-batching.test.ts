@@ -7,6 +7,7 @@ import {
 	extractDependencies,
 	extractIssueNumbersFromRef,
 	extractPaths,
+	importCandidates,
 	isCitablePath,
 	isMigrationBearing,
 	MIGRATION_LABEL,
@@ -789,6 +790,188 @@ describe("partitionClaimedIssues", () => {
 		);
 		expect(unclaimed.map((i) => i.number)).toEqual([1, 2]);
 		expect(claimed).toEqual([]);
+	});
+});
+
+/**
+ * The dependency-ordering subsystem — `orderByDependency`, the
+ * `mustPrecedeSerial` promotion, and `findViolations`.
+ *
+ * This block exists because the ship review found the whole subsystem
+ * untested: every `planBatches` call in the suite passed only
+ * `number`/`paths`/`migration`, so `blockedBy` never reached the scheduler and
+ * `plan.warnings` was never asserted. Roughly 100 lines of live code that the
+ * CLI prints dispatch decisions from, with no test able to fail.
+ *
+ * It immediately paid for itself: the two-cycle case below was emitting THREE
+ * warnings for one edge.
+ */
+describe("planBatches — dependency ordering", () => {
+	const serialFanIn = new Map([["src/db/schema.ts", 200]]);
+
+	test("a serial issue promotes its batchable blocker ahead of it", () => {
+		// The blocker cites a private file, so packing would have put it in a
+		// wave — i.e. AFTER the whole serial section, which is backwards.
+		const plan = planBatches(
+			[
+				{ number: 1, paths: ["src/db/schema.ts"], blockedBy: [2] },
+				{ number: 2, paths: ["src/b.ts"] },
+			],
+			serialFanIn,
+		);
+
+		expect(plan.serial).toEqual([2, 1]);
+		expect(plan.batches).toEqual([]);
+		expect(plan.warnings).toEqual([]);
+	});
+
+	test("promotion is transitive — a blocker's own blocker precedes it too", () => {
+		const plan = planBatches(
+			[
+				{ number: 1, paths: ["src/db/schema.ts"], blockedBy: [2] },
+				{ number: 2, paths: ["src/b.ts"], blockedBy: [3] },
+				{ number: 3, paths: ["src/c.ts"] },
+			],
+			serialFanIn,
+		);
+
+		expect(plan.serial).toEqual([3, 2, 1]);
+		expect(plan.batches).toEqual([]);
+		expect(plan.warnings).toEqual([]);
+	});
+
+	test("a blocker that is not in this plan constrains nothing", () => {
+		const plan = planBatches(
+			[{ number: 1, paths: ["src/db/schema.ts"], blockedBy: [999] }],
+			serialFanIn,
+		);
+
+		expect(plan.serial).toEqual([1]);
+		expect(plan.warnings).toEqual([]);
+	});
+
+	test("two issues in the same wave with a dependency are reported, not reordered", () => {
+		// Waves are deliberately never reordered — moving an issue between them
+		// cascades through the greedy packing. So this is a warning, not a fix.
+		const plan = planBatches(
+			[
+				{ number: 1, paths: ["src/a.ts"], blockedBy: [2] },
+				{ number: 2, paths: ["src/b.ts"] },
+			],
+			new Map(),
+		);
+
+		expect(plan.batches).toEqual([[1, 2]]);
+		expect(plan.warnings).toEqual([{ issue: 1, blocker: 2, kind: "parallel" }]);
+	});
+
+	/**
+	 * The defect this block was written to catch. `orderByDependency` gives up
+	 * on a cycle and leaves its members in their original relative order;
+	 * `findViolations` then read that arbitrary order back and derived its OWN
+	 * `before` verdict for an edge already reported as a cycle.
+	 *
+	 * MEASURED before the fix: three warnings for a two-issue cycle —
+	 * `1->2 cycle`, `2->1 cycle`, and a redundant `1->2 before`. The CLI renders
+	 * the two kinds as unrelated sentences, so one problem read as two
+	 * contradictory ones.
+	 */
+	test("a cycle is reported once per edge, never also as mis-ordered", () => {
+		const plan = planBatches(
+			[
+				{ number: 1, paths: ["src/db/schema.ts"], blockedBy: [2] },
+				{ number: 2, paths: ["src/db/schema.ts"], blockedBy: [1] },
+			],
+			serialFanIn,
+		);
+
+		expect(plan.warnings).toEqual([
+			{ issue: 1, blocker: 2, kind: "cycle" },
+			{ issue: 2, blocker: 1, kind: "cycle" },
+		]);
+		// Every member still appears in the plan exactly once, in its original
+		// relative order — a cycle is reported, not resolved and not dropped.
+		expect(plan.serial).toEqual([1, 2]);
+	});
+
+	test("an orderable issue beside a cycle is not emitted twice", () => {
+		// `orderByDependency`'s cycle pass walks all of `serial`, so without its
+		// `remaining` guard #9 — already placed by the Kahn pass — would be
+		// appended a second time.
+		const plan = planBatches(
+			[
+				{ number: 9, paths: ["src/db/schema.ts"] },
+				{ number: 1, paths: ["src/db/schema.ts"], blockedBy: [2] },
+				{ number: 2, paths: ["src/db/schema.ts"], blockedBy: [1] },
+			],
+			serialFanIn,
+		);
+
+		expect(plan.serial).toEqual([9, 1, 2]);
+		expect(plan.serial.filter((n) => n === 9)).toHaveLength(1);
+	});
+});
+
+/**
+ * The import resolver's candidate list and alias mapping.
+ *
+ * Lifted out of `scripts/batch-issues.ts` during the ship review so it is
+ * reachable from vitest at all. This is the function the port broke twice, both
+ * times silently — wrong quote style, then wrong alias — and either bug empties
+ * the fan-in map, which deletes the SERIAL section while the report still looks
+ * clean.
+ */
+describe("importCandidates", () => {
+	test("maps the #/ alias to src/", () => {
+		expect(importCandidates("src/routes", "#/lib/dcp")).toContain(
+			"src/lib/dcp.ts",
+		);
+	});
+
+	test("maps the @/ alias to src/ as well", () => {
+		// components.json points shadcn at `@/`, so both must resolve.
+		expect(importCandidates("src/routes", "@/components/ui/dialog")).toContain(
+			"src/components/ui/dialog.tsx",
+		);
+	});
+
+	test("resolves a relative specifier against the importing directory", () => {
+		expect(importCandidates("src/server", "./guards")).toContain(
+			"src/server/guards.ts",
+		);
+	});
+
+	test("resolves a parent-relative specifier", () => {
+		expect(importCandidates("src/server", "../lib/dcp")).toContain(
+			"src/lib/dcp.ts",
+		);
+	});
+
+	test("a bare package specifier resolves to nothing in this repo", () => {
+		// The branch that must NOT fall through to a path — upstream's version
+		// skipped these with a `continue`, and getting it wrong would add phantom
+		// importers for every node_modules package.
+		expect(importCandidates("src/lib", "react")).toEqual([]);
+		expect(importCandidates("src/lib", "@tanstack/react-router")).toEqual([]);
+	});
+
+	test("tries the exact path before adding an extension", () => {
+		// An import that already carries its extension must not become `x.css.ts`.
+		const candidates = importCandidates("src", "./styles.css");
+		expect(candidates[0]).toBe("src/styles.css");
+	});
+
+	test("tries index files last", () => {
+		const candidates = importCandidates("src/routes", "#/db");
+		expect(candidates.indexOf("src/db.ts")).toBeLessThan(
+			candidates.indexOf("src/db/index.ts"),
+		);
+	});
+
+	test("covers both TypeScript extensions", () => {
+		const candidates = importCandidates("src/routes", "#/lib/thing");
+		expect(candidates).toContain("src/lib/thing.ts");
+		expect(candidates).toContain("src/lib/thing.tsx");
 	});
 });
 

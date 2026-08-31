@@ -20,6 +20,8 @@
  * point of this file is that its numbers are testable.
  */
 
+import { join, normalize } from "node:path";
+
 export type IssueFiles = {
 	number: number;
 	/** Repo-relative paths the issue body names. */
@@ -87,6 +89,19 @@ export type BatchOptions = {
 	/** Cap on agents per wave. */
 	maxBatchSize?: number;
 };
+
+/**
+ * The two tuning numbers, exported so the CLI does not restate them.
+ *
+ * They were duplicated as bare literals in `scripts/batch-issues.ts`'s flag
+ * defaults, which is the exact shape CLAUDE.md's coverage-traps section warns
+ * about: a constant that lives in two files drifts silently, and the symptom
+ * here would be the CLI serialising a different set than the library's own
+ * default would. The CLI now passes a flag's value only when the flag was
+ * given, so these stay the single source of truth.
+ */
+export const DEFAULT_FAN_IN_THRESHOLD = 10;
+export const DEFAULT_MAX_BATCH_SIZE = 4;
 
 /**
  * Top-level directories a cited path may live under.
@@ -496,6 +511,47 @@ export function partitionClaimedIssues<T extends { number: number }>(
 	return { unclaimed, claimed };
 }
 
+/**
+ * The ordered candidate paths an import specifier could resolve to, or `[]`
+ * for a bare package specifier that names no file in this repo.
+ *
+ * Lifted out of `scripts/batch-issues.ts` and given an injected filesystem for
+ * the same reason `splitCitations` has one: this is the function the port broke
+ * TWICE, both times silently. Upstream matched `from '...'` (single quotes)
+ * where this repo writes 3,236 double-quoted imports to 54, and resolved `~/`
+ * and `@/` where this repo's alias is `#/` — 1,464 imports. Either bug alone
+ * empties the fan-in map, which deletes the SERIAL section from the plan while
+ * the report still looks clean. A function with that history does not belong in
+ * a module vitest cannot reach.
+ *
+ * `#/*` and `@/*` both map to `src/*` (package.json `imports`, and
+ * components.json for the shadcn half). Extension order matters: an
+ * extensionless specifier must try the exact path before `.ts`, and `index.*`
+ * last, so a directory containing both `foo.ts` and `foo/index.ts` resolves the
+ * way the bundler does.
+ *
+ * Pure path math — no I/O here, so the caller owns the filesystem.
+ */
+export function importCandidates(fromDir: string, spec: string): string[] {
+	let base: string;
+	if (spec.startsWith("#/") || spec.startsWith("@/")) {
+		base = join("src", spec.slice(2));
+	} else if (spec.startsWith(".")) {
+		base = normalize(join(fromDir, spec));
+	} else {
+		return []; // a package, not a file in this repo
+	}
+
+	return [
+		base,
+		`${base}.ts`,
+		`${base}.tsx`,
+		`${base}.css`,
+		join(base, "index.ts"),
+		join(base, "index.tsx"),
+	];
+}
+
 /** Label marking an issue whose branch will carry a Drizzle migration. */
 export const MIGRATION_LABEL = "migration";
 
@@ -619,7 +675,10 @@ function orderByDependency(
 export function planBatches(
 	issues: readonly IssueFiles[],
 	fanIn: ReadonlyMap<string, number>,
-	{ fanInThreshold = 10, maxBatchSize = 4 }: BatchOptions = {},
+	{
+		fanInThreshold = DEFAULT_FAN_IN_THRESHOLD,
+		maxBatchSize = DEFAULT_MAX_BATCH_SIZE,
+	}: BatchOptions = {},
 ): BatchPlan {
 	const serial: number[] = [];
 	const unknown: number[] = [];
@@ -652,16 +711,25 @@ export function planBatches(
 		issues.map((i) => [i.number, i.blockedBy ?? []] as const),
 	);
 	const mustPrecedeSerial = new Set<number>();
+	// Set lookups rather than `serial.includes` / `batchable.some` inside the
+	// per-edge loop: both were O(n) scans, making the walk O(E*(|serial|+
+	// |batchable|)). Inert at today's `gh issue list --limit 200` ceiling, but
+	// the sets cost one pass and remove the reason to think about it again.
+	const serialSet = new Set(serial);
+	const batchableNumbers = new Set(batchable.map((b) => b.number));
 	const pending = [...serial];
+	// Terminates even on a dependency cycle: a blocker is pushed only when it is
+	// newly added to `mustPrecedeSerial`, so each issue enters `pending` at most
+	// once.
 	while (pending.length > 0) {
 		const n = pending.pop();
 		for (const blocker of blockersOf.get(n as number) ?? []) {
-			if (serial.includes(blocker) || mustPrecedeSerial.has(blocker)) continue;
+			if (serialSet.has(blocker) || mustPrecedeSerial.has(blocker)) continue;
 			// Only issues in this plan, and only ones actually packed into a wave.
 			// A blocker citing no files constrains nothing, and one absent from the
 			// plan entirely is someone else's problem — `findViolations` already
 			// says nothing about either.
-			if (!batchable.some((b) => b.number === blocker)) continue;
+			if (!batchableNumbers.has(blocker)) continue;
 			mustPrecedeSerial.add(blocker);
 			pending.push(blocker);
 		}
@@ -704,11 +772,27 @@ export function planBatches(
 	const { ordered, cycles } = orderByDependency(serial, blockedBy);
 	const batches = waves.map((w) => w.issues);
 
+	// An edge already reported as a cycle must not ALSO be reported as
+	// mis-ordered. `orderByDependency` gives up on a cycle and leaves its
+	// members in their original relative order; `findViolations` then reads that
+	// arbitrary order back and derives a "before" verdict from it, knowing
+	// nothing about the cycle. MEASURED before this filter: a two-issue cycle
+	// emitted THREE warnings — `1->2 cycle`, `2->1 cycle`, and a redundant
+	// `1->2 before` — and the report renders the two kinds as unrelated
+	// sentences ("each claim to block the other" vs "is scheduled BEFORE #2"),
+	// so one problem read as two contradictory ones.
+	const cycleEdges = new Set(cycles.map((c) => `${c.issue}->${c.blocker}`));
+
 	return {
 		serial: ordered,
 		batches,
 		unknown,
-		warnings: [...cycles, ...findViolations(ordered, batches, blockedBy)],
+		warnings: [
+			...cycles,
+			...findViolations(ordered, batches, blockedBy).filter(
+				(w) => !cycleEdges.has(`${w.issue}->${w.blocker}`),
+			),
+		],
 	};
 }
 
