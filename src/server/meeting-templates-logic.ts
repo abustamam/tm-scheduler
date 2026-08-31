@@ -391,10 +391,23 @@ export async function copyTemplateForMeeting(
 		);
 	}
 
+	// Bounded, and REFUSES rather than truncating. Safe until now only because
+	// every source was a seeded template whose size the seed fixes; #622 lets an
+	// officer-authored template be a source, which makes this an officer-sized
+	// read. Fetching one MORE than the cap is what makes the check possible
+	// without an unbounded select. A silently shortened agenda is a meeting that
+	// runs off the end of its booking with nothing on the sheet to say so.
 	const beats = await conn
 		.select()
 		.from(meetingTemplateBeats)
-		.where(eq(meetingTemplateBeats.templateId, sourceTemplateId));
+		.where(eq(meetingTemplateBeats.templateId, sourceTemplateId))
+		.orderBy(asc(meetingTemplateBeats.sortOrder))
+		.limit(MAX_TEMPLATE_BEATS + 1);
+	if (beats.length > MAX_TEMPLATE_BEATS) {
+		throw new Error(
+			`That agenda is too large to copy (${MAX_TEMPLATE_BEATS} rows maximum).`,
+		);
+	}
 	if (beats.length > 0) {
 		await conn.insert(meetingTemplateBeats).values(
 			beats.map((b) => ({
