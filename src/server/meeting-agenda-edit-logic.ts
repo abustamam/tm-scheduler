@@ -72,6 +72,7 @@ export type AgendaDraftRow = {
 	 * that looks fine.
 	 */
 	flex: boolean;
+	handoff: boolean;
 	markGreen: number | null;
 	markYellow: number | null;
 	markRed: number | null;
@@ -189,6 +190,7 @@ export async function loadAgendaDraft(
 				// See `AgendaDraftRow.flex` — load-bearing for the client's
 				// `applyFlex`, not just for the editor's pin control.
 				flex: meetingTemplateBeats.flex,
+				handoff: meetingTemplateBeats.handoff,
 				markGreen: meetingTemplateBeats.markGreen,
 				markYellow: meetingTemplateBeats.markYellow,
 				markRed: meetingTemplateBeats.markRed,
@@ -1073,6 +1075,7 @@ export async function addAgendaRow(input: {
 			roleKey: row.roleKey,
 			repeatsRoleKey: row.repeatsRoleKey,
 			flex: row.flex,
+			handoff: row.handoff,
 			markGreen: row.markGreen,
 			markYellow: row.markYellow,
 			markRed: row.markRed,
@@ -1095,6 +1098,7 @@ export async function updateAgendaRow(input: {
 			| "roleKey"
 			| "repeatsRoleKey"
 			| "flex"
+			| "handoff"
 			| "markGreen"
 			| "markYellow"
 			| "markRed"

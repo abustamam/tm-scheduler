@@ -27,6 +27,7 @@ import {
 	assigneeDisplay,
 	numbered,
 	OPEN_LABEL,
+	resolveDetailTokens,
 	type TimingMarks,
 } from "./agenda-runsheet";
 import {
@@ -55,6 +56,7 @@ export type TemplateBeatSeed = {
 	roleKey: string | null;
 	repeatsRoleKey: string | null;
 	flex: boolean;
+	handoff: boolean;
 	markGreen: number | null;
 	markYellow: number | null;
 	markRed: number | null;
@@ -183,12 +185,23 @@ function toRow(
 	total: number,
 ): AgendaRow | null {
 	const label = capChars(row.label, MAX_TEMPLATE_LABEL_CHARS);
-	const detail = capChars(row.detail ?? "", MAX_TEMPLATE_DETAIL_CHARS);
+	// Cap BEFORE resolving: the cap bounds what an officer TYPED, and resolution
+	// can legitimately expand a short token into a long list of holder names.
+	// Capping afterwards would truncate people's names instead of the input.
+	const detail = resolveDetailTokens(
+		capChars(row.detail ?? "", MAX_TEMPLATE_DETAIL_CHARS),
+		bound,
+		// A materialized beat's `{roles}` always carries its own group, so there
+		// is no Beat-side list to fall back to. An officer who types a bare
+		// `{roles}` by hand gets nothing, which is honest.
+		() => [],
+	);
 	const base = {
 		detail,
 		minutes: row.minutes,
 		marks: resolveMarks(row),
 		...(row.flex ? { flex: true as const } : {}),
+		...(row.handoff ? { handoff: true as const } : {}),
 	};
 
 	if (row.kind === "section") {

@@ -96,6 +96,7 @@ const beat = (
 	roleKey: null,
 	repeatsRoleKey: null,
 	flex: false,
+	handoff: false,
 	markGreen: null,
 	markYellow: null,
 	markRed: null,

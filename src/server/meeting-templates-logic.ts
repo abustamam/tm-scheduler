@@ -136,6 +136,7 @@ async function loadTemplateBeats(
 				roleKey: meetingTemplateBeats.roleKey,
 				repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
 				flex: meetingTemplateBeats.flex,
+				handoff: meetingTemplateBeats.handoff,
 				markGreen: meetingTemplateBeats.markGreen,
 				markYellow: meetingTemplateBeats.markYellow,
 				markRed: meetingTemplateBeats.markRed,

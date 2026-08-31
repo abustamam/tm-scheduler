@@ -1614,12 +1614,7 @@ export function resolveDetailTokens(
 	if (!detail.includes("{")) return detail;
 	return detail.replace(
 		DETAIL_TOKEN_RE,
-		(
-			whole,
-			rolesGroup?: string,
-			roleKey?: string,
-			namesKey?: string,
-		) => {
+		(whole, rolesGroup?: string, roleKey?: string, namesKey?: string) => {
 			if (whole === AWARDS_TOKEN) return joinRoleNames(awardLabels(slots));
 			if (whole.startsWith("{roles")) {
 				// A group INSIDE the token is how a materialized beat carries what
