@@ -901,6 +901,12 @@ meeting → file issues → /triage → ready-for-agent → /investigate → imp
                                └→ needs-info → wait
 ```
 
+**Several `ready-for-agent` issues at once → batch them, don't dispatch serially.**
+`bun run batch:issues` groups the open backlog into waves parallel agents can take without
+colliding (see Commands above). The `dispatching-issue-waves` project skill
+(`.claude/skills/dispatching-issue-waves/SKILL.md`) covers how to act on the plan it prints —
+one stage per iteration, re-planned after every land, never executed as a stale printout.
+
 **Do NOT run the feature pipeline on a single issue.** brainstorming → grilling → writing-plans →
 subagent-driven-development earns its cost on a cross-surface feature; on a 30-line bug fix it is
 pure overhead. Keep `/grilling` for `ready-for-human` issues, where the *shape* of the fix is the
