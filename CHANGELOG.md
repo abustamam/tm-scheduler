@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.26.0.1] - 2026-08-28
+
+### Fixed
+
+- **The "All resources" link on a resource article is dark enough to read.** It was a pale teal on the page's off-white background — too faint to meet the accessibility standard for normal text. It now uses the same readable teal as the app's other back-links.
+
 ## [1.26.0.0] - 2026-08-28
 
 ### Added
