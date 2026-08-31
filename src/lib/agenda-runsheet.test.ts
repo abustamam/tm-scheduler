@@ -12,6 +12,7 @@ import {
 	expandRunSheet,
 	FLEX_TOLERANCE_MINUTES,
 	flexBannerMessage,
+	resolveDetailTokens,
 	formatBeatMinutes,
 	functionarySlots,
 	hasAnyFunctionaryRole,
@@ -3689,5 +3690,75 @@ describe("hand-off rows name the people they introduce (#585)", () => {
 			expect(detail).not.toContain("Best Table Topic,");
 			expect(detail).not.toContain(": Introduces");
 		}
+	});
+});
+
+describe("resolveDetailTokens", () => {
+	// A template beat has no `Beat` and no gating fields (spec D1), so the
+	// printed row's token vocabulary has to be reachable without one. This is
+	// the seam that lets an adopted agenda keep naming live holders instead of
+	// printing `{names:general_evaluator}` or freezing one evening's names.
+	const slots = [
+		slot({
+			id: "tm2",
+			roleKey: "timer",
+			roleName: "Timer",
+			category: "functionary",
+			assigneeName: "Ada",
+		}),
+		slot({
+			id: "gr2",
+			roleKey: "grammarian",
+			roleName: "Grammarian",
+			category: "functionary",
+			assigneeName: "Bo",
+		}),
+		slot({
+			id: "ge2",
+			roleKey: "general_evaluator",
+			roleName: "General Evaluator",
+			category: "leadership",
+			assigneeName: "Cy",
+		}),
+	];
+
+	it("resolves {names:…} against the current holders", () => {
+		const out = resolveDetailTokens(
+			"Introduces the GE{names:general_evaluator}",
+			slots,
+			() => [],
+		);
+		expect(out).toContain("Cy");
+		expect(out).not.toContain("{");
+	});
+
+	it("resolves a PARAMETERISED {roles:group} without a Beat", () => {
+		const out = resolveDetailTokens(
+			"Calls for the {roles:functionaries} to report",
+			slots,
+			() => [],
+		);
+		expect(out).toContain("Timer");
+		expect(out).toContain("Grammarian");
+		expect(out).not.toContain("{");
+	});
+
+	it("resolves a BARE {roles} from the caller's fallback", () => {
+		const out = resolveDetailTokens("Introduces the {roles}", slots, () => [
+			"Timer",
+		]);
+		expect(out).toBe("Introduces the Timer");
+	});
+
+	it("leaves an unknown role key verbatim so a typo is visible", () => {
+		expect(resolveDetailTokens("Ask the {role:tymer}", slots, () => [])).toBe(
+			"Ask the {role:tymer}",
+		);
+	});
+
+	it("resolves {role:…} to the club's own name for that role", () => {
+		expect(resolveDetailTokens("Ask the {role:timer}", slots, () => [])).toBe(
+			"Ask the Timer",
+		);
 	});
 });
