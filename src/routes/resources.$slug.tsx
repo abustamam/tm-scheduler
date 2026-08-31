@@ -40,7 +40,11 @@ function ResourceArticle() {
 		<ResourcesShell shell={shell} authCtx={authCtx}>
 			<Link
 				to="/resources"
-				className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-[var(--lagoon-deep)] no-underline hover:underline"
+				// `text-primary`, not `--lagoon-deep`: this sits on `--foam`, where
+				// the deep step is 3.59:1 — under AA for normal text. `--primary`
+				// resolves to `--lagoon-ink` in light (5.49:1) and `--lagoon` in
+				// dark (9.93:1), and matches the other back-links in the app.
+				className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-primary no-underline hover:underline"
 			>
 				<ArrowLeft className="size-4" />
 				All resources
