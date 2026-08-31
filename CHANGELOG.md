@@ -2,6 +2,21 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.27.0.0] - 2026-08-31
+
+### Added
+
+- **Every meeting's agenda is now editable, not just the ones built from a template.** The editor that arrived in v1.25.0.0 — the table with the running clock and the time budget along the bottom — could only ever open for a meeting someone had converted into a contest or another template. An ordinary Monday could not be touched: the timings came from the code, the same for every club, and the only thing a club could change about them was one checkbox. Open any meeting's agenda now and it opens, with the same clock and the same arithmetic. The first time you edit one, that meeting quietly gets its own copy of the standard agenda to hold your changes; nothing else changes and no other meeting is affected.
+- **Your agenda now has sections, so you can see where the hour goes.** An adopted agenda comes with five bands — Opening, Speeches, Table Topics, Evaluations, Closing — and each carries its own total. That is the number that answers the question this work started from: how much of the evening runs before anybody speaks. On a standard meeting the opening and the closing together are usually a third of it, and until now nothing said so.
+- **The agenda tells you what adopting costs.** Editing a meeting's agenda takes it off the standard one for good: improvements we make to the standard agenda stop reaching it. That is deliberate — an agenda you have edited should not be rewritten under you — but it is stated on the page rather than left to be discovered.
+
+### Fixed
+
+- **What prints does not change on the day you start editing.** Adopting an agenda is meant to hand you the same evening you already had, and now it demonstrably does: the sheet is compared row for row against the old code-driven one, for both the standard flow and the variant where the General Evaluator introduces the functionaries, and they match. The hand-off lines and the cue slides in the projected deck survive too, which they would not have without a change to how an agenda is stored.
+- **Names on the agenda still follow whoever holds the role.** A row reading "Introduces the General Evaluator: Dana" names Dana because Dana holds that role this week, not because her name was written down when the agenda was made. Getting this wrong would have printed one evening's names on every meeting thereafter, and the check that proves it renders the same agenda twice with different people and confirms the first name is gone.
+- **Copying an oversized agenda is refused rather than quietly shortened.** A template past the row limit used to be truncated on the way in, which would have handed a club a permanently shorter agenda it never wrote. It now says no.
+- **Undoing a deleted hand-off row brings back a hand-off row.** It used to come back as an ordinary row, losing its slide in the projected deck — the same shape as the "New item" bug fixed in v1.25.1.0, and found the same way.
+
 ## [1.26.1.0] - 2026-08-31
 
 ### Added

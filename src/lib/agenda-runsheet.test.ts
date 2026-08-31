@@ -3750,6 +3750,17 @@ describe("resolveDetailTokens", () => {
 		expect(out).toBe("Introduces the Timer");
 	});
 
+	it("falls back rather than throwing on an unknown {roles:group}", () => {
+		// The token is officer-editable text once an agenda is adopted, so a
+		// mistyped group must degrade to the caller's list instead of throwing
+		// and taking the whole printed sheet down with it.
+		expect(
+			resolveDetailTokens("Introduces the {roles:tymers}", slots, () => [
+				"Timer",
+			]),
+		).toBe("Introduces the Timer");
+	});
+
 	it("leaves an unknown role key verbatim so a typo is visible", () => {
 		expect(resolveDetailTokens("Ask the {role:tymer}", slots, () => [])).toBe(
 			"Ask the {role:tymer}",

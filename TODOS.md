@@ -236,6 +236,13 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   seeded template whose size the seed fixes. Turning an officer-authored private copy into a
   source makes this an officer-sized read. Cap it in that change, not before, and cap it at the
   seam the way `loadTemplateBeats` already does rather than at the writer alone.
+  **HALF DONE in v1.27.0.0 (622a).** The BEATS read is now bounded at `MAX_TEMPLATE_BEATS + 1` and
+  REFUSES past the cap rather than truncating — a copy that silently drops rows hands a club a
+  permanently shorter agenda it never authored, which is the one place truncation is worse than an
+  error. `meeting_template_roles` is still uncapped. Note the trigger is 622b, not 622a: a private
+  per-meeting copy still cannot be a source, so every source remains a seeded template until
+  "save as club template" lands. The beats half was done early because 622a was already in that
+  file; finish the roles half in 622b.
   **Priority:** P3
 
 - **`defaultCount` is unenforced after a re-point, and `slotsAdded` over-reports.**

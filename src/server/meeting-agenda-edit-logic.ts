@@ -128,25 +128,6 @@ function agendaEditable(status: string): boolean {
 }
 
 /**
- * This meeting's editable agenda, or null when it has none.
- *
- * Null means STANDARD: a meeting with `template_id IS NULL` renders the
- * code-derived `RUN_OF_SHOW`, which this editor deliberately does not touch.
- *
- * `meeting.templateId` is read here WITHOUT requiring it to be the meeting's
- * own private copy (`meeting_templates.meeting_id = meetingId`). A meeting
- * converted before this feature landed points straight at a SHARED template
- * instead — Task 6 returned null for that case on the theory that
- * `ensureAgendaDraft` would upgrade it on first write, but that is circular:
- * the route redirects away on null, so the officer never reaches a write, and
- * the upgrade that only fires on write never fires either — for every such
- * meeting, which in production is all of them. Reading it directly is safe
- * either way: `meeting.templateId` is not caller-supplied, it is the meeting's
- * OWN pointer, and the content is exactly what the meeting page already
- * renders. `ensureAgendaDraft` still forks a private copy, just on the first
- * WRITE rather than the first read.
- */
-/**
  * Build this meeting its own editable copy of the standard agenda, once.
  *
  * In a TRANSACTION with a re-read under `FOR UPDATE`: two officers opening the
@@ -196,6 +177,29 @@ async function materialiseForMeeting(
 	});
 }
 
+/**
+ * This meeting's editable agenda, or null when the meeting does not exist.
+ *
+ * Null used to mean STANDARD — a meeting with `template_id IS NULL` rendered
+ * the code-derived `RUN_OF_SHOW` and this editor deliberately did not touch it.
+ * Since #622 a standard meeting is MATERIALIZED into its own private copy on
+ * first load (see `materialiseForMeeting` above), so the only null left is a
+ * meeting id that matches no row.
+ *
+ * `meeting.templateId` is read here WITHOUT requiring it to be the meeting's
+ * own private copy (`meeting_templates.meeting_id = meetingId`). A meeting
+ * converted before this feature landed points straight at a SHARED template
+ * instead — Task 6 returned null for that case on the theory that
+ * `ensureAgendaDraft` would upgrade it on first write, but that is circular:
+ * the route redirects away on null, so the officer never reaches a write, and
+ * the upgrade that only fires on write never fires either — for every such
+ * meeting, which in production is all of them. Reading it directly is safe
+ * either way: `meeting.templateId` is not caller-supplied, it is the meeting's
+ * OWN pointer, and the content is exactly what the meeting page already
+ * renders. For a meeting pointing at a SHARED template, `ensureAgendaDraft`
+ * still forks a private copy on the first WRITE; a standard meeting gets its
+ * copy earlier, on this read.
+ */
 export async function loadAgendaDraft(
 	meetingId: string,
 ): Promise<AgendaDraft | null> {

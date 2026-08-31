@@ -39,10 +39,11 @@ export const Route = createFileRoute(
 		const draft = await getAgendaDraft({
 			data: { meetingId: params.meetingId },
 		});
-		// Null means STANDARD (no template) — this editor has nothing to edit.
-		// A shared-template meeting returns a normal draft (see
-		// `loadAgendaDraft`'s docblock); this redirect is the standard-meeting
-		// case only.
+		// Null now means the meeting does not exist. It used to mean STANDARD —
+		// no template, nothing for this editor to edit — but since #622 a
+		// standard meeting is materialized into its own copy on first load, so
+		// that case returns a normal draft like any other. The redirect stays as
+		// the not-found path.
 		if (!draft) {
 			throw redirect({
 				to: "/club/$clubId/meeting/$meetingId",
