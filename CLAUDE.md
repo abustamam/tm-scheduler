@@ -29,6 +29,43 @@ task description to also get a task-scoped bundle; omit it for deps and env
 only. Afterwards `git status` should be empty — if it is not, something in the
 bootstrap wrote a tracked file and that is a bug worth chasing.
 
+### Branch naming — the issue number goes LAST (required)
+
+**`<slug>-<issue>`.** `fix-dialog-scroll-619`, not `fix-619-dialog-scroll` and
+not `fix-dialog-scroll`. One branch closing several issues appends both:
+`worktree-convert-guard-617-618`.
+
+The name is not decoration — **it is the claim**. `bun run batch:issues` reads
+these numbers back off `git worktree list` and off open PRs' `headRefName`, and
+holds a claimed issue out of the plan. That is the only signal that exists
+during the window duplicate work actually happens in: a worktree claim exists
+from the first edit, before anything is pushed, and 6 of the last 10 merged PRs
+here carried no closing reference in the body at all, so GitHub's own link
+could not have covered them.
+
+Three rules, each with a failure behind it:
+
+- **The number is a SUFFIX here.** The upstream this tool was ported from uses
+  `fix/<issue>-<slug>` and reads leading tokens; this repo's branches already
+  put it last, so `extractIssueNumbersFromRef` reads from the end. Prefixing
+  the number instead makes the branch claim NOTHING — it is not an error, the
+  issue simply gets handed out again.
+- **A thematic name claims nothing, and that is deliberate.** Upstream's
+  motivating collision was two sessions building the same fix twelve minutes
+  apart, and neither saw the other precisely because both branches were named
+  thematically. Do not "fix" this by guessing a number from the slug: holding
+  back an issue nobody is working is a worse failure than the one it prevents.
+  `sw-prime-on-visit` and `worktree-evaluator-reorder-positional` are real
+  branches here that claim nothing.
+- **Do not end a slug in a bare number that is not an issue.** Reading stops at
+  the first trailing token that is not all digits, so `…-622a` correctly claims
+  nothing — but `…-utf-8` would claim issue #8. Rare, and the blast radius is
+  one issue held back, but avoid it.
+
+`EnterWorktree` names the branch after the worktree and prepends `worktree-`,
+so `git branch -m <slug>-<issue>` right after creating one is usually the
+fastest way to comply.
+
 ## Stack
 
 - **TanStack Start** (React 19, SSR via Nitro), file-based routing under `src/routes/`.
@@ -94,6 +131,13 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   (Vite/esbuild) and `bun run test` (Vitest) transpile without type-checking, so both pass on
   type-broken code; run `bun run typecheck` before claiming a change is green. CI runs it in the
   `check` job.
+- `bun run batch:issues` — group open `ready-for-agent` issues into waves that parallel agents
+  can take without colliding, by FILE-disjointness read out of the issue bodies. `--label`,
+  `--issues 619,618`, `--max`, `--fan-in`. Output is a plan; nothing is assigned or started.
+  Logic in `src/lib/issue-batching.ts` (pure, testable), CLI in `scripts/batch-issues.ts`.
+  It reads claims off live worktrees and open PRs, so the branch-naming rule above is what
+  makes it work. Do NOT batch by THEME — theme correlates with files, and files are what
+  actually conflict.
 - Run a single test with `bunx vitest run <path>` (or `bunx vitest <path>` to watch).
 
 **A suite that seeds a CLUB-LESS row must clean it up itself, and must not use a fixed key.**

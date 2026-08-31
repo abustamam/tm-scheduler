@@ -35,6 +35,7 @@
     "resolve:speech-projects": "bun run scripts/resolve-speech-projects.ts",
     "build:role-sheets": "bun run scripts/build-role-sheets.ts",
     "check:eval-links": "bun run scripts/check-evaluation-resource-links.ts",
+    "batch:issues": "bun run scripts/batch-issues.ts",
     "db:pull": "drizzle-kit pull",
     "db:studio": "drizzle-kit studio",
     "ext:dev": "cd extension && bun run dev",
