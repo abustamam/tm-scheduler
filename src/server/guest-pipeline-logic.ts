@@ -24,9 +24,13 @@ import {
 	guests,
 	meetingAttendance,
 	meetings,
+	memberDues,
 	members,
+	officerTerms,
+	pathEnrollments,
 	people,
 	roleSlots,
+	speeches,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { isAtMeetingNow } from "#/lib/guest-book-window";
@@ -35,6 +39,10 @@ import {
 	isStrandedConvertedGuest,
 	LINK_ALREADY_JOINED_MESSAGE,
 	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
+	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
+	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
+	UNDO_NO_RECORD_MESSAGE,
+	UNDO_NOT_CONVERTED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
 import { namesAgree } from "#/lib/person-name";
@@ -455,6 +463,15 @@ export interface PipelineGuestRow {
 	 * time, with a message saying they are not linked when they plainly are.
 	 */
 	linkReversible: boolean;
+	/**
+	 * This guest's conversion carries the record `applyUndoGuestConversion`
+	 * replays (#618), so the card may offer an Undo.
+	 *
+	 * False for a conversion performed before that record existed — the undo
+	 * would be refused, and a button that always fails is worse than none. Also
+	 * false for a LINK, which `linkReversible` covers and Unlink handles.
+	 */
+	conversionUndoable: boolean;
 	/** Earliest visited meeting date (derived — see `loadGuestPipeline`); null if none. */
 	firstVisitAt: Date | null;
 	/** Meetings visited (derived, never a stored counter). */
@@ -556,69 +573,101 @@ export async function loadGuestPipeline(
 	const { timeZone: tz, countryCode: cc } =
 		await loadClubPipelineSettings(clubId);
 	const visits = guestVisits(clubId, tz).as("guest_visits");
-	const [rows, visitRows, slotRows, linkRows] = await Promise.all([
-		db
-			.select({
-				id: guests.id,
-				name: guests.name,
-				preferredName: guests.preferredName,
-				email: guests.email,
-				phone: guests.phone,
-				stage: guests.stage,
-				convertedMembershipId: guests.convertedMembershipId,
-				createdAt: guests.createdAt,
-			})
-			.from(guests)
-			.where(eq(guests.clubId, clubId))
-			.orderBy(asc(guests.name)),
-		db
-			.select({
-				guestId: visits.guestId,
-				visitCount: count(),
-				firstVisitAt: min(visits.scheduledAt),
-			})
-			.from(visits)
-			.groupBy(visits.guestId),
-		db
-			.select({
-				guestId: roleSlots.assignedGuestId,
-				heldSlotCount: count(),
-			})
-			.from(roleSlots)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-			.where(
-				and(eq(meetings.clubId, clubId), isNotNull(roleSlots.assignedGuestId)),
-			)
-			.groupBy(roleSlots.assignedGuestId),
-		// Which guests' pointers came from a LINK (#635) rather than a real
-		// convert. Joined to `guests` on BOTH the guest id and the CURRENT
-		// membership, so a stale record from a link that was since undone and
-		// replaced by a real convert does not read as reversible.
-		db
-			.select({ guestId: guests.id })
-			.from(activityLog)
-			.innerJoin(
-				guests,
-				// Both comparisons cast explicitly. `activity_log.target_id` is TEXT
-				// while `guests.id` / `converted_membership_id` are UUID, and Postgres
-				// has no text=uuid operator — the uncast version was a 500 on every
-				// board load, not a wrong answer.
-				and(
-					sql`${activityLog.detail}->>'fromGuestId' = ${guests.id}::text`,
-					sql`${activityLog.targetId} = ${guests.convertedMembershipId}::text`,
+	const [rows, visitRows, slotRows, linkRows, conversionRows] =
+		await Promise.all([
+			db
+				.select({
+					id: guests.id,
+					name: guests.name,
+					preferredName: guests.preferredName,
+					email: guests.email,
+					phone: guests.phone,
+					stage: guests.stage,
+					convertedMembershipId: guests.convertedMembershipId,
+					createdAt: guests.createdAt,
+				})
+				.from(guests)
+				.where(eq(guests.clubId, clubId))
+				.orderBy(asc(guests.name)),
+			db
+				.select({
+					guestId: visits.guestId,
+					visitCount: count(),
+					firstVisitAt: min(visits.scheduledAt),
+				})
+				.from(visits)
+				.groupBy(visits.guestId),
+			db
+				.select({
+					guestId: roleSlots.assignedGuestId,
+					heldSlotCount: count(),
+				})
+				.from(roleSlots)
+				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+				.where(
+					and(
+						eq(meetings.clubId, clubId),
+						isNotNull(roleSlots.assignedGuestId),
+					),
+				)
+				.groupBy(roleSlots.assignedGuestId),
+			// Which guests' pointers came from a LINK (#635) rather than a real
+			// convert. Joined to `guests` on BOTH the guest id and the CURRENT
+			// membership, so a stale record from a link that was since undone and
+			// replaced by a real convert does not read as reversible.
+			db
+				.select({ guestId: guests.id })
+				.from(activityLog)
+				.innerJoin(
+					guests,
+					// Both comparisons cast explicitly. `activity_log.target_id` is TEXT
+					// while `guests.id` / `converted_membership_id` are UUID, and Postgres
+					// has no text=uuid operator — the uncast version was a 500 on every
+					// board load, not a wrong answer.
+					and(
+						sql`${activityLog.detail}->>'fromGuestId' = ${guests.id}::text`,
+						sql`${activityLog.targetId} = ${guests.convertedMembershipId}::text`,
+					),
+				)
+				.where(
+					and(
+						eq(activityLog.clubId, clubId),
+						eq(activityLog.action, "member_merge"),
+					),
 				),
-			)
-			.where(
-				and(
-					eq(activityLog.clubId, clubId),
-					eq(activityLog.action, "member_merge"),
+			// Which guests' CONVERSIONS carry a replayable record (#618). Same join
+			// shape as the links above and for the same reason, but the predicate is
+			// applied in JS rather than in SQL: `readConversionRecord` is what
+			// `applyUndoGuestConversion` refuses on, and a second definition of
+			// "replayable" expressed in `jsonb ?` operators would drift from it. The
+			// board offering an Undo the server then refuses is precisely the bug the
+			// link comment above records.
+			db
+				.select({ guestId: guests.id, detail: activityLog.detail })
+				.from(activityLog)
+				.innerJoin(
+					guests,
+					and(
+						sql`${activityLog.detail}->>'fromGuestId' = ${guests.id}::text`,
+						sql`${activityLog.targetId} = ${guests.convertedMembershipId}::text`,
+					),
+				)
+				.where(
+					and(
+						eq(activityLog.clubId, clubId),
+						eq(activityLog.action, "member_add"),
+					),
 				),
-			),
-	]);
+		]);
 
 	const visitsByGuest = new Map(visitRows.map((v) => [v.guestId, v]));
 	const slotsByGuest = new Map(slotRows.map((s) => [s.guestId, s]));
 	const reversible = new Set(linkRows.map((l) => l.guestId));
+	const undoable = new Set(
+		conversionRows
+			.filter((c) => readConversionRecord(c.detail) !== null)
+			.map((c) => c.guestId),
+	);
 
 	return rows.map((r) => {
 		const v = visitsByGuest.get(r.id);
@@ -636,6 +685,7 @@ export async function loadGuestPipeline(
 			stage: r.stage,
 			convertedMembershipId: r.convertedMembershipId,
 			linkReversible: reversible.has(r.id),
+			conversionUndoable: undoable.has(r.id),
 			visitCount: Number(v?.visitCount ?? 0),
 			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
 			heldSlotCount: Number(slotsByGuest.get(r.id)?.heldSlotCount ?? 0),
@@ -985,6 +1035,12 @@ export async function applyConvertGuestToMember(
 			const match = candidates.find((p) => namesAgree(p.name, name));
 			if (match) personId = match.id;
 		}
+		// Whether THIS conversion minted the row, as opposed to deduping onto one
+		// that already existed. Recorded in step 5 because an undo must never
+		// delete a Person or a membership it did not create (#618) — and nothing
+		// readable after the fact distinguishes the two.
+		let createdPerson = false;
+		let createdMembership = false;
 		if (!personId) {
 			const [p] = await tx
 				.insert(people)
@@ -992,6 +1048,7 @@ export async function applyConvertGuestToMember(
 				.returning({ id: people.id });
 			if (!p) throw new Error("Failed to create person.");
 			personId = p.id;
+			createdPerson = true;
 		} else if (preferredName) {
 			// Deduped onto an EXISTING Person: the insert above never ran, so seed
 			// the goes-by name here too or it is lost at the person level (#486).
@@ -1075,7 +1132,12 @@ export async function applyConvertGuestToMember(
 				.returning({ id: members.id });
 			if (m) {
 				membershipId = m.id;
+				createdMembership = true;
 			} else {
+				// The conflict branch: a concurrent convert won and created this row.
+				// It is not ours, so `createdMembership` stays false and an undo will
+				// detach the guest without deleting a membership another conversion
+				// is the author of.
 				const [raced] = await tx
 					.select({ id: members.id })
 					.from(members)
@@ -1092,10 +1154,17 @@ export async function applyConvertGuestToMember(
 		}
 
 		// 3. Re-point the guest's role slots to the new member (XOR constraint holds).
-		await tx
+		//
+		// `returning` the ids is what makes step 5's record replayable. An undo
+		// cannot re-derive this set later: by then the slots sit on the membership
+		// beside any the member has been assigned SINCE, and moving those to a
+		// guest would invent history rather than reverse it (#618). Same reason
+		// `applyLinkGuestToMember` records its own `slotIds`.
+		const movedSlots = await tx
 			.update(roleSlots)
 			.set({ assignedMemberId: membershipId, assignedGuestId: null })
-			.where(eq(roleSlots.assignedGuestId, input.guestId));
+			.where(eq(roleSlots.assignedGuestId, input.guestId))
+			.returning({ id: roleSlots.id });
 
 		// 4. Freeze the guest as joined with its membership pointer (never deleted).
 		await tx
@@ -1114,7 +1183,17 @@ export async function applyConvertGuestToMember(
 			action: "member_add",
 			targetType: "member",
 			targetId: membershipId,
-			detail: { name, fromGuestId: input.guestId, personId },
+			// `slotIds`, `createdMembership` and `createdPerson` are what make this
+			// conversion reversible (#618). A record without them predates undo and
+			// is refused rather than half-replayed — see `applyUndoGuestConversion`.
+			detail: {
+				name,
+				fromGuestId: input.guestId,
+				personId,
+				slotIds: movedSlots.map((s) => s.id),
+				createdMembership,
+				createdPerson,
+			},
 		});
 
 		return { ok: true as const, membershipId, personId };
@@ -1330,6 +1409,276 @@ export async function applyUnlinkGuestFromMember(
 		});
 
 		return { ok: true as const, slotIds };
+	});
+}
+
+export interface UndoConversionInput {
+	clubId: string;
+	guestId: string;
+	actorMemberId: string | null;
+}
+
+export interface UndoConversionResult {
+	ok: true;
+	/** Slots returned to the guest — exactly the set the conversion moved. */
+	slotIds: string[];
+	/** False when convert REUSED a membership; that row is left standing. */
+	membershipDeleted: boolean;
+}
+
+/** The replayable half of a conversion's activity record (#618). */
+type ConversionRecord = {
+	personId: string;
+	slotIds: string[];
+	createdMembership: boolean;
+	createdPerson: boolean;
+};
+
+/**
+ * A conversion's activity detail, or `null` when it cannot be replayed.
+ *
+ * Every field is checked for its TYPE rather than its truthiness, because the
+ * dangerous shape here is the older record that carries `personId` and nothing
+ * else: read loosely, `createdMembership` would default to `false` and the undo
+ * would silently leave a membership standing that it was supposed to remove, or
+ * — with the default the other way — delete a roster row this conversion never
+ * created. An absent `slotIds` is likewise not an empty one. A guest who held no
+ * slots is a real and ordinary case, so emptiness cannot mean "no record"; only
+ * the key being missing can.
+ */
+function readConversionRecord(detail: unknown): ConversionRecord | null {
+	if (!detail || typeof detail !== "object") return null;
+	const d = detail as Record<string, unknown>;
+	if (typeof d.personId !== "string") return null;
+	if (!Array.isArray(d.slotIds)) return null;
+	if (typeof d.createdMembership !== "boolean") return null;
+	if (typeof d.createdPerson !== "boolean") return null;
+	return {
+		personId: d.personId,
+		slotIds: d.slotIds.filter((s): s is string => typeof s === "string"),
+		createdMembership: d.createdMembership,
+		createdPerson: d.createdPerson,
+	};
+}
+
+/**
+ * Undo a convert-to-member (#618): the reverse of `applyConvertGuestToMember`.
+ *
+ * Convert is otherwise a one-way door. Its button is the only filled control on
+ * every non-joined card, immediately beside the outline stage buttons, with a
+ * `window.confirm` as the sole guard — so one mis-tap on a phone during a
+ * meeting stamped a `members` row plus a `people` row and there was no way back
+ * without database access.
+ *
+ * ## Why it replays a RECORD instead of re-deriving
+ *
+ * The same reason `applyUnlinkGuestFromMember` does, and the stakes are higher
+ * here because this one can delete a roster row. Two things are unknowable after
+ * the fact:
+ *
+ *   - WHICH slots the conversion moved. By now they sit on the membership beside
+ *     any the member has been assigned since, and handing those to a guest would
+ *     invent history rather than reverse it.
+ *   - WHETHER the conversion created the membership and the Person, or deduped
+ *     onto rows that already existed. Deleting a membership convert merely
+ *     REUSED destroys roster data the conversion never owned.
+ *
+ * So convert records both, and a conversion older than that record is refused
+ * (`UNDO_NO_RECORD_MESSAGE`) rather than half-reversed. That refusal is not a
+ * dead end: removing the member from the roster still works, and #632 made the
+ * guest card recover its controls when it does.
+ *
+ * ## What refuses it
+ *
+ * The membership must be untouched since. A signed-in account (`people.user_id`,
+ * the same gate `applyMemberRemove` uses), dues rows, and any role slot the
+ * member holds BEYOND the ones the conversion moved all block it — each is
+ * something a delete would destroy, and the merge tool is the right instrument
+ * once any is true.
+ *
+ * Speeches and Pathways enrolments are checked ONLY when the conversion created
+ * the Person. They hang off `people`, not `members`, so removing a membership
+ * never destroys them — but on a Person this conversion minted they can only
+ * have been earned afterwards, which makes them evidence the human really did
+ * start participating as a member. On a Person that was deduped onto, the same
+ * rows are somebody's pre-existing history in another club and say nothing about
+ * this conversion.
+ *
+ * The created Person is deliberately LEFT BEHIND when the membership goes. It is
+ * global (ADR-0008), deleting it could cascade further than this undo's remit,
+ * and an orphan Person is visible to the merge tool — which is the recoverable
+ * direction this file keeps choosing.
+ */
+export async function applyUndoGuestConversion(
+	input: UndoConversionInput,
+): Promise<UndoConversionResult> {
+	return db.transaction(async (tx) => {
+		const [guest] = await tx
+			.select()
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1)
+			.for("update");
+		if (!guest) throw new Error("Guest not found in this club.");
+		// A STRANDED guest lands here too, and refusing is right: its membership
+		// is already gone, so there is nothing to unwind, and #632 gave that row
+		// its ordinary stage and delete controls back.
+		if (!guest.convertedMembershipId) {
+			throw new Error(UNDO_NOT_CONVERTED_MESSAGE);
+		}
+		const membershipId = guest.convertedMembershipId;
+
+		// Newest first and tie-broken on id, for the reason `findGuestByContact`
+		// documents. Scoped to the membership the guest currently points at, so a
+		// guest converted, undone, and converted again cannot replay the older run.
+		const [entry] = await tx
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, input.clubId),
+					eq(activityLog.action, "member_add"),
+					sql`${activityLog.detail}->>'fromGuestId' = ${input.guestId}`,
+					eq(activityLog.targetId, membershipId),
+				),
+			)
+			.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+			.limit(1);
+		const record = readConversionRecord(entry?.detail ?? null);
+		if (!record) throw new Error(UNDO_NO_RECORD_MESSAGE);
+
+		// Lock the MEMBERSHIP too, not just the guest. Every guard below reads
+		// something hanging off this row, and a concurrent write would otherwise
+		// commit between the read and the delete — a role claimed for this member
+		// mid-undo would pass the "no extra roles" check and then be silently
+		// unassigned by the FK's `set null` on the way out. A slot insert takes a
+		// key-share lock on the member row it references, so taking it FOR UPDATE
+		// here is what actually serialises the two. Same reasoning as convert's
+		// lock on the guest row: read outside the lock, a check is a stale
+		// snapshot.
+		await tx
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.id, membershipId))
+			.limit(1)
+			.for("update");
+
+		const [person] = await tx
+			.select({ userId: people.userId })
+			.from(people)
+			.where(eq(people.id, record.personId))
+			.limit(1);
+		if (person?.userId) throw new Error(UNDO_MEMBER_HAS_ACCOUNT_MESSAGE);
+
+		// Slots the member holds that this conversion did NOT move. `notInArray`
+		// is avoided: drizzle compiles an empty list to a constant, and the two
+		// constants differ by operator, so an empty `slotIds` would silently
+		// invert this check rather than widen it.
+		const held = await tx
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(
+				and(
+					eq(roleSlots.assignedMemberId, membershipId),
+					eq(meetings.clubId, input.clubId),
+				),
+			);
+		const moved = new Set(record.slotIds);
+		if (held.some((s) => !moved.has(s.id))) {
+			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("roles"));
+		}
+
+		const [dues] = await tx
+			.select({ n: count() })
+			.from(memberDues)
+			.where(eq(memberDues.membershipId, membershipId));
+		if (Number(dues?.n ?? 0) > 0) {
+			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("dues records"));
+		}
+
+		const [terms] = await tx
+			.select({ n: count() })
+			.from(officerTerms)
+			.where(eq(officerTerms.membershipId, membershipId));
+		if (Number(terms?.n ?? 0) > 0) {
+			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("an officer term"));
+		}
+
+		if (record.createdPerson) {
+			const [spoken] = await tx
+				.select({ n: count() })
+				.from(speeches)
+				.where(eq(speeches.personId, record.personId));
+			if (Number(spoken?.n ?? 0) > 0) {
+				throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speeches"));
+			}
+			const [enrolled] = await tx
+				.select({ n: count() })
+				.from(pathEnrollments)
+				.where(eq(pathEnrollments.personId, record.personId));
+			if (Number(enrolled?.n ?? 0) > 0) {
+				throw new Error(
+					UNDO_MEMBER_HAS_HISTORY_MESSAGE("a Pathways enrolment"),
+				);
+			}
+		}
+
+		// Empty is legitimate — a guest who held no slots when converted — and the
+		// guard is still required, because drizzle compiles `inArray(col, [])` to
+		// `false` and the UPDATE would be a no-op that reads exactly like success.
+		if (record.slotIds.length > 0) {
+			await tx
+				.update(roleSlots)
+				.set({ assignedMemberId: null, assignedGuestId: input.guestId })
+				// Still held by THIS membership. A recorded slot that has since been
+				// reassigned to somebody else belongs to them now, and handing it to
+				// the guest would take a role off a third party who has no part in
+				// this undo. The guard above only proves the member holds nothing
+				// EXTRA; it says nothing about a recorded slot having moved away.
+				.where(
+					and(
+						inArray(roleSlots.id, record.slotIds),
+						eq(roleSlots.assignedMemberId, membershipId),
+					),
+				);
+		}
+
+		// Ordered after the slot move on purpose: `role_slots.assigned_member_id`
+		// would otherwise be cleared by the membership's own cascade, and the
+		// slots would return to OPEN instead of to the guest.
+		if (record.createdMembership) {
+			await tx.delete(members).where(eq(members.id, membershipId));
+		}
+
+		await tx
+			.update(guests)
+			.set({
+				stage: "following_up",
+				convertedMembershipId: null,
+				updatedAt: new Date(),
+			})
+			.where(eq(guests.id, input.guestId));
+
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "member_remove",
+			targetType: "member",
+			targetId: membershipId,
+			detail: {
+				name: guest.name,
+				undoneGuestId: input.guestId,
+				slotIds: record.slotIds,
+				membershipDeleted: record.createdMembership,
+			},
+		});
+
+		return {
+			ok: true as const,
+			slotIds: record.slotIds,
+			membershipDeleted: record.createdMembership,
+		};
 	});
 }
 

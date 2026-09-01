@@ -14,18 +14,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	clubs,
+	duesPeriods,
 	guests,
 	meetingAttendance,
 	meetings,
+	memberDues,
 	members,
+	officerTerms,
 	people,
 	roleSlots,
+	speeches,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import {
 	CONVERT_NAME_CLASH_MESSAGE,
 	LINK_ALREADY_JOINED_MESSAGE,
 	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
+	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
+	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
+	UNDO_NO_RECORD_MESSAGE,
+	UNDO_NOT_CONVERTED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
@@ -61,6 +69,7 @@ const {
 	applyDeleteGuest,
 	applyLinkGuestToMember,
 	applySetGuestStage,
+	applyUndoGuestConversion,
 	applyUnlinkGuestFromMember,
 	applyUpdateGuest,
 	captureGuestVisit,
@@ -2717,6 +2726,421 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				// stale record from making an unlinked guest look reversible.
 				expect(row?.convertedMembershipId).toBeNull();
 				expect(row?.linkReversible).toBe(false);
+			});
+		});
+	});
+
+	describe("undo a convert-to-member (#618)", () => {
+		/**
+		 * Convert a fresh guest and hand back every id the undo reasons about.
+		 *
+		 * Deliberately goes through `applyConvertGuestToMember` rather than
+		 * hand-writing the rows: the undo replays the ACTIVITY RECORD convert
+		 * writes, so a fixture that stamped `stage`/`converted_membership_id`
+		 * directly would test a state production never produces.
+		 */
+		async function converted(name: string) {
+			const guestId = await seedGuest(seed.clubId, name);
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			strayPeople.push(res.personId);
+			return { guestId, ...res };
+		}
+
+		/** Strip the replayable keys, leaving the pre-#618 record shape. */
+		async function stripRecord(guestId: string) {
+			const [row] = await testDb
+				.select({ id: activityLog.id, detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "member_add"),
+						sql`${activityLog.detail}->>'fromGuestId' = ${guestId}`,
+					),
+				)
+				.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+				.limit(1);
+			if (!row) throw new Error("No conversion record to strip");
+			const d = row.detail as Record<string, unknown>;
+			await testDb
+				.update(activityLog)
+				.set({
+					detail: {
+						name: d.name,
+						fromGuestId: d.fromGuestId,
+						personId: d.personId,
+					},
+				})
+				.where(eq(activityLog.id, row.id));
+		}
+
+		async function guestRow(guestId: string) {
+			const [g] = await testDb
+				.select({
+					stage: guests.stage,
+					convertedMembershipId: guests.convertedMembershipId,
+				})
+				.from(guests)
+				.where(eq(guests.id, guestId))
+				.limit(1);
+			return g;
+		}
+
+		it("returns the guest, its slots and the roster to before the convert", async () => {
+			const guestId = await seedGuest(seed.clubId, "Misclick Guest");
+			const slotId = await seedGuestRoleSlot(
+				seed.meetingId,
+				seed.roleDefinitionId,
+				guestId,
+			);
+			const { membershipId, personId } = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			strayPeople.push(personId);
+
+			const res = await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.membershipDeleted).toBe(true);
+			expect(res.slotIds).toEqual([slotId]);
+
+			// The slot goes back to the GUEST, not to open. This is what orders the
+			// membership delete after the slot move: the FK would otherwise null
+			// `assigned_member_id` on its way out and strand the slot unassigned.
+			const [slot] = await testDb
+				.select({
+					memberId: roleSlots.assignedMemberId,
+					guestId: roleSlots.assignedGuestId,
+					status: roleSlots.status,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId))
+				.limit(1);
+			expect(slot?.guestId).toBe(guestId);
+			expect(slot?.memberId).toBeNull();
+			expect(slot?.status).toBe("claimed");
+
+			const g = await guestRow(guestId);
+			expect(g?.stage).toBe("following_up");
+			expect(g?.convertedMembershipId).toBeNull();
+
+			const [gone] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, membershipId))
+				.limit(1);
+			expect(gone).toBeUndefined();
+		});
+
+		it("logs the undo against the membership it removed", async () => {
+			const { guestId, membershipId } = await converted("Logged Undo");
+			await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			const [row] = await testDb
+				.select({ detail: activityLog.detail, targetId: activityLog.targetId })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "member_remove"),
+						eq(activityLog.targetId, membershipId),
+					),
+				)
+				.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+				.limit(1);
+			expect(row).toBeDefined();
+			const detail = row?.detail as { undoneGuestId?: string } | null;
+			expect(detail?.undoneGuestId).toBe(guestId);
+		});
+
+		it("refuses a guest that was never converted", async () => {
+			const guestId = await seedGuest(seed.clubId, "Never Converted");
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_NOT_CONVERTED_MESSAGE);
+		});
+
+		it("refuses a STRANDED guest, whose membership is already gone", async () => {
+			// #632 gave this row its stage and delete controls back; there is no
+			// membership left to unwind, so the undo is not the recovery for it.
+			const { guestId, membershipId } = await converted("Stranded Undo");
+			await testDb.delete(members).where(eq(members.id, membershipId));
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_NOT_CONVERTED_MESSAGE);
+		});
+
+		it("refuses a conversion that predates the replayable record", async () => {
+			const { guestId } = await converted("Old Conversion");
+			await stripRecord(guestId);
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_NO_RECORD_MESSAGE);
+		});
+
+		it("refuses when the converted member can sign in", async () => {
+			const { guestId, personId } = await converted("Account Undo");
+			await testDb
+				.update(people)
+				.set({ userId: seed.memberUserId })
+				.where(eq(people.id, personId));
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_MEMBER_HAS_ACCOUNT_MESSAGE);
+		});
+
+		it("refuses when the member took on a role the conversion did not move", async () => {
+			const { guestId, membershipId } = await converted("Busy Undo");
+			await testDb.insert(roleSlots).values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: seed.roleDefinitionId,
+				assignedMemberId: membershipId,
+				status: "claimed",
+			});
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_MEMBER_HAS_HISTORY_MESSAGE("roles"));
+		});
+
+		it("refuses when the member has dues recorded", async () => {
+			const { guestId, membershipId } = await converted("Dues Undo");
+			const [period] = await testDb
+				.insert(duesPeriods)
+				.values({
+					clubId: seed.clubId,
+					label: `Undo period ${randomUUID()}`,
+					dueDate: new Date(),
+				})
+				.returning({ id: duesPeriods.id });
+			if (!period) throw new Error("Failed to seed dues period");
+			await testDb.insert(memberDues).values({
+				membershipId,
+				duesPeriodId: period.id,
+				status: "paid",
+			});
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_MEMBER_HAS_HISTORY_MESSAGE("dues records"));
+		});
+
+		it("refuses when a Person this conversion MINTED has since spoken", async () => {
+			// Only meaningful on a fresh Person: a speech on one it deduped onto is
+			// somebody's pre-existing history, and removing a membership does not
+			// destroy it (speeches hang off `people`, not `members`).
+			const { guestId, personId } = await converted("Spoken Undo");
+			await testDb.insert(speeches).values({ personId, title: "First speech" });
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speeches"));
+		});
+
+		it("leaves a REUSED membership standing and still frees the guest", async () => {
+			// Convert dedupes onto an existing Person and reuses their membership in
+			// this club, so that row predates the conversion. Deleting it would
+			// destroy roster data the conversion never created.
+			const personId = await trackedPerson({
+				name: "Existing Human",
+				email: `reuse-${randomUUID()}@example.com`,
+			});
+			const [existing] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name: "Existing Human" })
+				.returning({ id: members.id });
+			if (!existing) throw new Error("Failed to seed membership");
+			const guestId = await seedGuest(seed.clubId, "Existing Human");
+			const [person] = await testDb
+				.select({ email: people.email })
+				.from(people)
+				.where(eq(people.id, personId))
+				.limit(1);
+			await testDb
+				.update(guests)
+				.set({ email: person?.email ?? null })
+				.where(eq(guests.id, guestId));
+
+			const conv = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(conv.membershipId).toBe(existing.id);
+
+			const res = await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.membershipDeleted).toBe(false);
+
+			const [still] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, existing.id))
+				.limit(1);
+			expect(still?.id).toBe(existing.id);
+			const g = await guestRow(guestId);
+			expect(g?.stage).toBe("following_up");
+			expect(g?.convertedMembershipId).toBeNull();
+		});
+
+		it("refuses when the member holds an officer term", async () => {
+			// `officer_terms.membership_id` cascades on delete, so an undo without
+			// this guard erases a term silently — the worst shape of data loss.
+			const { guestId, membershipId } = await converted("Officer Undo");
+			await testDb.insert(officerTerms).values({
+				membershipId,
+				position: "president",
+				termStart: new Date(),
+			});
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_MEMBER_HAS_HISTORY_MESSAGE("an officer term"));
+		});
+
+		it("leaves a recorded slot that has since moved to someone else", async () => {
+			// The "no extra roles" guard proves the member holds nothing beyond the
+			// recorded set; it says nothing about a recorded slot having moved AWAY.
+			// Replaying it blindly would take a role off a third party.
+			const guestId = await seedGuest(seed.clubId, "Moved Slot Guest");
+			const slotId = await seedGuestRoleSlot(
+				seed.meetingId,
+				seed.roleDefinitionId,
+				guestId,
+			);
+			const { personId } = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			strayPeople.push(personId);
+
+			// The VPE reassigns that slot to a different member afterwards.
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: seed.memberId })
+				.where(eq(roleSlots.id, slotId));
+
+			await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const [slot] = await testDb
+				.select({
+					memberId: roleSlots.assignedMemberId,
+					guestId: roleSlots.assignedGuestId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId))
+				.limit(1);
+			expect(slot?.memberId).toBe(seed.memberId);
+			expect(slot?.guestId).toBeNull();
+		});
+
+		it("cannot be replayed twice", async () => {
+			const { guestId } = await converted("Twice Undo");
+			await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_NOT_CONVERTED_MESSAGE);
+		});
+
+		describe("conversionUndoable on the board", () => {
+			async function flagFor(guestId: string) {
+				const rows = await loadGuestPipeline(seed.clubId);
+				return rows.find((r) => r.id === guestId)?.conversionUndoable;
+			}
+
+			it("is true for a real convert and false once undone", async () => {
+				const { guestId } = await converted("Flag Undo");
+				expect(await flagFor(guestId)).toBe(true);
+				await applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+				expect(await flagFor(guestId)).toBe(false);
+			});
+
+			it("is false for a conversion with no replayable record", async () => {
+				// The board must not offer an Undo the server would refuse — the same
+				// failure the Unlink button had before `linkReversible` existed.
+				const { guestId } = await converted("Flag Old");
+				await stripRecord(guestId);
+				expect(await flagFor(guestId)).toBe(false);
+			});
+
+			it("is false for a LINK, which Unlink owns", async () => {
+				const guestId = await seedGuest(seed.clubId, "Flag Link");
+				const linkPersonId = await trackedPerson({ name: "Flag Link" });
+				const [m] = await testDb
+					.insert(members)
+					.values({
+						clubId: seed.clubId,
+						personId: linkPersonId,
+						name: "Flag Link",
+					})
+					.returning({ id: members.id });
+				if (!m) throw new Error("Failed to seed member");
+				await applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					memberId: m.id,
+					actorMemberId: seed.adminMemberId,
+				});
+				expect(await flagFor(guestId)).toBe(false);
 			});
 		});
 	});
