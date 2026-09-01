@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
-import { type ChangeEvent, useState } from "react";
+import { type ChangeEvent, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
@@ -100,10 +100,25 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 const textareaClass =
 	"flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:text-sm";
 
-// Native <select> styled to match the shadcn <Input> (no shadcn Select in ui/),
-// matching /admin/roles and /admin/schedule.
+/**
+ * Native <select> styled to match the shadcn <Input> (there is no shadcn Select
+ * in `ui/`).
+ *
+ * Tracks `input.tsx`'s CURRENT classes rather than copying the older string in
+ * `/admin/roles` and `/admin/schedule`, which has drifted: those two predate the
+ * `shadow-xs` / 3px tinted focus ring / `dark:bg-input/30` styling and sit among
+ * other selects, where the difference is invisible. This select sits directly
+ * among Input-styled text fields (District, Meeting schedule, Default country
+ * code), so a thin single-colour focus ring and a flat dark background read as a
+ * bug. The other two copies are recorded in TODOS.md rather than changed here.
+ *
+ * `text-base md:text-sm`, not a bare `text-sm`: iOS Safari auto-zooms the page
+ * when a form control under 16px takes focus, and this control opens a
+ * 400-entry picker — the one place on the page where that zoom is most
+ * disruptive.
+ */
 const selectClass =
-	"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+	"flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 /**
  * "America/Chicago (GMT-5)" — the offset is what makes a 400-entry list
@@ -155,6 +170,17 @@ function ClubSettings() {
 	const [savingAgenda, setSavingAgenda] = useState(false);
 	const [zone, setZone] = useState(timezone.timezone);
 	const [savingZone, setSavingZone] = useState(false);
+	/**
+	 * Memoized because this whole page is ONE component: the lead-time input and
+	 * three checkboxes are all controlled state here, so without this every
+	 * keystroke and every toggle would rebuild ~420 labels, each constructing an
+	 * `Intl.DateTimeFormat` (~28ms measured). `timezone.zones` is loader data and
+	 * referentially stable between renders, so the list is built once per load.
+	 */
+	const zoneOptions = useMemo(
+		() => timezone.zones.map((z) => ({ value: z, label: zoneLabel(z) })),
+		[timezone.zones],
+	);
 	const [logoFile, setLogoFile] = useState<File | null>(null);
 	const [logoAttested, setLogoAttested] = useState(false);
 	const [uploadingLogo, setUploadingLogo] = useState(false);
@@ -389,7 +415,7 @@ function ClubSettings() {
 
 			<form onSubmit={onSaveTimezone} className="max-w-xl space-y-4">
 				<div className="space-y-2">
-					<Label htmlFor="timezone">Club time zone</Label>
+					<Label htmlFor="timezone">Time zone</Label>
 					<select
 						id="timezone"
 						name="timezone"
@@ -397,17 +423,16 @@ function ClubSettings() {
 						value={zone}
 						onChange={(e) => setZone(e.target.value)}
 					>
-						{timezone.zones.map((z) => (
-							<option key={z} value={z}>
-								{zoneLabel(z)}
+						{zoneOptions.map((o) => (
+							<option key={o.value} value={o.value}>
+								{o.label}
 							</option>
 						))}
 					</select>
 					<p className="text-xs text-muted-foreground">
-						Changing this re-labels meetings that already exist: the times
-						themselves don't move, but the dates shown against them — and the
-						dated links to them — are recalculated in the new zone, so a meeting
-						link shared earlier may stop working.
+						Meeting times won't change, but their dates might — dates are shown
+						in whichever zone you pick here. If you've already shared a link to
+						a meeting, re-share it after saving: the old link may stop working.
 					</p>
 				</div>
 				{/* The label is swapped for a spinner while saving, so a role+name

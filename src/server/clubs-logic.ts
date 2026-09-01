@@ -303,6 +303,17 @@ export type ClubTimezoneSettings = {
  * Falls back to {@link DEFAULT_CLUB_TIMEZONE} when the club row is missing
  * (never throws), mirroring `getClubAgendaSettings` — a settings form can always
  * render, and the value it shows is the one the column default would have given.
+ *
+ * **The stored zone is unioned in when the list no longer contains it.**
+ * `CLUB_TIMEZONES` is computed from the RUNNING process's ICU tables, and those
+ * change between deploys: a zone written under one Node build can be spelled
+ * differently — or dropped — under the next. Without this the select would hold
+ * no `<option>` matching `value={zone}`, which does not error; it silently
+ * displays the FIRST option, so a club in Asia/Calcutta would read as
+ * Africa/Abidjan and the next save would write that. Same failure the header of
+ * `club-timezone.ts` describes for browser-vs-server, one axis over, and the
+ * reason the write-time `.refine` alone is not enough: it only proves the value
+ * was valid when it was written.
  */
 export async function getClubTimezoneSettings(
 	clubId: string,
@@ -312,9 +323,12 @@ export async function getClubTimezoneSettings(
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
 		.limit(1);
+	const timezone = row?.timezone ?? DEFAULT_CLUB_TIMEZONE;
 	return {
-		timezone: row?.timezone ?? DEFAULT_CLUB_TIMEZONE,
-		zones: CLUB_TIMEZONES,
+		timezone,
+		zones: isSupportedClubTimezone(timezone)
+			? CLUB_TIMEZONES
+			: [timezone, ...CLUB_TIMEZONES].sort(),
 	};
 }
 

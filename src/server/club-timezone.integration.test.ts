@@ -17,8 +17,12 @@
 
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { meetings } from "#/db/schema";
-import { DEFAULT_CLUB_TIMEZONE } from "#/lib/club-timezone";
+import { clubs, meetings } from "#/db/schema";
+import {
+	CLUB_TIMEZONES,
+	DEFAULT_CLUB_TIMEZONE,
+	isSupportedClubTimezone,
+} from "#/lib/club-timezone";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
 import {
@@ -75,6 +79,46 @@ describe.skipIf(!hasTestDb)("club timezone setting (#547)", () => {
 		// A select whose options omit the stored value silently renders its FIRST
 		// option instead — the club would look like it were in Africa/Abidjan.
 		expect(settings.zones).toContain(settings.timezone);
+	});
+
+	it("unions a stored zone the runtime's own list no longer carries", async () => {
+		// The deploy-drift case. `CLUB_TIMEZONES` comes from the RUNNING process's
+		// ICU tables, so a value written under one Node build can be absent under
+		// the next — and then the picker has no <option> for it and silently shows
+		// its first entry instead. Write past the schema deliberately to simulate
+		// that; the seam must still hand the client something it can display.
+		//
+		// `Antarctica/South_Pole` is a real deprecated alias that this ICU does not
+		// list, which is what makes it a faithful stand-in. But its ABSENCE is
+		// itself an ICU fact, so assert the precondition: if a future build starts
+		// listing it, this fails saying so rather than failing on an off-by-one
+		// length and sending the next reader after the union logic.
+		const DRIFTED = "Antarctica/South_Pole";
+		expect(
+			isSupportedClubTimezone(DRIFTED),
+			`${DRIFTED} is now in this runtime's zone list — pick another absent zone`,
+		).toBe(false);
+
+		await testDb
+			.update(clubs)
+			.set({ timezone: DRIFTED })
+			.where(eq(clubs.id, seed.clubId));
+
+		const settings = await getClubTimezoneSettings(seed.clubId);
+		expect(settings.timezone).toBe(DRIFTED);
+		expect(settings.zones).toContain(DRIFTED);
+		// Still sorted, and the real list is still there — the union must not
+		// replace the options, only add the one that is missing.
+		expect([...settings.zones]).toEqual([...settings.zones].sort());
+		expect(settings.zones).toContain(DEFAULT_CLUB_TIMEZONE);
+		expect(settings.zones.length).toBe(CLUB_TIMEZONES.length + 1);
+	});
+
+	it("does not duplicate the stored zone when the list already has it", async () => {
+		await applyClubTimezoneUpdate({ clubId: seed.clubId, timezone: TOKYO });
+		const settings = await getClubTimezoneSettings(seed.clubId);
+		expect(settings.zones.filter((z) => z === TOKYO).length).toBe(1);
+		expect(settings.zones.length).toBe(CLUB_TIMEZONES.length);
 	});
 
 	it("reads the default for a club that does not exist, rather than throwing", async () => {

@@ -128,4 +128,55 @@ describe("club settings writers are admin-gated (#547)", () => {
 			expect(writer.body).toMatch(/Schema\.parse\(/);
 		});
 	}
+
+	// The READ side. Enrolled here for the same reason as the writers: a handler
+	// body is unreachable from vitest, so dropping `requireClubViewAccess` and
+	// leaving a bare `requireUser()` would make every club's settings readable by
+	// any signed-in user of any club, with the whole suite green.
+	//
+	// Two of this file's GETs are deliberately PUBLIC (`getClubByIdentifier`,
+	// `getPublicClubProfileFn`) and are covered by the archive-gate sweep in
+	// `public-readers-archive-gate.guard.test.ts` instead.
+	//
+	// They are waived BY NAME, which is the weak point: a name buys an exemption
+	// whose claim nobody re-checks, and CLAUDE.md records that exact shape costing
+	// 11 ungated endpoints when a sweep exempted three guards by name whose
+	// property did not hold. So each waiver must EARN it — the body has to route
+	// through a `Public`-named seam, this repo's only in-source signal that a
+	// reader is archive-gated. Note the signal is on the SEAM, not the endpoint:
+	// `getClubByIdentifier` is public but says so only by calling
+	// `resolvePublicClubIdentifier`.
+	const PUBLIC_GETS = new Set([
+		"getClubByIdentifier",
+		"getPublicClubProfileFn",
+	]);
+	const readers = fns.filter(
+		(f) => f.method === "GET" && !PUBLIC_GETS.has(f.name),
+	);
+
+	it("finds the authed readers, and every waived GET earns its waiver", () => {
+		expect(readers.map((r) => r.name)).toContain("loadClubTimezoneSettings");
+		for (const name of PUBLIC_GETS) {
+			const fn = fns.find((f) => f.name === name && f.method === "GET");
+			expect(
+				fn,
+				`${name} is waived as public but is no longer a GET server fn here`,
+			).toBeDefined();
+			// Routes through a Public (archive-gated) seam...
+			expect(fn?.body).toMatch(/Public/);
+			// ...and resolves no session, which is what makes it public at all. A
+			// waived GET that started requiring one would be an authed reader
+			// hiding in the exemption list.
+			expect(fn?.body).not.toMatch(/requireUser\(\)/);
+		}
+	});
+
+	for (const reader of readers) {
+		it(`${reader.name} gates the read on club view access`, () => {
+			expect(reader.body).toMatch(/requireUser\(\)/);
+			expect(reader.body).toMatch(
+				/require(ClubViewAccess|ClubAdminView)\(\s*currentUser\.id,\s*clubId,?\s*\)/,
+			);
+		});
+	}
 });

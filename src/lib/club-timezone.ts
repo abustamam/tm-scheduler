@@ -40,7 +40,11 @@ export const CLUB_TIMEZONES: readonly string[] = [
 
 const CLUB_TIMEZONE_SET: ReadonlySet<string> = new Set(CLUB_TIMEZONES);
 
-/** Shown when a write is rejected; also the picker's own failure copy. */
+/**
+ * The zod rejection message for an unsupported zone. Reaches a user only as the
+ * server's error text in the settings toast — the picker cannot offer an invalid
+ * option, so there is no client-side check that renders it.
+ */
 export const INVALID_TIMEZONE_MESSAGE = "Choose a valid time zone.";
 
 /**

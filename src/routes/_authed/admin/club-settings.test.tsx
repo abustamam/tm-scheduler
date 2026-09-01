@@ -105,9 +105,15 @@ function loaderData(
 		logoMeta: overrides.logoMeta === undefined ? null : overrides.logoMeta,
 		timezone: {
 			timezone: overrides.timezone ?? "America/Chicago",
-			zones: ZONES,
+			zones: ZONES as readonly string[],
 		},
 	};
+}
+
+/** `loaderData` with the zone LIST overridden too — for the deploy-drift case
+ *  where the stored zone is not in the runtime's own list. */
+function loaderDataWith(timezone: { timezone: string; zones: string[] }) {
+	return { ...loaderData(), timezone };
 }
 
 /** Render the route's component with `useRouteContext`/`useLoaderData` stubbed. */
@@ -411,8 +417,7 @@ describe("Club settings — remove write path (onRemoveLogo)", () => {
  */
 describe("club settings — time zone (#547)", () => {
 	/** The select is labelled, so this is also the a11y assertion. */
-	const picker = () =>
-		screen.getByLabelText("Club time zone") as HTMLSelectElement;
+	const picker = () => screen.getByLabelText("Time zone") as HTMLSelectElement;
 
 	it("preselects the club's stored zone rather than the first option", async () => {
 		// The specific failure this pins: a select whose `value` does not match
@@ -480,15 +485,30 @@ describe("club settings — time zone (#547)", () => {
 		expect(invalidateSpy).not.toHaveBeenCalled();
 	});
 
-	it("warns that changing the zone re-labels meetings that already exist", async () => {
+	it("warns that changing the zone re-labels meetings, and says what to do", async () => {
 		await renderRoute(loaderData());
 		// The behaviour pinned by `club-timezone.integration.test.ts` is one an
 		// admin has to be told about BEFORE they change it — a dated link can 404
 		// or, on a double-header, resolve to the other meeting. If that copy is
-		// dropped, the behaviour becomes a surprise.
-		expect(
-			screen.getByText(/meeting link shared earlier may stop working/i),
-		).toBeTruthy();
+		// dropped, the behaviour becomes a surprise. The remedy is asserted too:
+		// a warning with no action leaves the officer stuck.
+		expect(screen.getByText(/old link may stop working/i)).toBeTruthy();
+		expect(screen.getByText(/re-share it after saving/i)).toBeTruthy();
+	});
+
+	it("still displays a stored zone the current ICU list has dropped", async () => {
+		// The deploy-drift case: `getClubTimezoneSettings` unions the stored value
+		// into `zones` when its own list no longer carries that spelling. Here the
+		// loader supplies exactly that shape. Without the union the select finds no
+		// matching <option> and silently falls back to the first — which is not an
+		// error, just a club quietly reading as the wrong zone.
+		await renderRoute(
+			loaderDataWith({
+				timezone: "Asia/Calcutta",
+				zones: ["Asia/Calcutta", ...ZONES].sort(),
+			}),
+		);
+		expect(picker().value).toBe("Asia/Calcutta");
 	});
 
 	it("disables the save button while the write is in flight", async () => {
