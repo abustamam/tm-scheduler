@@ -33,8 +33,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("#/server/clubs", () => ({
 	getClubProfileSettings: vi.fn(),
 	loadClubAgendaSettings: vi.fn(),
+	loadClubTimezoneSettings: vi.fn(),
 	updateClubAgendaSettings: vi.fn(),
 	updateClubProfile: vi.fn(),
+	updateClubTimezone: vi.fn(),
 }));
 vi.mock("#/server/notification-prefs", () => ({
 	loadClubReminderSettings: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("sonner", () => ({
 
 import { toast } from "sonner";
 import { removeClubLogoFn, uploadClubLogo } from "#/server/club-logo";
+import { updateClubTimezone } from "#/server/clubs";
 import { CLUB_LOGO_COPY, Route } from "./club-settings";
 
 afterEach(() => {
@@ -74,9 +77,20 @@ const ADMIN_CLUB = {
 	clubRole: "admin" as const,
 };
 
+/**
+ * The zones the fake loader offers. A THREE-entry list, not the real ~420: the
+ * point of every assertion below is that the component renders the list the
+ * SERVER sent and preselects the club's own value, and a short list makes an
+ * off-by-one or a dropped option visible in the failure message.
+ */
+const ZONES = ["America/Chicago", "Asia/Tokyo", "UTC"] as const;
+
 /** The loader payload shape the component reads, with only what it touches. */
 function loaderData(
-	overrides: { logoMeta?: { updatedAt: string } | null } = {},
+	overrides: {
+		logoMeta?: { updatedAt: string } | null;
+		timezone?: string;
+	} = {},
 ) {
 	return {
 		profile: {
@@ -89,6 +103,10 @@ function loaderData(
 		reminders: { enabled: true, leadTimeDays: 3 },
 		agenda: { geIntroducesFunctionaries: false },
 		logoMeta: overrides.logoMeta === undefined ? null : overrides.logoMeta,
+		timezone: {
+			timezone: overrides.timezone ?? "America/Chicago",
+			zones: ZONES,
+		},
 	};
 }
 
@@ -379,5 +397,97 @@ describe("Club settings — remove write path (onRemoveLogo)", () => {
 
 		await waitFor(() => expect(toast.error).toHaveBeenCalledWith("permission"));
 		expect(invalidateSpy).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The "Time zone" section (#547).
+ *
+ * These cover the half of the feature the DB-backed suite structurally cannot
+ * see: what the admin is shown and what the form actually sends. The seam tests
+ * in `club-timezone.integration.test.ts` prove the write is correct once it
+ * arrives; nothing there can catch a select that renders the wrong list, or a
+ * submit handler that posts the club's OLD zone.
+ */
+describe("club settings — time zone (#547)", () => {
+	/** The select is labelled, so this is also the a11y assertion. */
+	const picker = () =>
+		screen.getByLabelText("Club time zone") as HTMLSelectElement;
+
+	it("preselects the club's stored zone rather than the first option", async () => {
+		// The specific failure this pins: a select whose `value` does not match
+		// any option silently falls back to option one, so the club would read as
+		// America/Chicago no matter what it had saved. Tokyo is deliberately not
+		// first in ZONES.
+		await renderRoute(loaderData({ timezone: "Asia/Tokyo" }));
+		expect(picker().value).toBe("Asia/Tokyo");
+	});
+
+	it("renders exactly the zones the loader supplied", async () => {
+		await renderRoute(loaderData());
+		expect([...picker().options].map((o) => o.value)).toEqual([...ZONES]);
+	});
+
+	it("labels each option with its zone and current offset", async () => {
+		await renderRoute(loaderData());
+		// The offset is computed live from Intl, so assert its SHAPE rather than a
+		// value: "GMT-5" and "GMT-6" are both correct depending on whether the
+		// suite runs inside US summer time, and pinning one would make this test a
+		// calendar bomb.
+		const chicago = [...picker().options].find(
+			(o) => o.value === "America/Chicago",
+		);
+		expect(chicago?.text).toMatch(/^America\/Chicago \(GMT[+-]\d+\)$/);
+	});
+
+	it("saves the newly picked zone, not the one the club started on", async () => {
+		const user = userEvent.setup();
+		vi.mocked(updateClubTimezone).mockResolvedValue({ ok: true });
+		const router = await renderRoute(
+			loaderData({ timezone: "America/Chicago" }),
+		);
+		const invalidateSpy = vi
+			.spyOn(router, "invalidate")
+			.mockResolvedValue(undefined);
+
+		await user.selectOptions(picker(), "Asia/Tokyo");
+		await user.click(screen.getByRole("button", { name: "Save time zone" }));
+
+		await waitFor(() =>
+			expect(updateClubTimezone).toHaveBeenCalledWith({
+				data: { clubId: ADMIN_CLUB.clubId, timezone: "Asia/Tokyo" },
+			}),
+		);
+		expect(toast.success).toHaveBeenCalledWith("Time zone saved.");
+		expect(invalidateSpy).toHaveBeenCalled();
+	});
+
+	it("shows the server's message and does not invalidate when the save rejects", async () => {
+		const user = userEvent.setup();
+		vi.mocked(updateClubTimezone).mockRejectedValue(
+			new Error("This club has been archived."),
+		);
+		const router = await renderRoute(loaderData());
+		const invalidateSpy = vi
+			.spyOn(router, "invalidate")
+			.mockResolvedValue(undefined);
+
+		await user.click(screen.getByRole("button", { name: "Save time zone" }));
+
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("This club has been archived."),
+		);
+		expect(invalidateSpy).not.toHaveBeenCalled();
+	});
+
+	it("warns that changing the zone re-labels meetings that already exist", async () => {
+		await renderRoute(loaderData());
+		// The behaviour pinned by `club-timezone.integration.test.ts` is one an
+		// admin has to be told about BEFORE they change it — a dated link can 404
+		// or, on a double-header, resolve to the other meeting. If that copy is
+		// dropped, the behaviour becomes a surprise.
+		expect(
+			screen.getByText(/meeting link shared earlier may stop working/i),
+		).toBeTruthy();
 	});
 });

@@ -17,8 +17,10 @@ import {
 import {
 	getClubProfileSettings,
 	loadClubAgendaSettings,
+	loadClubTimezoneSettings,
 	updateClubAgendaSettings,
 	updateClubProfile,
+	updateClubTimezone,
 } from "#/server/clubs";
 import {
 	loadClubReminderSettings,
@@ -83,13 +85,14 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const [profile, reminders, agenda, logoMeta] = await Promise.all([
+		const [profile, reminders, agenda, logoMeta, timezone] = await Promise.all([
 			getClubProfileSettings({ data: context.adminClub.clubId }),
 			loadClubReminderSettings({ data: context.adminClub.clubId }),
 			loadClubAgendaSettings({ data: context.adminClub.clubId }),
 			getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }),
+			loadClubTimezoneSettings({ data: context.adminClub.clubId }),
 		]);
-		return { profile, reminders, agenda, logoMeta };
+		return { profile, reminders, agenda, logoMeta, timezone };
 	},
 	component: ClubSettings,
 });
@@ -97,9 +100,44 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 const textareaClass =
 	"flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:text-sm";
 
+// Native <select> styled to match the shadcn <Input> (no shadcn Select in ui/),
+// matching /admin/roles and /admin/schedule.
+const selectClass =
+	"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
+/**
+ * "America/Chicago (GMT-5)" — the offset is what makes a 400-entry list
+ * pickable, since an admin knows their offset far better than which IANA city
+ * names their zone.
+ *
+ * Offsets are CURRENT, not fixed: a zone on summer time shows its summer
+ * offset, which is the one that matches the admin's clock as they read it. The
+ * zone id is what gets stored either way, so the label drifting across a DST
+ * boundary changes nothing about the setting.
+ *
+ * The `try` is for a zone the SERVER's ICU lists and this browser's does not
+ * resolve (the two builds' alias tables differ — see `CLUB_TIMEZONES`); such an
+ * option stays selectable, just without an offset.
+ */
+function zoneLabel(zone: string): string {
+	const name = zone.replace(/_/g, " ");
+	try {
+		const offset = new Intl.DateTimeFormat("en-US", {
+			timeZone: zone,
+			timeZoneName: "shortOffset",
+		})
+			.formatToParts(new Date())
+			.find((p) => p.type === "timeZoneName")?.value;
+		return offset ? `${name} (${offset})` : name;
+	} catch {
+		return name;
+	}
+}
+
 function ClubSettings() {
 	const { adminClub } = Route.useRouteContext();
-	const { profile, reminders, agenda, logoMeta } = Route.useLoaderData();
+	const { profile, reminders, agenda, logoMeta, timezone } =
+		Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
 	const [remindersEnabled, setRemindersEnabled] = useState(reminders.enabled);
@@ -111,6 +149,8 @@ function ClubSettings() {
 		agenda.geIntroducesFunctionaries,
 	);
 	const [savingAgenda, setSavingAgenda] = useState(false);
+	const [zone, setZone] = useState(timezone.timezone);
+	const [savingZone, setSavingZone] = useState(false);
 	const [logoFile, setLogoFile] = useState<File | null>(null);
 	const [logoAttested, setLogoAttested] = useState(false);
 	const [uploadingLogo, setUploadingLogo] = useState(false);
@@ -184,6 +224,22 @@ function ClubSettings() {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {
 			setSavingAgenda(false);
+		}
+	}
+
+	async function onSaveTimezone(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		setSavingZone(true);
+		try {
+			await updateClubTimezone({
+				data: { clubId: adminClub.clubId, timezone: zone },
+			});
+			toast.success("Time zone saved.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setSavingZone(false);
 		}
 	}
 
@@ -313,6 +369,48 @@ function ClubSettings() {
 						<Loader2 className="size-4 animate-spin" />
 					) : (
 						"Save club profile"
+					)}
+				</Button>
+			</form>
+
+			<div className="pt-2">
+				<h2 className="font-display text-xl font-semibold tracking-[-0.01em]">
+					Time zone
+				</h2>
+				<p className="text-sm text-muted-foreground">
+					The zone your club meets in. Every meeting time, date and deadline in
+					the app is shown and interpreted in it.
+				</p>
+			</div>
+
+			<form onSubmit={onSaveTimezone} className="max-w-xl space-y-4">
+				<div className="space-y-2">
+					<Label htmlFor="timezone">Club time zone</Label>
+					<select
+						id="timezone"
+						name="timezone"
+						className={selectClass}
+						value={zone}
+						onChange={(e) => setZone(e.target.value)}
+					>
+						{timezone.zones.map((z) => (
+							<option key={z} value={z}>
+								{zoneLabel(z)}
+							</option>
+						))}
+					</select>
+					<p className="text-xs text-muted-foreground">
+						Changing this re-labels meetings that already exist: the times
+						themselves don't move, but the dates shown against them — and the
+						dated links to them — are recalculated in the new zone, so a meeting
+						link shared earlier may stop working.
+					</p>
+				</div>
+				<Button type="submit" disabled={savingZone} className="w-full">
+					{savingZone ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						"Save time zone"
 					)}
 				</Button>
 			</form>
