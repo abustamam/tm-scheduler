@@ -137,16 +137,17 @@ export function probeDialog(opts: {
 	const chrome = findChrome();
 	if (!chrome) throw new Error("No Chrome — set CHROME_PATH.");
 
-	// Written exactly as `writeViewportBox` writes it, including the units. The
-	// names are imported rather than spelled, so this cannot drift from the
-	// module under test.
-	const publish = opts.box
-		? `document.documentElement.style.setProperty(${JSON.stringify(
-				DIALOG_VIEWPORT_HEIGHT,
-			)}, ${JSON.stringify(`${opts.box.height}px`)});
-			document.documentElement.style.setProperty(${JSON.stringify(
-				DIALOG_VIEWPORT_TOP,
-			)}, ${JSON.stringify(`${opts.box.offsetTop}px`)});`
+	// Published as an inline `style` on `<html>`, which is the same place and the
+	// same units `writeViewportBox` writes to — but present from PARSE TIME.
+	//
+	// It was a `setProperty` call in the probe script first, and that was flaky
+	// in CI in the worst way: the geometry came back as the `100svh` fallback on
+	// SOME runs, so a different test failed each time and every failure looked
+	// like a real regression in the fix. Nothing about a dialog is asynchronous
+	// here, so there is no reason to introduce an ordering the document does not
+	// need — an attribute cannot race the layout it is an input to.
+	const publishedStyle = opts.box
+		? ` style="${DIALOG_VIEWPORT_HEIGHT}:${opts.box.height}px;${DIALOG_VIEWPORT_TOP}:${opts.box.offsetTop}px"`
 		: "";
 
 	const bandTop = opts.band.offsetTop;
@@ -155,7 +156,6 @@ export function probeDialog(opts: {
 	const probe = `<script>
 	(function () {
 		function fail(why) { document.title = "ERROR:" + why; }
-		${publish}
 		var shell = document.querySelector(${JSON.stringify(opts.shellSelector)});
 		var body = document.querySelector(${JSON.stringify(opts.bodySelector)});
 		var tail = document.querySelector(${JSON.stringify(opts.tailSelector)});
@@ -164,6 +164,12 @@ export function probeDialog(opts: {
 		if (!body) return fail("no body");
 		if (!tail) return fail("no tail");
 		if (!close) return fail("no close");
+		// The shell is only meaningfully measurable once the stylesheet is in
+		// effect. Unstyled, it is a static block whose geometry is plausible and
+		// wrong — which is how a CSS problem masquerades as a layout regression.
+		if (getComputedStyle(shell).position !== "fixed") {
+			return fail("stylesheet not applied — shell is " + getComputedStyle(shell).position);
+		}
 		var bandTop = ${bandTop}, bandBottom = ${bandBottom};
 		function inBand(el) {
 			var r = el.getBoundingClientRect();
@@ -211,7 +217,7 @@ export function probeDialog(opts: {
 		writeFileSync(join(dir, "app.css"), opts.css, "utf8");
 		writeFileSync(
 			join(dir, "page.html"),
-			`<!doctype html><html><head><meta charset="utf-8">` +
+			`<!doctype html><html${publishedStyle}><head><meta charset="utf-8">` +
 				`<link rel="stylesheet" href="./app.css"></head><body>` +
 				`${opts.bodyHtml}${probe}</body></html>`,
 			"utf8",
