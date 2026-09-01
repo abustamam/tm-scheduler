@@ -36,6 +36,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+	DIALOG_VIEWPORT_HEIGHT,
+	DIALOG_VIEWPORT_TOP,
+} from "#/lib/dialog-viewport";
 import { readSource } from "#/test/guard-source";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -144,6 +148,71 @@ describe("DialogContent keeps a height ceiling and a scroller (#619, #627)", () 
 		expect(ceiling).not.toMatch(/[^s]vh/);
 	});
 
+	it("measures the ceiling against the VISUAL viewport, not just svh", () => {
+		// #619 half (b). `svh` resolves against the LAYOUT viewport, which the
+		// on-screen keyboard does not shrink, so an `svh`-only ceiling is correct
+		// and simply never engages with the keyboard up. The ceiling has to read
+		// the property `#/lib/dialog-viewport` publishes, and `100svh` survives as
+		// the `var()` fallback for SSR and for engines with no `visualViewport`.
+		const ceiling = dialogContentClasses().match(/max-h-\[[^\]]+\]/)?.[0] ?? "";
+		expect(ceiling).toContain(DIALOG_VIEWPORT_HEIGHT);
+		expect(ceiling).toContain("100svh");
+	});
+
+	it("centres against the VISUAL viewport too, not only sizes to it", () => {
+		// Shrinking the box without moving it leaves a correctly sized dialog
+		// still centred on the layout viewport — i.e. still under the keyboard.
+		// `offsetTop` is what iOS reports when it scrolls the visual viewport to
+		// clear a focused input, and it is a separate failure mode from height,
+		// so both properties are asserted.
+		const top = dialogContentClasses().match(/\btop-\[[^\]]+\]/)?.[0] ?? "";
+		expect(top).toContain(DIALOG_VIEWPORT_HEIGHT);
+		expect(top).toContain(DIALOG_VIEWPORT_TOP);
+		expect(top).toContain("100svh");
+	});
+
+	it("wires the class string to the module that writes those properties", () => {
+		// The seam that can drift SILENTLY. A Tailwind arbitrary value is scanned
+		// statically, so the class string above must spell the property names as
+		// literal text and cannot interpolate the constants. Rename them in
+		// `dialog-viewport.ts` alone and `var()` falls back to `100svh` — the fix
+		// is gone, nothing throws, and typecheck, lint and every in-process test
+		// stay green. The two assertions above read the same exported constants
+		// this one requires the component to import, so a rename now has to reach
+		// the class string or fail here.
+		const src = readSource(DIALOG);
+		expect(src).toMatch(/from\s+"#\/lib\/dialog-viewport(\.ts)?"/);
+		expect(src).toContain("trackVisualViewport");
+	});
+
+	it("tracks the viewport from inside Content, not beside it", () => {
+		// Two failure modes, and only one position avoids both.
+		//
+		// In `DialogContent` itself the effect runs for every dialog COMPONENT in
+		// the tree, open or not — call sites render the element unconditionally
+		// and Radix decides presence internally — so the listener would stay
+		// attached for the life of the page. Hence: under the portal.
+		//
+		// As a SIBLING of `Content` under that portal it unmounts too EARLY:
+		// Radix wraps each portal child in its own `Presence`, and this one
+		// declares no exit animation, so the properties clear while `Content` is
+		// still fading out. Measured in the browser, that grows a closing
+		// keyboard-open dialog from 237px back to 528px mid-fade. Hence: a child
+		// of `Content`, whose lifetime includes the exit animation.
+		const src = readSource(DIALOG);
+		const contentAt = src.indexOf("<DialogPrimitive.Content");
+		const syncAt = src.indexOf("<DialogViewportSync");
+		const bodyAt = src.indexOf('data-slot="dialog-body"');
+		expect(syncAt, "DialogViewportSync is not rendered").toBeGreaterThan(-1);
+		expect(contentAt, "no DialogPrimitive.Content").toBeGreaterThan(-1);
+		expect(
+			syncAt,
+			"DialogViewportSync must be INSIDE DialogPrimitive.Content — as a " +
+				"sibling it unmounts before the close animation finishes",
+		).toBeGreaterThan(contentAt);
+		expect(syncAt).toBeLessThan(bodyAt);
+	});
+
 	it("still centres with a translate, which is why the ceiling is required", () => {
 		// If DialogContent ever stops being fixed+centred, the failure mode this
 		// guard protects changes shape and the reasoning above needs revisiting.
@@ -196,8 +265,18 @@ function tsxFiles(dir: string, acc: string[] = []): string[] {
  * That is the ORIGINAL bug reintroduced one call site at a time, and a regex
  * matching only `overflow-y-*` cannot see it — found by review, not by the
  * first draft of this guard.
+ *
+ * `top-[` joined them with #619's keyboard half, and it is the subtlest of the
+ * four. The shell now takes BOTH its ceiling and its centring from the visual
+ * viewport, and a call site that overrides only `top` leaves the dialog
+ * correctly SIZED to the space above the keyboard while still centred on the
+ * layout viewport — which is to say, still behind the keyboard. That failure
+ * looks like nothing at all on a desktop viewport, where the two agree.
+ * Anchored on a leading token boundary so a longer utility ending in `top-`
+ * cannot trip it.
  */
-const HEIGHT_OVERRIDE = /max-h-\[|overflow-y-(auto|scroll)|overflow-hidden/;
+const HEIGHT_OVERRIDE =
+	/max-h-\[|overflow-y-(auto|scroll)|overflow-hidden|[\s:"']top-\[/;
 
 /**
  * Every `<DialogContent …>` opening tag in a file, brace-aware.
@@ -276,6 +355,24 @@ describe("no dialog re-solves height locally (#619)", () => {
 		const tags = dialogContentTags(src);
 		expect(tags).toHaveLength(1);
 		expect(HEIGHT_OVERRIDE.test(tags[0] ?? "")).toBe(true);
+	});
+
+	it("finds a call site that re-centres the dialog itself", () => {
+		// The #619 keyboard half: overriding `top` alone keeps the ceiling and
+		// throws away the re-centring, which reads as correct everywhere the
+		// layout and visual viewports agree.
+		const tags = dialogContentTags('<DialogContent className="top-[10%]">');
+		expect(tags).toHaveLength(1);
+		expect(HEIGHT_OVERRIDE.test(tags[0] ?? "")).toBe(true);
+	});
+
+	it("does not trip on a utility that merely ends in 'top-'", () => {
+		// The token boundary earns its place: without it, any future utility
+		// whose name ends in `top-` would produce a false offender, and an
+		// offender list nobody trusts gets waived rather than fixed.
+		const tags = dialogContentTags('<DialogContent className="scroll-mt-4">');
+		expect(tags).toHaveLength(1);
+		expect(HEIGHT_OVERRIDE.test(tags[0] ?? "")).toBe(false);
 	});
 
 	it("does not match a different component with the same prefix", () => {
