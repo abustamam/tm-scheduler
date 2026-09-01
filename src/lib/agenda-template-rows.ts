@@ -25,6 +25,7 @@ import {
 	type AgendaRow,
 	type AgendaSlot,
 	assigneeDisplay,
+	evaluatedSpeakerLabel,
 	numbered,
 	OPEN_LABEL,
 	resolveDetailTokens,
@@ -35,6 +36,7 @@ import {
 	MAX_TEMPLATE_DETAIL_CHARS,
 	MAX_TEMPLATE_LABEL_CHARS,
 } from "./meeting-template-limits";
+import { speechBookedMinutes, speechWindow } from "./speech-window";
 
 /**
  * A beat's CONTENT, with no identity — what a seed authors and what gets
@@ -242,6 +244,40 @@ function toRow(
 	// so this is a corruption guard; Phase 2's editor needs a validation error.
 	if (!role) return null;
 
+	// A SPEAKER or EVALUATOR row is about one person's speech, so three of its
+	// fields come from the SLOT rather than the beat — exactly as `expandRunSheet`
+	// builds them. Without this an adopted agenda prints "Prepared speech" where
+	// the code path printed the speech's own title and level, drops the Timer's
+	// green/yellow/red for every speech, and says "Evaluates a speaker" instead
+	// of naming who. The marks are the sharp end: the Timer works from the
+	// printed sheet, and a speech row with no window gives them nothing to time.
+	const oneSlot = bound.length === 1 ? bound[0] : null;
+	// A speaker row reads its own speech; an evaluator row reads the speech it
+	// evaluates. `isSpeakerRole` is true for BOTH in this repo's role model, so
+	// they are told apart by whether the slot points at a speaker.
+	const isEvaluatorSlot = oneSlot?.evaluatesSlotId != null;
+	// Only when the BEAT declares no window of its own. A beat carrying marks is
+	// stating that the format fixes this segment — a contest's "Impromptu answer"
+	// runs 1:00-2:00 whoever is speaking — and must keep them. A standard speech
+	// beat declares none and defers to the speaker's own project, which is what
+	// `expandRunSheet` has always done.
+	const speechSlot =
+		role.isSpeakerRole && oneSlot && !isEvaluatorSlot && base.marks == null
+			? oneSlot
+			: null;
+	const evaluatedLabel =
+		oneSlot && isEvaluatorSlot
+			? evaluatedSpeakerLabel(oneSlot, allSlots)
+			: null;
+	const window = speechSlot ? speechWindow(speechSlot) : null;
+	const speechMarks = window
+		? {
+				green: window.min,
+				yellow: (window.min + window.max) / 2,
+				red: window.max,
+			}
+		: null;
+
 	// Number by the SLOT when the role really repeats, and label the assignee
 	// from the slot so a club that renamed the role sees its own word (#445).
 	const numberedLabel = numbered(label, index, total > 1);
@@ -264,6 +300,21 @@ function toRow(
 		...(names.length > 0 ? { holders: names } : {}),
 		roleKey: role.key,
 		...base,
+		// Slot-derived overrides, applied AFTER `base` so they win. Only ever set
+		// on a speaker or evaluator row bound to exactly one slot; every other row
+		// keeps the beat's own detail, minutes and marks untouched.
+		...(speechSlot
+			? {
+					detail: speechSlot.speechTitle
+						? `"${speechSlot.speechTitle}"${
+								speechSlot.projectLevel ? ` · ${speechSlot.projectLevel}` : ""
+							}`
+						: base.detail,
+					minutes: speechBookedMinutes(speechSlot),
+					marks: speechMarks,
+				}
+			: {}),
+		...(evaluatedLabel ? { detail: `Evaluates ${evaluatedLabel}` } : {}),
 	};
 }
 

@@ -1408,7 +1408,7 @@ function slotsForRole(
  * rather than storing it keeps the two in step through a role rename (#368) —
  * `slotsForRole` matches on the stable key first.
  */
-function evaluatedSpeakerLabel(
+export function evaluatedSpeakerLabel(
 	evaluator: AgendaSlot,
 	slots: AgendaSlot[],
 ): string | null {
