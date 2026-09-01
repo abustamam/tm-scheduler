@@ -31,7 +31,11 @@ vi.mock("#/server/guest-pipeline", () => ({
 	convertGuestToMember: vi.fn(),
 	deleteGuest: vi.fn(),
 	getGuestPipeline: vi.fn(),
+	getLinkCandidates: vi.fn(),
+	linkGuestToMember: vi.fn(),
 	setGuestStage: vi.fn(),
+	undoGuestConversion: vi.fn(),
+	unlinkGuestFromMember: vi.fn(),
 	updateGuest: vi.fn(),
 }));
 vi.mock("#/server/clubs", () => ({
@@ -66,6 +70,7 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		stage: "prospect",
 		convertedMembershipId: null,
 		linkReversible: false,
+		conversionUndoable: false,
 		firstVisitAt: null,
 		visitCount: 0,
 		heldSlotCount: 0,
@@ -264,5 +269,59 @@ describe("VP Membership guest card — edit dialog phone prefill", () => {
 	it("prefills empty for a guest with no number on file", async () => {
 		await renderRoute([guestRow({ phone: null, phoneRaw: null })]);
 		expect((await openEditDialog()).value).toBe("");
+	});
+});
+
+describe("VP Membership guest card — undo a conversion (#618)", () => {
+	const MEMBERSHIP = "33333333-3333-4333-8333-333333333333";
+
+	/** A guest converted for real: pointer set, and NOT a link. */
+	function convertedRow(over: Partial<PipelineGuestRow> = {}) {
+		return guestRow({
+			name: "Converted Guest",
+			stage: "joined",
+			convertedMembershipId: MEMBERSHIP,
+			linkReversible: false,
+			conversionUndoable: true,
+			...over,
+		});
+	}
+
+	it("offers Undo conversion on a real convert that carries a record", async () => {
+		await renderRoute([convertedRow()]);
+		expect(
+			screen.getByRole("button", { name: /undo conversion/i }),
+		).toBeTruthy();
+	});
+
+	it("offers nothing when the conversion predates the record", async () => {
+		// The server would refuse this one, and a button that always fails is
+		// worse than none — the same reasoning that keeps Unlink off a real
+		// convert. Asserted as an ABSENCE because that is the actual invariant.
+		await renderRoute([convertedRow({ conversionUndoable: false })]);
+		expect(
+			screen.queryByRole("button", { name: /undo conversion/i }),
+		).toBeNull();
+	});
+
+	it("offers Unlink, not Undo, for a guest that was LINKED", async () => {
+		await renderRoute([
+			convertedRow({ linkReversible: true, conversionUndoable: false }),
+		]);
+		expect(screen.getByRole("button", { name: /unlink/i })).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /undo conversion/i }),
+		).toBeNull();
+	});
+
+	it("offers no Undo on a STRANDED guest, which has its own controls back", async () => {
+		// Stranded = joined with a null pointer (#632). There is no membership
+		// left to unwind, and the card already shows the stage buttons again.
+		await renderRoute([
+			convertedRow({ convertedMembershipId: null, conversionUndoable: false }),
+		]);
+		expect(
+			screen.queryByRole("button", { name: /undo conversion/i }),
+		).toBeNull();
 	});
 });

@@ -37,6 +37,7 @@ import {
 	type ManualGuestStage,
 	type PipelineGuestRow,
 	setGuestStage,
+	undoGuestConversion,
 	unlinkGuestFromMember,
 	updateGuest,
 } from "#/server/guest-pipeline";
@@ -567,7 +568,48 @@ function GuestLinkMember({
 		}
 	}
 
-	if (convertedForReal) return null;
+	async function onUndoConversion() {
+		// A confirm, like Convert's own — this one deletes a roster row, and the
+		// button sits on a card the admin may have opened for another reason.
+		if (
+			!window.confirm(
+				`Undo ${guest.name}'s conversion? This removes the membership it ` +
+					`created and returns them to Following up, with any roles they hold ` +
+					`going back to the guest.`,
+			)
+		) {
+			return;
+		}
+		setBusy(true);
+		try {
+			await undoGuestConversion({ data: { clubId, guestId: guest.id } });
+			toast.success(`${guest.name} is a guest again.`);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	if (convertedForReal) {
+		// Only when the conversion carries the record the undo replays (#618). A
+		// conversion older than that record would be refused by the server, and a
+		// button that always fails is worse than no button — the same reasoning
+		// that keeps Unlink off a real convert two branches up.
+		if (!guest.conversionUndoable) return null;
+		return (
+			<Button
+				type="button"
+				variant="outline"
+				size="sm"
+				disabled={disabled || busy}
+				onClick={() => void onUndoConversion()}
+			>
+				Undo conversion
+			</Button>
+		);
+	}
 
 	if (linkedByLink) {
 		return (
