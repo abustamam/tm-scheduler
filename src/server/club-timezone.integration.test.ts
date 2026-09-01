@@ -128,6 +128,17 @@ describe.skipIf(!hasTestDb)("club timezone setting (#547)", () => {
 		expect(parsed.success).toBe(true);
 	});
 
+	it("rejects a clubId that is not a uuid, before it reaches Postgres", () => {
+		// Not cosmetic: `applyClubTimezoneUpdate` compares against a uuid column,
+		// and Postgres throws `invalid input syntax for type uuid` on a non-uuid
+		// — a 500 where the schema should have produced a clean rejection.
+		const parsed = clubTimezoneSchema.safeParse({
+			clubId: "not-a-uuid",
+			timezone: TOKYO,
+		});
+		expect(parsed.success).toBe(false);
+	});
+
 	it("never stores a rejected zone, so the datetime helpers cannot be poisoned", async () => {
 		// Belt-and-braces on the criterion "rejected even if the client sends it
 		// directly": prove the column still holds a resolvable zone afterwards.

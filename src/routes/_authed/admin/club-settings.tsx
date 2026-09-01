@@ -118,8 +118,12 @@ const selectClass =
  * The `try` is for a zone the SERVER's ICU lists and this browser's does not
  * resolve (the two builds' alias tables differ — see `CLUB_TIMEZONES`); such an
  * option stays selectable, just without an offset.
+ *
+ * Exported only so the degraded paths are reachable from a test: both of them
+ * depend on how the BROWSER's `Intl` answers, which cannot be provoked through
+ * a rendered select without stubbing `Intl` for the whole render.
  */
-function zoneLabel(zone: string): string {
+export function zoneLabel(zone: string): string {
 	const name = zone.replace(/_/g, " ");
 	try {
 		const offset = new Intl.DateTimeFormat("en-US", {
@@ -406,7 +410,15 @@ function ClubSettings() {
 						link shared earlier may stop working.
 					</p>
 				</div>
-				<Button type="submit" disabled={savingZone} className="w-full">
+				{/* The label is swapped for a spinner while saving, so a role+name
+				    query cannot find this button in exactly the state worth
+				    asserting. The testid is the stable handle. */}
+				<Button
+					type="submit"
+					data-testid="save-timezone"
+					disabled={savingZone}
+					className="w-full"
+				>
 					{savingZone ? (
 						<Loader2 className="size-4 animate-spin" />
 					) : (

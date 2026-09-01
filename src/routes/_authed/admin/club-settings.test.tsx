@@ -60,7 +60,7 @@ vi.mock("sonner", () => ({
 import { toast } from "sonner";
 import { removeClubLogoFn, uploadClubLogo } from "#/server/club-logo";
 import { updateClubTimezone } from "#/server/clubs";
-import { CLUB_LOGO_COPY, Route } from "./club-settings";
+import { CLUB_LOGO_COPY, Route, zoneLabel } from "./club-settings";
 
 afterEach(() => {
 	cleanup();
@@ -489,5 +489,108 @@ describe("club settings — time zone (#547)", () => {
 		expect(
 			screen.getByText(/meeting link shared earlier may stop working/i),
 		).toBeTruthy();
+	});
+
+	it("disables the save button while the write is in flight", async () => {
+		const user = userEvent.setup();
+		// Hold the write open so the pending state is observable. Without this
+		// gate the promise resolves inside the click and the disabled window is
+		// gone before any assertion can see it.
+		let release: (v: { ok: true }) => void = () => {};
+		vi.mocked(updateClubTimezone).mockReturnValue(
+			new Promise((resolve) => {
+				release = resolve;
+			}),
+		);
+		const router = await renderRoute(loaderData());
+		vi.spyOn(router, "invalidate").mockResolvedValue(undefined);
+
+		const button = () =>
+			screen.getByTestId("save-timezone") as HTMLButtonElement;
+		expect(button().disabled).toBe(false);
+
+		await user.click(button());
+		await waitFor(() => expect(button().disabled).toBe(true));
+
+		release({ ok: true });
+		// Settles cleanly — the finally block must clear the flag, or the admin is
+		// locked out of a second save after the first succeeds.
+		await waitFor(() => expect(button().disabled).toBe(false));
+	});
+
+	it("falls back to the generic message when the rejection is not an Error", async () => {
+		const user = userEvent.setup();
+		// Server fns can reject with a non-Error (a serialized RPC payload). The
+		// `err instanceof Error` arm is the only thing standing between that and
+		// `undefined` rendered as the toast body.
+		vi.mocked(updateClubTimezone).mockRejectedValue("not an Error object");
+		await renderRoute(loaderData());
+
+		await user.click(screen.getByRole("button", { name: "Save time zone" }));
+
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("Something went wrong."),
+		);
+	});
+});
+
+/**
+ * `zoneLabel`'s two degraded paths (#547).
+ *
+ * Both depend on how the BROWSER's `Intl` answers for a given zone, and the
+ * server's zone list is the one rendered — so a zone this browser's ICU spells
+ * differently reaches the label function for real. Neither path is reachable by
+ * driving the select, which is why the function is exported.
+ */
+describe("zoneLabel — offset degradation (#547)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("renders zone and offset when Intl resolves the zone", () => {
+		expect(zoneLabel("America/Chicago")).toMatch(
+			/^America\/Chicago \(GMT[+-]\d+\)$/,
+		);
+	});
+
+	it("replaces underscores so the option reads as words", () => {
+		expect(zoneLabel("America/New_York")).toContain("America/New York");
+		expect(zoneLabel("America/New_York")).not.toContain("_");
+	});
+
+	it("falls back to the bare zone name when Intl throws on the zone", () => {
+		// The cross-ICU case named in CLUB_TIMEZONES: the server lists a spelling
+		// this browser refuses. The option must stay selectable and readable.
+		//
+		// A CLASS, not `function () {}` — `bun run fix` rewrites a function
+		// expression into an arrow (biome's useArrowFunction), and an arrow is
+		// not a constructor, so `new Intl.DateTimeFormat()` throws
+		// "not a constructor" instead of the RangeError being simulated. Both
+		// stubs here passed that way for the wrong reason, and the sibling test
+		// below could not fail at all. Do not "simplify" these back.
+		vi.stubGlobal("Intl", {
+			...Intl,
+			DateTimeFormat: class {
+				constructor() {
+					throw new RangeError("Invalid time zone specified");
+				}
+			},
+		});
+		expect(zoneLabel("Asia/Calcutta")).toBe("Asia/Calcutta");
+	});
+
+	it("falls back to the bare zone name when Intl yields no offset part", () => {
+		// Defensive arm: `formatToParts` returning nothing named `timeZoneName`
+		// would otherwise render "Zone (undefined)". Reaching it requires a stub
+		// that CONSTRUCTS successfully — see the note above.
+		vi.stubGlobal("Intl", {
+			...Intl,
+			DateTimeFormat: class {
+				formatToParts() {
+					return [{ type: "literal", value: "x" }];
+				}
+			},
+		});
+		expect(zoneLabel("Asia/Tokyo")).toBe("Asia/Tokyo");
 	});
 });
