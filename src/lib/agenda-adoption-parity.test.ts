@@ -51,23 +51,40 @@ function standardSlots(geName: string | null = "Dana"): AgendaSlot[] {
 		slot("toastmaster_of_the_day", "Toastmaster of the Day", "Cara"),
 		slot("general_evaluator", "General Evaluator", geName),
 		slot("table_topics_master", "Table Topics Master", "Eli"),
+		// Regression: ISSUE-002 — these carried no speech title and no window, so
+		// BOTH renderers printed "Prepared speech" with null marks and the
+		// comparison below agreed on the wrong thing. A parity test is only as
+		// good as the fields its fixture populates.
+		// Found by /qa on 2026-08-31.
 		slot("speaker", "Speaker", "Fay", {
 			isSpeakerRole: true,
 			category: "speaker",
 			slotIndex: 0,
+			speechTitle: "Data That Persuades",
+			projectLevel: "Level 3",
+			minMinutes: 5,
+			maxMinutes: 7,
 		}),
 		slot("speaker", "Speaker", "Gus", {
 			isSpeakerRole: true,
 			category: "speaker",
 			slotIndex: 1,
+			speechTitle: "From Nervous to Natural",
+			projectLevel: "Level 2",
+			minMinutes: 5,
+			maxMinutes: 7,
 		}),
 		slot("evaluator", "Evaluator", "Hal", {
+			isSpeakerRole: true,
 			category: "evaluator",
 			slotIndex: 0,
+			evaluatesSlotId: "s5",
 		}),
 		slot("evaluator", "Evaluator", "Ivy", {
+			isSpeakerRole: true,
 			category: "evaluator",
 			slotIndex: 1,
+			evaluatesSlotId: "s6",
 		}),
 		slot("timer", "Timer", "Jo", { category: "functionary" }),
 		slot("grammarian", "Grammarian", "Kit", { category: "functionary" }),
@@ -128,6 +145,26 @@ describe("adoption preserves the printed sheet", () => {
 			);
 		});
 	}
+
+	it("keeps each speech's title, window and evaluator target", () => {
+		// Regression: ISSUE-002 — an adopted agenda printed "Prepared speech" with
+		// no marks, and "Evaluates a speaker" instead of naming who. The marks are
+		// the sharp end: the Timer works from the printed sheet.
+		// Found by /qa on 2026-08-31.
+		const rows = adoptedRows(true, standardSlots());
+
+		const speech = rows.find((r) => r.detail?.includes("Data That Persuades"));
+		expect(speech).toBeDefined();
+		expect(speech?.detail).toContain("Level 3");
+		expect(speech?.marks).toEqual({ green: 5, yellow: 6, red: 7 });
+
+		// The fixture links by slot id without an `evaluates.speakerName`, so this
+		// exercises the SLOT-LABEL fallback (#512's middle case) — the same one
+		// that prints "Evaluates Speaker 3" for an unclaimed speaking slot. The
+		// named form is covered by the live agenda, which carries the relation.
+		expect(rows.some((r) => r.detail === "Evaluates Speaker 1")).toBe(true);
+		expect(rows.some((r) => r.detail === "Evaluates a speaker")).toBe(false);
+	});
 
 	it("names a live holder, and FOLLOWS a holder change", () => {
 		// A frozen name passes any same-fixture comparison. Changing the holder

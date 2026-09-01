@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.27.1.0] - 2026-09-01
+
+### Fixed
+
+- **Editing an ordinary meeting's agenda no longer empties it.** The feature that shipped an hour earlier had a hole big enough to drive a meeting through: the first time you opened a standard meeting's agenda, the printed sheet lost every row that belonged to a person. Twenty-four rows became five. Speeches, Table Topics and Evaluations printed as empty headings, the meeting appeared to end at 9:07 instead of 10:20, and the banner announced it was finishing 83 minutes early. Nothing was actually lost — every row was safely stored the whole time, and they are all back — but the sheet you would have printed was unusable. If you opened an agenda between the two releases, open it again and it will read correctly.
+- **A speech keeps its title and its timing lights.** On an edited agenda the speeches had stopped saying what they were, printing a generic "Prepared speech" where the title and level belong, and the green, yellow and red minute marks beside each one had disappeared. Those marks are how the Timer does the job from the printed sheet, so this was the worst of the two to discover during a meeting. Both are back, and a contest keeps its own fixed windows exactly as before, because a contest's timing comes from the rules rather than from the speaker's project.
+- **Evaluators say who they are evaluating again.** The rows had gone back to a generic "Evaluates a speaker" instead of naming the person, or the speaking slot when the speech is still unclaimed.
+
 ## [1.27.0.0] - 2026-08-31
 
 ### Added
