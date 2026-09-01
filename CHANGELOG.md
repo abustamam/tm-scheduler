@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.28.0.0] - 2026-09-01
+
+### Added
+
+- **Converting a guest into a member can be undone.** Convert was a one-way door with a single confirm box in front of it, and it sits as the only filled button on every guest card — so one mis-tap during a meeting created a roster membership, a new person record, and moved that guest's roles onto it, with no way back short of editing the database. Converted cards now offer **Undo conversion**: the membership it created goes, any roles it moved return to the guest, and the guest lands back in Following up. It refuses, and says why, when the membership has picked up anything of its own since — a sign-in account, an officer term, dues, speeches, a Pathways enrolment, or a role nobody moved onto it — because undoing would then destroy something real, and the merge tool is the right instrument. Conversions done before this release cannot be undone automatically: nothing recorded what they created, and guessing would risk deleting a membership that was already on the roster. Removing that member from the roster still works, and the guest card recovers its controls when you do.
+
 ## [1.27.2.0] - 2026-09-01
 
 ### Fixed

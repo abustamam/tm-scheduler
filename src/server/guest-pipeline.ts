@@ -6,6 +6,7 @@ import {
 	applyDeleteGuest,
 	applyLinkGuestToMember,
 	applySetGuestStage,
+	applyUndoGuestConversion,
 	applyUnlinkGuestFromMember,
 	applyUpdateGuest,
 	captureGuestVisit,
@@ -188,6 +189,27 @@ export const unlinkGuestFromMember = createServerFn({ method: "POST" })
 			"admin",
 		]);
 		return applyUnlinkGuestFromMember({
+			clubId: data.clubId,
+			guestId: data.guestId,
+			actorMemberId: membership.id,
+		});
+	});
+
+/**
+ * Undo a convert-to-member (#618). AUTHED — admin-only, like convert itself:
+ * it can delete a roster row.
+ *
+ * Reuses `unlinkSchema` because the input is the same pair (club, guest) — a
+ * third identical schema would be a place for the two to drift.
+ */
+export const undoGuestConversion = createServerFn({ method: "POST" })
+	.validator((input: unknown) => unlinkSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const membership = await requireClubRole(currentUser.id, data.clubId, [
+			"admin",
+		]);
+		return applyUndoGuestConversion({
 			clubId: data.clubId,
 			guestId: data.guestId,
 			actorMemberId: membership.id,

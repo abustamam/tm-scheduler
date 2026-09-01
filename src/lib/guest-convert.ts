@@ -57,6 +57,45 @@ export const GUEST_IS_NOW_A_MEMBER_MESSAGE = (name: string): string =>
 export const UNLINK_NOT_LINKED_MESSAGE = "This guest isn't linked to a member.";
 
 /**
+ * Refusal when undoing a conversion on a guest that is not converted (#618).
+ *
+ * Includes a STRANDED guest: the membership is already gone, so there is
+ * nothing to unwind, and #632 gave that row its ordinary controls back.
+ */
+export const UNDO_NOT_CONVERTED_MESSAGE =
+	"This guest isn't a converted member, so there's no conversion to undo.";
+
+/**
+ * Refusal when the conversion predates the record an undo replays (#618).
+ *
+ * Convert did not record which slots it moved, or whether it CREATED the
+ * membership and the Person rather than deduping onto existing ones, until this
+ * feature shipped. Without that, an undo cannot tell a membership it minted
+ * from one that was already on the roster, and deleting the second destroys
+ * real data. Refusing is the honest answer; removing the member from the roster
+ * is still available and leaves the guest recoverable (#632).
+ */
+export const UNDO_NO_RECORD_MESSAGE =
+	"This conversion happened before undo was available, so it can't be " +
+	"reversed automatically. Remove the member from the roster instead — the " +
+	"guest card comes back with its controls.";
+
+/** Refusal when the converted member can sign in — mirrors `applyMemberRemove`. */
+export const UNDO_MEMBER_HAS_ACCOUNT_MESSAGE =
+	"That member is a signed-in account and can't be removed.";
+
+/**
+ * Refusal when the membership acquired something of its own since converting.
+ *
+ * Named rather than generic: the admin is being told they cannot use the one
+ * control on the card, and "has history" without saying WHAT sends them
+ * hunting. The merge tool is the right instrument once this is true.
+ */
+export const UNDO_MEMBER_HAS_HISTORY_MESSAGE = (what: string): string =>
+	`This member has ${what} of their own now, so undoing the conversion would ` +
+	`destroy it. Use the member merge tool instead.`;
+
+/**
  * Whether a guest row is stranded: frozen at `joined` while the membership it
  * was converted into no longer exists (#618).
  *
