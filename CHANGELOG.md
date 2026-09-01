@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.27.2.0] - 2026-09-01
+
+### Fixed
+
+- **On a phone, the bottom of a dialog no longer sits behind the keyboard.** Any dialog you type into could hide its own lower half the moment the keyboard came up, and the "Who are you?" name picker was the worst of them, because typing your name is the entire job of that box. Measured on a small phone: the dialog ran about 274 pixels past the bottom of what you could still see, taking the "I'm new — add me" field and its button with it. Scrolling did not help and was never going to — a dialog floats above the page rather than sitting in it, so there was nothing to scroll. Dialogs now measure themselves against the part of the screen the keyboard actually leaves you, shrink to fit it, and scroll inside themselves, so every field and every button stays reachable. With no keyboard open nothing looks any different, and pinch-zooming a dialog still behaves the way it always has.
+
 ## [1.27.1.0] - 2026-09-01
 
 ### Fixed
