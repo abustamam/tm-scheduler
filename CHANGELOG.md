@@ -2,6 +2,16 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.29.0.0] - 2026-09-01
+
+### Added
+
+- **Your club's time zone is now a setting, not a database edit.** Every time GavelUp shows or interprets a time — when a meeting starts, which date it falls on, when the agenda locks, when a meeting counts as over — it works in your club's time zone. Until now that was fixed to US Central for every club, and the only way to change it was for someone to edit the database by hand, so a club anywhere else had every one of those boundaries quietly shifted. **Club settings** now has a **Time zone** picker with every zone listed, each showing its current offset so you can find yours without knowing which city names it. One thing to know before you change it: your meetings won't move, but the dates shown against them can, because a date depends on which zone you read it in. An evening meeting in Chicago is the next day in Tokyo. Dated links to meetings are recalculated the same way, so a link you shared earlier may stop working — re-share it after saving, and the page tells you so before you save.
+
+### Fixed
+
+- **Meetings scheduled on a clock-change day are stored at the time you typed.** On the one day a year a time zone shifts its clocks, GavelUp could record a meeting an hour away from what was entered, and show it back that way, with nothing to indicate anything had gone wrong. It affected fourteen zones at ordinary evening meeting hours, including Sydney, Melbourne, Adelaide, Auckland and Cairo. No existing club could reach it — US Central changes its clocks at 2am, which no club meets across — but the new time zone picker makes those zones available, so this is fixed in the same release that makes them selectable. Every zone the picker offers is now checked automatically against the whole year, so a zone that starts observing daylight saving in future is covered without anyone remembering to look.
+
 ## [1.28.0.0] - 2026-09-01
 
 ### Added
