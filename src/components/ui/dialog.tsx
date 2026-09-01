@@ -2,8 +2,9 @@
 
 import { XIcon } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import type * as React from "react";
+import * as React from "react";
 import { Button } from "#/components/ui/button.tsx";
+import { trackVisualViewport } from "#/lib/dialog-viewport.ts";
 import { cn } from "#/lib/utils.ts";
 
 function Dialog({
@@ -44,6 +45,28 @@ function DialogOverlay({
 			{...props}
 		/>
 	);
+}
+
+/**
+ * Publishes the visual viewport box to CSS while a dialog is open, so the
+ * ceiling and the centring below can be measured against the part of the screen
+ * the on-screen keyboard has NOT covered (#619). Renders nothing.
+ *
+ * It sits inside `DialogPrimitive.Content` on purpose, and the choice is
+ * narrower than "somewhere under the portal". An effect in `DialogContent`
+ * itself would run for every dialog COMPONENT in the tree, open or not, because
+ * call sites render the element unconditionally and Radix decides presence
+ * internally — so it has to be under the portal. But Radix wraps EACH portal
+ * child in its own `Presence`, and this one declares no exit animation, so as a
+ * SIBLING of `Content` it unmounts the moment `open` flips while `Content` is
+ * still playing its fade-out. Measured in the browser: the properties cleared
+ * with the dialog still in the DOM, which with a keyboard up would grow the
+ * closing dialog from 237px back to 528px and re-centre it mid-fade. As a CHILD
+ * of `Content` its lifetime is `Content`'s, exit animation included.
+ */
+function DialogViewportSync() {
+	React.useEffect(() => trackVisualViewport(), []);
+	return null;
 }
 
 function DialogContent({
@@ -88,11 +111,39 @@ function DialogContent({
 					// the rounded corners. Every call site's own className is a
 					// `sm:max-w-*` width, so nothing out there fights `flex flex-col`.
 					//
-					// Note none of this addresses keyboard occlusion — the viewport
-					// meta has no `interactive-widget`, so the platform default
-					// `resizes-visual` leaves the layout viewport (and `svh`) intact
-					// when the keyboard opens. That half is still open on #619.
-					"fixed top-[50%] left-[50%] z-50 flex max-h-[calc(100svh-2rem)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] flex-col overflow-hidden rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+					// KEYBOARD OCCLUSION is the second half of #619, and it is a
+					// different mechanism that the ceiling above cannot see. The
+					// viewport meta has no `interactive-widget`, so the platform
+					// default `resizes-visual` shrinks the VISUAL viewport and leaves
+					// the LAYOUT viewport alone — and `svh` resolves against the
+					// layout viewport. `100svh` therefore still evaluates to the full
+					// height with the keyboard up: a 533px dialog fits under its
+					// ceiling, nothing overflows, the scroller never engages, and the
+					// bottom of the dialog is not below the fold but behind the
+					// keyboard.
+					//
+					// So both the ceiling and the CENTRING are measured against the
+					// visual viewport instead, published as two custom properties by
+					// `DialogViewportSync` above. `top` is the half that is easy to
+					// forget: shrinking the box without moving it leaves a correctly
+					// sized dialog still centred on the layout viewport, i.e. still
+					// under the keyboard. `--dialog-viewport-offset-top` is what iOS
+					// reports when it scrolls the visual viewport to clear a focused
+					// input.
+					//
+					// The `var()` FALLBACKS (`100svh`, `0px`) are the whole no-JS
+					// story: with no `visualViewport`, during SSR, and before the
+					// effect runs, these two utilities compute to exactly the
+					// `max-h-[calc(100svh-2rem)]` and `top-[50%]` that shipped in
+					// v1.25.2.0. Nothing regresses when the properties are absent.
+					//
+					// Do NOT spell the property names differently here than in
+					// `#/lib/dialog-viewport` — a Tailwind arbitrary value is scanned
+					// statically, so this string cannot interpolate those constants,
+					// and a rename on one side alone makes `var()` fall silently back
+					// to `100svh` with every gate green. `dialog-scroll.guard.test.ts`
+					// asserts the two spellings match.
+					"fixed top-[calc(var(--dialog-viewport-offset-top,0px)_+_var(--dialog-viewport-height,100svh)*0.5)] left-[50%] z-50 flex max-h-[calc(var(--dialog-viewport-height,100svh)-2rem)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] flex-col overflow-hidden rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
 					className,
 				)}
 				{...props}
@@ -114,6 +165,7 @@ function DialogContent({
 				 * DialogHeader/Footer/content is unchanged; the shell is now a
 				 * one-child flex column.
 				 */}
+				<DialogViewportSync />
 				<div
 					data-slot="dialog-body"
 					className="grid min-h-0 gap-4 overflow-y-auto overscroll-contain"

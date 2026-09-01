@@ -161,7 +161,7 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The three browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The four browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -183,6 +183,19 @@ mounting the real `SidebarInner` or `MeetingAttendancePanel` needs a router cont
 `overflow-y-auto` on a flex child with no `min-h-0` is a box that grows instead of scrolling, and
 satisfies every grep asking whether the class is present.
 
+`src/components/ui/dialog-keyboard-reachability.test.ts` (v1.27.2.0) is the fourth, and it is the
+one that cannot reproduce its own trigger: there is no way to raise a soft keyboard in headless
+Chrome. It does not need to. The fix reads `visualViewport` and copies it into two custom
+properties, and the CSS reads only those — so the harness (`src/test/dialog-keyboard-reach.ts`)
+writes the properties itself, with the box a keyboard would leave, and measures what CSS then does.
+That splits #619 into a JS half gated in jsdom (`src/lib/dialog-viewport.test.ts`: which events,
+what is written, when it is torn down) and a geometry half gated here, with the PROPERTY NAMES as
+the seam — imported from the same module the component imports, so the two halves cannot agree with
+each other and disagree with the shipped class string. Generalise the shape rather than the trick:
+when a browser cannot produce the input, find the narrow interface the fix actually reads and drive
+THAT. It carries a pre-fix control that reproduces the bug, which is what makes the rest able to
+fail.
+
 No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
 `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
 With none present those tests **skip locally**, so `bun run test` still works for someone without a
@@ -194,7 +207,7 @@ diagnosable. Beside that job's ONLY — the `extension` job is `working-director
 runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
 same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
-**On macOS all three skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+**On macOS all four skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
 puts nothing on `PATH` under any of those four names. This is a macOS-only gap: on Linux, where this
 repo is usually developed, `google-chrome` resolves and both gates run locally as normal. Do NOT
 "fix" it by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES` — that binary
@@ -392,8 +405,9 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   grep the compiled bundle — and note the minifier strips quotes, so match
   `[data-slot=x]`, not `[data-slot="x"]`.
 - **A dialog's height belongs to the primitive — do not re-solve it at the call site.**
-  `DialogContent` (`src/components/ui/dialog.tsx`) carries
-  `max-h-[calc(100svh-2rem)] overflow-y-auto overscroll-contain`, and the COMBINATION is the
+  `DialogContent` (`src/components/ui/dialog.tsx`) is a non-scrolling SHELL carrying the
+  ceiling and the padding, wrapped around a `data-slot="dialog-body"` child carrying
+  `min-h-0 overflow-y-auto overscroll-contain`, and the COMBINATION is the
   fact: it is `fixed` and centred by `translate-y-[-50%]`, so a box taller than the viewport
   hangs off both ends and the document cannot scroll it back — a fixed element is not in the
   scroll flow, so the overflow is not below the fold, it is unreachable. Measured before the fix
@@ -409,10 +423,36 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   no layout — so the gate is a source guard (`dialog-scroll.guard.test.ts`, comment-blind via
   `#/test/guard-source` for the must-be-present half, raw for the offender sweep, whose tag scan
   is brace-aware because a JSX prop can contain `>` and prop ORDER was all that kept the naive
-  regex working). Two things it does NOT fix, both open: the close button scrolls away with the
-  content (#627), and keyboard occlusion is a different mechanism entirely — the viewport meta
-  sets no `interactive-widget`, so the default `resizes-visual` leaves the layout viewport and
-  `svh` untouched when the keyboard opens and this ceiling never engages (#619).
+  regex working).
+  **The ceiling is measured against the VISUAL viewport, and that is a second mechanism, not a
+  refinement of the first.** An `svh` ceiling alone was correct and never ENGAGED with the
+  on-screen keyboard up: the viewport meta names no `interactive-widget`, so the platform
+  default `resizes-visual` shrinks the visual viewport and leaves the layout viewport — which is
+  what `svh` resolves against — untouched. A 533px identity dialog therefore still fitted under
+  `100svh`, nothing overflowed, the body scroller never engaged, and the bottom of the dialog was
+  not below the fold but behind the keyboard, reachable by nothing (#619; #627, the close button
+  scrolling away with the content, is closed and is why the shell/body split exists).
+  So `#/lib/dialog-viewport` copies `visualViewport` into two custom properties while a dialog is
+  open and the shell sizes AND centres against them, with `100svh`/`0px` as the `var()` fallbacks
+  so SSR and any engine without the API render exactly what v1.25.2.0 did. Four things to keep.
+  Sizing without RE-CENTRING fixes nothing — a correctly shrunk dialog still centred on the layout
+  viewport is still under the keyboard, which is why `top` reads the properties too and why
+  `offsetTop` (iOS scrolls the visual viewport to clear a focused input) is a failure mode
+  separate from height. The subscription is REF-COUNTED and lives inside `DialogPortal`, whose
+  children mount only while open: in `DialogContent` itself it would run for every dialog
+  component in the tree open or not, and a boolean would let a nested dialog's unmount clear the
+  properties out from under the dialog still on screen. `interactive-widget=resizes-content` was
+  the issue's first candidate and was NOT taken — MDN's browser-compat-data has no entry for it
+  under `meta[name=viewport]` at all, so it is unverified off Chrome and the worked example is an
+  iPhone; it also changes every `svh`-sized surface app-wide. It composes cleanly if ever adopted.
+  And the JS↔CSS seam is the PROPERTY NAMES: a Tailwind arbitrary value is scanned statically, so
+  the class string cannot interpolate the exported constants, and a rename on one side alone makes
+  `var()` fall back silently with every gate green — `dialog-scroll.guard.test.ts` asserts the two
+  spellings match. Geometry is gated by `dialog-keyboard-reachability.test.ts`, which lays the real
+  class strings out in headless Chrome with the properties set to what a keyboard leaves (269px of
+  a 560px SE viewport) and carries a pre-fix CONTROL that reproduces the bug, so the suite can
+  demonstrably fail; verified by mutation (reverting the two utilities fails 3 of its cases, the
+  shell bottom landing at 544px against the 269px keyboard line).
 
 ## Data layer
 
