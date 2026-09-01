@@ -62,10 +62,30 @@ import { findChrome } from "./print-page-count";
 export type VisualBox = ViewportBox;
 
 export type DialogProbe = {
+	/**
+	 * The REAL layout-viewport height, which is not `--window-size`.
+	 *
+	 * Chrome's bare `--headless` is NEW headless on any current build, and it
+	 * opens a real window whose chrome eats into the viewport: CI measured 417px
+	 * of viewport from `--window-size=375,560`. `chrome-headless-shell` is OLD
+	 * headless and reports the full 560. So a test that asserts against the
+	 * number it PASSED to `--window-size` silently encodes which binary ran it —
+	 * which is how this suite passed locally and failed in CI by exactly the
+	 * 143px difference. Assert against this instead.
+	 */
+	viewportHeight: number;
 	/** Shell edges, relative to the layout viewport. */
 	shellTop: number;
 	shellBottom: number;
 	shellHeight: number;
+	/** Computed values, so a failure reports the cascade instead of a guess. */
+	computedTop: string;
+	computedMaxHeight: string;
+	/** The properties read back off `<html>` — proves they were published. */
+	publishedHeight: string;
+	publishedTop: string;
+	/** Natural content height of the scrolling body. */
+	contentHeight: number;
 	/** Does the scrolling body have anything to scroll at this box? */
 	bodyOverflows: boolean;
 	/** How far the body actually moved when driven to the bottom. */
@@ -150,10 +170,22 @@ export function probeDialog(opts: {
 			return r.height > 0 && r.top >= bandTop && r.bottom <= bandBottom;
 		}
 		var shellRect = shell.getBoundingClientRect();
+		var shellStyle = getComputedStyle(shell);
+		var rootStyle = document.documentElement.style;
 		var out = {
+			viewportHeight: window.innerHeight,
 			shellTop: Math.round(shellRect.top),
 			shellBottom: Math.round(shellRect.bottom),
 			shellHeight: Math.round(shellRect.height),
+			computedTop: shellStyle.top,
+			computedMaxHeight: shellStyle.maxHeight,
+			publishedHeight: rootStyle.getPropertyValue(${JSON.stringify(
+				DIALOG_VIEWPORT_HEIGHT,
+			)}) || "unset",
+			publishedTop: rootStyle.getPropertyValue(${JSON.stringify(
+				DIALOG_VIEWPORT_TOP,
+			)}) || "unset",
+			contentHeight: body.scrollHeight,
 			bodyOverflows: body.scrollHeight > body.clientHeight ? 1 : 0
 		};
 		body.scrollTop = body.scrollHeight;
@@ -225,9 +257,15 @@ export function probeDialog(opts: {
 		const num = (k: string) => Number(kv.get(k) ?? "NaN");
 		const flag = (k: string) => kv.get(k) === "1";
 		return {
+			viewportHeight: num("viewportHeight"),
 			shellTop: num("shellTop"),
 			shellBottom: num("shellBottom"),
 			shellHeight: num("shellHeight"),
+			computedTop: kv.get("computedTop") ?? "",
+			computedMaxHeight: kv.get("computedMaxHeight") ?? "",
+			publishedHeight: kv.get("publishedHeight") ?? "",
+			publishedTop: kv.get("publishedTop") ?? "",
+			contentHeight: num("contentHeight"),
 			bodyOverflows: flag("bodyOverflows"),
 			scrolledBy: num("scrolledBy"),
 			tailInsideVisibleBand: flag("tailInsideVisibleBand"),

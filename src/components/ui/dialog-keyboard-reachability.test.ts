@@ -1,7 +1,11 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { probeDialog, type VisualBox } from "#/test/dialog-keyboard-reach";
+import {
+	type DialogProbe,
+	probeDialog,
+	type VisualBox,
+} from "#/test/dialog-keyboard-reach";
 import { readSource } from "#/test/guard-source";
 import { buildAppCss, candidatesIn } from "#/test/pinned-column-scroll";
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
@@ -30,14 +34,32 @@ import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIALOG = resolve(HERE, "dialog.tsx");
 
-/** An SE-class phone. */
+/**
+ * An SE-class phone — but only as the WINDOW size, which is not the viewport.
+ *
+ * Chrome's bare `--headless` is NEW headless and opens a real window whose
+ * chrome eats into the viewport (CI: 417px of viewport from a 560px window),
+ * while `chrome-headless-shell` is OLD headless and gives the full 560. So no
+ * assertion below may use this height — they use `probe.viewportHeight`, and
+ * `NO_KEYBOARD` is measured rather than assumed. Asserting the requested size
+ * is how this suite passed locally and failed in CI by exactly that 143px.
+ */
 const VIEWPORT = { width: 375, height: 560 };
 
-/** What iOS leaves visible once its keyboard is up. */
+/**
+ * What iOS leaves visible once its keyboard is up. A fixed box on purpose: it
+ * is the thing being simulated, not a property of the browser. `beforeAll`
+ * asserts it is actually smaller than the real viewport, or the fixture would
+ * be simulating nothing.
+ */
 const KEYBOARD_OPEN: VisualBox = { height: 269, offsetTop: 0 };
 
-/** The same phone with nothing covering it. */
-const NO_KEYBOARD: VisualBox = { height: 560, offsetTop: 0 };
+/**
+ * The same phone with nothing covering it — MEASURED in `beforeAll`, because
+ * "nothing is covering the screen" means the visual viewport equals the real
+ * layout viewport, whatever this browser made that.
+ */
+let NO_KEYBOARD: VisualBox = { height: VIEWPORT.height, offsetTop: 0 };
 
 /**
  * The `cn(...)` literal on `DialogPrimitive.Content` — the shell.
@@ -123,6 +145,24 @@ const SELECTORS = {
 	closeSelector: '[data-probe="close"]',
 };
 
+/**
+ * Every number the probe saw, for an assertion message.
+ *
+ * A bare `expected 16 to be greater than or equal to 80` from a browser running
+ * on someone else's machine is close to unactionable — it took a CI round trip
+ * to learn that the viewport was not the size this suite asked for. The cascade
+ * and the published properties are what distinguish "the fix regressed" from
+ * "this environment lays out differently", so a failure prints both.
+ */
+function why(probe: DialogProbe): string {
+	return (
+		`viewport=${probe.viewportHeight} shell=${probe.shellTop}..${probe.shellBottom}` +
+		` (h=${probe.shellHeight}) content=${probe.contentHeight}` +
+		` computed{top=${probe.computedTop} max-height=${probe.computedMaxHeight}}` +
+		` published{height=${probe.publishedHeight} top=${probe.publishedTop}}`
+	);
+}
+
 const hasChrome = findChrome() !== null;
 
 describe("dialog keyboard harness availability", () => {
@@ -148,6 +188,28 @@ describe.skipIf(!hasChrome)(
 		beforeAll(async () => {
 			html = fixture();
 			css = await buildAppCss(candidatesIn(html));
+
+			// Measure the real viewport before asserting anything against it, and
+			// pin the two preconditions the whole fixture rests on: the simulated
+			// keyboard must actually shrink the viewport, and the dialog's content
+			// must overflow the shrunk ceiling. If either stops holding, every
+			// assertion below still passes while testing nothing.
+			const probe = probeDialog({
+				bodyHtml: html,
+				css,
+				...SELECTORS,
+				viewport: VIEWPORT,
+				band: { height: 100_000, offsetTop: 0 },
+			});
+			NO_KEYBOARD = { height: probe.viewportHeight, offsetTop: 0 };
+			expect(
+				probe.viewportHeight,
+				`the simulated keyboard must shrink this viewport — ${why(probe)}`,
+			).toBeGreaterThan(KEYBOARD_OPEN.height);
+			expect(
+				probe.contentHeight,
+				`the fixture must overflow the keyboard-shrunk ceiling — ${why(probe)}`,
+			).toBeGreaterThan(KEYBOARD_OPEN.height);
 		}, CHROME_TEST_TIMEOUT_MS);
 
 		it(
@@ -228,11 +290,19 @@ describe.skipIf(!hasChrome)(
 					box: scrolled,
 					band: scrolled,
 				});
-				expect(probe.shellTop).toBeGreaterThanOrEqual(scrolled.offsetTop);
-				expect(probe.shellBottom).toBeLessThanOrEqual(
+				// Assert the mechanism before the geometry, so a failure says WHICH
+				// half broke rather than only that a pixel moved.
+				expect(probe.publishedTop, why(probe)).toBe(`${scrolled.offsetTop}px`);
+				expect(probe.shellHeight, why(probe)).toBeLessThanOrEqual(
+					scrolled.height,
+				);
+				expect(probe.shellTop, why(probe)).toBeGreaterThanOrEqual(
+					scrolled.offsetTop,
+				);
+				expect(probe.shellBottom, why(probe)).toBeLessThanOrEqual(
 					scrolled.offsetTop + scrolled.height,
 				);
-				expect(probe.tailInsideVisibleBand).toBe(true);
+				expect(probe.tailInsideVisibleBand, why(probe)).toBe(true);
 			},
 			CHROME_TEST_TIMEOUT_MS,
 		);
@@ -254,7 +324,9 @@ describe.skipIf(!hasChrome)(
 				});
 				expect(probe.bodyOverflows).toBe(false);
 				expect(probe.shellTop).toBeGreaterThanOrEqual(0);
-				expect(probe.shellBottom).toBeLessThanOrEqual(VIEWPORT.height);
+				expect(probe.shellBottom, why(probe)).toBeLessThanOrEqual(
+					probe.viewportHeight,
+				);
 				expect(probe.tailInsideVisibleBand).toBe(true);
 			},
 			CHROME_TEST_TIMEOUT_MS,
@@ -273,12 +345,19 @@ describe.skipIf(!hasChrome)(
 					viewport: VIEWPORT,
 					band: NO_KEYBOARD,
 				});
-				expect(probe.shellTop).toBeGreaterThanOrEqual(0);
-				expect(probe.shellBottom).toBeLessThanOrEqual(VIEWPORT.height);
+				expect(probe.shellTop, why(probe)).toBeGreaterThanOrEqual(0);
+				expect(probe.shellBottom, why(probe)).toBeLessThanOrEqual(
+					probe.viewportHeight,
+				);
 				// Centred: the gaps above and below the shell match within a pixel of
-				// rounding.
-				const below = VIEWPORT.height - probe.shellBottom;
-				expect(Math.abs(probe.shellTop - below)).toBeLessThanOrEqual(1);
+				// rounding. Measured against the REAL viewport — this assertion used
+				// `VIEWPORT.height` and failed in CI by exactly the 143px of browser
+				// chrome that new headless takes off a 560px window.
+				const below = probe.viewportHeight - probe.shellBottom;
+				expect(
+					Math.abs(probe.shellTop - below),
+					why(probe),
+				).toBeLessThanOrEqual(1);
 			},
 			CHROME_TEST_TIMEOUT_MS,
 		);
@@ -312,7 +391,9 @@ describe.skipIf(!hasChrome)(
 				});
 				// The dialog fits the LAYOUT viewport, which is why every in-process
 				// gate was happy...
-				expect(probe.shellBottom).toBeLessThanOrEqual(VIEWPORT.height);
+				expect(probe.shellBottom, why(probe)).toBeLessThanOrEqual(
+					probe.viewportHeight,
+				);
 				// ...and hangs below the keyboard line anyway.
 				expect(probe.shellBottom).toBeGreaterThan(KEYBOARD_OPEN.height);
 				// Nothing overflows, so the scroller half (a) added never engages.
