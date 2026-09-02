@@ -9,10 +9,26 @@
  * "MC" lost self-serve editing with its key fully intact, a club that invented a
  * role called "Toastmaster Evaluator" HANDED that member the whole meeting, and
  * with two names matching, `find` picked between them arbitrarily.
+ *
+ * EXPORTED rather than private since #660, because the role duty registry
+ * (`#/lib/role-duties`) keys its pre-meeting duties off the same two of them
+ * and imports them rather than redeclaring them — a second copy of a role key
+ * in a second file is the drift that caused both failures above.
+ *
+ * That is a claim about the duty registry ONLY, and deliberately not about the
+ * codebase: `agenda-slides.ts`, `agenda-runsheet.ts` and `meeting-packet.ts`
+ * still carry their own literals of these keys. Consolidating them is real
+ * work on three heavily-imported render modules, recorded in TODOS.md rather
+ * than smuggled into #660. So this export is where a new reader SHOULD come,
+ * not proof that every existing one already does.
+ *
+ * `VOTE_COUNTER_ROLE_KEY` has no importer yet and is exported for symmetry:
+ * the three keys are one set under one comment, and exporting two of them
+ * would invite the next reader to re-privatise the odd one out.
  */
-const TMOD_ROLE_KEY = "toastmaster_of_the_day";
-const GRAMMARIAN_ROLE_KEY = "grammarian";
-const VOTE_COUNTER_ROLE_KEY = "vote_counter";
+export const TMOD_ROLE_KEY = "toastmaster_of_the_day";
+export const GRAMMARIAN_ROLE_KEY = "grammarian";
+export const VOTE_COUNTER_ROLE_KEY = "vote_counter";
 
 /** A role identified the way the rest of the app identifies one: key first, with
  *  the name as the fallback for a slot that carries no key. */

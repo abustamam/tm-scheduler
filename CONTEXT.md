@@ -212,6 +212,18 @@ the nouns in `src/db/schema.ts`.
   and the Vote Counter's control of the digital ballot (#510, see **Digital vote**) — so a rename
   never moves a capability and a club-invented role that merely *sounds* like one never gains it.
   See #367 / #368 / #445 / #464 / #510.
+- **Role duty** — a pre-meeting job a role's holder owes, resolved from the same
+  `role_definitions.key` (`dutiesForRole`, `src/lib/role-duties.ts`). Exactly three exist: the
+  TMOD owes the meeting **theme**, the Grammarian owes the **Word of the Day**, and a speaker
+  (`speaker`, or a contest `contestant_prepared`) owes their **speech details**. Each carries a
+  `done` predicate over a plain caller-supplied context — never a db handle — so the checklist,
+  the nudge draft and the reminder email ask ONE question and cannot disagree about whether a job
+  is finished. A NULL key falls back to an **exact** canonical-name match, never a prefix, for the
+  #464 reason the entry above gives. **Every other role owns ZERO duties** and gets
+  `ROLE_CONFIRM_PROMPT`, which deliberately has no `done`: their prep is real but nothing records
+  it, and an unverifiable self-report must never be able to SUPPRESS a nudge. No consumers yet —
+  #667 (nudges), #665 (personal confirm page) and #666 (theme / Word-of-the-Day subroutes) land
+  behind it, and the composite helpers all three need are recorded in TODOS.md. See #660.
 - **Role slot** — one concrete, claimable agenda row for a meeting (`role_slots`). Generated
   from role definitions when a meeting is created. THE source of truth and history — see
   ADR-0005. A slot is `open`, `claimed`, or `confirmed`.
@@ -223,7 +235,11 @@ the nouns in `src/db/schema.ts`.
   so reassigning or rescheduling a slot never destroys the speech. Person-owned and *club-less*
   (a delivery's club comes from the slot it's attached to). Replaces the old slot-bound
   `speaker_details`. Scheduling state (unscheduled / scheduled / delivered) is **derived** from
-  slot linkage, not stored. See ADR-0009 / #79.
+  slot linkage, not stored. `title` is `NOT NULL`, so "no title decided yet" is stored as the
+  literal **`TBA`** sentinel; `isRealSpeechTitle` (`src/lib/speech-title.ts`) is the one answer to
+  "has this speaker actually named their speech?", shared by the write path (`normalizeSpeech`) and
+  every reader, because a plain non-blank check reads the app's own placeholder as a finished
+  speech. See ADR-0009 / #79 / #660.
 - **Minutes** — the post-meeting *record of what actually happened*, distinct from the agenda
   (the plan). Not its own table: the `meetings` row is the header, and the record is the three
   child sets below (attendance, Table Topics speakers, awards). Admin-authored on the meeting

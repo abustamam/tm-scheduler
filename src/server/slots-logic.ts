@@ -16,6 +16,7 @@ import {
 	type SpeakerEvaluatorRoles,
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
+import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
 import { logActivity } from "./activity";
 import { setPlanStatus } from "./attendance-plan-logic";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
@@ -1009,10 +1010,10 @@ export function normalizeSpeech(input?: SpeechInput): {
 		minMinutes !== null ||
 		maxMinutes !== null ||
 		presentationUrl !== null;
-	const hasRealTitle = title.length > 0 && title !== "TBA";
+	const hasRealTitle = isRealSpeechTitle(title);
 	return {
 		content: {
-			title: title.length > 0 ? title : "TBA",
+			title: title.length > 0 ? title : TBA_SPEECH_TITLE,
 			introduction,
 			pathwayPath,
 			projectName,
