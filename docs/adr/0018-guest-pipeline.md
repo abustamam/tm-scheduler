@@ -115,12 +115,14 @@ official minutes and was emailed to the club.
    early; the after-grace is deliberately shorter, since a signature hours after the room emptied
    is far more likely to be the public CTA than someone still standing there.
 3. **Why the calendar-day compare had to go, rather than just be gated.** It was wrong in both
-   directions. `clubs.timezone` defaults to `America/Chicago` and NOTHING in the product ever
-   writes it, so a Pacific club's 19:00 meeting and a 22:10 signature fall on different Chicago
-   dates and the visit vanished — VP Membership showed "No recorded visits" for someone who was in
-   the room. And a date-key match ignores the clock, so a 21:35 signature was stamped `present` at
-   a meeting that ended at 21:00. A window keyed on the meeting's own start and length depends on
-   neither the timezone nor the calendar.
+   directions. `clubs.timezone` defaults to `America/Chicago` and, when this was written, nothing
+   in the product ever wrote it, so a Pacific club's 19:00 meeting and a 22:10 signature fell on
+   different Chicago dates and the visit vanished — VP Membership showed "No recorded visits" for
+   someone who was in the room. And a date-key match ignores the clock, so a 21:35 signature was
+   stamped `present` at a meeting that ended at 21:00. A window keyed on the meeting's own start
+   and length depends on neither the timezone nor the calendar. (#547 made the column settable by
+   a club admin, which removes the first failure's cause but not the second's — the window stays
+   the right mechanism, and it is now also immune to an admin changing the zone mid-season.)
 4. **The scan is bounded.** `resolveCurrentMeeting` runs on an unauthenticated POST and used to
    scan every meeting the club had ever held; it now reads only meetings from the last 24 hours
    onward.

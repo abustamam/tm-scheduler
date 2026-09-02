@@ -35,11 +35,14 @@ export const GUEST_BOOK_GRACE_AFTER_MS = 60 * 60 * 1000;
  * comparison this replaced. That comparison was wrong in both directions:
  *
  *  - It dropped real visits. `clubs.timezone` defaults to `America/Chicago` and
- *    NOTHING in the product ever writes it (`onboarding-logic.ts` inserts a club
+ *    had NO writer when this was written (`onboarding-logic.ts` inserts a club
  *    with name/slug/clubNumber only), so a Pacific club's 19:00 meeting and a
- *    guest signing at 22:10 local fall on different Chicago dates — no
+ *    guest signing at 22:10 local fell on different Chicago dates — no
  *    attendance row at all, and VP-Membership then shows "No recorded visits"
- *    for someone who was in the room.
+ *    for someone who was in the room. #547 gave the column a writer (Club
+ *    settings → Time zone), which fixes that particular club but not the
+ *    mechanism: a zone that is merely WRONG, or changed mid-season, reproduces
+ *    it exactly.
  *  - It still recorded absent people. A date-key match ignores the clock, so a
  *    guest following the public CTA at 21:35 was stamped `present` at a meeting
  *    that ended at 21:00 — the same minutes pollution the gate exists to stop.
