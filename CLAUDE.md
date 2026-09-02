@@ -947,6 +947,22 @@ meeting → file issues → /triage → ready-for-agent → /investigate → imp
                                └→ needs-info → wait
 ```
 
+**Which review does this change get? Decide from the table, do not re-derive it.**
+
+| The change is… | Then |
+|---|---|
+| a RISK CATEGORY — authentication or **authorization** (anything changing who may write or delete another person's record), the archive gate, a migration, the service worker, a cascading delete, `applySelfAdd` | `/review`, then `/ship` — at any size, including a 20-line one |
+| large or wide-REACHING (several seams, or a global cascade like #646 — reach, not file count) | `/review`, then `/ship` |
+| anything else, 50+ changed lines | **`/ship` alone** |
+| under 50 changed lines | `/ship` alone — but it dispatches NO specialists there, so say "adversarial pass only", never "reviewed" |
+
+**`/ship` runs its own specialist army** — unconditionally above 50 changed lines, which is 23 of
+the last 25 PRs (the last row is the exception, not the rule). `/review` adds a SECOND army rather
+than replacing it, so `/ship` alone is the default and skipping `/review` is not skipping review.
+What `/review` buys is ORDERING — the harshest reader first, so a late finding does not force
+re-running the gates behind it. Pay for that on the top two rows only. The measurements, and the
+two false claims this table replaced, are in the cost entry below; re-derive rather than inherit.
+
 **Several `ready-for-agent` issues at once → batch them, don't dispatch serially.**
 `bun run batch:issues` groups the open backlog into waves parallel agents can take without
 colliding (see Commands above). The `dispatching-issue-waves` project skill
