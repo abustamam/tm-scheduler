@@ -293,6 +293,20 @@ async function primeAssetsOf(response, documentUrl) {
  * offline cache.
  */
 function isOfflineRoute(url) {
+	// `/me` (#665) is EXCLUDED even though it sits under a meeting path, and the
+	// exclusion is deliberate on three counts. It has no offline value: the page
+	// fetches its data client-side with no loader, so a cached document renders
+	// "Loading…" forever with no network. Its URL carries `?as=<memberId>`, and
+	// `networkFirst` keys the cache entry by the full URL — so caching it would
+	// write an identity link into Cache Storage, outliving the route's own
+	// `replace` navigation that scrubs it from history, on what may be a shared
+	// phone. And `primeSiblings` fires on every cached meeting navigation,
+	// fetching the full meeting page, Present AND Print plus up to
+	// MAX_PRIMED_ASSETS assets — four SSR renders per tap on the one URL a club
+	// mass-messages to its whole roster. Takedown eviction is unaffected: the
+	// meeting prefix still matches, so an archived club's `/me` is evicted with
+	// the rest of the meeting.
+	if (/^\/club\/[^/]+\/meeting\/[^/]+\/me$/.test(url.pathname)) return false;
 	return (
 		url.pathname.endsWith("/present") ||
 		url.pathname.endsWith("/print") ||
