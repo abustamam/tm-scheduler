@@ -105,12 +105,13 @@ const textareaClass =
  * in `ui/`).
  *
  * Tracks `input.tsx`'s CURRENT classes rather than copying the older string in
- * `/admin/roles` and `/admin/schedule`, which has drifted: those two predate the
- * `shadow-xs` / 3px tinted focus ring / `dark:bg-input/30` styling and sit among
- * other selects, where the difference is invisible. This select sits directly
- * among Input-styled text fields (District, Meeting schedule, Default country
- * code), so a thin single-colour focus ring and a flat dark background read as a
- * bug. The other two copies are recorded in TODOS.md rather than changed here.
+ * `/admin/roles`, `/admin/schedule` and `/admin/meetings/batch`, which has
+ * drifted: those three predate the `shadow-xs` / 3px tinted focus ring /
+ * `dark:bg-input/30` styling and sit among other selects, where the difference
+ * is invisible. This select sits directly among Input-styled text fields
+ * (District, Meeting schedule, Default country code), so a thin single-colour
+ * focus ring and a flat dark background read as a bug. Those three copies are
+ * recorded in TODOS.md rather than changed here.
  *
  * `text-base md:text-sm`, not a bare `text-sm`: iOS Safari auto-zooms the page
  * when a form control under 16px takes focus, and this control opens a

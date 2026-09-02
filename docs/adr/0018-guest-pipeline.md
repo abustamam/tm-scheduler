@@ -120,9 +120,11 @@ official minutes and was emailed to the club.
    different Chicago dates and the visit vanished — VP Membership showed "No recorded visits" for
    someone who was in the room. And a date-key match ignores the clock, so a 21:35 signature was
    stamped `present` at a meeting that ended at 21:00. A window keyed on the meeting's own start
-   and length depends on neither the timezone nor the calendar. (#547 made the column settable by
-   a club admin, which removes the first failure's cause but not the second's — the window stays
-   the right mechanism, and it is now also immune to an admin changing the zone mid-season.)
+   and length depends on neither the timezone nor the calendar. (#547 gave the column a writer —
+   **Club settings → Time zone** — but that does not retire this reasoning. `onboarding-logic.ts`
+   still creates a club without a timezone, so every new club starts on `America/Chicago` until an
+   admin notices; and a zone that is merely wrong, or changed mid-season, reproduces the first
+   failure exactly. The window is immune to all of it.)
 4. **The scan is bounded.** `resolveCurrentMeeting` runs on an unauthenticated POST and used to
    scan every meeting the club had ever held; it now reads only meetings from the last 24 hours
    onward.

@@ -11,8 +11,11 @@
  * than the one that was typed. Re-resolving the offset at the CANDIDATE instant
  * and recomputing when the two disagree is what fixes it.
  *
- * Measured across all 419 selectable zones at 18:00-22:00 on every day of 2026
- * (`datetime-dst.test.ts`): the single-pass version was wrong in 14 zones —
+ * Measured across all 419 selectable zones at 18:00-22:00 on days 1-28 of every
+ * month of 2026 (`datetime-dst.test.ts` — the bound is the sweep's, so the last
+ * two or three days of each month, including the 2026-03-29 EU spring-forward,
+ * are NOT covered; swept by hand once at #547 and clean, but do not read the
+ * test as "every day"): the single-pass version was wrong in 14 zones —
  * Sydney, Melbourne, Adelaide, Hobart, Broken Hill, Lord Howe, Auckland,
  * Chatham, Norfolk, Macquarie, McMurdo, Cairo, Beirut and Easter. Two passes
  * reduce that to zero.

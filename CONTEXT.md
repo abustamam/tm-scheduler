@@ -32,8 +32,11 @@ the nouns in `src/db/schema.ts`.
 - **Club timezone** (`clubs.timezone`, an IANA id; default `America/Chicago`) — the club-local
   axis every date and deadline is measured on: meeting times and dates, the URL date key,
   **Meeting phase**, the agenda freeze, whether a meeting counts as over. A club `admin` sets it
-  at **Club settings → Time zone** since #547 (`loadClubTimezoneSettings` / `updateClubTimezone`,
-  admin-gated); the column had no writer before that, so every club ran on US Central. The
+  at **Club settings → Time zone** since #547; the column had no writer before that, so every club
+  ran on US Central, and a club created today still starts there (`onboarding-logic.ts` writes no
+  timezone, so the column default stands until an admin picks one). The two seams split the way
+  the settings pages do: `updateClubTimezone` is `admin`-gated, `loadClubTimezoneSettings` only
+  `requireClubViewAccess` — any active member may READ the zone. The
   allowlist is `CLUB_TIMEZONES` (`src/lib/club-timezone.ts`) — this runtime's
   `Intl.supportedValuesOf("timeZone")` plus `UTC` — built on the SERVER and shipped down to the
   picker, because two ICU builds disagree about which spelling of an alias pair is canonical, so a
