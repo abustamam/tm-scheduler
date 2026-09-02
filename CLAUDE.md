@@ -899,7 +899,7 @@ Repo-specific notes:
   hand-edit either.
 - Issues are the canonical tracker (`abustamam/tm-scheduler` via `gh`), not `TODOS.md`. See `docs/agents/issue-tracker.md`.
 - Ship from a worktree, never the main checkout — see "Git worktree isolation" above.
-- Codex reviews are disabled (`gstack-config codex_reviews=disabled`) — there is no OpenAI subscription here. gstack's Claude adversarial and red-team passes still run; do not suggest installing the `codex` CLI, since it does nothing without credentials.
+- Codex reviews never run here — but NOT because the config says so. `gstack-config get codex_reviews` returns `enabled`; what stops them is that the `codex` CLI is not installed (`command -v codex` exits 1), so every Codex pass takes the `not_installed` branch and falls back to a Claude subagent. This line claimed the config was `disabled` until 2026-09-02, which is the kind of mechanism-by-hearsay that made the `/ship` cost entry below wrong for months. gstack's Claude adversarial and red-team passes still run; do not suggest installing the `codex` CLI, since it does nothing without credentials.
 
 ### Feature pipeline order
 
@@ -917,16 +917,17 @@ Both inserted steps exist for a specific reason:
   plan, so a wrong plan propagates cleanly through every task and every review. v1.1.0.0 shipped a
   spec that said "all five GE beats" where the variant has six; it survived 24 per-task reviews and
   two full `/ship` runs. An independent read of the plan is the only step positioned to catch that.
-- **`/review` once, after implementation, before `/ship`.** Ask it for the ADVERSARIAL pass, not
-  just the specialists — `/review` dispatches specialists by default and `/ship` runs the
-  adversarial subagent, which puts the harshest reader LAST. On 2026-08-04 that ordering turned one
+- **`/review` once, after implementation, before `/ship`.** Its adversarial pass is ALWAYS-ON, not
+  something to ask for (`review/SKILL.md:884`); what running it early buys is putting the harshest
+  reader FIRST instead of last. On 2026-08-04 that ordering turned one
   round into four on #519: the adversarial pass found that the cap function spread its whole input
   before deciding to truncate, recreating the very DoS the PR existed to close, and everything it
   found had to re-run three gates behind it. The adversarial pass is free and fast; running it
   early is the single biggest lever on churn. It is the only WHOLE-DIFF look —
   `subagent-driven-development`'s per-task reviews are scoped to one task and structurally cannot
-  see a cross-task interaction, which is what that bug was. It also logs a review so `/ship`'s
-  readiness dashboard reads CLEAR and `/ship` skips its own duplicate specialist pass.
+  see a cross-task interaction, which is what that bug was. What it does NOT do is save `/ship` a
+  pass: `/ship` dispatches its own specialists unconditionally, so running `/review` first buys
+  ORDERING, not a discount. See the cost entry below before assuming otherwise.
 
 **`/ship`'s review gate does not converge on a large diff.** It applies fixes, then stops and asks
 for a re-run; the re-run reviews everything again and any large diff keeps producing informational
@@ -969,12 +970,92 @@ Two insertions, both on the agent path:
   as the only QA surface. `/qa` drives a real browser and collapses that to minutes. `/qa-only` for
   a report without fixes. Note `/browse` needs `GSTACK_CHROMIUM_NO_SANDBOX=1` here.
 
-**`/ship` is cheap on a small diff — use it as-is.** It skips all specialists under 50 changed lines
-and the Codex structured review under 200. The three-run loop described above was a 1,400-line
-feature; the cost scales with the diff, not with the tool.
+**`/ship` is never cheap here, and `/review` does not make it cheaper — it adds a second review.**
+Two corrections, both measured 2026-09-02 against the 25 PRs merged through v1.28.0.0. Both
+replaced sentences that had sat in this file, confidently and wrongly, for months; re-derive
+before trusting the numbers rather than inheriting them the way those did.
 
-**Batch a meeting's findings.** Five small fixes shipped separately means five version bumps and five
-PRs. Group related ones into one PR with a single PATCH or MICRO bump; `/ship` will not decide that.
+**One: the built-in cheap path never fires.** `/ship` skips all specialists under 50 changed
+lines, but it counts `DIFF_LINES` — every line of the diff — and this repo's conventions put most
+of them in tests. **Exactly 2 of 25 cleared the skip** (#651 at 14 lines, #648 at 21); the median
+was **357**. This entry read "`/ship` is cheap on a small diff — use it as-is" until 2026-09-01,
+false for 23 of the 25. (The companion clause about the Codex structured review under 200 lines is
+dead here regardless — Codex is not installed, so those passes never run.)
+
+**Two, and the expensive one to get wrong: `/review` does not move `/ship`'s specialist pass.**
+`/ship` invokes Step 9 unconditionally (`ship/SKILL.md:683`). The readiness dashboard is
+informational and gates nothing — the NOT-CLEAR branch says so outright ("Ship runs its own review
+in Step 9", `:628`), and a CLEARED verdict changes only what the dashboard PRINTS. So `/review` +
+`/ship` is **two specialist armies and two adversarial passes**, not one moved. This file claimed
+the opposite in two places until 2026-09-02. (Do not "improve" that argument by adding that a
+CLEARED entry needs zero findings — `"clean"` means zero *unresolved* findings after Fix-First
+(`review/SKILL.md:900`), so clean entries are common here. That embellishment was written on
+2026-09-02 and cut the same day.)
+
+So the question is never which pass to run; it is whether to pay for a SECOND one. **`/ship` alone
+always reviews.** Run `/review` first only when ordering buys something: a large cross-surface diff
+where a late finding forces re-running the gates behind it (#519, four rounds) — and read
+"cross-surface" as REACH, not file count, since #646 changed four files and every anchor in the
+app. Below that, `/ship` alone is the review; "skip `/review`" never means "skip review". One honest
+exception at the very bottom: under 50 changed lines `/ship` dispatches **no specialists at all**
+(`ship/sections/review-army.md:178`) and you get the adversarial pass only. `/review` has the same
+50-line gate, so running it would not help either.
+
+**Size off SOURCE files, and know what counts as source.** The line count is carried by guard
+tests and browser harnesses, not by `CHANGELOG.md`/`VERSION` — those are written in Steps 12–13,
+AFTER the Step 9 review, so they are not even in the diff at gating time:
+
+| PR | src | test | meta | other | total lines |
+|---|---|---|---|---|---|
+| #658 | 4 | 2 | 3 | — | 1,067 |
+| #649 | 4 | 9 | 4 | — | 1,384 |
+| #644 | 10 | 12 | 4 | 3 `drizzle/`, 2 `docs/` | 7,931 |
+| #640 | 0 | 1 | 3 | 1 `public/` | 412 |
+
+```bash
+git diff <base>...HEAD --stat -- src public scripts drizzle ':!*.test.*' ':!src/test' | tail -1
+```
+
+**`src/` alone is the wrong pathspec** — `public/sw.js` (the service worker, #639/#640),
+`scripts/` and `drizzle/` are all source here, and a migration PR that omits `drizzle/` under-counts
+exactly the change `data-migration` exists to catch. Note the command prints **nothing**, not `0`,
+when no file matches; that is 5 of the 25, so treat empty as zero rather than as an error.
+
+**Median source files is 2, not 4** (5 PRs at zero, 4 at one, 4 at two, measured with the wide
+pathspec above — the `-- src`-only figure is 7/3/3, and quoting it here was this entry's own
+version of the mistake it warns about). So a "≤4 files" bar covers 21 of 25 — the 84th percentile —
+and excludes almost nothing: applied to this window it skips `/review` on **17 of 25**, including
+#629, a security fix closing self-add to a club roster, at 133 source lines and 4 files. Do not use
+file count as the gate. **Risk category overrides size, always:** authentication AND
+authorization — anything changing who may write or delete another person's record — plus the
+archive gate, migrations, the service worker, cascading deletes and anything touching
+`applySelfAdd`. #573 is why the second word is there: 2 files, 81 source lines, on none of the
+other categories, and it silently deleted members' declined-attendance replies.
+
+**Do NOT tell `/ship` a smaller number to suppress specialists.** `DIFF_LINES` gates more than the
+specialist list: red-team activates only above 200 **or on any CRITICAL finding**
+(`ship/sections/review-army.md:338`), simplification above 100, and security whenever
+`SCOPE_AUTH` is true at ANY size, else backend above 100 (`:181`). Below 50 everything is skipped.
+Understating it switches off **red-team — the highest-yield lens here** — which is the opposite of
+the intent.
+
+**Do NOT disable reviewers either.** `gstack-specialist-stats`, n=15 **as of 2026-09-02** (it moves
+every ship — re-run it rather than quoting this): red-team 525%, data-migration 500%,
+maintainability 444%, testing 389%, design 271%, api-contract 250%, security 211%, performance
+200%, simplification 67%. gstack auto-gates at **0 findings in 10+ dispatches** and nothing
+qualifies; `security` and `data-migration` carry `[NEVER_GATE]` and can never be gated regardless.
+Treat `data-migration`'s 500% as noise — it is one dispatch. The cost worth attacking is the
+~33.4k tokens of instructions `/ship` reads before seeing a line of your code (`ship/SKILL.md` 77KB
++ `review-army.md` 24KB + `adversarial.md` 18KB + `pr-body.md` 15KB, at a rough chars÷4, so an
+under-estimate) — which is per RUN, reduced by shipping fewer times, not by reviewing less.
+
+**Batch a meeting's findings.** Five small fixes shipped separately means five version bumps, five
+PRs, and five times that 33.4k. Group related ones into one PR with a single PATCH or MICRO bump;
+`/ship` will not decide that. **This is not the same lever as `batch:issues`, and conflating them
+is easy:** a WAVE is file-DISJOINT work sent to parallel worktrees, so a wave of four still costs
+four `/ship` runs — it buys wall-clock, not tokens. Collapsing costs a run only when the issues
+share a surface, which is the case a wave deliberately splits up. See the `shipping-batches`
+project skill (`.claude/skills/shipping-batches/SKILL.md`) for which issues may share a ship.
 
 Two skills worth running periodically rather than per-issue:
 
