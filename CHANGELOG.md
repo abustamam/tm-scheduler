@@ -2,6 +2,17 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.30.0.0] - 2026-09-02
+
+### Added
+
+- **A member can now answer "am I coming?" on one small page, without hunting through the full meeting agenda on a phone.** Open `/club/<your club>/meeting/<date>/me` and it says who you are, what you are on for, and gives you two buttons: you'll be there, or you can't. If you hold a role, it also lists what that role still owes — the Toastmaster's theme, the Grammarian's Word of the Day, a speaker's speech details — each ticked off or not according to your club's own data, with a link straight to where it gets done. A role that owns nothing recordable just asks you to confirm it, and points at your club's roles guide. Telling us you can't make it frees up any role you were holding, so nobody has to chase you and nobody is left assuming the slot is covered; because that cannot be undone automatically, it asks first and says plainly what it will do. The page is safe to open twice, shows the answer you already gave, and lets you change it. A link can carry who you are (`?as=`), so tapping it from your own message skips the "pick your name" step entirely — but if the phone is already signed in as someone else, or already picked a different member, it will never quietly repoint that phone at you; it shows you your own page for that visit and leaves the phone's own identity alone.
+- Nothing links to this page yet. The reminders and messages that will point people at it are the next piece of work, so for now it is reachable by typing the address.
+
+### Fixed
+
+- Answers are closed on a meeting that has already happened, not only on one an officer has explicitly marked complete. Clubs routinely never press Complete, so an old reminder sitting in a chat thread could otherwise still be tapped weeks later — which would have quietly freed up roles from a meeting that already took place and erased who actually did what.
+
 ## [1.29.1.0] - 2026-09-02
 
 ### Added
