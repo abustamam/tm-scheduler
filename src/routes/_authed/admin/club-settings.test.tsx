@@ -33,8 +33,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("#/server/clubs", () => ({
 	getClubProfileSettings: vi.fn(),
 	loadClubAgendaSettings: vi.fn(),
+	loadClubTimezoneSettings: vi.fn(),
 	updateClubAgendaSettings: vi.fn(),
 	updateClubProfile: vi.fn(),
+	updateClubTimezone: vi.fn(),
 }));
 vi.mock("#/server/notification-prefs", () => ({
 	loadClubReminderSettings: vi.fn(),
@@ -57,7 +59,8 @@ vi.mock("sonner", () => ({
 
 import { toast } from "sonner";
 import { removeClubLogoFn, uploadClubLogo } from "#/server/club-logo";
-import { CLUB_LOGO_COPY, Route } from "./club-settings";
+import { updateClubTimezone } from "#/server/clubs";
+import { CLUB_LOGO_COPY, Route, zoneLabel } from "./club-settings";
 
 afterEach(() => {
 	cleanup();
@@ -74,9 +77,20 @@ const ADMIN_CLUB = {
 	clubRole: "admin" as const,
 };
 
+/**
+ * The zones the fake loader offers. A THREE-entry list, not the real ~420: the
+ * point of every assertion below is that the component renders the list the
+ * SERVER sent and preselects the club's own value, and a short list makes an
+ * off-by-one or a dropped option visible in the failure message.
+ */
+const ZONES = ["America/Chicago", "Asia/Tokyo", "UTC"] as const;
+
 /** The loader payload shape the component reads, with only what it touches. */
 function loaderData(
-	overrides: { logoMeta?: { updatedAt: string } | null } = {},
+	overrides: {
+		logoMeta?: { updatedAt: string } | null;
+		timezone?: string;
+	} = {},
 ) {
 	return {
 		profile: {
@@ -89,7 +103,17 @@ function loaderData(
 		reminders: { enabled: true, leadTimeDays: 3 },
 		agenda: { geIntroducesFunctionaries: false },
 		logoMeta: overrides.logoMeta === undefined ? null : overrides.logoMeta,
+		timezone: {
+			timezone: overrides.timezone ?? "America/Chicago",
+			zones: ZONES as readonly string[],
+		},
 	};
+}
+
+/** `loaderData` with the zone LIST overridden too — for the deploy-drift case
+ *  where the stored zone is not in the runtime's own list. */
+function loaderDataWith(timezone: { timezone: string; zones: string[] }) {
+	return { ...loaderData(), timezone };
 }
 
 /** Render the route's component with `useRouteContext`/`useLoaderData` stubbed. */
@@ -379,5 +403,214 @@ describe("Club settings — remove write path (onRemoveLogo)", () => {
 
 		await waitFor(() => expect(toast.error).toHaveBeenCalledWith("permission"));
 		expect(invalidateSpy).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The "Time zone" section (#547).
+ *
+ * These cover the half of the feature the DB-backed suite structurally cannot
+ * see: what the admin is shown and what the form actually sends. The seam tests
+ * in `club-timezone.integration.test.ts` prove the write is correct once it
+ * arrives; nothing there can catch a select that renders the wrong list, or a
+ * submit handler that posts the club's OLD zone.
+ */
+describe("club settings — time zone (#547)", () => {
+	/** The select is labelled, so this is also the a11y assertion. */
+	const picker = () => screen.getByLabelText("Time zone") as HTMLSelectElement;
+
+	it("preselects the club's stored zone rather than the first option", async () => {
+		// The specific failure this pins: a select whose `value` does not match
+		// any option silently falls back to option one, so the club would read as
+		// America/Chicago no matter what it had saved. Tokyo is deliberately not
+		// first in ZONES.
+		await renderRoute(loaderData({ timezone: "Asia/Tokyo" }));
+		expect(picker().value).toBe("Asia/Tokyo");
+	});
+
+	it("renders exactly the zones the loader supplied", async () => {
+		await renderRoute(loaderData());
+		expect([...picker().options].map((o) => o.value)).toEqual([...ZONES]);
+	});
+
+	it("labels each option with its zone and current offset", async () => {
+		await renderRoute(loaderData());
+		// The offset is computed live from Intl, so assert its SHAPE rather than a
+		// value: "GMT-5" and "GMT-6" are both correct depending on whether the
+		// suite runs inside US summer time, and pinning one would make this test a
+		// calendar bomb.
+		const chicago = [...picker().options].find(
+			(o) => o.value === "America/Chicago",
+		);
+		expect(chicago?.text).toMatch(/^America\/Chicago \(GMT[+-]\d+\)$/);
+	});
+
+	it("saves the newly picked zone, not the one the club started on", async () => {
+		const user = userEvent.setup();
+		vi.mocked(updateClubTimezone).mockResolvedValue({ ok: true });
+		const router = await renderRoute(
+			loaderData({ timezone: "America/Chicago" }),
+		);
+		const invalidateSpy = vi
+			.spyOn(router, "invalidate")
+			.mockResolvedValue(undefined);
+
+		await user.selectOptions(picker(), "Asia/Tokyo");
+		await user.click(screen.getByRole("button", { name: "Save time zone" }));
+
+		await waitFor(() =>
+			expect(updateClubTimezone).toHaveBeenCalledWith({
+				data: { clubId: ADMIN_CLUB.clubId, timezone: "Asia/Tokyo" },
+			}),
+		);
+		expect(toast.success).toHaveBeenCalledWith("Time zone saved.");
+		expect(invalidateSpy).toHaveBeenCalled();
+	});
+
+	it("shows the server's message and does not invalidate when the save rejects", async () => {
+		const user = userEvent.setup();
+		vi.mocked(updateClubTimezone).mockRejectedValue(
+			new Error("This club has been archived."),
+		);
+		const router = await renderRoute(loaderData());
+		const invalidateSpy = vi
+			.spyOn(router, "invalidate")
+			.mockResolvedValue(undefined);
+
+		await user.click(screen.getByRole("button", { name: "Save time zone" }));
+
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("This club has been archived."),
+		);
+		expect(invalidateSpy).not.toHaveBeenCalled();
+	});
+
+	it("warns that changing the zone re-labels meetings, and says what to do", async () => {
+		await renderRoute(loaderData());
+		// The behaviour pinned by `club-timezone.integration.test.ts` is one an
+		// admin has to be told about BEFORE they change it — a dated link can 404
+		// or, on a double-header, resolve to the other meeting. If that copy is
+		// dropped, the behaviour becomes a surprise. The remedy is asserted too:
+		// a warning with no action leaves the officer stuck.
+		expect(screen.getByText(/old link may stop working/i)).toBeTruthy();
+		expect(screen.getByText(/re-share it after saving/i)).toBeTruthy();
+	});
+
+	it("still displays a stored zone the current ICU list has dropped", async () => {
+		// The deploy-drift case: `getClubTimezoneSettings` unions the stored value
+		// into `zones` when its own list no longer carries that spelling. Here the
+		// loader supplies exactly that shape. Without the union the select finds no
+		// matching <option> and silently falls back to the first — which is not an
+		// error, just a club quietly reading as the wrong zone.
+		await renderRoute(
+			loaderDataWith({
+				timezone: "Asia/Calcutta",
+				zones: ["Asia/Calcutta", ...ZONES].sort(),
+			}),
+		);
+		expect(picker().value).toBe("Asia/Calcutta");
+	});
+
+	it("disables the save button while the write is in flight", async () => {
+		const user = userEvent.setup();
+		// Hold the write open so the pending state is observable. Without this
+		// gate the promise resolves inside the click and the disabled window is
+		// gone before any assertion can see it.
+		let release: (v: { ok: true }) => void = () => {};
+		vi.mocked(updateClubTimezone).mockReturnValue(
+			new Promise((resolve) => {
+				release = resolve;
+			}),
+		);
+		const router = await renderRoute(loaderData());
+		vi.spyOn(router, "invalidate").mockResolvedValue(undefined);
+
+		const button = () =>
+			screen.getByTestId("save-timezone") as HTMLButtonElement;
+		expect(button().disabled).toBe(false);
+
+		await user.click(button());
+		await waitFor(() => expect(button().disabled).toBe(true));
+
+		release({ ok: true });
+		// Settles cleanly — the finally block must clear the flag, or the admin is
+		// locked out of a second save after the first succeeds.
+		await waitFor(() => expect(button().disabled).toBe(false));
+	});
+
+	it("falls back to the generic message when the rejection is not an Error", async () => {
+		const user = userEvent.setup();
+		// Server fns can reject with a non-Error (a serialized RPC payload). The
+		// `err instanceof Error` arm is the only thing standing between that and
+		// `undefined` rendered as the toast body.
+		vi.mocked(updateClubTimezone).mockRejectedValue("not an Error object");
+		await renderRoute(loaderData());
+
+		await user.click(screen.getByRole("button", { name: "Save time zone" }));
+
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("Something went wrong."),
+		);
+	});
+});
+
+/**
+ * `zoneLabel`'s two degraded paths (#547).
+ *
+ * Both depend on how the BROWSER's `Intl` answers for a given zone, and the
+ * server's zone list is the one rendered — so a zone this browser's ICU spells
+ * differently reaches the label function for real. Neither path is reachable by
+ * driving the select, which is why the function is exported.
+ */
+describe("zoneLabel — offset degradation (#547)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("renders zone and offset when Intl resolves the zone", () => {
+		expect(zoneLabel("America/Chicago")).toMatch(
+			/^America\/Chicago \(GMT[+-]\d+\)$/,
+		);
+	});
+
+	it("replaces underscores so the option reads as words", () => {
+		expect(zoneLabel("America/New_York")).toContain("America/New York");
+		expect(zoneLabel("America/New_York")).not.toContain("_");
+	});
+
+	it("falls back to the bare zone name when Intl throws on the zone", () => {
+		// The cross-ICU case named in CLUB_TIMEZONES: the server lists a spelling
+		// this browser refuses. The option must stay selectable and readable.
+		//
+		// A CLASS, not `function () {}` — `bun run fix` rewrites a function
+		// expression into an arrow (biome's useArrowFunction), and an arrow is
+		// not a constructor, so `new Intl.DateTimeFormat()` throws
+		// "not a constructor" instead of the RangeError being simulated. Both
+		// stubs here passed that way for the wrong reason, and the sibling test
+		// below could not fail at all. Do not "simplify" these back.
+		vi.stubGlobal("Intl", {
+			...Intl,
+			DateTimeFormat: class {
+				constructor() {
+					throw new RangeError("Invalid time zone specified");
+				}
+			},
+		});
+		expect(zoneLabel("Asia/Calcutta")).toBe("Asia/Calcutta");
+	});
+
+	it("falls back to the bare zone name when Intl yields no offset part", () => {
+		// Defensive arm: `formatToParts` returning nothing named `timeZoneName`
+		// would otherwise render "Zone (undefined)". Reaching it requires a stub
+		// that CONSTRUCTS successfully — see the note above.
+		vi.stubGlobal("Intl", {
+			...Intl,
+			DateTimeFormat: class {
+				formatToParts() {
+					return [{ type: "literal", value: "x" }];
+				}
+			},
+		});
+		expect(zoneLabel("Asia/Tokyo")).toBe("Asia/Tokyo");
 	});
 });

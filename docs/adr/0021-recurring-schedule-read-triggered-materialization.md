@@ -56,7 +56,12 @@ The deciding facts, from the codebase:
    `(club_id, scheduled_at)` index plus `ON CONFLICT DO NOTHING` (shared `insertMeetingWithSlots`,
    also used by batch) makes two concurrent top-ups resolve to exactly `keep_ahead`, never
    double-created. App-level local-date dedup skips any date already occupied by a meeting of
-   **any** status.
+   **any** status. **That dedup key is the CLUB-LOCAL date, so it is only stable while
+   `clubs.timezone` is.** Since #547 an admin can change the zone, which can move an existing
+   meeting onto a different local date and let the next top-up materialize a duplicate on the
+   date it vacated. The `(club_id, scheduled_at)` index does not catch it — the two meetings sit
+   at different instants. Open as #659; the deterministic-occurrence claim above holds only for a
+   fixed zone.
 
 4. **Cancellation is the skip mechanism.** A cancelled meeting does not count toward `keep_ahead`
    but keeps its date reserved, so the next top-up extends the tail by one without resurrecting it

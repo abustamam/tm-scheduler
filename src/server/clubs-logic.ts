@@ -6,6 +6,12 @@ import { z } from "zod";
 import { db } from "#/db";
 import { clubs } from "#/db/schema";
 import { isClubArchived } from "#/lib/club-archive";
+import {
+	CLUB_TIMEZONES,
+	DEFAULT_CLUB_TIMEZONE,
+	INVALID_TIMEZONE_MESSAGE,
+	isSupportedClubTimezone,
+} from "#/lib/club-timezone";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { isReadableClub } from "./club-readable-logic";
 
@@ -275,6 +281,94 @@ export async function applyClubAgendaSettingsUpdate(
 	const [updated] = await db
 		.update(clubs)
 		.set({ geIntroducesFunctionaries: input.geIntroducesFunctionaries })
+		.where(eq(clubs.id, input.clubId))
+		.returning({ id: clubs.id });
+	if (!updated) throw new Error("Club not found.");
+	return { ok: true as const };
+}
+
+// ---------------------------------------------------------------------------
+// Time zone — the club-local axis everything else is measured against (#547).
+// ---------------------------------------------------------------------------
+
+export type ClubTimezoneSettings = {
+	timezone: string;
+	/** The picker's options. See `CLUB_TIMEZONES` for why the SERVER's list. */
+	zones: readonly string[];
+};
+
+/**
+ * A club's timezone plus the list it may be set to.
+ *
+ * Falls back to {@link DEFAULT_CLUB_TIMEZONE} when the club row is missing
+ * (never throws), mirroring `getClubAgendaSettings` — a settings form can always
+ * render, and the value it shows is the one the column default would have given.
+ *
+ * **The stored zone is unioned in when the list no longer contains it.**
+ * `CLUB_TIMEZONES` is computed from the RUNNING process's ICU tables, and those
+ * change between deploys: a zone written under one Node build can be spelled
+ * differently — or dropped — under the next. Without this the select would hold
+ * no `<option>` matching `value={zone}`, which does not error; it silently
+ * displays the FIRST option, so a club in Asia/Calcutta would read as
+ * Africa/Abidjan and the next save would write that. Same failure the header of
+ * `club-timezone.ts` describes for browser-vs-server, one axis over, and the
+ * reason the write-time `.refine` alone is not enough: it only proves the value
+ * was valid when it was written.
+ */
+export async function getClubTimezoneSettings(
+	clubId: string,
+): Promise<ClubTimezoneSettings> {
+	const [row] = await db
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	const timezone = row?.timezone ?? DEFAULT_CLUB_TIMEZONE;
+	return {
+		timezone,
+		zones: isSupportedClubTimezone(timezone)
+			? CLUB_TIMEZONES
+			: [timezone, ...CLUB_TIMEZONES].sort(),
+	};
+}
+
+/**
+ * Validation is here, in the schema the server fn parses with, rather than only
+ * in the picker: the server fn is addressable directly with no form and no
+ * session-bearing client, so a client-side `<select>` constrains nobody.
+ */
+export const clubTimezoneSchema = z.object({
+	clubId: z.string().uuid(),
+	timezone: z.string().refine(isSupportedClubTimezone, {
+		message: INVALID_TIMEZONE_MESSAGE,
+	}),
+});
+export type ClubTimezoneInput = z.infer<typeof clubTimezoneSchema>;
+
+/**
+ * Persist a club's timezone. Caller enforces admin authz (see the
+ * `updateClubTimezone` wrapper), which is also what carries the archive gate:
+ * `requireClubRole` → `requireMembership` → `assertNotArchived`, the same cover
+ * the two sibling settings writers above rely on.
+ *
+ * **This re-labels meetings that already exist.** Stored `scheduled_at` instants
+ * do not move, but every club-local rendering of them is derived from this
+ * column at read time — including the URL date key, which is not stored
+ * anywhere (`meetingUrlKey` / `resolveMeetingKey`). So a meeting whose link was
+ * shared before the change can answer not-found afterwards, and on a
+ * double-header day a bare-date key can even resolve to the OTHER meeting. That
+ * is the accepted behaviour rather than an oversight: pinning old keys would
+ * mean storing one, and a club whose zone was wrong wants its dates corrected,
+ * which is the whole point of the setting. The uuid form of the key is stable
+ * across the change and is what a durable link should use.
+ * `club-timezone.integration.test.ts` pins all three halves of that.
+ */
+export async function applyClubTimezoneUpdate(
+	input: ClubTimezoneInput,
+): Promise<{ ok: true }> {
+	const [updated] = await db
+		.update(clubs)
+		.set({ timezone: input.timezone })
 		.where(eq(clubs.id, input.clubId))
 		.returning({ id: clubs.id });
 	if (!updated) throw new Error("Club not found.");

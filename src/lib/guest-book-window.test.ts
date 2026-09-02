@@ -48,15 +48,17 @@ describe("isAtMeetingNow", () => {
 	 * The FALSE NEGATIVE the calendar-day version caused, and the reason this is
 	 * an absolute-time window.
 	 *
-	 * `clubs.timezone` defaults to `America/Chicago` and nothing in the product
-	 * ever writes it, so for a club outside US Central a meeting and a signature
-	 * taken minutes apart can land on DIFFERENT Chicago dates — and the real
-	 * visit vanished. Expressed in absolute time, no timezone is consulted at
-	 * all, so the calendar day either instant falls on stops mattering.
+	 * `clubs.timezone` defaults to `America/Chicago`, so for a club outside US
+	 * Central a meeting and a signature taken minutes apart can land on
+	 * DIFFERENT Chicago dates — and the real visit vanished. #547 made the
+	 * column settable, which does not close this: a new club is still created
+	 * without one, and a wrong or mid-season-changed zone reproduces it.
+	 * Expressed in absolute time, no timezone is consulted at all, so the
+	 * calendar day either instant falls on stops mattering.
 	 */
 	it("counts a mid-meeting visit that crosses midnight in the STORED timezone", () => {
 		// A Pacific club, but `clubs.timezone` says America/Chicago (the schema
-		// default, which nothing in the product overwrites). The meeting starts
+		// default, which a new club is still created on). The meeting starts
 		// 21:30 PDT = 23:30 CDT, and the guest signs 45 minutes in, at 22:15 PDT
 		// = 00:15 CDT — the NEXT Chicago date. The old date-key compare dropped
 		// this guest while they were still in the room. Absolute time does not

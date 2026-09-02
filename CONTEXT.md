@@ -29,6 +29,27 @@ the nouns in `src/db/schema.ts`.
   and PDF); a club with no logo sees every surface exactly as before. GavelUp supplies no image
   of its own and never shares one club's upload with another — see ADR-0024 and **Invariants**.
   Shipped #495 (print), extended to the remaining surfaces #496.
+- **Club timezone** (`clubs.timezone`, an IANA id; default `America/Chicago`) — the club-local
+  axis every date and deadline is measured on: meeting times and dates, the URL date key,
+  **Meeting phase**, the agenda freeze, whether a meeting counts as over. A club `admin` sets it
+  at **Club settings → Time zone** since #547; the column had no writer before that, so every club
+  ran on US Central, and a club created today still starts there (`onboarding-logic.ts` writes no
+  timezone, so the column default stands until an admin picks one). The two seams split the way
+  the settings pages do: `updateClubTimezone` is `admin`-gated, `loadClubTimezoneSettings` only
+  `requireClubViewAccess` — any active member may READ the zone. The
+  allowlist is `CLUB_TIMEZONES` (`src/lib/club-timezone.ts`) — this runtime's
+  `Intl.supportedValuesOf("timeZone")` plus `UTC` — built on the SERVER and shipped down to the
+  picker, because two ICU builds disagree about which spelling of an alias pair is canonical, so a
+  browser-built list would offer values the server rejects and would silently fail to display a
+  saved one. **Changing it re-labels meetings that already exist:** stored `scheduled_at` instants
+  do not move, but every club-local rendering is derived at read time, the URL date key included,
+  and that key is stored nowhere (`meetingUrlKey` / `resolveMeetingKey`) — so a dated link shared
+  before the change can 404, and on a double-header day can resolve to the OTHER meeting. That is
+  accepted rather than an oversight (the uuid form of the key is what a durable link should use),
+  but one consequence is not: the recurrence top-up dedups on a club-local date string, so a zone
+  change can let it create a duplicate meeting (#659, open). `zonedWallTimeToUtc` resolves the zone
+  offset TWICE for this column's sake — a single pass stores the wrong hour on DST-transition days
+  in 14 zones, swept across all of them by `datetime-dst.test.ts`.
 - **Person** — a human (`people`), keyed by their Toastmasters Customer ID (`PN-…`, nullable;
   unique when present, with email as a fallback match key). Holds the facts that are the same
   across *every* club a person belongs to: name, contact, `original_join_date` (first-ever TM
