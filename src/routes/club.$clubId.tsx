@@ -5,6 +5,7 @@ import {
 	redirect,
 	useRouter,
 } from "@tanstack/react-router";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import { AppShell, shellPropsFromContext } from "#/components/app-shell";
 import { BrandMark } from "#/components/brand-mark";
@@ -59,10 +60,21 @@ function ClubShell() {
 	const { clubUuid, clubName, clubNumber, shell, authCtx, effectiveMemberId } =
 		Route.useRouteContext();
 	const router = useRouter();
-	const sessionMember =
-		effectiveMemberId && authCtx?.user
-			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
-			: null;
+	// Memoized because it feeds `IdentityGateProvider`'s context value, which
+	// consumers now put in `useEffect` dep arrays (#665's `?as=` seeding). A
+	// fresh object each render makes the context value fresh each render, which
+	// re-fires those effects on every render — harmless today only because the
+	// effect it drives goes quiet once the param is stripped.
+	const sessionMember = useMemo(
+		() =>
+			effectiveMemberId && authCtx?.user
+				? {
+						id: effectiveMemberId,
+						name: authCtx.user.name || authCtx.user.email,
+					}
+				: null,
+		[effectiveMemberId, authCtx?.user],
+	);
 
 	async function handleSignOut() {
 		await authClient.signOut();

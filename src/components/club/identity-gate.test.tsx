@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearStoredMember } from "#/lib/member-identity";
+import { clearStoredMember, storeMember } from "#/lib/member-identity";
 
 // Stub the roster server fns the dialog's PickNameForm calls.
 vi.mock("#/server/members", () => ({
@@ -133,5 +133,72 @@ describe("IdentityGateProvider", () => {
 			{ id: "m-jane", name: "Jane Doe" },
 			{ id: "m-jane", name: "Jane Doe" },
 		]);
+	});
+});
+
+/**
+ * The `sessionMember` field the context gained for #665's `?as=` seeding.
+ *
+ * Worth its own block because the wrong wiring is a ONE-TOKEN slip that
+ * typechecks and passes everything else: the provider computes
+ * `const effective = sessionMember ?? picked`, so exposing `effective` instead
+ * of `sessionMember` would make `resolveAsSeed` see a truthy "session" for
+ * every anonymous visitor who has already picked a name — and `?as=` would
+ * silently stop seeding for returning members, the largest group these nudge
+ * links target, with the whole suite green.
+ */
+function SessionProbe() {
+	const { member, sessionMember } = useRequireIdentity();
+	return (
+		<div>
+			<p>effective: {member ? member.id : "none"}</p>
+			<p>session: {sessionMember ? sessionMember.id : "none"}</p>
+		</div>
+	);
+}
+
+function renderProbe(sessionMember: { id: string; name: string } | null) {
+	const qc = new QueryClient();
+	return render(
+		<QueryClientProvider client={qc}>
+			<IdentityGateProvider
+				clubUuid={CLUB_UUID}
+				clubSlug={CLUB_SLUG}
+				sessionMember={sessionMember}
+			>
+				<SessionProbe />
+			</IdentityGateProvider>
+		</QueryClientProvider>,
+	);
+}
+
+describe("IdentityGateProvider → sessionMember (#665)", () => {
+	it("is null for an anonymous visitor who has ALREADY picked a name", async () => {
+		storeMember(CLUB_SLUG, { id: "m-picked", name: "Picked" });
+		renderProbe(null);
+		// The effective identity resolves to the pick…
+		await waitFor(() =>
+			expect(screen.getByText("effective: m-picked")).toBeTruthy(),
+		);
+		// …but sessionMember must stay null. This is the assertion that fails if
+		// someone exposes `effective` here.
+		expect(screen.getByText("session: none")).toBeTruthy();
+	});
+
+	it("is the SESSION member, not the pick, when both exist", async () => {
+		storeMember(CLUB_SLUG, { id: "m-picked", name: "Picked" });
+		renderProbe({ id: "m-session", name: "Signed In" });
+		await waitFor(() =>
+			expect(screen.getByText("session: m-session")).toBeTruthy(),
+		);
+		// And the session wins the effective identity, which is the pre-existing
+		// rule this field must not disturb.
+		expect(screen.getByText("effective: m-session")).toBeTruthy();
+	});
+
+	it("is null when there is neither a session nor a pick", () => {
+		renderProbe(null);
+		expect(screen.getByText("session: none")).toBeTruthy();
+		expect(screen.getByText("effective: none")).toBeTruthy();
 	});
 });

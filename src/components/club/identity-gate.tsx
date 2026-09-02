@@ -20,6 +20,19 @@ import { PickNameForm } from "./pick-name-form";
 interface IdentityGateValue {
 	/** The effective identity: session member (shell) or the name-pick, else null. */
 	member: StoredMember | null;
+	/**
+	 * The SIGNED-IN member of this club, when there is one — i.e. the reason
+	 * `member` might not be the localStorage pick.
+	 *
+	 * Exposed for `?as=` seeding (#665), which must not write over the pick
+	 * sitting underneath a session: the pick resurfaces on sign-out, and a
+	 * caller cannot tell the two identities apart from `member` alone. Re-deriving
+	 * it from route context at the call site would be a second copy of the
+	 * shell's `effectiveMemberId && authCtx?.user` expression, which is the
+	 * "component tested through its props cannot see a WRONG prop" trap in
+	 * CLAUDE.md — one derivation, read from where it already lives.
+	 */
+	sessionMember: StoredMember | null;
 	/** Resolve the current identity, or open the picker and resolve on pick.
 	 *  Resolves `null` when the picker is dismissed (caller aborts). */
 	requireIdentity: () => Promise<StoredMember | null>;
@@ -102,8 +115,13 @@ export function IdentityGateProvider({
 	);
 
 	const value = useMemo(
-		() => ({ member: effective, requireIdentity, promptIdentity }),
-		[effective, requireIdentity, promptIdentity],
+		() => ({
+			member: effective,
+			sessionMember,
+			requireIdentity,
+			promptIdentity,
+		}),
+		[effective, sessionMember, requireIdentity, promptIdentity],
 	);
 
 	return (
