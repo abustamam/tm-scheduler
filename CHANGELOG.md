@@ -2,6 +2,16 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.29.1.0] - 2026-09-02
+
+### Added
+
+- **Groundwork only: GavelUp now knows which pre-meeting jobs each role owes.** Nothing looks or behaves differently yet — there is no new screen and no new button in this release. What landed is the shared piece of knowledge three upcoming features all need: that the Toastmaster owes the meeting theme, the Grammarian owes the Word of the Day, and a speaker (including a contest contestant) owes their speech details, along with how to tell from your club's own data whether each is already handled. Every other role owes nothing recordable and simply gets "Confirm the role" with a link to your club's roles guide, which is deliberate: their preparation is real, but there is nowhere to write it down, and a tick nobody can verify must never be allowed to silence a reminder. Putting this in one place is the point — once reminders, the personal confirm page and the phone-sized theme and Word of the Day screens all ask the same question, they cannot give your members three different answers about whether a job is done.
+
+### Fixed
+
+- **A speaker who picks a Pathways project but leaves the title blank will still be reminded about it.** When a speech title is left empty, GavelUp stores the placeholder "TBA" — it cannot store nothing, and the title box says as much. Anything asking "has this speaker filled in their details?" by simply checking the title is not empty would read that placeholder as a finished speech and go quiet, on the single most common way a speaker leaves their talk undecided. There is now one shared answer to that question, used both where speech details are saved and wherever they are read, so the two cannot disagree.
+
 ## [1.29.0.0] - 2026-09-01
 
 ### Added
