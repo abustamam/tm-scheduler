@@ -48,13 +48,16 @@ function sweep(): { key: string; zone: string; typed: string; got: string }[] {
 		[];
 	for (const zone of CLUB_TIMEZONES) {
 		for (let month = 1; month <= 12; month++) {
-			// 28, not 31, so every month has the same shape and no date is invalid.
-			// The cost is real coverage: the last two or three days of each month
-			// are NEVER checked, and one DST transition lands there (2026-03-29,
-			// the EU spring-forward). Swept by hand at #547 and clean under two
-			// passes, but this is a hole, not a boundary — do not describe this
-			// test as covering "every day of 2026".
-			for (let day = 1; day <= 28; day++) {
+			// The REAL month length, not a flat 28. Capping at 28 keeps every month
+			// the same shape and never produces an invalid date, which is why it is
+			// the tempting bound — but it silently drops the last two or three days
+			// of every month, and 2026-03-29 is the EU spring-forward, the most
+			// populous transition date there is. A sweep sold as future-proofing
+			// cannot have a hole where the transitions are.
+			// `Date.UTC(y, month, 0)` is day zero of the NEXT month, i.e. the last
+			// day of this one.
+			const daysInMonth = new Date(Date.UTC(2026, month, 0)).getUTCDate();
+			for (let day = 1; day <= daysInMonth; day++) {
 				for (const hh of MEETING_HOURS) {
 					const typed = `2026-${String(month).padStart(2, "0")}-${String(
 						day,
@@ -81,7 +84,7 @@ describe("zonedWallTimeToUtc survives DST transitions (#547)", () => {
 		expect(MEETING_HOURS.length).toBeGreaterThan(0);
 	});
 
-	it("round-trips every offered zone at every evening hour, days 1-28 of each month of 2026", () => {
+	it("round-trips every offered zone at every evening hour of every day of 2026", () => {
 		const real = failures.filter((f) => !KNOWN_GAPS.has(f.key));
 		// Absolute, not relative: the assertion is "no zone stores a time other
 		// than the one typed", which cannot be satisfied by loosening a constant.
