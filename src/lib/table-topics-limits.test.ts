@@ -3,6 +3,7 @@ import { TABLE_TOPICS_MARKS } from "./agenda-runsheet";
 import {
 	formatTableTopicsClock,
 	formatTableTopicsTiming,
+	formatTableTopicsWindow,
 	hasTableTopicsLimits,
 	MAX_TABLE_TOPICS_SECONDS,
 	MIN_BARE_SECONDS,
@@ -10,6 +11,7 @@ import {
 	resolveTableTopicsMarks,
 	TABLE_TOPICS_DEFAULT_TIMING,
 } from "./table-topics-limits";
+import { formatTimingClock } from "./timing-window";
 
 /** MCF's printed rule: "1 min min, 2.3 min max, 2.31+ disqualified" — where
  *  "2.3 min" is how their sheet writes two minutes thirty. */
@@ -128,6 +130,91 @@ describe("resolveTableTopicsMarks", () => {
 		expect(
 			resolveTableTopicsMarks({ minSeconds: 60, maxSeconds: 120 }),
 		).toEqual(TABLE_TOPICS_MARKS);
+	});
+
+	// -----------------------------------------------------------------------
+	// The midpoint is rounded to a WHOLE SECOND, and that is a correctness fix.
+	//
+	// `mark_yellow` is `real()` — float4 — so a materialised template stores the
+	// midpoint at ~7 significant digits while every unmaterialised surface
+	// re-derives it as a float64. An odd-summed window puts the midpoint on a
+	// half second, and `formatTimingClock`'s `Math.round` then breaks the tie
+	// from the wrong side of the float4 noise.
+	// -----------------------------------------------------------------------
+	describe("the midpoint survives being stored as float4", () => {
+		it("rounds to a whole second before converting to minutes", () => {
+			// (60 + 155) / 2 = 107.5s, which rounds UP to 108s = 1.8 min exactly.
+			// ABSOLUTE — `(green + red) / 2` would give 1.7916666666666667 here and
+			// pass any assertion written against the formula.
+			expect(
+				resolveTableTopicsMarks({ minSeconds: 60, maxSeconds: 155 }).yellow,
+			).toBe(1.8);
+		});
+
+		it("PRE-FIX CONTROL: the unrounded midpoint really does drift", () => {
+			// Without this the suite below could be passing for a reason unrelated
+			// to the fix. `Math.fround` is what Postgres does to a `real` column.
+			const unrounded = (60 / 60 + 155 / 60) / 2;
+			expect(formatTimingClock(unrounded)).toBe("1:48");
+			expect(formatTimingClock(Math.fround(unrounded))).toBe("1:47");
+		});
+
+		it("agrees with itself across every window a club can state", () => {
+			// The frozen copy and the live derivation must print the same clock, or
+			// one meeting's Timer signals a second before the next one's for a
+			// reason nobody in the room can see.
+			let odd = 0;
+			for (let min = 20; min <= 240; min += 5) {
+				for (let max = min + 1; max <= 300; max += 7) {
+					const { yellow } = resolveTableTopicsMarks({
+						minSeconds: min,
+						maxSeconds: max,
+					});
+					if ((min + max) % 2 === 1) odd++;
+					expect(
+						formatTimingClock(Math.fround(yellow)),
+						`${min}s–${max}s`,
+					).toBe(formatTimingClock(yellow));
+				}
+			}
+			// The control's control: a sweep that happened to contain no
+			// odd-summed window would pass with the rounding deleted.
+			expect(odd).toBeGreaterThan(100);
+		});
+	});
+});
+
+describe("formatTableTopicsWindow", () => {
+	it("states the club's own window, with no ±30s speech grace", () => {
+		// ABSOLUTE. This is what the templated deck projects and what the Timer's
+		// role sheet prints, and the graced form of the same window — "0:30–3:00"
+		// — is what both said before #443's second cut.
+		expect(formatTableTopicsWindow(resolveTableTopicsMarks(MCF))).toBe(
+			"1:00–2:30",
+		);
+		expect(formatTableTopicsWindow(TABLE_TOPICS_MARKS)).toBe("1:00–2:00");
+	});
+
+	it("names the same two numbers the deck's sentence names", () => {
+		// The two surfaces state one rule in two shapes. Pinned together so
+		// whoever changes one gets a failure naming the other.
+		expect(formatTableTopicsTiming(MCF)).toContain("1:00 minimum");
+		expect(formatTableTopicsTiming(MCF)).toContain("2:30 maximum");
+		expect(formatTableTopicsWindow(resolveTableTopicsMarks(MCF))).toBe(
+			"1:00–2:30",
+		);
+	});
+});
+
+describe("TABLE_TOPICS_DEFAULT_TIMING", () => {
+	it("states the same window TABLE_TOPICS_MARKS signals", () => {
+		// Proximity was the only thing holding these together: nothing derived the
+		// sentence from the marks and no test compared them, so changing the marks
+		// to 1/1.5/2.5 left the deck projecting "1–2 minutes" with every gate
+		// green. ABSOLUTE on both sides.
+		expect(TABLE_TOPICS_DEFAULT_TIMING).toBe("1–2 minutes per speaker");
+		expect(TABLE_TOPICS_MARKS.green).toBe(1);
+		expect(TABLE_TOPICS_MARKS.red).toBe(2);
 	});
 });
 

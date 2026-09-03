@@ -244,6 +244,140 @@ describe("Timer sheet standard timing windows (#357)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// #443 — a club's own Table Topics window reaches the Timer.
+//
+// This is the surface the first cut of #443 left out, and leaving it out was
+// worse than not shipping: the club printed an agenda row saying red at 2:30
+// and stapled a Timer's sheet beside it saying red at 2:00, in one packet
+// (`meeting-packet.ts` staples them), with a script telling the Timer to say
+// the wrong number out loud.
+//
+// Every expected value below is ABSOLUTE. Stated as `formatTimingClock(
+// resolveTableTopicsMarks(CLUB).yellow)` these would pass for every possible
+// midpoint rule, including the one that put 1:30 on the sheet in the first
+// place.
+// ---------------------------------------------------------------------------
+describe("a club's own Table Topics window on the Timer sheet (#443)", () => {
+	/** MCF's printed rule: 1:00 minimum, 2:30 maximum. */
+	const CLUB = { minSeconds: 60, maxSeconds: 150 };
+	const clubFill: RoleSheetFill = { ...fill, tableTopicsLimits: CLUB };
+
+	/** Every string in a react-pdf element tree. Duplicated from the #509 suite
+	 *  below rather than hoisted, so neither block can be deleted by the other. */
+	function textOf(node: unknown): string[] {
+		if (node == null || node === false) return [];
+		if (typeof node === "string") return [node];
+		if (Array.isArray(node)) return node.flatMap(textOf);
+		const el = node as { props?: { children?: unknown } };
+		return el.props ? textOf(el.props.children) : [];
+	}
+	const wordsOf = (key: RoleSheetKey, f?: RoleSheetFill) =>
+		textOf(buildRoleSheetDoc(key, f)).join(" | ");
+
+	it("replaces the Table Topics row, and only that row", () => {
+		const rows = standardTimingRows(CLUB);
+		expect(rows).toContainEqual([
+			"Table Topics",
+			"1:00",
+			"1:45",
+			"2:30",
+			// No ±30s grace: a club that states its own cap has stated a HARD one,
+			// and the deck beside this sheet projects "2:31+ disqualified".
+			"1:00–2:30",
+		]);
+		// The other three are the standard windows, untouched — a club states a
+		// Table Topics rule, not a speech rule.
+		expect(rows).toContainEqual([
+			"Prepared speech",
+			"5:00",
+			"6:00",
+			"7:00",
+			"4:30–7:30",
+		]);
+		expect(rows).toContainEqual([
+			"Evaluation",
+			"2:00",
+			"2:30",
+			"3:00",
+			"1:30–3:30",
+		]);
+	});
+
+	it("leaves the blank sheet on the standard window", () => {
+		// The control, and it is load-bearing rather than decorative: the committed
+		// PDFs in `public/role-sheets/` serve every club, so they cannot adopt one
+		// club's rule. Without this, wiring the override unconditionally would look
+		// identical to wiring it correctly.
+		expect(standardTimingRows()).toEqual(standardTimingRows(null));
+		expect(standardTimingRows()).toContainEqual([
+			"Table Topics",
+			"1:00",
+			"1:30",
+			"2:00",
+			"0:30–2:30",
+		]);
+	});
+
+	it("moves the sentence the Timer reads ALOUD, not just the table", () => {
+		const said = sheetScripts(CANONICAL_SHEET_ROLE_NAMES, CLUB)
+			.timer.map((c) => c.say)
+			.join(" | ");
+		expect(said).toContain(
+			"For Table Topics: green at 1:00, yellow at 1:45, red at 2:30",
+		);
+		// The evaluation half of the same sentence is NOT a per-club rule and must
+		// not move with it.
+		expect(said).toContain(
+			"For each evaluation: green at 2:00, yellow at 2:30, red at 3:00",
+		);
+		// The number this replaced. Without a negative the assertion above passes
+		// on a sheet that prints both.
+		expect(said).not.toContain(
+			"For Table Topics: green at 1:00, yellow at 1:30",
+		);
+	});
+
+	it("prints both halves on the rendered sheet, from the fill", () => {
+		// Through `buildRoleSheetDoc`, because the two functions above can each be
+		// correct while the Timer sheet passes neither — which is exactly the bug
+		// this feature already shipped once, one hop up from a correct function.
+		const words = wordsOf("timer", clubFill);
+		// The TABLE half, pinned on the one cell the script does not also say —
+		// "2:30" alone would pass with the table reverted, since the spoken
+		// sentence carries it too, and the two halves are wired separately.
+		expect(words).toContain("1:00–2:30");
+		expect(words).not.toContain("0:30–2:30");
+		// The SPOKEN half.
+		expect(words).toContain("green at 1:00, yellow at 1:45, red at 2:30");
+		expect(words).not.toContain("green at 1:00, yellow at 1:30, red at 2:00");
+		// And the blank sheet still says the standard thing.
+		expect(wordsOf("timer")).toContain(
+			"green at 1:00, yellow at 1:30, red at 2:00",
+		);
+	});
+
+	it("ignores a window the renderers must not trust", () => {
+		// `hasTableTopicsLimits` is the gate, and it is re-applied here rather than
+		// assumed from the write path: a row predating the ceiling, or written by a
+		// script, must not reach the Timer's card.
+		for (const bad of [
+			{ minSeconds: 60, maxSeconds: null },
+			{ minSeconds: 150, maxSeconds: 60 },
+			{ minSeconds: 60, maxSeconds: 601 },
+			{ minSeconds: 60.5, maxSeconds: 150 },
+		]) {
+			expect(standardTimingRows(bad), JSON.stringify(bad)).toContainEqual([
+				"Table Topics",
+				"1:00",
+				"1:30",
+				"2:00",
+				"0:30–2:30",
+			]);
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
 // #509 — every sheet carries a script its holder can read aloud, and the
 // Ah-Counter stops being handed a list of the booked speakers.
 //
@@ -824,7 +958,13 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 		// `isDecodeSafe`/`MAX_LOGO_DIMENSION`, a pixel bound rather than a string
 		// one, and truncating base64 here would only corrupt a valid image.
 		const CAPPED = ["club", "date", "speakers", "wod", "roleNames"];
-		const BOUNDED_ELSEWHERE = ["logoDataUri"];
+		// `tableTopicsLimits` is BOUNDED_ELSEWHERE and not capped, and the canary
+		// is what forced the classification (#443). It is two integers, never a
+		// string, and it reaches react-pdf only through `hasTableTopicsLimits` —
+		// which refuses a non-integer, a negative and anything over
+		// `MAX_TABLE_TOPICS_SECONDS`, falling back to the standard window. A cap
+		// measured in characters has nothing to say about it.
+		const BOUNDED_ELSEWHERE = ["logoDataUri", "tableTopicsLimits"];
 		const every: Required<RoleSheetFill> = {
 			club: "Harborlight Toastmasters",
 			date: "Jul 22",
@@ -836,6 +976,7 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 			// non-empty — and since #520 it is interpolated mid-sentence into a sheet
 			// with a pinned one-page budget, rendered by react-pdf in this process.
 			roleNames: CANONICAL_SHEET_ROLE_NAMES,
+			tableTopicsLimits: { minSeconds: 60, maxSeconds: 150 },
 		};
 		expect(Object.keys(capFill(every)).sort()).toEqual(
 			[...CAPPED, ...BOUNDED_ELSEWHERE].sort(),

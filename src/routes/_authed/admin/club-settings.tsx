@@ -22,7 +22,10 @@ import {
 } from "#/lib/image-dimensions";
 import {
 	formatTableTopicsClock,
+	MAX_TABLE_TOPICS_SECONDS,
 	parseTableTopicsClock,
+	TABLE_TOPICS_DEFAULT_TIMING,
+	TABLE_TOPICS_MESSAGES,
 } from "#/lib/table-topics-limits";
 import {
 	getClubLogoMeta,
@@ -335,17 +338,25 @@ function ClubSettings() {
 			(ttMin.trim() !== "" && min === null) ||
 			(ttMax.trim() !== "" && max === null)
 		) {
-			toast.error(
-				"Enter Table Topics limits as minutes and seconds, like 2:30.",
-			);
+			toast.error(TABLE_TOPICS_MESSAGES.unparseable);
 			return;
 		}
 		if ((min === null) !== (max === null)) {
-			toast.error("Set both the minimum and the maximum, or neither.");
+			toast.error(TABLE_TOPICS_MESSAGES.halfStated);
 			return;
 		}
 		if (min !== null && max !== null && max <= min) {
-			toast.error("The maximum must be longer than the minimum.");
+			toast.error(TABLE_TOPICS_MESSAGES.inverted);
+			return;
+		}
+		// The FOURTH rule, and it was missing while the comment above promised
+		// that a typo lands on the field rather than coming back from the server.
+		// `parseTableTopicsClock` accepts up to three digits of minutes on
+		// purpose — capping is the caller's job — so "20:00" parsed to 1200,
+		// passed all three checks above, and returned as a raw zod `.max(600)`
+		// message rendered through the generic `catch` below.
+		if (max !== null && max > MAX_TABLE_TOPICS_SECONDS) {
+			toast.error(TABLE_TOPICS_MESSAGES.tooLong);
 			return;
 		}
 		setSavingAgenda(true);
@@ -671,10 +682,14 @@ function ClubSettings() {
 				<div className="space-y-2 border-t border-[var(--line)] pt-4">
 					<p className="text-sm font-medium">Table Topics speaking limits</p>
 					<p className="text-xs text-muted-foreground">
-						Leave both blank to use the standard 1–2 minutes. Set them and your
-						agenda, the projected deck and the Timer's colour marks all switch
-						to your club's own rule — the green light at the minimum, red at the
-						maximum, and anything past the maximum disqualified.
+						{/* Rendered from the constant, not retyped: this used to be a
+						    fourth hand-written copy of "1–2 minutes", so changing the
+						    marks would have left the form promising the old window. */}
+						Leave both blank to use the standard {TABLE_TOPICS_DEFAULT_TIMING}.
+						Set them and your agenda, the projected deck and the Timer's colour
+						marks and printed role sheet all switch to your club's own rule —
+						the green light at the minimum, red at the maximum, and anything
+						past the maximum disqualified.
 					</p>
 					<div className="flex gap-3">
 						<label className="flex-1 space-y-1 text-xs font-medium">
@@ -701,9 +716,10 @@ function ClubSettings() {
 						</label>
 					</div>
 					<p className="text-xs text-muted-foreground">
-						Minutes and seconds, like <code>2:30</code>. Not <code>2.5</code> —
-						a club that writes its cap as "2.3 min" means two minutes thirty,
-						and a decimal here would store the wrong number.
+						Minutes and seconds, like <code>2:30</code>, up to{" "}
+						<code>{formatTableTopicsClock(MAX_TABLE_TOPICS_SECONDS)}</code>. Not{" "}
+						<code>2.5</code> — a club that writes its cap as "2.3 min" means two
+						minutes thirty, and a decimal here would store the wrong number.
 					</p>
 				</div>
 				<Button type="submit" disabled={savingAgenda} className="w-full">

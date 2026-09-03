@@ -10,12 +10,13 @@
  * is precisely the assertion its relative-constant rule is about, so it is the
  * worst one to have hidden behind a skip.
  *
- * `clubs-logic.ts` imports `#/db`, which throws without `DATABASE_URL` — but
- * only when the module is EVALUATED, and vitest's setup provides no such var.
- * Importing the schema is safe because `db` is constructed lazily at module
- * scope from `process.env.DATABASE_URL`… which it is not. So this file mocks
- * `#/db` the same way the integration suites do, purely to make the import
- * side-effect free. No query is ever issued.
+ * `clubs-logic.ts` imports `#/db`, which throws without `DATABASE_URL`, and
+ * vitest's setup provides no such var. One might expect importing the schema to
+ * be safe on the grounds that `db` is constructed lazily — it is not:
+ * `src/db/index.ts` calls `drizzle(process.env.DATABASE_URL!)` at module scope,
+ * so the throw happens on import. Hence this file mocks `#/db` the same way the
+ * integration suites do, purely to make the import side-effect free. No query is
+ * ever issued.
  */
 import { describe, expect, it, vi } from "vitest";
 

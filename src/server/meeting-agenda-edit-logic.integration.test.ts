@@ -3665,6 +3665,42 @@ describe.skipIf(!hasTestDb)("materialise on first edit", () => {
 		if (m?.templateId) madeTemplates.push(m.templateId);
 	});
 
+	it("FREEZES the club's Table Topics window, not the standard one (#443)", async () => {
+		// The one unwire the source guard cannot see, and the worst one:
+		// `materialiseForMeeting` takes `TableTopicsLimits | null`, so a literal
+		// `null` at this call site typechecks, leaves the selected column selected,
+		// and still matches the guard's inner-forward regex — while permanently
+		// baking OUR window into the club's own rows. Nothing errors, and the club
+		// never sees its rule on any templated surface again.
+		await testDb
+			.update(clubs)
+			.set({ tableTopicsMinSeconds: 60, tableTopicsMaxSeconds: 150 })
+			.where(eq(clubs.id, club.clubId));
+
+		const draft = await loadAgendaDraft(club.meetingId);
+		const tt = draft?.rows.find(
+			(r) =>
+				r.kind === "role" &&
+				r.roleKey === "table_topics_master" &&
+				r.markRed !== null,
+		);
+		expect(tt, "the materialised Table Topics row").toBeDefined();
+		// ABSOLUTE minutes from 60s/150s. `toEqual(resolveTableTopicsMarks(...))`
+		// would pass for every midpoint rule, including the standard window this
+		// exists to keep out.
+		expect({
+			green: tt?.markGreen,
+			yellow: tt?.markYellow,
+			red: tt?.markRed,
+		}).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+
+		const [m] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		if (m?.templateId) madeTemplates.push(m.templateId);
+	});
+
 	it("DECLARES the roles its beats name, so none of them are dropped", async () => {
 		// Regression: ISSUE-001 — adopting an agenda printed 5 rows instead of 24.
 		// Found by /qa on 2026-08-31.

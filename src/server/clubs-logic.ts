@@ -13,7 +13,10 @@ import {
 	isSupportedClubTimezone,
 } from "#/lib/club-timezone";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
-import { MAX_TABLE_TOPICS_SECONDS } from "#/lib/table-topics-limits";
+import {
+	MAX_TABLE_TOPICS_SECONDS,
+	TABLE_TOPICS_MESSAGES,
+} from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
 
 /**
@@ -297,7 +300,13 @@ export const clubAgendaSettingsSchema = z
 		tableTopicsMinSeconds: tableTopicsBound,
 		tableTopicsMaxSeconds: tableTopicsBound,
 	})
-	// BOTH bounds or neither, and max above min. Enforced here as well as in
+	// BOTH bounds or neither, and max above min. The messages come from
+	// `TABLE_TOPICS_MESSAGES` rather than being typed here, because the admin
+	// form states the same two rules before the request and the pair used to be
+	// byte-for-byte duplicates with nothing linking them — so editing one left
+	// the rule speaking with two voices depending on which layer refused.
+	//
+	// Enforced here as well as in
 	// `hasTableTopicsLimits` because the two answer different questions: the
 	// renderer's guard decides whether to TRUST a row it was handed, this decides
 	// whether to STORE one. A half-window saved silently would read back as "not
@@ -306,7 +315,7 @@ export const clubAgendaSettingsSchema = z
 		(v) =>
 			(v.tableTopicsMinSeconds === null) === (v.tableTopicsMaxSeconds === null),
 		{
-			message: "Set both the minimum and the maximum, or neither.",
+			message: TABLE_TOPICS_MESSAGES.halfStated,
 			path: ["tableTopicsMaxSeconds"],
 		},
 	)
@@ -316,7 +325,7 @@ export const clubAgendaSettingsSchema = z
 			v.tableTopicsMaxSeconds === null ||
 			v.tableTopicsMaxSeconds > v.tableTopicsMinSeconds,
 		{
-			message: "The maximum must be longer than the minimum.",
+			message: TABLE_TOPICS_MESSAGES.inverted,
 			path: ["tableTopicsMaxSeconds"],
 		},
 	);

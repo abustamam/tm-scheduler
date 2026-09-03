@@ -7,8 +7,10 @@ import type { TableTopicsLimits } from "./table-topics-limits";
  * Turn the code-derived run of show into rows a club can edit.
  *
  * ```
- * buildRunOfShow({ geIntroducesFunctionaries })   the CLUB's variant
- *         |  22 beats, or 23 on the GE variant
+ * buildRunOfShow({ geIntroducesFunctionaries, tableTopicsLimits })
+ *         |  22 beats, or 23 on the GE variant — carrying the CLUB's variant
+ *         |  AND its Table Topics marks, which are SNAPSHOTTED below rather
+ *         |  than re-derived at render time (#443)
  *         v
  *   drop the gating   <- D1: a row stays until deleted, so the gate is
  *         |               evaluated ONCE, here, and never again

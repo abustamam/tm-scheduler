@@ -15,18 +15,24 @@
 // `resolveAgendaRows`), and a materialised template's frozen marks
 // (`agenda-materialise.ts`).
 //
-// The Timer's printed ROLE SHEET is deliberately NOT covered. It has a fourth
-// hardcoded copy — `STANDARD_TIMING_WINDOWS` in `server/role-sheet-layout.ts`,
-// feeding both the printed window table and the sentence the Timer reads aloud
-// — and it takes no club agenda config at all, because those sheets are
-// club-agnostic artifacts built by `scripts/build-role-sheets.ts` and committed
-// as PDFs. Wiring it is a real change with its own shape, filed separately. Say
-// so here rather than letting this header imply the reconciliation is complete.
+// The Timer's printed ROLE SHEET is covered too, and an earlier version of this
+// header said it was not — on the stated ground that role sheets are
+// "club-agnostic artifacts built by `scripts/build-role-sheets.ts` and committed
+// as PDFs". Half true, and the wrong half: `role-sheet-layout.ts` is ONE layout
+// serving both the committed blanks and the per-meeting sheets rendered by
+// `api/meetings.$id.role-sheets.$sheet.pdf.ts`, which already carry the club's
+// name, logo and role vocabulary (#520). So the excluded surface was the one
+// person the whole feature exists for: a club that set 2:30 printed an agenda
+// row saying 2:30 and handed the Timer a sheet saying red at 2:00, with a
+// spoken script telling them to say the wrong number out loud.
 //
-// `agenda-runsheet.ts`'s own comment named this upgrade before it existed —
-// "If a club ever needs its own, the upgrade is a per-club override that falls
-// back to these, which is why the numbers sit behind a name instead of inline
-// in the beat table." This module is that override.
+// `STANDARD_TIMING_WINDOWS` is still the source for a club that has stated
+// nothing, and the committed blanks are unchanged — they serve every club, so
+// they cannot adopt one club's rule. See `standardTimingRows`.
+//
+// `agenda-runsheet.ts` named this upgrade before it existed: its constants sat
+// behind a name instead of inline in the beat table specifically so a per-club
+// override could fall back to them. This module is that override.
 //
 // ## Why the constants live HERE and not beside their consumers
 //
@@ -66,10 +72,14 @@ export const TABLE_TOPICS_DEFAULT_TIMING = "1–2 minutes per speaker";
  * An ABSOLUTE number, not one derived from anything, because CLAUDE.md's rule
  * is that a test stated relative to the constant it guards cannot fail.
  *
- * Ten minutes is already four times the longest Table Topics answer any club
- * runs, and it exceeds the segment's own default budget of 10 minutes — so a
- * cap above it asks `applyFlex` to fit a segment around a single answer longer
- * than the segment. That is the argument, and it is the only one: this ceiling
+ * Ten minutes is four times the longest Table Topics answer any club runs, and
+ * it EQUALS the segment's own default budget (`minutes: 10` on the Table Topics
+ * beat) — so a cap at the ceiling already asks the whole segment to be one
+ * answer. An earlier version of this comment said 600 seconds "exceeds the
+ * segment's own default budget of 10 minutes", which is the same number stated
+ * as if it were a larger one, and reached for `applyFlex` to finish the
+ * argument — but `applyFlex` clamps the segment to 5–25 minutes, so a 10-minute
+ * answer is well inside what the segment can grow to. That is the argument, and it is the only one: this ceiling
  * does NOT catch unit typos. An earlier version of this comment claimed it
  * caught "a club meaning 2:30 and typing 230 seconds", which is false — 230 is
  * under 600 and stores a 3:50 cap happily. Unit mistakes are caught at the
@@ -114,7 +124,12 @@ export function hasTableTopicsLimits(
 	// both Infinities, so it subsumes the finiteness check it replaces.
 	if (!Number.isInteger(minSeconds) || !Number.isInteger(maxSeconds))
 		return false;
-	if (minSeconds < 0 || maxSeconds <= 0) return false;
+	// Only the LOW bound is checked here. `maxSeconds <= 0` stood beside it and
+	// was unreachable by construction — past this line `minSeconds >= 0`, and the
+	// final `maxSeconds > minSeconds` already rejects every value it could have
+	// caught. No test could tell its presence from its absence, which is a
+	// mutation-survivor dressed as a guard.
+	if (minSeconds < 0) return false;
 	// The ceiling is enforced HERE as well as at the write, because this module
 	// is what the renderers trust and a row predating the cap (or written by a
 	// script) must not reach the Timer's card.
@@ -131,18 +146,40 @@ export function hasTableTopicsLimits(
  * (Table Topics 1 / 1.5 / 2, evaluation 2 / 2.5 / 3). Deriving it keeps a club's
  * three lights consistent with every other beat's rather than making Table
  * Topics the one segment whose middle light means something different.
+ *
+ * The midpoint is rounded to a WHOLE SECOND before it becomes minutes, and that
+ * is a correctness fix rather than tidiness. `mark_yellow` is `real()` — float4
+ * — so a materialised template stores this value at ~7 significant digits while
+ * every unmaterialised surface re-derives it as a float64. When the two bounds
+ * sum to an odd number of seconds the midpoint lands on a half second, and
+ * `formatTimingClock`'s `Math.round` then breaks the tie from the wrong side of
+ * the float4 noise: a 1:00–2:35 club gets 1:48 live and 1:47 off the frozen row,
+ * one meeting's Timer signalling a second earlier than the next for no reason
+ * anyone can see. Rounding first makes yellow a multiple of 1/60, where float4
+ * error is ~1e-5 seconds and can never flip the tie. 25.6% of the windows a club
+ * can state are odd-summed, so this is not an edge case.
  */
 export function resolveTableTopicsMarks(
 	limits: TableTopicsLimits | null | undefined,
 ): TimingMarks {
 	if (!hasTableTopicsLimits(limits)) return TABLE_TOPICS_MARKS;
-	const green = limits.minSeconds / 60;
-	const red = limits.maxSeconds / 60;
-	return { green, yellow: (green + red) / 2, red };
+	const yellowSeconds = Math.round((limits.minSeconds + limits.maxSeconds) / 2);
+	return {
+		green: limits.minSeconds / 60,
+		yellow: yellowSeconds / 60,
+		red: limits.maxSeconds / 60,
+	};
 }
 
 /**
- * The deck's "Speaker time:" line, and the run sheet's timing clause.
+ * The deck's "Speaker time:" line.
+ *
+ * The ONLY caller is `agenda-slides.ts`. An earlier version of this line also
+ * claimed "the run sheet's timing clause", and the run sheet has never called
+ * it: the printed sheet and the on-screen agenda reach the same two numbers
+ * through `resolveTableTopicsMarks` → `beat.marks`, a different derivation with
+ * a different output shape. Both paths must move together; only one of them
+ * comes through here.
  *
  * Stated the way a club states it on its own printed agenda: the floor, the
  * cap, and the first disqualifying second. The DQ point is DERIVED as one
@@ -151,10 +188,18 @@ export function resolveTableTopicsMarks(
  * is the same fact twice.
  *
  * Note this is deliberately NOT the 30-second qualifying grace of
- * `timing-window.ts`. That rule is about prepared SPEECHES, and
- * `firstQualifyingWindow` skips every non-speaker row precisely so the Table
- * Topics window is never presented as a speech window (#357). A club's Table
+ * `timing-window.ts`. That rule is about prepared SPEECHES: a club's Table
  * Topics cap is its own rule and is stated as its own rule.
+ *
+ * `firstQualifyingWindow` enforces that by skipping every non-speaker row
+ * (#357) — but it is one of TWO derivations, and an earlier version of this
+ * paragraph cited it as if it covered both. `beatTimingText` (the TEMPLATED
+ * deck) calls `qualifyingWindowForMarks` directly with no filter at all, so a
+ * materialised meeting projected "qualifies 0:30–3:00" beside a
+ * non-materialised one saying "2:31+ disqualified" — two disqualification rules
+ * for one club, differing only by whether anyone had opened the agenda editor.
+ * `TABLE_TOPICS_ROLE_KEY` and `formatTableTopicsWindow` below are what that
+ * derivation now uses instead.
  */
 export function formatTableTopicsTiming(
 	limits: TableTopicsLimits | null | undefined,
@@ -164,6 +209,51 @@ export function formatTableTopicsTiming(
 	const max = formatSeconds(limits.maxSeconds);
 	const dq = formatSeconds(limits.maxSeconds + 1);
 	return `${min} minimum · ${max} maximum · ${dq}+ disqualified`;
+}
+
+/**
+ * The three refusals, stated once.
+ *
+ * The admin form checks these before the request so a typo lands on the field
+ * that is wrong, and the zod schema checks them again because a server fn is
+ * addressable without the form. That is two enforcement points by design — but
+ * it was also two byte-for-byte copies of each sentence, with nothing linking
+ * them, so editing one left the same rule speaking with two voices depending on
+ * which layer rejected the write. `CLUB_ARCHIVED_MESSAGE` in `#/lib/club-archive`
+ * is the existing pattern for exactly this shape.
+ */
+export const TABLE_TOPICS_MESSAGES = {
+	unparseable: "Enter Table Topics limits as minutes and seconds, like 2:30.",
+	halfStated: "Set both the minimum and the maximum, or neither.",
+	inverted: "The maximum must be longer than the minimum.",
+	/** The ceiling, said in the admin's units rather than in seconds. */
+	tooLong: `Table Topics limits cannot be longer than ${
+		MAX_TABLE_TOPICS_SECONDS / 60
+	}:00.`,
+} as const;
+
+/**
+ * The `role_definitions.key` of the beat this window governs.
+ *
+ * Named rather than typed inline because two derivations have to agree about
+ * WHICH row is the Table Topics segment — `beatTimingText` on the templated
+ * deck, and the Timer's role sheet — and a hand-typed `"table_topics_master"`
+ * in either of them is a rename away from silently governing nothing.
+ */
+export const TABLE_TOPICS_ROLE_KEY = "table_topics_master";
+
+/**
+ * The club's window as a plain span, e.g. "1:00–2:30".
+ *
+ * The same two numbers `formatTableTopicsTiming` states as a sentence, in the
+ * shape a `QualifyingWindow.range` uses, so the templated deck can print the
+ * club's rule in the slot where it used to print the speech grace. Taking
+ * MARKS rather than the stored seconds is deliberate: a templated row renders
+ * the marks FROZEN into it, and re-deriving from the club's current columns
+ * there would make the wall disagree with the paper the room is holding.
+ */
+export function formatTableTopicsWindow(marks: TimingMarks): string {
+	return `${formatSeconds(marks.green * 60)}–${formatSeconds(marks.red * 60)}`;
 }
 
 /**

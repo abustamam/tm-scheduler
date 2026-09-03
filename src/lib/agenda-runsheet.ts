@@ -491,10 +491,10 @@ export const FLEX_TOLERANCE_MINUTES = 2;
  *
  * This block covered Table Topics too until #443, and said the pair were
  * constants "rather than a schema column nobody would ever vary". A club did
- * vary it: MCF runs 1:00–2:30. Table Topics is now a per-club column with these
- * constants as its fallback (`#/lib/table-topics-limits`), and the same upgrade
- * path stays open to this one — which is why the numbers still sit behind a
- * name instead of inline in the beat table.
+ * vary it: MCF runs 1:00–2:30. Table Topics is now a per-club column whose
+ * fallback is `TABLE_TOPICS_MARKS`, which moved to `#/lib/table-topics-limits`,
+ * and the same upgrade path stays open to the evaluation window — which is why
+ * these numbers still sit behind a name instead of inline in the beat table.
  */
 export const EVALUATION_MARKS: TimingMarks = { green: 2, yellow: 2.5, red: 3 };
 
@@ -503,11 +503,14 @@ export const EVALUATION_MARKS: TimingMarks = { green: 2, yellow: 2.5, red: 3 };
  * it the FALLBACK for a per-club override and that module owns the override —
  * defining the constant here and importing the resolver from there would close
  * a cycle. Re-exported so the call sites that already read it from this module
- * keep working, exactly as `DEFAULT_SPEAKER_MINUTES` is above.
+ * keep working.
  *
- * The comment above about "the upgrade is a per-club override that falls back
- * to these" has now happened, for Table Topics only. `EVALUATION_MARKS` is
- * still a constant, and the same upgrade path remains open to it.
+ * Those call sites are all TESTS today (`agenda-runsheet.test.ts`,
+ * `role-sheet-layout.test.ts`, `table-topics-limits.test.ts`) — stated plainly
+ * because the shim is not load-bearing the way `DEFAULT_SPEAKER_MINUTES` above
+ * is, which this module also CONSUMES. It survives on the grounds that the
+ * importers exist; `TABLE_TOPICS_TIMING` was deleted in the same diff on the
+ * grounds that its importers did not.
  */
 export { TABLE_TOPICS_MARKS };
 
@@ -690,8 +693,10 @@ export type RunOfShowConfig = {
 	 * is deliberate: there is no safe default for the GE variant, so a caller
 	 * that forgets it must get a type error — but "the club stated nothing" is a
 	 * real and common state here whose correct answer IS the standard window.
-	 * Making it required would have meant editing ~200 test call sites to say
-	 * "no opinion", which is noise, not safety.
+	 * Making it required would have meant editing 51 `buildRunOfShow` fixtures
+	 * (74 counting `buildSlideDeck`) to say "no opinion", which is noise, not
+	 * safety. That figure read "~200" until it was counted, and being off by 3x
+	 * matters when the number IS the justification for the asymmetry.
 	 *
 	 * The risk that buys — a production caller silently projecting the standard
 	 * window at a club that set its own — is covered by
