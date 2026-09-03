@@ -240,12 +240,21 @@ Assessed against the diff, not the whole repo: every branch, error path and user
 introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
 gates on them.
 
-Eight coverage traps this repo has actually hit, all worth checking when a number looks fine:
+Nine coverage traps this repo has actually hit, all worth checking when a number looks fine:
 
 - **A test can pin the wrong thing after a rename.** An assertion matching a role name by string
   (`r.who === "Toastmaster of the Day"`) stopped being unique once a second beat rendered the same
   owner, so it passed while the row it was written to protect could have been deleted. Assert on
   something that identifies the row, not just its owner.
+- **A source guard's own vacuity floor erodes silently when it counts a PROXY.** Most guards here
+  carry one ("did the extraction actually find anything?"), and it is only as good as the thing it
+  counts. `club-logo-copy.guard.test.ts` counted quoted string literals in the extracted
+  `CLUB_LOGO_COPY` block against a floor of 10; #504 made three of those values template literals
+  so they could interpolate the shared caps, dropping the census from 19 to 16 while the object
+  GREW — no failure, and the floor now had a third less headroom than the day it was written. The
+  proxy is the bug: count the STRUCTURE the guard is about (keys of the object) rather than a
+  lexical accident of how the values happen to be written today, since the next value that stops
+  being a plain string erodes it again by the same silent amount.
 - **A parity/agreement test cannot see a defect present on both sides.** `agenda-parity.test.ts`
   proves the printed run sheet and the projected deck agree; a bug in both derivations passes, and
   adding the failing club shape to its matrix passes too. Cross-surface comparisons need at least
@@ -298,8 +307,17 @@ Eight coverage traps this repo has actually hit, all worth checking when a numbe
   unassertable, because a unit test importing it throws `DATABASE_URL is not set`. #522 shipped its
   minutes render caps inside `minutes-pdf-logic.ts` first, where they could have been raised to
   5,000,000 with the whole suite green — inside the very change that cites this trap. Put the
-  NUMBERS in `lib/` (`src/lib/minutes-render-caps.ts`, `src/lib/speaker-limits.ts`) and let the
-  renderer import them.
+  NUMBERS in `lib/` (`src/lib/minutes-render-caps.ts`, `src/lib/speaker-limits.ts`,
+  `src/lib/club-logo-limits.ts`) and let the renderer import them. The logo case (#504) adds the
+  second reason to do it, and it is not about testability at all: a number the CLIENT also has to
+  agree about cannot live in a `#/db`-importing module, so it gets RE-DECLARED there instead —
+  four files spelling the club-logo caps, held together by a comment saying "keep these in sync"
+  and identifiers that look shared but resolve to different symbols. That had already drifted
+  silently: #496 added the pixel cap server-side and the client never learned it, so an admin
+  could pick a 4000px logo, watch the client accept it, base64 the whole file, and be rejected
+  only after the round trip. One declaration plus an offender-sweep guard
+  (`club-logo-limits.guard.test.ts`) is what makes a matching identifier in four files fail
+  instead of rot.
 
 - **jsdom performs no layout, so a property of rendered GEOMETRY is untestable in process.** Print CSS
   was invisible to every gate here for exactly that reason: a missing `.pgwrap { padding: 0 !important }`
@@ -612,6 +630,19 @@ put member email and phone on their payloads, and lifting them out is what let
 every `club.ts` server fn that calls one to gate on `requireClubViewAccess`. Extract the
 queries worth testing or guarding; leaving the rest inline is fine.
 
+**A THIRD motive, and the one that bites quietly: a `-logic.ts` module imports `#/db`, so a PURE
+helper inside one is unreachable by the client, and the client then grows a SECOND implementation
+of it.** Nothing fails when that happens — the browser simply cannot import the module, so a
+client needing the same answer writes its own way to get it and the two drift with every gate
+green. `readImageDimensions` (the PNG/JPEG header parser) sat in `club-logo-logic.ts`, so
+`club-settings.tsx` reached for `createImageBitmap` instead: a full decode, on the REJECT path,
+costing 52.9 ms and 244 MB of renderer RSS on the 8000x8000 PNG the cap exists for, and a
+different parser that could accept a file the server's would reject. #504 moved it to
+`src/lib/image-dimensions.ts` (`Uint8Array`/`DataView`, imports nothing) and both sides call it.
+So the rule is wider than "extract the queries worth testing": a helper in a `-logic.ts` module
+that touches no db and that the client also needs belongs in `src/lib`, beside `club-archive.ts`
+and `club-logo-url.ts`, which are the same move already made twice.
+
 **Public `createServerFn` readers gate on `clubs.archived_at` themselves.** Archiving is the
 platform takedown lever (ADR-0016 / ADR-0024) and it has **four** db-level enforcement points, not
 one: `requireMembership` (`server/guards.ts`) covers authed WRITES; `grantView` in the same
@@ -721,6 +752,19 @@ Bun/drizzle-kit, which is why the runner is bundled rather than invoked via `dri
 Do NOT adopt edge/serverless adapters (Cloudflare Workers / Convex) — the persistent process is
 required for the `pg` pool and the planned in-process reminder poller (#7). The Workers + Neon
 path stays a deferred future option only.
+
+**Changing a `createServerFn`'s `method` is a BREAKING change for tabs already open**, and
+auto-deploy on push is what makes that reachable. A server fn's URL is derived from its file and
+export name, not from its body, so the URL is byte-identical across the deploy while the server
+now enforces the new verb strictly (405 with an `Allow` header). A client loaded before the
+deploy keeps calling the old method against the new server and gets a 405 the router surfaces as
+a failed loader — a blank page, not a stale one. #504 flipped `getClubLogoMeta` POST → GET and
+handled it by making the last call site `.catch(() => null)` like the other five, so a stale
+client degrades to "no logo" instead of blanking club settings. The rule generalises: when you
+flip a method, every caller needs a fallback in the SAME change, and a guard test is the only
+thing that can hold it — a `createServerFn` cannot be invoked from vitest and call sites
+`vi.mock` the module wholesale, so the transport is invisible to the whole suite
+(`club-logo-method.guard.test.ts`).
 
 ## Agent skills
 
