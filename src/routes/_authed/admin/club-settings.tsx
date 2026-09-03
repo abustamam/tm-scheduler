@@ -10,6 +10,10 @@ import { ACCESS_REQUEST_MAILTO } from "#/lib/brand";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import {
+	formatTableTopicsClock,
+	parseTableTopicsClock,
+} from "#/lib/table-topics-limits";
+import {
 	getClubLogoMeta,
 	removeClubLogoFn,
 	uploadClubLogo,
@@ -169,6 +173,19 @@ function ClubSettings() {
 		agenda.geIntroducesFunctionaries,
 	);
 	const [savingAgenda, setSavingAgenda] = useState(false);
+	// Held as the TEXT the admin typed, not as parsed seconds: a controlled
+	// number field that reformats mid-keystroke fights the person typing "2:30"
+	// the moment they have typed "2:".
+	const [ttMin, setTtMin] = useState(
+		agenda.tableTopicsMinSeconds === null
+			? ""
+			: formatTableTopicsClock(agenda.tableTopicsMinSeconds),
+	);
+	const [ttMax, setTtMax] = useState(
+		agenda.tableTopicsMaxSeconds === null
+			? ""
+			: formatTableTopicsClock(agenda.tableTopicsMaxSeconds),
+	);
 	const [zone, setZone] = useState(timezone.timezone);
 	const [savingZone, setSavingZone] = useState(false);
 	/**
@@ -241,12 +258,38 @@ function ClubSettings() {
 
 	async function onSaveAgenda(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
+		// Parsed BEFORE the request, so a typo is caught where the admin can see
+		// which field is wrong rather than coming back as a server error on a form
+		// that has already been submitted. Blank means "not stated" and clears the
+		// column; an unparseable value is refused outright, never silently
+		// coerced — coercing "2.3" to 2 seconds is how the wrong rule gets stored.
+		const min = ttMin.trim() === "" ? null : parseTableTopicsClock(ttMin);
+		const max = ttMax.trim() === "" ? null : parseTableTopicsClock(ttMax);
+		if (
+			(ttMin.trim() !== "" && min === null) ||
+			(ttMax.trim() !== "" && max === null)
+		) {
+			toast.error(
+				"Enter Table Topics limits as minutes and seconds, like 2:30.",
+			);
+			return;
+		}
+		if ((min === null) !== (max === null)) {
+			toast.error("Set both the minimum and the maximum, or neither.");
+			return;
+		}
+		if (min !== null && max !== null && max <= min) {
+			toast.error("The maximum must be longer than the minimum.");
+			return;
+		}
 		setSavingAgenda(true);
 		try {
 			await updateClubAgendaSettings({
 				data: {
 					clubId: adminClub.clubId,
 					geIntroducesFunctionaries: geIntroduces,
+					tableTopicsMinSeconds: min,
+					tableTopicsMaxSeconds: max,
 				},
 			});
 			toast.success("Agenda settings saved.");
@@ -528,6 +571,44 @@ function ClubSettings() {
 						each explaining their own role. Tick this if your General Evaluator
 						does it instead. Either way the General Evaluator still calls for
 						their reports near the end.
+					</p>
+				</div>
+				<div className="space-y-2 border-t border-[var(--line)] pt-4">
+					<p className="text-sm font-medium">Table Topics speaking limits</p>
+					<p className="text-xs text-muted-foreground">
+						Leave both blank to use the standard 1–2 minutes. Set them and your
+						agenda, the projected deck and the Timer's colour marks all switch
+						to your club's own rule — the green light at the minimum, red at the
+						maximum, and anything past the maximum disqualified.
+					</p>
+					<div className="flex gap-3">
+						<label className="flex-1 space-y-1 text-xs font-medium">
+							Minimum
+							<input
+								type="text"
+								inputMode="numeric"
+								placeholder="1:00"
+								value={ttMin}
+								onChange={(e) => setTtMin(e.target.value)}
+								className="w-full rounded-md border border-[var(--line)] bg-background px-3 py-2 text-sm"
+							/>
+						</label>
+						<label className="flex-1 space-y-1 text-xs font-medium">
+							Maximum
+							<input
+								type="text"
+								inputMode="numeric"
+								placeholder="2:30"
+								value={ttMax}
+								onChange={(e) => setTtMax(e.target.value)}
+								className="w-full rounded-md border border-[var(--line)] bg-background px-3 py-2 text-sm"
+							/>
+						</label>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Minutes and seconds, like <code>2:30</code>. Not <code>2.5</code> —
+						a club that writes its cap as "2.3 min" means two minutes thirty,
+						and a decimal here would store the wrong number.
 					</p>
 				</div>
 				<Button type="submit" disabled={savingAgenda} className="w-full">

@@ -275,6 +275,8 @@ function MeetingView() {
 		clubNumber,
 		clubDistrict,
 		clubMeetingSchedule,
+		tableTopicsMinSeconds,
+		tableTopicsMaxSeconds,
 		clubRoles,
 		clubGuests,
 		roster: loaderRoster,
@@ -372,7 +374,15 @@ function MeetingView() {
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
-		resolveAgendaRows({ geIntroducesFunctionaries, template, slots }),
+		resolveAgendaRows({
+			geIntroducesFunctionaries,
+			tableTopicsLimits: {
+				minSeconds: tableTopicsMinSeconds,
+				maxSeconds: tableTopicsMaxSeconds,
+			},
+			template,
+			slots,
+		}),
 		meeting.lengthMinutes,
 	);
 	const projectedEnd = new Date(
@@ -402,6 +412,8 @@ function MeetingView() {
 					district: clubDistrict,
 					timezone,
 					meetingSchedule: clubMeetingSchedule,
+					tableTopicsMinSeconds,
+					tableTopicsMaxSeconds,
 					logoUrl,
 				},
 				rows: flex.rows,
@@ -416,6 +428,8 @@ function MeetingView() {
 					district: clubDistrict,
 					timezone,
 					meetingSchedule: clubMeetingSchedule,
+					tableTopicsMinSeconds,
+					tableTopicsMaxSeconds,
 					logoUrl,
 				},
 				slots,

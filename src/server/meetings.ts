@@ -181,6 +181,12 @@ async function loadMeetingDetail(
 			// The club's run-of-show variant (#367) — both renderers of this
 			// payload (printed run sheet and projected deck) need it.
 			geIntroducesFunctionaries: true,
+			// The club's Table Topics window (#443), for the same reason and the
+			// same two renderers: the Timer's marks on the printed row and the
+			// "Speaker time:" line on the deck are derived from these two numbers,
+			// so a club that states its own rule stops being contradicted by ours.
+			tableTopicsMinSeconds: true,
+			tableTopicsMaxSeconds: true,
 		},
 	});
 
@@ -403,6 +409,10 @@ async function loadMeetingDetail(
 		// Day, introduces the functionaries. Feeds `buildRunOfShow` (print) and
 		// `buildSlideDeck` (deck) so the two never disagree.
 		geIntroducesFunctionaries: club?.geIntroducesFunctionaries ?? false,
+		// Null means "not stated" and every surface falls back to the standard
+		// 1–2 minute window — see `#/lib/table-topics-limits` (#443).
+		tableTopicsMinSeconds: club?.tableTopicsMinSeconds ?? null,
+		tableTopicsMaxSeconds: club?.tableTopicsMaxSeconds ?? null,
 		// The meeting's template content (#agenda-templates), or null for a
 		// standard meeting. Feeds `resolveAgendaRows` on both the screen and the
 		// print route so the two cannot disagree about what the meeting is.

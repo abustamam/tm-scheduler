@@ -64,6 +64,8 @@ function PresentPage() {
 		timezone: data.timezone,
 		meetingSchedule: data.clubMeetingSchedule,
 		logoUrl: data.logoUrl,
+		tableTopicsMinSeconds: data.tableTopicsMinSeconds,
+		tableTopicsMaxSeconds: data.tableTopicsMaxSeconds,
 	};
 	// Which BUILDER, not whether to build (#agenda-templates PR 2 replaced the
 	// notice this used to render). A templated meeting gets the beat-driven deck
@@ -76,6 +78,10 @@ function PresentPage() {
 				club,
 				rows: resolveAgendaRows({
 					geIntroducesFunctionaries: data.geIntroducesFunctionaries,
+					tableTopicsLimits: {
+						minSeconds: data.tableTopicsMinSeconds,
+						maxSeconds: data.tableTopicsMaxSeconds,
+					},
 					template: data.template,
 					slots: data.slots,
 				}),
