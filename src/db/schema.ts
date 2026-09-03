@@ -356,14 +356,33 @@ export const clubMeetingRecurrence = pgTable(
 // `onConflictDoUpdate` on the PK a natural upsert for "replace or insert".
 //
 // Every column is NOT NULL, deliberately: a partial write (bytes with no
-// `updated_at`) would produce a URL with no version, and the serving route's
-// `Cache-Control: immutable` would then pin that image in every client's
-// cache with no way to bust it. `onDelete: "cascade"` — deleting a club takes
-// its logo with it.
+// `updated_at`) would produce a URL with no version, and the serving route
+// caches on that version, so the image would be pinned in every client's
+// cache with no way to bust it. (That route answered `Cache-Control: immutable`
+// until #517, which is what made the hazard a year long; it is now a bounded
+// `max-age` plus an ETag, so the shape survives but the blast radius does not.)
+// `onDelete: "cascade"` — deleting a club takes its logo with it.
 //
 // `attested_by` / `attested_at` record who confirmed the club is authorized
 // to use the uploaded image (ADR-0024 trademark posture) — persisted, not
 // merely shown at upload time.
+//
+// `attested_by` has NO `onDelete` clause, so Postgres defaults to `NO ACTION`
+// and deleting a user who ever attested a logo fails outright with
+// `club_logos_attested_by_user_id_fk`. That is INERT today and deliberately
+// left alone (#504 item 3, explicitly out of scope): `db.delete(user)` appears
+// nowhere in this repo, and `sync_tokens.created_by` has the identical shape,
+// so this matches precedent rather than introducing a pattern.
+//
+// It becomes real the day account deletion ships — Better-Auth's `deleteUser`
+// plugin, a GDPR self-serve delete, or an admin remove-user action — as an
+// unhandled FK violation with no code path to resolve it. Whoever ships that
+// decides between nulling the attestation, reassigning it, and blocking the
+// delete, and the decision is ADR-0024's to make: the attestation is an audit
+// record of who accepted trademark responsibility, so nulling it silently is
+// not obviously the kind option. Recorded HERE rather than left in #504,
+// because that issue closes with the PR that consolidated the limits and this
+// note would have gone with it.
 //
 // The header-build read path (agenda print SSR) must select only `club_id`
 // and `updated_at` — never `bytes` — see `loadClubLogoMeta` in
