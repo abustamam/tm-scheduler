@@ -1,14 +1,25 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
-import { type ChangeEvent, useMemo, useState } from "react";
+import { type ChangeEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { ACCESS_REQUEST_MAILTO } from "#/lib/brand";
+import {
+	ALLOWED_LOGO_MIME_TYPES,
+	isAllowedLogoMime,
+	MAX_LOGO_BYTES,
+	MAX_LOGO_DIMENSION,
+	MAX_LOGO_KB,
+} from "#/lib/club-logo-limits";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import {
+	type ImageDimensions,
+	readImageDimensions,
+} from "#/lib/image-dimensions";
 import {
 	getClubLogoMeta,
 	removeClubLogoFn,
@@ -28,11 +39,40 @@ import {
 } from "#/server/notification-prefs";
 
 // Client-side pre-checks only — fast feedback before the upload round-trip.
-// The server (`src/server/club-logo-logic.ts`, Lane A) is the authoritative
-// check: same 256 KB decoded-byte cap, same MIME allowlist, plus a magic-byte
-// check this client can't do. Keep these two numbers in sync with the server.
-const MAX_LOGO_BYTES = 256 * 1024;
-const ALLOWED_LOGO_TYPES = new Set(["image/png", "image/jpeg"]);
+// The server (`src/server/club-logo-logic.ts`) is the authoritative check: the
+// same limits, the same header parser, plus a magic-byte sniff this client
+// doesn't repeat. Nothing here is re-declared; why that matters is in
+// `#/lib/club-logo-limits`.
+
+/**
+ * The selected image's intrinsic size, or null when we can't tell.
+ *
+ * Reads the file's HEADER through the same `#/lib/image-dimensions` parser the
+ * server runs, rather than decoding the image. `createImageBitmap` was the
+ * first cut of this and was the wrong tool twice over: it cost 52.9 ms and
+ * 244 MB of renderer RSS on the 8000x8000 / 243 KiB PNG the cap exists for
+ * (measured in headless Chrome) — a full decode, on the REJECT path, to learn
+ * two numbers — and being a different implementation from the server's parser
+ * it could disagree with it about the same file, silently, with every gate
+ * green. One shared function removes both problems.
+ *
+ * The WHOLE file is read, not a prefix: the parser walks to IEND to prove the
+ * structure, so a truncated slice returns null. That is affordable because the
+ * byte cap is checked before this runs, so `file` is already under
+ * `MAX_LOGO_BYTES` — 256 KiB of `ArrayBuffer`, no decode, nothing retained.
+ *
+ * Null means "don't block". This is a shortcut to the error message, never the
+ * gate: the server re-runs this exact parser plus a magic-byte sniff, and its
+ * messages distinguish "not a valid PNG or JPEG" from a size problem.
+ */
+async function readImageSize(file: File): Promise<ImageDimensions | null> {
+	try {
+		const bytes = new Uint8Array(await file.arrayBuffer());
+		return readImageDimensions(bytes, file.type);
+	} catch {
+		return null;
+	}
+}
 
 /** Read a File into the base64 string the upload server fn expects (no data: prefix). */
 async function fileToBase64(file: File): Promise<string> {
@@ -53,6 +93,13 @@ async function fileToBase64(file: File): Promise<string> {
  * because the file legitimately says "Toastmaster of the Day" elsewhere
  * (nominative use, ADR-0024 decision 2). Keep all logo copy here so the guard
  * stays enforceable — a string inlined in JSX escapes it.
+ *
+ * Every limit named in this copy is INTERPOLATED from `#/lib/club-logo-limits`,
+ * never typed out (#504). A hardcoded "up to 256KB" is a second declaration of
+ * the cap wearing prose, and it goes stale the same silent way the constants
+ * did. `club-settings.test.tsx`'s "logo copy is derived from the shared limits"
+ * block asserts these strings still contain the values the checks use AND that
+ * the help text reaches the DOM — the string alone proves nothing to a user.
  */
 export const CLUB_LOGO_COPY = {
 	sectionTitle: "Club logo",
@@ -62,7 +109,7 @@ export const CLUB_LOGO_COPY = {
 	replaceCta: "Replace logo",
 	emptyState: "No logo set yet.",
 	selectedFilePrefix: "Selected: ",
-	helpText: "PNG or JPEG, up to 256KB.",
+	helpText: `PNG or JPEG. Max ${MAX_LOGO_KB} KB, and no larger than ${MAX_LOGO_DIMENSION} x ${MAX_LOGO_DIMENSION} pixels.`,
 	attestationLabel: "I confirm my club is authorized to use this image.",
 	responsibilityNote:
 		"Your club is responsible for the image it uploads. Questions?",
@@ -72,7 +119,15 @@ export const CLUB_LOGO_COPY = {
 	uploadSuccess: "Club logo saved.",
 	removeSuccess: "Club logo removed.",
 	typeError: "Club logo must be a PNG or JPEG image.",
-	sizeError: "Club logo must be 256KB or smaller.",
+	sizeError: `Club logo must be ${MAX_LOGO_KB} KB or smaller.`,
+	// A function, so the client can name the size it measured the way the server
+	// does (`club-logo-logic.ts` appends the same parenthetical). The two paths
+	// are both live for one file — a browser this parser can't read falls through
+	// to the server — so they should read as one message, not two.
+	dimensionError: (size: ImageDimensions | null) =>
+		`Club logo must be ${MAX_LOGO_DIMENSION} x ${MAX_LOGO_DIMENSION} pixels or smaller${
+			size ? ` (this one is ${size.width} x ${size.height})` : ""
+		}.`,
 	genericError: "Something went wrong.",
 } as const;
 
@@ -89,7 +144,14 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 			getClubProfileSettings({ data: context.adminClub.clubId }),
 			loadClubReminderSettings({ data: context.adminClub.clubId }),
 			loadClubAgendaSettings({ data: context.adminClub.clubId }),
-			getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }),
+			// Degrades to "no logo" rather than blanking the whole settings page,
+			// matching the five public logo loaders, which already catch. It
+			// matters across a rolling deploy: a server fn's URL is derived from
+			// file+name, not content, so a tab left open across #504's POST->GET
+			// flip keeps POSTing to a URL that now answers 405.
+			getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }).catch(
+				() => null,
+			),
 			loadClubTimezoneSettings({ data: context.adminClub.clubId }),
 		]);
 		return { profile, reminders, agenda, logoMeta, timezone };
@@ -184,6 +246,10 @@ function ClubSettings() {
 	);
 	const [logoFile, setLogoFile] = useState<File | null>(null);
 	const [logoAttested, setLogoAttested] = useState(false);
+	// Monotonic selection counter — see `onLogoFileChange`. A ref, not state: it
+	// must not re-render, and a superseded pick has to read the CURRENT value
+	// after its await, which a captured state value cannot give it.
+	const logoPickSeq = useRef(0);
 	const [uploadingLogo, setUploadingLogo] = useState(false);
 	const [removingLogo, setRemovingLogo] = useState(false);
 
@@ -274,20 +340,49 @@ function ClubSettings() {
 		}
 	}
 
-	function onLogoFileChange(e: ChangeEvent<HTMLInputElement>) {
+	async function onLogoFileChange(e: ChangeEvent<HTMLInputElement>) {
 		const file = e.target.files?.[0] ?? null;
 		// Allow re-selecting the same file later (onChange won't fire otherwise).
 		e.target.value = "";
 		if (!file) return;
-		// Fast client-side feedback only — the server re-checks both (and adds a
-		// magic-byte check this client can't do), so a check removed here can
-		// only make the error slower to surface, never let a bad file through.
-		if (!ALLOWED_LOGO_TYPES.has(file.type)) {
-			toast.error(CLUB_LOGO_COPY.typeError);
+
+		// A rejected pick must not leave the PREVIOUS one staged. The native input
+		// was just cleared above, so a surviving "Selected: old.png" is the only
+		// thing on screen saying what Save would send — and it would send a file
+		// the admin thinks they replaced, still carrying its earlier attestation.
+		function reject(message: string) {
+			toast.error(message);
+			setLogoFile(null);
+			setLogoAttested(false);
+		}
+
+		// Fast client-side feedback only — the server re-checks all three (and
+		// adds a magic-byte sniff this client can't do), so a check removed here
+		// can only make the error slower to surface, never let a bad file through.
+		if (!isAllowedLogoMime(file.type)) {
+			reject(CLUB_LOGO_COPY.typeError);
 			return;
 		}
 		if (file.size > MAX_LOGO_BYTES) {
-			toast.error(CLUB_LOGO_COPY.sizeError);
+			reject(CLUB_LOGO_COPY.sizeError);
+			return;
+		}
+		// The pixel cap, which the client didn't know about at all until #504:
+		// bytes don't bound dimensions (a 4000x3000 transparent PNG fits inside
+		// the byte cap easily), so without this the admin base64s the whole file
+		// and learns it's too big only from the server's reply.
+		//
+		// `pick` guards re-entrancy: reading the file is async, so a second
+		// selection can start before this one resolves and the two would commit in
+		// RESOLUTION order rather than selection order.
+		const pick = ++logoPickSeq.current;
+		const size = await readImageSize(file);
+		if (pick !== logoPickSeq.current) return;
+		if (
+			size &&
+			(size.width > MAX_LOGO_DIMENSION || size.height > MAX_LOGO_DIMENSION)
+		) {
+			reject(CLUB_LOGO_COPY.dimensionError(size));
 			return;
 		}
 		setLogoFile(file);
@@ -573,7 +668,14 @@ function ClubSettings() {
 						id="logoFile"
 						name="logoFile"
 						type="file"
-						accept="image/png,image/jpeg"
+						// Derived, not retyped: this filter is what the OS file picker
+						// applies, so a hardcoded pair here is a fifth declaration of
+						// the allow-list — user-visible, and invisible to the #504
+						// guard, which sweeps identifiers and numbers rather than
+						// attribute strings. `join()` rather than `join(",")`: comma is
+						// its default, and a quote inside a JSX expression container
+						// derails `club-logo-copy.guard.test.ts`'s string scan.
+						accept={ALLOWED_LOGO_MIME_TYPES.join()}
 						onChange={onLogoFileChange}
 					/>
 					{logoFile ? (

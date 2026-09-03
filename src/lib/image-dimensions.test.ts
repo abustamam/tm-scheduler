@@ -19,16 +19,19 @@
  * rejected, even when a plausible width and height are sitting at the right
  * offsets.
  *
- * `#/db` is stubbed rather than pointed at a test database: nothing here touches
- * it, and the stub keeps these runnable in the default suite.
+ * The parser moved to `#/lib/image-dimensions` in #504 so the browser could run
+ * it too, and this file moved with it. `readImageDimensions` now imports
+ * directly; only `isDecodeSafe` (which combines it with the cap and lives with
+ * the DB-touching logic) still needs the `#/db` stub and the dynamic import.
+ * Nothing here touches a database — the stub keeps these in the default suite.
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { readImageDimensions } from "#/lib/image-dimensions";
+
 vi.mock("#/db", () => ({ db: {} }));
 
-const { isDecodeSafe, readImageDimensions } = await import(
-	"#/server/club-logo-logic"
-);
+const { isDecodeSafe } = await import("#/server/club-logo-logic");
 
 // ---------------------------------------------------------------------------
 // Builders — real files with real chunk structure, not a magic prefix and fill.

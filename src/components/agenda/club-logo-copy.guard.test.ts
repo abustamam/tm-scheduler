@@ -80,10 +80,18 @@ function clubLogoCopyBlock(): string {
 describe("club-logo copy names no trademark (#495, ADR-0024 constraint 1)", () => {
 	it("scans a non-trivial amount of copy (so a broken extraction can't pass vacuously)", () => {
 		const block = clubLogoCopyBlock();
-		// A crude floor on how much text this guard actually inspected: the
-		// current CLUB_LOGO_COPY has 18 keys, each a quoted string value.
-		const stringLiterals = block.match(/"[^"]*"/g) ?? [];
-		expect(stringLiterals.length).toBeGreaterThan(10);
+		// A floor on how much copy this guard actually inspected, counted by KEY
+		// rather than by quoted literal. It counted `"…"` matches until #504,
+		// which made three values template literals so they could interpolate the
+		// shared limits — dropping the census from 19 to 16 against a floor of 10
+		// while the object GREW. Counting keys tracks the object itself, so the
+		// next value that stops being a plain string does not quietly erode it.
+		const keys = block.match(/^\t[A-Za-z]\w*:/gm) ?? [];
+		expect(
+			keys.length,
+			`Expected the CLUB_LOGO_COPY extraction to find most of its keys, found ${keys.length}. ` +
+				"A drop here means the block extraction broke, not that the copy shrank.",
+		).toBeGreaterThan(15);
 
 		const logoComponentSrc = readSource(resolve(ROOT, CLUB_LOGO_FILE));
 		expect(logoComponentSrc.length).toBeGreaterThan(200);
