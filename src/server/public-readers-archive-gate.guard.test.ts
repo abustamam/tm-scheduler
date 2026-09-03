@@ -232,6 +232,23 @@ const WIRINGS: Wiring[] = [
 		leaks: "a full agenda: assignee names, speech titles, Word of the Day",
 	},
 	{
+		// #665. State the mechanism EXACTLY — an earlier draft of this comment
+		// said the seam "re-derives the club from the meeting's own FK rather
+		// than trusting a club id from the caller", and none of that is what
+		// happens. It calls `resolvePublicMeetingKey(args.clubId, key)`, whose
+		// first line is `isReadableClub(clubId)` — the CLUB-keyed variant, on a
+		// club id taken straight off the caller's payload. What closes the
+		// cross-club pairing is `resolveMeetingKey`'s own
+		// `eq(meetings.clubId, clubId)` predicate, not an FK re-derivation.
+		// `isReadableClubForMeeting` is never called here. Getting this wrong is
+		// the mechanism-by-hearsay failure CLAUDE.md records twice.
+		file: "server/personal-meeting.ts",
+		fn: "getPublicPersonalMeetingView",
+		mustCall: "loadPublicPersonalMeetingView",
+		leaks:
+			"a named member's roles, their attendance answer, and the meeting's theme and Word of the Day",
+	},
+	{
 		file: "server/voting.ts",
 		fn: "getBallot",
 		mustCall: "loadBallot",

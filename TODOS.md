@@ -8,6 +8,27 @@
 
 ## Meetings
 
+- The personal meeting page's roles payload is unbounded on both axes (#665). The
+  slot select has no `LIMIT`, and `role_definitions.name` is an uncapped `text`
+  column whose write path validates only `z.string().trim().min(1)` — unlike
+  `members.ts`'s 80-char name cap. The route interpolates every role name into the
+  H1 and the dialog copy. NOT the #519/#522 shape: the size takes an officer to
+  create, not an anonymous caller, and the render is client-side so no server event
+  loop is blocked. Left undone deliberately rather than half-done — a `.limit()`
+  whose test asserts `<= LIMIT` is the "stated relative to the constant it guards"
+  trap, so doing it properly means measuring a ceiling and capping the name on the
+  write path too.
+  **Priority:** P3
+
+- `?as=` seeding is covered by unit + guard tests, but the one behaviour that
+  decided its final shape was only visible in a browser (#665): when the seed is
+  REFUSED because the device already holds a different identity, stripping the
+  param makes `targetMemberId` fall back to the stored pick, so the page silently
+  flips to the other member. Fixed by not stripping in that arm. There is no
+  in-process test that would have caught it — the route cannot be mounted — so if
+  that derivation moves, re-check it in a browser rather than trusting the suite.
+  **Priority:** P4
+
 - An ex-member can still see a departed club's forward schedule. `userMemberIds` deliberately ignores `members.status`, and the deactivation sweep in `members-logic.ts` skips slots on CANCELLED meetings, while `applyReopenMeeting` restores a meeting without clearing assignments. Cancel a meeting, deactivate a member, reopen it, and their `/me` shows that club's date, theme and location with a Release button that dead-ends. Needs all three steps, so it is debt rather than scheduled work.
   **Priority:** P4
 
