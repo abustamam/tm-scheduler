@@ -28,7 +28,14 @@ the nouns in `src/db/schema.ts`.
   projected deck, the `.pptx` export, the Word of the Day poster and the club role sheets (HTML
   and PDF); a club with no logo sees every surface exactly as before. GavelUp supplies no image
   of its own and never shares one club's upload with another — see ADR-0024 and **Invariants**.
-  Shipped #495 (print), extended to the remaining surfaces #496.
+  Every one of those numbers and the MIME allow-list are declared once, in
+  `src/lib/club-logo-limits.ts` (no `#/db` import, so the browser can read them too), and the
+  admin help text interpolates them rather than restating them — a raised cap cannot leave
+  "up to 256KB" behind as a lie. The client checks type, bytes **and** pixels before uploading,
+  running the same `src/lib/image-dimensions.ts` header parser the server does, but that is a
+  shortcut to the error message and never the gate: the server re-checks all three and adds a
+  magic-byte sniff. Shipped #495 (print), extended to the remaining surfaces #496; limits
+  consolidated and the client pixel pre-check added #504.
 - **Club timezone** (`clubs.timezone`, an IANA id; default `America/Chicago`) — the club-local
   axis every date and deadline is measured on: meeting times and dates, the URL date key,
   **Meeting phase**, the agenda freeze, whether a meeting counts as over. A club `admin` sets it
