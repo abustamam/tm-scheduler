@@ -39,6 +39,8 @@ const club: ClubForDeck = {
 	district: "District 39",
 	timezone: "America/Chicago",
 	meetingSchedule: "2nd & 4th Thursdays",
+	tableTopicsMinSeconds: null,
+	tableTopicsMaxSeconds: null,
 };
 
 /** A contestant slot for the prepared-speech contest, in draw position `i`. */
@@ -64,6 +66,7 @@ function contestant(i: number, name: string): AgendaSlot {
 function contestRows(slots: AgendaSlot[]): AgendaRow[] {
 	return resolveAgendaRows({
 		geIntroducesFunctionaries: false,
+		tableTopicsLimits: null,
 		template: {
 			beats: withBeatIds(CONTEST_TEMPLATE.beats),
 			roles: CONTEST_TEMPLATE.roles,

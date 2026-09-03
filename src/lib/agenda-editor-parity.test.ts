@@ -24,6 +24,7 @@ function printClock(f: ReturnType<typeof contestFixture>) {
 		applyFlex(
 			resolveAgendaRows({
 				geIntroducesFunctionaries: false,
+				tableTopicsLimits: null,
 				template: { beats: f.beats, roles: f.roles },
 				slots: f.slots,
 			}),

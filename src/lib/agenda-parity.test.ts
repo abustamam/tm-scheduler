@@ -455,6 +455,8 @@ const club: ClubForDeck = {
 	timezone: "America/Chicago",
 	meetingSchedule: "2nd & 4th Thursday",
 	logoUrl: null,
+	tableTopicsMinSeconds: null,
+	tableTopicsMaxSeconds: null,
 };
 
 // This suite compares SECTION ORDER, never ballot content, so one fixture
