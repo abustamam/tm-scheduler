@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AgendaSlot } from "./agenda-runsheet";
-import { beatDuration, beatTiming, buildRunOfShow } from "./agenda-runsheet";
+import {
+	beatDuration,
+	beatTiming,
+	buildRunOfShow,
+	resolveAgendaRows,
+} from "./agenda-runsheet";
 import {
 	buildSlideDeck,
 	type ClubForDeck,
@@ -44,6 +49,8 @@ const club: ClubForDeck = {
 	timezone: "America/Chicago",
 	meetingSchedule: "2nd & 4th Thursday",
 	logoUrl: null,
+	tableTopicsMinSeconds: null,
+	tableTopicsMaxSeconds: null,
 };
 
 /** A fixture ballot URL (#510) — no test but the one below cares about its
@@ -360,12 +367,76 @@ describe("buildSlideDeck table topics", () => {
 		]);
 	});
 
-	it("table topics slide has master + hardcoded standard timing", () => {
+	it("table topics slide has master + the standard timing by default", () => {
 		const slide = build({ slots: [tt] }).find((s) => s.kind === "tableTopics");
 		expect(slide).toMatchObject({
 			master: "Rasheed Bustamam",
 			timing: "1–2 minutes per speaker",
 		});
+	});
+
+	it("projects the CLUB's window, and the run sheet's marks agree (#443)", () => {
+		// The bug this closes: the projector told the room "1–2 minutes" at a club
+		// whose own printed agenda says 2:30, while the Timer's card said red at
+		// 2:00. Three sources, two of them hardcoded.
+		//
+		// Both halves are asserted from ONE fixture, because the failure mode is
+		// them DISAGREEING — a test that only checked the deck would pass with the
+		// marks still hardcoded, which is exactly how this shipped.
+		const mcf = {
+			...club,
+			tableTopicsMinSeconds: 60,
+			tableTopicsMaxSeconds: 150,
+		};
+		const slide = buildSlideDeck({
+			meeting,
+			club: mcf,
+			slots: [tt],
+			geIntroducesFunctionaries: false,
+			ballotUrl: "https://example.test/ballot",
+		}).find((s) => s.kind === "tableTopics");
+		expect(slide).toMatchObject({
+			timing: "1:00 minimum · 2:30 maximum · 2:31+ disqualified",
+		});
+
+		// The Timer's marks, through `resolveAgendaRows` — the seam the printed
+		// run sheet, the on-screen agenda and the present page ALL use.
+		//
+		// Deliberately NOT `buildRunOfShow` directly. The first cut of this test
+		// did exactly that, which is why it passed while the run sheet was still
+		// unwired: it asserted the BUILDER, not the path production takes. A test
+		// that reaches the right answer by a route no user travels proves nothing
+		// about the surfaces the issue is about.
+		const rows = resolveAgendaRows({
+			geIntroducesFunctionaries: false,
+			tableTopicsLimits: { minSeconds: 60, maxSeconds: 150 },
+			template: null,
+			slots: [tt],
+		});
+		const segment = rows.find(
+			(r) => r.roleKey === "table_topics_master" && r.marks,
+		);
+		// Non-null first: without it, a row that stopped carrying marks entirely
+		// would compare undefined to undefined and pass.
+		expect(segment).toBeDefined();
+		// ABSOLUTE values from 60s/150s, never `toEqual(TABLE_TOPICS_MARKS)`.
+		expect(segment?.marks).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+	});
+
+	it("the run sheet falls back to the standard trio when unset (#443)", () => {
+		// The half that fails if someone "fixes" the case above by hardcoding a
+		// club window into the seam.
+		const rows = resolveAgendaRows({
+			geIntroducesFunctionaries: false,
+			tableTopicsLimits: null,
+			template: null,
+			slots: [tt],
+		});
+		const segment = rows.find(
+			(r) => r.roleKey === "table_topics_master" && r.marks,
+		);
+		expect(segment).toBeDefined();
+		expect(segment?.marks).toEqual({ green: 1, yellow: 1.5, red: 2 });
 	});
 
 	it("omits both table-topics slides when the role is absent", () => {

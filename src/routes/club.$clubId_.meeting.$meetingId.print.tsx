@@ -147,6 +147,8 @@ function PrintAgenda() {
 		meetingNumber,
 		officers,
 		geIntroducesFunctionaries,
+		tableTopicsMinSeconds,
+		tableTopicsMaxSeconds,
 		template,
 		logoUrl,
 	} = Route.useLoaderData();
@@ -158,6 +160,13 @@ function PrintAgenda() {
 	// surfaces cannot disagree about what the meeting is.
 	const runRows = resolveAgendaRows({
 		geIntroducesFunctionaries,
+		// The club's Table Topics window (#443). THIS is the surface the issue is
+		// about: the Timer's printed green/yellow/red trio. Omitting it here is
+		// what made the first cut print red at 2:00 beside a deck saying 2:30.
+		tableTopicsLimits: {
+			minSeconds: tableTopicsMinSeconds,
+			maxSeconds: tableTopicsMaxSeconds,
+		},
 		template,
 		slots,
 	});

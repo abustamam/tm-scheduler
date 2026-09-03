@@ -40,6 +40,7 @@ import {
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
 import { matchRoleDefs } from "#/lib/role-def-match";
+import type { TableTopicsLimits } from "#/lib/table-topics-limits";
 import { logActivity } from "./activity";
 import { loadMeetingSlots } from "./meeting-slots-logic";
 import {
@@ -144,6 +145,7 @@ async function materialiseForMeeting(
 	meetingId: string,
 	clubId: string,
 	geIntroducesFunctionaries: boolean,
+	tableTopicsLimits: TableTopicsLimits | null,
 ): Promise<string> {
 	return await database.transaction(async (tx) => {
 		const [locked] = await tx
@@ -154,7 +156,10 @@ async function materialiseForMeeting(
 			.limit(1);
 		if (locked?.templateId) return locked.templateId;
 
-		const seeds = materialiseRunOfShow(geIntroducesFunctionaries);
+		const seeds = materialiseRunOfShow(
+			geIntroducesFunctionaries,
+			tableTopicsLimits,
+		);
 		const [tpl] = await tx
 			.insert(meetingTemplates)
 			.values({
@@ -273,6 +278,11 @@ export async function loadAgendaDraft(
 			// round-trip for two scalars is waste.
 			timeZone: clubs.timezone,
 			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+			// #443: materialisation FREEZES the Table Topics marks into the
+			// template row, so the club's window has to be known here or the
+			// template snapshots ours.
+			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
 		})
 		.from(meetings)
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
@@ -289,6 +299,10 @@ export async function loadAgendaDraft(
 			meetingId,
 			meeting.clubId,
 			meeting.geIntroducesFunctionaries,
+			{
+				minSeconds: meeting.tableTopicsMinSeconds,
+				maxSeconds: meeting.tableTopicsMaxSeconds,
+			},
 		));
 
 	const [tpl] = await database

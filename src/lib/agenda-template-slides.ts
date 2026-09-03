@@ -58,7 +58,17 @@
  */
 import type { AgendaRow } from "./agenda-runsheet";
 import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
-import { formatTimingClock, qualifyingWindowForMarks } from "./timing-window";
+import {
+	formatTableTopicsWindow,
+	hasTableTopicsLimits,
+	TABLE_TOPICS_ROLE_KEY,
+	type TableTopicsLimits,
+} from "./table-topics-limits";
+import {
+	formatTimingClock,
+	type QualifyingWindow,
+	qualifyingWindowForMarks,
+} from "./timing-window";
 
 export type TemplateDeckInput = {
 	meeting: MeetingForDeck;
@@ -79,6 +89,19 @@ export type TemplateDeckInput = {
  * (#357) the printed agenda's timing key and the Timer's role sheet teach. In a
  * contest that window is not a courtesy — it IS the disqualification rule, so
  * the wall showing a different one from the paper is the worst case.
+ *
+ * The Table Topics segment is the one beat the grace does NOT govern once a
+ * club has stated its own window (#443). Its cap is the club's rule — MCF's own
+ * sheet says "2.31+ disqualified" — so applying the speech grace here projected
+ * "qualifies 0:30–3:00" off a materialised meeting while the identical club's
+ * unmaterialised meeting projected "2:31+ disqualified", one wall contradicting
+ * the next with nothing but the agenda editor between them. `firstQualifyingWindow`
+ * filters non-speaker rows for exactly this reason; this derivation did not,
+ * and a comment in `table-topics-limits.ts` claimed that filter covered both.
+ *
+ * A club that has stated NOTHING is left alone: its beat carries the standard
+ * marks, the graced window is what the Timer's blank role sheet has always
+ * printed, and changing that is a product question with its own shape (#679).
  */
 export type BeatTiming = {
 	green: string;
@@ -88,14 +111,26 @@ export type BeatTiming = {
 	qualifies: string;
 };
 
-export function beatTimingText(row: AgendaRow): BeatTiming | null {
-	const window = qualifyingWindowForMarks(row.marks);
-	if (!row.marks || !window) return null;
+export function beatTimingText(
+	row: AgendaRow,
+	tableTopicsLimits?: TableTopicsLimits | null,
+): BeatTiming | null {
+	if (!row.marks) return null;
+	const ownRule =
+		row.roleKey === TABLE_TOPICS_ROLE_KEY &&
+		hasTableTopicsLimits(tableTopicsLimits);
+	const window = ownRule ? null : qualifyingWindowForMarks(row.marks);
+	if (!ownRule && !window) return null;
 	return {
 		green: formatTimingClock(row.marks.green),
 		yellow: formatTimingClock(row.marks.yellow),
 		red: formatTimingClock(row.marks.red),
-		qualifies: window.range,
+		// FROZEN marks, not the club's current columns: a templated row renders
+		// what was snapshotted into it, and the room is holding paper built from
+		// the same rows.
+		qualifies: ownRule
+			? formatTableTopicsWindow(row.marks)
+			: (window as QualifyingWindow).range,
 	};
 }
 
@@ -137,7 +172,13 @@ export function buildTemplateSlideDeck({
 			label: row.who,
 			detail: row.detail.trim() || null,
 			minutes: row.minutes,
-			timing: beatTimingText(row),
+			// The club's own columns, off the SAME `ClubForDeck` the standard deck
+			// reads them from — so the two decks state one disqualification rule
+			// between them rather than one each.
+			timing: beatTimingText(row, {
+				minSeconds: club.tableTopicsMinSeconds,
+				maxSeconds: club.tableTopicsMaxSeconds,
+			}),
 		});
 	}
 

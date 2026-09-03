@@ -13,6 +13,10 @@ import {
 	isSupportedClubTimezone,
 } from "#/lib/club-timezone";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
+import {
+	MAX_TABLE_TOPICS_SECONDS,
+	TABLE_TOPICS_MESSAGES,
+} from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
 
 /**
@@ -246,12 +250,20 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
  *  object (rather than a bare boolean) because it is the config `buildRunOfShow`
  *  and `buildSlideDeck` take, and because it is the natural home for any second
  *  agenda knob. */
-export type ClubAgendaSettings = { geIntroducesFunctionaries: boolean };
+export type ClubAgendaSettings = {
+	geIntroducesFunctionaries: boolean;
+	/** The club's Table Topics window in SECONDS (#443), null for the standard
+	 *  one. The "second agenda knob" this type's comment anticipated. */
+	tableTopicsMinSeconds: number | null;
+	tableTopicsMaxSeconds: number | null;
+};
 
 /** The standard Toastmasters flow — what a club gets unless it says otherwise.
- *  Mirrors the column default in `schema.ts`. */
+ *  Mirrors the column defaults in `schema.ts`. */
 export const DEFAULT_CLUB_AGENDA_SETTINGS: ClubAgendaSettings = {
 	geIntroducesFunctionaries: false,
+	tableTopicsMinSeconds: null,
+	tableTopicsMaxSeconds: null,
 };
 
 /** Read a club's agenda settings. Falls back to the standard flow when the club
@@ -260,17 +272,63 @@ export async function getClubAgendaSettings(
 	clubId: string,
 ): Promise<ClubAgendaSettings> {
 	const [row] = await db
-		.select({ geIntroducesFunctionaries: clubs.geIntroducesFunctionaries })
+		.select({
+			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
+		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
 		.limit(1);
 	return row ?? DEFAULT_CLUB_AGENDA_SETTINGS;
 }
 
-export const clubAgendaSettingsSchema = z.object({
-	clubId: z.string().uuid(),
-	geIntroducesFunctionaries: z.boolean(),
-});
+/** One bound: whole seconds, within the absolute ceiling, or null for "not
+ *  stated". `.int()` matters — a fractional second reaching the clock formatter
+ *  is where "2:30" becomes "2:29" on one surface and "2:30" on another. */
+const tableTopicsBound = z
+	.number()
+	.int()
+	.min(0)
+	.max(MAX_TABLE_TOPICS_SECONDS)
+	.nullable();
+
+export const clubAgendaSettingsSchema = z
+	.object({
+		clubId: z.string().uuid(),
+		geIntroducesFunctionaries: z.boolean(),
+		tableTopicsMinSeconds: tableTopicsBound,
+		tableTopicsMaxSeconds: tableTopicsBound,
+	})
+	// BOTH bounds or neither, and max above min. The messages come from
+	// `TABLE_TOPICS_MESSAGES` rather than being typed here, because the admin
+	// form states the same two rules before the request and the pair used to be
+	// byte-for-byte duplicates with nothing linking them — so editing one left
+	// the rule speaking with two voices depending on which layer refused.
+	//
+	// Enforced here as well as in
+	// `hasTableTopicsLimits` because the two answer different questions: the
+	// renderer's guard decides whether to TRUST a row it was handed, this decides
+	// whether to STORE one. A half-window saved silently would read back as "not
+	// stated" and the admin would see their own entry vanish with no error.
+	.refine(
+		(v) =>
+			(v.tableTopicsMinSeconds === null) === (v.tableTopicsMaxSeconds === null),
+		{
+			message: TABLE_TOPICS_MESSAGES.halfStated,
+			path: ["tableTopicsMaxSeconds"],
+		},
+	)
+	.refine(
+		(v) =>
+			v.tableTopicsMinSeconds === null ||
+			v.tableTopicsMaxSeconds === null ||
+			v.tableTopicsMaxSeconds > v.tableTopicsMinSeconds,
+		{
+			message: TABLE_TOPICS_MESSAGES.inverted,
+			path: ["tableTopicsMaxSeconds"],
+		},
+	);
 export type ClubAgendaSettingsInput = z.infer<typeof clubAgendaSettingsSchema>;
 
 /** Persist a club's agenda settings. Caller enforces admin authz (see the
@@ -280,7 +338,11 @@ export async function applyClubAgendaSettingsUpdate(
 ): Promise<{ ok: true }> {
 	const [updated] = await db
 		.update(clubs)
-		.set({ geIntroducesFunctionaries: input.geIntroducesFunctionaries })
+		.set({
+			geIntroducesFunctionaries: input.geIntroducesFunctionaries,
+			tableTopicsMinSeconds: input.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: input.tableTopicsMaxSeconds,
+		})
 		.where(eq(clubs.id, input.clubId))
 		.returning({ id: clubs.id });
 	if (!updated) throw new Error("Club not found.");

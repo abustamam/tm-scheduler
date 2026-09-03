@@ -16,12 +16,15 @@
  */
 import { describe, expect, it } from "vitest";
 import { withBeatIds } from "../test/template-beat-ids";
+import { materialiseRunOfShow } from "./agenda-materialise";
 import type { AgendaRow, AgendaSlot } from "./agenda-runsheet";
 import { resolveAgendaRows } from "./agenda-runsheet";
 import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
+import type { TemplateRoleRow } from "./agenda-template-rows";
 import { buildTemplateSlideDeck } from "./agenda-template-slides";
 import { CONTEST_TEMPLATE } from "./contest-template";
 import { slideName } from "./slide-layout";
+import { formatTableTopicsTiming } from "./table-topics-limits";
 
 const meeting: MeetingForDeck = {
 	scheduledAt: new Date("2026-09-10T01:00:00Z"),
@@ -39,6 +42,8 @@ const club: ClubForDeck = {
 	district: "District 39",
 	timezone: "America/Chicago",
 	meetingSchedule: "2nd & 4th Thursdays",
+	tableTopicsMinSeconds: null,
+	tableTopicsMaxSeconds: null,
 };
 
 /** A contestant slot for the prepared-speech contest, in draw position `i`. */
@@ -64,6 +69,7 @@ function contestant(i: number, name: string): AgendaSlot {
 function contestRows(slots: AgendaSlot[]): AgendaRow[] {
 	return resolveAgendaRows({
 		geIntroducesFunctionaries: false,
+		tableTopicsLimits: null,
 		template: {
 			beats: withBeatIds(CONTEST_TEMPLATE.beats),
 			roles: CONTEST_TEMPLATE.roles,
@@ -338,5 +344,149 @@ describe("buildTemplateSlideDeck jump-grid labels", () => {
 	it("gives every slide a non-empty name", () => {
 		const deck = deckFor([contestant(0, "Ada")]);
 		for (const name of deck.map(slideName)) expect(name.trim()).not.toBe("");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #443 — the templated deck states the club's disqualification rule.
+//
+// `beatTimingText` called `qualifyingWindowForMarks` with no filter of any
+// kind, so the ±30s SPEECH grace was applied to the Table Topics segment. A
+// club that set 1:00–2:30 then had two walls: a materialised meeting projecting
+// "Qualifies: 0:30–3:00" and an unmaterialised one projecting "2:31+
+// disqualified", differing only by whether anyone had opened the agenda editor.
+//
+// The whole matrix in this file passes `tableTopicsLimits: null`, which is why
+// nothing here saw it. These cases combine a club window WITH a template.
+// ---------------------------------------------------------------------------
+describe("a club's own Table Topics window on the templated deck (#443)", () => {
+	/** MCF's printed rule. */
+	const CLUB = { minSeconds: 60, maxSeconds: 150 };
+
+	/**
+	 * The standard run of show, materialised and then rendered back through the
+	 * real row derivation — the same round trip production takes, so the marks
+	 * under test are the FROZEN ones rather than a fixture's.
+	 */
+	function tableTopicsBeat(
+		limits: { minSeconds: number | null; maxSeconds: number | null } | null,
+	) {
+		const seeds = materialiseRunOfShow(false, limits);
+		const roles: TemplateRoleRow[] = [
+			...new Set(seeds.map((s) => s.roleKey).filter((k): k is string => !!k)),
+		].map((key) => ({ key, name: key, isSpeakerRole: key === "speaker" }));
+		const rows = resolveAgendaRows({
+			geIntroducesFunctionaries: false,
+			tableTopicsLimits: limits,
+			template: { beats: withBeatIds(seeds), roles },
+			slots: [],
+		});
+		const deck = buildTemplateSlideDeck({
+			meeting,
+			club: {
+				...club,
+				tableTopicsMinSeconds: limits?.minSeconds ?? null,
+				tableTopicsMaxSeconds: limits?.maxSeconds ?? null,
+			},
+			rows,
+		});
+		// Identified by the ROW's role key rather than by "first timed slide" —
+		// CLAUDE.md's rename trap in the other direction: a beat added ahead of
+		// this one would silently move the assertion onto a different segment.
+		const label = rows.find(
+			(r) => r.roleKey === "table_topics_master" && r.marks,
+		)?.who;
+		expect(label, "the materialised Table Topics row").toBeTruthy();
+		// Through the DECK BUILDER, not `beatTimingText` directly: the bug was one
+		// hop up from a correct function, and a test that calls the function is
+		// blind to exactly that.
+		return deck.find(
+			(s): s is Extract<Slide, { kind: "templateBeat" }> =>
+				s.kind === "templateBeat" && s.label === label,
+		);
+	}
+
+	it("projects the club's own window, never the speech grace", () => {
+		const beat = tableTopicsBeat(CLUB);
+		expect(beat).toBeDefined();
+		// ABSOLUTE strings. Stated as `formatTableTopicsWindow(marks)` this would
+		// pass for every rule, including the graced one it replaced.
+		expect(beat?.timing).toEqual({
+			green: "1:00",
+			yellow: "1:45",
+			red: "2:30",
+			qualifies: "1:00–2:30",
+		});
+		expect(beat?.timing?.qualifies).not.toBe("0:30–3:00");
+	});
+
+	it("agrees with the sentence the UNTEMPLATED deck projects", () => {
+		// The contradiction stated as one assertion: both decks are the same club
+		// on two consecutive weeks, and the two numbers they name must be the two
+		// numbers the club stated.
+		const beat = tableTopicsBeat(CLUB);
+		expect(formatTableTopicsTiming(CLUB)).toBe(
+			"1:00 minimum · 2:30 maximum · 2:31+ disqualified",
+		);
+		expect(beat?.timing?.qualifies).toBe("1:00–2:30");
+	});
+
+	it("leaves a club that has stated nothing on the graced standard window", () => {
+		// The control. Without it, dropping the grace unconditionally would look
+		// identical to dropping it only where a club has its own rule — and the
+		// Timer's blank role sheet still prints 0:30–2:30, so that would put a new
+		// contradiction where this one used to be.
+		const beat = tableTopicsBeat(null);
+		expect(beat?.timing).toEqual({
+			green: "1:00",
+			yellow: "1:30",
+			red: "2:00",
+			qualifies: "0:30–2:30",
+		});
+	});
+
+	it("renders the FROZEN marks after the club edits its rule", () => {
+		// The documented limitation, pinned in both directions — untested it reads
+		// identically whether the rule holds or not. Materialised at 1:00–2:30,
+		// then rendered with the club's CURRENT window at 0:30–3:00: if the
+		// template branch wrongly re-derived, the marks would come out 0:30/1:45/
+		// 3:00 instead. Absolute values on both sides.
+		const seeds = materialiseRunOfShow(false, CLUB);
+		const roles: TemplateRoleRow[] = [
+			...new Set(seeds.map((s) => s.roleKey).filter((k): k is string => !!k)),
+		].map((key) => ({ key, name: key, isSpeakerRole: key === "speaker" }));
+		const live = { minSeconds: 30, maxSeconds: 180 };
+		const rows = resolveAgendaRows({
+			geIntroducesFunctionaries: false,
+			tableTopicsLimits: live,
+			template: { beats: withBeatIds(seeds), roles },
+			slots: [],
+		});
+		const row = rows.find(
+			(r) => r.roleKey === "table_topics_master" && r.marks,
+		);
+		expect(row?.marks).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+	});
+
+	it("still graces a contestant's speech at a club with a Table Topics rule", () => {
+		// The filter must reach the Table Topics beat and nothing else. A contest
+		// deck is where the qualifying window IS the disqualification rule, and
+		// these rows carry `contestant_prepared`, not `speaker` — so a filter
+		// written as "speakers only" would silently strip it.
+		const deck = buildTemplateSlideDeck({
+			meeting,
+			club: {
+				...club,
+				tableTopicsMinSeconds: CLUB.minSeconds,
+				tableTopicsMaxSeconds: CLUB.maxSeconds,
+			},
+			rows: contestRows([contestant(0, "Ada")]),
+		});
+		const timed = deck.filter(
+			(s): s is Extract<Slide, { kind: "templateBeat" }> =>
+				s.kind === "templateBeat" && s.timing != null,
+		);
+		expect(timed.length).toBeGreaterThan(0);
+		expect(timed[0]?.timing?.qualifies).toBe("4:30–7:30");
 	});
 });

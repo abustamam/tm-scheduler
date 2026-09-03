@@ -596,6 +596,7 @@ describe.skipIf(!hasChrome)(
 			return buildTimeline(
 				resolveAgendaRows({
 					geIntroducesFunctionaries: false,
+					tableTopicsLimits: null,
 					template: {
 						beats: withBeatIds(CONTEST_TEMPLATE.beats),
 						roles: roleRows,
@@ -790,6 +791,7 @@ function hostileTemplateRows(
 	return buildTimeline(
 		resolveAgendaRows({
 			geIntroducesFunctionaries: false,
+			tableTopicsLimits: null,
 			template: { beats, roles },
 			slots,
 		}),

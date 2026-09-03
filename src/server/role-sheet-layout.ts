@@ -33,6 +33,12 @@ import { EVALUATION_TIMING_ASK } from "../lib/agenda-runsheet";
 import { TOASTMASTERS_DISCLAIMER } from "../lib/brand";
 import { cap } from "../lib/cap";
 import {
+	formatTableTopicsWindow,
+	hasTableTopicsLimits,
+	resolveTableTopicsMarks,
+	type TableTopicsLimits,
+} from "../lib/table-topics-limits";
+import {
 	formatTimingClock,
 	graceSentence,
 	qualifyingWindow,
@@ -88,6 +94,18 @@ export interface RoleSheetFill {
 	 * here, not an oversight.
 	 */
 	roleNames?: SheetRoleNames;
+	/**
+	 * This club's own Table Topics window (#443). Absent ⇒ the standard 1–2
+	 * minutes, which is right for the committed blanks in `public/role-sheets/`:
+	 * they serve every club and cannot adopt one club's rule.
+	 *
+	 * Present, it moves the Timer's Table Topics row AND the sentence they read
+	 * aloud, because those are the numbers the person actually signals on. A
+	 * club that set 2:30 was printing an agenda saying 2:30 and stapling a sheet
+	 * beside it saying red at 2:00 — the same packet contradicting itself, on
+	 * the one surface the whole feature exists to get right.
+	 */
+	tableTopicsLimits?: TableTopicsLimits | null;
 }
 
 const C = {
@@ -464,6 +482,10 @@ function sheet(
  * so every printed column is derived rather than transcribed (#357): yellow is
  * the midpoint, and the qualifying window is the 30-second grace either side.
  */
+/** The one assignment in the table a club can override (#443). Named so the
+ *  lookup and the row it replaces cannot drift apart on a wording change. */
+const TABLE_TOPICS_ASSIGNMENT = "Table Topics";
+
 const STANDARD_TIMING_WINDOWS: {
 	assignment: string;
 	min: number;
@@ -472,19 +494,50 @@ const STANDARD_TIMING_WINDOWS: {
 	{ assignment: "Ice Breaker", min: 4, max: 6 },
 	{ assignment: "Prepared speech", min: 5, max: 7 },
 	{ assignment: "Evaluation", min: 2, max: 3 },
-	{ assignment: "Table Topics", min: 1, max: 2 },
+	{ assignment: TABLE_TOPICS_ASSIGNMENT, min: 1, max: 2 },
 ];
 
-/** The Timer sheet's "Standard timing windows" table rows, as printed:
- *  assignment · green · yellow · red · qualifying window. */
-export function standardTimingRows(): string[][] {
-	return STANDARD_TIMING_WINDOWS.map(({ assignment, min, max }) => [
-		assignment,
-		formatTimingClock(min),
-		formatTimingClock((min + max) / 2),
-		formatTimingClock(max),
-		qualifyingWindow(min, max)?.range ?? "",
-	]);
+/**
+ * The Timer sheet's "Standard timing windows" table rows, as printed:
+ * assignment · green · yellow · red · qualifying window.
+ *
+ * With a club's own Table Topics window (#443) that ONE row is replaced by it,
+ * from `resolveTableTopicsMarks` — the same function the agenda's marks come
+ * from, so the sheet and the row beside it cannot disagree about the midpoint.
+ *
+ * Its "Qualifies" cell drops the ±30s grace, and that is the point rather than
+ * an omission: a club that states its own cap has stated a HARD one ("2:30
+ * maximum · 2:31+ disqualified" is what the deck projects and what MCF prints),
+ * so a sheet saying the answer still qualifies at 3:00 would contradict the
+ * agenda in the Timer's other hand. A club that has stated nothing keeps the
+ * graced standard row unchanged — including in the committed blanks — because
+ * whether the standard Table Topics window should be graced at all is a
+ * separate product question (#679) and not one #443 gets to decide silently.
+ */
+export function standardTimingRows(
+	tableTopicsLimits?: TableTopicsLimits | null,
+): string[][] {
+	const own = hasTableTopicsLimits(tableTopicsLimits)
+		? resolveTableTopicsMarks(tableTopicsLimits)
+		: null;
+	return STANDARD_TIMING_WINDOWS.map(({ assignment, min, max }) => {
+		if (own && assignment === TABLE_TOPICS_ASSIGNMENT) {
+			return [
+				assignment,
+				formatTimingClock(own.green),
+				formatTimingClock(own.yellow),
+				formatTimingClock(own.red),
+				formatTableTopicsWindow(own),
+			];
+		}
+		return [
+			assignment,
+			formatTimingClock(min),
+			formatTimingClock((min + max) / 2),
+			formatTimingClock(max),
+			qualifyingWindow(min, max)?.range ?? "",
+		];
+	});
 }
 
 function timer(fill?: RoleSheetFill): ReactNode {
@@ -492,7 +545,10 @@ function timer(fill?: RoleSheetFill): ReactNode {
 		"Timer's log",
 		"Time each speaker and signal green / yellow / red at their windows.",
 		[
-			...script(sheetScripts(fill?.roleNames).timer),
+			// BOTH halves take the club's window, or the sheet contradicts itself:
+			// the table is what the Timer signals from and the script is what they
+			// say out loud, and #443 shipped once with only the table wired.
+			...script(sheetScripts(fill?.roleNames, fill?.tableTopicsLimits).timer),
 			h(Text, { key: "a", style: s.sectionTitle }, "Standard timing windows"),
 			h(
 				Text,
@@ -510,7 +566,7 @@ function timer(fill?: RoleSheetFill): ReactNode {
 						{ label: "Red (max)", flex: 1, color: C.red },
 						{ label: "Qualifies", flex: 1.6 },
 					],
-					standardTimingRows(),
+					standardTimingRows(fill?.tableTopicsLimits),
 				),
 			),
 			h(
@@ -722,20 +778,27 @@ function generalEvaluator(fill?: RoleSheetFill): ReactNode {
 /**
  * "green at 2:00, yellow at 2:30, red at 3:00" for a standard assignment.
  *
- * DERIVED from `STANDARD_TIMING_WINDOWS`, never transcribed — the same rule
- * #357 set for the printed columns, and it matters more here: the Timer reads
- * these numbers aloud while the table stating them sits on the same sheet, so a
- * transcribed copy would have one page contradicting itself. Throws on an
- * unknown assignment rather than defaulting, because a silent miss would put an
- * invented time in someone's mouth.
+ * DERIVED from `standardTimingRows`, never transcribed — the same rule #357 set
+ * for the printed columns, and it matters more here: the Timer reads these
+ * numbers aloud while the table stating them sits on the same sheet, so a
+ * transcribed copy would have one page contradicting itself. Reading the ROWS
+ * rather than `STANDARD_TIMING_WINDOWS` is what carries a club's own window
+ * (#443) into the spoken half too — the printed table took the override first
+ * and the script did not, which is one page contradicting itself by a different
+ * route. Throws on an unknown assignment rather than defaulting, because a
+ * silent miss would put an invented time in someone's mouth.
  */
-function signalSentence(assignment: string): string {
-	const w = STANDARD_TIMING_WINDOWS.find((x) => x.assignment === assignment);
-	if (w == null)
+function signalSentence(
+	assignment: string,
+	tableTopicsLimits?: TableTopicsLimits | null,
+): string {
+	const row = standardTimingRows(tableTopicsLimits).find(
+		(r) => r[0] === assignment,
+	);
+	if (row == null)
 		throw new Error(`role-sheet script: no standard window for ${assignment}`);
-	return `green at ${formatTimingClock(w.min)}, yellow at ${formatTimingClock(
-		(w.min + w.max) / 2,
-	)}, red at ${formatTimingClock(w.max)}`;
+	const [, green, yellow, red] = row;
+	return `green at ${green}, yellow at ${yellow}, red at ${red}`;
 }
 
 /**
@@ -794,6 +857,7 @@ export const CANONICAL_SHEET_ROLE_NAMES: SheetRoleNames = {
  */
 export function sheetScripts(
 	n: SheetRoleNames = CANONICAL_SHEET_ROLE_NAMES,
+	tableTopicsLimits?: TableTopicsLimits | null,
 ): Record<RoleSheetKey, ScriptCue[]> {
 	return {
 		timer: [
@@ -807,7 +871,10 @@ export function sheetScripts(
 				// at ONE sheet in the moment and wants one place to read from — and the
 				// merged form is what kept this sheet to a single page.
 				when: `When the ${n.table_topics_master} or the ${n.general_evaluator} asks you to explain the timing`,
-				say: `For Table Topics: ${signalSentence("Table Topics")}. For each evaluation: ${signalSentence("Evaluation")}.`,
+				say: `For Table Topics: ${signalSentence(
+					TABLE_TOPICS_ASSIGNMENT,
+					tableTopicsLimits,
+				)}. For each evaluation: ${signalSentence("Evaluation")}.`,
 			},
 			{
 				when: "When you are called for your report",

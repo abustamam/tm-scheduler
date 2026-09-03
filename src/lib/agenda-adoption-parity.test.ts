@@ -115,7 +115,9 @@ const ROLES: TemplateRoleRow[] = [
 ];
 
 function adoptedRows(geIntroducesFunctionaries: boolean, slots: AgendaSlot[]) {
-	const seeds = withBeatIds(materialiseRunOfShow(geIntroducesFunctionaries));
+	const seeds = withBeatIds(
+		materialiseRunOfShow(geIntroducesFunctionaries, null),
+	);
 	return buildTemplateRows(seeds, ROLES, slots).filter(
 		(r) => r.section !== true,
 	);
@@ -171,7 +173,7 @@ describe("adoption preserves the printed sheet", () => {
 		// between two renders is what proves the token stayed live rather than
 		// being resolved once at adoption — which would print, every week, the
 		// name of whoever happened to hold the role the day it was adopted.
-		const seeds = withBeatIds(materialiseRunOfShow(true));
+		const seeds = withBeatIds(materialiseRunOfShow(true, null));
 		const first = buildTemplateRows(seeds, ROLES, standardSlots("Dana"));
 		const second = buildTemplateRows(seeds, ROLES, standardSlots("Zed"));
 
@@ -184,7 +186,7 @@ describe("adoption preserves the printed sheet", () => {
 		// The materialised speech beat repeats over the speaker slots. If it were
 		// stored as a literal row instead, adding a speaker would silently print
 		// two speeches for three speakers.
-		const seeds = withBeatIds(materialiseRunOfShow(false));
+		const seeds = withBeatIds(materialiseRunOfShow(false, null));
 		const two = buildTemplateRows(seeds, ROLES, standardSlots());
 		const three = buildTemplateRows(seeds, ROLES, [
 			...standardSlots(),

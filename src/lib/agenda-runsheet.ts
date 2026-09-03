@@ -9,6 +9,11 @@ import {
 	speechBookedMinutes,
 	speechWindow,
 } from "./speech-window";
+import {
+	resolveTableTopicsMarks,
+	TABLE_TOPICS_MARKS,
+	type TableTopicsLimits,
+} from "./table-topics-limits";
 
 /** The default lives with the booked-duration rule it belongs to (#394); it is
  *  re-exported here because this is where every call site already reads it. */
@@ -475,26 +480,39 @@ export const TABLE_TOPICS_MAX = 25;
 export const FLEX_TOLERANCE_MINUTES = 2;
 
 /**
- * Timer-card marks for the two segments that are timed by CONVENTION rather
- * than per-slot (#507).
+ * Timer-card marks for an EVALUATION, timed by convention rather than per-slot
+ * (#507).
  *
  * A speaker's trio comes from their own speech (`speechWindow` reads the
  * `min_minutes`/`max_minutes` recorded against it), because a speech's length
- * is a property of that speech. An evaluation and a Table Topics response have
- * no such per-slot record — `speeches` is the only table carrying a range — and
- * their windows are the same every week, so they are constants here rather than
- * a schema column nobody would ever vary.
+ * is a property of that speech. An evaluation has no such per-slot record —
+ * `speeches` is the only table carrying a range — and its window is the same
+ * every week, so it is a constant here.
  *
- * These are the standard Toastmasters windows. If a club ever needs its own,
- * the upgrade is a per-club override that falls back to these, which is why the
- * numbers sit behind a name instead of inline in the beat table.
+ * This block covered Table Topics too until #443, and said the pair were
+ * constants "rather than a schema column nobody would ever vary". A club did
+ * vary it: MCF runs 1:00–2:30. Table Topics is now a per-club column whose
+ * fallback is `TABLE_TOPICS_MARKS`, which moved to `#/lib/table-topics-limits`,
+ * and the same upgrade path stays open to the evaluation window — which is why
+ * these numbers still sit behind a name instead of inline in the beat table.
  */
 export const EVALUATION_MARKS: TimingMarks = { green: 2, yellow: 2.5, red: 3 };
-export const TABLE_TOPICS_MARKS: TimingMarks = {
-	green: 1,
-	yellow: 1.5,
-	red: 2,
-};
+
+/**
+ * `TABLE_TOPICS_MARKS` now lives in `table-topics-limits.ts`, because #443 made
+ * it the FALLBACK for a per-club override and that module owns the override —
+ * defining the constant here and importing the resolver from there would close
+ * a cycle. Re-exported so the call sites that already read it from this module
+ * keep working.
+ *
+ * Those call sites are all TESTS today (`agenda-runsheet.test.ts`,
+ * `role-sheet-layout.test.ts`, `table-topics-limits.test.ts`) — stated plainly
+ * because the shim is not load-bearing the way `DEFAULT_SPEAKER_MINUTES` above
+ * is, which this module also CONSUMES. It survives on the grounds that the
+ * importers exist; `TABLE_TOPICS_TIMING` was deleted in the same diff on the
+ * grounds that its importers did not.
+ */
+export { TABLE_TOPICS_MARKS };
 
 /** Placeholder shown for an open (unassigned) slot. */
 export const OPEN_LABEL = "— open —";
@@ -664,7 +682,29 @@ export function buildReportingLegend(slots: AgendaSlot[]): LegendEntry[] {
  *  the run-of-show, including the GE's closing sequence (evaluate the
  *  evaluators → call for functionary reports → overall evaluation), depends on
  *  this flag. */
-export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
+export type RunOfShowConfig = {
+	geIntroducesFunctionaries: boolean;
+	/**
+	 * The club's own Table Topics window (#443), or null/absent for the standard
+	 * one. Drives the segment beat's timer marks, so the Timer's card and the
+	 * projected "Speaker time:" line come from one number.
+	 *
+	 * OPTIONAL, unlike `geIntroducesFunctionaries` beside it, and the asymmetry
+	 * is deliberate: there is no safe default for the GE variant, so a caller
+	 * that forgets it must get a type error — but "the club stated nothing" is a
+	 * real and common state here whose correct answer IS the standard window.
+	 * Making it required would have meant editing 51 `buildRunOfShow` fixtures
+	 * (74 counting `buildSlideDeck`) to say "no opinion", which is noise, not
+	 * safety. That figure read "~200" until it was counted, and being off by 3x
+	 * matters when the number IS the justification for the asymmetry.
+	 *
+	 * The risk that buys — a production caller silently projecting the standard
+	 * window at a club that set its own — is covered by
+	 * `table-topics-limits-wiring.guard.test.ts`, which pins the call sites that
+	 * hold club data.
+	 */
+	tableTopicsLimits?: TableTopicsLimits | null;
+};
 
 /** The Timer — one of the four standard functionaries, and the role whose
  *  ABSENCE (not presence) drives the most beats.
@@ -872,7 +912,11 @@ const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
  */
 export function buildRunOfShow({
 	geIntroducesFunctionaries,
+	tableTopicsLimits = null,
 }: RunOfShowConfig): Beat[] {
+	// Resolved ONCE for the whole run of show, so the segment beat and anything
+	// downstream reading `marks` off it can never disagree.
+	const tableTopicsMarks = resolveTableTopicsMarks(tableTopicsLimits);
 	const functionaryIntroOwner = geIntroducesFunctionaries
 		? GENERAL_EVALUATOR_ROLE
 		: TOASTMASTER_ROLE;
@@ -1064,7 +1108,8 @@ export function buildRunOfShow({
 			detail: `Impromptu topics using the Word of the Day · asks the ${roleNameToken(TIMER_ROLE)} to explain the timing`,
 			minutes: 10,
 			flex: true,
-			marks: TABLE_TOPICS_MARKS,
+			// The club's window when it stated one, the standard one otherwise.
+			marks: tableTopicsMarks,
 			fallbacks: [
 				{
 					unless: TIMER_ROLE,
@@ -2035,6 +2080,22 @@ export function flexBannerMessage(flex: FlexResult): string | null {
  */
 export function resolveAgendaRows(input: {
 	geIntroducesFunctionaries: boolean;
+	/**
+	 * The club's Table Topics window (#443), or null for the standard one.
+	 *
+	 * REQUIRED, unlike the same field on `RunOfShowConfig`. This is THE seam all
+	 * three run-sheet surfaces use, so a caller that omits it silently prints the
+	 * standard Timer marks beside a deck projecting the club's — the exact
+	 * contradiction #443 exists to close, inverted. That is not hypothetical: it
+	 * is what this function did in the first cut, and it was invisible because
+	 * the feature's own test called `buildRunOfShow` directly and never came
+	 * through here. Required means typecheck names every call site.
+	 *
+	 * Ignored on the template branch, like `geIntroducesFunctionaries`: a
+	 * materialised template carries its own stored marks, frozen at
+	 * materialisation from the club's window (`materialiseRunOfShow`).
+	 */
+	tableTopicsLimits: TableTopicsLimits | null;
 	template: {
 		beats: TemplateBeatRow[];
 		roles: TemplateRoleRow[];
@@ -2046,6 +2107,7 @@ export function resolveAgendaRows(input: {
 			input.slots,
 			buildRunOfShow({
 				geIntroducesFunctionaries: input.geIntroducesFunctionaries,
+				tableTopicsLimits: input.tableTopicsLimits,
 			}),
 		);
 	}

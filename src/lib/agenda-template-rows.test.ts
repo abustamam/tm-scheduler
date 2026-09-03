@@ -567,6 +567,7 @@ describe("resolveAgendaRows", () => {
 		expect(
 			resolveAgendaRows({
 				geIntroducesFunctionaries: false,
+				tableTopicsLimits: null,
 				template: null,
 				slots: [],
 			}),
@@ -579,6 +580,7 @@ describe("resolveAgendaRows", () => {
 		expect(
 			resolveAgendaRows({
 				geIntroducesFunctionaries: true,
+				tableTopicsLimits: null,
 				template: null,
 				slots: [],
 			}),
@@ -596,6 +598,7 @@ describe("resolveAgendaRows", () => {
 	it("does NOT fall back to the standard flow for an empty template", () => {
 		const out = resolveAgendaRows({
 			geIntroducesFunctionaries: false,
+			tableTopicsLimits: null,
 			template: { beats: [], roles: [] },
 			slots: [],
 		});
@@ -614,11 +617,13 @@ describe("resolveAgendaRows", () => {
 		};
 		const a = resolveAgendaRows({
 			geIntroducesFunctionaries: false,
+			tableTopicsLimits: null,
 			template,
 			slots: [],
 		});
 		const b = resolveAgendaRows({
 			geIntroducesFunctionaries: true,
+			tableTopicsLimits: null,
 			template,
 			slots: [],
 		});

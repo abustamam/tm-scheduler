@@ -48,6 +48,8 @@ const club: ClubForDeck = {
 	timezone: "America/Chicago",
 	meetingSchedule: "2nd & 4th Thursday",
 	logoUrl: null,
+	tableTopicsMinSeconds: null,
+	tableTopicsMaxSeconds: null,
 };
 
 // This suite exercises pptx export, never ballot content, so one fixture

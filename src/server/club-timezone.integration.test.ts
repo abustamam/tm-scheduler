@@ -143,6 +143,8 @@ describe.skipIf(!hasTestDb)("club timezone setting (#547)", () => {
 		expect(profile).toMatchObject({ district: null, mission: null });
 		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
 			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
 		});
 	});
 

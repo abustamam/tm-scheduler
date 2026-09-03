@@ -170,6 +170,8 @@ export async function loadRoleSheetFill(
 				timezone: clubs.timezone,
 				wordOfTheDay: meetings.wordOfTheDay,
 				wodDefinition: meetings.wodDefinition,
+				tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+				tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
 			})
 			.from(meetings)
 			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
@@ -203,6 +205,14 @@ export async function loadRoleSheetFill(
 		wod,
 		logoDataUri,
 		roleNames,
+		// #443. Selected here rather than resolved in the layout because the
+		// layout is shared with `scripts/build-role-sheets.ts`, which has no club
+		// and no database — "no club to ask" is a real state on this surface, and
+		// the blanks must keep printing the standard window.
+		tableTopicsLimits: {
+			minSeconds: row.tableTopicsMinSeconds,
+			maxSeconds: row.tableTopicsMaxSeconds,
+		},
 	};
 }
 

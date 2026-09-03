@@ -24,6 +24,10 @@ import {
 	speechBookedMinutes,
 	speechWindow,
 } from "./speech-window";
+import {
+	formatTableTopicsTiming,
+	type TableTopicsLimits,
+} from "./table-topics-limits";
 
 /** The meeting fields the deck needs (structural subset of the DB row). */
 export type MeetingForDeck = {
@@ -52,6 +56,15 @@ export type ClubForDeck = {
 	district: string | null;
 	timezone: string;
 	meetingSchedule: string | null;
+	/**
+	 * The club's Table Topics window in SECONDS, or null for the standard one
+	 * (#443). Required rather than optional for the same reason `logoUrl` is: a
+	 * new deck caller that omits it should get a type error, not a projector
+	 * quietly telling the room 1–2 minutes at a club whose own agenda says 2:30.
+	 * That contradiction is the bug this feature exists to close.
+	 */
+	tableTopicsMinSeconds: number | null;
+	tableTopicsMaxSeconds: number | null;
 };
 
 /** Carried by all three vote slides — the ends of the speech, Table Topics and
@@ -327,19 +340,6 @@ const ROLE = {
 } as const satisfies Record<string, RoleRef>;
 
 /**
- * The one duration on the deck that is NOT a beat's budget (#356), and the
- * reason it is exempt: this is the limit on a SINGLE impromptu answer, while
- * the Table Topics beat books the whole SEGMENT. Deriving it would project
- * "Speaker time: 10 minutes" at a speaker who has one to two — a per-speaker
- * versus per-segment difference, not a disagreement.
- *
- * The segment number is also the one the deck could never state honestly:
- * `applyFlex` resizes that beat at render time to whatever makes the meeting
- * come out to its scheduled length, and the deck is not given that length.
- */
-export const TABLE_TOPICS_TIMING = "1–2 minutes per speaker";
-
-/**
  * The "Time:" line on a prepared-speech slide: the slot's assigned range when
  * it has one, otherwise the minutes the run sheet books for that same row.
  *
@@ -417,11 +417,16 @@ function speechLabel(index: number, multi: boolean): string {
  *  parameters: the club's run-of-show config (#367) would have made this a
  *  sixth positional argument behind two optional ones.
  *
- *  The config is REQUIRED — `buildRunOfShow` requires it too, and a caller that
- *  forgot it would otherwise silently project the standard flow at a club that
- *  runs MCF's variant. `nextMeetingAt`/`meetingNumber` stay optional because
- *  null is a meaningful value for both. */
-export type SlideDeckInput = RunOfShowConfig & {
+ *  `geIntroducesFunctionaries` is REQUIRED — `buildRunOfShow` requires it too,
+ *  and a caller that forgot it would otherwise silently project the standard
+ *  flow at a club that runs MCF's variant. `nextMeetingAt`/`meetingNumber` stay
+ *  optional because null is a meaningful value for both.
+ *
+ *  `tableTopicsLimits` is OMITTED from the config rather than inherited: this
+ *  builder reads that window off `club` and would silently IGNORE a field of
+ *  the same name passed here, which is two ways to state one fact with one of
+ *  them inert. Omitting it makes that a type error instead. */
+export type SlideDeckInput = Omit<RunOfShowConfig, "tableTopicsLimits"> & {
 	meeting: MeetingForDeck;
 	club: ClubForDeck;
 	slots: AgendaSlot[];
@@ -450,7 +455,24 @@ export function buildSlideDeck({
 	// The same run-of-show the printed agenda expands, built from the same club
 	// config — so the durations the deck projects ARE the ones the timeline
 	// books, rather than a second set of numbers that happens to match (#356).
-	const runOfShow = buildRunOfShow({ geIntroducesFunctionaries });
+	// The club's Table Topics window travels into the run of show too, so the
+	// Timer's marks and the "Speaker time:" line this deck projects derive from
+	// the same two numbers — the single-sourcing the durations already get
+	// (#356).
+	//
+	// The PRINTED row gets there by its own path: `resolveAgendaRows` takes the
+	// same limits and forwards them, and takes them as a REQUIRED field so a
+	// route cannot omit them. The first cut wired only this call, which printed
+	// red at 2:00 beside a deck saying 2:30 — the contradiction #443 exists to
+	// close, inverted. `table-topics-limits-wiring.guard.test.ts` pins both.
+	const tableTopicsLimits: TableTopicsLimits = {
+		minSeconds: club.tableTopicsMinSeconds,
+		maxSeconds: club.tableTopicsMaxSeconds,
+	};
+	const runOfShow = buildRunOfShow({
+		geIntroducesFunctionaries,
+		tableTopicsLimits,
+	});
 
 	deck.push({
 		kind: "title",
@@ -673,7 +695,23 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "tableTopics",
 			master: ttOwner.name,
-			timing: TABLE_TOPICS_TIMING,
+			// The one duration on the deck that is NOT a beat's budget (#356), and
+			// the reason it is exempt: this is the limit on a SINGLE impromptu
+			// answer, while the Table Topics beat books the whole SEGMENT.
+			// Deriving it would project "Speaker time: 10 minutes" at a speaker who
+			// has one to two — a per-speaker versus per-segment difference, not a
+			// disagreement. The segment number is also the one the deck could never
+			// state honestly: `applyFlex` resizes that beat at render time to
+			// whatever makes the meeting come out to its scheduled length, and the
+			// deck is not given that length.
+			//
+			// #443 made the VALUE per-club. The old `TABLE_TOPICS_TIMING` export is
+			// GONE rather than aliased: a grep found no importer anywhere, so a
+			// shim would have been dead code whose comment claimed callers that do
+			// not exist. (`agenda-runsheet.ts` kept its `TABLE_TOPICS_MARKS`
+			// re-export for the opposite reason — that one HAS importers. The two
+			// decisions look contradictory four files apart and are not.)
+			timing: formatTableTopicsTiming(tableTopicsLimits),
 			// Gated on the word alone (#355) — the definition rides along when the
 			// meeting has one. Read from the same trimmed values the opening slides
 			// use, so a whitespace-only field is blank everywhere.

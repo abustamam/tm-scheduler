@@ -2,6 +2,24 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.31.0.0] - 2026-09-03
+
+### Added
+
+- **A club can now state its own Table Topics speaking limits, and every surface that names a number reads them.** Club settings → Agenda has two new fields taking minutes and seconds ("1:00", "2:30"). Set them and the projected deck, the printed run sheet, the on-screen agenda, a materialised agenda template and the Timer's own printed role sheet all switch to your club's rule: the green light at your minimum, yellow at the midpoint, red at your maximum, and anything past the maximum disqualified. Leave both blank and nothing changes — the standard 1–2 minutes, exactly as before. MCF prints "1 min min, 2.3 min max, 2.31+ disqualified" on its own agenda; before this the app projected "1–2 minutes per speaker" on the wall and printed a Timer's row saying red at 2:00, so the club had three sources of truth and the two that came from us were both wrong.
+- The fields take minutes and seconds on purpose and refuse a decimal. A club that writes its cap as "2.3 min" means two minutes thirty, and reading that as 2.3 minutes would have quietly stored 2:18. They also refuse a bare "1" or "2" — an admin thinking in minutes types those, and read as seconds they would have printed a green card at one second. Both bounds or neither, the maximum has to be longer than the minimum, and nothing over 10:00; every one of those is checked in the page before it saves, so the field that is wrong is the one that says so.
+
+### Fixed
+
+- **The Timer's printed role sheet now says the same numbers as the agenda stapled beside it.** This was the surface the feature nearly shipped without, on the belief that role sheets are one-size-fits-all files built offline. They are not: the sheet handed out for a meeting is generated for that meeting and already carries the club's name, crest and role vocabulary. So a club that set 2:30 would have printed an agenda saying 2:30 and, in the same packet, a Timer's sheet saying red at 2:00 — with a script telling the Timer to announce the wrong number out loud. Both halves of that sheet, the table and the spoken script, now follow the club.
+- **Two meetings at the same club can no longer state different disqualification rules.** A meeting whose agenda someone had opened in the editor projected "qualifies 0:30–3:00" — the thirty-second grace that belongs to prepared speeches — while a meeting nobody had touched projected "2:31+ disqualified". Same club, same stored rule, two walls, and the only difference was whether anyone had opened the agenda editor. The Table Topics segment now states the club's own cap on both.
+- The yellow card no longer lands a second early on some windows. The midpoint of an odd-length window (1:00 to 2:35, say) falls on a half second, and the copy frozen into an edited agenda is stored at lower precision than the one worked out fresh — so the same club's Timer could be told 1:47 one week and 1:48 the next, for a reason nobody in the room could see. Just over a quarter of the windows a club can state were affected.
+- The settings page now refuses a limit over 10:00 itself, with a sentence, instead of letting it be submitted and rejected by the server in raw technical wording.
+
+### Known limitation
+
+- A club that edits the agenda for a specific meeting takes a copy of its Table Topics window at that moment. Changing the club-wide rule afterwards does not rewrite that meeting's copy — the meeting keeps what it was built with until that row is edited. New meetings pick up the new rule normally.
+
 ## [1.30.1.0] - 2026-09-03
 
 ### Fixed

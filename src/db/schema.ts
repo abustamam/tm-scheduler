@@ -238,6 +238,22 @@ export const clubs = pgTable("clubs", {
 	defaultMeetingMinutes: integer("default_meeting_minutes")
 		.notNull()
 		.default(90),
+	// The club's own Table Topics speaking limits (#443), in SECONDS, nullable
+	// because most clubs run the standard 1–2 minute window and should not have
+	// to state it. Null on either column means "not stated" and every surface
+	// falls back to `TABLE_TOPICS_MARKS` — see `#/lib/table-topics-limits`, which
+	// owns the fallback and every derivation from these two numbers.
+	//
+	// SECONDS, not the float minutes `TimingMarks` uses, because the rule this
+	// exists to express is 2:30 and a club admin should type minutes-and-seconds
+	// rather than "2.5". MCF's printed agenda writes that cap as "2.3 min", which
+	// rounded into float minutes would silently store 2:18.
+	//
+	// There is deliberately no third column for the disqualification threshold:
+	// it is one second past the cap, derived at render time, so an admin editing
+	// the cap can never leave a stale DQ number behind it.
+	tableTopicsMinSeconds: integer("table_topics_min_seconds"),
+	tableTopicsMaxSeconds: integer("table_topics_max_seconds"),
 	// Club-level reminder settings (#274 — the reminders control layer). Two
 	// scalar knobs the admin/VP-Education sets on /admin/club-settings; the role-
 	// reminder producer (#272) reads them. `reminder_enabled` gates whether the

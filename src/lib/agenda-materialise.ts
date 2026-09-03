@@ -1,13 +1,16 @@
 // src/lib/agenda-materialise.ts
 import { type Beat, buildRunOfShow, type RoleGroup } from "./agenda-runsheet";
 import type { TemplateBeatSeed } from "./agenda-template-rows";
+import type { TableTopicsLimits } from "./table-topics-limits";
 
 /**
  * Turn the code-derived run of show into rows a club can edit.
  *
  * ```
- * buildRunOfShow({ geIntroducesFunctionaries })   the CLUB's variant
- *         |  22 beats, or 23 on the GE variant
+ * buildRunOfShow({ geIntroducesFunctionaries, tableTopicsLimits })
+ *         |  22 beats, or 23 on the GE variant — carrying the CLUB's variant
+ *         |  AND its Table Topics marks, which are SNAPSHOTTED below rather
+ *         |  than re-derived at render time (#443)
  *         v
  *   drop the gating   <- D1: a row stays until deleted, so the gate is
  *         |               evaluated ONCE, here, and never again
@@ -60,11 +63,31 @@ function bandOpensAt(beats: Beat[]): number[] {
 
 export function materialiseRunOfShow(
 	geIntroducesFunctionaries: boolean,
+	/**
+	 * The club's Table Topics window (#443), or null for the standard one.
+	 *
+	 * REQUIRED, for the same reason the variant above is passed: `beatSeed`
+	 * PERSISTS `beat.marks` into `mark_green/mark_yellow/mark_red` on the
+	 * template row, and `resolveMarks` (`agenda-template-rows.ts`) makes that
+	 * stored copy what renders. So a template materialised without this freezes
+	 * OUR window into the club's own rows, permanently — a club that later sets
+	 * its rule sees nothing change on any surface, deck included.
+	 *
+	 * Known limitation, stated rather than hidden: this snapshots at
+	 * materialisation time. A club that edits its window AFTER materialising
+	 * keeps the frozen marks until the template's Table Topics row is edited.
+	 * Re-deriving stored marks at render time is the fix and is out of scope
+	 * here — see the follow-up issue.
+	 */
+	tableTopicsLimits: TableTopicsLimits | null,
 ): TemplateBeatSeed[] {
 	// NOT the `RUN_OF_SHOW` const — that is this call with the variant frozen
 	// `false`, so reading it gives every club the 22-beat sheet and silently
 	// drops MCF's `geOpeningHandoff`. Spec R5.
-	const beats = buildRunOfShow({ geIntroducesFunctionaries });
+	const beats = buildRunOfShow({
+		geIntroducesFunctionaries,
+		tableTopicsLimits,
+	});
 	const opensAt = bandOpensAt(beats);
 
 	const out: TemplateBeatSeed[] = [];

@@ -132,6 +132,38 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 	it("defaults a new club to the standard flow", async () => {
 		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
 			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
+		});
+	});
+
+	it("stores a club's Table Topics window, and clears it again (#443)", async () => {
+		// MCF's rule: "1 min min, 2.3 min max" — 60s and 150s.
+		await applyClubAgendaSettingsUpdate({
+			clubId: seed.clubId,
+			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: 60,
+			tableTopicsMaxSeconds: 150,
+		});
+		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
+			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: 60,
+			tableTopicsMaxSeconds: 150,
+		});
+
+		// Clearing BACK to null is the half that fails if the update coalesces a
+		// null into "leave unchanged" — a club that set a rule by mistake must be
+		// able to take it off.
+		await applyClubAgendaSettingsUpdate({
+			clubId: seed.clubId,
+			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
+		});
+		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
+			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
 		});
 	});
 
@@ -139,17 +171,25 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 		await applyClubAgendaSettingsUpdate({
 			clubId: seed.clubId,
 			geIntroducesFunctionaries: true,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
 		});
 		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
 			geIntroducesFunctionaries: true,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
 		});
 
 		await applyClubAgendaSettingsUpdate({
 			clubId: seed.clubId,
 			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
 		});
 		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
 			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
 		});
 	});
 
@@ -163,6 +203,8 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 		await applyClubAgendaSettingsUpdate({
 			clubId: seed.clubId,
 			geIntroducesFunctionaries: true,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
 		});
 		expect((await getClubProfile(seed.clubId))?.district).toBe("District 39");
 	});
@@ -170,7 +212,11 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 	it("reads the standard flow for a club that does not exist", async () => {
 		expect(
 			await getClubAgendaSettings("00000000-0000-0000-0000-000000000000"),
-		).toEqual({ geIntroducesFunctionaries: false });
+		).toEqual({
+			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
+		});
 	});
 
 	it("throws when updating a club that does not exist", async () => {
@@ -178,6 +224,8 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 			applyClubAgendaSettingsUpdate({
 				clubId: "00000000-0000-0000-0000-000000000000",
 				geIntroducesFunctionaries: true,
+				tableTopicsMinSeconds: null,
+				tableTopicsMaxSeconds: null,
 			}),
 		).rejects.toThrow("Club not found.");
 	});
