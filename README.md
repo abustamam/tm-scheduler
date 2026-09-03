@@ -18,10 +18,11 @@ manager: Bun.
 
 - [Bun](https://bun.sh)
 - A PostgreSQL instance for development (Docker is easiest — see below)
-- Chrome or Chromium on `PATH`, for the three tests that measure real layout — two print gates
-  and the pinned-column scroll check. Optional locally — without a browser those tests skip and
-  the rest of the suite still runs. CI requires it (and `ubuntu-latest` already ships it),
-  because a layout gate that skips itself looks identical to one that passed.
+- Chrome or Chromium on `PATH`, for the four tests that measure real layout — two print gates,
+  the pinned-column scroll check and the dialog keyboard-reachability check. Optional locally —
+  without a browser those tests skip and the rest of the suite still runs. CI requires it (and
+  `ubuntu-latest` already ships it), because a layout gate that skips itself looks identical to
+  one that passed.
 
 ## Setup
 

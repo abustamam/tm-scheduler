@@ -10,6 +10,7 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { MAX_ENCODED_LENGTH } from "#/lib/club-logo-limits";
 import {
 	applyClubLogoUpload,
 	type ClubLogoMeta,
@@ -29,9 +30,10 @@ const uploadSchema = z.object({
 	// Base64-encoded image bytes (the client reads the File via
 	// `file.arrayBuffer()` → base64, matching the CSV-text transport in
 	// upload-members.ts). Capped on the ENCODED string; the server separately
-	// enforces a 256 KB cap on the DECODED bytes (club-logo-logic.ts), since
-	// base64 inflates size ~33% — the two numbers are deliberately different.
-	base64: z.string().min(1).max(350_000),
+	// enforces the decoded-bytes cap (club-logo-logic.ts), since base64 inflates
+	// size ~33% — the two numbers are deliberately different, and both are
+	// declared once in `#/lib/club-logo-limits`.
+	base64: z.string().min(1).max(MAX_ENCODED_LENGTH),
 	// Client-declared MIME — validated (allow-list + magic-byte sniff) server
 	// side in club-logo-logic.ts, never trusted here. Bounded so a padded
 	// value can't ride in the payload as far as the logic layer; the friendly
@@ -81,8 +83,14 @@ export const removeClubLogoFn = createServerFn({ method: "POST" })
  * already exposed by the public `<img>` URL the printed agenda embeds. Used
  * by the club-settings admin UI to render the current preview / "remove"
  * affordance.
+ *
+ * GET, not POST (#504): this only runs a `select`, and every other read-shaped
+ * server fn here is already a GET — including `getPublicMeetingByKey`, whose
+ * object payload is the same shape as this one's. No count is stated on
+ * purpose; a census in a comment rots on the next unrelated reader, and
+ * `club-logo-method.guard.test.ts` re-derives the claim on every run instead.
  */
-export const getClubLogoMeta = createServerFn({ method: "POST" })
+export const getClubLogoMeta = createServerFn({ method: "GET" })
 	.validator((i: unknown) => clubIdSchema.parse(i))
 	.handler(async ({ data }) => {
 		const meta = await loadClubLogoMeta(data.clubId);

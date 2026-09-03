@@ -2,6 +2,19 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.30.1.0] - 2026-09-03
+
+### Fixed
+
+- **Uploading a club logo now tells you a picture is too big BEFORE it uploads, and says what the limits are up front.** The logo form has always had two limits — how heavy the file is, and how many pixels across it is — but only the first was checked in your browser. The pixel limit was added on the server a while back and the page was never told, so a club admin could pick a 4000-pixel-wide logo, watch the page accept it, wait while the whole file was sent, and only then be told it was too large. Now the page reads the picture's dimensions the moment you choose it, refuses it immediately, and names the size it found — "Club logo must be 2000 x 2000 pixels or smaller (this one is 2400 x 1200)" — the same way the server does. The help text under the file picker now states both limits instead of just the file size, so the refusal is not the first you hear of it.
+- A picture that fails any of those checks no longer leaves the one you picked before it sitting there as the pending upload. Previously the file picker would clear itself while the line above it still read "Selected: old-logo.png", the confirmation tick stayed ticked, and pressing Save would have uploaded the file you thought you had just replaced.
+- Opening Club settings no longer risks showing an error page instead of the settings if the logo lookup fails; it simply shows no logo, which is what the club's public pages have always done.
+
+### Changed
+
+- Nothing a member sees. Behind the scenes, the four numbers and lists that govern logo uploads — the file-size cap, the pixel cap, the upload transfer cap and the accepted picture formats — were each written out separately in four different files, kept in step only by a comment asking whoever edited one to remember the others. That is how the pixel limit came to be enforced in one place and unknown in another. They are now declared once and read from that one place by everything, including the wording shown to admins and the file picker's own format filter, so the page cannot promise one limit while the server enforces another.
+- The code that reads a picture's width and height is also shared now rather than existing twice. The browser previously worked them out by fully decoding the image, which for a large logo meant unpacking roughly a quarter of a gigabyte in the admin's own browser just to reject the file; it now reads the few bytes of the picture's header that state its size, exactly as the server does. Same answer, no unpacking, and the two can no longer disagree about the same file.
+
 ## [1.30.0.0] - 2026-09-02
 
 ### Added
