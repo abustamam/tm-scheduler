@@ -1220,7 +1220,7 @@ function RowDetail({
 	// stored, and then silently discarded by every surface that prints it.
 	//
 	// The SAME function the render path uses, imported rather than re-typed. The
-	// first cut hand-wrote three of its four conditions here; the copies drifted
+	// first cut hand-wrote its conditions here instead; the copies drifted
 	// immediately, and the row in the gap got its inputs disabled by this file
 	// while the server refreshed nothing — three blank locked fields and no way
 	// back. A predicate two files state separately is the shape this repo keeps

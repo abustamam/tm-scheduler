@@ -34,7 +34,15 @@ export {
 // ceiling rather than writing 600 into the SQL, so the constraint and every
 // application layer cannot state different limits. `table-topics-limits.ts`
 // imports nothing at runtime (its one import is `import type`), so this pulls
-// no module graph into drizzle-kit's schema bundle.
+// no module graph into the two standalone bundles that gate a container start
+// (`.output/seed-catalog.mjs` and `.output/seed-templates.mjs`) or into
+// drizzle-kit's own schema read — `table-topics-limits-wiring.guard.test.ts`
+// holds that.
+//
+// RELATIVE, against CLAUDE.md's `#/*` preference, and deliberately: this file is
+// read by drizzle-kit outside the app's module resolution, where the
+// `package.json` `imports` alias is not guaranteed to resolve. Every other
+// import in this file is relative for the same reason.
 import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";
 // user is re-exported above for Better-Auth; imported here for people.userId and
 // notifications foreign keys (the person-level auth link — ADR-0008 Phase B).

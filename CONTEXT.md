@@ -373,12 +373,15 @@ the nouns in `src/db/schema.ts`.
   edited its window afterwards kept the old numbers on the agenda while the Timer's printed role
   sheet, which reads the live columns, printed the new ones. `refreshTableTopicsMarks`
   (`agenda-template-rows.ts`) now re-derives that ONE row at render, applied at the two seams that
-  hold a club (`resolveAgendaRows` and `loadAgendaDraft`); the agenda editor shows that row.s window as
-  read-only clock text, with a link to Club settings, rather than accepting an edit
-  the render path would discard. **And the cap is
-  a hard one, unlike a speech's.** A club that states its own window gets no ±30s qualifying
-  grace: "2:30 maximum · 2:31+ disqualified" is what the deck projects and what the Timer's sheet
-  prints. The graced form survives only for a club that has stated nothing, including on the
+  hold a club (`resolveAgendaRows` and `loadAgendaDraft`); the agenda editor shows that row's
+  window as read-only clock text, with a link to Club settings, rather than accepting an edit the
+  render path would discard. **And the cap is a hard one, unlike a speech's.** A club that states
+  its own window gets no ±30s qualifying grace — but the surfaces say so in two shapes, and only
+  one of them is that sentence. The STANDARD deck projects `formatTableTopicsTiming`'s
+  "1:00 minimum · 2:30 maximum · 2:31+ disqualified", and is its only caller; the TEMPLATED deck
+  (`beatTimingText`) and the Timer's printed role sheet (`standardTimingRows`) both print
+  `formatTableTopicsWindow`'s bare span "1:00–2:30" in the cell where a speech row shows its
+  graced one. The graced form survives only for a club that has stated nothing, including on the
   committed blank role sheets, which serve every club and so cannot adopt one club's rule.
 - **Award** — a meeting's ribbon winner (`meeting_awards`): Best Speaker, Best Evaluator, or Best
   Table Topics, each an optional member-or-guest (XOR). Set directly by an admin, or confirmed by
