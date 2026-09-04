@@ -628,6 +628,82 @@ describe("the window editor", () => {
 		).toBeNull();
 	});
 
+	// Regression: #531 QA — after a save or a reset landed while the editor was
+	// still open, its date inputs kept the OLD dates while the header above showed
+	// the new ones, and `changed` was therefore true, so "Save dates" was live and
+	// one stray click silently re-applied the override the admin had just cleared.
+	// Found by /qa on 2026-09-04 in a real browser: it needs a WRITE to land while
+	// the editor is open, which no fixture built at mount time reproduces.
+	// Report: .gstack/qa-reports/qa-report-localhost-3000-2026-09-04.md
+	it("re-syncs its inputs when the stored window changes underneath it", async () => {
+		const overridden = view({
+			periods: [
+				tally(1, {
+					windowIsDefault: false,
+					window: { period: 1, startsOn: "2026-06-01", endsOn: "2026-09-30" },
+				}),
+				tally(2),
+			],
+		});
+		const mounted = mount(overridden);
+		await openEditor(1);
+		expect(
+			(
+				screen.getByLabelText("Closes", {
+					selector: "#cot-end-1",
+				}) as HTMLInputElement
+			).value,
+		).toBe("2026-09-30");
+
+		// The reset lands: the parent re-renders with TI's window restored, editor
+		// still open.
+		mounted.rerender(
+			<OfficerTrainingPanel
+				view={view()}
+				onAddRecord={noop}
+				onRemoveRecord={noop}
+				onSetWindow={noop}
+				onResetWindow={noop}
+			/>,
+		);
+
+		expect(
+			(
+				screen.getByLabelText("Closes", {
+					selector: "#cot-end-1",
+				}) as HTMLInputElement
+			).value,
+		).toBe("2026-08-31");
+		// …and Save is inert again, so there is nothing to click that would undo it.
+		expect(
+			(screen.getByRole("button", { name: "Save dates" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+	});
+
+	it("does not clobber a half-typed date on an unrelated re-render", async () => {
+		// The mirror sync is keyed on the window VALUES, not the object, so a
+		// re-render handing over an equal-but-new `window` must leave the admin's
+		// in-progress edit alone. Keyed on the object it would wipe every keystroke.
+		const mounted = mount(view());
+		const user = await openEditor(1);
+		const end = screen.getByLabelText("Closes", { selector: "#cot-end-1" });
+		await user.clear(end);
+		await user.type(end, "2026-09-15");
+
+		mounted.rerender(
+			<OfficerTrainingPanel
+				view={view()}
+				onAddRecord={noop}
+				onRemoveRecord={noop}
+				onSetWindow={noop}
+				onResetWindow={noop}
+			/>,
+		);
+
+		expect((end as HTMLInputElement).value).toBe("2026-09-15");
+	});
+
 	it("resets an overridden window back to TI's dates", async () => {
 		const mounted = mount(
 			view({

@@ -11,7 +11,7 @@
  * position. The DERIVATIONS stay in `#/lib/officer-training`; this file renders.
  */
 import { AlertTriangle, Check, Plus, RotateCcw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -277,46 +277,52 @@ function TrainedList({
 	}
 	return (
 		<ul className="border-b border-[var(--line)]">
+			{/*
+			 * Each row is TWO flex children, not eight: the details wrap inside their
+			 * own `min-w-0 flex-1` group and the delete button stays pinned to the
+			 * first line. With every span a direct child of the row, `ml-auto` put the
+			 * button on whichever wrapped line it landed on — at 390px that was a
+			 * second line for the longer names, giving the list ragged row heights.
+			 */}
 			{records.map((r) => (
-				<li
-					key={r.id}
-					className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm"
-				>
-					<Check
-						className="size-3.5 shrink-0 text-[var(--lagoon-deep)]"
-						aria-hidden
-					/>
-					<span className="font-medium">{r.memberName}</span>
-					<span className="text-xs text-[var(--sea-ink-soft)]">
-						{officerPositionLabel(r.position)}
-					</span>
-					{r.trainedOn ? (
+				<li key={r.id} className="flex items-start gap-2 px-5 py-2 text-sm">
+					<div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+						<Check
+							className="size-3.5 shrink-0 text-[var(--lagoon-deep)]"
+							aria-hidden
+						/>
+						<span className="font-medium">{r.memberName}</span>
 						<span className="text-xs text-[var(--sea-ink-soft)]">
-							{formatIsoDate(r.trainedOn)}
+							{officerPositionLabel(r.position)}
 						</span>
-					) : (
-						<span className="text-xs italic text-[var(--sea-ink-soft)]">
-							date not recorded
-						</span>
-					)}
-					{r.outsideWindow ? (
-						<Badge
-							variant="outline"
-							className="gap-1 border-[var(--warning-strong)] font-normal text-[var(--warning-strong)]"
-						>
-							<AlertTriangle className="size-3" aria-hidden />
-							outside this window
-						</Badge>
-					) : null}
-					{r.counts ? null : (
-						<Badge variant="outline" className="font-normal">
-							not counted
-						</Badge>
-					)}
+						{r.trainedOn ? (
+							<span className="text-xs text-[var(--sea-ink-soft)]">
+								{formatIsoDate(r.trainedOn)}
+							</span>
+						) : (
+							<span className="text-xs italic text-[var(--sea-ink-soft)]">
+								date not recorded
+							</span>
+						)}
+						{r.outsideWindow ? (
+							<Badge
+								variant="outline"
+								className="gap-1 border-[var(--warning-strong)] font-normal text-[var(--warning-strong)]"
+							>
+								<AlertTriangle className="size-3" aria-hidden />
+								outside this window
+							</Badge>
+						) : null}
+						{r.counts ? null : (
+							<Badge variant="outline" className="font-normal">
+								not counted
+							</Badge>
+						)}
+					</div>
 					<Button
 						size="sm"
 						variant="ghost"
-						className="ml-auto"
+						className="shrink-0"
 						disabled={busy}
 						aria-label={`Remove ${r.memberName} as ${officerPositionLabel(r.position)}`}
 						onClick={() => onRemoveRecord(r.id)}
@@ -471,6 +477,25 @@ function WindowEditor({
 	const [startsOn, setStartsOn] = useState(tally.window.startsOn);
 	const [endsOn, setEndsOn] = useState(tally.window.endsOn);
 	const [open, setOpen] = useState(false);
+
+	// These two inputs MIRROR stored state, so they must re-sync when it changes.
+	// Without this the editor stayed open after a save or a reset holding the OLD
+	// dates while the header above it showed the new ones — and `changed` was then
+	// true, so "Save dates" was live and one stray click silently re-applied the
+	// override the admin had just cleared. Found in a browser, not by a test: it
+	// needs a real write to land while the editor is open. Same fix and same
+	// reason as `BaseCard` in `_authed/admin/dcp.tsx`, which mirrors
+	// `baseMemberCount` and syncs it exactly this way.
+	//
+	// Keyed on the VALUES, not the object, so a re-render that hands over an
+	// equal-but-new `window` does not clobber what the admin is mid-way through
+	// typing. `AddRecordForm`'s date field deliberately does NOT do this: it is a
+	// fresh-entry field with a seeded default, not a mirror, and re-syncing it
+	// would discard a date the admin had typed.
+	useEffect(() => {
+		setStartsOn(tally.window.startsOn);
+		setEndsOn(tally.window.endsOn);
+	}, [tally.window.startsOn, tally.window.endsOn]);
 
 	const invalid = endsOn < startsOn;
 	const changed =
