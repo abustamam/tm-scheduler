@@ -83,11 +83,14 @@ interface ServerFn {
  *  each sliced to its own declaration. */
 function serverFns(file: string): ServerFn[] {
 	const source = readSource(resolve(process.cwd(), file));
-	const decls = [
-		...source.matchAll(
-			/export const (\w+) = createServerFn\(\{\s*method:\s*"(\w+)"/g,
-		),
-	];
+	// Match the DECLARATION, then read the method out of the sliced body. The
+	// regex used to pin `method` as the first key
+	// (`createServerFn\(\{\s*method:\s*"(\w+)"`), which meant
+	// `createServerFn({ response: "raw", method: "GET" })` and a bare
+	// `createServerFn()` both vanished from the sweep — silently unenrolled, with
+	// the per-file floor still satisfied by the others. The one substitution this
+	// guard exists to catch was escapable by changing declaration style.
+	const decls = [...source.matchAll(/export const (\w+) = createServerFn\(/g)];
 	return decls.map((m) => {
 		const start = m.index ?? 0;
 		const lines = source.slice(start).split("\n");
@@ -102,7 +105,8 @@ function serverFns(file: string): ServerFn[] {
 			}
 			offset += line.length + 1;
 		}
-		return { file, name: m[1] as string, method: m[2] as string, body };
+		const method = /method:\s*"(\w+)"/.exec(body)?.[1] ?? "UNKNOWN";
+		return { file, name: m[1] as string, method, body };
 	});
 }
 
@@ -123,14 +127,18 @@ describe("DCP + officer training server fns are admin-gated (#207 / #531)", () =
 		expect(names).toContain("removeTrainingRecord");
 		expect(names).toContain("setTrainingWindow");
 		expect(names).toContain("resetTrainingWindow");
-		// Six in dcp.ts, five in officer-training.ts at the time of writing.
-		expect(fns.length).toBeGreaterThanOrEqual(11);
-		for (const file of MODULES) {
-			expect(
-				fns.filter((f) => f.file === file).length,
-				`${file} contributed no server fns — the matcher stopped matching`,
-			).toBeGreaterThanOrEqual(5);
-		}
+		// SEVEN in dcp.ts (getScoreboard, getScoreboardYears, startScoreboard,
+		// updateGoal, applyEducationSuggestions, applyTrainingSuggestion,
+		// updateBaseMemberCount) and five in officer-training.ts = 12. The floor
+		// was `>= 11` under a comment saying six, so one dcp.ts fn could drop out
+		// of enrollment with this file green — CLAUDE.md's "vacuity floor erodes
+		// silently" trap, in the guard written to prevent it. Exact counts, so
+		// ADDING an endpoint also fails here and forces it to be gated.
+		expect(fns.filter((f) => f.file === "src/server/dcp.ts")).toHaveLength(7);
+		expect(
+			fns.filter((f) => f.file === "src/server/officer-training.ts"),
+		).toHaveLength(5);
+		expect(fns).toHaveLength(12);
 	});
 
 	it("slices each declaration to its own body, never into the next", () => {
@@ -151,16 +159,46 @@ describe("DCP + officer training server fns are admin-gated (#207 / #531)", () =
 
 	for (const fn of fns) {
 		it(`${fn.name} resolves a user and requires the admin club role`, () => {
-			expect(fn.body).toMatch(/requireUser\(\)/);
+			expect(fn.body).toMatch(/await\s+requireUser\(\)/);
 			// The ROLE LIST is asserted, not just the call. `requireClubRole` with a
 			// wider list would satisfy a bare "is it called?" check while letting
 			// any member of the club rewrite the scoreboard.
+			//
+			// AWAITED, too. Without `await\s+` a floating `requireClubRole(...)`
+			// satisfied this regex while the handler ran straight on to the data:
+			// the rejection surfaces as an unhandled promise nobody observes and
+			// the caller gets a 200. Nothing else in the repo catches that —
+			// biome runs `recommended` only and `noFloatingPromises` is a nursery
+			// rule (verified: biome reports nothing on a floating call), and
+			// `tsc --noEmit` does not model it either.
 			expect(
 				fn.body,
-				`${fn.name} must gate on requireClubRole(..., ["admin"]). Without it any signed-in user could reach this club's scoreboard — and because requireClubRole is what reaches assertNotArchived, an ARCHIVED club would be writable too (ADR-0024 takedown).`,
+				`${fn.name} must AWAIT requireClubRole(..., ["admin"]). Without it any signed-in user could reach this club's scoreboard — and because requireClubRole is what reaches assertNotArchived, an ARCHIVED club would be writable too (ADR-0024 takedown).`,
 			).toMatch(
-				/requireClubRole\(\s*user\.id,\s*data\.clubId,\s*\["admin"\],?\s*\)/,
+				/await\s+requireClubRole\(\s*user\.id,\s*data\.clubId,\s*\["admin"\],?\s*\)/,
 			);
+		});
+
+		it(`${fn.name} gates BEFORE it touches the data`, () => {
+			// Order, not just presence. A handler that reads first and gates after
+			// satisfies every assertion above while having already run the query —
+			// the check becomes a post-hoc audit of data it has fetched, and for a
+			// read fn the rejection is the only thing standing between the caller
+			// and a payload that has already been assembled.
+			const gate = fn.body.search(/await\s+requireClubRole\(/);
+			const firstDbCall = fn.body.search(/\w+Db\(/);
+			expect(
+				gate,
+				`${fn.name}: no awaited requireClubRole found`,
+			).toBeGreaterThan(-1);
+			expect(
+				firstDbCall,
+				`${fn.name}: no *Db( seam call found — this guard's ordering check is vacuous for it`,
+			).toBeGreaterThan(-1);
+			expect(
+				gate,
+				`${fn.name} calls its data seam before requireClubRole — the gate must run first, not audit a payload it already built.`,
+			).toBeLessThan(firstDbCall);
 		});
 
 		it(`${fn.name} validates its input with a schema`, () => {

@@ -746,6 +746,106 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		).toHaveLength(0);
 	});
 
+	it("carries the absorbed row's audit attribution too, independently of the date (#531)", async () => {
+		// `recorded_by` gets the same treatment as `trained_on` — one side ABSENT
+		// rather than contradictory, so the null is filled instead of the row's
+		// history being dropped. `coalesce` per column makes the two independent:
+		// this fixture has the keeper holding the DATE and the absorbed row
+		// holding the RECORDER, so a single shared guard would have carried
+		// neither.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		await testDb.insert(officerTrainingRecords).values([
+			{
+				membershipId: keeperId,
+				position: "treasurer",
+				programYear: 2026,
+				period: 1,
+				trainedOn: "2026-07-01",
+				recordedBy: null,
+			},
+			{
+				membershipId: absorbedId,
+				position: "treasurer",
+				programYear: 2026,
+				period: 1,
+				trainedOn: null,
+				recordedBy: seed.adminUserId,
+			},
+		]);
+
+		await testDb.transaction((tx) =>
+			collapseMemberships(tx, seed.clubId, keeperId, absorbedId),
+		);
+
+		const rows = await testDb
+			.select({
+				membershipId: officerTrainingRecords.membershipId,
+				trainedOn: officerTrainingRecords.trainedOn,
+				recordedBy: officerTrainingRecords.recordedBy,
+			})
+			.from(officerTrainingRecords)
+			.where(eq(officerTrainingRecords.membershipId, keeperId));
+
+		expect(rows).toHaveLength(1);
+		// The keeper's own date survived (not overwritten by the absorbed null)…
+		expect(rows[0]?.trainedOn).toBe("2026-07-01");
+		// …and the attribution the absorbed row carried was picked up.
+		expect(rows[0]?.recordedBy).toBe(seed.adminUserId);
+	});
+
+	it("fills the keeper's missing date from the absorbed row on a colliding claim (#531)", async () => {
+		// The fill-UPDATE only fires when the KEEPER's date is null and the
+		// absorbed row has one. A plain "keeper wins" (the pattern borrowed from
+		// `meeting_attendance_plan`) would silently downgrade a dated claim to
+		// "date not recorded" — the case above (#531's own test) only exercises
+		// "both sides dated", where the keeper's date already wins and this
+		// branch of the UPDATE's WHERE (`k.trained_on IS NULL`) never runs.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+
+		await testDb.insert(officerTrainingRecords).values([
+			{
+				membershipId: keeperId,
+				position: "secretary",
+				programYear: 2026,
+				period: 1,
+				trainedOn: null,
+			},
+			{
+				membershipId: absorbedId,
+				position: "secretary",
+				programYear: 2026,
+				period: 1,
+				trainedOn: "2026-07-05",
+			},
+		]);
+
+		await testDb.transaction((tx) =>
+			collapseMemberships(tx, seed.clubId, keeperId, absorbedId),
+		);
+
+		const rows = await testDb
+			.select({
+				membershipId: officerTrainingRecords.membershipId,
+				trainedOn: officerTrainingRecords.trainedOn,
+			})
+			.from(officerTrainingRecords)
+			.where(
+				and(
+					eq(officerTrainingRecords.position, "secretary"),
+					eq(officerTrainingRecords.programYear, 2026),
+					eq(officerTrainingRecords.period, 1),
+				),
+			);
+
+		// The collision resolved to ONE row — the keeper's — and it now carries
+		// the date the absorbed row had, rather than staying "date not recorded".
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.membershipId).toBe(keeperId);
+		expect(rows[0]?.trainedOn).toBe("2026-07-05");
+	});
+
 	it("collapses two ballots by one human into one, and re-points the rest (#510)", async () => {
 		// The FK drift-guard above only proves the columns are NAMED. This proves
 		// the re-point actually runs — and that the unique (session, voter) index

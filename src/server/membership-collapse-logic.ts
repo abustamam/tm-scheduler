@@ -306,7 +306,8 @@ export async function collapseMemberships(
 	//     training may well have picked a different one of the two rows each
 	//     period. Drop the absorbed row on a collision — the keeper's claim for
 	//     that (office, year, period) already says the same thing, and the count
-	//     is over distinct PEOPLE, so dropping a duplicate claim for the surviving
+	//     is over distinct people (floored at distinct offices), so dropping a
+	//     duplicate claim for the surviving
 	//     person loses nothing. (The merge DOES lower the club's trained count
 	//     when the two rows were two Person records for one human — that is the
 	//     merge working, not the count having been wrong: there was only ever one
@@ -318,18 +319,24 @@ export async function collapseMemberships(
 	//     pattern borrowed from `meeting_attendance_plan`) silently downgraded a
 	//     dated claim to "date not recorded". Unlike the attendance case there is
 	//     a meaningful reconciliation here, because one side is ABSENT rather
-	//     than contradictory — nothing is overwritten, only a null filled.
+	//     than contradictory — nothing is overwritten, only a null filled. The
+	//     same argument applies to `recorded_by`, so the audit attribution is
+	//     carried across too rather than being lost with the row; `coalesce`
+	//     makes each column independent, so filling one never disturbs the other.
 	await tx.execute(sql`
 		UPDATE officer_training_records AS k
-		SET trained_on = a.trained_on
+		SET trained_on = coalesce(k.trained_on, a.trained_on),
+			recorded_by = coalesce(k.recorded_by, a.recorded_by)
 		FROM officer_training_records AS a
 		WHERE k.membership_id = ${keeperId}
 			AND a.membership_id = ${absorbedId}
 			AND k.position = a.position
 			AND k.program_year = a.program_year
 			AND k.period = a.period
-			AND k.trained_on IS NULL
-			AND a.trained_on IS NOT NULL`);
+			AND (
+				(k.trained_on IS NULL AND a.trained_on IS NOT NULL)
+				OR (k.recorded_by IS NULL AND a.recorded_by IS NOT NULL)
+			)`);
 	await tx.execute(sql`
 		DELETE FROM officer_training_records
 		WHERE membership_id = ${absorbedId}

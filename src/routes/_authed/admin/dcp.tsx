@@ -22,12 +22,15 @@ import {
 } from "#/lib/dcp";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import {
+	defaultTrainingWindows,
 	TRAINING_GOAL_KEY,
 	type TrainingPeriod,
+	todayIso,
 	trainingAppliedMessage,
 	trainingApplyLabel,
 	trainingProgramYearForDate,
 	trainingSuggestionNote,
+	windowPhase,
 } from "#/lib/officer-training";
 import { cn } from "#/lib/utils";
 import {
@@ -110,7 +113,15 @@ function DcpTracker() {
 	// with a scoreboard, and no club starts next year's board in June. So all of
 	// June the panel showed both windows shut, in the exact month incoming
 	// officers are trained. See `trainingProgramYearForDate`.
+	// The year whose training window is OPEN right now, and whether one actually
+	// is. `trainingYear !== year` alone was not a June test: it fires whenever an
+	// admin reviews a PAST year, so reviewing 2024-25 in April announced
+	// "Officer training for 2026-27 is open now" — false in five of the twelve
+	// months. The phase check is what makes the sentence true.
 	const trainingYear = trainingProgramYearForDate();
+	const trainingWindowOpen = defaultTrainingWindows(trainingYear).some(
+		(w) => windowPhase(w, todayIso()) === "open",
+	);
 	const yearOptions = Array.from(
 		new Set([currentProgramYear(), trainingYear, ...loaded.years, year]),
 	).sort((a, b) => b - a);
@@ -396,7 +407,7 @@ function DcpTracker() {
 									{/* The June case, said out loud: both of the viewed year's
 									    windows can be shut while the NEXT year's period 1 is
 									    open, and the panel below would just look finished. */}
-									{trainingYear !== year ? (
+									{trainingYear !== year && trainingWindowOpen ? (
 										<p className="text-xs text-[var(--warning-strong)]">
 											Officer training for {programYearLabel(trainingYear)} is
 											open now. Switch the year above to record it — the windows

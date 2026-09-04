@@ -7,10 +7,11 @@
  * (`server-modules.guard.test.ts` enforces it). Reachability: a
  * `createServerFn` handler cannot be invoked from vitest, so a query left
  * inline there is coverable by a source grep and nothing else — and the whole
- * point of #531 is that the counting rule ("distinct PEOPLE") is testable.
+ * point of #531 is that the counting rule (the smaller of distinct people and
+ * distinct offices) is testable.
  *
  * All the rules — the four-officer bar, TI's default windows, the leap year, the
- * distinct-people de-dup, the goal-9 suggestion — live in the pure, client-safe
+ * de-dup and its office ceiling, the goal-9 suggestion — live in the pure, client-safe
  * `#/lib/officer-training`. This module only fetches rows and hands them over.
  *
  * ## Authorization lives in the caller, as it does for the rest of DCP
@@ -27,8 +28,12 @@
  * and unchanged by #531: the same officer can already flip goal 9 by hand and
  * edit every other goal, so forging records is a strictly weaker path to the
  * same place, and narrowing this feature to the President while the toggle
- * beside it stays open to every officer would be incoherent. The control is
- * that goal 9 stays President-APPLIED. (This paragraph claimed the opposite —
+ * beside it stays open to every officer would be incoherent. What remains is a
+ * workflow convention rather than a control: goal 9 has to be APPLIED
+ * deliberately rather than moving on its own, but nothing gates that on the
+ * President — `applyTrainingSuggestion` takes the same `["admin"]` as
+ * everything else, which every open officer term satisfies. (This paragraph
+ * claimed the opposite —
  * "an officer does not get to record their own training" — which was a security
  * property stated in two files and false in both.)
  *
@@ -200,11 +205,16 @@ export interface TrainingRecordView {
  * `g9Suggestion`, `hasRecords` and `programYear`, and nothing but the tests read
  * them: the route takes all three from `DcpScoreboardView.derivedTraining`
  * (`dcp.tsx`), because the scoreboard needs them anyway for the badge and the
- * Apply button. Keeping a second copy here meant the same rows were read and
- * de-duped twice per page load, in two transactions — so the two numbers shown
- * adjacently, the goal-row badge and the panel's own "3/4", came from different
- * snapshots and could disagree. Refetching them together fixes staleness, not
- * read skew. One derivation, one reader.
+ * Apply button. Dropping them removes a THIRD derivation of the same rule that
+ * no reader consumed — one derivation per payload instead of two.
+ *
+ * State the limit precisely, because an earlier draft of this paragraph
+ * overclaimed it as a read-skew fix and that is not what it is. The panel's
+ * "3/4" (`periods[].trained`, from this payload) and the goal-row badge
+ * (`derivedTraining.trainedByPeriod`, from `getScoreboard`) still come from two
+ * server fns, two HTTP calls, two transactions — so they can still disagree for
+ * one paint if a write lands between them. Every write path refetches both
+ * together, which is what keeps that window to initial load.
  */
 export interface OfficerTrainingView {
 	/** The calendar date the phases and countdowns below were computed against. */
@@ -353,11 +363,15 @@ export async function loadTrainingRecords(
 	clubId: string,
 	programYear: number,
 	/**
-	 * The already-resolved windows, when the caller has them. Optional so the
-	 * standalone contract still works, but {@link getOfficerTrainingView} passes
-	 * them, and that is not only a saved round trip: fetching them again meant
-	 * two concurrent reads on different pool connections, so the tallies could
-	 * use one set of dates while these rows' `outsideWindow` flags used another.
+	 * The already-resolved windows. {@link getOfficerTrainingView} — the only
+	 * production caller — always passes them, and that is not merely a saved
+	 * round trip: fetching them again meant two concurrent reads on different
+	 * pool connections, so the tallies could use one set of dates while these
+	 * rows' `outsideWindow` flags used another.
+	 *
+	 * Optional only so the seam stays callable on its own, which the integration
+	 * suite relies on. Said plainly rather than dressed up as a production
+	 * contract: the `??` fallback below is reachable from tests alone.
 	 */
 	windows?: readonly ResolvedWindow[],
 ): Promise<TrainingRecordView[]> {
@@ -639,7 +653,7 @@ export async function deriveTrainingSuggestion(
 	return {
 		suggestion: suggestG9(scoring),
 		// The SAME pure helper the panel's tallies use — not a second de-dup
-		// written here. Re-deriving "distinct people" locally is how the badge on
+		// written here. Re-deriving the count locally is how the badge on
 		// the scoreboard and the numbers in the panel would come to disagree, with
 		// every gate green; `countTrainedOfficers` is the one place that rule lives.
 		trainedByPeriod: TRAINING_PERIODS.map((p) =>

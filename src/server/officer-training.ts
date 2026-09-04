@@ -10,9 +10,13 @@
  *
  * That arm grants on ANY open `officer_terms` row, so every elected officer is a
  * full admin here and CAN record their own training. Deliberate and unchanged by
- * #531 — the same officer can already toggle goal 9 by hand — and the control is
- * that goal 9 stays President-applied. See `officer-training-logic.ts`'s header;
- * this paragraph used to assert the opposite.
+ * #531 — the same officer can already toggle goal 9 by hand. What that buys is
+ * narrower than "control": goal 9 still has to be APPLIED deliberately rather
+ * than moving on its own, but that is a workflow convention, not a gate. There
+ * is no President-only check anywhere — `applyTrainingSuggestion` is gated
+ * `["admin"]` like the rest, and ADR-0019 §4 is explicit that no
+ * officer-position authz is introduced. See `officer-training-logic.ts`'s
+ * header; this paragraph used to assert the opposite of its own first sentence.
  *
  * `requireClubRole` → `requireMembership` also carries the `clubs.archived_at`
  * gate, which is why nothing here calls `assertClubNotArchived` separately (same
@@ -85,7 +89,10 @@ export const addTrainingRecord = createServerFn({ method: "POST" })
  * Returns `{ removed, view }` rather than just the flag: every other training
  * write hands back the fresh view, and this one made the client refetch it — a
  * third round trip for one DELETE. `removed` is still surfaced so the caller can
- * tell "already gone" from "not yours" and stop reporting success for a no-op.
+ * stop reporting success for a no-op. It does NOT distinguish "already gone"
+ * from "not yours" — both return false, deliberately, because telling them apart
+ * would be a cross-club existence oracle. (`officer-training-logic.ts` words
+ * this correctly; this sentence used to claim the opposite.)
  */
 export const removeTrainingRecord = createServerFn({ method: "POST" })
 	.validator((i: unknown) => removeTrainingRecordSchema.parse(i))

@@ -13,12 +13,16 @@
  * ## The fixture matrix, and why it is shaped this way
  *
  * CLAUDE.md's trap: a fixture spanning ONE axis is not a guarantee. The counting
- * rule here is "distinct people", so the cases where that DIVERGES from the
- * obvious reading are the ones worth building, and each of the three below is a
- * separate mechanism rather than a variation:
+ * rule here is the SMALLER of distinct people and distinct offices, so the cases
+ * where that diverges from the obvious reading are the ones worth building, and
+ * each of the four below is a separate mechanism rather than a variation:
  *
  * 1. **A member holding two offices.** Distinct-offices says 4, distinct-people
  *    says 3. Every all-single-office fixture passes under either rule.
+ * 1b. **Four people trained for ONE office.** The mirror, and the one this
+ *    matrix originally missed: distinct-people says 4 and TI credits 1, so a
+ *    people-only count OVER-counted — the direction the conservative rule
+ *    exists to prevent. This is why the count is a min and not a de-dup.
  * 2. **An officer whose term ended mid-window.** Their record must keep
  *    counting (the club WAS credited) while their seat leaves the "who still
  *    needs sending" list. A fixture with only open terms cannot tell a correct
@@ -649,6 +653,26 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 				);
 			}
 			expect(await loadTrainingRecords(seeded.clubId, PY)).toHaveLength(2);
+		});
+
+		it("refuses a third training period on officer_training_records at the database level", async () => {
+			// Mirrors the two officer_training_periods CHECK tests above, which exist
+			// precisely because the zod refinement in front of them is not what
+			// protects the table — a raw `sql` write bypasses `periodSchema` entirely.
+			// `officer_training_records` carries the identical CHECK
+			// (`officer_training_records_period_check`) and it had no test of its own.
+			const member = await addMember(seeded.clubId, "Check Constraint Target");
+			expect(
+				await violatedConstraint(
+					testDb.insert(officerTrainingRecords).values({
+						membershipId: member,
+						position: "president",
+						programYear: PY,
+						period: 3,
+						trainedOn: IN_P1,
+					}),
+				),
+			).toBe("officer_training_records_period_check");
 		});
 	});
 

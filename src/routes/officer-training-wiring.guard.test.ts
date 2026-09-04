@@ -129,7 +129,24 @@ describe("DCP route → officer training wiring (#531)", () => {
 		// unreachable from the picker — `loaded.years` holds only years with a
 		// scoreboard, and no club starts next year's board in June.
 		expect(src).toContain("trainingProgramYearForDate()");
-		expect(src).toContain("trainingYear");
+		// The two expressions that make the symbol DO anything, not just its
+		// presence. `expect(src).toContain("trainingYear")` alone passed on a
+		// route that computed the year and then used it for nothing — the
+		// existence-only assertion the ship coverage audit rated a single star.
+		// Putting it in the picker is what makes June's year reachable at all…
+		expect(src).toContain("currentProgramYear(), trainingYear");
+		// …and this conditional is what tells the club the year they are LOOKING
+		// at is not the year whose window is open. Without it the panel simply
+		// reads "Closed / Closed" for the whole of June and explains nothing.
+		//
+		// It is ANDed with an actually-open window, and that half is not cosmetic:
+		// `trainingYear !== year` alone is not a June test — it fires whenever an
+		// admin reviews a PAST year, so reviewing 2024-25 in April announced
+		// "Officer training for 2026-27 is open now" in five of the twelve months
+		// when nothing was open at all. The banner asserts a fact, so it has to
+		// check it.
+		expect(src).toContain("trainingYear !== year && trainingWindowOpen");
+		expect(src).toContain('windowPhase(w, todayIso()) === "open"');
 	});
 
 	it("reads the removed flag rather than always reporting success", () => {

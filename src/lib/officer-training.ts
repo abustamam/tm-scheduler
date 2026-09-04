@@ -32,11 +32,14 @@
  *
  * ## What the bar counts here, and why it disagrees with that quote
  *
- * TI words the bar over ROLES. This app counts **distinct PEOPLE** — a member
- * holding two offices counts ONCE toward the four (maintainer decision,
- * 2026-09-04). That is deliberately the conservative reading: it can only
- * UNDER-count relative to TI, so the app can never tell a club it cleared goal 9
- * when TI would disagree. TI, not GavelUp, is the system of record for who got
+ * TI words the bar over ROLES and adds that credit goes to one person per role.
+ * The maintainer's decision (2026-09-04) was to count distinct PEOPLE, so a
+ * member holding two offices counts ONCE. Taking that alone was wrong in the
+ * other direction — two people trained for the SAME office counted twice where
+ * TI credits one — so the bar is **the smaller of distinct people and distinct
+ * offices**. See {@link countTrainedOfficers}, which is where that rule lives
+ * and where the reasoning is written out in full. Both ceilings together are
+ * what make "can only under-count relative to TI" true rather than intended. TI, not GavelUp, is the system of record for who got
  * trained, which is also why nothing here writes goal 9 — the derivation is a
  * SUGGESTION the President applies (ADR-0019, third assist beside the roster
  * assist for goals 7/8 and the Pathways assist for goals 1–6, #245).
@@ -249,7 +252,11 @@ export function defaultTrainingWindow(
 	};
 }
 
-/** Both TI default windows for a program year, in chronological order. */
+/**
+ * Both TI default windows for a program year, in chronological order. Used by
+ * the DCP route to ask whether ANY window is open right now (the June banner's
+ * honesty check) and by the tests.
+ */
 export function defaultTrainingWindows(programYear: number): TrainingWindow[] {
 	return TRAINING_PERIODS.map((p) => defaultTrainingWindow(programYear, p));
 }
@@ -538,12 +545,17 @@ export interface TrainingPeriodTally {
 	phase: WindowPhase;
 	/** Inclusive days left before the window shuts; null once closed. */
 	daysUntilClose: number | null;
-	/** Distinct PEOPLE with a record in this period. */
+	/** The scored count: the smaller of distinct people and distinct offices. */
 	trained: number;
 	/** Always {@link TRAINED_OFFICERS_REQUIRED}; carried so the UI needn't import it. */
 	required: number;
 	met: boolean;
-	/** How many more distinct people are needed (0 once met). */
+	/**
+	 * How many more the period needs (0 once met). Moving it takes one more
+	 * person AND one more office, since {@link countTrainedOfficers} is the min
+	 * of the two — recording a fifth person against an office already trained
+	 * changes nothing.
+	 */
 	shortfall: number;
 }
 

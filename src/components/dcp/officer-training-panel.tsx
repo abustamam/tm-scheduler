@@ -95,11 +95,12 @@ export function OfficerTrainingPanel({
 				    correction was the furthest thing on screen from the number it
 				    corrected. */}
 				<p className="mt-1 max-w-2xl text-xs text-[var(--sea-ink-soft)]">
-					Goal 9 needs four officers trained in each training period.
-					Toastmasters counts four officer <em>roles</em>; to stay on the safe
-					side this page counts four different <em>people</em>, so someone
-					holding two offices counts once. Record who attended and this page
-					tells you how many more you need and how long the window is open.
+					Goal 9 needs four officer <em>roles</em> trained in each training
+					period, and Toastmasters credits one person per role. This page needs
+					both: four different <em>people</em> in four different roles. So
+					someone holding two offices counts once, and four people all trained
+					for Secretary also count once. Record who attended and this page tells
+					you how many more you need and how long the window is open.
 				</p>
 			</div>
 
@@ -196,7 +197,7 @@ function PeriodCard({
 						    it succeeded. */}
 						{tally.met
 							? `All ${tally.required} trained`
-							: `${tally.shortfall} more ${tally.shortfall === 1 ? "officer" : "officers"} needed`}
+							: `${tally.shortfall} more ${tally.shortfall === 1 ? "officer" : "officers"} needed, in ${tally.shortfall === 1 ? "a role" : "roles"} not yet trained`}
 					</div>
 				</div>
 			</div>
@@ -238,7 +239,17 @@ function PeriodCard({
 				</div>
 			) : null}
 
+			{/* KEYED on the window, so switching program year remounts the form and
+			    re-seeds its date. The date is state seeded once at mount (a
+			    fresh-entry field, deliberately not a mirror — see WindowEditor), and
+			    the year picker changes `defaultDate` without remounting. The June
+			    banner tells the admin to switch years to record training, and the
+			    first record made afterwards then carried the PREVIOUS year's date
+			    and arrived flagged "outside this window" — the exact failure
+			    `defaultDateFor` exists to prevent, reached by following the app's
+			    own instruction. */}
 			<AddRecordForm
+				key={`${tally.window.startsOn}:${tally.window.endsOn}`}
 				period={tally.period}
 				roster={view.roster}
 				seats={view.seats}

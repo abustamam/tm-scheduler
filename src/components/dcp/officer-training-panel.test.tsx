@@ -133,6 +133,26 @@ describe("the tally", () => {
 		expect(first.textContent).toContain("1 more officer needed");
 	});
 
+	it("names the lever that actually moves the shortfall", () => {
+		// "3 more officers needed" pointed at the wrong lever: with four people on
+		// one office, recording a fifth PERSON moves the number by zero, because
+		// the count is the min of people and offices. The shortfall has to name
+		// the role half too.
+		mount(
+			view({ periods: [tally(1, { trained: 1, shortfall: 3 }), tally(2)] }),
+		);
+		expect(card(1).textContent).toContain(
+			"3 more officers needed, in roles not yet trained",
+		);
+		cleanup();
+		mount(
+			view({ periods: [tally(1, { trained: 3, shortfall: 1 }), tally(2)] }),
+		);
+		expect(card(1).textContent).toContain(
+			"1 more officer needed, in a role not yet trained",
+		);
+	});
+
 	it("pluralises the shortfall", () => {
 		mount(
 			view({ periods: [tally(1, { trained: 2, shortfall: 2 }), tally(2)] }),
@@ -890,9 +910,18 @@ describe("the panel", () => {
 			/>,
 		);
 		const text = container.textContent ?? "";
-		expect(text).toContain("Toastmasters counts four officer");
+		// BOTH ceilings, because the count is the min of the two and naming only
+		// one makes the page contradict its own headline number. The people half
+		// alone shipped while `countTrainedOfficers` was already a min: four
+		// different people all recorded as Secretary render "1/4" directly under
+		// a sentence promising the page counts four different people.
+		expect(text).toContain("four officer");
+		expect(text).toContain("one person per role");
 		expect(text).toContain("four different");
 		expect(text).toContain("someone holding two offices counts once");
+		expect(text).toContain(
+			"four people all trained for Secretary also count once",
+		);
 		expect(text).toContain("nothing here ticks goal 9 for you");
 		// The disclosure precedes the first period card in reading order.
 		const heading = container.querySelector("#cot-heading");
