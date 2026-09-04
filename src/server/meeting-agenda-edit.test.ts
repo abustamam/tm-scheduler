@@ -67,8 +67,10 @@ const fakeStartContext: StartStorageContext = {
 	handlerType: "serverFn",
 };
 
-async function rejectionMessage(patch: Record<string, unknown>) {
-	const outcome = await runWithStartContext(fakeStartContext, () =>
+/** The raw server-fn outcome, so a case can assert ACCEPTANCE rather than only
+ *  a different refusal sentence. */
+async function patchOutcome(patch: Record<string, unknown>) {
+	return (await runWithStartContext(fakeStartContext, () =>
 		updateAgendaRowFn.__executeServer({
 			method: "POST",
 			data: {
@@ -77,8 +79,11 @@ async function rejectionMessage(patch: Record<string, unknown>) {
 				patch,
 			},
 		}),
-	);
-	const { error } = outcome as { error?: { message: string } };
+	)) as { error?: { message: string } };
+}
+
+async function rejectionMessage(patch: Record<string, unknown>) {
+	const { error } = await patchOutcome(patch);
 	if (!error) throw new Error("expected updateAgendaRowFn to reject");
 	return error.message;
 }
@@ -120,10 +125,36 @@ describe("updateAgendaRowFn's patch validator rejects with a human message", () 
 		);
 	});
 
-	it("markRed not an integer: readable, not a JSON dump", async () => {
-		const message = await rejectionMessage({ markRed: 2.2 });
+	it("ACCEPTS a fractional mark — the columns are real(), not integer", async () => {
+		// This case asserted the opposite until #679 (`markRed: 2.2` had to be
+		// refused with "whole number"), on a comment claiming a float "reached an
+		// `integer` column". It does not: `mark_green/mark_yellow/mark_red` are
+		// `real()`, and 2.5 is a value this app itself stores — `EVALUATION_MARKS`
+		// is 2 / 2.5 / 3, so every materialised evaluation beat holds one. The
+		// `.int()` made a legal stored value unwritable through the only path that
+		// writes one: the editor's inputs refused 2.5, and Undo on a deleted
+		// evaluation row replayed the stored 2.5 and failed AFTER the placeholder
+		// was inserted, losing the officer's row.
+		//
+		// Asserted as ACCEPTANCE, not as a different rejection sentence: the patch
+		// clears the validator outright here, so `rejectionMessage` would throw its
+		// own "expected to reject" and a test written that way could never say
+		// which layer let the value through.
+		// `error` is a KEY that is present-but-undefined on success, so this asks
+		// about its VALUE — `not.toHaveProperty("error")` passes on a rejection.
+		expect((await patchOutcome({ markRed: 2.2 })).error).toBeFalsy();
+		// The neighbouring bound is untouched — dropping `.int()` must not drop the
+		// range with it.
+		expect(await rejectionMessage({ markRed: MAX_BEAT_MINUTES + 1 })).toBe(
+			`Red mark must be between 0 and ${MAX_BEAT_MINUTES}.`,
+		);
+	});
+
+	it("still refuses a NON-numeric mark, readably", async () => {
+		// Dropping `.int()` must not drop the type check with it.
+		const message = await rejectionMessage({ markRed: "soon" });
 		expect(looksLikeJsonDump(message)).toBe(false);
-		expect(message).toMatch(/whole number/i);
+		expect(message).toBe("Red mark must be a number.");
 	});
 
 	it("an over-long label: readable, not a JSON dump", async () => {

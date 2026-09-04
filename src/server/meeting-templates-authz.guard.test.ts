@@ -185,8 +185,9 @@ describe("meeting template and agenda-editor server fns", () => {
 		// A schema private to a server-fn module is invisible to vitest (#519's
 		// corollary), so this is the only thing that can hold the bound. `label`
 		// and `detail` were unbounded strings feeding a code-point spread, and
-		// the three marks were bare `z.number()` — a float reached an `integer`
-		// column as a raw Postgres 500 where a 400 belongs.
+		// the three marks were bare `z.number()` with no RANGE at all, so an
+		// arbitrary number reached the row. (The original note here said a float
+		// hit "an `integer` column" — the mark columns are `real`; see below.)
 		const patch = schemaBody(
 			readSource("src/server/meeting-agenda-edit.ts"),
 			"patchInput",
@@ -197,11 +198,27 @@ describe("meeting template and agenda-editor server fns", () => {
 				new RegExp(`${field}: z[\\s\\S]{0,120}?\\.max\\(MAX_TEMPLATE`),
 			);
 		}
-		for (const field of ["minutes", "markGreen", "markYellow", "markRed"]) {
-			expect(patch, `${field} must be an int in range`).toMatch(
-				new RegExp(
-					`${field}: z[\\s\\S]{0,160}?\\.int\\(\\)[\\s\\S]{0,160}?\\.max\\(MAX_BEAT_MINUTES\\)`,
-				),
+		// `minutes` is an INTEGER column, so it keeps `.int()`.
+		expect(patch, "minutes must be an int in range").toMatch(
+			/minutes: z[\s\S]{0,160}?\.int\(\)[\s\S]{0,160}?\.max\(MAX_BEAT_MINUTES\)/,
+		);
+		// The three marks are `real()` columns and must NOT carry `.int()` (#679).
+		// This loop required it until then, and the comment above justified that
+		// with "a float reached an `integer` column" — which was simply wrong about
+		// the schema: `mark_green/yellow/red` are `real`, and the app's own
+		// `EVALUATION_MARKS` is 2 / 2.5 / 3, so every materialised evaluation beat
+		// already stores a half minute. The bound that matters is the RANGE, and
+		// requiring `.int()` beside it made a legal stored value unwritable through
+		// the only path that writes it: the editor's inputs rejected 2.5, and Undo
+		// on a deleted evaluation row replayed the stored 2.5, failed validation
+		// after `addAgendaRow` had already inserted the placeholder, and lost the
+		// officer's row.
+		for (const field of ["markGreen", "markYellow", "markRed"]) {
+			expect(patch, `${field} must be bounded in range`).toMatch(
+				new RegExp(`${field}: z[\\s\\S]{0,160}?\\.max\\(MAX_BEAT_MINUTES\\)`),
+			);
+			expect(patch, `${field} backs a real() column, so no .int()`).not.toMatch(
+				new RegExp(`${field}: z[\\s\\S]{0,60}?\\.int\\(\\)`),
 			);
 		}
 	});
