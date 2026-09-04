@@ -8,8 +8,13 @@ import {
 	MAX_TABLE_TOPICS_SECONDS,
 	MIN_BARE_SECONDS,
 	parseTableTopicsClock,
+	refusalAfterEdit,
+	refuseTableTopicsSeconds,
 	resolveTableTopicsMarks,
 	TABLE_TOPICS_DEFAULT_TIMING,
+	TABLE_TOPICS_MESSAGES,
+	tableTopicsClockText,
+	validateTableTopicsForm,
 } from "./table-topics-limits";
 import { formatTimingClock } from "./timing-window";
 
@@ -304,5 +309,283 @@ describe("parseTableTopicsClock", () => {
 				seconds,
 			);
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #679 — the admin form's validation, which was unreachable by any test.
+//
+// It lived inline in `club-settings.tsx`, a ROUTE file that cannot be mounted
+// in vitest, so four branches and two initial-state expressions had no gate at
+// all — and the ceiling check was missing for exactly as long as that was true,
+// through a review of the very block whose comment promised it.
+//
+// Every boundary below is ABSOLUTE. Written as
+// `expect(...(MAX_TABLE_TOPICS_SECONDS + 1)).ok === false` these would pass for
+// every value of the constant, including one that reintroduces the problem —
+// which is CLAUDE.md's relative-constant rule, and the reason the ceiling in
+// particular is the worst assertion here to state relatively.
+// ---------------------------------------------------------------------------
+describe("refuseTableTopicsSeconds", () => {
+	it("accepts a stated window, and the cleared state", () => {
+		// The vacuity control: without it every refusal below could be produced by
+		// a predicate that refuses everything.
+		expect(refuseTableTopicsSeconds(60, 150)).toBeNull();
+		expect(refuseTableTopicsSeconds(null, null)).toBeNull();
+		// A zero minimum is a real (if silly) rule, not absence.
+		expect(refuseTableTopicsSeconds(0, 150)).toBeNull();
+	});
+
+	it("refuses past the ceiling, on the bound that broke it", () => {
+		expect(refuseTableTopicsSeconds(60, 600)).toBeNull();
+		expect(refuseTableTopicsSeconds(60, 601)).toEqual({
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.tooLong,
+		});
+		expect(refuseTableTopicsSeconds(601, 700)).toEqual({
+			field: "min",
+			message: TABLE_TOPICS_MESSAGES.tooLong,
+		});
+	});
+
+	it("refuses a half-stated window, pointing at the BLANK field", () => {
+		// The field is the one to FILL, not the one carrying a value: an admin who
+		// typed a maximum needs the cursor in the minimum.
+		expect(refuseTableTopicsSeconds(60, null)).toEqual({
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.halfStated,
+		});
+		expect(refuseTableTopicsSeconds(null, 150)).toEqual({
+			field: "min",
+			message: TABLE_TOPICS_MESSAGES.halfStated,
+		});
+	});
+
+	it("refuses an inverted or equal window", () => {
+		expect(refuseTableTopicsSeconds(150, 60)).toEqual({
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.inverted,
+		});
+		expect(refuseTableTopicsSeconds(90, 90)).toEqual({
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.inverted,
+		});
+	});
+
+	it("checks the ceiling BEFORE the cross-field rules", () => {
+		// This function returns on the FIRST match, so its order alone decides
+		// which sentence an input that breaks several rules gets — and BOTH layers
+		// read that one answer. Do not restate this as "matches zod's
+		// shape-then-refinement phases": that held while the ceiling was a
+		// per-bound `.max()`, and #679 moved the ceiling in here, so zod has no
+		// per-bound rule left to sequence against. The wiring guard separately
+		// bans re-adding that `.max()`.
+		expect(refuseTableTopicsSeconds(700, 601)?.message).toBe(
+			TABLE_TOPICS_MESSAGES.tooLong,
+		);
+		// And an over-ceiling value that is ALSO half-stated.
+		expect(refuseTableTopicsSeconds(null, 601)?.message).toBe(
+			TABLE_TOPICS_MESSAGES.tooLong,
+		);
+	});
+});
+
+describe("validateTableTopicsForm", () => {
+	it("passes MCF's window through as seconds", () => {
+		expect(validateTableTopicsForm("1:00", "2:30")).toEqual({
+			ok: true,
+			minSeconds: 60,
+			maxSeconds: 150,
+		});
+	});
+
+	it("treats BLANK as clearing both columns, not as a zero", () => {
+		// The distinction the columns depend on. `parseTableTopicsClock("")` is
+		// also null, so the emptiness test cannot be folded into the parse — and
+		// getting it wrong stores a 0:00 minimum instead of "no rule".
+		expect(validateTableTopicsForm("", "")).toEqual({
+			ok: true,
+			minSeconds: null,
+			maxSeconds: null,
+		});
+		expect(validateTableTopicsForm("   ", "  ")).toEqual({
+			ok: true,
+			minSeconds: null,
+			maxSeconds: null,
+		});
+	});
+
+	it("refuses an unparseable value on the field that holds it", () => {
+		expect(validateTableTopicsForm("2.5", "2:30")).toEqual({
+			ok: false,
+			field: "min",
+			message: TABLE_TOPICS_MESSAGES.unparseable,
+		});
+		expect(validateTableTopicsForm("1:00", "abc")).toEqual({
+			ok: false,
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.unparseable,
+		});
+		// A bare number under the unit-mistake floor is unparseable, not a rule:
+		// an admin thinking in MINUTES types 1 and 2.
+		expect(validateTableTopicsForm("1", "2").ok).toBe(false);
+	});
+
+	it("refuses a half-stated window", () => {
+		expect(validateTableTopicsForm("1:00", "")).toEqual({
+			ok: false,
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.halfStated,
+		});
+		expect(validateTableTopicsForm("", "2:30")).toEqual({
+			ok: false,
+			field: "min",
+			message: TABLE_TOPICS_MESSAGES.halfStated,
+		});
+	});
+
+	it("refuses an inverted window", () => {
+		expect(validateTableTopicsForm("2:30", "1:00")).toEqual({
+			ok: false,
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.inverted,
+		});
+	});
+
+	it("refuses past the ceiling — the branch the route was MISSING", () => {
+		// This is the bug #679 named. `parseTableTopicsClock` accepts up to three
+		// digits of minutes on purpose, so "20:00" parsed to 1200, passed
+		// unparseable/half-stated/inverted, and returned from the server as a raw
+		// zod message on a form that had already been submitted.
+		expect(validateTableTopicsForm("1:00", "20:00")).toEqual({
+			ok: false,
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.tooLong,
+		});
+		// ABSOLUTE, both sides of the boundary, through the FORM's own units.
+		expect(validateTableTopicsForm("1:00", "10:00")).toEqual({
+			ok: true,
+			minSeconds: 60,
+			maxSeconds: 600,
+		});
+		expect(validateTableTopicsForm("1:00", "601").ok).toBe(false);
+		expect(validateTableTopicsForm("1:00", "599")).toEqual({
+			ok: true,
+			minSeconds: 60,
+			maxSeconds: 599,
+		});
+		// The bare four-digit form the parser also accepts. "9999" is the shape the
+		// issue named; it is 2:46:39, not a Table Topics answer.
+		expect(validateTableTopicsForm("1:00", "9999")).toEqual({
+			ok: false,
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.tooLong,
+		});
+	});
+
+	it("refuses unparseable BEFORE the numeric rules", () => {
+		// Both wrong: a garbage minimum and a maximum over the ceiling. The
+		// unparseable field is the one the admin can actually see is wrong.
+		expect(validateTableTopicsForm("abc", "20:00")).toEqual({
+			ok: false,
+			field: "min",
+			message: TABLE_TOPICS_MESSAGES.unparseable,
+		});
+	});
+});
+
+describe("refusalAfterEdit", () => {
+	const tooLongMax = {
+		field: "max",
+		message: TABLE_TOPICS_MESSAGES.tooLong,
+	} as const;
+
+	it("clears the marker when the FLAGGED field is edited", () => {
+		expect(refusalAfterEdit(tooLongMax, "max")).toBeNull();
+	});
+
+	it("KEEPS a FIELD-scoped refusal when the other field is edited", () => {
+		// The half an inline `prev?.field === field ? null : prev` gets wrong by
+		// one operator, with the whole suite green. `unparseable` and `tooLong`
+		// belong to ONE input, so dropping the red border on a still-broken
+		// Minimum because the admin typed in Maximum tells them a field is fixed
+		// when it is not.
+		//
+		// Asserted with `toBe`, not `toEqual`: `setTtRefusal` takes this as an
+		// updater, so returning a fresh clone on every keystroke in the untouched
+		// field would re-render the form for a value that did not change.
+		expect(refusalAfterEdit(tooLongMax, "min")).toBe(tooLongMax);
+		expect(
+			refusalAfterEdit(
+				{ field: "min", message: TABLE_TOPICS_MESSAGES.unparseable },
+				"max",
+			)?.message,
+		).toBe(TABLE_TOPICS_MESSAGES.unparseable);
+	});
+
+	it("CLEARS a PAIR-scoped refusal from either field", () => {
+		// `inverted` is attributed to `max`, but lowering the MINIMUM resolves it
+		// — and leaving "The maximum must be longer than the minimum." standing
+		// over a now-valid pair points `aria-describedby` at a false sentence.
+		const inverted = {
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.inverted,
+		} as const;
+		expect(refusalAfterEdit(inverted, "max")).toBeNull();
+		expect(refusalAfterEdit(inverted, "min")).toBeNull();
+
+		// `halfStated` is attributed to the BLANK field, and clearing the FILLED
+		// one is the legitimate "we state no window" resolution.
+		const halfStated = {
+			field: "max",
+			message: TABLE_TOPICS_MESSAGES.halfStated,
+		} as const;
+		expect(refusalAfterEdit(halfStated, "min")).toBeNull();
+		expect(refusalAfterEdit(halfStated, "max")).toBeNull();
+	});
+
+	it("is a no-op when nothing is flagged", () => {
+		expect(refusalAfterEdit(null, "min")).toBeNull();
+		expect(refusalAfterEdit(null, "max")).toBeNull();
+	});
+});
+
+describe("tableTopicsClockText", () => {
+	it("round-trips stored seconds back into the clock the admin typed", () => {
+		expect(tableTopicsClockText(60)).toBe("1:00");
+		expect(tableTopicsClockText(150)).toBe("2:30");
+	});
+
+	it("shows an EMPTY field for a column that is null, never 0:00", () => {
+		// `formatTableTopicsClock(0)` is a perfectly good clock, so a `?? 0`
+		// anywhere on this path turns "this club states no rule" into "this club's
+		// minimum is zero seconds" on the screen — and the next save stores it.
+		expect(tableTopicsClockText(null)).toBe("");
+		// A stored ZERO is a real rule and must still render as a clock, which is
+		// what makes the assertion above about null rather than about falsiness.
+		expect(tableTopicsClockText(0)).toBe("0:00");
+	});
+
+	it("feeds its own output back through the validator unchanged", () => {
+		// The two halves of the form are each other's inverse: what the page seeds
+		// the inputs with must be what a save with no edit stores back. Without
+		// this the seeding could format "2:30" as "2.5" and only the admin would
+		// find out. 155s is deliberately odd-summed, the case the midpoint rounding
+		// exists for.
+		const stored = { minSeconds: 60, maxSeconds: 155 };
+		expect(
+			validateTableTopicsForm(
+				tableTopicsClockText(stored.minSeconds),
+				tableTopicsClockText(stored.maxSeconds),
+			),
+		).toEqual({ ok: true, ...stored });
+		// And the cleared state round-trips to "clear both columns", not to a
+		// half-window — the pair the form's blank/unparseable split turns on.
+		expect(
+			validateTableTopicsForm(
+				tableTopicsClockText(null),
+				tableTopicsClockText(null),
+			),
+		).toEqual({ ok: true, minSeconds: null, maxSeconds: null });
 	});
 });

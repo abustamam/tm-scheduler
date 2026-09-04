@@ -370,6 +370,16 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 	 */
 	function tableTopicsBeat(
 		limits: { minSeconds: number | null; maxSeconds: number | null } | null,
+		/**
+		 * The club's window NOW, when it differs from the one the template was
+		 * materialised with (#679). Defaults to `limits`, which is the case every
+		 * other test here wants — and is exactly why the refresh was invisible to
+		 * all of them: passing the same window to both sides makes it a no-op.
+		 */
+		live: {
+			minSeconds: number | null;
+			maxSeconds: number | null;
+		} | null = limits,
 	) {
 		const seeds = materialiseRunOfShow(false, limits);
 		const roles: TemplateRoleRow[] = [
@@ -377,7 +387,7 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		].map((key) => ({ key, name: key, isSpeakerRole: key === "speaker" }));
 		const rows = resolveAgendaRows({
 			geIntroducesFunctionaries: false,
-			tableTopicsLimits: limits,
+			tableTopicsLimits: live,
 			template: { beats: withBeatIds(seeds), roles },
 			slots: [],
 		});
@@ -385,8 +395,8 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 			meeting,
 			club: {
 				...club,
-				tableTopicsMinSeconds: limits?.minSeconds ?? null,
-				tableTopicsMaxSeconds: limits?.maxSeconds ?? null,
+				tableTopicsMinSeconds: live?.minSeconds ?? null,
+				tableTopicsMaxSeconds: live?.maxSeconds ?? null,
 			},
 			rows,
 		});
@@ -420,6 +430,25 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		expect(beat?.timing?.qualifies).not.toBe("0:30–3:00");
 	});
 
+	it("projects the club's window as it stands NOW, not as it was materialised", () => {
+		// The surface #679's whole story is about, and the one every other case in
+		// this file is blind to: they pass the same window to materialisation and
+		// to render, so the re-derivation is a no-op and deleting it changes
+		// nothing here. Materialised at 1:00–2:30, projected while the club states
+		// 0:30–3:00 — the two differ in EVERY mark, so neither can pass for the
+		// other. ABSOLUTE strings, through `buildTemplateSlideDeck` rather than
+		// through `beatTimingText`, because the wiring is what breaks.
+		const beat = tableTopicsBeat(CLUB, { minSeconds: 30, maxSeconds: 180 });
+		expect(beat?.timing).toEqual({
+			green: "0:30",
+			yellow: "1:45",
+			red: "3:00",
+			qualifies: "0:30–3:00",
+		});
+		// The pre-#679 projection, named so this cannot pass by coincidence.
+		expect(beat?.timing?.red).not.toBe("2:30");
+	});
+
 	it("agrees with the sentence the UNTEMPLATED deck projects", () => {
 		// The contradiction stated as one assertion: both decks are the same club
 		// on two consecutive weeks, and the two numbers they name must be the two
@@ -445,12 +474,18 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		});
 	});
 
-	it("renders the FROZEN marks after the club edits its rule", () => {
-		// The documented limitation, pinned in both directions — untested it reads
-		// identically whether the rule holds or not. Materialised at 1:00–2:30,
-		// then rendered with the club's CURRENT window at 0:30–3:00: if the
-		// template branch wrongly re-derived, the marks would come out 0:30/1:45/
-		// 3:00 instead. Absolute values on both sides.
+	it("RE-DERIVES after the club edits its rule, dropping the snapshot (#679)", () => {
+		// This assertion is inverted from what it said at v1.31.0.0, where it
+		// pinned the frozen marks as a documented limitation. #679 closed that:
+		// the Timer's printed role sheet re-derived from the live club columns
+		// while this row did not, so a club that edited its window was handed a
+		// packet whose run sheet and Timer card named different numbers.
+		//
+		// Materialised at 1:00–2:30, then rendered with the club's CURRENT window
+		// at 0:30–3:00 — so the two windows are distinguishable in EVERY mark and
+		// neither can pass for the other. Absolute values on both sides: stated as
+		// `resolveTableTopicsMarks(live)` this would pass for the frozen values too
+		// if the re-derivation were deleted and the fixture happened to agree.
 		const seeds = materialiseRunOfShow(false, CLUB);
 		const roles: TemplateRoleRow[] = [
 			...new Set(seeds.map((s) => s.roleKey).filter((k): k is string => !!k)),
@@ -465,7 +500,18 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		const row = rows.find(
 			(r) => r.roleKey === "table_topics_master" && r.marks,
 		);
-		expect(row?.marks).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+		expect(row?.marks).toEqual({ green: 0.5, yellow: 1.75, red: 3 });
+		// The SNAPSHOT is untouched — this is a render-time derivation, not a
+		// rewrite of the stored row. Without this the assertion above would also
+		// pass if materialisation had stopped freezing the club's window at all,
+		// which is a different (and permanent) defect #443's own guard exists for.
+		const seed = seeds.find(
+			(s) => s.roleKey === "table_topics_master" && s.flex,
+		);
+		expect({ green: seed?.markGreen, red: seed?.markRed }).toEqual({
+			green: 1,
+			red: 2.5,
+		});
 	});
 
 	it("still graces a contestant's speech at a club with a Table Topics rule", () => {

@@ -1,6 +1,7 @@
 import { assigneeDisplayName } from "./agenda";
 import {
 	buildTemplateRows,
+	refreshTableTopicsMarks,
 	type TemplateBeatRow,
 	type TemplateRoleRow,
 } from "./agenda-template-rows";
@@ -2091,9 +2092,13 @@ export function resolveAgendaRows(input: {
 	 * the feature's own test called `buildRunOfShow` directly and never came
 	 * through here. Required means typecheck names every call site.
 	 *
-	 * Ignored on the template branch, like `geIntroducesFunctionaries`: a
-	 * materialised template carries its own stored marks, frozen at
-	 * materialisation from the club's window (`materialiseRunOfShow`).
+	 * Used on BOTH branches since #679, unlike `geIntroducesFunctionaries`.
+	 * `materialiseRunOfShow` freezes the club's marks into the stored row and
+	 * `resolveMarks` makes that copy authoritative, so a club editing its window
+	 * afterwards kept the old numbers on every already-materialised meeting —
+	 * while the Timer's printed role sheet re-derived from the live columns, so
+	 * one packet contradicted itself. `refreshTableTopicsMarks` re-derives that
+	 * one row here; see its docblock for what it costs.
 	 */
 	tableTopicsLimits: TableTopicsLimits | null;
 	template: {
@@ -2112,7 +2117,7 @@ export function resolveAgendaRows(input: {
 		);
 	}
 	return buildTemplateRows(
-		input.template.beats,
+		refreshTableTopicsMarks(input.template.beats, input.tableTopicsLimits),
 		input.template.roles,
 		input.slots,
 	);

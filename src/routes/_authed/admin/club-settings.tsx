@@ -23,9 +23,12 @@ import {
 import {
 	formatTableTopicsClock,
 	MAX_TABLE_TOPICS_SECONDS,
-	parseTableTopicsClock,
+	refusalAfterEdit,
 	TABLE_TOPICS_DEFAULT_TIMING,
-	TABLE_TOPICS_MESSAGES,
+	type TableTopicsField,
+	type TableTopicsRefusal,
+	tableTopicsClockText,
+	validateTableTopicsForm,
 } from "#/lib/table-topics-limits";
 import {
 	getClubLogoMeta,
@@ -240,17 +243,28 @@ function ClubSettings() {
 	const [savingAgenda, setSavingAgenda] = useState(false);
 	// Held as the TEXT the admin typed, not as parsed seconds: a controlled
 	// number field that reformats mid-keystroke fights the person typing "2:30"
-	// the moment they have typed "2:".
+	// the moment they have typed "2:". Seeded through `tableTopicsClockText`
+	// rather than by an inline conditional, because nothing in this file is
+	// reachable from vitest and the rule it carries — a null column renders EMPTY,
+	// never `0:00` — is the difference between "this club states no window" and
+	// "this club's minimum is zero seconds" (#679).
 	const [ttMin, setTtMin] = useState(
-		agenda.tableTopicsMinSeconds === null
-			? ""
-			: formatTableTopicsClock(agenda.tableTopicsMinSeconds),
+		tableTopicsClockText(agenda.tableTopicsMinSeconds),
 	);
 	const [ttMax, setTtMax] = useState(
-		agenda.tableTopicsMaxSeconds === null
-			? ""
-			: formatTableTopicsClock(agenda.tableTopicsMaxSeconds),
+		tableTopicsClockText(agenda.tableTopicsMaxSeconds),
 	);
+	/** The last refusal, kept WHOLE rather than as a field name. The toast says
+	 *  the sentence once and disappears; the field keeps `aria-invalid` but a bare
+	 *  red border is not a reason, so the message is also rendered under the input
+	 *  it belongs to and pointed at by `aria-describedby`. */
+	const [ttRefusal, setTtRefusal] = useState<TableTopicsRefusal | null>(null);
+	/** Which refusal survives an edit is `refusalAfterEdit`'s rule, not this
+	 *  file's — see it for why touching the OTHER field must leave the marker
+	 *  standing. Written inline here in the first cut of #679, which is the exact
+	 *  mistake #679 exists to correct, one scale down. */
+	const clearTtRefusal = (field: TableTopicsField) =>
+		setTtRefusal((prev) => refusalAfterEdit(prev, field));
 	const [zone, setZone] = useState(timezone.timezone);
 	const [savingZone, setSavingZone] = useState(false);
 	/**
@@ -327,46 +341,26 @@ function ClubSettings() {
 
 	async function onSaveAgenda(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
-		// Parsed BEFORE the request, so a typo is caught where the admin can see
+		// Validated BEFORE the request, so a typo is caught where the admin can see
 		// which field is wrong rather than coming back as a server error on a form
-		// that has already been submitted. Blank means "not stated" and clears the
-		// column; an unparseable value is refused outright, never silently
-		// coerced — coercing "2.3" to 2 seconds is how the wrong rule gets stored.
-		const min = ttMin.trim() === "" ? null : parseTableTopicsClock(ttMin);
-		const max = ttMax.trim() === "" ? null : parseTableTopicsClock(ttMax);
-		if (
-			(ttMin.trim() !== "" && min === null) ||
-			(ttMax.trim() !== "" && max === null)
-		) {
-			toast.error(TABLE_TOPICS_MESSAGES.unparseable);
+		// that has already been submitted. The four branches used to be written out
+		// here, where nothing can test them — and the ceiling check was missing for
+		// exactly as long as that was true (#679).
+		const result = validateTableTopicsForm(ttMin, ttMax);
+		if (!result.ok) {
+			setTtRefusal({ field: result.field, message: result.message });
+			toast.error(result.message);
 			return;
 		}
-		if ((min === null) !== (max === null)) {
-			toast.error(TABLE_TOPICS_MESSAGES.halfStated);
-			return;
-		}
-		if (min !== null && max !== null && max <= min) {
-			toast.error(TABLE_TOPICS_MESSAGES.inverted);
-			return;
-		}
-		// The FOURTH rule, and it was missing while the comment above promised
-		// that a typo lands on the field rather than coming back from the server.
-		// `parseTableTopicsClock` accepts up to three digits of minutes on
-		// purpose — capping is the caller's job — so "20:00" parsed to 1200,
-		// passed all three checks above, and returned as a raw zod `.max(600)`
-		// message rendered through the generic `catch` below.
-		if (max !== null && max > MAX_TABLE_TOPICS_SECONDS) {
-			toast.error(TABLE_TOPICS_MESSAGES.tooLong);
-			return;
-		}
+		setTtRefusal(null);
 		setSavingAgenda(true);
 		try {
 			await updateClubAgendaSettings({
 				data: {
 					clubId: adminClub.clubId,
 					geIntroducesFunctionaries: geIntroduces,
-					tableTopicsMinSeconds: min,
-					tableTopicsMaxSeconds: max,
+					tableTopicsMinSeconds: result.minSeconds,
+					tableTopicsMaxSeconds: result.maxSeconds,
 				},
 			});
 			toast.success("Agenda settings saved.");
@@ -691,29 +685,65 @@ function ClubSettings() {
 						the green light at the minimum, red at the maximum, and anything
 						past the maximum disqualified.
 					</p>
+					{/* The shared `Input`, not a bare `<input>`. The hand-rolled pair
+					    this replaces carried only `aria-invalid:border-destructive`, so
+					    the invalid state was a 1px border where every neighbouring field
+					    in this form shows a destructive RING — weakest in dark, where
+					    `--line` is already nearly invisible. It also missed the shared
+					    focus ring and used `text-sm`, which makes iOS Safari zoom the
+					    page on focus. `Input` ships all three. */}
+					{/* Explicit `htmlFor`/`id` rather than nesting the field inside the
+					    label. Biome's `noLabelWithoutControl` cannot see through a
+					    component boundary, so wrapping `<Input>` in a bare `<label>`
+					    fails the gate — and the explicit pair is what every other field
+					    in this form already does. */}
 					<div className="flex gap-3">
-						<label className="flex-1 space-y-1 text-xs font-medium">
-							Minimum
-							<input
+						<div className="flex-1 space-y-1">
+							<Label htmlFor="tt-min">Minimum</Label>
+							<Input
+								id="tt-min"
 								type="text"
 								inputMode="numeric"
 								placeholder="1:00"
 								value={ttMin}
-								onChange={(e) => setTtMin(e.target.value)}
-								className="w-full rounded-md border border-[var(--line)] bg-background px-3 py-2 text-sm"
+								aria-invalid={ttRefusal?.field === "min"}
+								aria-describedby={
+									ttRefusal?.field === "min" ? "tt-min-error" : undefined
+								}
+								onChange={(e) => {
+									setTtMin(e.target.value);
+									clearTtRefusal("min");
+								}}
 							/>
-						</label>
-						<label className="flex-1 space-y-1 text-xs font-medium">
-							Maximum
-							<input
+							{ttRefusal?.field === "min" ? (
+								<p id="tt-min-error" className="text-destructive text-xs">
+									{ttRefusal.message}
+								</p>
+							) : null}
+						</div>
+						<div className="flex-1 space-y-1">
+							<Label htmlFor="tt-max">Maximum</Label>
+							<Input
+								id="tt-max"
 								type="text"
 								inputMode="numeric"
 								placeholder="2:30"
 								value={ttMax}
-								onChange={(e) => setTtMax(e.target.value)}
-								className="w-full rounded-md border border-[var(--line)] bg-background px-3 py-2 text-sm"
+								aria-invalid={ttRefusal?.field === "max"}
+								aria-describedby={
+									ttRefusal?.field === "max" ? "tt-max-error" : undefined
+								}
+								onChange={(e) => {
+									setTtMax(e.target.value);
+									clearTtRefusal("max");
+								}}
 							/>
-						</label>
+							{ttRefusal?.field === "max" ? (
+								<p id="tt-max-error" className="text-destructive text-xs">
+									{ttRefusal.message}
+								</p>
+							) : null}
+						</div>
 					</div>
 					<p className="text-xs text-muted-foreground">
 						Minutes and seconds, like <code>2:30</code>, up to{" "}

@@ -27,6 +27,7 @@ import {
 import { generateSlotRows } from "#/lib/agenda";
 import { materialiseRunOfShow } from "#/lib/agenda-materialise";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
+import { refreshTableTopicsMarks } from "#/lib/agenda-template-rows";
 import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
@@ -362,7 +363,22 @@ export async function loadAgendaDraft(
 		timeZone: meeting.timeZone,
 		lengthMinutes: meeting.lengthMinutes,
 		geIntroducesFunctionaries: meeting.geIntroducesFunctionaries,
-		rows,
+		// The SAME re-derivation the render surfaces apply (#679), so the editor's
+		// read-only window on the Table Topics segment shows the numbers that will
+		// actually print rather than whatever was frozen at materialisation. Doing
+		// it HERE rather than in `useAgendaModel` is what keeps the editor from
+		// growing a derivation of its own: the rows the client receives are already
+		// refreshed, so its `buildTemplateRowsWithSource` call needs no argument and
+		// its clock cannot disagree with the print route's.
+		//
+		// A READ, not a write-back. The stored row keeps the frozen numbers and
+		// nothing depends on them any more; correcting them would be a write on a
+		// GET, and `materialiseForMeeting` above is already as much of that as this
+		// function should do.
+		rows: refreshTableTopicsMarks(rows, {
+			minSeconds: meeting.tableTopicsMinSeconds,
+			maxSeconds: meeting.tableTopicsMaxSeconds,
+		}),
 		roles,
 	};
 }
