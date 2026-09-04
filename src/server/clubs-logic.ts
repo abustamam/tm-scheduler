@@ -13,10 +13,7 @@ import {
 	isSupportedClubTimezone,
 } from "#/lib/club-timezone";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
-import {
-	MAX_TABLE_TOPICS_SECONDS,
-	TABLE_TOPICS_MESSAGES,
-} from "#/lib/table-topics-limits";
+import { refuseTableTopicsSeconds } from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
 
 /**
@@ -283,15 +280,12 @@ export async function getClubAgendaSettings(
 	return row ?? DEFAULT_CLUB_AGENDA_SETTINGS;
 }
 
-/** One bound: whole seconds, within the absolute ceiling, or null for "not
- *  stated". `.int()` matters — a fractional second reaching the clock formatter
- *  is where "2:30" becomes "2:29" on one surface and "2:30" on another. */
-const tableTopicsBound = z
-	.number()
-	.int()
-	.min(0)
-	.max(MAX_TABLE_TOPICS_SECONDS)
-	.nullable();
+/** One bound's SHAPE: whole non-negative seconds, or null for "not stated".
+ *  `.int()` matters — a fractional second reaching the clock formatter is where
+ *  "2:30" becomes "2:29" on one surface and "2:30" on another. The ceiling is
+ *  NOT here; it is one of the three rules `refuseTableTopicsSeconds` owns, so
+ *  that the form and this schema state it once. */
+const tableTopicsBound = z.number().int().min(0).nullable();
 
 export const clubAgendaSettingsSchema = z
 	.object({
@@ -300,35 +294,36 @@ export const clubAgendaSettingsSchema = z
 		tableTopicsMinSeconds: tableTopicsBound,
 		tableTopicsMaxSeconds: tableTopicsBound,
 	})
-	// BOTH bounds or neither, and max above min. The messages come from
-	// `TABLE_TOPICS_MESSAGES` rather than being typed here, because the admin
-	// form states the same two rules before the request and the pair used to be
-	// byte-for-byte duplicates with nothing linking them — so editing one left
-	// the rule speaking with two voices depending on which layer refused.
+	// Ceiling, both-or-neither and ordering, from `refuseTableTopicsSeconds` —
+	// the ONE statement of those three rules (#679). #443 shared the SENTENCES
+	// and left the rules as two hand-written copies, and the copies had already
+	// diverged: the admin form was missing the ceiling check its own comment
+	// promised, so `20:00` passed every client check and came back as a raw zod
+	// `.max(600)` message. A shared predicate is what makes that unreachable.
+	// The refusal names its FIELD, which becomes the issue's `path`, so the
+	// message still lands on the input the admin has to change.
 	//
-	// Enforced here as well as in
-	// `hasTableTopicsLimits` because the two answer different questions: the
-	// renderer's guard decides whether to TRUST a row it was handed, this decides
-	// whether to STORE one. A half-window saved silently would read back as "not
-	// stated" and the admin would see their own entry vanish with no error.
-	.refine(
-		(v) =>
-			(v.tableTopicsMinSeconds === null) === (v.tableTopicsMaxSeconds === null),
-		{
-			message: TABLE_TOPICS_MESSAGES.halfStated,
-			path: ["tableTopicsMaxSeconds"],
-		},
-	)
-	.refine(
-		(v) =>
-			v.tableTopicsMinSeconds === null ||
-			v.tableTopicsMaxSeconds === null ||
-			v.tableTopicsMaxSeconds > v.tableTopicsMinSeconds,
-		{
-			message: TABLE_TOPICS_MESSAGES.inverted,
-			path: ["tableTopicsMaxSeconds"],
-		},
-	);
+	// Enforced here as well as in `hasTableTopicsLimits` because the two answer
+	// different questions: the renderer's guard decides whether to TRUST a row it
+	// was handed, this decides whether to STORE one. A half-window saved silently
+	// would read back as "not stated" and the admin would see their own entry
+	// vanish with no error.
+	.superRefine((v, ctx) => {
+		const refusal = refuseTableTopicsSeconds(
+			v.tableTopicsMinSeconds,
+			v.tableTopicsMaxSeconds,
+		);
+		if (!refusal) return;
+		ctx.addIssue({
+			code: "custom",
+			message: refusal.message,
+			path: [
+				refusal.field === "min"
+					? "tableTopicsMinSeconds"
+					: "tableTopicsMaxSeconds",
+			],
+		});
+	});
 export type ClubAgendaSettingsInput = z.infer<typeof clubAgendaSettingsSchema>;
 
 /** Persist a club's agenda settings. Caller enforces admin authz (see the

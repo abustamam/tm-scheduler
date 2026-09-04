@@ -3670,19 +3670,39 @@ describe.skipIf(!hasTestDb)("materialise on first edit", () => {
 		// `materialiseForMeeting` takes `TableTopicsLimits | null`, so a literal
 		// `null` at this call site typechecks, leaves the selected column selected,
 		// and still matches the guard's inner-forward regex — while permanently
-		// baking OUR window into the club's own rows. Nothing errors, and the club
-		// never sees its rule on any templated surface again.
+		// baking OUR window into the club's own rows.
+		//
+		// Asserted against the STORED beat, not against `draft.rows`. #679 made
+		// `loadAgendaDraft` re-derive that row's marks from the live club columns
+		// before returning, so reading the draft would now report the club's window
+		// whether materialisation froze it or a literal `null` — the assertion
+		// would have kept passing while the thing it names stopped happening. Same
+		// class of erosion as the two relative-constant tests #679 also fixed.
 		await testDb
 			.update(clubs)
 			.set({ tableTopicsMinSeconds: 60, tableTopicsMaxSeconds: 150 })
 			.where(eq(clubs.id, club.clubId));
 
-		const draft = await loadAgendaDraft(club.meetingId);
-		const tt = draft?.rows.find(
-			(r) =>
-				r.kind === "role" &&
-				r.roleKey === "table_topics_master" &&
-				r.markRed !== null,
+		await loadAgendaDraft(club.meetingId);
+		const [m] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		if (m?.templateId) madeTemplates.push(m.templateId);
+		expect(m?.templateId).toBeTruthy();
+
+		const stored = await testDb
+			.select({
+				roleKey: meetingTemplateBeats.roleKey,
+				flex: meetingTemplateBeats.flex,
+				markGreen: meetingTemplateBeats.markGreen,
+				markYellow: meetingTemplateBeats.markYellow,
+				markRed: meetingTemplateBeats.markRed,
+			})
+			.from(meetingTemplateBeats)
+			.where(eq(meetingTemplateBeats.templateId, m?.templateId as string));
+		const tt = stored.find(
+			(r) => r.roleKey === "table_topics_master" && r.flex === true,
 		);
 		expect(tt, "the materialised Table Topics row").toBeDefined();
 		// ABSOLUTE minutes from 60s/150s. `toEqual(resolveTableTopicsMarks(...))`
@@ -3693,12 +3713,62 @@ describe.skipIf(!hasTestDb)("materialise on first edit", () => {
 			yellow: tt?.markYellow,
 			red: tt?.markRed,
 		}).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+	});
 
+	it("RE-DERIVES that row when the club edits its window afterwards (#679)", async () => {
+		// The bug #443 left behind: materialisation snapshots, `resolveMarks` makes
+		// the snapshot authoritative, so a club editing its window later kept the
+		// old numbers — while the Timer's printed role sheet re-derived from the
+		// live columns, so one packet contradicted itself.
+		//
+		// Materialise FIRST with the club stating nothing, so the stored row really
+		// does hold the standard window and the assertion below cannot pass by the
+		// snapshot already being right.
+		const before = await loadAgendaDraft(club.meetingId);
 		const [m] = await testDb
 			.select({ templateId: meetings.templateId })
 			.from(meetings)
 			.where(eq(meetings.id, club.meetingId));
 		if (m?.templateId) madeTemplates.push(m.templateId);
+		const ttBefore = before?.rows.find(
+			(r) => r.roleKey === "table_topics_master" && r.flex === true,
+		);
+		expect({
+			green: ttBefore?.markGreen,
+			yellow: ttBefore?.markYellow,
+			red: ttBefore?.markRed,
+		}).toEqual({ green: 1, yellow: 1.5, red: 2 });
+
+		await testDb
+			.update(clubs)
+			.set({ tableTopicsMinSeconds: 60, tableTopicsMaxSeconds: 150 })
+			.where(eq(clubs.id, club.clubId));
+
+		const after = await loadAgendaDraft(club.meetingId);
+		const ttAfter = after?.rows.find(
+			(r) => r.roleKey === "table_topics_master" && r.flex === true,
+		);
+		expect({
+			green: ttAfter?.markGreen,
+			yellow: ttAfter?.markYellow,
+			red: ttAfter?.markRed,
+		}).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+
+		// A READ, not a write-back: the stored row still holds what was frozen.
+		// Asserted so "the draft is right" cannot quietly become "the GET writes",
+		// which is a different change with different concurrency questions.
+		const stored = await testDb
+			.select({
+				roleKey: meetingTemplateBeats.roleKey,
+				flex: meetingTemplateBeats.flex,
+				markRed: meetingTemplateBeats.markRed,
+			})
+			.from(meetingTemplateBeats)
+			.where(eq(meetingTemplateBeats.templateId, m?.templateId as string));
+		const ttStored = stored.find(
+			(r) => r.roleKey === "table_topics_master" && r.flex === true,
+		);
+		expect(ttStored?.markRed).toBe(2);
 	});
 
 	it("DECLARES the roles its beats name, so none of them are dropped", async () => {

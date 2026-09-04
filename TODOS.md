@@ -8,15 +8,6 @@
 
 ## Meetings
 
-- A club's Table Topics window is SNAPSHOTTED into a meeting's agenda template at
-  materialisation (#443). A club that edits the window afterwards keeps the frozen
-  marks on that meeting until the row is edited. Re-deriving stored marks at render
-  time is the fix; it is a wider change than #443 because `resolveMarks`
-  (`agenda-template-rows.ts`) deliberately makes the STORED copy authoritative so an
-  officer's per-meeting edit survives, and re-derivation has to tell "never edited"
-  from "edited to the same value". Filed for #679.
-  **Priority:** P2
-
 - The standard Table Topics row on the Timer's blank role sheet still prints the
   ±30s speech grace (`0:30–2:30`), while the product's own rule for that segment is
   the cap with no grace — which is what `formatTableTopicsTiming` states, what
@@ -26,13 +17,6 @@
   alone: changing it rewrites the committed PDFs in `public/role-sheets/` for every
   club, which is a product decision rather than a wiring one.
   **Priority:** P3
-
-- No DB `CHECK` constraint on `clubs.table_topics_min_seconds` /
-  `_max_seconds` (#443). Both bounds, ordering and the 10-minute ceiling are enforced
-  by the zod schema on the write path and re-checked by `hasTableTopicsLimits` before
-  anything renders, so a bad row degrades to the standard window rather than to a
-  wrong one — but a script writing directly still gets to store it.
-  **Priority:** P4
 
 - The personal meeting page's roles payload is unbounded on both axes (#665). The
   slot select has no `LIMIT`, and `role_definitions.name` is an uncapped `text`

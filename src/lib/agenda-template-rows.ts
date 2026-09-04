@@ -37,6 +37,11 @@ import {
 	MAX_TEMPLATE_LABEL_CHARS,
 } from "./meeting-template-limits";
 import { speechBookedMinutes, speechWindow } from "./speech-window";
+import {
+	resolveTableTopicsMarks,
+	TABLE_TOPICS_ROLE_KEY,
+	type TableTopicsLimits,
+} from "./table-topics-limits";
 
 /**
  * A beat's CONTENT, with no identity — what a seed authors and what gets
@@ -122,6 +127,141 @@ function resolveMarks(row: TemplateBeatRow): TimingMarks | null {
 	const { markGreen, markYellow, markRed } = row;
 	if (markGreen == null || markYellow == null || markRed == null) return null;
 	return { green: markGreen, yellow: markYellow, red: markRed };
+}
+
+/** The minimum a row has to carry for {@link isTableTopicsSegment} to decide
+ *  about it. Structural rather than `TemplateBeatRow`, and EXPORTED, because the
+ *  agenda editor's `AgendaDraftRow` is the same fields under a different name
+ *  and both sides call the same predicate — a caller that cannot name the
+ *  constraint writes its own copy, which is how the two drifted apart in the
+ *  first cut of #679. */
+export type MarkedBeat = {
+	kind: "section" | "role" | "event";
+	roleKey: string | null;
+	markGreen: number | null;
+	markYellow: number | null;
+	markRed: number | null;
+};
+
+/** The three mark columns, narrowed to present. {@link isTableTopicsSegment} is a
+ *  TYPE PREDICATE so a caller that has checked it does not then need a `?? 0`
+ *  fallback the check already made unreachable — dead defence reads as care and
+ *  is untestable by construction. */
+type ClubOwnedMarks = {
+	markGreen: number;
+	markYellow: number;
+	markRed: number;
+};
+
+/**
+ * Whether a stored beat is a Table Topics row whose timer marks the CLUB owns.
+ *
+ * Exported because two places have to agree about it and disagreeing is silent:
+ * {@link refreshTableTopicsMarks} decides which row to re-derive, and the agenda
+ * editor decides which row's three mark inputs to stop offering. The first cut
+ * of #679 hand-wrote the editor's copy with one condition missing, which
+ * disabled the inputs on a row the server would not refresh — three permanently
+ * blank, permanently disabled fields and no way back. Five review passes found
+ * it independently. One function, both call sites.
+ *
+ * **Three conditions, and `flex` is deliberately NOT one of them.** `roleKey`
+ * alone is ambiguous — the run of show gives THREE beats `table_topics_master`
+ * (the segment, the "Best Table Topics" vote, and the GE hand-off) and
+ * `beatSeed` labels all three `"Table Topics Master"`, so neither the key nor
+ * the label identifies the row. What separates them is that only the segment
+ * CARRIES MARKS: the other two declare none, so `beatSeed` writes null for all
+ * three columns. Verified against a real materialised template — three rows with
+ * that key, one with marks.
+ *
+ * The first cut used `flex` for that job and it was wrong twice over. It was a
+ * mutation SURVIVOR (deleting the clause left 2,434 tests green, because every
+ * fixture that excluded the vote and the hand-off also excluded them on the
+ * marks clause) — and worse, `flex` is a length property the officer toggles
+ * with a one-click "Pin" button about DURATION. Pinning the Table Topics
+ * segment to a fixed length would have silently detached its timing from club
+ * settings, re-creating the self-contradicting packet this whole change exists
+ * to eliminate, with the explanatory copy vanishing at the same moment.
+ *
+ * **All three marks present** is what keeps this from inventing data:
+ * `addAgendaRow` writes null marks, so an officer who adds a row and points it
+ * at the Table Topics Master must not watch a timer card appear on it, and an
+ * officer who deliberately cleared all three (legal — `assertMarks` allows 0 or
+ * 3) must not watch them come back. That clause is also what makes
+ * `beatTimingText`'s roleKey-only test correct: it early-returns on a row with
+ * no marks, so the deck labels a span as the club's disqualification rule for
+ * exactly the rows this accepts.
+ */
+export function isTableTopicsSegment<T extends MarkedBeat>(
+	beat: T,
+): beat is T & ClubOwnedMarks {
+	return (
+		beat.kind === "role" &&
+		beat.roleKey === TABLE_TOPICS_ROLE_KEY &&
+		beat.markGreen != null &&
+		beat.markYellow != null &&
+		beat.markRed != null
+	);
+}
+
+/**
+ * Re-derive the Table Topics segment's timer marks from the club's CURRENT
+ * window (#679).
+ *
+ * `materialiseRunOfShow` snapshots the club's marks into the stored row, and
+ * `resolveMarks` above makes that stored copy authoritative — deliberately, so
+ * an officer's per-meeting edit survives. The cost was that a club editing its
+ * window afterwards kept the frozen numbers on every meeting already
+ * materialised, which in practice is every meeting whose agenda editor has ever
+ * been opened (`loadAgendaDraft` materialises on READ).
+ *
+ * That was not a stale number in isolation, and the sharpest version is why
+ * this re-derives rather than waiting for a button. The Timer's printed role
+ * sheet has re-derived from the live columns since #443 — `standardTimingRows`
+ * reads `clubs.table_topics_*_seconds` on every render — so the club that
+ * edited its window was already being handed a PACKET whose run sheet said one
+ * thing and whose Timer card said another, stapled together. A "refresh from
+ * club settings" action would leave those two disagreeing until someone
+ * noticed; this makes them the same derivation from the same source.
+ *
+ * **What it costs, stated plainly:** the Table Topics segment's marks stop
+ * being per-meeting data. An officer can no longer give one meeting a different
+ * Table Topics window through the agenda editor — which is why the editor shows
+ * that row's window as read-only text rather than accepting an edit it would
+ * discard, and why a meeting that already carries a hand-set override starts
+ * printing the club's window instead on the next render. The capability was not
+ * really there before: the deck labels this row's span as the club's
+ * disqualification rule and the Timer's card ignores the row entirely, so a
+ * per-meeting override already contradicted two surfaces the moment it was made.
+ *
+ * Applied at the two seams that hold a club: `resolveAgendaRows`, which every
+ * render surface goes through, and `loadAgendaDraft`, so the editor shows what
+ * will actually print. NOT applied inside `buildTemplateRows`, which takes no
+ * club and has ~50 test call sites — threading an optional window through there
+ * would mean a caller that omits it silently REPLACING a club's window with the
+ * standard one, which is the #443 freeze bug relocated to render time.
+ *
+ * Note `null` here means "the club states nothing", NOT "leave the rows alone":
+ * it resolves to the standard window and OVERWRITES. A third render seam that
+ * forgets to join the club columns would therefore print our rule over the
+ * club's, silently — which is why `table-topics-limits-wiring.guard.test.ts`
+ * sweeps `src/` for every `buildTemplateRows` caller rather than pinning the two
+ * known ones by name.
+ */
+export function refreshTableTopicsMarks<T extends MarkedBeat>(
+	beats: T[],
+	tableTopicsLimits: TableTopicsLimits | null,
+): T[] {
+	const marks = resolveTableTopicsMarks(tableTopicsLimits);
+	return beats.map((beat) =>
+		isTableTopicsSegment(beat)
+			? {
+					...beat,
+					markGreen: marks.green,
+					markYellow: marks.yellow,
+					markRed: marks.red,
+				}
+			: beat,
+	);
 }
 
 /** Slots belonging to a template role, in slot order. */

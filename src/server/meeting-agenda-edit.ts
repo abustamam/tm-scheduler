@@ -95,7 +95,13 @@ function fallbackMessage(issue: {
 			return `${rangeLabel} must be between 0 and ${MAX_BEAT_MINUTES}.`;
 		}
 		if (issue.code === "invalid_type") {
-			return `${rangeLabel} must be a whole number.`;
+			// "whole" only for `minutes`, the one field of the four that still
+			// carries `.int()` — the three marks back `real()` columns and 2.5 is a
+			// value this app itself stores, so telling an officer it must be whole
+			// would be describing a rule that is no longer there (#679).
+			return field === "minutes"
+				? `${rangeLabel} must be a whole number.`
+				: `${rangeLabel} must be a number.`;
 		}
 		return undefined;
 	}
@@ -172,12 +178,23 @@ const rowInput = z.object({
  * This is the edge bound, NOT a second copy of the cap — do not tighten it to
  * the cap itself, that would reject legal emoji labels with a zod error.
  *
- * The three marks were `z.number()` with no `.int()` and no range, so a FLOAT
- * reached an `integer` column and came back as a raw Postgres 500 where a 400
- * belongs — and nothing else bounded them at all: `assertMarks` only checks
- * all-three-or-none, never the values. Bounded to the same
- * `MAX_BEAT_MINUTES` as `minutes`, since a mark is a minute offset within the
- * beat it belongs to.
+ * The three marks were `z.number()` with no range at all — `assertMarks` only
+ * checks all-three-or-none, never the values — so any number reached the row.
+ * Bounded to the same `MAX_BEAT_MINUTES` as `minutes`, since a mark is a minute
+ * offset within the beat it belongs to.
+ *
+ * They do NOT carry `.int()`, and the reason is worth stating because they did
+ * until #679 on an argument that was simply wrong about the schema: the note
+ * here said a float "reached an `integer` column and came back as a raw
+ * Postgres 500". `mark_green/mark_yellow/mark_red` are `real()`. Fractional
+ * marks are what this app stores — `EVALUATION_MARKS` is 2 / 2.5 / 3, so every
+ * materialised evaluation beat holds a half minute, and a club's Table Topics
+ * midpoint is fractional for a quarter of the windows it can state. `.int()`
+ * therefore made a legal stored value unwritable through the only path that
+ * writes one: the editor's mark inputs rejected 2.5, and Undo on a deleted
+ * evaluation row replayed the stored 2.5 and failed validation AFTER
+ * `addAgendaRow` had inserted the placeholder, so the officer lost the row.
+ * `minutes` keeps `.int()` — that column really is an integer.
  *
  * None of the eight bounds below carries a message argument — see
  * `fallbackMessage` above, and `meeting-templates-authz.guard.test.ts`,
@@ -210,27 +227,20 @@ const patchInput = rowInput.extend({
 				.max(MAX_TEMPLATE_LABEL_CHARS * 2)
 				.nullable()
 				.optional(),
-			markGreen: z
-				.number()
-				.int()
-				.min(0)
-				.max(MAX_BEAT_MINUTES)
-				.nullable()
-				.optional(),
-			markYellow: z
-				.number()
-				.int()
-				.min(0)
-				.max(MAX_BEAT_MINUTES)
-				.nullable()
-				.optional(),
-			markRed: z
-				.number()
-				.int()
-				.min(0)
-				.max(MAX_BEAT_MINUTES)
-				.nullable()
-				.optional(),
+			// FRACTIONAL, unlike `minutes` above. These three back `real()` columns
+			// and the app's own constants are fractional — `EVALUATION_MARKS` is
+			// 2 / 2.5 / 3, so every materialised evaluation beat already stores a
+			// half minute, and a club's Table Topics midpoint is fractional for 25%
+			// of the windows it can state. `.int()` sat on all three anyway (#679),
+			// which made a half-minute mark unwritable through the only path that
+			// writes them: the editor's own inputs rejected 2.5, and Undo on a
+			// deleted evaluation row replayed the stored 2.5 and failed validation
+			// AFTER `addAgendaRow` had already inserted the placeholder — so the
+			// officer lost the row. The bound that matters is `MAX_BEAT_MINUTES`,
+			// which is kept.
+			markGreen: z.number().min(0).max(MAX_BEAT_MINUTES).nullable().optional(),
+			markYellow: z.number().min(0).max(MAX_BEAT_MINUTES).nullable().optional(),
+			markRed: z.number().min(0).max(MAX_BEAT_MINUTES).nullable().optional(),
 			// LAST, after every bounded field. `meeting-templates-authz.guard
 			// .test.ts` matches each bound with a `[\s\S]{0,120}` window between the
 			// field name and its `.max(...)`; inserting between an existing field and

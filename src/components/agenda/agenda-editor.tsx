@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import {
 	ArrowDown,
 	ArrowUp,
@@ -32,7 +33,10 @@ import {
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
 } from "#/lib/agenda-runsheet";
-import { buildTemplateRowsWithSource } from "#/lib/agenda-template-rows";
+import {
+	buildTemplateRowsWithSource,
+	isTableTopicsSegment,
+} from "#/lib/agenda-template-rows";
 import { buildTimeline } from "#/lib/agenda-timing";
 import {
 	MAX_BEAT_MINUTES,
@@ -40,6 +44,7 @@ import {
 	MAX_TEMPLATE_DETAIL_CHARS,
 	MAX_TEMPLATE_LABEL_CHARS,
 } from "#/lib/meeting-template-limits";
+import { formatTimingClock } from "#/lib/timing-window";
 import type {
 	AgendaDraft,
 	AgendaDraftRole,
@@ -163,6 +168,21 @@ async function runAction(action: () => Promise<unknown>): Promise<boolean> {
  * Runs against `localRows` rather than `draft.rows` so the clock moves as the
  * officer types, before any save. That is the whole feature — the previous
  * editor could change a duration and tell you nothing about what it did.
+ *
+ * One asymmetry with the print route, and it is deliberate: `resolveAgendaRows`
+ * re-derives the Table Topics segment's marks from the club's window (#679) and
+ * this does not, because `loadAgendaDraft` already did it to the rows it sent —
+ * so the editor stays a fourth CALLER rather than growing a derivation. Marks
+ * do not enter the clock at all, so nothing here would notice either way; what
+ * would notice is the row detail panel, which reads the draft row directly.
+ *
+ * Two different tests hold the two halves of that, and neither substitutes for
+ * the other. `agenda-editor-parity.test.ts` pins that the two DERIVATIONS agree
+ * given the same input — it calls `refreshTableTopicsMarks` itself to stand in
+ * for this seam, so it cannot fail if `loadAgendaDraft` stops applying it. What
+ * pins the SEAM is the source grep in `table-topics-limits-wiring.guard.test.ts`
+ * (`rows: refreshTableTopicsMarks(rows, {`), plus its sweep for any other
+ * `buildTemplateRows` caller.
  */
 function useAgendaModel(draft: AgendaDraft, localRows: AgendaDraftRow[]) {
 	return useMemo(() => {
@@ -731,6 +751,24 @@ function AgendaTableRow({
 							repeatsRoleKey: snapshot.repeatsRoleKey,
 							flex: snapshot.flex,
 							handoff: snapshot.handoff,
+							// ALL THREE marks, unconditionally. An earlier cut of #679 skipped
+							// them on a club-governed Table Topics row, reasoning that the
+							// render path re-derives that row from the club anyway — which is
+							// false for exactly this case and was the worst bug in the change.
+							// `addAgendaRow` inserts the placeholder with NULL marks, and
+							// `isTableTopicsSegment` REQUIRES all three present, so the
+							// restored row stopped matching its own predicate: never
+							// refreshed again, no timer window on the run sheet, the agenda or
+							// the deck, while the Timer's role sheet kept printing the club's
+							// — one misclick and an Undo rebuilding the self-contradicting
+							// packet this whole change exists to eliminate.
+							//
+							// What that skip was working around was a real bug one layer down,
+							// now fixed at its root: `updateAgendaRowFn` bounded these three
+							// with `.int()` against `real()` columns, so ANY fractional mark
+							// failed validation after the placeholder was already inserted.
+							// That took the evaluation beat's stored 2.5 with it, so Undo on
+							// an ordinary evaluator row lost the row too.
 							markGreen: snapshot.markGreen,
 							markYellow: snapshot.markYellow,
 							markRed: snapshot.markRed,
@@ -1177,6 +1215,20 @@ function RowDetail({
 	commitMarks: () => Promise<void>;
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 }) {
+	// The Table Topics segment's marks come from CLUB settings and are
+	// re-derived on every render (#679), so an edit here would be accepted,
+	// stored, and then silently discarded by every surface that prints it.
+	//
+	// The SAME function the render path uses, imported rather than re-typed. The
+	// first cut hand-wrote its conditions here instead; the copies drifted
+	// immediately, and the row in the gap got its inputs disabled by this file
+	// while the server refreshed nothing — three blank locked fields and no way
+	// back. A predicate two files state separately is the shape this repo keeps
+	// getting burned by.
+	//
+	// The values shown are already the club's: `loadAgendaDraft` refreshes the
+	// rows it hands over.
+	const marksFromClub = isTableTopicsSegment(row);
 	return (
 		<tr className="border-b bg-muted/20">
 			<td />
@@ -1256,50 +1308,88 @@ function RowDetail({
 						</label>
 					) : null}
 
-					<div className="grid grid-cols-3 gap-3">
-						<div className="flex flex-col gap-1">
-							<Label htmlFor={`${row.id}-green`}>Green at</Label>
-							<Input
-								id={`${row.id}-green`}
-								aria-label="Green mark minute"
-								type="number"
-								min={0}
-								max={MAX_BEAT_MINUTES}
-								value={markGreen}
-								disabled={!editable}
-								onChange={(e) => setMarkGreen(e.target.value)}
-								onBlur={() => void commitMarks()}
-							/>
+					{marksFromClub ? (
+						// NOT three disabled number boxes. The marks are float MINUTES, so a
+						// 1:00–2:45 club renders yellow as 1.8833333333333333 in a narrow
+						// numeric cell — and once the field is read-only that is simply a
+						// wrong-looking number the officer cannot correct. Clocks are the
+						// units they typed the rule in, and they are what every printed
+						// surface shows. `formatTimingClock` takes MINUTES, which is what
+						// these columns hold.
+						//
+						// Read-only TEXT rather than `readOnly` inputs: there is nothing to
+						// select or copy that the sentence below does not already say, and a
+						// focusable field that refuses every keystroke is a worse answer to
+						// "why can't I type here" than not offering the field.
+						<div
+							className="flex flex-col gap-1"
+							data-testid={`agenda-row-club-marks-${row.id}`}
+						>
+							<span className="font-medium text-sm">Timing</span>
+							<p className="text-sm tabular-nums">
+								Green {formatTimingClock(row.markGreen)} · Yellow{" "}
+								{formatTimingClock(row.markYellow)} · Red{" "}
+								{formatTimingClock(row.markRed)}
+							</p>
+							<p className="text-muted-foreground text-xs">
+								Set once for the whole club, not per meeting — every agenda, the
+								projected deck and the Timer's card read the same window. Change
+								it in{" "}
+								<Link
+									to="/admin/club-settings"
+									className="text-primary underline underline-offset-2 hover:text-primary/80"
+								>
+									Club settings
+								</Link>{" "}
+								under Table Topics speaking limits.
+							</p>
 						</div>
-						<div className="flex flex-col gap-1">
-							<Label htmlFor={`${row.id}-yellow`}>Yellow at</Label>
-							<Input
-								id={`${row.id}-yellow`}
-								aria-label="Yellow mark minute"
-								type="number"
-								min={0}
-								max={MAX_BEAT_MINUTES}
-								value={markYellow}
-								disabled={!editable}
-								onChange={(e) => setMarkYellow(e.target.value)}
-								onBlur={() => void commitMarks()}
-							/>
+					) : (
+						<div className="grid grid-cols-3 gap-3">
+							<div className="flex flex-col gap-1">
+								<Label htmlFor={`${row.id}-green`}>Green at</Label>
+								<Input
+									id={`${row.id}-green`}
+									aria-label="Green mark minute"
+									type="number"
+									min={0}
+									max={MAX_BEAT_MINUTES}
+									value={markGreen}
+									disabled={!editable}
+									onChange={(e) => setMarkGreen(e.target.value)}
+									onBlur={() => void commitMarks()}
+								/>
+							</div>
+							<div className="flex flex-col gap-1">
+								<Label htmlFor={`${row.id}-yellow`}>Yellow at</Label>
+								<Input
+									id={`${row.id}-yellow`}
+									aria-label="Yellow mark minute"
+									type="number"
+									min={0}
+									max={MAX_BEAT_MINUTES}
+									value={markYellow}
+									disabled={!editable}
+									onChange={(e) => setMarkYellow(e.target.value)}
+									onBlur={() => void commitMarks()}
+								/>
+							</div>
+							<div className="flex flex-col gap-1">
+								<Label htmlFor={`${row.id}-red`}>Red at</Label>
+								<Input
+									id={`${row.id}-red`}
+									aria-label="Red mark minute"
+									type="number"
+									min={0}
+									max={MAX_BEAT_MINUTES}
+									value={markRed}
+									disabled={!editable}
+									onChange={(e) => setMarkRed(e.target.value)}
+									onBlur={() => void commitMarks()}
+								/>
+							</div>
 						</div>
-						<div className="flex flex-col gap-1">
-							<Label htmlFor={`${row.id}-red`}>Red at</Label>
-							<Input
-								id={`${row.id}-red`}
-								aria-label="Red mark minute"
-								type="number"
-								min={0}
-								max={MAX_BEAT_MINUTES}
-								value={markRed}
-								disabled={!editable}
-								onChange={(e) => setMarkRed(e.target.value)}
-								onBlur={() => void commitMarks()}
-							/>
-						</div>
-					</div>
+					)}
 				</div>
 			</td>
 		</tr>

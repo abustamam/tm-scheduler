@@ -9,6 +9,7 @@ import {
 import {
 	buildTemplateRows,
 	buildTemplateRowsWithSource,
+	refreshTableTopicsMarks,
 	type TemplateBeatRow,
 	type TemplateRoleRow,
 } from "./agenda-template-rows";
@@ -886,5 +887,223 @@ describe("buildTemplateRowsWithSource", () => {
 		expect(rows[0]?.detail).not.toContain("{");
 		expect(rows[0]?.detail).toContain("General Evaluator");
 		expect(rows[0]?.handoff).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #679 — the Table Topics segment's marks follow the CLUB, not the snapshot.
+//
+// `materialiseRunOfShow` freezes the club's marks into the stored row and
+// `resolveMarks` makes that copy authoritative, so a club that edited its
+// window afterwards kept the old numbers on every already-materialised meeting
+// — while the Timer's printed role sheet re-derived from the live columns. One
+// packet, two different Table Topics windows, stapled together.
+//
+// Every expected value below is ABSOLUTE. Stated as
+// `resolveTableTopicsMarks(CLUB).green` they would pass for every derivation,
+// including the frozen one this exists to replace.
+// ---------------------------------------------------------------------------
+describe("refreshTableTopicsMarks (#679)", () => {
+	const TTM_ROLES: TemplateRoleRow[] = [
+		{
+			key: "table_topics_master",
+			name: "Table Topics Master",
+			isSpeakerRole: false,
+		},
+	];
+	/** MCF's window: 1:00–2:30, midpoint 1:45. */
+	const MCF = { minSeconds: 60, maxSeconds: 150 };
+	/** What materialisation freezes for a club that had stated nothing. */
+	const FROZEN_STANDARD = { markGreen: 1, markYellow: 1.5, markRed: 2 };
+
+	/** The materialised segment: a ROLE beat with the Table Topics key that
+	 *  carries marks. `flex` is set because the real one has it, and is
+	 *  deliberately NOT part of the predicate — see the `flex: false` case. */
+	const segment = (over: Partial<TemplateBeatRow> = {}) =>
+		beat({
+			sortOrder: 0,
+			kind: "role",
+			label: "Table Topics Master",
+			roleKey: "table_topics_master",
+			flex: true,
+			...FROZEN_STANDARD,
+			...over,
+		});
+
+	const marksOf = (b: TemplateBeatRow | undefined) => ({
+		green: b?.markGreen,
+		yellow: b?.markYellow,
+		red: b?.markRed,
+	});
+
+	it("replaces the frozen marks with the club's current window", () => {
+		const [out] = refreshTableTopicsMarks([segment()], MCF);
+		expect(marksOf(out)).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+	});
+
+	it("keeps following the club after an officer PINS the row (flex: false)", () => {
+		// The predicate must not read `flex`. The agenda editor's "Pin" button
+		// sets `flex: false` in one click — it is about the segment's LENGTH — and
+		// a predicate keyed on it would let that one click silently detach the
+		// timing from club settings, re-creating the packet whose run sheet and
+		// Timer card disagree. The Timer's role sheet has no equivalent opt-out,
+		// so there is nothing on the other side to match.
+		//
+		// This case is also the mutation gate the first cut lacked: re-adding
+		// `beat.flex === true` to `isTableTopicsSegment` fails HERE and nowhere
+		// else, because every other fixture that excludes a row also excludes it
+		// on the marks or roleKey clause.
+		const pinned = refreshTableTopicsMarks([segment({ flex: false })], MCF);
+		expect(marksOf(pinned[0])).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+	});
+
+	it("restores the standard window when a club CLEARS its own", () => {
+		// The direction a "refresh only when the stored marks are the default"
+		// trigger cannot handle, and the reason the trigger is identity instead.
+		const frozenClub = segment({
+			markGreen: 1,
+			markYellow: 1.75,
+			markRed: 2.5,
+		});
+		expect(marksOf(refreshTableTopicsMarks([frozenClub], null)[0])).toEqual({
+			green: 1,
+			yellow: 1.5,
+			red: 2,
+		});
+	});
+
+	it("leaves an over-ceiling or inverted row on the standard window", () => {
+		// `resolveTableTopicsMarks` is fail-safe, and this inherits that: a row a
+		// script wrote past the cap must not reach the Timer's card through here.
+		for (const bad of [
+			{ minSeconds: 60, maxSeconds: 99999 },
+			{ minSeconds: 150, maxSeconds: 60 },
+			{ minSeconds: 60, maxSeconds: null },
+		]) {
+			expect(marksOf(refreshTableTopicsMarks([segment()], bad)[0])).toEqual({
+				green: 1,
+				yellow: 1.5,
+				red: 2,
+			});
+		}
+	});
+
+	it("touches ONLY the segment — not the vote, the hand-off, or another role", () => {
+		// The run of show gives THREE beats `table_topics_master` and `beatSeed`
+		// labels all three "Table Topics Master", so neither the key nor the label
+		// identifies the row. What separates them is that only the segment CARRIES
+		// MARKS — verified against a real materialised template, which holds three
+		// rows with that key and one with marks.
+		const beats = [
+			segment(),
+			// The Best Table Topics vote: same key and label, no marks.
+			beat({
+				sortOrder: 1,
+				kind: "role",
+				label: "Table Topics Master",
+				roleKey: "table_topics_master",
+			}),
+			// The GE hand-off: same again.
+			beat({
+				sortOrder: 2,
+				kind: "role",
+				label: "Table Topics Master",
+				roleKey: "table_topics_master",
+				handoff: true,
+			}),
+			// A different role that DOES carry marks — the evaluation window.
+			beat({
+				sortOrder: 3,
+				kind: "role",
+				label: "Evaluator",
+				roleKey: "evaluator",
+				markGreen: 2,
+				markYellow: 2.5,
+				markRed: 3,
+			}),
+		];
+		const out = refreshTableTopicsMarks(beats, MCF);
+		expect(marksOf(out[0])).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+		expect(marksOf(out[1])).toEqual({
+			green: null,
+			yellow: null,
+			red: null,
+		});
+		expect(marksOf(out[2])).toEqual({
+			green: null,
+			yellow: null,
+			red: null,
+		});
+		expect(marksOf(out[3])).toEqual({ green: 2, yellow: 2.5, red: 3 });
+		// Everything else about the segment survives — this rewrites three fields,
+		// not the row.
+		expect({ ...out[0], ...FROZEN_STANDARD }).toEqual(segment());
+	});
+
+	it("does not INVENT marks on a row that has none", () => {
+		// `addAgendaRow` writes null marks, so an officer who adds a row and points
+		// it at the Table Topics Master must not watch a timer card appear — and an
+		// officer who deliberately cleared all three (legal: `assertMarks` allows 0
+		// or 3) must not watch them come back.
+		const cleared = segment({
+			markGreen: null,
+			markYellow: null,
+			markRed: null,
+		});
+		expect(marksOf(refreshTableTopicsMarks([cleared], MCF)[0])).toEqual({
+			green: null,
+			yellow: null,
+			red: null,
+		});
+	});
+
+	it("ignores a PARTIAL mark set, one clause at a time", () => {
+		// The predicate tests all three columns separately, so a fixture that nulls
+		// all three leaves any ONE of the clauses deletable with the suite green.
+		// Each case below is the only thing excluding its row.
+		//
+		// Reachable rather than theoretical: `assertMarks` allows 0 or 3 on the
+		// write path, but these rows predate it and a script writes what it likes.
+		// `resolveMarks` collapses a partial set to null, so refreshing one would
+		// mean the editor showing a timer card the printed sheet does not.
+		for (const hole of ["markGreen", "markYellow", "markRed"] as const) {
+			const partial = segment({ [hole]: null });
+			expect(
+				marksOf(refreshTableTopicsMarks([partial], MCF)[0]),
+				`${hole} alone must exclude the row`,
+			).toEqual(marksOf(partial));
+		}
+	});
+
+	it("ignores a SECTION row that happens to carry the key", () => {
+		const band = segment({ kind: "section", label: "TABLE TOPICS" });
+		expect(marksOf(refreshTableTopicsMarks([band], MCF)[0])).toEqual({
+			green: 1,
+			yellow: 1.5,
+			red: 2,
+		});
+	});
+
+	it("reaches the printed rows through resolveAgendaRows", () => {
+		// The seam every render surface actually uses. The unit assertions above
+		// prove the transform; this proves it is WIRED, which is the half #443
+		// shipped wrong twice — a correct derivation nothing called.
+		const rows = resolveAgendaRows({
+			geIntroducesFunctionaries: false,
+			tableTopicsLimits: MCF,
+			template: { beats: [segment()], roles: TTM_ROLES },
+			slots: [slot("table_topics_master", "Table Topics Master", 0, "Ada")],
+		});
+		expect(rows[0]?.marks).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
+
+		// PRE-FIX CONTROL: the same call with the club's window omitted from the
+		// template branch is what shipped, and it printed the frozen 1/1.5/2.
+		// Without this the assertion above could pass on a fixture that happened
+		// to be frozen at the club's numbers already.
+		expect(
+			buildTemplateRows([segment()], TTM_ROLES, [
+				slot("table_topics_master", "Table Topics Master", 0, "Ada"),
+			])[0]?.marks,
+		).toEqual({ green: 1, yellow: 1.5, red: 2 });
 	});
 });

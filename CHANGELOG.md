@@ -2,6 +2,19 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.32.0.0] - 2026-09-03
+
+### Changed
+
+- **Your Table Topics window now follows the club, on every meeting, the moment you change it.** Before this, opening a meeting's agenda editor froze your speaking limits into that meeting: change the window afterwards in Club settings and the agenda, the projected deck and the on-screen run sheet kept the old numbers, while the Timer's printed role sheet — which always reads the live setting — printed the new ones. One packet, two different windows, stapled together. Every surface now reads the same current setting. **If you had hand-set the green/yellow/red marks on a specific meeting's Table Topics row, that meeting will switch to your club's window the next time it renders.**
+- The agenda editor no longer offers three number boxes on that one row. It shows the window as clocks — "Green 1:00 · Yellow 1:53 · Red 2:45" — with a link to Club settings, because an edit there was being accepted and then discarded by everything that prints. Every other row's timing boxes are unchanged.
+
+### Fixed
+
+- **The timing boxes in the agenda editor accepted half minutes again.** They had refused anything but a whole number, which is wrong for this app: an evaluation row's yellow mark is 2:30, and the app stores exactly that. So typing 2.5 was rejected, and — worse — deleting a row with a half-minute mark and clicking **Undo** put an empty placeholder row back and then failed, losing the row you were trying to recover. Undo now restores every field it took.
+- The Table Topics limits on Club settings say what is wrong under the field that is wrong, not only in a message that disappears. The field is marked for screen readers, the sentence is tied to it, and it clears when you fix it — including when the fix is in the *other* box, for the two rules that are about the pair rather than one number.
+- A club's Table Topics limits can no longer be stored in a broken state by anything, including a script or a direct database edit. Only one of the two bounds, a maximum below the minimum, a negative, or anything over 10:00 is now refused by the database itself, not just by the form.
+
 ## [1.31.0.0] - 2026-09-03
 
 ### Added

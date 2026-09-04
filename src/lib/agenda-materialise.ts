@@ -9,8 +9,8 @@ import type { TableTopicsLimits } from "./table-topics-limits";
  * ```
  * buildRunOfShow({ geIntroducesFunctionaries, tableTopicsLimits })
  *         |  22 beats, or 23 on the GE variant — carrying the CLUB's variant
- *         |  AND its Table Topics marks, which are SNAPSHOTTED below rather
- *         |  than re-derived at render time (#443)
+ *         |  AND its Table Topics marks, SNAPSHOTTED below as the row's initial
+ *         |  value (#443) and re-derived at render since #679
  *         v
  *   drop the gating   <- D1: a row stays until deleted, so the gate is
  *         |               evaluated ONCE, here, and never again
@@ -73,11 +73,13 @@ export function materialiseRunOfShow(
 	 * OUR window into the club's own rows, permanently — a club that later sets
 	 * its rule sees nothing change on any surface, deck included.
 	 *
-	 * Known limitation, stated rather than hidden: this snapshots at
-	 * materialisation time. A club that edits its window AFTER materialising
-	 * keeps the frozen marks until the template's Table Topics row is edited.
-	 * Re-deriving stored marks at render time is the fix and is out of scope
-	 * here — see the follow-up issue.
+	 * The snapshot is now the row's INITIAL value only. #679 closed the stale
+	 * half: `refreshTableTopicsMarks` (`agenda-template-rows.ts`) re-derives this
+	 * one row's marks from the club's current window at every render, so a club
+	 * that edits its window after materialising no longer keeps the frozen
+	 * numbers. Passing the club's window here still matters — the stored row
+	 * should be right on the day it is written, and it is what a template COPY
+	 * (`copyTemplateForMeeting`) carries forward.
 	 */
 	tableTopicsLimits: TableTopicsLimits | null,
 ): TemplateBeatSeed[] {

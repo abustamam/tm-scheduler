@@ -8,7 +8,11 @@
  * stubbed rather than bypassed — see the second describe.
  */
 import { describe, expect, it, vi } from "vitest";
-import { RENDER_CAPS } from "#/server/role-sheet-layout";
+import {
+	RENDER_CAPS,
+	sheetScripts,
+	standardTimingRows,
+} from "#/server/role-sheet-layout";
 
 /** What the stubbed database is holding for the current test. */
 const stored = vi.hoisted(() => ({
@@ -211,6 +215,87 @@ describe("renderRoleSheetPdf bounds what the public route renders (#519)", () =>
 		expect(fill.roleNames?.grammarian).toBe("Grammarian");
 		expect(fill.roleNames?.toastmaster_of_the_day).toBe("Toastmaster");
 		expect(text.startsWith("%PDF-")).toBe(true);
+	});
+
+	/**
+	 * #443's window through the REAL loader, for the reason the test above it
+	 * gives about role names — and it was missing (#679).
+	 *
+	 * `role-sheet-layout.test.ts` proves the Timer's table and spoken script both
+	 * move when they are HANDED a window; the only thing standing between that
+	 * and the printed sheet was four `toContain` string greps in
+	 * `table-topics-limits-wiring.guard.test.ts`. A grep sees the columns being
+	 * selected and the fill naming them; it cannot see the two being wired to each
+	 * other, so swapping min and max here would have passed every gate and printed
+	 * red before green.
+	 */
+	it("carries the club's Table Topics window from the database onto the fill", async () => {
+		stored.row = {
+			clubName: "Harborlight",
+			scheduledAt: new Date("2026-07-23T01:00:00Z"),
+			timezone: "America/Chicago",
+			wordOfTheDay: null,
+			wodDefinition: null,
+			// MCF's rule: 1:00–2:30.
+			tableTopicsMinSeconds: 60,
+			tableTopicsMaxSeconds: 150,
+		};
+		stored.program = [];
+		stored.roleDefs = [];
+
+		const fill = await loadRoleSheetFill("meeting-1");
+		// ABSOLUTE seconds, and NOT `toEqual(stored.row)` — the two columns are
+		// interchangeable by type, so an assertion that compares the object to
+		// itself cannot see them swapped.
+		expect(fill.tableTopicsLimits?.minSeconds).toBe(60);
+		expect(fill.tableTopicsLimits?.maxSeconds).toBe(150);
+
+		// And through the builder the route actually calls, since a fill the
+		// document ignores is the failure #443 shipped once already. ABSOLUTE
+		// clocks: 1:00 / 1:45 / 2:30, with the pre-fix 2:00 named as the negative.
+		const rows = standardTimingRows(fill.tableTopicsLimits);
+		expect(rows.find((r) => r[0] === "Table Topics")).toEqual([
+			"Table Topics",
+			"1:00",
+			"1:45",
+			"2:30",
+			"1:00–2:30",
+		]);
+		const says = sheetScripts(fill.roleNames, fill.tableTopicsLimits)
+			.timer.map((c) => c.say)
+			.join(" | ");
+		expect(says).toContain("For Table Topics: green at 1:00");
+		expect(says).toContain("red at 2:30");
+		expect(says, "the standard window must be gone").not.toContain(
+			"red at 2:00",
+		);
+	});
+
+	it("leaves the fill on the standard window when the club states nothing", async () => {
+		// The vacuity control for the case above: a loader that hardcoded MCF's
+		// numbers would pass it. Null columns must arrive as null, not as zeros.
+		stored.row = {
+			clubName: "Harborlight",
+			scheduledAt: new Date("2026-07-23T01:00:00Z"),
+			timezone: "America/Chicago",
+			wordOfTheDay: null,
+			wodDefinition: null,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
+		};
+		stored.program = [];
+		stored.roleDefs = [];
+
+		const fill = await loadRoleSheetFill("meeting-1");
+		expect(fill.tableTopicsLimits).toEqual({
+			minSeconds: null,
+			maxSeconds: null,
+		});
+		expect(
+			standardTimingRows(fill.tableTopicsLimits).find(
+				(r) => r[0] === "Table Topics",
+			),
+		).toEqual(["Table Topics", "1:00", "1:30", "2:00", "0:30–2:30"]);
 	});
 
 	it("caps a stored role name before it reaches the renderer", async () => {

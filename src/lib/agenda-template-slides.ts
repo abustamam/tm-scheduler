@@ -125,9 +125,19 @@ export function beatTimingText(
 		green: formatTimingClock(row.marks.green),
 		yellow: formatTimingClock(row.marks.yellow),
 		red: formatTimingClock(row.marks.red),
-		// FROZEN marks, not the club's current columns: a templated row renders
-		// what was snapshotted into it, and the room is holding paper built from
-		// the same rows.
+		// The ROW's marks, which for this segment are the club's CURRENT window
+		// since #679 — `resolveAgendaRows` re-derives them on the way here, so the
+		// wall and the paper the room is holding are the same derivation from the
+		// same source. This comment said "FROZEN marks, not the club's current
+		// columns" and stayed true only until that landed; the file was not touched
+		// by the change, so nothing prompted a re-read. Reading the row rather than
+		// the club columns is still the right call and is now also correct: it
+		// keeps this function a pure function of its argument.
+		//
+		// `ownRule` needs no marks-provenance test of its own. The early return
+		// above means `row.marks` is non-null, which with the roleKey match is
+		// exactly `isTableTopicsSegment` — so the club's hard cap is labelled as
+		// the rule for precisely the rows whose marks the club owns.
 		qualifies: ownRule
 			? formatTableTopicsWindow(row.marks)
 			: (window as QualifyingWindow).range,

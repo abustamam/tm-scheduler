@@ -30,6 +30,20 @@ export {
 	verification,
 } from "./auth-schema";
 
+// One number, one declaration. `clubs`'s Table Topics CHECK interpolates the
+// ceiling rather than writing 600 into the SQL, so the constraint and every
+// application layer cannot state different limits. `table-topics-limits.ts`
+// imports nothing at runtime (its one import is `import type`), so this pulls
+// no module graph into the two standalone bundles that gate a container start
+// (`.output/seed-catalog.mjs` and `.output/seed-templates.mjs`) or into
+// drizzle-kit's own schema read — `table-topics-limits-wiring.guard.test.ts`
+// holds that.
+//
+// RELATIVE, against CLAUDE.md's `#/*` preference, and deliberately: this file is
+// read by drizzle-kit outside the app's module resolution, where the
+// `package.json` `imports` alias is not guaranteed to resolve. Every other
+// import in this file is relative for the same reason.
+import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";
 // user is re-exported above for Better-Auth; imported here for people.userId and
 // notifications foreign keys (the person-level auth link — ADR-0008 Phase B).
 import { user } from "./auth-schema";
@@ -213,79 +227,145 @@ export const duesStatusEnum = pgEnum("dues_status", ["paid", "waived"]);
 // Clubs & memberships
 // ---------------------------------------------------------------------------
 
-export const clubs = pgTable("clubs", {
-	id: uuid("id").defaultRandom().primaryKey(),
-	name: text("name").notNull(),
-	slug: text("slug").notNull().unique(),
-	clubNumber: text("club_number").unique(),
-	timezone: text("timezone").notNull().default("America/Chicago"),
-	// Free-text club profile fields shown on the printable agenda. All nullable —
-	// empty/unset is valid and the agenda falls back gracefully (no empty labels).
-	// district: display label only (e.g. "District 39"); mission: free text, may be
-	// multi-line; meetingSchedule: human-readable (e.g. "2nd & 4th Thursday, 6:45–7:45 PM").
-	district: text("district"),
-	mission: text("mission"),
-	meetingSchedule: text("meeting_schedule"),
-	// Default international dialing code (e.g. "+1") applied to member/guest phone
-	// numbers that lack one, so the tap-to-nudge WhatsApp link (#37) is a valid
-	// full E.164 number. Nullable — unset means numbers without a country code
-	// simply don't get a WhatsApp link (#295).
-	defaultCountryCode: text("default_country_code"),
-	// Default meeting length in minutes. New meetings inherit this at insert
-	// (copied onto the meeting row) so a later change here never silently moves
-	// the end time of meetings already scheduled. Non-null with a sensible
-	// default (90) — most clubs run 60- or 90-minute meetings.
-	defaultMeetingMinutes: integer("default_meeting_minutes")
-		.notNull()
-		.default(90),
-	// The club's own Table Topics speaking limits (#443), in SECONDS, nullable
-	// because most clubs run the standard 1–2 minute window and should not have
-	// to state it. Null on either column means "not stated" and every surface
-	// falls back to `TABLE_TOPICS_MARKS` — see `#/lib/table-topics-limits`, which
-	// owns the fallback and every derivation from these two numbers.
-	//
-	// SECONDS, not the float minutes `TimingMarks` uses, because the rule this
-	// exists to express is 2:30 and a club admin should type minutes-and-seconds
-	// rather than "2.5". MCF's printed agenda writes that cap as "2.3 min", which
-	// rounded into float minutes would silently store 2:18.
-	//
-	// There is deliberately no third column for the disqualification threshold:
-	// it is one second past the cap, derived at render time, so an admin editing
-	// the cap can never leave a stale DQ number behind it.
-	tableTopicsMinSeconds: integer("table_topics_min_seconds"),
-	tableTopicsMaxSeconds: integer("table_topics_max_seconds"),
-	// Club-level reminder settings (#274 — the reminders control layer). Two
-	// scalar knobs the admin/VP-Education sets on /admin/club-settings; the role-
-	// reminder producer (#272) reads them. `reminder_enabled` gates whether the
-	// club sends role reminders at all; `reminder_lead_time_days` is how many days
-	// before a meeting to remind slot holders. Both non-null. `reminder_enabled`
-	// defaults FALSE — role reminders are opt-in per club (soft launch): a club
-	// turns them on from /admin/club-settings once ready, and the 0036 migration
-	// flips every existing club off. `reminder_lead_time_days` defaults 3. Modeled
-	// as columns on `clubs` (like `default_meeting_minutes`), not a 1:1 table: they
-	// are two scalars with universal defaults, unlike the multi-field,
-	// check-constrained `club_meeting_recurrence`.
-	reminderEnabled: boolean("reminder_enabled").notNull().default(false),
-	reminderLeadTimeDays: integer("reminder_lead_time_days").notNull().default(3),
-	// The one axis of per-club variance in the generated run-of-show (#367).
-	// FALSE (the default, and the standard Toastmasters flow) means the
-	// Toastmaster of the Day introduces the functionaries at the top of the
-	// meeting, each explaining their own role. TRUE is MCF's variant, where the
-	// General Evaluator introduces them instead. Nothing else about the agenda
-	// depends on it — the GE's closing sequence (evaluate the evaluators → call
-	// for the functionary reports → overall evaluation) is the same either way.
-	// Read by `buildRunOfShow` (printed agenda) and `buildSlideDeck` (deck).
-	geIntroducesFunctionaries: boolean("ge_introduces_functionaries")
-		.notNull()
-		.default(false),
-	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
-	// Reversible: unarchive clears it. Archiving retains all club data untouched
-	// and blocks every access path except the superadmin console. This comment used
-	// to enumerate the enforcement points and was wrong twice (#544, #560) — see
-	// `isClubArchived` (`src/lib/club-archive.ts`) for the one canonical list.
-	archivedAt: timestamp("archived_at"),
-	createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const clubs = pgTable(
+	"clubs",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		name: text("name").notNull(),
+		slug: text("slug").notNull().unique(),
+		clubNumber: text("club_number").unique(),
+		timezone: text("timezone").notNull().default("America/Chicago"),
+		// Free-text club profile fields shown on the printable agenda. All nullable —
+		// empty/unset is valid and the agenda falls back gracefully (no empty labels).
+		// district: display label only (e.g. "District 39"); mission: free text, may be
+		// multi-line; meetingSchedule: human-readable (e.g. "2nd & 4th Thursday, 6:45–7:45 PM").
+		district: text("district"),
+		mission: text("mission"),
+		meetingSchedule: text("meeting_schedule"),
+		// Default international dialing code (e.g. "+1") applied to member/guest phone
+		// numbers that lack one, so the tap-to-nudge WhatsApp link (#37) is a valid
+		// full E.164 number. Nullable — unset means numbers without a country code
+		// simply don't get a WhatsApp link (#295).
+		defaultCountryCode: text("default_country_code"),
+		// Default meeting length in minutes. New meetings inherit this at insert
+		// (copied onto the meeting row) so a later change here never silently moves
+		// the end time of meetings already scheduled. Non-null with a sensible
+		// default (90) — most clubs run 60- or 90-minute meetings.
+		defaultMeetingMinutes: integer("default_meeting_minutes")
+			.notNull()
+			.default(90),
+		// The club's own Table Topics speaking limits (#443), in SECONDS, nullable
+		// because most clubs run the standard 1–2 minute window and should not have
+		// to state it. Null on either column means "not stated" and every surface
+		// falls back to `TABLE_TOPICS_MARKS` — see `#/lib/table-topics-limits`, which
+		// owns the fallback and every derivation from these two numbers.
+		//
+		// SECONDS, not the float minutes `TimingMarks` uses, because the rule this
+		// exists to express is 2:30 and a club admin should type minutes-and-seconds
+		// rather than "2.5". MCF's printed agenda writes that cap as "2.3 min", which
+		// rounded into float minutes would silently store 2:18.
+		//
+		// There is deliberately no third column for the disqualification threshold:
+		// it is one second past the cap, derived at render time, so an admin editing
+		// the cap can never leave a stale DQ number behind it.
+		tableTopicsMinSeconds: integer("table_topics_min_seconds"),
+		tableTopicsMaxSeconds: integer("table_topics_max_seconds"),
+		// Club-level reminder settings (#274 — the reminders control layer). Two
+		// scalar knobs the admin/VP-Education sets on /admin/club-settings; the role-
+		// reminder producer (#272) reads them. `reminder_enabled` gates whether the
+		// club sends role reminders at all; `reminder_lead_time_days` is how many days
+		// before a meeting to remind slot holders. Both non-null. `reminder_enabled`
+		// defaults FALSE — role reminders are opt-in per club (soft launch): a club
+		// turns them on from /admin/club-settings once ready, and the 0036 migration
+		// flips every existing club off. `reminder_lead_time_days` defaults 3. Modeled
+		// as columns on `clubs` (like `default_meeting_minutes`), not a 1:1 table: they
+		// are two scalars with universal defaults, unlike the multi-field,
+		// check-constrained `club_meeting_recurrence`.
+		reminderEnabled: boolean("reminder_enabled").notNull().default(false),
+		reminderLeadTimeDays: integer("reminder_lead_time_days")
+			.notNull()
+			.default(3),
+		// The one axis of per-club variance in the generated run-of-show (#367).
+		// FALSE (the default, and the standard Toastmasters flow) means the
+		// Toastmaster of the Day introduces the functionaries at the top of the
+		// meeting, each explaining their own role. TRUE is MCF's variant, where the
+		// General Evaluator introduces them instead. Nothing else about the agenda
+		// depends on it — the GE's closing sequence (evaluate the evaluators → call
+		// for the functionary reports → overall evaluation) is the same either way.
+		// Read by `buildRunOfShow` (printed agenda) and `buildSlideDeck` (deck).
+		geIntroducesFunctionaries: boolean("ge_introduces_functionaries")
+			.notNull()
+			.default(false),
+		// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
+		// Reversible: unarchive clears it. Archiving retains all club data untouched
+		// and blocks every access path except the superadmin console. This comment used
+		// to enumerate the enforcement points and was wrong twice (#544, #560) — see
+		// `isClubArchived` (`src/lib/club-archive.ts`) for the one canonical list.
+		archivedAt: timestamp("archived_at"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// The Table Topics window's invariants, in the database (#679).
+		//
+		// They already hold in zod on the write path and are re-checked by
+		// `hasTableTopicsLimits` before anything renders, so a bad row degrades to
+		// the standard window rather than to a wrong one. What neither layer
+		// reaches is a writer that never sees them: a seed script, a support data
+		// fix, a bulk import. `(60, NULL)`, `(150, 60)` and `(0, 99999)` were all
+		// storable, and a stored-but-ignored row is its own failure — an admin who
+		// asked for 2:30, sees 2:30 in the form on reload, and gets 1:00–2:00 on
+		// every printed sheet with nothing anywhere saying why.
+		//
+		// **Why this is safe to add VALIDATING, stated correctly.** An earlier
+		// version of this comment said "every existing row has both columns NULL",
+		// which is FALSE and contradicted the paragraph above it: v1.31.0.0 shipped
+		// the columns AND the admin form in the same release, so a club can already
+		// have stored a window. The real argument is that the shipped zod accept
+		// set (`.int().min(0).max(600).nullable()` plus both-or-neither and
+		// max > min) is EXACTLY this predicate, so no row the application wrote can
+		// violate it. That matters because `ADD CONSTRAINT` without `NOT VALID`
+		// scans the table, and the runner is the container's start command
+		// (`node .output/migrate.mjs && node .output/server/index.mjs`) — a
+		// violating row does not degrade the deploy, it stops the server booting.
+		// Measured at 9.8ms over 100,000 rows, so the scan itself is free.
+		//
+		// The generalisation worth keeping: this reasoning holds ONLY while the
+		// constraint is no narrower than the validation already shipped. Adding one
+		// that is narrower needs the offending rows found first —
+		//   select count(*) from clubs where not (<predicate>);
+		// — because the failure mode is a deploy that fails closed, not a stale page.
+		// LOWERING `MAX_TABLE_TOPICS_SECONDS` is exactly that case; see the note on
+		// the constant.
+		//
+		// A CHECK fails only on FALSE — NULL passes — so the shape matters.
+		// `(a IS NULL) = (b IS NULL)` is a comparison of two booleans and is never
+		// NULL, and the second conjunct short-circuits on `max IS NULL`; a
+		// half-stated row makes the first conjunct FALSE, and `FALSE AND NULL` is
+		// FALSE, so no arm can evaluate to NULL and slip through.
+		//
+		// `>= 0` and the ceiling are here as well as the ordering because
+		// `hasTableTopicsLimits` refuses both and the whole point is that this
+		// stops a row it would have had to refuse from existing at all. The
+		// ceiling is INTERPOLATED from `MAX_TABLE_TOPICS_SECONDS` rather than
+		// typed as 600 — the sibling `club_meeting_recurrence` checks write their
+		// bounds as literals with the constant named only in a comment, which is
+		// exactly the drift this repo keeps finding.
+		check(
+			"clubs_table_topics_window_check",
+			sql`(
+				(${t.tableTopicsMinSeconds} IS NULL) = (${t.tableTopicsMaxSeconds} IS NULL)
+				AND (
+					${t.tableTopicsMaxSeconds} IS NULL
+					OR (
+						${t.tableTopicsMinSeconds} >= 0
+						AND ${t.tableTopicsMaxSeconds} > ${t.tableTopicsMinSeconds}
+						AND ${t.tableTopicsMaxSeconds} <= ${sql.raw(String(MAX_TABLE_TOPICS_SECONDS))}
+					)
+				)
+			)`,
+		),
+	],
+);
 
 // ---------------------------------------------------------------------------
 // Standing meeting-recurrence rule (#190). A per-club, OPEN-ENDED schedule rule
