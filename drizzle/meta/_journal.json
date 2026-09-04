@@ -484,6 +484,13 @@
       "when": 1788456609679,
       "tag": "0068_cooing_mimic",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1788472726556,
+      "tag": "0069_vengeful_the_order",
+      "breakpoints": true
     }
   ]
 }
