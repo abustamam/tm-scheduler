@@ -358,6 +358,28 @@ the nouns in `src/db/schema.ts`.
   (`table_topics_speakers`), captured as an ordered list of member-or-guest (XOR) + optional
   topic text. Distinct from the **Table Topics Master** role (the role definition that runs the
   segment). See ADR-0014.
+- **Table Topics window** — the club's own speaking limits for the Table Topics segment
+  (`clubs.table_topics_min_seconds` / `_max_seconds`, #443), in SECONDS because the rule a club
+  states is "2:30" and float minutes would round it. **Both columns or neither**: either NULL
+  means the club has stated nothing and every surface falls back to the standard 1–2 minute
+  window. `#/lib/table-topics-limits` owns the fallback and all four derivations
+  (`hasTableTopicsLimits`, `resolveTableTopicsMarks`, `formatTableTopicsTiming`,
+  `formatTableTopicsWindow`); nothing re-derives them locally. Since #679 the invariants are also
+  a DB `CHECK` (`clubs_table_topics_window_check`), so a script writing directly cannot store a
+  half-stated, inverted, negative or over-ceiling pair.
+  Two things about it are easy to get wrong. **The window is a CLUB rule, not per-meeting data.**
+  Materialising a meeting's agenda template freezes the marks into
+  `meeting_template_beats.mark_*`, and until #679 that snapshot was what rendered — so a club that
+  edited its window afterwards kept the old numbers on the agenda while the Timer's printed role
+  sheet, which reads the live columns, printed the new ones. `refreshTableTopicsMarks`
+  (`agenda-template-rows.ts`) now re-derives that ONE row at render, applied at the two seams that
+  hold a club (`resolveAgendaRows` and `loadAgendaDraft`); the agenda editor shows that row.s window as
+  read-only clock text, with a link to Club settings, rather than accepting an edit
+  the render path would discard. **And the cap is
+  a hard one, unlike a speech's.** A club that states its own window gets no ±30s qualifying
+  grace: "2:30 maximum · 2:31+ disqualified" is what the deck projects and what the Timer's sheet
+  prints. The graced form survives only for a club that has stated nothing, including on the
+  committed blank role sheets, which serve every club and so cannot adopt one club's rule.
 - **Award** — a meeting's ribbon winner (`meeting_awards`): Best Speaker, Best Evaluator, or Best
   Table Topics, each an optional member-or-guest (XOR). Set directly by an admin, or confirmed by
   the Ballot Counter from a **Digital vote**. See ADR-0014.
