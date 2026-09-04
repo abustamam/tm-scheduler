@@ -935,12 +935,15 @@ export const officerTrainingRecords = pgTable(
 			t.programYear,
 			t.period,
 		),
-		// The read path is always "this club, this program year", resolved through
-		// the membership join.
-		index("officer_training_records_year_idx").on(
-			t.membershipId,
-			t.programYear,
-		),
+		// NO separate (membership_id, program_year) index. The unique index above
+		// already leads on `membership_id`, which is how both readers reach these
+		// rows (a nested loop from `members` on `club_id`), and Postgres applies
+		// `program_year` as a non-contiguous qual on the SAME index — verified by
+		// EXPLAIN with the extra index dropped inside a transaction: identical
+		// plan, identical two-column `Index Cond`, cost 8.17 vs 8.19. A membership
+		// holds at most 7 offices x 2 periods = 14 rows per year, so there is no
+		// cardinality at which the two diverge, and the second index would cost a
+		// write on every upsert to filter a 14-row scan.
 		check("officer_training_records_period_check", sql`${t.period} in (1, 2)`),
 	],
 );

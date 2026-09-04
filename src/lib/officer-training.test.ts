@@ -9,6 +9,7 @@
  * below reads a constant from the module to build its own expectation.
  */
 import { describe, expect, it } from "vitest";
+import { goalByKey } from "./dcp";
 import {
 	countTrainedOfficers,
 	daysBetween,
@@ -22,14 +23,20 @@ import {
 	isPeriodMet,
 	isTrainablePosition,
 	isTrainingPeriod,
+	isWindowOrderValid,
 	suggestG9,
 	TRAINABLE_OFFICER_POSITIONS,
 	TRAINED_OFFICERS_REQUIRED,
+	TRAINING_GOAL_KEY,
 	TRAINING_PERIODS,
 	type TrainingRecordLike,
 	tallyPeriod,
 	todayIso,
+	trainingAppliedMessage,
+	trainingApplyLabel,
 	trainingPeriodLabel,
+	trainingProgramYearForDate,
+	trainingSuggestionNote,
 	untrainedSeats,
 	windowPhase,
 } from "./officer-training";
@@ -183,6 +190,125 @@ describe("daysUntilClose", () => {
 	it("is negative when the target is in the past", () => {
 		expect(daysBetween("2026-09-01", "2026-08-31")).toBe(-1);
 	});
+
+	it("counts to the END of a window that has not opened yet", () => {
+		// The deadline the club is racing is the CLOSE, not the open. Returning
+		// days-until-OPEN instead was green across all three suites: the unit tests
+		// only probed dates inside the window, the integration test asserted the
+		// upcoming PHASE but not its number, and the panel takes the number as a
+		// literal prop.
+		// 2026-05-01 → 2026-08-31 is 122 days.
+		expect(daysUntilClose(P1_2026, "2026-05-01")).toBe(122);
+		expect(daysUntilClose(P1_2026, "2026-05-31")).toBe(92);
+	});
+});
+
+describe("trainingProgramYearForDate", () => {
+	// The whole point: it differs from `programYearForDate` in exactly one month.
+	it("names the NEXT program year through the whole of June", () => {
+		// Jun 15 2027 sits inside period 1 of program year 2027
+		// (2027-06-01..2027-08-31), while currentProgramYear() still says 2026,
+		// whose windows both closed months earlier. Pinning the panel to the
+		// latter showed "Closed / Closed" in the month officers are trained.
+		expect(trainingProgramYearForDate(new Date(2027, 5, 15))).toBe(2027);
+		expect(trainingProgramYearForDate(new Date(2027, 5, 1))).toBe(2027);
+		expect(trainingProgramYearForDate(new Date(2027, 5, 30))).toBe(2027);
+	});
+
+	it("agrees with the program year in every other month", () => {
+		// July–December → that calendar year.
+		expect(trainingProgramYearForDate(new Date(2027, 6, 1))).toBe(2027);
+		expect(trainingProgramYearForDate(new Date(2027, 11, 31))).toBe(2027);
+		// January–May → the previous one. March–May genuinely have no open
+		// window, so reading them as the old year is correct, not a gap.
+		expect(trainingProgramYearForDate(new Date(2027, 0, 1))).toBe(2026);
+		expect(trainingProgramYearForDate(new Date(2027, 1, 28))).toBe(2026);
+		expect(trainingProgramYearForDate(new Date(2027, 4, 31))).toBe(2026);
+	});
+
+	it("returns a year whose period 1 window actually contains the date", () => {
+		// Stated as the property rather than as a formula, so a re-derivation that
+		// happens to produce the same numbers for the cases above still has to be
+		// right about the thing that matters.
+		const june = new Date(2027, 5, 15);
+		const py = trainingProgramYearForDate(june);
+		expect(windowPhase(defaultTrainingWindow(py, 1), todayIso(june))).toBe(
+			"open",
+		);
+	});
+});
+
+describe("isWindowOrderValid", () => {
+	it("accepts an in-order window, including a single day", () => {
+		expect(isWindowOrderValid("2026-06-01", "2026-08-31")).toBe(true);
+		expect(isWindowOrderValid("2026-06-01", "2026-06-01")).toBe(true);
+	});
+
+	it("rejects a back-to-front window", () => {
+		expect(isWindowOrderValid("2026-08-31", "2026-06-01")).toBe(false);
+	});
+
+	it("rejects an EMPTY bound — the half a bare comparison gets wrong", () => {
+		// `"2026-08-31" < ""` is FALSE, so a plain `endsOn < startsOn` called a
+		// cleared start date VALID and left the form's Save button live on a
+		// request the server always rejects, with a raw ZodError as the toast.
+		expect("2026-08-31" < "").toBe(false);
+		expect(isWindowOrderValid("", "2026-08-31")).toBe(false);
+		expect(isWindowOrderValid("2026-06-01", "")).toBe(false);
+		expect(isWindowOrderValid("", "")).toBe(false);
+	});
+});
+
+describe("the apply affordance's words", () => {
+	// These exist as functions precisely so this test can exist. As ternaries in
+	// the route they were unreachable: no test mounts a route, typecheck sees two
+	// strings either way, and mutation swapped the polarity with 150/150 green.
+	it("labels the button with the value the click will WRITE", () => {
+		expect(trainingApplyLabel(1)).toBe("Apply training records (mark met)");
+		expect(trainingApplyLabel(0)).toBe("Apply training records (mark not met)");
+	});
+
+	it("reports what was actually stored, matching polarity", () => {
+		expect(trainingAppliedMessage(1)).toBe(
+			"Goal 9 marked met from your officer training records.",
+		);
+		expect(trainingAppliedMessage(0)).toBe(
+			"Goal 9 set to not met from your officer training records.",
+		);
+	});
+
+	it("keeps the two labels distinct, so a swap cannot pass", () => {
+		expect(trainingApplyLabel(1)).not.toBe(trainingApplyLabel(0));
+		expect(trainingAppliedMessage(1)).not.toBe(trainingAppliedMessage(0));
+	});
+
+	it("puts period 1 FIRST in the badge — the order IS the information", () => {
+		// The badge is the only surface telling the club WHICH window is short.
+		expect(trainingSuggestionNote([4, 3])).toBe("Training: 4 and 3 of 4");
+		expect(trainingSuggestionNote([3, 4])).toBe("Training: 3 and 4 of 4");
+		expect(trainingSuggestionNote([4, 3])).not.toBe(
+			trainingSuggestionNote([3, 4]),
+		);
+	});
+
+	it("renders zeros for a missing period rather than 'undefined'", () => {
+		expect(trainingSuggestionNote([])).toBe("Training: 0 and 0 of 4");
+		expect(trainingSuggestionNote([2])).toBe("Training: 2 and 0 of 4");
+	});
+});
+
+describe("TRAINING_GOAL_KEY", () => {
+	it("really names the composite TRAINING goal in the DCP catalog", () => {
+		// The key is a second spelling of `DCP_GOALS[].key`, so this is what keeps
+		// the two honest. Without it a catalog renumber would leave the route
+		// picking the group by category and the row by this key — two selectors
+		// disagreeing — while `expect(TRAINING_GOAL_KEY).toBe("g9")` still passed.
+		const goal = goalByKey(TRAINING_GOAL_KEY);
+		expect(goal).toBeDefined();
+		expect(goal?.category).toBe("training");
+		expect(goal?.composite).toBe(true);
+		expect(goal?.target).toBe(1);
+	});
 });
 
 describe("formatIsoDate", () => {
@@ -196,9 +322,23 @@ describe("formatIsoDate", () => {
 		expect(formatIsoDate("2026-12-31")).toBe("Dec 31, 2026");
 	});
 
-	it("passes a non-ISO string through rather than rendering NaN", () => {
+	it("passes a SHAPE-invalid string through rather than rendering NaN", () => {
 		expect(formatIsoDate("not a date")).toBe("not a date");
-		expect(formatIsoDate("2026-13-01")).toBe("2026-13-01");
+		expect(formatIsoDate("")).toBe("");
+	});
+
+	it("overflow-rolls a shape-valid but impossible date, which is unreachable", () => {
+		// `formatCalendarDay`'s contract is "returns the input unchanged if it is
+		// not a plain date", where plain means the YYYY-MM-DD SHAPE — so
+		// `2026-13-01` is formatted, and `Date.UTC(2026, 12, 1)` rolls it into
+		// 2027. Asserted rather than hidden, because it differs from the
+		// hand-rolled formatter this replaced (which returned the input), and the
+		// difference is only acceptable because the value cannot get here:
+		// the default windows are code-derived, a stored bound comes from a
+		// Postgres `date` column which refuses month 13 outright, and
+		// `isoDateSchema` rejects calendar-invalid dates on the way in
+		// (`src/server/officer-training-logic.ts`, covered in its own suite).
+		expect(formatIsoDate("2026-13-01")).toBe("Jan 1, 2027");
 	});
 });
 
@@ -294,6 +434,94 @@ describe("countTrainedOfficers", () => {
 	it("is zero for an empty record set", () => {
 		expect(countTrainedOfficers([], 1)).toBe(0);
 		expect(countTrainedOfficers([], 2)).toBe(0);
+	});
+
+	// -----------------------------------------------------------------------
+	// The OTHER direction, which the distinct-people rule alone got wrong
+	// -----------------------------------------------------------------------
+
+	it("floors at distinct OFFICES, so four people on one office count 1", () => {
+		// TI: "credit is given only for one person per officer role." Four members
+		// each recorded as Secretary is ONE trained role, and counting distinct
+		// people alone read it as 4 and suggested goal 9 MET where TI credits one.
+		// That is the direction the conservative rule exists to prevent, and the
+		// panel's own copy asserted it could not happen.
+		const records = [
+			rec(ALICE, "secretary", 1),
+			rec(BOB, "secretary", 1),
+			rec(CARA, "secretary", 1),
+			rec(DAN, "secretary", 1),
+		];
+		expect(countTrainedOfficers(records, 1)).toBe(1);
+		expect(isPeriodMet(countTrainedOfficers(records, 1))).toBe(false);
+	});
+
+	it("reachable shape: outgoing and incoming President both trained in June", () => {
+		// Period 1 straddles the Jul 1 term change on purpose, so two Presidents
+		// legitimately both attend. TI credits the ROLE once.
+		const records = [
+			rec(ALICE, "president", 1),
+			rec(BOB, "president", 1),
+			rec(CARA, "vp_education", 1),
+			rec(DAN, "secretary", 1),
+		];
+		// Three roles, four people → 3.
+		expect(countTrainedOfficers(records, 1)).toBe(3);
+	});
+
+	it("takes the SMALLER of the two ceilings, whichever binds", () => {
+		// People-bound: 2 people over 3 offices → 2.
+		expect(
+			countTrainedOfficers(
+				[
+					rec(ALICE, "president", 1),
+					rec(ALICE, "secretary", 1),
+					rec(ALICE, "treasurer", 1),
+					rec(BOB, "vp_education", 1),
+				],
+				1,
+			),
+		).toBe(2);
+		// Office-bound: 3 people over 2 offices → 2.
+		expect(
+			countTrainedOfficers(
+				[
+					rec(ALICE, "president", 1),
+					rec(BOB, "president", 1),
+					rec(CARA, "secretary", 1),
+				],
+				1,
+			),
+		).toBe(2);
+	});
+
+	it("counts a DUPLICATED human twice, which no key here can prevent", () => {
+		// Recorded rather than fixed, and asserted so the limit is explicit rather
+		// than discovered later. `guards.ts` notes one human can hold two `members`
+		// rows in the same club — but only "through two Person rows", and
+		// `members_club_person_unique` on (club_id, person_id) makes membership and
+		// person 1:1 within a club. So a duplicated human counts twice under EITHER
+		// key, and the remedy is merging the two Person rows (`collapseMemberships`),
+		// not a different de-dup column. Adversarial review proposed keying on
+		// `person_id`; it would change nothing.
+		const dupA = "aaaa1111-1111-1111-1111-111111111111";
+		const dupB = "bbbb2222-2222-2222-2222-222222222222";
+		const records = [
+			rec(dupA, "secretary", 1),
+			rec(dupB, "treasurer", 1),
+			rec(CARA, "president", 1),
+			rec(DAN, "vp_education", 1),
+		];
+		expect(countTrainedOfficers(records, 1)).toBe(4);
+		// And after the merge collapses them to one membership, it reads 3 — which
+		// is the merge working, not the count having been wrong.
+		const merged = [
+			rec(dupA, "secretary", 1),
+			rec(dupA, "treasurer", 1),
+			rec(CARA, "president", 1),
+			rec(DAN, "vp_education", 1),
+		];
+		expect(countTrainedOfficers(merged, 1)).toBe(3);
 	});
 });
 

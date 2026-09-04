@@ -456,9 +456,16 @@ export type ApplyTrainingInput = z.infer<typeof applyTrainingSchema>;
  * It CAN write a 0, which clears a hand-entered Met, and that is deliberate: the
  * President is accepting what the records say, and the alternative (an apply that
  * silently refuses to lower a value) would leave the scoreboard disagreeing with
- * the panel beside it. What stops it happening by accident is upstream — the UI
- * only offers the action once `derivedTraining.hasRecords` is true, and the
- * button names the value it will write.
+ * the panel beside it.
+ *
+ * What it must NOT do is write a 0 on no evidence. `hasRecords` is asserted HERE
+ * and not only in the UI: the button is hidden without records, but a stale tab,
+ * a replayed POST or any direct call would otherwise clear a President's manual
+ * Met for a club that has recorded nothing. That is the #573 shape CLAUDE.md
+ * records — a one-tap action wired to a write whose floor was optional — except
+ * that here the floor was absent server-side entirely while
+ * `deriveTrainingSuggestion` already returned the fact and this function
+ * destructured it away.
  */
 export async function applyTrainingSuggestion(
 	input: ApplyTrainingInput,
@@ -466,7 +473,15 @@ export async function applyTrainingSuggestion(
 ): Promise<DcpScoreboardView> {
 	const { clubId, programYear } = input;
 	await requireScoreboard(clubId, programYear);
-	const { suggestion } = await deriveTrainingSuggestion(clubId, programYear);
+	const { suggestion, hasRecords } = await deriveTrainingSuggestion(
+		clubId,
+		programYear,
+	);
+	if (!hasRecords) {
+		throw new Error(
+			"Record officer training first — there is nothing to apply to goal 9 yet.",
+		);
+	}
 	await updateGoal(
 		{
 			clubId,

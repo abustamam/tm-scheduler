@@ -1,5 +1,5 @@
 {
-  "id": "7f13e9bb-7fc0-42d3-966b-ae3978249ee0",
+  "id": "b648a31b-aa8d-4bf4-9044-ca40ef2c3e9b",
   "prevId": "68d2a5c8-b1c7-4d4a-b7bc-2f54b1568027",
   "version": "7",
   "dialect": "postgresql",
@@ -3523,27 +3523,6 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "officer_training_records_year_idx": {
-          "name": "officer_training_records_year_idx",
-          "columns": [
-            {
-              "expression": "membership_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "program_year",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}

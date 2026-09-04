@@ -72,7 +72,6 @@ function view(
 	overrides: Partial<OfficerTrainingView> = {},
 ): OfficerTrainingView {
 	return {
-		programYear: 2026,
 		today: "2026-07-02",
 		periods: [tally(1), tally(2)],
 		focus: 1,
@@ -87,8 +86,6 @@ function view(
 			{ membershipId: BOB, name: "Bob Boss" },
 			{ membershipId: CARA, name: "Cara Clerk" },
 		],
-		g9Suggestion: 0,
-		hasRecords: false,
 		...overrides,
 	};
 }
@@ -143,13 +140,13 @@ describe("the tally", () => {
 		expect(card(1).textContent).toContain("2 more officers needed");
 	});
 
-	it("says the bar is cleared instead of naming a shortfall", () => {
+	it("says all four are trained instead of naming a shortfall", () => {
 		mount(
 			view({
 				periods: [tally(1, { trained: 4, met: true, shortfall: 0 }), tally(2)],
 			}),
 		);
-		expect(card(1).textContent).toContain("Bar cleared");
+		expect(card(1).textContent).toContain("All 4 trained");
 		expect(card(1).textContent).not.toContain("more officer");
 	});
 
@@ -167,7 +164,7 @@ describe("the tally", () => {
 				],
 			}),
 		);
-		expect(card(1).textContent).toContain("Bar cleared");
+		expect(card(1).textContent).toContain("All 4 trained");
 		expect(card(2).textContent).toContain("3 more officers needed");
 	});
 });
@@ -205,6 +202,60 @@ describe("the window", () => {
 		expect(card(1).textContent).not.toContain("1 days");
 	});
 
+	it("never puts white text on either countdown fill", () => {
+		// Measured contrast of white on these fills: 3.15:1 / 1.95:1 on
+		// --warning-strong and 3.81:1 / 1.46:1 on --lagoon-deep (light / dark).
+		// All four fail AA at the 12px a Badge renders, and the two dark values are
+		// the label-on-fill class recorded at #645. `--on-accent-fill` is dark ink,
+		// 4.6:1 at worst. Asserted as an OFFENDER SWEEP because jsdom loads no
+		// stylesheet and can see nothing about legibility itself.
+		for (const t of [
+			tally(1, { phase: "open", daysUntilClose: 60 }),
+			tally(1, { phase: "open", daysUntilClose: 3, trained: 1, shortfall: 3 }),
+		]) {
+			cleanup();
+			const { container } = mount(view({ periods: [t, tally(2)] }));
+			expect(container.innerHTML).not.toContain(
+				"bg-[var(--warning-strong)] text-white",
+			);
+			expect(container.innerHTML).not.toContain(
+				"bg-[var(--lagoon-deep)] text-white",
+			);
+			expect(container.innerHTML).toContain("text-[var(--on-accent-fill)]");
+		}
+	});
+
+	it("signals urgency with more than colour", () => {
+		// WCAG 1.4.1. The two arms used to render IDENTICAL text, so the only
+		// difference between "three weeks left and short" and "comfortably open"
+		// was #c2851a vs #328f97 — nothing at all for a colour-blind reader, a
+		// forced-colours reader, or a monochrome print of the page.
+		const urgent = mount(
+			view({
+				periods: [
+					tally(1, {
+						phase: "open",
+						daysUntilClose: 10,
+						trained: 2,
+						shortfall: 2,
+					}),
+					tally(2),
+				],
+			}),
+		);
+		expect(card(1).textContent).toContain("Closes in 10 days · act now");
+		expect(urgent.container.querySelectorAll("svg").length).toBeGreaterThan(0);
+
+		cleanup();
+		mount(
+			view({
+				periods: [tally(1, { phase: "open", daysUntilClose: 60 }), tally(2)],
+			}),
+		);
+		expect(card(1).textContent).toContain("Closes in 60 days");
+		expect(card(1).textContent).not.toContain("act now");
+	});
+
 	it("marks the last three weeks urgent while the bar is unmet", () => {
 		// The signal the club in the issue never got. Amber at 21 days and under,
 		// and ONLY while short — a met period needs no alarm.
@@ -221,7 +272,24 @@ describe("the window", () => {
 				],
 			}),
 		);
-		expect(container.innerHTML).toContain("var(--warning-strong)");
+		expect(container.innerHTML).toContain("bg-[var(--warning-strong)]");
+		// Exactly at the boundary: 21 days is urgent, 22 is not.
+		expect(card(1).textContent).toContain("act now");
+		cleanup();
+		mount(
+			view({
+				periods: [
+					tally(1, {
+						phase: "open",
+						daysUntilClose: 22,
+						trained: 2,
+						shortfall: 2,
+					}),
+					tally(2),
+				],
+			}),
+		);
+		expect(card(1).textContent).not.toContain("act now");
 	});
 
 	it("does NOT mark a met period urgent, however few days are left", () => {
@@ -240,9 +308,11 @@ describe("the window", () => {
 			}),
 		);
 		expect(card(1).textContent).toContain("Closes in 1 day");
-		expect(container.innerHTML).not.toContain(
-			"bg-[var(--warning-strong)] text-white",
-		);
+		// The urgent FILL is absent, which is the real assertion — the old one
+		// looked for `bg-[var(--warning-strong)] text-white`, a string this
+		// component no longer emits anywhere, so it could only pass.
+		expect(container.innerHTML).not.toContain("bg-[var(--warning-strong)]");
+		expect(card(1).textContent).not.toContain("act now");
 	});
 
 	it("reports a shut window as Closed with no countdown", () => {
@@ -305,7 +375,7 @@ describe("the window", () => {
 
 describe("recorded training", () => {
 	it("lists a record with its member, office and date", () => {
-		mount(view({ records: [record()], hasRecords: true }));
+		mount(view({ records: [record()] }));
 		const text = card(1).textContent ?? "";
 		expect(text).toContain("Alice Dual");
 		expect(text).toContain("Secretary");
@@ -313,7 +383,7 @@ describe("recorded training", () => {
 	});
 
 	it("says so when no date was recorded, rather than showing a placeholder date", () => {
-		mount(view({ records: [record({ trainedOn: null })], hasRecords: true }));
+		mount(view({ records: [record({ trainedOn: null })] }));
 		expect(card(1).textContent).toContain("date not recorded");
 	});
 
@@ -321,7 +391,6 @@ describe("recorded training", () => {
 		mount(
 			view({
 				records: [record({ trainedOn: "2026-09-20", outsideWindow: true })],
-				hasRecords: true,
 			}),
 		);
 		const text = card(1).textContent ?? "";
@@ -336,14 +405,13 @@ describe("recorded training", () => {
 				records: [
 					record({ position: "immediate_past_president", counts: false }),
 				],
-				hasRecords: true,
 			}),
 		);
 		expect(card(1).textContent).toContain("not counted");
 	});
 
 	it("puts a record in its own period's card only", () => {
-		mount(view({ records: [record({ period: 2 })], hasRecords: true }));
+		mount(view({ records: [record({ period: 2 })] }));
 		expect(card(1).textContent).toContain(
 			"Nobody recorded for this period yet",
 		);
@@ -353,10 +421,15 @@ describe("recorded training", () => {
 	it("removes by record id", async () => {
 		const user = userEvent.setup();
 		const { onRemoveRecord } = mount(
-			view({ records: [record({ id: "rec-42" })], hasRecords: true }),
+			view({ records: [record({ id: "rec-42" })] }),
 		);
 		await user.click(
-			screen.getByRole("button", { name: "Remove Alice Dual as Secretary" }),
+			// Names the RECORD, not the office. "Remove Alice Dual as Secretary" is
+			// what a button ending an officer TERM would say, and this button is
+			// icon-only so its label is a screen reader's only cue.
+			screen.getByRole("button", {
+				name: "Remove Alice Dual's Secretary training record",
+			}),
 		);
 		expect(onRemoveRecord).toHaveBeenCalledWith("rec-42");
 	});
@@ -373,7 +446,6 @@ describe("the not-recorded list", () => {
 		mount(
 			view({
 				records: [record({ position: "secretary" })],
-				hasRecords: true,
 			}),
 		);
 		const text = card(1).textContent ?? "";
@@ -396,14 +468,13 @@ describe("the not-recorded list", () => {
 						position: "president",
 					}),
 				],
-				hasRecords: true,
 			}),
 		);
 		expect(card(1).textContent).not.toContain("Not recorded yet");
 	});
 
 	it("is per-period — a second-period record leaves the first period's seats open", () => {
-		mount(view({ records: [record({ period: 2 })], hasRecords: true }));
+		mount(view({ records: [record({ period: 2 })] }));
 		expect(card(1).textContent).toContain("Alice Dual · Secretary");
 		expect(card(2).textContent).not.toContain("Alice Dual · Secretary");
 	});
@@ -611,6 +682,80 @@ describe("the window editor", () => {
 		);
 	});
 
+	it("refuses to save with an EMPTY bound, either side", async () => {
+		// `"2026-08-31" < ""` is FALSE, so a bare `endsOn < startsOn` called a
+		// cleared START valid: Save stayed live and the click round-tripped to a
+		// zod rejection whose message is a raw JSON array. Clearing CLOSES happened
+		// to behave, which is what made the check look like it worked — and the
+		// suite only covered that side.
+		mount(view());
+		const user = await openEditor(1);
+		const start = screen.getByLabelText("Opens", { selector: "#cot-start-1" });
+		await user.clear(start);
+		expect(
+			(screen.getByRole("button", { name: "Save dates" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+		expect(document.body.textContent).toContain(
+			"The window must end on or after it starts.",
+		);
+	});
+
+	it("closes the editor after a save, and after a reset", async () => {
+		// `setOpen(false)` appeared nowhere, so once opened the form stayed on both
+		// period cards for the life of the page — including after a successful
+		// save, where the button that would collapse it is the very element the
+		// form replaced.
+		const mounted = mount(view());
+		const user = await openEditor(1);
+		const end = screen.getByLabelText("Closes", { selector: "#cot-end-1" });
+		await user.clear(end);
+		await user.type(end, "2026-09-15");
+		await user.click(screen.getByRole("button", { name: "Save dates" }));
+		expect(mounted.onSetWindow).toHaveBeenCalledTimes(1);
+		expect(
+			screen.queryByLabelText("Closes", { selector: "#cot-end-1" }),
+		).toBeNull();
+		expect(
+			screen.getAllByRole("button", { name: "Edit these dates" }).length,
+		).toBe(2);
+	});
+
+	it("cancels without writing, and discards the half-typed edit", async () => {
+		const mounted = mount(view());
+		const user = await openEditor(1);
+		const end = screen.getByLabelText("Closes", { selector: "#cot-end-1" });
+		await user.clear(end);
+		await user.type(end, "2026-09-15");
+		await user.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(mounted.onSetWindow).not.toHaveBeenCalled();
+		// Reopening starts from what is STORED, not the abandoned value.
+		await user.click(
+			screen.getAllByRole("button", {
+				name: "Edit these dates",
+			})[0] as HTMLElement,
+		);
+		expect(
+			(
+				screen.getByLabelText("Closes", {
+					selector: "#cot-end-1",
+				}) as HTMLInputElement
+			).value,
+		).toBe("2026-08-31");
+	});
+
+	it("marks the toggle as a disclosure for assistive tech", async () => {
+		mount(view());
+		const toggle = screen.getAllByRole("button", {
+			name: "Edit these dates",
+		})[0] as HTMLElement;
+		expect(toggle.getAttribute("aria-expanded")).toBe("false");
+		expect(toggle.getAttribute("aria-controls")).toBe("cot-window-editor-1");
+		const user = userEvent.setup();
+		await user.click(toggle);
+		expect(document.getElementById("cot-window-editor-1")).toBeTruthy();
+	});
+
 	it("refuses to save an unchanged window", async () => {
 		mount(view());
 		await openEditor(1);
@@ -729,10 +874,12 @@ describe("the window editor", () => {
 // ---------------------------------------------------------------------------
 
 describe("the panel", () => {
-	it("discloses that it counts PEOPLE where Toastmasters counts roles", () => {
-		// Load-bearing copy, not decoration: the app's count is deliberately
-		// conservative, and a club comparing this page against TI's own report has
-		// to be told why the two can differ.
+	it("discloses the counting rule BESIDE the numbers, not after both cards", () => {
+		// Load-bearing copy, not decoration: the count is deliberately stricter
+		// than TI's, and a club comparing this page against TI's own report has to
+		// be told why the two can differ. It used to sit below both period cards,
+		// so a President met "four officers", "3/4" and "1 more officer needed" —
+		// three assertions in the people grain — before the correction.
 		const { container } = render(
 			<OfficerTrainingPanel
 				view={view()}
@@ -743,14 +890,47 @@ describe("the panel", () => {
 			/>,
 		);
 		const text = container.textContent ?? "";
-		expect(text).toContain("distinct");
-		expect(text).toContain("a member holding two offices counts once");
-		expect(text).toContain("never over-count");
-		expect(text).toContain("goal 9 is never ticked for you");
+		expect(text).toContain("Toastmasters counts four officer");
+		expect(text).toContain("four different");
+		expect(text).toContain("someone holding two offices counts once");
+		expect(text).toContain("nothing here ticks goal 9 for you");
+		// The disclosure precedes the first period card in reading order.
+		const heading = container.querySelector("#cot-heading");
+		expect(heading).toBeTruthy();
+		const disclosure = heading?.parentElement?.textContent ?? "";
+		expect(disclosure).toContain("four different");
+
+		// It no longer claims it "can only under-count, never over-count" — that
+		// was false in the two-people-one-office direction until the count was
+		// floored at distinct offices too.
+		expect(text).not.toContain("never over-count");
+	});
+
+	it("titles the panel as a SUBHEADING of its DCP category, not a peer", () => {
+		// The page is h1 → h2 per category, and this panel is nested inside the
+		// Training category's section. An h2 made them siblings in heading
+		// navigation, so a screen reader heard "Training" then "Club officer
+		// training" as peers when one contains the other.
+		const { container } = render(
+			<OfficerTrainingPanel
+				view={view()}
+				onAddRecord={noop}
+				onRemoveRecord={noop}
+				onSetWindow={noop}
+				onResetWindow={noop}
+			/>,
+		);
+		const heading = container.querySelector("#cot-heading");
+		expect(heading?.tagName).toBe("H3");
+		expect(container.querySelector("h2")).toBeNull();
+		// Still the section's accessible name.
+		expect(
+			container.querySelector("section")?.getAttribute("aria-labelledby"),
+		).toBe("cot-heading");
 	});
 
 	it("disables every control while a write is in flight", () => {
-		mount(view({ records: [record()], hasRecords: true }), true);
+		mount(view({ records: [record()] }), true);
 		for (const button of screen.getAllByRole("button")) {
 			expect((button as HTMLButtonElement).disabled).toBe(true);
 		}

@@ -28,5 +28,4 @@ ALTER TABLE "officer_training_periods" ADD CONSTRAINT "officer_training_periods_
 ALTER TABLE "officer_training_records" ADD CONSTRAINT "officer_training_records_membership_id_members_id_fk" FOREIGN KEY ("membership_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "officer_training_records" ADD CONSTRAINT "officer_training_records_recorded_by_user_id_fk" FOREIGN KEY ("recorded_by") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "officer_training_periods_club_year_period_unique" ON "officer_training_periods" USING btree ("club_id","program_year","period");--> statement-breakpoint
-CREATE UNIQUE INDEX "officer_training_records_unique" ON "officer_training_records" USING btree ("membership_id","position","program_year","period");--> statement-breakpoint
-CREATE INDEX "officer_training_records_year_idx" ON "officer_training_records" USING btree ("membership_id","program_year");
+CREATE UNIQUE INDEX "officer_training_records_unique" ON "officer_training_records" USING btree ("membership_id","position","program_year","period");

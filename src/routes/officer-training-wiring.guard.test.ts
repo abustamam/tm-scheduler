@@ -4,21 +4,32 @@
  *
  * ## Why a source guard and not a render test
  *
- * `OfficerTrainingPanel` has 37 component tests — with props the test supplies.
- * That is exactly the position CLAUDE.md records #319 shipping from: both
- * components were well covered and the bug was in neither, because the defect
- * was the EXPRESSION at the call site. Every prop this route computes is
- * untested by construction, and three of them decide whether the feature works
- * at all:
+ * `OfficerTrainingPanel` is thoroughly covered by component tests — with props
+ * the test supplies. That is exactly the position CLAUDE.md records #319
+ * shipping from: both components were well covered and the bug was in neither,
+ * because the defect was the EXPRESSION at the call site. Every prop this route
+ * computes is untested by construction, and three of them decide whether the
+ * feature works at all:
  *
  *   · which category the panel renders under (`cat === "training"`),
  *   · which goal row carries the derived badge (`g.key === TRAINING_GOAL_KEY`),
  *   · whether the apply is OFFERED (`training.hasRecords`) — the guard that
  *     stops an apply of 0 clearing a hand-entered Met on no evidence.
  *
+ * (No test COUNT here. An earlier draft said "37 component tests" and was stale
+ * within one commit, which is the drift this repo records as mechanism-by-
+ * hearsay — and the number carried none of the argument anyway.)
+ *
  * Rendering `_authed/admin/dcp.tsx` to observe them means a router context, an
  * auth context and five mocked server fns. The repo's idiom for a layer vitest
  * cannot otherwise reach is a comment-blind source guard, and this is one.
+ *
+ * What this guard NO LONGER has to carry: the two apply STRINGS and the badge's
+ * period order used to be ternaries in the route, and a source grep could only
+ * assert both strings appeared somewhere — mutation swapped their polarity with
+ * the whole suite green. They are now pure functions in `#/lib/officer-training`
+ * with unit tests, which is the stronger fix: a guard pins presence, a test pins
+ * behaviour.
  *
  * ## Two read modes, one per assertion class
  *
@@ -26,13 +37,16 @@
  *
  *   · "must BE present" → `readSource` (comment-blind). A comment naming the
  *     expression satisfies a raw `toContain`, so the real wiring could be
- *     deleted with a comment above it still quoting it. This file's own header
- *     quotes `cat === "training"` and `training.hasRecords`, which is precisely
- *     the trip-wire.
+ *     deleted with a comment above it still quoting it.
  *   · "must be ABSENT" → `readFileSync` (raw). Stripping only DELETES text, and
  *     the stripper is a lexer rather than a parser, so it could erase a real
  *     offending line and report clean — a false PASS on the half that exists to
  *     catch the regression.
+ *
+ * Note the comment-blind half is NOT protected by this file's own header the way
+ * `club-index-wiring.guard.test.ts`'s is: that file greps ITSELF, this one greps
+ * the route, so nothing written here can make an assertion pass or fail. The
+ * reader choice is still right; the reason is the general one above.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -89,12 +103,39 @@ describe("DCP route → officer training wiring (#531)", () => {
 		expect(src).toContain("suggestTraining ?");
 	});
 
-	it("names the value the apply will write, before the click", () => {
-		// This action can LOWER a stored value, so the label has to say which way
-		// it is going. A generic "Apply" would make clearing a Met look like
-		// setting one.
-		expect(src).toContain("Apply training records (mark met)");
-		expect(src).toContain("Apply training records (mark not met)");
+	it("takes the apply label and the toast from the shared helpers", () => {
+		// The action can LOWER a stored value, so the label has to say which way it
+		// is going — and WHICH string goes with which value is now pinned by a unit
+		// test on the helpers, not by this grep. All this case has to hold is that
+		// the route still routes through them: inline ternaries were what made the
+		// polarity unreachable, and re-inlining them would silently restore that.
+		expect(src).toContain("trainingApplyLabel(training.suggestion)");
+		expect(src).toContain("trainingAppliedMessage(");
+		expect(src).toContain("trainingSuggestionNote(training.trainedByPeriod)");
+	});
+
+	it("does not re-inline the label strings it just moved to the lib", () => {
+		// Offender sweep, RAW. A literal here would be a second spelling that the
+		// helper's unit test cannot see, which is the state this refactor left.
+		const raw = readFileSync(resolve(ROOT, ROUTE), "utf8");
+		expect(raw).not.toContain("Apply training records (mark");
+		expect(raw).not.toContain("Goal 9 marked met from");
+		expect(raw).not.toContain("Goal 9 set to not met from");
+	});
+
+	it("offers the year whose TRAINING window is open, not just the program year", () => {
+		// `currentProgramYear()` rolls on Jul 1 while period 1 opens Jun 1, so for
+		// the whole of June the open window belongs to a year that was otherwise
+		// unreachable from the picker — `loaded.years` holds only years with a
+		// scoreboard, and no club starts next year's board in June.
+		expect(src).toContain("trainingProgramYearForDate()");
+		expect(src).toContain("trainingYear");
+	});
+
+	it("reads the removed flag rather than always reporting success", () => {
+		// The seam returns it so a stale UI can tell "already gone" from "not
+		// yours"; the only caller discarded it and toasted success for a no-op.
+		expect(src).toContain("const { removed, view: next }");
 	});
 
 	it("refreshes the scoreboard after every training write", () => {
@@ -121,6 +162,15 @@ describe("nothing writes goal 9 on its own (#531 / ADR-0019)", () => {
 				`${rel} must not write dcp_goal_progress. Officer training produces a SUGGESTION the President applies (ADR-0019's third assist); a write here would tick goal 9 silently, and TI — not GavelUp — is the record of who was trained.`,
 			).not.toContain("dcpGoalProgress");
 			expect(source).not.toContain("dcp_goal_progress");
+			// `updateGoal` is the SANCTIONED write, and it is neither of the strings
+			// above — so without this line the sweep named for the issue's central
+			// promise could not see the only write path that exists:
+			// `officer-training-logic.ts` could import it and tick goal 9 inside
+			// `addTrainingRecord` with this guard green.
+			expect(
+				source,
+				`${rel} must not call updateGoal — that is the sanctioned goal-9 write and it belongs to the President's explicit apply, not to recording a training record.`,
+			).not.toContain("updateGoal");
 		});
 	}
 

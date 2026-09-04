@@ -4,16 +4,23 @@
  * `officer-training-logic.ts` so the Start compiler strips it from the client
  * bundle (`server-modules.guard.test.ts` enforces it).
  *
- * Every fn is gated to clubRole "admin", matching `dcp.ts` and ADR-0019 §4: the
- * President already resolves to "admin" through effective-admin, so recording
- * officer training introduces no officer-position-based authz — an officer
- * cannot record their own attendance.
+ * Every fn is gated to clubRole "admin", matching `dcp.ts` and ADR-0019 §4: no
+ * officer-position-based authz is introduced, because the President already
+ * resolves to "admin" through effective-admin.
+ *
+ * That arm grants on ANY open `officer_terms` row, so every elected officer is a
+ * full admin here and CAN record their own training. Deliberate and unchanged by
+ * #531 — the same officer can already toggle goal 9 by hand — and the control is
+ * that goal 9 stays President-applied. See `officer-training-logic.ts`'s header;
+ * this paragraph used to assert the opposite.
  *
  * `requireClubRole` → `requireMembership` also carries the `clubs.archived_at`
  * gate, which is why nothing here calls `assertClubNotArchived` separately (same
  * as `dcp.ts`). None of these fns is session-less, so
  * `public-readers-archive-gate.guard.test.ts` classifies them as guarded rather
- * than enrolling them as public readers.
+ * than enrolling them as public readers — which is precisely why the role list
+ * needs its own guard (`officer-training-authz.guard.test.ts`): that sweep is
+ * satisfied by any `require*` call and cannot see a widened role list.
  */
 import { createServerFn } from "@tanstack/react-start";
 import { requireClubRole, requireUser } from "./guards";
@@ -74,10 +81,23 @@ export const addTrainingRecord = createServerFn({ method: "POST" })
 		});
 	});
 
+/**
+ * Returns `{ removed, view }` rather than just the flag: every other training
+ * write hands back the fresh view, and this one made the client refetch it — a
+ * third round trip for one DELETE. `removed` is still surfaced so the caller can
+ * tell "already gone" from "not yours" and stop reporting success for a no-op.
+ */
 export const removeTrainingRecord = createServerFn({ method: "POST" })
 	.validator((i: unknown) => removeTrainingRecordSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return removeTrainingRecordDb(data);
+		const { removed } = await removeTrainingRecordDb(data);
+		return {
+			removed,
+			view: await getOfficerTrainingViewDb({
+				clubId: data.clubId,
+				programYear: data.programYear,
+			}),
+		};
 	});

@@ -109,6 +109,20 @@ describe("formatCalendarDay (#529)", () => {
 		withDefaultZone("America/Chicago", () => {
 			expect(formatCalendarDay("2026-09-01")).toBe("Sep 1");
 			expect(formatCalendarDay("2026-01-01")).toBe("Jan 1");
+			// `withYear` (#531): a training window spans two calendar years
+			// ("Nov 1, 2026 – Feb 28, 2027") and is meaningless without it. Same
+			// UTC pinning, which is the reason it is an option here rather than a
+			// second function somebody would write without it.
+			expect(formatCalendarDay("2026-08-10", { withYear: true })).toBe(
+				"Aug 10, 2026",
+			);
+			expect(formatCalendarDay("2027-02-28", { withYear: true })).toBe(
+				"Feb 28, 2027",
+			);
+			// Explicit false and an absent option behave identically.
+			expect(formatCalendarDay("2026-08-10", { withYear: false })).toBe(
+				"Aug 10",
+			);
 		});
 	});
 

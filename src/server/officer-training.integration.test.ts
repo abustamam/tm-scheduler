@@ -27,7 +27,8 @@
  *    COUNT. A fixture with only in-window dates passes whether the flag exists,
  *    is inverted, or silently voids the row.
  */
-import { and, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubs,
@@ -35,8 +36,9 @@ import {
 	officerTerms,
 	officerTrainingPeriods,
 	officerTrainingRecords,
+	people,
 } from "#/db/schema";
-import type { OfficerPosition } from "#/lib/officers";
+import { OFFICER_POSITIONS, type OfficerPosition } from "#/lib/officers";
 import {
 	cleanup,
 	hasTestDb,
@@ -53,6 +55,8 @@ import {
 } from "./dcp-logic";
 import {
 	addTrainingRecord,
+	addTrainingRecordSchema,
+	deriveTrainingSuggestion,
 	getOfficerTrainingView,
 	loadOfficerSeats,
 	loadTrainingRecords,
@@ -60,6 +64,7 @@ import {
 	removeTrainingRecord,
 	resetTrainingWindow,
 	setTrainingWindow,
+	setTrainingWindowSchema,
 } from "./officer-training-logic";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -326,7 +331,11 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 			expect(view.periods[0]?.required).toBe(4);
 			expect(view.periods[0]?.shortfall).toBe(1);
 			expect(view.periods[0]?.met).toBe(false);
-			expect(view.g9Suggestion).toBe(0);
+			// The suggestion lives on the SCOREBOARD payload, not on this view —
+			// one derivation, one reader (see the type's own doc comment).
+			expect(
+				(await deriveTrainingSuggestion(seeded.clubId, PY)).suggestion,
+			).toBe(0);
 		});
 
 		it("clears a period at four distinct people", async () => {
@@ -364,7 +373,9 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 			expect(view.periods[0]?.met).toBe(true);
 			// Only ONE period is met, so goal 9 is not.
 			expect(view.periods[1]?.trained).toBe(0);
-			expect(view.g9Suggestion).toBe(0);
+			expect(
+				(await deriveTrainingSuggestion(seeded.clubId, PY)).suggestion,
+			).toBe(0);
 		});
 
 		it("keeps a record counting after its officer's term ended mid-window", async () => {
@@ -491,6 +502,100 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 			expect(rows[0]?.counts).toBe(true);
 		});
 
+		it("orders records period → member name → office", async () => {
+			// The view type documents this order and nothing pinned it: mutation
+			// replaced all three `orderBy` terms with `random()` and 41/41 stayed
+			// green, because every test that indexes `records[0]` used a one-row
+			// fixture. Names chosen so alphabetical and insertion order DISAGREE.
+			const zoe = await addMember(seeded.clubId, "Zoe Last");
+			const ada = await addMember(seeded.clubId, "Ada First");
+			for (const [membershipId, position, period] of [
+				[zoe, "president", 2],
+				[zoe, "secretary", 1],
+				[ada, "treasurer", 1],
+			] as const) {
+				await addTrainingRecord(
+					{
+						clubId: seeded.clubId,
+						programYear: PY,
+						membershipId,
+						position,
+						period,
+						trainedOn: period === 1 ? IN_P1 : IN_P2,
+					},
+					null,
+				);
+			}
+			const rows = await loadTrainingRecords(seeded.clubId, PY);
+			expect(
+				rows.map((r) => `${r.period}:${r.memberName}:${r.position}`),
+			).toEqual([
+				"1:Ada First:treasurer",
+				"1:Zoe Last:secretary",
+				"2:Zoe Last:president",
+			]);
+		});
+
+		it("cannot hold two memberships for one Person in one club", async () => {
+			// The constraint that makes membership and person interchangeable as the
+			// de-dup key WITHIN a club, asserted rather than assumed — adversarial
+			// review proposed re-keying the count on `person_id` on the belief that
+			// this state was reachable. It is not: the duplicate-human case
+			// `guards.ts` describes needs two PERSON rows, so both keys count it
+			// twice, and only a merge fixes it.
+			const personId = await seedPerson({ name: "Twice Over" });
+			await testDb.insert(members).values({
+				clubId: seeded.clubId,
+				personId,
+				name: "Twice Over",
+				clubRole: "member",
+				status: "active",
+			});
+			expect(
+				await violatedConstraint(
+					testDb.insert(members).values({
+						clubId: seeded.clubId,
+						personId,
+						name: "Twice Over (dup)",
+						clubRole: "member",
+						status: "active",
+					}),
+				),
+			).toBe("members_club_person_unique");
+		});
+
+		it("floors the count at distinct OFFICES, so four on one office count 1", async () => {
+			// TI credits one person per role. Four members recorded against
+			// Secretary is one trained role; counting distinct people alone read it
+			// as 4 and suggested goal 9 met where TI credits one.
+			const ids = await Promise.all([
+				addMember(seeded.clubId, "One"),
+				addMember(seeded.clubId, "Two"),
+				addMember(seeded.clubId, "Three"),
+				addMember(seeded.clubId, "Four"),
+			]);
+			for (const membershipId of ids) {
+				await addTrainingRecord(
+					{
+						clubId: seeded.clubId,
+						programYear: PY,
+						membershipId,
+						position: "secretary",
+						period: 1,
+						trainedOn: IN_P1,
+					},
+					null,
+				);
+			}
+			const view = await getOfficerTrainingView(
+				{ clubId: seeded.clubId, programYear: PY },
+				IN_P1,
+			);
+			expect(view.records).toHaveLength(4);
+			expect(view.periods[0]?.trained).toBe(1);
+			expect(view.periods[0]?.met).toBe(false);
+		});
+
 		it("scopes records to their program year", async () => {
 			const dan = await addMember(seeded.clubId, "Dan");
 			await addTrainingRecord(
@@ -570,6 +675,25 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 				),
 			).rejects.toThrow(/not one of the seven offices/);
 			expect(await loadTrainingRecords(seeded.clubId, PY)).toHaveLength(0);
+		});
+
+		it("does not make an IPP-only club look like it has evidence to apply", async () => {
+			// `hasRecords` is the gate that decides whether the UI OFFERS an apply,
+			// and an apply can write 0 over a hand-entered Met. Counted as
+			// `rows.length > 0` it was true for a club whose only rows are Immediate
+			// Past President — rows the count ignores — so the club was offered a
+			// destructive action on evidence supporting nothing.
+			const ipp = await addMember(seeded.clubId, "Ivy Past");
+			await testDb.insert(officerTrainingRecords).values({
+				membershipId: ipp,
+				position: "immediate_past_president",
+				programYear: PY,
+				period: 1,
+				trainedOn: IN_P1,
+			});
+			const derived = await deriveTrainingSuggestion(seeded.clubId, PY);
+			expect(derived.hasRecords).toBe(false);
+			expect(derived.trainedByPeriod).toEqual([0, 0]);
 		});
 
 		it("does not count an IPP row that reached the table another way", async () => {
@@ -672,6 +796,7 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 
 			const result = await removeTrainingRecord({
 				clubId: seeded.clubId,
+				programYear: PY,
 				recordId,
 			});
 			expect(result.removed).toBe(false);
@@ -695,6 +820,7 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 			const mine = await loadTrainingRecords(seeded.clubId, PY);
 			const result = await removeTrainingRecord({
 				clubId: seeded.clubId,
+				programYear: PY,
 				// biome-ignore lint/style/noNonNullAssertion: seeded one row immediately above
 				recordId: mine[0]!.id,
 			});
@@ -705,6 +831,7 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 		it("reports removed:false for an id that never existed", async () => {
 			const result = await removeTrainingRecord({
 				clubId: seeded.clubId,
+				programYear: PY,
 				recordId: "00000000-0000-0000-0000-000000000000",
 			});
 			expect(result.removed).toBe(false);
@@ -758,6 +885,19 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 				startsOn: "2026-06-15",
 				endsOn: "2026-09-15",
 			});
+			// Capture the person ids BEFORE the club goes, because `cleanup` reads
+			// them off this club's members and this test is about to delete the club
+			// out from under it — the cascade takes the members first, `cleanup`
+			// then finds none, and every `people` row is orphaned in the SHARED test
+			// database. Measured before this fix: orphans climbed 83 → 86 → 89 over
+			// two runs of this file alone. CLAUDE.md's club-less-row rule, and it
+			// matters beyond tidiness because any future suite reading `people`
+			// unscoped becomes order-dependent on this one.
+			const doomed = await testDb
+				.select({ personId: members.personId })
+				.from(members)
+				.where(eq(members.clubId, other.clubId));
+
 			// The takedown lever (ADR-0024) reaches these rows through
 			// clubs → members → records, and clubs → periods.
 			await testDb.delete(clubs).where(eq(clubs.id, other.clubId));
@@ -773,6 +913,11 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 					.from(officerTrainingPeriods)
 					.where(eq(officerTrainingPeriods.clubId, other.clubId)),
 			).toHaveLength(0);
+
+			const orphans = [...new Set(doomed.map((m) => m.personId))];
+			if (orphans.length > 0) {
+				await testDb.delete(people).where(inArray(people.id, orphans));
+			}
 		});
 	});
 
@@ -840,17 +985,21 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 			expect(view.periods[1]?.daysUntilClose).toBeNull();
 			expect(view.periods[1]?.trained).toBe(3);
 			expect(view.periods[1]?.shortfall).toBe(1);
-			expect(view.g9Suggestion).toBe(0);
+			expect(
+				(await deriveTrainingSuggestion(seeded.clubId, PY)).suggestion,
+			).toBe(0);
 		});
 
-		it("reports hasRecords:false for a club that has recorded nothing", async () => {
+		it("reads empty for a club that has recorded nothing", async () => {
 			const view = await getOfficerTrainingView(
 				{ clubId: seeded.clubId, programYear: PY },
 				IN_P1,
 			);
-			expect(view.hasRecords).toBe(false);
-			expect(view.g9Suggestion).toBe(0);
 			expect(view.records).toEqual([]);
+			expect(view.periods[0]?.trained).toBe(0);
+			const derived = await deriveTrainingSuggestion(seeded.clubId, PY);
+			expect(derived.hasRecords).toBe(false);
+			expect(derived.suggestion).toBe(0);
 		});
 
 		it("defaults `today` to the real clock rather than throwing", async () => {
@@ -927,6 +1076,7 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 			const second = rows.filter((r) => r.period === 2);
 			await removeTrainingRecord({
 				clubId: seeded.clubId,
+				programYear: PY,
 				// biome-ignore lint/style/noNonNullAssertion: trainBothPeriods seeds four second-period rows
 				recordId: second[0]!.id,
 			});
@@ -1018,17 +1168,199 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 			).rejects.toThrow(/No DCP scoreboard/);
 		});
 
-		it("clamps the applied value to the composite 0/1", async () => {
-			// `updateGoal` owns the clamp; routing the apply through it rather than
-			// upserting `dcp_goal_progress` directly is what keeps one copy of it.
+		it("refuses to apply when the club has recorded nothing", async () => {
+			// The server floor, not just the hidden button. Without it a stale tab,
+			// a replayed POST or any direct call clears a President's manual Met for
+			// a club with no records — the #573 shape, except the floor was absent
+			// server-side entirely while `deriveTrainingSuggestion` already returned
+			// the fact and the apply destructured it away.
 			await startScoreboard({ clubId: seeded.clubId, programYear: PY });
-			await trainBothPeriods();
-			const applied = await applyTrainingSuggestion(
-				{ clubId: seeded.clubId, programYear: PY },
+			await updateGoal(
+				{ clubId: seeded.clubId, programYear: PY, goalKey: "g9", achieved: 1 },
 				seeded.adminUserId,
 			);
-			expect(applied.progress.g9).toBe(1);
-			expect(applied.progress.g9).not.toBeGreaterThan(1);
+			await expect(
+				applyTrainingSuggestion(
+					{ clubId: seeded.clubId, programYear: PY },
+					seeded.adminUserId,
+				),
+			).rejects.toThrow(/Record officer training first/);
+			// The hand-entered Met SURVIVED.
+			const board = await getScoreboard({
+				clubId: seeded.clubId,
+				programYear: PY,
+			});
+			expect(board.progress.g9).toBe(1);
+		});
+
+		it("refuses to apply when the only records count toward nothing", async () => {
+			// Same floor, reached through the countable filter rather than an empty
+			// table: an IPP-only club has rows but no evidence.
+			await startScoreboard({ clubId: seeded.clubId, programYear: PY });
+			const ipp = await addMember(seeded.clubId, "Ivy Past");
+			await testDb.insert(officerTrainingRecords).values({
+				membershipId: ipp,
+				position: "immediate_past_president",
+				programYear: PY,
+				period: 1,
+			});
+			await expect(
+				applyTrainingSuggestion(
+					{ clubId: seeded.clubId, programYear: PY },
+					seeded.adminUserId,
+				),
+			).rejects.toThrow(/Record officer training first/);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// The input schemas
+	// -----------------------------------------------------------------------
+
+	describe("input schemas", () => {
+		// This whole layer had NO tests: mutation replaced `isoDateSchema` with a
+		// bare `z.string()` and deleted the window-order refine, and 150/150 stayed
+		// green. The db CHECKs backstop the period and the window order, and pg's
+		// `date` type backstops the shape — but `program_year` has no CHECK at all,
+		// and the promise of a readable message instead of a driver error is only
+		// kept here.
+		const validWindow = {
+			clubId: randomUUID(),
+			programYear: PY,
+			period: 1 as const,
+			startsOn: "2026-06-01",
+			endsOn: "2026-08-31",
+		};
+
+		it("accepts a well-formed window", () => {
+			expect(setTrainingWindowSchema.safeParse(validWindow).success).toBe(true);
+		});
+
+		it("rejects a back-to-front window with a readable message", () => {
+			const result = setTrainingWindowSchema.safeParse({
+				...validWindow,
+				startsOn: "2026-08-31",
+				endsOn: "2026-06-01",
+			});
+			expect(result.success).toBe(false);
+			expect(JSON.stringify(result.error?.issues)).toContain(
+				"The window must end on or after it starts.",
+			);
+		});
+
+		it("rejects an EMPTY bound rather than passing it to Postgres", () => {
+			expect(
+				setTrainingWindowSchema.safeParse({ ...validWindow, startsOn: "" })
+					.success,
+			).toBe(false);
+			expect(
+				setTrainingWindowSchema.safeParse({ ...validWindow, endsOn: "" })
+					.success,
+			).toBe(false);
+		});
+
+		it("rejects a shape-valid but impossible calendar date", () => {
+			// `\d{2}` matches 31 in a 30-day month, and `Date.UTC` OVERFLOW-ROLLS
+			// the excess, so the shape check alone is not enough.
+			for (const bad of [
+				"2026-02-31",
+				"2026-04-31",
+				"2026-13-01",
+				"2026-1-01",
+			]) {
+				expect(
+					setTrainingWindowSchema.safeParse({ ...validWindow, endsOn: bad })
+						.success,
+					`${bad} must be rejected`,
+				).toBe(false);
+			}
+			// A real leap day is accepted.
+			expect(
+				setTrainingWindowSchema.safeParse({
+					...validWindow,
+					startsOn: "2028-02-01",
+					endsOn: "2028-02-29",
+				}).success,
+			).toBe(true);
+			// A non-leap Feb 29 is not.
+			expect(
+				setTrainingWindowSchema.safeParse({
+					...validWindow,
+					startsOn: "2026-02-01",
+					endsOn: "2026-02-29",
+				}).success,
+			).toBe(false);
+		});
+
+		it("rejects a third training period", () => {
+			expect(
+				setTrainingWindowSchema.safeParse({ ...validWindow, period: 3 })
+					.success,
+			).toBe(false);
+			expect(
+				setTrainingWindowSchema.safeParse({ ...validWindow, period: 0 })
+					.success,
+			).toBe(false);
+		});
+
+		it("bounds the program year, which has no db CHECK behind it", () => {
+			const base = {
+				clubId: randomUUID(),
+				membershipId: randomUUID(),
+				position: "president" as const,
+				period: 1 as const,
+			};
+			expect(
+				addTrainingRecordSchema.safeParse({ ...base, programYear: 1999 })
+					.success,
+			).toBe(false);
+			expect(
+				addTrainingRecordSchema.safeParse({ ...base, programYear: 2101 })
+					.success,
+			).toBe(false);
+			expect(
+				addTrainingRecordSchema.safeParse({ ...base, programYear: 2026 })
+					.success,
+			).toBe(true);
+		});
+
+		it("accepts every office in the shared enum, and nothing else", () => {
+			// Derived from OFFICER_POSITIONS rather than re-listed, so a ninth
+			// office cannot be offered by the panel and refused by the schema.
+			const base = {
+				clubId: randomUUID(),
+				membershipId: randomUUID(),
+				programYear: PY,
+				period: 1 as const,
+			};
+			for (const position of OFFICER_POSITIONS) {
+				expect(
+					addTrainingRecordSchema.safeParse({ ...base, position }).success,
+					`${position} must parse`,
+				).toBe(true);
+			}
+			expect(
+				addTrainingRecordSchema.safeParse({ ...base, position: "webmaster" })
+					.success,
+			).toBe(false);
+		});
+
+		it("treats an omitted date as absent rather than rejecting it", () => {
+			const base = {
+				clubId: randomUUID(),
+				membershipId: randomUUID(),
+				programYear: PY,
+				period: 1 as const,
+				position: "president" as const,
+			};
+			expect(addTrainingRecordSchema.safeParse(base).success).toBe(true);
+			expect(
+				addTrainingRecordSchema.safeParse({ ...base, trainedOn: null }).success,
+			).toBe(true);
+			expect(
+				addTrainingRecordSchema.safeParse({ ...base, trainedOn: "2026-02-31" })
+					.success,
+			).toBe(false);
 		});
 	});
 });

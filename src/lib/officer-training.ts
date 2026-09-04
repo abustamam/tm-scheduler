@@ -47,6 +47,8 @@
  * on purpose: {@link countTrainedOfficers} scores, {@link untrainedSeats}
  * displays.
  */
+import { programYearForDate } from "#/lib/dcp";
+import { formatCalendarDay } from "#/lib/format";
 import { OFFICER_POSITIONS, type OfficerPosition } from "#/lib/officers";
 
 // ---------------------------------------------------------------------------
@@ -62,9 +64,15 @@ import { OFFICER_POSITIONS, type OfficerPosition } from "#/lib/officers";
 export const TRAINING_PERIODS = [1, 2] as const;
 export type TrainingPeriod = (typeof TRAINING_PERIODS)[number];
 
-/** Type guard for a stored/`z.input` period value. */
+/**
+ * Type guard for a stored / request period value, derived from
+ * {@link TRAINING_PERIODS} rather than re-spelling `1 || 2`. It is what
+ * `periodSchema` in `officer-training-logic.ts` validates with, so the domain
+ * has one declaration in TypeScript and one in SQL (the two `CHECK`s) instead of
+ * four.
+ */
 export function isTrainingPeriod(value: unknown): value is TrainingPeriod {
-	return value === 1 || value === 2;
+	return (TRAINING_PERIODS as readonly unknown[]).includes(value);
 }
 
 /** Display label for a period ("First period" / "Second period"). */
@@ -77,10 +85,19 @@ export function trainingPeriodLabel(period: TrainingPeriod): string {
 // ---------------------------------------------------------------------------
 
 /**
- * The DCP goal these records feed — `DCP_GOALS[8].key` in `#/lib/dcp`. Named
- * once so the apply path, the scoreboard badge and the guard test all spell the
- * same key: a bare `"g9"` in three files is three chances to write `"g10"` and
- * silently move the composite administration goal instead.
+ * The DCP goal these records feed. Named once so the apply path, the scoreboard
+ * badge and the guard all spell the same key: a bare `"g9"` in three files is
+ * three chances to write `"g10"` and silently move the composite ADMINISTRATION
+ * goal instead.
+ *
+ * A literal rather than a lookup, because `#/lib/dcp`'s catalog is the source of
+ * truth for the goal and this is a second spelling of its key. What keeps the
+ * two honest is an assertion, not this comment: `officer-training.test.ts`
+ * checks `goalByKey(TRAINING_GOAL_KEY)` really is the composite TRAINING goal.
+ * Without it a catalog renumber (TI reorders, `g9` becomes administration) would
+ * leave the route picking the GROUP by `category === "training"` and the ROW by
+ * this key — two selectors quietly disagreeing, the badge rendering against no
+ * row, and `expect(TRAINING_GOAL_KEY).toBe("g9")` still passing.
  */
 export const TRAINING_GOAL_KEY = "g9";
 
@@ -162,33 +179,21 @@ export function daysBetween(from: IsoDate, to: IsoDate): number {
 	return epochDay(to) - epochDay(from);
 }
 
-const MONTH_ABBREVIATIONS = [
-	"Jan",
-	"Feb",
-	"Mar",
-	"Apr",
-	"May",
-	"Jun",
-	"Jul",
-	"Aug",
-	"Sep",
-	"Oct",
-	"Nov",
-	"Dec",
-] as const;
-
 /**
- * `2026-06-01` → `Jun 1, 2026`. Formatted from the STRING's own parts, never by
- * constructing a `Date`: `new Date("2026-06-01")` is parsed as UTC midnight and
- * `toLocaleDateString` then renders it in local time, printing "May 31" for
- * every viewer west of Greenwich. That is the one bug a window bound cannot
- * afford, since the bound IS the deadline being displayed.
+ * `2026-06-01` → `Jun 1, 2026`, for a window bound that has to name its year.
+ *
+ * A thin alias over `formatCalendarDay` (`#/lib/format`, #529) rather than an
+ * implementation: that function already solves this exact problem — a calendar
+ * day put through `new Date("2026-06-01")` is UTC midnight and formats as
+ * "May 31" for every viewer west of Greenwich, disagreeing between the SSR
+ * container and the hydrated client — and it does it with a UTC-pinned `Intl`
+ * formatter, so it is locale-aware where a hand-rolled month table is
+ * English-only. #531 shipped that hand-rolled table first, two files from the
+ * function whose doc comment carries the same reasoning; this is the reuse it
+ * should have been.
  */
 export function formatIsoDate(iso: IsoDate): string {
-	if (!isIsoDate(iso)) return iso;
-	const month = MONTH_ABBREVIATIONS[Number(iso.slice(5, 7)) - 1];
-	if (!month) return iso;
-	return `${month} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}`;
+	return formatCalendarDay(iso, { withYear: true });
 }
 
 /** Gregorian leap year — needed for period 2's Feb 28 vs Feb 29 end date. */
@@ -249,6 +254,54 @@ export function defaultTrainingWindows(programYear: number): TrainingWindow[] {
 	return TRAINING_PERIODS.map((p) => defaultTrainingWindow(programYear, p));
 }
 
+/**
+ * The program year whose TRAINING windows "today" sits in — which is NOT always
+ * `currentProgramYear()`, and the gap is a whole month of silence.
+ *
+ * `currentProgramYear` rolls on Jul 1. Period 1 opens Jun 1 of the year it
+ * belongs to. So through the whole of June, `currentProgramYear()` names the
+ * year whose windows are BOTH already shut and final, while period 1 of the next
+ * program year is open right now — the month incoming officers are actually
+ * being trained. Measured for 2027-06-15: `currentProgramYear()` = 2026, whose
+ * windows are `2026-06-01..2026-08-31` (closed) and `2026-11-01..2027-02-28`
+ * (closed), while `2027-06-01..2027-08-31` is OPEN.
+ *
+ * Pinning the panel to `currentProgramYear()` therefore showed both windows
+ * Closed with no countdown for all of June — exactly the "two of four and three
+ * weeks left" reading #531 exists to give — and a club that recorded June
+ * training anyway filed it against the PREVIOUS year's goal 9, already scored,
+ * where it also came back flagged "outside this window".
+ *
+ * June is the ONLY month the two disagree. March–May read as shut and genuinely
+ * are (last year's period 2 closed end of February, this year's period 1 has not
+ * opened), so they are left alone.
+ */
+export function trainingProgramYearForDate(now: Date = new Date()): number {
+	// getMonth() is 0-based, so 5 is June.
+	return now.getMonth() === 5 ? now.getFullYear() : programYearForDate(now);
+}
+
+/**
+ * Is a proposed window the right way round? One declaration, so the form, the
+ * zod refinement and any future reader state the rule once. The db CHECK
+ * (`officer_training_periods_order_check`) is a deliberate extra copy — the only
+ * one a raw `sql` write cannot bypass.
+ *
+ * An EMPTY bound is invalid, which is the half a bare `endsOn < startsOn` gets
+ * wrong: with `startsOn` cleared, `"2026-08-31" < ""` is FALSE, so the naive
+ * predicate called an empty start valid and left the form's Save button live on
+ * a request the server always rejects — with a raw `ZodError` JSON array as the
+ * toast.
+ */
+export function isWindowOrderValid(startsOn: string, endsOn: string): boolean {
+	if (!startsOn || !endsOn) return false;
+	return endsOn >= startsOn;
+}
+
+/** The one wording for a back-to-front window, shared by the form and the seam. */
+export const WINDOW_ORDER_MESSAGE =
+	"The window must end on or after it starts.";
+
 /** Where "today" sits relative to a window. Both bounds are INCLUSIVE. */
 export type WindowPhase = "upcoming" | "open" | "closed";
 
@@ -297,9 +350,32 @@ export function isOutsideWindow(
 // Counting
 // ---------------------------------------------------------------------------
 
-/** The fields of a training record the scoring rules actually read. */
+/**
+ * The fields of a training record the scoring and display rules read.
+ *
+ * ## Why `membershipId` and NOT `members.person_id`
+ *
+ * Adversarial review argued the count should de-dup on `person_id`, because
+ * "one human can hold two `members` rows in the SAME club" (`guards.ts` says
+ * exactly that). The claim is true and the fix does nothing, which is worth
+ * writing down so it is not re-litigated: `members_club_person_unique` is a
+ * unique index on `(club_id, person_id)`, so WITHIN a club membership and person
+ * are 1:1 — the state `guards.ts` describes is reached "through two Person
+ * rows", i.e. two DIFFERENT person ids. A duplicated human therefore counts
+ * twice under either key, and no key can fix it; only merging the two Person
+ * rows can, which is what `collapseMemberships` is for.
+ *
+ * The supporting argument was wrong in the same way. It read the merge REDUCING
+ * a club's count from 2 to 1 as proof the key was wrong. That reduction is
+ * correct and is the point of a merge: there was only ever one human, and the
+ * count is over people.
+ */
 export interface TrainingRecordLike {
-	/** The `members` row (a person in THIS club), the unit the bar counts. */
+	/**
+	 * The `members` row. The unit {@link countTrainedOfficers} de-dups on (1:1
+	 * with the person inside a club, per the note above) and the unit
+	 * {@link untrainedSeats} keys on with the office.
+	 */
 	membershipId: string;
 	/** The office the club claims this person was trained for. */
 	position: OfficerPosition;
@@ -307,26 +383,54 @@ export interface TrainingRecordLike {
 }
 
 /**
- * Officers trained in a period — **distinct people**, not distinct offices.
+ * Officers trained in a period, floored to what TI could possibly credit:
+ * **the smaller of distinct PEOPLE and distinct OFFICES**.
  *
- * Two filters, both load-bearing and neither derivable from the other:
+ * Two filters first, both load-bearing and neither derivable from the other:
  * `period` (a record credits exactly one of the two windows) and
  * {@link isTrainablePosition} (an Immediate Past President record counts for
  * nothing, per TI's list of seven). Records whose office is untrainable are
  * dropped BEFORE the de-dup, so a person holding only that office contributes 0
  * rather than 1.
+ *
+ * ## Why BOTH ceilings, when the decision was "distinct people"
+ *
+ * The maintainer's rule is distinct people, chosen because it "can only
+ * under-count relative to TI, so a club is never told it cleared goal 9 when TI
+ * would disagree" (2026-09-04). That reasoning holds in one direction and fails
+ * in the other, and taking people alone would have made the guarantee FALSE:
+ *
+ * - One person, two offices → TI credits 2 roles, people says 1. Under-counts,
+ *   as intended.
+ * - **Two people, one office → TI credits 1 role** ("credit is given only for
+ *   one person per officer role" — the manual is explicit), people says 2.
+ *   OVER-counts, which is the direction the rule exists to prevent.
+ *
+ * The second shape is reachable, not theoretical: the unique index is
+ * (membership, office, year, period), so any number of members may each claim
+ * `secretary`, and the panel offers all seven offices to any active member on
+ * purpose (someone may have been trained for an office they have since handed
+ * on). Four members recorded against one office read "4/4 · Bar cleared" and
+ * suggested goal 9 MET where TI credits one role.
+ *
+ * `Math.min` honours the decision rather than reversing it: the result is never
+ * more than distinct people (the rule as given) and never more than distinct
+ * offices (TI's own cap), so "can only under-count" becomes true instead of
+ * merely intended. For the settled dual-office example the answer is unchanged.
  */
 export function countTrainedOfficers(
 	records: readonly TrainingRecordLike[],
 	period: TrainingPeriod,
 ): number {
 	const people = new Set<string>();
+	const offices = new Set<OfficerPosition>();
 	for (const r of records) {
 		if (r.period !== period) continue;
 		if (!isTrainablePosition(r.position)) continue;
 		people.add(r.membershipId);
+		offices.add(r.position);
 	}
-	return people.size;
+	return Math.min(people.size, offices.size);
 }
 
 /** Is a period's four-officer bar cleared? */
@@ -345,6 +449,54 @@ export function suggestG9(records: readonly TrainingRecordLike[]): number {
 	)
 		? 1
 		: 0;
+}
+
+// ---------------------------------------------------------------------------
+// The words the apply affordance says
+// ---------------------------------------------------------------------------
+//
+// These three live HERE, as pure functions of a number, for one reason: in the
+// route they were ternaries, and a ternary between two strings is invisible to
+// every gate this repo has. A route cannot be mounted in vitest, typecheck sees
+// two strings whichever way round they are, and the source guard could only
+// assert that both strings appear SOMEWHERE. Mutation review swapped the button
+// labels and the toast polarity together and the whole suite stayed green at
+// 150/150 — so the President would have clicked "mark met" and watched goal 9 go
+// to not-met, with a toast confirming the opposite of what happened, in the one
+// affordance #531 exists to add. As functions they are unit-tested against
+// literals and an inversion fails a real test.
+
+/**
+ * The apply button's label. Names the value the click will WRITE, because this
+ * action can lower a stored value: a generic "Apply" would make clearing a
+ * hand-entered Met look like setting one.
+ */
+export function trainingApplyLabel(suggestion: number): string {
+	return suggestion === 1
+		? "Apply training records (mark met)"
+		: "Apply training records (mark not met)";
+}
+
+/** The toast after an apply, describing what was actually stored. */
+export function trainingAppliedMessage(stored: number): string {
+	return stored === 1
+		? "Goal 9 marked met from your officer training records."
+		: "Goal 9 set to not met from your officer training records.";
+}
+
+/**
+ * The dashed badge beside goal 9: "Training: 4 and 3 of 4".
+ *
+ * Order is [period 1, period 2] and that ORDER is the information — it is the
+ * only surface telling the club WHICH of the two windows is short, which is the
+ * single fact #531 exists to deliver. Swapping the two reads as plausible and
+ * was green under mutation while it lived in the route as a destructuring.
+ */
+export function trainingSuggestionNote(
+	trainedByPeriod: readonly number[],
+): string {
+	const [first = 0, second = 0] = trainedByPeriod;
+	return `Training: ${first} and ${second} of ${TRAINED_OFFICERS_REQUIRED}`;
 }
 
 // ---------------------------------------------------------------------------

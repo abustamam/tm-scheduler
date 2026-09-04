@@ -17,11 +17,27 @@
  *
  * Every seam here is reached only through `officer-training.ts`, whose fns run
  * `requireUser()` + `requireClubRole(userId, clubId, ["admin"])`. That is
- * ADR-0019 §4: the President resolves to club `admin` through effective-admin,
- * so no officer-position-based authz is introduced — an officer does not get to
- * record their own training. `requireClubRole` → `requireMembership` also
- * carries the `clubs.archived_at` gate, which is why these functions do not
- * call `assertClubNotArchived` themselves (matching `dcp-logic.ts`).
+ * ADR-0019 §4: no officer-position-based authz is introduced, because the
+ * President already resolves to club `admin`.
+ *
+ * Read that precisely. `requireClubRole`'s effective-admin arm grants on ANY
+ * open `officer_terms` row — its own doc says "every officer is a full admin" —
+ * so EVERY elected officer, Sergeant at Arms included, can record training
+ * (their own included) and delete another member's record. That is deliberate
+ * and unchanged by #531: the same officer can already flip goal 9 by hand and
+ * edit every other goal, so forging records is a strictly weaker path to the
+ * same place, and narrowing this feature to the President while the toggle
+ * beside it stays open to every officer would be incoherent. The control is
+ * that goal 9 stays President-APPLIED. (This paragraph claimed the opposite —
+ * "an officer does not get to record their own training" — which was a security
+ * property stated in two files and false in both.)
+ *
+ * `requireClubRole` → `requireMembership` also carries the `clubs.archived_at`
+ * gate (`assertNotArchived`), which is why these functions do not call
+ * `assertClubNotArchived` themselves (matching `dcp-logic.ts`). That coupling is
+ * the substitution `officer-training-authz.guard.test.ts` watches for: swapping
+ * `requireClubRole` for a bare `requireUser()` would take the archive gate with
+ * it, and nothing else in the repo would fail.
  *
  * What the seam DOES enforce, because a session cannot: **club scoping on every
  * id the caller supplies.** A membership id and a record id both arrive from the
@@ -47,6 +63,8 @@ import {
 	isIsoDate,
 	isOutsideWindow,
 	isTrainablePosition,
+	isTrainingPeriod,
+	isWindowOrderValid,
 	type OfficerSeat,
 	suggestG9,
 	TRAINING_PERIODS,
@@ -56,8 +74,13 @@ import {
 	type TrainingWindow,
 	tallyPeriod,
 	todayIso,
+	WINDOW_ORDER_MESSAGE,
 } from "#/lib/officer-training";
-import { type OfficerPosition, officerRank } from "#/lib/officers";
+import {
+	OFFICER_POSITIONS,
+	type OfficerPosition,
+	officerRank,
+} from "#/lib/officers";
 
 // ---------------------------------------------------------------------------
 // Input schemas
@@ -71,11 +94,19 @@ const clubYear = {
 };
 
 /**
- * 1 or 2. A `z.union` of literals rather than `min(1).max(2)` so the parsed type
- * is `TrainingPeriod` and not `number` — the pure helpers are keyed on the
- * literal union, and widening here would push a cast into every call site.
+ * 1 or 2, validated through the shared {@link isTrainingPeriod} guard so the
+ * domain has ONE declaration in TypeScript (`TRAINING_PERIODS`, which the guard
+ * reads) and one in SQL (the two `CHECK`s). It was a local
+ * `z.union([z.literal(1), z.literal(2)])` — a third spelling — while a guard
+ * written for exactly this job sat unused in the lib.
+ *
+ * `z.custom` rather than `z.union` keeps the parsed type as `TrainingPeriod`
+ * rather than widening to `number`, which would push a cast into every caller.
  */
-const periodSchema = z.union([z.literal(1), z.literal(2)]);
+const periodSchema = z.custom<TrainingPeriod>(
+	isTrainingPeriod,
+	"Pick training period 1 or 2.",
+);
 
 /** `YYYY-MM-DD`, and a real calendar day — `2026-02-31` parses and is rejected. */
 const isoDateSchema = z
@@ -98,9 +129,11 @@ export const setTrainingWindowSchema = z
 	})
 	// Mirrors the `officer_training_periods_order_check` CHECK. Both copies earn
 	// their keep: this one produces a readable message, the constraint is the one
-	// a raw `sql` write cannot bypass.
-	.refine((v) => v.endsOn >= v.startsOn, {
-		message: "The window must end on or after it starts.",
+	// a raw `sql` write cannot bypass. The PREDICATE and the MESSAGE come from
+	// the shared lib so the form states the same rule in the same words — it had
+	// a third, hand-written copy of both.
+	.refine((v) => isWindowOrderValid(v.startsOn, v.endsOn), {
+		message: WINDOW_ORDER_MESSAGE,
 		path: ["endsOn"],
 	});
 export type SetTrainingWindowInput = z.infer<typeof setTrainingWindowSchema>;
@@ -116,23 +149,22 @@ export type ResetTrainingWindowInput = z.infer<
 export const addTrainingRecordSchema = z.object({
 	...clubYear,
 	membershipId: z.string().uuid(),
-	position: z.enum([
-		"president",
-		"vp_education",
-		"vp_membership",
-		"vp_public_relations",
-		"secretary",
-		"treasurer",
-		"sergeant_at_arms",
-		"immediate_past_president",
-	]),
+	// Derived from the shared const, not re-listed. `src/lib/officers.ts` calls
+	// itself "the single source of truth for the enum values", and the repo
+	// already has this idiom (`members-logic.ts`: `z.enum(OFFICER_POSITIONS)`).
+	// Spelling the eight literals here meant a ninth office added to the enum
+	// would be offered by the panel (which reads the DERIVED
+	// `TRAINABLE_OFFICER_POSITIONS`) and rejected by this schema with a raw
+	// ZodError — two lists that look shared and are not, which is the
+	// `club-logo-limits` drift CLAUDE.md records.
+	position: z.enum(OFFICER_POSITIONS),
 	period: periodSchema,
 	trainedOn: isoDateSchema.nullable().optional(),
 });
 export type AddTrainingRecordInput = z.infer<typeof addTrainingRecordSchema>;
 
 export const removeTrainingRecordSchema = z.object({
-	clubId: z.string().uuid(),
+	...clubYear,
 	recordId: z.string().uuid(),
 });
 export type RemoveTrainingRecordInput = z.infer<
@@ -161,34 +193,37 @@ export interface TrainingRecordView {
 	counts: boolean;
 }
 
+/**
+ * The admin panel's payload.
+ *
+ * It deliberately carries NO goal-9 suggestion. It used to also expose
+ * `g9Suggestion`, `hasRecords` and `programYear`, and nothing but the tests read
+ * them: the route takes all three from `DcpScoreboardView.derivedTraining`
+ * (`dcp.tsx`), because the scoreboard needs them anyway for the badge and the
+ * Apply button. Keeping a second copy here meant the same rows were read and
+ * de-duped twice per page load, in two transactions — so the two numbers shown
+ * adjacently, the goal-row badge and the panel's own "3/4", came from different
+ * snapshots and could disagree. Refetching them together fixes staleness, not
+ * read skew. One derivation, one reader.
+ */
 export interface OfficerTrainingView {
-	programYear: number;
 	/** The calendar date the phases and countdowns below were computed against. */
 	today: IsoDate;
 	/** Both periods, chronological. */
 	periods: TrainingPeriodTally[];
 	/** The period to lead with (first open, else first upcoming, else 2). */
 	focus: TrainingPeriod;
-	/** Every record for the club-year, newest date first within each period. */
+	/**
+	 * Every record for the club-year, ordered period → member name → office. NOT
+	 * by date: `trained_on` is nullable, so a date sort clumps the undated rows
+	 * arbitrarily. (This read "newest date first within each period" while the
+	 * query ordered by name — a contract nothing implemented and nothing tested.)
+	 */
 	records: TrainingRecordView[];
 	/** Currently-held TI-countable offices, canonical order (President first). */
 	seats: OfficerSeat[];
 	/** Active roster for the "record a training" picker, by name. */
 	roster: { membershipId: string; name: string }[];
-	/**
-	 * What an Apply would write to goal 9 (0 or 1). Nothing writes it without one
-	 * — ADR-0019's house style, the third assist beside the roster assist (goals
-	 * 7/8) and the Pathways assist (goals 1–6, #245).
-	 */
-	g9Suggestion: number;
-	/**
-	 * Whether the club has recorded ANY training for this year. A bare
-	 * `g9Suggestion: 0` is ambiguous — "recorded and genuinely short" vs "never
-	 * recorded anything" — and applying the second would clear a President's
-	 * hand-entered Met. So the UI only OFFERS the apply when this is true,
-	 * mirroring how `pathwaysSynced` gates the education assist.
-	 */
-	hasRecords: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,9 +352,17 @@ export async function resetTrainingWindow(
 export async function loadTrainingRecords(
 	clubId: string,
 	programYear: number,
+	/**
+	 * The already-resolved windows, when the caller has them. Optional so the
+	 * standalone contract still works, but {@link getOfficerTrainingView} passes
+	 * them, and that is not only a saved round trip: fetching them again meant
+	 * two concurrent reads on different pool connections, so the tallies could
+	 * use one set of dates while these rows' `outsideWindow` flags used another.
+	 */
+	windows?: readonly ResolvedWindow[],
 ): Promise<TrainingRecordView[]> {
-	const windows = await loadTrainingWindows(clubId, programYear);
-	const byPeriod = new Map(windows.map((w) => [w.window.period, w.window]));
+	const resolved = windows ?? (await loadTrainingWindows(clubId, programYear));
+	const byPeriod = new Map(resolved.map((w) => [w.window.period, w.window]));
 
 	const rows = await db
 		.select({
@@ -338,6 +381,9 @@ export async function loadTrainingRecords(
 				eq(officerTrainingRecords.programYear, programYear),
 			),
 		)
+		// Period first, then member name, then office — the reading order of the
+		// list. NOT by date: `trained_on` is nullable, so a date sort puts the
+		// undated rows in an arbitrary clump. The view type documents this order.
 		.orderBy(
 			asc(officerTrainingRecords.period),
 			asc(members.name),
@@ -529,9 +575,14 @@ export async function getOfficerTrainingView(
 	today: IsoDate = todayIso(),
 ): Promise<OfficerTrainingView> {
 	const { clubId, programYear } = input;
-	const [windows, records, seats, roster] = await Promise.all([
-		loadTrainingWindows(clubId, programYear),
-		loadTrainingRecords(clubId, programYear),
+	// Windows are resolved FIRST and handed to `loadTrainingRecords`, rather than
+	// both fetching their own: two concurrent reads on different pool connections
+	// could return different dates, and then the tallies and the rows'
+	// `outsideWindow` flags would be computed against different windows on the
+	// same screen.
+	const windows = await loadTrainingWindows(clubId, programYear);
+	const [records, seats, roster] = await Promise.all([
+		loadTrainingRecords(clubId, programYear, windows),
 		loadOfficerSeats(clubId),
 		loadTrainingRoster(clubId),
 	]);
@@ -542,15 +593,12 @@ export async function getOfficerTrainingView(
 	);
 
 	return {
-		programYear,
 		today,
 		periods,
 		focus: focusPeriod(periods),
 		records,
 		seats,
 		roster,
-		g9Suggestion: suggestG9(scoring),
-		hasRecords: records.length > 0,
 	};
 }
 
@@ -597,6 +645,13 @@ export async function deriveTrainingSuggestion(
 		trainedByPeriod: TRAINING_PERIODS.map((p) =>
 			countTrainedOfficers(scoring, p),
 		),
-		hasRecords: rows.length > 0,
+		// COUNTABLE rows only, not `rows.length > 0`. `hasRecords` is the gate
+		// that decides whether the UI offers an apply, and an apply can write 0
+		// over a hand-entered Met — so a club whose only rows are Immediate Past
+		// President (which the count ignores) would have been offered a
+		// destructive action on evidence that supports nothing. The field exists
+		// to tell "recorded and genuinely short" from "nothing recorded"; a row
+		// that can never count belongs in the second bucket.
+		hasRecords: scoring.some((r) => isTrainablePosition(r.position)),
 	};
 }

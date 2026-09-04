@@ -62,7 +62,8 @@ export function formatShortDate(value: Date | string, timeZone?: string) {
 }
 
 /**
- * Format a CALENDAR DAY ("YYYY-MM-DD") as e.g. "Aug 10".
+ * Format a CALENDAR DAY ("YYYY-MM-DD") as e.g. "Aug 10", or "Aug 10, 2026" with
+ * `{ withYear: true }`.
  *
  * Deliberately not `formatShortDate`, which would take the same string through
  * `new Date("2026-08-10")` — UTC midnight — and then format it in the runtime's
@@ -71,16 +72,28 @@ export function formatShortDate(value: Date | string, timeZone?: string) {
  * construction and the formatting to UTC makes the day survive the round trip
  * unchanged, whoever is looking and wherever the process runs.
  *
+ * `withYear` was added by #531, whose training-window bounds span two calendar
+ * years ("Nov 1, 2026 – Feb 28, 2027") and are meaningless without it. It is an
+ * option here rather than a second function because the UTC pinning above is the
+ * whole point and a parallel implementation would drop it — which is exactly what
+ * #531 did first, hand-rolling an English month table in
+ * `officer-training.ts` while this function sat two files away carrying the same
+ * reasoning in its own doc comment.
+ *
  * Returns the input unchanged if it is not a plain date, so a bad value shows up
  * rather than becoming "Invalid Date".
  */
-export function formatCalendarDay(ymd: string) {
+export function formatCalendarDay(
+	ymd: string,
+	options?: { withYear?: boolean },
+) {
 	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
 	if (!m) return ymd;
 	const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
 	return new Intl.DateTimeFormat(undefined, {
 		month: "short",
 		day: "numeric",
+		...(options?.withYear ? { year: "numeric" as const } : {}),
 		timeZone: "UTC",
 	}).format(d);
 }

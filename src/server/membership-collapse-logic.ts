@@ -96,8 +96,9 @@ export async function collapseMemberships(
 		.where(eq(members.id, keeperId));
 
 	// --- Re-point every membership FK (absorbed → keeper) ------------------
-	// This heading read "the eleven membership FKs" while fifteen numbered steps
-	// followed it, so the number is gone: the authority is the FK drift-guard in
+	// This heading carried a COUNT that had been stale for several releases (it
+	// read "the eleven membership FKs" above fourteen numbered steps), so the
+	// number is gone: the authority is the FK drift-guard in
 	// `membership-collapse-logic.integration.test.ts`, which compares the handled
 	// set against the LIVE pg_constraint catalog and fails on any new FK to
 	// `members`. That guard is what caught #531's own missing re-point.
@@ -305,8 +306,30 @@ export async function collapseMemberships(
 	//     training may well have picked a different one of the two rows each
 	//     period. Drop the absorbed row on a collision — the keeper's claim for
 	//     that (office, year, period) already says the same thing, and the count
-	//     is over distinct PEOPLE, so collapsing two rows for one person changes
-	//     no total.
+	//     is over distinct PEOPLE, so dropping a duplicate claim for the surviving
+	//     person loses nothing. (The merge DOES lower the club's trained count
+	//     when the two rows were two Person records for one human — that is the
+	//     merge working, not the count having been wrong: there was only ever one
+	//     human. `members_club_person_unique` means a single Person cannot hold
+	//     two memberships in one club, so this is the only shape it arises in.)
+	//
+	//     Fill the keeper's MISSING date from the absorbed row before dropping
+	//     it. `trained_on` is nullable by design, so a plain "keeper wins" (the
+	//     pattern borrowed from `meeting_attendance_plan`) silently downgraded a
+	//     dated claim to "date not recorded". Unlike the attendance case there is
+	//     a meaningful reconciliation here, because one side is ABSENT rather
+	//     than contradictory — nothing is overwritten, only a null filled.
+	await tx.execute(sql`
+		UPDATE officer_training_records AS k
+		SET trained_on = a.trained_on
+		FROM officer_training_records AS a
+		WHERE k.membership_id = ${keeperId}
+			AND a.membership_id = ${absorbedId}
+			AND k.position = a.position
+			AND k.program_year = a.program_year
+			AND k.period = a.period
+			AND k.trained_on IS NULL
+			AND a.trained_on IS NOT NULL`);
 	await tx.execute(sql`
 		DELETE FROM officer_training_records
 		WHERE membership_id = ${absorbedId}

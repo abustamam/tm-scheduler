@@ -22,9 +22,12 @@ import {
 } from "#/lib/dcp";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import {
-	TRAINED_OFFICERS_REQUIRED,
 	TRAINING_GOAL_KEY,
 	type TrainingPeriod,
+	trainingAppliedMessage,
+	trainingApplyLabel,
+	trainingProgramYearForDate,
+	trainingSuggestionNote,
 } from "#/lib/officer-training";
 import { cn } from "#/lib/utils";
 import {
@@ -100,9 +103,16 @@ function DcpTracker() {
 	const [loading, setLoading] = useState(false);
 	const loadedYearRef = useRef(loaded.year);
 
-	// Year options: every started year plus the current one, newest first.
+	// Year options: every started year, the current one, and the year whose
+	// TRAINING window is open — which differs from `currentProgramYear()` for the
+	// whole of June, because period 1 opens Jun 1 of a program year that has not
+	// begun. Without it that year was unreachable: `loaded.years` holds only years
+	// with a scoreboard, and no club starts next year's board in June. So all of
+	// June the panel showed both windows shut, in the exact month incoming
+	// officers are trained. See `trainingProgramYearForDate`.
+	const trainingYear = trainingProgramYearForDate();
 	const yearOptions = Array.from(
-		new Set([currentProgramYear(), ...loaded.years, year]),
+		new Set([currentProgramYear(), trainingYear, ...loaded.years, year]),
 	).sort((a, b) => b - a);
 
 	// Both payloads are refetched together on every reload: the scoreboard's g9
@@ -194,11 +204,12 @@ function DcpTracker() {
 				data: { clubId, programYear: year },
 			});
 			setView(v);
-			toast.success(
-				v.progress[TRAINING_GOAL_KEY] === 1
-					? "Goal 9 marked met from your officer training records."
-					: "Goal 9 set to not met from your officer training records.",
-			);
+			// From the lib, not a ternary here. As a ternary the two strings were
+			// invisible to every gate — a route cannot be mounted in vitest and
+			// typecheck sees two strings either way round — and mutation review
+			// swapped the polarity with the whole suite green at 150/150, which
+			// would have told the President the opposite of what was written.
+			toast.success(trainingAppliedMessage(v.progress[TRAINING_GOAL_KEY] ?? 0));
 		} catch (err) {
 			toast.error(
 				err instanceof Error
@@ -254,11 +265,19 @@ function DcpTracker() {
 		if (!clubId) return;
 		setLoading(true);
 		try {
-			await removeTrainingRecord({ data: { clubId, recordId } });
-			const next = await getOfficerTraining({
-				data: { clubId, programYear: year },
+			// The fn now returns the fresh view alongside the flag, so this is two
+			// round trips rather than three. And the flag is READ: it reported
+			// "Training record removed." for a delete that removed nothing, which is
+			// what a stale tab or a double-click produces.
+			const { removed, view: next } = await removeTrainingRecord({
+				data: { clubId, programYear: year, recordId },
 			});
-			await afterTrainingWrite(next, "Training record removed.");
+			await afterTrainingWrite(
+				next,
+				removed
+					? "Training record removed."
+					: "That record was already gone — refreshed the list.",
+			);
 		} catch (err) {
 			trainingError(err, "Couldn't remove that record.");
 		} finally {
@@ -373,14 +392,26 @@ function DcpTracker() {
 							    feed. Rendered from the loader's own payload, so the panel is
 							    there on first paint rather than after a client fetch. */}
 							{cat === "training" && training ? (
-								<OfficerTrainingPanel
-									view={training}
-									busy={loading}
-									onAddRecord={handleAddRecord}
-									onRemoveRecord={handleRemoveRecord}
-									onSetWindow={handleSetWindow}
-									onResetWindow={handleResetWindow}
-								/>
+								<>
+									{/* The June case, said out loud: both of the viewed year's
+									    windows can be shut while the NEXT year's period 1 is
+									    open, and the panel below would just look finished. */}
+									{trainingYear !== year ? (
+										<p className="text-xs text-[var(--warning-strong)]">
+											Officer training for {programYearLabel(trainingYear)} is
+											open now. Switch the year above to record it — the windows
+											below belong to {programYearLabel(year)}.
+										</p>
+									) : null}
+									<OfficerTrainingPanel
+										view={training}
+										busy={loading}
+										onAddRecord={handleAddRecord}
+										onRemoveRecord={handleRemoveRecord}
+										onSetWindow={handleSetWindow}
+										onResetWindow={handleResetWindow}
+									/>
+								</>
 							) : null}
 						</div>
 					))}
@@ -613,14 +644,11 @@ function GoalGroup({
 						disabled={loading}
 					>
 						<Sparkles className="size-3.5" aria-hidden />
-						{loading
-							? "Applying…"
-							: // Names the value it will write. This action can lower a
-								// hand-entered Met, so the label has to say so before the click
-								// rather than after it.
-								training.suggestion === 1
-								? "Apply training records (mark met)"
-								: "Apply training records (mark not met)"}
+						{/* Both strings come from the lib, where a unit test pins which
+						    one goes with which value. Inline they were a ternary between
+						    two strings, which typecheck cannot distinguish and no test
+						    could reach — mutation swapped them with the suite green. */}
+						{loading ? "Applying…" : trainingApplyLabel(training.suggestion)}
 					</Button>
 				) : null}
 			</div>
@@ -650,12 +678,6 @@ function GoalGroup({
 			) : null}
 		</div>
 	);
-}
-
-/** "Training: 4 and 3 of 4" — the two period counts behind the g9 suggestion. */
-function trainingSuggestionNote(trainedByPeriod: number[]): string {
-	const [first = 0, second = 0] = trainedByPeriod;
-	return `Training: ${first} and ${second} of ${TRAINED_OFFICERS_REQUIRED}`;
 }
 
 function GoalRow({

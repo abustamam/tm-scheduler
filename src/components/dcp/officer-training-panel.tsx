@@ -19,11 +19,13 @@ import { Label } from "#/components/ui/label";
 import {
 	formatIsoDate,
 	type IsoDate,
+	isWindowOrderValid,
 	TRAINABLE_OFFICER_POSITIONS,
 	type TrainingPeriod,
 	type TrainingPeriodTally,
 	trainingPeriodLabel,
 	untrainedSeats,
+	WINDOW_ORDER_MESSAGE,
 } from "#/lib/officer-training";
 import { type OfficerPosition, officerPositionLabel } from "#/lib/officers";
 import { cn } from "#/lib/utils";
@@ -52,8 +54,17 @@ export interface OfficerTrainingPanelProps {
 	onResetWindow: (period: TrainingPeriod) => void;
 }
 
+// `max-w-full` matters at 375px: a 36-character member name rendered the select
+// 309px wide inside a 301px content box, clipping its own dropdown arrow against
+// the card's `overflow-hidden`.
 const SELECT_CLASS =
-	"h-9 rounded-md border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-sm font-medium outline-none focus-visible:border-[var(--lagoon-deep)]";
+	"h-9 max-w-full rounded-md border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-sm font-medium outline-none focus-visible:border-[var(--lagoon-deep)]";
+
+/**
+ * How close to the deadline counts as urgent. Three weeks is the issue's own
+ * framing ("the window closes in three weeks and you have two of four").
+ */
+const URGENT_DAYS = 21;
 
 export function OfficerTrainingPanel({
 	view,
@@ -66,14 +77,29 @@ export function OfficerTrainingPanel({
 	return (
 		<section aria-labelledby="cot-heading" className="space-y-3">
 			<div>
-				<h2 id="cot-heading" className="text-sm font-bold tracking-[-0.01em]">
+				{/* h3, not h2: the page is h1 → h2 per DCP category, and this panel is
+				    nested INSIDE the Training category's section. An h2 here made the
+				    two siblings in heading navigation, so a screen-reader user heard
+				    "Training" then "Club officer training" as peers when one contains
+				    the other. */}
+				<h3 id="cot-heading" className="text-sm font-bold tracking-[-0.01em]">
 					Club officer training
-				</h2>
+				</h3>
+				{/* The counting rule is stated HERE, beside the numbers it governs.
+				    It used to sit below both period cards, so a President read "four
+				    officers", then "3/4", then "1 more officer needed" — three
+				    assertions in the people grain — and only afterwards learned that
+				    Toastmasters counts roles and this page is deliberately stricter.
+				    For a club with a Secretary/Treasurer double-hatter that is the
+				    difference between "we're short" and "TI says we're fine", and the
+				    correction was the furthest thing on screen from the number it
+				    corrected. */}
 				<p className="mt-1 max-w-2xl text-xs text-[var(--sea-ink-soft)]">
-					Goal 9 needs four officers trained in each of the two training
-					periods. Record who attended and this page will tell you how many more
-					you need and how long the window is open — then you can apply the
-					result to goal 9 above.
+					Goal 9 needs four officers trained in each training period.
+					Toastmasters counts four officer <em>roles</em>; to stay on the safe
+					side this page counts four different <em>people</em>, so someone
+					holding two offices counts once. Record who attended and this page
+					tells you how many more you need and how long the window is open.
 				</p>
 			</div>
 
@@ -91,11 +117,8 @@ export function OfficerTrainingPanel({
 			))}
 
 			<p className="max-w-2xl text-xs text-[var(--sea-ink-soft)]">
-				Toastmasters counts four officer <em>roles</em>; this page counts four
-				distinct <em>people</em>, so a member holding two offices counts once.
-				That can only under-count, never over-count — and Toastmasters, not
-				GavelUp, is the record of who was trained, so goal 9 is never ticked for
-				you.
+				Toastmasters, not GavelUp, decides who was trained — nothing here ticks
+				goal 9 for you.
 			</p>
 		</section>
 	);
@@ -166,8 +189,13 @@ function PeriodCard({
 								: "text-[var(--warning-strong)]",
 						)}
 					>
+						{/* "All four trained", not "Bar cleared": the rest of this page
+						    says Met / Mark met / not met / goals met, and the other arm of
+						    this very ternary says "officers needed". "Bar cleared" named
+						    nothing else on screen, and it is the only place a club is told
+						    it succeeded. */}
 						{tally.met
-							? "Bar cleared"
+							? `All ${tally.required} trained`
 							: `${tally.shortfall} more ${tally.shortfall === 1 ? "officer" : "officers"} needed`}
 					</div>
 				</div>
@@ -184,10 +212,24 @@ function PeriodCard({
 					<div className="text-xs font-bold uppercase tracking-[0.04em] text-[var(--sea-ink-soft)]">
 						Not recorded yet
 					</div>
+					{/*
+					 * `max-w-full whitespace-normal` on the badge because Badge ships
+					 * `whitespace-nowrap w-fit shrink-0`, so a long name could neither
+					 * wrap nor shrink and the card's `overflow-hidden` CLIPPED it with
+					 * no ellipsis and no scroller. Measured at a 375px viewport (301px
+					 * content box): "Christopher Vandenberghe-Whitmore · VP Public
+					 * Relations" rendered 339.4px, right edge past the card at x=376.4.
+					 */}
 					<ul className="mt-1.5 flex flex-wrap gap-1.5">
 						{open.map((seat) => (
-							<li key={`${seat.membershipId}:${seat.position}`}>
-								<Badge variant="outline" className="font-normal">
+							<li
+								key={`${seat.membershipId}:${seat.position}`}
+								className="min-w-0"
+							>
+								<Badge
+									variant="outline"
+									className="max-w-full whitespace-normal text-left font-normal"
+								>
 									{seat.name} · {officerPositionLabel(seat.position)}
 								</Badge>
 							</li>
@@ -240,21 +282,32 @@ function PhaseBadge({ tally }: { tally: TrainingPeriodTally }) {
 		);
 	}
 	const days = tally.daysUntilClose ?? 0;
-	// Urgency is the whole point of the countdown: an amber badge for the last
-	// three weeks is what the issue's "discovers in March" club never had.
-	const urgent = !tally.met && days <= 21;
+	// Urgency is the whole point of the countdown: flagging the last three weeks
+	// is what the issue's "discovers in March" club never had.
+	const urgent = !tally.met && days <= URGENT_DAYS;
+	const countdown =
+		days === 0
+			? "Closes today"
+			: `Closes in ${days} ${days === 1 ? "day" : "days"}`;
 	return (
 		<Badge
 			className={cn(
-				"font-normal",
-				urgent
-					? "bg-[var(--warning-strong)] text-white"
-					: "bg-[var(--lagoon-deep)] text-white",
+				"gap-1 font-normal",
+				// `text-[var(--on-accent-fill)]`, never `text-white`. Both of these
+				// fills are light in BOTH themes, so white measured 3.2:1 / 2.0:1 on
+				// the amber and 3.8:1 / 1.5:1 on the teal — all four under AA at the
+				// 12px a Badge renders, and the two dark values are the label-on-fill
+				// class recorded at #645. Dark ink is 4.6:1 at worst. See styles.css.
+				"text-[var(--on-accent-fill)]",
+				urgent ? "bg-[var(--warning-strong)]" : "bg-[var(--lagoon-deep)]",
 			)}
 		>
-			{days === 0
-				? "Closes today"
-				: `Closes in ${days} ${days === 1 ? "day" : "days"}`}
+			{/* Urgency was carried by BACKGROUND COLOUR ALONE — the two arms rendered
+			    identical text, so a colour-blind reader, a forced-colours reader and
+			    anyone printing the page got no signal at all (WCAG 1.4.1). The icon
+			    and the trailing words are the non-colour channel. */}
+			{urgent ? <AlertTriangle className="size-3" aria-hidden /> : null}
+			{urgent ? `${countdown} · act now` : countdown}
 		</Badge>
 	);
 }
@@ -314,8 +367,17 @@ function TrainedList({
 							</Badge>
 						) : null}
 						{r.counts ? null : (
-							<Badge variant="outline" className="font-normal">
-								not counted
+							// Says WHY, and carries a title, because this badge renders
+							// only for a row the UI cannot create (the seam refuses
+							// Immediate Past President and the picker never offers it) —
+							// so its only reader is someone with no context for it, and a
+							// bare "not counted" gave neither a reason nor a remedy.
+							<Badge
+								variant="outline"
+								className="max-w-full whitespace-normal font-normal"
+								title="Immediate Past President is not one of the seven offices Toastmasters counts for officer training."
+							>
+								not counted by Toastmasters
 							</Badge>
 						)}
 					</div>
@@ -324,7 +386,10 @@ function TrainedList({
 						variant="ghost"
 						className="shrink-0"
 						disabled={busy}
-						aria-label={`Remove ${r.memberName} as ${officerPositionLabel(r.position)}`}
+						// "Remove X as Secretary" is what a button that ENDED an officer
+						// term would say; this deletes a training RECORD, and the button
+						// is icon-only so its label is a screen reader's only cue.
+						aria-label={`Remove ${r.memberName}'s ${officerPositionLabel(r.position)} training record`}
 						onClick={() => onRemoveRecord(r.id)}
 					>
 						<Trash2 className="size-3.5" aria-hidden />
@@ -477,6 +542,7 @@ function WindowEditor({
 	const [startsOn, setStartsOn] = useState(tally.window.startsOn);
 	const [endsOn, setEndsOn] = useState(tally.window.endsOn);
 	const [open, setOpen] = useState(false);
+	const editorId = `cot-window-editor-${tally.period}`;
 
 	// These two inputs MIRROR stored state, so they must re-sync when it changes.
 	// Without this the editor stayed open after a save or a reset holding the OLD
@@ -497,7 +563,12 @@ function WindowEditor({
 		setEndsOn(tally.window.endsOn);
 	}, [tally.window.startsOn, tally.window.endsOn]);
 
-	const invalid = endsOn < startsOn;
+	// `isWindowOrderValid`, not a local `endsOn < startsOn`: that predicate calls
+	// an EMPTY start valid, because `"2026-08-31" < ""` is false. Clearing the
+	// Opens field therefore left Save live on a request the server always
+	// rejects — with a raw `ZodError` JSON array as the toast. Clearing Closes
+	// happened to behave, which is what made it look like a working check.
+	const invalid = !isWindowOrderValid(startsOn, endsOn);
 	const changed =
 		startsOn !== tally.window.startsOn || endsOn !== tally.window.endsOn;
 
@@ -508,6 +579,8 @@ function WindowEditor({
 					size="sm"
 					variant="ghost"
 					disabled={busy}
+					aria-expanded={false}
+					aria-controls={editorId}
 					onClick={() => setOpen(true)}
 				>
 					Edit these dates
@@ -517,7 +590,7 @@ function WindowEditor({
 	}
 
 	return (
-		<div className="flex flex-wrap items-end gap-2 px-5 py-3">
+		<div id={editorId} className="flex flex-wrap items-end gap-2 px-5 py-3">
 			<div className="space-y-1">
 				<Label htmlFor={`cot-start-${tally.period}`} className="text-xs">
 					Opens
@@ -544,10 +617,19 @@ function WindowEditor({
 					onChange={(e) => setEndsOn(e.target.value)}
 				/>
 			</div>
+			{/* Each write CLOSES the editor. `setOpen(false)` appeared nowhere
+			    before, so once opened the form stayed on both period cards for the
+			    life of the page — including after a successful save, where the
+			    button that would collapse it is the very element the form replaced.
+			    Collapsing on write is also what makes the value re-sync above
+			    visible as confirmation rather than as a silent swap. */}
 			<Button
 				size="sm"
 				disabled={busy || invalid || !changed}
-				onClick={() => onSetWindow({ period: tally.period, startsOn, endsOn })}
+				onClick={() => {
+					onSetWindow({ period: tally.period, startsOn, endsOn });
+					setOpen(false);
+				}}
 			>
 				Save dates
 			</Button>
@@ -556,15 +638,32 @@ function WindowEditor({
 					size="sm"
 					variant="outline"
 					disabled={busy}
-					onClick={() => onResetWindow(tally.period)}
+					onClick={() => {
+						onResetWindow(tally.period);
+						setOpen(false);
+					}}
 				>
 					<RotateCcw className="size-3.5" aria-hidden />
 					Use Toastmasters' dates
 				</Button>
 			)}
+			<Button
+				size="sm"
+				variant="ghost"
+				disabled={busy}
+				onClick={() => {
+					// Discard the edit as well as collapsing, so reopening starts from
+					// what is stored rather than from a half-typed abandoned value.
+					setStartsOn(tally.window.startsOn);
+					setEndsOn(tally.window.endsOn);
+					setOpen(false);
+				}}
+			>
+				Cancel
+			</Button>
 			{invalid ? (
 				<p className="text-xs text-[var(--warning-strong)]">
-					The window must end on or after it starts.
+					{WINDOW_ORDER_MESSAGE}
 				</p>
 			) : null}
 		</div>

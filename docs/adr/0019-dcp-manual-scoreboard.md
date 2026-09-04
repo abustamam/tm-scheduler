@@ -110,11 +110,38 @@ not change how it is stored or scored.
   Scoped to the club-year rather than to `dcp_scoreboards.id` so the windows are readable before a
   scoreboard exists — which is precisely when the deadline reading is worth having.
 
-**The bar counts distinct PEOPLE.** TI words goal 9 over ROLES ("four club officer roles trained").
-This app counts four distinct people, so a member holding two offices counts once. That is
-deliberately the conservative reading: it can only under-count relative to TI, so the app can never
-tell a club it cleared goal 9 when TI would disagree. Display is keyed on `(membership, office)`
-instead, so a dual-office holder can read as done on one seat and open on the other.
+**The bar counts the smaller of distinct PEOPLE and distinct OFFICES.** The decision (2026-09-04)
+was distinct people — a member holding two offices counts once — justified as the conservative
+reading that "can only under-count relative to TI". Review found the justification false in one
+direction, and the fix preserves the decision rather than reversing it.
+
+TI words goal 9 over ROLES and adds "credit is given only for one person per officer role". So the
+two rules diverge both ways: one person over two offices is 2 to TI and 1 to a people count
+(under-counting, as intended), but **two people over one office is 1 to TI and 2 to a people
+count** — over-counting, which is exactly what the conservative reading exists to prevent. That
+shape is reachable rather than theoretical: the unique index is `(membership, office, year,
+period)`, so any number of members may each claim `secretary`, and the picker offers all seven
+offices to any active member deliberately (someone may have been trained for an office they have
+since handed on). Four members recorded against one office displayed "4/4 · Bar cleared" and
+suggested goal 9 MET where TI credits one role — while the panel's own copy asserted that could not
+happen.
+
+`Math.min(people, offices)` is never more than distinct people (the decision as given) and never
+more than TI's cap, so the guarantee is now true rather than intended. For the settled dual-office
+example the answer is unchanged.
+
+One limit stays and is recorded rather than fixed: a duplicated HUMAN counts twice. `guards.ts`
+notes one human can hold two `members` rows in a club, but only through two Person rows, and
+`members_club_person_unique` makes membership and person 1:1 within a club — so no de-dup column
+helps, and merging the Person rows is the remedy. Display is keyed on `(membership, office)`, so a
+dual-office holder reads as done on one seat and open on the other.
+
+**The panel's program year is not `currentProgramYear()`.** That rolls on Jul 1; period 1 opens
+Jun 1 of the year it belongs to. For the whole of June the open window therefore belongs to the
+NEXT program year, and pinning the panel to the current one showed both windows shut in the one
+month incoming officers are trained — with June entries filed against the previous year's
+already-scored goal 9. `trainingProgramYearForDate` names the right year and the picker offers it;
+June is the only month the two disagree.
 
 `immediate_past_president` is excluded — TI names seven elected offices and IPP is not among them.
 

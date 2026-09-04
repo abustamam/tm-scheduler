@@ -531,12 +531,29 @@ the nouns in `src/db/schema.ts`.
   mid-window and their membership going inactive. `trained_on` is NULLABLE (a club often knows
   someone attended without knowing the day) and the score never reads it — the view compares it
   against the window and FLAGS a mismatch rather than voiding the claim, since TI is the arbiter.
-  **The bar counts DISTINCT PEOPLE, where TI words it over ROLES** (maintainer decision,
-  2026-09-04): a member holding two offices counts ONCE toward the four. Deliberately the
-  conservative reading — it can only under-count, so the app never tells a club it cleared goal
-  9 when TI would disagree. The DISPLAY grain is narrower, keyed on `(membership, office)`, so a
-  dual-office holder trained for one office reads as done on that seat and open on the other
-  while still counting 1: `countTrainedOfficers` scores, `untrainedSeats` displays.
+  **The bar counts the SMALLER of distinct PEOPLE and distinct OFFICES.** The maintainer's rule
+  (2026-09-04) is distinct people — a member holding two offices counts ONCE — chosen because it
+  "can only under-count relative to TI". That reasoning holds one way and fails the other, and
+  review caught it: TI's manual says "credit is given only for one person per officer role", so
+  **two people recorded against ONE office is 1 role to TI and would have been 2 to a
+  people-only count** — over-counting, the direction the rule exists to prevent. Reachable, not
+  theoretical: the unique index is (membership, office, year, period) and the picker offers all
+  seven offices to any member on purpose. Four members on one office read "4/4 · Bar cleared"
+  and suggested goal 9 MET. `Math.min` honours the decision rather than reversing it — never
+  more than distinct people, never more than TI's own cap — so "can only under-count" is now
+  true instead of merely intended.
+  A duplicated HUMAN still counts twice and no key fixes that: `members_club_person_unique`
+  makes membership and person 1:1 within a club, so the two-`members`-rows case `guards.ts`
+  describes needs two Person rows. Merging them (`collapseMemberships`) is the remedy, and the
+  count dropping afterwards is the merge working.
+  The DISPLAY grain is narrower, keyed on `(membership, office)`, so a dual-office holder
+  trained for one office reads as done on that seat and open on the other while still counting
+  1: `countTrainedOfficers` scores, `untrainedSeats` displays.
+  **The panel's program year is not always `currentProgramYear()`.** That rolls on Jul 1 while
+  period 1 opens Jun 1, so for the whole of June the open window belongs to the NEXT program
+  year — `trainingProgramYearForDate` names it, and the year picker offers it. Without that the
+  panel showed both windows shut in the one month incoming officers are actually trained, and
+  June training recorded anyway was filed against the previous year's already-scored goal 9.
   **Seven countable offices, not eight** — `immediate_past_president` is in the enum but not in
   TI's list, so the seam refuses to record one and the count filters it out anyway (defence in
   depth: an import or raw statement cannot smuggle one in). All the rules are pure and
