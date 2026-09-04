@@ -16,6 +16,7 @@ import {
 	expandRunSheet,
 	TABLE_TOPICS_MARKS,
 } from "#/lib/agenda-runsheet";
+import { TABLE_TOPICS_ROLE_KEY } from "#/lib/table-topics-limits";
 import { formatTimingClock } from "#/lib/timing-window";
 import { WOD_LIMITS } from "#/lib/wod-limits";
 import {
@@ -194,20 +195,36 @@ describe("agenda marks agree with the Timer sheet's published windows (#507)", (
 	const published = (assignment: string) =>
 		rows.find((r) => r[0] === assignment);
 
+	// Both cases go through a LITERAL, and that is the fix #679 asked for. The
+	// pairing was previously stated as `sheet === formatTimingClock(MARKS.*)`,
+	// which is relative to the very constant it guards: change `TABLE_TOPICS_MARKS`
+	// to 3/4/5 and both sides move together, the test passes, and every printed
+	// Timer sheet in the product now says something else. Comparing each side to
+	// the same absolute triple keeps the agreement this block exists for AND
+	// makes a drift that moves both surfaces at once fail — which is the one
+	// defect a pure parity test cannot see (CLAUDE.md's parity trap).
+	const clocks = (m: { green: number; yellow: number; red: number }) => [
+		formatTimingClock(m.green),
+		formatTimingClock(m.yellow),
+		formatTimingClock(m.red),
+	];
+
 	it("evaluation", () => {
 		expect(published("Evaluation")?.slice(1, 4)).toEqual([
-			formatTimingClock(EVALUATION_MARKS.green),
-			formatTimingClock(EVALUATION_MARKS.yellow),
-			formatTimingClock(EVALUATION_MARKS.red),
+			"2:00",
+			"2:30",
+			"3:00",
 		]);
+		expect(clocks(EVALUATION_MARKS)).toEqual(["2:00", "2:30", "3:00"]);
 	});
 
 	it("table topics", () => {
 		expect(published("Table Topics")?.slice(1, 4)).toEqual([
-			formatTimingClock(TABLE_TOPICS_MARKS.green),
-			formatTimingClock(TABLE_TOPICS_MARKS.yellow),
-			formatTimingClock(TABLE_TOPICS_MARKS.red),
+			"1:00",
+			"1:30",
+			"2:00",
 		]);
+		expect(clocks(TABLE_TOPICS_MARKS)).toEqual(["1:00", "1:30", "2:00"]);
 	});
 });
 
@@ -469,14 +486,25 @@ describe("role sheets carry a spoken script (#509)", () => {
 			).toContain("For each evaluation:");
 		});
 
-		it("has the Timer ready for the Table Topics ask the agenda makes", () => {
-			// The flex segment carrying the Table Topics marks — again structural.
-			const [segment] = template.filter(
+		// The lookup is by ROLE KEY, not by `b.marks === TABLE_TOPICS_MARKS` (#679).
+		// Reference equality only ever worked by accident: `resolveTableTopicsMarks`
+		// returns the shared constant OBJECT on its fallback branch and a fresh
+		// literal on the club-window branch, so the old filter silently meant "the
+		// default-club beat" and returned NOTHING for the club the whole feature
+		// exists for. `TABLE_TOPICS_ROLE_KEY` is the handle named for exactly this —
+		// two derivations having to agree which row is the Table Topics segment —
+		// and `flex` stays in the predicate because it is what distinguishes the
+		// segment from the Table Topics Master's other beats.
+		const tableTopicsSegment = (beats: typeof template) =>
+			beats.filter(
 				(b) =>
 					b.kind === "role" &&
 					b.flex === true &&
-					b.marks === TABLE_TOPICS_MARKS,
+					b.roleKey === TABLE_TOPICS_ROLE_KEY,
 			);
+
+		it("has the Timer ready for the Table Topics ask the agenda makes", () => {
+			const [segment] = tableTopicsSegment(template);
 			expect(segment).toBeDefined();
 			expect(segment.detail).toContain("to explain the timing");
 
@@ -485,6 +513,29 @@ describe("role sheets carry a spoken script (#509)", () => {
 				.join(" | ");
 			expect(says).toContain("For Table Topics:");
 			expect(says).toContain("For each evaluation:");
+		});
+
+		it("finds the same segment for a club that states its own window", () => {
+			// The half the reference-equality lookup could not reach, and the reason
+			// the change above is a fix rather than a tidy-up: with MCF's window the
+			// beat's marks are a fresh object, so the old predicate matched nothing
+			// and this whole case was unwritable. ABSOLUTE minutes.
+			const own = buildRunOfShow({
+				geIntroducesFunctionaries: false,
+				tableTopicsLimits: { minSeconds: 60, maxSeconds: 150 },
+			});
+			const [segment] = tableTopicsSegment(own);
+			expect(segment).toBeDefined();
+			expect(segment.kind === "role" && segment.marks).toEqual({
+				green: 1,
+				yellow: 1.75,
+				red: 2.5,
+			});
+			// Exactly one, on the CLUB-WINDOW build this case is about — asserted
+			// against `own`, not the default-window `template` above it, which the
+			// sibling case already covers and which cannot see a beat that only the
+			// club branch emits.
+			expect(tableTopicsSegment(own)).toHaveLength(1);
 		});
 
 		it("has the Grammarian give the Word of the Day where the agenda says", () => {
