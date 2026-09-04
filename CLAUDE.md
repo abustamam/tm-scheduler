@@ -474,7 +474,7 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
 
 ## Data layer
 
-Schema is `src/db/schema.ts` — the full domain model (~35 tables): clubs,
+Schema is `src/db/schema.ts` — the full domain model (~39 tables): clubs,
 people/members (Person vs Membership, ADR-0008), officer_terms, meetings,
 role_definitions/role_slots (ADR-0005), meeting_attendance_plan and
 meeting_attendance (the PLAN and the RECORD — two tables, never one, see
@@ -485,9 +485,12 @@ club's own uploaded logo, bytea, ADR-0024 — rendered on the four print
 layouts, the projected deck, the `.pptx` export, the Word of the Day poster
 and the club role sheets, HTML and PDF), digital voting (`meeting_vote_sessions`
 / `meeting_votes` / `meeting_ballot_guests`, #510 — see `CONTEXT.md`'s
-**Digital vote** entry), and notifications (drained by an in-process poller,
-ADR-0023). Better-Auth's tables live in `src/db/auth-schema.ts`. See
-`CONTEXT.md` for the glossary.
+**Digital vote** entry), Club Officer Training (`officer_training_periods` /
+`officer_training_records`, #531 — the record behind DCP goal 9; the periods
+table is a SPARSE override of TI's own window dates, so **row absent = the
+default**, see `CONTEXT.md`'s **Club Officer Training (COT)** entry), and
+notifications (drained by an in-process poller, ADR-0023). Better-Auth's tables
+live in `src/db/auth-schema.ts`. See `CONTEXT.md` for the glossary.
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
 Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then
 `bun run db:generate` + `bun run db:migrate` (do NOT `db:push` the dev DB — see the `db:migrate`
