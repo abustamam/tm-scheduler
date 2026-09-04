@@ -1,6 +1,7 @@
 # ADR-0019: Distinguished Club Program — a manual scoreboard, catalog in code
 
-Status: Accepted
+Status: Accepted (§1's "the **only** auto-derivation" is now three assists, and §3's
+composite-goal note is extended — see the Amendment below before trusting either)
 
 ## Context
 
@@ -75,3 +76,66 @@ rule) and the tier/base/catalog math is the pure, client-safe `#/lib/dcp`.
   rule change is a code edit, not a migration.
 - The membership base's net-+5 path depends on the snapshotted baseline; a club that starts its
   scoreboard well after Jul 1 must correct `base_member_count` by hand.
+
+## Amendment — goal 9 gains a record behind it (#531, third assist)
+
+Status: Accepted. Extends §1's assist boundary and §3's composite-goal note. Nothing in the
+original decision is reversed: goal 9 remains a President-entered composite 0/1 in
+`dcp_goal_progress`, and the recognition tier and membership base remain derived at read time.
+
+### What §3 got right, and what it left the club unable to see
+
+"Composite goals (9 training, 10 administration) are scored by Toastmasters as a single met/not,
+so they are `target = 1` with a 0/1 toggle" is a correct statement about SCORING, and it was
+silently read as a statement about STORAGE. Goal 9 held nothing but the toggle, so the scoreboard
+could not answer any of: which officers were trained, which of the two training periods they were
+trained in, how many more the club needs, or how long the window is open. The toggle holds no
+information until someone already knows the answer — which is the state #531 was filed against: a
+club discovers in March that only three officers were trained in the second window, the window is
+shut, and a DCP point is gone.
+
+### Decision
+
+Two new tables sit BESIDE `dcp_goal_progress` and feed goal 9 an editable **suggestion**. They do
+not change how it is stored or scored.
+
+- **`officer_training_records`** — one row per `(membership, office, program_year, period)`. Keyed
+  on the membership and the office rather than on an `officer_terms.id`, because a term row closes
+  and reopens on re-election while training credit does not: a record must survive its officer's
+  term ending mid-window. `trained_on` is nullable and the score never reads it.
+- **`officer_training_periods`** — a SPARSE override of the two window date ranges, scoped to
+  `(club, program_year)`. Toastmasters sets the windows itself (Jun 1 – Aug 31; Nov 1 –
+  Feb 28/29) so those are the defaults, derived in code: **row absent = TI's window**. Editable
+  because a district may deviate, and because only a real date range makes a deadline honest.
+  Scoped to the club-year rather than to `dcp_scoreboards.id` so the windows are readable before a
+  scoreboard exists — which is precisely when the deadline reading is worth having.
+
+**The bar counts distinct PEOPLE.** TI words goal 9 over ROLES ("four club officer roles trained").
+This app counts four distinct people, so a member holding two offices counts once. That is
+deliberately the conservative reading: it can only under-count relative to TI, so the app can never
+tell a club it cleared goal 9 when TI would disagree. Display is keyed on `(membership, office)`
+instead, so a dual-office holder can read as done on one seat and open on the other.
+
+`immediate_past_president` is excluded — TI names seven elected offices and IPP is not among them.
+
+**Assist, never a write.** This is the third assist, alongside the roster assist (goals 7 & 8) and
+the Pathways assist (goals 1–6, #245), and it follows their pattern exactly rather than inventing a
+fourth: the suggestion is computed on every read, stored nowhere, and written only by an explicit
+`applyTrainingSuggestion`. That routes through `updateGoal`, so the composite 0/1 clamp and the
+audit stamp keep one owner. TI, not GavelUp, is the system of record for who was trained — a club
+must never be told it missed a point because someone forgot to tick a box here.
+
+### Consequences
+
+- §1's "the **only** auto-derivation is a roster-based pre-fill" is now three assists, all of them
+  suggestions. The no-silent-write rule is what makes them uniform.
+- The apply CAN write a 0, clearing a hand-entered Met. Guarded upstream, not in the seam: the
+  action is offered only once the club has recorded something, and the button names the value it
+  will write.
+- Goal 10 (administration) keeps its bare toggle. Dues renewal and officer-list submission happen
+  on TI's site with no local record to derive from, so there is nothing to put behind it.
+- A window-closing notification is now buildable (ADR-0023's poller needs only an INSERT) and is
+  deliberately NOT built here: the panel shows the countdown, and a nudge is its own change.
+- The counting rule sits in `src/lib/officer-training.ts` rather than in a `-logic.ts` module,
+  because the substance of this change is a set of numbers and a constant inside a `#/db`-importing
+  module cannot be asserted by a unit test at all.

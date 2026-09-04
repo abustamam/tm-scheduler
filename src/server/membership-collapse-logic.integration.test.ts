@@ -38,6 +38,7 @@ import {
 	members,
 	notifications,
 	officerTerms,
+	officerTrainingRecords,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
@@ -642,6 +643,12 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			"meeting_vote_sessions.opened_by_member_id",
 			"meeting_votes.voter_member_id",
 			"meeting_votes.candidate_member_id",
+			// #531 — Club Officer Training. Unique (membership, position,
+			// program_year, period) and ON DELETE CASCADE, so it re-points via the
+			// delete-then-update pattern. This guard is what caught it: the merge
+			// would otherwise have destroyed the absorbed membership's training
+			// credit and dropped the club below goal 9's four-officer bar.
+			"officer_training_records.membership_id",
 		]);
 
 		const result = await testDb.execute(sql`
@@ -658,6 +665,85 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		);
 
 		expect([...actual].sort()).toEqual([...HANDLED].sort());
+	});
+
+	it("keeps officer training credit through a merge, colliding rows and all (#531)", async () => {
+		// The FK drift-guard above only proves the column is NAMED. This proves the
+		// re-point runs — and it is the case that matters most, because
+		// `officer_training_records` is ON DELETE CASCADE on `members`: without the
+		// re-point the merge DESTROYS the absorbed membership's training credit,
+		// silently dropping the club below goal 9's four-officer bar with no error
+		// anywhere. The drift-guard caught this missing on the day the table landed.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+
+		// A COLLIDING pair — both memberships claim President, period 1, 2026 — plus
+		// a distinct row on each side. The collision is the realistic case: a
+		// duplicate membership is one human recorded twice, and whoever entered the
+		// training may have picked a different row each period.
+		await testDb.insert(officerTrainingRecords).values([
+			{
+				membershipId: keeperId,
+				position: "president",
+				programYear: 2026,
+				period: 1,
+				trainedOn: "2026-07-01",
+			},
+			{
+				membershipId: absorbedId,
+				position: "president",
+				programYear: 2026,
+				period: 1,
+				trainedOn: "2026-07-02",
+			},
+			{
+				membershipId: keeperId,
+				position: "secretary",
+				programYear: 2026,
+				period: 1,
+				trainedOn: "2026-07-03",
+			},
+			{
+				membershipId: absorbedId,
+				position: "treasurer",
+				programYear: 2026,
+				period: 2,
+				trainedOn: "2026-12-04",
+			},
+		]);
+
+		await testDb.transaction((tx) =>
+			collapseMemberships(tx, seed.clubId, keeperId, absorbedId),
+		);
+
+		const survivors = await testDb
+			.select({
+				position: officerTrainingRecords.position,
+				period: officerTrainingRecords.period,
+				trainedOn: officerTrainingRecords.trainedOn,
+				membershipId: officerTrainingRecords.membershipId,
+			})
+			.from(officerTrainingRecords)
+			.where(eq(officerTrainingRecords.membershipId, keeperId));
+
+		// Three rows, all on the keeper: the collision resolved to ONE (the
+		// keeper's, by date), and the absorbed membership's Treasurer credit for
+		// period 2 SURVIVED rather than being cascade-deleted.
+		expect(survivors.map((r) => `${r.position}:${r.period}`).sort()).toEqual([
+			"president:1",
+			"secretary:1",
+			"treasurer:2",
+		]);
+		expect(survivors.find((r) => r.position === "president")?.trainedOn).toBe(
+			"2026-07-01",
+		);
+		// Nothing left pointing at the absorbed membership.
+		expect(
+			await testDb
+				.select({ id: officerTrainingRecords.id })
+				.from(officerTrainingRecords)
+				.where(eq(officerTrainingRecords.membershipId, absorbedId)),
+		).toHaveLength(0);
 	});
 
 	it("collapses two ballots by one human into one, and re-points the rest (#510)", async () => {

@@ -491,10 +491,11 @@ the nouns in `src/db/schema.ts`.
   are **Distinguished** (5 goals), **Select Distinguished** (7), **President's Distinguished**
   (9), each also requiring the **membership base** (≥20 active members OR net growth of +5). The
   President owns the club's progress. In GavelUp it's a **President-owned scoreboard** — every
-  goal is hand-entered, with roster and Pathways assists offered as editable suggestions rather
-  than applied automatically. The goal catalog (labels + targets) is static code
-  (`src/lib/dcp.ts`); only per-club progress is stored, and the tier/base are DERIVED, never
-  stored. See ADR-0019 / #207, and #245 for the education assist.
+  goal is hand-entered, with roster, Pathways and officer-training assists offered as editable
+  suggestions rather than applied automatically. The goal catalog (labels + targets) is static
+  code (`src/lib/dcp.ts`); only per-club progress is stored, and the tier/base are DERIVED,
+  never stored. See ADR-0019 / #207, #245 for the education assist and #531 for the officer
+  training one.
 - **Program year** — the Toastmasters year, Jul 1 – Jun 30, keyed by its **starting calendar
   year** (e.g. 2026 = Jul 1 2026 – Jun 30 2027).
 - **DCP scoreboard** (`dcp_scoreboards`) — a club's DCP record for one program year: the parent
@@ -512,6 +513,38 @@ the nouns in `src/db/schema.ts`.
   excluded and need entering by hand. Awards map onto goals as n(L1)→g1, n(L2)→g2/g3 (cap 2
   each), n(L3)→g4, n(L4)+n(L5)→g5/g6 (cap 1 each); "a Path" in the goal 5/6 wording ≡ Level 5,
   as the count-based mirror carries no separate path-complete signal. See #245 / ADR-0022.
+- **Club Officer Training (COT)** — the record behind **DCP goal 9**, and the THIRD assist
+  (#531). TI runs **two training periods** per program year and needs **four officers trained
+  in each**. Two tables, and they are shaped differently on purpose.
+  **`officer_training_periods` is a SPARSE OVERRIDE**: TI's own windows — Jun 1 – Aug 31, and
+  Nov 1 – Feb 28/29 — are the defaults, derived in code from the program year, so **row absent
+  = TI's window** and a club gets a correct deadline having configured nothing. A row appears
+  only where an admin edited the dates because their district deviated, and
+  `resetTrainingWindow` deletes it back to the default. Scoped to `(club, program_year)` rather
+  than to `dcp_scoreboards.id`, because the windows must be readable BEFORE a club has started
+  a scoreboard — which is exactly when the deadline reading is worth having. Period 1 starts a
+  month before the program year does (Jun 1), which is TI's design, not an off-by-one.
+  **`officer_training_records` is one row per `(membership, office, program_year, period)`** —
+  the club's claim that this person was trained for this office in that window. Keyed on the
+  MEMBERSHIP and the office rather than on an `officer_terms.id`, because a term row closes and
+  reopens on re-election while the credit does not: a record survives its officer's term ending
+  mid-window and their membership going inactive. `trained_on` is NULLABLE (a club often knows
+  someone attended without knowing the day) and the score never reads it — the view compares it
+  against the window and FLAGS a mismatch rather than voiding the claim, since TI is the arbiter.
+  **The bar counts DISTINCT PEOPLE, where TI words it over ROLES** (maintainer decision,
+  2026-09-04): a member holding two offices counts ONCE toward the four. Deliberately the
+  conservative reading — it can only under-count, so the app never tells a club it cleared goal
+  9 when TI would disagree. The DISPLAY grain is narrower, keyed on `(membership, office)`, so a
+  dual-office holder trained for one office reads as done on that seat and open on the other
+  while still counting 1: `countTrainedOfficers` scores, `untrainedSeats` displays.
+  **Seven countable offices, not eight** — `immediate_past_president` is in the enum but not in
+  TI's list, so the seam refuses to record one and the count filters it out anyway (defence in
+  depth: an import or raw statement cannot smuggle one in). All the rules are pure and
+  client-safe in `src/lib/officer-training.ts`; the queries are `src/server/officer-training-logic.ts`;
+  every server fn is admin-gated (`requireClubRole(["admin"])`, ADR-0019 §4). Goal 9 stays a
+  hand-toggled 0/1 — nothing here writes `dcp_goal_progress`
+  (`officer-training-wiring.guard.test.ts` enforces that), and the President applies the
+  suggestion explicitly with a button that names the value it will write.
 
 **Meeting template** — a named bundle of a role set plus a flat run-of-show, letting a meeting
 run a shape other than the club's standard night (today: **Speech Contest**).

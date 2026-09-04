@@ -11,6 +11,8 @@ import { z } from "zod";
 import {
 	applyEducationSchema,
 	applyEducationSuggestions as applyEducationSuggestionsDb,
+	applyTrainingSchema,
+	applyTrainingSuggestion as applyTrainingSuggestionDb,
 	getScoreboard as getScoreboardDb,
 	getScoreboardSchema,
 	listScoreboardYears as listScoreboardYearsDb,
@@ -63,6 +65,14 @@ export const applyEducationSuggestions = createServerFn({ method: "POST" })
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
 		return applyEducationSuggestionsDb(data, user.id);
+	});
+
+export const applyTrainingSuggestion = createServerFn({ method: "POST" })
+	.validator((i: unknown) => applyTrainingSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applyTrainingSuggestionDb(data, user.id);
 	});
 
 export const updateBaseMemberCount = createServerFn({ method: "POST" })

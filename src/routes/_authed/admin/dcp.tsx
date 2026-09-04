@@ -2,6 +2,11 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Award, Check, Sparkles, Trophy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+	type AddRecordRequest,
+	OfficerTrainingPanel,
+	type SetWindowRequest,
+} from "#/components/dcp/officer-training-panel";
 import { PageContainer } from "#/components/page-container";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -16,9 +21,15 @@ import {
 	tierLabel,
 } from "#/lib/dcp";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import {
+	TRAINED_OFFICERS_REQUIRED,
+	TRAINING_GOAL_KEY,
+	type TrainingPeriod,
+} from "#/lib/officer-training";
 import { cn } from "#/lib/utils";
 import {
 	applyEducationSuggestions,
+	applyTrainingSuggestion,
 	getScoreboard,
 	getScoreboardYears,
 	startScoreboard,
@@ -26,6 +37,14 @@ import {
 	updateGoal,
 } from "#/server/dcp";
 import type { DcpScoreboardView } from "#/server/dcp-logic";
+import {
+	addTrainingRecord,
+	getOfficerTraining,
+	removeTrainingRecord,
+	resetTrainingWindow,
+	setTrainingWindow,
+} from "#/server/officer-training";
+import type { OfficerTrainingView } from "#/server/officer-training-logic";
 
 const CATEGORY_LABEL: Record<DcpGoalCategory, string> = {
 	education: "Education",
@@ -53,15 +72,17 @@ export const Route = createFileRoute("/_authed/admin/dcp")({
 				clubId: null as string | null,
 				year: currentProgramYear(),
 				view: null as DcpScoreboardView | null,
+				training: null as OfficerTrainingView | null,
 				years: [] as number[],
 			};
 		}
 		const year = currentProgramYear();
-		const [view, years] = await Promise.all([
+		const [view, years, training] = await Promise.all([
 			getScoreboard({ data: { clubId: club.clubId, programYear: year } }),
 			getScoreboardYears({ data: { clubId: club.clubId } }),
+			getOfficerTraining({ data: { clubId: club.clubId, programYear: year } }),
 		]);
-		return { clubId: club.clubId, year, view, years };
+		return { clubId: club.clubId, year, view, training, years };
 	},
 	component: DcpTracker,
 });
@@ -73,6 +94,9 @@ function DcpTracker() {
 
 	const [year, setYear] = useState(loaded.year);
 	const [view, setView] = useState<DcpScoreboardView | null>(loaded.view);
+	const [training, setTraining] = useState<OfficerTrainingView | null>(
+		loaded.training,
+	);
 	const [loading, setLoading] = useState(false);
 	const loadedYearRef = useRef(loaded.year);
 
@@ -81,12 +105,19 @@ function DcpTracker() {
 		new Set([currentProgramYear(), ...loaded.years, year]),
 	).sort((a, b) => b - a);
 
+	// Both payloads are refetched together on every reload: the scoreboard's g9
+	// badge and the training panel's tallies come from the same records, so
+	// refreshing one alone would let them disagree on screen.
 	const reload = useCallback(async () => {
 		if (!clubId) return;
 		setLoading(true);
 		try {
-			const v = await getScoreboard({ data: { clubId, programYear: year } });
+			const [v, t] = await Promise.all([
+				getScoreboard({ data: { clubId, programYear: year } }),
+				getOfficerTraining({ data: { clubId, programYear: year } }),
+			]);
 			setView(v);
+			setTraining(t);
 			loadedYearRef.current = year;
 		} catch (err) {
 			toast.error(
@@ -150,6 +181,116 @@ function DcpTracker() {
 					? err.message
 					: "Couldn't apply the Pathways suggestions.",
 			);
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	async function handleApplyTraining() {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const v = await applyTrainingSuggestion({
+				data: { clubId, programYear: year },
+			});
+			setView(v);
+			toast.success(
+				v.progress[TRAINING_GOAL_KEY] === 1
+					? "Goal 9 marked met from your officer training records."
+					: "Goal 9 set to not met from your officer training records.",
+			);
+		} catch (err) {
+			toast.error(
+				err instanceof Error
+					? err.message
+					: "Couldn't apply the officer training records.",
+			);
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	/**
+	 * Every training write returns the fresh training payload from the server, so
+	 * the panel updates without a round trip — but the SCOREBOARD's g9 suggestion
+	 * is derived from the same rows, so it is reloaded too. Skipping that is how
+	 * the badge above would go on claiming 3 of 4 after the fourth was recorded.
+	 */
+	async function afterTrainingWrite(
+		next: OfficerTrainingView,
+		message: string,
+	) {
+		setTraining(next);
+		toast.success(message);
+		if (!clubId) return;
+		try {
+			setView(await getScoreboard({ data: { clubId, programYear: year } }));
+		} catch {
+			// The write landed; only the scoreboard badge is stale. Leave the success
+			// toast standing rather than reporting a failure that did not happen.
+		}
+	}
+
+	function trainingError(err: unknown, fallback: string) {
+		toast.error(err instanceof Error ? err.message : fallback);
+	}
+
+	async function handleAddRecord(request: AddRecordRequest) {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const next = await addTrainingRecord({
+				data: { clubId, programYear: year, ...request },
+			});
+			await afterTrainingWrite(next, "Training recorded.");
+		} catch (err) {
+			trainingError(err, "Couldn't record that training.");
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	async function handleRemoveRecord(recordId: string) {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			await removeTrainingRecord({ data: { clubId, recordId } });
+			const next = await getOfficerTraining({
+				data: { clubId, programYear: year },
+			});
+			await afterTrainingWrite(next, "Training record removed.");
+		} catch (err) {
+			trainingError(err, "Couldn't remove that record.");
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	async function handleSetWindow(request: SetWindowRequest) {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const next = await setTrainingWindow({
+				data: { clubId, programYear: year, ...request },
+			});
+			await afterTrainingWrite(next, "Training window updated.");
+		} catch (err) {
+			trainingError(err, "Couldn't update that window.");
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	async function handleResetWindow(period: TrainingPeriod) {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const next = await resetTrainingWindow({
+				data: { clubId, programYear: year, period },
+			});
+			await afterTrainingWrite(next, "Back to Toastmasters' dates.");
+		} catch (err) {
+			trainingError(err, "Couldn't reset that window.");
 		} finally {
 			setLoading(false);
 		}
@@ -219,14 +360,29 @@ function DcpTracker() {
 					<SummaryHeadline view={view} />
 					<BaseCard view={view} onSave={handleBase} />
 					{CATEGORY_ORDER.map((cat) => (
-						<GoalGroup
-							key={cat}
-							category={cat}
-							view={view}
-							loading={loading}
-							onGoal={handleGoal}
-							onApplyEducation={handleApplyEducation}
-						/>
+						<div key={cat} className="space-y-3">
+							<GoalGroup
+								category={cat}
+								view={view}
+								loading={loading}
+								onGoal={handleGoal}
+								onApplyEducation={handleApplyEducation}
+								onApplyTraining={handleApplyTraining}
+							/>
+							{/* The training records sit directly under goal 9, the goal they
+							    feed. Rendered from the loader's own payload, so the panel is
+							    there on first paint rather than after a client fetch. */}
+							{cat === "training" && training ? (
+								<OfficerTrainingPanel
+									view={training}
+									busy={loading}
+									onAddRecord={handleAddRecord}
+									onRemoveRecord={handleRemoveRecord}
+									onSetWindow={handleSetWindow}
+									onResetWindow={handleResetWindow}
+								/>
+							) : null}
+						</div>
 					))}
 				</>
 			)}
@@ -413,18 +569,25 @@ function GoalGroup({
 	loading,
 	onGoal,
 	onApplyEducation,
+	onApplyTraining,
 }: {
 	category: DcpGoalCategory;
 	view: DcpScoreboardView;
 	loading: boolean;
 	onGoal: (goal: DcpGoal, achieved: number) => void;
 	onApplyEducation: () => void;
+	onApplyTraining: () => void;
 }) {
 	const goals = DCP_GOALS.filter((g) => g.category === category);
 	// Suggestions exist only for the education goals, and only once this club has
 	// actually synced Base Camp — a bare "0" from a club that never synced would
 	// read as "nobody completed anything" rather than "we have no data".
 	const suggest = category === "education" && view.pathwaysSynced;
+	// Same gate, same reason: applying a suggestion of 0 from a club that has
+	// recorded no training would clear a hand-entered Met on no evidence. The
+	// records existing is what makes the 0 mean something.
+	const training = view.derivedTraining;
+	const suggestTraining = category === "training" && training.hasRecords;
 	return (
 		<div>
 			<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -442,6 +605,24 @@ function GoalGroup({
 						{loading ? "Applying…" : "Apply Pathways suggestions"}
 					</Button>
 				) : null}
+				{suggestTraining ? (
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={onApplyTraining}
+						disabled={loading}
+					>
+						<Sparkles className="size-3.5" aria-hidden />
+						{loading
+							? "Applying…"
+							: // Names the value it will write. This action can lower a
+								// hand-entered Met, so the label has to say so before the click
+								// rather than after it.
+								training.suggestion === 1
+								? "Apply training records (mark met)"
+								: "Apply training records (mark not met)"}
+					</Button>
+				) : null}
 			</div>
 			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
 				{goals.map((g) => (
@@ -450,6 +631,11 @@ function GoalGroup({
 						goal={g}
 						achieved={view.progress[g.key] ?? 0}
 						derived={suggest ? (view.derivedEducation[g.key] ?? 0) : null}
+						suggestionNote={
+							suggestTraining && g.key === TRAINING_GOAL_KEY
+								? trainingSuggestionNote(training.trainedByPeriod)
+								: null
+						}
 						onGoal={onGoal}
 					/>
 				))}
@@ -466,16 +652,30 @@ function GoalGroup({
 	);
 }
 
+/** "Training: 4 and 3 of 4" — the two period counts behind the g9 suggestion. */
+function trainingSuggestionNote(trainedByPeriod: number[]): string {
+	const [first = 0, second = 0] = trainedByPeriod;
+	return `Training: ${first} and ${second} of ${TRAINED_OFFICERS_REQUIRED}`;
+}
+
 function GoalRow({
 	goal,
 	achieved,
 	derived,
+	suggestionNote,
 	onGoal,
 }: {
 	goal: DcpGoal;
 	achieved: number;
 	/** Live Pathways suggestion, or null when this goal has none to offer. */
 	derived: number | null;
+	/**
+	 * A dashed badge for a COMPOSITE goal's live derivation (goal 9's officer
+	 * training counts). Composite goals show a toggle rather than a number field,
+	 * so `derived` above has nowhere to render on them — this is the seam that
+	 * gives a 0/1 goal a suggestion of its own.
+	 */
+	suggestionNote: string | null;
 	onGoal: (goal: DcpGoal, achieved: number) => void;
 }) {
 	const met = achieved >= goal.target;
@@ -514,13 +714,25 @@ function GoalRow({
 				) : null}
 			</div>
 			{goal.composite ? (
-				<Button
-					size="sm"
-					variant={met ? "default" : "outline"}
-					onClick={() => onGoal(goal, met ? 0 : 1)}
-				>
-					{met ? "Met" : "Mark met"}
-				</Button>
+				<div className="flex items-center gap-2">
+					{suggestionNote ? (
+						<Badge
+							variant="outline"
+							className="gap-1 border-dashed text-[var(--sea-ink-soft)]"
+							title="Derived from your officer training records — not yet applied"
+						>
+							<Sparkles className="size-3" aria-hidden />
+							{suggestionNote}
+						</Badge>
+					) : null}
+					<Button
+						size="sm"
+						variant={met ? "default" : "outline"}
+						onClick={() => onGoal(goal, met ? 0 : 1)}
+					>
+						{met ? "Met" : "Mark met"}
+					</Button>
+				</div>
 			) : (
 				<div className="flex items-center gap-2">
 					{derived !== null ? (
