@@ -246,13 +246,22 @@ describe("PersonalThemeEditor — the save", () => {
 		expect(themePayload().selfMemberId).toBe(MEMBER);
 	});
 
-	it("sends NO self-assert for a signed-in caller", async () => {
-		// The session is the identity server-side; asserting a member id as well
-		// would be the forgeable input #396 removed from the wire.
+	it("STILL self-asserts for a signed-in caller — the session is not a grant", async () => {
+		// This case previously asserted `toBeNull()`, and that was the bug rather
+		// than the contract. `isSignedIn` comes from `publicShellDecision`, which
+		// returns `shell: true` for ANY member of the club — not just an admin. So
+		// nulling on it broke the exact person this feature is for: an ordinary
+		// signed-in member holding this meeting's TMOD slot got the form rendered
+		// (`runsMeeting` includes `isTmod`) and a permission error on Save.
+		//
+		// Sending it is not the forgeable input #396 removed, because nothing
+		// trusts it: `resolveMeetingAgendaAuthz` runs the admin arm first without
+		// reading it, and the self-assert arm verifies it against
+		// `role_slots.assigned_member_id` before crediting it.
 		await renderTheme({ isSignedIn: true });
 		await userEvent.click(screen.getByRole("button", { name: /save theme/i }));
 		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
-		expect(themePayload().selfMemberId).toBeNull();
+		expect(themePayload().selfMemberId).toBe(MEMBER);
 	});
 
 	it("does NOT hand back to the personal page when the write fails", async () => {

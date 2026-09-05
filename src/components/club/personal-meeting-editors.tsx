@@ -300,10 +300,25 @@ export function PersonalThemeEditor(props: EditorProps) {
 							updateMeeting({
 								data: themeOnlyUpdate({
 									meetingId: props.meeting.id,
-									// Null for a signed-in admin: the server resolves them
-									// through the session, and asserting a member id they may
-									// not hold would be the forgeable input #396 removed.
-									selfMemberId: props.isSignedIn ? null : props.memberId,
+									// ALWAYS sent, signed in or not. `isSignedIn` is not "is an
+									// admin": `publicShellDecision` returns `shell: true` for
+									// ANY member of the club, so nulling on it refused the
+									// ordinary signed-in member who holds this meeting's TMOD
+									// slot — the form rendered (`canEditMeetingMeta` is
+									// `runsMeeting && isEditableWindow`, and `runsMeeting`
+									// includes `isTmod`) and Save threw "You don't have
+									// permission to edit this meeting."
+									//
+									// Sending it is not the forgeable input #396 removed,
+									// because the server never TRUSTS it:
+									// `resolveMeetingAgendaAuthz` runs the admin arm FIRST and
+									// never reads `selfMemberId`, so an admin resolves through
+									// the session either way; the self-assert arm then compares
+									// it against `role_slots.assigned_member_id` before
+									// crediting it. The existing dialog already does exactly
+									// this — `club.$clubId.meeting.$meetingId.tsx:944` branches
+									// on `canManage`, never on having a session.
+									selfMemberId: props.memberId,
 									// The meeting's CURRENT wall time, resubmitted unchanged.
 									// A self-serve TMOD carries `canReschedule = false` and any
 									// actual move is rejected — see ADR-0010.
@@ -393,7 +408,7 @@ export function PersonalWordEditor(props: EditorProps) {
 							updateWordOfTheDay({
 								data: {
 									meetingId: props.meeting.id,
-									selfMemberId: props.isSignedIn ? null : props.memberId,
+									selfMemberId: props.memberId,
 									// Blank → undefined, which the writer stores as null. All
 									// three travel on every save; see the component docblock.
 									wordOfTheDay: word.trim() || undefined,
