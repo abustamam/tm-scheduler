@@ -1,25 +1,8 @@
 # Changelog
 
-Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
+Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file.
 
-## [1.33.0.0] - 2026-09-04
-
-### Added
-
-- **Goal 9 now has your club's actual training records behind it, and tells you how long is left to fix a shortfall.** Until now the Distinguished Club Program scoreboard's officer-training goal was a single tick box with nothing underneath: it could not tell you which officers had been trained, which of the two training periods they were trained in, how many more of the four you needed, or how many days you had left. It could only record an answer you already knew. A club that discovered in March that only three officers made the second window discovered it from somewhere else, and by then the window was shut. The DCP scoreboard now carries a **Club officer training** panel under goal 9 with a card for each of the two periods: who is recorded, who is still missing, the count against the four, and the dates — with an amber "Closes in 12 days · act now" once you are inside three weeks and still short.
-- **The two training windows come pre-set to Toastmasters' own dates, and you can change them.** Period 1 is June 1 – August 31 and period 2 is November 1 – February 28 (February 29 in a leap year), so a club gets a correct countdown having set nothing up. If your district runs different dates, edit them per period and per program year; "Use Toastmasters' dates" puts them back. Nothing is stored until you change something.
-- **Recording a training takes three fields.** Pick the member, pick the office they were trained for, and optionally the date. The date is genuinely optional — clubs often know someone attended without remembering the day, and the count does not depend on it. If you do enter a date that falls outside the period's window, the row is flagged rather than thrown away, because Toastmasters decides what counted, not us.
-- **Goal 9 gets an editable suggestion, and nothing ticks it for you.** Once you have recorded any training, the goal row shows a dashed "Training: 4 and 3 of 4" badge and an **Apply training records** button that names what it will write — "(mark met)" or "(mark not met)". The President still decides. This is the third assist on the scoreboard, alongside the new-member pre-fill and the Pathways suggestions, and it follows the same rule as both: Toastmasters is the record of what your club achieved, so the app never marks a goal for you and never tells you that you missed one.
-
-### Changed
-
-- The scoreboard counts **four officer roles**, the way Toastmasters does — "four club officer roles trained", with credit given for one person per role. So a member who holds two offices and is trained for both covers two of the four, and four people all trained as Secretary cover one. This matters most for smaller clubs: with a President who is also VP Education and a Secretary who is also Treasurer, two trained people can cover all four roles, and the page now says so instead of reporting a shortfall Toastmasters would not.
-- Immediate Past President is not one of the seven offices Toastmasters counts for officer training, so it cannot be recorded and does not count toward the four.
-
-### Known limitation
-
-- The deadline lives on the DCP page. Nothing emails or notifies you when a window is about to close — you have to open the scoreboard to see the countdown. The records now exist to drive a reminder, so that can come later.
-- The page does not check that the person you record was actually elected to the office you record them under, which Toastmasters does require. It deliberately lets you record any office for any member, because someone may have been trained for a role they have since handed on — the claim is yours to make and Toastmasters is the arbiter.
+**Frozen on 2026-09-04 at 1.32.0.0, the last versioned release.** Releases are no longer versioned; the squash-merged PR titles on `main` are the record from here. See CLAUDE.md's "Skill routing" for why.
 
 ## [1.32.0.0] - 2026-09-03
 
