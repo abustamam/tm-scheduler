@@ -210,12 +210,20 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 		// The inverse assertion: the modules allowed to accept an asserted actor
 		// must actually be resolving it, so relaxing the resolver back into a bare
 		// pass-through can't slip past rule 2 by simply deleting the read.
+		//
+		// `attendance-actor-logic.ts` counts as reaching the resolver because it IS
+		// one hop from it and nothing else: it is the shared D6 ladder, every arm of
+		// which ends in `resolveWriteActor`, and the case below pins that so the
+		// chain cannot be broken at the far end. It became a hop rather than an
+		// inline call in #675, when the ladder moved out of `attendance-plan.ts` so
+		// `availability.ts`'s destructive writer could reuse it instead of shipping
+		// a second copy — or, as it had until then, no subject check at all.
 		for (const file of PUBLIC_ACTOR_MODULES) {
 			const src = readSource(join(serverDir, file));
 			expect(
 				src,
 				`${file} accepts an asserted actor but never resolves it`,
-			).toMatch(/from "\.\/write-actor-logic"/);
+			).toMatch(/from "\.\/(write-actor-logic|attendance-actor-logic)"/);
 			const asserted = schemaActorFields(src).length;
 			const resolved = (src.match(SANCTIONED_READ) ?? []).length;
 			expect(
@@ -224,6 +232,19 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 					`every server fn that accepts one must hand it to write-actor-logic`,
 			).toBeGreaterThanOrEqual(asserted);
 		}
+	});
+
+	it("the shared actor ladder itself reaches write-actor-logic", () => {
+		// The far end of the hop the case above allows. Without this, deleting
+		// `resolveWriteActor` from the ladder would leave two of the three public
+		// modules satisfying the inverse assertion through a module that resolves
+		// nothing.
+		const src = readSource(join(serverDir, "attendance-actor-logic.ts"));
+		expect(src).toMatch(/from "\.\/write-actor-logic"/);
+		expect(
+			src,
+			"the ladder must club-scope the caller through resolveWriteActor, not compare a raw payload id",
+		).toContain("resolveWriteActor({");
 	});
 
 	it("the no-auth allowlist has not grown", () => {
