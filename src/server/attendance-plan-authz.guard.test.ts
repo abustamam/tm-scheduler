@@ -31,6 +31,22 @@ const SRC = readSource(FILE);
 /** Verbatim — for "must be ABSENT" only. */
 const RAW = readFileSync(FILE, "utf8");
 
+/**
+ * The ladder itself moved to `attendance-actor-logic.ts` in #675, so the
+ * assertions about ITS shape read from there.
+ *
+ * It moved because privacy cost two things at once. `resolveActor` was private
+ * to this `createServerFn` module, which made it unreachable from vitest — this
+ * whole file exists because of that — AND unreachable from the other
+ * session-less writer that needed the same decision, so
+ * `markUnavailableReleasing` shipped with no subject check at all. The move is
+ * why `availability.integration.test.ts` can now EXECUTE the self-only rule
+ * instead of only reading it; these assertions stay because they still pin the
+ * things execution cannot see cheaply — the arm ORDER, and the two capability
+ * splits the handlers below key off.
+ */
+const LADDER = readSource(resolve(__dirname, "attendance-actor-logic.ts"));
+
 /** One `export const <name> = createServerFn…` declaration, so a per-handler
  *  assertion cannot be satisfied by its neighbour's correct code. */
 function handlerBody(source: string, name: string): string {
@@ -49,13 +65,22 @@ const HANDLERS = ["setPlannedAttendance", "clearPlannedAttendance"];
 describe("attendance-plan authz (D6)", () => {
 	it("gates the officer path on requireClubRole(admin)", () => {
 		// Whitespace-tolerant: the formatter wraps this call across lines.
-		expect(SRC).toMatch(
+		expect(LADDER).toMatch(
 			/requireClubRole\(\s*user\.id,\s*args\.clubId,\s*\[\s*["']admin["'],?\s*\]/,
 		);
 	});
 
 	it("never gates a write on the member role", () => {
-		expect(SRC).not.toMatch(/requireClubRole\([^)]*\[\s*["']member["'],?\s*\]/);
+		// Both files: the ladder is where the call lives, and the handlers are
+		// where a second, weaker one would be added.
+		// Comment-blind on both, matching how this assertion has always read: the
+		// modules discuss their own role gating in prose, and a stripped read can
+		// only ever remove a FALSE offender from a negative.
+		for (const src of [LADDER, SRC]) {
+			expect(src).not.toMatch(
+				/requireClubRole\([^)]*\[\s*["']member["'],?\s*\]/,
+			);
+		}
 	});
 
 	for (const fn of HANDLERS) {
@@ -107,7 +132,9 @@ describe("attendance-plan authz (D6)", () => {
 	// anywhere in the module, dead code included); a `toContain` on the
 	// condition alone passes with the body emptied to `{ /* allow */ }`.
 	it("rejects a member setting someone else's row", () => {
-		const body = SRC.slice(SRC.indexOf("async function resolveActor"));
+		const body = LADDER.slice(
+			LADDER.indexOf("export async function resolveActor"),
+		);
 		expect(
 			body,
 			"the comparison is the rule; without it any caller may name any subject",
@@ -174,15 +201,27 @@ describe("attendance-plan authz (D6)", () => {
 		// guard-source keeps negatives verbatim and positives comment-blind.)
 		// Two arms grant the capability since #576, so the reported flag is
 		// asserted through the arm labels rather than a true/false pair.
-		expect(SRC).toContain('viaManager: true, via: "officer"');
-		expect(SRC).toContain('viaManager: true, via: "tmod"');
-		expect(SRC).toContain('viaManager: false, via: "self"');
+		expect(LADDER).toContain('viaManager: true, via: "officer"');
+		expect(LADDER).toContain('viaManager: true, via: "tmod"');
+		expect(LADDER).toContain('viaManager: false, via: "self"');
 		for (const fn of HANDLERS) {
 			expect(
 				handlerBody(RAW, fn),
 				`${fn} must use the reported branch, not re-derive it from the actor id`,
 			).not.toContain("actorMemberId === null");
 		}
+	});
+
+	it("keeps ONE copy of the ladder, in the shared module", () => {
+		// #675 moved it out so `availability.ts` could reuse it. A local copy
+		// creeping back would satisfy every assertion above — they read the shared
+		// module — while the two ladders drifted, which is the failure the move
+		// exists to prevent. Verbatim: the header prose names the function, and a
+		// comment-blind read would flag that as an offender.
+		expect(
+			RAW,
+			"resolveActor lives in attendance-actor-logic.ts — import it, do not re-declare it",
+		).not.toContain("function resolveActor");
 	});
 
 	it("never reads the club from the request payload", () => {
@@ -193,15 +232,15 @@ describe("attendance-plan authz (D6)", () => {
 	});
 
 	it("admits this meeting's Toastmaster as a third arm, scoped to that meeting", () => {
-		// #576. Unreachable from vitest — `resolveActor` is private to this
-		// `createServerFn` module — so the arm's SHAPE is pinned here and its
-		// read-side twin is executed in `tmod-panel-data.integration.test.ts`.
-		expect(SRC).toContain("loadTmodMemberId(args.meetingId)");
+		// #576. The arm's SHAPE is pinned here; its read-side twin is executed in
+		// `tmod-panel-data.integration.test.ts`, and since #675 the WRITE side is
+		// executed too, in `availability.integration.test.ts`.
+		expect(LADDER).toContain("loadTmodMemberId(args.meetingId)");
 		expect(
-			SRC,
+			LADDER,
 			"the TMOD grant must be scoped to the meeting being written, never resolved from the club",
 		).not.toMatch(/loadTmodMemberId\(\s*args\.clubId/);
-		expect(SRC).toContain('via: "tmod"');
+		expect(LADDER).toContain('via: "tmod"');
 	});
 
 	it("asks who is CALLING for the TMOD check, not who is being written", () => {
@@ -220,11 +259,13 @@ describe("attendance-plan authz (D6)", () => {
 		// asks who is CALLING (`?? null`). The subject default appears only in the
 		// fallback that runs when the caller asserted nothing, strictly AFTER the
 		// TMOD comparison.
-		const callerResolve = SRC.indexOf(
+		const callerResolve = LADDER.indexOf(
 			"claimedActorMemberId: args.claimedActorMemberId ?? null,",
 		);
-		const tmodCompare = SRC.indexOf("caller === tmodMemberId");
-		const subjectDefault = SRC.indexOf("claimedActorMemberId: args.memberId,");
+		const tmodCompare = LADDER.indexOf("caller === tmodMemberId");
+		const subjectDefault = LADDER.indexOf(
+			"claimedActorMemberId: args.memberId,",
+		);
 		expect(callerResolve).toBeGreaterThan(-1);
 		expect(
 			tmodCompare,
@@ -248,9 +289,9 @@ describe("attendance-plan authz (D6)", () => {
 		// body — so `tmod > officer` held regardless of how the arms were actually
 		// ordered, and this test passed with the arms physically swapped. Found by
 		// the #576 review, which swapped them and watched it stay green.
-		const officer = SRC.indexOf('viaManager: true, via: "officer"');
-		const tmod = SRC.indexOf('viaManager: true, via: "tmod"');
-		const self = SRC.indexOf('viaManager: false, via: "self"');
+		const officer = LADDER.indexOf('viaManager: true, via: "officer"');
+		const tmod = LADDER.indexOf('viaManager: true, via: "tmod"');
+		const self = LADDER.indexOf('viaManager: false, via: "self"');
 		expect(officer).toBeGreaterThan(-1);
 		expect(tmod).toBeGreaterThan(officer);
 		expect(self).toBeGreaterThan(tmod);
@@ -275,10 +316,12 @@ describe("attendance-plan authz (D6)", () => {
 			SRC,
 			"the officer clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",
 		).not.toContain("onlyFrom: viaManager ?");
-		expect(
-			SRC,
-			"viaOfficer was renamed to viaManager when the TMOD arm landed — a surviving use means one gate was missed",
-		).not.toContain("viaOfficer");
+		for (const src of [SRC, LADDER]) {
+			expect(
+				src,
+				"viaOfficer was renamed to viaManager when the TMOD arm landed — a surviving use means one gate was missed",
+			).not.toContain("viaOfficer");
+		}
 	});
 
 	it("floors the nudge auto-advance so it cannot demote a real answer", () => {
