@@ -1255,17 +1255,36 @@ export async function confirmSlotCore(args: {
 	return db.transaction(async (tx) => {
 		// Conditional UPDATE: only flips 'claimed' → 'confirmed'; a concurrent
 		// release that races us back to 'open' will produce zero rows.
+		//
+		// The self arm ALSO re-asserts the holder here, and that is not belt-and-
+		// braces. The slot read above happens OUTSIDE this transaction and takes no
+		// `FOR UPDATE`, so `resolveConfirmGrant` decides on a snapshot. Status alone
+		// does not close the window, because a reassignment is not a release:
+		// `reassignSlotCore` sets `assignedMemberId` to the NEW holder and leaves
+		// `status` at 'claimed', so a plain id+status match still fires. Without
+		// this clause, Alice confirming while the VPE reassigns to Bob flips BOB's
+		// slot to 'confirmed' — a role he never accepted, rendering as
+		// `Coming · assumed` — and writes the `coming` plan row for ALICE, who by
+		// then holds nothing. Matching on the holder makes the check-then-act
+		// atomic: the row the grant was resolved against is the row we update, or
+		// we update nothing.
 		const updated = await tx
 			.update(roleSlots)
 			.set({ status: "confirmed" })
 			.where(
-				and(eq(roleSlots.id, args.slotId), eq(roleSlots.status, "claimed")),
+				and(
+					eq(roleSlots.id, args.slotId),
+					eq(roleSlots.status, "claimed"),
+					grant.via === "self"
+						? eq(roleSlots.assignedMemberId, grant.holderMemberId)
+						: undefined,
+				),
 			)
 			.returning({ id: roleSlots.id });
 
 		if (updated.length === 0) {
 			throw new Error(
-				"Slot was no longer claimed — it may have been released concurrently.",
+				"Slot was no longer claimed — it may have been released or reassigned concurrently.",
 			);
 		}
 
