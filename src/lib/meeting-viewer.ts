@@ -97,3 +97,27 @@ export function meetingViewer(input: {
 			input.isGrammarian && !input.isTmod && !manages && input.isEditableWindow,
 	};
 }
+
+/**
+ * May this viewer edit the meeting's WORD OF THE DAY? The union of the two
+ * capabilities above, and a named function rather than an inline `||` because
+ * neither flag answers the question ALONE and the focused `/me/word` route
+ * (#666) has to ask it.
+ *
+ * `canEditWod` is deliberately the PURE Grammarian's affordance — it is false
+ * for the TMOD and for an admin, so that the agenda page shows them one "Edit
+ * meeting" button instead of two overlapping controls. Reading it on its own as
+ * "may edit the Word of the Day" therefore inverts the answer for exactly the
+ * two callers who have the WIDER capability: `resolveWordOfTheDayAuthz` grants
+ * admin, TMOD **and** Grammarian, so a route gated on `canEditWod` alone would
+ * tell the Toastmaster they may not do something the server would happily let
+ * them do.
+ *
+ * Composing the two flags rather than re-deriving from `isTmod`/`isGrammarian`
+ * keeps the LOCK for free: `lockedViewer` zeroes both, so a completed meeting —
+ * and, for a non-manager, a meeting whose day has passed — answers false here
+ * without this function knowing anything about a meeting's lifecycle.
+ */
+export function canEditWordOfTheDay(viewer: MeetingViewer): boolean {
+	return viewer.canEditMeetingMeta || viewer.canEditWod;
+}
