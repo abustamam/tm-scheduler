@@ -531,24 +531,37 @@ the nouns in `src/db/schema.ts`.
   mid-window and their membership going inactive. `trained_on` is NULLABLE (a club often knows
   someone attended without knowing the day) and the score never reads it — the view compares it
   against the window and FLAGS a mismatch rather than voiding the claim, since TI is the arbiter.
-  **The bar counts the SMALLER of distinct PEOPLE and distinct OFFICES.** The maintainer's rule
-  (2026-09-04) is distinct people — a member holding two offices counts ONCE — chosen because it
-  "can only under-count relative to TI". That reasoning holds one way and fails the other, and
-  review caught it: TI's manual says "credit is given only for one person per officer role", so
-  **two people recorded against ONE office is 1 role to TI and would have been 2 to a
-  people-only count** — over-counting, the direction the rule exists to prevent. Reachable, not
-  theoretical: the unique index is (membership, office, year, period) and the picker offers all
-  seven offices to any member on purpose. Four members on one office read "4/4 · Bar cleared"
-  and suggested goal 9 MET. `Math.min` honours the decision rather than reversing it — never
-  more than distinct people, never more than TI's own cap — so "can only under-count" is now
-  true instead of merely intended.
-  A duplicated HUMAN still counts twice and no key fixes that: `members_club_person_unique`
-  makes membership and person 1:1 within a club, so the two-`members`-rows case `guards.ts`
-  describes needs two Person rows. Merging them (`collapseMemberships`) is the remedy, and the
-  count dropping afterwards is the merge working.
-  The DISPLAY grain is narrower, keyed on `(membership, office)`, so a dual-office holder
-  trained for one office reads as done on that seat and open on the other while still counting
-  1: `countTrainedOfficers` scores, `untrainedSeats` displays.
+  **The bar counts distinct trainable OFFICES with at least one record** — a direct
+  transcription of TI's rule, not a proxy for it: "four club officer roles trained", with
+  "credit given only for one person per officer role". A member holding two offices and
+  trained for both covers TWO of the four; four members all trained as Secretary cover ONE.
+  It arrived as an instruction to count distinct PEOPLE (2026-09-04), to guarantee the app
+  "can only under-count, never tell a club it cleared a goal it did not", and went through a
+  `Math.min(people, offices)` stage before landing here. Counting heads is wrong in both
+  directions and the table is worth keeping, because each row is a real club shape:
+
+  | Shape | TI credits | offices | people |
+  |---|---|---|---|
+  | 4 people, 4 offices | 4 | 4 | 4 |
+  | 4 people, all Secretary | 1 | 1 | **4** — over-counts, suggested goal 9 MET |
+  | 1 person, 2 offices | 2 | 2 | **1** — under-counts |
+  | 2 people, 4 offices | 4 | 4 | **2** — under-counts, told the club it failed |
+
+  Row 2 is what ruled counting heads out (reachable: the unique index is (membership, office,
+  year, period) and the picker offers all seven offices to any member on purpose). Rows 3-4
+  are why the people ceiling did not survive as a SECOND ceiling either — a ceiling with no
+  basis in TI's rule can only subtract, and both shapes are the double-hatting small club,
+  normal below ~15 members. Counting offices satisfies the original guarantee outright.
+  A duplicated HUMAN is no longer a counting hazard at all: two `members` rows for one person
+  on two different offices are two roles, which is what TI credits. (`members_club_person_unique`
+  makes membership and person 1:1 within a club, so that state needs two Person rows;
+  `collapseMemberships` merges them.)
+  What this does NOT check is whether the person actually held the office recorded against
+  them, which TI requires. Deliberate: a record must survive its officer's term ending
+  mid-window, and the club's claim is the club's to make.
+  The DISPLAY grain is different, keyed on `(membership, office)`, so a dual-office holder
+  trained for one office reads as done on that seat and open on the other:
+  `countTrainedOfficers` scores over offices, `untrainedSeats` displays over seats.
   **The panel's program year is not always `currentProgramYear()`.** That rolls on Jul 1 while
   period 1 opens Jun 1, so for the whole of June the open window belongs to the NEXT program
   year — `trainingProgramYearForDate` names it, and the year picker offers it. Without that the

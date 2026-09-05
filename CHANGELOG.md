@@ -13,13 +13,13 @@ Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO`
 
 ### Changed
 
-- The scoreboard counts **four different people**, where Toastmasters counts four officer roles. A member holding two offices counts once. The panel says so beside the number, because a club with a Secretary/Treasurer double-hatter will otherwise read a shortfall that Toastmasters would not. It is also capped at the number of distinct offices, so four people all recorded against Secretary counts as one — Toastmasters gives credit for one person per role, and this way the app can only ever under-count, never tell you that you cleared a goal you did not.
+- The scoreboard counts **four officer roles**, the way Toastmasters does — "four club officer roles trained", with credit given for one person per role. So a member who holds two offices and is trained for both covers two of the four, and four people all trained as Secretary cover one. This matters most for smaller clubs: with a President who is also VP Education and a Secretary who is also Treasurer, two trained people can cover all four roles, and the page now says so instead of reporting a shortfall Toastmasters would not.
 - Immediate Past President is not one of the seven offices Toastmasters counts for officer training, so it cannot be recorded and does not count toward the four.
 
 ### Known limitation
 
 - The deadline lives on the DCP page. Nothing emails or notifies you when a window is about to close — you have to open the scoreboard to see the countdown. The records now exist to drive a reminder, so that can come later.
-- Merging two duplicate member records merges their training too, which can lower your recorded count by one. That is correct — the two rows were always one person — but it is worth knowing before it surprises you.
+- The page does not check that the person you record was actually elected to the office you record them under, which Toastmasters does require. It deliberately lets you record any office for any member, because someone may have been trained for a role they have since handed on — the claim is yours to make and Toastmasters is the arbiter.
 
 ## [1.32.0.0] - 2026-09-03
 

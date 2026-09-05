@@ -86,21 +86,19 @@ export function OfficerTrainingPanel({
 					Club officer training
 				</h3>
 				{/* The counting rule is stated HERE, beside the numbers it governs.
-				    It used to sit below both period cards, so a President read "four
-				    officers", then "3/4", then "1 more officer needed" — three
-				    assertions in the people grain — and only afterwards learned that
-				    Toastmasters counts roles and this page is deliberately stricter.
-				    For a club with a Secretary/Treasurer double-hatter that is the
-				    difference between "we're short" and "TI says we're fine", and the
-				    correction was the furthest thing on screen from the number it
-				    corrected. */}
+				    It used to sit below both period cards, and it used to describe a
+				    DIFFERENT rule from the one the code ran — "four different people"
+				    over a headline that counts roles. A club with a Secretary/Treasurer
+				    double-hatter is exactly where the two diverge, so the sentence has
+				    to sit next to the number it explains and has to say the same thing
+				    the number does. */}
 				<p className="mt-1 max-w-2xl text-xs text-[var(--sea-ink-soft)]">
 					Goal 9 needs four officer <em>roles</em> trained in each training
-					period, and Toastmasters credits one person per role. This page needs
-					both: four different <em>people</em> in four different roles. So
-					someone holding two offices counts once, and four people all trained
-					for Secretary also count once. Record who attended and this page tells
-					you how many more you need and how long the window is open.
+					period, and Toastmasters credits one person per role — so this page
+					counts <em>roles</em>, not heads. Someone holding two offices and
+					trained for both covers two of the four; four people all trained as
+					Secretary cover one. Record who attended and this page tells you how
+					many more you need and how long the window is open.
 				</p>
 			</div>
 
@@ -196,8 +194,8 @@ function PeriodCard({
 						    nothing else on screen, and it is the only place a club is told
 						    it succeeded. */}
 						{tally.met
-							? `All ${tally.required} trained`
-							: `${tally.shortfall} more ${tally.shortfall === 1 ? "officer" : "officers"} needed, in ${tally.shortfall === 1 ? "a role" : "roles"} not yet trained`}
+							? `All ${tally.required} roles trained`
+							: `${tally.shortfall} more ${tally.shortfall === 1 ? "role" : "roles"} needed`}
 					</div>
 				</div>
 			</div>

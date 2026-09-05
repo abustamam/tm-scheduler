@@ -306,13 +306,12 @@ export async function collapseMemberships(
 	//     training may well have picked a different one of the two rows each
 	//     period. Drop the absorbed row on a collision — the keeper's claim for
 	//     that (office, year, period) already says the same thing, and the count
-	//     is over distinct people (floored at distinct offices), so dropping a
-	//     duplicate claim for the surviving
-	//     person loses nothing. (The merge DOES lower the club's trained count
-	//     when the two rows were two Person records for one human — that is the
-	//     merge working, not the count having been wrong: there was only ever one
-	//     human. `members_club_person_unique` means a single Person cannot hold
-	//     two memberships in one club, so this is the only shape it arises in.)
+	//     is over distinct OFFICES, so dropping a duplicate claim for the surviving
+	//     person loses nothing — and a merge can never LOWER the club's trained
+	//     count, because the surviving rows still cover the same set of offices.
+	//     (That was not true while the count was over people: this comment used
+	//     to explain why the count legitimately dropped on merge. Counting
+	//     offices removed the whole class.)
 	//
 	//     Fill the keeper's MISSING date from the absorbed row before dropping
 	//     it. `trained_on` is nullable by design, so a plain "keeper wins" (the

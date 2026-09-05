@@ -7,11 +7,11 @@
  * (`server-modules.guard.test.ts` enforces it). Reachability: a
  * `createServerFn` handler cannot be invoked from vitest, so a query left
  * inline there is coverable by a source grep and nothing else — and the whole
- * point of #531 is that the counting rule (the smaller of distinct people and
- * distinct offices) is testable.
+ * point of #531 is that the counting rule (distinct trainable offices) is
+ * testable.
  *
  * All the rules — the four-officer bar, TI's default windows, the leap year, the
- * de-dup and its office ceiling, the goal-9 suggestion — live in the pure, client-safe
+ * office de-dup, the goal-9 suggestion — live in the pure, client-safe
  * `#/lib/officer-training`. This module only fetches rows and hands them over.
  *
  * ## Authorization lives in the caller, as it does for the rest of DCP

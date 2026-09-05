@@ -352,7 +352,7 @@ describe("todayIso", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Counting: distinct PEOPLE
+// Counting: distinct OFFICES
 // ---------------------------------------------------------------------------
 
 const ALICE = "11111111-1111-1111-1111-111111111111";
@@ -370,36 +370,80 @@ function rec(
 }
 
 describe("countTrainedOfficers", () => {
-	it("counts a dual-office holder ONCE (distinct people, not offices)", () => {
-		// The divergence case the whole rule turns on. Four RECORDS across three
-		// PEOPLE: Alice is Secretary + Treasurer. Distinct-offices would say 4 and
-		// clear the bar; distinct-people says 3 and does not.
-		const records = [
-			rec(ALICE, "secretary", 1),
-			rec(ALICE, "treasurer", 1),
-			rec(BOB, "president", 1),
-			rec(CARA, "vp_education", 1),
-		];
-		expect(countTrainedOfficers(records, 1)).toBe(3);
-		expect(isPeriodMet(countTrainedOfficers(records, 1))).toBe(false);
-	});
+	// The four shapes that decide the rule, each with an ABSOLUTE expected value.
+	// Never `toBe(TRAINED_OFFICERS_REQUIRED)` or a comparison against it: an
+	// expectation written in terms of the constant passes for every value of the
+	// constant, including one that reintroduces the bug (CLAUDE.md's own trap).
+	//
+	//   Shape                    | TI credits | offices | people (the old rule)
+	//   4 people, 4 offices      |          4 |       4 | 4
+	//   4 people, all Secretary  |          1 |       1 | 4   <- over-counted
+	//   1 person,  2 offices     |          2 |       2 | 1   <- under-counted
+	//   2 people,  4 offices     |          4 |       4 | 2   <- under-counted
 
-	it("clears the bar at four distinct people", () => {
+	it("SHAPE 1 — four people in four offices counts 4", () => {
 		const records = [
-			rec(ALICE, "secretary", 1),
-			rec(ALICE, "treasurer", 1),
-			rec(BOB, "president", 1),
-			rec(CARA, "vp_education", 1),
-			rec(DAN, "sergeant_at_arms", 1),
+			rec(ALICE, "president", 1),
+			rec(BOB, "vp_education", 1),
+			rec(CARA, "secretary", 1),
+			rec(DAN, "treasurer", 1),
 		];
 		expect(countTrainedOfficers(records, 1)).toBe(4);
 		expect(isPeriodMet(countTrainedOfficers(records, 1))).toBe(true);
 	});
 
+	it("SHAPE 2 — four people all trained as Secretary counts 1", () => {
+		// TI: "credit is given only for one person per officer role." Counting
+		// people read this as 4 and suggested goal 9 MET where TI credits one —
+		// the over-count the whole rule exists to prevent. Reachable: the unique
+		// index is (membership, office, year, period), so any number of members
+		// may each claim the same office.
+		const records = [
+			rec(ALICE, "secretary", 1),
+			rec(BOB, "secretary", 1),
+			rec(CARA, "secretary", 1),
+			rec(DAN, "secretary", 1),
+		];
+		expect(countTrainedOfficers(records, 1)).toBe(1);
+		expect(isPeriodMet(countTrainedOfficers(records, 1))).toBe(false);
+	});
+
+	it("SHAPE 3 — one person trained for two offices counts 2", () => {
+		// The double-hatting small club. Counting people said 1, and
+		// min(people, offices) also said 1, because the people ceiling had no
+		// basis in TI's rule and could only subtract. TI credits both roles.
+		const records = [rec(ALICE, "secretary", 1), rec(ALICE, "treasurer", 1)];
+		expect(countTrainedOfficers(records, 1)).toBe(2);
+	});
+
+	it("SHAPE 4 — two people covering four offices counts 4", () => {
+		// Same mechanism as shape 3, at the bar. President also VPE, Secretary
+		// also Treasurer: normal below about fifteen members, and TI credits four
+		// roles. The people ceiling reported 2 and told the club it had failed.
+		const records = [
+			rec(ALICE, "president", 1),
+			rec(ALICE, "vp_education", 1),
+			rec(BOB, "secretary", 1),
+			rec(BOB, "treasurer", 1),
+		];
+		expect(countTrainedOfficers(records, 1)).toBe(4);
+		expect(isPeriodMet(countTrainedOfficers(records, 1))).toBe(true);
+	});
+
+	it("de-dups repeat records for the same office", () => {
+		// Two people plus a duplicate claim on one of their offices — still two
+		// roles. This is the de-dup itself, separate from shape 2's headline case.
+		const records = [
+			rec(ALICE, "president", 1),
+			rec(BOB, "president", 1),
+			rec(CARA, "secretary", 1),
+		];
+		expect(countTrainedOfficers(records, 1)).toBe(2);
+	});
+
 	it("ignores an Immediate Past President record entirely", () => {
-		// The untrainable office is dropped BEFORE the de-dup, so Erin — who holds
-		// only that office — contributes 0, not 1. Counting her would clear the bar
-		// on three real officers.
+		// The untrainable office is dropped BEFORE the de-dup, so it can never be
+		// the fourth role. Counting it would clear the bar on three real ones.
 		const records = [
 			rec(ALICE, "president", 1),
 			rec(BOB, "vp_education", 1),
@@ -407,16 +451,21 @@ describe("countTrainedOfficers", () => {
 			rec(ERIN, "immediate_past_president", 1),
 		];
 		expect(countTrainedOfficers(records, 1)).toBe(3);
+		expect(isPeriodMet(countTrainedOfficers(records, 1))).toBe(false);
 	});
 
-	it("does not let an IPP row rescue a person's other office", () => {
-		// Mirror of the above: Alice holds IPP *and* Treasurer. The IPP row is
-		// dropped, the Treasurer row still counts her once.
+	it("counts a person's OTHER office when their IPP row is dropped", () => {
 		const records = [
 			rec(ALICE, "immediate_past_president", 1),
 			rec(ALICE, "treasurer", 1),
 		];
 		expect(countTrainedOfficers(records, 1)).toBe(1);
+	});
+
+	it("counts an IPP-only club as zero", () => {
+		expect(
+			countTrainedOfficers([rec(ERIN, "immediate_past_president", 1)], 1),
+		).toBe(0);
 	});
 
 	it("scores each period separately", () => {
@@ -431,103 +480,33 @@ describe("countTrainedOfficers", () => {
 		expect(countTrainedOfficers(records, 2)).toBe(1);
 	});
 
+	it("can reach all seven offices, and stops there", () => {
+		// The ceiling is TI's seven elected offices, so a club cannot manufacture
+		// an eighth role by recording IPP alongside them.
+		const records = [
+			...TRAINABLE_OFFICER_POSITIONS.map((p) => rec(ALICE, p, 1)),
+			rec(BOB, "immediate_past_president", 1),
+		];
+		expect(countTrainedOfficers(records, 1)).toBe(7);
+	});
+
 	it("is zero for an empty record set", () => {
 		expect(countTrainedOfficers([], 1)).toBe(0);
 		expect(countTrainedOfficers([], 2)).toBe(0);
 	});
 
-	// -----------------------------------------------------------------------
-	// The OTHER direction, which the distinct-people rule alone got wrong
-	// -----------------------------------------------------------------------
-
-	it("floors at distinct OFFICES, so four people on one office count 1", () => {
-		// TI: "credit is given only for one person per officer role." Four members
-		// each recorded as Secretary is ONE trained role, and counting distinct
-		// people alone read it as 4 and suggested goal 9 MET where TI credits one.
-		// That is the direction the conservative rule exists to prevent, and the
-		// panel's own copy asserted it could not happen.
-		const records = [
-			rec(ALICE, "secretary", 1),
-			rec(BOB, "secretary", 1),
-			rec(CARA, "secretary", 1),
-			rec(DAN, "secretary", 1),
-		];
-		expect(countTrainedOfficers(records, 1)).toBe(1);
-		expect(isPeriodMet(countTrainedOfficers(records, 1))).toBe(false);
-	});
-
-	it("reachable shape: outgoing and incoming President both trained in June", () => {
-		// Period 1 straddles the Jul 1 term change on purpose, so two Presidents
-		// legitimately both attend. TI credits the ROLE once.
-		const records = [
-			rec(ALICE, "president", 1),
-			rec(BOB, "president", 1),
-			rec(CARA, "vp_education", 1),
-			rec(DAN, "secretary", 1),
-		];
-		// Three roles, four people → 3.
-		expect(countTrainedOfficers(records, 1)).toBe(3);
-	});
-
-	it("takes the SMALLER of the two ceilings, whichever binds", () => {
-		// People-bound: 2 people over 3 offices → 2.
-		expect(
-			countTrainedOfficers(
-				[
-					rec(ALICE, "president", 1),
-					rec(ALICE, "secretary", 1),
-					rec(ALICE, "treasurer", 1),
-					rec(BOB, "vp_education", 1),
-				],
-				1,
-			),
-		).toBe(2);
-		// Office-bound: 3 people over 2 offices → 2.
-		expect(
-			countTrainedOfficers(
-				[
-					rec(ALICE, "president", 1),
-					rec(BOB, "president", 1),
-					rec(CARA, "secretary", 1),
-				],
-				1,
-			),
-		).toBe(2);
-	});
-
-	it("counts a DUPLICATED human twice, which no key here can prevent", () => {
-		// Recorded rather than fixed, and asserted so the limit is explicit rather
-		// than discovered later. `guards.ts` notes one human can hold two `members`
-		// rows in the same club — but only "through two Person rows", and
-		// `members_club_person_unique` on (club_id, person_id) makes membership and
-		// person 1:1 within a club. So a duplicated human counts twice under EITHER
-		// key, and the remedy is merging the two Person rows (`collapseMemberships`),
-		// not a different de-dup column. Adversarial review proposed keying on
-		// `person_id`; it would change nothing.
+	it("counts a DUPLICATED human's two memberships as the offices they cover", () => {
+		// `guards.ts` notes one human can hold two `members` rows in a club (only
+		// through two Person rows — `members_club_person_unique` makes membership
+		// and person 1:1). Under the office rule that is no longer a counting
+		// hazard at all: two rows for one human on two different offices are two
+		// roles, which is what TI credits.
 		const dupA = "aaaa1111-1111-1111-1111-111111111111";
 		const dupB = "bbbb2222-2222-2222-2222-222222222222";
-		const records = [
-			rec(dupA, "secretary", 1),
-			rec(dupB, "treasurer", 1),
-			rec(CARA, "president", 1),
-			rec(DAN, "vp_education", 1),
-		];
-		expect(countTrainedOfficers(records, 1)).toBe(4);
-		// And after the merge collapses them to one membership, it reads 3 — which
-		// is the merge working, not the count having been wrong.
-		const merged = [
-			rec(dupA, "secretary", 1),
-			rec(dupA, "treasurer", 1),
-			rec(CARA, "president", 1),
-			rec(DAN, "vp_education", 1),
-		];
-		expect(countTrainedOfficers(merged, 1)).toBe(3);
+		const records = [rec(dupA, "secretary", 1), rec(dupB, "treasurer", 1)];
+		expect(countTrainedOfficers(records, 1)).toBe(2);
 	});
 });
-
-// ---------------------------------------------------------------------------
-// The goal-9 suggestion
-// ---------------------------------------------------------------------------
 
 describe("suggestG9", () => {
 	const four = (period: 1 | 2) => [
@@ -558,17 +537,39 @@ describe("suggestG9", () => {
 		expect(suggestG9([])).toBe(0);
 	});
 
-	it("suggests 0 when eight offices are covered by three people per period", () => {
-		// Distinct-offices would clear both periods here (4 offices each); the
-		// distinct-people rule does not. Guards the conservative reading against a
-		// refactor that de-dups on office.
+	it("suggests 1 for a double-hatting club that covers four roles per period", () => {
+		// Three people covering four offices in each period. TI credits four roles
+		// per period, so this club HAS cleared goal 9 — and under the previous
+		// people rule it was told the opposite, in the club shape that is normal
+		// below about fifteen members. The inversion of this expectation is the
+		// whole point of the change; asserted at the suggestion level so the fix
+		// is pinned end to end, not only inside countTrainedOfficers.
 		const perPeriod = (period: 1 | 2) => [
 			rec(ALICE, "secretary", period),
 			rec(ALICE, "treasurer", period),
 			rec(BOB, "president", period),
 			rec(CARA, "vp_education", period),
 		];
-		expect(suggestG9([...perPeriod(1), ...perPeriod(2)])).toBe(0);
+		expect(suggestG9([...perPeriod(1), ...perPeriod(2)])).toBe(1);
+	});
+
+	it("still suggests 0 when a period's four records cover only one role", () => {
+		// The over-count guard, at the suggestion level: four people all trained
+		// as Secretary is one role, so the period is not met and goal 9 is not
+		// suggested however many records exist.
+		const four = (period: 1 | 2) => [
+			rec(ALICE, "president", period),
+			rec(BOB, "vp_education", period),
+			rec(CARA, "secretary", period),
+			rec(DAN, "treasurer", period),
+		];
+		const oneRole = [
+			rec(ALICE, "secretary", 2),
+			rec(BOB, "secretary", 2),
+			rec(CARA, "secretary", 2),
+			rec(DAN, "secretary", 2),
+		];
+		expect(suggestG9([...four(1), ...oneRole])).toBe(0);
 	});
 });
 

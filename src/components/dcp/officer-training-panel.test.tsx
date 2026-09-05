@@ -130,34 +130,30 @@ describe("the tally", () => {
 		const first = card(1);
 		expect(first.textContent).toContain("3");
 		expect(first.textContent).toContain("/4");
-		expect(first.textContent).toContain("1 more officer needed");
+		expect(first.textContent).toContain("1 more role needed");
 	});
 
 	it("names the lever that actually moves the shortfall", () => {
-		// "3 more officers needed" pointed at the wrong lever: with four people on
-		// one office, recording a fifth PERSON moves the number by zero, because
-		// the count is the min of people and offices. The shortfall has to name
-		// the role half too.
+		// The count is over ROLES, so the thing that moves it is a record for an
+		// office nothing covers yet — another person on an office already trained
+		// changes nothing. "3 more officers needed" pointed at the wrong noun.
 		mount(
 			view({ periods: [tally(1, { trained: 1, shortfall: 3 }), tally(2)] }),
 		);
-		expect(card(1).textContent).toContain(
-			"3 more officers needed, in roles not yet trained",
-		);
+		expect(card(1).textContent).toContain("3 more roles needed");
+		expect(card(1).textContent).not.toContain("officers needed");
 		cleanup();
 		mount(
 			view({ periods: [tally(1, { trained: 3, shortfall: 1 }), tally(2)] }),
 		);
-		expect(card(1).textContent).toContain(
-			"1 more officer needed, in a role not yet trained",
-		);
+		expect(card(1).textContent).toContain("1 more role needed");
 	});
 
 	it("pluralises the shortfall", () => {
 		mount(
 			view({ periods: [tally(1, { trained: 2, shortfall: 2 }), tally(2)] }),
 		);
-		expect(card(1).textContent).toContain("2 more officers needed");
+		expect(card(1).textContent).toContain("2 more roles needed");
 	});
 
 	it("says all four are trained instead of naming a shortfall", () => {
@@ -166,8 +162,8 @@ describe("the tally", () => {
 				periods: [tally(1, { trained: 4, met: true, shortfall: 0 }), tally(2)],
 			}),
 		);
-		expect(card(1).textContent).toContain("All 4 trained");
-		expect(card(1).textContent).not.toContain("more officer");
+		expect(card(1).textContent).toContain("All 4 roles trained");
+		expect(card(1).textContent).not.toContain("more role");
 	});
 
 	it("keeps the two periods' numbers apart", () => {
@@ -184,8 +180,8 @@ describe("the tally", () => {
 				],
 			}),
 		);
-		expect(card(1).textContent).toContain("All 4 trained");
-		expect(card(2).textContent).toContain("3 more officers needed");
+		expect(card(1).textContent).toContain("All 4 roles trained");
+		expect(card(2).textContent).toContain("3 more roles needed");
 	});
 });
 
@@ -352,7 +348,7 @@ describe("the window", () => {
 		expect(card(1).textContent).toContain("Closed");
 		expect(card(1).textContent).not.toContain("Closes in");
 		// The failure the issue describes, on screen: shut and one short.
-		expect(card(1).textContent).toContain("1 more officer needed");
+		expect(card(1).textContent).toContain("1 more role needed");
 	});
 
 	it("names the opening date for an upcoming window", () => {
@@ -898,7 +894,7 @@ describe("the panel", () => {
 		// Load-bearing copy, not decoration: the count is deliberately stricter
 		// than TI's, and a club comparing this page against TI's own report has to
 		// be told why the two can differ. It used to sit below both period cards,
-		// so a President met "four officers", "3/4" and "1 more officer needed" —
+		// so a President met "four different people", "3/4" and a shortfall line —
 		// three assertions in the people grain — before the correction.
 		const { container } = render(
 			<OfficerTrainingPanel
@@ -910,28 +906,27 @@ describe("the panel", () => {
 			/>,
 		);
 		const text = container.textContent ?? "";
-		// BOTH ceilings, because the count is the min of the two and naming only
-		// one makes the page contradict its own headline number. The people half
-		// alone shipped while `countTrainedOfficers` was already a min: four
-		// different people all recorded as Secretary render "1/4" directly under
-		// a sentence promising the page counts four different people.
+		// The copy must state the rule the CODE runs. It has now been wrong twice
+		// in opposite directions — first promising "four different people" while
+		// the count was a min, then still promising it after the count became
+		// roles — so this pins the actual rule and both of its consequences.
 		expect(text).toContain("four officer");
 		expect(text).toContain("one person per role");
-		expect(text).toContain("four different");
-		expect(text).toContain("someone holding two offices counts once");
-		expect(text).toContain(
-			"four people all trained for Secretary also count once",
-		);
+		expect(text).toContain("counts");
+		expect(text).toContain("not heads");
+		// The under-count direction the people rule got wrong…
+		expect(text).toContain("covers two of the four");
+		// …and the over-count direction it also got wrong.
+		expect(text).toContain("four people all trained as Secretary cover one");
 		expect(text).toContain("nothing here ticks goal 9 for you");
 		// The disclosure precedes the first period card in reading order.
 		const heading = container.querySelector("#cot-heading");
 		expect(heading).toBeTruthy();
 		const disclosure = heading?.parentElement?.textContent ?? "";
-		expect(disclosure).toContain("four different");
+		expect(disclosure).toContain("not heads");
 
-		// It no longer claims it "can only under-count, never over-count" — that
-		// was false in the two-people-one-office direction until the count was
-		// floored at distinct offices too.
+		// No surface may claim the superseded people rule.
+		expect(text).not.toContain("four different people");
 		expect(text).not.toContain("never over-count");
 	});
 

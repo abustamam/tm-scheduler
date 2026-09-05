@@ -110,31 +110,42 @@ not change how it is stored or scored.
   Scoped to the club-year rather than to `dcp_scoreboards.id` so the windows are readable before a
   scoreboard exists — which is precisely when the deadline reading is worth having.
 
-**The bar counts the smaller of distinct PEOPLE and distinct OFFICES.** The decision (2026-09-04)
-was distinct people — a member holding two offices counts once — justified as the conservative
-reading that "can only under-count relative to TI". Review found the justification false in one
-direction, and the fix preserves the decision rather than reversing it.
+**The bar counts distinct trainable OFFICES with at least one record.** TI words goal 9 over
+roles — "a minimum of four club officer roles trained" — and adds "credit is given only for one
+person per officer role". Both halves point at the same unit, so counting distinct offices is a
+transcription of the rule rather than an approximation of it.
 
-TI words goal 9 over ROLES and adds "credit is given only for one person per officer role". So the
-two rules diverge both ways: one person over two offices is 2 to TI and 1 to a people count
-(under-counting, as intended), but **two people over one office is 1 to TI and 2 to a people
-count** — over-counting, which is exactly what the conservative reading exists to prevent. That
-shape is reachable rather than theoretical: the unique index is `(membership, office, year,
-period)`, so any number of members may each claim `secretary`, and the picker offers all seven
-offices to any active member deliberately (someone may have been trained for an office they have
-since handed on). Four members recorded against one office displayed "4/4 · Bar cleared" and
-suggested goal 9 MET where TI credits one role — while the panel's own copy asserted that could not
-happen.
+This took two corrections to reach, and both are worth recording because the reasoning generalises.
 
-`Math.min(people, offices)` is never more than distinct people (the decision as given) and never
-more than TI's cap, so the guarantee is now true rather than intended. For the settled dual-office
-example the answer is unchanged.
+The instruction (2026-09-04) was to count distinct PEOPLE, justified as the conservative reading
+that "can only under-count relative to TI". Review found that false in one direction: **two people
+recorded against one office is 1 role to TI and 2 to a people count** — over-counting, exactly what
+the conservative reading exists to prevent, and reachable rather than theoretical (the unique index
+is `(membership, office, year, period)`, and the panel offers all seven offices to any active member
+deliberately, since someone may have been trained for an office they have since handed on). Four
+members against one office displayed "4/4 · Bar cleared" and suggested goal 9 MET.
 
-One limit stays and is recorded rather than fixed: a duplicated HUMAN counts twice. `guards.ts`
-notes one human can hold two `members` rows in a club, but only through two Person rows, and
-`members_club_person_unique` makes membership and person 1:1 within a club — so no de-dup column
-helps, and merging the Person rows is the remedy. Display is keyed on `(membership, office)`, so a
-dual-office holder reads as done on one seat and open on the other.
+The first fix kept people as a second ceiling, `Math.min(people, offices)`. That closed the
+over-count but kept a ceiling with no basis in TI's rule, and such a ceiling can only subtract:
+
+| Shape | TI credits | distinct offices | min(people, offices) |
+|---|---|---|---|
+| 4 people, 4 offices | 4 | 4 | 4 |
+| 4 people, all Secretary | 1 | 1 | 1 |
+| 1 person, 2 offices | 2 | 2 | **1** |
+| 2 people, 4 offices | 4 | 4 | **2** |
+
+Both shapes it gets wrong are the double-hatting small club — President also VP Education,
+Secretary also Treasurer — which is normal below about fifteen members and describes the club this
+was built for. Counting offices alone satisfies the original guarantee outright, because it IS TI's
+rule; there is nothing left to be conservative about.
+
+Two limits stay, recorded rather than fixed. The count does not verify that the person held the
+office recorded against them, which TI requires ("Officers must be trained for the position to
+which they were elected") — deliberate, because a record must survive its officer's term ending
+mid-window and the club's claim is the club's to make. And display is keyed on
+`(membership, office)` rather than on the office alone, so a dual-office holder trained for one of
+their two reads as done on that seat and open on the other.
 
 **The panel's program year is not `currentProgramYear()`.** That rolls on Jul 1; period 1 opens
 Jun 1 of the year it belongs to. For the whole of June the open window therefore belongs to the

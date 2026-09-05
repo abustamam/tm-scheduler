@@ -32,17 +32,20 @@
  *
  * ## What the bar counts here, and why it disagrees with that quote
  *
- * TI words the bar over ROLES and adds that credit goes to one person per role.
- * The maintainer's decision (2026-09-04) was to count distinct PEOPLE, so a
- * member holding two offices counts ONCE. Taking that alone was wrong in the
- * other direction — two people trained for the SAME office counted twice where
- * TI credits one — so the bar is **the smaller of distinct people and distinct
- * offices**. See {@link countTrainedOfficers}, which is where that rule lives
- * and where the reasoning is written out in full. Both ceilings together are
- * what make "can only under-count relative to TI" true rather than intended. TI, not GavelUp, is the system of record for who got
- * trained, which is also why nothing here writes goal 9 — the derivation is a
- * SUGGESTION the President applies (ADR-0019, third assist beside the roster
- * assist for goals 7/8 and the Pathways assist for goals 1–6, #245).
+ * TI words the bar over ROLES — "four club officer roles trained", with "credit
+ * given only for one person per officer role" — so the bar here is **distinct
+ * trainable OFFICES with at least one record**, a direct transcription rather
+ * than a proxy. A member holding two offices and trained for both covers two of
+ * the four; four members all trained as Secretary cover one.
+ *
+ * This arrived as an instruction to count distinct PEOPLE (2026-09-04), to
+ * guarantee the app can only under-count. Counting people broke that guarantee
+ * on one shape and under-counted needlessly on two others; the full table and
+ * the reasoning live on {@link countTrainedOfficers}, which is where the rule
+ * is. TI, not GavelUp, is the system of record for who got trained, which is
+ * also why nothing here writes goal 9 — the derivation is a SUGGESTION the
+ * President applies (ADR-0019, third assist beside the roster assist for goals
+ * 7/8 and the Pathways assist for goals 1–6, #245).
  *
  * Seat-level display is keyed on (membership, office) instead, so a dual-office
  * holder trained for one of their two offices reads as trained on that seat and
@@ -357,87 +360,89 @@ export function isOutsideWindow(
 // Counting
 // ---------------------------------------------------------------------------
 
-/**
- * The fields of a training record the scoring and display rules read.
- *
- * ## Why `membershipId` and NOT `members.person_id`
- *
- * Adversarial review argued the count should de-dup on `person_id`, because
- * "one human can hold two `members` rows in the SAME club" (`guards.ts` says
- * exactly that). The claim is true and the fix does nothing, which is worth
- * writing down so it is not re-litigated: `members_club_person_unique` is a
- * unique index on `(club_id, person_id)`, so WITHIN a club membership and person
- * are 1:1 — the state `guards.ts` describes is reached "through two Person
- * rows", i.e. two DIFFERENT person ids. A duplicated human therefore counts
- * twice under either key, and no key can fix it; only merging the two Person
- * rows can, which is what `collapseMemberships` is for.
- *
- * The supporting argument was wrong in the same way. It read the merge REDUCING
- * a club's count from 2 to 1 as proof the key was wrong. That reduction is
- * correct and is the point of a merge: there was only ever one human, and the
- * count is over people.
- */
+/** The fields of a training record the scoring and display rules read. */
 export interface TrainingRecordLike {
 	/**
-	 * The `members` row. The unit {@link countTrainedOfficers} de-dups on (1:1
-	 * with the person inside a club, per the note above) and the unit
-	 * {@link untrainedSeats} keys on with the office.
+	 * The `members` row. NOT the scoring key — {@link countTrainedOfficers}
+	 * de-dups on the OFFICE, so this is read only by {@link untrainedSeats},
+	 * which keys on (membership, office) to show a dual-office holder as done on
+	 * one seat and open on the other.
+	 *
+	 * Worth keeping, because it was argued twice: adversarial review proposed
+	 * scoring on `members.person_id` instead, on the belief one Person can hold
+	 * two memberships in a club. `members_club_person_unique` makes them 1:1
+	 * within a club, so that state needs two Person rows and no de-dup column
+	 * reaches it — merging them (`collapseMemberships`) is the remedy. Moot for
+	 * scoring now in any case: the count never looks at either id.
 	 */
 	membershipId: string;
-	/** The office the club claims this person was trained for. */
+	/** The office the club claims this person was trained for — the scoring key. */
 	position: OfficerPosition;
 	period: TrainingPeriod;
 }
 
 /**
- * Officers trained in a period, floored to what TI could possibly credit:
- * **the smaller of distinct PEOPLE and distinct OFFICES**.
+ * Officers trained in a period: **distinct trainable OFFICES with at least one
+ * record**. That is not an approximation of TI's rule — it IS TI's rule.
  *
  * Two filters first, both load-bearing and neither derivable from the other:
  * `period` (a record credits exactly one of the two windows) and
  * {@link isTrainablePosition} (an Immediate Past President record counts for
  * nothing, per TI's list of seven). Records whose office is untrainable are
- * dropped BEFORE the de-dup, so a person holding only that office contributes 0
- * rather than 1.
+ * dropped BEFORE the de-dup, so a club whose only record is an IPP one counts 0.
  *
- * ## Why BOTH ceilings, when the decision was "distinct people"
+ * ## Why offices, and why not people
  *
- * The maintainer's rule is distinct people, chosen because it "can only
- * under-count relative to TI, so a club is never told it cleared goal 9 when TI
- * would disagree" (2026-09-04). That reasoning holds in one direction and fails
- * in the other, and taking people alone would have made the guarantee FALSE:
+ * TI: *"A minimum of four club officer roles trained"* and *"credit is given
+ * only for one person per officer role."* Both halves point at the same unit —
+ * a role is credited when someone was trained for it, and a second person
+ * trained for the same role adds nothing. Counting distinct offices is a direct
+ * transcription of that.
  *
- * - One person, two offices → TI credits 2 roles, people says 1. Under-counts,
- *   as intended.
- * - **Two people, one office → TI credits 1 role** ("credit is given only for
- *   one person per officer role" — the manual is explicit), people says 2.
- *   OVER-counts, which is the direction the rule exists to prevent.
+ * The instruction this arrived under (2026-09-04) was to count distinct PEOPLE,
+ * to guarantee the app "can only under-count, never tell a club it cleared a
+ * goal it did not". Counting people turned out to break that guarantee in one
+ * direction and to under-count needlessly in the other:
  *
- * The second shape is reachable, not theoretical: the unique index is
- * (membership, office, year, period), so any number of members may each claim
- * `secretary`, and the panel offers all seven offices to any active member on
- * purpose (someone may have been trained for an office they have since handed
- * on). Four members recorded against one office read "4/4 · Bar cleared" and
- * suggested goal 9 MET where TI credits one role.
+ * | Shape                     | TI credits | offices | people |
+ * |---------------------------|-----------:|--------:|-------:|
+ * | 4 people, 4 offices       |          4 |       4 |      4 |
+ * | 4 people, all Secretary   |          1 |       1 |  **4** |
+ * | 1 person, 2 offices       |          2 |       2 |  **1** |
+ * | 2 people, 4 offices       |          4 |       4 |  **2** |
  *
- * `Math.min` honours the decision rather than reversing it: the result is never
- * more than distinct people (the rule as given) and never more than distinct
- * offices (TI's own cap), so "can only under-count" becomes true instead of
- * merely intended. For the settled dual-office example the answer is unchanged.
+ * Row 2 is the over-count the guarantee exists to prevent, and it is reachable
+ * rather than theoretical: the unique index is (membership, office, year,
+ * period), so any number of members may each claim `secretary`, and the panel
+ * offers all seven offices to any active member on purpose (someone may have
+ * been trained for an office they have since handed on). Four members recorded
+ * against one office once read "4/4 · Bar cleared" and suggested goal 9 MET.
+ *
+ * Rows 3 and 4 are why the people ceiling did not survive as a SECOND ceiling
+ * either. `Math.min(people, offices)` fixed row 2 but kept both, and a ceiling
+ * with no basis in TI's rule can only subtract: it reported 1 where TI credits
+ * 2, and 2 where TI credits 4. Both of those shapes are the double-hatting
+ * small club — President also VPE, Secretary also Treasurer — which is normal
+ * below about fifteen members. Counting offices satisfies the original
+ * guarantee outright, because it is TI's rule rather than a proxy for it.
+ *
+ * The one thing this does NOT check is whether the person actually held the
+ * office they are recorded against; TI requires that ("Officers must be trained
+ * for the position to which they were elected"). Deliberate — a record must
+ * survive its officer's term ending mid-window, and the club's claim is the
+ * club's to make. TI, not GavelUp, is the arbiter.
  */
 export function countTrainedOfficers(
 	records: readonly TrainingRecordLike[],
 	period: TrainingPeriod,
 ): number {
-	const people = new Set<string>();
 	const offices = new Set<OfficerPosition>();
 	for (const r of records) {
 		if (r.period !== period) continue;
 		if (!isTrainablePosition(r.position)) continue;
-		people.add(r.membershipId);
 		offices.add(r.position);
 	}
-	return Math.min(people.size, offices.size);
+	return offices.size;
 }
 
 /** Is a period's four-officer bar cleared? */
@@ -545,16 +550,15 @@ export interface TrainingPeriodTally {
 	phase: WindowPhase;
 	/** Inclusive days left before the window shuts; null once closed. */
 	daysUntilClose: number | null;
-	/** The scored count: the smaller of distinct people and distinct offices. */
+	/** The scored count: distinct trainable offices with at least one record. */
 	trained: number;
 	/** Always {@link TRAINED_OFFICERS_REQUIRED}; carried so the UI needn't import it. */
 	required: number;
 	met: boolean;
 	/**
-	 * How many more the period needs (0 once met). Moving it takes one more
-	 * person AND one more office, since {@link countTrainedOfficers} is the min
-	 * of the two — recording a fifth person against an office already trained
-	 * changes nothing.
+	 * How many more the period needs (0 once met). Moving it takes a record for
+	 * an office that has none yet — recording another person against an office
+	 * already covered changes nothing, since the count is over offices.
 	 */
 	shortfall: number;
 }

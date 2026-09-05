@@ -7,22 +7,21 @@
  * Runs against a real Postgres identified by TEST_DATABASE_URL; skipped when
  * unset (never touches dev/prod).
  *
- *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test_531 \
+ *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/officer-training.integration.test.ts
  *
  * ## The fixture matrix, and why it is shaped this way
  *
  * CLAUDE.md's trap: a fixture spanning ONE axis is not a guarantee. The counting
- * rule here is the SMALLER of distinct people and distinct offices, so the cases
- * where that diverges from the obvious reading are the ones worth building, and
- * each of the four below is a separate mechanism rather than a variation:
+ * rule is distinct trainable OFFICES, so the cases worth building are the ones
+ * where that diverges from counting heads — it has been wrong in BOTH directions
+ * during this change, so both are pinned:
  *
- * 1. **A member holding two offices.** Distinct-offices says 4, distinct-people
- *    says 3. Every all-single-office fixture passes under either rule.
- * 1b. **Four people trained for ONE office.** The mirror, and the one this
- *    matrix originally missed: distinct-people says 4 and TI credits 1, so a
- *    people-only count OVER-counted — the direction the conservative rule
- *    exists to prevent. This is why the count is a min and not a de-dup.
+ * 1. **A member holding two offices.** Two roles to TI, and one under the
+ *    people rule this replaced. Every single-office fixture reads the same
+ *    either way.
+ * 1b. **Four people trained for ONE office.** The mirror: one role to TI, four
+ *    under a people count. This is the over-count that ruled counting heads out.
  * 2. **An officer whose term ended mid-window.** Their record must keep
  *    counting (the club WAS credited) while their seat leaves the "who still
  *    needs sending" list. A fixture with only open terms cannot tell a correct
@@ -301,9 +300,11 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 	// -----------------------------------------------------------------------
 
 	describe("records and the four-officer bar", () => {
-		it("counts a dual-office holder ONCE, so four records over three people fall short", async () => {
-			// Fixture axis 1. Distinct-offices reads 4 here and clears the bar;
-			// distinct-people reads 3 and does not.
+		it("credits a dual-office holder for BOTH offices, clearing the bar on three people", async () => {
+			// Fixture axis 1, end to end. Alice is Secretary + Treasurer and trained
+			// for both, so three people cover four roles — which is what TI credits
+			// and what a club below ~15 members actually looks like. The people rule
+			// this replaced read 3 and told the club it had failed.
 			const alice = await addMember(seeded.clubId, "Alice Dual");
 			const bob = await addMember(seeded.clubId, "Bob");
 			const cara = await addMember(seeded.clubId, "Cara");
@@ -331,18 +332,20 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 				IN_P1,
 			);
 			expect(view.records).toHaveLength(4);
-			expect(view.periods[0]?.trained).toBe(3);
+			expect(view.periods[0]?.trained).toBe(4);
 			expect(view.periods[0]?.required).toBe(4);
-			expect(view.periods[0]?.shortfall).toBe(1);
-			expect(view.periods[0]?.met).toBe(false);
-			// The suggestion lives on the SCOREBOARD payload, not on this view —
-			// one derivation, one reader (see the type's own doc comment).
+			expect(view.periods[0]?.shortfall).toBe(0);
+			expect(view.periods[0]?.met).toBe(true);
+			// Period 2 is still empty, so goal 9 is not suggested — the bar is per
+			// period. The suggestion lives on the SCOREBOARD payload, not on this
+			// view: one derivation, one reader (see the type's own doc comment).
+			expect(view.periods[1]?.trained).toBe(0);
 			expect(
 				(await deriveTrainingSuggestion(seeded.clubId, PY)).suggestion,
 			).toBe(0);
 		});
 
-		it("clears a period at four distinct people", async () => {
+		it("clears a period at four distinct offices", async () => {
 			const ids = await Promise.all([
 				addMember(seeded.clubId, "One"),
 				addMember(seeded.clubId, "Two"),
@@ -570,7 +573,7 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 
 		it("floors the count at distinct OFFICES, so four on one office count 1", async () => {
 			// TI credits one person per role. Four members recorded against
-			// Secretary is one trained role; counting distinct people alone read it
+			// Secretary is one trained role; counting heads read it
 			// as 4 and suggested goal 9 met where TI credits one.
 			const ids = await Promise.all([
 				addMember(seeded.clubId, "One"),
@@ -1042,7 +1045,7 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 	// -----------------------------------------------------------------------
 
 	describe("the goal 9 suggestion", () => {
-		/** Four distinct people trained in BOTH periods — the only shape that clears g9. */
+		/** Four distinct OFFICES trained in BOTH periods — what clears g9. */
 		async function trainBothPeriods(): Promise<void> {
 			const ids = await Promise.all([
 				addMember(seeded.clubId, "One"),
@@ -1095,7 +1098,7 @@ describe.skipIf(!hasTestDb)("officer training (integration)", () => {
 		it("suggests 0 with three of four in the second period", async () => {
 			await startScoreboard({ clubId: seeded.clubId, programYear: PY });
 			await trainBothPeriods();
-			// Remove one second-period record, leaving three distinct people there.
+			// Remove one second-period record, leaving three trained offices there.
 			const rows = await loadTrainingRecords(seeded.clubId, PY);
 			const second = rows.filter((r) => r.period === 2);
 			await removeTrainingRecord({
