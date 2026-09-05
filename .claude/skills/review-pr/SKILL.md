@@ -71,10 +71,12 @@ Follow `.claude/skills/code-review/SKILL.md` steps 3 to 5 exactly (the smell bas
 sub-agent briefs, the side-by-side aggregation) with these substitutions:
 
 - The diff command and commit list are the `origin/<base>...origin/<head>` forms from step 1.
-- The spec is what step 2 found.
-- The Standards sources are CLAUDE.md's **Conventions**, **Data layer** and **Test Coverage**
-  sections. There is no `CODING_STANDARDS.md` yet; carving one out of CLAUDE.md is a
-  `/session-retro` item, not a prerequisite for reviewing.
+- The spec is what step 2 found. If the PR body lists deviations from that spec, hand them to the
+  Spec sub-agent as acknowledged: it checks that the diff is coherent with them, and does not
+  report them again as scope creep.
+- The Standards source is `CODING_STANDARDS.md` at the repo root, plus the short bullets under
+  CLAUDE.md's `## Conventions` (import alias, Biome style, strict TS). Everything longer was moved
+  into the standards file on 2026-09-05 so it stops riding in every agent's context.
 
 ### 5. Report
 
