@@ -20,15 +20,11 @@ One stage per iteration, re-planned at the top of every iteration:
    `--max` set to the total of both. If they collapse into one wave, they never conflicted —
    the cap split them — and that merged wave is the stage to dispatch. Do this every time a
    trailing wave is smaller than `--max`; it is the only free throughput in the loop.
-4. Dispatch that stage. One worktree per issue.
+4. Dispatch that stage — one worktree per issue, one agent per worktree, each handed **the
+   brief** below.
 5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
-6. Review each PR with `/review-pr N` from the main session — and gstack `/review` in its
-   worktree too when the hint names a risk category — then `gh pr merge --squash --auto`.
-7. Branch protection requires each branch to be up to date with `main` (`strict: true`), so
-   after each PR lands run `gh pr update-branch N` on the ones still open; CI re-runs and
-   auto-merge fires when green. Repeat until the wave has landed. (A merge queue would do this
-   unattended; GitHub offers it only on organization-owned repos, and this one is user-owned.)
-8. Run `/qa-only` once against the deployed app. Then go to 1.
+6. Review the wave's PRs, then land them one at a time — see **Landing the wave** below.
+7. Run `/qa-only` once against the deployed app. Then go to 1.
 
 Step 1 is not a formality. Between stages the plan genuinely changes: a merge makes cited
 paths exist (an issue leaves CITED PATHS ARE MISSING), someone's worktree or PR claims an
@@ -71,6 +67,69 @@ creates.
 - Then the repo's issue pipeline: `/investigate` → implement → `gh pr create` with `Closes #N`
   in the body → **stop**. Review, merge and `/qa-only` happen from the main session, per wave.
 
+## The brief
+
+The section above is what must be true. This is that, in the form you send. Fill the
+placeholders from the issue's `batch:issues` entry and dispatch one per issue, verbatim:
+
+```text
+Issue #<N>: <title>
+
+Files this issue cites:
+  <path>
+  <path>
+
+1. From the main checkout: `git worktree add .claude/worktrees/<slug>-<N> -b <slug>-<N>`,
+   then `bun run worktree:setup "<one line: what you are building>"`. Work only there.
+   The issue number goes LAST in the branch name with nothing after it — see CLAUDE.md's
+   "Branch naming" for the three ways a suffix silently un-claims the issue.
+2. `/investigate` before you write anything.
+3. Implement. Stay inside the cited files. If the real fix needs a file that is not
+   listed above, STOP and report the path instead of editing it.
+4. Gates, in order: `bun run typecheck`, `bun run test`, then
+   `bunx biome check --diagnostic-level=error`. (`test` needs `TEST_DATABASE_URL` or
+   ~630 tests skip and the run still reads green — CLAUDE.md has the value.)
+5. `gh pr create` with `Closes #<N>` in the body.
+6. STOP THERE. Do not merge, do not review your own PR, do not pick up another issue.
+```
+
+**Keep it this short.** The agent works in a worktree, so it reads CLAUDE.md itself — the
+brief carries only what CLAUDE.md cannot know (which issue, which files, that this agent
+stops at the PR). Growing it into a second copy of the conventions is how the two drift.
+The branch rule is the one duplicated line, and it is duplicated because its failure is
+silent: nothing errors, the issue is simply handed out twice.
+
+## Staying inside the cited files
+
+A wave is disjoint by the paths the issue **bodies** cite. An agent that edits a file its own
+issue never cited voids that property for the whole wave, and nothing downstream catches it:
+`batch:issues` planned against the bodies and has already run, and the second agent's edit to
+that file looks like an ordinary conflict with no cause attached.
+
+So when the fix genuinely lies outside the cited set, the agent stops and reports the path.
+The main session then either widens the issue body and re-plans, or lands this wave first —
+both are cheap. Editing it anyway and noting it in the PR body is not: by the time anyone
+reads the body, the collision has already happened.
+
+## Landing the wave
+
+`/review-pr` checks nothing out, so the wave's reviews are independent and all run at once.
+Merging is the serial half, because branch protection makes each land invalidate the rest.
+
+1. `/review-pr N` for **every** PR in the wave, dispatched together. Where one prints a
+   risk-category hint, run gstack `/review` in that PR's worktree as well.
+2. Send back what the reviews found. Then **re-read the fix diff yourself before merging.**
+   The review agents saw the diff as it was dispatched; the commits answering them are gated
+   by nothing — no second review, and CI only proves the tests still pass. This is the one
+   step in the loop with nothing watching it.
+3. `gh pr merge --squash --auto` — one PR.
+4. `gh pr update-branch M` on every PR still open (`strict: true` requires each branch be up
+   to date with `main`). CI re-runs; auto-merge fires when green.
+5. Back to 3 with the next PR, until the wave has landed.
+
+A merge queue would run 3–5 unattended, and it was the first choice; GitHub offers it only on
+organization-owned repos and this one is user-owned.
+
 ## Common mistakes
 
 | Mistake | Consequence |
@@ -83,3 +142,6 @@ creates.
 | Dispatching a NEEDS A FILE PATH issue anyway | Disjointness was never established for it |
 | An agent merging its own PR | Skips review, and lands on a `main` its CI run never saw |
 | A PR body without `Closes #N` | The branch is deleted on merge, the claim vanishes, the issue is handed out again |
+| An agent editing a file its issue never cited | Voids the disjointness the wave was built on; the collision arrives with no cause attached |
+| Merging the round that answers the review | Those commits were reviewed by nothing — re-read the diff yourself |
+| Reviewing the wave's PRs one at a time | `/review-pr` checks nothing out; only the merging has to be serial |
