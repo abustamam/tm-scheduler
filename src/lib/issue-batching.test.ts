@@ -148,12 +148,8 @@ describe("extractPaths", () => {
 	 * The allowlist is the whole safety property. Without it the rule regresses
 	 * into matching any root-level `name.ext`.
 	 *
-	 * `CHANGELOG.md` is the port-specific case and it is deliberately excluded.
-	 * It is frozen now, and while `/ship` still wrote it on every release, letting
-	 * issues cite it would have made them all collide with each other
-	 * unconditionally and serialised the entire backlog. Either way it is not a
-	 * change surface an issue edits. `TODOS.md` left the list on 2026-09-04 for
-	 * the mirror-image reason: it was in every diff, and became `TODOS/<branch>.md`.
+	 * `CHANGELOG.md`, `VERSION` and (since 2026-09-04) `TODOS.md` are deliberately
+	 * excluded; the comment above `CITED_ROOT_FILES` says why for each.
 	 */
 	test("leaves a root file that is not on the allowlist alone", () => {
 		expect(

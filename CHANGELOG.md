@@ -2,7 +2,7 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file.
 
-**Entries stop at 1.32.0.0 (2026-09-04).** Releases are no longer versioned; the squash-merged PR titles on `main` are the record from here. See CLAUDE.md's "Skill routing" for why.
+**Frozen on 2026-09-04 at 1.32.0.0, the last versioned release.** Releases are no longer versioned; the squash-merged PR titles on `main` are the record from here. See CLAUDE.md's "Skill routing" for why.
 
 ## [1.32.0.0] - 2026-09-03
 

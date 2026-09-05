@@ -15,14 +15,16 @@ main checkout is never touched and no worktree is needed.
 ### 1. Resolve the PR
 
 ```bash
-gh pr view <N> --json number,title,state,headRefName,baseRefName,body,url \
-  --jq '{number,title,state,head:.headRefName,base:.baseRefName,url,body}'
+gh pr view <N> --json number,title,state,isCrossRepository,headRefName,baseRefName,body,url \
+  --jq '{number,title,state,fork:.isCrossRepository,head:.headRefName,base:.baseRefName,url,body}'
 git fetch origin "<base>" "<head>" --quiet
 git diff --stat "origin/<base>...origin/<head>"
 ```
 
-Stop with a clear message if the PR does not exist, is not open, or the diff is empty. A bad
-ref should fail here, not inside two parallel sub-agents.
+Stop with a clear message if the PR does not exist, is not open, comes from a fork
+(`isCrossRepository: true`, so its branch is not on `origin` and the fetch above cannot see it;
+external PRs are not a review surface here), or the diff is empty. A bad ref should fail here,
+not inside two parallel sub-agents.
 
 Capture two commands once and pass them verbatim to every sub-agent. Never `HEAD`:
 
@@ -48,17 +50,20 @@ List the changed files. If any match, print one line before dispatching:
 
 | Path or symbol | Category |
 |---|---|
+| `src/lib/auth.ts`, `src/lib/auth-client.ts`, `src/routes/api/auth/` | authentication |
 | `src/server/guards.ts`, `src/server/club-readable-logic.ts`, `src/server/meeting-authz-logic.ts` | authorization / archive gate |
 | `drizzle/`, `src/db/schema.ts` | migration |
 | `public/sw.js` | service worker |
-| any hunk naming `applySelfAdd` | self-add |
+| any hunk under `src/` naming `applySelfAdd` (documentation that names it does not count) | self-add |
 
 > Risk category touched (<category>). CLAUDE.md's review table says run gstack `/review` in the
 > PR's worktree as well. This skill does not replace it.
 
-Paths cannot see an authorization change made in an unrelated file, so a silent hint is not a
-clean bill. The categories and the reason each is on the list live in CLAUDE.md's skill-routing
-section; this table mirrors it and changes with it.
+Two of CLAUDE.md's six categories have no path: an authorization change can live in any server
+module, and a cascading delete is a shape, not a file. So a silent hint is not a clean bill; read
+the Spec axis's summary of what the diff does with that in mind. The categories and the reason
+each is on the list live in CLAUDE.md's skill-routing section; this table mirrors the ones that
+have paths and changes with it.
 
 ### 4. Run the two axes
 

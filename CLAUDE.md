@@ -937,7 +937,7 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 | Land | `gh pr merge --squash --auto`. The merge queue tests each PR against `main` plus everything queued ahead of it. |
 | Verify a wave | `/qa-only` against the deployed app, once per wave after the queue drains, before the next meeting. Findings become issues. |
 | See what shipped | `/retro` (gstack). `/session-retro` is the other one: what in the agent's environment made a session harder than it needed to be. |
-| Park debt | `TODOS/<branch-name>.md`. See `TODOS/README.md` for the lifecycle. |
+| Park debt | `TODOS/<branch-name>.md`, several items per file, deleted when done. Swept at `/retro` and whenever `batch:issues` comes back empty. `TODOS/README.md` has the lifecycle. |
 
 ### Pull requests
 
@@ -946,8 +946,9 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 - **Body**: `Closes #N` is mandatory. Branches are deleted on merge, so a merged PR without it
   leaves the issue open with no claim on it, and the next `batch:issues` hands it out again.
   Everything else in the body is optional.
-- **The agent never merges.** A wave PR is green against the `main` that existed when its CI
-  ran; the queue is what tests it against the `main` it will actually land on. Before the queue,
+- **A wave agent never merges its own PR.** Merging happens from the main session, after
+  `/review-pr`. A wave PR is green against the `main` that existed when its CI ran; the queue is
+  what tests it against the `main` it will actually land on. Before the queue,
   `/ship` merged `main` into the branch before testing, and branch protection still does not
   require a branch to be up to date (`strict: false`), so the queue is the only gate. `ci.yml`
   runs on `merge_group:` for that reason; removing that trigger stalls every queued PR.

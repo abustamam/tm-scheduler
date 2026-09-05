@@ -32,5 +32,5 @@ it. There is no completed log. Git history and the closed issue are the record.
 ## `legacy-2026-09.md`
 
 The single `TODOS.md` this directory replaced, frozen on 2026-09-04 with 69 open items. It is swept
-on the same schedule as everything else until it is empty, then deleted. Code comments that say
-"recorded in TODOS.md" mean this file.
+on the same schedule as everything else until it is empty, then deleted. Anything that still says
+`TODOS.md`, whether a code comment, `CONTEXT.md`, an ADR or the Dockerfile, means this file.
