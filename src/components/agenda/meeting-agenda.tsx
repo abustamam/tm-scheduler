@@ -229,6 +229,35 @@ export function MeetingAgenda({
 	const [assignSlot, setAssignSlot] = useState<AgendaSlot | null>(null);
 	const [editSpeechSlot, setEditSpeechSlot] = useState<AgendaSlot | null>(null);
 	const [takeoverSlot, setTakeoverSlot] = useState<AgendaSlot | null>(null);
+	const [contactPendingId, setContactPendingId] = useState<string | null>(null);
+
+	/**
+	 * The rail's `contacted()` guard (`meeting-attendance-panel.tsx`), which this
+	 * surface has to carry too now that it records outreach (#662). Wiring
+	 * `onContacted` straight onto the draft links would re-open on the agenda card
+	 * the exact defect the rail already measured and fixed.
+	 *
+	 * The two draft links are bare `<a>`s, and no `disabled` attribute exists on an
+	 * anchor, so a fat-finger fires this once per tap — four taps, four calls.
+	 * Neither layer below absorbs it: the route's `markAsked` resolves `current`
+	 * from a `rungOverride` captured at render, so same-tick taps all read `null`,
+	 * and the server's `setPlanStatus` MATCHES an existing `reached_out` row, so
+	 * `returning()` is non-empty and every duplicate lands another `plan_set` in
+	 * `activity_log`. Not corruption — `demoteFrom` still stops a late nudge
+	 * overwriting a real answer — but N rows in the feed for one tap.
+	 *
+	 * `contactedSet` covers the already-recorded case; `contactPendingId` covers
+	 * the same-tick burst the set cannot see, because the route only refreshes it
+	 * after the round trip.
+	 */
+	const contactedSet = new Set(contactedMemberIds);
+	function recordContact(memberId: string) {
+		if (contactPendingId !== null || contactedSet.has(memberId)) return;
+		setContactPendingId(memberId);
+		void Promise.resolve(onContacted?.(memberId, "nudge")).finally(() => {
+			setContactPendingId(null);
+		});
+	}
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
@@ -522,6 +551,12 @@ export function MeetingAgenda({
 								const removeRoleDisabledReason = paired
 									? "Remove the paired speaker role instead"
 									: "Unassign first";
+								// The holder's MEMBER id, or null when the slot is open or
+								// held by a guest. Read into a const so the narrowing survives
+								// into the confirm-nudge callback below — TypeScript discards
+								// a narrowing of `slot.assigneeId` the moment it crosses a
+								// closure boundary.
+								const holderMemberId = slot.assigneeId;
 								return (
 									<li
 										key={slot.id}
@@ -669,6 +704,41 @@ export function MeetingAgenda({
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														mode="confirm"
+														// Chasing the person who already HOLDS the role is
+														// outreach, and it records as such — through the SAME
+														// `onContacted` seam the recruit picker twelve lines
+														// below already reaches, which the route wires to
+														// `setContacted` (#662). Without it, whether an ask
+														// counted depended on which of two surfaces the officer
+														// used: the identical `mode="confirm"` draft in the
+														// attendance rail records it, so a nudge sent from the
+														// card the officer is actually looking at left that same
+														// member reading "Ask" on the rail beside it.
+														//
+														// `via: "nudge"` for the same reason the recruit picker
+														// and the rail's `markAsked` both spell it that way —
+														// one action must not reach `activity_log` under two
+														// different names.
+														//
+														// `setContacted`'s `demoteFrom: ["reached_out"]` floor
+														// is what makes firing this unconditionally safe: a
+														// holder who has already replied "coming" keeps that
+														// answer, so the write can never turn a real reply back
+														// into an ask.
+														//
+														// MEMBER-HELD SLOTS ONLY. A guest holder carries
+														// `assigneeGuestId` and no `members` row, so a plan
+														// write for them has no foreign key to land on and
+														// throws — for the one case that looks perfectly fine
+														// on screen, since `assigneeName` is populated for a
+														// guest too. `assigneeId` is the field that tells them
+														// apart, and an absent `onContacted` leaves the draft
+														// links working exactly as they did.
+														onContacted={
+															holderMemberId
+																? () => recordContact(holderMemberId)
+																: undefined
+														}
 													/>
 												) : null}
 
