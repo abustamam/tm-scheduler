@@ -9,10 +9,12 @@ import { listMembers } from "#/server/members";
 import { MemberAvatar } from "./member-avatar";
 
 /**
- * Roster search + "I'm new — add me" picker. Extracted from the retired
- * `PickNameScreen` so the identity dialog reuses it. Router-independent:
- * `clubUuid` is passed in; on pick it calls `onPicked` with the chosen/created
- * member. Renders inside a Dialog (no full-page chrome of its own).
+ * Roster search and picker — search only, since #616/#630 removed the
+ * "I'm new — add me" self-add (see `notListedHint` below). Extracted from the
+ * retired `PickNameScreen` so the identity dialog reuses it. Router-independent:
+ * `clubUuid` is passed in; on pick it calls `onPicked` with the member chosen
+ * from the existing roster. Renders inside a Dialog (no full-page chrome of its
+ * own).
  */
 export function PickNameForm({
 	clubUuid,

@@ -240,10 +240,13 @@ async function loadClubPipelineSettings(
 // Why 30: guests arrive in BATCHES — an open house is exactly when a club most
 // wants the form working and most wants to impress visitors. 30 new guests in
 // one club in one hour clears any real meeting and still bounds abuse to a
-// number an officer can delete by hand. (30 was picked against the public member
-// self-add's 15 — the sibling cap on a rare individual event. That path and its
-// constants were deleted at #630, so the comparison now reads against the ballot
-// guest cap in `voting-logic.ts` instead.)
+// number an officer can delete by hand. (30 was originally picked against the
+// public member self-add's 15 — the sibling cap on a rare individual event, so
+// double it for a path where arrivals cluster. #630 deleted that path and its
+// constants, which leaves 30 standing on the batch argument above rather than on
+// a ratio. Do NOT repoint the comparison at `MAX_BALLOT_GUESTS_PER_MEETING`: it
+// is 60, so a "batches justify a bigger cap" sentence aimed at it argues for the
+// opposite of 30.)
 //
 // A RETURNING guest (matched by email or phone) does not consume the cap: only
 // the create path counts, so regulars are never throttled.

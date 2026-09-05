@@ -5,8 +5,18 @@
  * These never called the server fns: each helper below replicates the query
  * against `testDb`, because a `createServerFn` is unreachable from vitest. The
  * add helper was named after `addMember` when that fn was public; #630 deleted
- * it, and the helper stays because what it pins — a roster row plus its
- * `member_add` activity row — is what `applyBulkImport` must still produce.
+ * that fn and renamed the helper.
+ *
+ * BE HONEST ABOUT WHAT THIS FILE IS. `insertRosterMember` writes the member row
+ * and the `member_add` row itself, and the case below then asserts those same
+ * rows exist — so it asserts that `testDb.insert` inserts, and would pass with
+ * every production seam deleted. No production code is imported here. That
+ * predates #630 (`addMemberPublic` on `main` hand-rolled the identical two
+ * inserts); it is recorded rather than fixed because the fix is to drive the
+ * real seam the way `public-writers-archive-gate.integration.test.ts` does
+ * — `vi.mock("#/db", …)` plus a dynamic import — which is a rewrite, not a
+ * removal. See `TODOS/remove-self-add-630.md`. Do NOT read the `member_add`
+ * assertion as pinning `applyBulkImport`: nothing links them.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://test:test@localhost:5433/tm_test \

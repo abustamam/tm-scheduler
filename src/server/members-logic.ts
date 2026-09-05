@@ -548,10 +548,11 @@ export interface BulkImportResult {
 /**
  * Insert the valid pasted rows into `members`, skipping blank names, malformed
  * emails, and duplicates (against the live roster + within the batch — same
- * rules as the client preview). Logs one `member_add` per inserted member — the
- * only remaining producer of that action since #630 deleted the public self-add.
- * Phone is standardized to E.164 on write with the club default country code
- * (#295).
+ * rules as the client preview). Logs one `member_add` per inserted member. #630
+ * deleted the public self-add, which leaves TWO producers of that action rather
+ * than one: this, and `applyConvertGuestToMember` in `guest-pipeline-logic.ts`
+ * — the same seam the `member-write-authz` census names. Phone is standardized
+ * to E.164 on write with the club default country code (#295).
  */
 export async function applyBulkImport(
 	input: BulkImportInput,
