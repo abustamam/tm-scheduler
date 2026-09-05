@@ -23,9 +23,12 @@ One stage per iteration, re-planned at the top of every iteration:
 4. Dispatch that stage. One worktree per issue.
 5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
 6. Review each PR with `/review-pr N` from the main session — and gstack `/review` in its
-   worktree too when the hint names a risk category — then `gh pr merge --squash --auto`. The
-   merge queue lands them in order, each tested against `main` plus the ones ahead of it.
-7. When the queue is empty, run `/qa-only` once against the deployed app. Then go to 1.
+   worktree too when the hint names a risk category — then `gh pr merge --squash --auto`.
+7. Branch protection requires each branch to be up to date with `main` (`strict: true`), so
+   after each PR lands run `gh pr update-branch N` on the ones still open; CI re-runs and
+   auto-merge fires when green. Repeat until the wave has landed. (A merge queue would do this
+   unattended; GitHub offers it only on organization-owned repos, and this one is user-owned.)
+8. Run `/qa-only` once against the deployed app. Then go to 1.
 
 Step 1 is not a formality. Between stages the plan genuinely changes: a merge makes cited
 paths exist (an issue leaves CITED PATHS ARE MISSING), someone's worktree or PR claims an
