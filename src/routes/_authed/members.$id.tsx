@@ -43,6 +43,12 @@ import {
 	officerPositionLabel,
 } from "#/lib/officers";
 import { firstNameOf } from "#/lib/person-name";
+import {
+	SPEECH_SCHEDULE_STATE_LABELS,
+	type SpeechScheduleState,
+	speechLogHeadline,
+	speechScheduleState,
+} from "#/lib/speech-schedule-state";
 import { getMemberProfile } from "#/server/club";
 import {
 	editMember,
@@ -80,6 +86,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 				openSpeakerSlots: [],
 				pathOptions: [] as EnrollablePath[],
 				enrollments: [] as MemberEnrollment[],
+				now: Date.now(),
 			};
 		}
 		const [profile, pathways, pathOptions, enrollments] = await Promise.all([
@@ -94,7 +101,16 @@ export const Route = createFileRoute("/_authed/members/$id")({
 				() => [],
 			),
 		]);
-		return { ...profile, pathways, pathOptions, enrollments };
+		return {
+			...profile,
+			pathways,
+			pathOptions,
+			enrollments,
+			// Pinned in the loader, not sampled while rendering: one value is
+			// dehydrated with the loader data, so the SSR pass and the hydration
+			// pass classify every speech-log row identically. See #656 / #608.
+			now: Date.now(),
+		};
 	},
 	component: MemberDetail,
 });
@@ -116,6 +132,27 @@ function dayMon(value: Date | string) {
 	};
 }
 
+/**
+ * The speech-log badge. The decision it renders belongs to
+ * `speechScheduleState`, shared with the dashboard's copy of this list so the
+ * two surfaces cannot answer differently for one slot (#656); the wording comes
+ * from the same module for the same reason.
+ */
+function SpeechStatePill({ state }: { state: SpeechScheduleState }) {
+	if (state === "scheduled") {
+		return (
+			<span className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]">
+				{SPEECH_SCHEDULE_STATE_LABELS.scheduled}
+			</span>
+		);
+	}
+	return (
+		<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-semibold text-[var(--palm)]">
+			{SPEECH_SCHEDULE_STATE_LABELS.delivered}
+		</span>
+	);
+}
+
 function MemberDetail() {
 	const {
 		member,
@@ -126,6 +163,7 @@ function MemberDetail() {
 		openSpeakerSlots,
 		pathOptions,
 		enrollments,
+		now,
 	} = Route.useLoaderData();
 	const { activeClubId, clubs, officerPositions } = Route.useRouteContext();
 	const clubId = activeClubId;
@@ -259,7 +297,10 @@ function MemberDetail() {
 					) : (
 						speechLog.map((l) => {
 							const { day, mon } = dayMon(l.scheduledAt);
-							const scheduled = new Date(l.scheduledAt).getTime() > Date.now();
+							const state = speechScheduleState({
+								scheduledAt: l.scheduledAt,
+								now,
+							});
 							const sub = [l.projectName, l.pathwayPath, l.projectLevel]
 								.filter(Boolean)
 								.join(" · ");
@@ -278,7 +319,10 @@ function MemberDetail() {
 									</div>
 									<div className="min-w-0">
 										<div className="truncate text-sm font-bold">
-											{l.speechTitle ?? l.roleName}
+											{speechLogHeadline({
+												speechTitle: l.speechTitle,
+												roleName: l.roleName,
+											})}
 										</div>
 										<div className="truncate text-xs text-[var(--sea-ink-soft)]">
 											{sub ||
@@ -287,15 +331,7 @@ function MemberDetail() {
 													: l.roleName)}
 										</div>
 									</div>
-									{scheduled ? (
-										<span className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]">
-											Scheduled
-										</span>
-									) : (
-										<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-semibold text-[var(--palm)]">
-											Completed
-										</span>
-									)}
+									<SpeechStatePill state={state} />
 								</div>
 							);
 						})
