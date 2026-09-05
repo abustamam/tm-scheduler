@@ -40,7 +40,15 @@ const PLURAL = "Best Table Topics";
  */
 const SINGULAR = /Best Table Topic(?!s)/;
 
-const SCANNED = /\.(m?[jt]sx?|cjs|cts)$/i;
+/**
+ * `content/` is in scope, not only `src/`: `src/data/resource-content.ts` bundles
+ * `/content/resources/*.md` through `import.meta.glob`, so that prose is served
+ * to a public reader as surely as any component is. A `src/`-only sweep would
+ * leave it guarded by nothing. Same reasoning as
+ * `attendance-plan-store.guard.test.ts` spanning `src/` and `scripts/`.
+ */
+const SCAN_ROOTS = ["src", "content"];
+const SCANNED = /\.(m?[jt]sx?|cjs|cts|md)$/i;
 /**
  * Tests may quote the old wording deliberately, to assert history. Kept in step
  * with `SCANNED`'s extension set on purpose — a narrower list here would sweep
@@ -57,10 +65,12 @@ function walk(dir: string, out: string[] = []): string[] {
 	return out;
 }
 
-const sourceFiles = walk(resolve(ROOT, "src"))
-	.filter((abs) => SCANNED.test(abs) && !IS_TEST.test(abs))
-	// This guard states the pattern it forbids, so it can't be its own offender.
-	.filter((abs) => abs !== SELF);
+const sourceFiles = SCAN_ROOTS.filter((r) => existsSync(resolve(ROOT, r)))
+	.flatMap((r) => walk(resolve(ROOT, r)))
+	.filter((abs) => SCANNED.test(abs) && !IS_TEST.test(abs));
+
+/** Whitespace-insensitive, so a Biome reflow of correct copy is not a failure. */
+const flat = (s: string) => s.replace(/\s+/g, " ");
 
 /**
  * Every surface that names the award to a reader, and the exact text each one
@@ -69,69 +79,92 @@ const sourceFiles = walk(resolve(ROOT, "src"))
  * The expectation is per-SITE rather than a bare `toContain(PLURAL)`, because a
  * whole-file substring is satisfied by any other mention in the same file: with
  * a plain substring, deleting `agenda-runsheet.ts`'s `AWARD_CATEGORIES` label
- * still passes on the two voting-detail strings further down, and
- * `slide-layout.ts` passes on its vote-slide title alone. Both halves of this
- * guard were reviewed as overclaiming exactly that, so each entry now pins the
- * construct that actually renders, not merely the words.
+ * still passed on the two voting-detail strings further down, and
+ * `slide-layout.ts` passed on its vote-slide title alone.
+ *
+ * Needles are matched after whitespace collapsing (see `flat`), so wrapping a
+ * long line does not fail a surface whose copy is correct — the brittleness a
+ * reviewer measured on three of these before that change.
  *
  * Listed rather than discovered: a rename that DELETED the award's name from a
- * surface would otherwise satisfy the offender sweep perfectly.
+ * surface would otherwise satisfy the offender sweep perfectly. The sweep is
+ * the auto-enrolling half; this list only guards deletion.
+ *
+ * Deliberately NOT listed: `print-theme.tsx`'s ballot-QR caption reads
+ * "Best Speaker · Evaluator · Table Topics", an abbreviated three-item list
+ * rather than the award's name, so pinning it here would freeze an abbreviation
+ * as if it were the canonical wording. The offender sweep still covers it.
  */
-const SURFACES: { file: string; expect: string[] }[] = [
+const SURFACES: { file: string; needles: string[] }[] = [
 	{
 		file: "src/lib/slide-layout.ts",
 		// Title and body head line, which #460 also made agree with each other.
-		expect: [
+		needles: [
 			`"Vote for ${PLURAL} Speaker"`,
 			`"Please Vote for ${PLURAL} Speaker:"`,
 		],
 	},
 	{
 		file: "src/lib/agenda-slides.ts",
-		expect: [`awardCategories.push("${PLURAL}")`],
+		needles: [`awardCategories.push("${PLURAL}")`],
 	},
 	{
+		// All THREE reader-facing sites: the `AWARD_CATEGORIES` label spliced into
+		// the awards beat, and both voting-detail strings. Pinning only the label
+		// left the other two deletable while this stayed green.
 		file: "src/lib/agenda-runsheet.ts",
-		// The `AWARD_CATEGORIES` entry, not the voting-detail copy beside it.
-		expect: [`label: "${PLURAL}"`],
+		needles: [
+			`label: "${PLURAL}"`,
+			`report · opens voting for ${PLURAL}`,
+			`detail: "Opens voting for ${PLURAL}"`,
+		],
 	},
 	{
 		file: "src/lib/role-template.ts",
 		// The Ballot Counter's role description, in prose.
-		expect: [`Best Evaluator, and ${PLURAL}`],
+		needles: [`Best Evaluator, and ${PLURAL}`],
 	},
 	{
 		file: "src/server/role-sheet-layout.ts",
-		expect: [`award("${PLURAL}")`],
+		needles: [`award("${PLURAL}")`],
 	},
 	{
 		file: "src/server/minutes-pdf-logic.ts",
-		expect: [`best_table_topics: "${PLURAL}"`],
+		needles: [`best_table_topics: "${PLURAL}"`],
 	},
 	{
 		file: "src/components/club/meeting-minutes.tsx",
-		expect: [`best_table_topics: "${PLURAL}"`],
+		needles: [`best_table_topics: "${PLURAL}"`],
 	},
 	{
 		file: "src/components/club/ballot.tsx",
-		expect: [`best_table_topics: "${PLURAL}"`],
+		needles: [`best_table_topics: "${PLURAL}"`],
 	},
 	{
 		file: "src/components/club/vote-counter-panel.tsx",
-		expect: [`best_table_topics: "${PLURAL}"`],
+		needles: [`best_table_topics: "${PLURAL}"`],
 	},
 	{
 		file: "src/components/agenda/meeting-agenda-print.tsx",
-		// The printed agenda's "Tonight's Votes" box, in reading order.
-		expect: [`["Best Speaker", "${PLURAL}", "Best Evaluator"]`],
+		// The printed agenda's "Tonight's Votes" box. The adjacent PAIR rather
+		// than the whole bracketed array: Biome's multiline form of the same
+		// literal adds a trailing comma and bracket padding, which whitespace
+		// collapsing alone does not absorb, so pinning the brackets failed on a
+		// reflow of correct copy. The pair still fixes the plural and its
+		// reading-order neighbour.
+		needles: [`"${PLURAL}", "Best Evaluator"`],
 	},
 	{
 		// The Ballot Counter console's on-screen help text. Missing from this
 		// list on the first pass — it was already plural, so nothing failed, and
-		// a list that silently omits a surface is the maintenance trap a reviewer
-		// flagged. Kept because it IS reader-facing copy naming the award.
+		// a list that silently omits a surface is the maintenance trap.
 		file: "src/routes/club.$clubId.meeting.$meetingId.tsx",
-		expect: [`eligible for ${PLURAL}`],
+		needles: [`eligible for ${PLURAL}`],
+	},
+	{
+		// Public resources prose, served from `content/` via `import.meta.glob`.
+		file: "content/resources/what-to-expect.md",
+		needles: [`Best Evaluator, and ${PLURAL}`],
 	},
 ];
 
@@ -151,8 +184,28 @@ describe("#460: one wording for the Best Table Topics award", () => {
 		expect(SINGULAR.test(`Vote for ${PLURAL} Speaker`)).toBe(false);
 	});
 
+	/**
+	 * The floor that matters is MEMBERSHIP, not a count. A count is satisfied by
+	 * a lexical accident: narrowing `SCANNED` to drop `sx?` took the sweep from
+	 * 399 files to 267 — every `.tsx` in the repo, five of the surfaces below
+	 * among them — and a `> 100` floor stayed green, because the positive half
+	 * resolves its paths directly and never notices they left the sweep. Tying
+	 * the two halves together is what closes that.
+	 */
+	it("sweeps every surface it separately asserts on", () => {
+		const missing = SURFACES.map((s) => s.file).filter(
+			(file) => !sourceFiles.includes(resolve(ROOT, file)),
+		);
+		expect(
+			missing,
+			"These surfaces are asserted on below but are NOT in the offender " +
+				"sweep, so the singular could return to them unnoticed. Check " +
+				"`SCAN_ROOTS`, `SCANNED` and `IS_TEST`.",
+		).toEqual([]);
+	});
+
 	it("walks a non-trivial source tree (so a broken walk can't pass vacuously)", () => {
-		expect(sourceFiles.length).toBeGreaterThan(100);
+		expect(sourceFiles.length).toBeGreaterThan(300);
 	});
 
 	it("no non-test source file uses the singular display string", () => {
@@ -176,13 +229,15 @@ describe("#460: one wording for the Best Table Topics award", () => {
 
 	it.each(SURFACES)("$file still names the award to its reader", ({
 		file,
-		expect: expected,
+		needles,
 	}) => {
 		const abs = resolve(ROOT, file);
 		expect(existsSync(abs), `${file} is missing`).toBe(true);
-		// Comment-blind here: this half requires the text to BE present, so a
-		// mention in a comment would be a false PASS with the real label deleted.
-		const src = readSource(abs);
-		for (const needle of expected) expect(src).toContain(needle);
+		// Comment-blind for code, so a mention in a comment is not a false PASS
+		// with the real label deleted. Markdown has no JS comments to strip and
+		// `//` inside it is prose, so it is read raw.
+		const raw = readFileSync(abs, "utf8");
+		const src = flat(file.endsWith(".md") ? raw : readSource(abs));
+		for (const needle of needles) expect(src).toContain(flat(needle));
 	});
 });
