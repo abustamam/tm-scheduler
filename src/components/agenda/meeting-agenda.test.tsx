@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
+import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { lockedViewer } from "#/lib/meeting-lifecycle";
 import { meetingViewer } from "#/lib/meeting-viewer";
 import {
@@ -766,5 +769,205 @@ describe("MeetingAgenda evaluator reorder arrows", () => {
 		expect(
 			screen.queryByRole("button", { name: /Move Evaluator .* up/ }),
 		).toBeNull();
+	});
+});
+
+/**
+ * #662 — the agenda's confirm nudge records outreach.
+ *
+ * What the bug actually was: an officer chased the person who already HOLDS a
+ * role, from the slot card they were looking at, and the attendance rail beside
+ * it still read "Ask". The identical `mode="confirm"` draft in the rail recorded
+ * it, so whether an ask counted depended on which of two surfaces they used.
+ *
+ * So the assertion is that LABEL, not the callback. A spy-only test
+ * (`expect(onContacted).toHaveBeenCalledWith("m1", "nudge")`) is green for a
+ * wiring that reaches a seam writing nothing, and it is the recorded trap for
+ * this shape — CODING_STANDARDS.md, "Test coverage": a component tested through
+ * its props cannot see a wrong prop, and a handler assertion IS the prop.
+ *
+ * Both surfaces are therefore mounted over ONE plan array, wired the way
+ * `club.$clubId.meeting.$meetingId.tsx` wires them: `contactedMemberIds` is
+ * derived from the plan by that route's own filter, the rail's role map comes
+ * from the real `buildPanelRoleMap`, and `recordOutreach` stands in for
+ * `setContacted` + `router.invalidate()`. The stand-in keeps that server fn's
+ * `demoteFrom: ["reached_out"]` floor so the harness cannot claim a write
+ * production would refuse; the floor itself belongs to the server and is
+ * asserted in `outreach.integration.test.ts`.
+ */
+describe("MeetingAgenda confirm nudge records outreach (#662)", () => {
+	afterEach(() => cleanup());
+
+	const HOLDER = {
+		id: "m-holder",
+		name: "Priya Raman",
+		preferredName: null,
+		phone: "+15551230000",
+		email: "priya@club.example",
+	};
+	const GUEST_SLOT_ID = "g-visitor";
+
+	const manager = () =>
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: true,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
+
+	/** One filled leadership slot. `status: "claimed"`, deliberately NOT
+	 *  "confirmed": a confirmed slot makes the rail INFER "Coming · assumed" for
+	 *  its holder, and that row never reads "Ask" whether outreach was recorded or
+	 *  not — the fixture would then pass with the fix reverted. */
+	function heldSlot(over: Partial<AgendaSlot> = {}): AgendaSlot[] {
+		return [
+			slot({
+				id: "s-tmod",
+				roleName: "Toastmaster",
+				roleDefinitionId: "rd-tmod",
+				category: "leadership",
+				status: "claimed",
+				assigneeId: HOLDER.id,
+				assigneeName: HOLDER.name,
+				assigneeIsGuest: false,
+				assigneeGuestId: null,
+				holderPhone: HOLDER.phone,
+				holderEmail: HOLDER.email,
+				holderPreferredName: HOLDER.preferredName,
+				...over,
+			}),
+		];
+	}
+
+	/** The same slot held by a GUEST: `assigneeName` is populated exactly as it is
+	 *  for a member — which is why `assigneeName` cannot be the gate — while
+	 *  `assigneeId` is null and the id lives on `assigneeGuestId` instead. */
+	const guestHeldSlot = () =>
+		heldSlot({
+			assigneeId: null,
+			assigneeGuestId: GUEST_SLOT_ID,
+			assigneeName: "Visiting Vera",
+			assigneeIsGuest: true,
+		});
+
+	function Surfaces({ slots }: { slots: AgendaSlot[] }) {
+		const [plan, setPlan] = useState<
+			{ memberId: string; status: PlanStatus }[]
+		>([]);
+		// `setContacted` + `router.invalidate()`, compressed. Floor-only: a row that
+		// already carries a rung is left alone, so this can never report a write the
+		// server would have refused.
+		const recordOutreach = (memberId: string) =>
+			setPlan((rows) =>
+				rows.some((r) => r.memberId === memberId)
+					? rows
+					: [...rows, { memberId, status: "reached_out" }],
+			);
+		// The route's own derivation, verbatim.
+		const contactedMemberIds = plan
+			.filter((p) => p.status === "reached_out")
+			.map((p) => p.memberId);
+		const roleCounts = buildRoleCounts(slots);
+		const roleByMemberId: Record<string, string> = {};
+		for (const s of slots) {
+			if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
+		}
+		return (
+			<>
+				<div data-testid="agenda">
+					<MeetingAgenda
+						slots={slots}
+						viewer={manager()}
+						actions={actions}
+						roster={[HOLDER]}
+						roleRecency={{}}
+						roleByMemberId={roleByMemberId}
+						unavailableMemberIds={[]}
+						shareUrl="https://gavelup.app/club/test/meeting/m1"
+						meetingDate="Jan 1, 2026"
+						meeting={meetingFixture()}
+						templateKey={null}
+						timezone="UTC"
+						selfMemberId="me"
+						onMetaSaved={() => {}}
+						contactedMemberIds={contactedMemberIds}
+						onContacted={(memberId) => recordOutreach(memberId)}
+					/>
+				</div>
+				<div data-testid="rail">
+					<MeetingAttendancePanel
+						mode="plan"
+						roster={[HOLDER]}
+						plan={plan}
+						rungOverride={{}}
+						roleByMemberId={buildPanelRoleMap(slots)}
+						meetingDate="Jan 1, 2026"
+						shareUrl="https://gavelup.app/club/test/meeting/m1"
+						locked={false}
+						onWriteRung={() => {}}
+						onContacted={recordOutreach}
+					/>
+				</div>
+				{/* The SHARED state both surfaces are driven by, rendered so the
+				    guest case below can assert that no write was attempted at all —
+				    a guest has no rail row of their own to read it off. */}
+				<output data-testid="plan">{JSON.stringify(plan)}</output>
+			</>
+		);
+	}
+
+	const agenda = () => within(screen.getByTestId("agenda"));
+	const rail = () => within(screen.getByTestId("rail"));
+	const planState = () => screen.getByTestId("plan").textContent;
+
+	// BOTH channels, because `NudgeButtons` wires `onClick={onContacted}` on each
+	// anchor separately — covering one leaves the other severable in silence. The
+	// rail renders the same two links `iconOnly`, so their accessible names are
+	// the long "Message … on WhatsApp, opens in a new tab" form and cannot collide
+	// with these exact-string queries; the `within(agenda())` scope is belt and
+	// braces on top of that.
+	it.each([
+		"WhatsApp",
+		"Email",
+	])('the %s draft takes the role holder off "Ask"', async (channel) => {
+		render(<Surfaces slots={heldSlot()} />);
+
+		// The bug, before the click: the holder of a role, unasked.
+		expect(
+			rail().getByRole("button", { name: "Priya Raman status: Ask" }),
+		).toBeTruthy();
+
+		await userEvent.click(agenda().getByRole("link", { name: channel }));
+
+		// The fix, stated as the user sees it.
+		expect(
+			rail().getByRole("button", { name: "Priya Raman status: Asked" }),
+		).toBeTruthy();
+		expect(
+			rail().queryByRole("button", { name: "Priya Raman status: Ask" }),
+		).toBeNull();
+		// And the rung that produced it, so a label that changed for some other
+		// reason cannot stand in for the write.
+		expect(planState()).toBe(
+			JSON.stringify([{ memberId: HOLDER.id, status: "reached_out" }]),
+		);
+	});
+
+	it("writes nothing for a GUEST-held slot, and keeps the drafts", async () => {
+		render(<Surfaces slots={guestHeldSlot()} />);
+
+		// The affordance is unchanged — an absent `onContacted` must not take the
+		// draft links with it.
+		const link = agenda().getByRole("link", { name: "WhatsApp" });
+		expect(link.getAttribute("href")).toContain("15551230000");
+
+		await userEvent.click(link);
+
+		// A guest has no `members` row, so the plan write has no foreign key to land
+		// on. Nothing is attempted. Asserted on the shared state rather than on a
+		// spy: the failure this prevents is a throw at the seam, and the seam is
+		// only reached if something was written.
+		expect(planState()).toBe("[]");
 	});
 });
