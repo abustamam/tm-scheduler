@@ -7,6 +7,12 @@ import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resour
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { formatMeetingDate } from "#/lib/format";
+import {
+	SPEECH_SCHEDULE_STATE_LABELS,
+	type SpeechScheduleState,
+	speechLogHeadline,
+	speechScheduleState,
+} from "#/lib/speech-schedule-state";
 import { listMySpeeches } from "#/server/club";
 import { listMyCommitments } from "#/server/meetings";
 import {
@@ -28,7 +34,28 @@ export const Route = createFileRoute("/_authed/dashboard")({
 				getMyPathEnrollments(),
 				listPathwayOptions(),
 			]);
-		return { commitments, speeches, pathways, enrollments, pathOptions };
+		return {
+			commitments,
+			speeches,
+			pathways,
+			enrollments,
+			pathOptions,
+			// The instant the speech log is read against, pinned HERE rather than
+			// sampled while rendering. One value is dehydrated with the loader data,
+			// so the SSR pass and the hydration pass classify every row identically
+			// — the hydration hazard #608 records on this page's greeting, not
+			// repeated.
+			//
+			// NOT the same clock `listMyCommitments` filtered its own rows on: that
+			// `gte(meetings.scheduledAt, new Date())` runs on the SERVER, while this
+			// loader runs in the BROWSER on a client-side navigation. The two agree
+			// to within clock skew, not exactly, so a badly-set client clock can
+			// still show one slot as an upcoming role and a delivered speech at the
+			// same time — the #656 contradiction narrowed from "always" to "skew
+			// wide". Closing it means the server handing its own instant down with
+			// the payload, which is a change to the seam and is parked in TODOS.
+			now: Date.now(),
+		};
 	},
 	component: Dashboard,
 });
@@ -55,7 +82,7 @@ function dayMon(value: Date | string, timeZone?: string) {
 
 function Dashboard() {
 	const { authUser, activeClubId } = Route.useRouteContext();
-	const { commitments, speeches, pathways, enrollments, pathOptions } =
+	const { commitments, speeches, pathways, enrollments, pathOptions, now } =
 		Route.useLoaderData();
 	const router = useRouter();
 	const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
@@ -130,6 +157,10 @@ function Dashboard() {
 						) : (
 							speeches.map((l) => {
 								const { day, mon } = dayMon(l.scheduledAt);
+								const state = speechScheduleState({
+									scheduledAt: l.scheduledAt,
+									now,
+								});
 								return (
 									<div
 										key={l.slotId}
@@ -145,7 +176,10 @@ function Dashboard() {
 										</div>
 										<div className="min-w-0">
 											<div className="truncate text-sm font-bold">
-												{l.speechTitle ?? l.roleName}
+												{speechLogHeadline({
+													speechTitle: l.speechTitle,
+													roleName: l.roleName,
+												})}
 											</div>
 											<div className="truncate text-xs text-[var(--sea-ink-soft)]">
 												{[l.projectName, l.pathwayPath]
@@ -156,7 +190,7 @@ function Dashboard() {
 													: ""}
 											</div>
 										</div>
-										<CompletedPill />
+										<SpeechStatePill state={state} />
 									</div>
 								);
 							})
@@ -287,11 +321,25 @@ function Dashboard() {
 	);
 }
 
-function CompletedPill() {
+/**
+ * The speech-log badge. Which state a row is in is NOT decided here — the
+ * decision is `speechScheduleState`, shared with the member profile's copy of
+ * this list so the two surfaces cannot answer differently for one slot (#656).
+ * The wording is shared too; a literal here is what let this card and that one
+ * drift apart in the first place.
+ */
+function SpeechStatePill({ state }: { state: SpeechScheduleState }) {
+	if (state === "scheduled") {
+		return (
+			<span className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]">
+				{SPEECH_SCHEDULE_STATE_LABELS.scheduled}
+			</span>
+		);
+	}
 	return (
 		<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-semibold text-[var(--palm)]">
 			<span className="size-1.5 rounded-full bg-[var(--palm)]" />
-			Completed
+			{SPEECH_SCHEDULE_STATE_LABELS.delivered}
 		</span>
 	);
 }
