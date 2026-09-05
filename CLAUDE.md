@@ -241,6 +241,48 @@ introduces should have a test that exercises it. The coverage traps this repo ha
 green number hides, live in `CODING_STANDARDS.md` ("Test coverage"), which `/review-pr` reads. Read
 them before writing a test for a rendered-geometry property, a cap, a guard, or a computed prop.
 
+- **A `*.guard.test.ts` is code, and its own bugs are invisible to a green run — MUTATE IT.** These
+  guards do string surgery on source (slice a `cn()` argument, find a fn body, walk an import
+  block), and that arithmetic goes wrong in both directions while the suite stays green either way.
+  Four guards over two days, 2026-08-25/26. The first three were caught by deliberately
+  reintroducing the defect and watching which assertions moved; the fourth is the one mutation
+  cannot reach, and a later reader found it:
+  - **False PASS, the dangerous one.** `meetings-guest-source.guard.test.ts` sliced
+    `indexOf('from "#/db/schema"') - 400` to read the import block. That import sits ~317 bytes in,
+    so the start was NEGATIVE — and `String.slice` reads a negative start as an offset from the END,
+    giving `start > end` and an **empty string**. The assertion passed on every possible input,
+    including the exact bug it existed to catch (#637). It stayed green while its two neighbours
+    went red, which is the only reason it was found.
+  - **False FAIL, twice, both from crediting the wrong declaration.**
+    `member-write-authz.guard.test.ts` first sliced fn bodies declaration-to-declaration, which swept
+    in the NEXT function's doc comment and made `listMembers` an offender because `addMember`'s
+    comment says `applySelfAdd` (#616). `dialog-scroll.guard.test.ts` used a bare
+    `indexOf('data-slot="dialog-close"')`, which found the standalone `DialogClose` re-export near
+    the top of the file instead of the button inside `DialogContent`, and compared the wrong pair
+    (#627). Both failed on CORRECT code — safe, but a guard that always fails gets deleted.
+  - **Over-trusted, not wrong.** `meeting-template-limits.bench.test.ts`' per-row ratio was
+    documented as catching a quadratic "with a factor of four to spare". Two injected quadratics
+    PASSED before a third crossed it: it catches one that quadruples the work at the ceiling and
+    misses one that merely doubles it (#631). The comment claimed sharpness the number did not have.
+  - **The COMMENT was false, which no mutation can catch.** The same #631 change wrote that its
+    2000ms ceiling was "the file's ONLY absolute bound", and the assertion beside it repeated the
+    claim. Both were false on the day they were written: removing the ladder's literals left a 250ms
+    in the emoji test and a 150ms in the 50,000-slot test standing, unexamined. #642 found them,
+    replaced all three with one `CATASTROPHE_MS`, and added `bench-absolute-bounds.guard.test.ts` so
+    the rule is enforced rather than asserted in prose. Exactly the shape of the
+    "`requireMembership` covers every authed path" error recorded under **Data layer** — a claim
+    about a WHOLE FILE or a whole layer, checkable in one place, false in another, and believed
+    because it was written confidently.
+
+  Four rules from that. **Mutation is not optional on a guard** — reintroduce the defect and confirm
+  the RIGHT assertion fails, because a source guard has no other way to prove it can fail at all.
+  **Assert the slice is non-empty** (or that it still contains a known neighbour) whenever a guard
+  computes offsets, since every false-pass above was an empty or mis-anchored slice. **Anchor every
+  search inside the construct you mean** — `indexOf` from byte zero finds the first same-named thing
+  in the file, which in a barrel-ish module is almost never the one you want. And **grep before
+  writing "the only"** — a superlative about a file is a claim, not a summary; run the search that
+  would falsify it, or write what you actually checked instead.
+
 ## Environment
 
 Local env goes in `.env.local` (loaded by `drizzle.config.ts` via dotenv and by the dev script).
