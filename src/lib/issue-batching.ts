@@ -164,12 +164,13 @@ export const CITED_EXTENSIONS = [
  * rejects nothing, so "see package.json" in an issue that merely mentions it
  * becomes a citation, and a phantom path costs a wave.
  *
- * `CHANGELOG.md` and `VERSION` are deliberately NOT here, and the reason is
- * specific to this repo: `/ship` writes both on every single release, so if
- * issues cited them they would collide with each other unconditionally and the
- * planner would serialise the entire backlog. They are a shared surface that
- * is genuinely append-only per PR, which is the one shape disjointness models
- * badly.
+ * `CHANGELOG.md` and `VERSION` are deliberately NOT here. Both have been frozen
+ * at 1.32.0.0 since 2026-09-04 (CLAUDE.md, "Skill routing"), so they are not a
+ * change surface at all; and while `/ship` still wrote them on every release,
+ * listing them would have made every issue collide with every other and
+ * serialised the whole backlog. `TODOS.md` was listed until the same date and
+ * had the opposite problem — it was in every diff — which is why it became one
+ * `TODOS/<branch>.md` per branch, a shape no issue cites as a change set.
  *
  * `.github/workflows/ci.yml` has the same shape as these and is also NOT here:
  * the walk in `scripts/batch-issues.ts` skips every entry starting with `.`,
@@ -180,7 +181,6 @@ export const CITED_EXTENSIONS = [
 export const CITED_ROOT_FILES = [
 	"CLAUDE.md",
 	"CONTEXT.md",
-	"TODOS.md",
 	"README.md",
 	"package.json",
 	"biome.json",

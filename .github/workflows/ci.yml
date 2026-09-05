@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Inert today: GitHub offers merge queues only on organization-owned repos, and this one
+  # is user-owned, so main uses strict branch protection instead. Kept so a queue is one
+  # setting away if the repo ever moves to an org; harmless otherwise. See CLAUDE.md's
+  # skill routing.
+  merge_group:
 
 jobs:
   check:
