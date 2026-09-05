@@ -229,6 +229,35 @@ export function MeetingAgenda({
 	const [assignSlot, setAssignSlot] = useState<AgendaSlot | null>(null);
 	const [editSpeechSlot, setEditSpeechSlot] = useState<AgendaSlot | null>(null);
 	const [takeoverSlot, setTakeoverSlot] = useState<AgendaSlot | null>(null);
+	const [contactPendingId, setContactPendingId] = useState<string | null>(null);
+
+	/**
+	 * The rail's `contacted()` guard (`meeting-attendance-panel.tsx`), which this
+	 * surface has to carry too now that it records outreach (#662). Wiring
+	 * `onContacted` straight onto the draft links would re-open on the agenda card
+	 * the exact defect the rail already measured and fixed.
+	 *
+	 * The two draft links are bare `<a>`s, and no `disabled` attribute exists on an
+	 * anchor, so a fat-finger fires this once per tap — four taps, four calls.
+	 * Neither layer below absorbs it: the route's `markAsked` resolves `current`
+	 * from a `rungOverride` captured at render, so same-tick taps all read `null`,
+	 * and the server's `setPlanStatus` MATCHES an existing `reached_out` row, so
+	 * `returning()` is non-empty and every duplicate lands another `plan_set` in
+	 * `activity_log`. Not corruption — `demoteFrom` still stops a late nudge
+	 * overwriting a real answer — but N rows in the feed for one tap.
+	 *
+	 * `contactedSet` covers the already-recorded case; `contactPendingId` covers
+	 * the same-tick burst the set cannot see, because the route only refreshes it
+	 * after the round trip.
+	 */
+	const contactedSet = new Set(contactedMemberIds);
+	function recordContact(memberId: string) {
+		if (contactPendingId !== null || contactedSet.has(memberId)) return;
+		setContactPendingId(memberId);
+		void Promise.resolve(onContacted?.(memberId, "nudge")).finally(() => {
+			setContactPendingId(null);
+		});
+	}
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
@@ -707,7 +736,7 @@ export function MeetingAgenda({
 														// links working exactly as they did.
 														onContacted={
 															holderMemberId
-																? () => onContacted?.(holderMemberId, "nudge")
+																? () => recordContact(holderMemberId)
 																: undefined
 														}
 													/>

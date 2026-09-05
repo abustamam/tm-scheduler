@@ -851,19 +851,30 @@ describe("MeetingAgenda confirm nudge records outreach (#662)", () => {
 			assigneeIsGuest: true,
 		});
 
-	function Surfaces({ slots }: { slots: AgendaSlot[] }) {
+	function Surfaces({
+		slots,
+		onWrite,
+	}: {
+		slots: AgendaSlot[];
+		/** Counts REQUESTS, not resulting rows — the duplicate-tap case is about
+		 *  the number of calls that leave the component, which the floor below
+		 *  deliberately hides. */
+		onWrite?: (memberId: string) => void;
+	}) {
 		const [plan, setPlan] = useState<
 			{ memberId: string; status: PlanStatus }[]
 		>([]);
 		// `setContacted` + `router.invalidate()`, compressed. Floor-only: a row that
 		// already carries a rung is left alone, so this can never report a write the
 		// server would have refused.
-		const recordOutreach = (memberId: string) =>
+		const recordOutreach = (memberId: string) => {
+			onWrite?.(memberId);
 			setPlan((rows) =>
 				rows.some((r) => r.memberId === memberId)
 					? rows
 					: [...rows, { memberId, status: "reached_out" }],
 			);
+		};
 		// The route's own derivation, verbatim.
 		const contactedMemberIds = plan
 			.filter((p) => p.status === "reached_out")
@@ -952,6 +963,46 @@ describe("MeetingAgenda confirm nudge records outreach (#662)", () => {
 		expect(planState()).toBe(
 			JSON.stringify([{ memberId: HOLDER.id, status: "reached_out" }]),
 		);
+	});
+
+	/**
+	 * The rail already carries this guard (`meeting-attendance-panel.tsx`), and it
+	 * documents a MEASURED defect: a bare `<a>` takes no `disabled`, so four taps
+	 * produced four calls. Wiring `onContacted` straight onto the agenda's draft
+	 * links re-opens it here.
+	 *
+	 * Asserting `planState()` would NOT catch it — the floor-preserving stand-in
+	 * (and the server's real `demoteFrom`) collapse duplicates into one row, so the
+	 * rung looks identical either way. The observable is the number of REQUESTS,
+	 * which is what lands N `plan_set` rows in `activity_log` and fires N router
+	 * invalidations. Hence `onWrite`.
+	 */
+	it("records ONE write when the same draft is tapped repeatedly", async () => {
+		const writes: string[] = [];
+		render(<Surfaces slots={heldSlot()} onWrite={(id) => writes.push(id)} />);
+
+		const link = agenda().getByRole("link", { name: "WhatsApp" });
+		await userEvent.click(link);
+		await userEvent.click(link);
+		await userEvent.click(link);
+
+		expect(writes).toEqual([HOLDER.id]);
+		expect(planState()).toBe(
+			JSON.stringify([{ memberId: HOLDER.id, status: "reached_out" }]),
+		);
+	});
+
+	it("records ONE write across the two channels for the same holder", async () => {
+		// The second channel is a different anchor with its own `onClick`, so the
+		// already-contacted half of the guard is what has to stop it — not the
+		// in-flight half.
+		const writes: string[] = [];
+		render(<Surfaces slots={heldSlot()} onWrite={(id) => writes.push(id)} />);
+
+		await userEvent.click(agenda().getByRole("link", { name: "WhatsApp" }));
+		await userEvent.click(agenda().getByRole("link", { name: "Email" }));
+
+		expect(writes).toEqual([HOLDER.id]);
 	});
 
 	it("writes nothing for a GUEST-held slot, and keeps the drafts", async () => {
