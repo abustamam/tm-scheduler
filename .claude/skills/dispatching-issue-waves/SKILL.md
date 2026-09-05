@@ -21,8 +21,11 @@ One stage per iteration, re-planned at the top of every iteration:
    the cap split them — and that merged wave is the stage to dispatch. Do this every time a
    trailing wave is smaller than `--max`; it is the only free throughput in the loop.
 4. Dispatch that stage. One worktree per issue.
-5. Land it — merged, not just green.
-6. Go to 1.
+5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
+6. Review each PR with `/review-pr N` from the main session — and gstack `/review` in its
+   worktree too when the hint names a risk category — then `gh pr merge --squash --auto`. The
+   merge queue lands them in order, each tested against `main` plus the ones ahead of it.
+7. When the queue is empty, run `/qa-only` once against the deployed app. Then go to 1.
 
 Step 1 is not a formality. Between stages the plan genuinely changes: a merge makes cited
 paths exist (an issue leaves CITED PATHS ARE MISSING), someone's worktree or PR claims an
@@ -62,7 +65,8 @@ creates.
   trailing token, so anything appended after the number silently un-claims the branch and
   the next re-run hands the same issue to a second agent. A retry branch needs a different
   slug, not a suffix.
-- Then the repo's issue pipeline: `/investigate` → implement → `/qa` → `/ship`.
+- Then the repo's issue pipeline: `/investigate` → implement → `gh pr create` with `Closes #N`
+  in the body → **stop**. Review, merge and `/qa-only` happen from the main session, per wave.
 
 ## Common mistakes
 
@@ -74,3 +78,5 @@ creates.
 | Skipping the absent-paths line | Two agents in one wave edit the same file |
 | Treating a short trailing wave as a conflict | A serialised round for no reason |
 | Dispatching a NEEDS A FILE PATH issue anyway | Disjointness was never established for it |
+| An agent merging its own PR | Skips review, and lands on a `main` its CI run never saw |
+| A PR body without `Closes #N` | The branch is deleted on merge, the claim vanishes, the issue is handed out again |

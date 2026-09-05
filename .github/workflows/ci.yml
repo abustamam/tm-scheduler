@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue tests each PR against main plus everything queued ahead of it, and
+  # it waits for the `check` and `extension` contexts to report on this event. Remove
+  # this trigger and every queued PR stalls. See CLAUDE.md's skill routing.
+  merge_group:
 
 jobs:
   check:
