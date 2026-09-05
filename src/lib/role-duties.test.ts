@@ -33,6 +33,7 @@ import {
 	type DutyContext,
 	type DutyId,
 	dutiesForRole,
+	personalMeetingHref,
 	ROLE_CONFIRM_PROMPT,
 	type RoleDuty,
 } from "./role-duties";
@@ -343,6 +344,54 @@ describe("every duty is safe to interpolate", () => {
 			);
 			expect(href, `${duty.id} href`).toContain(TARGET.clubId);
 			expect(href, `${duty.id} href`).toContain(TARGET.meetingId);
+		}
+	});
+});
+
+/**
+ * WHERE each duty is done (#666).
+ *
+ * These are exact-equality assertions rather than `toContain`, because the
+ * failure being guarded is a wrong PATH, not a missing param — and the sweep
+ * above already passes for `/club/x/meeting/y` and for
+ * `/club/x/meeting/y/me/word` alike. `personal-duty-routes.guard.test.ts`
+ * carries the other half: that a route file actually backs each of these.
+ */
+describe("each duty points at the surface that performs it", () => {
+	const hrefFor = (roleName: string, roleKey: string) =>
+		dutiesForRole({ roleName, roleKey })[0].href(TARGET);
+	const base = `/club/${TARGET.clubId}/meeting/${TARGET.meetingId}`;
+
+	it("the theme is set on the focused /me/theme subroute", () => {
+		expect(hrefFor("Toastmaster of the Day", "toastmaster_of_the_day")).toBe(
+			`${base}/me/theme`,
+		);
+	});
+
+	it("the Word of the Day is set on the focused /me/word subroute", () => {
+		expect(hrefFor("Grammarian", "grammarian")).toBe(`${base}/me/word`);
+	});
+
+	it("the Word of the Day duty does NOT point at the printed poster", () => {
+		// `/club/:clubId/meeting/:key/word` already exists and is the POSTER. The
+		// `/me/` segment is the whole separation, and dropping it would send a
+		// Grammarian who tapped "Set the Word of the Day" to a read-only artifact.
+		expect(hrefFor("Grammarian", "grammarian")).not.toBe(`${base}/word`);
+	});
+
+	it("the speech details stay on the full meeting page", () => {
+		// #666 narrowed exactly two of the three. The speech-details sheet has no
+		// focused subroute, so this one must NOT have moved.
+		expect(hrefFor("Speaker", "speaker")).toBe(base);
+	});
+
+	it("the personal page href is the prefix of both editors", () => {
+		expect(personalMeetingHref(TARGET)).toBe(`${base}/me`);
+		for (const href of [
+			hrefFor("Toastmaster of the Day", "toastmaster_of_the_day"),
+			hrefFor("Grammarian", "grammarian"),
+		]) {
+			expect(href.startsWith(`${personalMeetingHref(TARGET)}/`)).toBe(true);
 		}
 	});
 });

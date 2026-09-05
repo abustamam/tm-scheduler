@@ -146,24 +146,53 @@ const isFilled = (value: string | null | undefined): boolean =>
 	typeof value === "string" && value.trim() !== "";
 
 /**
- * All three duties are performed on the meeting page, which is where the theme
- * dialog, the Word of the Day dialog and the speech-details sheet all live
- * today. Kept per-duty rather than shared, because it is the seam #666 narrows
- * when the focused phone-sized subroutes land.
+ * The full meeting page — still where the speech-details sheet lives, and the
+ * fallback this whole file pointed at before #666.
  *
  * Every segment is URL-safe by construction — a club slug, and a date-key or
  * uuid meeting id — so nothing needs escaping, the same argument
- * `buildAgendaSharePath` makes.
+ * `buildAgendaSharePath` makes. That argument is what lets the two personal
+ * hrefs below simply append a literal segment.
  */
 const meetingHref = ({ clubId, meetingId }: DutyTarget): string =>
 	`/club/${clubId}/meeting/${meetingId}`;
+
+/**
+ * The personal meeting page (#665) — the checklist these duties are read from,
+ * and the page every focused editor returns to on save so the tick is visible.
+ *
+ * Exported because the editors need it too and a second spelling of this path
+ * is exactly the drift `TMOD_ROLE_KEY`'s docblock describes one file over: the
+ * registry hands out the links INTO the editors, so it owns the link back out.
+ */
+export const personalMeetingHref = (target: DutyTarget): string =>
+	`${meetingHref(target)}/me`;
+
+/**
+ * A focused phone-sized editor under the personal meeting page (#666).
+ *
+ * `/me/` is the deliberate namespace split the issue argues for: `/me/word` is
+ * "the thing I have to do", while the existing `/club/:club/meeting/:key/word`
+ * is the PRINTED Word of the Day poster and must not be overloaded. Two
+ * different surfaces, two different audiences, one segment apart — so the
+ * literal is spelled here rather than assembled at either call site.
+ *
+ * These are LEAF routes, not children of the personal page: `me.tsx` renders no
+ * `<Outlet />`, so the route files carry a trailing underscore on the `me`
+ * segment (`…$meetingId_.me_.theme.tsx`) to opt out of nesting while keeping
+ * this URL. `personal-duty-routes.guard.test.ts` fails if the file backing
+ * either href stops existing — a checklist row that 404s is the one failure
+ * this registry cannot see for itself.
+ */
+const personalDutyHref = (target: DutyTarget, leaf: string): string =>
+	`${personalMeetingHref(target)}/${leaf}`;
 
 const MEETING_THEME_DUTY: RoleDuty = {
 	id: "meeting_theme",
 	label: "Set the meeting theme",
 	clause: "set the meeting theme",
 	done: (ctx) => isFilled(ctx.theme),
-	href: meetingHref,
+	href: (target) => personalDutyHref(target, "theme"),
 };
 
 const WORD_OF_THE_DAY_DUTY: RoleDuty = {
@@ -171,7 +200,7 @@ const WORD_OF_THE_DAY_DUTY: RoleDuty = {
 	label: "Set the Word of the Day",
 	clause: "set the Word of the Day",
 	done: (ctx) => isFilled(ctx.wordOfTheDay),
-	href: meetingHref,
+	href: (target) => personalDutyHref(target, "word"),
 };
 
 const SPEECH_DETAILS_DUTY: RoleDuty = {
