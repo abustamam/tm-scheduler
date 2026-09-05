@@ -438,13 +438,13 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * recorded in TODOS.md rather than left implied.
  */
 const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
-	// `addMember` used to head this list. It is admin-gated since #616, so it is
-	// no longer a session-less write and the derived sweep below sees its
-	// `require*` calls directly. `applySelfAdd` still reads `archived_at` inside
-	// its own `FOR UPDATE` lock — a pre-check would be check-then-act on the path
-	// that mints a `people` row plus a `members` row — and
-	// `public-writers-archive-gate.integration.test.ts` still executes that seam,
-	// so the archive behaviour stays covered where it actually lives.
+	// `addMember` used to head this list. It came off at #616, which admin-gated
+	// it: it was no longer a session-less write, and the derived sweep below saw
+	// its `require*` calls directly. #630 deleted it and its `applySelfAdd` seam
+	// outright — an admin-gated fn with zero call sites — so there is nothing left
+	// here to gate. The in-lock archive read that seam was the worked example of
+	// is recorded in CODING_STANDARDS.md ("WRITES are closed too"), which is where
+	// the rule lives now that the code that demonstrated it is gone.
 	{
 		fn: "submitGuestBook",
 		file: "src/server/guest-pipeline-logic.ts",

@@ -7,21 +7,10 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import {
-	and,
-	asc,
-	count,
-	eq,
-	gte,
-	inArray,
-	isNull,
-	ne,
-	sql,
-} from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
-import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	defaultClubRoleForOffices,
 	OFFICER_POSITIONS,
@@ -79,89 +68,6 @@ export async function loadPublicClubRoster(
 		name: m.name,
 		officerPositions: officers.get(m.id) ?? [],
 	}));
-}
-
-// Public self-add throttle (#326). `addMember` is a session-less public write
-// (the "I'm new — add me" name-pick path), so an unauthenticated actor with a
-// club link could otherwise spam roster rows. Cap brand-new members per club per
-// rolling window. The count includes members added by ANY path (incl. an admin
-// bulk-import) — an intentional, acceptable safety valve: a large import briefly
-// pausing public self-adds is fine (the admin is present), and it needs no new
-// table or `member_add`-action split (self-add and bulk-import share that action).
-export const SELF_ADD_WINDOW_MS = 60 * 60 * 1000; // 1h
-export const SELF_ADD_MAX_PER_WINDOW = 15;
-export const SELF_ADD_THROTTLED_MESSAGE =
-	"Too many new members were just added to this club — please try again in a bit.";
-
-/**
- * Public "I'm new — add me" self-add: a fresh Person + Membership (ADR-0008; a
- * self-add is a new person, dedupe/merge is a later deliberate action). Throttled
- * per club (see `SELF_ADD_MAX_PER_WINDOW`) — over the cap throws
- * `SELF_ADD_THROTTLED_MESSAGE`, which the name-pick dialog surfaces verbatim.
- * Extracted from `addMember`'s handler so the throttle is integration-testable.
- */
-export async function applySelfAdd(input: { clubId: string; name: string }) {
-	// Count and insert in ONE transaction, behind a lock on the club row. The
-	// original #326 implementation counted outside any transaction, which is not
-	// a cap: every concurrent request reads the same pre-insert total and they
-	// all pass. Proved on two sibling caps in this repo — the voting guest cap
-	// (#510) let 200 concurrent calls clear a limit of 60, and the guest book let
-	// 33 clear 30 — so this one was assumed broken and confirmed by test rather
-	// than left on trust. `FOR UPDATE` serialises self-adds per club; under READ
-	// COMMITTED the COUNT takes a fresh snapshot once the lock is granted, so it
-	// sees what the requests ahead of it committed.
-	return db.transaction(async (tx) => {
-		// The lock select also answers the archive question (#555), and reading
-		// `archived_at` HERE rather than through `assertClubNotArchived` before the
-		// transaction is the whole point. A pre-check is check-then-act: a club
-		// archived between the check and the insert still gets the rows, and this
-		// is the path that mints a `people` row plus a `members` row, so the race
-		// leaves exactly the PII a takedown was meant to stop collecting. Inside
-		// the lock the two questions are answered against the same row version,
-		// and it costs no extra round trip — the statement was already here.
-		//
-		// Fails CLOSED on a missing club, matching `assertClubNotArchived`: the
-		// FK on `members.club_id` would reject the insert anyway, but with a
-		// constraint error rather than the sentence a caller can show someone.
-		const locked = await tx.execute<{ archived_at: Date | null }>(
-			sql`SELECT archived_at FROM clubs WHERE id = ${input.clubId} FOR UPDATE`,
-		);
-		const lockedClub = locked.rows[0];
-		if (!lockedClub) throw new Error("Club not found.");
-		if (lockedClub.archived_at != null) {
-			throw new Error(CLUB_ARCHIVED_MESSAGE);
-		}
-		const since = new Date(Date.now() - SELF_ADD_WINDOW_MS);
-		const [recent] = await tx
-			.select({ n: count() })
-			.from(members)
-			.where(
-				and(eq(members.clubId, input.clubId), gte(members.createdAt, since)),
-			);
-		if ((recent?.n ?? 0) >= SELF_ADD_MAX_PER_WINDOW) {
-			throw new Error(SELF_ADD_THROTTLED_MESSAGE);
-		}
-
-		const [person] = await tx
-			.insert(people)
-			.values({ name: input.name })
-			.returning({ id: people.id });
-		if (!person) throw new Error("Failed to insert person.");
-		const [m] = await tx
-			.insert(members)
-			.values({ clubId: input.clubId, personId: person.id, name: input.name })
-			.returning({ id: members.id });
-		if (!m) throw new Error("Failed to insert member.");
-		await logActivity(tx, {
-			clubId: input.clubId,
-			actorMemberId: m.id,
-			action: "member_add",
-			targetType: "member",
-			targetId: m.id,
-			detail: { name: input.name },
-		});
-		return { id: m.id };
-	});
 }
 
 /**
@@ -233,7 +139,8 @@ export const editSchema = z.object({
 	// `officerPositions` below (whose `undefined` means "leave untouched").
 	// Capped because this value is the one field here that seeds UP onto the
 	// cross-club `people` row, so one club's admin writes it into a record other
-	// clubs share. Matches the public self-add cap in `members.ts`.
+	// clubs share. 80 was the cap the deleted public self-add used for a name
+	// (#326/#630); it stays the ceiling for a person-level name here.
 	preferredName: z.string().trim().max(80).nullable().optional(),
 	email: z.string().trim().email().nullable().optional(),
 	phone: z.string().trim().nullable().optional(),
@@ -641,9 +548,10 @@ export interface BulkImportResult {
 /**
  * Insert the valid pasted rows into `members`, skipping blank names, malformed
  * emails, and duplicates (against the live roster + within the batch — same
- * rules as the client preview). Logs one `member_add` per inserted member
- * (mirrors `addMember`'s action/targetType/detail shape). Phone is standardized
- * to E.164 on write with the club default country code (#295).
+ * rules as the client preview). Logs one `member_add` per inserted member — the
+ * only remaining producer of that action since #630 deleted the public self-add.
+ * Phone is standardized to E.164 on write with the club default country code
+ * (#295).
  */
 export async function applyBulkImport(
 	input: BulkImportInput,
