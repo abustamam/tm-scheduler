@@ -1,8 +1,8 @@
 // #460: the Table Topics award is named ONE way for a reader — "Best Table
 // Topics", plural — on every surface that prints, projects or renders it.
 //
-// Why a source grep rather than ten behavioural assertions. The award's name
-// is a display string duplicated across ten modules, four of them private
+// Why a source grep rather than eleven behavioural assertions. The award's name
+// is a display string duplicated across eleven modules, four of them private
 // `CATEGORY_LABELS` maps that export nothing and so cannot be imported and
 // compared. Before this guard the repo carried both spellings at once: the run
 // sheet's award label, the projected deck's award list and the printed agenda's
@@ -18,7 +18,8 @@
 //
 // The internal key `best_table_topics` is untouched and out of scope — it is a
 // Postgres ENUM value (`award_category`, drizzle/0022_zippy_killer_shrike.sql)
-// and a key in five display maps. Only human-readable text is governed here.
+// and the key of the four display maps. Only human-readable text is governed
+// here.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,25 +35,21 @@ const PLURAL = "Best Table Topics";
 /**
  * The retired singular, matched only where it is NOT the plural: the negative
  * lookahead is what makes "Best Table Topics" pass and "Best Table Topic
- * Speaker" fail.
+ * Speaker" fail. The control below pins that behaviour, because a guard whose
+ * matcher has silently stopped matching is indistinguishable from a clean tree.
  */
 const SINGULAR = /Best Table Topic(?!s)/;
 
-const SKIP_DIRS = new Set([
-	"node_modules",
-	".output",
-	".wxt",
-	".vite",
-	"dist",
-	"build",
-]);
 const SCANNED = /\.(m?[jt]sx?|cjs|cts)$/i;
-/** Tests may quote the old wording deliberately, to assert history. */
-const IS_TEST = /\.(test|spec)\.[jt]sx?$/i;
+/**
+ * Tests may quote the old wording deliberately, to assert history. Kept in step
+ * with `SCANNED`'s extension set on purpose — a narrower list here would sweep
+ * `foo.test.mts` as production source.
+ */
+const IS_TEST = /\.(test|spec)\.(m?[jt]sx?|cjs|cts)$/i;
 
 function walk(dir: string, out: string[] = []): string[] {
 	for (const entry of readdirSync(dir)) {
-		if (SKIP_DIRS.has(entry)) continue;
 		const abs = join(dir, entry);
 		if (statSync(abs).isDirectory()) walk(abs, out);
 		else out.push(abs);
@@ -66,24 +63,94 @@ const sourceFiles = walk(resolve(ROOT, "src"))
 	.filter((abs) => abs !== SELF);
 
 /**
- * The ten surfaces that name the award to a reader. Listed rather than
- * discovered: a rename that DELETED the name from one of them would otherwise
- * satisfy the offender-list half of this guard perfectly.
+ * Every surface that names the award to a reader, and the exact text each one
+ * must still carry.
+ *
+ * The expectation is per-SITE rather than a bare `toContain(PLURAL)`, because a
+ * whole-file substring is satisfied by any other mention in the same file: with
+ * a plain substring, deleting `agenda-runsheet.ts`'s `AWARD_CATEGORIES` label
+ * still passes on the two voting-detail strings further down, and
+ * `slide-layout.ts` passes on its vote-slide title alone. Both halves of this
+ * guard were reviewed as overclaiming exactly that, so each entry now pins the
+ * construct that actually renders, not merely the words.
+ *
+ * Listed rather than discovered: a rename that DELETED the award's name from a
+ * surface would otherwise satisfy the offender sweep perfectly.
  */
-const SURFACES = [
-	"src/lib/slide-layout.ts",
-	"src/lib/agenda-slides.ts",
-	"src/lib/agenda-runsheet.ts",
-	"src/lib/role-template.ts",
-	"src/server/role-sheet-layout.ts",
-	"src/server/minutes-pdf-logic.ts",
-	"src/components/club/meeting-minutes.tsx",
-	"src/components/club/ballot.tsx",
-	"src/components/club/vote-counter-panel.tsx",
-	"src/components/agenda/meeting-agenda-print.tsx",
+const SURFACES: { file: string; expect: string[] }[] = [
+	{
+		file: "src/lib/slide-layout.ts",
+		// Title and body head line, which #460 also made agree with each other.
+		expect: [
+			`"Vote for ${PLURAL} Speaker"`,
+			`"Please Vote for ${PLURAL} Speaker:"`,
+		],
+	},
+	{
+		file: "src/lib/agenda-slides.ts",
+		expect: [`awardCategories.push("${PLURAL}")`],
+	},
+	{
+		file: "src/lib/agenda-runsheet.ts",
+		// The `AWARD_CATEGORIES` entry, not the voting-detail copy beside it.
+		expect: [`label: "${PLURAL}"`],
+	},
+	{
+		file: "src/lib/role-template.ts",
+		// The Ballot Counter's role description, in prose.
+		expect: [`Best Evaluator, and ${PLURAL}`],
+	},
+	{
+		file: "src/server/role-sheet-layout.ts",
+		expect: [`award("${PLURAL}")`],
+	},
+	{
+		file: "src/server/minutes-pdf-logic.ts",
+		expect: [`best_table_topics: "${PLURAL}"`],
+	},
+	{
+		file: "src/components/club/meeting-minutes.tsx",
+		expect: [`best_table_topics: "${PLURAL}"`],
+	},
+	{
+		file: "src/components/club/ballot.tsx",
+		expect: [`best_table_topics: "${PLURAL}"`],
+	},
+	{
+		file: "src/components/club/vote-counter-panel.tsx",
+		expect: [`best_table_topics: "${PLURAL}"`],
+	},
+	{
+		file: "src/components/agenda/meeting-agenda-print.tsx",
+		// The printed agenda's "Tonight's Votes" box, in reading order.
+		expect: [`["Best Speaker", "${PLURAL}", "Best Evaluator"]`],
+	},
+	{
+		// The Ballot Counter console's on-screen help text. Missing from this
+		// list on the first pass — it was already plural, so nothing failed, and
+		// a list that silently omits a surface is the maintenance trap a reviewer
+		// flagged. Kept because it IS reader-facing copy naming the award.
+		file: "src/routes/club.$clubId.meeting.$meetingId.tsx",
+		expect: [`eligible for ${PLURAL}`],
+	},
 ];
 
 describe("#460: one wording for the Best Table Topics award", () => {
+	// Control. Without this, flipping `SINGULAR`'s lookahead — or any edit that
+	// stops it matching — leaves the sweep below permanently green with the bug
+	// fully reintroduced, which is the failure mode a source guard cannot
+	// otherwise show. Same reason `dialog-keyboard-reachability.test.ts` carries
+	// a pre-fix control.
+	it("the matcher it sweeps with can actually tell the two spellings apart", () => {
+		expect(SINGULAR.test("Best Table Topic")).toBe(true);
+		expect(SINGULAR.test("Best Table Topic, Best Evaluator")).toBe(true);
+		expect(SINGULAR.test("Please Vote for Best Table Topic Speaker:")).toBe(
+			true,
+		);
+		expect(SINGULAR.test(PLURAL)).toBe(false);
+		expect(SINGULAR.test(`Vote for ${PLURAL} Speaker`)).toBe(false);
+	});
+
 	it("walks a non-trivial source tree (so a broken walk can't pass vacuously)", () => {
 		expect(sourceFiles.length).toBeGreaterThan(100);
 	});
@@ -107,11 +174,15 @@ describe("#460: one wording for the Best Table Topics award", () => {
 		).toEqual([]);
 	});
 
-	it.each(SURFACES)("%s still names the award to its reader", (rel) => {
-		const abs = resolve(ROOT, rel);
-		expect(existsSync(abs), `${rel} is missing`).toBe(true);
-		// Comment-blind here: this half requires the string to BE present, so a
+	it.each(SURFACES)("$file still names the award to its reader", ({
+		file,
+		expect: expected,
+	}) => {
+		const abs = resolve(ROOT, file);
+		expect(existsSync(abs), `${file} is missing`).toBe(true);
+		// Comment-blind here: this half requires the text to BE present, so a
 		// mention in a comment would be a false PASS with the real label deleted.
-		expect(readSource(abs)).toContain(PLURAL);
+		const src = readSource(abs);
+		for (const needle of expected) expect(src).toContain(needle);
 	});
 });

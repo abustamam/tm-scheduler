@@ -14,3 +14,14 @@
   serial pre-req the rest of the wave was waiting on, so widening it to a cross-layer refactor
   would have held up four other agents.
   **Priority:** P3
+
+- **The design template still says the singular, and it is what gets transcribed.**
+  `templates/meeting-agenda/MeetingAgenda.dc.html` — the design source
+  `src/components/agenda/meeting-agenda-print.tsx:4` names as the layout it transcribes — prints
+  "Best Table Topic" at lines 132, 233, 373, 392, 526 and 542, the last two being ballot stubs.
+  Nothing serves that file, so no member reads it and #460's acceptance criterion (scoped to
+  `src/`) is not breached; `award-wording.guard.test.ts` deliberately does not scan outside `src/`
+  either. The cost is that the next person transcribing a layout change out of the template
+  reintroduces the singular into `meeting-agenda-print.tsx`, and the guard would then be the only
+  thing that catches it. Either sync the template's six strings or note the divergence in it.
+  **Priority:** P4
