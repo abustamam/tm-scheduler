@@ -423,11 +423,12 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
  * because for reads the two are interchangeable and swapping them typechecks.
  * Writes have no such sibling pair: the gate is one call, and what varies is
- * WHERE it lives. Five of these gate in a `-logic` seam — which is strictly
- * better, because a seam is reachable from vitest and
- * `public-writers-archive-gate.integration.test.ts` executes all five — and two
- * gate in the handler because their logic is inline there and lifting it out is
- * a refactor #555 was not.
+ * WHERE it lives. Six of these gate in a `-logic` seam — which is strictly
+ * better, because a seam is reachable from vitest, and
+ * `public-writers-archive-gate.integration.test.ts` executes five of the six
+ * (`confirmSlotCore`'s gate is executed by `slots-confirm.integration.test.ts`
+ * instead, beside the rest of that arm) — and two gate in the handler because
+ * their logic is inline there and lifting it out is a refactor #555 was not.
  *
  * So each row names the file the gate is IN. That is weaker than checking the
  * handler itself, and the weakness is stated rather than papered over: this
@@ -468,6 +469,21 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 	{
 		fn: "closeVoteFn",
 		file: "src/server/voting-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	// #661 admitted the slot's own HOLDER to `confirmSlot` — a self-asserted
+	// member id checked against `role_slots.assigned_member_id`, with no session
+	// anywhere. It was an authed-only write until then, so this row is new rather
+	// than moved: the officer arm still reaches the gate through
+	// `requireClubRole`, and the holder arm reaches nothing at all without the
+	// call named here. Note the sweep above enrolled it only because the handler
+	// no longer NAMES a `require*` guard — leaving `requireUser()` in the handler
+	// while adding a session-less arm beside it would have kept this endpoint
+	// silently exempt by regex, which is the classification failure
+	// `SELF_ASSERT_GUARDS` below exists to document.
+	{
+		fn: "confirmSlot",
+		file: "src/server/slots-logic.ts",
 		gate: "assertClubNotArchived",
 	},
 	// Handler-gated: the logic is inline in `slots.ts`, so the gate is in the
@@ -759,12 +775,14 @@ describe("session-less writes carry the archive gate (#555)", () => {
 
 	// Vacuity checks: an empty table would pass every case above.
 	it("covers every write that was waived as a #544 follow-up", () => {
-		// Was 8. `addMember` came out when #616 made it admin-gated: it is no
-		// longer a session-less write, so a row here asserting where its
+		// Was 8, then 7. `addMember` came out when #616 made it admin-gated: it is
+		// no longer a session-less write, so a row here asserting where its
 		// ANONYMOUS archive gate lives would be describing something that no
-		// longer exists. The count is the vacuity guard, so it moves deliberately
-		// with the table rather than being loosened to `toBeGreaterThan`.
-		expect(WRITE_GATES).toHaveLength(7);
+		// longer exists. `confirmSlot` went the other way at #661, which gave an
+		// authed-only write a session-less HOLDER arm. The count is the vacuity
+		// guard, so it moves deliberately with the table rather than being
+		// loosened to `toBeGreaterThan`.
+		expect(WRITE_GATES).toHaveLength(8);
 	});
 
 	it("does not also waive a write it claims to gate", () => {
