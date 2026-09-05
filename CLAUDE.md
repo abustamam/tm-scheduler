@@ -447,7 +447,9 @@ run gstack `/review` in the PR's worktree as well, at any size:
 - a migration (`drizzle/`, `schema.ts`);
 - the service worker (`public/sw.js`);
 - a cascading delete;
-- `applySelfAdd`.
+- `captureGuestVisit` — the session-less write that mints a row carrying a visitor's name, email
+  and phone, behind its own club lock. This slot said `applySelfAdd` until #630 deleted that fn;
+  the slot is for whichever public path is currently the one minting PII, not for the name.
 
 `/review-pr` prints a hint when a changed path is on that list. Paths cannot see an authorization
 change in an unrelated file, so a silent hint is not a clean bill. gstack's Codex passes fall back

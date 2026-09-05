@@ -31,8 +31,10 @@ const uuid = z.string().uuid();
 
 /**
  * Guest-book capture (the public #239 front door). PUBLIC — no session required,
- * mirroring `addMember`/`getPublicSeasonGrid`: anyone at the meeting with the
- * club link may self-register. Create-or-find by email→name-qualified phone
+ * mirroring `getPublicSeasonGrid`: anyone at the meeting with the club link may
+ * self-register. (It used to name `addMember` alongside it; that public roster
+ * self-add was admin-gated at #616 and deleted at #630 — a visitor's door is the
+ * guest book, not the roster.) Create-or-find by email→name-qualified phone
  * (#488) + record a visit
  * against the club's current/nearest meeting.
  */
