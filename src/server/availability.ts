@@ -11,9 +11,18 @@
 // the new write surface does not do, so it outlives the other two until
 // something folds slot release into the ladder.
 //
-// All three are PUBLIC and session-less, which is why each one names the rungs
-// it may touch (`SELF_SERVICE_RUNGS`) rather than trusting the seam to know who
-// is calling. The seam cannot know — it has no session.
+// All three are PUBLIC and session-less. The two `setAvailability` /
+// `clearAvailability` delegates therefore name the rungs they may touch
+// (`SELF_SERVICE_RUNGS`) rather than trusting the plan seam to know who is
+// calling: that seam is `attendance-plan-logic.ts`, and it genuinely cannot
+// know — it takes a `DbOrTx` and no session.
+//
+// `markUnavailableReleasing` is the exception since #675, and the distinction is
+// worth keeping straight because it is what the missing gate hid behind. ITS
+// seam is `releaseSlotsAndMarkUnavailable`, which reaches the request for a
+// session itself and runs the D6 actor ladder — so the caller check does live
+// there, and this module must hand it the client's RAW assertion for that to
+// mean anything.
 import { createServerFn } from "@tanstack/react-start";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -59,8 +68,11 @@ const availabilitySchema = z.object({
 });
 
 /** Mark a member as unavailable for a meeting — the `not_coming` rung.
- *  Idempotent (the seam upserts). PUBLIC — no session required; trust guard via
- *  requireMemberInClub. */
+ *  Idempotent (the seam upserts). PUBLIC — no session required.
+ *  `requireMemberInClub` is a trust guard on the SUBJECT, not an authorization
+ *  check on the CALLER; #675 audited this pair and left it, because writing
+ *  `not_coming` releases nothing and the member's own answer is recoverable by
+ *  re-answering. See TODOS/release-roles-subject-check-675.md. */
 export const setAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
@@ -89,7 +101,10 @@ export const setAvailability = createServerFn({ method: "POST" })
 	});
 
 /** Take a member's "not coming" back to "no answer" (row absent).
- *  PUBLIC — no session required; trust guard via requireMemberInClub. */
+ *  PUBLIC — no session required. `requireMemberInClub` proves the SUBJECT is on
+ *  the roster; it proves nothing about the caller. What bounds this one is the
+ *  self-service floor it hands the seam below, which keeps an officer's
+ *  `reached_out` out of reach of a session-less delete. */
 export const clearAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
@@ -125,7 +140,14 @@ export const clearAvailability = createServerFn({ method: "POST" })
  * it, atomically (#204). A member can't both hold a role and be absent, so the
  * grid offers this as one confirmed action instead of a contradiction. Release
  * mirrors `releaseSlot` (slot → open, assignee + speech unlinked; speech kept).
- * PUBLIC — trust guard via requireMemberInClub.
+ *
+ * PUBLIC — no session required. `requireMemberInClub` below is a TRUST guard on
+ * the SUBJECT (they are on this club's roster and still active); it is NOT an
+ * authorization check on the CALLER, and reading it as one is how this fn
+ * shipped with no subject check while its less destructive sibling
+ * `setPlannedAttendance` had one (#675). The caller's authorization is the D6
+ * ladder, and it runs inside `releaseSlotsAndMarkUnavailable` — a seam vitest
+ * can reach — rather than here, where nothing but a source grep could see it.
  */
 export const markUnavailableReleasing = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
@@ -134,15 +156,18 @@ export const markUnavailableReleasing = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const actorMemberId = await requestWriteActor({
-			clubId: meeting.clubId,
-			claimedActorMemberId: data.actorMemberId ?? data.memberId,
-		});
 		const { released } = await releaseSlotsAndMarkUnavailable(db, {
 			memberId: data.memberId,
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
-			actorMemberId,
+			// The RAW claim, deliberately NOT defaulted to the subject. That default
+			// is what the two delegates above still use, and it is right for them
+			// because they only resolve who to CREDIT. Here the same expression
+			// would make actor === subject for every request and turn the ladder's
+			// subject check into a no-op — the #675 hole, restored in one token.
+			// `availability-authz.guard.test.ts` reads this handler VERBATIM, so
+			// spelling the offending expression in a comment would fail it.
+			claimedActorMemberId: data.actorMemberId,
 		});
 		return { ok: true as const, released };
 	});

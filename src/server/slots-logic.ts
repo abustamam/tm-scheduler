@@ -19,6 +19,7 @@ import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
 import { logActivity } from "./activity";
 import { setPlanStatus } from "./attendance-plan-logic";
+import { assertClubNotArchived, requireClubRole } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import { roleDefScope } from "./meeting-templates-logic";
 import { resolveProjectDisplay } from "./project-picker-logic";
@@ -1150,6 +1151,210 @@ export async function markComingOnSelfClaim(
 		// superseded by the strongest statement the member can make.
 		demoteFrom: ["reached_out", "not_coming"],
 	});
+}
+
+/**
+ * WHICH arm admitted a confirm (#661). Persisted as
+ * `activity_log.detail.grantedVia`, for the reason CLAUDE.md's actor-provenance
+ * rule gives about the TMOD ladder: an officer's vouch and the member's own
+ * answer are otherwise indistinguishable in the feed, and "confirmed" is the one
+ * word whose meaning differs entirely between them.
+ */
+export type ConfirmSlotVia = "officer" | "self";
+
+/** The public arm's rejection. Exported so a test matches the string the code
+ *  raises rather than a copy of it that can drift. */
+export const NOT_THE_SLOT_HOLDER_MESSAGE =
+	"Only the member who holds this role can confirm it.";
+
+/** Raised when the officer arm is taken with no session at all. */
+export const CONFIRM_NEEDS_SIGN_IN_MESSAGE =
+	"You need to be signed in to do that.";
+
+/**
+ * Confirm a claimed slot, from either of two arms (#661).
+ *
+ * Until #661 "confirmed" meant *an officer vouched for this person*, because
+ * `confirmSlot` was `requireUser()` + `requireClubRole(admin)` and there was no
+ * member-facing confirm anywhere in the product. The holder arm is what makes it
+ * able to mean *the person said yes* — and only then is it honest for the
+ * attendance rail to draft "just confirming you're our Toastmaster".
+ *
+ * Which arm runs is decided by ONE thing: whether the caller asserted a
+ * `selfMemberId`. Not by whether a session happens to exist, and not by trying
+ * the officer arm first and falling back — an assertion that does not hold is a
+ * failed assertion, and silently re-admitting that caller as an officer would
+ * both mask a mistyped member id and record the wrong `grantedVia` for it.
+ *
+ *  - **self** — `selfMemberId` must equal `role_slots.assigned_member_id`. Same
+ *    honour-system trust level as `claimSlot` and `setAvailability`, which
+ *    already take a raw member id with no session; it grants strictly less,
+ *    since the id has to match a slot the server read itself. The actor credited
+ *    is the assignee VERIFIED against that row, which is the
+ *    `resolveMeetingAgendaAuthz` TMOD precedent ("verified against the slot
+ *    above, so it is safe to credit") rather than `requestWriteActor`'s
+ *    membership precedence — crediting the resolved caller instead would file
+ *    "Alice says Bob is coming" under a `grantedVia: "self"` row and contradict
+ *    it. A signed-in member of this club can therefore still assert the holder's
+ *    id; so can anyone at all, from a logged-out browser, which is what the
+ *    honour system means here and why closing it for the signed-in half only
+ *    would buy nothing.
+ *  - **officer** — unchanged from before #661, including its messages: a session
+ *    plus `requireClubRole(admin)`. Writes NO plan row, deliberately: nobody
+ *    answered, so `buildPlanPanel` should keep inferring `Coming · assumed` from
+ *    the confirmed slot rather than claiming an answer exists.
+ *
+ * Lives here rather than in the `slots.ts` handler for the reason
+ * CODING_STANDARDS.md gives for the other session-less writes: a handler body is
+ * unreachable from vitest, so a gate that lives in one is covered by a source
+ * grep and nothing else. Everything below — including the archive gate — is
+ * executed by `slots-confirm.integration.test.ts`.
+ */
+export async function confirmSlotCore(args: {
+	slotId: string;
+	/** The signed-in user's id, or null. Only the officer arm reads it. */
+	sessionUserId: string | null;
+	/** Self-asserted holder id (the public arm), or null for the officer arm. */
+	selfMemberId: string | null;
+}): Promise<{ ok: true; grantedVia: ConfirmSlotVia; planWritten: boolean }> {
+	const [slot] = await db
+		.select({
+			id: roleSlots.id,
+			status: roleSlots.status,
+			assignedMemberId: roleSlots.assignedMemberId,
+			meetingId: roleSlots.meetingId,
+			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
+		})
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(eq(roleSlots.id, args.slotId))
+		.limit(1);
+
+	if (!slot) {
+		throw new Error("Role not found.");
+	}
+
+	// #555/#661. The holder arm takes NO session, so it reaches none of the
+	// enforcement points `requireClubRole` carries for the officer arm — this
+	// call is the only thing standing between an anonymous caller and a write to
+	// a taken-down club. Before BOTH the lock check and either grant arm: a
+	// taken-down club must refuse for the reason it was taken down rather than
+	// leaking that the meeting is completed, and gating after the officer arm
+	// returned would leave the wider (session-less) half open anyway. Same
+	// ordering, for the same two reasons, as `resolveMeetingAgendaAuthz`.
+	await assertClubNotArchived(slot.clubId);
+	assertMeetingNotLocked(slot.meetingStatus);
+
+	const grant = await resolveConfirmGrant(args, slot);
+
+	if (slot.status !== "claimed") {
+		throw new Error("Only a claimed role can be confirmed.");
+	}
+
+	return db.transaction(async (tx) => {
+		// Conditional UPDATE: only flips 'claimed' → 'confirmed'; a concurrent
+		// release that races us back to 'open' will produce zero rows.
+		//
+		// The self arm ALSO re-asserts the holder here, and that is not belt-and-
+		// braces. The slot read above happens OUTSIDE this transaction and takes no
+		// `FOR UPDATE`, so `resolveConfirmGrant` decides on a snapshot. Status alone
+		// does not close the window, because a reassignment is not a release:
+		// `reassignSlotCore` sets `assignedMemberId` to the NEW holder and leaves
+		// `status` at 'claimed', so a plain id+status match still fires. Without
+		// this clause, Alice confirming while the VPE reassigns to Bob flips BOB's
+		// slot to 'confirmed' — a role he never accepted, rendering as
+		// `Coming · assumed` — and writes the `coming` plan row for ALICE, who by
+		// then holds nothing. Matching on the holder makes the check-then-act
+		// atomic: the row the grant was resolved against is the row we update, or
+		// we update nothing.
+		const updated = await tx
+			.update(roleSlots)
+			.set({ status: "confirmed" })
+			.where(
+				and(
+					eq(roleSlots.id, args.slotId),
+					eq(roleSlots.status, "claimed"),
+					grant.via === "self"
+						? eq(roleSlots.assignedMemberId, grant.holderMemberId)
+						: undefined,
+				),
+			)
+			.returning({ id: roleSlots.id });
+
+		if (updated.length === 0) {
+			throw new Error(
+				"Slot was no longer claimed — it may have been released or reassigned concurrently.",
+			);
+		}
+
+		let planWritten = false;
+		if (grant.via === "self") {
+			// In the SAME transaction as the flip, so a confirm can never half-land
+			// as "the slot says yes but the rail says no answer".
+			const { changed } = await setPlanStatus(tx, {
+				memberId: grant.holderMemberId,
+				meetingId: slot.meetingId,
+				clubId: slot.clubId,
+				status: "coming",
+				actorMemberId: grant.actorMemberId,
+				grantedVia: "self",
+				// `markComingOnSelfClaim`'s list, and for its reason: every rung
+				// EXCEPT `coming`, so a re-confirm logs nothing while a decline or an
+				// officer's ask is superseded. Confirming the role after previously
+				// declining is a real change of mind and should win — and it is the
+				// member's OWN answer either way, so this floor never lets one person
+				// overwrite another's: `reached_out` is the officer's ask, not a
+				// reply, and `not_coming` here can only be this member's.
+				demoteFrom: ["reached_out", "not_coming"],
+			});
+			planWritten = changed;
+		}
+
+		await logActivity(tx, {
+			clubId: slot.clubId,
+			actorMemberId: grant.actorMemberId,
+			action: "claim",
+			targetType: "slot",
+			targetId: args.slotId,
+			detail: { confirmed: true, grantedVia: grant.via },
+		});
+
+		return { ok: true as const, grantedVia: grant.via, planWritten };
+	});
+}
+
+/** The resolved arm. A union rather than two loose fields so the plan write can
+ *  only reach a holder id the self arm actually verified. */
+type ConfirmGrant =
+	| { via: "self"; actorMemberId: string; holderMemberId: string }
+	| { via: "officer"; actorMemberId: string | null };
+
+async function resolveConfirmGrant(
+	args: { sessionUserId: string | null; selfMemberId: string | null },
+	slot: { assignedMemberId: string | null; clubId: string },
+): Promise<ConfirmGrant> {
+	if (args.selfMemberId !== null) {
+		if (
+			slot.assignedMemberId === null ||
+			slot.assignedMemberId !== args.selfMemberId
+		) {
+			throw new Error(NOT_THE_SLOT_HOLDER_MESSAGE);
+		}
+		return {
+			via: "self",
+			actorMemberId: slot.assignedMemberId,
+			holderMemberId: slot.assignedMemberId,
+		};
+	}
+	if (!args.sessionUserId) {
+		throw new Error(CONFIRM_NEEDS_SIGN_IN_MESSAGE);
+	}
+	// The actor is the resolved admin membership — never the client (#396).
+	const membership = await requireClubRole(args.sessionUserId, slot.clubId, [
+		"admin",
+	]);
+	return { via: "officer", actorMemberId: membership.id };
 }
 
 /**
