@@ -934,8 +934,8 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 | Debug | `/investigate`. It is the debugging skill here and satisfies superpowers' systematic-debugging gate. |
 | Open a PR | `gh pr create`. The agent stops there. |
 | Review a PR | `/review-pr N` from the main session. gstack `/review` in the PR's worktree **as well** for a risk category (below). |
-| Land | `gh pr merge --squash --auto`. The merge queue tests each PR against `main` plus everything queued ahead of it. |
-| Verify a wave | `/qa-only` against the deployed app, once per wave after the queue drains, before the next meeting. Findings become issues. |
+| Land | `gh pr merge --squash --auto`. Branch protection requires the branch to be up to date with `main`, so after each PR lands run `gh pr update-branch N` on the rest; CI re-runs and auto-merge fires when green. |
+| Verify a wave | `/qa-only` against the deployed app, once per wave after it has all landed, before the next meeting. Findings become issues. |
 | See what shipped | `/retro` (gstack). `/session-retro` is the other one: what in the agent's environment made a session harder than it needed to be. |
 | Park debt | `TODOS/<branch-name>.md`, several items per file, deleted when done. Swept at `/retro` and whenever `batch:issues` comes back empty. `TODOS/README.md` has the lifecycle. |
 
@@ -947,11 +947,14 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
   leaves the issue open with no claim on it, and the next `batch:issues` hands it out again.
   Everything else in the body is optional.
 - **A wave agent never merges its own PR.** Merging happens from the main session, after
-  `/review-pr`. A wave PR is green against the `main` that existed when its CI ran; the queue is
-  what tests it against the `main` it will actually land on. Before the queue,
-  `/ship` merged `main` into the branch before testing, and branch protection still does not
-  require a branch to be up to date (`strict: false`), so the queue is the only gate. `ci.yml`
-  runs on `merge_group:` for that reason; removing that trigger stalls every queued PR.
+  `/review-pr`. A wave PR is green against the `main` that existed when its CI ran, so branch
+  protection requires the branch to be up to date before it merges (`strict: true`, set
+  2026-09-05): after each PR lands, `gh pr update-branch N` on the others and let CI re-run.
+  Before this, `/ship` merged `main` into the branch before testing and nothing else checked.
+  A merge queue would do the updating unattended, and it was the first choice, but GitHub offers
+  it only on organization-owned repositories and this one is user-owned (the rulesets API
+  returns an empty-reason 422 on a `merge_queue` rule). `ci.yml` keeps its `merge_group:`
+  trigger, inert today, so the queue is one setting away if the repo ever moves to an org.
 
 ### Which review
 
@@ -988,7 +991,7 @@ subagent-driven-development are retired here.
 
 ```
 room → file issues → /triage → ready-for-agent → batch:issues → worktree → /investigate → implement
-                            │                                                → gh pr create → /review-pr → queue → /qa-only (per wave)
+                            │                                                → gh pr create → /review-pr → merge → /qa-only (per wave)
                             ├→ ready-for-human → /grilling → /spec → ready-for-agent
                             └→ needs-info → wait
 idea → [brainstorming | /grilling] → /spec → ready-for-agent issues → (as above)
