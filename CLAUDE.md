@@ -237,8 +237,8 @@ Minimum: 60%
 Target: 85%
 
 Assessed against the diff, not the whole repo: every branch, error path and user flow the change
-introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
-gates on them.
+introduces should have a test that exercises it. `/review-pr`'s Standards axis reads this section,
+so the traps below are what a diff is held to.
 
 Nine coverage traps this repo has actually hit, all worth checking when a number looks fine:
 
@@ -705,7 +705,7 @@ from vitest, so a handler-gated write is covered by a source grep and nothing el
 the eight" until v1.26.0.0; #616 admin-gated `addMember`, which took it out of the session-less set
 entirely. `WRITE_GATES` in `public-readers-archive-gate.guard.test.ts` is the list — count there.)
 `releaseSlot`/`updateSpeakerDetails` are the two still in that position (their logic is inline in
-`slots.ts`), recorded in TODOS.md.
+`slots.ts`), recorded in `TODOS/legacy-2026-09.md`.
 
 **The enrollment sweep is now closed on both shapes**, having been closed on neither. The
 `\n});` body-slicing bug is fixed (#565) and `bodyStopsAtItsOwnDeclaration` fails on any
@@ -775,11 +775,11 @@ Issues and PRDs live as GitHub issues in `abustamam/tm-scheduler` (managed via t
 #### What earns an issue
 
 File one only when it is (a) a correctness or security bug a user can actually hit, or (b) work
-you would genuinely schedule. Everything else becomes a comment at the call site or a line in
-`TODOS.md`, and is reported in the PR body or the session summary instead.
+you would genuinely schedule. Everything else becomes a comment at the call site or an item in
+`TODOS/<branch-name>.md`, and is reported in the PR body or the session summary instead.
 
-This exists because the default pulls the other way. `/ship` runs six reviewers whose job is to
-find things, so every run surfaces more than one PR can absorb; filing each leftover finding is a
+This exists because the default pulls the other way. A reviewer's job is to find things, so every
+review surfaces more than one PR can absorb; filing each leftover finding is a
 ratchet that grows the backlog by construction. One session closed 2 issues and opened 5 — of which
 exactly one was a real bug. The other four were a two-line index, a debt note already recorded in a
 code comment, and an edge case needing a three-step repro.
@@ -791,8 +791,9 @@ Two second-order costs make the bar higher than it looks:
 - A filed issue has a maintenance tail. Closing one as noise leaves any code comment that
   references it pointing at a dead number.
 
-`TODOS.md` already states the boundary: it is for in-flight debt not worth an issue yet, and
-anything outliving its branch becomes an issue. Respect that direction rather than inverting it.
+`TODOS/README.md` states the boundary: a file holds in-flight debt not worth an issue yet, and is
+swept — promote, drop, or leave — at every `/retro` and whenever `batch:issues` comes back empty.
+Respect that direction rather than inverting it.
 
 ### Triage labels
 
@@ -916,212 +917,85 @@ Do NOT start the server manually via Bash first — let `preview_start` own the 
 <!-- CODELEDGER:END -->
 ## Skill routing
 
-When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt,
+invoke the skill.
 
-Key routing rules:
-- Product ideas/brainstorming → invoke /office-hours
-- Strategy/scope → invoke /plan-ceo-review
-- Architecture → invoke /plan-eng-review
-- Design system/plan review → invoke /design-consultation or /plan-design-review
-- Full review pipeline → invoke /autoplan
-- Bugs/errors → invoke /investigate
-- QA/testing site behavior → invoke /qa or /qa-only
-- Code review/diff check → invoke /review
-- Visual polish → invoke /design-review
-- Ship/deploy/PR → invoke /ship or /land-and-deploy
-- Save progress → invoke /context-save
-- Resume context → invoke /context-restore
-- Author a backlog-ready spec/issue → invoke /spec
+This section was rewritten on 2026-09-04. The ethos: MVP phase, live users, one maintainer who
+steers specs rather than writing code. Review effort goes where it has been shown to pay and
+nowhere else, release ceremony is zero, and deferred debt is per-branch and deleted rather than
+logged. `/ship` no longer runs here. The ~210 lines this replaced were about its cost; their
+measurements are in git history (#672, #673) if a release cadence ever comes back.
 
-Repo-specific notes:
-- `/ship` reads `VERSION`, `CHANGELOG.md`, and `TODOS.md` at the repo root. `VERSION` is the
-  4-digit `MAJOR.MINOR.PATCH.MICRO` source of truth; `package.json` carries the npm-valid
-  3-digit TRANSLATION of it (`1.25.0.0` → `1.25.0`). They are not the same string, and that is
-  deliberate: npm rejects a four-component version, so every `package.json` written before
-  gstack v1.69 held a technically malformed value. Nothing in this repo reads either file and
-  no CI job gates on them, which is why it went unnoticed. `/ship` writes both — do not
-  hand-edit either.
-- Issues are the canonical tracker (`abustamam/tm-scheduler` via `gh`), not `TODOS.md`. See `docs/agents/issue-tracker.md`.
-- Ship from a worktree, never the main checkout — see "Git worktree isolation" above.
-- Codex reviews never run here — but NOT because the config says so. `gstack-config get codex_reviews` returns `enabled`; what stops them is that the `codex` CLI is not installed (`command -v codex` exits 1), so every Codex pass takes the `not_installed` branch and falls back to a Claude subagent. This line claimed the config was `disabled` until 2026-09-02, which is the kind of mechanism-by-hearsay that made the `/ship` cost entry below wrong for months. gstack's Claude adversarial and red-team passes still run; do not suggest installing the `codex` CLI, since it does nothing without credentials.
-
-### Feature pipeline order
-
-The maintainer does not write code. The spec is the artifact he steers, so weight review toward the
-spec and run the diff-level review exactly once:
-
-```
-brainstorming → /grilling → writing-plans → /plan-eng-review → subagent-driven-development → /review → /ship
-                                            ^^^^^^^^^^^^^^^^                                  ^^^^^^^
-```
-
-Both inserted steps exist for a specific reason:
-
-- **`/plan-eng-review` before implementing.** `subagent-driven-development` reviews code against the
-  plan, so a wrong plan propagates cleanly through every task and every review. v1.1.0.0 shipped a
-  spec that said "all five GE beats" where the variant has six; it survived 24 per-task reviews and
-  two full `/ship` runs. An independent read of the plan is the only step positioned to catch that.
-- **`/review` once, after implementation, before `/ship`.** Its adversarial pass is ALWAYS-ON, not
-  something to ask for (`review/SKILL.md:884`); what running it early buys is putting the harshest
-  reader FIRST instead of last. On 2026-08-04 that ordering turned one
-  round into four on #519: the adversarial pass found that the cap function spread its whole input
-  before deciding to truncate, recreating the very DoS the PR existed to close, and everything it
-  found had to re-run three gates behind it. The adversarial pass is free and fast; running it
-  early is the single biggest lever on churn. It is the only WHOLE-DIFF look —
-  `subagent-driven-development`'s per-task reviews are scoped to one task and structurally cannot
-  see a cross-task interaction, which is what that bug was. What it does NOT do is save `/ship` a
-  pass: `/ship` dispatches its own specialists unconditionally, so running `/review` first buys
-  ORDERING, not a discount. See the cost entry below before assuming otherwise.
-
-**`/ship`'s review gate does not converge on a large diff.** It applies fixes, then stops and asks
-for a re-run; the re-run reviews everything again and any large diff keeps producing informational
-findings. Running `/review` first mostly avoids this. If it still fires and the round is
-all-informational, say so and proceed — offer that rather than waiting to be asked. Fixing
-informational findings is not free: one such fix in v1.1.0.0 introduced a user-visible regression
-that the next round had to catch.
-
-### Issue pipeline order
-
-The other, more common workflow: bugs are found during a live club meeting, filed as issues from the
-room, then `/triage` labels them at home and `ready-for-agent` ones run autonomously.
-
-```
-meeting → file issues → /triage → ready-for-agent → /investigate → implement → /qa → /ship
-                               └→ ready-for-human → /grilling → implement → /qa → /ship
-                               └→ needs-info → wait
-```
-
-**Which review does this change get? Decide from the table, do not re-derive it.**
-
-| The change is… | Then |
+| To… | Use |
 |---|---|
-| a RISK CATEGORY — authentication or **authorization** (anything changing who may write or delete another person's record), the archive gate, a migration, the service worker, a cascading delete, `applySelfAdd` | `/review`, then `/ship` — at any size, including a 20-line one |
-| large or wide-REACHING (several seams, or a global cascade like #646 — reach, not file count) | `/review`, then `/ship` |
-| anything else, 50+ changed lines | **`/ship` alone** |
-| under 50 changed lines | `/ship` alone — but it dispatches NO specialists there, so say "adversarial pass only", never "reviewed" |
+| Shape a feature | brainstorming or `/grilling` as the situation calls for, then **always `/spec`**. Its output is one or more `ready-for-agent` issues citing files. `/plan-eng-review` only if `/spec` emits three or more. |
+| Triage the room's issues | `/triage` |
+| Plan a wave | `bun run batch:issues`, acted on per the `dispatching-issue-waves` project skill |
+| Debug | `/investigate`. It is the debugging skill here and satisfies superpowers' systematic-debugging gate. |
+| Open a PR | `gh pr create`. The agent stops there. |
+| Review a PR | `/review-pr N` from the main session. gstack `/review` in the PR's worktree **as well** for a risk category (below). |
+| Land | `gh pr merge --squash --auto`. The merge queue tests each PR against `main` plus everything queued ahead of it. |
+| Verify a wave | `/qa-only` against the deployed app, once per wave after the queue drains, before the next meeting. Findings become issues. |
+| See what shipped | `/retro` (gstack). `/session-retro` is the other one: what in the agent's environment made a session harder than it needed to be. |
+| Park debt | `TODOS/<branch-name>.md`. See `TODOS/README.md` for the lifecycle. |
 
-**`/ship` runs its own specialist army** — unconditionally above 50 changed lines, which is 23 of
-the last 25 PRs (the last row is the exception, not the rule). `/review` adds a SECOND army rather
-than replacing it, so `/ship` alone is the default and skipping `/review` is not skipping review.
-What `/review` buys is ORDERING — the harshest reader first, so a late finding does not force
-re-running the gates behind it. Pay for that on the top two rows only. The measurements, and the
-two false claims this table replaced, are in the cost entry below; re-derive rather than inherit.
+### Pull requests
 
-**Several `ready-for-agent` issues at once → batch them, don't dispatch serially.**
-`bun run batch:issues` groups the open backlog into waves parallel agents can take without
-colliding (see Commands above). The `dispatching-issue-waves` project skill
-(`.claude/skills/dispatching-issue-waves/SKILL.md`) covers how to act on the plan it prints —
-one stage per iteration, re-planned after every land, never executed as a stale printout.
+- **Title**: conventional-commit style, `fix(agenda): …`, with no version prefix. `VERSION` is
+  frozen at `1.32.0.0` and `CHANGELOG.md` stops there; do not bump either. Nothing reads them.
+- **Body**: `Closes #N` is mandatory. Branches are deleted on merge, so a merged PR without it
+  leaves the issue open with no claim on it, and the next `batch:issues` hands it out again.
+  Everything else in the body is optional.
+- **The agent never merges.** A wave PR is green against the `main` that existed when its CI
+  ran; the queue is what tests it against the `main` it will actually land on. Before the queue,
+  `/ship` merged `main` into the branch before testing, and branch protection still does not
+  require a branch to be up to date (`strict: false`), so the queue is the only gate. `ci.yml`
+  runs on `merge_group:` for that reason; removing that trigger stalls every queued PR.
 
-**Do NOT run the feature pipeline on a single issue.** brainstorming → grilling → writing-plans →
-subagent-driven-development earns its cost on a cross-surface feature; on a 30-line bug fix it is
-pure overhead. Keep `/grilling` for `ready-for-human` issues, where the *shape* of the fix is the
-open question rather than its location.
+### Which review
 
-Two insertions, both on the agent path:
+`/review-pr` runs the Matt Pocock code-review skill's two axes, Standards (repo conventions plus a
+fixed smell baseline) and Spec (does the diff do what the issue asked), against the PR's branch on
+`origin` with no checkout. Neither axis asks who may now write or delete another person's record.
+#573 did exactly that in 81 lines across 2 files with every gate green, so for a **risk category**
+run gstack `/review` in the PR's worktree as well, at any size:
 
-- **`/investigate` before implementing a bug.** This is the failure mode of an autonomous
-  `ready-for-agent` run: given "the banner says the wrong thing", an agent patches the banner.
-  #448 is the worked example — the issue itself listed "soften the banner copy" as an option, and
-  the real cause was one line in a marker pass two functions away. Patching the copy would have
-  looked like success while leaving a 35-minute Table Topics segment running against a 25-minute cap.
-- **`/qa` after implementing, before the next meeting.** The loop's real defect is verification
-  latency: a bug found at meeting N is fixed at home and confirmed at meeting N+1, with a live club
-  as the only QA surface. `/qa` drives a real browser and collapses that to minutes. `/qa-only` for
-  a report without fixes. Note `/browse` needs `GSTACK_CHROMIUM_NO_SANDBOX=1` here.
+- authentication or **authorization**: anything changing who may write or delete another
+  person's record;
+- the archive gate (`guards.ts`, `club-readable-logic.ts`, `meeting-authz-logic.ts`);
+- a migration (`drizzle/`, `schema.ts`);
+- the service worker (`public/sw.js`);
+- a cascading delete;
+- `applySelfAdd`.
 
-**`/ship` is never cheap here, and `/review` does not make it cheaper — it adds a second review.**
-Two corrections, both measured 2026-09-02 against the 25 PRs merged through v1.28.0.0. Both
-replaced sentences that had sat in this file, confidently and wrongly, for months; re-derive
-before trusting the numbers rather than inheriting them the way those did.
+`/review-pr` prints a hint when a changed path is on that list. Paths cannot see an authorization
+change in an unrelated file, so a silent hint is not a clean bill. gstack's Codex passes fall back
+to a Claude subagent here because the `codex` CLI is not installed; do not install it, it does
+nothing without credentials.
 
-**One: the built-in cheap path never fires.** `/ship` skips all specialists under 50 changed
-lines, but it counts `DIFF_LINES` — every line of the diff — and this repo's conventions put most
-of them in tests. **Exactly 2 of 25 cleared the skip** (#651 at 14 lines, #648 at 21); the median
-was **357**. This entry read "`/ship` is cheap on a small diff — use it as-is" until 2026-09-01,
-false for 23 of the 25. (The companion clause about the Codex structured review under 200 lines is
-dead here regardless — Codex is not installed, so those passes never run.)
+### Shaping
 
-**Two, and the expensive one to get wrong: `/review` does not move `/ship`'s specialist pass.**
-`/ship` invokes Step 9 unconditionally (`ship/SKILL.md:683`). The readiness dashboard is
-informational and gates nothing — the NOT-CLEAR branch says so outright ("Ship runs its own review
-in Step 9", `:628`), and a CLEARED verdict changes only what the dashboard PRINTS. So `/review` +
-`/ship` is **two specialist armies and two adversarial passes**, not one moved. This file claimed
-the opposite in two places until 2026-09-02. (Do not "improve" that argument by adding that a
-CLEARED entry needs zero findings — `"clean"` means zero *unresolved* findings after Fix-First
-(`review/SKILL.md:900`), so clean entries are common here. That embellishment was written on
-2026-09-02 and cut the same day.)
+A feature becomes issues and rides the same wave pipeline as a bug. brainstorming answers "what
+should this be", `/grilling` answers "here is my position, break it", and either is optional.
+`/spec` is the exit, because its Phase 3 reads the code and produces the `## Files` section
+`batch:issues` needs. A feature too big for one issue leaves `/spec` as several, linked with the
+`depends on #N` lines the planner recognises. A `ready-for-agent` brief satisfies superpowers'
+brainstorming gate; do not re-run it on a dispatched issue. writing-plans and
+subagent-driven-development are retired here.
 
-So the question is never which pass to run; it is whether to pay for a SECOND one. **`/ship` alone
-always reviews.** Run `/review` first only when ordering buys something: a large cross-surface diff
-where a late finding forces re-running the gates behind it (#519, four rounds) — and read
-"cross-surface" as REACH, not file count, since #646 changed four files and every anchor in the
-app. Below that, `/ship` alone is the review; "skip `/review`" never means "skip review". One honest
-exception at the very bottom: under 50 changed lines `/ship` dispatches **no specialists at all**
-(`ship/sections/review-army.md:178`) and you get the adversarial pass only. `/review` has the same
-50-line gate, so running it would not help either.
+### Pipelines
 
-**Size off SOURCE files, and know what counts as source.** The line count is carried by guard
-tests and browser harnesses, not by `CHANGELOG.md`/`VERSION` — those are written in Steps 12–13,
-AFTER the Step 9 review, so they are not even in the diff at gating time:
-
-| PR | src | test | meta | other | total lines |
-|---|---|---|---|---|---|
-| #658 | 4 | 2 | 3 | — | 1,067 |
-| #649 | 4 | 9 | 4 | — | 1,384 |
-| #644 | 10 | 12 | 4 | 3 `drizzle/`, 2 `docs/` | 7,931 |
-| #640 | 0 | 1 | 3 | 1 `public/` | 412 |
-
-```bash
-git diff <base>...HEAD --stat -- src public scripts drizzle ':!*.test.*' ':!src/test' | tail -1
+```
+room → file issues → /triage → ready-for-agent → batch:issues → worktree → /investigate → implement
+                            │                                                → gh pr create → /review-pr → queue → /qa-only (per wave)
+                            ├→ ready-for-human → /grilling → /spec → ready-for-agent
+                            └→ needs-info → wait
+idea → [brainstorming | /grilling] → /spec → ready-for-agent issues → (as above)
 ```
 
-**`src/` alone is the wrong pathspec** — `public/sw.js` (the service worker, #639/#640),
-`scripts/` and `drizzle/` are all source here, and a migration PR that omits `drizzle/` under-counts
-exactly the change `data-migration` exists to catch. Note the command prints **nothing**, not `0`,
-when no file matches; that is 5 of the 25, so treat empty as zero rather than as an error.
+`/investigate` before implementing is the one insertion on the agent path worth defending: given
+"the banner says the wrong thing", an agent patches the banner. #448 listed "soften the banner
+copy" as an option, and the cause was one line in a marker pass two functions away.
 
-**Median source files is 2, not 4** (5 PRs at zero, 4 at one, 4 at two, measured with the wide
-pathspec above — the `-- src`-only figure is 7/3/3, and quoting it here was this entry's own
-version of the mistake it warns about). So a "≤4 files" bar covers 21 of 25 — the 84th percentile —
-and excludes almost nothing: applied to this window it skips `/review` on **17 of 25**, including
-#629, a security fix closing self-add to a club roster, at 133 source lines and 4 files. Do not use
-file count as the gate. **Risk category overrides size, always:** authentication AND
-authorization — anything changing who may write or delete another person's record — plus the
-archive gate, migrations, the service worker, cascading deletes and anything touching
-`applySelfAdd`. #573 is why the second word is there: 2 files, 81 source lines, on none of the
-other categories, and it silently deleted members' declined-attendance replies.
-
-**Do NOT tell `/ship` a smaller number to suppress specialists.** `DIFF_LINES` gates more than the
-specialist list: red-team activates only above 200 **or on any CRITICAL finding**
-(`ship/sections/review-army.md:338`), simplification above 100, and security whenever
-`SCOPE_AUTH` is true at ANY size, else backend above 100 (`:181`). Below 50 everything is skipped.
-Understating it switches off **red-team — the highest-yield lens here** — which is the opposite of
-the intent.
-
-**Do NOT disable reviewers either.** `gstack-specialist-stats`, n=15 **as of 2026-09-02** (it moves
-every ship — re-run it rather than quoting this): red-team 525%, data-migration 500%,
-maintainability 444%, testing 389%, design 271%, api-contract 250%, security 211%, performance
-200%, simplification 67%. gstack auto-gates at **0 findings in 10+ dispatches** and nothing
-qualifies; `security` and `data-migration` carry `[NEVER_GATE]` and can never be gated regardless.
-Treat `data-migration`'s 500% as noise — it is one dispatch. The cost worth attacking is the
-~33.4k tokens of instructions `/ship` reads before seeing a line of your code (`ship/SKILL.md` 77KB
-+ `review-army.md` 24KB + `adversarial.md` 18KB + `pr-body.md` 15KB, at a rough chars÷4, so an
-under-estimate) — which is per RUN, reduced by shipping fewer times, not by reviewing less.
-
-**Batch a meeting's findings.** Five small fixes shipped separately means five version bumps, five
-PRs, and five times that 33.4k. Group related ones into one PR with a single PATCH or MICRO bump;
-`/ship` will not decide that. **This is not the same lever as `batch:issues`, and conflating them
-is easy:** a WAVE is file-DISJOINT work sent to parallel worktrees, so a wave of four still costs
-four `/ship` runs — it buys wall-clock, not tokens. Collapsing costs a run only when the issues
-share a surface, which is the case a wave deliberately splits up. See the `shipping-batches`
-project skill (`.claude/skills/shipping-batches/SKILL.md`) for which issues may share a ship.
-
-Two skills worth running periodically rather than per-issue:
-
-- **`/retro`** — `/ship` Step 20 already writes coverage and plan metrics to `~/.gstack/projects/`
-  for exactly this, and nothing has ever read them. Over a few meetings' issues it shows which
-  surfaces keep breaking.
-- **`/improve`** — the proactive complement to meeting QA: one finds what broke, the other what is
-  fragile. It produces self-contained plans for other agents to execute, which matches how work gets
-  done here.
+Work from a worktree, never the main checkout; see "Git worktree isolation" above. `/browse` needs
+`GSTACK_CHROMIUM_NO_SANDBOX=1` here.

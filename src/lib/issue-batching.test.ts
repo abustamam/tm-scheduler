@@ -148,11 +148,12 @@ describe("extractPaths", () => {
 	 * The allowlist is the whole safety property. Without it the rule regresses
 	 * into matching any root-level `name.ext`.
 	 *
-	 * `CHANGELOG.md` is the port-specific case and it is deliberately excluded:
-	 * `/ship` writes it on every single release, so if issues could cite it they
-	 * would all collide with each other unconditionally and the planner would
-	 * serialise the entire backlog. It is a shared surface that is genuinely
-	 * append-only per PR — the one shape disjointness models badly.
+	 * `CHANGELOG.md` is the port-specific case and it is deliberately excluded.
+	 * It is frozen now, and while `/ship` still wrote it on every release, letting
+	 * issues cite it would have made them all collide with each other
+	 * unconditionally and serialised the entire backlog. Either way it is not a
+	 * change surface an issue edits. `TODOS.md` left the list on 2026-09-04 for
+	 * the mirror-image reason: it was in every diff, and became `TODOS/<branch>.md`.
 	 */
 	test("leaves a root file that is not on the allowlist alone", () => {
 		expect(
@@ -160,8 +161,12 @@ describe("extractPaths", () => {
 		).toEqual([]);
 	});
 
-	test("VERSION is not citable — /ship writes it on every release", () => {
+	test("VERSION is not citable — frozen, and never a change surface", () => {
 		expect(extractPaths("bump VERSION and CHANGELOG.md")).toEqual([]);
+	});
+
+	test("TODOS.md is no longer citable — it became TODOS/<branch>.md", () => {
+		expect(extractPaths("noted in TODOS.md under Agenda")).toEqual([]);
 	});
 
 	/**
