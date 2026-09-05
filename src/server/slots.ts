@@ -6,6 +6,7 @@ import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
 import { logActivity } from "./activity";
 import {
 	assertClubNotArchived,
+	getSessionUser,
 	requireClubRole,
 	requireMeetingAgendaEditor,
 	requireMemberInClub,
@@ -20,6 +21,7 @@ import {
 	applyRemoveRoleSlot,
 	applyRemoveSpeakerSlot,
 	attachSpeechToSlot,
+	confirmSlotCore,
 	editSlotSpeech,
 	markComingOnSelfClaim,
 	reassignSlotCore,
@@ -198,69 +200,28 @@ export const releaseSlot = createServerFn({ method: "POST" })
 
 const confirmSchema = z.object({
 	slotId: z.string().uuid(),
+	/** The holder confirming for THEMSELVES (#661) — the public arm, verified
+	 *  against `role_slots.assigned_member_id`. Omitted by the officer surface,
+	 *  which vouches for someone else and stays session-gated. Its presence is
+	 *  what selects the arm; see `confirmSlotCore`. */
+	memberId: z.string().uuid().optional(),
 });
 
-/** Confirm a claimed slot. Only club admins/VPEs may do this.
- *  AUTHED — requires VPE/admin session. */
+/** Confirm a claimed slot — either the slot's own holder saying yes, or a club
+ *  admin/VPE vouching for them (#661).
+ *  MIXED: the officer arm requires a VPE/admin session; the holder arm is PUBLIC
+ *  and session-less, which is why the whole gate — the archive check included —
+ *  lives in `confirmSlotCore` where a test can reach it. */
 export const confirmSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => confirmSchema.parse(input))
 	.handler(async ({ data }) => {
-		const currentUser = await requireUser();
-
-		const [slot] = await db
-			.select({
-				id: roleSlots.id,
-				status: roleSlots.status,
-				assignedMemberId: roleSlots.assignedMemberId,
-				clubId: meetings.clubId,
-				meetingStatus: meetings.status,
-			})
-			.from(roleSlots)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-			.where(eq(roleSlots.id, data.slotId))
-			.limit(1);
-
-		if (!slot) {
-			throw new Error("Role not found.");
-		}
-		assertMeetingNotLocked(slot.meetingStatus);
-
-		// The actor is the resolved admin membership — never the client (#396).
-		const membership = await requireClubRole(currentUser.id, slot.clubId, [
-			"admin",
-		]);
-
-		if (slot.status !== "claimed") {
-			throw new Error("Only a claimed role can be confirmed.");
-		}
-
-		return db.transaction(async (tx) => {
-			// Conditional UPDATE: only flips 'claimed' → 'confirmed'; a concurrent
-			// release that races us back to 'open' will produce zero rows.
-			const updated = await tx
-				.update(roleSlots)
-				.set({ status: "confirmed" })
-				.where(
-					and(eq(roleSlots.id, data.slotId), eq(roleSlots.status, "claimed")),
-				)
-				.returning({ id: roleSlots.id });
-
-			if (updated.length === 0) {
-				throw new Error(
-					"Slot was no longer claimed — it may have been released concurrently.",
-				);
-			}
-
-			await logActivity(tx, {
-				clubId: slot.clubId,
-				actorMemberId: membership.id,
-				action: "claim",
-				targetType: "slot",
-				targetId: data.slotId,
-				detail: { confirmed: true },
-			});
-
-			return { ok: true as const };
+		// `getSessionUser`, not `requireUser`: an anonymous holder is a first-class
+		// caller here. The officer arm still refuses a null session itself.
+		const currentUser = await getSessionUser();
+		return confirmSlotCore({
+			slotId: data.slotId,
+			sessionUserId: currentUser?.id ?? null,
+			selfMemberId: data.memberId ?? null,
 		});
 	});
 

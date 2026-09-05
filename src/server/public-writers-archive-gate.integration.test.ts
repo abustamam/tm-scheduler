@@ -27,9 +27,13 @@
  * this product. The list is not curated: it is exactly the set
  * `public-readers-archive-gate.guard.test.ts` waived with the reason
  * `"write — #544 follow-up"`, and that guard now requires each one to name its
- * gate instead, in its `WRITE_GATES` table. Seven rows there; the five that gate
- * in a `-logic` SEAM are the five this file can execute, because a handler body
- * is unreachable from vitest.
+ * gate instead, in its `WRITE_GATES` table. Eight rows there; six gate in a
+ * `-logic` SEAM, because a handler body is unreachable from vitest. Five of
+ * those six are executed here. The sixth is `confirmSlotCore` (#661, which gave
+ * an authed-only write a session-less holder arm); its before/after pair lives
+ * in `slots-confirm.integration.test.ts` beside the rest of that arm's cases,
+ * rather than here, because the fixture it needs is a CLAIMED slot and a holder,
+ * which none of the cases below build.
  *
  * ## Each case is a BEFORE/AFTER pair, for the reason #544's suite gives
  *
