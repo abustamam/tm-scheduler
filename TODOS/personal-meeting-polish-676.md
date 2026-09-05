@@ -38,3 +38,32 @@ today.
   means threading a prop through the shell for a link that 404s to the same "we couldn't find it"
   answer the page is already giving. Left as is.
   **Priority:** P4
+
+## Review residue from PR #695
+
+Judgement calls from the Standards and Spec axes, none blocking, none worth an
+issue under CLAUDE.md's bar.
+
+- **`EYEBROW` is `text-xs`, not `roles-guide.tsx:74`'s `text-[11px] tracking-[0.04em] uppercase`.**
+  The issue cited that recipe for the ROLE GROUP label, and the same constant is
+  now reused for the meeting-time eyebrow — so the time and the section heading
+  render identically, when the time is the page's headline fact and the h2 is a
+  divider. Worth splitting into two constants. **P4.**
+- **`FullMeetingLink` has no `hover:`/`focus-visible:` affordance** while every
+  other link on the page carries `hover:underline`. Undercuts the same
+  consistency argument this diff makes for "Not you?". **P4.**
+- **Three near-identical `Shell → Notice → Button` blocks stay in the route
+  module**, along with `<Button className="min-h-11 w-full">Pick your name</Button>`
+  — so those three buttons' copy and tap-target floor are gated by nothing, in
+  the module the diff argues is untestable. The headings beside them ARE gated.
+  Finishing the extraction would close it. **P3.**
+- **`pending = "release"` also fires for "Yes, I can't make it" when `holdsRole`
+  is false**, where nothing is released. Mysterious Name, no behavioural effect.
+  **P4.**
+- **Answer-button gap moved `gap-2` → `gap-3`** with no stated reason; the issue
+  named 8px as the problem but not 12px as the answer. **P4.**
+
+Resolved in review, not parked: `formatMeetingKeyLabel` re-derived
+`parseMeetingKey`'s classification and already disagreed with it (it accepted
+`-2599`, which the router rejects because 25:99 rolls into the next day). It now
+delegates, held by an agreement test over both.

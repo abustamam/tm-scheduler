@@ -20,7 +20,10 @@
 // same reason the body was. `PersonalMeetingNotice` takes `title` as a REQUIRED
 // prop, which is the structural half of the finding that earned it: the four
 // states each rendered a bare grey `<p>` with no heading, and a required prop
-// makes a heading-less state fail to compile rather than fail in review.
+// makes a heading-less state fail to compile rather than fail in review. Three
+// of the four route through it — loading keeps the centred-spinner convention
+// the issue itself cited and gains the meeting NAME instead of a heading; see
+// `PersonalMeetingNotice`'s own docblock for why.
 //
 // ## Two stale-state rules, and they are the same rule twice
 //
@@ -68,6 +71,7 @@ import {
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { listRoles } from "#/lib/list-roles";
 import { isMeetingLocked, isMeetingOver } from "#/lib/meeting-lifecycle";
+import { parseMeetingKey } from "#/lib/meeting-url";
 import {
 	type DutyTarget,
 	dutiesForRole,
@@ -491,22 +495,23 @@ export function FullMeetingLink({
  * meeting's, and the two agree only by construction.
  */
 export function formatMeetingKeyLabel(key: string): string | null {
-	const m = /^(\d{4})-(\d{2})-(\d{2})(?:-\d{4})?$/.exec(key.trim());
-	if (!m) return null;
-	const [, y, mo, d] = m;
-	const year = Number(y);
-	const month = Number(mo);
-	const day = Number(d);
-	const local = new Date(year, month - 1, day);
-	if (
-		local.getFullYear() !== year ||
-		local.getMonth() !== month - 1 ||
-		local.getDate() !== day
-	) {
-		return null;
-	}
-	// No `timeZone`: `local` was BUILT in the runtime's zone, so formatting it
+	// `parseMeetingKey` is the classifier, and re-deriving it here was a second
+	// implementation that already DISAGREED with it: `(?:-\d{4})?` accepts any
+	// four digits, so `2026-09-05-2599` parsed here and is rejected there — and
+	// `meeting-url.ts` names that exact case in its own comment, because 25:99
+	// gets rolled into the next day rather than refused. It also rejects
+	// impossible calendar dates (`2026-09-31` rolls to October) and knows about
+	// the uuid form. One implementation, so the label cannot say yes to a key the
+	// router says no to.
+	const parsed = parseMeetingKey(key.trim());
+	if (parsed.kind !== "date" && parsed.kind !== "instant") return null;
+	// No `timeZone`: `local` is BUILT in the runtime's zone, so formatting it
 	// there is what round-trips the calendar date the URL names.
+	const local = new Date(
+		Number(parsed.date.slice(0, 4)),
+		Number(parsed.date.slice(5, 7)) - 1,
+		Number(parsed.date.slice(8, 10)),
+	);
 	return formatMeetingDate(local);
 }
 
@@ -514,6 +519,15 @@ export function formatMeetingKeyLabel(key: string): string | null {
  * A page state that is not the page. `title` is REQUIRED and is a heading —
  * all four of these states used to be a bare grey `<p>`, so the surface had no
  * heading at all unless the happy path rendered.
+ *
+ * THREE of the four route through here: no-identity, error and not-found.
+ * Loading does not, deliberately — `PersonalMeetingLoading` follows the centred
+ * `Loader2` convention the issue itself cited (`ballot.tsx:66`), and a heading
+ * announced for a state that exists for a few hundred milliseconds is noise to a
+ * screen reader rather than structure. It still carries the other half of the
+ * finding, which is the half that mattered: it NAMES the meeting, so a member on
+ * a slow connection is not looking at a page whose entire content is the word
+ * "Loading…".
  */
 export function PersonalMeetingNotice({
 	title,

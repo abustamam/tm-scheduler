@@ -41,6 +41,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
+import { parseMeetingKey } from "#/lib/meeting-url";
 
 vi.mock("#/server/availability", () => ({
 	markUnavailableReleasing: vi.fn(async () => ({ ok: true, released: 1 })),
@@ -683,5 +684,37 @@ describe("formatMeetingKeyLabel (#676)", () => {
 		expect(formatMeetingKeyLabel("2026-13-40")).toBeNull();
 		expect(formatMeetingKeyLabel("2026-02-30")).toBeNull();
 		expect(formatMeetingKeyLabel("2025-02-29")).toBeNull();
+	});
+
+	/**
+	 * The label and the ROUTER must classify a key the same way. The first cut
+	 * re-derived the parse here with `(?:-\d{4})?`, which accepts any four digits
+	 * — so `-2599` labelled fine while `parseMeetingKey` rejects it, because 25:99
+	 * gets rolled into the next day rather than refused. A page cannot honestly
+	 * print "Tue, Sep 5" for a URL the router is about to call invalid.
+	 *
+	 * Asserted as AGREEMENT with `parseMeetingKey` rather than as a hard-coded
+	 * null, so this cannot drift back apart: tightening or loosening the
+	 * classifier moves both sides at once, and a second implementation appearing
+	 * here fails the case rather than silently disagreeing again.
+	 */
+	it("agrees with parseMeetingKey on every key, including out-of-range times", () => {
+		for (const key of [
+			"2026-09-05",
+			"2026-09-05-1845",
+			"2026-09-05-2599", // shape-valid, time-invalid — the disagreement
+			"2026-09-05-2400",
+			"2026-09-31",
+			"2026-02-30",
+			"22222222-2222-4222-8222-222222222222",
+			"next-week",
+			"",
+		]) {
+			const routable = ["date", "instant"].includes(parseMeetingKey(key).kind);
+			expect(
+				formatMeetingKeyLabel(key) !== null,
+				`label and router disagree on "${key}"`,
+			).toBe(routable);
+		}
 	});
 });
