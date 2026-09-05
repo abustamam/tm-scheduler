@@ -28,3 +28,35 @@ Noticed while fixing #656 (dashboard speech-log badge). Nothing here blocked the
   (`r.speechTitle ?? r.theme`) among them — and would show the placeholder verbatim. Worth a sweep
   the next time someone is in that neighbourhood; not worth a change on its own.
   **Priority:** P4
+
+## The complement with `loadMyCommitments` is skew-wide, not exact
+
+Found by the Spec review axis on PR #693. `loadMyCommitments`
+(`src/server/my-activity-logic.ts:194`) filters `gte(meetings.scheduledAt, new Date())`
+on the SERVER; `now: Date.now()` in `dashboard.tsx`'s loader runs in the BROWSER on
+any client-side navigation. So the two instants agree to within clock skew rather
+than exactly, and a client clock running fast can badge a row `Completed` in the
+speech log while "My upcoming roles" still lists it as signed up — the same #656
+contradiction, narrowed from always-wrong to a skew-wide window.
+
+Fix: have the server fn return the instant it filtered on and thread that down,
+instead of sampling a second one in the loader. That is a change to
+`my-activity-logic.ts` / the payload type, outside #656's `## Files`.
+**Priority: P3** — the window is a mis-set client clock wide, and main was
+unconditionally wrong here.
+
+## The source guard encodes the `SpeechStatePill` duplication
+
+Also from the Standards axis. The guard asserts
+`/<SpeechStatePill\s+state=\{state\}\s*\/>/` and `/state === "scheduled"/` in a
+`describe.each` over BOTH routes. So extracting the duplicated pill into
+`src/components/` later requires editing the guard too — Shotgun Surgery baked
+into a test. Not wrong today (the duplication is real and the guard should see
+it), but whoever extracts the pill should expect to move the guard with it.
+**Priority: P4.**
+
+## This guard lives in a `.test.ts`, not a `.guard.test.ts`
+
+~30 source guards here are named `*.guard.test.ts`; this one is a `describe`
+block inside `speech-schedule-state.test.ts`. Splitting it out would match the
+convention and make it greppable with its siblings. **Priority: P4.**

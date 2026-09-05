@@ -44,9 +44,16 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			// sampled while rendering. One value is dehydrated with the loader data,
 			// so the SSR pass and the hydration pass classify every row identically
 			// — the hydration hazard #608 records on this page's greeting, not
-			// repeated. It is also the same clock `listMyCommitments` filtered its
-			// own rows on above, which is what keeps the two cards from disagreeing
-			// about one slot (#656).
+			// repeated.
+			//
+			// NOT the same clock `listMyCommitments` filtered its own rows on: that
+			// `gte(meetings.scheduledAt, new Date())` runs on the SERVER, while this
+			// loader runs in the BROWSER on a client-side navigation. The two agree
+			// to within clock skew, not exactly, so a badly-set client clock can
+			// still show one slot as an upcoming role and a delivered speech at the
+			// same time — the #656 contradiction narrowed from "always" to "skew
+			// wide". Closing it means the server handing its own instant down with
+			// the payload, which is a change to the seam and is parked in TODOS.
 			now: Date.now(),
 		};
 	},

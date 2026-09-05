@@ -336,9 +336,15 @@ describe("speech-log route wiring (#656)", () => {
 		 * classify identically (#608's hazard, not repeated).
 		 */
 		it("pins the comparison instant in the loader", () => {
-			const loader = src.slice(0, src.indexOf("component:"));
-			expect(loader, `no loader region found in ${path}`).not.toBe("");
-			expect(loader).toMatch(/now:\s*Date\.now\(\)/);
+			// Assert the MARKER was found, not that the slice is non-empty. With
+			// `not.toBe("")` a missing marker makes `indexOf` return -1, `slice(0, -1)`
+			// hands back the whole file minus one character, the floor passes, and
+			// `now: Date.now()` then matches anywhere in the module — including inside
+			// `component:`, which is the one place this test exists to forbid. That is
+			// the "counts a PROXY for the thing" trap in CODING_STANDARDS.md.
+			const marker = src.indexOf("component:");
+			expect(marker, `no "component:" marker in ${path}`).toBeGreaterThan(-1);
+			expect(src.slice(0, marker)).toMatch(/now:\s*Date\.now\(\)/);
 		});
 
 		/**
@@ -349,7 +355,14 @@ describe("speech-log route wiring (#656)", () => {
 		 * surface.
 		 */
 		it("does not compare against the clock at render time", () => {
-			expect(raw).not.toMatch(/getTime\(\)\s*>\s*Date\.now\(\)/);
+			// Both orders and all four operators. The first version pinned only the
+			// exact prior spelling (`getTime() > Date.now()`), so `Date.now() < at`
+			// — the same defect written the other way round — reintroduced the
+			// render-time read silently. An offender sweep that only knows the
+			// spelling it was written against is a sweep for one commit.
+			expect(raw).not.toMatch(/getTime\(\)\s*[<>]=?\s*Date\.now\(\)/);
+			expect(raw).not.toMatch(/Date\.now\(\)\s*[<>]=?\s*[\w.$]*\.?getTime\(\)/);
+			expect(raw).not.toMatch(/new Date\([^)]*\)\s*[<>]=?\s*new Date\(\)/);
 		});
 	});
 
