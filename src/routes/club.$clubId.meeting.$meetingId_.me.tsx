@@ -37,12 +37,25 @@
 // `?as=` seeds the same localStorage identity the anonymous roster pick already
 // sets, and only when the browser has no conflicting identity of its own. Every
 // write is an existing public server fn taking a raw member id with no session.
+// ## Where the markup lives
+//
+// The shell, the four non-happy states and the body itself are all in
+// `components/club/personal-meeting-body.tsx`, not here. This module cannot be
+// mounted in vitest — it pulls `#/server/personal-meeting` → `#/db` →
+// "DATABASE_URL is not set" — so branching presentation left in this file is
+// untestable by construction; #665 moved the body across for that reason and
+// #676 moved the states that surround it for the same one. What stays here is
+// the WIRING, which `personal-meeting-wiring.guard.test.ts` reads as source.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect } from "react";
-import { BackLink } from "#/components/back-link";
 import { useRequireIdentity } from "#/components/club/identity-gate";
-import { PersonalMeetingBody } from "#/components/club/personal-meeting-body";
+import {
+	PersonalMeetingBody,
+	PersonalMeetingLoading,
+	PersonalMeetingNotice,
+	PersonalMeetingShell,
+} from "#/components/club/personal-meeting-body";
 import { Button } from "#/components/ui/button";
 import { resolveAsSeed, useCurrentMember } from "#/lib/member-identity";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
@@ -138,24 +151,33 @@ function PersonalMeetingRoute() {
 	}, [queryClient, clubUuid, meetingId]);
 
 	// No identity resolvable at all → the existing picker, never an error.
+	//
+	// All four non-happy branches go through `PersonalMeetingNotice`, whose
+	// `title` is a REQUIRED heading prop: each of them used to be a bare grey
+	// `<p>`, so unless the happy path rendered the page carried no heading at
+	// all and a failed load never said which meeting it had failed on. The
+	// component takes the raw `$meetingId` segment because that is the only
+	// meeting context these branches have — the club name and the real date sit
+	// behind the query that has not answered.
 	if (!targetMemberId) {
 		return (
-			<Shell clubId={clubId} meetingId={meetingId}>
-				<p className="text-muted-foreground text-sm">
-					We couldn't tell who you are from this link.
-				</p>
-				<Button className="mt-4 w-full" onClick={promptIdentity}>
+			<PersonalMeetingShell clubId={clubId} meetingId={meetingId}>
+				<PersonalMeetingNotice title="Who's answering?" meetingKey={meetingId}>
+					We couldn't tell who you are from this link. Pick your name and we'll
+					show you your roles and let you answer.
+				</PersonalMeetingNotice>
+				<Button className="min-h-11 w-full" onClick={promptIdentity}>
 					Pick your name
 				</Button>
-			</Shell>
+			</PersonalMeetingShell>
 		);
 	}
 
 	if (view.isPending) {
 		return (
-			<Shell clubId={clubId} meetingId={meetingId}>
-				<p className="text-muted-foreground text-sm">Loading…</p>
-			</Shell>
+			<PersonalMeetingShell clubId={clubId} meetingId={meetingId}>
+				<PersonalMeetingLoading meetingKey={meetingId} />
+			</PersonalMeetingShell>
 		);
 	}
 
@@ -164,18 +186,22 @@ function PersonalMeetingRoute() {
 	// them to an identity picker that cannot help.
 	if (view.isError) {
 		return (
-			<Shell clubId={clubId} meetingId={meetingId}>
-				<p className="text-muted-foreground text-sm">
-					We couldn't load this right now.
-				</p>
+			<PersonalMeetingShell clubId={clubId} meetingId={meetingId}>
+				<PersonalMeetingNotice
+					title="We couldn't load this"
+					meetingKey={meetingId}
+				>
+					Something went wrong on the way to us, so nothing has been saved
+					either way. Try again in a moment.
+				</PersonalMeetingNotice>
 				<Button
-					className="mt-4 w-full"
+					className="min-h-11 w-full"
 					variant="outline"
 					onClick={() => void view.refetch()}
 				>
 					Try again
 				</Button>
-			</Shell>
+			</PersonalMeetingShell>
 		);
 	}
 
@@ -184,19 +210,23 @@ function PersonalMeetingRoute() {
 	// collapses them deliberately.
 	if (!view.data) {
 		return (
-			<Shell clubId={clubId} meetingId={meetingId}>
-				<p className="text-muted-foreground text-sm">
-					We couldn't find that meeting, or this link is out of date.
-				</p>
-				<Button className="mt-4 w-full" onClick={promptIdentity}>
+			<PersonalMeetingShell clubId={clubId} meetingId={meetingId}>
+				<PersonalMeetingNotice
+					title="We couldn't find that meeting"
+					meetingKey={meetingId}
+				>
+					This link may be out of date, or it may be for a different club. Pick
+					your name and we'll try again.
+				</PersonalMeetingNotice>
+				<Button className="min-h-11 w-full" onClick={promptIdentity}>
 					Pick your name
 				</Button>
-			</Shell>
+			</PersonalMeetingShell>
 		);
 	}
 
 	return (
-		<Shell clubId={clubId} meetingId={meetingId}>
+		<PersonalMeetingShell clubId={clubId} meetingId={meetingId}>
 			<PersonalMeetingBody
 				view={view.data}
 				clubId={clubId}
@@ -205,30 +235,6 @@ function PersonalMeetingRoute() {
 				onNotYou={promptIdentity}
 				canRepick={!sessionMember}
 			/>
-		</Shell>
-	);
-}
-
-function Shell({
-	clubId,
-	meetingId,
-	children,
-}: {
-	clubId: string;
-	meetingId: string;
-	children: React.ReactNode;
-}) {
-	return (
-		<div className="mx-auto w-full max-w-reading space-y-4 p-4 pb-10">
-			<div className="pt-2">
-				<BackLink
-					to="/club/$clubId/meeting/$meetingId"
-					params={{ clubId, meetingId }}
-				>
-					Full meeting page
-				</BackLink>
-			</div>
-			{children}
-		</div>
+		</PersonalMeetingShell>
 	);
 }
