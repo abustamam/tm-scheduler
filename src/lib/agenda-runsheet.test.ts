@@ -1094,7 +1094,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 
 	// The bug the single-pass rewrite fixed. Resolving the role name first and the
 	// LIST tokens second meant a club role named literally "{awards}" had the
-	// awards list spliced into its row: "Calls for the Best Table Topic, Best
+	// awards list spliced into its row: "Calls for the Best Table Topics, Best
 	// Evaluator & Best Speaker's report". `role-definitions-logic.ts` validates
 	// only non-empty, so an admin can type it. One `String.replace` pass never
 	// rescans what it substituted, which is what makes this inert by construction
@@ -1109,7 +1109,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 				`Calls for the ${hostileName}'s report · opens voting for Best Speaker`,
 			);
 			// The tell: no award label and no second role name leaked in.
-			expect(detail).not.toContain("Best Table Topic,");
+			expect(detail).not.toContain("Best Table Topics,");
 			expect(detail).not.toContain("Timer");
 		}
 	});
@@ -2653,11 +2653,11 @@ describe("expandRunSheet — awards beat adapts to the scored segments (#372)", 
 
 	it("lists every category when the club runs all three scored segments", () => {
 		expect(awardsRow([speaker, ttm, evaluator])?.detail).toBe(
-			"Awards · Best Table Topic, Best Evaluator & Best Speaker · hands over to the President",
+			"Awards · Best Table Topics, Best Evaluator & Best Speaker · hands over to the President",
 		);
 	});
 
-	it("omits Best Table Topic for a club with no Table Topics Master", () => {
+	it("omits Best Table Topics for a club with no Table Topics Master", () => {
 		expect(awardsRow([speaker, evaluator])?.detail).toBe(
 			"Awards · Best Evaluator & Best Speaker · hands over to the President",
 		);
@@ -2682,7 +2682,7 @@ describe("expandRunSheet — awards beat adapts to the scored segments (#372)", 
 			assigneeName: "M",
 		});
 		expect(awardsRow([renamed])?.detail).toBe(
-			"Awards · Best Table Topic · hands over to the President",
+			"Awards · Best Table Topics · hands over to the President",
 		);
 	});
 });
@@ -3687,7 +3687,7 @@ describe("hand-off rows name the people they introduce (#585)", () => {
 			]);
 			expect(detail).toBe(`Introduces the Table Topics Master: ${hostile}`);
 			// The tells: no spliced surrounding copy, no second expansion.
-			expect(detail).not.toContain("Best Table Topic,");
+			expect(detail).not.toContain("Best Table Topics,");
 			expect(detail).not.toContain(": Introduces");
 		}
 	});

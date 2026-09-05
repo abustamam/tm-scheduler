@@ -1524,3 +1524,23 @@ describe("timing layout splits nothing (#463)", () => {
 		expect(p.whole).toBe("Sergeant-at-Arms");
 	});
 });
+
+// #460. The "Tonight's Votes" box is the printed agenda's copy of the award
+// names, and until this test nothing pinned its three strings at all — which is
+// how it kept the singular "Best Table Topic" long after the ballot, the
+// minutes, the minutes PDF and the club role sheet had moved to the plural.
+//
+// `award-wording.guard.test.ts` greps the source for the retired spelling; this
+// asserts the box actually RENDERS the name, on both layouts that carry it.
+// Neither half substitutes for the other: a grep cannot see a box that stopped
+// rendering, and a render cannot see the nine other surfaces.
+describe("the printed votes box names the awards as every other surface does (#460)", () => {
+	for (const layout of ["spacious", "timing"] as const) {
+		it(`names all three awards on the ${layout} layout`, () => {
+			renderLayout(layout);
+			expect(screen.getByText("Best Speaker")).toBeTruthy();
+			expect(screen.getByText("Best Table Topics")).toBeTruthy();
+			expect(screen.getByText("Best Evaluator")).toBeTruthy();
+		});
+	}
+});

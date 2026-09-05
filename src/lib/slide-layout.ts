@@ -296,8 +296,8 @@ export function slideLayout(slide: Slide): SlideLayout {
 			const lines: Line[] = [];
 			if (slide.caller) lines.push(callerLine(slide.caller));
 			if (slide.hasTimer) lines.push(head("Ask for Table Topics times."));
-			lines.push(head("Please Vote for Best Table Topic Speaker:"));
-			return content("Vote for Best Table Topic", {
+			lines.push(head("Please Vote for Best Table Topics Speaker:"));
+			return content("Vote for Best Table Topics Speaker", {
 				form: "centered",
 				lines,
 			});

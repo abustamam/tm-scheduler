@@ -2330,7 +2330,7 @@ function AnnouncementsBlock({
 }
 
 function VotesBlock({ compact }: { compact?: boolean }) {
-	const rows = ["Best Speaker", "Best Table Topic", "Best Evaluator"];
+	const rows = ["Best Speaker", "Best Table Topics", "Best Evaluator"];
 	return (
 		<div
 			style={{
