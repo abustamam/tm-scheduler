@@ -2,6 +2,11 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Award, Check, Sparkles, Trophy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+	type AddRecordRequest,
+	OfficerTrainingPanel,
+	type SetWindowRequest,
+} from "#/components/dcp/officer-training-panel";
 import { PageContainer } from "#/components/page-container";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -16,9 +21,21 @@ import {
 	tierLabel,
 } from "#/lib/dcp";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import {
+	defaultTrainingWindows,
+	TRAINING_GOAL_KEY,
+	type TrainingPeriod,
+	todayIso,
+	trainingAppliedMessage,
+	trainingApplyLabel,
+	trainingProgramYearForDate,
+	trainingSuggestionNote,
+	windowPhase,
+} from "#/lib/officer-training";
 import { cn } from "#/lib/utils";
 import {
 	applyEducationSuggestions,
+	applyTrainingSuggestion,
 	getScoreboard,
 	getScoreboardYears,
 	startScoreboard,
@@ -26,6 +43,14 @@ import {
 	updateGoal,
 } from "#/server/dcp";
 import type { DcpScoreboardView } from "#/server/dcp-logic";
+import {
+	addTrainingRecord,
+	getOfficerTraining,
+	removeTrainingRecord,
+	resetTrainingWindow,
+	setTrainingWindow,
+} from "#/server/officer-training";
+import type { OfficerTrainingView } from "#/server/officer-training-logic";
 
 const CATEGORY_LABEL: Record<DcpGoalCategory, string> = {
 	education: "Education",
@@ -53,15 +78,17 @@ export const Route = createFileRoute("/_authed/admin/dcp")({
 				clubId: null as string | null,
 				year: currentProgramYear(),
 				view: null as DcpScoreboardView | null,
+				training: null as OfficerTrainingView | null,
 				years: [] as number[],
 			};
 		}
 		const year = currentProgramYear();
-		const [view, years] = await Promise.all([
+		const [view, years, training] = await Promise.all([
 			getScoreboard({ data: { clubId: club.clubId, programYear: year } }),
 			getScoreboardYears({ data: { clubId: club.clubId } }),
+			getOfficerTraining({ data: { clubId: club.clubId, programYear: year } }),
 		]);
-		return { clubId: club.clubId, year, view, years };
+		return { clubId: club.clubId, year, view, training, years };
 	},
 	component: DcpTracker,
 });
@@ -73,20 +100,45 @@ function DcpTracker() {
 
 	const [year, setYear] = useState(loaded.year);
 	const [view, setView] = useState<DcpScoreboardView | null>(loaded.view);
+	const [training, setTraining] = useState<OfficerTrainingView | null>(
+		loaded.training,
+	);
 	const [loading, setLoading] = useState(false);
 	const loadedYearRef = useRef(loaded.year);
 
-	// Year options: every started year plus the current one, newest first.
+	// Year options: every started year, the current one, and the year whose
+	// TRAINING window is open — which differs from `currentProgramYear()` for the
+	// whole of June, because period 1 opens Jun 1 of a program year that has not
+	// begun. Without it that year was unreachable: `loaded.years` holds only years
+	// with a scoreboard, and no club starts next year's board in June. So all of
+	// June the panel showed both windows shut, in the exact month incoming
+	// officers are trained. See `trainingProgramYearForDate`.
+	// The year whose training window is OPEN right now, and whether one actually
+	// is. `trainingYear !== year` alone was not a June test: it fires whenever an
+	// admin reviews a PAST year, so reviewing 2024-25 in April announced
+	// "Officer training for 2026-27 is open now" — false in five of the twelve
+	// months. The phase check is what makes the sentence true.
+	const trainingYear = trainingProgramYearForDate();
+	const trainingWindowOpen = defaultTrainingWindows(trainingYear).some(
+		(w) => windowPhase(w, todayIso()) === "open",
+	);
 	const yearOptions = Array.from(
-		new Set([currentProgramYear(), ...loaded.years, year]),
+		new Set([currentProgramYear(), trainingYear, ...loaded.years, year]),
 	).sort((a, b) => b - a);
 
+	// Both payloads are refetched together on every reload: the scoreboard's g9
+	// badge and the training panel's tallies come from the same records, so
+	// refreshing one alone would let them disagree on screen.
 	const reload = useCallback(async () => {
 		if (!clubId) return;
 		setLoading(true);
 		try {
-			const v = await getScoreboard({ data: { clubId, programYear: year } });
+			const [v, t] = await Promise.all([
+				getScoreboard({ data: { clubId, programYear: year } }),
+				getOfficerTraining({ data: { clubId, programYear: year } }),
+			]);
 			setView(v);
+			setTraining(t);
 			loadedYearRef.current = year;
 		} catch (err) {
 			toast.error(
@@ -150,6 +202,125 @@ function DcpTracker() {
 					? err.message
 					: "Couldn't apply the Pathways suggestions.",
 			);
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	async function handleApplyTraining() {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const v = await applyTrainingSuggestion({
+				data: { clubId, programYear: year },
+			});
+			setView(v);
+			// From the lib, not a ternary here. As a ternary the two strings were
+			// invisible to every gate — a route cannot be mounted in vitest and
+			// typecheck sees two strings either way round — and mutation review
+			// swapped the polarity with the whole suite green at 150/150, which
+			// would have told the President the opposite of what was written.
+			toast.success(trainingAppliedMessage(v.progress[TRAINING_GOAL_KEY] ?? 0));
+		} catch (err) {
+			toast.error(
+				err instanceof Error
+					? err.message
+					: "Couldn't apply the officer training records.",
+			);
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	/**
+	 * Every training write returns the fresh training payload from the server, so
+	 * the panel updates without a round trip — but the SCOREBOARD's g9 suggestion
+	 * is derived from the same rows, so it is reloaded too. Skipping that is how
+	 * the badge above would go on claiming 3 of 4 after the fourth was recorded.
+	 */
+	async function afterTrainingWrite(
+		next: OfficerTrainingView,
+		message: string,
+	) {
+		setTraining(next);
+		toast.success(message);
+		if (!clubId) return;
+		try {
+			setView(await getScoreboard({ data: { clubId, programYear: year } }));
+		} catch {
+			// The write landed; only the scoreboard badge is stale. Leave the success
+			// toast standing rather than reporting a failure that did not happen.
+		}
+	}
+
+	function trainingError(err: unknown, fallback: string) {
+		toast.error(err instanceof Error ? err.message : fallback);
+	}
+
+	async function handleAddRecord(request: AddRecordRequest) {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const next = await addTrainingRecord({
+				data: { clubId, programYear: year, ...request },
+			});
+			await afterTrainingWrite(next, "Training recorded.");
+		} catch (err) {
+			trainingError(err, "Couldn't record that training.");
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	async function handleRemoveRecord(recordId: string) {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			// The fn now returns the fresh view alongside the flag, so this is two
+			// round trips rather than three. And the flag is READ: it reported
+			// "Training record removed." for a delete that removed nothing, which is
+			// what a stale tab or a double-click produces.
+			const { removed, view: next } = await removeTrainingRecord({
+				data: { clubId, programYear: year, recordId },
+			});
+			await afterTrainingWrite(
+				next,
+				removed
+					? "Training record removed."
+					: "That record was already gone — refreshed the list.",
+			);
+		} catch (err) {
+			trainingError(err, "Couldn't remove that record.");
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	async function handleSetWindow(request: SetWindowRequest) {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const next = await setTrainingWindow({
+				data: { clubId, programYear: year, ...request },
+			});
+			await afterTrainingWrite(next, "Training window updated.");
+		} catch (err) {
+			trainingError(err, "Couldn't update that window.");
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	async function handleResetWindow(period: TrainingPeriod) {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const next = await resetTrainingWindow({
+				data: { clubId, programYear: year, period },
+			});
+			await afterTrainingWrite(next, "Back to Toastmasters' dates.");
+		} catch (err) {
+			trainingError(err, "Couldn't reset that window.");
 		} finally {
 			setLoading(false);
 		}
@@ -219,14 +390,41 @@ function DcpTracker() {
 					<SummaryHeadline view={view} />
 					<BaseCard view={view} onSave={handleBase} />
 					{CATEGORY_ORDER.map((cat) => (
-						<GoalGroup
-							key={cat}
-							category={cat}
-							view={view}
-							loading={loading}
-							onGoal={handleGoal}
-							onApplyEducation={handleApplyEducation}
-						/>
+						<div key={cat} className="space-y-3">
+							<GoalGroup
+								category={cat}
+								view={view}
+								loading={loading}
+								onGoal={handleGoal}
+								onApplyEducation={handleApplyEducation}
+								onApplyTraining={handleApplyTraining}
+							/>
+							{/* The training records sit directly under goal 9, the goal they
+							    feed. Rendered from the loader's own payload, so the panel is
+							    there on first paint rather than after a client fetch. */}
+							{cat === "training" && training ? (
+								<>
+									{/* The June case, said out loud: both of the viewed year's
+									    windows can be shut while the NEXT year's period 1 is
+									    open, and the panel below would just look finished. */}
+									{trainingYear !== year && trainingWindowOpen ? (
+										<p className="text-xs text-[var(--warning-strong)]">
+											Officer training for {programYearLabel(trainingYear)} is
+											open now. Switch the year above to record it — the windows
+											below belong to {programYearLabel(year)}.
+										</p>
+									) : null}
+									<OfficerTrainingPanel
+										view={training}
+										busy={loading}
+										onAddRecord={handleAddRecord}
+										onRemoveRecord={handleRemoveRecord}
+										onSetWindow={handleSetWindow}
+										onResetWindow={handleResetWindow}
+									/>
+								</>
+							) : null}
+						</div>
 					))}
 				</>
 			)}
@@ -413,18 +611,25 @@ function GoalGroup({
 	loading,
 	onGoal,
 	onApplyEducation,
+	onApplyTraining,
 }: {
 	category: DcpGoalCategory;
 	view: DcpScoreboardView;
 	loading: boolean;
 	onGoal: (goal: DcpGoal, achieved: number) => void;
 	onApplyEducation: () => void;
+	onApplyTraining: () => void;
 }) {
 	const goals = DCP_GOALS.filter((g) => g.category === category);
 	// Suggestions exist only for the education goals, and only once this club has
 	// actually synced Base Camp — a bare "0" from a club that never synced would
 	// read as "nobody completed anything" rather than "we have no data".
 	const suggest = category === "education" && view.pathwaysSynced;
+	// Same gate, same reason: applying a suggestion of 0 from a club that has
+	// recorded no training would clear a hand-entered Met on no evidence. The
+	// records existing is what makes the 0 mean something.
+	const training = view.derivedTraining;
+	const suggestTraining = category === "training" && training.hasRecords;
 	return (
 		<div>
 			<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -442,6 +647,21 @@ function GoalGroup({
 						{loading ? "Applying…" : "Apply Pathways suggestions"}
 					</Button>
 				) : null}
+				{suggestTraining ? (
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={onApplyTraining}
+						disabled={loading}
+					>
+						<Sparkles className="size-3.5" aria-hidden />
+						{/* Both strings come from the lib, where a unit test pins which
+						    one goes with which value. Inline they were a ternary between
+						    two strings, which typecheck cannot distinguish and no test
+						    could reach — mutation swapped them with the suite green. */}
+						{loading ? "Applying…" : trainingApplyLabel(training.suggestion)}
+					</Button>
+				) : null}
 			</div>
 			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
 				{goals.map((g) => (
@@ -450,6 +670,11 @@ function GoalGroup({
 						goal={g}
 						achieved={view.progress[g.key] ?? 0}
 						derived={suggest ? (view.derivedEducation[g.key] ?? 0) : null}
+						suggestionNote={
+							suggestTraining && g.key === TRAINING_GOAL_KEY
+								? trainingSuggestionNote(training.trainedByPeriod)
+								: null
+						}
 						onGoal={onGoal}
 					/>
 				))}
@@ -470,12 +695,20 @@ function GoalRow({
 	goal,
 	achieved,
 	derived,
+	suggestionNote,
 	onGoal,
 }: {
 	goal: DcpGoal;
 	achieved: number;
 	/** Live Pathways suggestion, or null when this goal has none to offer. */
 	derived: number | null;
+	/**
+	 * A dashed badge for a COMPOSITE goal's live derivation (goal 9's officer
+	 * training counts). Composite goals show a toggle rather than a number field,
+	 * so `derived` above has nowhere to render on them — this is the seam that
+	 * gives a 0/1 goal a suggestion of its own.
+	 */
+	suggestionNote: string | null;
 	onGoal: (goal: DcpGoal, achieved: number) => void;
 }) {
 	const met = achieved >= goal.target;
@@ -514,13 +747,25 @@ function GoalRow({
 				) : null}
 			</div>
 			{goal.composite ? (
-				<Button
-					size="sm"
-					variant={met ? "default" : "outline"}
-					onClick={() => onGoal(goal, met ? 0 : 1)}
-				>
-					{met ? "Met" : "Mark met"}
-				</Button>
+				<div className="flex items-center gap-2">
+					{suggestionNote ? (
+						<Badge
+							variant="outline"
+							className="gap-1 border-dashed text-[var(--sea-ink-soft)]"
+							title="Derived from your officer training records — not yet applied"
+						>
+							<Sparkles className="size-3" aria-hidden />
+							{suggestionNote}
+						</Badge>
+					) : null}
+					<Button
+						size="sm"
+						variant={met ? "default" : "outline"}
+						onClick={() => onGoal(goal, met ? 0 : 1)}
+					>
+						{met ? "Met" : "Mark met"}
+					</Button>
+				</div>
 			) : (
 				<div className="flex items-center gap-2">
 					{derived !== null ? (

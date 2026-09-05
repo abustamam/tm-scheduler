@@ -26,6 +26,7 @@ import {
 	members,
 	notifications,
 	officerTerms,
+	officerTrainingRecords,
 	projectCompletionMarks,
 	roleSlots,
 	tableTopicsSpeakers,
@@ -94,7 +95,13 @@ export async function collapseMemberships(
 		})
 		.where(eq(members.id, keeperId));
 
-	// --- Re-point the eleven membership FKs (absorbed → keeper) ------------
+	// --- Re-point every membership FK (absorbed → keeper) ------------------
+	// This heading carried a COUNT that had been stale for several releases (it
+	// read "the eleven membership FKs" above fourteen numbered steps), so the
+	// number is gone: the authority is the FK drift-guard in
+	// `membership-collapse-logic.integration.test.ts`, which compares the handled
+	// set against the LIVE pg_constraint catalog and fails on any new FK to
+	// `members`. That guard is what caught #531's own missing re-point.
 	// Pattern for the unique-constrained tables: DELETE the absorbed rows that
 	// would collide with an existing keeper row FIRST, then re-point the rest.
 
@@ -289,6 +296,58 @@ export async function collapseMemberships(
 		.update(meetingVotes)
 		.set({ candidateMemberId: keeperId })
 		.where(eq(meetingVotes.candidateMemberId, absorbedId));
+
+	// 15. officer_training_records.membership_id (#531) — unique (membership,
+	//     position, program_year, period), and ON DELETE CASCADE, so without a
+	//     re-point the merge would DESTROY the absorbed membership's training
+	//     credit and silently drop the club below goal 9's four-officer bar. The
+	//     collision case is real rather than theoretical: a duplicate membership
+	//     is usually the same human recorded twice, and whoever recorded the
+	//     training may well have picked a different one of the two rows each
+	//     period. Drop the absorbed row on a collision — the keeper's claim for
+	//     that (office, year, period) already says the same thing, and the count
+	//     is over distinct OFFICES, so dropping a duplicate claim for the surviving
+	//     person loses nothing — and a merge can never LOWER the club's trained
+	//     count, because the surviving rows still cover the same set of offices.
+	//     (That was not true while the count was over people: this comment used
+	//     to explain why the count legitimately dropped on merge. Counting
+	//     offices removed the whole class.)
+	//
+	//     Fill the keeper's MISSING date from the absorbed row before dropping
+	//     it. `trained_on` is nullable by design, so a plain "keeper wins" (the
+	//     pattern borrowed from `meeting_attendance_plan`) silently downgraded a
+	//     dated claim to "date not recorded". Unlike the attendance case there is
+	//     a meaningful reconciliation here, because one side is ABSENT rather
+	//     than contradictory — nothing is overwritten, only a null filled. The
+	//     same argument applies to `recorded_by`, so the audit attribution is
+	//     carried across too rather than being lost with the row; `coalesce`
+	//     makes each column independent, so filling one never disturbs the other.
+	await tx.execute(sql`
+		UPDATE officer_training_records AS k
+		SET trained_on = coalesce(k.trained_on, a.trained_on),
+			recorded_by = coalesce(k.recorded_by, a.recorded_by)
+		FROM officer_training_records AS a
+		WHERE k.membership_id = ${keeperId}
+			AND a.membership_id = ${absorbedId}
+			AND k.position = a.position
+			AND k.program_year = a.program_year
+			AND k.period = a.period
+			AND (
+				(k.trained_on IS NULL AND a.trained_on IS NOT NULL)
+				OR (k.recorded_by IS NULL AND a.recorded_by IS NOT NULL)
+			)`);
+	await tx.execute(sql`
+		DELETE FROM officer_training_records
+		WHERE membership_id = ${absorbedId}
+			AND (position, program_year, period) IN (
+				SELECT position, program_year, period
+				FROM officer_training_records
+				WHERE membership_id = ${keeperId}
+			)`);
+	await tx
+		.update(officerTrainingRecords)
+		.set({ membershipId: keeperId })
+		.where(eq(officerTrainingRecords.membershipId, absorbedId));
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));

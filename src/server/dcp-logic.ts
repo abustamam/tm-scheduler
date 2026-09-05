@@ -4,11 +4,18 @@
 // db-touching export in the server-fn module would drag `pg` → `Buffer` into the
 // browser. All the tier/base/catalog math is the pure, client-safe `#/lib/dcp`.
 //
-// Goals are President-entered. Two assists SUGGEST values without writing on
+// Goals are President-entered. THREE assists SUGGEST values without writing on
 // their own: g7/g8 pre-filled at start from `members.joinedAt` in the
-// program-year window, and g1–g6 live-derived from this club's dated Pathways
-// completions (#245 / ADR-0022) and only stored when explicitly applied. The
-// recognition tier + membership base are DERIVED at read time, never stored.
+// program-year window, g1–g6 live-derived from this club's dated Pathways
+// completions (#245 / ADR-0022), and g9 live-derived from its Club Officer
+// Training records (#531). The last two are stored only when explicitly
+// applied. The recognition tier + membership base are DERIVED at read time,
+// never stored.
+//
+// That count read "Two assists" until #531, and keeping it accurate matters:
+// this is the paragraph a future author reads to learn the house style, and
+// ADR-0019's position is that TI — not GavelUp — is the system of record for
+// every one of these goals, so no derivation may write on its own.
 import { and, asc, count, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
@@ -29,6 +36,8 @@ import {
 	programYearWindow,
 	splitNewMembers,
 } from "#/lib/dcp";
+import { TRAINING_GOAL_KEY } from "#/lib/officer-training";
+import { deriveTrainingSuggestion } from "./officer-training-logic";
 
 export interface DcpScoreboardView {
 	programYear: number;
@@ -54,6 +63,25 @@ export interface DcpScoreboardView {
 	 * suggestions or fall back to pure manual entry.
 	 */
 	pathwaysSynced: boolean;
+	/**
+	 * Live Club Officer Training SUGGESTION for the composite goal 9 (#531).
+	 * Always computed, never stored — `progress.g9` stays the only thing that
+	 * scores, so this counts toward nothing until the President applies it.
+	 */
+	derivedTraining: {
+		/** What an apply would write: 0 or 1. */
+		suggestion: number;
+		/** Distinct PEOPLE trained, [period 1, period 2]. */
+		trainedByPeriod: number[];
+		/**
+		 * Whether ANY training is recorded for the year. A bare `suggestion: 0` is
+		 * ambiguous — "recorded and genuinely short" vs "never recorded anything" —
+		 * and applying the second would clear a President's hand-entered Met. The UI
+		 * only offers the apply when this is true, exactly as `pathwaysSynced` gates
+		 * the education assist.
+		 */
+		hasRecords: boolean;
+	};
 	summary: DcpSummary;
 }
 
@@ -211,12 +239,14 @@ export async function getScoreboard(
 		newMemberCount,
 		derivedEducation,
 		pathwaysSynced,
+		derivedTraining,
 	] = await Promise.all([
 		findScoreboard(clubId, programYear),
 		countActiveMembers(clubId),
 		countNewMembers(clubId, programYear),
 		deriveEducationGoals(clubId, programYear),
 		hasPathwaysCompletions(clubId),
+		deriveTrainingSuggestion(clubId, programYear),
 	]);
 
 	const progress: Record<string, number> = {};
@@ -244,6 +274,7 @@ export async function getScoreboard(
 		progress,
 		derivedEducation,
 		pathwaysSynced,
+		derivedTraining,
 		// Scores from STORED progress only — derived suggestions never count.
 		summary: computeDcpSummary({ progress, currentActive, baseMemberCount }),
 	};
@@ -402,6 +433,64 @@ export async function applyEducationSuggestions(
 			set: { achieved: sql`excluded.achieved`, updatedBy, updatedAt },
 		});
 
+	return getScoreboard({ clubId, programYear });
+}
+
+export const applyTrainingSchema = z.object({
+	clubId: z.string().uuid(),
+	programYear: z.number().int().min(2000).max(2100),
+});
+export type ApplyTrainingInput = z.infer<typeof applyTrainingSchema>;
+
+/**
+ * Write the live Club Officer Training suggestion into stored goal 9 (#531) —
+ * the President reviewing and accepting the derivation. The third assist,
+ * mirroring {@link applyEducationSuggestions}.
+ *
+ * Scoped to `g9` alone: nothing else on the scoreboard is touched. It goes
+ * through `updateGoal` rather than writing `dcp_goal_progress` directly so the
+ * composite 0/1 clamp and the `updatedBy` audit stamp are applied by the one
+ * function that owns them — a second upsert here would be a second place the
+ * clamp could be forgotten.
+ *
+ * It CAN write a 0, which clears a hand-entered Met, and that is deliberate: the
+ * President is accepting what the records say, and the alternative (an apply that
+ * silently refuses to lower a value) would leave the scoreboard disagreeing with
+ * the panel beside it.
+ *
+ * What it must NOT do is write a 0 on no evidence. `hasRecords` is asserted HERE
+ * and not only in the UI: the button is hidden without records, but a stale tab,
+ * a replayed POST or any direct call would otherwise clear a President's manual
+ * Met for a club that has recorded nothing. That is the #573 shape CLAUDE.md
+ * records — a one-tap action wired to a write whose floor was optional — except
+ * that here the floor was absent server-side entirely while
+ * `deriveTrainingSuggestion` already returned the fact and this function
+ * destructured it away.
+ */
+export async function applyTrainingSuggestion(
+	input: ApplyTrainingInput,
+	updatedBy: string | null,
+): Promise<DcpScoreboardView> {
+	const { clubId, programYear } = input;
+	await requireScoreboard(clubId, programYear);
+	const { suggestion, hasRecords } = await deriveTrainingSuggestion(
+		clubId,
+		programYear,
+	);
+	if (!hasRecords) {
+		throw new Error(
+			"Record officer training first — there is nothing to apply to goal 9 yet.",
+		);
+	}
+	await updateGoal(
+		{
+			clubId,
+			programYear,
+			goalKey: TRAINING_GOAL_KEY,
+			achieved: suggestion,
+		},
+		updatedBy,
+	);
 	return getScoreboard({ clubId, programYear });
 }
 

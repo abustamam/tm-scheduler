@@ -27,6 +27,15 @@
   --warning: #d99a2e;
   --warning-foreground: #8f640c;
   --warning-strong: #c2851a;
+  /* Ink for text sitting ON a --warning-strong or --lagoon-deep FILL (#531).
+     Unlike --success-foreground it does NOT flip, because both fills are light
+     in BOTH themes, so dark ink is the readable choice throughout:
+       #0a1418 on --warning-strong  5.5:1 light  ·  9.6:1 dark
+       #0a1418 on --lagoon-deep     4.6:1 light  ·  12.8:1 dark
+     `text-white` on those same fills measures 3.2 / 2.0 and 3.8 / 1.5 — all four
+     under AA at the 12px a Badge renders, and the two dark values are the
+     label-on-fill class recorded at #645. Never put white on either fill. */
+  --on-accent-fill: #0a1418;
   /* Soft warning surface (row highlights); was referenced but never defined,
      so usages silently fell back to a hardcoded hex. */
   --warning-soft: #fdf3e7;
@@ -104,6 +113,9 @@
   --warning-foreground: #e6c98a;
   --warning-strong: #e0b357;
   --warning-soft: rgba(224, 179, 87, 0.14);
+  /* Same ink as light mode, deliberately — see the light block. Both accent
+     fills are LIGHTER here (#e0b357, #8de5db), so dark ink is even safer. */
+  --on-accent-fill: #0a1418;
   --kicker: #b8efe5;
   --bg-base: #0a1418;
   --header-bg: rgba(10, 20, 24, 0.8);
@@ -176,6 +188,7 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-warning-strong: var(--warning-strong);
   --color-warning-soft: var(--warning-soft);
+  --color-on-accent-fill: var(--on-accent-fill);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-success-strong: var(--success-strong);

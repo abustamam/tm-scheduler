@@ -810,6 +810,145 @@ export const dcpGoalProgress = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Club Officer Training (COT) — the record behind DCP goal 9 (#531).
+//
+// ADR-0019 §3 stores goal 9 as a composite 0/1 in `dcp_goal_progress` with
+// nothing behind it, which is why the scoreboard could never warn a club that a
+// training window was about to shut: the toggle holds no information until
+// someone already knows the answer. These two tables are that information. They
+// do NOT change how goal 9 is stored or scored — they feed an editable
+// SUGGESTION the President applies, the third assist beside the roster assist
+// (goals 7/8) and the Pathways assist (goals 1–6, #245). Nothing here writes
+// `dcp_goal_progress`; TI, not GavelUp, is the system of record for who was
+// trained.
+//
+// `officer_training_periods` is the SPARSE window override. TI's own dates
+// (Jun 1 – Aug 31, and Nov 1 – Feb 28/29) are the defaults and live in code
+// (`src/lib/officer-training.ts`), so **row absent = TI's window** and a club
+// gets a correct countdown with zero configuration. A row exists only where an
+// admin edited the dates because their district deviated. Scoped to
+// (club, program_year) rather than to `dcp_scoreboards.id` deliberately: the
+// windows must be readable before a club has started a scoreboard, which is
+// exactly when the "you have two of four and three weeks left" reading is worth
+// having.
+//
+// `officer_training_records` is one row per (membership, office, program_year,
+// period) — the club's claim that this person was trained for this office in
+// this window. Keyed on the MEMBERSHIP and the office rather than on an
+// `officer_terms.id`, because a term row closes and reopens on re-election while
+// the training credit does not: a record must survive its officer's term ending
+// mid-window (the club was credited; the person left the office afterward).
+//
+// Two constraints from TI's manual that are deliberately NOT modelled, recorded
+// here so a future change does not have to rediscover them. (1) Credit requires
+// a LIVE session with an authorized District representative — "club officers who
+// only view a video that describes their responsibilities are not considered
+// trained" — so if a `how` column is ever added, video-only is not a valid
+// value. (2) Newly chartered clubs have a different requirements table keyed on
+// charter date; out of scope for v1, and nothing above forecloses it.
+// ---------------------------------------------------------------------------
+
+export const officerTrainingPeriods = pgTable(
+	"officer_training_periods",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// Program year identified by its STARTING calendar year, matching
+		// `dcp_scoreboards.program_year`. See src/lib/dcp.ts.
+		programYear: integer("program_year").notNull(),
+		// 1 or 2 — TI runs exactly two periods per program year. A plain integer,
+		// not an enum, so the natural ordering IS the chronological one. The CHECK
+		// is the only thing that can stop a third period being written by a raw
+		// `sql` template, which typecheck cannot see.
+		period: integer("period").notNull(),
+		// Inclusive calendar bounds. `mode: "string"` (`YYYY-MM-DD`) rather than a
+		// Date: a window bound is a calendar day with no instant attached, and a
+		// Date at local midnight becomes a UTC instant that shifts the day for half
+		// the world on the way to the client.
+		startsOn: date("starts_on", { mode: "string" }).notNull(),
+		endsOn: date("ends_on", { mode: "string" }).notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("officer_training_periods_club_year_period_unique").on(
+			t.clubId,
+			t.programYear,
+			t.period,
+		),
+		check("officer_training_periods_period_check", sql`${t.period} in (1, 2)`),
+		// A window that ends before it starts would make every countdown negative
+		// and `windowPhase` report "closed" forever. The seam validates it too; this
+		// is the copy a raw SQL write cannot bypass.
+		check(
+			"officer_training_periods_order_check",
+			sql`${t.endsOn} >= ${t.startsOn}`,
+		),
+	],
+);
+
+export const officerTrainingRecords = pgTable(
+	"officer_training_records",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		// The club is reached through `members.club_id` (as `officer_terms` does),
+		// not duplicated here — a second copy is a second thing that can disagree.
+		// The cascade from `clubs` → `members` → here is what makes a takedown and
+		// the test cleanup reach these rows.
+		membershipId: uuid("membership_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		// The office the club claims this person was trained FOR. TI: "Officers
+		// must be trained for the position to which they were elected."
+		// `immediate_past_president` is storable but counts for nothing — it is not
+		// one of TI's seven (see TRAINABLE_OFFICER_POSITIONS); the seam rejects it
+		// on the way in.
+		position: officerPositionEnum("position").notNull(),
+		programYear: integer("program_year").notNull(),
+		period: integer("period").notNull(),
+		// The day they were trained, when the club knows it. NULLABLE on purpose:
+		// a club frequently knows an officer attended without knowing the date, and
+		// a NOT NULL column here would need a sentinel — which is the shape that
+		// silently defeated an is-it-filled predicate on `speeches.title`. The
+		// score never reads this column; the view compares it against the period's
+		// window and flags a mismatch (`isOutsideWindow`) rather than voiding the
+		// claim.
+		trainedOn: date("trained_on", { mode: "string" }),
+		// Audit: who recorded it. Nullable — an import or a later backfill has no
+		// editor. Mirrors `dcp_goal_progress.updated_by`.
+		recordedBy: text("recorded_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// One claim per person, office, year and period — a double-entry must not
+		// be able to inflate the count. (It could not inflate the DISTINCT-PEOPLE
+		// count anyway, which is the point: the constraint is here so the RECORD
+		// list the club reads has no duplicate rows either.)
+		uniqueIndex("officer_training_records_unique").on(
+			t.membershipId,
+			t.position,
+			t.programYear,
+			t.period,
+		),
+		// NO separate (membership_id, program_year) index. The unique index above
+		// already leads on `membership_id`, which is how both readers reach these
+		// rows (a nested loop from `members` on `club_id`), and Postgres applies
+		// `program_year` as a non-contiguous qual on the SAME index — verified by
+		// EXPLAIN with the extra index dropped inside a transaction: identical
+		// plan, identical two-column `Index Cond`, cost 8.17 vs 8.19. A membership
+		// holds at most 7 offices x 2 periods = 14 rows per year, so there is no
+		// cardinality at which the two diverge, and the second index would cost a
+		// write on every upsert to filter a 14-row scan.
+		check("officer_training_records_period_check", sql`${t.period} in (1, 2)`),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Guests — club-scoped visitors who can be assigned to a role slot (#151) and
 // tracked through the VP-Membership pipeline (#208, ADR-0018).
 //
@@ -2044,6 +2183,26 @@ export const officerTermsRelations = relations(officerTerms, ({ one }) => ({
 		references: [members.id],
 	}),
 }));
+
+export const officerTrainingPeriodsRelations = relations(
+	officerTrainingPeriods,
+	({ one }) => ({
+		club: one(clubs, {
+			fields: [officerTrainingPeriods.clubId],
+			references: [clubs.id],
+		}),
+	}),
+);
+
+export const officerTrainingRecordsRelations = relations(
+	officerTrainingRecords,
+	({ one }) => ({
+		membership: one(members, {
+			fields: [officerTrainingRecords.membershipId],
+			references: [members.id],
+		}),
+	}),
+);
 
 export const duesPeriodsRelations = relations(duesPeriods, ({ one, many }) => ({
 	club: one(clubs, {
