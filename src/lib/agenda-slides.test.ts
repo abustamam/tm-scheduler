@@ -1469,7 +1469,7 @@ describe("buildSlideDeck awards + reminders", () => {
 			(s) => s.kind === "awards",
 		);
 		expect(slide).toMatchObject({
-			categories: ["Best Table Topic", "Best Evaluator", "Best Speaker"],
+			categories: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
 		});
 
 		const speakerOnly = build({ slots: [speaker] }).find(

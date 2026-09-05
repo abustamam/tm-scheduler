@@ -530,7 +530,7 @@ export const ROLES_TOKEN = "{roles}";
  *  categories the club actually scores (#372) — the same list, in the same
  *  order, that the deck's `awards` slide builds. Unlike `ROLES_TOKEN` these are
  *  FIXED labels, not the club's role names: a club that renames "Table Topics
- *  Master" still hands out Best Table Topic. */
+ *  Master" still hands out Best Table Topics. */
 export const AWARDS_TOKEN = "{awards}";
 
 /**
@@ -881,7 +881,7 @@ const NAMES_ROLES: BeatRole[] = Object.values(HANDOFF_ROLES);
  *  the beat's `requiresAnyOf` gate drops it, exactly as the deck omits the
  *  slide. */
 const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
-	{ role: TABLE_TOPICS_ROLE, label: "Best Table Topic" },
+	{ role: TABLE_TOPICS_ROLE, label: "Best Table Topics" },
 	{ role: EVALUATOR_ROLE, label: "Best Evaluator" },
 	{ role: SPEAKER_ROLE, label: "Best Speaker" },
 ];

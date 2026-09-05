@@ -191,12 +191,12 @@ describe("slideLayout bodies", () => {
 		};
 		expect(lines(true)).toEqual([
 			{ role: "head", text: "Ask for Table Topics times." },
-			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+			{ role: "head", text: "Please Vote for Best Table Topics Speaker:" },
 		]);
 		// The Best-Table-Topics vote beat's fallback drops the same clause when
 		// there is no Timer.
 		expect(lines(false)).toEqual([
-			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+			{ role: "head", text: "Please Vote for Best Table Topics Speaker:" },
 		]);
 	});
 
@@ -257,7 +257,7 @@ describe("slideLayout bodies", () => {
 			];
 			expect(headers).toEqual([
 				"Vote for Best Speaker",
-				"Vote for Best Table Topic",
+				"Vote for Best Table Topics Speaker",
 				"Vote for Best Evaluator",
 			]);
 			expect(new Set(headers).size).toBe(3);
@@ -685,7 +685,7 @@ describe("slideLayout bodies", () => {
 			).toMatchObject({
 				lines: [
 					{ role: "strong", text: "Table Topics Master · Rasheed" },
-					{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+					{ role: "head", text: "Please Vote for Best Table Topics Speaker:" },
 				],
 			});
 			expect(
@@ -1031,11 +1031,11 @@ describe("slideLayout bodies", () => {
 	it("awards is a numbered list of the categories", () => {
 		const l = slideLayout({
 			kind: "awards",
-			categories: ["Best Table Topic", "Best Evaluator", "Best Speaker"],
+			categories: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
 		});
 		expect(l.chrome === "content" && l.body).toMatchObject({
 			form: "numbered",
-			items: ["Best Table Topic", "Best Evaluator", "Best Speaker"],
+			items: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
 		});
 	});
 

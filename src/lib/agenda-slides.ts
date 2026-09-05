@@ -815,7 +815,7 @@ export function buildSlideDeck({
 	}
 
 	const awardCategories: string[] = [];
-	if (ttOwner) awardCategories.push("Best Table Topic");
+	if (ttOwner) awardCategories.push("Best Table Topics");
 	if (evaluators.length > 0) awardCategories.push("Best Evaluator");
 	if (speakers.length > 0) awardCategories.push("Best Speaker");
 	if (awardCategories.length > 0) {

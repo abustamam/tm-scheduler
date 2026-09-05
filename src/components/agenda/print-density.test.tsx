@@ -285,7 +285,7 @@ const mcfRows: TimelineRow[] = [
 		who: TM,
 		roleKey: "toastmaster_of_the_day",
 		detail:
-			"Awards · Best Table Topic, Best Evaluator & Best Speaker · hands " +
+			"Awards · Best Table Topics, Best Evaluator & Best Speaker · hands " +
 			"over to the President",
 		minutes: 2,
 		marks: null,
