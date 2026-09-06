@@ -65,13 +65,22 @@ export function ResourceCatalog({
 		<>
 			{showFilter ? (
 				// A group of toggles, not a tablist: there are no panels to switch
-				// between, only one list that shrinks. <fieldset> rather than a div
-				// with role="group" because biome's useSemanticElements fails the
-				// latter; `min-w-0` undoes the element's `min-inline-size: min-content`,
-				// which would otherwise stop the row wrapping.
+				// between, only one list that shrinks.
+				//
+				// <fieldset> rather than <div role="group"> because biome 2.4.5's
+				// `a11y/useSemanticElements` fails the div as an ERROR, naming
+				// <fieldset> as the replacement — it covers `group`, and the diagnostic
+				// does not depend on having an aria-label. That is a claim about one
+				// pinned linter version, so re-probe rather than inherit it:
+				// `printf 'export const P = () => <div role="group" />;' > src/p.tsx &&
+				// bunx biome lint src/p.tsx`. If a later biome drops `group` from the
+				// mapping, a plain div is the better element here — this is a row of
+				// toggle buttons, not form fields, and it carries no <legend>.
+				// The accessible name comes from aria-label either way, which is what
+				// getByRole("group", { name }) resolves in the test beside this.
 				<fieldset
 					aria-label="Filter resources by category"
-					className="mb-5 flex min-w-0 flex-wrap gap-2"
+					className="mb-5 flex flex-wrap gap-2"
 				>
 					<CategoryChip
 						label="All"
