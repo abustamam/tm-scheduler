@@ -1,20 +1,6 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import {
-	BookOpen,
-	Clock,
-	FileText,
-	ListChecks,
-	Star,
-	Users,
-} from "lucide-react";
-import type { ComponentType } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import { ResourceCatalog } from "#/components/resources/resource-catalog";
 import { ResourcesShell } from "#/components/resources/resources-shell";
-import {
-	type Resource,
-	type ResourceIcon,
-	resources,
-	resourceToneGradient,
-} from "#/data/resources";
 import { getAuthContext } from "#/server/auth-context";
 
 const TITLE = "Toastmasters resources — GavelUp";
@@ -42,15 +28,6 @@ export const Route = createFileRoute("/resources/")({
 	component: ResourcesIndex,
 });
 
-const ICONS: Record<ResourceIcon, ComponentType<{ className?: string }>> = {
-	book: BookOpen,
-	clock: Clock,
-	list: ListChecks,
-	users: Users,
-	doc: FileText,
-	star: Star,
-};
-
 function ResourcesIndex() {
 	const { shell, authCtx } = Route.useRouteContext();
 	return (
@@ -64,35 +41,12 @@ function ResourcesIndex() {
 					you can bring along.
 				</p>
 			</div>
-			<div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3.5">
-				{resources.map((r) => (
-					<ResourceCard key={r.slug} resource={r} />
-				))}
-			</div>
+			{/* Cards + the category filter (#313). Rendered as <ResourcesShell>'s
+			    CHILD, which is what makes the filter reach both shell branches: the
+			    shell picks the app sidebar or the light header around exactly this
+			    subtree. Keeping it a child rather than duplicating it per branch is
+			    pinned by resources-index-catalog.guard.test.ts. */}
+			<ResourceCatalog />
 		</ResourcesShell>
-	);
-}
-
-function ResourceCard({ resource }: { resource: Resource }) {
-	const Icon = ICONS[resource.icon];
-	return (
-		<Link
-			to="/resources/$slug"
-			params={{ slug: resource.slug }}
-			className="group flex flex-col gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 text-[var(--sea-ink)] no-underline shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-all hover:-translate-y-0.5 hover:border-[var(--lagoon-deep)]"
-		>
-			<span
-				className="flex size-10 items-center justify-center rounded-lg text-white"
-				style={{ background: resourceToneGradient(resource.tone) }}
-			>
-				<Icon className="size-5" />
-			</span>
-			<div>
-				<div className="text-sm leading-tight font-bold">{resource.title}</div>
-				<p className="mt-1 text-xs leading-snug text-[var(--sea-ink-soft)]">
-					{resource.desc}
-				</p>
-			</div>
-		</Link>
 	);
 }
