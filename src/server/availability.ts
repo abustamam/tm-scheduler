@@ -6,10 +6,18 @@
 // availability toggle (`season-grid.tsx:176,203`) — PR 2 only repoints the
 // MEETING PAGE (the officer panel and the personal strip) onto
 // `setPlannedAttendance` / `clearPlannedAttendance` directly; it never touches
-// the grid, so these two are not retiring. `markUnavailableReleasing` is NOT in
-// that set either: it also releases every role the member holds (#204), which
-// the new write surface does not do, so it outlives the other two until
-// something folds slot release into the ladder.
+// the grid, so these two are not retiring.
+//
+// `markUnavailableReleasing` is NOT in that set either, and the reason CHANGED
+// with #663. It used to be "the new write surface does not release roles"; it
+// now does — `setPlannedAttendance`'s `not_coming` folds slot release into the
+// ladder through `attendance-decline-logic.ts`. What is left is a difference of
+// ARM, not of effect: this endpoint releases on all three arms of D6 (it is the
+// season grid's act-on-behalf-of path, and the personal meeting page's
+// single-subject "Can't make it"), while the rail's ladder withholds the
+// release from the honour-system TMOD claim, because there it is one forged
+// request per member away from emptying a meeting's whole programme. Folding
+// the two together would have to pick one of those, so they stay separate.
 //
 // All three are PUBLIC and session-less. The two `setAvailability` /
 // `clearAvailability` delegates therefore name the rungs they may touch

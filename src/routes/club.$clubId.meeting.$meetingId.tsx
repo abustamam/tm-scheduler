@@ -23,6 +23,10 @@ import {
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
+import {
+	DeclineReleaseDialog,
+	type PendingDecline,
+} from "#/components/club/decline-release-dialog";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
@@ -56,6 +60,7 @@ import {
 	formatMeetingTime,
 	formatMeetingTimeRange,
 } from "#/lib/format";
+import { buildHeldRoleLabels } from "#/lib/held-role-labels";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
@@ -371,6 +376,15 @@ function MeetingView() {
 	// ordering guarantee, and an out-of-order resolution leaves the persisted
 	// rung disagreeing with the member's last tap.
 	const [myStatusBusy, setMyStatusBusy] = useState(false);
+	// The decline the officer (or the member) has picked but not yet confirmed
+	// (#663). Null while nothing is pending. Held HERE rather than in the panel
+	// because BOTH surfaces that write a rung on this page go through
+	// `writeRung` — the rail's chips and the personal strip's "Can't make it" —
+	// and a confirm wired to only one of them would leave the other releasing
+	// roles silently.
+	const [pendingDecline, setPendingDecline] = useState<PendingDecline | null>(
+		null,
+	);
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
@@ -731,6 +745,11 @@ function MeetingView() {
 	// never `buildPanelRoleMap(slots.filter(...))`. See `attendance-panel.test.ts`'s
 	// "numbers a role off every slot it HAS" for what the filtered call produces.
 	const panelRoleByMemberId = buildPanelRoleMap(slots);
+	// EVERY role a member holds, numbered, for the decline confirm (#663) — the
+	// rail's badge map above is one role per member by design, and the officer
+	// has to be told about all of them before all of them are freed. Also
+	// unfiltered, for the numbering reason `buildPanelRoleMap` gives.
+	const heldRolesByMember = buildHeldRoleLabels(slots);
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.
 	// `unavailableMembers` (public) already names who is `not_coming`;
@@ -756,7 +775,53 @@ function MeetingView() {
 	// who is not the TMOD.
 	const actorClaim = !effectiveCanManage && myId ? { actorMemberId: myId } : {};
 
+	/**
+	 * The roles this member would LOSE by being marked `not_coming` right now —
+	 * empty when nothing would be freed, which is the "write straight through"
+	 * case.
+	 *
+	 * It PREDICTS the server's arm rather than guessing generously, because the
+	 * dialog names roles and a dialog that promises a release which does not
+	 * happen is worse than no dialog. `attendance-decline-logic.ts` releases on
+	 * the officer and self arms only; `resolveActor` orders the arms officer →
+	 * TMOD → self, so a self-asserted Toastmaster resolves to `tmod` even when
+	 * writing their OWN row and nothing is freed.
+	 *
+	 * `canManage`, NOT `effectiveCanManage`: the server keys off the SESSION, and
+	 * an admin previewing-as-member (#320) still carries one, so the preview flag
+	 * would make this under-predict on the one path where the release still lands.
+	 */
+	function rolesFreedByDecline(memberId: string): string[] {
+		const held = heldRolesByMember[memberId];
+		if (!held || held.labels.length === 0) return [];
+		const releases = canManage || (memberId === myId && !isTmod);
+		return releases ? held.labels : [];
+	}
+
 	async function writeRung(
+		memberId: string,
+		next: PlanStatus | null,
+		via: "nudge" | "manual" = "manual",
+	) {
+		// #663: a decline that frees roles asks first. Returns WITHOUT writing and
+		// without touching `rungOverride`, so cancelling leaves no optimistic chip
+		// to roll back; the dialog's confirm calls `commitRung` directly.
+		if (next === "not_coming") {
+			const roleLabels = rolesFreedByDecline(memberId);
+			if (roleLabels.length > 0) {
+				setPendingDecline({
+					memberId,
+					name: heldRolesByMember[memberId]?.name ?? "this member",
+					roleLabels,
+					self: memberId === myId,
+				});
+				return;
+			}
+		}
+		return commitRung(memberId, next, via);
+	}
+
+	async function commitRung(
 		memberId: string,
 		next: PlanStatus | null,
 		via: "nudge" | "manual" = "manual",
@@ -778,7 +843,7 @@ function MeetingView() {
 		setRungOverride((o) => ({ ...o, [memberId]: next }));
 		retainPending(memberId);
 		try {
-			await (next === null
+			const written = await (next === null
 				? clearPlannedAttendance({
 						data: { memberId, meetingId: meeting.id, ...actorClaim },
 					})
@@ -791,6 +856,17 @@ function MeetingView() {
 							...actorClaim,
 						},
 					}));
+			// #663: say what actually happened. The confirm named the roles BEFORE
+			// the write; this is the receipt, and it reads the SERVER's count rather
+			// than the labels the dialog showed — the arm gate lives server-side, so
+			// the client's prediction is the thing that could be wrong.
+			if ("released" in written && written.released > 0) {
+				toast.success(
+					written.released === 1
+						? "Not coming — role freed."
+						: "Not coming — roles freed.",
+				);
+			}
 			// Fire-and-forget, NOT awaited: the override already holds the value
 			// this write just committed, so nothing on screen is waiting on this
 			// resolving. But SOME invalidate has to fire, or `contactedMemberIds` /
@@ -1718,6 +1794,22 @@ function MeetingView() {
 					</aside>
 				) : null}
 			</div>
+			{/* #663. Outside the two columns because it is portalled anyway, and
+			    because it serves BOTH of them — the rail's chips and the personal
+			    strip both reach it through `writeRung`. Confirming calls
+			    `commitRung`, the same write every other rung takes, so the
+			    optimistic override, the rollback and the invalidate are unchanged. */}
+			<DeclineReleaseDialog
+				pending={pendingDecline}
+				onCancel={() => setPendingDecline(null)}
+				onConfirm={(p) => {
+					// Closed FIRST, then written: the write is optimistic (the override
+					// moves the chip immediately) so holding the dialog up for a round
+					// trip would only delay the feedback it already gave.
+					setPendingDecline(null);
+					void commitRung(p.memberId, "not_coming");
+				}}
+			/>
 		</div>
 	);
 }

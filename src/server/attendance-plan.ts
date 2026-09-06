@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { attendancePlanStatusEnum, meetings } from "#/db/schema";
 import { resolveActor } from "./attendance-actor-logic";
+import { declinePlannedAttendance } from "./attendance-decline-logic";
 import {
 	CLEARABLE_ASK,
 	clearPlanStatus,
@@ -60,7 +61,11 @@ const planSchema = z.object({
 	via: z.enum(["nudge", "manual"]).default("manual"),
 });
 
-/** Set a member's planned attendance for a meeting. */
+/** Set a member's planned attendance for a meeting.
+ *
+ *  `not_coming` is not just a rung: it also frees every role the member holds in
+ *  this meeting, on the arms `attendance-decline-logic.ts` allows (#663). The
+ *  return carries `released` so the caller can say what was freed. */
 export const setPlannedAttendance = createServerFn({ method: "POST" })
 	.validator((i: unknown) => planSchema.parse(i))
 	.handler(async ({ data }) => {
@@ -70,6 +75,30 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
+		// A DECLINE is not just a rung (#663). A member cannot both hold a role and
+		// be absent, so `not_coming` also frees every slot they hold in this
+		// meeting — one transaction, the same `releaseSlotsAndMarkUnavailable` the
+		// season grid has used since #204, rather than the bare `setPlanStatus`
+		// below that left the agenda listing a Toastmaster whose own row read "Not
+		// coming".
+		//
+		// Returns BEFORE the ladder below so the actor is resolved once on this
+		// path: the seam runs the SAME `resolveActor`, and it has to, because it
+		// takes the raw claim (a pre-resolved actor id would satisfy the subject
+		// check by construction — #675). Which arms may release is that seam's
+		// decision and is executed in `attendance-decline.integration.test.ts`; the
+		// ladder resumed below still guards every other rung.
+		if (data.status === "not_coming") {
+			return declinePlannedAttendance(db, {
+				memberId: data.memberId,
+				meetingId: data.meetingId,
+				clubId: meeting.clubId,
+				// The RAW claim, deliberately not defaulted to the subject — see the
+				// seam's own note, and `availability.ts`'s.
+				claimedActorMemberId: data.actorMemberId,
+				via: data.via,
+			});
+		}
 		const { actorMemberId, viaManager, via } = await resolveActor({
 			clubId: meeting.clubId,
 			meetingId: data.meetingId,
@@ -85,7 +114,11 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		if (!viaManager && data.status === "reached_out") {
 			throw new Error(OFFICER_ONLY_REACHED_OUT_MESSAGE);
 		}
-		return setPlanStatus(db, {
+		// ONE return shape across both branches (#663). `released` is always
+		// present and 0 here, rather than absent, so a caller reading it does not
+		// have to narrow a union to find out whether anything was freed — the
+		// route's decline toast is the reader.
+		const written = await setPlanStatus(db, {
 			memberId: data.memberId,
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
@@ -125,6 +158,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 					? ["reached_out"]
 					: undefined,
 		});
+		return { ...written, released: 0 };
 	});
 
 /** Clear a member's planned attendance back to "no answer" (row absent). */

@@ -202,14 +202,20 @@ function AttendanceRow({
 	// you already put on the programme wastes the ask. Uses the BASE role name,
 	// never the numbered code: "you're our Speaker 1" reads as a mail merge.
 	//
-	// Branches on the ANSWER as well as the slot. A member who declined still
-	// HOLDS their slot until someone reassigns it, so keying on `m.role` alone
-	// drafted "just confirming you're our Toastmaster" to someone whose own row
-	// reads "Not coming" — the panel showing the officer a decline and then
-	// handing them a message asserting acceptance. The attendance draft is a
-	// re-ask rather than a false claim, which is the best the existing modes
-	// offer; the message that case really wants ("can you hand the role off?")
-	// is a new mode and a separate change.
+	// Branches on the ANSWER as well as the slot, and still has to: keying on
+	// `m.role` alone drafted "just confirming you're our Toastmaster" to someone
+	// whose own row reads "Not coming" — the panel showing the officer a decline
+	// and then handing them a message asserting acceptance.
+	//
+	// #663 shrank the case rather than removing it. A decline written from this
+	// rail now FREES the roles the member held, so "declined but still holding a
+	// slot" is no longer the normal outcome of the control right beside this
+	// draft. It remains reachable three ways: a self-asserted Toastmaster's
+	// decline, which records the rung and deliberately releases nothing; a row
+	// written before #663; and the season grid's own `setAvailability`, which
+	// writes the rung without releasing. So the branch stays, and so does the
+	// re-ask copy — it is the honest draft for a member who is down as absent and
+	// still on the programme.
 	const nudgeMode =
 		m.role && m.status !== "not_coming"
 			? { mode: "confirm" as const, roleName: m.role.roleName }
