@@ -8,7 +8,7 @@ import {
 } from "#/lib/attendance-lapse";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { formatShortDate } from "#/lib/format";
+import { formatMeetingDate, formatShortDate } from "#/lib/format";
 import { formatTenure } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import {
@@ -202,10 +202,13 @@ function MemberIdentity({
 	memberId,
 	name,
 	joinedAt,
+	upcomingRoleAt,
 }: {
 	memberId: string;
 	name: string;
 	joinedAt: Date | string | null;
+	/** #543 — omitted by callers that have no upcoming-claim data (LapseRow). */
+	upcomingRoleAt?: Date | string;
 }) {
 	return (
 		<div className="flex min-w-0 items-center gap-3">
@@ -215,11 +218,70 @@ function MemberIdentity({
 				size={38}
 			/>
 			<div className="min-w-0 leading-[1.25]">
-				<div className="truncate text-sm font-bold">{name}</div>
+				<div className="flex min-w-0 items-center gap-2">
+					<span className="truncate text-sm font-bold">{name}</span>
+					{/* The pill is `sm`-and-up ONLY — see BookedMarker's note. */}
+					{upcomingRoleAt ? <BookedPill at={upcomingRoleAt} /> : null}
+				</div>
 				<div className="text-xs text-[var(--sea-ink-soft)]">
 					{joinedAt ? formatTenure(joinedAt) : "Tenure unknown"}
 				</div>
+				{upcomingRoleAt ? <BookedLine at={upcomingRoleAt} /> : null}
 			</div>
+		</div>
+	);
+}
+
+/**
+ * The upcoming-claim marker (#543). Both lists it sits in rank members by PAST
+ * participation, so without it Monday's Toastmaster reads "Never held a role"
+ * on the officer's own dashboard while the club's sign-up sheet has her name on
+ * it. It does not change the rank or the overdue count — it says "already
+ * booked, no outreach needed today" beside a number that is still honest about
+ * history.
+ *
+ * **"Booked", not "Up next".** This renders in the SPEAKER QUEUE as well as the
+ * overdue list, and the claim behind it is for a role of ANY kind — which is
+ * what the overdue list wants, since overdue means no claimed role at all. In a
+ * list whose subtitle says "ranked by how long since they last held a speaker
+ * role", "Up next" beside a member booked as Timer reads as "speaking Monday":
+ * the VPE skips her and she goes another cycle without speaking. That is #543's
+ * own contradiction pointing the other way. Role-neutral copy is true on both
+ * surfaces; narrowing the marker to speaker roles was the alternative and
+ * throws away the engagement signal the overdue list is asking for.
+ * `reporting.integration.test.ts` pins the any-role half and the component
+ * suite pins the wording, so neither can be changed alone.
+ *
+ * **Two forms, because below `sm` there is no room for a pill.** At 375px the
+ * page's `px-4`, the row's `px-5`, the 112px wait column and the gaps leave the
+ * identity text block ~85px, against ~146px for the pill. A
+ * `whitespace-nowrap shrink-0` pill there takes that width from the `truncate`
+ * NAME — collapsing it to an ellipsis, defeating the wait column's whole reason
+ * for narrowing below `sm` — and is then clipped by `Section`'s
+ * `overflow-hidden` anyway. So below `sm` the marker becomes a plain line under
+ * the tenure that is allowed to WRAP, and drops the weekday. The weekday is not
+ * the problem by itself: "Booked · Aug 10" is still ~109px as a pill, so
+ * shortening the label alone does not rescue it, and hiding the marker outright
+ * would drop the fix for a VPE doing outreach from a phone. jsdom has no layout
+ * and can see none of this, which is why the component suite pins the two class
+ * strings instead.
+ */
+function BookedPill({ at }: { at: Date | string }) {
+	return (
+		// Teal (the token the member dashboard's "Signed up" pill uses) rather
+		// than the amber the wait column carries: these two mean opposite things
+		// and must not look alike.
+		<span className="hidden shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-[var(--lagoon-deep)] sm:inline-block">
+			Booked · {formatMeetingDate(at)}
+		</span>
+	);
+}
+
+/** The below-`sm` form of {@link BookedPill} — wrapping text, no weekday. */
+function BookedLine({ at }: { at: Date | string }) {
+	return (
+		<div className="text-xs font-bold text-[var(--lagoon-deep)] sm:hidden">
+			Booked {formatShortDate(at)}
 		</div>
 	);
 }
@@ -246,6 +308,7 @@ function OverdueRow({ member }: { member: OverdueMemberRow }) {
 				memberId={member.memberId}
 				name={member.name}
 				joinedAt={member.joinedAt}
+				upcomingRoleAt={member.upcomingRoleAt}
 			/>
 			<div className="text-sm">
 				<span className="font-bold text-[var(--warning-strong)]">{wait}</span>
@@ -319,6 +382,7 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 				memberId={row.memberId}
 				name={row.name}
 				joinedAt={row.joinedAt}
+				upcomingRoleAt={row.upcomingRoleAt}
 			/>
 			<div className="hidden text-sm sm:block">
 				{row.lastSpokenAt ? (
