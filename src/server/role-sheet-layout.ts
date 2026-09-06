@@ -7,6 +7,15 @@
  * template; passing a `RoleSheetFill` pre-fills the header + speaker rows so the
  * blank and filled variants stay visually identical apart from the filled cells.
  *
+ * **Editing this file makes `public/role-sheets/*.pdf` stale.** Those five files
+ * are checked-in build artifacts, and `/resources` and the meeting page serve
+ * THEM, not this module — so a change here that is not followed by
+ * `bun run build:role-sheets` ships the old sheet to the club. It has happened
+ * twice: #507 printed "Amber" on all five while this file said "Yellow", and the
+ * Ah-Counter's log sat on `main` drawing one table column ~1.25× wider than the
+ * nine equal columns declared below. `role-sheet-artifacts.test.ts` (#515) now
+ * fails you instead of a club noticing.
+ *
  * Original content — NO Toastmasters International copyrighted material. Uses
  * `React.createElement` (not JSX) so this stays a `.ts` module, matching the
  * server minutes-PDF pattern (`minutes-pdf-logic.ts`). This module has NO `#/db`
