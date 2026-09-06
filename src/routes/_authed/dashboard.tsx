@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { BookOpen, CalendarDays } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { DashboardGreeting } from "#/components/dashboard-greeting";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
@@ -59,13 +60,6 @@ export const Route = createFileRoute("/_authed/dashboard")({
 	},
 	component: Dashboard,
 });
-
-function greeting(name: string) {
-	const h = new Date().getHours();
-	const period = h < 12 ? "morning" : h < 18 ? "afternoon" : "evening";
-	const first = name.trim().split(/\s+/)[0] || name;
-	return `Good ${period}, ${first}`;
-}
 
 function dayMon(value: Date | string, timeZone?: string) {
 	const d = new Date(value);
@@ -127,9 +121,17 @@ function Dashboard() {
 	return (
 		<PageContainer>
 			<div className="mb-5">
-				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
-					{greeting(authUser.name || authUser.email)}
-				</h1>
+				{/* The H1 lives in its own component because the greeting depends on
+				    the VIEWER's clock, which the server does not have: computed here
+				    during render it read the container's timezone (UTC on Railway) on
+				    the SSR pass and the browser's on the hydration pass, so the two
+				    disagreed for every member outside UTC and React threw the server
+				    markup away (#608). `DashboardGreeting` renders a time-neutral
+				    line on both of those passes and reaches for the clock only after
+				    mount. It is also the only way to gate this: a route module
+				    reaches `#/db` through its server fns and cannot be rendered in
+				    vitest at all. */}
+				<DashboardGreeting name={authUser.name || authUser.email} />
 				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
 					Here's where you stand and what's coming up.
 				</p>
