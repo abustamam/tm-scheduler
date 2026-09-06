@@ -7,6 +7,7 @@ import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
+import { SpeechLogDate } from "#/components/speech-log-date";
 import { formatMeetingDate } from "#/lib/format";
 import {
 	SPEECH_SCHEDULE_STATE_LABELS,
@@ -60,19 +61,6 @@ export const Route = createFileRoute("/_authed/dashboard")({
 	},
 	component: Dashboard,
 });
-
-function dayMon(value: Date | string, timeZone?: string) {
-	const d = new Date(value);
-	return {
-		day: new Intl.DateTimeFormat(undefined, {
-			day: "numeric",
-			timeZone,
-		}).format(d),
-		mon: new Intl.DateTimeFormat(undefined, { month: "short", timeZone })
-			.format(d)
-			.toUpperCase(),
-	};
-}
 
 function Dashboard() {
 	const { authUser, activeClubId } = Route.useRouteContext();
@@ -158,7 +146,6 @@ function Dashboard() {
 							</Link>
 						) : (
 							speeches.map((l) => {
-								const { day, mon } = dayMon(l.scheduledAt);
 								const state = speechScheduleState({
 									scheduledAt: l.scheduledAt,
 									now,
@@ -168,14 +155,16 @@ function Dashboard() {
 										key={l.slotId}
 										className="grid grid-cols-[64px_1fr_auto] items-center gap-3.5 border-t border-[var(--line)] px-5 py-3 transition-colors hover:bg-[var(--foam)]"
 									>
-										<div className="text-center leading-[1.1]">
-											<div className="font-display text-lg font-semibold">
-												{day}
-											</div>
-											<div className="text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)]">
-												{mon}
-											</div>
-										</div>
+										{/* Same hazard as the H1 above, and the reason this is a
+										    component too: the date was formatted with an
+										    `Intl.DateTimeFormat(undefined, …)` whose zone AND
+										    locale both resolve against the runtime, so the UTC
+										    container and the viewer's browser disagreed on the day
+										    number and on the month's spelling (#608). The row
+										    carries no club timezone to pin it to — `loadMySpeechLog`
+										    joins no `clubs` row — so the honest fix is to let the
+										    viewer's own runtime answer, after mount. */}
+										<SpeechLogDate value={l.scheduledAt} />
 										<div className="min-w-0">
 											<div className="truncate text-sm font-bold">
 												{speechLogHeadline({

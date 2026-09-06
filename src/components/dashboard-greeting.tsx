@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { firstNameOf } from "#/lib/person-name";
 
 /**
  * The dashboard's H1 greeting (#608).
@@ -44,14 +43,16 @@ export function greetingPeriod(hour: number): GreetingPeriod {
  * the clock-during-render shape in place for the next person to copy.
  */
 export function greetingText(displayName: string, hour: number | null): string {
-	// `firstNameOf`, not a local `split(/\s+/)`: this is the same question
-	// `greetingName` answers for nudge drafts, and the shared helper knows the
-	// "Khan, Zabihullah" shape the Toastmasters export emits — where a bare
-	// whitespace split greets someone by their family name, with the comma still
-	// attached. The `||` keeps the old fall-through for a value it cannot
-	// tokenize at all (an all-whitespace stored name), because greeting by an
-	// empty string is the worse of the two bad outcomes.
-	const who = firstNameOf(displayName) || displayName;
+	// Deliberately NOT `firstNameOf` from `#/lib/person-name`, though it is the
+	// repo's shared "what to call this person" helper and the obvious cleanup
+	// here. It reads the first comma as a `Last, First` separator, and the
+	// likeliest comma on a Toastmasters DISPLAY name is a designation suffix —
+	// so "Nina Patel, DTM" greets "DTM" and "John Smith, ACB, ALB" greets "ACB".
+	// Both were measured, not reasoned about. `firstNameOf` is right for a
+	// roster `people.name` (where the CSV really does emit "Khan, Zabihullah")
+	// and wrong for this field; telling the two apart needs a signal neither
+	// string carries, which is why this stays a plain first-token split.
+	const who = displayName.trim().split(/\s+/)[0] || displayName;
 	if (hour === null) return `Welcome back, ${who}`;
 	return `Good ${greetingPeriod(hour)}, ${who}`;
 }
