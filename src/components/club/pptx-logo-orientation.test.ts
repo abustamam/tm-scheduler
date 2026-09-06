@@ -42,7 +42,10 @@
  * argument: it models the browsers that exist, not the one in the docs.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ImageDimensions } from "#/lib/image-dimensions";
+import {
+	type ImageDimensions,
+	readImageDimensions,
+} from "#/lib/image-dimensions";
 import { fetchClubLogo } from "./pptx-download-button";
 
 const URL_ = "/api/club/abc/logo?v=1";
@@ -88,12 +91,23 @@ function jpeg({
 	width,
 	height,
 	orientation,
+	fillRun = false,
 }: {
 	width: number;
 	height: number;
 	/** Omit for a file carrying no EXIF block at all. */
 	orientation?: number;
+	/**
+	 * Pad the gap before the first marker with a `0xFF` fill byte (T.81
+	 * B.1.1.2). Legal JPEG that decoders accept, and that
+	 * `readImageDimensions` refuses BY DESIGN — its `readJpegDimensions`
+	 * comment says it will not collapse fill runs because `jay-peg`, the
+	 * decoder react-pdf actually reaches for, does not either. That makes this
+	 * flag the cheapest honest way to build a file which reaches the fallback.
+	 */
+	fillRun?: boolean;
 }): Uint8Array<ArrayBuffer> {
+	const fill = fillRun ? [Buffer.from([0xff])] : [];
 	const exif =
 		orientation === undefined ? [] : [segment(0xe1, exifPayload(orientation))];
 	// Copied out of the Buffer: a pooled `Buffer` is a `Uint8Array<ArrayBufferLike>`,
@@ -101,6 +115,7 @@ function jpeg({
 	return Uint8Array.from(
 		Buffer.concat([
 			Buffer.from([0xff, 0xd8]), // SOI
+			...fill,
 			...exif,
 			sof(width, height),
 			Buffer.from([0xff, 0xd9]), // EOI
@@ -112,7 +127,14 @@ function jpeg({
 // The browser model: an orientation-applying decoder, driven by the bytes.
 // ---------------------------------------------------------------------------
 
-/** EXIF Orientation out of a JPEG's APP1 block, or null. Either byte order. */
+/**
+ * EXIF Orientation out of a JPEG's APP1 block, or null. Either byte order.
+ *
+ * Tolerates `0xFF` fill runs, as every shipping decoder does and as
+ * `readImageDimensions` deliberately does not. That divergence is the point:
+ * it is what lets a fixture be decodable and unparseable at once, which is the
+ * exact class the production fallback exists for.
+ */
 function exifOrientationOf(bytes: Uint8Array): number | null {
 	// byteOffset/byteLength are not optional — Node pools small Buffers inside a
 	// shared ArrayBuffer, so a bare `new DataView(b.buffer)` reads someone
@@ -121,6 +143,10 @@ function exifOrientationOf(bytes: Uint8Array): number | null {
 	let pos = 2; // past SOI
 	while (pos + 4 <= bytes.length) {
 		if (bytes[pos] !== 0xff) return null;
+		if (bytes[pos + 1] === 0xff) {
+			pos++; // fill byte
+			continue;
+		}
 		const marker = bytes[pos + 1];
 		const length = view.getUint16(pos + 2);
 		if (marker === 0xe1) {
@@ -242,12 +268,49 @@ describe("EXIF-rotated logos in the .pptx export (#518)", () => {
 		expect([logo?.width, logo?.height]).toEqual([300, 300]);
 	});
 
-	// The header parser is strict on purpose — it refuses any structure it
-	// cannot prove a decoder reads the same way. Rows uploaded under an older,
-	// looser version of it are still in `club_logos`, and this function is
-	// documented best-effort, so those decks must keep their crest.
-	it("falls back to the decoder for bytes the header parser refuses", async () => {
-		serve(Uint8Array.from([0xff, 0xd8, 0x00, 0x01]));
+	// -----------------------------------------------------------------------
+	// The fallback. Club logos shipped at v1.4.0.0 (#505) with magic-byte and
+	// MIME validation and no structural parse; `readImageDimensions` reached
+	// the upload path at v1.5.0.0 (#496/#513). Rows uploaded in between went in
+	// unparsed, so a legal JPEG the strict walker declines is really in
+	// `club_logos` and really reaches this path.
+	//
+	// A four-byte fixture would not test it. No engine decodes that, so a real
+	// `createImageBitmap` rejects and `fetchClubLogo` returns null through the
+	// outer catch — it pins the wiring and is blind to the class. These use a
+	// file that DECODES fine and only the strict parser refuses.
+	// -----------------------------------------------------------------------
+
+	/** Decodable, refused by `readImageDimensions`, and EXIF-rotated. */
+	const FALLBACK_ROTATED = jpeg({
+		width: 120,
+		height: 40,
+		orientation: 6,
+		fillRun: true,
+	});
+
+	// The second control. If the strict parser is ever loosened to collapse fill
+	// runs, this fixture stops reaching the fallback and the two tests below go
+	// green without exercising anything — so assert the precondition here, where
+	// it fails loudly and says why.
+	it("reaches the fallback: decodable, unparseable, and rotated", () => {
+		expect(readImageDimensions(FALLBACK_ROTATED, "image/jpeg")).toBeNull();
+		expect(exifOrientationOf(FALLBACK_ROTATED)).toBe(6);
+	});
+
+	it("undoes the decoder's rotation on the fallback path", async () => {
+		serve(FALLBACK_ROTATED);
+		stubBrowserDecoder({ width: 120, height: 40 });
+
+		const logo = await fetchClubLogo(URL_);
+
+		// Without the correction this is 40x120 — #518 verbatim, on the branch
+		// that closes it, for every row uploaded before the parser existed.
+		expect([logo?.width, logo?.height]).toEqual([120, 40]);
+	});
+
+	it("leaves the fallback alone when the file declares no rotation", async () => {
+		serve(jpeg({ width: 64, height: 64, fillRun: true }));
 		stubBrowserDecoder({ width: 64, height: 64 });
 
 		const logo = await fetchClubLogo(URL_);
@@ -256,7 +319,7 @@ describe("EXIF-rotated logos in the .pptx export (#518)", () => {
 	});
 
 	it("still returns null when neither the header nor a decoder can measure", async () => {
-		serve(Uint8Array.from([0xff, 0xd8, 0x00, 0x01]));
+		serve(FALLBACK_ROTATED);
 		vi.stubGlobal("createImageBitmap", undefined);
 
 		expect(await fetchClubLogo(URL_)).toBeNull();
