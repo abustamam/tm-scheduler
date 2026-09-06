@@ -20,10 +20,11 @@ One stage per iteration, re-planned at the top of every iteration:
    `--max` set to the total of both. If they collapse into one wave, they never conflicted —
    the cap split them — and that merged wave is the stage to dispatch. Do this every time a
    trailing wave is smaller than `--max`; it is the only free throughput in the loop.
-4. Dispatch that stage — one worktree per issue, one agent per worktree, each handed **the
-   brief** below.
+4. Dispatch that stage — one agent per issue, each handed **the brief** below. The brief has
+   each agent create and bootstrap its own worktree.
 5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
-6. Review the wave's PRs, then land them one at a time — see **Landing the wave** below.
+6. **From the main session**: review the wave's PRs, then land them one at a time — see
+   **Landing the wave** below. The merge decision is the maintainer's, not an agent's.
 7. Run `/qa-only` once against the deployed app. Then go to 1.
 
 Step 1 is not a formality. Between stages the plan genuinely changes: a merge makes cited
@@ -57,7 +58,8 @@ creates.
 
 ## Required per dispatched issue
 
-- **Worktree:** `git worktree add`, then `bun run worktree:setup "<what you are building>"`.
+- **Worktree:** `git worktree add`, then `bun run worktree:setup "<what you are building>"`
+  **from inside it** — run from the main checkout it exits 0 without bootstrapping anything.
 - **Branch: `<slug>-<issue>`, number LAST — with nothing after it.**
   `fix-dcp-training-531` claims #531. `issue-531-dcp` claims **nothing**, and so does
   `fix-dcp-531-wip` or `-531-v2` or `-531-retry`: reading stops at the first non-numeric
@@ -79,56 +81,56 @@ Files this issue cites:
   <path>
   <path>
 
-1. From the main checkout: `git worktree add .claude/worktrees/<slug>-<N> -b <slug>-<N>`,
-   then `bun run worktree:setup "<one line: what you are building>"`. Work only there.
-   The issue number goes LAST in the branch name with nothing after it — see CLAUDE.md's
-   "Branch naming" for the three ways a suffix silently un-claims the issue.
-2. `/investigate` before you write anything.
-3. Implement. Stay inside the cited files. If the real fix needs a file that is not
-   listed above, STOP and report the path instead of editing it.
-4. Gates, in order: `bun run typecheck`, `bun run test`, then
-   `bunx biome check --diagnostic-level=error`. (`test` needs `TEST_DATABASE_URL` or
-   ~630 tests skip and the run still reads green — CLAUDE.md has the value.)
-5. `gh pr create` with `Closes #<N>` in the body.
-6. STOP THERE. Do not merge, do not review your own PR, do not pick up another issue.
+1. Make your own worktree, from the main checkout:
+   `git worktree add .claude/worktrees/<slug>-<N> -b <slug>-<N>`
+   The issue number goes LAST in the branch name with nothing after it — CLAUDE.md's
+   "Branch naming" has the rules and what a suffix costs.
+2. `cd` into that worktree, then `bun run worktree:setup "<what you are building>"`.
+   Run it FROM THE WORKTREE: from the main checkout it exits 0 having done nothing, and
+   the missing bootstrap does not surface until something silently returns empty.
+3. `/investigate` before you write anything.
+4. Implement. Stay inside the cited files. A NEW file you create — a test beside the code
+   you changed, most often — is yours and needs no citation. An EXISTING file that is not
+   listed above is not yours: STOP and report the path instead of editing it.
+5. Green gates before you open the PR: everything CI's `check` job runs
+   (`.github/workflows/ci.yml`). `bun run test` needs `TEST_DATABASE_URL` or the
+   database-backed tests skip and the run still reads green — CLAUDE.md has the value.
+6. `gh pr create` with `Closes #<N>` in the body.
+7. STOP THERE. Do not merge, do not review your own PR, do not pick up another issue.
 ```
 
 **Keep it this short.** The agent works in a worktree, so it reads CLAUDE.md itself — the
-brief carries only what CLAUDE.md cannot know (which issue, which files, that this agent
-stops at the PR). Growing it into a second copy of the conventions is how the two drift.
-The branch rule is the one duplicated line, and it is duplicated because its failure is
-silent: nothing errors, the issue is simply handed out twice.
+brief carries only what CLAUDE.md cannot know: which issue, which files, and that this agent
+stops at the PR. Where the two must overlap, copy a **command name or a one-line rule** and
+cite CLAUDE.md for the reasoning. Never copy the reasoning, and never copy a number: a figure
+restated here is a figure that goes stale somewhere else first. Step 5 is the shape to
+imitate — it points at `ci.yml` rather than listing the gates, because an earlier draft
+listed three of them and CI ran five.
 
-## Staying inside the cited files
-
-A wave is disjoint by the paths the issue **bodies** cite. An agent that edits a file its own
-issue never cited voids that property for the whole wave, and nothing downstream catches it:
-`batch:issues` planned against the bodies and has already run, and the second agent's edit to
-that file looks like an ordinary conflict with no cause attached.
-
-So when the fix genuinely lies outside the cited set, the agent stops and reports the path.
-The main session then either widens the issue body and re-plans, or lands this wave first —
-both are cheap. Editing it anyway and noting it in the PR body is not: by the time anyone
-reads the body, the collision has already happened.
+Step 4 is the one rule with no home in CLAUDE.md, so here is why it is there: a wave is
+disjoint by the paths the issue **bodies** cite. An agent that edits an existing file its own
+issue never cited voids that property for the whole wave, and nothing downstream catches it —
+`batch:issues` planned against the bodies and has already run, so the collision surfaces as an
+ordinary conflict with no cause attached.
 
 ## Landing the wave
 
+**From the main session, and the merge is the maintainer's.** A wave agent stops at
+`gh pr create`; nothing below is on its path.
+
 `/review-pr` checks nothing out, so the wave's reviews are independent and all run at once.
-Merging is the serial half, because branch protection makes each land invalidate the rest.
+Merging is the serial half.
 
 1. `/review-pr N` for **every** PR in the wave, dispatched together. Where one prints a
    risk-category hint, run gstack `/review` in that PR's worktree as well.
-2. Send back what the reviews found. Then **re-read the fix diff yourself before merging.**
-   The review agents saw the diff as it was dispatched; the commits answering them are gated
-   by nothing — no second review, and CI only proves the tests still pass. This is the one
-   step in the loop with nothing watching it.
-3. `gh pr merge --squash --auto` — one PR.
-4. `gh pr update-branch M` on every PR still open (`strict: true` requires each branch be up
-   to date with `main`). CI re-runs; auto-merge fires when green.
-5. Back to 3 with the next PR, until the wave has landed.
-
-A merge queue would run 3–5 unattended, and it was the first choice; GitHub offers it only on
-organization-owned repos and this one is user-owned.
+2. Send back what the reviews found.
+3. **Read the fix diff before merging it — you, not an agent.** The reviewers saw the diff as
+   it was dispatched; the commits answering them are gated by nothing, and CI only proves the
+   tests still pass. Every other step here can be delegated, and this is why the merge button
+   is not on the agent path at all.
+4. `gh pr merge --squash --auto`, then `gh pr update-branch` on each PR still open —
+   CLAUDE.md's "Land" row has why branch protection forces that order. Back to 3 with the
+   next PR, until the wave has landed.
 
 ## Common mistakes
 
@@ -142,6 +144,7 @@ organization-owned repos and this one is user-owned.
 | Dispatching a NEEDS A FILE PATH issue anyway | Disjointness was never established for it |
 | An agent merging its own PR | Skips review, and lands on a `main` its CI run never saw |
 | A PR body without `Closes #N` | The branch is deleted on merge, the claim vanishes, the issue is handed out again |
-| An agent editing a file its issue never cited | Voids the disjointness the wave was built on; the collision arrives with no cause attached |
-| Merging the round that answers the review | Those commits were reviewed by nothing — re-read the diff yourself |
+| An agent editing an **existing** file its issue never cited | Voids the disjointness the wave was built on; the collision arrives with no cause attached |
+| Running `worktree:setup` from the main checkout | It exits 0 having done nothing; the worktree stays unbootstrapped and fails silently later |
+| Merging the round that answers the review | Those commits were reviewed by nothing; the maintainer reading that diff is the only gate |
 | Reviewing the wave's PRs one at a time | `/review-pr` checks nothing out; only the merging has to be serial |
