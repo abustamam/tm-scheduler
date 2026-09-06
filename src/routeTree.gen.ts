@@ -62,6 +62,8 @@ import { Route as ClubClubIdMeetingMeetingIdMeRouteImport } from './routes/club.
 import { Route as ClubClubIdMeetingMeetingIdAgendaRouteImport } from './routes/club.$clubId.meeting.$meetingId_.agenda'
 import { Route as ApiMeetingsIdPacketPdfRouteImport } from './routes/api/meetings.$id.packet.pdf'
 import { Route as ApiMeetingsIdMinutesPdfRouteImport } from './routes/api/meetings.$id.minutes.pdf'
+import { Route as ClubClubIdMeetingMeetingIdMeWordRouteImport } from './routes/club.$clubId.meeting.$meetingId_.me_.word'
+import { Route as ClubClubIdMeetingMeetingIdMeThemeRouteImport } from './routes/club.$clubId.meeting.$meetingId_.me_.theme'
 import { Route as ApiMeetingsIdRoleSheetsSheetPdfRouteImport } from './routes/api/meetings.$id.role-sheets.$sheet.pdf'
 
 const UnsubscribeRoute = UnsubscribeRouteImport.update({
@@ -338,6 +340,18 @@ const ApiMeetingsIdMinutesPdfRoute = ApiMeetingsIdMinutesPdfRouteImport.update({
   path: '/api/meetings/$id/minutes/pdf',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ClubClubIdMeetingMeetingIdMeWordRoute =
+  ClubClubIdMeetingMeetingIdMeWordRouteImport.update({
+    id: '/meeting/$meetingId_/me_/word',
+    path: '/meeting/$meetingId/me/word',
+    getParentRoute: () => ClubClubIdRoute,
+  } as any)
+const ClubClubIdMeetingMeetingIdMeThemeRoute =
+  ClubClubIdMeetingMeetingIdMeThemeRouteImport.update({
+    id: '/meeting/$meetingId_/me_/theme',
+    path: '/meeting/$meetingId/me/theme',
+    getParentRoute: () => ClubClubIdRoute,
+  } as any)
 const ApiMeetingsIdRoleSheetsSheetPdfRoute =
   ApiMeetingsIdRoleSheetsSheetPdfRouteImport.update({
     id: '/api/meetings/$id/role-sheets/$sheet/pdf',
@@ -399,6 +413,8 @@ export interface FileRoutesByFullPath {
   '/club/$clubId/meeting/$meetingId/vote': typeof ClubClubIdMeetingMeetingIdVoteRoute
   '/club/$clubId/meeting/$meetingId/word': typeof ClubClubIdMeetingMeetingIdWordRoute
   '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
+  '/club/$clubId/meeting/$meetingId/me/theme': typeof ClubClubIdMeetingMeetingIdMeThemeRoute
+  '/club/$clubId/meeting/$meetingId/me/word': typeof ClubClubIdMeetingMeetingIdMeWordRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -452,6 +468,8 @@ export interface FileRoutesByTo {
   '/club/$clubId/meeting/$meetingId/vote': typeof ClubClubIdMeetingMeetingIdVoteRoute
   '/club/$clubId/meeting/$meetingId/word': typeof ClubClubIdMeetingMeetingIdWordRoute
   '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
+  '/club/$clubId/meeting/$meetingId/me/theme': typeof ClubClubIdMeetingMeetingIdMeThemeRoute
+  '/club/$clubId/meeting/$meetingId/me/word': typeof ClubClubIdMeetingMeetingIdMeWordRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -509,6 +527,8 @@ export interface FileRoutesById {
   '/club/$clubId_/meeting/$meetingId/vote': typeof ClubClubIdMeetingMeetingIdVoteRoute
   '/club/$clubId_/meeting/$meetingId/word': typeof ClubClubIdMeetingMeetingIdWordRoute
   '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
+  '/club/$clubId/meeting/$meetingId_/me_/theme': typeof ClubClubIdMeetingMeetingIdMeThemeRoute
+  '/club/$clubId/meeting/$meetingId_/me_/word': typeof ClubClubIdMeetingMeetingIdMeWordRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -566,6 +586,8 @@ export interface FileRouteTypes {
     | '/club/$clubId/meeting/$meetingId/vote'
     | '/club/$clubId/meeting/$meetingId/word'
     | '/api/meetings/$id/role-sheets/$sheet/pdf'
+    | '/club/$clubId/meeting/$meetingId/me/theme'
+    | '/club/$clubId/meeting/$meetingId/me/word'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -619,6 +641,8 @@ export interface FileRouteTypes {
     | '/club/$clubId/meeting/$meetingId/vote'
     | '/club/$clubId/meeting/$meetingId/word'
     | '/api/meetings/$id/role-sheets/$sheet/pdf'
+    | '/club/$clubId/meeting/$meetingId/me/theme'
+    | '/club/$clubId/meeting/$meetingId/me/word'
   id:
     | '__root__'
     | '/'
@@ -675,6 +699,8 @@ export interface FileRouteTypes {
     | '/club/$clubId_/meeting/$meetingId/vote'
     | '/club/$clubId_/meeting/$meetingId/word'
     | '/api/meetings/$id/role-sheets/$sheet/pdf'
+    | '/club/$clubId/meeting/$meetingId_/me_/theme'
+    | '/club/$clubId/meeting/$meetingId_/me_/word'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -1076,6 +1102,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMeetingsIdMinutesPdfRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/club/$clubId/meeting/$meetingId_/me_/word': {
+      id: '/club/$clubId/meeting/$meetingId_/me_/word'
+      path: '/meeting/$meetingId/me/word'
+      fullPath: '/club/$clubId/meeting/$meetingId/me/word'
+      preLoaderRoute: typeof ClubClubIdMeetingMeetingIdMeWordRouteImport
+      parentRoute: typeof ClubClubIdRoute
+    }
+    '/club/$clubId/meeting/$meetingId_/me_/theme': {
+      id: '/club/$clubId/meeting/$meetingId_/me_/theme'
+      path: '/meeting/$meetingId/me/theme'
+      fullPath: '/club/$clubId/meeting/$meetingId/me/theme'
+      preLoaderRoute: typeof ClubClubIdMeetingMeetingIdMeThemeRouteImport
+      parentRoute: typeof ClubClubIdRoute
+    }
     '/api/meetings/$id/role-sheets/$sheet/pdf': {
       id: '/api/meetings/$id/role-sheets/$sheet/pdf'
       path: '/api/meetings/$id/role-sheets/$sheet/pdf'
@@ -1162,6 +1202,8 @@ interface ClubClubIdRouteChildren {
   ClubClubIdMeetingMeetingIdRoute: typeof ClubClubIdMeetingMeetingIdRoute
   ClubClubIdMeetingMeetingIdAgendaRoute: typeof ClubClubIdMeetingMeetingIdAgendaRoute
   ClubClubIdMeetingMeetingIdMeRoute: typeof ClubClubIdMeetingMeetingIdMeRoute
+  ClubClubIdMeetingMeetingIdMeThemeRoute: typeof ClubClubIdMeetingMeetingIdMeThemeRoute
+  ClubClubIdMeetingMeetingIdMeWordRoute: typeof ClubClubIdMeetingMeetingIdMeWordRoute
 }
 
 const ClubClubIdRouteChildren: ClubClubIdRouteChildren = {
@@ -1170,6 +1212,9 @@ const ClubClubIdRouteChildren: ClubClubIdRouteChildren = {
   ClubClubIdMeetingMeetingIdRoute: ClubClubIdMeetingMeetingIdRoute,
   ClubClubIdMeetingMeetingIdAgendaRoute: ClubClubIdMeetingMeetingIdAgendaRoute,
   ClubClubIdMeetingMeetingIdMeRoute: ClubClubIdMeetingMeetingIdMeRoute,
+  ClubClubIdMeetingMeetingIdMeThemeRoute:
+    ClubClubIdMeetingMeetingIdMeThemeRoute,
+  ClubClubIdMeetingMeetingIdMeWordRoute: ClubClubIdMeetingMeetingIdMeWordRoute,
 }
 
 const ClubClubIdRouteWithChildren = ClubClubIdRoute._addFileChildren(
