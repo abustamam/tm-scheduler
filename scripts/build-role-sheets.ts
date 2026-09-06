@@ -9,6 +9,13 @@
  * meeting-aware, server-rendered sheets (#311) so blank and pre-filled variants
  * can't drift. This script just renders each sheet blank (no fill) and writes
  * the PDF.
+ *
+ * Forgetting to run it is caught by `src/server/role-sheet-artifacts.test.ts`
+ * (#515), which renders every sheet and compares the drawing operators against
+ * the committed file. That gate is in `bun run test`, not in a CI workflow step:
+ * PDF bytes are not reproducible across machines, so `build:role-sheets` +
+ * `git diff --exit-code` would be red on every run. `src/test/pdf-content.ts`
+ * has the measurements.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
