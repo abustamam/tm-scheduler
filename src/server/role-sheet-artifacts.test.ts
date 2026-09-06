@@ -15,17 +15,22 @@
  * meeting page actually serve, so all of them stayed green through both.
  *
  * This runs inside `bun run test`, which CI already runs, so it needs no
- * `.github/workflows/ci.yml` step. That is not just convenience: the CI step the
- * issue proposed (`build:role-sheets` then fail on a dirty tree) cannot work,
- * because DEFLATE output is not portable between machines and the tree would be
- * dirty on every run. `src/test/pdf-content.ts` carries the measurements.
+ * `.github/workflows/ci.yml` step. It is NOT the only workable gate, and an
+ * earlier version of this comment wrongly said so — the byte-level step #515
+ * asked for (`build:role-sheets`, normalise, `git diff --exit-code`) is viable,
+ * and `src/test/pdf-content.ts` has both the measurement that refuted the claim
+ * and the four reasons this one is still the better artifact.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { describe, expect, it } from "vitest";
-import { describePdfDrift, readPdfContent } from "#/test/pdf-content";
+import {
+	describePdfDrift,
+	isUninflated,
+	readPdfContent,
+} from "#/test/pdf-content";
 import { buildRoleSheetDoc, ROLE_SHEETS } from "./role-sheet-layout";
 
 /**
@@ -62,6 +67,12 @@ describe("the committed role sheets match the layout", () => {
 		expect(committed.pages).toBe(1);
 		expect(committed.streams).toHaveLength(1);
 		expect(committed.streams[0].length).toBeGreaterThan(1_000);
+		// Named separately from the length floor because the failure is different
+		// in KIND, not degree: an opaque stream silently demotes this gate from
+		// comparing layout to comparing compression, and two mis-delimited streams
+		// hash equal. Assert it on both sides, so the message says which.
+		expect(committed.streams.filter(isUninflated)).toEqual([]);
+		expect(readPdfContent(rendered).streams.filter(isUninflated)).toEqual([]);
 
 		const drift = describePdfDrift(committed, readPdfContent(rendered));
 		expect(

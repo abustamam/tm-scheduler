@@ -15,6 +15,7 @@ import { deflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
 	describePdfDrift,
+	isUninflated,
 	type PdfContent,
 	readPdfContent,
 } from "./pdf-content";
@@ -29,7 +30,7 @@ const TIMER_PDF = resolve(
 );
 
 /** A PDF-shaped buffer: only the header and the objects this reader parses. */
-function fakePdf(...objects: (string | Buffer)[]): Buffer {
+function rawPdf(...objects: (string | Buffer)[]): Buffer {
 	return Buffer.concat([
 		Buffer.from("%PDF-1.3\n", "latin1"),
 		...objects.map((o) =>
@@ -37,6 +38,10 @@ function fakePdf(...objects: (string | Buffer)[]): Buffer {
 		),
 	]);
 }
+
+/** {@link rawPdf} plus a one-page tree, since the reader throws without one. */
+const fakePdf = (...objects: (string | Buffer)[]): Buffer =>
+	rawPdf(PAGE_TREE, ...objects);
 
 function streamObject(payload: Buffer, length: string, eol = "\n"): Buffer {
 	return Buffer.concat([
@@ -47,7 +52,11 @@ function streamObject(payload: Buffer, length: string, eol = "\n"): Buffer {
 }
 
 const digest = (payload: Buffer) =>
-	`binary:${payload.length}:${createHash("sha256").update(payload).digest("hex")}`;
+	`uninflated:${payload.length}:${createHash("sha256").update(payload).digest("hex")}`;
+
+/** Every fake PDF here needs a page tree, because the reader refuses to guess. */
+const PAGE_TREE =
+	"1 0 obj\n<<\n/Type /Pages\n/Count 1\n/Kids [8 0 R]\n>>\nendobj\n";
 
 const content: PdfContent = {
 	pages: 1,
@@ -78,9 +87,9 @@ describe("readPdfContent", () => {
 		).toThrow(/not a PDF/);
 	});
 
-	it("counts pages without counting the /Pages tree root", () => {
+	it("takes the page count from the tree root", () => {
 		const parsed = readPdfContent(
-			fakePdf(
+			rawPdf(
 				"1 0 obj\n<<\n/Type /Pages\n/Count 2\n>>\nendobj\n",
 				"8 0 obj\n<<\n/Type /Page\n/MediaBox [0 0 612 792]\n>>\nendobj\n",
 				"9 0 obj\n<<\n/Type /Page\n/MediaBox [0 0 595.28 841.89]\n>>\nendobj\n",
@@ -88,6 +97,27 @@ describe("readPdfContent", () => {
 		);
 		expect(parsed.pages).toBe(2);
 		expect(parsed.mediaBoxes).toEqual(["0 0 612 792", "0 0 595.28 841.89"]);
+	});
+
+	it("ignores a /Type /Page token forged in uncompressed metadata", () => {
+		// The reason this delegates to countPdfPages rather than counting the
+		// tokens: /Info and /Annots /URI are NOT compressed, so content decides
+		// the count. It measured 4 on a genuinely 2-page document in #502. Here a
+		// one-page sheet is made to look like three.
+		const parsed = readPdfContent(
+			rawPdf(
+				"1 0 obj\n<<\n/Type /Pages\n/Count 1\n>>\nendobj\n",
+				"8 0 obj\n<<\n/Type /Page\n/MediaBox [0 0 612 792]\n>>\nendobj\n",
+				"14 0 obj\n<<\n/Title (/Type /Page and /Type /Page)\n>>\nendobj\n",
+			),
+		);
+		expect(parsed.pages).toBe(1);
+	});
+
+	it("refuses to guess when there is no page tree", () => {
+		expect(() =>
+			readPdfContent(rawPdf("8 0 obj\n<<\n/Type /Page\n>>\nendobj\n")),
+		).toThrow(/Refusing to guess a page count/);
 	});
 
 	it("reads both the font names and the resource map that points at them", () => {
@@ -114,12 +144,23 @@ describe("readPdfContent", () => {
 		expect(parsed.streams).toEqual([body]);
 	});
 
-	it("digests a stream it cannot inflate rather than dropping it", () => {
+	it("marks a stream it cannot inflate rather than dropping it", () => {
 		const payload = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
 		const parsed = readPdfContent(
 			fakePdf(streamObject(payload, String(payload.length))),
 		);
 		expect(parsed.streams).toEqual([digest(payload)]);
+		// The marker is the point, not the digest: the gate asserts on it, because
+		// past here the comparison is about compression rather than layout.
+		expect(parsed.streams.map(isUninflated)).toEqual([true]);
+	});
+
+	it("does not mark a stream it did inflate", () => {
+		const payload = deflateSync(Buffer.from("BT\nET", "latin1"));
+		const parsed = readPdfContent(
+			fakePdf(streamObject(payload, String(payload.length))),
+		);
+		expect(parsed.streams.map(isUninflated)).toEqual([false]);
 	});
 
 	it("trusts /Length over a literal 'endstream' inside the payload", () => {
@@ -223,12 +264,18 @@ describe("describePdfDrift", () => {
 		expect(drift).toContain('rendered:  "ET"');
 	});
 
-	it("reports a binary stream by its digest rather than by line", () => {
+	it("says an uninflated stream means the comparison itself is broken", () => {
+		// Without this the message is two opaque digests and no cause, and the
+		// obvious reaction — re-render until it goes green — buries a filter change
+		// instead of fixing it. Say so in the failure.
 		const drift = describePdfDrift(
-			withStreams("binary:7:aaaa"),
-			withStreams("binary:7:bbbb"),
+			withStreams("uninflated:7:aaaa"),
+			withStreams("uninflated:7:bbbb"),
 		);
-		expect(drift).toContain("committed: binary:7:aaaa");
-		expect(drift).toContain("rendered:  binary:7:bbbb");
+		expect(drift).toContain("COMPRESSED bytes, not");
+		expect(drift).toContain("do not");
+		expect(drift).toContain("re-render against this failure");
+		expect(drift).toContain("committed: uninflated:7:aaaa");
+		expect(drift).toContain("rendered:  uninflated:7:bbbb");
 	});
 });

@@ -12,42 +12,56 @@
  * equal columns — a difference no amount of asserting on the in-memory document
  * can see, because the file on disk is what `/resources` actually serves.
  *
- * ## Why not compare the bytes
- *
- * Both re-render options in the issue assumed a byte diff was reachable after
- * some normalisation. It is not, and the measurements are worth keeping:
- *
- * - Every render writes a fresh `/CreationDate` and a fresh trailer `/ID`, so
- *   two renders of an unchanged layout are never byte-identical.
- * - Worse, and the reason normalising those two fields is not enough: DEFLATE
- *   output is not portable. `timer.pdf`'s content stream INFLATES to bytes
- *   identical to a fresh render's, and compresses to 4838 bytes committed
- *   against 4472 fresh on this machine. A `git diff --exit-code` after
- *   `build:role-sheets` would therefore go red on a PR that changed nothing,
- *   whenever CI's zlib differs from the committer's — the exact CI step that
- *   trains everyone to ignore it.
- *
- * ## What this compares instead
+ * ## What this compares
  *
  * The DECOMPRESSED content streams: every drawing operator react-pdf emitted —
  * glyphs, colours, line widths, coordinates — plus page count, page size, and
  * the fonts the document declares. That is a strict superset of the extracted
- * text the issue proposed, so it also catches a purely visual change (a colour,
- * a border, a column width) that leaves the wording alone. It is stable by
- * measurement, not by hope: two fresh renders of the same sheet produce
- * byte-identical content streams, and `@react-pdf/*` + `yoga-layout` are pinned
- * in `bun.lock`, so CI and a laptop render the same geometry.
+ * text #515 proposed, so it also catches a purely visual change (a colour, a
+ * border, a column width) that leaves the wording alone. `ah-counter.pdf` was
+ * exactly that shape, so the cheaper text comparison would have passed it.
  *
  * Deliberately NOT compared: `/CreationDate`, the trailer `/ID`, the xref table,
  * object offsets, and the compressed stream bytes. Each is a property of the
  * render, not of the layout.
+ *
+ * ## A normalised byte diff would also work — read this before ruling it out
+ *
+ * An earlier version of this comment claimed a byte-level CI step
+ * (`build:role-sheets` then `git diff --exit-code`) could not be made stable,
+ * citing `timer.pdf`'s content stream compressing to 4838 bytes committed
+ * against 4472 fresh. **That reading was wrong**, and review caught it. The gap
+ * was a STALE CORPUS, not entropy: all five committed streams were uniformly
+ * LARGER than a fresh render of byte-identical inflated content (timer
+ * 4838→4472, ah-counter 6661→4864, grammarian 2368→2245, ballot-counter
+ * 3258→2813, general-evaluator 2028→1933). One-directional across every file is
+ * a compressor-settings change, and `@react-pdf/pdfkit@5.1.1` imports one-shot
+ * `node:zlib` today. Re-measured after re-rendering all five:
+ *
+ * - Two fresh renders in one process produce byte-identical compressed streams.
+ * - Normalising ONLY `/CreationDate` and the trailer `/ID` — both fixed-length,
+ *   so no offset shifts — makes a fresh render byte-identical to the committed
+ *   file, for all five sheets.
+ *
+ * So the alternative is viable and nobody should be told otherwise. This gate
+ * stays the one that runs for four reasons that survive the correction: it is
+ * already inside `bun run test` and needs no workflow step, it names the
+ * OPERATOR that changed instead of saying two binaries differ, it is indifferent
+ * to the compressor so a `react-pdf` or zlib bump costs no re-baselining of five
+ * binaries, and it does not depend on cross-platform byte determinism at all.
+ *
+ * That last one is the honest open question: every measurement above ran on one
+ * macOS arm64 machine (bun 1.2.8, node 22.6.0). Whether CI's `ubuntu-latest`
+ * zlib emits the same bytes is UNTESTED in either direction. A byte-level step
+ * would find out on its first red run; this gate never has to ask.
  */
 import { createHash } from "node:crypto";
 import { inflateSync } from "node:zlib";
+import { countPdfPages } from "./print-page-count";
 
 /** The layout-determined content of one PDF. */
 export interface PdfContent {
-	/** `/Type /Page` objects — the sheet count. */
+	/** Sheets, read off the page tree by {@link countPdfPages}. */
 	pages: number;
 	/** Each `/MediaBox`, whitespace-normalised, in file order. */
 	mediaBoxes: string[];
@@ -55,14 +69,28 @@ export interface PdfContent {
 	fonts: string[];
 	/**
 	 * Every stream, inflated. A stream that is not DEFLATE (an embedded image or
-	 * font file) is reduced to `binary:<length>:<sha256>` — still drift-sensitive,
-	 * just not readable in a failure message.
+	 * font file) is reduced to `uninflated:<length>:<sha256>`, which {@link
+	 * isUninflated} detects. A caller must treat that as a broken comparison
+	 * rather than a passing one — see that function.
 	 */
 	streams: string[];
 }
 
-/** `/Type /Pages` is the tree root, not a sheet, so the boundary matters. */
-const PAGE = /\/Type\s*\/Page(?![A-Za-z])/g;
+/**
+ * Marker for a stream this module could not inflate.
+ *
+ * Not a graceful degradation. Once a stream is opaque, the gate silently stops
+ * comparing LAYOUT and starts comparing COMPRESSION: a `react-pdf` release that
+ * switched filters would make every sheet go red with a digest mismatch naming
+ * no cause, and — worse, because it looks like success — a stream the reader
+ * mis-delimits reduces to a hash on both sides and can compare EQUAL. So the
+ * marker is public, and `role-sheet-artifacts.test.ts` asserts on it directly.
+ */
+const UNINFLATED = "uninflated:";
+
+/** Whether {@link readPdfContent} failed to inflate this stream. */
+export const isUninflated = (stream: string): boolean =>
+	stream.startsWith(UNINFLATED);
 /** Only numbers, so this can never run away scanning compressed bytes. */
 const MEDIA_BOX = /\/MediaBox\s*\[([\d.+\-\s]*)\]/g;
 const BASE_FONT = /\/BaseFont\s*\/([A-Za-z0-9+\-.,_]+)/g;
@@ -106,7 +134,7 @@ function decodeStream(raw: Uint8Array): string {
 		return Buffer.from(inflateSync(raw)).toString("latin1");
 	} catch {
 		const digest = createHash("sha256").update(raw).digest("hex");
-		return `binary:${raw.length}:${digest}`;
+		return `${UNINFLATED}${raw.length}:${digest}`;
 	}
 }
 
@@ -144,7 +172,13 @@ export function readPdfContent(bytes: Uint8Array): PdfContent {
 		);
 	}
 	return {
-		pages: (latin.match(PAGE) ?? []).length,
+		// Via the shared harness, which reads `/Count` off the `/Type /Pages` root
+		// and THROWS rather than guess. Counting `/Type /Page` objects is the
+		// obvious implementation and the rejected one: uncompressed `/Info` and
+		// `/Annots /URI` text can forge the token, and it measured 4 on a genuinely
+		// 2-page document. `pages` is this gate's vacuity floor, so a forgeable
+		// count is a forgeable floor.
+		pages: countPdfPages(buf),
 		mediaBoxes: [...latin.matchAll(MEDIA_BOX)].map((m) => squash(m[1])),
 		fonts: [
 			...[...latin.matchAll(BASE_FONT)].map((m) => m[1]),
@@ -155,8 +189,15 @@ export function readPdfContent(bytes: Uint8Array): PdfContent {
 }
 
 function firstLineDifference(committed: string, rendered: string): string {
-	if (committed.startsWith("binary:") || rendered.startsWith("binary:")) {
-		return `  committed: ${committed.slice(0, 120)}\n  rendered:  ${rendered.slice(0, 120)}`;
+	if (isUninflated(committed) || isUninflated(rendered)) {
+		return [
+			"  a stream did not inflate, so this compares COMPRESSED bytes, not",
+			"  layout — the renderer's stream filter has changed, or this reader",
+			"  mis-delimited the stream. Fix src/test/pdf-content.ts; do not",
+			"  re-render against this failure.",
+			`    committed: ${committed.slice(0, 120)}`,
+			`    rendered:  ${rendered.slice(0, 120)}`,
+		].join("\n");
 	}
 	const a = committed.split("\n");
 	const b = rendered.split("\n");
