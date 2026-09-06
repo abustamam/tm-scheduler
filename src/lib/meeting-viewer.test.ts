@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { meetingViewer } from "./meeting-viewer";
+import { canEditWordOfTheDay, meetingViewer } from "./meeting-viewer";
 
 // Default fixture = an anonymous self-serve (name-pick) identity: has an id but
 // is NOT signed in. This is the honor-system path that must NOT be able to boot.
@@ -95,5 +95,65 @@ describe("meetingViewer", () => {
 		expect(gram.canEditWod).toBe(false);
 		expect(gram.canClaim).toBe(true);
 		expect(gram.canReleaseOwn).toBe(true);
+	});
+});
+
+/**
+ * The focused `/me/word` route (#666) has to ask "may this viewer edit the Word
+ * of the Day?", and NEITHER flag answers that alone. `canEditWod` is the pure
+ * Grammarian's affordance — deliberately false for the TMOD and for an admin so
+ * the agenda page shows one control instead of two — so a route reading it on
+ * its own inverts the answer for exactly the two callers with the WIDER
+ * capability.
+ *
+ * The truth table below is `resolveWordOfTheDayAuthz`'s three grant arms
+ * (admin, TMOD self-assert, Grammarian self-assert) restated on the client. A
+ * cross-check on the server side of it lives in
+ * `word-of-the-day.integration.test.ts`; the value of stating it twice is that
+ * this is the surface that decides whether the form is even offered.
+ */
+describe("canEditWordOfTheDay", () => {
+	it("grants the pure Grammarian", () => {
+		expect(
+			canEditWordOfTheDay(meetingViewer({ ...base, isGrammarian: true })),
+		).toBe(true);
+	});
+
+	it("grants the TMOD, whose own canEditWod is false", () => {
+		const v = meetingViewer({ ...base, isTmod: true });
+		expect(v.canEditWod).toBe(false);
+		expect(canEditWordOfTheDay(v)).toBe(true);
+	});
+
+	it("grants an admin, whose canEditWod is also false", () => {
+		const v = meetingViewer({ ...base, canManage: true, isSignedIn: true });
+		expect(v.canEditWod).toBe(false);
+		expect(canEditWordOfTheDay(v)).toBe(true);
+	});
+
+	it("denies a member holding neither role", () => {
+		expect(canEditWordOfTheDay(meetingViewer(base))).toBe(false);
+	});
+
+	it("denies a visitor with no identity at all", () => {
+		expect(
+			canEditWordOfTheDay(meetingViewer({ ...base, currentMemberId: null })),
+		).toBe(false);
+	});
+
+	it("denies everyone once the edit window is closed", () => {
+		// The lock comes for free: `lockedViewer` zeroes both flags, so this
+		// function needs to know nothing about a meeting's lifecycle.
+		for (const who of [
+			{ isGrammarian: true },
+			{ isTmod: true },
+			{ canManage: true, isSignedIn: true },
+		]) {
+			expect(
+				canEditWordOfTheDay(
+					meetingViewer({ ...base, ...who, isEditableWindow: false }),
+				),
+			).toBe(false);
+		}
 	});
 });

@@ -54,7 +54,7 @@ List the changed files. If any match, print one line before dispatching:
 | `src/server/guards.ts`, `src/server/club-readable-logic.ts`, `src/server/meeting-authz-logic.ts` | authorization / archive gate |
 | `drizzle/`, `src/db/schema.ts` | migration |
 | `public/sw.js` | service worker |
-| any hunk under `src/` naming `applySelfAdd` (documentation that names it does not count) | self-add |
+| any hunk under `src/` naming `captureGuestVisit` (documentation that names it does not count) | public PII-minting write |
 
 > Risk category touched (<category>). CLAUDE.md's review table says run gstack `/review` in the
 > PR's worktree as well. This skill does not replace it.

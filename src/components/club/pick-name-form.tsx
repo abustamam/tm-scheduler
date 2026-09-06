@@ -9,10 +9,12 @@ import { listMembers } from "#/server/members";
 import { MemberAvatar } from "./member-avatar";
 
 /**
- * Roster search + "I'm new — add me" picker. Extracted from the retired
- * `PickNameScreen` so the identity dialog reuses it. Router-independent:
- * `clubUuid` is passed in; on pick it calls `onPicked` with the chosen/created
- * member. Renders inside a Dialog (no full-page chrome of its own).
+ * Roster search and picker — search only, since #616/#630 removed the
+ * "I'm new — add me" self-add (see `notListedHint` below). Extracted from the
+ * retired `PickNameScreen` so the identity dialog reuses it. Router-independent:
+ * `clubUuid` is passed in; on pick it calls `onPicked` with the member chosen
+ * from the existing roster. Renders inside a Dialog (no full-page chrome of its
+ * own).
  */
 export function PickNameForm({
 	clubUuid,
@@ -28,9 +30,10 @@ export function PickNameForm({
 	 * "Visiting us today?" card below this form and would only duplicate it.
 	 *
 	 * There is deliberately no self-add here any more (#616). This form used to
-	 * end in an "I'm new — add me" box wired to the session-less `addMember`, so
-	 * anyone holding the club link could write a row into the club's membership
-	 * record — which is what put a tracked guest into a real club's roster.
+	 * end in an "I'm new — add me" box wired to a session-less `addMember` server
+	 * fn, so anyone holding the club link could write a row into the club's
+	 * membership record — which is what put a tracked guest into a real club's
+	 * roster. That fn no longer exists at all (#630).
 	 */
 	notListedHint?: ReactNode;
 }) {

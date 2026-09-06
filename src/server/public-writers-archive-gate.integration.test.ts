@@ -3,9 +3,8 @@
  * half of #544).
  *
  * #544 closed the reads and deliberately scoped writes out, which created an
- * asymmetry rather than a partial fix: three of these paths MINT rows carrying
- * names — `applySelfAdd` (a `people` row plus a `members` row),
- * `captureGuestVisit` (a guest row with optional email and phone),
+ * asymmetry rather than a partial fix: some of these paths MINT rows carrying
+ * names — `captureGuestVisit` (a guest row with optional email and phone),
  * `joinBallotAsGuest` (a ballot-guest identity) — so a taken-down club kept
  * accreting PII while every read of it returned empty. Nobody could notice: the
  * writer got a silent success with no read-back, and no admin could reach the
@@ -13,15 +12,28 @@
  * says archiving "locks out every member and admin"; until this it locked out
  * neither.
  *
+ * `applySelfAdd` was the third of those row-minting paths and the reason the
+ * asymmetry mattered most — it minted a `people` row PLUS a `members` row. It is
+ * gone: #616 admin-gated its only caller, so it stopped being session-less, and
+ * #630 deleted it. Its case left this file with it. What it taught did not — see
+ * CODING_STANDARDS.md's "WRITES are closed too", which still states the rule its
+ * in-lock placement is the worked example of.
+ *
  * ## Why these paths and not every write
  *
  * `assertClubNotArchived` is reachable for free from `requireMembership`, so
- * every AUTHED mutation already had the gate. These eight are the session-less
- * ones — the anonymous roster-pick identity is the dominant path in this
- * product — and they never touch that choke point. The list is not curated: it
- * is exactly the set `public-readers-archive-gate.guard.test.ts` waived with the
- * reason `"write — #544 follow-up"`, and that guard now requires each one to
- * name its gate instead.
+ * every AUTHED mutation already had the gate. The session-less ones never touch
+ * that choke point — the anonymous roster-pick identity is the dominant path in
+ * this product. The list is not curated: it is exactly the set
+ * `public-readers-archive-gate.guard.test.ts` waived with the reason
+ * `"write — #544 follow-up"`, and that guard now requires each one to name its
+ * gate instead, in its `WRITE_GATES` table. Eight rows there; six gate in a
+ * `-logic` SEAM, because a handler body is unreachable from vitest. Five of
+ * those six are executed here. The sixth is `confirmSlotCore` (#661, which gave
+ * an authed-only write a session-less holder arm); its before/after pair lives
+ * in `slots-confirm.integration.test.ts` beside the rest of that arm's cases,
+ * rather than here, because the fixture it needs is a CLAIMED slot and a holder,
+ * which none of the cases below build.
  *
  * ## Each case is a BEFORE/AFTER pair, for the reason #544's suite gives
  *
@@ -45,7 +57,7 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clubs, meetings, roleSlots } from "#/db/schema";
+import { clubs, guests, meetings, roleSlots } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	cleanup,
@@ -57,7 +69,6 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { applySelfAdd } = await import("#/server/members-logic");
 const { captureGuestVisit } = await import("#/server/guest-pipeline-logic");
 const { castVote, joinBallotAsGuest, openVote, closeVote } = await import(
 	"#/server/voting-logic"
@@ -91,53 +102,14 @@ describe.skipIf(!hasTestDb)(
 	"public writes refuse an archived club (#555)",
 	() => {
 		/**
-		 * The row-minting three first — the reason this issue mattered more after
+		 * The row-minting pair first — the reason this issue mattered more after
 		 * #544 rather than less.
+		 *
+		 * A THROW is not the whole promise on a minting path: a throw after a
+		 * partial insert looks identical from the caller's side. So this asserts
+		 * the observable the gate actually controls — that the refusal left NO
+		 * `guests` row behind — alongside the before/after pair.
 		 */
-		it("applySelfAdd — no new Person or Membership in a taken-down club", async () => {
-			const s = await seedLiveClub();
-			// BEFORE: the write works, so the AFTER cannot pass by accident.
-			const added = await applySelfAdd({ clubId: s.clubId, name: "Live Add" });
-			expect(added.id).toBeTruthy();
-
-			await archive(s.clubId);
-			await expect(
-				applySelfAdd({ clubId: s.clubId, name: "Archived Add" }),
-			).rejects.toThrow(ARCHIVED);
-		});
-
-		/**
-		 * The archive check here lives INSIDE the existing `FOR UPDATE` lock rather
-		 * than in a pre-check, because a pre-check is check-then-act: a club archived
-		 * between the check and the insert still gets the rows. This asserts the
-		 * observable that placement controls — that nothing was written — rather than
-		 * just that it threw, since a throw after a partial insert would look the same
-		 * from the caller's side.
-		 */
-		it("applySelfAdd — the refusal leaves NO rows behind", async () => {
-			const s = await seedLiveClub();
-			const before = await testDb
-				.select({ id: clubs.id })
-				.from(clubs)
-				.where(eq(clubs.id, s.clubId));
-			expect(before).toHaveLength(1);
-
-			const countMembers = async () =>
-				(
-					await testDb.execute<{ n: string }>(
-						// biome-ignore lint/style/noUnusedTemplateLiteral: drizzle sql tag
-						`SELECT count(*)::text AS n FROM members WHERE club_id = '${s.clubId}'`,
-					)
-				).rows[0]?.n;
-
-			const priorCount = await countMembers();
-			await archive(s.clubId);
-			await expect(
-				applySelfAdd({ clubId: s.clubId, name: "Should Not Exist" }),
-			).rejects.toThrow(ARCHIVED);
-			expect(await countMembers()).toBe(priorCount);
-		});
-
 		it("captureGuestVisit — no guest name, email or phone collected", async () => {
 			const s = await seedLiveClub();
 			const live = await captureGuestVisit({
@@ -148,6 +120,15 @@ describe.skipIf(!hasTestDb)(
 			});
 			expect(live).toBeTruthy();
 
+			const countGuests = async () =>
+				(
+					await testDb
+						.select({ id: guests.id })
+						.from(guests)
+						.where(eq(guests.clubId, s.clubId))
+				).length;
+			const priorCount = await countGuests();
+
 			await archive(s.clubId);
 			await expect(
 				captureGuestVisit({
@@ -157,6 +138,7 @@ describe.skipIf(!hasTestDb)(
 					phone: "555-0199",
 				}),
 			).rejects.toThrow(ARCHIVED);
+			expect(await countGuests()).toBe(priorCount);
 		});
 
 		it("joinBallotAsGuest — no ballot-guest identity minted", async () => {

@@ -6,7 +6,6 @@ import {
 	applyMemberEdit,
 	applyMemberMerge,
 	applyMemberRemove,
-	applySelfAdd,
 	applySetMemberRole,
 	applySetMemberStatus,
 	bulkImportSchema,
@@ -28,40 +27,24 @@ export const listMembers = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => z.string().uuid().parse(clubId))
 	.handler(async ({ data: clubId }) => loadPublicClubRoster(clubId));
 
-const addMemberSchema = z.object({
-	clubId: z.string().uuid(),
-	// Cap the length so one public self-add can't insert an oversized row (#326).
-	name: z.string().trim().min(1).max(80),
-});
-
-/**
- * Add a new roster member to a club. ADMIN-ONLY since #616 — this was PUBLIC,
- * with no session and nothing but a per-club rate limit between anyone holding
- * the club link and a real row in the club's membership record.
- *
- * That was deliberate once (#32: "member picks their name from the roster …
- * self-add if absent") and is no longer defensible: it produced a live incident
- * where a guest being tracked in the VP-Membership pipeline turned up in a
- * club's roster, leaving two records for one human with nothing linking them.
- * `members-logic.ts` never references `guests`, so the path was structurally
- * blind to the pipeline. #326 capped the RATE of that write; it left the
- * capability, which is the part that mattered.
- *
- * Every non-member now has a door that is not this one: the guest book (#239),
- * assign-guest-to-slot (#151), and the pipeline itself (#208). A genuine new
- * member is added by an officer through Roster → "+ Add member".
- *
- * The throttle inside `applySelfAdd` stays. It is redundant behind an admin gate
- * and is left in place deliberately rather than deleted in a security fix — see
- * the follow-up issue for the dead-code removal.
- */
-export const addMember = createServerFn({ method: "POST" })
-	.validator((i: unknown) => addMemberSchema.parse(i))
-	.handler(async ({ data }) => {
-		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applySelfAdd(data);
-	});
+// There is deliberately NO `addMember` here (#616, deleted #630). It was PUBLIC
+// for a long time — no session, and nothing but a per-club rate limit between
+// anyone holding the club link and a real row in the club's membership record.
+// That was deliberate once (#32: "member picks their name from the roster …
+// self-add if absent") and stopped being defensible when it produced a live
+// incident: a guest tracked in the VP-Membership pipeline turned up in a club's
+// roster, leaving two records for one human with nothing linking them.
+// `members-logic.ts` never references `guests`, so the path was structurally
+// blind to the pipeline. #326 capped the RATE of that write and left the
+// capability, which was the part that mattered; #616 admin-gated it, which left
+// a gated fn with zero call sites, and #630 removed it with its throttle.
+//
+// Every non-member has a door that is not this one: the guest book (#239),
+// assign-guest-to-slot (#151), and the pipeline itself (#208). A genuine new
+// member is added by an officer through Roster → "+ Add member", which is
+// `bulkImportMembers` below. `member-write-authz.guard.test.ts` asserts the
+// CLASS — no `createServerFn` may write `members` without a club-role gate — so
+// the next writer cannot be anonymous by omission.
 
 // ---------------------------------------------------------------------------
 // VPE roster management (authed). The DB logic lives in `members-logic.ts` so

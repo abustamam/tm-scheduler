@@ -162,8 +162,10 @@ export type ResolvedMembership =
 	  };
 
 /** The rejection every archive check raises. The message itself lives in
- *  `#/lib/club-archive` beside `isClubArchived`, so the write gate's own
- *  in-transaction check (#555, `applySelfAdd`) raises the identical sentence. */
+ *  `#/lib/club-archive` beside `isClubArchived`, so a write that cannot call
+ *  this assert — the per-meeting agenda resolvers' private
+ *  `assertMeetingClubNotArchived`, and any write gating inside its own
+ *  transaction (#555) — raises the identical sentence. */
 function assertNotArchived(club: { archivedAt: Date | null }): void {
 	if (isClubArchived(club)) {
 		throw new Error(CLUB_ARCHIVED_MESSAGE);

@@ -419,21 +419,42 @@ taken-down club's pages and crest on a 404/410 (#556).
 archived club into not-found; a write THROWS, because every write already has an error path to its
 caller and silently accepting one that will never be readable is worse than saying the club is gone.
 `assertClubNotArchived` (exported from `guards.ts`) is the call, and the message lives in
-`#/lib/club-archive` as `CLUB_ARCHIVED_MESSAGE` so the two callers that cannot use the assert still
-raise the same sentence. The first is `applySelfAdd`, and the exception is the interesting part:
-it reads `archived_at` inside its own pre-existing `FOR UPDATE` lock instead, because a pre-check is
-check-then-act and this is the path that mints a `people` row PLUS a `members` row — the race would
-leave exactly the PII the takedown was meant to stop collecting. Where a write already holds a club
-lock, gate inside it; everywhere else the assert is right. The second arrived in v1.26.0.0: the
-per-meeting agenda-write resolvers read `archived_at` in a private
-`assertMeetingClubNotArchived`, because `guards.ts` imports `meeting-authz-logic.ts` and calling
-the assert back would close an import cycle. Five of the seven session-less writes gate
+`#/lib/club-archive` as `CLUB_ARCHIVED_MESSAGE` so a caller that cannot use the assert still raises
+the same sentence. One such caller exists today, and it arrived in v1.26.0.0: the per-meeting
+agenda-write resolvers read `archived_at` in a private `assertMeetingClubNotArchived`, because
+`guards.ts` imports `meeting-authz-logic.ts` and calling the assert back would close an import
+cycle. Five of the seven session-less writes gate
 in a `-logic` SEAM rather than in the handler, which is not stylistic: a handler body is unreachable
 from vitest, so a handler-gated write is covered by a source grep and nothing else. (It read "six of
 the eight" until v1.26.0.0; #616 admin-gated `addMember`, which took it out of the session-less set
-entirely. `WRITE_GATES` in `public-readers-archive-gate.guard.test.ts` is the list — count there.)
+entirely, and #630 deleted it. `WRITE_GATES` in `public-readers-archive-gate.guard.test.ts` is the
+list — count there.)
 `releaseSlot`/`updateSpeakerDetails` are the two still in that position (their logic is inline in
 `slots.ts`), recorded in `TODOS/legacy-2026-09.md`.
+
+**Where a write already holds a club lock, gate INSIDE it; everywhere else the assert is right.**
+This rule has no live instance as of #630, and it is stated here rather than dropped because the
+reasoning does not depend on the function that demonstrated it. That function was `applySelfAdd`,
+the anonymous "I'm new — add me" roster self-add. It took a `FOR UPDATE` on the club row for its
+throttle, and #555 read `archived_at` out of that same locked row instead of calling
+`assertClubNotArchived` before the transaction. The placement was the whole point: a pre-check is
+check-then-act, so a club archived between the check and the insert still gets the rows, and that
+path minted a `people` row PLUS a `members` row — the race would have left exactly the PII the
+takedown was meant to stop collecting. Reading `archived_at` inside the lock answered both
+questions against one row version and cost no extra round trip, because the statement was already
+there. #616 admin-gated the only caller and #630 deleted both.
+
+Do NOT repoint that example at a surviving session-less writer without checking, because the
+obvious candidate does the opposite. `captureGuestVisit` calls `assertClubNotArchived` FIRST, before
+its transaction, and then takes `SELECT id FROM clubs … FOR UPDATE` inside it for the guest-book
+throttle — a lock it could gate in, on a path that mints a `guests` row carrying a name, an email
+and a phone. So it is a pre-check with a lock available, which is the shape this rule argues
+against, and it is the one place the rule would still apply if someone moved the check. That has
+not been done and is not a #630 regression: it is how #555 shipped it. It is parked in
+`TODOS/remove-self-add-630.md` rather than filed, because the window is a few milliseconds wide on
+a superadmin takedown and the residual row is a guest in a club every read already reports as
+gone — but a reader looking for the worked example should find this note instead of assuming the
+guest book is one.
 
 **The enrollment sweep is now closed on both shapes**, having been closed on neither. The
 `\n});` body-slicing bug is fixed (#565) and `bodyStopsAtItsOwnDeclaration` fails on any

@@ -237,11 +237,16 @@ async function loadClubPipelineSettings(
 // Capping NEW guests therefore caps fabricated attendance too: attendance is
 // unique per (meeting, guest), so one guest can only ever produce one row.
 //
-// Why 30 rather than the 15 `applySelfAdd` uses for members: a member self-add
-// is a rare individual event, while guests arrive in BATCHES — an open house is
-// exactly when a club most wants the form working and most wants to impress
-// visitors. 30 new guests in one club in one hour clears any real meeting and
-// still bounds abuse to a number an officer can delete by hand.
+// Why 30: guests arrive in BATCHES — an open house is exactly when a club most
+// wants the form working and most wants to impress visitors. 30 new guests in
+// one club in one hour clears any real meeting and still bounds abuse to a
+// number an officer can delete by hand. (30 was originally picked against the
+// public member self-add's 15 — the sibling cap on a rare individual event, so
+// double it for a path where arrivals cluster. #630 deleted that path and its
+// constants, which leaves 30 standing on the batch argument above rather than on
+// a ratio. Do NOT repoint the comparison at `MAX_BALLOT_GUESTS_PER_MEETING`: it
+// is 60, so a "batches justify a bigger cap" sentence aimed at it argues for the
+// opposite of 30.)
 //
 // A RETURNING guest (matched by email or phone) does not consume the cap: only
 // the create path counts, so regulars are never throttled.
@@ -311,7 +316,9 @@ export interface CaptureGuestResult {
  * visitors thus get a NEW attendance row (a later meeting) rather than a
  * duplicate guest; a repeat scan at the SAME meeting is idempotent (the
  * meeting×guest unique index). No auth — the caller (the public server fn)
- * trusts the club link, mirroring `addMember`.
+ * trusts the club link. It used to say "mirroring `addMember`"; that public
+ * roster self-add was admin-gated at #616 and deleted at #630, so this is now
+ * the front door for a non-member rather than the second-best one.
  */
 export async function captureGuestVisit(
 	input: CaptureGuestInput,
@@ -996,7 +1003,7 @@ export async function applyConvertGuestToMember(
 		//
 		//    When neither qualifies, a FRESH Person is the right answer rather than
 		//    a best guess: ADR-0008 treats dedupe/merge as a later deliberate
-		//    action (`applySelfAdd` says the same), and the superadmin merge tool
+		//    action, and the superadmin merge tool
 		//    exists to fuse two Persons after the fact. Under-matching is visible
 		//    and reversible; over-matching is neither.
 		let personId: string | null = null;
