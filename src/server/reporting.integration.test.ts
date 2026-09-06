@@ -9,8 +9,10 @@
  *   TEST_DATABASE_URL=postgresql://test:test@localhost:5433/tm_test \
  *     bunx vitest run src/server/reporting.integration.test.ts
  */
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	meetingAttendance,
 	meetings,
 	members,
 	roleDefinitions,
@@ -56,11 +58,32 @@ async function addMeeting(clubId: string, daysAgo: number): Promise<string> {
 	return row.id;
 }
 
+/**
+ * A meeting that has NOT happened yet (#543). Separate from `addMeeting` rather
+ * than a negative `daysAgo` because the upcoming-claim tests also need to vary
+ * the meeting's status, and "cancelled, 3 days from now" is the case the marker
+ * has to stay off.
+ */
+async function addUpcomingMeeting(
+	clubId: string,
+	daysAhead: number,
+	status: "scheduled" | "cancelled" = "scheduled",
+): Promise<{ meetingId: string; scheduledAt: Date }> {
+	const scheduledAt = new Date(Date.now() + daysAhead * DAY);
+	const [row] = await testDb
+		.insert(meetings)
+		.values({ clubId, scheduledAt, status })
+		.returning({ id: meetings.id });
+	if (!row) throw new Error("meeting insert failed");
+	return { meetingId: row.id, scheduledAt };
+}
+
 async function addSlot(opts: {
 	meetingId: string;
 	roleDefinitionId: string;
 	memberId: string;
 	speechId?: string;
+	status?: "open" | "claimed" | "confirmed";
 }): Promise<string> {
 	const [row] = await testDb
 		.insert(roleSlots)
@@ -68,7 +91,7 @@ async function addSlot(opts: {
 			meetingId: opts.meetingId,
 			roleDefinitionId: opts.roleDefinitionId,
 			assignedMemberId: opts.memberId,
-			status: "confirmed",
+			status: opts.status ?? "confirmed",
 			speechId: opts.speechId ?? null,
 		})
 		.returning({ id: roleSlots.id });
@@ -226,5 +249,185 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 		expect(ids.indexOf(stale.memberId)).toBeLessThan(
 			ids.indexOf(recent.memberId),
 		);
+
+		// #543 — nobody in this club holds a future claim, so no row carries the
+		// marker. `seedClub` DOES leave a meeting a week out, with an OPEN slot
+		// assigned to nobody: an unclaimed slot is not a commitment.
+		for (const row of overdue) {
+			expect(row.upcomingRoleAt).toBeUndefined();
+		}
+	});
+
+	// #543 — the VPE dashboard ranks by PAST participation, so a member who has
+	// signed up for Monday still reads "Never held a role" beside the club's own
+	// sign-up sheet. These cover the additive marker that resolves the
+	// contradiction, and — just as importantly — that it is only a marker: the
+	// ordering, `isOverdue` and the overdue count are unchanged by a future claim.
+	describe("upcoming role claims (#543)", () => {
+		it("marks an overdue member who holds a confirmed future role, without changing isOverdue or the rank", async () => {
+			const { loadOverdueMembers } = await import("#/server/reporting-logic");
+
+			const booked = await addMember(seeded.clubId, "Booked Member");
+			const stale = await addMember(seeded.clubId, "Stale Member");
+
+			const past = await addMeeting(seeded.clubId, 90);
+			await addSlot({
+				meetingId: past,
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: stale.memberId,
+			});
+			const next = await addUpcomingMeeting(seeded.clubId, 3);
+			await addSlot({
+				meetingId: next.meetingId,
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: booked.memberId,
+			});
+
+			const overdue = await loadOverdueMembers(seeded.clubId, 60);
+			const byId = new Map(overdue.map((m) => [m.memberId, m]));
+			const row = byId.get(booked.memberId);
+
+			// The marker is present and points at the meeting they claimed.
+			expect(row?.upcomingRoleAt?.getTime()).toBe(next.scheduledAt.getTime());
+			// …and NOTHING backward-looking moved. A claim is not participation
+			// until it happens: this member is still counted, still flagged, still
+			// has no role history, and still sorts above the member who last held
+			// a role 90 days ago.
+			expect(row?.isOverdue).toBe(true);
+			expect(row?.daysSinceLastRole).toBeNull();
+			expect(row?.lastAnyRoleAt).toBeNull();
+			const ids = overdue.map((m) => m.memberId);
+			expect(ids.indexOf(booked.memberId)).toBeLessThan(
+				ids.indexOf(stale.memberId),
+			);
+			// The OVERDUE MEMBERS stat card counts `isOverdue` rows; the marker must
+			// not quietly remove this member from it. Option (b) in #543 — dropping
+			// them from the count — was considered and explicitly rejected.
+			const counted = overdue.filter((m) => m.isOverdue).map((m) => m.memberId);
+			expect(counted).toContain(booked.memberId);
+		});
+
+		it("marks a never-spoken member in the speaker queue too", async () => {
+			const { loadSpeakerRotation } = await import("#/server/reporting-logic");
+
+			const booked = await addMember(seeded.clubId, "Booked Speaker");
+			const next = await addUpcomingMeeting(seeded.clubId, 5);
+			await addSlot({
+				meetingId: next.meetingId,
+				roleDefinitionId: speakerRoleId,
+				memberId: booked.memberId,
+			});
+
+			const rotation = await loadSpeakerRotation(seeded.clubId);
+			const row = rotation.find((r) => r.memberId === booked.memberId);
+
+			expect(row?.upcomingRoleAt?.getTime()).toBe(next.scheduledAt.getTime());
+			// Still "Never spoken" — the speech has not happened yet.
+			expect(row?.timesSpoken).toBe(0);
+			expect(row?.lastSpokenAt).toBeNull();
+		});
+
+		it("does NOT mark a claim at a cancelled future meeting", async () => {
+			const { loadOverdueMembers } = await import("#/server/reporting-logic");
+
+			const ghost = await addMember(seeded.clubId, "Ghost Meeting");
+			const off = await addUpcomingMeeting(seeded.clubId, 4, "cancelled");
+			await addSlot({
+				meetingId: off.meetingId,
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: ghost.memberId,
+			});
+
+			const overdue = await loadOverdueMembers(seeded.clubId, 60);
+			const row = overdue.find((m) => m.memberId === ghost.memberId);
+			expect(row?.upcomingRoleAt).toBeUndefined();
+		});
+
+		it("does NOT mark an open slot that merely names a member", async () => {
+			// A slot can carry `assigned_member_id` while still sitting at status
+			// `open` — that is a suggestion, not a commitment, and the past-facing
+			// queries already refuse to count it.
+			const { loadOverdueMembers } = await import("#/server/reporting-logic");
+
+			const pencilled = await addMember(seeded.clubId, "Pencilled In");
+			const next = await addUpcomingMeeting(seeded.clubId, 2);
+			await addSlot({
+				meetingId: next.meetingId,
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: pencilled.memberId,
+				status: "open",
+			});
+
+			const overdue = await loadOverdueMembers(seeded.clubId, 60);
+			const row = overdue.find((m) => m.memberId === pencilled.memberId);
+			expect(row?.upcomingRoleAt).toBeUndefined();
+		});
+
+		it("shows the SOONEST of two future claims", async () => {
+			const { loadOverdueMembers } = await import("#/server/reporting-logic");
+
+			const busy = await addMember(seeded.clubId, "Busy Member");
+			const soon = await addUpcomingMeeting(seeded.clubId, 3);
+			const later = await addUpcomingMeeting(seeded.clubId, 17);
+			await addSlot({
+				meetingId: later.meetingId,
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: busy.memberId,
+			});
+			await addSlot({
+				meetingId: soon.meetingId,
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: busy.memberId,
+				status: "claimed",
+			});
+
+			const overdue = await loadOverdueMembers(seeded.clubId, 60);
+			const row = overdue.find((m) => m.memberId === busy.memberId);
+			// The later meeting was inserted FIRST, so a query that took any row
+			// rather than the minimum would pass on insertion order alone.
+			expect(row?.upcomingRoleAt?.getTime()).toBe(soon.scheduledAt.getTime());
+		});
+
+		it("leaves the attendance-lapse rows untouched", async () => {
+			// The three loaders share `HELD_SLOT_STATUSES` and the
+			// past/not-cancelled predicate, and `loadAttendanceLapse` reads role
+			// slots too (holding a role counts as being there, #530). Widening
+			// either to reach future meetings would quietly mark a member present
+			// at a meeting that has not happened, breaking their absence streak.
+			const { loadAttendanceLapse } = await import("#/server/reporting-logic");
+
+			const drifter = await addMember(seeded.clubId, "Drifting Member");
+			// Members are scored from `joined_at ?? created_at`, and these fixtures
+			// backdate meetings — an ordering production never produces. Backdate
+			// the member so the window is eligible for them at all.
+			await testDb
+				.update(members)
+				.set({ createdAt: new Date(Date.now() - 400 * DAY) })
+				.where(eq(members.id, drifter.memberId));
+			// Three held meetings where somebody took the register and the drifter
+			// is not on it — an absence each.
+			for (const daysAgo of [7, 14, 21]) {
+				const past = await addMeeting(seeded.clubId, daysAgo);
+				await testDb.insert(meetingAttendance).values({
+					meetingId: past,
+					memberId: seeded.memberId,
+					status: "present",
+				});
+			}
+			// …and they are booked for next week, which must NOT rescue the streak.
+			const next = await addUpcomingMeeting(seeded.clubId, 6);
+			await addSlot({
+				meetingId: next.meetingId,
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: drifter.memberId,
+			});
+
+			const rows = await loadAttendanceLapse(seeded.clubId);
+			const row = rows.find((r) => r.memberId === drifter.memberId);
+			expect(row?.streak).toBe(3);
+			expect(row?.isLapsed).toBe(true);
+			// The row shape is the lapse row's own — no upcoming marker leaked in.
+			expect(row && "upcomingRoleAt" in row).toBe(false);
+		});
 	});
 });

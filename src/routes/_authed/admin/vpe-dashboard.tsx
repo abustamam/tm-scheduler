@@ -8,7 +8,7 @@ import {
 } from "#/lib/attendance-lapse";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { formatShortDate } from "#/lib/format";
+import { formatMeetingDate, formatShortDate } from "#/lib/format";
 import { formatTenure } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import {
@@ -202,10 +202,13 @@ function MemberIdentity({
 	memberId,
 	name,
 	joinedAt,
+	upcomingRoleAt,
 }: {
 	memberId: string;
 	name: string;
 	joinedAt: Date | string | null;
+	/** #543 — omitted by callers that have no upcoming-claim data (LapseRow). */
+	upcomingRoleAt?: Date | string;
 }) {
 	return (
 		<div className="flex min-w-0 items-center gap-3">
@@ -215,12 +218,35 @@ function MemberIdentity({
 				size={38}
 			/>
 			<div className="min-w-0 leading-[1.25]">
-				<div className="truncate text-sm font-bold">{name}</div>
+				<div className="flex min-w-0 items-center gap-2">
+					<span className="truncate text-sm font-bold">{name}</span>
+					{upcomingRoleAt ? <UpNextPill at={upcomingRoleAt} /> : null}
+				</div>
 				<div className="text-xs text-[var(--sea-ink-soft)]">
 					{joinedAt ? formatTenure(joinedAt) : "Tenure unknown"}
 				</div>
 			</div>
 		</div>
+	);
+}
+
+/**
+ * "Up next · Mon, Aug 10" (#543). Both lists this sits in rank members by PAST
+ * participation, so without it Monday's Toastmaster reads "Never held a role"
+ * on the officer's own dashboard while the club's sign-up sheet has her name on
+ * it. The pill does not change the rank or the overdue count — it says "already
+ * booked, no outreach needed today" beside a number that is still honest about
+ * history.
+ *
+ * Teal (the same token the member dashboard's "Signed up" pill uses) rather
+ * than the amber the wait column carries: these two rows mean opposite things
+ * and must not look alike.
+ */
+function UpNextPill({ at }: { at: Date | string }) {
+	return (
+		<span className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-[var(--lagoon-deep)]">
+			Up next · {formatMeetingDate(at)}
+		</span>
 	);
 }
 
@@ -246,6 +272,7 @@ function OverdueRow({ member }: { member: OverdueMemberRow }) {
 				memberId={member.memberId}
 				name={member.name}
 				joinedAt={member.joinedAt}
+				upcomingRoleAt={member.upcomingRoleAt}
 			/>
 			<div className="text-sm">
 				<span className="font-bold text-[var(--warning-strong)]">{wait}</span>
@@ -319,6 +346,7 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 				memberId={row.memberId}
 				name={row.name}
 				joinedAt={row.joinedAt}
+				upcomingRoleAt={row.upcomingRoleAt}
 			/>
 			<div className="hidden text-sm sm:block">
 				{row.lastSpokenAt ? (
