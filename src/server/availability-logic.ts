@@ -63,6 +63,15 @@ export async function releaseSlotsAndMarkUnavailable(
 		/** ALWAYS the OWNING club, read off the meeting row by the caller (#396) —
 		 *  never the `clubId` the request payload carries. */
 		clubId: string;
+		/** How the change happened, recorded in `activity_log.detail` only.
+		 *
+		 *  Added by #663, when `setPlannedAttendance` started declining through
+		 *  this seam and carried a `via` its two older callers never had. Optional,
+		 *  so the season grid and the personal meeting page need no change and keep
+		 *  `setPlanStatus`'s own `"manual"` default — but a caller that HAS the
+		 *  provenance must pass it, or the destructive path records less of it than
+		 *  the harmless rung write beside it. */
+		via?: "nudge" | "manual";
 	},
 ): Promise<{ released: number }> {
 	// Takedown outranks every other reason to refuse (ADR-0016), so it runs
@@ -109,6 +118,7 @@ export async function releaseSlotsAndMarkUnavailable(
 			clubId: args.clubId,
 			status: "not_coming",
 			actorMemberId,
+			via: args.via,
 			// WHICH arm admitted the write, persisted as `activity_log.detail.
 			// grantedVia`. Optional on the seam, so a caller with a ladder that
 			// forgets it drops the distinction silently — and a grant defended as

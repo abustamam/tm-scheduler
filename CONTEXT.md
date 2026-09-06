@@ -313,7 +313,15 @@ the nouns in `src/db/schema.ts`.
   now the ONLY encoding of unavailable, and row presence answers nothing. Consequence for
   readers: filter on the STATUS, never on the row existing. `reached_out` is the private record
   of having asked, kept from MEMBERS rather than from everyone who runs the meeting; `coming` and
-  `not_coming` are the member's own answer and are self-serve. All three rungs are STORED values;
+  `not_coming` are the member's own answer and are self-serve.
+  Since #663 a `not_coming` written from the MEETING PAGE can also free every role slot the member
+  holds on that meeting, in the same transaction — so the rung is no longer confined to this table.
+  It is opt-in on the request (`releaseHeldRoles`, default false, so a client loaded before that
+  deploy still gets the plain rung write), it is withheld from a self-asserted Toastmaster acting on
+  someone else's row, and it is refused once the meeting is over. The seam is
+  `attendance-decline-logic.ts`; `setAvailability` (the season grid's own toggle) still writes the
+  rung and releases nothing.
+  All three rungs are STORED values;
   since v1.19.0.0 the officer's rail also DERIVES one, and the two must not be confused.
   `buildPlanPanel` (`src/lib/attendance-panel.ts`) resolves a DISPLAY status per member: an
   explicit `coming` / `not_coming` wins, because their own word outranks anything inferred; else a

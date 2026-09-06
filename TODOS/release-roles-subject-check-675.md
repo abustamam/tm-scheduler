@@ -13,7 +13,14 @@ Left over from #675, which gave `markUnavailableReleasing` the subject check it 
   would actually bound it is the issue's own second suggestion: a per-club rate limit in front of
   the slot `UPDATE`. Deliberately not built here — it needs a decision about where the counter
   lives and what a legitimate burst looks like on meeting night.
-  **Priority:** P2
+
+  **Widened by #663.** `setPlannedAttendance` now releases as well, so the residual covers two
+  endpoints, not one. The rail's version needs an explicit `releaseHeldRoles` on the payload and
+  refuses after the meeting, which raises the floor slightly; neither is an authorization
+  improvement. `attendance-decline.integration.test.ts`'s "THE RESIDUAL" case executes the hole
+  against a real database, so the scenario is no longer only described. The bounding fix is
+  unchanged: a per-club rate limit in front of the slot `UPDATE`.
+  **Priority:** P2 → P1, since a second caller now reaches it.
 
 - **`setAvailability` / `clearAvailability` were audited and left.** The issue asked for the pair
   to be looked at in the same pass. Both still take a self-asserted `actorMemberId` with no

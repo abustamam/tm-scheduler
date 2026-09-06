@@ -23,6 +23,10 @@ import {
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
+import {
+	DeclineReleaseDialog,
+	type PendingDecline,
+} from "#/components/club/decline-release-dialog";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
@@ -56,6 +60,7 @@ import {
 	formatMeetingTime,
 	formatMeetingTimeRange,
 } from "#/lib/format";
+import { buildHeldRoleLabels } from "#/lib/held-role-labels";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
@@ -371,6 +376,20 @@ function MeetingView() {
 	// ordering guarantee, and an out-of-order resolution leaves the persisted
 	// rung disagreeing with the member's last tap.
 	const [myStatusBusy, setMyStatusBusy] = useState(false);
+	// The decline the officer (or the member) has picked but not yet confirmed
+	// (#663). Null while nothing is pending. Held HERE rather than in the panel
+	// because BOTH surfaces that write a rung on this page go through
+	// `writeRung` — the rail's chips and the personal strip's "Can't make it" —
+	// and a confirm wired to only one of them would leave the other releasing
+	// roles silently.
+	const [pendingDecline, setPendingDecline] = useState<PendingDecline | null>(
+		null,
+	);
+	// The confirm's OWN in-flight flag. `writeRung` returns as soon as the dialog
+	// opens, so the panel's `pendingId` and the strip's `myStatusBusy` have both
+	// cleared by the time the officer answers — the confirmed write would
+	// otherwise be the one write on this page guarded by nothing.
+	const [declineBusy, setDeclineBusy] = useState(false);
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
@@ -731,6 +750,11 @@ function MeetingView() {
 	// never `buildPanelRoleMap(slots.filter(...))`. See `attendance-panel.test.ts`'s
 	// "numbers a role off every slot it HAS" for what the filtered call produces.
 	const panelRoleByMemberId = buildPanelRoleMap(slots);
+	// EVERY role a member holds, numbered, for the decline confirm (#663) — the
+	// rail's badge map above is one role per member by design, and the officer
+	// has to be told about all of them before all of them are freed. Also
+	// unfiltered, for the numbering reason `buildPanelRoleMap` gives.
+	const heldRolesByMember = buildHeldRoleLabels(slots);
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.
 	// `unavailableMembers` (public) already names who is `not_coming`;
@@ -756,10 +780,71 @@ function MeetingView() {
 	// who is not the TMOD.
 	const actorClaim = !effectiveCanManage && myId ? { actorMemberId: myId } : {};
 
+	/**
+	 * Whether a decline written by THIS viewer, about THIS member, frees roles.
+	 *
+	 * It predicts the server's ARM — `attendance-decline-logic.ts` releases on
+	 * the officer arm, on the member's own answer, and on the Toastmaster's own
+	 * row; it withholds only a Toastmaster acting on someone ELSE. So the two
+	 * clauses here are officer-or-self, and `isTmod` is deliberately NOT read:
+	 * the own-row TMOD case resolves to `via: "tmod"` server-side (arm order is
+	 * officer → TMOD → self) and releases anyway, so branching on it here would
+	 * put the client and the server back out of step.
+	 *
+	 * `canManage`, NOT `effectiveCanManage`: the server keys off the SESSION, and
+	 * an admin previewing-as-member (#320) still carries one, so the preview flag
+	 * would make this under-predict on a path where the release still lands.
+	 *
+	 * This decides COPY only. It is NOT the gate on whether to ask — see
+	 * `writeRung` — and it is not the gate on the release either, which is the
+	 * server's.
+	 */
+	function declineFreesRoles(memberId: string): boolean {
+		return canManage || memberId === myId;
+	}
+
 	async function writeRung(
 		memberId: string,
 		next: PlanStatus | null,
 		via: "nudge" | "manual" = "manual",
+	) {
+		// #663: EVERY decline asks first. Deliberately not gated on the page
+		// believing this member holds a role — `heldRolesByMember` comes from
+		// loader data and the rail does not poll (CODING_STANDARDS.md), so a slot
+		// claimed since the page rendered is absent from it while the server frees
+		// it anyway. Gating on it skipped the confirm on exactly the case where
+		// the officer has the least idea what is about to happen, which is the
+		// sibling surface's documented first-cut bug (`personal-meeting-body.tsx`).
+		// A toast afterwards is a receipt, not consent.
+		//
+		// Returns WITHOUT writing and without touching `rungOverride`, so
+		// cancelling leaves no optimistic chip to roll back.
+		if (next === "not_coming") {
+			setPendingDecline({
+				memberId,
+				name:
+					heldRolesByMember[memberId]?.name ??
+					panelRosterForMode.find((r) => r.id === memberId)?.name ??
+					"this member",
+				roleLabels: heldRolesByMember[memberId]?.labels ?? [],
+				self: memberId === myId,
+				willRelease: declineFreesRoles(memberId),
+			});
+			return;
+		}
+		return commitRung(memberId, next, via);
+	}
+
+	async function commitRung(
+		memberId: string,
+		next: PlanStatus | null,
+		via: "nudge" | "manual" = "manual",
+		/** The confirm dialog was shown and answered (#663). DEFAULT FALSE, and
+		 *  only `DeclineReleaseDialog`'s own action passes true — every other
+		 *  caller here reaches this through `writeRung`, which cannot get past the
+		 *  dialog for a `not_coming`. The server treats an absent flag as "record
+		 *  the rung, free nothing"; see the field's note in `attendance-plan.ts`. */
+		releaseHeldRoles = false,
 	) {
 		// Roll back to what the UI was ACTUALLY showing, not the loader's
 		// snapshot: nothing here awaits an invalidate before this runs, and for a
@@ -778,7 +863,7 @@ function MeetingView() {
 		setRungOverride((o) => ({ ...o, [memberId]: next }));
 		retainPending(memberId);
 		try {
-			await (next === null
+			const written = await (next === null
 				? clearPlannedAttendance({
 						data: { memberId, meetingId: meeting.id, ...actorClaim },
 					})
@@ -788,9 +873,21 @@ function MeetingView() {
 							meetingId: meeting.id,
 							status: next,
 							via,
+							releaseHeldRoles,
 							...actorClaim,
 						},
 					}));
+			// #663: say what actually happened. The confirm named the roles BEFORE
+			// the write; this is the receipt, and it reads the SERVER's count rather
+			// than the labels the dialog showed — the arm gate lives server-side, so
+			// the client's prediction is the thing that could be wrong.
+			if ("released" in written && written.released > 0) {
+				toast.success(
+					written.released === 1
+						? "Not coming — role freed."
+						: "Not coming — roles freed.",
+				);
+			}
 			// Fire-and-forget, NOT awaited: the override already holds the value
 			// this write just committed, so nothing on screen is waiting on this
 			// resolving. But SOME invalidate has to fire, or `contactedMemberIds` /
@@ -1718,6 +1815,32 @@ function MeetingView() {
 					</aside>
 				) : null}
 			</div>
+			{/* #663. Outside the two columns because it is portalled anyway, and
+			    because it serves BOTH of them — the rail's chips and the personal
+			    strip both reach it through `writeRung`. Confirming calls
+			    `commitRung`, the same write every other rung takes, so the
+			    optimistic override, the rollback and the invalidate are unchanged. */}
+			<DeclineReleaseDialog
+				pending={pendingDecline}
+				busy={declineBusy}
+				onCancel={() => setPendingDecline(null)}
+				onConfirm={async (p) => {
+					// Stays OPEN until the write resolves, with both controls disabled.
+					// The alternative — close first, write after — is what left this
+					// path with no in-flight guard at all: the dialog is modal, so
+					// while it is up nothing else on the page is tappable either.
+					if (declineBusy) return;
+					setDeclineBusy(true);
+					try {
+						// `true` is passed HERE and nowhere else: this is the one call
+						// site that has shown someone what would be freed.
+						await commitRung(p.memberId, "not_coming", "manual", true);
+					} finally {
+						setDeclineBusy(false);
+						setPendingDecline(null);
+					}
+				}}
+			/>
 		</div>
 	);
 }

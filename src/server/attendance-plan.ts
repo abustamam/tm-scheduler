@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { attendancePlanStatusEnum, meetings } from "#/db/schema";
 import { resolveActor } from "./attendance-actor-logic";
+import { declinePlannedAttendance } from "./attendance-decline-logic";
 import {
 	CLEARABLE_ASK,
 	clearPlanStatus,
@@ -58,9 +59,36 @@ const planSchema = z.object({
 	status: z.enum(attendancePlanStatusEnum.enumValues),
 	/** How the change happened. Recorded in activity_log.detail only. */
 	via: z.enum(["nudge", "manual"]).default("manual"),
+	/**
+	 * On `not_coming`: the caller has shown someone which roles would be freed
+	 * and they said yes (#663).
+	 *
+	 * `.default(false)` is the STALE-TAB GATE and the default is the whole point.
+	 * This endpoint's URL, method and payload shape are unchanged by #663 — only
+	 * the side effect moved — and push-to-main auto-deploys while `public/sw.js`
+	 * claims open tabs without reloading them. So during every deploy window
+	 * there are clients sending the exact request they always sent, from a bundle
+	 * with no confirm dialog in it. Absent ⇒ false ⇒ record the rung and free
+	 * nothing, which is byte-for-byte what those clients used to get.
+	 *
+	 * Do NOT "simplify" this to `.default(true)` or to a plain `z.boolean()` with
+	 * the release inferred from the status. That is the same hazard class as
+	 * flipping a server fn's `method` (CLAUDE.md), minus the part that makes a
+	 * flip survivable: a wrong verb fails loudly with a 405 the router surfaces,
+	 * and this fails silently with a member's roles gone and no undo — re-claiming
+	 * a freed slot mints a NEW speech row (`attachSpeechToSlot`) and orphans the
+	 * original.
+	 */
+	releaseHeldRoles: z.boolean().default(false),
 });
 
-/** Set a member's planned attendance for a meeting. */
+/** Set a member's planned attendance for a meeting.
+ *
+ *  `not_coming` can also free every role the member holds in this meeting, but
+ *  only when the caller OPTS IN with `releaseHeldRoles` and their arm allows it
+ *  (#663) — see that field's note for why the default is the load-bearing part.
+ *  The return carries `released` so the caller can say what was actually
+ *  freed. */
 export const setPlannedAttendance = createServerFn({ method: "POST" })
 	.validator((i: unknown) => planSchema.parse(i))
 	.handler(async ({ data }) => {
@@ -70,6 +98,35 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
+		// A DECLINE is not just a rung (#663). A member cannot both hold a role and
+		// be absent, so `not_coming` also frees every slot they hold in this
+		// meeting — one transaction, the same `releaseSlotsAndMarkUnavailable` the
+		// season grid has used since #204, rather than the bare `setPlanStatus`
+		// below that left the agenda listing a Toastmaster whose own row read "Not
+		// coming".
+		//
+		// Returns BEFORE the ladder below so the actor is resolved once on this
+		// path: the seam runs the SAME `resolveActor`, and it has to, because it
+		// takes the raw claim (a pre-resolved actor id would satisfy the subject
+		// check by construction — #675). Whether the release actually happens is
+		// that seam's decision — the opt-in flag, then the arm, then the meeting
+		// window — and every outcome is executed in
+		// `attendance-decline.integration.test.ts`; the ladder resumed below still
+		// guards every other rung.
+		if (data.status === "not_coming") {
+			return declinePlannedAttendance(db, {
+				memberId: data.memberId,
+				meetingId: data.meetingId,
+				clubId: meeting.clubId,
+				// The RAW claim, deliberately not defaulted to the subject — see the
+				// seam's own note, and `availability.ts`'s.
+				claimedActorMemberId: data.actorMemberId,
+				// Straight through, never hard-coded true: a client that did not send
+				// the field is a client that has never seen a confirm dialog.
+				releaseHeldRoles: data.releaseHeldRoles,
+				via: data.via,
+			});
+		}
 		const { actorMemberId, viaManager, via } = await resolveActor({
 			clubId: meeting.clubId,
 			meetingId: data.meetingId,
@@ -85,7 +142,11 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		if (!viaManager && data.status === "reached_out") {
 			throw new Error(OFFICER_ONLY_REACHED_OUT_MESSAGE);
 		}
-		return setPlanStatus(db, {
+		// ONE return shape across both branches (#663). `released` is always
+		// present and 0 here, rather than absent, so a caller reading it does not
+		// have to narrow a union to find out whether anything was freed — the
+		// route's decline toast is the reader.
+		const written = await setPlanStatus(db, {
 			memberId: data.memberId,
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
@@ -125,12 +186,19 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 					? ["reached_out"]
 					: undefined,
 		});
+		return { ...written, released: 0 };
 	});
 
 /** Clear a member's planned attendance back to "no answer" (row absent). */
 export const clearPlannedAttendance = createServerFn({ method: "POST" })
 	.validator((i: unknown) =>
-		planSchema.omit({ status: true, via: true }).parse(i),
+		// `releaseHeldRoles` omitted alongside the other two: clearing a row back to
+		// "no answer" has no release to consent to, and leaving the field accepted
+		// here would put a flag on an endpoint that ignores it — which is how the
+		// next reader concludes the clear releases something.
+		planSchema
+			.omit({ status: true, via: true, releaseHeldRoles: true })
+			.parse(i),
 	)
 	.handler(async ({ data }) => {
 		const meeting = await loadMeeting(data.meetingId);
