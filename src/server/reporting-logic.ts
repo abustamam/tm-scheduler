@@ -11,10 +11,12 @@ import {
 	asc,
 	desc,
 	eq,
+	gte,
 	inArray,
 	isNotNull,
 	lt,
 	max,
+	min,
 	ne,
 	sql,
 } from "drizzle-orm";
@@ -56,6 +58,8 @@ export interface SpeakerRotationRow {
 	latestPathwayPath: string | null;
 	latestProjectName: string | null;
 	latestProjectLevel: string | null;
+	/** #543 — see `loadUpcomingRoleClaims`. Absent when there is none. */
+	upcomingRoleAt?: Date;
 }
 
 export interface OverdueMemberRow {
@@ -68,6 +72,74 @@ export interface OverdueMemberRow {
 	/** Whole days since the last role; null when the member has never held one. */
 	daysSinceLastRole: number | null;
 	isOverdue: boolean;
+	/** #543 — see `loadUpcomingRoleClaims`. Absent when there is none. */
+	upcomingRoleAt?: Date;
+}
+
+/**
+ * Per member, the soonest meeting STILL IN THE FUTURE at which they hold a
+ * claimed or confirmed role (#543). Members with no upcoming claim are absent
+ * from the map rather than present with a null.
+ *
+ * What this is for: every other query in this file is deliberately
+ * backward-looking, so a member who signed up for Monday's meeting and has not
+ * held a role in a year still reads "Never held a role" on the VPE dashboard —
+ * correct as history, and flatly contradicted by the club's own sign-up sheet
+ * on the next surface over. This adds the missing half as a MARKER: the
+ * ordering, `isOverdue` and the overdue stat count are untouched (a claim is
+ * not participation until it happens), but the officer can see at a glance
+ * that this person is already booked and needs no outreach today.
+ *
+ * `gte(now)` is the exact complement of the `lt(now)` the past-facing queries
+ * use, so a meeting belongs to exactly one side of the split and neither can
+ * lose it. `HELD_SLOT_STATUSES` and the cancelled-meeting exclusion are shared
+ * with them too, so "claimed" means the same thing in both directions —
+ * an open slot nobody has taken is not a commitment, and a cancelled meeting
+ * is not one either.
+ *
+ * **Deliberately NOT filtered to speaker roles**, unlike the `is_speaker_role`
+ * subquery in `loadSpeakerRotation` that this feeds. Overdue means "no claimed
+ * role of ANY kind", so narrowing this would blind the surface that needs it
+ * most — a member booked as Timer is exactly the person a VPE should not chase.
+ * The speaker queue consumes the same any-role answer, which is why the
+ * dashboard's marker is worded role-neutrally ("Booked", not "Up next"): the
+ * two decisions are one decision, and the component suite pins the other half.
+ */
+export async function loadUpcomingRoleClaims(
+	clubId: string,
+	now: Date = new Date(),
+): Promise<Map<string, Date>> {
+	const rows = await db
+		.select({
+			memberId: roleSlots.assignedMemberId,
+			// MIN, not MAX: a member booked for two future meetings is "up next"
+			// at the SOONER one.
+			soonestAt: min(meetings.scheduledAt),
+		})
+		.from(roleSlots)
+		.innerJoin(
+			meetings,
+			and(
+				eq(meetings.id, roleSlots.meetingId),
+				eq(meetings.clubId, clubId),
+				gte(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.where(
+			and(
+				inArray(roleSlots.status, [...HELD_SLOT_STATUSES]),
+				isNotNull(roleSlots.assignedMemberId),
+			),
+		)
+		.groupBy(roleSlots.assignedMemberId);
+
+	const map = new Map<string, Date>();
+	for (const r of rows) {
+		if (!r.memberId || !r.soonestAt) continue;
+		map.set(r.memberId, r.soonestAt);
+	}
+	return map;
 }
 
 /**
@@ -128,7 +200,12 @@ export async function loadSpeakerRotation(
 			asc(members.name),
 		);
 
-	const latest = await loadLatestSpeechByMember(clubId);
+	// Same `now` the rank above was computed from, so the past/future split is
+	// one instant rather than two.
+	const [latest, upcoming] = await Promise.all([
+		loadLatestSpeechByMember(clubId),
+		loadUpcomingRoleClaims(clubId, now),
+	]);
 
 	return rows.map((r) => {
 		const speech = latest.get(r.memberId);
@@ -142,6 +219,7 @@ export async function loadSpeakerRotation(
 			latestPathwayPath: speech?.pathwayPath ?? null,
 			latestProjectName: speech?.projectName ?? null,
 			latestProjectLevel: speech?.projectLevel ?? null,
+			upcomingRoleAt: upcoming.get(r.memberId),
 		};
 	});
 }
@@ -229,26 +307,31 @@ export async function loadOverdueMembers(
 		.groupBy(roleSlots.assignedMemberId)
 		.as("role_stats");
 
-	const rows = await db
-		.select({
-			memberId: members.id,
-			name: members.name,
-			clubRole: members.clubRole,
-			joinedAt: members.joinedAt,
-			lastAnyRoleAt: roleStats.lastAnyRoleAt,
-		})
-		.from(members)
-		.leftJoin(roleStats, eq(roleStats.memberId, members.id))
-		.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
-		.orderBy(
-			sql`${roleStats.lastAnyRoleAt} asc nulls first`,
-			asc(members.name),
-		);
+	const [rows, upcoming] = await Promise.all([
+		db
+			.select({
+				memberId: members.id,
+				name: members.name,
+				clubRole: members.clubRole,
+				joinedAt: members.joinedAt,
+				lastAnyRoleAt: roleStats.lastAnyRoleAt,
+			})
+			.from(members)
+			.leftJoin(roleStats, eq(roleStats.memberId, members.id))
+			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
+			.orderBy(
+				sql`${roleStats.lastAnyRoleAt} asc nulls first`,
+				asc(members.name),
+			),
+		loadUpcomingRoleClaims(clubId, now),
+	]);
 
 	return rows.map((r) => {
 		const daysSinceLastRole = r.lastAnyRoleAt
 			? Math.floor((now.getTime() - r.lastAnyRoleAt.getTime()) / 86_400_000)
 			: null;
+		// Deliberately NOT influenced by `upcomingRoleAt` (#543): overdue means
+		// "has not participated recently", which a future claim cannot retroact.
 		const isOverdue =
 			daysSinceLastRole === null || daysSinceLastRole > thresholdDays;
 		return {
@@ -259,6 +342,7 @@ export async function loadOverdueMembers(
 			lastAnyRoleAt: r.lastAnyRoleAt,
 			daysSinceLastRole,
 			isOverdue,
+			upcomingRoleAt: upcoming.get(r.memberId),
 		};
 	});
 }
