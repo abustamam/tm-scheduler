@@ -9,6 +9,19 @@
  * meeting-aware, server-rendered sheets (#311) so blank and pre-filled variants
  * can't drift. This script just renders each sheet blank (no fill) and writes
  * the PDF.
+ *
+ * Forgetting to run it is caught by `src/server/role-sheet-artifacts.test.ts`
+ * (#515), which renders every sheet and compares the drawing operators against
+ * the committed file. That gate lives in `bun run test` rather than a CI workflow
+ * step, but NOT because a byte-level step is impossible — an earlier version of
+ * this comment claimed that and was wrong. Renders here are reproducible once
+ * `/CreationDate` and the trailer `/ID` are normalised; `src/test/pdf-content.ts`
+ * has the measurement and the reasons the test gate is still the better one.
+ *
+ * The output is reproducible only as far as the machine, though: re-render on a
+ * different OS or zlib and the compressed bytes may differ while the drawing
+ * operators do not. That is invisible to the gate by design, so if you are
+ * diffing these files by hand, inflate first.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
