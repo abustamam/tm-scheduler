@@ -150,3 +150,35 @@ export const resources: Resource[] = [
 export function resourceBySlug(slug: string): Resource | undefined {
 	return resources.find((r) => r.slug === slug);
 }
+
+/**
+ * The categories that actually have articles, in the order the registry first
+ * mentions each one (#313).
+ *
+ * DERIVED, never a hardcoded list of the three `ResourceCategory` values: the
+ * index's filter maps this straight to chips, so widening the union and adding
+ * one entry is the whole change — the component stays untouched. It is also
+ * what keeps the filter from offering a dead end, since a category with no
+ * entries never becomes an option in the first place.
+ */
+export function resourceCategories(
+	list: readonly Resource[] = resources,
+): ResourceCategory[] {
+	const seen: ResourceCategory[] = [];
+	for (const r of list) if (!seen.includes(r.cat)) seen.push(r.cat);
+	return seen;
+}
+
+/**
+ * Narrow the registry to one category. `null` is the unfiltered default — the
+ * index's first paint, and what the "All" chip returns you to.
+ *
+ * Pure and `#/db`-free like the rest of this module, because the filter is a
+ * client-side derivation over data already on the page, not a round trip.
+ */
+export function filterResourcesByCategory(
+	cat: ResourceCategory | null,
+	list: readonly Resource[] = resources,
+): Resource[] {
+	return cat === null ? [...list] : list.filter((r) => r.cat === cat);
+}
