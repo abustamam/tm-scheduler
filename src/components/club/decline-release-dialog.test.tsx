@@ -12,11 +12,12 @@ import {
  * pool (#663).
  *
  * The assertions are on the COPY, deliberately, because the copy is the whole
- * feature: the release is not reversible from the meeting page, so what makes
- * this dialog worth its tap is that it names the roles the officer is about to
- * empty. A test that only checked the dialog opened would pass for "This frees 2
- * roles", which is the version that reads fine in review and is useless in the
- * room — the officer's next question is always WHICH.
+ * feature: the release is not reversible from the meeting page — re-claiming a
+ * freed slot mints a NEW speech row rather than reattaching the old one — so
+ * what makes this dialog worth its tap is that it names the roles the officer is
+ * about to empty. A test that only checked the dialog opened would pass for
+ * "This frees 2 roles", which is the version that reads fine in review and is
+ * useless in the room: the officer's next question is always WHICH.
  */
 function pending(over: Partial<PendingDecline> = {}): PendingDecline {
 	return {
@@ -24,6 +25,7 @@ function pending(over: Partial<PendingDecline> = {}): PendingDecline {
 		name: "Ana Ruiz",
 		roleLabels: ["Toastmaster of the Day"],
 		self: false,
+		willRelease: true,
 		...over,
 	};
 }
@@ -65,9 +67,6 @@ describe("DeclineReleaseDialog (#663)", () => {
 	});
 
 	it("says the release cannot be undone", () => {
-		// The reason a confirm exists at all: nothing on the meeting page puts a
-		// released slot back, so an officer who only meant to record a decline must
-		// be told before, not after.
 		const { getByRole } = render(
 			<DeclineReleaseDialog
 				pending={pending()}
@@ -94,9 +93,6 @@ describe("DeclineReleaseDialog (#663)", () => {
 	});
 
 	it("switches to first person on the member's own row", () => {
-		// Same component, both surfaces: the rail's chips act on someone else, the
-		// personal strip acts on the viewer. Third-person copy there would read as
-		// if someone else were doing it to them.
 		const { getByRole } = render(
 			<DeclineReleaseDialog
 				pending={pending({ self: true })}
@@ -111,8 +107,6 @@ describe("DeclineReleaseDialog (#663)", () => {
 	});
 
 	it("agrees with itself about singular and plural", () => {
-		// One array drives the pronoun, the noun and the button, so a member holding
-		// exactly one role never reads "those roles … put them back".
 		const { getByRole, getByText } = render(
 			<DeclineReleaseDialog
 				pending={pending({ roleLabels: ["Timer", "Grammarian"] })}
@@ -124,6 +118,86 @@ describe("DeclineReleaseDialog (#663)", () => {
 		expect(text).toContain("frees those roles");
 		expect(text).toContain("can't put them back automatically");
 		getByText("Not coming & free the roles");
+		getByText("Keep the roles");
+	});
+
+	describe("when the page knows of no role", () => {
+		// The case the first cut skipped entirely. `roleLabels` comes from loader
+		// data and the rail does not poll, so an empty list means "we did not see
+		// one", never "there isn't one" — the server frees a slot claimed since the
+		// page rendered whether or not this dialog mentioned it.
+		it("still opens, and warns without naming anything", () => {
+			const { getByRole } = render(
+				<DeclineReleaseDialog
+					pending={pending({ roleLabels: [] })}
+					onCancel={vi.fn()}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			const text = getByRole("dialog").textContent ?? "";
+			expect(text).toContain("any role Ana Ruiz has taken");
+			expect(text).toContain("can't put it back automatically");
+		});
+
+		it("does not promise a specific role on the button either", () => {
+			const { getByText } = render(
+				<DeclineReleaseDialog
+					pending={pending({ roleLabels: [] })}
+					onCancel={vi.fn()}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			getByText("Not coming & free any role");
+		});
+	});
+
+	describe("when this caller's arm frees nothing", () => {
+		// A self-asserted Toastmaster acting on someone else. The server records
+		// the rung and keeps the slot, so promising a release here would be the
+		// silent divergence in the other direction.
+		it("says the role stays theirs", () => {
+			const { getByRole } = render(
+				<DeclineReleaseDialog
+					pending={pending({ willRelease: false })}
+					onCancel={vi.fn()}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			const text = getByRole("dialog").textContent ?? "";
+			expect(text).toContain("That stays theirs");
+			expect(text).not.toContain("frees");
+			expect(text).not.toContain("put it back");
+		});
+
+		it("offers a plain confirm, not a destructive one", () => {
+			const { getByText } = render(
+				<DeclineReleaseDialog
+					pending={pending({ willRelease: false })}
+					onCancel={vi.fn()}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			getByText("Mark not coming");
+			getByText("Never mind");
+		});
+	});
+
+	it("marks the freeing confirm as destructive", () => {
+		// Below `sm` the footer is `flex-col-reverse`, so this button is the TOP of
+		// the stack — the first thing a thumb reaches on the phone this rail is run
+		// from. The default variant there reads as the safe choice.
+		const { getByText } = render(
+			<DeclineReleaseDialog
+				pending={pending()}
+				onCancel={vi.fn()}
+				onConfirm={vi.fn()}
+			/>,
+		);
+		const confirm = getByText("Not coming & free the role");
+		expect(confirm.className).toContain("destructive");
+		// And the way OUT names the outcome, rather than saying "Cancel" next to a
+		// button that frees a role.
+		getByText("Keep the role");
 	});
 
 	it("hands the pending decline back on confirm, and nothing on cancel", async () => {
@@ -143,8 +217,6 @@ describe("DeclineReleaseDialog (#663)", () => {
 	});
 
 	it("cancels without confirming", async () => {
-		// The half that matters: a cancel that also wrote would make the confirm a
-		// decoration.
 		const onConfirm = vi.fn();
 		const onCancel = vi.fn();
 		const { getByText } = render(
@@ -154,14 +226,12 @@ describe("DeclineReleaseDialog (#663)", () => {
 				onConfirm={onConfirm}
 			/>,
 		);
-		await userEvent.click(getByText("Cancel"));
+		await userEvent.click(getByText("Keep the role"));
 		expect(onCancel).toHaveBeenCalledTimes(1);
 		expect(onConfirm).not.toHaveBeenCalled();
 	});
 
 	it("cancels when the dialog is dismissed", async () => {
-		// Escape / overlay close must clear the pending decline too, or the next
-		// pick reopens a dialog the officer already walked away from.
 		const onCancel = vi.fn();
 		render(
 			<DeclineReleaseDialog
@@ -173,4 +243,47 @@ describe("DeclineReleaseDialog (#663)", () => {
 		await userEvent.keyboard("{Escape}");
 		expect(onCancel).toHaveBeenCalled();
 	});
+
+	describe("while the confirmed write is in flight", () => {
+		it("disables both controls", () => {
+			const { getByText } = render(
+				<DeclineReleaseDialog
+					pending={pending()}
+					busy
+					onCancel={vi.fn()}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			expect(
+				getByText("Not coming & free the role").hasAttribute("disabled"),
+			).toBe(true);
+			expect(getByText("Keep the role").hasAttribute("disabled")).toBe(true);
+		});
+
+		it("cannot be dismissed out from under the write", async () => {
+			// Escape and the overlay both route through `onOpenChange`. Dismissing
+			// mid-flight leaves the officer with no idea whether it landed.
+			const onCancel = vi.fn();
+			render(
+				<DeclineReleaseDialog
+					pending={pending()}
+					busy
+					onCancel={onCancel}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			await userEvent.keyboard("{Escape}");
+			expect(onCancel).not.toHaveBeenCalled();
+		});
+	});
+
+	// NOT tested here: the "Mark undefined not coming?" flash during the closing
+	// animation. Radix keeps the content mounted for the exit transition, and
+	// jsdom runs no CSS animations — `getComputedStyle(node).animationName` is
+	// "", so Presence unmounts on the same tick and the intermediate render this
+	// bug lives in never happens in the harness. A test here passes identically
+	// with the fix reverted, which is the shape CODING_STANDARDS.md calls a guard
+	// that cannot fail. The fix reads one narrow interface (the copy is derived
+	// from a held value, not from the live prop) and
+	// `decline-release-wiring.guard.test.ts` drives THAT instead.
 });

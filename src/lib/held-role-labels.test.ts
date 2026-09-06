@@ -69,11 +69,16 @@ describe("buildHeldRoleLabels (#663)", () => {
 		expect(map).toEqual({});
 	});
 
-	it("keeps the first slot's assignee name", () => {
+	it("keeps the FIRST slot's assignee name when the rows disagree", () => {
+		// Both rows name the same member in production, so this pins DETERMINISM
+		// rather than a real choice: the fixture has to make them differ or the
+		// assertion cannot fail for the reason it states, and "last wins" would
+		// pass just as well.
 		const map = buildHeldRoleLabels([
 			slot({ roleName: "Toastmaster", assigneeId: "m1", assigneeName: "Ana" }),
-			slot({ roleName: "Timer", assigneeId: "m1", assigneeName: "Ana" }),
+			slot({ roleName: "Timer", assigneeId: "m1", assigneeName: "Stale Name" }),
 		]);
 		expect(map.m1?.name).toBe("Ana");
+		expect(map.m1?.labels).toEqual(["Toastmaster", "Timer"]);
 	});
 });

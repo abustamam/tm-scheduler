@@ -207,15 +207,17 @@ function AttendanceRow({
 	// whose own row reads "Not coming" — the panel showing the officer a decline
 	// and then handing them a message asserting acceptance.
 	//
-	// #663 shrank the case rather than removing it. A decline written from this
-	// rail now FREES the roles the member held, so "declined but still holding a
-	// slot" is no longer the normal outcome of the control right beside this
-	// draft. It remains reachable three ways: a self-asserted Toastmaster's
-	// decline, which records the rung and deliberately releases nothing; a row
-	// written before #663; and the season grid's own `setAvailability`, which
-	// writes the rung without releasing. So the branch stays, and so does the
-	// re-ask copy — it is the honest draft for a member who is down as absent and
-	// still on the programme.
+	// #663 shrank the case rather than removing it. A confirmed decline written
+	// from this rail now FREES the roles the member held, so "declined but still
+	// holding a slot" is no longer the normal outcome of the control right beside
+	// this draft. It remains reachable four ways: a self-asserted Toastmaster
+	// declining for SOMEONE ELSE, which records the rung and deliberately keeps
+	// their slot; a decline sent without the `releaseHeldRoles` opt-in, which is
+	// what a tab loaded before the #663 deploy does; a row written before #663 at
+	// all; and the season grid's own `setAvailability`, which writes the rung
+	// without releasing. So the branch stays, and so does the re-ask copy — it is
+	// the honest draft for a member who is down as absent and still on the
+	// programme.
 	const nudgeMode =
 		m.role && m.status !== "not_coming"
 			? { mode: "confirm" as const, roleName: m.role.roleName }

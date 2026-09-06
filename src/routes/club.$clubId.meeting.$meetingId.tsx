@@ -385,6 +385,11 @@ function MeetingView() {
 	const [pendingDecline, setPendingDecline] = useState<PendingDecline | null>(
 		null,
 	);
+	// The confirm's OWN in-flight flag. `writeRung` returns as soon as the dialog
+	// opens, so the panel's `pendingId` and the strip's `myStatusBusy` have both
+	// cleared by the time the officer answers — the confirmed write would
+	// otherwise be the one write on this page guarded by nothing.
+	const [declineBusy, setDeclineBusy] = useState(false);
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
@@ -776,26 +781,26 @@ function MeetingView() {
 	const actorClaim = !effectiveCanManage && myId ? { actorMemberId: myId } : {};
 
 	/**
-	 * The roles this member would LOSE by being marked `not_coming` right now —
-	 * empty when nothing would be freed, which is the "write straight through"
-	 * case.
+	 * Whether a decline written by THIS viewer, about THIS member, frees roles.
 	 *
-	 * It PREDICTS the server's arm rather than guessing generously, because the
-	 * dialog names roles and a dialog that promises a release which does not
-	 * happen is worse than no dialog. `attendance-decline-logic.ts` releases on
-	 * the officer and self arms only; `resolveActor` orders the arms officer →
-	 * TMOD → self, so a self-asserted Toastmaster resolves to `tmod` even when
-	 * writing their OWN row and nothing is freed.
+	 * It predicts the server's ARM — `attendance-decline-logic.ts` releases on
+	 * the officer arm, on the member's own answer, and on the Toastmaster's own
+	 * row; it withholds only a Toastmaster acting on someone ELSE. So the two
+	 * clauses here are officer-or-self, and `isTmod` is deliberately NOT read:
+	 * the own-row TMOD case resolves to `via: "tmod"` server-side (arm order is
+	 * officer → TMOD → self) and releases anyway, so branching on it here would
+	 * put the client and the server back out of step.
 	 *
 	 * `canManage`, NOT `effectiveCanManage`: the server keys off the SESSION, and
 	 * an admin previewing-as-member (#320) still carries one, so the preview flag
-	 * would make this under-predict on the one path where the release still lands.
+	 * would make this under-predict on a path where the release still lands.
+	 *
+	 * This decides COPY only. It is NOT the gate on whether to ask — see
+	 * `writeRung` — and it is not the gate on the release either, which is the
+	 * server's.
 	 */
-	function rolesFreedByDecline(memberId: string): string[] {
-		const held = heldRolesByMember[memberId];
-		if (!held || held.labels.length === 0) return [];
-		const releases = canManage || (memberId === myId && !isTmod);
-		return releases ? held.labels : [];
+	function declineFreesRoles(memberId: string): boolean {
+		return canManage || memberId === myId;
 	}
 
 	async function writeRung(
@@ -803,20 +808,29 @@ function MeetingView() {
 		next: PlanStatus | null,
 		via: "nudge" | "manual" = "manual",
 	) {
-		// #663: a decline that frees roles asks first. Returns WITHOUT writing and
-		// without touching `rungOverride`, so cancelling leaves no optimistic chip
-		// to roll back; the dialog's confirm calls `commitRung` directly.
+		// #663: EVERY decline asks first. Deliberately not gated on the page
+		// believing this member holds a role — `heldRolesByMember` comes from
+		// loader data and the rail does not poll (CODING_STANDARDS.md), so a slot
+		// claimed since the page rendered is absent from it while the server frees
+		// it anyway. Gating on it skipped the confirm on exactly the case where
+		// the officer has the least idea what is about to happen, which is the
+		// sibling surface's documented first-cut bug (`personal-meeting-body.tsx`).
+		// A toast afterwards is a receipt, not consent.
+		//
+		// Returns WITHOUT writing and without touching `rungOverride`, so
+		// cancelling leaves no optimistic chip to roll back.
 		if (next === "not_coming") {
-			const roleLabels = rolesFreedByDecline(memberId);
-			if (roleLabels.length > 0) {
-				setPendingDecline({
-					memberId,
-					name: heldRolesByMember[memberId]?.name ?? "this member",
-					roleLabels,
-					self: memberId === myId,
-				});
-				return;
-			}
+			setPendingDecline({
+				memberId,
+				name:
+					heldRolesByMember[memberId]?.name ??
+					panelRosterForMode.find((r) => r.id === memberId)?.name ??
+					"this member",
+				roleLabels: heldRolesByMember[memberId]?.labels ?? [],
+				self: memberId === myId,
+				willRelease: declineFreesRoles(memberId),
+			});
+			return;
 		}
 		return commitRung(memberId, next, via);
 	}
@@ -825,6 +839,12 @@ function MeetingView() {
 		memberId: string,
 		next: PlanStatus | null,
 		via: "nudge" | "manual" = "manual",
+		/** The confirm dialog was shown and answered (#663). DEFAULT FALSE, and
+		 *  only `DeclineReleaseDialog`'s own action passes true — every other
+		 *  caller here reaches this through `writeRung`, which cannot get past the
+		 *  dialog for a `not_coming`. The server treats an absent flag as "record
+		 *  the rung, free nothing"; see the field's note in `attendance-plan.ts`. */
+		releaseHeldRoles = false,
 	) {
 		// Roll back to what the UI was ACTUALLY showing, not the loader's
 		// snapshot: nothing here awaits an invalidate before this runs, and for a
@@ -853,6 +873,7 @@ function MeetingView() {
 							meetingId: meeting.id,
 							status: next,
 							via,
+							releaseHeldRoles,
 							...actorClaim,
 						},
 					}));
@@ -1801,13 +1822,23 @@ function MeetingView() {
 			    optimistic override, the rollback and the invalidate are unchanged. */}
 			<DeclineReleaseDialog
 				pending={pendingDecline}
+				busy={declineBusy}
 				onCancel={() => setPendingDecline(null)}
-				onConfirm={(p) => {
-					// Closed FIRST, then written: the write is optimistic (the override
-					// moves the chip immediately) so holding the dialog up for a round
-					// trip would only delay the feedback it already gave.
-					setPendingDecline(null);
-					void commitRung(p.memberId, "not_coming");
+				onConfirm={async (p) => {
+					// Stays OPEN until the write resolves, with both controls disabled.
+					// The alternative — close first, write after — is what left this
+					// path with no in-flight guard at all: the dialog is modal, so
+					// while it is up nothing else on the page is tappable either.
+					if (declineBusy) return;
+					setDeclineBusy(true);
+					try {
+						// `true` is passed HERE and nowhere else: this is the one call
+						// site that has shown someone what would be freed.
+						await commitRung(p.memberId, "not_coming", "manual", true);
+					} finally {
+						setDeclineBusy(false);
+						setPendingDecline(null);
+					}
 				}}
 			/>
 		</div>

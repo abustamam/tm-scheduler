@@ -11,13 +11,23 @@
 // `markUnavailableReleasing` is NOT in that set either, and the reason CHANGED
 // with #663. It used to be "the new write surface does not release roles"; it
 // now does — `setPlannedAttendance`'s `not_coming` folds slot release into the
-// ladder through `attendance-decline-logic.ts`. What is left is a difference of
-// ARM, not of effect: this endpoint releases on all three arms of D6 (it is the
-// season grid's act-on-behalf-of path, and the personal meeting page's
-// single-subject "Can't make it"), while the rail's ladder withholds the
-// release from the honour-system TMOD claim, because there it is one forged
-// request per member away from emptying a meeting's whole programme. Folding
-// the two together would have to pick one of those, so they stay separate.
+// ladder through `attendance-decline-logic.ts`. Three differences are left, and
+// none of them is authorization:
+//
+//   · This endpoint releases UNCONDITIONALLY; the rail's requires an explicit
+//     `releaseHeldRoles` on the payload, because that endpoint's request shape
+//     did not change when the side effect did and a stale tab must not trip it.
+//   · This one releases on all three arms of D6 — it is the season grid's
+//     act-on-behalf-of path and the personal page's single-subject "Can't make
+//     it", both of which confirm first. The rail's withholds the release from a
+//     Toastmaster acting on ANOTHER member's row: a product ceiling on how much
+//     one honour-system caller can sweep in a few honest taps, and deliberately
+//     not a security claim (see `attendance-decline-logic.ts`, and the RESIDUAL
+//     case in `attendance-decline.integration.test.ts` that executes the hole).
+//   · The rail's refuses once the meeting is OVER, not merely completed.
+//
+// Folding the two together would have to pick one of each, so they stay
+// separate.
 //
 // All three are PUBLIC and session-less. The two `setAvailability` /
 // `clearAvailability` delegates therefore name the rungs they may touch

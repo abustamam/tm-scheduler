@@ -70,6 +70,45 @@ describe("the decline confirm is on the write path, not beside it (#663)", () =>
 		);
 	});
 
+	it("asks on EVERY decline, never only when the page knows of a role", () => {
+		// The first cut gated the dialog on `roleLabels.length > 0`, computed from
+		// loader data against a rail that does not poll (CODING_STANDARDS.md). A
+		// slot claimed since the page rendered is absent from that map while the
+		// server frees it anyway — so the one case it skipped was the one where the
+		// officer had the least idea what was about to happen. Same first-cut bug
+		// `personal-meeting-body.tsx` documents for the sibling surface.
+		const body = fnBody(RAW, "writeRung");
+		expect(
+			body,
+			"the confirm must not be conditional on the page believing a role is held",
+		).not.toMatch(/roleLabels\.length > 0/);
+		expect(body).not.toMatch(/if \(\s*rolesFreedByDecline/);
+	});
+
+	it("passes the opt-in flag from the CONFIRM and nowhere else", () => {
+		// `commitRung`'s parameter defaults to false, so every other caller —
+		// `markAsked`, `setMyStatus`, the panel's chips — sends a payload the server
+		// treats as "record the rung, free nothing". Only the dialog's action, which
+		// has actually shown someone what would go, passes true.
+		expect(SRC).toMatch(/releaseHeldRoles = false,/);
+		expect(SRC).toContain("releaseHeldRoles,");
+		expect(SRC).toMatch(
+			/commitRung\(p\.memberId, "not_coming", "manual", true\)/,
+		);
+		// Exactly one call site passes it.
+		expect(RAW.split('"not_coming", "manual", true').length - 1).toBe(1);
+	});
+
+	it("guards the confirmed write with its own in-flight flag", () => {
+		// `writeRung` returns as soon as the dialog opens, so the panel's
+		// `pendingId` and the strip's `myStatusBusy` have both cleared by the time
+		// the officer answers. Without this the confirmed write — the only
+		// destructive one on the page — would be the one guarded by nothing.
+		expect(SRC).toContain("busy={declineBusy}");
+		expect(SRC).toContain("if (declineBusy) return;");
+		expect(SRC).toContain("setDeclineBusy(true);");
+	});
+
 	it("writeRung touches no optimistic state on the intercepted path", () => {
 		// `setRungOverride` belongs to `commitRung`. Called here too, a cancelled
 		// confirm would leave the chip reading "Not coming" against a server that
@@ -103,7 +142,7 @@ describe("the decline confirm is on the write path, not beside it (#663)", () =>
 
 	it("the confirm's own action writes, and writes not_coming", () => {
 		expect(SRC).toContain("pending={pendingDecline}");
-		expect(SRC).toMatch(/commitRung\(p\.memberId, "not_coming"\)/);
+		expect(SRC).toMatch(/commitRung\(p\.memberId, "not_coming",/);
 	});
 });
 
@@ -111,24 +150,72 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 	it("reads canManage, never the preview-adjusted flag", () => {
 		// `effectiveCanManage` is `canManage && !previewAsMember` (#320). The server
 		// keys off the SESSION, which an admin previewing as a member still carries,
-		// so the preview flag would under-predict on the one path where the release
-		// still lands — the dialog would not appear and the roles would go anyway.
-		const body = fnBody(SRC, "rolesFreedByDecline");
+		// so the preview flag would mispredict on a path where the release lands.
+		const body = fnBody(SRC, "declineFreesRoles");
 		expect(body).toContain("canManage");
 		expect(
-			fnBody(RAW, "rolesFreedByDecline"),
+			fnBody(RAW, "declineFreesRoles"),
 			"the preview flag is not what the server sees",
 		).not.toContain("effectiveCanManage");
 	});
 
-	it("excludes the self-asserted Toastmaster, matching the seam", () => {
-		// `attendance-decline-logic.ts` releases on `officer` and `self` only, and
-		// `resolveActor` orders the arms officer → TMOD → self — so a TMOD resolves
-		// to `tmod` even on their own row. Without `!isTmod` here the dialog would
-		// promise a release the server then declines to make.
-		expect(fnBody(SRC, "rolesFreedByDecline")).toContain(
-			"memberId === myId && !isTmod",
+	it("matches the seam's arms: officer or the member's own row", () => {
+		// `attendance-decline-logic.ts` releases on `officer`, on `self`, AND on the
+		// Toastmaster's own row — the last because `resolveActor` orders the arms
+		// officer → TMOD → self, so a TMOD declining for themselves resolves to
+		// `tmod`. Reading `isTmod` here would put the copy back out of step with the
+		// server on exactly that row.
+		const body = fnBody(SRC, "declineFreesRoles");
+		expect(body).toContain("canManage || memberId === myId");
+		expect(
+			fnBody(RAW, "declineFreesRoles"),
+			"the own-row TMOD case releases server-side, so this must not exclude it",
+		).not.toContain("isTmod");
+	});
+
+	it("hands the dialog what it needs to tell the truth", () => {
+		// `willRelease` picks between "this frees the role" and "that stays
+		// theirs". Dropped, the prop defaults to nothing and the dialog promises a
+		// release the server may decline to make.
+		const body = fnBody(SRC, "writeRung");
+		expect(body).toContain("willRelease: declineFreesRoles(memberId)");
+		expect(body).toContain("roleLabels: heldRolesByMember[memberId]?.labels");
+	});
+
+	it("derives its copy from a HELD value, not the live prop", () => {
+		// The "Mark undefined not coming?" flash. Radix keeps the dialog mounted for
+		// its exit transition, so on every close — confirm and cancel alike — the
+		// component re-renders once with `pending === null` while the box is still
+		// on screen, and anything reading `pending?.name` blanks mid-animation.
+		//
+		// It is asserted HERE, against the source, because jsdom cannot produce it:
+		// no CSS animations run there, `getComputedStyle(node).animationName` is
+		// "", and Presence unmounts on the same tick — so a render test passes
+		// identically with the fix reverted. Same move CLAUDE.md records for the
+		// dialog-keyboard gate: when the harness cannot produce the input, drive the
+		// narrow interface the fix actually reads.
+		const DIALOG = readSource(
+			resolve(
+				dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"components",
+				"club",
+				"decline-release-dialog.tsx",
+			),
 		);
+		expect(DIALOG).toContain(
+			"const [shown, setShown] = useState<PendingDecline | null>(pending)",
+		);
+		expect(DIALOG).toContain("if (pending) setShown(pending)");
+		// `open` is the ONE thing that may read the live prop — it is what drives
+		// the animation this exists to survive.
+		const readsLiveProp = DIALOG.split("\n").filter(
+			(l) => l.includes("pending?.") || l.includes("pending."),
+		);
+		expect(
+			readsLiveProp,
+			"the rendered copy must come from `shown`; `pending` only drives `open`",
+		).toEqual([]);
 	});
 
 	it("names roles from every slot the meeting has", () => {

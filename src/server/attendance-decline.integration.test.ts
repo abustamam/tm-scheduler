@@ -3,20 +3,31 @@
  * `setPlannedAttendance` reaches when the rung it is asked to write is
  * `not_coming`.
  *
- * The behaviour under test is a BRANCH ON THE ACTOR'S ARM, and it is worth being
- * precise about why that branch has to be exercised rather than read: the
- * officer and self arms free every role the member holds, the honour-system TMOD
- * arm records the rung and frees nothing, and the two outcomes differ ONLY in
- * `role_slots` — the plan row is identical, the `plan_set` activity row is
- * identical apart from `grantedVia`. So a suite that asserted the rung would
- * pass with the gate inverted, with the gate deleted, and with the release
- * dropped entirely, which is the state the rail shipped in.
+ * Three gates decide whether the roles are actually freed, and they are asserted
+ * separately because they fail in different directions:
  *
- * A `createServerFn` handler cannot be invoked in vitest, which is why the
- * branch lives in this seam and not in the handler
- * (CODING_STANDARDS.md, "WRITES are closed too"). What the handler contributes —
- * that it reaches this seam for `not_coming` and NOT for the other two rungs,
- * behind the archive gate and the meeting lock — is pinned by
+ * 1. `releaseHeldRoles` — the caller opted in. The DEPLOY-WINDOW gate: this
+ *    endpoint's URL, method and payload shape did not change with #663, and
+ *    `public/sw.js` claims open tabs without reloading them, so without this a
+ *    pre-#663 client would send its usual request and get a destructive release
+ *    with no dialog and no toast. The first block below is that regression test,
+ *    and it is the one that matters most: everything after it passes `true`.
+ * 2. The ARM. A product ceiling, NOT a security boundary — see the seam's header
+ *    and THE RESIDUAL case below, which executes the hole and asserts it is open.
+ * 3. The meeting window. `assertMeetingNotLocked` is `status === "completed"`
+ *    only, and clubs routinely never press Complete.
+ *
+ * The officer/self and TMOD-on-someone-else outcomes differ ONLY in
+ * `role_slots` — the plan row is identical and the `plan_set` row differs only
+ * in `grantedVia` — so a suite that asserted the rung would pass with the arm
+ * gate inverted, deleted, or with the release dropped entirely, which is the
+ * state the rail shipped in.
+ *
+ * A `createServerFn` handler cannot be invoked in vitest, which is why all of
+ * this lives in a seam (CODING_STANDARDS.md, "WRITES are closed too"). What the
+ * handler contributes — that it reaches this seam for `not_coming` and not for
+ * the other two rungs, that it forwards the flag rather than hard-coding it, and
+ * that the zod default is `false` — is pinned by
  * `attendance-decline-wiring.guard.test.ts`.
  *
  * Run with:
@@ -29,6 +40,7 @@ import {
 	activityLog,
 	clubs,
 	meetingAttendancePlan,
+	meetings,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -53,8 +65,6 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
  * the officer test would prove nothing. Mocked at the LIBRARY boundary, so
  * `requireClubRole` / `requireMembership` stay real and run against real rows;
  * what is faked is only the cookie → session lookup a test process cannot have.
- * Copied in shape from `availability.integration.test.ts`, which gates the seam
- * this one composes.
  */
 let sessionUserId: string | null = null;
 /** One stable object, because the impersonation marker is keyed on identity. */
@@ -72,7 +82,8 @@ vi.mock("#/lib/auth", () => ({
 	},
 }));
 
-const { declinePlannedAttendance } = await import("./attendance-decline-logic");
+const { declinePlannedAttendance, RELEASE_AFTER_MEETING_MESSAGE } =
+	await import("./attendance-decline-logic");
 const { SELF_ONLY_MESSAGE } = await import("./attendance-actor-logic");
 
 async function planRows(memberId: string, meetingId: string) {
@@ -196,10 +207,81 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			.where(eq(roleSlots.id, seed.slotId));
 	}
 
+	async function seededSlot() {
+		const [slot] = await testDb
+			.select({
+				status: roleSlots.status,
+				assignedMemberId: roleSlots.assignedMemberId,
+				claimedAt: roleSlots.claimedAt,
+				speechId: roleSlots.speechId,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.id, seed.slotId))
+			.limit(1);
+		return slot;
+	}
+
+	describe("the releaseHeldRoles opt-in (the deploy-window gate)", () => {
+		it("frees NOTHING when the caller did not ask, even on the officer arm", async () => {
+			// THE regression test for the stale-tab hazard. A client from before
+			// #663 sends this exact payload — same URL, same method, same fields —
+			// from a bundle with no confirm dialog in it, and push-to-main
+			// auto-deploys while the service worker claims open tabs without
+			// reloading them. The old behaviour is the ONLY safe answer here, and
+			// the arm is deliberately the most permissive one so this cannot pass by
+			// being rejected for some other reason.
+			await holdSeededSlot();
+			sessionUserId = seed.adminUserId;
+
+			const { released } = await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.adminMemberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: false,
+			});
+			expect(released).toBe(0);
+
+			const slot = await seededSlot();
+			expect(slot?.assignedMemberId).toBe(seed.memberId);
+			expect(slot?.status).toBe("claimed");
+			expect(await releaseLogs([seed.slotId])).toHaveLength(0);
+
+			// The RUNG still lands — that is what the old client came for, and
+			// refusing it would break the stale tab in the other direction.
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"not_coming",
+			);
+		});
+
+		it("records the rung on a meeting that already happened, when nothing is being freed", async () => {
+			// The other half of "do not newly break the old client". The release is
+			// refused after the meeting (below), but a plain rung write on a past
+			// meeting is harmless and is exactly what a stale tab does.
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 30 * 24 * 3600 * 1000) })
+				.where(eq(meetings.id, seed.meetingId));
+
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: seed.memberId,
+					claimedActorMemberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: false,
+				}),
+			).resolves.toMatchObject({ released: 0 });
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"not_coming",
+			);
+		});
+	});
+
 	describe("the officer arm", () => {
 		it("frees EVERY role the member holds, and records the decline", async () => {
 			await holdSeededSlot();
-			const secondSlotId = await addHeldSlot(seed, seed.memberId, "Timer");
+			const secondSlotId = await addHeldSlot(seed, seed.memberId, "Timer 2");
 			sessionUserId = seed.adminUserId;
 
 			const result = await declinePlannedAttendance(testDb, {
@@ -207,6 +289,7 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 				claimedActorMemberId: seed.adminMemberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
+				releaseHeldRoles: true,
 			});
 			expect(result.released).toBe(2);
 
@@ -215,7 +298,6 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			// on the surface the officer is reading.
 			const slotRows = await testDb
 				.select({
-					id: roleSlots.id,
 					status: roleSlots.status,
 					assignedMemberId: roleSlots.assignedMemberId,
 					claimedAt: roleSlots.claimedAt,
@@ -249,10 +331,32 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			expect(rels[0]?.detail).toMatchObject({ fromMemberId: seed.memberId });
 		});
 
+		it("carries `via` into the activity detail on the RELEASING branch", async () => {
+			// The destructive branch must not record LESS provenance than the
+			// harmless one. It used to drop `via` on the floor, so every release
+			// read `manual` in the feed however it was triggered — on the one branch
+			// whose audit trail is the only record that survives it.
+			await holdSeededSlot();
+			sessionUserId = seed.adminUserId;
+			await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.adminMemberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+				via: "nudge",
+			});
+			expect((await planSetLogs(seed.meetingId))[0]?.detail).toMatchObject({
+				via: "nudge",
+			});
+		});
+
 		it("keeps the SPEECH row, only unlinking it (ADR-0009)", async () => {
 			// The speech is the member's own record of a talk they prepared; the
 			// slot going back to the open pool must not delete it. Deleting it would
-			// pass every assertion above.
+			// pass every assertion above. It matters more than it looks: re-claiming
+			// the slot runs `attachSpeechToSlot`, which INSERTs, so a deleted speech
+			// is unrecoverable and a kept one is at least reattachable by hand.
 			const [speech] = await testDb
 				.insert(speeches)
 				.values({ personId: seed.personId, title: "My Icebreaker" })
@@ -274,14 +378,10 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 				claimedActorMemberId: seed.adminMemberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
+				releaseHeldRoles: true,
 			});
 
-			const [slot] = await testDb
-				.select({ speechId: roleSlots.speechId })
-				.from(roleSlots)
-				.where(eq(roleSlots.id, seed.slotId))
-				.limit(1);
-			expect(slot?.speechId).toBeNull();
+			expect((await seededSlot())?.speechId).toBeNull();
 			const kept = await testDb
 				.select({ title: speeches.title })
 				.from(speeches)
@@ -299,6 +399,7 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 				claimedActorMemberId: seed.memberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
+				releaseHeldRoles: true,
 			});
 			expect(released).toBe(1);
 			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
@@ -310,12 +411,12 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 		});
 
 		it("records the rung with nothing to free when the member holds no role", async () => {
-			// The common case, and the one that must not error or log a release.
 			const { released, changed } = await declinePlannedAttendance(testDb, {
 				memberId: seed.memberId,
 				claimedActorMemberId: seed.memberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
+				releaseHeldRoles: true,
 			});
 			expect(released).toBe(0);
 			expect(changed).toBe(true);
@@ -326,9 +427,6 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 		});
 
 		it("REJECTS another member asserting themselves as the actor", async () => {
-			// The self-only rule the shared ladder enforces, exercised through this
-			// seam because this is the entry point the rail now uses. Without it a
-			// caller could name any member and empty their agenda.
 			await holdSeededSlot();
 			await expect(
 				declinePlannedAttendance(testDb, {
@@ -336,30 +434,56 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 					claimedActorMemberId: otherMemberId,
 					meetingId: seed.meetingId,
 					clubId: seed.clubId,
+					releaseHeldRoles: true,
 				}),
 			).rejects.toThrow(SELF_ONLY_MESSAGE);
 
-			const [slot] = await testDb
-				.select({
-					status: roleSlots.status,
-					assignedMemberId: roleSlots.assignedMemberId,
-				})
-				.from(roleSlots)
-				.where(eq(roleSlots.id, seed.slotId))
-				.limit(1);
+			const slot = await seededSlot();
 			expect(slot?.assignedMemberId).toBe(seed.memberId);
 			expect(slot?.status).toBe("claimed");
 			expect(await planRows(seed.memberId, seed.meetingId)).toHaveLength(0);
 		});
+
+		it("THE RESIDUAL: an anonymous caller who asserts NOTHING releases the subject's roles", async () => {
+			// Executed, not described, because an earlier draft of this change
+			// defended the arm gate as a security boundary and this is the case that
+			// disproves it. With no session and no claim, `resolveActor`'s last arm
+			// resolves the caller TO the subject and returns `via: "self"` — a
+			// releasing arm. So the cheap forgery is to OMIT the claim, once per
+			// member, and it is quieter than asserting one: the feed credits the
+			// victim as the actor.
+			//
+			// That is the product's identity model (#317), the same honour system
+			// `claimSlot` and `releaseSlot` run on, and closing it is a much larger
+			// change than #663. `availability.integration.test.ts` has asserted the
+			// same residual for the sibling endpoint since #675. The arm gate is a
+			// product ceiling on what a Toastmaster can do in a few honest taps; it
+			// is not authorization, and this test is here so nobody re-describes it
+			// as one.
+			await holdSeededSlot();
+			const { released } = await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			});
+			expect(released).toBe(1);
+			expect((await seededSlot())?.status).toBe("open");
+			const [log] = await planSetLogs(seed.meetingId);
+			expect(log?.detail).toMatchObject({ grantedVia: "self" });
+			expect(
+				log?.actorMemberId,
+				"the write is credited to the SUBJECT, which is what makes this quiet",
+			).toBe(seed.memberId);
+		});
 	});
 
 	describe("the TMOD arm", () => {
-		it("records the rung and releases NOTHING", async () => {
-			// THE case this seam exists for. The TMOD claim is honour-system — the id
-			// it is compared against ships on the public agenda payload — so one
-			// forged request per member would otherwise empty a meeting's whole
-			// programme. The rung is still written: they run the meeting, and
-			// recording who is not coming is the panel's job.
+		it("frees NOTHING on another member's row", async () => {
+			// The product ceiling: a Toastmaster running the panel cannot sweep a
+			// meeting's whole programme in a few taps. The rung is still written —
+			// they run the meeting, and recording who is not coming is the panel's
+			// job.
 			await holdSeededSlot();
 			await addTmodSlot(seed, otherMemberId);
 
@@ -368,17 +492,11 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 				claimedActorMemberId: otherMemberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
+				releaseHeldRoles: true,
 			});
 			expect(released).toBe(0);
 
-			const [slot] = await testDb
-				.select({
-					status: roleSlots.status,
-					assignedMemberId: roleSlots.assignedMemberId,
-				})
-				.from(roleSlots)
-				.where(eq(roleSlots.id, seed.slotId))
-				.limit(1);
+			const slot = await seededSlot();
 			expect(slot?.assignedMemberId).toBe(seed.memberId);
 			expect(slot?.status).toBe("claimed");
 			expect(await releaseLogs([seed.slotId])).toHaveLength(0);
@@ -394,48 +512,113 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			expect(log?.detail).toMatchObject({ grantedVia: "tmod" });
 		});
 
-		it("releases nothing even on the Toastmaster's OWN row", async () => {
-			// A consequence of the ladder's arm ORDER (officer → TMOD → self: self
-			// last, or it would swallow the TMOD arm), stated as a test because it
-			// reads surprising. The TMOD declining for themselves resolves to `tmod`,
-			// not `self`, so their slot stays theirs. They still have the agenda's own
-			// release control and the personal meeting page's confirmed "Can't make
-			// it", which is a single-subject action rather than a ladder.
+		it("DOES free the Toastmaster's own roles on their own row", async () => {
+			// Their own answer about their own attendance, and the member most
+			// likely to hold a role. It needs saying because the arm ORDER makes it
+			// non-obvious: officer → TMOD → self, self last so it cannot swallow the
+			// TMOD arm, which means a Toastmaster declining for themselves resolves
+			// to `tmod` rather than `self`. Leaving that on the withholding side was
+			// a silent divergence — the rail would say "not coming" and the agenda
+			// would keep them on the programme, with nothing explaining why.
 			const tmodSlotId = await addTmodSlot(seed, seed.memberId);
+			await holdSeededSlot();
 
 			const { released } = await declinePlannedAttendance(testDb, {
 				memberId: seed.memberId,
 				claimedActorMemberId: seed.memberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
+				releaseHeldRoles: true,
 			});
-			expect(released).toBe(0);
+			// Both of them: the TMOD slot and the other role they held.
+			expect(released).toBe(2);
 			const [slot] = await testDb
 				.select({ assignedMemberId: roleSlots.assignedMemberId })
 				.from(roleSlots)
 				.where(eq(roleSlots.id, tmodSlotId))
 				.limit(1);
-			expect(slot?.assignedMemberId).toBe(seed.memberId);
+			expect(slot?.assignedMemberId).toBeNull();
+			// Still credited to the arm that admitted it, not relabelled `self`.
 			expect((await planSetLogs(seed.meetingId))[0]?.detail).toMatchObject({
 				grantedVia: "tmod",
 			});
 		});
 	});
 
-	describe("the archive gate", () => {
-		// BEFORE/AFTER pairs: a write that throws for an archived club proves
-		// nothing on its own, since any broken fixture also throws. The "before"
-		// half is what fails if the gate is deleted.
-		it("refuses on the RELEASING arm once the club is archived", async () => {
+	describe("the meeting window", () => {
+		// BEFORE/AFTER pairs: a write that throws proves nothing on its own, since
+		// any broken fixture also throws. The "before" half is what fails if the
+		// gate is deleted.
+		it("refuses a release once the meeting's day has PASSED, though it is not completed", async () => {
+			// `assertMeetingNotLocked` is `status === "completed"` and nothing else,
+			// and clubs routinely never press Complete — so last month's meeting
+			// sits at "scheduled" forever while its nudge link stays in a chat
+			// scrollback. A release there erases who actually did what.
 			await holdSeededSlot();
 			sessionUserId = seed.adminUserId;
+			const args = {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.adminMemberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			};
+			await expect(
+				declinePlannedAttendance(testDb, args),
+			).resolves.toMatchObject({ released: 1 });
+
+			// Put it back and move the meeting into the past.
+			await holdSeededSlot();
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 30 * 24 * 3600 * 1000) })
+				.where(eq(meetings.id, seed.meetingId));
+
+			await expect(declinePlannedAttendance(testDb, args)).rejects.toThrow(
+				RELEASE_AFTER_MEETING_MESSAGE,
+			);
+			const slot = await seededSlot();
+			expect(slot?.assignedMemberId).toBe(seed.memberId);
+			expect(slot?.status).toBe("claimed");
+		});
+
+		it("refuses a release on a COMPLETED meeting", async () => {
+			// The lock the handler also carries, asserted here because the seam is
+			// reachable from a direct POST that never went through the handler's
+			// guard order.
+			await holdSeededSlot();
+			sessionUserId = seed.adminUserId;
+			await testDb
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, seed.meetingId));
+
 			await expect(
 				declinePlannedAttendance(testDb, {
 					memberId: seed.memberId,
 					claimedActorMemberId: seed.adminMemberId,
 					meetingId: seed.meetingId,
 					clubId: seed.clubId,
+					releaseHeldRoles: true,
 				}),
+			).rejects.toThrow(RELEASE_AFTER_MEETING_MESSAGE);
+			expect((await seededSlot())?.assignedMemberId).toBe(seed.memberId);
+		});
+	});
+
+	describe("the archive gate", () => {
+		it("refuses on the RELEASING arm once the club is archived", async () => {
+			await holdSeededSlot();
+			sessionUserId = seed.adminUserId;
+			const args = {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.adminMemberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			};
+			await expect(
+				declinePlannedAttendance(testDb, args),
 			).resolves.toMatchObject({ released: 1 });
 
 			await testDb
@@ -443,32 +626,46 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 				.set({ archivedAt: new Date() })
 				.where(eq(clubs.id, seed.clubId));
 
-			await expect(
-				declinePlannedAttendance(testDb, {
-					memberId: seed.memberId,
-					claimedActorMemberId: seed.adminMemberId,
-					meetingId: seed.meetingId,
-					clubId: seed.clubId,
-				}),
-			).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+			await expect(declinePlannedAttendance(testDb, args)).rejects.toThrow(
+				CLUB_ARCHIVED_MESSAGE,
+			);
 		});
 
-		it("refuses on the NON-releasing TMOD arm too", async () => {
+		it("refuses on the NON-releasing branch too", async () => {
 			// The branch that reaches `setPlanStatus` directly, so it inherits no
 			// archive check from the release seam — and takes a self-asserted member
 			// id with no session, so `requireMembership`'s check (#186) never runs
 			// for it either. Without this seam's own assert, an archived club would
 			// still accept the write on exactly one of the two branches.
-			await addTmodSlot(seed, otherMemberId);
+			const args = {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: false,
+			};
 			await expect(
-				declinePlannedAttendance(testDb, {
-					memberId: seed.memberId,
-					claimedActorMemberId: otherMemberId,
-					meetingId: seed.meetingId,
-					clubId: seed.clubId,
-				}),
+				declinePlannedAttendance(testDb, args),
 			).resolves.toMatchObject({ released: 0 });
 
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, seed.clubId));
+
+			await expect(declinePlannedAttendance(testDb, args)).rejects.toThrow(
+				CLUB_ARCHIVED_MESSAGE,
+			);
+		});
+
+		it("refuses BEFORE the meeting window is even considered", async () => {
+			// Takedown outranks every other reason to refuse (ADR-0016): an archived
+			// club must not answer differently depending on which other gate would
+			// also have rejected it.
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 30 * 24 * 3600 * 1000) })
+				.where(eq(meetings.id, seed.meetingId));
 			await testDb
 				.update(clubs)
 				.set({ archivedAt: new Date() })
@@ -477,9 +674,10 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			await expect(
 				declinePlannedAttendance(testDb, {
 					memberId: seed.memberId,
-					claimedActorMemberId: otherMemberId,
+					claimedActorMemberId: seed.memberId,
 					meetingId: seed.meetingId,
 					clubId: seed.clubId,
+					releaseHeldRoles: true,
 				}),
 			).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
 		});
