@@ -96,6 +96,14 @@ export interface OverdueMemberRow {
  * with them too, so "claimed" means the same thing in both directions —
  * an open slot nobody has taken is not a commitment, and a cancelled meeting
  * is not one either.
+ *
+ * **Deliberately NOT filtered to speaker roles**, unlike the `is_speaker_role`
+ * subquery in `loadSpeakerRotation` that this feeds. Overdue means "no claimed
+ * role of ANY kind", so narrowing this would blind the surface that needs it
+ * most — a member booked as Timer is exactly the person a VPE should not chase.
+ * The speaker queue consumes the same any-role answer, which is why the
+ * dashboard's marker is worded role-neutrally ("Booked", not "Up next"): the
+ * two decisions are one decision, and the component suite pins the other half.
  */
 export async function loadUpcomingRoleClaims(
 	clubId: string,

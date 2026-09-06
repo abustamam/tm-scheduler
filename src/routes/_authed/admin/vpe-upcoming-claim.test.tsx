@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Component tests for the "Up next" marker on the VPE dashboard (#543).
+// Component tests for the "Booked" upcoming-claim marker on the VPE dashboard (#543).
 //
 // The server suite proves `upcomingRoleAt` is DERIVED correctly. It cannot see
 // whether the dashboard renders it, and the bug being fixed is a rendering
@@ -30,7 +30,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AttendanceLapseRow } from "#/lib/attendance-lapse";
-import { formatMeetingDate } from "#/lib/format";
+import { formatMeetingDate, formatShortDate } from "#/lib/format";
 import type {
 	OverdueMemberRow,
 	SpeakerRotationRow,
@@ -144,7 +144,7 @@ describe("VPE dashboard — upcoming-claim marker (#543)", () => {
 
 		const row = rowFor("Dana Lee");
 		expect(
-			within(row).getByText(`Up next · ${formatMeetingDate(MONDAY)}`),
+			within(row).getByText(`Booked · ${formatMeetingDate(MONDAY)}`),
 		).toBeTruthy();
 		// The backward-looking half is untouched — this member really has never
 		// held a role, and the officer still needs to see that.
@@ -172,12 +172,12 @@ describe("VPE dashboard — upcoming-claim marker (#543)", () => {
 
 		expect(
 			within(rowFor("Soon Member")).getByText(
-				`Up next · ${formatMeetingDate(MONDAY)}`,
+				`Booked · ${formatMeetingDate(MONDAY)}`,
 			),
 		).toBeTruthy();
 		expect(
 			within(rowFor("Later Member")).getByText(
-				`Up next · ${formatMeetingDate(LATER)}`,
+				`Booked · ${formatMeetingDate(LATER)}`,
 			),
 		).toBeTruthy();
 	});
@@ -191,20 +191,47 @@ describe("VPE dashboard — upcoming-claim marker (#543)", () => {
 			overdue: [
 				overdueRow({
 					memberId: "a",
-					name: "Booked One",
+					name: "Dana Signed",
 					upcomingRoleAt: MONDAY,
 				}),
-				overdueRow({ memberId: "b", name: "Unbooked One" }),
+				overdueRow({ memberId: "b", name: "Reg Waiting" }),
 			],
 		});
 
 		expect(overdueCount()).toBe("2");
-		expect(screen.getByText("Booked One")).toBeTruthy();
+		expect(screen.getByText("Dana Signed")).toBeTruthy();
 	});
 
 	it("shows no marker for a member with no upcoming claim", async () => {
 		await renderRoute({ overdue: [overdueRow()] });
-		expect(screen.queryByText(/Up next/)).toBeNull();
+		expect(screen.queryByText(/Booked/)).toBeNull();
+	});
+
+	it("keeps the phone form off the truncated name", async () => {
+		// jsdom has no layout, so the overflow itself is unassertable here. The
+		// class COMBINATION that decides it is not: at 375px the page's `px-4`,
+		// the row's `px-5`, the 112px wait column and the gaps leave the identity
+		// text block ~85px, against ~146px of `whitespace-nowrap shrink-0` pill.
+		// A pill that renders there takes that width from the `truncate` NAME —
+		// collapsing it to an ellipsis, defeating the wait column's whole reason
+		// for narrowing below `sm` — and is then clipped by Section's
+		// `overflow-hidden` anyway.
+		await renderRoute({ overdue: [overdueRow({ upcomingRoleAt: MONDAY })] });
+
+		const pill = screen.getByText(`Booked · ${formatMeetingDate(MONDAY)}`);
+		expect(pill.className).toContain("hidden");
+		expect(pill.className).toContain("sm:inline-block");
+
+		// The phone form takes its place: present, on its own line, allowed to
+		// WRAP (no `whitespace-nowrap`, no `shrink-0`), and weekday-less. The
+		// weekday is not the problem on its own — "Booked · Aug 10" is still
+		// ~109px as a pill — so shortening the label alone would not have fixed
+		// this, and neither would hiding the marker outright: a VPE doing
+		// outreach from a phone is exactly who #543 is about.
+		const line = screen.getByText(`Booked ${formatShortDate(MONDAY)}`);
+		expect(line.className).toContain("sm:hidden");
+		expect(line.className).not.toContain("whitespace-nowrap");
+		expect(line.className).not.toContain("shrink-0");
 	});
 
 	it("marks a never-spoken member in the speaker queue, keeping the rank text", async () => {
@@ -214,10 +241,23 @@ describe("VPE dashboard — upcoming-claim marker (#543)", () => {
 
 		const row = rowFor("Priya Raman");
 		expect(
-			within(row).getByText(`Up next · ${formatMeetingDate(MONDAY)}`),
+			within(row).getByText(`Booked · ${formatMeetingDate(MONDAY)}`),
 		).toBeTruthy();
 		// The queue ranks by DELIVERED speeches, so this stays true until Monday.
 		expect(within(row).getByText("Never spoken")).toBeTruthy();
+	});
+
+	it("words the speaker-queue marker role-neutrally", async () => {
+		// The marker is fed by an ANY-ROLE query (pinned in
+		// reporting.integration.test.ts), so the member below may well be booked
+		// as Timer. In a list whose subtitle says "ranked by how long since they
+		// last held a speaker role", "Up next" would read as "speaking Monday":
+		// the VPE skips her and she goes another cycle without speaking — #543's
+		// own contradiction pointing the other way. "Booked" is true either way.
+		await renderRoute({ rotation: [rotationRow({ upcomingRoleAt: MONDAY })] });
+
+		const marker = screen.getByText(`Booked · ${formatMeetingDate(MONDAY)}`);
+		expect(marker.textContent).not.toMatch(/up next|speak/i);
 	});
 
 	it("leaves the Stopped attending rows unmarked", async () => {
@@ -227,6 +267,6 @@ describe("VPE dashboard — upcoming-claim marker (#543)", () => {
 		// show up here.
 		await renderRoute({ lapse: [lapseRow()] });
 		expect(screen.getByText("Casey Kim")).toBeTruthy();
-		expect(screen.queryByText(/Up next/)).toBeNull();
+		expect(screen.queryByText(/Booked/)).toBeNull();
 	});
 });

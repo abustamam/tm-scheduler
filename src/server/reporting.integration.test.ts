@@ -327,6 +327,35 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 			expect(row?.lastSpokenAt).toBeNull();
 		});
 
+		it("marks a speaker-queue row for a NON-speaker future claim", async () => {
+			// The marker is any-role BY DESIGN — overdue means "no claimed role of
+			// any kind", and a member booked as Timer is exactly the person a VPE
+			// should not chase. It is also why the dashboard's marker is worded
+			// role-neutrally: adding an `is_speaker_role` filter here to make "Up
+			// next" honest in the speaker queue would fail this test, and changing
+			// the copy back to "Up next" fails the component suite. The two halves
+			// cannot drift apart quietly.
+			const { loadSpeakerRotation } = await import("#/server/reporting-logic");
+
+			const timer = await addMember(seeded.clubId, "Timer Only");
+			const next = await addUpcomingMeeting(seeded.clubId, 5);
+			await addSlot({
+				meetingId: next.meetingId,
+				// seedClub's role definition is a non-speaker "Timer".
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: timer.memberId,
+			});
+
+			const rotation = await loadSpeakerRotation(seeded.clubId);
+			const row = rotation.find((r) => r.memberId === timer.memberId);
+
+			expect(row?.upcomingRoleAt?.getTime()).toBe(next.scheduledAt.getTime());
+			// …and the queue's own ranking still says they have never spoken, which
+			// is true: a Timer booking is not a speech.
+			expect(row?.timesSpoken).toBe(0);
+			expect(row?.lastSpokenAt).toBeNull();
+		});
+
 		it("does NOT mark a claim at a cancelled future meeting", async () => {
 			const { loadOverdueMembers } = await import("#/server/reporting-logic");
 
