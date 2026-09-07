@@ -721,12 +721,28 @@ export type UpdateBaseInput = z.infer<typeof updateBaseSchema>;
  * `dcp_scoreboards` has no such column — so before #690 a change to the number
  * the whole membership half of the scoreboard is scored against was recorded
  * absolutely nowhere.
+ *
+ * A no-op call returns without writing OR logging. This is load-bearing rather
+ * than an optimisation: the baseline field on the DCP page saves on BLUR and,
+ * unlike the goal inputs beside it, does not compare against the current value
+ * first — so tabbing through it calls this function with the number already
+ * stored. Before #690 that was an invisible redundant UPDATE; with an audit
+ * entry attached it would mint "corrected the DCP membership base" rows whose
+ * before and after are identical, in the one feed this whole change exists to
+ * make worth reading. A trail padded with non-events is how a club learns to
+ * stop reading it.
+ *
+ * The comparison is `===` on `number | null` and the null arm is deliberate:
+ * null is "never snapshotted", which the ≥20-active rule treats differently
+ * from a snapshotted 0, so null → 0 and 0 → null are both REAL changes and must
+ * still log. Only null → null and n → n are the no-op.
  */
 export async function updateBaseMemberCount(
 	input: UpdateBaseInput,
 	actorMemberId: ActorMemberId = null,
 ): Promise<{ ok: true }> {
 	const board = await requireScoreboard(input.clubId, input.programYear);
+	if (board.baseMemberCount === input.baseMemberCount) return { ok: true };
 	await db.transaction(async (tx) => {
 		await tx
 			.update(dcpScoreboards)

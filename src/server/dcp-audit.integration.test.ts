@@ -39,6 +39,8 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/dcp-audit.integration.test.ts
  */
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -59,15 +61,40 @@ import {
 	seedPerson,
 	testDb,
 } from "#/test/db";
+import { readSource } from "#/test/guard-source";
 import {
 	applyEducationSuggestions,
 	applyTrainingSuggestion,
+	getScoreboard,
 	startScoreboard,
 	updateBaseMemberCount,
 	updateGoal,
 } from "./dcp-logic";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+/**
+ * Injects a failure INSIDE a writer's transaction, immediately after the audit
+ * row has been inserted and before the transaction commits. Hoisted because
+ * `vi.mock`'s factory runs above the imports; the flag is off for every other
+ * case in this file, where the wrapper is a straight pass-through.
+ */
+const auditFailure = vi.hoisted(() => ({ throwAfterLog: false }));
+
+vi.mock("./activity", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./activity")>();
+	return {
+		...actual,
+		logActivity: async (
+			...args: Parameters<typeof actual.logActivity>
+		): Promise<void> => {
+			await actual.logActivity(...args);
+			if (auditFailure.throwAfterLog) {
+				throw new Error("injected failure after the audit row was written");
+			}
+		},
+	};
+});
 
 const PY = 2026;
 /** A completion timestamp inside the PY 2026 window (Jul 1 2026 – Jul 1 2027). */
@@ -309,6 +336,44 @@ describe.skipIf(!hasTestDb)("DCP scoreboard auditing (integration)", () => {
 		});
 	});
 
+	it("writes nothing when the base count has not actually changed", async () => {
+		await startScoreboard({ clubId: seeded.clubId, programYear: PY }, null);
+
+		// The baseline field on the DCP page saves on BLUR and does not compare
+		// against the current value first, so this is what tabbing through it
+		// sends: the number already stored. Before the guard it minted a
+		// "corrected the DCP membership base" entry whose before and after were
+		// identical — noise in the one feed this change exists to make readable.
+		await updateBaseMemberCount(
+			{ clubId: seeded.clubId, programYear: PY, baseMemberCount: 2 },
+			seeded.adminMemberId,
+		);
+
+		// The start's entry, and nothing after it.
+		expect(await entries("dcp_scoreboard_edit")).toHaveLength(1);
+	});
+
+	it("treats null and 0 as different bases, so both directions still log", async () => {
+		await startScoreboard({ clubId: seeded.clubId, programYear: PY }, null);
+		const set = (baseMemberCount: number | null) =>
+			updateBaseMemberCount(
+				{ clubId: seeded.clubId, programYear: PY, baseMemberCount },
+				seeded.adminMemberId,
+			);
+
+		// null is "never snapshotted", which the ≥20-active rule reads differently
+		// from a snapshotted 0. A no-op guard written as a falsy comparison would
+		// swallow two of these three real changes.
+		await set(null); // 2 → null   logs
+		await set(null); // null → null  no-op
+		await set(0); //    null → 0     logs
+		await set(0); //    0 → 0        no-op
+		await set(null); // 0 → null    logs
+
+		// The start plus exactly the three real changes.
+		expect(await entries("dcp_scoreboard_edit")).toHaveLength(4);
+	});
+
 	it("records a cleared base as null on both ends rather than 0", async () => {
 		await startScoreboard({ clubId: seeded.clubId, programYear: PY }, null);
 		await updateBaseMemberCount(
@@ -432,6 +497,74 @@ describe.skipIf(!hasTestDb)("DCP scoreboard auditing (integration)", () => {
 	});
 
 	// -------------------------------------------------------------------------
+	// The audit row and the write it describes share ONE transaction
+	// -------------------------------------------------------------------------
+
+	it("rolls the audit row back with the write it describes", async () => {
+		// Every case above asserts committed end-state, which is blind to the
+		// property that actually matters here: swap `logActivity(tx, …)` for
+		// `logActivity(db, …)` in all five writers and all of them still pass,
+		// because nothing they do ever fails. This is the case that can tell the
+		// difference. `db` is the pool, so a row written through it autocommits on
+		// its own connection and SURVIVES the rollback below — an audit entry for
+		// a change the club cannot see, which is strictly worse than none.
+		//
+		// `updateGoal` is the writer under test because it is the only one with a
+		// data change crisp enough to assert the rollback on from the other side
+		// (the goal is still at its old value), and because the other four share
+		// its exact shape — `db.transaction(tx => { …write…; logActivity(tx, …) })`
+		// — which the source assertion below pins rather than leaves asserted.
+		await startScoreboard({ clubId: seeded.clubId, programYear: PY }, null);
+		await updateGoal(
+			{ clubId: seeded.clubId, programYear: PY, goalKey: "g1", achieved: 3 },
+			seeded.adminUserId,
+			seeded.adminMemberId,
+		);
+		const settled = await entries();
+		expect(settled).toHaveLength(2); // the start, and the edit
+
+		auditFailure.throwAfterLog = true;
+		try {
+			await expect(
+				updateGoal(
+					{
+						clubId: seeded.clubId,
+						programYear: PY,
+						goalKey: "g1",
+						achieved: 9,
+					},
+					seeded.adminUserId,
+					seeded.adminMemberId,
+				),
+			).rejects.toThrow(/injected failure/);
+		} finally {
+			auditFailure.throwAfterLog = false;
+		}
+
+		// The data side rolled back: the 9 never landed.
+		const view = await getScoreboard({
+			clubId: seeded.clubId,
+			programYear: PY,
+		});
+		expect(view.progress.g1).toBe(3);
+		// …and the audit side went with it. This is the assertion that fails when
+		// the log is handed `db` instead of `tx`: it would read 3 here.
+		expect(await entries()).toHaveLength(2);
+	});
+
+	it("hands the transaction, not the pool, to all five writers", async () => {
+		// The generalisation of the case above, which can only exercise one
+		// writer. `logActivity(db,` anywhere in this module is the bug that case
+		// describes; five `logActivity(tx,` call sites is the whole audit surface
+		// of #690, so this also fails if a sixth DCP write lands unaudited.
+		const source = readSource(
+			join(dirname(fileURLToPath(import.meta.url)), "dcp-logic.ts"),
+		);
+		expect(source.split("logActivity(tx,").length - 1).toBe(5);
+		expect(source).not.toContain("logActivity(db,");
+	});
+
+	// -------------------------------------------------------------------------
 	// The impersonation shape
 	// -------------------------------------------------------------------------
 
@@ -466,7 +599,13 @@ describe("the feed renders both DCP actions", () => {
 			action,
 			createdAt: new Date(),
 			actorName: "Rasheed",
-			targetType: "member",
+			// What these rows ACTUALLY carry. It said "member" in the first cut of
+			// this file — not by choice, but because `ActivityEntry["targetType"]`
+			// omitted "scoreboard" and the honest value would not compile, while the
+			// unchecked cast in `loadActivity` let the real rows through anyway. A
+			// fixture that has to lie to typecheck is the union being wrong, not the
+			// fixture.
+			targetType: "scoreboard",
 			roleName: null,
 			meetingId: null,
 			meetingScheduledAt: null,

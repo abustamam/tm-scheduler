@@ -28,7 +28,24 @@ export interface ActivityEntry {
 	action: string;
 	createdAt: Date;
 	actorName: string | null;
-	targetType: "slot" | "meeting" | "member";
+	/**
+	 * The kind of thing `targetId` points at. Kept in step with
+	 * `ActivityInput["targetType"]` in `activity.ts`, which is what the WRITE side
+	 * enforces, and with the vocabulary comment on `activity_log.target_type`.
+	 *
+	 * "scoreboard" is a `dcp_scoreboards` row (#690). It is listed because the cast
+	 * below is unchecked, so a value missing here is not a type error — it is a
+	 * silent lie, and a test writing a DCP entry then has to spell it "member" to
+	 * compile, which is how a fixture comes to disagree with what ships.
+	 *
+	 * Widening this changes NO behaviour: every consumer compares with `===`
+	 * against "slot" / "meeting" / "member", so a scoreboard row resolves to no
+	 * role, no meeting and no link, which is the correct rendering for it.
+	 *
+	 * Known gap, pre-dating #690 and left alone deliberately: "club" (#495) ships
+	 * today and is still absent from this union.
+	 */
+	targetType: "slot" | "meeting" | "member" | "scoreboard";
 	roleName: string | null;
 	meetingId: string | null;
 	meetingScheduledAt: Date | null;
