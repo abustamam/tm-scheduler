@@ -193,6 +193,43 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "vote_close":
 			summary = "closed a vote";
 			break;
+		// The DCP scoreboard (#690) — the club's official Distinguished Club
+		// Program record. Two actions, split on WHO decided the number: a typed-in
+		// value against an accepted derivation. The inner switch reads
+		// `detail.change` through `entry.change`, the same seam `meeting_edit`
+		// above uses, so neither action needed a new field on `ActivityEntry`.
+		//
+		// Neither names the goal or the year, deliberately, and for the reason
+		// `meeting_template_set` gives: the feed is a "who touched what, when"
+		// list, and `detail` holds the specifics for anyone who needs them.
+		// Without these cases the `default` below renders the raw enum string.
+		case "dcp_scoreboard_edit":
+			switch (entry.change) {
+				case "started":
+					summary = "started the DCP scoreboard";
+					break;
+				case "base":
+					summary = "corrected the DCP membership base";
+					break;
+				case "goal":
+					summary = "updated a DCP goal";
+					break;
+				default:
+					summary = "updated the DCP scoreboard";
+			}
+			break;
+		case "dcp_suggestion_applied":
+			switch (entry.change) {
+				case "education":
+					summary = "applied the Pathways suggestions to the DCP scoreboard";
+					break;
+				case "training":
+					summary = "applied the officer-training suggestion to DCP goal 9";
+					break;
+				default:
+					summary = "applied a suggestion to the DCP scoreboard";
+			}
+			break;
 		default:
 			summary = entry.action;
 	}

@@ -21,8 +21,12 @@ export interface ActivityInput {
 	actorMemberId: string | null;
 	action: ActivityAction;
 	// "club" is for changes to club-level state that aren't tied to a slot,
-	// meeting or member — the club logo (#495) is the first.
-	targetType: "slot" | "meeting" | "member" | "club";
+	// meeting or member — the club logo (#495) is the first. "scoreboard" is a
+	// `dcp_scoreboards` row (#690) — club-level too, but it has a row of its own
+	// to point at, and the DCP record is per PROGRAM YEAR, so "club" would lose
+	// which year a change belongs to. The schema comment on `activity_log.target_type`
+	// documents this same vocabulary; keep the two in step.
+	targetType: "slot" | "meeting" | "member" | "club" | "scoreboard";
 	targetId?: string | null;
 	detail?: unknown;
 	/**

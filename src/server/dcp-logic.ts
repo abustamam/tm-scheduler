@@ -16,7 +16,17 @@
 // this is the paragraph a future author reads to learn the house style, and
 // ADR-0019's position is that TI — not GavelUp — is the system of record for
 // every one of these goals, so no derivation may write on its own.
-import { and, asc, count, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	eq,
+	gte,
+	inArray,
+	isNotNull,
+	lt,
+	sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -37,7 +47,31 @@ import {
 	splitNewMembers,
 } from "#/lib/dcp";
 import { TRAINING_GOAL_KEY } from "#/lib/officer-training";
+import { logActivity } from "./activity";
 import { deriveTrainingSuggestion } from "./officer-training-logic";
+
+/**
+ * The acting MEMBERSHIP id for the `activity_log` row a DCP write appends
+ * (#690), null for a read-write impersonating superadmin — memberless in the
+ * club, so `logActivity` credits the real person via `impersonated_by` instead.
+ *
+ * Deliberately a separate parameter from the `updatedBy` these functions already
+ * took, because the two are different ids answering different questions and they
+ * are NOT interchangeable: `updatedBy` is a USER id stamping
+ * `dcp_goal_progress.updated_by` (the row-level "who touched this value last",
+ * overwritten by the next edit and gone with the row), while this is a
+ * MEMBERSHIP id, which is the only thing the club's activity feed can render a
+ * name from. Mistaking the first for an audit trail is what #690 was: it holds
+ * no history, no before value, and `dcp_scoreboards` — where the membership base
+ * lives — has no such column at all.
+ *
+ * Optional so the existing DB-level tests keep calling these functions with no
+ * actor (an honest "system" row, which `logActivity` is null-aware about). Every
+ * real call site is a server fn in `dcp.ts` and passes the membership
+ * `requireClubRole` already resolved — NEVER a value off the client payload
+ * (#396 / `actor-provenance.guard.test.ts`).
+ */
+type ActorMemberId = string | null;
 
 export interface DcpScoreboardView {
 	programYear: number;
@@ -298,6 +332,7 @@ export type StartScoreboardInput = z.infer<typeof startScoreboardSchema>;
  */
 export async function startScoreboard(
 	input: StartScoreboardInput,
+	actorMemberId: ActorMemberId = null,
 ): Promise<DcpScoreboardView> {
 	const { clubId, programYear } = input;
 	const existing = await findScoreboard(clubId, programYear);
@@ -331,6 +366,28 @@ export async function startScoreboard(
 				.onConflictDoNothing({
 					target: [dcpGoalProgress.scoreboardId, dcpGoalProgress.goalKey],
 				});
+			// Same transaction as the write it describes — an audit row that can
+			// commit while the scoreboard does not is worse than none. Inside the
+			// `if (!board)` guard above deliberately: a start that LOST the race
+			// created nothing, and logging it would put two "started the scoreboard"
+			// entries in the feed for one scoreboard.
+			await logActivity(tx, {
+				clubId,
+				actorMemberId,
+				action: "dcp_scoreboard_edit",
+				targetType: "scoreboard",
+				targetId: board.id,
+				// `before: null` is the honest before for a create — the scoreboard
+				// did not exist. `after` is what the start actually snapshotted and
+				// pre-filled, which is the part a reader would otherwise have to
+				// reconstruct from the roster as it stood that day.
+				detail: {
+					change: "started",
+					programYear,
+					before: null,
+					after: { baseMemberCount: currentActive, ...prefill },
+				},
+			});
 		});
 	}
 	return getScoreboard({ clubId, programYear });
@@ -343,12 +400,60 @@ export async function startScoreboard(
 async function requireScoreboard(
 	clubId: string,
 	programYear: number,
-): Promise<{ id: string }> {
+): Promise<{ id: string; baseMemberCount: number | null }> {
 	const board = await findScoreboard(clubId, programYear);
 	if (!board) {
 		throw new Error("No DCP scoreboard has been started for that year.");
 	}
 	return board;
+}
+
+/**
+ * The stored `achieved` for the named goals, keyed by goal — the BEFORE half of
+ * an audit entry (#690). A goal with no row yet reads as absent rather than 0:
+ * "was never set" and "was set to 0" are different facts, and on the composite
+ * goals the second is a President's explicit Not Met.
+ */
+async function readGoalProgress(
+	scoreboardId: string,
+	goalKeys: string[],
+): Promise<Record<string, number>> {
+	if (goalKeys.length === 0) return {};
+	const rows = await db
+		.select({
+			goalKey: dcpGoalProgress.goalKey,
+			achieved: dcpGoalProgress.achieved,
+		})
+		.from(dcpGoalProgress)
+		.where(
+			and(
+				eq(dcpGoalProgress.scoreboardId, scoreboardId),
+				inArray(dcpGoalProgress.goalKey, goalKeys),
+			),
+		);
+	return Object.fromEntries(rows.map((r) => [r.goalKey, r.achieved]));
+}
+
+/**
+ * The goals whose value actually MOVED, as `{ before, after }` maps over that
+ * subset. This is what makes an apply's audit entry say something: a batch that
+ * re-wrote six goals and changed none is a different event from one that raised
+ * two, and an entry listing all six either way tells a reader nothing.
+ */
+function diffGoals(
+	before: Record<string, number>,
+	after: Record<string, number>,
+): {
+	goals: string[];
+	before: Record<string, number | null>;
+	after: Record<string, number>;
+} {
+	const goals = Object.keys(after).filter((k) => before[k] !== after[k]);
+	return {
+		goals,
+		before: Object.fromEntries(goals.map((k) => [k, before[k] ?? null])),
+		after: Object.fromEntries(goals.map((k) => [k, after[k] as number])),
+	};
 }
 
 export const updateGoalSchema = z.object({
@@ -359,37 +464,94 @@ export const updateGoalSchema = z.object({
 });
 export type UpdateGoalInput = z.infer<typeof updateGoalSchema>;
 
+/** A drizzle transaction handle, so a writer and the audit row it produces can
+ *  commit together. Same shape `logActivity` accepts. */
+type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * Upsert ONE goal's stored value, with the composite 0/1 clamp, and no audit
+ * entry. Private, and the ONLY place the clamp is written: a second copy is a
+ * second place it can be forgotten, which is the rule `applyTrainingSuggestion`
+ * already followed by calling `updateGoal`. It is extracted here so that rule
+ * survives #690 — `updateGoal` now also logs, and an apply must not file as a
+ * hand edit. (The education apply below keeps its own multi-row upsert: it
+ * writes only count goals, which the clamp does not touch, and "all six or none"
+ * is the point of that single statement.) Each public writer wraps this and logs
+ * the event it actually is — a President typing a number is not the same feed
+ * entry as a President accepting a derivation, even when the row is identical.
+ *
+ * Returns the value as STORED (post-clamp), which is the `after` an audit entry
+ * must record: logging the requested 7 for a composite goal that stored 1 would
+ * make the trail disagree with the scoreboard.
+ */
+async function writeGoalValue(
+	conn: Tx,
+	scoreboardId: string,
+	goal: { key: string; composite?: boolean },
+	requested: number,
+	updatedBy: string | null,
+): Promise<number> {
+	const achieved = goal.composite ? (requested > 0 ? 1 : 0) : requested;
+	const updatedAt = new Date();
+	await conn
+		.insert(dcpGoalProgress)
+		.values({
+			scoreboardId,
+			goalKey: goal.key,
+			achieved,
+			updatedBy,
+			updatedAt,
+		})
+		.onConflictDoUpdate({
+			target: [dcpGoalProgress.scoreboardId, dcpGoalProgress.goalKey],
+			set: { achieved, updatedBy, updatedAt },
+		});
+	return achieved;
+}
+
 /**
  * Set a single goal's `achieved` value. Composite goals (9, 10) are clamped to a
  * 0/1 toggle; count goals keep their raw value (may exceed target). Stamps the
- * editing user for the audit trail.
+ * editing user on the row, and appends the `activity_log` entry the club's feed
+ * reads (#690) — the row stamp records only who touched it LAST, so it is not by
+ * itself an answer to "who changed this, and when".
  */
 export async function updateGoal(
 	input: UpdateGoalInput,
 	updatedBy: string | null,
+	actorMemberId: ActorMemberId = null,
 ): Promise<{ ok: true }> {
 	const goal = goalByKey(input.goalKey);
 	if (!goal) throw new Error("Unknown DCP goal.");
 	const board = await requireScoreboard(input.clubId, input.programYear);
-	const achieved = goal.composite
-		? input.achieved > 0
-			? 1
-			: 0
-		: input.achieved;
+	// Read the BEFORE outside the transaction the write runs in: it is the value
+	// the President was looking at, and an entry that carries only the new number
+	// says nothing a reader could not already see on the scoreboard.
+	const before = await readGoalProgress(board.id, [goal.key]);
 
-	await db
-		.insert(dcpGoalProgress)
-		.values({
-			scoreboardId: board.id,
-			goalKey: goal.key,
-			achieved,
+	await db.transaction(async (tx) => {
+		const achieved = await writeGoalValue(
+			tx,
+			board.id,
+			goal,
+			input.achieved,
 			updatedBy,
-			updatedAt: new Date(),
-		})
-		.onConflictDoUpdate({
-			target: [dcpGoalProgress.scoreboardId, dcpGoalProgress.goalKey],
-			set: { achieved, updatedBy, updatedAt: new Date() },
+		);
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId,
+			action: "dcp_scoreboard_edit",
+			targetType: "scoreboard",
+			targetId: board.id,
+			detail: {
+				change: "goal",
+				programYear: input.programYear,
+				goalKey: goal.key,
+				before: before[goal.key] ?? null,
+				after: achieved,
+			},
 		});
+	});
 	return { ok: true };
 }
 
@@ -407,31 +569,59 @@ export type ApplyEducationInput = z.infer<typeof applyEducationSchema>;
  * education goals: g7/g8 (new members), the composite g9/g10, and the membership
  * base are never touched. The suggestions stay live afterward — the next read
  * re-derives, so later completions resurface as a new suggestion to apply.
+ *
+ * Audited as ONE `dcp_suggestion_applied` entry naming the goals that actually
+ * moved (#690), not six entries and not one per goal: "the President accepted
+ * the Pathways assist" is a single event, and six rows would bury the rest of
+ * the feed under one click.
  */
 export async function applyEducationSuggestions(
 	input: ApplyEducationInput,
 	updatedBy: string | null,
+	actorMemberId: ActorMemberId = null,
 ): Promise<DcpScoreboardView> {
 	const { clubId, programYear } = input;
 	const board = await requireScoreboard(clubId, programYear);
 	const derived = await deriveEducationGoals(clubId, programYear);
 	const updatedAt = new Date();
+	const before = await readGoalProgress(board.id, [...EDUCATION_GOAL_KEYS]);
+	const after = Object.fromEntries(
+		EDUCATION_GOAL_KEYS.map((k) => [k, derived[k] ?? 0]),
+	);
 
-	await db
-		.insert(dcpGoalProgress)
-		.values(
-			EDUCATION_GOAL_KEYS.map((goalKey) => ({
-				scoreboardId: board.id,
-				goalKey,
-				achieved: derived[goalKey] ?? 0,
-				updatedBy,
-				updatedAt,
-			})),
-		)
-		.onConflictDoUpdate({
-			target: [dcpGoalProgress.scoreboardId, dcpGoalProgress.goalKey],
-			set: { achieved: sql`excluded.achieved`, updatedBy, updatedAt },
+	await db.transaction(async (tx) => {
+		await tx
+			.insert(dcpGoalProgress)
+			.values(
+				EDUCATION_GOAL_KEYS.map((goalKey) => ({
+					scoreboardId: board.id,
+					goalKey,
+					achieved: derived[goalKey] ?? 0,
+					updatedBy,
+					updatedAt,
+				})),
+			)
+			.onConflictDoUpdate({
+				target: [dcpGoalProgress.scoreboardId, dcpGoalProgress.goalKey],
+				set: { achieved: sql`excluded.achieved`, updatedBy, updatedAt },
+			});
+		await logActivity(tx, {
+			clubId,
+			actorMemberId,
+			action: "dcp_suggestion_applied",
+			targetType: "scoreboard",
+			targetId: board.id,
+			detail: {
+				change: "education",
+				programYear,
+				// An apply that moved nothing still logs, with an empty `goals`: the
+				// President took the action, and "accepted the assist, nothing
+				// changed" is a true and occasionally useful line. It is the goal
+				// LIST that carries the information, not the entry's existence.
+				...diffGoals(before, after),
+			},
 		});
+	});
 
 	return getScoreboard({ clubId, programYear });
 }
@@ -448,10 +638,13 @@ export type ApplyTrainingInput = z.infer<typeof applyTrainingSchema>;
  * mirroring {@link applyEducationSuggestions}.
  *
  * Scoped to `g9` alone: nothing else on the scoreboard is touched. It goes
- * through `updateGoal` rather than writing `dcp_goal_progress` directly so the
- * composite 0/1 clamp and the `updatedBy` audit stamp are applied by the one
- * function that owns them — a second upsert here would be a second place the
- * clamp could be forgotten.
+ * through {@link writeGoalValue} rather than writing `dcp_goal_progress`
+ * directly so the composite 0/1 clamp and the `updatedBy` stamp are applied by
+ * the one function that owns them — a second upsert here would be a second place
+ * the clamp could be forgotten. It stops one level short of `updateGoal`, which
+ * is what it used to call, for the audit trail alone (#690): `updateGoal` logs
+ * `dcp_scoreboard_edit`, and an accepted suggestion filed as a typed-in number
+ * is exactly the confusion the two-value vocabulary exists to prevent.
  *
  * It CAN write a 0, which clears a hand-entered Met, and that is deliberate: the
  * President is accepting what the records say, and the alternative (an apply that
@@ -470,9 +663,10 @@ export type ApplyTrainingInput = z.infer<typeof applyTrainingSchema>;
 export async function applyTrainingSuggestion(
 	input: ApplyTrainingInput,
 	updatedBy: string | null,
+	actorMemberId: ActorMemberId = null,
 ): Promise<DcpScoreboardView> {
 	const { clubId, programYear } = input;
-	await requireScoreboard(clubId, programYear);
+	const board = await requireScoreboard(clubId, programYear);
 	const { suggestion, hasRecords } = await deriveTrainingSuggestion(
 		clubId,
 		programYear,
@@ -482,15 +676,34 @@ export async function applyTrainingSuggestion(
 			"Record officer training first — there is nothing to apply to goal 9 yet.",
 		);
 	}
-	await updateGoal(
-		{
+	const goal = goalByKey(TRAINING_GOAL_KEY);
+	if (!goal) throw new Error("Unknown DCP goal.");
+	const before = await readGoalProgress(board.id, [goal.key]);
+
+	await db.transaction(async (tx) => {
+		const achieved = await writeGoalValue(
+			tx,
+			board.id,
+			goal,
+			suggestion,
+			updatedBy,
+		);
+		await logActivity(tx, {
 			clubId,
-			programYear,
-			goalKey: TRAINING_GOAL_KEY,
-			achieved: suggestion,
-		},
-		updatedBy,
-	);
+			actorMemberId,
+			action: "dcp_suggestion_applied",
+			targetType: "scoreboard",
+			targetId: board.id,
+			// Same `{ goals, before, after }` shape as the education apply, over the
+			// one goal this touches, so a reader of the feed (or of this code) does
+			// not have to learn two payloads for the same kind of event.
+			detail: {
+				change: "training",
+				programYear,
+				...diffGoals(before, { [goal.key]: achieved }),
+			},
+		});
+	});
 	return getScoreboard({ clubId, programYear });
 }
 
@@ -501,20 +714,46 @@ export const updateBaseSchema = z.object({
 });
 export type UpdateBaseInput = z.infer<typeof updateBaseSchema>;
 
-/** Correct the year's snapshotted base member count (used by the net-+5 rule). */
+/**
+ * Correct the year's snapshotted base member count (used by the net-+5 rule).
+ *
+ * The one DCP write with no row-level `updated_by` to fall back on —
+ * `dcp_scoreboards` has no such column — so before #690 a change to the number
+ * the whole membership half of the scoreboard is scored against was recorded
+ * absolutely nowhere.
+ */
 export async function updateBaseMemberCount(
 	input: UpdateBaseInput,
+	actorMemberId: ActorMemberId = null,
 ): Promise<{ ok: true }> {
-	await requireScoreboard(input.clubId, input.programYear);
-	await db
-		.update(dcpScoreboards)
-		.set({ baseMemberCount: input.baseMemberCount, updatedAt: new Date() })
-		.where(
-			and(
-				eq(dcpScoreboards.clubId, input.clubId),
-				eq(dcpScoreboards.programYear, input.programYear),
-			),
-		);
+	const board = await requireScoreboard(input.clubId, input.programYear);
+	await db.transaction(async (tx) => {
+		await tx
+			.update(dcpScoreboards)
+			.set({ baseMemberCount: input.baseMemberCount, updatedAt: new Date() })
+			.where(
+				and(
+					eq(dcpScoreboards.clubId, input.clubId),
+					eq(dcpScoreboards.programYear, input.programYear),
+				),
+			);
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId,
+			action: "dcp_scoreboard_edit",
+			targetType: "scoreboard",
+			targetId: board.id,
+			detail: {
+				change: "base",
+				programYear: input.programYear,
+				// `findScoreboard` already selected the old value, so the BEFORE costs
+				// no extra query. Both ends are nullable: null is "not snapshotted",
+				// which the ≥20-active rule treats differently from a 0.
+				before: board.baseMemberCount,
+				after: input.baseMemberCount,
+			},
+		});
+	});
 	return { ok: true };
 }
 
