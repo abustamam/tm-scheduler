@@ -97,6 +97,9 @@ Files this issue cites:
    database-backed tests skip and the run still reads green — CLAUDE.md has the value.
 6. `gh pr create` with `Closes #<N>` in the body.
 7. STOP THERE. Do not merge, do not review your own PR, do not pick up another issue.
+   Anything you noticed on the way follows CLAUDE.md's "What earns an issue": in the diff,
+   fix it; a user-visible bug outside it, one `needs-triage` issue; anything else, one
+   sentence in the PR body.
 ```
 
 **Keep it this short.** The agent works in a worktree, so it reads CLAUDE.md itself — the
@@ -148,3 +151,4 @@ Merging is the serial half.
 | Running `worktree:setup` from the main checkout | It exits 0 having done nothing; the worktree stays unbootstrapped and fails silently later |
 | Merging the round that answers the review | Those commits were reviewed by nothing; the maintainer reading that diff is the only gate |
 | Reviewing the wave's PRs one at a time | `/review-pr` checks nothing out; only the merging has to be serial |
+| An agent labelling its own finding `ready-for-agent` | The next `batch:issues` run dispatches work nobody asked for; the label is the maintainer's |

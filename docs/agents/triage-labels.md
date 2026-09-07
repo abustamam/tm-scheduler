@@ -15,3 +15,5 @@ The skills speak in terms of five canonical state roles and two category roles. 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
 Edit the right-hand column to match whatever vocabulary you actually use.
+
+`ready-for-agent` is the maintainer's label. An agent applies it only when directed (`/spec` output, `/triage`, "move #N to ready-for-agent"), never to an issue it filed from its own observation; those arrive as `needs-triage` plus a category and stay there until the maintainer moves them. See "Who files" in `docs/agents/issue-tracker.md`.

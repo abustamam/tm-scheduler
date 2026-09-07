@@ -37,7 +37,9 @@ Take the first of these that yields an issue:
 
 1. `Closes #N` / `Fixes #N` / `Resolves #N` in the PR body. This is the convention here. A PR
    without one leaves its issue open and re-dispatchable once the branch is deleted on merge, so
-   its absence is itself a finding: report it under Spec.
+   its absence is itself a finding: report it under Spec. The one exception is a body that says
+   the maintainer asked for the work directly with no issue (CLAUDE.md's "Pull requests" allows
+   it); then the body's own statement of intent is the spec, and steps 2 and 3 are skipped.
 2. The trailing number on the branch name (`<slug>-<issue>`; two trailing numbers are two issues).
 3. `#N` references in the commit messages.
 
