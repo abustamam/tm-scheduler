@@ -6,6 +6,14 @@
 // Every fn is gated to clubRole "admin". The President already resolves to
 // "admin" (effective-admin: any open officer term passes `requireClubRole`
 // admin — see guards.ts / #202), so this covers the President without a new role.
+//
+// Each of the five WRITES also passes `membership.id` down as the acting member
+// for the `activity_log` entry the logic layer appends (#690). It comes from the
+// membership `requireClubRole` just resolved, never from the payload — the
+// scoreboard is the club's official DCP record, and #396 is what happens when a
+// feed credits whoever the client named. `membership.id` is null for a
+// read-write impersonating superadmin (memberless in the club), which
+// `logActivity` records as the real person rather than as nobody.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
@@ -47,38 +55,38 @@ export const startScoreboard = createServerFn({ method: "POST" })
 	.validator((i: unknown) => startScoreboardSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return startScoreboardDb(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return startScoreboardDb(data, membership.id);
 	});
 
 export const updateGoal = createServerFn({ method: "POST" })
 	.validator((i: unknown) => updateGoalSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return updateGoalDb(data, user.id);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return updateGoalDb(data, user.id, membership.id);
 	});
 
 export const applyEducationSuggestions = createServerFn({ method: "POST" })
 	.validator((i: unknown) => applyEducationSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applyEducationSuggestionsDb(data, user.id);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applyEducationSuggestionsDb(data, user.id, membership.id);
 	});
 
 export const applyTrainingSuggestion = createServerFn({ method: "POST" })
 	.validator((i: unknown) => applyTrainingSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applyTrainingSuggestionDb(data, user.id);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applyTrainingSuggestionDb(data, user.id, membership.id);
 	});
 
 export const updateBaseMemberCount = createServerFn({ method: "POST" })
 	.validator((i: unknown) => updateBaseSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return updateBaseMemberCountDb(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return updateBaseMemberCountDb(data, membership.id);
 	});

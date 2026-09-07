@@ -193,12 +193,31 @@ describe("nothing writes goal 9 on its own (#531 / ADR-0019)", () => {
 
 	it("the apply is the ONLY path from training records to goal 9", () => {
 		// `applyTrainingSuggestion` lives in `dcp-logic.ts` and routes through
-		// `updateGoal`, which owns the composite 0/1 clamp and the audit stamp. A
-		// second upsert would be a second place to forget the clamp.
+		// `writeGoalValue`, which owns the composite 0/1 clamp and the `updatedBy`
+		// stamp. A second upsert would be a second place to forget the clamp.
+		//
+		// It called `updateGoal` until #690, which is a level ABOVE that helper
+		// and now also appends a `dcp_scoreboard_edit` activity entry — the wrong
+		// action for an accepted suggestion, which files as `dcp_suggestion_applied`.
+		// So the apply stopped one level short, and this guard follows it down.
+		// The property is unchanged and is what the strings below pin: exactly one
+		// function in this module upserts `dcp_goal_progress` for a single goal,
+		// and the apply goes through it rather than issuing SQL of its own.
 		const dcpLogic = stripped("src/server/dcp-logic.ts");
 		expect(dcpLogic).toContain("export async function applyTrainingSuggestion");
-		expect(dcpLogic).toContain("goalKey: TRAINING_GOAL_KEY");
-		expect(dcpLogic).toContain("await updateGoal(");
+		expect(dcpLogic).toContain("goalByKey(TRAINING_GOAL_KEY)");
+		expect(dcpLogic).toContain("await writeGoalValue(");
+		// The clamp lives in exactly one place. THREE `.insert(dcpGoalProgress)`
+		// statements are expected, each writing a set the clamp does not apply to
+		// or owning the clamp itself: the start's seed of all ten goals at 0,
+		// `writeGoalValue`'s single-goal upsert, and the education apply's
+		// deliberate all-six-or-none batch (count goals only). A fourth means
+		// someone wrote their own goal upsert again, which is how the composite
+		// goals get a second, divergent 0/1 rule.
+		expect(
+			dcpLogic.split(".insert(dcpGoalProgress)").length - 1,
+			"a fourth dcp_goal_progress upsert appeared in dcp-logic.ts — route single-goal writes through writeGoalValue, which owns the composite 0/1 clamp",
+		).toBe(3);
 	});
 
 	it("the scoreboard read reports the suggestion without storing it", () => {
