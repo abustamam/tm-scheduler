@@ -291,6 +291,7 @@ export async function materializeTemplateRoles(
 				defaultCount: r.defaultCount,
 				sortOrder: r.sortOrder,
 				isSpeakerRole: r.isSpeakerRole,
+				slotsUnordered: r.slotsUnordered,
 				description: r.description,
 			})),
 		)
@@ -386,6 +387,7 @@ export async function copyTemplateForMeeting(
 				defaultCount: r.defaultCount,
 				sortOrder: r.sortOrder,
 				isSpeakerRole: r.isSpeakerRole,
+				slotsUnordered: r.slotsUnordered,
 				description: r.description,
 			})),
 		);

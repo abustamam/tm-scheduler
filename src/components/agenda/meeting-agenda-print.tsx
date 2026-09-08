@@ -7,6 +7,7 @@
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
+import { type RosterEntry, rosterGridPositions } from "#/lib/agenda";
 import { groupByPresenter } from "#/lib/agenda-groups";
 import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
 import { introducedSuffix } from "#/lib/agenda-runsheet";
@@ -70,8 +71,10 @@ function clubLine(h: AgendaHeader): string {
 		.join("  ·  ");
 }
 
-/** One row of the "Meeting Roles" roster (name null → open/unfilled). */
-export type AgendaRoleEntry = { label: string; name: string | null };
+/** One row of the "Meeting Roles" roster: `buildRosterEntries`' output, named
+ *  for the print route that feeds it. Aliased rather than restated so a field
+ *  added to one cannot go missing from the other. */
+export type AgendaRoleEntry = RosterEntry;
 
 /** A club officer for the officer grid. */
 export type AgendaOfficer = { office: string; name: string };
@@ -281,6 +284,14 @@ function RolesRoster({
 	const large = variant === "large";
 	const labelSize = large ? 11 : boxed ? 9.5 : 9;
 	const nameSize = large ? 14 : boxed ? 11.5 : 10.5;
+	// An entry naming several people (#624 — an unordered role's collapsed
+	// entry) spans both columns, so "which cell closes the box" and "which is
+	// the right column" are computed rather than read off the index: `i % 2` is
+	// not the column once a cell can span, and `i >= length - 2` is not the
+	// bottom edge. `lastInColumn` reproduces the old rule exactly for a roster
+	// with no wide entry, odd counts included — this must not restyle the
+	// ordinary agenda every club prints.
+	const positions = rosterGridPositions(roles);
 	return (
 		<div
 			style={{
@@ -294,50 +305,80 @@ function RolesRoster({
 				}),
 			}}
 		>
-			{roles.map((r, i) => (
-				<div
-					key={r.label}
-					style={{
-						display: "flex",
-						justifyContent: "space-between",
-						alignItems: large ? "baseline" : "center",
-						padding: boxed ? "6px 14px" : large ? "9px 0" : "5px 0",
-						borderBottom:
-							boxed && i >= roles.length - 2
-								? undefined
-								: "1px solid rgba(23,58,64,.09)",
-						background: boxed && i % 2 === 1 ? "#fafdfb" : undefined,
-					}}
-				>
-					<span
+			{roles.map((r, i) => {
+				const pos = positions[i] ?? {
+					row: 0,
+					col: 0 as const,
+					wide: false,
+					lastInColumn: true,
+				};
+				return (
+					<div
+						// Index, not label: collapsing means two same-named role
+						// DEFINITIONS both render the bare role name (`buildRosterEntries`
+						// groups by definition, so that shape is supported), and the
+						// numbering that used to make labels unique is exactly what is
+						// gone. The roster is rebuilt wholesale on every render, so
+						// there is no reordering for a stable key to protect.
+						// biome-ignore lint/suspicious/noArrayIndexKey: see above
+						key={i}
+						data-roster-entry=""
+						// Present only on an entry spanning both columns; its value is
+						// the holder count the width was granted for. A collapsed entry
+						// with one holder sits in an ordinary cell and carries nothing.
+						data-roster-wide={pos.wide ? r.holderCount : undefined}
 						style={{
-							fontSize: labelSize,
-							textTransform: "uppercase",
-							letterSpacing: ".03em",
-							color: MUTED,
-							fontWeight: 700,
-							whiteSpace: "nowrap",
+							display: "flex",
+							justifyContent: "space-between",
+							alignItems: large ? "baseline" : "center",
+							padding: boxed ? "6px 14px" : large ? "9px 0" : "5px 0",
+							borderBottom:
+								boxed && pos.lastInColumn
+									? undefined
+									: "1px solid rgba(23,58,64,.09)",
+							background: boxed && pos.col === 1 ? "#fafdfb" : undefined,
+							gridColumn: pos.wide ? "1 / -1" : undefined,
 						}}
 					>
-						{r.label}
-					</span>
-					{r.name ? (
-						<span style={{ fontSize: nameSize, fontWeight: 600 }}>
-							{r.name}
-						</span>
-					) : (
 						<span
 							style={{
-								fontSize: nameSize - 1,
+								fontSize: labelSize,
+								textTransform: "uppercase",
+								letterSpacing: ".03em",
+								color: MUTED,
 								fontWeight: 700,
-								color: OPEN,
+								whiteSpace: "nowrap",
 							}}
 						>
-							{boxed ? "○ Open" : "Open"}
+							{r.label}
 						</span>
-					)}
-				</div>
-			))}
+						{r.name ? (
+							<span
+								style={{
+									fontSize: nameSize,
+									fontWeight: 600,
+									// A list of several names wraps; keep the wrapped lines
+									// ragged-left against the right edge like every other
+									// name in the column, clear of the label.
+									...(pos.wide && { textAlign: "right", paddingLeft: 16 }),
+								}}
+							>
+								{r.name}
+							</span>
+						) : (
+							<span
+								style={{
+									fontSize: nameSize - 1,
+									fontWeight: 700,
+									color: OPEN,
+								}}
+							>
+								{boxed ? "○ Open" : "Open"}
+							</span>
+						)}
+					</div>
+				);
+			})}
 		</div>
 	);
 }

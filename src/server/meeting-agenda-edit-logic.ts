@@ -203,6 +203,7 @@ async function materialiseForMeeting(
 					category: roleDefinitions.category,
 					defaultCount: roleDefinitions.defaultCount,
 					isSpeakerRole: roleDefinitions.isSpeakerRole,
+					slotsUnordered: roleDefinitions.slotsUnordered,
 				})
 				.from(roleDefinitions)
 				.where(
@@ -228,6 +229,7 @@ async function materialiseForMeeting(
 						category: club?.category ?? ("functionary" as const),
 						defaultCount: club?.defaultCount ?? 1,
 						isSpeakerRole: club?.isSpeakerRole ?? false,
+						slotsUnordered: club?.slotsUnordered ?? false,
 						sortOrder: i,
 					};
 				}),

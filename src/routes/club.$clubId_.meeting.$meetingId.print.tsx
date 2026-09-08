@@ -197,9 +197,10 @@ function PrintAgenda() {
 		.format(startsAt)
 		.replace(",", " ·");
 
-	// Meeting-roles roster: numbered, with assignee or open. Speakers are
-	// interleaved with their paired evaluators so each pair shares a row in the
-	// two-column print layout.
+	// Meeting-roles roster: one entry per slot, numbered where a role repeats,
+	// with assignee or open — except an UNORDERED role (#624), which collapses
+	// into one entry naming every holder. Speakers are interleaved with their
+	// paired evaluators so each pair shares a row in the two-column print layout.
 	const roles: AgendaRoleEntry[] = buildRosterEntries(slots);
 
 	// Plain-language role explainers (first description seen per role name).

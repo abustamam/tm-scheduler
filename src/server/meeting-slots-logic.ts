@@ -55,6 +55,12 @@ export async function loadMeetingSlots(meetingId: string) {
 			description: roleDefinitions.description,
 			sortOrder: roleDefinitions.sortOrder,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			// See `role_definitions.slots_unordered` (#624). This is the ONE loader
+			// the meeting page, the print route and the attendance rail read slots
+			// through, so every DISPLAY surface gets the flag from here. The copy
+			// chain reads the column separately (`meeting-templates-logic`,
+			// `meeting-agenda-edit-logic`) — that is materialization, not display.
+			slotsUnordered: roleDefinitions.slotsUnordered,
 			// assigneeId is the MEMBER id (null for a guest or open slot) — used for
 			// "is mine" / roster flags. A guest assignee is carried separately.
 			assigneeId: assignee.id,

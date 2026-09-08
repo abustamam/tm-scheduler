@@ -80,6 +80,7 @@ export async function seedTemplate(seed: TemplateSeed): Promise<string> {
 				defaultCount: r.defaultCount,
 				sortOrder: r.sortOrder,
 				isSpeakerRole: r.isSpeakerRole,
+				slotsUnordered: r.slotsUnordered,
 				description: r.description,
 			})),
 		);

@@ -217,6 +217,11 @@ export async function loadSeasonGrid(input: {
 	const rows: SeasonGridRow[] = rowDefs.map((r) => ({
 		roleDefinitionId: r.roleDefinitionId,
 		slotIndex: r.slotIndex,
+		// Deliberately WITHOUT `slotsUnordered` (#624). On the printed roster the
+		// number asserts a speaking order that does not exist yet; here each row
+		// IS one slot across the season, and seven rows all reading "Contestant"
+		// would be indistinguishable in a matrix that cannot collapse them. The
+		// number is the row's identity, not a claim about who speaks first.
 		label: slotLabel(
 			{ roleName: r.roleName, slotIndex: r.slotIndex },
 			roleCounts,

@@ -7,9 +7,12 @@ import {
 	buildShortCodes,
 	formatLastServed,
 	generateSlotRows,
+	OPEN_LABEL,
 	resolveAssignAction,
 	resolveEvaluatorLinks,
 	roleAbbrev,
+	rosterGridPositions,
+	slotAccessibleLabel,
 	slotLabel,
 	summarizeAgenda,
 } from "./agenda";
@@ -534,5 +537,386 @@ describe("assigneeDisplayName (guest marker, #151)", () => {
 	});
 	it("returns null for an unassigned slot", () => {
 		expect(assigneeDisplayName(null, true)).toBeNull();
+	});
+});
+
+/**
+ * #624. A contest's speaking order is drawn by lot at the briefing, so a
+ * contestant role's `slot_index` is sign-up order wearing a rank. A role whose
+ * definition says its slots are UNORDERED prints without a number, and the
+ * roster collapses its slots into one entry naming every holder.
+ */
+describe("slotLabel — an unordered role never numbers its slots (#624)", () => {
+	const counts = { Contestant: 4, Speaker: 3 };
+
+	it("drops the number when the role's slots are unordered", () => {
+		expect(
+			slotLabel(
+				{ roleName: "Contestant", slotIndex: 2, slotsUnordered: true },
+				counts,
+			),
+		).toBe("Contestant");
+	});
+
+	it("still numbers an ORDERED role with several slots", () => {
+		expect(
+			slotLabel(
+				{ roleName: "Speaker", slotIndex: 2, slotsUnordered: false },
+				counts,
+			),
+		).toBe("Speaker 3");
+		// The flag is optional on the slot shape: every existing caller passes a
+		// slot without it, and those must keep numbering exactly as before.
+		expect(slotLabel({ roleName: "Speaker", slotIndex: 0 }, counts)).toBe(
+			"Speaker 1",
+		);
+	});
+});
+
+describe("slotAccessibleLabel — an unordered role's controls stay tellable apart (#624)", () => {
+	const counts = { Contestant: 3, Speaker: 3 };
+
+	it("appends the holder's name once the number is gone", () => {
+		// Three "Move Contestant up" buttons are indistinguishable to a screen
+		// reader browsing by control; the number used to do this job.
+		expect(
+			slotAccessibleLabel(
+				{
+					roleName: "Contestant",
+					slotIndex: 1,
+					slotsUnordered: true,
+					assigneeName: "Rehanna Khan",
+				},
+				counts,
+			),
+		).toBe("Contestant (Rehanna Khan)");
+	});
+
+	it("is just the label for an ORDERED role, whose number already does the job", () => {
+		expect(
+			slotAccessibleLabel(
+				{ roleName: "Speaker", slotIndex: 1, assigneeName: "Rehanna Khan" },
+				counts,
+			),
+		).toBe("Speaker 2");
+	});
+
+	it("is just the label for an OPEN unordered slot", () => {
+		expect(
+			slotAccessibleLabel(
+				{
+					roleName: "Contestant",
+					slotIndex: 1,
+					slotsUnordered: true,
+					assigneeName: null,
+				},
+				counts,
+			),
+		).toBe("Contestant");
+	});
+});
+
+describe("buildRosterEntries — an unordered role collapses into one entry (#624)", () => {
+	const slot = (
+		roleName: string,
+		slotIndex: number,
+		assigneeName: string | null,
+		over: Partial<{
+			category: "leadership" | "speaker" | "evaluator" | "functionary";
+			isSpeakerRole: boolean;
+			slotsUnordered: boolean;
+			assigneeIsGuest: boolean;
+		}> = {},
+	) => ({
+		roleName,
+		slotIndex,
+		category: "functionary" as const,
+		isSpeakerRole: false,
+		assigneeName,
+		...over,
+	});
+	const contestant = (i: number, name: string | null, isGuest = false) =>
+		slot("Contestant", i, name, {
+			category: "speaker",
+			isSpeakerRole: true,
+			slotsUnordered: true,
+			assigneeIsGuest: isGuest,
+		});
+
+	it("names every holder in one entry, in the role's position, unnumbered", () => {
+		const slots = [
+			slot("Contest Chair", 0, "Rasheed Bustamam", { category: "leadership" }),
+			contestant(0, "Faisal Ali"),
+			contestant(1, "Rehanna Khan"),
+			contestant(2, "Jagpal Singh"),
+			contestant(3, "Riyaz Mohammed"),
+			slot("Contest Timer", 0, "Saif"),
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Contest Chair", name: "Rasheed Bustamam" },
+			{
+				label: "Contestant",
+				name: "Faisal Ali, Rehanna Khan, Jagpal Singh, and Riyaz Mohammed",
+				holderCount: 4,
+			},
+			{ label: "Contest Timer", name: "Saif" },
+		]);
+	});
+
+	it("uses the same list punctuation as the run of show", () => {
+		// `Intl.ListFormat` with the Oxford comma — the printed sheet's "Contest
+		// speeches" row joins the same four names, and the two must read alike.
+		const two = buildRosterEntries([
+			contestant(0, "Faisal Ali"),
+			contestant(1, "Rehanna Khan"),
+		]);
+		expect(two[0]?.name).toBe("Faisal Ali and Rehanna Khan");
+	});
+
+	it("marks each guest holder individually", () => {
+		const entries = buildRosterEntries([
+			contestant(0, "Faisal Ali"),
+			contestant(1, "Ben Carter", true),
+		]);
+		expect(entries).toEqual([
+			{
+				label: "Contestant",
+				name: "Faisal Ali and Ben Carter · Guest",
+				holderCount: 2,
+			},
+		]);
+	});
+
+	it("reads as a single open entry when nobody holds the role", () => {
+		expect(
+			buildRosterEntries([contestant(0, null), contestant(1, null)]),
+		).toEqual([{ label: "Contestant", name: null, holderCount: 0 }]);
+	});
+
+	it("shows at most ONE open placeholder beside the holders it has", () => {
+		// Same rule as `agenda-template-rows.ts`'s collapseOpen: a role nobody
+		// has fully staffed must still say so, once, not once per empty place.
+		const entries = buildRosterEntries([
+			contestant(0, "Faisal Ali"),
+			contestant(1, null),
+			contestant(2, null),
+		]);
+		expect(entries).toEqual([
+			{
+				label: "Contestant",
+				name: `Faisal Ali and ${OPEN_LABEL}`,
+				holderCount: 1,
+			},
+		]);
+	});
+
+	it("leaves an ORDERED role with several slots as one numbered entry each", () => {
+		const slots = [
+			slot("Speaker", 0, "Jagpal Singh", {
+				category: "speaker",
+				isSpeakerRole: true,
+			}),
+			slot("Speaker", 1, "Sudheer Isanaka", {
+				category: "speaker",
+				isSpeakerRole: true,
+			}),
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Speaker 1", name: "Jagpal Singh" },
+			{ label: "Speaker 2", name: "Sudheer Isanaka" },
+		]);
+	});
+
+	it("keeps the original order instead of pairing when the SPEAKER side is collapsed", () => {
+		// Pairing puts one speaker beside one evaluator per row. A collapsed entry
+		// stands for several people and takes a full row once it names two, so
+		// there is no row for a partner to share: the roster keeps its original
+		// order rather than interleaving a list against a single entry. No shipped
+		// template has unordered speakers AND evaluators; this pins the rule.
+		const slots = [
+			contestant(0, "A"),
+			contestant(1, "B"),
+			slot("Evaluator", 0, "E1", { category: "evaluator" }),
+			slot("Evaluator", 1, "E2", { category: "evaluator" }),
+		];
+		expect(buildRosterEntries(slots).map((e) => e.label)).toEqual([
+			"Contestant",
+			"Evaluator 1",
+			"Evaluator 2",
+		]);
+	});
+
+	it("keeps the original order when the paired EVALUATOR role is the unordered one", () => {
+		// The mirror case, and the one the interleave got wrong: with one
+		// collapsed evaluator item it emitted [Speaker 1, Evaluator, Speaker 2],
+		// a full-width evaluator row wedged between two speakers.
+		const slots = [
+			slot("Speaker", 0, "S1", { category: "speaker", isSpeakerRole: true }),
+			slot("Speaker", 1, "S2", { category: "speaker", isSpeakerRole: true }),
+			slot("Evaluator", 0, "E1", {
+				category: "evaluator",
+				slotsUnordered: true,
+			}),
+			slot("Evaluator", 1, "E2", {
+				category: "evaluator",
+				slotsUnordered: true,
+			}),
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Speaker 1", name: "S1" },
+			{ label: "Speaker 2", name: "S2" },
+			{ label: "Evaluator", name: "E1 and E2", holderCount: 2 },
+		]);
+	});
+
+	it("keeps the original order when the collapsed speaker role has only ONE holder", () => {
+		// `collapsedSide` tests for the PRESENCE of a holder count, not for a
+		// count above one, and the comment beside it says why: with 0 or 1 holders
+		// the entry still stands for the whole role, so there is still no
+		// per-speaker partner. Nothing exercised that claim — every other
+		// collapsed fixture names two or more, and with a single speaker-side item
+		// the interleave happens to emit the original order anyway. This is the
+		// arrangement where the two answers differ: under `holderCount > 1` the
+		// roster would come back interleaved.
+		const slots = [
+			contestant(0, "A1"),
+			slot("Speaker", 0, "S1", { category: "speaker", isSpeakerRole: true }),
+			slot("Speaker", 1, "S2", { category: "speaker", isSpeakerRole: true }),
+			slot("Evaluator", 0, "E1", { category: "evaluator" }),
+			slot("Evaluator", 1, "E2", { category: "evaluator" }),
+		];
+		expect(buildRosterEntries(slots).map((e) => e.label)).toEqual([
+			"Contestant",
+			"Speaker 1",
+			"Speaker 2",
+			"Evaluator 1",
+			"Evaluator 2",
+		]);
+	});
+
+	it("keeps the original order when the collapsed speaker role has NO holder", () => {
+		const slots = [
+			contestant(0, null),
+			slot("Speaker", 0, "S1", { category: "speaker", isSpeakerRole: true }),
+			slot("Speaker", 1, "S2", { category: "speaker", isSpeakerRole: true }),
+			slot("Evaluator", 0, "E1", { category: "evaluator" }),
+			slot("Evaluator", 1, "E2", { category: "evaluator" }),
+		];
+		expect(buildRosterEntries(slots).map((e) => e.label)).toEqual([
+			"Contestant",
+			"Speaker 1",
+			"Speaker 2",
+			"Evaluator 1",
+			"Evaluator 2",
+		]);
+	});
+
+	it("groups by role DEFINITION, so an ordered role sharing the name keeps its own entries", () => {
+		const slots = [
+			{ ...contestant(0, "A1"), roleDefinitionId: "def-unordered" },
+			{ ...contestant(1, "A2"), roleDefinitionId: "def-unordered" },
+			{
+				...slot("Contestant", 0, "B1", {
+					category: "speaker",
+					isSpeakerRole: true,
+				}),
+				roleDefinitionId: "def-ordered",
+			},
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Contestant", name: "A1 and A2", holderCount: 2 },
+			// Numbered off the NAME's total count, as every same-named role always
+			// was; the point here is that B1 is not swallowed into the list above.
+			{ label: "Contestant 1", name: "B1" },
+		]);
+	});
+
+	it("never absorbs an ORDERED slot into the collapsed entry, even without definition ids", () => {
+		// Fixtures (and any caller that omits `roleDefinitionId`) group by name;
+		// the grouping must still only gather slots that are themselves unordered.
+		const slots = [
+			contestant(0, "A1"),
+			contestant(1, "A2"),
+			slot("Contestant", 0, "B1", { category: "speaker", isSpeakerRole: true }),
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Contestant", name: "A1 and A2", holderCount: 2 },
+			{ label: "Contestant 1", name: "B1" },
+		]);
+	});
+});
+
+describe("rosterGridPositions — a multi-holder entry takes a whole row (#624)", () => {
+	it("lays ordinary entries two to a row", () => {
+		expect(rosterGridPositions([{}, {}, {}])).toEqual([
+			{ row: 0, col: 0, wide: false, lastInColumn: false },
+			{ row: 0, col: 1, wide: false, lastInColumn: true },
+			{ row: 1, col: 0, wide: false, lastInColumn: true },
+		]);
+	});
+
+	it("gives an entry naming several people its own full-width row", () => {
+		expect(rosterGridPositions([{}, {}, { holderCount: 4 }, {}, {}])).toEqual([
+			{ row: 0, col: 0, wide: false, lastInColumn: false },
+			{ row: 0, col: 1, wide: false, lastInColumn: false },
+			{ row: 1, col: 0, wide: true, lastInColumn: false },
+			{ row: 2, col: 0, wide: false, lastInColumn: true },
+			{ row: 2, col: 1, wide: false, lastInColumn: true },
+		]);
+	});
+
+	it("starts a new row for the wide entry when the left cell is taken", () => {
+		expect(rosterGridPositions([{}, { holderCount: 2 }, {}])).toEqual([
+			{ row: 0, col: 0, wide: false, lastInColumn: false },
+			{ row: 1, col: 0, wide: true, lastInColumn: false },
+			{ row: 2, col: 0, wide: false, lastInColumn: true },
+		]);
+	});
+
+	it("keeps a collapsed entry with ONE holder in an ordinary cell", () => {
+		// "Faisal Ali and — open —" fits half a row; only a list of several
+		// earns the width.
+		expect(
+			rosterGridPositions([{ holderCount: 1 }, { holderCount: 0 }]),
+		).toEqual([
+			{ row: 0, col: 0, wide: false, lastInColumn: true },
+			{ row: 0, col: 1, wide: false, lastInColumn: true },
+		]);
+	});
+
+	/**
+	 * The boxed roster drops a cell's bottom rule when nothing sits below it, so
+	 * this flag decides how EVERY club's ordinary agenda is ruled, not just a
+	 * contest's. The old code found those cells as "the last two entries", which
+	 * is right only for an even count; a roster with an odd count — the common
+	 * case, MCF's standard sheet has eleven roles — leaves the final row half
+	 * empty, and the cell above that empty half has nothing under it either.
+	 * Reproducing the old answer exactly for an unordered-free roster is the
+	 * point: this change must not restyle a sheet no contest is involved in.
+	 */
+	it("closes BOTH trailing cells of an odd roster, exactly as the old rule did", () => {
+		const odd = rosterGridPositions([{}, {}, {}, {}, {}]);
+		expect(odd.map((p) => p.lastInColumn)).toEqual([
+			false,
+			false,
+			false,
+			true, // right column, row 1 — the empty half of row 2 is below it
+			true, // left column, row 2 — the last cell
+		]);
+	});
+
+	it("closes only the final row of an even roster", () => {
+		expect(
+			rosterGridPositions([{}, {}, {}, {}]).map((p) => p.lastInColumn),
+		).toEqual([false, false, true, true]);
+	});
+
+	it("treats a wide entry as covering both columns beneath it", () => {
+		// Neither cell of row 0 is closed: the full-width entry below spans them.
+		expect(
+			rosterGridPositions([{}, {}, { holderCount: 3 }]).map(
+				(p) => p.lastInColumn,
+			),
+		).toEqual([false, false, true]);
 	});
 });

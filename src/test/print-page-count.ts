@@ -315,6 +315,32 @@ export function printedPageCount(html: string): number {
  * is what a regression ceiling needs.
  */
 export function measuredHeight(html: string, selector: string): number {
+	const [only] = measuredHeights(html, [selector]);
+	// `measuredHeights` throws on a miss, so the array is always full here; the
+	// fallback exists only because indexing a tuple is `number | undefined`.
+	return only ?? 0;
+}
+
+/**
+ * Every selector's natural height, from ONE browser launch.
+ *
+ * Each `measuredHeight` call costs a Chrome process, and that is the harness's
+ * whole running cost: CI's runner is slower and more contended than a laptop,
+ * so a suite that measures generously here does not fail its own assertions —
+ * it starves its NEIGHBOURS. #624 added fifteen launches to this file and took
+ * a sibling test from 8.5s to 75s against a 60s per-test ceiling, red in CI and
+ * green on the machine that wrote it. Measure several things about one page in
+ * one launch rather than one thing per launch.
+ *
+ * Same contract as the singular form for each selector, including the throw on
+ * a miss: the answers come back in the order asked, and a selector matching
+ * nothing names ITSELF in the error rather than yielding a plausible zero.
+ */
+export function measuredHeights(
+	html: string,
+	selectors: readonly string[],
+): number[] {
+	if (selectors.length === 0) return [];
 	const chrome = findChrome();
 	if (!chrome) {
 		throw new Error(
@@ -331,10 +357,16 @@ export function measuredHeight(html: string, selector: string): number {
 		document.querySelectorAll("[data-fit-inner]").forEach(function (p) {
 			p.style.minHeight = "0";
 		});
-		var el = document.querySelector(${JSON.stringify(selector)});
-		if (!el) { document.title = "MISSING"; return; }
-		el.style.minHeight = "0";
-		document.title = String(el.scrollHeight);
+		// Clear every target's own minHeight BEFORE measuring any of them: with
+		// several selectors in one pass, measuring as we go would read an earlier
+		// element while a later one still stretches its shared parent.
+		var sel = ${JSON.stringify(selectors)};
+		var els = sel.map(function (s) { return document.querySelector(s); });
+		els.forEach(function (el) { if (el) el.style.minHeight = "0"; });
+		var out = els.map(function (el, i) {
+			return el ? String(el.scrollHeight) : "MISSING:" + sel[i];
+		});
+		document.title = out.join("|");
 	})();
 	</script>`;
 	const dir = mkdtempSync(join(tmpdir(), "print-measure-"));
@@ -356,15 +388,23 @@ export function measuredHeight(html: string, selector: string): number {
 			],
 			{ encoding: "utf8", stdio: "pipe", timeout: 10_000 },
 		);
-		const measured = dom.match(/<title>(\d+)<\/title>/);
-		if (!measured) {
+		const title = dom.match(/<title>([^<]*)<\/title>/)?.[1];
+		const parts = title?.split("|") ?? [];
+		if (parts.length !== selectors.length) {
 			throw new Error(
-				`Could not measure "${selector}". Chrome reported ` +
-					`${dom.match(/<title>([^<]*)<\/title>/)?.[1] ?? "no title"} — ` +
-					"MISSING means the selector matched nothing.",
+				`Could not measure ${JSON.stringify(selectors)}. Chrome reported ` +
+					`${title ?? "no title"} — the probe did not run.`,
 			);
 		}
-		return Number(measured[1]);
+		return parts.map((part, i) => {
+			if (!/^\d+$/.test(part)) {
+				throw new Error(
+					`Could not measure "${selectors[i]}". Chrome reported ${part} — ` +
+						"MISSING means the selector matched nothing.",
+				);
+			}
+			return Number(part);
+		});
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

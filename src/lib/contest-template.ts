@@ -54,6 +54,9 @@ type SeedRole = TemplateRoleRow & {
 	defaultCount: number;
 	sortOrder: number;
 	description: string;
+	/** The role's slots have no order the sheet may assert (#624). Copied onto
+	 *  `meeting_template_roles` and, at materialization, `role_definitions`. */
+	slotsUnordered: boolean;
 };
 
 export type TemplateSeed = {
@@ -72,7 +75,7 @@ const role = (
 	defaultCount: number,
 	sortOrder: number,
 	description: string,
-	isSpeakerRole = false,
+	flags: { isSpeakerRole?: boolean; slotsUnordered?: boolean } = {},
 ): SeedRole => ({
 	key,
 	name,
@@ -80,7 +83,8 @@ const role = (
 	defaultCount,
 	sortOrder,
 	description,
-	isSpeakerRole,
+	isSpeakerRole: flags.isSpeakerRole ?? false,
+	slotsUnordered: flags.slotsUnordered ?? false,
 });
 
 let order = 0;
@@ -165,6 +169,13 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 		),
 		// The template's ONLY speaker role — see the header note on +/- controls.
 		// Three is a starting point, not a limit.
+		//
+		// UNORDERED (#624): speaking order is drawn by lot at the briefing, with
+		// the room watching, and the printed sheet goes out before that. So the
+		// roles grid names every contestant in one unnumbered entry rather than
+		// asserting "Contestant 1..N" off sign-up order. The two timers and two
+		// ballot counters stay numbered on purpose — "Contest Timer 1 / 2" is how
+		// they tell their stopwatches apart, and nothing is drawn for them.
 		role(
 			"contestant_prepared",
 			"Contestant",
@@ -172,7 +183,7 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 			3,
 			70,
 			"Competes in the contest. A contest speech can still be a Pathways project — attach it as you would any speech.",
-			true,
+			{ isSpeakerRole: true, slotsUnordered: true },
 		),
 	],
 	beats: [

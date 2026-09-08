@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildRosterEntries } from "#/lib/agenda";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import { expandRunSheet, OPEN_LABEL } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { buildTimeline } from "#/lib/agenda-timing";
+import {
+	CONTEST_CONTESTANTS,
+	contestRosterSlots,
+} from "#/test/contest-fixture";
 import {
 	type AgendaHeader,
 	type AgendaLayout,
@@ -167,6 +172,91 @@ describe("a row held by several people puts the names on their own line", () => 
 			}
 		});
 	}
+});
+
+describe("Meeting Roles roster — an unordered role is ONE entry naming every holder (#624)", () => {
+	const NAMES = CONTEST_CONTESTANTS;
+	/** MCF's contest slots as the print route's loader shapes them (the shared
+	 *  fixture), run through the REAL `buildRosterEntries` rather than a
+	 *  hand-typed collapsed entry — so the "no `Contestant 1`" assertion below
+	 *  can actually fail if the builder numbers them, instead of asserting a
+	 *  fixture that never had a number to begin with. Four contestants collapse
+	 *  into one entry beside three ordinary single-holder entries. */
+	const CONTEST_ROLES = buildRosterEntries(contestRosterSlots());
+
+	function renderRoles(layout: AgendaLayout) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				roles={CONTEST_ROLES}
+				officers={[]}
+				explainers={[]}
+				rows={rows}
+			/>,
+		);
+	}
+
+	for (const layout of ["editorial", "grid", "timing", "spacious"] as const) {
+		it(`${layout}: prints the collapsed entry once, unnumbered, naming everyone`, () => {
+			const { container } = renderRoles(layout);
+			const wide = container.querySelectorAll("[data-roster-wide]");
+			expect(wide).toHaveLength(1);
+			expect(wide[0]?.getAttribute("data-roster-wide")).toBe("4");
+			const text = wide[0]?.textContent ?? "";
+			expect(text).toContain("Contestant");
+			// The whole point: no "Contestant 1" anywhere on the sheet.
+			expect(container.textContent ?? "").not.toMatch(/Contestant \d/);
+			for (const name of NAMES) expect(text).toContain(name);
+		});
+
+		it(`${layout}: gives the collapsed entry both roster columns, and no other entry`, () => {
+			const { container } = renderRoles(layout);
+			const wide = container.querySelector<HTMLElement>("[data-roster-wide]");
+			expect(wide?.style.gridColumn).toBe("1 / -1");
+			const ordinary = [
+				...container.querySelectorAll<HTMLElement>(
+					"[data-roster-entry]:not([data-roster-wide])",
+				),
+			];
+			expect(ordinary).toHaveLength(3);
+			for (const el of ordinary) expect(el.style.gridColumn).toBe("");
+		});
+	}
+
+	it("grid: only the cell the frame closes drops its bottom rule", () => {
+		// The boxed variant drops the rule where nothing sits below. It used to
+		// find those cells as "the last two", which a full-width entry breaks: the
+		// entry before it would lose its rule while sitting in the row above.
+		const { container } = renderRoles("grid");
+		const entries = [
+			...container.querySelectorAll<HTMLElement>("[data-roster-entry]"),
+		];
+		// Chair and ballot counter share row 0, the timer sits alone in row 1, and
+		// the wide entry starts row 2 and covers both columns — so every earlier
+		// cell has something beneath it and keeps its rule.
+		expect(entries).toHaveLength(4);
+		for (const el of entries.slice(0, 3)) {
+			expect(el.style.borderBottom).not.toBe("");
+		}
+		expect(entries[3]?.style.borderBottom).toBe("");
+	});
+
+	it("grid: the zebra tint follows the COLUMN, so a wide entry is never tinted", () => {
+		// The other half of `rosterGridPositions`' contract, and the half a
+		// `gridColumn` assertion cannot see. The tint moved from `i % 2 === 1` to
+		// `pos.col === 1`; index 3 is the discriminator — ODD, so tinted under the
+		// old expression, but column 0 (it spans the row) under the new one, which
+		// would paint a stray band across the full sheet width.
+		const { container } = renderRoles("grid");
+		const entries = [
+			...container.querySelectorAll<HTMLElement>("[data-roster-entry]"),
+		];
+		expect(entries[0]?.style.background).toBe(""); // chair, col 0
+		expect(entries[1]?.style.background).not.toBe(""); // ballot counter, col 1
+		expect(entries[2]?.style.background).toBe(""); // timer, col 0
+		expect(entries[3]?.style.background).toBe(""); // wide, spans the row
+	});
 });
 
 describe("MeetingAgendaPrint prints yellow, never amber (#507)", () => {

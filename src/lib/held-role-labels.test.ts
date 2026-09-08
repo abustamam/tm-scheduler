@@ -59,6 +59,27 @@ describe("buildHeldRoleLabels (#663)", () => {
 		expect(map.m1?.labels).toEqual(["Evaluator 1"]);
 	});
 
+	it("leaves an UNORDERED role unnumbered, once per holder (#624)", () => {
+		// A contest's contestants: slot_index is sign-up order, not a rank, so
+		// "This frees Contestant 3" would assert an order the draw has not made.
+		const map = buildHeldRoleLabels([
+			slot({
+				roleName: "Contestant",
+				slotIndex: 0,
+				assigneeId: "m1",
+				slotsUnordered: true,
+			}),
+			slot({
+				roleName: "Contestant",
+				slotIndex: 1,
+				assigneeId: "m2",
+				slotsUnordered: true,
+			}),
+		]);
+		expect(map.m1?.labels).toEqual(["Contestant"]);
+		expect(map.m2?.labels).toEqual(["Contestant"]);
+	});
+
 	it("omits members who hold nothing, and guest-held slots", () => {
 		// Absence IS the signal: the caller reads "not in this map" as "no confirm,
 		// write straight through". A guest has no attendance rung to decline, and

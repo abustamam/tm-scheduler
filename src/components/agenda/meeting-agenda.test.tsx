@@ -703,6 +703,50 @@ describe("MeetingAgenda evaluator reorder arrows", () => {
 		).toBeTruthy();
 	});
 
+	it("names an UNORDERED role's arrows by holder, since the number is gone (#624)", () => {
+		// A contest's contestants: the card title is the bare role name on every
+		// card, so two "Move Contestant up" buttons would be indistinguishable to
+		// someone browsing by control. The holder's name takes over the job the
+		// number did for speakers above.
+		const contestant = (
+			id: string,
+			slotIndex: number,
+			assigneeId: string,
+			assigneeName: string,
+		) =>
+			slot({
+				id,
+				roleName: "Contestant",
+				roleDefinitionId: "rdC",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotsUnordered: true,
+				slotIndex,
+				status: "claimed",
+				assigneeId,
+				assigneeName,
+			});
+		renderAgenda(
+			manager(),
+			[
+				contestant("c1", 0, "m1", "Faisal Ali"),
+				contestant("c2", 1, "m2", "Rehanna Khan"),
+			],
+			paired(),
+		);
+		expect(
+			screen.getByRole("button", { name: "Move Contestant (Faisal Ali) up" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", {
+				name: "Move Contestant (Rehanna Khan) down",
+			}),
+		).toBeTruthy();
+		// And the card titles assert no rank either.
+		expect(screen.queryByText(/Contestant \d/)).toBeNull();
+		expect(screen.getAllByText("Contestant")).toHaveLength(2);
+	});
+
 	it("clicking ↑ calls moveEvaluator with the slot and direction", async () => {
 		const moveEvaluator = vi.fn(
 			async (_slot: AgendaSlot, _direction: "up" | "down") => {},
