@@ -171,9 +171,10 @@ function collapsedRosterEntry(
  * and only ever gathers unordered slots — an ordered role sharing the name
  * keeps its own numbered entries. If a collapsed entry lands on either side of
  * the speaker/evaluator pairing, the roster keeps its original order instead:
- * pairing puts ONE speaker beside ONE evaluator per row, and a single entry
- * standing for several people, which takes a full row once it names two or
- * more, has no row to share.
+ * pairing puts ONE speaker beside the ONE evaluator who evaluates them, and a
+ * collapsed entry is a single item standing for the whole role — there is no
+ * per-speaker partner to sit beside, however many holders it names (with two
+ * or more it also takes the full row, so there is no shared row either).
  */
 export function buildRosterEntries<T extends RosterSlot>(
 	slots: T[],
@@ -225,6 +226,8 @@ export function buildRosterEntries<T extends RosterSlot>(
 	const evaluators = pairedEvalName
 		? items.filter((it) => it.slot.roleName === pairedEvalName)
 		: [];
+	// Any collapsed entry, not only a wide one: with 0 or 1 holders it still
+	// stands for the whole role, so there is still no per-speaker partner.
 	const collapsedSide = [...speakers, ...evaluators].some(
 		(it) => it.entry.holderCount !== undefined,
 	);

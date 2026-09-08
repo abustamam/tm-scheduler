@@ -7,6 +7,10 @@ import { expandRunSheet, OPEN_LABEL } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { buildTimeline } from "#/lib/agenda-timing";
 import {
+	CONTEST_CONTESTANTS,
+	contestRosterSlots,
+} from "#/test/contest-fixture";
+import {
 	type AgendaHeader,
 	type AgendaLayout,
 	MeetingAgendaPrint,
@@ -171,42 +175,14 @@ describe("a row held by several people puts the names on their own line", () => 
 });
 
 describe("Meeting Roles roster — an unordered role is ONE entry naming every holder (#624)", () => {
-	const NAMES = [
-		"Faisal Ali",
-		"Rehanna Khan",
-		"Jagpal Singh",
-		"Riyaz Mohammed",
-	];
-	/** MCF's contest slots as the print route's loader shapes them, run through
-	 *  the REAL `buildRosterEntries` rather than a hand-typed collapsed entry —
-	 *  so the "no `Contestant 1`" assertion below can actually fail if the
-	 *  builder numbers them, instead of asserting a fixture that never had a
-	 *  number to begin with. Four contestants collapse into one entry beside
-	 *  two ordinary single-holder entries. */
-	const CONTEST_ROLES = buildRosterEntries([
-		{
-			roleName: "Contest Chair",
-			slotIndex: 0,
-			category: "leadership",
-			isSpeakerRole: false,
-			assigneeName: "Rasheed Bustamam",
-		},
-		{
-			roleName: "Contest Timer",
-			slotIndex: 0,
-			category: "functionary",
-			isSpeakerRole: false,
-			assigneeName: "Saif",
-		},
-		...NAMES.map((name, i) => ({
-			roleName: "Contestant",
-			slotIndex: i,
-			category: "speaker" as const,
-			isSpeakerRole: true,
-			slotsUnordered: true,
-			assigneeName: name,
-		})),
-	]);
+	const NAMES = CONTEST_CONTESTANTS;
+	/** MCF's contest slots as the print route's loader shapes them (the shared
+	 *  fixture), run through the REAL `buildRosterEntries` rather than a
+	 *  hand-typed collapsed entry — so the "no `Contestant 1`" assertion below
+	 *  can actually fail if the builder numbers them, instead of asserting a
+	 *  fixture that never had a number to begin with. Four contestants collapse
+	 *  into one entry beside three ordinary single-holder entries. */
+	const CONTEST_ROLES = buildRosterEntries(contestRosterSlots());
 
 	function renderRoles(layout: AgendaLayout) {
 		return render(
@@ -243,7 +219,7 @@ describe("Meeting Roles roster — an unordered role is ONE entry naming every h
 					"[data-roster-entry]:not([data-roster-wide])",
 				),
 			];
-			expect(ordinary).toHaveLength(2);
+			expect(ordinary).toHaveLength(3);
 			for (const el of ordinary) expect(el.style.gridColumn).toBe("");
 		});
 	}
@@ -256,9 +232,11 @@ describe("Meeting Roles roster — an unordered role is ONE entry naming every h
 		const entries = [
 			...container.querySelectorAll<HTMLElement>("[data-roster-entry]"),
 		];
-		expect(entries).toHaveLength(3);
-		expect(entries[1]?.style.borderBottom).not.toBe("");
-		expect(entries[2]?.style.borderBottom).toBe("");
+		// Chair and ballot counter share row 0, the timer sits alone in row 1, and
+		// the wide entry starts row 2: the timer's row keeps its rule.
+		expect(entries).toHaveLength(4);
+		expect(entries[2]?.style.borderBottom).not.toBe("");
+		expect(entries[3]?.style.borderBottom).toBe("");
 	});
 });
 

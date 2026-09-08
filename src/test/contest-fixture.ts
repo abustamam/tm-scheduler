@@ -8,6 +8,7 @@
 // assertion cannot drift apart. A parity test compares two derivations; if each
 // side built its own fixture, the two could agree perfectly about a shape
 // neither club runs.
+import type { RosterSlot } from "#/lib/agenda";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import type {
 	TemplateBeatRow,
@@ -47,6 +48,49 @@ const ROLES: TemplateRoleRow[] = [
 ];
 
 const NAMES = ["Faisal Ali", "Rehanna Khan", "Jagpal Singh", "Riyaz Mohammed"];
+
+/** The four contestants `contestFixture` seats, exported so a roster test can
+ *  assert on the same names the run-of-show golden uses. */
+export const CONTEST_CONTESTANTS: readonly string[] = NAMES;
+
+/**
+ * MCF's contest as the print route's loader shapes ROSTER slots (#624): the
+ * three single-place roles the club actually staffed on 2026-09-10, then one
+ * contestant slot per name in the template's one unordered role. Shared by the
+ * jsdom roster test and the Chrome geometry gate so neither hand-rolls the
+ * shape the other measures. `roleDefinitionId` is set the way `loadMeetingSlots`
+ * sets it, so `buildRosterEntries` groups by definition here as in production.
+ */
+export function contestRosterSlots(
+	names: readonly string[] = NAMES,
+): RosterSlot[] {
+	const single = (
+		roleName: string,
+		category: RosterSlot["category"],
+		assigneeName: string,
+	): RosterSlot => ({
+		roleName,
+		roleDefinitionId: `def-${roleName.toLowerCase().replace(/\s+/g, "-")}`,
+		slotIndex: 0,
+		category,
+		isSpeakerRole: false,
+		assigneeName,
+	});
+	return [
+		single("Contest Chair", "leadership", "Rasheed Bustamam"),
+		single("Ballot Counter", "functionary", "Schinthia Islam"),
+		single("Contest Timer", "functionary", "Saif"),
+		...names.map((name, i) => ({
+			roleName: "Contestant",
+			roleDefinitionId: "def-contestant",
+			slotIndex: i,
+			category: "speaker" as const,
+			isSpeakerRole: true,
+			slotsUnordered: true,
+			assigneeName: name,
+		})),
+	];
+}
 
 export function contestFixture(contestants = 4) {
 	const beats: TemplateBeatRow[] = [
