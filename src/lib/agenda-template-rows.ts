@@ -421,11 +421,21 @@ function toRow(
 	// Number by the SLOT when the role really repeats, and label the assignee
 	// from the slot so a club that renamed the role sees its own word (#445).
 	const numberedLabel = numbered(label, index, total > 1);
-	const names = collapseOpen(
-		bound
-			.map((s) => assigneeDisplay(s))
-			.filter((n): n is string => n != null && n !== ""),
-	);
+	const displayed = bound
+		.map((s) => assigneeDisplay(s))
+		.filter((n): n is string => n != null && n !== "");
+	// An UNORDERED role drops the placeholder entirely once anyone holds it
+	// (#624): a contest is entered, not staffed, so an unclaimed contestant place
+	// is one fewer entrant rather than a job to recruit into, and "and — open —"
+	// trailing the speaking list says the opposite. Every ordered role keeps
+	// `collapseOpen`'s single placeholder — see its docblock. Read off the SLOTS
+	// rather than the template role, which does not carry the flag; the loaders
+	// put it on every slot they return.
+	const held = displayed.filter((n) => n !== OPEN_LABEL);
+	const names =
+		bound.some((s) => s.slotsUnordered) && held.length > 0
+			? held
+			: collapseOpen(displayed);
 	const holder = names.length > 0 ? joinHolders(names) : null;
 	const who = holder ? `${numberedLabel} · ${holder}` : numberedLabel;
 	// The halves unjoined (#463), same as the standard path. `holder` is null on a

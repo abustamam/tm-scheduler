@@ -88,6 +88,14 @@ export type RosterEntry = {
 	 *  many people `name` joins, open places not counted. Two or more is the
 	 *  print layout's cue to give the entry a full row of the grid. */
 	holderCount?: number;
+	/** The same people `name` joins, UNJOINED — the layout input. A seven-name
+	 *  prose list wrapped mid-sentence across the sheet and read as a paragraph,
+	 *  so the print roster lays these out two to a row instead. Data beside the
+	 *  prose for the same reason `AgendaRow.holders` is (#463): a joined string
+	 *  forces one presentation on every layout and cannot be split back apart,
+	 *  since a club's role names and the guest marker both contain the
+	 *  separators a parser would key on. */
+	holders?: string[];
 };
 
 /** Subtle marker appended to a guest assignee's name everywhere it renders
@@ -125,10 +133,16 @@ export type RosterSlot = {
 
 /**
  * The single roster entry an UNORDERED role collapses into (#624): its bare
- * name, every holder joined the way the run of show joins them, and at most ONE
- * open placeholder — the same rule `agenda-template-rows.ts` applies to a
- * multi-holder row, so "Faisal Ali and — open —" reads identically on both
- * halves of the sheet. Nobody holding it reads as a plain open entry.
+ * name and the people who hold it, both joined (`name`) and unjoined
+ * (`holders`, which is what the sheet lays out in columns).
+ *
+ * NO open placeholder, unlike the multi-holder rows `agenda-template-rows.ts`
+ * builds. There, one "— open —" is kept because an unstaffed Ballot Counter is
+ * a job somebody still has to be recruited into. A contest is not staffed, it
+ * is ENTERED: an unclaimed contestant place just means one fewer entrant, and a
+ * placeholder trailing the speaking list reads as a gap someone ought to close.
+ * The floor that rule exists to protect still holds — a role NOBODY holds
+ * returns a null name and prints as open, so the row never silently vanishes.
  */
 function collapsedRosterEntry(
 	roleName: string,
@@ -139,10 +153,10 @@ function collapsedRosterEntry(
 		.filter((n): n is string => n != null);
 	if (names.length === 0)
 		return { label: roleName, name: null, holderCount: 0 };
-	const open = group.length - names.length;
 	return {
 		label: roleName,
-		name: listRoles(open > 0 ? [...names, OPEN_LABEL] : names),
+		name: listRoles(names),
+		holders: names,
 		holderCount: names.length,
 	};
 }

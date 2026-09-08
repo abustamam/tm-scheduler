@@ -853,14 +853,22 @@ function hostileTemplateRows(
  * `buildRosterEntries`, so the builder is under the gate too.
  *
  * What is measured, and why it is this: the entry's HEIGHT. A `nowrap` label
- * beside a list of names in a fixed-width cell shows its trouble in exactly one
- * way, the list wraps and the row grows — so the property the layout note
- * cares about is how much the entry grows against the two widths it could be
- * given. Every case therefore carries the pre-fix control from
- * `dialog-keyboard-reach`: the SAME entry denied its width (holder count
- * stripped, so it lands in an ordinary half-width cell), which must be TALLER.
- * A sheet whose `gridColumn` stopped taking effect measures exactly the
- * control, and the comparison fails.
+ * beside a list of names in a fixed-width cell shows its trouble by wrapping,
+ * so height is the measurable.
+ *
+ * The holders are laid out TWO TO A ROW, which is a claim about height and
+ * nothing else — jsdom sees a `grid-template-columns` declaration and has no
+ * idea what the engine does with it. Pinned exactly, and without depending on a
+ * font metric that differs between macOS and CI: three names must occupy the
+ * SAME height as four (two rows each) while two must be shorter (one row).
+ * Only a two-column layout satisfies both — one name per row makes three
+ * shorter than four, and prose makes two the same as three.
+ *
+ * Each case also carries the width control from `dialog-keyboard-reach`: the
+ * SAME grid denied its full-width row (holder count stripped, so it lands in an
+ * ordinary half-width cell) has narrower columns, so its names wrap and it must
+ * be TALLER. A sheet whose `gridColumn` stopped taking effect measures exactly
+ * the control.
  */
 describe.skipIf(!hasChrome)(
 	"collapsed roster entry geometry (#624)",
@@ -874,11 +882,14 @@ describe.skipIf(!hasChrome)(
 			"Diego Nuci",
 			"Muhammad Ali",
 		];
-		const roster = () => buildRosterEntries(contestRosterSlots(CONTESTANTS));
-		/** The same roster with the holder count stripped: no entry is wide, so
-		 *  the contestants sit in an ordinary half-width cell. */
+		const rosterOf = (n: number) =>
+			buildRosterEntries(contestRosterSlots(CONTESTANTS.slice(0, n)));
+		const roster = () => rosterOf(CONTESTANTS.length);
+		/** The same roster with the holder COUNT stripped but the holders kept:
+		 *  the name grid still renders, in an ordinary half-width cell instead of
+		 *  its own full-width row. Narrower columns, so the same names wrap. */
 		const control = (r: AgendaRoleEntry[]) =>
-			r.map(({ label, name }) => ({ label, name }));
+			r.map(({ label, name, holders }) => ({ label, name, holders }));
 		/** The collapsed entry is the 4th child of the roster grid on every layout
 		 *  (chair, ballot counter, timer, contestants), whether or not it is wide. */
 		const COLLAPSED = "[data-roster-entry]:nth-child(4)";
@@ -941,34 +952,63 @@ describe.skipIf(!hasChrome)(
 			"editorial",
 			"spacious",
 			"timing",
-		] as const)("%s: the full-width entry is shorter than the same entry in a half-width cell", (layout) => {
-			const r = roster();
-			// The real sheet and its pre-fix control in one document, one launch.
-			// `wide` measures whole entry BOXES (block-level flex rows), never the
+		] as const)("%s: the full-width name grid is shorter than the same grid in a half-width cell", (layout) => {
+			// LONG names deliberately. Laid out in columns, MCF's own seven names
+			// are narrow enough to fit a half-width cell unwrapped, so measuring
+			// them proves nothing about the full-width row — the two heights come
+			// back identical on the boxed layouts. The span earns its keep once the
+			// names are long, which is the case that needs the gate; these are the
+			// length the two-page hand-off suite below uses for the same reason.
+			const r = buildRosterEntries(
+				contestRosterSlots([
+					"Bartholomew Fotheringay-Smythe",
+					"Anastasia Vasilievna Kuznetsova",
+					"Maximilian Oppenheimer-Rothschild",
+					"Wilhelmina Featherstonehaugh",
+					"Konstantin Rachmaninov-Petrov",
+					"Evangelina Marchetti-Delacroix",
+					"Thaddeus Wolstenholme-Baxter",
+				]),
+			);
+			// The real sheet and its control in one document, one launch. Measures
+			// whole entry BOXES (block-level flex rows and the grid), never the
 			// inline name spans: an inline box reports `scrollHeight` 0, which
 			// would read as the tightest possible fit.
-			const [wide = 0, oneRow = 0, halfWidth = 0] = measuredHeights(
+			const [wide = 0, halfWidth = 0] = measuredHeights(
 				combined([
 					{ id: "real", layout, roles: r },
 					{ id: "control", layout, roles: control(r) },
 				]),
-				[
-					"#real [data-roster-wide]",
-					"#real [data-roster-entry]:not([data-roster-wide])",
-					`#control ${COLLAPSED}`,
-				],
+				["#real [data-roster-wide]", `#control ${COLLAPSED}`],
 			);
 			expect(wide).toBeGreaterThan(0);
 			expect(halfWidth).toBeGreaterThan(wide);
+		});
 
-			// A height budget in the roster's own units, not a line count: fallback
-			// fonts differ between macOS and CI's Ubuntu and move wrap points (see
-			// the file header), so "exactly one line" cannot be asserted, and a
-			// line count would need the line-height, which the padding-inclusive
-			// entry height does not expose. Two ordinary rows is what the layout
-			// absorbs without the sheet's one-page promise moving; on the grid this
-			// machine measures one (27px of 54).
-			expect(wide).toBeLessThanOrEqual(2 * oneRow);
+		it.each([
+			"grid",
+			"editorial",
+			"spacious",
+			"timing",
+		] as const)("%s: lays the holders exactly two to a row", (layout) => {
+			// Three names must cost the same height as four, and two must cost
+			// less. Only two-per-row satisfies both: one-per-row makes three
+			// shorter than four, and a wrapped prose list makes two the same as
+			// three. No font metric enters, so macOS and CI agree.
+			const [two = 0, three = 0, four = 0, five = 0] = measuredHeights(
+				combined(
+					[2, 3, 4, 5].map((n) => ({
+						id: `n${n}`,
+						layout,
+						roles: rosterOf(n),
+					})),
+				),
+				[2, 3, 4, 5].map((n) => `#n${n} [data-roster-holders]`),
+			);
+			expect(two).toBeGreaterThan(0);
+			expect(three).toBe(four);
+			expect(two).toBeLessThan(three);
+			expect(four).toBeLessThan(five);
 		});
 
 		it("holds the hostile roster to the same width control and the dense legibility floor", () => {
