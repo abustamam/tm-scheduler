@@ -352,7 +352,35 @@ function RolesRoster({
 						>
 							{r.label}
 						</span>
-						{r.name ? (
+						{r.holders && r.holders.length > 1 ? (
+							// Two to a row, not a sentence. Joined as prose, seven
+							// contestants wrapped mid-list across the full sheet width and
+							// read as a paragraph — an officer scanning for who is
+							// competing had to parse it. Columns hug their content
+							// (`max-content`) so the block still sits at the right edge
+							// like every other name in this grid, capped by `minmax` so a
+							// long name wraps inside its column instead of pushing the
+							// label off the sheet.
+							<div
+								data-roster-holders={r.holders.length}
+								style={{
+									display: "grid",
+									gridTemplateColumns:
+										"minmax(0, max-content) minmax(0, max-content)",
+									columnGap: large ? 34 : 24,
+									rowGap: large ? 4 : 2,
+									fontSize: nameSize,
+									fontWeight: 600,
+									paddingLeft: 16,
+								}}
+							>
+								{r.holders.map((h) => (
+									<span data-roster-holder key={h}>
+										{h}
+									</span>
+								))}
+							</div>
+						) : r.name ? (
 							<span
 								style={{
 									fontSize: nameSize,
@@ -801,11 +829,27 @@ function RunNarrative({
 									/>
 								</div>
 								{multiHolder(lead) ? (
+									// Two to a row, matching the roles grid above: joined as
+									// prose the same list wrapped mid-sentence and read as a
+									// paragraph rather than a cast list, and this is the row a
+									// Timer scans to see who is up.
 									<div
 										data-row-holders
-										style={{ fontWeight: 600, color: MUTED }}
+										style={{
+											display: "grid",
+											gridTemplateColumns:
+												"minmax(0, max-content) minmax(0, max-content)",
+											columnGap: lg ? 28 : 20,
+											rowGap: 1,
+											fontWeight: 600,
+											color: MUTED,
+										}}
 									>
-										{lead.holder}
+										{(lead.holders ?? []).map((h) => (
+											<span data-row-holder key={h}>
+												{h}
+											</span>
+										))}
 									</div>
 								) : null}
 							</div>

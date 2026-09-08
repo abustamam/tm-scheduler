@@ -752,6 +752,60 @@ describe("a multi-holder row carries its names as DATA, not only as prose", () =
 		// print a fully-staffed-looking row for a half-staffed job.
 		expect(row?.holders).toEqual(["Muhammad Ali", OPEN_LABEL]);
 	});
+
+	it("drops the placeholder entirely for an UNORDERED role", () => {
+		// A contest's contestants, where an unclaimed place is not an unfilled
+		// JOB: nobody needs to be recruited into it, the contest simply has that
+		// many entrants. "and — open —" trailing the speaking list says the
+		// opposite, and it is the one row on the sheet where the count is the
+		// point. Ordered roles keep the placeholder (the case above) — an
+		// unstaffed Ballot Counter still has to be asked for.
+		const [row] = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Contest speeches",
+					roleKey: "contestant",
+				}),
+			],
+			ROLES,
+			[
+				{
+					...slot("contestant", "Contestant", 0, "Faisal Ali"),
+					slotsUnordered: true,
+				},
+				{
+					...slot("contestant", "Contestant", 1, "Rehanna Khan"),
+					slotsUnordered: true,
+				},
+				{ ...slot("contestant", "Contestant", 2), slotsUnordered: true },
+			],
+		);
+		expect(row?.holders).toEqual(["Faisal Ali", "Rehanna Khan"]);
+		expect(row?.holder).toBe("Faisal Ali and Rehanna Khan");
+	});
+
+	it("still prints an unordered row nobody has entered, rather than dropping it", () => {
+		// The floor `collapseOpen` was written to protect (v1.24.0.0): a role with
+		// no holder must still appear. Dropping the placeholder must not drop the
+		// ROW — an empty contestant list is a contest with no entrants yet, and
+		// the sheet has to say so.
+		const [row] = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Contest speeches",
+					roleKey: "contestant",
+				}),
+			],
+			ROLES,
+			[{ ...slot("contestant", "Contestant", 0), slotsUnordered: true }],
+		);
+		expect(row?.roleLabel).toBe("Contest speeches");
+		expect(row?.holder).toBe(OPEN_LABEL);
+	});
 });
 
 describe("buildTemplateRowsWithSource", () => {
