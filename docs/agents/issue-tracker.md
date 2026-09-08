@@ -33,6 +33,42 @@ Create a GitHub issue.
 
 Run `gh issue view <number> --comments`.
 
+## Who files, and what an agent-filed issue looks like
+
+The maintainer is the intake. An agent files an issue only for a user-visible bug, data loss or
+corruption, or a security hole that lies outside the files its PR touches; the full rule is "What
+earns an issue" in `CLAUDE.md`. That issue:
+
+- opens with the line `Found by an agent while working on #N` (or `… while <what the maintainer
+  asked>` when there was no issue), so the grep below can count it;
+- carries `needs-triage` and a category label, nothing more. `ready-for-agent` is applied at the
+  maintainer's direction only: `/spec` output, `/triage`, or "move #N to ready-for-agent".
+
+## Health
+
+Two numbers, one command each, run at `/retro` or whenever the queue feels wrong. Both want to stay
+small; a rise means the pipeline has started generating its own input again.
+
+Issues an agent filed in the last 7 days:
+
+```bash
+gh issue list --state all --limit 500 \
+  --search "created:>=$(date -u -v-7d +%F 2>/dev/null || date -u -d '7 days ago' +%F)" \
+  --json body -q '[.[] | select(.body | test("^Found by an agent"))] | length'
+```
+
+Closed issues in the last 30 days, built against declined. A tracker that never says no is building
+everything anyone noticed:
+
+```bash
+gh issue list --state closed --limit 500 \
+  --search "closed:>=$(date -u -v-30d +%F 2>/dev/null || date -u -d '30 days ago' +%F)" \
+  --json stateReason -q 'group_by(.stateReason) | map({(.[0].stateReason): length}) | add'
+```
+
+Baseline on 2026-09-07: 0 agent-filed (the convention starts that day), and
+`{"COMPLETED":63,"NOT_PLANNED":2}`.
+
 ## Body conventions `batch:issues` reads
 
 `bun run batch:issues` (see CLAUDE.md's Commands section) parses two things out of an issue

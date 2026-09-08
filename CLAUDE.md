@@ -82,7 +82,7 @@ fastest way to comply.
   and the `tanstackStartCookies` plugin — no email+password, no OAuth.
   Magic-link delivery goes through **Resend** (`src/lib/email.ts`, `src/lib/magic-link-email.ts`) when `RESEND_API_KEY` is set; with no key it falls back to logging the URL to the server console (dev). The React client is
   `src/lib/auth-client.ts` (`authClient.useSession()` / `signOut()`, see
-  `src/integrations/better-auth/header-user.tsx`).
+  `src/routes/_authed.tsx`).
 - **TanStack Query** for client data, SSR-integrated (`src/integrations/tanstack-query/`,
   wired as router context in `src/router.tsx`).
 - **shadcn/ui** + **Tailwind CSS v4** (config-less, via `@tailwindcss/vite`; styles in
@@ -342,26 +342,29 @@ Issues and PRDs live as GitHub issues in `abustamam/tm-scheduler` (managed via t
 
 #### What earns an issue
 
-File one only when it is (a) a correctness or security bug a user can actually hit, or (b) work
-you would genuinely schedule. Everything else becomes a comment at the call site or an item in
-`TODOS/<branch-name>.md`, and is reported in the PR body or the session summary instead.
+Intake is people using the app: the maintainer, and the members whose complaints reach them. An
+agent does not go looking for work. What it notices while doing the work it was given goes to one
+of three places, and the test for the first is `git diff --name-only`, not effort:
 
-This exists because the default pulls the other way. A reviewer's job is to find things, so every
-review surfaces more than one PR can absorb; filing each leftover finding is a
-ratchet that grows the backlog by construction. One session closed 2 issues and opened 5 — of which
-exactly one was a real bug. The other four were a two-line index, a debt note already recorded in a
-code comment, and an edge case needing a three-step repro.
+- **Inside the files the PR already touches:** fix it in the PR and name it in the body.
+- **Outside the diff, and a user-visible bug, data loss or corruption, or a security hole:** file
+  one issue whose first line is `Found by an agent while working on #N` (or `while <what the
+  maintainer asked>` when there is no issue), labelled `needs-triage` plus a category. Never
+  `ready-for-agent`: an agent applies that label only at the maintainer's direction (`/spec`
+  output, `/triage`, "move #N to ready-for-agent"), never to a finding of its own.
+- **Anything else:** one sentence in the PR body or the final message. No issue, no `TODOS/`
+  entry, no code comment pointing at a number. If the maintainer wants it, they ask, and the
+  asking is the record.
 
-Two second-order costs make the bar higher than it looks:
-
-- Labelling review residue `ready-for-agent` inflates the queue that implies real work, which is
-  the number you actually plan against.
-- A filed issue has a maintenance tail. Closing one as noise leaves any code comment that
-  references it pointing at a dead number.
-
-`TODOS/README.md` states the boundary: a file holds in-flight debt not worth an issue yet, and is
-swept — promote, drop, or leave — at every `/retro` and whenever `batch:issues` comes back empty.
-Respect that direction rather than inverting it.
+The reason is measured. Of the 65 issues closed here in the 30 days to 2026-09-07, 63 closed
+COMPLETED and 2 NOT_PLANNED: nothing in the pipeline ever said no, so everything an agent noticed
+got built. The repo this repo's batcher was ported from measured the same shape, found ~2
+follow-ups per merged PR feeding its planner of which roughly one in eighteen was a bug a user
+could hit, and deleted the apparatus. Here the parallel layer stays, because the work is features
+and the waves are real throughput; what goes is every path by which an agent's observation becomes
+a queue item without the maintainer deciding to want it. `TODOS/` is closed to new entries (its
+README says what happens to what is already there), and `docs/agents/issue-tracker.md` has the two
+greps that check the rule is holding.
 
 ### Triage labels
 
@@ -397,10 +400,11 @@ knowing, the rest is in `./.codeledger/bin/codeledger help` and the vendor docs:
 When the user's request matches an available skill, invoke it via the Skill tool. When in doubt,
 invoke the skill.
 
-This section was rewritten on 2026-09-04. The ethos: MVP phase, live users, one maintainer who
-steers specs rather than writing code. Review effort goes where it has been shown to pay and
-nowhere else, release ceremony is zero, and deferred debt is per-branch and deleted rather than
-logged. `/ship` no longer runs here. The ~210 lines this replaced were about its cost; their
+This section was rewritten on 2026-09-04 and tightened on 2026-09-07. The ethos: MVP phase, live
+users, one maintainer who steers specs rather than writing code, and intake that is people using
+the app rather than agents noticing things. Review effort goes where it has been shown to pay and
+nowhere else, release ceremony is zero, and deferred debt is not logged at all ("What earns an
+issue", above). `/ship` no longer runs here. The ~210 lines this replaced were about its cost; their
 measurements are in git history (#672, #673) if a release cadence ever comes back.
 
 | To… | Use |
@@ -412,17 +416,19 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 | Open a PR | `gh pr create`. The agent stops there. |
 | Review a PR | `/review-pr N` from the main session. gstack `/review` in the PR's worktree **as well** for a risk category (below). |
 | Land | `gh pr merge --squash --auto`. Branch protection requires the branch to be up to date with `main`, so after each PR lands run `gh pr update-branch N` on the rest; CI re-runs and auto-merge fires when green. |
-| Verify a wave | `/qa-only` against the deployed app, once per wave after it has all landed, before the next meeting. Findings become issues. |
-| See what shipped | `/retro` (gstack). `/session-retro` is the other one: what in the agent's environment made a session harder than it needed to be. |
-| Park debt | `TODOS/<branch-name>.md`, several items per file, deleted when done. Swept at `/retro` and whenever `batch:issues` comes back empty. `TODOS/README.md` has the lifecycle. |
+| Verify a wave | `/qa-only` against the deployed app, once per wave after it has all landed, before the next meeting. A finding becomes an issue only if it passes "What earns an issue", and it is `needs-triage` until the maintainer says otherwise. |
+| See what shipped | `/retro` (gstack), and the two health greps in `docs/agents/issue-tracker.md` alongside it. `/session-retro` is the other one: what in the agent's environment made a session harder than it needed to be. |
+| Park debt | Don't. Inside the diff, fix it; outside it, the three-way rule under "What earns an issue". `TODOS/` takes no new files. |
 
 ### Pull requests
 
 - **Title**: conventional-commit style, `fix(agenda): …`, with no version prefix. `VERSION` is
   frozen at `1.32.0.0` and `CHANGELOG.md` stops there; do not bump either. Nothing reads them.
-- **Body**: `Closes #N` is mandatory. Branches are deleted on merge, so a merged PR without it
-  leaves the issue open with no claim on it, and the next `batch:issues` hands it out again.
-  Everything else in the body is optional.
+- **Body**: `Closes #N` whenever an issue exists, and it is mandatory then: branches are deleted
+  on merge, so a merged PR without it leaves the issue open with no claim on it, and the next
+  `batch:issues` hands it out again. Work the maintainer asked for directly in a session may have
+  no issue; then the body says so in one line (`Asked for directly; no issue`) and the PR is the
+  record. Everything else in the body is optional.
 - **A wave agent never merges its own PR.** Merging happens from the main session, after
   `/review-pr`. A wave PR is green against the `main` that existed when its CI ran, so branch
   protection requires the branch to be up to date before it merges (`strict: true`, set
