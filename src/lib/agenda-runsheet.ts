@@ -1,4 +1,4 @@
-import { assigneeDisplayName } from "./agenda";
+import { assigneeDisplayName, OPEN_LABEL } from "./agenda";
 import {
 	buildTemplateRows,
 	refreshTableTopicsMarks,
@@ -40,6 +40,11 @@ export type AgendaSlot = {
 	roleKey?: string | null;
 	category: string;
 	isSpeakerRole: boolean;
+	/** The role's slots have no meaningful order (#624): a contest's contestants,
+	 *  drawn on the day. `slotLabel` drops the number and the printed roster
+	 *  collapses the role into one entry. Absent on every slot of a standard
+	 *  meeting, which keeps numbering as before. */
+	slotsUnordered?: boolean;
 	slotIndex: number;
 	assigneeName: string | null;
 	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
@@ -515,8 +520,10 @@ export const EVALUATION_MARKS: TimingMarks = { green: 2, yellow: 2.5, red: 3 };
  */
 export { TABLE_TOPICS_MARKS };
 
-/** Placeholder shown for an open (unassigned) slot. */
-export const OPEN_LABEL = "— open —";
+/** Placeholder shown for an open (unassigned) slot. Defined in `./agenda`, which
+ *  this module already imports from and whose roster builder needs it too (#624);
+ *  re-exported so every caller that reads it from here keeps working. */
+export { OPEN_LABEL };
 
 /** Token in a beat's `detail`, replaced at expansion time by the roles from
  *  the beat's `requiresAnyOf` that the club actually runs, under the club's OWN

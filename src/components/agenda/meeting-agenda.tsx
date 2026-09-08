@@ -36,7 +36,12 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
-import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
+import {
+	buildRoleCounts,
+	slotAccessibleLabel,
+	slotLabel,
+	summarizeAgenda,
+} from "#/lib/agenda";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
 import { speechWindow, speechWindowInputError } from "#/lib/speech-window";
@@ -626,14 +631,16 @@ export function MeetingAgenda({
 												    not just the lineup: every card in a lineup renders an
 												    identical-looking pair, so a bare "Move speaker up" is
 												    announced N times with nothing to tell them apart when
-												    browsing by control. `slotLabel` is already computed
-												    for the card title just above. */}
+												    browsing by control. For an UNORDERED role (#624) the
+												    card title is the bare role name on every card, so
+												    `slotAccessibleLabel` appends the holder instead
+												    ("Move Contestant (Rehanna Khan) up"). */}
 												{viewer.canManage && slot.isSpeakerRole ? (
 													<div className="flex gap-1">
 														<Button
 															size="sm"
 															variant="ghost"
-															aria-label={`Move ${slotLabel(slot, roleCounts)} up`}
+															aria-label={`Move ${slotAccessibleLabel(slot, roleCounts)} up`}
 															disabled={busy || speakerSlots[0]?.id === slot.id}
 															onClick={() => doMoveSpeaker(slot, "up")}
 														>
@@ -642,7 +649,7 @@ export function MeetingAgenda({
 														<Button
 															size="sm"
 															variant="ghost"
-															aria-label={`Move ${slotLabel(slot, roleCounts)} down`}
+															aria-label={`Move ${slotAccessibleLabel(slot, roleCounts)} down`}
 															disabled={
 																busy ||
 																speakerSlots[speakerSlots.length - 1]?.id ===
@@ -660,7 +667,7 @@ export function MeetingAgenda({
 														<Button
 															size="sm"
 															variant="ghost"
-															aria-label={`Move ${slotLabel(slot, roleCounts)} up`}
+															aria-label={`Move ${slotAccessibleLabel(slot, roleCounts)} up`}
 															disabled={
 																busy || evaluatorSlots[0]?.id === slot.id
 															}
@@ -671,7 +678,7 @@ export function MeetingAgenda({
 														<Button
 															size="sm"
 															variant="ghost"
-															aria-label={`Move ${slotLabel(slot, roleCounts)} down`}
+															aria-label={`Move ${slotAccessibleLabel(slot, roleCounts)} down`}
 															disabled={
 																busy ||
 																evaluatorSlots[evaluatorSlots.length - 1]

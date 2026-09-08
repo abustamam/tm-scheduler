@@ -55,6 +55,12 @@ export async function loadMeetingSlots(meetingId: string) {
 			description: roleDefinitions.description,
 			sortOrder: roleDefinitions.sortOrder,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			// The role's slots carry no order (#624 — a contest's contestants, drawn
+			// on the day). `slotLabel` drops the number and the printed roster
+			// collapses the role into one entry; this is the ONE loader the meeting
+			// page, the print route and the attendance rail all read slots through,
+			// so the flag rides here and nowhere else needs to know its column.
+			slotsUnordered: roleDefinitions.slotsUnordered,
 			// assigneeId is the MEMBER id (null for a guest or open slot) — used for
 			// "is mine" / roster flags. A guest assignee is carried separately.
 			assigneeId: assignee.id,

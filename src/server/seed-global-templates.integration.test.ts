@@ -96,6 +96,27 @@ describe.skipIf(!hasTestDb)("seedTemplate", () => {
 		});
 	});
 
+	it("writes each role's slotsUnordered flag from the seed (#624)", async () => {
+		const s = seed();
+		const id = await seedTemplate(s);
+		created.push(id);
+		const rows = await testDb
+			.select({
+				key: meetingTemplateRoles.key,
+				slotsUnordered: meetingTemplateRoles.slotsUnordered,
+			})
+			.from(meetingTemplateRoles)
+			.where(eq(meetingTemplateRoles.templateId, id));
+		const flagged = rows.filter((r) => r.slotsUnordered).map((r) => r.key);
+		// Against the seed AND absolutely: the seed's own test pins which role is
+		// flagged, so a writer that dropped the column would fail the first
+		// assertion, and a seed that flagged nothing would fail the second.
+		expect(flagged).toEqual(
+			s.roles.filter((r) => r.slotsUnordered).map((r) => r.key),
+		);
+		expect(flagged).toEqual(["contestant_prepared"]);
+	});
+
 	it("re-running returns the SAME template rather than a second one", async () => {
 		const s = seed();
 		const first = await seedTemplate(s);

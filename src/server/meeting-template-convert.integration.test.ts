@@ -40,6 +40,7 @@ const {
 	materializeTemplateRoles,
 	planTemplateConversion,
 } = await import("./meeting-templates-logic");
+const { loadMeetingSlots } = await import("./meeting-slots-logic");
 
 describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 	let club: SeededClub;
@@ -99,6 +100,8 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 				defaultCount: 3,
 				sortOrder: 20,
 				isSpeakerRole: true,
+				// #624: speaking order is drawn on the day, so the slots carry none.
+				slotsUnordered: true,
 			},
 		]);
 		await testDb.insert(meetingTemplateBeats).values({
@@ -425,6 +428,65 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 				.from(roleDefinitions)
 				.where(eq(roleDefinitions.id, after?.roleDefinitionId ?? ""));
 			expect(def?.templateId).toBe(m?.templateId);
+		});
+	});
+
+	describe("unordered slots (#624)", () => {
+		/** The flag on `meeting_template_roles` reaches the two rows the grid
+		 *  actually reads through: the club's materialized `role_definitions`
+		 *  (which own the slots) and the private per-meeting copy of the template
+		 *  (which re-materializes on a later re-conversion). Either one missing
+		 *  and the sheet numbers contestants again. */
+		it("copies the flag onto the materialized definition and the private copy's role", async () => {
+			await convert(templateId);
+			const [m] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const privateId = m?.templateId ?? "";
+			expect(privateId).not.toBe("");
+
+			const defs = await testDb
+				.select({
+					key: roleDefinitions.key,
+					slotsUnordered: roleDefinitions.slotsUnordered,
+				})
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, club.clubId),
+						eq(roleDefinitions.templateId, privateId),
+					),
+				);
+			expect(
+				Object.fromEntries(defs.map((d) => [d.key, d.slotsUnordered])),
+			).toEqual({ contest_chair: false, contestant_prepared: true });
+
+			const copyRoles = await testDb
+				.select({
+					key: meetingTemplateRoles.key,
+					slotsUnordered: meetingTemplateRoles.slotsUnordered,
+				})
+				.from(meetingTemplateRoles)
+				.where(eq(meetingTemplateRoles.templateId, privateId));
+			expect(
+				Object.fromEntries(copyRoles.map((r) => [r.key, r.slotsUnordered])),
+			).toEqual({ contest_chair: false, contestant_prepared: true });
+		});
+
+		it("rides on every slot the meeting page and the print route load", async () => {
+			await convert(templateId);
+			const slots = await loadMeetingSlots(club.meetingId);
+			expect(
+				slots
+					.filter((s) => s.roleKey === "contestant_prepared")
+					.map((s) => s.slotsUnordered),
+			).toEqual([true, true, true]);
+			expect(
+				slots
+					.filter((s) => s.roleKey === "contest_chair")
+					.map((s) => s.slotsUnordered),
+			).toEqual([false]);
 		});
 	});
 

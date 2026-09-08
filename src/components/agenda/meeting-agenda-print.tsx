@@ -7,6 +7,7 @@
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
+import { rosterGridPositions } from "#/lib/agenda";
 import { groupByPresenter } from "#/lib/agenda-groups";
 import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
 import { introducedSuffix } from "#/lib/agenda-runsheet";
@@ -70,8 +71,15 @@ function clubLine(h: AgendaHeader): string {
 		.join("  ·  ");
 }
 
-/** One row of the "Meeting Roles" roster (name null → open/unfilled). */
-export type AgendaRoleEntry = { label: string; name: string | null };
+/** One row of the "Meeting Roles" roster (name null → open/unfilled).
+ *  `holderCount` is set only on the entry an UNORDERED role collapses into
+ *  (#624) — see `RosterEntry` in `#/lib/agenda`, of which this is the print
+ *  route's view. */
+export type AgendaRoleEntry = {
+	label: string;
+	name: string | null;
+	holderCount?: number;
+};
 
 /** A club officer for the officer grid. */
 export type AgendaOfficer = { office: string; name: string };
@@ -281,6 +289,13 @@ function RolesRoster({
 	const large = variant === "large";
 	const labelSize = large ? 11 : boxed ? 9.5 : 9;
 	const nameSize = large ? 14 : boxed ? 11.5 : 10.5;
+	// An entry naming several people (#624 — an unordered role's collapsed
+	// entry) spans both columns, so "last row" and "right column" are computed
+	// rather than read off the index: the boxed variant drops its rule on the
+	// last ROW only, and tints the right COLUMN only. Indexing by `i` gave the
+	// entry before a full-width last row no rule while it sat in the row above.
+	const positions = rosterGridPositions(roles);
+	const lastRow = positions[positions.length - 1]?.row ?? 0;
 	return (
 		<div
 			style={{
@@ -294,50 +309,65 @@ function RolesRoster({
 				}),
 			}}
 		>
-			{roles.map((r, i) => (
-				<div
-					key={r.label}
-					style={{
-						display: "flex",
-						justifyContent: "space-between",
-						alignItems: large ? "baseline" : "center",
-						padding: boxed ? "6px 14px" : large ? "9px 0" : "5px 0",
-						borderBottom:
-							boxed && i >= roles.length - 2
-								? undefined
-								: "1px solid rgba(23,58,64,.09)",
-						background: boxed && i % 2 === 1 ? "#fafdfb" : undefined,
-					}}
-				>
-					<span
+			{roles.map((r, i) => {
+				const pos = positions[i] ?? { row: 0, col: 0, wide: false };
+				return (
+					<div
+						key={r.label}
+						data-roster-entry=""
+						data-roster-holders={pos.wide ? r.holderCount : undefined}
 						style={{
-							fontSize: labelSize,
-							textTransform: "uppercase",
-							letterSpacing: ".03em",
-							color: MUTED,
-							fontWeight: 700,
-							whiteSpace: "nowrap",
+							display: "flex",
+							justifyContent: "space-between",
+							alignItems: large ? "baseline" : "center",
+							padding: boxed ? "6px 14px" : large ? "9px 0" : "5px 0",
+							borderBottom:
+								boxed && pos.row === lastRow
+									? undefined
+									: "1px solid rgba(23,58,64,.09)",
+							background: boxed && pos.col === 1 ? "#fafdfb" : undefined,
+							gridColumn: pos.wide ? "1 / -1" : undefined,
 						}}
 					>
-						{r.label}
-					</span>
-					{r.name ? (
-						<span style={{ fontSize: nameSize, fontWeight: 600 }}>
-							{r.name}
-						</span>
-					) : (
 						<span
 							style={{
-								fontSize: nameSize - 1,
+								fontSize: labelSize,
+								textTransform: "uppercase",
+								letterSpacing: ".03em",
+								color: MUTED,
 								fontWeight: 700,
-								color: OPEN,
+								whiteSpace: "nowrap",
 							}}
 						>
-							{boxed ? "○ Open" : "Open"}
+							{r.label}
 						</span>
-					)}
-				</div>
-			))}
+						{r.name ? (
+							<span
+								style={{
+									fontSize: nameSize,
+									fontWeight: 600,
+									// A list of several names wraps; keep the wrapped lines
+									// ragged-left against the right edge like every other
+									// name in the column, clear of the label.
+									...(pos.wide && { textAlign: "right", paddingLeft: 16 }),
+								}}
+							>
+								{r.name}
+							</span>
+						) : (
+							<span
+								style={{
+									fontSize: nameSize - 1,
+									fontWeight: 700,
+									color: OPEN,
+								}}
+							>
+								{boxed ? "○ Open" : "Open"}
+							</span>
+						)}
+					</div>
+				);
+			})}
 		</div>
 	);
 }

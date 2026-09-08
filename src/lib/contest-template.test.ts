@@ -303,4 +303,18 @@ describe("contest template rendered", () => {
 		expect(total(4) - total(3)).toBe(8);
 		expect(CONTEST_TEMPLATE.defaultLengthMinutes).toBe(90);
 	});
+
+	/**
+	 * #624. Speaking order is drawn by lot at the briefing, so the contestant
+	 * role's slots carry no order the sheet may assert. Every other contest
+	 * role either has one place or (the judges, timers, counters) a count that
+	 * is a headcount, not a sequence — but those are not asserted unordered,
+	 * because "Contest Timer 1 / 2" is how the two timers tell their stopwatches
+	 * apart on the day.
+	 */
+	it("declares the contestant role's slots unordered, and only that role's", () => {
+		const unordered = CONTEST_TEMPLATE.roles.filter((r) => r.slotsUnordered);
+		expect(unordered.map((r) => r.key)).toEqual(["contestant_prepared"]);
+		expect(unordered[0]?.isSpeakerRole).toBe(true);
+	});
 });

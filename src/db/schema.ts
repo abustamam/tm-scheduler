@@ -1110,6 +1110,14 @@ export const roleDefinitions = pgTable(
 		defaultCount: integer("default_count").notNull().default(1),
 		sortOrder: integer("sort_order").notNull().default(0),
 		isSpeakerRole: boolean("is_speaker_role").notNull().default(false),
+		// The role's slots have no meaningful order (#624). A contest's speaking
+		// order is drawn by lot at the briefing, so a contestant's `slot_index` is
+		// sign-up order wearing a rank: `slotLabel` (src/lib/agenda.ts) prints the
+		// bare role name and the printed roster collapses the role into ONE entry
+		// naming every holder. Copied from `meeting_template_roles` at
+		// materialization, like every other column here; false for every standard
+		// role, where "Speaker 2" is a real position on the agenda.
+		slotsUnordered: boolean("slots_unordered").notNull().default(false),
 		// Human-readable responsibilities, shown before claiming + on the shared link.
 		description: text("description"),
 		// Whether new meetings generate slots for this role (#368). A "skeleton
@@ -1321,6 +1329,10 @@ export const meetingTemplateRoles = pgTable(
 		defaultCount: integer("default_count").notNull().default(1),
 		sortOrder: integer("sort_order").notNull().default(0),
 		isSpeakerRole: boolean("is_speaker_role").notNull().default(false),
+		// See `role_definitions.slots_unordered` (#624); this is the template's
+		// declaration, copied onto the club's definition when the role is
+		// materialized. The seeded contest sets it on `contestant_prepared` only.
+		slotsUnordered: boolean("slots_unordered").notNull().default(false),
 		description: text("description"),
 	},
 	(t) => [

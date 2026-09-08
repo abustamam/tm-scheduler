@@ -49,6 +49,9 @@ export function buildHeldRoleLabels(
 		slotIndex: number;
 		assigneeId: string | null;
 		assigneeName: string | null;
+		/** Declared so `slotLabel` sees it (#624): an unordered role's holder is
+		 *  "Contestant", never "Contestant 3". */
+		slotsUnordered?: boolean;
 	}[],
 ): Record<string, HeldRoles> {
 	// A fresh array rather than a cast: `buildRoleCounts` takes a mutable `T[]`

@@ -1,3 +1,5 @@
+import { listRoles } from "./list-roles";
+
 /** A role definition's shape needed to generate slots. */
 export type SlotGenInput = {
 	id: string;
@@ -36,18 +38,61 @@ export function buildRoleCounts<T extends { roleName: string }>(
 	}, {});
 }
 
-/** "Speaker 1" when a role repeats, otherwise just "Speaker". */
+/** "Speaker 1" when a role repeats, otherwise just "Speaker".
+ *
+ *  Never numbered when the role's slots are UNORDERED (#624): a contest's
+ *  speaking order is drawn by lot at the briefing, so `slot_index` there is
+ *  sign-up order wearing a rank, and the sheet must not assert one. The flag is
+ *  optional on the slot shape because every existing caller passes a slot
+ *  without it, and those keep numbering exactly as before. */
 export function slotLabel(
-	slot: { roleName: string; slotIndex: number },
+	slot: { roleName: string; slotIndex: number; slotsUnordered?: boolean },
 	roleCounts: Record<string, number>,
 ): string {
+	if (slot.slotsUnordered) return slot.roleName;
 	return roleCounts[slot.roleName] > 1
 		? `${slot.roleName} ${slot.slotIndex + 1}`
 		: slot.roleName;
 }
 
+/** The name a CONTROL on this slot is announced with: `slotLabel`, plus the
+ *  holder's name for an unordered role (#624). Once "Contestant 1..4" all read
+ *  "Contestant", four identical "Move Contestant up" buttons are
+ *  indistinguishable to someone browsing by control — the number used to do
+ *  that job, so the name takes it over. An ordered role keeps its number and
+ *  needs nothing appended; an OPEN unordered slot has no name to append. */
+export function slotAccessibleLabel(
+	slot: {
+		roleName: string;
+		slotIndex: number;
+		slotsUnordered?: boolean;
+		assigneeName?: string | null;
+	},
+	roleCounts: Record<string, number>,
+): string {
+	const label = slotLabel(slot, roleCounts);
+	return slot.slotsUnordered && slot.assigneeName
+		? `${label} (${slot.assigneeName})`
+		: label;
+}
+
+/** How an unfilled place reads in PROSE — the run of show ("Introduces the
+ *  speakers: — open —, Rehanna"), a multi-holder row, and a collapsed roster
+ *  entry (#624) all use this one string, so a partly-staffed role reads the
+ *  same on every part of the sheet. Defined here rather than in
+ *  `agenda-runsheet.ts`, which re-exports it, because that module imports from
+ *  this one and the roster builder below needs it too. */
+export const OPEN_LABEL = "— open —";
+
 /** One row of the "Meeting Roles" roster (name null → open/unfilled). */
-export type RosterEntry = { label: string; name: string | null };
+export type RosterEntry = {
+	label: string;
+	name: string | null;
+	/** Set only on the ONE entry an unordered role collapses into (#624): how
+	 *  many people `name` joins, open places not counted. Two or more is the
+	 *  print layout's cue to give the entry a full row of the grid. */
+	holderCount?: number;
+};
 
 /** Subtle marker appended to a guest assignee's name everywhere it renders
  *  (#151), e.g. "Ben Carter · Guest". */
@@ -72,7 +117,36 @@ export type RosterSlot = {
 	assigneeName: string | null;
 	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
 	assigneeIsGuest?: boolean;
+	/** The role's slots have no meaningful order (#624) — a contest's
+	 *  contestants, whose order is drawn on the day. The roster collapses such a
+	 *  role into one entry naming every holder. Optional: callers that omit it
+	 *  get one numbered entry per slot, as before. */
+	slotsUnordered?: boolean;
 };
+
+/**
+ * The single roster entry an UNORDERED role collapses into (#624): its bare
+ * name, every holder joined the way the run of show joins them, and at most ONE
+ * open placeholder — the same rule `agenda-template-rows.ts` applies to a
+ * multi-holder row, so "Faisal Ali and — open —" reads identically on both
+ * halves of the sheet. Nobody holding it reads as a plain open entry.
+ */
+function collapsedRosterEntry(
+	roleName: string,
+	group: readonly RosterSlot[],
+): RosterEntry {
+	const names = group
+		.map((g) => assigneeDisplayName(g.assigneeName, g.assigneeIsGuest))
+		.filter((n): n is string => n != null);
+	if (names.length === 0)
+		return { label: roleName, name: null, holderCount: 0 };
+	const open = group.length - names.length;
+	return {
+		label: roleName,
+		name: listRoles(open > 0 ? [...names, OPEN_LABEL] : names),
+		holderCount: names.length,
+	};
+}
 
 /**
  * Order the meeting-roles roster so each speaker sits beside its paired
@@ -90,15 +164,38 @@ export type RosterSlot = {
  * Assumes the roles before the speaker block fill whole rows (the standard
  * template has two leadership roles), so the interleaved pairs start in the
  * left column and each speaker/evaluator pair shares a row.
+ *
+ * An UNORDERED role (#624) is one entry, not one per slot: it is collapsed
+ * FIRST, carried by its first slot so it keeps the role's position, and the
+ * pairing pass below never sees the role's other slots.
  */
 export function buildRosterEntries<T extends RosterSlot>(
 	slots: T[],
 ): RosterEntry[] {
 	const roleCounts = buildRoleCounts(slots);
-	const entry = (s: T): RosterEntry => ({
-		label: slotLabel(s, roleCounts),
-		name: assigneeDisplayName(s.assigneeName, s.assigneeIsGuest),
-	});
+	const items: { slot: T; entry: RosterEntry }[] = [];
+	const collapsed = new Set<string>();
+	for (const s of slots) {
+		if (!s.slotsUnordered) {
+			items.push({
+				slot: s,
+				entry: {
+					label: slotLabel(s, roleCounts),
+					name: assigneeDisplayName(s.assigneeName, s.assigneeIsGuest),
+				},
+			});
+			continue;
+		}
+		if (collapsed.has(s.roleName)) continue;
+		collapsed.add(s.roleName);
+		items.push({
+			slot: s,
+			entry: collapsedRosterEntry(
+				s.roleName,
+				slots.filter((g) => g.roleName === s.roleName),
+			),
+		});
+	}
 
 	// Paired evaluator = evaluator-category role with the most slots.
 	const evalCounts = new Map<string, number>();
@@ -116,12 +213,12 @@ export function buildRosterEntries<T extends RosterSlot>(
 		}
 	}
 
-	const speakers = slots.filter((s) => s.isSpeakerRole);
+	const speakers = items.filter((it) => it.slot.isSpeakerRole);
 	const evaluators = pairedEvalName
-		? slots.filter((s) => s.roleName === pairedEvalName)
+		? items.filter((it) => it.slot.roleName === pairedEvalName)
 		: [];
 	if (speakers.length === 0 || evaluators.length === 0) {
-		return slots.map(entry);
+		return items.map((it) => it.entry);
 	}
 
 	const interleaved: RosterEntry[] = [];
@@ -129,25 +226,66 @@ export function buildRosterEntries<T extends RosterSlot>(
 	for (let i = 0; i < n; i++) {
 		const sp = speakers[i];
 		const ev = evaluators[i];
-		if (sp) interleaved.push(entry(sp));
-		if (ev) interleaved.push(entry(ev));
+		if (sp) interleaved.push(sp.entry);
+		if (ev) interleaved.push(ev.entry);
 	}
 
 	// Emit the interleaved block where the speaker block starts; drop the
 	// speaker and paired-evaluator slots from their original spots.
 	const result: RosterEntry[] = [];
 	let emitted = false;
-	for (const s of slots) {
-		if (s.isSpeakerRole || s.roleName === pairedEvalName) {
+	for (const it of items) {
+		if (it.slot.isSpeakerRole || it.slot.roleName === pairedEvalName) {
 			if (!emitted) {
 				result.push(...interleaved);
 				emitted = true;
 			}
 			continue;
 		}
-		result.push(entry(s));
+		result.push(it.entry);
 	}
 	return result;
+}
+
+/** Where one roster entry lands in the two-column "Meeting Roles" grid. */
+export type RosterGridPosition = { row: number; col: 0 | 1; wide: boolean };
+
+/**
+ * Lay the roster into its two-column grid. An entry naming several people
+ * (#624) takes a whole row — half a column cannot hold four surnames legibly —
+ * and starts a fresh row when the left cell is already taken; everything else
+ * fills left, then right. The print layout needs this to know which entries
+ * sit in the LAST row (the boxed variant closes with its frame and drops the
+ * rule there) and which COLUMN an entry occupies (the right one is tinted):
+ * "the last two entries" and "odd index" stopped meaning those things the
+ * moment a cell could span. A collapsed entry with one holder, or none, is an
+ * ordinary cell — "Faisal Ali and — open —" fits half a row.
+ */
+export function rosterGridPositions(
+	entries: readonly { holderCount?: number }[],
+): RosterGridPosition[] {
+	const out: RosterGridPosition[] = [];
+	let row = 0;
+	let col: 0 | 1 = 0;
+	for (const e of entries) {
+		if ((e.holderCount ?? 0) > 1) {
+			if (col === 1) {
+				row++;
+				col = 0;
+			}
+			out.push({ row, col: 0, wide: true });
+			row++;
+			continue;
+		}
+		out.push({ row, col, wide: false });
+		if (col === 0) {
+			col = 1;
+		} else {
+			col = 0;
+			row++;
+		}
+	}
+	return out;
 }
 
 type EvaluatorRow = {

@@ -169,6 +169,82 @@ describe("a row held by several people puts the names on their own line", () => 
 	}
 });
 
+describe("Meeting Roles roster — an unordered role is ONE entry naming every holder (#624)", () => {
+	/** What `buildRosterEntries` emits for MCF's contest once the contestant
+	 *  role is flagged unordered: the four contestants collapse into one entry
+	 *  carrying its holder count, beside two ordinary single-holder entries. */
+	const CONTEST_ROLES = [
+		{ label: "Contest Chair", name: "Rasheed Bustamam" },
+		{ label: "Contest Timer", name: "Saif" },
+		{
+			label: "Contestant",
+			name: "Faisal Ali, Rehanna Khan, Jagpal Singh, and Riyaz Mohammed",
+			holderCount: 4,
+		},
+	];
+	const NAMES = [
+		"Faisal Ali",
+		"Rehanna Khan",
+		"Jagpal Singh",
+		"Riyaz Mohammed",
+	];
+
+	function renderRoles(layout: AgendaLayout) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				roles={CONTEST_ROLES}
+				officers={[]}
+				explainers={[]}
+				rows={rows}
+			/>,
+		);
+	}
+
+	for (const layout of ["editorial", "grid", "timing", "spacious"] as const) {
+		it(`${layout}: prints the collapsed entry once, unnumbered, naming everyone`, () => {
+			const { container } = renderRoles(layout);
+			const wide = container.querySelectorAll("[data-roster-holders]");
+			expect(wide).toHaveLength(1);
+			expect(wide[0]?.getAttribute("data-roster-holders")).toBe("4");
+			const text = wide[0]?.textContent ?? "";
+			expect(text).toContain("Contestant");
+			// The whole point: no "Contestant 1" anywhere on the sheet.
+			expect(container.textContent ?? "").not.toMatch(/Contestant \d/);
+			for (const name of NAMES) expect(text).toContain(name);
+		});
+
+		it(`${layout}: gives the collapsed entry both roster columns, and no other entry`, () => {
+			const { container } = renderRoles(layout);
+			const wide = container.querySelector<HTMLElement>(
+				"[data-roster-holders]",
+			);
+			expect(wide?.style.gridColumn).toBe("1 / -1");
+			const ordinary = [
+				...container.querySelectorAll<HTMLElement>(
+					"[data-roster-entry]:not([data-roster-holders])",
+				),
+			];
+			expect(ordinary).toHaveLength(2);
+			for (const el of ordinary) expect(el.style.gridColumn).toBe("");
+		});
+	}
+
+	it("grid: a wide entry closing the boxed roster keeps the rule under the row above it", () => {
+		// The boxed variant drops the bottom rule on the LAST row only. It used to
+		// find that row as "the last two cells", which a full-width cell breaks:
+		// the entry before it would lose its rule while sitting in the row above.
+		const { container } = renderRoles("grid");
+		const entries = [
+			...container.querySelectorAll<HTMLElement>("[data-roster-entry]"),
+		];
+		expect(entries).toHaveLength(3);
+		expect(entries[1]?.style.borderBottom).not.toBe("");
+		expect(entries[2]?.style.borderBottom).toBe("");
+	});
+});
+
 describe("MeetingAgendaPrint prints yellow, never amber (#507)", () => {
 	// The rename shipped once already with the committed PDFs still printing
 	// "Amber", because every test asserted DATA and none asserted the printed
