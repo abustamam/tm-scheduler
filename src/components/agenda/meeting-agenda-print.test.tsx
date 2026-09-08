@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildRosterEntries } from "#/lib/agenda";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import { expandRunSheet, OPEN_LABEL } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
@@ -170,24 +171,42 @@ describe("a row held by several people puts the names on their own line", () => 
 });
 
 describe("Meeting Roles roster — an unordered role is ONE entry naming every holder (#624)", () => {
-	/** What `buildRosterEntries` emits for MCF's contest once the contestant
-	 *  role is flagged unordered: the four contestants collapse into one entry
-	 *  carrying its holder count, beside two ordinary single-holder entries. */
-	const CONTEST_ROLES = [
-		{ label: "Contest Chair", name: "Rasheed Bustamam" },
-		{ label: "Contest Timer", name: "Saif" },
-		{
-			label: "Contestant",
-			name: "Faisal Ali, Rehanna Khan, Jagpal Singh, and Riyaz Mohammed",
-			holderCount: 4,
-		},
-	];
 	const NAMES = [
 		"Faisal Ali",
 		"Rehanna Khan",
 		"Jagpal Singh",
 		"Riyaz Mohammed",
 	];
+	/** MCF's contest slots as the print route's loader shapes them, run through
+	 *  the REAL `buildRosterEntries` rather than a hand-typed collapsed entry —
+	 *  so the "no `Contestant 1`" assertion below can actually fail if the
+	 *  builder numbers them, instead of asserting a fixture that never had a
+	 *  number to begin with. Four contestants collapse into one entry beside
+	 *  two ordinary single-holder entries. */
+	const CONTEST_ROLES = buildRosterEntries([
+		{
+			roleName: "Contest Chair",
+			slotIndex: 0,
+			category: "leadership",
+			isSpeakerRole: false,
+			assigneeName: "Rasheed Bustamam",
+		},
+		{
+			roleName: "Contest Timer",
+			slotIndex: 0,
+			category: "functionary",
+			isSpeakerRole: false,
+			assigneeName: "Saif",
+		},
+		...NAMES.map((name, i) => ({
+			roleName: "Contestant",
+			slotIndex: i,
+			category: "speaker" as const,
+			isSpeakerRole: true,
+			slotsUnordered: true,
+			assigneeName: name,
+		})),
+	]);
 
 	function renderRoles(layout: AgendaLayout) {
 		return render(
@@ -205,9 +224,9 @@ describe("Meeting Roles roster — an unordered role is ONE entry naming every h
 	for (const layout of ["editorial", "grid", "timing", "spacious"] as const) {
 		it(`${layout}: prints the collapsed entry once, unnumbered, naming everyone`, () => {
 			const { container } = renderRoles(layout);
-			const wide = container.querySelectorAll("[data-roster-holders]");
+			const wide = container.querySelectorAll("[data-roster-wide]");
 			expect(wide).toHaveLength(1);
-			expect(wide[0]?.getAttribute("data-roster-holders")).toBe("4");
+			expect(wide[0]?.getAttribute("data-roster-wide")).toBe("4");
 			const text = wide[0]?.textContent ?? "";
 			expect(text).toContain("Contestant");
 			// The whole point: no "Contestant 1" anywhere on the sheet.
@@ -217,13 +236,11 @@ describe("Meeting Roles roster — an unordered role is ONE entry naming every h
 
 		it(`${layout}: gives the collapsed entry both roster columns, and no other entry`, () => {
 			const { container } = renderRoles(layout);
-			const wide = container.querySelector<HTMLElement>(
-				"[data-roster-holders]",
-			);
+			const wide = container.querySelector<HTMLElement>("[data-roster-wide]");
 			expect(wide?.style.gridColumn).toBe("1 / -1");
 			const ordinary = [
 				...container.querySelectorAll<HTMLElement>(
-					"[data-roster-entry]:not([data-roster-holders])",
+					"[data-roster-entry]:not([data-roster-wide])",
 				),
 			];
 			expect(ordinary).toHaveLength(2);

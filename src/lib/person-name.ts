@@ -62,7 +62,7 @@ export function greetingName(p: NamedPerson): string {
  * function safe no matter which caller reaches it: a 400KB stored name costs
  * ~22ms per call in NFD-normalize and regex alone, before any pairing runs.
  */
-const MAX_NAME_CHARS = 200;
+export const MAX_NAME_CHARS = 200;
 
 /**
  * The comparable tokens of a full name: lowercased, diacritic-folded, split on

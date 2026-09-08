@@ -7,7 +7,7 @@
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
-import { rosterGridPositions } from "#/lib/agenda";
+import { type RosterEntry, rosterGridPositions } from "#/lib/agenda";
 import { groupByPresenter } from "#/lib/agenda-groups";
 import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
 import { introducedSuffix } from "#/lib/agenda-runsheet";
@@ -71,15 +71,10 @@ function clubLine(h: AgendaHeader): string {
 		.join("  ·  ");
 }
 
-/** One row of the "Meeting Roles" roster (name null → open/unfilled).
- *  `holderCount` is set only on the entry an UNORDERED role collapses into
- *  (#624) — see `RosterEntry` in `#/lib/agenda`, of which this is the print
- *  route's view. */
-export type AgendaRoleEntry = {
-	label: string;
-	name: string | null;
-	holderCount?: number;
-};
+/** One row of the "Meeting Roles" roster: `buildRosterEntries`' output, named
+ *  for the print route that feeds it. Aliased rather than restated so a field
+ *  added to one cannot go missing from the other. */
+export type AgendaRoleEntry = RosterEntry;
 
 /** A club officer for the officer grid. */
 export type AgendaOfficer = { office: string; name: string };
@@ -315,7 +310,10 @@ function RolesRoster({
 					<div
 						key={r.label}
 						data-roster-entry=""
-						data-roster-holders={pos.wide ? r.holderCount : undefined}
+						// Present only on an entry spanning both columns; its value is
+						// the holder count the width was granted for. A collapsed entry
+						// with one holder sits in an ordinary cell and carries nothing.
+						data-roster-wide={pos.wide ? r.holderCount : undefined}
 						style={{
 							display: "flex",
 							justifyContent: "space-between",

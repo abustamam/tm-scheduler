@@ -727,9 +727,12 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 		]);
 	});
 
-	it("still pairs a collapsed speaker entry with the evaluator block", () => {
-		// No shipped template has unordered speakers AND evaluators, but the
-		// interleave must not duplicate or drop the collapsed entry if one does.
+	it("keeps the original order instead of pairing when the SPEAKER side is collapsed", () => {
+		// Pairing puts one speaker beside one evaluator per row. A collapsed entry
+		// stands for several people and takes a full row once it names two, so
+		// there is no row for a partner to share: the roster keeps its original
+		// order rather than interleaving a list against a single entry. No shipped
+		// template has unordered speakers AND evaluators; this pins the rule.
 		const slots = [
 			contestant(0, "A"),
 			contestant(1, "B"),
@@ -740,6 +743,63 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 			"Contestant",
 			"Evaluator 1",
 			"Evaluator 2",
+		]);
+	});
+
+	it("keeps the original order when the paired EVALUATOR role is the unordered one", () => {
+		// The mirror case, and the one the interleave got wrong: with one
+		// collapsed evaluator item it emitted [Speaker 1, Evaluator, Speaker 2],
+		// a full-width evaluator row wedged between two speakers.
+		const slots = [
+			slot("Speaker", 0, "S1", { category: "speaker", isSpeakerRole: true }),
+			slot("Speaker", 1, "S2", { category: "speaker", isSpeakerRole: true }),
+			slot("Evaluator", 0, "E1", {
+				category: "evaluator",
+				slotsUnordered: true,
+			}),
+			slot("Evaluator", 1, "E2", {
+				category: "evaluator",
+				slotsUnordered: true,
+			}),
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Speaker 1", name: "S1" },
+			{ label: "Speaker 2", name: "S2" },
+			{ label: "Evaluator", name: "E1 and E2", holderCount: 2 },
+		]);
+	});
+
+	it("groups by role DEFINITION, so an ordered role sharing the name keeps its own entries", () => {
+		const slots = [
+			{ ...contestant(0, "A1"), roleDefinitionId: "def-unordered" },
+			{ ...contestant(1, "A2"), roleDefinitionId: "def-unordered" },
+			{
+				...slot("Contestant", 0, "B1", {
+					category: "speaker",
+					isSpeakerRole: true,
+				}),
+				roleDefinitionId: "def-ordered",
+			},
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Contestant", name: "A1 and A2", holderCount: 2 },
+			// Numbered off the NAME's total count, as every same-named role always
+			// was; the point here is that B1 is not swallowed into the list above.
+			{ label: "Contestant 1", name: "B1" },
+		]);
+	});
+
+	it("never absorbs an ORDERED slot into the collapsed entry, even without definition ids", () => {
+		// Fixtures (and any caller that omits `roleDefinitionId`) group by name;
+		// the grouping must still only gather slots that are themselves unordered.
+		const slots = [
+			contestant(0, "A1"),
+			contestant(1, "A2"),
+			slot("Contestant", 0, "B1", { category: "speaker", isSpeakerRole: true }),
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Contestant", name: "A1 and A2", holderCount: 2 },
+			{ label: "Contestant 1", name: "B1" },
 		]);
 	});
 });

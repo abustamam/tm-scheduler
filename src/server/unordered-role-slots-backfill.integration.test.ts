@@ -201,8 +201,9 @@ describe.skipIf(!hasTestDb)(
 			const { definitions, clubFlagged } = await flagsAfterBackfill();
 			expect(definitions.Contestant).toBe(true);
 			expect(definitions.Judge).toBe(false);
-			// The seeded club's whole standard role set rides along in `definitions`:
-			// every one of those must stay false too.
+			// The seeded club's own standard role (`seedClub` inserts one, "Timer")
+			// rides along in `definitions` and must stay false too.
+			expect(definitions.Timer).toBe(false);
 			expect(clubFlagged).toBe(1);
 		});
 

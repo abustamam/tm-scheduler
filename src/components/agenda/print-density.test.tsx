@@ -41,6 +41,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { buildRosterEntries } from "#/lib/agenda";
 import {
 	EDITORIAL_DENSE_MIN_PRINTED_PT,
 	EDITORIAL_MIN_PRINTED_PT,
@@ -63,6 +64,7 @@ import {
 	MAX_TEMPLATE_LABEL_CHARS,
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
+import { MAX_NAME_CHARS } from "#/lib/person-name";
 import {
 	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
@@ -70,7 +72,11 @@ import {
 	printableDocument,
 } from "#/test/print-page-count";
 import { withBeatIds } from "#/test/template-beat-ids";
-import { type AgendaHeader, MeetingAgendaPrint } from "./meeting-agenda-print";
+import {
+	type AgendaHeader,
+	type AgendaRoleEntry,
+	MeetingAgendaPrint,
+} from "./meeting-agenda-print";
 import { MIN_FIT_SCALE, PAGE_H, PRINT_PAGE_CSS } from "./print-theme";
 
 const header: AgendaHeader = {
@@ -324,13 +330,20 @@ const mcfRows: TimelineRow[] = [
  * confident, wrong, much smaller number — the exact silently-plausible failure
  * this file exists to catch. Measuring those layouts needs an nth-sheet
  * selector, so make that change deliberately rather than by passing an argument.
+ *
+ * `rosterRoles` defaults to the standard roster above; the collapsed-roster
+ * suite (#624) passes its own, because the roster is the one block on this
+ * sheet whose height a single role can now change.
  */
-function agendaHeight(rows: TimelineRow[]): number {
+function agendaHeight(
+	rows: TimelineRow[],
+	rosterRoles: AgendaRoleEntry[] = roles,
+): number {
 	const html = renderToStaticMarkup(
 		<MeetingAgendaPrint
 			layout="editorial"
 			header={header}
-			roles={roles}
+			roles={rosterRoles}
 			officers={officers}
 			explainers={[]}
 			rows={rows}
@@ -405,14 +418,17 @@ describe("MIN_FIT_SCALE", { timeout: CHROME_TEST_TIMEOUT_MS }, () => {
  * makes both the constant and the layout load-bearing in one number, and states
  * it in the unit the complaint was made in ("this agenda is quite small").
  */
-function printedDetailPt(rows: TimelineRow[]): number {
+function printedDetailPt(
+	rows: TimelineRow[],
+	rosterRoles: AgendaRoleEntry[] = roles,
+): number {
 	// Clamped at 1 because `FitPage` only ever SHRINKS — its effect is guarded by
 	// `if (h > PAGE_H)`, so a sheet that already fits is printed at its declared
 	// size with no transform at all. Without the clamp, a layout that got short
 	// enough to stop needing a scale would report type LARGER than it prints, and
 	// because this is a floor, that overstatement passes. A false pass in the one
 	// gate whose whole job is catching false passes.
-	const raw = (PAGE_H - 2) / agendaHeight(rows);
+	const raw = (PAGE_H - 2) / agendaHeight(rows, rosterRoles);
 	// Mirrors `FitPage`: below MIN_FIT_SCALE it stops scaling and lets the sheet
 	// FLOW across pages instead, so the type prints at its declared size. Without
 	// this branch the helper would report the crushed size for an agenda that is
@@ -799,6 +815,153 @@ function hostileTemplateRows(
 		"America/Chicago",
 	);
 }
+
+/**
+ * #624: an UNORDERED role's slots collapse into one roster entry naming every
+ * holder, and an entry naming two or more people is given both grid columns.
+ * That is the one piece of print geometry the fix introduces, and jsdom cannot
+ * see it: `meeting-agenda-print.test.tsx` checks the inline `gridColumn`, which
+ * proves the STYLE is emitted, not what a paginating engine does with a
+ * `nowrap` label beside a wrapping list of names. So this measures it.
+ *
+ * Two fixtures, per the "fixture that spans ONE axis" trap: MCF's real roster
+ * (seven contestants with ordinary names — the sheet that prints on
+ * 2026-09-10) and the hostile one (`MAX_ROLE_REPEAT_SLOTS` holders at
+ * `MAX_NAME_CHARS` code points each, in this file's emoji idiom), which is what
+ * an officer can author. Both are built through the REAL `buildRosterEntries`,
+ * not a hand-typed collapsed entry, so the builder is under the gate too.
+ */
+describe.skipIf(!hasChrome)(
+	"collapsed roster entry geometry (#624)",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		const CONTESTANTS = [
+			"Faisal Ali",
+			"Rehanna Khan",
+			"Jagpal Singh",
+			"Riyaz Mohammed",
+			"Anshul Khindri",
+			"Diego Nuci",
+			"Muhammad Ali",
+		];
+
+		/** The contest roster as the print route's loader shapes it: three
+		 *  single-place roles, then `names.length` contestants in the one
+		 *  unordered role. Entry 4 (1-based) is the collapsed one. */
+		function contestRoster(names: readonly string[]): AgendaRoleEntry[] {
+			return buildRosterEntries([
+				{
+					roleName: "Contest Chair",
+					slotIndex: 0,
+					category: "leadership",
+					isSpeakerRole: false,
+					assigneeName: "Rasheed Bustamam",
+				},
+				{
+					roleName: "Ballot Counter",
+					slotIndex: 0,
+					category: "functionary",
+					isSpeakerRole: false,
+					assigneeName: "Schinthia Islam",
+				},
+				{
+					roleName: "Contest Timer",
+					slotIndex: 0,
+					category: "functionary",
+					isSpeakerRole: false,
+					assigneeName: "Saif",
+				},
+				...names.map((name, i) => ({
+					roleName: "Contestant",
+					slotIndex: i,
+					category: "speaker" as const,
+					isSpeakerRole: true,
+					slotsUnordered: true,
+					assigneeName: name,
+				})),
+			]);
+		}
+
+		/** Natural height of `selector` on the GRID layout — the default sheet,
+		 *  the one a club that prints rather than projects gets — with this roster.
+		 *  Measures whole entry boxes (block-level flex rows), never the inline
+		 *  name spans: an inline box reports `scrollHeight` 0, which would read as
+		 *  the tightest possible fit. */
+		function rosterEntryHeight(
+			rosterRoles: AgendaRoleEntry[],
+			selector: string,
+		): number {
+			const html = renderToStaticMarkup(
+				<MeetingAgendaPrint
+					layout="grid"
+					header={header}
+					roles={rosterRoles}
+					officers={officers}
+					explainers={[]}
+					rows={mcfRows}
+				/>,
+			);
+			return measuredHeight(printableDocument(PRINT_PAGE_CSS, html), selector);
+		}
+
+		it("collapses MCF's seven contestants into one entry the builder marks for the full row", () => {
+			// The content control the geometry below rests on: a roster of four
+			// entries, the last naming seven people. A builder that stopped
+			// collapsing would fail here, not read as a very short entry.
+			const roster = contestRoster(CONTESTANTS);
+			expect(roster).toHaveLength(4);
+			expect(roster[3]?.label).toBe("Contestant");
+			expect(roster[3]?.holderCount).toBe(7);
+		});
+
+		it("keeps seven names to at most two lines across the full row, and fewer than the half-width control", () => {
+			const roster = contestRoster(CONTESTANTS);
+			const wide = rosterEntryHeight(roster, "[data-roster-wide]");
+			const oneLine = rosterEntryHeight(
+				roster,
+				"[data-roster-entry]:not([data-roster-wide])",
+			);
+			expect(oneLine).toBeGreaterThan(0);
+			// A bound rather than "exactly one line": fallback fonts differ between
+			// macOS and CI's Ubuntu and move wrap points (see the file header). Two
+			// entry heights admit two lines of names and reject three.
+			expect(wide).toBeLessThanOrEqual(2 * oneLine);
+
+			// The pre-fix control, same idiom as `dialog-keyboard-reach`: the SAME
+			// entry denied its width. Stripping the holder count lays it into an
+			// ordinary half-width cell, where the same names must wrap MORE. This is
+			// what lets the bound above fail — a sheet whose `gridColumn` stopped
+			// taking effect would measure exactly this control.
+			const control = roster.map(({ label, name }) => ({ label, name }));
+			const halfWidth = rosterEntryHeight(
+				control,
+				"[data-roster-entry]:nth-child(4)",
+			);
+			expect(halfWidth).toBeGreaterThan(wide);
+		});
+
+		it("prints legible body text with the hostile roster: every place held, every name at its cap", () => {
+			const names = Array.from(
+				{ length: MAX_ROLE_REPEAT_SLOTS },
+				(_, i) =>
+					`${hostileStr(MAX_NAME_CHARS - 2)}${String(i).padStart(2, "0")}`,
+			);
+			const roster = contestRoster(names);
+			expect(roster[3]?.holderCount).toBe(MAX_ROLE_REPEAT_SLOTS);
+			// The editorial sheet, held to the same floor as the run of show. A
+			// roster this long pushes the sheet past `MIN_FIT_SCALE`'s threshold, so
+			// it FLOWS at full size rather than being squeezed — which is the
+			// property: a maximal roster does not silently shrink the whole agenda.
+			expect(printedDetailPt(mcfRows, roster)).toBeGreaterThanOrEqual(
+				EDITORIAL_DENSE_MIN_PRINTED_PT,
+			);
+			// And it is a real, taller sheet — not a roster that vanished and fit.
+			expect(agendaHeight(mcfRows, roster)).toBeGreaterThan(
+				agendaHeight(mcfRows),
+			);
+		});
+	},
+);
 
 describe.skipIf(!hasChrome)(
 	"worst-case template density (#task-10)",

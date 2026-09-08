@@ -129,6 +129,44 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		});
 	});
 
+	it("keeps numbering an UNORDERED role's rows — here the number is the row's identity (#624)", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		// The printed roster collapses an unordered role into one unnumbered entry
+		// because the number there asserts a speaking order that does not exist.
+		// The season grid is a matrix: each row IS one slot across the season and
+		// cannot collapse, so three rows all reading "Contestant" would be
+		// indistinguishable. `season-grid-logic` therefore deliberately does NOT
+		// pass the flag to `slotLabel`; this pins that choice so a later "thread it
+		// everywhere" sweep changes the grid on purpose or not at all.
+		const [contestant] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Contestant",
+				category: "speaker",
+				defaultCount: 3,
+				sortOrder: 5,
+				isSpeakerRole: true,
+				slotsUnordered: true,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values(
+			[0, 1, 2].map((slotIndex) => ({
+				meetingId: seed.meetingId,
+				roleDefinitionId: contestant!.id,
+				slotIndex,
+			})),
+		);
+
+		const data = await loadSeasonGrid({ clubId: seed.clubId, count: 8 });
+		const rows = data.rows.filter((r) => r.roleDefinitionId === contestant!.id);
+		expect(rows.map((r) => r.label)).toEqual([
+			"Contestant 1",
+			"Contestant 2",
+			"Contestant 3",
+		]);
+	});
+
 	it("count: 4 limits upcoming meetings", async () => {
 		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
 		// seedClub already inserted 1 upcoming meeting; add 5 more upcoming.

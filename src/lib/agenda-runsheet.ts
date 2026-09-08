@@ -40,10 +40,8 @@ export type AgendaSlot = {
 	roleKey?: string | null;
 	category: string;
 	isSpeakerRole: boolean;
-	/** The role's slots have no meaningful order (#624): a contest's contestants,
-	 *  drawn on the day. `slotLabel` drops the number and the printed roster
-	 *  collapses the role into one entry. Absent on every slot of a standard
-	 *  meeting, which keeps numbering as before. */
+	/** See `role_definitions.slots_unordered` (#624). Absent on every slot of a
+	 *  standard meeting, which keeps numbering as before. */
 	slotsUnordered?: boolean;
 	slotIndex: number;
 	assigneeName: string | null;

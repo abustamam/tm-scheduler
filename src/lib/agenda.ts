@@ -38,13 +38,10 @@ export function buildRoleCounts<T extends { roleName: string }>(
 	}, {});
 }
 
-/** "Speaker 1" when a role repeats, otherwise just "Speaker".
- *
- *  Never numbered when the role's slots are UNORDERED (#624): a contest's
- *  speaking order is drawn by lot at the briefing, so `slot_index` there is
- *  sign-up order wearing a rank, and the sheet must not assert one. The flag is
- *  optional on the slot shape because every existing caller passes a slot
- *  without it, and those keep numbering exactly as before. */
+/** "Speaker 1" when a role repeats, otherwise just "Speaker" — and never
+ *  numbered for an UNORDERED role (#624; `role_definitions.slots_unordered` in
+ *  `schema.ts` says why). The flag is optional on the slot shape: callers that
+ *  omit it keep numbering exactly as before. */
 export function slotLabel(
 	slot: { roleName: string; slotIndex: number; slotsUnordered?: boolean },
 	roleCounts: Record<string, number>,
@@ -76,11 +73,10 @@ export function slotAccessibleLabel(
 		: label;
 }
 
-/** How an unfilled place reads in PROSE — the run of show ("Introduces the
- *  speakers: — open —, Rehanna"), a multi-holder row, and a collapsed roster
- *  entry (#624) all use this one string, so a partly-staffed role reads the
- *  same on every part of the sheet. Defined here rather than in
- *  `agenda-runsheet.ts`, which re-exports it, because that module imports from
+/** How an unfilled place reads in PROSE — the run of show, a multi-holder row
+ *  and a collapsed roster entry all use this one string, so a partly-staffed
+ *  role reads the same on every part of the sheet. Defined here rather than in
+ *  `agenda-runsheet.ts` (which re-exports it) because that module imports from
  *  this one and the roster builder below needs it too. */
 export const OPEN_LABEL = "— open —";
 
@@ -117,11 +113,14 @@ export type RosterSlot = {
 	assigneeName: string | null;
 	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
 	assigneeIsGuest?: boolean;
-	/** The role's slots have no meaningful order (#624) — a contest's
-	 *  contestants, whose order is drawn on the day. The roster collapses such a
-	 *  role into one entry naming every holder. Optional: callers that omit it
-	 *  get one numbered entry per slot, as before. */
+	/** See `role_definitions.slots_unordered` (#624). The roster collapses such
+	 *  a role into one entry naming every holder; callers that omit the flag get
+	 *  one numbered entry per slot, as before. */
 	slotsUnordered?: boolean;
+	/** Groups an unordered role's slots by DEFINITION when present, so an
+	 *  ordered role that happens to share the name is not absorbed into the
+	 *  collapsed entry. Fixtures without ids fall back to the name. */
+	roleDefinitionId?: string;
 };
 
 /**
@@ -167,12 +166,20 @@ function collapsedRosterEntry(
  *
  * An UNORDERED role (#624) is one entry, not one per slot: it is collapsed
  * FIRST, carried by its first slot so it keeps the role's position, and the
- * pairing pass below never sees the role's other slots.
+ * pairing pass below never sees the role's other slots. Grouping is by role
+ * DEFINITION where the slot carries one (the loaders do), by name otherwise,
+ * and only ever gathers unordered slots — an ordered role sharing the name
+ * keeps its own numbered entries. If a collapsed entry lands on either side of
+ * the speaker/evaluator pairing, the roster keeps its original order instead:
+ * pairing puts ONE speaker beside ONE evaluator per row, and a single entry
+ * standing for several people, which takes a full row once it names two or
+ * more, has no row to share.
  */
 export function buildRosterEntries<T extends RosterSlot>(
 	slots: T[],
 ): RosterEntry[] {
 	const roleCounts = buildRoleCounts(slots);
+	const groupKey = (s: RosterSlot) => s.roleDefinitionId ?? s.roleName;
 	const items: { slot: T; entry: RosterEntry }[] = [];
 	const collapsed = new Set<string>();
 	for (const s of slots) {
@@ -186,13 +193,14 @@ export function buildRosterEntries<T extends RosterSlot>(
 			});
 			continue;
 		}
-		if (collapsed.has(s.roleName)) continue;
-		collapsed.add(s.roleName);
+		const key = groupKey(s);
+		if (collapsed.has(key)) continue;
+		collapsed.add(key);
 		items.push({
 			slot: s,
 			entry: collapsedRosterEntry(
 				s.roleName,
-				slots.filter((g) => g.roleName === s.roleName),
+				slots.filter((g) => g.slotsUnordered && groupKey(g) === key),
 			),
 		});
 	}
@@ -217,7 +225,10 @@ export function buildRosterEntries<T extends RosterSlot>(
 	const evaluators = pairedEvalName
 		? items.filter((it) => it.slot.roleName === pairedEvalName)
 		: [];
-	if (speakers.length === 0 || evaluators.length === 0) {
+	const collapsedSide = [...speakers, ...evaluators].some(
+		(it) => it.entry.holderCount !== undefined,
+	);
+	if (speakers.length === 0 || evaluators.length === 0 || collapsedSide) {
 		return items.map((it) => it.entry);
 	}
 
