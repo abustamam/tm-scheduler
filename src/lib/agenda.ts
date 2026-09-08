@@ -262,23 +262,34 @@ export function buildRosterEntries<T extends RosterSlot>(
 }
 
 /** Where one roster entry lands in the two-column "Meeting Roles" grid. */
-export type RosterGridPosition = { row: number; col: 0 | 1; wide: boolean };
+export type RosterGridPosition = {
+	row: number;
+	col: 0 | 1;
+	wide: boolean;
+	/** Nothing renders BELOW this cell in its column, so the boxed variant's
+	 *  frame is what closes it and it draws no bottom rule of its own. Not the
+	 *  same as "in the last row": an odd roster's final row holds one cell, and
+	 *  the cell above the empty half has nothing under it either. Getting that
+	 *  wrong hangs a rule inside the frame on every club's ordinary agenda, not
+	 *  just a contest's — the roster has an odd entry count more often than not. */
+	lastInColumn: boolean;
+};
 
 /**
  * Lay the roster into its two-column grid. An entry naming several people
  * (#624) takes a whole row — half a column cannot hold four surnames legibly —
  * and starts a fresh row when the left cell is already taken; everything else
- * fills left, then right. The print layout needs this to know which entries
- * sit in the LAST row (the boxed variant closes with its frame and drops the
- * rule there) and which COLUMN an entry occupies (the right one is tinted):
- * "the last two entries" and "odd index" stopped meaning those things the
- * moment a cell could span. A collapsed entry with one holder, or none, is an
- * ordinary cell — "Faisal Ali and — open —" fits half a row.
+ * fills left, then right. The print layout needs this to know which COLUMN an
+ * entry occupies (the boxed variant tints the right one) and which cells have
+ * nothing beneath them (`lastInColumn` — those draw no bottom rule, the frame
+ * closes them): "odd index" and "the last two entries" stopped meaning those
+ * things the moment a cell could span. A collapsed entry with one holder, or
+ * none, is an ordinary cell — "Faisal Ali and — open —" fits half a row.
  */
 export function rosterGridPositions(
 	entries: readonly { holderCount?: number }[],
 ): RosterGridPosition[] {
-	const out: RosterGridPosition[] = [];
+	const placed: Omit<RosterGridPosition, "lastInColumn">[] = [];
 	let row = 0;
 	let col: 0 | 1 = 0;
 	for (const e of entries) {
@@ -287,11 +298,11 @@ export function rosterGridPositions(
 				row++;
 				col = 0;
 			}
-			out.push({ row, col: 0, wide: true });
+			placed.push({ row, col: 0, wide: true });
 			row++;
 			continue;
 		}
-		out.push({ row, col, wide: false });
+		placed.push({ row, col, wide: false });
 		if (col === 0) {
 			col = 1;
 		} else {
@@ -299,7 +310,13 @@ export function rosterGridPositions(
 			row++;
 		}
 	}
-	return out;
+	// A later WIDE entry sits under both columns, so it covers either one.
+	return placed.map((p, i) => ({
+		...p,
+		lastInColumn: !placed
+			.slice(i + 1)
+			.some((later) => later.wide || later.col === p.col),
+	}));
 }
 
 type EvaluatorRow = {

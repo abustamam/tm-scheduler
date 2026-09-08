@@ -285,12 +285,13 @@ function RolesRoster({
 	const labelSize = large ? 11 : boxed ? 9.5 : 9;
 	const nameSize = large ? 14 : boxed ? 11.5 : 10.5;
 	// An entry naming several people (#624 — an unordered role's collapsed
-	// entry) spans both columns, so "last row" and "right column" are computed
-	// rather than read off the index: the boxed variant drops its rule on the
-	// last ROW only, and tints the right COLUMN only. Indexing by `i` gave the
-	// entry before a full-width last row no rule while it sat in the row above.
+	// entry) spans both columns, so "which cell closes the box" and "which is
+	// the right column" are computed rather than read off the index: `i % 2` is
+	// not the column once a cell can span, and `i >= length - 2` is not the
+	// bottom edge. `lastInColumn` reproduces the old rule exactly for a roster
+	// with no wide entry, odd counts included — this must not restyle the
+	// ordinary agenda every club prints.
 	const positions = rosterGridPositions(roles);
-	const lastRow = positions[positions.length - 1]?.row ?? 0;
 	return (
 		<div
 			style={{
@@ -305,10 +306,22 @@ function RolesRoster({
 			}}
 		>
 			{roles.map((r, i) => {
-				const pos = positions[i] ?? { row: 0, col: 0, wide: false };
+				const pos = positions[i] ?? {
+					row: 0,
+					col: 0 as const,
+					wide: false,
+					lastInColumn: true,
+				};
 				return (
 					<div
-						key={r.label}
+						// Index, not label: collapsing means two same-named role
+						// DEFINITIONS both render the bare role name (`buildRosterEntries`
+						// groups by definition, so that shape is supported), and the
+						// numbering that used to make labels unique is exactly what is
+						// gone. The roster is rebuilt wholesale on every render, so
+						// there is no reordering for a stable key to protect.
+						// biome-ignore lint/suspicious/noArrayIndexKey: see above
+						key={i}
 						data-roster-entry=""
 						// Present only on an entry spanning both columns; its value is
 						// the holder count the width was granted for. A collapsed entry
@@ -320,7 +333,7 @@ function RolesRoster({
 							alignItems: large ? "baseline" : "center",
 							padding: boxed ? "6px 14px" : large ? "9px 0" : "5px 0",
 							borderBottom:
-								boxed && pos.row === lastRow
+								boxed && pos.lastInColumn
 									? undefined
 									: "1px solid rgba(23,58,64,.09)",
 							background: boxed && pos.col === 1 ? "#fafdfb" : undefined,

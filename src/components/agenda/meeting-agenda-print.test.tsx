@@ -224,19 +224,38 @@ describe("Meeting Roles roster — an unordered role is ONE entry naming every h
 		});
 	}
 
-	it("grid: a wide entry closing the boxed roster keeps the rule under the row above it", () => {
-		// The boxed variant drops the bottom rule on the LAST row only. It used to
-		// find that row as "the last two cells", which a full-width cell breaks:
-		// the entry before it would lose its rule while sitting in the row above.
+	it("grid: only the cell the frame closes drops its bottom rule", () => {
+		// The boxed variant drops the rule where nothing sits below. It used to
+		// find those cells as "the last two", which a full-width entry breaks: the
+		// entry before it would lose its rule while sitting in the row above.
 		const { container } = renderRoles("grid");
 		const entries = [
 			...container.querySelectorAll<HTMLElement>("[data-roster-entry]"),
 		];
 		// Chair and ballot counter share row 0, the timer sits alone in row 1, and
-		// the wide entry starts row 2: the timer's row keeps its rule.
+		// the wide entry starts row 2 and covers both columns — so every earlier
+		// cell has something beneath it and keeps its rule.
 		expect(entries).toHaveLength(4);
-		expect(entries[2]?.style.borderBottom).not.toBe("");
+		for (const el of entries.slice(0, 3)) {
+			expect(el.style.borderBottom).not.toBe("");
+		}
 		expect(entries[3]?.style.borderBottom).toBe("");
+	});
+
+	it("grid: the zebra tint follows the COLUMN, so a wide entry is never tinted", () => {
+		// The other half of `rosterGridPositions`' contract, and the half a
+		// `gridColumn` assertion cannot see. The tint moved from `i % 2 === 1` to
+		// `pos.col === 1`; index 3 is the discriminator — ODD, so tinted under the
+		// old expression, but column 0 (it spans the row) under the new one, which
+		// would paint a stray band across the full sheet width.
+		const { container } = renderRoles("grid");
+		const entries = [
+			...container.querySelectorAll<HTMLElement>("[data-roster-entry]"),
+		];
+		expect(entries[0]?.style.background).toBe(""); // chair, col 0
+		expect(entries[1]?.style.background).not.toBe(""); // ballot counter, col 1
+		expect(entries[2]?.style.background).toBe(""); // timer, col 0
+		expect(entries[3]?.style.background).toBe(""); // wide, spans the row
 	});
 });
 

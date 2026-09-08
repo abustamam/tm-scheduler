@@ -7,6 +7,7 @@ import {
 	buildShortCodes,
 	formatLastServed,
 	generateSlotRows,
+	OPEN_LABEL,
 	resolveAssignAction,
 	resolveEvaluatorLinks,
 	roleAbbrev,
@@ -15,7 +16,6 @@ import {
 	slotLabel,
 	summarizeAgenda,
 } from "./agenda";
-import { OPEN_LABEL } from "./agenda-runsheet";
 
 const rosterSlot = (
 	roleName: string,
@@ -769,6 +769,48 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 		]);
 	});
 
+	it("keeps the original order when the collapsed speaker role has only ONE holder", () => {
+		// `collapsedSide` tests for the PRESENCE of a holder count, not for a
+		// count above one, and the comment beside it says why: with 0 or 1 holders
+		// the entry still stands for the whole role, so there is still no
+		// per-speaker partner. Nothing exercised that claim — every other
+		// collapsed fixture names two or more, and with a single speaker-side item
+		// the interleave happens to emit the original order anyway. This is the
+		// arrangement where the two answers differ: under `holderCount > 1` the
+		// roster would come back interleaved.
+		const slots = [
+			contestant(0, "A1"),
+			slot("Speaker", 0, "S1", { category: "speaker", isSpeakerRole: true }),
+			slot("Speaker", 1, "S2", { category: "speaker", isSpeakerRole: true }),
+			slot("Evaluator", 0, "E1", { category: "evaluator" }),
+			slot("Evaluator", 1, "E2", { category: "evaluator" }),
+		];
+		expect(buildRosterEntries(slots).map((e) => e.label)).toEqual([
+			"Contestant",
+			"Speaker 1",
+			"Speaker 2",
+			"Evaluator 1",
+			"Evaluator 2",
+		]);
+	});
+
+	it("keeps the original order when the collapsed speaker role has NO holder", () => {
+		const slots = [
+			contestant(0, null),
+			slot("Speaker", 0, "S1", { category: "speaker", isSpeakerRole: true }),
+			slot("Speaker", 1, "S2", { category: "speaker", isSpeakerRole: true }),
+			slot("Evaluator", 0, "E1", { category: "evaluator" }),
+			slot("Evaluator", 1, "E2", { category: "evaluator" }),
+		];
+		expect(buildRosterEntries(slots).map((e) => e.label)).toEqual([
+			"Contestant",
+			"Speaker 1",
+			"Speaker 2",
+			"Evaluator 1",
+			"Evaluator 2",
+		]);
+	});
+
 	it("groups by role DEFINITION, so an ordered role sharing the name keeps its own entries", () => {
 		const slots = [
 			{ ...contestant(0, "A1"), roleDefinitionId: "def-unordered" },
@@ -807,27 +849,27 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 describe("rosterGridPositions — a multi-holder entry takes a whole row (#624)", () => {
 	it("lays ordinary entries two to a row", () => {
 		expect(rosterGridPositions([{}, {}, {}])).toEqual([
-			{ row: 0, col: 0, wide: false },
-			{ row: 0, col: 1, wide: false },
-			{ row: 1, col: 0, wide: false },
+			{ row: 0, col: 0, wide: false, lastInColumn: false },
+			{ row: 0, col: 1, wide: false, lastInColumn: true },
+			{ row: 1, col: 0, wide: false, lastInColumn: true },
 		]);
 	});
 
 	it("gives an entry naming several people its own full-width row", () => {
 		expect(rosterGridPositions([{}, {}, { holderCount: 4 }, {}, {}])).toEqual([
-			{ row: 0, col: 0, wide: false },
-			{ row: 0, col: 1, wide: false },
-			{ row: 1, col: 0, wide: true },
-			{ row: 2, col: 0, wide: false },
-			{ row: 2, col: 1, wide: false },
+			{ row: 0, col: 0, wide: false, lastInColumn: false },
+			{ row: 0, col: 1, wide: false, lastInColumn: false },
+			{ row: 1, col: 0, wide: true, lastInColumn: false },
+			{ row: 2, col: 0, wide: false, lastInColumn: true },
+			{ row: 2, col: 1, wide: false, lastInColumn: true },
 		]);
 	});
 
 	it("starts a new row for the wide entry when the left cell is taken", () => {
 		expect(rosterGridPositions([{}, { holderCount: 2 }, {}])).toEqual([
-			{ row: 0, col: 0, wide: false },
-			{ row: 1, col: 0, wide: true },
-			{ row: 2, col: 0, wide: false },
+			{ row: 0, col: 0, wide: false, lastInColumn: false },
+			{ row: 1, col: 0, wide: true, lastInColumn: false },
+			{ row: 2, col: 0, wide: false, lastInColumn: true },
 		]);
 	});
 
@@ -837,8 +879,44 @@ describe("rosterGridPositions — a multi-holder entry takes a whole row (#624)"
 		expect(
 			rosterGridPositions([{ holderCount: 1 }, { holderCount: 0 }]),
 		).toEqual([
-			{ row: 0, col: 0, wide: false },
-			{ row: 0, col: 1, wide: false },
+			{ row: 0, col: 0, wide: false, lastInColumn: true },
+			{ row: 0, col: 1, wide: false, lastInColumn: true },
 		]);
+	});
+
+	/**
+	 * The boxed roster drops a cell's bottom rule when nothing sits below it, so
+	 * this flag decides how EVERY club's ordinary agenda is ruled, not just a
+	 * contest's. The old code found those cells as "the last two entries", which
+	 * is right only for an even count; a roster with an odd count — the common
+	 * case, MCF's standard sheet has eleven roles — leaves the final row half
+	 * empty, and the cell above that empty half has nothing under it either.
+	 * Reproducing the old answer exactly for an unordered-free roster is the
+	 * point: this change must not restyle a sheet no contest is involved in.
+	 */
+	it("closes BOTH trailing cells of an odd roster, exactly as the old rule did", () => {
+		const odd = rosterGridPositions([{}, {}, {}, {}, {}]);
+		expect(odd.map((p) => p.lastInColumn)).toEqual([
+			false,
+			false,
+			false,
+			true, // right column, row 1 — the empty half of row 2 is below it
+			true, // left column, row 2 — the last cell
+		]);
+	});
+
+	it("closes only the final row of an even roster", () => {
+		expect(
+			rosterGridPositions([{}, {}, {}, {}]).map((p) => p.lastInColumn),
+		).toEqual([false, false, true, true]);
+	});
+
+	it("treats a wide entry as covering both columns beneath it", () => {
+		// Neither cell of row 0 is closed: the full-width entry below spans them.
+		expect(
+			rosterGridPositions([{}, {}, { holderCount: 3 }]).map(
+				(p) => p.lastInColumn,
+			),
+		).toEqual([false, false, true]);
 	});
 });
