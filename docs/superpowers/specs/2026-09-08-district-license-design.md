@@ -1,6 +1,6 @@
 # District license — design
 
-**Issue:** none yet. `/spec` exits this into three `ready-for-agent` issues, A, B and C (D7).
+**Issue:** A1 is #716. A2, B and C follow through `/spec` (D7).
 **Depends on:** ADR-0016 (provisioned onboarding), ADR-0024 (trademark-safe default), ADR-0025 (no Base Camp sync in the commercial product), #686 (officer training records behind DCP goal 9), #62 (membership CSV upload)
 **Status:** approved by the maintainer 2026-09-08. Ready for `/spec`.
 
@@ -13,7 +13,7 @@ Brainstormed 2026-09-08. Eight decisions, D1–D8. The commercial side (who buys
 GavelUp is multi-club by construction (ADR-0006) but single-operator in practice: one maintainer runs it for their own clubs, and every surface was built for that operator's needs before anyone else's. Two consequences matter now.
 
 1. **Nothing above the club exists.** `clubs.district` is a display label — `src/db/schema.ts:262-264`, "district: display label only (e.g. "District 39")" — read by the agenda slides and the meeting header and nothing else. There is no area, no division, no district officer, and no way for anyone outside a club to see how it is doing.
-2. **An officer who is not the maintainer cannot get from an empty club to a running meeting unaided.** Onboarding is superadmin-provisioned by design (ADR-0016) and stays that way (D5). What is missing is the stretch after provisioning — recurrence, template, first meetings, roster, sign-ins — which today lives in the maintainer's head.
+2. **An officer who is not the maintainer cannot get from an empty club to a running meeting unaided.** Onboarding is superadmin-provisioned by design (ADR-0016) and stays that way (D5). The #265 setup checklist on `/officers` already guides recurrence, roster, meetings and officers; what is missing is the time zone (#670), member invites, and a graduation rule that waits for them (#716).
 
 The direction chosen 2026-09-08: **the district is the customer; clubs are the users.** A district buys one license, its clubs get GavelUp free, and the district's officers get what Toastmasters' own tooling does not give them: a between-visits view of club health. One buyer instead of thirty, and distribution through the district's own channels (officer training, Area Director visits) instead of club-by-club sales.
 
@@ -23,7 +23,8 @@ What that requires of the product is the three specs below. What it does not req
 
 Three specs, ordered (D7):
 
-- **A — an officer's first month.** A guided first-meeting checklist on the dashboard and a UX pass on the five screens a club officer touches most, driven by a fresh-officer `/qa` run and one real pilot officer.
+- **A1 — an officer's first month (#716).** The existing #265 checklist extended: time zone required at provisioning, an "Invite your members" row, and graduation that waits for invites.
+- **A2 — officer UX findings.** Filed only after a `/qa-only` fresh-officer run against a seeded local club produces a numbered list.
 - **B — the district layer.** Districts, areas, district officer terms, read-only scope resolution, and the per-club sharing switch.
 - **C — the district dashboard.** Club-health rows, the needs-a-visit rule, and a weekly Area Director digest.
 
@@ -42,7 +43,8 @@ Three specs, ordered (D7):
 
 | Capability | Where | Note |
 |---|---|---|
-| Membership CSV import from the Club Central export, Customer-ID resolution, read-only preview | `src/lib/members-import-plan.ts`, `src/server/upload-members-logic.ts`, `src/server/import-members-logic.ts` (#62) | A links to it from the checklist; it does not touch it |
+| Membership CSV import from the Club Central export, Customer-ID resolution, read-only preview | `src/lib/members-import-plan.ts`, `src/server/upload-members-logic.ts`, `src/server/import-members-logic.ts` (#62) | The checklist's roster row already links to it |
+| First-admin setup checklist: five data-derived rows on `/officers`, where a signed-in officer lands | `src/lib/onboarding-checklist.ts`, `src/server/onboarding-checklist-logic.ts` (#265), `src/routes/index.tsx` `homeRedirectTarget` | A1 extends it (#716). Do not build a second one on the dashboard |
 | Multi-club, Person vs Membership | ADR-0006, ADR-0008 | A person already spans clubs; a district officer is a person, not a membership |
 | Club officer terms and effective-admin | `officer_position` enum `src/db/schema.ts:72`, `src/server/officers-logic.ts` | D2 mirrors the shape one level up |
 | DCP scoreboard, goal 9 officer training records | ADR-0019, #686, `officer_training_periods`, `officer_training_records` | C reads these; it does not derive goals |
@@ -93,19 +95,17 @@ Thresholds are the first thing the pilot will tune; they ship as constants with 
 
 Nothing in D3 names a member. No emails, no names, no dues, no per-member attendance leaves the club. This is the boundary the product is sold on, and the reason district officers never get PII exposure through GavelUp.
 
-### D5 — Onboarding stays provisioned; the first month is guided
+### D5 — Onboarding stays provisioned; the first month is guided by the #265 checklist, extended
 
-No public create-club route. Superadmin creates the club, picks its area (B), and the president and VP Education sign in by magic link (existing). The dashboard then shows a checklist derived from data, not stored state:
+No public create-club route. Superadmin creates the club, picks its area (B) and its time zone (required at provisioning, #670 option 2, in A1), and the president and VP Education sign in by magic link (existing). They land on `/officers`, where the #265 setup checklist already derives its rows from data, never from a stored flag. A1 (#716) adds what a club run by someone other than the maintainer needs and the checklist lacks:
 
-1. Meeting recurrence set (`club_meeting_recurrence` row exists)
-2. Agenda template chosen (a club-level template exists, #622)
-3. Next meetings generated (≥ 1 future non-cancelled meeting)
-4. Members imported (≥ 5 active memberships) — links to the #62 upload
-5. Members signing in (≥ 1 member who is not an officer has a linked user)
+1. Time zone required at provisioning, prefilled from the superadmin's browser zone, shown in the console list.
+2. An "Invite your members" row after "Import your roster", complete when invited-or-joined members reach `min(5, active members)`.
+3. Graduation waits for invites: the checklist stays until the club has meetings, a roster, and invited members.
 
-Each item links to the screen that completes it. It disappears when all five are true and can be dismissed earlier by an admin. Derived, so it is always honest and never needs a migration.
+Not added: an agenda-template row. Templates are optional (`src/server/meeting-agenda-edit-logic.ts:158-177` seeds one on first edit; roles come from the club's role template), so choosing one is not a setup step. The first draft of this section put the checklist on the dashboard; that was wrong, officers already land on `/officers`.
 
-The UX pass in A covers, in this order, the five screens an officer touches in that first month: dashboard, `admin/schedule`, `admin/roles`, `roster`, `meetings.$id`. The `/qa` run uses a fresh-officer persona with no prior knowledge of the app; findings become the A issue's checklist, not separate issues (CLAUDE.md, "What earns an issue").
+The UX pass (A2) is filed only after a `/qa-only` fresh-officer run against a seeded local club produces a numbered findings list. Findings land as `needs-triage` per CLAUDE.md "What earns an issue", and the maintainer promotes what they want.
 
 ### D6 — No billing code
 
@@ -115,11 +115,12 @@ A district license is a one-page agreement and an invoice outside the app. Strip
 
 | Spec | Touches (for `/spec` Phase 3 to confirm) | Depends on |
 |---|---|---|
-| A | `src/routes/_authed/dashboard.tsx`, `admin/schedule.tsx`, `admin/roles.tsx`, `roster.tsx`, `meetings.$id.tsx`, a new onboarding-checklist component and its `-logic` module | nothing |
-| B | `src/db/schema.ts`, a drizzle migration, `src/server/clubs-logic.ts`, new `src/server/district-officers-logic.ts`, `src/routes/_authed/superadmin/*`, `admin/club-settings.tsx` | nothing |
+| A1 | #716 — `src/server/onboarding-logic.ts`, `src/server/onboarding-checklist-logic.ts`, `src/lib/onboarding-checklist.ts`, `src/routes/_authed/superadmin/index.tsx`, and their tests | nothing |
+| A2 | officer UX findings; files named by the `/qa-only` run | nothing; filed after the run |
+| B | `src/db/schema.ts`, a drizzle migration, `src/server/clubs-logic.ts`, new `src/server/district-officers-logic.ts`, `src/routes/_authed/superadmin/*`, `admin/club-settings.tsx`; plus bulk club provisioning from a district club list CSV (club number, name, division, area) with a district default time zone, because a district of 163 clubs cannot be provisioned one at a time | A1 (same provisioning form) |
 | C | new `src/routes/_authed/district/*`, new `src/server/district-health-logic.ts`, a new notification type in the poller | B |
 
-A and B are disjoint and can ride one wave. C follows B. A ships first because pilot clubs have to run meetings before C has anything to show.
+A1 ships first. B touches the same provisioning form, so it follows A1. C follows B. A2 rides whenever its findings exist.
 
 ### D8 — Out of scope, named so nobody rebuilds it
 
