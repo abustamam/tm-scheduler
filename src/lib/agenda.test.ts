@@ -657,6 +657,18 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 			{
 				label: "Contestant",
 				name: "Faisal Ali, Rehanna Khan, Jagpal Singh, and Riyaz Mohammed",
+				// The same names UNJOINED, so the sheet can lay them out in columns
+				// rather than running them together as prose. Same reasoning as
+				// `AgendaRow.holders` (#463): a joined string forces one
+				// presentation on every layout and cannot be split back apart, since
+				// a club's role names and the guest marker both contain the
+				// separators a parser would key on.
+				holders: [
+					"Faisal Ali",
+					"Rehanna Khan",
+					"Jagpal Singh",
+					"Riyaz Mohammed",
+				],
 				holderCount: 4,
 			},
 			{ label: "Contest Timer", name: "Saif" },
@@ -682,6 +694,7 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 			{
 				label: "Contestant",
 				name: "Faisal Ali and Ben Carter · Guest",
+				holders: ["Faisal Ali", "Ben Carter · Guest"],
 				holderCount: 2,
 			},
 		]);
@@ -693,9 +706,12 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 		).toEqual([{ label: "Contestant", name: null, holderCount: 0 }]);
 	});
 
-	it("shows at most ONE open placeholder beside the holders it has", () => {
-		// Same rule as `agenda-template-rows.ts`'s collapseOpen: a role nobody
-		// has fully staffed must still say so, once, not once per empty place.
+	it("names only the people who hold it — an empty place is not an unfilled job", () => {
+		// Unlike an ordered role, where `agenda-template-rows`' `collapseOpen`
+		// keeps one "— open —" because an unstaffed Ballot Counter still has to be
+		// recruited. A contest simply has the entrants it has, so a placeholder
+		// trailing the speaking list reads as a gap somebody ought to close.
+		// A role NOBODY holds is still shown as open — the case below.
 		const entries = buildRosterEntries([
 			contestant(0, "Faisal Ali"),
 			contestant(1, null),
@@ -704,10 +720,12 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 		expect(entries).toEqual([
 			{
 				label: "Contestant",
-				name: `Faisal Ali and ${OPEN_LABEL}`,
+				name: "Faisal Ali",
+				holders: ["Faisal Ali"],
 				holderCount: 1,
 			},
 		]);
+		expect(entries[0]?.name).not.toContain(OPEN_LABEL);
 	});
 
 	it("leaves an ORDERED role with several slots as one numbered entry each", () => {
@@ -765,7 +783,12 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 		expect(buildRosterEntries(slots)).toEqual([
 			{ label: "Speaker 1", name: "S1" },
 			{ label: "Speaker 2", name: "S2" },
-			{ label: "Evaluator", name: "E1 and E2", holderCount: 2 },
+			{
+				label: "Evaluator",
+				name: "E1 and E2",
+				holders: ["E1", "E2"],
+				holderCount: 2,
+			},
 		]);
 	});
 
@@ -824,7 +847,12 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 			},
 		];
 		expect(buildRosterEntries(slots)).toEqual([
-			{ label: "Contestant", name: "A1 and A2", holderCount: 2 },
+			{
+				label: "Contestant",
+				name: "A1 and A2",
+				holders: ["A1", "A2"],
+				holderCount: 2,
+			},
 			// Numbered off the NAME's total count, as every same-named role always
 			// was; the point here is that B1 is not swallowed into the list above.
 			{ label: "Contestant 1", name: "B1" },
@@ -840,7 +868,12 @@ describe("buildRosterEntries — an unordered role collapses into one entry (#62
 			slot("Contestant", 0, "B1", { category: "speaker", isSpeakerRole: true }),
 		];
 		expect(buildRosterEntries(slots)).toEqual([
-			{ label: "Contestant", name: "A1 and A2", holderCount: 2 },
+			{
+				label: "Contestant",
+				name: "A1 and A2",
+				holders: ["A1", "A2"],
+				holderCount: 2,
+			},
 			{ label: "Contestant 1", name: "B1" },
 		]);
 	});

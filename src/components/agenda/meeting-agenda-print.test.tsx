@@ -112,12 +112,29 @@ describe("a row held by several people puts the names on their own line", () => 
 	// The two NARRATIVE layouts. `grid` and `timing` lay the halves into
 	// separate cells already, so neither has the problem this fixes.
 	for (const layout of ["editorial", "spacious"] as const) {
-		it(`breaks a four-holder list onto its own line (${layout})`, () => {
+		it(`lays a four-holder list out two to a row (${layout})`, () => {
+			// Its own line first (the marks belong beside the title, not trailing
+			// the last surname), and then in COLUMNS rather than as prose: seven
+			// names joined with commas wrapped mid-sentence and read as a
+			// paragraph. The run of show and the roles grid do the same thing, so
+			// the sheet reads one way about who is competing.
 			const { container } = renderContest(layout);
-			const line = container.querySelector("[data-row-holders]");
+			const line = container.querySelector<HTMLElement>("[data-row-holders]");
 			expect(line, "the holder list must be its own element").toBeTruthy();
+			expect(line?.style.display).toBe("grid");
+			expect(line?.style.gridTemplateColumns.match(/minmax/g)).toHaveLength(2);
+			expect(
+				[...(line?.querySelectorAll("[data-row-holder]") ?? [])].map(
+					(n) => n.textContent,
+				),
+			).toEqual([
+				"Faisal Ali",
+				"Rehanna Khan",
+				"Jagpal Singh",
+				"Riyaz Mohammed",
+			]);
 			expect(line?.textContent).toBe(
-				"Faisal Ali, Rehanna Khan, Jagpal Singh, and Riyaz Mohammed",
+				"Faisal AliRehanna KhanJagpal SinghRiyaz Mohammed",
 			);
 		});
 
@@ -223,6 +240,28 @@ describe("Meeting Roles roster — an unordered role is ONE entry naming every h
 			for (const el of ordinary) expect(el.style.gridColumn).toBe("");
 		});
 	}
+
+	it.each([
+		"editorial",
+		"grid",
+		"timing",
+		"spacious",
+	] as const)("%s: lays the holders out two to a row instead of running them together", (layout) => {
+		// A seven-name prose list wrapped mid-sentence across the full sheet
+		// width and read as a paragraph, not a cast list. Two columns of names
+		// is what an officer scans down.
+		const { container } = renderRoles(layout);
+		const wide = container.querySelector<HTMLElement>("[data-roster-wide]");
+		const names = [
+			...(wide?.querySelectorAll("[data-roster-holder]") ?? []),
+		].map((n) => n.textContent);
+		expect(names).toEqual([...NAMES]);
+		// The grid is what puts two on a row; without it the names are still
+		// separate elements but flow as one line.
+		const grid = wide?.querySelector<HTMLElement>("[data-roster-holders]");
+		expect(grid?.style.display).toBe("grid");
+		expect(grid?.style.gridTemplateColumns.match(/minmax/g)).toHaveLength(2);
+	});
 
 	it("grid: only the cell the frame closes drops its bottom rule", () => {
 		// The boxed variant drops the rule where nothing sits below. It used to
