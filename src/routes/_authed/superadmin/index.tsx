@@ -1,11 +1,16 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { Loader2, Plus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import {
+	CLUB_TIMEZONES,
+	DEFAULT_CLUB_TIMEZONE,
+	isSupportedClubTimezone,
+} from "#/lib/club-timezone";
 import { listConsoleClubs, provisionClub } from "#/server/onboarding";
 
 export const Route = createFileRoute("/_authed/superadmin/")({
@@ -57,6 +62,7 @@ function SuperadminConsole() {
 								<tr className="border-b border-[var(--line)] bg-[var(--surface-strong)] text-left text-xs font-semibold text-[var(--sea-ink-soft)]">
 									<th className="px-4 py-2.5">Club</th>
 									<th className="px-4 py-2.5">Number</th>
+									<th className="px-4 py-2.5">Time zone</th>
 									<th className="px-4 py-2.5">Members</th>
 									<th className="px-4 py-2.5">First admin</th>
 									<th className="px-4 py-2.5">Created</th>
@@ -84,6 +90,9 @@ function SuperadminConsole() {
 										</td>
 										<td className="px-4 py-2.5 tabular-nums">
 											{club.clubNumber ?? "—"}
+										</td>
+										<td className="px-4 py-2.5 whitespace-nowrap text-[var(--sea-ink-soft)]">
+											{club.timezone}
 										</td>
 										<td className="px-4 py-2.5 tabular-nums">
 											{club.memberCount}
@@ -134,6 +143,19 @@ function LinkBadge({ linked }: { linked: boolean }) {
 
 function CreateClubForm({ onCreated }: { onCreated: () => void }) {
 	const [submitting, setSubmitting] = useState(false);
+	// Start on the column default so SSR and the first client render agree, then
+	// swap in the browser's own zone once mounted (the ThemeToggle /
+	// OnboardingChecklist gate): `Intl` resolves to the SERVER's zone during SSR,
+	// so seeding state from it directly would hydrate a different selected
+	// `<option>` than it rendered.
+	const [timezone, setTimezone] = useState<string>(DEFAULT_CLUB_TIMEZONE);
+
+	useEffect(() => {
+		const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+		if (browserZone && isSupportedClubTimezone(browserZone)) {
+			setTimezone(browserZone);
+		}
+	}, []);
 
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -147,6 +169,7 @@ function CreateClubForm({ onCreated }: { onCreated: () => void }) {
 					clubNumber: String(form.get("clubNumber") ?? "").trim(),
 					adminName: String(form.get("adminName") ?? "").trim(),
 					adminEmail: String(form.get("adminEmail") ?? "").trim(),
+					timezone: String(form.get("timezone") ?? "").trim(),
 				},
 			});
 			toast.success(`Created club (slug: ${res.slug}).`);
@@ -202,6 +225,32 @@ function CreateClubForm({ onCreated }: { onCreated: () => void }) {
 						required
 						placeholder="jamie@example.com"
 					/>
+				</div>
+				<div className="space-y-1.5">
+					<Label htmlFor="timezone">Time zone</Label>
+					{/* The BROWSER's zone list, unlike club settings' picker, which is
+					    shipped down by the server. The two reasons that one needs the
+					    server list don't apply to a create form: there is no stored
+					    value to display (so no silently-wrong selection), and an alias
+					    the server spells differently is rejected by `createClubSchema`
+					    with a visible message rather than written. */}
+					<select
+						id="timezone"
+						name="timezone"
+						className="flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
+						value={timezone}
+						onChange={(e) => setTimezone(e.target.value)}
+					>
+						{CLUB_TIMEZONES.map((zone) => (
+							<option key={zone} value={zone}>
+								{zone}
+							</option>
+						))}
+					</select>
+					<p className="text-xs text-muted-foreground">
+						Every meeting time and date the club sees is interpreted in this
+						zone. Changing it later re-labels meetings that already exist.
+					</p>
 				</div>
 			</div>
 			<div className="flex items-center">

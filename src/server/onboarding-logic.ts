@@ -12,6 +12,10 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs, members, people, roleDefinitions } from "#/db/schema";
+import {
+	INVALID_TIMEZONE_MESSAGE,
+	isSupportedClubTimezone,
+} from "#/lib/club-timezone";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { slugify } from "#/lib/slug";
 import { findBestPersonByEmail } from "./people-logic";
@@ -35,6 +39,10 @@ export interface ConsoleClubRow {
 	clubId: string;
 	name: string;
 	clubNumber: string | null;
+	/** The club's IANA zone. Listed beside the number so a wrong pick at
+	 *  provisioning is visible before the club has its first meeting (#716) —
+	 *  after that, correcting it re-labels meetings that already exist. */
+	timezone: string;
 	memberCount: number;
 	createdAt: Date;
 	/** Soft-archive timestamp (ADR-0016 / #186); null = active. Archived clubs
@@ -55,6 +63,7 @@ export async function listClubsForConsole(): Promise<ConsoleClubRow[]> {
 			id: clubs.id,
 			name: clubs.name,
 			clubNumber: clubs.clubNumber,
+			timezone: clubs.timezone,
 			createdAt: clubs.createdAt,
 			archivedAt: clubs.archivedAt,
 		})
@@ -96,6 +105,7 @@ export async function listClubsForConsole(): Promise<ConsoleClubRow[]> {
 		clubId: c.id,
 		name: c.name,
 		clubNumber: c.clubNumber,
+		timezone: c.timezone,
 		memberCount: countByClub.get(c.id) ?? 0,
 		createdAt: c.createdAt,
 		archivedAt: c.archivedAt,
@@ -202,6 +212,19 @@ export const createClubSchema = z.object({
 		.trim()
 		.toLowerCase()
 		.email("A valid email is required."),
+	/**
+	 * REQUIRED at provisioning (#716/#670) rather than left to the column default.
+	 * `clubs.timezone` is the axis every meeting instant, URL date key and
+	 * deadline is measured against, and correcting it later re-labels meetings
+	 * that already exist and can break links that were already shared (see
+	 * `updateClubTimezone`) — so the cheapest moment to be right is before the
+	 * club has any. A missing value is rejected with the same message an
+	 * unsupported one gets: both mean "the console must pick a zone", and the
+	 * server fn is addressable with no form, so the `<select>` constrains nobody.
+	 */
+	timezone: z
+		.string({ error: INVALID_TIMEZONE_MESSAGE })
+		.refine(isSupportedClubTimezone, { message: INVALID_TIMEZONE_MESSAGE }),
 });
 export type CreateClubInput = z.infer<typeof createClubSchema>;
 
@@ -249,6 +272,7 @@ export async function createClubWithAdmin(
 				name: input.clubName,
 				slug,
 				clubNumber: input.clubNumber,
+				timezone: input.timezone,
 			})
 			.returning({ id: clubs.id, slug: clubs.slug });
 		if (!club) throw new Error("Failed to create the club.");
