@@ -171,6 +171,28 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// kind of change `member_remove` and `outreach_clear` are logged for
 	// elsewhere in this enum. `detail = { roleKey, released }`.
 	"meeting_agenda_role_removed",
+	// The DCP scoreboard (#690). TWO values, not one and not five: the club's
+	// official Distinguished Club Program record has five admin-gated writers,
+	// and to a reader of the feed they are two different events — "the President
+	// typed a number" (`dcp_scoreboard_edit`: starting the scoreboard, setting a
+	// goal, correcting the membership base) against "the President accepted a
+	// batch of suggestions that moved several goals at once"
+	// (`dcp_suggestion_applied`: the Pathways assist for goals 1–6, and the
+	// officer-training assist for goal 9).
+	//
+	// It stops at two deliberately. Values here are one-way — `availability_set`
+	// above is annotated "Kept — never remove" for exactly that reason — so a
+	// vocabulary that proves too coarse can be widened later, while one that is
+	// too fine can never be narrowed.
+	//
+	// Both carry `targetType: "scoreboard"` with the `dcp_scoreboards` row id, and
+	// a `detail.change` discriminator the feed already reads
+	// (`activity-feed-logic.ts` maps `detail.change` → `ActivityEntry.change`, the
+	// same seam `meeting_edit` uses). An apply writes ONE row naming the goals it
+	// moved, never one per goal.
+	// `detail = { change, programYear, before?, after?, goalKey?, goals? }`
+	"dcp_scoreboard_edit",
+	"dcp_suggestion_applied",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -1952,7 +1974,13 @@ export const activityLog = pgTable(
 			onDelete: "set null",
 		}),
 		action: activityActionEnum("action").notNull(),
-		targetType: text("target_type").notNull(), // 'slot' | 'meeting' | 'member'
+		// 'slot' | 'meeting' | 'member' | 'club' | 'scoreboard'. Free text, not an
+		// enum — the union that is actually enforced is `ActivityInput["targetType"]`
+		// in `src/server/activity.ts`, and this comment must be kept in step with it
+		// (a reader who trusts a stale list learns the wrong vocabulary). 'club' is
+		// club-level state tied to no slot/meeting/member (#495); 'scoreboard' is a
+		// `dcp_scoreboards` row (#690), whose id is the `target_id`.
+		targetType: text("target_type").notNull(),
 		targetId: text("target_id"),
 		detail: jsonb("detail"), // { before?, after?, ... }
 		createdAt: timestamp("created_at").defaultNow().notNull(),

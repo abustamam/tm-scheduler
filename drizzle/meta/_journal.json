@@ -498,6 +498,13 @@
       "when": 1788555430811,
       "tag": "0070_smooth_cerise",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1788795838434,
+      "tag": "0071_warm_mauler",
+      "breakpoints": true
     }
   ]
 }
