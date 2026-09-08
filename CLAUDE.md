@@ -415,7 +415,7 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 | Debug | `/investigate`. It is the debugging skill here and satisfies superpowers' systematic-debugging gate. |
 | Open a PR | `gh pr create`. The agent stops there. |
 | Review a PR | `/review-pr N` from the main session. gstack `/review` in the PR's worktree **as well** for a risk category (below). |
-| Land | `gh pr merge --squash --auto`. Branch protection requires the branch to be up to date with `main`, so after each PR lands run `gh pr update-branch N` on the rest; CI re-runs and auto-merge fires when green. |
+| Land | `gh pr merge --squash --auto`. Needs the repo's **Allow auto-merge** setting ON — see below. Branch protection requires the branch to be up to date with `main`, so after each PR lands run `gh pr update-branch N` on the rest; CI re-runs and auto-merge fires when green. |
 | Verify a wave | `/qa-only` against the deployed app, once per wave after it has all landed, before the next meeting. A finding becomes an issue only if it passes "What earns an issue", and it is `needs-triage` until the maintainer says otherwise. |
 | See what shipped | `/retro` (gstack), and the two health greps in `docs/agents/issue-tracker.md` alongside it. `/session-retro` is the other one: what in the agent's environment made a session harder than it needed to be. |
 | Park debt | Don't. Inside the diff, fix it; outside it, the three-way rule under "What earns an issue". `TODOS/` takes no new files. |
@@ -438,6 +438,27 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
   it only on organization-owned repositories and this one is user-owned (the rulesets API
   returns an empty-reason 422 on a `merge_queue` rule). `ci.yml` keeps its `merge_group:`
   trigger, inert today, so the queue is one setting away if the repo ever moves to an org.
+- **`--auto` needs the repo's "Allow auto-merge" setting, and its being OFF has no symptom
+  until you try to land.** It was off here until 2026-09-07, so the Land step above did not
+  work as written: `gh pr merge --squash --auto` fails with `GraphQL: Auto merge is not allowed
+  for this repository (enablePullRequestAutoMerge)`, which reads like a permissions problem and
+  is not one — it is `allow_auto_merge: false` on the repo, unrelated to `strict: true` and to
+  the org-only merge queue above. Check with
+  `gh api repos/abustamam/tm-scheduler --jq '.allow_auto_merge'`; turn it back on with
+  `gh api -X PATCH repos/abustamam/tm-scheduler -F allow_auto_merge=true`. Keep it on: arming
+  auto-merge is what makes "merges only when green" a mechanism rather than the merger's
+  discipline, and `enforce_admins` is `false` here, so a manual `gh pr merge --squash` from an
+  admin account can land a PR whose required checks are still pending or failing.
+  It does NOT update a stale branch — that is the merge queue's job, which is why
+  `gh pr update-branch` stays a manual step per landing.
+- **Do not pass `--delete-branch`.** `delete_branch_on_merge` is already true on the repo, so
+  the remote branch goes on merge; the flag's remaining job is deleting the LOCAL branch, which
+  fails while it is checked out in a worktree. Remove the worktree, then the branch.
+- **Verify a merge instead of reading `gh pr merge`'s output.** It prints its `✓` confirmation
+  only to a TTY, so under an agent's tool call a successful squash-merge prints NOTHING; and per
+  the reverse failure, its local-checkout step can print a `fatal` after the merge has already
+  landed. Neither silence nor a fatal tells you what happened —
+  `gh pr view N --json state,mergeCommit` does.
 
 ### Which review
 
