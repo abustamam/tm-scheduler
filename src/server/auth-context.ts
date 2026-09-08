@@ -9,6 +9,7 @@ import {
 	countArchivedClubMemberships,
 	loadUserClubMemberships,
 } from "./auth-context-logic";
+import { loadPersonDisplayName } from "./auth-context-person-logic";
 import { getSessionUser } from "./guards";
 import { getActiveImpersonationForUser } from "./impersonation-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
@@ -50,7 +51,17 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 		// Resolve the signed-in user → Person (people.user_id) → their active
 		// memberships, reading role + the member id per club (ADR-0008 Phase B).
 		// Soft-archived clubs are excluded (#560) — see `loadUserClubMemberships`.
-		const myMemberships = await loadUserClubMemberships(user.id);
+		//
+		// The display name comes off the same Person (#707). Better-Auth's
+		// magic-link plugin stores `name: name || ""` and nothing in `src/` ever
+		// writes that column, so `user.name` is `""` for every real account and the
+		// `|| user.email` arm at every consumer — the dashboard `<h1>` included —
+		// was the branch 100% of users took. Concurrent with the memberships read
+		// so the extra hop stays off the critical path of every authed page load.
+		const [myMemberships, personName] = await Promise.all([
+			loadUserClubMemberships(user.id),
+			loadPersonDisplayName(user.id),
+		]);
 
 		const myClubs = myMemberships.map((m) => ({
 			clubId: m.clubId,
@@ -149,7 +160,12 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			myClubs.length === 0 ? await countArchivedClubMemberships(user.id) : 0;
 
 		return {
-			user: { id: user.id, name: user.name, email: user.email },
+			// `personName ?? user.name` — the roster name wins, and the Better-Auth
+			// column is the last resort rather than the first source (#707). Never
+			// reorder these: `user.name` is `""` in production, and `""` is a
+			// perfectly good non-null value, so `user.name ?? personName` would
+			// silently reinstate the bug for everyone while both suites stay green.
+			user: { id: user.id, name: personName ?? user.name, email: user.email },
 			clubs: myClubs,
 			currentMemberId,
 			activeClubId,
