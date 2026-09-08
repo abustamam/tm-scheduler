@@ -605,10 +605,14 @@ const MIGRATION_DIR = "drizzle/";
  * *proposing* a migration cannot cite one, which is why the label carries the
  * weight.
  *
- * NOTE: `migration` is not yet in this repo's canonical label vocabulary
- * (`docs/agents/triage-labels.md`). Until it is added, only the path signal
- * fires. That is a documented gap, not a silent one — `scripts/batch-issues.ts`
- * says so in its output when no issue carries the label.
+ * NOTE: `migration` EXISTS in this repo's tracker and is listed in
+ * `docs/agents/triage-labels.md`, so both signals are live. It did not exist
+ * when this function was written, which is the whole reason the path signal
+ * came first — an earlier version of this comment said the label half was
+ * inert, and that stopped being true without anything here noticing.
+ * `scripts/batch-issues.ts` still reports when no OPEN issue carries the label,
+ * which is a different statement (a backlog with no migrations in it) and
+ * remains worth printing.
  *
  * Erring toward serialising costs one wave. Erring the other way costs every
  * concurrent agent a drift failure in files they never touched.

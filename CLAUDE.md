@@ -140,9 +140,19 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   Logic in `src/lib/issue-batching.ts` (pure, testable), CLI in `scripts/batch-issues.ts`.
   It reads claims off live worktrees and open PRs, so the branch-naming rule above is what
   makes it work. Do NOT batch by THEME — theme correlates with files, and files are what
-  actually conflict. It also serialises an issue labelled `migration` — not yet in the canonical
-  label vocabulary below, so until it's added only a cited `drizzle/` path forces serialisation,
-  and the CLI says so in its own output when nothing carries the label.
+  actually conflict. It also serialises an issue labelled `migration`. **That label exists** and is
+  in the vocabulary below; this line used to say it did not, which is why the `drizzle/` path
+  signal was built first and why the label half went unused after it landed. Prefer the LABEL: a
+  cited `drizzle/` path only fires once the migration is written, so it never fires on the issue
+  that merely proposes one — exactly the issue a wave needs held back. The CLI still reports when
+  no OPEN issue carries the label, because a serialisation that never fires looks like a backlog
+  with no migrations in it.
+  **The change set is read from a heading that is exactly `## Files`** — `issue-batching.ts:254`
+  matches `/^#{1,6}\s+Files\s*$/` and nothing else. So `## Files Reference`, which is what
+  gstack `/spec`'s own issue template prescribes, contributes NOTHING: the batcher falls back to
+  scanning the whole body for path-shaped strings, and the waves get built from prose mentions
+  rather than the declared change set. Nothing errors and the plan still looks plausible, so after
+  filing check the issue appears under `bun run batch:issues` with the files you meant.
 - Run a single test with `bunx vitest run <path>` (or `bunx vitest <path>` to watch).
 
 **A suite that seeds a CLUB-LESS row must clean it up itself, and must not use a fixed key.**
