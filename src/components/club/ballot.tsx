@@ -25,14 +25,35 @@ const CATEGORY_LABELS = {
 type CategoryKey = keyof typeof CATEGORY_LABELS;
 type Category = BallotData["categories"][CategoryKey];
 
+/** Someone this phone can vote for: either a row the server listed, or a name
+ *  being typed into the write-in field for the first time. The write-in arm has
+ *  no id because it has no row yet — `selectionKey` derives one. */
+type Nominee =
+	| { kind: "member" | "guest"; id: string; name: string }
+	| { kind: "writeIn"; name: string };
+
+/**
+ * The ONE derivation of a nominee's selection key. Both the candidate buttons
+ * and the write-in field route through it, which is what keeps a fresh write-in
+ * matching the row that comes back on the next poll: `loadWriteInCandidates`
+ * ids a write-in by `writeInKey(name)`, so folding here is what makes
+ * `writeIn:${cand.id}` and the just-typed selection the same string.
+ *
+ * They used to be derived in two places, and the write-in half stored the raw
+ * spelling — so the returning button was never ticked for the very voter who
+ * typed the name. One function, called from both, is the structural fix.
+ */
+function selectionKey(n: Nominee): string {
+	return n.kind === "writeIn"
+		? `writeIn:${writeInKey(n.name)}`
+		: `${n.kind}:${n.id}`;
+}
+
 /** What this phone has chosen in one category. The NAME is stored alongside the
- *  id rather than looked back up in `c.candidates`, for two reasons. A write-in
- *  is not in that list until the next poll returns it, so a lookup would have
- *  nothing to name for up to 5s; and when it does come back its id is the FOLDED
- *  `writeInKey`, not the spelling that was typed. Keeping the name here means
- *  the confirmation can say it back the instant the server accepts the vote. */
+ *  key because a write-in is not in `c.candidates` until the next poll returns
+ *  it, so there would be nothing to name for up to 5s. Once it IS there the
+ *  card prefers the listed spelling — see `confirmedName`. */
 interface Choice {
-	/** `${kind}:${id}` — the same key the candidate buttons are identified by. */
 	id: string;
 	name: string;
 }
@@ -86,17 +107,27 @@ export function Ballot({
 
 	/** Tap-to-cast: the vote goes the moment a name is tapped, and the card says
 	 *  "sending" until the server answers. There is deliberately no state in which
-	 *  a chosen name is sitting unsent behind a Submit button (#722). */
-	function vote(
-		category: CategoryKey,
-		choice: Choice,
-		candidate:
-			| { kind: "member" | "guest"; id: string }
-			| { kind: "writeIn"; name: string },
-	) {
-		setPicked((p) => ({ ...p, [category]: choice }));
+	 *  a chosen name is sitting unsent behind a Submit button (#722).
+	 *
+	 *  One `nominee` in, both derivations here: the local selection key and the
+	 *  wire payload. Neither call site computes either. */
+	function vote(category: CategoryKey, nominee: Nominee) {
+		setPicked((p) => ({
+			...p,
+			[category]: { id: selectionKey(nominee), name: nominee.name },
+		}));
 		setCast((s) => ({ ...s, [category]: "sending" }));
-		send.mutate({ category, candidate });
+		send.mutate({
+			category,
+			// A write-in posts the NAME, never the folded key: the server re-derives
+			// the key, and the first spelling cast stays the display form. Sending
+			// the key back would lowercase someone's name on the awards slide the
+			// moment a second person voted for them.
+			candidate:
+				nominee.kind === "writeIn"
+					? { kind: "writeIn", name: nominee.name }
+					: { kind: nominee.kind, id: nominee.id },
+		});
 	}
 
 	if (ballot.isPending) {
@@ -116,9 +147,15 @@ export function Ballot({
 	// look like never having opened one. That is the right distinction for the
 	// Vote Counter's console — which still shows every category and its state,
 	// unchanged — and the wrong one for the phone in the room: a voter does not
-	// need a tombstone for a vote they can no longer cast. The payload's
-	// `hasOpened` is what that finding added and this component no longer reads
-	// it; it stays on `BallotData` for the console and its own tests.
+	// need a tombstone for a vote they can no longer cast.
+	//
+	// `hasOpened` is the field that finding added, and this component was its
+	// only reader. Checked on this branch with `git grep hasOpened -- src`: what
+	// is left is the producer (`voting-logic.ts`), two server integration suites
+	// asserting it, and this component's test fixtures. Nothing in production
+	// reads it — the Vote Counter console imports neither `BallotData` nor
+	// `getBallot`. It stays on the payload only because #722 rules out changing
+	// `getBallot`; deciding its fate is a separate call.
 	const visible = (
 		Object.entries(ballot.data?.categories ?? {}) as [CategoryKey, Category][]
 	).filter(([, c]) => c.isOpen);
@@ -153,20 +190,33 @@ export function Ballot({
 				and you can tap a different name to change it while the vote is open.
 			</p>
 			{visible.map(([category, c]) => {
-				const key = category;
-				const chosen = picked[key];
-				const state = cast[key];
+				const chosen = picked[category];
+				const state = cast[category];
+				const nominees: Nominee[] = c.candidates.map((cand) =>
+					cand.kind === "writeIn"
+						? { kind: "writeIn", name: cand.name }
+						: { kind: cand.kind, id: cand.id, name: cand.name },
+				);
+				// The confirmation names whatever the TICKED BUTTON names. It matters
+				// for a write-in: `loadWriteInCandidates` displays the FIRST spelling
+				// cast, so a voter who types "bob smith" after someone else cast "Bob
+				// Smith" gets a button reading "Bob Smith" — and the card must not then
+				// confirm "bob smith" beside it. Falls back to the typed spelling for
+				// the up-to-5s window before the poll lists it at all.
+				const confirmedName =
+					nominees.find((n) => selectionKey(n) === chosen?.id)?.name ??
+					chosen?.name;
 				return (
 					<section
-						key={key}
+						key={category}
 						className="rounded-2xl border border-border bg-card p-5"
 					>
 						<h2 className="font-display text-lg font-semibold">
-							{CATEGORY_LABELS[key]}
+							{CATEGORY_LABELS[category]}
 						</h2>
 						<div className="mt-4 flex flex-col gap-2">
-							{c.candidates.map((cand) => {
-								const id = `${cand.kind}:${cand.id}`;
+							{nominees.map((nominee) => {
+								const id = selectionKey(nominee);
 								const isChosen = chosen?.id === id;
 								return (
 									<Button
@@ -175,44 +225,23 @@ export function Ballot({
 										// Large tap target: this is used one-handed, standing up,
 										// in a room, on a phone.
 										className="h-14 justify-start text-base"
-										onClick={() =>
-											vote(
-												key,
-												{ id, name: cand.name },
-												// A write-in posts the NAME, never the folded key: the
-												// server re-derives the key, and the first spelling
-												// cast stays the display form. Sending the key back
-												// would lowercase someone's name on the awards slide
-												// the moment a second person voted for them.
-												cand.kind === "writeIn"
-													? { kind: "writeIn", name: cand.name }
-													: { kind: cand.kind, id: cand.id },
-											)
-										}
+										onClick={() => vote(category, nominee)}
 									>
 										{isChosen ? (
 											<CheckCircle2 className="mr-2 size-5" aria-hidden />
 										) : null}
-										{cand.name}
+										{nominee.name}
 									</Button>
 								);
 							})}
 							<WriteInField
-								disabled={send.isPending}
-								onSubmit={(name) =>
-									vote(
-										key,
-										// The id must be the FOLDED key, because that is the id the
-										// write-in comes back with on the next poll
-										// (`loadWriteInCandidates` groups by `writeInKey`). Storing
-										// the raw spelling instead left the returning button
-										// unticked for the very voter who typed it, while the
-										// confirmation below named them — two answers to "did my
-										// vote go in" on one card.
-										{ id: `writeIn:${writeInKey(name)}`, name },
-										{ kind: "writeIn", name },
-									)
-								}
+								// Keyed by CATEGORY, like every other piece of cast state here.
+								// `send.isPending` is one flag for one shared mutation, so it
+								// disabled the write-in field of every OTHER open category while
+								// a vote was in flight in this one — which is exactly the
+								// two-categories-at-once case the states above are keyed for.
+								disabled={state === "sending"}
+								onSubmit={(name) => vote(category, { kind: "writeIn", name })}
 							/>
 						</div>
 						{/* One live region per card, always mounted so a screen reader
@@ -231,7 +260,7 @@ export function Ballot({
 								<p className="mt-3 text-sm text-muted-foreground">
 									Sending your vote…
 								</p>
-							) : state === "recorded" && chosen ? (
+							) : state === "recorded" && confirmedName ? (
 								// The confirmation the muted sentence never gave: it names who
 								// it counted, and it only appears once the SERVER has said yes.
 								// Not a button — a "Submit" here would imply the tap had not
@@ -243,7 +272,7 @@ export function Ballot({
 									/>
 									<span>
 										<span className="font-semibold">
-											Vote counted for {chosen.name}.
+											Vote counted for {confirmedName}.
 										</span>{" "}
 										Tap another name to change it.
 									</span>
