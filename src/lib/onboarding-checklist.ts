@@ -27,7 +27,7 @@ export interface OnboardingChecklistItem {
 }
 
 /**
- * The setup checklist's five data-backed rows, in order, each deep-linking to
+ * The setup checklist's six data-backed rows, in order, each deep-linking to
  * the real screen that completes it and auto-checked from the club's actual
  * data (#265) — never a stored step flag. "Share your sign-up link" isn't
  * included here: copying a link leaves no data trace, so it's rendered by the
@@ -40,7 +40,7 @@ export function buildOnboardingChecklistItems(
 		{
 			key: "club-details",
 			label: "Confirm your club details",
-			description: "Name, club number, and meeting day/time.",
+			description: "Name, club number, time zone, and meeting day/time.",
 			to: "/admin/club-settings",
 			complete: status.clubDetailsComplete,
 		},
@@ -50,6 +50,13 @@ export function buildOnboardingChecklistItems(
 			description: `Add your members (at least ${CHECKLIST_MEMBER_THRESHOLD}).`,
 			to: "/roster",
 			complete: status.hasEnoughMembers,
+		},
+		{
+			key: "invite",
+			label: "Invite your members",
+			description: "Send sign-in links so members can claim roles.",
+			to: "/roster",
+			complete: status.hasInvitedMembers,
 		},
 		{
 			key: "recurrence",

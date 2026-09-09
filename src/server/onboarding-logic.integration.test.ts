@@ -14,12 +14,17 @@ import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, members, people, roleDefinitions, user } from "#/db/schema";
+import {
+	DEFAULT_CLUB_TIMEZONE,
+	INVALID_TIMEZONE_MESSAGE,
+} from "#/lib/club-timezone";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { cleanup, hasTestDb, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const {
+	createClubSchema,
 	createClubWithAdmin,
 	updateUnclaimedAdminEmail,
 	listClubsForConsole,
@@ -51,6 +56,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			clubNumber: number,
 			adminName: "Jamie Rivera",
 			adminEmail: "jamie@example.com",
+			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(res.clubId);
 
@@ -99,6 +105,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			clubNumber: uniqueNumber(),
 			adminName: "A Admin",
 			adminEmail: "a@example.com",
+			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(a.clubId);
 		const b = await createClubWithAdmin({
@@ -106,6 +113,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			clubNumber: uniqueNumber(),
 			adminName: "B Admin",
 			adminEmail: "b@example.com",
+			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(b.clubId);
 
@@ -120,6 +128,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			clubNumber: number,
 			adminName: "First Admin",
 			adminEmail: "first@example.com",
+			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(first.clubId);
 
@@ -129,6 +138,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 				clubNumber: number, // duplicate
 				adminName: "Second Admin",
 				adminEmail: "second@example.com",
+				timezone: DEFAULT_CLUB_TIMEZONE,
 			}),
 		).rejects.toThrow(/already exists/i);
 
@@ -151,6 +161,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			clubNumber: uniqueNumber(),
 			adminName: "Edit Me",
 			adminEmail: "old@example.com",
+			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(res.clubId);
 
@@ -174,6 +185,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			clubNumber: uniqueNumber(),
 			adminName: "Claimed Admin",
 			adminEmail: "claimed@example.com",
+			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(res.clubId);
 
@@ -212,11 +224,12 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			clubNumber: uniqueNumber(),
 			adminName: "Listed Admin",
 			adminEmail: "listed@example.com",
+			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(res.clubId);
 
 		const list = await listClubsForConsole();
-		const row = list.find((c) => c.clubId === res.clubId);
+		const row = list.clubs.find((c) => c.clubId === res.clubId);
 		expect(row).toBeTruthy();
 		expect(row?.memberCount).toBe(1);
 		expect(row?.firstAdmin?.name).toBe("Listed Admin");
@@ -228,6 +241,137 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		expect(detail.firstAdmin?.personId).toBe(res.personId);
 		expect(detail.firstAdmin?.linked).toBe(false);
 		expect(detail.memberCount).toBe(1);
+	});
+
+	// #716/#670. The zone is picked at provisioning rather than left to the
+	// column default, because correcting it after the club has meetings re-labels
+	// every one of them and can break links already shared (`updateClubTimezone`).
+	it("stores the provisioned time zone, and lists it in the console", async () => {
+		const res = await createClubWithAdmin({
+			clubName: "Pacific Club",
+			clubNumber: uniqueNumber(),
+			adminName: "Pacific Admin",
+			adminEmail: "pacific@example.com",
+			timezone: "America/Los_Angeles",
+		});
+		createdClubs.push(res.clubId);
+
+		const [club] = await testDb
+			.select({ timezone: clubs.timezone })
+			.from(clubs)
+			.where(eq(clubs.id, res.clubId));
+		expect(club.timezone).toBe("America/Los_Angeles");
+		// Not the column default — a create that silently ignored the input would
+		// still read back a plausible zone.
+		expect(club.timezone).not.toBe(DEFAULT_CLUB_TIMEZONE);
+
+		const listed = await listClubsForConsole();
+		const row = listed.clubs.find((c) => c.clubId === res.clubId);
+		expect(row?.timezone).toBe("America/Los_Angeles");
+
+		// The create form's picker renders THIS list, not one the browser built —
+		// see `ConsoleClubList.zones`. A payload that stopped carrying it would
+		// send the route back to importing `CLUB_TIMEZONES` client-side.
+		expect(listed.zones).toContain("America/Los_Angeles");
+		expect(listed.zones).toContain(DEFAULT_CLUB_TIMEZONE);
+		expect(listed.zones.length).toBeGreaterThan(100);
+		expect(listed.defaultZone).toBe(DEFAULT_CLUB_TIMEZONE);
+	});
+
+	/**
+	 * AC 1. `createClubWithAdmin` does NOT parse its own input — the guarantee
+	 * lives entirely in `provisionClub`'s `.validator(createClubSchema.parse)`,
+	 * which runs before the handler. A `createServerFn` cannot be invoked from
+	 * vitest, so this composes the two halves exactly as that wrapper does.
+	 *
+	 * Composing them is what makes the three row assertions able to FAIL: they
+	 * follow a call that would have written all three rows had the parse let it
+	 * through (a dropped `timezone` field would fall back to the column default
+	 * and provision the club happily). Asserting them after a bare
+	 * `safeParse` — a pure function — cannot fail on any input.
+	 */
+	async function provision(input: unknown) {
+		return createClubWithAdmin(createClubSchema.parse(input));
+	}
+
+	/** Run an attempt to completion and hand back its error, tracking the club for
+	 *  teardown if it unexpectedly SUCCEEDED. Deliberately not
+	 *  `rejects.toThrow`: that aborts the test on the rejection assertion, so the
+	 *  three row assertions — the half AC 1 is actually about — would never run
+	 *  on the regression they exist to catch. This way a schema that stops
+	 *  rejecting fails on "no club row was written", which is the true finding. */
+	async function attempt(input: unknown): Promise<unknown> {
+		return provision(input).then(
+			(res) => {
+				createdClubs.push(res.clubId);
+				return null;
+			},
+			(err: unknown) => err,
+		);
+	}
+
+	it("rejects an unsupported time zone before any row is written", async () => {
+		const clubName = `Mars Club ${randomUUID()}`;
+		const adminEmail = `mars-${randomUUID()}@example.com`;
+		const base = {
+			clubName,
+			clubNumber: uniqueNumber(),
+			adminName: "Mars Admin",
+			adminEmail,
+		};
+
+		const unsupported = await attempt({ ...base, timezone: "Mars/Olympus" });
+		// A MISSING zone takes the same path: the server fn is addressable with no
+		// form and no client, so the console's <select> constrains nobody.
+		const missing = await attempt(base);
+
+		// AC 1's three tables. Nothing reached the transaction.
+		const club = await testDb
+			.select({ id: clubs.id })
+			.from(clubs)
+			.where(eq(clubs.name, clubName));
+		expect(club, "a clubs row was written").toHaveLength(0);
+
+		const person = await testDb
+			.select({ id: people.id })
+			.from(people)
+			.where(eq(people.email, adminEmail));
+		expect(person, "a people row was written").toHaveLength(0);
+
+		const member = await testDb
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.email, adminEmail));
+		expect(member, "a members row was written").toHaveLength(0);
+
+		// And both failed for the RIGHT reason, with the message AC 1 names —
+		// otherwise a schema that rejected everything would satisfy the rows above.
+		expect((unsupported as Error | null)?.message).toContain(
+			INVALID_TIMEZONE_MESSAGE,
+		);
+		expect((missing as Error | null)?.message).toContain(
+			INVALID_TIMEZONE_MESSAGE,
+		);
+	});
+
+	it("accepts a supported zone through the same validator path", async () => {
+		// The control for the case above: same composition, valid zone, and the
+		// club IS provisioned — so the rejections are the schema's doing and not
+		// `provision` being broken in some way that would reject anything.
+		const res = await provision({
+			clubName: `Valid Club ${randomUUID()}`,
+			clubNumber: uniqueNumber(),
+			adminName: "Valid Admin",
+			adminEmail: `valid-${randomUUID()}@example.com`,
+			timezone: "Europe/London",
+		});
+		createdClubs.push(res.clubId);
+
+		const [club] = await testDb
+			.select({ timezone: clubs.timezone })
+			.from(clubs)
+			.where(eq(clubs.id, res.clubId));
+		expect(club.timezone).toBe("Europe/London");
 	});
 });
 
@@ -253,6 +397,7 @@ describe.skipIf(!hasTestDb)("createClubWithAdmin dedupe (Rule B)", () => {
 			clubNumber: randomUUID().slice(0, 8),
 			adminName: "Rasheed",
 			adminEmail: `r-${randomUUID()}@x.io`,
+			timezone: DEFAULT_CLUB_TIMEZONE,
 			...over,
 		};
 	}
