@@ -12,6 +12,12 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs, members, people, roleDefinitions } from "#/db/schema";
+import {
+	CLUB_TIMEZONES,
+	DEFAULT_CLUB_TIMEZONE,
+	INVALID_TIMEZONE_MESSAGE,
+	isSupportedClubTimezone,
+} from "#/lib/club-timezone";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { slugify } from "#/lib/slug";
 import { findBestPersonByEmail } from "./people-logic";
@@ -35,6 +41,10 @@ export interface ConsoleClubRow {
 	clubId: string;
 	name: string;
 	clubNumber: string | null;
+	/** The club's IANA zone. Listed beside the number so a wrong pick at
+	 *  provisioning is visible before the club has its first meeting (#716) —
+	 *  after that, correcting it re-labels meetings that already exist. */
+	timezone: string;
 	memberCount: number;
 	createdAt: Date;
 	/** Soft-archive timestamp (ADR-0016 / #186); null = active. Archived clubs
@@ -43,18 +53,47 @@ export interface ConsoleClubRow {
 	firstAdmin: ConsoleAdmin | null;
 }
 
+export interface ConsoleClubList {
+	clubs: ConsoleClubRow[];
+	/**
+	 * The zones the provisioning form may offer, shipped down with the payload
+	 * rather than imported by the route (#716).
+	 *
+	 * This must be the SERVER's list, for the first failure `CLUB_TIMEZONES`'
+	 * docblock names: two ICU builds disagree about which spelling of an alias
+	 * pair is canonical — this Node lists `Asia/Calcutta` where a newer browser
+	 * lists `Asia/Kolkata` — so a picker built from the BROWSER's list offers
+	 * options this server rejects. The rejection is not even legible: the server
+	 * fn's `.validator` throws a ZodError, whose `message` is a JSON issues
+	 * array, so the console's toast prints that instead of
+	 * `INVALID_TIMEZONE_MESSAGE`, and a retry re-picks the same unusable zone.
+	 * Shipping the list from the side that VALIDATES removes the disagreement by
+	 * construction, and keeps the `<option>` set identical across SSR and
+	 * hydration as a second effect.
+	 */
+	zones: readonly string[];
+	/**
+	 * What the form starts on before the browser's own zone is known — the value
+	 * the column default would have given. The route swaps in the browser zone
+	 * after mount, but only if it appears in {@link zones}.
+	 */
+	defaultZone: string;
+}
+
 /**
- * All clubs for the superadmin console: name, club number, member count, first
- * admin (name/email + whether their account is linked yet), and created date.
+ * All clubs for the superadmin console: name, club number, time zone, member
+ * count, first admin (name/email + whether their account is linked yet), and
+ * created date — plus the zone list the create form's picker renders.
  * "First admin" is the earliest-created admin membership in the club (the one
  * provisioned at onboarding). The caller enforces the superadmin gate.
  */
-export async function listClubsForConsole(): Promise<ConsoleClubRow[]> {
+export async function listClubsForConsole(): Promise<ConsoleClubList> {
 	const clubRows = await db
 		.select({
 			id: clubs.id,
 			name: clubs.name,
 			clubNumber: clubs.clubNumber,
+			timezone: clubs.timezone,
 			createdAt: clubs.createdAt,
 			archivedAt: clubs.archivedAt,
 		})
@@ -92,15 +131,20 @@ export async function listClubsForConsole(): Promise<ConsoleClubRow[]> {
 		});
 	}
 
-	return clubRows.map((c) => ({
-		clubId: c.id,
-		name: c.name,
-		clubNumber: c.clubNumber,
-		memberCount: countByClub.get(c.id) ?? 0,
-		createdAt: c.createdAt,
-		archivedAt: c.archivedAt,
-		firstAdmin: firstAdminByClub.get(c.id) ?? null,
-	}));
+	return {
+		clubs: clubRows.map((c) => ({
+			clubId: c.id,
+			name: c.name,
+			clubNumber: c.clubNumber,
+			timezone: c.timezone,
+			memberCount: countByClub.get(c.id) ?? 0,
+			createdAt: c.createdAt,
+			archivedAt: c.archivedAt,
+			firstAdmin: firstAdminByClub.get(c.id) ?? null,
+		})),
+		zones: CLUB_TIMEZONES,
+		defaultZone: DEFAULT_CLUB_TIMEZONE,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +246,19 @@ export const createClubSchema = z.object({
 		.trim()
 		.toLowerCase()
 		.email("A valid email is required."),
+	/**
+	 * REQUIRED at provisioning (#716/#670) rather than left to the column default.
+	 * `clubs.timezone` is the axis every meeting instant, URL date key and
+	 * deadline is measured against, and correcting it later re-labels meetings
+	 * that already exist and can break links that were already shared (see
+	 * `updateClubTimezone`) — so the cheapest moment to be right is before the
+	 * club has any. A missing value is rejected with the same message an
+	 * unsupported one gets: both mean "the console must pick a zone", and the
+	 * server fn is addressable with no form, so the `<select>` constrains nobody.
+	 */
+	timezone: z
+		.string({ error: INVALID_TIMEZONE_MESSAGE })
+		.refine(isSupportedClubTimezone, { message: INVALID_TIMEZONE_MESSAGE }),
 });
 export type CreateClubInput = z.infer<typeof createClubSchema>;
 
@@ -249,6 +306,7 @@ export async function createClubWithAdmin(
 				name: input.clubName,
 				slug,
 				clubNumber: input.clubNumber,
+				timezone: input.timezone,
 			})
 			.returning({ id: clubs.id, slug: clubs.slug });
 		if (!club) throw new Error("Failed to create the club.");
