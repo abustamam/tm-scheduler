@@ -31,30 +31,52 @@
  * and it is the reason `auth-context-logic.ts` exists beside it. Same split,
  * same reason. The call site is pinned by `auth-context-name-wiring.guard.test.ts`.
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { people } from "#/db/schema";
+import { members, people } from "#/db/schema";
 import { resolveUserPersonId } from "./person-identity-logic";
 
 /**
  * The roster name for a signed-in account, or null when there is none to show.
  *
- * Resolved through `resolveUserPersonId` rather than a `where(eq(people.userId,
- * …))` of its own, deliberately. `people.user_id` is NOT unique — ADR-0008
- * makes one human one Person but real duplicates predate #329's
- * dedupe-on-write, and `linkPersonToUser` links EVERY unlinked Person matching
+ * Two rungs, in the order #707 asks for.
+ *
+ * **1. The ACTIVE club's Person.** `people.user_id` is not unique — ADR-0008
+ * makes one human one Person, but real duplicates predate #329's
+ * dedupe-on-write, and `linkPersonToUser` binds EVERY unlinked Person matching
  * the verified email in one statement, so a duplicated human gets several at
- * once. An ad-hoc pick here would name a different Person than every other
- * person-level surface (Pathways enrollment, progress marks, the project
- * picker) resolves to — the exact divergence #437 and #329 exist to close, and
- * a second ordering that has to be kept in step with theirs by hand.
+ * once with a different name on each. The club you are looking at is the one
+ * whose roster spelling you expect to be greeted by, so its membership decides.
+ * `people.createdAt, people.id` breaks a tie between two duplicates inside that
+ * one club — the same tail `resolveUserPersonId` uses, deliberately, so the two
+ * can never order a tie differently.
  *
- * Costs one extra round trip over folding the name into that resolver's own
- * select. That buys a single ordering instead of two, and the second query is a
- * primary-key lookup on the row the first already found.
+ * **2. The canonical Person**, via `resolveUserPersonId`, when there is no
+ * active club (a signed-in account on nobody's roster, or one whose only club
+ * was archived) or when the active club's row carries no usable name. That
+ * resolver is the shared one — `pathwaysForUser` (`pathways-read-logic.ts`),
+ * `selfPersonId` in `path-enrollment-logic.ts` and the same in
+ * `progress-marks-logic.ts` all read through it — so the fallback names the
+ * same Person those person-level surfaces write to. An ad-hoc
+ * `where(eq(people.userId, …))` here would be an unordered pick, which is the
+ * defect #329 and #437 exist to close, re-opened on a new surface. (The speech
+ * project picker is NOT one of them: it resolves a `memberId` through
+ * `resolveMemberSubject` → `members.person_id`, which rung 1 above matches.)
  *
- * Null, not `""`, in all three "nothing to show" cases — no linked Person, the
- * Person disappeared between the two reads, or a blank/whitespace name. The
+ * The ladder ENDS there — it does not go hunting through the remaining
+ * duplicates for any row that happens to carry a name. Doing so would need a
+ * third ordering to keep in step with `resolveUserPersonId` by hand, and it
+ * buys nothing real: `people.name` is NOT NULL and every write path demands
+ * one, so a blank is a data defect whose answer degrades to the email — the
+ * pre-#707 behaviour for that account, not a regression.
+ *
+ * Under impersonation this still names the SUPERADMIN, correctly:
+ * `getSessionUser` never swaps `user.id`, so `id`/`email` on the context are
+ * theirs too, and a superadmin viewing a club they are not on simply misses
+ * rung 1 and falls to rung 2. The identity stays internally consistent.
+ *
+ * Null, not `""`, in every "nothing to show" case — no linked Person, the
+ * Person disappeared between two reads, or a blank/whitespace name. The
  * caller's `?? user.name` then falls through to the existing `|| user.email`
  * arm at every consumer, which is the pre-#707 behaviour and still the right
  * last resort. Returning `""` would work by accident today (falsy) and break
@@ -62,7 +84,21 @@ import { resolveUserPersonId } from "./person-identity-logic";
  */
 export async function loadPersonDisplayName(
 	userId: string,
+	activeClubId: string | null,
 ): Promise<string | null> {
+	if (activeClubId) {
+		const [row] = await db
+			.select({ name: people.name })
+			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
+			.where(and(eq(people.userId, userId), eq(members.clubId, activeClubId)))
+			.orderBy(people.createdAt, people.id)
+			.limit(1);
+		// `people.name` is NOT NULL, but not CHECK-constrained against blanks.
+		const clubName = row?.name.trim();
+		if (clubName) return clubName;
+	}
+
 	const personId = await resolveUserPersonId(userId);
 	if (!personId) return null;
 	const [row] = await db
@@ -70,6 +106,5 @@ export async function loadPersonDisplayName(
 		.from(people)
 		.where(eq(people.id, personId))
 		.limit(1);
-	// `people.name` is NOT NULL, but not CHECK-constrained against blanks.
 	return row?.name.trim() || null;
 }

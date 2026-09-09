@@ -51,17 +51,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 		// Resolve the signed-in user → Person (people.user_id) → their active
 		// memberships, reading role + the member id per club (ADR-0008 Phase B).
 		// Soft-archived clubs are excluded (#560) — see `loadUserClubMemberships`.
-		//
-		// The display name comes off the same Person (#707). Better-Auth's
-		// magic-link plugin stores `name: name || ""` and nothing in `src/` ever
-		// writes that column, so `user.name` is `""` for every real account and the
-		// `|| user.email` arm at every consumer — the dashboard `<h1>` included —
-		// was the branch 100% of users took. Concurrent with the memberships read
-		// so the extra hop stays off the critical path of every authed page load.
-		const [myMemberships, personName] = await Promise.all([
-			loadUserClubMemberships(user.id),
-			loadPersonDisplayName(user.id),
-		]);
+		const myMemberships = await loadUserClubMemberships(user.id);
 
 		const myClubs = myMemberships.map((m) => ({
 			clubId: m.clubId,
@@ -133,9 +123,23 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 
 		// Their open officer positions in the active club (#202) — drives the
 		// effective-admin nav + the Officer home's per-office sections.
-		const officerPositions = currentMemberId
-			? await getOpenOfficerPositions(db, currentMemberId)
-			: [];
+		//
+		// The display name rides along here, and sits AFTER `activeClubId` rather
+		// than beside the memberships read for a reason (#707): a human duplicated
+		// across clubs can carry a different roster spelling in each, and the club
+		// you are looking at is the one whose spelling should greet you, so the
+		// seam needs the active club to honour that. Paired with the officer read
+		// — the other query gated on the same club — so the hop costs no extra
+		// round trip on an authed page load.
+		//
+		// `.catch` because a name is cosmetic and a page is not. Every other query
+		// in this handler is load-bearing (a throw there SHOULD fail the load);
+		// this one only decides whether the header greets you by name or by email,
+		// so it must never be the thing that blanks the app shell.
+		const [officerPositions, personName] = await Promise.all([
+			currentMemberId ? getOpenOfficerPositions(db, currentMemberId) : [],
+			loadPersonDisplayName(user.id, activeClubId).catch(() => null),
+		]);
 
 		// #190: keep the active club's schedule topped up to its recurrence rule,
 		// materialized lazily on this authenticated member load (read-triggered —
