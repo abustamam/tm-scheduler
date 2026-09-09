@@ -17,6 +17,8 @@ const NEW_CLUB: OnboardingChecklistStatus = {
 	clubDetailsComplete: false,
 	memberCount: 2,
 	hasEnoughMembers: false,
+	invitedMemberCount: 0,
+	hasInvitedMembers: false,
 	hasRecurrence: false,
 	hasMeeting: false,
 	hasOfficerTerm: false,
@@ -28,6 +30,8 @@ const ESTABLISHED_CLUB: OnboardingChecklistStatus = {
 	clubDetailsComplete: true,
 	memberCount: 12,
 	hasEnoughMembers: true,
+	invitedMemberCount: 12,
+	hasInvitedMembers: true,
 	hasRecurrence: true,
 	hasMeeting: true,
 	hasOfficerTerm: true,
@@ -60,8 +64,9 @@ describe("OnboardingChecklist", () => {
 	it("renders every item, checked/unchecked per the status", async () => {
 		await renderChecklist({ clubId: "club-1", status: NEW_CLUB });
 		expect(screen.getByText("Get your club set up")).toBeTruthy();
-		expect(screen.getByText("0 of 5 done")).toBeTruthy();
+		expect(screen.getByText("0 of 6 done")).toBeTruthy();
 		expect(screen.getByText("Confirm your club details")).toBeTruthy();
+		expect(screen.getByText("Invite your members")).toBeTruthy();
 		expect(screen.getByText("Share your sign-up link")).toBeTruthy();
 	});
 
@@ -72,7 +77,7 @@ describe("OnboardingChecklist", () => {
 			hasOfficerTerm: true,
 		};
 		await renderChecklist({ clubId: "club-1", status });
-		expect(screen.getByText("2 of 5 done")).toBeTruthy();
+		expect(screen.getByText("2 of 6 done")).toBeTruthy();
 	});
 
 	it("renders nothing once the club has graduated (isNewClub false)", async () => {
