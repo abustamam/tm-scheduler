@@ -142,6 +142,26 @@ describe.skipIf(!hasTestDb)("startup migration runner (#684)", () => {
 	beforeAll(async () => {
 		admin = new Client({ connectionString: urlForDatabase("postgres") });
 		await admin.connect();
+
+		// Reap orphans before creating this run's. The suffix is fresh every run,
+		// so a run killed mid-flight (a vitest timeout, a Ctrl-C) leaves its
+		// scratch databases behind forever with nothing that would ever name them
+		// again. Skipping any database with a live backend keeps this from taking
+		// a concurrent run's databases out from under it; an orphan by definition
+		// has none. Each drop is independently guarded so losing that race
+		// degrades to a leak rather than a failed suite.
+		const stale = await admin.query<{ datname: string }>(
+			`select d.datname from pg_database d
+			 where d.datname like 'tm_migrate684_%'
+			   and not exists (select 1 from pg_stat_activity a where a.datname = d.datname)`,
+		);
+		for (const row of stale.rows) {
+			try {
+				await admin.query(`drop database if exists "${row.datname}" with (force)`);
+			} catch {
+				// Raced with another run that just connected. Leave it.
+			}
+		}
 	});
 
 	afterAll(async () => {
@@ -166,7 +186,7 @@ describe.skipIf(!hasTestDb)("startup migration runner (#684)", () => {
 			// The defaults live in the line every deploy log prints, so pin them
 			// here: they are the window a stalled deploy actually gets.
 			expect(first.stdout).toContain(
-				"[migrate] lock_timeout=5000ms attempts=3 retry_delay=1000ms statement_timeout=server default",
+				"[migrate] lock_timeout=5000ms/statement attempts=3 retry_delay=1000ms budget=600000ms statement_timeout=server default",
 			);
 
 			const client = new Client({ connectionString: url });
@@ -187,6 +207,11 @@ describe.skipIf(!hasTestDb)("startup migration runner (#684)", () => {
 			const second = await runMigrate({ url });
 			expect(second.code).toBe(0);
 			expect(second.stdout).toContain("[migrate] migrations applied");
+			// "Fast" is half of what the rerun has to be, and an exit code cannot
+			// see it. One default lock_timeout is 5s, so a rerun that waited on a
+			// lock at all, or re-applied the 73 files, lands outside this.
+			expect(second.ms).toBeLessThan(10_000);
+			expect(second.stderr).not.toContain("retrying in");
 		},
 		45_000,
 	);
@@ -288,13 +313,85 @@ describe.skipIf(!hasTestDb)("startup migration runner (#684)", () => {
 		45_000,
 	);
 
-	it("refuses a nonsense override rather than silently using the default", async () => {
-		// Rejected before anything connects, so this needs no scratch database.
-		const result = await runMigrate({
-			url: urlForDatabase("postgres"),
-			env: { MIGRATE_LOCK_TIMEOUT_MS: "0" },
-		});
+	it(
+		"stops at the total budget, which is the only bound on a per-statement timeout",
+		async () => {
+			const url = await createScratchDatabase("budget");
+			const dir = createTempDir();
+			writeMigrations(dir, [
+				{ tag: "0000_probe", sql: "create table probe (id integer primary key);" },
+			]);
+			expect((await runMigrate({ url, cwd: dir })).code).toBe(0);
+
+			writeMigrations(dir, [
+				{ tag: "0000_probe", sql: "create table probe (id integer primary key);" },
+				{ tag: "0001_probe_alter", sql: "alter table probe add column extra integer;" },
+			]);
+
+			const blocker = new Client({ connectionString: url });
+			await blocker.connect();
+			await blocker.query("begin");
+			await blocker.query("lock table probe in access exclusive mode");
+
+			let result: RunResult;
+			try {
+				// One attempt, a 60s per-statement window, a 1s budget. Nothing
+				// but the budget can end this run: the single statement would
+				// wait the full 60s and blow this test's ceiling, and there is no
+				// retry sleep to cut short. That is the shape that matters —
+				// `lock_timeout` is per statement and a real run has 366 of them,
+				// so the only bound on the total is this one.
+				result = await runMigrate({
+					url,
+					cwd: dir,
+					env: {
+						MIGRATE_LOCK_TIMEOUT_MS: "60000",
+						MIGRATE_LOCK_ATTEMPTS: "1",
+						MIGRATE_BUDGET_MS: "1000",
+					},
+				});
+			} finally {
+				await blocker.query("rollback");
+				await blocker.end();
+			}
+
+			expect(result.code).toBe(1);
+			// Well under the 60s the statement itself was allowed to wait.
+			expect(result.ms).toBeLessThan(8_000);
+			expect(result.stderr).toContain("budget (MIGRATE_BUDGET_MS) ran out");
+			expect(result.stdout).not.toContain("migrations applied");
+		},
+		45_000,
+	);
+
+	it("refuses to report success when the journal declares no migrations", async () => {
+		const dir = createTempDir();
+		writeMigrations(dir, []);
+		// Checked before anything connects, so this needs no scratch database.
+		const result = await runMigrate({ url: urlForDatabase("postgres"), cwd: dir });
 		expect(result.code).toBe(1);
-		expect(result.stderr).toContain("MIGRATE_LOCK_TIMEOUT_MS");
+		expect(result.stdout).not.toContain("migrations applied");
+		expect(result.stderr).toContain("declares no migrations");
 	});
+
+	it.each([
+		["MIGRATE_LOCK_TIMEOUT_MS", "0"],
+		["MIGRATE_LOCK_TIMEOUT_MS", "600000"],
+		["MIGRATE_LOCK_ATTEMPTS", "20"],
+		// An integer by `Number.isInteger`, and also 10^21 milliseconds.
+		["MIGRATE_LOCK_RETRY_DELAY_MS", "1e21"],
+		["MIGRATE_BUDGET_MS", "86400000"],
+	])(
+		"refuses %s=%s rather than silently using the default",
+		async (name, value) => {
+			// Rejected before anything connects, so this needs no scratch database.
+			const result = await runMigrate({
+				url: urlForDatabase("postgres"),
+				env: { [name]: value },
+			});
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain(name);
+			expect(result.stdout).not.toContain("migrations applied");
+		},
+	);
 });
