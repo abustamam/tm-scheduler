@@ -9,7 +9,7 @@
  *     bunx vitest run src/server/onboarding-checklist-logic.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubMeetingRecurrence,
@@ -17,6 +17,7 @@ import {
 	meetings,
 	members,
 	officerTerms,
+	people,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -175,6 +176,60 @@ describe.skipIf(!hasTestDb)(
 			for (const memberId of added) {
 				await inviteMember(seeded.clubId, memberId);
 			}
+			status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.invitedMemberCount).toBe(5);
+			expect(status.hasInvitedMembers).toBe(true);
+			expect(status.isNewClub).toBe(false);
+		});
+
+		/**
+		 * AC 9's actual shape, and the state EVERY real club is in on day one: a
+		 * full roster imported from the TI export, a meeting on the calendar, and
+		 * not one invite sent. Every other un-graduated case in this file sits at
+		 * `invitedMemberCount: 2`, because seedClub's own members arrive already
+		 * linked — so none of them exercises the clause at zero, which is the
+		 * number the new `|| !hasInvitedMembers` exists for.
+		 */
+		it("a full roster with ZERO invites has not graduated", async () => {
+			// Un-link seedClub's two members so nobody in this club is invited or
+			// joined. Scoped to this club's own people — never an unscoped update.
+			const seededPeople = await testDb
+				.select({ personId: members.personId })
+				.from(members)
+				.where(eq(members.clubId, seeded.clubId));
+			await testDb
+				.update(people)
+				.set({ userId: null, invitedAt: null })
+				.where(
+					inArray(
+						people.id,
+						seededPeople.map((r) => r.personId),
+					),
+				);
+
+			for (let i = 0; i < 3; i++) {
+				await addActiveMember(seeded.clubId, `Uninvited ${i}`);
+			}
+
+			let status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.memberCount).toBe(5);
+			expect(status.hasEnoughMembers).toBe(true);
+			expect(status.hasMeeting).toBe(true); // seedClub's one meeting
+			// The whole point: the roster and the meeting are both there, and the
+			// invite count is ZERO. Only the invites clause is holding it back.
+			expect(status.invitedMemberCount).toBe(0);
+			expect(status.hasInvitedMembers).toBe(false);
+			expect(status.isNewClub).toBe(true);
+
+			// And it graduates the moment the invites go out — the same club, one
+			// fact changed, so the assertion above cannot be passing for some other
+			// reason.
+			const seedMembers = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.clubId, seeded.clubId));
+			for (const m of seedMembers) await inviteMember(seeded.clubId, m.id);
+
 			status = await getOnboardingChecklistStatus(seeded.clubId);
 			expect(status.invitedMemberCount).toBe(5);
 			expect(status.hasInvitedMembers).toBe(true);

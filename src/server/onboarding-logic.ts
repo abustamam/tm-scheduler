@@ -13,6 +13,8 @@ import { z } from "zod";
 import { db } from "#/db";
 import { clubs, members, people, roleDefinitions } from "#/db/schema";
 import {
+	CLUB_TIMEZONES,
+	DEFAULT_CLUB_TIMEZONE,
 	INVALID_TIMEZONE_MESSAGE,
 	isSupportedClubTimezone,
 } from "#/lib/club-timezone";
@@ -51,13 +53,41 @@ export interface ConsoleClubRow {
 	firstAdmin: ConsoleAdmin | null;
 }
 
+export interface ConsoleClubList {
+	clubs: ConsoleClubRow[];
+	/**
+	 * The zones the provisioning form may offer, shipped down with the payload
+	 * rather than imported by the route (#716).
+	 *
+	 * This must be the SERVER's list, for the first failure `CLUB_TIMEZONES`'
+	 * docblock names: two ICU builds disagree about which spelling of an alias
+	 * pair is canonical — this Node lists `Asia/Calcutta` where a newer browser
+	 * lists `Asia/Kolkata` — so a picker built from the BROWSER's list offers
+	 * options this server rejects. The rejection is not even legible: the server
+	 * fn's `.validator` throws a ZodError, whose `message` is a JSON issues
+	 * array, so the console's toast prints that instead of
+	 * `INVALID_TIMEZONE_MESSAGE`, and a retry re-picks the same unusable zone.
+	 * Shipping the list from the side that VALIDATES removes the disagreement by
+	 * construction, and keeps the `<option>` set identical across SSR and
+	 * hydration as a second effect.
+	 */
+	zones: readonly string[];
+	/**
+	 * What the form starts on before the browser's own zone is known — the value
+	 * the column default would have given. The route swaps in the browser zone
+	 * after mount, but only if it appears in {@link zones}.
+	 */
+	defaultZone: string;
+}
+
 /**
- * All clubs for the superadmin console: name, club number, member count, first
- * admin (name/email + whether their account is linked yet), and created date.
+ * All clubs for the superadmin console: name, club number, time zone, member
+ * count, first admin (name/email + whether their account is linked yet), and
+ * created date — plus the zone list the create form's picker renders.
  * "First admin" is the earliest-created admin membership in the club (the one
  * provisioned at onboarding). The caller enforces the superadmin gate.
  */
-export async function listClubsForConsole(): Promise<ConsoleClubRow[]> {
+export async function listClubsForConsole(): Promise<ConsoleClubList> {
 	const clubRows = await db
 		.select({
 			id: clubs.id,
@@ -101,16 +131,20 @@ export async function listClubsForConsole(): Promise<ConsoleClubRow[]> {
 		});
 	}
 
-	return clubRows.map((c) => ({
-		clubId: c.id,
-		name: c.name,
-		clubNumber: c.clubNumber,
-		timezone: c.timezone,
-		memberCount: countByClub.get(c.id) ?? 0,
-		createdAt: c.createdAt,
-		archivedAt: c.archivedAt,
-		firstAdmin: firstAdminByClub.get(c.id) ?? null,
-	}));
+	return {
+		clubs: clubRows.map((c) => ({
+			clubId: c.id,
+			name: c.name,
+			clubNumber: c.clubNumber,
+			timezone: c.timezone,
+			memberCount: countByClub.get(c.id) ?? 0,
+			createdAt: c.createdAt,
+			archivedAt: c.archivedAt,
+			firstAdmin: firstAdminByClub.get(c.id) ?? null,
+		})),
+		zones: CLUB_TIMEZONES,
+		defaultZone: DEFAULT_CLUB_TIMEZONE,
+	};
 }
 
 // ---------------------------------------------------------------------------
