@@ -9,6 +9,7 @@ import {
 	countArchivedClubMemberships,
 	loadUserClubMemberships,
 } from "./auth-context-logic";
+import { loadPersonDisplayName } from "./auth-context-person-logic";
 import { getSessionUser } from "./guards";
 import { getActiveImpersonationForUser } from "./impersonation-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
@@ -122,9 +123,23 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 
 		// Their open officer positions in the active club (#202) — drives the
 		// effective-admin nav + the Officer home's per-office sections.
-		const officerPositions = currentMemberId
-			? await getOpenOfficerPositions(db, currentMemberId)
-			: [];
+		//
+		// The display name rides along here, and sits AFTER `activeClubId` rather
+		// than beside the memberships read for a reason (#707): a human duplicated
+		// across clubs can carry a different roster spelling in each, and the club
+		// you are looking at is the one whose spelling should greet you, so the
+		// seam needs the active club to honour that. Paired with the officer read
+		// — the other query gated on the same club — so the hop costs no extra
+		// round trip on an authed page load.
+		//
+		// `.catch` because a name is cosmetic and a page is not. Every other query
+		// in this handler is load-bearing (a throw there SHOULD fail the load);
+		// this one only decides whether the header greets you by name or by email,
+		// so it must never be the thing that blanks the app shell.
+		const [officerPositions, personName] = await Promise.all([
+			currentMemberId ? getOpenOfficerPositions(db, currentMemberId) : [],
+			loadPersonDisplayName(user.id, activeClubId).catch(() => null),
+		]);
 
 		// #190: keep the active club's schedule topped up to its recurrence rule,
 		// materialized lazily on this authenticated member load (read-triggered —
@@ -149,7 +164,12 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			myClubs.length === 0 ? await countArchivedClubMemberships(user.id) : 0;
 
 		return {
-			user: { id: user.id, name: user.name, email: user.email },
+			// `personName ?? user.name` — the roster name wins, and the Better-Auth
+			// column is the last resort rather than the first source (#707). Never
+			// reorder these: `user.name` is `""` in production, and `""` is a
+			// perfectly good non-null value, so `user.name ?? personName` would
+			// silently reinstate the bug for everyone while both suites stay green.
+			user: { id: user.id, name: personName ?? user.name, email: user.email },
 			clubs: myClubs,
 			currentMemberId,
 			activeClubId,
