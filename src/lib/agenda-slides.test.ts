@@ -1726,3 +1726,80 @@ describe("buildSlideDeck full meeting ordering", () => {
 		expect(kinds.indexOf("wordOfDay")).toBeLessThan(kinds.indexOf("speech"));
 	});
 });
+
+// #719 — the printed agenda gained a row before each speech introducing that
+// speech's evaluator. The DECK gains nothing, and that is a requirement rather
+// than an accident: one extra slide per speech, projected at the room, saying
+// something addressed to the Toastmaster.
+describe("the speech preamble adds no slide (#719)", () => {
+	const speechClub = (n: number): AgendaSlot[] => [
+		slot({
+			id: "tm",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			category: "leadership",
+			assigneeName: "Faisal",
+		}),
+		...Array.from({ length: n }, (_, i) =>
+			slot({
+				id: `sp${i + 1}`,
+				roleKey: "speaker",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: i,
+				assigneeName: `Speaker${i + 1}`,
+			}),
+		),
+		...Array.from({ length: n }, (_, i) =>
+			slot({
+				id: `ev${i + 1}`,
+				roleKey: "evaluator",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 10 + i,
+				assigneeName: `Evaluator${i + 1}`,
+				evaluatesSlotId: `sp${i + 1}`,
+			}),
+		),
+	];
+
+	// ABSOLUTE counts, measured 2026-09-11, never `rows.length - something`: the
+	// whole claim is that the two surfaces DIFFER here by exactly the preamble
+	// rows, so a count derived from the rows would move with them.
+	for (const [n, want] of [
+		[1, 13],
+		[2, 15],
+		[3, 17],
+	] as const) {
+		it(`projects ${want} slides for ${n} speaker(s), preambles included`, () => {
+			expect(build({ slots: speechClub(n) })).toHaveLength(want);
+		});
+	}
+
+	it("projects exactly one hand-off slide into the speeches, not one per speech", () => {
+		// The specific shape that would go wrong: `buildSlideDeck` emits a slide
+		// per hand-off BEAT, and the preamble is not a beat. If it ever became
+		// one, this count moves with the speaker count.
+		for (const n of [1, 2, 3]) {
+			const toSpeakers = build({ slots: speechClub(n) }).filter(
+				(s) => s.kind === "handoff" && s.to === "the speakers",
+			);
+			expect(toSpeakers, `${n} speakers`).toHaveLength(1);
+		}
+	});
+
+	it("names the evaluator on no slide at all", () => {
+		// The deck's evaluation slides name evaluators, but nothing in the SPEECH
+		// stretch does — that is the copy the preamble row exists to carry, and
+		// projecting it would be the extra slide this case forbids.
+		const deck = build({ slots: speechClub(2) });
+		const speechStretch = deck.slice(
+			deck.findIndex((s) => s.kind === "handoff"),
+			deck.findIndex((s) => s.kind === "voteSpeaker"),
+		);
+		expect(
+			JSON.stringify(speechStretch).includes("objectives and timing"),
+		).toBe(false);
+	});
+});

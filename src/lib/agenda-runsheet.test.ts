@@ -21,6 +21,7 @@ import {
 	RUN_OF_SHOW,
 	reportingFunctionarySlots,
 	resolveDetailTokens,
+	SPEECH_OBJECTIVES_ASK,
 	TABLE_TOPICS_MARKS,
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
@@ -1521,6 +1522,14 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
 			[
 				"Toastmaster of the Day · Faisal",
+				// #719: emitted inside the speaker beat's own expansion, one per
+				// speech, so it stays adjacent to the speech it introduces. A
+				// hand-off in the PRINT sense (a 0-minute compact band); the deck
+				// gains no slide, which `agenda-parity.test.ts` pins.
+				"Introduces the Evaluator · asks for the speech objectives and timing",
+			],
+			[
+				"Toastmaster of the Day · Faisal",
 				"Introduces the Table Topics Master: Rasheed",
 			],
 			[
@@ -1538,6 +1547,14 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
+			[
+				"Toastmaster of the Day · Faisal",
+				// #719: emitted inside the speaker beat's own expansion, one per
+				// speech, so it stays adjacent to the speech it introduces. A
+				// hand-off in the PRINT sense (a 0-minute compact band); the deck
+				// gains no slide, which `agenda-parity.test.ts` pins.
+				"Introduces the Evaluator · asks for the speech objectives and timing",
+			],
 			[
 				"Toastmaster of the Day · Faisal",
 				"Introduces the Table Topics Master: Rasheed",
@@ -1559,6 +1576,14 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
 			[
 				"Toastmaster of the Day · Faisal",
+				// #719: emitted inside the speaker beat's own expansion, one per
+				// speech, so it stays adjacent to the speech it introduces. A
+				// hand-off in the PRINT sense (a 0-minute compact band); the deck
+				// gains no slide, which `agenda-parity.test.ts` pins.
+				"Introduces the Evaluator · asks for the speech objectives and timing",
+			],
+			[
+				"Toastmaster of the Day · Faisal",
 				"Introduces the General Evaluator: Riyaz",
 			],
 			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
@@ -1572,6 +1597,14 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		// General Evaluator is never told to introduce one.
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
+			[
+				"Toastmaster of the Day · Faisal",
+				// #719: emitted inside the speaker beat's own expansion, one per
+				// speech, so it stays adjacent to the speech it introduces. A
+				// hand-off in the PRINT sense (a 0-minute compact band); the deck
+				// gains no slide, which `agenda-parity.test.ts` pins.
+				"Introduces the Evaluator · asks for the speech objectives and timing",
+			],
 			[
 				"Toastmaster of the Day · Faisal",
 				"Introduces the Table Topics Master: Rasheed",
@@ -1641,6 +1674,10 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 			timed.filter((r) => r.handoff === true).map((r) => r.detail),
 		).toEqual([
 			"Introduces the speakers",
+			// #719's speech preamble rides the same pipeline — it is a hand-off row
+			// emitted inside the speaker beat, so this also pins that `applyFlex`
+			// does not lose the marker on a row it did not resize.
+			"Introduces the Evaluator · asks for the speech objectives and timing",
 			"Introduces the Table Topics Master: Rasheed",
 			"Introduces the General Evaluator: Riyaz",
 			"Introduces the speech evaluators",
@@ -4113,5 +4150,192 @@ describe("AgendaRow.slotId is null wherever no single slot owns the row (#732)",
 		);
 		expect(row?.section).toBe(true);
 		expect(row?.slotId).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #719 — the agenda now introduces each speech's evaluator, before that speech.
+//
+// The room used to go straight from "Introduces the speakers" to the speech,
+// so nobody heard who was evaluating or what the project was trying to do. The
+// hard part is ORDER: `expandRunSheet` expands each beat fully before moving
+// on, so a separate beat ahead of the speaker beat would emit every
+// introduction first and then every speech. The rows are emitted from INSIDE
+// the speaker beat's own iteration for that reason, and these cases are what
+// hold it.
+// ---------------------------------------------------------------------------
+describe("the speech preamble introduces each evaluator (#719)", () => {
+	const PREAMBLE = /^Introduces the /;
+
+	/** A club with `n` speakers and one evaluator per speech, paired. */
+	function speechClub(
+		n: number,
+		opts: { assignEvaluators?: boolean; link?: boolean } = {},
+	): AgendaSlot[] {
+		const { assignEvaluators = true, link = true } = opts;
+		const speakers = Array.from({ length: n }, (_, i) =>
+			slot({
+				id: `sp${i + 1}`,
+				roleKey: "speaker",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: i,
+				assigneeName: `Speaker${i + 1}`,
+			}),
+		);
+		const evaluators = Array.from({ length: n }, (_, i) =>
+			slot({
+				id: `ev${i + 1}`,
+				roleKey: "evaluator",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 10 + i,
+				assigneeName: assignEvaluators ? `Evaluator${i + 1}` : null,
+				evaluatesSlotId: link ? `sp${i + 1}` : null,
+			}),
+		);
+		return [
+			slot({
+				id: "tm",
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+			...speakers,
+			...evaluators,
+		];
+	}
+
+	/** The speaker beat alone — the unit under test, expanded on its own the way
+	 *  `agenda-parity.test.ts` expands a single beat. */
+	const speechRows = (slots: AgendaSlot[]) =>
+		expandRunSheet(
+			slots,
+			buildRunOfShow({ geIntroducesFunctionaries: false }).filter(
+				(b) => b.kind === "role" && b.role === "speaker",
+			),
+		);
+
+	for (const n of [1, 2, 3]) {
+		it(`INTERLEAVES preamble and speech for ${n} speaker(s)`, () => {
+			// The whole point. Stated as an exact ordered list rather than "contains
+			// a preamble", because the failure this guards against — every
+			// introduction, then every speech — contains all of them too.
+			const rows = speechRows(speechClub(n));
+			const shape = rows.map((r) =>
+				PREAMBLE.test(r.detail) ? "preamble" : "speech",
+			);
+			expect(shape).toEqual(
+				Array.from({ length: n }, () => ["preamble", "speech"]).flat(),
+			);
+			// …and each preamble is about the speech it precedes, not some other.
+			for (let i = 0; i < n; i++) {
+				expect(rows[i * 2].detail).toContain(`Evaluator${i + 1}`);
+				expect(rows[i * 2 + 1].who).toContain(`Speaker${i + 1}`);
+			}
+		});
+	}
+
+	it("names the evaluator paired through evaluatesSlotId, not by position", () => {
+		// The pairing is a LINK, and a club can link them in any order. Reversing
+		// it here fails anything that reads the evaluator list positionally.
+		const slots = speechClub(2);
+		const reversed = slots.map((s) =>
+			s.id === "ev1"
+				? { ...s, evaluatesSlotId: "sp2" }
+				: s.id === "ev2"
+					? { ...s, evaluatesSlotId: "sp1" }
+					: s,
+		);
+		const rows = speechRows(reversed);
+		expect(rows[0].detail).toContain("Evaluator2");
+		expect(rows[0].detail).not.toContain("Evaluator1");
+		expect(rows[2].detail).toContain("Evaluator1");
+	});
+
+	it("falls back to the bare role name when the evaluator is unassigned", () => {
+		// A missing evaluator is exactly when the Toastmaster needs the prompt, so
+		// the row stays and drops the name — the `renderUnowned` convention.
+		const rows = speechRows(speechClub(1, { assignEvaluators: false }));
+		expect(rows[0].detail).toBe(
+			"Introduces the Evaluator · asks for the speech objectives and timing",
+		);
+		expect(rows[0].detail).not.toContain(":");
+	});
+
+	it("falls back the same way when no evaluator is LINKED to the speech", () => {
+		// Distinct from the case above: here somebody is holding an evaluator slot,
+		// they are simply not attached to this speech. Naming them would be worse
+		// than naming nobody.
+		const rows = speechRows(speechClub(1, { link: false }));
+		expect(rows[0].detail).toBe(
+			"Introduces the Evaluator · asks for the speech objectives and timing",
+		);
+	});
+
+	it("emits ZERO preamble rows for a meeting with no speakers", () => {
+		const noSpeakers = speechClub(0);
+		expect(speechRows(noSpeakers)).toEqual([]);
+		expect(
+			expandRunSheet(noSpeakers, RUN_OF_SHOW).filter((r) =>
+				r.detail.includes("asks for the speech objectives"),
+			),
+		).toEqual([]);
+	});
+
+	it("says BOTH things it exists for, from the shared constant", () => {
+		// One source of truth, the `EVALUATION_TIMING_ASK` pattern: the row's copy
+		// and anything else that has to say the same words read the same export.
+		expect(SPEECH_OBJECTIVES_ASK).toBe(
+			"asks for the speech objectives and timing",
+		);
+		const detail = speechRows(speechClub(1))[0].detail;
+		expect(detail).toContain("Introduces the");
+		expect(detail).toContain(SPEECH_OBJECTIVES_ASK);
+	});
+
+	it("uses the CLUB's word for evaluator, not ours", () => {
+		// `{role:evaluator}` resolves through `NAMEABLE_ROLES` — the reason
+		// EVALUATOR_ROLE was added to that list. A club that renamed the role sees
+		// its own word here, as it does two rows down on the evaluation beat.
+		const renamed = speechClub(1).map((s) =>
+			s.roleKey === "evaluator" ? { ...s, roleName: "Coach" } : s,
+		);
+		expect(speechRows(renamed)[0].detail).toContain("Introduces the Coach:");
+	});
+
+	it("is the Toastmaster's row, at zero minutes, carrying no slot", () => {
+		const row = speechRows(speechClub(1))[0];
+		expect(row.who).toBe("Toastmaster of the Day · Faisal");
+		expect(row.roleKey).toBe("toastmaster_of_the_day");
+		// Zero, so no printed clock moves and `applyFlex` takes nothing out of
+		// Table Topics — see `BeatPreamble.minutes`.
+		expect(row.minutes).toBe(0);
+		expect(row.marks).toBeNull();
+		// NULL: the row repeats once per speech, so it is neither the speaker's
+		// turn nor a second claim on the Toastmaster's one slot (#732).
+		expect(row.slotId).toBeNull();
+	});
+
+	it("prints the bare role name when the club runs no Toastmaster", () => {
+		const noTm = speechClub(1).filter(
+			(s) => s.roleKey !== "toastmaster_of_the_day",
+		);
+		const row = speechRows(noTm)[0];
+		expect(row.who).toBe("Toastmaster of the Day");
+		expect(row.holder).toBeNull();
+		// The cue survives, because it is what tells whoever IS holding the room
+		// what to do.
+		expect(row.detail).toContain(SPEECH_OBJECTIVES_ASK);
+	});
+
+	it("adds no minutes to the meeting", () => {
+		// The timeline is derived on every render, so a nonzero preamble would
+		// silently move every clock after it on every existing meeting.
+		const total = (rs: AgendaRow[]) => rs.reduce((n, r) => n + r.minutes, 0);
+		const rows = expandRunSheet(speechClub(3), RUN_OF_SHOW);
+		expect(total(rows.filter((r) => PREAMBLE.test(r.detail)))).toBe(0);
 	});
 });

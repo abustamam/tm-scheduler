@@ -286,6 +286,25 @@ export type Beat = (
 			 * speech instead, since that window is per-slot.
 			 */
 			marks?: TimingMarks;
+			/**
+			 * A row emitted BEFORE each expansion of this beat, inside the same
+			 * per-slot iteration (#719). Read by the `role: "speaker"` arm only.
+			 *
+			 * It exists because `expandRunSheet` walks beats and expands each one
+			 * fully before moving to the next, so a separate beat placed ahead of
+			 * the speaker beat would emit every evaluator introduction first and
+			 * then every speech:
+			 *
+			 *     Intro evaluator 1 · Intro evaluator 2 · Speech 1 · Speech 2
+			 *
+			 * The rows have to INTERLEAVE, and hanging the preamble off the beat it
+			 * belongs to makes that true by construction rather than by two beats
+			 * agreeing to stay adjacent through every future insertion.
+			 *
+			 * Its owner is a DIFFERENT role from the beat's — the Toastmaster
+			 * introduces, the Speaker speaks — so it carries its own.
+			 */
+			preamble?: BeatPreamble;
 	  }
 ) & {
 	id?: BeatId;
@@ -350,6 +369,28 @@ export type Beat = (
 	 * print the name twice.
 	 */
 	introducesGroup?: BeatRole;
+};
+
+/**
+ * The introduction that precedes each expansion of a fanned-out beat (#719) —
+ * see `Beat.preamble`, which is the only place it is set.
+ *
+ * A row, not a beat: it has no gates and no fallbacks of its own, because it is
+ * emitted exactly as often as the beat it hangs off and is dropped with it. A
+ * meeting with no speakers therefore emits no preambles, without anything here
+ * having to say so.
+ *
+ * `minutes` is 0 today and the field exists so it need not stay that way. Zero
+ * is the right default rather than a placeholder: a nonzero preamble would
+ * shift every printed clock after it and shrink the Table Topics segment
+ * through `applyFlex`, which is a bigger change than an introduction that
+ * happens inside the speech's own minute.
+ */
+export type BeatPreamble = BeatRole & {
+	/** The row's detail, in TEMPLATE form — the same tokens a beat's own detail
+	 *  may carry, plus `PAIRED_EVALUATOR_TOKEN`, which only this resolves. */
+	detail: string;
+	minutes: number;
 };
 
 /**
@@ -768,6 +809,43 @@ const TIMER_ROLE: BeatRole = { roleKey: TIMER_ROLE_KEY, roleName: "Timer" };
  */
 export const EVALUATION_TIMING_ASK = "explain the timing for an evaluation";
 
+/**
+ * What the Toastmaster asks each speech's evaluator for, before that speech
+ * (#719), shared by the run-sheet row and by any sheet that has to say the same
+ * thing — the `EVALUATION_TIMING_ASK` pattern one line up, and for its reason.
+ *
+ * The agenda went straight from "Introduces the speakers" to the speech, so the
+ * room never heard who was evaluating or what the project was trying to do, and
+ * the Timer's card meant nothing to anyone listening. Both halves are stated
+ * here because the beat exists for both: introduce the evaluator, and get the
+ * objectives and the assigned time said out loud.
+ */
+export const SPEECH_OBJECTIVES_ASK =
+	"asks for the speech objectives and timing";
+
+/**
+ * Token for the evaluator paired to THIS speech (#719): `": Jane Smith"`, or
+ * `""` when nobody is.
+ *
+ * Neither `{role:evaluator}` nor `{names:evaluator}` can express it, which is
+ * why it is a token of its own rather than a reuse. The first names the ROLE
+ * ("what does this club call an evaluator"); the second names EVERY holder of
+ * it, which on a three-speech meeting is all three evaluators against each
+ * speech. This one is per-ROW, resolved from the speaker slot the row is about
+ * through `evaluatesSlotId`.
+ *
+ * It carries its own separator for the same reason `{names:…}` does: a bare
+ * name resolving to "" would leave "Introduces the Evaluator: " dangling.
+ *
+ * A row with NO pairing context resolves it to "" rather than leaving it
+ * verbatim — the opposite of `{role:tymer}`, and deliberate. A materialised
+ * club template carries this token on a row that is not about any one speech
+ * (see `agenda-materialise.ts`), and the honest rendering there is the generic
+ * "Introduces the Evaluator · …", not a literal `{evaluator:paired}` printed on
+ * an officer's agenda.
+ */
+export const PAIRED_EVALUATOR_TOKEN = "{evaluator:paired}";
+
 /** The Grammarian — a standard functionary, and the second role whose ABSENCE
  *  drives a `fallbacks` entry rather than a gate (#508): the functionary-intro
  *  beat cues the Word of the Day, which is the Grammarian's to give, so a club
@@ -857,6 +935,11 @@ const TABLE_TOPICS_ROLE: BeatRole = {
  *   `alsoRequiresAnyOf`).
  * Either is fine. What is NOT fine is naming a role in prose with neither.
  */
+const EVALUATOR_ROLE: BeatRole = {
+	roleKey: "evaluator",
+	roleName: "Evaluator",
+};
+
 const NAMEABLE_ROLES: BeatRole[] = [
 	TIMER_ROLE,
 	// #462: the two hand-off targets that name ONE specific role holder, so a
@@ -868,11 +951,15 @@ const NAMEABLE_ROLES: BeatRole[] = [
 	// #508: the functionary-intro beat cues the Word of the Day by name, so a
 	// club that renamed Grammarian sees its own name in the cue.
 	GRAMMARIAN_ROLE,
+	// #719: the speech preamble names ONE evaluator — the one paired to that
+	// speech — so unlike the group hand-off two rows down ("the speech
+	// evaluators", which addresses all of them) there is a single role label to
+	// swap in, and a club that renamed Evaluator sees its own word. Declared
+	// above this array rather than below it, which is where it used to sit:
+	// naming it here from a `const` initialised later is a TDZ crash at import,
+	// not a lint nit.
+	EVALUATOR_ROLE,
 ];
-const EVALUATOR_ROLE: BeatRole = {
-	roleKey: "evaluator",
-	roleName: "Evaluator",
-};
 
 /**
  * The roles `{names:…}` will name holders for (#585) — the four hand-off
@@ -1095,6 +1182,19 @@ export function buildRunOfShow({
 			role: "speaker",
 			detail: "Prepared speech",
 			minutes: DEFAULT_SPEAKER_MINUTES,
+			// One row per speech, immediately BEFORE it (#719). The pairing is not
+			// computed here — `{evaluator:paired}` resolves through the evaluator
+			// slot whose `evaluatesSlotId` points at this speech, which is the same
+			// link `orderEvaluators` sorts on and `evaluatedSpeakerLabel` renders
+			// from the other end. Nothing new is derived; the agenda simply says out
+			// loud what the roster already knows.
+			preamble: {
+				...TOASTMASTER_ROLE,
+				detail: `Introduces the ${roleNameToken(EVALUATOR_ROLE)}${PAIRED_EVALUATOR_TOKEN} · ${SPEECH_OBJECTIVES_ASK}`,
+				// See `BeatPreamble.minutes`: a nonzero preamble would move every
+				// printed clock after it and take the minutes out of Table Topics.
+				minutes: 0,
+			},
 		},
 		{
 			// The vote belongs to whoever is running the segment that just scored,
@@ -1645,6 +1745,39 @@ export function introducedSuffix(names: string[]): string {
  * Who holds `key` this meeting, as the `{names:…}` token renders it (#585):
  * `": Riyaz"`, `": Jagpal, Rehanna & Faisal"`, or `""`.
  */
+/**
+ * Who is evaluating THIS speech (#719) — the inverse of `evaluatedSpeakerLabel`,
+ * over the same `evaluatesSlotId` link and in the same `slotIndex` order.
+ *
+ * Names only, like `introducedNames`, so `introducedSuffix` can format them and
+ * the preamble row's separator is the one every other hand-off already uses.
+ * An evaluator who is linked but UNASSIGNED contributes nothing, which is the
+ * fallback the preamble row wants: "Introduces the Evaluator", bare. That is
+ * also the state in which the Toastmaster most needs the prompt.
+ *
+ * Restricted to evaluator slots via `matchesRole` rather than trusting
+ * `evaluatesSlotId` alone: the column is an evaluator's, but a rename-proof
+ * predicate is what the rest of this file binds with, and a stray link from
+ * some other role must not put that person's name in the evaluator's place.
+ *
+ * PLURAL, because two evaluators can point at one speech. Rare, but the row
+ * that named only the first would be wrong rather than terse.
+ */
+export function pairedEvaluatorNames(
+	speakerSlotId: string,
+	slots: AgendaSlot[],
+): string[] {
+	return slots
+		.filter(
+			(s) =>
+				s.evaluatesSlotId === speakerSlotId &&
+				matchesRole(s, EVALUATOR_ROLE.roleKey, EVALUATOR_ROLE.roleName),
+		)
+		.sort((a, b) => a.slotIndex - b.slotIndex)
+		.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
+		.filter((n): n is string => n != null);
+}
+
 function roleHolderNames(key: string, slots: AgendaSlot[]): string | null {
 	const role = NAMES_ROLES.find((r) => r.roleKey === key);
 	// Unknown key ⇒ null, so the caller can leave the token verbatim the way
@@ -1658,7 +1791,7 @@ function roleHolderNames(key: string, slots: AgendaSlot[]): string | null {
  *  ONE pass. Order inside the alternation is irrelevant; what matters is that
  *  there is only one pass. */
 const DETAIL_TOKEN_RE =
-	/\{roles(?::([a-zA-Z]+))?\}|\{awards\}|\{role:([a-z_]+)\}|\{names:([a-z_]+)\}/g;
+	/\{roles(?::([a-zA-Z]+))?\}|\{awards\}|\{role:([a-z_]+)\}|\{names:([a-z_]+)\}|\{evaluator:paired\}/g;
 
 /**
  * Resolve a beat's detail tokens against the roles the club runs (#367, #372,
@@ -1690,12 +1823,30 @@ export function resolveDetailTokens(
 	/** The `{roles}` list when the token carries no group of its own. Lazy so a
 	 *  detail with no tokens costs nothing. */
 	bareRoles: () => string[],
+	/**
+	 * `PAIRED_EVALUATOR_TOKEN`'s value for THIS row (#719), already formatted by
+	 * `introducedSuffix` — `": Jane Smith"` or `""`.
+	 *
+	 * Resolved INSIDE this pass rather than by a `.replaceAll` afterwards, and
+	 * that is the same hazard the single-pass rule above exists for: a person's
+	 * display name is user data, so splicing it in after resolution would make
+	 * a member called `{awards}` expand into the awards list, and splicing it in
+	 * BEFORE would put a club role name where a token used to be. One pass, no
+	 * rescanning, either way.
+	 *
+	 * Absent ⇒ the token resolves to `""` — see `PAIRED_EVALUATOR_TOKEN` for why
+	 * that is the honest answer for a row that is not about one speech, and not
+	 * the verbatim-token treatment `{role:…}` gives an unknown key.
+	 */
+	pairedEvaluator?: () => string,
 ): string {
 	if (!detail.includes("{")) return detail;
 	return detail.replace(
 		DETAIL_TOKEN_RE,
 		(whole, rolesGroup?: string, roleKey?: string, namesKey?: string) => {
 			if (whole === AWARDS_TOKEN) return joinRoleNames(awardLabels(slots));
+			if (whole === PAIRED_EVALUATOR_TOKEN)
+				return pairedEvaluator ? pairedEvaluator() : "";
 			if (whole.startsWith("{roles")) {
 				// A group INSIDE the token is how a materialized beat carries what
 				// `requiresGroup` carries on a Beat — spec D1 drops the gating
@@ -1858,7 +2009,59 @@ export function expandRunSheet(
 			if (beat.role === "speaker") {
 				const ordered = [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
 				const multi = ordered.length > 1;
+				// The preamble's owner is resolved ONCE for the whole fan-out (#719):
+				// it is the same person before every speech, and looking it up per
+				// speaker would be the same answer three times.
+				const preamble = beat.preamble;
+				const preambleOwner = preamble
+					? slotsForRole(slots, preamble.roleKey, preamble.roleName)[0]
+					: undefined;
 				ordered.forEach((s, i) => {
+					if (preamble) {
+						rows.push({
+							// `renderUnowned`'s convention when the club runs no such role:
+							// the bare canonical name, because a missing Toastmaster is not
+							// a reason to drop the cue — the cue is what tells whoever IS
+							// holding the room what to do.
+							who: preambleOwner
+								? `${preambleOwner.roleName} · ${assigneeDisplay(preambleOwner)}`
+								: preamble.roleName,
+							roleLabel: preambleOwner?.roleName ?? preamble.roleName,
+							holder: preambleOwner ? assigneeDisplay(preambleOwner) : null,
+							roleKey: preamble.roleKey,
+							// NULL, and not either slot that made this row (#732). It is
+							// not the speaker's turn — the speech row below is — and it is
+							// not one of the Toastmaster's either: this row repeats once
+							// per speech, so binding it to the Toastmaster's single slot
+							// would attribute several rows to one slot. "Cannot be recorded
+							// against a person" is the honest answer.
+							slotId: null,
+							detail: resolveDetailTokens(
+								preamble.detail,
+								slots,
+								() => groupRoleNames(beat, slots),
+								() => introducedSuffix(pairedEvaluatorNames(s.id, slots)),
+							),
+							minutes: preamble.minutes,
+							marks: null,
+							// A 0-minute "X introduces Y" — the definition of `handoff` on a
+							// ROW, and it has to be set or the sheet does not fit. The print
+							// layouts render a hand-off as a compact band rather than a full
+							// segment block, and on the editorial one-pager those three
+							// blocks are the difference between one sheet and two: measured
+							// through `print-density.test.tsx`, a real MCF agenda goes
+							// 6.675pt → 6.366pt as bands and 6.675pt → FLOWS (raw 0.708,
+							// under `MIN_FIT_SCALE`) as full blocks.
+							//
+							// The DECK does not read this field — `buildSlideDeck` emits a
+							// slide per hand-off BEAT, by position — so no slide is added,
+							// which is #719's AC 7. `agenda-parity.test.ts` used row-level
+							// `handoff` as a stand-in for "came from a hand-off beat"; that
+							// proxy stopped holding here and its `handoffRows` now selects
+							// the beats directly.
+							handoff: true,
+						});
+					}
 					// The row's two numbers answer two different questions (#394), so
 					// they read two different helpers: the marks need an assigned
 					// RANGE (both ends, or none at all), while the clock needs an

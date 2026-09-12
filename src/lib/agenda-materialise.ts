@@ -1,5 +1,10 @@
 // src/lib/agenda-materialise.ts
-import { type Beat, buildRunOfShow, type RoleGroup } from "./agenda-runsheet";
+import {
+	type Beat,
+	type BeatPreamble,
+	buildRunOfShow,
+	type RoleGroup,
+} from "./agenda-runsheet";
 import type { TemplateBeatSeed } from "./agenda-template-rows";
 import type { TableTopicsLimits } from "./table-topics-limits";
 
@@ -8,7 +13,8 @@ import type { TableTopicsLimits } from "./table-topics-limits";
  *
  * ```
  * buildRunOfShow({ geIntroducesFunctionaries, tableTopicsLimits })
- *         |  22 beats, or 23 on the GE variant — carrying the CLUB's variant
+ *         |  22 beats, or 23 on the GE variant (one of which seeds an extra
+ *         |  row for its `preamble`, #719) — carrying the CLUB's variant
  *         |  AND its Table Topics marks, SNAPSHOTTED below as the row's initial
  *         |  value (#443) and re-derived at render since #679
  *         v
@@ -99,9 +105,63 @@ export function materialiseRunOfShow(
 			out.push(sectionSeed(BAND_LABELS[band] as string, out.length));
 			band += 1;
 		}
+		// A beat with a `preamble` seeds TWO rows (#719), or a club-owned template
+		// silently loses the introduction the code-derived run of show has. It
+		// comes first, matching the order `expandRunSheet` emits, and joins the
+		// beat's own repeat block so the two interleave per speaker.
+		if (beat.kind === "role" && beat.preamble != null) {
+			out.push(preambleSeed(beat.preamble, repeatsRoleKeyOf(beat), out.length));
+		}
 		out.push(beatSeed(beat, out.length));
 	});
 	return out;
+}
+
+/**
+ * The speech preamble as a template row (#719).
+ *
+ * It carries the SPEAKER's `repeatsRoleKey` even though it is the Toastmaster's
+ * row, and that is the whole of how the adopted sheet interleaves. A
+ * `repeatsRoleKey` run is expanded as a BLOCK — `buildTemplateRowsWithSource`
+ * gathers the consecutive beats sharing the key and emits the whole block once
+ * per slot — so preamble+speech repeat together as preamble 1, speech 1,
+ * preamble 2, speech 2. Left null it would render one introduction ahead of
+ * every speech, which is the ordering #719 exists to avoid and which
+ * `agenda-adoption-parity.test.ts` would (rightly) fail: adoption must not
+ * change the printed sheet.
+ *
+ * Only the row whose `roleKey` EQUALS the repeat key is bound to the
+ * iteration's slot, so this stays the Toastmaster's row and does not become the
+ * speaker's — the same mechanism a contest's "minute of silence" beat uses to
+ * sit inside a block it does not own.
+ *
+ * `detail` is carried VERBATIM (spec D7) including `PAIRED_EVALUATOR_TOKEN`,
+ * which the template renderer resolves against the block's own speaker slot.
+ *
+ * A `handoff`, matching the row `expandRunSheet` emits: the flag is what makes
+ * the print layouts render it as a compact band, and on the editorial one-pager
+ * that is the difference between one sheet and two. It adds no deck slide — the
+ * deck reads hand-off BEATS, by position.
+ */
+function preambleSeed(
+	preamble: BeatPreamble,
+	repeatsRoleKey: string | null,
+	sortOrder: number,
+): TemplateBeatSeed {
+	return {
+		sortOrder,
+		kind: "role",
+		label: preamble.roleName,
+		detail: preamble.detail,
+		minutes: preamble.minutes,
+		roleKey: preamble.roleKey,
+		repeatsRoleKey,
+		flex: false,
+		handoff: true,
+		markGreen: null,
+		markYellow: null,
+		markRed: null,
+	};
 }
 
 function sectionSeed(label: string, sortOrder: number): TemplateBeatSeed {
@@ -121,15 +181,28 @@ function sectionSeed(label: string, sortOrder: number): TemplateBeatSeed {
 	};
 }
 
+/**
+ * The key a beat fans out over, or null.
+ *
+ * A speaker or evaluator beat fans out across every matching slot, which is
+ * what `repeatsRoleKey` means in the template model. Materialising it as a
+ * literal row instead would give a three-speaker meeting ONE speech.
+ *
+ * Named rather than inlined in `beatSeed` because the preamble row has to join
+ * the SAME block (#719), and a second copy of the predicate is how the two
+ * would come to disagree about which beats repeat — leaving a preamble stranded
+ * outside its block, printing once.
+ */
+function repeatsRoleKeyOf(beat: Beat): string | null {
+	return beat.kind === "role" &&
+		(beat.role === "speaker" || beat.role === "evaluator")
+		? beat.roleKey
+		: null;
+}
+
 function beatSeed(beat: Beat, sortOrder: number): TemplateBeatSeed {
 	const isRole = beat.kind === "role";
-	// A speaker or evaluator beat fans out across every matching slot, which is
-	// what `repeatsRoleKey` means in the template model. Materialising it as a
-	// literal row instead would give a three-speaker meeting ONE speech.
-	const repeats =
-		isRole && (beat.role === "speaker" || beat.role === "evaluator")
-			? beat.roleKey
-			: null;
+	const repeats = repeatsRoleKeyOf(beat);
 	const marks = isRole ? beat.marks : null;
 	return {
 		sortOrder,

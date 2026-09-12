@@ -138,7 +138,9 @@ function handoff(who: string, roleKey: string, detail: string, time: string) {
 	return { who, roleKey, detail, minutes: 0, marks: null, handoff: true, time };
 }
 
-/** MCF's 2026-08-13 run of show: 20 timed beats and 8 hand-offs, in page order. */
+/** MCF's 2026-08-13 run of show: 20 timed beats and 10 hand-offs, in page order.
+ *  Ten since #719 — two of them are the per-speech preambles introducing each
+ *  evaluator, which the speaker beat emits inside its own expansion. */
 const mcfRows: TimelineRow[] = [
 	{
 		who: "Sergeant-at-Arms",
@@ -179,6 +181,18 @@ const mcfRows: TimelineRow[] = [
 		time: "6:50",
 	},
 	handoff(TM, "toastmaster_of_the_day", "Introduces the speakers", "6:53"),
+	// #719 — one hand-off band before EACH speech, introducing that speech's
+	// evaluator and asking for the objectives and timing. These are what the
+	// speaker beat's `preamble` emits, transcribed here like the rest of the
+	// sheet: without them this fixture measures an agenda the app no longer
+	// prints, and the gate stops seeing the axis it exists for.
+	handoff(
+		TM,
+		"toastmaster_of_the_day",
+		"Introduces the Evaluator: Rasheed Bustamam · asks for the speech " +
+			"objectives and timing",
+		"6:53",
+	),
 	{
 		who: "Speaker 1 · Jagpal Singh",
 		roleKey: "speaker",
@@ -187,6 +201,13 @@ const mcfRows: TimelineRow[] = [
 		marks: { green: 5, yellow: 6, red: 7 },
 		time: "6:53",
 	},
+	handoff(
+		TM,
+		"toastmaster_of_the_day",
+		"Introduces the Evaluator: Riyaz Mohammed · asks for the speech " +
+			"objectives and timing",
+		"7:00",
+	),
 	{
 		who: "Speaker 2 · Sudheer Isanaka",
 		roleKey: "speaker",
@@ -488,8 +509,21 @@ describe.skipIf(!hasChrome)(
 			// reports row grows with the club's functionary count), so that row names
 			// four here rather than three.
 			//
-			// The 0.40pt left above the 6.2 floor is NOT headroom for the next copy
-			// change. `agenda-print-type.ts` says what that margin is for: the harness
+			// #719 spent most of what was left, measured on macOS harness fonts with
+			// the two speech preambles added to this fixture above:
+			//
+			//   without the preambles ........................ 6.675pt (raw 0.7739)
+			//   with them, as hand-off BANDS ................. 6.366pt (raw 0.7381)  ← ships
+			//   with them, as full segment blocks ............ FLOWS   (raw 0.7083)
+			//
+			// The third row is why those rows carry `handoff: true`: a full block per
+			// introduction puts the scale under `MIN_FIT_SCALE` and this agenda onto
+			// two sheets. As bands it stays one, 0.166pt above the floor. That is a
+			// thin margin for the platform variance below, and it is the tradeoff
+			// #719 states in its AC 9 — measured, not assumed.
+			//
+			// The 0.40pt that used to sit above the 6.2 floor was NOT headroom for
+			// the next copy change. `agenda-print-type.ts` says what that margin is for: the harness
 			// resolves no webfonts, and the substitute differs between a developer's
 			// machine and CI's Ubuntu, moving where lines wrap. It is reserved for that
 			// variance. Anything lengthening these rows again needs a fresh measurement
@@ -551,6 +585,14 @@ describe.skipIf(!hasChrome)(
 		it("keeps a denser agenda readable too, at a lower floor", () => {
 			const denser: TimelineRow[] = [
 				...mcfRows,
+				// …and its own preamble band (#719), since a third speech brings one.
+				handoff(
+					TM,
+					"toastmaster_of_the_day",
+					"Introduces the Evaluator: Riyaz Mohammed · asks for the speech " +
+						"objectives and timing",
+					"7:08",
+				),
 				{
 					who: "Speaker 3 · Anotherlongname Here",
 					roleKey: "speaker",
@@ -569,9 +611,26 @@ describe.skipIf(!hasChrome)(
 					time: "7:33",
 				},
 			];
-			// Measured 6.42pt, against 5.26pt before this change (1579px of content,
-			// declared 10.5). The GAIN holds for a bigger club; the absolute size does
-			// not, which is exactly what a separate floor is for.
+			// This case now measures the FLOW branch, and the number below is
+			// therefore the declared size rather than a squeezed one — read the
+			// assertion as "still legible", not as "still one sheet".
+			//
+			// Measured on macOS harness fonts:
+			//
+			//   before #719 ............ 6.244pt, raw 0.7239 — squeezed onto ONE sheet
+			//   after  #719 ............ 8.625pt, raw 0.6778 — FLOWS onto two
+			//
+			// A three-speaker club's editorial agenda gains a sheet. The fixture was
+			// already 0.0039 above `MIN_FIT_SCALE` before this change — the next copy
+			// addition of any size was going to tip it — and #719's three preamble
+			// bands cost 99px against the ~10px of slack that was left. #563 is the
+			// issue about this layout being out of room; nothing shorter fixes it,
+			// since the cost is the ROWS and not their text (four copy variants
+			// measured identically at 6.366pt on the two-speaker fixture).
+			//
+			// The floor still holds and is not vacuous in the direction that matters:
+			// a layout that got here by shrinking its own type would report a
+			// SMALLER number, not a larger one.
 			expect(printedDetailPt(denser)).toBeGreaterThanOrEqual(
 				EDITORIAL_DENSE_MIN_PRINTED_PT,
 			);

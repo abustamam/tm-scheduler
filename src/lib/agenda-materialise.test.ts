@@ -6,16 +6,20 @@ import { BAND_LABELS, materialiseRunOfShow } from "./agenda-materialise";
  *
  * An assertion stated relative to the constant it guards passes for every value
  * of that constant, including one that reintroduces the bug (#519). These
- * numbers were measured from `buildRunOfShow` on 2026-08-25 and are the
- * acceptance criteria in the spec's D2 tables — if the materialiser disagrees,
- * the materialiser is wrong.
+ * numbers were measured from `buildRunOfShow` on 2026-08-25, re-measured on
+ * 2026-09-11, and are the acceptance criteria in the spec's D2 tables — if the
+ * materialiser disagrees, the materialiser is wrong.
  *
- * `bands` is the index, in the ORIGINAL beat list, of the beat each band opens
- * on.
+ * `beats` counts EMITTED beat rows, which is no longer the same as the number
+ * of beats `buildRunOfShow` returns: since #719 the speaker beat carries a
+ * `preamble` and seeds two rows, so the count is one higher than the template's
+ * length in both variants. `bands` is the seed index of each band opener minus
+ * the sections before it, which used to equal the beat index for the same
+ * reason and now does not past SPEECHES.
  */
 const EXPECTED = {
-	false: { beats: 22, handoffs: 4, bands: [0, 4, 7, 10, 18] },
-	true: { beats: 23, handoffs: 5, bands: [0, 5, 8, 11, 19] },
+	false: { beats: 23, handoffs: 5, bands: [0, 4, 8, 11, 19] },
+	true: { beats: 24, handoffs: 6, bands: [0, 5, 9, 12, 20] },
 } as const;
 
 describe("materialiseRunOfShow table topics window (#443)", () => {
@@ -138,5 +142,52 @@ describe("materialiseRunOfShow", () => {
 		for (const d of rolesTokens) {
 			expect(d).toMatch(/\{roles:(functionaries|reportingFunctionaries)\}/);
 		}
+	});
+});
+
+// #719 — the speech preamble has to survive materialisation, or a club that
+// opened the agenda editor once silently loses the beat introducing each
+// speech's evaluator while every other club keeps it.
+describe("materialiseRunOfShow seeds the speech preamble (#719)", () => {
+	const preambleOf = (seeds: ReturnType<typeof materialiseRunOfShow>) =>
+		seeds.find((s) => s.detail?.includes("{evaluator:paired}"));
+
+	it("emits a Toastmaster row immediately BEFORE the speech row", () => {
+		const seeds = materialiseRunOfShow(false, null);
+		const at = seeds.findIndex((s) => s.detail?.includes("{evaluator:paired}"));
+		expect(at).toBeGreaterThan(-1);
+		expect(seeds[at + 1]?.repeatsRoleKey).toBe("speaker");
+	});
+
+	it("carries the tokens VERBATIM, so they resolve per meeting", () => {
+		// ABSOLUTE strings. Stated as `beat.preamble.detail` this would pass for a
+		// seeder that emitted an empty row, and stated as "contains Evaluator" it
+		// would pass for a row that had already frozen one evening's names in.
+		expect(preambleOf(materialiseRunOfShow(false, null))?.detail).toBe(
+			"Introduces the {role:evaluator}{evaluator:paired} · asks for the speech objectives and timing",
+		);
+	});
+
+	it("is the Toastmaster's, 0 minutes, untimed, and inside the speaker block", () => {
+		const p = preambleOf(materialiseRunOfShow(false, null));
+		expect(p?.roleKey).toBe("toastmaster_of_the_day");
+		expect(p?.minutes).toBe(0);
+		// A hand-off, so the print layouts give it the compact band an adopted
+		// sheet needs to keep fitting one page — the same flag the code-derived
+		// row carries, which is what `agenda-adoption-parity.test.ts` counts.
+		expect(p?.handoff).toBe(true);
+		// Inside the SPEAKER's repeat block, which is what interleaves it — one
+		// introduction before each speech rather than all of them up front.
+		expect(p?.repeatsRoleKey).toBe("speaker");
+		expect([p?.markGreen, p?.markYellow, p?.markRed]).toEqual([
+			null,
+			null,
+			null,
+		]);
+	});
+
+	it("lands on BOTH club variants", () => {
+		expect(preambleOf(materialiseRunOfShow(true, null))).toBeDefined();
+		expect(preambleOf(materialiseRunOfShow(false, null))).toBeDefined();
 	});
 });

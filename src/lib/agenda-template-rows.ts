@@ -26,8 +26,10 @@ import {
 	type AgendaSlot,
 	assigneeDisplay,
 	evaluatedSpeakerLabel,
+	introducedSuffix,
 	numbered,
 	OPEN_LABEL,
+	pairedEvaluatorNames,
 	resolveDetailTokens,
 	type TimingMarks,
 } from "./agenda-runsheet";
@@ -330,6 +332,15 @@ function toRow(
 	 *  Toastmaster row — so resolving against `bound` alone silently produces
 	 *  "Introduces the " for every cross-role cue on the sheet. */
 	allSlots: AgendaSlot[],
+	/**
+	 * The SPEAKER slot this row's repeat block is on, when it is on one (#719).
+	 *
+	 * Distinct from `bound`, which is the slots this row NAMES. The speech
+	 * preamble is the Toastmaster's row sitting inside the speaker's block, so
+	 * it names the Toastmaster and is ABOUT a speech that is not its own — the
+	 * one thing `{evaluator:paired}` needs and `bound` cannot supply.
+	 */
+	blockSlot: AgendaSlot | null = null,
 ): AgendaRow | null {
 	const label = capChars(row.label, MAX_TEMPLATE_LABEL_CHARS);
 	// Cap BEFORE resolving: the cap bounds what an officer TYPED, and resolution
@@ -342,6 +353,14 @@ function toRow(
 		// is no Beat-side list to fall back to. An officer who types a bare
 		// `{roles}` by hand gets nothing, which is honest.
 		() => [],
+		// The evaluator paired to this iteration's speech (#719), so an adopted
+		// template names the same person the code-derived sheet does — which is
+		// 622a's promise and what `agenda-adoption-parity.test.ts` holds. Outside
+		// a repeat block there is no speech to pair with and the token correctly
+		// resolves to nothing.
+		blockSlot
+			? () => introducedSuffix(pairedEvaluatorNames(blockSlot.id, allSlots))
+			: undefined,
 	);
 	const base = {
 		detail,
@@ -582,16 +601,37 @@ export function buildTemplateRowsWithSource(
 		);
 		repeated.forEach((s, n) => {
 			for (const blockRow of block) {
-				// Bind the ROLE-owning row to this iteration's slot; the others in
-				// the block (a minute of silence) own no slot and repeat as-is.
-				const bound = blockRow.roleKey === repeatKey ? [s] : [];
+				// Bind the ROLE-owning row to this iteration's slot. A row inside the
+				// block that owns a DIFFERENT role binds to its own holders instead
+				// (#719: the Toastmaster's speech preamble, repeating alongside the
+				// speech it introduces), so it names that person rather than nobody.
+				// A row with no role at all — a contest's minute of silence — still
+				// binds to nothing and repeats as-is.
+				const owns = blockRow.roleKey === repeatKey;
+				const bound = owns
+					? [s]
+					: blockRow.kind === "role" && blockRow.roleKey != null
+						? slotsForRole(slots, blockRow.roleKey).slice(
+								0,
+								MAX_ROLE_REPEAT_SLOTS,
+							)
+						: [];
 				const emitted = toRow(
 					blockRow,
 					rolesByKey,
 					bound,
-					n,
-					repeated.length,
+					// A non-owning row is not the Nth of anything — numbering it by the
+					// iteration prints "Toastmaster of the Day 1" above speech 1. Same
+					// 0/0 the non-repeating role path passes, which leaves the label
+					// unnumbered.
+					owns ? n : 0,
+					owns ? repeated.length : 0,
 					slots,
+					// The iteration's slot, passed to EVERY row in the block rather
+					// than only the owning one: a block row that does not own the slot
+					// is still about it (#719's speech preamble), and that is the only
+					// thing distinguishing it from an unrelated row on the sheet.
+					s,
 				);
 				if (emitted) {
 					out.push({
