@@ -4,11 +4,14 @@ import {
 	findGrammarianSlot,
 	findTmodSlot,
 	isGrammarianRoleName,
+	isTimerRoleName,
 	isTmodRoleName,
 	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
 	type RoleDefLite,
+	TIMER_ROLE_KEY,
 } from "./meeting-roles";
+import { ROLE_TEMPLATE } from "./role-template";
 
 describe("isTmodRoleName", () => {
 	it("matches the standard TMOD role names (case/space-insensitive)", () => {
@@ -36,6 +39,79 @@ describe("isGrammarianRoleName", () => {
 		expect(isGrammarianRoleName("Grammar")).toBe(false);
 		expect(isGrammarianRoleName("Ah-Counter")).toBe(false);
 		expect(isGrammarianRoleName("Toastmaster of the Day")).toBe(false);
+	});
+});
+
+// #732. The Timer is NOT a capability role — nothing is granted by holding it,
+// which is why there is no `findTimerSlot` beside the other three. The key and
+// the exact-name fallback exist so the surfaces that have to NAME the Timer
+// (#729's stopwatch link; the run sheet's beats) resolve it one way, instead of
+// each writing `roleKey === "timer"` inline and each getting a pre-#368
+// NULL-key Timer wrong on its own — the #464 failure shape in a new place.
+describe("the Timer resolver (#732)", () => {
+	/**
+	 * Key first, name ONLY when there is no key.
+	 *
+	 * Spelled out here rather than shipped as a finder because no caller needs
+	 * one yet — but the ORDER is the part that has to be pinned, and it is the
+	 * shape #729 is told to use.
+	 */
+	const isTimerSlot = (s: { roleName: string; roleKey?: string | null }) =>
+		s.roleKey != null
+			? s.roleKey === TIMER_ROLE_KEY
+			: isTimerRoleName(s.roleName);
+
+	it("uses the key the seed actually writes", () => {
+		expect(TIMER_ROLE_KEY).toBe("timer");
+		// Read off `ROLE_TEMPLATE` too, so a drifted constant fails here rather
+		// than silently matching no Timer in any club's `role_definitions`.
+		expect(ROLE_TEMPLATE.find((r) => r.name === "Timer")?.key).toBe(
+			TIMER_ROLE_KEY,
+		);
+	});
+
+	it("matches the canonical name exactly, trimmed and case-folded", () => {
+		expect(isTimerRoleName("Timer")).toBe(true);
+		expect(isTimerRoleName("  timer  ")).toBe(true);
+		expect(isTimerRoleName("TIMER")).toBe(true);
+	});
+
+	it("rejects look-alikes, including the word half the movement actually says", () => {
+		// "Timekeeper" is what many clubs call this out loud, and it is
+		// deliberately NOT canonical: this app never seeds that name, so a role
+		// called it was invented by a club and carries a NULL key for that
+		// reason. Widening to admit it would re-open #464 on a new role.
+		for (const name of [
+			"Timekeeper",
+			"Time Keeper",
+			"Timer Keeper",
+			"Timers",
+			"Timer Assistant",
+			"Assistant Timer",
+			"Ah-Counter",
+		]) {
+			expect(isTimerRoleName(name)).toBe(false);
+		}
+	});
+
+	it("resolves a standard Timer whose key is still NULL, via the name", () => {
+		// A rename predating the #368 backfill leaves `role_definitions.key`
+		// NULL. Those clubs must keep resolving, which is the whole reason the
+		// fallback exists.
+		expect(isTimerSlot({ roleName: "Timer", roleKey: null })).toBe(true);
+		expect(isTimerSlot({ roleName: "Timer" })).toBe(true);
+	});
+
+	it("prefers the key, so a renamed Timer resolves and a keyless look-alike does not", () => {
+		const renamed = { roleName: "Chronometer", roleKey: TIMER_ROLE_KEY };
+		const alike = { roleName: "Timekeeper", roleKey: null };
+		expect(isTimerSlot(renamed)).toBe(true);
+		expect(isTimerSlot(alike)).toBe(false);
+		// And a slot that carries SOMEONE ELSE's key is not rescued by a
+		// canonical-looking name: the key is the answer once there is one.
+		expect(isTimerSlot({ roleName: "Timer", roleKey: "club_invented" })).toBe(
+			false,
+		);
 	});
 });
 

@@ -355,11 +355,20 @@ function toRow(
 		// A band, never a presenter. `section` is a real field rather than a reuse
 		// of `handoff`, whose renderer is an indented italic elbow meaning
 		// "X introduces Y" — the wrong visual language for a segment header.
-		return { who: label, roleKey: null, section: true, ...base, marks: null };
+		return {
+			who: label,
+			roleKey: null,
+			// A band is not anybody's turn (#732) — see `AgendaRow.slotId`.
+			slotId: null,
+			section: true,
+			...base,
+			marks: null,
+		};
 	}
 
 	if (row.kind === "event") {
-		return { who: label, ...base };
+		// No owner, so no slot (#732).
+		return { who: label, slotId: null, ...base };
 	}
 
 	// A role beat bound to NOBODY renders as a plain labelled beat — the same
@@ -377,7 +386,8 @@ function toRow(
 	// a club to schedule. The alternative — keep it hidden and badge the editor
 	// card — leaves the officer able to author an invisible row anyway, one
 	// select away, and asks them to learn a rule instead of removing it.
-	if (row.roleKey == null) return { who: label, ...base };
+	// The beat names no role, so it is bound to no slot either (#732).
+	if (row.roleKey == null) return { who: label, slotId: null, ...base };
 	const role = rolesByKey.get(row.roleKey);
 	// A beat naming a role the template does not declare is dropped rather than
 	// rendered against an invented name. The seed is the only writer in Phase 1,
@@ -449,6 +459,14 @@ function toRow(
 		// "nobody" stay distinguishable at every consumer.
 		...(names.length > 0 ? { holders: names } : {}),
 		roleKey: role.key,
+		// The row's one slot, when it has exactly one (#732). That is every
+		// iteration of a `repeatsRoleKey` block, which binds one slot per row.
+		// NULL on a non-repeating beat bound to two or more — two ballot counters
+		// perform one tally together, and the row is about both of them, so there
+		// is no single turn to name. Also null when the role has no slot at all.
+		// Reuses `oneSlot`, which the speech/evaluator overrides below already
+		// gate on, so "this row is about one person" is asked once.
+		slotId: oneSlot?.id ?? null,
 		...base,
 		// Slot-derived overrides, applied AFTER `base` so they win. Only ever set
 		// on a speaker or evaluator row bound to exactly one slot; every other row

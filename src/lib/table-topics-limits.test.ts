@@ -14,6 +14,7 @@ import {
 	TABLE_TOPICS_DEFAULT_TIMING,
 	TABLE_TOPICS_MESSAGES,
 	tableTopicsClockText,
+	tableTopicsDqSeconds,
 	validateTableTopicsForm,
 } from "./table-topics-limits";
 import { formatTimingClock } from "./timing-window";
@@ -254,6 +255,40 @@ describe("formatTableTopicsTiming", () => {
 		expect(formatTableTopicsTiming({ minSeconds: 65, maxSeconds: 125 })).toBe(
 			"1:05 minimum · 2:05 maximum · 2:06+ disqualified",
 		);
+	});
+});
+
+describe("tableTopicsDqSeconds (#732)", () => {
+	it("is one second past the cap", () => {
+		expect(tableTopicsDqSeconds(MCF)).toBe(151);
+		expect(tableTopicsDqSeconds({ maxSeconds: 0 })).toBe(1);
+		// The minute boundary, where the NUMBER is unremarkable and only the
+		// rendering above has to carry.
+		expect(tableTopicsDqSeconds({ maxSeconds: 179 })).toBe(180);
+	});
+
+	it("is the same number the printed sentence prints", () => {
+		// The point of the export. Before it, a caller needing the number
+		// re-derived `maxSeconds + 1` beside the sentence, which is how one club
+		// came to have two disqualification rules stated on two surfaces. Driving
+		// the assertion from `tableTopicsDqSeconds` rather than from a literal is
+		// what makes this a check on ONE expression instead of two.
+		for (const maxSeconds of [59, 60, 119, 150, 179, 599]) {
+			const dq = tableTopicsDqSeconds({ maxSeconds });
+			expect(formatTableTopicsTiming({ minSeconds: 30, maxSeconds })).toContain(
+				`${formatTableTopicsClock(dq)}+ disqualified`,
+			);
+		}
+	});
+
+	it("says nothing about whether the club stated a window", () => {
+		// It takes the cap alone, so it cannot answer "did they state one" and
+		// must not be read as if it could — `hasTableTopicsLimits` is that
+		// question, and `formatTableTopicsTiming` asks it first.
+		expect(formatTableTopicsTiming({ minSeconds: null, maxSeconds: 150 })).toBe(
+			TABLE_TOPICS_DEFAULT_TIMING,
+		);
+		expect(tableTopicsDqSeconds({ maxSeconds: 150 })).toBe(151);
 	});
 });
 

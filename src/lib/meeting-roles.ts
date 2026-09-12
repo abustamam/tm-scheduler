@@ -30,6 +30,25 @@ export const TMOD_ROLE_KEY = "toastmaster_of_the_day";
 export const GRAMMARIAN_ROLE_KEY = "grammarian";
 export const VOTE_COUNTER_ROLE_KEY = "vote_counter";
 
+/**
+ * `role_definitions.key` for the Timer, kept OUT of the three above because it
+ * is not a capability (#732).
+ *
+ * The other three decide who may DO something — edit the agenda, own the Word
+ * of the Day, run the votes. Nothing is granted by holding the Timer; the key
+ * is here because the Timer is the role two other surfaces have to name, and
+ * naming it by string is the #464 failure shape. `agenda-runsheet.ts` already
+ * carries its own `TIMER_ROLE` literal for beat binding, and this export does
+ * NOT claim to have replaced it — same standing caveat the block above states
+ * for its own three keys: this is where a new reader should come, not proof
+ * that every existing one already does.
+ *
+ * Separate const rather than a fourth entry in that group so the group's
+ * comment stays true. A reader who needs "may this member run the votes"
+ * should not find a role that answers no such question sitting in the list.
+ */
+export const TIMER_ROLE_KEY = "timer";
+
 /** A role identified the way the rest of the app identifies one: key first, with
  *  the name as the fallback for a slot that carries no key. */
 export type RoleIdentity = { roleName: string; roleKey?: string | null };
@@ -65,6 +84,11 @@ export type RoleIdentity = { roleName: string; roleKey?: string | null };
 const TMOD_CANONICAL_NAMES = ["toastmaster of the day", "toastmaster"];
 const GRAMMARIAN_CANONICAL_NAMES = ["grammarian"];
 const VOTE_COUNTER_CANONICAL_NAMES = ["vote counter"];
+/** Exactly one canonical name, and exactly the seed's (`role-template.ts`).
+ *  "Timekeeper" is what many clubs SAY and is deliberately not here: it is not
+ *  the name this app ships, so a role called that was invented by a club and
+ *  has a NULL key for that reason, which is population 1 above. */
+const TIMER_CANONICAL_NAMES = ["timer"];
 
 const matchesCanonical = (names: string[], name: string): boolean =>
 	names.includes(name.trim().toLowerCase());
@@ -90,6 +114,24 @@ export function isTmodRoleName(name: string): boolean {
  */
 export function isGrammarianRoleName(name: string): boolean {
 	return matchesCanonical(GRAMMARIAN_CANONICAL_NAMES, name);
+}
+
+/**
+ * True when a role-definition name is EXACTLY the Timer role's canonical name
+ * (#732). NOT "Timekeeper", not "Timer Keeper", not the plural "Timers".
+ *
+ * The FALLBACK, never the rule: read `TIMER_ROLE_KEY` first and reach for this
+ * only when a slot's `role_definitions.key` is NULL — the same key-then-name
+ * order `findCapabilityRole` below encodes for the other three. A standard
+ * Timer renamed before the #368 backfill still has to resolve; a club-invented
+ * role that merely sounds like one must not.
+ *
+ * Exact for the reason the canonical-name docblock above gives at length: every
+ * club-invented role has a NULL key, so a prefix or substring match here would
+ * hand a club's "Timer Assistant" whatever the caller is gating.
+ */
+export function isTimerRoleName(name: string): boolean {
+	return matchesCanonical(TIMER_CANONICAL_NAMES, name);
 }
 
 /**

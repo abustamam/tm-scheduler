@@ -219,8 +219,30 @@ export function formatTableTopicsTiming(
 	if (!hasTableTopicsLimits(limits)) return TABLE_TOPICS_DEFAULT_TIMING;
 	const min = formatSeconds(limits.minSeconds);
 	const max = formatSeconds(limits.maxSeconds);
-	const dq = formatSeconds(limits.maxSeconds + 1);
+	const dq = formatSeconds(tableTopicsDqSeconds(limits));
 	return `${min} minimum · ${max} maximum · ${dq}+ disqualified`;
+}
+
+/**
+ * The first DISQUALIFYING second — the number behind the "2:31+" that
+ * `formatTableTopicsTiming` above prints (#732).
+ *
+ * One second past the cap, derived rather than stored, for the reason
+ * `formatTableTopicsTiming` states: the DQ point and the cap an admin edits are
+ * the same fact, and storing both is how two walls come to contradict each
+ * other. This export exists so that a caller needing the NUMBER — a clock
+ * deciding whether a Table Topics speech disqualified — reads the same
+ * expression the printed sentence does, instead of re-deriving `maxSeconds + 1`
+ * beside it. That re-derivation is the failure `agenda-template-slides.ts`
+ * records, where two surfaces stated two disqualification rules for one club.
+ *
+ * Takes the CAP alone rather than a `TableTopicsLimits`, so a caller that has
+ * already narrowed through `hasTableTopicsLimits` can pass it straight in. It
+ * therefore says nothing about whether the club HAS stated a window — ask
+ * `hasTableTopicsLimits` first, as `formatTableTopicsTiming` does.
+ */
+export function tableTopicsDqSeconds(limits: { maxSeconds: number }): number {
+	return limits.maxSeconds + 1;
 }
 
 /**
