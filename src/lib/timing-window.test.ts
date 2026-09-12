@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TABLE_TOPICS_ROLE_KEY } from "./table-topics-limits";
 import {
 	firstQualifyingWindow,
 	formatTimingClock,
@@ -7,6 +8,7 @@ import {
 	graceSentence,
 	qualifyingWindow,
 	qualifyingWindowForMarks,
+	segmentFor,
 	TIMING_GRACE_MINUTES,
 } from "./timing-window";
 
@@ -263,8 +265,9 @@ describe("graceRuleSentence", () => {
 
 	it("is the same rule `graceSentence` states for a window of that segment", () => {
 		// One source, two shapes. If these drift, one surface teaches a rule the
-		// next contradicts — which is the whole of #720.
-		expect(graceSentence(null)).toBe(graceRuleSentence("speech"));
+		// next contradicts — which is the whole of #720. `graceSentence(null)` is
+		// not asserted equal to `graceRuleSentence("speech")` here: it DELEGATES to
+		// it, so an equality assertion would only be restating the call.
 		for (const segment of ["speech", "tableTopics"] as const) {
 			const w = qualifyingWindow(1, 2, segment);
 			expect(w).not.toBeNull();
@@ -272,5 +275,48 @@ describe("graceRuleSentence", () => {
 				graceRuleSentence(segment).replace(/\.$/, ""),
 			);
 		}
+	});
+
+	it("derives the no-window note from the speech segment, not a literal", () => {
+		// The branch that used to spell the rule out by hand while the module
+		// header claimed nothing in the file could. Both halves of the bare note
+		// have to come from the same records the concrete forms read, so this pins
+		// the two together: the compact note's span is the sentence's span.
+		expect(graceNote(null)).toContain("±0:30 grace");
+		const speechSpan = graceRuleSentence("speech")
+			.replace("A speech qualifies from ", "")
+			.replace(/\.$/, "");
+		expect(graceNote(null)).toBe(`±0:30 grace — ${speechSpan}`);
+		// …and ABSOLUTELY, so the derivation above cannot pass by both sides being
+		// wrong together.
+		expect(graceNote(null)).toBe(
+			"±0:30 grace — 0:30 before green through 0:30 after red",
+		);
+	});
+});
+
+// #720 — WHICH segment a row is, decided once. Three surfaces asked this in
+// three different ways before (a display label, a role key, and an implicit
+// speaker filter), which is the same shape as the bug the issue exists to fix.
+describe("segmentFor", () => {
+	it("is Table Topics for the Table Topics Master's key and nothing else", () => {
+		expect(segmentFor("table_topics_master")).toBe("tableTopics");
+		expect(segmentFor("speaker")).toBe("speech");
+		expect(segmentFor("evaluator")).toBe("speech");
+		expect(segmentFor("toastmaster_of_the_day")).toBe("speech");
+	});
+
+	it("treats a row with no role key as a speech", () => {
+		// An event row (Sergeant-at-Arms, President) carries no key, and
+		// `firstQualifyingWindow` has always treated those as speeches.
+		expect(segmentFor(null)).toBe("speech");
+		expect(segmentFor(undefined)).toBe("speech");
+	});
+
+	it("agrees with the role key the rest of the app matches on", () => {
+		// Not `segmentFor(TABLE_TOPICS_ROLE_KEY)`, which would pass for any value
+		// of the constant: the LITERAL key, so a rename of the constant that missed
+		// this derivation fails here.
+		expect(TABLE_TOPICS_ROLE_KEY).toBe("table_topics_master");
 	});
 });

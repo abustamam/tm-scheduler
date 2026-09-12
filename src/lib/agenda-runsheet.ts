@@ -1742,10 +1742,6 @@ export function introducedSuffix(names: string[]): string {
 }
 
 /**
- * Who holds `key` this meeting, as the `{names:…}` token renders it (#585):
- * `": Riyaz"`, `": Jagpal, Rehanna & Faisal"`, or `""`.
- */
-/**
  * Who is evaluating THIS speech (#719) — the inverse of `evaluatedSpeakerLabel`,
  * over the same `evaluatesSlotId` link and in the same `slotIndex` order.
  *
@@ -1778,6 +1774,10 @@ export function pairedEvaluatorNames(
 		.filter((n): n is string => n != null);
 }
 
+/**
+ * Who holds `key` this meeting, as the `{names:…}` token renders it (#585):
+ * `": Riyaz"`, `": Jagpal, Rehanna & Faisal"`, or `""`.
+ */
 function roleHolderNames(key: string, slots: AgendaSlot[]): string | null {
 	const role = NAMES_ROLES.find((r) => r.roleKey === key);
 	// Unknown key ⇒ null, so the caller can leave the token verbatim the way

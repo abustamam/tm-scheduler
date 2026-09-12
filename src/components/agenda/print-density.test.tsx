@@ -611,26 +611,55 @@ describe.skipIf(!hasChrome)(
 					time: "7:33",
 				},
 			];
-			// This case now measures the FLOW branch, and the number below is
-			// therefore the declared size rather than a squeezed one — read the
-			// assertion as "still legible", not as "still one sheet".
+			// This case measures the FLOW branch since #719, so the floor below is
+			// the DECLARED size rather than a squeezed one and would pass for a
+			// sheet of any length at all. On its own that is the shape
+			// CODING_STANDARDS names — an assertion that passes BECAUSE of the thing
+			// it should be noticing — so the branch itself is pinned first, and the
+			// floor is read as "still legible", never as "still one sheet".
 			//
 			// Measured on macOS harness fonts:
 			//
 			//   before #719 ............ 6.244pt, raw 0.7239 — squeezed onto ONE sheet
 			//   after  #719 ............ 8.625pt, raw 0.6778 — FLOWS onto two
 			//
-			// A three-speaker club's editorial agenda gains a sheet. The fixture was
-			// already 0.0039 above `MIN_FIT_SCALE` before this change — the next copy
-			// addition of any size was going to tip it — and #719's three preamble
-			// bands cost 99px against the ~10px of slack that was left. #563 is the
-			// issue about this layout being out of room; nothing shorter fixes it,
-			// since the cost is the ROWS and not their text (four copy variants
-			// measured identically at 6.366pt on the two-speaker fixture).
+			// A three-speaker club's editorial agenda gains a sheet. #719's AC 9
+			// anticipated the cost and asked that it be measured; this is what makes
+			// it a number a future change breaks, in EITHER direction — recover the
+			// sheet and this fails too, deliberately, so the recovery is recorded
+			// rather than absorbed.
 			//
-			// The floor still holds and is not vacuous in the direction that matters:
-			// a layout that got here by shrinking its own type would report a
-			// SMALLER number, not a larger one.
+			// This is the only harness in the repo that can see it.
+			// `print-page-count.test.tsx` structurally cannot: `FitPage`'s flow
+			// branch is a `useEffect`, both print harnesses feed static SSR markup
+			// to Chrome, so every `.agenda-page` there stays `height: PAGE_H;
+			// overflow: hidden` and content volume provably cannot move a count —
+			// that file's own header says exactly this, and a three-speaker fixture
+			// added there measured 1 sheet. `MIN_FIT_SCALE` is the predicate
+			// `FitPage` itself branches on, so comparing against it here asks the
+			// same question the runtime does.
+			const denserRaw = (PAGE_H - 2) / agendaHeight(denser);
+			expect(denserRaw).toBeLessThan(MIN_FIT_SCALE);
+
+			// …and the CONTROL that makes the line above a measurement of #719
+			// rather than of "three speeches is a lot of rows": the same agenda
+			// without the three preamble bands still fits one sheet, at raw 0.7239 —
+			// 0.0039 above the cliff, so the next copy addition of any size was
+			// going to tip it and #719 is what did. #563 is the issue about this
+			// layout being out of room. Nothing shorter fixes it: the cost is the
+			// ROWS, not their text, and four copy variants measured identically at
+			// 6.366pt on the two-speaker fixture above.
+			const withoutPreambles = denser.filter(
+				(r) => !r.detail.includes("asks for the speech objectives"),
+			);
+			expect(denser.length - withoutPreambles.length).toBe(3);
+			expect(
+				(PAGE_H - 2) / agendaHeight(withoutPreambles),
+			).toBeGreaterThanOrEqual(MIN_FIT_SCALE);
+
+			// The floor still holds, and is not vacuous in the direction that
+			// matters: a layout that got here by shrinking its own type would report
+			// a SMALLER number, not a larger one.
 			expect(printedDetailPt(denser)).toBeGreaterThanOrEqual(
 				EDITORIAL_DENSE_MIN_PRINTED_PT,
 			);

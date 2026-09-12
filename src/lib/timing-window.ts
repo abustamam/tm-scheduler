@@ -24,6 +24,12 @@
 // before green" beside a window that starts at green.
 import type { TimingMarks } from "./agenda-runsheet";
 import { speechWindow } from "./speech-window";
+// The role key only. `table-topics-limits` imports nothing from here at
+// runtime and its only `agenda-runsheet` import is a type, so this closes no
+// cycle — and naming the key rather than typing "table_topics_master" is what
+// keeps `segmentFor` bound to the same constant the deck and the agenda editor
+// match on.
+import { TABLE_TOPICS_ROLE_KEY } from "./table-topics-limits";
 
 /** The grace period either side of the assigned range, in minutes (30 s). */
 export const TIMING_GRACE_MINUTES = 0.5;
@@ -45,6 +51,28 @@ export const TIMING_GRACE_MINUTES = 0.5;
 export type TimingSegment = "speech" | "tableTopics";
 
 /**
+ * WHICH segment a row belongs to, from its `role_definitions.key` (#720).
+ *
+ * One derivation, because three surfaces need the answer and #720 is the bug
+ * that three copies of one timing rule produces. Before this they each decided
+ * for themselves and by different means — the Timer's sheet matched a display
+ * label (`assignment === "Table Topics"`), the templated deck matched the role
+ * key, and `firstQualifyingWindow` implied it from a speaker filter without
+ * ever naming a segment. `agenda-template-slides.ts` records what the last
+ * round of that cost: "two surfaces stating two disqualification rules for one
+ * club, differing only by whether anyone had opened the agenda editor."
+ *
+ * `null`/absent is `"speech"`, matching `firstQualifyingWindow`'s existing rule
+ * that a row with no `roleKey` is an event row and gets the speech treatment.
+ * Every non-Table-Topics segment is `"speech"` by construction — there is no
+ * third answer to give, because the only question is whether the grace applies
+ * below green.
+ */
+export function segmentFor(roleKey: string | null | undefined): TimingSegment {
+	return roleKey === TABLE_TOPICS_ROLE_KEY ? "tableTopics" : "speech";
+}
+
+/**
  * How far BELOW green the window reaches, per segment.
  *
  * A record rather than a boolean parameter so the rule is stated once, in one
@@ -57,24 +85,43 @@ const GRACE_BELOW_MINUTES: Record<TimingSegment, number> = {
 	tableTopics: 0,
 };
 
-/** The rule each segment's window obeys, as a clause. The numbers a surface
- *  prints and the sentence it prints beside them both come from the window's
- *  own `segment`, so they cannot disagree (#720). */
-const SEGMENT_RULE: Record<TimingSegment, string> = {
-	speech: "A speech qualifies from 0:30 before green through 0:30 after red",
+/**
+ * The BARE span each segment qualifies over — the clause with no subject.
+ *
+ * The one place a segment's rule is written in words. Everything else in this
+ * file that says the rule is built from this: the full sentence below, the
+ * compact note's fallback branch, and both concrete forms. Stated separately
+ * from `SEGMENT_RULE` because the compact note prints the span WITHOUT a
+ * subject ("±0:30 grace — 0:30 before green through 0:30 after red") and the
+ * sentence prints it WITH one, and those two were a hardcoded literal each
+ * until they disagreed — the module header claimed no surface could pair the
+ * speech words with a Table Topics window while `graceNote`'s own null branch
+ * derived from nothing at all.
+ */
+const SEGMENT_SPAN: Record<TimingSegment, string> = {
+	speech: "0:30 before green through 0:30 after red",
 	// "from green", not "from 0:30 before green" — the whole of #720 is that
 	// there is no credit below the minimum here. Kept to one clause because the
-	// Timer's sheet prints both of these plus its own trailing sentence inside a
-	// one-page budget (`role-sheet-layout.test.ts` fails you if it spills).
-	tableTopics:
-		"A Table Topics response qualifies from green through 0:30 after red",
+	// Timer's sheet prints both segments' sentences plus its own trailing line
+	// inside a one-page budget (`role-sheet-layout.test.ts` fails you if it
+	// spills).
+	tableTopics: "green through 0:30 after red",
 };
 
 /** What one timed item of this segment is CALLED, for the concrete "e.g. a
- *  5:00–7:00 speech qualifies …" half of the copy. */
+ *  5:00–7:00 speech qualifies …" half of the copy, and for the subject of the
+ *  full sentence below. */
 const SEGMENT_NOUN: Record<TimingSegment, string> = {
 	speech: "speech",
 	tableTopics: "Table Topics response",
+};
+
+/** The rule each segment's window obeys, as a clause. DERIVED from the noun and
+ *  the span, so the numbers a surface prints and the sentence beside them come
+ *  from one place and cannot disagree (#720). */
+const SEGMENT_RULE: Record<TimingSegment, string> = {
+	speech: `A ${SEGMENT_NOUN.speech} qualifies from ${SEGMENT_SPAN.speech}`,
+	tableTopics: `A ${SEGMENT_NOUN.tableTopics} qualifies from ${SEGMENT_SPAN.tableTopics}`,
 };
 
 /** The compact grace label. `±` only where the grace really is symmetric. */
@@ -189,7 +236,12 @@ export function firstQualifyingWindow(
 ): QualifyingWindow | null {
 	for (const row of rows) {
 		if (row.roleKey != null && row.roleKey !== "speaker") continue;
-		const w = qualifyingWindowForMarks(row.marks);
+		// The filter above already admits only speeches, so `segmentFor` can only
+		// answer "speech" here — and that is the point of asking it rather than
+		// letting the default do the work silently. The row's key decides its
+		// segment in ONE place (#720); this surface additionally decides which
+		// ROW to teach from, which is #507's separate rule.
+		const w = qualifyingWindowForMarks(row.marks, segmentFor(row.roleKey));
 		if (w) return w;
 	}
 	return null;
@@ -210,9 +262,17 @@ export function graceNote(w: QualifyingWindow | null): string {
 	// green. `firstQualifyingWindow` only ever hands this a SPEECH today, which
 	// is why the printed keys are unchanged — but the pairing is now structural
 	// rather than a property of that filter.
-	if (!w) return "±0:30 grace — 0:30 before green through 0:30 after red";
-	return `${SEGMENT_GRACE_LABEL[w.segment]} — e.g. a ${w.assigned} ${
-		SEGMENT_NOUN[w.segment]
+	//
+	// The no-window branch is DERIVED too, from the speech segment rather than
+	// from a literal. It was the one place in this file that spelled the rule out
+	// by hand, which made the module header's "no surface can print '0:30 before
+	// green' beside a window that starts at green" an overclaim about its own
+	// neighbour: editing `SEGMENT_SPAN.speech` would have moved every other
+	// surface and left this line behind.
+	const segment = w?.segment ?? "speech";
+	if (!w) return `${SEGMENT_GRACE_LABEL[segment]} — ${SEGMENT_SPAN[segment]}`;
+	return `${SEGMENT_GRACE_LABEL[segment]} — e.g. a ${w.assigned} ${
+		SEGMENT_NOUN[segment]
 	} qualifies ${w.range}`;
 }
 
@@ -232,11 +292,12 @@ export function graceRuleSentence(segment: TimingSegment): string {
 
 /** The full-sentence form for the two-page "Timing Signals" callout and any
  *  other surface with room to spell the rule out. The rule follows the window's
- *  own segment, exactly as `graceNote` above does (#720). */
+ *  own segment, exactly as `graceNote` above does (#720), and with no window it
+ *  IS `graceRuleSentence("speech")` — delegated rather than restated, so the two
+ *  cannot drift into being two sentences. */
 export function graceSentence(w: QualifyingWindow | null): string {
-	const segment = w?.segment ?? "speech";
-	const rule = SEGMENT_RULE[segment];
-	return w
-		? `${rule} — a ${w.assigned} ${SEGMENT_NOUN[segment]} qualifies between ${w.from} and ${w.to}.`
-		: `${rule}.`;
+	if (!w) return graceRuleSentence("speech");
+	return `${SEGMENT_RULE[w.segment]} — a ${w.assigned} ${
+		SEGMENT_NOUN[w.segment]
+	} qualifies between ${w.from} and ${w.to}.`;
 }

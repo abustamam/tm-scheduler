@@ -61,13 +61,13 @@ import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
 import {
 	formatTableTopicsWindow,
 	hasTableTopicsLimits,
-	TABLE_TOPICS_ROLE_KEY,
 	type TableTopicsLimits,
 } from "./table-topics-limits";
 import {
 	formatTimingClock,
 	type QualifyingWindow,
 	qualifyingWindowForMarks,
+	segmentFor,
 } from "./timing-window";
 
 export type TemplateDeckInput = {
@@ -120,19 +120,18 @@ export function beatTimingText(
 	tableTopicsLimits?: TableTopicsLimits | null,
 ): BeatTiming | null {
 	if (!row.marks) return null;
-	const isTableTopics = row.roleKey === TABLE_TOPICS_ROLE_KEY;
-	const ownRule = isTableTopics && hasTableTopicsLimits(tableTopicsLimits);
-	// The segment travels into the derivation (#720). A club that has stated
-	// nothing still projects a window here — the standard 1:00–2:00 marks — and
-	// it used to be the SPEECH window of those marks, "qualifies 0:30–2:30",
-	// telling the room a 31-second answer was eligible for the vote. The upper
-	// +0:30 is unchanged; only the floor moves, to green.
-	const window = ownRule
-		? null
-		: qualifyingWindowForMarks(
-				row.marks,
-				isTableTopics ? "tableTopics" : "speech",
-			);
+	// ONE derivation of "which segment is this row", shared with the Timer's
+	// sheet and the printed agenda's grace line (#720) — `segmentFor` is where
+	// the role key is matched, so this file no longer states that rule itself.
+	const segment = segmentFor(row.roleKey);
+	const ownRule =
+		segment === "tableTopics" && hasTableTopicsLimits(tableTopicsLimits);
+	// The segment travels into the derivation. A club that has stated nothing
+	// still projects a window here — the standard 1:00–2:00 marks — and it used
+	// to be the SPEECH window of those marks, "qualifies 0:30–2:30", telling the
+	// room a 31-second answer was eligible for the vote. The upper +0:30 is
+	// unchanged; only the floor moves, to green.
+	const window = ownRule ? null : qualifyingWindowForMarks(row.marks, segment);
 	if (!ownRule && !window) return null;
 	return {
 		green: formatTimingClock(row.marks.green),

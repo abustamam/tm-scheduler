@@ -601,31 +601,38 @@ export function buildTemplateRowsWithSource(
 		);
 		repeated.forEach((s, n) => {
 			for (const blockRow of block) {
-				// Bind the ROLE-owning row to this iteration's slot. A row inside the
-				// block that owns a DIFFERENT role binds to its own holders instead
-				// (#719: the Toastmaster's speech preamble, repeating alongside the
-				// speech it introduces), so it names that person rather than nobody.
-				// A row with no role at all — a contest's minute of silence — still
-				// binds to nothing and repeats as-is.
+				// Bind the ROLE-owning row to this iteration's slot; the others in
+				// the block (a minute of silence) own no slot and repeat as-is.
+				//
+				// The ONE exception is a HAND-OFF row inside a block it does not own
+				// (#719's speech preamble, repeating alongside the speech it
+				// introduces). A hand-off row says "X introduces Y": X has to be a
+				// person, and X is never "the 2nd of anything" — so it binds to its
+				// own role's holders and keeps its label unnumbered, where the
+				// default would print "Toastmaster of the Day 1" holding nobody. The
+				// exception is scoped to `handoff` rather than to every non-owning
+				// role row so that no other template row's rendering moves: a plain
+				// role beat an officer parks inside a repeat block is unchanged.
 				const owns = blockRow.roleKey === repeatKey;
+				const introducerKey =
+					!owns && blockRow.handoff && blockRow.kind === "role"
+						? blockRow.roleKey
+						: null;
 				const bound = owns
 					? [s]
-					: blockRow.kind === "role" && blockRow.roleKey != null
-						? slotsForRole(slots, blockRow.roleKey).slice(
-								0,
-								MAX_ROLE_REPEAT_SLOTS,
-							)
+					: introducerKey != null
+						? slotsForRole(slots, introducerKey).slice(0, MAX_ROLE_REPEAT_SLOTS)
 						: [];
 				const emitted = toRow(
 					blockRow,
 					rolesByKey,
 					bound,
-					// A non-owning row is not the Nth of anything — numbering it by the
-					// iteration prints "Toastmaster of the Day 1" above speech 1. Same
-					// 0/0 the non-repeating role path passes, which leaves the label
+					// Only the hand-off exception moves; every other block row keeps
+					// the iteration's index and count exactly as before. 0/0 is what
+					// the non-repeating role path passes, and it leaves the label
 					// unnumbered.
-					owns ? n : 0,
-					owns ? repeated.length : 0,
+					introducerKey != null ? 0 : n,
+					introducerKey != null ? 0 : repeated.length,
 					slots,
 					// The iteration's slot, passed to EVERY row in the block rather
 					// than only the owning one: a block row that does not own the slot
