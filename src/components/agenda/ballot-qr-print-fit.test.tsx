@@ -446,18 +446,25 @@ describe.skipIf(!hasChrome)(
 			}
 		});
 
-		it("adds spacious page 1's code for no height at all", () => {
+		it("puts spacious page 1's code BESIDE its officer band, not under it", () => {
 			const m = measure();
-			// The officer band on that sheet is ~159px tall — an officer grid plus
-			// the meeting schedule — so a `FOOTER_QR_PX` square placed beside it
-			// fits inside the height the band already had. Measured 890px with the
-			// code and 890px without: exactly zero.
+			// The officer band on that sheet is an officer grid plus the meeting
+			// schedule, and it is taller than the code, so a `FOOTER_QR_PX` square
+			// placed beside it mostly fits inside height the band already had.
 			//
-			// Stated as a small ceiling rather than `=== 0` so a platform that
-			// wraps the officer grid differently does not fail for the wrong
-			// reason, and it is the assertion that fails if someone moves this code
-			// under the band instead of beside it.
-			expect(m.spSheet1Qr - m.spSheet1None).toBeLessThanOrEqual(4);
+			// The bound is 32, and the first cut of it was 4 — calibrated against
+			// the zero this measures on macOS, which is the same mistake as
+			// calibrating a size against one platform's sheet height. CI's Ubuntu
+			// renders that officer grid ~14px shorter, so the square overhangs it
+			// and the sheet grows by 14px. Not a regression: the sheet is 890-904px
+			// of 1056 either way, which the case above already holds.
+			//
+			// What this is actually for is the PLACEMENT. Under the band the code
+			// costs the square plus its gap — 63px at today's constant, and more at
+			// any larger one — so 32 separates "beside" from "under" with room for
+			// the platform spread measured on both (0px macOS, 14px Ubuntu) and is
+			// not derived from `FOOTER_QR_PX`.
+			expect(m.spSheet1Qr - m.spSheet1None).toBeLessThanOrEqual(32);
 		});
 	},
 );

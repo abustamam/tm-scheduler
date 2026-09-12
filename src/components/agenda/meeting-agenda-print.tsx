@@ -1773,10 +1773,12 @@ function SpaciousLayout({
 						    `DarkFooter` beneath it: a second dark band would be a
 						    block-level addition to a sheet, which is the shape of change
 						    that pushes a printed page. Beside the officer stack it is
-						    free — that stack is ~115px tall, so a `FOOTER_QR_PX` square
-						    fits inside it with room over, and this sheet measures 905px
-						    of 1056 with the code on it. Same trick, same reason, as
-						    `DarkFooter`'s own rewrite. */}
+						    all but free — that stack is taller than the square, so the
+						    sheet measures 890px of 1056 with the code on it against 890
+						    without (macOS), and 904 against 890 on CI's Ubuntu, where
+						    the officer grid renders ~14px shorter and the square
+						    overhangs it. Same trick, same reason, as `DarkFooter`'s own
+						    rewrite. */}
 						<div style={{ display: "flex", alignItems: "center", gap: 18 }}>
 							<div style={{ flex: 1, minWidth: 0 }}>
 								{officers.length > 0 ? (
