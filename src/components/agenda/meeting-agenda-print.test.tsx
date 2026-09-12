@@ -15,6 +15,7 @@ import {
 	type AgendaLayout,
 	MeetingAgendaPrint,
 } from "./meeting-agenda-print";
+import { FOOTER_QR_PX } from "./print-theme";
 
 afterEach(cleanup);
 
@@ -1253,7 +1254,100 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 			);
 			expect(container.querySelector(".footer-qr")).toBeNull();
 		});
+
+		it(`sizes the ${layout} layout's QR from FOOTER_QR_PX`, () => {
+			// #717. The size was a bare `32` at two call sites — `DarkFooter` and
+			// `GridLayout`'s hand-rolled copy — and a bare literal at a call site
+			// is how the two would drift again. Read off the rendered `<svg>`
+			// rather than off the import, so a call site that keeps its own number
+			// fails here instead of passing because the constant exists.
+			//
+			// This says the code is DECLARED at that edge. What it prints is a
+			// different number on three of these four layouts, because `FitPage`
+			// scales the whole sheet — and how much bigger the sheet got is the
+			// half only a browser can see (`ballot-qr-print-fit.test.tsx`).
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			for (const svg of container.querySelectorAll(".footer-qr svg")) {
+				expect(svg.getAttribute("width")).toBe(String(FOOTER_QR_PX));
+				expect(svg.getAttribute("height")).toBe(String(FOOTER_QR_PX));
+			}
+			// …and the loop above is only a claim if it ran. A layout whose QR
+			// stopped rendering would satisfy every assertion in it.
+			expect(
+				container.querySelectorAll(".footer-qr svg").length,
+			).toBeGreaterThan(0);
+		});
 	}
+
+	// #717's other half, and the one a reader cannot see on screen: `timing` is
+	// the only two-sheet layout, both its sheets scroll past in one view, and
+	// page 1 was never passed `ballotUrl` at all. A club printing that agenda
+	// double-sided handed out a front side with no way to reach the ballot.
+	//
+	// Scoped per SHEET rather than counting `.footer-qr` in the container,
+	// because a count of 2 is also what a page-2 footer rendered twice would
+	// give. `TwoPage` emits both sheets as `.agenda-page` siblings.
+	describe("the timing layout carries it on BOTH sheets", () => {
+		const sheets = (container: HTMLElement) => [
+			container.querySelector(".agenda-page:nth-of-type(1)"),
+			container.querySelector(".agenda-page:nth-of-type(2)"),
+		];
+
+		it("puts a real QR on page 1 and page 2 when ballotUrl is set", () => {
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout="timing"
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[{ role: "Timer", description: "Times the meeting." }]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			const [page1, page2] = sheets(container);
+			// The control first: two sheets, so "page 1" below is a real sheet and
+			// not a null the optional chaining would quietly forgive.
+			expect(page1).not.toBeNull();
+			expect(page2).not.toBeNull();
+			for (const page of [page1, page2]) {
+				const qr = page?.querySelector(".footer-qr");
+				expect(qr).not.toBeNull();
+				expect(qr?.querySelector("svg")).not.toBeNull();
+				expect(qr?.textContent?.toLowerCase()).toContain("scan to vote");
+			}
+		});
+
+		it("puts one on NEITHER sheet when ballotUrl is undefined", () => {
+			// AC 7: with no ballot URL the footers are exactly what they were, on
+			// both sheets — page 1 must not start rendering an empty QR frame now
+			// that it is wired up.
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout="timing"
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[{ role: "Timer", description: "Times the meeting." }]}
+					rows={rows}
+				/>,
+			);
+			for (const page of sheets(container)) {
+				expect(page).not.toBeNull();
+				expect(page?.querySelector(".footer-qr")).toBeNull();
+			}
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------

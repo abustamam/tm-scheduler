@@ -23,6 +23,7 @@ import { ClubLogo } from "./club-logo";
 import {
 	DarkFooter,
 	FitPage,
+	FOOTER_QR_PX,
 	FOREST,
 	GREEN,
 	HAIR,
@@ -1424,7 +1425,10 @@ function GridLayout({
 							// Top margin trimmed 14 → 10 (#510) — the fourth and last piece
 							// of the inventory this file's header earmarks: three section
 							// gaps above plus this footer margin, ~16px total, spent to pay
-							// for the ~19px the QR costs the row just below.
+							// for the ~19px a 32px QR cost the row just below. #717 raised
+							// that code to `FOOTER_QR_PX` and paid the extra 24px out of
+							// this layout's remaining slack rather than out of the
+							// inventory, which is already spent — see the QR's own note.
 							margin: "10px -36px 0",
 							padding: "13px 36px 16px",
 							color: "#fff",
@@ -1436,9 +1440,10 @@ function GridLayout({
 									display: "flex",
 									justifyContent: "space-between",
 									// `center`, not the original `baseline`: this row can now
-									// carry a 32px QR beside its text, and centering the two
-									// is the shape that reads right — baseline would sit the
-									// square against the text's cap-height instead.
+									// carry a `FOOTER_QR_PX` square beside its text, and
+									// centering the two is the shape that reads right —
+									// baseline would sit the square against the text's
+									// cap-height instead.
 									alignItems: "center",
 									gap: 16,
 									marginBottom: officers.length > 0 ? 8 : 0,
@@ -1479,10 +1484,22 @@ function GridLayout({
 									) : null}
 									{ballotUrl ? (
 										// Grid has no headroom (see the file-header note above),
-										// so this is the smallest legible copy of the QR rather
-										// than `DarkFooter`'s: one caption line, not two, and 5px
-										// of gap instead of 6 — every point here was taken out of
-										// the layout's own inventory, not left on the table.
+										// so this is the tightest copy of the QR rather than
+										// `DarkFooter`'s: one caption line, not three, and 5px
+										// of gap instead of 7 — every point here was taken out
+										// of the layout's own inventory, not left on the table.
+										//
+										// The SIZE is shared, though (#717): a second literal is
+										// how the two drifted, and this footer can afford the
+										// same edge. Measured on the real MCF agenda, a 56px code
+										// here puts the sheet at 1430px against the 1464px where
+										// `FitPage` would flow it onto a second page — 34px of
+										// slack, about two wrapped lines of the cross-platform
+										// variance `agenda-print-type.ts` describes. That is the
+										// number `ballot-qr-print-fit.test.tsx` holds; raising
+										// `FOOTER_QR_PX` past it costs this layout a sheet, and
+										// unlike `DarkFooter` there is no disclaimer here for the
+										// code to sit beside and ride for free.
 										<span
 											className="footer-qr"
 											style={{
@@ -1491,7 +1508,11 @@ function GridLayout({
 												gap: 5,
 											}}
 										>
-											<QRCodeSVG value={ballotUrl} size={32} marginSize={0} />
+											<QRCodeSVG
+												value={ballotUrl}
+												size={FOOTER_QR_PX}
+												marginSize={0}
+											/>
 											<span
 												style={{
 													fontSize: 6,
@@ -2073,9 +2094,17 @@ function TimingLayout({
 					) : null}
 				</div>
 
+				{/* #717: `ballotUrl` here, not only on page 2. `timing` is the only
+				    two-sheet layout a club prints DOUBLE-SIDED, and the front side
+				    carried no way to reach the ballot. Invisible on screen, where
+				    both sheets scroll past in one view. This sheet has the room:
+				    measured 928px of 1056 with the code on it, so `FitPage` applies
+				    no scale at all and this is the one printed surface in the app
+				    where the QR lands at its full `FOOTER_QR_PX` edge. */}
 				<DarkFooter
 					left="Page 1 of 2 · Officers & roles"
 					right="toastmasters.org"
+					ballotUrl={ballotUrl}
 				/>
 			</FitPage>
 

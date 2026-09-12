@@ -294,18 +294,60 @@ export function Kick({
 }
 
 /**
+ * The printed scan-to-vote QR's edge, in CSS px. ONE number for every printed
+ * ballot QR — `DarkFooter` below and `GridLayout`'s hand-rolled copy of it
+ * (`meeting-agenda-print.tsx`). Two literals is how those drifted before (#717).
+ *
+ * It shipped at 32, which is ~8.5mm at the 96dpi `@page` assumes, and less than
+ * that in the hand: the one-page layouts sit inside `FitPage`, so the code
+ * PRINTS at 32 × the sheet's scale — measured 23px (6.2mm) on editorial. The
+ * encoded value is an origin plus `/club/<slug>/meeting/<key>/vote`, which lands
+ * at QR version 3-4, so that is a ~0.2mm module: about half what a phone camera
+ * resolves across a table.
+ *
+ * 56, not the 72 (~19mm) #717 asked for, and the ceiling is the editorial sheet
+ * rather than the footer band. Measured on the real MCF 2026-08-13 agenda
+ * through `print-page-count.ts`'s harness (macOS fonts — see that file on why
+ * these are not the deployed page's numbers). `FitPage` FLOWS a sheet onto a
+ * second page once it needs a scale under `MIN_FIT_SCALE`, which for editorial
+ * is 1464px of content:
+ *
+ *   footer as it was, QR 32 ....... 1445px  raw 0.7294  6.291pt   ← shipped
+ *   footer as it was, QR 48 ....... 1461px  raw 0.7214  6.222pt
+ *   footer as it was, QR 56 ....... 1469px  FLOWS — the agenda gains a sheet
+ *   QR beside the whole footer, 56  1443px  raw 0.7304  6.300pt   ← ships
+ *   QR beside the whole footer, 72  1459px  raw 0.7224  6.231pt
+ *
+ * So the row rewrite below is what pays for the bump rather than headroom that
+ * was lying around: a QR up to ~41px now costs the sheet NOTHING, and 56 leaves
+ * editorial 2px SHORTER and a hair more legible than it prints today. 72 would
+ * land 5px from the flow cliff and 0.031pt from `EDITORIAL_MIN_PRINTED_PT`,
+ * which is inside the cross-platform wrap variance those floors carry margin
+ * for. Raising this further is a decision about editorial's density (#563), not
+ * about the QR — and `ballot-qr-print-fit.test.tsx` is what will tell you.
+ */
+export const FOOTER_QR_PX = 56;
+
+/**
  * The dark page footer: a left/right line plus the non-affiliation disclaimer.
  *
- * `ballotUrl`, when set, adds a small scan-to-vote QR (#510) beside `right` —
- * for clubs that print the agenda instead of projecting present mode. It is
- * optional and threaded only to the LAST sheet of a layout (the one still on
- * the table when voting happens). `GridLayout` hand-rolls its own tight
- * officer footer instead of this component (see its "NO HEADROOM LEFT" note)
- * and carries its own, smaller copy of the same QR rather than one here.
+ * `ballotUrl`, when set, adds a scan-to-vote QR (#510) at the band's right edge
+ * — for clubs that print the agenda instead of projecting present mode. It is
+ * optional, and since #717 it is threaded to EVERY sheet of a layout rather
+ * than the last: `timing` prints two sides, and a club printing it double-sided
+ * was handing out a front side with no way to vote. `GridLayout` hand-rolls its
+ * own tight officer footer instead of this component (see its "NO HEADROOM
+ * LEFT" note) and carries its own copy of the same QR, at the same
+ * `FOOTER_QR_PX`, rather than one here.
  *
- * The QR renders INLINE (`display: inline-flex`), sharing the same row as
- * `right`, not as its own block below — a block-level addition here is the
- * shape of change that pushes a printed page (`print-page-reset.guard.test.ts`).
+ * The QR is a flex sibling of the ENTIRE footer stack — the left/right line and
+ * the disclaimer both — not a member of the left/right row. That is the whole
+ * reason `FOOTER_QR_PX` can be 56 instead of 32: beside a two-line disclaimer
+ * the code is free up to ~41px and cheap past it, where inside the row every
+ * pixel of it was height the sheet had to find. It is still INLINE
+ * (`display: inline-flex`) and still inside the same band — a block-level
+ * addition below the band is the shape of change that pushes a printed page
+ * (`print-page-reset.guard.test.ts`).
  */
 export function DarkFooter({
 	left,
@@ -324,60 +366,79 @@ export function DarkFooter({
 				padding: "11px 38px",
 			}}
 		>
-			<div
-				style={{
-					display: "flex",
-					justifyContent: "space-between",
-					alignItems: "center",
-					gap: 12,
-				}}
-			>
-				<span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>
-					{left}
-				</span>
-				<span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-					<span
+			<div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+				<div style={{ flex: 1, minWidth: 0 }}>
+					<div
 						style={{
-							fontSize: 11,
-							fontWeight: 700,
-							color: SEAFOAM,
-							letterSpacing: ".03em",
+							display: "flex",
+							justifyContent: "space-between",
+							alignItems: "center",
+							gap: 12,
 						}}
 					>
-						{right}
-					</span>
-					{ballotUrl ? (
-						<span
-							className="footer-qr"
-							style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-						>
-							<QRCodeSVG value={ballotUrl} size={32} marginSize={0} />
-							<span
-								style={{
-									fontSize: 6.5,
-									lineHeight: 1.2,
-									color: "rgba(255,255,255,.85)",
-									fontWeight: 700,
-								}}
-							>
-								Scan to vote
-								<br />
-								Best Speaker · Evaluator · Table Topics
-							</span>
+						<span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>
+							{left}
 						</span>
-					) : null}
-				</span>
+						<span
+							style={{
+								fontSize: 11,
+								fontWeight: 700,
+								color: SEAFOAM,
+								letterSpacing: ".03em",
+							}}
+						>
+							{right}
+						</span>
+					</div>
+					<p
+						style={{
+							margin: "6px 0 0",
+							fontSize: 7.5,
+							lineHeight: 1.35,
+							color: "rgba(255,255,255,0.5)",
+						}}
+					>
+						{TOASTMASTERS_DISCLAIMER}
+					</p>
+				</div>
+				{ballotUrl ? (
+					<span
+						className="footer-qr"
+						style={{
+							flex: "none",
+							display: "inline-flex",
+							alignItems: "center",
+							gap: 7,
+						}}
+					>
+						{/* Three lines now, from #510's two, and the same words. The
+						    band is the thing that is genuinely scarce HORIZONTALLY:
+						    every pixel this caption takes comes off the disclaimer's
+						    column beside it, and a disclaimer pushed from two printed
+						    lines to three is 10px the sheet has to find. Broken by
+						    hand rather than by a width cap so the wrap points are the
+						    readable ones and not wherever the platform's fallback font
+						    lands. Three short lines still fit inside `FOOTER_QR_PX`,
+						    so they cost the band no height at all. */}
+						<span
+							style={{
+								fontSize: 6.5,
+								lineHeight: 1.2,
+								color: "rgba(255,255,255,.85)",
+								fontWeight: 700,
+								textAlign: "right",
+							}}
+						>
+							Scan to vote
+							<br />
+							Best Speaker
+							<br />
+							Evaluator · Table Topics
+						</span>
+						<QRCodeSVG value={ballotUrl} size={FOOTER_QR_PX} marginSize={0} />
+					</span>
+				) : null}
 			</div>
-			<p
-				style={{
-					margin: "6px 0 0",
-					fontSize: 7.5,
-					lineHeight: 1.35,
-					color: "rgba(255,255,255,0.5)",
-				}}
-			>
-				{TOASTMASTERS_DISCLAIMER}
-			</p>
 		</div>
 	);
 }
