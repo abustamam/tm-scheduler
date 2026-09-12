@@ -30,12 +30,19 @@
 // the club's Table Topics window and the GE variant flag. Deriving them any
 // other way is how the phone and the paper come to disagree about when red is.
 //
-// ## No writes, and so no new authorization
+// ## The page grants nothing; `canRecord` is an affordance
 //
-// This issue stores nothing (#730 is the record). The page is offered to any
-// visitor who can name themselves, exactly like the two duty editors, and the
-// LINK to it is what is scoped to the Timer — on the personal meeting page,
-// through `findTimerSlot`.
+// The page is offered to any visitor who can name themselves, exactly like the
+// two duty editors, and the LINK to it is scoped to the Timer on the personal
+// meeting page. Since #730 it also passes a `canRecord` flag, computed from the
+// meeting's own slots so a member who holds none of the three capabilities is
+// not shown a control that could only fail. It is an AFFORDANCE and nothing
+// more: `recordMeetingTiming` re-runs the whole actor ladder server-side on
+// every request, and its answer is the one that counts.
+//
+// The route still performs no write itself — `meeting-timer.tsx` calls
+// `recordTiming`, for the same reason the markup lives there: a route module is
+// untestable by construction.
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingTimer } from "#/components/club/meeting-timer";
@@ -43,6 +50,7 @@ import { Button } from "#/components/ui/button";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { formatMeetingDate } from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
+import { findTimerSlot, findTmodSlot } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { personalMeetingHref } from "#/lib/role-duties";
 import { getMeetingByKey, getPublicMeetingByKey } from "#/server/meetings";
@@ -75,6 +83,7 @@ function PersonalTimerRoute() {
 		meeting,
 		slots,
 		timezone,
+		canManage,
 		geIntroducesFunctionaries,
 		tableTopicsMinSeconds,
 		tableTopicsMaxSeconds,
@@ -111,6 +120,18 @@ function PersonalTimerRoute() {
 		slots,
 	});
 
+	// The three capabilities the server admits, resolved the way the server
+	// resolves them (#730): key first, exact canonical name only for a NULL key.
+	// A `roleKey === "timer"` comparison here would hide the control from a
+	// standard Timer whose key predates the #368 backfill, and offer it to a
+	// club-invented look-alike — the #464 shape, on the CLIENT half where it
+	// shows up as "the button never appears for me".
+	const canRecord =
+		myId !== null &&
+		(canManage ||
+			myId === (findTimerSlot(slots)?.assigneeId ?? null) ||
+			myId === (findTmodSlot(slots)?.assigneeId ?? null));
+
 	if (!myId) {
 		return <NeedsIdentity onPick={promptIdentity} />;
 	}
@@ -123,6 +144,14 @@ function PersonalTimerRoute() {
 			tableTopicsLimits={{
 				minSeconds: tableTopicsMinSeconds,
 				maxSeconds: tableTopicsMaxSeconds,
+			}}
+			slots={slots}
+			recording={{
+				// `meeting.id`, never the `$meetingId` URL segment — the segment is a
+				// club-local date key and the writer validates a uuid.
+				meetingId: meeting.id,
+				actorMemberId: myId,
+				canRecord,
 			}}
 		/>
 	);

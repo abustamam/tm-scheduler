@@ -89,6 +89,18 @@ const PUBLIC_ACTOR_MODULES = new Set([
 	// Transitional: PR 2 repoints the panel here and deletes `availability.ts`,
 	// which takes this list back to two.
 	"attendance-plan.ts",
+	// #730: recording the time the Timer measured. A fourth session-less write
+	// endpoint, and it is here for the reason this list exists — to INVENTORY
+	// them — rather than because the field is decorative. It is load-bearing: a
+	// timing has no subject member to fall back to, so unlike the attendance
+	// ladder there is no default that would credit an unnamed caller to anyone.
+	// The assertion IS the identity, and the whole ladder is decided from it.
+	//
+	// The payload spells the field `actorMemberId` and the seam takes it as
+	// `claimedActorMemberId`, which is the rename the case below keys on: what
+	// arrives is what a client SAID, and `resolveWriteActor` club-scopes it
+	// before anything is credited to it.
+	"timings.ts",
 ]);
 
 /** Not an actor at all — a READ filter on the activity feed ("show me rows by
@@ -218,12 +230,21 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 		// inline call in #675, when the ladder moved out of `attendance-plan.ts` so
 		// `availability.ts`'s destructive writer could reuse it instead of shipping
 		// a second copy — or, as it had until then, no subject check at all.
+		//
+		// `timings-logic.ts` (#730) is the same shape and is admitted on the same
+		// terms: `timings.ts` is a wrapper with no decision in it, its ladder lives
+		// one hop away in the seam, and the far end is pinned by its own case
+		// below. Admitting a hop without pinning its far end would let the chain be
+		// broken where nothing is looking, which is the whole reason both cases
+		// exist rather than just the allowance.
 		for (const file of PUBLIC_ACTOR_MODULES) {
 			const src = readSource(join(serverDir, file));
 			expect(
 				src,
 				`${file} accepts an asserted actor but never resolves it`,
-			).toMatch(/from "\.\/(write-actor-logic|attendance-actor-logic)"/);
+			).toMatch(
+				/from "\.\/(write-actor-logic|attendance-actor-logic|timings-logic)"/,
+			);
 			const asserted = schemaActorFields(src).length;
 			const resolved = (src.match(SANCTIONED_READ) ?? []).length;
 			expect(
@@ -232,6 +253,18 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 					`every server fn that accepts one must hand it to write-actor-logic`,
 			).toBeGreaterThanOrEqual(asserted);
 		}
+	});
+
+	it("the timing ladder itself reaches write-actor-logic (#730)", () => {
+		// The far end of the hop allowed above for `timings.ts`. Without this,
+		// deleting `resolveWriteActor` from that ladder would leave the wrapper
+		// satisfying the inverse assertion through a module that resolves nothing.
+		const src = readSource(join(serverDir, "timings-logic.ts"));
+		expect(src).toMatch(/from "\.\/write-actor-logic"/);
+		expect(
+			src,
+			"the ladder must club-scope the caller through resolveWriteActor, not compare a raw payload id",
+		).toContain("resolveWriteActor({");
 	});
 
 	it("the shared actor ladder itself reaches write-actor-logic", () => {
@@ -253,11 +286,12 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 		// and forces the change to be argued for in review. That review is also the
 		// real control on the shapes the regexes above cannot see (see the header)
 		// — a new no-auth write endpoint is the only way one of them lands.
-		expect(PUBLIC_ACTOR_MODULES.size).toBe(3);
+		expect(PUBLIC_ACTOR_MODULES.size).toBe(4);
 		expect([...PUBLIC_ACTOR_MODULES].sort()).toEqual([
 			"attendance-plan.ts",
 			"availability.ts",
 			"slots.ts",
+			"timings.ts",
 		]);
 	});
 });

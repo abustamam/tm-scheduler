@@ -1,5 +1,6 @@
 import { Download } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { SyncStatus } from "#/components/club/sync-status";
 import {
 	AssigneePicker,
@@ -15,10 +16,13 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card";
+import { Input } from "#/components/ui/input";
 import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { formatCalendarDay } from "#/lib/format";
 import { projectMinutes } from "#/lib/project-minutes";
+import { formatStopwatch, parseStopwatch } from "#/lib/timer-state";
+import { TIMING_VERDICT_LABEL, timingVerdict } from "#/lib/timing-verdict";
 import type { MinutesActionItems } from "#/server/action-items-logic";
 import {
 	addTableTopics,
@@ -28,8 +32,10 @@ import {
 	removeTableTopics,
 	setMinutesAward,
 } from "#/server/minutes";
+import { recordTiming } from "#/server/timings";
 
 type MinutesData = NonNullable<MinutesResult["data"]>;
+type MinutesTiming = NonNullable<MinutesData["timings"]>[number];
 type AwardCategory = MinutesData["awards"][number]["category"];
 /**
  * Derived from the payload rather than re-declared as a hand-written union. The
@@ -393,6 +399,12 @@ function MeetingMinutesView({
 					}
 				/>
 
+				<TimingSection
+					meetingId={meetingId}
+					timings={displayMinutes.timings}
+					canEdit={canEdit}
+				/>
+
 				<ProgramSection program={program} meetingPast={meetingPast} />
 			</CardContent>
 		</Card>
@@ -587,6 +599,185 @@ function AwardsSection({
 				))}
 			</ul>
 		</section>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Timing (#730) — read-only for a member, correctable by an officer
+// ---------------------------------------------------------------------------
+
+/**
+ * The times the Timer measured, with the verdict derived from each row's OWN
+ * stored marks.
+ *
+ * ## Not through the offline queue, and that is deliberate
+ *
+ * Every other write on this card goes through `mutate` (the offline minutes
+ * queue). A timing correction does not: the timing write is a plain server fn
+ * for the three reasons `timings-logic.ts` sets out, and putting the CORRECTION
+ * on the queue while the RECORD is direct would give one table two write
+ * channels with different ordering guarantees. The correction is an officer at
+ * a laptop, after the meeting, which is the case the queue was never for.
+ *
+ * ## Why the accepted value is held locally
+ *
+ * The route hands this card no invalidation callback — `onMutated` reaches only
+ * the standalone fallback — so a saved correction has nothing to refetch it.
+ * Rather than reach past the props for a router, the accepted value is kept in
+ * a local overlay and rendered over the loader's rows: the write has landed,
+ * the officer sees what they typed, and the next real load reads it back from
+ * the database. The overlay is per SLOT, and it holds only what the SERVER
+ * returned, so it can never show a number the row does not have.
+ */
+function TimingSection({
+	meetingId,
+	timings,
+	canEdit,
+}: {
+	meetingId: string;
+	/** Optional: the offline snapshot in IndexedDB is an unversioned
+	 *  `MinutesData` from a previous deploy and has no `timings` key at all. */
+	timings: MinutesTiming[] | undefined;
+	canEdit: boolean;
+}) {
+	const [corrected, setCorrected] = useState<Record<string, number>>({});
+	const rows = timings ?? [];
+	// Absent, not empty: a club that does not use the stopwatch has not failed
+	// to record anything, and a permanently empty section on every set of its
+	// minutes says otherwise. Same choice the PDF's `buildTimingSection` makes,
+	// and the two must agree or the screen and the download differ.
+	if (rows.length === 0) return null;
+	return (
+		<section className="space-y-2">
+			<div>
+				<h3 className="font-semibold text-sm">Timing</h3>
+				<p className="text-xs text-[var(--sea-ink-soft)]">
+					What the Timer measured, against the window each segment was assigned
+					at the time.
+				</p>
+			</div>
+			<ul className="space-y-1 text-sm">
+				{rows.map((t) => (
+					<TimingRow
+						key={t.slotId}
+						meetingId={meetingId}
+						timing={
+							t.slotId in corrected
+								? { ...t, elapsedSeconds: corrected[t.slotId] }
+								: t
+						}
+						canEdit={canEdit}
+						onCorrected={(seconds) =>
+							setCorrected((prev) => ({ ...prev, [t.slotId]: seconds }))
+						}
+					/>
+				))}
+			</ul>
+		</section>
+	);
+}
+
+function TimingRow({
+	meetingId,
+	timing,
+	canEdit,
+	onCorrected,
+}: {
+	meetingId: string;
+	timing: MinutesTiming;
+	canEdit: boolean;
+	onCorrected: (seconds: number) => void;
+}) {
+	const [editing, setEditing] = useState(false);
+	const [text, setText] = useState("");
+	const [busy, setBusy] = useState(false);
+	const clock = formatStopwatch(timing.elapsedSeconds * 1000);
+	const verdict =
+		TIMING_VERDICT_LABEL[
+			timingVerdict(timing.elapsedSeconds, timing, "speech")
+		];
+
+	const save = useCallback(async () => {
+		const seconds = parseStopwatch(text);
+		if (seconds === null) {
+			// Refused before the round trip, and NOT silently corrected: a bare "6"
+			// is a unit mistake, and guessing which unit was meant is how a wrong
+			// number gets stored with every downstream check passing.
+			toast.error("Type a time as minutes and seconds, like 6:11.");
+			return;
+		}
+		setBusy(true);
+		try {
+			// `marks` deliberately OMITTED. A correction fixes the NUMBER; the
+			// window it was judged against belongs to the moment it was measured,
+			// and rewriting that here would let a typo fix silently re-decide
+			// whether the speech qualified.
+			const written = await recordTiming({
+				data: { meetingId, slotId: timing.slotId, elapsedSeconds: seconds },
+			});
+			onCorrected(written.elapsedSeconds);
+			setEditing(false);
+			toast.success("Time updated.");
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't update that time.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	}, [meetingId, onCorrected, text, timing.slotId]);
+
+	return (
+		<li className="flex flex-wrap items-center gap-x-2 gap-y-1">
+			<span className="font-medium">{timing.roleName}:</span>
+			<span className="text-muted-foreground">
+				{timing.assigneeName ?? "—"}
+				{timing.isGuest ? " (Guest)" : ""}
+			</span>
+			{editing ? (
+				<>
+					<Input
+						className="h-8 w-20"
+						aria-label={`Time for ${timing.roleName}`}
+						value={text}
+						placeholder={clock}
+						disabled={busy}
+						onChange={(e) => setText(e.target.value)}
+					/>
+					<Button size="sm" disabled={busy} onClick={() => void save()}>
+						Save
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						disabled={busy}
+						onClick={() => setEditing(false)}
+					>
+						Cancel
+					</Button>
+				</>
+			) : (
+				<>
+					<span className="tabular-nums">{clock}</span>
+					<span className="text-xs text-[var(--sea-ink-soft)]">{verdict}</span>
+					{canEdit ? (
+						<Button
+							size="xs"
+							variant="ghost"
+							onClick={() => {
+								// Seeded with the CURRENT value, so a correction is an edit
+								// rather than a retype — and so the accepted format is on
+								// screen before anyone has to guess it.
+								setText(clock);
+								setEditing(true);
+							}}
+						>
+							Correct
+						</Button>
+					) : null}
+				</>
+			)}
+		</li>
 	);
 }
 

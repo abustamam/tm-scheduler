@@ -158,3 +158,26 @@ export function formatStopwatch(ms: number): string {
 	const secs = total % 60;
 	return `${mins}:${String(secs).padStart(2, "0")}`;
 }
+
+/**
+ * `mm:ss` → whole seconds, or null when the text is not a clock (#730).
+ *
+ * The inverse of `formatStopwatch`, for the one place a measured time is TYPED
+ * rather than measured: an officer correcting a mistyped number on the minutes
+ * screen.
+ *
+ * STRICTLY the clock form, and a bare number is refused. `parseTableTopicsClock`
+ * next door accepts bare digits above a floor because no club's speaking LIMIT
+ * is under twenty seconds — but a measured time genuinely can be, and the same
+ * leniency here would read an officer typing "6" as six seconds instead of six
+ * minutes and store it with every downstream check passing. The clock is
+ * explicit about its units; someone who writes 0:06 means it.
+ *
+ * Minutes are not capped at 60 and seconds are, mirroring `formatStopwatch`: a
+ * 63-minute segment is "63:00", and "6:75" is a typo rather than 7:15.
+ */
+export function parseStopwatch(text: string): number | null {
+	const m = /^(\d{1,3}):([0-5]\d)$/.exec(text.trim());
+	if (!m) return null;
+	return Number(m[1]) * 60 + Number(m[2]);
+}

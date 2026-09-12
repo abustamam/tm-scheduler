@@ -37,12 +37,15 @@ import { cap } from "#/lib/cap";
 import { formatMeetingDate } from "#/lib/format";
 import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
+import { TIMING_VERDICT_LABEL, timingVerdict } from "#/lib/timing-verdict";
+import { formatTimingClock } from "#/lib/timing-window";
 import {
 	type AttendanceStatus,
 	type AwardCategory,
 	loadMinutes,
 	loadMinutesProgram,
 	type MinutesData,
+	type MinutesTimingRow,
 } from "./minutes-logic";
 
 const AWARD_LABELS: Record<AwardCategory, string> = {
@@ -217,6 +220,66 @@ export function buildAttendanceSection(minutes: {
 }
 
 /**
+ * The Timing block of the minutes, as plain strings (#730).
+ *
+ * Pure and exported for the same reason `buildActionItemsSection` is: a
+ * rendered PDF's content streams are compressed, so a byte search cannot see
+ * any of the rules below, and asserting them here is the only way they are
+ * checkable at all.
+ *
+ * ## Null means the section is OMITTED, and that is a decision
+ *
+ * This repo does BOTH things with an empty section, so neither is an existing
+ * invariant to inherit: `buildActionItemsSection` returning null omits
+ * entirely, while Table Topics and Program render "No … recorded." The choice
+ * here follows action items, and the reason is what the absence would MEAN.
+ * Attendance and Table Topics are things every meeting has, so an empty one is
+ * information — "nobody came", "we skipped the segment". The stopwatch is
+ * opt-in: a club that never uses it has not failed to record anything, and
+ * printing a permanently empty heading on every set of its minutes says
+ * otherwise.
+ *
+ * ## The verdict is derived here, from the row's OWN marks
+ *
+ * `timingVerdict` reads the marks stored on the timing, never a live agenda
+ * value, so an officer editing the min/max next month cannot re-decide whether
+ * a past speech qualified. `unknown` is a real outcome — a beat can carry a
+ * partial trio — and prints as "No window set" rather than as a judgement
+ * nobody made.
+ *
+ * Row-capped like every other section: react-pdf's cost is super-linear in row
+ * count, and `role_slots` are creatable through the self-assert path with no
+ * ceiling. `programRows` is the right constant because a timing IS a program
+ * row that got measured, so the two sections cannot be capped differently.
+ */
+export function buildTimingSection(minutes: {
+	timings?: MinutesTimingRow[];
+}): { rows: string[]; tail: string | null } | null {
+	// `?? []` and not a non-null assertion: an offline snapshot written by a
+	// previous deploy has no `timings` key at all. See `MinutesData.timings`.
+	const timings = minutes.timings ?? [];
+	if (timings.length === 0) return null;
+	const rows = timings.slice(0, MINUTES_RENDER_CAPS.programRows).map((t) => {
+		const who = t.assigneeName
+			? `${cap(t.assigneeName, MINUTES_RENDER_CAPS.name)}${
+					t.isGuest ? " (Guest)" : ""
+				}`
+			: "—";
+		const verdict =
+			TIMING_VERDICT_LABEL[timingVerdict(t.elapsedSeconds, t, "speech")];
+		// Seconds → the SAME clock the printed agenda and the Timer's role sheet
+		// use, so a member reading the minutes beside the agenda sees one
+		// notation rather than two.
+		const clock = formatTimingClock(t.elapsedSeconds / 60);
+		return `${cap(t.roleName, MINUTES_RENDER_CAPS.roleName)}: ${who} — ${clock} · ${verdict}`;
+	});
+	return {
+		rows,
+		tail: elidedLine(timings.length, MINUTES_RENDER_CAPS.programRows),
+	};
+}
+
+/**
  * Build the minutes PDF for a meeting and return it as a byte buffer. Contains:
  * a header (club, date, theme, Word of the Day), attendance (present/absent/
  * excused/unmarked counts + names + the guest list), Table Topics speakers +
@@ -267,6 +330,7 @@ export async function renderMinutesPdf(
 		minutes.actionItems,
 		audience,
 	);
+	const timingSection = buildTimingSection(minutes);
 	const doc = h(
 		Document,
 		{ title: `Minutes — ${clubName}` },
@@ -383,6 +447,22 @@ export async function renderMinutesPdf(
 									{ style: styles.muted },
 									actionItemsSection.resolvedTail,
 								)
+							: null,
+					),
+			// Timing (#730) — the Timer's measured times. ABSENT, not empty, when
+			// the club recorded none; `buildTimingSection`'s docblock says why that
+			// differs from Table Topics two sections up.
+			timingSection === null
+				? null
+				: h(
+						View,
+						{ style: styles.section },
+						h(Text, { style: styles.sectionTitle }, "Timing"),
+						timingSection.rows.map((line, i) =>
+							h(Text, { key: `timing-${i}`, style: styles.listItem }, line),
+						),
+						timingSection.tail
+							? h(Text, { style: styles.muted }, timingSection.tail)
 							: null,
 					),
 			// Awards

@@ -193,6 +193,20 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "vote_close":
 			summary = "closed a vote";
 			break;
+		// #730 — the Timer recorded (or corrected) a measured time. ONE line for
+		// both, because the write is an upsert keyed on the slot and a reader of
+		// the feed would have to re-derive which it was from the row's history
+		// anyway.
+		//
+		// It names neither the segment nor the number, deliberately, and for the
+		// reason `vote_open` above gives: `ActivityEntry` carries neither, the
+		// feed is a "who touched what, when" list, and `detail` holds the
+		// specifics — including `grantedVia`, which is the part that makes an
+		// honour-system write auditable. `targetType` is "slot", so the entry
+		// already resolves the ROLE beside this text.
+		case "timing_record":
+			summary = "recorded a time";
+			break;
 		// The DCP scoreboard (#690) — the club's official Distinguished Club
 		// Program record. Two actions, split on WHO decided the number: a typed-in
 		// value against an accepted derivation. The inner switch reads

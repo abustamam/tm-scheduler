@@ -15,10 +15,18 @@
 // clock and advancing the interval is a real measurement of a real duration,
 // with none of the flake a wall-clock wait brings on a loaded CI box.
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgendaRow } from "#/lib/agenda-runsheet";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgendaRow, AgendaSlot } from "#/lib/agenda-runsheet";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
-import { buildTimerSegments, MeetingTimer } from "./meeting-timer";
+
+// `meeting-timer.tsx` imports the writer, which reaches `#/db` and throws
+// `DATABASE_URL is not set` at module load. Mocked at the SERVER-FN boundary —
+// what is faked is the RPC, so everything this file asserts about the payload,
+// the refusals and the receipt is the component's own behaviour.
+vi.mock("#/server/timings", () => ({ recordTiming: vi.fn() }));
+
+const { recordTiming } = await import("#/server/timings");
+const { buildTimerSegments, MeetingTimer } = await import("./meeting-timer");
 
 const T0 = new Date("2026-09-15T18:00:00.000Z").getTime();
 
@@ -39,6 +47,34 @@ function row(over: Partial<AgendaRow> = {}): AgendaRow {
 
 const LIMITS = { minSeconds: 60, maxSeconds: 150 };
 
+/** The two `role_definitions` columns `isTimeableRole` reads, per slot. */
+function slot(
+	over: Partial<Pick<AgendaSlot, "id" | "isSpeakerRole" | "category">> = {},
+): Pick<AgendaSlot, "id" | "isSpeakerRole" | "category"> {
+	return { id: "slot-1", isSpeakerRole: true, category: "speaker", ...over };
+}
+
+/** What the server hands back on a successful record. */
+function saved(over: Record<string, unknown> = {}) {
+	return {
+		slotId: "slot-1",
+		roleName: "Speaker 1",
+		elapsedSeconds: 371,
+		markGreen: 5,
+		markYellow: 6,
+		markRed: 7,
+		grantedVia: "self" as const,
+		recordedByMemberId: "member-1",
+		...over,
+	};
+}
+
+const RECORDING = {
+	meetingId: "11111111-1111-4111-8111-111111111111",
+	actorMemberId: "member-1",
+	canRecord: true,
+};
+
 /**
  * Mount, then wind the clock.
  *
@@ -52,13 +88,22 @@ const LIMITS = { minSeconds: 60, maxSeconds: 150 };
  * has happened is the initial `now` of an idle clock, which is worth 0:00 at
  * any instant.
  */
-async function mount(rows: AgendaRow[], limits = LIMITS) {
+async function mount(
+	rows: AgendaRow[],
+	limits = LIMITS,
+	extra: {
+		slots?: Pick<AgendaSlot, "id" | "isSpeakerRole" | "category">[];
+		recording?: typeof RECORDING;
+	} = {},
+) {
 	await renderUnderMemoryRouter(
 		<MeetingTimer
 			when="Tuesday, September 15, 2026"
 			backHref="/club/harbor-city/meeting/2026-09-15/me"
 			rows={rows}
 			tableTopicsLimits={limits}
+			slots={extra.slots}
+			recording={extra.recording}
 		/>,
 	);
 	vi.useFakeTimers({ shouldAdvanceTime: false });
@@ -105,6 +150,11 @@ async function advance(ms: number) {
 	});
 }
 
+beforeEach(() => {
+	vi.mocked(recordTiming).mockReset();
+	vi.mocked(recordTiming).mockResolvedValue(saved());
+});
+
 afterEach(() => {
 	cleanup();
 	vi.useRealTimers();
@@ -142,6 +192,42 @@ describe("buildTimerSegments — which rows get a clock", () => {
 		// running clock's state with it.
 		const segments = buildTimerSegments([row({ slotId: "slot-xyz" })]);
 		expect(segments[0].key).toBe("slot-xyz");
+	});
+
+	it("marks a slot-backed timeable row recordable, and nothing else", () => {
+		// The two questions are separate on purpose: every marked row gets a
+		// CLOCK, only a slot-backed timeable one gets a RECORD.
+		const segments = buildTimerSegments(
+			[
+				row({ slotId: "speaker", roleKey: "speaker" }),
+				row({ slotId: "evaluator", roleKey: "evaluator" }),
+				row({ slotId: "ttm", roleKey: "table_topics_master" }),
+				row({ slotId: null, roleKey: null }),
+				row({ slotId: "unknown-to-the-caller" }),
+			],
+			[
+				slot({ id: "speaker", isSpeakerRole: true, category: "speaker" }),
+				slot({ id: "evaluator", isSpeakerRole: false, category: "evaluator" }),
+				// The Table Topics row binds the MASTER's slot, which is leadership —
+				// so a stored number would be one time for a segment with four to
+				// eight speakers, attributed to whoever asked the questions.
+				slot({ id: "ttm", isSpeakerRole: false, category: "leadership" }),
+			],
+		);
+		expect(segments.map((x) => x.recordable)).toEqual([
+			true,
+			true,
+			false,
+			false,
+			false,
+		]);
+	});
+
+	it("records nothing at all when the caller passes no slots", () => {
+		// #729's shape. With no slot columns there is nothing to ask
+		// `isTimeableRole`, and guessing would be the wrong default.
+		const segments = buildTimerSegments([row()]);
+		expect(segments[0].recordable).toBe(false);
 	});
 
 	it("marks the Table Topics row as the other DQ rule", () => {
@@ -372,5 +458,179 @@ describe("the wake lock", () => {
 		await tap(screen.getByRole("button", { name: "Start" }));
 		await advance(3_000);
 		expect(screen.getByText("0:03")).toBeTruthy();
+	});
+});
+
+describe("recording on stop (#730)", () => {
+	it("posts the measurement, the marks and the asserted identity", async () => {
+		await mount([row()], LIMITS, { slots: [slot()], recording: RECORDING });
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(371_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await act(async () => {});
+
+		expect(recordTiming).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(recordTiming).mock.calls[0][0]).toEqual({
+			data: {
+				meetingId: RECORDING.meetingId,
+				slotId: "slot-1",
+				elapsedSeconds: 371,
+				// The marks the clock was JUDGED against travel with it, so the row
+				// records the window in force at the time and a later agenda edit
+				// cannot silently re-decide whether the speech qualified.
+				marks: { green: 5, yellow: 6, red: 7 },
+				actorMemberId: RECORDING.actorMemberId,
+			},
+		});
+	});
+
+	it("shows the recorded time and the verdict, from what the SERVER stored", async () => {
+		// Not from what this render happens to hold: the mock returns a DIFFERENT
+		// number from the one the clock measured, and the receipt must show the
+		// server's — if the two ever differ, the stored row is the record.
+		vi.mocked(recordTiming).mockResolvedValue(
+			saved({ elapsedSeconds: 500, markGreen: 5, markRed: 7 }),
+		);
+		await mount([row()], LIMITS, { slots: [slot()], recording: RECORDING });
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(371_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await act(async () => {});
+		// 8:20 against a 4:30–7:30 window, and the clock said 6:11.
+		expect(screen.getByText("Recorded 8:20 · Over time")).toBeTruthy();
+	});
+
+	it("records the STOP's reading, not a later render's", async () => {
+		// The clock is stopped; time keeps passing. A record that re-measured on
+		// the next tick would store whatever the render loop happened to see.
+		await mount([row()], LIMITS, { slots: [slot()], recording: RECORDING });
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(9_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await advance(600_000);
+		await act(async () => {});
+		const payload = vi.mocked(recordTiming).mock.calls[0]?.[0] as {
+			data: { elapsedSeconds: number };
+		};
+		expect(payload.data.elapsedSeconds).toBe(9);
+	});
+
+	it("records on STOP and on nothing else", async () => {
+		// A pause is not a finished measurement.
+		await mount([row()], LIMITS, { slots: [slot()], recording: RECORDING });
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(9_000);
+		await tap(screen.getByRole("button", { name: "Pause" }));
+		await act(async () => {});
+		expect(recordTiming).not.toHaveBeenCalled();
+		await tap(screen.getByRole("button", { name: "Resume" }));
+		await advance(3_000);
+		await act(async () => {});
+		expect(recordTiming).not.toHaveBeenCalled();
+	});
+
+	it("writes nothing when the caller passed no recording context", async () => {
+		// #729's ephemeral stopwatch, which is what an unidentified visitor gets.
+		await mount([row()], LIMITS, { slots: [slot()] });
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(9_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await act(async () => {});
+		expect(recordTiming).not.toHaveBeenCalled();
+		expect(screen.queryByText(/Recorded/)).toBeNull();
+	});
+
+	it("writes nothing, and explains nothing, for a viewer who may not record", async () => {
+		// Silence is right here: a member who holds none of the three
+		// capabilities is not being denied anything they were offered.
+		await mount([row()], LIMITS, {
+			slots: [slot()],
+			recording: { ...RECORDING, canRecord: false },
+		});
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(9_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await act(async () => {});
+		expect(recordTiming).not.toHaveBeenCalled();
+		expect(screen.queryByText(/isn't a speech or an evaluation/)).toBeNull();
+	});
+
+	it("offers no recording for the Table Topics row, and says why", async () => {
+		// The trap #730 exists to close: that row IS slot-backed (the Table
+		// Topics Master's), so a naive write would type-check, insert cleanly and
+		// store one wrong number. The Timer still gets a working clock.
+		await mount(
+			[
+				row({
+					slotId: "ttm",
+					roleKey: "table_topics_master",
+					roleLabel: "Table Topics",
+				}),
+			],
+			LIMITS,
+			{
+				slots: [
+					slot({ id: "ttm", isSpeakerRole: false, category: "leadership" }),
+				],
+				recording: RECORDING,
+			},
+		);
+		expect(screen.getByText(/isn't a speech or an evaluation/)).toBeTruthy();
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(60_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await act(async () => {});
+		expect(recordTiming).not.toHaveBeenCalled();
+		expect(screen.getByText("1:00")).toBeTruthy();
+	});
+
+	it("offers no recording for a row with no slot", async () => {
+		await mount(
+			[row({ slotId: null, roleKey: null, roleLabel: "Club business" })],
+			LIMITS,
+			{
+				slots: [slot()],
+				recording: RECORDING,
+			},
+		);
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(60_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await act(async () => {});
+		expect(recordTiming).not.toHaveBeenCalled();
+	});
+
+	it("shows a refusal VERBATIM and keeps the clock's reading", async () => {
+		// The two server refusals mean different things — "no one speaker here"
+		// and "not you" — so the surface must not flatten them into one sentence
+		// of its own. And the measurement is not lost because the write was
+		// refused: a Timer who thinks it is stops trusting the surface mid-meeting.
+		vi.mocked(recordTiming).mockRejectedValue(
+			new Error("Someone else already recorded a time for this segment."),
+		);
+		await mount([row()], LIMITS, { slots: [slot()], recording: RECORDING });
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(9_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await act(async () => {});
+		expect(
+			screen.getByText(
+				"Someone else already recorded a time for this segment.",
+			),
+		).toBeTruthy();
+		expect(screen.getByText("0:09")).toBeTruthy();
+	});
+
+	it("clears the receipt on reset, so it never sits under a 0:00 clock", async () => {
+		await mount([row()], LIMITS, { slots: [slot()], recording: RECORDING });
+		await tap(screen.getByRole("button", { name: "Start" }));
+		await advance(371_000);
+		await tap(screen.getByRole("button", { name: "Stop" }));
+		await act(async () => {});
+		expect(screen.getByText(/^Recorded /)).toBeTruthy();
+		await tap(screen.getByRole("button", { name: "Reset" }));
+		await act(async () => {});
+		expect(screen.queryByText(/^Recorded /)).toBeNull();
+		expect(screen.getByText("0:00")).toBeTruthy();
 	});
 });

@@ -196,46 +196,42 @@ describe("the routes hand the editors RAW loader fields", () => {
 	}
 });
 
-describe("the personal page's link INTO the stopwatch (#729)", () => {
-	// The one entrance to `/me/timer`. It is not a `duty.href`, so the registry
-	// sweep at the top of this file cannot reach it, and the personal page's own
-	// render tests cannot see the EXPRESSION that decides who is offered it —
-	// CODING_STANDARDS' "a component tested through its props cannot see a WRONG
-	// prop", where the prop is computed. Both halves below have a live failure
-	// behind them, so both are asserted here.
+describe("the personal page's link INTO the stopwatch (#729/#730)", () => {
+	// The only entrance to `/me/timer`. #729 shipped it as a hardcoded `<Link>`
+	// because `RoleDuty` requires a truthful `done` and nothing was stored to
+	// derive one from; #730 stored it, so the link is now the `timing` duty and
+	// the registry sweep at the top of this file reaches it. What is asserted
+	// here is the pair that sweep cannot see: that the literal is GONE, and that
+	// the context feeding the duty's `done` actually carries the field.
 	const body = readSource(resolve(ROOT, PERSONAL_BODY));
 	const rawBody = readFileSync(resolve(ROOT, PERSONAL_BODY), "utf8");
 
-	it("resolves the Timer through findTimerSlot, not a roleKey comparison", () => {
-		// KEY FIRST, then the exact canonical name. `findTimerSlot` is the shipped
-		// resolver and its whole point is that ORDER: a name-first check hands the
-		// Timer's surface to a club-invented "Timer Assistant" whenever the real
-		// Timer has been renamed, and nothing fails (#464/#732).
-		expect(body).toContain("findTimerSlot(view.roles)");
+	it("the timer route is reached through the registry, not a second literal", () => {
+		// RAW negative, across both spellings #729 used: a surviving hardcoded
+		// path would be a SECOND way in, and the two would drift the moment the
+		// route moved — which is what the "the duty registry owns where a duty is
+		// done… Never hardcode one here" comment in that file is about.
+		expect(rawBody).not.toContain("/me/timer");
+		expect(rawBody).not.toContain("me_/timer");
 	});
 
-	it("never re-derives the Timer by comparing the key inline", () => {
-		// RAW negative: `role.roleKey === "timer"` type-checks, reads fine, and
-		// silently denies the link to a standard Timer slot whose key is NULL.
-		expect(rawBody).not.toMatch(/roleKey\s*===\s*["']timer["']/);
+	it("passes hasTiming into the duty context", () => {
+		// Without this the `timing` duty's `done` is permanently false, which is
+		// precisely the outcome `role-duties.ts` forbids and the reason #729
+		// deferred the duty rather than shipping an always-unticked box. A missing
+		// `FIELD_BY_DUTY` entry is a typecheck failure over in
+		// `role-duties.test.ts`; a missing PASS-THROUGH here is not, so it needs
+		// its own assertion.
+		expect(body).toContain("hasTiming: view.meeting.hasTiming");
 	});
 
-	it("offers the link only on the slot the Timer actually holds", () => {
-		// Per-SLOT, never per-member: `view.roles` can carry several roles, and a
-		// member-wide flag would hang a stopwatch off their Evaluator card too.
-		expect(body).toContain("role.slotId === timerSlotId");
-	});
-
-	it("closes the link when the meeting's write window has", () => {
-		// A month-old link still sits in the chat scrollback. Without this a
-		// meeting that already happened sprouts a stopwatch.
-		expect(body).toMatch(/role\.slotId === timerSlotId && !writesClosed/);
-	});
-
-	it("uses the router's own typed path", () => {
-		// A `to={string}` form 404s at the Timer's thumb when the route file is
-		// renamed; the typed path fails `typecheck` instead.
-		expect(body).toContain('to="/club/$clubId/meeting/$meetingId/me/timer"');
+	it("keeps the meeting-scoped and slot-scoped fields distinct", () => {
+		// `speechTitle` is per-SLOT (a member can hold two speaker slots and one
+		// title must not tick both); `hasTiming` is per-MEETING, because a timing
+		// is recorded against a SPEAKER's slot and never against the Timer's own.
+		// Reading either at the other's scope is a silently wrong tick.
+		expect(body).toContain("speechTitle: role.speechTitle");
+		expect(rawBody).not.toContain("hasTiming: role.");
 	});
 });
 

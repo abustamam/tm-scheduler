@@ -30,12 +30,16 @@
 import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "#/components/ui/button";
-import type { AgendaRow, TimingMarks } from "#/lib/agenda-runsheet";
+import type { AgendaRow, AgendaSlot, TimingMarks } from "#/lib/agenda-runsheet";
 import {
 	hasTableTopicsLimits,
 	TABLE_TOPICS_ROLE_KEY,
 	type TableTopicsLimits,
 } from "#/lib/table-topics-limits";
+import {
+	isTimeableRole,
+	timingNotRecordableMessage,
+} from "#/lib/timeable-roles";
 import {
 	TIMER_BAND_LABEL,
 	type TimerBand,
@@ -50,10 +54,12 @@ import {
 	type TimerState,
 	timerReducer,
 } from "#/lib/timer-state";
+import { TIMING_VERDICT_LABEL, timingVerdict } from "#/lib/timing-verdict";
 import {
 	formatTimingClock,
 	qualifyingWindowForMarks,
 } from "#/lib/timing-window";
+import { recordTiming } from "#/server/timings";
 
 /** One timed row, reduced to what a clock needs. */
 export type TimerSegment = {
@@ -68,29 +74,66 @@ export type TimerSegment = {
 	marks: TimingMarks;
 	/** Which disqualification rule applies — see `timer-signal.ts`. */
 	kind: TimerKind;
+	/**
+	 * Whether stopping this clock can be RECORDED (#730): the row is backed by
+	 * one slot AND that slot's role is timeable.
+	 *
+	 * Decided with `isTimeableRole`, the same predicate `recordMeetingTiming`
+	 * asks on the server, so the affordance and the mutation cannot disagree —
+	 * the #464/#510 rule. False is the honest answer for the Table Topics row
+	 * (its slot is the Table Topics MASTER's, so a stored number would be one
+	 * time for a segment with four to eight speakers) and for every row with no
+	 * single slot. Such a row still gets a working clock; what it does not get is
+	 * a button that would fail.
+	 */
+	recordable: boolean;
 };
+
+/** The columns `isTimeableRole` reads, per slot. A `Map` so the lookup is not
+ *  a scan per row on an agenda that can carry dozens of slots. */
+type SlotColumns = { isSpeakerRole: boolean; category: string };
 
 /**
  * The timed rows of a run sheet, in order.
  *
- * `marks !== null` is the ONLY filter, deliberately: the printed agenda decides
- * which rows carry a trio of marks, and this surface must clock exactly those.
- * Adding a second condition here (only slot-backed rows, only speeches) would
- * put the phone and the paper into disagreement about what the Timer is timing.
+ * `marks !== null` is the ONLY filter on WHICH ROWS APPEAR, deliberately: the
+ * printed agenda decides which rows carry a trio of marks, and this surface
+ * must clock exactly those. Adding a second condition here (only slot-backed
+ * rows, only speeches) would put the phone and the paper into disagreement
+ * about what the Timer is timing.
+ *
+ * `recordable` is a separate question with a separate answer, and keeping the
+ * two apart is the whole shape of #729/#730: every marked row gets a CLOCK,
+ * and only a slot-backed timeable one gets a RECORD.
  */
-export function buildTimerSegments(rows: readonly AgendaRow[]): TimerSegment[] {
+export function buildTimerSegments(
+	rows: readonly AgendaRow[],
+	slots: readonly Pick<AgendaSlot, "id" | "isSpeakerRole" | "category">[] = [],
+): TimerSegment[] {
+	const columns = new Map<string, SlotColumns>(
+		slots.map((s) => [
+			s.id,
+			{ isSpeakerRole: s.isSpeakerRole, category: s.category },
+		]),
+	);
 	const segments: TimerSegment[] = [];
 	rows.forEach((row, index) => {
 		if (!row.marks) return;
+		const slotId = row.slotId ?? null;
+		const slot = slotId ? columns.get(slotId) : undefined;
 		segments.push({
-			key: row.slotId ?? `row-${index}`,
-			slotId: row.slotId ?? null,
+			key: slotId ?? `row-${index}`,
+			slotId,
 			// `roleLabel`/`holder` rather than splitting `who`: that string is
 			// genuinely ambiguous (#463) and its own docblock says so.
 			roleLabel: row.roleLabel ?? row.who,
 			holder: row.holder ?? null,
 			marks: row.marks,
 			kind: row.roleKey === TABLE_TOPICS_ROLE_KEY ? "tableTopics" : "speech",
+			// `slot` is undefined when the row names no slot AND when the caller
+			// passed no slots at all — #729's shape, where nothing is recordable
+			// because nothing can be.
+			recordable: slot !== undefined && isTimeableRole(slot),
 		});
 	});
 	return segments;
@@ -178,16 +221,47 @@ export type MeetingTimerProps = {
 	 *  Null when the club has stated none, in which case a Table Topics clock
 	 *  has no DQ — see `timerSignal`. */
 	tableTopicsLimits: TableTopicsLimits | null;
+	/** The meeting's slots, for the two `role_definitions` columns
+	 *  `isTimeableRole` reads. Omit to get #729's pure stopwatch: with no slot
+	 *  columns nothing is recordable, which is the honest default. */
+	slots?: readonly Pick<AgendaSlot, "id" | "isSpeakerRole" | "category">[];
+	/**
+	 * Present when this surface may write (#730); absent for a viewer who cannot.
+	 *
+	 * `canRecord` is an AFFORDANCE, re-decided server-side on every request — the
+	 * client computes it from the meeting's own slots (am I the Timer, the TMOD,
+	 * or an officer) so a member who is none of those is not shown a control that
+	 * would only produce an error. It grants nothing.
+	 */
+	recording?: {
+		/** The meeting's UUID. NEVER the `$meetingId` URL segment — that is a
+		 *  club-local date key and the writer validates a uuid. */
+		meetingId: string;
+		/** Self-asserted roster identity (#317). Club-scoped server-side. */
+		actorMemberId: string;
+		canRecord: boolean;
+	};
 };
+
+/** What happened to a segment's record attempt. Kept per segment rather than
+ *  as one page-level flag: the Timer stops eight clocks over an evening, and a
+ *  single banner would say nothing about WHICH one failed. */
+type RecordOutcome =
+	| { status: "saving" }
+	| { status: "saved"; elapsedSeconds: number; verdict: string }
+	| { status: "error"; message: string };
 
 export function MeetingTimer({
 	when,
 	backHref,
 	rows,
 	tableTopicsLimits,
+	slots,
+	recording,
 }: MeetingTimerProps) {
-	const segments = buildTimerSegments(rows);
+	const segments = buildTimerSegments(rows, slots);
 	const [states, setStates] = useState<Record<string, TimerState>>({});
+	const [outcomes, setOutcomes] = useState<Record<string, RecordOutcome>>({});
 	// The tick. State, not a ref, because its only job is to make React render
 	// again — see the module header on why it carries no measurement.
 	const [now, setNow] = useState(() => Date.now());
@@ -206,16 +280,107 @@ export function MeetingTimer({
 
 	useWakeLock(running);
 
-	const dispatch = useCallback((key: string, action: TimerAction) => {
-		setStates((prev) => ({
-			...prev,
-			[key]: timerReducer(prev[key] ?? IDLE_TIMER, action),
-		}));
-		// Repaint immediately rather than waiting up to 200ms for the next tick —
-		// a Start whose clock still reads 0:00 for a fifth of a second reads as a
-		// tap that did not land, and the Timer taps again.
-		setNow(Date.now());
-	}, []);
+	/**
+	 * Store what a stopped clock measured (#730).
+	 *
+	 * Fired from the STOP transition and from nowhere else — a pause is not a
+	 * finished measurement, and `timer-state.ts` refuses to resume a stopped
+	 * clock precisely so the surface cannot end up showing a number the stored
+	 * row no longer matches.
+	 *
+	 * Everything it decides is an affordance: the server re-runs the timeable
+	 * check and the whole actor ladder, and its refusal is what the Timer sees.
+	 * Both refusals are shown VERBATIM, because they mean different things —
+	 * "this segment has no one speaker" and "not you" send the Timer to two
+	 * different places, which is why the server throws two named errors rather
+	 * than one.
+	 */
+	const record = useCallback(
+		async (segment: TimerSegment, elapsedSeconds: number) => {
+			if (!recording?.canRecord || !segment.recordable || !segment.slotId) {
+				return;
+			}
+			const slotId = segment.slotId;
+			setOutcomes((prev) => ({ ...prev, [segment.key]: { status: "saving" } }));
+			try {
+				const saved = await recordTiming({
+					data: {
+						meetingId: recording.meetingId,
+						slotId,
+						elapsedSeconds,
+						// The marks the clock was JUDGED against travel with the
+						// measurement, so the row records the window in force at the time
+						// and a later agenda edit cannot re-decide it.
+						marks: {
+							green: segment.marks.green,
+							yellow: segment.marks.yellow,
+							red: segment.marks.red,
+						},
+						actorMemberId: recording.actorMemberId,
+					},
+				});
+				setOutcomes((prev) => ({
+					...prev,
+					[segment.key]: {
+						status: "saved",
+						elapsedSeconds: saved.elapsedSeconds,
+						// Derived from what the SERVER stored, not from what this render
+						// happens to hold: if the two ever differ, the record is the
+						// truth and the Timer should be reading it.
+						verdict:
+							TIMING_VERDICT_LABEL[
+								timingVerdict(saved.elapsedSeconds, saved, "speech")
+							],
+					},
+				}));
+			} catch (err) {
+				setOutcomes((prev) => ({
+					...prev,
+					[segment.key]: {
+						status: "error",
+						message:
+							err instanceof Error
+								? err.message
+								: "Couldn't save that time. The clock still shows it.",
+					},
+				}));
+			}
+		},
+		[recording],
+	);
+
+	const dispatch = useCallback(
+		(segment: TimerSegment, action: TimerAction) => {
+			const key = segment.key;
+			setStates((prev) => {
+				const next = timerReducer(prev[key] ?? IDLE_TIMER, action);
+				// Read the elapsed time off the state the reducer just produced, not
+				// off a fresh `Date.now()` a tick later: a stop is a closed interval,
+				// and re-measuring afterwards would record whatever the render loop
+				// happened to see.
+				if (action.type === "stop" && next.phase === "stopped") {
+					void record(segment, Math.round(next.accumulatedMs / 1000));
+				}
+				return { ...prev, [key]: next };
+			});
+			// Clearing the clock clears its receipt too: leaving "Recorded 6:11"
+			// under a 0:00 clock invites a re-read of a number that is no longer on
+			// screen. The stored row is untouched — a reset is a display action, and
+			// re-recording is what replaces the row.
+			if (action.type === "reset") {
+				setOutcomes((prev) => {
+					if (!(key in prev)) return prev;
+					const { [key]: _dropped, ...rest } = prev;
+					return rest;
+				});
+			}
+			// Repaint immediately rather than waiting up to 200ms for the next tick —
+			// a Start whose clock still reads 0:00 for a fifth of a second reads as a
+			// tap that did not land, and the Timer taps again.
+			setNow(Date.now());
+		},
+		[record],
+	);
 
 	const limits = hasTableTopicsLimits(tableTopicsLimits)
 		? tableTopicsLimits
@@ -254,7 +419,9 @@ export function MeetingTimer({
 								state={states[segment.key] ?? IDLE_TIMER}
 								now={now}
 								limits={limits}
-								onAction={(action) => dispatch(segment.key, action)}
+								outcome={outcomes[segment.key]}
+								canRecord={recording?.canRecord ?? false}
+								onAction={(action) => dispatch(segment, action)}
 							/>
 						</li>
 					))}
@@ -276,12 +443,20 @@ function SegmentClock({
 	state,
 	now,
 	limits,
+	outcome,
+	canRecord,
 	onAction,
 }: {
 	segment: TimerSegment;
 	state: TimerState;
 	now: number;
 	limits: { maxSeconds: number } | null;
+	outcome: RecordOutcome | undefined;
+	/** Whether this VIEWER may record at all. Separate from
+	 *  `segment.recordable`, which is about the ROW — a Timer looking at the
+	 *  Table Topics card needs to be told why that one is different, and a
+	 *  visitor who may record nothing needs to be told nothing. */
+	canRecord: boolean;
 	onAction: (action: TimerAction) => void;
 }) {
 	const elapsed = elapsedMs(state, now);
@@ -382,6 +557,33 @@ function SegmentClock({
 					</Button>
 				) : null}
 			</div>
+
+			{/* The RECEIPT (#730). Stopping the clock is the record — there is no
+			    second "save" tap, because the Timer's hands are already busy and a
+			    measurement that needs confirming is one that gets lost. */}
+			{canRecord && !segment.recordable ? (
+				// Said once, on the card it is about, and only to someone who can
+				// record the others. Otherwise a Timer with eight cards and seven
+				// receipts is left guessing why one has none.
+				<p className="text-muted-foreground text-xs">
+					{timingNotRecordableMessage(segment.roleLabel)}
+				</p>
+			) : null}
+			{outcome?.status === "saving" ? (
+				<p className="text-muted-foreground text-xs">Saving…</p>
+			) : null}
+			{outcome?.status === "saved" ? (
+				<p className="text-xs text-success">
+					Recorded {formatStopwatch(outcome.elapsedSeconds * 1000)} ·{" "}
+					{outcome.verdict}
+				</p>
+			) : null}
+			{outcome?.status === "error" ? (
+				// The clock keeps its reading, and the copy says so: the measurement
+				// is not lost just because the write was refused, and a Timer who
+				// thinks it is will stop trusting the surface mid-meeting.
+				<p className="text-xs text-destructive">{outcome.message}</p>
+			) : null}
 		</div>
 	);
 }

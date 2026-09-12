@@ -15,6 +15,7 @@ import {
 	elapsedSeconds,
 	formatStopwatch,
 	IDLE_TIMER,
+	parseStopwatch,
 	type TimerState,
 	timerReducer,
 } from "./timer-state";
@@ -252,5 +253,45 @@ describe("formatStopwatch", () => {
 
 	it("clamps a negative input at zero", () => {
 		expect(formatStopwatch(-1)).toBe("0:00");
+	});
+});
+
+describe("parseStopwatch — the officer's correction input", () => {
+	it("round-trips every value formatStopwatch can print", () => {
+		for (const seconds of [0, 6, 59, 60, 371, 3780]) {
+			expect(parseStopwatch(formatStopwatch(seconds * 1000))).toBe(seconds);
+		}
+	});
+
+	it("accepts a clock with or without a leading zero, and tolerates padding", () => {
+		expect(parseStopwatch("6:11")).toBe(371);
+		expect(parseStopwatch("06:11")).toBe(371);
+		expect(parseStopwatch("  6:11  ")).toBe(371);
+		expect(parseStopwatch("0:06")).toBe(6);
+	});
+
+	it("does not wrap minutes at 60", () => {
+		expect(parseStopwatch("63:00")).toBe(3780);
+	});
+
+	it("REFUSES a bare number, which is the unit trap", () => {
+		// `parseTableTopicsClock` accepts bare digits above a floor because no
+		// club's speaking LIMIT is under twenty seconds. A measured time can be,
+		// so the same leniency here would read an officer typing "6" as six
+		// SECONDS and store it with every downstream check passing.
+		for (const text of ["6", "371", "0"]) {
+			expect(parseStopwatch(text), text).toBeNull();
+		}
+	});
+
+	it("refuses a seconds field of 60 or more — a typo, not 7:15", () => {
+		expect(parseStopwatch("6:75")).toBeNull();
+		expect(parseStopwatch("6:60")).toBeNull();
+	});
+
+	it("refuses blanks, decimals and anything else", () => {
+		for (const text of ["", "   ", "6.5", "6:5", "six", "-1:00", "6:1x"]) {
+			expect(parseStopwatch(text), JSON.stringify(text)).toBeNull();
+		}
 	});
 });

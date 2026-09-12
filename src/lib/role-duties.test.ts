@@ -46,12 +46,39 @@ const ALL_DUTIES: RoleDuty[] = ROLE_TEMPLATE.flatMap((r) => [
 ]);
 
 /** Which context field each duty is supposed to read — and, by omission, which
- *  ones it must ignore. */
+ *  ones it must ignore. A missing entry is a TYPECHECK failure, which is what
+ *  makes this matrix keep pace with `DutyId` rather than rot behind it. */
 const FIELD_BY_DUTY: Record<DutyId, keyof DutyContext> = {
 	meeting_theme: "theme",
 	word_of_the_day: "wordOfTheDay",
 	speech_details: "speechTitle",
+	timing: "hasTiming",
 };
+
+/**
+ * The value that makes each FIELD read as done.
+ *
+ * Needed since #730, because `hasTiming` is a BOOLEAN fact where the other
+ * three are filled strings — and the cross-wiring matrix at the bottom of this
+ * file builds a context out of everybody else's fields, so it has to know what
+ * "somebody else's answer" looks like for each of them. Writing a string into
+ * `hasTiming` would not type-check, and casting past that would make the
+ * strongest assertion in the file vacuous for the one duty that reads a
+ * different SHAPE of answer.
+ */
+const DONE_VALUE_BY_FIELD: Record<keyof DutyContext, string | boolean> = {
+	theme: "somebody else's answer",
+	wordOfTheDay: "somebody else's answer",
+	speechTitle: "somebody else's answer",
+	hasTiming: true,
+};
+
+/** The duties whose `done` reads a FILLED STRING. The string-shaped loops below
+ *  sweep these; `timing` gets its own cases, because "an empty string is not
+ *  done" is not a statement about a boolean. */
+const STRING_DUTIES = ALL_DUTIES.filter((d) => d.id !== "timing");
+/** The one boolean duty, reached the way a consumer reaches it. */
+const TIMING_DUTY = ALL_DUTIES.find((d) => d.id === "timing");
 
 const dutyIds = (role: { roleName: string; roleKey?: string | null }) =>
 	dutiesForRole(role).map((d) => d.id);
@@ -78,17 +105,37 @@ describe("which role owns which duty", () => {
 		]);
 	});
 
-	it("exactly three standard roles own a duty, and it is these three", () => {
+	it("the Timer owns timing the meeting (#730)", () => {
+		// The Timer owned NOTHING until `meeting_timings` existed: a duty needs a
+		// truthful `done`, and there was no stored answer to read one from. #729
+		// shipped the stopwatch and deliberately left the duty out for that
+		// reason; this is what changed.
+		expect(dutyIds({ roleName: "Timer", roleKey: "timer" })).toEqual([
+			"timing",
+		]);
+	});
+
+	it("exactly four standard roles own a duty, and it is these four", () => {
 		const owners = ROLE_TEMPLATE.filter(
 			(r) => dutiesForRole({ roleName: r.name, roleKey: r.key }).length > 0,
 		)
 			.map((r) => r.key)
 			.sort();
-		expect(owners).toEqual(["grammarian", "speaker", "toastmaster_of_the_day"]);
+		expect(owners).toEqual([
+			"grammarian",
+			"speaker",
+			"timer",
+			"toastmaster_of_the_day",
+		]);
 	});
 
 	it("every other standard role owns nothing — prep with nowhere to record it is not a duty", () => {
-		const owners = new Set(["grammarian", "speaker", "toastmaster_of_the_day"]);
+		const owners = new Set([
+			"grammarian",
+			"speaker",
+			"timer",
+			"toastmaster_of_the_day",
+		]);
 		for (const r of ROLE_TEMPLATE) {
 			if (owners.has(r.key)) continue;
 			expect(
@@ -207,6 +254,12 @@ describe("resolution is by key, with an exact-name fallback (#368/#464)", () => 
 			"Grammarian Assistant",
 			"Grammarians",
 			"Speaker Coach",
+			// "Timekeeper" is what many clubs SAY and is deliberately not canonical
+			// (#732): a role called that was invented by the club, carries a NULL
+			// key for that reason, and must not inherit the Timer's duty.
+			"Timekeeper",
+			"Timer Assistant",
+			"Timers",
 		]) {
 			expect(
 				dutiesForRole({ roleName: lookalike, roleKey: null }),
@@ -234,6 +287,9 @@ describe("resolution is by key, with an exact-name fallback (#368/#464)", () => 
 		expect(dutyIds({ roleName: " speaker ", roleKey: null })).toEqual([
 			"speech_details",
 		]);
+		expect(dutyIds({ roleName: "  TIMER ", roleKey: null })).toEqual([
+			"timing",
+		]);
 	});
 
 	it('the bare "Toastmaster" the standard template answers to also resolves', () => {
@@ -259,7 +315,7 @@ describe("done predicates", () => {
 		{ label: "whitespace only", value: "   " },
 	]) {
 		it(`treats ${state.label} as NOT done`, () => {
-			for (const duty of ALL_DUTIES) {
+			for (const duty of STRING_DUTIES) {
 				const ctx = { [FIELD_BY_DUTY[duty.id]]: state.value } as DutyContext;
 				expect(duty.done(ctx), `${duty.id} with ${state.label}`).toBe(false);
 			}
@@ -267,14 +323,14 @@ describe("done predicates", () => {
 	}
 
 	it("treats a filled field as done", () => {
-		for (const duty of ALL_DUTIES) {
+		for (const duty of STRING_DUTIES) {
 			const ctx = { [FIELD_BY_DUTY[duty.id]]: "Perseverance" } as DutyContext;
 			expect(duty.done(ctx), `${duty.id} with a value`).toBe(true);
 		}
 	});
 
 	it("treats a value padded with whitespace as done", () => {
-		for (const duty of ALL_DUTIES) {
+		for (const duty of STRING_DUTIES) {
 			const ctx = {
 				[FIELD_BY_DUTY[duty.id]]: "  Perseverance  ",
 			} as DutyContext;
@@ -302,6 +358,26 @@ describe("done predicates", () => {
 		expect(speech?.done({ speechTitle: "How TBA Ruined My Talk" })).toBe(true);
 	});
 
+	it("the string-shaped loops above cover every duty but the boolean one", () => {
+		// Vacuity floor for the split: if `STRING_DUTIES` silently emptied — a
+		// renamed id, a filter that stopped matching — every loop above would pass
+		// having asserted nothing.
+		expect(STRING_DUTIES.length).toBe(ALL_DUTIES.length - 1);
+		expect(STRING_DUTIES.map((d) => d.id)).not.toContain("timing");
+		expect(TIMING_DUTY, "the timing duty must be reachable").toBeDefined();
+	});
+
+	it("the timing duty is done when a time has been recorded, and not before", () => {
+		// A BOOLEAN, so the four blank-ish states above do not apply — what does
+		// is that an ABSENT field is not done, exactly like an explicit false. A
+		// caller that loaded only the meeting meta passes `undefined`, and reading
+		// that as done would tick the box for a Timer who has recorded nothing.
+		expect(TIMING_DUTY?.done({ hasTiming: true })).toBe(true);
+		expect(TIMING_DUTY?.done({ hasTiming: false })).toBe(false);
+		expect(TIMING_DUTY?.done({ hasTiming: undefined })).toBe(false);
+		expect(TIMING_DUTY?.done({})).toBe(false);
+	});
+
 	it("is not done on an empty context", () => {
 		for (const duty of ALL_DUTIES) {
 			expect(duty.done({}), `${duty.id} on {}`).toBe(false);
@@ -309,11 +385,17 @@ describe("done predicates", () => {
 	});
 
 	it("reads its OWN field and no other", () => {
+		// Every OTHER field set to the value that would make ITS duty done. Since
+		// #730 that is per-field rather than one string for all of them — see
+		// `DONE_VALUE_BY_FIELD` — which also makes this strictly stronger than the
+		// version it replaced: a duty that read a sibling's field now sees a value
+		// its own predicate would accept, instead of a string a boolean check
+		// would have rejected anyway.
 		for (const duty of ALL_DUTIES) {
 			const mine = FIELD_BY_DUTY[duty.id];
 			const others = Object.values(FIELD_BY_DUTY).filter((f) => f !== mine);
 			const ctx = Object.fromEntries(
-				others.map((f) => [f, "somebody else's answer"]),
+				others.map((f) => [f, DONE_VALUE_BY_FIELD[f]]),
 			) as DutyContext;
 			expect(
 				duty.done(ctx),
@@ -379,6 +461,10 @@ describe("each duty points at the surface that performs it", () => {
 		expect(hrefFor("Grammarian", "grammarian")).not.toBe(`${base}/word`);
 	});
 
+	it("timing is done on the focused /me/timer subroute", () => {
+		expect(hrefFor("Timer", "timer")).toBe(`${base}/me/timer`);
+	});
+
 	it("the speech details stay on the full meeting page", () => {
 		// #666 narrowed exactly two of the three. The speech-details sheet has no
 		// focused subroute, so this one must NOT have moved.
@@ -390,6 +476,7 @@ describe("each duty points at the surface that performs it", () => {
 		for (const href of [
 			hrefFor("Toastmaster of the Day", "toastmaster_of_the_day"),
 			hrefFor("Grammarian", "grammarian"),
+			hrefFor("Timer", "timer"),
 		]) {
 			expect(href.startsWith(`${personalMeetingHref(TARGET)}/`)).toBe(true);
 		}
@@ -434,7 +521,14 @@ describe("the registry is a frozen singleton", () => {
 	});
 
 	it("freezes the shared empty result too", () => {
-		const none = dutiesForRole({ roleName: "Timer", roleKey: "timer" });
+		// The Ah-Counter, not the Timer: the Timer owns the `timing` duty since
+		// #730 and no longer returns the shared empty array, so asking it here
+		// would have quietly stopped testing the empty case.
+		const none = dutiesForRole({
+			roleName: "Ah-Counter",
+			roleKey: "ah_counter",
+		});
+		expect(none).toEqual([]);
 		expect(Object.isFrozen(none)).toBe(true);
 	});
 });

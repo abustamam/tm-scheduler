@@ -498,6 +498,22 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 		file: "src/server/slots.ts",
 		gate: "assertClubNotArchived",
 	},
+	// #730 — the Timer's measured times. Session-less by design (the Timer taps
+	// a link out of a chat thread), and it MINTS rows: without this gate an
+	// archived club would keep accreting a record of its meetings while every
+	// read of it returned empty, which is the exact asymmetry #555 closed for
+	// the three PII writers above.
+	//
+	// Seam-gated, so `timings.integration.test.ts` executes the refusal rather
+	// than only asserting the call is present — and it asserts the ORDER too,
+	// because takedown outranks every other reason to refuse and an archived
+	// club's cancelled meeting must not answer differently from its scheduled
+	// one.
+	{
+		fn: "recordTiming",
+		file: "src/server/timings-logic.ts",
+		gate: "assertClubNotArchived",
+	},
 ];
 
 /** Calls that mean "this fn resolves a session", i.e. not an anonymous reader.
@@ -779,10 +795,11 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		// no longer a session-less write, so a row here asserting where its
 		// ANONYMOUS archive gate lives would be describing something that no
 		// longer exists. `confirmSlot` went the other way at #661, which gave an
-		// authed-only write a session-less HOLDER arm. The count is the vacuity
-		// guard, so it moves deliberately with the table rather than being
-		// loosened to `toBeGreaterThan`.
-		expect(WRITE_GATES).toHaveLength(8);
+		// authed-only write a session-less HOLDER arm. `recordTiming` (#730) is
+		// the ninth: a genuinely new session-less write, not a reclassified one.
+		// The count is the vacuity guard, so it moves deliberately with the table
+		// rather than being loosened to `toBeGreaterThan`.
+		expect(WRITE_GATES).toHaveLength(9);
 	});
 
 	it("does not also waive a write it claims to gate", () => {

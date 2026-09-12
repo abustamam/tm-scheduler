@@ -193,6 +193,16 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// `detail = { change, programYear, before?, after?, goalKey?, goals? }`
 	"dcp_scoreboard_edit",
 	"dcp_suggestion_applied",
+	// The Timer recorded (or corrected) a measured time for one agenda slot
+	// (#730). ONE value, not a create/update pair: the write is an upsert keyed
+	// on the slot, so "recorded" and "corrected" are the same operation reaching
+	// the same row, and the feed's reader would have to re-derive which it was
+	// from the row's history anyway. `detail = { slotId, roleName,
+	// elapsedSeconds, grantedVia }` — `grantedVia` because the write has an
+	// honour-system arm, and a grant defended as auditable is not auditable
+	// while a self-asserted Timer's write and a session-authenticated officer's
+	// look identical in the feed (the rule `plan_set` already follows).
+	"timing_record",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -236,6 +246,27 @@ export const awardCategoryEnum = pgEnum("award_category", [
 	"best_speaker",
 	"best_evaluator",
 	"best_table_topics",
+]);
+
+// WHICH arm of the timing actor ladder admitted a write (#730) — a club
+// officer, this meeting's Toastmaster, or the member holding this meeting's
+// Timer slot asserting themselves.
+//
+// A pgEnum rather than bare `text`, and the reason is the same one that makes
+// the column worth having at all. Two of the three arms are honour-system
+// claims resolved against a member id the public agenda payload already
+// publishes, so the grant is defensible only because it is auditable
+// afterwards — and an audit trail carrying a typo'd arm name that type-checked
+// clean is not one. The union it mirrors is `ResolvedActor["via"]` in
+// `attendance-actor-logic.ts`, which is where the shape came from.
+//
+// `self` is the Timer's own arm here, NOT "the subject of the write" as it is
+// on the attendance ladder: a timing has no subject member, so the self arm
+// means "the caller holds this meeting's Timer slot".
+export const timingGrantedViaEnum = pgEnum("timing_granted_via", [
+	"officer",
+	"tmod",
+	"self",
 ]);
 
 // Membership-dues payment state (#206 / ADR-0017). A `member_dues` row exists
@@ -1552,6 +1583,82 @@ export const meetingAwards = pgTable(
 	],
 );
 
+/**
+ * The times the Timer measured (#730) — the fourth child of the minutes record,
+ * and the first one keyed on an agenda SLOT rather than on a person.
+ *
+ * One row per timed slot per meeting. #729 measures and throws away; this is
+ * where the measurement lands, so the club can answer "did that speech qualify"
+ * and "do our speakers habitually run over" from something other than a paper
+ * slip that goes in the bin.
+ *
+ * Five decisions in this shape, each with a reason:
+ *
+ * - **SECONDS, integer.** `clubs.table_topics_min_seconds` already made this
+ *   call and the comment on it records why. The MARKS are float minutes because
+ *   2.5 is exactly representable and an admin types 2.5; a MEASUREMENT in float
+ *   minutes invites `6.999999` and a report that reads 6:59 on one surface and
+ *   7:00 on another.
+ * - **The marks are COPIED onto the row.** A timing is a historical fact. An
+ *   officer editing the agenda's min/max next month must not silently re-decide
+ *   whether a past speech qualified, which is exactly what a row reading its
+ *   marks live through `role_slots` would do. Same instinct as
+ *   `officer_training_periods` being a sparse override rather than a live read.
+ *   Nullable, because a beat can carry a partial or absent trio and the honest
+ *   record of "measured against no window" is null.
+ * - **`slot_id` NOT NULL and plainly unique.** No XOR, no nullable subject, no
+ *   partial index: one timing per slot, enforced by the simplest constraint
+ *   that says so. A timing with no subject is not a record of anything, and the
+ *   plain (non-partial) unique index is also what `ON CONFLICT` can infer as an
+ *   arbiter for the upsert — the same reason `meeting_attendance`'s two unique
+ *   indexes are plain.
+ * - **`granted_via` NOT NULL, and a pgEnum** — see that enum's own comment.
+ * - **`recorded_by_member_id` is `set null` on member delete**, which has a
+ *   consequence the overwrite floor has to STATE rather than discover: after a
+ *   member is deleted a row can no longer prove whose it was. The floor treats
+ *   NULL as "not the caller's own" and fails closed — a self-arm Timer may not
+ *   overwrite a row whose recorder is unknown; an officer still can.
+ *
+ * Both FKs cascade: deleting a meeting takes its timings, and so does deleting
+ * the slot they are about. A timing outliving its slot would name a subject
+ * nothing can resolve.
+ */
+export const meetingTimings = pgTable(
+	"meeting_timings",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		/** The agenda row timed. NOT NULL — see the docblock. */
+		slotId: uuid("slot_id")
+			.notNull()
+			.references(() => roleSlots.id, { onDelete: "cascade" }),
+		/** Measured duration. SECONDS, integer. */
+		elapsedSeconds: integer("elapsed_seconds").notNull(),
+		/** The marks in force WHEN MEASURED, in minutes — byte-identical columns
+		 *  to `meeting_template_beats`' own trio. */
+		markGreen: real("mark_green"),
+		markYellow: real("mark_yellow"),
+		markRed: real("mark_red"),
+		recordedByMemberId: uuid("recorded_by_member_id").references(
+			() => members.id,
+			{ onDelete: "set null" },
+		),
+		grantedVia: timingGrantedViaEnum("granted_via").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("meeting_timings_meeting_idx").on(t.meetingId),
+		uniqueIndex("meeting_timings_slot_unique").on(t.slotId),
+		// A negative duration is not a slow speech, it is a corrupt row — and the
+		// write path takes a number off a public request, so the floor belongs in
+		// the database as well as in the validator.
+		check("meeting_timings_elapsed_nonneg", sql`${t.elapsedSeconds} >= 0`),
+	],
+);
+
 // ---------------------------------------------------------------------------
 // Digital voting (#510). A vote SESSION is the window for one award category on
 // one meeting; a VOTE is one ballot cast into it. The winner does not live here
@@ -2354,6 +2461,21 @@ export const meetingAwardsRelations = relations(meetingAwards, ({ one }) => ({
 	guest: one(guests, {
 		fields: [meetingAwards.guestId],
 		references: [guests.id],
+	}),
+}));
+
+export const meetingTimingsRelations = relations(meetingTimings, ({ one }) => ({
+	meeting: one(meetings, {
+		fields: [meetingTimings.meetingId],
+		references: [meetings.id],
+	}),
+	slot: one(roleSlots, {
+		fields: [meetingTimings.slotId],
+		references: [roleSlots.id],
+	}),
+	recordedBy: one(members, {
+		fields: [meetingTimings.recordedByMemberId],
+		references: [members.id],
 	}),
 }));
 
