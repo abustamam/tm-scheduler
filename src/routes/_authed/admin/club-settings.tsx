@@ -15,7 +15,10 @@ import {
 	MAX_LOGO_KB,
 } from "#/lib/club-logo-limits";
 import { clubLogoUrl } from "#/lib/club-logo-url";
-import { effectiveAdminClub } from "#/lib/effective-admin";
+import {
+	effectiveAdminClub,
+	effectiveAdminClubFor,
+} from "#/lib/effective-admin";
 import {
 	type ImageDimensions,
 	readImageDimensions,
@@ -141,9 +144,39 @@ export const CLUB_LOGO_COPY = {
 	genericError: "Something went wrong.",
 } as const;
 
+/** The one search key this route reads (#685) — see `validateSearch` below. */
+export type ClubSettingsSearch = { club?: string };
+
 export const Route = createFileRoute("/_authed/admin/club-settings")({
-	beforeLoad: ({ context }) => {
-		const adminClub = effectiveAdminClub(context);
+	/**
+	 * `?club=<uuid>` names the club to show, for a caller that already knows one
+	 * (#685). Optional and defaulted to `undefined`, so the two global-navigation
+	 * links — the app-shell nav item and the command palette, both of which have
+	 * no club in hand — keep resolving from workspace context exactly as before.
+	 *
+	 * Not validated as a uuid here on purpose: `beforeLoad` matches the value
+	 * against the viewer's own club list, so a malformed id simply finds nothing
+	 * and is refused by the same branch that refuses a real club they have no
+	 * rights on. A second shape check would be a second place to keep in step.
+	 */
+	validateSearch: (search: Record<string, unknown>): ClubSettingsSearch => ({
+		club: typeof search.club === "string" ? search.club : undefined,
+	}),
+	beforeLoad: ({ context, search }) => {
+		// ONE resolution, returned into route context and read by both the loader
+		// and the component below. The guard admitting one club while the loader
+		// rendered another is the failure mode this shape exists to make
+		// unreachable.
+		//
+		// An explicit `?club` is matched against the viewer's OWN admin clubs and
+		// REFUSED when it doesn't resolve — never silently swapped for the
+		// context-resolved club, which would reinstate #685 in a harder-to-see
+		// form (the officer lands on the wrong club's settings again, now
+		// believing the link is fixed). The refusal is the same `/dashboard`
+		// bounce the route already gives a non-admin.
+		const adminClub = search.club
+			? effectiveAdminClubFor(context, search.club)
+			: effectiveAdminClub(context);
 		if (!adminClub) {
 			throw redirect({ to: "/dashboard" });
 		}

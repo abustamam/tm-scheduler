@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import {
 	ArrowDown,
 	ArrowUp,
@@ -1178,6 +1178,40 @@ function RowActions({
 	);
 }
 
+/**
+ * "Club settings", pointed at the club whose agenda is open (#685).
+ *
+ * This editor is URL-scoped — it lives at `/club/$clubId/meeting/…/agenda`, so
+ * the club it edits is whatever the path says. `/admin/club-settings` is
+ * context-scoped: with no club named it resolves the workspace's ACTIVE club.
+ * For a multi-club admin editing club B while their active club is A, those two
+ * schemes crossed at this one link and sent them to A's settings, where
+ * changing the Table Topics window left the agenda in front of them untouched.
+ *
+ * `useParams({ strict: false })` rather than a prop: the club is already in the
+ * URL this component is rendered under, and threading it down would be the
+ * "change to the agenda editor beyond what the link passes" the issue rules
+ * out. `strict: false` also keeps the component mountable outside that route —
+ * `clubId` is then `undefined`, `search.club` is dropped from the href, and the
+ * link degrades to exactly today's context-scoped behaviour rather than
+ * throwing.
+ *
+ * The route re-checks the id against the viewer's own admin clubs, so this is a
+ * hint about which club is meant, not a grant.
+ */
+function ClubSettingsLink() {
+	const { clubId } = useParams({ strict: false });
+	return (
+		<Link
+			to="/admin/club-settings"
+			search={{ club: clubId }}
+			className="text-primary underline underline-offset-2 hover:text-primary/80"
+		>
+			Club settings
+		</Link>
+	);
+}
+
 /** Everything a row carries that the four columns do not: the note, the role
  *  binding, the per-holder flag and the timer card's three marks. */
 function RowDetail({
@@ -1334,14 +1368,7 @@ function RowDetail({
 							<p className="text-muted-foreground text-xs">
 								Set once for the whole club, not per meeting — every agenda, the
 								projected deck and the Timer's card read the same window. Change
-								it in{" "}
-								<Link
-									to="/admin/club-settings"
-									className="text-primary underline underline-offset-2 hover:text-primary/80"
-								>
-									Club settings
-								</Link>{" "}
-								under Table Topics speaking limits.
+								it in <ClubSettingsLink /> under Table Topics speaking limits.
 							</p>
 						</div>
 					) : (
