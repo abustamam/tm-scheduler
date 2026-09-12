@@ -16,6 +16,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { themeOnlyUpdate } from "#/lib/meeting-meta-update";
 import {
 	cleanup,
 	hasTestDb,
@@ -174,6 +175,150 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 			scheduledAt: "2026-08-01T18:30",
 		});
 		expect((await meetingRow(club.meetingId)).lengthMinutes).toBe(45);
+	});
+
+	/**
+	 * The video-call join link (#731).
+	 *
+	 * Two of these are the ones a happy-path suite would skip, and both are
+	 * costly in the same direction — an online club losing its join link is the
+	 * club losing the meeting:
+	 *
+	 *   1. a theme-only save must PRESERVE the link (the data-loss case), and
+	 *   2. omitting the field must still CLEAR it, which is what makes (1) a
+	 *      requirement of every caller rather than a nicety.
+	 *
+	 * Both assert against the stored column, not against the payload — the echo's
+	 * own unit test covers the payload, and a test that stopped there could not
+	 * see a writer that ignored it.
+	 */
+	describe("join link (#731)", () => {
+		const LINK = "https://zoom.us/j/1234567890";
+		const wallTime = "2026-08-01T18:30";
+
+		async function joinUrlOf(meetingId: string) {
+			const [m] = await testDb
+				.select({ joinUrl: meetings.joinUrl })
+				.from(meetings)
+				.where(eq(meetings.id, meetingId));
+			return m.joinUrl;
+		}
+
+		/** Put a link on the seeded meeting without going through the writer. */
+		async function givenStoredLink(value = LINK) {
+			await testDb
+				.update(meetings)
+				.set({ joinUrl: value })
+				.where(eq(meetings.id, club.meetingId));
+		}
+
+		const update = (joinUrl?: string | null) =>
+			applyMeetingUpdate({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+				scheduledAt: wallTime,
+				joinUrl,
+			});
+
+		it("stores a pasted link", async () => {
+			await update(LINK);
+			expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+		});
+
+		it("coerces a bare host to https, which is what officers actually paste", async () => {
+			await update("zoom.us/j/1234567890");
+			expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+		});
+
+		it.each([
+			"",
+			"   ",
+			"tbd",
+			"n/a",
+			"javascript:alert(1)",
+		])("stores null for %j rather than a link that goes nowhere", async (input) => {
+			await givenStoredLink();
+			await update(input);
+			expect(await joinUrlOf(club.meetingId)).toBeNull();
+		});
+
+		it("never stores a non-http scheme, whatever the client sent", async () => {
+			// The client runs the same validator for a fast message; this is the
+			// assertion that the SERVER value is the stored one.
+			await update("data:text/html,<script>alert(1)</script>");
+			expect(await joinUrlOf(club.meetingId)).toBeNull();
+		});
+
+		/**
+		 * THE data-loss case. A focused editor that posts
+		 * `{ meetingId, scheduledAt, theme }` and nothing else nulls the column —
+		 * see the header of `#/lib/meeting-meta-update`. For an online-only club
+		 * that is the room itself, deleted by a Toastmaster typing a theme.
+		 */
+		it("survives a theme-only save that echoes the stored meta", async () => {
+			await givenStoredLink();
+			await applyMeetingUpdate({
+				...themeOnlyUpdate({
+					meetingId: club.meetingId,
+					selfMemberId: club.memberId,
+					scheduledAt: wallTime,
+					theme: "New beginnings",
+					current: {
+						location: "The Old Library, Room 5",
+						joinUrl: LINK,
+						wordOfTheDay: null,
+						wodDefinition: null,
+						wodExample: null,
+						notes: null,
+						reminders: null,
+					},
+				}),
+				actorMemberId: club.memberId,
+			});
+			expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+		});
+
+		it("is CLEARED by a save that omits it — which is why the echo is required", async () => {
+			// The mirror of the test above, and the reason `MeetingMetaEcho` makes
+			// `joinUrl` a required property rather than an optional one. If this
+			// ever starts passing with the link intact, the writer has stopped being
+			// a full replace and the echo's contract needs rereading, not deleting.
+			await givenStoredLink();
+			await update(undefined);
+			expect(await joinUrlOf(club.meetingId)).toBeNull();
+		});
+
+		it("records the PRIOR link in the meeting_edit audit entry", async () => {
+			await givenStoredLink();
+			await update("https://meet.google.com/abc-defg-hij");
+			const [entry] = await testDb
+				.select({ detail: activityLog.detail })
+				.from(activityLog)
+				.where(eq(activityLog.action, "meeting_edit"));
+			const detail = entry.detail as {
+				before: { joinUrl: string | null };
+				after: { joinUrl: string | null };
+			};
+			expect(detail.before.joinUrl).toBe(LINK);
+			expect(detail.after.joinUrl).toBe("https://meet.google.com/abc-defg-hij");
+		});
+
+		it("createMeeting stores a normalized link on a brand-new meeting", async () => {
+			const { meetingId } = await applyCreateMeeting({
+				clubId: club.clubId,
+				scheduledAt: "2026-09-22T18:30",
+				joinUrl: "zoom.us/j/9876543210",
+			});
+			expect(await joinUrlOf(meetingId)).toBe("https://zoom.us/j/9876543210");
+		});
+
+		it("createMeeting leaves it null when the club meets in a room", async () => {
+			const { meetingId } = await applyCreateMeeting({
+				clubId: club.clubId,
+				scheduledAt: "2026-09-29T18:30",
+			});
+			expect(await joinUrlOf(meetingId)).toBeNull();
+		});
 	});
 
 	it("addSpeakerSlot adds a paired speaker + evaluator", async () => {

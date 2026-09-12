@@ -62,6 +62,9 @@ const { applyMeetingUpdate, applyWordOfTheDayUpdate } = await import(
  *  payload that crosses two fields fails rather than passing on a shared one. */
 const STORED_META = {
 	location: "The Old Library, Room 5",
+	// #731 — required by `MeetingMetaEcho`; the join link is nulled by a
+	// theme-only save that omits it, exactly like the fields around it.
+	joinUrl: "https://zoom.us/j/1234567890",
 	wordOfTheDay: "ineffable",
 	wodDefinition: "too great to be expressed in words",
 	wodExample: "an ineffable joy",

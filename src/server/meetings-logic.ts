@@ -13,6 +13,7 @@ import {
 import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { isMeetingLocked, meetingDateReached } from "#/lib/meeting-lifecycle";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
 import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic";
 import { listPlanForMeetings } from "./attendance-plan-logic";
@@ -92,6 +93,8 @@ export interface MeetingCreateInput {
 	scheduledAt: string;
 	theme?: string | null;
 	location?: string | null;
+	/** Raw video-call join link (#731) — normalized here, never trusted as typed. */
+	joinUrl?: string | null;
 	wordOfTheDay?: string | null;
 	notes?: string | null;
 }
@@ -133,6 +136,9 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 				scheduledAt,
 				lengthMinutes: club.defaultMeetingMinutes,
 				location: input.location?.trim() || null,
+				// Server-authoritative (#731): the client runs the same function for
+				// a fast error message, but THIS is the value that is stored.
+				joinUrl: normalizePresentationUrl(input.joinUrl),
 				theme: input.theme?.trim() || null,
 				wordOfTheDay: input.wordOfTheDay?.trim() || null,
 				notes: input.notes?.trim() || null,
@@ -163,6 +169,10 @@ export interface MeetingUpdateInput {
 	lengthMinutes?: number | null;
 	theme?: string | null;
 	location?: string | null;
+	/** Raw video-call join link (#731). A full-REPLACE field like the free-text
+	 *  ones beside it: omit it and the stored link is CLEARED, which is exactly
+	 *  what `MeetingMetaEcho` exists to stop a one-field editor from doing. */
+	joinUrl?: string | null;
 	wordOfTheDay?: string | null;
 	wodDefinition?: string | null;
 	wodExample?: string | null;
@@ -198,6 +208,11 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 			input.lengthMinutes != null ? input.lengthMinutes : meeting.lengthMinutes,
 		theme: input.theme?.trim() || null,
 		location: input.location?.trim() || null,
+		// Server-authoritative (#731). `""`, `"tbd"`, `"n/a"` and
+		// `"javascript:alert(1)"` all land on null; a bare host is coerced to
+		// `https://`. Reuses the `speeches.presentation_url` validator rather than
+		// growing a second one.
+		joinUrl: normalizePresentationUrl(input.joinUrl),
 		wordOfTheDay: input.wordOfTheDay?.trim() || null,
 		wodDefinition: input.wodDefinition?.trim() || null,
 		wodExample: input.wodExample?.trim() || null,
@@ -244,6 +259,7 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 					wodDefinition: meeting.wodDefinition,
 					wodExample: meeting.wodExample,
 					location: meeting.location,
+					joinUrl: meeting.joinUrl,
 					notes: meeting.notes,
 					reminders: meeting.reminders,
 					scheduledAt: meeting.scheduledAt,
