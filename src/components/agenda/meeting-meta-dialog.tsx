@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import {
@@ -60,11 +60,27 @@ export function MeetingMetaDialog({
 	onSaved: () => void | Promise<void>;
 }) {
 	const [submitting, setSubmitting] = useState(false);
-	// #731. Controlled, unlike every other input here, for two reasons: the blur
-	// check needs the current value, and the payload carries it separately from
-	// `meetingUpdateFromForm` (which builds the fields the form has always had).
-	const [joinUrl, setJoinUrl] = useState(meeting.joinUrl ?? "");
 	const [joinUrlError, setJoinUrlError] = useState<string | null>(null);
+
+	/**
+	 * #731. The join-link INPUT is uncontrolled, like every other field here, and
+	 * that is load-bearing rather than stylistic.
+	 *
+	 * This component is mounted whenever the viewer may edit meta — see
+	 * `meeting-agenda.tsx` — not when the dialog opens, so state declared out here
+	 * lives for the lifetime of the meeting page. Radix unmounts `DialogContent`'s
+	 * children on close, so an uncontrolled input re-reads the row on every open;
+	 * a `useState(meeting.joinUrl ?? "")` does not. Since this field is sent on
+	 * EVERY save, holding it in state meant a cancelled edit came back and won:
+	 * clear the field, press Cancel, reopen, save a theme, and the club's join
+	 * link is gone. It also never picked up a link saved by anyone else.
+	 *
+	 * The error MESSAGE still lives out here, because the submit handler has to be
+	 * able to raise it, so it is the one thing that needs resetting by hand.
+	 */
+	useEffect(() => {
+		if (!open) setJoinUrlError(null);
+	}, [open]);
 
 	/** The same validator the server stores through (`normalizePresentationUrl`),
 	 *  run here only so a typo is caught before the round trip. Blank is always
@@ -78,6 +94,7 @@ export function MeetingMetaDialog({
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		const form = new FormData(e.currentTarget);
+		const joinUrl = String(form.get("joinUrl") ?? "").trim();
 		// Refuse the save rather than silently storing null: the server normalizes
 		// "tbd" to null too, so without this the officer's typo would look saved
 		// and the link would simply be gone.
@@ -108,11 +125,11 @@ export function MeetingMetaDialog({
 					// REPLACE, so `""` is how the officer clears the link — omitting it
 					// would clear it too, but then there would be no way to keep one.
 					//
-					// Read from STATE, not from `form`: the input is controlled so the
-					// blur check can see it. `meetingUpdateFromForm` builds the fields
-					// the form has always had and does not know about this one; this key
-					// is spread last, so it wins if that ever changes.
-					joinUrl: joinUrl.trim(),
+					// Read off the same `form` as everything else.
+					// `meetingUpdateFromForm` builds the fields this dialog has always
+					// had and does not know about this one; the key is spread last, so
+					// it stays correct if that ever changes.
+					joinUrl,
 				},
 			});
 			toast.success("Meeting updated.");
@@ -214,9 +231,8 @@ export function MeetingMetaDialog({
 							type="text"
 							inputMode="url"
 							placeholder="https://zoom.us/j/…"
-							value={joinUrl}
-							onChange={(e) => {
-								setJoinUrl(e.target.value);
+							defaultValue={meeting.joinUrl ?? ""}
+							onChange={() => {
 								// Clear a standing error as soon as the officer edits, so the
 								// message never contradicts what is on screen.
 								if (joinUrlError) setJoinUrlError(null);

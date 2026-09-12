@@ -26,6 +26,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#/db", () => ({ db: {} }));
 
 const { buildNotificationEmail } = await import("./notifications-logic");
+const { formatMeetingDate } = await import("#/lib/format");
 
 const ROW = {
 	recipientName: "Ada Lovelace",
@@ -77,11 +78,79 @@ describe("a meeting with no join link mentions it in neither body", () => {
 		});
 	}
 
-	it("is otherwise byte-identical to the reminder that shipped before #731", () => {
-		// The whole no-link path is the common one — most clubs meet in a room —
-		// so a change that quietly reworded it for everyone would be a regression
+	it("is byte-identical to the reminder that shipped before #731", () => {
+		// The no-link path is the COMMON one — most clubs meet in a room — so a
+		// change that quietly reworded it for everyone would be a regression
 		// dressed as a feature.
-		expect(build({ joinUrl: null })).toEqual(build());
+		//
+		// Pinned against the literal pre-#731 bodies, transcribed from the commit
+		// before this change. An earlier version of this test compared
+		// `build({joinUrl: null})` with `build()` — both the no-link branch, so it
+		// asserted that one branch equals itself and would have passed over any
+		// rewording at all.
+		//
+		// Only the DATE is interpolated, because `formatMeetingDate` drops the year
+		// for a meeting in the current one — hardcoding its output would make this
+		// test start failing in January for a reason unrelated to the email.
+		// Everything else is the literal pre-#731 text.
+		const when = formatMeetingDate(ROW.meetingScheduledAt);
+		const email = build({ joinUrl: null });
+		expect(email.text).toBe(
+			[
+				"Hi Ada Lovelace,",
+				"",
+				`This is a reminder that you're signed up as Timer for Harbor City Toastmasters's meeting on ${when}.`,
+				"",
+				"See you there!",
+				"Harbor City Toastmasters",
+				"",
+				"—",
+				"Don't want role reminders? Unsubscribe: https://gavelup.app/u/abc123",
+			].join("\n"),
+		);
+		expect(
+			email.html,
+		).toBe(`<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#18181b;">
+  <p>Hi Ada Lovelace,</p>
+  <p>This is a reminder that you're signed up as <strong>Timer</strong> for Harbor City Toastmasters's meeting on <strong>${when}</strong>.</p>
+  <p>See you there!<br>Harbor City Toastmasters</p>
+  <p style="font-size:12px;color:#a1a1aa;margin-top:24px;">
+    Don't want role reminders?
+    <a href="https://gavelup.app/u/abc123" style="color:#71717a;">Unsubscribe</a>.
+  </p>
+</div>`);
+	});
+});
+
+/**
+ * The builder re-normalizes rather than trusting the column, exactly as the
+ * meeting page does at render — and this is the more important of the two
+ * places, because the page needs someone to be looking at it while a reminder
+ * is PUSHED to every role holder from the club's own sender.
+ */
+describe("a row written some other way cannot put a bad link in the mail", () => {
+	it("drops a javascript: scheme instead of linking it", () => {
+		const email = build({ joinUrl: "javascript:alert(1)" });
+		expect(email.html).not.toContain("javascript:");
+		expect(email.text).not.toContain("javascript:");
+		expect(email.html).not.toContain("Join the video call");
+	});
+
+	it("drops a credentials-in-URL link that reads as Zoom (#731 P1)", () => {
+		// `https://zoom.us@evil.example.com/` has hostname evil.example.com. The
+		// email renders link text == href, so it would read as a Zoom link to
+		// every recipient.
+		const email = build({ joinUrl: "https://zoom.us@evil.example.com/j/123" });
+		expect(email.html).not.toContain("evil.example.com");
+		expect(email.text).not.toContain("evil.example.com");
+		expect(email.html).not.toContain("Join the video call");
+	});
+
+	it("still sends an ordinary stored link", () => {
+		// The control: re-normalizing must not drop the good case.
+		expect(build({ joinUrl: "https://zoom.us/j/1234567890" }).text).toContain(
+			"https://zoom.us/j/1234567890",
+		);
 	});
 });
 
@@ -92,14 +161,16 @@ describe("the href cannot be broken out of (AC 7b)", () => {
 	 * other way — a hand-run SQL fix, a future importer — because the escaping
 	 * is what decides whether that becomes a broken link or an injected tag.
 	 */
-	it("escapes a double quote instead of closing the attribute", () => {
+	it("cannot close the href with a quote in the URL", () => {
+		// TWO layers now, and the order matters for what this asserts.
+		// `normalizePresentationUrl` runs first and percent-encodes `"`, `<` and
+		// `>` in the path, so nothing hostile survives to reach the escaper at all.
 		const email = build({
 			joinUrl: 'https://evil.example.com/"><script>alert(1)</script>',
 		});
 		expect(email.html).not.toContain("<script>");
-		expect(email.html).toContain("&quot;");
-		// The `>` of the injected tag is escaped too, so nothing reopens.
-		expect(email.html).toContain("&gt;");
+		expect(email.html).not.toContain('"><');
+		expect(email.html).toContain("%22%3E%3Cscript%3E");
 	});
 
 	it("escapes the angle brackets of an injected tag in the club name too", () => {

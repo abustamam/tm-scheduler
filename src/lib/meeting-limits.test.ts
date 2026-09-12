@@ -5,11 +5,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 import {
+	JOIN_URL_FIELD,
 	MEETING_FIELDS,
 	MEETING_LIMITS,
 	MEETING_UPDATE_FIELDS,
 } from "./meeting-limits";
 import { MINUTES_RENDER_CAPS } from "./minutes-render-caps";
+import { normalizePresentationUrl } from "./presentation-url";
 
 const REJECT_KEYS = [
 	"theme",
@@ -99,6 +101,98 @@ describe("MEETING_UPDATE_FIELDS — the whole-meeting form TRUNCATES", () => {
 		expect(r.success).toBe(true);
 		if (!r.success) return;
 		expect(r.data).toHaveLength(MEETING_LIMITS.theme);
+	});
+});
+
+/**
+ * JOIN_URL_FIELD — the cap that has to measure the value it does NOT receive.
+ *
+ * The first cut of #731 was `z.string().max(2048)` on the input, with a comment
+ * asserting "a stored value can only have come through this cap". That is false,
+ * and these tests are the measurement that falsifies it: normalization grows the
+ * string, so an input under the cap can store far over it, and an over-long
+ * stored value then blocks EVERY later save of the whole meeting through a
+ * session-less write path.
+ */
+describe("JOIN_URL_FIELD — the cap measures the STORED value (#731)", () => {
+	const parse = (v: string) => JOIN_URL_FIELD.safeParse(v);
+
+	it("accepts an ordinary join link", () => {
+		expect(parse("https://zoom.us/j/1234567890").success).toBe(true);
+		expect(parse("zoom.us/j/1234567890").success).toBe(true);
+	});
+
+	it("accepts blank — clearing the link is a legitimate edit", () => {
+		expect(parse("").success).toBe(true);
+		expect(parse("   ").success).toBe(true);
+	});
+
+	it("accepts a non-link, which normalizes to null and stores as null", () => {
+		// "tbd" is refused by the DIALOG, not by the cap. The cap's only job is
+		// length; rejecting shape here would give two sources of truth for it.
+		expect(parse("tbd").success).toBe(true);
+	});
+
+	/**
+	 * The measurement. Percent-encoding is up to ~6x, so an input comfortably
+	 * under the cap produces a stored value far over it.
+	 */
+	it("rejects an input UNDER the cap whose normalized form is OVER it", () => {
+		const input = `https://zoom.us/j/${"é".repeat(1000)}`;
+		// The premise, asserted rather than asserted-about: this is what makes an
+		// input-only cap wrong.
+		expect(input.length).toBeLessThanOrEqual(MEETING_LIMITS.joinUrl);
+		expect(normalizePresentationUrl(input)?.length).toBeGreaterThan(
+			MEETING_LIMITS.joinUrl,
+		);
+		// …and the field refuses it, which an input-only `.max()` would not.
+		expect(parse(input).success).toBe(false);
+	});
+
+	it("rejects a bare host whose https:// prefix pushes it over", () => {
+		const input = `${"z".repeat(1000)}.com/${"x".repeat(1038)}`;
+		expect(input.length).toBeLessThanOrEqual(MEETING_LIMITS.joinUrl);
+		expect(parse(input).success).toBe(false);
+	});
+
+	it("rejects an 8MB paste without handing it to the URL parser", () => {
+		// The raw length is checked first, so this short-circuits.
+		expect(
+			parse("https://zoom.us/j/".concat("x".repeat(8_000_000))).success,
+		).toBe(false);
+	});
+
+	it("rejects with a HUMAN message, not raw JSON", () => {
+		const r = parse(`https://zoom.us/j/${"é".repeat(1000)}`);
+		expect(r.success).toBe(false);
+		if (r.success) return;
+		const message = r.error.issues[0]?.message ?? "";
+		expect(message).toMatch(/^Keep the .+ under \d+ characters\.$/);
+		expect(message).not.toContain("{");
+	});
+
+	/**
+	 * The property that makes measuring the normalized value a PERMANENT fix
+	 * rather than one that merely moves the threshold: a value this field
+	 * accepted, once stored, re-normalizes to itself. So the dialog resending it
+	 * and `themeOnlyUpdate` echoing it can never trip the cap.
+	 */
+	it("normalization is idempotent, so a stored value always re-validates", () => {
+		for (const input of [
+			"zoom.us/j/1234567890",
+			`https://zoom.us/j/${"é".repeat(10)}`,
+			"https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc",
+		]) {
+			const once = normalizePresentationUrl(input);
+			expect(once).not.toBeNull();
+			expect(normalizePresentationUrl(once ?? "")).toBe(once);
+			expect(parse(once ?? "").success).toBe(true);
+		}
+	});
+
+	it("leaves room for the longest join link anyone actually uses", () => {
+		// Teams is the worst offender at ~450 characters; Zoom is ~70.
+		expect(MEETING_LIMITS.joinUrl).toBeGreaterThanOrEqual(1_000);
 	});
 });
 
@@ -199,6 +293,39 @@ describe("the server modules compose the meeting caps (#525)", () => {
 		});
 	}
 
+	/**
+	 * #731's join link, on its own assertion because its validator is a bare
+	 * identifier rather than a `MEETING_FIELDS.x` member access, so the loop
+	 * above cannot express it.
+	 *
+	 * This is the guard the first cut of #731 did not have, and the gap was
+	 * exactly the one this describe block exists for: the cap was an inline
+	 * `z.string().max(2048)` inside a server-fn module, which vitest cannot
+	 * invoke. `git grep 2048` returned one line, no test could reach it, and the
+	 * whole protection was deletable with the suite green.
+	 */
+	it("declares both joinUrl schemas from JOIN_URL_FIELD", () => {
+		const declarations = meetings.match(/\bjoinUrl\s*:\s*[^,\n]*/g) ?? [];
+		// BOTH schemas, create and update — a guard that passed on one would miss
+		// the other, and the create path is the quieter of the two.
+		expect(declarations).toHaveLength(2);
+		for (const d of declarations) {
+			expect(d).toMatch(/JOIN_URL_FIELD/);
+		}
+	});
+
+	it("measures the normalized value, not the raw input (#731 P1)", () => {
+		// The regression that reads as correct: `z.string().max(N)` looks like a
+		// cap and admits values the column cannot round-trip. Pinned at the
+		// SOURCE because the behavioural half is in `meeting-limits.ts` and this
+		// asserts that `meetings.ts` reaches for it rather than re-rolling one.
+		const limits = readSource(resolve(here(), "./meeting-limits.ts"));
+		expect(limits).toMatch(
+			/JOIN_URL_FIELD[\s\S]{0,400}normalizePresentationUrl/,
+		);
+		expect(meetings).not.toMatch(/joinUrl\s*:\s*z\.string\(/);
+	});
+
 	// The create/update split is a DECISION, not an accident, and it is the same
 	// one `wod-limits` encodes for the same two schemas: create rejects so the
 	// author sees an error on new input, update truncates so a row written before
@@ -246,7 +373,10 @@ describe("the server modules compose the meeting caps (#525)", () => {
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".ts") || file.includes(".test.")) continue;
 			const raw = readFileSync(resolve(dir, file), "utf8");
-			for (const field of REJECT_KEYS) {
+			// `joinUrl` rides the same sweep (#731): it is reached through the same
+			// session-less `tmod-self-assert` arm, and an uncapped one is worse
+			// than an uncapped `location` because normalization multiplies it.
+			for (const field of [...REJECT_KEYS, "joinUrl"] as const) {
 				const m = raw.match(
 					new RegExp(`\\b${field}\\s*:\\s*z\\.string\\(`, "g"),
 				);

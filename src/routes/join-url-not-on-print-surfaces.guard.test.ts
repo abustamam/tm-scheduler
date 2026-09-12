@@ -124,10 +124,19 @@ describe("the join link is on the authed meeting page (vacuity floor)", () => {
 		// The location ternary CLOSES before the join link opens.
 		expect(locationClosed).toBeGreaterThan(location);
 		expect(join).toBeGreaterThan(locationClosed);
-		// …and closes just before it, so the two are adjacent chips in the same
-		// meta row rather than the join link having drifted into another section
-		// where a club with no location would never see it.
-		expect(join - locationClosed).toBeLessThan(1500);
+
+		// …and no ELEMENT BOUNDARY sits between them, so they are adjacent chips
+		// inside the same meta row rather than the join link having drifted into
+		// another section where a club with no location would never look.
+		//
+		// Asserted structurally rather than as a character distance: a threshold
+		// like "within 1500 characters" is a unitless number with no reason behind
+		// it, and it breaks on any unrelated edit nearby while still passing if
+		// the chip moved somewhere genuinely wrong but close.
+		const between = src.slice(locationClosed, join);
+		expect(between).not.toContain("<div");
+		expect(between).not.toContain("</div");
+		expect(between).not.toContain("<span");
 	});
 });
 

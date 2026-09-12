@@ -22,6 +22,7 @@
 // established for exactly this.
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#/server/meetings", () => ({
@@ -59,22 +60,40 @@ const meeting = (over: Record<string, unknown> = {}) =>
 		...over,
 	}) as unknown as MeetingProp;
 
+/** The dialog exactly as `meeting-agenda.tsx` mounts it: ALWAYS rendered when
+ *  the viewer may edit meta, with `open` toggling — not conditionally mounted. */
+const dialog = (
+	open: boolean,
+	over: Record<string, unknown> = {},
+): ReactElement => (
+	<MeetingMetaDialog
+		open={open}
+		onOpenChange={() => {}}
+		meeting={meeting(over)}
+		timezone="America/Chicago"
+		selfMemberId={null}
+		canReschedule
+		onSaved={vi.fn(async () => {})}
+	/>
+);
+
+/** Re-query every time: Radix unmounts `DialogContent`'s children on close, so
+ *  a node captured before a close/reopen cycle is stale. */
+const field = () =>
+	screen.getByLabelText("Video call link") as HTMLInputElement;
+const saveButton = () => screen.getByRole("button", { name: /save changes/i });
+
 function setup(over: Record<string, unknown> = {}) {
-	render(
-		<MeetingMetaDialog
-			open
-			onOpenChange={() => {}}
-			meeting={meeting(over)}
-			timezone="America/Chicago"
-			selfMemberId={null}
-			canReschedule
-			onSaved={vi.fn(async () => {})}
-		/>,
-	);
+	const view = render(dialog(true, over));
 	return {
 		user: userEvent.setup(),
-		input: screen.getByLabelText("Video call link") as HTMLInputElement,
-		save: screen.getByRole("button", { name: /save changes/i }),
+		input: field(),
+		save: saveButton(),
+		/** Close the dialog and reopen it, the way Cancel then the toolbar do. */
+		async reopen() {
+			view.rerender(dialog(false, over));
+			view.rerender(dialog(true, over));
+		},
 	};
 }
 
@@ -143,6 +162,67 @@ describe("what the dialog sends", () => {
 		await user.click(save);
 		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
 		expect("joinUrl" in sentData().data).toBe(true);
+	});
+});
+
+/**
+ * The dialog is mounted whenever `viewer.canEditMeetingMeta` (`meeting-agenda.tsx`),
+ * NOT gated on `open`. Radix unmounts `DialogContent`'s children on close, so
+ * every sibling input re-reads the row on each open because each is uncontrolled
+ * with a `defaultValue`.
+ *
+ * The first cut of #731 held this one field in `useState(meeting.joinUrl ?? "")`
+ * in the PARENT, which Radix never unmounts. That initializes once, for the
+ * lifetime of the meeting page — and since the field is sent on every save, a
+ * discarded edit came back and won:
+ *
+ *   link set → open → clear the field → CANCEL → reopen → save a theme
+ *   → the club's join link is deleted.
+ *
+ * Which is the data-loss `MeetingMetaEcho` exists to prevent, reintroduced on
+ * the client. These are the regression.
+ */
+describe("the field re-reads the row on every open", () => {
+	it("discards an edit that was cancelled rather than saved", async () => {
+		const { user, input, reopen } = setup({
+			joinUrl: "https://zoom.us/j/1234567890",
+		});
+		await user.clear(input);
+		expect(input.value).toBe("");
+		await reopen();
+		expect(field().value).toBe("https://zoom.us/j/1234567890");
+	});
+
+	it("does not resend a cancelled clear on the NEXT save", async () => {
+		// The half that actually loses data: the stale value is what goes on the
+		// wire, so asserting only the input's value would miss it.
+		const { user, input, reopen } = setup({
+			joinUrl: "https://zoom.us/j/1234567890",
+		});
+		await user.clear(input);
+		await reopen();
+		await user.click(saveButton());
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect(sentData().data.joinUrl).toBe("https://zoom.us/j/1234567890");
+	});
+
+	it("picks up a link added by someone else since the dialog last opened", async () => {
+		// `onMetaSaved()` refetches and the `meeting` prop changes underneath a
+		// mounted dialog. State initialized once would stay diverged from the row.
+		const view = render(dialog(true, { joinUrl: null }));
+		expect(field().value).toBe("");
+		view.rerender(dialog(false, { joinUrl: null }));
+		view.rerender(dialog(true, { joinUrl: "https://meet.google.com/abc" }));
+		expect(field().value).toBe("https://meet.google.com/abc");
+	});
+
+	it("clears a stale validation error on reopen", async () => {
+		const { user, input, reopen } = setup();
+		await user.type(input, "tbd");
+		await user.tab();
+		expect(await screen.findByText(JOIN_URL_ERROR)).toBeTruthy();
+		await reopen();
+		expect(screen.queryByText(JOIN_URL_ERROR)).toBeNull();
 	});
 });
 

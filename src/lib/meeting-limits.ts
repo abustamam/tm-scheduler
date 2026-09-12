@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { cap } from "./cap";
+import { normalizePresentationUrl } from "./presentation-url";
 
 /**
  * Length caps on the meeting free-text fields (#525).
@@ -52,6 +53,12 @@ export const MEETING_LIMITS = {
 	reminders: 2_000,
 	/** A Table Topics question. Renders into the minutes PDF. */
 	topic: 200,
+	/**
+	 * The video-call join link (#731). Measured against the NORMALIZED value —
+	 * see `JOIN_URL_FIELD`. Generous: the longest real join link on record is a
+	 * Teams URL at ~450 characters, and Zoom's are ~70.
+	 */
+	joinUrl: 2_048,
 } as const;
 
 /**
@@ -124,3 +131,53 @@ export const MEETING_UPDATE_FIELDS = {
 	reminders: truncating(MEETING_LIMITS.reminders),
 	topic: truncating(MEETING_LIMITS.topic),
 } as const;
+
+/**
+ * The video-call join link (#731). ONE validator for both the create and the
+ * update schema, and it measures the **normalized** value.
+ *
+ * ## Why not `z.string().max(2048)` on the input
+ *
+ * That was the first cut and it was wrong in a way that reads as correct. The
+ * stored value is not the input: `applyMeetingUpdate` writes
+ * `normalizePresentationUrl(input.joinUrl)`, and normalization GROWS the string
+ * — percent-encoding is up to 6x (measured: `https://zoom.us/j/` + "é"×1000 is
+ * 1018 characters in and **6018** stored), and a bare host gains `https://`.
+ *
+ * So an input cap admits values the column cannot round-trip, and that is a
+ * LOCKOUT, not a cosmetic gap. `updateMeetingSchema` covers the whole meeting;
+ * the edit dialog resends the stored link on every save and `themeOnlyUpdate`
+ * echoes it, so once an over-long value is stored the meeting's date, theme,
+ * Word of the Day and notes all stop being savable. `/me/theme` has no join-link
+ * input at all, so a TMOD is hard-blocked with no way to repair it — and the
+ * write is reachable through the session-less `tmod-self-assert` arm, so it is
+ * an unauthenticated denial of service on one meeting record.
+ *
+ * Measuring the normalized value closes it for good, because normalization is
+ * idempotent (asserted in the test beside this file): a value that passed once
+ * re-normalizes to itself and passes forever.
+ *
+ * ## Neither rejecting nor truncating, exactly
+ *
+ * It REJECTS, unlike `MEETING_UPDATE_FIELDS`, and the lockout argument that
+ * drives truncation elsewhere does not apply: the column ships in #731's own
+ * migration, so no pre-cap value can exist, and every value that ever reaches it
+ * has passed this check. Truncating would be actively worse — a shortened URL is
+ * a broken link, not a shorter one, and it would be stored looking fine.
+ *
+ * The raw length is checked FIRST so an 8MB paste is refused before it reaches
+ * the URL parser, then the normalized length, which is the one that gets stored.
+ */
+export const JOIN_URL_FIELD = z.string().superRefine((raw, ctx) => {
+	const trimmed = raw.trim();
+	const tooLong =
+		trimmed.length > MEETING_LIMITS.joinUrl ||
+		(normalizePresentationUrl(trimmed)?.length ?? 0) > MEETING_LIMITS.joinUrl;
+	if (!tooLong) return;
+	ctx.addIssue({
+		code: "custom",
+		// Same shape as `rejecting`'s message, and for the same reason: this text
+		// goes straight into a toast in front of a club officer.
+		message: `Keep the video call link under ${MEETING_LIMITS.joinUrl} characters.`,
+	});
+});

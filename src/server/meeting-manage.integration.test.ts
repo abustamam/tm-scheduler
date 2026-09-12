@@ -16,6 +16,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { utcToZonedWallTime } from "#/lib/datetime";
 import { themeOnlyUpdate } from "#/lib/meeting-meta-update";
 import {
 	cleanup,
@@ -36,6 +37,7 @@ const {
 const { applyMeetingUpdate, applyCreateMeeting } = await import(
 	"./meetings-logic"
 );
+const { resolveMeetingAgendaAuthz } = await import("./meeting-authz-logic");
 
 async function meetingRow(meetingId: string) {
 	const [m] = await testDb
@@ -318,6 +320,151 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 				scheduledAt: "2026-09-29T18:30",
 			});
 			expect(await joinUrlOf(meetingId)).toBeNull();
+		});
+
+		/**
+		 * AC 2 — WHO may write the link.
+		 *
+		 * Every case above calls `applyMeetingUpdate` directly, and that function
+		 * runs no authorization at all: it takes `actorMemberId` and
+		 * `canReschedule` already resolved. So none of them says anything about the
+		 * ladder, and asserting "it rides the existing ladder" without exercising it
+		 * is the shape of claim that is true until it isn't.
+		 *
+		 * These run the pair the route actually runs — `resolveMeetingAgendaAuthz`
+		 * (what `requireMeetingAgendaEditor` wraps) and then the write — so a change
+		 * that widened or narrowed the grant shows up here.
+		 *
+		 * The TMOD arm is SESSION-LESS by design (ADR-0010): it grants on a
+		 * self-asserted member id that matches this meeting's Toastmaster slot,
+		 * with no `sessionUserId`. That is the repo's existing trust model for
+		 * agenda content and #731 does not change it — but the join link is the
+		 * first field through it that becomes a live href in outbound email, so the
+		 * boundary is worth pinning rather than assuming.
+		 */
+		describe("who may write it", () => {
+			const LINK_2 = "https://meet.google.com/abc-defg-hij";
+
+			/**
+			 * The meeting's CURRENT wall time in the club's zone, not a literal.
+			 *
+			 * A self-asserted TMOD carries `canReschedule = false` and the writer
+			 * compares the resubmitted time to the stored one TO THE MINUTE, so a
+			 * hardcoded string is rejected as an attempted reschedule — which is
+			 * what the first cut of this block did, and it failed for a reason that
+			 * had nothing to do with the join link. Resubmitting the real value is
+			 * also what the dialog does (ADR-0010), so this is the route's own path.
+			 */
+			let currentWallTime: string;
+			beforeEach(async () => {
+				const [meeting, clubRow] = await Promise.all([
+					testDb.query.meetings.findFirst({
+						where: eq(meetings.id, club.meetingId),
+					}),
+					testDb.query.clubs.findFirst({ where: eq(clubs.id, club.clubId) }),
+				]);
+				if (!meeting || !clubRow) throw new Error("seed failed");
+				currentWallTime = utcToZonedWallTime(
+					meeting.scheduledAt,
+					clubRow.timezone,
+				);
+			});
+
+			/** Add this meeting's Toastmaster slot, held by `memberId`. */
+			async function addTmodSlot(memberId: string | null) {
+				const [def] = await testDb
+					.insert(roleDefinitions)
+					.values({
+						clubId: club.clubId,
+						name: "Toastmaster of the Day",
+						key: "toastmaster_of_the_day",
+						category: "functionary",
+						isSpeakerRole: false,
+						sortOrder: 1,
+					})
+					.returning({ id: roleDefinitions.id });
+				await testDb.insert(roleSlots).values({
+					meetingId: club.meetingId,
+					roleDefinitionId: def.id,
+					status: memberId ? "claimed" : "open",
+					assignedMemberId: memberId,
+				});
+			}
+
+			/** The route's own two steps: resolve, then write. Returns whether the
+			 *  caller was allowed, so a denial is asserted rather than inferred from
+			 *  an unchanged column. */
+			async function saveJoinUrl(
+				who: { sessionUserId?: string | null; selfMemberId?: string | null },
+				joinUrl: string,
+			) {
+				const authz = await resolveMeetingAgendaAuthz({
+					meetingId: club.meetingId,
+					sessionUserId: who.sessionUserId ?? null,
+					selfMemberId: who.selfMemberId ?? null,
+				});
+				if (!authz.allowed) return false;
+				await applyMeetingUpdate({
+					meetingId: club.meetingId,
+					actorMemberId: authz.actorMemberId,
+					scheduledAt: currentWallTime,
+					joinUrl,
+					canReschedule: authz.via === "admin",
+				});
+				return true;
+			}
+
+			it("an admin sets it", async () => {
+				expect(
+					await saveJoinUrl({ sessionUserId: club.adminUserId }, LINK),
+				).toBe(true);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+			});
+
+			it("an admin clears it", async () => {
+				await givenStoredLink();
+				expect(await saveJoinUrl({ sessionUserId: club.adminUserId }, "")).toBe(
+					true,
+				);
+				expect(await joinUrlOf(club.meetingId)).toBeNull();
+			});
+
+			it("the meeting's self-asserted TMOD sets it", async () => {
+				await addTmodSlot(club.memberId);
+				expect(await saveJoinUrl({ selfMemberId: club.memberId }, LINK_2)).toBe(
+					true,
+				);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK_2);
+			});
+
+			it("a plain member is REFUSED, and the stored link is untouched", async () => {
+				// No TMOD slot for them: `club.memberId` holds nothing on this
+				// meeting, so neither arm grants.
+				await givenStoredLink();
+				expect(await saveJoinUrl({ selfMemberId: club.memberId }, LINK_2)).toBe(
+					false,
+				);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+			});
+
+			it("a member who holds a DIFFERENT meeting's TMOD slot is refused", async () => {
+				// The self-assert arm compares against THIS meeting's slot. A member
+				// who is Toastmaster next week must not be able to rewrite this
+				// week's room.
+				await givenStoredLink();
+				await addTmodSlot(club.adminMemberId);
+				expect(await saveJoinUrl({ selfMemberId: club.memberId }, LINK_2)).toBe(
+					false,
+				);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+			});
+
+			it("an anonymous caller with no ids at all is refused", async () => {
+				await givenStoredLink();
+				await addTmodSlot(club.memberId);
+				expect(await saveJoinUrl({}, LINK_2)).toBe(false);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+			});
 		});
 	});
 

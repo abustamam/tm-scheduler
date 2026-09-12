@@ -25,6 +25,7 @@ import {
 import type { SendEmailParams } from "#/lib/email";
 import { sendEmail as realSendEmail } from "#/lib/email";
 import { formatMeetingDate } from "#/lib/format";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { buildUnsubscribeUrl } from "#/lib/unsubscribe-token";
 
 /** Give up on a row after this many failed attempts (bounded retry). */
@@ -132,7 +133,15 @@ export function buildNotificationEmail(row: {
 	// body is what a text-only client renders, and a reminder whose join link
 	// exists only in the HTML fails for exactly the members most likely to be
 	// reading it on a locked-down work mail client.
-	const joinUrl = row.joinUrl?.trim() || null;
+	//
+	// Re-normalized here rather than trusted off the row, exactly as the meeting
+	// page does at render, and this is the MORE important of the two: the page
+	// needs someone to be looking at it, while a reminder is pushed to every role
+	// holder from the club's own sender. `normalizePresentationUrl` returns null
+	// for a non-http scheme and for credentials-in-URL, so a row written some
+	// other way — a hand-run SQL fix, a future importer — produces a reminder
+	// with no link rather than a `javascript:` href or a deceptive one.
+	const joinUrl = normalizePresentationUrl(row.joinUrl);
 
 	const text = [
 		`Hi ${row.recipientName},`,
