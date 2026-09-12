@@ -93,10 +93,16 @@ function draftWith(rows: AgendaDraftRow[]): AgendaDraft {
 
 const noop = vi.fn(async () => ({}) as never);
 
+/** The club the fixture's agenda belongs to. A UUID, not a slug: since #685 the
+ *  Club settings link is built from `clubUuid` rather than the `$clubId` URL
+ *  segment, which `resolveClubOrRedirect` canonicalises to the SLUG. */
+const CLUB_UUID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
 async function renderEditor(rows: AgendaDraftRow[]) {
 	await renderUnderMemoryRouter(
 		<AgendaEditor
 			draft={draftWith(rows)}
+			clubUuid={CLUB_UUID}
 			onAddRow={vi.fn(async () => rows[0])}
 			onUpdateRow={noop}
 			onRemoveRow={noop}
@@ -180,7 +186,12 @@ describe("the club-owned Table Topics row in the agenda editor (#679)", () => {
 		const panel = screen.getByTestId("agenda-row-club-marks-tt");
 		expect(panel.textContent).toContain("Set once for the whole club");
 		const link = within(panel).getByRole("link", { name: /Club settings/ });
-		expect(link.getAttribute("href")).toBe("/admin/club-settings");
+		// Carries the club (#685). Without it the settings page resolves the
+		// workspace's ACTIVE club, which for a multi-club officer is a different
+		// club than the agenda they are looking at.
+		expect(link.getAttribute("href")).toBe(
+			`/admin/club-settings?club=${CLUB_UUID}`,
+		);
 	});
 
 	it("leaves every OTHER row's three inputs editable", async () => {

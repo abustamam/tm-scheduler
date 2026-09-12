@@ -70,6 +70,12 @@ function AgendaEditorRoute() {
 	// disagrees with what `router.invalidate()` just refreshed.
 	const draft = Route.useLoaderData();
 	const { clubId, meetingId } = Route.useParams();
+	// The club's UUID, NOT `clubId`. `resolveClubOrRedirect` (the `/club/$clubId`
+	// shell's beforeLoad) canonicalises that segment to the club's SLUG, so
+	// `clubId` here is a slug and is only good for building links back. Anything
+	// that has to MATCH a club id — the editor's Club settings link, #685 — needs
+	// the uuid the shell resolved.
+	const { clubUuid } = Route.useRouteContext();
 	const router = useRouter();
 
 	async function refresh() {
@@ -104,6 +110,7 @@ function AgendaEditorRoute() {
 
 			<AgendaEditor
 				draft={draft}
+				clubUuid={clubUuid}
 				onAddRow={async (afterRowId, kind) => {
 					// The created row is RETURNED, not discarded: undo restores a
 					// deleted row by adding one and patching its fields onto it, and

@@ -77,6 +77,11 @@ const draft: AgendaDraft = {
 };
 
 const noopHandlers = {
+	// Required since #685: the Club settings link is built from the club's
+	// UUID rather than the URL segment (which is the club SLUG). Any value
+	// does here — the link is only rendered by the Table Topics branch, which
+	// has its own suites.
+	clubUuid: "00000000-0000-4000-8000-000000000000",
 	// Returns a ROW: `onAddRow` hands back what it created so undo can patch the
 	// deleted row's fields onto it.
 	onAddRow: vi.fn().mockResolvedValue({

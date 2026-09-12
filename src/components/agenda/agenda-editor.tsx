@@ -113,6 +113,14 @@ export interface NewAgendaRole {
 
 export interface AgendaEditorProps {
 	draft: AgendaDraft;
+	/** The club's UUID, from the club shell's route context (#685).
+	 *
+	 *  A PROP rather than a router read, and specifically not the `$clubId` URL
+	 *  segment: `resolveClubOrRedirect` canonicalises that segment to the club's
+	 *  SLUG, so reading it here would send a slug to a lookup that matches UUIDs
+	 *  and dead-end every viewer at `/dashboard`. `club.$clubId.tsx`'s
+	 *  `beforeLoad` returns `clubUuid: club.id` for exactly this. */
+	clubUuid: string;
 	/** Returns the CREATED row. The server fn already did; the prop type
 	 *  discarded it. Undo needs the new id to restore the deleted row's fields
 	 *  onto it. */
@@ -234,6 +242,7 @@ function deltaPhrase(deltaMinutes: number): string {
 
 export function AgendaEditor({
 	draft,
+	clubUuid,
 	onAddRow,
 	onUpdateRow,
 	onRemoveRow,
@@ -378,6 +387,7 @@ export function AgendaEditor({
 								return (
 									<AgendaTableRow
 										key={`${entry.beatId}-${entry.iteration}`}
+										clubUuid={clubUuid}
 										index={index}
 										entry={entry}
 										row={row}
@@ -499,6 +509,7 @@ function parseIntOrNull(value: string): number | null {
  * beat.
  */
 function AgendaTableRow({
+	clubUuid,
 	index,
 	entry,
 	row,
@@ -517,6 +528,8 @@ function AgendaTableRow({
 	onRemoveRow,
 	onMoveRow,
 }: {
+	/** Threaded to `RowDetail` for the Club settings link (#685). */
+	clubUuid: string;
 	index: number;
 	entry: BudgetEntry;
 	row: AgendaDraftRow;
@@ -839,6 +852,7 @@ function AgendaTableRow({
 				</tr>
 				{open ? (
 					<RowDetail
+						clubUuid={clubUuid}
 						row={row}
 						roles={roles}
 						editable={editable}
@@ -972,6 +986,7 @@ function AgendaTableRow({
 			</tr>
 			{open ? (
 				<RowDetail
+					clubUuid={clubUuid}
 					row={row}
 					roles={roles}
 					editable={editable}
@@ -1178,9 +1193,47 @@ function RowActions({
 	);
 }
 
+/**
+ * "Club settings", pointed at the club whose agenda is open (#685).
+ *
+ * This editor is URL-scoped — it lives at `/club/$clubId/meeting/…/agenda`, so
+ * the club it edits is whatever the path says. `/admin/club-settings` is
+ * context-scoped: with no club named it resolves the workspace's ACTIVE club.
+ * For a multi-club admin editing club B while their active club is A, those two
+ * schemes crossed at this one link and sent them to A's settings, where
+ * changing the Table Topics window left the agenda in front of them untouched.
+ *
+ * The club arrives as a PROP, threaded from the route. The first cut of #685
+ * read the router's `$clubId` path param instead, and that was wrong in a way
+ * this component could not see: `/club/$clubId`'s `beforeLoad` runs
+ * `resolveClubOrRedirect`, which redirects unless the segment already equals the
+ * club's SLUG. So the param is a slug by the time anything here renders, the
+ * link emitted `?club=<slug>`, the settings route matched it against UUIDs, and
+ * every viewer was bounced to `/dashboard` — the link worked for single-club
+ * admins before that change and for nobody after it. Taking the value as a prop
+ * makes its provenance a compile-time fact instead of an assumption about where
+ * the component happens to be mounted; `club.$clubId.tsx` returns
+ * `clubUuid: club.id` into route context for exactly this.
+ *
+ * The route re-checks the id against the viewer's own admin clubs, so this is a
+ * hint about which club is meant, not a grant.
+ */
+function ClubSettingsLink({ clubUuid }: { clubUuid: string }) {
+	return (
+		<Link
+			to="/admin/club-settings"
+			search={{ club: clubUuid }}
+			className="text-primary underline underline-offset-2 hover:text-primary/80"
+		>
+			Club settings
+		</Link>
+	);
+}
+
 /** Everything a row carries that the four columns do not: the note, the role
  *  binding, the per-holder flag and the timer card's three marks. */
 function RowDetail({
+	clubUuid,
 	row,
 	roles,
 	editable,
@@ -1198,6 +1251,7 @@ function RowDetail({
 	commitMarks,
 	onUpdateRow,
 }: {
+	clubUuid: string;
 	row: AgendaDraftRow;
 	roles: AgendaDraftRole[];
 	editable: boolean;
@@ -1334,14 +1388,8 @@ function RowDetail({
 							<p className="text-muted-foreground text-xs">
 								Set once for the whole club, not per meeting — every agenda, the
 								projected deck and the Timer's card read the same window. Change
-								it in{" "}
-								<Link
-									to="/admin/club-settings"
-									className="text-primary underline underline-offset-2 hover:text-primary/80"
-								>
-									Club settings
-								</Link>{" "}
-								under Table Topics speaking limits.
+								it in <ClubSettingsLink clubUuid={clubUuid} /> under Table
+								Topics speaking limits.
 							</p>
 						</div>
 					) : (
