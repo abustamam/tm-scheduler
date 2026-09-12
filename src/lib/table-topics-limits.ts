@@ -236,13 +236,25 @@ export function formatTableTopicsTiming(
  * beside it. That re-derivation is the failure `agenda-template-slides.ts`
  * records, where two surfaces stated two disqualification rules for one club.
  *
- * Takes the CAP alone rather than a `TableTopicsLimits`, so a caller that has
- * already narrowed through `hasTableTopicsLimits` can pass it straight in. It
- * therefore says nothing about whether the club HAS stated a window — ask
+ * Reads the CAP alone, so a caller that has already narrowed through
+ * `hasTableTopicsLimits` can pass its whole object straight in. It therefore
+ * says nothing about whether the club HAS stated a window — ask
  * `hasTableTopicsLimits` first, as `formatTableTopicsTiming` does.
+ *
+ * An OBJECT rather than the bare `maxSeconds: number` that `tableTopicsClockText`
+ * takes a few lines down, and the difference is deliberate. That one reads a
+ * field the caller has already chosen; this one is the arithmetic that makes
+ * the choice matter, and a bare number parameter would accept
+ * `tableTopicsDqSeconds(limits.minSeconds)` silently — a disqualification
+ * point one second past the FLOOR, printed with no type error and no test
+ * failing unless someone happened to pin that club's sentence.
  */
-export function tableTopicsDqSeconds(limits: { maxSeconds: number }): number {
-	return limits.maxSeconds + 1;
+export function tableTopicsDqSeconds({
+	maxSeconds,
+}: {
+	maxSeconds: number;
+}): number {
+	return maxSeconds + 1;
 }
 
 /**

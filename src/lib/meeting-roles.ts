@@ -37,11 +37,18 @@ export const VOTE_COUNTER_ROLE_KEY = "vote_counter";
  * The other three decide who may DO something — edit the agenda, own the Word
  * of the Day, run the votes. Nothing is granted by holding the Timer; the key
  * is here because the Timer is the role two other surfaces have to name, and
- * naming it by string is the #464 failure shape. `agenda-runsheet.ts` already
- * carries its own `TIMER_ROLE` literal for beat binding, and this export does
- * NOT claim to have replaced it — same standing caveat the block above states
- * for its own three keys: this is where a new reader should come, not proof
- * that every existing one already does.
+ * naming it by string is the #464 failure shape. Resolve a SLOT through
+ * `findTimerSlot` below rather than comparing to this constant by hand: the
+ * key is only half the answer, and the other half is the order it is asked in.
+ *
+ * Five modules still spell `"timer"` as a bare literal —
+ * `src/server/packet-pdf-logic.ts`, `src/lib/agenda-slides.ts`,
+ * `src/lib/meeting-packet.ts`, `src/data/role-sheets.ts` and
+ * `src/lib/agenda.ts`. This export does NOT claim to have replaced them; same
+ * standing caveat the block above states for its own three keys, and this is
+ * where a new reader should come, not proof that every existing one already
+ * does. (`src/lib/role-template.ts` is the canonical seed declaration, which
+ * is the source, not an offender.)
  *
  * Separate const rather than a fourth entry in that group so the group's
  * comment stays true. A reader who needs "may this member run the votes"
@@ -120,11 +127,11 @@ export function isGrammarianRoleName(name: string): boolean {
  * True when a role-definition name is EXACTLY the Timer role's canonical name
  * (#732). NOT "Timekeeper", not "Timer Keeper", not the plural "Timers".
  *
- * The FALLBACK, never the rule: read `TIMER_ROLE_KEY` first and reach for this
- * only when a slot's `role_definitions.key` is NULL — the same key-then-name
- * order `findCapabilityRole` below encodes for the other three. A standard
- * Timer renamed before the #368 backfill still has to resolve; a club-invented
- * role that merely sounds like one must not.
+ * NAME-ONLY, so it is the fallback rather than the rule: it runs only for a
+ * slot whose `role_definitions.key` is NULL. Prefer `findTimerSlot`, which
+ * reads the key when there is one — same relationship `isTmodRoleName` has to
+ * `findTmodSlot`. A standard Timer renamed before the #368 backfill still has
+ * to resolve; a club-invented role that merely sounds like one must not.
  *
  * Exact for the reason the canonical-name docblock above gives at length: every
  * club-invented role has a NULL key, so a prefix or substring match here would
@@ -204,6 +211,31 @@ export function findVoteCounterSlot<T extends RoleIdentity>(
 		VOTE_COUNTER_ROLE_KEY,
 		VOTE_COUNTER_CANONICAL_NAMES,
 	);
+}
+
+/**
+ * The meeting's Timer slot, or undefined (#732).
+ *
+ * Reuses `findCapabilityRole` for its MECHANISM, not for its premise: the
+ * Timer grants nothing, and `TIMER_ROLE_KEY`'s docblock says why it is not in
+ * the capability group. What is worth reusing is the resolution ORDER — key
+ * first, then the canonical names in priority order — and the array-order
+ * determinism that function's docblock records as a real bug, where the same
+ * meeting resolved to a different member between two requests because the
+ * server's slot array is a SQL result.
+ *
+ * That is the whole reason this exists rather than leaving `TIMER_ROLE_KEY`
+ * and `isTimerRoleName` for a caller to combine. #732 shipped the two pieces
+ * and left the order to whoever assembled them, which put the load-bearing
+ * half — key BEFORE name — in no shipped code at all: a caller that checked
+ * the name first would hand the Timer's surface to a club-invented
+ * look-alike whenever the real Timer had been renamed, and nothing would have
+ * failed. One exported function is what makes the order testable.
+ */
+export function findTimerSlot<T extends RoleIdentity>(
+	slots: T[],
+): T | undefined {
+	return findCapabilityRole(slots, TIMER_ROLE_KEY, TIMER_CANONICAL_NAMES);
 }
 
 /**

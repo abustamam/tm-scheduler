@@ -5,6 +5,7 @@ import {
 	type TemplateBeatRow,
 	type TemplateRoleRow,
 } from "./agenda-template-rows";
+import { TIMER_ROLE_KEY } from "./meeting-roles";
 import {
 	DEFAULT_SPEAKER_MINUTES,
 	speechBookedMinutes,
@@ -751,7 +752,7 @@ export type RunOfShowConfig = {
  *  - `alsoRequiresAnyOf` drops the ROW — the evaluation-timing beat (#508),
  *    which exists only to ask the Timer something and has nothing to say
  *    without one. */
-const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
+const TIMER_ROLE: BeatRole = { roleKey: TIMER_ROLE_KEY, roleName: "Timer" };
 
 /**
  * The words the General Evaluator uses to hand the room to the Timer before the
