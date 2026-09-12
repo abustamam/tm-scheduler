@@ -295,36 +295,53 @@ export function Kick({
 
 /**
  * The printed scan-to-vote QR's edge, in CSS px. ONE number for every printed
- * ballot QR — `DarkFooter` below and `GridLayout`'s hand-rolled copy of it
- * (`meeting-agenda-print.tsx`). Two literals is how those drifted before (#717).
+ * ballot QR — `DarkFooter` below, and `GridLayout`'s and `SpaciousLayout`'s
+ * hand-rolled copies (`meeting-agenda-print.tsx`). Two literals is how the
+ * first two drifted (#717).
  *
  * It shipped at 32, which is ~8.5mm at the 96dpi `@page` assumes, and less than
  * that in the hand: the one-page layouts sit inside `FitPage`, so the code
- * PRINTS at 32 × the sheet's scale — measured 23px (6.2mm) on editorial. The
+ * PRINTS at 32 × the sheet's scale — measured 23.6px (6.2mm) on editorial. The
  * encoded value is an origin plus `/club/<slug>/meeting/<key>/vote`, which lands
  * at QR version 3-4, so that is a ~0.2mm module: about half what a phone camera
  * resolves across a table.
  *
- * 56, not the 72 (~19mm) #717 asked for, and the ceiling is the editorial sheet
- * rather than the footer band. Measured on the real MCF 2026-08-13 agenda
- * through `print-page-count.ts`'s harness (macOS fonts — see that file on why
- * these are not the deployed page's numbers). `FitPage` FLOWS a sheet onto a
- * second page once it needs a scale under `MIN_FIT_SCALE`, which for editorial
- * is 1464px of content:
+ * 56, not the 72 (~19mm) #717 asked for, and the binding surface is the
+ * EDITORIAL SHEET rather than the footer band. Measured on the real MCF
+ * 2026-08-13 agenda through `print-page-count.ts`'s harness (macOS fonts — see
+ * that file on why these are not the deployed page's numbers). `FitPage` FLOWS a
+ * sheet onto a second page once it needs a scale under `MIN_FIT_SCALE`, which
+ * for editorial is 1464px of content:
  *
- *   footer as it was, QR 32 ....... 1445px  raw 0.7294  6.291pt   ← shipped
- *   footer as it was, QR 48 ....... 1461px  raw 0.7214  6.222pt
- *   footer as it was, QR 56 ....... 1469px  FLOWS — the agenda gains a sheet
- *   QR beside the whole footer, 56  1443px  raw 0.7304  6.300pt   ← ships
- *   QR beside the whole footer, 72  1459px  raw 0.7224  6.231pt
+ *                    editorial              grid            printed edge
+ *                 height  slack   pt     height  slack     (ed / grid)
+ *   QR 32 ....... 1428px  35.9  6.366    1406px  57.9    23.6px / 24.0px
+ *   QR 48 ....... 1435px  28.9  6.335    1422px  41.9    35.3px / 35.6px
+ *   QR 56 ....... 1443px  20.9  6.300    1430px  33.9    40.9px / 41.3px  ←
+ *   QR 64 ....... 1451px  12.9  6.265    1438px  25.9    46.5px / 46.9px
+ *   QR 72 ....... 1459px   4.9  6.231    1446px  17.9    52.0px / 52.5px
  *
- * So the row rewrite below is what pays for the bump rather than headroom that
- * was lying around: a QR up to ~41px now costs the sheet NOTHING, and 56 leaves
- * editorial 2px SHORTER and a hair more legible than it prints today. 72 would
- * land 5px from the flow cliff and 0.031pt from `EDITORIAL_MIN_PRINTED_PT`,
- * which is inside the cross-platform wrap variance those floors carry margin
- * for. Raising this further is a decision about editorial's density (#563), not
- * about the QR — and `ballot-qr-print-fit.test.tsx` is what will tell you.
+ * 72 does NOT push a sheet, so #717's own escape clause ("if the footer band
+ * cannot fit 72px without pushing a sheet") is not what picks 56. The MARGIN
+ * does. `ballot-qr-print-fit.test.tsx`'s `MIN_FLOW_SLACK_PX` requires a layout
+ * to stand at least one wrapped line (16px) clear of the cliff, because that is
+ * the unit of disagreement between this harness on macOS and on CI's Ubuntu —
+ * no webfont resolves here and the substitute moves where lines wrap. 72 leaves
+ * 4.9px and 64 leaves 12.9px; both are inside one wrap of costing the club a
+ * second sheet. 56 leaves 20.9px, which is also MORE than the 18.9px the 32px
+ * code stands on in `main` today — so the bigger code does not spend editorial's
+ * safety margin, it adds to it.
+ *
+ * That is a judgement about measurement noise, not a rule from the issue, and
+ * the maintainer may reasonably prefer 64 or 72 for the ~13% and ~27% larger
+ * printed code. Overriding it means raising `MIN_FLOW_SLACK_PX` deliberately in
+ * the same change.
+ *
+ * The rewrite below is what makes even 56 affordable, rather than headroom that
+ * was lying around: hung beside the whole footer stack, a code up to ~41px costs
+ * the sheet NOTHING. Inside the left/right row where #510 had it, 56 measured
+ * 1469px and editorial FLOWED. Going past 56 is a decision about editorial's
+ * density (#563), not about the QR.
  */
 export const FOOTER_QR_PX = 56;
 
@@ -334,11 +351,12 @@ export const FOOTER_QR_PX = 56;
  * `ballotUrl`, when set, adds a scan-to-vote QR (#510) at the band's right edge
  * — for clubs that print the agenda instead of projecting present mode. It is
  * optional, and since #717 it is threaded to EVERY sheet of a layout rather
- * than the last: `timing` prints two sides, and a club printing it double-sided
- * was handing out a front side with no way to vote. `GridLayout` hand-rolls its
- * own tight officer footer instead of this component (see its "NO HEADROOM
- * LEFT" note) and carries its own copy of the same QR, at the same
- * `FOOTER_QR_PX`, rather than one here.
+ * than the last: BOTH two-sheet layouts print two sides, and a club printing
+ * either double-sided was handing out a front side with no way to vote.
+ * `GridLayout` and `SpaciousLayout`'s page 1 hand-roll their own officer bands
+ * instead of this component (see `GridLayout`'s "NO HEADROOM LEFT" note) and
+ * carry their own copies of the same QR, at the same `FOOTER_QR_PX`, rather
+ * than one here.
  *
  * The QR is a flex sibling of the ENTIRE footer stack — the left/right line and
  * the disclaimer both — not a member of the left/right row. That is the whole
@@ -360,6 +378,12 @@ export function DarkFooter({
 }) {
 	return (
 		<div
+			// Test hook only — nothing renders off it, same idiom as `data-fit-inner`
+			// above. It names the BAND, which is the box `ballot-qr-print-fit.test.tsx`
+			// has to measure directly: a sheet-height delta cannot tell "the footer
+			// grew" from "the run of show did", and the band growing when there is NO
+			// ballot URL is exactly what #717's AC 7 forbids.
+			data-print-footer=""
 			style={{
 				marginTop: "auto",
 				background: INK,

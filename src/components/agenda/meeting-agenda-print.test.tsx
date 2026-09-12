@@ -1289,15 +1289,24 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 		});
 	}
 
-	// #717's other half, and the one a reader cannot see on screen: `timing` is
-	// the only two-sheet layout, both its sheets scroll past in one view, and
-	// page 1 was never passed `ballotUrl` at all. A club printing that agenda
-	// double-sided handed out a front side with no way to reach the ballot.
+	// #717's other half, and the one a reader cannot see on screen: both sheets
+	// of a two-sheet layout scroll past in one view, and page 1 was never passed
+	// a `ballotUrl` at all. A club printing that agenda double-sided handed out a
+	// front side with no way to reach the ballot.
+	//
+	// BOTH two-sheet layouts, not just `timing`. The issue's premise was that
+	// `timing` is the only one; `SpaciousLayout` wraps `TwoPage` as well and had
+	// the identical gap, caught in review. A per-layout loop is what stops the
+	// next reader inheriting the same premise — `grep -n "<TwoPage>"` is the
+	// check, and if it ever returns a third layout this list is what fails.
 	//
 	// Scoped per SHEET rather than counting `.footer-qr` in the container,
 	// because a count of 2 is also what a page-2 footer rendered twice would
 	// give. `TwoPage` emits both sheets as `.agenda-page` siblings.
-	describe("the timing layout carries it on BOTH sheets", () => {
+	describe.each([
+		"timing",
+		"spacious",
+	] as const)("the %s layout carries it on BOTH sheets", (layout) => {
 		const sheets = (container: HTMLElement) => [
 			container.querySelector(".agenda-page:nth-of-type(1)"),
 			container.querySelector(".agenda-page:nth-of-type(2)"),
@@ -1306,7 +1315,7 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 		it("puts a real QR on page 1 and page 2 when ballotUrl is set", () => {
 			const { container } = render(
 				<MeetingAgendaPrint
-					layout="timing"
+					layout={layout}
 					header={header}
 					roles={[{ label: "Toastmaster", name: "Lee P." }]}
 					officers={[{ office: "President", name: "Pat Lee" }]}
@@ -1334,7 +1343,7 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 			// that it is wired up.
 			const { container } = render(
 				<MeetingAgendaPrint
-					layout="timing"
+					layout={layout}
 					header={header}
 					roles={[{ label: "Toastmaster", name: "Lee P." }]}
 					officers={[{ office: "President", name: "Pat Lee" }]}
@@ -1346,6 +1355,27 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 				expect(page).not.toBeNull();
 				expect(page?.querySelector(".footer-qr")).toBeNull();
 			}
+		});
+
+		it("renders page 1's QR even for a club with no officers and no schedule", () => {
+			// `SpaciousLayout`'s page-1 band and `GridLayout`'s footer are both
+			// CONDITIONAL on having something to show. Without `|| ballotUrl` in
+			// that condition the band never renders for such a club, and the code
+			// has nowhere to go on the very sheet this fixes — a silent hole that
+			// the fixtures above, which all pass officers, cannot see.
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={{ ...header, meetingSchedule: null, mission: null }}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[]}
+					explainers={[{ role: "Timer", description: "Times the meeting." }]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			const [page1] = sheets(container);
+			expect(page1?.querySelector(".footer-qr")).not.toBeNull();
 		});
 	});
 });
