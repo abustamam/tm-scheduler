@@ -1,67 +1,50 @@
 // @vitest-environment jsdom
 /**
  * The agenda editor's "Club settings" link carries the club whose agenda is
- * open (#685).
+ * open — as a UUID (#685).
  *
- * ## Why this needs its own file, and its own router
+ * ## The regression this file is really guarding
  *
- * `agenda-editor-table-topics.test.tsx` already asserts this link's href, and
- * it will keep passing after this change — because `renderUnderMemoryRouter`
- * mounts a bare root route at `/`, where there are no path params at all. That
- * is the DEGRADED path (no club known ⇒ no `?club`, today's context-scoped
- * behaviour), and asserting it is worth keeping. It just cannot see the fix:
- * the club the link must carry only exists when the component is mounted under
- * `/club/$clubId/…`, which is the one place it ships. So this file builds a
- * router with that real path shape, and the shared harness stays untouched for
- * everything that does not need params.
+ * The first cut of #685 read the club off the router:
+ * `useParams({ strict: false }).clubId`. That is WRONG here and the wrongness is
+ * invisible from inside this component. `/club/$clubId`'s `beforeLoad` runs
+ * `resolveClubOrRedirect`, which redirects unless `identifier === club.slug`
+ * (`club-route.ts`), so by the time the editor renders the segment is the club's
+ * SLUG. The link therefore emitted `?club=<slug>`, the settings route matched it
+ * against `context.clubs[].clubId` (UUIDs), nothing matched, and EVERY viewer —
+ * including the single-club admins for whom the link worked before — was bounced
+ * to `/dashboard`.
  *
- * ## The bug
+ * That shipped past a component test because the test mounted the editor on a
+ * flat synthetic route with no `/club/$clubId` parent, so canonicalisation never
+ * ran, and hardcoded a UUID into the path. The test and its "pre-fix control"
+ * both passed against production-broken code. Two lessons are baked in below:
  *
- * The editor is URL-scoped, `/admin/club-settings` was context-scoped, and
- * nothing reconciled them. A multi-club admin editing club B's agenda whose
- * active club was A followed this link into A's settings and changed A's Table
- * Topics window — leaving the agenda in front of them untouched, which reads as
- * "the setting did nothing". A grep for the `<Link>` cannot tell the two cases
- * apart; only the rendered href can.
- *
- * The route's half (does `?club` select the right club, and is a club the
- * viewer has no rights on refused) is in
- * `src/routes/_authed/admin/club-settings-club-param.test.ts`. The two halves
- * meet at the parameter NAME, so they are written against the same literal
- * `club=` rather than against each other.
+ * 1. The club is a PROP now, so the value's provenance is a compile-time fact
+ *    rather than a mount-path assumption. `src/components/` contains no
+ *    `useParams` at all, and the third test here keeps it that way.
+ * 2. A rendered-href test cannot see whether the ROUTE hands over the right
+ *    value. Only source can, so the wiring assertions below read the route file
+ *    — and each is written to fail against the exact broken wiring, not merely
+ *    to confirm the correct one.
  */
-import {
-	createMemoryHistory,
-	createRootRoute,
-	createRoute,
-	createRouter,
-	RouterProvider,
-} from "@tanstack/react-router";
-import {
-	cleanup,
-	render,
-	screen,
-	waitFor,
-	within,
-} from "@testing-library/react";
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgendaDraft, AgendaDraftRow } from "#/server/meeting-agenda-edit";
+import { readSource } from "#/test/guard-source";
+import { renderUnderMemoryRouter } from "#/test/router-harness";
 import { AgendaEditor } from "./agenda-editor";
 
 afterEach(cleanup);
 
-const CLUB_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const MEETING = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const CLUB_UUID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
-/** MCF's window as `loadAgendaDraft` hands it over: MINUTES, club-owned. */
-const CLUB_MARKS = {
-	markGreen: 1,
-	markYellow: 1.8833333333333333,
-	markRed: 2.75,
-};
-
-/** The Table Topics row, the one row whose detail panel carries the link. */
+/** The Table Topics row — the one row whose detail panel carries the link. Its
+ *  club-owned marks are what put the link there (#679). */
 const TT_ROW: AgendaDraftRow = {
 	id: "tt",
 	sortOrder: 0,
@@ -73,7 +56,9 @@ const TT_ROW: AgendaDraftRow = {
 	repeatsRoleKey: null,
 	flex: true,
 	handoff: false,
-	...CLUB_MARKS,
+	markGreen: 1,
+	markYellow: 1.8833333333333333,
+	markRed: 2.75,
 };
 
 const DRAFT: AgendaDraft = {
@@ -99,10 +84,12 @@ const DRAFT: AgendaDraft = {
 
 const noop = vi.fn(async () => ({}) as never);
 
-function editor() {
-	return (
+/** Render, open the Table Topics detail panel, return the link's href. */
+async function settingsHref(clubUuid: string): Promise<string | null> {
+	await renderUnderMemoryRouter(
 		<AgendaEditor
 			draft={DRAFT}
+			clubUuid={clubUuid}
 			onAddRow={vi.fn(async () => TT_ROW)}
 			onUpdateRow={noop}
 			onRemoveRow={noop}
@@ -111,85 +98,81 @@ function editor() {
 			onAddRole={noop}
 			planRoleRemoval={vi.fn(async () => [])}
 			onRemoveRole={noop}
-		/>
+		/>,
 	);
-}
-
-/**
- * Mount the editor at the URL it actually ships at, so `$clubId` resolves.
- *
- * Deliberately NOT `renderUnderMemoryRouter` — that harness's whole point is a
- * single parameterless root route, and giving it a params story would make
- * every caller pay for one. Pass `path: null` for the parameterless control.
- */
-async function renderAt(path: string | null): Promise<void> {
-	const rootRoute = createRootRoute(
-		path === null ? { component: () => editor() } : {},
-	);
-	const routeTree =
-		path === null
-			? rootRoute
-			: rootRoute.addChildren([
-					createRoute({
-						getParentRoute: () => rootRoute,
-						path: "/club/$clubId/meeting/$meetingId/agenda",
-						component: () => editor(),
-					}),
-				]);
-	const router = createRouter({
-		routeTree,
-		history: createMemoryHistory({ initialEntries: [path ?? "/"] }),
-	});
-	render(<RouterProvider router={router as never} />);
-	await waitFor(() => expect(router.state.status).toBe("idle"));
-}
-
-/** Open the Table Topics row's detail panel — the link lives behind it. */
-async function openDetail() {
 	await userEvent
 		.setup()
 		.click(screen.getAllByRole("button", { name: "Show row details" })[0]);
-}
-
-function settingsLinkHref(): string | null {
-	const panel = screen.getByTestId("agenda-row-club-marks-tt");
-	return within(panel)
+	return within(screen.getByTestId("agenda-row-club-marks-tt"))
 		.getByRole("link", { name: /Club settings/ })
 		.getAttribute("href");
 }
 
-describe("the agenda editor's Club settings link (#685)", () => {
-	it("carries the club whose agenda is open, not the workspace's active one", async () => {
-		// The reproduction. Before the fix this href was a bare
-		// "/admin/club-settings" no matter which club's agenda was open, and the
-		// settings page then resolved the ACTIVE club — a different one for the
-		// multi-club admin this bug was reported by.
-		await renderAt(`/club/${CLUB_B}/meeting/${MEETING}/agenda`);
-		await openDetail();
-		expect(settingsLinkHref()).toBe(`/admin/club-settings?club=${CLUB_B}`);
-	});
+const AGENDA_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.agenda.tsx";
+const EDITOR = "src/components/agenda/agenda-editor.tsx";
 
-	it("names the parameter `club`, which is the seam with the route", async () => {
-		// Spelled out separately because the two halves of this fix can only
-		// disagree here: rename the search key on either side and the link still
-		// renders, the page still loads, and it silently shows the wrong club
-		// again. Asserting the whole href above already covers it; this case
-		// exists so the failure message says which half moved.
-		await renderAt(`/club/${CLUB_B}/meeting/${MEETING}/agenda`);
-		await openDetail();
-		const href = settingsLinkHref() ?? "";
-		expect(new URL(href, "https://example.test").searchParams.get("club")).toBe(
-			CLUB_B,
+describe("the rendered link", () => {
+	it("carries the club it was given", async () => {
+		expect(await settingsHref(CLUB_UUID)).toBe(
+			`/admin/club-settings?club=${CLUB_UUID}`,
 		);
 	});
 
-	it("degrades to the plain link when there is no club in the URL", async () => {
-		// The vacuity control, and the promise made to the two global-navigation
-		// links: mounted anywhere without a `$clubId`, this emits no `?club` at
-		// all rather than `?club=undefined`, so the route resolves from context
-		// exactly as it does today.
-		await renderAt(null);
-		await openDetail();
-		expect(settingsLinkHref()).toBe("/admin/club-settings");
+	it("carries THAT club and not some other one", async () => {
+		// The assertion that fails if the wrong value reaches the link: a second,
+		// distinguishable club id must come out the other end unchanged. A test
+		// that only ever passes one id cannot tell "reads its prop" from "prints a
+		// constant".
+		const other = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+		expect(await settingsHref(other)).toBe(
+			`/admin/club-settings?club=${other}`,
+		);
+	});
+});
+
+describe("the wiring that supplies it", () => {
+	// Read comment-blind: these are "the pattern must BE present" assertions, and
+	// this file's own header names every string they look for.
+	const routeSrc = readSource(resolve(process.cwd(), AGENDA_ROUTE));
+
+	it("passes the route CONTEXT's clubUuid to the editor", () => {
+		expect(routeSrc).toMatch(
+			/const\s*\{\s*clubUuid\s*\}\s*=\s*Route\.useRouteContext\(\)/,
+		);
+		expect(routeSrc).toMatch(
+			/<AgendaEditor[\s\S]{0,200}?clubUuid=\{clubUuid\}/,
+		);
+	});
+
+	it("never hands the $clubId URL SEGMENT over as the club uuid", () => {
+		// THE assertion this round exists for. `resolveClubOrRedirect`
+		// canonicalises that segment to the club's slug, so `clubUuid={clubId}`
+		// reproduces the shipped bug exactly — and it type-checks, renders, and
+		// passes every href test that hardcodes a uuid into its own fixture.
+		expect(routeSrc).not.toMatch(/clubUuid=\{\s*clubId\s*\}/);
+		expect(routeSrc).not.toMatch(/clubUuid=\{\s*params\.clubId\s*\}/);
+	});
+
+	it("keeps the club-shell canonicalisation that makes the segment a slug", () => {
+		// The premise the two assertions above rest on. If this ever stops being
+		// true the segment becomes usable and the reasoning recorded here — in
+		// three docblocks and this file — is stale rather than wrong-but-harmless.
+		// Read RAW, not comment-blind: an "offender must be absent" shape, where
+		// stripping could only mask a real occurrence.
+		const clubRoute = readFileSync(
+			resolve(process.cwd(), "src/lib/club-route.ts"),
+			"utf8",
+		);
+		expect(clubRoute).toContain("identifier !== club.slug");
+	});
+
+	it("reads no router state inside the editor component", () => {
+		// `src/components/` has no `useParams` anywhere, and the hidden mount-path
+		// dependency it created here is what made the broken version untestable.
+		// An "offender must be absent" assertion, so RAW source deliberately: a
+		// comment-blind read would let a real call hide behind a `//` on the same
+		// line.
+		const raw = readFileSync(resolve(process.cwd(), EDITOR), "utf8");
+		expect(raw).not.toMatch(/\buseParams\s*\(/);
 	});
 });

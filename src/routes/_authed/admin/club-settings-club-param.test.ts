@@ -29,13 +29,17 @@
  * 3. With NO parameter, resolution is byte-for-byte today's. The app-shell nav
  *    item and the command palette both link here with no club in hand.
  *
- * ## Not the authorization boundary, and the test must not imply it is
+ * ## This guard IS the admin boundary for the reads
  *
- * Every read and write the page makes re-runs `requireClubRole(userId, clubId,
- * ["admin"])` server-side, per club (`club-settings-authz.guard.test.ts` pins
- * the write half). This guard decides which page a viewer is OFFERED. That is
- * why the office arm may stay permissive for a non-active club — see the
- * docblock on `effectiveAdminClubFor`.
+ * The WRITES are admin-gated server-side (`club-settings-authz.guard.test.ts`
+ * pins that). The four loader READS are not: `getClubProfileSettings`,
+ * `loadClubReminderSettings`, `loadClubAgendaSettings` and
+ * `loadClubTimezoneSettings` all gate on `requireClubViewAccess`, which is
+ * member-level, and `loadClubReminderSettings`'s docblock says so outright —
+ * "any member with view access (the route itself is admin-gated)". So a viewer
+ * this guard admits in error sees the club's real settings, not an error page.
+ * That is why the office arm is club-scoped in `effectiveAdminClubFor` and why
+ * the two cases below that turn a member away are the load-bearing ones.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -183,17 +187,37 @@ describe("beforeLoad club resolution (#685)", () => {
 		});
 	});
 
-	it("refuses a malformed id without a separate shape check", () => {
+	it("refuses a malformed id, and a club SLUG, without a separate shape check", () => {
+		// The slug case is not hypothetical: the first cut of #685 sent the
+		// `/club/$clubId` segment, which the club shell has already canonicalised
+		// to the slug. Every viewer landed here.
 		expect(resolve(MULTI_CLUB_ADMIN, { club: "not-a-uuid" })).toEqual({
+			redirectedTo: "/dashboard",
+		});
+		expect(resolve(MULTI_CLUB_ADMIN, { club: "club-b" })).toEqual({
 			redirectedTo: "/dashboard",
 		});
 	});
 
-	it("admits an officer-by-office to the club the link names (#202)", () => {
-		// A VPE of B, stored role `member` in both, workspace acting in A. This is
-		// the case the fix is FOR: #202 exists because officers are typically not
-		// stored admins, so refusing them here would make the fix useless to the
-		// people it was written for.
+	it("admits an officer-by-office naming their own active club (#202)", () => {
+		// The normal flow: `club.$clubId.tsx`'s beforeLoad switches the active club
+		// to the viewed club before the agenda editor renders, so the club the
+		// link names IS the active club and the office arm applies.
+		const context = guardContext({
+			clubs: [
+				club(CLUB_A, "member", "Club A"),
+				club(CLUB_B, "member", "Club B"),
+			],
+			activeClubId: CLUB_B,
+			officerPositions: ["vp_education"],
+		});
+		expect(resolve(context, { club: CLUB_B })).toEqual({ clubId: CLUB_B });
+	});
+
+	it("turns away an officer of A who is only a member of the club named", () => {
+		// The hole the first cut left open, and the reason it mattered: the four
+		// loader reads are member-level (`requireClubViewAccess`), so admitting
+		// here renders club B's real settings rather than failing downstream.
 		const context = guardContext({
 			clubs: [
 				club(CLUB_A, "member", "Club A"),
@@ -201,6 +225,21 @@ describe("beforeLoad club resolution (#685)", () => {
 			],
 			activeClubId: CLUB_A,
 			officerPositions: ["vp_education"],
+		});
+		expect(resolve(context, { club: CLUB_B })).toEqual({
+			redirectedTo: "/dashboard",
+		});
+	});
+
+	it("still admits a stored admin of a club that is not active", () => {
+		// The stored-admin arm reads that club's OWN membership row, so narrowing
+		// the office arm must not take it with it.
+		const context = guardContext({
+			clubs: [
+				club(CLUB_A, "member", "Club A"),
+				club(CLUB_B, "admin", "Club B"),
+			],
+			activeClubId: CLUB_A,
 		});
 		expect(resolve(context, { club: CLUB_B })).toEqual({ clubId: CLUB_B });
 	});

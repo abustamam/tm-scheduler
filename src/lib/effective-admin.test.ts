@@ -106,12 +106,17 @@ describe("effectiveAdminClubFor (club by id) — #685", () => {
 		expect(effectiveAdminClubFor(context, STRANGER)).toBeUndefined();
 	});
 
-	it("refuses a garbage id the same way, with no second shape check", () => {
+	it("refuses a garbage id, and a SLUG, the same way", () => {
+		// The slug case is the shipped regression of the first cut: the link read
+		// `/club/$clubId`, which `resolveClubOrRedirect` has canonicalised to the
+		// club's slug, and sent that. It matches no club here.
 		const context = ctx({
 			clubs: [club(CLUB_A, "admin", "A")],
 			activeClubId: CLUB_A,
 		});
-		expect(effectiveAdminClubFor(context, "not-a-uuid")).toBeUndefined();
+		expect(
+			effectiveAdminClubFor(context, "harbor-city-speakers"),
+		).toBeUndefined();
 		expect(effectiveAdminClubFor(context, "")).toBeUndefined();
 	});
 
@@ -123,33 +128,40 @@ describe("effectiveAdminClubFor (club by id) — #685", () => {
 		expect(effectiveAdminClubFor(context, CLUB_B)).toBeUndefined();
 	});
 
-	it("admits an officer-by-office, same definition as the context resolver (#202)", () => {
-		// Narrowing the office arm to the active club would lock out exactly the
-		// person this fix is for: #202 exists because officers are typically NOT
-		// stored admins, so a VPE of B viewing B's agenda from an A-active
-		// workspace would be bounced by the fix meant to help them.
+	it("admits an officer-by-office for the ACTIVE club (#202)", () => {
+		const context = ctx({
+			clubs: [club(CLUB_A, "member", "A")],
+			activeClubId: CLUB_A,
+			officerPositions: ["vp_education"],
+		});
+		expect(effectiveAdminClubFor(context, CLUB_A)?.clubId).toBe(CLUB_A);
+	});
+
+	it("does NOT let an office in the active club vouch for a different club", () => {
+		// The unsound arm, spelled out. `officerPositions` is resolved off the
+		// ACTIVE club's membership id (`auth-context.ts`) and `OfficerPosition`
+		// carries no club, so an officer of A says nothing about B. Reusing
+		// `effectiveAdminClub`'s club-blind arm here would admit this viewer to
+		// B's settings — and the four settings READS gate on
+		// `requireClubViewAccess` (member-level), so B's real settings would
+		// render rather than an error page.
 		const context = ctx({
 			clubs: [club(CLUB_A, "member", "A"), club(CLUB_B, "member", "B")],
 			activeClubId: CLUB_A,
 			officerPositions: ["vp_education"],
 		});
-		expect(effectiveAdminClubFor(context, CLUB_B)?.clubId).toBe(CLUB_B);
+		expect(effectiveAdminClubFor(context, CLUB_B)).toBeUndefined();
 	});
 
-	it("agrees with the context resolver whenever the named club IS the active one", () => {
-		// The two share one predicate; this is what pins them from drifting into
-		// two different answers to "is this viewer an admin here".
-		for (const role of ["admin", "member"] as const) {
-			for (const offices of [[], ["president"] as OfficerPosition[]]) {
-				const context = ctx({
-					clubs: [club(CLUB_A, role, "A")],
-					activeClubId: CLUB_A,
-					officerPositions: offices,
-				});
-				expect(effectiveAdminClubFor(context, CLUB_A)).toEqual(
-					effectiveAdminClub(context),
-				);
-			}
-		}
+	it("still admits a STORED admin of a non-active club", () => {
+		// The narrowing above must not take the stored-admin arm with it: that arm
+		// reads the club's own membership row, which is per-club and therefore
+		// sound for any club in the list.
+		const context = ctx({
+			clubs: [club(CLUB_A, "member", "A"), club(CLUB_B, "admin", "B")],
+			activeClubId: CLUB_A,
+			officerPositions: [],
+		});
+		expect(effectiveAdminClubFor(context, CLUB_B)?.clubId).toBe(CLUB_B);
 	});
 });

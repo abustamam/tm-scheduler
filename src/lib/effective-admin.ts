@@ -12,24 +12,6 @@ interface ClubCtx {
 }
 
 /**
- * "Is the viewer an effective admin of THIS club?" — stored `club_role =
- * "admin"` OR they hold any elected office (#202).
- *
- * The single definition both resolvers below share, so the club-in-context and
- * club-by-id paths cannot drift into two different answers to the same
- * question. It mirrors the server's `requireClubRole(userId, clubId,
- * ["admin"])`, which is the actual authorization boundary: every read and write
- * on an admin surface re-runs that per club, so what this decides is which page
- * a viewer is offered, not what they may see.
- */
-function isEffectiveAdmin(
-	context: ClubCtx,
-	club: ClubCtx["clubs"][number],
-): boolean {
-	return club.clubRole === "admin" || context.officerPositions.length > 0;
-}
-
-/**
  * The club the workspace is acting in, IF the signed-in user is an effective
  * admin there — stored `club_role = "admin"` OR they hold any elected office
  * (#202). Returns `undefined` when they're not an admin, so route `beforeLoad`
@@ -43,43 +25,59 @@ export function effectiveAdminClub<C extends ClubCtx>(
 		context.clubs.find((c) => c.clubId === context.activeClubId) ??
 		context.clubs[0];
 	if (!active) return undefined;
-	return isEffectiveAdmin(context, active) ? active : undefined;
+	const isAdmin =
+		active.clubRole === "admin" || context.officerPositions.length > 0;
+	return isAdmin ? active : undefined;
 }
 
 /**
- * The same question asked about an EXPLICIT club instead of the active one
- * (#685).
+ * The same question asked about an EXPLICIT club id instead of the active one
+ * (#685) — for `/admin/club-settings?club=<uuid>`, whose caller already knows
+ * which club it means.
  *
- * Why it exists: `/admin/club-settings` is context-scoped while the agenda
- * editor that links to it is URL-scoped (`/club/$clubId/…`). A multi-club admin
- * editing club B's agenda whose active club is A followed that link into A's
- * settings, changed the Table Topics window there, and the agenda they came
- * from was unaffected — which reads as "the setting did nothing". The link now
- * names the club it means, and this is what the route validates it with.
+ * ## Why the office arm is narrower here, and why that costs nothing
  *
- * Two rules, both load-bearing:
+ * `effectiveAdminClub` above admits on `officerPositions.length > 0` without
+ * looking at which club it was handed. That is sound for it — the club it
+ * resolves IS the active club, and `auth-context.ts` reads officer positions off
+ * the active club's membership id (`getOpenOfficerPositions(db,
+ * currentMemberId)`), so the two always describe the same club. `OfficerPosition`
+ * is a bare enum with no club on it, so there is nothing else to filter by.
+ *
+ * Reusing that arm for an arbitrary club is unsound in a way that is not
+ * theoretical: an officer of club A who is a plain member of club B would pass
+ * for B. That matters because this guard is the admin boundary for the settings
+ * READS — all four (`getClubProfileSettings`, `loadClubReminderSettings`,
+ * `loadClubAgendaSettings`, `loadClubTimezoneSettings`) gate on
+ * `requireClubViewAccess`, which is member-level, and
+ * `loadClubReminderSettings`'s own docblock says so ("any member with view
+ * access — the route itself is admin-gated"). Only the WRITES run
+ * `requireClubRole(…, ["admin"])`. So a permissive arm here renders club B's
+ * real settings, not an error page.
+ *
+ * Restricting it to the active club costs nothing in practice, which is the
+ * measured half rather than the hopeful half: `club.$clubId.tsx`'s `beforeLoad`
+ * calls `publicShellDecision`, and for a signed-in member of the viewed club
+ * whose active club differs it calls `setActiveClub` and re-runs on the same
+ * URL. Every surface that can produce an explicit club id here therefore sits
+ * under a route that has ALREADY made that club active. The narrow arm only
+ * declines in the stale-tab case (another tab switched the active club after
+ * this page rendered), and there it declines with a `/dashboard` bounce rather
+ * than by showing the wrong club's settings.
+ *
+ * ## The other two rules
  *
  * - The id **selects among the viewer's OWN clubs** (`context.clubs` is their
- *   membership list). A club they are not in is not found here, so a
- *   caller-supplied id can never widen reach beyond where the context resolver
- *   could already have landed them.
+ *   membership list), so a caller-supplied id can never reach a club they are
+ *   not in.
  * - A refusal returns `undefined` and the caller must NOT fall back to the
- *   context-resolved club. Falling back reinstates the original bug in a harder
- *   form: the officer lands on some other club's settings again, now believing
- *   the link is fixed.
+ *   context-resolved club. Falling back reinstates #685 in a harder form: the
+ *   officer lands on some other club's settings again, now believing the link
+ *   is fixed.
  *
- * One honest imprecision, recorded rather than papered over:
- * `context.officerPositions` is resolved for the ACTIVE club only
- * (`auth-context.ts` reads them off the active club's membership id), so for a
- * non-active club the office arm is a permissive signal, not a proof. Narrowing
- * it to `clubId === activeClubId` would lock out exactly the person this fix is
- * for — an officer-by-office of club B whose active club is A — since #202
- * exists because officers are typically NOT stored admins. The permissive
- * direction is safe because it is not the boundary: `requireClubRole` re-checks
- * per club on every read and write the settings page makes, and
- * `requireMeetingTemplateEditor` (the same check) already gated the agenda
- * editor the link is rendered on, so anyone who can SEE the link is admitted by
- * the server for that club.
+ * @param clubId a club UUID. NOT a slug — `resolveClubOrRedirect` canonicalises
+ *   `/club/$clubId` to the club's SLUG, so a caller reading that URL segment
+ *   must resolve it to `clubUuid` first or every lookup here misses.
  */
 export function effectiveAdminClubFor<C extends ClubCtx>(
 	context: C,
@@ -87,5 +85,7 @@ export function effectiveAdminClubFor<C extends ClubCtx>(
 ): C["clubs"][number] | undefined {
 	const club = context.clubs.find((c) => c.clubId === clubId);
 	if (!club) return undefined;
-	return isEffectiveAdmin(context, club) ? club : undefined;
+	const byOffice =
+		clubId === context.activeClubId && context.officerPositions.length > 0;
+	return club.clubRole === "admin" || byOffice ? club : undefined;
 }

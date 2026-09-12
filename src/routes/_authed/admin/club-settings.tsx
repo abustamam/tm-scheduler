@@ -144,8 +144,9 @@ export const CLUB_LOGO_COPY = {
 	genericError: "Something went wrong.",
 } as const;
 
-/** The one search key this route reads (#685) — see `validateSearch` below. */
-export type ClubSettingsSearch = { club?: string };
+/** The one search key this route reads (#685) — see `validateSearch` below.
+ *  Local, like every other route's search type here: nothing imports it. */
+type ClubSettingsSearch = { club?: string };
 
 export const Route = createFileRoute("/_authed/admin/club-settings")({
 	/**
@@ -153,6 +154,12 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 	 * (#685). Optional and defaulted to `undefined`, so the two global-navigation
 	 * links — the app-shell nav item and the command palette, both of which have
 	 * no club in hand — keep resolving from workspace context exactly as before.
+	 *
+	 * The value is a club UUID. NOT a slug — `/club/$clubId` canonicalises its
+	 * segment to the club's slug (`resolveClubOrRedirect`), so a caller reading
+	 * that URL must send the resolved `clubUuid` instead; sending the slug
+	 * matches no club here and bounces the viewer to `/dashboard`. That is
+	 * exactly the regression the first cut of #685 shipped.
 	 *
 	 * Not validated as a uuid here on purpose: `beforeLoad` matches the value
 	 * against the viewer's own club list, so a malformed id simply finds nothing
