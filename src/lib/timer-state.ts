@@ -160,6 +160,26 @@ export function formatStopwatch(ms: number): string {
 }
 
 /**
+ * Whole SECONDS → `m:ss` — the ONE formatter for a stored measurement (#730).
+ *
+ * Every surface that renders a `meeting_timings.elapsed_seconds` goes through
+ * this: the Timer's receipt, the minutes card and the minutes PDF. It exists as
+ * its own name rather than as three `formatStopwatch(seconds * 1000)` call
+ * sites so there is one thing to grep and one place to change.
+ *
+ * NOT `formatTimingClock`, and the distinction is the reason this is here.
+ * That one formats a MARK — float minutes, where 6.5 is exactly what an admin
+ * typed — so it ROUNDS to the nearest second and carries 60 into the next
+ * minute. This formats a MEASUREMENT, which is already whole seconds, and
+ * floors. The two agree for every value that can actually be stored, which is
+ * precisely what makes using them interchangeably dangerous: a divergence would
+ * be silent. One input type, one formatter.
+ */
+export function formatElapsedSeconds(seconds: number): string {
+	return formatStopwatch(seconds * 1000);
+}
+
+/**
  * `mm:ss` → whole seconds, or null when the text is not a clock (#730).
  *
  * The inverse of `formatStopwatch`, for the one place a measured time is TYPED

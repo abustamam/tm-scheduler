@@ -331,41 +331,31 @@ export async function recordMeetingTiming(
 		claimedActorMemberId: input.claimedActorMemberId ?? null,
 	});
 
-	// THE FLOOR, in two halves that do different jobs.
+	// THE FLOOR, and it is a PREDICATE — nothing else.
 	//
 	// A self-asserted Timer may add their own answer and correct their OWN, but
-	// may not replace somebody else's record — the same shape as planned
-	// attendance's, and the same reason. A NULL recorder fails CLOSED:
-	// `recorded_by_member_id` is `set null` on member delete, so after a member
-	// is deleted a row cannot prove whose it was, and `eq(col, <id>)` is already
-	// false for NULL in SQL, which is the behaviour we want rather than an
-	// accident of it.
+	// may not replace somebody else's record: the same shape as planned
+	// attendance's, and the same reason. A NULL recorder fails CLOSED, and it
+	// falls out of SQL rather than out of a branch — `recorded_by_member_id` is
+	// `set null` on member delete, so after a member is deleted a row cannot
+	// prove whose it was, and `eq(col, <id>)` is already false for NULL.
 	//
-	// The PREDICATE below is the enforcement — a `setWhere` Postgres evaluates
-	// against the live row, so two writes racing cannot both pass a check made
-	// before either landed. That is the same reason `setPlanStatus`'s `demoteFrom`
-	// is a predicate rather than a read-then-write.
+	// `undefined` on the manager arms: an officer or the Toastmaster may correct
+	// anyone's row, so there is no predicate to apply to them.
 	//
-	// The READ here is only for the MESSAGE. A filtered-out `setWhere` produces
-	// no returned row and no error, which as a refusal is indistinguishable from
-	// a success the Timer never sees — so the read tells them WHY, and the
-	// `!written` arm below catches the race the read cannot see.
+	// There is deliberately NO read-then-write in front of this, which is how
+	// the first cut had it — and the read was worse than redundant. It could not
+	// enforce anything a concurrent write could not slip past (the point of
+	// `setPlanStatus`'s `demoteFrom` being a `setWhere` too), it duplicated the
+	// refusal in a second place that could drift from this one, and because it
+	// threw first it made every SERIAL test pass with `setWhere` deleted — so
+	// the safety-critical half was left held by one race test and one source
+	// grep. Dropping it costs a round trip nobody wanted and puts the ordinary
+	// overwrite tests back on the real mechanism.
 	const floor =
 		actor.viaManager || actor.actorMemberId === null
 			? undefined
 			: eq(meetingTimings.recordedByMemberId, actor.actorMemberId);
-	const [existing] = await db
-		.select({ recordedByMemberId: meetingTimings.recordedByMemberId })
-		.from(meetingTimings)
-		.where(eq(meetingTimings.slotId, slot.slotId))
-		.limit(1);
-	if (
-		existing &&
-		floor !== undefined &&
-		existing.recordedByMemberId !== actor.actorMemberId
-	) {
-		throw new Error(TIMING_OVERWRITE_MESSAGE);
-	}
 
 	// `marks` absent means "leave the stored copy alone", which is what a
 	// CORRECTION wants: an officer fixing a mistyped number must not also
@@ -420,11 +410,14 @@ export async function recordMeetingTiming(
 				recordedByMemberId: meetingTimings.recordedByMemberId,
 			});
 		if (!written) {
-			// The `setWhere` filtered the update out, which on this path means the
-			// row changed hands between the read above and the write: another actor
-			// recorded it in the window between. Same message as the read's
-			// refusal, because it is the same refusal — the difference is only that
-			// Postgres caught this one.
+			// Nothing came back, so the `setWhere` filtered the update out: a row
+			// exists for this slot and somebody else recorded it. This is the ONLY
+			// place the overwrite refusal is raised, which is what keeps the
+			// message and the enforcement from drifting apart.
+			//
+			// With no floor there is no predicate to filter anything, so an empty
+			// result would mean something has gone wrong that this function cannot
+			// name — hence the second arm rather than one message for both.
 			throw new Error(
 				floor === undefined
 					? "Failed to record the time."

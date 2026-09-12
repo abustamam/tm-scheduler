@@ -27,13 +27,15 @@
  * this product. The list is not curated: it is exactly the set
  * `public-readers-archive-gate.guard.test.ts` waived with the reason
  * `"write — #544 follow-up"`, and that guard now requires each one to name its
- * gate instead, in its `WRITE_GATES` table. Eight rows there; six gate in a
+ * gate instead, in its `WRITE_GATES` table. NINE rows there; seven gate in a
  * `-logic` SEAM, because a handler body is unreachable from vitest. Five of
- * those six are executed here. The sixth is `confirmSlotCore` (#661, which gave
- * an authed-only write a session-less holder arm); its before/after pair lives
- * in `slots-confirm.integration.test.ts` beside the rest of that arm's cases,
- * rather than here, because the fixture it needs is a CLAIMED slot and a holder,
- * which none of the cases below build.
+ * those seven are executed here, and the other two are executed beside the rest
+ * of their own feature's cases because each needs a fixture none of the cases
+ * below build: `confirmSlotCore` (#661, which gave an authed-only write a
+ * session-less holder arm) in `slots-confirm.integration.test.ts`, which needs a
+ * CLAIMED slot and a holder; and `recordTiming` (#730, the Timer's measured
+ * times) in `timings.integration.test.ts`, which needs a meeting whose Timer
+ * slot is assigned plus a timeable slot to record against.
  *
  * ## Each case is a BEFORE/AFTER pair, for the reason #544's suite gives
  *

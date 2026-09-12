@@ -37,8 +37,8 @@ import { cap } from "#/lib/cap";
 import { formatMeetingDate } from "#/lib/format";
 import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
+import { formatElapsedSeconds } from "#/lib/timer-state";
 import { TIMING_VERDICT_LABEL, timingVerdict } from "#/lib/timing-verdict";
-import { formatTimingClock } from "#/lib/timing-window";
 import {
 	type AttendanceStatus,
 	type AwardCategory,
@@ -267,10 +267,12 @@ export function buildTimingSection(minutes: {
 			: "—";
 		const verdict =
 			TIMING_VERDICT_LABEL[timingVerdict(t.elapsedSeconds, t, "speech")];
-		// Seconds → the SAME clock the printed agenda and the Timer's role sheet
-		// use, so a member reading the minutes beside the agenda sees one
-		// notation rather than two.
-		const clock = formatTimingClock(t.elapsedSeconds / 60);
+		// Through the one MEASUREMENT formatter, so this row, the Timer's own
+		// receipt and the minutes screen cannot render the same stored number
+		// three ways. Deliberately NOT `formatTimingClock`, which formats a MARK
+		// (float minutes, rounded, carrying at :60): see `formatElapsedSeconds`
+		// for why interchanging them is a silent divergence waiting to happen.
+		const clock = formatElapsedSeconds(t.elapsedSeconds);
 		return `${cap(t.roleName, MINUTES_RENDER_CAPS.roleName)}: ${who} — ${clock} · ${verdict}`;
 	});
 	return {

@@ -15,6 +15,7 @@
 // clock and advancing the interval is a real measurement of a real duration,
 // with none of the flake a wall-clock wait brings on a loaded CI box.
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgendaRow, AgendaSlot } from "#/lib/agenda-runsheet";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
@@ -94,17 +95,24 @@ async function mount(
 	extra: {
 		slots?: Pick<AgendaSlot, "id" | "isSpeakerRole" | "category">[];
 		recording?: typeof RECORDING;
+		/** Render under `<StrictMode>`, which double-invokes renders, state
+		 *  updaters and effects. See the StrictMode case at the bottom. */
+		strict?: boolean;
 	} = {},
 ) {
+	const wrap = (ui: React.ReactNode) =>
+		extra.strict ? <StrictMode>{ui}</StrictMode> : ui;
 	await renderUnderMemoryRouter(
-		<MeetingTimer
-			when="Tuesday, September 15, 2026"
-			backHref="/club/harbor-city/meeting/2026-09-15/me"
-			rows={rows}
-			tableTopicsLimits={limits}
-			slots={extra.slots}
-			recording={extra.recording}
-		/>,
+		wrap(
+			<MeetingTimer
+				when="Tuesday, September 15, 2026"
+				backHref="/club/harbor-city/meeting/2026-09-15/me"
+				rows={rows}
+				tableTopicsLimits={limits}
+				slots={extra.slots}
+				recording={extra.recording}
+			/>,
+		),
 	);
 	vi.useFakeTimers({ shouldAdvanceTime: false });
 	clock = T0;
@@ -221,6 +229,28 @@ describe("buildTimerSegments — which rows get a clock", () => {
 			false,
 			false,
 		]);
+		// And WHY not, which is a different fact per row. The Table Topics row is
+		// refused for its ROLE; the slot-less row for being about no one turn;
+		// the row whose slot the caller did not describe gets no explanation at
+		// all, because this surface has nothing to judge it by.
+		expect(segments.map((x) => x.unrecordableReason)).toEqual([
+			null,
+			null,
+			"not-timeable",
+			"no-single-slot",
+			null,
+		]);
+	});
+
+	it("blames the ROW, not the role, on a Speaker row bound to no single slot", () => {
+		// #732 leaves `slotId` null on a non-repeating role beat bound to two or
+		// more slots, and that row is often a Speaker. Reusing the role message
+		// there tells the Timer a speech "isn't a speech".
+		const [seg] = buildTimerSegments(
+			[row({ slotId: null, roleKey: "speaker", roleLabel: "Speakers" })],
+			[slot()],
+		);
+		expect(seg.unrecordableReason).toBe("no-single-slot");
 	});
 
 	it("records nothing at all when the caller passes no slots", () => {
@@ -576,6 +606,10 @@ describe("recording on stop (#730)", () => {
 			},
 		);
 		expect(screen.getByText(/isn't a speech or an evaluation/)).toBeTruthy();
+		// The ROLE's reason, and it is the server's own string rather than a
+		// re-wording — the refusal a hand-made request gets and the explanation
+		// on screen are one sentence.
+		expect(screen.queryByText(/isn't one person's turn/)).toBeNull();
 		await tap(screen.getByRole("button", { name: "Start" }));
 		await advance(60_000);
 		await tap(screen.getByRole("button", { name: "Stop" }));
@@ -584,15 +618,19 @@ describe("recording on stop (#730)", () => {
 		expect(screen.getByText("1:00")).toBeTruthy();
 	});
 
-	it("offers no recording for a row with no slot", async () => {
+	it("offers no recording for a row with no slot, and gives the ROW's reason", async () => {
 		await mount(
-			[row({ slotId: null, roleKey: null, roleLabel: "Club business" })],
+			[row({ slotId: null, roleKey: "speaker", roleLabel: "Speakers" })],
 			LIMITS,
 			{
 				slots: [slot()],
 				recording: RECORDING,
 			},
 		);
+		// The row's reason, NOT the role's: this one is a Speaker row, and
+		// "isn't a speech or an evaluation" would be untrue as well as unhelpful.
+		expect(screen.getByText(/isn't one person's turn/)).toBeTruthy();
+		expect(screen.queryByText(/isn't a speech or an evaluation/)).toBeNull();
 		await tap(screen.getByRole("button", { name: "Start" }));
 		await advance(60_000);
 		await tap(screen.getByRole("button", { name: "Stop" }));
@@ -632,5 +670,44 @@ describe("recording on stop (#730)", () => {
 		await act(async () => {});
 		expect(screen.queryByText(/^Recorded /)).toBeNull();
 		expect(screen.getByText("0:00")).toBeTruthy();
+	});
+});
+
+describe("StrictMode", () => {
+	it("sends ONE POST per Stop, even when React double-invokes", async () => {
+		// THE BUG THIS EXISTS FOR. The record used to be fired from inside
+		// `setStates((prev) => …)`. A state updater must be pure: StrictMode
+		// double-invokes them and a concurrent render can replay them, so one Stop
+		// sent TWO `recordTiming` POSTs — a duplicated measurement of a real
+		// speech, stored under the same slot and therefore invisible afterwards.
+		//
+		// Every other case in this file renders OUTSIDE StrictMode, so a
+		// `toHaveBeenCalledTimes(1)` there passes on the broken code. This one is
+		// the only assertion that can fail on it, which is why it renders the
+		// whole surface a second way rather than asserting the fix's shape.
+		await mount([row()], LIMITS, {
+			slots: [slot()],
+			recording: RECORDING,
+			strict: true,
+		});
+		await tap(screen.getAllByRole("button", { name: "Start" })[0]);
+		await advance(371_000);
+		await tap(screen.getAllByRole("button", { name: "Stop" })[0]);
+		await act(async () => {});
+		expect(recordTiming).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps one clock per segment under a double-invoked render", async () => {
+		// The other half: a reducer run from a doubled updater would advance the
+		// clock twice per tap. The ref this now writes from is only touched by the
+		// event handler, which React never doubles.
+		await mount([row()], LIMITS, {
+			slots: [slot()],
+			recording: RECORDING,
+			strict: true,
+		});
+		await tap(screen.getAllByRole("button", { name: "Start" })[0]);
+		await advance(9_000);
+		expect(screen.getAllByText("0:09").length).toBeGreaterThan(0);
 	});
 });

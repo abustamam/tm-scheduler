@@ -179,7 +179,28 @@ describe("the writer runs every gate, in this order", () => {
 		// `undefined` on the manager arms, so an officer or the Toastmaster is
 		// not floored by the predicate meant for the self-asserted Timer.
 		expect(body).toContain("actor.viaManager || actor.actorMemberId === null");
-		expect(body).toContain("throw new Error(TIMING_OVERWRITE_MESSAGE)");
+	});
+
+	it("raises the overwrite refusal in exactly ONE place", () => {
+		// A read-then-write in front of the predicate is the shape this had in its
+		// first cut, and it did real harm: it duplicated the refusal somewhere
+		// that could drift from the predicate, and because it threw FIRST every
+		// serial overwrite test passed with `setWhere` deleted — leaving the
+		// safety-critical half held by one race test alone. A second occurrence of
+		// the message here is that shape coming back.
+		const body = writerBody();
+		expect([...body.matchAll(/TIMING_OVERWRITE_MESSAGE/g)]).toHaveLength(1);
+		// …and it is raised off the WRITE's own result, not off a prior read.
+		expect(body).toMatch(
+			/if \(!written\)[\s\S]{0,600}TIMING_OVERWRITE_MESSAGE/,
+		);
+		// Keyed on the SELECT, not on the column name: the upsert's `returning`
+		// legitimately names `recordedByMemberId`, so a negative on the column
+		// would fail on correct code — the false-FAIL half of the guard traps in
+		// CODING_STANDARDS. The writer reads this table nowhere.
+		expect(body, "no read-then-write in front of the predicate").not.toContain(
+			".from(meetingTimings)",
+		);
 	});
 
 	it("names the ON CONFLICT arbiter explicitly", () => {

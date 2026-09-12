@@ -21,7 +21,7 @@ import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { formatCalendarDay } from "#/lib/format";
 import { projectMinutes } from "#/lib/project-minutes";
-import { formatStopwatch, parseStopwatch } from "#/lib/timer-state";
+import { formatElapsedSeconds, parseStopwatch } from "#/lib/timer-state";
 import { TIMING_VERDICT_LABEL, timingVerdict } from "#/lib/timing-verdict";
 import type { MinutesActionItems } from "#/server/action-items-logic";
 import {
@@ -691,7 +691,7 @@ function TimingRow({
 	const [editing, setEditing] = useState(false);
 	const [text, setText] = useState("");
 	const [busy, setBusy] = useState(false);
-	const clock = formatStopwatch(timing.elapsedSeconds * 1000);
+	const clock = formatElapsedSeconds(timing.elapsedSeconds);
 	const verdict =
 		TIMING_VERDICT_LABEL[
 			timingVerdict(timing.elapsedSeconds, timing, "speech")

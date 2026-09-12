@@ -254,6 +254,25 @@ const SPEECH_DETAILS_DUTY: RoleDuty = {
  * instruction rather than a piece of prep — "Before the meeting" is the heading
  * on the checklist, and "time the speeches" reads correctly as the thing you
  * are being reminded you will have to do.
+ *
+ * ## It is NOT closed when the answer window closes, and #729 said otherwise
+ *
+ * #729 gated its own hardcoded link on `writesClosed`, so a month-old meeting
+ * would not "sprout a stopwatch". Moving the link into this registry drops that
+ * gate, and the drop is deliberate rather than incidental.
+ *
+ * The two rules pull opposite ways and #730's wins. A timing is part of the
+ * MINUTES record, and minutes are written after the meeting by definition —
+ * `recordMeetingTiming` accepts a `completed` meeting on purpose, and the club's
+ * reason for wanting the record at all ("do our speakers habitually run over")
+ * is served by a Timer filling it in afterwards. Closing the only route to that
+ * surface would make the feature unusable in the window it exists for.
+ *
+ * What #729 was protecting against is not lost: a CANCELLED meeting is refused
+ * server-side with a message the surface shows verbatim, and the other three
+ * duties already render on a past meeting for the same reason this one now
+ * does. `personal-duty-routes.guard.test.ts` holds the decision, because it is
+ * exactly the kind of thing a later reader re-adds in good faith.
  */
 const TIMING_DUTY: RoleDuty = {
 	id: "timing",

@@ -225,6 +225,51 @@ describe("the personal page's link INTO the stopwatch (#729/#730)", () => {
 		expect(body).toContain("hasTiming: view.meeting.hasTiming");
 	});
 
+	it("does NOT close the checklist when the answer window closes", () => {
+		// A DELIBERATE reversal of #729, recorded here because it is reversible by
+		// accident and the reasons pull opposite ways.
+		//
+		// #729 gated its hardcoded stopwatch link on `writesClosed` "so a
+		// month-old meeting does not sprout a stopwatch". #730 makes the timing
+		// write legitimate exactly then: minutes are written AFTER the meeting by
+		// definition, the server accepts a `completed` one on purpose, and the
+		// club's reason for wanting the record at all — "do our speakers
+		// habitually run over" — is served by a Timer filling it in afterwards.
+		// Gating the only link to that surface would have made the feature
+		// unusable in the window it exists for.
+		//
+		// So the duty renders like the other three: through the registry, on the
+		// same terms, ticked or not. A CANCELLED meeting is refused server-side
+		// with a message the surface shows verbatim.
+		//
+		// RAW, and bounded to the duty `<section>` rather than to the file:
+		// `writesClosed` legitimately gates the ANSWER buttons above it and the
+		// notice beside them, so a file-wide negative would fail on correct code.
+		//
+		// A computed slice needs a floor and an anchor, per CODING_STANDARDS —
+		// every false PASS this repo has had from a source guard was an empty or
+		// mis-anchored one, and an unbounded slice here caught `AnswerState`'s own
+		// prop at the bottom of the file and produced a false FAIL instead.
+		// Anchored at the CONDITIONAL that opens the section, not at the heading
+		// inside it: the obvious place to re-add the gate is the `{holdsRole ? (`
+		// wrapper, which sits above the heading and which a heading-anchored slice
+		// would not see. Verified by mutation — gating that wrapper leaves a
+		// heading-anchored version green.
+		const heading = rawBody.indexOf("Before the meeting");
+		const start = rawBody.lastIndexOf("{holdsRole", heading);
+		const end = rawBody.indexOf("</section>", heading);
+		expect(heading, "the duty heading must be found").toBeGreaterThan(-1);
+		expect(
+			start,
+			"the section's own conditional must be found",
+		).toBeGreaterThan(-1);
+		expect(end, "the duty section must be closed").toBeGreaterThan(heading);
+		const section = rawBody.slice(start, end);
+		expect(section).toContain("dutiesForRole({");
+		expect(section).toContain("ROLE_CONFIRM_PROMPT.href(target)");
+		expect(section).not.toContain("writesClosed");
+	});
+
 	it("keeps the meeting-scoped and slot-scoped fields distinct", () => {
 		// `speechTitle` is per-SLOT (a member can hold two speaker slots and one
 		// title must not tick both); `hasTiming` is per-MEETING, because a timing
@@ -263,9 +308,18 @@ describe("the Timer's stopwatch route (#729)", () => {
 		expect(timer).toContain("personalMeetingHref({ clubId, meetingId })");
 	});
 
-	it("writes nothing — #729 is an ephemeral stopwatch", () => {
-		// RAW negative. #730 adds the record through its own server fn; until then
-		// a write reaching this route would be a store nobody reviewed.
+	it("performs no write ITSELF — the component it renders does", () => {
+		// Named for what it asserts. #729 shipped a surface that stored nothing at
+		// all, and this case's first wording said so; #730 made the surface write,
+		// and the case kept passing because it only ever looked at the ROUTE. The
+		// rule it actually holds is the one every route file here obeys: a route
+		// module imports `#/server/meetings` and therefore cannot be mounted in
+		// vitest, so a write placed in one is invisible to the whole suite. The
+		// write lives in `meeting-timer.tsx`, where `meeting-timer.test.tsx`
+		// executes it against a mocked server fn.
+		//
+		// RAW negative, per `guard-source.ts`: stripping comments here could only
+		// loosen it.
 		const raw = readFileSync(resolve(ROOT, TIMER_ROUTE), "utf8");
 		expect(raw).not.toMatch(/#\/server\/timings/);
 		expect(raw).not.toMatch(/recordTiming\(/);

@@ -423,12 +423,18 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
  * because for reads the two are interchangeable and swapping them typechecks.
  * Writes have no such sibling pair: the gate is one call, and what varies is
- * WHERE it lives. Six of these gate in a `-logic` seam — which is strictly
- * better, because a seam is reachable from vitest, and
- * `public-writers-archive-gate.integration.test.ts` executes five of the six
- * (`confirmSlotCore`'s gate is executed by `slots-confirm.integration.test.ts`
- * instead, beside the rest of that arm) — and two gate in the handler because
- * their logic is inline there and lifting it out is a refactor #555 was not.
+ * WHERE it lives. SEVEN of these gate in a `-logic` seam — which is strictly
+ * better, because a seam is reachable from vitest — and two gate in the handler
+ * because their logic is inline there and lifting it out is a refactor #555 was
+ * not.
+ *
+ * Of the seven, five are executed by `public-writers-archive-gate.integration.test.ts`.
+ * The other two are executed beside the rest of their own feature's cases,
+ * because each needs a fixture that suite does not build: `confirmSlotCore` in
+ * `slots-confirm.integration.test.ts` (a CLAIMED slot and a holder), and
+ * `recordTiming` in `timings.integration.test.ts` (a meeting whose Timer slot is
+ * assigned, plus a timeable slot to record against). That suite also asserts the
+ * ORDER — archive before the meeting window — which a presence check cannot see.
  *
  * So each row names the file the gate is IN. That is weaker than checking the
  * handler itself, and the weakness is stated rather than papered over: this
