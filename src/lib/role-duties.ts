@@ -31,8 +31,10 @@
 import {
 	GRAMMARIAN_ROLE_KEY,
 	isGrammarianRoleName,
+	isTimerRoleName,
 	isTmodRoleName,
 	type RoleIdentity,
+	TIMER_ROLE_KEY,
 	TMOD_ROLE_KEY,
 } from "#/lib/meeting-roles";
 import { isRealSpeechTitle } from "#/lib/speech-title";
@@ -86,7 +88,11 @@ const SPEECH_ROLE_KEY_BY_CANONICAL_NAME: ReadonlyMap<string, string> = new Map([
 ]);
 
 /** Stable ids, safe to persist and to switch on. Never the label, which is copy. */
-export type DutyId = "meeting_theme" | "word_of_the_day" | "speech_details";
+export type DutyId =
+	| "meeting_theme"
+	| "word_of_the_day"
+	| "speech_details"
+	| "timing";
 
 /**
  * What `done` reads: a plain object the caller ALREADY holds, never a db
@@ -105,6 +111,23 @@ export interface DutyContext {
 	wordOfTheDay?: string | null;
 	/** The slot's `speeches.title`. */
 	speechTitle?: string | null;
+	/**
+	 * Whether any `meeting_timings` row exists for THIS MEETING (#730).
+	 *
+	 * A boolean, where the other three fields are the value itself, and the
+	 * difference is real rather than a shortcut: the other duties are done when a
+	 * COLUMN is filled and the consumer already holds that column, while a timing
+	 * is a row in a table the consumer has no reason to load. The seam answers
+	 * the question instead of shipping the rows.
+	 *
+	 * MEETING-scoped, not slot-scoped, and that is deliberate. The Timer's job is
+	 * to time the meeting, not one segment of it, so the tick means "you have
+	 * started recording" — the honest answer available without the app deciding
+	 * how many of the night's speeches count as enough. Contrast `speechTitle`,
+	 * which is per-SLOT because a member can hold two speaker slots and one title
+	 * must not tick both.
+	 */
+	hasTiming?: boolean;
 }
 
 /** The meeting a duty is being resolved against — the `href` route params. */
@@ -215,6 +238,54 @@ const SPEECH_DETAILS_DUTY: RoleDuty = {
 };
 
 /**
+ * Timing the meeting (#730), and the reason the Timer owned nothing until now.
+ *
+ * The module header above says every other role owns zero duties because "their
+ * prep is real, but it has nowhere to be recorded, so a checkbox for it could
+ * only be a self-report nobody can verify". That was true of the Timer too, and
+ * #729 deliberately shipped its stopwatch with NO duty for exactly that reason:
+ * `RoleDuty` requires a `done`, an always-false one puts a permanently-unticked
+ * box on the checklist, and a truthful one needed a stored answer that did not
+ * exist yet.
+ *
+ * `meeting_timings` is that stored answer, so the duty can land with a `done`
+ * that reads a fact rather than a claim. It is the first duty here that is done
+ * DURING the meeting rather than before it, which is why the label is an
+ * instruction rather than a piece of prep — "Before the meeting" is the heading
+ * on the checklist, and "time the speeches" reads correctly as the thing you
+ * are being reminded you will have to do.
+ *
+ * ## It is NOT closed when the answer window closes, and #729 said otherwise
+ *
+ * #729 gated its own hardcoded link on `writesClosed`, so a month-old meeting
+ * would not "sprout a stopwatch". Moving the link into this registry drops that
+ * gate, and the drop is deliberate rather than incidental.
+ *
+ * The two rules pull opposite ways and #730's wins. A timing is part of the
+ * MINUTES record, and minutes are written after the meeting by definition —
+ * `recordMeetingTiming` accepts a `completed` meeting on purpose, and the club's
+ * reason for wanting the record at all ("do our speakers habitually run over")
+ * is served by a Timer filling it in afterwards. Closing the only route to that
+ * surface would make the feature unusable in the window it exists for.
+ *
+ * What #729 was protecting against is not lost: a CANCELLED meeting is refused
+ * server-side with a message the surface shows verbatim, and the other three
+ * duties already render on a past meeting for the same reason this one now
+ * does. `personal-duty-routes.guard.test.ts` holds the decision, because it is
+ * exactly the kind of thing a later reader re-adds in good faith.
+ */
+const TIMING_DUTY: RoleDuty = {
+	id: "timing",
+	label: "Time the speeches",
+	clause: "time the speeches",
+	// `=== true`, not truthiness: an ABSENT field is not done, exactly like a
+	// blank one, and `undefined` is what a caller that loaded only the meeting
+	// meta passes.
+	done: (ctx) => ctx.hasTiming === true,
+	href: (target) => personalDutyHref(target, "timer"),
+};
+
+/**
  * FROZEN, and that is load-bearing rather than tidy. This registry is a
  * module-level singleton, so `dutiesForRole` hands every caller the same array
  * and the same duty objects; `readonly` on the return type stops an in-repo
@@ -246,6 +317,7 @@ const DUTIES_BY_ROLE_KEY = new Map<string, readonly RoleDuty[]>([
 	[GRAMMARIAN_ROLE_KEY, freezeDuties([WORD_OF_THE_DAY_DUTY])],
 	[SPEAKER_ROLE_KEY, freezeDuties([SPEECH_DETAILS_DUTY])],
 	[CONTESTANT_ROLE_KEY, freezeDuties([SPEECH_DETAILS_DUTY])],
+	[TIMER_ROLE_KEY, freezeDuties([TIMING_DUTY])],
 ]);
 
 /**
@@ -267,6 +339,10 @@ function resolveRoleKey(role: RoleIdentity): string | null {
 	if (role.roleKey != null) return role.roleKey;
 	if (isTmodRoleName(role.roleName)) return TMOD_ROLE_KEY;
 	if (isGrammarianRoleName(role.roleName)) return GRAMMARIAN_ROLE_KEY;
+	// EXACT canonical name only, same as the two above — "Timekeeper" is what
+	// many clubs say and is deliberately not canonical, so a role called that was
+	// invented by the club and correctly owns nothing (#732).
+	if (isTimerRoleName(role.roleName)) return TIMER_ROLE_KEY;
 	return (
 		SPEECH_ROLE_KEY_BY_CANONICAL_NAME.get(role.roleName.trim().toLowerCase()) ??
 		null

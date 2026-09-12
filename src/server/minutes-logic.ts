@@ -15,6 +15,7 @@ import {
 	meetingAttendance,
 	meetingAwards,
 	meetings,
+	meetingTimings,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -101,6 +102,26 @@ export interface MinutesAwardRow {
 	isGuest: boolean;
 }
 
+/**
+ * One recorded time (#730), joined to what it is about.
+ *
+ * Carries the marks it was measured against and NOT a verdict. The verdict is
+ * derived at render, through `timingVerdict` (`#/lib/timing-verdict`), so the
+ * minutes screen and the minutes PDF cannot answer "did that qualify"
+ * differently — and so a stored answer cannot outlive the rule that produced
+ * it. See that module's header.
+ */
+export interface MinutesTimingRow {
+	slotId: string;
+	roleName: string;
+	/** The slot's holder, or null for an unassigned slot somebody timed anyway. */
+	assigneeName: string | null;
+	isGuest: boolean;
+	elapsedSeconds: number;
+	markGreen: number | null;
+	markRed: number | null;
+}
+
 export interface MinutesProgramRow {
 	slotId: string;
 	roleName: string;
@@ -139,6 +160,21 @@ export interface MinutesData {
 	 * is null unless the loader ran behind the shell gate.
 	 */
 	actionItems: MinutesActionItems;
+	/**
+	 * The times the Timer measured (#730), in agenda order. Empty when the club
+	 * did not use the stopwatch, which is the common case and the reason the
+	 * PDF's section is OMITTED rather than rendered empty.
+	 *
+	 * OPTIONAL on the type, and that is not laziness. The offline minutes
+	 * snapshot in IndexedDB is an unversioned `MinutesData` written by a PREVIOUS
+	 * deploy and handed back by `readSnapshot` with no shape check, so the first
+	 * offline load after this release has no `timings` key at all. `actionItems`
+	 * learned that the hard way — a missing key there white-screened the whole
+	 * minutes page for the secretary who had just lost signal mid-meeting, which
+	 * is the one case the offline queue exists for. Every consumer must treat
+	 * absent as empty.
+	 */
+	timings?: MinutesTimingRow[];
 	counts: {
 		present: number;
 		absent: number;
@@ -470,6 +506,45 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		previousMeetingAt: previous?.scheduledAt ?? null,
 	});
 
+	// The Timer's measured times (#730). Read HERE rather than through a helper
+	// in `timings-logic.ts`: that module owns the WRITE and the ladder that
+	// admits it, and a read with no rule in it belongs beside the other minutes
+	// reads. Ordered the way the Program section is, so the two sections of the
+	// same document list the same meeting in the same order.
+	const timingAssignee = alias(members, "timing_member");
+	const timingGuest = alias(guests, "timing_guest");
+	const timingRows = await db
+		.select({
+			slotId: meetingTimings.slotId,
+			elapsedSeconds: meetingTimings.elapsedSeconds,
+			markGreen: meetingTimings.markGreen,
+			markRed: meetingTimings.markRed,
+			roleName: roleDefinitions.name,
+			assigneeName: sql<
+				string | null
+			>`coalesce(${timingAssignee.name}, ${timingGuest.name})`,
+			guestId: timingGuest.id,
+		})
+		.from(meetingTimings)
+		.innerJoin(roleSlots, eq(roleSlots.id, meetingTimings.slotId))
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.leftJoin(timingAssignee, eq(timingAssignee.id, roleSlots.assignedMemberId))
+		.leftJoin(timingGuest, eq(timingGuest.id, roleSlots.assignedGuestId))
+		.where(eq(meetingTimings.meetingId, meetingId))
+		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
+	const timings: MinutesTimingRow[] = timingRows.map((r) => ({
+		slotId: r.slotId,
+		roleName: r.roleName,
+		assigneeName: r.assigneeName,
+		isGuest: r.guestId != null,
+		elapsedSeconds: r.elapsedSeconds,
+		markGreen: r.markGreen,
+		markRed: r.markRed,
+	}));
+
 	return {
 		meetingId,
 		clubId,
@@ -479,6 +554,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		tableTopicsSpeakers: ttList,
 		awards: awardList,
 		awardEligible,
+		timings,
 		counts: { present, absent, excused, unmarked, guests: guestList.length },
 	};
 }

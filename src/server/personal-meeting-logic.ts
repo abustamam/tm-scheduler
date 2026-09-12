@@ -57,6 +57,7 @@ import {
 	clubs,
 	type meetingStatusEnum,
 	meetings,
+	meetingTimings,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -116,6 +117,31 @@ export interface PersonalMeetingView {
 		 * US spelling `"canceled"` would compile and silently show answer buttons.
 		 */
 		status: (typeof meetingStatusEnum.enumValues)[number];
+		/**
+		 * Whether ANY time has been recorded for this meeting (#730) — the
+		 * truthful `done` behind the Timer's `timing` duty.
+		 *
+		 * MEETING-scoped, and it has to be. A per-SLOT version reads naturally
+		 * and is wrong in the one way that matters: timings are recorded against
+		 * the SPEAKERS' slots, never against the Timer's own, which is not a
+		 * timeable role at all. So "does a timing exist for this member's slot"
+		 * is false for the Timer forever — the permanently-unticked box
+		 * `role-duties.ts` forbids, and the exact reason #729 deferred this duty
+		 * rather than shipping an always-false `done`.
+		 *
+		 * It therefore sits beside `theme` and `wordOfTheDay`, which are
+		 * meeting-scoped for the same structural reason, and NOT beside
+		 * `speechTitle`, which is per-slot because a member can hold two speaker
+		 * slots and one title must not tick both.
+		 *
+		 * OPTIONAL on the type, and the seam always sets it. Same shape #732 gave
+		 * `AgendaRow.slotId`, for the same reason: every existing consumer and
+		 * fixture compiles untouched, and an absent value reads as NOT DONE —
+		 * which is exactly what `DutyContext`'s own `hasTiming` says an absent
+		 * field means, so the two agree by construction rather than by a rule
+		 * somebody has to remember.
+		 */
+		hasTiming?: boolean;
 	};
 	/** The resolved member — `name` only, never contact details. */
 	member: { id: string; name: string };
@@ -249,6 +275,20 @@ export async function loadPublicPersonalMeetingView(args: {
 		)
 		.orderBy(roleSlots.slotIndex);
 
+	// Has anything been timed yet (#730)? A bare existence check — the duty asks
+	// whether the Timer has STARTED recording, not how many of the night's
+	// speeches they got to, and answering the second question would mean the app
+	// deciding how many is enough.
+	//
+	// `limit(1)` on the meeting index rather than a count: nothing reads the
+	// number, and a count over a table the self-assert path can grow is work
+	// nobody asked for.
+	const [anyTiming] = await db
+		.select({ slotId: meetingTimings.slotId })
+		.from(meetingTimings)
+		.where(eq(meetingTimings.meetingId, meetingId))
+		.limit(1);
+
 	// Through the seam, not an inline query: `attendance-plan-logic.ts` is where
 	// the two status predicates live, and `attendance-plan-store.guard.test.ts`
 	// fails any non-test source outside it that names the plan table.
@@ -275,6 +315,7 @@ export async function loadPublicPersonalMeetingView(args: {
 			theme: meeting.theme,
 			wordOfTheDay: meeting.wordOfTheDay,
 			status: meeting.status,
+			hasTiming: anyTiming !== undefined,
 		},
 		member: { id: member.id, name: member.name },
 		roles: slotRows.map((r) => ({

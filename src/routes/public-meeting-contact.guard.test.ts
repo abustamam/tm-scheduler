@@ -48,16 +48,24 @@ describe("public meeting routes never ship contact (#37 PII)", () => {
 		expect(src).not.toMatch(/[^c]getMeetingByKey\(\{/);
 	});
 
-	// The two focused duty editors (#666) load the SAME payload for the same
+	// The focused duty routes (#666, #729) load the SAME payload for the same
 	// reason and carry the same obligation. They are reached from a chat link, so
 	// the anonymous branch is the COMMON one here rather than the edge case: a
 	// Grammarian tapping their link has no session at all, and must never be
 	// handed the roster contact an admin is entitled to. The shell branch exists
 	// only so a signed-in officer is not falsely told they lack a capability the
 	// server would grant them through the admin arm.
+	//
+	// `me_.timer` (#729) belongs on THIS loop and not the strict public-only one
+	// above, and the distinction is not cosmetic: the strict loop forbids
+	// `getMeetingByKey` outright, which would demote a signed-in officer opening
+	// the stopwatch to the anonymous payload. It stores nothing and needs no
+	// contact — but it reads the whole agenda through the same loader the two
+	// editors do, so it inherits the same fork and the same PII floor.
 	for (const rel of [
 		"club.$clubId.meeting.$meetingId_.me_.theme.tsx",
 		"club.$clubId.meeting.$meetingId_.me_.word.tsx",
+		"club.$clubId.meeting.$meetingId_.me_.timer.tsx",
 	]) {
 		it(`${rel} gates getMeetingByKey behind context.shell`, () => {
 			const src = read(rel);

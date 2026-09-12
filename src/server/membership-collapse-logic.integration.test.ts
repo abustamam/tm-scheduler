@@ -649,6 +649,12 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			// would otherwise have destroyed the absorbed membership's training
 			// credit and dropped the club below goal 9's four-officer bar.
 			"officer_training_records.membership_id",
+			// #730 — the Timer's measured times. Nullable attribution with no
+			// member-unique constraint, so it re-points plainly. It matters beyond
+			// tidiness: the overwrite floor treats an unknown recorder as NOT the
+			// caller's own, so losing this on a merge would leave the merged member
+			// unable to correct their own measurement.
+			"meeting_timings.recorded_by_member_id",
 		]);
 
 		const result = await testDb.execute(sql`

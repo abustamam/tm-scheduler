@@ -512,6 +512,13 @@
       "when": 1788878364368,
       "tag": "0072_unordered_role_slots",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1789182957349,
+      "tag": "0073_sticky_mister_fear",
+      "breakpoints": true
     }
   ]
 }

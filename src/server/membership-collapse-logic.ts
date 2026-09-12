@@ -20,6 +20,7 @@ import {
 	meetingAttendance,
 	meetingAttendancePlan,
 	meetingAwards,
+	meetingTimings,
 	meetingVoteSessions,
 	meetingVotes,
 	memberDues,
@@ -221,6 +222,19 @@ export async function collapseMemberships(
 		.update(clubActionItems)
 		.set({ ownerMemberId: keeperId })
 		.where(eq(clubActionItems.ownerMemberId, absorbedId));
+
+	// 8c. meeting_timings.recorded_by_member_id (#730) — nullable attribution,
+	//    and the table's only unique index is on `slot_id`, which carries no
+	//    member at all. So a plain re-point can never collide: two members can
+	//    never both hold one slot's timing. Without this the absorbed
+	//    membership's writes lose "who recorded this" on every merge — which
+	//    matters more here than it looks, because the overwrite floor treats an
+	//    unknown recorder as NOT the caller's own and would then refuse the
+	//    merged member a correction to their own measurement.
+	await tx
+		.update(meetingTimings)
+		.set({ recordedByMemberId: keeperId })
+		.where(eq(meetingTimings.recordedByMemberId, absorbedId));
 
 	// 9. project_completion_marks.marked_by_member_id — attribution only, and
 	//    nullable. No member-unique constraint (the mark's uniqueness is on

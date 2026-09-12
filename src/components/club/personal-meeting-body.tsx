@@ -302,6 +302,15 @@ export function PersonalMeetingBody({
 												// Per-SLOT, never per-member: a member can hold two
 												// speaker slots and one title must not tick both.
 												speechTitle: role.speechTitle,
+												// MEETING-scoped, unlike the line above, and the seam's
+												// own docblock says why: a timing is recorded against a
+												// SPEAKER's slot, never against the Timer's, so a
+												// per-slot answer would be false for the Timer forever
+												// — the permanently-unticked box `role-duties.ts`
+												// forbids. Passing it is not optional bookkeeping: the
+												// tick is the receipt, and without this the duty lands
+												// with a `done` that can never be true (#730).
+												hasTiming: view.meeting.hasTiming,
 											});
 											return (
 												<li key={duty.id}>
