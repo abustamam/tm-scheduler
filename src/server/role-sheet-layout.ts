@@ -49,7 +49,7 @@ import {
 } from "../lib/table-topics-limits";
 import {
 	formatTimingClock,
-	graceSentence,
+	graceRuleSentence,
 	qualifyingWindow,
 } from "../lib/timing-window";
 import { WOD_LIMITS } from "../lib/wod-limits";
@@ -518,10 +518,18 @@ const STANDARD_TIMING_WINDOWS: {
  * an omission: a club that states its own cap has stated a HARD one ("2:30
  * maximum · 2:31+ disqualified" is what the deck projects and what MCF prints),
  * so a sheet saying the answer still qualifies at 3:00 would contradict the
- * agenda in the Timer's other hand. A club that has stated nothing keeps the
- * graced standard row unchanged — including in the committed blanks — because
- * whether the standard Table Topics window should be graced at all is a
- * separate product question (#679) and not one #443 gets to decide silently.
+ * agenda in the Timer's other hand.
+ *
+ * The row for a club that has stated NOTHING used to keep the fully graced
+ * standard window, `0:30–2:30`, on the ground that whether the standard Table
+ * Topics window should be graced at all was a separate product question (#679).
+ * #720 answered it: a response must reach the minimum to be eligible, so this
+ * row is now derived with `"tableTopics"` and reads `1:00–2:30`. The committed
+ * blanks change with it — the old cell told every club's Timer that a
+ * 31-second answer was in the running for Best Table Topics.
+ *
+ * The three OTHER rows are byte-identical to before: the lower grace is dropped
+ * for this one assignment and nothing else.
  */
 export function standardTimingRows(
 	tableTopicsLimits?: TableTopicsLimits | null,
@@ -530,7 +538,8 @@ export function standardTimingRows(
 		? resolveTableTopicsMarks(tableTopicsLimits)
 		: null;
 	return STANDARD_TIMING_WINDOWS.map(({ assignment, min, max }) => {
-		if (own && assignment === TABLE_TOPICS_ASSIGNMENT) {
+		const isTableTopics = assignment === TABLE_TOPICS_ASSIGNMENT;
+		if (own && isTableTopics) {
 			return [
 				assignment,
 				formatTimingClock(own.green),
@@ -544,7 +553,8 @@ export function standardTimingRows(
 			formatTimingClock(min),
 			formatTimingClock((min + max) / 2),
 			formatTimingClock(max),
-			qualifyingWindow(min, max)?.range ?? "",
+			qualifyingWindow(min, max, isTableTopics ? "tableTopics" : "speech")
+				?.range ?? "",
 		];
 	});
 }
@@ -581,7 +591,13 @@ function timer(fill?: RoleSheetFill): ReactNode {
 			h(
 				Text,
 				{ key: "c-grace", style: [s.note, { marginTop: 6 }] },
-				`${graceSentence(null)} Outside that window the speech is disqualified from the vote — call it out in your report.`,
+				// BOTH rules, because the table above holds both kinds of row and the
+				// Timer reads this out loud (#720). One sentence about speeches sat
+				// directly under a Table Topics cell that no longer obeys it, and
+				// "Outside that window" had two windows to refer to.
+				`${graceRuleSentence("speech")} ${graceRuleSentence(
+					"tableTopics",
+				)} Outside it, a speaker is out of the vote — say so in your report.`,
 			),
 			h(Text, { key: "d", style: s.sectionTitle }, "Timing log"),
 			h(

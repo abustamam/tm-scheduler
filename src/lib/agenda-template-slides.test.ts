@@ -460,17 +460,20 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		expect(beat?.timing?.qualifies).toBe("1:00–2:30");
 	});
 
-	it("leaves a club that has stated nothing on the graced standard window", () => {
-		// The control. Without it, dropping the grace unconditionally would look
-		// identical to dropping it only where a club has its own rule — and the
-		// Timer's blank role sheet still prints 0:30–2:30, so that would put a new
-		// contradiction where this one used to be.
+	it("leaves a club that has stated nothing on the STANDARD window", () => {
+		// The control. Without it, dropping the club's own hard cap unconditionally
+		// would look identical to applying it only where a club has one.
+		//
+		// It said "the graced standard window", `0:30–2:30`, until #720: the marks
+		// are still the standard ones and still derived rather than the club's hard
+		// cap, but the derivation now floors at green for this segment, so the wall
+		// and the Timer's blank role sheet (which moved with it) agree.
 		const beat = tableTopicsBeat(null);
 		expect(beat?.timing).toEqual({
 			green: "1:00",
 			yellow: "1:30",
 			red: "2:00",
-			qualifies: "0:30–2:30",
+			qualifies: "1:00–2:30",
 		});
 	});
 

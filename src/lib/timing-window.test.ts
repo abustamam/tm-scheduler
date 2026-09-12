@@ -3,6 +3,7 @@ import {
 	firstQualifyingWindow,
 	formatTimingClock,
 	graceNote,
+	graceRuleSentence,
 	graceSentence,
 	qualifyingWindow,
 	qualifyingWindowForMarks,
@@ -73,6 +74,61 @@ describe("qualifyingWindow", () => {
 	it("exposes the grace period as half a minute", () => {
 		expect(TIMING_GRACE_MINUTES).toBe(0.5);
 	});
+
+	it("labels a window with the segment it was derived for", () => {
+		expect(qualifyingWindow(5, 7)?.segment).toBe("speech");
+		expect(qualifyingWindow(1, 2, "tableTopics")?.segment).toBe("tableTopics");
+	});
+});
+
+// #720 — a Table Topics response must REACH the minimum to be eligible for Best
+// Table Topics, so the grace applies above red only. Every expected value here
+// is an ABSOLUTE clock: stated as `green - TIMING_GRACE_MINUTES` these would
+// pass for the rule they exist to forbid.
+describe("qualifyingWindow for Table Topics (#720)", () => {
+	it("floors at green with the default 1:00–2:00 marks", () => {
+		const w = qualifyingWindow(1, 2, "tableTopics");
+		expect(w?.fromMinutes).toBe(1);
+		expect(w?.toMinutes).toBe(2.5);
+		expect(w?.range).toBe("1:00–2:30");
+		// The bug, named so the assertion above cannot pass by coincidence.
+		expect(w?.range).not.toBe("0:30–2:30");
+	});
+
+	it("floors at the CLUB's green, not at ours", () => {
+		// A club that deliberately states a 0:45 minimum gets 0:45 — the floor is
+		// whatever green the club set, not a house number. (#720 explicitly
+		// declined to raise the stored CHECK floor to 60 s.)
+		expect(qualifyingWindow(0.75, 2.5, "tableTopics")?.range).toBe("0:45–3:00");
+		expect(qualifyingWindow(1, 2.5, "tableTopics")?.range).toBe("1:00–3:00");
+	});
+
+	it("keeps the UPPER grace, which #720 leaves alone", () => {
+		const w = qualifyingWindow(1, 2, "tableTopics");
+		expect(w?.to).toBe("2:30");
+		expect(w?.toMinutes).toBe(2.5);
+	});
+
+	it("leaves speeches and evaluations exactly as they were", () => {
+		// The regression pin. Dropping the lower grace unconditionally would look
+		// identical to dropping it for one segment, on every surface but these.
+		expect(qualifyingWindow(5, 7, "speech")?.range).toBe("4:30–7:30");
+		expect(qualifyingWindow(2, 3, "speech")?.range).toBe("1:30–3:30");
+		// …and the default argument is the speech rule, so an un-migrated call
+		// site cannot silently pick up the Table Topics floor.
+		expect(qualifyingWindow(5, 7)?.range).toBe("4:30–7:30");
+		expect(
+			qualifyingWindowForMarks({ green: 2, yellow: 2.5, red: 3 })?.range,
+		).toBe("1:30–3:30");
+	});
+
+	it("still clamps at zero rather than rendering a negative clock", () => {
+		// Vacuous for Table Topics as such (a floor at green cannot go below
+		// zero), but the clamp is a property of the function and #720's AC 6 asks
+		// for it to hold across both variants.
+		expect(qualifyingWindow(0, 1, "tableTopics")?.from).toBe("0:00");
+		expect(qualifyingWindow(0.25, 1, "speech")?.from).toBe("0:00");
+	});
 });
 
 describe("qualifyingWindowForMarks", () => {
@@ -85,6 +141,13 @@ describe("qualifyingWindowForMarks", () => {
 	it("is null for an untimed beat", () => {
 		expect(qualifyingWindowForMarks(null)).toBeNull();
 		expect(qualifyingWindowForMarks(undefined)).toBeNull();
+	});
+
+	it("carries the segment through to the marks form (#720)", () => {
+		expect(
+			qualifyingWindowForMarks({ green: 1, yellow: 1.5, red: 2 }, "tableTopics")
+				?.range,
+		).toBe("1:00–2:30");
 	});
 });
 
@@ -156,5 +219,58 @@ describe("grace copy", () => {
 		expect(graceSentence(null)).toBe(
 			"A speech qualifies from 0:30 before green through 0:30 after red.",
 		);
+	});
+
+	// #720 AC 4: the WORDS have to follow the NUMBERS. Both of these read the
+	// window's own `segment`, so a surface cannot print "0:30 before green" over
+	// a window that starts at green.
+	it("states the Table Topics rule over a Table Topics window", () => {
+		const w = qualifyingWindow(1, 2, "tableTopics");
+		expect(graceNote(w)).toBe(
+			"+0:30 grace — e.g. a 1:00–2:00 Table Topics response qualifies 1:00–2:30",
+		);
+		expect(graceNote(w)).not.toContain("±0:30");
+		expect(graceSentence(w)).toBe(
+			"A Table Topics response qualifies from green through 0:30 after red — a 1:00–2:00 Table Topics response qualifies between 1:00 and 2:30.",
+		);
+		expect(graceSentence(w)).not.toContain("0:30 before green");
+	});
+
+	it("keeps the speech copy byte-identical over a speech window", () => {
+		// The other half of the pairing: adding the segment must not reword the
+		// four surfaces that were already right.
+		const w = qualifyingWindow(4, 6);
+		expect(graceNote(w)).toBe(
+			"±0:30 grace — e.g. a 4:00–6:00 speech qualifies 3:30–6:30",
+		);
+		expect(graceSentence(w)).toBe(
+			"A speech qualifies from 0:30 before green through 0:30 after red — a 4:00–6:00 speech qualifies between 3:30 and 6:30.",
+		);
+	});
+});
+
+// The standalone-rule form the Timer's sheet reads, where ONE note sits under a
+// table holding both kinds of row (#720).
+describe("graceRuleSentence", () => {
+	it("states each segment's rule as its own sentence", () => {
+		expect(graceRuleSentence("speech")).toBe(
+			"A speech qualifies from 0:30 before green through 0:30 after red.",
+		);
+		expect(graceRuleSentence("tableTopics")).toBe(
+			"A Table Topics response qualifies from green through 0:30 after red.",
+		);
+	});
+
+	it("is the same rule `graceSentence` states for a window of that segment", () => {
+		// One source, two shapes. If these drift, one surface teaches a rule the
+		// next contradicts — which is the whole of #720.
+		expect(graceSentence(null)).toBe(graceRuleSentence("speech"));
+		for (const segment of ["speech", "tableTopics"] as const) {
+			const w = qualifyingWindow(1, 2, segment);
+			expect(w).not.toBeNull();
+			expect(graceSentence(w)).toContain(
+				graceRuleSentence(segment).replace(/\.$/, ""),
+			);
+		}
 	});
 });

@@ -249,13 +249,18 @@ describe("Timer sheet standard timing windows (#357)", () => {
 		]);
 	});
 
-	it("never prints a negative lower bound on a short assignment", () => {
+	// #720 replaced this case. It used to assert `0:30–2:30` under the heading
+	// "never prints a negative lower bound on a short assignment" — the clamp is
+	// real and still tested (`timing-window.test.ts`), but this row was never the
+	// place it could fire, and the number it pinned was the bug: it told the
+	// Timer a 31-second Table Topics answer was eligible for the vote.
+	it("floors the Table Topics row at green, with no grace below it", () => {
 		expect(rows).toContainEqual([
 			"Table Topics",
 			"1:00",
 			"1:30",
 			"2:00",
-			"0:30–2:30",
+			"1:00–2:30",
 		]);
 	});
 });
@@ -331,7 +336,9 @@ describe("a club's own Table Topics window on the Timer sheet (#443)", () => {
 			"1:00",
 			"1:30",
 			"2:00",
-			"0:30–2:30",
+			// Since #720 the blank sheet floors at green too. "Standard window"
+			// means the standard MARKS, not the speech grace rule applied to them.
+			"1:00–2:30",
 		]);
 	});
 
@@ -388,9 +395,67 @@ describe("a club's own Table Topics window on the Timer sheet (#443)", () => {
 				"1:00",
 				"1:30",
 				"2:00",
-				"0:30–2:30",
+				"1:00–2:30",
 			]);
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #720 — the Timer's sheet said a 31-second Table Topics answer was eligible.
+//
+// TWO surfaces on one sheet, and they are wired separately: the "Qualifies"
+// column the Timer signals from, and the note underneath that they READ ALOUD.
+// #443 already shipped this sheet once with only the table wired, so both are
+// asserted, through the rendered document rather than through the two functions
+// that feed it.
+// ---------------------------------------------------------------------------
+describe("Table Topics eligibility on the Timer sheet (#720)", () => {
+	function textOf(node: unknown): string[] {
+		if (node == null || node === false) return [];
+		if (typeof node === "string") return [node];
+		if (Array.isArray(node)) return node.flatMap(textOf);
+		const el = node as { props?: { children?: unknown } };
+		return el.props ? textOf(el.props.children) : [];
+	}
+	const timerWords = (f?: RoleSheetFill) =>
+		textOf(buildRoleSheetDoc("timer", f)).join(" | ");
+
+	it("the Qualifies cell and the spoken rule agree, on the blank sheet", () => {
+		const words = timerWords();
+		// The cell.
+		expect(words).toContain("1:00–2:30");
+		expect(words).not.toContain("0:30–2:30");
+		// The rule read aloud, stated for BOTH kinds of row in the table above it.
+		expect(words).toContain(
+			"A speech qualifies from 0:30 before green through 0:30 after red.",
+		);
+		expect(words).toContain(
+			"A Table Topics response qualifies from green through 0:30 after red.",
+		);
+		// The old note said "Outside that window …" beside a table with two
+		// different windows in it.
+		expect(words).not.toContain("Outside that window");
+	});
+
+	it("says the same two things on a club's own sheet", () => {
+		const words = timerWords({
+			...fill,
+			tableTopicsLimits: { minSeconds: 60, maxSeconds: 150 },
+		});
+		expect(words).toContain("1:00–2:30");
+		expect(words).toContain(
+			"A Table Topics response qualifies from green through 0:30 after red.",
+		);
+	});
+
+	it("leaves the three speech rows graced", () => {
+		// The control: dropping the grace everywhere would satisfy every
+		// assertion above and disqualify a prepared speech that actually
+		// qualifies — the error #357 exists to prevent, inverted.
+		const words = timerWords();
+		expect(words).toContain("4:30–7:30");
+		expect(words).toContain("1:30–3:30");
 	});
 });
 

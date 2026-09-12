@@ -203,15 +203,19 @@ export function resolveTableTopicsMarks(
  * `timing-window.ts`. That rule is about prepared SPEECHES: a club's Table
  * Topics cap is its own rule and is stated as its own rule.
  *
- * `firstQualifyingWindow` enforces that by skipping every non-speaker row
- * (#357) — but it is one of TWO derivations, and an earlier version of this
- * paragraph cited it as if it covered both. `beatTimingText` (the TEMPLATED
- * deck) calls `qualifyingWindowForMarks` directly with no filter at all, so a
- * materialised meeting projected "qualifies 0:30–3:00" beside a
- * non-materialised one saying "2:31+ disqualified" — two disqualification rules
- * for one club, differing only by whether anyone had opened the agenda editor.
- * `TABLE_TOPICS_ROLE_KEY` and `formatTableTopicsWindow` below are what that
- * derivation now uses instead.
+ * The ASYMMETRY that made that hard to hold is fixed at source since #720.
+ * `qualifyingWindow` now takes a `TimingSegment`, and `"tableTopics"` drops the
+ * grace BELOW green while keeping the +0:30 above red — so a surface deriving a
+ * Table Topics window no longer has to be kept away from the derivation, it
+ * just has to name its segment. Two rounds of filtering preceded that and
+ * neither was the fix: `firstQualifyingWindow` skips every non-speaker row
+ * (#357) so the printed agenda's EXAMPLE is a speech, and `beatTimingText` (the
+ * TEMPLATED deck) had no filter at all, so a materialised meeting projected
+ * "qualifies 0:30–3:00" beside a non-materialised one saying "2:31+
+ * disqualified" — two disqualification rules for one club, differing only by
+ * whether anyone had opened the agenda editor. `TABLE_TOPICS_ROLE_KEY` and
+ * `formatTableTopicsWindow` below are what that derivation uses for a club with
+ * a stated cap; a club with none now gets the segment-aware window.
  */
 export function formatTableTopicsTiming(
 	limits: TableTopicsLimits | null | undefined,
