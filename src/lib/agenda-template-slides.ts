@@ -61,13 +61,13 @@ import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
 import {
 	formatTableTopicsWindow,
 	hasTableTopicsLimits,
-	TABLE_TOPICS_ROLE_KEY,
 	type TableTopicsLimits,
 } from "./table-topics-limits";
 import {
 	formatTimingClock,
 	type QualifyingWindow,
 	qualifyingWindowForMarks,
+	segmentFor,
 } from "./timing-window";
 
 export type TemplateDeckInput = {
@@ -99,9 +99,13 @@ export type TemplateDeckInput = {
  * filters non-speaker rows for exactly this reason; this derivation did not,
  * and a comment in `table-topics-limits.ts` claimed that filter covered both.
  *
- * A club that has stated NOTHING is left alone: its beat carries the standard
- * marks, the graced window is what the Timer's blank role sheet has always
- * printed, and changing that is a product question with its own shape (#679).
+ * A club that has stated NOTHING is no longer left entirely alone, and #720 is
+ * why. Its beat still carries the STANDARD marks and still prints a derived
+ * window rather than the club's hard cap — but that window is now the Table
+ * Topics one (floored at green, `1:00–2:30`) rather than the speech one
+ * (`0:30–2:30`). "Whether the standard Table Topics window should be graced at
+ * all" was the product question #679 declined to answer silently; #720 answered
+ * it, and the answer is no.
  */
 export type BeatTiming = {
 	green: string;
@@ -116,10 +120,18 @@ export function beatTimingText(
 	tableTopicsLimits?: TableTopicsLimits | null,
 ): BeatTiming | null {
 	if (!row.marks) return null;
+	// ONE derivation of "which segment is this row", shared with the Timer's
+	// sheet and the printed agenda's grace line (#720) — `segmentFor` is where
+	// the role key is matched, so this file no longer states that rule itself.
+	const segment = segmentFor(row.roleKey);
 	const ownRule =
-		row.roleKey === TABLE_TOPICS_ROLE_KEY &&
-		hasTableTopicsLimits(tableTopicsLimits);
-	const window = ownRule ? null : qualifyingWindowForMarks(row.marks);
+		segment === "tableTopics" && hasTableTopicsLimits(tableTopicsLimits);
+	// The segment travels into the derivation. A club that has stated nothing
+	// still projects a window here — the standard 1:00–2:00 marks — and it used
+	// to be the SPEECH window of those marks, "qualifies 0:30–2:30", telling the
+	// room a 31-second answer was eligible for the vote. The upper +0:30 is
+	// unchanged; only the floor moves, to green.
+	const window = ownRule ? null : qualifyingWindowForMarks(row.marks, segment);
 	if (!ownRule && !window) return null;
 	return {
 		green: formatTimingClock(row.marks.green),

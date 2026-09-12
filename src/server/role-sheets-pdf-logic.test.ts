@@ -295,7 +295,9 @@ describe("renderRoleSheetPdf bounds what the public route renders (#519)", () =>
 			standardTimingRows(fill.tableTopicsLimits).find(
 				(r) => r[0] === "Table Topics",
 			),
-		).toEqual(["Table Topics", "1:00", "1:30", "2:00", "0:30–2:30"]);
+			// Since #720 the standard row floors at green: a Table Topics response
+			// must reach the minimum to be eligible. The marks are unchanged.
+		).toEqual(["Table Topics", "1:00", "1:30", "2:00", "1:00–2:30"]);
 	});
 
 	it("caps a stored role name before it reaches the renderer", async () => {

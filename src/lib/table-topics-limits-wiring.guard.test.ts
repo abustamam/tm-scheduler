@@ -511,7 +511,13 @@ describe("table topics limits wiring (#443)", () => {
 		// disqualification rules, separated only by whether anyone had opened the
 		// agenda editor.
 		const src = readSource("src/lib/agenda-template-slides.ts");
-		expect(src).toContain("row.roleKey === TABLE_TOPICS_ROLE_KEY");
+		// Through `segmentFor` since #720, not a hand-written key match. That
+		// function is the ONE place the role key decides a timing segment — the
+		// Timer's sheet and the printed agenda's grace line read it too — so a
+		// literal comparison here would be a second statement of the rule, which
+		// is what put two disqualification rules on one club in the first place.
+		expect(src).toContain("segmentFor(row.roleKey)");
+		expect(src).toContain('segment === "tableTopics"');
 		expect(src).toContain("formatTableTopicsWindow(row.marks)");
 		// The club's own columns must reach it, off the same `ClubForDeck` the
 		// standard deck reads.

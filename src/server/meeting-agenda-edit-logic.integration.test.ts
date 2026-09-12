@@ -3655,9 +3655,11 @@ describe.skipIf(!hasTestDb)("materialise on first edit", () => {
 			.where(eq(clubs.id, club.clubId));
 
 		const draft = await loadAgendaDraft(club.meetingId);
-		// 23 beats + 5 bands on this variant, 22 + 5 on the other. Reading the
+		// 24 beat rows + 5 bands on this variant, 23 + 5 on the other. Reading the
 		// RUN_OF_SHOW const instead of building for the club fails HERE (R5).
-		expect(draft?.rows).toHaveLength(28);
+		// (23/24 rather than 22/23 since #719: the speaker beat seeds its speech
+		// preamble as a second row — see `agenda-materialise.test.ts`'s EXPECTED.)
+		expect(draft?.rows).toHaveLength(29);
 		const [m] = await testDb
 			.select({ templateId: meetings.templateId })
 			.from(meetings)
@@ -3809,7 +3811,10 @@ describe.skipIf(!hasTestDb)("materialise on first edit", () => {
 			.set({ geIntroducesFunctionaries: true })
 			.where(eq(clubs.id, club.clubId));
 		const draft = await loadAgendaDraft(club.meetingId);
-		expect(draft?.rows.filter((r) => r.handoff)).toHaveLength(5);
+		// SIX on this variant since #719: the five segment hand-offs plus the
+		// speech preamble, which is a hand-off row inside the speaker's repeat
+		// block (introducing that speech's evaluator).
+		expect(draft?.rows.filter((r) => r.handoff)).toHaveLength(6);
 		// Stored verbatim; `buildTemplateRows` resolves them per render against
 		// whoever holds the role that week.
 		expect(
