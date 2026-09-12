@@ -5,6 +5,7 @@ import {
 	type TemplateBeatRow,
 	type TemplateRoleRow,
 } from "./agenda-template-rows";
+import { TIMER_ROLE_KEY } from "./meeting-roles";
 import {
 	DEFAULT_SPEAKER_MINUTES,
 	speechBookedMinutes,
@@ -87,6 +88,34 @@ export type AgendaRow = {
 	 *  label follows the club, a club that renamed Speaker to Presenter would
 	 *  silently lose the colour. Identity belongs in a field, not in prose. */
 	roleKey?: string | null;
+	/**
+	 * The one `AgendaSlot.id` this row is about, or null when it is about no
+	 * single slot (#732).
+	 *
+	 * `roleKey` above says WHICH ROLE a row belongs to; this says WHICH PERSON'S
+	 * TURN it is, which is a different question and the one a per-row record has
+	 * to answer. `who` cannot: its own docblock explains why the string is
+	 * ambiguous, and two speakers with the same name would collapse into one.
+	 * A run-sheet INDEX cannot either — it moves the moment anyone adds a row.
+	 *
+	 * Populated on the three arms that emit exactly one row per slot (the
+	 * speaker, evaluator and one-row-per-matching-slot arms of `expandRunSheet`)
+	 * and on a templated role beat bound to exactly one slot — which is every
+	 * iteration of a `repeatsRoleKey` block.
+	 *
+	 * NULL, deliberately and permanently, on the rows that hold no single slot:
+	 * an event beat, a `renderUnowned` row (nothing matched, so there is no
+	 * slot at all), a templated beat with a null `roleKey` (the editor's
+	 * "Nobody"), and a non-repeating role beat bound to two or more slots. A row
+	 * naming two holders has no one slot, and inventing one would attribute a
+	 * measurement to the wrong member. Null is the honest answer and consumers
+	 * must handle it: a null here means "cannot be recorded against a person",
+	 * not "not yet threaded".
+	 *
+	 * Optional so every existing consumer compiles untouched — nothing reads it
+	 * yet; #729 (the Timer's stopwatch) and #730 (the timing record) do.
+	 */
+	slotId?: string | null;
 	/**
 	 * The two halves of `who`, carried separately (#463).
 	 *
@@ -723,7 +752,7 @@ export type RunOfShowConfig = {
  *  - `alsoRequiresAnyOf` drops the ROW — the evaluation-timing beat (#508),
  *    which exists only to ask the Timer something and has nothing to say
  *    without one. */
-const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
+const TIMER_ROLE: BeatRole = { roleKey: TIMER_ROLE_KEY, roleName: "Timer" };
 
 /**
  * The words the General Evaluator uses to hand the room to the Timer before the
@@ -1810,6 +1839,9 @@ export function expandRunSheet(
 		if (beat.kind === "event") {
 			rows.push({
 				who: fallbackOwner?.roleName ?? beat.who,
+				// An event beat is an officer position, not a meeting role: it binds
+				// to no slot at all, so there is nothing to carry here (#732).
+				slotId: null,
 				detail: beatDetail,
 				minutes: beat.minutes,
 				marks: null,
@@ -1849,6 +1881,8 @@ export function expandRunSheet(
 						roleLabel: numbered(s.roleName, i, multi),
 						holder: assigneeDisplay(s),
 						roleKey: owner.roleKey,
+						// One row per slot, so this row is about exactly this one (#732).
+						slotId: s.id,
 						detail: s.speechTitle
 							? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
 							: beatDetail,
@@ -1867,6 +1901,10 @@ export function expandRunSheet(
 						roleLabel: numbered(s.roleName, i, multi),
 						holder: assigneeDisplay(s),
 						roleKey: owner.roleKey,
+						// This evaluator's own slot — NOT `s.evaluatesSlotId`, which is
+						// the speech being evaluated. `orderEvaluators` only reorders the
+						// same slots, so the pairing here is unaffected by it (#732).
+						slotId: s.id,
 						// Names the speaker when known, else the speaking SLOT ("Speaker
 						// 2"), else the beat's generic wording (#512). See
 						// `evaluatedSpeakerLabel` for why the middle case matters.
@@ -1897,6 +1935,9 @@ export function expandRunSheet(
 					rows.push({
 						who: owner.roleName,
 						roleKey: owner.roleKey,
+						// Nothing MATCHED this beat — the club runs no such slot — so
+						// there is no id to carry, only the bare role name (#732).
+						slotId: null,
 						detail: beatDetail,
 						minutes: beat.minutes,
 						marks: beat.marks ?? null,
@@ -1911,6 +1952,8 @@ export function expandRunSheet(
 						roleLabel: s.roleName,
 						holder: assigneeDisplay(s),
 						roleKey: owner.roleKey,
+						// One row per matching slot, so this row is about this one (#732).
+						slotId: s.id,
 						detail: beatDetail,
 						minutes: beat.minutes,
 						marks: beat.marks ?? null,

@@ -25,6 +25,11 @@ import {
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
 } from "./agenda-runsheet";
+import {
+	buildTemplateRows,
+	type TemplateBeatRow,
+	type TemplateRoleRow,
+} from "./agenda-template-rows";
 import { buildTimeline } from "./agenda-timing";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
@@ -1225,6 +1230,8 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		expect(rows[0]).toEqual({
 			who: "Toastmaster of the Day",
 			roleKey: "toastmaster_of_the_day",
+			// Unowned: no slot matched, so no id to carry (#732).
+			slotId: null,
 			detail: "Opens voting for Best Speaker",
 			minutes: 1,
 			marks: null,
@@ -1246,6 +1253,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			roleLabel: "Toastmaster of the Day",
 			holder: "Faisal",
 			roleKey: "toastmaster_of_the_day",
+			slotId: "tm",
 			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
 			marks: null,
@@ -1268,6 +1276,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			roleLabel: "Toastmaster of the Day",
 			holder: "Faisal",
 			roleKey: "toastmaster_of_the_day",
+			slotId: "tm",
 			detail: "Opens voting for Best Evaluator",
 			minutes: 1,
 			marks: null,
@@ -1290,6 +1299,9 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		).toEqual({
 			who: "Toastmaster of the Day",
 			roleKey: "toastmaster_of_the_day",
+			// Unowned again — the fallback moved the OWNER, and that role has no
+			// slot either, so there is still nothing to carry (#732).
+			slotId: null,
 			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
 			marks: null,
@@ -1350,6 +1362,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 			roleLabel: "Toastmaster of the Day",
 			holder: "Faisal",
 			roleKey: "toastmaster_of_the_day",
+			slotId: "tm",
 			detail: "Calls for the Timer to report",
 			minutes: 3,
 			marks: null,
@@ -1366,6 +1379,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 			roleLabel: "General Evaluator",
 			holder: "Riyaz",
 			roleKey: "general_evaluator",
+			slotId: "ge",
 			detail: "Overall meeting evaluation · returns control to the Toastmaster",
 			minutes: 2,
 			marks: null,
@@ -1377,6 +1391,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 				roleLabel: "Toastmaster of the Day",
 				holder: "Faisal",
 				roleKey: "toastmaster_of_the_day",
+				slotId: "tm",
 				detail: "Overall meeting evaluation",
 				minutes: 2,
 				marks: null,
@@ -2069,6 +2084,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			roleLabel: "Toastmaster of the Day",
 			holder: "Dana",
 			roleKey: "toastmaster_of_the_day",
+			slotId: "s",
 			detail:
 				"Introduces the Timer & Grammarian; each explains their role · the Grammarian gives the Word of the Day",
 			minutes: 3,
@@ -2164,6 +2180,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			// shape change deserves.
 			detail: "Introduces the speakers",
 			introduces: ["Sam"],
+			slotId: "s",
 			minutes: 0,
 			marks: null,
 			handoff: true,
@@ -2782,6 +2799,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 				roleLabel: "Table Topics Master",
 				holder: "Rasheed",
 				roleKey: "table_topics_master",
+				slotId: "s",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
 				marks: null,
@@ -2804,6 +2822,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 				roleLabel: "Toastmaster of the Day",
 				holder: "Faisal",
 				roleKey: "toastmaster_of_the_day",
+				slotId: "s",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
 				marks: null,
@@ -2864,6 +2883,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 				roleLabel: "Toastmaster of the Day",
 				holder: "Faisal",
 				roleKey: "toastmaster_of_the_day",
+				slotId: "s",
 				detail: "Hands off directly to the General Evaluator",
 				minutes: 0,
 				marks: null,
@@ -2929,6 +2949,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 				roleLabel: "Table Topics Master",
 				holder: "Rasheed",
 				roleKey: "table_topics_master",
+				slotId: "s",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
 				marks: null,
@@ -3067,6 +3088,7 @@ describe("renderUnowned (#363)", () => {
 			{
 				who: "Toastmaster of the Day",
 				roleKey: "toastmaster_of_the_day",
+				slotId: null,
 				detail: "Opens voting for Best Speaker",
 				minutes: 1,
 				marks: null,
@@ -3186,6 +3208,7 @@ describe("BeatFallback — fb.detail resolves through resolveDetail (#363)", () 
 				roleLabel: "Toastmaster of the Day",
 				holder: "Faisal",
 				roleKey: "toastmaster_of_the_day",
+				slotId: "s",
 				detail: "Introduces the Timer",
 				minutes: 1,
 				marks: null,
@@ -3220,6 +3243,8 @@ describe("BeatFallback — fb.detail resolves through resolveDetail (#363)", () 
 		expect(expandRunSheet(slots, [beat])).toEqual([
 			{
 				who: "Timer",
+				// An event beat binds to no slot, whatever its `who` says (#732).
+				slotId: null,
 				detail: "Introduces the Grammarian",
 				minutes: 1,
 				marks: null,
@@ -3771,5 +3796,322 @@ describe("resolveDetailTokens", () => {
 		expect(resolveDetailTokens("Ask the {role:timer}", slots, () => [])).toBe(
 			"Ask the Timer",
 		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #732 — `AgendaRow.slotId`.
+//
+// `roleKey` says which ROLE a row belongs to; `slotId` says whose TURN it is,
+// which is the question a per-row measurement has to answer and the one `who`
+// is documented as unable to answer. Nothing reads the field yet (#729's
+// stopwatch and #730's timing record do), so this block is the ONLY thing
+// standing between the threading and a silent regression: a wrong id here
+// would attribute a stored measurement to the wrong member, and no other gate
+// in the repo can see it.
+//
+// Seven emission arms, covered one for one against the table in #732. The
+// three that emit exactly one row per slot carry the id; every other arm is
+// null ON PURPOSE, and a test that let one of them start returning an id would
+// be asserting that a guess is acceptable.
+// ---------------------------------------------------------------------------
+
+const TEMPLATE_ROLES: TemplateRoleRow[] = [
+	{ key: "contestant", name: "Contestant", isSpeakerRole: true },
+	{ key: "ballot_counter", name: "Ballot Counter", isSpeakerRole: false },
+];
+
+function templateBeat(
+	over: Partial<TemplateBeatRow> & { sortOrder: number },
+): TemplateBeatRow {
+	return {
+		id: `b${over.sortOrder}`,
+		kind: "event",
+		label: "Beat",
+		detail: null,
+		minutes: 1,
+		roleKey: null,
+		repeatsRoleKey: null,
+		flex: false,
+		handoff: false,
+		markGreen: null,
+		markYellow: null,
+		markRed: null,
+		...over,
+	};
+}
+
+const contestant = (index: number, name: string): AgendaSlot =>
+	slot({
+		id: `contestant-${index}`,
+		roleKey: "contestant",
+		roleName: "Contestant",
+		category: "speaker",
+		isSpeakerRole: true,
+		slotIndex: index,
+		assigneeName: name,
+	});
+
+const ballotCounter = (index: number, name: string): AgendaSlot =>
+	slot({
+		id: `ballot-${index}`,
+		roleKey: "ballot_counter",
+		roleName: "Ballot Counter",
+		category: "functionary",
+		slotIndex: index,
+		assigneeName: name,
+	});
+
+describe("AgendaRow.slotId — the three arms that hold exactly one slot (#732)", () => {
+	it("speaker: each row carries its OWN speaker's slot", () => {
+		const speakers = [
+			slot({
+				id: "sp1",
+				roleKey: "speaker",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 0,
+				assigneeName: "Jagpal",
+			}),
+			slot({
+				id: "sp2",
+				roleKey: "speaker",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 1,
+				assigneeName: "Sam",
+			}),
+		];
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "speaker",
+			roleName: "Speaker",
+			role: "speaker",
+			detail: "Prepared speech",
+			minutes: 7,
+		};
+		// Paired with `who` rather than asserted alone: an id that is merely
+		// PRESENT proves nothing, and the failure this guards against is the two
+		// being crossed.
+		expect(
+			expandRunSheet(speakers, [beat]).map((r) => [r.who, r.slotId]),
+		).toEqual([
+			["Speaker 1 · Jagpal", "sp1"],
+			["Speaker 2 · Sam", "sp2"],
+		]);
+	});
+
+	it("evaluator: the EVALUATOR's own slot, not the speech it evaluates, and it survives the reordering", () => {
+		const sp1 = slot({
+			id: "sp1",
+			roleKey: "speaker",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			slotIndex: 0,
+			assigneeName: "Jagpal",
+		});
+		const sp2 = slot({
+			id: "sp2",
+			roleKey: "speaker",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			slotIndex: 1,
+			assigneeName: "Sam",
+		});
+		// Stored in the REVERSE of speaking order, so `orderEvaluators` has to
+		// move both — which is the case that separates "carries its own slot"
+		// from "carries whatever slot sits at its position".
+		const evaluatesSecond = slot({
+			id: "ev-second",
+			roleKey: "evaluator",
+			roleName: "Evaluator",
+			category: "evaluator",
+			slotIndex: 0,
+			assigneeName: "Priya",
+			evaluatesSlotId: "sp2",
+		});
+		const evaluatesFirst = slot({
+			id: "ev-first",
+			roleKey: "evaluator",
+			roleName: "Evaluator",
+			category: "evaluator",
+			slotIndex: 1,
+			assigneeName: "Riyaz",
+			evaluatesSlotId: "sp1",
+		});
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "evaluator",
+			roleName: "Evaluator",
+			role: "evaluator",
+			detail: "Evaluates a speaker",
+			minutes: 3,
+		};
+		const rows = expandRunSheet(
+			[sp1, sp2, evaluatesSecond, evaluatesFirst],
+			[beat],
+		);
+		expect(rows.map((r) => [r.holder, r.slotId])).toEqual([
+			["Riyaz", "ev-first"],
+			["Priya", "ev-second"],
+		]);
+		// The slot the row is ABOUT is the evaluator's, never `evaluatesSlotId`.
+		// Storing the speech's id here would file the evaluator's own time
+		// against the speaker (#730).
+		expect(rows.map((r) => r.slotId)).not.toContain("sp1");
+	});
+
+	it("plain: one row per matching slot, each carrying that slot", () => {
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "ballot_counter",
+			roleName: "Ballot Counter",
+			role: "plain",
+			detail: "Counts the ballots",
+			minutes: 2,
+		};
+		expect(
+			expandRunSheet(
+				[ballotCounter(0, "Ayesha"), ballotCounter(1, "Bilal")],
+				[beat],
+			).map((r) => r.slotId),
+		).toEqual(["ballot-0", "ballot-1"]);
+	});
+
+	it("templated role beat bound to one slot: every iteration of a repeat block", () => {
+		// `repeatsRoleKey` binds exactly one slot per iteration, so a contest's
+		// speech rows are recordable even though they come from the template path
+		// rather than from `expandRunSheet`'s standard flow.
+		const rows = buildTemplateRows(
+			[
+				templateBeat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Contestant",
+					minutes: 7,
+					roleKey: "contestant",
+					repeatsRoleKey: "contestant",
+				}),
+			],
+			TEMPLATE_ROLES,
+			[contestant(0, "Ayesha"), contestant(1, "Bilal")],
+		);
+		expect(rows.map((r) => [r.holder, r.slotId])).toEqual([
+			["Ayesha", "contestant-0"],
+			["Bilal", "contestant-1"],
+		]);
+	});
+});
+
+describe("AgendaRow.slotId is null wherever no single slot owns the row (#732)", () => {
+	it("expandRunSheet event beat: an officer position binds to no slot at all", () => {
+		const beat: Beat = {
+			kind: "event",
+			who: "Sergeant-at-Arms",
+			detail: "Call to Order · phones silent",
+			minutes: 1,
+		};
+		expect(expandRunSheet([], [beat])[0]?.slotId).toBeNull();
+	});
+
+	it("expandRunSheet renderUnowned: nothing matched, so there is no slot to name", () => {
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "timer",
+			roleName: "Timer",
+			role: "plain",
+			detail: "Explains the timing",
+			minutes: 1,
+			renderUnowned: true,
+		};
+		const [row] = expandRunSheet([], [beat]);
+		expect(row?.who).toBe("Timer");
+		expect(row?.slotId).toBeNull();
+	});
+
+	it("templated event beat: null even when an officer has MARKED it", () => {
+		// Reachable through the shipped editor, not only in theory:
+		// `resolveMarks` gates on neither `kind` nor `roleKey`, and
+		// `updateAgendaRow` validates neither, so an event beat can carry a full
+		// green/yellow/red today. #729 will clock such a row; #730 must still
+		// refuse to store a number against it, because there is nobody to store
+		// it against.
+		const [row] = buildTemplateRows(
+			[
+				templateBeat({
+					sortOrder: 0,
+					kind: "event",
+					label: "Contest briefing",
+					minutes: 5,
+					markGreen: 1,
+					markYellow: 2,
+					markRed: 3,
+				}),
+			],
+			TEMPLATE_ROLES,
+			[contestant(0, "Ayesha")],
+		);
+		expect(row?.marks).toEqual({ green: 1, yellow: 2, red: 3 });
+		expect(row?.slotId).toBeNull();
+	});
+
+	it("templated role beat with a null roleKey — the editor's 'Nobody'", () => {
+		const [row] = buildTemplateRows(
+			[
+				templateBeat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Interview",
+					minutes: 5,
+					roleKey: null,
+				}),
+			],
+			TEMPLATE_ROLES,
+			[contestant(0, "Ayesha")],
+		);
+		expect(row?.who).toBe("Interview");
+		expect(row?.slotId).toBeNull();
+	});
+
+	it("templated non-repeating role beat bound to TWO slots", () => {
+		// Two ballot counters perform one tally together, so the row names both
+		// and belongs to neither. Guessing either would attribute a measurement
+		// to the wrong member.
+		const [row] = buildTemplateRows(
+			[
+				templateBeat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Ballot count",
+					minutes: 2,
+					roleKey: "ballot_counter",
+				}),
+			],
+			TEMPLATE_ROLES,
+			[ballotCounter(0, "Ayesha"), ballotCounter(1, "Bilal")],
+		);
+		expect(row?.holders).toEqual(["Ayesha", "Bilal"]);
+		expect(row?.slotId).toBeNull();
+	});
+
+	it("templated section band: a header is nobody's turn", () => {
+		const [row] = buildTemplateRows(
+			[
+				templateBeat({
+					sortOrder: 0,
+					kind: "section",
+					label: "PREPARED SPEECH CONTEST",
+					minutes: 0,
+				}),
+			],
+			TEMPLATE_ROLES,
+			[contestant(0, "Ayesha")],
+		);
+		expect(row?.section).toBe(true);
+		expect(row?.slotId).toBeNull();
 	});
 });

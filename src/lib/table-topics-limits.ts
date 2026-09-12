@@ -219,8 +219,42 @@ export function formatTableTopicsTiming(
 	if (!hasTableTopicsLimits(limits)) return TABLE_TOPICS_DEFAULT_TIMING;
 	const min = formatSeconds(limits.minSeconds);
 	const max = formatSeconds(limits.maxSeconds);
-	const dq = formatSeconds(limits.maxSeconds + 1);
+	const dq = formatSeconds(tableTopicsDqSeconds(limits));
 	return `${min} minimum · ${max} maximum · ${dq}+ disqualified`;
+}
+
+/**
+ * The first DISQUALIFYING second — the number behind the "2:31+" that
+ * `formatTableTopicsTiming` above prints (#732).
+ *
+ * One second past the cap, derived rather than stored, for the reason
+ * `formatTableTopicsTiming` states: the DQ point and the cap an admin edits are
+ * the same fact, and storing both is how two walls come to contradict each
+ * other. This export exists so that a caller needing the NUMBER — a clock
+ * deciding whether a Table Topics speech disqualified — reads the same
+ * expression the printed sentence does, instead of re-deriving `maxSeconds + 1`
+ * beside it. That re-derivation is the failure `agenda-template-slides.ts`
+ * records, where two surfaces stated two disqualification rules for one club.
+ *
+ * Reads the CAP alone, so a caller that has already narrowed through
+ * `hasTableTopicsLimits` can pass its whole object straight in. It therefore
+ * says nothing about whether the club HAS stated a window — ask
+ * `hasTableTopicsLimits` first, as `formatTableTopicsTiming` does.
+ *
+ * An OBJECT rather than the bare `maxSeconds: number` that `tableTopicsClockText`
+ * takes a few lines down, and the difference is deliberate. That one reads a
+ * field the caller has already chosen; this one is the arithmetic that makes
+ * the choice matter, and a bare number parameter would accept
+ * `tableTopicsDqSeconds(limits.minSeconds)` silently — a disqualification
+ * point one second past the FLOOR, printed with no type error and no test
+ * failing unless someone happened to pin that club's sentence.
+ */
+export function tableTopicsDqSeconds({
+	maxSeconds,
+}: {
+	maxSeconds: number;
+}): number {
+	return maxSeconds + 1;
 }
 
 /**
