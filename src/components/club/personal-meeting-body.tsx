@@ -55,6 +55,9 @@ import {
 	CheckCircle2,
 	Circle,
 	Loader2,
+	// Aliased: `Timer` is the ROLE throughout this file's prose and props, and an
+	// unaliased icon of that name reads as the role at every call site.
+	Timer as TimerIcon,
 	XCircle,
 } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
@@ -71,6 +74,7 @@ import {
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { listRoles } from "#/lib/list-roles";
 import { isMeetingLocked, isMeetingOver } from "#/lib/meeting-lifecycle";
+import { findTimerSlot } from "#/lib/meeting-roles";
 import { parseMeetingKey } from "#/lib/meeting-url";
 import {
 	type DutyTarget,
@@ -205,6 +209,18 @@ export function PersonalMeetingBody({
 	const answerNo = useCallback(() => setConfirmRelease(true), []);
 
 	const target: DutyTarget = { clubId, meetingId };
+
+	// WHICH of this member's roles is the Timer (#729), resolved through the
+	// shipped resolver rather than by an inline key comparison here. (Spelling
+	// that comparison out even in prose would fail the raw source guard beside
+	// this rule, which is the point: there is one way to ask.)
+	// `findTimerSlot` reads the KEY first and falls back to the exact canonical
+	// name only for a slot whose key is NULL — the order is the load-bearing
+	// half, and getting it backwards hands the Timer's surface to a
+	// club-invented look-alike whenever the real Timer has been renamed (#464).
+	// `view.roles` is only the roles THIS member holds, so a hit means "you are
+	// the Timer", which is exactly the question the link asks.
+	const timerSlotId = findTimerSlot(view.roles)?.slotId ?? null;
 
 	return (
 		<>
@@ -354,6 +370,36 @@ export function PersonalMeetingBody({
 										</li>
 									)}
 								</ul>
+								{/* The Timer's stopwatch (#729).
+								    NOT a violation of the "never hardcode a duty target here"
+								    rule three dozen lines up: that rule is about `duty.href`,
+								    and this is not a duty. `RoleDuty` requires a truthful
+								    `done`, and #729 stores nothing to derive one from — an
+								    always-false `done` would put a permanently-unticked box on
+								    this checklist, which is exactly what `role-duties.ts`
+								    forbids. #730 records the times and moves this link into
+								    the registry as the `timing` duty, at which point the
+								    literal below goes away. It is the ROUTER's own typed
+								    path, not a string: a rename of the route file then fails
+								    `typecheck` here rather than 404ing under the Timer's
+								    thumb, which a `to={string}` form cannot do.
+
+								    Gated on `writesClosed` so a link that outlived its meeting
+								    in a chat thread does not sprout a stopwatch for a meeting
+								    that happened last month. */}
+								{role.slotId === timerSlotId && !writesClosed ? (
+									<Link
+										to="/club/$clubId/meeting/$meetingId/me/timer"
+										params={{ clubId, meetingId }}
+										className={DUTY_ROW}
+									>
+										<TimerIcon
+											aria-hidden
+											className="size-4 shrink-0 text-primary"
+										/>
+										<span>Open the stopwatch</span>
+									</Link>
+								) : null}
 							</div>
 						);
 					})}

@@ -4,11 +4,13 @@
  * ## Why a source guard and not a render test
  *
  * The editor BODIES live in `components/club/personal-meeting-editors.tsx` and
- * are render-tested there. What stays here is what vitest cannot reach: the two
- * route modules, which import `#/server/meetings` → `#/db` and throw
- * `DATABASE_URL is not set` on import. Everything asserted below is an
- * EXPRESSION on one of those routes — CODING_STANDARDS' "a component tested
- * through its props cannot see a WRONG prop", where the props are computed.
+ * are render-tested there; the Timer's stopwatch body (#729) lives in
+ * `components/club/meeting-timer.tsx` and is render-tested there. What stays
+ * here is what vitest cannot reach: the three route modules, which import
+ * `#/server/meetings` → `#/db` and throw `DATABASE_URL is not set` on import.
+ * Everything asserted below is an EXPRESSION on one of those routes —
+ * CODING_STANDARDS' "a component tested through its props cannot see a WRONG
+ * prop", where the props are computed.
  *
  * ## The one assertion that could not be written any other way
  *
@@ -48,11 +50,14 @@ import { readSource } from "#/test/guard-source";
 const ROOT = resolve(fileURLToPath(import.meta.url), "../../..");
 const THEME_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.me_.theme.tsx";
 const WORD_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.me_.word.tsx";
+const TIMER_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.me_.timer.tsx";
 const EDITORS = "src/components/club/personal-meeting-editors.tsx";
+const PERSONAL_BODY = "src/components/club/personal-meeting-body.tsx";
 
 /** Comment-blind — for "this pattern must BE present". */
 const theme = readSource(resolve(ROOT, THEME_ROUTE));
 const word = readSource(resolve(ROOT, WORD_ROUTE));
+const timer = readSource(resolve(ROOT, TIMER_ROUTE));
 const editors = readSource(resolve(ROOT, EDITORS));
 /** Verbatim — for "this offender must be ABSENT". Never `readSource`. */
 const rawEditors = readFileSync(resolve(ROOT, EDITORS), "utf8");
@@ -102,6 +107,22 @@ describe("every duty href is a route that exists", () => {
 		expect(fullPaths.has(ROLE_CONFIRM_PROMPT.href(TARGET))).toBe(true);
 	});
 
+	it("the Timer's stopwatch is a real route (#729)", () => {
+		// Asserted DIRECTLY, not through the registry sweep above, and that is
+		// the point rather than belt-and-braces. #729 deliberately ships no
+		// `DutyId` — `RoleDuty` requires a truthful `done` and nothing was stored
+		// to derive one from until #730 — so the sweep, which only walks
+		// registered duties, could not see this route at all. It is reached from
+		// one hardcoded `<Link>` on the personal meeting page, and a rename of the
+		// route file would leave every other gate in this repo green while the
+		// club's Timer taps it and lands on a 404.
+		expect(
+			fullPaths.has(
+				`/club/${TARGET.clubId}/meeting/${TARGET.meetingId}/me/timer`,
+			),
+		).toBe(true);
+	});
+
 	// A matching URL is NOT proof the page renders, and this is the case that
 	// makes the distinction real rather than theoretical. Verified by mutation:
 	// renaming the theme route to `…$meetingId_.me.theme.tsx` — the obvious
@@ -112,7 +133,7 @@ describe("every duty href is a route that exists", () => {
 	// visitor is shown the personal page again with no error anywhere. Every
 	// assertion above stays green. The `me_` segment is what prevents it.
 	it("the editors hang off the club shell, not off the outlet-less personal page", () => {
-		for (const leaf of ["theme", "word"]) {
+		for (const leaf of ["theme", "word", "timer"]) {
 			expect(
 				tree,
 				`${leaf} editor must be a child of the /club/$clubId shell`,
@@ -173,6 +194,86 @@ describe("the routes hand the editors RAW loader fields", () => {
 			expect(src).toContain("useEffectiveMember(clubId, session)");
 		});
 	}
+});
+
+describe("the personal page's link INTO the stopwatch (#729)", () => {
+	// The one entrance to `/me/timer`. It is not a `duty.href`, so the registry
+	// sweep at the top of this file cannot reach it, and the personal page's own
+	// render tests cannot see the EXPRESSION that decides who is offered it —
+	// CODING_STANDARDS' "a component tested through its props cannot see a WRONG
+	// prop", where the prop is computed. Both halves below have a live failure
+	// behind them, so both are asserted here.
+	const body = readSource(resolve(ROOT, PERSONAL_BODY));
+	const rawBody = readFileSync(resolve(ROOT, PERSONAL_BODY), "utf8");
+
+	it("resolves the Timer through findTimerSlot, not a roleKey comparison", () => {
+		// KEY FIRST, then the exact canonical name. `findTimerSlot` is the shipped
+		// resolver and its whole point is that ORDER: a name-first check hands the
+		// Timer's surface to a club-invented "Timer Assistant" whenever the real
+		// Timer has been renamed, and nothing fails (#464/#732).
+		expect(body).toContain("findTimerSlot(view.roles)");
+	});
+
+	it("never re-derives the Timer by comparing the key inline", () => {
+		// RAW negative: `role.roleKey === "timer"` type-checks, reads fine, and
+		// silently denies the link to a standard Timer slot whose key is NULL.
+		expect(rawBody).not.toMatch(/roleKey\s*===\s*["']timer["']/);
+	});
+
+	it("offers the link only on the slot the Timer actually holds", () => {
+		// Per-SLOT, never per-member: `view.roles` can carry several roles, and a
+		// member-wide flag would hang a stopwatch off their Evaluator card too.
+		expect(body).toContain("role.slotId === timerSlotId");
+	});
+
+	it("closes the link when the meeting's write window has", () => {
+		// A month-old link still sits in the chat scrollback. Without this a
+		// meeting that already happened sprouts a stopwatch.
+		expect(body).toMatch(/role\.slotId === timerSlotId && !writesClosed/);
+	});
+
+	it("uses the router's own typed path", () => {
+		// A `to={string}` form 404s at the Timer's thumb when the route file is
+		// renamed; the typed path fails `typecheck` instead.
+		expect(body).toContain('to="/club/$clubId/meeting/$meetingId/me/timer"');
+	});
+});
+
+describe("the Timer's stopwatch route (#729)", () => {
+	it("keys the identity on the RAW clubId param", () => {
+		// Same rule as the two editors, and the same failure: the identity gate
+		// stores under the raw `$clubId` segment, so reading it with `clubUuid`
+		// resolves an identity nothing ever wrote and the Timer is asked to pick
+		// their name again on a page they were sent to by name.
+		expect(timer).toContain("useEffectiveMember(clubId, session)");
+	});
+
+	it("derives the run sheet through resolveAgendaRows, never its own marks", () => {
+		// The clock's green/yellow/red must be the PRINTED agenda's, character for
+		// character. `resolveAgendaRows` is the one seam all three run-sheet
+		// surfaces go through; a route that re-derived marks from `slots` would
+		// put the Timer's phone and the Timer's paper card in disagreement, which
+		// is the whole failure #443 closed for the deck.
+		expect(timer).toContain("resolveAgendaRows({");
+		expect(timer).toMatch(
+			/resolveAgendaRows\(\{[\s\S]{0,400}tableTopicsLimits: \{/,
+		);
+	});
+
+	it("takes the back link from the duty registry, not a second literal", () => {
+		// `personalMeetingHref` owns the path back out — the registry hands out the
+		// links IN, so a second spelling here is the drift `TMOD_ROLE_KEY`'s
+		// docblock describes.
+		expect(timer).toContain("personalMeetingHref({ clubId, meetingId })");
+	});
+
+	it("writes nothing — #729 is an ephemeral stopwatch", () => {
+		// RAW negative. #730 adds the record through its own server fn; until then
+		// a write reaching this route would be a store nobody reviewed.
+		const raw = readFileSync(resolve(ROOT, TIMER_ROUTE), "utf8");
+		expect(raw).not.toMatch(/#\/server\/timings/);
+		expect(raw).not.toMatch(/recordTiming\(/);
+	});
 });
 
 describe("saving hands back to the personal page", () => {
