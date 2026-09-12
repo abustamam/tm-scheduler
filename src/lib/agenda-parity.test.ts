@@ -962,11 +962,32 @@ describe("run-sheet ⇄ deck duration parity (#356)", () => {
  * `renderUnowned`, so an unowned hand-off is dropped rather than printed as a
  * bare role, and the slide's `from` therefore has a counterpart for every row.
  */
+/**
+ * The rows produced by the HAND-OFF BEATS, in template order.
+ *
+ * Selected from the beats rather than by filtering `r.handoff` off a whole
+ * expansion, which is what this did until #719. Row-level `handoff` was a
+ * faithful stand-in for "came from a hand-off beat" while every such row did —
+ * and #719 broke that: the speaker beat now emits a 0-minute Toastmaster row
+ * before each speech (introducing that speech's evaluator), which is a hand-off
+ * in the PRINT sense the flag actually controls, a compact band rather than a
+ * full block. It is not a beat, so the deck emits no slide for it and must not:
+ * one slide per speech introducing the evaluator is precisely what #719 rules
+ * out.
+ *
+ * Reading the beats keeps this comparing what it says it compares — the
+ * hand-off beats against the hand-off slides — and is the same per-beat
+ * expansion `printSections` above relies on, with the same equivalence pinned
+ * by the harness test.
+ */
 const handoffRows = (
 	slots: AgendaSlot[],
 	config: RunOfShowConfig,
 ): AgendaRow[] =>
-	expandRunSheet(slots, buildRunOfShow(config)).filter((r) => r.handoff);
+	buildRunOfShow(config)
+		.filter((b) => b.handoff === true)
+		.flatMap((b) => expandRunSheet(slots, [b]))
+		.filter((r) => r.handoff);
 
 const handoffSlides = (slots: AgendaSlot[], config: RunOfShowConfig) =>
 	buildSlideDeck({
@@ -1468,7 +1489,13 @@ describe("speech-slot time agreement — deck ⇄ run sheet (#394)", () => {
 			];
 			for (const config of CONFIGS) {
 				const beat = buildRunOfShow(config)[speechBeatIndex(config)];
-				const rows = expandRunSheet(slots, [beat]);
+				// The SPEECH rows only. Since #719 the speaker beat also emits a
+				// Toastmaster row before each speech (its `preamble`, introducing that
+				// speech's evaluator), which has no slot window and no deck slide —
+				// the comparison here is slot-to-slide and those rows are neither.
+				const rows = expandRunSheet(slots, [beat]).filter(
+					(r) => r.roleKey === "speaker",
+				);
 				const slides = buildSlideDeck({
 					meeting,
 					club,

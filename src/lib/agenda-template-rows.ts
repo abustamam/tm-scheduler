@@ -26,8 +26,10 @@ import {
 	type AgendaSlot,
 	assigneeDisplay,
 	evaluatedSpeakerLabel,
+	introducedSuffix,
 	numbered,
 	OPEN_LABEL,
+	pairedEvaluatorNames,
 	resolveDetailTokens,
 	type TimingMarks,
 } from "./agenda-runsheet";
@@ -330,6 +332,15 @@ function toRow(
 	 *  Toastmaster row — so resolving against `bound` alone silently produces
 	 *  "Introduces the " for every cross-role cue on the sheet. */
 	allSlots: AgendaSlot[],
+	/**
+	 * The SPEAKER slot this row's repeat block is on, when it is on one (#719).
+	 *
+	 * Distinct from `bound`, which is the slots this row NAMES. The speech
+	 * preamble is the Toastmaster's row sitting inside the speaker's block, so
+	 * it names the Toastmaster and is ABOUT a speech that is not its own — the
+	 * one thing `{evaluator:paired}` needs and `bound` cannot supply.
+	 */
+	blockSlot: AgendaSlot | null = null,
 ): AgendaRow | null {
 	const label = capChars(row.label, MAX_TEMPLATE_LABEL_CHARS);
 	// Cap BEFORE resolving: the cap bounds what an officer TYPED, and resolution
@@ -342,6 +353,14 @@ function toRow(
 		// is no Beat-side list to fall back to. An officer who types a bare
 		// `{roles}` by hand gets nothing, which is honest.
 		() => [],
+		// The evaluator paired to this iteration's speech (#719), so an adopted
+		// template names the same person the code-derived sheet does — which is
+		// 622a's promise and what `agenda-adoption-parity.test.ts` holds. Outside
+		// a repeat block there is no speech to pair with and the token correctly
+		// resolves to nothing.
+		blockSlot
+			? () => introducedSuffix(pairedEvaluatorNames(blockSlot.id, allSlots))
+			: undefined,
 	);
 	const base = {
 		detail,
@@ -584,14 +603,42 @@ export function buildTemplateRowsWithSource(
 			for (const blockRow of block) {
 				// Bind the ROLE-owning row to this iteration's slot; the others in
 				// the block (a minute of silence) own no slot and repeat as-is.
-				const bound = blockRow.roleKey === repeatKey ? [s] : [];
+				//
+				// The ONE exception is a HAND-OFF row inside a block it does not own
+				// (#719's speech preamble, repeating alongside the speech it
+				// introduces). A hand-off row says "X introduces Y": X has to be a
+				// person, and X is never "the 2nd of anything" — so it binds to its
+				// own role's holders and keeps its label unnumbered, where the
+				// default would print "Toastmaster of the Day 1" holding nobody. The
+				// exception is scoped to `handoff` rather than to every non-owning
+				// role row so that no other template row's rendering moves: a plain
+				// role beat an officer parks inside a repeat block is unchanged.
+				const owns = blockRow.roleKey === repeatKey;
+				const introducerKey =
+					!owns && blockRow.handoff && blockRow.kind === "role"
+						? blockRow.roleKey
+						: null;
+				const bound = owns
+					? [s]
+					: introducerKey != null
+						? slotsForRole(slots, introducerKey).slice(0, MAX_ROLE_REPEAT_SLOTS)
+						: [];
 				const emitted = toRow(
 					blockRow,
 					rolesByKey,
 					bound,
-					n,
-					repeated.length,
+					// Only the hand-off exception moves; every other block row keeps
+					// the iteration's index and count exactly as before. 0/0 is what
+					// the non-repeating role path passes, and it leaves the label
+					// unnumbered.
+					introducerKey != null ? 0 : n,
+					introducerKey != null ? 0 : repeated.length,
 					slots,
+					// The iteration's slot, passed to EVERY row in the block rather
+					// than only the owning one: a block row that does not own the slot
+					// is still about it (#719's speech preamble), and that is the only
+					// thing distinguishing it from an unrelated row on the sheet.
+					s,
 				);
 				if (emitted) {
 					out.push({

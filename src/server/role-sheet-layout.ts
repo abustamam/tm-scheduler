@@ -45,12 +45,14 @@ import {
 	formatTableTopicsWindow,
 	hasTableTopicsLimits,
 	resolveTableTopicsMarks,
+	TABLE_TOPICS_ROLE_KEY,
 	type TableTopicsLimits,
 } from "../lib/table-topics-limits";
 import {
 	formatTimingClock,
-	graceSentence,
+	graceRuleSentence,
 	qualifyingWindow,
+	segmentFor,
 } from "../lib/timing-window";
 import { WOD_LIMITS } from "../lib/wod-limits";
 
@@ -495,15 +497,33 @@ function sheet(
  *  lookup and the row it replaces cannot drift apart on a wording change. */
 const TABLE_TOPICS_ASSIGNMENT = "Table Topics";
 
+/**
+ * The four rows, each with the `role_definitions.key` its timing rule belongs
+ * to (#720).
+ *
+ * The KEY, not the printed label, is what decides the segment — `segmentFor` is
+ * the one place that match happens, shared with the templated deck and the
+ * printed agenda's grace line. Matching on `assignment === "Table Topics"` here
+ * instead would have been a third statement of one rule, keyed on a display
+ * string, which is the shape #720 exists to remove. `null` for the three rows
+ * that are not a club-configurable segment: they are speeches as far as the
+ * grace is concerned, which is exactly `segmentFor`'s default.
+ */
 const STANDARD_TIMING_WINDOWS: {
 	assignment: string;
+	roleKey: string | null;
 	min: number;
 	max: number;
 }[] = [
-	{ assignment: "Ice Breaker", min: 4, max: 6 },
-	{ assignment: "Prepared speech", min: 5, max: 7 },
-	{ assignment: "Evaluation", min: 2, max: 3 },
-	{ assignment: TABLE_TOPICS_ASSIGNMENT, min: 1, max: 2 },
+	{ assignment: "Ice Breaker", roleKey: null, min: 4, max: 6 },
+	{ assignment: "Prepared speech", roleKey: null, min: 5, max: 7 },
+	{ assignment: "Evaluation", roleKey: null, min: 2, max: 3 },
+	{
+		assignment: TABLE_TOPICS_ASSIGNMENT,
+		roleKey: TABLE_TOPICS_ROLE_KEY,
+		min: 1,
+		max: 2,
+	},
 ];
 
 /**
@@ -518,10 +538,18 @@ const STANDARD_TIMING_WINDOWS: {
  * an omission: a club that states its own cap has stated a HARD one ("2:30
  * maximum · 2:31+ disqualified" is what the deck projects and what MCF prints),
  * so a sheet saying the answer still qualifies at 3:00 would contradict the
- * agenda in the Timer's other hand. A club that has stated nothing keeps the
- * graced standard row unchanged — including in the committed blanks — because
- * whether the standard Table Topics window should be graced at all is a
- * separate product question (#679) and not one #443 gets to decide silently.
+ * agenda in the Timer's other hand.
+ *
+ * The row for a club that has stated NOTHING used to keep the fully graced
+ * standard window, `0:30–2:30`, on the ground that whether the standard Table
+ * Topics window should be graced at all was a separate product question (#679).
+ * #720 answered it: a response must reach the minimum to be eligible, so this
+ * row is now derived with `"tableTopics"` and reads `1:00–2:30`. The committed
+ * blanks change with it — the old cell told every club's Timer that a
+ * 31-second answer was in the running for Best Table Topics.
+ *
+ * The three OTHER rows are byte-identical to before: the lower grace is dropped
+ * for this one assignment and nothing else.
  */
 export function standardTimingRows(
 	tableTopicsLimits?: TableTopicsLimits | null,
@@ -529,7 +557,7 @@ export function standardTimingRows(
 	const own = hasTableTopicsLimits(tableTopicsLimits)
 		? resolveTableTopicsMarks(tableTopicsLimits)
 		: null;
-	return STANDARD_TIMING_WINDOWS.map(({ assignment, min, max }) => {
+	return STANDARD_TIMING_WINDOWS.map(({ assignment, roleKey, min, max }) => {
 		if (own && assignment === TABLE_TOPICS_ASSIGNMENT) {
 			return [
 				assignment,
@@ -544,7 +572,7 @@ export function standardTimingRows(
 			formatTimingClock(min),
 			formatTimingClock((min + max) / 2),
 			formatTimingClock(max),
-			qualifyingWindow(min, max)?.range ?? "",
+			qualifyingWindow(min, max, segmentFor(roleKey))?.range ?? "",
 		];
 	});
 }
@@ -581,7 +609,19 @@ function timer(fill?: RoleSheetFill): ReactNode {
 			h(
 				Text,
 				{ key: "c-grace", style: [s.note, { marginTop: 6 }] },
-				`${graceSentence(null)} Outside that window the speech is disqualified from the vote — call it out in your report.`,
+				// BOTH rules, because the table above holds both kinds of row and the
+				// Timer reads this out loud (#720). One sentence about speeches sat
+				// directly under a Table Topics cell that no longer obeys it.
+				//
+				// The closing clause names BOTH parties and says "its own window"
+				// rather than "it". With two rules stated in front of it, "Outside
+				// it" had two antecedents, and "a speaker" is not what a Table Topics
+				// respondent is called — a wrong word in a line read aloud in a
+				// meeting, which is the half of #720's AC 5 the printed cell cannot
+				// carry.
+				`${graceRuleSentence("speech")} ${graceRuleSentence(
+					"tableTopics",
+				)} Outside its own window, a speaker or respondent is out of the vote — say so in your report.`,
 			),
 			h(Text, { key: "d", style: s.sectionTitle }, "Timing log"),
 			h(
