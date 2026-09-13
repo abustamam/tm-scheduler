@@ -1881,16 +1881,17 @@ function SpaciousLayout({
 						<RunNarrative rows={rows} scale="lg" nameTheGroup />
 					</div>
 
-					<div style={{ display: "flex", gap: 20, marginTop: 22 }}>
+					{/* #721 retired the paper "Tonight's Votes" box that used to sit
+					    beside this at a fixed 238px — the club votes on phones through
+					    the footer QR now. A block rather than the old single-child flex
+					    row, so the announcements list and the ruled notes lines take the
+					    freed width instead of leaving a gap where the panel was. */}
+					<div style={{ marginTop: 22 }}>
 						{announcementLines(header.announcements).length > 0 ? (
-							<AnnouncementsBlock
-								text={header.announcements}
-								style={{ flex: 1 }}
-							/>
+							<AnnouncementsBlock text={header.announcements} />
 						) : (
 							<NotesBlock lines={3} />
 						)}
-						<VotesBlock />
 					</div>
 				</div>
 
@@ -2368,16 +2369,15 @@ function TimingLayout({
 						})}
 					</div>
 
-					<div style={{ display: "flex", gap: 16, marginTop: 18 }}>
+					{/* #721 — same as the spacious run of show above: the compact
+					    206px votes panel is gone and this block takes the full width
+					    rather than leaving a column of nothing beside it. */}
+					<div style={{ marginTop: 18 }}>
 						{announcementLines(header.announcements).length > 0 ? (
-							<AnnouncementsBlock
-								text={header.announcements}
-								style={{ flex: 1 }}
-							/>
+							<AnnouncementsBlock text={header.announcements} />
 						) : (
 							<NotesBlock lines={4} />
 						)}
-						<VotesBlock compact />
 					</div>
 				</div>
 
@@ -2507,50 +2507,10 @@ function AnnouncementsBlock({
 	);
 }
 
-function VotesBlock({ compact }: { compact?: boolean }) {
-	const rows = ["Best Speaker", "Best Table Topics", "Best Evaluator"];
-	return (
-		<div
-			style={{
-				flex: "none",
-				width: compact ? 206 : 238,
-				background: MINT,
-				border: "1px solid rgba(23,58,64,.1)",
-				borderRadius: compact ? 10 : 12,
-				padding: compact ? "12px 15px" : "14px 16px",
-			}}
-		>
-			<Kick style={{ fontSize: 9.5, marginBottom: 7 }}>Tonight's Votes</Kick>
-			<div
-				style={{
-					display: "flex",
-					flexDirection: "column",
-					gap: 6,
-					fontSize: 11,
-					color: INK,
-				}}
-			>
-				{rows.map((r, i) => (
-					<div
-						key={r}
-						style={{
-							display: "flex",
-							justifyContent: "space-between",
-							borderBottom:
-								i < rows.length - 1
-									? "1px dashed rgba(23,58,64,.2)"
-									: undefined,
-							paddingBottom: 4,
-						}}
-					>
-						<span style={{ color: MUTED, fontWeight: 600 }}>{r}</span>
-						<span>________</span>
-					</div>
-				))}
-			</div>
-		</div>
-	);
-}
+/* #721 removed `VotesBlock` from here: a mint panel of three award names over
+   `________` rules, 238px on `spacious` and 206px on `timing`. It was a paper
+   ballot from before #510; the club votes by scanning the footer QR now, so it
+   collected marks nobody counted. The QR is the replacement and stays. */
 
 /** Stacks two letter-size pages with a page break between them for print. */
 function TwoPage({ children }: { children: React.ReactNode }) {

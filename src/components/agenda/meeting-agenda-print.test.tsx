@@ -492,18 +492,21 @@ describe("MeetingAgendaPrint announcements", () => {
 	}
 
 	for (const layout of ["spacious", "timing"] as const) {
+		// Both cases carried a third assertion that the "Tonight's Votes" box was
+		// still there. It was a bystander — these two are about announcements
+		// replacing the ruled Meeting Notes lines, and the box merely shared the
+		// row. #721 retired the box; the assertion went with it rather than the
+		// cases.
 		it(`${layout}: announcements replace the ruled Meeting Notes lines when present`, () => {
 			renderWith(layout, withAnnouncements);
 			expect(screen.getByText("Bring a guest")).toBeTruthy();
 			expect(screen.queryByText("Meeting Notes")).toBeNull();
-			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
 		});
 
 		it(`${layout}: keeps the Meeting Notes lines when there are no announcements`, () => {
 			renderWith(layout, header);
 			expect(screen.getByText("Meeting Notes")).toBeTruthy();
 			expect(screen.queryByText("Bring a guest")).toBeNull();
-			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
 		});
 	}
 });
@@ -1778,22 +1781,62 @@ describe("timing layout splits nothing (#463)", () => {
 	});
 });
 
-// #460. The "Tonight's Votes" box is the printed agenda's copy of the award
-// names, and until this test nothing pinned its three strings at all — which is
-// how it kept the singular "Best Table Topic" long after the ballot, the
-// minutes, the minutes PDF and the club role sheet had moved to the plural.
+// #721 RETIRED the describe block that stood here: "the printed votes box names
+// the awards as every other surface does (#460)", which asserted the box
+// rendered "Best Speaker", "Best Table Topics" and "Best Evaluator" on both
+// `spacious` and `timing`. The coverage was not lost by accident — the surface
+// it covered is gone. The box was a paper ballot from before digital voting
+// (#510); the club now scans the footer QR, so three award names and three
+// `________` rules collected marks nobody counted.
 //
-// `award-wording.guard.test.ts` greps the source for the retired spelling; this
-// asserts the box actually RENDERS the name, on both layouts that carry it.
-// Neither half substitutes for the other: a grep cannot see a box that stopped
-// rendering, and a render cannot see the nine other surfaces.
-describe("the printed votes box names the awards as every other surface does (#460)", () => {
+// #460's other half still stands: `award-wording.guard.test.ts` sweeps every
+// source file for the retired singular "Best Table Topic", so the spelling
+// cannot come back through a new surface. What that file LOST is its per-site
+// entry for `meeting-agenda-print.tsx`, removed there with the same reason —
+// the positive half of a guard cannot assert a string that no longer has a
+// place to live.
+//
+// The negative assertions below are what replaces it. They are the only thing
+// standing between this issue and a well-meaning re-add.
+describe("the printed agenda carries no paper votes box (#721)", () => {
+	const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+
 	for (const layout of ["spacious", "timing"] as const) {
-		it(`names all three awards on the ${layout} layout`, () => {
+		it(`renders no "Tonight's Votes" box on the ${layout} layout`, () => {
 			renderLayout(layout);
-			expect(screen.getByText("Best Speaker")).toBeTruthy();
-			expect(screen.getByText("Best Table Topics")).toBeTruthy();
-			expect(screen.getByText("Best Evaluator")).toBeTruthy();
+			expect(screen.queryByText(/Tonight.s Votes/)).toBeNull();
+			// The two award names the box was the LAST place in this file to
+			// render. "Best Speaker" is deliberately not among them: it survives
+			// in the footer QR's caption, which is the point of the case below.
+			expect(screen.queryByText("Best Table Topics")).toBeNull();
+			expect(screen.queryByText("Best Evaluator")).toBeNull();
+			// The write-a-name-here rules themselves, so a box that kept its shape
+			// under a different heading still fails.
+			expect(screen.queryAllByText("________")).toHaveLength(0);
+		});
+
+		// AC 9. The QR is the REPLACEMENT for the box, so the deletion above is
+		// only safe while it renders. `MeetingAgendaPrint — the scan-to-vote QR
+		// (#510)` covers the QR on its own terms across all four layouts; this
+		// pins the pairing — no box, and a way to vote — in one assertion, which
+		// is the thing a future reader of the block above needs to see.
+		it(`keeps the scan-to-vote QR on the ${layout} layout`, () => {
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			expect(screen.queryByText(/Tonight.s Votes/)).toBeNull();
+			const qr = container.querySelector(".footer-qr");
+			expect(qr).not.toBeNull();
+			expect(qr?.querySelector("svg")).not.toBeNull();
+			expect(qr?.textContent).toContain("Best Speaker");
 		});
 	}
 });
