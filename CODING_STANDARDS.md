@@ -177,6 +177,16 @@ Ten coverage traps this repo has actually hit, all worth checking when a number 
   differences were deliberate. A new print route imports the constant. `print-page-reset.guard.test.ts`
   walks `src/routes/` recursively and fails on a route that defines its own `.pgwrap` padding, so the
   next print route is enrolled automatically rather than remembered.
+  Since #718 it is a **builder with a portrait default**: `printPageCss(orientation)` produces the
+  stylesheet and `PRINT_PAGE_CSS` is `printPageCss()`, byte-identical to what it always was. A route
+  that needs the other orientation calls the function — only the Word of the Day poster does, because
+  it is one short word sized against the measure and wants the sheet's long edge. Everything else
+  keeps importing the constant, and **the shared `@page` rule is never flipped** to suit one surface.
+  The guard test now mechanises that rather than trusting the prose: it asserts the default is still
+  `letter portrait`, that the landscape variant differs in the `@page` rule and **nowhere else**, that
+  both keep `margin: 0`, and **which route** asks for landscape. That last one has no downstream gate —
+  every sheet is a fixed box, so a surface whose sheet and page box disagree prints part of itself off
+  the paper with the printed page count still reading 1.
 - **The global text-link rule is LAYERED — a component's own colour utility wins.**
   `src/styles.css` styles bare `a` inside `@layer base`. Tailwind v4 declares
   `@layer theme, base, components, utilities`, and layer order beats specificity, so any

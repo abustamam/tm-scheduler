@@ -20,6 +20,17 @@
 // no longer checks that each route carries the rule, it checks that no route
 // hand-rolls its own page padding instead of using the shared constant.
 //
+// THIRD THING, #718: the stylesheet grew a parameter. `printPageCss(
+// orientation)` is the builder and `PRINT_PAGE_CSS` is its portrait default,
+// because the Word of the Day poster is one short word sized against the
+// measure and wants the sheet's long edge while every other surface is rows and
+// wants the other one. That is still ONE stylesheet — the assertions below pin
+// that the two forms differ in the `@page` rule and nowhere else, that the
+// default is unchanged, and WHICH route asks for the other orientation. The
+// last of those is the one with no downstream gate: a sheet is a fixed box, so
+// a surface whose sheet and page box disagree prints part of itself off the
+// paper with the page count still reading 1.
+//
 // And the outcome itself is now tested directly. `print-page-count.test.tsx`
 // renders each surface through headless Chrome and counts sheets; deleting the
 // reset from `PRINT_PAGE_CSS` fails it with `expected 2 to be 1`, which is the
@@ -31,7 +42,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PRINT_PAGE_CSS } from "#/components/agenda/print-theme";
+import { PRINT_PAGE_CSS, printPageCss } from "#/components/agenda/print-theme";
 import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
@@ -105,6 +116,67 @@ describe("the shared print stylesheet keeps a sheet to one page", () => {
 		);
 	});
 
+	// The default is the assertion here, not an incidental property of it. #718
+	// gave the Word of the Day poster its own orientation and the shared
+	// stylesheet a parameter to express that; the failure mode it opened is
+	// flipping the SHARED rule instead, which turns the agenda, the role sheet
+	// and the packet landscape with nothing else in the repo noticing — every
+	// sheet is a fixed 816x1056 box, so it still counts one page, it just prints
+	// two-thirds of itself into a 1056x816 page box. `PRINT_PAGE_CSS` is what
+	// those five surfaces serve, so this is the line that holds them.
+	it("defaults to portrait, which is what every other print surface serves", () => {
+		expect(
+			printPageCss(),
+			"printPageCss() must default to portrait — five of the six print " +
+				"surfaces take the default, and flipping it turns all of them.",
+		).toContain("size: letter portrait;");
+		expect(printPageCss()).not.toContain("landscape");
+		// The constant IS the default, not a second copy of it. If these ever
+		// diverge, a route importing PRINT_PAGE_CSS and a route calling
+		// printPageCss() are serving different stylesheets.
+		expect(PRINT_PAGE_CSS).toBe(printPageCss());
+		expect(PRINT_PAGE_CSS).toBe(printPageCss("portrait"));
+	});
+
+	it("emits a landscape page box on request, still full-bleed", () => {
+		const landscape = printBlock(printPageCss("landscape"));
+		expect(landscape).toMatch(
+			/@page\s*\{[^}]*size:\s*letter landscape;[^}]*margin:\s*0/,
+		);
+	});
+
+	// Orientation is the ONLY thing the parameter may vary. The reason this
+	// repo has one print stylesheet is that it had three and they drifted; a
+	// parameter that quietly grows a second difference is the same failure with
+	// a nicer signature. Comparing the two strings with the `@page` line removed
+	// says "identical except for the page box" in the one way that cannot be
+	// satisfied by a comment.
+	it("differs from the default in the @page rule and nowhere else", () => {
+		const withoutPageRule = (css: string) =>
+			css.replace(/@page\s*\{[^}]*\}/, "@page { … }");
+		expect(withoutPageRule(printPageCss("landscape"))).toBe(
+			withoutPageRule(printPageCss()),
+		);
+	});
+
+	// `margin: 0` is this file's original subject and it has to hold for BOTH,
+	// asserted through the same brace-matching reader rather than by eye: the
+	// landscape variant is a different string and the v1.3.0.0 bug it prevents
+	// (28px of screen padding overflowing a marginless page box) is orientation-
+	// independent.
+	it("keeps the .pgwrap reset and margin: 0 in both orientations", () => {
+		for (const orientation of ["portrait", "landscape"] as const) {
+			const b = printBlock(printPageCss(orientation));
+			expect(b, `${orientation} has no @media print block`).toBeTruthy();
+			expect(b, `${orientation} lost the .pgwrap reset`).toMatch(
+				/\.pgwrap\s*\{[^}]*padding:\s*0\s*!important/,
+			);
+			expect(b, `${orientation} lost @page margin: 0`).toMatch(
+				/@page\s*\{[^}]*margin:\s*0/,
+			);
+		}
+	});
+
 	it("hides the screen-only toolbar when printing", () => {
 		expect(block).toMatch(/\.no-print\s*\{[^}]*display:\s*none\s*!important/);
 	});
@@ -166,11 +238,23 @@ function routeFiles(dir: string = ROUTES): string[] {
 
 const ALL_ROUTES = routeFiles().sort();
 
-/** The routes that opted into the shared stylesheet. */
+/**
+ * The routes that opted into the shared stylesheet, in EITHER form.
+ *
+ * Two spellings since #718: `PRINT_PAGE_CSS` is the portrait default five
+ * surfaces import, and `printPageCss(…)` is the same stylesheet with its page
+ * box chosen — the poster route is the one caller. Matching only the constant
+ * would have quietly dropped the poster out of this list, which is worse than
+ * it sounds: the list is what the next assertion checks, so the route that
+ * needed watching most would have stopped being watched with nothing red.
+ */
 // Comment-BLIND: this is a "must BE present" check, so a route that merely
-// MENTIONS the constant in a comment must not satisfy it.
+// MENTIONS either name in a comment must not satisfy it — and the poster route
+// now does exactly that, naming `PRINT_PAGE_CSS` in a header comment explaining
+// what it serves INSTEAD.
+const SHARED_CSS = /\bPRINT_PAGE_CSS\b|\bprintPageCss\s*\(/;
 const routesUsingSharedCss = ALL_ROUTES.filter((f) =>
-	readStripped(f).includes("PRINT_PAGE_CSS"),
+	SHARED_CSS.test(readStripped(f)),
 );
 
 describe("no print route hand-rolls its own page CSS", () => {
@@ -186,6 +270,44 @@ describe("no print route hand-rolls its own page CSS", () => {
 			"club.$clubId_.meeting.$meetingId.print.tsx",
 		);
 		expect(routesUsingSharedCss).toContain("club.$clubId_.roles.tsx");
+	});
+
+	// WHICH orientation each route serves, pinned at the source (#718).
+	//
+	// Nothing downstream can see this. Both sheets are a fixed `.agenda-page`
+	// box, so `print-page-count.test.tsx` reports one page whether the box and
+	// the page box agree or not — a poster that quietly went back to portrait
+	// would print an 1056px sheet into an 816px-wide page box, lose a third of
+	// itself off the right edge, and keep every gate green. And the reverse, an
+	// agenda route reaching for `printPageCss("landscape")`, is the mistake the
+	// shared-constant convention exists to make hard.
+	//
+	// Comment-blind for the same reason as the discovery filter above.
+	it("only the Word of the Day poster asks for landscape", () => {
+		const landscape = ALL_ROUTES.filter((f) =>
+			/printPageCss\s*\(\s*["'`]landscape["'`]\s*\)/.test(readStripped(f)),
+		);
+		expect(
+			landscape,
+			"landscape is the poster's alone — it is one short word sized against " +
+				"the measure, which is the only content here that wants the long " +
+				"edge. A row-per-line agenda or role sheet wants the other one.",
+		).toEqual(["club.$clubId_.meeting.$meetingId.word.tsx"]);
+	});
+
+	it("the agenda and roles routes take the portrait default", () => {
+		for (const file of [
+			"club.$clubId_.meeting.$meetingId.print.tsx",
+			"club.$clubId_.roles.tsx",
+		]) {
+			const src = readStripped(file);
+			expect(src, `${file} should serve the bare PRINT_PAGE_CSS`).toContain(
+				"PRINT_PAGE_CSS",
+			);
+			expect(src, `${file} must not choose an orientation`).not.toMatch(
+				/printPageCss\s*\(/,
+			);
+		}
 	});
 
 	it("walks a non-trivial route tree (so a broken walk can't pass vacuously)", () => {
