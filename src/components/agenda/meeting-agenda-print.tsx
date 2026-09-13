@@ -23,6 +23,7 @@ import { ClubLogo } from "./club-logo";
 import {
 	DarkFooter,
 	FitPage,
+	FOOTER_QR_PX,
 	FOREST,
 	GREEN,
 	HAIR,
@@ -1418,13 +1419,17 @@ function GridLayout({
 				header.mission ||
 				ballotUrl ? (
 					<div
+						data-print-footer=""
 						style={{
 							marginTop: "auto",
 							background: INK,
 							// Top margin trimmed 14 → 10 (#510) — the fourth and last piece
 							// of the inventory this file's header earmarks: three section
 							// gaps above plus this footer margin, ~16px total, spent to pay
-							// for the ~19px the QR costs the row just below.
+							// for the ~19px a 32px QR cost the row just below. #717 raised
+							// that code to `FOOTER_QR_PX` and paid the extra 24px out of
+							// this layout's remaining slack rather than out of the
+							// inventory, which is already spent — see the QR's own note.
 							margin: "10px -36px 0",
 							padding: "13px 36px 16px",
 							color: "#fff",
@@ -1436,9 +1441,10 @@ function GridLayout({
 									display: "flex",
 									justifyContent: "space-between",
 									// `center`, not the original `baseline`: this row can now
-									// carry a 32px QR beside its text, and centering the two
-									// is the shape that reads right — baseline would sit the
-									// square against the text's cap-height instead.
+									// carry a `FOOTER_QR_PX` square beside its text, and
+									// centering the two is the shape that reads right —
+									// baseline would sit the square against the text's
+									// cap-height instead.
 									alignItems: "center",
 									gap: 16,
 									marginBottom: officers.length > 0 ? 8 : 0,
@@ -1479,10 +1485,22 @@ function GridLayout({
 									) : null}
 									{ballotUrl ? (
 										// Grid has no headroom (see the file-header note above),
-										// so this is the smallest legible copy of the QR rather
-										// than `DarkFooter`'s: one caption line, not two, and 5px
-										// of gap instead of 6 — every point here was taken out of
-										// the layout's own inventory, not left on the table.
+										// so this is the tightest copy of the QR rather than
+										// `DarkFooter`'s: one caption line, not three, and 5px
+										// of gap instead of 7 — every point here was taken out
+										// of the layout's own inventory, not left on the table.
+										//
+										// The SIZE is shared, though (#717): a second literal is
+										// how the two drifted, and this footer can afford the
+										// same edge. Measured on the real MCF agenda, a 56px code
+										// here puts the sheet at 1430px against the 1464px where
+										// `FitPage` would flow it onto a second page — 34px of
+										// slack, about two wrapped lines of the cross-platform
+										// variance `agenda-print-type.ts` describes. That is the
+										// number `ballot-qr-print-fit.test.tsx` holds; raising
+										// `FOOTER_QR_PX` past it costs this layout a sheet, and
+										// unlike `DarkFooter` there is no disclaimer here for the
+										// code to sit beside and ride for free.
 										<span
 											className="footer-qr"
 											style={{
@@ -1491,7 +1509,11 @@ function GridLayout({
 												gap: 5,
 											}}
 										>
-											<QRCodeSVG value={ballotUrl} size={32} marginSize={0} />
+											<QRCodeSVG
+												value={ballotUrl}
+												size={FOOTER_QR_PX}
+												marginSize={0}
+											/>
 											<span
 												style={{
 													fontSize: 6,
@@ -1726,8 +1748,13 @@ function SpaciousLayout({
 					) : null}
 				</div>
 
-				{officers.length > 0 || header.meetingSchedule ? (
+				{/* `|| ballotUrl`, like `GridLayout`'s footer (#717): a club with
+				    neither officers nor a meeting schedule on file would otherwise
+				    render no band at all on this sheet, and the QR would have
+				    nowhere to go on the very page this fixes. */}
+				{officers.length > 0 || header.meetingSchedule || ballotUrl ? (
 					<div
+						data-print-footer=""
 						style={{
 							marginTop: "auto",
 							background: INK,
@@ -1735,36 +1762,89 @@ function SpaciousLayout({
 							color: "#fff",
 						}}
 					>
-						{officers.length > 0 ? (
-							<>
-								<Kick
-									style={{ color: SEAFOAM, fontSize: 9.5, marginBottom: 9 }}
-								>
-									Club Officers
-								</Kick>
-								<OfficerGrid officers={officers} onDark />
-							</>
-						) : null}
-						{header.meetingSchedule ? (
-							<div style={{ marginTop: officers.length > 0 ? 12 : 0 }}>
-								<Kick
-									style={{ color: SEAFOAM, fontSize: 9.5, marginBottom: 3 }}
-								>
-									Meets
-								</Kick>
-								<div
+						{/* #717: `spacious` is the OTHER two-sheet layout, and its page 1
+						    had no ballot QR — the same defect the issue describes for
+						    `timing`, which the issue's premise (that `timing` is the only
+						    two-sheet layout) missed. A club printing spacious
+						    double-sided still handed out a front side with no route to
+						    the ballot.
+
+						    The code goes INSIDE this existing band rather than adding a
+						    `DarkFooter` beneath it: a second dark band would be a
+						    block-level addition to a sheet, which is the shape of change
+						    that pushes a printed page. Beside the officer stack it is
+						    all but free — that stack is taller than the square, so the
+						    sheet measures 890px of 1056 with the code on it against 890
+						    without (macOS), and 904 against 890 on CI's Ubuntu, where
+						    the officer grid renders ~14px shorter and the square
+						    overhangs it. Same trick, same reason, as `DarkFooter`'s own
+						    rewrite. */}
+						<div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+							<div style={{ flex: 1, minWidth: 0 }}>
+								{officers.length > 0 ? (
+									<>
+										<Kick
+											style={{ color: SEAFOAM, fontSize: 9.5, marginBottom: 9 }}
+										>
+											Club Officers
+										</Kick>
+										<OfficerGrid officers={officers} onDark />
+									</>
+								) : null}
+								{header.meetingSchedule ? (
+									<div style={{ marginTop: officers.length > 0 ? 12 : 0 }}>
+										<Kick
+											style={{ color: SEAFOAM, fontSize: 9.5, marginBottom: 3 }}
+										>
+											Meets
+										</Kick>
+										<div
+											style={{
+												fontSize: 11,
+												fontWeight: 500,
+												color: "rgba(255,255,255,.85)",
+												lineHeight: 1.3,
+												whiteSpace: "pre-line",
+											}}
+										>
+											{header.meetingSchedule}
+										</div>
+									</div>
+								) : null}
+							</div>
+							{ballotUrl ? (
+								<span
+									className="footer-qr"
 									style={{
-										fontSize: 11,
-										fontWeight: 500,
-										color: "rgba(255,255,255,.85)",
-										lineHeight: 1.3,
-										whiteSpace: "pre-line",
+										flex: "none",
+										display: "inline-flex",
+										alignItems: "center",
+										gap: 7,
 									}}
 								>
-									{header.meetingSchedule}
-								</div>
-							</div>
-						) : null}
+									<span
+										style={{
+											fontSize: 7,
+											lineHeight: 1.2,
+											color: "rgba(255,255,255,.85)",
+											fontWeight: 700,
+											textAlign: "right",
+										}}
+									>
+										Scan to vote
+										<br />
+										Best Speaker
+										<br />
+										Evaluator · Table Topics
+									</span>
+									<QRCodeSVG
+										value={ballotUrl}
+										size={FOOTER_QR_PX}
+										marginSize={0}
+									/>
+								</span>
+							) : null}
+						</div>
 					</div>
 				) : null}
 			</FitPage>
@@ -2073,9 +2153,22 @@ function TimingLayout({
 					) : null}
 				</div>
 
+				{/* #717: `ballotUrl` here, not only on page 2. A club printing this
+				    agenda DOUBLE-SIDED got a front side with no way to reach the
+				    ballot. Invisible on screen, where both sheets scroll past in one
+				    view. `SpaciousLayout` had the same gap and is fixed the same
+				    way — the issue's premise that `timing` is the only two-sheet
+				    layout is wrong, and `grep -n "<TwoPage>"` is how to check it.
+
+				    This sheet has the room: measured 928px of 1056 with the code on
+				    it, so `FitPage` applies no transform and the QR prints at its
+				    full `FOOTER_QR_PX` edge. Not unique in that — every sheet the
+				    scale leaves alone does, including spacious page 2, which is long
+				    enough to take `FitPage`'s FLOW branch instead. */}
 				<DarkFooter
 					left="Page 1 of 2 · Officers & roles"
 					right="toastmasters.org"
+					ballotUrl={ballotUrl}
 				/>
 			</FitPage>
 

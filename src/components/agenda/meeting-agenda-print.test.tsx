@@ -15,6 +15,7 @@ import {
 	type AgendaLayout,
 	MeetingAgendaPrint,
 } from "./meeting-agenda-print";
+import { FOOTER_QR_PX } from "./print-theme";
 
 afterEach(cleanup);
 
@@ -1253,7 +1254,130 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 			);
 			expect(container.querySelector(".footer-qr")).toBeNull();
 		});
+
+		it(`sizes the ${layout} layout's QR from FOOTER_QR_PX`, () => {
+			// #717. The size was a bare `32` at two call sites — `DarkFooter` and
+			// `GridLayout`'s hand-rolled copy — and a bare literal at a call site
+			// is how the two would drift again. Read off the rendered `<svg>`
+			// rather than off the import, so a call site that keeps its own number
+			// fails here instead of passing because the constant exists.
+			//
+			// This says the code is DECLARED at that edge. What it prints is a
+			// different number on three of these four layouts, because `FitPage`
+			// scales the whole sheet — and how much bigger the sheet got is the
+			// half only a browser can see (`ballot-qr-print-fit.test.tsx`).
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			for (const svg of container.querySelectorAll(".footer-qr svg")) {
+				expect(svg.getAttribute("width")).toBe(String(FOOTER_QR_PX));
+				expect(svg.getAttribute("height")).toBe(String(FOOTER_QR_PX));
+			}
+			// …and the loop above is only a claim if it ran. A layout whose QR
+			// stopped rendering would satisfy every assertion in it.
+			expect(
+				container.querySelectorAll(".footer-qr svg").length,
+			).toBeGreaterThan(0);
+		});
 	}
+
+	// #717's other half, and the one a reader cannot see on screen: both sheets
+	// of a two-sheet layout scroll past in one view, and page 1 was never passed
+	// a `ballotUrl` at all. A club printing that agenda double-sided handed out a
+	// front side with no way to reach the ballot.
+	//
+	// BOTH two-sheet layouts, not just `timing`. The issue's premise was that
+	// `timing` is the only one; `SpaciousLayout` wraps `TwoPage` as well and had
+	// the identical gap, caught in review. A per-layout loop is what stops the
+	// next reader inheriting the same premise — `grep -n "<TwoPage>"` is the
+	// check, and if it ever returns a third layout this list is what fails.
+	//
+	// Scoped per SHEET rather than counting `.footer-qr` in the container,
+	// because a count of 2 is also what a page-2 footer rendered twice would
+	// give. `TwoPage` emits both sheets as `.agenda-page` siblings.
+	describe.each([
+		"timing",
+		"spacious",
+	] as const)("the %s layout carries it on BOTH sheets", (layout) => {
+		const sheets = (container: HTMLElement) => [
+			container.querySelector(".agenda-page:nth-of-type(1)"),
+			container.querySelector(".agenda-page:nth-of-type(2)"),
+		];
+
+		it("puts a real QR on page 1 and page 2 when ballotUrl is set", () => {
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[{ role: "Timer", description: "Times the meeting." }]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			const [page1, page2] = sheets(container);
+			// The control first: two sheets, so "page 1" below is a real sheet and
+			// not a null the optional chaining would quietly forgive.
+			expect(page1).not.toBeNull();
+			expect(page2).not.toBeNull();
+			for (const page of [page1, page2]) {
+				const qr = page?.querySelector(".footer-qr");
+				expect(qr).not.toBeNull();
+				expect(qr?.querySelector("svg")).not.toBeNull();
+				expect(qr?.textContent?.toLowerCase()).toContain("scan to vote");
+			}
+		});
+
+		it("puts one on NEITHER sheet when ballotUrl is undefined", () => {
+			// AC 7: with no ballot URL the footers are exactly what they were, on
+			// both sheets — page 1 must not start rendering an empty QR frame now
+			// that it is wired up.
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[{ role: "Timer", description: "Times the meeting." }]}
+					rows={rows}
+				/>,
+			);
+			for (const page of sheets(container)) {
+				expect(page).not.toBeNull();
+				expect(page?.querySelector(".footer-qr")).toBeNull();
+			}
+		});
+
+		it("renders page 1's QR even for a club with no officers and no schedule", () => {
+			// `SpaciousLayout`'s page-1 band and `GridLayout`'s footer are both
+			// CONDITIONAL on having something to show. Without `|| ballotUrl` in
+			// that condition the band never renders for such a club, and the code
+			// has nowhere to go on the very sheet this fixes — a silent hole that
+			// the fixtures above, which all pass officers, cannot see.
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={{ ...header, meetingSchedule: null, mission: null }}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[]}
+					explainers={[{ role: "Timer", description: "Times the meeting." }]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			const [page1] = sheets(container);
+			expect(page1?.querySelector(".footer-qr")).not.toBeNull();
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------
