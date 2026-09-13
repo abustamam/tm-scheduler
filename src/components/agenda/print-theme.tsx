@@ -31,7 +31,50 @@ export const PAGE_W = 816;
 export const PAGE_H = 1056;
 
 /**
+ * Which way round a print SURFACE turns its sheet.
+ *
+ * Orientation used to be a property of the shared stylesheet — one hardcoded
+ * `size: letter portrait` that every print route inherited whether it suited
+ * the content or not. It suits five of the six: an agenda, a role sheet and a
+ * packet are columns of rows, and the long axis is the one they need. The Word
+ * of the Day poster is the exception (#718) and it is the exception by
+ * construction: it is ONE SHORT WORD set as large as it will go, so the binding
+ * constraint is the measure's WIDTH, and portrait hands it the narrow axis.
+ * Landscape is 1056px of sheet against 816px — 29% more measure, which
+ * `posterWordSize` spends directly on type size.
+ *
+ * A parameter and not a second stylesheet. `CODING_STANDARDS.md`'s "print
+ * routes share one stylesheet" is the rule, and a fork is exactly the drift it
+ * exists to prevent — three divergent copies is where `PRINT_PAGE_CSS` came
+ * from in the first place.
+ */
+export type PageOrientation = "portrait" | "landscape";
+
+/**
+ * The sheet's box in CSS px for an orientation.
+ *
+ * Landscape is the SAME letter page turned, so it swaps `PAGE_W`/`PAGE_H`
+ * rather than introducing a second pair of constants that could drift from
+ * them — 1056 x 816 is one edit away from wrong if it is typed out anywhere.
+ */
+export function pageBox(orientation: PageOrientation = "portrait"): {
+	width: number;
+	height: number;
+} {
+	return orientation === "landscape"
+		? { width: PAGE_H, height: PAGE_W }
+		: { width: PAGE_W, height: PAGE_H };
+}
+
+/**
  * The stylesheet every print route serves. One copy, because three diverged.
+ *
+ * `orientation` is the ONLY thing a caller may vary, it defaults to portrait,
+ * and the default output is byte-identical to what this constant held before
+ * #718 — so the agenda, the roles sheet and the packet routes print exactly the
+ * page they printed yesterday and only the poster route passes anything. See
+ * `PageOrientation` above for why the poster is the one surface that differs
+ * and why this is a parameter rather than a second stylesheet.
  *
  * The rules are not cosmetic and the reset is the load-bearing one: `@page` sets
  * `margin: 0` and each sheet is exactly `PAGE_H` tall, so leaving the screen-only
@@ -71,9 +114,15 @@ export const PAGE_H = 1056;
  * query); it is now scoped to `@media screen`. That is safe only because the
  * sheet is 816px and the letter page box is 816px, so block layout and centred
  * flex land on the same pixel — verified by rasterising both and diffing. It
- * stops being safe the moment those two numbers diverge.
+ * stops being safe the moment those two numbers diverge. (It is also why the
+ * poster route does NOT use that rule: it centres its landscape sheet through
+ * an inline style on its own wrapper, where a 1056px sheet inside an 816px
+ * screen viewport is a different problem from the printed page box.)
  */
-export const PRINT_PAGE_CSS = `
+export function printPageCss(
+	orientation: PageOrientation = "portrait",
+): string {
+	return `
 	@media screen { body { background: #d8e6dd; } }
 	.pgwrap { padding: 28px 0; }
 	@media print {
@@ -85,9 +134,21 @@ export const PRINT_PAGE_CSS = `
 		.agenda-page { box-shadow: none !important; break-after: page; break-inside: avoid; }
 		.agenda-page:last-child { break-after: auto; }
 		.footer-qr { break-inside: avoid; }
-		@page { size: letter portrait; margin: 0; }
+		@page { size: letter ${orientation}; margin: 0; }
 	}
 `;
+}
+
+/**
+ * The portrait stylesheet, which is what five of the six print surfaces serve.
+ *
+ * Kept as a constant rather than made every caller write `printPageCss()`: it
+ * is the default and the overwhelmingly common case, three routes already
+ * import this name, and `print-page-reset.guard.test.ts` discovers print routes
+ * by looking for it. A route that wants the other orientation calls the
+ * function; everything else keeps importing this.
+ */
+export const PRINT_PAGE_CSS = printPageCss();
 
 /**
  * The floating screen-only toolbar each print route pins top-right.
@@ -171,12 +232,21 @@ export const PAGE_OUTER: React.CSSProperties = {
 /**
  * One letter page that never overflows onto a second sheet.
  *
- * Renders its children at the natural 816px width, measures the real content
+ * Renders its children at the sheet's natural width, measures the real content
  * height once (after webfonts settle), and if it's taller than the sheet,
  * reflows the content at a wider virtual width and scales it back down. Because
- * the pre-scale width is 816/scale, the scaled result is exactly 816px wide
- * (full-bleed preserved) and ≤ 1056px tall (nothing clipped) — true WYSIWYG:
- * the on-screen card matches the printed page.
+ * the pre-scale width is width/scale, the scaled result is exactly the sheet's
+ * width (full-bleed preserved) and no taller than the sheet (nothing clipped) —
+ * true WYSIWYG: the on-screen card matches the printed page.
+ *
+ * EVERY number above comes from `pageBox(orientation)`, never from `PAGE_W` /
+ * `PAGE_H` directly (#718). Those two constants ARE the portrait box, so
+ * closing over them looked correct for as long as every surface was portrait —
+ * and a landscape sheet measured against a 1056px ceiling it can never reach
+ * would silently never scale, then clip its tail against an 816px
+ * `overflow: hidden` box with the page count still reporting 1. The scale-to-
+ * fit maths is wrong by 29% in that direction, which is precisely the amount no
+ * gate in this repo can see.
  */
 /**
  * The smallest scale `FitPage` will apply before it gives up and lets the sheet
@@ -196,12 +266,22 @@ export const PAGE_OUTER: React.CSSProperties = {
  */
 export const MIN_FIT_SCALE = 0.72;
 
-export function FitPage({ children }: { children: React.ReactNode }) {
+export function FitPage({
+	children,
+	orientation = "portrait",
+}: {
+	children: React.ReactNode;
+	/** The sheet this page is measured and clipped against. Portrait unless the
+	 *  route also serves `printPageCss("landscape")` — the two have to agree, or
+	 *  the sheet is a different shape from the page box it prints into. */
+	orientation?: PageOrientation;
+}) {
 	const innerRef = useRef<HTMLDivElement>(null);
 	const [fit, setFit] = useState<number | null>(null);
 	/** Set when the content is too long to scale legibly — see MIN_FIT_SCALE.
 	 *  The sheet then drops its fixed height and paginates instead. */
 	const [flow, setFlow] = useState(false);
+	const { width: sheetW, height: sheetH } = pageBox(orientation);
 
 	useEffect(() => {
 		const el = innerRef.current;
@@ -211,8 +291,8 @@ export function FitPage({ children }: { children: React.ReactNode }) {
 			if (cancelled) return;
 			const h = el.scrollHeight;
 			// -2px guard against the "content == page height" phantom blank page.
-			if (h <= PAGE_H) return;
-			const scale = (PAGE_H - 2) / h;
+			if (h <= sheetH) return;
+			const scale = (sheetH - 2) / h;
 			// Too long to shrink and stay readable: print it across several sheets
 			// rather than one unreadable one.
 			if (scale < MIN_FIT_SCALE) setFlow(true);
@@ -226,7 +306,15 @@ export function FitPage({ children }: { children: React.ReactNode }) {
 		return () => {
 			cancelled = true;
 		};
-	}, [fit, flow]);
+	}, [fit, flow, sheetH]);
+
+	// PAGE_OUTER is the PORTRAIT sheet — every other property on it (the fills,
+	// the clip, the print-colour-adjust) is orientation-independent, so the box
+	// is overridden here rather than duplicated into a second style object.
+	const outer: React.CSSProperties =
+		orientation === "landscape"
+			? { ...PAGE_OUTER, width: sheetW, height: sheetH }
+			: PAGE_OUTER;
 
 	return (
 		<div
@@ -234,10 +322,10 @@ export function FitPage({ children }: { children: React.ReactNode }) {
 			style={
 				flow
 					? // Flowing: drop the fixed height and the clip so the browser
-						// paginates. `overflow: hidden` on a PAGE_H box would CLIP the
+						// paginates. `overflow: hidden` on a full-height box would CLIP the
 						// tail of a long agenda rather than carrying it to sheet two.
-						{ ...PAGE_OUTER, height: undefined, overflow: undefined }
-					: PAGE_OUTER
+						{ ...outer, height: undefined, overflow: undefined }
+					: outer
 			}
 		>
 			<div
@@ -246,16 +334,16 @@ export function FitPage({ children }: { children: React.ReactNode }) {
 				// `scrollHeight` the effect above measures, so a test can measure the
 				// same number in a real browser (`measuredHeight`, src/test/print-page-count.ts).
 				// That number IS the printed type size on this surface: everything here
-				// is scaled by PAGE_H/height, so a layout that grows 20% taller prints
-				// 20% smaller, silently and with the page count unchanged. Nothing else
-				// in the repo can see that — jsdom does no layout, and the page-count
-				// gate reports 1 either way.
+				// is scaled by the sheet height / height, so a layout that grows 20%
+				// taller prints 20% smaller, silently and with the page count
+				// unchanged. Nothing else in the repo can see that — jsdom does no
+				// layout, and the page-count gate reports 1 either way.
 				data-fit-inner=""
 				style={{
-					width: fit ? PAGE_W / fit : PAGE_W,
-					// No PAGE_H floor when flowing — the sheet is as tall as it needs
-					// to be and the browser breaks it into pages.
-					minHeight: fit || flow ? undefined : PAGE_H,
+					width: fit ? sheetW / fit : sheetW,
+					// No sheet-height floor when flowing — the sheet is as tall as it
+					// needs to be and the browser breaks it into pages.
+					minHeight: fit || flow ? undefined : sheetH,
 					transform: fit ? `scale(${fit})` : undefined,
 					transformOrigin: "top left",
 					display: "flex",

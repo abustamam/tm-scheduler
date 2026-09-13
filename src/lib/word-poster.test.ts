@@ -9,59 +9,108 @@ import {
 	TARGET_W,
 } from "./word-poster";
 
+/**
+ * What the two tables held before #718 turned the sheet, largest bucket first.
+ *
+ * Kept as literals, and deliberately not imported from anywhere: this is the
+ * before half of the issue's central claim — a landscape sheet is 35% more
+ * measure and the word should be visibly bigger for it. A test written against
+ * the CURRENT table can only say the sizes step; it cannot say they went up,
+ * and a revert of `word-poster.ts` alone would leave every other assertion in
+ * this file green.
+ */
+const PORTRAIT_NORMAL = [173, 116, 90, 74, 61];
+const PORTRAIT_ALL_CAPS = [141, 94, 65, 52, 44];
+/** One word per bucket, at the bucket's own length. */
+const PER_BUCKET = [
+	"candid",
+	"ephemeral!",
+	"ephemerally",
+	"a".repeat(18),
+	"a".repeat(19),
+];
+
 describe("posterWordSize", () => {
 	it("steps down at each bucket boundary", () => {
 		// Lengths are spelled out because the boundary is the whole point.
-		expect(posterWordSize("apt")).toBe(173); // 3
-		expect(posterWordSize("candid")).toBe(173); // 6
-		expect(posterWordSize("aplomb!")).toBe(116); // 7
-		expect(posterWordSize("ephemeral!")).toBe(116); // 10
-		expect(posterWordSize("ephemerally")).toBe(90); // 11
-		expect(posterWordSize("magnanimously!")).toBe(90); // 14
-		expect(posterWordSize("circumlocution!")).toBe(74); // 15
-		expect(posterWordSize("a".repeat(18))).toBe(74); // 18
-		expect(posterWordSize("a".repeat(19))).toBe(61); // 19
+		expect(posterWordSize("apt")).toBe(220); // 3
+		expect(posterWordSize("candid")).toBe(220); // 6
+		expect(posterWordSize("aplomb!")).toBe(157); // 7
+		expect(posterWordSize("ephemeral!")).toBe(157); // 10
+		expect(posterWordSize("ephemerally")).toBe(124); // 11
+		expect(posterWordSize("magnanimously!")).toBe(124); // 14
+		expect(posterWordSize("circumlocution!")).toBe(111); // 15
+		expect(posterWordSize("a".repeat(18))).toBe(111); // 18
+		expect(posterWordSize("a".repeat(19))).toBe(93); // 19
 	});
 
 	it("floors at the smallest size for pathological input", () => {
-		expect(posterWordSize("a".repeat(60))).toBe(61);
+		expect(posterWordSize("a".repeat(60))).toBe(93);
 	});
 
 	it("measures the trimmed word, so padding does not shrink it", () => {
-		expect(posterWordSize("   apt   ")).toBe(173);
+		expect(posterWordSize("   apt   ")).toBe(220);
 	});
 
 	it("sizes an empty word like a short one — there is no empty-string special case", () => {
-		expect(posterWordSize("")).toBe(173);
+		expect(posterWordSize("")).toBe(220);
 	});
 
 	// Capitals are far wider than lowercase, so an all-caps word gets its own,
 	// much smaller table. Pin the branch from both sides at the same length.
 	it("uses the smaller all-caps sizes for a word typed in capitals", () => {
-		expect(posterWordSize("EPHEMERAL")).toBe(94); // 9, all caps
-		expect(posterWordSize("Ephemeral")).toBe(116); // 9, not all caps
+		expect(posterWordSize("EPHEMERAL")).toBe(129); // 9, all caps
+		expect(posterWordSize("Ephemeral")).toBe(157); // 9, not all caps
 	});
 
 	it("steps down at each all-caps bucket boundary", () => {
-		expect(posterWordSize("CANDID")).toBe(141); // 6
-		expect(posterWordSize("APLOMB!")).toBe(94); // 7
-		expect(posterWordSize("EPHEMERAL!")).toBe(94); // 10
-		expect(posterWordSize("EPHEMERALLY")).toBe(65); // 11
-		expect(posterWordSize("MAGNANIMOUSLY!")).toBe(65); // 14
-		expect(posterWordSize("CIRCUMLOCUTION!")).toBe(52); // 15
-		expect(posterWordSize("A".repeat(18))).toBe(52); // 18
-		expect(posterWordSize("A".repeat(19))).toBe(44); // 19
+		expect(posterWordSize("CANDID")).toBe(190); // 6
+		expect(posterWordSize("APLOMB!")).toBe(129); // 7
+		expect(posterWordSize("EPHEMERAL!")).toBe(129); // 10
+		expect(posterWordSize("EPHEMERALLY")).toBe(95); // 11
+		expect(posterWordSize("MAGNANIMOUSLY!")).toBe(95); // 14
+		expect(posterWordSize("CIRCUMLOCUTION!")).toBe(72); // 15
+		expect(posterWordSize("A".repeat(18))).toBe(72); // 18
+		expect(posterWordSize("A".repeat(19))).toBe(60); // 19
 	});
 
 	it("treats mixed case as ordinary, not all-caps", () => {
-		expect(posterWordSize("EPhemeral")).toBe(116); // 9
+		expect(posterWordSize("EPhemeral")).toBe(157); // 9
 	});
 
 	// The all-caps test is "contains a letter AND equals its own uppercase".
 	// Digits equal their own uppercase, so without the letter half of that
 	// condition "1234" would be sized as shouted text.
 	it("sizes letterless input from the normal table", () => {
-		expect(posterWordSize("1234")).toBe(173); // 4, no letters
+		expect(posterWordSize("1234")).toBe(220); // 4, no letters
+	});
+
+	// THE POINT OF #718, asserted as a direction rather than as five more
+	// literals. Every bucket in both tables has to be strictly larger than the
+	// portrait size it replaced — that is what 35% more measure buys, and it is
+	// the thing a reader of this file should be able to check without a browser.
+	it("sizes every bucket larger than the portrait table it replaced", () => {
+		PER_BUCKET.forEach((word, i) => {
+			const before = PORTRAIT_NORMAL[i] as number;
+			expect(
+				posterWordSize(word),
+				`bucket ${i} shrank or held: the landscape measure is 925px against ` +
+					"685px, so every size must go up. If the tables were re-derived, " +
+					"update PORTRAIT_NORMAL here in the same change.",
+			).toBeGreaterThan(before);
+			expect(posterWordSize(word.toUpperCase())).toBeGreaterThan(
+				PORTRAIT_ALL_CAPS[i] as number,
+			);
+		});
+	});
+
+	// And how much larger, at the two words a club is most likely to set. The
+	// ratios are NOT uniform (see "NEVER EXTRAPOLATE A SIZE") — the short bucket
+	// gains 27% and the long ones 50%+ — so a single scale factor applied to the
+	// old table would be wrong, and pinning two ends says so.
+	it("gains between a quarter and a half, not a uniform scale", () => {
+		expect(posterWordSize("Ephemeral") / 116).toBeCloseTo(1.353, 2);
+		expect(posterWordSize("a".repeat(19)) / 61).toBeCloseTo(1.525, 2);
 	});
 
 	// The measurement harness sweeps length ranges built from BUCKET_BOUNDARIES
@@ -85,39 +134,80 @@ describe("posterBodySize", () => {
 	// drifts away from. Spelled out per bucket because the clamp makes the
 	// mapping non-obvious at the ends.
 	it("is a third of the word size at each normal bucket", () => {
-		expect(posterBodySize("apt")).toBe(32); // 173/3 = 58 → clamped
-		expect(posterBodySize("ephemeral!")).toBe(32); // 116/3 = 39 → clamped
-		expect(posterBodySize("ephemerally")).toBe(30); // 90/3
-		expect(posterBodySize("circumlocution!")).toBe(25); // 74/3 = 24.7
-		expect(posterBodySize("a".repeat(19))).toBe(20); // 61/3 = 20.3
+		expect(posterBodySize("apt")).toBe(32); // 220/3 = 73 → clamped
+		expect(posterBodySize("ephemeral!")).toBe(32); // 157/3 = 52 → clamped
+		expect(posterBodySize("ephemerally")).toBe(32); // 124/3 = 41 → clamped
+		expect(posterBodySize("circumlocution!")).toBe(32); // 111/3 = 37 → clamped
+		expect(posterBodySize("a".repeat(19))).toBe(31); // 93/3
 	});
 
 	it("is a third of the word size at each all-caps bucket", () => {
-		expect(posterBodySize("CANDID")).toBe(32); // 141/3 = 47 → clamped
-		expect(posterBodySize("EPHEMERAL!")).toBe(31); // 94/3 = 31.3
-		expect(posterBodySize("EPHEMERALLY")).toBe(22); // 65/3 = 21.7
-		expect(posterBodySize("A".repeat(18))).toBe(20); // 52/3 = 17.3 → clamped
-		expect(posterBodySize("A".repeat(19))).toBe(20); // 44/3 = 14.7 → clamped
+		expect(posterBodySize("CANDID")).toBe(32); // 190/3 = 63 → clamped
+		expect(posterBodySize("EPHEMERAL!")).toBe(32); // 129/3 = 43 → clamped
+		expect(posterBodySize("EPHEMERALLY")).toBe(32); // 95/3 = 31.7 → 32
+		expect(posterBodySize("A".repeat(18))).toBe(24); // 72/3
+		expect(posterBodySize("A".repeat(19))).toBe(20); // 60/3
 	});
 
-	// Both ends of the clamp, from the sizes that actually reach them.
-	it("floors at 20px so the body stays legible from the back of the room", () => {
-		// 52/3 and 44/3 are both under 20 and both land on the floor.
-		expect(Math.round(posterWordSize("A".repeat(18)) / 3)).toBeLessThan(20);
-		expect(posterBodySize("A".repeat(18))).toBe(20);
+	/**
+	 * THE CEILING NOW DOES MOST OF THE WORK, and that is a #718 consequence
+	 * worth failing on rather than discovering later.
+	 *
+	 * At the portrait sizes the clamp caught 2 of the 10 buckets and the
+	 * third-of-the-word rule set the other 8. At the landscape sizes it catches
+	 * 7, so an ordinary word's definition is 32px at every length. Counting it
+	 * here means a later retune that changes the balance — raising the ceiling,
+	 * or shrinking the tables again — says so out loud instead of silently
+	 * restoring a ratio the comments no longer describe.
+	 */
+	it("clamps 7 of the 10 buckets at the ceiling", () => {
+		const everyBucket = [
+			"apt",
+			"ephemeral!",
+			"ephemerally",
+			"circumlocution!",
+			"a".repeat(19),
+			"CANDID",
+			"EPHEMERAL!",
+			"EPHEMERALLY",
+			"A".repeat(18),
+			"A".repeat(19),
+		];
+		const clamped = everyBucket.filter((w) => posterBodySize(w) === 32);
+		expect(clamped).toHaveLength(7);
+		// …and the ratio still holds where it is not clamped, which is what makes
+		// the clamp a ceiling rather than a fixed size in disguise.
+		expect(posterBodySize("A".repeat(18))).toBe(
+			Math.round(posterWordSize("A".repeat(18)) / 3),
+		);
+	});
+
+	// Both ends of the clamp. The floor no longer FIRES: the smallest size in
+	// either table is 60 and 60/3 is exactly 20, where the portrait table had two
+	// all-caps buckets under it (52/3 and 44/3). So it is now a boundary the
+	// table sits exactly on, with no slack — the next retune that shrinks the
+	// tail crosses it, and the definition stops tracking the word at that end.
+	it("lands exactly on the 20px floor at the smallest size", () => {
+		expect(Math.round(posterWordSize("A".repeat(19)) / 3)).toBe(20);
+		expect(posterBodySize("A".repeat(19))).toBe(20);
+		// Pathological input is longer still, and gets the same floor.
 		expect(posterBodySize("A".repeat(40))).toBe(20);
 	});
 
 	it("ceilings at 32px so a short word's definition cannot balloon", () => {
-		// 173/3 is 58 — nearly double the cap, and would compete with the word.
+		// 220/3 is 73 — more than double the cap, and would compete with the word.
 		expect(Math.round(posterWordSize("apt") / 3)).toBeGreaterThan(32);
 		expect(posterBodySize("apt")).toBe(32);
 	});
 
-	// The ceiling is also what the poster's `min(23em, CONTENT_W px)` cap is
-	// priced against: 23em only stays inside the content box up to ~30px.
-	it("keeps the ceiling at a size where 23em still needs the width cap", () => {
-		expect(23 * 32).toBeGreaterThan(CONTENT_W);
+	// The ceiling used to be what priced the poster's `min(23em, CONTENT_W px)`
+	// cap: 23em at 32px is 736px, which exceeded the 704px PORTRAIT content box.
+	// The landscape box is 944px, so the cap is now slack. Pinned in both
+	// directions because "the cap does nothing" is the reasoning under which
+	// someone deletes it, and the portrait number is why it exists.
+	it("no longer needs the width cap at the landscape measure", () => {
+		expect(23 * 32).toBeLessThan(CONTENT_W); // 736 < 944 — slack
+		expect(23 * 32).toBeGreaterThan(704); // but it bound on the portrait box
 	});
 
 	it("measures the trimmed word, like the word size it is derived from", () => {
@@ -132,6 +222,21 @@ describe("the width budget", () => {
 		expect(TARGET_W).toBe(CONTENT_W - SAFETY_MARGIN);
 		expect(SAFETY_MARGIN).toBeGreaterThan(0);
 		expect(TARGET_W).toBeLessThan(CONTENT_W);
+	});
+
+	// The measure the tables were actually derived against (#718). The geometry
+	// identity — that this really is the landscape sheet less the padding — is
+	// pinned in `word-of-the-day-poster.test.tsx`, which can import the page box
+	// without pulling React into this module. This is the other half: the exact
+	// numbers the harness ran with, so a re-derivation against a different
+	// measure cannot land without saying so.
+	it("is the landscape measure the size tables were derived against", () => {
+		expect(CONTENT_W).toBe(944);
+		expect(TARGET_W).toBe(925);
+		// And it really is WIDER than the portrait box it replaced, by the 34%
+		// the issue is about — a revert of CONTENT_W alone leaves the tables
+		// sized for a box they no longer fit in, and this is what catches it.
+		expect(CONTENT_W).toBeGreaterThan(704);
 	});
 });
 

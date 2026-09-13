@@ -1,9 +1,19 @@
 // src/components/agenda/word-of-the-day-poster.tsx
 //
 // A one-page printable carrying a meeting's Word of the Day in display type,
-// with its definition and example usage beneath. Printed on letter portrait and
-// taped to the wall so the room can read it from any seat for the whole
+// with its definition and example usage beneath. Printed on letter LANDSCAPE
+// and taped to the wall so the room can read it from any seat for the whole
 // meeting.
+//
+// Landscape alone among this repo's print surfaces (#718), and for the reason
+// the surface exists: this is one short word set as large as it will go, so the
+// binding constraint is the measure's WIDTH and the sheet's long edge is the
+// one it wants. The three places that have to agree are the `@page` rule
+// (`printPageCss("landscape")`, served by the route), the sheet
+// (`<FitPage orientation="landscape">`, below) and the size table
+// (`CONTENT_W`/`posterWordSize`, derived against the landscape measure). The
+// route serves the first; this component owns the second and consumes the
+// third.
 //
 // Presentational only — no data access, no routing — so it unit-tests the way
 // `club-role-sheet.tsx` does. Shares the print aesthetic (brand tokens,
@@ -47,7 +57,7 @@ export function WordOfTheDayPoster({
 	const ex = example?.trim() || null;
 
 	return (
-		<FitPage>
+		<FitPage orientation="landscape">
 			<div
 				style={{
 					flex: 1,
@@ -97,9 +107,12 @@ export function WordOfTheDayPoster({
 							fontWeight: 500,
 							margin: 0,
 							// 23em is the measure (~65 characters) this is set to; the cap
-							// is what keeps that intent from exceeding the content box now
-							// that the size varies — 23em is 690px at 30px but 736px at the
-							// 32px ceiling, wider than the 704px box.
+							// keeps that intent from exceeding the content box as the size
+							// varies. It is SLACK on the landscape sheet — 23em at the 32px
+							// ceiling is 736px against a 944px box, where on the old 704px
+							// portrait box it bound. Kept because it is what holds if either
+							// number moves back, and because dropping a cap that currently
+							// does nothing is how it is absent the next time it matters.
 							maxWidth: `min(23em, ${CONTENT_W}px)`,
 						}}
 					>
@@ -137,9 +150,16 @@ export function WordOfTheDayPoster({
 			    The footer band DOES grow by a few px when a club has a logo (a 20px
 			    image plus its plate against an 11px text line), which is safe here
 			    only because `FitPage` measures the composed page and scales it to
-			    `PAGE_H - 2` when it overflows. Verified at one page with and
-			    without a logo — do not restate this as "the height is unchanged",
-			    which is what this comment used to claim. */}
+			    the sheet height less 2px when it overflows. Verified at one page
+			    with and without a logo — do not restate this as "the height is
+			    unchanged", which is what this comment used to claim.
+
+			    The margin for this is THINNER since #718: the landscape sheet is
+			    816px tall where the portrait one was 1056, a 23% cut, taken at the
+			    same moment the word grew 27–52%. Scale-to-fit firing is not a
+			    failure the page count can see — it prints one sheet either way, at
+			    a smaller size than the table declares — so it is asserted directly
+			    in `print-page-count.test.tsx`. */}
 			<DarkFooter
 				left={
 					<span style={{ display: "flex", alignItems: "center", gap: 10 }}>
