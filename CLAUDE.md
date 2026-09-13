@@ -171,7 +171,7 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The four browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The five browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -206,6 +206,20 @@ when a browser cannot produce the input, find the narrow interface the fix actua
 THAT. It carries a pre-fix control that reproduces the bug, which is what makes the rest able to
 fail.
 
+`src/components/agenda/ballot-qr-print-fit.test.tsx` (#717) is the fifth: it asserts the printed
+ballot QR is big enough for a phone to scan. Its floor is stated on the **printed** edge rather than
+on `FOOTER_QR_PX`, because `FitPage` scales each sheet by a different amount and one constant
+therefore reaches paper at four different sizes — 56px declared prints at ~41px on editorial and
+grid, and at 56px on the two sheets the scale leaves alone. An assertion on the declared size cannot
+see that, which is the same blind spot `print-page-count` has about density.
+
+What earned it a paragraph is the draft before it. Every assertion was stated RELATIVE to
+`FOOTER_QR_PX` or as a ceiling — and a ceiling gets LOOSER as the thing it guards shrinks, so
+putting the constant back to the 32px the issue was filed about left all seven new tests, and the 37
+beside them, green. The suite was blind to precisely the regression it was written for. The mutation
+check had only gone upward, to 80, where ceilings do fire. So: mutate a size constant in BOTH
+directions, and state the floor as an absolute number, never against the constant under test.
+
 No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
 `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
 With none present those tests **skip locally**, so `bun run test` still works for someone without a
@@ -217,9 +231,9 @@ diagnosable. Beside that job's ONLY — the `extension` job is `working-director
 runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
 same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
-**On macOS all four skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
-puts nothing on `PATH` under any of those four names. This is a macOS-only gap: on Linux, where this
-repo is usually developed, `google-chrome` resolves and both gates run locally as normal. Do NOT
+**On macOS all five skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+puts nothing on `PATH` under any of those four binary names. This is a macOS-only gap: on Linux,
+where this repo is usually developed, `google-chrome` resolves and they all run locally as normal. Do NOT
 "fix" it by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES` — that binary
 answers `--version`, so `findChrome` accepts it, but it never returns from `--print-to-pdf` under the
 agent sandbox, which turns an honest skip into 135s of `ETIMEDOUT`. A browser that is found but hangs
