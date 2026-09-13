@@ -390,7 +390,7 @@ describe.skipIf(!hasChrome)(
 		 */
 		it("no bucket needs FitPage's scale-down", () => {
 			const sheet = pageBox("landscape").height;
-			// One word per bucket: 220 / 157 / 124 / 111 / 93 px of display type,
+			// One word per bucket: 233 / 157 / 124 / 111 / 93 px of display type,
 			// plus an all-caps word off the second table. macOS slacks at the time
 			// of writing: 115 / 181 / 216 / 113 / 155 / 211 px.
 			const words = [

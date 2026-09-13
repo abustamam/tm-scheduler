@@ -19,9 +19,27 @@
  * So the two renderers differ in LAYOUT only — if they ever disagree about how
  * big a word should be, the bug is here, not in two places.
  *
- * The conversion is close to exact rather than a fudge: the HTML poster's
- * `CONTENT_W` is 704px, which is 528pt, against this page's 524pt of content
- * width — within one percent, so a word sized to fit one fits the other.
+ * THE TWO SIZES TRAVEL DIFFERENTLY, and conflating them shipped a bug (#718).
+ *
+ * `posterWordSize` is MEASURE-RELATIVE: it is the largest size at which the
+ * widest word of that length still fits `CONTENT_W`. What carries across to
+ * this page is the FRACTION OF THE MEASURE it occupies, so it converts through
+ * the ratio of the two measures — 524pt here against the poster's `CONTENT_W`.
+ * That ratio is what makes it orientation-proof: turn the poster and both the
+ * size and the measure move together, so this page does not.
+ *
+ * `posterBodySize` is ABSOLUTE: a 20–32px clamp chosen for legibility from the
+ * back of a room, with no relationship to the measure at all. It converts by
+ * the UNIT ALONE. Running it through the measure ratio is wrong, and was
+ * invisible for as long as that ratio was ~0.99 — the poster's portrait
+ * `CONTENT_W` of 704px is 528pt against this page's 524pt, so the ratio sat at
+ * 0.992 and the error was under one percent.
+ *
+ * #718 turned the poster landscape and `CONTENT_W` became 944px = 708pt, a 35%
+ * gap rather than a 1% one. The word was fine (its ratio is the point) and the
+ * definition and example shrank 25.4% on every packet, gated by nothing. Hence
+ * two converters below instead of one, and `word-poster-layout.test.ts` pinning
+ * both in absolute points.
  *
  * Original content, NO Toastmasters International copyrighted material, same
  * as the role sheets. `React.createElement` rather than JSX so this stays a
@@ -36,19 +54,43 @@ import { cap } from "#/lib/cap";
 import { WOD_LIMITS } from "#/lib/wod-limits";
 import { CONTENT_W, posterBodySize, posterWordSize } from "#/lib/word-poster";
 
-/** LETTER content width in points, at this page's horizontal padding. */
-const CONTENT_PT = 612 - 44 * 2;
+/**
+ * LETTER content width in points, at this page's horizontal padding.
+ *
+ * THIS PAGE'S OWN measure, and the only width this module is entitled to lay
+ * out against. It is a property of the packet's letter-portrait page and its
+ * 44pt padding — nothing about the HTML poster's sheet may move it.
+ */
+export const CONTENT_PT = 612 - 44 * 2;
 
 /**
- * px → pt for the shared sizing table.
+ * A MEASURE-RELATIVE px size → pt on this page. For the word, and only the
+ * word.
  *
- * Scaled by the ratio of the two content widths as well as by the unit, so a
- * word that exactly fills the HTML poster exactly fills this one. The ratio is
- * ~0.99, so it changes little — it is here so the relationship is stated rather
- * than left to coincide.
+ * Reads as "what fraction of the poster's measure does this size occupy, and
+ * what is that fraction of MINE". Both `CONTENT_W` and `posterWordSize` move
+ * together when the poster's sheet changes, so the quotient — and therefore
+ * this page — does not: the ≤6 bucket was 173px of 704 (24.57%) portrait and is
+ * 233px of 944 (24.68%) landscape, which lands 128.8pt and 129.3pt here.
+ *
+ * The `* 0.75` converts `CONTENT_W` from px to pt so both sides of the ratio
+ * are in the same unit.
  */
-function posterPt(px: number): number {
+export function posterWordPt(px: number): number {
 	return pxToPt(px) * (CONTENT_PT / (CONTENT_W * 0.75));
+}
+
+/**
+ * An ABSOLUTE px size → pt on this page. For the definition and example.
+ *
+ * No measure ratio: `posterBodySize` is a legibility clamp, not a fraction of
+ * anything, so the only correct conversion is the unit. This is a plain alias
+ * for `pxToPt` and exists ANYWAY, rather than being inlined, so the call sites
+ * below state which of the two rules each size follows — inlining it is how the
+ * distinction goes back to being invisible.
+ */
+export function posterBodyPt(px: number): number {
+	return pxToPt(px);
 }
 
 const C = { ink: "#1f2933", soft: "#52606d", line: "#b8c1cc" };
@@ -135,15 +177,21 @@ export function buildWordPosterPage(
 		h(
 			View,
 			{ style: s.middle },
+			// Measure-relative: the word is sized to fill the poster's measure, so
+			// it is ported as a fraction of this page's.
 			h(
 				Text,
-				{ style: [s.word, { fontSize: posterPt(posterWordSize(word)) }] },
+				{ style: [s.word, { fontSize: posterWordPt(posterWordSize(word)) }] },
 				word,
 			),
+			// Absolute: a legibility clamp, ported by the unit alone. Running this
+			// one through the measure ratio is the #718 bug.
 			def
 				? h(
 						Text,
-						{ style: [s.body, { fontSize: posterPt(posterBodySize(word)) }] },
+						{
+							style: [s.body, { fontSize: posterBodyPt(posterBodySize(word)) }],
+						},
 						def,
 					)
 				: null,
@@ -156,7 +204,9 @@ export function buildWordPosterPage(
 							style: [
 								s.example,
 								{
-									fontSize: posterPt(posterBodySize(word)) * 0.82,
+									// Absolute, like the definition it sits under — times the
+									// same 0.82 it always carried.
+									fontSize: posterBodyPt(posterBodySize(word)) * 0.82,
 									fontFamily: "Times-Italic",
 								},
 							],

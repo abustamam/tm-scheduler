@@ -2,11 +2,19 @@
  * Re-derive and verify the Word of the Day poster's font-size tables
  * (`src/lib/word-poster.ts`) against a real browser and a real dictionary.
  *
- * Run this whenever something invalidates those tables: a change to `PAGE_W`,
- * `POSTER_PAD_X`, the display font family or weight, or a bucket boundary. The
- * tables are each the largest size that clears the target, so any of those can
- * push a bucket over and reintroduce the mid-word break they exist to prevent
- * — with no test able to notice, because the failure is font rendering.
+ * Run this whenever something invalidates those tables: a change to the poster's
+ * ORIENTATION, to `PAGE_W` / `PAGE_H`, to `POSTER_PAD_X`, to the display font
+ * family or weight, or to a bucket boundary. The tables are each the largest
+ * size that clears the target, so any of those can push a bucket over and
+ * reintroduce the mid-word break they exist to prevent — with no test able to
+ * notice, because the failure is font rendering.
+ *
+ * ORIENTATION IS ON THAT LIST AND IS EASY TO MISS (#718), because it does not
+ * appear anywhere in this file: it reaches the measurement through `CONTENT_W`,
+ * which the poster derives from the LANDSCAPE sheet's width (`PAGE_H`) rather
+ * than the portrait one. Turning the sheet re-prices every bucket by ~35%, so
+ * "the orientation changed" and "the page size changed" invalidate these tables
+ * identically.
  *
  * Everything that defines the measurement is READ FROM SOURCE, never copied
  * here: the sizes via `posterWordSize`, the length ranges via
@@ -65,6 +73,24 @@ import {
 
 const WORDS_FILE = process.env.WORDS_FILE ?? "/usr/share/dict/words";
 const MODE = process.argv[2] === "derive" ? "derive" : "verify";
+
+/**
+ * The largest font size `derive` will consider, in px.
+ *
+ * Named and generous rather than inline and tight, because the search walks
+ * DOWN from here and a bucket whose true fit is above it gets the ceiling back
+ * with no signal that it was capped — see `largestFitting`. 220 was that
+ * mistake: fine for the 704px portrait measure, an invisible 6% haircut on the
+ * ≤6 bucket at the 944px landscape one (#718).
+ *
+ * 400 is well clear of any size a letter sheet can carry: the poster's own
+ * height budget stops being satisfiable long before it (a 400px word is 420px
+ * of line against ~636px of usable landscape sheet, before the definition and
+ * example beneath it). `derive` now also flags any bucket that comes back AT
+ * this value, so the next time it binds it says so instead of being read as a
+ * measured fit.
+ */
+const MAX_CANDIDATE_PX = 400;
 
 /**
  * The display face actually used by the poster, taken from `SERIF` in
@@ -151,6 +177,7 @@ const RANGES = ${JSON.stringify(RANGES)};
 const FONT_FAMILY = ${JSON.stringify(FONT_FAMILY)};
 const WEIGHT = ${POSTER_FONT_WEIGHT};
 const CONTENT_W = ${CONTENT_W}, TARGET_W = ${TARGET_W}, MODE = ${JSON.stringify(mode)};
+const MAX_CANDIDATE_PX = ${MAX_CANDIDATE_PX};
 const host = document.getElementById("host");
 
 function domWidth(text, size) {
@@ -194,12 +221,24 @@ function fontIsReallyApplied() {
     Math.abs(measureIn("'" + FONT_FAMILY + "', " + base) - measureIn(base)) > 0.5);
 }
 
+// Searches DOWN from MAX_CANDIDATE_PX, so that ceiling silently caps any bucket
+// whose true fit is above it — the search returns the ceiling and reports the
+// width there, which looks exactly like a measured fit. It was 220, which was
+// comfortably clear of every size while the measure was the 704px portrait box
+// (widest bucket: 173). #718 widened the measure to 944px and the ≤6 bucket
+// went straight to the ceiling: "Wampum" renders 870px at 220 against a 925px
+// target, i.e. 6% of the new measure left unspent, in the one bucket a "the
+// word should be bigger" change is most visible in. Hence the capped flag
+// below. (No backticks in this block: it is inside the page template literal.)
 function largestFitting(cands) {
-  for (let s = 220; s >= 8; s--) {
+  for (let s = MAX_CANDIDATE_PX; s >= 8; s--) {
     const [w, width] = worstAt(cands, s);
-    if (width <= TARGET_W) return [s, w, width];
+    // Flag a bucket that fits at the very first size tried: the true largest
+    // fitting size is then at or above the ceiling and this is NOT a measured
+    // fit. Report it rather than let it read as one.
+    if (width <= TARGET_W) return [s, w, width, s === MAX_CANDIDATE_PX];
   }
-  return [0, "?", 0];
+  return [0, "?", 0, false];
 }
 
 function run() {
@@ -216,16 +255,20 @@ function run() {
     lines.push("NORMAL (must satisfy lowercase AND Capitalised):");
     for (const [lo, hi] of RANGES) {
       const pool = shortlist(lower, lo, hi, 100, 40).concat(shortlist(cap, lo, hi, 100, 40));
-      const [size, word, width] = largestFitting(pool);
+      const [size, word, width, capped] = largestFitting(pool);
       norm.push(size);
-      lines.push("  len " + lo + "-" + hi + " -> " + size + "px  binding " + word + " " + width.toFixed(1) + "px");
+      if (capped) failed = true;
+      lines.push("  len " + lo + "-" + hi + " -> " + size + "px  binding " + word + " " + width.toFixed(1) + "px" +
+        (capped ? "  *** CAPPED AT MAX_CANDIDATE_PX (" + MAX_CANDIDATE_PX + ") — NOT A MEASURED FIT, raise it and re-run ***" : ""));
     }
     lines.push("  => " + norm.join(" / "));
     lines.push("ALL_CAPS:");
     for (const [lo, hi] of RANGES) {
-      const [size, word, width] = largestFitting(shortlist(upper, lo, hi, 100, 40));
+      const [size, word, width, capped] = largestFitting(shortlist(upper, lo, hi, 100, 40));
       caps.push(size);
-      lines.push("  len " + lo + "-" + hi + " -> " + size + "px  binding " + word + " " + width.toFixed(1) + "px");
+      if (capped) failed = true;
+      lines.push("  len " + lo + "-" + hi + " -> " + size + "px  binding " + word + " " + width.toFixed(1) + "px" +
+        (capped ? "  *** CAPPED AT MAX_CANDIDATE_PX (" + MAX_CANDIDATE_PX + ") — NOT A MEASURED FIT, raise it and re-run ***" : ""));
     }
     lines.push("  => " + caps.join(" / "));
   } else {

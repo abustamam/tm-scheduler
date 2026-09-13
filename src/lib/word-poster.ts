@@ -69,15 +69,16 @@
 // It reports the widest word and its width per bucket, and will tell you if a
 // size no longer clears the target.
 //
-// TWO THINGS THAT HARNESS WILL NOT TELL YOU, both of which bind on a landscape
-// sheet and did not on a portrait one:
+// TWO THINGS THAT HARNESS WILL NOT TELL YOU, both of which bit during #718:
 //
-//   · ITS SEARCH STOPS AT 220px (`largestFitting`, `for (let s = 220; …)`).
-//     That ceiling was never reached while the widest bucket was 173; at the
-//     landscape measure the ≤6 bucket hits it with room to spare — "Wampum"
-//     renders 870px at 220 against a 925px target, so 220 is a HARNESS ceiling
-//     here, not a measured fit. Raising it is a deliberate change, not a
-//     correction, and it needs the height check below run beside it.
+//   · ITS SEARCH HAS A CEILING, and a bucket that reaches it comes back looking
+//     like a measured fit. `largestFitting` walks DOWN from `MAX_CANDIDATE_PX`,
+//     which was an inline 220 — never reached while the widest bucket was 173,
+//     hit immediately by the ≤6 bucket at the landscape measure. It reported
+//     220 with "Wampum" at 870px against a 925px target: 6% of the new measure
+//     silently unspent, in the bucket this change is most visible in. The true
+//     fit is 233. The ceiling is now a named 400 and `derive` FLAGS a capped
+//     bucket, so it cannot happen quietly again.
 //   · HEIGHT IS NOW A REAL CONSTRAINT. The landscape sheet is only 816px tall
 //     against the portrait 1056, so the vertical budget fell 23% at the same
 //     moment the type grew. The word, its definition and its example still have
@@ -85,6 +86,14 @@
 //     prints SMALLER than this table says, silently, with the page count
 //     unchanged. `print-page-count.test.tsx` measures that directly; nothing in
 //     the width harness can see it.
+//
+// AND ONE THING NEITHER HARNESS CAN SEE: these sizes are consumed by a SECOND
+// renderer. `src/server/word-poster-layout.ts` lays the same poster out as a
+// react-pdf page for the meeting packet, on a LETTER PORTRAIT sheet with 524pt
+// of measure. It converts px → pt through `CONTENT_W`, so re-pricing this
+// module re-prices that page too. Both halves of that conversion are now pinned
+// by `word-poster-layout.test.ts`; read its header before changing CONTENT_W,
+// because the two sizes travel differently and #718 shipped one of them wrong.
 //
 // ---------------------------------------------------------------------------
 // WHY LENGTH IS A WEAK PROXY FOR WIDTH
@@ -239,15 +248,20 @@ type SizeTable = {
 /**
  * Ordinary words — lowercase or Capitalised.
  *
- * Measured at the 925px landscape target (#718); the portrait table these
- * replace was 173/116/90/74/61 at 685px. The ≤6 entry is the one that is NOT a
- * measured fit: 220 is where the harness's own search starts, and "Wampum"
- * renders 870px there against 925px of budget. See the harness caveats in the
- * header before raising it.
+ * Every entry measured at the 925px landscape target (#718); the portrait table
+ * these replace was 173/116/90/74/61 at 685px. Binding widths at these sizes:
+ * 921.8 / 923.2 / 924.2 / 923.6 / 916.9 px — all just under target, which is
+ * what "the largest size that clears it" looks like.
+ *
+ * The ≤6 entry was briefly 220, which was the measurement harness's own search
+ * CEILING rather than a fit — it left 6% of the new measure unspent in the one
+ * bucket #718 is most visible in, and it moved the packet PDF (below). The
+ * ceiling is now named and generous, and `derive` flags a bucket that reaches
+ * it. Do not re-introduce a number here that the harness did not measure.
  */
 const NORMAL: SizeTable = {
 	buckets: [
-		[6, 220],
+		[6, 233],
 		[10, 157],
 		[14, 124],
 		[18, 111],
@@ -264,9 +278,9 @@ const NORMAL: SizeTable = {
  * choice, so the all-caps case gets its own (much smaller) sizes instead and
  * ordinary words pay nothing.
  *
- * Re-measured at 925px for #718; was 141/94/65/52/44 at 685px. Every entry here
- * IS a measured fit — the harness's 220px ceiling binds only the normal ≤6
- * bucket, because capitals are wide enough that 190 is a real answer.
+ * Re-measured at 925px for #718; was 141/94/65/52/44 at 685px. Unaffected by
+ * the search-ceiling problem that briefly mis-set the normal ≤6 bucket:
+ * capitals are wide enough that 190 was always a real answer.
  */
 const ALL_CAPS: SizeTable = {
 	buckets: [
@@ -327,7 +341,7 @@ export function posterWordSize(word: string): number {
  *   • 20px floor — the wall-legibility limit. This is read from the back of a
  *     room, so the definition cannot follow a small word down indefinitely.
  *   • 32px ceiling — stops the definition ballooning under a SHORT word, where
- *     a third of 220px would be 73px and the body would compete with the word
+ *     a third of 233px would be 78px and the body would compete with the word
  *     it is explaining.
  *
  * THE CEILING NOW BINDS ALMOST EVERYWHERE, and that is a change #718 made
@@ -335,7 +349,7 @@ export function posterWordSize(word: string): number {
  * buckets of ten and the third-of-the-word rule ran the rest (32/32/30/25/20,
  * 32/31/22/20/20). At the landscape sizes it catches seven (32/32/32/32/31,
  * 32/32/32/24/20), so an ordinary word's definition is now 32px whatever its
- * length. The hierarchy the ratio exists to protect survives — 220:32 is 6.9x
+ * length. The hierarchy the ratio exists to protect survives — 233:32 is 7.3x
  * and 93:31 is 3.0x, both emphatic — and 32px is the most legible the
  * definition has ever been from the back of a room, which is the poster's job.
  * But "a third of the word size" now describes the tail of the range only.

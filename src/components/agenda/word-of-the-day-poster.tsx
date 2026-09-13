@@ -156,7 +156,7 @@ export function WordOfTheDayPoster({
 
 			    The margin for this is THINNER since #718: the landscape sheet is
 			    816px tall where the portrait one was 1056, a 23% cut, taken at the
-			    same moment the word grew 27–52%. Scale-to-fit firing is not a
+			    same moment the word grew 35–52%. Scale-to-fit firing is not a
 			    failure the page count can see — it prints one sheet either way, at
 			    a smaller size than the table declares — so it is asserted directly
 			    in `print-page-count.test.tsx`. */}

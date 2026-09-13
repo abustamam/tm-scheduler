@@ -33,8 +33,8 @@ const PER_BUCKET = [
 describe("posterWordSize", () => {
 	it("steps down at each bucket boundary", () => {
 		// Lengths are spelled out because the boundary is the whole point.
-		expect(posterWordSize("apt")).toBe(220); // 3
-		expect(posterWordSize("candid")).toBe(220); // 6
+		expect(posterWordSize("apt")).toBe(233); // 3
+		expect(posterWordSize("candid")).toBe(233); // 6
 		expect(posterWordSize("aplomb!")).toBe(157); // 7
 		expect(posterWordSize("ephemeral!")).toBe(157); // 10
 		expect(posterWordSize("ephemerally")).toBe(124); // 11
@@ -49,11 +49,11 @@ describe("posterWordSize", () => {
 	});
 
 	it("measures the trimmed word, so padding does not shrink it", () => {
-		expect(posterWordSize("   apt   ")).toBe(220);
+		expect(posterWordSize("   apt   ")).toBe(233);
 	});
 
 	it("sizes an empty word like a short one — there is no empty-string special case", () => {
-		expect(posterWordSize("")).toBe(220);
+		expect(posterWordSize("")).toBe(233);
 	});
 
 	// Capitals are far wider than lowercase, so an all-caps word gets its own,
@@ -82,7 +82,7 @@ describe("posterWordSize", () => {
 	// Digits equal their own uppercase, so without the letter half of that
 	// condition "1234" would be sized as shouted text.
 	it("sizes letterless input from the normal table", () => {
-		expect(posterWordSize("1234")).toBe(220); // 4, no letters
+		expect(posterWordSize("1234")).toBe(233); // 4, no letters
 	});
 
 	// THE POINT OF #718, asserted as a direction rather than as five more
@@ -104,12 +104,19 @@ describe("posterWordSize", () => {
 		});
 	});
 
-	// And how much larger, at the two words a club is most likely to set. The
-	// ratios are NOT uniform (see "NEVER EXTRAPOLATE A SIZE") — the short bucket
-	// gains 27% and the long ones 50%+ — so a single scale factor applied to the
-	// old table would be wrong, and pinning two ends says so.
-	it("gains between a quarter and a half, not a uniform scale", () => {
+	// And how much larger. The gains are NOT uniform (see "NEVER EXTRAPOLATE A
+	// SIZE"): the short and middle buckets track the measure's own +35%, while
+	// the long ones gain 50%+ because that is where `opsz` is still changing
+	// fast. So a single scale factor applied to the old table would be wrong at
+	// the tail, and pinning both ends says so.
+	it("tracks the measure at the short end and beats it at the long one", () => {
+		const measureGain = 925 / 685; // 1.3504
+		expect(posterWordSize("Apt") / 173).toBeCloseTo(1.347, 2);
 		expect(posterWordSize("Ephemeral") / 116).toBeCloseTo(1.353, 2);
+		// The tail gains materially MORE than the measure did.
+		expect(posterWordSize("a".repeat(19)) / 61).toBeGreaterThan(
+			measureGain * 1.1,
+		);
 		expect(posterWordSize("a".repeat(19)) / 61).toBeCloseTo(1.525, 2);
 	});
 
@@ -134,7 +141,7 @@ describe("posterBodySize", () => {
 	// drifts away from. Spelled out per bucket because the clamp makes the
 	// mapping non-obvious at the ends.
 	it("is a third of the word size at each normal bucket", () => {
-		expect(posterBodySize("apt")).toBe(32); // 220/3 = 73 → clamped
+		expect(posterBodySize("apt")).toBe(32); // 233/3 = 78 → clamped
 		expect(posterBodySize("ephemeral!")).toBe(32); // 157/3 = 52 → clamped
 		expect(posterBodySize("ephemerally")).toBe(32); // 124/3 = 41 → clamped
 		expect(posterBodySize("circumlocution!")).toBe(32); // 111/3 = 37 → clamped
@@ -195,7 +202,7 @@ describe("posterBodySize", () => {
 	});
 
 	it("ceilings at 32px so a short word's definition cannot balloon", () => {
-		// 220/3 is 73 — more than double the cap, and would compete with the word.
+		// 233/3 is 78 — more than double the cap, and would compete with the word.
 		expect(Math.round(posterWordSize("apt") / 3)).toBeGreaterThan(32);
 		expect(posterBodySize("apt")).toBe(32);
 	});
