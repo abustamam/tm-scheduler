@@ -1,7 +1,16 @@
 // src/routes/club.$clubId_.meeting.$meetingId.word.tsx
 //
-// The Word of the Day poster: one letter-portrait sheet with the meeting's word
-// in display type, for taping to the wall so the room can read it all meeting.
+// The Word of the Day poster: one letter-LANDSCAPE sheet with the meeting's
+// word in display type, for taping to the wall so the room can read it all
+// meeting.
+//
+// The only landscape print route here (#718). It serves
+// `printPageCss("landscape")` instead of the shared `PRINT_PAGE_CSS`, which is
+// the SAME stylesheet with one substitution in its `@page` rule — not a fork,
+// see `CODING_STANDARDS.md`'s "print routes share one stylesheet". The sheet
+// itself turns inside `WordOfTheDayPoster`, which passes
+// `orientation="landscape"` to `FitPage`; the two have to agree or an 816px
+// sheet prints into a 1056px page box.
 //
 // PUBLIC, like the sibling /print and /present routes — it shows only what the
 // public agenda already shows. The `$clubId_` escape renders it standalone,
@@ -18,9 +27,9 @@
 // /^\/club\/[^/]+\/meeting\//, which this path already satisfies.
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import {
-	PRINT_PAGE_CSS,
 	PrintButton,
 	PrintToolbar,
+	printPageCss,
 	SANS,
 } from "#/components/agenda/print-theme";
 import { WordOfTheDayPoster } from "#/components/agenda/word-of-the-day-poster";
@@ -145,7 +154,13 @@ function WordPoster() {
 			<PrintToolbar>
 				<PrintButton />
 			</PrintToolbar>
-			<style>{PRINT_PAGE_CSS}</style>
+			<style>{printPageCss("landscape")}</style>
+			{/* The landscape sheet is 1056px wide, which is wider than most laptop
+			    viewports — so on SCREEN this wrapper's centring leaves it flush
+			    left and the page scrolls sideways, exactly as the two-sheet agenda
+			    layouts already do. Printing is unaffected: `@page` is 1056px too,
+			    so the sheet and the page box are the same width and the centring
+			    is a no-op there. */}
 			<div
 				className="pgwrap"
 				style={{ display: "flex", justifyContent: "center" }}

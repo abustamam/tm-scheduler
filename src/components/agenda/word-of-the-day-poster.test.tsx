@@ -9,7 +9,7 @@ import {
 	posterBodySize,
 	posterWordSize,
 } from "#/lib/word-poster";
-import { PAGE_W } from "./print-theme";
+import { pageBox } from "./print-theme";
 import { WordOfTheDayPoster } from "./word-of-the-day-poster";
 
 afterEach(cleanup);
@@ -86,13 +86,33 @@ describe("WordOfTheDayPoster", () => {
 	// exactly CONTENT_W. Nothing else ties that number to the page width and the
 	// poster's padding, so widening either would silently narrow the box below
 	// what the tables assume and reintroduce mid-word breaks.
+	//
+	// The page here is the LANDSCAPE sheet since #718 — this test read
+	// `PAGE_W - 2 * POSTER_PAD_X` and it now reads the landscape box's width,
+	// which is `PAGE_H`. It is the assertion that fires if the sheet and the size
+	// table ever disagree about which way round the poster prints: turn the
+	// component back to portrait without re-deriving and CONTENT_W is 944 against
+	// a 704px box, so every word breaks mid-word.
 	it("keeps the measured content width equal to the real page geometry", () => {
-		expect(PAGE_W - 2 * POSTER_PAD_X).toBe(CONTENT_W);
+		expect(pageBox("landscape").width - 2 * POSTER_PAD_X).toBe(CONTENT_W);
+		// Read through `pageBox` rather than PAGE_H directly so the identity
+		// states the ORIENTATION it depends on. Pinned against the portrait box
+		// too, because "both are letter" is what makes the mistake plausible.
+		expect(pageBox("portrait").width - 2 * POSTER_PAD_X).not.toBe(CONTENT_W);
+	});
+
+	// The sheet the component actually renders has to be that same landscape
+	// box, or the identity above is a fact about two constants and nothing else.
+	it("renders its sheet in landscape", () => {
+		render(<WordOfTheDayPoster {...base} />);
+		const sheet = document.querySelector<HTMLElement>(".agenda-page");
+		expect(sheet?.style.width).toBe(`${pageBox("landscape").width}px`);
+		expect(sheet?.style.height).toBe(`${pageBox("landscape").height}px`);
 	});
 
 	// ...and the identity above is worth nothing on its own: it relates three
 	// constants while saying nothing about what the poster RENDERS. Padding of
-	// `POSTER_PAD_X + 24` narrows the real box to 656px — under the 685px target
+	// `POSTER_PAD_X + 24` narrows the real box to 896px — under the 925px target
 	// the tables were derived against — with every other test in this file still
 	// green. These two pin the geometry to the constants it was measured with.
 	it("pads the content box by exactly POSTER_PAD_X on both sides", () => {
@@ -136,9 +156,10 @@ describe("WordOfTheDayPoster", () => {
 		expect(posterBodySize("Apt")).not.toBe(posterBodySize(long));
 	});
 
-	// 23em is the measure, but at the 32px body ceiling that is 736px — wider
-	// than the 704px content box. The cap is what keeps the intent from
-	// overflowing now that the size varies.
+	// 23em is the measure. At the 32px body ceiling that is 736px, which is
+	// inside the 944px landscape box — so the cap is slack today, where on the
+	// old 704px portrait box it bound. It stays, and is pinned here, because it
+	// is what holds if either number moves back.
 	it("caps the body measure at the content width", () => {
 		render(<WordOfTheDayPoster {...base} word="Apt" />);
 		const expected = `min(23em, ${CONTENT_W}px)`;
