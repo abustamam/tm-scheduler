@@ -16,6 +16,8 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { utcToZonedWallTime } from "#/lib/datetime";
+import { themeOnlyUpdate } from "#/lib/meeting-meta-update";
 import {
 	cleanup,
 	hasTestDb,
@@ -35,6 +37,7 @@ const {
 const { applyMeetingUpdate, applyCreateMeeting } = await import(
 	"./meetings-logic"
 );
+const { resolveMeetingAgendaAuthz } = await import("./meeting-authz-logic");
 
 async function meetingRow(meetingId: string) {
 	const [m] = await testDb
@@ -174,6 +177,295 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 			scheduledAt: "2026-08-01T18:30",
 		});
 		expect((await meetingRow(club.meetingId)).lengthMinutes).toBe(45);
+	});
+
+	/**
+	 * The video-call join link (#731).
+	 *
+	 * Two of these are the ones a happy-path suite would skip, and both are
+	 * costly in the same direction — an online club losing its join link is the
+	 * club losing the meeting:
+	 *
+	 *   1. a theme-only save must PRESERVE the link (the data-loss case), and
+	 *   2. omitting the field must still CLEAR it, which is what makes (1) a
+	 *      requirement of every caller rather than a nicety.
+	 *
+	 * Both assert against the stored column, not against the payload — the echo's
+	 * own unit test covers the payload, and a test that stopped there could not
+	 * see a writer that ignored it.
+	 */
+	describe("join link (#731)", () => {
+		const LINK = "https://zoom.us/j/1234567890";
+		const wallTime = "2026-08-01T18:30";
+
+		async function joinUrlOf(meetingId: string) {
+			const [m] = await testDb
+				.select({ joinUrl: meetings.joinUrl })
+				.from(meetings)
+				.where(eq(meetings.id, meetingId));
+			return m.joinUrl;
+		}
+
+		/** Put a link on the seeded meeting without going through the writer. */
+		async function givenStoredLink(value = LINK) {
+			await testDb
+				.update(meetings)
+				.set({ joinUrl: value })
+				.where(eq(meetings.id, club.meetingId));
+		}
+
+		const update = (joinUrl?: string | null) =>
+			applyMeetingUpdate({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+				scheduledAt: wallTime,
+				joinUrl,
+			});
+
+		it("stores a pasted link", async () => {
+			await update(LINK);
+			expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+		});
+
+		it("coerces a bare host to https, which is what officers actually paste", async () => {
+			await update("zoom.us/j/1234567890");
+			expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+		});
+
+		it.each([
+			"",
+			"   ",
+			"tbd",
+			"n/a",
+			"javascript:alert(1)",
+		])("stores null for %j rather than a link that goes nowhere", async (input) => {
+			await givenStoredLink();
+			await update(input);
+			expect(await joinUrlOf(club.meetingId)).toBeNull();
+		});
+
+		it("never stores a non-http scheme, whatever the client sent", async () => {
+			// The client runs the same validator for a fast message; this is the
+			// assertion that the SERVER value is the stored one.
+			await update("data:text/html,<script>alert(1)</script>");
+			expect(await joinUrlOf(club.meetingId)).toBeNull();
+		});
+
+		/**
+		 * THE data-loss case. A focused editor that posts
+		 * `{ meetingId, scheduledAt, theme }` and nothing else nulls the column —
+		 * see the header of `#/lib/meeting-meta-update`. For an online-only club
+		 * that is the room itself, deleted by a Toastmaster typing a theme.
+		 */
+		it("survives a theme-only save that echoes the stored meta", async () => {
+			await givenStoredLink();
+			await applyMeetingUpdate({
+				...themeOnlyUpdate({
+					meetingId: club.meetingId,
+					selfMemberId: club.memberId,
+					scheduledAt: wallTime,
+					theme: "New beginnings",
+					current: {
+						location: "The Old Library, Room 5",
+						joinUrl: LINK,
+						wordOfTheDay: null,
+						wodDefinition: null,
+						wodExample: null,
+						notes: null,
+						reminders: null,
+					},
+				}),
+				actorMemberId: club.memberId,
+			});
+			expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+		});
+
+		it("is CLEARED by a save that omits it — which is why the echo is required", async () => {
+			// The mirror of the test above, and the reason `MeetingMetaEcho` makes
+			// `joinUrl` a required property rather than an optional one. If this
+			// ever starts passing with the link intact, the writer has stopped being
+			// a full replace and the echo's contract needs rereading, not deleting.
+			await givenStoredLink();
+			await update(undefined);
+			expect(await joinUrlOf(club.meetingId)).toBeNull();
+		});
+
+		it("records the PRIOR link in the meeting_edit audit entry", async () => {
+			await givenStoredLink();
+			await update("https://meet.google.com/abc-defg-hij");
+			const [entry] = await testDb
+				.select({ detail: activityLog.detail })
+				.from(activityLog)
+				.where(eq(activityLog.action, "meeting_edit"));
+			const detail = entry.detail as {
+				before: { joinUrl: string | null };
+				after: { joinUrl: string | null };
+			};
+			expect(detail.before.joinUrl).toBe(LINK);
+			expect(detail.after.joinUrl).toBe("https://meet.google.com/abc-defg-hij");
+		});
+
+		it("createMeeting stores a normalized link on a brand-new meeting", async () => {
+			const { meetingId } = await applyCreateMeeting({
+				clubId: club.clubId,
+				scheduledAt: "2026-09-22T18:30",
+				joinUrl: "zoom.us/j/9876543210",
+			});
+			expect(await joinUrlOf(meetingId)).toBe("https://zoom.us/j/9876543210");
+		});
+
+		it("createMeeting leaves it null when the club meets in a room", async () => {
+			const { meetingId } = await applyCreateMeeting({
+				clubId: club.clubId,
+				scheduledAt: "2026-09-29T18:30",
+			});
+			expect(await joinUrlOf(meetingId)).toBeNull();
+		});
+
+		/**
+		 * AC 2 — WHO may write the link.
+		 *
+		 * Every case above calls `applyMeetingUpdate` directly, and that function
+		 * runs no authorization at all: it takes `actorMemberId` and
+		 * `canReschedule` already resolved. So none of them says anything about the
+		 * ladder, and asserting "it rides the existing ladder" without exercising it
+		 * is the shape of claim that is true until it isn't.
+		 *
+		 * These run the pair the route actually runs — `resolveMeetingAgendaAuthz`
+		 * (what `requireMeetingAgendaEditor` wraps) and then the write — so a change
+		 * that widened or narrowed the grant shows up here.
+		 *
+		 * The TMOD arm is SESSION-LESS by design (ADR-0010): it grants on a
+		 * self-asserted member id that matches this meeting's Toastmaster slot,
+		 * with no `sessionUserId`. That is the repo's existing trust model for
+		 * agenda content and #731 does not change it — but the join link is the
+		 * first field through it that becomes a live href in outbound email, so the
+		 * boundary is worth pinning rather than assuming.
+		 */
+		describe("who may write it", () => {
+			const LINK_2 = "https://meet.google.com/abc-defg-hij";
+
+			/**
+			 * The meeting's CURRENT wall time in the club's zone, not a literal.
+			 *
+			 * A self-asserted TMOD carries `canReschedule = false` and the writer
+			 * compares the resubmitted time to the stored one TO THE MINUTE, so a
+			 * hardcoded string is rejected as an attempted reschedule — which is
+			 * what the first cut of this block did, and it failed for a reason that
+			 * had nothing to do with the join link. Resubmitting the real value is
+			 * also what the dialog does (ADR-0010), so this is the route's own path.
+			 */
+			let currentWallTime: string;
+			beforeEach(async () => {
+				const [meeting, clubRow] = await Promise.all([
+					testDb.query.meetings.findFirst({
+						where: eq(meetings.id, club.meetingId),
+					}),
+					testDb.query.clubs.findFirst({ where: eq(clubs.id, club.clubId) }),
+				]);
+				if (!meeting || !clubRow) throw new Error("seed failed");
+				currentWallTime = utcToZonedWallTime(
+					meeting.scheduledAt,
+					clubRow.timezone,
+				);
+			});
+
+			/** Add this meeting's Toastmaster slot, held by `memberId`. */
+			async function addTmodSlot(memberId: string | null) {
+				const [def] = await testDb
+					.insert(roleDefinitions)
+					.values({
+						clubId: club.clubId,
+						name: "Toastmaster of the Day",
+						key: "toastmaster_of_the_day",
+						category: "functionary",
+						isSpeakerRole: false,
+						sortOrder: 1,
+					})
+					.returning({ id: roleDefinitions.id });
+				await testDb.insert(roleSlots).values({
+					meetingId: club.meetingId,
+					roleDefinitionId: def.id,
+					status: memberId ? "claimed" : "open",
+					assignedMemberId: memberId,
+				});
+			}
+
+			/** The route's own two steps: resolve, then write. Returns whether the
+			 *  caller was allowed, so a denial is asserted rather than inferred from
+			 *  an unchanged column. */
+			async function saveJoinUrl(
+				who: { sessionUserId?: string | null; selfMemberId?: string | null },
+				joinUrl: string,
+			) {
+				const authz = await resolveMeetingAgendaAuthz({
+					meetingId: club.meetingId,
+					sessionUserId: who.sessionUserId ?? null,
+					selfMemberId: who.selfMemberId ?? null,
+				});
+				if (!authz.allowed) return false;
+				await applyMeetingUpdate({
+					meetingId: club.meetingId,
+					actorMemberId: authz.actorMemberId,
+					scheduledAt: currentWallTime,
+					joinUrl,
+					canReschedule: authz.via === "admin",
+				});
+				return true;
+			}
+
+			it("an admin sets it", async () => {
+				expect(
+					await saveJoinUrl({ sessionUserId: club.adminUserId }, LINK),
+				).toBe(true);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+			});
+
+			it("an admin clears it", async () => {
+				await givenStoredLink();
+				expect(await saveJoinUrl({ sessionUserId: club.adminUserId }, "")).toBe(
+					true,
+				);
+				expect(await joinUrlOf(club.meetingId)).toBeNull();
+			});
+
+			it("the meeting's self-asserted TMOD sets it", async () => {
+				await addTmodSlot(club.memberId);
+				expect(await saveJoinUrl({ selfMemberId: club.memberId }, LINK_2)).toBe(
+					true,
+				);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK_2);
+			});
+
+			it("a plain member is REFUSED, and the stored link is untouched", async () => {
+				// No TMOD slot for them: `club.memberId` holds nothing on this
+				// meeting, so neither arm grants.
+				await givenStoredLink();
+				expect(await saveJoinUrl({ selfMemberId: club.memberId }, LINK_2)).toBe(
+					false,
+				);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+			});
+
+			it("a member who holds a DIFFERENT meeting's TMOD slot is refused", async () => {
+				// The self-assert arm compares against THIS meeting's slot. A member
+				// who is Toastmaster next week must not be able to rewrite this
+				// week's room.
+				await givenStoredLink();
+				await addTmodSlot(club.adminMemberId);
+				expect(await saveJoinUrl({ selfMemberId: club.memberId }, LINK_2)).toBe(
+					false,
+				);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+			});
+
+			it("an anonymous caller with no ids at all is refused", async () => {
+				await givenStoredLink();
+				await addTmodSlot(club.memberId);
+				expect(await saveJoinUrl({}, LINK_2)).toBe(false);
+				expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+			});
+		});
 	});
 
 	it("addSpeakerSlot adds a paired speaker + evaluator", async () => {

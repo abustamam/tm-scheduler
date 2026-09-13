@@ -62,6 +62,9 @@ const { applyMeetingUpdate, applyWordOfTheDayUpdate } = await import(
  *  payload that crosses two fields fails rather than passing on a shared one. */
 const STORED_META = {
 	location: "The Old Library, Room 5",
+	// #731 — required by `MeetingMetaEcho`; the join link is nulled by a
+	// theme-only save that omits it, exactly like the fields around it.
+	joinUrl: "https://zoom.us/j/1234567890",
 	wordOfTheDay: "ineffable",
 	wodDefinition: "too great to be expressed in words",
 	wodExample: "an ineffable joy",
@@ -252,6 +255,28 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 			expect(after?.wodDefinition).toBe(STORED_META.wodDefinition);
 			expect(after?.wodExample).toBe(STORED_META.wodExample);
 		});
+
+		/**
+		 * AC 4 (#731). True by CONSTRUCTION — `applyWordOfTheDayUpdate` writes only
+		 * the three Word-of-the-Day columns, so it cannot touch the join link — but
+		 * "true by construction" is a property of today's implementation, and this
+		 * is the assertion that notices if that ever stops being true.
+		 *
+		 * It is a real risk rather than a theoretical one: the obvious "fix" for a
+		 * future Grammarian-editable field is to widen this writer toward
+		 * `applyMeetingUpdate`, which IS a full replace.
+		 */
+		it("a Grammarian saving only the Word of the Day leaves the join link intact", async () => {
+			await addRoleSlot(club, "Grammarian", club.memberId);
+			await saveWord(club.memberId, {
+				word: "loquacious",
+				definition: STORED_META.wodDefinition,
+				example: STORED_META.wodExample,
+			});
+			expect((await readMeeting(club.meetingId))?.joinUrl).toBe(
+				STORED_META.joinUrl,
+			);
+		});
 	});
 
 	describe("the closed windows", () => {
@@ -291,6 +316,10 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 			const after = await readMeeting(club.meetingId);
 			expect(after?.theme).toBe("New beginnings");
 			expect(after?.location).toBe(STORED_META.location);
+			// #731. The costliest of these to lose: for an online-only club the
+			// join link is the room, and this save is one a TMOD makes from their
+			// phone on meeting night.
+			expect(after?.joinUrl).toBe(STORED_META.joinUrl);
 			expect(after?.wordOfTheDay).toBe(STORED_META.wordOfTheDay);
 			expect(after?.wodDefinition).toBe(STORED_META.wodDefinition);
 			expect(after?.wodExample).toBe(STORED_META.wodExample);
@@ -336,6 +365,9 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 			const after = await readMeeting(club.meetingId);
 			expect(after?.theme).toBe("New beginnings");
 			expect(after?.location).toBeNull();
+			// #731 rides the same cliff, which is why `MeetingMetaEcho` makes it a
+			// REQUIRED property rather than an optional one.
+			expect(after?.joinUrl).toBeNull();
 			expect(after?.wordOfTheDay).toBeNull();
 			expect(after?.wodDefinition).toBeNull();
 			expect(after?.wodExample).toBeNull();

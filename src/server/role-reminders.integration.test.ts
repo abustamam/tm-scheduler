@@ -453,6 +453,8 @@ describe("isRoleReminderStale", () => {
 		roleName: "Timer",
 		clubName: "Club",
 		meetingScheduledAt: new Date(),
+		// #731 — on the row the poller selects; staleness never reads it.
+		joinUrl: null,
 		expectedAssignedMemberId: "m1",
 		currentAssignedMemberId: "m1",
 		slotStatus: "claimed",

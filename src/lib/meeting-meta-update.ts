@@ -6,7 +6,10 @@
  * `applyMeetingUpdate` writes `theme: input.theme?.trim() || null` — and the
  * identical line for `location`, `wordOfTheDay`, `wodDefinition`, `wodExample`,
  * `notes` and `reminders`. An OMITTED field is therefore not "leave it alone",
- * it is **null it**. The existing "Edit meeting" dialog never notices, because
+ * it is **null it**. `joinUrl` (#731) reaches the same null by a different
+ * function — `normalizePresentationUrl(input.joinUrl)`, which maps `undefined`
+ * to null like it maps `""` and `"tbd"` — so it belongs to this set, not to the
+ * two exceptions below, and the shape of the line is not the thing to check. The existing "Edit meeting" dialog never notices, because
  * it prefills every one of those inputs from the stored row and resubmits the
  * lot; a focused editor that posts `{ meetingId, scheduledAt, theme }` and
  * nothing else silently erases the club's location, its Word of the Day, its
@@ -55,6 +58,20 @@
  */
 export interface MeetingMetaEcho {
 	location: string | null;
+	/**
+	 * The video-call join link (#731). Echoed for the same reason as the rest and
+	 * with a sharper consequence: an online-only club's join link is the ONLY way
+	 * its members reach the meeting, and `applyMeetingUpdate` nulls what it is not
+	 * given. A TMOD saving a theme from `/me/theme` would otherwise delete the
+	 * room, silently, on meeting night.
+	 *
+	 * REQUIRED rather than optional on purpose. `?:` would typecheck at every
+	 * existing call site and reintroduce exactly the omission this interface
+	 * exists to make impossible; the compiler refusing a caller that forgot is
+	 * the enforcement. The enrollment sweep in the test beside this file is the
+	 * other half, and it only sees fields the echo's OWN fixture supplies.
+	 */
+	joinUrl: string | null;
 	wordOfTheDay: string | null;
 	wodDefinition: string | null;
 	wodExample: string | null;
@@ -99,6 +116,7 @@ export function themeOnlyUpdate(input: ThemeOnlyUpdateInput) {
 		scheduledAt: input.scheduledAt,
 		theme: echo(input.theme),
 		location: echo(input.current.location),
+		joinUrl: echo(input.current.joinUrl),
 		wordOfTheDay: echo(input.current.wordOfTheDay),
 		wodDefinition: echo(input.current.wodDefinition),
 		wodExample: echo(input.current.wodExample),
