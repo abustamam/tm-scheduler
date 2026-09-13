@@ -27,9 +27,9 @@
  * this product. The list is not curated: it is exactly the set
  * `public-readers-archive-gate.guard.test.ts` waived with the reason
  * `"write — #544 follow-up"`, and that guard now requires each one to name its
- * gate instead, in its `WRITE_GATES` table. NINE rows there; seven gate in a
- * `-logic` SEAM, because a handler body is unreachable from vitest. Five of
- * those seven are executed here, and the other two are executed beside the rest
+ * gate instead, in its `WRITE_GATES` table. ELEVEN rows there; nine gate in a
+ * `-logic` SEAM, because a handler body is unreachable from vitest. Seven of
+ * those nine are executed here, and the other two are executed beside the rest
  * of their own feature's cases because each needs a fixture none of the cases
  * below build: `confirmSlotCore` (#661, which gave an authed-only write a
  * session-less holder arm) in `slots-confirm.integration.test.ts`, which needs a
@@ -59,7 +59,13 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clubs, guests, meetings, roleSlots } from "#/db/schema";
+import {
+	clubs,
+	guests,
+	meetingCandidateDisqualifications,
+	meetings,
+	roleSlots,
+} from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	cleanup,
@@ -72,9 +78,14 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { captureGuestVisit } = await import("#/server/guest-pipeline-logic");
-const { castVote, joinBallotAsGuest, openVote, closeVote } = await import(
-	"#/server/voting-logic"
-);
+const {
+	castVote,
+	joinBallotAsGuest,
+	openVote,
+	closeVote,
+	disqualifyCandidate,
+	undoDisqualification,
+} = await import("#/server/voting-logic");
 
 let seeded: SeededClub | null = null;
 
@@ -222,6 +233,77 @@ describe.skipIf(!hasTestDb)(
 					actorMemberId: s.adminMemberId,
 				}),
 			).rejects.toThrow(ARCHIVED);
+		});
+
+		// #723. Both gate in their seam, so both are executable here. The undo is
+		// the one worth having beside the set: it is a DELETE, and "an archived
+		// club cannot be written to" is easy to read as being about rows appearing
+		// — a delete that still ran would leave a taken-down club's live vote state
+		// changing under an operator who can no longer see it.
+		it("disqualifyCandidate — refused, and no ruling is recorded", async () => {
+			const s = await seedLiveClub();
+			// The BEFORE half, per this file's discipline: the same call against the
+			// LIVE club succeeds, so the refusal below cannot be some unrelated
+			// fixture problem throwing. A different category, because the unique
+			// index would refuse a second ruling on the same candidate and that
+			// would pass the `rejects` assertion for the wrong reason.
+			await disqualifyCandidate({
+				meetingId: s.meetingId,
+				clubId: s.clubId,
+				category: "best_evaluator",
+				candidate: { kind: "member", id: s.adminMemberId },
+				reason: "Outside the qualifying window",
+				actorMemberId: s.adminMemberId,
+			});
+
+			await archive(s.clubId);
+			await expect(
+				disqualifyCandidate({
+					meetingId: s.meetingId,
+					clubId: s.clubId,
+					category: "best_speaker",
+					candidate: { kind: "member", id: s.adminMemberId },
+					reason: "Outside the qualifying window",
+					actorMemberId: s.adminMemberId,
+				}),
+			).rejects.toThrow(ARCHIVED);
+			// Only the one written before the archive — the refused call left
+			// nothing behind.
+			expect(
+				await testDb
+					.select({ category: meetingCandidateDisqualifications.category })
+					.from(meetingCandidateDisqualifications)
+					.where(eq(meetingCandidateDisqualifications.meetingId, s.meetingId)),
+			).toEqual([{ category: "best_evaluator" }]);
+		});
+
+		it("undoDisqualification — refused, and the ruling stands", async () => {
+			const s = await seedLiveClub();
+			await disqualifyCandidate({
+				meetingId: s.meetingId,
+				clubId: s.clubId,
+				category: "best_speaker",
+				candidate: { kind: "member", id: s.adminMemberId },
+				reason: "Outside the qualifying window",
+				actorMemberId: s.adminMemberId,
+			});
+
+			await archive(s.clubId);
+			await expect(
+				undoDisqualification({
+					meetingId: s.meetingId,
+					clubId: s.clubId,
+					category: "best_speaker",
+					candidate: { kind: "member", id: s.adminMemberId },
+					actorMemberId: s.adminMemberId,
+				}),
+			).rejects.toThrow(ARCHIVED);
+			expect(
+				await testDb
+					.select({ id: meetingCandidateDisqualifications.id })
+					.from(meetingCandidateDisqualifications)
+					.where(eq(meetingCandidateDisqualifications.meetingId, s.meetingId)),
+			).toHaveLength(1);
 		});
 
 		/**

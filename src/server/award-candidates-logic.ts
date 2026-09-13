@@ -13,16 +13,27 @@
  * Names ONLY. No email, no phone: the ballot is a fully public surface and the
  * public club sheet is a soft gate, so contact details must never reach it.
  * `award-candidates.integration.test.ts` asserts that directly.
+ *
+ * Since #723 this module also owns DISQUALIFICATION — who may no longer win
+ * despite having spoken. It lives here rather than beside the ballot for the
+ * same "one derivation" reason the file opens with: `isEligibleCandidate` is
+ * the server-side gate `castVote` calls, so the mark that hides a name on the
+ * ballot and the mark that makes the server refuse the vote have to be the
+ * same fact. Stamped onto each candidate rather than returned separately, so a
+ * consumer cannot read the list and forget to consult it.
  */
 import { asc, eq } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	guests,
+	meetingCandidateDisqualifications,
 	members,
 	roleDefinitions,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { capDisqualificationReason } from "#/lib/disqualification";
+import { writeInKey } from "#/lib/write-in-limits";
 import { AWARD_CATEGORIES, type AwardCategory } from "./minutes-logic";
 
 /**
@@ -39,13 +50,112 @@ export interface AwardCandidate {
 	/** Member/guest: the row id. Write-in: `writeInKey(name)`. */
 	id: string;
 	name: string;
+	/**
+	 * Why this candidate can no longer win, or null (#723).
+	 *
+	 * NOT optional. Every producer of an `AwardCandidate` has to answer this,
+	 * which is the point: the public ballot, the tally and `isEligibleCandidate`
+	 * all read one list, and a producer that could leave the field off would
+	 * silently mean "eligible" on all three at once — including the one that
+	 * decides whether the server accepts a vote.
+	 */
+	disqualified: CandidateDisqualification | null;
+}
+
+/** Why a candidate was ruled out. An object rather than a bare string so the
+ *  null check at a call site reads as "is this person out", and so a later
+ *  `at`/`by` can be added without touching every consumer. */
+export interface CandidateDisqualification {
+	reason: string;
 }
 
 export type AwardCandidates = Record<AwardCategory, AwardCandidate[]>;
 
+/**
+ * Every disqualification on a meeting, per category, keyed `${kind}:${id}` —
+ * the same key `loadAwardCandidates` de-dupes on and the tally counts under
+ * (#723).
+ *
+ * A MAP rather than a list because every consumer asks the same question
+ * ("is this one candidate out?") once per candidate, and because building it
+ * once is what lets `loadWriteInCandidates` — which lives in `voting-logic.ts`
+ * and produces the OTHER half of the ballot's candidate list — stamp its rows
+ * from the identical fact.
+ */
+export type DisqualifiedIndex = Record<
+	AwardCategory,
+	Map<string, CandidateDisqualification>
+>;
+
+/** Build that index for one meeting. One indexed read; see the type above. */
+export async function loadDisqualifications(
+	meetingId: string,
+): Promise<DisqualifiedIndex> {
+	const rows = await db
+		.select({
+			category: meetingCandidateDisqualifications.category,
+			memberId: meetingCandidateDisqualifications.candidateMemberId,
+			guestId: meetingCandidateDisqualifications.candidateGuestId,
+			writeIn: meetingCandidateDisqualifications.candidateWriteIn,
+			reason: meetingCandidateDisqualifications.reason,
+		})
+		.from(meetingCandidateDisqualifications)
+		.where(eq(meetingCandidateDisqualifications.meetingId, meetingId));
+
+	const out = {} as DisqualifiedIndex;
+	for (const category of AWARD_CATEGORIES) out[category] = new Map();
+	for (const r of rows) {
+		// The write-in column already holds the FOLDED key (see the schema
+		// comment), but it is folded again here rather than trusted: this reaches
+		// the public ballot and the `castVote` gate, and a row written by any
+		// future path that skips `disqualifyCandidate` would otherwise fail to
+		// match the candidate it names — which fails OPEN, letting the vote
+		// through. Folding an already-folded key is a no-op.
+		const key = r.memberId
+			? `member:${r.memberId}`
+			: r.guestId
+				? `guest:${r.guestId}`
+				: r.writeIn
+					? `writeIn:${writeInKey(r.writeIn)}`
+					: null;
+		// Unreachable while the table's exactly-one check holds; dropped rather
+		// than crashed on, because a candidate-less row disqualifies nobody.
+		if (!key) continue;
+		// Capped on the way OUT as well as in — the column is unbounded `text`
+		// and this string renders on every phone in the room.
+		out[r.category].set(key, {
+			reason: capDisqualificationReason(r.reason),
+		});
+	}
+	return out;
+}
+
+/** This candidate's disqualification, or null. Handles all three kinds —
+ *  unlike `isEligibleCandidate` below, a WRITE-IN can be disqualified, because
+ *  the Vote Counter sees the typed name on their console once it has been cast
+ *  once. */
+export function disqualificationFor(
+	index: DisqualifiedIndex,
+	category: AwardCategory,
+	candidate: { kind: "member" | "guest" | "writeIn"; id: string },
+): CandidateDisqualification | null {
+	return index[category].get(`${candidate.kind}:${candidate.id}`) ?? null;
+}
+
 export async function loadAwardCandidates(
 	meetingId: string,
 ): Promise<AwardCandidates> {
+	// Loaded HERE rather than taken as a parameter, deliberately (#723). Every
+	// caller of this function is a place a disqualified candidate must not slip
+	// through — the ballot, the tally and `castVote`'s gate — and an argument
+	// they each have to remember is exactly the shape that goes missing when a
+	// fourth caller appears. `loadWriteInCandidates` (`voting-logic.ts`) pays
+	// for its own copy of this one small indexed read for the same reason. It
+	// costs one extra query per ballot poll against a table holding at most a
+	// handful of rows per meeting, which is not a cost worth trading
+	// correctness for.
+	const disqualified = await loadDisqualifications(meetingId);
+
 	// `members.name` is the per-club authoritative display name, denormalized on
 	// purpose (#486) — it is what `loadMinutes` already reads for award winners.
 	// Do NOT join through `people.name`: the two diverge, and the ballot must
@@ -112,7 +222,12 @@ export async function loadAwardCandidates(
 		const key = `${kind}:${id}`;
 		if (seen[category].has(key)) return;
 		seen[category].add(key);
-		out[category].push({ kind, id, name });
+		out[category].push({
+			kind,
+			id,
+			name,
+			disqualified: disqualified[category].get(key) ?? null,
+		});
 	};
 
 	for (const r of slotRows) {
@@ -132,7 +247,15 @@ export async function loadAwardCandidates(
  * separately — it validates the NAME (length, non-blank) rather than
  * membership of a derived list. Passing a write-in to this function would
  * always answer false, so the type excludes it rather than leaving a caller
- * to discover that at runtime.
+ * to discover that at runtime. Note that a write-in CAN still be disqualified;
+ * `castVote`'s write-in arm consults `disqualificationFor` directly, because
+ * this function is not the thing that gates it.
+ *
+ * `!c.disqualified` is the load-bearing half of #723 (AC 3). Hiding the name
+ * on the ballot is a UI courtesy: a phone whose 5s poll has not landed yet
+ * still holds a tappable button for someone who has just been ruled out, and a
+ * hand-crafted POST never polls at all. This is the only place that refuses
+ * the vote.
  */
 export function isEligibleCandidate(
 	candidates: AwardCandidates,
@@ -140,7 +263,8 @@ export function isEligibleCandidate(
 	candidate: { kind: "member" | "guest"; id: string },
 ): boolean {
 	return candidates[category].some(
-		(c) => c.kind === candidate.kind && c.id === candidate.id,
+		(c) =>
+			c.kind === candidate.kind && c.id === candidate.id && !c.disqualified,
 	);
 }
 

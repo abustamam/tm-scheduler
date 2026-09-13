@@ -20,6 +20,7 @@ import {
 	meetingAttendance,
 	meetingAttendancePlan,
 	meetingAwards,
+	meetingCandidateDisqualifications,
 	meetingTimings,
 	meetingVoteSessions,
 	meetingVotes,
@@ -362,6 +363,48 @@ export async function collapseMemberships(
 		.update(officerTrainingRecords)
 		.set({ membershipId: keeperId })
 		.where(eq(officerTrainingRecords.membershipId, absorbedId));
+
+	// 16. meeting_candidate_disqualifications.candidate_member_id (#723) —
+	//     unique (meeting, category, candidate). The collision is the same shape
+	//     as `meeting_votes.voter_member_id` above and just as reachable: a
+	//     duplicate membership is usually one human recorded twice, both can hold
+	//     speaker slots on the same meeting, and a Vote Counter ruling "that
+	//     speaker" out may well have tapped a different one of the two rows.
+	//     Without the DELETE the merge would fail on the index and the whole
+	//     collapse would roll back — the member could not be merged at all until
+	//     someone found the row by hand.
+	//
+	//     Drop the absorbed ruling and keep the keeper's, which is also right on
+	//     the merits: the two rows say the same thing about the same person, and
+	//     what survives is still "this person cannot win this award". Keeping the
+	//     absorbed one instead would only change which REASON string survives,
+	//     and there is no basis for preferring it. Note this is the opposite
+	//     trade-off from `officer_training_records` above, and deliberately: a
+	//     training row carries a nullable date worth reconciling, while `reason`
+	//     is NOT NULL on both sides, so there is nothing absent to fill.
+	await tx.execute(sql`
+		DELETE FROM meeting_candidate_disqualifications
+		WHERE candidate_member_id = ${absorbedId}
+			AND (meeting_id, category) IN (
+				SELECT meeting_id, category
+				FROM meeting_candidate_disqualifications
+				WHERE candidate_member_id = ${keeperId}
+			)`);
+	await tx
+		.update(meetingCandidateDisqualifications)
+		.set({ candidateMemberId: keeperId })
+		.where(eq(meetingCandidateDisqualifications.candidateMemberId, absorbedId));
+
+	// 17. meeting_candidate_disqualifications.disqualified_by_member_id (#723) —
+	//     nullable attribution ("who ruled this candidate out"), in no unique
+	//     index, so a plain re-point cannot collide. Same shape as
+	//     `meeting_vote_sessions.opened_by_member_id` at step 12.
+	await tx
+		.update(meetingCandidateDisqualifications)
+		.set({ disqualifiedByMemberId: keeperId })
+		.where(
+			eq(meetingCandidateDisqualifications.disqualifiedByMemberId, absorbedId),
+		);
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));

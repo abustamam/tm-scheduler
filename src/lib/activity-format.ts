@@ -193,6 +193,19 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "vote_close":
 			summary = "closed a vote";
 			break;
+		// #723 — the Vote Counter ruled a candidate out of an award, or undid it.
+		// Names neither the candidate nor the reason, for the reason `vote_open`
+		// above gives: `ActivityEntry` carries neither, and the feed is a "who
+		// touched what, when" list. That is a sharper trade-off here than
+		// elsewhere, because the reason IS the point of the feature — so it is
+		// written into `detail` on both the set (`{ category, reason }`) and the
+		// undo, which is where it survives the row's deletion.
+		case "vote_disqualify":
+			summary = "disqualified a candidate from a vote";
+			break;
+		case "vote_disqualify_undo":
+			summary = "undid a candidate's disqualification";
+			break;
 		// #730 — the Timer recorded (or corrected) a measured time. ONE line for
 		// both, because the write is an upsert keyed on the slot and a reader of
 		// the feed would have to re-derive which it was from the row's history

@@ -9,15 +9,18 @@
 import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	activityLog,
 	guests,
 	meetingAttendance,
 	meetingBallotGuests,
+	meetingCandidateDisqualifications,
 	meetings,
 	meetingVoteSessions,
 	meetingVotes,
 	members,
 	roleDefinitions,
 	roleSlots,
+	tableTopicsSpeakers,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -35,12 +38,14 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const {
 	castVote,
 	closeVote,
+	disqualifyCandidate,
 	joinBallotAsGuest,
 	listVoteSessions,
 	loadBallot,
 	loadParticipation,
 	loadTally,
 	openVote,
+	undoDisqualification,
 } = await import("#/server/voting-logic");
 const { applyCompleteMeeting } = await import("#/server/meetings-logic");
 const { setAward } = await import("#/server/minutes-logic");
@@ -1200,6 +1205,11 @@ describe.skipIf(!hasTestDb)("write-in candidates (#582)", () => {
 			kind: "writeIn",
 			id: "rehanna khan",
 			name: "Rehanna Khan",
+			// #723 stamps every candidate, write-ins included. Asserted as part of
+			// the whole shape rather than waived: the ballot renders this field, so
+			// a write-in that quietly stopped carrying it would render as ruled out
+			// or crash, depending on the consumer.
+			disqualified: null,
 		});
 	});
 
@@ -1213,7 +1223,12 @@ describe.skipIf(!hasTestDb)("write-in candidates (#582)", () => {
 		// see their own name lowercased on the awards slide because they happened
 		// to be the second person voted for.
 		expect(offered.filter((c) => c.kind === "writeIn")).toEqual([
-			{ kind: "writeIn", id: "rehanna khan", name: "Rehanna Khan" },
+			{
+				kind: "writeIn",
+				id: "rehanna khan",
+				name: "Rehanna Khan",
+				disqualified: null,
+			},
 		]);
 	});
 
@@ -1315,5 +1330,439 @@ describe.skipIf(!hasTestDb)("write-in candidates (#582)", () => {
 			.from(meetingAwards)
 			.where(eq(meetingAwards.meetingId, seed.meetingId));
 		expect(row).toEqual({ m: seed.memberId, w: null });
+	});
+});
+
+/**
+ * Candidate disqualification (#723).
+ *
+ * A speaker can have spoken and still be unable to win — they ran outside the
+ * qualifying window, or never used the Word of the Day. The ruling is a human
+ * judgement the Vote Counter makes and the app records; what these tests pin is
+ * that recording it actually STOPS the vote rather than only hiding a button,
+ * and that undoing it puts everything back with no compensating write.
+ *
+ * AUTHORIZATION is proved in the two layers this repo splits it into, neither
+ * of them here: `voting-authz.guard.test.ts` proves `disqualifyCandidateFn` /
+ * `undoDisqualificationFn` call `requireVoteCounter` at all (a `createServerFn`
+ * cannot be invoked from vitest), and `vote-counter-capability.integration.test.ts`
+ * proves the decision that gate makes. This file exercises the SEAM those
+ * handlers call once the gate has said yes.
+ */
+describe.skipIf(!hasTestDb)("candidate disqualification (#723)", () => {
+	let seed: SeededClub;
+	let secondMemberId: string;
+
+	function open(category: "best_speaker" | "best_table_topics") {
+		return openVote({
+			meetingId: seed.meetingId,
+			category,
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+	}
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				sortOrder: 99,
+			})
+			.returning({ id: roleDefinitions.id });
+		// TWO speakers, so every assertion has an eligible neighbour to compare
+		// against: a bug that rules out the whole category looks identical to a
+		// correct one when there is only a single candidate.
+		const personId = await seedPerson({ name: "Second Speaker" });
+		const [m2] = await testDb
+			.insert(members)
+			.values({
+				clubId: seed.clubId,
+				personId,
+				name: "Second Speaker",
+				clubRole: "member",
+				status: "active",
+			})
+			.returning({ id: members.id });
+		secondMemberId = m2.id;
+		await testDb.insert(roleSlots).values([
+			{
+				meetingId: seed.meetingId,
+				roleDefinitionId: def.id,
+				slotIndex: 0,
+				assignedMemberId: seed.adminMemberId,
+			},
+			{
+				meetingId: seed.meetingId,
+				roleDefinitionId: def.id,
+				slotIndex: 1,
+				assignedMemberId: secondMemberId,
+			},
+		]);
+		await open("best_speaker");
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	const rule = (
+		candidate: Parameters<typeof disqualifyCandidate>[0]["candidate"],
+		reason = "Outside the qualifying window",
+		category: "best_speaker" | "best_table_topics" = "best_speaker",
+	) =>
+		disqualifyCandidate({
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			category,
+			candidate,
+			reason,
+			actorMemberId: seed.adminMemberId,
+		});
+
+	const unrule = (
+		candidate: Parameters<typeof undoDisqualification>[0]["candidate"],
+		category: "best_speaker" | "best_table_topics" = "best_speaker",
+	) =>
+		undoDisqualification({
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			category,
+			candidate,
+			actorMemberId: seed.adminMemberId,
+		});
+
+	/** Rulings on THIS meeting only. ~50 DB-backed suites share one Postgres, so
+	 *  an unscoped select risks asserting on another suite's rows. */
+	const myRulings = () =>
+		testDb
+			.select({
+				category: meetingCandidateDisqualifications.category,
+				m: meetingCandidateDisqualifications.candidateMemberId,
+				g: meetingCandidateDisqualifications.candidateGuestId,
+				w: meetingCandidateDisqualifications.candidateWriteIn,
+				reason: meetingCandidateDisqualifications.reason,
+				by: meetingCandidateDisqualifications.disqualifiedByMemberId,
+			})
+			.from(meetingCandidateDisqualifications)
+			.where(eq(meetingCandidateDisqualifications.meetingId, seed.meetingId));
+
+	/** Vote ROWS for this meeting, scoped through the session join. */
+	const myVotes = () =>
+		testDb
+			.select({ m: meetingVotes.candidateMemberId })
+			.from(meetingVotes)
+			.innerJoin(
+				meetingVoteSessions,
+				eq(meetingVoteSessions.id, meetingVotes.sessionId),
+			)
+			.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+
+	const voteFor = (voterId: string, candidateId: string) =>
+		castVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			voter: { kind: "member", id: voterId },
+			candidate: { kind: "member", id: candidateId },
+		});
+
+	// AC 3. The one that matters: this calls the server path DIRECTLY, with no
+	// UI and no poll, which is exactly the shape a stale phone or a hand-crafted
+	// POST has. A ballot that merely hides the button would pass every component
+	// test and fail here.
+	it("castVote REJECTS a disqualified candidate, called directly", async () => {
+		await rule({ kind: "member", id: seed.adminMemberId });
+		await expect(voteFor(seed.memberId, seed.adminMemberId)).rejects.toThrow(
+			/not eligible/i,
+		);
+		expect(await myVotes()).toHaveLength(0);
+	});
+
+	// The control that makes the assertion above mean something: the rejection
+	// has to be about THIS candidate, not about the category having a ruling in
+	// it at all.
+	it("still accepts the eligible neighbour in the same category", async () => {
+		await rule({ kind: "member", id: seed.adminMemberId });
+		await expect(
+			voteFor(seed.memberId, secondMemberId),
+		).resolves.toBeUndefined();
+		expect(await myVotes()).toEqual([{ m: secondMemberId }]);
+	});
+
+	// The write-in arm skips `isEligibleCandidate` by design (#582), so it needs
+	// its own check — without it, the candidate shape the Vote Counter most
+	// often has to rule out is the one that cannot be.
+	it("castVote REJECTS a disqualified WRITE-IN, folded", async () => {
+		await open("best_table_topics");
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "writeIn", name: "Bo Smith" },
+		});
+		await rule(
+			{ kind: "writeIn", name: "Bo Smith" },
+			"No Word of the Day",
+			"best_table_topics",
+		);
+		// A DIFFERENT spelling of the same name. The column stores the folded key
+		// precisely so this is refused: matching raw would let every later voter
+		// cast the same person back in by changing their capitals.
+		await expect(
+			castVote({
+				meetingId: seed.meetingId,
+				category: "best_table_topics",
+				voter: { kind: "member", id: secondMemberId },
+				candidate: { kind: "writeIn", name: "  bo   smith " },
+			}),
+		).rejects.toThrow(/not eligible/i);
+	});
+
+	// The read side folds too, and this is the only thing that can prove it.
+	//
+	// `disqualifyCandidate` folds on the way IN and `castVote` folds the incoming
+	// name before looking it up, so for every row this feature writes the fold in
+	// `loadDisqualifications` is a no-op — deleting it leaves the whole suite
+	// green (verified by mutation). What it defends against is a row written by
+	// some path that skips the seam, which is reachable: the column is plain
+	// `text` with no normalising constraint, and this is a bulk-editable table
+	// like any other. A ruling that fails to MATCH its candidate fails OPEN — the
+	// vote goes through — so the defence is worth having and therefore worth
+	// pinning. Written raw here, exactly as such a path would.
+	it("matches a ruling stored UNFOLDED, so a stray row still bites", async () => {
+		await open("best_table_topics");
+		await testDb.insert(meetingCandidateDisqualifications).values({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			candidateWriteIn: "  Bo   SMITH ",
+			reason: "Written by a path that skipped the seam",
+		});
+		await expect(
+			castVote({
+				meetingId: seed.meetingId,
+				category: "best_table_topics",
+				voter: { kind: "member", id: seed.memberId },
+				candidate: { kind: "writeIn", name: "Bo Smith" },
+			}),
+		).rejects.toThrow(/not eligible/i);
+	});
+
+	// AC 4. The votes are NOT deleted — that is what makes undo free.
+	it("keeps votes cast before the ruling, and drops them from the tally", async () => {
+		await voteFor(seed.memberId, seed.adminMemberId);
+		await voteFor(secondMemberId, seed.adminMemberId);
+		await voteFor(seed.adminMemberId, secondMemberId);
+
+		await rule({ kind: "member", id: seed.adminMemberId });
+		const speaker = (await loadTally(seed.meetingId)).best_speaker;
+
+		// Out of the winner list at any count — the ruled-out candidate LEADS 2-1
+		// here, which is the case a naive "drop the zero-count rows" would miss.
+		expect(speaker.results.map((r) => r.id)).toEqual([secondMemberId]);
+		expect(speaker.disqualified).toEqual([
+			expect.objectContaining({
+				id: seed.adminMemberId,
+				count: 2,
+				reason: "Outside the qualifying window",
+			}),
+		]);
+		// And the rows themselves are untouched.
+		expect(await myVotes()).toHaveLength(3);
+	});
+
+	// AC 5. A pure delete, with nothing to reconstruct.
+	it("undo restores the candidate to the ballot AND its prior votes to the tally", async () => {
+		await voteFor(seed.memberId, seed.adminMemberId);
+		await voteFor(secondMemberId, seed.adminMemberId);
+		await rule({ kind: "member", id: seed.adminMemberId });
+		await unrule({ kind: "member", id: seed.adminMemberId });
+
+		const tally = await loadTally(seed.meetingId);
+		expect(tally.best_speaker.disqualified).toEqual([]);
+		expect(
+			tally.best_speaker.results.find((r) => r.id === seed.adminMemberId)
+				?.count,
+		).toBe(2);
+
+		const ballot = await loadBallot(seed.meetingId);
+		expect(
+			ballot.categories.best_speaker.candidates.map((c) => c.disqualified),
+		).toEqual([null, null]);
+		// And the vote the gate refused while the ruling stood now lands.
+		await expect(
+			voteFor(seed.adminMemberId, seed.adminMemberId),
+		).resolves.toBeUndefined();
+	});
+
+	it("undoing a ruling that is not there is a no-op, not an error", async () => {
+		await expect(
+			unrule({ kind: "member", id: seed.adminMemberId }),
+		).resolves.toBeUndefined();
+		expect(await myRulings()).toHaveLength(0);
+	});
+
+	// AC 6, DB-enforced. Two officers can have this console open at once; the
+	// second one to tap must learn the ruling exists rather than silently
+	// replace the first one's stated reason.
+	it("a second ruling on the same candidate in the same category is refused", async () => {
+		await rule({ kind: "member", id: seed.adminMemberId }, "First reason");
+		await expect(
+			rule({ kind: "member", id: seed.adminMemberId }, "Second reason"),
+		).rejects.toThrow();
+		expect(await myRulings()).toEqual([
+			expect.objectContaining({ reason: "First reason" }),
+		]);
+	});
+
+	// AC 7. The same person, two awards, one ruling.
+	it("a ruling in one category does not touch the same person in another", async () => {
+		await open("best_table_topics");
+		await testDb.insert(tableTopicsSpeakers).values({
+			meetingId: seed.meetingId,
+			memberId: seed.adminMemberId,
+			sortOrder: 0,
+		});
+		await rule({ kind: "member", id: seed.adminMemberId });
+
+		const ballot = await loadBallot(seed.meetingId);
+		const inSpeaker = ballot.categories.best_speaker.candidates.find(
+			(c) => c.id === seed.adminMemberId,
+		);
+		const inTopics = ballot.categories.best_table_topics.candidates.find(
+			(c) => c.id === seed.adminMemberId,
+		);
+		expect(inSpeaker?.disqualified).toEqual({
+			reason: "Outside the qualifying window",
+		});
+		expect(inTopics?.disqualified).toBe(null);
+		// And the gate agrees with the ballot — the two must never drift.
+		await expect(
+			castVote({
+				meetingId: seed.meetingId,
+				category: "best_table_topics",
+				voter: { kind: "member", id: seed.memberId },
+				candidate: { kind: "member", id: seed.adminMemberId },
+			}),
+		).resolves.toBeUndefined();
+	});
+
+	// AC 2, server half: the ballot SERVES the ruled-out candidate rather than
+	// dropping them, and carries the reason. A name vanishing from a voter's
+	// screen mid-meeting reads as a bug.
+	it("the ballot keeps the ruled-out candidate, with the reason", async () => {
+		await rule(
+			{ kind: "member", id: seed.adminMemberId },
+			"No Word of the Day",
+		);
+		const list = (await loadBallot(seed.meetingId)).categories.best_speaker
+			.candidates;
+		expect(list).toHaveLength(2);
+		expect(list.find((c) => c.id === seed.adminMemberId)?.disqualified).toEqual(
+			{ reason: "No Word of the Day" },
+		);
+	});
+
+	// AC 9. The reason is in the log as well as in the row, because the row is
+	// deleted on undo and a club asking "why was she ruled out and then not" has
+	// nowhere else to look.
+	it("both writes reach activity_log", async () => {
+		await rule(
+			{ kind: "member", id: seed.adminMemberId },
+			"No Word of the Day",
+		);
+		await unrule({ kind: "member", id: seed.adminMemberId });
+		const rows = await testDb
+			.select({
+				action: activityLog.action,
+				actor: activityLog.actorMemberId,
+				detail: activityLog.detail,
+			})
+			.from(activityLog)
+			.where(eq(activityLog.clubId, seed.clubId));
+		const mine = rows.filter((r) => r.action.startsWith("vote_disqualify"));
+		expect(mine.map((r) => r.action).sort()).toEqual([
+			"vote_disqualify",
+			"vote_disqualify_undo",
+		]);
+		expect(mine.every((r) => r.actor === seed.adminMemberId)).toBe(true);
+		expect(mine.find((r) => r.action === "vote_disqualify")?.detail).toEqual({
+			category: "best_speaker",
+			reason: "No Word of the Day",
+		});
+	});
+
+	// AC 10. `on delete cascade`, which is the whole reason this table can carry
+	// an exactly-one check where `meeting_votes` cannot.
+	it("deleting the member takes their ruling with it", async () => {
+		await rule({ kind: "member", id: secondMemberId });
+		expect(await myRulings()).toHaveLength(1);
+		await testDb.delete(members).where(eq(members.id, secondMemberId));
+		expect(await myRulings()).toHaveLength(0);
+	});
+
+	it("deleting a guest takes their ruling with it", async () => {
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Visiting Speaker" })
+			.returning({ id: guests.id });
+		await rule({ kind: "guest", id: g.id });
+		expect(await myRulings()).toHaveLength(1);
+		await testDb.delete(guests).where(eq(guests.id, g.id));
+		expect(await myRulings()).toHaveLength(0);
+	});
+
+	it("refuses a blank reason — the column is NOT NULL for a reason", async () => {
+		await expect(
+			rule({ kind: "member", id: seed.adminMemberId }, "   "),
+		).rejects.toThrow(/reason/i);
+		expect(await myRulings()).toHaveLength(0);
+	});
+
+	it("refuses a reason past the cap rather than storing a truncated one", async () => {
+		await expect(
+			rule({ kind: "member", id: seed.adminMemberId }, "x".repeat(5000)),
+		).rejects.toThrow(/too long/i);
+		expect(await myRulings()).toHaveLength(0);
+	});
+
+	// The candidate FKs reference `members`/`guests` globally, so without the
+	// club scope an officer of one club could mint rows naming another club's
+	// people. They would match no candidate and rule out nobody — but a write
+	// that crosses a club boundary at all is the wrong shape for a table about
+	// one person excluding another.
+	it("refuses a candidate belonging to another club", async () => {
+		const other = await seedClub();
+		try {
+			await expect(
+				rule({ kind: "member", id: other.memberId }),
+			).rejects.toThrow(/not found/i);
+			expect(await myRulings()).toHaveLength(0);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	// AC 11. The club that never disqualifies anyone must see nothing new — and
+	// "nothing new" is a claim about the payloads, not about the screen.
+	it("a meeting with no rulings carries null on every candidate and an empty list", async () => {
+		await voteFor(seed.memberId, seed.adminMemberId);
+		const ballot = await loadBallot(seed.meetingId);
+		expect(
+			ballot.categories.best_speaker.candidates.every(
+				(c) => c.disqualified === null,
+			),
+		).toBe(true);
+		const tally = await loadTally(seed.meetingId);
+		for (const category of [
+			"best_speaker",
+			"best_evaluator",
+			"best_table_topics",
+		] as const) {
+			expect(tally[category].disqualified).toEqual([]);
+		}
+		expect(tally.best_speaker.results).toHaveLength(2);
 	});
 });

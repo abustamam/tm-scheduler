@@ -455,6 +455,7 @@ describe.skipIf(!hasTestDb)(
 				id: "x",
 				name: "Leaked",
 				kind: "member",
+				disqualified: null,
 			});
 			expect(
 				(await loadBallot(s.meetingId)).categories.best_speaker.candidates,

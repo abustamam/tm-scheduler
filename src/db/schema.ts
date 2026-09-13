@@ -159,6 +159,13 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// record. `detail = { category }`.
 	"vote_open",
 	"vote_close",
+	// Digital voting (#723): the Vote Counter ruled a candidate out of one award,
+	// or undid that. Unlike `vote_cast` these ARE logged — a disqualification is
+	// one person deciding another cannot win, which is exactly the kind of write
+	// a club should be able to see afterwards. `detail = { category, reason }` on
+	// the set; `{ category }` on the undo, since the reason is gone by then.
+	"vote_disqualify",
+	"vote_disqualify_undo",
 	// Planned attendance changed (spec 2026-08-11, D1). One action for every
 	// rung of the ladder; the rung is in the detail, not the action name.
 	// `detail = { memberId, status: "reached_out" | "coming" | "not_coming" | null, via }`
@@ -1820,6 +1827,121 @@ export const meetingBallotGuests = pgTable(
 	],
 );
 
+/**
+ * A candidate the Vote Counter has ruled OUT of one category on one meeting
+ * (#723), with the reason the room is told.
+ *
+ * Exists because eligibility is not derivable: a speaker can have spoken and
+ * still not be able to win — they ran outside the qualifying window, or never
+ * used the Word of the Day. The Timer's own printed script already tells the
+ * room that rule ("Outside that window the speech is disqualified from the
+ * vote — call it out in your report", `role-sheet-layout.ts`), and until this
+ * table the app had no way to act on it: the room voted for someone who could
+ * not win and the Vote Counter either ignored the tally quietly or explained
+ * the result afterwards.
+ *
+ * A disqualified candidate STAYS on the ballot, struck through and carrying
+ * its reason, and cannot be voted for. Not removed: a name vanishing from a
+ * voter's screen mid-meeting reads as a bug. Votes already cast for them stay
+ * in `meeting_votes` and drop out of the tally on the READ side, the same way
+ * a candidate-less row already does — so undoing a disqualification restores
+ * both the ballot entry and its prior votes with no write.
+ *
+ * Addressed by the SAME three mutually-exclusive candidate columns as
+ * `meeting_votes`, so the two line up without a translation layer. Two
+ * deliberate asymmetries with that sibling table, both of which will otherwise
+ * read as mistakes:
+ *
+ *  1. `num_nonnulls(...) = 1` here, where `meeting_votes` has `<= 1`. That
+ *     table's member column is `on delete set null`, which makes a
+ *     candidate-less vote row a REACHABLE state (a member leaving the club
+ *     must not be blocked by a year-old ballot) and an exactly-one check would
+ *     turn the DELETE into a runtime error. This table uses `on delete
+ *     cascade` on both id columns instead — a departing member or guest takes
+ *     their disqualification with them, which is what should happen to it —
+ *     so a candidate-less row is never reachable and exactly-one is safe.
+ *  2. `candidate_write_in` stores the FOLDED `writeInKey`, not the display
+ *     spelling `meeting_votes` keeps. A write-in candidate IS its folded key
+ *     everywhere downstream (`loadWriteInCandidates` ids one by
+ *     `writeInKey(name)`, the tally counts under it), so folding here is what
+ *     makes disqualifying "Bob Smith" also block a vote typed as "bob smith"
+ *     — and what lets the unique index below enforce "not twice" in the
+ *     database rather than in application code. `meeting_votes` keeps the raw
+ *     spelling because the FIRST one cast is the display form; this table
+ *     displays nothing, so it has no reason to.
+ */
+export const meetingCandidateDisqualifications = pgTable(
+	"meeting_candidate_disqualifications",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		category: awardCategoryEnum("category").notNull(),
+		candidateMemberId: uuid("candidate_member_id").references(
+			() => members.id,
+			{ onDelete: "cascade" },
+		),
+		candidateGuestId: uuid("candidate_guest_id").references(() => guests.id, {
+			onDelete: "cascade",
+		}),
+		/** The `writeInKey` of the typed name — folded, not the display spelling.
+		 *  See asymmetry (2) in the table comment above. */
+		candidateWriteIn: text("candidate_write_in"),
+		/**
+		 * Why. NOT NULL on purpose: the whole complaint this answers is a result
+		 * the room cannot account for, and a disqualification with no reason is
+		 * another one. Capped on the way in by `disqualificationReasonSchema`
+		 * (`#/lib/disqualification`) — it reaches the PUBLIC ballot, so the cap
+		 * lives in `lib/` where both sides of the wire and a unit test can see it.
+		 */
+		reason: text("reason").notNull(),
+		/** Who ruled it out. `set null` rather than cascade: the disqualification
+		 *  outlives the officer who recorded it, exactly as
+		 *  `meeting_vote_sessions.opened_by_member_id` outlives whoever opened the
+		 *  vote. The audit trail is in `activity_log` either way. */
+		disqualifiedByMemberId: uuid("disqualified_by_member_id").references(
+			() => members.id,
+			{ onDelete: "set null" },
+		),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("meeting_candidate_disqualifications_meeting_idx").on(t.meetingId),
+		// One disqualification per candidate per category, enforced HERE rather
+		// than in application code. PLAIN (non-partial) unique indexes, the same
+		// construction `meeting_votes`' two voter arbiters use: Postgres treats
+		// NULLs as distinct, so the member rows (guest and write-in null) never
+		// collide with the guest rows or the write-in rows. Partial indexes with a
+		// `WHERE ... is not null` predicate would be equivalent here and are what
+		// the spec sketched — they are deliberately NOT used, because `db:push`
+		// does not update an existing partial index's predicate (see CLAUDE.md),
+		// so every later edit to one silently diverges the test database from the
+		// schema. Nothing about this table needs the predicate.
+		uniqueIndex("meeting_candidate_dq_member_unique").on(
+			t.meetingId,
+			t.category,
+			t.candidateMemberId,
+		),
+		uniqueIndex("meeting_candidate_dq_guest_unique").on(
+			t.meetingId,
+			t.category,
+			t.candidateGuestId,
+		),
+		uniqueIndex("meeting_candidate_dq_write_in_unique").on(
+			t.meetingId,
+			t.category,
+			t.candidateWriteIn,
+		),
+		// EXACTLY one — see asymmetry (1) in the table comment above.
+		check(
+			"meeting_candidate_dq_single_candidate",
+			sql`num_nonnulls(${t.candidateMemberId}, ${t.candidateGuestId}, ${t.candidateWriteIn}) = 1`,
+		),
+	],
+);
+
 // ---------------------------------------------------------------------------
 // Speeches — first-class, Person-owned content (ADR-0009 / #79).
 //
@@ -2518,6 +2640,21 @@ export const meetingVotesRelations = relations(meetingVotes, ({ one }) => ({
 		references: [meetingVoteSessions.id],
 	}),
 }));
+
+// Parent link only, for the same reason `meetingVotesRelations` above carries
+// one: the two candidate FKs point at `members` and `guests` and nothing reads
+// them relationally — `award-candidates-logic.ts` queries this table by
+// (meeting, category) and matches candidates in JS, because a write-in has no
+// row to join to at all.
+export const meetingCandidateDisqualificationsRelations = relations(
+	meetingCandidateDisqualifications,
+	({ one }) => ({
+		meeting: one(meetings, {
+			fields: [meetingCandidateDisqualifications.meetingId],
+			references: [meetings.id],
+		}),
+	}),
+);
 
 export const roleDefinitionsRelations = relations(
 	roleDefinitions,

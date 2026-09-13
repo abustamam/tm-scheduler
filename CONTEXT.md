@@ -412,6 +412,28 @@ the nouns in `src/db/schema.ts`.
   Reached from a QR on the present-mode vote slides and all four printed agenda layouts, or
   directly at `/club/:clubId/meeting/:key/vote`. See
   `docs/superpowers/specs/2026-08-08-digital-voting-design.md`.
+- **Disqualification** — the Vote Counter's record that a candidate cannot win one award on one
+  meeting, with the reason the room is told (`meeting_candidate_disqualifications`, #723). Eligibility
+  is not derivable: a speaker can have spoken and still be out, because they ran outside the
+  qualifying window or never used the Word of the Day — the Timer's own printed script already tells
+  the room that rule (`role-sheet-layout.ts`) and until this the app could not act on it. It is a
+  human judgement the app RECORDS; nothing derives it from timing data. A ruled-out candidate **stays
+  on the ballot**, struck through and carrying its reason, and cannot be voted for — a name vanishing
+  from a voter's screen mid-meeting reads as a bug, and a console-only flag leaves people spending
+  their one vote on someone who cannot win. The load-bearing enforcement is `isEligibleCandidate`
+  (`award-candidates-logic.ts`), which `castVote` calls: the hidden button is a courtesy to a phone
+  that has polled, and the server is what refuses. Ballots already cast are KEPT in `meeting_votes`
+  and dropped on the READ side (`loadTally` splits `results` from `disqualified`), which is what makes
+  undo a pure DELETE with the prior votes intact. Per `(meeting, category, candidate)` — the same
+  person can be out for Best Speaker and eligible for Best Table Topics — addressed by the same three
+  mutually-exclusive candidate columns `meeting_votes` uses, with two deliberate asymmetries the
+  schema comment states: `num_nonnulls(...) = 1` rather than `<= 1` (both id columns cascade, so a
+  candidate-less row is unreachable), and `candidate_write_in` holding the FOLDED `writeInKey` rather
+  than the display spelling (so ruling out "Bob Smith" also refuses a ballot typed "bob smith", and so
+  the unique index enforces "not twice" in the database). Gated exactly as open/close are, logged to
+  `activity_log` on both the set and the undo — the reason travels in `detail`, because it is gone
+  from the row once undone. Deliberately NOT on the printed agenda or the projected deck: it is
+  live-meeting state.
 - **Offline write queue** — the single write channel for a meeting's minutes record (attendance,
   Table Topics speakers, awards) on the venue wifi this product actually runs on (#176; hardened and
   made load-bearing by roll call in v1.20.0.0). One IndexedDB store

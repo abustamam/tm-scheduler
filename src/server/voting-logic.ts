@@ -15,6 +15,7 @@ import {
 	guests,
 	meetingAttendance,
 	meetingBallotGuests,
+	meetingCandidateDisqualifications,
 	meetings,
 	meetingVoteSessions,
 	meetingVotes,
@@ -22,6 +23,7 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { cap } from "#/lib/cap";
+import { disqualificationReasonSchema } from "#/lib/disqualification";
 import {
 	WRITE_IN_LIMITS,
 	writeInKey,
@@ -30,8 +32,11 @@ import {
 import { logActivity } from "./activity";
 import {
 	type AwardCandidate,
+	type CandidateDisqualification,
+	disqualificationFor,
 	isEligibleCandidate,
 	loadAwardCandidates,
+	loadDisqualifications,
 } from "./award-candidates-logic";
 import { isReadableClubForMeeting } from "./club-readable-logic";
 import { assertClubNotArchived } from "./guards";
@@ -171,6 +176,157 @@ export async function closeAllVotesTx(
 		);
 }
 
+/**
+ * Rule a candidate out of one category, with the reason the room is told
+ * (#723).
+ *
+ * Declared beside `openVote`/`closeVote` because it is the same kind of thing:
+ * a Vote Counter operating the window from the console, gated by the same
+ * `requireVoteCounter` + `assertMeetingNotLocked` pair in `voting.ts`, and
+ * archive-gated here in the SEAM for the reason `openVote` states — a handler
+ * body cannot be reached from vitest, so a check placed there is covered by a
+ * source grep alone.
+ *
+ * INSERTS, never upserts. A second disqualification of the same candidate in
+ * the same category hits `meeting_candidate_dq_*_unique` and throws, which is
+ * the behaviour worth having rather than a silent overwrite: two officers can
+ * have this console open at once, and the second one to tap should learn that
+ * the ruling already exists instead of quietly replacing the first one's
+ * stated reason. Correcting a reason is undo-then-redo, and the undo control
+ * sits next to the name.
+ *
+ * The member/guest arms are club-scoped even though nothing downstream could
+ * read a foreign row: the candidate columns reference `members`/`guests`
+ * globally, so without this an officer of one club could mint rows naming
+ * another club's people. They would match no candidate and disqualify nobody,
+ * but a write that crosses a club boundary at all is the wrong shape for a
+ * table about one person excluding another.
+ */
+export async function disqualifyCandidate(
+	input: WindowInput & { candidate: CandidateRef; reason: string },
+): Promise<void> {
+	await assertClubNotArchived(input.clubId);
+
+	const parsedReason = disqualificationReasonSchema.safeParse(input.reason);
+	if (!parsedReason.success) {
+		throw new Error(parsedReason.error.issues[0]?.message ?? "Give a reason.");
+	}
+
+	const { memberId, guestId, writeIn } = await resolveDisqualifiedCandidate(
+		input.candidate,
+		input.clubId,
+	);
+
+	await db.transaction(async (tx) => {
+		await tx.insert(meetingCandidateDisqualifications).values({
+			meetingId: input.meetingId,
+			category: input.category,
+			candidateMemberId: memberId,
+			candidateGuestId: guestId,
+			candidateWriteIn: writeIn,
+			reason: parsedReason.data,
+			disqualifiedByMemberId: input.actorMemberId,
+		});
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "vote_disqualify",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			// The reason is carried here as well as in the row because the row is
+			// deleted on undo and this is what survives it — a club asking "why was
+			// she ruled out and then not" has nowhere else to look.
+			detail: { category: input.category, reason: parsedReason.data },
+		});
+	});
+}
+
+/**
+ * Undo a disqualification: the candidate returns to the ballot and their prior
+ * votes return to the tally (#723 AC 5).
+ *
+ * A pure DELETE, with no compensating write anywhere. That is the whole reason
+ * the exclusion is a read-side split in `loadTally` rather than a mutation of
+ * `meeting_votes`: nothing was destroyed, so nothing has to be reconstructed,
+ * and a ballot cast before the ruling counts again the moment the row goes.
+ *
+ * Idempotent, like `closeVote` — undoing a disqualification that is not there
+ * is a no-op rather than an error, so a double-tap is harmless, and only a
+ * DELETE that actually removed something is logged.
+ */
+export async function undoDisqualification(
+	input: WindowInput & { candidate: CandidateRef },
+): Promise<void> {
+	await assertClubNotArchived(input.clubId);
+
+	const { memberId, guestId, writeIn } = await resolveDisqualifiedCandidate(
+		input.candidate,
+		input.clubId,
+	);
+
+	await db.transaction(async (tx) => {
+		const removed = await tx
+			.delete(meetingCandidateDisqualifications)
+			.where(
+				and(
+					eq(meetingCandidateDisqualifications.meetingId, input.meetingId),
+					eq(meetingCandidateDisqualifications.category, input.category),
+					memberId
+						? eq(meetingCandidateDisqualifications.candidateMemberId, memberId)
+						: guestId
+							? eq(meetingCandidateDisqualifications.candidateGuestId, guestId)
+							: eq(
+									meetingCandidateDisqualifications.candidateWriteIn,
+									writeIn as string,
+								),
+				),
+			)
+			.returning({ id: meetingCandidateDisqualifications.id });
+		if (removed.length === 0) return;
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "vote_disqualify_undo",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: { category: input.category },
+		});
+	});
+}
+
+/**
+ * The three mutually-exclusive candidate columns for one `CandidateRef`, plus
+ * the club-scoping check for the two arms that have a row.
+ *
+ * ONE derivation shared by the set and the clear, which is what keeps them
+ * addressing the same candidate — a write-in folded on the way in and matched
+ * raw on the way out would make undo silently miss its own row.
+ */
+async function resolveDisqualifiedCandidate(
+	candidate: CandidateRef,
+	clubId: string,
+): Promise<{
+	memberId: string | null;
+	guestId: string | null;
+	writeIn: string | null;
+}> {
+	if (candidate.kind === "writeIn") {
+		const parsed = writeInNameSchema.safeParse(candidate.name);
+		if (!parsed.success) {
+			throw new Error(parsed.error.issues[0]?.message ?? "Invalid name.");
+		}
+		// FOLDED, matching what the schema comment says this column holds and what
+		// `loadDisqualifications` looks the candidate up by.
+		return { memberId: null, guestId: null, writeIn: writeInKey(parsed.data) };
+	}
+	if (candidate.kind === "member") {
+		await requireMemberInMeetingClub(candidate.id, clubId);
+		return { memberId: candidate.id, guestId: null, writeIn: null };
+	}
+	await requireGuestInClub(candidate.id, clubId);
+	return { memberId: null, guestId: candidate.id, writeIn: null };
+}
+
 export interface VoterRef {
 	kind: "member" | "guest";
 	id: string;
@@ -263,8 +419,27 @@ export async function castVote(input: {
 			throw new Error(parsed.error.issues[0]?.message ?? "Invalid name.");
 		}
 		writeIn = parsed.data;
+		// A write-in has no derived list to be on, so its disqualification check
+		// cannot ride `isEligibleCandidate` the way the member/guest arm's does —
+		// it is made explicitly here, against the FOLDED key, which is what makes
+		// ruling out "Bob Smith" also refuse a ballot typed "bob smith". Without
+		// this the write-in arm would be the hole in #723's gate: the Vote Counter
+		// can see and disqualify a typed name the moment it has been cast once,
+		// and every later voter could still cast it.
+		const index = await loadDisqualifications(input.meetingId);
+		if (
+			disqualificationFor(index, input.category, {
+				kind: "writeIn",
+				id: writeInKey(writeIn),
+			})
+		) {
+			throw new Error("That person is not eligible for this award.");
+		}
 	} else {
 		const candidates = await loadAwardCandidates(input.meetingId);
+		// `isEligibleCandidate` rejects a DISQUALIFIED candidate as well as an
+		// unlisted one (#723 AC 3) — the ballot hiding the name is a courtesy to a
+		// phone that has polled, and this is the gate.
 		if (!isEligibleCandidate(candidates, input.category, input.candidate)) {
 			throw new Error("That person is not eligible for this award.");
 		}
@@ -517,10 +692,18 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
  * Read through `cap` on the way out. The write path caps too, but this is a
  * public surface and the column is unbounded `text`, so a row written by any
  * future path that forgets is elided here rather than shipped to a phone.
+ *
+ * Stamps `disqualified` like `loadAwardCandidates` does (#723). This is the
+ * OTHER producer of `AwardCandidate`s, and it loads its own copy of the index
+ * for the reason stated there: a disqualification that reached the roster half
+ * of the ballot and not the write-in half would hide one name and leave the
+ * other tappable, on the one category (Best Table Topics) where write-ins are
+ * the common case.
  */
 async function loadWriteInCandidates(
 	meetingId: string,
 ): Promise<Record<AwardCategory, AwardCandidate[]>> {
+	const disqualified = await loadDisqualifications(meetingId);
 	const rows = await db
 		.select({
 			category: meetingVoteSessions.category,
@@ -546,6 +729,7 @@ async function loadWriteInCandidates(
 			kind: "writeIn",
 			id: key,
 			name: cap(r.name, WRITE_IN_LIMITS.name),
+			disqualified: disqualified[r.category].get(`writeIn:${key}`) ?? null,
 		});
 	}
 	return out;
@@ -558,9 +742,32 @@ export interface TallyResult {
 	count: number;
 }
 
+/** A candidate the Vote Counter has ruled out, with the count their votes
+ *  WOULD have had (#723). The count is shown rather than hidden so the console
+ *  can say what the exclusion cost — "3 votes, excluded" is the sentence the
+ *  Vote Counter has to be able to give the room. */
+export interface DisqualifiedTallyResult extends TallyResult {
+	reason: string;
+}
+
 export interface CategoryTally {
 	isOpen: boolean;
+	/** ELIGIBLE candidates only, ranked. This is the winner list (#723 AC 4) —
+	 *  a disqualified candidate is not in it at any count, so a Set winner tap
+	 *  cannot reach one by accident. */
 	results: TallyResult[];
+	/**
+	 * Disqualified candidates, with their reason and their excluded count.
+	 *
+	 * Carried rather than dropped for two reasons the console needs: the undo
+	 * control has to have something to render (a name that vanished from every
+	 * payload could never be restored), and the Vote Counter has to be able to
+	 * see that the exclusion is in force before they announce a result. The
+	 * underlying `meeting_votes` rows are untouched — this is a read-side split,
+	 * which is what makes undo a pure delete with the prior votes intact
+	 * (#723 AC 5).
+	 */
+	disqualified: DisqualifiedTallyResult[];
 	/** Who has voted — names only. Participation, never preference: it lets the
 	 *  Ballot Counter spot a ballot from someone who went home, and it cannot
 	 *  reveal a choice because no id or candidate travels with it. */
@@ -611,18 +818,34 @@ export async function loadTally(
 			if (!key) continue;
 			counts.set(key, (counts.get(key) ?? 0) + 1);
 		}
+		// Write-ins are counted alongside the derived candidates, so the Ballot
+		// Counter reads one ranked list rather than two. Counted BEFORE the
+		// eligible/disqualified split, deliberately: a disqualified candidate's
+		// votes are still in `meeting_votes` and still counted here, they are just
+		// reported in the other list — which is what makes undo restore them with
+		// no write (#723 AC 5).
+		const ranked = [...candidates[category], ...writeIns[category]]
+			.map((c) => ({
+				kind: c.kind,
+				id: c.id,
+				name: c.name,
+				count: counts.get(`${c.kind}:${c.id}`) ?? 0,
+				disqualified: c.disqualified,
+			}))
+			.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 		out[category] = {
 			isOpen: sessions[category].isOpen,
-			// Write-ins are counted alongside the derived candidates, so the Ballot
-			// Counter reads one ranked list rather than two.
-			results: [...candidates[category], ...writeIns[category]]
-				.map((c) => ({
-					kind: c.kind,
-					id: c.id,
-					name: c.name,
-					count: counts.get(`${c.kind}:${c.id}`) ?? 0,
-				}))
-				.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+			results: ranked
+				.filter((r) => !r.disqualified)
+				.map(({ disqualified: _, ...r }) => r),
+			disqualified: ranked
+				.filter((r) => r.disqualified)
+				.map(({ disqualified, ...r }) => ({
+					...r,
+					// Non-null by the filter above; `disqualified` is the discriminator
+					// the two lists are split on.
+					reason: (disqualified as CandidateDisqualification).reason,
+				})),
 			voterNames: mine
 				.map((r) => r.voterMemberName ?? r.voterGuestName ?? "")
 				.filter(Boolean)

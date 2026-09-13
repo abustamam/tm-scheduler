@@ -25,6 +25,15 @@
  * calling `getSessionUser()` here just resolves to "no session" (the same
  * fallback it uses for a real anonymous self-assert caller in production).
  *
+ * The same gate answers for `voting.ts` — `openVoteFn`, `closeVoteFn`,
+ * `getVoteTally`, and since #723 `disqualifyCandidateFn` /
+ * `undoDisqualificationFn`, the last two being a new write that decides who may
+ * exclude another person from an award. Their half of the split lives in
+ * `voting-authz.guard.test.ts`, which proves each of those exports calls
+ * `requireVoteCounter` at all; the DECISION those calls get is the one this
+ * file pins, so #723's "only a user who may open or close a vote may
+ * disqualify" is these two files together and not a third copy of them.
+ *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/vote-counter-capability.integration.test.ts
