@@ -2461,9 +2461,14 @@ function Signal({
 
 const NOTE_LINE_KEYS = ["a", "b", "c", "d", "e", "f"];
 
+/** Both call sites (`spacious` :1893, `timing` :2379) are plain block
+ *  containers since #721 took the votes panel out of the flex row they shared,
+ *  so the root carries no `flex: 1` — it would be inert, and AC 3 was written
+ *  about exactly this kind of leftover. Restore it if this is ever a flex item
+ *  again. */
 function NotesBlock({ lines }: { lines: number }) {
 	return (
-		<div style={{ flex: 1 }}>
+		<div>
 			<Kick style={{ fontSize: 9.5, marginBottom: 7 }}>Meeting Notes</Kick>
 			{NOTE_LINE_KEYS.slice(0, lines).map((k) => (
 				<div

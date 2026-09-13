@@ -1796,8 +1796,13 @@ describe("timing layout splits nothing (#463)", () => {
 // the positive half of a guard cannot assert a string that no longer has a
 // place to live.
 //
-// The negative assertions below are what replaces it. They are the only thing
-// standing between this issue and a well-meaning re-add.
+// The negative assertions below are what replaces it. Checked before writing
+// that, per CODING_STANDARDS.md's rule on superlatives: `grep -rn "Tonight"`
+// and `grep -rln "________"` over `src/` and `content/` return this file, the
+// component's own tombstone comment, the guard's, and three unrelated guest
+// fixtures named "Tonight …". So no other suite asserts the box's absence
+// today — which is a fact about the tree as it stands, not a guarantee, and
+// the thing to re-check if these ever look redundant.
 describe("the printed agenda carries no paper votes box (#721)", () => {
 	const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
 
@@ -1820,6 +1825,16 @@ describe("the printed agenda carries no paper votes box (#721)", () => {
 		// (#510)` covers the QR on its own terms across all four layouts; this
 		// pins the pairing — no box, and a way to vote — in one assertion, which
 		// is the thing a future reader of the block above needs to see.
+		//
+		// It also carries the CAPTION's award names, which nothing else does.
+		// `award-wording.guard.test.ts` has two halves and they guard different
+		// things: the offender sweep guards SPELLING across every source file,
+		// and the `SURFACES` list guards DELETION per site. That list deliberately
+		// omits the caption — its docblock says pinning an abbreviated three-item
+		// list would freeze the abbreviation as if it were the award's name — and
+		// #721 removed this file's own entry with the votes box. So between them
+		// nothing would notice the caption quietly losing an award, on either
+		// layout that used to print the names twice.
 		it(`keeps the scan-to-vote QR on the ${layout} layout`, () => {
 			const { container } = render(
 				<MeetingAgendaPrint
@@ -1833,10 +1848,28 @@ describe("the printed agenda carries no paper votes box (#721)", () => {
 				/>,
 			);
 			expect(screen.queryByText(/Tonight.s Votes/)).toBeNull();
-			const qr = container.querySelector(".footer-qr");
-			expect(qr).not.toBeNull();
-			expect(qr?.querySelector("svg")).not.toBeNull();
-			expect(qr?.textContent).toContain("Best Speaker");
+			// EVERY QR on the sheet, not `querySelector`'s first. Both layouts
+			// print two since #746, and on `spacious` they come from different
+			// modules: page 1 carries its own caption in this file (:1817),
+			// page 2 gets `DarkFooter`'s from `print-theme.tsx`. `timing` takes
+			// both from `DarkFooter`. So the first match is a DIFFERENT caption
+			// per layout, and asserting it alone left the other copy unguarded —
+			// verified by mutation: editing `print-theme.tsx`'s caption failed
+			// `timing` only, and editing this file's failed `spacious` only.
+			// Looping over both copies is what makes one edit fail both cases.
+			const qrs = [...container.querySelectorAll(".footer-qr")];
+			// The loop is only a claim if it ran.
+			expect(qrs.length).toBeGreaterThan(0);
+			for (const qr of qrs) {
+				expect(qr.querySelector("svg")).not.toBeNull();
+				// All three awards the caption abbreviates, not just the first.
+				// The halves are separate text nodes either side of a `<br/>`, so
+				// `textContent` runs them together; the second is asserted as the
+				// whole `Evaluator · Table Topics` pair, which fails if either
+				// name goes and also fixes their order.
+				expect(qr.textContent).toContain("Best Speaker");
+				expect(qr.textContent).toContain("Evaluator · Table Topics");
+			}
 		});
 	}
 });
