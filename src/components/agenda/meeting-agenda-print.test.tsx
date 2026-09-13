@@ -492,18 +492,21 @@ describe("MeetingAgendaPrint announcements", () => {
 	}
 
 	for (const layout of ["spacious", "timing"] as const) {
+		// Both cases carried a third assertion that the "Tonight's Votes" box was
+		// still there. It was a bystander — these two are about announcements
+		// replacing the ruled Meeting Notes lines, and the box merely shared the
+		// row. #721 retired the box; the assertion went with it rather than the
+		// cases.
 		it(`${layout}: announcements replace the ruled Meeting Notes lines when present`, () => {
 			renderWith(layout, withAnnouncements);
 			expect(screen.getByText("Bring a guest")).toBeTruthy();
 			expect(screen.queryByText("Meeting Notes")).toBeNull();
-			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
 		});
 
 		it(`${layout}: keeps the Meeting Notes lines when there are no announcements`, () => {
 			renderWith(layout, header);
 			expect(screen.getByText("Meeting Notes")).toBeTruthy();
 			expect(screen.queryByText("Bring a guest")).toBeNull();
-			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
 		});
 	}
 });
@@ -1778,22 +1781,95 @@ describe("timing layout splits nothing (#463)", () => {
 	});
 });
 
-// #460. The "Tonight's Votes" box is the printed agenda's copy of the award
-// names, and until this test nothing pinned its three strings at all — which is
-// how it kept the singular "Best Table Topic" long after the ballot, the
-// minutes, the minutes PDF and the club role sheet had moved to the plural.
+// #721 RETIRED the describe block that stood here: "the printed votes box names
+// the awards as every other surface does (#460)", which asserted the box
+// rendered "Best Speaker", "Best Table Topics" and "Best Evaluator" on both
+// `spacious` and `timing`. The coverage was not lost by accident — the surface
+// it covered is gone. The box was a paper ballot from before digital voting
+// (#510); the club now scans the footer QR, so three award names and three
+// `________` rules collected marks nobody counted.
 //
-// `award-wording.guard.test.ts` greps the source for the retired spelling; this
-// asserts the box actually RENDERS the name, on both layouts that carry it.
-// Neither half substitutes for the other: a grep cannot see a box that stopped
-// rendering, and a render cannot see the nine other surfaces.
-describe("the printed votes box names the awards as every other surface does (#460)", () => {
+// #460's other half still stands: `award-wording.guard.test.ts` sweeps every
+// source file for the retired singular "Best Table Topic", so the spelling
+// cannot come back through a new surface. What that file LOST is its per-site
+// entry for `meeting-agenda-print.tsx`, removed there with the same reason —
+// the positive half of a guard cannot assert a string that no longer has a
+// place to live.
+//
+// The negative assertions below are what replaces it. Checked before writing
+// that, per CODING_STANDARDS.md's rule on superlatives: `grep -rn "Tonight"`
+// and `grep -rln "________"` over `src/` and `content/` return this file, the
+// component's own tombstone comment, the guard's, and three unrelated guest
+// fixtures named "Tonight …". So no other suite asserts the box's absence
+// today — which is a fact about the tree as it stands, not a guarantee, and
+// the thing to re-check if these ever look redundant.
+describe("the printed agenda carries no paper votes box (#721)", () => {
+	const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+
 	for (const layout of ["spacious", "timing"] as const) {
-		it(`names all three awards on the ${layout} layout`, () => {
+		it(`renders no "Tonight's Votes" box on the ${layout} layout`, () => {
 			renderLayout(layout);
-			expect(screen.getByText("Best Speaker")).toBeTruthy();
-			expect(screen.getByText("Best Table Topics")).toBeTruthy();
-			expect(screen.getByText("Best Evaluator")).toBeTruthy();
+			expect(screen.queryByText(/Tonight.s Votes/)).toBeNull();
+			// The two award names the box was the LAST place in this file to
+			// render. "Best Speaker" is deliberately not among them: it survives
+			// in the footer QR's caption, which is the point of the case below.
+			expect(screen.queryByText("Best Table Topics")).toBeNull();
+			expect(screen.queryByText("Best Evaluator")).toBeNull();
+			// The write-a-name-here rules themselves, so a box that kept its shape
+			// under a different heading still fails.
+			expect(screen.queryAllByText("________")).toHaveLength(0);
+		});
+
+		// AC 9. The QR is the REPLACEMENT for the box, so the deletion above is
+		// only safe while it renders. `MeetingAgendaPrint — the scan-to-vote QR
+		// (#510)` covers the QR on its own terms across all four layouts; this
+		// pins the pairing — no box, and a way to vote — in one assertion, which
+		// is the thing a future reader of the block above needs to see.
+		//
+		// It also carries the CAPTION's award names, which nothing else does.
+		// `award-wording.guard.test.ts` has two halves and they guard different
+		// things: the offender sweep guards SPELLING across every source file,
+		// and the `SURFACES` list guards DELETION per site. That list deliberately
+		// omits the caption — its docblock says pinning an abbreviated three-item
+		// list would freeze the abbreviation as if it were the award's name — and
+		// #721 removed this file's own entry with the votes box. So between them
+		// nothing would notice the caption quietly losing an award, on either
+		// layout that used to print the names twice.
+		it(`keeps the scan-to-vote QR on the ${layout} layout`, () => {
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			expect(screen.queryByText(/Tonight.s Votes/)).toBeNull();
+			// EVERY QR on the sheet, not `querySelector`'s first. Both layouts
+			// print two since #746, and on `spacious` they come from different
+			// modules: page 1 carries its own caption in this file (:1817),
+			// page 2 gets `DarkFooter`'s from `print-theme.tsx`. `timing` takes
+			// both from `DarkFooter`. So the first match is a DIFFERENT caption
+			// per layout, and asserting it alone left the other copy unguarded —
+			// verified by mutation: editing `print-theme.tsx`'s caption failed
+			// `timing` only, and editing this file's failed `spacious` only.
+			// Looping over both copies is what makes one edit fail both cases.
+			const qrs = [...container.querySelectorAll(".footer-qr")];
+			// The loop is only a claim if it ran.
+			expect(qrs.length).toBeGreaterThan(0);
+			for (const qr of qrs) {
+				expect(qr.querySelector("svg")).not.toBeNull();
+				// All three awards the caption abbreviates, not just the first.
+				// The halves are separate text nodes either side of a `<br/>`, so
+				// `textContent` runs them together; the second is asserted as the
+				// whole `Evaluator · Table Topics` pair, which fails if either
+				// name goes and also fixes their order.
+				expect(qr.textContent).toContain("Best Speaker");
+				expect(qr.textContent).toContain("Evaluator · Table Topics");
+			}
 		});
 	}
 });

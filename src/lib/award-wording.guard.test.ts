@@ -144,16 +144,22 @@ const SURFACES: { file: string; needles: string[] }[] = [
 		file: "src/components/club/vote-counter-panel.tsx",
 		needles: [`best_table_topics: "${PLURAL}"`],
 	},
-	{
-		file: "src/components/agenda/meeting-agenda-print.tsx",
-		// The printed agenda's "Tonight's Votes" box. The adjacent PAIR rather
-		// than the whole bracketed array: Biome's multiline form of the same
-		// literal adds a trailing comma and bracket padding, which whitespace
-		// collapsing alone does not absorb, so pinning the brackets failed on a
-		// reflow of correct copy. The pair still fixes the plural and its
-		// reading-order neighbour.
-		needles: [`"${PLURAL}", "Best Evaluator"`],
-	},
+	// DELIBERATELY ABSENT: `src/components/agenda/meeting-agenda-print.tsx`. It
+	// held the printed agenda's "Tonight's Votes" box, pinned here on the
+	// adjacent PAIR `"Best Table Topics", "Best Evaluator"`. #721 retired that
+	// box — the club votes by scanning the footer QR (#510), so three award names
+	// over three `________` rules collected marks nobody counted. With the
+	// surface gone the award's name has nowhere to live in that file, so the
+	// entry is REMOVED rather than left to fail: a positive assertion cannot
+	// guard a string that has no site.
+	//
+	// The file-header note above warns that "a list that silently omits a surface
+	// is the maintenance trap", which is why this is written down rather than
+	// deleted quietly. The two halves that still cover the file: the offender
+	// sweep below still reads it, so the singular cannot return there; and
+	// `meeting-agenda-print.test.tsx`'s `#721` block asserts the box does NOT
+	// render, so the surface cannot come back without someone reading both notes.
+	// Re-add an entry here if a printed layout ever names the award again.
 	{
 		// The Ballot Counter console's on-screen help text. Missing from this
 		// list on the first pass — it was already plural, so nothing failed, and
