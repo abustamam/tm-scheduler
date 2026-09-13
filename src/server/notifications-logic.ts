@@ -25,6 +25,7 @@ import {
 import type { SendEmailParams } from "#/lib/email";
 import { sendEmail as realSendEmail } from "#/lib/email";
 import { formatMeetingDate } from "#/lib/format";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { buildUnsubscribeUrl } from "#/lib/unsubscribe-token";
 
 /** Give up on a row after this many failed attempts (bounded retry). */
@@ -68,6 +69,11 @@ export interface DueNotification {
 	roleName: string;
 	clubName: string;
 	meetingScheduledAt: Date;
+	/** The meeting's video-call join link, or null (#731). The reminder is the
+	 *  one place the link reaches a member who is NOT looking at the app, which
+	 *  is the whole complaint the feature answers ("what's the link?" in the
+	 *  group chat on meeting night). */
+	joinUrl: string | null;
 	// Send-time staleness re-validation for role-assignment reminders (#272).
 	// `expectedAssignedMemberId` is the assignee the reminder was enqueued FOR
 	// (NULL ⇒ not a role reminder — e.g. a #271 row — so it is never re-validated);
@@ -113,6 +119,9 @@ export function buildNotificationEmail(row: {
 	roleName: string;
 	clubName: string;
 	meetingScheduledAt: Date;
+	/** The meeting's video-call join link, or null/absent (#731). Emitted in BOTH
+	 *  bodies when set, and mentioned in neither when not. */
+	joinUrl?: string | null;
 	/** The one-click, no-auth unsubscribe URL for this recipient (#274). Every
 	 *  reminder email carries it (deliverability + etiquette). */
 	unsubscribeUrl: string;
@@ -120,10 +129,25 @@ export function buildNotificationEmail(row: {
 	const when = formatMeetingDate(row.meetingScheduledAt);
 	const subject = `Reminder: you're ${row.roleName} at ${row.clubName} on ${when}`;
 
+	// #731. The link goes in BOTH halves, not just the HTML one: the plain-text
+	// body is what a text-only client renders, and a reminder whose join link
+	// exists only in the HTML fails for exactly the members most likely to be
+	// reading it on a locked-down work mail client.
+	//
+	// Re-normalized here rather than trusted off the row, exactly as the meeting
+	// page does at render, and this is the MORE important of the two: the page
+	// needs someone to be looking at it, while a reminder is pushed to every role
+	// holder from the club's own sender. `normalizePresentationUrl` returns null
+	// for a non-http scheme and for credentials-in-URL, so a row written some
+	// other way — a hand-run SQL fix, a future importer — produces a reminder
+	// with no link rather than a `javascript:` href or a deceptive one.
+	const joinUrl = normalizePresentationUrl(row.joinUrl);
+
 	const text = [
 		`Hi ${row.recipientName},`,
 		"",
 		`This is a reminder that you're signed up as ${row.roleName} for ${row.clubName}'s meeting on ${when}.`,
+		...(joinUrl ? ["", `Join the video call: ${joinUrl}`] : []),
 		"",
 		"See you there!",
 		row.clubName,
@@ -132,9 +156,13 @@ export function buildNotificationEmail(row: {
 		`Don't want role reminders? Unsubscribe: ${row.unsubscribeUrl}`,
 	].join("\n");
 
+	const joinHtml = joinUrl
+		? `\n  <p>Join the video call: <a href="${escapeHtml(joinUrl)}">${escapeHtml(joinUrl)}</a></p>`
+		: "";
+
 	const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#18181b;">
   <p>Hi ${escapeHtml(row.recipientName)},</p>
-  <p>This is a reminder that you're signed up as <strong>${escapeHtml(row.roleName)}</strong> for ${escapeHtml(row.clubName)}'s meeting on <strong>${escapeHtml(when)}</strong>.</p>
+  <p>This is a reminder that you're signed up as <strong>${escapeHtml(row.roleName)}</strong> for ${escapeHtml(row.clubName)}'s meeting on <strong>${escapeHtml(when)}</strong>.</p>${joinHtml}
   <p>See you there!<br>${escapeHtml(row.clubName)}</p>
   <p style="font-size:12px;color:#a1a1aa;margin-top:24px;">
     Don't want role reminders?
@@ -145,11 +173,24 @@ export function buildNotificationEmail(row: {
 	return { subject, html, text };
 }
 
+/**
+ * Escape for BOTH HTML text and a double-quoted attribute value.
+ *
+ * The `"` arm arrived with #731. Two values here land inside `href="…"`, and
+ * `join_url` is the first of them that is not app-generated.
+ * `normalizePresentationUrl` percent-encodes a quote, so this changes nothing
+ * for a link that came through the app — it is what keeps a row written some
+ * other way (a hand-run SQL fix, a future importer) from closing the attribute
+ * and opening a tag. `&quot;` renders as `"` in text content, so the call sites
+ * that escape plain copy are unaffected. `'` needs no arm: every attribute in
+ * this template is double-quoted.
+ */
 function escapeHtml(value: string): string {
 	return value
 		.replace(/&/g, "&amp;")
 		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;");
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;");
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +258,7 @@ export async function selectDueNotifications(
 				roleName: roleDefinitions.name,
 				clubName: clubs.name,
 				meetingScheduledAt: meetings.scheduledAt,
+				joinUrl: meetings.joinUrl,
 				expectedAssignedMemberId: notifications.assignedMemberId,
 				currentAssignedMemberId: roleSlots.assignedMemberId,
 				slotStatus: roleSlots.status,

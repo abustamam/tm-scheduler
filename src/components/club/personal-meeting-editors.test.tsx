@@ -51,6 +51,8 @@ const STORED = {
 	status: "scheduled",
 	theme: "Old theme",
 	location: "The Old Library, Room 5",
+	// #731 — required by `MeetingMetaEcho`, which `EditorMeeting` extends.
+	joinUrl: "https://zoom.us/j/1234567890",
 	wordOfTheDay: "ineffable",
 	wodDefinition: "too great to be expressed in words",
 	wodExample: "an ineffable joy",

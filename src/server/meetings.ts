@@ -11,7 +11,11 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import { MEETING_FIELDS, MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
+import {
+	JOIN_URL_FIELD,
+	MEETING_FIELDS,
+	MEETING_UPDATE_FIELDS,
+} from "#/lib/meeting-limits";
 import {
 	localDateKey,
 	localDayRange,
@@ -628,6 +632,10 @@ const createMeetingSchema = z.object({
 	// HTML datetime-local value, interpreted in the club's timezone.
 	scheduledAt: z.string().min(1),
 	location: MEETING_FIELDS.location.optional(),
+	// #731. LENGTH only, and measured against the NORMALIZED value — see
+	// `JOIN_URL_FIELD`. The stored value's SHAPE comes from
+	// `normalizePresentationUrl` in `applyCreateMeeting` / `applyMeetingUpdate`.
+	joinUrl: JOIN_URL_FIELD.optional(),
 	theme: MEETING_FIELDS.theme.optional(),
 	wordOfTheDay: WOD_FIELDS.word.optional(),
 	notes: MEETING_FIELDS.notes.optional(),
@@ -652,6 +660,11 @@ const updateMeetingSchema = z.object({
 	scheduledAt: z.string().min(1),
 	lengthMinutes: z.number().int().positive().optional(),
 	location: MEETING_UPDATE_FIELDS.location.optional(),
+	// #731. A full-REPLACE field like the rest: omitting it CLEARS the stored
+	// link, which is why `MeetingMetaEcho` carries it — see
+	// `#/lib/meeting-meta-update`. Rejects rather than truncates, and measures
+	// the NORMALIZED length; `JOIN_URL_FIELD` carries both reasons.
+	joinUrl: JOIN_URL_FIELD.optional(),
 	theme: MEETING_UPDATE_FIELDS.theme.optional(),
 	wordOfTheDay: WOD_UPDATE_FIELDS.word.optional(),
 	wodDefinition: WOD_UPDATE_FIELDS.definition.optional(),

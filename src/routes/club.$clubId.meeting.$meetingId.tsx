@@ -14,6 +14,7 @@ import {
 	Lock,
 	MapPin,
 	Sparkles,
+	Video,
 	WifiOff,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -75,6 +76,7 @@ import {
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
 import {
 	deriveRollAttendance,
 	deriveRollGuests,
@@ -479,6 +481,10 @@ function MeetingView() {
 		now,
 	});
 	const locked = isMeetingLocked(meeting.status);
+	// #731. Null unless the club set a join link AND it still normalizes to an
+	// http(s) URL — see the render site in the header for why it is re-checked
+	// here rather than read straight off the row.
+	const joinUrl = normalizePresentationUrl(meeting.joinUrl);
 	// Its own fact, not a step toward `over`: it drives the "already taken place"
 	// notice, which a manager (still editing) must not see.
 	const datePassed = meetingDatePassed(meeting.scheduledAt, timezone, now);
@@ -1398,6 +1404,34 @@ function MeetingView() {
 							<MapPin className="size-4" aria-hidden />
 							{meeting.location}
 						</span>
+					) : null}
+					{/* The video-call join link (#731). A SIBLING of the location
+					    conditional above, never a child of it: an online-only club
+					    leaves `location` blank, and that club is the entire audience
+					    for this chip — nesting it would hide the link on exactly the
+					    meetings that have one.
+
+					    Re-normalized at render rather than trusted from the row. Every
+					    write path already stores a clean http(s) URL, so this changes
+					    nothing today; it means a value that reached the column some
+					    other way (a hand-run SQL fix, a future importer) cannot put a
+					    `javascript:` href on the page.
+
+					    A bare `<a>`, sibling to the surrounding markup and never inside
+					    a `<Link>` — a nested anchor is invalid HTML. `text-primary` is
+					    all the colour it needs: the global `a` rule lives in
+					    `@layer base`, so a component's own utility wins with no opt-out
+					    (CODING_STANDARDS "the global text-link rule is LAYERED"). */}
+					{joinUrl ? (
+						<a
+							href={joinUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
+						>
+							<Video className="size-4" aria-hidden />
+							Join the video call
+						</a>
 					) : null}
 				</div>
 				<MeetingNavStrip clubId={clubId} items={navItems} />

@@ -1,0 +1,1 @@
+ALTER TABLE "meetings" ADD COLUMN "join_url" text;

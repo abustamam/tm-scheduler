@@ -1076,6 +1076,22 @@ export const meetings = pgTable(
 		// default (90) backfills meetings created before this column existed.
 		lengthMinutes: integer("length_minutes").notNull().default(90),
 		location: text("location"),
+		// The video-call join link for an online or hybrid club (#731). Named
+		// `join_url` rather than `zoom_url`: the value is a join link and the
+		// vendor is not the app's business, and `speeches.presentation_url` beside
+		// it sets the naming shape. Every write normalizes through
+		// `normalizePresentationUrl`, so a stored value is always an http(s) URL
+		// with a dotted host — never "tbd", never `javascript:`.
+		//
+		// Deliberately WITHHELD from /print, /present, /word and the .pptx export.
+		// A join URL is not private data, it is a key to the door: anyone holding
+		// it can walk into the meeting and there is no revocation short of a new
+		// room. Those four are in-room artifacts that get projected, printed and
+		// shared onward, and nobody types a URL off a projector anyway. The
+		// withholding is a RENDER-side rule — the shared `loadMeetingDetail`
+		// payload carries this column to every consumer — held by
+		// `src/routes/join-url-not-on-print-surfaces.guard.test.ts`.
+		joinUrl: text("join_url"),
 		theme: text("theme"),
 		wordOfTheDay: text("word_of_the_day"),
 		// Word-of-the-Day supporting copy for the projected present-mode deck.

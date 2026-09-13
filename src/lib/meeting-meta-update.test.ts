@@ -36,6 +36,7 @@ import {
  *  fixture string. */
 const STORED: MeetingMetaEcho = {
 	location: "The Old Library, Room 5",
+	joinUrl: "https://zoom.us/j/1234567890",
 	wordOfTheDay: "ineffable",
 	wodDefinition: "too great to be expressed in words",
 	wodExample: "an ineffable joy",
@@ -84,6 +85,7 @@ describe("themeOnlyUpdate — the round trip", () => {
 	it("echoes every other stored meta field unchanged", () => {
 		const payload = build();
 		expect(payload.location).toBe(STORED.location);
+		expect(payload.joinUrl).toBe(STORED.joinUrl);
 		expect(payload.wordOfTheDay).toBe(STORED.wordOfTheDay);
 		expect(payload.wodDefinition).toBe(STORED.wodDefinition);
 		expect(payload.wodExample).toBe(STORED.wodExample);
@@ -95,6 +97,7 @@ describe("themeOnlyUpdate — the round trip", () => {
 		const payload = build({
 			current: {
 				location: null,
+				joinUrl: null,
 				wordOfTheDay: null,
 				wodDefinition: null,
 				wodExample: null,
@@ -103,11 +106,23 @@ describe("themeOnlyUpdate — the round trip", () => {
 			},
 		});
 		expect(payload.location).toBeUndefined();
+		expect(payload.joinUrl).toBeUndefined();
 		expect(payload.wordOfTheDay).toBeUndefined();
 		expect(payload.wodDefinition).toBeUndefined();
 		expect(payload.wodExample).toBeUndefined();
 		expect(payload.notes).toBeUndefined();
 		expect(payload.reminders).toBeUndefined();
+	});
+
+	/**
+	 * #731, called out on its own because the blast radius is not like the
+	 * others'. Losing a location on an in-person meeting is an inconvenience the
+	 * room already knows the answer to; losing the join link on an ONLINE club's
+	 * meeting locks every member out of the meeting itself, and the club has no
+	 * way to notice until the hour it starts.
+	 */
+	it("echoes the video-call join link, which is the room for an online club", () => {
+		expect(build().joinUrl).toBe("https://zoom.us/j/1234567890");
 	});
 
 	it("does NOT send lengthMinutes or meetingNumber", () => {
@@ -159,9 +174,10 @@ describe("every updateMeeting field is echoed or waived", () => {
 		expect(start).toBeGreaterThan(-1);
 		// Counts the STRUCTURE — the schema's own keys — rather than a lexical
 		// proxy like quoted literals, which is the erosion CODING_STANDARDS
-		// describes. 12 keys as of #666; a schema that shrinks below the waiver
-		// list plus the echo has lost fields, which is also worth failing on.
-		expect(keys.length).toBeGreaterThanOrEqual(12);
+		// describes. 12 keys as of #666, 13 as of #731 (`joinUrl`); a schema that
+		// shrinks below the waiver list plus the echo has lost fields, which is
+		// also worth failing on.
+		expect(keys.length).toBeGreaterThanOrEqual(13);
 	});
 
 	it("echoes every non-waived field back to the writer", () => {
