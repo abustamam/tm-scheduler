@@ -26,9 +26,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { PublicFooter } from "#/components/public-footer";
+import { posterWordSize } from "#/lib/word-poster";
 import {
 	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
+	measuredHeights,
 	printableDocument,
 	printedPageCount,
 } from "#/test/print-page-count";
@@ -44,6 +46,8 @@ import {
 	PRINT_PAGE_CSS,
 	PrintButton,
 	PrintToolbar,
+	pageBox,
+	printPageCss,
 } from "./print-theme";
 import { WordOfTheDayPoster } from "./word-of-the-day-poster";
 
@@ -175,6 +179,34 @@ function pages(css: string, html: string): number {
 	return printedPageCount(printableDocument(css, html));
 }
 
+/**
+ * The Word of the Day poster inside the ROUTE's wrapper — see the page-count
+ * assertion below for why the wrapper is not optional.
+ *
+ * A function rather than a constant because #718 needs the same page at both
+ * ends of the size table: the word drives `posterWordSize`, which drives the
+ * body size beneath it, so "Apt" and a 22-letter word compose very differently
+ * tall pages out of identical markup. The definition and example are held
+ * fixed so the word is the only thing varying.
+ */
+function posterHtml(word = "Ephemeral"): string {
+	return renderToStaticMarkup(
+		<div
+			className="pgwrap"
+			style={{ display: "flex", justifyContent: "center" }}
+		>
+			<WordOfTheDayPoster
+				word={word}
+				definition="Lasting for a very short time; fleeting."
+				example="The applause was ephemeral, but the lesson stayed."
+				clubName={LONG_CLUB}
+				dateLong="Friday, July 31, 2026"
+				logoUrl={LOGO}
+			/>
+		</div>,
+	);
+}
+
 // ---------------------------------------------------------------------------
 
 const hasChrome = findChrome() !== null;
@@ -277,22 +309,119 @@ describe.skipIf(!hasChrome)(
 			// change the count. Where the wrapper lives differs per surface — the
 			// role sheet and `TwoPage` carry their own, and the grid and editorial
 			// agendas have none at all.
-			const html = renderToStaticMarkup(
-				<div
-					className="pgwrap"
-					style={{ display: "flex", justifyContent: "center" }}
-				>
-					<WordOfTheDayPoster
-						word="Ephemeral"
-						definition="Lasting for a very short time; fleeting."
-						example="The applause was ephemeral, but the lesson stayed."
-						clubName={LONG_CLUB}
-						dateLong="Friday, July 31, 2026"
-						logoUrl={LOGO}
-					/>
-				</div>,
+			//
+			// The STYLESHEET is the route's too, and since #718 that is no longer
+			// `PRINT_PAGE_CSS` — the poster is the one landscape surface, so it
+			// serves `printPageCss("landscape")`.
+			expect(pages(printPageCss("landscape"), posterHtml())).toBe(1);
+
+			// MEASURED, NOT ASSUMED: the count above cannot tell you the poster
+			// printed landscape. Serving the portrait default instead also prints
+			// 1 — a 1056px-wide sheet in an 816px-wide page box OVERFLOWS
+			// HORIZONTALLY, and horizontal overflow is clipped rather than
+			// paginated, so the club gets one sheet with the right third of the
+			// poster missing and every gate green. (Expected 2 here first; Chrome
+			// said 1. The mechanism is why, not a quirk.)
+			//
+			// So the orientation itself is pinned where it CAN be seen: at the
+			// source, by `print-page-reset.guard.test.ts` (which route calls
+			// `printPageCss("landscape")`) and by `word-of-the-day-poster.test.tsx`
+			// (that the sheet `FitPage` renders is the landscape box). This line
+			// records the blindness rather than leaving the 1 above to be read as
+			// evidence it does not carry — the same job as the empty-document
+			// control at the bottom of this file.
+			expect(pages(PRINT_PAGE_CSS, posterHtml())).toBe(1);
+		});
+
+		/**
+		 * That the landscape `@page` rule REACHES Chrome, which the poster's own
+		 * count cannot show (see above).
+		 *
+		 * A 1056px-tall sheet is one page under `letter portrait` and two under
+		 * `letter landscape`, because the landscape page box is only 816px tall and
+		 * VERTICAL overflow is the kind that paginates. So the pair below is a
+		 * direct read of the page box's height: it can only pass if the browser
+		 * honoured the orientation this change added.
+		 *
+		 * Synthetic markup and a hand-built `.agenda-page`, deliberately, for the
+		 * same reason as the pagination test above it: the subject is the
+		 * STYLESHEET, not any component.
+		 */
+		it("the landscape page box is really 816px tall, not 1056", () => {
+			const portraitSheet =
+				'<div class="agenda-page" style="width:816px;height:1056px;background:#fff"></div>';
+			expect(pages(printPageCss("landscape"), portraitSheet)).toBe(2);
+			// The control that makes that mean something: the identical sheet under
+			// the portrait page box is one page. Without it, a 2 could come from
+			// anything about the fixture.
+			expect(pages(PRINT_PAGE_CSS, portraitSheet)).toBe(1);
+		});
+
+		/**
+		 * The height half of the landscape turn (#718), which no other gate sees.
+		 *
+		 * `FitPage` scales a sheet down when its content overruns, which prints the
+		 * word SMALLER than `posterWordSize` declares with the count unchanged —
+		 * the same blindness `print-density.test.tsx` exists for on the agenda.
+		 * #718 spent 23% of the sheet's height (1056 → 816) to buy 35% of its
+		 * width, so height is the axis the change could plausibly have broken, and
+		 * AC 6 is exactly "the scale-down must not fire for normal inputs". One
+		 * word per bucket, measured directly.
+		 *
+		 * READ THIS BEFORE ADDING A WORD. The harness runs with
+		 * `MAP * ~NOTFOUND`, so Fraunces never loads and the platform's fallback
+		 * serif does the drawing — and that face is WIDER than Fraunces at these
+		 * sizes. Every bucket's size is priced at 92–98% of the measure in
+		 * Fraunces, so the fallback wraps each bucket's WIDEST word onto a second
+		 * line here and nowhere real. Measured: "Wampum" composes 932px against
+		 * this 816px sheet and would fail — and it does the same thing at the
+		 * PORTRAIT sizes this change replaced ("Wampum" @173px in a 704px box is
+		 * two lines too), so it is a property of the harness, not of #718.
+		 *
+		 * Two consequences. The words below are chosen to carry more slack than a
+		 * wrapped word line costs at their size, because CI's Ubuntu fallback is a
+		 * different face again and moves where lines break. And an exact line
+		 * count is deliberately NOT asserted for the same reason — it would be
+		 * green here and red on the runner.
+		 *
+		 * One browser launch for all of them, per the note on `measuredHeights`:
+		 * launches are this harness's whole running cost and a generous file
+		 * starves its neighbours rather than itself.
+		 */
+		it("no bucket needs FitPage's scale-down", () => {
+			const sheet = pageBox("landscape").height;
+			// One word per bucket: 233 / 157 / 124 / 111 / 93 px of display type,
+			// plus an all-caps word off the second table. macOS slacks at the time
+			// of writing: 115 / 181 / 216 / 113 / 155 / 211 px.
+			const words = [
+				"Apt",
+				"Ephemeral",
+				"Ephemerally",
+				"Telecommunications",
+				"Electroencephalographs",
+				"EPHEMERAL",
+			];
+			const doc = printableDocument(
+				printPageCss("landscape"),
+				words.map((w, i) => `<div id="w${i}">${posterHtml(w)}</div>`).join(""),
 			);
-			expect(pages(PRINT_PAGE_CSS, html)).toBe(1);
+			const heights = measuredHeights(
+				doc,
+				words.map((_, i) => `#w${i} [data-fit-inner]`),
+			);
+			words.forEach((word, i) => {
+				const natural = heights[i] as number;
+				expect(
+					natural,
+					`"${word}" composes ${natural}px of content against a ${sheet}px ` +
+						"landscape sheet. Over it, FitPage scales the whole poster down — " +
+						"the page count stays 1 and the word prints smaller than " +
+						`posterWordSize says (${posterWordSize(word)}px), silently. If ` +
+						"this is a few px over on a runner whose fallback serif wraps a " +
+						"line differently, the fix is a narrower fixture word, not a " +
+						"bigger sheet.",
+				).toBeLessThanOrEqual(sheet);
+			});
 		});
 
 		it("the club role sheet prints exactly one page", () => {
