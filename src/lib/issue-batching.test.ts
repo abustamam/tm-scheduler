@@ -666,6 +666,18 @@ describe("isMigrationBearing", () => {
  * 21 issues by hand rather than trust the plan.
  */
 describe("isPriority", () => {
+	/**
+	 * The literal, not the constant. Every other assertion here is stated
+	 * relative to `PRIORITY_LABEL` and so passes for any value of it — but the
+	 * string is a wire contract with two things vitest cannot see: the label on
+	 * the GitHub tracker, and the row in `docs/agents/triage-labels.md`. Rename
+	 * the constant's value and the planner silently stops firing on every issue
+	 * the maintainer labelled. See CODING_STANDARDS.md, "Test coverage".
+	 */
+	test("the label string is exactly the one on the tracker", () => {
+		expect(PRIORITY_LABEL).toBe("priority");
+	});
+
 	test("the label is the whole signal", () => {
 		expect(isPriority([PRIORITY_LABEL])).toBe(true);
 	});
@@ -732,10 +744,16 @@ describe("planBatches — priority", () => {
 	});
 
 	test("priority does not win against a dependency", () => {
-		// #3 is labelled and #1 is not, and #3 still lands after it. The label
-		// changes the tie-break `orderByDependency` uses; it is not an input to
-		// whether an issue is ready. (#2 also lands ahead of #3 — Kahn releases a
-		// whole ready level at once, and #2 was ready in the first one.)
+		// TWO priority issues, and only one of them blocked. That is what makes
+		// this case discriminating: delete the pre-sort and the order becomes
+		// [1, 2, 4, 3], so the assertion below fails rather than passing by
+		// accident. A lone blocked priority issue lands in Kahn's second level
+		// whether or not the label is read at all, which proves nothing.
+		//
+		// What it pins: #4 is labelled and leads; #3 is labelled and still waits
+		// for #2, which is not. The label moves the tie-break, and is not an input
+		// to whether an issue is ready. (#1 also precedes #3 — Kahn releases a
+		// whole ready level at once, and it was ready in the first.)
 		const plan = planBatches(
 			[
 				issue(1, ["src/db/schema.ts", "src/a.ts"]),
@@ -744,13 +762,14 @@ describe("planBatches — priority", () => {
 					number: 3,
 					paths: ["src/db/schema.ts", "src/c.ts"],
 					priority: true,
-					blockedBy: [1],
+					blockedBy: [2],
 				},
+				prioritised(4, ["src/db/schema.ts", "src/d.ts"]),
 			],
 			new Map([["src/db/schema.ts", 188]]),
 		);
 
-		expect(plan.serial).toEqual([1, 2, 3]);
+		expect(plan.serial).toEqual([4, 1, 2, 3]);
 		expect(plan.warnings).toEqual([]);
 	});
 
@@ -758,8 +777,13 @@ describe("planBatches — priority", () => {
 		// Both halves of the rule in one plan: #1 is serial on fan-in and #2 on
 		// its migration, and the label moves neither into a wave. Going FIRST and
 		// going ALONE are different questions.
+		//
+		// #5 is what makes this case discriminating — serial, NOT labelled, and
+		// first to arrive, so deleting the pre-sort reads [5, 1, 2]. Without it
+		// the assertion holds whether or not priority is read.
 		const plan = planBatches(
 			[
+				issue(5, ["src/db/schema.ts", "src/e.ts"]),
 				issue(7, ["src/b.ts"]),
 				prioritised(1, ["src/db/schema.ts"]),
 				{
@@ -772,7 +796,7 @@ describe("planBatches — priority", () => {
 			new Map([["src/db/schema.ts", 188]]),
 		);
 
-		expect(plan.serial).toEqual([1, 2]);
+		expect(plan.serial).toEqual([1, 2, 5]);
 		expect(plan.batches).toEqual([[7]]);
 	});
 

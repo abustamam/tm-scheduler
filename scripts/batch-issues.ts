@@ -32,6 +32,7 @@ import {
 	MIGRATION_LABEL,
 	partitionClaimedIssues,
 	planBatches,
+	PRIORITY_LABEL,
 	splitCitations,
 } from "../src/lib/issue-batching";
 
@@ -419,8 +420,13 @@ const migrationIssues = new Set(
 	issues.filter((i) => i.migration).map((i) => i.number),
 );
 
+// Built from the PLANNED issues, not every fetched one — unlike `migrationIssues`
+// above, which only ever reaches `line()` and so never sees a claimed issue. This
+// set is also counted in the header, and that count is a statement about the plan
+// printed below: a claimed priority issue inflating it would describe an ordering
+// that was applied to something the reader cannot see.
 const priorityIssues = new Set(
-	issues.filter((i) => i.priority).map((i) => i.number),
+	unclaimed.filter((i) => i.priority).map((i) => i.number),
 );
 
 /**
@@ -465,12 +471,13 @@ const heldBack =
 // Counted in the header as well as tagged per line: the ordering the plan
 // applied is invisible from the plan itself — an order with no priorities in it
 // and an order whose priorities all sorted to where they already were look the
-// same. The count says which one this is.
-const prioritised =
+// same. The count says which one this is; the note at the foot of the report
+// covers the case this one cannot, where the count is zero.
+const priorityNote =
 	priorityIssues.size > 0 ? `, ${priorityIssues.size} priority` : "";
 console.log(
 	`\n${raw.length} issues${explicit ? "" : ` labelled "${label}"`}` +
-		`${prioritised}${heldBack}, ` +
+		`${heldBack}${priorityNote}, ` +
 		`fan-in threshold ${fanInThreshold}, max ${maxBatchSize} per wave\n`,
 );
 
@@ -568,6 +575,23 @@ if (!anyLabelled) {
 		`Note: no issue carries the "${MIGRATION_LABEL}" label, so migration\n` +
 			`serialisation fired only on cited drizzle/ paths. An issue that will\n` +
 			`write a migration but cites none is NOT held out of a wave — label it.\n`,
+	);
+}
+
+// Same failure, one label over: an ordering that never fired is indistinguishable
+// from a backlog where nothing was urgent. Worse than the migration case in one
+// respect — that one has a second signal in cited `drizzle/` paths, and this has
+// none, so a label the tracker never had, a constant typo'd out of agreement with
+// it, or a `--issues` run that happens to exclude every priority issue all read
+// as "arrival order was what you wanted".
+const anyPriority = raw.some((i) =>
+	(i.labels ?? []).some((l) => l.name === PRIORITY_LABEL),
+);
+if (!anyPriority) {
+	console.log(
+		`Note: no issue carries the "${PRIORITY_LABEL}" label, so the plan above\n` +
+			`is in arrival order. Nothing here can infer urgency from a diff — if you\n` +
+			`expected an issue to lead, label it and re-run.\n`,
 	);
 }
 

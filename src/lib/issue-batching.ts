@@ -741,11 +741,15 @@ export function planBatches(
 		maxBatchSize = DEFAULT_MAX_BATCH_SIZE,
 	}: BatchOptions = {},
 ): BatchPlan {
-	// The one place `priority` acts. Everything downstream — the serial split,
-	// the fan-in test, the dependency promotion, the greedy packing — reads
-	// this list instead of `issues` and is otherwise unchanged, so priority can
-	// only ever change WHERE an issue lands in the order, never WHICH section
-	// it lands in.
+	// The one place `priority` acts, and the only ORDERED read of it is the
+	// classification loop below — the two `blockedBy` Maps further down are keyed
+	// lookups, so they read this list for uniformity (nothing below should reach
+	// past the sort) rather than for any behaviour of their own.
+	//
+	// Every rule downstream — the fan-in test, migration serialisation, the
+	// dependency promotion, the greedy packing — is otherwise untouched, so
+	// priority can only change WHERE an issue lands in the order, never WHICH
+	// section it lands in.
 	//
 	// `sort` is stable (ES2019 onward), so arrival order survives inside each
 	// group and a backlog with no priority labels sorts to itself. That is what
