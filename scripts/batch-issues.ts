@@ -28,6 +28,7 @@ import {
 	type IssueClaim,
 	isCitablePath,
 	isMigrationBearing,
+	isPriority,
 	MIGRATION_LABEL,
 	partitionClaimedIssues,
 	planBatches,
@@ -370,16 +371,15 @@ const issues = raw.map((i) => {
 		(p) => known.has(p),
 	);
 	if (missing.length > 0) missingByIssue.set(i.number, missing);
+	const labels = (i.labels ?? []).map((l) => l.name);
 	return {
 		number: i.number,
 		paths,
 		blockedBy: [...(declaredBlockers.get(i.number) ?? [])].sort(
 			(a, b) => a - b,
 		),
-		migration: isMigrationBearing({
-			labels: (i.labels ?? []).map((l) => l.name),
-			paths,
-		}),
+		migration: isMigrationBearing({ labels, paths }),
+		priority: isPriority(labels),
 	};
 });
 
@@ -419,6 +419,10 @@ const migrationIssues = new Set(
 	issues.filter((i) => i.migration).map((i) => i.number),
 );
 
+const priorityIssues = new Set(
+	issues.filter((i) => i.priority).map((i) => i.number),
+);
+
 /**
  * The file column: what this issue batches on, plus what was dropped.
  *
@@ -444,14 +448,29 @@ const line = (n: number) => {
 	// Flagged inline rather than only in a footnote: the reason this one is
 	// serial is not its fan-in, and someone scanning the list will otherwise
 	// assume it is and move it.
-	const tag = migrationIssues.has(n) ? "  [MIGRATION — run alone]" : "";
+	//
+	// The two tags compose, and both can be true at once: `priority` says why
+	// this one is EARLY, `migration` says why it is ALONE. Reading either as the
+	// other is exactly the mistake the inline tag exists to prevent.
+	const tags = [
+		priorityIssues.has(n) ? "[PRIORITY]" : "",
+		migrationIssues.has(n) ? "[MIGRATION — run alone]" : "",
+	].filter(Boolean);
+	const tag = tags.length > 0 ? `  ${tags.join("  ")}` : "";
 	return `  #${n}${tag}  ${titles.get(n) ?? ""}\n      ${filesOf(n)}`;
 };
 
 const heldBack =
 	claimed.length > 0 ? `, ${claimed.length} already claimed` : "";
+// Counted in the header as well as tagged per line: the ordering the plan
+// applied is invisible from the plan itself — an order with no priorities in it
+// and an order whose priorities all sorted to where they already were look the
+// same. The count says which one this is.
+const prioritised =
+	priorityIssues.size > 0 ? `, ${priorityIssues.size} priority` : "";
 console.log(
-	`\n${raw.length} issues${explicit ? "" : ` labelled "${label}"`}${heldBack}, ` +
+	`\n${raw.length} issues${explicit ? "" : ` labelled "${label}"`}` +
+		`${prioritised}${heldBack}, ` +
 		`fan-in threshold ${fanInThreshold}, max ${maxBatchSize} per wave\n`,
 );
 

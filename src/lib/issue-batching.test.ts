@@ -10,7 +10,9 @@ import {
 	importCandidates,
 	isCitablePath,
 	isMigrationBearing,
+	isPriority,
 	MIGRATION_LABEL,
+	PRIORITY_LABEL,
 	partitionClaimedIssues,
 	planBatches,
 	splitCitations,
@@ -652,6 +654,209 @@ describe("isMigrationBearing", () => {
 
 		expect(plan.serial).toEqual([1]);
 		expect(plan.batches).toEqual([[2]]);
+	});
+});
+
+/**
+ * `priority` is a statement about the world outside the repo, so like
+ * `migration` it is read off a label rather than computed.
+ *
+ * MEASURED on 2026-09-08: ordering by arrival put #716 — the one issue on the
+ * revenue path — in wave 2 behind four polish items, and the maintainer ranked
+ * 21 issues by hand rather than trust the plan.
+ */
+describe("isPriority", () => {
+	test("the label is the whole signal", () => {
+		expect(isPriority([PRIORITY_LABEL])).toBe(true);
+	});
+
+	test("an issue carrying other labels is not priority", () => {
+		expect(isPriority(["bug", "ready-for-agent", MIGRATION_LABEL])).toBe(false);
+	});
+
+	test("no labels at all is not priority", () => {
+		expect(isPriority()).toBe(false);
+	});
+});
+
+/**
+ * What `priority` may and may not do.
+ *
+ * It reorders; it never reclassifies. The three mechanisms the plan exists to
+ * enforce — fan-in, migration serialisation, dependencies — all outrank it,
+ * because a label that could defeat them would be a label that quietly turns
+ * the plan back into the hand-ranked list it replaced.
+ */
+describe("planBatches — priority", () => {
+	const prioritised = (number: number, paths: string[]) => ({
+		number,
+		paths,
+		priority: true,
+	});
+
+	test("a priority issue takes a wave-one slot from an earlier arrival", () => {
+		// Every issue here is disjoint from every other, so the only thing
+		// deciding who makes the cut is order — which is exactly the case the
+		// label exists for. Without it #9 waits a whole wave behind four issues
+		// that merely arrived first.
+		const plan = planBatches(
+			[
+				issue(1, ["src/1.ts"]),
+				issue(2, ["src/2.ts"]),
+				issue(3, ["src/3.ts"]),
+				issue(4, ["src/4.ts"]),
+				prioritised(9, ["src/9.ts"]),
+			],
+			new Map(),
+			{ maxBatchSize: 4 },
+		);
+
+		expect(plan.batches).toEqual([[9, 1, 2, 3], [4]]);
+	});
+
+	test("priority wins the serial tie-break", () => {
+		// All three are serial on fan-in, so the section's order is the only
+		// question. Arrival order survives among the unlabelled ones: the sort is
+		// stable, so #1 still precedes #2.
+		const plan = planBatches(
+			[
+				issue(1, ["src/db/schema.ts", "src/a.ts"]),
+				issue(2, ["src/db/schema.ts", "src/b.ts"]),
+				prioritised(3, ["src/db/schema.ts", "src/c.ts"]),
+			],
+			new Map([["src/db/schema.ts", 188]]),
+		);
+
+		expect(plan.serial).toEqual([3, 1, 2]);
+		expect(plan.warnings).toEqual([]);
+	});
+
+	test("priority does not win against a dependency", () => {
+		// #3 is labelled and #1 is not, and #3 still lands after it. The label
+		// changes the tie-break `orderByDependency` uses; it is not an input to
+		// whether an issue is ready. (#2 also lands ahead of #3 — Kahn releases a
+		// whole ready level at once, and #2 was ready in the first one.)
+		const plan = planBatches(
+			[
+				issue(1, ["src/db/schema.ts", "src/a.ts"]),
+				issue(2, ["src/db/schema.ts", "src/b.ts"]),
+				{
+					number: 3,
+					paths: ["src/db/schema.ts", "src/c.ts"],
+					priority: true,
+					blockedBy: [1],
+				},
+			],
+			new Map([["src/db/schema.ts", 188]]),
+		);
+
+		expect(plan.serial).toEqual([1, 2, 3]);
+		expect(plan.warnings).toEqual([]);
+	});
+
+	test("priority never lifts an issue out of serial", () => {
+		// Both halves of the rule in one plan: #1 is serial on fan-in and #2 on
+		// its migration, and the label moves neither into a wave. Going FIRST and
+		// going ALONE are different questions.
+		const plan = planBatches(
+			[
+				issue(7, ["src/b.ts"]),
+				prioritised(1, ["src/db/schema.ts"]),
+				{
+					number: 2,
+					paths: ["src/only-mine.ts"],
+					migration: true,
+					priority: true,
+				},
+			],
+			new Map([["src/db/schema.ts", 188]]),
+		);
+
+		expect(plan.serial).toEqual([1, 2]);
+		expect(plan.batches).toEqual([[7]]);
+	});
+
+	/**
+	 * The regression guard on the sort itself. `planBatches` now runs the
+	 * pre-sort unconditionally, so the property that matters most is that a
+	 * backlog carrying no `priority` label at all plans exactly as it did before
+	 * the label existed — `sort` is stable, so an all-equal key permutes nothing.
+	 *
+	 * The fixture is the real `ready-for-agent` backlog as `bun run batch:issues`
+	 * saw it on 2026-09-13, paths and all, and the expectation is the plan the
+	 * PRE-CHANGE planner produced for it. A pre-sort that quietly reordered
+	 * equal keys would show up here and nowhere else in this file.
+	 */
+	test("a backlog with no priority labels plans exactly as it did before", () => {
+		const plan = planBatches(
+			[
+				{
+					number: 683,
+					paths: [
+						"src/db/schema.ts",
+						"src/lib/agenda-template-rows.test.ts",
+						"src/lib/agenda-template-rows.ts",
+						"src/server/meeting-agenda-edit-logic.ts",
+					],
+					migration: true,
+				},
+				issue(727, [
+					"src/components/club/attendance-guests-group.test.tsx",
+					"src/components/club/attendance-guests-group.tsx",
+					"src/components/club/meeting-attendance-panel.test.tsx",
+					"src/components/club/meeting-attendance-panel.tsx",
+					"src/routes/_authed/admin/vp-membership.tsx",
+					"src/routes/club.$clubId.meeting.$meetingId.tsx",
+					"src/server/guest-pipeline.ts",
+				]),
+				issue(726, [
+					"src/components/agenda/offline-badge.test.tsx",
+					"src/components/agenda/offline-badge.tsx",
+				]),
+				issue(725, [
+					"src/components/agenda/meeting-present.test.tsx",
+					"src/components/agenda/meeting-present.tsx",
+					"src/lib/deck-to-pptx.test.ts",
+					"src/lib/deck-to-pptx.ts",
+					"src/lib/slide-layout.test.ts",
+					"src/lib/slide-layout.ts",
+				]),
+				issue(724, [
+					"src/components/agenda/meeting-present.test.tsx",
+					"src/components/agenda/meeting-present.tsx",
+					"src/lib/deck-to-pptx.test.ts",
+					"src/lib/deck-to-pptx.ts",
+					"src/lib/slide-spacing.ts",
+				]),
+				issue(719, [
+					"scripts/build-role-sheets.ts",
+					"src/data/role-sheets.ts",
+					"src/lib/meeting-packet.ts",
+					"src/server/role-sheet-artifacts.test.ts",
+					"src/server/role-sheet-layout.test.ts",
+					"src/server/role-sheet-layout.ts",
+				]),
+				issue(667, [
+					"src/components/agenda/meeting-agenda.tsx",
+					"src/components/club/meeting-attendance-panel.tsx",
+					"src/components/club/nudge-buttons.tsx",
+					"src/components/club/nudge-recruit-picker.tsx",
+					"src/lib/nudge.test.ts",
+					"src/lib/nudge.ts",
+				]),
+			],
+			new Map([["src/db/schema.ts", 188]]),
+		);
+
+		expect(plan).toEqual({
+			serial: [683],
+			batches: [
+				[727, 726, 725, 719],
+				[724, 667],
+			],
+			unknown: [],
+			warnings: [],
+		});
 	});
 });
 

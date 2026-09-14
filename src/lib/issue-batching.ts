@@ -38,6 +38,13 @@ export type IssueFiles = {
 	 * `planBatches`.
 	 */
 	migration?: boolean;
+	/**
+	 * True when the maintainer has marked this issue as going first, from
+	 * `isPriority`. A tie-break on ORDER only — it never moves an issue between
+	 * the serial section and a wave, and never overrides a dependency. See
+	 * `planBatches`.
+	 */
+	priority?: boolean;
 };
 
 /** A dependency the plan could not honour. Reported, never silently reordered. */
@@ -628,6 +635,42 @@ export function isMigrationBearing({
 	return paths.some((p) => p.startsWith(MIGRATION_DIR));
 }
 
+/** Label marking an issue the planner should order ahead of its arrival slot. */
+export const PRIORITY_LABEL = "priority";
+
+/**
+ * Whether the maintainer has marked this issue as going first.
+ *
+ * ## Why a label and not a heuristic
+ *
+ * The same argument as `isMigrationBearing`, for a different reason. Urgency
+ * is not a property of the diff: an issue on the revenue path and an issue
+ * nobody is waiting on can cite identical files, so nothing this module can
+ * compute distinguishes them. It is a statement about the world outside the
+ * repo, and the only person who holds it is the maintainer.
+ *
+ * MEASURED on 2026-09-08: the planner ordered by arrival, which put #716 —
+ * the one issue on the revenue path — in wave 2 behind four polish items, and
+ * the maintainer ranked 21 issues by hand rather than trust the plan. A plan
+ * that has to be re-sorted before it is used is not a plan.
+ *
+ * ## Why it is a tie-break and not a promotion
+ *
+ * `priority` reorders; it never reclassifies. A priority issue that touches a
+ * widely-imported file is still serial, a priority migration still runs alone,
+ * and a priority issue blocked by a non-priority one still lands after its
+ * blocker — because the alternative is a label that quietly defeats the three
+ * mechanisms the plan exists to enforce. Going first and going alone are
+ * different questions; only the maintainer's label answers the first.
+ *
+ * Deliberately a boolean, not a P0-P3 ladder. One bit is the smallest thing
+ * that fixes the measured failure; a ladder buys precision the backlog has not
+ * yet asked for, and every rung is a judgement call at triage time.
+ */
+export function isPriority(labels: readonly string[] = []): boolean {
+	return labels.includes(PRIORITY_LABEL);
+}
+
 /**
  * Order `serial` so a blocker precedes everything it blocks.
  *
@@ -639,6 +682,12 @@ export function isMigrationBearing({
  * Kahn's algorithm with the original index as a stable tie-break, so an
  * unconstrained list comes back untouched. A cycle leaves its members in
  * their original relative order and is reported rather than resolved.
+ *
+ * That tie-break is where `priority` reaches the serial section: `planBatches`
+ * builds `serial` from a list already sorted priority-first, so the index
+ * carries it and no rule here needs to know the label exists. A dependency
+ * still wins — a blocker is not "ready" while its dependent is waiting, whoever
+ * is labelled.
  */
 function orderByDependency(
 	serial: readonly number[],
@@ -692,11 +741,24 @@ export function planBatches(
 		maxBatchSize = DEFAULT_MAX_BATCH_SIZE,
 	}: BatchOptions = {},
 ): BatchPlan {
+	// The one place `priority` acts. Everything downstream — the serial split,
+	// the fan-in test, the dependency promotion, the greedy packing — reads
+	// this list instead of `issues` and is otherwise unchanged, so priority can
+	// only ever change WHERE an issue lands in the order, never WHICH section
+	// it lands in.
+	//
+	// `sort` is stable (ES2019 onward), so arrival order survives inside each
+	// group and a backlog with no priority labels sorts to itself. That is what
+	// makes this safe to run unconditionally.
+	const prioritised = [...issues].sort(
+		(a, b) => Number(b.priority ?? false) - Number(a.priority ?? false),
+	);
+
 	const serial: number[] = [];
 	const unknown: number[] = [];
 	const batchable: IssueFiles[] = [];
 
-	for (const issue of issues) {
+	for (const issue of prioritised) {
 		if (issue.paths.length === 0) {
 			unknown.push(issue.number);
 			continue;
@@ -720,7 +782,7 @@ export function planBatches(
 	// BEFORE the packing runs does not — the packing never sees it. Transitive,
 	// because a blocker's own blockers have to precede it too.
 	const blockersOf = new Map(
-		issues.map((i) => [i.number, i.blockedBy ?? []] as const),
+		prioritised.map((i) => [i.number, i.blockedBy ?? []] as const),
 	);
 	const mustPrecedeSerial = new Set<number>();
 	// Set lookups rather than `serial.includes` / `batchable.some` inside the
@@ -779,7 +841,7 @@ export function planBatches(
 	}
 
 	const blockedBy = new Map(
-		issues.map((i) => [i.number, i.blockedBy ?? []] as const),
+		prioritised.map((i) => [i.number, i.blockedBy ?? []] as const),
 	);
 	const { ordered, cycles } = orderByDependency(serial, blockedBy);
 	const batches = waves.map((w) => w.issues);
