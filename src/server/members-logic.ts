@@ -7,7 +7,7 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, asc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
@@ -181,16 +181,53 @@ export async function applyMemberEdit(input: EditInput) {
 	await db.transaction(async (tx) => {
 		await tx.update(members).set(next).where(eq(members.id, input.memberId));
 		// Reconcile people.email UP from the membership when the edit sets an email
-		// and the linked Person has none (#306). This fills the gap that made the
-		// #266 emailless-claim takeover possible — a member whose email lived only
-		// on the membership row looked "emailless" at the Person level. Guarded on
-		// `people.email IS NULL` so an existing Person email is NEVER clobbered
-		// (that protects linked accounts, whose email is already set); belt-only.
+		// (#306). The FIRST arm is the original seed: the Person has no email, which
+		// is the gap that made the #266 emailless-claim takeover possible — a member
+		// whose email lived only on the membership row looked "emailless" at the
+		// Person level.
+		//
+		// The SECOND arm is a CORRECTION, and it is what makes a typo repairable at
+		// all. `people.email` — never `members.email` — is the auth match key
+		// (`linkPersonToUser`), the invite target (`prepareInvite` prefers
+		// `person.email ?? member.email`) and the public-claim key
+		// (`claimPersonForUser`). With only the IS NULL arm, an admin who created a
+		// member under a mistyped address could never repair it: the roster showed
+		// the corrected address while all three of those kept reading the typo, so
+		// the member signed in successfully and landed on `NoClubScreen` ("You're
+		// not in a club yet"), a resent invite went to the mistyped inbox, and
+		// nothing anywhere reported a problem. Shipped incident, THR Speaking Club:
+		// corrected 2026-09-12, still locked out 2026-09-14.
+		//
+		// Two guards keep the widening honest and BOTH are load-bearing:
+		//  - `user_id IS NULL` — once a Person has signed in, their address is one
+		//    they PROVED they own via magic link, and no club admin may move it.
+		//    That is the protection the old comment was reaching for when it said
+		//    the NULL check "protects linked accounts".
+		//  - the value match — overwrite ONLY the exact address this membership is
+		//    currently carrying, i.e. the one it seeded. A Person is one row per
+		//    human across every club (ADR-0008), so an address a DIFFERENT club
+		//    recorded survives untouched. Without it, club A's admin could retarget
+		//    a shared, unlinked Person at an address they control and then take the
+		//    person over through `claimPersonForUser`, inheriting club B's
+		//    membership. Same scoping idiom as the preferred-name clear below.
+		// A NULL `current.email` makes that comparison NULL (never true), so a
+		// membership that never carried an email can only take the first arm.
 		if (next.email !== null) {
 			await tx
 				.update(people)
 				.set({ email: next.email })
-				.where(and(eq(people.id, current.personId), isNull(people.email)));
+				.where(
+					and(
+						eq(people.id, current.personId),
+						or(
+							isNull(people.email),
+							and(
+								isNull(people.userId),
+								sql`lower(${people.email}) = lower(${current.email})`,
+							),
+						),
+					),
+				);
 		}
 		// Same shape for the "goes by" name (#486): it is a person-level fact
 		// (ADR-0008) that should travel with them, so seed it UP when the Person
