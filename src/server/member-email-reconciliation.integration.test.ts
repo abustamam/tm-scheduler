@@ -25,9 +25,9 @@
  *     bunx vitest run src/server/member-email-reconciliation.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { members, people, user } from "#/db/schema";
+import { activityLog, members, people, user } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -198,20 +198,116 @@ describe.skipIf(!hasTestDb)("member email reconciliation (#306)", () => {
 		expect(await personUserId(personId)).toBe(userId);
 	});
 
-	it("clearing the membership email clears the Person's too", async () => {
-		// Same argument as the preferred-name clear below it in the source: leaving
-		// the Person copy behind means the invite target and claim key still hold
-		// an address the admin just deleted from the roster.
-		const existing = `clearme-${randomUUID()}@test.example`;
+	it("clearing the membership email leaves the Person's intact", async () => {
+		// Deliberately NOT symmetric with the preferred-name clear. Two reasons, both
+		// demonstrated: `loadMemberProfile` binds the form to `members.email` raw, so
+		// a Person-only address renders blank and an unrelated save submits null —
+		// clearing here would make a name edit a permanent lockout. And a null
+		// `people.email` is not fail-safe: it is exactly the state where
+		// `claimPersonForUser` falls back to `members.email`, which any officer of
+		// any of this Person's clubs controls.
+		const existing = `keepme-${randomUUID()}@test.example`;
 		const { memberId, personId } = await seedMember({
 			personEmail: existing,
 			memberEmail: existing,
 		});
 
-		await edit(memberId, null);
+		const res = await edit(memberId, null);
 
-		expect(await personEmail(personId)).toBeNull();
+		expect(await personEmail(personId)).toBe(existing);
 		expect(await memberEmail(memberId)).toBeNull();
+		expect(res.personEmailSynced).toBeNull();
+	});
+
+	it("reports null when the Person already carries the address", async () => {
+		// The third state. `null` and `false` are both falsy, so a caller that
+		// collapses them warns on every no-op save; this pins them apart.
+		const same = `same-${randomUUID()}@test.example`;
+		const { memberId } = await seedMember({
+			personEmail: same,
+			memberEmail: same,
+		});
+
+		const res = await edit(memberId, same);
+
+		expect(res.personEmailSynced).toBeNull();
+	});
+
+	it("a case-only difference is not reported as a refusal", async () => {
+		// Every identity reader normalises (`lower(...)` / `.trim().toLowerCase()`),
+		// so a capitalisation edit changes nothing for any of them. Reporting it as
+		// a refusal would fire a lockout warning on a routine save, and a false
+		// alarm is how the real one gets ignored.
+		const n = randomUUID();
+		const verified = `case-${n}@test.example`;
+		const userId = await seedUser(verified);
+		const { memberId } = await seedMember({
+			personEmail: verified,
+			memberEmail: verified,
+			personUserId: userId,
+		});
+
+		const res = await edit(memberId, `CASE-${n}@TEST.EXAMPLE`);
+
+		expect(res.personEmailSynced).toBeNull();
+	});
+
+	it("does not re-report a refusal on a save that left the address alone", async () => {
+		// A linked member can legitimately carry a work address on the membership
+		// and a personal one on the Person, permanently. Reporting that divergence
+		// on every unrelated save (a name fix, an officer checkbox) would keep the
+		// alarm lit forever on a healthy row.
+		const n = randomUUID();
+		const work = `work-${n}@test.example`;
+		const personal = `personal-${n}@test.example`;
+		const userId = await seedUser(personal);
+		const { memberId } = await seedMember({
+			personEmail: personal,
+			memberEmail: work,
+			personUserId: userId,
+		});
+
+		const res = await edit(memberId, work);
+
+		expect(res.personEmailSynced).toBeNull();
+	});
+
+	it("trims a padded address before it reaches either row", async () => {
+		const addr = `pad-${randomUUID()}@test.example`;
+		const { memberId, personId } = await seedMember({});
+
+		await edit(memberId, `  ${addr}  `);
+
+		expect(await personEmail(personId)).toBe(addr);
+		expect(await memberEmail(memberId)).toBe(addr);
+	});
+
+	it("records a refused reconciliation in the activity log", async () => {
+		// The only durable record that the identity key was left stale. Without a
+		// gate, the observability half of this change can be deleted with the whole
+		// repo green, and the next lockout is un-diagnosable exactly as before.
+		const shared = `shared-${randomUUID()}@test.example`;
+		const { memberId, personId } = await seedMember({
+			personEmail: shared,
+			memberEmail: shared,
+		});
+		await alsoInAnotherClub(personId, shared);
+
+		await edit(memberId, `attacker-${randomUUID()}@test.example`);
+
+		const [row] = await testDb
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, club.clubId),
+					eq(activityLog.action, "member_edit"),
+				),
+			);
+		expect(
+			(row?.detail as { personEmailSynced?: boolean | null })
+				?.personEmailSynced,
+		).toBe(false);
 	});
 
 	// ---- blast radius: what the guard refuses -------------------------------

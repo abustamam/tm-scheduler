@@ -277,6 +277,46 @@ Ten coverage traps this repo has actually hit, all worth checking when a number 
 
 ## Data layer
 
+**`people.email` is an identity key, and every writer of it carries the same
+blast-radius rule.** It is what `linkPersonToUser` matches a sign-in against
+(exclusively), and it wins the `person.email ?? member.email` coalesce at both
+`prepareMemberInvite` and `claimPersonForUser` — so a wrong value locks a member
+out of all three at once, and `members.email` rescues none of them. A roster
+admin may move it only when the Person **has no account** (`user_id IS NULL`)
+**and holds no membership outside the editing club**. Both writers reachable
+from an admin enforce that predicate: `applyMemberEdit`'s reconciliation and
+`prepareMemberInvite`'s seed. Guarding one is worthless — they sit behind the
+same gate, on the same roster row, and for a while only the first was guarded,
+which left the rule defeated by the Invite button one click over.
+
+Three traps, each paid for:
+
+- **Do not scope it by value.** "Only overwrite the address this membership
+  seeded" compares against `members.email`, which the same admin writes — two
+  saves defeat it, and one does in the common case, because every path that
+  creates a shared Person puts the identical address on both rows. It also
+  cannot repair the state the bug leaves behind, where the two rows have already
+  diverged.
+- **NULL is not fail-safe.** An empty `people.email` is precisely the state
+  where the claim path falls back to `members.email`. Blanking it hands the
+  claim key to any officer of any of that Person's clubs rather than withdrawing
+  it — which is why clearing a roster email deliberately leaves the Person's
+  intact, asymmetric with the `preferred_name` clear beside it.
+- **A refused write must be surfaced, not just logged.** The whole defect class
+  here is silence: the roster shows the corrected address, every identity reader
+  keeps matching the old one, and nobody can tell. `applyMemberEdit` returns a
+  three-state `personEmailSynced` (`null` nothing to do / `true` written /
+  `false` refused) and the edit screen must branch on `=== false` — `null` is
+  falsy too, so `if (!synced)` warns on every no-op save and trains the reader
+  to ignore it.
+
+Guarded by `member-email-reconciliation.integration.test.ts` and
+`account-invite-logic.integration.test.ts`. Still open, and deliberately so: the
+`NOT EXISTS` is a phantom under READ COMMITTED (a concurrent second-club
+membership insert is invisible to it), and a Person genuinely held by two clubs
+can have their address repaired by neither — there is no person-level repair
+surface outside `mergePeople` and superadmin SQL.
+
 **Planned attendance is ONE table with a status, read through ONE seam.**
 `meeting_attendance_plan` holds one row per (member, meeting) carrying
 `reached_out | coming | not_coming`; **row absent = "no answer"**. It replaced the two

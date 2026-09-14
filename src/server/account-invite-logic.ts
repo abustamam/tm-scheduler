@@ -16,7 +16,7 @@
 //    nobody can adopt another member's identity by picking their name. A member
 //    with NO email on file anywhere is un-claimable on the public surface (it
 //    needs an officer invite) — never adopted under an arbitrary address.
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, ne, notExists, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, people, user } from "#/db/schema";
 
@@ -105,11 +105,37 @@ export async function prepareMemberInvite(input: {
 	// Persist the effective email on the Person if it was missing, and stamp the
 	// invite. Both guarded on `user_id IS NULL` so a concurrent sign-in that just
 	// linked the Person is never clobbered.
+	//
+	// The email seed carries the SAME blast-radius rule as `applyMemberEdit`'s
+	// reconciliation, and it has to: this is the second admin-reachable writer of
+	// `people.email`, behind the identical `requireClubRole(["admin"])` gate, on a
+	// button sitting on the same roster row. Guarding only the edit form left the
+	// invariant defeated one click over — an officer of club A could have the
+	// person-level write refused on the form, press Invite, and seed
+	// `members.email` (which they control) onto a Person club B also holds, then
+	// bind it on their own sign-in. Reproduced end to end. If you change one of
+	// these predicates, change both.
 	if (!person.email) {
 		await db
 			.update(people)
 			.set({ email })
-			.where(and(eq(people.id, person.id), isNull(people.userId)));
+			.where(
+				and(
+					eq(people.id, person.id),
+					isNull(people.userId),
+					notExists(
+						db
+							.select({ one: sql`1` })
+							.from(members)
+							.where(
+								and(
+									eq(members.personId, people.id),
+									ne(members.clubId, input.clubId),
+								),
+							),
+					),
+				),
+			);
 	}
 	await db
 		.update(people)

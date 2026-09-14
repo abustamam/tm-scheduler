@@ -147,11 +147,11 @@ export const editSchema = z.object({
 	// submits "" and `greetingName` must see "nobody told us", not a blank.
 	// OMITTING it clears it, same as `email`/`phone` above and UNLIKE
 	// `officerPositions` below (whose `undefined` means "leave untouched").
-	// Capped because this value reaches the cross-club `people` row, so one club's
-	// admin writes it into a record other clubs share. `email` reaches it too —
-	// more so now that it can overwrite and not only seed — but the email validator
-	// bounds that one's shape; this is the field whose seed-up is unbounded free
-	// text. 80 was the cap the deleted public self-add used for a name
+	// Capped because THIS field really can land on a Person other clubs share: its
+	// seed-up is guarded only on `people.preferred_name IS NULL`. The email write
+	// below carries a blast-radius guard that refuses whenever any other club holds
+	// the Person, so email never reaches a shared record and needs no cap for that
+	// reason. 80 was the cap the deleted public self-add used for a name
 	// (#326/#630); it stays the ceiling for a person-level name here.
 	preferredName: z.string().trim().max(80).nullable().optional(),
 	email: z.string().trim().email().nullable().optional(),
@@ -164,8 +164,22 @@ export const editSchema = z.object({
 });
 type EditInput = z.infer<typeof editSchema> & RosterActor;
 
-/** Update a roster member's name/contact and reconcile their office set (#100);
- *  logs member_edit with the office change. */
+/**
+ * Update a roster member's name/contact and reconcile their office set (#100);
+ * logs member_edit with the office change.
+ *
+ * @returns `personEmailSynced`, a THREE-state signal — `null` and `false` are
+ * both falsy, so never test it with `if (!synced)`:
+ *   - `null`  — nothing to do. The Person already carried this address (or the
+ *               edit cleared the membership's, which never touches the Person).
+ *   - `true`  — the Person row was reconciled; every identity reader now agrees
+ *               with the roster.
+ *   - `false` — REFUSED. This edit moved the roster address, but the Person has
+ *               an account or belongs to another club too, so `people.email`
+ *               still holds the old value and sign-in, invite and claim all
+ *               still match it. The caller MUST surface this: an admin who is
+ *               not told has no way to discover the member is locked out.
+ */
 export async function applyMemberEdit(input: EditInput) {
 	const [current] = await db
 		.select()
@@ -207,10 +221,14 @@ export async function applyMemberEdit(input: EditInput) {
 		//
 		// `people.email` is the identity key. `linkPersonToUser` reads it
 		// EXCLUSIVELY to bind a sign-in to a roster Person, and it takes precedence
-		// at the other two readers, which coalesce `person.email ?? member.email`:
-		// `prepareMemberInvite` (where the invite is actually sent) and
-		// `claimPersonForUser` (the public claim). So a WRONG `people.email` poisons
-		// all three, and `members.email` cannot rescue any of them.
+		// at the other two IDENTITY readers, which coalesce
+		// `person.email ?? member.email`: `prepareMemberInvite` (where the invite is
+		// actually sent) and `claimPersonForUser` (the public claim). So a WRONG
+		// `people.email` poisons all three, and `members.email` cannot rescue any of
+		// them. (It is read elsewhere too — `pathways-sync-logic`'s Base Camp match,
+		// `guest-pipeline-logic`'s convert dedupe, `people-logic`'s lookups — but
+		// those are advisory or club-scoped and are not what a wrong value takes
+		// over. This list is the auth set, not the complete set of readers.)
 		//
 		// Until now this only fired `where people.email IS NULL`, which made a
 		// mistyped address unrepairable: the roster displayed the correction while
@@ -239,8 +257,9 @@ export async function applyMemberEdit(input: EditInput) {
 		// address the Person carries, then to one the attacker controls — satisfy any
 		// such comparison, and in the common case one save is enough, because every
 		// path that creates a shared Person (`import-members-logic`,
-		// `guest-pipeline-logic`, `people-logic`'s dedupe, and the seed arm here)
-		// writes the SAME address to both rows by construction. Both sequences were
+		// `guest-pipeline-logic`, `onboarding-logic`'s `createClubWithAdmin`, and
+		// the NULL-`people.email` case of this very write) puts the SAME address on
+		// both rows by construction. Both sequences were
 		// demonstrated end to end: the retargeted Person binds to the attacker's
 		// account on their next sign-in via `linkPersonToUser` — which is an
 		// unbounded multi-row UPDATE over a column with no unique constraint — and
@@ -272,18 +291,54 @@ export async function applyMemberEdit(input: EditInput) {
 		// so a membership-level "did this edit change anything" check skips the one
 		// row that needs repairing — re-saving the roster is exactly what the admin
 		// does when the first correction appears not to have worked.
+		//
+		// NEVER on a null edit, and the asymmetry with the preferred-name CLEAR
+		// below is deliberate. Two reasons, both demonstrated rather than reasoned:
+		//  - `loadMemberProfile` binds the edit form to `members.email` RAW (unlike
+		//    `preferred_name`, which it coalesces), so a member whose address lives
+		//    only on their Person renders a BLANK field, and an unrelated save — a
+		//    name fix, an officer checkbox — submits null. Clearing here would make
+		//    that a permanent lockout triggered by a name edit.
+		//  - a null `people.email` is not fail-safe. It is the state where
+		//    `claimPersonForUser` falls back to `members.email`, the column any
+		//    officer of any of this Person's clubs controls, so blanking it HANDS
+		//    OVER the claim key rather than withdrawing it.
+		// Clearing the membership address therefore leaves the Person's intact, as
+		// it always has. A person-level clear needs its own surface and its own
+		// argument; it is not a side effect of editing a roster row.
 		const [personNow] = await tx
 			.select({ email: people.email })
 			.from(people)
 			.where(eq(people.id, current.personId));
-		if ((personNow?.email ?? null) !== next.email) {
+		// Normalised, because every identity reader normalises: `linkPersonToUser`
+		// compares `lower(...) = lower(...)` and `claimPersonForUser` does
+		// `.trim().toLowerCase()`. A case-only difference changes nothing for any of
+		// them, so treating it as a divergence would raise a lockout alarm on a
+		// routine capitalisation edit.
+		const personEmailNow = personNow?.email?.trim().toLowerCase() ?? null;
+		const nextEmailNorm = next.email?.toLowerCase() ?? null;
+		if (next.email !== null && personEmailNow !== nextEmailNorm) {
 			const synced = await tx
 				.update(people)
 				.set({ email: next.email })
 				.where(personWritable)
 				.returning({ id: people.id });
-			syncedPersonEmail = synced.length > 0;
+			// A refusal is only worth reporting when THIS edit asked to move the
+			// address. A linked member can carry a work address on the membership and
+			// a personal one on the Person quite legitimately, and that divergence is
+			// permanent — reporting it on every unrelated save would fire the alarm
+			// forever on healthy rows, which is how the one real alarm gets ignored.
+			syncedPersonEmail =
+				synced.length > 0 ? true : next.email !== current.email ? false : null;
 		}
+		// The "goes by" name below is scoped by VALUE, not by blast radius, and that
+		// asymmetry is deliberate rather than an oversight: `preferred_name` is a
+		// display fallback, so the worst a stale copy costs is a wrong greeting in
+		// another club, and one club overwriting another's answer is the only risk
+		// worth guarding. `people.email` is an identity key whose worst case is an
+		// account takeover, which is why it gets the stricter rule. Do not "make
+		// them consistent" in either direction without re-reading both arguments.
+		//
 		// Same shape for the "goes by" name (#486): it is a person-level fact
 		// (ADR-0008) that should travel with them, so seed it UP when the Person
 		// has none. Guarded on NULL so a second club's admin can't overwrite what
