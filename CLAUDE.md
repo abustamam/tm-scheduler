@@ -379,7 +379,13 @@ greps that check the rule is holding.
 
 ### Triage labels
 
-Canonical label vocabulary, unchanged: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Canonical label vocabulary, ten labels and no others: the five state labels `needs-triage`,
+`needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, plus `tracking` for an umbrella
+issue; the two categories `bug` and `enhancement`; and the two scheduling labels `migration` (run
+alone) and `priority` (run first). Twelve labels that nothing read were deleted on 2026-09-08, so
+`docs/agents/triage-labels.md` now names a consumer for each one that remains — **name the consumer
+before adding an eleventh.** `priority` is the maintainer's, like `ready-for-agent`: an agent
+applies it only when directed, never to an issue it filed.
 
 ### Domain docs
 
