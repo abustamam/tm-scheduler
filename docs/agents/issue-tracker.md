@@ -46,8 +46,9 @@ earns an issue" in `CLAUDE.md`. That issue:
 
 ## Health
 
-Two numbers, one command each, run at `/retro` or whenever the queue feels wrong. Both want to stay
-small; a rise means the pipeline has started generating its own input again.
+Three numbers, one command each, run at `/retro` or whenever the queue feels wrong. The first two
+want to stay small; a rise means the pipeline has started generating its own input again. The third
+wants to be zero.
 
 Issues an agent filed in the last 7 days:
 
@@ -66,8 +67,20 @@ gh issue list --state closed --limit 500 \
   --json stateReason -q 'group_by(.stateReason) | map({(.[0].stateReason): length}) | add'
 ```
 
+Open issues carrying no state label. These are invisible to triage: `/triage` works the
+`needs-triage` queue and `batch:issues` works `ready-for-agent`, so an issue in neither is in no
+queue at all and is found only by someone scrolling the tracker. Four were sitting like that on
+2026-09-08, held up by labels from a retired roadmap. The state set is the five state labels plus
+`tracking` — see `docs/agents/triage-labels.md`:
+
+```bash
+gh issue list --state open --limit 500 --json number,labels \
+  -q '[.[] | select([.labels[].name] | any(IN("needs-triage","needs-info","ready-for-agent","ready-for-human","wontfix","tracking")) | not)] | length'
+```
+
 Baseline on 2026-09-07: 0 agent-filed (the convention starts that day), and
-`{"COMPLETED":63,"NOT_PLANNED":2}`.
+`{"COMPLETED":63,"NOT_PLANNED":2}`. The third grep read 0 on 2026-09-13, after the four were
+relabelled.
 
 ## Body conventions `batch:issues` reads
 

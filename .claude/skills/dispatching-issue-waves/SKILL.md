@@ -45,6 +45,15 @@ exists.
 | ⚠️ DEPENDENCY VIOLATIONS | Could not be reordered | Sequence those by hand before dispatching |
 | ⚠️ Could not read PRs/worktrees | A claim source was unreachable | The plan may contain work someone else is on. Verify by hand. |
 
+**The two inline tags, and why they are not the same tag.** `[MIGRATION — run alone]` explains
+why an issue is in SERIAL. `[PRIORITY]` explains why it is EARLY — the maintainer has put it on
+the revenue path or in front of the next meeting, and the planner ordered it ahead of issues that
+merely arrived first. Priority is a tie-break on order only, so a `[PRIORITY]` line in SERIAL is
+still one-at-a-time, a line carrying both tags still runs alone, and a priority issue whose blocker
+is not priority still prints after that blocker. Both tags appear on the same line when both apply.
+The header's `N priority` count says the ordering was applied at all — a plan with no priorities and
+a plan whose priorities all sorted to where they already were look identical otherwise.
+
 **Writing an issue so the tool can read it:** see `docs/agents/issue-tracker.md`'s "Body
 conventions `batch:issues` reads" for the exact `## Files` heading and dependency phrasing
 (`blocked by #N`, `depends on #N`, `requires #N`, `land #N first`, `blocks #N`) it recognizes.
