@@ -142,6 +142,21 @@ describe.skipIf(!hasTestDb)("member email reconciliation (#306)", () => {
 		return row?.userId ?? null;
 	}
 
+	/** The `personEmailSynced` value on this club's own member_edit log row. */
+	async function loggedSync(): Promise<boolean | null | undefined> {
+		const [row] = await testDb
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, club.clubId),
+					eq(activityLog.action, "member_edit"),
+				),
+			);
+		return (row?.detail as { personEmailSynced?: boolean | null })
+			?.personEmailSynced;
+	}
+
 	async function memberEmail(memberId: string): Promise<string | null> {
 		const [row] = await testDb
 			.select({ email: members.email })
@@ -282,6 +297,60 @@ describe.skipIf(!hasTestDb)("member email reconciliation (#306)", () => {
 		expect(await memberEmail(memberId)).toBe(addr);
 	});
 
+	it("a case-only difference on the PERSON row is not reported as a refusal", async () => {
+		// The mirror of the test above, and the one that pins the PERSON side of the
+		// comparison. Every fixture here stores lowercase, so dropping
+		// `.trim().toLowerCase()` from the person side survived a full-suite
+		// mutation run — the normalisation was real behaviour held by nothing.
+		// The Person is deliberately UNLINKED and single-club, so the guard would
+		// ALLOW a write here. That is what makes this test able to fail: if the
+		// comparison stops normalising, a case-only edit looks like a change and
+		// churns the stored row. With an account holder the write is refused anyway
+		// and the normalised report rescues it, so that fixture proves nothing.
+		const n = randomUUID();
+		const stored = `MIXED-${n}@TEST.EXAMPLE`;
+		const { memberId, personId } = await seedMember({
+			personEmail: stored,
+			memberEmail: stored,
+		});
+
+		const res = await edit(memberId, `mixed-${n}@test.example`);
+
+		expect(res.personEmailSynced).toBeNull();
+		expect(await personEmail(personId)).toBe(stored);
+	});
+
+	it("a padded PERSON address is not reported as a divergence", async () => {
+		// `.trim()` specifically: a legacy padded row must not read as a change.
+		const addr = `padp-${randomUUID()}@test.example`;
+		const { memberId } = await seedMember({
+			personEmail: `  ${addr}  `,
+			memberEmail: addr,
+		});
+
+		expect((await edit(memberId, addr)).personEmailSynced).toBeNull();
+	});
+
+	it("a refusal on an UNLINKED Person is reported on every save, not just the first", async () => {
+		// The lockout case. After the first corrective save `members.email` already
+		// holds the new value, so a report keyed on "did this save move the roster
+		// address" goes quiet from the second save onward — and re-opening the
+		// record is exactly what an admin does when the first correction looks
+		// ineffective. A shared Person is unlinked and stale: say so every time.
+		const n = randomUUID();
+		const stale = `stale-${n}@test.example`;
+		const corrected = `corrected-${n}@test.example`;
+		const { memberId, personId } = await seedMember({
+			personEmail: stale,
+			memberEmail: stale,
+		});
+		await alsoInAnotherClub(personId, stale);
+
+		expect((await edit(memberId, corrected)).personEmailSynced).toBe(false);
+		// Same address again — the roster did not move this time.
+		expect((await edit(memberId, corrected)).personEmailSynced).toBe(false);
+	});
+
 	it("records a refused reconciliation in the activity log", async () => {
 		// The only durable record that the identity key was left stale. Without a
 		// gate, the observability half of this change can be deleted with the whole
@@ -308,6 +377,29 @@ describe.skipIf(!hasTestDb)("member email reconciliation (#306)", () => {
 			(row?.detail as { personEmailSynced?: boolean | null })
 				?.personEmailSynced,
 		).toBe(false);
+	});
+
+	it("records a SUCCESSFUL reconciliation in the activity log as true", async () => {
+		// The refusal case alone proves the field is PRESENT, not that it says
+		// anything true: hard-coding it to `false` — an audit trail claiming every
+		// member edit left someone locked out — survived a full-suite mutation run.
+		const { memberId } = await seedMember({});
+
+		await edit(memberId, `logged-${randomUUID()}@test.example`);
+
+		expect(await loggedSync()).toBe(true);
+	});
+
+	it("records a no-op save in the activity log as null", async () => {
+		const same = `same-${randomUUID()}@test.example`;
+		const { memberId } = await seedMember({
+			personEmail: same,
+			memberEmail: same,
+		});
+
+		await edit(memberId, same);
+
+		expect(await loggedSync()).toBeNull();
 	});
 
 	// ---- blast radius: what the guard refuses -------------------------------

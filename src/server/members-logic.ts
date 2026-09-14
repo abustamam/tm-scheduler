@@ -7,17 +7,7 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import {
-	and,
-	asc,
-	eq,
-	gte,
-	inArray,
-	isNull,
-	ne,
-	notExists,
-	sql,
-} from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
@@ -39,6 +29,7 @@ import {
 	openOfficerTermIfAbsent,
 	reconcileOfficerTerms,
 } from "./officer-terms-logic";
+import { personEmailWritable } from "./person-email-guard";
 
 /** One row of the public member picker. `officerPositions` keeps the NARROW
  *  `OfficerPosition` union rather than `string[]` — the pickers feed it straight
@@ -170,15 +161,22 @@ type EditInput = z.infer<typeof editSchema> & RosterActor;
  *
  * @returns `personEmailSynced`, a THREE-state signal — `null` and `false` are
  * both falsy, so never test it with `if (!synced)`:
- *   - `null`  — nothing to do. The Person already carried this address (or the
- *               edit cleared the membership's, which never touches the Person).
+ *   - `null`  — nothing to report. Either the Person already carried this
+ *               address (compared normalised), or the edit cleared the
+ *               membership's (which never touches the Person), or the write was
+ *               refused on an ACCOUNT HOLDER and this save did not move the
+ *               roster address — a permanent, legitimate divergence (a work
+ *               address on the membership, a personal one on the Person).
+ *               `null` does NOT mean the two rows agree.
  *   - `true`  — the Person row was reconciled; every identity reader now agrees
  *               with the roster.
- *   - `false` — REFUSED. This edit moved the roster address, but the Person has
- *               an account or belongs to another club too, so `people.email`
- *               still holds the old value and sign-in, invite and claim all
- *               still match it. The caller MUST surface this: an admin who is
- *               not told has no way to discover the member is locked out.
+ *   - `false` — REFUSED, and worth telling someone. The Person has an account or
+ *               belongs to another club too, so `people.email` still holds the
+ *               old value and sign-in, invite and claim all still match it. For
+ *               an account holder that means the roster and their proven sign-in
+ *               address now disagree; for a Person another club holds it means
+ *               the member stays locked out. Either way the caller MUST surface
+ *               it — no other screen a club admin can reach shows `people.email`.
  */
 export async function applyMemberEdit(input: EditInput) {
 	const [current] = await db
@@ -219,73 +217,24 @@ export async function applyMemberEdit(input: EditInput) {
 		await tx.update(members).set(next).where(eq(members.id, input.memberId));
 		// Reconcile people.email from the membership (#306, widened here).
 		//
-		// `people.email` is the identity key. `linkPersonToUser` reads it
-		// EXCLUSIVELY to bind a sign-in to a roster Person, and it takes precedence
-		// at the other two IDENTITY readers, which coalesce
-		// `person.email ?? member.email`: `prepareMemberInvite` (where the invite is
-		// actually sent) and `claimPersonForUser` (the public claim). So a WRONG
-		// `people.email` poisons all three, and `members.email` cannot rescue any of
-		// them. (It is read elsewhere too — `pathways-sync-logic`'s Base Camp match,
-		// `guest-pipeline-logic`'s convert dedupe, `people-logic`'s lookups — but
-		// those are advisory or club-scoped and are not what a wrong value takes
-		// over. This list is the auth set, not the complete set of readers.)
+		// Reconcile `people.email` — the identity key — from the membership.
 		//
 		// Until now this only fired `where people.email IS NULL`, which made a
 		// mistyped address unrepairable: the roster displayed the correction while
-		// all three readers kept matching the typo, so the member signed in and
+		// every identity reader kept matching the typo, so the member signed in and
 		// landed on `NoClubScreen` ("You're not in a club yet"), a resent invite went
 		// to the mistyped inbox, and nothing reported a problem to anyone. Hit in
 		// production 2026-09-12; the member was still locked out two days later.
 		//
-		// The guard is a BLAST-RADIUS rule, not a value comparison, and the
-		// distinction is the whole design:
-		//  - `user_id IS NULL` — once someone has signed in, their address is one
-		//    they PROVED they own via magic link. No club admin may move it. Applied
-		//    to the WHOLE predicate, not just the correction case: an account holder
-		//    whose Person email is somehow NULL (reachable via `people-merge-logic`,
-		//    which reconciles `email` and `userId` independently) must be just as
-		//    unwritable.
-		//  - no membership outside THIS club — a Person is one row per human across
-		//    every club (ADR-0008), so rewriting it from club A silently re-keys the
-		//    identity club B relies on. With no other club on the row, this club is
-		//    the only stakeholder and owns the value outright.
-		//
-		// Do NOT reintroduce a "does the Person still carry the address this
-		// membership seeded" comparison in place of the second rule. It reads as a
-		// tighter guard and is not one: `current.email` is the MEMBERSHIP's email,
-		// which is state this same admin writes. Two consecutive saves — first to the
-		// address the Person carries, then to one the attacker controls — satisfy any
-		// such comparison, and in the common case one save is enough, because every
-		// path that creates a shared Person (`import-members-logic`,
-		// `guest-pipeline-logic`, `onboarding-logic`'s `createClubWithAdmin`, and
-		// the NULL-`people.email` case of this very write) puts the SAME address on
-		// both rows by construction. Both sequences were
-		// demonstrated end to end: the retargeted Person binds to the attacker's
-		// account on their next sign-in via `linkPersonToUser` — which is an
-		// unbounded multi-row UPDATE over a column with no unique constraint — and
-		// `auth-context-logic` then hands them every club that Person belongs to, at
-		// whatever role the victim held. A value comparison also cannot repair the
-		// incident above at all, since by then the two rows have already diverged.
+		// Who may write the column, and why it is a blast-radius rule rather than a
+		// value comparison, lives in ONE place — `person-email-guard.ts`. Read it
+		// before changing anything here; every writer shares that predicate and a
+		// guard test asserts the call sites emit identical SQL.
 		//
 		// `syncedPersonEmail` records whether the write actually landed, because the
 		// failure this whole change exists to remove was a SILENT one: a refused
 		// reconciliation that looks exactly like a successful one is how a member
 		// stays locked out for two days with nobody able to see why.
-		const personWritable = and(
-			eq(people.id, current.personId),
-			isNull(people.userId),
-			notExists(
-				tx
-					.select({ one: sql`1` })
-					.from(members)
-					.where(
-						and(
-							eq(members.personId, people.id),
-							ne(members.clubId, input.clubId),
-						),
-					),
-			),
-		);
 		// Compare against the PERSON's address, never the membership's. The incident
 		// state is `members.email` already corrected and `people.email` still wrong,
 		// so a membership-level "did this edit change anything" check skips the one
@@ -307,29 +256,48 @@ export async function applyMemberEdit(input: EditInput) {
 		// it always has. A person-level clear needs its own surface and its own
 		// argument; it is not a side effect of editing a roster row.
 		const [personNow] = await tx
-			.select({ email: people.email })
+			.select({ email: people.email, userId: people.userId })
 			.from(people)
 			.where(eq(people.id, current.personId));
-		// Normalised, because every identity reader normalises: `linkPersonToUser`
-		// compares `lower(...) = lower(...)` and `claimPersonForUser` does
-		// `.trim().toLowerCase()`. A case-only difference changes nothing for any of
-		// them, so treating it as a divergence would raise a lockout alarm on a
-		// routine capitalisation edit.
-		const personEmailNow = personNow?.email?.trim().toLowerCase() ?? null;
-		const nextEmailNorm = next.email?.toLowerCase() ?? null;
+		// EVERY comparison in this block is normalised, because every identity
+		// reader normalises: `linkPersonToUser` compares `lower(...) = lower(...)`
+		// and `claimPersonForUser` does `.trim().toLowerCase()`. A case- or
+		// padding-only difference changes nothing for any of them, so treating one
+		// as a divergence raises a lockout alarm on a routine capitalisation edit.
+		// Normalise both sides of BOTH tests — an earlier cut normalised the attempt
+		// and left the report raw, which fired the warning on exactly those saves.
+		const norm = (v: string | null | undefined) =>
+			v?.trim().toLowerCase() ?? null;
+		const personEmailNow = norm(personNow?.email);
+		const nextEmailNorm = norm(next.email);
 		if (next.email !== null && personEmailNow !== nextEmailNorm) {
 			const synced = await tx
 				.update(people)
 				.set({ email: next.email })
-				.where(personWritable)
+				.where(personEmailWritable(tx, current.personId, input.clubId))
 				.returning({ id: people.id });
-			// A refusal is only worth reporting when THIS edit asked to move the
-			// address. A linked member can carry a work address on the membership and
-			// a personal one on the Person quite legitimately, and that divergence is
-			// permanent — reporting it on every unrelated save would fire the alarm
-			// forever on healthy rows, which is how the one real alarm gets ignored.
-			syncedPersonEmail =
-				synced.length > 0 ? true : next.email !== current.email ? false : null;
+			if (synced.length > 0) {
+				syncedPersonEmail = true;
+			} else {
+				// Refused. WHY decides whether the admin needs telling, and the two
+				// reasons are not alike:
+				//  - the Person is UNLINKED, so the refusal came from the other-club
+				//    rule. `people.email` is stale against the roster and nobody can
+				//    sign in to that membership — a live lockout, reported EVERY time.
+				//    Reporting it only when this save moved the address would go quiet
+				//    from the second save onward, and re-opening the record is exactly
+				//    what an admin does when the first correction looks ineffective.
+				//  - the Person HAS an account, so their address is one they proved
+				//    they own. A membership carrying a work address against a personal
+				//    one on the Person is legitimate and permanent, so only say
+				//    something when this edit actually tried to move the roster
+				//    address; otherwise an unrelated save (a name fix, an officer
+				//    checkbox) would light the alarm forever on a healthy row.
+				syncedPersonEmail =
+					personNow?.userId == null || nextEmailNorm !== norm(current.email)
+						? false
+						: null;
+			}
 		}
 		// The "goes by" name below is scoped by VALUE, not by blast radius, and that
 		// asymmetry is deliberate rather than an oversight: `preferred_name` is a

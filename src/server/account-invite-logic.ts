@@ -6,8 +6,10 @@
 // Two entry points:
 //  - `prepareMemberInvite` — the admin roster action (Part A). Resolves the
 //    picked membership to its Person, refuses to re-invite an already-joined
-//    account, ensures the Person has an email on file (copying the membership
-//    email up when absent), and stamps `invited_at`. Returns the address the
+//    account, copies the membership email up when the Person has none AND no
+//    other club holds them (the blast-radius guard — it may DECLINE, and the
+//    invite still goes out to this club's own address), and stamps
+//    `invited_at`. Returns the address the
 //    magic link should go to; the wrapper sends it via `auth.api.signInMagicLink`.
 //  - `claimPersonForUser` — the post-sign-in finish step for BOTH the admin
 //    invite and the public "This is me" claim (Part B). Binds the picked Person
@@ -16,9 +18,13 @@
 //    nobody can adopt another member's identity by picking their name. A member
 //    with NO email on file anywhere is un-claimable on the public surface (it
 //    needs an officer invite) — never adopted under an arbitrary address.
-import { and, eq, isNull, ne, notExists, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, people, user } from "#/db/schema";
+import {
+	personEmailWritable,
+	personHeldByAnotherClub,
+} from "./person-email-guard";
 
 export type InvitePrepOutcome =
 	| "ready"
@@ -106,36 +112,19 @@ export async function prepareMemberInvite(input: {
 	// invite. Both guarded on `user_id IS NULL` so a concurrent sign-in that just
 	// linked the Person is never clobbered.
 	//
-	// The email seed carries the SAME blast-radius rule as `applyMemberEdit`'s
-	// reconciliation, and it has to: this is the second admin-reachable writer of
-	// `people.email`, behind the identical `requireClubRole(["admin"])` gate, on a
-	// button sitting on the same roster row. Guarding only the edit form left the
-	// invariant defeated one click over — an officer of club A could have the
-	// person-level write refused on the form, press Invite, and seed
-	// `members.email` (which they control) onto a Person club B also holds, then
-	// bind it on their own sign-in. Reproduced end to end. If you change one of
-	// these predicates, change both.
+	// The email seed carries the SAME blast-radius rule as every other writer of
+	// `people.email` — it is admin-reachable, behind the identical
+	// `requireClubRole(["admin"])` gate, on a button sitting on the same roster
+	// row as the edit form. Guarding only the edit form left the invariant
+	// defeated one click over: an officer of club A could have the person-level
+	// write refused on the form, press Invite, and seed `members.email` (which
+	// they control) onto a Person club B also holds. Reproduced end to end.
+	// The predicate lives in `person-email-guard.ts`; do not inline a copy.
 	if (!person.email) {
 		await db
 			.update(people)
 			.set({ email })
-			.where(
-				and(
-					eq(people.id, person.id),
-					isNull(people.userId),
-					notExists(
-						db
-							.select({ one: sql`1` })
-							.from(members)
-							.where(
-								and(
-									eq(members.personId, people.id),
-									ne(members.clubId, input.clubId),
-								),
-							),
-					),
-				),
-			);
+			.where(personEmailWritable(db, person.id, input.clubId));
 	}
 	await db
 		.update(people)
@@ -193,6 +182,7 @@ export async function claimPersonForUser(input: {
 	const [member] = await db
 		.select({
 			id: members.id,
+			clubId: members.clubId,
 			personId: members.personId,
 			email: members.email,
 		})
@@ -215,6 +205,27 @@ export async function claimPersonForUser(input: {
 	// The address the club has for this member — on the Person OR the membership
 	// row. NO email anywhere ⇒ un-claimable on the public surface: an officer must
 	// invite them, so nobody adopts another member's identity by picking a name.
+	//
+	// The `?? member.email` half is the dangerous one, and it is why a NULL
+	// `people.email` is not the fail-safe it looks like. `members.email` is a
+	// column any officer of ANY of this Person's clubs can set to anything; the
+	// coalesce is what turns that into a claim key. For a Person only this club
+	// holds that is fine — the club already owns the identity outright. For a
+	// Person another club also holds it is a cross-club takeover: club A's officer
+	// types their own address onto their membership row, signs in, and inherits
+	// club B's membership at whatever role the victim held. Reproduced end to end
+	// against the guarded writers, which is the point — the earlier guards refused
+	// every write they were asked about and the claim completed the seed anyway.
+	//
+	// So the fallback is withdrawn exactly where it is unsafe. A shared Person
+	// with no person-level address is `needs_invite`: an officer must invite them,
+	// and that invite goes to an address recorded on the PERSON, not one typed on
+	// a membership row.
+	const sharedWithAnotherClub =
+		!person.email &&
+		(await personHeldByAnotherClub(db, person.id, member.clubId));
+	if (sharedWithAnotherClub) return "needs_invite";
+
 	const onFileEmail =
 		(person.email ?? member.email)?.trim().toLowerCase() || null;
 	if (!onFileEmail) return "needs_invite";
@@ -233,15 +244,23 @@ export async function claimPersonForUser(input: {
 	// membership row, so future sign-in auto-link resolves it directly.
 	return await bindPerson({
 		personId: person.id,
+		clubId: member.clubId,
 		userId: input.userId,
 		setEmail: person.email ? undefined : onFileEmail,
 	});
 }
 
 /** Atomically claim an unlinked Person (guarded on `user_id IS NULL`); on a lost
- *  race, re-read to report whether it became ours or someone else's. */
+ *  race, re-read to report whether it became ours or someone else's.
+ *
+ *  When it also SEEDS the address (`setEmail`) it is a writer of the identity
+ *  key, so that arm carries the shared blast-radius predicate too. Its one
+ *  caller already refuses the shared-Person case before reaching here, and this
+ *  is deliberately belt AND braces: the guard should hold for the next caller
+ *  as well, not just for the current one. */
 async function bindPerson(input: {
 	personId: string;
+	clubId: string;
 	userId: string;
 	setEmail?: string;
 }): Promise<ClaimOutcome> {
@@ -252,7 +271,11 @@ async function bindPerson(input: {
 				? { userId: input.userId, email: input.setEmail }
 				: { userId: input.userId },
 		)
-		.where(and(eq(people.id, input.personId), isNull(people.userId)))
+		.where(
+			input.setEmail
+				? personEmailWritable(db, input.personId, input.clubId)
+				: and(eq(people.id, input.personId), isNull(people.userId)),
+		)
 		.returning({ id: people.id });
 	if (linked.length > 0) return "linked";
 

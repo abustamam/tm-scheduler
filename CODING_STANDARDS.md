@@ -277,19 +277,36 @@ Ten coverage traps this repo has actually hit, all worth checking when a number 
 
 ## Data layer
 
-**`people.email` is an identity key, and every writer of it carries the same
-blast-radius rule.** It is what `linkPersonToUser` matches a sign-in against
-(exclusively), and it wins the `person.email ?? member.email` coalesce at both
-`prepareMemberInvite` and `claimPersonForUser` — so a wrong value locks a member
-out of all three at once, and `members.email` rescues none of them. A roster
-admin may move it only when the Person **has no account** (`user_id IS NULL`)
-**and holds no membership outside the editing club**. Both writers reachable
-from an admin enforce that predicate: `applyMemberEdit`'s reconciliation and
-`prepareMemberInvite`'s seed. Guarding one is worthless — they sit behind the
-same gate, on the same roster row, and for a while only the first was guarded,
-which left the rule defeated by the Invite button one click over.
+**`people.email` is an identity key. Every writer of it goes through
+`personEmailWritable` (`src/server/person-email-guard.ts`), and the rule is only
+worth anything if ALL of them do.** `linkPersonToUser` matches a sign-in against
+it exclusively, and it wins the `person.email ?? member.email` coalesce at
+`prepareMemberInvite` and `claimPersonForUser` — so whoever controls the value
+controls who the Person becomes, and a wrong one locks a member out of all three
+at once. The predicate: the Person **has no account** (`user_id IS NULL`) **and
+holds no membership outside the acting club**.
 
-Three traps, each paid for:
+Guarding a subset does not reduce the hole, it MOVES it. That was learned three
+times on one branch, each round convinced it was done: guarding the roster form
+left the Invite button open; guarding both left the claim path open, which seeds
+the address AND the account link; and the CSV import was open the whole time.
+The enumeration, not the predicate, is the thing that keeps being wrong — which
+is why `person-email-guard.guard.test.ts` enumerates the writers mechanically,
+per write site, and fails on a new one. A file-level version of that test passed
+while a writer sat unguarded beside a guarded sibling; do not weaken it back.
+
+Writers, and where each stands:
+
+| Writer | Reachable by | Guarded |
+|---|---|---|
+| `applyMemberEdit` reconciliation | club admin | yes |
+| `prepareMemberInvite` seed | club admin | yes |
+| `bindPerson` (claim) — writes email AND `user_id` | any signed-in user | yes |
+| `importPeopleAndMembers` (CSV commit) | club admin | yes |
+| `updateUnclaimedAdminEmail` | superadmin only | waived — first-admin repair surface |
+| `mergePeople` | superadmin only | waived — fill-only on the keeper |
+
+Four traps, each paid for:
 
 - **Do not scope it by value.** "Only overwrite the address this membership
   seeded" compares against `members.email`, which the same admin writes — two
@@ -298,24 +315,46 @@ Three traps, each paid for:
   cannot repair the state the bug leaves behind, where the two rows have already
   diverged.
 - **NULL is not fail-safe.** An empty `people.email` is precisely the state
-  where the claim path falls back to `members.email`. Blanking it hands the
-  claim key to any officer of any of that Person's clubs rather than withdrawing
-  it — which is why clearing a roster email deliberately leaves the Person's
-  intact, asymmetric with the `preferred_name` clear beside it.
-- **A refused write must be surfaced, not just logged.** The whole defect class
-  here is silence: the roster shows the corrected address, every identity reader
+  where the claim path falls back to `members.email`, a column any officer of
+  any of that Person's clubs controls. Blanking it HANDS OVER the claim key
+  rather than withdrawing it. Hence two rules that look inconsistent and are
+  not: clearing a roster email leaves the Person's intact (asymmetric with the
+  `preferred_name` clear beside it), and `claimPersonForUser` refuses the
+  `?? member.email` fallback entirely for a Person more than one club holds.
+- **A refused write must be surfaced, not just logged.** The defect class here
+  is silence: the roster shows the corrected address, every identity reader
   keeps matching the old one, and nobody can tell. `applyMemberEdit` returns a
   three-state `personEmailSynced` (`null` nothing to do / `true` written /
-  `false` refused) and the edit screen must branch on `=== false` — `null` is
-  falsy too, so `if (!synced)` warns on every no-op save and trains the reader
-  to ignore it.
+  `false` refused) and the edit screen branches on `=== false` — `null` is falsy
+  too, so `if (!synced)` warns on every no-op save and trains the reader to
+  ignore it. For an UNLINKED Person the refusal is reported on every save, not
+  only the one that moved the address: after the first correction the roster
+  already holds the new value, and re-opening the record is exactly what an
+  admin does when the first attempt looked ineffective.
+- **Normalise both sides of both comparisons.** Every identity reader lowercases
+  (and the claim path trims), so a case- or padding-only difference changes
+  nothing for any of them. An earlier cut normalised the "is there anything to
+  do" test and left the "was it refused" test raw, which fired the lockout
+  warning on a healthy member who retyped their address in different case.
 
-Guarded by `member-email-reconciliation.integration.test.ts` and
-`account-invite-logic.integration.test.ts`. Still open, and deliberately so: the
-`NOT EXISTS` is a phantom under READ COMMITTED (a concurrent second-club
-membership insert is invisible to it), and a Person genuinely held by two clubs
-can have their address repaired by neither — there is no person-level repair
-surface outside `mergePeople` and superadmin SQL.
+Guarded by `person-email-guard.guard.test.ts` (the writer enumeration),
+`member-email-reconciliation.integration.test.ts`,
+`account-invite-logic.integration.test.ts` and
+`src/routes/_authed/members.$id.test.tsx` (the admin actually being told).
+
+Still open, and deliberately so — neither is a regression, both predate this
+rule and are recorded here rather than quietly carried:
+
+- The `NOT EXISTS` is a phantom under READ COMMITTED: a concurrent second-club
+  membership insert is invisible to it. Closing it needs SERIALIZABLE, or an
+  advisory lock on the person id taken by this write AND by every path that
+  inserts a `members` row.
+- A Person two clubs genuinely share can have their address corrected by no
+  club-level surface, and an inactive or archived-club membership blocks just as
+  hard as an active one. The only person-level repair is the superadmin
+  console's unclaimed-admin edit (`updateUnclaimedAdminEmail`, first admin only,
+  unlinked only) or direct SQL — `mergePeople` only FILLS a null keeper address
+  and cannot correct a wrong one.
 
 **Planned attendance is ONE table with a status, read through ONE seam.**
 `meeting_attendance_plan` holds one row per (member, meeting) carrying

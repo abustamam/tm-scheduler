@@ -326,7 +326,8 @@ describe("member profile — edit dialog phone prefill", () => {
  * `applyMemberEdit` can update the roster row and REFUSE to move the member's
  * sign-in address (they hold an account, or another club holds them too). It
  * reports that as `personEmailSynced === false`, and this screen is the only
- * place a human ever learns of it — nothing else renders `people.email`.
+ * place a CLUB admin ever learns of it — no roster surface renders
+ * `people.email`, and the only screens that do are superadmin-only.
  *
  * The whole defect class behind that flag is silence: the roster shows the
  * corrected address, every identity reader keeps matching the old one, and the

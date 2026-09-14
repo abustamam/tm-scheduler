@@ -290,10 +290,72 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 				memberId: member.id,
 			});
 
-			// The invite itself may still go out to this club's own address — that is
-			// this club's business. What must NOT happen is the identity key moving.
+			// The invite still goes out to this club's own address — that is this
+			// club's business, and stopping it would break inviting a member whose
+			// contact details only the club has.
 			expect(prep.outcome).toBe("ready");
 			expect((await personRow(person.id))?.email).toBeNull();
+
+			// But the column assertion above is NOT the property that matters, and an
+			// earlier cut of this test stopped there — it passed while the takeover
+			// still completed one step later. `people.email` being NULL is exactly the
+			// state in which `claimPersonForUser` falls back to `members.email`, so
+			// drive it to the outcome: the officer signs in on the address they typed
+			// and must NOT end up holding this Person (and with it the other club's
+			// membership).
+			const { claimPersonForUser } = await import("./account-invite-logic");
+			const attackerUserId = await seedUser(attacker);
+			expect(
+				await claimPersonForUser({
+					memberId: member.id,
+					userId: attackerUserId,
+				}),
+			).toBe("needs_invite");
+			expect((await personRow(person.id))?.userId).toBeNull();
+			expect((await personRow(person.id))?.email).toBeNull();
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("a shared Person with no person-level address is not claimable at all", async () => {
+		// The same rule from the public claim surface directly, with no invite in
+		// the story: `members.email` is a column any officer of any of this Person's
+		// clubs can set to anything, so it cannot be the key that binds an account
+		// to a Person more than one club holds. Single-club Persons keep the
+		// fallback — that is the ordinary "the VPE gave me an email" path, asserted
+		// by the sibling test above.
+		const other = await seedClub();
+		try {
+			const [person] = await testDb
+				.insert(people)
+				.values({ name: "Shared Person", email: null })
+				.returning({ id: people.id });
+			if (!person) throw new Error("person insert failed");
+			const typed = `typed-${randomUUID()}@test.example`;
+			const [member] = await testDb
+				.insert(members)
+				.values({
+					clubId: club.clubId,
+					personId: person.id,
+					name: "Shared Person",
+					email: typed,
+				})
+				.returning({ id: members.id });
+			if (!member) throw new Error("member insert failed");
+			await testDb.insert(members).values({
+				clubId: other.clubId,
+				personId: person.id,
+				name: "Shared Person",
+				email: null,
+			});
+			const { claimPersonForUser } = await import("./account-invite-logic");
+			const userId = await seedUser(typed);
+
+			expect(await claimPersonForUser({ memberId: member.id, userId })).toBe(
+				"needs_invite",
+			);
+			expect((await personRow(person.id))?.userId).toBeNull();
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 		}

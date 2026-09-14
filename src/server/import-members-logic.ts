@@ -23,6 +23,7 @@ import {
 	currentOfficersFor,
 	openOfficerTermIfAbsent,
 } from "./officer-terms-logic";
+import { personEmailWritable } from "./person-email-guard";
 
 export interface ImportStats {
 	peopleCreated: number;
@@ -37,6 +38,12 @@ export interface ImportStats {
 	/** Rows whose "Current Position" was non-blank but unparseable (left null,
 	 *  logged as a warning — like the ambiguous-name skip). */
 	unparseablePosition: number;
+	/** Rows that matched a Person this club does not solely hold (or who already
+	 *  has a sign-in account), so the CSV's address was NOT written to
+	 *  `people.email`. The membership row still took it. Counted rather than
+	 *  thrown: an import of 60 rows should not fail because one member also
+	 *  belongs to another club, but the refusal must not be invisible either. */
+	peopleEmailRefused: number;
 }
 
 /**
@@ -81,6 +88,7 @@ export async function importPeopleAndMembers(
 		peopleMatchedByEmail: 0,
 		membersCreated: 0,
 		membersUpdated: 0,
+		peopleEmailRefused: 0,
 		ambiguous: 0,
 		skippedBlankName: 0,
 		unparseablePosition: 0,
@@ -119,10 +127,31 @@ export async function importPeopleAndMembers(
 
 			// Person-level fill-only name/email/phone; adopt a Customer ID when we
 			// finally have one; always refresh the original join date from the CSV.
-			await db.update(people).set(pd.set).where(eq(people.id, personId));
+			//
+			// `people.email` is the identity key, and the candidate list above is
+			// GLOBAL (matched on Customer ID or email, with no club scope), so this
+			// row can resolve to a Person another club holds. Seeding an address onto
+			// one of those from a CSV is the same cross-club takeover the roster form
+			// and the invite button refuse — a club A admin uploads a row carrying the
+			// victim's Customer ID and their own address, and `linkPersonToUser` binds
+			// it on their next sign-in. So the email field takes the shared
+			// blast-radius predicate; everything else on the row keeps its existing
+			// fill-only behaviour, since a name or phone cannot re-key an identity.
+			const { email: pdEmail, ...pdRest } = pd.set;
+			await db.update(people).set(pdRest).where(eq(people.id, personId));
+			let storedEmail = current.email;
+			if (pdEmail !== current.email) {
+				const seeded = await db
+					.update(people)
+					.set({ email: pdEmail })
+					.where(personEmailWritable(db, personId, clubId))
+					.returning({ id: people.id });
+				if (seeded.length > 0) storedEmail = pdEmail;
+				else stats.peopleEmailRefused++;
+			}
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
-			current.email = pd.set.email;
+			current.email = storedEmail;
 			current.phone = pd.set.phone;
 		} else {
 			if (pd.kind === "ambiguous") stats.ambiguous++;
