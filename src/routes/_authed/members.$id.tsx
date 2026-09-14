@@ -681,7 +681,7 @@ function MemberActions({
 		) as OfficerPosition[];
 		setBusy(true);
 		try {
-			const res = await editMember({
+			await editMember({
 				data: {
 					clubId,
 					memberId: member.id,
@@ -692,20 +692,13 @@ function MemberActions({
 					officerPositions,
 				},
 			});
-			// `personEmailSynced === false` means the roster now shows the new address
-			// but the member's SIGN-IN address could not be moved — they already have
-			// an account, or another club holds them too. Saying nothing here is the
-			// exact defect this change exists to remove: the admin sees success, the
-			// roster looks right, and the member stays locked out of sign-in, invites
-			// and claim with no way for anyone to find out why. Note `null` (nothing
-			// to reconcile) is also falsy, so this tests for `false` explicitly.
-			if (res.personEmailSynced === false) {
-				toast.warning(
-					"Member updated, but their sign-in email was left unchanged — they already have an account, or they're on another club's roster too.",
-				);
-			} else {
-				toast.success("Member updated.");
-			}
+			// A plain success, because the save can no longer half-succeed (#756).
+			// This used to branch on a three-state `personEmailSynced` and warn when
+			// the member's SIGN-IN address could not be moved. That signal existed
+			// because the roster form wrote the identity key under a guard that could
+			// refuse; it writes `members.email` and nothing else now, so there is no
+			// refusal to report. Correcting a typo is this save plus a re-invite.
+			toast.success("Member updated.");
 			setEditOpen(false);
 			await router.invalidate();
 		} catch (err) {

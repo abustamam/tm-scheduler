@@ -221,6 +221,7 @@ async function firstAdminOf(clubId: string) {
 	const [row] = await db
 		.select({
 			personId: people.id,
+			memberId: members.id,
 			name: people.name,
 			email: people.email,
 			userId: people.userId,
@@ -390,6 +391,16 @@ export type UpdateAdminEmailInput = z.infer<typeof updateAdminEmailSchema>;
  * account is the broader capability in #187 (out of scope). The caller enforces
  * the superadmin gate. Throws when the club or its admin can't be found, or the
  * admin is already linked.
+ *
+ * **Writes BOTH columns, and the membership one is the load-bearing half**
+ * (#756). The sign-in auto-link matches `members.email`; `people.email` is the
+ * verified identity address, and this is the one waiver to "only a bind writes
+ * it" — the bootstrap case, where a club exists, nobody has signed in, and there
+ * is therefore no verified address in existence to fall back on. Writing only
+ * the Person row would leave this console reporting success while the admin
+ * stayed locked out, which is precisely the silent half-failure the roster form
+ * shipped and #756 removed. `person-email-writers.guard.test.ts` records the
+ * waiver.
  */
 export async function updateUnclaimedAdminEmail(
 	input: UpdateAdminEmailInput,
@@ -402,10 +413,16 @@ export async function updateUnclaimedAdminEmail(
 		);
 	}
 
-	await db
-		.update(people)
-		.set({ email: input.email })
-		.where(eq(people.id, admin.personId));
+	await db.transaction(async (tx) => {
+		await tx
+			.update(members)
+			.set({ email: input.email })
+			.where(eq(members.id, admin.memberId));
+		await tx
+			.update(people)
+			.set({ email: input.email })
+			.where(eq(people.id, admin.personId));
+	});
 
 	return { ok: true, personId: admin.personId };
 }

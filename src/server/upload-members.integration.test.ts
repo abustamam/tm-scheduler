@@ -169,6 +169,32 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 		expect(commit.stats.skippedBlankName).toBe(1);
 	});
 
+	it("preview and commit agree after the person-level address was cleared", async () => {
+		// The state migration 0076 leaves un-claimed members in: `people.email` NULL,
+		// the roster row holding the address. BOTH sides had to widen their candidate
+		// query for that, and they load it from two different modules — so this pins
+		// the parity rather than either half's answer. A preview promising "1 update"
+		// over a commit that inserts a duplicate Person is worse than either being
+		// wrong alone: the VPE approves a diff that is not what runs.
+		const clubId = await club();
+		const text = csv([
+			{ Name: "Hal", Email: "hal@x.io", "Status (*)": "PaidMember" },
+		]);
+		await logic.commitMemberImport(clubId, text);
+		await testDb
+			.update(people)
+			.set({ email: null })
+			.where(eq(people.email, "hal@x.io"));
+
+		const preview = await logic.previewMemberImport(clubId, text);
+		const commit = await logic.commitMemberImport(clubId, text);
+
+		expect(preview.summary.peopleCreated).toBe(commit.stats.peopleCreated);
+		expect(preview.summary.toUpdate).toBe(commit.stats.membersUpdated);
+		expect(commit.stats.peopleCreated).toBe(0);
+		expect(await clubMemberCount(clubId)).toBe(1);
+	});
+
 	it("fill-only: never overwrites a stored email, always sets the join date", async () => {
 		const clubId = await club();
 		// Seed a person + membership that already has an (edited) email.

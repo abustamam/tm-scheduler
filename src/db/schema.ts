@@ -593,6 +593,22 @@ export const people = pgTable(
 		// edit (guarded on NULL, so one club can't overwrite another's) and by
 		// merge/convert; read via COALESCE in `meeting-contacts-logic.ts`.
 		preferredName: text("preferred_name"),
+		// The VERIFIED identity address, plus the person-level dedupe key (#756).
+		// Two things it is NOT, both of which it used to be:
+		//  - it is NOT what binds an account. `linkPersonToUser` and
+		//    `claimPersonForUser` match `members.email` — the club's own contact
+		//    record — and require the Person to be held by exactly one club. A
+		//    club-scoped actor typing an address can therefore no longer decide who
+		//    a Person becomes, which is what made a typo a lockout and every writer
+		//    of this column a cross-club takeover.
+		//  - it is NOT club-editable. Exactly one thing UPDATEs it: the bind, which
+		//    writes an address a magic link just proved, in the same statement that
+		//    sets `user_id` (`account-link-logic.ts`; the two superadmin exceptions
+		//    are named in `person-email-writers.guard.test.ts`).
+		// It IS still written at INSERT, by the CSV importer, the guest-book
+		// conversion and the create-club form, because a brand-new Person row is
+		// nobody's identity yet and this is the fallback dedupe key ADR-0008 leans
+		// on for "one human, one Person". Read it as a hint, never as a credential.
 		email: text("email"),
 		phone: text("phone"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
@@ -632,6 +648,29 @@ export const people = pgTable(
 		index("people_user_idx").on(t.userId),
 	],
 );
+
+// ---------------------------------------------------------------------------
+// What migration 0076 cleared out of `people.email` (#756).
+//
+// TEMPORARY, and meant to be dropped. Inverting the ownership of that column
+// made every value written before the change un-trustworthy as an identity —
+// nobody had proved they owned any of them — so the migration nulls the ones on
+// un-claimed Persons. This table is the undo: the rollback plan is `revert the
+// PR` plus one UPDATE joining back through it, and it exists because a data
+// migration you cannot reverse is one you cannot deploy on a Friday.
+//
+// Drop it (schema + a migration) once a release has passed without incident.
+// Deliberately NOT a general audit trail: it holds one snapshot, from one
+// migration, and nothing writes to it at runtime.
+// ---------------------------------------------------------------------------
+
+export const peopleEmailBackup = pgTable("people_email_backup", {
+	personId: uuid("person_id")
+		.primaryKey()
+		.references(() => people.id, { onDelete: "cascade" }),
+	email: text("email").notNull(),
+	capturedAt: timestamp("captured_at").defaultNow().notNull(),
+});
 
 // ---------------------------------------------------------------------------
 // Roster members (self-serve MVP — auth-decoupled identities).

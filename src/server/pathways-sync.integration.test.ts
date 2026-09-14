@@ -199,6 +199,31 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 		expect(levels).toHaveLength(2);
 	});
 
+	it("matches on the ROSTER address when the Person carries none", async () => {
+		// The post-#756 shape, and the state migration 0076 leaves every un-claimed
+		// member in: `people.email` null, the club's contact record holding the
+		// address. Matching only the person-level column would quietly move most of
+		// a club's roster into `unmatched` on the next sync — a silent degradation,
+		// since an unmatched row is a normal thing for this report to contain.
+		const personId = await makeMember({ email: null });
+		await testDb
+			.update(members)
+			.set({ email: "roster-only@example.com" })
+			.where(eq(members.personId, personId));
+
+		const res = await syncClubProgress(clubId, [
+			mp({ email: "roster-only@example.com", basecampUserId: "bc-roster" }),
+		]);
+
+		expect(res.unmatched).toEqual([]);
+		expect(res.matched).toBe(1);
+		const [p] = await testDb
+			.select({ bc: people.basecampUserId })
+			.from(people)
+			.where(eq(people.id, personId));
+		expect(p.bc).toBe("bc-roster");
+	});
+
 	it("never overwrites an existing shared-catalog path name (insert-if-missing)", async () => {
 		// pathways_paths is a globally shared catalog: one club's sync must not be
 		// able to rename an entry every other club displays. Seed the row with a

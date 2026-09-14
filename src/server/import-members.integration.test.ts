@@ -168,6 +168,110 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(famMembers).toHaveLength(2);
 	});
 
+	it("never seeds people.email onto a MATCHED person, even in its own club", async () => {
+		// `people.email` is the verified identity address (#756): only a bind
+		// against a magic-link-proved address writes it. A CSV is a file an officer
+		// uploaded, so it fills the club's contact record and stops there. Person
+		// CREATION still carries the address — a fresh row is nobody's identity yet,
+		// and the column is the dedupe key ADR-0008 relies on — but a row that
+		// already exists is left alone.
+		const clubId = await club();
+		await importPeopleAndMembers(clubId, [
+			row({ customerId: "PN-EM", name: "Em" }),
+		]);
+		const stats = await importPeopleAndMembers(clubId, [
+			row({ customerId: "PN-EM", name: "Em", email: "em@x.io" }),
+		]);
+
+		expect(stats.peopleMatchedByCustomerId).toBe(1);
+		const [em] = await testDb
+			.select({ email: people.email })
+			.from(people)
+			.where(eq(people.customerId, "PN-EM"));
+		expect(em?.email).toBeNull();
+		// The club's own contact record DID fill — that is the officer's to set,
+		// and it is the address the invite and the claim will both use.
+		const [membership] = await testDb
+			.select({ email: members.email })
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		expect(membership?.email).toBe("em@x.io");
+	});
+
+	it("cannot re-key a Person the importing club does not hold", async () => {
+		// The cross-club shape, which is the one with teeth: the candidate list is
+		// matched GLOBALLY on Customer ID, so a row carrying a victim's PN- number
+		// and the importer's own address reached a Person another club holds. #755
+		// answered that with a blast-radius predicate on the write; #756 removes the
+		// write. Kept as a regression pin because the reason it is safe changed.
+		const clubA = await club();
+		const clubB = await club();
+		await importPeopleAndMembers(clubA, [
+			row({ customerId: "PN-VIC", name: "Vic" }),
+		]);
+		await importPeopleAndMembers(clubB, [
+			row({ customerId: "PN-VIC", name: "Vic", email: "attacker@x.io" }),
+		]);
+
+		const [vic] = await testDb
+			.select({ email: people.email })
+			.from(people)
+			.where(eq(people.customerId, "PN-VIC"));
+		expect(vic?.email).toBeNull();
+	});
+
+	it("re-matches a member whose person-level address was cleared", async () => {
+		// The state migration 0076 leaves every un-claimed member in: `people.email`
+		// NULL, the club's roster row holding the address. A Person with no Customer
+		// ID is matched by EMAIL, so a person-level-only candidate list stops
+		// recognising them — and the miss is not quiet, it adds a second Person AND
+		// a second roster row for the same human on every subsequent import.
+		const clubId = await club();
+		await importPeopleAndMembers(clubId, [
+			row({ name: "Fay", email: "fay@x.io" }),
+		]);
+		// Simulate the migration against this club's row.
+		await testDb
+			.update(people)
+			.set({ email: null })
+			.where(eq(people.email, "fay@x.io"));
+
+		const stats = await importPeopleAndMembers(clubId, [
+			row({ name: "Fay", email: "fay@x.io" }),
+		]);
+
+		expect(stats.peopleCreated).toBe(0);
+		expect(stats.peopleMatchedByEmail).toBe(1);
+		const roster = await testDb
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		expect(roster, "a duplicate roster row for the same human").toHaveLength(1);
+	});
+
+	it("does not match on ANOTHER club's roster address", async () => {
+		// The candidate list is global, so widening it to membership addresses has
+		// to stay scoped to the importing club — otherwise a CSV could reach a
+		// Person through a contact record some other club typed, which is the
+		// cross-club shape this whole change exists to close.
+		const clubA = await club();
+		const clubB = await club();
+		await importPeopleAndMembers(clubA, [
+			row({ name: "Gus", email: "gus@x.io" }),
+		]);
+		await testDb
+			.update(people)
+			.set({ email: null })
+			.where(eq(people.email, "gus@x.io"));
+
+		const stats = await importPeopleAndMembers(clubB, [
+			row({ name: "Gus", email: "gus@x.io" }),
+		]);
+
+		expect(stats.peopleCreated).toBe(1);
+		expect(stats.peopleMatchedByEmail).toBe(0);
+	});
+
 	it("adopts a Customer ID onto a person first seen by email only", async () => {
 		const clubId = await club();
 		await importPeopleAndMembers(clubId, [

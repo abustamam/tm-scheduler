@@ -14,7 +14,7 @@
  */
 import { eq } from "drizzle-orm";
 import { db } from "#/db";
-import { members, people } from "#/db/schema";
+import { members } from "#/db/schema";
 import { isPaid, mapRow, parseCsv } from "#/lib/members-csv";
 import {
 	type ExistingMembershipRow,
@@ -27,6 +27,7 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	type ImportStats,
 	importPeopleAndMembers,
+	loadPersonCandidates,
 } from "./import-members-logic";
 
 /** Columns the Toastmasters export always carries — a cheap sanity gate so a
@@ -75,17 +76,12 @@ export async function previewMemberImport(
 		.map(mapRow)
 		.map((r) => ({ ...r, phone: toStoredPhone(r.phone, cc) }));
 
-	// People are global (club-less) — the resolver matches across every club, so
-	// load them all, exactly as the committing writer does.
-	const existingPeople: ExistingPersonRow[] = await db
-		.select({
-			id: people.id,
-			customerId: people.customerId,
-			email: people.email,
-			name: people.name,
-			phone: people.phone,
-		})
-		.from(people);
+	// People are global (club-less) — the resolver matches across every club. Load
+	// them through the SAME function the committing writer uses, never a copy of
+	// its query: the two sides run identical pure decisions over this list, so a
+	// difference here is a preview that promises something the commit will not do.
+	const existingPeople: ExistingPersonRow[] =
+		await loadPersonCandidates(clubId);
 	const existingMemberships: ExistingMembershipRow[] = await db
 		.select({
 			id: members.id,
