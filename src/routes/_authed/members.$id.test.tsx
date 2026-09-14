@@ -38,7 +38,9 @@
 // behaviour would PIN the asymmetry rather than record it, so this comment is
 // the record.
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { editMember } from "#/server/members";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/club", () => ({
@@ -68,7 +70,7 @@ vi.mock("#/server/speeches", () => ({
 	rescheduleSpeech: vi.fn(),
 }));
 vi.mock("sonner", () => ({
-	toast: { success: vi.fn(), error: vi.fn() },
+	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
 
 import { Route } from "./members.$id";
@@ -317,5 +319,75 @@ describe("member profile — edit dialog phone prefill", () => {
 	it("prefills empty for a member with no number on file", async () => {
 		await renderRoute({ phone: null, phoneRaw: null });
 		expect((await openEditDialog()).value).toBe("");
+	});
+});
+
+/**
+ * `applyMemberEdit` can update the roster row and REFUSE to move the member's
+ * sign-in address (they hold an account, or another club holds them too). It
+ * reports that as `personEmailSynced === false`, and this screen is the only
+ * place a CLUB admin ever learns of it — no roster surface renders
+ * `people.email`, and the only screens that do are superadmin-only.
+ *
+ * The whole defect class behind that flag is silence: the roster shows the
+ * corrected address, every identity reader keeps matching the old one, and the
+ * member is locked out of sign-in with no one able to say why. An unconditional
+ * success toast here reinstates exactly that, which is why these are tests and
+ * not a comment.
+ */
+describe("member profile — edit dialog save feedback", () => {
+	async function saveEdit() {
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		await screen.findByLabelText("Phone");
+		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+	}
+
+	it("warns instead of reporting success when the sign-in email was NOT moved", async () => {
+		vi.mocked(editMember).mockResolvedValue({
+			ok: true,
+			personEmailSynced: false,
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+		} as any);
+		await renderRoute();
+
+		await saveEdit();
+
+		await vi.waitFor(() => expect(toast.warning).toHaveBeenCalled());
+		expect(
+			String(vi.mocked(toast.warning).mock.calls[0]?.[0]),
+			"the warning has to name WHY, or an admin cannot act on it",
+		).toMatch(/sign-in email|another club|already have an account/i);
+		expect(toast.success).not.toHaveBeenCalled();
+	});
+
+	it("reports plain success when the reconciliation landed", async () => {
+		vi.mocked(editMember).mockResolvedValue({
+			ok: true,
+			personEmailSynced: true,
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+		} as any);
+		await renderRoute();
+
+		await saveEdit();
+
+		await vi.waitFor(() => expect(toast.success).toHaveBeenCalled());
+		expect(toast.warning).not.toHaveBeenCalled();
+	});
+
+	it("does not warn on the no-op case, where null means nothing to reconcile", async () => {
+		// `null` and `false` are both falsy. A caller testing `if (!synced)` would
+		// warn on every ordinary save — a name fix, an officer checkbox — and an
+		// alarm that fires constantly is one nobody reads.
+		vi.mocked(editMember).mockResolvedValue({
+			ok: true,
+			personEmailSynced: null,
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+		} as any);
+		await renderRoute();
+
+		await saveEdit();
+
+		await vi.waitFor(() => expect(toast.success).toHaveBeenCalled());
+		expect(toast.warning).not.toHaveBeenCalled();
 	});
 });
