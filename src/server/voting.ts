@@ -167,15 +167,14 @@ const disqualifySchema = operateSchema.extend({ candidate: candidateRef });
  */
 export const disqualifyCandidateFn = createServerFn({ method: "POST" })
 	.validator((input: unknown) =>
-		// The reason's LENGTH bound is NOT duplicated here, for the reason the
-		// `candidateRef` comment above gives for the write-in name:
+		// The reason carries NO length bound here, exactly as `candidateRef`
+		// carries none for the write-in name and for the same stated reason:
 		// `disqualifyCandidate` owns it through `disqualificationReasonSchema`, so
-		// the cap has exactly one definition and a unit test can reach it without
-		// going through a `createServerFn` it cannot invoke. The outer bound here
-		// is a request-size guard, not the rule.
-		disqualifySchema
-			.extend({ reason: z.string().min(1).max(2000) })
-			.parse(input),
+		// the cap has one definition and a unit test can reach it without going
+		// through a `createServerFn` it cannot invoke. An outer "request-size"
+		// number here would be a second value to keep in agreement, which is the
+		// thing that comment exists to refuse.
+		disqualifySchema.extend({ reason: z.string() }).parse(input),
 	)
 	.handler(async ({ data }) => {
 		const authz = await requireVoteCounter(data);

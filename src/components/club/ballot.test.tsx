@@ -677,16 +677,25 @@ describe("Ballot", () => {
 			);
 			renderBallot();
 
-			const out = await screen.findByRole("button", { name: /Bo/ });
+			const out = await screen.findByRole("button", { name: "Bo" });
 			// `disabled`, not a click guard: it is what actually stops the tap AND
 			// what takes the control out of the tab order. A component that merely
 			// dropped the handler would still invite a tap and do nothing.
 			expect((out as HTMLButtonElement).disabled).toBe(true);
-			// The name is struck through and the reason sits beside it. Both come
-			// off the same branch, so both are asserted — a refactor that keeps the
-			// strike and loses the reason leaves a voter told nothing.
 			expect(within(out).getByText("Bo").className).toContain("line-through");
-			expect(within(out).getByText(new RegExp(RULING))).toBeTruthy();
+
+			// The reason sits OUTSIDE the disabled button, and this is what pins
+			// that rather than merely checking the text exists somewhere.
+			// `buttonVariants` carries `disabled:opacity-50`, and `opacity` applies
+			// to the whole subtree — so a reason rendered INSIDE the control is
+			// halved to roughly 3.5:1 with no child class able to recover it, which
+			// is how this shipped before review: the one thing the feature exists to
+			// tell the room, rendered behind the styling meant to mute the control.
+			// Asserting the DOM relationship is the difference between "the reason
+			// is present" and "the reason is legible".
+			const reason = screen.getByText(new RegExp(RULING));
+			expect(out.contains(reason)).toBe(false);
+			expect(reason.className).toContain("text-sm");
 
 			// The eligible neighbour is untouched — the fixture carries both
 			// because the failure this guards against is a blanket disable.
@@ -703,7 +712,7 @@ describe("Ballot", () => {
 			submitVote.mockResolvedValue({ ok: true });
 			renderBallot();
 
-			const out = await screen.findByRole("button", { name: /Bo/ });
+			const out = await screen.findByRole("button", { name: "Bo" });
 			await userEvent.click(out);
 			// The whole point of AC 2: the vote must not leave the phone. Asserting
 			// the MUTATION (not the rendered tick) is what survives a refactor that
@@ -761,7 +770,7 @@ describe("Ballot", () => {
 			expect(
 				(
 					(await screen.findByRole("button", {
-						name: /Bo/,
+						name: "Bo",
 					})) as HTMLButtonElement
 				).disabled,
 			).toBe(true);
@@ -771,8 +780,18 @@ describe("Ballot", () => {
 			);
 			await poll(qc);
 
-			const back = await screen.findByRole("button", { name: "Bo" });
-			expect((back as HTMLButtonElement).disabled).toBe(false);
+			// `waitFor` on the ASSERTION, not `findByRole` on the element: both the
+			// ruled-out button and the restored one answer to the name "Bo", so a
+			// `findBy*` resolves the instant either exists and hands back the stale
+			// disabled one before the poll's re-render has flushed. Retrying the
+			// property is what actually waits for the state to change.
+			await waitFor(() => {
+				expect(
+					(screen.getByRole("button", { name: "Bo" }) as HTMLButtonElement)
+						.disabled,
+				).toBe(false);
+			});
+			const back = screen.getByRole("button", { name: "Bo" });
 			await userEvent.click(back);
 			expect(submitVote).toHaveBeenCalledTimes(1);
 		});

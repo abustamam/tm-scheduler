@@ -257,26 +257,44 @@ export function Ballot({
 								// struck through and carrying its reason, rather than removed:
 								// a name vanishing from a voter's screen mid-meeting reads as a
 								// bug, and the room needs to be told WHY a vote it was about to
-								// cast cannot land. Still a `<Button>`, and `min-h-14` keeps the
-								// tappable names' rhythm — it grows (`h-auto`) only by however
-								// much the reason wraps to, rather than shrinking to a
-								// different-looking row. `disabled`, not a dropped click
-								// handler, is what makes it untappable: a click guard would
-								// still invite the tap and would leave the control in the tab
-								// order.
+								// cast cannot land. Still a `<Button>` at the same `h-14`, so the
+								// other names do not jump when one is ruled out.
+								//
+								// `disabled` rather than `aria-disabled` + a dropped handler, and
+								// the trade-off is real rather than obvious. `disabled` REMOVES
+								// the row from the tab order, so a sighted keyboard user tabbing
+								// the ballot never lands on it — that is the cost, and it is
+								// accepted because the row is genuinely non-actionable (unlike a
+								// submit button whose criteria you want to inspect). It is not
+								// lost to screen readers: a disabled button stays in the
+								// accessibility tree, and the ballot's real audience — VoiceOver
+								// swiping linearly, NVDA/JAWS in browse mode — reaches it and
+								// hears the name. The reason lives outside the control so the
+								// muting cannot swallow it; see below.
 								if (nominee.disqualified) {
 									return (
-										<Button
-											key={id}
-											variant="outline"
-											disabled
-											className="h-auto min-h-14 flex-col items-start justify-center gap-0.5 py-2 text-base"
-										>
-											<span className="line-through">{nominee.name}</span>
-											<span className="text-xs font-normal whitespace-normal text-left">
+										<div key={id} className="flex flex-col gap-1">
+											<Button
+												variant="outline"
+												disabled
+												className="h-14 justify-start text-base"
+											>
+												<span className="line-through">{nominee.name}</span>
+											</Button>
+											{/* OUTSIDE the button, and that is the whole point.
+											    `buttonVariants` carries `disabled:opacity-50`, and
+											    `opacity` applies to the entire subtree and creates a
+											    stacking context — no child class can claw it back. The
+											    reason is the one thing this feature exists to tell the
+											    room, so rendering it at 12px and half alpha (~3.5:1,
+											    under the 4.5:1 floor) on a phone in a meeting room put
+											    the payload behind the very styling meant to mute the
+											    control. The NAME is what should read as unavailable;
+											    the explanation should not. */}
+											<p className="px-1 text-sm text-muted-foreground">
 												Can't win: {nominee.disqualified.reason}
-											</span>
-										</Button>
+											</p>
+										</div>
 									);
 								}
 								return (
@@ -315,8 +333,14 @@ export function Ballot({
 								// last send is doing, a pick that can no longer win is the
 								// thing the voter needs to act on, and re-sending it would
 								// only be rejected by `castVote`'s gate.
-								<p className="mt-3 text-sm font-medium text-destructive">
-									{confirmedName} can't win this award ({chosenIsOut.reason}).
+								//
+								// `warning`, not `destructive`, and the distinction is the
+								// message. `destructive` below means "your vote did not send,
+								// try again" — a transient failure the voter can retry away.
+								// This is persistent state that nobody did wrong. Rendering
+								// both in the same red made the voter work out which.
+								<p className="mt-3 text-sm font-medium text-warning-foreground">
+									{confirmedName} can't win this award — {chosenIsOut.reason}.
 									Tap another name.
 								</p>
 							) : state === "failed" ? (

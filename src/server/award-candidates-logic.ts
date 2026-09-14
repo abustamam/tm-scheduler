@@ -112,11 +112,14 @@ export async function loadDisqualifications(
 		// match the candidate it names — which fails OPEN, letting the vote
 		// through. Folding an already-folded key is a no-op.
 		const key = r.memberId
-			? `member:${r.memberId}`
+			? disqualificationKey({ kind: "member", id: r.memberId })
 			: r.guestId
-				? `guest:${r.guestId}`
+				? disqualificationKey({ kind: "guest", id: r.guestId })
 				: r.writeIn
-					? `writeIn:${writeInKey(r.writeIn)}`
+					? disqualificationKey({
+							kind: "writeIn",
+							id: writeInKey(r.writeIn),
+						})
 					: null;
 		// Unreachable while the table's exactly-one check holds; dropped rather
 		// than crashed on, because a candidate-less row disqualifies nobody.
@@ -130,66 +133,93 @@ export async function loadDisqualifications(
 	return out;
 }
 
-/** This candidate's disqualification, or null. Handles all three kinds —
- *  unlike `isEligibleCandidate` below, a WRITE-IN can be disqualified, because
- *  the Vote Counter sees the typed name on their console once it has been cast
- *  once. */
+/**
+ * This candidate's disqualification, or null. Handles all three kinds — unlike
+ * `isEligibleCandidate` below, a WRITE-IN can be disqualified, because the Vote
+ * Counter sees the typed name on their console once it has been cast once.
+ *
+ * THE one place the `${kind}:${id}` key is read. Every consumer goes through
+ * it — `loadAwardCandidates` and `loadWriteInCandidates` when they stamp, and
+ * `castVote`'s write-in arm when it gates — because a key format spelled
+ * independently in four places is how the two sides of a lookup quietly stop
+ * agreeing. This feature already shipped one bug of exactly that shape (the
+ * undo that folded its input and matched the column raw), which is why the
+ * spellings were collapsed rather than left as four correct copies.
+ */
 export function disqualificationFor(
 	index: DisqualifiedIndex,
 	category: AwardCategory,
 	candidate: { kind: "member" | "guest" | "writeIn"; id: string },
 ): CandidateDisqualification | null {
-	return index[category].get(`${candidate.kind}:${candidate.id}`) ?? null;
+	return index[category].get(disqualificationKey(candidate)) ?? null;
 }
 
+/** The key `disqualificationFor` reads and `loadDisqualifications` writes.
+ *  Not exported: nothing outside this module should be building it. */
+function disqualificationKey(candidate: {
+	kind: "member" | "guest" | "writeIn";
+	id: string;
+}): string {
+	return `${candidate.kind}:${candidate.id}`;
+}
+
+/**
+ * `dq` is OPTIONAL, and the default is the point (#723).
+ *
+ * Omit it and this function loads the index itself, so a caller that knows
+ * nothing about disqualification still gets correctly stamped candidates —
+ * which matters because every caller is a place a ruled-out candidate must not
+ * slip through, and an argument each one has to remember is exactly what goes
+ * missing when a fourth appears.
+ *
+ * Pass it when you are ALSO calling `loadWriteInCandidates`, which produces the
+ * other half of the ballot's candidate list and needs the same index. Both
+ * `loadBallot` and `loadTally` do, so without the parameter each poll issued
+ * the identical `where meeting_id = ?` TWICE, concurrently — on the read every
+ * phone in the room makes every 5 seconds.
+ */
 export async function loadAwardCandidates(
 	meetingId: string,
+	dq?: DisqualifiedIndex,
 ): Promise<AwardCandidates> {
-	// Loaded HERE rather than taken as a parameter, deliberately (#723). Every
-	// caller of this function is a place a disqualified candidate must not slip
-	// through — the ballot, the tally and `castVote`'s gate — and an argument
-	// they each have to remember is exactly the shape that goes missing when a
-	// fourth caller appears. `loadWriteInCandidates` (`voting-logic.ts`) pays
-	// for its own copy of this one small indexed read for the same reason. It
-	// costs one extra query per ballot poll against a table holding at most a
-	// handful of rows per meeting, which is not a cost worth trading
-	// correctness for.
-	const disqualified = await loadDisqualifications(meetingId);
-
-	// `members.name` is the per-club authoritative display name, denormalized on
-	// purpose (#486) — it is what `loadMinutes` already reads for award winners.
-	// Do NOT join through `people.name`: the two diverge, and the ballot must
-	// show the same name every other surface shows.
-	const slotRows = await db
-		.select({
-			category: roleDefinitions.category,
-			memberId: roleSlots.assignedMemberId,
-			guestId: roleSlots.assignedGuestId,
-			memberName: members.name,
-			guestName: guests.name,
-		})
-		.from(roleSlots)
-		.innerJoin(
-			roleDefinitions,
-			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-		)
-		.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
-		.leftJoin(guests, eq(guests.id, roleSlots.assignedGuestId))
-		.where(eq(roleSlots.meetingId, meetingId))
-		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
-
-	const ttRows = await db
-		.select({
-			memberId: tableTopicsSpeakers.memberId,
-			guestId: tableTopicsSpeakers.guestId,
-			memberName: members.name,
-			guestName: guests.name,
-		})
-		.from(tableTopicsSpeakers)
-		.leftJoin(members, eq(members.id, tableTopicsSpeakers.memberId))
-		.leftJoin(guests, eq(guests.id, tableTopicsSpeakers.guestId))
-		.where(eq(tableTopicsSpeakers.meetingId, meetingId))
-		.orderBy(asc(tableTopicsSpeakers.sortOrder));
+	// All three reads take only `meetingId` and none depends on another, so they
+	// go in parallel rather than stacking three round-trips on the public poll.
+	const [disqualified, slotRows, ttRows] = await Promise.all([
+		dq ? Promise.resolve(dq) : loadDisqualifications(meetingId),
+		// `members.name` is the per-club authoritative display name, denormalized
+		// on purpose (#486) — it is what `loadMinutes` already reads for award
+		// winners. Do NOT join through `people.name`: the two diverge, and the
+		// ballot must show the same name every other surface shows.
+		db
+			.select({
+				category: roleDefinitions.category,
+				memberId: roleSlots.assignedMemberId,
+				guestId: roleSlots.assignedGuestId,
+				memberName: members.name,
+				guestName: guests.name,
+			})
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
+			.leftJoin(guests, eq(guests.id, roleSlots.assignedGuestId))
+			.where(eq(roleSlots.meetingId, meetingId))
+			.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex)),
+		db
+			.select({
+				memberId: tableTopicsSpeakers.memberId,
+				guestId: tableTopicsSpeakers.guestId,
+				memberName: members.name,
+				guestName: guests.name,
+			})
+			.from(tableTopicsSpeakers)
+			.leftJoin(members, eq(members.id, tableTopicsSpeakers.memberId))
+			.leftJoin(guests, eq(guests.id, tableTopicsSpeakers.guestId))
+			.where(eq(tableTopicsSpeakers.meetingId, meetingId))
+			.orderBy(asc(tableTopicsSpeakers.sortOrder)),
+	]);
 
 	const empty = (): AwardCandidates => ({
 		best_speaker: [],
@@ -226,7 +256,7 @@ export async function loadAwardCandidates(
 			kind,
 			id,
 			name,
-			disqualified: disqualified[category].get(key) ?? null,
+			disqualified: disqualificationFor(disqualified, category, { kind, id }),
 		});
 	};
 
@@ -254,8 +284,10 @@ export async function loadAwardCandidates(
  * `!c.disqualified` is the load-bearing half of #723 (AC 3). Hiding the name
  * on the ballot is a UI courtesy: a phone whose 5s poll has not landed yet
  * still holds a tappable button for someone who has just been ruled out, and a
- * hand-crafted POST never polls at all. This is the only place that refuses
- * the vote.
+ * hand-crafted POST never polls at all. This is where a MEMBER-or-GUEST vote
+ * is refused; the write-in arm of `castVote` is the other half, and there are
+ * exactly those two — both throw the same message, and `voting-logic.ts` is
+ * the only file that throws it.
  */
 export function isEligibleCandidate(
 	candidates: AwardCandidates,

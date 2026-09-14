@@ -415,14 +415,18 @@ the nouns in `src/db/schema.ts`.
 - **Disqualification** — the Vote Counter's record that a candidate cannot win one award on one
   meeting, with the reason the room is told (`meeting_candidate_disqualifications`, #723). Eligibility
   is not derivable: a speaker can have spoken and still be out, because they ran outside the
-  qualifying window or never used the Word of the Day — the Timer's own printed script already tells
-  the room that rule (`role-sheet-layout.ts`) and until this the app could not act on it. It is a
+  qualifying window or never used the Word of the Day. The Timer's printed report cue already tells
+  the room the first ("Anyone outside their qualifying window is not eligible for the vote",
+  `role-sheet-layout.ts`); the Word of the Day is the GRAMMARIAN's sheet and club convention rather
+  than printed rule. Until this the app could act on neither. It is a
   human judgement the app RECORDS; nothing derives it from timing data. A ruled-out candidate **stays
   on the ballot**, struck through and carrying its reason, and cannot be voted for — a name vanishing
   from a voter's screen mid-meeting reads as a bug, and a console-only flag leaves people spending
-  their one vote on someone who cannot win. The load-bearing enforcement is `isEligibleCandidate`
-  (`award-candidates-logic.ts`), which `castVote` calls: the hidden button is a courtesy to a phone
-  that has polled, and the server is what refuses. Ballots already cast are KEPT in `meeting_votes`
+  their one vote on someone who cannot win. Enforcement is server-side and has exactly TWO halves, both in
+  `castVote`: `isEligibleCandidate` (`award-candidates-logic.ts`) refuses a member-or-guest vote, and
+  the write-in arm consults `disqualificationFor` directly, because a write-in has no derived list to
+  be absent from. The hidden button is a courtesy to a phone that has polled; these two are what
+  refuse. Ballots already cast are KEPT in `meeting_votes`
   and dropped on the READ side (`loadTally` splits `results` from `disqualified`), which is what makes
   undo a pure DELETE with the prior votes intact. Per `(meeting, category, candidate)` — the same
   person can be out for Best Speaker and eligible for Best Table Topics — addressed by the same three

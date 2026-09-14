@@ -33,6 +33,7 @@ import { logActivity } from "./activity";
 import {
 	type AwardCandidate,
 	type CandidateDisqualification,
+	type DisqualifiedIndex,
 	disqualificationFor,
 	isEligibleCandidate,
 	loadAwardCandidates,
@@ -215,30 +216,59 @@ export async function disqualifyCandidate(
 	const { memberId, guestId, writeIn } = await resolveDisqualifiedCandidate(
 		input.candidate,
 		input.clubId,
+		input.meetingId,
+		input.category,
 	);
 
-	await db.transaction(async (tx) => {
-		await tx.insert(meetingCandidateDisqualifications).values({
-			meetingId: input.meetingId,
-			category: input.category,
-			candidateMemberId: memberId,
-			candidateGuestId: guestId,
-			candidateWriteIn: writeIn,
-			reason: parsedReason.data,
-			disqualifiedByMemberId: input.actorMemberId,
+	// The unique index is the arbiter (see the doc comment), but what it throws
+	// is `duplicate key value violates unique constraint
+	// "meeting_candidate_dq_member_unique"`, and the console renders a failed
+	// ruling's message verbatim to an officer running a meeting. Translate the
+	// one violation this path can actually produce; anything else rethrows
+	// untouched, because a message invented for an error nobody diagnosed is
+	// worse than the raw one.
+	// Checks the CAUSE as well as the error: drizzle wraps a driver failure in a
+	// `DrizzleQueryError` whose message is the whole parameterised statement, so
+	// the SQLSTATE the decision rests on is one level down. Reading only the top
+	// level silently never matched, and the officer got the raw query text.
+	const isDuplicate = (e: unknown): boolean => {
+		const code = (e as { code?: unknown } | null)?.code;
+		if (code === "23505") return true;
+		const cause = (e as { cause?: unknown } | null)?.cause;
+		return cause != null && cause !== e && isDuplicate(cause);
+	};
+
+	try {
+		await db.transaction(async (tx) => {
+			await tx.insert(meetingCandidateDisqualifications).values({
+				meetingId: input.meetingId,
+				category: input.category,
+				candidateMemberId: memberId,
+				candidateGuestId: guestId,
+				candidateWriteIn: writeIn,
+				reason: parsedReason.data,
+				disqualifiedByMemberId: input.actorMemberId,
+			});
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: input.actorMemberId,
+				action: "vote_disqualify",
+				targetType: "meeting",
+				targetId: input.meetingId,
+				// The reason is carried here as well as in the row because the row is
+				// deleted on undo and this is what survives it — a club asking "why
+				// was she ruled out and then not" has nowhere else to look. The UNDO
+				// logs only the category: by then the reason is gone from the row, and
+				// this entry is where it still stands.
+				detail: { category: input.category, reason: parsedReason.data },
+			});
 		});
-		await logActivity(tx, {
-			clubId: input.clubId,
-			actorMemberId: input.actorMemberId,
-			action: "vote_disqualify",
-			targetType: "meeting",
-			targetId: input.meetingId,
-			// The reason is carried here as well as in the row because the row is
-			// deleted on undo and this is what survives it — a club asking "why was
-			// she ruled out and then not" has nowhere else to look.
-			detail: { category: input.category, reason: parsedReason.data },
-		});
-	});
+	} catch (e) {
+		if (isDuplicate(e)) {
+			throw new Error("That candidate is already disqualified in this award.");
+		}
+		throw e;
+	}
 }
 
 /**
@@ -262,6 +292,8 @@ export async function undoDisqualification(
 	const { memberId, guestId, writeIn } = await resolveDisqualifiedCandidate(
 		input.candidate,
 		input.clubId,
+		input.meetingId,
+		input.category,
 	);
 
 	await db.transaction(async (tx) => {
@@ -275,10 +307,18 @@ export async function undoDisqualification(
 						? eq(meetingCandidateDisqualifications.candidateMemberId, memberId)
 						: guestId
 							? eq(meetingCandidateDisqualifications.candidateGuestId, guestId)
-							: eq(
-									meetingCandidateDisqualifications.candidateWriteIn,
-									writeIn as string,
-								),
+							: // FOLDED on both sides, and this half was a bug until #723's
+								// own review found it. `loadDisqualifications` re-folds the
+								// stored value on READ, so a row written unfolded by a path
+								// that skipped this seam still BITES — but matching the column
+								// raw here meant that same row could never be removed. Combined
+								// with the deliberate no-op below, the Vote Counter tapped Undo,
+								// got a resolved promise and an invalidated query, and the
+								// ruling silently stood. A defence that fires and cannot be
+								// lifted is worse than no defence, so the two sides now fold
+								// identically: this expression is `writeInKey` in SQL —
+								// lowercase, collapse whitespace runs, trim.
+								sql`btrim(regexp_replace(lower(${meetingCandidateDisqualifications.candidateWriteIn}), '\\s+', ' ', 'g')) = ${writeIn}`,
 				),
 			)
 			.returning({ id: meetingCandidateDisqualifications.id });
@@ -296,15 +336,27 @@ export async function undoDisqualification(
 
 /**
  * The three mutually-exclusive candidate columns for one `CandidateRef`, plus
- * the club-scoping check for the two arms that have a row.
+ * the scoping check for each arm.
  *
  * ONE derivation shared by the set and the clear, which is what keeps them
- * addressing the same candidate — a write-in folded on the way in and matched
- * raw on the way out would make undo silently miss its own row.
+ * addressing the same candidate.
+ *
+ * Every arm is BOUNDED, and the write-in one is the reason this matters. The
+ * member and guest arms are bounded by the club roster — `requireMemberInMeetingClub`
+ * / `requireGuestInClub` reject a foreign row, so the most rows this table can
+ * ever hold for them is the roster times the three categories. A write-in has
+ * no row and no roster: its identity IS the free-text string, so without the
+ * check below any distinct string would mint a new row (plus an `activity_log`
+ * row), unbounded, on a table `loadDisqualifications` reads on the PUBLIC
+ * ballot poll. `requireCastWriteIn` bounds it by the one thing that is already
+ * capped — ballots actually cast — and costs the real flow nothing, because the
+ * console only ever offers names the tally listed.
  */
 async function resolveDisqualifiedCandidate(
 	candidate: CandidateRef,
 	clubId: string,
+	meetingId: string,
+	category: AwardCategory,
 ): Promise<{
 	memberId: string | null;
 	guestId: string | null;
@@ -317,7 +369,9 @@ async function resolveDisqualifiedCandidate(
 		}
 		// FOLDED, matching what the schema comment says this column holds and what
 		// `loadDisqualifications` looks the candidate up by.
-		return { memberId: null, guestId: null, writeIn: writeInKey(parsed.data) };
+		const key = writeInKey(parsed.data);
+		await requireCastWriteIn(meetingId, category, key);
+		return { memberId: null, guestId: null, writeIn: key };
 	}
 	if (candidate.kind === "member") {
 		await requireMemberInMeetingClub(candidate.id, clubId);
@@ -325,6 +379,44 @@ async function resolveDisqualifiedCandidate(
 	}
 	await requireGuestInClub(candidate.id, clubId);
 	return { memberId: null, guestId: candidate.id, writeIn: null };
+}
+
+/**
+ * Throws unless `key` names a write-in someone has actually CAST in this
+ * meeting's category (#723).
+ *
+ * This is the write-in arm's answer to "which candidates exist" — the question
+ * `requireMemberInMeetingClub` answers for the other two. It is a bound, not a
+ * courtesy: the console derives its write-in list from the tally, so a legitimate
+ * ruling always names a cast ballot, while a hand-crafted call without this could
+ * write one row per distinct string forever.
+ *
+ * Matched on the FOLDED key, the same way everything else in this feature
+ * addresses a write-in, so "Bob Smith" finds the ballot cast as "bob  smith".
+ */
+async function requireCastWriteIn(
+	meetingId: string,
+	category: AwardCategory,
+	key: string,
+) {
+	const [row] = await db
+		.select({ id: meetingVotes.id })
+		.from(meetingVotes)
+		.innerJoin(
+			meetingVoteSessions,
+			eq(meetingVoteSessions.id, meetingVotes.sessionId),
+		)
+		.where(
+			and(
+				eq(meetingVoteSessions.meetingId, meetingId),
+				eq(meetingVoteSessions.category, category),
+				sql`btrim(regexp_replace(lower(${meetingVotes.candidateWriteIn}), '\\s+', ' ', 'g')) = ${key}`,
+			),
+		)
+		.limit(1);
+	if (!row) {
+		throw new Error("Nobody has voted for that name in this award.");
+	}
 }
 
 export interface VoterRef {
@@ -656,10 +748,17 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 	if (!(await isReadableClubForMeeting(meetingId))) {
 		return { meetingId, categories: closedBallotCategories() };
 	}
+	// ONE load of the disqualification index, shared by both candidate
+	// producers (#723). Each defaults to loading its own when called without
+	// it, which is what keeps a future caller correct — but both producers run
+	// on this path, so leaving them to default issued the identical
+	// `where meeting_id = ?` twice per poll, on the read every phone in the
+	// room makes every 5 seconds.
+	const disqualified = await loadDisqualifications(meetingId);
 	const [sessions, candidates, writeIns] = await Promise.all([
 		listVoteSessions(meetingId),
-		loadAwardCandidates(meetingId),
-		loadWriteInCandidates(meetingId),
+		loadAwardCandidates(meetingId, disqualified),
+		loadWriteInCandidates(meetingId, disqualified),
 	]);
 	const categories = {} as Record<AwardCategory, BallotCategory>;
 	for (const category of AWARD_CATEGORIES) {
@@ -694,16 +793,21 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
  * future path that forgets is elided here rather than shipped to a phone.
  *
  * Stamps `disqualified` like `loadAwardCandidates` does (#723). This is the
- * OTHER producer of `AwardCandidate`s, and it loads its own copy of the index
- * for the reason stated there: a disqualification that reached the roster half
- * of the ballot and not the write-in half would hide one name and leave the
- * other tappable, on the one category (Best Table Topics) where write-ins are
- * the common case.
+ * OTHER producer of `AwardCandidate`s, and both must stamp: a disqualification
+ * that reached the roster half of the ballot and not the write-in half would
+ * hide one name and leave the other tappable, on the one category (Best Table
+ * Topics) where write-ins are the common case.
+ *
+ * `dq` is optional for the same reason it is on `loadAwardCandidates` — a
+ * caller that knows nothing about disqualification still gets stamped rows —
+ * and every real caller passes it, because both producers run on the same
+ * request and the index is one read for the pair.
  */
 async function loadWriteInCandidates(
 	meetingId: string,
+	dq?: DisqualifiedIndex,
 ): Promise<Record<AwardCategory, AwardCandidate[]>> {
-	const disqualified = await loadDisqualifications(meetingId);
+	const disqualified = dq ?? (await loadDisqualifications(meetingId));
 	const rows = await db
 		.select({
 			category: meetingVoteSessions.category,
@@ -729,7 +833,10 @@ async function loadWriteInCandidates(
 			kind: "writeIn",
 			id: key,
 			name: cap(r.name, WRITE_IN_LIMITS.name),
-			disqualified: disqualified[r.category].get(`writeIn:${key}`) ?? null,
+			disqualified: disqualificationFor(disqualified, r.category, {
+				kind: "writeIn",
+				id: key,
+			}),
 		});
 	}
 	return out;
@@ -778,10 +885,17 @@ export interface CategoryTally {
 export async function loadTally(
 	meetingId: string,
 ): Promise<Record<AwardCategory, CategoryTally>> {
+	// ONE load of the disqualification index, shared by both candidate
+	// producers (#723). Each defaults to loading its own when called without
+	// it, which is what keeps a future caller correct — but both producers run
+	// on this path, so leaving them to default issued the identical
+	// `where meeting_id = ?` twice per poll, on the read every phone in the
+	// room makes every 5 seconds.
+	const disqualified = await loadDisqualifications(meetingId);
 	const [sessions, candidates, writeIns] = await Promise.all([
 		listVoteSessions(meetingId),
-		loadAwardCandidates(meetingId),
-		loadWriteInCandidates(meetingId),
+		loadAwardCandidates(meetingId, disqualified),
+		loadWriteInCandidates(meetingId, disqualified),
 	]);
 	const rows = await db
 		.select({

@@ -20,11 +20,21 @@ import { cap } from "./cap";
  * where a second wrapped line is already pushing it. Far smaller than
  * `WRITE_IN_LIMITS.name`'s reasoning needs to be, because unlike a name this
  * is written by an AUTHENTICATED-or-self-asserted Vote Counter rather than by
- * anyone holding the ballot link: the row bound is one per candidate per
- * category, and it reaches no synchronous PDF renderer (#723 keeps
- * disqualification off the printed agenda and the projected deck entirely).
- * The absolute ceiling is pinned by `disqualification-limits.guard.test.ts`
- * rather than stated relative to itself — an assertion written as
+ * anyone holding the ballot link, and it reaches no synchronous PDF renderer
+ * (#723 keeps disqualification off the printed agenda and the projected deck
+ * entirely).
+ *
+ * The ROW bound is what makes length x rows safe, and it is worth stating
+ * exactly because the obvious version of it is wrong. For a member or guest
+ * candidate it is the club roster times three categories, because
+ * `resolveDisqualifiedCandidate` rejects a candidate outside the meeting's
+ * club. A WRITE-IN has no roster — its identity is the free-text string — so
+ * the bound there is not the candidate list but `requireCastWriteIn`: a ruling
+ * may only name a write-in someone actually cast, and ballots are already
+ * capped per meeting. Without that check any distinct string would mint a row.
+ *
+ * The absolute ceiling is pinned by `disqualification.test.ts` rather than
+ * stated relative to itself — an assertion written as
  * `<= DISQUALIFICATION_LIMITS.reason` passes for every value of it, including
  * one that reintroduces the bug.
  */
@@ -65,8 +75,15 @@ export function capDisqualificationReason(reason: string): string {
 }
 
 /**
- * The two rulings the Timer's own script already describes, offered as one tap
- * in the Vote Counter's console.
+ * The two common rulings, offered as one tap in the Vote Counter's console.
+ *
+ * Only the FIRST is in the Timer's script — their printed report cue reads
+ * "Here are the times. Anyone outside their qualifying window is not eligible
+ * for the vote." The Word of the Day belongs to the GRAMMARIAN's sheet, which
+ * asks the room to use the word and never says failing to is disqualifying;
+ * that half is club convention, not printed rule. Worth the distinction,
+ * because "the script already says it" is the argument for offering a preset
+ * at all, and it only holds for one of them.
  *
  * Presets, not an enum: the column is free text because a club will have a
  * third reason nobody anticipated, and a closed vocabulary would push that

@@ -162,9 +162,19 @@ describe("VoteCounterPanel disqualification (#723)", () => {
 		await userEvent.click(
 			await speaker.findByRole("button", { name: "Disqualify Bo" }),
 		);
+		// The chip FILLS the field — it does not commit. Two outline chips above a
+		// primary submit read as "pick a reason, then press Disqualify", so a chip
+		// that wrote the ruling on tap invited the console's highest-consequence
+		// mis-tap. Asserting the mutation has NOT fired yet is what pins that.
 		await userEvent.click(
 			speaker.getByRole("button", { name: DISQUALIFICATION_PRESETS[1] }),
 		);
+		expect(disqualifyCandidateFn).not.toHaveBeenCalled();
+		expect(
+			(speaker.getByLabelText(/Reason Bo can't win/) as HTMLInputElement).value,
+		).toBe(DISQUALIFICATION_PRESETS[1]);
+
+		await userEvent.click(speaker.getByRole("button", { name: "Disqualify" }));
 
 		expect(disqualifyCandidateFn).toHaveBeenCalledTimes(1);
 		expect(disqualifyCandidateFn.mock.calls[0][0].data).toEqual({
@@ -232,6 +242,7 @@ describe("VoteCounterPanel disqualification (#723)", () => {
 		await userEvent.click(
 			tt.getByRole("button", { name: DISQUALIFICATION_PRESETS[0] }),
 		);
+		await userEvent.click(tt.getByRole("button", { name: "Disqualify" }));
 
 		expect(disqualifyCandidateFn.mock.calls[0][0].data.candidate).toEqual({
 			kind: "writeIn",
@@ -262,7 +273,7 @@ describe("VoteCounterPanel disqualification (#723)", () => {
 		const speaker = card("Best Speaker");
 		// The count is shown, not hidden: "3 votes, excluded" is the sentence the
 		// Vote Counter has to be able to give the room.
-		expect(await speaker.findByText(/3\s*excluded/)).toBeTruthy();
+		expect(await speaker.findByText(/3 votes excluded/)).toBeTruthy();
 		expect(speaker.getByText("Outside the window")).toBeTruthy();
 
 		await userEvent.click(
@@ -344,6 +355,187 @@ describe("VoteCounterPanel disqualification (#723)", () => {
 		expect(speaker.queryByRole("button", { name: /^Undo/ })).toBeNull();
 	});
 
+	// The open list must not be a leaderboard, and hiding the DIGITS is only half
+	// of that. `loadTally` ranks `results` by count descending, so rendering its
+	// order straight through kept the ranking: row one was the current leader and
+	// the list reshuffled every 5s poll. The fixture here is deliberately NOT in
+	// count order — the original test's was (`Ana 4, Bo 1`), which is exactly why
+	// it could not see this.
+	it("orders an OPEN category by name, not by live vote count", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Zoe", 9), member("m-2", "Abe", 1)],
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		await speaker.findByText("Zoe");
+		const names = speaker
+			.getAllByRole("button", { name: /^Disqualify / })
+			.map((b) => b.textContent);
+		// Alphabetical. Count order would put Zoe first, and would move rows under
+		// the cursor of a destructive control that has no confirm step.
+		expect(names[0]).toContain("Abe");
+		expect(names[1]).toContain("Zoe");
+	});
+
+	// AC 1: "any candidate in any category". A category closed before anyone
+	// voted used to list no candidates at all, because the whole block was gated
+	// on `total > 0` — so the one state where an early ruling is most likely is
+	// the one where it was impossible.
+	it("still offers the control on a CLOSED category with no votes", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: false,
+					results: [member("m-1", "Ana", 0)],
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		expect(
+			await speaker.findByRole("button", { name: "Disqualify Ana" }),
+		).toBeTruthy();
+		// ...and no winner can be picked, because nobody voted.
+		expect(speaker.queryByRole("button", { name: "Set winner" })).toBeNull();
+	});
+
+	// "N votes in" means how many people voted. `results` is eligible-only since
+	// #723, so summing it alone made the number DROP when a ruling landed —
+	// under-reporting participation, which is the one thing that line says.
+	it("counts every ballot in the total, disqualified candidates included", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: false,
+					results: [member("m-1", "Ana", 2)],
+					disqualified: [
+						{ ...member("m-2", "Bo", 3), reason: "Outside the window" },
+					],
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		expect(await speaker.findByText("5 votes in")).toBeTruthy();
+	});
+
+	// The zero case is the NORMAL one when the Vote Counter rules someone out
+	// early — which is the whole reason the control is reachable while the vote
+	// is open. "0 excluded" implies something was taken away and reads as a bug.
+	it("says nothing was excluded when the ruling landed before any votes", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					disqualified: [
+						{ ...member("m-2", "Bo", 0), reason: "Outside the window" },
+					],
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		expect(await speaker.findByText(/no votes to exclude/)).toBeTruthy();
+		expect(speaker.queryByText(/0 votes excluded/)).toBeNull();
+	});
+
+	// A failed undo used to say NOTHING: the row stayed, the button re-enabled,
+	// and "nothing happened" is indistinguishable from a slow poll. This is the
+	// correction path for a ruling already announced to the room.
+	it("surfaces a failed undo instead of silently leaving the row", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					disqualified: [
+						{ ...member("m-2", "Bo", 1), reason: "Outside the window" },
+					],
+				}),
+			}),
+		);
+		undoDisqualificationFn.mockRejectedValue(
+			new Error("This meeting is completed."),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		await userEvent.click(
+			await speaker.findByRole("button", {
+				name: "Undo disqualification of Bo",
+			}),
+		);
+		expect(await speaker.findByText(/This meeting is completed/)).toBeTruthy();
+	});
+
+	// `disqualify` is ONE mutation shared by every row, so its error outlives the
+	// form that produced it. Without a reset, failing on Ana and then opening
+	// Bo's form rendered Ana's rejection under Bo's name before anything was
+	// typed — which mid-meeting reads as "Bo was refused too". Scoping the render
+	// by category was the first attempt and was not enough: both are in one.
+	it("does not show one candidate's rejection on another's form", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana"), member("m-2", "Bo")],
+				}),
+			}),
+		);
+		disqualifyCandidateFn.mockRejectedValue(
+			new Error("Only the Ballot Counter or a club admin can do that."),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		await userEvent.click(
+			await speaker.findByRole("button", { name: "Disqualify Ana" }),
+		);
+		await userEvent.click(
+			speaker.getByRole("button", { name: DISQUALIFICATION_PRESETS[0] }),
+		);
+		await userEvent.click(speaker.getByRole("button", { name: "Disqualify" }));
+		await speaker.findByText(/Only the Ballot Counter/);
+
+		await userEvent.click(speaker.getByRole("button", { name: "Cancel" }));
+		await userEvent.click(
+			speaker.getByRole("button", { name: "Disqualify Bo" }),
+		);
+		expect(speaker.queryByText(/Only the Ballot Counter/)).toBeNull();
+	});
+
+	// Cancel is the only way out of a form that takes over its row, so a broken
+	// one strands the Vote Counter mid-meeting with no way back to the list.
+	it("Cancel closes the form without writing", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana")],
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		await userEvent.click(
+			await speaker.findByRole("button", { name: "Disqualify Ana" }),
+		);
+		await userEvent.click(speaker.getByRole("button", { name: "Cancel" }));
+		expect(
+			speaker.getByRole("button", { name: "Disqualify Ana" }),
+		).toBeTruthy();
+		expect(disqualifyCandidateFn).not.toHaveBeenCalled();
+	});
+
 	it("surfaces a rejected disqualification instead of closing the form", async () => {
 		getVoteTally.mockResolvedValue(
 			tally({
@@ -365,6 +557,7 @@ describe("VoteCounterPanel disqualification (#723)", () => {
 		await userEvent.click(
 			speaker.getByRole("button", { name: DISQUALIFICATION_PRESETS[0] }),
 		);
+		await userEvent.click(speaker.getByRole("button", { name: "Disqualify" }));
 
 		// The form STAYS open carrying the reason it failed for. A rejection that
 		// closed the form would read as success — the candidate would simply not

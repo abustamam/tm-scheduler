@@ -1550,6 +1550,204 @@ describe.skipIf(!hasTestDb)("candidate disqualification (#723)", () => {
 		).rejects.toThrow(/not eligible/i);
 	});
 
+	// The OTHER producer of `AwardCandidate`s. `loadWriteInCandidates` stamps
+	// `disqualified` too, and until #723's own review nothing asserted the
+	// positive: every write-in case proved only that `castVote` REFUSES one, and
+	// that path consults `loadDisqualifications` directly rather than going
+	// through this producer. Replacing its stamp with a literal `null` left the
+	// whole suite green — on the one category where write-ins are the common
+	// case. Verified by mutation.
+	it("serves a disqualified WRITE-IN struck through, with its excluded count", async () => {
+		await open("best_table_topics");
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "writeIn", name: "Bo Smith" },
+		});
+		await rule(
+			{ kind: "writeIn", name: "Bo Smith" },
+			"No Word of the Day",
+			"best_table_topics",
+		);
+
+		const ballot = await loadBallot(seed.meetingId);
+		const wi = ballot.categories.best_table_topics.candidates.find(
+			(c) => c.kind === "writeIn",
+		);
+		expect(wi?.disqualified).toEqual({ reason: "No Word of the Day" });
+
+		const tally = await loadTally(seed.meetingId);
+		expect(
+			tally.best_table_topics.results.some((r) => r.kind === "writeIn"),
+		).toBe(false);
+		expect(tally.best_table_topics.disqualified).toEqual([
+			expect.objectContaining({
+				kind: "writeIn",
+				id: "bo smith",
+				count: 1,
+				reason: "No Word of the Day",
+			}),
+		]);
+	});
+
+	// Undo's write-in arm, which had NO coverage and was broken because of it.
+	// `loadDisqualifications` re-folds the stored value on read, so a row written
+	// unfolded still bites — but the DELETE matched the column exactly, so that
+	// same row could never be removed. Combined with the deliberate no-op on zero
+	// rows, the Vote Counter tapped Undo, got a resolved promise, and the ruling
+	// silently stood. Both halves are asserted here; the second is the one that
+	// failed before the fix.
+	it("undo removes a WRITE-IN ruling, including one stored unfolded", async () => {
+		await open("best_table_topics");
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "writeIn", name: "Bo Smith" },
+		});
+		await rule(
+			{ kind: "writeIn", name: "Bo Smith" },
+			"No Word of the Day",
+			"best_table_topics",
+		);
+		await unrule({ kind: "writeIn", name: "Bo Smith" }, "best_table_topics");
+		expect(await myRulings()).toHaveLength(0);
+
+		// The exact row shape the re-fold test above proves still BITES must also
+		// be liftable, or the defence is a trap rather than a defence.
+		await testDb.insert(meetingCandidateDisqualifications).values({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			candidateWriteIn: "  Bo   SMITH ",
+			reason: "Written by a path that skipped the seam",
+		});
+		await unrule({ kind: "writeIn", name: "Bo Smith" }, "best_table_topics");
+		expect(await myRulings()).toHaveLength(0);
+	});
+
+	// The write-in arm's BOUND. Member and guest candidates are bounded by the
+	// club roster; a write-in's identity is the free-text string, so without this
+	// any distinct string mints a row — plus an `activity_log` row — on a table
+	// `loadDisqualifications` reads on the PUBLIC 5s ballot poll.
+	it("refuses a write-in ruling for a name nobody cast", async () => {
+		await open("best_table_topics");
+		await expect(
+			rule(
+				{ kind: "writeIn", name: "Nobody Voted For Me" },
+				"No Word of the Day",
+				"best_table_topics",
+			),
+		).rejects.toThrow(/nobody has voted/i);
+		expect(await myRulings()).toHaveLength(0);
+	});
+
+	// The bound must not be so tight it rejects the real flow: the console offers
+	// the tally's display spelling, and the ballot stores the FIRST spelling
+	// cast, so the two can differ in case and spacing from what a later voter
+	// typed. Matching folded is what keeps the legitimate ruling working.
+	it("accepts a write-in ruling that differs in case and spacing from the cast ballot", async () => {
+		await open("best_table_topics");
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "writeIn", name: "Bo Smith" },
+		});
+		await expect(
+			rule(
+				{ kind: "writeIn", name: "  bo   SMITH " },
+				"No Word of the Day",
+				"best_table_topics",
+			),
+		).resolves.toBeUndefined();
+	});
+
+	// AC 6, sharpened. `.rejects.toThrow()` alone would also pass on an
+	// app-level pre-check, and the spec says DB-enforced — so this asserts the
+	// database is what refuses, by going around the seam entirely with a raw
+	// insert and reading the SQLSTATE back.
+	it("the unique index — not app code — is what refuses a second ruling", async () => {
+		const row = {
+			meetingId: seed.meetingId,
+			category: "best_speaker" as const,
+			candidateMemberId: seed.adminMemberId,
+			reason: "First",
+		};
+		await testDb.insert(meetingCandidateDisqualifications).values(row);
+		await expect(
+			testDb
+				.insert(meetingCandidateDisqualifications)
+				.values({ ...row, reason: "Second" }),
+		).rejects.toMatchObject({ cause: { code: "23505" } });
+	});
+
+	// The other two unique indexes, which the member case above cannot cover.
+	// The write-in one matters most: the column is folded on the way in
+	// SPECIFICALLY so this index can enforce "not twice", and nothing else
+	// proves it does.
+	it("the guest and write-in unique indexes refuse a second ruling too", async () => {
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Visiting Speaker" })
+			.returning({ id: guests.id });
+		const guestRow = {
+			meetingId: seed.meetingId,
+			category: "best_speaker" as const,
+			candidateGuestId: g.id,
+			reason: "First",
+		};
+		await testDb.insert(meetingCandidateDisqualifications).values(guestRow);
+		await expect(
+			testDb.insert(meetingCandidateDisqualifications).values(guestRow),
+		).rejects.toMatchObject({ cause: { code: "23505" } });
+
+		const writeInRow = {
+			meetingId: seed.meetingId,
+			category: "best_table_topics" as const,
+			candidateWriteIn: "bo smith",
+			reason: "First",
+		};
+		await testDb.insert(meetingCandidateDisqualifications).values(writeInRow);
+		await expect(
+			testDb.insert(meetingCandidateDisqualifications).values(writeInRow),
+		).rejects.toMatchObject({ cause: { code: "23505" } });
+	});
+
+	// The exactly-one check. `loadDisqualifications` carries an `if (!key)
+	// continue;` whose comment says "unreachable while the table's exactly-one
+	// check holds" — a claim resting on a constraint nothing verified. Both
+	// directions, because `= 1` fails differently from `<= 1`.
+	it("the check constraint refuses a row naming two candidates, or none", async () => {
+		await expect(
+			testDb.insert(meetingCandidateDisqualifications).values({
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				candidateMemberId: seed.adminMemberId,
+				candidateWriteIn: "bo smith",
+				reason: "Two at once",
+			}),
+		).rejects.toMatchObject({ cause: { code: "23514" } });
+
+		await expect(
+			testDb.insert(meetingCandidateDisqualifications).values({
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				reason: "Nobody at all",
+			}),
+		).rejects.toMatchObject({ cause: { code: "23514" } });
+	});
+
+	// A duplicate ruling reaches the console as a message an officer can act on,
+	// not as `duplicate key value violates unique constraint "..."`. The console
+	// renders a failed ruling's text verbatim.
+	it("reports a duplicate ruling in words, not as a constraint violation", async () => {
+		await rule({ kind: "member", id: seed.adminMemberId }, "First reason");
+		await expect(
+			rule({ kind: "member", id: seed.adminMemberId }, "Second reason"),
+		).rejects.toThrow(/already disqualified/i);
+	});
+
 	// AC 4. The votes are NOT deleted — that is what makes undo free.
 	it("keeps votes cast before the ruling, and drops them from the tally", async () => {
 		await voteFor(seed.memberId, seed.adminMemberId);

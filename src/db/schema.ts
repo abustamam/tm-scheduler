@@ -5,6 +5,7 @@ import {
 	check,
 	customType,
 	date,
+	foreignKey,
 	index,
 	integer,
 	jsonb,
@@ -1833,12 +1834,14 @@ export const meetingBallotGuests = pgTable(
  *
  * Exists because eligibility is not derivable: a speaker can have spoken and
  * still not be able to win — they ran outside the qualifying window, or never
- * used the Word of the Day. The Timer's own printed script already tells the
- * room that rule ("Outside that window the speech is disqualified from the
- * vote — call it out in your report", `role-sheet-layout.ts`), and until this
- * table the app had no way to act on it: the room voted for someone who could
- * not win and the Vote Counter either ignored the tally quietly or explained
- * the result afterwards.
+ * used the Word of the Day. The first of those the room is already told about
+ * out loud: the Timer's printed report cue reads "Here are the times. Anyone
+ * outside their qualifying window is not eligible for the vote."
+ * (`role-sheet-layout.ts`, the `timer` script). The second belongs to the
+ * GRAMMARIAN's sheet, which asks the room to use the word and never says
+ * failing to is disqualifying. Until this table the app could act on neither:
+ * the room voted for someone who could not win and the Vote Counter either
+ * ignored the tally quietly or explained the result afterwards.
  *
  * A disqualified candidate STAYS on the ballot, struck through and carrying
  * its reason, and cannot be voted for. Not removed: a name vanishing from a
@@ -1874,17 +1877,29 @@ export const meetingCandidateDisqualifications = pgTable(
 	"meeting_candidate_disqualifications",
 	{
 		id: uuid("id").defaultRandom().primaryKey(),
-		meetingId: uuid("meeting_id")
-			.notNull()
-			.references(() => meetings.id, { onDelete: "cascade" }),
+		// No inline `.references()` on any FK in this table — all four are named
+		// in the extra-config array below. This one's derived name would have fit
+		// (62 bytes); keeping it inline while the other three had to move would
+		// have left one long derived identifier among three deliberate short ones.
+		meetingId: uuid("meeting_id").notNull(),
 		category: awardCategoryEnum("category").notNull(),
-		candidateMemberId: uuid("candidate_member_id").references(
-			() => members.id,
-			{ onDelete: "cascade" },
-		),
-		candidateGuestId: uuid("candidate_guest_id").references(() => guests.id, {
-			onDelete: "cascade",
-		}),
+		// The FKs are named EXPLICITLY, in the extra-config array, and
+		// that is not style. Drizzle's derived name is
+		// `<table>_<column>_<reftable>_<refcolumn>_fk`, and this table's name is
+		// long enough that all three derive past Postgres' 63-BYTE identifier
+		// limit (69, 67 and 75). Postgres does not error on that — it emits a
+		// NOTICE and TRUNCATES. `db:migrate` survives it (one apply, and CI's
+		// drift check compares schema.ts to the snapshot, which holds the
+		// untruncated name), but `db:push` INTROSPECTS the live database, sees the
+		// truncated name, fails to match the declared one, and reissues
+		// DROP + ADD on every single run — so `tm_test`, which is push-synced and
+		// which parallel agents re-push mid-run, takes ACCESS EXCLUSIVE on this
+		// table and spends a window with no FK enforcement at all, forever. These
+		// were the first identifiers over 63 bytes in the whole migration history;
+		// `drizzle-identifier-length.guard.test.ts` now fails the next one in CI
+		// rather than in a NOTICE nobody reads.
+		candidateMemberId: uuid("candidate_member_id"),
+		candidateGuestId: uuid("candidate_guest_id"),
 		/** The `writeInKey` of the typed name — folded, not the display spelling.
 		 *  See asymmetry (2) in the table comment above. */
 		candidateWriteIn: text("candidate_write_in"),
@@ -1899,16 +1914,39 @@ export const meetingCandidateDisqualifications = pgTable(
 		/** Who ruled it out. `set null` rather than cascade: the disqualification
 		 *  outlives the officer who recorded it, exactly as
 		 *  `meeting_vote_sessions.opened_by_member_id` outlives whoever opened the
-		 *  vote. The audit trail is in `activity_log` either way. */
-		disqualifiedByMemberId: uuid("disqualified_by_member_id").references(
-			() => members.id,
-			{ onDelete: "set null" },
-		),
+		 *  vote. The audit trail is in `activity_log` either way. Its FK is named
+		 *  explicitly below for the 63-byte reason given above. */
+		disqualifiedByMemberId: uuid("disqualified_by_member_id"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
 	(t) => [
-		index("meeting_candidate_disqualifications_meeting_idx").on(t.meetingId),
+		// Named explicitly — see the 63-byte note on the columns above. The
+		// `meeting_candidate_dq_` prefix matches what the check and the three
+		// unique indexes already use, so every identifier on this table is short
+		// and consistent rather than three long derived ones and four short
+		// hand-written ones.
+		foreignKey({
+			name: "meeting_candidate_dq_meeting_fk",
+			columns: [t.meetingId],
+			foreignColumns: [meetings.id],
+		}).onDelete("cascade"),
+		foreignKey({
+			name: "meeting_candidate_dq_member_fk",
+			columns: [t.candidateMemberId],
+			foreignColumns: [members.id],
+		}).onDelete("cascade"),
+		foreignKey({
+			name: "meeting_candidate_dq_guest_fk",
+			columns: [t.candidateGuestId],
+			foreignColumns: [guests.id],
+		}).onDelete("cascade"),
+		foreignKey({
+			name: "meeting_candidate_dq_by_member_fk",
+			columns: [t.disqualifiedByMemberId],
+			foreignColumns: [members.id],
+		}).onDelete("set null"),
+		index("meeting_candidate_dq_meeting_idx").on(t.meetingId),
 		// One disqualification per candidate per category, enforced HERE rather
 		// than in application code. PLAIN (non-partial) unique indexes, the same
 		// construction `meeting_votes`' two voter arbiters use: Postgres treats

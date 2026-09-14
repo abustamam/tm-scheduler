@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Lock, LockOpen, Undo2 } from "lucide-react";
+import { Ban, Loader2, Lock, LockOpen, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -115,7 +115,7 @@ export function VoteCounterPanel({
 	});
 
 	/** Which candidate's reason form is open, as `${category}:${kind}:${id}`.
-	 *  One at a time across the whole console: the form replaces the row it
+	 *  One at a time across the whole console: the form takes over the row it
 	 *  belongs to, and two open at once on a laptop mid-meeting is noise. */
 	const [reasonFor, setReasonFor] = useState<string | null>(null);
 
@@ -124,6 +124,9 @@ export function VoteCounterPanel({
 			category: AwardCategory;
 			candidate: CandidatePayload;
 			reason: string;
+			/** The row this ruling belongs to, so its pending state disables one
+			 *  control rather than every Disqualify button in the console. */
+			key: string;
 		}) =>
 			disqualifyCandidateFn({
 				data: {
@@ -140,8 +143,28 @@ export function VoteCounterPanel({
 		},
 	});
 
+	/** Open one candidate's reason form, clearing any previous failure first.
+	 *
+	 *  The `reset()` is the fix, not decoration: `disqualify` is ONE mutation
+	 *  shared by every row, so its `isError`/`error` outlive the form that
+	 *  produced them. Without this, failing on Ana and then opening Bo's form
+	 *  rendered Ana's rejection under Bo's name before the Vote Counter had
+	 *  typed anything — which on a laptop mid-meeting reads as "Bo was refused
+	 *  too". Scoping the render by category was the first attempt and was not
+	 *  enough: both candidates are in the same category. */
+	function openReasonForm(key: string) {
+		disqualify.reset();
+		setReasonFor(key);
+	}
+
 	const undo = useMutation({
-		mutationFn: (v: { category: AwardCategory; candidate: CandidatePayload }) =>
+		mutationFn: (v: {
+			category: AwardCategory;
+			candidate: CandidatePayload;
+			/** The row this undo belongs to, so a failure renders under THAT name
+			 *  rather than under every disqualified row in the console. */
+			key: string;
+		}) =>
 			undoDisqualificationFn({
 				data: {
 					meetingId,
@@ -161,51 +184,96 @@ export function VoteCounterPanel({
 				// (#510) alongside the per-category tally, so the counts live one
 				// level down under `categories`.
 				const t = tally.data?.categories[category];
-				const total = t?.results.reduce((n, r) => n + r.count, 0) ?? 0;
+				// EVERY ballot in this category, disqualified candidates' included.
+				// `results` is eligible-only since #723, so summing it alone made
+				// "N votes in" DROP when a ruling landed — under-reporting how many
+				// people actually voted, which is the one thing this line means. The
+				// exclusion belongs to the winner list, not to the participation
+				// count; `loadParticipation`, which the projector reads, counts rows.
+				const total =
+					(t?.results.reduce((n, r) => n + r.count, 0) ?? 0) +
+					(t?.disqualified.reduce((n, r) => n + r.count, 0) ?? 0);
 				const top = t?.results[0]?.count ?? 0;
 				const tied = (t?.results ?? []).filter(
 					(r) => r.count === top && top > 0,
 				);
 
-				/** The disqualify control, plus its reason form when this is the row
-				 *  the Vote Counter opened. Shared by the open and closed lists so the
-				 *  two cannot drift on what a ruling costs. */
-				const disqualifyControl = (r: TallyEntry) => {
-					const key = `${category}:${r.kind}:${r.id}`;
-					if (reasonFor === key) {
-						return (
-							<ReasonForm
-								name={r.name}
-								pending={disqualify.isPending}
-								error={
-									disqualify.isError &&
-									disqualify.variables?.category === category
-										? (disqualify.error as Error).message
-										: null
-								}
-								onCancel={() => setReasonFor(null)}
-								onSubmit={(reason) =>
-									disqualify.mutate({
-										category,
-										candidate: candidatePayload(r),
-										reason,
-									})
-								}
-							/>
-						);
-					}
+				const rowKey = (r: TallyEntry) => `${category}:${r.kind}:${r.id}`;
+
+				/**
+				 * One candidate row: the name (with its count when the vote is
+				 * closed), the disqualify control, and — when this is the row the
+				 * Vote Counter opened — the reason form STACKED BENEATH it at full
+				 * width, with the row's other controls out of the way.
+				 *
+				 * The form used to be returned into the row's right-hand control
+				 * slot, which is a `flex items-center gap-1` beside "Set winner": a
+				 * ~150px card wedged into a one-line row, vertically centred against
+				 * the name, with the preset chips overflowing because
+				 * `buttonVariants` carries `shrink-0 whitespace-nowrap` and
+				 * "Spoke outside the qualifying window" is ~250px of unbreakable
+				 * text. Giving the form the row is what makes it usable, and it is
+				 * what the comment on `reasonFor` always claimed happened.
+				 */
+				const candidateRow = (r: TallyEntry, trailing?: React.ReactNode) => {
+					const key = rowKey(r);
+					const open = reasonFor === key;
 					return (
-						<Button
-							size="sm"
-							variant="ghost"
-							className="text-muted-foreground"
-							disabled={disqualify.isPending}
-							onClick={() => setReasonFor(key)}
-						>
-							<Ban className="mr-1 size-4" aria-hidden />
-							<span className="sr-only">Disqualify {r.name}</span>
-							<span aria-hidden>Disqualify</span>
-						</Button>
+						<div key={key} className="flex flex-col gap-2">
+							<div className="flex items-start justify-between gap-3">
+								<span className="text-sm">
+									{r.name}
+									{t && !t.isOpen ? ` — ${r.count}` : ""}
+								</span>
+								{open ? null : (
+									<div className="flex items-center gap-1">
+										<Button
+											size="sm"
+											variant="ghost"
+											className="text-muted-foreground"
+											// Scoped to THIS row. `disqualify.isPending` is one flag
+											// for one shared mutation, so the bare form greyed every
+											// Disqualify button in every category while one was in
+											// flight — the one-flag-many-rows shape `ballot.tsx`
+											// documents having already fixed for `send.isPending`.
+											disabled={
+												disqualify.isPending &&
+												disqualify.variables?.key === key
+											}
+											onClick={() => openReasonForm(key)}
+										>
+											<Ban className="mr-1 size-4" aria-hidden />
+											<span className="sr-only">Disqualify {r.name}</span>
+											<span aria-hidden>Disqualify</span>
+										</Button>
+										{trailing}
+									</div>
+								)}
+							</div>
+							{open ? (
+								<ReasonForm
+									name={r.name}
+									pending={disqualify.isPending}
+									// No category comparison: `openReasonForm` resets the
+									// mutation, so any error still set belongs to the form that
+									// is open.
+									error={
+										disqualify.isError
+											? (disqualify.error as Error).message
+											: null
+									}
+									onCancel={() => setReasonFor(null)}
+									onSubmit={(reason) =>
+										disqualify.mutate({
+											category,
+											candidate: candidatePayload(r),
+											reason,
+											key,
+										})
+									}
+								/>
+							) : null}
+						</div>
 					);
 				};
 
@@ -240,63 +308,66 @@ export function VoteCounterPanel({
 
 						{/* While the vote is OPEN: names with no counts, so a candidate can
 						    be ruled out mid-vote without turning this into a live
-						    leaderboard. See the component doc comment. */}
+						    leaderboard.
+						
+						    Sorted BY NAME, and that is the load-bearing half. `loadTally`
+						    ranks `results` by count descending, so rendering its order
+						    straight through hid the digits and kept the ranking: row one
+						    was the current leader and the list reshuffled every 5s poll.
+						    Worse than the leak, the reshuffle moved rows under the cursor
+						    of a destructive control that by design has no confirm step —
+						    aim at Alice's Disqualify, a poll lands, and the button under
+						    the pointer is Bob's. Alphabetical is stable and says nothing. */}
 						{t?.isOpen && t.results.length > 0 ? (
 							<div className="mt-3 flex flex-col gap-2">
-								{t.results.map((r) => (
-									<div
-										key={`${r.kind}:${r.id}`}
-										className="flex items-center justify-between gap-3"
-									>
-										<span className="text-sm">{r.name}</span>
-										{disqualifyControl(r)}
-									</div>
-								))}
+								<p className="text-xs font-medium text-muted-foreground">
+									Candidates
+								</p>
+								{[...t.results]
+									.sort((a, b) => a.name.localeCompare(b.name))
+									.map((r) => candidateRow(r))}
 							</div>
 						) : null}
 
 						{/* Counts are visible HERE and nowhere else. The projector gets a
 						    participation badge only — a live leaderboard in the room
-						    produces bandwagon voting and kills the reveal. */}
+						    produces bandwagon voting and kills the reveal.
+						
+						    The candidate list renders whenever the category is CLOSED,
+						    including with zero votes in. Gating it on `total > 0` meant a
+						    category closed before anyone voted listed no candidates at
+						    all, so nobody could be ruled out there — against #723's "any
+						    candidate in any category". Only the tie notice and the winner
+						    buttons need a vote to make sense. */}
 						{t && !t.isOpen ? (
 							<div className="mt-3 flex flex-col gap-2">
-								{total > 0 ? (
-									<>
-										{tied.length > 1 ? (
-											<p className="text-sm font-medium text-warning-foreground">
-												{tied.length} tied on {top} — pick the winner.
-											</p>
-										) : null}
-										{t.results.map((r) => (
-											<div
-												key={`${r.kind}:${r.id}`}
-												className="flex items-center justify-between gap-3"
-											>
-												<span className="text-sm">
-													{r.name} — {r.count}
-												</span>
-												<div className="flex items-center gap-1">
-													{disqualifyControl(r)}
-													<Button
-														size="sm"
-														variant="outline"
-														onClick={() =>
-															onSetWinner(
-																category,
-																// A write-in has no row to point at, so the award
-																// carries the NAME. `r.name` is the first spelling
-																// cast, which is what the room saw on the ballot.
-																candidatePayload(r),
-															)
-														}
-													>
-														Set winner
-													</Button>
-												</div>
-											</div>
-										))}
-									</>
+								{tied.length > 1 ? (
+									<p className="text-sm font-medium text-warning-foreground">
+										{tied.length} tied on {top} — pick the winner.
+									</p>
 								) : null}
+								{t.results.map((r) =>
+									candidateRow(
+										r,
+										total > 0 ? (
+											<Button
+												size="sm"
+												variant="outline"
+												onClick={() =>
+													onSetWinner(
+														category,
+														// A write-in has no row to point at, so the award
+														// carries the NAME. `r.name` is the first spelling
+														// cast, which is what the room saw on the ballot.
+														candidatePayload(r),
+													)
+												}
+											>
+												Set winner
+											</Button>
+										) : null,
+									),
+								)}
 								<Button
 									type="button"
 									size="sm"
@@ -320,35 +391,68 @@ export function VoteCounterPanel({
 								<p className="text-xs font-medium text-muted-foreground">
 									Disqualified — votes kept on file, excluded from the count
 								</p>
-								{t.disqualified.map((r) => (
-									<div
-										key={`${r.kind}:${r.id}`}
-										className="flex items-start justify-between gap-3"
-									>
-										<span className="text-sm text-muted-foreground">
-											<span className="line-through">{r.name}</span> — {r.count}{" "}
-											excluded
-											<span className="block text-xs">{r.reason}</span>
-										</span>
-										<Button
-											size="sm"
-											variant="ghost"
-											disabled={undo.isPending}
-											onClick={() =>
-												undo.mutate({
-													category,
-													candidate: candidatePayload(r),
-												})
-											}
-										>
-											<Undo2 className="mr-1 size-4" aria-hidden />
-											<span className="sr-only">
-												Undo disqualification of {r.name}
-											</span>
-											<span aria-hidden>Undo</span>
-										</Button>
-									</div>
-								))}
+								{t.disqualified.map((r) => {
+									const key = rowKey(r);
+									const busy = undo.isPending && undo.variables?.key === key;
+									return (
+										<div key={key} className="flex flex-col gap-1">
+											<div className="flex items-start justify-between gap-3">
+												<span className="text-sm text-muted-foreground">
+													<span className="line-through">{r.name}</span>
+													{" — "}
+													{/* The zero case is the NORMAL one when the Vote
+													    Counter rules someone out early, which is the
+													    whole reason the control is reachable while the
+													    vote is open. "0 excluded" implies something was
+													    taken away and reads as a bug. */}
+													{r.count === 0
+														? "no votes to exclude"
+														: `${r.count} ${r.count === 1 ? "vote" : "votes"} excluded`}
+													<span className="block text-xs">{r.reason}</span>
+												</span>
+												<Button
+													size="sm"
+													variant="ghost"
+													// Scoped to this row, like the disqualify control:
+													// one shared mutation must not grey every Undo in
+													// the console.
+													disabled={busy}
+													onClick={() =>
+														undo.mutate({
+															category,
+															candidate: candidatePayload(r),
+															key,
+														})
+													}
+												>
+													{busy ? (
+														<Loader2
+															className="mr-1 size-4 animate-spin"
+															aria-hidden
+														/>
+													) : (
+														<Undo2 className="mr-1 size-4" aria-hidden />
+													)}
+													<span className="sr-only">
+														Undo disqualification of {r.name}
+													</span>
+													<span aria-hidden>Undo</span>
+												</Button>
+											</div>
+											{/* A failed undo used to say NOTHING: the row stayed put,
+											    the button re-enabled, and "nothing happened" is
+											    indistinguishable from a slow poll. This is the
+											    correction path for a ruling already announced to the
+											    room, and it was the one new mutation with no error
+											    surface at all. */}
+											{undo.isError && undo.variables?.key === key ? (
+												<p className="text-xs font-medium text-destructive">
+													{(undo.error as Error).message}
+												</p>
+											) : null}
+										</div>
+									);
+								})}
 							</div>
 						) : null}
 
@@ -374,16 +478,22 @@ export function VoteCounterPanel({
 /**
  * Capture the reason a candidate is being ruled out.
  *
- * The two rulings the Timer's own printed script already describes are one tap
- * each (`DISQUALIFICATION_PRESETS`), because they are what almost every real
- * disqualification is and the person using this is running a meeting. The free
- * text arm exists because a club will have a third reason nobody anticipated,
- * and a closed vocabulary would push that back into the console-only flag this
- * feature replaces.
+ * The two common rulings (`DISQUALIFICATION_PRESETS`) FILL THE FIELD; they do
+ * not commit. That is deliberate and was changed in review. Tapping a chip used
+ * to write the ruling immediately, but two same-size outline chips sitting above
+ * a primary "Disqualify" button read universally as "pick a reason, then press
+ * Disqualify" — so the affordance invited exactly the mis-tap it could least
+ * afford, against a named person, with no confirm step. Filling the field costs
+ * one extra tap on the common case and buys a single commit point plus
+ * symmetry: preset and free text now travel the same path.
  *
- * There is no confirm step. The ruling is undoable in one tap from the list it
- * lands in, which is a better guard than a dialog: it is visible afterwards
- * rather than only before.
+ * The free text arm exists because a club will have a third reason nobody
+ * anticipated, and a closed vocabulary would push that back into the
+ * console-only flag this feature replaces.
+ *
+ * There is still no confirm dialog. The ruling is undoable in one tap from the
+ * list it lands in, which is a better guard: it is visible afterwards rather
+ * than only before.
  */
 function ReasonForm({
 	name,
@@ -409,10 +519,11 @@ function ReasonForm({
 				{DISQUALIFICATION_PRESETS.map((preset) => (
 					<Button
 						key={preset}
+						type="button"
 						size="sm"
 						variant="outline"
 						disabled={pending}
-						onClick={() => onSubmit(preset)}
+						onClick={() => setText(preset)}
 					>
 						{preset}
 					</Button>
@@ -427,6 +538,12 @@ function ReasonForm({
 				}}
 			>
 				<Input
+					// Matches `WriteInField` on the ballot, which autofocuses for the
+					// same reason: the field appeared because the operator asked for
+					// it, and this console is used under time pressure. Without it the
+					// click that opened the form also destroyed the focused node, so
+					// focus fell to <body> and a keyboard user lost their place.
+					autoFocus
 					value={text}
 					onChange={(e) => setText(e.target.value)}
 					placeholder="Another reason"
@@ -438,7 +555,19 @@ function ReasonForm({
 					aria-label={`Reason ${name} can't win`}
 				/>
 				<Button type="submit" size="sm" disabled={pending || !trimmed}>
-					Disqualify
+					{/* `disabled` alone only fades the button, telling the operator
+					    neither that anything is happening nor which control they hit —
+					    the reason `personal-meeting-body.tsx` ships a spinner beside
+					    its own pending state rather than relying on the fade. */}
+					{pending ? (
+						<>
+							<Loader2 className="mr-1 size-4 animate-spin" aria-hidden />
+							<span className="sr-only">Disqualifying…</span>
+							<span aria-hidden>Disqualify</span>
+						</>
+					) : (
+						"Disqualify"
+					)}
 				</Button>
 				<Button
 					type="button"

@@ -439,7 +439,7 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * So each row names the file the gate is IN. That is weaker than checking the
  * handler itself, and the weakness is stated rather than papered over: this
  * asserts the gate exists in the module that owns the write, not that this
- * particular write reaches it. The integration suite is what proves the five
+ * particular write reaches it. The integration suite is what proves the seven
  * seam-gated ones actually refuse; for the two handler-gated ones this guard is
  * the only gate there is, which is exactly why moving them into seams is
  * recorded in TODOS.md rather than left implied.

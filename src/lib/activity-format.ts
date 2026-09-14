@@ -197,9 +197,10 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		// Names neither the candidate nor the reason, for the reason `vote_open`
 		// above gives: `ActivityEntry` carries neither, and the feed is a "who
 		// touched what, when" list. That is a sharper trade-off here than
-		// elsewhere, because the reason IS the point of the feature — so it is
-		// written into `detail` on both the set (`{ category, reason }`) and the
-		// undo, which is where it survives the row's deletion.
+		// elsewhere, because the reason IS the point of the feature — so the SET
+		// writes it into `detail` (`{ category, reason }`), and that entry is what
+		// survives the row's deletion. The UNDO carries `{ category }` only: by
+		// then the reason is gone from the row, and the set's entry still holds it.
 		case "vote_disqualify":
 			summary = "disqualified a candidate from a vote";
 			break;
