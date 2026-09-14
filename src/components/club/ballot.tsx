@@ -24,13 +24,29 @@ const CATEGORY_LABELS = {
 
 type CategoryKey = keyof typeof CATEGORY_LABELS;
 type Category = BallotData["categories"][CategoryKey];
+/** Why the server says this candidate can no longer win (#723), or null.
+ *  Derived off the payload rather than imported: `voting.ts` exports only
+ *  `BallotData` and the `createServerFn`s, so the shape has ONE definition and
+ *  the ballot cannot disagree with what the server sent. */
+type Disqualification = Category["candidates"][number]["disqualified"];
 
 /** Someone this phone can vote for: either a row the server listed, or a name
  *  being typed into the write-in field for the first time. The write-in arm has
- *  no id because it has no row yet — `selectionKey` derives one. */
+ *  no id because it has no row yet — `selectionKey` derives one.
+ *
+ *  `disqualified` is optional on BOTH arms, and that is not laziness: a name
+ *  just typed into the write-in field has not been to the server yet, so this
+ *  phone genuinely does not know. Absent reads as "not known to be out", which
+ *  is the honest default — the server is the gate (`castVote` rejects it), and
+ *  the next poll fills the field in. */
 type Nominee =
-	| { kind: "member" | "guest"; id: string; name: string }
-	| { kind: "writeIn"; name: string };
+	| {
+			kind: "member" | "guest";
+			id: string;
+			name: string;
+			disqualified?: Disqualification;
+	  }
+	| { kind: "writeIn"; name: string; disqualified?: Disqualification };
 
 /**
  * The ONE derivation of a nominee's selection key. Both the candidate buttons
@@ -194,8 +210,17 @@ export function Ballot({
 				const state = cast[category];
 				const nominees: Nominee[] = c.candidates.map((cand) =>
 					cand.kind === "writeIn"
-						? { kind: "writeIn", name: cand.name }
-						: { kind: cand.kind, id: cand.id, name: cand.name },
+						? {
+								kind: "writeIn",
+								name: cand.name,
+								disqualified: cand.disqualified,
+							}
+						: {
+								kind: cand.kind,
+								id: cand.id,
+								name: cand.name,
+								disqualified: cand.disqualified,
+							},
 				);
 				// The confirmation names whatever the TICKED BUTTON names. It matters
 				// for a write-in: `loadWriteInCandidates` displays the FIRST spelling
@@ -203,9 +228,19 @@ export function Ballot({
 				// Smith" gets a button reading "Bob Smith" — and the card must not then
 				// confirm "bob smith" beside it. Falls back to the typed spelling for
 				// the up-to-5s window before the poll lists it at all.
-				const confirmedName =
-					nominees.find((n) => selectionKey(n) === chosen?.id)?.name ??
-					chosen?.name;
+				const chosenNominee = nominees.find(
+					(n) => selectionKey(n) === chosen?.id,
+				);
+				const confirmedName = chosenNominee?.name ?? chosen?.name;
+				// This phone voted for someone the Vote Counter has since ruled out
+				// (#723). The vote is still in `meeting_votes` — it is excluded from
+				// the tally, not deleted — so the card must stop saying "Vote counted"
+				// and say what is actually true, which is that this vote will not
+				// count for anyone unless they tap a different name. Leaving the
+				// confirmation standing is precisely the failure this feature exists
+				// to end: someone spending their one vote on a candidate who cannot
+				// win and never being told.
+				const chosenIsOut = chosenNominee?.disqualified ?? null;
 				return (
 					<section
 						key={category}
@@ -218,6 +253,50 @@ export function Ballot({
 							{nominees.map((nominee) => {
 								const id = selectionKey(nominee);
 								const isChosen = chosen?.id === id;
+								// Ruled out by the Vote Counter (#723). Kept ON the ballot,
+								// struck through and carrying its reason, rather than removed:
+								// a name vanishing from a voter's screen mid-meeting reads as a
+								// bug, and the room needs to be told WHY a vote it was about to
+								// cast cannot land. Still a `<Button>` at the same `h-14`, so the
+								// other names do not jump when one is ruled out.
+								//
+								// `disabled` rather than `aria-disabled` + a dropped handler, and
+								// the trade-off is real rather than obvious. `disabled` REMOVES
+								// the row from the tab order, so a sighted keyboard user tabbing
+								// the ballot never lands on it — that is the cost, and it is
+								// accepted because the row is genuinely non-actionable (unlike a
+								// submit button whose criteria you want to inspect). It is not
+								// lost to screen readers: a disabled button stays in the
+								// accessibility tree, and the ballot's real audience — VoiceOver
+								// swiping linearly, NVDA/JAWS in browse mode — reaches it and
+								// hears the name. The reason lives outside the control so the
+								// muting cannot swallow it; see below.
+								if (nominee.disqualified) {
+									return (
+										<div key={id} className="flex flex-col gap-1">
+											<Button
+												variant="outline"
+												disabled
+												className="h-14 justify-start text-base"
+											>
+												<span className="line-through">{nominee.name}</span>
+											</Button>
+											{/* OUTSIDE the button, and that is the whole point.
+											    `buttonVariants` carries `disabled:opacity-50`, and
+											    `opacity` applies to the entire subtree and creates a
+											    stacking context — no child class can claw it back. The
+											    reason is the one thing this feature exists to tell the
+											    room, so rendering it at 12px and half alpha (~3.5:1,
+											    under the 4.5:1 floor) on a phone in a meeting room put
+											    the payload behind the very styling meant to mute the
+											    control. The NAME is what should read as unavailable;
+											    the explanation should not. */}
+											<p className="px-1 text-sm text-muted-foreground">
+												Can't win: {nominee.disqualified.reason}
+											</p>
+										</div>
+									);
+								}
 								return (
 									<Button
 										key={id}
@@ -249,7 +328,22 @@ export function Ballot({
 						    `<output>` rather than `<div role="status">`: same implicit
 						    role, and it is the element Biome's a11y rule asks for. */}
 						<output className="block">
-							{state === "failed" ? (
+							{chosenIsOut ? (
+								// Ahead of `failed` and `sending` alike: whatever this phone's
+								// last send is doing, a pick that can no longer win is the
+								// thing the voter needs to act on, and re-sending it would
+								// only be rejected by `castVote`'s gate.
+								//
+								// `warning`, not `destructive`, and the distinction is the
+								// message. `destructive` below means "your vote did not send,
+								// try again" — a transient failure the voter can retry away.
+								// This is persistent state that nobody did wrong. Rendering
+								// both in the same red made the voter work out which.
+								<p className="mt-3 text-sm font-medium text-warning-foreground">
+									{confirmedName} can't win this award — {chosenIsOut.reason}.
+									Tap another name.
+								</p>
+							) : state === "failed" ? (
 								// The selection is KEPT on failure, and a failure NEVER reads as
 								// counted. A dropped vote that looks cast is worse than a
 								// visible retry.

@@ -38,7 +38,29 @@ const CLOSED: Category = { isOpen: false, hasOpened: true, candidates: [] };
 const open = (...names: [string, string][]): Category => ({
 	isOpen: true,
 	hasOpened: true,
-	candidates: names.map(([id, name]) => ({ kind: "member", id, name })),
+	candidates: names.map(([id, name]) => ({
+		kind: "member",
+		id,
+		name,
+		disqualified: null,
+	})),
+});
+/** An open category where one candidate has been ruled out (#723). The third
+ *  tuple slot is the reason; `null` there is an ordinary eligible candidate, so
+ *  one fixture covers both halves of the list a real ballot renders — which is
+ *  the case that matters, since the bug this guards against is the ruled-out
+ *  name staying tappable while its neighbours behave. */
+const openWithDisqualified = (
+	...names: [string, string, string | null][]
+): Category => ({
+	isOpen: true,
+	hasOpened: true,
+	candidates: names.map(([id, name, reason]) => ({
+		kind: "member",
+		id,
+		name,
+		disqualified: reason === null ? null : { reason },
+	})),
 });
 /** An open category listing write-ins already cast. `loadWriteInCandidates` ids
  *  each by `writeInKey(name)` — folded — while the NAME it displays is the
@@ -47,7 +69,12 @@ const open = (...names: [string, string][]): Category => ({
 const openWithWriteIn = (...names: [string, string][]): Category => ({
 	isOpen: true,
 	hasOpened: true,
-	candidates: names.map(([id, name]) => ({ kind: "writeIn", id, name })),
+	candidates: names.map(([id, name]) => ({
+		kind: "writeIn",
+		id,
+		name,
+		disqualified: null,
+	})),
 });
 
 /** Every category defaults to untouched; override just the ones a test cares
@@ -628,6 +655,145 @@ describe("Ballot", () => {
 				await screen.findByText(/Vote counted for Bob Smith/),
 			).toBeTruthy();
 			expect(screen.queryByText(/Vote counted for bob smith/)).toBeNull();
+		});
+	});
+
+	// #723. A candidate can be on the ballot and unable to win — they ran
+	// outside the qualifying window, or never used the Word of the Day. The
+	// server is the gate (`castVote` rejects the vote); what these tests pin is
+	// that the phone does not invite a vote it knows will be refused, and that
+	// it says WHY.
+	describe("a disqualified candidate (#723)", () => {
+		const RULING = "Did not use the Word of the Day";
+
+		it("renders struck through with the reason, and is not tappable", async () => {
+			getBallot.mockResolvedValue(
+				fixture({
+					best_speaker: openWithDisqualified(
+						["m-1", "Ana", null],
+						["m-2", "Bo", RULING],
+					),
+				}),
+			);
+			renderBallot();
+
+			const out = await screen.findByRole("button", { name: "Bo" });
+			// `disabled`, not a click guard: it is what actually stops the tap AND
+			// what takes the control out of the tab order. A component that merely
+			// dropped the handler would still invite a tap and do nothing.
+			expect((out as HTMLButtonElement).disabled).toBe(true);
+			expect(within(out).getByText("Bo").className).toContain("line-through");
+
+			// The reason sits OUTSIDE the disabled button, and this is what pins
+			// that rather than merely checking the text exists somewhere.
+			// `buttonVariants` carries `disabled:opacity-50`, and `opacity` applies
+			// to the whole subtree — so a reason rendered INSIDE the control is
+			// halved to roughly 3.5:1 with no child class able to recover it, which
+			// is how this shipped before review: the one thing the feature exists to
+			// tell the room, rendered behind the styling meant to mute the control.
+			// Asserting the DOM relationship is the difference between "the reason
+			// is present" and "the reason is legible".
+			const reason = screen.getByText(new RegExp(RULING));
+			expect(out.contains(reason)).toBe(false);
+			expect(reason.className).toContain("text-sm");
+
+			// The eligible neighbour is untouched — the fixture carries both
+			// because the failure this guards against is a blanket disable.
+			const ok = await screen.findByRole("button", { name: "Ana" });
+			expect((ok as HTMLButtonElement).disabled).toBe(false);
+		});
+
+		it("does not cast a vote when the ruled-out name is clicked", async () => {
+			getBallot.mockResolvedValue(
+				fixture({
+					best_speaker: openWithDisqualified(["m-2", "Bo", RULING]),
+				}),
+			);
+			submitVote.mockResolvedValue({ ok: true });
+			renderBallot();
+
+			const out = await screen.findByRole("button", { name: "Bo" });
+			await userEvent.click(out);
+			// The whole point of AC 2: the vote must not leave the phone. Asserting
+			// the MUTATION (not the rendered tick) is what survives a refactor that
+			// keeps the disabled styling and re-attaches a handler.
+			expect(submitVote).not.toHaveBeenCalled();
+		});
+
+		it("retracts its own confirmation when this phone's pick is ruled out mid-vote", async () => {
+			getBallot.mockResolvedValue(
+				fixture({ best_speaker: open(["m-2", "Bo"]) }),
+			);
+			submitVote.mockResolvedValue({ ok: true });
+			const { qc } = renderBallot();
+
+			await userEvent.click(await screen.findByRole("button", { name: "Bo" }));
+			expect(await screen.findByText(/Vote counted for Bo/)).toBeTruthy();
+
+			// The Vote Counter rules Bo out; the next 5s poll brings it down.
+			getBallot.mockResolvedValue(
+				fixture({
+					best_speaker: openWithDisqualified(["m-2", "Bo", RULING]),
+				}),
+			);
+			await poll(qc);
+
+			// A standing "Vote counted" here is exactly the failure #723 exists to
+			// end — someone spending their one vote on a candidate who cannot win
+			// and never being told. The row stays in `meeting_votes`; what changes
+			// is that the card stops claiming it counts for anyone.
+			// The retraction names the ruling, not just the fact of one — a voter
+			// told "you can't vote for Bo" and not why has to ask someone.
+			const retraction = await screen.findByText(/Bo can't win this award/);
+			expect(retraction.textContent).toContain(RULING);
+			// Two places say it now, which is correct: the struck-through button and
+			// this line. `getAllByText` rather than `getByText`, which throws on the
+			// second match and would read as a failure of the feature.
+			expect(screen.getAllByText(new RegExp(RULING)).length).toBeGreaterThan(0);
+			// Asserted AFTER the `find` above, which is what waits for the poll's
+			// re-render. A bare `queryByText` here runs against whatever is mounted
+			// at that instant and reports the PRE-poll card, so it fails on correct
+			// code — the false-fail shape `CODING_STANDARDS.md` records for guards
+			// that compute their own anchor, in its component-test form.
+			expect(screen.queryByText(/Vote counted for Bo/)).toBeNull();
+		});
+
+		it("restores the candidate when the ruling is undone", async () => {
+			getBallot.mockResolvedValue(
+				fixture({
+					best_speaker: openWithDisqualified(["m-2", "Bo", RULING]),
+				}),
+			);
+			submitVote.mockResolvedValue({ ok: true });
+			const { qc } = renderBallot();
+
+			expect(
+				(
+					(await screen.findByRole("button", {
+						name: "Bo",
+					})) as HTMLButtonElement
+				).disabled,
+			).toBe(true);
+
+			getBallot.mockResolvedValue(
+				fixture({ best_speaker: open(["m-2", "Bo"]) }),
+			);
+			await poll(qc);
+
+			// `waitFor` on the ASSERTION, not `findByRole` on the element: both the
+			// ruled-out button and the restored one answer to the name "Bo", so a
+			// `findBy*` resolves the instant either exists and hands back the stale
+			// disabled one before the poll's re-render has flushed. Retrying the
+			// property is what actually waits for the state to change.
+			await waitFor(() => {
+				expect(
+					(screen.getByRole("button", { name: "Bo" }) as HTMLButtonElement)
+						.disabled,
+				).toBe(false);
+			});
+			const back = screen.getByRole("button", { name: "Bo" });
+			await userEvent.click(back);
+			expect(submitVote).toHaveBeenCalledTimes(1);
 		});
 	});
 });

@@ -31,6 +31,7 @@ import {
 	meetingAttendance,
 	meetingAttendancePlan,
 	meetingAwards,
+	meetingCandidateDisqualifications,
 	meetings,
 	meetingVoteSessions,
 	meetingVotes,
@@ -655,6 +656,15 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			// caller's own, so losing this on a merge would leave the merged member
 			// unable to correct their own measurement.
 			"meeting_timings.recorded_by_member_id",
+			// #723 — candidate disqualification. `candidate_member_id` sits inside a
+			// unique (meeting, category, candidate), so it re-points via the
+			// delete-then-update pattern; `disqualified_by_member_id` is nullable
+			// attribution in no unique and re-points plainly. This guard is what
+			// caught them: without the delete, merging two memberships both ruled
+			// out on one meeting would violate the index and roll the WHOLE collapse
+			// back, leaving the member unmergeable until someone found the row.
+			"meeting_candidate_disqualifications.candidate_member_id",
+			"meeting_candidate_disqualifications.disqualified_by_member_id",
 		]);
 
 		const result = await testDb.execute(sql`
@@ -671,6 +681,90 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		);
 
 		expect([...actual].sort()).toEqual([...HANDLED].sort());
+	});
+
+	it("merges two disqualified memberships instead of failing on the unique index (#723)", async () => {
+		// The FK drift-guard above only proves the columns are NAMED. This proves
+		// the delete-then-update runs, and it is the case that matters: without the
+		// DELETE, the insert-or-update on a colliding pair violates
+		// `meeting_candidate_dq_member_unique` and rolls back the WHOLE collapse —
+		// so the member could not be merged at all until someone found the row by
+		// hand. The collision is realistic rather than theoretical: a duplicate
+		// membership is one human recorded twice, both can hold speaker slots on
+		// one meeting, and the Vote Counter ruling "that speaker" out taps whichever
+		// row the console showed them.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+
+		await testDb.insert(meetingCandidateDisqualifications).values([
+			// The COLLIDING pair — same meeting, same category, both memberships.
+			{
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				candidateMemberId: keeperId,
+				reason: "Keeper's ruling",
+			},
+			{
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				candidateMemberId: absorbedId,
+				reason: "Absorbed ruling",
+			},
+			// A row only the absorbed membership has, in another category — it must
+			// SURVIVE the merge rather than being swept up with the collision.
+			{
+				meetingId: seed.meetingId,
+				category: "best_table_topics",
+				candidateMemberId: absorbedId,
+				reason: "Absorbed elsewhere",
+			},
+			// And the attribution column, which is in no unique index.
+			{
+				meetingId: seed.meetingId,
+				category: "best_evaluator",
+				candidateMemberId: null,
+				candidateGuestId: null,
+				candidateWriteIn: "someone typed in",
+				reason: "By the absorbed officer",
+				disqualifiedByMemberId: absorbedId,
+			},
+		]);
+
+		await testDb.transaction((tx) =>
+			collapseMemberships(tx, seed.clubId, keeperId, absorbedId),
+		);
+
+		const rows = await testDb
+			.select({
+				category: meetingCandidateDisqualifications.category,
+				candidate: meetingCandidateDisqualifications.candidateMemberId,
+				by: meetingCandidateDisqualifications.disqualifiedByMemberId,
+				reason: meetingCandidateDisqualifications.reason,
+			})
+			.from(meetingCandidateDisqualifications)
+			.where(eq(meetingCandidateDisqualifications.meetingId, seed.meetingId));
+
+		// The collision resolved to ONE row — the keeper's, reason and all.
+		const speaker = rows.filter((r) => r.category === "best_speaker");
+		expect(speaker).toEqual([
+			expect.objectContaining({
+				candidate: keeperId,
+				reason: "Keeper's ruling",
+			}),
+		]);
+		// The absorbed membership's OTHER ruling re-pointed rather than vanishing.
+		expect(rows.filter((r) => r.category === "best_table_topics")).toEqual([
+			expect.objectContaining({ candidate: keeperId }),
+		]);
+		// The attribution re-pointed too.
+		expect(rows.filter((r) => r.category === "best_evaluator")).toEqual([
+			expect.objectContaining({ by: keeperId }),
+		]);
+		// Nothing at all is left pointing at the absorbed membership — which is
+		// also what makes the `members` DELETE at the end of the collapse possible.
+		expect(
+			rows.some((r) => r.candidate === absorbedId || r.by === absorbedId),
+		).toBe(false);
 	});
 
 	it("keeps officer training credit through a merge, colliding rows and all (#531)", async () => {

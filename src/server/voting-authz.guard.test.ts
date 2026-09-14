@@ -10,7 +10,16 @@ import { readSource } from "#/test/guard-source";
 
 const SOURCE = readSource("src/server/voting.ts");
 
-const GATED = ["openVoteFn", "closeVoteFn", "getVoteTally"];
+const GATED = [
+	"openVoteFn",
+	"closeVoteFn",
+	// #723 — a new write that decides who may exclude another person from an
+	// award. Gated exactly as open/close are, and enrolled here in the same
+	// change: a gate nothing asserts is one refactor from being dropped.
+	"disqualifyCandidateFn",
+	"undoDisqualificationFn",
+	"getVoteTally",
+];
 
 /**
  * The slice of SOURCE covering just `name`'s export — from its `export const`
@@ -43,9 +52,29 @@ describe("voting server fns are gated (#510)", () => {
 		});
 	}
 
-	it("openVoteFn and closeVoteFn assert the meeting lock", () => {
-		for (const name of ["openVoteFn", "closeVoteFn"]) {
+	// Every LIVE-WINDOW operation, which since #723 is four rather than two.
+	// `getVoteTally` is deliberately not among them — the tally must stay
+	// readable after the meeting is completed, which is exactly when the winner
+	// gets confirmed.
+	it("the window operations assert the meeting lock", () => {
+		for (const name of [
+			"openVoteFn",
+			"closeVoteFn",
+			"disqualifyCandidateFn",
+			"undoDisqualificationFn",
+		]) {
 			expect(gatedExportBody(name)).toContain("assertMeetingNotLocked(");
 		}
+	});
+
+	// The inverse, and the half a "must be present" sweep cannot state: the one
+	// GATED export that must NOT assert the lock. Without this, "add the lock
+	// everywhere" reads as strictly safer and would silently break confirming a
+	// winner on a completed meeting — the normal case, since completion is when
+	// the minutes get written.
+	it("getVoteTally does NOT assert the meeting lock", () => {
+		expect(gatedExportBody("getVoteTally")).not.toContain(
+			"assertMeetingNotLocked(",
+		);
 	});
 });

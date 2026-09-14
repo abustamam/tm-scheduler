@@ -289,8 +289,9 @@ bcm_project_progress — ADR-0011), sync_tokens, activity_log, club_logos (a
 club's own uploaded logo, bytea, ADR-0024 — rendered on the four print
 layouts, the projected deck, the `.pptx` export, the Word of the Day poster
 and the club role sheets, HTML and PDF), digital voting (`meeting_vote_sessions`
-/ `meeting_votes` / `meeting_ballot_guests`, #510 — see `CONTEXT.md`'s
-**Digital vote** entry), Club Officer Training (`officer_training_periods` /
+/ `meeting_votes` / `meeting_ballot_guests`, #510, plus
+`meeting_candidate_disqualifications`, #723 — see `CONTEXT.md`'s
+**Digital vote** and **Disqualification** entries), Club Officer Training (`officer_training_periods` /
 `officer_training_records`, #531 — the record behind DCP goal 9; the periods
 table is a SPARSE override of TI's own window dates, so **row absent = the
 default**, see `CONTEXT.md`'s **Club Officer Training (COT)** entry), and

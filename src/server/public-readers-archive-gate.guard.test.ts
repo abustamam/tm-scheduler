@@ -423,12 +423,12 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
  * because for reads the two are interchangeable and swapping them typechecks.
  * Writes have no such sibling pair: the gate is one call, and what varies is
- * WHERE it lives. SEVEN of these gate in a `-logic` seam — which is strictly
+ * WHERE it lives. NINE of these gate in a `-logic` seam — which is strictly
  * better, because a seam is reachable from vitest — and two gate in the handler
  * because their logic is inline there and lifting it out is a refactor #555 was
  * not.
  *
- * Of the seven, five are executed by `public-writers-archive-gate.integration.test.ts`.
+ * Of the nine, seven are executed by `public-writers-archive-gate.integration.test.ts`.
  * The other two are executed beside the rest of their own feature's cases,
  * because each needs a fixture that suite does not build: `confirmSlotCore` in
  * `slots-confirm.integration.test.ts` (a CLAIMED slot and a holder), and
@@ -439,7 +439,7 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * So each row names the file the gate is IN. That is weaker than checking the
  * handler itself, and the weakness is stated rather than papered over: this
  * asserts the gate exists in the module that owns the write, not that this
- * particular write reaches it. The integration suite is what proves the five
+ * particular write reaches it. The integration suite is what proves the seven
  * seam-gated ones actually refuse; for the two handler-gated ones this guard is
  * the only gate there is, which is exactly why moving them into seams is
  * recorded in TODOS.md rather than left implied.
@@ -474,6 +474,23 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 	},
 	{
 		fn: "closeVoteFn",
+		file: "src/server/voting-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	// #723. Session-less for the same reason open/close are: the Vote Counter
+	// operates this console through a self-asserted member id, not a login. Both
+	// gate in the `disqualifyCandidate` / `undoDisqualification` seams rather
+	// than the handlers, so vitest can execute the check —
+	// `voting.integration.test.ts` covers the rest of their behaviour and
+	// `public-writers-archive-gate.integration.test.ts` is where the refusal
+	// itself is proved.
+	{
+		fn: "disqualifyCandidateFn",
+		file: "src/server/voting-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "undoDisqualificationFn",
 		file: "src/server/voting-logic.ts",
 		gate: "assertClubNotArchived",
 	},
@@ -803,9 +820,12 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		// longer exists. `confirmSlot` went the other way at #661, which gave an
 		// authed-only write a session-less HOLDER arm. `recordTiming` (#730) is
 		// the ninth: a genuinely new session-less write, not a reclassified one.
+		// `disqualifyCandidateFn` / `undoDisqualificationFn` (#723) are the tenth
+		// and eleventh, also genuinely new — the Vote Counter operates that console
+		// through a self-asserted member id, exactly as they do open/close.
 		// The count is the vacuity guard, so it moves deliberately with the table
 		// rather than being loosened to `toBeGreaterThan`.
-		expect(WRITE_GATES).toHaveLength(9);
+		expect(WRITE_GATES).toHaveLength(11);
 	});
 
 	it("does not also waive a write it claims to gate", () => {

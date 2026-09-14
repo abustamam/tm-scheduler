@@ -5,12 +5,14 @@ import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	castVote,
 	closeVote,
+	disqualifyCandidate,
 	joinBallotAsGuest,
 	loadBallot,
 	loadParticipation,
 	loadTableTopicsForConsole,
 	loadTally,
 	openVote,
+	undoDisqualification,
 } from "./voting-logic";
 
 // The db-touching logic lives in `voting-logic.ts` (never imported by client
@@ -143,6 +145,63 @@ export const closeVoteFn = createServerFn({ method: "POST" })
 			meetingId: data.meetingId,
 			clubId: authz.clubId,
 			category: data.category,
+			actorMemberId: authz.actorMemberId,
+		});
+		return { ok: true as const };
+	});
+
+/** The window operations above plus WHO. `candidateRef` is the same union
+ *  `submitVote` takes — a write-in can be ruled out too, once it has been cast
+ *  and the Vote Counter can see it on their console. */
+const disqualifySchema = operateSchema.extend({ candidate: candidateRef });
+
+/**
+ * Rule a candidate out of one award (#723). GATED — Ballot Counter or club
+ * admin, exactly as `openVoteFn` / `closeVoteFn` are, and enrolled in
+ * `voting-authz.guard.test.ts`'s GATED list alongside them.
+ *
+ * The lock assert is deliberate and matches open/close rather than
+ * `getVoteTally`: disqualifying is an operation on a LIVE vote, not a read of
+ * the record, so a completed meeting refuses it for the same reason it refuses
+ * re-opening the window.
+ */
+export const disqualifyCandidateFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) =>
+		// The reason carries NO length bound here, exactly as `candidateRef`
+		// carries none for the write-in name and for the same stated reason:
+		// `disqualifyCandidate` owns it through `disqualificationReasonSchema`, so
+		// the cap has one definition and a unit test can reach it without going
+		// through a `createServerFn` it cannot invoke. An outer "request-size"
+		// number here would be a second value to keep in agreement, which is the
+		// thing that comment exists to refuse.
+		disqualifySchema.extend({ reason: z.string() }).parse(input),
+	)
+	.handler(async ({ data }) => {
+		const authz = await requireVoteCounter(data);
+		assertMeetingNotLocked(authz.meetingStatus);
+		await disqualifyCandidate({
+			meetingId: data.meetingId,
+			clubId: authz.clubId,
+			category: data.category,
+			candidate: data.candidate,
+			reason: data.reason,
+			actorMemberId: authz.actorMemberId,
+		});
+		return { ok: true as const };
+	});
+
+/** Undo a disqualification (#723) — the candidate returns to the ballot and
+ *  their prior votes to the tally. Same gate, same lock, same reasons. */
+export const undoDisqualificationFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => disqualifySchema.parse(input))
+	.handler(async ({ data }) => {
+		const authz = await requireVoteCounter(data);
+		assertMeetingNotLocked(authz.meetingStatus);
+		await undoDisqualification({
+			meetingId: data.meetingId,
+			clubId: authz.clubId,
+			category: data.category,
+			candidate: data.candidate,
 			actorMemberId: authz.actorMemberId,
 		});
 		return { ok: true as const };
