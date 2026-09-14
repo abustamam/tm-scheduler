@@ -179,6 +179,40 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		expect(person.email).toBe("new@example.com");
 	});
 
+	it("the corrected admin email reaches the column sign-in actually matches", async () => {
+		// This is the bootstrap repair, and since #756 the sign-in auto-link matches
+		// `members.email`, not `people.email`. Writing only the Person row would
+		// leave the surface looking like it worked while the admin still could not
+		// get in — the exact silent half-failure this repo already shipped once on
+		// the roster form. Driven to the observable rather than asserted on the
+		// column, so a future re-keying of the match cannot quietly pass.
+		const { linkPersonToUser } = await import("#/server/account-link-logic");
+		const corrected = `corrected-${randomUUID()}@test.example`;
+		const res = await createClubWithAdmin({
+			clubName: "Bootstrap Club",
+			clubNumber: uniqueNumber(),
+			adminName: "Typo Admin",
+			adminEmail: `typo-${randomUUID()}@test.example`,
+			timezone: DEFAULT_CLUB_TIMEZONE,
+		});
+		createdClubs.push(res.clubId);
+
+		await updateUnclaimedAdminEmail({ clubId: res.clubId, email: corrected });
+
+		const userId = randomUUID();
+		await testDb.insert(user).values({
+			id: userId,
+			name: "Typo Admin",
+			email: corrected,
+			emailVerified: true,
+		});
+		createdUsers.push(userId);
+
+		expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([
+			res.personId,
+		]);
+	});
+
 	it("refuses editing the admin email once the Person is linked", async () => {
 		const res = await createClubWithAdmin({
 			clubName: "Claimed Club",

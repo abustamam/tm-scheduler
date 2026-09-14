@@ -8,7 +8,7 @@
  * non-blank email → new person), then upsert the Membership for (club, person).
  * People are global (club-less); memberships are the per-club roster row.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
 import { batchSharedEmails, type MappedMember } from "#/lib/members-csv";
@@ -23,7 +23,6 @@ import {
 	currentOfficersFor,
 	openOfficerTermIfAbsent,
 } from "./officer-terms-logic";
-import { personEmailWritable } from "./person-email-guard";
 
 export interface ImportStats {
 	peopleCreated: number;
@@ -38,12 +37,43 @@ export interface ImportStats {
 	/** Rows whose "Current Position" was non-blank but unparseable (left null,
 	 *  logged as a warning — like the ambiguous-name skip). */
 	unparseablePosition: number;
-	/** Rows that matched a Person this club does not solely hold (or who already
-	 *  has a sign-in account), so the CSV's address was NOT written to
-	 *  `people.email`. The membership row still took it. Counted rather than
-	 *  thrown: an import of 60 rows should not fail because one member also
-	 *  belongs to another club, but the refusal must not be invisible either. */
-	peopleEmailRefused: number;
+}
+
+/**
+ * The Person rows an import resolves against, for `clubId`. **Shared by the
+ * committing writer below AND by the dry-run preview** (`upload-members-logic`)
+ * — they run the same pure decisions over this list, so loading it differently
+ * on the two sides is the one way the VPE's approved diff can stop matching what
+ * actually runs. It lives here, in one exported function, for that reason.
+ *
+ * The match address is `people.email` FALLING BACK to this club's own roster
+ * address (#756). `people.email` is the verified identity address now and is
+ * NULL for everyone who has not signed in — migration 0076 cleared the rest — so
+ * a person-level-only list stops recognising a member who has no Customer ID.
+ * The miss is not quiet: it adds a second Person AND a second roster row for the
+ * same human, on every subsequent import.
+ *
+ * The fallback is scoped to the IMPORTING club by the join condition,
+ * deliberately. A contact record another club typed must not be reachable from
+ * this CSV — that is the cross-club shape the rest of #756 closes. Person-level
+ * addresses stay global, as they always were.
+ */
+export async function loadPersonCandidates(
+	clubId: string,
+): Promise<ExistingPersonRow[]> {
+	return db
+		.selectDistinct({
+			id: people.id,
+			customerId: people.customerId,
+			email: sql<string | null>`coalesce(${people.email}, ${members.email})`,
+			name: people.name,
+			phone: people.phone,
+		})
+		.from(people)
+		.leftJoin(
+			members,
+			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
+		);
 }
 
 /**
@@ -72,15 +102,7 @@ export async function importPeopleAndMembers(
 
 	// Load all people once; keep the in-memory list in sync as we insert so
 	// duplicate rows within a single run resolve against freshly-created people.
-	const existing: ExistingPersonRow[] = await db
-		.select({
-			id: people.id,
-			customerId: people.customerId,
-			email: people.email,
-			name: people.name,
-			phone: people.phone,
-		})
-		.from(people);
+	const existing = await loadPersonCandidates(clubId);
 
 	const stats: ImportStats = {
 		peopleCreated: 0,
@@ -88,7 +110,6 @@ export async function importPeopleAndMembers(
 		peopleMatchedByEmail: 0,
 		membersCreated: 0,
 		membersUpdated: 0,
-		peopleEmailRefused: 0,
 		ambiguous: 0,
 		skippedBlankName: 0,
 		unparseablePosition: 0,
@@ -125,33 +146,22 @@ export async function importPeopleAndMembers(
 			if (pd.kind === "customerId") stats.peopleMatchedByCustomerId++;
 			else stats.peopleMatchedByEmail++;
 
-			// Person-level fill-only name/email/phone; adopt a Customer ID when we
-			// finally have one; always refresh the original join date from the CSV.
+			// Person-level fill-only name/phone; adopt a Customer ID when we finally
+			// have one; always refresh the original join date from the CSV.
 			//
-			// `people.email` is the identity key, and the candidate list above is
-			// GLOBAL (matched on Customer ID or email, with no club scope), so this
-			// row can resolve to a Person another club holds. Seeding an address onto
-			// one of those from a CSV is the same cross-club takeover the roster form
-			// and the invite button refuse — a club A admin uploads a row carrying the
-			// victim's Customer ID and their own address, and `linkPersonToUser` binds
-			// it on their next sign-in. So the email field takes the shared
-			// blast-radius predicate; everything else on the row keeps its existing
-			// fill-only behaviour, since a name or phone cannot re-key an identity.
-			const { email: pdEmail, ...pdRest } = pd.set;
+			// `email` is dropped from the SET entirely (#756). Matching on Customer ID
+			// or on a person-level address is GLOBAL, so this row can resolve to a
+			// Person another club holds — and a CSV is a file an officer uploaded, not
+			// an address anyone proved they own. The address fills the MEMBERSHIP's
+			// contact record below instead, which is the column the invite and the
+			// claim both read. A Person CREATED by this import still carries it (the
+			// `insert` arm below): a fresh row is nobody's identity yet, and
+			// `people.email` remains the dedupe key ADR-0008 leans on for "one human,
+			// one Person".
+			const { email: _pdEmail, ...pdRest } = pd.set;
 			await db.update(people).set(pdRest).where(eq(people.id, personId));
-			let storedEmail = current.email;
-			if (pdEmail !== current.email) {
-				const seeded = await db
-					.update(people)
-					.set({ email: pdEmail })
-					.where(personEmailWritable(db, personId, clubId))
-					.returning({ id: people.id });
-				if (seeded.length > 0) storedEmail = pdEmail;
-				else stats.peopleEmailRefused++;
-			}
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
-			current.email = storedEmail;
 			current.phone = pd.set.phone;
 		} else {
 			if (pd.kind === "ambiguous") stats.ambiguous++;

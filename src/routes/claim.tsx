@@ -73,8 +73,13 @@ const COPY: Record<
 		success: false,
 	},
 	needs_invite: {
-		title: "Ask for an invite",
-		body: "This name doesn't have an email on file yet, so it can't be claimed here. Ask a club officer to send you an invite — that link will attach it to your account.",
+		// Two different reasons land here, and the copy must not assert either one:
+		// the roster row has no email, OR more than one club holds this profile, in
+		// which case no club may bind it from a roster address (#756). Naming only
+		// the first sent the second group to an officer who would send an invite,
+		// watch it fail the same way, and have nothing left to try.
+		title: "Ask a club officer",
+		body: "This name can't be attached to your account automatically. A club officer can check the email on your roster entry and send you an invite — or, if you're on more than one club's roster, get you set up directly.",
 		success: false,
 	},
 	not_found: {

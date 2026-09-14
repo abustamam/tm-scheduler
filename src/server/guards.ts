@@ -85,8 +85,9 @@ export async function requireUser() {
  *   2. ADMIN next — the human genuinely holds an admin membership here, so
  *      denying it because the other duplicate was returned first is the bug.
  *      This grants nothing new: `people.user_id` is written only by
- *      `linkPersonToUser`, under `isNull(people.userId)` plus a match on the
- *      magic-link-verified email, so every linked Person is the same human.
+ *      `bindVerifiedPerson` (`account-link-logic.ts`), under
+ *      `isNull(people.userId)` plus a match on the magic-link-verified email,
+ *      so every linked Person is the same human.
  *   3. Open OFFICER TERM next — effective-admin (#202) is granted by
  *      `getOpenOfficerPositions(membership.id)`, which reads ONE membership.
  *      Without this, two non-admin duplicates could hide the officer term on

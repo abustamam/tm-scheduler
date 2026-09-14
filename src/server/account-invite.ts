@@ -23,8 +23,9 @@ function claimCallbackURL(memberId: string): string {
 
 /**
  * Send an admin-initiated account-invite magic link to a roster member (#266,
- * Part A). Admin-gated. The link goes to the Person's OWN email on file — never
- * an arbitrary address — so acceptance provably links exactly that Person. The
+ * Part A). Admin-gated. The link goes to the address on THIS club's roster row —
+ * never an arbitrary one typed into the request — which is also the address the
+ * claim will require, so acceptance provably links exactly that Person. The
  * server-side `auth.api.signInMagicLink` call is the same secure magic-link path
  * user sign-in uses; `metadata.kind: "invite"` swaps in the invitation email copy.
  */
