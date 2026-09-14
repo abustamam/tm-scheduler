@@ -7,7 +7,17 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, asc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	gte,
+	inArray,
+	isNull,
+	ne,
+	notExists,
+	sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
@@ -137,9 +147,11 @@ export const editSchema = z.object({
 	// submits "" and `greetingName` must see "nobody told us", not a blank.
 	// OMITTING it clears it, same as `email`/`phone` above and UNLIKE
 	// `officerPositions` below (whose `undefined` means "leave untouched").
-	// Capped because this value is the one field here that seeds UP onto the
-	// cross-club `people` row, so one club's admin writes it into a record other
-	// clubs share. 80 was the cap the deleted public self-add used for a name
+	// Capped because this value reaches the cross-club `people` row, so one club's
+	// admin writes it into a record other clubs share. `email` reaches it too —
+	// more so now that it can overwrite and not only seed — but the email validator
+	// bounds that one's shape; this is the field whose seed-up is unbounded free
+	// text. 80 was the cap the deleted public self-add used for a name
 	// (#326/#630); it stays the ceiling for a person-level name here.
 	preferredName: z.string().trim().max(80).nullable().optional(),
 	email: z.string().trim().email().nullable().optional(),
@@ -173,61 +185,104 @@ export async function applyMemberEdit(input: EditInput) {
 		// AND seed "   " onto people.preferred_name, permanently defeating the
 		// isNull guard below so the real name could never seed up.
 		preferredName: input.preferredName?.trim() || null,
-		email: input.email ?? null,
+		// Trimmed HERE for the same reason as `preferredName` above, and it matters
+		// more now that this value can overwrite `people.email`: `linkPersonToUser`
+		// compares `lower(people.email) = lower(user.email)` with NO trim, so a
+		// padded address stored here kills auto-link on every sign-in while
+		// `claimPersonForUser` (which does `.trim().toLowerCase()`) still matches —
+		// the same "corrected on the roster, still locked out" shape this change
+		// exists to remove. The zod schema trims, but `applyMemberEdit` is exported
+		// and reached directly with the validator bypassed.
+		email: input.email?.trim() || null,
 		phone: toStoredPhone(input.phone, cc),
 	};
 	// Current offices before the edit — derived from open terms, for the log.
 	const beforeOffices = await currentOfficersFor(input.memberId);
+	// Declared out here so the caller can see it: null = nothing to reconcile,
+	// true = `people.email` now matches the roster, false = the write was refused.
+	let syncedPersonEmail: boolean | null = null;
 	await db.transaction(async (tx) => {
 		await tx.update(members).set(next).where(eq(members.id, input.memberId));
-		// Reconcile people.email UP from the membership when the edit sets an email
-		// (#306). The FIRST arm is the original seed: the Person has no email, which
-		// is the gap that made the #266 emailless-claim takeover possible — a member
-		// whose email lived only on the membership row looked "emailless" at the
-		// Person level.
+		// Reconcile people.email from the membership (#306, widened here).
 		//
-		// The SECOND arm is a CORRECTION, and it is what makes a typo repairable at
-		// all. `people.email` — never `members.email` — is the auth match key
-		// (`linkPersonToUser`), the invite target (`prepareInvite` prefers
-		// `person.email ?? member.email`) and the public-claim key
-		// (`claimPersonForUser`). With only the IS NULL arm, an admin who created a
-		// member under a mistyped address could never repair it: the roster showed
-		// the corrected address while all three of those kept reading the typo, so
-		// the member signed in successfully and landed on `NoClubScreen` ("You're
-		// not in a club yet"), a resent invite went to the mistyped inbox, and
-		// nothing anywhere reported a problem. Shipped incident, THR Speaking Club:
-		// corrected 2026-09-12, still locked out 2026-09-14.
+		// `people.email` is the identity key. `linkPersonToUser` reads it
+		// EXCLUSIVELY to bind a sign-in to a roster Person, and it takes precedence
+		// at the other two readers, which coalesce `person.email ?? member.email`:
+		// `prepareMemberInvite` (where the invite is actually sent) and
+		// `claimPersonForUser` (the public claim). So a WRONG `people.email` poisons
+		// all three, and `members.email` cannot rescue any of them.
 		//
-		// Two guards keep the widening honest and BOTH are load-bearing:
-		//  - `user_id IS NULL` — once a Person has signed in, their address is one
-		//    they PROVED they own via magic link, and no club admin may move it.
-		//    That is the protection the old comment was reaching for when it said
-		//    the NULL check "protects linked accounts".
-		//  - the value match — overwrite ONLY the exact address this membership is
-		//    currently carrying, i.e. the one it seeded. A Person is one row per
-		//    human across every club (ADR-0008), so an address a DIFFERENT club
-		//    recorded survives untouched. Without it, club A's admin could retarget
-		//    a shared, unlinked Person at an address they control and then take the
-		//    person over through `claimPersonForUser`, inheriting club B's
-		//    membership. Same scoping idiom as the preferred-name clear below.
-		// A NULL `current.email` makes that comparison NULL (never true), so a
-		// membership that never carried an email can only take the first arm.
-		if (next.email !== null) {
-			await tx
-				.update(people)
-				.set({ email: next.email })
-				.where(
-					and(
-						eq(people.id, current.personId),
-						or(
-							isNull(people.email),
-							and(
-								isNull(people.userId),
-								sql`lower(${people.email}) = lower(${current.email})`,
-							),
+		// Until now this only fired `where people.email IS NULL`, which made a
+		// mistyped address unrepairable: the roster displayed the correction while
+		// all three readers kept matching the typo, so the member signed in and
+		// landed on `NoClubScreen` ("You're not in a club yet"), a resent invite went
+		// to the mistyped inbox, and nothing reported a problem to anyone. Hit in
+		// production 2026-09-12; the member was still locked out two days later.
+		//
+		// The guard is a BLAST-RADIUS rule, not a value comparison, and the
+		// distinction is the whole design:
+		//  - `user_id IS NULL` — once someone has signed in, their address is one
+		//    they PROVED they own via magic link. No club admin may move it. Applied
+		//    to the WHOLE predicate, not just the correction case: an account holder
+		//    whose Person email is somehow NULL (reachable via `people-merge-logic`,
+		//    which reconciles `email` and `userId` independently) must be just as
+		//    unwritable.
+		//  - no membership outside THIS club — a Person is one row per human across
+		//    every club (ADR-0008), so rewriting it from club A silently re-keys the
+		//    identity club B relies on. With no other club on the row, this club is
+		//    the only stakeholder and owns the value outright.
+		//
+		// Do NOT reintroduce a "does the Person still carry the address this
+		// membership seeded" comparison in place of the second rule. It reads as a
+		// tighter guard and is not one: `current.email` is the MEMBERSHIP's email,
+		// which is state this same admin writes. Two consecutive saves — first to the
+		// address the Person carries, then to one the attacker controls — satisfy any
+		// such comparison, and in the common case one save is enough, because every
+		// path that creates a shared Person (`import-members-logic`,
+		// `guest-pipeline-logic`, `people-logic`'s dedupe, and the seed arm here)
+		// writes the SAME address to both rows by construction. Both sequences were
+		// demonstrated end to end: the retargeted Person binds to the attacker's
+		// account on their next sign-in via `linkPersonToUser` — which is an
+		// unbounded multi-row UPDATE over a column with no unique constraint — and
+		// `auth-context-logic` then hands them every club that Person belongs to, at
+		// whatever role the victim held. A value comparison also cannot repair the
+		// incident above at all, since by then the two rows have already diverged.
+		//
+		// `syncedPersonEmail` records whether the write actually landed, because the
+		// failure this whole change exists to remove was a SILENT one: a refused
+		// reconciliation that looks exactly like a successful one is how a member
+		// stays locked out for two days with nobody able to see why.
+		const personWritable = and(
+			eq(people.id, current.personId),
+			isNull(people.userId),
+			notExists(
+				tx
+					.select({ one: sql`1` })
+					.from(members)
+					.where(
+						and(
+							eq(members.personId, people.id),
+							ne(members.clubId, input.clubId),
 						),
 					),
-				);
+			),
+		);
+		// Compare against the PERSON's address, never the membership's. The incident
+		// state is `members.email` already corrected and `people.email` still wrong,
+		// so a membership-level "did this edit change anything" check skips the one
+		// row that needs repairing — re-saving the roster is exactly what the admin
+		// does when the first correction appears not to have worked.
+		const [personNow] = await tx
+			.select({ email: people.email })
+			.from(people)
+			.where(eq(people.id, current.personId));
+		if ((personNow?.email ?? null) !== next.email) {
+			const synced = await tx
+				.update(people)
+				.set({ email: next.email })
+				.where(personWritable)
+				.returning({ id: people.id });
+			syncedPersonEmail = synced.length > 0;
 		}
 		// Same shape for the "goes by" name (#486): it is a person-level fact
 		// (ADR-0008) that should travel with them, so seed it UP when the Person
@@ -284,10 +339,18 @@ export async function applyMemberEdit(input: EditInput) {
 					officerPositions: beforeOffices,
 				},
 				after: { ...next, officerPositions: afterOffices },
+				// Null = the Person already carried this address, nothing to do.
+				// False = the reconciliation was REFUSED (the Person has signed in,
+				// or belongs to another club too), so `people.email` still differs
+				// from what the roster now shows and every identity reader still
+				// matches the old value. That is the state this change exists to
+				// stop being invisible, so it belongs in the audit trail even
+				// though no UI reads it yet.
+				personEmailSynced: syncedPersonEmail,
 			},
 		});
 	});
-	return { ok: true as const };
+	return { ok: true as const, personEmailSynced: syncedPersonEmail };
 }
 
 export const setStatusSchema = z.object({

@@ -152,9 +152,11 @@ export type ClaimOutcome =
  *                        on the public surface (an officer must invite them),
  *                        never adopted under an arbitrary verified address.
  *   - `linked`         — the on-file email matches the verified sign-in email.
- * "On file" coalesces `people.email` with the membership's `members.email`
- * (`applyMemberEdit` writes the latter but not the former), so a member the VPE
- * gave an email still uses the email-match path, not the un-claimable one.
+ * "On file" coalesces `people.email` with the membership's `members.email`, so a
+ * member the VPE gave an email still uses the email-match path, not the
+ * un-claimable one. The two can legitimately differ: `applyMemberEdit` always
+ * writes `members.email`, but reconciles `people.email` only when nobody has
+ * signed in as that Person AND the Person belongs to no club but that one.
  * The link write is guarded on `user_id IS NULL` and re-checks on a 0-row result
  * so two concurrent claims resolve deterministically.
  */

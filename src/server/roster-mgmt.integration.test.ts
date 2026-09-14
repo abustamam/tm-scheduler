@@ -281,10 +281,11 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	});
 
 	it("editSchema caps the goes-by name so one club can't write junk onto the shared Person", async () => {
-		// This is the only field on the member edit form that seeds UP onto the
-		// cross-club `people` row, so an uncapped value is one club's admin
-		// writing unbounded text into a record other clubs read (#486). The cap
-		// lives in the validator, which `applyMemberEdit` never runs.
+		// `email` also reaches the cross-club `people` row, but its validator bounds
+		// its shape; this is the field whose seed-up is unbounded FREE TEXT, so an
+		// uncapped value is one club's admin writing junk into a record other clubs
+		// read (#486). The cap lives in the validator, which `applyMemberEdit`
+		// never runs.
 		const { editSchema } = await import("#/server/members-logic");
 		const base = {
 			clubId: seed.clubId,
