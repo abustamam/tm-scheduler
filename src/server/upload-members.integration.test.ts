@@ -169,6 +169,52 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 		expect(commit.stats.skippedBlankName).toBe(1);
 	});
 
+	it("preview and commit agree across a MULTI-ROW batch, per row", async () => {
+		// The one-row version of this test below cannot see the failure it is named
+		// for. Within a batch, both sides carry an in-memory candidate list that
+		// grows as rows are processed; the drift was that the planner mirrored a
+		// person-email write the committer had stopped making, so a LATER row in the
+		// same file resolved differently on the two sides. One row never reaches the
+		// second resolution, and 0-vs-1 counters agree by accident.
+		//
+		// So: several rows, the whole summary compared field by field, and the
+		// per-row verdicts compared too — `plan.rows` is what the VPE actually
+		// approves, and a summary can match while individual rows do not.
+		const clubId = await club();
+		const n = randomUUID().slice(0, 8);
+		const text = csv([
+			{
+				"Customer ID": `PN-${n}-1`,
+				Name: "Ida",
+				Email: `ida-${n}@x.io`,
+				"Status (*)": "PaidMember",
+			},
+			// Same address, no Customer ID — resolves only by email, so it sees
+			// whatever the first row left in the in-memory list.
+			{ Name: "Ida Again", Email: `ida-${n}@x.io`, "Status (*)": "PaidMember" },
+			{ Name: "Jo", Email: `jo-${n}@x.io`, "Status (*)": "PaidMember" },
+			{ Name: "", "Status (*)": "PaidMember" },
+		]);
+
+		const preview = await logic.previewMemberImport(clubId, text);
+		const commit = await logic.commitMemberImport(clubId, text);
+
+		expect(preview.summary).toMatchObject({
+			toInsert: commit.stats.membersCreated,
+			toUpdate: commit.stats.membersUpdated,
+			toSkip: commit.stats.skippedBlankName,
+			peopleCreated: commit.stats.peopleCreated,
+			peopleMatched:
+				commit.stats.peopleMatchedByCustomerId +
+				commit.stats.peopleMatchedByEmail,
+			ambiguous: commit.stats.ambiguous,
+		});
+		// And the roster ended up the size the preview promised.
+		expect(await clubMemberCount(clubId)).toBe(
+			preview.summary.toInsert + preview.summary.toUpdate,
+		);
+	});
+
 	it("preview and commit agree after the person-level address was cleared", async () => {
 		// The state migration 0076 leaves un-claimed members in: `people.email` NULL,
 		// the roster row holding the address. BOTH sides had to widen their candidate

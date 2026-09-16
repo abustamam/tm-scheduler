@@ -796,7 +796,22 @@ function MemberActions({
 								type="email"
 								defaultValue={member.email ?? ""}
 								placeholder="name@example.com"
+								aria-describedby="edit-email-hint"
 							/>
+							{/* The one place the app says what this field is for. The save
+							    used to warn when it could not move the member's SIGN-IN
+							    address; #756 makes that impossible rather than reportable,
+							    so the "and then re-invite" half has to be said HERE, on the
+							    screen where a typo is actually corrected, or it is said
+							    nowhere. */}
+							<p
+								id="edit-email-hint"
+								className="text-xs text-[var(--sea-ink-soft)]"
+							>
+								The club's contact address, and where an account invite is sent.
+								If they haven't joined yet, send a fresh invite after changing
+								it.
+							</p>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="edit-phone">Phone</Label>

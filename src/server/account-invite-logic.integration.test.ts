@@ -271,6 +271,104 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		).toBe("no_email");
 	});
 
+	it("prepareMemberInvite refuses when another club's roster disagrees", async () => {
+		// The dead end this PR's first cut shipped: the invite reported `ready`, the
+		// magic link went out, Better-Auth minted a real account, and the claim then
+		// refused — the admin saw "Invite sent." forever and the member bounced. The
+		// invite now asks the same question the bind will, BEFORE a link is sent.
+		const { prepareMemberInvite } = await import("./account-invite-logic");
+		const other = await seedClub();
+		try {
+			const mine = `mine-${randomUUID()}@test.example`;
+			const { memberId, personId } = await seedMember({
+				email: null,
+				memberEmail: mine,
+			});
+			await testDb.insert(members).values({
+				clubId: other.clubId,
+				personId,
+				name: "Picked Person",
+				email: `theirs-${randomUUID()}@test.example`,
+			});
+
+			expect(
+				(await prepareMemberInvite({ clubId: club.clubId, memberId })).outcome,
+			).toBe("roster_conflict");
+			// And no invite was stamped, so the roster does not show them as invited.
+			expect((await personRow(personId))?.invitedAt).toBeNull();
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("prepareMemberInvite is ready for a DUAL-CLUB member both rosters agree on", async () => {
+		// Dual membership is routine. The rule is unanimity, not exclusivity — so
+		// the ordinary two-club member gets an invite like anyone else.
+		const { prepareMemberInvite } = await import("./account-invite-logic");
+		const other = await seedClub();
+		try {
+			const shared = `dual-${randomUUID()}@test.example`;
+			const { memberId, personId } = await seedMember({
+				email: null,
+				memberEmail: shared,
+			});
+			await testDb.insert(members).values({
+				clubId: other.clubId,
+				personId,
+				name: "Picked Person",
+				email: shared,
+			});
+
+			const prep = await prepareMemberInvite({ clubId: club.clubId, memberId });
+			expect(prep.outcome).toBe("ready");
+			expect(prep.email).toBe(shared);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("a DUAL-CLUB member whose rosters agree can claim", async () => {
+		const { claimPersonForUser } = await import("./account-invite-logic");
+		const other = await seedClub();
+		try {
+			const shared = `dual-claim-${randomUUID()}@test.example`;
+			const { memberId, personId } = await seedMember({
+				email: null,
+				memberEmail: shared,
+			});
+			await testDb.insert(members).values({
+				clubId: other.clubId,
+				personId,
+				name: "Picked Person",
+				email: shared,
+			});
+			const userId = await seedUser(shared);
+
+			expect(await claimPersonForUser({ memberId, userId })).toBe("linked");
+			expect((await personRow(personId))?.userId).toBe(userId);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("two members sharing one address cannot claim each other", async () => {
+		// The household case on the explicit-pick surface. Picking a name is a
+		// claim, not proof: with one address on two roster rows the app cannot tell
+		// which human is at the keyboard, and the sign-in auto-link refuses for the
+		// same reason. An officer giving them distinct addresses is the repair.
+		const { claimPersonForUser } = await import("./account-invite-logic");
+		const shared = `household-${randomUUID()}@test.example`;
+		const alice = await seedMember({ email: null, memberEmail: shared });
+		const bob = await seedMember({ email: null, memberEmail: shared });
+		const userId = await seedUser(shared);
+
+		expect(await claimPersonForUser({ memberId: bob.memberId, userId })).toBe(
+			"roster_conflict",
+		);
+		expect((await personRow(bob.personId))?.userId).toBeNull();
+		expect((await personRow(alice.personId))?.userId).toBeNull();
+	});
+
 	it("an officer cannot take over a Person another club also holds (#755 regression)", async () => {
 		// The takeover #755 chased across four writers, re-run against the model
 		// that removed the writers instead of guarding them. An officer of club A
@@ -310,11 +408,14 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 				memberId: member.id,
 			});
 
-			// The invite still goes out to this club's own address — that is this
-			// club's business, and stopping it would break inviting a member whose
-			// contact details only the club has.
-			expect(prep.outcome).toBe("ready");
+			// The invite is REFUSED, and this expectation is the review finding
+			// itself: an earlier cut asserted `ready` here, reasoning that sending to
+			// this club's own address was this club's business. It is not, once the
+			// claim will refuse — the link mints a real account that then cannot be
+			// used, the row shows "invited" forever, and nothing names the reason.
+			expect(prep.outcome).toBe("roster_conflict");
 			expect((await personRow(person.id))?.email).toBeNull();
+			expect((await personRow(person.id))?.invitedAt).toBeNull();
 
 			// But the column assertion above is NOT the property that matters, and an
 			// earlier cut of this test stopped there — it passed while the takeover
@@ -335,7 +436,7 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 					memberId: member.id,
 					userId: attackerUserId,
 				}),
-			).toBe("needs_invite");
+			).toBe("roster_conflict");
 			expect((await personRow(person.id))?.userId).toBeNull();
 			expect((await personRow(person.id))?.email).toBeNull();
 		} finally {
@@ -378,7 +479,7 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 			const userId = await seedUser(typed);
 
 			expect(await claimPersonForUser({ memberId: member.id, userId })).toBe(
-				"needs_invite",
+				"roster_conflict",
 			);
 			expect((await personRow(person.id))?.userId).toBeNull();
 		} finally {
@@ -406,7 +507,7 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 			const userId = await seedUser(typed);
 
 			expect(await claimPersonForUser({ memberId, userId })).toBe(
-				"needs_invite",
+				"roster_conflict",
 			);
 			expect((await personRow(personId))?.userId).toBeNull();
 		} finally {

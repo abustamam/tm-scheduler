@@ -8,7 +8,7 @@
 // module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). See `members-logic.ts` and
 // `server-modules.guard.test.ts`.
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs, members, people, roleDefinitions } from "#/db/schema";
@@ -114,7 +114,14 @@ export async function listClubsForConsole(): Promise<ConsoleClubList> {
 		.select({
 			clubId: members.clubId,
 			name: people.name,
-			email: people.email,
+			// The person-level address falling back to this club's roster row
+			// (#756). Migration 0076 nulled `people.email` for everyone who has
+			// never signed in, which is every admin this console exists to chase —
+			// so reading the person column alone showed a blank address for exactly
+			// the rows the operator is here to act on, next to a repair button that
+			// WRITES the identity column. That invites typing an address back over
+			// one the roster already holds correctly.
+			email: sql<string | null>`coalesce(${people.email}, ${members.email})`,
 			userId: people.userId,
 		})
 		.from(members)
@@ -223,7 +230,10 @@ async function firstAdminOf(clubId: string) {
 			personId: people.id,
 			memberId: members.id,
 			name: people.name,
-			email: people.email,
+			// Same coalesce as `listClubsForConsole`, for the same reason: this is
+			// the value the repair form prefills, so reading the column 0076 clears
+			// would have the operator retype an address the roster already holds.
+			email: sql<string | null>`coalesce(${people.email}, ${members.email})`,
 			userId: people.userId,
 		})
 		.from(members)
@@ -418,10 +428,22 @@ export async function updateUnclaimedAdminEmail(
 			.update(members)
 			.set({ email: input.email })
 			.where(eq(members.id, admin.memberId));
-		await tx
+		// `isNull(people.userId)` in the STATEMENT, not only in the check above.
+		// The `admin.userId` read happens outside this transaction, so under READ
+		// COMMITTED a sign-in that binds the Person in between would leave a LINKED
+		// Person carrying a superadmin-typed address in place of the one a magic
+		// link proved — breaking the invariant the whole release rests on, from the
+		// one writer whose waiver claims it is safe.
+		const moved = await tx
 			.update(people)
 			.set({ email: input.email })
-			.where(eq(people.id, admin.personId));
+			.where(and(eq(people.id, admin.personId), isNull(people.userId)))
+			.returning({ id: people.id });
+		if (moved.length === 0) {
+			throw new Error(
+				"This admin claimed their account while you were editing — their email can't be edited here.",
+			);
+		}
 	});
 
 	return { ok: true, personId: admin.personId };

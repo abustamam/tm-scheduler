@@ -61,8 +61,12 @@ export interface ImportStats {
 export async function loadPersonCandidates(
 	clubId: string,
 ): Promise<ExistingPersonRow[]> {
+	// Plain `select`, not `selectDistinct`: the join cannot fan out, so the DISTINCT
+	// would be a HashAggregate over the whole `people` table for nothing.
+	// `members_club_person_unique` guarantees at most one membership per
+	// (club, person), and `people.id` is in the projection anyway.
 	return db
-		.selectDistinct({
+		.select({
 			id: people.id,
 			customerId: people.customerId,
 			email: sql<string | null>`coalesce(${people.email}, ${members.email})`,
@@ -149,17 +153,32 @@ export async function importPeopleAndMembers(
 			// Person-level fill-only name/phone; adopt a Customer ID when we finally
 			// have one; always refresh the original join date from the CSV.
 			//
-			// `email` is dropped from the SET entirely (#756). Matching on Customer ID
-			// or on a person-level address is GLOBAL, so this row can resolve to a
-			// Person another club holds — and a CSV is a file an officer uploaded, not
-			// an address anyone proved they own. The address fills the MEMBERSHIP's
-			// contact record below instead, which is the column the invite and the
-			// claim both read. A Person CREATED by this import still carries it (the
-			// `insert` arm below): a fresh row is nobody's identity yet, and
-			// `people.email` remains the dedupe key ADR-0008 leans on for "one human,
-			// one Person".
-			const { email: _pdEmail, ...pdRest } = pd.set;
-			await db.update(people).set(pdRest).where(eq(people.id, personId));
+			// `email` is absent from `MatchedPersonValues` by TYPE (#756), not by a
+			// destructure here — a destructure left the shared PLANNER still
+			// computing the field and mirroring it into its own candidate list, so
+			// the preview and this writer disagreed inside one batch. Matching on
+			// Customer ID or on a person-level address is GLOBAL, so this row can
+			// resolve to a Person another club holds — and a CSV is a file an officer
+			// uploaded, not an address anyone proved they own. The address fills the
+			// MEMBERSHIP's contact record below instead, which is the column the
+			// invite and the claim both read. A Person CREATED by this import still
+			// carries it (the `insert` arm below): a fresh row is nobody's identity
+			// yet, and `people.email` remains the dedupe key ADR-0008 leans on.
+			// Spelled out field by field rather than `.set(pd.set)`. A SET whose
+			// argument is an identifier cannot be checked by scanning, so
+			// `person-email-writers.guard.test.ts` refuses one outright — and it is
+			// right to: this call site read `.set(pdRest)` when the field was merely
+			// destructured away, and putting `email` back into that object would
+			// have restored the removed cross-club writer with every gate green.
+			await db
+				.update(people)
+				.set({
+					customerId: pd.set.customerId,
+					name: pd.set.name,
+					phone: pd.set.phone,
+					originalJoinDate: pd.set.originalJoinDate,
+				})
+				.where(eq(people.id, personId));
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
 			current.phone = pd.set.phone;

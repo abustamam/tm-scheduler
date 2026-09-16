@@ -597,18 +597,25 @@ export const people = pgTable(
 		// Two things it is NOT, both of which it used to be:
 		//  - it is NOT what binds an account. `linkPersonToUser` and
 		//    `claimPersonForUser` match `members.email` — the club's own contact
-		//    record — and require the Person to be held by exactly one club. A
-		//    club-scoped actor typing an address can therefore no longer decide who
-		//    a Person becomes, which is what made a typo a lockout and every writer
-		//    of this column a cross-club takeover.
+		//    record — under a UNANIMITY rule across the clubs that hold the Person.
+		//    A club-scoped actor typing an address can therefore no longer decide
+		//    who a Person becomes, which is what made a typo a lockout and every
+		//    writer of this column a cross-club takeover.
 		//  - it is NOT club-editable. Exactly one thing UPDATEs it: the bind, which
-		//    writes an address a magic link just proved, in the same statement that
-		//    sets `user_id` (`account-link-logic.ts`; the two superadmin exceptions
-		//    are named in `person-email-writers.guard.test.ts`).
+		//    reads the address off the `user` row ITSELF (a caller cannot hand it
+		//    one) and sets `user_id` in the same statement (`account-link-logic.ts`;
+		//    the superadmin/operator exceptions are named in
+		//    `person-email-writers.guard.test.ts`).
 		// It IS still written at INSERT, by the CSV importer, the guest-book
-		// conversion and the create-club form, because a brand-new Person row is
-		// nobody's identity yet and this is the fallback dedupe key ADR-0008 leans
-		// on for "one human, one Person". Read it as a hint, never as a credential.
+		// conversion, the bulk paste and the create-club form, because a brand-new
+		// Person row is nobody's identity yet and this is the fallback dedupe key
+		// ADR-0008 leans on for "one human, one Person".
+		//
+		// So the invariant is NARROWER than "every value here is verified", and
+		// stating it the loose way would be the false-completeness claim this repo
+		// has already been burned by: non-null on a LINKED Person means verified;
+		// on an unlinked one it is a typed hint. Nothing binds from it either way,
+		// which is the property that actually matters.
 		email: text("email"),
 		phone: text("phone"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
@@ -665,9 +672,15 @@ export const people = pgTable(
 // ---------------------------------------------------------------------------
 
 export const peopleEmailBackup = pgTable("people_email_backup", {
-	personId: uuid("person_id")
-		.primaryKey()
-		.references(() => people.id, { onDelete: "cascade" }),
+	// **Deliberately NOT a foreign key.** An `ON DELETE cascade` reference to
+	// `people` would let ordinary app activity destroy the undo: `mergePeople`
+	// DELETEs the absorbed Person, so a superadmin merging any of the cleared
+	// rows between the migration and a rollback would silently remove that
+	// human's only surviving copy of their pre-migration address, and nothing
+	// would report it. A snapshot does not need referential integrity to the row
+	// it is a snapshot of — a dangling id here is exactly as useful as a live
+	// one, and outliving the row is the point.
+	personId: uuid("person_id").primaryKey(),
 	email: text("email").notNull(),
 	capturedAt: timestamp("captured_at").defaultNow().notNull(),
 });

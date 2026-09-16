@@ -58,6 +58,11 @@ export interface BulkInviteResult {
 	sent: number;
 	alreadyJoined: number;
 	noEmail: number;
+	/** Members whose rosters disagree about their address, so an invite could not
+	 *  be honoured (#756). Counted rather than sent: a magic link for one of these
+	 *  mints a real account that the claim then refuses, which is the silent
+	 *  half-failure this release exists to remove. */
+	rosterConflict: number;
 	recentlyInvited: number;
 }
 
@@ -94,6 +99,7 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			sent: 0,
 			alreadyJoined: 0,
 			noEmail: 0,
+			rosterConflict: 0,
 			recentlyInvited: 0,
 		};
 		for (const row of rows) {
@@ -110,13 +116,24 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 				result.noEmail += 1;
 				continue;
 			}
+			if (prep.outcome === "roster_conflict") {
+				result.rosterConflict += 1;
+				continue;
+			}
 			if (prep.outcome === "recently_invited") {
 				result.recentlyInvited += 1;
 				continue;
 			}
+			// Send ONLY on `ready`, and read the address off that narrowed shape
+			// rather than casting. A future outcome added to the union then skips
+			// this member instead of reaching `signInMagicLink` with an undefined
+			// address, which is what a trailing `else` plus `prep.email as string`
+			// did — it would have thrown on the first such row and aborted the
+			// whole bulk send.
+			if (prep.outcome !== "ready" || !prep.email) continue;
 			await auth.api.signInMagicLink({
 				body: {
-					email: prep.email as string,
+					email: prep.email,
 					callbackURL: claimCallbackURL(row.memberId),
 					metadata: { kind: "invite", clubName: prep.clubName },
 				},

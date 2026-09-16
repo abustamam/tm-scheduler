@@ -43,7 +43,7 @@ import * as schema from "#/db/schema";
 import { clubs, members, people, peopleEmailBackup, user } from "#/db/schema";
 import { hasTestDb } from "#/test/db";
 
-const MIGRATION = resolve(process.cwd(), "drizzle/0076_great_skrulls.sql");
+const MIGRATION = resolve(process.cwd(), "drizzle/0076_bored_meltdown.sql");
 
 /** The migration's hand-written data statements, split on drizzle's marker. */
 function dataStatements(): string[] {
@@ -64,6 +64,19 @@ function dataStatements(): string[] {
 	).toBe(3);
 	return statements;
 }
+
+/**
+ * The rollback statement, kept in step with `scripts/rollback-0076.ts` by being
+ * asserted here rather than only written there. All three predicates matter; the
+ * `email IS NULL` one is the least obvious and has its own test below.
+ */
+const RESTORE = sql`
+	UPDATE "people" p SET "email" = b."email"
+	  FROM "people_email_backup" b
+	 WHERE p."id" = b."person_id"
+	   AND p."user_id" IS NULL
+	   AND p."email" IS NULL
+`;
 
 /** This suite's own database name, on the same server as `TEST_DATABASE_URL`. */
 const SCRATCH_DB = `tm_0076_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -87,12 +100,27 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 
 	beforeAll(async () => {
 		// CREATE/DROP DATABASE cannot run inside a transaction, so this uses a bare
-		// client against the configured database rather than the pool below. CI's
-		// `tm_migrate_runner` step already creates a database with these
-		// credentials, so the privilege is one the workflow relies on elsewhere.
-		const admin = new pg.Client({ connectionString: urlFor("postgres") });
+		// client — against the CONFIGURED database, not a hardcoded `postgres`.
+		// CI's `tm_migrate_runner` step creates a database the same way
+		// (`psql -d tm_test -c 'CREATE DATABASE …'`), and a `postgres` maintenance
+		// database is not guaranteed to be reachable on a developer's box.
+		const admin = new pg.Client({
+			connectionString: process.env.TEST_DATABASE_URL,
+		});
 		await admin.connect();
 		try {
+			// Reap anything a previous run left behind. The scratch name is random
+			// and the drop lives in `afterAll`, so a Ctrl-C, an OOM or a killed
+			// vitest worker orphans a database with nothing to collect it; on a
+			// shared dev container they accumulate silently.
+			const stale = await admin.query<{ datname: string }>(
+				"select datname from pg_database where datname like 'tm_0076_%'",
+			);
+			for (const row of stale.rows) {
+				await admin.query(
+					`DROP DATABASE IF EXISTS "${row.datname}" WITH (FORCE)`,
+				);
+			}
 			await admin.query(`CREATE DATABASE "${SCRATCH_DB}"`);
 		} finally {
 			await admin.end();
@@ -112,7 +140,9 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 
 	afterAll(async () => {
 		await pool?.end();
-		const admin = new pg.Client({ connectionString: urlFor("postgres") });
+		const admin = new pg.Client({
+			connectionString: process.env.TEST_DATABASE_URL,
+		});
 		await admin.connect();
 		try {
 			await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
@@ -233,9 +263,8 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 	});
 
 	it("restores exactly what it cleared, from the backup table", async () => {
-		// The rollback plan is a `revert` plus this UPDATE, which is why it is
-		// written into the migration's own header comment. An untested restore is a
-		// restore you find out about during the incident.
+		// The rollback is `scripts/rollback-0076.ts`, and this is its statement. An
+		// untested restore is a restore you find out about during the incident.
 		await inRolledBackTx(async (tx) => {
 			const addr = `restore-${randomUUID()}@test.example`;
 			const personId = await seedInTx(tx, {
@@ -244,13 +273,35 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 			});
 
 			await runMigration(tx);
-			await tx.execute(sql`
-				UPDATE "people" p SET "email" = b."email"
-				FROM "people_email_backup" b
-				WHERE p."id" = b."person_id" AND p."user_id" IS NULL
-			`);
+			await tx.execute(RESTORE);
 
 			expect(await personEmail(tx, personId)).toBe(addr);
+		});
+	});
+
+	it("the restore does not clobber a repair made after the migration", async () => {
+		// `updateUnclaimedAdminEmail` and `mergePeople`'s keeper fill both write
+		// `people.email` on an UNCLAIMED Person, so `user_id IS NULL` does not
+		// protect their work — only `email IS NULL` does. Without that arm the
+		// rollback undoes an operator's repair during the very incident that
+		// triggered it.
+		await inRolledBackTx(async (tx) => {
+			const cleared = `cleared-${randomUUID()}@test.example`;
+			const repaired = `repaired-${randomUUID()}@test.example`;
+			const personId = await seedInTx(tx, {
+				personEmail: cleared,
+				memberEmail: cleared,
+			});
+
+			await runMigration(tx);
+			// The superadmin fixes them up post-deploy.
+			await tx
+				.update(people)
+				.set({ email: repaired })
+				.where(eq(people.id, personId));
+			await tx.execute(RESTORE);
+
+			expect(await personEmail(tx, personId)).toBe(repaired);
 		});
 	});
 
@@ -326,9 +377,37 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 		});
 	});
 
-	it("is a no-op on a database that has already been migrated", async () => {
-		// drizzle will not re-run it, but a hand-applied re-run during an incident
-		// must not do anything surprising either.
+	it("a re-run would clear a Person created AFTER the migration", async () => {
+		// The file is SINGLE-USE, and this is why. An earlier draft of the header
+		// invited a hand re-run during an incident and called it a no-op; the test
+		// that "proved" it re-ran against a row the first pass had already emptied,
+		// so it passed for the wrong reason. Statement 3 is unscoped in time and
+		// Person CREATION still writes `people.email` (the CSV importer, the
+		// guest-book conversion, the bulk paste, the create-club form) — so a
+		// second pass takes the dedupe key off everyone provisioned since.
+		//
+		// Pinned as a HAZARD rather than fixed: scoping the statement to a deploy
+		// timestamp would make the migration unreadable for a re-run nobody should
+		// perform. The assertion exists so that anyone who later decides the file
+		// IS re-runnable has to delete a test that says otherwise.
+		await inRolledBackTx(async (tx) => {
+			const addr = `after-${randomUUID()}@test.example`;
+			await runMigration(tx);
+			const laterPerson = await seedInTx(tx, {
+				personEmail: addr,
+				memberEmail: addr,
+			});
+
+			expect(await personEmail(tx, laterPerson)).toBe(addr);
+			await runMigration(tx);
+			expect(
+				await personEmail(tx, laterPerson),
+				"a second pass is destructive — the header must keep saying SINGLE-USE",
+			).toBeNull();
+		});
+	});
+
+	it("the capture is write-once, so a second pass cannot spoil the snapshot", async () => {
 		await inRolledBackTx(async (tx) => {
 			const addr = `already-${randomUUID()}@test.example`;
 			const personId = await seedInTx(tx, {
@@ -339,9 +418,8 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 			await runMigration(tx);
 			await runMigration(tx);
 
-			expect(await personEmail(tx, personId)).toBeNull();
-			// The capture is still the ORIGINAL value: the second pass must not
-			// overwrite the snapshot with the NULL the first pass wrote.
+			// Still the ORIGINAL value: `ON CONFLICT DO NOTHING` keeps the second
+			// pass from overwriting the snapshot with the NULL the first pass wrote.
 			const [saved] = await tx
 				.select({ email: peopleEmailBackup.email })
 				.from(peopleEmailBackup)

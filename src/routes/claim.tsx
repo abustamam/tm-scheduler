@@ -26,6 +26,7 @@ type ClaimView =
 	| "already_other"
 	| "email_mismatch"
 	| "needs_invite"
+	| "roster_conflict"
 	| "not_found"
 	| "needs_signin";
 
@@ -73,13 +74,19 @@ const COPY: Record<
 		success: false,
 	},
 	needs_invite: {
-		// Two different reasons land here, and the copy must not assert either one:
-		// the roster row has no email, OR more than one club holds this profile, in
-		// which case no club may bind it from a roster address (#756). Naming only
-		// the first sent the second group to an officer who would send an invite,
-		// watch it fail the same way, and have nothing left to try.
-		title: "Ask a club officer",
-		body: "This name can't be attached to your account automatically. A club officer can check the email on your roster entry and send you an invite — or, if you're on more than one club's roster, get you set up directly.",
+		title: "Ask for an invite",
+		body: "This name doesn't have an email on file yet, so it can't be claimed here. Ask a club officer to add your email to the roster and send you an invite — that link will attach it to your account.",
+		success: false,
+	},
+	roster_conflict: {
+		// Names the ONE thing an officer can actually do. An earlier cut said an
+		// officer could "get you set up directly", which was false — the only
+		// person-level repair is superadmin-gated (`mergePeople`,
+		// `updateUnclaimedAdminEmail`). Since #756's review this state has a real
+		// club-level fix, so the copy points at it: every club that has this member
+		// needs the same, correct address on their roster row.
+		title: "The rosters don't agree",
+		body: "Your email checks out for this club, but another club's roster has something different for you — or this address is on more than one member's entry. Ask a club officer to make sure your roster email is right in every club you're in, then open your invite link again.",
 		success: false,
 	},
 	not_found: {

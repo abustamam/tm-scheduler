@@ -43,12 +43,13 @@ import { resolveUserPersonId } from "./person-identity-logic";
  *
  * **1. The ACTIVE club's Person.** `people.user_id` is not unique — ADR-0008
  * makes one human one Person, but real duplicates predate #329's
- * dedupe-on-write, and a human can still accrue several one at a time: since
- * #756 each sign-in binds at most one Person, so a duplicated human picks up
- * another on a later sign-in or through `claimPersonForUser`, with a different
- * name on each. (Before #756 one statement bound them all at once; the shape
- * this fallback exists for is unchanged, only the pace.) The club you are
- * looking at is the one
+ * dedupe-on-write, and a human can still hold several with a different name on
+ * each. Since #756 a sign-in binds at most ONE Person, and refuses entirely
+ * while two of them share a roster address — so duplicates no longer accrue on
+ * their own and no longer self-heal either: the second one is bound by an
+ * officer invite (`claimPersonForUser`) or fused by `mergePeople`, which is what
+ * `listDuplicatePeople` exists to surface. The club you are looking at is the
+ * one
  * whose roster spelling you expect to be greeted by, so its membership decides.
  * `people.createdAt, people.id` breaks a tie between two duplicates inside that
  * one club — the same tail `resolveUserPersonId` uses, deliberately, so the two

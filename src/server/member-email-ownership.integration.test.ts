@@ -139,6 +139,27 @@ describe.skipIf(!hasTestDb)("member email ownership (#756)", () => {
 		return row?.email ?? null;
 	}
 
+	it("does not rewrite an UNLINKED, SINGLE-CLUB Person's address", async () => {
+		// THE discriminating case, and the reason it is first. Most of this file's
+		// assertions hold under #755's guard as well — it refused the write for an
+		// account holder and for a multi-club Person — so they are regression pins,
+		// not the gate. This is the one fixture where the two models disagree on
+		// every assertion: an unlinked Person held by one club was exactly what
+		// #755's blast-radius predicate ALLOWED the roster form to overwrite, and
+		// #756 says the form may not touch the column at all.
+		const stale = `stale-${randomUUID()}@test.example`;
+		const corrected = `corrected-${randomUUID()}@test.example`;
+		const { memberId, personId } = await seedMember({
+			personEmail: stale,
+			memberEmail: stale,
+		});
+
+		await edit(memberId, corrected);
+
+		expect(await memberEmail(memberId)).toBe(corrected);
+		expect(await personEmail(personId)).toBe(stale);
+	});
+
 	it("writes the roster address and leaves the Person's untouched", async () => {
 		const seeded = `seeded-${randomUUID()}@test.example`;
 		const corrected = `corrected-${randomUUID()}@test.example`;
@@ -154,9 +175,11 @@ describe.skipIf(!hasTestDb)("member email ownership (#756)", () => {
 	});
 
 	it("leaves an ACCOUNT HOLDER's proven address untouched", async () => {
-		// This used to be a refusal the admin had to be warned about. It is now
-		// simply not something the form reaches: a work address on the membership
-		// and a personal one on the Person is an ordinary, permanent state.
+		// REGRESSION PIN, not the gate: #755's guard refused this write too, so it
+		// passes under both models. Kept because the REASON changed — it used to be
+		// a refusal the admin had to be warned about, and is now simply not
+		// something the form reaches. A work address on the membership and a
+		// personal one on the Person is an ordinary, permanent state.
 		const proven = `proven-${randomUUID()}@test.example`;
 		const userId = await seedUser(proven);
 		const { memberId, personId } = await seedMember({
@@ -171,6 +194,7 @@ describe.skipIf(!hasTestDb)("member email ownership (#756)", () => {
 	});
 
 	it("leaves the Person untouched when another club holds them too", async () => {
+		// Regression pin — #755's blast-radius guard refused this one as well.
 		const shared = `shared-${randomUUID()}@test.example`;
 		const { memberId, personId } = await seedMember({
 			personEmail: shared,

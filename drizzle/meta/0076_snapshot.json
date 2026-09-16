@@ -1,5 +1,5 @@
 {
-  "id": "c98ed548-d02d-40eb-99a2-84b80685eb4e",
+  "id": "3b1378fb-b180-4195-9532-d78b8b72649b",
   "prevId": "c6550b57-c364-4246-896c-89e96f7c1551",
   "version": "7",
   "dialect": "postgresql",
@@ -4595,21 +4595,7 @@
         }
       },
       "indexes": {},
-      "foreignKeys": {
-        "people_email_backup_person_id_people_id_fk": {
-          "name": "people_email_backup_person_id_people_id_fk",
-          "tableFrom": "people_email_backup",
-          "tableTo": "people",
-          "columnsFrom": [
-            "person_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
