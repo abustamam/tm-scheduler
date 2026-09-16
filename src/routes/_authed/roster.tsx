@@ -37,6 +37,7 @@ import {
 	type OfficerPosition,
 	officerPositionLabel,
 } from "#/lib/officers";
+import { INVITE_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	buildImportPreview,
 	type PreviewRow,
@@ -589,6 +590,16 @@ function RowInviteControl({
 			const res = await inviteMember({ data: { clubId, memberId } });
 			if (res.outcome === "no_email") {
 				toast.error("Add an email for this member first.");
+			} else if (res.outcome === "roster_conflict") {
+				// The one refusal an unqualified success toast used to hide (#756
+				// review): the link would be delivered, an account minted, and the
+				// claim would then refuse — leaving this row showing "invited"
+				// forever with nothing on any screen naming the reason.
+				toast.error(
+					res.obstacle
+						? INVITE_CONFLICT_COPY[res.obstacle]
+						: "No invite sent — this member's roster entries need sorting out first.",
+				);
 			} else if (res.outcome === "already_joined") {
 				toast.info("They already have an account.");
 			} else {
@@ -652,13 +663,22 @@ function InviteAllDialog({
 		setBusy(true);
 		try {
 			const res = await inviteAllMembers({ data: { clubId } });
-			toast.success(
+			const summary =
 				`Sent ${res.sent} invite${res.sent === 1 ? "" : "s"}.` +
-					(res.noEmail > 0 ? ` ${res.noEmail} skipped (no email).` : "") +
-					(res.recentlyInvited > 0
-						? ` ${res.recentlyInvited} already invited recently.`
-						: ""),
-			);
+				(res.noEmail > 0 ? ` ${res.noEmail} skipped (no email).` : "") +
+				(res.rosterConflict > 0
+					? ` ${res.rosterConflict} skipped (another club's roster has a different email).`
+					: "") +
+				(res.recentlyInvited > 0
+					? ` ${res.recentlyInvited} already invited recently.`
+					: "") +
+				(res.failed > 0
+					? ` ${res.failed} couldn't be delivered — try those again tomorrow.`
+					: "");
+			// "Sent 0 invites." is not a success. Reporting it as one is how a bulk
+			// send that reached nobody reads as a job done.
+			if (res.sent === 0) toast.info(summary);
+			else toast.success(summary);
 			onOpenChange(false);
 			await router.invalidate();
 		} catch (err) {

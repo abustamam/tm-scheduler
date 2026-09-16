@@ -84,9 +84,12 @@ export async function requireUser() {
  *      status) could grant management off an inactive admin row.
  *   2. ADMIN next — the human genuinely holds an admin membership here, so
  *      denying it because the other duplicate was returned first is the bug.
- *      This grants nothing new: `people.user_id` is written only by
- *      `linkPersonToUser`, under `isNull(people.userId)` plus a match on the
- *      magic-link-verified email, so every linked Person is the same human.
+ *      This grants nothing new: `people.user_id` is written by
+ *      `bindVerifiedPerson` (`account-link-logic.ts`), under
+ *      `isNull(people.userId)` plus a match on the magic-link-verified email,
+ *      and by `mergePeople`'s keeper adoption (superadmin, and
+ *      `checkMergeBlocks` refuses two linked Persons) — so every linked Person
+ *      is still the same human either way.
  *   3. Open OFFICER TERM next — effective-admin (#202) is granted by
  *      `getOpenOfficerPositions(membership.id)`, which reads ONE membership.
  *      Without this, two non-admin duplicates could hide the officer term on

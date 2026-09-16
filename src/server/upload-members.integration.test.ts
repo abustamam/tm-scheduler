@@ -169,6 +169,84 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 		expect(commit.stats.skippedBlankName).toBe(1);
 	});
 
+	it("preview and commit agree across a MULTI-ROW batch", async () => {
+		// The one-row version of this test below cannot see the failure it is named
+		// for. Within a batch, both sides carry an in-memory candidate list that
+		// grows as rows are processed; the drift was that the planner mirrored a
+		// person-email write the committer had stopped making, so a LATER row in the
+		// same file resolved differently on the two sides. One row never reaches the
+		// second resolution, and 0-vs-1 counters agree by accident.
+		//
+		// So: several rows, and the whole summary compared field by field.
+		//
+		// It does NOT compare per-row verdicts, and an earlier version of this
+		// comment claimed it did — `plan.rows` is the diff the VPE actually
+		// approves, and a summary can agree while individual rows do not. Closing
+		// that needs the committer to report per-row outcomes, which it does not;
+		// the gap is named here rather than papered over, and the roster-size
+		// assertion below is the cheap half that catches the shape this test was
+		// written for.
+		const clubId = await club();
+		const n = randomUUID().slice(0, 8);
+		const text = csv([
+			{
+				"Customer ID": `PN-${n}-1`,
+				Name: "Ida",
+				Email: `ida-${n}@x.io`,
+				"Status (*)": "PaidMember",
+			},
+			// Same address, no Customer ID — resolves only by email, so it sees
+			// whatever the first row left in the in-memory list.
+			{ Name: "Ida Again", Email: `ida-${n}@x.io`, "Status (*)": "PaidMember" },
+			{ Name: "Jo", Email: `jo-${n}@x.io`, "Status (*)": "PaidMember" },
+			{ Name: "", "Status (*)": "PaidMember" },
+		]);
+
+		const preview = await logic.previewMemberImport(clubId, text);
+		const commit = await logic.commitMemberImport(clubId, text);
+
+		expect(preview.summary).toMatchObject({
+			toInsert: commit.stats.membersCreated,
+			toUpdate: commit.stats.membersUpdated,
+			toSkip: commit.stats.skippedBlankName,
+			peopleCreated: commit.stats.peopleCreated,
+			peopleMatched:
+				commit.stats.peopleMatchedByCustomerId +
+				commit.stats.peopleMatchedByEmail,
+			ambiguous: commit.stats.ambiguous,
+		});
+		// And the roster ended up the size the preview promised.
+		expect(await clubMemberCount(clubId)).toBe(
+			preview.summary.toInsert + preview.summary.toUpdate,
+		);
+	});
+
+	it("preview and commit agree after the person-level address was cleared", async () => {
+		// The state migration 0076 leaves un-claimed members in: `people.email` NULL,
+		// the roster row holding the address. BOTH sides had to widen their candidate
+		// query for that, and they load it from two different modules — so this pins
+		// the parity rather than either half's answer. A preview promising "1 update"
+		// over a commit that inserts a duplicate Person is worse than either being
+		// wrong alone: the VPE approves a diff that is not what runs.
+		const clubId = await club();
+		const text = csv([
+			{ Name: "Hal", Email: "hal@x.io", "Status (*)": "PaidMember" },
+		]);
+		await logic.commitMemberImport(clubId, text);
+		await testDb
+			.update(people)
+			.set({ email: null })
+			.where(eq(people.email, "hal@x.io"));
+
+		const preview = await logic.previewMemberImport(clubId, text);
+		const commit = await logic.commitMemberImport(clubId, text);
+
+		expect(preview.summary.peopleCreated).toBe(commit.stats.peopleCreated);
+		expect(preview.summary.toUpdate).toBe(commit.stats.membersUpdated);
+		expect(commit.stats.peopleCreated).toBe(0);
+		expect(await clubMemberCount(clubId)).toBe(1);
+	});
+
 	it("fill-only: never overwrites a stored email, always sets the join date", async () => {
 		const clubId = await club();
 		// Seed a person + membership that already has an (edited) email.

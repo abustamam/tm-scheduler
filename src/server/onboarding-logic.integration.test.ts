@@ -179,6 +179,107 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		expect(person.email).toBe("new@example.com");
 	});
 
+	it("the corrected admin email reaches the column sign-in actually matches", async () => {
+		// This is the bootstrap repair, and since #756 the sign-in auto-link matches
+		// `members.email`, not `people.email`. Writing only the Person row would
+		// leave the surface looking like it worked while the admin still could not
+		// get in — the exact silent half-failure this repo already shipped once on
+		// the roster form. Driven to the observable rather than asserted on the
+		// column, so a future re-keying of the match cannot quietly pass.
+		const { linkPersonToUser } = await import("#/server/account-link-logic");
+		const corrected = `corrected-${randomUUID()}@test.example`;
+		const res = await createClubWithAdmin({
+			clubName: "Bootstrap Club",
+			clubNumber: uniqueNumber(),
+			adminName: "Typo Admin",
+			adminEmail: `typo-${randomUUID()}@test.example`,
+			timezone: DEFAULT_CLUB_TIMEZONE,
+		});
+		createdClubs.push(res.clubId);
+
+		await updateUnclaimedAdminEmail({ clubId: res.clubId, email: corrected });
+
+		const userId = randomUUID();
+		await testDb.insert(user).values({
+			id: userId,
+			name: "Typo Admin",
+			email: corrected,
+			emailVerified: true,
+		});
+		createdUsers.push(userId);
+
+		expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([
+			res.personId,
+		]);
+	});
+
+	it("the console shows the roster address once 0076 has cleared the Person's", async () => {
+		// The repair surface must not go blank for exactly the rows it exists to
+		// chase. `updateUnclaimedAdminEmail` sits on this screen and WRITES the
+		// identity column, so showing an empty field next to it invites an operator
+		// to retype an address the roster already holds correctly.
+		const { listClubsForConsole, getClubConsoleDetail } = await import(
+			"#/server/onboarding-logic"
+		);
+		const addr = `console-${randomUUID()}@test.example`;
+		const res = await createClubWithAdmin({
+			clubName: "Console Club",
+			clubNumber: uniqueNumber(),
+			adminName: "Unclaimed Admin",
+			adminEmail: addr,
+			timezone: DEFAULT_CLUB_TIMEZONE,
+		});
+		createdClubs.push(res.clubId);
+		// Simulate migration 0076 against this club's admin.
+		await testDb
+			.update(people)
+			.set({ email: null })
+			.where(eq(people.id, res.personId));
+
+		const detail = await getClubConsoleDetail(res.clubId);
+		expect(detail.firstAdmin?.email).toBe(addr);
+
+		const listed = (await listClubsForConsole()).clubs.find(
+			(c) => c.clubId === res.clubId,
+		);
+		expect(listed?.firstAdmin?.email).toBe(addr);
+	});
+
+	it("refuses the admin-email edit if the Person links mid-edit", async () => {
+		// The check reads `admin.userId` outside the write's transaction, so the
+		// predicate has to be in the STATEMENT too — otherwise a sign-in landing in
+		// that window leaves a LINKED Person carrying a superadmin-typed address in
+		// place of the one a magic link proved, from the one writer whose waiver
+		// claims it is safe. Simulated by linking between the read and the write.
+		const res = await createClubWithAdmin({
+			clubName: "Racing Club",
+			clubNumber: uniqueNumber(),
+			adminName: "Racing Admin",
+			adminEmail: `race-${randomUUID()}@test.example`,
+			timezone: DEFAULT_CLUB_TIMEZONE,
+		});
+		createdClubs.push(res.clubId);
+		const userId = randomUUID();
+		await testDb.insert(user).values({
+			id: userId,
+			name: "Racing Admin",
+			email: `race-user-${randomUUID()}@test.example`,
+			emailVerified: true,
+		});
+		createdUsers.push(userId);
+		await testDb
+			.update(people)
+			.set({ userId })
+			.where(eq(people.id, res.personId));
+
+		await expect(
+			updateUnclaimedAdminEmail({
+				clubId: res.clubId,
+				email: `hijack-${randomUUID()}@test.example`,
+			}),
+		).rejects.toThrow(/claimed/i);
+	});
+
 	it("refuses editing the admin email once the Person is linked", async () => {
 		const res = await createClubWithAdmin({
 			clubName: "Claimed Club",

@@ -44,9 +44,15 @@ describe("resolvePersonDecision", () => {
 		);
 		expect(d.kind).toBe("customerId");
 		if (d.kind !== "customerId") throw new Error("expected match");
-		// Name/email already present → not overwritten (fill-only).
+		// Name already present → not overwritten (fill-only).
 		expect(d.set.name).toBe("Ada");
-		expect(d.set.email).toBe("ada@x.io");
+		// And the SET carries no `email` at all (#756): a match never re-keys an
+		// existing Person's identity, so the field is gone from the type. Asserted
+		// on the VALUE rather than left to the compiler, because this is the shape
+		// the committing writer and the dry-run preview must agree on — the last
+		// time they disagreed, a row that previewed as a match minted a duplicate
+		// Person and a duplicate roster row on commit.
+		expect(Object.hasOwn(d.set, "email")).toBe(false);
 	});
 
 	it("matches by email and inserts when nothing matches", () => {

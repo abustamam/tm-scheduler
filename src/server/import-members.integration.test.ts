@@ -168,6 +168,131 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(famMembers).toHaveLength(2);
 	});
 
+	it("never seeds people.email onto a MATCHED person, even in its own club", async () => {
+		// `people.email` is the verified identity address (#756): only a bind
+		// against a magic-link-proved address writes it. A CSV is a file an officer
+		// uploaded, so it fills the club's contact record and stops there. Person
+		// CREATION still carries the address — a fresh row is nobody's identity yet,
+		// and the column is the dedupe key ADR-0008 relies on — but a row that
+		// already exists is left alone.
+		const clubId = await club();
+		// Per-run keys: vitest runs test FILES in parallel against one shared
+		// `tm_test`, `people.customer_id` is globally UNIQUE, and an unscoped
+		// select on `people` is order-dependent by construction (CLAUDE.md).
+		const n = randomUUID().slice(0, 8);
+		await importPeopleAndMembers(clubId, [
+			row({ customerId: `PN-EM-${n}`, name: "Em" }),
+		]);
+		const stats = await importPeopleAndMembers(clubId, [
+			row({ customerId: `PN-EM-${n}`, name: "Em", email: `em-${n}@x.io` }),
+		]);
+
+		expect(stats.peopleMatchedByCustomerId).toBe(1);
+		const [em] = await testDb
+			.select({ email: people.email })
+			.from(people)
+			.where(eq(people.customerId, `PN-EM-${n}`));
+		expect(em?.email).toBeNull();
+		// The club's own contact record DID fill — that is the officer's to set,
+		// and it is the address the invite and the claim will both use.
+		const [membership] = await testDb
+			.select({ email: members.email })
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		expect(membership?.email).toBe(`em-${n}@x.io`);
+	});
+
+	it("cannot re-key a Person the importing club does not hold", async () => {
+		// The cross-club shape, which is the one with teeth: the candidate list is
+		// matched GLOBALLY on Customer ID, so a row carrying a victim's PN- number
+		// and the importer's own address reached a Person another club holds. #755
+		// answered that with a blast-radius predicate on the write; #756 removes the
+		// write. Kept as a regression pin because the reason it is safe changed.
+		const clubA = await club();
+		const clubB = await club();
+		const n = randomUUID().slice(0, 8);
+		await importPeopleAndMembers(clubA, [
+			row({ customerId: `PN-VIC-${n}`, name: "Vic" }),
+		]);
+		await importPeopleAndMembers(clubB, [
+			row({
+				customerId: `PN-VIC-${n}`,
+				name: "Vic",
+				email: `attacker-${n}@x.io`,
+			}),
+		]);
+
+		const [vic] = await testDb
+			.select({ email: people.email })
+			.from(people)
+			.where(eq(people.customerId, `PN-VIC-${n}`));
+		expect(vic?.email).toBeNull();
+	});
+
+	it("re-matches a member whose person-level address was cleared", async () => {
+		// The state migration 0076 leaves every un-claimed member in: `people.email`
+		// NULL, the club's roster row holding the address. A Person with no Customer
+		// ID is matched by EMAIL, so a person-level-only candidate list stops
+		// recognising them — and the miss is not quiet, it adds a second Person AND
+		// a second roster row for the same human on every subsequent import.
+		const clubId = await club();
+		const n = randomUUID().slice(0, 8);
+		const addr = `fay-${n}@x.io`;
+		await importPeopleAndMembers(clubId, [row({ name: "Fay", email: addr })]);
+		// Simulate the migration — scoped to THIS club's person by id. An unscoped
+		// `update(people)` on a shared `tm_test` takes another file's in-flight
+		// rows, which is the hazard CLAUDE.md names by name.
+		const [fay] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		if (!fay) throw new Error("seeded member missing");
+		await testDb
+			.update(people)
+			.set({ email: null })
+			.where(eq(people.id, fay.personId));
+
+		const stats = await importPeopleAndMembers(clubId, [
+			row({ name: "Fay", email: addr }),
+		]);
+
+		expect(stats.peopleCreated).toBe(0);
+		expect(stats.peopleMatchedByEmail).toBe(1);
+		const roster = await testDb
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		expect(roster, "a duplicate roster row for the same human").toHaveLength(1);
+	});
+
+	it("does not match on ANOTHER club's roster address", async () => {
+		// The candidate list is global, so widening it to membership addresses has
+		// to stay scoped to the importing club — otherwise a CSV could reach a
+		// Person through a contact record some other club typed, which is the
+		// cross-club shape this whole change exists to close.
+		const clubA = await club();
+		const clubB = await club();
+		const n = randomUUID().slice(0, 8);
+		const addr = `gus-${n}@x.io`;
+		await importPeopleAndMembers(clubA, [row({ name: "Gus", email: addr })]);
+		const [gus] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.clubId, clubA));
+		if (!gus) throw new Error("seeded member missing");
+		await testDb
+			.update(people)
+			.set({ email: null })
+			.where(eq(people.id, gus.personId));
+
+		const stats = await importPeopleAndMembers(clubB, [
+			row({ name: "Gus", email: addr }),
+		]);
+
+		expect(stats.peopleCreated).toBe(1);
+		expect(stats.peopleMatchedByEmail).toBe(0);
+	});
+
 	it("adopts a Customer ID onto a person first seen by email only", async () => {
 		const clubId = await club();
 		await importPeopleAndMembers(clubId, [

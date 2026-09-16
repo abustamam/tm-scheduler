@@ -51,6 +51,7 @@ import {
 	DEFAULT_COUNTRY_CODE,
 	toStoredPhone,
 } from "#/lib/phone";
+import { normalizedEmail } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
@@ -1020,10 +1021,31 @@ export async function applyConvertGuestToMember(
 			// household fusion #488 fixes for phone numbers, just on the key this
 			// change promoted to go first. The CSV importer already honours this
 			// (its `ambiguous` stat); the convert path did not.
+			// Matches the person-level address OR THIS CLUB's roster record for them
+			// (#756). Migration 0076 nulled `people.email` for everyone who has never
+			// signed in, so a person-level-only match stopped recognising essentially
+			// the whole roster — and the miss is not quiet: converting a guest who is
+			// already a member then mints a SECOND Person and a second roster row for
+			// the same human, in the same club. Worse, the pair is invisible to
+			// `listDuplicatePeople` unless it coalesces the same way, because one
+			// row's `people.email` is NULL.
+			//
+			// Scoped to `input.clubId` by the join, so no other club's contact record
+			// can reach this conversion.
 			const candidates = await tx
-				.select({ id: people.id })
+				.selectDistinct({ id: people.id, createdAt: people.createdAt })
 				.from(people)
-				.where(sql`lower(${people.email}) = ${email.toLowerCase()}`)
+				.leftJoin(
+					members,
+					and(
+						eq(members.personId, people.id),
+						eq(members.clubId, input.clubId),
+					),
+				)
+				.where(
+					sql`${normalizedEmail(people.email)} = ${email.toLowerCase()}
+					    or ${normalizedEmail(members.email)} = ${email.toLowerCase()}`,
+				)
 				.orderBy(...order)
 				.limit(2);
 			if (candidates.length === 1) personId = candidates[0]?.id ?? null;

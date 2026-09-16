@@ -314,10 +314,12 @@ describe.skipIf(!hasTestDb)("session display name (#707)", () => {
 		});
 
 		/**
-		 * `people.created_at` defaults to `now()`, so two Persons minted by ONE
-		 * `linkPersonToUser` statement — which binds every unlinked Person
-		 * matching the verified email at once — can share a timestamp to the
-		 * microsecond. `people.id` is the tertiary key that closes it; without it
+		 * `people.created_at` defaults to `now()`, so two Persons minted by one
+		 * import run — or by a conversion racing it — can share a timestamp to the
+		 * microsecond. (Before #756 one `linkPersonToUser` statement bound every
+		 * matching Person at once and produced the pair directly; it now binds at
+		 * most one, but the duplicates still exist and still need ordering.)
+		 * `people.id` is the tertiary key that closes it; without it
 		 * this is "whichever row the database returned first", which is exactly
 		 * what the criterion rules out.
 		 */

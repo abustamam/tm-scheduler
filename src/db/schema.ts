@@ -593,6 +593,30 @@ export const people = pgTable(
 		// edit (guarded on NULL, so one club can't overwrite another's) and by
 		// merge/convert; read via COALESCE in `meeting-contacts-logic.ts`.
 		preferredName: text("preferred_name"),
+		// The VERIFIED identity address, plus the person-level dedupe key (#756).
+		// Two things it is NOT, both of which it used to be:
+		//  - it is NOT what binds an account. `linkPersonToUser` and
+		//    `claimPersonForUser` match `members.email` — the club's own contact
+		//    record — under a UNANIMITY rule across the clubs that hold the Person.
+		//    A club-scoped actor typing an address can therefore no longer decide
+		//    who a Person becomes, which is what made a typo a lockout and every
+		//    writer of this column a cross-club takeover.
+		//  - it is NOT club-editable. One thing a CLUB can reach UPDATEs it: the
+		//    bind, which reads the address off the `user` row ITSELF (a caller
+		//    cannot hand it one) and sets `user_id` in the same statement
+		//    (`account-link-logic.ts`). Three superadmin/operator waivers are named
+		//    in `person-email-writers.guard.test.ts` — "exactly one" would be the
+		//    kind of false-completeness claim this comment warns about below.
+		// It IS still written at INSERT, by the CSV importer, the guest-book
+		// conversion, the bulk paste and the create-club form, because a brand-new
+		// Person row is nobody's identity yet and this is the fallback dedupe key
+		// ADR-0008 leans on for "one human, one Person".
+		//
+		// So the invariant is NARROWER than "every value here is verified", and
+		// stating it the loose way would be the false-completeness claim this repo
+		// has already been burned by: non-null on a LINKED Person means verified;
+		// on an unlinked one it is a typed hint. Nothing binds from it either way,
+		// which is the property that actually matters.
 		email: text("email"),
 		phone: text("phone"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
@@ -632,6 +656,35 @@ export const people = pgTable(
 		index("people_user_idx").on(t.userId),
 	],
 );
+
+// ---------------------------------------------------------------------------
+// What migration 0076 cleared out of `people.email` (#756).
+//
+// TEMPORARY, and meant to be dropped. Inverting the ownership of that column
+// made every value written before the change un-trustworthy as an identity —
+// nobody had proved they owned any of them — so the migration nulls the ones on
+// un-claimed Persons. This table is the undo: the rollback plan is `revert the
+// PR` plus one UPDATE joining back through it, and it exists because a data
+// migration you cannot reverse is one you cannot deploy on a Friday.
+//
+// Drop it (schema + a migration) once a release has passed without incident.
+// Deliberately NOT a general audit trail: it holds one snapshot, from one
+// migration, and nothing writes to it at runtime.
+// ---------------------------------------------------------------------------
+
+export const peopleEmailBackup = pgTable("people_email_backup", {
+	// **Deliberately NOT a foreign key.** An `ON DELETE cascade` reference to
+	// `people` would let ordinary app activity destroy the undo: `mergePeople`
+	// DELETEs the absorbed Person, so a superadmin merging any of the cleared
+	// rows between the migration and a rollback would silently remove that
+	// human's only surviving copy of their pre-migration address, and nothing
+	// would report it. A snapshot does not need referential integrity to the row
+	// it is a snapshot of — a dangling id here is exactly as useful as a live
+	// one, and outliving the row is the point.
+	personId: uuid("person_id").primaryKey(),
+	email: text("email").notNull(),
+	capturedAt: timestamp("captured_at").defaultNow().notNull(),
+});
 
 // ---------------------------------------------------------------------------
 // Roster members (self-serve MVP — auth-decoupled identities).

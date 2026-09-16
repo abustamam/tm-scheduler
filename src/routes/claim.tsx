@@ -26,6 +26,7 @@ type ClaimView =
 	| "already_other"
 	| "email_mismatch"
 	| "needs_invite"
+	| "roster_conflict"
 	| "not_found"
 	| "needs_signin";
 
@@ -74,7 +75,19 @@ const COPY: Record<
 	},
 	needs_invite: {
 		title: "Ask for an invite",
-		body: "This name doesn't have an email on file yet, so it can't be claimed here. Ask a club officer to send you an invite — that link will attach it to your account.",
+		body: "This name doesn't have an email on file yet, so it can't be claimed here. Ask a club officer to add your email to the roster and send you an invite — that link will attach it to your account.",
+		success: false,
+	},
+	roster_conflict: {
+		// Three different obstacles land here and only one of them is fixable by a
+		// club officer, so the copy must not promise that it is. An earlier cut
+		// said an officer could "get you set up directly" — false, the only
+		// person-level repair is superadmin-gated — and the cut before that told
+		// this group to ask for an invite, which fails identically and sends them
+		// round the loop again. So: name the state, give the one step that is
+		// always safe to take, and do not invent a remedy.
+		title: "We can't attach this name yet",
+		body: "Your email checks out, but this club's records need a change before an account can be attached to your name. Your club officers have been given the details — ask them, and if they can't resolve it they can get in touch with GavelUp.",
 		success: false,
 	},
 	not_found: {

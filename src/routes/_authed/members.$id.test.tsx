@@ -323,17 +323,14 @@ describe("member profile — edit dialog phone prefill", () => {
 });
 
 /**
- * `applyMemberEdit` can update the roster row and REFUSE to move the member's
- * sign-in address (they hold an account, or another club holds them too). It
- * reports that as `personEmailSynced === false`, and this screen is the only
- * place a CLUB admin ever learns of it — no roster surface renders
- * `people.email`, and the only screens that do are superadmin-only.
+ * A roster save either works or throws — it can no longer HALF-succeed (#756).
  *
- * The whole defect class behind that flag is silence: the roster shows the
- * corrected address, every identity reader keeps matching the old one, and the
- * member is locked out of sign-in with no one able to say why. An unconditional
- * success toast here reinstates exactly that, which is why these are tests and
- * not a comment.
+ * This screen used to branch on `applyMemberEdit`'s three-state
+ * `personEmailSynced` and warn when the member's sign-in address could not be
+ * moved, because the form wrote `people.email` under a guard that could refuse
+ * and no other surface a club admin can reach shows that column. The form writes
+ * `members.email` and nothing else now, so there is no refusal to surface and no
+ * three-state falsiness trap to keep pinning apart.
  */
 describe("member profile — edit dialog save feedback", () => {
 	async function saveEdit() {
@@ -342,10 +339,28 @@ describe("member profile — edit dialog save feedback", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 	}
 
-	it("warns instead of reporting success when the sign-in email was NOT moved", async () => {
+	it("reports plain success on a save", async () => {
 		vi.mocked(editMember).mockResolvedValue({
 			ok: true,
-			personEmailSynced: false,
+			rosterConflict: null,
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+		} as any);
+		await renderRoute();
+
+		await saveEdit();
+
+		await vi.waitFor(() => expect(toast.success).toHaveBeenCalled());
+		expect(toast.warning).not.toHaveBeenCalled();
+	});
+
+	it("warns when the saved address leaves the member unable to sign in", async () => {
+		// The save LANDED — `members.email` is the club's own column — but the
+		// roster now stops a bind. Silence here is the defect class this release
+		// exists to remove, and the shared-address case is worse than it looks: it
+		// revokes the OTHER member's sign-in too, and they are nowhere on screen.
+		vi.mocked(editMember).mockResolvedValue({
+			ok: true,
+			rosterConflict: "shared_address",
 			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
 		} as any);
 		await renderRoute();
@@ -355,39 +370,41 @@ describe("member profile — edit dialog save feedback", () => {
 		await vi.waitFor(() => expect(toast.warning).toHaveBeenCalled());
 		expect(
 			String(vi.mocked(toast.warning).mock.calls[0]?.[0]),
-			"the warning has to name WHY, or an admin cannot act on it",
-		).toMatch(/sign-in email|another club|already have an account/i);
+			"the warning has to name the OTHER member, or an admin cannot act on it",
+		).toMatch(/another member/i);
 		expect(toast.success).not.toHaveBeenCalled();
 	});
 
-	it("reports plain success when the reconciliation landed", async () => {
+	it("names the obstacle rather than a generic refusal", async () => {
+		// Three obstacles, three remedies — and one of them (`multiple_clubs`) is
+		// not something a club officer can fix at all. A single catch-all message
+		// sent that group to an officer with nothing to try, which is the copy bug
+		// review found in the `/claim` page.
 		vi.mocked(editMember).mockResolvedValue({
 			ok: true,
-			personEmailSynced: true,
+			rosterConflict: "multiple_clubs",
 			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
 		} as any);
 		await renderRoute();
 
 		await saveEdit();
 
-		await vi.waitFor(() => expect(toast.success).toHaveBeenCalled());
-		expect(toast.warning).not.toHaveBeenCalled();
+		await vi.waitFor(() => expect(toast.warning).toHaveBeenCalled());
+		expect(String(vi.mocked(toast.warning).mock.calls[0]?.[0])).toMatch(
+			/more than one club/i,
+		);
 	});
 
-	it("does not warn on the no-op case, where null means nothing to reconcile", async () => {
-		// `null` and `false` are both falsy. A caller testing `if (!synced)` would
-		// warn on every ordinary save — a name fix, an officer checkbox — and an
-		// alarm that fires constantly is one nobody reads.
-		vi.mocked(editMember).mockResolvedValue({
-			ok: true,
-			personEmailSynced: null,
-			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
-		} as any);
+	it("reports the error and keeps the dialog open when the save throws", async () => {
+		vi.mocked(editMember).mockRejectedValue(new Error("Member not found."));
 		await renderRoute();
 
 		await saveEdit();
 
-		await vi.waitFor(() => expect(toast.success).toHaveBeenCalled());
-		expect(toast.warning).not.toHaveBeenCalled();
+		await vi.waitFor(() => expect(toast.error).toHaveBeenCalled());
+		expect(String(vi.mocked(toast.error).mock.calls[0]?.[0])).toMatch(
+			/Member not found/,
+		);
+		expect(toast.success).not.toHaveBeenCalled();
 	});
 });

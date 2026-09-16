@@ -28,7 +28,17 @@ import {
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
 const isBlank = (s: string | null | undefined) => norm(s) === "";
 
-/** An existing Person, as the resolver sees it (people are global, club-less). */
+/**
+ * An existing Person, as the resolver sees it.
+ *
+ * People are global and club-less, but `email` here is NOT simply
+ * `people.email`: since #756 the loader (`loadPersonCandidates`) supplies the
+ * person-level address falling back to THIS club's roster address, because
+ * migration 0076 nulled the person-level one for everyone who has never signed
+ * in. Both sides of the import — the committing writer and the dry-run preview —
+ * must build this list through that same function, or the diff the VPE approves
+ * stops matching what runs.
+ */
 export interface ExistingPersonRow {
 	id: string;
 	customerId: string | null;
@@ -46,7 +56,13 @@ export interface ExistingMembershipRow {
 	phone: string | null;
 }
 
-/** Person-row column values written on insert / fill-only update. */
+/**
+ * Person-row column values written on INSERT.
+ *
+ * `email` is on this type because Person CREATION still carries it — a brand-new
+ * row is nobody's identity yet, and `people.email` remains ADR-0008's fallback
+ * dedupe key. A MATCH does not: see {@link MatchedPersonValues}.
+ */
 export interface PersonValues {
 	customerId: string | null;
 	name: string;
@@ -56,14 +72,29 @@ export interface PersonValues {
 }
 
 /**
+ * What a MATCH writes to the Person row — everything `PersonValues` carries
+ * except `email` (#756).
+ *
+ * The omission is the type doing a job a comment was doing badly. A CSV is a
+ * file an officer uploaded, so it may not re-key an existing human's identity;
+ * the committing writer therefore stopped writing the column on a match. It
+ * expressed that by destructuring the field away, which left the PLANNER still
+ * computing it and still mirroring it into its in-memory candidate list — so the
+ * preview and the commit disagreed inside a single batch, and a row that matched
+ * in the diff the VPE approved minted a duplicate Person and a duplicate roster
+ * row on commit. Narrowing the type makes that shape unrepresentable.
+ */
+export type MatchedPersonValues = Omit<PersonValues, "email">;
+
+/**
  * How one CSV row resolves against the existing people. `customerId`/`email`
  * are matches (carry the target person `id` and the fill-only `set` to write);
  * `insert`/`ambiguous` create a new person (`ambiguous` = the row's email is
  * shared by 2+ distinct people this batch, so it is deliberately NOT merged).
  */
 export type PersonDecision =
-	| { kind: "customerId"; id: string; set: PersonValues }
-	| { kind: "email"; id: string; set: PersonValues }
+	| { kind: "customerId"; id: string; set: MatchedPersonValues }
+	| { kind: "email"; id: string; set: MatchedPersonValues }
 	| { kind: "insert"; values: PersonValues }
 	| { kind: "ambiguous"; values: PersonValues };
 
@@ -71,8 +102,10 @@ export type PersonDecision =
  * Decide a row's Person, mirroring `importPeopleAndMembers` exactly:
  * a shared-email row is forced ambiguous up front, otherwise ADR-0008
  * precedence (Customer ID → unambiguous email → insert) applies. On a match the
- * `set` is fill-only for name/email/phone and always adopts a Customer ID /
- * refreshes the original join date.
+ * `set` is fill-only for name/phone, always adopts a Customer ID and refreshes
+ * the original join date — and carries NO `email` at all (#756): a CSV may fill
+ * this club's roster row, never re-key an existing human's identity. An INSERT
+ * still carries it; see {@link MatchedPersonValues}.
  */
 export function resolvePersonDecision(
 	row: MappedMember,
@@ -94,10 +127,12 @@ export function resolvePersonDecision(
 		if (!current) {
 			return { kind: "insert", values: personValues(row) };
 		}
-		const set: PersonValues = {
+		// No `email` — a match does not re-key an existing Person's identity
+		// (#756). The address still reaches the club's own roster row through
+		// `classifyMembership` below.
+		const set: MatchedPersonValues = {
 			customerId: current.customerId ?? row.customerId,
 			name: fillOnly(current.name, row.name) ?? current.name,
-			email: fillOnly(current.email, row.email),
 			phone: fillOnly(current.phone, row.phone),
 			originalJoinDate: row.originalJoinDate,
 		};
@@ -286,9 +321,11 @@ export function planImport(
 			if (!current) continue; // unreachable
 			personId = current.id;
 			summary.peopleMatched++;
+			// `current.email` is deliberately NOT updated — the commit does not write
+			// it on a match either, and mirroring a write that does not happen is
+			// what made the preview promise a diff the commit would not perform.
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
-			current.email = pd.set.email;
 			current.phone = pd.set.phone;
 		} else {
 			personId = `__new_person_${synthCounter++}`;

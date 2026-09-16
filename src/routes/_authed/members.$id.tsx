@@ -43,6 +43,7 @@ import {
 	officerPositionLabel,
 } from "#/lib/officers";
 import { firstNameOf } from "#/lib/person-name";
+import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	SPEECH_SCHEDULE_STATE_LABELS,
 	type SpeechScheduleState,
@@ -692,17 +693,17 @@ function MemberActions({
 					officerPositions,
 				},
 			});
-			// `personEmailSynced === false` means the roster now shows the new address
-			// but the member's SIGN-IN address could not be moved — they already have
-			// an account, or another club holds them too. Saying nothing here is the
-			// exact defect this change exists to remove: the admin sees success, the
-			// roster looks right, and the member stays locked out of sign-in, invites
-			// and claim with no way for anyone to find out why. Note `null` (nothing
-			// to reconcile) is also falsy, so this tests for `false` explicitly.
-			if (res.personEmailSynced === false) {
-				toast.warning(
-					"Member updated, but their sign-in email was left unchanged — they already have an account, or they're on another club's roster too.",
-				);
+			// The save always LANDS — `members.email` is the club's own column. What
+			// it can do is leave the member unable to sign in, and in one case leave
+			// SOMEONE ELSE unable to: an address another active member already
+			// carries makes the roster ambiguous and refuses both of them, on a
+			// screen that shows no sign of the other person.
+			//
+			// `null` is the ordinary case. The old `personEmailSynced` signal this
+			// replaces was three-state and both falsy values meant different things;
+			// this one is an obstacle or nothing.
+			if (res.rosterConflict) {
+				toast.warning(ROSTER_CONFLICT_COPY[res.rosterConflict]);
 			} else {
 				toast.success("Member updated.");
 			}
@@ -803,7 +804,22 @@ function MemberActions({
 								type="email"
 								defaultValue={member.email ?? ""}
 								placeholder="name@example.com"
+								aria-describedby="edit-email-hint"
 							/>
+							{/* The one place the app says what this field is for. The save
+							    used to warn when it could not move the member's SIGN-IN
+							    address; #756 makes that impossible rather than reportable,
+							    so the "and then re-invite" half has to be said HERE, on the
+							    screen where a typo is actually corrected, or it is said
+							    nowhere. */}
+							<p
+								id="edit-email-hint"
+								className="text-xs text-[var(--sea-ink-soft)]"
+							>
+								The club's contact address, and where an account invite is sent.
+								If they haven't joined yet, send a fresh invite after changing
+								it.
+							</p>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="edit-phone">Phone</Label>

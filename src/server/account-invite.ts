@@ -12,6 +12,7 @@ import {
 	type InvitePrepOutcome,
 	prepareMemberInvite,
 } from "./account-invite-logic";
+import type { RosterObstacle } from "./account-link-logic";
 import { requireClubRole, requireUser } from "./guards";
 
 // The post-verification landing that finishes linking the picked Person to the
@@ -23,8 +24,9 @@ function claimCallbackURL(memberId: string): string {
 
 /**
  * Send an admin-initiated account-invite magic link to a roster member (#266,
- * Part A). Admin-gated. The link goes to the Person's OWN email on file — never
- * an arbitrary address — so acceptance provably links exactly that Person. The
+ * Part A). Admin-gated. The link goes to the address on THIS club's roster row —
+ * never an arbitrary one typed into the request — which is also the address the
+ * claim will require, so acceptance provably links exactly that Person. The
  * server-side `auth.api.signInMagicLink` call is the same secure magic-link path
  * user sign-in uses; `metadata.kind: "invite"` swaps in the invitation email copy.
  */
@@ -34,30 +36,50 @@ export const inviteMember = createServerFn({ method: "POST" })
 			.object({ clubId: z.string().uuid(), memberId: z.string().uuid() })
 			.parse(i),
 	)
-	.handler(async ({ data }): Promise<{ outcome: InvitePrepOutcome }> => {
-		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+	.handler(
+		async ({
+			data,
+		}): Promise<{ outcome: InvitePrepOutcome; obstacle?: RosterObstacle }> => {
+			const user = await requireUser();
+			await requireClubRole(user.id, data.clubId, ["admin"]);
 
-		const prep = await prepareMemberInvite(data);
-		if (prep.outcome !== "ready") return { outcome: prep.outcome };
+			const prep = await prepareMemberInvite(data);
+			// `obstacle` rides along so the roster can name the one thing the admin
+			// can act on. An OLD client bundle ignores the extra field and falls into
+			// its trailing `else` — which is why the copy for a missing obstacle is
+			// still a refusal on the new client rather than a success.
+			if (prep.outcome !== "ready") {
+				return { outcome: prep.outcome, obstacle: prep.obstacle };
+			}
 
-		const request = getRequest();
-		await auth.api.signInMagicLink({
-			body: {
-				email: prep.email as string,
-				callbackURL: claimCallbackURL(data.memberId),
-				metadata: { kind: "invite", clubName: prep.clubName },
-			},
-			headers: request.headers,
-		});
-		return { outcome: "ready" };
-	});
+			const request = getRequest();
+			await auth.api.signInMagicLink({
+				body: {
+					email: prep.email as string,
+					callbackURL: claimCallbackURL(data.memberId),
+					metadata: { kind: "invite", clubName: prep.clubName },
+				},
+				headers: request.headers,
+			});
+			return { outcome: "ready" };
+		},
+	);
 
 export interface BulkInviteResult {
 	sent: number;
 	alreadyJoined: number;
 	noEmail: number;
+	/** Members whose rosters disagree about their address, so an invite could not
+	 *  be honoured (#756). Counted rather than sent: a magic link for one of these
+	 *  mints a real account that the claim then refuses, which is the silent
+	 *  half-failure this release exists to remove. */
+	rosterConflict: number;
 	recentlyInvited: number;
+	/** Members whose magic link threw on send (Resend down, a rejected address).
+	 *  They are already stamped `invited_at`, so the 24h cooldown will suppress
+	 *  the retry — which is why the count has to reach the admin rather than
+	 *  aborting the run and looking like nothing was sent. */
+	failed: number;
 }
 
 /**
@@ -93,7 +115,9 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			sent: 0,
 			alreadyJoined: 0,
 			noEmail: 0,
+			rosterConflict: 0,
 			recentlyInvited: 0,
+			failed: 0,
 		};
 		for (const row of rows) {
 			const prep = await prepareMemberInvite({
@@ -109,19 +133,41 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 				result.noEmail += 1;
 				continue;
 			}
+			if (prep.outcome === "roster_conflict") {
+				result.rosterConflict += 1;
+				continue;
+			}
 			if (prep.outcome === "recently_invited") {
 				result.recentlyInvited += 1;
 				continue;
 			}
-			await auth.api.signInMagicLink({
-				body: {
-					email: prep.email as string,
-					callbackURL: claimCallbackURL(row.memberId),
-					metadata: { kind: "invite", clubName: prep.clubName },
-				},
-				headers: request.headers,
-			});
-			result.sent += 1;
+			// Send ONLY on `ready`, and read the address off that narrowed shape
+			// rather than casting. A future outcome added to the union then skips
+			// this member instead of reaching `signInMagicLink` with an undefined
+			// address, which is what a trailing `else` plus `prep.email as string`
+			// did — it would have thrown on the first such row and aborted the
+			// whole bulk send.
+			if (prep.outcome !== "ready" || !prep.email) continue;
+			// One failing send must not abort the run. `prepareMemberInvite` has
+			// ALREADY stamped `invited_at` by this point, so an unguarded throw on
+			// row 17 of 60 left 16 links delivered, row 17 marked invited but never
+			// sent, and the admin looking at "Couldn't send invites" — and the 24h
+			// cooldown then suppressed row 17 on the retry, so that member got
+			// nothing for a day. Counted instead, and reported in the summary.
+			try {
+				await auth.api.signInMagicLink({
+					body: {
+						email: prep.email,
+						callbackURL: claimCallbackURL(row.memberId),
+						metadata: { kind: "invite", clubName: prep.clubName },
+					},
+					headers: request.headers,
+				});
+				result.sent += 1;
+			} catch (err) {
+				console.error("bulk invite send failed", row.memberId, err);
+				result.failed += 1;
+			}
 		}
 		return result;
 	});

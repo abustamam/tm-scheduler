@@ -32,21 +32,28 @@ import { getOnboardingChecklistStatus } from "./onboarding-checklist-logic";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-/** An active roster member with an email on file, so `prepareMemberInvite` can
- *  actually stamp it. Its Person is UNLINKED and UNINVITED — the state an
- *  imported roster arrives in. */
+/** An active roster member with an email on the ROSTER row, so
+ *  `prepareMemberInvite` can actually stamp it. The address lives on
+ *  `members.email` and NOT on the Person: that is where an invite reads it since
+ *  #756, and `people.email` is now the verified identity address, which an
+ *  un-claimed member by definition has none of. Its Person is UNLINKED and
+ *  UNINVITED — the state an imported roster arrives in. */
 async function addActiveMember(
 	clubId: string,
 	name: string,
 	status: "active" | "inactive" = "active",
 ): Promise<string> {
-	const personId = await seedPerson({
-		name,
-		email: `checklist-${randomUUID()}@test.example`,
-	});
+	const personId = await seedPerson({ name });
 	const [row] = await testDb
 		.insert(members)
-		.values({ clubId, personId, name, clubRole: "member", status })
+		.values({
+			clubId,
+			personId,
+			name,
+			email: `checklist-${randomUUID()}@test.example`,
+			clubRole: "member",
+			status,
+		})
 		.returning({ id: members.id });
 	if (!row) throw new Error("member insert failed");
 	return row.id;

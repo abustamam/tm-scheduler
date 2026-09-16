@@ -23,6 +23,7 @@ import {
 	people,
 } from "#/db/schema";
 import type { ParsedMemberPath } from "#/lib/basecamp-progress";
+import { normalizedEmail } from "./account-link-logic";
 
 export interface SyncResult {
 	matched: number;
@@ -51,6 +52,18 @@ async function resolvePersonId(
 	if (byBc.length === 1) return byBc[0].id;
 
 	if (!row.email) return null;
+	// EITHER address this club holds for the human: the person-level one, or the
+	// club's own roster record. Both halves are needed since #756 — `people.email`
+	// is the verified identity address and is NULL for everyone who has not signed
+	// in (migration 0076 cleared the rest), so a person-level-only match would move
+	// most of a club's roster into `unmatched` on the next sync. That failure is
+	// invisible by construction: an unmatched row is a normal thing for this
+	// report to contain, so nothing would look wrong.
+	//
+	// The join is already scoped to THIS club, so no other club's contact record
+	// can participate in the match. The `!== 1` ambiguity guard below still holds
+	// across both columns, which is what keeps a shared household address (ADR-0008
+	// "never auto-merge on an email shared by 2+ distinct people") unmatched.
 	const byEmail = await db
 		.selectDistinct({ id: people.id, basecampUserId: people.basecampUserId })
 		.from(people)
@@ -58,7 +71,9 @@ async function resolvePersonId(
 			members,
 			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
 		)
-		.where(sql`lower(${people.email}) = ${row.email}`);
+		.where(
+			sql`${normalizedEmail(people.email)} = ${row.email} or ${normalizedEmail(members.email)} = ${row.email}`,
+		);
 	if (byEmail.length !== 1) return null; // 0 or ambiguous → unmatched
 
 	const person = byEmail[0];
