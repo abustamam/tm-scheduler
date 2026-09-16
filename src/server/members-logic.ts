@@ -19,6 +19,7 @@ import {
 } from "#/lib/officers";
 import { toStoredPhone } from "#/lib/phone";
 import { buildImportPreview } from "#/lib/roster-import";
+import { type RosterObstacle, rosterConflictFor } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { isReadableClub } from "./club-readable-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
@@ -159,12 +160,15 @@ type EditInput = z.infer<typeof editSchema> & RosterActor;
  *
  * **The email written here is `members.email` and only that** — the club's own
  * contact record (#756). It used to also reconcile `people.email`, the identity
- * key, under a blast-radius guard, and return a three-state `personEmailSynced`
- * saying whether that landed; the edit screen warned when it had not. All of it
- * is gone, because the club no longer owns the identity key at all: a Person's
- * address is written by the bind that a magic link proved, and correcting a typo
- * is now this edit plus a re-invite, with nothing to refuse and nothing to warn
- * about. `member-email-ownership.integration.test.ts` holds the rule.
+ * key, under a blast-radius guard; the club no longer owns that column at all,
+ * so there is nothing here to refuse.
+ *
+ * @returns `rosterConflict`, the obstacle that would now stop this member
+ * binding an account, or null. **Reported, not refused** — and it is not only
+ * about the member being edited: typing an address another active member already
+ * carries makes the roster ambiguous and revokes THEIR sign-in too, on a screen
+ * that shows no sign of them. `member-email-ownership.integration.test.ts` holds
+ * the rule.
  */
 export async function applyMemberEdit(input: EditInput) {
 	const [current] = await db
@@ -265,7 +269,40 @@ export async function applyMemberEdit(input: EditInput) {
 			},
 		});
 	});
-	return { ok: true as const };
+
+	// Did this edit leave the member unable to sign in? Reported, never refused —
+	// `members.email` is the club's own column and an officer may set it to
+	// whatever the club needs.
+	//
+	// The case that makes this necessary is not the member being edited: typing an
+	// address ANOTHER active member already carries makes the roster ambiguous, and
+	// the bind then refuses BOTH of them. So a save on Alice's row can silently
+	// revoke Bob's sign-in — a member the admin was not editing and cannot see from
+	// this screen. The invite button and the bulk dialog both ask this question;
+	// the edit form is where the address is actually typed.
+	//
+	// Skipped for a Person who already holds an account: their sign-in address is
+	// `people.email`, which this form cannot touch, so nothing here can break it.
+	const rosterConflict = current.personId
+		? await personEmailObstacle(current.personId, next.email)
+		: null;
+	return { ok: true as const, rosterConflict };
+}
+
+/** The bind obstacle for a member's Person, or null — including for an already
+ *  linked Person (nothing this form writes can affect their sign-in). */
+async function personEmailObstacle(
+	personId: string,
+	email: string | null,
+): Promise<RosterObstacle | null> {
+	if (!email) return null;
+	const [person] = await db
+		.select({ userId: people.userId })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	if (person?.userId) return null;
+	return rosterConflictFor(personId, email);
 }
 
 export const setStatusSchema = z.object({

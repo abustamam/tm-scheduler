@@ -38,6 +38,7 @@
     "batch:issues": "bun run scripts/batch-issues.ts",
     "db:pull": "drizzle-kit pull",
     "db:studio": "drizzle-kit studio",
+    "rollback:0076": "bun run scripts/rollback-0076.ts",
     "ext:dev": "cd extension && bun run dev",
     "ext:build": "cd extension && bun run build",
     "ext:test": "cd extension && bun run test",

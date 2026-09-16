@@ -7,8 +7,11 @@
  * identity key and each needed the same blast-radius predicate; the predicate
  * was never the thing that was wrong, the LIST was, three review rounds running.
  * #756 removed the writers instead of guarding them, so the list is one entry
- * long and the claim is correspondingly stronger: a club-scoped actor cannot
- * write the column at all.
+ * long. The claim is precisely: **a club-scoped actor cannot RE-KEY an existing
+ * Person's address.** Creation still carries one — the matcher exempts a plain
+ * INSERT on purpose, because `people.email` is also ADR-0008's dedupe hint — and
+ * saying "cannot write the column at all" would be false in the same sentence
+ * this file exists to make true.
  *
  * **The matcher is the part that has been wrong every time, so it is tested
  * too.** A first cut of THIS file keyed on the literal token `email` appearing
@@ -44,7 +47,16 @@ const BINDER_FN = "bindVerifiedPerson";
  * whole files, so a second `update(people).set({ email })` added anywhere inside
  * a waived file was silently exempt — the same over-capture shape, one level up.
  */
-const WAIVERS: Record<string, { fn: string; sites: number; reason: string }> = {
+const WAIVERS: Record<
+	string,
+	{
+		fn: string;
+		sites: number;
+		reason: string;
+		/** Its UPDATE must carry `isNull(people.userId)` in the statement itself. */
+		requiresUnlinkedGuard?: boolean;
+	}
+> = {
 	// The console repair for a club's FIRST admin, before anyone has signed in —
 	// the bootstrap case, where no verified address exists yet. It writes the
 	// membership row alongside, and carries `isNull(people.userId)` in the same
@@ -54,6 +66,17 @@ const WAIVERS: Record<string, { fn: string; sites: number; reason: string }> = {
 		fn: "updateUnclaimedAdminEmail",
 		sites: 1,
 		reason: "superadmin console, first-admin bootstrap repair",
+		// Its `admin.userId` check runs OUTSIDE the write's transaction, so under
+		// READ COMMITTED a sign-in landing in that window would leave a LINKED
+		// Person carrying a superadmin-typed address — from the one writer whose
+		// waiver claims it is safe. The predicate has to be in the STATEMENT.
+		//
+		// Asserted on the SOURCE because the behaviour is unreachable from a test:
+		// the pre-write check fires first for every state a test can construct, so
+		// deleting `isNull(people.userId)` from the UPDATE left the whole suite
+		// green. That was found by mutation, and this is the gate that replaces the
+		// test which could not fail.
+		requiresUnlinkedGuard: true,
 	},
 	// Merges two Person rows; only ever FILLS a null keeper address
 	// (`keeper.email ?? absorbed.email`), never moves a set one.
@@ -102,47 +125,114 @@ function sources(): Array<{ key: string; text: string }> {
 }
 
 /**
- * Write sites in `src` that touch `people.email`, by SHAPE.
+ * Strip line and block comments, so a `;` or the word `email` inside prose
+ * cannot steer the scan. This repo writes very long comments — several of them
+ * about this very column — so an un-stripped source is the likeliest way the
+ * matcher lies, in either direction.
+ */
+function withoutComments(src: string): string {
+	return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+}
+
+/**
+ * The local binding for `#/db/schema`'s `people` export in this file, so an
+ * aliased import (`import { people as p }`) cannot rename its way past the scan.
+ * Defaults to `people` when there is no import to read.
+ */
+function peopleBinding(src: string): string {
+	const alias = /import\s*\{[^}]*\bpeople\s+as\s+(\w+)/.exec(src);
+	return alias?.[1] ?? "people";
+}
+
+/**
+ * Write sites in `src` that RE-KEY `people.email`, matched by SHAPE.
  *
- * Three rules, each earned:
- *   - the span runs to the statement's end (`;`), not to a `.where(`, so an
- *     UNFILTERED `update(people).set({...})` cannot slip through by having no
- *     WHERE at all;
- *   - a SET whose argument is not an inline object literal (a variable, a
- *     spread, a ternary) is flagged regardless of its text, because scanning
- *     cannot tell what it contains;
- *   - a raw `db.execute(sql\`update people set …\`)` is flagged too.
+ * The rules, each earned by an evasion found in review:
+ *   - **comments are stripped first.** The span used to end at the first `;`
+ *     CHARACTER, so a semicolon in a trailing comment truncated the body before
+ *     `.set(` was seen and the site vanished.
+ *   - **the table is resolved through its local binding**, including a
+ *     namespace qualifier or an `as` cast, so `schema.people`, `people as any`
+ *     and an aliased import are all still the same table.
+ *   - **a SET that is not an inline object literal is flagged outright** — a
+ *     variable, a spread, a ternary. Scanning cannot read what it contains, and
+ *     the production call site that mattered was exactly `.set(pdRest)`.
+ *   - **an update with NO `.set(` we can read is flagged**, so a chain split
+ *     across statements (`const q = db.update(people); q.set(...)`) is caught by
+ *     the half that is visible.
+ *   - **raw SQL is matched by its TEXT wherever it appears** — any template or
+ *     string literal — rather than by the call that runs it, because
+ *     `sql.raw(...)`, a hoisted fragment and `$client.query(...)` all evaded a
+ *     scan anchored on `.execute(sql\`…\`)`.
+ *   - **an UPSERT counts as a re-key.** `insert(people).onConflictDoUpdate({ set })`
+ *     writes an EXISTING row, and `people.customer_id` is globally unique, so
+ *     the importer upserting on it is the single most likely future writer.
  *
- * It deliberately does NOT flag an INSERT. Person CREATION still carries the
- * address — a fresh row is nobody's identity yet, and `people.email` is
+ * It deliberately does NOT flag a plain INSERT. Person CREATION still carries
+ * the address — a fresh row is nobody's identity yet, and `people.email` is
  * ADR-0008's fallback dedupe key. The rule is about RE-KEYING a Person who
  * already exists.
  */
-function emailWriteSites(src: string): string[] {
+function emailWriteSites(source: string): string[] {
 	const hits: string[] = [];
+	const src = withoutComments(source);
+	const table = peopleBinding(source);
+	// `people`, `schema.people`, `people as any` — any of them, inside the call.
+	const target = `(?:\\w+\\.)?${table}(?:\\s+as\\s+\\w+)?`;
 
-	for (const m of src.matchAll(/\.update\(\s*people\s*\)([\s\S]*?);/g)) {
-		const body = m[1] ?? "";
-		const set = /\.set\(\s*(\{[\s\S]*?\})\s*\)/.exec(body);
+	/**
+	 * Judge one SET clause. `opener` differs by shape: a query builder writes
+	 * `.set({…})`, drizzle's upsert writes `set: {…}` inside the conflict object.
+	 * An opener that is present but whose argument is not a readable literal is
+	 * flagged; an opener that is absent entirely is flagged too, because a chain
+	 * split across statements leaves the write in the half we cannot see.
+	 */
+	const classifySet = (body: string, kind: string, opener: RegExp) => {
+		const literalRe = new RegExp(`${opener.source}\\s*(\\{[\\s\\S]*?\\})`);
+		const set = literalRe.exec(body);
 		if (!set) {
-			// `.set(` with a non-literal argument, or no `.set(` we can read.
-			if (/\.set\(/.test(body))
-				hits.push("update(people) with a non-literal SET");
-			continue;
+			hits.push(
+				opener.test(body)
+					? `${kind} with a non-literal SET`
+					: `${kind} whose SET could not be read`,
+			);
+			return;
 		}
 		const literal = set[1] ?? "";
-		// A spread inside the literal is just as opaque as a bare identifier —
-		// `{ ...pd.set }` can carry anything.
 		if (literal.includes("...")) {
-			hits.push("update(people) with a spread in its SET");
-			continue;
+			hits.push(`${kind} with a spread in its SET`);
+			return;
 		}
-		if (/\bemail\b/.test(literal)) hits.push("update(people) setting email");
+		if (/\bemail\b/.test(literal)) hits.push(`${kind} setting email`);
+	};
+
+	for (const m of src.matchAll(
+		new RegExp(`\\.update\\(\\s*${target}\\s*\\)([\\s\\S]*?);`, "g"),
+	)) {
+		classifySet(m[1] ?? "", "update(people)", /\.set\(/);
 	}
 
-	for (const m of src.matchAll(/\.execute\(\s*sql`([\s\S]*?)`/g)) {
-		const text = m[1] ?? "";
-		if (/update\s+"?people"?[\s\S]*\bset\b[\s\S]*\bemail\b/i.test(text)) {
+	// An upsert re-keys an existing row. Only the conflict branch matters, and it
+	// spells its SET `set: {…}` rather than `.set(…)`.
+	for (const m of src.matchAll(
+		new RegExp(`\\.insert\\(\\s*${target}\\s*\\)([\\s\\S]*?);`, "g"),
+	)) {
+		const body = m[1] ?? "";
+		if (/\.onConflictDoUpdate\(/.test(body)) {
+			classifySet(body, "insert(people).onConflictDoUpdate", /\bset:/);
+		}
+	}
+
+	// Raw SQL, by its text, wherever it is written. Schema-qualified too.
+	for (const m of src.matchAll(
+		/`([^`]*)`|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g,
+	)) {
+		const text = m[1] ?? m[2] ?? m[3] ?? "";
+		if (
+			/update\s+(?:"?public"?\.)?"?people"?[\s\S]*\bset\b[\s\S]*\bemail\b/i.test(
+				text,
+			)
+		) {
 			hits.push("raw SQL update of people.email");
 		}
 	}
@@ -234,6 +324,78 @@ describe("the matcher itself", () => {
 			),
 		).toBe(0);
 	});
+
+	// ---------------------------------------------------------------------
+	// Derived from the matcher's OWN assumptions, not from the bug reports.
+	// Each of these evaded the previous cut, whose self-tests covered only the
+	// evasions review had already named — so the block confirmed yesterday's
+	// fixes and probed nothing about today's matcher.
+	// ---------------------------------------------------------------------
+
+	it("flags an UPSERT that re-keys on conflict", () => {
+		// `people.customer_id` is globally UNIQUE, so the CSV importer upserting on
+		// it is the most likely way this column ever gets written again.
+		expect(
+			flags(
+				`await db.insert(people).values({ name, email }).onConflictDoUpdate({ target: people.customerId, set: { email: typed } });`,
+			),
+		).toBe(1);
+	});
+
+	it("does NOT flag an upsert whose conflict branch leaves email alone", () => {
+		expect(
+			flags(
+				`await db.insert(people).values({ name, email }).onConflictDoUpdate({ target: people.customerId, set: { name: row.name } });`,
+			),
+		).toBe(0);
+	});
+
+	it("is not fooled by a semicolon inside a comment", () => {
+		expect(
+			flags(
+				"await db\n\t.update(people) // re-key; see #756\n\t.set({ email: typed })\n\t.where(eq(people.id, id));",
+			),
+		).toBe(1);
+	});
+
+	it("flags an update whose chain is split across statements", () => {
+		expect(
+			flags(
+				"const q = db.update(people);\nawait q.set({ email: typed }).where(eq(people.id, id));",
+			),
+		).toBe(1);
+	});
+
+	it("flags a write through an ALIASED import", () => {
+		expect(
+			flags(
+				`import { people as p } from "#/db/schema";\nawait db.update(p).set({ email: typed }).where(eq(p.id, id));`,
+			),
+		).toBe(1);
+	});
+
+	it("flags a write through a namespaced or cast table reference", () => {
+		expect(
+			flags(`await db.update(schema.people).set({ email: t }).where(x);`),
+		).toBe(1);
+		expect(
+			flags(`await db.update(people as any).set({ email: t }).where(x);`),
+		).toBe(1);
+	});
+
+	it("flags raw SQL however it is written or executed", () => {
+		expect(
+			flags("await db.execute(sql.raw(`update people set email = null`));"),
+		).toBe(1);
+		expect(
+			flags(
+				"const s = sql`update people set email = null`;\nawait db.execute(s);",
+			),
+		).toBe(1);
+		expect(
+			flags('await db.$client.query("update public.people set email = null");'),
+		).toBe(1);
+	});
 });
 
 describe("people.email writers (verified identity address)", () => {
@@ -296,6 +458,30 @@ describe("people.email writers (verified identity address)", () => {
 		expect(src).toMatch(/verifiedEmailFor\(input\.userId\)/);
 	});
 
+	it("the sign-in resolver refuses on ambiguity, not just on no-match", () => {
+		// A SOURCE assertion because no behavioural test can hold this one, and that
+		// was established by mutation rather than assumed: changing
+		// `candidates.length !== 1` to `=== 0` leaves the whole suite green, because
+		// arm 3 of the bind's WHERE independently refuses when two Persons carry the
+		// address. Applying BOTH mutations together turns the two household tests
+		// red, which is what proves the redundancy is real and symmetric.
+		//
+		// It is still worth gating: with the candidate count weakened, arm 3 becomes
+		// the ONLY thing standing between a shared household address and one spouse
+		// binding the other's Person — and a single point of failure on a takeover
+		// is exactly what this file exists to prevent.
+		const src = readFileSync(join(SERVER_DIR, "account-link-logic.ts"), "utf8");
+		const fn =
+			/export async function linkPersonToUser\(([\s\S]*?)\n}/.exec(src)?.[1] ??
+			"";
+		expect(fn, "linkPersonToUser is gone or renamed").not.toBe("");
+		expect(
+			fn,
+			"the candidate count no longer refuses 2+ candidates — arm 3 of the bind " +
+				"is then the only thing refusing a household takeover",
+		).toMatch(/candidates\.length\s*!==\s*1/);
+	});
+
 	it("names every waiver, so a silent exemption cannot accrete", () => {
 		const byKey = new Map(sources().map((s) => [s.key, s.text]));
 		for (const [key, waiver] of Object.entries(WAIVERS)) {
@@ -318,6 +504,19 @@ describe("people.email writers (verified identity address)", () => {
 				emailWriteSites(text ?? ""),
 				`${key} now has more people.email write sites than its waiver allows`,
 			).toHaveLength(waiver.sites);
+
+			if (waiver.requiresUnlinkedGuard) {
+				// The span between `.update(people)` and the end of the statement.
+				const stmt =
+					/\.update\(\s*people\s*\)([\s\S]*?);/.exec(
+						withoutComments(text ?? ""),
+					)?.[1] ?? "";
+				expect(
+					stmt,
+					`${key}'s people.email write must carry isNull(people.userId) in the STATEMENT — ` +
+						`a check outside the transaction is a TOCTOU, and no behavioural test can reach it`,
+				).toMatch(/isNull\(\s*people\.userId\s*\)/);
+			}
 		}
 	});
 });

@@ -13,6 +13,7 @@ import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import { startImpersonation } from "#/server/impersonation";
 import {
 	archiveConsoleClub,
@@ -352,13 +353,22 @@ function AdminPanel({
 		const form = new FormData(e.currentTarget);
 		setSubmitting(true);
 		try {
-			await updateConsoleAdminEmail({
+			const res = await updateConsoleAdminEmail({
 				data: {
 					clubId,
 					email: String(form.get("email") ?? "").trim(),
 				},
 			});
-			toast.success("Admin email updated.");
+			// The write always lands; whether it REPAIRS anything is the question
+			// this console exists to answer. A second club holding the same Person,
+			// or another member carrying the address, still refuses the bind — so
+			// reporting a flat success here would leave the admin locked out and the
+			// operator believing the job was done (#756).
+			if (res.rosterConflict) {
+				toast.warning(ROSTER_CONFLICT_COPY[res.rosterConflict]);
+			} else {
+				toast.success("Admin email updated.");
+			}
 			onSaved();
 		} catch (err) {
 			toast.error(

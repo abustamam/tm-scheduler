@@ -340,14 +340,59 @@ describe("member profile — edit dialog save feedback", () => {
 	}
 
 	it("reports plain success on a save", async () => {
-		// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
-		vi.mocked(editMember).mockResolvedValue({ ok: true } as any);
+		vi.mocked(editMember).mockResolvedValue({
+			ok: true,
+			rosterConflict: null,
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+		} as any);
 		await renderRoute();
 
 		await saveEdit();
 
 		await vi.waitFor(() => expect(toast.success).toHaveBeenCalled());
 		expect(toast.warning).not.toHaveBeenCalled();
+	});
+
+	it("warns when the saved address leaves the member unable to sign in", async () => {
+		// The save LANDED — `members.email` is the club's own column — but the
+		// roster now stops a bind. Silence here is the defect class this release
+		// exists to remove, and the shared-address case is worse than it looks: it
+		// revokes the OTHER member's sign-in too, and they are nowhere on screen.
+		vi.mocked(editMember).mockResolvedValue({
+			ok: true,
+			rosterConflict: "shared_address",
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+		} as any);
+		await renderRoute();
+
+		await saveEdit();
+
+		await vi.waitFor(() => expect(toast.warning).toHaveBeenCalled());
+		expect(
+			String(vi.mocked(toast.warning).mock.calls[0]?.[0]),
+			"the warning has to name the OTHER member, or an admin cannot act on it",
+		).toMatch(/another member/i);
+		expect(toast.success).not.toHaveBeenCalled();
+	});
+
+	it("names the obstacle rather than a generic refusal", async () => {
+		// Three obstacles, three remedies — and one of them (`multiple_clubs`) is
+		// not something a club officer can fix at all. A single catch-all message
+		// sent that group to an officer with nothing to try, which is the copy bug
+		// review found in the `/claim` page.
+		vi.mocked(editMember).mockResolvedValue({
+			ok: true,
+			rosterConflict: "multiple_clubs",
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+		} as any);
+		await renderRoute();
+
+		await saveEdit();
+
+		await vi.waitFor(() => expect(toast.warning).toHaveBeenCalled());
+		expect(String(vi.mocked(toast.warning).mock.calls[0]?.[0])).toMatch(
+			/more than one club/i,
+		);
 	});
 
 	it("reports the error and keeps the dialog open when the save throws", async () => {

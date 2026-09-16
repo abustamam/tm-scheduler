@@ -278,118 +278,127 @@ Ten coverage traps this repo has actually hit, all worth checking when a number 
 ## Data layer
 
 **Identity is verified, never typed. `people.email` is an address a magic link
-proved; `members.email` is the club's own contact record.** Two columns, two
-owners, one direction of trust:
+proved; `members.email` is the club's own contact record.**
 
 | Column | Owner | UPDATEd by | Read as |
 |---|---|---|---|
-| `people.email` | the human | the bind, and nothing else a club can reach | a verified address on a LINKED Person; a typed dedupe hint on an unlinked one |
+| `people.email` | the human | the bind, plus three superadmin/operator waivers | verified on a LINKED Person; a typed dedupe hint on an unlinked one |
 | `members.email` | the club | any officer, freely | the contact record, and the identity MATCH key |
 
-- **One thing UPDATEs `people.email`: `bindVerifiedPerson`**
-  (`src/server/account-link-logic.ts`). It reads the address off the `user` row
-  itself — a caller cannot hand it one — and sets `user_id` in the same
-  statement. The waivers (`updateUnclaimedAdminEmail`, `mergePeople`,
-  `scripts/rollback-0076.ts`) are superadmin- or operator-only and are named,
-  per function and per write-site COUNT, in
-  `src/server/person-email-writers.guard.test.ts`.
-- **Binding reads `members.email`**, at both readers: `linkPersonToUser`
-  (sign-in) and `claimPersonForUser` (invite-accept and the public claim).
-- **Person CREATION still writes `people.email`** — the CSV importer, the
-  guest-book conversion, the bulk paste, the create-club form. A brand-new row
-  is nobody's identity yet and the column is ADR-0008's fallback dedupe key. So
-  the honest invariant is narrower than "every value is verified": **a non-null
-  `people.email` on a LINKED Person is verified; on an unlinked one it is a
-  hint.** Nothing binds from it either way, which is the property that matters.
+The invariant is narrower than "every value is verified", and saying it the loose
+way is how this file has misled readers three times: **non-null on a LINKED
+Person means verified; on an unlinked one it is a hint.** Person CREATION still
+writes it — the CSV importer, the guest-book conversion, the bulk paste, the
+create-club form — because a fresh row is nobody's identity yet and the column is
+ADR-0008's fallback dedupe key. Nothing binds from it either way, which is the
+property that actually matters.
 
-### The rule: unanimity among the clubs that hold the Person
+### The rule
 
-`bindVerifiedPerson`'s own WHERE, all of it, in one statement:
+`bindVerifiedPerson`'s own WHERE, all of it, in one statement. It reads the
+address off the `user` row itself, so no caller can hand it one.
 
 1. the Person has no account (`user_id IS NULL`);
-2. at least one LIVE roster row of theirs carries the verified address;
-3. no live roster row of theirs carries anything else (or nothing);
-4. no OTHER Person has a live roster row carrying that address.
+2. a membership of theirs carries the verified address;
+3. exactly one club holds them;
+4. no OTHER Person's membership carries that address.
 
-"Live" excludes inactive memberships and archived clubs. Neither exclusion helps
-an attacker: marking a row inactive withdraws that row's objection, it never
-manufactures agreement, and archiving is superadmin-only.
+**Every membership counts — no status filter, no archived filter.** Two
+alternatives were written and reviewed out, and both failures are the same shape:
+the rule reads `members`, a table the actor it constrains can write.
 
-**The first cut of #756 used "only one club may hold them" and it was wrong in
-both directions at once.** It denied an account to every dual-club member —
-routine in Toastmasters — by every route, with no repair a club could perform.
-And its only input was `members`, a table the actor it constrains can write: any
-club admin could push an arbitrary Person into the refused state through the CSV
-importer's GLOBAL Customer-ID match, turning a takeover guard into a
-denial-of-account weapon aimed at another club's member. Unanimity is monotone in
-the attacker's direction — a club joining the Person can only ADD a row that must
-also agree — and it leaves a repair a club can actually perform: put the member's
-real address on the roster, in every club that holds them.
+- "Only one club may hold them", scoped to nothing, denies dual-club members. That
+  is the cost below, and it is the one we are carrying.
+- "Unanimity among the clubs that hold them" let dual-club members in, but had to
+  scope the dissenting set to ACTIVE rows in unarchived clubs — so a Person whose
+  memberships had all lapsed had NO dissenters, and a club admin who attached them
+  (the CSV importer matches Customer ID globally, with no club scope) supplied the
+  only vouching row themselves and took the Person. **Narrowing the set was the
+  whole of that bug.** Do not reintroduce a status or archived filter here.
 
-Arm 4 is the household case. One address on two roster rows is an ambiguity the
-app cannot resolve: picking a name is a claim, not proof, and both spouses read
-the same inbox. It lives in the WRITE, not only in the sign-in resolver, because
-the explicit claim reaches the same bind by a different route — without it,
-`claimPersonForUser` bound whichever row the user picked.
+Arm 2 is load-bearing alone: unanimity over an empty set is vacuously true, so
+without it a Person with no memberships binds to any address at all.
+
+Arm 4 is the household case — one address on two roster rows is an ambiguity the
+app cannot resolve, and it lives in the WRITE because the explicit claim reaches
+the bind without the sign-in resolver's candidate count.
+
+### `rosterConflictFor` is that rule's EXACT COMPLEMENT
+
+Every surface that refuses before acting — `prepareMemberInvite`, the roster edit
+form, the superadmin admin-email repair — asks the SELECT while the decision is
+made by the WHERE. When they drifted by one arm, the invite reported `ready` for a
+member no roster row vouched for, Better-Auth minted a real account, and the claim
+then refused. `roster-obstacle.guard.test.ts` asserts the two against each other
+over a matrix of roster shapes; a new arm in one and not the other fails there.
+
+It returns WHICH obstacle, because the three have different remedies and one of
+them (`multiple_clubs`) no club officer can fix. Copy lives in one place,
+`src/lib/roster-conflict-copy.ts`.
 
 ### Four traps, each paid for
 
 - **A roster edit must not touch `people.email` — not even to seed it.** Nor may
-  the invite button, which used to copy the membership address up one click over
-  from a form that had just refused the same write.
-- **Ask the bind's question BEFORE sending an invite.** `prepareMemberInvite`
-  returns `roster_conflict` rather than `ready` when the bind would refuse. The
-  first cut did not, and the defect this release exists to remove simply
-  relocated: a magic link went out, Better-Auth minted a real account, the claim
-  refused, the admin saw "Invite sent." forever and the member bounced.
-- **Put the predicate in the STATEMENT, not in a SELECT before it.** An earlier
-  cut checked the club rule with its own round trip, which is a check-then-write.
-  The predicate it replaced had been part of the UPDATE all along.
-- **`people.email` is not a fallback key** — not at the invite (which sends to
-  `members.email` and returns `no_email` rather than mailing a link to an address
-  the roster disagrees with), and not at the claim.
+  the invite button. But the edit form must still REPORT: typing an address
+  another active member carries makes the roster ambiguous and revokes THEIR
+  sign-in, on a screen that shows no sign of them.
+- **Ask the bind's question before sending an invite**, and before reporting a
+  superadmin repair succeeded.
+- **Put the predicate in the STATEMENT.** A check-then-write has a window; and for
+  `updateUnclaimedAdminEmail`, whose pre-check sits outside its transaction, no
+  behavioural test can reach the in-statement guard at all — deleting it left the
+  whole suite green. `person-email-writers.guard.test.ts` gates it on the source.
+- **`people.email` is not a fallback key** — not at the invite, not at the claim.
 
 ### Clearing it has reach: it is still a dedupe key
 
-Migration 0076 nulls `people.email` for every un-claimed Person, and FOUR readers
-key on it. All four now match `people.email` OR a `members.email`
-(`loadPersonCandidates` in `import-members-logic.ts` — which the dry-run preview
-loads through too, or the VPE approves a diff the commit will not perform —
-`pathways-sync-logic.ts`, `guest-pipeline-logic.ts`'s conversion, and
-`people-logic.ts`'s `findBestPersonByEmail` plus `listDuplicatePeople`).
+Migration 0076 nulls it for every un-claimed Person, and **five** readers key on
+it. All five now consult `members.email` as well — `loadPersonCandidates` by
+COALESCE (person-level first, this club's roster as fallback), the other four by
+OR: `pathways-sync-logic`, `guest-pipeline-logic`'s conversion, and
+`people-logic`'s `findBestPersonByEmail`, `listDuplicatePeople` / `peopleForEmail`
+and `searchPeopleForMerge`.
 
 Leaving any of them behind is not the benign under-match ADR-0008 prefers. The
-duplicate it mints has one row with a NULL person-level address and one with a
-set one, so `listDuplicatePeople` could see neither — while the bind's arm 4 now
-refuses BOTH rows. That is a silent, permanent lockout whose repair tool cannot
-find it.
+duplicate it mints has one NULL address and one set one, so `listDuplicatePeople`
+could see neither — while arm 4 refuses BOTH rows. That is a silent, permanent
+lockout whose repair tool cannot find it.
+
+Use `normalizedEmail()` from `account-link-logic.ts` for the SQL side and
+`normalizeEmail()` for the JS side. Four copies of that expression drifted apart
+inside one change, one of them back to the `lower(trim(…))` form that strips
+spaces only — which made a tabbed address match on the claim path and not at
+sign-in. One index cannot serve two spellings either.
 
 ### Guarded by
 
-`person-email-writers.guard.test.ts` (one-writer enumeration by SHAPE — a SET
-that is not an inline object literal is refused outright, because scanning cannot
-read it; with nine self-tests proving the matcher flags each evasion),
-`account-link-logic.integration.test.ts` (what will and will not bind),
-`member-email-ownership.integration.test.ts` (a roster edit writes one column),
-`account-invite-logic.integration.test.ts` (invite, claim, typo repair end to
-end) and `person-email-clear-migration.integration.test.ts` (0076, against a
-database of its own — see that header for why).
+`person-email-writers.guard.test.ts` (one writer, matched by SHAPE — a SET that is
+not an inline object literal is refused outright, comments are stripped before
+scanning, the table is resolved through its local binding, upserts and raw SQL
+count; with self-tests derived from the matcher's own assumptions rather than from
+the incident list), `roster-obstacle.guard.test.ts` (the complement),
+`account-link-logic.integration.test.ts` (each arm killed independently, through
+`bindVerifiedPerson` directly where the resolver would short-circuit first),
+`member-email-ownership.integration.test.ts`,
+`account-invite-logic.integration.test.ts` and
+`person-email-clear-migration.integration.test.ts`.
 
 ### Still open, and deliberately so
 
-- The bind's predicate is evaluated inside one statement, but under READ
-  COMMITTED a membership committed after that statement's snapshot is invisible
-  to it. Closing it needs SERIALIZABLE, or an advisory lock on the person id
-  taken by the bind AND by every path that inserts a `members` row.
-- A club admin can still attach an arbitrary Person to their own club (the CSV
-  importer matches Customer ID globally; the guest conversion matches phone plus
-  name). Under unanimity that can DENY a bind until the roster is corrected,
-  which is visible and repairable — but the attachment itself is ungated. Gating
-  it is the real fix and is its own change.
-- **`people_email_backup` is temporary and nothing will remind anyone.** Drop it
-  (schema + a migration) once a release has passed without incident;
-  `scripts/rollback-0076.ts` is what needs it until then. Check with
-  `select count(*), max(captured_at) from people_email_backup`.
+- **A member two clubs genuinely hold cannot bind by any route** until one
+  membership is removed. That is the status quo before #756 and what the issue
+  specified; supporting them safely needs the attach gate below.
+- **The attach primitive is ungated.** A club admin can pull an arbitrary Person
+  into their own club — the CSV importer matches Customer ID globally, the guest
+  conversion matches phone plus name — and thereby put them in the refused state.
+  Under this rule that is a DENIAL, not a takeover, and it is visible and
+  repairable; it is still the root cause every predicate here has tripped over,
+  and gating it is its own change.
+- **READ COMMITTED phantom:** the bind's predicate is one statement, but a
+  membership committed after its snapshot is invisible to it.
+- **`people_email_backup` is temporary.** Drop it by removing it from `schema.ts`
+  and shipping the generated migration once a release has passed;
+  `scripts/rollback-0076.ts` needs it until then.
 
 **Planned attendance is ONE table with a status, read through ONE seam.**
 `meeting_attendance_plan` holds one row per (member, meeting) carrying

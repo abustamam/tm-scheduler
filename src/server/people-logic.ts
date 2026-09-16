@@ -21,6 +21,7 @@ import {
 	type KeeperCandidate,
 	pickKeeper,
 } from "#/lib/person-identity";
+import { normalizedEmail } from "#/server/account-link-logic";
 import { checkMergeBlocks } from "#/server/people-merge-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -61,8 +62,8 @@ export async function findBestPersonByEmail(
 		.from(people)
 		.leftJoin(members, eq(members.personId, people.id))
 		.where(
-			sql`lower(${people.email}) = ${normalized}
-			    or lower(regexp_replace(${members.email}, '^[[:space:]]+|[[:space:]]+$', '', 'g')) = ${normalized}`,
+			sql`${normalizedEmail(people.email)} = ${normalized}
+			    or ${normalizedEmail(members.email)} = ${normalized}`,
 		);
 	if (rows.length === 0) return null;
 	if (rows.length === 1) return rows[0].id;
@@ -176,16 +177,24 @@ export async function searchPeopleForMerge(
 	const trimmed = query.trim().toLowerCase();
 	if (trimmed.length < 2) return [];
 	const q = `%${trimmed}%`;
+	// Searches the ROSTER address too (#756). Migration 0076 nulled `people.email`
+	// for everyone who has never signed in, and `mergePeople` — which this search
+	// feeds — is the documented repair for a member the bind refuses as a shared
+	// address. Searching only the person-level column would leave that repair
+	// unable to find the very people it exists for.
 	const rows = await db
-		.select({
+		.selectDistinct({
 			id: people.id,
 			name: people.name,
 			email: people.email,
 			userId: people.userId,
 		})
 		.from(people)
+		.leftJoin(members, eq(members.personId, people.id))
 		.where(
-			sql`lower(${people.name}) like ${q} or lower(${people.email}) like ${q}`,
+			sql`lower(${people.name}) like ${q}
+			    or ${normalizedEmail(people.email)} like ${q}
+			    or ${normalizedEmail(members.email)} like ${q}`,
 		)
 		.orderBy(people.name, people.id)
 		.limit(25);
@@ -351,9 +360,10 @@ async function countMovingEnrollments(
 
 /** All Persons sharing a (lowercased) email, decorated for display. */
 async function peopleForEmail(email: string): Promise<DuplicatePerson[]> {
-	// Both columns, matching `listDuplicatePeople`'s grouping — a group found by
-	// a roster address whose members are then looked up by person-level address
-	// only would render empty, which is worse than not listing it.
+	// Both columns, normalised the SAME WAY `listDuplicatePeople` groups them. An
+	// earlier cut trimmed the grouping key and not the lookup key, so a padded
+	// person-level address formed a group whose own member was then not found —
+	// the empty render this comment claims to prevent.
 	const rows = await db
 		.selectDistinct({
 			id: people.id,
@@ -364,8 +374,8 @@ async function peopleForEmail(email: string): Promise<DuplicatePerson[]> {
 		.from(people)
 		.leftJoin(members, eq(members.personId, people.id))
 		.where(
-			sql`lower(${people.email}) = ${email}
-			    or lower(regexp_replace(${members.email}, '^[[:space:]]+|[[:space:]]+$', '', 'g')) = ${email}`,
+			sql`${normalizedEmail(people.email)} = ${email}
+			    or ${normalizedEmail(members.email)} = ${email}`,
 		)
 		.orderBy(people.name, people.id);
 	return decorate(rows);

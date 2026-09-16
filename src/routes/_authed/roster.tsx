@@ -37,6 +37,7 @@ import {
 	type OfficerPosition,
 	officerPositionLabel,
 } from "#/lib/officers";
+import { INVITE_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	buildImportPreview,
 	type PreviewRow,
@@ -595,7 +596,9 @@ function RowInviteControl({
 				// claim would then refuse — leaving this row showing "invited"
 				// forever with nothing on any screen naming the reason.
 				toast.error(
-					"Another club's roster has a different email for this member — or this address is on two members here. Both need fixing before an invite can link them.",
+					res.obstacle
+						? INVITE_CONFLICT_COPY[res.obstacle]
+						: "No invite sent — this member's roster entries need sorting out first.",
 				);
 			} else if (res.outcome === "already_joined") {
 				toast.info("They already have an account.");
@@ -668,6 +671,9 @@ function InviteAllDialog({
 					: "") +
 				(res.recentlyInvited > 0
 					? ` ${res.recentlyInvited} already invited recently.`
+					: "") +
+				(res.failed > 0
+					? ` ${res.failed} couldn't be delivered — try those again tomorrow.`
 					: "");
 			// "Sent 0 invites." is not a success. Reporting it as one is how a bulk
 			// send that reached nobody reads as a job done.

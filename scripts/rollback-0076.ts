@@ -11,11 +11,27 @@
  * from `git log`.
  *
  * Run AFTER reverting the application code:
- *   bun run scripts/rollback-0076.ts          # dry run, prints what it would do
- *   bun run scripts/rollback-0076.ts --apply  # performs the restore
+ *   bun run rollback:0076          # dry run, prints what it would do
+ *   bun run rollback:0076 --apply  # performs the restore
  *
- * Uses `DATABASE_URL` from the environment (`.env.local` locally; on Railway,
- * `railway run bun run scripts/rollback-0076.ts --apply`).
+ * **Against PRODUCTION, do not reach for `railway run`.** It executes locally
+ * with the service's variables injected, and Railway's `DATABASE_URL` is the
+ * private `*.railway.internal` host, which does not resolve off-platform; this
+ * project has no TCP proxy on the Postgres service. This file is also NOT
+ * bundled into `.output/`, and the runtime image (`node:22-slim`) carries no
+ * Bun and no `node_modules`, so it cannot run in the app container either.
+ *
+ * The verified production path is psql inside the database service, with the
+ * statement this script runs — which is why the statement is also written
+ * verbatim in `drizzle/0076_bored_meltdown.sql`'s header:
+ *
+ *   railway ssh --service Postgres -- psql -X -c "UPDATE \"people\" p \
+ *     SET \"email\" = b.\"email\" FROM \"people_email_backup\" b \
+ *     WHERE p.\"id\" = b.\"person_id\" AND p.\"user_id\" IS NULL \
+ *     AND p.\"email\" IS NULL;"
+ *
+ * This script is for a local or staging database, and for reading the accounting
+ * (`--apply` omitted) before running the psql form above.
  *
  * Safe to run more than once: the `email IS NULL` predicate means an already
  * restored row is not matched a second time.
@@ -54,18 +70,42 @@ async function main() {
 		//     `mergePeople`'s keeper fill) set AFTER the migration. Without this
 		//     arm the restore undoes an operator's repair during the very incident
 		//     that triggered the rollback.
-		const restorable = await db.execute<{ count: number }>(sql`
-			select count(*)::int as count
-			  from "people" p
-			  join "people_email_backup" b on b."person_id" = p."id"
-			 where p."user_id" is null and p."email" is null
+		// Full accounting, in BOTH modes. A bare "restorable" count hides the rows
+		// the join drops: `mergePeople` DELETEs an absorbed Person, and the snapshot
+		// carries no FK (deliberately — the reference would have let the merge
+		// cascade the undo away), so those ids dangle and their addresses reach
+		// nobody. An operator seeing "12 rows" needs to know the snapshot holds 15.
+		const audit = await db.execute<{
+			total: number;
+			restorable: number;
+			gone: number;
+			linked: number;
+			has_email: number;
+		}>(sql`
+			select
+				count(*)::int as total,
+				count(*) filter (
+					where p."id" is not null and p."user_id" is null and p."email" is null
+				)::int as restorable,
+				count(*) filter (where p."id" is null)::int as gone,
+				count(*) filter (where p."user_id" is not null)::int as linked,
+				count(*) filter (
+					where p."id" is not null and p."email" is not null
+				)::int as has_email
+			  from "people_email_backup" b
+			  left join "people" p on p."id" = b."person_id"
 		`);
-		const count = restorable.rows[0]?.count ?? 0;
+		const a = audit.rows[0];
+		const count = a?.restorable ?? 0;
+		console.log(
+			`snapshot: ${a?.total ?? 0} row(s) — ${count} restorable, ` +
+				`${a?.gone ?? 0} whose Person no longer exists (merged or deleted), ` +
+				`${a?.linked ?? 0} already signed in, ` +
+				`${a?.has_email ?? 0} repaired since the migration.`,
+		);
 
 		if (!APPLY) {
-			console.log(
-				`DRY RUN: ${count} row(s) would have their people.email restored. Re-run with --apply.`,
-			);
+			console.log("DRY RUN — re-run with --apply to restore.");
 			return;
 		}
 

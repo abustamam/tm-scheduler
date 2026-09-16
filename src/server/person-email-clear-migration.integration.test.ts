@@ -65,18 +65,39 @@ function dataStatements(): string[] {
 	return statements;
 }
 
+const ROLLBACK_SCRIPT = resolve(process.cwd(), "scripts/rollback-0076.ts");
+
 /**
- * The rollback statement, kept in step with `scripts/rollback-0076.ts` by being
- * asserted here rather than only written there. All three predicates matter; the
- * `email IS NULL` one is the least obvious and has its own test below.
+ * The rollback statement, READ OUT OF `scripts/rollback-0076.ts` rather than
+ * copied here.
+ *
+ * An earlier cut hand-typed it and claimed in this very comment to be "keeping
+ * the script in step" — nothing read the script, so editing a predicate there
+ * left every test below green while the only artifact that runs during an
+ * incident quietly changed meaning. All three predicates matter; the
+ * `email IS NULL` one is the least obvious and has its own test.
  */
-const RESTORE = sql`
-	UPDATE "people" p SET "email" = b."email"
-	  FROM "people_email_backup" b
-	 WHERE p."id" = b."person_id"
-	   AND p."user_id" IS NULL
-	   AND p."email" IS NULL
-`;
+function restoreStatement(): string {
+	const text = readFileSync(ROLLBACK_SCRIPT, "utf8");
+	// The apply-path statement: the UPDATE inside the `sql` template, not the one
+	// quoted in the header comment (which is psql-escaped).
+	const stmt = /sql`(\s*UPDATE "people" p SET[\s\S]*?)`/.exec(text)?.[1];
+	expect(
+		stmt,
+		"scripts/rollback-0076.ts no longer carries a readable UPDATE statement",
+	).toBeTruthy();
+	const sqlText = stmt as string;
+	// Cheap belt: the three predicates, named, so a drift that still parses fails
+	// with a message rather than a mystery.
+	for (const predicate of [
+		/b\."person_id"/,
+		/p\."user_id" IS NULL/i,
+		/p\."email" IS NULL/i,
+	]) {
+		expect(sqlText, `the rollback lost ${predicate}`).toMatch(predicate);
+	}
+	return sqlText;
+}
 
 /** This suite's own database name, on the same server as `TEST_DATABASE_URL`. */
 const SCRATCH_DB = `tm_0076_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -113,13 +134,27 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 			// and the drop lives in `afterAll`, so a Ctrl-C, an OOM or a killed
 			// vitest worker orphans a database with nothing to collect it; on a
 			// shared dev container they accumulate silently.
+			//
+			// **Only databases with no live backends, and never WITH (FORCE).** This
+			// repo runs parallel agents against one server by design, so another run
+			// of THIS file is the normal case rather than a corner — and a forced
+			// drop would terminate its connections and fail it with errors pointing
+			// nowhere near the cause. An in-use database simply refuses to drop here,
+			// which is the correct outcome; `afterAll` still forces its own.
 			const stale = await admin.query<{ datname: string }>(
-				"select datname from pg_database where datname like 'tm_0076_%'",
+				`select d.datname from pg_database d
+				  where d.datname like 'tm_0076_%'
+				    and not exists (
+				      select 1 from pg_stat_activity a where a.datname = d.datname
+				    )`,
 			);
 			for (const row of stale.rows) {
-				await admin.query(
-					`DROP DATABASE IF EXISTS "${row.datname}" WITH (FORCE)`,
-				);
+				await admin
+					.query(`DROP DATABASE IF EXISTS "${row.datname}"`)
+					.catch(() => {
+						// Raced with another run that just connected. Leave it; that run
+						// owns it and will drop it itself.
+					});
 			}
 			await admin.query(`CREATE DATABASE "${SCRATCH_DB}"`);
 		} finally {
@@ -273,7 +308,7 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 			});
 
 			await runMigration(tx);
-			await tx.execute(RESTORE);
+			await tx.execute(sql.raw(restoreStatement()));
 
 			expect(await personEmail(tx, personId)).toBe(addr);
 		});
@@ -299,7 +334,7 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 				.update(people)
 				.set({ email: repaired })
 				.where(eq(people.id, personId));
-			await tx.execute(RESTORE);
+			await tx.execute(sql.raw(restoreStatement()));
 
 			expect(await personEmail(tx, personId)).toBe(repaired);
 		});
@@ -405,6 +440,15 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 				"a second pass is destructive — the header must keep saying SINGLE-USE",
 			).toBeNull();
 		});
+
+		// …and the warning that stands between an operator and that data loss is
+		// itself a gate, not prose. Without this line, deleting the SINGLE-USE
+		// paragraph — the only thing telling anyone not to do what the assertions
+		// above just demonstrated — left every test green.
+		expect(
+			readFileSync(MIGRATION, "utf8"),
+			"0076's header must keep its SINGLE-USE warning — the assertions above prove a re-run destroys data",
+		).toMatch(/SINGLE-USE/);
 	});
 
 	it("the capture is write-once, so a second pass cannot spoil the snapshot", async () => {

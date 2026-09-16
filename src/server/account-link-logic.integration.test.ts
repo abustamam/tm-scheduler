@@ -7,18 +7,22 @@
  * was typed by a club-scoped actor (the CSV importer, the guest-book conversion,
  * the create-club form, the bulk paste) rather than proved by anybody.
  *
- * **The rule is UNANIMITY across the clubs that hold the Person**, not "only one
- * club holds them". A first cut used the latter and it was wrong in two
- * directions at once, both found in review:
- *   - it denied an account to every dual-club member, which is routine here, with
- *     no club-reachable repair at all; and
- *   - its input was a table the actor it constrains can write, so any club admin
- *     could push an arbitrary Person into the refused state through the CSV
- *     importer's global Customer-ID match.
- * Unanimity is monotone: a club joining the Person can only ADD a row that must
- * also agree, never satisfy one. So it keeps the cross-club takeover shut while
- * leaving a repair a club can actually perform — put the member's real address
- * on the roster, in every club that holds them.
+ * **The rule is CONSERVATIVE: exactly one club holds the Person, a membership of
+ * theirs carries the verified address, and no other Person carries it.** Every
+ * membership counts — no status filter, no archived filter.
+ *
+ * A cleverer "unanimity across the clubs that hold them" rule was written and
+ * reviewed out. It scoped the dissenting set to ACTIVE memberships in unarchived
+ * clubs, which meant a Person whose memberships had all lapsed had no dissenters
+ * at all — so an attacker who attached them to their own club (the CSV importer
+ * matches Customer ID globally) supplied the only vouching row themselves and
+ * took the Person. Live-scoping was the whole of that bug, so nothing is scoped
+ * now.
+ *
+ * The cost is real and is not hidden: a member two clubs genuinely hold cannot
+ * bind by any route until one membership is removed. That is the status quo
+ * before this change, it is what #756 specified, and it is recorded in
+ * CODING_STANDARDS under "Still open".
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
@@ -289,101 +293,126 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		// ---------------------------------------------------------------------
-		// Unanimity across the clubs that hold the Person
+		// One club, and it has to vouch
+		//
+		// The rule is deliberately the CONSERVATIVE one, after two attempts at
+		// something cleverer. A "unanimity across the clubs that hold them" rule
+		// shipped in review and turned out to have a TAKEOVER in it: it scoped the
+		// dissenting set to ACTIVE memberships in unarchived clubs, so a Person
+		// whose every membership had lapsed had no dissenters at all, and an
+		// attacker who attached them to their own club (the CSV importer matches
+		// Customer ID globally) supplied the only vouching row themselves. Every
+		// row here counts now — no status filter, no archived filter — because the
+		// live-scoping was the whole of that bug.
+		//
+		// The cost is stated rather than hidden: a member two clubs genuinely hold
+		// cannot bind by any route until one membership is removed. That is the
+		// status quo before this PR, it is what issue #756 specified, and it is
+		// recorded in CODING_STANDARDS under "Still open".
 		// ---------------------------------------------------------------------
 
-		it("binds a DUAL-CLUB member when both rosters carry the same address", async () => {
-			// Dual membership is routine in Toastmasters. A blanket "only one club"
-			// rule denied these members an account by every route, with no repair a
-			// club could perform — worse than the bug it was guarding against.
+		it("refuses a Person that TWO clubs hold, even when both rosters agree", async () => {
+			// The conservative rule. A second club makes the Person un-bindable
+			// regardless of what either roster says, because `members.email` is a
+			// column any officer of either club controls.
 			const { linkPersonToUser } = await import("#/server/account-link-logic");
 			const email = `dual-${randomUUID()}@test.example`;
 			const { personId } = await seedMember({ memberEmail: email });
 			await alsoHeldBy(personId, email);
 			const userId = await seedUser(email);
 
-			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([
-				personId,
-			]);
-			expect((await personRow(personId))?.email).toBe(email);
+			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([]);
+			expect((await personRow(personId))?.userId).toBeNull();
 		});
 
-		it("refuses when another club's roster carries a DIFFERENT address", async () => {
-			// The takeover, and the reason the rule is unanimity rather than a
-			// majority or a first-match: club A's officer typing their own address on
-			// their own row must not be able to inherit club B's membership.
+		it("counts an INACTIVE membership in another club", async () => {
+			// THE test the takeover needed. The rule it replaces excluded inactive
+			// rows, so a Person whose other memberships had all lapsed had nobody to
+			// disagree — and an attacker attaching them to a third club became their
+			// only voucher. Every row counts, whatever its status.
 			const { linkPersonToUser } = await import("#/server/account-link-logic");
-			const attacker = `attacker-${randomUUID()}@test.example`;
-			const { personId } = await seedMember({ memberEmail: attacker });
-			await alsoHeldBy(personId, `victim-${randomUUID()}@test.example`);
-			const userId = await seedUser(attacker);
+			const email = `lapsed-${randomUUID()}@test.example`;
+			const { personId } = await seedMember({ memberEmail: email });
+			await alsoHeldBy(personId, null, { status: "inactive" });
+			const userId = await seedUser(email);
 
 			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([]);
+		});
+
+		it("counts a membership in an ARCHIVED club", async () => {
+			// Same reasoning. Archiving is superadmin-only so an attacker cannot
+			// reach it, but excluding archived rows would reopen the same empty-set
+			// hole for any Person whose one other club had been taken down.
+			const { linkPersonToUser } = await import("#/server/account-link-logic");
+			const email = `archived-${randomUUID()}@test.example`;
+			const { personId } = await seedMember({ memberEmail: email });
+			await alsoHeldBy(personId, null, { archived: true });
+			const userId = await seedUser(email);
+
+			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([]);
+		});
+
+		it("an attacker attaching the Person to their own club cannot bind it", async () => {
+			// The takeover, driven end to end. Club A's admin attaches a Person that
+			// only club B holds (the CSV importer matches Customer ID globally — see
+			// `import-members.integration.test.ts`), types their own address on the
+			// row they just made, and signs in. The second club is what refuses.
+			const { bindVerifiedPerson } = await import(
+				"#/server/account-link-logic"
+			);
+			const attacker = `attacker-${randomUUID()}@test.example`;
+			// The victim, held by their own club, with a lapsed membership elsewhere
+			// so the OLD rule would have found no dissenters.
+			const { personId } = await seedMember({
+				memberEmail: `victim-${randomUUID()}@test.example`,
+				status: "inactive",
+			});
+			await alsoHeldBy(personId, attacker);
+			const userId = await seedUser(attacker);
+
+			expect(await bindVerifiedPerson({ personId, userId })).toBe(false);
 			expect((await personRow(personId))?.userId).toBeNull();
 			expect((await personRow(personId))?.email).toBeNull();
 		});
 
-		it("refuses when another club holds the Person with NO address on file", async () => {
-			// A blank roster row is not agreement. The other club has recorded
-			// nothing, so it cannot be said to vouch for this address — and the
-			// repair is for them to record it.
-			const { linkPersonToUser } = await import("#/server/account-link-logic");
-			const email = `half-${randomUUID()}@test.example`;
-			const { personId } = await seedMember({ memberEmail: email });
-			await alsoHeldBy(personId, null);
-			const userId = await seedUser(email);
+		it("refuses when no membership of theirs carries the address", async () => {
+			// The vouching arm, killed on its own. MUTATION NOTE: this must be driven
+			// through `bindVerifiedPerson` DIRECTLY — routing it through
+			// `linkPersonToUser` proves nothing, because the candidate query refuses
+			// first for its own reasons and the bind is never reached. That is
+			// exactly how the previous cut of this arm ended up untested: replacing
+			// it with `sql`true`` left the whole suite green.
+			const { bindVerifiedPerson } = await import(
+				"#/server/account-link-logic"
+			);
+			const { personId } = await seedMember({
+				memberEmail: `roster-${randomUUID()}@test.example`,
+			});
+			const userId = await seedUser(`other-${randomUUID()}@test.example`);
 
-			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([]);
+			expect(await bindVerifiedPerson({ personId, userId })).toBe(false);
+			expect((await personRow(personId))?.userId).toBeNull();
 		});
 
-		it("an INACTIVE membership elsewhere does not block the bind", async () => {
-			// Someone who left a club years ago must not have their identity held
-			// hostage by that club's stale roster row. Scoping to active memberships
-			// cannot help an attacker: marking their own row inactive withdraws their
-			// own objection, it never manufactures agreement.
-			const { linkPersonToUser } = await import("#/server/account-link-logic");
-			const email = `lapsed-${randomUUID()}@test.example`;
-			const { personId } = await seedMember({ memberEmail: email });
-			await alsoHeldBy(personId, `stale-${randomUUID()}@test.example`, {
-				status: "inactive",
-			});
-			const userId = await seedUser(email);
+		it("refuses a Person with no memberships at all", async () => {
+			// A club-less Person is nobody's member. `applyMemberRemove` leaves one
+			// behind, as does undoing a guest conversion, and without the vouching
+			// arm the two NOT EXISTS arms are vacuously true — so any address at all
+			// would bind them.
+			const { bindVerifiedPerson } = await import(
+				"#/server/account-link-logic"
+			);
+			const [person] = await testDb
+				.insert(people)
+				.values({ name: "Club-less Person", email: null })
+				.returning({ id: people.id });
+			if (!person) throw new Error("person insert failed");
+			personIds.push(person.id);
+			const userId = await seedUser(`nobody-${randomUUID()}@test.example`);
 
-			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([
-				personId,
-			]);
-		});
-
-		it("a membership in an ARCHIVED club does not block the bind", async () => {
-			// Archiving is the takedown lever (ADR-0016) and is superadmin-only. An
-			// archived club is inaccessible everywhere else; it must not keep a vote
-			// on who its former members are.
-			const { linkPersonToUser } = await import("#/server/account-link-logic");
-			const email = `archived-${randomUUID()}@test.example`;
-			const { personId } = await seedMember({ memberEmail: email });
-			await alsoHeldBy(personId, `gone-${randomUUID()}@test.example`, {
-				archived: true,
-			});
-			const userId = await seedUser(email);
-
-			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([
-				personId,
-			]);
-		});
-
-		it("refuses a Person whose only memberships are inactive", async () => {
-			// Unanimity alone is vacuously true when nothing is left to agree, so the
-			// rule also needs somebody actually vouching. Without this arm, a Person
-			// with no live membership would bind to any address at all.
-			const { linkPersonToUser } = await import("#/server/account-link-logic");
-			const email = `all-lapsed-${randomUUID()}@test.example`;
-			await seedMember({
-				memberEmail: email,
-				status: "inactive",
-			});
-			const userId = await seedUser(email);
-
-			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([]);
+			expect(await bindVerifiedPerson({ personId: person.id, userId })).toBe(
+				false,
+			);
 		});
 
 		// ---------------------------------------------------------------------
@@ -410,9 +439,7 @@ describe.skipIf(!hasTestDb)(
 			// club's roster. Alice claims her own row explicitly, so she is linked.
 			// If linked Persons stopped counting, Bob would become the sole candidate
 			// on Alice's NEXT sign-in and bind to HER account — handing her his
-			// membership and his roles. Two rows carrying one address is an ambiguity
-			// whoever holds them; `mergePeople` is the repair when they are genuinely
-			// one human.
+			// membership and his roles.
 			const { linkPersonToUser } = await import("#/server/account-link-logic");
 			const shared = `spouses-${randomUUID()}@test.example`;
 			const aliceUserId = await seedUser(shared);
@@ -425,6 +452,23 @@ describe.skipIf(!hasTestDb)(
 			expect((await linkPersonToUser(aliceUserId)).linkedPersonIds).toEqual([]);
 			expect((await personRow(bob.personId))?.userId).toBeNull();
 			expect((await personRow(alice.personId))?.userId).toBe(aliceUserId);
+		});
+
+		it("the ambiguity arm refuses the explicit CLAIM too, not just sign-in", async () => {
+			// Killed on its own, through the path that reaches the bind without the
+			// candidate count: picking a name is a claim, not proof, and both spouses
+			// read the same inbox.
+			const { bindVerifiedPerson } = await import(
+				"#/server/account-link-logic"
+			);
+			const shared = `claim-ambig-${randomUUID()}@test.example`;
+			await seedMember({ memberEmail: shared });
+			const bob = await seedMember({ memberEmail: shared });
+			const userId = await seedUser(shared);
+
+			expect(await bindVerifiedPerson({ personId: bob.personId, userId })).toBe(
+				false,
+			);
 		});
 
 		// ---------------------------------------------------------------------
@@ -442,7 +486,7 @@ describe.skipIf(!hasTestDb)(
 			);
 			const email = `self-guard-${randomUUID()}@test.example`;
 			const { personId } = await seedMember({ memberEmail: email });
-			await alsoHeldBy(personId, `disagrees-${randomUUID()}@test.example`);
+			await alsoHeldBy(personId, email);
 			const userId = await seedUser(email);
 
 			expect(await bindVerifiedPerson({ personId, userId })).toBe(false);
@@ -464,13 +508,13 @@ describe.skipIf(!hasTestDb)(
 			expect((await personRow(personId))?.email).toBe(email);
 		});
 
-		it("a second club joining mid-flight cannot produce a bind it would refuse", async () => {
-			// `openBlockingTx` holds an uncommitted second membership. The bind is not
-			// blocked by it (different rows), so this pins the honest guarantee rather
-			// than an imagined one: the predicate is evaluated by the UPDATE itself,
-			// so once the other club's row is COMMITTED the write refuses — no
-			// caller-side re-check required. The residual is the READ COMMITTED
-			// phantom, recorded in CODING_STANDARDS.
+		it("holds the READ COMMITTED line honestly: a row committed first refuses", async () => {
+			// What the statement DOES guarantee, stated as the test rather than as a
+			// comment. `openBlockingTx` holds an uncommitted second membership; the
+			// bind is not blocked by it (different rows) and would succeed against
+			// its own snapshot — so this commits FIRST and asserts the refusal comes
+			// from the UPDATE itself, with no caller-side re-check. The uncommitted
+			// case is the phantom recorded in CODING_STANDARDS, not a guarantee.
 			const { bindVerifiedPerson } = await import(
 				"#/server/account-link-logic"
 			);
@@ -485,7 +529,7 @@ describe.skipIf(!hasTestDb)(
 					clubId: other.clubId,
 					personId,
 					name: "Roster Person",
-					email: `disagrees-${randomUUID()}@test.example`,
+					email,
 				});
 			});
 			await writer.commit();

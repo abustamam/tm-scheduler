@@ -79,14 +79,15 @@ const COPY: Record<
 		success: false,
 	},
 	roster_conflict: {
-		// Names the ONE thing an officer can actually do. An earlier cut said an
-		// officer could "get you set up directly", which was false — the only
-		// person-level repair is superadmin-gated (`mergePeople`,
-		// `updateUnclaimedAdminEmail`). Since #756's review this state has a real
-		// club-level fix, so the copy points at it: every club that has this member
-		// needs the same, correct address on their roster row.
-		title: "The rosters don't agree",
-		body: "Your email checks out for this club, but another club's roster has something different for you — or this address is on more than one member's entry. Ask a club officer to make sure your roster email is right in every club you're in, then open your invite link again.",
+		// Three different obstacles land here and only one of them is fixable by a
+		// club officer, so the copy must not promise that it is. An earlier cut
+		// said an officer could "get you set up directly" — false, the only
+		// person-level repair is superadmin-gated — and the cut before that told
+		// this group to ask for an invite, which fails identically and sends them
+		// round the loop again. So: name the state, give the one step that is
+		// always safe to take, and do not invent a remedy.
+		title: "We can't attach this name yet",
+		body: "Your email checks out, but this club's records need a change before an account can be attached to your name. Your club officers have been given the details — ask them, and if they can't resolve it they can get in touch with GavelUp.",
 		success: false,
 	},
 	not_found: {

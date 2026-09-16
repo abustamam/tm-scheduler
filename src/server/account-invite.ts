@@ -12,6 +12,7 @@ import {
 	type InvitePrepOutcome,
 	prepareMemberInvite,
 } from "./account-invite-logic";
+import type { RosterObstacle } from "./account-link-logic";
 import { requireClubRole, requireUser } from "./guards";
 
 // The post-verification landing that finishes linking the picked Person to the
@@ -35,24 +36,34 @@ export const inviteMember = createServerFn({ method: "POST" })
 			.object({ clubId: z.string().uuid(), memberId: z.string().uuid() })
 			.parse(i),
 	)
-	.handler(async ({ data }): Promise<{ outcome: InvitePrepOutcome }> => {
-		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+	.handler(
+		async ({
+			data,
+		}): Promise<{ outcome: InvitePrepOutcome; obstacle?: RosterObstacle }> => {
+			const user = await requireUser();
+			await requireClubRole(user.id, data.clubId, ["admin"]);
 
-		const prep = await prepareMemberInvite(data);
-		if (prep.outcome !== "ready") return { outcome: prep.outcome };
+			const prep = await prepareMemberInvite(data);
+			// `obstacle` rides along so the roster can name the one thing the admin
+			// can act on. An OLD client bundle ignores the extra field and falls into
+			// its trailing `else` — which is why the copy for a missing obstacle is
+			// still a refusal on the new client rather than a success.
+			if (prep.outcome !== "ready") {
+				return { outcome: prep.outcome, obstacle: prep.obstacle };
+			}
 
-		const request = getRequest();
-		await auth.api.signInMagicLink({
-			body: {
-				email: prep.email as string,
-				callbackURL: claimCallbackURL(data.memberId),
-				metadata: { kind: "invite", clubName: prep.clubName },
-			},
-			headers: request.headers,
-		});
-		return { outcome: "ready" };
-	});
+			const request = getRequest();
+			await auth.api.signInMagicLink({
+				body: {
+					email: prep.email as string,
+					callbackURL: claimCallbackURL(data.memberId),
+					metadata: { kind: "invite", clubName: prep.clubName },
+				},
+				headers: request.headers,
+			});
+			return { outcome: "ready" };
+		},
+	);
 
 export interface BulkInviteResult {
 	sent: number;
@@ -64,6 +75,11 @@ export interface BulkInviteResult {
 	 *  half-failure this release exists to remove. */
 	rosterConflict: number;
 	recentlyInvited: number;
+	/** Members whose magic link threw on send (Resend down, a rejected address).
+	 *  They are already stamped `invited_at`, so the 24h cooldown will suppress
+	 *  the retry — which is why the count has to reach the admin rather than
+	 *  aborting the run and looking like nothing was sent. */
+	failed: number;
 }
 
 /**
@@ -101,6 +117,7 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			noEmail: 0,
 			rosterConflict: 0,
 			recentlyInvited: 0,
+			failed: 0,
 		};
 		for (const row of rows) {
 			const prep = await prepareMemberInvite({
@@ -131,15 +148,26 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			// did — it would have thrown on the first such row and aborted the
 			// whole bulk send.
 			if (prep.outcome !== "ready" || !prep.email) continue;
-			await auth.api.signInMagicLink({
-				body: {
-					email: prep.email,
-					callbackURL: claimCallbackURL(row.memberId),
-					metadata: { kind: "invite", clubName: prep.clubName },
-				},
-				headers: request.headers,
-			});
-			result.sent += 1;
+			// One failing send must not abort the run. `prepareMemberInvite` has
+			// ALREADY stamped `invited_at` by this point, so an unguarded throw on
+			// row 17 of 60 left 16 links delivered, row 17 marked invited but never
+			// sent, and the admin looking at "Couldn't send invites" — and the 24h
+			// cooldown then suppressed row 17 on the retry, so that member got
+			// nothing for a day. Counted instead, and reported in the summary.
+			try {
+				await auth.api.signInMagicLink({
+					body: {
+						email: prep.email,
+						callbackURL: claimCallbackURL(row.memberId),
+						metadata: { kind: "invite", clubName: prep.clubName },
+					},
+					headers: request.headers,
+				});
+				result.sent += 1;
+			} catch (err) {
+				console.error("bulk invite send failed", row.memberId, err);
+				result.failed += 1;
+			}
 		}
 		return result;
 	});

@@ -601,11 +601,12 @@ export const people = pgTable(
 		//    A club-scoped actor typing an address can therefore no longer decide
 		//    who a Person becomes, which is what made a typo a lockout and every
 		//    writer of this column a cross-club takeover.
-		//  - it is NOT club-editable. Exactly one thing UPDATEs it: the bind, which
-		//    reads the address off the `user` row ITSELF (a caller cannot hand it
-		//    one) and sets `user_id` in the same statement (`account-link-logic.ts`;
-		//    the superadmin/operator exceptions are named in
-		//    `person-email-writers.guard.test.ts`).
+		//  - it is NOT club-editable. One thing a CLUB can reach UPDATEs it: the
+		//    bind, which reads the address off the `user` row ITSELF (a caller
+		//    cannot hand it one) and sets `user_id` in the same statement
+		//    (`account-link-logic.ts`). Three superadmin/operator waivers are named
+		//    in `person-email-writers.guard.test.ts` — "exactly one" would be the
+		//    kind of false-completeness claim this comment warns about below.
 		// It IS still written at INSERT, by the CSV importer, the guest-book
 		// conversion, the bulk paste and the create-club form, because a brand-new
 		// Person row is nobody's identity yet and this is the fallback dedupe key

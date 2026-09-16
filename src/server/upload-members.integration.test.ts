@@ -169,7 +169,7 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 		expect(commit.stats.skippedBlankName).toBe(1);
 	});
 
-	it("preview and commit agree across a MULTI-ROW batch, per row", async () => {
+	it("preview and commit agree across a MULTI-ROW batch", async () => {
 		// The one-row version of this test below cannot see the failure it is named
 		// for. Within a batch, both sides carry an in-memory candidate list that
 		// grows as rows are processed; the drift was that the planner mirrored a
@@ -177,9 +177,15 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 		// same file resolved differently on the two sides. One row never reaches the
 		// second resolution, and 0-vs-1 counters agree by accident.
 		//
-		// So: several rows, the whole summary compared field by field, and the
-		// per-row verdicts compared too — `plan.rows` is what the VPE actually
-		// approves, and a summary can match while individual rows do not.
+		// So: several rows, and the whole summary compared field by field.
+		//
+		// It does NOT compare per-row verdicts, and an earlier version of this
+		// comment claimed it did — `plan.rows` is the diff the VPE actually
+		// approves, and a summary can agree while individual rows do not. Closing
+		// that needs the committer to report per-row outcomes, which it does not;
+		// the gap is named here rather than papered over, and the roster-size
+		// assertion below is the cheap half that catches the shape this test was
+		// written for.
 		const clubId = await club();
 		const n = randomUUID().slice(0, 8);
 		const text = csv([

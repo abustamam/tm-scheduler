@@ -43,6 +43,7 @@ import {
 	officerPositionLabel,
 } from "#/lib/officers";
 import { firstNameOf } from "#/lib/person-name";
+import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	SPEECH_SCHEDULE_STATE_LABELS,
 	type SpeechScheduleState,
@@ -681,7 +682,7 @@ function MemberActions({
 		) as OfficerPosition[];
 		setBusy(true);
 		try {
-			await editMember({
+			const res = await editMember({
 				data: {
 					clubId,
 					memberId: member.id,
@@ -692,13 +693,20 @@ function MemberActions({
 					officerPositions,
 				},
 			});
-			// A plain success, because the save can no longer half-succeed (#756).
-			// This used to branch on a three-state `personEmailSynced` and warn when
-			// the member's SIGN-IN address could not be moved. That signal existed
-			// because the roster form wrote the identity key under a guard that could
-			// refuse; it writes `members.email` and nothing else now, so there is no
-			// refusal to report. Correcting a typo is this save plus a re-invite.
-			toast.success("Member updated.");
+			// The save always LANDS — `members.email` is the club's own column. What
+			// it can do is leave the member unable to sign in, and in one case leave
+			// SOMEONE ELSE unable to: an address another active member already
+			// carries makes the roster ambiguous and refuses both of them, on a
+			// screen that shows no sign of the other person.
+			//
+			// `null` is the ordinary case. The old `personEmailSynced` signal this
+			// replaces was three-state and both falsy values meant different things;
+			// this one is an obstacle or nothing.
+			if (res.rosterConflict) {
+				toast.warning(ROSTER_CONFLICT_COPY[res.rosterConflict]);
+			} else {
+				toast.success("Member updated.");
+			}
 			setEditOpen(false);
 			await router.invalidate();
 		} catch (err) {

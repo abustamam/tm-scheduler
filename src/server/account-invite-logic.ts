@@ -17,16 +17,18 @@
 //    identity at all — correcting a typo is an ordinary roster edit now.
 //  - `claimPersonForUser` — the post-sign-in finish step for BOTH the admin
 //    invite and the public "This is me" claim (Part B). Binds the picked Person
-//    to the freshly-signed-in account, IDEMPOTENTLY and SAFELY: it links ONLY
-//    when the verified sign-in email matches the membership's on-file address
-//    AND only one club holds the Person, so nobody can adopt another member's
-//    identity by picking their name.
+//    to the freshly-signed-in account, IDEMPOTENTLY and SAFELY: the decision is
+//    `bindVerifiedPerson`'s own WHERE, so picking a name cannot adopt somebody
+//    else's identity — the verified address has to be on this membership, the
+//    Person has to be held by one club, and no other member may carry that
+//    address. Everything after the refused bind here is EXPLANATION.
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, people } from "#/db/schema";
 import {
 	bindVerifiedPerson,
 	normalizeEmail,
+	type RosterObstacle,
 	rosterConflictFor,
 	verifiedEmailFor,
 } from "./account-link-logic";
@@ -50,6 +52,9 @@ export interface InvitePrep {
 	personId?: string;
 	/** The club's display name, for the invite email copy (present when `ready`). */
 	clubName?: string;
+	/** WHICH roster problem blocked it (present only on `roster_conflict`), so the
+	 *  admin is told the one thing they can act on rather than a generic refusal. */
+	obstacle?: RosterObstacle;
 }
 
 /**
@@ -114,15 +119,13 @@ export async function prepareMemberInvite(input: {
 	const email = member.email?.trim() || null;
 	if (!email) return { outcome: "no_email" };
 
-	// Would the bind this invite leads to actually land? Asked before the link is
-	// sent, so an officer never mints an account that cannot be claimed.
-	if (await rosterConflictFor(person.id, email)) {
-		return { outcome: "roster_conflict" };
-	}
-
 	// Bulk cooldown: with a usable email but an invite stamped within the window,
 	// skip this member (no resend, no re-stamp). Single explicit invite omits
 	// `respectCooldown`, so an admin "resend" always sends.
+	//
+	// Checked BEFORE the roster question below, deliberately: a member this run
+	// is going to skip anyway needs no verdict, and the conflict read is two
+	// queries per member on a path that loops the whole roster.
 	if (
 		input.respectCooldown &&
 		person.invitedAt &&
@@ -130,6 +133,14 @@ export async function prepareMemberInvite(input: {
 	) {
 		return { outcome: "recently_invited" };
 	}
+
+	// Would the bind this invite leads to actually land? Asked before the link is
+	// sent, so an officer never mints an account that cannot be claimed. This is
+	// the EXACT complement of the bind's own predicate — an earlier cut checked
+	// only two of its three arms and reported `ready` for a member no roster row
+	// vouched for, which is the half-failure this release exists to delete.
+	const obstacle = await rosterConflictFor(person.id, email);
+	if (obstacle) return { outcome: "roster_conflict", obstacle };
 
 	// Stamp the invite. Guarded on `user_id IS NULL` so a concurrent sign-in that
 	// just linked the Person is never clobbered.
@@ -235,13 +246,20 @@ export async function claimPersonForUser(input: {
 		return "roster_conflict";
 	}
 
-	// A concurrent claim won the race. Report the final state.
+	// Only a genuine race is left. Re-read, and say `already_other` ONLY when the
+	// row really does belong to somebody else: an earlier cut returned it on a
+	// NULL `user_id` too, so a refusal the explainer could not model told the
+	// member "this name is already linked to a different account" — false, alarming,
+	// and with no action that could clear it. A still-unlinked row means the bind
+	// refused for a roster reason `rosterConflictFor` failed to name, which is a
+	// bug in the complement rather than a fact about this member.
 	const [now] = await db
 		.select({ userId: people.userId })
 		.from(people)
 		.where(eq(people.id, person.id))
 		.limit(1);
-	return now?.userId === input.userId ? "already_yours" : "already_other";
+	if (now?.userId == null) return "roster_conflict";
+	return now.userId === input.userId ? "already_yours" : "already_other";
 }
 
 /** Resolve the club a membership belongs to (the invite-accept landing lands the

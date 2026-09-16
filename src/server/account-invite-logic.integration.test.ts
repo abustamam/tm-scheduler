@@ -301,9 +301,18 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		}
 	});
 
-	it("prepareMemberInvite is ready for a DUAL-CLUB member both rosters agree on", async () => {
-		// Dual membership is routine. The rule is unanimity, not exclusivity — so
-		// the ordinary two-club member gets an invite like anyone else.
+	it("a DUAL-CLUB member is refused BEFORE a link is sent, with the reason", async () => {
+		// The conservative rule's cost, asserted rather than discovered. A member
+		// two clubs hold cannot bind by any route until one membership is removed
+		// — that is the status quo before #756 and what the issue specified. What
+		// IS new is that the officer finds out at the point of action instead of
+		// after the member bounces: no link goes out, no account is minted, and
+		// `obstacle` names which of the three problems it is.
+		//
+		// A "unanimity across the clubs" rule that would have let this member in
+		// was written and reviewed out: it had to scope the dissenting set to
+		// ACTIVE rows, which handed an attacker a Person whose memberships had all
+		// lapsed. See `rosterPermitsBind`.
 		const { prepareMemberInvite } = await import("./account-invite-logic");
 		const other = await seedClub();
 		try {
@@ -320,14 +329,18 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 			});
 
 			const prep = await prepareMemberInvite({ clubId: club.clubId, memberId });
-			expect(prep.outcome).toBe("ready");
-			expect(prep.email).toBe(shared);
+			expect(prep.outcome).toBe("roster_conflict");
+			expect(prep.obstacle).toBe("multiple_clubs");
+			expect((await personRow(personId))?.invitedAt).toBeNull();
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 		}
 	});
 
-	it("a DUAL-CLUB member whose rosters agree can claim", async () => {
+	it("a DUAL-CLUB member's claim is refused for the same reason", async () => {
+		// The claim and the invite must agree — they ask the same predicate, and
+		// the whole point of `rosterConflictFor` being the bind's exact complement
+		// is that no surface can say "ready" where another says "refused".
 		const { claimPersonForUser } = await import("./account-invite-logic");
 		const other = await seedClub();
 		try {
@@ -344,11 +357,38 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 			});
 			const userId = await seedUser(shared);
 
-			expect(await claimPersonForUser({ memberId, userId })).toBe("linked");
-			expect((await personRow(personId))?.userId).toBe(userId);
+			expect(await claimPersonForUser({ memberId, userId })).toBe(
+				"roster_conflict",
+			);
+			expect((await personRow(personId))?.userId).toBeNull();
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 		}
+	});
+
+	it("a claim that cannot bind never says somebody else took the name", async () => {
+		// `already_other` used to be the catch-all after a refused bind, so a member
+		// whose roster row simply carried no address was told "This name is already
+		// linked to a different account" — false, alarming, and with nothing they or
+		// an officer could do about it. Reachable whenever the explainer cannot model
+		// the refusal, which is precisely when the message matters most.
+		const { claimPersonForUser } = await import("./account-invite-logic");
+		const addr = `no-vouch-${randomUUID()}@test.example`;
+		const { memberId, personId } = await seedMember({
+			email: null,
+			memberEmail: addr,
+		});
+		const userId = await seedUser(addr);
+		// Take the address off the roster row between the match and the bind.
+		await testDb
+			.update(members)
+			.set({ email: null })
+			.where(eq(members.id, memberId));
+
+		const outcome = await claimPersonForUser({ memberId, userId });
+
+		expect(outcome).not.toBe("already_other");
+		expect((await personRow(personId))?.userId).toBeNull();
 	});
 
 	it("two members sharing one address cannot claim each other", async () => {

@@ -23,6 +23,7 @@ import {
 	people,
 } from "#/db/schema";
 import type { ParsedMemberPath } from "#/lib/basecamp-progress";
+import { normalizedEmail } from "./account-link-logic";
 
 export interface SyncResult {
 	matched: number;
@@ -71,7 +72,7 @@ async function resolvePersonId(
 			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
 		)
 		.where(
-			sql`lower(${people.email}) = ${row.email} or lower(trim(${members.email})) = ${row.email}`,
+			sql`${normalizedEmail(people.email)} = ${row.email} or ${normalizedEmail(members.email)} = ${row.email}`,
 		);
 	if (byEmail.length !== 1) return null; // 0 or ambiguous → unmatched
 

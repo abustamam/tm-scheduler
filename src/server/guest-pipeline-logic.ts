@@ -51,6 +51,7 @@ import {
 	DEFAULT_COUNTRY_CODE,
 	toStoredPhone,
 } from "#/lib/phone";
+import { normalizedEmail } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
@@ -1042,8 +1043,8 @@ export async function applyConvertGuestToMember(
 					),
 				)
 				.where(
-					sql`lower(${people.email}) = ${email.toLowerCase()}
-					    or lower(regexp_replace(${members.email}, '^[[:space:]]+|[[:space:]]+$', '', 'g')) = ${email.toLowerCase()}`,
+					sql`${normalizedEmail(people.email)} = ${email.toLowerCase()}
+					    or ${normalizedEmail(members.email)} = ${email.toLowerCase()}`,
 				)
 				.orderBy(...order)
 				.limit(2);

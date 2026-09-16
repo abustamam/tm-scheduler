@@ -43,18 +43,31 @@ CREATE TABLE "people_email_backup" (
 -- **ROLLBACK — reverting the PR alone is NOT a valid rollback.** The old
 -- `linkPersonToUser` matched `lower(people.email)`, so a reverted deploy against
 -- a migrated database leaves every cleared member unable to auto-link: a state
--- neither the old code nor the new produces. The restore is
--- `scripts/rollback-0076.ts` (committed in the same PR, and deliberately a
--- SCRIPT rather than only a comment here, because `git revert` deletes this
--- file). Its statement, for the record:
---   UPDATE "people" p SET "email" = b."email"
---   FROM "people_email_backup" b
---   WHERE p."id" = b."person_id" AND p."user_id" IS NULL AND p."email" IS NULL;
+-- neither the old code nor the new produces. The compensating UPDATE must be run.
+--
+-- In PRODUCTION, run it inside the database service — `scripts/rollback-0076.ts`
+-- is NOT bundled into `.output/` and the runtime image has no Bun, and
+-- `railway run` executes locally against a private host that does not resolve
+-- off-platform:
+--
+--   railway ssh --service Postgres -- psql -X -c "UPDATE \"people\" p \
+--     SET \"email\" = b.\"email\" FROM \"people_email_backup\" b \
+--     WHERE p.\"id\" = b.\"person_id\" AND p.\"user_id\" IS NULL \
+--     AND p.\"email\" IS NULL;"
+--
+-- `bun run rollback:0076` runs the same statement against a local or staging
+-- database, and with `--apply` omitted prints the full accounting (how many
+-- snapshot rows are restorable, how many belong to a Person since merged away,
+-- how many have already signed in or been repaired).
+--
 -- The `p."email" IS NULL` arm is load-bearing: without it the restore clobbers
--- any address the two sanctioned non-bind writers set AFTER the migration
+-- any address the sanctioned non-bind writers set AFTER the migration
 -- (`updateUnclaimedAdminEmail`, `mergePeople`'s keeper fill), undoing an
 -- operator's repair during the very incident that triggered the rollback.
--- Drop `people_email_backup` once a release has passed.
+-- Drop `people_email_backup` by REMOVING it from `schema.ts` and shipping the
+-- generated migration, not by hand: a hand-drop puts production out of step with
+-- the snapshot, and the later generated `DROP TABLE` carries no IF EXISTS, so it
+-- would fail the deploy closed at container start.
 
 -- 1. Capture, before anything is destroyed. ON CONFLICT so a re-run can never
 --    overwrite the original snapshot with a later value.

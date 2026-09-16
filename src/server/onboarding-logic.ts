@@ -20,6 +20,7 @@ import {
 } from "#/lib/club-timezone";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { slugify } from "#/lib/slug";
+import { type RosterObstacle, rosterConflictFor } from "./account-link-logic";
 import { findBestPersonByEmail } from "./people-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -414,7 +415,12 @@ export type UpdateAdminEmailInput = z.infer<typeof updateAdminEmailSchema>;
  */
 export async function updateUnclaimedAdminEmail(
 	input: UpdateAdminEmailInput,
-): Promise<{ ok: true; personId: string }> {
+): Promise<{
+	ok: true;
+	personId: string;
+	/** The obstacle that would still stop this admin binding, or null. */
+	rosterConflict: RosterObstacle | null;
+}> {
 	const admin = await firstAdminOf(input.clubId);
 	if (!admin) throw new Error("This club has no admin to edit.");
 	if (admin.userId != null) {
@@ -446,7 +452,15 @@ export async function updateUnclaimedAdminEmail(
 		}
 	});
 
-	return { ok: true, personId: admin.personId };
+	// Did the repair actually repair anything? This console's whole job is to get
+	// an un-claimed first admin signed in, and writing both columns is not
+	// sufficient on its own: if a second club also holds them, or another member
+	// carries the same address, the bind still refuses and the admin stays locked
+	// out — while this function returns `{ ok: true }`. That is verbatim the
+	// silent half-failure the release exists to remove, on the one surface
+	// specifically built to fix it.
+	const rosterConflict = await rosterConflictFor(admin.personId, input.email);
+	return { ok: true, personId: admin.personId, rosterConflict };
 }
 
 // ---------------------------------------------------------------------------
