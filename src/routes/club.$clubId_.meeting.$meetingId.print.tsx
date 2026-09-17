@@ -26,6 +26,7 @@ import { buildAgendaSharePath } from "#/lib/agenda-share-url";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { getClubLogoMeta } from "#/server/club-logo";
@@ -78,7 +79,15 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 				getClubLogoMeta({ data: { clubId: club.id } }).catch(() => null),
 			]);
 			if (data.meeting.clubId !== club.id) throw notFound();
-			return { ...data, logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt) };
+			// Whatever this returns is DEHYDRATED into the served document, so the
+			// projection is the withholding — not what the layouts below choose to
+			// draw (#754). `inRoomMeetingPayload` names the meeting columns a
+			// printed sheet may carry and drops the rest; its docblock says why an
+			// allowlist rather than a delete.
+			return {
+				...inRoomMeetingPayload(data),
+				logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
+			};
 		},
 		component: PrintAgenda,
 		// The <title> becomes the browser's default "Save as PDF" filename, so we
