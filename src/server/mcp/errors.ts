@@ -53,6 +53,17 @@ export type McpBlockingCode =
 	| "AMBIGUOUS_GUEST"
 	| "MEETING_LOCKED"
 	| "INVALID_PHONE"
+	/**
+	 * The address on the line is not a valid email.
+	 *
+	 * Blocking rather than a zod rejection, and that choice is the point: a hard
+	 * schema failure would reject a 60-line page because one address was misread,
+	 * which on a TRANSCRIPTION path is the wrong trade. It has to be caught
+	 * somewhere, though — a guest marked present becomes a default recipient of
+	 * the club's minutes email (`minutes-email-port-logic.ts:54`), and
+	 * `resolveMinutesRecipients` only checks that the string is non-empty.
+	 */
+	| "INVALID_EMAIL"
 	| "FIELD_TOO_LONG";
 
 export interface McpBlockingItem {

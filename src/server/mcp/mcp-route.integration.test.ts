@@ -20,9 +20,11 @@ import {
 	clubs,
 	guests,
 	impersonationSessions,
+	meetings,
 	officerTerms,
 	people,
 } from "#/db/schema";
+import { utcToZonedWallTime } from "#/lib/datetime";
 import {
 	cleanup,
 	hasTestDb,
@@ -402,6 +404,20 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			stage: "prospect",
 		});
 
+		// `record_guest_book` needs a meeting whose club-local day has ARRIVED, or
+		// it returns `plan: null` and its masking code never runs — which is how
+		// an earlier version of this test passed vacuously on the one tool that
+		// actually ingests raw contact details. `seedClub`'s meeting is in the
+		// future by design, so add a past one.
+		const past = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+		await testDb.insert(meetings).values({
+			clubId: seed.clubId,
+			scheduledAt: past,
+			status: "completed",
+			theme: "Past",
+		});
+		const pastDate = utcToZonedWallTime(past, "America/Chicago").slice(0, 10);
+
 		// Sweep every tool that can name a guest, on the raw response text rather
 		// than a parsed field: a leak through an unexpected key is exactly the
 		// kind this is meant to catch.
@@ -412,7 +428,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("get_agenda", { meetingId: seed.meetingId }),
 			toolsCall("record_guest_book", {
 				clubId: seed.clubId,
-				meetingDate: "2020-01-01",
+				meetingDate: pastDate,
 				entries: [{ name: "Contactful Guest", email }],
 			}),
 		];
@@ -467,6 +483,21 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					authorization: `Bearer ${adminToken}`,
 				},
 				body: "not json",
+			}),
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("rejects a BATCHED JSON-RPC request", async () => {
+		// In JSON-response mode the SDK dispatches every message of a batch at
+		// once without awaiting them (`webStandardStreamableHttp.js:588-591`), so
+		// one 1 MB body could start thousands of applies together. Each blocks on
+		// the club advisory lock holding a pooled connection, and the app shares
+		// node-postgres' default pool of 10 — ten queued applies from one valid
+		// token would starve the whole web app, not just this endpoint.
+		const res = await handleMcpRequest(
+			mcpRequest([toolsCall("whoami"), toolsCall("whoami")], {
+				token: adminToken,
 			}),
 		);
 		expect(res.status).toBe(400);

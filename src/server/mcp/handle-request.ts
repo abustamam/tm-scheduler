@@ -15,7 +15,7 @@
  * rejects. Hoisting the transport (or the `McpServer`) to module scope is the
  * tempting optimisation and it breaks on the SECOND tool call, which is the
  * worst possible failure shape: every smoke test passes, and the thing falls
- * over the moment someone uses it for real. `mcp-transport.integration.test.ts`
+ * over the moment someone uses it for real. `mcp-route.integration.test.ts`
  * makes two sequential calls against one process for exactly this reason.
  *
  * Constructing a server per request is cheap — it is object graph assembly, no
@@ -155,6 +155,30 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 		body = JSON.parse(text);
 	} catch {
 		return json({ error: "Body must be JSON." }, 400);
+	}
+
+	// Reject JSON-RPC BATCHES.
+	//
+	// Not a style preference — it closes an amplification path. In JSON-response
+	// mode the SDK dispatches every message of a batch at once and does not await
+	// them (`webStandardStreamableHttp.js:588-591`: `for (const message of
+	// messages) { this.onmessage?.(…) }`). A single 1 MB body therefore holds
+	// thousands of `tools/call` entries that all start together; each
+	// `record_guest_book` apply opens a transaction and blocks on
+	// `pg_advisory_xact_lock`, which waits indefinitely while holding its pooled
+	// connection. `src/db/index.ts` takes node-postgres' default pool of 10 and
+	// the app sets no `statement_timeout`, so ten queued applies from ONE valid
+	// token starve the connection pool for the whole web app — not just this
+	// endpoint.
+	//
+	// The endpoint has no use for batching: every tool here is one
+	// request/response, and MCP clients send one call at a time. Refusing the
+	// shape is a smaller change than trying to bound its concurrency.
+	if (Array.isArray(body)) {
+		return json(
+			{ error: "Batched JSON-RPC requests are not supported. Send one call." },
+			400,
+		);
 	}
 
 	// Authenticate BEFORE building the server, so an invalid credential never

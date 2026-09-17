@@ -13,7 +13,10 @@
  *
  * Both sides read through existing readers rather than new queries:
  * `loadPublicClubRoster` for members (which carries its own archive gate) and
- * `listClubGuests` for guests.
+ * `loadGuestPipeline` for guests — the VP-Membership board's reader, because it
+ * is the one that already carries stage, the derived visit count and the
+ * preferred name. `listClubGuests` is the narrow picker reader and has none of
+ * them.
  */
 import { z } from "zod";
 import { loadGuestPipeline } from "#/server/guest-pipeline-logic";

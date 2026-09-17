@@ -29,6 +29,7 @@
  */
 import { sql } from "drizzle-orm";
 import type { db } from "#/db";
+import { McpError } from "./errors";
 
 /** A drizzle transaction handle (mirrors `activity.ts`). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
@@ -41,5 +42,30 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
  * pool handed out, guarding nothing.
  */
 export async function lockClub(tx: Tx, clubId: string): Promise<void> {
-	await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${clubId}))`);
+	// Bound the wait. `pg_advisory_xact_lock` otherwise blocks INDEFINITELY while
+	// holding its pooled connection, and `src/db/index.ts` takes node-postgres'
+	// default pool of 10 shared by the whole app — so a handful of applies queued
+	// behind one slow holder can starve every other request in the process, not
+	// just this endpoint. The app sets no `statement_timeout` anywhere, so
+	// nothing else would cut the wait short.
+	//
+	// `SET LOCAL` scopes it to this transaction, so the setting cannot leak back
+	// into the pool and shorten an unrelated query's patience later.
+	//
+	// 5s is well beyond a real apply (the locked section is one re-plan and a
+	// handful of inserts) and well inside any request timeout. Exceeding it means
+	// something is genuinely wrong rather than merely busy.
+	await tx.execute(sql`SET LOCAL lock_timeout = '5s'`);
+	try {
+		await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${clubId}))`);
+	} catch (err) {
+		// Postgres raises 55P03 `lock_not_available` on timeout. Say what happened
+		// and that retrying is the right response — an apply that failed here
+		// wrote nothing, so a retry is safe.
+		throw new McpError(
+			"INTERNAL",
+			"That club is busy with another change right now. Try again in a moment.",
+			{ cause: err instanceof Error ? err.message : String(err) },
+		);
+	}
 }

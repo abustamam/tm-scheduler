@@ -130,10 +130,26 @@ interface PlannedEntry {
 	source: { name: string; email: string | null; phone: string | null };
 }
 
+/**
+ * The hashed plan.
+ *
+ * `meetingNumber` is deliberately NOT here. It is DERIVED by counting held
+ * meetings forward from the club's most recent numbered one
+ * (`deriveMeetingNumber`), so it depends on rows this plan does not touch —
+ * backfilling a number onto any earlier meeting changes it. Hashing it violated
+ * D5 ("a plan contains only the rows it would touch, so a write elsewhere in
+ * the club does not make it stale") and made an ordinary backfill fail every
+ * outstanding apply as `PLAN_STALE`, which is indistinguishable from a database
+ * race and is the exact failure the design's own table warns about.
+ *
+ * MEASURED: with the number in the hash, inserting one numbered earlier meeting
+ * moved the header from `null` to `41` and changed the hash, with no row the
+ * plan touches altered. The number is still SHOWN — it rides alongside in
+ * `toPublicPlan`, where a human reads it and nothing compares it.
+ */
 interface GuestBookPlan {
 	meeting: {
 		meetingId: string;
-		meetingNumber: number | null;
 		date: string;
 		theme: string | null;
 	};
@@ -165,7 +181,12 @@ async function plan(
 		resolve?: Record<string, string>;
 	},
 	countryCode: string,
-): Promise<{ plan: GuestBookPlan | null; blocking: McpBlockingItem[] }> {
+): Promise<{
+	plan: GuestBookPlan | null;
+	blocking: McpBlockingItem[];
+	/** Shown to the caller, never hashed — see `GuestBookPlan`. */
+	meetingNumber: number | null;
+}> {
 	const blocking: McpBlockingItem[] = [];
 
 	// The club-local DAY the caller named, as an instant range. Both bounds are
@@ -206,6 +227,7 @@ async function plan(
 	if (onDate.length === 0) {
 		return {
 			plan: null,
+			meetingNumber: null,
 			blocking: [
 				{
 					code: "NO_MEETING_ON_DATE",
@@ -220,6 +242,7 @@ async function plan(
 		// can share a day. Which one a page belongs to is not ours to guess.
 		return {
 			plan: null,
+			meetingNumber: null,
 			blocking: [
 				{
 					code: "AMBIGUOUS_DATE",
@@ -288,6 +311,27 @@ async function plan(
 				code: "INVALID_PHONE",
 				entryIndex: index,
 				message: `Entry ${index}: "${typedPhone}" has no digits in it — check that line of the page.`,
+			});
+		}
+
+		// A guest marked present becomes a DEFAULT RECIPIENT of this meeting's
+		// minutes email (`minutes-email-port-logic.ts:54`), and
+		// `resolveMinutesRecipients` only checks the string is non-empty before
+		// handing it to the mailer. Both other paths that write `guests.email`
+		// validate the format — the public guest book
+		// (`guest-pipeline-schemas.ts:33`) and the admin edit
+		// (`guest-pipeline.ts:85`) both use `z.string().trim().email()`. This one
+		// is fed by an LLM reading HANDWRITING, so it is the path most likely to
+		// produce a malformed address and was the only one not checking.
+		//
+		// Blocking rather than a zod rejection on the schema: a hard failure would
+		// throw out a whole page because one line was misread, and the blocking
+		// mechanism exists to say which line to look at.
+		if (email && !z.string().email().safeParse(email).success) {
+			blocking.push({
+				code: "INVALID_EMAIL",
+				entryIndex: index,
+				message: `Entry ${index}: that email address is not valid — check that line of the page.`,
 			});
 		}
 
@@ -421,7 +465,6 @@ async function plan(
 		plan: {
 			meeting: {
 				meetingId: meeting.id,
-				meetingNumber: deriveMeetingNumber(spine, meeting.id),
 				date: utcToZonedWallTime(meeting.scheduledAt, club.timezone).slice(
 					0,
 					10,
@@ -431,6 +474,8 @@ async function plan(
 			entries,
 		},
 		blocking,
+		// Alongside the plan, never inside it — see `GuestBookPlan`.
+		meetingNumber: deriveMeetingNumber(spine, meeting.id),
 	};
 }
 
@@ -439,7 +484,7 @@ async function plan(
  * `write` block dropped. The `summary` is what a human actually reads before
  * saying yes.
  */
-function toPublicPlan(p: GuestBookPlan) {
+function toPublicPlan(p: GuestBookPlan, meetingNumber: number | null) {
 	const counts = {
 		matched: 0,
 		new: 0,
@@ -449,7 +494,9 @@ function toPublicPlan(p: GuestBookPlan) {
 	for (const e of p.entries) counts[e.outcome]++;
 
 	return {
-		meeting: p.meeting,
+		// The derived number rejoins the header HERE, outside the hash, because
+		// this is where a human reads it (see `GuestBookPlan`).
+		meeting: { ...p.meeting, meetingNumber },
 		summary: {
 			...counts,
 			// "How many people will this page add to the minutes email" is the
@@ -501,13 +548,17 @@ export const recordGuestBookTool: McpToolDefinition = {
 
 		// ---- Preview: nothing is written ----------------------------------
 		if (!args.planHash) {
-			const { plan: p, blocking } = await plan(db, club, args, countryCode);
+			const {
+				plan: p,
+				blocking,
+				meetingNumber,
+			} = await plan(db, club, args, countryCode);
 			// No plan means the meeting could not be identified. There is nothing
 			// to hash and nothing to approve — only the blocking item to answer.
 			if (!p) return { applied: false, plan: null, blocking, planHash: null };
 			return {
 				applied: false,
-				...toPublicPlan(p),
+				...toPublicPlan(p, meetingNumber),
 				blocking,
 				planHash: hashOf(p),
 			};
@@ -519,7 +570,11 @@ export const recordGuestBookTool: McpToolDefinition = {
 			// re-plan below sees a state no other apply can move underneath it.
 			await lockClub(tx, club.clubId);
 
-			const { plan: fresh, blocking } = await plan(tx, club, args, countryCode);
+			const {
+				plan: fresh,
+				blocking,
+				meetingNumber,
+			} = await plan(tx, club, args, countryCode);
 			// The meeting stopped being identifiable between preview and apply —
 			// it was rescheduled or deleted, or a second one was added to the day.
 			// Nothing is written; the transaction rolls back on throw.
@@ -537,7 +592,11 @@ export const recordGuestBookTool: McpToolDefinition = {
 				throw new McpError(
 					"PLAN_STALE",
 					"The club changed since that preview. Here is a fresh plan — show it and ask again.",
-					{ ...toPublicPlan(fresh), blocking, planHash: freshHash },
+					{
+						...toPublicPlan(fresh, meetingNumber),
+						blocking,
+						planHash: freshHash,
+					},
 				);
 			}
 			if (blocking.length > 0) {
@@ -614,8 +673,8 @@ export const recordGuestBookTool: McpToolDefinition = {
 
 			return {
 				applied: true,
-				meeting: fresh.meeting,
-				summary: toPublicPlan(fresh).summary,
+				meeting: { ...fresh.meeting, meetingNumber },
+				summary: toPublicPlan(fresh, meetingNumber).summary,
 				newGuestIds,
 				matchedGuestIds,
 				attendanceRecorded: attendanceFor.length,

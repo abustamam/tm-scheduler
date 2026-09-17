@@ -270,6 +270,17 @@ describe.skipIf(!hasTestDb)("record_guest_book (#773)", () => {
 		// A plan contains only the rows it would touch, so ordinary activity in
 		// the club must not make an approved plan un-appliable. Without this, the
 		// mechanism would be too brittle to use on a busy club.
+		//
+		// The inserted meeting is EARLIER than the one being transcribed, and
+		// carries a meeting NUMBER. That combination is the one that matters and
+		// an earlier version of this test could not see it: it inserted a FUTURE
+		// meeting, which is the one case that cannot move anything, so it passed
+		// while the hash was in fact unstable. `deriveMeetingNumber` counts
+		// forward from the club's most recent numbered meeting, so backfilling a
+		// number onto an earlier one renumbers every meeting after it — and with
+		// the derived number inside the hashed plan that renumber failed every
+		// outstanding apply as PLAN_STALE. MEASURED before the fix: the header
+		// moved from null to 41 and the hash changed.
 		const args = {
 			clubId: seed.clubId,
 			meetingDate: pastMeetingDate,
@@ -279,13 +290,47 @@ describe.skipIf(!hasTestDb)("record_guest_book (#773)", () => {
 
 		await testDb.insert(meetings).values({
 			clubId: seed.clubId,
-			scheduledAt: new Date(Date.now() + 40 * 24 * 60 * 60 * 1000),
-			status: "scheduled",
-			theme: "Unrelated",
+			scheduledAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+			status: "completed",
+			theme: "Backfilled",
+			meetingNumber: 40,
 		});
 
 		const second = (await call(args)) as Preview;
 		expect(second.planHash).toBe(first.planHash);
+		// The number itself is still REPORTED — it just is not hashed. Without
+		// this the test would also pass if the header silently stopped carrying
+		// it, which is the other way to make the hash stable and the wrong one.
+		expect(second.meeting?.meetingNumber).toBe(41);
+		expect(first.meeting?.meetingNumber).toBeNull();
+	});
+
+	it("blocks an email address it cannot parse, and never lets one reach the mailer", async () => {
+		// A guest marked present becomes a default recipient of the minutes email,
+		// and `resolveMinutesRecipients` only checks the string is non-empty. This
+		// path is fed by an LLM reading handwriting, so it is the one most likely
+		// to produce a malformed address — and it was the only guest-writing path
+		// not validating the format.
+		const p = (await call({
+			clubId: seed.clubId,
+			meetingDate: pastMeetingDate,
+			entries: [{ name: "Smudged Line", email: "jane at example dot com" }],
+		})) as Preview;
+		expect(p.blocking[0]).toMatchObject({
+			code: "INVALID_EMAIL",
+			entryIndex: 0,
+		});
+
+		// And apply refuses while it stands, so nothing is written.
+		await expect(
+			call({
+				clubId: seed.clubId,
+				meetingDate: pastMeetingDate,
+				entries: [{ name: "Smudged Line", email: "jane at example dot com" }],
+				planHash: p.planHash,
+			}),
+		).rejects.toMatchObject({ code: "BLOCKED" });
+		expect(await guestRows()).toHaveLength(0);
 	});
 
 	// --- AC7: an unresolved ambiguity ------------------------------------
