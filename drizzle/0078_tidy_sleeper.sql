@@ -1,0 +1,2 @@
+ALTER TABLE "clubs" ADD COLUMN "digital_voting_enabled" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+ALTER TABLE "meetings" ADD COLUMN "digital_voting_disabled" boolean DEFAULT false NOT NULL;

@@ -369,6 +369,14 @@ describe("formatActivity", () => {
 		expect(
 			formatActivity({ ...meetingBase, change: "role_enabled" }).summary,
 		).toBe("enabled a role for upcoming meetings");
+		expect(
+			formatActivity({ ...meetingBase, change: "digital_voting_disabled" })
+				.summary,
+		).toBe("turned off digital voting for the meeting");
+		expect(
+			formatActivity({ ...meetingBase, change: "digital_voting_enabled" })
+				.summary,
+		).toBe("turned digital voting back on for the meeting");
 		expect(formatActivity({ ...meetingBase, change: null }).summary).toBe(
 			"updated the meeting",
 		);

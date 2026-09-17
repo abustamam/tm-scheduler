@@ -217,6 +217,26 @@ describe("MeetingPresent", () => {
 		expect(screen.getByText("Scan to vote")).toBeTruthy();
 	});
 
+	it("keeps the vote slide's nominees but shows no QR, no label and no count when digital voting is off (#770)", async () => {
+		// Earlier tests in this file poll too, and nothing clears the mock between
+		// them — without this the "never polled" assertion below reads their calls.
+		getVoteParticipation.mockClear();
+		const offDeck = deck.map((s) =>
+			s.kind === "voteSpeaker" ? { ...s, ballotUrl: null } : s,
+		);
+		const { container } = renderPresent({ deck: offDeck });
+		clickNext(); // -> wordOfDay
+		clickNext(); // -> voteSpeaker
+
+		expect(screen.getByText("Please Vote for Best Speaker:")).toBeTruthy();
+		expect(screen.getAllByText(/Jane Doe/).length).toBeGreaterThan(0);
+		expect(container.querySelector('[data-testid="vote-qr"]')).toBeNull();
+		expect(screen.queryByText("Scan to vote")).toBeNull();
+		expect(screen.queryByText(/votes? in/)).toBeNull();
+		// No vote slide carries a ballot, so nothing polls for a count.
+		expect(getVoteParticipation).not.toHaveBeenCalled();
+	});
+
 	it("renders no QR plate at all on a non-vote content slide", () => {
 		const { container } = renderPresent();
 		clickNext(); // -> wordOfDay: a content slide, but not a vote slide

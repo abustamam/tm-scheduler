@@ -14,7 +14,16 @@
 // `club.$clubId_.meeting.$meetingId.word.test.tsx`: mock the route's server-fn
 // and club-resolver imports (all reach `#/db` → `pg`, which must not load in a
 // unit test), then call `Route.options.loader` directly.
-import { isNotFound } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	createMemoryHistory,
+	createRootRoute,
+	createRouter,
+	isNotFound,
+	RouterProvider,
+} from "@tanstack/react-router";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import type React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
@@ -129,5 +138,82 @@ describe("ballot route loader (#510)", () => {
 			clubName: "Downtown Toastmasters",
 			meetingId: MEETING_ID,
 		});
+	});
+});
+
+describe("ballot route loader — digital voting switch (#770)", () => {
+	for (const digitalVoting of [true, false]) {
+		it(`passes digitalVoting=${digitalVoting} through for the page to branch on`, async () => {
+			mockClub();
+			vi.mocked(getPublicMeetingByKey).mockResolvedValue({
+				meeting: { id: MEETING_ID, clubId: CLUB_ID },
+				digitalVoting,
+				// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
+			} as any);
+
+			await expect(
+				runLoader({
+					params: { clubId: "downtown", meetingId: "2026-01-01" },
+					location,
+				}),
+			).resolves.toMatchObject({ digitalVoting });
+		});
+	}
+});
+
+/** Render the ballot PAGE (not just its loader) with a stubbed payload. */
+async function renderVotePage(digitalVoting: boolean) {
+	vi.spyOn(Route, "useLoaderData").mockReturnValue({
+		clubId: CLUB_ID,
+		clubName: "Downtown Toastmasters",
+		clubNumber: "123456",
+		meetingId: MEETING_ID,
+		digitalVoting,
+		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+	} as any);
+	const Component = Route.options.component as () => React.ReactElement;
+	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const rootRoute = createRootRoute({
+		component: () => (
+			<QueryClientProvider client={qc}>
+				<Component />
+			</QueryClientProvider>
+		),
+	});
+	const router = createRouter({
+		routeTree: rootRoute,
+		history: createMemoryHistory({ initialEntries: ["/"] }),
+	});
+	render(<RouterProvider router={router} />);
+	await waitFor(() => expect(router.state.status).toBe("idle"));
+}
+
+describe("ballot page — digital voting off (#770)", () => {
+	afterEach(() => {
+		cleanup();
+		localStorage.clear();
+		vi.restoreAllMocks();
+	});
+
+	it("says so and offers NO way to identify yourself", async () => {
+		await renderVotePage(false);
+
+		expect(
+			screen.getByText("Digital voting is off for this meeting"),
+		).toBeTruthy();
+		// The name picker and the guest-name field are the two ways in; neither
+		// may be reachable, or a voter starts a flow that cannot end in a vote.
+		expect(screen.queryByText(/Who are you/i)).toBeNull();
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(screen.queryByRole("button", { name: /join|vote/i })).toBeNull();
+	});
+
+	it("shows the picker when digital voting is on — the control case", async () => {
+		await renderVotePage(true);
+
+		expect(
+			screen.queryByText("Digital voting is off for this meeting"),
+		).toBeNull();
+		expect(screen.getAllByRole("textbox").length).toBeGreaterThan(0);
 	});
 });

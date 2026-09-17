@@ -145,6 +145,13 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 				case "role_enabled":
 					summary = "enabled a role for upcoming meetings";
 					break;
+				// #770 — the meeting's digital-voting switch.
+				case "digital_voting_disabled":
+					summary = "turned off digital voting for the meeting";
+					break;
+				case "digital_voting_enabled":
+					summary = "turned digital voting back on for the meeting";
+					break;
 				default:
 					summary = "updated the meeting";
 			}

@@ -10,6 +10,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	clubs,
 	guests,
 	meetingAttendance,
 	meetingBallotGuests,
@@ -1962,5 +1963,160 @@ describe.skipIf(!hasTestDb)("candidate disqualification (#723)", () => {
 			expect(tally[category].disqualified).toEqual([]);
 		}
 		expect(tally.best_speaker.results).toHaveLength(2);
+	});
+});
+
+describe.skipIf(!hasTestDb)("digital voting switched off (#770)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				sortOrder: 99,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: def.id,
+			slotIndex: 0,
+			assignedMemberId: seed.adminMemberId,
+		});
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	/** Flip a switch straight in the database — WITHOUT closing anything — so
+	 *  each gate is shown to hold on its own, not because a force-close already
+	 *  ran. The force-close is `meeting-digital-voting.integration.test.ts`. */
+	const switchOff = {
+		club: () =>
+			testDb
+				.update(clubs)
+				.set({ digitalVotingEnabled: false })
+				.where(eq(clubs.id, seed.clubId)),
+		meeting: () =>
+			testDb
+				.update(meetings)
+				.set({ digitalVotingDisabled: true })
+				.where(eq(meetings.id, seed.meetingId)),
+	};
+
+	const open = () =>
+		openVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+
+	const sessionsForMeeting = () =>
+		testDb
+			.select({ id: meetingVoteSessions.id })
+			.from(meetingVoteSessions)
+			.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+
+	for (const which of ["club", "meeting"] as const) {
+		describe(`off by the ${which} switch`, () => {
+			it("openVote refuses and opens nothing", async () => {
+				await switchOff[which]();
+				await expect(open()).rejects.toThrow(
+					"Digital voting is off for this meeting.",
+				);
+				expect(await sessionsForMeeting()).toHaveLength(0);
+			});
+
+			it("castVote refuses a ballot into a session that is still open", async () => {
+				await open();
+				await switchOff[which]();
+				await expect(
+					castVote({
+						meetingId: seed.meetingId,
+						category: "best_speaker",
+						voter: { kind: "member", id: seed.memberId },
+						candidate: { kind: "member", id: seed.adminMemberId },
+					}),
+				).rejects.toThrow("Digital voting is off for this meeting.");
+				const [session] = await sessionsForMeeting();
+				const votes = await testDb
+					.select({ id: meetingVotes.id })
+					.from(meetingVotes)
+					.where(eq(meetingVotes.sessionId, session.id));
+				expect(votes).toHaveLength(0);
+			});
+
+			it("joinBallotAsGuest refuses and mints no guest", async () => {
+				await switchOff[which]();
+				await expect(
+					joinBallotAsGuest({ meetingId: seed.meetingId, name: "Osei, Kwame" }),
+				).rejects.toThrow("Digital voting is off for this meeting.");
+				expect(
+					await testDb
+						.select({ id: guests.id })
+						.from(guests)
+						.where(eq(guests.clubId, seed.clubId)),
+				).toHaveLength(0);
+				expect(
+					await testDb
+						.select({ guestId: meetingBallotGuests.guestId })
+						.from(meetingBallotGuests)
+						.where(eq(meetingBallotGuests.meetingId, seed.meetingId)),
+				).toHaveLength(0);
+			});
+
+			it("loadBallot says so and ships no candidates, even with a session open", async () => {
+				await open();
+				await switchOff[which]();
+				const ballot = await loadBallot(seed.meetingId);
+				expect(ballot.digitalVotingOff).toBe(true);
+				for (const c of Object.values(ballot.categories)) {
+					expect(c.isOpen).toBe(false);
+					expect(c.candidates).toEqual([]);
+				}
+			});
+
+			it("loadParticipation reports no ballots, even with one cast", async () => {
+				await open();
+				await castVote({
+					meetingId: seed.meetingId,
+					category: "best_speaker",
+					voter: { kind: "member", id: seed.memberId },
+					candidate: { kind: "member", id: seed.adminMemberId },
+				});
+				await switchOff[which]();
+				const p = await loadParticipation(seed.meetingId);
+				expect(p.categories.best_speaker.ballotsIn).toBe(0);
+				expect(p.presentCount).toBeNull();
+			});
+		});
+	}
+
+	it("still lets the Ballot Counter close a vote and read its tally once off", async () => {
+		await open();
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "member", id: seed.adminMemberId },
+		});
+		await switchOff.meeting();
+		await closeVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		const tally = await loadTally(seed.meetingId);
+		expect(JSON.stringify(tally)).toContain(seed.adminMemberId);
+	});
+
+	it("loadBallot reports digitalVotingOff false while it is on", async () => {
+		expect((await loadBallot(seed.meetingId)).digitalVotingOff).toBe(false);
 	});
 });

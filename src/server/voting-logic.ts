@@ -9,9 +9,10 @@
  * Authorization is the caller's job (`resolveVoteCounterAuthz`), matching how
  * `minutes-logic.ts` trusts its server fn's admin gate.
  */
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	clubs,
 	guests,
 	meetingAttendance,
 	meetingBallotGuests,
@@ -23,6 +24,10 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { cap } from "#/lib/cap";
+import {
+	DIGITAL_VOTING_OFF_MESSAGE,
+	isDigitalVotingOn,
+} from "#/lib/digital-voting";
 import { disqualificationReasonSchema } from "#/lib/disqualification";
 import {
 	WRITE_IN_LIMITS,
@@ -77,6 +82,53 @@ export async function listVoteSessions(
 	return out;
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** The two switches #770 reads, joined in one statement. */
+const DIGITAL_VOTING_SWITCHES = {
+	digitalVotingEnabled: clubs.digitalVotingEnabled,
+	digitalVotingDisabled: meetings.digitalVotingDisabled,
+};
+
+/**
+ * Whether this meeting's digital vote is on (#770), for the READS: the ballot
+ * and the participation count every phone and the projector poll. A meeting
+ * that does not exist answers true — whether it exists is the caller's own
+ * lookup's question, and every caller already asks it.
+ */
+async function isDigitalVotingOnFor(meetingId: string): Promise<boolean> {
+	const [row] = await db
+		.select(DIGITAL_VOTING_SWITCHES)
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	// One flat row answers both halves of the rule — it carries the club's
+	// column and the meeting's, joined.
+	return row ? isDigitalVotingOn(row, row) : true;
+}
+
+/**
+ * The WRITE gate (#770): throws unless this meeting's digital vote is on,
+ * inside the caller's transaction and under `FOR SHARE` on both rows. The lock
+ * is what makes a switch-off that commits mid-call observable: flipping either
+ * switch UPDATEs its row, so a writer here waits for that commit and then reads
+ * the new value rather than the one from before it. Without it an `openVote`
+ * racing a switch-off could reopen a session the switch-off had just closed.
+ */
+async function assertDigitalVotingOnTx(tx: Tx, meetingId: string) {
+	const [row] = await tx
+		.select(DIGITAL_VOTING_SWITCHES)
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1)
+		.for("share");
+	if (row && !isDigitalVotingOn(row, row)) {
+		throw new Error(DIGITAL_VOTING_OFF_MESSAGE);
+	}
+}
+
 interface WindowInput {
 	meetingId: string;
 	clubId: string;
@@ -96,6 +148,12 @@ export async function openVote(input: WindowInput): Promise<void> {
 	// test, which would have left this covered by a source grep alone.
 	await assertClubNotArchived(input.clubId);
 	await db.transaction(async (tx) => {
+		// #770. Opening is the one window write gated on the switch. CLOSING is
+		// deliberately NOT gated: switching off closes every open vote itself, and
+		// a Close arriving afterwards — from a console tab loaded before the
+		// switch, which keeps its buttons until it reloads — must be a harmless
+		// no-op rather than an error the officer cannot act on.
+		await assertDigitalVotingOnTx(tx, input.meetingId);
 		await tx
 			.insert(meetingVoteSessions)
 			.values({
@@ -173,6 +231,33 @@ export async function closeAllVotesTx(
 			and(
 				eq(meetingVoteSessions.meetingId, meetingId),
 				isNull(meetingVoteSessions.closedAt),
+			),
+		);
+}
+
+/**
+ * Close every open vote in every meeting of ONE club, for the club-level
+ * digital-voting switch (#770). Takes `tx` for the same reason
+ * `closeAllVotesTx` does: the switch and the closes must land together.
+ *
+ * ONE statement, not a loop over the club's meetings: a club has as many
+ * meetings as it has history, and a transaction that issues a statement per
+ * meeting holds its locks for as long as that list is long.
+ */
+export async function closeClubVotesTx(tx: Tx, clubId: string): Promise<void> {
+	await tx
+		.update(meetingVoteSessions)
+		.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
+		.where(
+			and(
+				isNull(meetingVoteSessions.closedAt),
+				inArray(
+					meetingVoteSessions.meetingId,
+					tx
+						.select({ id: meetings.id })
+						.from(meetings)
+						.where(eq(meetings.clubId, clubId)),
+				),
 			),
 		);
 }
@@ -495,6 +580,15 @@ export async function castVote(input: {
 	// candidate eligibility, because the derivations that answer it read the
 	// roster this club is supposed to have stopped exposing.
 	await assertClubNotArchived(clubId);
+	// #770, before eligibility for the same reason as the archive gate above.
+	// Not locked: the atomic INSERT below already refuses a session that a
+	// switch-off has closed (the switch-off closes every open session in its own
+	// transaction), so a cast racing it fails as "not open" either way. This
+	// read is what refuses a cast into a session that is somehow still open
+	// while the switch says off, and gives the phone the right sentence.
+	if (!(await isDigitalVotingOnFor(input.meetingId))) {
+		throw new Error(DIGITAL_VOTING_OFF_MESSAGE);
+	}
 
 	// (1) Candidate validity — two different questions for the two shapes.
 	//
@@ -705,6 +799,10 @@ export interface BallotCategory {
 export interface BallotData {
 	meetingId: string;
 	categories: Record<AwardCategory, BallotCategory>;
+	/** True when the club or this meeting has digital voting switched off
+	 *  (#770). Every category then reads closed with nobody on it, and the
+	 *  phone says why instead of "No vote is open right now". */
+	digitalVotingOff: boolean;
 }
 
 /** Every category at zero ballots — the not-found participation badge. */
@@ -746,7 +844,20 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 	// already renders for a meeting whose sessions were never opened, so no
 	// caller needs a new branch.
 	if (!(await isReadableClubForMeeting(meetingId))) {
-		return { meetingId, categories: closedBallotCategories() };
+		return {
+			meetingId,
+			categories: closedBallotCategories(),
+			digitalVotingOff: false,
+		};
+	}
+	// #770. Answered like the archived club above — closed, nobody on it — so a
+	// session left open when the switch went off ships no candidate names.
+	if (!(await isDigitalVotingOnFor(meetingId))) {
+		return {
+			meetingId,
+			categories: closedBallotCategories(),
+			digitalVotingOff: true,
+		};
 	}
 	// ONE load of the disqualification index, shared by both candidate
 	// producers (#723). Each defaults to loading its own when called without
@@ -777,7 +888,7 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 				: [],
 		};
 	}
-	return { meetingId, categories };
+	return { meetingId, categories, digitalVotingOff: false };
 }
 
 /**
@@ -1018,6 +1129,9 @@ export async function loadTableTopicsForConsole(
 }
 
 export interface Participation {
+	/** True when the club or this meeting has digital voting switched off
+	 *  (#770) — the counts are then all zero and mean nothing. */
+	digitalVotingOff: boolean;
 	categories: Record<AwardCategory, { ballotsIn: number }>;
 	/**
 	 * How many people are marked present, or NULL when there is no honest
@@ -1058,7 +1172,20 @@ export async function loadParticipation(
 	// asymmetry between two neighbours in ONE file, keyed identically, is exactly
 	// how #544 happened in the first place.
 	if (!(await isReadableClubForMeeting(meetingId))) {
-		return { categories: zeroBallotCounts(), presentCount: null };
+		return {
+			digitalVotingOff: false,
+			categories: zeroBallotCounts(),
+			presentCount: null,
+		};
+	}
+	// #770 — the projector's count is part of digital voting too, and the flag
+	// says WHY it is zero rather than leaving the deck to guess.
+	if (!(await isDigitalVotingOnFor(meetingId))) {
+		return {
+			digitalVotingOff: true,
+			categories: zeroBallotCounts(),
+			presentCount: null,
+		};
 	}
 	const rows = await db
 		.select({
@@ -1088,6 +1215,7 @@ export async function loadParticipation(
 		.where(eq(meetingAttendance.meetingId, meetingId));
 
 	return {
+		digitalVotingOff: false,
 		categories,
 		presentCount: (attendance?.present ?? 0) > 0 ? attendance.present : null,
 	};
@@ -1204,6 +1332,9 @@ export async function joinBallotAsGuest(input: {
 			.where(eq(meetings.id, input.meetingId))
 			.limit(1)
 			.for("update");
+		// #770, under the lock above and before any name is looked up or
+		// minted: a refused join must leave no `guests` row behind.
+		await assertDigitalVotingOnTx(tx, input.meetingId);
 
 		// Excludes converted guests (`converted_membership_id` set) — ADR-0018's
 		// "a joined guest is a member" rule, applied the same way `listClubGuests`

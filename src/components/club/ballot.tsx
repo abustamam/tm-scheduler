@@ -146,6 +146,12 @@ export function Ballot({
 		});
 	}
 
+	// #770, before the waiting panel below, which would otherwise tell a phone
+	// in a paper-ballot room to keep waiting for a vote that is never coming.
+	// Polled, not loader-borne: the switch can be flipped while this page is
+	// already open in someone's hand.
+	if (ballot.data?.digitalVotingOff) return <BallotOff />;
+
 	if (ballot.isPending) {
 		return (
 			<div className="flex justify-center py-10">
@@ -444,5 +450,26 @@ function WriteInField({
 				Vote
 			</Button>
 		</form>
+	);
+}
+
+/**
+ * What the ballot says when the club or this meeting has digital voting off
+ * (#770). Shared by the ballot route, which knows before a voter has picked a
+ * name and can name the club, and by `Ballot`, which learns it from a poll —
+ * the switch can be flipped while a phone already has the page open.
+ */
+export function BallotOff({ clubName }: { clubName?: string }) {
+	return (
+		<div className="rounded-2xl border border-border bg-card px-6 py-10 text-center">
+			<h2 className="font-display text-xl font-semibold">
+				Digital voting is off for this meeting
+			</h2>
+			<p className="mt-1 text-sm text-muted-foreground">
+				{clubName
+					? `${clubName} isn't voting on phones today. If there's an award vote, it's on paper.`
+					: "There's no phone vote today. If there's an award vote, it's on paper."}
+			</p>
+		</div>
 	);
 }

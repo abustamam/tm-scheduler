@@ -11,6 +11,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { isDigitalVotingOn } from "#/lib/digital-voting";
 import {
 	JOIN_URL_FIELD,
 	MEETING_FIELDS,
@@ -58,6 +59,7 @@ import {
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
+	applyMeetingDigitalVoting,
 	applyMeetingUpdate,
 	applyReopenMeeting,
 	applyWordOfTheDayUpdate,
@@ -191,6 +193,9 @@ async function loadMeetingDetail(
 			// so a club that states its own rule stops being contradicted by ours.
 			tableTopicsMinSeconds: true,
 			tableTopicsMaxSeconds: true,
+			// Digital voting (#770): every renderer of this payload decides from
+			// it whether a ballot QR, a vote panel or a ballot exists at all.
+			digitalVotingEnabled: true,
 		},
 	});
 
@@ -417,6 +422,15 @@ async function loadMeetingDetail(
 		// 1–2 minute window — see `#/lib/table-topics-limits` (#443).
 		tableTopicsMinSeconds: club?.tableTopicsMinSeconds ?? null,
 		tableTopicsMaxSeconds: club?.tableTopicsMaxSeconds ?? null,
+		// #770. `digitalVoting` is the RESOLVED answer every surface reads — the
+		// print QR, the deck's vote slides, the Ballot Counter panel and the
+		// public ballot. `clubDigitalVotingEnabled` is the club's half alone, so
+		// the meeting page can tell an admin WHICH switch is off.
+		digitalVoting: isDigitalVotingOn(
+			{ digitalVotingEnabled: club?.digitalVotingEnabled ?? true },
+			meeting,
+		),
+		clubDigitalVotingEnabled: club?.digitalVotingEnabled ?? true,
 		// The meeting's template content (#agenda-templates), or null for a
 		// standard meeting. Feeds `resolveAgendaRows` on both the screen and the
 		// print route so the two cannot disagree about what the meeting is.
@@ -743,6 +757,36 @@ export const completeMeeting = createServerFn({ method: "POST" })
 			meetingId: data.meetingId,
 			actorMemberId: membership.id,
 		});
+	});
+
+const digitalVotingSchema = z.object({
+	meetingId: uuid,
+	disabled: z.boolean(),
+});
+
+/** Switch digital voting off, or back on, for one meeting (#770). Signed-in
+ *  club admins only — deliberately NOT `requireMeetingAgendaEditor`, whose
+ *  self-asserted-Toastmaster arm would let anyone on the public page shut a
+ *  room's vote. Switching off closes any open vote. AUTHED. */
+export const setMeetingDigitalVoting = createServerFn({ method: "POST" })
+	.validator((input: unknown) => digitalVotingSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const [row] = await db
+			.select({ clubId: meetings.clubId })
+			.from(meetings)
+			.where(eq(meetings.id, data.meetingId))
+			.limit(1);
+		if (!row) throw new Error("Meeting not found.");
+		const membership = await requireClubRole(currentUser.id, row.clubId, [
+			"admin",
+		]);
+		await applyMeetingDigitalVoting({
+			meetingId: data.meetingId,
+			disabled: data.disabled,
+			actorMemberId: membership.id,
+		});
+		return { ok: true as const };
 	});
 
 /** Reopen a completed meeting back to `scheduled` so it can be amended (#150).
