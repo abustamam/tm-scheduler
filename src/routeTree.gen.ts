@@ -18,6 +18,7 @@ import { Route as ResourcesIndexRouteImport } from './routes/resources.index'
 import { Route as ResourcesEvaluationResourcesRouteImport } from './routes/resources.evaluation-resources'
 import { Route as ResourcesSlugRouteImport } from './routes/resources.$slug'
 import { Route as ClubClubIdRouteImport } from './routes/club.$clubId'
+import { Route as ApiMcpRouteImport } from './routes/api/mcp'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiDevLoginRouteImport } from './routes/api/dev-login'
 import { Route as AuthedSuperadminRouteImport } from './routes/_authed/superadmin'
@@ -110,6 +111,11 @@ const ResourcesSlugRoute = ResourcesSlugRouteImport.update({
 const ClubClubIdRoute = ClubClubIdRouteImport.update({
   id: '/club/$clubId',
   path: '/club/$clubId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMcpRoute = ApiMcpRouteImport.update({
+  id: '/api/mcp',
+  path: '/api/mcp',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -381,6 +387,7 @@ export interface FileRoutesByFullPath {
   '/superadmin': typeof AuthedSuperadminRouteWithChildren
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
@@ -438,6 +445,7 @@ export interface FileRoutesByTo {
   '/schedule': typeof AuthedScheduleRoute
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
   '/resources': typeof ResourcesIndexRoute
@@ -497,6 +505,7 @@ export interface FileRoutesById {
   '/_authed/superadmin': typeof AuthedSuperadminRouteWithChildren
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
@@ -557,6 +566,7 @@ export interface FileRouteTypes {
     | '/superadmin'
     | '/api/dev-login'
     | '/api/health'
+    | '/api/mcp'
     | '/club/$clubId'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
@@ -614,6 +624,7 @@ export interface FileRouteTypes {
     | '/schedule'
     | '/api/dev-login'
     | '/api/health'
+    | '/api/mcp'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
     | '/resources'
@@ -672,6 +683,7 @@ export interface FileRouteTypes {
     | '/_authed/superadmin'
     | '/api/dev-login'
     | '/api/health'
+    | '/api/mcp'
     | '/club/$clubId'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
@@ -724,6 +736,7 @@ export interface RootRouteChildren {
   UnsubscribeRoute: typeof UnsubscribeRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiMcpRoute: typeof ApiMcpRoute
   ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
   ResourcesSlugRoute: typeof ResourcesSlugRoute
   ResourcesEvaluationResourcesRoute: typeof ResourcesEvaluationResourcesRoute
@@ -805,6 +818,13 @@ declare module '@tanstack/react-router' {
       path: '/club/$clubId'
       fullPath: '/club/$clubId'
       preLoaderRoute: typeof ClubClubIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mcp': {
+      id: '/api/mcp'
+      path: '/api/mcp'
+      fullPath: '/api/mcp'
+      preLoaderRoute: typeof ApiMcpRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/health': {
@@ -1252,6 +1272,7 @@ const rootRouteChildren: RootRouteChildren = {
   UnsubscribeRoute: UnsubscribeRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiMcpRoute: ApiMcpRoute,
   ClubClubIdRoute: ClubClubIdRouteWithChildren,
   ResourcesSlugRoute: ResourcesSlugRoute,
   ResourcesEvaluationResourcesRoute: ResourcesEvaluationResourcesRoute,

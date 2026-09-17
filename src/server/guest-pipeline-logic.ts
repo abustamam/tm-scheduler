@@ -109,77 +109,246 @@ type GuestContactRow = {
 };
 
 /**
- * The club guest matching an email, or a phone whose name also agrees — the ONE
- * dedup key for guests, used both by guest-book capture (to reuse the row) and
- * by the edit path (to refuse creating a second row that would match). Email
- * leads over phone, mirroring `applyConvertGuestToMember`'s Person dedup.
- *
- * The name check on the phone branch is the same guard as the Person dedup, for
- * the same reason (#488): a spouse or coworker signing the guest book with the
- * shared number they already gave is TWO prospects, and collapsing them into one
- * row silently merges their attendance and understates the VP-Membership funnel.
- * `opts.name` is the name the caller is presenting; a phone hit whose stored
- * name disagrees is passed over, not returned.
- *
- * `opts.digits` is the caller's number in E.164 digits; the SQL compares it
- * against the STORED phone's digits. Both sides therefore have to be E.164 for
- * the compare to mean anything — writes are (every path funnels through
- * `toStoredPhone` with a never-null country code), and rows written before that
- * are brought over by `scripts/backfill-phone-e164.ts` (#397).
- *
- * Ordered oldest-first and tie-broken on id: without an ORDER BY, a `limit(1)`
- * over two matching rows is a Postgres coin flip, so a returning visitor's
- * history would split nondeterministically across them.
+ * What `matchGuest` compares against. Wider than `GuestContactRow` by the two
+ * columns the ORDERING needs, because the order is part of the answer (below)
+ * and a caller that loaded rows in some other order would get a different one.
  */
-async function findGuestByContact(
+export interface GuestMatchCandidate extends GuestContactRow {
+	createdAt: Date;
+}
+
+/** The name a caller is presenting, with whatever contact came with it. */
+export interface GuestMatchInput {
+	name: string;
+	email: string | null;
+	/**
+	 * The E.164 STORED form (`toStoredPhone(raw, cc)`), not raw input. Both sides
+	 * are reduced to digits before comparing, and the digits of `+1 (555)
+	 * 123-4567` and of `(555) 123-4567` differ — that mismatch is the whole of
+	 * #397.
+	 */
+	phone: string | null;
+}
+
+/**
+ * What the club's guest list says about one presented name+contact.
+ *
+ * `already_present` is deliberately NOT here: whether a matched guest already
+ * has attendance at a particular meeting is a fact about a meeting, not about
+ * the guest list, and folding it in would make this function need a meeting.
+ * `record_guest_book` upgrades `matched` to `already_present` itself.
+ */
+export type GuestMatch =
+	| { outcome: "matched"; via: "email" | "phone"; guest: GuestMatchCandidate }
+	| { outcome: "new" }
+	| {
+			outcome: "ambiguous";
+			reason: "phone_name_disagree" | "name_only";
+			candidates: GuestMatchCandidate[];
+	  };
+
+/**
+ * THE guest dedup rule (#488 / ADR-0018), over an in-memory candidate set.
+ *
+ * Email leads, then a phone whose name also agrees — mirroring
+ * `applyConvertGuestToMember`'s Person dedup. The name check on the phone
+ * branch is the same guard as that one, for the same reason: a spouse or
+ * coworker signing the guest book with the shared number they already gave is
+ * TWO prospects, and collapsing them into one row silently merges their
+ * attendance and understates the VP-Membership funnel.
+ *
+ * **Why a pure function over candidates rather than a query.** Three callers
+ * need this rule and they need it at two very different scales. The single-guest
+ * paths (`captureGuestVisit` at the door, `applyUpdateGuest`'s clash check) hand
+ * it the small bounded set their own indexed queries returned. The MCP
+ * guest-book transcription (#773) hands it the club's guests, loaded ONCE for a
+ * page of up to 100 entries — the query-per-lookup shape would be ~200 round
+ * trips per preview and again inside the locked apply transaction. A second
+ * implementation for the batch path is how two paths come to disagree about who
+ * is the same visitor, so there is one rule and the caller chooses the I/O.
+ *
+ * **Ordering is part of the answer.** Candidates are sorted oldest-first and
+ * tie-broken on id before anything is compared: over two matching rows an
+ * arbitrary pick would split a returning visitor's history nondeterministically
+ * between them.
+ *
+ * **`ambiguous` is a REPORT, not a decision.** This function never decides what
+ * to do about one — the public path treats it as "no match, create" (its
+ * long-standing behaviour, which must not change), and MCP planning blocks on it
+ * and asks a human. Two situations produce it:
+ *   - `phone_name_disagree`: the number is on file under a name that does not
+ *     agree. The public path creating a second prospect here is CORRECT (#488);
+ *     a transcriber looking at one handwritten line deserves to be asked.
+ *   - `name_only`: no email and no phone at all, but an existing guest's name
+ *     agrees. Reported only when `nameOnlyAmbiguity` is set, because a name is
+ *     not a dedup key — the public path must keep creating a new guest for a
+ *     visitor who gives only a name, or two different Sam Rays become one.
+ */
+export function matchGuest(
+	candidates: GuestMatchCandidate[],
+	input: GuestMatchInput,
+	opts?: { excludeGuestId?: string; nameOnlyAmbiguity?: boolean },
+): GuestMatch {
+	const pool = candidates
+		.filter((c) => c.id !== opts?.excludeGuestId)
+		.sort(
+			(a, b) =>
+				a.createdAt.getTime() - b.createdAt.getTime() ||
+				(a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+		);
+
+	const email = input.email?.trim().toLowerCase() || null;
+	if (email) {
+		const byEmail = pool.find((c) => c.email?.trim().toLowerCase() === email);
+		if (byEmail) return { outcome: "matched", via: "email", guest: byEmail };
+	}
+
+	const digits = normalizePhone(input.phone);
+	if (digits) {
+		const samePhone = pool.filter((c) => normalizePhone(c.phone) === digits);
+		const agreeing = samePhone.find((c) => namesAgree(c.name, input.name));
+		if (agreeing) return { outcome: "matched", via: "phone", guest: agreeing };
+		if (samePhone.length > 0) {
+			return {
+				outcome: "ambiguous",
+				reason: "phone_name_disagree",
+				candidates: samePhone,
+			};
+		}
+	}
+
+	if (opts?.nameOnlyAmbiguity && !email && !digits) {
+		const byName = pool.filter((c) => namesAgree(c.name, input.name));
+		if (byName.length > 0) {
+			return { outcome: "ambiguous", reason: "name_only", candidates: byName };
+		}
+	}
+
+	return { outcome: "new" };
+}
+
+/**
+ * `matchGuest` against the database, for a SINGLE presented name+contact.
+ *
+ * This is the QUERY half; the rule itself is `matchGuest` above. It fetches
+ * exactly the candidate universe the old `findGuestByContact` did — the
+ * email-matching rows and up to `PHONE_CANDIDATE_LIMIT` rows sharing the
+ * number, both club-scoped, both indexed — and applies the shared comparison to
+ * them. Keeping the two bounded queries rather than loading the club's guests
+ * matters here: the public guest book runs this on an unauthenticated POST, one
+ * visitor at a time. The BATCH path (MCP guest-book transcription) does the
+ * opposite — `loadGuestMatchCandidates` once, then `matchGuest` per entry — for
+ * the reason given on `matchGuest`.
+ *
+ * `input.phone` is the caller's number in the E.164 STORED form; the SQL
+ * compares its digits against the STORED phone's digits. Both sides therefore
+ * have to be E.164 for the compare to mean anything — writes are (every path
+ * funnels through `toStoredPhone` with a never-null country code), and rows
+ * written before that are brought over by `scripts/backfill-phone-e164.ts`
+ * (#397).
+ *
+ * `nameOnlyAmbiguity` is NOT offered: an entry with no contact details has no
+ * candidate query to run, so a name-only scan would mean loading the club's
+ * guests — which is the batch path's job, not this one's.
+ */
+async function findGuestMatch(
 	conn: DbOrTx,
 	clubId: string,
-	opts: {
-		digits: string;
-		email: string | null;
-		name: string;
-		excludeGuestId?: string;
-	},
-): Promise<GuestContactRow | undefined> {
+	input: GuestMatchInput,
+	opts?: { excludeGuestId?: string },
+): Promise<GuestMatch> {
 	const cols = {
 		id: guests.id,
 		name: guests.name,
 		email: guests.email,
 		phone: guests.phone,
+		createdAt: guests.createdAt,
 	};
-	const scope = opts.excludeGuestId
+	const scope = opts?.excludeGuestId
 		? and(eq(guests.clubId, clubId), ne(guests.id, opts.excludeGuestId))
 		: eq(guests.clubId, clubId);
 	const order = [asc(guests.createdAt), asc(guests.id)] as const;
 
-	if (opts.email) {
-		const [byEmail] = await conn
-			.select(cols)
-			.from(guests)
-			.where(
-				and(scope, sql`lower(${guests.email}) = ${opts.email.toLowerCase()}`),
-			)
-			.orderBy(...order)
-			.limit(1);
-		if (byEmail) return byEmail;
+	const email = input.email?.trim() || null;
+	const digits = normalizePhone(input.phone);
+
+	const candidates: GuestMatchCandidate[] = [];
+	if (email) {
+		candidates.push(
+			...(await conn
+				.select(cols)
+				.from(guests)
+				.where(and(scope, sql`lower(${guests.email}) = ${email.toLowerCase()}`))
+				.orderBy(...order)
+				.limit(1)),
+		);
 	}
-	if (opts.digits) {
-		// Candidates, not a result: take the oldest whose name agrees.
-		const byPhone = await conn
-			.select(cols)
-			.from(guests)
-			.where(
-				and(
-					scope,
-					sql`regexp_replace(coalesce(${guests.phone}, ''), '[^0-9]', '', 'g') = ${opts.digits}`,
-				),
-			)
-			.orderBy(...order)
-			.limit(PHONE_CANDIDATE_LIMIT);
-		const match = byPhone.find((g) => namesAgree(g.name, opts.name));
-		if (match) return match;
+	if (digits) {
+		candidates.push(
+			...(await conn
+				.select(cols)
+				.from(guests)
+				.where(
+					and(
+						scope,
+						sql`regexp_replace(coalesce(${guests.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
+					),
+				)
+				.orderBy(...order)
+				.limit(PHONE_CANDIDATE_LIMIT)),
+		);
 	}
-	return undefined;
+	return matchGuest(candidates, input, opts);
+}
+
+/**
+ * The club guest a presented name+contact resolves to, or undefined.
+ *
+ * Collapses `findGuestMatch`'s three outcomes to the two its callers act on:
+ * `matched` yields the row, and BOTH `new` and `ambiguous` yield undefined.
+ * That is deliberate and is the behaviour these paths have always had — the
+ * public guest book creates a second prospect for a shared number under a
+ * disagreeing name (#488), and the edit path lets that same edit through rather
+ * than calling it a clash.
+ *
+ * EXPORTED so `minutes-logic`'s `resolveGuestId` shares it (#773). Before that
+ * it inserted with an id-only `onConflictDoNothing`, so an officer adding a
+ * returning visitor to a past meeting minted a duplicate `guests` row —
+ * silently, because the minutes rendered the right name either way.
+ */
+export async function findGuestForContact(
+	conn: DbOrTx,
+	clubId: string,
+	input: GuestMatchInput,
+	opts?: { excludeGuestId?: string },
+): Promise<GuestContactRow | undefined> {
+	const match = await findGuestMatch(conn, clubId, input, opts);
+	return match.outcome === "matched" ? match.guest : undefined;
+}
+
+/**
+ * Every guest of a club that the MCP batch matcher may match against, loaded
+ * ONCE per call (#773). Same stage filter as `listClubGuests` would NOT do:
+ * this deliberately includes `joined` and `lost` guests, because the question
+ * is "does this row already exist", not "who should the picker offer".
+ * Transcribing a page that names a guest who has since joined must reuse their
+ * row, not mint a second one.
+ */
+export async function loadGuestMatchCandidates(
+	conn: DbOrTx,
+	clubId: string,
+): Promise<GuestMatchCandidate[]> {
+	return conn
+		.select({
+			id: guests.id,
+			name: guests.name,
+			email: guests.email,
+			phone: guests.phone,
+			createdAt: guests.createdAt,
+		})
+		.from(guests)
+		.where(eq(guests.clubId, clubId))
+		.orderBy(asc(guests.createdAt), asc(guests.id));
 }
 
 /**
@@ -334,14 +503,13 @@ export async function captureGuestVisit(
 	const name = input.name.trim();
 	if (!name) throw new Error("Please enter your name.");
 	const email = input.email?.trim() || null;
-	// Standardize to E.164 on write (#295); the digits form below (for dedup) is
-	// derived from the normalized value so matching stays consistent. The country
-	// code is never null (#397), so the guest who types `(555) 123-4567` on their
+	// Standardize to E.164 on write (#295); `matchGuest` reduces this normalized
+	// value to digits for dedup, so matching stays consistent. The country code
+	// is never null (#397), so the guest who types `(555) 123-4567` on their
 	// first visit and `+1 (555) 123-4567` on their second is ONE guest with two
 	// visits — not two "1 visit" prospects.
 	const cc = await loadClubDefaultCountryCode(input.clubId);
 	const phone = toStoredPhone(input.phone, cc);
-	const digits = normalizePhone(phone);
 
 	// Attendance is only written for a meeting HAPPENING NOW. Since #319 the
 	// guest book is linked from the public club page ("Planning a visit?"), not
@@ -358,10 +526,13 @@ export async function captureGuestVisit(
 
 	return db.transaction(async (tx) => {
 		// 1. Dedup, club-scoped: email → phone-with-name-agreement → none.
-		const existing = await findGuestByContact(tx, input.clubId, {
-			digits,
-			email,
+		//    An `ambiguous` outcome (shared number, disagreeing name) resolves to
+		//    undefined here and creates a second prospect — which is #488's rule
+		//    and this path's long-standing behaviour, not an oversight.
+		const existing = await findGuestForContact(tx, input.clubId, {
 			name,
+			email,
+			phone,
 		});
 
 		let guestId: string;
@@ -748,12 +919,12 @@ export async function applyUpdateGuest(
 	const email = input.email?.trim() || null;
 	const phone = toStoredPhone(input.phone, cc);
 
-	const clash = await findGuestByContact(db, input.clubId, {
-		digits: normalizePhone(phone),
-		email,
-		name,
-		excludeGuestId: input.guestId,
-	});
+	const clash = await findGuestForContact(
+		db,
+		input.clubId,
+		{ name, email, phone },
+		{ excludeGuestId: input.guestId },
+	);
 	if (clash) {
 		throw new Error(
 			`Another guest in this club (${clash.name}) already has that phone number or email.`,

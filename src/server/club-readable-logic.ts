@@ -6,7 +6,7 @@
  * logo/brand takedown path. A read path that ignores it defeats the mechanism
  * it was built for.
  *
- * There are four enforcement points, and they are not interchangeable. The
+ * There are five enforcement points, and they are not interchangeable. The
  * canonical list is `isClubArchived`'s docblock in `#/lib/club-archive` — check the
  * count there before trusting this one, which is a copy and has rotted before:
  *
@@ -27,6 +27,15 @@
  *   · PER-MEETING AGENDA WRITES — the three resolvers in `meeting-authz-logic.ts`
  *     gate themselves, because their grant ladder reaches none of the above and
  *     its TMOD arm needs no session at all (v1.26.0.0).
+ *   · MCP BEARER TOKENS — `authorizeToken` / `authenticateToken` in
+ *     `mcp/authz-logic.ts` (#773). A bearer credential reaches none of the above
+ *     for the same reason the Pathways ingest did not (#555): there is no session
+ *     and no `requireMembership` on the path, so the check has to be its own.
+ *
+ * Note the shape those last two share with this module and NOT with the first
+ * two: each is a grant ladder that resolves its own actor. That is the signal to
+ * look for — a new authorization path is a new enforcement point, whatever it is
+ * called.
  *
  * It lives in its own module — rather than in `club-logo-logic.ts`, where
  * `isReadableClub` was born (#495) — precisely because that home is why #544

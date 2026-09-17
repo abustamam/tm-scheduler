@@ -209,6 +209,123 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 		expect(m.guests).toHaveLength(0);
 	});
 
+	// ---------------------------------------------------------------------
+	// #773 CRITICAL regression. `resolveGuestId` used to insert with
+	// `onConflictDoNothing({ target: guests.id })` — an id conflict only, never
+	// an email or phone match — so an officer adding a RETURNING visitor to a
+	// past meeting minted a second `guests` row every time. Nothing errored and
+	// nothing looked wrong on the page: the minutes listed the right name, while
+	// the club's guest list grew a duplicate and the visitor's history split
+	// across two rows, each showing "1 visit". That is the whole failure mode —
+	// silent, cumulative, and invisible to the surface that caused it — so these
+	// two tests are the only defence and were written to fail first.
+	//
+	// The dedup rule they pin is `matchGuest`'s, which is the SAME rule the
+	// public guest book has always used (#488): email first, then a phone whose
+	// name also agrees.
+	// ---------------------------------------------------------------------
+
+	it("does NOT create a second guest row when a returning guest's EMAIL matches (#773)", async () => {
+		const first = await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Rita Vance", email: "rita@example.com" },
+		});
+
+		// A second meeting — the officer is transcribing a later week.
+		const [later] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+
+		// Same person, typed slightly differently, same email.
+		const second = await addGuestPresent({
+			// biome-ignore lint/style/noNonNullAssertion: insert above returns a row
+			meetingId: later!.id,
+			newGuest: { name: "Rita Vance", email: "RITA@example.com" },
+		});
+
+		expect(second.guestId).toBe(first.guestId);
+		const rows = await testDb
+			.select({ id: guests.id })
+			.from(guests)
+			.where(eq(guests.clubId, seed.clubId));
+		expect(rows).toHaveLength(1);
+	});
+
+	it("does NOT create a second guest row when a returning guest's PHONE matches and the names agree (#773)", async () => {
+		const first = await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Samir Patel", phone: "(555) 123-4567" },
+		});
+
+		const [later] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+
+		const second = await addGuestPresent({
+			// biome-ignore lint/style/noNonNullAssertion: insert above returns a row
+			meetingId: later!.id,
+			newGuest: { name: "Samir Patel", phone: "+1 555 123 4567" },
+		});
+
+		expect(second.guestId).toBe(first.guestId);
+		const rows = await testDb
+			.select({ id: guests.id })
+			.from(guests)
+			.where(eq(guests.clubId, seed.clubId));
+		expect(rows).toHaveLength(1);
+	});
+
+	// The other half of #488, and the reason the fix above is a MATCH and not a
+	// name compare: a shared number under a name that does not agree is two
+	// different prospects, and merging them would understate the funnel.
+	it("DOES create a second guest when the phone matches but the names disagree (#773 / #488)", async () => {
+		await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Samir Patel", phone: "(555) 987-6543" },
+		});
+		const second = await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Priya Raman", phone: "(555) 987-6543" },
+		});
+
+		const rows = await testDb
+			.select({ id: guests.id })
+			.from(guests)
+			.where(eq(guests.clubId, seed.clubId));
+		expect(rows).toHaveLength(2);
+		expect(rows.map((r) => r.id)).toContain(second.guestId);
+	});
+
+	// A guest who gives only a name is always a NEW guest. A name is not a dedup
+	// key — two different Sam Rays must not collapse into one prospect.
+	it("DOES create a second guest for a name-only entry, even when the name agrees (#773)", async () => {
+		const first = await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Sam Ray" },
+		});
+		const second = await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Sam Ray" },
+		});
+
+		expect(second.guestId).not.toBe(first.guestId);
+		const rows = await testDb
+			.select({ id: guests.id })
+			.from(guests)
+			.where(eq(guests.clubId, seed.clubId));
+		expect(rows).toHaveLength(2);
+	});
+
 	it("pre-lists a guest holding a role slot as present (fromRole)", async () => {
 		const guestId = await newGuest("Nadia Visitor");
 		await testDb
