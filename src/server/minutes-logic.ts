@@ -35,6 +35,7 @@ import {
 	loadAwardCandidates,
 } from "./award-candidates-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { findGuestForContact } from "./guest-pipeline-logic";
 
 export type AttendanceStatus = "present" | "absent" | "excused";
 export type AwardCategory =
@@ -632,14 +633,41 @@ async function resolveGuestId(
 		if (!name) throw new Error("A guest name is required.");
 		// Standardize the guest phone to E.164 on write (#295).
 		const cc = await loadClubDefaultCountryCode(clubId);
+		const email = input.newGuest.email?.trim() || null;
+		const phone = toStoredPhone(input.newGuest.phone, cc);
+
+		// #773. `onConflictDoNothing({ target: guests.id })` below is an ID
+		// conflict and nothing else, so before this check an officer adding a
+		// RETURNING visitor to a past meeting minted a second `guests` row every
+		// time — silently, because the minutes rendered the right name either
+		// way, while the club's guest list grew a duplicate and the visitor's
+		// history split across two rows each showing "1 visit".
+		//
+		// The rule is the public guest book's, shared rather than re-derived
+		// (#488): email first, then a phone whose name also agrees. An
+		// `ambiguous` outcome resolves to "no match" here and creates a second
+		// prospect, which is what that rule says a shared number under a
+		// disagreeing name means.
+		//
+		// This runs BEFORE the insert, so the client-supplied `newGuestId`
+		// idempotency is unaffected: a replay whose first attempt created the row
+		// now MATCHES that row and returns the same id it would have returned
+		// through the id conflict.
+		const existing = await findGuestForContact(tx, clubId, {
+			name,
+			email,
+			phone,
+		});
+		if (existing) return existing.id;
+
 		const [created] = await tx
 			.insert(guests)
 			.values({
 				...(newGuestId ? { id: newGuestId } : {}),
 				clubId,
 				name,
-				email: input.newGuest.email?.trim() || null,
-				phone: toStoredPhone(input.newGuest.phone, cc),
+				email,
+				phone,
 			})
 			.onConflictDoNothing({ target: guests.id })
 			.returning({ id: guests.id });

@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { Bell, CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { ApiTokensSection } from "#/components/api-tokens-section";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
@@ -104,6 +105,10 @@ function MyCommitments() {
 					)}
 				</Button>
 			</div>
+
+			{/* Renders nothing unless the user is an admin or officer somewhere
+			    (#773). That check is server-side — see `ApiTokensSection`. */}
+			<ApiTokensSection />
 
 			{needsSpeechDetails.length > 0 ? (
 				<div className="rounded-xl border border-[var(--warning)]/40 bg-[var(--warning-soft)] p-4">

@@ -211,6 +211,18 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// while a self-asserted Timer's write and a session-authenticated officer's
 	// look identical in the feed (the rule `plan_set` already follows).
 	"timing_record",
+	// A page of the paper guest book was transcribed through the MCP endpoint
+	// (#773). ONE row per apply, not one per guest: the maintainer transcribes a
+	// PAGE, the apply is all-or-nothing, and a feed that lists twelve separate
+	// rows for one sitting buries the club's other activity. Recording guest
+	// attendance from the browser still logs nothing — that asymmetry is
+	// deliberate and narrow: this path is a bearer token acting outside a
+	// session, so "who wrote these rows, and through what" is the question the
+	// feed has to be able to answer. `detail = { meetingId, newGuestIds,
+	// matchedGuestIds, via }`, and it carries NO names or contact details —
+	// every member of the club can read the activity feed, and a guest's email
+	// is not theirs to read.
+	"guest_visits_record",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -2295,6 +2307,44 @@ export const syncTokens = pgTable(
 		revokedAt: timestamp("revoked_at"),
 	},
 	(t) => [index("sync_tokens_club_idx").on(t.clubId)],
+);
+
+// ---------------------------------------------------------------------------
+// API tokens — per-USER Bearer credentials for the MCP endpoint (#773 / #771).
+//
+// The deliberate difference from `sync_tokens` above is the owner column, and
+// it is the whole point of a second table rather than a nullable `user_id` on
+// that one. A sync token IS a club: `/api/pathways/ingest` derives `clubId`
+// from it and every row it writes is credited to nobody. An api token is a
+// PERSON: `/api/mcp` derives a user from it and then resolves that user's
+// membership in whichever club the tool names, so every write it makes lands
+// in `activity_log` with a real `actor_member_id` (D10). Folding the two into
+// one table would make "which of these two identities does this row carry"
+// a runtime question on a credential path, which is the last place it belongs.
+//
+// Raw token is `tmk_` + 32 random bytes base64url, shown once at creation and
+// stored only as a SHA-256 hash. The prefix differs from `gup_` so a pasted
+// token says which kind it is before anything tries to resolve it.
+//
+// There is no scope column and no expiry: revocation (`revoked_at`) is the
+// kill switch, which is the right size for one user. Both are additive later.
+// ---------------------------------------------------------------------------
+export const apiTokens = pgTable(
+	"api_tokens",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		// Cascade: a deleted user's tokens must not outlive them as credentials
+		// that still resolve to a `user.id` nothing else can reach.
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		tokenHash: text("token_hash").notNull().unique(),
+		name: text("name"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		lastUsedAt: timestamp("last_used_at"),
+		revokedAt: timestamp("revoked_at"),
+	},
+	(t) => [index("api_tokens_user_idx").on(t.userId)],
 );
 
 // ---------------------------------------------------------------------------

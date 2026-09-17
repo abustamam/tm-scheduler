@@ -15,7 +15,7 @@
  * restating it: this claim has now gone stale twice (#544, #560), and each restated
  * copy is another place it can rot independently.
  *
- * Four db-level points, and a route guard is none of them. Labelled by MECHANISM,
+ * Five db-level points, and a route guard is none of them. Labelled by MECHANISM,
  * not by verb — an earlier version of this list said "authed WRITES" for the first
  * one, which is checkably false: GET server fns that gate with `requireClubRole`
  * (e.g. `getScoreboard` in `server/dcp.ts`) reach it too.
@@ -45,6 +45,19 @@
  *     Runs BEFORE the meeting-lock check in the two resolvers that HAVE one —
  *     `resolveVoteCounterAuthz` deliberately has none, which is also why the gate
  *     cannot be folded into `assertMeetingNotLocked`.
+ *   - The MCP token authorizer — `authorizeToken` / `authenticateToken`
+ *     (`server/mcp/authz-logic.ts`, #773). A fifth mechanism, and it exists for
+ *     the same reason the ingest route needed its own (#555): a BEARER credential
+ *     never passes through `requireMembership`, so it never gets the archive check
+ *     for free. It resolves its own memberships with `clubs.archived_at` on the
+ *     join and reads the flag off that row with `isClubArchived` — it does NOT
+ *     call `assertClubNotArchived`, which would re-query a fact it already has
+ *     (the round-trip #566 removed from the membership guards).
+ *     TWO effects, not one, and the difference is deliberate: `authenticateToken`
+ *     FILTERS archived clubs out of what `whoami` reports, so a taken-down club is
+ *     not even named; `authorizeToken` REJECTS one a caller names directly, with
+ *     `ARCHIVED` rather than `FORBIDDEN`, matching what `requireMembership` tells
+ *     a real admin in the browser.
  *
  * Authed readers that resolve membership with a bare `getMembership` reach NONE of
  * them and must call a public seam themselves: `minutes.ts`, the minutes-PDF API

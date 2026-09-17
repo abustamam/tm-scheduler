@@ -892,8 +892,14 @@ describe("API routes are enrolled in the archive gate (#555)", () => {
 	};
 
 	/** Any of these counts as gating on the archive. */
+	// `isClubArchived` is the pure predicate from `#/lib/club-archive`, and it is
+	// here because a caller that has ALREADY joined `clubs.archived_at` onto the
+	// row it resolved must not issue a second query for the same fact — that is
+	// exactly what #566 removed from the membership guards. `assertClubNotArchived`
+	// is for a caller holding a club id and no resolved row; a caller holding the
+	// row reads the flag off it. Both are gates; only the cost differs.
 	const API_GATES =
-		/isReadableClub|isReadableClubForMeeting|isReadableClubForMember|assertClubNotArchived/;
+		/isReadableClub|isReadableClubForMeeting|isReadableClubForMember|assertClubNotArchived|isClubArchived/;
 
 	/**
 	 * Routes whose gate lives in the `-logic` seam they delegate to, not in the
@@ -909,6 +915,13 @@ describe("API routes are enrolled in the archive gate (#555)", () => {
 	const API_GATED_VIA: Record<string, string> = {
 		"club.$clubId.logo.ts": "src/server/club-logo-logic.ts",
 		"pathways/ingest.ts": "src/server/pathways-ingest-logic.ts",
+		// #773. The MCP endpoint's route body does nothing but delegate, and its
+		// handler does nothing but authenticate and dispatch; the archive check
+		// lives where the membership is resolved, which for a bearer token is
+		// `authorizeToken`. It is the same lesson ingest taught (#555): a bearer
+		// credential never passes through `requireMembership`, so it never gets
+		// the archive check for free and has to carry its own.
+		"mcp.ts": "src/server/mcp/authz-logic.ts",
 	};
 
 	function walk(dir: string, prefix = ""): string[] {

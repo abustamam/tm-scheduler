@@ -540,6 +540,13 @@
       "when": 1789594863918,
       "tag": "0076_bored_meltdown",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1789676285070,
+      "tag": "0077_spotty_puma",
+      "breakpoints": true
     }
   ]
 }

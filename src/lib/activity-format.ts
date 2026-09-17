@@ -258,6 +258,18 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 					summary = "applied a suggestion to the DCP scoreboard";
 			}
 			break;
+		// A page of the paper guest book, transcribed through the MCP endpoint
+		// (#773). ONE entry per page rather than one per guest, so the wording is
+		// deliberately plural-neutral: the count lives in `detail`, and the feed
+		// is a "who touched what, when" list.
+		//
+		// It names NO guest, for the reason the detail carries no names either —
+		// every member of the club can read this feed, and a visitor's identity is
+		// not theirs to read. `targetType` is "meeting", so the entry already
+		// resolves WHICH meeting beside this text.
+		case "guest_visits_record":
+			summary = "recorded guests from the guest book";
+			break;
 		default:
 			summary = entry.action;
 	}
