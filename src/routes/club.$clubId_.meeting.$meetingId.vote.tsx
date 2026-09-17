@@ -2,7 +2,11 @@ import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
-import { Ballot, type VoterIdentity } from "#/components/club/ballot";
+import {
+	Ballot,
+	BallotOff,
+	type VoterIdentity,
+} from "#/components/club/ballot";
 import { PickNameForm } from "#/components/club/pick-name-form";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { PublicFooter } from "#/components/public-footer";
@@ -39,6 +43,8 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 			clubName: club.name,
 			clubNumber: club.clubNumber,
 			meetingId: detail.meeting.id,
+			// #770 — off means no name picker and no ballot, just the notice.
+			digitalVoting: detail.digitalVoting,
 		};
 	},
 	component: VotePage,
@@ -66,7 +72,8 @@ function readVoter(meetingId: string): VoterIdentity | null {
 }
 
 function VotePage() {
-	const { clubId, clubName, clubNumber, meetingId } = Route.useLoaderData();
+	const { clubId, clubName, clubNumber, meetingId, digitalVoting } =
+		Route.useLoaderData();
 	const [voter, setVoter] = useState<VoterIdentity | null>(() => {
 		const stored = readVoter(meetingId);
 		if (stored) return stored;
@@ -92,7 +99,9 @@ function VotePage() {
 			</header>
 
 			<main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-6 px-5 py-10">
-				{voter ? (
+				{!digitalVoting ? (
+					<BallotOff clubName={clubName} />
+				) : voter ? (
 					<>
 						<Ballot meetingId={meetingId} voter={voter} />
 						<Button

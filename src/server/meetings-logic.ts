@@ -323,6 +323,49 @@ export async function applyWordOfTheDayUpdate(input: WordOfTheDayUpdateInput) {
 }
 
 /**
+ * Switch digital voting off (or back on) for ONE meeting (#770). Caller enforces
+ * admin authz — see `setMeetingDigitalVoting`, which deliberately does NOT take
+ * the self-asserted-Toastmaster path `updateMeeting` does: an unauthenticated
+ * caller must not be able to shut a room's vote.
+ *
+ * Switching off closes every open vote in the SAME transaction, like completing
+ * a meeting does: the switch always takes effect, and a ballot racing it is
+ * refused by `castVote`'s atomic insert rather than slipping in after. Votes
+ * already cast are kept — switching back on and reopening a category reuses
+ * its session. Switching back on reopens nothing.
+ *
+ * Only the MEETING's half of the rule. A club with digital voting off stays off
+ * here whatever this writes (`isDigitalVotingOn`).
+ */
+export async function applyMeetingDigitalVoting(input: {
+	meetingId: string;
+	disabled: boolean;
+	actorMemberId: string | null;
+}): Promise<void> {
+	await db.transaction(async (tx) => {
+		const [meeting] = await tx
+			.update(meetings)
+			.set({ digitalVotingDisabled: input.disabled })
+			.where(eq(meetings.id, input.meetingId))
+			.returning({ clubId: meetings.clubId });
+		if (!meeting) throw new Error("Meeting not found.");
+		if (input.disabled) await closeAllVotesTx(tx, input.meetingId);
+		await logActivity(tx, {
+			clubId: meeting.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: {
+				change: input.disabled
+					? "digital_voting_disabled"
+					: "digital_voting_enabled",
+			},
+		});
+	});
+}
+
+/**
  * Close out a meeting: set `status = completed`, which locks its agenda from
  * further edits (#150). Guarded to the meeting's scheduled date being today or
  * past (in the club timezone) so an upcoming meeting can't be locked by

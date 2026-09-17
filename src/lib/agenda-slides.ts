@@ -84,8 +84,10 @@ type VoteTiming = {
 	caller: LegendEntry | null;
 	/** Absolute URL of this meeting's public ballot (#510), rendered as a QR on
 	 *  the slide. The projector is already showing "Vote for Best Speaker" at
-	 *  exactly the moment people need to scan, which beats a printed footer. */
-	ballotUrl: string;
+	 *  exactly the moment people need to scan, which beats a printed footer.
+	 *  `null` when the meeting runs no digital vote (#770): the slide stays, so
+	 *  a paper-ballot room still sees the nominees, with no QR and no count. */
+	ballotUrl: string | null;
 };
 
 /**
@@ -438,8 +440,9 @@ export type SlideDeckInput = Omit<RunOfShowConfig, "tableTopicsLimits"> & {
 	 *  vote slide. Required rather than defaulted: building it needs the
 	 *  request's origin, which this pure deck builder has no business knowing —
 	 *  a caller that forgot it should get a type error, not a QR that renders
-	 *  a relative path nobody's camera can scan. */
-	ballotUrl: string;
+	 *  a relative path nobody's camera can scan. `null` when the meeting runs
+	 *  no digital vote (#770) — see `ballotUrlFor`. */
+	ballotUrl: string | null;
 };
 
 export function buildSlideDeck({

@@ -145,6 +145,7 @@ describe.skipIf(!hasTestDb)("club timezone setting (#547)", () => {
 			geIntroducesFunctionaries: false,
 			tableTopicsMinSeconds: null,
 			tableTopicsMaxSeconds: null,
+			digitalVotingEnabled: true,
 		});
 	});
 

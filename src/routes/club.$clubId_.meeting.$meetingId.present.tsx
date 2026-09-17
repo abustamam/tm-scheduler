@@ -7,6 +7,7 @@ import { buildSlideDeck } from "#/lib/agenda-slides";
 import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { ballotUrlFor } from "#/lib/digital-voting";
 import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { getClubLogoMeta } from "#/server/club-logo";
@@ -56,14 +57,18 @@ function PresentPage() {
 	// The absolute ballot URL is derived in the browser (#510), same as the
 	// guest-book QR on the VP Membership page: SSR has no origin, and a QR
 	// baked from a relative path is not a URL a phone's camera can resolve.
-	// Blank until the effect fires, which is why every vote slide's `ballotUrl`
-	// is `""` for that first render — `MeetingPresent` shows a loading state
-	// rather than a QR that can't scan.
-	const [origin, setOrigin] = useState("");
+	// Unknown until the effect fires, which is why every vote slide's
+	// `ballotUrl` is `""` for that first render — `MeetingPresent` shows a
+	// loading state rather than a QR that can't scan. Null when the club or
+	// this meeting runs no digital vote (#770): the vote slides still show the
+	// nominees for a paper ballot, with no QR and no count.
+	const [origin, setOrigin] = useState<string | null>(null);
 	useEffect(() => setOrigin(window.location.origin), []);
-	const ballotUrl = origin
-		? `${origin}/club/${clubId}/meeting/${meetingId}/vote`
-		: "";
+	const ballotUrl = ballotUrlFor(
+		data.digitalVoting,
+		{ clubKey: clubId, meetingKey: meetingId },
+		origin,
+	);
 	const club = {
 		name: data.clubName,
 		clubNumber: data.clubNumber,

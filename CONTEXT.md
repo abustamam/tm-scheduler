@@ -412,6 +412,18 @@ the nouns in `src/db/schema.ts`.
   Reached from a QR on the present-mode vote slides and all four printed agenda layouts, or
   directly at `/club/:clubId/meeting/:key/vote`. See
   `docs/superpowers/specs/2026-08-08-digital-voting-design.md`.
+  **Two switches turn it off (#770)**: the club's `digital_voting_enabled` (default on, set in
+  Club settings) and one meeting's `digital_voting_disabled` (default off, set by a signed-in club
+  admin from that meeting's Ballot Counter console — never by the self-asserted Toastmaster). A
+  meeting can only switch it further OFF: a club with it off is off for every meeting.
+  `isDigitalVotingOn` (`src/lib/digital-voting.ts`) is the one statement of that rule. "Off" removes
+  the digital part only — no ballot QR on any printed layout or slide (every ballot URL comes from
+  `ballotUrlFor`, which answers null), no vote panel in the console, the public ballot says voting
+  is off, and `openVote`, `castVote` and `joinBallotAsGuest` refuse. It keeps what a paper-ballot
+  club still uses: the deck's vote slides with the nominees, the agenda's "opens voting for Best
+  Speaker" lines, Table Topics speaker capture, and recording winners in the minutes. Switching
+  either one off closes every open vote session in the same transaction, like completing a meeting;
+  votes already cast are kept, and closing a vote or reading its tally still works while off.
 - **Disqualification** — the Vote Counter's record that a candidate cannot win one award on one
   meeting, with the reason the room is told (`meeting_candidate_disqualifications`, #723). Eligibility
   is not derivable: a speaker can have spoken and still be out, because they ran outside the
