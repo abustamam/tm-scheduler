@@ -1160,10 +1160,19 @@ export const meetings = pgTable(
 		// A join URL is not private data, it is a key to the door: anyone holding
 		// it can walk into the meeting and there is no revocation short of a new
 		// room. Those four are in-room artifacts that get projected, printed and
-		// shared onward, and nobody types a URL off a projector anyway. The
-		// withholding is a RENDER-side rule — the shared `loadMeetingDetail`
-		// payload carries this column to every consumer — held by
-		// `src/routes/join-url-not-on-print-surfaces.guard.test.ts`.
+		// shared onward, and nobody types a URL off a projector anyway.
+		//
+		// The withholding is a PAYLOAD rule, not a render-side one (#754): the
+		// shared `loadMeetingDetail` carries every column of this row to every
+		// consumer, and a route loader that returns `{ ...data }` dehydrates it
+		// into the served document whether or not a component draws it. So the
+		// three artifact route loaders narrow the row through
+		// `IN_ROOM_MEETING_FIELDS` (`#/lib/in-room-meeting-payload`), which is an
+		// ALLOWLIST — **a column added below reaches no in-room artifact until
+		// someone adds it there on purpose**, which is the property #731's
+		// render-side rule and its source grep did not have.
+		// `src/routes/join-url-not-on-print-surfaces.guard.test.ts` holds both
+		// halves: the built payload, and the modules that draw these surfaces.
 		joinUrl: text("join_url"),
 		theme: text("theme"),
 		wordOfTheDay: text("word_of_the_day"),

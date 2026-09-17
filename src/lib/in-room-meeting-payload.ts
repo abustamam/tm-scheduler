@@ -78,6 +78,14 @@ export const IN_ROOM_MEETING_FIELDS = [
 
 export type InRoomMeetingField = (typeof IN_ROOM_MEETING_FIELDS)[number];
 
+/** A detail payload whose `meeting` has been narrowed to the allowlist. */
+export type InRoomPayload<T extends { meeting: object }> = Omit<
+	T,
+	"meeting"
+> & {
+	meeting: Pick<T["meeting"], Extract<keyof T["meeting"], InRoomMeetingField>>;
+};
+
 /**
  * The detail payload with its `meeting` narrowed to `IN_ROOM_MEETING_FIELDS`.
  *
@@ -91,9 +99,7 @@ export type InRoomMeetingField = (typeof IN_ROOM_MEETING_FIELDS)[number];
  */
 export function inRoomMeetingPayload<T extends { meeting: object }>(
 	data: T,
-): Omit<T, "meeting"> & {
-	meeting: Pick<T["meeting"], Extract<keyof T["meeting"], InRoomMeetingField>>;
-} {
+): InRoomPayload<T> {
 	const { meeting, ...rest } = data;
 	const kept: Record<string, unknown> = {};
 	for (const field of IN_ROOM_MEETING_FIELDS) {
@@ -101,10 +107,5 @@ export function inRoomMeetingPayload<T extends { meeting: object }>(
 			kept[field] = (meeting as Record<string, unknown>)[field];
 		}
 	}
-	return { ...rest, meeting: kept } as Omit<T, "meeting"> & {
-		meeting: Pick<
-			T["meeting"],
-			Extract<keyof T["meeting"], InRoomMeetingField>
-		>;
-	};
+	return { ...rest, meeting: kept } as InRoomPayload<T>;
 }

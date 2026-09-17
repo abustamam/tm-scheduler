@@ -85,6 +85,7 @@ vi.mock("#/server/voting", () => ({
 vi.mock("#/server/members", () => ({ listMembers: vi.fn() }));
 
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { IN_ROOM_MEETING_FIELDS } from "#/lib/in-room-meeting-payload";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
@@ -217,10 +218,26 @@ describe("the join link is on NO in-room artifact (#731)", () => {
  * `{ ...data, logoUrl }`, and no grep for an identifier can see a field riding
  * a spread.
  *
- * Deliberately FIELD-AGNOSTIC. It does not check that one named column was
- * removed, it checks that nothing outside `IN_ROOM_MEETING_FIELDS` survives —
- * so the column added next year is covered by the same assertion, which is
- * precisely what neither the grep nor a "did we delete joinUrl" test can do.
+ * ## Why the central assertion is over KEYS, not over values
+ *
+ * The first cut of this block asserted two sentinel VALUES — a made-up future
+ * column and a string inside `notes` — and its docblock claimed that covered
+ * "the column added next year". It did not: a sentinel only fires if someone
+ * ALSO adds that column to the `detail()` fixture, and a `delete joinUrl;
+ * delete notes` implementation still shipped `status`, `meetingNumber`,
+ * `templateId` and `createdAt` with every case green. That is the same defect
+ * #754 is about, one level up: a lexical proxy standing in for a structural
+ * property.
+ *
+ * So the central assertion counts the STRUCTURE the guard is about —
+ * `Object.keys(payload.meeting)` against `IN_ROOM_MEETING_FIELDS` — per
+ * `CODING_STANDARDS.md`'s rule about a guard's proxy eroding silently. It reads
+ * the allowlist from the module the routes import, deliberately: the question
+ * it asks is "does the projection honour its own declared list", which no
+ * fixture can answer. What stops the LIST itself from growing the wrong entry
+ * is the join-link assertion beside it, plus an explicit check that the list
+ * names nothing join-shaped. Two questions, two assertions; neither alone is
+ * enough.
  */
 const CLUB_ID = "11111111-1111-4111-8111-111111111111";
 const MEETING_ID = "22222222-2222-4222-8222-222222222222";
@@ -256,7 +273,8 @@ function detail() {
 			notes: "Ask Dana whether the projector bulb was replaced",
 			reminders: "Dues are due Friday",
 			createdAt: "2026-07-01T00:00:00Z",
-			// The next column, whatever it turns out to be.
+			// The next column, whatever it turns out to be. Named nowhere in the
+			// app — it is here so the key-set assertion has an unknown to reject.
 			someFutureColumn: FUTURE_COLUMN_VALUE,
 		},
 		meetingNumber: 56,
@@ -287,29 +305,54 @@ function detail() {
 	};
 }
 
-const ARTIFACT_ROUTES = [
-	["/print", PrintRoute],
-	["/present", PresentRoute],
-	["/word", WordRoute],
-	// Already compliant before #754 — it projects four named fields and was the
-	// pattern copied into `in-room-meeting-payload`. Enrolled so it stays that
-	// way: nothing else asserts it, and a `{ ...detail }` here would be the same
-	// bug on the most-shared URL in the room.
-	["/vote", VoteRoute],
-] as const;
-
-const ctx = {
-	params: { clubId: "downtown", meetingId: "2026-07-31" },
-	location: {
-		href: "/club/downtown/meeting/2026-07-31/print",
-		pathname: "/club/downtown/meeting/2026-07-31/print",
-		searchStr: "",
-	},
+type ArtifactRoute = {
+	/** URL segment, the test name, and the `location` its loader is handed. */
+	segment: string;
+	// biome-ignore lint/suspicious/noExplicitAny: the loader union has no call sig
+	route: { options: { loader?: any } };
+	/**
+	 * Does this loader return the detail payload's `meeting` at all?
+	 *
+	 * A per-entry flag rather than a slice of this array: the sheet/deck
+	 * surfaces and `/vote` get different structural assertions, and indexing
+	 * makes that correspondence depend on the order somebody left the array in.
+	 */
+	carriesMeeting: boolean;
 };
 
-// biome-ignore lint/suspicious/noExplicitAny: the loader union has no call sig
-const runLoader = (route: { options: { loader?: any } }) =>
-	route.options.loader(ctx) as Promise<unknown>;
+const ARTIFACT_ROUTES: ArtifactRoute[] = [
+	{ segment: "print", route: PrintRoute, carriesMeeting: true },
+	{ segment: "present", route: PresentRoute, carriesMeeting: true },
+	{ segment: "word", route: WordRoute, carriesMeeting: true },
+	// Already compliant before #754 — it projects four named fields and carries
+	// no meeting row at all, which is the stronger position and the pattern
+	// copied into `in-room-meeting-payload`. Enrolled so it stays that way:
+	// nothing else asserts it, and a `{ ...detail }` here would be the same bug
+	// on the most-shared URL in the room.
+	{ segment: "vote", route: VoteRoute, carriesMeeting: false },
+];
+
+/** The router context each loader is handed, with ITS own path. They read it
+ *  only to pass to `resolveClubOrRedirect`, which is mocked here — but one
+ *  hardcoded `/print` for all four is the kind of copy that outlives its
+ *  excuse. */
+const ctx = (segment: string) => ({
+	params: { clubId: "downtown", meetingId: "2026-07-31" },
+	location: {
+		href: `/club/downtown/meeting/2026-07-31/${segment}`,
+		pathname: `/club/downtown/meeting/2026-07-31/${segment}`,
+		searchStr: "",
+	},
+});
+
+const runLoader = ({ segment, route }: ArtifactRoute) =>
+	route.options.loader(ctx(segment)) as Promise<{
+		meeting?: Record<string, unknown>;
+	}>;
+
+/** The allowlist as the projection itself reads it — see the docblock above on
+ *  why this test imports it rather than restating it. */
+const ALLOWED: ReadonlySet<string> = new Set(IN_ROOM_MEETING_FIELDS);
 
 /** What gets serialised into the page — the thing the acceptance criterion is
  *  about, not the thing a component chose to render. */
@@ -346,45 +389,92 @@ describe("no in-room artifact SHIPS the join link (#754)", () => {
 		expect(shipped(preFix)).toMatch(JOIN_URL);
 	});
 
-	for (const [label, route] of ARTIFACT_ROUTES) {
+	/**
+	 * The floor that makes every subset assertion below mean something.
+	 *
+	 * `keys ⊆ allowlist` is trivially true of a fixture that only ever carried
+	 * allowlisted columns, and trimming `detail()` is the cheapest way to turn
+	 * this whole block green without changing what ships. So: the fixture row
+	 * must carry columns the allowlist does not, and `joinUrl` must be one.
+	 */
+	it("the fixture row carries columns outside the allowlist (floor)", () => {
+		const outside = Object.keys(detail().meeting).filter(
+			(k) => !ALLOWED.has(k),
+		);
+		expect(outside).toContain("joinUrl");
+		expect(outside).toContain("notes");
+		expect(outside).toContain("someFutureColumn");
+		// The real row is wider than the three named above; a fixture that shrank
+		// to just them would still be a weaker test than the one written here.
+		expect(outside.length).toBeGreaterThanOrEqual(6);
+	});
+
+	/**
+	 * …and the other half of the same question. The key-set assertions read
+	 * `IN_ROOM_MEETING_FIELDS` from the module the routes import, so they cannot
+	 * tell an allowlist that GREW the wrong entry from one that did not. This
+	 * can, and so can the join-link case in the loop below.
+	 */
+	it("the allowlist itself names nothing join-shaped", () => {
+		expect(IN_ROOM_MEETING_FIELDS.join(" ")).not.toMatch(JOIN_URL);
+	});
+
+	for (const entry of ARTIFACT_ROUTES) {
+		const label = `/${entry.segment}`;
+
 		it(`${label} ships no join link`, async () => {
-			const payload = shipped(await runLoader(route));
+			const payload = shipped(await runLoader(entry));
 			expect(payload).not.toContain(SECRET);
 			expect(payload).not.toMatch(JOIN_URL);
 		});
 
 		/**
-		 * Allowlist, not denylist. A fix that deleted the one named field would
-		 * pass the assertion above and fail this one, and the next column added to
-		 * `meetings` would leak exactly the way `join_url` did.
+		 * The structural assertion, and the enforcement this block exists for.
+		 *
+		 * Allowlist, not denylist: a fix that deleted the one named column would
+		 * pass the case above and fail this one — and so does `delete joinUrl;
+		 * delete notes`, which an assertion over sentinel VALUES let through with
+		 * `status`, `meetingNumber`, `templateId` and `createdAt` still shipping.
+		 * Every key is checked, so a column added to `meetings` next year is
+		 * covered without anyone touching this file.
 		 */
-		it(`${label} ships no column outside the allowlist`, async () => {
-			const payload = shipped(await runLoader(route));
-			expect(payload).not.toContain(FUTURE_COLUMN_VALUE);
-			// The organizer's private scratch rode the same spread.
-			expect(payload).not.toContain("projector bulb");
+		it(`${label} ships no meeting column outside the allowlist`, async () => {
+			const payload = await runLoader(entry);
+
+			if (!entry.carriesMeeting) {
+				// `/vote` projects four named fields and no meeting row at all.
+				// Asserted as absence rather than as an empty key set, which an
+				// accidental `meeting: {}` would also satisfy.
+				expect(payload.meeting).toBeUndefined();
+				return;
+			}
+
+			const keys = Object.keys(payload.meeting ?? {});
+			// A projection that shipped `{}` would satisfy the subset check for the
+			// wrong reason, and would also blank the sheet.
+			expect(keys.length).toBeGreaterThan(0);
+			expect(keys.filter((k) => !ALLOWED.has(k))).toEqual([]);
 		});
 
 		/**
-		 * Vacuity floor. Every assertion above is "must not appear", which an
-		 * empty object, a thrown redirect swallowed into `undefined`, or a loader
-		 * that stopped calling the meeting read would all satisfy.
+		 * Vacuity floor for the "must not appear" cases. An empty object, a
+		 * redirect swallowed into `undefined`, or a loader that stopped calling
+		 * the meeting read would satisfy all of them.
 		 */
 		it(`${label} still ships what the surface needs`, async () => {
-			const payload = shipped(await runLoader(route));
+			const payload = shipped(await runLoader(entry));
 			expect(payload).toContain("Downtown Toastmasters");
 			expect(payload).toContain(MEETING_ID);
 		});
-	}
 
-	/**
-	 * The three artifact routes specifically — `/vote` deliberately drops all of
-	 * this. Their sheets and slides are built from these fields, so a projection
-	 * that took the URL by taking the row with it would pass everything above.
-	 */
-	for (const [label, route] of ARTIFACT_ROUTES.slice(0, 3)) {
+		if (!entry.carriesMeeting) continue;
+
+		/**
+		 * The sheets and slides are drawn from these. A projection that took the
+		 * URL by taking the row with it passes everything above and prints blank.
+		 */
 		it(`${label} still ships the meeting the sheet is drawn from`, async () => {
-			const payload = shipped(await runLoader(route));
+			const payload = shipped(await runLoader(entry));
 			for (const kept of [
 				"Beginnings", // theme
 				"Ephemeral", // word of the day
