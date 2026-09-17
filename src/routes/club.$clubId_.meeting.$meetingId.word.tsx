@@ -36,6 +36,7 @@ import { WordOfTheDayPoster } from "#/components/agenda/word-of-the-day-poster";
 import { PublicFooter } from "#/components/public-footer";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { hasWordOfTheDay } from "#/lib/word-poster";
@@ -61,7 +62,13 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/word")({
 			getClubLogoMeta({ data: { clubId: club.id } }).catch(() => null),
 		]);
 		if (data.meeting.clubId !== club.id) throw notFound();
-		return { ...data, logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt) };
+		// Dehydrated into the served document. The poster draws three fields, but
+		// the whole meeting row shipped until #754 — the projection is what makes
+		// this sheet carry only what a wall poster needs.
+		return {
+			...inRoomMeetingPayload(data),
+			logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
+		};
 	},
 	component: WordPoster,
 	// The <title> becomes the browser's default "Save as PDF" filename. The

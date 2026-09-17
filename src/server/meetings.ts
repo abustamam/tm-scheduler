@@ -153,6 +153,20 @@ async function loadMeetingDetail(
 	meetingId: string,
 	currentUserId?: string | null,
 ) {
+	// The WHOLE row, no column projection — and that is deliberate, because this
+	// one builder serves the agenda editor, the canonical meeting page and the
+	// in-room artifacts alike, and narrowing it here would take the video-call
+	// link off the page it exists for (`club.$clubId.meeting.$meetingId.tsx`
+	// renders it for members, who are its entire audience).
+	//
+	// The consequence, and #754's bug: every column lands on the payload of
+	// every consumer, and a route loader that returns `{ ...data }` DEHYDRATES
+	// it into the served document whether or not a component draws it. So a
+	// consumer that must not carry a column narrows it ITSELF, at its loader —
+	// `#/lib/in-room-meeting-payload` for the three print/present/word routes,
+	// and `vote.tsx`'s own four-field projection. Adding a column here adds it
+	// to every payload; it reaches an in-room artifact only if someone puts it
+	// in `IN_ROOM_MEETING_FIELDS` on purpose.
 	const meeting = await db.query.meetings.findFirst({
 		where: eq(meetings.id, meetingId),
 	});

@@ -8,6 +8,7 @@ import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { ballotUrlFor } from "#/lib/digital-voting";
+import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
@@ -35,7 +36,13 @@ export const Route = createFileRoute(
 			getClubLogoMeta({ data: { clubId: club.id } }).catch(() => null),
 		]);
 		if (data.meeting.clubId !== club.id) throw notFound();
-		return { ...data, logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt) };
+		// Dehydrated into the served document, and this page is public and
+		// unauthenticated — so the projection is the withholding, not what the
+		// deck below happens to render (#754). See `inRoomMeetingPayload`.
+		return {
+			...inRoomMeetingPayload(data),
+			logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
+		};
 	},
 	component: PresentPage,
 	head: () => ({
