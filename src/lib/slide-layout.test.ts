@@ -1177,6 +1177,24 @@ describe("templated-meeting layouts (#agenda-templates)", () => {
 		expect(body.link).toBeNull();
 	});
 
+	it("a multi-line note is one bullet per line, blank lines dropped", () => {
+		// The Note field is a textarea: an officer who puts the scenario on its
+		// own line meant a separate point, and one wrapped bullet would read as a
+		// run-on sentence on the wall.
+		const body = bulletsOf({
+			kind: "templateBeat",
+			label: "Activity 2 · Partner Conversation Practice",
+			detail: "Partner practice\n\n  Scenario: a missed deadline  \n",
+			minutes: 20,
+			timing: null,
+		});
+		expect(body.items).toEqual([
+			"Partner practice",
+			"Scenario: a missed deadline",
+			"Time: 20 min",
+		]);
+	});
+
 	it("a timed beat never also prints the raw booked minutes", () => {
 		// Two numbers for one duration is how a surface starts contradicting
 		// itself: "Signals: 5:00 … 7:00" beside "Time: 7 min" invites the room to
