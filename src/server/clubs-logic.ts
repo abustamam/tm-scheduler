@@ -4,7 +4,7 @@
 import { eq, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs } from "#/db/schema";
+import { clubs, meetings } from "#/db/schema";
 import { isClubArchived } from "#/lib/club-archive";
 import {
 	CLUB_TIMEZONES,
@@ -15,6 +15,7 @@ import {
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { refuseTableTopicsSeconds } from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
+import { closeAllVotesTx } from "./voting-logic";
 
 /**
  * The country code to normalize this club's phone numbers with (#295) — the
@@ -253,6 +254,10 @@ export type ClubAgendaSettings = {
 	 *  one. The "second agenda knob" this type's comment anticipated. */
 	tableTopicsMinSeconds: number | null;
 	tableTopicsMaxSeconds: number | null;
+	/** Whether the club votes on phones (#770). Not run-of-show variance, but
+	 *  it is a per-club switch the same settings form saves, and every meeting
+	 *  reads it live. See `isDigitalVotingOn`. */
+	digitalVotingEnabled: boolean;
 };
 
 /** The standard Toastmasters flow — what a club gets unless it says otherwise.
@@ -261,6 +266,7 @@ export const DEFAULT_CLUB_AGENDA_SETTINGS: ClubAgendaSettings = {
 	geIntroducesFunctionaries: false,
 	tableTopicsMinSeconds: null,
 	tableTopicsMaxSeconds: null,
+	digitalVotingEnabled: true,
 };
 
 /** Read a club's agenda settings. Falls back to the standard flow when the club
@@ -273,6 +279,7 @@ export async function getClubAgendaSettings(
 			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
 			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
 			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
+			digitalVotingEnabled: clubs.digitalVotingEnabled,
 		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
@@ -293,6 +300,10 @@ export const clubAgendaSettingsSchema = z
 		geIntroducesFunctionaries: z.boolean(),
 		tableTopicsMinSeconds: tableTopicsBound,
 		tableTopicsMaxSeconds: tableTopicsBound,
+		// Optional, and absent means "leave it": a settings tab loaded before
+		// #770 deployed posts the three fields above and nothing else, and a
+		// required field here would turn every one of its saves into a refusal.
+		digitalVotingEnabled: z.boolean().optional(),
 	})
 	// Ceiling, both-or-neither and ordering, from `refuseTableTopicsSeconds` —
 	// the ONE statement of those three rules (#679). #443 shared the SENTENCES
@@ -331,16 +342,32 @@ export type ClubAgendaSettingsInput = z.infer<typeof clubAgendaSettingsSchema>;
 export async function applyClubAgendaSettingsUpdate(
 	input: ClubAgendaSettingsInput,
 ): Promise<{ ok: true }> {
-	const [updated] = await db
-		.update(clubs)
-		.set({
-			geIntroducesFunctionaries: input.geIntroducesFunctionaries,
-			tableTopicsMinSeconds: input.tableTopicsMinSeconds,
-			tableTopicsMaxSeconds: input.tableTopicsMaxSeconds,
-		})
-		.where(eq(clubs.id, input.clubId))
-		.returning({ id: clubs.id });
-	if (!updated) throw new Error("Club not found.");
+	await db.transaction(async (tx) => {
+		const [updated] = await tx
+			.update(clubs)
+			.set({
+				geIntroducesFunctionaries: input.geIntroducesFunctionaries,
+				tableTopicsMinSeconds: input.tableTopicsMinSeconds,
+				tableTopicsMaxSeconds: input.tableTopicsMaxSeconds,
+				...(input.digitalVotingEnabled === undefined
+					? {}
+					: { digitalVotingEnabled: input.digitalVotingEnabled }),
+			})
+			.where(eq(clubs.id, input.clubId))
+			.returning({ id: clubs.id });
+		if (!updated) throw new Error("Club not found.");
+		// #770. Switching the club off closes every open vote in every one of its
+		// meetings, in this transaction — the same reason the meeting switch
+		// does (`applyMeetingDigitalVoting`). Unconditional on the PREVIOUS
+		// value: saving "off" over "off" finds nothing open and closes nothing.
+		if (input.digitalVotingEnabled === false) {
+			const clubMeetings = await tx
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(eq(meetings.clubId, input.clubId));
+			for (const m of clubMeetings) await closeAllVotesTx(tx, m.id);
+		}
+	});
 	return { ok: true as const };
 }
 

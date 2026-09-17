@@ -369,6 +369,17 @@ export const clubs = pgTable(
 		geIntroducesFunctionaries: boolean("ge_introduces_functionaries")
 			.notNull()
 			.default(false),
+		// Whether the club runs its award votes on phones (#770). FALSE turns
+		// digital voting off for EVERY meeting of the club: no ballot QR on any
+		// agenda or slide, no Ballot Counter console, and `voting-logic.ts`
+		// refuses to open a vote, take a ballot or add a guest to one. Paper
+		// voting and recording the winners are untouched. Read LIVE, never
+		// copied onto meetings — a meeting can only switch it further OFF
+		// (`meetings.digital_voting_disabled`); `isDigitalVotingOn`
+		// (`src/lib/digital-voting.ts`) is the one statement of the rule.
+		digitalVotingEnabled: boolean("digital_voting_enabled")
+			.notNull()
+			.default(true),
 		// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 		// Reversible: unarchive clears it. Archiving retains all club data untouched
 		// and blocks every access path except the superadmin console. This comment used
@@ -1148,6 +1159,12 @@ export const meetings = pgTable(
 		// club default changes; editable per-meeting via the edit dialog. Non-null
 		// default (90) backfills meetings created before this column existed.
 		lengthMinutes: integer("length_minutes").notNull().default(90),
+		// This one meeting runs no digital vote (#770), whatever the club does.
+		// Off-ONLY by design: a club with `digital_voting_enabled = false` stays
+		// off here even when this is false. See `isDigitalVotingOn`.
+		digitalVotingDisabled: boolean("digital_voting_disabled")
+			.notNull()
+			.default(false),
 		location: text("location"),
 		// The video-call join link for an online or hybrid club (#731). Named
 		// `join_url` rather than `zoom_url`: the value is a join link and the

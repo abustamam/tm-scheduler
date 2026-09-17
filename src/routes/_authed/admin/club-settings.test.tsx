@@ -101,6 +101,7 @@ function loaderData(
 	overrides: {
 		logoMeta?: { updatedAt: string } | null;
 		timezone?: string;
+		digitalVotingEnabled?: boolean;
 	} = {},
 ) {
 	return {
@@ -112,7 +113,12 @@ function loaderData(
 			defaultCountryCode: "",
 		},
 		reminders: { enabled: true, leadTimeDays: 3 },
-		agenda: { geIntroducesFunctionaries: false },
+		agenda: {
+			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
+			digitalVotingEnabled: overrides.digitalVotingEnabled ?? true,
+		},
 		logoMeta: overrides.logoMeta === undefined ? null : overrides.logoMeta,
 		timezone: {
 			timezone: overrides.timezone ?? "America/Chicago",
@@ -835,5 +841,41 @@ describe("zoneLabel — offset degradation (#547)", () => {
 			},
 		});
 		expect(zoneLabel("Asia/Tokyo")).toBe("Asia/Tokyo");
+	});
+});
+
+describe("Club settings — digital voting (#770)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+		vi.clearAllMocks();
+	});
+
+	function digitalVotingCheckbox() {
+		return screen.getByRole("checkbox", {
+			name: "Use digital voting (QR ballots)",
+		}) as HTMLInputElement;
+	}
+
+	it("shows the club's stored switch", async () => {
+		await renderRoute(loaderData({ digitalVotingEnabled: false }));
+		expect(digitalVotingCheckbox().checked).toBe(false);
+	});
+
+	it("saves the switch with the agenda settings", async () => {
+		const clubs = await import("#/server/clubs");
+		vi.mocked(clubs.updateClubAgendaSettings).mockResolvedValue({ ok: true });
+		await renderRoute(loaderData({ digitalVotingEnabled: true }));
+
+		await userEvent.click(digitalVotingCheckbox());
+		await userEvent.click(
+			screen.getByRole("button", { name: "Save agenda settings" }),
+		);
+
+		await waitFor(() =>
+			expect(clubs.updateClubAgendaSettings).toHaveBeenCalledWith({
+				data: expect.objectContaining({ digitalVotingEnabled: false }),
+			}),
+		);
 	});
 });

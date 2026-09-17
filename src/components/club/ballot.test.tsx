@@ -88,6 +88,7 @@ function fixture(overrides: Partial<BallotData["categories"]>): BallotData {
 			best_table_topics: UNTOUCHED,
 			...overrides,
 		},
+		digitalVotingOff: false,
 	};
 }
 
@@ -153,6 +154,21 @@ describe("Ballot", () => {
 		cleanup();
 		vi.useRealTimers();
 		vi.clearAllMocks();
+	});
+
+	describe("digital voting switched off (#770)", () => {
+		it("says digital voting is off instead of waiting for a vote", async () => {
+			getBallot.mockResolvedValue({
+				...fixture({}),
+				digitalVotingOff: true,
+			});
+			renderBallot();
+
+			expect(
+				await screen.findByText("Digital voting is off for this meeting"),
+			).toBeTruthy();
+			expect(screen.queryByText(WAITING_PANEL)).toBeNull();
+		});
 	});
 
 	describe("which categories get a card (#722)", () => {

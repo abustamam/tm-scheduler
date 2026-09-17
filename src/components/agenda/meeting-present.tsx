@@ -119,6 +119,8 @@ export function MeetingPresent({
 		queryKey: ["vote-participation", meetingId],
 		queryFn: () => getVoteParticipation({ data: { meetingId } }),
 		refetchInterval: 5000,
+		// No count to show on a deck with no digital vote (#770), so no poll.
+		enabled: deck.some((s) => isVoteSlide(s) && s.ballotUrl !== null),
 	});
 	/** "7 votes in", or "7 of 12 present have voted" once attendance is marked.
 	 *  `presentCount` is null until then — the server cannot know who is in the
@@ -222,10 +224,13 @@ export function MeetingPresent({
 	const title = deck.find((s) => s.kind === "title");
 	const fdate = title ? footerDate(title.scheduledAt, title.timezone) : "";
 	// The QR + badge (#510) — null on every non-vote slide, which `ContentSlide`
-	// reads as "render the body alone, exactly as before".
-	const vote = isVoteSlide(slide)
-		? { ballotUrl: slide.ballotUrl, label: participationLabel(slide.kind) }
-		: null;
+	// reads as "render the body alone, exactly as before". Also null on a vote
+	// slide whose meeting runs no digital vote (#770, `ballotUrl: null`): the
+	// nominees are still projected for a paper ballot, with no QR and no count.
+	const vote =
+		isVoteSlide(slide) && slide.ballotUrl !== null
+			? { ballotUrl: slide.ballotUrl, label: participationLabel(slide.kind) }
+			: null;
 
 	return (
 		<div className="fixed inset-0 flex items-center justify-center bg-black">

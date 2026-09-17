@@ -26,6 +26,7 @@ import { buildAgendaSharePath } from "#/lib/agenda-share-url";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { ballotUrlFor } from "#/lib/digital-voting";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { getClubLogoMeta } from "#/server/club-logo";
@@ -128,13 +129,11 @@ function PrintAgenda() {
 	// present route's own QR and the guest-book QR on the VP Membership page:
 	// this route renders on the server first, where `window` doesn't exist, and
 	// a QR baked from a relative path is not a URL a phone's camera can resolve.
-	// Blank until the effect fires, which is why `DarkFooter` treats an empty
-	// `ballotUrl` as "no QR yet" rather than rendering one that can't scan.
-	const [origin, setOrigin] = useState("");
+	// Unknown until the effect fires, which `ballotUrlFor` answers with an empty
+	// `ballotUrl` — `DarkFooter` treats that as "no QR yet" rather than
+	// rendering one that can't scan.
+	const [origin, setOrigin] = useState<string | null>(null);
 	useEffect(() => setOrigin(window.location.origin), []);
-	const ballotUrl = origin
-		? `${origin}/club/${clubIdParam}/meeting/${meetingId}/vote`
-		: "";
 	const {
 		meeting,
 		slots,
@@ -151,7 +150,15 @@ function PrintAgenda() {
 		tableTopicsMaxSeconds,
 		template,
 		logoUrl,
+		digitalVoting,
 	} = Route.useLoaderData();
+	// Null when the club or this meeting runs no digital vote (#770): every
+	// layout then prints no QR and no "Scan to vote".
+	const ballotUrl = ballotUrlFor(
+		digitalVoting,
+		{ clubKey: clubIdParam, meetingKey: meetingId },
+		origin,
+	);
 
 	// ONE seam for both meeting shapes (#agenda-templates). `resolveAgendaRows`
 	// returns finished rows: the standard flow expands the code-derived
@@ -294,7 +301,7 @@ function PrintAgenda() {
 				officers={officers}
 				explainers={explainers}
 				rows={rows}
-				ballotUrl={ballotUrl}
+				ballotUrl={ballotUrl ?? undefined}
 			/>
 		</div>
 	);

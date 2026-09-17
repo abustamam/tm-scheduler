@@ -547,6 +547,20 @@ describe("buildSlideDeck vote slides (#367)", () => {
 		expect(noTimer.evaluator).toMatchObject({ hasTimer: false });
 	});
 
+	it("keeps every vote slide, with a null ballot URL, when digital voting is off (#770)", () => {
+		const on = build({ slots: [speaker, ttm, evaluator] });
+		const off = build({ slots: [speaker, ttm, evaluator], ballotUrl: null });
+		const voteKinds = (d: typeof on) =>
+			d.filter((s) => s.kind.startsWith("vote")).map((s) => s.kind);
+		// The SAME vote slides, in the same places — a paper-ballot room still
+		// needs the nominees on the wall.
+		expect(voteKinds(off)).toEqual(voteKinds(on));
+		expect(voteKinds(off).length).toBeGreaterThan(0);
+		for (const s of off.filter((x) => x.kind.startsWith("vote"))) {
+			expect((s as { ballotUrl: string | null }).ballotUrl).toBeNull();
+		}
+	});
+
 	it("carries the ballot URL on every vote slide (#510)", () => {
 		const deck = build({ slots: [speaker, ttm, evaluator] });
 		const voteSlides = deck.filter((s) => s.kind.startsWith("vote"));

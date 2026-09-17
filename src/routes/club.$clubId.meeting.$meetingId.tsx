@@ -28,6 +28,8 @@ import {
 	DeclineReleaseDialog,
 	type PendingDecline,
 } from "#/components/club/decline-release-dialog";
+import { DigitalVotingSwitch } from "#/components/club/digital-voting-switch";
+
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
@@ -56,6 +58,7 @@ import { buildSlideDeck } from "#/lib/agenda-slides";
 import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
+import { ballotUrlFor } from "#/lib/digital-voting";
 import {
 	formatMeetingDate,
 	formatMeetingTime,
@@ -98,6 +101,7 @@ import {
 	listPastMeetings,
 	listUpcomingMeetings,
 	reopenMeeting,
+	setMeetingDigitalVoting,
 } from "#/server/meetings";
 import { listMembers } from "#/server/members";
 import {
@@ -299,6 +303,8 @@ function MeetingView() {
 		template,
 		templateKey,
 		logoUrl,
+		digitalVoting,
+		clubDigitalVotingEnabled,
 	} = Route.useLoaderData();
 	const router = useRouter();
 	const online = useOnlineStatus();
@@ -413,10 +419,12 @@ function MeetingView() {
 	// (#510) — same relative-during-SSR/absolute-after-hydrate split as
 	// `nudgeShareUrl` below, computed here because `buildSlideDeck` (unlike
 	// that share link) needs it up front to stamp onto every vote slide.
-	const ballotUrl =
-		typeof window === "undefined"
-			? `/club/${clubId}/meeting/${urlKey}/vote`
-			: `${window.location.origin}/club/${clubId}/meeting/${urlKey}/vote`;
+	// Null when this meeting runs no digital vote (#770).
+	const ballotUrl = ballotUrlFor(
+		digitalVoting,
+		{ clubKey: clubId, meetingKey: urlKey },
+		typeof window === "undefined" ? "" : window.location.origin,
+	);
 	// Which BUILDER, not whether to build (#agenda-templates PR 2). A templated
 	// meeting gets the beat-driven deck built from the printed run sheet's OWN
 	// rows — `flex.rows` is that same array, POST-flex, so the deck and the sheet
@@ -1299,6 +1307,29 @@ function MeetingView() {
 		}
 	}
 
+	const [digitalVotingBusy, setDigitalVotingBusy] = useState(false);
+	/** #770. Invalidates rather than patching local state: the switch changes
+	 *  what the whole page renders (the vote panel, the deck's vote slides) and
+	 *  the loader is what computes `digitalVoting`. */
+	async function handleSetDigitalVotingDisabled(disabled: boolean) {
+		setDigitalVotingBusy(true);
+		try {
+			await setMeetingDigitalVoting({
+				data: { meetingId: meeting.id, disabled },
+			});
+			await router.invalidate();
+			toast.success(
+				disabled
+					? "Digital voting is off for this meeting."
+					: "Digital voting is back on for this meeting.",
+			);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : "Couldn't save that.");
+		} finally {
+			setDigitalVotingBusy(false);
+		}
+	}
+
 	async function handleSetVoteWinner(
 		category: AwardCategory,
 		winner:
@@ -1661,11 +1692,22 @@ function MeetingView() {
 									Ballot Counter console
 								</h2>
 								<p className="text-muted-foreground text-sm">
-									Only visible to you. Add Table Topics speakers so they're
-									eligible for Best Table Topics, then open a category, watch
-									the count, and confirm the winner once it closes.
+									{digitalVoting
+										? "Only visible to you. Add Table Topics speakers so they're eligible for Best Table Topics, then open a category, watch the count, and confirm the winner once it closes."
+										: "Only visible to you. Add Table Topics speakers so they're recorded in the minutes."}
 								</p>
 							</div>
+							{/* #770 — signed-in club admins only, matching the server fn.
+							    `canManage`, not `effectiveCanManage`: the server keys off the
+							    SESSION, so an admin previewing as a member still has it. */}
+							{canManage ? (
+								<DigitalVotingSwitch
+									digitalVoting={digitalVoting}
+									clubDigitalVotingEnabled={clubDigitalVotingEnabled}
+									busy={digitalVotingBusy}
+									onSetDisabled={handleSetDigitalVotingDisabled}
+								/>
+							) : null}
 							<TableTopicsCapture
 								speakers={consoleSpeakers}
 								canEdit={true}
@@ -1676,12 +1718,18 @@ function MeetingView() {
 								onRemove={handleRemoveTableTopicsSpeaker}
 								onMove={handleMoveTableTopicsSpeaker}
 							/>
-							<VoteCounterPanel
-								meetingId={meeting.id}
-								selfMemberId={myId}
-								onSetWinner={handleSetVoteWinner}
-								onClearWinner={handleClearVoteWinner}
-							/>
+							{/* #770. Table Topics capture above stays either way — the
+							    minutes and the guest pipeline read those speakers, and a
+							    paper-ballot club still needs them. Only the digital vote
+							    panel goes. */}
+							{digitalVoting ? (
+								<VoteCounterPanel
+									meetingId={meeting.id}
+									selfMemberId={myId}
+									onSetWinner={handleSetVoteWinner}
+									onClearWinner={handleClearVoteWinner}
+								/>
+							) : null}
 						</section>
 					) : null}
 

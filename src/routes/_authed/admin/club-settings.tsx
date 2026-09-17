@@ -280,6 +280,9 @@ function ClubSettings() {
 	const [geIntroduces, setGeIntroduces] = useState(
 		agenda.geIntroducesFunctionaries,
 	);
+	const [digitalVoting, setDigitalVoting] = useState(
+		agenda.digitalVotingEnabled,
+	);
 	const [savingAgenda, setSavingAgenda] = useState(false);
 	// Held as the TEXT the admin typed, not as parsed seconds: a controlled
 	// number field that reformats mid-keystroke fights the person typing "2:30"
@@ -401,6 +404,7 @@ function ClubSettings() {
 					geIntroducesFunctionaries: geIntroduces,
 					tableTopicsMinSeconds: result.minSeconds,
 					tableTopicsMaxSeconds: result.maxSeconds,
+					digitalVotingEnabled: digitalVoting,
 				},
 			});
 			toast.success("Agenda settings saved.");
@@ -711,6 +715,22 @@ function ClubSettings() {
 						each explaining their own role. Tick this if your General Evaluator
 						does it instead. Either way the General Evaluator still calls for
 						their reports near the end.
+					</p>
+				</div>
+				<div className="space-y-2 border-t border-[var(--line)] pt-4">
+					<label className="flex items-center gap-2 text-sm font-medium">
+						<input
+							type="checkbox"
+							checked={digitalVoting}
+							onChange={(e) => setDigitalVoting(e.target.checked)}
+						/>
+						Use digital voting (QR ballots)
+					</label>
+					<p className="text-xs text-muted-foreground">
+						Off: no ballot QR on agendas or slides, and no vote panel in the
+						Ballot Counter console. Any vote that's open closes when you save.
+						Paper voting and recording winners still work. You can also turn it
+						off for a single meeting from that meeting's console.
 					</p>
 				</div>
 				<div className="space-y-2 border-t border-[var(--line)] pt-4">

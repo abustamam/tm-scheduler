@@ -131,3 +131,23 @@ describe("ballot route loader (#510)", () => {
 		});
 	});
 });
+
+describe("ballot route loader — digital voting switch (#770)", () => {
+	for (const digitalVoting of [true, false]) {
+		it(`passes digitalVoting=${digitalVoting} through for the page to branch on`, async () => {
+			mockClub();
+			vi.mocked(getPublicMeetingByKey).mockResolvedValue({
+				meeting: { id: MEETING_ID, clubId: CLUB_ID },
+				digitalVoting,
+				// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
+			} as any);
+
+			await expect(
+				runLoader({
+					params: { clubId: "downtown", meetingId: "2026-01-01" },
+					location,
+				}),
+			).resolves.toMatchObject({ digitalVoting });
+		});
+	}
+});
