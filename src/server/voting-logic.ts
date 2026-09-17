@@ -244,10 +244,7 @@ export async function closeAllVotesTx(
  * meetings as it has history, and a transaction that issues a statement per
  * meeting holds its locks for as long as that list is long.
  */
-export async function closeClubVotesTx(
-	tx: Tx,
-	clubId: string,
-): Promise<void> {
+export async function closeClubVotesTx(tx: Tx, clubId: string): Promise<void> {
 	await tx
 		.update(meetingVoteSessions)
 		.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
