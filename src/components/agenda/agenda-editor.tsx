@@ -667,7 +667,12 @@ function AgendaTableRow({
 		}
 	}
 	async function commitDetail() {
-		const next = detail === "" ? null : detail;
+		// Trimmed: a trailing Enter is easy to leave in a textarea, and every
+		// print layout keeps line breaks, so it would push the row's timing marks
+		// (or a hand-off's names) onto a line of their own.
+		const trimmed = detail.trim();
+		if (trimmed !== detail) setDetail(trimmed);
+		const next = trimmed === "" ? null : trimmed;
 		if (next === confirmed.current.detail) return;
 		if (await runAction(() => onUpdateRow(row.id, { detail: next }))) {
 			markConfirmed({ detail: next });

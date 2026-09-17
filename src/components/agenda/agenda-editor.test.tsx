@@ -380,6 +380,29 @@ describe("AgendaEditor", () => {
 		);
 	});
 
+	it("drops a trailing line break before saving a note", async () => {
+		// Print keeps line breaks, so "…participant\n" would put the row's timing
+		// marks on a line of their own on the agenda.
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		await openRowDetail(1);
+		const note = screen.getByLabelText("Row note") as HTMLTextAreaElement;
+		await userEvent.type(note, "1 min per participant{Enter}{Enter}");
+		await userEvent.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", {
+				detail: "1 min per participant",
+			}),
+		);
+		expect(note.value).toBe("1 min per participant");
+	});
+
 	it("does not confirm when nothing is claimed", async () => {
 		// Friction scales with damage — a confirm on every change trains officers
 		// to click through the one that matters.

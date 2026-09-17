@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { fitScale } from "#/lib/slide-fit";
+import { readSource } from "#/test/guard-source";
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
+import {
+	SLIDE_BODY_BOX_1280,
+	SLIDE_BODY_ROOM_1280,
+} from "#/test/slide-fit-box";
 
 /**
  * Whether a shrunk slide body actually lands inside its box (#767).
@@ -16,24 +21,19 @@ import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
  * the last line off the footer rule is a question for a layout engine, and the
  * answer turned out to depend on the padding the old formula ignored.
  *
- * The fixture reproduces the measured 1280×720 box in plain px, and a pre-fix
+ * The fixture reproduces the measured 1280×720 box (its padding read from the
+ * same `slide-spacing` constants the slide renders with), and a pre-fix
  * CONTROL rendered beside it — scaled the old way, by the padding box — must
  * overflow. Without the control, a fixture that could never overflow would
  * pass these assertions for any scale at all.
  */
 const hasChrome = findChrome() !== null;
 
-const BOX = {
-	clientWidth: 1280,
-	clientHeight: 457,
-	paddingTop: 51.2,
-	paddingRight: 102.4,
-	paddingBottom: 19.2,
-	paddingLeft: 102.4,
-};
-const BODY = { width: 1075.2, height: 523 };
+const BOX = SLIDE_BODY_BOX_1280;
+/** The live deck's overlong body: `w-full`, 523px tall. */
+const BODY = { width: SLIDE_BODY_ROOM_1280.width, height: 523 };
 
-/** The scale #767 shipped: the padding box, not the content box. */
+/** The scale before the #767 fix: the padding box, not the content box. */
 const PRE_FIX_SCALE = Math.min(
 	1,
 	BOX.clientWidth / BODY.width,
@@ -157,3 +157,36 @@ describe.skipIf(!hasChrome)(
 		});
 	},
 );
+
+describe("useFitTransform scales by the content box", () => {
+	// Everything above calls `fitScale` directly, and jsdom reports a zero
+	// scrollWidth so the hook returns before scaling anything — so putting the
+	// old `o.clientHeight / sh` back inside the hook would leave every test here
+	// green. This pins the call site. Comment-blind: the hook's own comment names
+	// the old formula.
+	const src = readSource(
+		new URL("./meeting-present.tsx", import.meta.url).pathname,
+	);
+	const start = src.indexOf("function useFitTransform(");
+	const end = src.indexOf("\nfunction ", start + 1);
+	const hook = src.slice(start, end);
+
+	it("finds the hook", () => {
+		expect(start).toBeGreaterThan(-1);
+		expect(hook).toContain("useLayoutEffect");
+	});
+
+	it("computes the scale through fitScale, with the box's computed padding", () => {
+		expect(hook).toMatch(/const k = fitScale\(/);
+		expect(hook).toContain("getComputedStyle(o)");
+		for (const side of ["Top", "Right", "Bottom", "Left"]) {
+			expect(hook).toContain(
+				`padding${side}: Number.parseFloat(cs.padding${side})`,
+			);
+		}
+	});
+
+	it("does not divide by the padding box itself", () => {
+		expect(hook).not.toMatch(/o\.client(Width|Height)\s*\/\s*s[wh]/);
+	});
+});

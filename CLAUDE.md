@@ -171,7 +171,7 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The four browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The five browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -206,6 +206,12 @@ when a browser cannot produce the input, find the narrow interface the fix actua
 THAT. It carries a pre-fix control that reproduces the bug, which is what makes the rest able to
 fail.
 
+`src/components/agenda/slide-fit-geometry.test.ts` (#767) is the fifth: it renders a projected
+slide's body box and asserts a shrunk body lands inside it rather than behind the footer. Same
+split — `fitScale` (`src/lib/slide-fit.ts`) is the seam, the box's padding comes from the
+`slide-spacing` constants, a pre-fix control overflows beside it, and a source guard pins that
+`useFitTransform` actually calls it.
+
 No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
 `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
 With none present those tests **skip locally**, so `bun run test` still works for someone without a
@@ -217,9 +223,9 @@ diagnosable. Beside that job's ONLY — the `extension` job is `working-director
 runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
 same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
-**On macOS all four skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+**On macOS all five skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
 puts nothing on `PATH` under any of those four names. This is a macOS-only gap: on Linux, where this
-repo is usually developed, `google-chrome` resolves and both gates run locally as normal. Do NOT
+repo is usually developed, `google-chrome` resolves and these gates run locally as normal. Do NOT
 "fix" it by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES` — that binary
 answers `--version`, so `findChrome` accepts it, but it never returns from `--print-to-pdf` under the
 agent sandbox, which turns an honest skip into 135s of `ETIMEDOUT`. A browser that is found but hangs

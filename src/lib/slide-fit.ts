@@ -17,7 +17,15 @@ export type FitBox = {
  * box still left an overlong body clipping its last line behind the footer
  * (#767, "Time: 20 min" half-hidden on a real deck).
  *
- * Never enlarges (capped at 1), ignores a sub-pixel shortfall, and returns 1 for a body or box with no size,
+ * Height is where this matters and where it is exact: the body box centres
+ * its child vertically, so overflow is even top and bottom and a scale about
+ * the body's centre lands it inside. Width only ever binds on content that
+ * cannot wrap (the body is `w-full`, so wrapped text measures exactly the
+ * room); such content overflows to the right only, and the centred scale does
+ * not fully contain it.
+ *
+ * Never enlarges (capped at 1), ignores a shortfall of up to one pixel, and
+ * returns 1 for a body or box with no size,
  * where any other answer would scale the slide to nothing.
  */
 export function fitScale(
@@ -30,7 +38,7 @@ export function fitScale(
 	if (width <= 0 || height <= 0) return 1;
 	// A pixel of slack per axis. `scrollWidth`/`scrollHeight` are rounded to
 	// whole pixels while the padding is fractional (cqw), so a body that exactly
-	// fits can report 1076 against 1075.6 of room — and a 0.9996 scale on every
+	// fits can report 1076 against 1075.2 of room — and a 0.9996 scale on every
 	// slide softens all of its text for no visible gain.
 	const kw = natural.width > width + 1 ? width / natural.width : 1;
 	const kh = natural.height > height + 1 ? height / natural.height : 1;
