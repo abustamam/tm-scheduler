@@ -355,6 +355,54 @@ describe("AgendaEditor", () => {
 		await waitFor(() => expect(minutes.value).toBe("5"));
 	});
 
+	it("takes a multi-line note and saves its line breaks", async () => {
+		// A one-line <input> drops Enter on the floor, so an officer could not put
+		// a scenario on its own line under the instructions — the printed agenda
+		// and the slides both render the break, but nothing could write one.
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		// Row 1 is the Welcome role row (row 0 is the OPENING band).
+		await openRowDetail(1);
+		const note = screen.getByLabelText("Row note");
+		expect(note.tagName).toBe("TEXTAREA");
+		await userEvent.type(note, "Who are you?{Enter}1 min per participant");
+		await userEvent.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", {
+				detail: "Who are you?\n1 min per participant",
+			}),
+		);
+	});
+
+	it("drops a trailing line break before saving a note", async () => {
+		// Print keeps line breaks, so "…participant\n" would put the row's timing
+		// marks on a line of their own on the agenda.
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		await openRowDetail(1);
+		const note = screen.getByLabelText("Row note") as HTMLTextAreaElement;
+		await userEvent.type(note, "1 min per participant{Enter}{Enter}");
+		await userEvent.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", {
+				detail: "1 min per participant",
+			}),
+		);
+		expect(note.value).toBe("1 min per participant");
+	});
+
 	it("does not confirm when nothing is claimed", async () => {
 		// Friction scales with damage — a confirm on every change trains officers
 		// to click through the one that matters.

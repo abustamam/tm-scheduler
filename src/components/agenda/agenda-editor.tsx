@@ -20,6 +20,7 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { Textarea } from "#/components/ui/textarea";
 import {
 	type BudgetEntry,
 	type DisplayBand,
@@ -666,7 +667,12 @@ function AgendaTableRow({
 		}
 	}
 	async function commitDetail() {
-		const next = detail === "" ? null : detail;
+		// Trimmed: a trailing Enter is easy to leave in a textarea, and every
+		// print layout keeps line breaks, so it would push the row's timing marks
+		// (or a hand-off's names) onto a line of their own.
+		const trimmed = detail.trim();
+		if (trimmed !== detail) setDetail(trimmed);
+		const next = trimmed === "" ? null : trimmed;
 		if (next === confirmed.current.detail) return;
 		if (await runAction(() => onUpdateRow(row.id, { detail: next }))) {
 			markConfirmed({ detail: next });
@@ -1290,12 +1296,16 @@ function RowDetail({
 				<div className="flex flex-col gap-3">
 					<div className="flex flex-col gap-1">
 						<Label htmlFor={`${row.id}-detail`}>Note</Label>
-						<Input
+						{/* A textarea, not an input: each line of a note prints on its
+						    own line of the agenda and becomes its own bullet on the
+						    slides, and an <input> cannot hold the line break. */}
+						<Textarea
 							id={`${row.id}-detail`}
 							aria-label="Row note"
 							value={detail}
 							disabled={!editable}
 							maxLength={MAX_TEMPLATE_DETAIL_CHARS}
+							rows={2}
 							onChange={(e) => setDetail(e.target.value)}
 							onBlur={() => void commitDetail()}
 						/>

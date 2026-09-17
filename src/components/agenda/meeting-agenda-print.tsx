@@ -612,7 +612,7 @@ function HandoffBand({
 			    pushed onto its own line while the detail sits short. The separator is
 			    `NAMES_SEPARATOR`, shared with the singular hand-offs' `{names:…}`
 			    token so both read identically on the page. */}
-			<span>
+			<span style={{ whiteSpace: "pre-line" }}>
 				{row.detail}
 				{nameTheGroup ? introducedSuffix(row.introduces ?? []) : ""}
 			</span>
@@ -740,6 +740,8 @@ function RunNarrative({
 		fontSize: type.detail,
 		color: MUTED,
 		lineHeight: 1.4,
+		// A note's own line breaks (the editor's Note is multi-line).
+		whiteSpace: "pre-line" as const,
 	};
 	return (
 		<div>
@@ -1388,7 +1390,15 @@ function GridLayout({
 									<span style={{ fontSize: 10.5, fontWeight: 700 }}>
 										{r.who}.
 									</span>{" "}
-									<span style={{ fontSize: 10, color: MUTED }}>{r.detail}</span>
+									<span
+										style={{
+											fontSize: 10,
+											color: MUTED,
+											whiteSpace: "pre-line",
+										}}
+									>
+										{r.detail}
+									</span>
 								</div>
 								{r.marks ? (
 									<div
@@ -2324,7 +2334,14 @@ function TimingLayout({
 											</span>
 										) : null}
 									</div>
-									<div style={{ flex: 1, fontSize: 10.5, color: MUTED }}>
+									<div
+										style={{
+											flex: 1,
+											fontSize: 10.5,
+											color: MUTED,
+											whiteSpace: "pre-line",
+										}}
+									>
 										{r.detail}
 									</div>
 									<div

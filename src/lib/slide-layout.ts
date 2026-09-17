@@ -406,8 +406,12 @@ export function slideLayout(slide: Slide): SlideLayout {
 		case "templateBeat": {
 			// Bullets, like `speech` — the room is reading facts off a wall, not a
 			// sentence. Detail first (what this beat IS), then the clock.
-			const items: string[] = [];
-			if (slide.detail) items.push(slide.detail);
+			// One bullet per line of the note: the editor's Note is multi-line,
+			// and a line break there is a separate point, not a wrap.
+			const items: string[] = (slide.detail ?? "")
+				.split("\n")
+				.map((line) => line.trim())
+				.filter(Boolean);
 			if (slide.timing) {
 				items.push(
 					`Signals: ${slide.timing.green} green · ${slide.timing.yellow} yellow · ${slide.timing.red} red`,

@@ -1873,3 +1873,66 @@ describe("the printed agenda carries no paper votes box (#721)", () => {
 		});
 	}
 });
+
+describe("a multi-line note keeps its line breaks on every layout", () => {
+	// The editor's Note is a textarea, so an officer can put a scenario on its
+	// own line under the instructions. A detail node with the default
+	// `white-space: normal` folds that newline into a space and the sheet prints
+	// one run-on sentence — nothing errors, it just reads worse than the note
+	// that was typed. jsdom does no layout, so the style is the observable here.
+	const multiLineRows: TimelineRow[] = [
+		{
+			who: "Workshop Host · Lee P.",
+			detail: "Who are you?\n1 min per participant",
+			minutes: 25,
+			marks: { green: 0.5, yellow: 0.75, red: 1 },
+			time: "12:15",
+		},
+		{
+			// Same presenter, so the narrative layouts print this as a FOLLOWING
+			// line of the group above — a separate render path from the lead.
+			who: "Workshop Host · Lee P.",
+			detail: "Partner practice\nScenario: a missed deadline",
+			minutes: 20,
+			marks: null,
+			time: "12:40",
+		},
+		{
+			who: "Workshop Host · Lee P.",
+			detail: "Introduces the next pair\nof speakers",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "1:00",
+		},
+	];
+
+	/** The innermost element whose own text is the note — a newline included,
+	 *  which `getByText`'s default normaliser would otherwise collapse away. */
+	const noteNode = (note: string) =>
+		screen.getByText(
+			(_, el) =>
+				el?.textContent === note &&
+				[...el.children].every((c) => c.textContent !== note),
+		);
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: prints each line of a note on its own line`, () => {
+			render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Workshop Host", name: "Lee P." }]}
+					officers={[]}
+					explainers={[]}
+					rows={multiLineRows}
+				/>,
+			);
+			for (const row of multiLineRows) {
+				const note = row.detail as string;
+				const node = noteNode(note);
+				expect(getComputedStyle(node).whiteSpace).toBe("pre-line");
+			}
+		});
+	}
+});

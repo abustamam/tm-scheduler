@@ -14,6 +14,7 @@ import { ClubLogo } from "#/components/agenda/club-logo";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { fitScale } from "#/lib/slide-fit";
 import {
 	footerDate,
 	type Line,
@@ -422,7 +423,20 @@ function useFitTransform(deps: unknown[]) {
 		const sw = n.scrollWidth;
 		const sh = n.scrollHeight;
 		if (!sw || !sh) return;
-		const k = Math.min(1, o.clientWidth / sw, o.clientHeight / sh);
+		// The CONTENT box, not `clientHeight` alone: that includes the padding,
+		// and scaling to it left an overlong body clipped by the footer (#767).
+		const cs = getComputedStyle(o);
+		const k = fitScale(
+			{
+				clientWidth: o.clientWidth,
+				clientHeight: o.clientHeight,
+				paddingTop: Number.parseFloat(cs.paddingTop),
+				paddingRight: Number.parseFloat(cs.paddingRight),
+				paddingBottom: Number.parseFloat(cs.paddingBottom),
+				paddingLeft: Number.parseFloat(cs.paddingLeft),
+			},
+			{ width: sw, height: sh },
+		);
 		n.style.transform = k < 1 ? `scale(${k})` : "none";
 		// biome-ignore lint/correctness/useExhaustiveDependencies: deps drive re-measure per slide
 	}, deps);
