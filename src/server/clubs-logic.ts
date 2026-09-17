@@ -4,7 +4,7 @@
 import { eq, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs, meetings } from "#/db/schema";
+import { clubs } from "#/db/schema";
 import { isClubArchived } from "#/lib/club-archive";
 import {
 	CLUB_TIMEZONES,
@@ -15,7 +15,7 @@ import {
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { refuseTableTopicsSeconds } from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
-import { closeAllVotesTx } from "./voting-logic";
+import { closeClubVotesTx } from "./voting-logic";
 
 /**
  * The country code to normalize this club's phone numbers with (#295) — the
@@ -361,11 +361,7 @@ export async function applyClubAgendaSettingsUpdate(
 		// does (`applyMeetingDigitalVoting`). Unconditional on the PREVIOUS
 		// value: saving "off" over "off" finds nothing open and closes nothing.
 		if (input.digitalVotingEnabled === false) {
-			const clubMeetings = await tx
-				.select({ id: meetings.id })
-				.from(meetings)
-				.where(eq(meetings.clubId, input.clubId));
-			for (const m of clubMeetings) await closeAllVotesTx(tx, m.id);
+			await closeClubVotesTx(tx, input.clubId);
 		}
 	});
 	return { ok: true as const };

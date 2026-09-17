@@ -60,7 +60,11 @@ describe("setMeetingDigitalVoting is signed-in club admins only", () => {
 	const source = readSource("src/server/meetings.ts");
 	const start = source.indexOf("export const setMeetingDigitalVoting =");
 	const next = source.indexOf("\nexport ", start + 1);
-	const body = source.slice(start, next);
+	// `undefined`, never the raw -1: `slice(start, -1)` reads the -1 as an
+	// offset from the END and silently drops the last character, which is the
+	// shape of the false-pass `CODING_STANDARDS.md` records for guards that
+	// compute offsets. Latent while another export follows this one.
+	const body = source.slice(start, next === -1 ? undefined : next);
 
 	it("finds the server fn", () => {
 		expect(start).toBeGreaterThan(-1);

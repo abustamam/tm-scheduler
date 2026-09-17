@@ -146,6 +146,12 @@ export function Ballot({
 		});
 	}
 
+	// #770, before the waiting panel below, which would otherwise tell a phone
+	// in a paper-ballot room to keep waiting for a vote that is never coming.
+	// Polled, not loader-borne: the switch can be flipped while this page is
+	// already open in someone's hand.
+	if (ballot.data?.digitalVotingOff) return <BallotOff />;
+
 	if (ballot.isPending) {
 		return (
 			<div className="flex justify-center py-10">
@@ -172,10 +178,6 @@ export function Ballot({
 	// reads it — the Vote Counter console imports neither `BallotData` nor
 	// `getBallot`. It stays on the payload only because #722 rules out changing
 	// `getBallot`; deciding its fate is a separate call.
-	// #770. Before the waiting panel, which would otherwise tell a phone in a
-	// paper-ballot room to keep waiting for a vote that is never coming.
-	if (ballot.data?.digitalVotingOff) return <BallotOff />;
-
 	const visible = (
 		Object.entries(ballot.data?.categories ?? {}) as [CategoryKey, Category][]
 	).filter(([, c]) => c.isOpen);

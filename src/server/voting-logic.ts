@@ -9,7 +9,7 @@
  * Authorization is the caller's job (`resolveVoteCounterAuthz`), matching how
  * `minutes-logic.ts` trusts its server fn's admin gate.
  */
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
@@ -103,6 +103,8 @@ async function isDigitalVotingOnFor(meetingId: string): Promise<boolean> {
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
+	// One flat row answers both halves of the rule — it carries the club's
+	// column and the meeting's, joined.
 	return row ? isDigitalVotingOn(row, row) : true;
 }
 
@@ -146,10 +148,11 @@ export async function openVote(input: WindowInput): Promise<void> {
 	// test, which would have left this covered by a source grep alone.
 	await assertClubNotArchived(input.clubId);
 	await db.transaction(async (tx) => {
-		// #770. Opening is the one window write gated on the switch: CLOSING
-		// stays open to the Ballot Counter so a vote left running when the
-		// switch went off can still be tidied up (a switch-off closes them
-		// itself, but a tab from before the switch should not be stranded).
+		// #770. Opening is the one window write gated on the switch. CLOSING is
+		// deliberately NOT gated: switching off closes every open vote itself, and
+		// a Close arriving afterwards — from a console tab loaded before the
+		// switch, which keeps its buttons until it reloads — must be a harmless
+		// no-op rather than an error the officer cannot act on.
 		await assertDigitalVotingOnTx(tx, input.meetingId);
 		await tx
 			.insert(meetingVoteSessions)
@@ -228,6 +231,36 @@ export async function closeAllVotesTx(
 			and(
 				eq(meetingVoteSessions.meetingId, meetingId),
 				isNull(meetingVoteSessions.closedAt),
+			),
+		);
+}
+
+/**
+ * Close every open vote in every meeting of ONE club, for the club-level
+ * digital-voting switch (#770). Takes `tx` for the same reason
+ * `closeAllVotesTx` does: the switch and the closes must land together.
+ *
+ * ONE statement, not a loop over the club's meetings: a club has as many
+ * meetings as it has history, and a transaction that issues a statement per
+ * meeting holds its locks for as long as that list is long.
+ */
+export async function closeClubVotesTx(
+	tx: Tx,
+	clubId: string,
+): Promise<void> {
+	await tx
+		.update(meetingVoteSessions)
+		.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
+		.where(
+			and(
+				isNull(meetingVoteSessions.closedAt),
+				inArray(
+					meetingVoteSessions.meetingId,
+					tx
+						.select({ id: meetings.id })
+						.from(meetings)
+						.where(eq(meetings.clubId, clubId)),
+				),
 			),
 		);
 }
@@ -1099,6 +1132,9 @@ export async function loadTableTopicsForConsole(
 }
 
 export interface Participation {
+	/** True when the club or this meeting has digital voting switched off
+	 *  (#770) — the counts are then all zero and mean nothing. */
+	digitalVotingOff: boolean;
 	categories: Record<AwardCategory, { ballotsIn: number }>;
 	/**
 	 * How many people are marked present, or NULL when there is no honest
@@ -1138,12 +1174,21 @@ export async function loadParticipation(
 	// keeps answering is a live existence oracle for a taken-down club — and an
 	// asymmetry between two neighbours in ONE file, keyed identically, is exactly
 	// how #544 happened in the first place.
-	if (
-		!(await isReadableClubForMeeting(meetingId)) ||
-		// #770 — the projector's count is part of digital voting too.
-		!(await isDigitalVotingOnFor(meetingId))
-	) {
-		return { categories: zeroBallotCounts(), presentCount: null };
+	if (!(await isReadableClubForMeeting(meetingId))) {
+		return {
+			digitalVotingOff: false,
+			categories: zeroBallotCounts(),
+			presentCount: null,
+		};
+	}
+	// #770 — the projector's count is part of digital voting too, and the flag
+	// says WHY it is zero rather than leaving the deck to guess.
+	if (!(await isDigitalVotingOnFor(meetingId))) {
+		return {
+			digitalVotingOff: true,
+			categories: zeroBallotCounts(),
+			presentCount: null,
+		};
 	}
 	const rows = await db
 		.select({
@@ -1173,6 +1218,7 @@ export async function loadParticipation(
 		.where(eq(meetingAttendance.meetingId, meetingId));
 
 	return {
+		digitalVotingOff: false,
 		categories,
 		presentCount: (attendance?.present ?? 0) > 0 ? attendance.present : null,
 	};
