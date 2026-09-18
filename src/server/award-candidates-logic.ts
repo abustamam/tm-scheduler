@@ -21,6 +21,13 @@
  * ballot and the mark that makes the server refuse the vote have to be the
  * same fact. Stamped onto each candidate rather than returned separately, so a
  * consumer cannot read the list and forget to consult it.
+ *
+ * There is a THIRD reader, and it is not a vote: `setAward` (`minutes-logic.ts`)
+ * calls `loadDisqualifications` + `disqualificationFor` before writing a winner
+ * (#786). Confirming the winner is a separate human tap that #723 deliberately
+ * left outside the ballot, so the writer had to become its own enforcement
+ * point — it reaches `meeting_awards`, and from there the minutes, the emailed
+ * minutes and the public minutes PDF.
  */
 import { asc, eq } from "drizzle-orm";
 import { db } from "#/db";
