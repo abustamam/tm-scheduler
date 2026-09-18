@@ -7,7 +7,7 @@
  *     bunx vitest run src/server/meeting-manage.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -16,7 +16,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
-import { utcToZonedWallTime } from "#/lib/datetime";
+import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
 	hasTestDb,
@@ -118,6 +118,28 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 	});
 
+	/**
+	 * `meeting_edit` rows for THIS run's meeting, newest first.
+	 *
+	 * Scoped and ordered because vitest runs test FILES in parallel against one
+	 * shared `tm_test` and several suites write that action — an unscoped read
+	 * here returns another file's row. Measured: adding the #772 meta-patch suite
+	 * made the unscoped version of the join-link assertion below fail 2 runs in 3.
+	 */
+	const scopedMetaEdits = () =>
+		testDb
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.action, "meeting_edit"),
+					eq(activityLog.clubId, club.clubId),
+					eq(activityLog.targetId, club.meetingId),
+				),
+			)
+			.orderBy(desc(activityLog.createdAt))
+			.limit(1);
+
 	it("updateMeeting writes the fields it is given + logs meeting_edit", async () => {
 		await applyMeetingMetaPatch({
 			meetingId: club.meetingId,
@@ -126,10 +148,28 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 			theme: "  New Beginnings  ",
 			wordOfTheDay: "verve",
 		});
-		const [m] = await testDb
-			.select()
-			.from(activityLog)
-			.where(eq(activityLog.action, "meeting_edit"));
+		// The title says "writes the fields it is given", so assert the COLUMNS —
+		// and `scheduledAt` in particular, which is the only place in the repo that
+		// pins the patch writer storing a time it WAS given (the meta-patch suite
+		// covers only "stays put when omitted").
+		const [row] = await testDb
+			.select({
+				theme: meetings.theme,
+				wordOfTheDay: meetings.wordOfTheDay,
+				scheduledAt: meetings.scheduledAt,
+			})
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		expect(row.theme).toBe("New Beginnings");
+		expect(row.wordOfTheDay).toBe("verve");
+		const [clubRow] = await testDb
+			.select({ timezone: clubs.timezone })
+			.from(clubs)
+			.where(eq(clubs.id, club.clubId));
+		expect(row.scheduledAt.getTime()).toBe(
+			zonedWallTimeToUtc("2026-08-01T18:30", clubRow.timezone).getTime(),
+		);
+		const [m] = await scopedMetaEdits();
 		expect(m).toBeTruthy();
 	});
 
@@ -285,10 +325,7 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		it("records the PRIOR link in the meeting_edit audit entry", async () => {
 			await givenStoredLink();
 			await update("https://meet.google.com/abc-defg-hij");
-			const [entry] = await testDb
-				.select({ detail: activityLog.detail })
-				.from(activityLog)
-				.where(eq(activityLog.action, "meeting_edit"));
+			const [entry] = await scopedMetaEdits();
 			const detail = entry.detail as {
 				before: { joinUrl: string | null };
 				after: { joinUrl: string | null };

@@ -84,9 +84,11 @@ condition 1 (verify the production table is empty before assuming).
   plan 014 landed, the body is `reassignSlotCore` in `slots-logic.ts`).
 - `createMeeting` — `src/server/meetings.ts:336` → logic in
   `src/server/meetings-logic.ts` (slot generation lives there).
-- Reschedule/cancel — `applyMeetingUpdate` in `src/server/meetings-logic.ts:83`;
-  it already detects a schedule change
-  (`toMinute(next.scheduledAt) !== toMinute(meeting.scheduledAt)`, line 113)
+- Reschedule/cancel — `applyMeetingMetaPatch` in `src/server/meetings-logic.ts`
+  (renamed from `applyMeetingUpdate` by #772); it compares
+  `toMinute(next.scheduledAt) !== toMinute(meeting.scheduledAt)`, but ONLY inside
+  the `!canReschedule` rejection guard — read that comparison as an authorization
+  check, not as a reschedule hook
   and handles `status` (meeting cancel is a status change to `"cancelled"` —
   locate the exact branch; STOP if cancel is not handled in this function).
 
@@ -283,9 +285,14 @@ instant); club timezone matters only for display in templates (Step 5).
   `cancelPendingForSlot` then `scheduleClaimNotifications` for the new member.
 - `createMeeting` (via `meetings-logic.ts` create path): after slots are
   generated, `scheduleMeetingDigests(tx, …)`.
-- `applyMeetingUpdate` (`meetings-logic.ts:83`): in the schedule-change branch
-  (line ~113), `shiftPendingForMeeting`; in the cancel branch,
-  `cancelPendingForMeeting`.
+- `applyMeetingMetaPatch` (`meetings-logic.ts`; renamed from `applyMeetingUpdate`
+  by #772): hook `shiftPendingForMeeting` where `next.scheduledAt` is PRESENT —
+  i.e. the caller actually sent a time. Do NOT hook it inside the
+  `if (!canReschedule)` block: since #772 that block is the non-admin REJECTION
+  guard, so a shift written there fires only for a caller forbidden to reschedule
+  and never for an admin who actually moves the meeting. In the cancel branch,
+  `cancelPendingForMeeting`. Line numbers deliberately omitted — they moved once
+  already.
 
 Import from `./notifications-logic` — imports of `-logic` modules inside
 server-fn modules are the established pattern; the guard test checks
@@ -442,7 +449,7 @@ Stop and report back (do not improvise) if:
   If you cannot get confirmation, say so in your report and proceed only with
   the local/dev DBs — flag the prod migration as needing that check at deploy
   time.
-- Meeting cancel is NOT handled inside `applyMeetingUpdate` (you can't find
+- Meeting cancel is NOT handled inside `applyMeetingMetaPatch` (you can't find
   the status→cancelled branch there) — the cancel write point needs a
   different home; report where cancel actually happens.
 - Neither Nitro plugin mechanism (Step 6 A/B) produces the boot log — poller

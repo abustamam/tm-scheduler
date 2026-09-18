@@ -21,7 +21,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/meeting-meta-patch.integration.test.ts
  */
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activityLog, meetings } from "#/db/schema";
 import {
@@ -124,6 +124,32 @@ describe.skipIf(!hasTestDb)("applyMeetingMetaPatch", () => {
 		expect((await metaOf())[field]).toBeNull();
 	});
 
+	/**
+	 * Each field stores ITS OWN input. The two clear cases above are satisfied by
+	 * writing null from any source, and the trim case below covers `theme` alone —
+	 * so without this, mutating the writer's loop body to
+	 * `next[field] = input.theme?.trim() || null` (every column takes the theme's
+	 * value) left all eight meeting-meta suites green. MEASURED. That mutation is
+	 * exactly what the refactor made possible: seven hand-written lines naming
+	 * their own field became one loop over a list.
+	 *
+	 * The per-field distinct value is what makes a crossed field fail.
+	 */
+	it.each(FIELDS)("stores %s from its own input", async (field) => {
+		// `joinUrl` is normalized, so give it a value that survives the URL
+		// validator rather than the prose the other seven take.
+		const value =
+			field === "joinUrl"
+				? "https://meet.google.com/abc-defg-hij"
+				: `fresh ${field}`;
+		await applyMeetingMetaPatch({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+			[field]: value,
+		});
+		expect((await metaOf())[field]).toBe(value);
+	});
+
 	it("trims a stored value", async () => {
 		await applyMeetingMetaPatch({
 			meetingId: club.meetingId,
@@ -183,6 +209,53 @@ describe.skipIf(!hasTestDb)("applyMeetingMetaPatch", () => {
 					scheduledAt: "2031-01-02T09:15",
 				}),
 			).rejects.toThrow(/reschedule/i);
+		});
+
+		/**
+		 * The two NUMERIC fields are waived from the guard sweep, and they disagree
+		 * with each other on what `null` means — so nothing pinned either half
+		 * until now. `meetingNumber: null` CLEARS (back to derived numbering,
+		 * #358); `lengthMinutes: null` is UNCHANGED, because `length_minutes` is
+		 * `notNull().default(90)` and there is nothing to clear to. A future author
+		 * tidying `!= null` into `!== undefined` for consistency with the seven
+		 * text fields would write NULL into a NOT NULL column; this is what fails.
+		 */
+		it("clears the meeting number when passed null", async () => {
+			await testDb
+				.update(meetings)
+				.set({ meetingNumber: 56 })
+				.where(eq(meetings.id, club.meetingId));
+			await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+				meetingNumber: null,
+			});
+			const [m] = await testDb
+				.select({ n: meetings.meetingNumber })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			expect(m.n).toBeNull();
+		});
+
+		it("treats an explicit null length as UNCHANGED, not as a clear", async () => {
+			await testDb
+				.update(meetings)
+				.set({ lengthMinutes: 45 })
+				.where(eq(meetings.id, club.meetingId));
+			await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+				// CAST, and the cast is the point. `lengthMinutes?: number` makes this
+				// state unrepresentable in TypeScript and `updateMeetingSchema` has no
+				// `.nullable()` on it either, so a typed caller cannot reach here —
+				// but a JSON caller can (the MCP tool surface, #771, parses untyped
+				// input), and `length_minutes` is `notNull()`. This pins the third
+				// layer: the writer's own `!= null` must drop it rather than write
+				// NULL into a NOT NULL column. Tidying that to `!== undefined` for
+				// consistency with the seven text fields is what fails here.
+				lengthMinutes: null as unknown as number,
+			});
+			expect((await timeOf()).lengthMinutes).toBe(45);
 		});
 
 		it("still refuses a TMOD who changes the length", async () => {
@@ -246,10 +319,24 @@ describe.skipIf(!hasTestDb)("applyMeetingMetaPatch", () => {
 	 */
 	describe("the meeting_edit entry", () => {
 		async function detailOf() {
+			// SCOPED to this run's club and meeting, and ordered. vitest runs test
+			// FILES in parallel against one shared `tm_test` and three other suites
+			// write `meeting_edit`, so an unscoped read here returns another file's
+			// row — measured: it picked up a `notes`-only patch from
+			// `personal-duty-edit` and failed. Worse for the absence assertion
+			// below, which any concurrent entry satisfies.
 			const [entry] = await testDb
 				.select({ detail: activityLog.detail })
 				.from(activityLog)
-				.where(eq(activityLog.action, "meeting_edit"));
+				.where(
+					and(
+						eq(activityLog.action, "meeting_edit"),
+						eq(activityLog.clubId, club.clubId),
+						eq(activityLog.targetId, club.meetingId),
+					),
+				)
+				.orderBy(desc(activityLog.createdAt))
+				.limit(1);
 			return entry?.detail as
 				| { before: Record<string, unknown>; after: Record<string, unknown> }
 				| undefined;
@@ -265,6 +352,48 @@ describe.skipIf(!hasTestDb)("applyMeetingMetaPatch", () => {
 			expect(Object.keys(detail?.after ?? {})).toEqual(["theme"]);
 			expect(detail?.before).toEqual({ theme: STORED.theme });
 			expect(detail?.after).toEqual({ theme: "New beginnings" });
+		});
+
+		/**
+		 * The case the one-field assertion above cannot reach. The Edit-meeting
+		 * dialog prefills every input from the row and resubmits the lot, so the
+		 * writer receives all eleven keys on a save that changed one — and before
+		 * the unchanged-key drop, the entry named all eleven. That is the pre-#772
+		 * full-row snapshot by another route, and it is what stops an officer
+		 * reading the activity log from telling which entry moved the location.
+		 */
+		it("names one field for a DIALOG-shaped save that changed one", async () => {
+			await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+				// Every stored value resubmitted unchanged, exactly as the dialog
+				// does, with one field altered.
+				theme: "New beginnings",
+				location: STORED.location,
+				joinUrl: STORED.joinUrl,
+				wordOfTheDay: STORED.wordOfTheDay,
+				wodDefinition: STORED.wodDefinition,
+				wodExample: STORED.wodExample,
+				notes: STORED.notes,
+				reminders: STORED.reminders,
+			});
+			const detail = await detailOf();
+			expect(Object.keys(detail?.after ?? {})).toEqual(["theme"]);
+			expect(detail?.before).toEqual({ theme: STORED.theme });
+		});
+
+		it("is not written at all for a patch that changes nothing", async () => {
+			// Every field resubmitted at its stored value — the dialog save where the
+			// officer opened it and pressed Save without typing.
+			await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+				theme: STORED.theme,
+				location: STORED.location,
+				notes: STORED.notes,
+			});
+			expect(await detailOf()).toBeUndefined();
+			expect((await metaOf()).theme).toBe(STORED.theme);
 		});
 
 		it("is not written at all for a patch with no fields in it", async () => {

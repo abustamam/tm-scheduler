@@ -65,6 +65,7 @@ const meeting = (over: Record<string, unknown> = {}) =>
 const dialog = (
 	open: boolean,
 	over: Record<string, unknown> = {},
+	canReschedule = true,
 ): ReactElement => (
 	<MeetingMetaDialog
 		open={open}
@@ -72,7 +73,7 @@ const dialog = (
 		meeting={meeting(over)}
 		timezone="America/Chicago"
 		selfMemberId={null}
-		canReschedule
+		canReschedule={canReschedule}
 		onSaved={vi.fn(async () => {})}
 	/>
 );
@@ -270,5 +271,38 @@ describe("the inline error", () => {
 		expect(await screen.findByText(JOIN_URL_ERROR)).toBeTruthy();
 		await user.type(input, "x");
 		await waitFor(() => expect(screen.queryByText(JOIN_URL_ERROR)).toBeNull());
+	});
+});
+
+/**
+ * The time, for a viewer who may not change it (#772).
+ *
+ * `meeting-agenda.tsx` mounts this dialog on `viewer.canEditMeetingMeta` — which
+ * includes a self-serve Toastmaster who is NOT an admin — and passes
+ * `canReschedule={viewer.canManage}`, false for exactly that person. It used to
+ * resubmit the meeting's stored wall time on their behalf, and the writer
+ * compared that against a FRESH read: so if an admin moved the meeting while this
+ * tab was open, the TMOD's next save was refused with "Only an admin or VP
+ * Education can reschedule this meeting" and the edit they actually made was
+ * lost. No race needed, just a stale tab. Saying nothing about the time cannot be
+ * read as a move.
+ */
+describe("the time a non-rescheduling viewer sends", () => {
+	it("omits scheduledAt entirely", async () => {
+		const user = userEvent.setup();
+		render(dialog(true, {}, false));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect("scheduledAt" in sentData().data).toBe(false);
+	});
+
+	it("still sends it for an admin, who picks it from the form", async () => {
+		// The CONTROL. Without it the assertion above passes on a dialog that never
+		// sends the field at all, which would break rescheduling outright.
+		const user = userEvent.setup();
+		render(dialog(true, {}, true));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect(sentData().data.scheduledAt).toBeTruthy();
 	});
 });

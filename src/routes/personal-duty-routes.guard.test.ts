@@ -374,16 +374,26 @@ describe("the writes go through the tested payload builders", () => {
 		expect(payload).toContain("meetingId: props.meeting.id");
 		expect(payload).toContain("selfMemberId: props.memberId");
 		expect(payload).toContain("theme,");
-		for (const field of [
-			"location",
-			"joinUrl",
-			"wordOfTheDay",
-			"wodDefinition",
-			"wodExample",
-			"notes",
-			"reminders",
-			"scheduledAt",
-		]) {
+		// DERIVED from `updateMeetingSchema`, not hand-listed. #666's sweep read its
+		// field list off that schema, so a NEW meta field was auto-enrolled into the
+		// theme editor's obligation; a hand-written list of eight names loses that —
+		// a future `subtitle` added to the schema, to `EditorMeeting`, and echoed
+		// onto this payload from `props.meeting` would reintroduce the page-load
+		// snapshot lost update with every test green.
+		const schemaBody = (() => {
+			const src = readSource(resolve(ROOT, "src/server/meetings.ts"));
+			const start = src.indexOf("const updateMeetingSchema = z.object({");
+			expect(start, "updateMeetingSchema not found").toBeGreaterThan(-1);
+			return src.slice(start, src.indexOf("});", start));
+		})();
+		const forbidden = [...schemaBody.matchAll(/^\t(\w+):/gm)]
+			.map((m) => m[1])
+			// The three the editor legitimately sends: the two identity fields and
+			// the one field it edits.
+			.filter((k) => !["meetingId", "selfMemberId", "theme"].includes(k));
+		// Vacuity floor: 13 schema keys minus the 3 above.
+		expect(forbidden.length).toBeGreaterThanOrEqual(10);
+		for (const field of forbidden) {
 			expect(
 				payload,
 				`${field} must not be on the theme payload — see #772`,

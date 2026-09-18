@@ -23,6 +23,7 @@
  * real database in `meeting-meta-patch.integration.test.ts`; this file exists
  * only to catch the field that never got there.
  */
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
@@ -30,6 +31,38 @@ import { readSource } from "#/test/guard-source";
 const here = () => new URL(".", import.meta.url).pathname;
 const meetingsSrc = readSource(resolve(here(), "./meetings.ts"));
 const logicSrc = readSource(resolve(here(), "./meetings-logic.ts"));
+
+/**
+ * RAW, comments included — and deliberately NOT through `readSource`.
+ * `guard-source.ts` states the rule: a guard of the form "the offender list must
+ * be empty" must not read stripped source, because there a comment can only
+ * produce a false FAILURE, so stripping LOOSENS it. The `not.toContain`
+ * assertions at the bottom of this file are exactly that form: a comment that
+ * reintroduces the echo's NAME should fail them, since the next author greps for
+ * it. Everything else here reads stripped, because this file's own prose names
+ * the fields it sweeps for.
+ */
+const rawMeetings = readFileSync(resolve(here(), "./meetings.ts"), "utf8");
+const rawLogic = readFileSync(resolve(here(), "./meetings-logic.ts"), "utf8");
+
+/**
+ * The writer's OWN body. `meetings-logic.ts` holds five other writers that take
+ * an `input` (`applyCreateMeeting`, `applyWordOfTheDayUpdate`,
+ * `applyCompleteMeeting`, `applyReopenMeeting`, `applyMeetingDigitalVoting`), so
+ * a sweep run against the whole file passes when a field is read by ANY of them.
+ * MEASURED: adding `subtitle` to the schema plus one `if (input.subtitle !==
+ * undefined) {}` inside `applyWordOfTheDayUpdate` left the sweep green — the
+ * "silently a no-op" failure it exists to catch. CODING_STANDARDS says it
+ * directly: anchor every search inside the construct you mean.
+ */
+const writerBody = (() => {
+	const start = logicSrc.indexOf(
+		"export async function applyMeetingMetaPatch(",
+	);
+	expect(start, "applyMeetingMetaPatch not found").toBeGreaterThan(-1);
+	const after = logicSrc.indexOf("\nexport ", start + 1);
+	return logicSrc.slice(start, after === -1 ? undefined : after);
+})();
 
 /** The schema body, comment-blind — this file's own prose names these fields. */
 const schemaBody = (() => {
@@ -65,6 +98,14 @@ const NON_TEXT = new Set([
 ]);
 
 describe("updateMeetingSchema is a patch, field by field", () => {
+	it("finds the writer's own body (vacuity floor)", () => {
+		// If this slice ever came back empty the sweep below would pass on anything.
+		expect(writerBody.length).toBeGreaterThan(500);
+		expect(writerBody).toContain("META_TEXT_FIELDS");
+		// And it must NOT have swallowed the next writer.
+		expect(writerBody).not.toContain("applyWordOfTheDayUpdate");
+	});
+
 	it("finds the schema and its fields (vacuity floor)", () => {
 		// Counts the schema's own KEYS rather than a lexical proxy. 13 as of #731,
 		// unchanged by #772 — a schema that shrinks below the non-text list plus the
@@ -129,7 +170,7 @@ describe("the writer reads every field the schema accepts", () => {
 			.filter(
 				(k) =>
 					!textFields.includes(k) &&
-					!new RegExp(`input\\.${k} !== undefined`).test(logicSrc),
+					!new RegExp(`input\\.${k} !== undefined`).test(writerBody),
 			);
 		expect(
 			unread,
@@ -148,17 +189,19 @@ describe("the writer reads every field the schema accepts", () => {
 		// sent it. Initialising it from the stored row instead would satisfy every
 		// "omitted field is unchanged" assertion while restoring the lost update,
 		// because the write would name columns the caller never sent.
-		expect(logicSrc).toMatch(
+		expect(writerBody).toMatch(
 			/const next: Partial<typeof meetings\.\$inferInsert> = \{\};/,
 		);
-		expect(logicSrc).toMatch(/if \(value !== undefined\) next\[field\] =/);
+		expect(writerBody).toMatch(/if \(value !== undefined\) next\[field\] =/);
 	});
 
 	it("keeps the deleted echo deleted", () => {
 		// `themeOnlyUpdate` / `MeetingMetaEcho` were the #666 mitigation. A caller
 		// echoing stored values back at a PATCH writer is a lost update with no
 		// upside at all.
-		expect(meetingsSrc).not.toContain("themeOnlyUpdate");
-		expect(logicSrc).not.toContain("themeOnlyUpdate");
+		expect(rawMeetings).not.toContain("themeOnlyUpdate");
+		expect(rawLogic).not.toContain("themeOnlyUpdate");
+		expect(rawMeetings).not.toContain("MeetingMetaEcho");
+		expect(rawLogic).not.toContain("MeetingMetaEcho");
 	});
 });

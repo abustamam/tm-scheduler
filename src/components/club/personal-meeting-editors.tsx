@@ -67,9 +67,16 @@ export interface EditorMeeting {
 	/** Prefills the theme editor. */
 	theme: string | null;
 	/** Prefill the WORD editor, which is the only reason these three are here:
-	 *  `applyWordOfTheDayUpdate` owns exactly these columns and replaces all
+	 *  `applyWordOfTheDayUpdate` owns exactly these columns and REPLACES all
 	 *  three, so that form has to show what is stored or a save loses the two
-	 *  fields the officer did not retype. */
+	 *  fields the officer did not retype.
+	 *
+	 *  Read that as the limit of what #772 closed, not as a contradiction of it.
+	 *  These three ARE still a page-load snapshot echo, so the same lost update
+	 *  survives WITHIN the Word of the Day: a `wodExample` the Toastmaster adds
+	 *  through the Edit-meeting dialog after this page loaded is reverted when the
+	 *  Grammarian saves their word. #772 changed the general meta writer only;
+	 *  giving `applyWordOfTheDayUpdate` the same tri-state is its own change. */
 	wordOfTheDay: string | null;
 	wodDefinition: string | null;
 	wodExample: string | null;
@@ -90,7 +97,8 @@ interface EditorProps {
 	meetingId: string;
 	meeting: EditorMeeting;
 	slots: EditorSlot[];
-	/** The club's timezone, for the date line and the wall-time echo. */
+	/** The club's timezone, for the date line and the lifecycle (meeting-over)
+	 *  check. The wall-time echo it also fed went with #772. */
 	timezone: string;
 	canManage: boolean;
 	/** The effective member id — session member or localStorage pick. Null when

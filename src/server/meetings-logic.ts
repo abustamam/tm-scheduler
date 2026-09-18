@@ -161,17 +161,26 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 }
 
 /**
- * A meeting-meta PATCH (#772). Every optional field is a TRI-STATE, and the
+ * A meeting-meta PATCH (#772). Every FREE-TEXT field is a TRI-STATE, and the
  * distinction is the whole point of this interface:
  *
  *   omitted / `undefined`  leave the stored value alone
  *   `null` or blank        clear it
  *   a value                store it, trimmed
  *
+ * The two NUMERIC fields are not tri-states and do not generalise from the
+ * seven above. `meetingNumber` clears on null (back to derived, #358), but
+ * `lengthMinutes` has nothing to clear TO — `meetings.length_minutes` is
+ * `notNull().default(90)` — so for it omission is the only "leave it alone" and
+ * there is no null state at all. `scheduledAt` is the same: a wall-time string
+ * resolved against the club's timezone, with no "clear the date". Tidying
+ * `lengthMinutes`'s `!= null` into `!== undefined` to match the loop would
+ * write NULL into a NOT NULL column; the integration suite pins that.
+ *
  * This replaced a full-REPLACE writer that wrote `theme: input.theme?.trim() ||
  * null` and the identical line for six more free-text columns, so omission
  * meant *null it*. A one-field editor therefore had to echo six values it was
- * not editing (`themeOnlyUpdate`, deleted with this change) or silently erase
+ * not editing (via an echo helper, deleted with this change) or silently erase
  * the club's location, Word of the Day, announcements and notes while
  * reporting success. Worse, that echo was a page-load SNAPSHOT: a Toastmaster
  * saving a theme wrote back the Word of the Day as it had been when their page
@@ -189,8 +198,10 @@ export interface MeetingMetaPatchInput {
 	 *  the current time — a partial editor no longer has to resubmit it, which is
 	 *  what the `canReschedule` comparison below used to force. */
 	scheduledAt?: string;
-	/** Meeting length in minutes. Omit to leave the current length unchanged. */
-	lengthMinutes?: number | null;
+	/** Meeting length in minutes. Omit to leave the current length unchanged.
+	 *  NOT nullable, unlike the free-text fields: the column is `notNull()` with
+	 *  a default, and the wire schema has no `.nullable()` either. */
+	lengthMinutes?: number;
 	theme?: string | null;
 	location?: string | null;
 	/** Raw video-call join link (#731). Normalized by
@@ -230,13 +241,16 @@ const META_TEXT_FIELDS = [
 /** Update a meeting's meta (incl. reschedule) and log a `meeting_edit`.
  *  Omitted fields are left alone — see `MeetingMetaPatchInput`. */
 export async function applyMeetingMetaPatch(input: MeetingMetaPatchInput) {
+	// ONE round trip, not two. The club is needed for its timezone alone, and
+	// only when the caller sent `scheduledAt` — which since #772 the focused
+	// editors never do. `meetings.club_id` is `notNull().references(clubs.id)`,
+	// so the relation always resolves.
 	const meeting = await db.query.meetings.findFirst({
 		where: eq(meetings.id, input.meetingId),
+		with: { club: true },
 	});
 	if (!meeting) throw new Error("Meeting not found.");
-	const club = await db.query.clubs.findFirst({
-		where: eq(clubs.id, meeting.clubId),
-	});
+	const club = meeting.club;
 	if (!club) throw new Error("Club not found.");
 
 	// SPARSE by construction: a key is present only because the caller sent that
@@ -286,15 +300,38 @@ export async function applyMeetingMetaPatch(input: MeetingMetaPatchInput) {
 		}
 	}
 
+	// Drop keys whose value is ALREADY what is stored. Deliberately after the
+	// authorization check above, so that check sees exactly what the caller sent
+	// rather than what survived a normalization step.
+	//
+	// This is what makes "the entry is the diff" true for the DIALOG too, not just
+	// for a one-field editor. The dialog prefills every input from the row and
+	// resubmits the lot, so without this every admin save named all eleven columns
+	// in its `meeting_edit` entry — indistinguishable from the pre-#772 full-row
+	// snapshot — and an officer reading the activity log to find who changed the
+	// location could not tell which entry did it. It also stops the UPDATE naming
+	// columns nothing changed.
+	for (const key of Object.keys(next) as (keyof typeof next)[]) {
+		const proposed = next[key];
+		const stored = meeting[key as keyof typeof meeting];
+		const unchanged =
+			proposed instanceof Date && stored instanceof Date
+				? proposed.getTime() === stored.getTime()
+				: proposed === stored;
+		if (unchanged) delete next[key];
+	}
+
 	// An empty patch is a save with nothing in it — a `set` with no keys is a
-	// drizzle error, and an audit entry naming no change is noise.
+	// drizzle error, and an audit entry naming no change is noise. Reachable from
+	// the dialog now that an unchanged resubmit drops out above.
 	const changed = Object.keys(next) as (keyof typeof next)[];
 	if (changed.length === 0) return { clubId: meeting.clubId };
 
 	await db.transaction(async (tx) => {
 		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));
-		// `before` mirrors `after` key for key, so the entry reads as the diff it
-		// is rather than nine columns of which two moved.
+		// `before` mirrors `after` key for key, and both name only what actually
+		// MOVED (unchanged keys were dropped above) — so the entry reads as the
+		// diff it is rather than eleven columns of which two changed.
 		const before: Record<string, unknown> = {};
 		for (const key of changed)
 			before[key] = meeting[key as keyof typeof meeting];

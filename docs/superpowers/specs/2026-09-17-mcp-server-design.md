@@ -43,7 +43,7 @@ The direction: an MCP endpoint inside the app, so an LLM makes these changes as 
 | Server route with bearer auth and a body cap | `src/routes/api/pathways/ingest.ts` | the shape `/api/mcp` copies |
 | Hashed, revocable, shown-once token | `sync_tokens`; `src/server/sync-tokens.ts`; `parseBearerToken` in `pathways-ingest-logic.ts` | `api_tokens` mirrors it, keyed to a user |
 | Batch meeting insert, same-date skip, one transaction | `applyBatchCreateMeetings` (`batch-meetings-logic.ts`), `insertMeetingWithSlots` (`meeting-create-logic.ts`) | extended with per-meeting fields |
-| Meeting field edits | `applyMeetingUpdate`, `applyWordOfTheDayUpdate` (`meetings-logic.ts`) | caps in `MEETING_FIELDS` (`src/lib/meeting-limits.ts`) |
+| Meeting field edits | `applyMeetingMetaPatch`, `applyWordOfTheDayUpdate` (`meetings-logic.ts`) | caps in `MEETING_FIELDS` (`src/lib/meeting-limits.ts`) |
 | Schedule top-up | `ensureScheduleToppedUp` (`schedule-topup-logic.ts`) | idempotent |
 | Guest dedupe | `findGuestByContact` (private, `guest-pipeline-logic.ts`), `namesAgree` (`src/lib/person-name.ts`), `toStoredPhone` (`src/lib/phone.ts`) | exported as `matchGuest` (D7) |
 | Past-meeting guest attendance | `addGuestPresent`, `assertAttendanceRecordable` (`minutes-logic.ts`) | |
@@ -215,15 +215,17 @@ Each entry is matched to meetings by its club-local date:
   - Logged as `meeting_create`.
 - **One meeting on that date: `update`.**
   - The plan shows a field diff, e.g. `theme: — → "Harvest"`. Only fields present in the input change.
-  - **`applyMeetingUpdate` is a full REPLACE** (`meetings-logic.ts:205-221`: `theme:
-    input.theme?.trim() || null`, and the same line for `location`, `joinUrl`,
-    `wordOfTheDay`, `wodDefinition`, `wodExample`, `notes`, `reminders`; `scheduledAt` is
-    required). Sending only a theme would therefore CLEAR a meeting's Word of the Day, join
-    link and notes. The planner already reads each meeting to build its diff, so it echoes
-    every field it is not changing, using `MeetingMetaEcho` in `src/lib/meeting-meta-update.ts`
-    — the same echo the `/me/theme` editor uses. A test asserts that an update which sets
-    only a theme leaves the other meta fields intact. The root-cause fix (a patch writer
-    where `undefined` means unchanged) is issue #772, deliberately not in these PRs.
+  - **`applyMeetingMetaPatch` is a PATCH** (#772 landed, superseding what this bullet used
+    to say). Send ONLY the fields the planner's diff actually changes: an omitted field is
+    left alone, `null` or a blank string clears, a value is stored trimmed. There is no echo
+    to build and nothing to carry — `MeetingMetaEcho` / `themeOnlyUpdate` and
+    `src/lib/meeting-meta-update.ts` are DELETED, and
+    `src/server/meeting-meta-patch.guard.test.ts` fails a caller that reimplements them
+    (an echo in front of a patch writer is a page-load-snapshot lost update with no upside).
+    `scheduledAt` is optional now too, so a meta-only update omits it rather than resubmitting
+    the meeting's wall time. A test still asserts that an update setting only a theme leaves
+    the other meta fields intact — it is now a property of the writer rather than of this
+    caller.
   - A locked meeting is blocking.
   - Logged as `meeting_edit`.
 - **More than one meeting on that date:** blocking, `AMBIGUOUS_DATE`. The unique index covers the exact instant, not the date.
@@ -425,7 +427,7 @@ read line by line, and is exercised on real data before three write tools depend
 | PR | Contents | Why here |
 |---|---|---|
 | **PR1** | `api_tokens` + migration, `/me` token UI, `/api/mcp`, `authenticateToken` / `authorizeToken`, `McpError`, `src/lib/mcp-plan.ts`, the four read tools, `toMcpGuest`, `matchGuest` (+ the two CRITICAL regressions), `record_guest_book`, `mcp-authz.guard.test.ts` | All the risk (auth, CSRF posture, plan hash) plus the one tool that proves the preview→apply loop on real data |
-| **PR2** | `upsert_agendas`, the `MeetingMetaEcho` echo, the top-up rule, `meeting_create` logging | The workflow you most want, on a proven base |
+| **PR2** | `upsert_agendas`, the top-up rule, `meeting_create` logging (the meta echo is GONE — #772 made the writer a patch, so T1 below is dropped) | The workflow you most want, on a proven base |
 | **PR3** | `assign_roles`, `releaseSlotCore` extraction | Touches `slots-logic.ts`, which nothing else in this plan does |
 
 ## NOT in scope
@@ -501,7 +503,8 @@ Synthesized from this review's findings. Each task derives from a specific findi
 
 - [ ] **T1 (P1, human: ~1h / CC: ~10min)** — `upsert_agendas` — echo meta fields instead of clearing them
   - Surfaced by: Architecture issue 1 — `meetings-logic.ts:205-221` full REPLACE
-  - Files: `src/server/mcp/tools/upsert-agendas.ts`, `src/lib/meeting-meta-update.ts`
+  - Files: `src/server/mcp/tools/upsert-agendas.ts` (the `src/lib/meeting-meta-update.ts`
+    half is DROPPED — #772 deleted that module; send a sparse patch instead of an echo)
   - Verify: test that setting only a theme leaves WOD, join link, notes intact
 - [ ] **T2 (P1, human: ~30min / CC: ~5min)** — `/api/mcp` — fresh server + transport per request
   - Surfaced by: Architecture issue 2 — `webStandardStreamableHttp.js:168-174`

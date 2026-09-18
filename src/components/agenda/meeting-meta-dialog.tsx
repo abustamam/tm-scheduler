@@ -103,11 +103,15 @@ export function MeetingMetaDialog({
 			return;
 		}
 		// Admins pick the date/time from the form. A self-serve TMOD has no such
-		// field, so re-submit the meeting's current wall time unchanged — the
-		// server treats a same-minute value as a no-op, not a reschedule.
+		// field and says NOTHING about the time (#772): `updateMeeting` is a patch,
+		// so an omitted `scheduledAt` leaves the meeting where it is. This used to
+		// resubmit the stored wall time, which the writer then compared against a
+		// FRESH read — so if an admin moved the meeting while this tab was open,
+		// the TMOD's next save was refused as an attempted reschedule and their
+		// edit was lost. Sending nothing cannot be read as a move.
 		const scheduledAt = canReschedule
 			? String(form.get("scheduledAt") ?? "")
-			: utcToZonedWallTime(new Date(meeting.scheduledAt), timezone);
+			: undefined;
 		if (canReschedule && !scheduledAt) {
 			toast.error("Date & time is required.");
 			return;
@@ -121,9 +125,13 @@ export function MeetingMetaDialog({
 						selfMemberId,
 						scheduledAt,
 					}),
-					// ALWAYS sent, blank included (#731). `updateMeeting` is a full
-					// REPLACE, so `""` is how the officer clears the link — omitting it
-					// would clear it too, but then there would be no way to keep one.
+					// ALWAYS sent, blank included (#731). `updateMeeting` is a PATCH since
+					// #772, so omitting the key would LEAVE the stored link alone — which
+					// means `""` is the only way this dialog says "clear it", and this
+					// dialog is the only surface that can. The always-send is therefore
+					// load-bearing in the opposite direction from the one this comment
+					// used to give: it is what makes a clear POSSIBLE, not what stops an
+					// accidental wipe.
 					//
 					// Read off the same `form` as everything else.
 					// `meetingUpdateFromForm` builds the fields this dialog has always
