@@ -13,17 +13,50 @@
 // (3) does the same thing one step earlier: the field renders blank, and blank
 // saves as null.
 //
-// A source grep (the public-meeting-contact.guard.test.ts pattern) because
-// these are route files: the repo has no route-render tests, the server halves
-// are covered by integration tests that call `applyMemberEdit`/
+// A source grep (the public-meeting-contact.guard.test.ts pattern): the member
+// form is a route file and the repo has no route-render tests, the server
+// halves are covered by integration tests that call `applyMemberEdit`/
 // `applyUpdateGuest` directly, and this wiring sits between the two where no
 // existing test can see it.
-import { dirname, resolve } from "node:path";
+//
+// The GUEST form moved out of `_authed/admin/vp-membership.tsx` into the shared
+// `components/club/guest-edit-dialog.tsx` at #727, when the meeting page's
+// attendance rail became a second caller. This guard is the reason the move had
+// to be a LIFT rather than a copy: it reads ONE file per form, so a second copy
+// of the guest form would have been unguarded, and the failure it guards
+// against is silent — a mismatch makes `form.get` return null, the handler
+// sends null, and every save wipes the stored name while the form still looks
+// like it works.
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
+
+/** Every non-test `.tsx` under `root` whose RAW source contains `needle`,
+ *  as paths relative to `root` with forward slashes. */
+function filesContaining(root: string, needle: string): string[] {
+	const out: string[] = [];
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name !== "node_modules") walk(full);
+			} else if (
+				entry.name.endsWith(".tsx") &&
+				!entry.name.includes(".test.")
+			) {
+				if (readFileSync(full, "utf8").includes(needle)) {
+					out.push(relative(root, full).split("\\").join("/"));
+				}
+			}
+		}
+	};
+	walk(root);
+	return out;
+}
 /**
  * Comments are blanked FIRST (see `#/test/guard-source`), then whitespace is
  * collapsed so Biome's line-wrapping can't fool the matches. The order is
@@ -44,7 +77,9 @@ const FORMS = [
 		row: "member",
 	},
 	{
-		file: "_authed/admin/vp-membership.tsx",
+		// NOT `_authed/admin/vp-membership.tsx` any more (#727). The form lives in
+		// the shared dialog; VP Membership and the meeting rail both render it.
+		file: "../components/club/guest-edit-dialog.tsx",
 		what: "guest",
 		row: "guest",
 	},
@@ -84,5 +119,33 @@ describe("the Goes by field round-trips (#486)", () => {
 		for (const { file } of FORMS) {
 			expect(read(file)).toContain("preferredName");
 		}
+	});
+
+	it("there are exactly TWO of these forms in the tree (#727)", () => {
+		// The census, and the reason #727 had to LIFT the guest form rather than
+		// copy it. This guard reads ONE file per form, so a third copy anywhere —
+		// the obvious shortcut when a second surface wants the same dialog — would
+		// be completely unguarded, and its failure mode is silent and destructive:
+		// a `name` / `form.get` mismatch makes the save send `null`, wiping the
+		// stored value while the form still looks like it works.
+		//
+		// Reads RAW, not comment-blind: this is an offender-list sweep, so a
+		// comment quoting the attribute can only ever ADD a false offender (a loud
+		// failure, the safe direction), while blanking comments could LOOSEN it.
+		const found = filesContaining(
+			resolve(ROUTES, ".."),
+			'name="preferredName"',
+		);
+		expect(
+			found.sort(),
+			"a third copy of the goes-by form appeared. This guard reads one file " +
+				"per form, so the new copy is unguarded — import the shared component " +
+				"instead, or add it to FORMS above and say why a third form exists.",
+		).toEqual(
+			[
+				"components/club/guest-edit-dialog.tsx",
+				"routes/_authed/members.$id.tsx",
+			].sort(),
+		);
 	});
 });

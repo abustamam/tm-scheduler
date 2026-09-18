@@ -3,6 +3,7 @@ import { Loader2, Printer, UserPlus } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { GuestEditDialog } from "#/components/club/guest-edit-dialog";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
@@ -16,14 +17,12 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
-import { Label } from "#/components/ui/label";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
 import { isStrandedConvertedGuest } from "#/lib/guest-convert";
 import { mailtoHref } from "#/lib/mailto";
-import { firstNameOf } from "#/lib/person-name";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
 import {
@@ -39,7 +38,6 @@ import {
 	setGuestStage,
 	undoGuestConversion,
 	unlinkGuestFromMember,
-	updateGuest,
 } from "#/server/guest-pipeline";
 
 export const Route = createFileRoute("/_authed/admin/vp-membership")({
@@ -755,36 +753,6 @@ function GuestEditDelete({
 	const stranded = isStrandedConvertedGuest(guest);
 	const joined = guest.stage === "joined" && !stranded;
 
-	async function onEditSubmit(e: React.FormEvent<HTMLFormElement>) {
-		e.preventDefault();
-		const form = new FormData(e.currentTarget);
-		const name = String(form.get("name") ?? "").trim();
-		if (!name) {
-			toast.error("Name is required.");
-			return;
-		}
-		setBusy(true);
-		try {
-			await updateGuest({
-				data: {
-					clubId,
-					guestId: guest.id,
-					name,
-					preferredName: String(form.get("preferredName") ?? "").trim() || null,
-					email: String(form.get("email") ?? "").trim() || null,
-					phone: String(form.get("phone") ?? "").trim() || null,
-				},
-			});
-			toast.success("Guest updated.");
-			setEditOpen(false);
-			await router.invalidate();
-		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
-		} finally {
-			setBusy(false);
-		}
-	}
-
 	async function onDelete() {
 		setBusy(true);
 		try {
@@ -831,81 +799,20 @@ function GuestEditDelete({
 				</Button>
 			)}
 
-			<Dialog open={editOpen} onOpenChange={setEditOpen}>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>Edit guest</DialogTitle>
-						<DialogDescription>
-							{joined
-								? `Fix ${guest.name}'s guest record. They are already a member — their roster details are edited on the roster.`
-								: `Fix ${guest.name}'s name and contact details.`}
-						</DialogDescription>
-					</DialogHeader>
-					<form onSubmit={onEditSubmit} className="space-y-4">
-						<div className="space-y-2">
-							<Label htmlFor={`guest-name-${guest.id}`}>Name</Label>
-							<Input
-								id={`guest-name-${guest.id}`}
-								name="name"
-								required
-								defaultValue={guest.name}
-								autoFocus
-							/>
-						</div>
-						<div className="space-y-2">
-							<Label htmlFor={`guest-preferred-${guest.id}`}>Goes by</Label>
-							<Input
-								id={`guest-preferred-${guest.id}`}
-								name="preferredName"
-								defaultValue={guest.preferredName ?? ""}
-								placeholder={firstNameOf(guest.name)}
-								aria-describedby={`guest-preferred-hint-${guest.id}`}
-							/>
-							<p
-								id={`guest-preferred-hint-${guest.id}`}
-								className="text-xs text-[var(--sea-ink-soft)]"
-							>
-								Used to greet them in WhatsApp and email drafts. Leave blank to
-								use their first name.
-							</p>
-						</div>
-						<div className="space-y-2">
-							<Label htmlFor={`guest-email-${guest.id}`}>Email</Label>
-							<Input
-								id={`guest-email-${guest.id}`}
-								name="email"
-								type="email"
-								defaultValue={guest.email ?? ""}
-								placeholder="name@example.com"
-							/>
-						</div>
-						<div className="space-y-2">
-							<Label htmlFor={`guest-phone-${guest.id}`}>Phone</Label>
-							{/* `phoneRaw`, NOT `phone`. `phone` is coalesced for display — a
-							    country-code guess — so a guest stored as "415-555-2671 x12"
-							    would prefill as "+1415555267112", a number the VPM never
-							    typed, in the dialog they opened to fix a name. See
-							    `PipelineGuestRow.phoneRaw`. */}
-							<Input
-								id={`guest-phone-${guest.id}`}
-								name="phone"
-								type="tel"
-								defaultValue={guest.phoneRaw ?? ""}
-							/>
-						</div>
-						<DialogFooter>
-							<DialogClose asChild>
-								<Button type="button" variant="outline" disabled={busy}>
-									Cancel
-								</Button>
-							</DialogClose>
-							<Button type="submit" disabled={busy}>
-								{busy ? "Saving…" : "Save changes"}
-							</Button>
-						</DialogFooter>
-					</form>
-				</DialogContent>
-			</Dialog>
+			{/* The SHARED dialog (#727) — the same component the meeting page's
+			    attendance rail opens from a guest's name. `PipelineGuestRow` is a
+			    superset of `GuestEditFields`, so this row goes straight in. Do NOT
+			    inline a copy back here: the form's three-way `name` / `form.get` /
+			    `defaultValue` wiring is guarded in ONE file (`goes-by-field.guard
+			    .test.ts`), and a second copy is a second place for it to rot
+			    silently — a mismatch wipes the stored value on every save. */}
+			<GuestEditDialog
+				guest={guest}
+				clubId={clubId}
+				joined={joined}
+				open={editOpen}
+				onOpenChange={setEditOpen}
+			/>
 
 			<Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
 				<DialogContent>

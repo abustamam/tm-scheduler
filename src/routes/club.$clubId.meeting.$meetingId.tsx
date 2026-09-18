@@ -93,6 +93,7 @@ import {
 	setPlannedAttendance,
 } from "#/server/attendance-plan";
 import { getClubLogoMeta } from "#/server/club-logo";
+import { getGuestPipeline } from "#/server/guest-pipeline";
 import {
 	completeMeeting,
 	getMeetingByKey,
@@ -629,12 +630,81 @@ function MeetingView() {
 			}),
 		enabled: needsTmodPlan,
 	});
+	// The guests the rail may EDIT (#727), and the stored fields to prefill the
+	// dialog with. Mirrors `fetchedRoster` / `getTmodPanelData` above: the
+	// payload deliberately projects `clubGuests` to `{ id, name }` because guest
+	// contact has never ridden on this page, so the one viewer who may fix a
+	// guest fetches it behind a gate of its own instead of widening the page for
+	// everyone. `getGuestPipeline` is that gate — `requireUser()` +
+	// `requireClubAdminView()` — and it is the SAME read VP Membership's loader
+	// makes, so both callers of the shared dialog hand it the same row type and
+	// there is no second definition of "what the dialog edits".
+	//
+	// `enabled` is the exact condition under which the control can appear, which
+	// is BOTH conjuncts: `showRollPanel` alone is `effectiveCanManage &&
+	// minutes.canEdit` and says nothing about the phase, so on its own it is
+	// true for an admin looking at an UPCOMING meeting — a page with no Guests
+	// group on it at all — and would pull a club's visitor contact details down
+	// on every pre-meeting render.
+	//
+	// `data` is undefined until it lands and undefined on a failure, which
+	// renders the names as plain text: exactly what a viewer without the
+	// capability sees. The conservative direction, and the necessary one — this
+	// form turns a blank field into `null` on save, so a dialog opened over rows
+	// that never arrived would wipe the record it was opened to fix.
+	const { data: guestPipeline } = useQuery({
+		queryKey: ["guest-pipeline", clubUuid],
+		queryFn: () => getGuestPipeline({ data: clubUuid }),
+		enabled: panelMode === "roll" && showRollPanel,
+	});
+	// `effectiveCanManage` and not `guestPipeline !== undefined` alone: the query
+	// is the DATA, the capability is the permission, and reading the presence of
+	// a fetch as a permission is exactly the shape that lets a cache entry from
+	// an earlier viewer arm a control for a later one.
+	//
+	// The client gate is `canManage` and the server's is `requireClubRole(…,
+	// ["admin"])`, and those two do NOT agree — deliberately. `canManageClub`
+	// (`guards.ts`) is `clubRole === "admin"` only, while `requireClubRole`
+	// ALSO grants to an elected officer holding an open `officer_terms` row
+	// (effective-admin, #202). So an officer who holds their seat by election
+	// rather than by stored `club_role` sees plain text here while the server
+	// would have accepted their write: the server is deliberately MORE
+	// permissive than this UI. That asymmetry is pre-existing — it already
+	// governs whether this panel shows roster contact at all — and it stays;
+	// widening it here would invent a second answer to "may this person edit a
+	// guest". `guest-edit-authz.integration.test.ts` pins both halves.
+	const guestEdit =
+		effectiveCanManage && guestPipeline
+			? {
+					clubId: clubUuid,
+					fields: Object.fromEntries(
+						guestPipeline.map((g) => [
+							g.id,
+							{
+								id: g.id,
+								name: g.name,
+								preferredName: g.preferredName,
+								email: g.email,
+								// `phoneRaw`, the stored column — NEVER `g.phone`, which is
+								// coalesced to E.164 for display. See `GuestEditFields`.
+								phoneRaw: g.phoneRaw,
+							},
+						]),
+					),
+				}
+			: undefined;
 	// Evict the contact roster when the viewer changes. Keying on `myId` makes a
 	// switch READ a different key; it does not remove the old one, and the default
 	// gcTime keeps it in memory for five minutes. That matters on the shared club
 	// laptop that gets passed around at a meeting: "not you? re-pick" would
 	// otherwise leave the previous Toastmaster's copy of every member's phone and
 	// email sitting in the cache (#576 review).
+	//
+	// The guest pipeline above is deliberately NOT evicted here. This eviction
+	// exists for the anonymous roster PICK — "not you? re-pick" on a shared
+	// laptop — and that identity never carries `canManage`, so it never fetched
+	// the pipeline in the first place; the cache entry belongs to a real signed-in
+	// admin session, which a re-pick does not end.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: myId is the TRIGGER, not a value the body reads — a change of viewer is exactly when the previous viewer's cached contact roster must be dropped
 	useEffect(() => {
 		return () => {
@@ -1829,6 +1899,20 @@ function MeetingView() {
 							// record of who turned up. One derivation, off the route's frozen
 							// clock, so this cannot disagree with the agenda beside it.
 							mode={panelMode}
+							// #727. `effectiveCanManage`, never bare `canManage`: #320's
+							// preview-as-member drops management everywhere it gates admin
+							// UI, and a link to `/members/$id` is admin UI — it is the
+							// affordance an officer previewing the member view is checking
+							// the absence of. The target route is `_authed` and enforces its
+							// own access either way; what this decides is whether a viewer
+							// who cannot follow the link is shown one.
+							canViewMemberDetail={effectiveCanManage}
+							// Roll mode's guest edit (#727). `undefined` for everyone else,
+							// so their guest names stay plain text with no disabled control
+							// hinting at what they cannot do. Carries the stored fields with
+							// the permission — see the derivation above for why the two
+							// travel together and why this gate is `canManage`.
+							guestEdit={guestEdit}
 							// TWO sources, one name. An officer gets `loaderRoster` (the
 							// payload's contact-bearing roster, populated only when the
 							// server itself resolved `canManage`). This meeting's

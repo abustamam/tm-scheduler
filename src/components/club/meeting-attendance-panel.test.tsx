@@ -4,10 +4,19 @@ import {
 	cleanup,
 	fireEvent,
 	render,
+	screen,
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderUnderMemoryRouter } from "#/test/router-harness";
+
+// The panel reaches the shared `GuestEditDialog` through `AttendanceGuestsGroup`
+// (#727), and that dialog imports the `updateGuest` server fn — a server-fn
+// module pulls `#/db` → `pg` → `DATABASE_URL` at import time, unset under
+// jsdom. Stubbing it is what keeps this suite able to mount the panel at all.
+vi.mock("#/server/guest-pipeline", () => ({ updateGuest: vi.fn() }));
+
 import { MeetingAttendancePanel } from "./meeting-attendance-panel";
 
 const roster = [
@@ -1483,5 +1492,147 @@ describe("roll mode", () => {
 			/>,
 		);
 		getByText(/1 change saved on this device/);
+	});
+});
+
+/**
+ * #727 — the member name is a link to `/members/$id`, for a viewer the SERVER
+ * has already resolved as able to manage the club, and plain text for everyone
+ * else.
+ *
+ * The gate itself is a prop, and a prop-driven gate is exactly the shape that
+ * ships the wrong audience with a green suite (#319: `VisitCta` was fully
+ * tested and shown to the wrong people because every test injected the prop
+ * itself). So these assert what the COMPONENT does with each answer, and
+ * `attendance-panel-wiring.guard.test.ts` asserts the route expression that
+ * computes it. Neither half is sufficient alone.
+ */
+describe("member identity link (#727)", () => {
+	afterEach(() => cleanup());
+
+	const linkProps = {
+		mode: "plan" as const,
+		roster: [
+			{
+				id: "m1",
+				name: "Ayesha Khan",
+				preferredName: null,
+				phone: null,
+				email: null,
+			},
+		],
+		plan: [],
+		rungOverride: {},
+		roleByMemberId: {},
+		meetingDate: "Tue 19 Aug",
+		shareUrl: "https://club.example/m",
+		locked: false,
+		onWriteRung: vi.fn(),
+		onContacted: vi.fn(),
+	};
+
+	it("renders PLAIN TEXT without the capability", async () => {
+		// The default. `canViewMemberDetail` is optional so plan mode's existing
+		// callers need no change, which means the default is what an un-wired
+		// caller gets — and it has to be the closed one.
+		await renderUnderMemoryRouter(<MeetingAttendancePanel {...linkProps} />);
+		expect(screen.getByText("Ayesha Khan")).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "Ayesha Khan" })).toBeNull();
+	});
+
+	it("links the name to that member's detail page WITH the capability", async () => {
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
+		);
+		const link = screen.getByRole("link", { name: "Ayesha Khan" });
+		// The ID in the href, not merely "a link exists": the row holds the id and
+		// a link built from the wrong one lands on a stranger's profile (or, since
+		// `/members/$id` is `_authed`, on a sign-in wall) with nothing visibly
+		// wrong on this page.
+		expect(link.getAttribute("href")).toBe("/members/m1");
+	});
+
+	it("keeps the two-line clamp on the LINKED name (criterion 11)", async () => {
+		// `name` is unbounded user data and the rail is ~292px wide. The clamp has
+		// to be on the element holding the TEXT, so swapping a `<span>` for an
+		// `<a>` is the classic way to lose it — and jsdom performs no layout, so
+		// the rendered height is not measurable here (CLAUDE.md's jsdom trap).
+		// What IS assertable is that the link carries the same box the plain span
+		// does, which is the property the shared class constant exists to hold.
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
+		);
+		const link = screen.getByRole("link", { name: "Ayesha Khan" });
+		expect(link.className).toContain("line-clamp-2");
+		expect(link.className).toContain("break-words");
+		expect(link.className).toContain("min-w-0");
+	});
+
+	it("links the name in ROLL mode too", async () => {
+		// Roll mode is meeting day, which is when "who is this person?" is asked
+		// out loud. The two modes render different row components, so a fix wired
+		// into one of them leaves the other dead — which is the exact failure
+		// `PanelRow`/`PanelIdentityLine` were extracted to prevent.
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel
+				{...linkProps}
+				mode="roll"
+				attendance={[]}
+				onSetAttendance={vi.fn()}
+				canViewMemberDetail={true}
+			/>,
+		);
+		expect(
+			screen.getByRole("link", { name: "Ayesha Khan" }).getAttribute("href"),
+		).toBe("/members/m1");
+	});
+
+	it("passes the guest-edit capability down to the Guests group", async () => {
+		// The panel is the only path from the route to that group, and `guestEdit`
+		// is OPTIONAL there — so dropping it here type-checks, lints clean, and
+		// silently removes the control. The group's own suite covers what it does
+		// with the capability; this covers that it ever arrives.
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel
+				{...linkProps}
+				mode="roll"
+				attendance={[]}
+				onSetAttendance={vi.fn()}
+				guests={[{ guestId: "g1", name: "Nadia Farouk", fromRole: false }]}
+				clubGuests={[]}
+				guestEdit={{
+					clubId: "c1",
+					fields: {
+						g1: {
+							id: "g1",
+							name: "Nadia Farouk",
+							preferredName: null,
+							email: null,
+							phoneRaw: null,
+						},
+					},
+				}}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+		).toBeTruthy();
+	});
+
+	it("leaves the guest name plain when the panel is given no capability", async () => {
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel
+				{...linkProps}
+				mode="roll"
+				attendance={[]}
+				onSetAttendance={vi.fn()}
+				guests={[{ guestId: "g1", name: "Nadia Farouk", fromRole: false }]}
+				clubGuests={[]}
+			/>,
+		);
+		expect(screen.getByText("Nadia Farouk")).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /Edit Nadia Farouk/i }),
+		).toBeNull();
 	});
 });
