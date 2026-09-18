@@ -852,7 +852,7 @@ describe("hand-off slides (#363)", () => {
 		// `not.toContain("Hand-off")` check below, whereas `slideName` would return
 		// the headline and hide it. Keep the copy; it is load-bearing here.
 		const headers = handoffs({ geIntroducesFunctionaries: true }).map((s) => {
-			const layout = slideLayout(s);
+			const layout = slideLayout(s, null);
 			return layout.chrome === "content" ? layout.header : "splash";
 		});
 		expect(headers).not.toContain("Hand-off");
@@ -1423,12 +1423,12 @@ describe("the Toastmaster covers the General Evaluator's role — deck (#363)", 
 		// exported to .pptx — not just the slide data. This is the assertion that
 		// would have caught a hardcoded header.
 		const rendered = build({ slots: noGe }).map((s) =>
-			JSON.stringify(slideLayout(s)),
+			JSON.stringify(slideLayout(s, null)),
 		);
 		expect(rendered.filter((t) => t.includes("General Evaluator"))).toEqual([]);
 		// Not vacuous: the same club WITH a General Evaluator says it plenty.
 		const withGe = build({ slots: [...noGe, ge] }).map((s) =>
-			JSON.stringify(slideLayout(s)),
+			JSON.stringify(slideLayout(s, null)),
 		);
 		expect(
 			withGe.filter((t) => t.includes("General Evaluator")).length,

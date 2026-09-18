@@ -5,9 +5,14 @@ import {
 	buildSlideDeck,
 	type ClubForDeck,
 	type MeetingForDeck,
+	type Slide,
 } from "./agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "./brand";
 import { type ClubLogoAsset, deckToPptx, pptxFileName } from "./deck-to-pptx";
+import {
+	SPLASH_LOGO_HEIGHT_PCT,
+	SPLASH_LOGO_MAX_WIDTH_PCT,
+} from "./slide-layout";
 import {
 	inchesOfWidth,
 	SLIDE_HEADER_GAP_PCT,
@@ -252,7 +257,7 @@ describe("pptx via slideLayout", () => {
 	});
 });
 
-describe("club logo on the title splash (#496)", () => {
+describe("club logo on the bookend splashes (#496, #725)", () => {
 	// A 1x1 transparent PNG. Only its shape matters here; the bytes are never
 	// decoded by these assertions — the intrinsic size is carried alongside on
 	// `ClubLogoAsset`, because that is how the real caller supplies it.
@@ -273,7 +278,29 @@ describe("club logo on the title splash (#496)", () => {
 		return objects.filter((o) => o.image);
 	}
 
+	/** Does this slide carry the nominative word "Toastmasters" on its own?
+	 *  A WHOLE line equal to it, not `slideText().toContain`: the club is called
+	 *  "MCF Toastmasters Club" and the non-affiliation disclaimer on a content
+	 *  footer spells it out too, so a substring check answers yes for most of
+	 *  the deck whether or not the word is rendered. */
+	function hasWord(pptx: PptxGenJS, i: number): boolean {
+		return slideText(pptx, i)
+			.split("\n")
+			.some((line) => line === "Toastmasters");
+	}
+
 	const withLogo: ClubForDeck = { ...club, logoUrl: "/api/club/abc/logo?v=1" };
+
+	/** The deck a club WITH a logo gets. The closing splash is its last slide. */
+	function logoDeck() {
+		return buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
+			geIntroducesFunctionaries: false,
+		});
+	}
 
 	it("embeds the image on the title slide when bytes are supplied", () => {
 		const deck = buildSlideDeck({
@@ -314,21 +341,59 @@ describe("club logo on the title splash (#496)", () => {
 		expect(slideImages(pptx, 0)).toHaveLength(0);
 	});
 
-	it("puts the logo ONLY on the title slide, not on every splash", () => {
+	// #725 moved this from ONE slide to exactly TWO. The count is the point: a
+	// logo placed on every splash is the outcome the `templateSection` null
+	// guards against, and "at least one" would not see it.
+	it("puts the logo on both bookend splashes and nowhere else", () => {
+		const deck = logoDeck();
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
+		// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs internals
+		const carrying = ((pptx as any).slides as any[])
+			.map((_s, i) => i)
+			.filter((i) => slideImages(pptx, i).length > 0);
+		expect(deck[deck.length - 1]?.kind).toBe("thankYou");
+		expect(carrying).toEqual([0, deck.length - 1]);
+	});
+
+	it("embeds the image on the closing splash, which used to carry none (#725)", () => {
+		const deck = logoDeck();
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
+		expect(slideImages(pptx, deck.length - 1)).toHaveLength(1);
+	});
+
+	// The mark REPLACES the word — the pair the issue is about. Asserted on both
+	// bookends, because the closing splash reaches `renderSplash` by a different
+	// route (deck-level `clubLogoUrl`, not a field on its own slide).
+	it("drops the word Toastmasters from a splash that carries the logo", () => {
+		const deck = logoDeck();
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
+		expect(hasWord(pptx, 0)).toBe(false);
+		expect(hasWord(pptx, deck.length - 1)).toBe(false);
+	});
+
+	it("keeps the word on both splashes when the club has no logo", () => {
 		const deck = buildSlideDeck({
 			meeting,
-			club: withLogo,
+			club,
 			slots: fullSlots,
 			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
-		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
-		// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs internals
-		const total = ((pptx as any).slides as any[]).reduce(
-			(n, _s, i) => n + slideImages(pptx, i).length,
-			0,
-		);
-		expect(total).toBe(1);
+		const pptx = deckToPptx(PptxGenJS, deck, null);
+		expect(hasWord(pptx, 0)).toBe(true);
+		expect(hasWord(pptx, deck.length - 1)).toBe(true);
+	});
+
+	// The amendment on #725. The bytes are fetched in the BROWSER at click time
+	// and that fetch can fail; keying the fallback on `logoUrl` rather than on
+	// the loaded image would leave the splash carrying neither mark nor word.
+	it("falls back to the word when the club has a logo the caller could not fetch", () => {
+		const deck = logoDeck();
+		const pptx = deckToPptx(PptxGenJS, deck, null);
+		expect(slideImages(pptx, 0)).toHaveLength(0);
+		expect(slideImages(pptx, deck.length - 1)).toHaveLength(0);
+		expect(hasWord(pptx, 0)).toBe(true);
+		expect(hasWord(pptx, deck.length - 1)).toBe(true);
 	});
 
 	it("keeps the club name on the title slide alongside the logo", () => {
@@ -348,17 +413,137 @@ describe("club logo on the title splash (#496)", () => {
 	// both "one image". The .pptx really did emit `<a:stretch/>` into a
 	// 4in x 0.85in frame, smearing a square crest to 4.7:1, while every one of
 	// those tests passed. These assert the geometry instead.
-	function titleImage(logo: ClubLogoAsset) {
-		const deck = buildSlideDeck({
-			meeting,
-			club: withLogo,
-			slots: fullSlots,
-			ballotUrl: BALLOT_URL,
-			geIntroducesFunctionaries: false,
-		});
-		const [img] = slideImages(deckToPptx(PptxGenJS, deck, logo), 0);
+	function splashImage(logo: ClubLogoAsset, which: "opening" | "closing") {
+		const deck = logoDeck();
+		const i = which === "opening" ? 0 : deck.length - 1;
+		const [img] = slideImages(deckToPptx(PptxGenJS, deck, logo), i);
 		return img.options as { x: number; y: number; w: number; h: number };
 	}
+	const titleImage = (logo: ClubLogoAsset) => splashImage(logo, "opening");
+
+	/**
+	 * The box, in inches, stated as LITERALS rather than re-derived from
+	 * `SPLASH_LOGO_*_PCT`.
+	 *
+	 * A bound written as `inchesOfWidth(SPLASH_LOGO_HEIGHT_PCT, 13.33)` holds for
+	 * every value those constants could take, including a typo that shrinks the
+	 * mark back to a postage stamp — it cannot fail, which is the trap
+	 * CLAUDE.md names for a test stated relative to the constant it guards. The
+	 * proportions are pinned separately, once, below.
+	 */
+	const BOX_W_IN = 7.7314; // 58% of 13.33
+	const BOX_H_IN = 1.9995; // 15% of 13.33
+	/** The box before #725, when the logo sat above the word. */
+	const OLD_BOX_H_IN = 0.85;
+
+	it("declares the proportions the projected splash sizes with", () => {
+		expect(SPLASH_LOGO_MAX_WIDTH_PCT).toBe(58);
+		expect(SPLASH_LOGO_HEIGHT_PCT).toBe(15);
+		expect(inchesOfWidth(SPLASH_LOGO_MAX_WIDTH_PCT, 13.33)).toBeCloseTo(
+			BOX_W_IN,
+			3,
+		);
+		expect(inchesOfWidth(SPLASH_LOGO_HEIGHT_PCT, 13.33)).toBeCloseTo(
+			BOX_H_IN,
+			3,
+		);
+	});
+
+	// "Larger than today" is the whole request, and nothing above can see it: a
+	// correctly-contained postage stamp passes every shape assertion here.
+	it("gives a square crest more than twice the height the old box allowed", () => {
+		const { h } = titleImage({ ...LOGO, width: 512, height: 512 });
+		expect(h).toBeGreaterThan(OLD_BOX_H_IN * 2);
+	});
+
+	// The logo grew into the space the word vacated, which ends at y=2.25; the
+	// rule sits at y=2.5. Everything below it must be exactly where it was, so
+	// the plate — not just the image — has to clear the rule.
+	it("keeps the logo and its plate clear of the rule under it", () => {
+		const deck = logoDeck();
+		const pptx = deckToPptx(PptxGenJS, deck, {
+			...LOGO,
+			width: 512,
+			height: 512,
+		});
+		for (const i of [0, deck.length - 1]) {
+			// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs internals
+			const objects = (pptx as any).slides[i]._slideObjects as any[];
+			const plate = objects.find(
+				(o) => o.options?.fill?.color === "FFFFFF" && o.options?.w,
+			);
+			const [img] = slideImages(pptx, i);
+			expect(plate.options.y).toBeGreaterThanOrEqual(0);
+			expect(plate.options.y + plate.options.h).toBeLessThan(2.5);
+			expect(img.options.y + img.options.h).toBeLessThan(2.5);
+		}
+	});
+
+	/** `renderSplash`'s plate padding, in inches. Copied, and pinned below. */
+	const PLATE_PAD_IN = 0.08;
+
+	// The horizontal half of the same sentence, and the one #725's review caught.
+	// `SPLASH_LOGO_MAX_WIDTH_PCT` is documented as "exactly the width of the rule
+	// beneath it" — which was true of the projected splash, where both are drawn
+	// from the same constant, and FALSE here: the rule was a hard-coded `w: 6` on
+	// a 13.33in frame (45%) while the box was 58%, so a max-width wordmark
+	// overhung its own rule by ~0.87in a side in the downloaded deck. The
+	// vertical assertion above passes throughout; only a width comparison sees
+	// it. Measured against the RENDERED rule, not a restated proportion.
+	it("keeps the logo and its plate within the rule's width", () => {
+		const deck = logoDeck();
+		const pptx = deckToPptx(PptxGenJS, deck, {
+			...LOGO,
+			// 10:1 — the widest shape the ceiling has to hold, and the only one
+			// that can reach the rule's edge at all.
+			width: 2000,
+			height: 200,
+		});
+		for (const i of [0, deck.length - 1]) {
+			// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs internals
+			const objects = (pptx as any).slides[i]._slideObjects as any[];
+			const line = objects.find((o) => o.options?.line && o.options?.h === 0);
+			expect(line, "no rule on the splash").toBeTruthy();
+			const ruleLeft = line.options.x as number;
+			const ruleRight = ruleLeft + (line.options.w as number);
+			expect(line.options.w).toBeGreaterThan(0);
+
+			const plate = objects.find(
+				(o) => o.options?.fill?.color === "FFFFFF" && o.options?.w,
+			);
+			const [img] = slideImages(pptx, i);
+
+			// The MARK is what the ceiling governs, and it must fit outright.
+			expect(
+				img.options.x,
+				"the mark overhangs the rule's left edge",
+			).toBeGreaterThanOrEqual(ruleLeft - 0.01);
+			expect(
+				img.options.x + img.options.w,
+				"the mark overhangs the rule's right edge",
+			).toBeLessThanOrEqual(ruleRight + 0.01);
+
+			// The plate may exceed it by `renderSplash`'s own `pad` and nothing
+			// else — the same bound the projected splash puts on `ClubLogo`'s 4px,
+			// so the two surfaces state one rule in their own units rather than
+			// one of them quietly allowing more.
+			expect(
+				ruleLeft - plate.options.x,
+				"the plate exceeds the rule by more than its padding",
+			).toBeLessThanOrEqual(PLATE_PAD_IN + 0.01);
+			expect(
+				plate.options.x + plate.options.w - ruleRight,
+				"the plate exceeds the rule by more than its padding",
+			).toBeLessThanOrEqual(PLATE_PAD_IN + 0.01);
+		}
+	});
+
+	it("places the closing splash's logo exactly where the opening one sits", () => {
+		const square = { ...LOGO, width: 512, height: 512 };
+		expect(splashImage(square, "closing")).toEqual(
+			splashImage(square, "opening"),
+		);
+	});
 
 	it("keeps a square crest square instead of stretching it to the box", () => {
 		const { w, h } = titleImage({ ...LOGO, width: 512, height: 512 });
@@ -367,22 +552,66 @@ describe("club logo on the title splash (#496)", () => {
 
 	it("fits a wide wordmark to the box without exceeding either dimension", () => {
 		const { w, h } = titleImage({ ...LOGO, width: 1200, height: 300 });
-		// 4:1 source stays 4:1, and is height-limited inside the 4 x 0.85 box.
+		// 4:1 source stays 4:1, and is width-limited inside the box: at
+		// `SPLASH_LOGO_MAX_WIDTH_PCT` of the frame the box is now wider than four
+		// times its own height.
 		expect(w / h).toBeCloseTo(4, 3);
-		expect(w).toBeLessThanOrEqual(4 + 1e-6);
-		expect(h).toBeLessThanOrEqual(0.85 + 1e-6);
+		expect(w).toBeLessThanOrEqual(BOX_W_IN + 1e-6);
+		expect(h).toBeLessThanOrEqual(BOX_H_IN + 1e-6);
+	});
+
+	// A 10:1 banner is the shape the width bound exists for: contained by height
+	// alone it would be 20in wide on a 13.33in slide.
+	it("holds an extreme wordmark inside the slide, not just inside the box", () => {
+		const { x, w, h } = titleImage({ ...LOGO, width: 3000, height: 300 });
+		expect(w).toBeCloseTo(BOX_W_IN, 3);
+		expect(w / h).toBeCloseTo(10, 3);
+		expect(x).toBeGreaterThan(0);
+		expect(x + w).toBeLessThan(13.33);
 	});
 
 	it("scales a tall crest to the box height, not its width", () => {
 		const { w, h } = titleImage({ ...LOGO, width: 300, height: 1200 });
-		expect(h).toBeCloseTo(0.85, 5);
-		expect(w).toBeCloseTo(0.2125, 4);
+		expect(h).toBeCloseTo(BOX_H_IN, 3);
+		expect(w).toBeCloseTo(BOX_H_IN / 4, 3);
 	});
 
 	it("centres the logo horizontally on the slide", () => {
 		const { x, w } = titleImage({ ...LOGO, width: 512, height: 512 });
 		// 13.33in slide width — equal margins either side.
 		expect(x + w / 2).toBeCloseTo(13.33 / 2, 5);
+	});
+
+	// AC5 on #725: a contest's round dividers are splashes too, and they keep
+	// the word. `slideLayout` decides that, but a renderer that placed the logo
+	// on every splash tone would put it back, so it is asserted through the
+	// export rather than through the descriptor alone.
+	it("leaves a contest's section bands with the word and no logo", () => {
+		const contest: Slide[] = [
+			{
+				kind: "title",
+				clubName: "MCF Toastmasters Club",
+				logoUrl: "/api/club/abc/logo?v=1",
+				district: null,
+				clubNumber: null,
+				meetingNumber: null,
+				scheduledAt: new Date("2026-06-25T23:45:00Z"),
+				timezone: "America/Chicago",
+			},
+			{ kind: "templateSection", title: "Round 1" },
+			{
+				kind: "thankYou",
+				meetingSchedule: "2nd & 4th Thursday",
+				nextMeetingAt: null,
+				timezone: "America/Chicago",
+			},
+		];
+		const pptx = deckToPptx(PptxGenJS, contest, LOGO);
+		expect(slideImages(pptx, 1)).toHaveLength(0);
+		expect(hasWord(pptx, 1)).toBe(true);
+		// …while the bookends either side of it still carry the mark.
+		expect(slideImages(pptx, 0)).toHaveLength(1);
+		expect(slideImages(pptx, 2)).toHaveLength(1);
 	});
 
 	it("puts a light plate behind the logo so a dark one stays visible", () => {

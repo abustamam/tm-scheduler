@@ -12,6 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import {
+	SPLASH_LOGO_HEIGHT_PCT,
+	SPLASH_LOGO_MAX_WIDTH_PCT,
+} from "#/lib/slide-layout";
+import {
 	cqw,
 	SLIDE_HEADER_GAP_PCT,
 	SLIDE_INSET_PCT,
@@ -545,17 +549,32 @@ describe("MeetingPresent", () => {
 	});
 });
 
-describe("club logo on the projected splash (#496)", () => {
+describe("club logo on the projected splash (#496, #725)", () => {
 	afterEach(() => cleanup());
 
 	const LOGO = "/api/club/abc/logo?v=1754000000000";
 	const withLogo: Slide[] = deck.map((s) =>
 		s.kind === "title" ? { ...s, logoUrl: LOGO } : s,
 	);
+	/** `deck` is [title, wordOfDay, voteSpeaker, thankYou]. */
+	const CLOSING_SPLASH_CLICKS = 3;
+	function goToClosingSplash() {
+		for (let n = 0; n < CLOSING_SPLASH_CLICKS; n++) clickNext();
+		// Not a comment: if the deck fixture gains a slide, every assertion below
+		// would silently be about whatever slide landed here instead.
+		expect(screen.getByText("Thank You")).toBeTruthy();
+	}
+	const logoImg = () =>
+		document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
+	const anyClubImg = () => document.querySelector(`img[src^="/api/club/"]`);
+	/** The nominative word, as its own element — never the club name, which
+	 *  contains it. `getByText` is exact by default; `queryByText` returns null
+	 *  rather than throwing when the word is not rendered. */
+	const word = () => screen.queryByText("Toastmasters");
 
 	it("renders the logo on the opening splash when the club has one", () => {
 		renderPresent({ deck: withLogo });
-		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
+		const img = logoImg();
 		expect(img).not.toBeNull();
 		expect(img?.getAttribute("alt")).toBe("");
 	});
@@ -565,19 +584,88 @@ describe("club logo on the projected splash (#496)", () => {
 	// which is the whole reason ClubLogo takes a size at all.
 	it("sizes the projected logo in container units, not pixels", () => {
 		renderPresent({ deck: withLogo });
-		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
+		const img = logoImg();
 		expect(img?.style.height).toContain("cqw");
 		expect(img?.style.height).not.toContain("px");
 	});
 
+	// The wiring half of #725's sizing: that the splash renders the SHARED
+	// proportions rather than its own literals, so the `.pptx` export cannot
+	// drift from it. How big that actually lands on a 16:9 frame, and whether
+	// the column still fits, is `splash-logo-geometry.test.ts` — jsdom does no
+	// layout and would report any pair of numbers here as fine.
+	it("sizes it from the proportions both renderers share", () => {
+		renderPresent({ deck: withLogo });
+		const img = logoImg();
+		expect(img?.style.height).toBe(cqw(SPLASH_LOGO_HEIGHT_PCT));
+		expect(img?.style.maxWidth).toBe(cqw(SPLASH_LOGO_MAX_WIDTH_PCT));
+		// Bigger than the 9cqw it stood at before #725, stated as a literal: a
+		// comparison against the constant itself would hold for any value.
+		expect(SPLASH_LOGO_HEIGHT_PCT).toBeGreaterThan(9);
+	});
+
 	it("renders no image at all when the club has no logo", () => {
 		renderPresent();
-		expect(document.querySelector(`img[src^="/api/club/"]`)).toBeNull();
+		expect(anyClubImg()).toBeNull();
 	});
 
 	it("still shows the club name as the splash headline beside the logo", () => {
 		renderPresent({ deck: withLogo });
 		expect(screen.getByText(CLUB_NAME)).toBeTruthy();
+	});
+
+	// #725: the closing splash carried neither logo nor anything club-specific,
+	// and it is the slide on the wall while the room is standing up.
+	it("carries the logo onto the closing splash too", () => {
+		renderPresent({ deck: withLogo });
+		goToClosingSplash();
+		expect(logoImg()).not.toBeNull();
+	});
+
+	// The mark REPLACES the word; they never stack. Both bookends, because the
+	// closing splash gets its URL by a different route (deck-level context).
+	it("drops the word Toastmasters from a splash carrying the logo", () => {
+		renderPresent({ deck: withLogo });
+		expect(word()).toBeNull();
+		goToClosingSplash();
+		expect(word()).toBeNull();
+	});
+
+	it("keeps the word on both splashes when the club has no logo", () => {
+		renderPresent();
+		expect(word()).not.toBeNull();
+		expect(anyClubImg()).toBeNull();
+		goToClosingSplash();
+		expect(word()).not.toBeNull();
+		expect(anyClubImg()).toBeNull();
+	});
+
+	// The amendment on #725, screen half. `ClubLogo` is shared with the print
+	// surfaces and has no error handling of its own, so without this the splash
+	// of a club whose logo 404s shows neither a mark nor the word.
+	it("falls back to the word when the logo image fails to load", () => {
+		renderPresent({ deck: withLogo });
+		const img = logoImg();
+		if (!img) throw new Error("expected the logo to render before it failed");
+		expect(word()).toBeNull();
+
+		fireEvent.error(img);
+
+		expect(word()).not.toBeNull();
+		expect(anyClubImg()).toBeNull();
+	});
+
+	// A failure on the opening splash must not follow the presenter to the
+	// closing one as a boolean would: both splashes render through the SAME
+	// component instance, so the state is keyed on the URL that failed.
+	it("re-tries the image on the next splash rather than staying failed", () => {
+		renderPresent({ deck: withLogo });
+		const img = logoImg();
+		if (!img) throw new Error("expected the logo to render");
+		fireEvent.error(img);
+		goToClosingSplash();
+		expect(logoImg()).not.toBeNull();
+		expect(word()).toBeNull();
 	});
 });
 
@@ -645,6 +733,24 @@ describe("a templated meeting's deck (#agenda-templates)", () => {
 		).toBeTruthy();
 		// The disqualification window (#357) reaches the wall, not just the paper.
 		expect(screen.getByText("Qualifies: 4:30–7:30")).toBeTruthy();
+	});
+
+	// AC5 on #725. A round divider is a splash too, and on a deck whose bookends
+	// now carry the club's mark it still shows the word and no logo: five of
+	// these in one contest is wallpaper rather than identification.
+	it("leaves a section band with the word and no logo", () => {
+		const LOGO = "/api/club/abc/logo?v=1";
+		renderPresent({
+			deck: contestDeck.map((s) =>
+				s.kind === "title" ? { ...s, logoUrl: LOGO } : s,
+			),
+		});
+		// The opening splash has it…
+		expect(document.querySelector(`img[src="${LOGO}"]`)).not.toBeNull();
+		clickNext(); // -> the section band
+		expect(screen.getByText("PREPARED SPEECH CONTEST")).toBeTruthy();
+		expect(document.querySelector(`img[src="${LOGO}"]`)).toBeNull();
+		expect(screen.queryByText("Toastmasters")).not.toBeNull();
 	});
 
 	it("lists both new kinds in the jump-to-slide grid", () => {
