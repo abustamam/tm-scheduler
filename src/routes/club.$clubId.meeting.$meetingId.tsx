@@ -79,6 +79,7 @@ import {
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
+import { outstandingDutiesByMember } from "#/lib/nudge";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import {
 	deriveRollAttendance,
@@ -844,11 +845,31 @@ function MeetingView() {
 
 	const pairedIds = pairedRoleIds(clubRoles);
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
-	const nudgeShareUrl =
-		typeof window === "undefined"
-			? `/club/${clubId}/meeting/${urlKey}`
-			: `${window.location.origin}/club/${clubId}/meeting/${urlKey}`;
+	// RELATIVE during SSR, absolute after hydration — `window` exists only on the
+	// client, and `NudgeButtons` keeps its links off the server render entirely
+	// so a draft can never carry the relative form.
+	const nudgeOrigin =
+		typeof window === "undefined" ? "" : window.location.origin;
+	const nudgeShareUrl = `${nudgeOrigin}/club/${clubId}/meeting/${urlKey}`;
+	// The pieces a ROLE draft's link is built from (#667): the recipient's own
+	// meeting page, `?as=` appended per recipient by `personalNudgeUrl`. Kept as
+	// the three parts rather than a finished URL because the member id is known
+	// only at the row. `shareUrl` above stays what the role-less `attendance` and
+	// `arriving` drafts link to — those ask about the MEETING, and the public
+	// agenda is the page that answers.
+	const nudgePersonalBase = {
+		origin: nudgeOrigin,
+		clubId,
+		meetingKey: urlKey,
+	};
 	const nudgeDate = footerDate(meeting.scheduledAt, timezone);
+	// What each member's role still owes, for the rail's confirm drafts (#667).
+	// Built from the SAME unfiltered `slots` array as `panelRoleByMemberId`
+	// below — both take a double-booked member's first slot, so the role the
+	// draft names and the duty it lists cannot come from different slots. A pure
+	// function in `#/lib/nudge` rather than a loop here, for the reason
+	// `buildPanelRoleMap` gives beneath it: this route cannot mount in vitest.
+	const nudgeDutiesByMemberId = outstandingDutiesByMember(slots, meeting);
 	// Lifted from <MeetingAgenda> so the agenda and the panel share one map.
 	const roleCounts = buildRoleCounts(slots);
 	const roleByMemberId: Record<string, string> = {};
@@ -1681,6 +1702,10 @@ function MeetingView() {
 						clubGuests={effectiveCanManage ? clubGuests : undefined}
 						shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
 						meetingDate={effectiveCanManage ? nudgeDate : ""}
+						// Gated like `shareUrl` beside it: <MeetingAgenda> renders for
+						// plain members too, and the draft affordances this feeds are
+						// manager-only.
+						personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
 						meeting={meeting}
 						templateKey={templateKey}
 						timezone={timezone}
@@ -2002,6 +2027,12 @@ function MeetingView() {
 							roleByMemberId={panelRoleByMemberId}
 							meetingDate={nudgeDate}
 							shareUrl={nudgeShareUrl}
+							// The BARE names, like the two above: the panel only ever mounts
+							// for someone who runs the meeting, so the agenda's guarded form
+							// would strip the duty clause and the personal link out of every
+							// draft the rail sends.
+							dutiesByMemberId={nudgeDutiesByMemberId}
+							personalNudgeBase={nudgePersonalBase}
 							locked={locked}
 							onWriteRung={writeRung}
 							onContacted={markAsked}

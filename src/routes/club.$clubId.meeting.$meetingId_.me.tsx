@@ -4,16 +4,26 @@
 // whether they are coming, sees the roles they hold, and gets the checklist of
 // what each role still owes (#660).
 //
-// ## Nothing links here yet — the producer is #667
+// ## What links here: the nudge drafts (#667)
 //
-// Stated plainly because three earlier drafts of this header claimed the
-// opposite. `nudgeShareUrl` still builds `/club/$clubId/meeting/$urlKey` (the
-// full meeting page) and carries no `?as=`; a repo-wide grep finds no producer
-// of that param outside this feature's own tests. The nudge and email drafts
-// that will point here are #667's, and #665's own issue says deep-link targets
-// land in the follow-up. So today this route is reachable by typing the URL.
-// Do NOT write a comment asserting a call site that does not exist — the next
-// reader greps for it and concludes the grep is broken.
+// One producer, and only one. `buildNudge`'s ROLE arms (`confirm` / `recruit`)
+// link here instead of the public agenda, built by `personalNudgeUrl`
+// (`#/lib/nudge`) from `personalMeetingHref` plus `?as=<memberId>` — so the
+// member an officer is chasing lands on the page that lists what their role
+// still owes. `club.$clubId.meeting.$meetingId.tsx` supplies the three pieces
+// (`nudgePersonalBase`); the agenda's slot cards, its recruit picker and the
+// attendance rail each append the `?as=` of the row they are drafting to.
+//
+// What does NOT link here, deliberately: the role-less `attendance` and
+// `arriving` drafts, which ask about the MEETING and keep `nudgeShareUrl`; a
+// slot held by a GUEST, who has no `members` row and so no `?as=` identity to
+// seed; and the automated role-reminder email, which is a different surface
+// with its own send-time re-validation (#667 leaves it for a follow-up).
+//
+// This header said "nothing links here yet" until #667, and three drafts before
+// that claimed the opposite while it was still true. Either way the rule is the
+// same: do not assert a call site without grepping for it first — the next
+// reader greps, finds nothing, and concludes the grep is broken.
 //
 // ## `$meetingId_` and why the segment is a KEY
 //

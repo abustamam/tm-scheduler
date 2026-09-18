@@ -26,9 +26,15 @@ import {
 	type PanelRowRole,
 	type PlanStatus,
 } from "#/lib/attendance-panel";
+import { type PersonalNudgeBase, personalNudgeUrl } from "#/lib/nudge";
+import type { RoleDuty } from "#/lib/role-duties";
 import { buildRollPanel, type RollRow } from "#/lib/roll-panel";
 import { cn } from "#/lib/utils.ts";
 import type { AttendanceStatus, MinutesGuestRow } from "#/server/minutes-logic";
+
+/** One shared empty map for the duty prop's default (#667), so a panel render
+ *  with no duties wired does not mint a new object every pass. */
+const NO_DUTIES_BY_MEMBER: ReadonlyMap<string, readonly RoleDuty[]> = new Map();
 
 /** Chip copy. "No answer" is the ABSENCE of a row, so choosing it clears. */
 const RUNG_LABELS: Record<PlanStatus, string> = {
@@ -262,6 +268,8 @@ function AttendanceRow({
 	locked,
 	meetingDate,
 	shareUrl,
+	duties,
+	personalNudgeBase,
 	linkIdentity,
 	pending,
 	onWriteRung,
@@ -271,6 +279,13 @@ function AttendanceRow({
 	locked: boolean;
 	meetingDate: string;
 	shareUrl: string;
+	/** What this member's role still owes (#667), already filtered by the
+	 *  registry's `done`. Undefined for a member holding no role — which is
+	 *  also every row that sends the role-less `attendance` draft below, so the
+	 *  two cannot come apart. */
+	duties?: readonly RoleDuty[];
+	/** Where a role draft's link points (#667) — `?as=` is appended per row. */
+	personalNudgeBase?: PersonalNudgeBase | null;
 	/** #727 — see the panel's `canViewMemberDetail` prop. */
 	linkIdentity: boolean;
 	pending: boolean;
@@ -300,7 +315,19 @@ function AttendanceRow({
 	// programme.
 	const nudgeMode =
 		m.role && m.status !== "not_coming"
-			? { mode: "confirm" as const, roleName: m.role.roleName }
+			? {
+					mode: "confirm" as const,
+					roleName: m.role.roleName,
+					// Both ride the CONFIRM branch, not the shared props below. The
+					// `attendance` arm addresses a member with no role, so it has
+					// neither a duty to name nor a checklist to send anyone to —
+					// hoisting either out of this ternary is how a role-less draft
+					// grows a clause about somebody else's job.
+					duties,
+					personalUrl: personalNudgeBase
+						? personalNudgeUrl(personalNudgeBase, m.id)
+						: null,
+				}
 			: { mode: "attendance" as const };
 
 	// An assumed Coming can sit ON TOP OF a real stored rung, and without showing
@@ -789,6 +816,8 @@ export function MeetingAttendancePanel({
 	roleByMemberId,
 	meetingDate,
 	shareUrl,
+	dutiesByMemberId = NO_DUTIES_BY_MEMBER,
+	personalNudgeBase = null,
 	locked,
 	phaseCompleted = false,
 	busy = false,
@@ -823,6 +852,30 @@ export function MeetingAttendancePanel({
 	roleByMemberId: Readonly<Record<string, PanelRole>>;
 	meetingDate: string;
 	shareUrl: string;
+	/**
+	 * What each member's role still owes (#667), keyed by member, already
+	 * filtered by the duty registry's own `done`.
+	 *
+	 * Built by the ROUTE (`outstandingDutiesByMember`, `#/lib/nudge`) from the
+	 * same `slots` array that feeds `roleByMemberId`, because a row cannot
+	 * derive it: `PanelRole` is a short code and a base role NAME, with no role
+	 * key and no speech title to resolve a duty against. Both maps take the
+	 * first slot of a double-booked member, so the role the draft NAMES and the
+	 * duty it lists are the same slot's.
+	 *
+	 * A `Map`, not a `Record`, and not for tidiness: an object answers for
+	 * `__proto__` and `constructor`, so indexing one with an id taken off a row
+	 * can return something that is not a duty list. `role-duties.ts` states that
+	 * rule for its own registry; `outstandingDutiesByMember` follows it, and the
+	 * prop type is what carries it across this boundary.
+	 *
+	 * Defaults to empty, so the panel's existing call sites and its own fixture
+	 * keep drafting exactly what they drafted before.
+	 */
+	dutiesByMemberId?: ReadonlyMap<string, readonly RoleDuty[]>;
+	/** Where a role draft's link points (#667) — the member's own meeting page.
+	 *  Absent leaves every draft on `shareUrl`, which is what it was. */
+	personalNudgeBase?: PersonalNudgeBase | null;
 	locked: boolean;
 	/** Roll mode only. Once the meeting is a historical record nobody is being
 	 *  chased, so contact links disappear. Defaults false so plan mode's
@@ -1200,6 +1253,8 @@ export function MeetingAttendancePanel({
 										locked={writesLocked}
 										meetingDate={meetingDate}
 										shareUrl={shareUrl}
+										duties={dutiesByMemberId.get(m.id)}
+										personalNudgeBase={personalNudgeBase}
 										linkIdentity={canViewMemberDetail}
 										pending={pendingId === m.id}
 										onWriteRung={writeRung}

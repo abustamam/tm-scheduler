@@ -44,6 +44,11 @@ import {
 } from "#/lib/agenda";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
+import {
+	outstandingDutiesForSlot,
+	type PersonalNudgeBase,
+	personalNudgeUrl,
+} from "#/lib/nudge";
 import { speechWindow, speechWindowInputError } from "#/lib/speech-window";
 import {
 	applyTemplateToMeeting,
@@ -135,6 +140,17 @@ export interface MeetingAgendaProps {
 	/** Absolute public meeting URL + friendly date, for tap-to-nudge (#37). */
 	shareUrl: string;
 	meetingDate: string;
+	/**
+	 * Where a ROLE draft's link points (#667): the holder's own meeting page,
+	 * with `?as=` appended per recipient — so the person being chased lands on
+	 * the page that lists what they owe instead of the club-wide agenda.
+	 *
+	 * Optional, and absent falls every draft back to `shareUrl`. The route
+	 * supplies it; the component cannot build it, because the path is keyed on
+	 * the club SLUG and the meeting's URL key and this component is handed
+	 * neither (its `meeting` row carries uuids).
+	 */
+	personalNudgeBase?: PersonalNudgeBase | null;
 	/** The full meeting row, for the lifted edit dialogs. The WOD dialog reads
 	 *  only a subset (id + wod fields); the meta dialog needs all of it. */
 	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
@@ -198,6 +214,7 @@ export function MeetingAgenda({
 	clubGuests = [],
 	shareUrl,
 	meetingDate,
+	personalNudgeBase = null,
 	meeting,
 	templateKey,
 	effectiveMeetingNumber = null,
@@ -708,8 +725,25 @@ export function MeetingAgenda({
 														phone={slot.holderPhone}
 														email={slot.holderEmail}
 														roleName={slot.roleName}
+														duties={outstandingDutiesForSlot(slot, meeting)}
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
+														// The holder's own page when they are a MEMBER. A
+														// guest holder has no `members` row and so no
+														// `?as=` identity to seed, which is the same
+														// `assigneeId`-vs-`assigneeGuestId` distinction
+														// `onContacted` below turns on — and there the
+														// absent value is what keeps the draft links
+														// working, exactly as the `shareUrl` fallback does
+														// here.
+														personalUrl={
+															holderMemberId && personalNudgeBase
+																? personalNudgeUrl(
+																		personalNudgeBase,
+																		holderMemberId,
+																	)
+																: null
+														}
 														mode="confirm"
 														// Chasing the person who already HOLDS the role is
 														// outreach, and it records as such — through the SAME
@@ -752,8 +786,10 @@ export function MeetingAgenda({
 												{viewer.canManage && isOpen ? (
 													<NudgeRecruitPicker
 														roleName={slot.roleName}
+														duties={outstandingDutiesForSlot(slot, meeting)}
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
+														personalNudgeBase={personalNudgeBase}
 														targets={recruitTargets}
 														onContacted={(id, via) => onContacted?.(id, via)}
 														onUncontacted={(id) => onUncontacted?.(id)}
