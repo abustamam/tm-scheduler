@@ -897,7 +897,16 @@ describe("AgendaEditor delete undo", () => {
 					markGreen: 5,
 					markYellow: 6,
 					markRed: 7,
-					clubGoverned: false,
+					// TRUE, both of them. Every boolean on this fixture used to be
+					// `false`, which made the two lines restoring them mutation
+					// SURVIVORS — `handoff: snapshot.handoff` and `clubGoverned:
+					// snapshot.clubGoverned` could each be replaced by the literal
+					// `false` with the whole suite green. Both are fields whose loss is
+					// silent: an undone hand-off row prints as an ordinary beat instead
+					// of an indented elbow, and an undone Table Topics row stops tracking
+					// the club’s window on every surface at once.
+					handoff: true,
+					clubGoverned: true,
 				},
 			],
 		};
@@ -932,11 +941,11 @@ describe("AgendaEditor delete undo", () => {
 			roleKey: "toastmaster",
 			repeatsRoleKey: null,
 			flex: false,
-			handoff: false,
+			handoff: true,
 			markGreen: 5,
 			markYellow: 6,
 			markRed: 7,
-			clubGoverned: false,
+			clubGoverned: true,
 		});
 	});
 

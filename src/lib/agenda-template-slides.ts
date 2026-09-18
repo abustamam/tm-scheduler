@@ -56,8 +56,8 @@
  * — they are meeting-level text the club typed, not a beat, so they would
  * otherwise be silently dropped from a contest.
  */
+import type { AgendaRow } from "./agenda-runsheet";
 import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
-import type { GovernedAgendaRow } from "./agenda-template-rows";
 import {
 	formatTableTopicsWindow,
 	hasTableTopicsLimits,
@@ -73,11 +73,8 @@ import {
 export type TemplateDeckInput = {
 	meeting: MeetingForDeck;
 	club: ClubForDeck;
-	/** Rows from `resolveAgendaRows` — the printed run sheet's own rows. Typed
-	 *  wider than `AgendaRow[]` so `beatTimingText` can read the stored
-	 *  club-governance marker off a templated row (#683); a standard row that
-	 *  carries none is a legitimate member and reads as ungoverned. */
-	rows: GovernedAgendaRow[];
+	/** Rows from `resolveAgendaRows` — the printed run sheet's own rows. */
+	rows: AgendaRow[];
 	/** Backs the Thank-You slide; null when nothing is scheduled after. */
 	nextMeetingAt?: Date | null;
 	/** The club's effective meeting number (#358). */
@@ -119,7 +116,7 @@ export type BeatTiming = {
 };
 
 export function beatTimingText(
-	row: GovernedAgendaRow,
+	row: AgendaRow,
 	tableTopicsLimits?: TableTopicsLimits | null,
 ): BeatTiming | null {
 	if (!row.marks) return null;

@@ -1565,6 +1565,26 @@ export const meetingTemplateBeats = pgTable(
 			t.templateId,
 			t.sortOrder,
 		),
+		// AT MOST ONE governed row per template, and a template is private to one
+		// meeting — so per-meeting (#683).
+		//
+		// In the database because three separate writers have to hold it and two of
+		// them held it only by construction: `materialiseRunOfShow` picks one beat
+		// with `findIndex`, the migration's backfill picks one with `DISTINCT ON`,
+		// and the agenda editor's re-govern button can be clicked on any of the
+		// THREE beats the run of show gives `table_topics_master`. Two governed rows
+		// is not a cosmetic duplicate: `refreshTableTopicsMarks` is a `.map`, so
+		// both rows have their marks overwritten with the club's speaking window at
+		// every render, permanently, and the second one is a row the officer set
+		// deliberately.
+		//
+		// PARTIAL, on `club_governed` alone: the ungoverned rows are the overwhelming
+		// majority and must not collide with each other. `assertGovernable` refuses
+		// the same write with a sentence first — this is the floor under it, not the
+		// message.
+		uniqueIndex("meeting_template_beats_club_governed_unique")
+			.on(t.templateId)
+			.where(sql`${t.clubGoverned}`),
 	],
 );
 

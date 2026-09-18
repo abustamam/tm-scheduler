@@ -117,34 +117,13 @@ export type TemplateRoleRow = {
  * speech, silence, speech, silence… and neither beat owns a contiguous run.
  */
 export type SourcedAgendaRow = {
-	row: GovernedAgendaRow;
+	row: AgendaRow;
 	beatId: string;
 	/** 0 for a non-repeating beat; the slot index within the block otherwise. */
 	iteration: number;
 	/** 1 for a non-repeating beat; the block's slot count otherwise. */
 	iterationCount: number;
 };
-
-/**
- * An emitted row that also says whether the CLUB owns its marks (#683).
- *
- * The flag has to reach the projected deck: `beatTimingText` labels a row's span
- * as the club's Table Topics rule rather than as the ±30s speech grace, and it
- * used to decide that from the row's `roleKey` plus the presence of marks — the
- * same inference {@link isTableTopicsSegment} stopped making, so a vote row an
- * officer had timed got the club's labelling on the wall.
- *
- * An intersection carried on the TEMPLATE path's own rows rather than a field on
- * `AgendaRow` itself, because only this path has a stored beat to read it from.
- * `expandRunSheet` builds the standard flow from code-derived beats with no
- * template row behind them, and a plain `AgendaRow` is a perfectly good
- * `GovernedAgendaRow`: the flag absent means the club owns nothing, which is the
- * honest answer there. The deck only ever runs on this path — the routes call
- * `buildTemplateSlideDeck` exactly when the meeting has a template — but the
- * wider parameter type means a caller that hands it standard rows still
- * compiles, and still gets the truthful answer.
- */
-export type GovernedAgendaRow = AgendaRow & { clubGoverned?: true };
 
 /**
  * Cap by CODE POINTS, not UTF-16 units. Slicing a surrogate pair in half yields
@@ -412,7 +391,7 @@ function toRow(
 	 * one thing `{evaluator:paired}` needs and `bound` cannot supply.
 	 */
 	blockSlot: AgendaSlot | null = null,
-): GovernedAgendaRow | null {
+): AgendaRow | null {
 	const label = capChars(row.label, MAX_TEMPLATE_LABEL_CHARS);
 	// Cap BEFORE resolving: the cap bounds what an officer TYPED, and resolution
 	// can legitimately expand a short token into a long list of holder names.
@@ -737,6 +716,6 @@ export function buildTemplateRows(
 	beats: TemplateBeatRow[],
 	roles: TemplateRoleRow[],
 	slots: AgendaSlot[],
-): GovernedAgendaRow[] {
+): AgendaRow[] {
 	return buildTemplateRowsWithSource(beats, roles, slots).map((e) => e.row);
 }

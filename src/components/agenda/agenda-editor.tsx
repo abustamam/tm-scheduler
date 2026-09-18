@@ -199,9 +199,9 @@ function useAgendaModel(draft: AgendaDraft, localRows: AgendaDraftRow[]) {
 	return useMemo(() => {
 		// `AgendaDraftRow` and `TemplateBeatRow` are field-for-field identical
 		// (id, sortOrder, kind, label, detail, minutes, roleKey, repeatsRoleKey,
-		// flex, three marks), so this passes straight through with no mapping. If
-		// typecheck ever disagrees the two types have drifted — reconcile them
-		// rather than papering over it with a spread.
+		// flex, handoff, three marks, clubGoverned), so this passes straight
+		// through with no mapping. If typecheck ever disagrees the two types have
+		// drifted — reconcile them rather than papering over it with a spread.
 		const sourced = buildTemplateRowsWithSource(
 			localRows,
 			draft.roles,
@@ -498,6 +498,32 @@ function parseIntOrNull(value: string): number | null {
 }
 
 /**
+ * A timer MARK, in minutes, which is a fraction far more often than not.
+ *
+ * `parseInt` was here, and against `real()` columns it is data loss on blur
+ * rather than a rejected edit: `commitMarks` re-parses ALL THREE inputs on any
+ * single blur, so touching one field truncated the other two. `EVALUATION_MARKS`
+ * is 2 / 2.5 / 3, so every materialised evaluation row already carried a half
+ * minute — one focus-and-blur turned its window into 2 / 2 / 3, and the truncated
+ * numbers reached the printed sheet, the projected deck and the Timer's card with
+ * `assertMarks` (all-three-or-none) seeing nothing wrong.
+ *
+ * #683 made it reachable on the club's own window too: un-governing hands the row
+ * the club's marks, and a 1:00–2:45 club's midpoint is 113/60 minutes. The server
+ * half of this was already fixed — #679 took `.int()` off the three mark fields in
+ * `meeting-agenda-edit.ts` precisely because they back `real()` — and this was the
+ * last `.int()` in the chain, on the only path that writes them.
+ *
+ * `Number.parseFloat`, not `Number()`: an empty or blank string is already handled
+ * above, and `Number("")` is 0, which would silently write a zero mark.
+ */
+function parseMarkOrNull(value: string): number | null {
+	if (value.trim() === "") return null;
+	const n = Number.parseFloat(value);
+	return Number.isNaN(n) ? null : n;
+}
+
+/**
  * One rendered agenda row.
  *
  * FOUR columns carry the scannable facts — start, activity, who, minutes — and
@@ -696,9 +722,9 @@ function AgendaTableRow({
 		}
 	}
 	async function commitMarks() {
-		const green = parseIntOrNull(markGreen);
-		const yellow = parseIntOrNull(markYellow);
-		const red = parseIntOrNull(markRed);
+		const green = parseMarkOrNull(markGreen);
+		const yellow = parseMarkOrNull(markYellow);
+		const red = parseMarkOrNull(markRed);
 		const c = confirmed.current;
 		if (green === c.markGreen && yellow === c.markYellow && red === c.markRed) {
 			return;
@@ -720,6 +746,44 @@ function AgendaTableRow({
 	 *  "no refresh" rule does not apply — without this the toggle saves and the
 	 *  page does not move until an unprompted reload, which reads as a dead
 	 *  button. */
+	/**
+	 * Hand this row's marks to the club, or take them back, then RE-READ (#683).
+	 *
+	 * The re-read is not optional here for the same reason it is not optional on
+	 * `setFlex` below: only the server can say the result. Re-governing replaces
+	 * all three marks with the club's CURRENT window — the client does not have
+	 * those numbers, it has whatever the officer last typed — and either direction
+	 * swaps which controls this panel offers, which is derived from `draft`. With
+	 * no re-read the save lands and the panel does not move until an unprompted
+	 * reload, which reads as a dead button.
+	 *
+	 * Un-governing carries the three marks the officer is LOOKING AT. The stored
+	 * row can still hold the materialisation snapshot while `loadAgendaDraft`
+	 * refreshed what it sent, so without them the inputs would open on a window
+	 * the officer was never shown — the app changing their timing at the moment
+	 * they took it over. Re-governing sends the flag alone: anything else would be
+	 * numbers the refresh immediately replaces.
+	 */
+	async function setClubGoverned(clubGoverned: boolean) {
+		const patch: RowPatch = clubGoverned
+			? { clubGoverned: true }
+			: {
+					clubGoverned: false,
+					markGreen: row.markGreen,
+					markYellow: row.markYellow,
+					markRed: row.markRed,
+				};
+		setPending(true);
+		try {
+			if (await runAction(() => onUpdateRow(row.id, patch))) {
+				markConfirmed(patch);
+				await runAction(() => onRefresh());
+			}
+		} finally {
+			setPending(false);
+		}
+	}
+
 	async function setFlex(flex: boolean) {
 		setPending(true);
 		try {
@@ -776,13 +840,17 @@ function AgendaTableRow({
 							// them on a club-governed Table Topics row, reasoning that the
 							// render path re-derives that row from the club anyway — which is
 							// false for exactly this case and was the worst bug in the change.
-							// `addAgendaRow` inserts the placeholder with NULL marks, and
-							// `isTableTopicsSegment` REQUIRES all three present, so the
-							// restored row stopped matching its own predicate: never
-							// refreshed again, no timer window on the run sheet, the agenda or
-							// the deck, while the Timer's role sheet kept printing the club's
-							// — one misclick and an Undo rebuilding the self-contradicting
-							// packet this whole change exists to eliminate.
+							// `addAgendaRow` inserts the placeholder with NULL marks and the
+							// predicate then REQUIRED all three, so the restored row stopped
+							// matching it: never refreshed again, no timer window on the run
+							// sheet, the agenda or the deck, while the Timer's role sheet kept
+							// printing the club's — one misclick and an Undo rebuilding the
+							// self-contradicting packet that change exists to eliminate.
+							//
+							// #683 removed the marks clause, so a restored row with null marks
+							// would now be refreshed on its own — but only if it is still
+							// GOVERNED, which is the line below and the reason this one no
+							// longer carries the whole argument.
 							//
 							// What that skip was working around was a real bug one layer down,
 							// now fixed at its root: `updateAgendaRowFn` bounded these three
@@ -885,6 +953,7 @@ function AgendaTableRow({
 						markRed={markRed}
 						setMarkRed={setMarkRed}
 						commitMarks={commitMarks}
+						setClubGoverned={setClubGoverned}
 						onUpdateRow={onUpdateRow}
 					/>
 				) : null}
@@ -1019,6 +1088,7 @@ function AgendaTableRow({
 					markRed={markRed}
 					setMarkRed={setMarkRed}
 					commitMarks={commitMarks}
+					setClubGoverned={setClubGoverned}
 					onUpdateRow={onUpdateRow}
 				/>
 			) : null}
@@ -1266,6 +1336,7 @@ function RowDetail({
 	markRed,
 	setMarkRed,
 	commitMarks,
+	setClubGoverned,
 	onUpdateRow,
 }: {
 	clubUuid: string;
@@ -1284,6 +1355,7 @@ function RowDetail({
 	markRed: string;
 	setMarkRed: (next: string) => void;
 	commitMarks: () => Promise<void>;
+	setClubGoverned: (clubGoverned: boolean) => Promise<void>;
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 }) {
 	// The Table Topics segment's marks come from CLUB settings and are
@@ -1432,16 +1504,7 @@ function RowDetail({
 								size="sm"
 								className="self-start"
 								disabled={!editable}
-								onClick={() =>
-									void runAction(() =>
-										onUpdateRow(row.id, {
-											clubGoverned: false,
-											markGreen: row.markGreen,
-											markYellow: row.markYellow,
-											markRed: row.markRed,
-										}),
-									)
-								}
+								onClick={() => void setClubGoverned(false)}
 							>
 								Use a different window for this meeting
 							</Button>
@@ -1454,6 +1517,11 @@ function RowDetail({
 									id={`${row.id}-green`}
 									aria-label="Green mark minute"
 									type="number"
+									// Fractional minutes are the norm on these three, not an
+									// edge case — the evaluation window is 2 / 2.5 / 3. Without
+									// this the browser's own validation rejects a half minute
+									// before `commitMarks` ever runs.
+									step="any"
 									min={0}
 									max={MAX_BEAT_MINUTES}
 									value={markGreen}
@@ -1468,6 +1536,11 @@ function RowDetail({
 									id={`${row.id}-yellow`}
 									aria-label="Yellow mark minute"
 									type="number"
+									// Fractional minutes are the norm on these three, not an
+									// edge case — the evaluation window is 2 / 2.5 / 3. Without
+									// this the browser's own validation rejects a half minute
+									// before `commitMarks` ever runs.
+									step="any"
 									min={0}
 									max={MAX_BEAT_MINUTES}
 									value={markYellow}
@@ -1482,6 +1555,11 @@ function RowDetail({
 									id={`${row.id}-red`}
 									aria-label="Red mark minute"
 									type="number"
+									// Fractional minutes are the norm on these three, not an
+									// edge case — the evaluation window is 2 / 2.5 / 3. Without
+									// this the browser's own validation rejects a half minute
+									// before `commitMarks` ever runs.
+									step="any"
 									min={0}
 									max={MAX_BEAT_MINUTES}
 									value={markRed}
@@ -1507,11 +1585,7 @@ function RowDetail({
 							size="sm"
 							className="self-start"
 							disabled={!editable}
-							onClick={() =>
-								void runAction(() =>
-									onUpdateRow(row.id, { clubGoverned: true }),
-								)
-							}
+							onClick={() => void setClubGoverned(true)}
 						>
 							Follow the club's Table Topics window
 						</Button>

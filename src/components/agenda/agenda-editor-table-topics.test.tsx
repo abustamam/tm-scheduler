@@ -26,7 +26,7 @@
  * than a useful failure. Add Table Topics cases HERE, or convert that file to
  * `renderUnderMemoryRouter` first.
  */
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgendaDraft, AgendaDraftRow } from "#/server/meeting-agenda-edit";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
@@ -254,6 +254,7 @@ describe("the un-govern and re-govern controls (#683)", () => {
 
 	async function renderWith(rows: AgendaDraftRow[]) {
 		const onUpdateRow = vi.fn(async () => ({}) as never);
+		const onRefresh = vi.fn(async () => ({}) as never);
 		await renderUnderMemoryRouter(
 			<AgendaEditor
 				draft={draftWith(rows)}
@@ -262,13 +263,13 @@ describe("the un-govern and re-govern controls (#683)", () => {
 				onUpdateRow={onUpdateRow}
 				onRemoveRow={noop}
 				onMoveRow={noop}
-				onRefresh={noop}
+				onRefresh={onRefresh}
 				onAddRole={noop}
 				planRoleRemoval={vi.fn(async () => [])}
 				onRemoveRole={noop}
 			/>,
 		);
-		return onUpdateRow;
+		return { onUpdateRow, onRefresh };
 	}
 
 	async function click(name: string) {
@@ -282,7 +283,7 @@ describe("the un-govern and re-govern controls (#683)", () => {
 		// way out). Un-governing without carrying the displayed numbers would drop
 		// the officer into three inputs holding a window they never chose and were
 		// not shown — the app changing their timing at the moment they took it over.
-		const onUpdateRow = await renderWith([TT_ROW]);
+		const { onUpdateRow } = await renderWith([TT_ROW]);
 		await openDetail(0);
 		await click(UN_GOVERN);
 		expect(onUpdateRow).toHaveBeenCalledWith("tt", {
@@ -293,8 +294,79 @@ describe("the un-govern and re-govern controls (#683)", () => {
 		});
 	});
 
+	it("RE-READS after each, or the panel does not move", async () => {
+		// Both directions change what this panel offers, and re-governing replaces
+		// all three marks with the club's current window — numbers the client does
+		// not have. `marksFromClub` derives from `draft`, so with no refresh the
+		// save lands and nothing on screen changes until an unprompted reload. That
+		// is the "dead button" `setFlex` already carries a docblock about.
+		const un = await renderWith([TT_ROW]);
+		await openDetail(0);
+		await click(UN_GOVERN);
+		await waitFor(() => expect(un.onRefresh).toHaveBeenCalled());
+
+		cleanup();
+		const re = await renderWith([
+			row({ id: "own", roleKey: "table_topics_master" }),
+		]);
+		await openDetail(0);
+		await click(RE_GOVERN);
+		await waitFor(() => expect(re.onRefresh).toHaveBeenCalled());
+	});
+
+	it("survives a blur on the inputs it hands the officer", async () => {
+		// The corruption this pairing produced. `resolveTableTopicsMarks` returns
+		// `seconds / 60`, so a 1:00–2:45 club's yellow is 113/60 = 1.8833…; the
+		// un-govern patch puts those three into the row, the row flips to the
+		// editable branch, and `commitMarks` re-parses ALL THREE on any single
+		// blur. Under `parseInt` one focus-and-blur wrote 1 / 1 / 2 — green equal
+		// to yellow — onto the printed sheet, the deck and the Timer's card, with
+		// `assertMarks` (all-three-or-none) seeing nothing wrong.
+		//
+		// Driven on the already-un-governed row, because that is the state the
+		// officer is left in and the marks are the club's own.
+		const { onUpdateRow } = await renderWith([
+			row({
+				id: "own",
+				roleKey: "table_topics_master",
+				markGreen: 1,
+				markYellow: 1.8833333333333333,
+				markRed: 2.75,
+			}),
+		]);
+		await openDetail(0);
+		const { default: userEvent } = await import("@testing-library/user-event");
+		const user = userEvent.setup();
+		await user.click(screen.getByLabelText("Green mark minute"));
+		await user.tab();
+		// Nothing changed, so `commitMarks` should send nothing at all — and if it
+		// ever does send, the values must be the ones it was given.
+		for (const call of onUpdateRow.mock.calls as unknown as [
+			string,
+			Record<string, unknown>,
+		][]) {
+			expect(call[1]).toEqual({
+				markGreen: 1,
+				markYellow: 1.8833333333333333,
+				markRed: 2.75,
+			});
+		}
+		// And a deliberate fractional edit round-trips rather than truncating.
+		const yellow = screen.getByLabelText("Yellow mark minute");
+		await user.clear(yellow);
+		await user.type(yellow, "2.5");
+		await user.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("own", {
+				markGreen: 1,
+				markYellow: 2.5,
+				markRed: 2.75,
+			}),
+		);
+	});
+
 	it("offers the way BACK on an ungoverned Table Topics row", async () => {
-		const onUpdateRow = await renderWith([
+		const { onUpdateRow } = await renderWith([
 			row({
 				id: "own",
 				roleKey: "table_topics_master",

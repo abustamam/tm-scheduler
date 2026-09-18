@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "meeting_template_beats_club_governed_unique" ON "meeting_template_beats" USING btree ("template_id") WHERE "meeting_template_beats"."club_governed";

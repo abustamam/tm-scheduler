@@ -11,7 +11,7 @@
  * is unreachable from vitest — which for a module of gates is the whole ball
  * game.
  */
-import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db as database } from "#/db";
 import {
 	clubs,
@@ -708,6 +708,34 @@ function assertWithin(value: string, max: number, what: string): void {
 	}
 }
 
+/**
+ * The patch with every explicitly-`undefined` key REMOVED.
+ *
+ * `zod`'s `.optional()` keeps a key whose value is `undefined` — measured:
+ * `z.object({ clubGoverned: z.boolean().optional() }).parse({ clubGoverned:
+ * undefined })` comes back with `"clubGoverned" in result === true`. Every
+ * assert below reads `"field" in patch` to tell "the caller is setting this" from
+ * "the caller left it alone", and drizzle's `.set()` then drops the undefined
+ * value from the SQL — so such a key answers "yes, being set" to the validators
+ * and "no, untouched" to the write. The two disagree, and the validators lose.
+ *
+ * Reachable and not theoretical: `{ clubGoverned: undefined, roleKey: "timer" }`
+ * made `assertGovernable` read the merged governance as `false` and return
+ * early, while the column kept its stored `true` — a governed row repointed at
+ * any role, which is the multi-row overwrite #683 exists to stop. The sibling
+ * `assertRepeatBinding` has the same hole against
+ * `{ repeatsRoleKey: undefined, roleKey: X }`, which is why the strip lives HERE,
+ * once, ahead of every assert AND of the write, rather than inside one of them.
+ *
+ * A patch that is nothing but undefined keys collapses to `{}` and is refused as
+ * "Nothing to update" above, which is what it is.
+ */
+function definedOnly<T extends object>(patch: T): T {
+	return Object.fromEntries(
+		Object.entries(patch).filter(([, value]) => value !== undefined),
+	) as T;
+}
+
 type MarkFields = {
 	markGreen: number | null;
 	markYellow: number | null;
@@ -841,6 +869,51 @@ function assertGovernable(
 	if (!isClubGovernable({ kind: current.kind, roleKey })) {
 		throw new Error(
 			"Only the Table Topics row can follow the club's speaking window.",
+		);
+	}
+}
+
+/**
+ * At most ONE governed row per template, said in a sentence (#683).
+ *
+ * `meeting_template_beats_club_governed_unique` is the real floor and this does
+ * not replace it — a partial unique index cannot be raced past, and this read is
+ * a separate statement from the write that follows it. What the index CANNOT do
+ * is explain itself: it surfaces as drizzle's own `Failed query: update
+ * "meeting_template_beats" ...`, which `runAction` toasts verbatim at an officer
+ * who clicked a button the editor offered them.
+ *
+ * And the editor does offer it on all three. `isClubGovernable` is role-key only,
+ * the run of show gives THREE beats `table_topics_master`, and there is no
+ * cheaper predicate that tells them apart — that ambiguity is the whole of #683.
+ * So "the club's window already governs a row on this agenda" is the honest
+ * refusal, and it names the recovery: un-govern that one first.
+ *
+ * Scoped to the FINAL `templateId` and excluding the row being written, so
+ * re-governing a row that is already governed is a no-op rather than a conflict
+ * with itself.
+ */
+async function assertSoleGovernedRow(
+	conn: DbOrTx,
+	templateId: string,
+	rowId: string,
+	patch: { clubGoverned?: boolean },
+): Promise<void> {
+	if (patch.clubGoverned !== true) return;
+	const [other] = await conn
+		.select({ id: meetingTemplateBeats.id })
+		.from(meetingTemplateBeats)
+		.where(
+			and(
+				eq(meetingTemplateBeats.templateId, templateId),
+				eq(meetingTemplateBeats.clubGoverned, true),
+				ne(meetingTemplateBeats.id, rowId),
+			),
+		)
+		.limit(1);
+	if (other) {
+		throw new Error(
+			"Another row already follows the club's Table Topics window. Give that one its own window first.",
 		);
 	}
 }
@@ -1339,7 +1412,7 @@ export async function updateAgendaRow(input: {
 		>
 	>;
 }): Promise<void> {
-	const { patch } = input;
+	const patch = definedOnly(input.patch);
 	if (Object.keys(patch).length === 0) {
 		throw new Error("Nothing to update.");
 	}
@@ -1403,6 +1476,10 @@ export async function updateAgendaRow(input: {
 			assertRepeatBinding(target, patch);
 			assertGovernable(target, patch);
 		}
+		// AFTER `rowId` is final, because the question is "is any OTHER row
+		// governed" and the answer depends on which row this is. Its own index is
+		// the floor; this is the sentence (#683).
+		await assertSoleGovernedRow(tx, templateId, rowId, patch);
 		// Scoped to THIS meeting's template either way: the row id is
 		// caller-supplied, and without the template predicate an officer of one
 		// club could edit another's agenda by id.

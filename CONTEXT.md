@@ -383,7 +383,17 @@ the nouns in `src/db/schema.ts`.
   (`agenda-template-rows.ts`) now re-derives that ONE row at render, applied at the two seams that
   hold a club (`resolveAgendaRows` and `loadAgendaDraft`); the agenda editor shows that row's
   window as read-only clock text, with a link to Club settings, rather than accepting an edit the
-  render path would discard. **And the cap is a hard one, unlike a speech's.** A club that states
+  render path would discard.
+  **WHICH row is a stored fact, not a guess** (`meeting_template_beats.club_governed`, #683).
+  `materialiseRunOfShow` marks exactly one beat, a partial unique index holds it at one per
+  template, and `isTableTopicsSegment` is a read of that column. It used to be inferred from the
+  row's own contents — the role key plus all three marks present — and the marks are the officer's
+  field: the run of show gives THREE beats `table_topics_master` (the segment, the Best Table
+  Topics vote, the GE hand-off), so timing the vote row made it start matching and the refresh
+  overwrote it, on a row nobody was editing, with no way back. The editor now offers both doors on
+  that row — "Use a different window for this meeting" and "Follow the club's Table Topics window"
+  — so a per-meeting override is a deliberate choice rather than an accident, and `isClubGovernable`
+  is the one predicate saying which rows may be offered it. **And the cap is a hard one, unlike a speech's.** A club that states
   its own window gets no ±30s qualifying grace — but the surfaces say so in two shapes, and only
   one of them is that sentence. The STANDARD deck projects `formatTableTopicsTiming`'s
   "1:00 minimum · 2:30 maximum · 2:31+ disqualified", and is its only caller; the TEMPLATED deck

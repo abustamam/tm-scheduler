@@ -528,6 +528,12 @@ describe("table topics limits wiring (#443)", () => {
 			src,
 			"the deck must not restate which row the club's window governs",
 		).not.toContain("TABLE_TOPICS_ROLE_KEY");
+		// And the flag has to be DECLARED on the row type the seam returns, or the
+		// value rides an untyped property that any projection in `resolveAgendaRows`
+		// drops with every other gate green.
+		expect(readSource("src/lib/agenda-runsheet.ts")).toContain(
+			"clubGoverned?: true;",
+		);
 		expect(src).toContain("formatTableTopicsWindow(row.marks)");
 		// The club's own columns must reach it, off the same `ClubForDeck` the
 		// standard deck reads.

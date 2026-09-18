@@ -18,9 +18,11 @@
  * 2. `refreshTableTopicsMarks` reads it to choose whose marks to re-derive —
  *    covered in `agenda-template-rows.test.ts` beside the predicate.
  * 3. `beatTimingText` reads it to choose whose RULE the projected deck quotes,
- *    and it reads it off an `AgendaRow` two functions downstream, where the
- *    compiler cannot prove the flag survived. That hop is what the deck cases
- *    below drive end to end.
+ *    and it reads it off an `AgendaRow` two functions downstream. `AgendaRow`
+ *    names the field, so the type carries it — but nothing about a TYPE stops a
+ *    future projection inside `resolveAgendaRows` from dropping the value, and
+ *    the symptom would be the deck quietly reverting to the graced window with
+ *    every gate green. That hop is what the deck cases below drive end to end.
  */
 import { describe, expect, it } from "vitest";
 import { withBeatIds } from "../test/template-beat-ids";
@@ -28,11 +30,7 @@ import { materialiseRunOfShow } from "./agenda-materialise";
 import type { AgendaSlot } from "./agenda-runsheet";
 import { resolveAgendaRows } from "./agenda-runsheet";
 import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
-import type {
-	GovernedAgendaRow,
-	TemplateBeatSeed,
-	TemplateRoleRow,
-} from "./agenda-template-rows";
+import type { TemplateBeatSeed, TemplateRoleRow } from "./agenda-template-rows";
 import { isClubGovernable } from "./agenda-template-rows";
 import { buildTemplateSlideDeck } from "./agenda-template-slides";
 import { TABLE_TOPICS_ROLE_KEY } from "./table-topics-limits";
@@ -200,10 +198,7 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		const seedRoles: TemplateRoleRow[] = [
 			...new Set(seeds.map((s) => s.roleKey).filter((k): k is string => !!k)),
 		].map((key) => ({ key, name: key, isSpeakerRole: key === "speaker" }));
-		// ANNOTATED, not cast. `resolveAgendaRows` declares `AgendaRow[]`, so the
-		// marker is erased at that seam and the widening back is exactly what the
-		// deck's own parameter does — see `GovernedAgendaRow`.
-		const rows: GovernedAgendaRow[] = resolveAgendaRows({
+		const rows = resolveAgendaRows({
 			geIntroducesFunctionaries: false,
 			tableTopicsLimits: CLUB,
 			template: { beats: withBeatIds(seeds), roles: seedRoles },
@@ -264,10 +259,7 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		const seedRoles: TemplateRoleRow[] = [
 			...new Set(seeds.map((s) => s.roleKey).filter((k): k is string => !!k)),
 		].map((key) => ({ key, name: key, isSpeakerRole: key === "speaker" }));
-		// ANNOTATED, not cast. `resolveAgendaRows` declares `AgendaRow[]`, so the
-		// marker is erased at that seam and the widening back is exactly what the
-		// deck's own parameter does — see `GovernedAgendaRow`.
-		const rows: GovernedAgendaRow[] = resolveAgendaRows({
+		const rows = resolveAgendaRows({
 			geIntroducesFunctionaries: false,
 			tableTopicsLimits: null,
 			template: { beats: withBeatIds(seeds), roles: seedRoles },
@@ -300,10 +292,7 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		// flag arrives. Rebuilding rows anywhere in that pipeline would drop it
 		// silently and the deck would quietly stop quoting the club's rule.
 		const seeds = materialiseRunOfShow(false, CLUB);
-		// ANNOTATED, not cast. `resolveAgendaRows` declares `AgendaRow[]`, so the
-		// marker is erased at that seam and the widening back is exactly what the
-		// deck's own parameter does — see `GovernedAgendaRow`.
-		const rows: GovernedAgendaRow[] = resolveAgendaRows({
+		const rows = resolveAgendaRows({
 			geIntroducesFunctionaries: false,
 			tableTopicsLimits: CLUB,
 			template: {

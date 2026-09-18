@@ -5,11 +5,11 @@ import {
 	buildRunOfShow,
 	type RoleGroup,
 } from "./agenda-runsheet";
-import type { TemplateBeatSeed } from "./agenda-template-rows";
 import {
-	TABLE_TOPICS_ROLE_KEY,
-	type TableTopicsLimits,
-} from "./table-topics-limits";
+	isClubGovernable,
+	type TemplateBeatSeed,
+} from "./agenda-template-rows";
+import type { TableTopicsLimits } from "./table-topics-limits";
 
 /**
  * Turn the code-derived run of show into rows a club can edit.
@@ -147,8 +147,13 @@ function clubGovernedIndex(beats: Beat[]): number {
 	return beats.findIndex(
 		(b) =>
 			b.kind === "role" &&
-			b.roleKey === TABLE_TOPICS_ROLE_KEY &&
-			b.marks != null,
+			b.marks != null &&
+			// The SAME predicate the editor asks before offering the re-govern
+			// control and `assertGovernable` asks before allowing it, imported
+			// rather than restated. Three writers have to agree about which rows the
+			// club's window may govern, and a fourth copy of the role key here is
+			// the drift #679 already paid for once.
+			isClubGovernable(b),
 	);
 }
 

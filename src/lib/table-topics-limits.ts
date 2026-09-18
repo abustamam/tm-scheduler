@@ -290,12 +290,18 @@ export const TABLE_TOPICS_MESSAGES = {
  * The `role_definitions.key` of the beat this window governs.
  *
  * Named rather than typed inline because several derivations have to agree
- * about WHICH row is the Table Topics segment, and a hand-typed
- * `"table_topics_master"` in any of them is a rename away from silently
- * governing nothing. The readers are `beatTimingText` on the templated deck and
- * `isTableTopicsSegment` (`agenda-template-rows.ts`), which the agenda editor
- * also calls — one predicate, two call sites, after #679 found that the editor
- * had grown its own copy.
+ * about the Table Topics segment, and a hand-typed `"table_topics_master"` in
+ * any of them is a rename away from silently matching nothing.
+ *
+ * It no longer answers "WHICH row does the club's window govern" — since #683
+ * that is `meeting_template_beats.club_governed`, a stored column, because the
+ * run of show gives THREE beats this key and only fields the officer edits told
+ * them apart. What the key still decides is which rows the club's window COULD
+ * govern, which is `isClubGovernable` (`agenda-template-rows.ts`): read by the
+ * agenda editor to decide whether to offer the re-govern control, by
+ * `updateAgendaRow`'s `assertGovernable` to refuse everything else, and by
+ * `materialiseRunOfShow` to pick the one beat it marks. One predicate, three
+ * call sites, after #679 found that the editor had grown its own copy.
  *
  * The Timer's role sheet is NOT one of them, and an earlier version of this
  * paragraph said it was. `role-sheet-layout.ts` matches its own

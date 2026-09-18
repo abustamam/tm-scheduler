@@ -20,7 +20,7 @@
  *    that actually ran.
  */
 import { readFileSync } from "node:fs";
-import { asc, eq, inArray, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubs,
@@ -34,6 +34,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	type TestTx,
 	testDb,
 } from "#/test/db";
 
@@ -333,7 +334,14 @@ describe.skipIf(!hasTestDb)(
 			// one. This is why the check runs against the MERGED row rather than
 			// against the patch — the same lesson `assertMarks` and
 			// `assertRepeatBinding` each learned separately.
-			const { voteId } = await givenAgenda();
+			const { segmentId, voteId } = await givenAgenda();
+			// The segment gives up the club's window first, or the vote row cannot
+			// take it — see the one-row-per-template cases below.
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: segmentId,
+				patch: { clubGoverned: false },
+			});
 			await updateAgendaRow({
 				meetingId: club.meetingId,
 				rowId: voteId,
@@ -346,6 +354,115 @@ describe.skipIf(!hasTestDb)(
 					patch: { roleKey: "evaluator", repeatsRoleKey: null },
 				}),
 			).rejects.toThrow(/Only the Table Topics row/);
+		});
+
+		it("refuses a patch whose governance key is explicitly UNDEFINED", async () => {
+			// `z.optional()` KEEPS a key whose value is undefined, and drizzle's
+			// `.set()` drops it — so before `definedOnly`, this patch read as
+			// "un-governing" to `assertGovernable` (which returned early) and as
+			// "not touching club_governed" to the write. A governed row came out the
+			// other side still governed and pointed at another role.
+			const { segmentId } = await givenAgenda();
+			await expect(
+				updateAgendaRow({
+					meetingId: club.meetingId,
+					rowId: segmentId,
+					patch: {
+						clubGoverned: undefined,
+						roleKey: "evaluator",
+						repeatsRoleKey: null,
+					},
+				}),
+			).rejects.toThrow(/Only the Table Topics row/);
+			const stayed = (await draftRows()).find((r) => r.id === segmentId);
+			// Both halves: the write was refused outright, not applied in part.
+			expect(stayed?.roleKey).toBe(TTM);
+			expect(stayed?.clubGoverned).toBe(true);
+		});
+	},
+);
+
+describe.skipIf(!hasTestDb)(
+	"at most one governed row per agenda (#683)",
+	() => {
+		it("refuses a SECOND governed row", async () => {
+			// `isClubGovernable` is role-key only and the run of show gives THREE
+			// beats that key, so the editor offers the re-govern button on all three.
+			// Two governed rows is not a duplicate: `refreshTableTopicsMarks` is a
+			// `.map`, so BOTH have their marks overwritten with the club's speaking
+			// window at every render, forever — the original bug, with the club's own
+			// feature doing it.
+			const { voteId } = await givenAgenda();
+			await expect(
+				updateAgendaRow({
+					meetingId: club.meetingId,
+					rowId: voteId,
+					patch: { clubGoverned: true },
+				}),
+			).rejects.toThrow(/Another row already follows/);
+			const rows = await draftRows();
+			expect(rows.filter((r) => r.clubGoverned).length).toBe(1);
+			expect(rows.find((r) => r.clubGoverned)?.sortOrder).toBe(0);
+		});
+
+		it("allows the hand-off after the segment gives the window up", async () => {
+			// The vacuity control: a floor that refused every re-govern would pass
+			// the case above and break the recovery path the whole issue is about.
+			const { segmentId, handoffId } = await givenAgenda();
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: segmentId,
+				patch: { clubGoverned: false },
+			});
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: handoffId,
+				patch: { clubGoverned: true },
+			});
+			const rows = await draftRows();
+			expect(
+				rows.filter((r) => r.clubGoverned).map((r) => r.sortOrder),
+			).toEqual([2]);
+		});
+
+		it("lets the row that already holds it re-state that it does", async () => {
+			// A double-clicked button, or a stale tab. The floor excludes the row
+			// being written, so this is a no-op rather than a conflict with itself.
+			const { segmentId } = await givenAgenda();
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: segmentId,
+				patch: { clubGoverned: true },
+			});
+			expect((await draftRows()).filter((r) => r.clubGoverned).length).toBe(1);
+		});
+
+		it("is held by the DATABASE too, not only by the check", async () => {
+			// `assertSoleGovernedRow` is a separate statement from the write it
+			// guards, so it cannot survive a race on its own. The partial unique
+			// index is the actual floor; this drives it directly, the way a
+			// concurrent second writer would arrive.
+			const { voteId } = await givenAgenda();
+			const err = await testDb
+				.update(meetingTemplateBeats)
+				.set({ clubGoverned: true })
+				.where(eq(meetingTemplateBeats.id, voteId))
+				.then(
+					() => null,
+					(e: unknown) => e,
+				);
+			expect(err, "the second governed row must be refused").toBeTruthy();
+			// Asserted on the CAUSE. Drizzle's own message is `Failed query: update
+			// …` with the constraint nowhere in it, so a `toThrow(/…_unique/)` here
+			// fails against a database that is enforcing the rule perfectly — and
+			// passes against nothing at all, since any query error would satisfy a
+			// looser pattern. The pg error carries the name.
+			const cause = (err as { cause?: { code?: string; constraint?: string } })
+				.cause;
+			expect({ code: cause?.code, constraint: cause?.constraint }).toEqual({
+				code: "23505",
+				constraint: "meeting_template_beats_club_governed_unique",
+			});
 		});
 
 		it("always allows turning governance OFF", async () => {
@@ -373,21 +490,55 @@ describe.skipIf(!hasTestDb)(
 //
 // Executed as the SHIPPED statement, read out of the migration file, because a
 // backfill runs once against production data and a paraphrase of it is not the
-// thing that runs. The file is found by content rather than by name so renaming
-// or renumbering the migration fails loudly here instead of silently testing
-// nothing.
+// thing that runs.
+//
+// The path is HARDCODED, and the two ways that can go wrong both fail loudly:
+// renaming or renumbering the file throws ENOENT out of `readFileSync`, and
+// editing the statement out of it throws the error below. Neither degrades into
+// a green run that tested nothing, which is the only property that matters here.
 // ---------------------------------------------------------------------------
+const BACKFILL_PATH = "drizzle/0079_minor_peter_parker.sql";
 const BACKFILL_SQL = (() => {
-	const path = "drizzle/0079_minor_peter_parker.sql";
-	const text = readFileSync(path, "utf8");
+	const text = readFileSync(BACKFILL_PATH, "utf8");
 	const at = text.indexOf(
 		'UPDATE "meeting_template_beats" SET "club_governed" = true',
 	);
 	if (at === -1) {
-		throw new Error(`no club_governed backfill statement in ${path}`);
+		throw new Error(`no club_governed backfill statement in ${BACKFILL_PATH}`);
 	}
 	return text.slice(at);
 })();
+
+/** Thrown to roll the backfill back. Not an Error subclass, so a real failure
+ *  inside the callback can never be mistaken for it. */
+const ROLLBACK = Symbol("rollback");
+
+/**
+ * Run the shipped backfill, read the result, then ROLL BACK.
+ *
+ * The statement has no template or club predicate — it cannot, it is a one-time
+ * migration over the whole table — and `tm_test` is shared by ~50 vitest files
+ * running in parallel, so committing it would set `club_governed` on other
+ * suites' in-flight rows. CLAUDE.md names this exact hazard.
+ *
+ * A transaction is the one way to keep the statement BYTE-IDENTICAL to what
+ * ships while containing its blast radius: the reads happen inside, the throw
+ * undoes the writes, and the sibling suites see nothing but a brief row lock.
+ * Scoping the SQL instead would mean testing a statement this repo does not run.
+ */
+async function withBackfill<T>(read: (tx: TestTx) => Promise<T>): Promise<T> {
+	let out: T | undefined;
+	try {
+		await testDb.transaction(async (tx) => {
+			await tx.execute(sql.raw(BACKFILL_SQL));
+			out = await read(tx);
+			throw ROLLBACK;
+		});
+	} catch (err) {
+		if (err !== ROLLBACK) throw err;
+	}
+	return out as T;
+}
 
 describe.skipIf(!hasTestDb)("the #683 backfill", () => {
 	/** A template as it existed BEFORE the column — every row ungoverned, the
@@ -426,8 +577,8 @@ describe.skipIf(!hasTestDb)("the #683 backfill", () => {
 		return t.id;
 	}
 
-	async function governedOrders(templateId: string) {
-		const rows = await testDb
+	async function governedOrders(conn: TestTx, templateId: string) {
+		const rows = await conn
 			.select({
 				sortOrder: meetingTemplateBeats.sortOrder,
 				clubGoverned: meetingTemplateBeats.clubGoverned,
@@ -449,8 +600,7 @@ describe.skipIf(!hasTestDb)("the #683 backfill", () => {
 			// A marked row of a different role — the evaluation window.
 			{ sortOrder: 4, roleKey: "evaluator", marks: [2, 2.5, 3] },
 		]);
-		await testDb.execute(sql.raw(BACKFILL_SQL));
-		expect(await governedOrders(id)).toEqual([1]);
+		expect(await withBackfill((tx) => governedOrders(tx, id))).toEqual([1]);
 	});
 
 	it("marks ONE row when the vote row carries marks too, and it is the earlier one", async () => {
@@ -463,11 +613,10 @@ describe.skipIf(!hasTestDb)("the #683 backfill", () => {
 			{ sortOrder: 1, roleKey: TTM, marks: [0.5, 0.75, 1] },
 			{ sortOrder: 2, roleKey: TTM },
 		]);
-		await testDb.execute(sql.raw(BACKFILL_SQL));
 		// ABSOLUTE [0]: one row, and the earlier one. `[0, 1]` is the "marked
 		// both" failure and `[1]` is the "picked the vote row" failure, and the
 		// two are different bugs.
-		expect(await governedOrders(id)).toEqual([0]);
+		expect(await withBackfill((tx) => governedOrders(tx, id))).toEqual([0]);
 	});
 
 	it("marks nothing on a template with no Table Topics window at all", async () => {
@@ -476,8 +625,7 @@ describe.skipIf(!hasTestDb)("the #683 backfill", () => {
 			{ sortOrder: 0, roleKey: "contestant_prepared", marks: [5, 6, 7] },
 			{ sortOrder: 1, roleKey: TTM },
 		]);
-		await testDb.execute(sql.raw(BACKFILL_SQL));
-		expect(await governedOrders(id)).toEqual([]);
+		expect(await withBackfill((tx) => governedOrders(tx, id))).toEqual([]);
 	});
 
 	it("marks each template independently, one row apiece", async () => {
@@ -492,39 +640,40 @@ describe.skipIf(!hasTestDb)("the #683 backfill", () => {
 			{ sortOrder: 0, roleKey: TTM },
 			{ sortOrder: 1, roleKey: TTM, marks: [1, 1.75, 2.5] },
 		]);
-		await testDb.execute(sql.raw(BACKFILL_SQL));
-		expect(await governedOrders(a)).toEqual([0]);
-		expect(await governedOrders(b)).toEqual([1]);
+		const [aOrders, bOrders] = await withBackfill(async (tx) => [
+			await governedOrders(tx, a),
+			await governedOrders(tx, b),
+		]);
+		expect(aOrders).toEqual([0]);
+		expect(bOrders).toEqual([1]);
 	});
 
 	it("is idempotent, and re-running it governs nothing new", async () => {
 		// Drizzle records applied migrations, so this should never re-run — but a
 		// restore, a replay, or a hand-run of the file all can, and a backfill that
 		// is not safe to repeat is a landmine rather than a migration.
+		//
+		// Both runs live inside ONE rolled-back transaction: the second has to see
+		// the first's writes for the question to mean anything, and neither may
+		// reach the other suites sharing this database.
 		const id = await givenLegacyTemplate([
 			{ sortOrder: 0, roleKey: TTM, marks: [1, 1.75, 2.5] },
 			{ sortOrder: 1, roleKey: TTM, marks: [0.5, 0.75, 1] },
 		]);
-		await testDb.execute(sql.raw(BACKFILL_SQL));
-		// An officer un-governs the segment between the two runs. The second run
-		// must not put it back: the backfill is a one-time transcription of the old
-		// inference, not a rule that keeps applying.
-		await testDb
-			.update(meetingTemplateBeats)
-			.set({ clubGoverned: false })
-			.where(
-				inArray(
-					meetingTemplateBeats.id,
-					testDb
-						.select({ id: meetingTemplateBeats.id })
-						.from(meetingTemplateBeats)
-						.where(eq(meetingTemplateBeats.templateId, id)),
-				),
-			);
-		await testDb.execute(sql.raw(BACKFILL_SQL));
-		// Honest about what "idempotent" means here: re-running DOES re-derive the
+		const orders = await withBackfill(async (tx) => {
+			// An officer un-governs the segment between the two runs. Re-running must
+			// not put it back: the backfill is a one-time transcription of the old
+			// inference, not a rule that keeps applying.
+			await tx
+				.update(meetingTemplateBeats)
+				.set({ clubGoverned: false })
+				.where(eq(meetingTemplateBeats.templateId, id));
+			await tx.execute(sql.raw(BACKFILL_SQL));
+			return governedOrders(tx, id);
+		});
+		// Honest about what "idempotent" means here: a second run DOES re-derive the
 		// same answer from the same unchanged rows. What it must never do is pick a
-		// DIFFERENT row or pick two.
-		expect(await governedOrders(id)).toEqual([0]);
+		// DIFFERENT row, or pick two — the state the unique index now refuses.
+		expect(orders).toEqual([0]);
 	});
 });
