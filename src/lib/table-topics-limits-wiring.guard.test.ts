@@ -517,7 +517,23 @@ describe("table topics limits wiring (#443)", () => {
 		// literal comparison here would be a second statement of the rule, which
 		// is what put two disqualification rules on one club in the first place.
 		expect(src).toContain("segmentFor(row.roleKey)");
-		expect(src).toContain('segment === "tableTopics"');
+		// WHOSE rule is being quoted is the STORED marker since #683, and no longer
+		// `segment === "tableTopics"`. `segmentFor` reads the role key alone, and
+		// the run of show gives three beats that key — so an officer who set timer
+		// marks on the Best Table Topics vote row had the wall announce their
+		// 0:30–1:00 as the club's disqualification rule. `segmentFor` still decides
+		// the window's FLOOR above, which is what the first assertion holds.
+		expect(src).toContain("row.clubGoverned === true");
+		expect(
+			src,
+			"the deck must not restate which row the club's window governs",
+		).not.toContain("TABLE_TOPICS_ROLE_KEY");
+		// And the flag has to be DECLARED on the row type the seam returns, or the
+		// value rides an untyped property that any projection in `resolveAgendaRows`
+		// drops with every other gate green.
+		expect(readSource("src/lib/agenda-runsheet.ts")).toContain(
+			"clubGoverned?: true;",
+		);
 		expect(src).toContain("formatTableTopicsWindow(row.marks)");
 		// The club's own columns must reach it, off the same `ClubForDeck` the
 		// standard deck reads.

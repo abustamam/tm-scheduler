@@ -248,6 +248,21 @@ const patchInput = rowInput.extend({
 			// reason unrelated to the change. A boolean has no bound of its own to
 			// add, so the end is where it belongs.
 			flex: z.boolean().optional(),
+			// `handoff` has been in `RowPatch` and in the editor's Undo payload
+			// since #719 and was never here, so zod STRIPPED it: undoing a deleted
+			// hand-off row flattened its indented "X introduces Y" elbow on the
+			// printed sheet and the deck, and reported success. Same omission class
+			// as `copyTemplateForMeeting`'s column list, found in the same pass.
+			handoff: z.boolean().optional(),
+			// The un-govern / re-govern control (#683). Also last, and also a
+			// boolean with no bound — same reason as `flex` above.
+			//
+			// Nothing here decides WHICH row may carry it: the floor is
+			// `assertGovernable` in `meeting-agenda-edit-logic.ts`, checked against
+			// the merged row inside the transaction, because the legal answer
+			// depends on the row's stored `kind` and `role_key` and a validator sees
+			// only the patch.
+			clubGoverned: z.boolean().optional(),
 		})
 		.refine((p) => Object.keys(p).length > 0, {
 			message: "Patch must set at least one field.",

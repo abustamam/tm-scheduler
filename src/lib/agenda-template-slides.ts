@@ -123,9 +123,17 @@ export function beatTimingText(
 	// ONE derivation of "which segment is this row", shared with the Timer's
 	// sheet and the printed agenda's grace line (#720) — `segmentFor` is where
 	// the role key is matched, so this file no longer states that rule itself.
+	// It still decides the WINDOW's floor (Table Topics floors at green, a speech
+	// at green-0:30); what it no longer decides is whose rule is being quoted.
+	//
+	// That is the STORED marker's question now (#683). `segmentFor` reads only the
+	// role key, and the run of show gives three beats that key — so an officer who
+	// put timer marks on the Best Table Topics vote row had the wall announce
+	// their 0:30-1:00 as the club's disqualification rule, on a row the club's
+	// window does not govern and the refresh pass does not touch.
 	const segment = segmentFor(row.roleKey);
 	const ownRule =
-		segment === "tableTopics" && hasTableTopicsLimits(tableTopicsLimits);
+		row.clubGoverned === true && hasTableTopicsLimits(tableTopicsLimits);
 	// The segment travels into the derivation. A club that has stated nothing
 	// still projects a window here — the standard 1:00–2:00 marks — and it used
 	// to be the SPEECH window of those marks, "qualifies 0:30–2:30", telling the
@@ -146,10 +154,11 @@ export function beatTimingText(
 		// the club columns is still the right call and is now also correct: it
 		// keeps this function a pure function of its argument.
 		//
-		// `ownRule` needs no marks-provenance test of its own. The early return
-		// above means `row.marks` is non-null, which with the roleKey match is
-		// exactly `isTableTopicsSegment` — so the club's hard cap is labelled as
-		// the rule for precisely the rows whose marks the club owns.
+		// `ownRule` needs no marks-provenance test of its own, and since #683 that
+		// is a fact rather than a coincidence: the flag is written by
+		// `materialiseRunOfShow` on the one row `refreshTableTopicsMarks` then
+		// re-derives, so the rows this labels as the club's rule are exactly the
+		// rows whose marks the club actually wrote.
 		qualifies: ownRule
 			? formatTableTopicsWindow(row.marks)
 			: (window as QualifyingWindow).range,

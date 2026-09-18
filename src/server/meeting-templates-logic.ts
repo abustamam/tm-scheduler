@@ -140,6 +140,12 @@ async function loadTemplateBeats(
 				markGreen: meetingTemplateBeats.markGreen,
 				markYellow: meetingTemplateBeats.markYellow,
 				markRed: meetingTemplateBeats.markRed,
+				// #683. This is the ONE read every render surface goes through, so
+				// omitting it would leave every row looking ungoverned and quietly
+				// refreeze every club's Table Topics window at its materialisation
+				// snapshot. `TemplateBeatRow.clubGoverned` is required for exactly
+				// that reason — the omission is invisible at runtime.
+				clubGoverned: meetingTemplateBeats.clubGoverned,
 			})
 			.from(meetingTemplateBeats)
 			.where(eq(meetingTemplateBeats.templateId, templateId))
@@ -411,6 +417,12 @@ export async function copyTemplateForMeeting(
 		);
 	}
 	if (beats.length > 0) {
+		// EVERY content column, which `findRow`'s docblock already assumed ("a fork
+		// copies every column verbatim") and this list did not deliver: `handoff`
+		// was missing, so a fork silently flattened the indented "X introduces Y"
+		// elbows into ordinary rows. Not reachable today — no shared template
+		// declares a hand-off — but it is the same omission `club_governed` would
+		// have been, and an explicit list is only safe while it is complete.
 		await conn.insert(meetingTemplateBeats).values(
 			beats.map((b) => ({
 				templateId: copy.id,
@@ -422,9 +434,11 @@ export async function copyTemplateForMeeting(
 				roleKey: b.roleKey,
 				repeatsRoleKey: b.repeatsRoleKey,
 				flex: b.flex,
+				handoff: b.handoff,
 				markGreen: b.markGreen,
 				markYellow: b.markYellow,
 				markRed: b.markRed,
+				clubGoverned: b.clubGoverned,
 			})),
 		);
 	}

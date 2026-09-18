@@ -104,6 +104,9 @@ const beat = (
 	markGreen: null,
 	markYellow: null,
 	markRed: null,
+	// A contest states its own windows on its own beats; nothing here is the
+	// club's Table Topics segment, so no seed carries the marker (#683).
+	clubGoverned: false,
 	...over,
 });
 

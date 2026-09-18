@@ -69,6 +69,18 @@ export type TemplateBeatSeed = {
 	markGreen: number | null;
 	markYellow: number | null;
 	markRed: number | null;
+	/**
+	 * Whether the CLUB owns this row's marks (#683) — see the column's own
+	 * docblock in `schema.ts`.
+	 *
+	 * REQUIRED rather than optional, for the reason `AgendaDraftRow.flex` is:
+	 * every reader that forgets it fails in the direction that LOOKS fine.
+	 * `undefined` reads as "not governed", so a loader that omitted the column
+	 * would leave every club's Table Topics window frozen at its materialisation
+	 * snapshot again, on every surface at once, with nothing throwing. Required
+	 * means typecheck names each select and each seed.
+	 */
+	clubGoverned: boolean;
 };
 
 /**
@@ -143,6 +155,8 @@ export type MarkedBeat = {
 	markGreen: number | null;
 	markYellow: number | null;
 	markRed: number | null;
+	/** The stored answer to "does the club own this row's marks" (#683). */
+	clubGoverned: boolean;
 };
 
 /** The three mark columns, narrowed to present. {@link isTableTopicsSegment} is a
@@ -158,51 +172,87 @@ type ClubOwnedMarks = {
 /**
  * Whether a stored beat is a Table Topics row whose timer marks the CLUB owns.
  *
- * Exported because two places have to agree about it and disagreeing is silent:
- * {@link refreshTableTopicsMarks} decides which row to re-derive, and the agenda
- * editor decides which row's three mark inputs to stop offering. The first cut
- * of #679 hand-wrote the editor's copy with one condition missing, which
- * disabled the inputs on a row the server would not refresh — three permanently
- * blank, permanently disabled fields and no way back. Five review passes found
- * it independently. One function, both call sites.
+ * Exported because three places have to agree about it and disagreeing is
+ * silent: {@link refreshTableTopicsMarks} decides which row to re-derive, the
+ * agenda editor decides which row's three mark inputs to stop offering, and
+ * `beatTimingText` decides which row's span the projected deck labels as the
+ * club's rule rather than as the ±30s speech grace. The first cut of #679
+ * hand-wrote the editor's copy with one condition missing, which disabled the
+ * inputs on a row the server would not refresh — three permanently blank,
+ * permanently disabled fields and no way back. Five review passes found it
+ * independently. One function, every call site.
  *
- * **Three conditions, and `flex` is deliberately NOT one of them.** `roleKey`
- * alone is ambiguous — the run of show gives THREE beats `table_topics_master`
- * (the segment, the "Best Table Topics" vote, and the GE hand-off) and
- * `beatSeed` labels all three `"Table Topics Master"`, so neither the key nor
- * the label identifies the row. What separates them is that only the segment
- * CARRIES MARKS: the other two declare none, so `beatSeed` writes null for all
- * three columns. Verified against a real materialised template — three rows with
- * that key, one with marks.
+ * **ONE condition, and it is a STORED column** (#683). Every earlier cut asked
+ * the row about its own contents, and every one of those properties is
+ * something the officer edits:
  *
- * The first cut used `flex` for that job and it was wrong twice over. It was a
- * mutation SURVIVOR (deleting the clause left 2,434 tests green, because every
- * fixture that excluded the vote and the hand-off also excluded them on the
- * marks clause) — and worse, `flex` is a length property the officer toggles
- * with a one-click "Pin" button about DURATION. Pinning the Table Topics
- * segment to a fixed length would have silently detached its timing from club
- * settings, re-creating the self-contradicting packet this whole change exists
- * to eliminate, with the explanatory copy vanishing at the same moment.
+ * - `flex` went first (#682). It is a length property behind a one-click "Pin"
+ *   button about DURATION, so pinning the segment silently detached its timing
+ *   from club settings — and it was a mutation SURVIVOR besides (deleting the
+ *   clause left 2,434 tests green, because every fixture that excluded the vote
+ *   row on `flex` excluded it on marks too).
+ * - `roleKey` alone was never enough: the run of show gives THREE beats
+ *   `table_topics_master` (the segment, the "Best Table Topics" vote, and the GE
+ *   hand-off) and `beatSeed` labels all three `"Table Topics Master"`, so
+ *   neither the key nor the label identifies the row.
+ * - **All three marks present** was what told those three apart, and it is what
+ *   #683 removed. Only the segment declares marks *when materialised* — but the
+ *   marks are the officer's own field. Set timer marks on the Best Table Topics
+ *   vote row and it began to match: the refresh pass overwrote them with the
+ *   club's speaking window, the editor replaced its inputs with read-only text,
+ *   and the only way out was delete-and-re-add. The officer was editing a
+ *   different row than the one that broke.
  *
- * **All three marks present** is what keeps this from inventing data:
- * `addAgendaRow` writes null marks, so an officer who adds a row and points it
- * at the Table Topics Master must not watch a timer card appear on it, and an
- * officer who deliberately cleared all three (legal — `assertMarks` allows 0 or
- * 3) must not watch them come back. That clause is also what makes
- * `beatTimingText`'s roleKey-only test correct: it early-returns on a row with
- * no marks, so the deck labels a span as the club's disqualification rule for
- * exactly the rows this accepts.
+ * So the question is answered once, at materialisation, and stored. Nothing an
+ * officer can type changes the answer, and the editor's own un-govern control is
+ * the one way it moves.
+ *
+ * **Still a TYPE PREDICATE, and the marks it narrows are an invariant
+ * {@link refreshTableTopicsMarks} establishes** rather than one this reads.
+ * `resolveTableTopicsMarks` always answers with a full trio (the standard window
+ * when the club has stated nothing), so a governed beat that has been through
+ * the refresh carries all three. Every consumer that READS the narrowed marks is
+ * downstream of it: `resolveAgendaRows` refreshes before building rows, and
+ * `loadAgendaDraft` refreshes before the editor sees a draft. The one caller
+ * upstream of the refresh is the refresh itself, which overwrites all three and
+ * reads none of them.
+ *
+ * That ordering is also the point of dropping the marks clause rather than
+ * keeping it alongside the column. A governed row whose marks are null — which
+ * `assertMarks` permits, and which the Undo path could mint before the
+ * placeholder was patched — must still be refreshed back onto the club's window.
+ * Under the old predicate it stopped matching instead: never refreshed again, no
+ * timer window on the run sheet, the agenda or the deck, while the Timer's role
+ * sheet kept printing the club's. The marker replaces the inference; it does not
+ * sit beside it.
  */
 export function isTableTopicsSegment<T extends MarkedBeat>(
 	beat: T,
 ): beat is T & ClubOwnedMarks {
-	return (
-		beat.kind === "role" &&
-		beat.roleKey === TABLE_TOPICS_ROLE_KEY &&
-		beat.markGreen != null &&
-		beat.markYellow != null &&
-		beat.markRed != null
-	);
+	return beat.clubGoverned;
+}
+
+/**
+ * Whether the club's Table Topics window COULD govern this row — i.e. whether
+ * the agenda editor may offer to hand it back (#683).
+ *
+ * The mirror of {@link isTableTopicsSegment}, and it has to be inferred because
+ * there is nothing else to ask: a row the officer has un-governed carries
+ * `clubGoverned = false` like every other row, so only its role says it was ever
+ * a candidate. Inference is safe HERE and was not there, because this decides
+ * what BUTTON to show rather than whose numbers win — a false positive offers a
+ * control the officer can ignore, where the old predicate's false positive
+ * rewrote their data.
+ *
+ * Lives beside the predicate rather than in the editor because the editor must
+ * not restate the role key: that is how the two copies drifted in #679, and
+ * `table-topics-limits-wiring.guard.test.ts` fails a file that does.
+ */
+export function isClubGovernable(beat: {
+	kind: MarkedBeat["kind"];
+	roleKey: string | null;
+}): boolean {
+	return beat.kind === "role" && beat.roleKey === TABLE_TOPICS_ROLE_KEY;
 }
 
 /**
@@ -368,6 +418,10 @@ function toRow(
 		marks: resolveMarks(row),
 		...(row.flex ? { flex: true as const } : {}),
 		...(row.handoff ? { handoff: true as const } : {}),
+		// Carried only when TRUE, like `flex` and `handoff` above, so an ordinary
+		// row is byte-identical to what it was before #683 and the agenda/deck
+		// parity fixtures that compare whole rows keep comparing the same object.
+		...(row.clubGoverned ? { clubGoverned: true as const } : {}),
 	};
 
 	if (row.kind === "section") {

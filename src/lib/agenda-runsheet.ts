@@ -205,6 +205,28 @@ export type AgendaRow = {
 	 *  wrong visual language for a segment header and would read as a sub-row
 	 *  continuation marker. Carries no clock stamp and no presenter. */
 	section?: true;
+	/**
+	 * The CLUB owns this row's three marks — today, its Table Topics window
+	 * (#683). Carried from `meeting_template_beats.club_governed`.
+	 *
+	 * Read by `beatTimingText` on the projected deck, which quotes a governed
+	 * row's span as the club's hard cap ("2:31+ disqualified") rather than as the
+	 * ±30s graced qualifying window. It used to ask `segmentFor(row.roleKey)`
+	 * instead, and the run of show gives THREE beats `table_topics_master` — so an
+	 * officer who set timer marks on the Best Table Topics vote row had the wall
+	 * announce their window as the club's rule.
+	 *
+	 * Set by the TEMPLATE path only (`buildTemplateRows`). `expandRunSheet` builds
+	 * the standard flow from code-derived beats with no stored row behind them, so
+	 * ABSENT there is the honest answer rather than an oversight — the same shape
+	 * as `holders` above.
+	 *
+	 * On `AgendaRow` rather than on a widened alias of it deliberately: the row
+	 * crosses `resolveAgendaRows`, which is declared `AgendaRow[]`, and a field
+	 * the seam does not name is a field any future projection there drops with
+	 * every gate green.
+	 */
+	clubGoverned?: true;
 };
 
 /** A functionary/uncovered role shown in the header legend. */

@@ -109,6 +109,10 @@ describe("editor / print clock parity", () => {
 				markGreen: 1,
 				markYellow: 1.5,
 				markRed: 2,
+				// The STORED marker is what the refresh keys on since #683 — the
+				// marks below are the frozen snapshot it replaces, not the reason it
+				// fires.
+				clubGoverned: true,
 			},
 		];
 		const roles: TemplateRoleRow[] = [
