@@ -19,6 +19,8 @@ import {
 	footerDate,
 	type Line,
 	type SlideLayout,
+	SPLASH_LOGO_HEIGHT_PCT,
+	SPLASH_LOGO_MAX_WIDTH_PCT,
 	slideLayout,
 	slideName,
 } from "#/lib/slide-layout";
@@ -220,8 +222,12 @@ export function MeetingPresent({
 	}, [next, prev, onExit, overview, cursor, last, openOverview, jumpTo]);
 
 	const slide = deck[i];
-	const layout = slideLayout(slide);
 	const title = deck.find((s) => s.kind === "title");
+	// The club's logo is deck-level, read off the title slide the same way the
+	// content footer's club name and date are, and handed to `slideLayout` so the
+	// CLOSING splash can carry it too (#725) without a second copy of the URL
+	// riding on the thank-you slide.
+	const layout = slideLayout(slide, title?.logoUrl ?? null);
 	const fdate = title ? footerDate(title.scheduledAt, title.timezone) : "";
 	// The QR + badge (#510) — null on every non-vote slide, which `ContentSlide`
 	// reads as "render the body alone, exactly as before". Also null on a vote
@@ -454,6 +460,18 @@ function Splash({
 	layout: Extract<SlideLayout, { chrome: "splash" }>;
 }) {
 	const dark = layout.tone === "dark";
+	// Which URL failed, rather than a boolean: the presenter walks from the
+	// opening splash to the closing one through the SAME component instance
+	// (both render <Splash/> in the same position), so a boolean would need an
+	// effect to clear and a new logo would inherit the old one's failure.
+	const [failedUrl, setFailedUrl] = useState<string | null>(null);
+	// #725: the club's mark REPLACES the word — the two never stack. Decided from
+	// the image that actually LOADED, not from the URL: a logo the browser cannot
+	// fetch must fall back to the word rather than leave the splash with neither,
+	// and `ClubLogo` carries no error handling of its own (it is shared with the
+	// print surfaces, where a broken image is a gap rather than a wrong word).
+	const logoUrl = layout.logoUrl;
+	const showLogo = logoUrl != null && failedUrl !== logoUrl;
 	return (
 		<div
 			className="flex h-full w-full flex-col items-center justify-center px-[8cqw] text-center"
@@ -466,26 +484,41 @@ function Splash({
 					: { background: GROUND, color: INK }
 			}
 		>
-			{/* The club's OWN uploaded logo, above the program name it belongs to.
-			    Sized in cqw like everything else on a slide, so it scales with
-			    whatever this is projected onto. Renders nothing when the club has
-			    no logo, leaving the splash exactly as it was. */}
-			<ClubLogo
-				logoUrl={layout.logoUrl ?? null}
-				height="9cqw"
-				maxWidth="46cqw"
-			/>
-			{/* Nominative word use, not the official wordmark image (ADR-0024). */}
-			<div
-				className="font-display font-semibold tracking-[-0.01em]"
-				style={{
-					fontSize: "6cqw",
-					color: dark ? "#ffffff" : NAVY,
-					marginTop: layout.logoUrl ? "2.2cqw" : undefined,
-				}}
-			>
-				Toastmasters
-			</div>
+			{/* The club's OWN uploaded logo, standing where the program name used to
+			    and at the size that headroom buys (#725). Sized in cqw like
+			    everything else on a slide, so it scales with whatever this is
+			    projected onto, and bounded in BOTH dimensions because a club
+			    uploads whatever it has.
+
+			    `display: contents` on the wrapper so the plate stays a direct flex
+			    child of the column and the layout is what it would be without it;
+			    the wrapper exists only to catch the image's `error`, which does not
+			    bubble natively but does reach an ancestor handler through React's
+			    own dispatch. */}
+			{showLogo && (
+				<span
+					style={{ display: "contents" }}
+					onError={() => setFailedUrl(logoUrl)}
+				>
+					<ClubLogo
+						logoUrl={logoUrl}
+						height={cqw(SPLASH_LOGO_HEIGHT_PCT)}
+						maxWidth={cqw(SPLASH_LOGO_MAX_WIDTH_PCT)}
+					/>
+				</span>
+			)}
+			{/* Nominative word use, not the official wordmark image (ADR-0024).
+			    Renders only when no logo is on the slide, which is what makes a
+			    club WITHOUT one — and a club whose logo failed to load — get the
+			    splash exactly as it has always been. */}
+			{!showLogo && (
+				<div
+					className="font-display font-semibold tracking-[-0.01em]"
+					style={{ fontSize: "6cqw", color: dark ? "#ffffff" : NAVY }}
+				>
+					Toastmasters
+				</div>
+			)}
 			<div
 				className="my-[3.4cqw] h-px w-[58cqw]"
 				style={{ background: dark ? "rgba(255,255,255,.55)" : NAVY }}

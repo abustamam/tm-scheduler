@@ -918,6 +918,71 @@ describe("slideLayout bodies", () => {
 		}
 	});
 
+	// #725. The closing splash carries no club fields of its own, so the logo
+	// reaches it as the second argument — deck-level context, the way the
+	// content footer's club name and date already do.
+	describe("the closing splash's club logo (#725)", () => {
+		const closing: Slide = {
+			kind: "thankYou",
+			meetingSchedule: "2nd & 4th Thu",
+			nextMeetingAt: null,
+			timezone: "UTC",
+		};
+		const LOGO = "/api/club/abc/logo?v=1754000000000";
+
+		it("carries the club's logo when the club has uploaded one", () => {
+			const l = slideLayout(closing, LOGO);
+			if (l.chrome !== "splash") throw new Error("expected a splash");
+			expect(l.logoUrl).toBe(LOGO);
+		});
+
+		it("carries null when the club has none", () => {
+			const l = slideLayout(closing, null);
+			if (l.chrome !== "splash") throw new Error("expected a splash");
+			expect(l.logoUrl).toBeNull();
+		});
+
+		// The default is what `slideName` and every copy assertion in this file
+		// call through. It has to mean "no logo", not "undefined".
+		it("carries null when the caller passes nothing at all", () => {
+			const l = slideLayout(closing);
+			if (l.chrome !== "splash") throw new Error("expected a splash");
+			expect(l.logoUrl).toBeNull();
+		});
+
+		// The opening splash reads the URL off its OWN slide, and must keep doing
+		// so: it is the slide the builder puts the club's logo on.
+		it("leaves the opening splash reading its own slide's logoUrl", () => {
+			const title: Slide = {
+				kind: "title",
+				clubName: "MCF Toastmasters Club",
+				logoUrl: LOGO,
+				district: null,
+				clubNumber: null,
+				meetingNumber: null,
+				scheduledAt: new Date("2026-06-25T23:45:00Z"),
+				timezone: "UTC",
+			};
+			const l = slideLayout({ ...title, logoUrl: null }, LOGO);
+			if (l.chrome !== "splash") throw new Error("expected a splash");
+			expect(l.logoUrl).toBeNull();
+			const withOwn = slideLayout(title, null);
+			if (withOwn.chrome !== "splash") throw new Error("expected a splash");
+			expect(withOwn.logoUrl).toBe(LOGO);
+		});
+
+		// AC5: a contest's round dividers are splashes too and stay bare, even
+		// on a deck whose bookends now carry the mark.
+		it("does not reach a contest's section bands", () => {
+			const l = slideLayout(
+				{ kind: "templateSection", title: "PREPARED SPEECH CONTEST" },
+				LOGO,
+			);
+			if (l.chrome !== "splash") throw new Error("expected a splash");
+			expect(l.logoUrl).toBeNull();
+		});
+	});
+
 	it("thankYou falls back to meetingSchedule when there is no next meeting", () => {
 		const l = slideLayout({
 			kind: "thankYou",
@@ -1149,9 +1214,10 @@ describe("templated-meeting layouts (#agenda-templates)", () => {
 		if (l.chrome !== "splash") throw new Error("expected a splash");
 		expect(l.headline).toBe("PREPARED SPEECH CONTEST");
 		expect(l.tone).toBe("dark");
-		// The crest belongs on the opening splash. Repeating it on five round
-		// dividers turns it into wallpaper, and the splash type forces the choice
-		// to be explicit rather than defaulted.
+		// #725 put the crest on the CLOSING splash as well as the opening one and
+		// deliberately stopped there: a meeting has two bookends, a contest has
+		// five round dividers, and five is wallpaper. The splash type forces the
+		// choice to be explicit rather than defaulted.
 		expect(l.logoUrl).toBeNull();
 	});
 

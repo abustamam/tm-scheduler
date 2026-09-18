@@ -38,12 +38,65 @@ export type SlideLayout =
 			tone: "light" | "dark";
 			headline: string;
 			sub: Line[];
-			/** Only the opening title splash carries one; every other splash
-			 *  (currently just the closing thank-you) sets it null. Required so a
-			 *  new splash kind has to make that choice explicitly. */
+			/** The club's own uploaded logo. The two splashes that bookend a
+			 *  meeting — the opening title and the closing thank-you — carry it
+			 *  when the club has uploaded one (#725); a contest's section bands set
+			 *  it null. Required so a new splash kind has to make that choice
+			 *  explicitly.
+			 *
+			 *  Non-null is also what suppresses the word "Toastmasters" on that
+			 *  splash: the club's mark REPLACES the word rather than stacking over
+			 *  it, so a splash shows one or the other and never both. Both
+			 *  renderers decide that from the image they actually have, not from
+			 *  this URL — see `deck-to-pptx.ts`'s `renderSplash`. */
 			logoUrl: string | null;
 	  }
 	| { chrome: "content"; header: string; body: Body };
+
+/**
+ * The splash logo's box, as PROPORTIONS of the slide frame width (#725).
+ *
+ * Same argument as `slide-spacing.ts` makes for content-slide spacing, applied
+ * to the one element both splashes now lead with: the projected deck sizes in
+ * `cqw` (percent of frame width) and the `.pptx` export sizes in inches on a
+ * 13.33in frame, so the only thing the two can actually share is the
+ * proportion. `cqw()` and `inchesOfWidth()` turn these into either unit.
+ *
+ * They live here rather than in `slide-spacing.ts` because they are not
+ * content-slide spacing: the logo is part of what the splash DESCRIPTOR says,
+ * and this module is what both renderers already read that from.
+ *
+ * BOTH bounds are load-bearing, and neither is a suggestion. A club uploads
+ * whatever it has — a square crest, a 10:1 wordmark, a tall banner — so the
+ * logo is contained in a `HEIGHT x MAX_WIDTH` box rather than given one fixed
+ * dimension: the height alone lets a wide wordmark run off the slide, and the
+ * width alone lets a tall one push the headline off the bottom.
+ *
+ * The values are MEASURED, not chosen. At 1280x720 the opening splash's worst
+ * case (a logo, five sub-lines) stands 680px tall against the frame's 720 —
+ * about 20px of clearance. Today's arrangement, logo at 9% stacked ABOVE the
+ * word, measures 745px and already overflows the frame by 13px top and bottom;
+ * dropping the word is what pays for the bigger mark.
+ * `splash-logo-geometry.test.ts` re-measures both in a real browser, because
+ * jsdom does no layout and would report either arrangement as fine.
+ */
+export const SPLASH_LOGO_HEIGHT_PCT = 15;
+/**
+ * Exactly the width of the rule beneath it, so the mark reads as sitting within
+ * the splash's own frame rather than spanning past it.
+ *
+ * It is also the number that sets the BOX's aspect ratio, which is the part
+ * that is easy to get wrong. `ClubLogo` locks the height and lets `object-fit:
+ * contain` letterbox anything wider than the box, inside a white plate that is
+ * visible on the dark closing splash — so a ceiling chosen only for "does not
+ * reach the edge" puts white bands around every wordmark wider than
+ * `MAX_WIDTH / HEIGHT`. At 58/15 that is 3.9:1, close to the 46/9 = 5.1:1 the
+ * splash had before #725, so the range of shapes that letterbox barely moves
+ * while every shape gets bigger. Anything wider than that still letterboxes,
+ * as it did before; fixing that needs sizing that can see the image's own
+ * ratio, which is `ClubLogo`'s to own and shared with the print surfaces.
+ */
+export const SPLASH_LOGO_MAX_WIDTH_PCT = 58;
 
 const head = (text: string): Line => ({ role: "head", text });
 const name = (text: string): Line => ({ role: "name", text });
@@ -147,7 +200,22 @@ export function slideName(slide: Slide): string {
 	return layout.chrome === "content" ? layout.header : layout.headline;
 }
 
-export function slideLayout(slide: Slide): SlideLayout {
+/**
+ * @param clubLogoUrl The club's own uploaded logo, or null when it has none.
+ *   DECK-level context rather than a field on every slide, for the same reason
+ *   `deckToPptx` and `MeetingPresent` derive the content footer's club name and
+ *   date from the title slide instead of repeating them on each one: the
+ *   closing splash carries no club fields of its own, and putting one there
+ *   would be a second copy of a value that can then disagree with the first.
+ *   Only the splashes read it. Defaults to null so `slideName`, which wants
+ *   nothing but the headline, and every test asserting COPY can keep calling
+ *   with one argument — a caller that omits it gets a deck with no club logo,
+ *   which is exactly what a club without one gets.
+ */
+export function slideLayout(
+	slide: Slide,
+	clubLogoUrl: string | null = null,
+): SlideLayout {
 	switch (slide.kind) {
 		case "title": {
 			const sub: Line[] = [];
@@ -393,8 +461,10 @@ export function slideLayout(slide: Slide): SlideLayout {
 		// splash so a contest round announces itself the way the opening and
 		// closing do — a content slide with an empty body would read as a beat
 		// whose details failed to load. `logoUrl: null` is the deliberate choice
-		// the splash type forces: the crest belongs on the opening, and repeating
-		// it five times through a contest turns it into wallpaper.
+		// the splash type forces, and #725 — which put the crest on the CLOSING
+		// splash too — deliberately left it alone: a meeting has two bookends, but
+		// a contest has five round dividers, and a mark repeated five times
+		// through one meeting is wallpaper rather than identification.
 		case "templateSection":
 			return {
 				chrome: "splash",
@@ -438,9 +508,20 @@ export function slideLayout(slide: Slide): SlideLayout {
 				tone: "dark",
 				headline: "Thank You",
 				sub: thankYouSub(slide),
-				// The club's logo opens the deck; repeating it on the closing slide
-				// would be branding for its own sake.
-				logoUrl: null,
+				// #725 reverses the `null` that stood here, and the reason it stood
+				// ("the club's logo opens the deck; repeating it on the closing slide
+				// would be branding for its own sake") was measuring the wrong thing.
+				// This slide is on the wall while the room is standing up, packing up
+				// and talking to guests — in wall-time it is the most-looked-at slide
+				// in the deck, and it was the one saying nothing about whose meeting
+				// this was. It carries the club's mark for the same reason the
+				// opening does, and on the same terms: the mark REPLACES the word
+				// "Toastmasters", and a club with no logo still gets the word here
+				// exactly as before.
+				//
+				// This does NOT generalise to every splash — see `templateSection`,
+				// where the reason for `null` is about repetition and still holds.
+				logoUrl: clubLogoUrl,
 			};
 	}
 	return ((_x: never): never => {
