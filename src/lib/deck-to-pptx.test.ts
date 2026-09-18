@@ -826,6 +826,44 @@ describe("content-slide geometry (#359, #724)", () => {
 		expect(mark?.options.x).toBeCloseTo(region[0]?.options.x as number, 6);
 	});
 
+	it("keeps a long club name out of the GavelUp mark's box (#724)", () => {
+		// #724 widened the club/date block from a hand-placed 4.33in to the whole
+		// remaining inset width, 8.70in. It is RIGHT-aligned, so the extra width
+		// is room the text grows LEFTWARD into — a club name that used to wrap at
+		// 4.33in now runs on toward the mark. The right edge assertion above
+		// cannot see that; this bounds the other end.
+		//
+		// The bound is structural rather than a measurement of the text: the
+		// block starts exactly where the mark's box ends (`INSET + FOOT_MARK_W`),
+		// so pptxgenjs wraps the name inside its own box and no name of any
+		// length can enter the mark's. Asserted with a deliberately long name so
+		// the geometry is exercised rather than merely reasoned about.
+		const longName =
+			"The Greater Metropolitan Communicators & Leaders Advanced Toastmasters Club";
+		const deck = buildSlideDeck({
+			meeting,
+			club: { ...club, name: longName },
+			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck);
+		const idx = deck.findIndex((s) => s.kind === "wordOfDay");
+		const { text } = footerRegion(objectsOn(pptx, idx));
+		const mark = text.find((o) => o.options.align === "left");
+		const block = text.find((o) => o.options.align === "right");
+		expect(mark, "no left-set footer mark").toBeTruthy();
+		expect(block, "no right-set club/date block").toBeTruthy();
+		// The name really is on this slide, so the fixture cannot pass by having
+		// quietly dropped it.
+		expect(slideText(pptx, idx)).toContain(longName);
+		// No overlap, and they do not merely touch by accident: the block begins
+		// at the mark box's right edge.
+		const markRight = (mark?.options.x as number) + (mark?.options.w as number);
+		expect(block?.options.x as number).toBeGreaterThanOrEqual(markRight);
+		expect(block?.options.x as number).toBeCloseTo(markRight, 6);
+	});
+
 	it("clears the body off the navy band by the shared bottom inset (#724)", () => {
 		// The other half of the report: the body crowded the footer. Measured the
 		// way the eye reads it — from the bottom of the body box to the top of the

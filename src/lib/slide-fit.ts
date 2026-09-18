@@ -12,10 +12,13 @@ export type FitBox = {
  * The scale that fits a slide body's natural size inside its box.
  *
  * Divides by the CONTENT area. `clientWidth`/`clientHeight` include the box's
- * padding, and the content slide's body box has 4cqw of it above (the gap under
- * the header rule) and 1.5cqw below — so a scale computed against the padding
- * box still left an overlong body clipping its last line behind the footer
- * (#767, "Time: 20 min" half-hidden on a real deck).
+ * padding, and the content slide's body box carries `SLIDE_HEADER_GAP_PCT` of
+ * it above (the gap under the header rule) and `SLIDE_BODY_BOTTOM_PCT` below,
+ * which are not equal — so a scale computed against the padding box still left
+ * an overlong body clipping its last line behind the footer (#767, "Time: 20
+ * min" half-hidden on a real deck). Named rather than written out: this line
+ * said "4cqw above and 1.5cqw below" until #724 retuned the second one, which
+ * is the same hand-kept-copy drift that issue was about.
  *
  * Height is where this matters and where it is exact: the body box centres
  * its child vertically, so overflow is even top and bottom and a scale about

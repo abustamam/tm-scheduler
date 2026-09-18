@@ -798,6 +798,47 @@ describe("a templated meeting's deck (#agenda-templates)", () => {
  * the constants, because the relationship alone cannot tell a shared derivation
  * from two literals that happen to match, which is the state this deck was in.
  */
+/**
+ * A `<name …>` opening tag, brace- and quote-aware.
+ *
+ * `src.indexOf(">", open)` is the obvious version and it is wrong: a JSX prop
+ * can legitimately contain `>` — an arrow function, a comparison inside a `{…}`
+ * expression, a `>` in a quoted string — and the scan then truncates inside the
+ * prop. Today's `<footer>` happens to carry none, so the naive form works by
+ * prop ORDER rather than by correctness, and the day someone adds an
+ * `onClick={(e) => …}` it produces a false FAIL on an innocent edit. That is
+ * the direction that gets a guard deleted by whoever hits it instead of fixed,
+ * so this is the same depth-plus-quote scan `dialog-scroll.guard.test.ts` uses,
+ * for the same reason.
+ *
+ * Lexical, not a parser — a brace inside a quoted string is skipped with the
+ * string, but a template literal's `${…}` is not tracked. Throws rather than
+ * returning "" so a missing or unclosed tag is a named failure instead of an
+ * assertion about an empty slice.
+ */
+function openingTag(src: string, name: string): string {
+	const OPEN = `<${name}`;
+	for (let i = src.indexOf(OPEN); i !== -1; i = src.indexOf(OPEN, i + 1)) {
+		// Reject `<footerbar` — require a JSX name boundary.
+		if (/[A-Za-z0-9_-]/.test(src[i + OPEN.length] ?? "")) continue;
+		let depth = 0;
+		let quote: string | null = null;
+		for (let j = i + OPEN.length; j < src.length; j++) {
+			const c = src[j];
+			if (quote) {
+				if (c === quote && src[j - 1] !== "\\") quote = null;
+				continue;
+			}
+			if (c === '"' || c === "'" || c === "`") quote = c;
+			else if (c === "{") depth++;
+			else if (c === "}") depth--;
+			else if (c === ">" && depth === 0) return src.slice(i, j + 1);
+		}
+		throw new Error(`<${name}> opening tag is never closed`);
+	}
+	throw new Error(`no <${name}> found`);
+}
+
 describe("content-slide spacing (#359, #724)", () => {
 	afterEach(() => cleanup());
 
@@ -912,10 +953,36 @@ describe("content-slide spacing (#359, #724)", () => {
 		const source = readSource(
 			resolve(dirname(fileURLToPath(import.meta.url)), "meeting-present.tsx"),
 		);
-		const open = source.indexOf("<footer");
-		expect(open, "no <footer> in meeting-present.tsx").toBeGreaterThan(-1);
-		const tag = source.slice(open, source.indexOf(">", open) + 1);
+		const tag = openingTag(source, "footer");
 		expect(tag).toContain("SLIDE_FOOTER_HEIGHT_PCT");
 		expect(tag).toContain("SLIDE_INSET_PCT");
+	});
+
+	it("finds the tag's real end, not the first `>` inside a prop (self-test)", () => {
+		// Without this, `openingTag` could regress to `indexOf(">")` and the guard
+		// above would still pass on TODAY's footer, which carries no `>` in any
+		// prop. That is prop ORDER holding a guard up rather than correctness, and
+		// what it eventually produces is a false FAIL on an innocent edit — how a
+		// guard gets deleted by whoever hits it instead of fixed.
+		expect(
+			openingTag(
+				"<footer onX={(e) => f(e)} style={{ h: cqw(K) }}>body",
+				"footer",
+			),
+		).toBe("<footer onX={(e) => f(e)} style={{ h: cqw(K) }}>");
+		// A `>` inside a quoted prop must not end it either.
+		expect(openingTag('<footer title="a > b">x', "footer")).toBe(
+			'<footer title="a > b">',
+		);
+		// And a JSX name boundary: `<footerbar>` is a different element.
+		expect(openingTag("<footerbar k={9}/><footer k={1}>", "footer")).toBe(
+			"<footer k={1}>",
+		);
+		// Absent and unclosed are named failures, not an empty slice that would
+		// make the `toContain` assertions above fail for the wrong reason.
+		expect(() => openingTag("<section/>", "footer")).toThrow(/no <footer>/);
+		expect(() => openingTag("<footer style={{ a: 1 }}", "footer")).toThrow(
+			/never closed/,
+		);
 	});
 });
