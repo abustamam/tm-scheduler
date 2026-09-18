@@ -15,6 +15,8 @@ import {
 } from "./slide-layout";
 import {
 	inchesOfWidth,
+	SLIDE_BODY_BOTTOM_PCT,
+	SLIDE_FOOTER_HEIGHT_PCT,
 	SLIDE_HEADER_GAP_PCT,
 	SLIDE_INSET_PCT,
 } from "./slide-spacing";
@@ -661,8 +663,9 @@ describe("club logo on the bookend splashes (#496, #725)", () => {
 /** The 16:9 frame `deck-to-pptx` builds on. Private there, so named here — a
  *  wrong value makes the derivation assertion fail loudly rather than pass. */
 const PPTX_FRAME_W = 13.33;
+const PPTX_FRAME_H = 7.5;
 
-describe("content-slide geometry (#359)", () => {
+describe("content-slide geometry (#359, #724)", () => {
 	// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
 	const objectsOn = (pptx: PptxGenJS, i: number): any[] =>
 		// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
@@ -687,11 +690,13 @@ describe("content-slide geometry (#359)", () => {
 	/**
 	 * Everything ABOVE the footer band — the header, the rule and the body.
 	 *
-	 * The footer is full-bleed by design (`x: 0, w: W`) and carries its own
-	 * inset for the club name and date, so including it would make any
-	 * shared-edge assertion meaningless. Its top is found from the slide rather
-	 * than hardcoded, so tuning `FOOT_H` cannot silently pull footer chrome into
-	 * this set.
+	 * The band itself is full-bleed by design (`x: 0, w: W`), so it is excluded
+	 * on geometry rather than by name: a full-width shape has no left edge to
+	 * share. Its TEXT is a different matter and is asserted separately below —
+	 * until #724 that text carried its own 5% inset against this region's 8%,
+	 * which is precisely the thing "one shared left edge" is supposed to mean.
+	 * The band's top is found from the slide rather than hardcoded, so tuning
+	 * `SLIDE_FOOTER_HEIGHT_PCT` cannot silently pull footer chrome into this set.
 	 */
 	// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
 	function contentRegion(objects: any[]) {
@@ -737,6 +742,150 @@ describe("content-slide geometry (#359)", () => {
 		expect(gap).toBeCloseTo(
 			inchesOfWidth(SLIDE_HEADER_GAP_PCT, PPTX_FRAME_W),
 			6,
+		);
+	});
+
+	/**
+	 * The navy band, and the text sitting on it. Found the same way
+	 * `contentRegion` finds its complement, so the two partition the slide.
+	 */
+	// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
+	function footerRegion(objects: any[]) {
+		const band = objects.find(
+			(o) => o.options?.x === 0 && o.options?.w === PPTX_FRAME_W,
+		);
+		expect(band, "no full-bleed footer band found").toBeTruthy();
+		const footerTop = band.options.y as number;
+		const text = objects.filter(
+			(o) =>
+				o !== band &&
+				typeof o.options?.y === "number" &&
+				o.options.y >= footerTop,
+		);
+		return { band, text };
+	}
+
+	it("sizes the footer band from the shared proportion (#724)", () => {
+		// `FOOT_H` was `1.13` under the comment `// ~8.5% of width` — the HTML
+		// deck's `h-[8.5cqw]` copied by hand into inches, and 0.003in out. The
+		// 6-place closeness is what makes this an assertion about the DERIVATION:
+		// the old literal fails it, a fresh hand copy of 1.133 fails it too.
+		const { band } = footerRegion(contentSlide());
+		expect(band.options.h).toBeCloseTo(
+			inchesOfWidth(SLIDE_FOOTER_HEIGHT_PCT, PPTX_FRAME_W),
+			6,
+		);
+		expect(band.options.y).toBeCloseTo(
+			PPTX_FRAME_H - inchesOfWidth(SLIDE_FOOTER_HEIGHT_PCT, PPTX_FRAME_W),
+			6,
+		);
+	});
+
+	it("insets the footer's text to the same edges as the slide above it (#724)", () => {
+		// The assertion the pre-#724 geometry failed: the "GavelUp" mark at
+		// `x: 0.67` (5.03% of W) against a body at 1.066 (8%), so the one element
+		// of the footer that could line up with the rule and the body stood 0.4in
+		// inside them. Every footer text box now starts at one inset and ends at
+		// the other — left edges and right edges both, since the club/date block
+		// is right-aligned and it was its RIGHT edge that carried the old literal.
+		const objects = contentSlide();
+		const region = contentRegion(objects);
+		const { text } = footerRegion(objects);
+		const inset = inchesOfWidth(SLIDE_INSET_PCT, PPTX_FRAME_W);
+		expect(text.length, "expected mark, club/date and disclaimer").toBe(3);
+		// Read through each box's OWN alignment, because a text box's inset is the
+		// edge its text is set against: the mark is left-set, the club/date block
+		// right-set, the fine print centred across both. Asserting `x` alone would
+		// pass a right-aligned block hand-placed to land anywhere.
+		for (const o of text) {
+			const left = o.options.x as number;
+			const right = left + (o.options.w as number);
+			const align = o.options.align as string;
+			if (align !== "right") {
+				expect(left, `${align}-set footer text, left edge`).toBeCloseTo(
+					inset,
+					6,
+				);
+			}
+			if (align !== "left") {
+				expect(right, `${align}-set footer text, right edge`).toBeCloseTo(
+					PPTX_FRAME_W - inset,
+					6,
+				);
+			}
+		}
+		// Every alignment is actually exercised, so the branches above cannot all
+		// be vacuously skipped by a footer that lost a block.
+		expect(new Set(text.map((o) => o.options.align))).toEqual(
+			new Set(["left", "right", "center"]),
+		);
+		// And it is the same edge the header, rule and body stand on — read off
+		// the slide rather than restated, so this cannot agree with a stale
+		// constant while disagreeing with the region above it.
+		const mark = text.find((o) => o.options.align === "left");
+		expect(mark?.options.x).toBeCloseTo(region[0]?.options.x as number, 6);
+	});
+
+	it("keeps a long club name out of the GavelUp mark's box (#724)", () => {
+		// #724 widened the club/date block from a hand-placed 4.33in to the whole
+		// remaining inset width, 8.70in. It is RIGHT-aligned, so the extra width
+		// is room the text grows LEFTWARD into — a club name that used to wrap at
+		// 4.33in now runs on toward the mark. The right edge assertion above
+		// cannot see that; this bounds the other end.
+		//
+		// The bound is structural rather than a measurement of the text: the
+		// block starts exactly where the mark's box ends (`INSET + FOOT_MARK_W`),
+		// so pptxgenjs wraps the name inside its own box and no name of any
+		// length can enter the mark's. Asserted with a deliberately long name so
+		// the geometry is exercised rather than merely reasoned about.
+		const longName =
+			"The Greater Metropolitan Communicators & Leaders Advanced Toastmasters Club";
+		const deck = buildSlideDeck({
+			meeting,
+			club: { ...club, name: longName },
+			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck);
+		const idx = deck.findIndex((s) => s.kind === "wordOfDay");
+		const { text } = footerRegion(objectsOn(pptx, idx));
+		const mark = text.find((o) => o.options.align === "left");
+		const block = text.find((o) => o.options.align === "right");
+		expect(mark, "no left-set footer mark").toBeTruthy();
+		expect(block, "no right-set club/date block").toBeTruthy();
+		// The name really is on this slide, so the fixture cannot pass by having
+		// quietly dropped it.
+		expect(slideText(pptx, idx)).toContain(longName);
+		// No overlap, and they do not merely touch by accident: the block begins
+		// at the mark box's right edge.
+		const markRight = (mark?.options.x as number) + (mark?.options.w as number);
+		expect(block?.options.x as number).toBeGreaterThanOrEqual(markRight);
+		expect(block?.options.x as number).toBeCloseTo(markRight, 6);
+	});
+
+	it("clears the body off the navy band by the shared bottom inset (#724)", () => {
+		// The other half of the report: the body crowded the footer. Measured the
+		// way the eye reads it — from the bottom of the body box to the top of the
+		// band — so it stays true however `BODY.h`'s arithmetic is rearranged, and
+		// stated as a PROPORTION so the on-screen deck's `paddingBottom` and this
+		// are the same claim in two units rather than two tunable numbers.
+		const objects = contentSlide();
+		const region = contentRegion(objects);
+		const { band } = footerRegion(objects);
+		const body = region.reduce((a, b) => (b.options.y > a.options.y ? b : a));
+		const gap =
+			(band.options.y as number) -
+			((body.options.y as number) + (body.options.h as number));
+		expect(gap).toBeCloseTo(
+			inchesOfWidth(SLIDE_BODY_BOTTOM_PCT, PPTX_FRAME_W),
+			6,
+		);
+		// And it is real clearance, not the token 1.5% #359 left behind: at least
+		// half the gap under the hairline rule above. Same floor the projected
+		// deck's own spacing suite asserts.
+		expect(gap).toBeGreaterThanOrEqual(
+			inchesOfWidth(SLIDE_HEADER_GAP_PCT, PPTX_FRAME_W) / 2,
 		);
 	});
 

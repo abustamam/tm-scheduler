@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
@@ -17,9 +20,12 @@ import {
 } from "#/lib/slide-layout";
 import {
 	cqw,
+	SLIDE_BODY_BOTTOM_PCT,
+	SLIDE_FOOTER_HEIGHT_PCT,
 	SLIDE_HEADER_GAP_PCT,
 	SLIDE_INSET_PCT,
 } from "#/lib/slide-spacing";
+import { readSource } from "#/test/guard-source";
 import { MeetingPresent } from "./meeting-present";
 
 // `MeetingPresent` polls `getVoteParticipation` for the bare-count badge
@@ -782,8 +788,58 @@ describe("a templated meeting's deck (#agenda-templates)", () => {
  * independently: each carried a 6% header inset and a 7-7.5% body inset, so the
  * body sat indented past its own rule on BOTH surfaces, and it never read as a
  * bug because the surfaces agreed with each other.
+ *
+ * #724 added the FOOTER, which #359 left out, and retuned the body's bottom
+ * clearance. Same failure one band lower and for two more quarters: the navy
+ * band carried `px-[5cqw]` and `h-[8.5cqw]` here and `x: 0.67` / `FOOT_H = 1.13`
+ * there, four literals agreeing with each other and with nothing on their own
+ * slide. What is asserted below is again the RELATIONSHIP — the footer's mark
+ * stands on the same left edge as the rule and the body — plus one binding to
+ * the constants, because the relationship alone cannot tell a shared derivation
+ * from two literals that happen to match, which is the state this deck was in.
  */
-describe("content-slide spacing (#359)", () => {
+/**
+ * A `<name …>` opening tag, brace- and quote-aware.
+ *
+ * `src.indexOf(">", open)` is the obvious version and it is wrong: a JSX prop
+ * can legitimately contain `>` — an arrow function, a comparison inside a `{…}`
+ * expression, a `>` in a quoted string — and the scan then truncates inside the
+ * prop. Today's `<footer>` happens to carry none, so the naive form works by
+ * prop ORDER rather than by correctness, and the day someone adds an
+ * `onClick={(e) => …}` it produces a false FAIL on an innocent edit. That is
+ * the direction that gets a guard deleted by whoever hits it instead of fixed,
+ * so this is the same depth-plus-quote scan `dialog-scroll.guard.test.ts` uses,
+ * for the same reason.
+ *
+ * Lexical, not a parser — a brace inside a quoted string is skipped with the
+ * string, but a template literal's `${…}` is not tracked. Throws rather than
+ * returning "" so a missing or unclosed tag is a named failure instead of an
+ * assertion about an empty slice.
+ */
+function openingTag(src: string, name: string): string {
+	const OPEN = `<${name}`;
+	for (let i = src.indexOf(OPEN); i !== -1; i = src.indexOf(OPEN, i + 1)) {
+		// Reject `<footerbar` — require a JSX name boundary.
+		if (/[A-Za-z0-9_-]/.test(src[i + OPEN.length] ?? "")) continue;
+		let depth = 0;
+		let quote: string | null = null;
+		for (let j = i + OPEN.length; j < src.length; j++) {
+			const c = src[j];
+			if (quote) {
+				if (c === quote && src[j - 1] !== "\\") quote = null;
+				continue;
+			}
+			if (c === '"' || c === "'" || c === "`") quote = c;
+			else if (c === "{") depth++;
+			else if (c === "}") depth--;
+			else if (c === ">" && depth === 0) return src.slice(i, j + 1);
+		}
+		throw new Error(`<${name}> opening tag is never closed`);
+	}
+	throw new Error(`no <${name}> found`);
+}
+
+describe("content-slide spacing (#359, #724)", () => {
 	afterEach(() => cleanup());
 
 	const contentDeck: Slide[] = [
@@ -796,7 +852,8 @@ describe("content-slide spacing (#359)", () => {
 		},
 	];
 
-	/** The header element and the scaled body's measuring box. */
+	/** The three bands of a content slide: the header element, the scaled body's
+	 *  measuring box, and the navy footer. */
 	function boxes() {
 		const { container } = renderPresent({ deck: contentDeck });
 		const header = container.querySelector("header");
@@ -804,7 +861,13 @@ describe("content-slide spacing (#359)", () => {
 		// The measuring box is the header's next sibling — see `ContentSlide`.
 		const body = header.nextElementSibling as HTMLElement | null;
 		if (!body) throw new Error("no body box rendered");
-		return { header: header as HTMLElement, body };
+		const footer = container.querySelector("footer");
+		if (!footer) throw new Error("no content-slide footer rendered");
+		return {
+			header: header as HTMLElement,
+			body,
+			footer: footer as HTMLElement,
+		};
 	}
 
 	it("gives the header and the body one shared left inset", () => {
@@ -839,5 +902,87 @@ describe("content-slide spacing (#359)", () => {
 		const { header, body } = boxes();
 		expect(header.style.paddingLeft).toBe(cqw(SLIDE_INSET_PCT));
 		expect(body.style.paddingTop).toBe(cqw(SLIDE_HEADER_GAP_PCT));
+	});
+
+	it("stands the footer's mark on the same left edge as the header and body (#724)", () => {
+		// The band itself is full-bleed, so its TEXT inset is the only thing that
+		// can line up with the slide above it. At `px-[5cqw]` against an 8% body it
+		// did not, by 3% of frame width — ~0.4in on the exported deck.
+		const { header, body, footer } = boxes();
+		expect(footer.style.paddingLeft).toBeTruthy();
+		expect(footer.style.paddingLeft).toBe(header.style.paddingLeft);
+		expect(footer.style.paddingLeft).toBe(body.style.paddingLeft);
+		expect(footer.style.paddingRight).toBe(header.style.paddingRight);
+	});
+
+	it("sizes the footer band from the shared proportion (#724)", () => {
+		// `h-[8.5cqw]` here and `FOOT_H = 1.13` (commented "~8.5% of width") there
+		// were one proportion kept by hand in two files — and the copy was 0.003in
+		// out. The .pptx half of this assertion is in `deck-to-pptx.test.ts`.
+		const { footer } = boxes();
+		expect(footer.style.height).toBe(cqw(SLIDE_FOOTER_HEIGHT_PCT));
+		expect(footer.style.paddingLeft).toBe(cqw(SLIDE_INSET_PCT));
+	});
+
+	it("leaves the body real clearance above the navy band (#724)", () => {
+		// The existing assertion above only says top > bottom, which `1.5` against
+		// `4` satisfied while the body sat 2.7x closer to a solid block of navy
+		// than to a hairline rule. This is the floor that value fails: the bottom
+		// clearance is at least half the gap under the rule. It brackets the
+		// constant from below the way `paddingTop > paddingBottom` brackets it from
+		// above, so a retune in either direction has to stay between them.
+		const { body } = boxes();
+		const num = (v: string) => Number.parseFloat(v);
+		expect(num(body.style.paddingBottom)).toBeGreaterThanOrEqual(
+			num(body.style.paddingTop) / 2,
+		);
+		expect(body.style.paddingBottom).toBe(cqw(SLIDE_BODY_BOTTOM_PCT));
+	});
+
+	it("names the spacing constants in the footer's own markup (#724)", () => {
+		// The one hole the assertions above cannot cover. A rendered `8.5cqw` is
+		// indistinguishable from `cqw(SLIDE_FOOTER_HEIGHT_PCT)` once it reaches the
+		// style attribute, so a hand-written literal that happens to match today's
+		// value passes every one of them and drifts the moment the constant is
+		// tuned — which is the whole history of this band.
+		//
+		// A must-BE-present grep, so it reads through `readSource`: a comment that
+		// merely MENTIONS the constant would otherwise satisfy it (see
+		// `src/test/guard-source.ts`). Scoped to the `<footer>` opening tag rather
+		// than the file, so an unrelated use elsewhere cannot stand in for it.
+		const source = readSource(
+			resolve(dirname(fileURLToPath(import.meta.url)), "meeting-present.tsx"),
+		);
+		const tag = openingTag(source, "footer");
+		expect(tag).toContain("SLIDE_FOOTER_HEIGHT_PCT");
+		expect(tag).toContain("SLIDE_INSET_PCT");
+	});
+
+	it("finds the tag's real end, not the first `>` inside a prop (self-test)", () => {
+		// Without this, `openingTag` could regress to `indexOf(">")` and the guard
+		// above would still pass on TODAY's footer, which carries no `>` in any
+		// prop. That is prop ORDER holding a guard up rather than correctness, and
+		// what it eventually produces is a false FAIL on an innocent edit — how a
+		// guard gets deleted by whoever hits it instead of fixed.
+		expect(
+			openingTag(
+				"<footer onX={(e) => f(e)} style={{ h: cqw(K) }}>body",
+				"footer",
+			),
+		).toBe("<footer onX={(e) => f(e)} style={{ h: cqw(K) }}>");
+		// A `>` inside a quoted prop must not end it either.
+		expect(openingTag('<footer title="a > b">x', "footer")).toBe(
+			'<footer title="a > b">',
+		);
+		// And a JSX name boundary: `<footerbar>` is a different element.
+		expect(openingTag("<footerbar k={9}/><footer k={1}>", "footer")).toBe(
+			"<footer k={1}>",
+		);
+		// Absent and unclosed are named failures, not an empty slice that would
+		// make the `toContain` assertions above fail for the wrong reason.
+		expect(() => openingTag("<section/>", "footer")).toThrow(/no <footer>/);
+		expect(() => openingTag("<footer style={{ a: 1 }}", "footer")).toThrow(
+			/never closed/,
+		);
 	});
 });

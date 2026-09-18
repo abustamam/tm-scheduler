@@ -16,10 +16,13 @@ import {
  *
  * `slide-fit.test.ts` pins the arithmetic; this pins what the arithmetic is FOR,
  * which jsdom cannot see because it does no layout. The body box is a flex
- * column with `justify-content: center` and uneven padding (4cqw above, 1.5cqw
- * below), and the body scales about its own centre. Whether a given scale keeps
- * the last line off the footer rule is a question for a layout engine, and the
- * answer turned out to depend on the padding the old formula ignored.
+ * column with `justify-content: center` and uneven padding
+ * (`SLIDE_HEADER_GAP_PCT` above, `SLIDE_BODY_BOTTOM_PCT` below), and the body
+ * scales about its own centre. Whether a given scale keeps the last line off
+ * the footer rule is a question for a layout engine, and the answer turned out
+ * to depend on the padding the old formula ignored. The two are named rather
+ * than written out — this line said "4cqw above, 1.5cqw below" until #724
+ * retuned the second one.
  *
  * The fixture reproduces the measured 1280×720 box (its padding read from the
  * same `slide-spacing` constants the slide renders with), and a pre-fix
