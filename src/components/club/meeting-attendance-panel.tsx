@@ -32,6 +32,10 @@ import { buildRollPanel, type RollRow } from "#/lib/roll-panel";
 import { cn } from "#/lib/utils.ts";
 import type { AttendanceStatus, MinutesGuestRow } from "#/server/minutes-logic";
 
+/** One shared empty map for the duty prop's default (#667), so a panel render
+ *  with no duties wired does not mint a new object every pass. */
+const NO_DUTIES_BY_MEMBER: ReadonlyMap<string, readonly RoleDuty[]> = new Map();
+
 /** Chip copy. "No answer" is the ABSENCE of a row, so choosing it clears. */
 const RUNG_LABELS: Record<PlanStatus, string> = {
 	reached_out: "Asked",
@@ -812,7 +816,7 @@ export function MeetingAttendancePanel({
 	roleByMemberId,
 	meetingDate,
 	shareUrl,
-	dutiesByMemberId = {},
+	dutiesByMemberId = NO_DUTIES_BY_MEMBER,
 	personalNudgeBase = null,
 	locked,
 	phaseCompleted = false,
@@ -859,10 +863,16 @@ export function MeetingAttendancePanel({
 	 * first slot of a double-booked member, so the role the draft NAMES and the
 	 * duty it lists are the same slot's.
 	 *
+	 * A `Map`, not a `Record`, and not for tidiness: an object answers for
+	 * `__proto__` and `constructor`, so indexing one with an id taken off a row
+	 * can return something that is not a duty list. `role-duties.ts` states that
+	 * rule for its own registry; `outstandingDutiesByMember` follows it, and the
+	 * prop type is what carries it across this boundary.
+	 *
 	 * Defaults to empty, so the panel's existing call sites and its own fixture
 	 * keep drafting exactly what they drafted before.
 	 */
-	dutiesByMemberId?: Readonly<Record<string, readonly RoleDuty[]>>;
+	dutiesByMemberId?: ReadonlyMap<string, readonly RoleDuty[]>;
 	/** Where a role draft's link points (#667) — the member's own meeting page.
 	 *  Absent leaves every draft on `shareUrl`, which is what it was. */
 	personalNudgeBase?: PersonalNudgeBase | null;
@@ -1243,7 +1253,7 @@ export function MeetingAttendancePanel({
 										locked={writesLocked}
 										meetingDate={meetingDate}
 										shareUrl={shareUrl}
-										duties={dutiesByMemberId[m.id]}
+										duties={dutiesByMemberId.get(m.id)}
 										personalNudgeBase={personalNudgeBase}
 										linkIdentity={canViewMemberDetail}
 										pending={pendingId === m.id}

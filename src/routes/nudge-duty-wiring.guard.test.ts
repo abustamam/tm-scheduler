@@ -34,23 +34,49 @@ describe("duty-aware nudge route wiring (#667)", () => {
 	// <MeetingAgenda> and <MeetingAttendancePanel> take same-named props, so a
 	// whole-file `toContain` stays green when a prop is cleanly SWAPPED between
 	// them — matched at the other component's tag.
-	const panelAt = src.indexOf("<MeetingAttendancePanel");
-	const panelProps = src.slice(panelAt, src.indexOf("/>", panelAt));
-	const agendaAt = src.indexOf("<MeetingAgenda");
-	const agendaProps = src.slice(agendaAt, src.indexOf("/>", agendaAt));
+	//
+	// BOUNDED, not merely anchored. `indexOf` returns -1 for a missing `/>`, and
+	// `slice(at, -1)` is not an empty window — it runs to EOF, which silently
+	// turns every positional assertion below into the whole-file match this
+	// windowing exists to avoid. That is loose in the FALSE-PASS direction, so
+	// the closing offset is computed once here and asserted before anything
+	// reads the slice.
+	const tagWindow = (tag: string) => {
+		const at = src.indexOf(tag);
+		const end = at === -1 ? -1 : src.indexOf("/>", at);
+		return { at, end, props: end > at ? src.slice(at, end) : "" };
+	};
+	const panel = tagWindow("<MeetingAttendancePanel");
+	const agenda = tagWindow("<MeetingAgenda");
+	const panelProps = panel.props;
+	const agendaProps = agenda.props;
 
-	it("finds both call sites at all", () => {
-		// Without this, a renamed or deleted element makes a window the empty
-		// string and turns every `toContain` below into a failure whose message
-		// says nothing about the cause.
-		expect(
-			panelAt,
-			"expected a <MeetingAttendancePanel … /> call site",
-		).toBeGreaterThan(-1);
-		expect(
-			agendaAt,
-			"expected a <MeetingAgenda … /> call site",
-		).toBeGreaterThan(-1);
+	it("finds both call sites, and each window stops at its own tag", () => {
+		// Without this, a renamed element or a lost `/>` makes a window empty or
+		// file-long and turns every `toContain` below into a failure whose
+		// message says nothing about the cause — or, worse, into a pass.
+		for (const [name, w] of [
+			["<MeetingAttendancePanel", panel],
+			["<MeetingAgenda", agenda],
+		] as const) {
+			expect(
+				w.at,
+				`expected a ${name} … /> call site in the route`,
+			).toBeGreaterThan(-1);
+			expect(
+				w.end,
+				`expected ${name} to be self-closing (\`/>\`), so its window has an end`,
+			).toBeGreaterThan(w.at);
+			expect(
+				w.props.length,
+				`expected a non-empty ${name} window`,
+			).toBeGreaterThan(0);
+		}
+		// And each window holds ONE component's props. The two tags are the
+		// thing a runaway slice would swallow, and swallowing is what makes a
+		// swapped prop pass.
+		expect(panelProps).not.toContain("<MeetingAgenda");
+		expect(agendaProps).not.toContain("<MeetingAttendancePanel");
 	});
 
 	it("builds the rail's duty map with the extracted, unit-tested function", () => {

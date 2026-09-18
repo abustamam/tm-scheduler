@@ -684,7 +684,7 @@ describe("outstandingDutiesByMember", () => {
 			],
 			{ theme: null, wordOfTheDay: null },
 		);
-		expect(map.m1?.map((d) => d.id)).toEqual(["word_of_the_day"]);
+		expect(map.get("m1")?.map((d) => d.id)).toEqual(["word_of_the_day"]);
 	});
 
 	it("suppresses a duty the meeting already has an answer for", () => {
@@ -698,7 +698,7 @@ describe("outstandingDutiesByMember", () => {
 			],
 			{ theme: "Beginnings", wordOfTheDay: null },
 		);
-		expect(map.m1).toEqual([]);
+		expect(map.get("m1")).toEqual([]);
 	});
 
 	it("reads speech titles per SLOT, so one finished talk cannot silence the other", () => {
@@ -719,8 +719,8 @@ describe("outstandingDutiesByMember", () => {
 			}),
 		];
 		const map = outstandingDutiesByMember(slots, {});
-		expect(map.m1).toEqual([]);
-		expect(map.m2?.map((d) => d.id)).toEqual(["speech_details"]);
+		expect(map.get("m1")).toEqual([]);
+		expect(map.get("m2")?.map((d) => d.id)).toEqual(["speech_details"]);
 	});
 
 	it("skips open and guest-held slots, which have no member to key on", () => {
@@ -734,7 +734,7 @@ describe("outstandingDutiesByMember", () => {
 			],
 			{},
 		);
-		expect(Object.keys(map)).toEqual([]);
+		expect(map.size).toBe(0);
 	});
 
 	it("leaves a Timer's timing duty outstanding, since no caller loads timings", () => {
@@ -742,7 +742,26 @@ describe("outstandingDutiesByMember", () => {
 			[slot({ assigneeId: "m1", roleName: "Timer", roleKey: TIMER_ROLE_KEY })],
 			{},
 		);
-		expect(map.m1?.map((d) => d.id)).toEqual(["timing"]);
+		expect(map.get("m1")?.map((d) => d.id)).toEqual(["timing"]);
+	});
+
+	it("answers nothing for a key nobody wrote, including `__proto__`", () => {
+		// The rule `DUTIES_BY_ROLE_KEY` states one module over, carried across
+		// this boundary by the TYPE: a `Record` would answer for `__proto__` and
+		// `constructor` with something that is not a duty list, and the panel
+		// indexes this with an id taken off a row.
+		const map = outstandingDutiesByMember(
+			[
+				slot({
+					assigneeId: "m1",
+					roleName: "Grammarian",
+					roleKey: GRAMMARIAN_ROLE_KEY,
+				}),
+			],
+			{},
+		);
+		expect(map.get("__proto__")).toBeUndefined();
+		expect(map.get("constructor")).toBeUndefined();
 	});
 
 	it("takes the SAME slot of a double-booked member that the rail's badge does", () => {
@@ -767,8 +786,15 @@ describe("outstandingDutiesByMember", () => {
 		];
 		const named = buildPanelRoleMap(slots).m1?.roleName;
 		expect(named).toBe("Toastmaster of the Day");
-		expect(outstandingDutiesByMember(slots, {}).m1).toEqual(
-			outstandingDuties({ roleName: named ?? "", roleKey: TMOD_ROLE_KEY }, {}),
+		const expected = outstandingDuties(
+			{ roleName: named ?? "", roleKey: TMOD_ROLE_KEY },
+			{},
 		);
+		// The FLOOR. Two implementations agreeing on `[]` agree about nothing —
+		// and every way this fixture could go wrong (a theme already set, a role
+		// key that resolves to no duties, a slot the map skipped) produces exactly
+		// that vacuous pass.
+		expect(expected).toHaveLength(1);
+		expect(outstandingDutiesByMember(slots, {}).get("m1")).toEqual(expected);
 	});
 });

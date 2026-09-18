@@ -177,6 +177,34 @@ export function outstandingDuties(
 }
 
 /**
+ * What ONE SLOT's holder still owes: the role identity and the duty context a
+ * slot resolves to, in one place.
+ *
+ * The three fields go together and are easy to get half right — `speechTitle`
+ * is per-SLOT (a member can hold two speaker slots, and one finished title must
+ * not silence the draft about the other) while `theme` and `wordOfTheDay` are
+ * meeting-wide. Spelling that shape at each call site is how the agenda card
+ * and the rail's map come to disagree about what a slot owes.
+ */
+export function outstandingDutiesForSlot(
+	slot: {
+		roleName: string;
+		roleKey?: string | null;
+		speechTitle?: string | null;
+	},
+	meeting: Pick<DutyContext, "theme" | "wordOfTheDay">,
+): readonly RoleDuty[] {
+	return outstandingDuties(
+		{ roleName: slot.roleName, roleKey: slot.roleKey },
+		{
+			theme: meeting.theme,
+			wordOfTheDay: meeting.wordOfTheDay,
+			speechTitle: slot.speechTitle,
+		},
+	);
+}
+
+/**
  * Outstanding duties keyed by MEMBER, for the attendance rail (#667).
  *
  * The rail cannot derive them for itself: a row carries a `PanelRole`, which is
@@ -190,11 +218,14 @@ export function outstandingDuties(
  * draft names exactly that role. Built last-wins, this map would name one role
  * in the sentence and list the OTHER role's duty in the same breath.
  *
- * `hasTiming` is deliberately not in `meeting`, so a Timer's `timing` duty is
- * always outstanding here. That is the truthful answer for a draft: a
- * `meeting_timings` row only exists once timing starts during the meeting, and
- * `loadMeetingDetail` loads none — see #667's amendment for why adding one is
- * not worth putting this on `src/server/meetings.ts`.
+ * A `Map`, not an object, FOLLOWING the rule `DUTIES_BY_ROLE_KEY` states one
+ * module over: "an object answers for `__proto__` and `constructor`", so a key
+ * we never wrote resolves to something that is not a duty list at all. The keys
+ * here are member ids, which are uuids today and so cannot be either — but the
+ * type is the half that travels, and as a `Record` the PANEL would index a
+ * caller's plain object with an id it got from a row. A `Map` makes failing
+ * closed on an unknown key structural rather than an argument about where ids
+ * come from, which is exactly the sibling's reasoning.
  */
 export function outstandingDutiesByMember(
 	slots: readonly {
@@ -204,20 +235,11 @@ export function outstandingDutiesByMember(
 		speechTitle?: string | null;
 	}[],
 	meeting: Pick<DutyContext, "theme" | "wordOfTheDay">,
-): Record<string, readonly RoleDuty[]> {
-	const byMember: Record<string, readonly RoleDuty[]> = {};
+): ReadonlyMap<string, readonly RoleDuty[]> {
+	const byMember = new Map<string, readonly RoleDuty[]>();
 	for (const slot of slots) {
-		if (!slot.assigneeId || slot.assigneeId in byMember) continue;
-		byMember[slot.assigneeId] = outstandingDuties(
-			{ roleName: slot.roleName, roleKey: slot.roleKey },
-			{
-				theme: meeting.theme,
-				wordOfTheDay: meeting.wordOfTheDay,
-				// Per-SLOT, never per-member: a member can hold two speaker slots and
-				// one finished title must not silence the draft about the other.
-				speechTitle: slot.speechTitle,
-			},
-		);
+		if (!slot.assigneeId || byMember.has(slot.assigneeId)) continue;
+		byMember.set(slot.assigneeId, outstandingDutiesForSlot(slot, meeting));
 	}
 	return byMember;
 }

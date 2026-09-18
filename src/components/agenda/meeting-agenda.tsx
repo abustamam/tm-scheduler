@@ -45,7 +45,7 @@ import {
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
 import {
-	outstandingDuties,
+	outstandingDutiesForSlot,
 	type PersonalNudgeBase,
 	personalNudgeUrl,
 } from "#/lib/nudge";
@@ -306,30 +306,6 @@ export function MeetingAgenda({
 		roleByMemberId,
 		new Set(contactedMemberIds),
 	);
-
-	/**
-	 * What a slot's role still OWES, for the two drafts this card sends (#667).
-	 *
-	 * Per SLOT, not per role: `speechTitle` is the slot's own, so a member
-	 * holding two speaker slots gets the clause on the one still reading "TBA"
-	 * and not on the one they have written. The other two fields are
-	 * meeting-wide and shared, which is why an open Toastmaster slot's RECRUIT
-	 * draft stays quiet about a theme somebody has already set.
-	 *
-	 * `outstandingDuties` does the filtering with the registry's own `done`, so
-	 * this card and the personal page's checklist answer "is it done?" from one
-	 * predicate. Never `dutiesForRole` raw — that is the list of what the role
-	 * owns, which is not the same question.
-	 */
-	const owedBySlot = (s: AgendaSlot) =>
-		outstandingDuties(
-			{ roleName: s.roleName, roleKey: s.roleKey },
-			{
-				theme: meeting.theme,
-				wordOfTheDay: meeting.wordOfTheDay,
-				speechTitle: s.speechTitle,
-			},
-		);
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -749,7 +725,7 @@ export function MeetingAgenda({
 														phone={slot.holderPhone}
 														email={slot.holderEmail}
 														roleName={slot.roleName}
-														duties={owedBySlot(slot)}
+														duties={outstandingDutiesForSlot(slot, meeting)}
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														// The holder's own page when they are a MEMBER. A
@@ -810,7 +786,7 @@ export function MeetingAgenda({
 												{viewer.canManage && isOpen ? (
 													<NudgeRecruitPicker
 														roleName={slot.roleName}
-														duties={owedBySlot(slot)}
+														duties={outstandingDutiesForSlot(slot, meeting)}
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														personalNudgeBase={personalNudgeBase}
