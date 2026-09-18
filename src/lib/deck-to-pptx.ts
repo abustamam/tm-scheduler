@@ -13,6 +13,7 @@ import {
 	type SlideLayout,
 	SPLASH_LOGO_HEIGHT_PCT,
 	SPLASH_LOGO_MAX_WIDTH_PCT,
+	SPLASH_RULE_WIDTH_PCT,
 	slideLayout,
 } from "./slide-layout";
 
@@ -152,10 +153,17 @@ function renderSplash(
 			color: dark ? "FFFFFF" : NAVY,
 		});
 	}
+	// Derived, not a literal (#725). This was `w: 6` — 45% of the frame — while
+	// the projected splash drew the same rule at 58%, so the logo ceiling that
+	// says "the width of the rule" held on screen and overhung by 0.87in a side
+	// here. Two hand-kept copies of a proportion drift; one derivation cannot,
+	// which is the whole argument `slide-spacing.ts` makes for the content
+	// slides.
+	const RULE_W = inchesOfWidth(SPLASH_RULE_WIDTH_PCT, W);
 	s.addShape(pptx.ShapeType.line, {
-		x: (W - 6) / 2,
+		x: (W - RULE_W) / 2,
 		y: 2.5,
-		w: 6,
+		w: RULE_W,
 		h: 0,
 		line: { color: dark ? "FFFFFF" : NAVY, width: 1 },
 	});

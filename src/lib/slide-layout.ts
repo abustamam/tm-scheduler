@@ -82,17 +82,34 @@ export type SlideLayout =
  */
 export const SPLASH_LOGO_HEIGHT_PCT = 15;
 /**
- * Exactly the width of the rule beneath it, so the mark reads as sitting within
- * the splash's own frame rather than spanning past it.
+ * The rule that sits under the mark, same units story.
+ *
+ * It is here rather than inline in either renderer because #725 found them
+ * disagreeing about it: the projected splash drew `w-[58cqw]`, the `.pptx`
+ * hard-coded `w: 6` on a 13.33in frame, and 6/13.33 is 45%. Nothing noticed,
+ * because the two surfaces are never looked at side by side — the same shape
+ * `slide-spacing.ts` was created for after #359. Tying the logo's ceiling to
+ * "the width of the rule" is only a meaningful sentence once there is ONE rule
+ * width, and at 45% the exported deck was overhanging its own rule by 0.87in
+ * per side.
+ */
+export const SPLASH_RULE_WIDTH_PCT = 58;
+/**
+ * Exactly `SPLASH_RULE_WIDTH_PCT`, so the mark reads as sitting within the
+ * splash's own frame rather than spanning past the rule beneath it. Asserted
+ * against the RENDERED rule on both surfaces rather than restated as a literal
+ * — see `splash-logo-geometry.test.ts` and `deck-to-pptx.test.ts`.
  *
  * It is also the number that sets the BOX's aspect ratio, which is the part
  * that is easy to get wrong. `ClubLogo` locks the height and lets `object-fit:
  * contain` letterbox anything wider than the box, inside a white plate that is
  * visible on the dark closing splash — so a ceiling chosen only for "does not
  * reach the edge" puts white bands around every wordmark wider than
- * `MAX_WIDTH / HEIGHT`. At 58/15 that is 3.9:1, close to the 46/9 = 5.1:1 the
- * splash had before #725, so the range of shapes that letterbox barely moves
- * while every shape gets bigger. Anything wider than that still letterboxes,
+ * `MAX_WIDTH / HEIGHT`. At 58/15 that is 3.9:1, against 46/9 = 5.1:1 on the
+ * screen splash before #725 and 4/0.85 = 4.7:1 in the export — the two did not
+ * even agree with each other — so the range of shapes that letterbox barely
+ * moves, it now moves identically on both surfaces, and every shape gets
+ * bigger. Anything wider than that still letterboxes,
  * as it did before; fixing that needs sizing that can see the image's own
  * ratio, which is `ClubLogo`'s to own and shared with the print surfaces.
  */
@@ -196,7 +213,10 @@ function presenterLine(presenter: LegendEntry | null): string | null {
  *  grid depends on can be asserted against the real derivation instead of a copy
  *  of it (#446). Splash slides carry no header, so they answer to their headline. */
 export function slideName(slide: Slide): string {
-	const layout = slideLayout(slide);
+	// `null`: a name is the headline or the header, and neither depends on the
+	// logo. Explicit because the parameter is required — see its docblock on why
+	// a defaulted one let a renderer forget the closing splash silently.
+	const layout = slideLayout(slide, null);
 	return layout.chrome === "content" ? layout.header : layout.headline;
 }
 
@@ -214,7 +234,7 @@ export function slideName(slide: Slide): string {
  */
 export function slideLayout(
 	slide: Slide,
-	clubLogoUrl: string | null = null,
+	clubLogoUrl: string | null,
 ): SlideLayout {
 	switch (slide.kind) {
 		case "title": {

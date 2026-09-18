@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
 	SPLASH_LOGO_HEIGHT_PCT,
 	SPLASH_LOGO_MAX_WIDTH_PCT,
+	SPLASH_RULE_WIDTH_PCT,
 } from "#/lib/slide-layout";
 import { readSource } from "#/test/guard-source";
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
@@ -112,11 +113,22 @@ function subLine(text: string): string {
 }
 
 /** The splash column, modelling `Splash` in `meeting-present.tsx`. */
+/**
+ * `ClubLogo`'s plate padding, copied into the fixture above and pinned against
+ * the real component below.
+ *
+ * It is 8px of every measured height and the whole of the plate's overhang past
+ * the rule, so a fixture that guessed it would move numbers this suite asserts
+ * on — and the "still models the real splash" guard reads `meeting-present.tsx`,
+ * which never mentions it.
+ */
+const PLATE_PAD = 4;
+
 function splash(c: Case): string {
 	const logo =
 		c.src === null
 			? ""
-			: `<span style="flex:none;display:inline-flex;background:#fff;border-radius:4px;padding:4px;line-height:0"><img class="logo" src="${c.src}" alt="" style="height:${c.logoPct}cqw;width:auto;max-width:${c.maxWidthPct}cqw;object-fit:contain"></span>`;
+			: `<span style="flex:none;display:inline-flex;background:#fff;border-radius:4px;padding:${PLATE_PAD}px;line-height:0"><img class="logo" src="${c.src}" alt="" style="height:${c.logoPct}cqw;width:auto;max-width:${c.maxWidthPct}cqw;object-fit:contain"></span>`;
 	// `font-display` is `'Fraunces', Georgia, serif`, and Fraunces cannot load
 	// here — so the fallback the harness actually renders is the serif.
 	const word = c.word
@@ -125,7 +137,7 @@ function splash(c: Case): string {
 	return `<div class="frame" id="${c.id}" style="position:relative;aspect-ratio:16/9;width:${FRAME_W}px;container-type:inline-size;margin-bottom:80px;background:#eee">
 	<div class="col" style="display:flex;height:100%;width:100%;flex-direction:column;align-items:center;justify-content:center;padding-left:8cqw;padding-right:8cqw;text-align:center">
 		${logo}${word}
-		<div class="rule" style="margin-top:3.4cqw;margin-bottom:3.4cqw;height:1px;width:58cqw;background:#004062"></div>
+		<div class="rule" style="margin-top:3.4cqw;margin-bottom:3.4cqw;height:1px;width:${SPLASH_RULE_WIDTH_PCT}cqw;background:#004062"></div>
 		<div class="headline" style="font-size:6.4cqw;font-weight:800;line-height:1.25;text-wrap:balance">${c.headline}</div>
 		<div style="margin-top:2.6cqw;display:flex;flex-direction:column;gap:0.7cqw">${c.sub.map(subLine).join("")}</div>
 	</div>
@@ -144,8 +156,16 @@ type Measured = {
 	logoLeft: number;
 	logoRight: number;
 	logoBottom: number;
-	/** The rule's top edge, frame-relative: the first thing under the logo. */
+	/** The rule's box, frame-relative. Its TOP is the first thing under the
+	 *  logo; its WIDTH is the ceiling the logo's own is declared equal to. */
 	ruleTop: number;
+	ruleLeft: number;
+	ruleRight: number;
+	/** The white plate `ClubLogo` wraps the image in. Wider than the image by
+	 *  its fixed 4px padding, and the part a viewer actually sees on a dark
+	 *  splash — so the rule comparison has to know about it. */
+	plateLeft: number;
+	plateRight: number;
 	/** The column's content box, inside the 8cqw gutters. */
 	contentLeft: number;
 	contentRight: number;
@@ -172,6 +192,7 @@ function measure(cases: readonly Case[]): Map<string, Measured> {
 			? img.getBoundingClientRect()
 			: { width: 0, height: 0, left: fb.left, right: fb.left, bottom: fb.top };
 		var rule = f.querySelector(".rule").getBoundingClientRect();
+		var pb = img ? img.parentElement.getBoundingClientRect() : ib;
 		return [
 			last.bottom - first.top,
 			first.top - fb.top,
@@ -181,6 +202,10 @@ function measure(cases: readonly Case[]): Map<string, Measured> {
 			ib.right - fb.left,
 			ib.bottom - fb.top,
 			rule.top - fb.top,
+			rule.left - fb.left,
+			rule.right - fb.left,
+			pb.left - fb.left,
+			pb.right - fb.left,
 			parseFloat(cs.paddingLeft),
 			fb.width - parseFloat(cs.paddingRight),
 			img ? img.naturalWidth : 0
@@ -223,7 +248,7 @@ function measure(cases: readonly Case[]): Map<string, Measured> {
 		rows.forEach((row, i) => {
 			const n = row.split(",").map(Number);
 			const id = ids[i];
-			if (id === undefined || n.length !== 11 || n.some(Number.isNaN)) {
+			if (id === undefined || n.length !== 15 || n.some(Number.isNaN)) {
 				throw new Error(`Bad measurement for ${ids[i]}: "${row}"`);
 			}
 			out.set(id, {
@@ -235,9 +260,13 @@ function measure(cases: readonly Case[]): Map<string, Measured> {
 				logoRight: n[5] as number,
 				logoBottom: n[6] as number,
 				ruleTop: n[7] as number,
-				contentLeft: n[8] as number,
-				contentRight: n[9] as number,
-				naturalWidth: n[10] as number,
+				ruleLeft: n[8] as number,
+				ruleRight: n[9] as number,
+				plateLeft: n[10] as number,
+				plateRight: n[11] as number,
+				contentLeft: n[12] as number,
+				contentRight: n[13] as number,
+				naturalWidth: n[14] as number,
 			});
 		});
 		return out;
@@ -427,6 +456,49 @@ describe.skipIf(!hasChrome)(
 				);
 			}
 		});
+
+		// The ceiling's own sentence, measured instead of restated. #725 shipped
+		// `SPLASH_LOGO_MAX_WIDTH_PCT`'s doc saying "exactly the width of the rule
+		// beneath it" and asserted it as `<= 58` against a literal — which was
+		// true of this renderer and FALSE of the `.pptx`, where the rule was
+		// hard-coded at 45% and the mark overhung it by 0.87in a side. A literal
+		// cannot see that; the rendered rule can.
+		//
+		// The PLATE, not the image: `ClubLogo` wraps the mark in a white plate
+		// that is what a viewer actually sees against a dark splash, and it is
+		// wider than the image by its own padding. A test that compared the image
+		// would pass with the plate hanging over the rule.
+		it("keeps the logo's plate within the rendered rule on every shape", () => {
+			for (const id of ["square", "banner", "tower", "closing"]) {
+				const c = of(id);
+				expect(
+					c.ruleRight - c.ruleLeft,
+					`${id} measured no rule`,
+				).toBeGreaterThan(0);
+				// The IMAGE box is what the ceiling governs, and it must fit.
+				expect(
+					c.logoLeft,
+					`${id}'s mark overhangs the rule left`,
+				).toBeGreaterThan(c.ruleLeft - 0.5);
+				expect(
+					c.logoRight,
+					`${id}'s mark overhangs the rule right`,
+				).toBeLessThan(c.ruleRight + 0.5);
+				// The PLATE may exceed it by `ClubLogo`'s own padding and by nothing
+				// else. Asserted as a BOUND rather than ignored: the plate is what a
+				// viewer sees against a dark splash, so if that padding ever grows,
+				// the white edge starts reading as wider than the rule and this is
+				// the only thing that would say so.
+				expect(
+					c.ruleLeft - c.plateLeft,
+					`${id}'s plate exceeds the rule by more than ClubLogo's padding`,
+				).toBeLessThan(PLATE_PAD + 0.5);
+				expect(
+					c.plateRight - c.ruleRight,
+					`${id}'s plate exceeds the rule by more than ClubLogo's padding`,
+				).toBeLessThan(PLATE_PAD + 0.5);
+			}
+		});
 	},
 );
 
@@ -450,9 +522,14 @@ describe("the shape of the logo's box", () => {
 		).toBeGreaterThan(before * 0.7);
 	});
 
-	// The mark should not read as wider than the rule it sits above.
+	// The mark should not read as wider than the rule it sits above. Compared to
+	// the SHARED constant rather than to a literal 58: the two are allowed to
+	// change together, and a literal here would have to be edited in lockstep by
+	// hand — which is the drift #725 was filed about, one level up.
 	it("is no wider than the rule beneath it", () => {
-		expect(SPLASH_LOGO_MAX_WIDTH_PCT).toBeLessThanOrEqual(58);
+		expect(SPLASH_LOGO_MAX_WIDTH_PCT).toBeLessThanOrEqual(
+			SPLASH_RULE_WIDTH_PCT,
+		);
 	});
 });
 
@@ -480,7 +557,6 @@ describe("the fixture still models the real splash", () => {
 			"justify-center",
 			"px-[8cqw]",
 			"my-[3.4cqw]",
-			"w-[58cqw]",
 			"text-[6.4cqw]",
 			"leading-tight",
 			"mt-[2.6cqw]",
@@ -490,9 +566,25 @@ describe("the fixture still models the real splash", () => {
 		}
 	});
 
+	// The fixture copies `ClubLogo`'s plate, and the guard above reads only
+	// `meeting-present.tsx` — which never mentions it. Without this, changing the
+	// plate's padding moves every height this suite measures and the rule
+	// overhang it bounds, with the whole file still green.
+	it("still wraps the mark in the plate the fixture copied", () => {
+		const logo = readSource("src/components/agenda/club-logo.tsx");
+		expect(logo).toContain(`padding: ${PLATE_PAD}`);
+		expect(logo).toContain('background: "#fff"');
+		expect(logo).toContain("lineHeight: 0");
+	});
+
 	it("still sizes the logo from the shared proportions", () => {
 		expect(body).toContain("cqw(SPLASH_LOGO_HEIGHT_PCT)");
 		expect(body).toContain("cqw(SPLASH_LOGO_MAX_WIDTH_PCT)");
+		// The rule too, and this one replaced a `w-[58cqw]` class: the literal is
+		// what let this renderer and the `.pptx` disagree by 13 points of frame
+		// width without anything noticing (#725).
+		expect(body).toContain("cqw(SPLASH_RULE_WIDTH_PCT)");
+		expect(body).not.toContain("w-[58cqw]");
 		// A literal here would put the two renderers back where #359 found them.
 		expect(body).not.toMatch(/height="[\d.]+cqw"/);
 		expect(body).not.toMatch(/maxWidth="[\d.]+cqw"/);

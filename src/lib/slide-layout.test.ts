@@ -9,7 +9,7 @@ import { slideLayout, slideName } from "./slide-layout";
 const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
 
 const contentHeader = (slide: Slide) => {
-	const l = slideLayout(slide);
+	const l = slideLayout(slide, null);
 	return l.chrome === "content" ? l.header : `splash:${l.tone}`;
 };
 
@@ -67,7 +67,7 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 
 describe("slideLayout bodies", () => {
 	it("toastmaster body is the name only (header carries the role)", () => {
-		const l = slideLayout({ kind: "toastmaster", name: "Faisal Ali" });
+		const l = slideLayout({ kind: "toastmaster", name: "Faisal Ali" }, null);
 		expect(l).toMatchObject({ chrome: "content", header: "Toastmaster" });
 		if (l.chrome === "content" && l.body.form === "centered") {
 			expect(l.body.lines).toEqual([{ role: "head", text: "Faisal Ali" }]);
@@ -77,15 +77,18 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("speech is left bullets, project shown only when present", () => {
-		const withProject = slideLayout({
-			kind: "speech",
-			label: "First Speech",
-			speaker: "Jagpal",
-			title: "AI",
-			projectLevel: "Level 3",
-			time: "5–7 minutes",
-			link: null,
-		});
+		const withProject = slideLayout(
+			{
+				kind: "speech",
+				label: "First Speech",
+				speaker: "Jagpal",
+				title: "AI",
+				projectLevel: "Level 3",
+				time: "5–7 minutes",
+				link: null,
+			},
+			null,
+		);
 		if (
 			withProject.chrome === "content" &&
 			withProject.body.form === "bullets"
@@ -99,15 +102,18 @@ describe("slideLayout bodies", () => {
 		} else {
 			throw new Error("expected bullets");
 		}
-		const noProject = slideLayout({
-			kind: "speech",
-			label: "First Speech",
-			speaker: "Jagpal",
-			title: null,
-			projectLevel: null,
-			time: "5–7 minutes",
-			link: null,
-		});
+		const noProject = slideLayout(
+			{
+				kind: "speech",
+				label: "First Speech",
+				speaker: "Jagpal",
+				title: null,
+				projectLevel: null,
+				time: "5–7 minutes",
+				link: null,
+			},
+			null,
+		);
 		if (noProject.chrome === "content" && noProject.body.form === "bullets") {
 			expect(noProject.body.items).toEqual([
 				"Speaker: Jagpal",
@@ -117,15 +123,18 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("speech carries a link on the bullets body only when set (#175)", () => {
-		const withLink = slideLayout({
-			kind: "speech",
-			label: "First Speech",
-			speaker: "Jagpal",
-			title: "AI",
-			projectLevel: null,
-			time: "5–7 minutes",
-			link: "https://acme.com/deck",
-		});
+		const withLink = slideLayout(
+			{
+				kind: "speech",
+				label: "First Speech",
+				speaker: "Jagpal",
+				title: "AI",
+				projectLevel: null,
+				time: "5–7 minutes",
+				link: "https://acme.com/deck",
+			},
+			null,
+		);
 		if (withLink.chrome === "content" && withLink.body.form === "bullets") {
 			expect(withLink.body.link).toBe("https://acme.com/deck");
 			// The "Link: Presentation" line is rendered from body.link, not an item.
@@ -133,15 +142,18 @@ describe("slideLayout bodies", () => {
 		} else {
 			throw new Error("expected bullets");
 		}
-		const noLink = slideLayout({
-			kind: "speech",
-			label: "First Speech",
-			speaker: "Jagpal",
-			title: null,
-			projectLevel: null,
-			time: "5–7 minutes",
-			link: null,
-		});
+		const noLink = slideLayout(
+			{
+				kind: "speech",
+				label: "First Speech",
+				speaker: "Jagpal",
+				title: null,
+				projectLevel: null,
+				time: "5–7 minutes",
+				link: null,
+			},
+			null,
+		);
 		if (noLink.chrome === "content" && noLink.body.form === "bullets") {
 			expect(noLink.body.link).toBeNull();
 		}
@@ -149,13 +161,16 @@ describe("slideLayout bodies", () => {
 
 	it("vote-speaker asks for speaking time only when the club runs a Timer (#367)", () => {
 		const lines = (hasTimer: boolean) => {
-			const l = slideLayout({
-				kind: "voteSpeaker",
-				names: ["Jagpal", "Farhanaaz"],
-				hasTimer,
-				caller: null,
-				ballotUrl: BALLOT_URL,
-			});
+			const l = slideLayout(
+				{
+					kind: "voteSpeaker",
+					names: ["Jagpal", "Farhanaaz"],
+					hasTimer,
+					caller: null,
+					ballotUrl: BALLOT_URL,
+				},
+				null,
+			);
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
 			return l.body.lines;
@@ -179,12 +194,15 @@ describe("slideLayout bodies", () => {
 
 	it("vote-table-topics asks for the times only when the club runs a Timer (#367)", () => {
 		const lines = (hasTimer: boolean) => {
-			const l = slideLayout({
-				kind: "voteTableTopics",
-				hasTimer,
-				caller: null,
-				ballotUrl: BALLOT_URL,
-			});
+			const l = slideLayout(
+				{
+					kind: "voteTableTopics",
+					hasTimer,
+					caller: null,
+					ballotUrl: BALLOT_URL,
+				},
+				null,
+			);
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
 			return l.body.lines;
@@ -202,13 +220,16 @@ describe("slideLayout bodies", () => {
 
 	it("vote-evaluator asks for the timer's report only when the club runs a Timer (#367)", () => {
 		const lines = (hasTimer: boolean) => {
-			const l = slideLayout({
-				kind: "voteEvaluator",
-				names: ["Riyaz"],
-				hasTimer,
-				caller: null,
-				ballotUrl: BALLOT_URL,
-			});
+			const l = slideLayout(
+				{
+					kind: "voteEvaluator",
+					names: ["Riyaz"],
+					hasTimer,
+					caller: null,
+					ballotUrl: BALLOT_URL,
+				},
+				null,
+			);
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
 			return l.body.lines.map((x) => x.text);
@@ -481,7 +502,7 @@ describe("slideLayout bodies", () => {
 
 	describe("handoff layout (#363)", () => {
 		const centered = (slide: Slide) => {
-			const l = slideLayout(slide);
+			const l = slideLayout(slide, null);
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected a centered content body");
 			return l.body;
@@ -571,13 +592,16 @@ describe("slideLayout bodies", () => {
 
 		it("reads as a cue for the person handing over", () => {
 			expect(
-				slideLayout({
-					kind: "handoff",
-					from: { role: "Table Topics Master", name: "Rasheed" },
-					to: "the General Evaluator",
-					toLabel: "the General Evaluator",
-					toNames: [],
-				}),
+				slideLayout(
+					{
+						kind: "handoff",
+						from: { role: "Table Topics Master", name: "Rasheed" },
+						to: "the General Evaluator",
+						toLabel: "the General Evaluator",
+						toNames: [],
+					},
+					null,
+				),
 			).toEqual({
 				chrome: "content",
 				header: "Hand-off — General Evaluator",
@@ -707,12 +731,15 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("evaluation of the evaluators is the GE's evaluator-evaluation slide (#367)", () => {
-		const l = slideLayout({
-			kind: "evaluatorEvaluation",
-			owner: "General Evaluator",
-			name: "Riyaz",
-			time: "2 minutes",
-		});
+		const l = slideLayout(
+			{
+				kind: "evaluatorEvaluation",
+				owner: "General Evaluator",
+				name: "Riyaz",
+				time: "2 minutes",
+			},
+			null,
+		);
 		if (l.chrome === "content" && l.body.form === "centered") {
 			expect(l.body.lines.map((x) => x.text)).toEqual([
 				"General Evaluator:",
@@ -731,7 +758,7 @@ describe("slideLayout bodies", () => {
 	it("names the covering role on all three GE slides, never the literal 'General Evaluator'", () => {
 		const owner = "Toastmaster of the Day";
 		const texts = (slide: Slide) => {
-			const l = slideLayout(slide);
+			const l = slideLayout(slide, null);
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
 			return l.body.lines.map((x) => x.text);
@@ -768,11 +795,14 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("keeps naming the General Evaluator on the general-evaluation slide when there is one", () => {
-		const l = slideLayout({
-			kind: "generalEvaluation",
-			owner: "General Evaluator",
-			time: "2 minutes",
-		});
+		const l = slideLayout(
+			{
+				kind: "generalEvaluation",
+				owner: "General Evaluator",
+				time: "2 minutes",
+			},
+			null,
+		);
 		if (l.chrome === "content" && l.body.form === "centered") {
 			expect(l.body.lines.map((x) => x.text)).toEqual([
 				"General Evaluator",
@@ -783,15 +813,18 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("functionary intro team line lists filled roles only", () => {
-		const l = slideLayout({
-			kind: "functionaryIntro",
-			owner: "General Evaluator",
-			name: "Riyaz",
-			team: [
-				{ role: "Grammarian", name: "Priya" },
-				{ role: "Timer", name: "— open —" },
-			],
-		});
+		const l = slideLayout(
+			{
+				kind: "functionaryIntro",
+				owner: "General Evaluator",
+				name: "Riyaz",
+				team: [
+					{ role: "Grammarian", name: "Priya" },
+					{ role: "Timer", name: "— open —" },
+				],
+			},
+			null,
+		);
 		if (l.chrome === "content" && l.body.form === "centered") {
 			const muted = l.body.lines
 				.filter((x) => x.role === "muted")
@@ -805,7 +838,10 @@ describe("slideLayout bodies", () => {
 
 	it("functionary intro names whichever role owns it (#367)", () => {
 		const owned = (owner: string) =>
-			slideLayout({ kind: "functionaryIntro", owner, name: "Riyaz", team: [] });
+			slideLayout(
+				{ kind: "functionaryIntro", owner, name: "Riyaz", team: [] },
+				null,
+			);
 		for (const owner of ["Toastmaster of the Day", "General Evaluator"]) {
 			const l = owned(owner);
 			expect(l).toMatchObject({ chrome: "content", header: "Functionaries" });
@@ -818,16 +854,19 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("functionary reports lists each reporter, skipping open roles (#353)", () => {
-		const l = slideLayout({
-			kind: "functionaryReports",
-			owner: "General Evaluator",
-			name: "Riyaz",
-			team: [
-				{ role: "Grammarian", name: "Priya" },
-				{ role: "Ah-Counter", name: "— open —" },
-				{ role: "Timer", name: "Bilal" },
-			],
-		});
+		const l = slideLayout(
+			{
+				kind: "functionaryReports",
+				owner: "General Evaluator",
+				name: "Riyaz",
+				team: [
+					{ role: "Grammarian", name: "Priya" },
+					{ role: "Ah-Counter", name: "— open —" },
+					{ role: "Timer", name: "Bilal" },
+				],
+			},
+			null,
+		);
 		expect(l).toMatchObject({
 			chrome: "content",
 			header: "Functionary Reports",
@@ -845,16 +884,19 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("title splash carries the club's meeting number when set (#358)", () => {
-		const l = slideLayout({
-			kind: "title",
-			clubName: "MCF",
-			logoUrl: null,
-			district: "District 39",
-			clubNumber: "28677176",
-			meetingNumber: 56,
-			scheduledAt: new Date("2026-07-10T00:00:00Z"),
-			timezone: "UTC",
-		});
+		const l = slideLayout(
+			{
+				kind: "title",
+				clubName: "MCF",
+				logoUrl: null,
+				district: "District 39",
+				clubNumber: "28677176",
+				meetingNumber: 56,
+				scheduledAt: new Date("2026-07-10T00:00:00Z"),
+				timezone: "UTC",
+			},
+			null,
+		);
 		expect(l.chrome).toBe("splash");
 		if (l.chrome === "splash") {
 			expect(l.sub.map((s) => s.text ?? "")).toContain("Meeting #56");
@@ -862,16 +904,19 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("title splash omits the meeting number when the club has none", () => {
-		const l = slideLayout({
-			kind: "title",
-			clubName: "MCF",
-			logoUrl: null,
-			district: null,
-			clubNumber: null,
-			meetingNumber: null,
-			scheduledAt: new Date("2026-07-10T00:00:00Z"),
-			timezone: "UTC",
-		});
+		const l = slideLayout(
+			{
+				kind: "title",
+				clubName: "MCF",
+				logoUrl: null,
+				district: null,
+				clubNumber: null,
+				meetingNumber: null,
+				scheduledAt: new Date("2026-07-10T00:00:00Z"),
+				timezone: "UTC",
+			},
+			null,
+		);
 		expect(l.chrome).toBe("splash");
 		if (l.chrome === "splash") {
 			expect(l.sub.map((s) => s.text ?? "").join(" ")).not.toContain(
@@ -881,16 +926,19 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("title splash sub carries district, club #, date, start time", () => {
-		const l = slideLayout({
-			kind: "title",
-			clubName: "MCF",
-			logoUrl: null,
-			district: "District 39",
-			clubNumber: "28677176",
-			meetingNumber: null,
-			scheduledAt: new Date("2026-07-10T00:00:00Z"),
-			timezone: "UTC",
-		});
+		const l = slideLayout(
+			{
+				kind: "title",
+				clubName: "MCF",
+				logoUrl: null,
+				district: "District 39",
+				clubNumber: "28677176",
+				meetingNumber: null,
+				scheduledAt: new Date("2026-07-10T00:00:00Z"),
+				timezone: "UTC",
+			},
+			null,
+		);
 		expect(l.chrome).toBe("splash");
 		if (l.chrome === "splash") {
 			expect(l.tone).toBe("light");
@@ -903,12 +951,15 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("thankYou splash is dark, gold headline, real next-meeting date", () => {
-		const l = slideLayout({
-			kind: "thankYou",
-			meetingSchedule: "2nd Thu",
-			nextMeetingAt: new Date("2026-07-23T18:00:00Z"),
-			timezone: "UTC",
-		});
+		const l = slideLayout(
+			{
+				kind: "thankYou",
+				meetingSchedule: "2nd Thu",
+				nextMeetingAt: new Date("2026-07-23T18:00:00Z"),
+				timezone: "UTC",
+			},
+			null,
+		);
 		expect(l.chrome).toBe("splash");
 		if (l.chrome === "splash") {
 			expect(l.tone).toBe("dark");
@@ -945,7 +996,7 @@ describe("slideLayout bodies", () => {
 		// The default is what `slideName` and every copy assertion in this file
 		// call through. It has to mean "no logo", not "undefined".
 		it("carries null when the caller passes nothing at all", () => {
-			const l = slideLayout(closing);
+			const l = slideLayout(closing, null);
 			if (l.chrome !== "splash") throw new Error("expected a splash");
 			expect(l.logoUrl).toBeNull();
 		});
@@ -984,23 +1035,29 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("thankYou falls back to meetingSchedule when there is no next meeting", () => {
-		const l = slideLayout({
-			kind: "thankYou",
-			meetingSchedule: "2nd & 4th Thu",
-			nextMeetingAt: null,
-			timezone: "UTC",
-		});
+		const l = slideLayout(
+			{
+				kind: "thankYou",
+				meetingSchedule: "2nd & 4th Thu",
+				nextMeetingAt: null,
+				timezone: "UTC",
+			},
+			null,
+		);
 		if (l.chrome === "splash") {
 			expect(l.sub.map((s) => s.text)).toContain("We meet 2nd & 4th Thu");
 		}
 	});
 
 	it("toastmasterIntro shows only the parts present, spacer only when both", () => {
-		const both = slideLayout({
-			kind: "toastmasterIntro",
-			theme: "Unity",
-			word: "Synergy",
-		});
+		const both = slideLayout(
+			{
+				kind: "toastmasterIntro",
+				theme: "Unity",
+				word: "Synergy",
+			},
+			null,
+		);
 		if (both.chrome === "content" && both.body.form === "centered") {
 			expect(both.body.lines.map((l) => l.role)).toEqual([
 				"head",
@@ -1018,11 +1075,14 @@ describe("slideLayout bodies", () => {
 			]);
 		} else throw new Error("expected centered");
 
-		const themeOnly = slideLayout({
-			kind: "toastmasterIntro",
-			theme: "Unity",
-			word: null,
-		});
+		const themeOnly = slideLayout(
+			{
+				kind: "toastmasterIntro",
+				theme: "Unity",
+				word: null,
+			},
+			null,
+		);
 		if (themeOnly.chrome === "content" && themeOnly.body.form === "centered") {
 			expect(themeOnly.body.lines.some((l) => l.role === "spacer")).toBe(false);
 			expect(themeOnly.body.lines.map((l) => l.text)).toEqual([
@@ -1033,13 +1093,16 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("wordOfDay carries word/definition/example (nulls preserved)", () => {
-		const l = slideLayout({
-			kind: "wordOfDay",
-			word: "Synergy",
-			definition: "cooperation",
-			example: null,
-			presenter: null,
-		});
+		const l = slideLayout(
+			{
+				kind: "wordOfDay",
+				word: "Synergy",
+				definition: "cooperation",
+				example: null,
+				presenter: null,
+			},
+			null,
+		);
 		expect(l.chrome === "content" && l.body).toMatchObject({
 			form: "word",
 			word: "Synergy",
@@ -1054,13 +1117,16 @@ describe("slideLayout bodies", () => {
 		// The slide now sits inside the Toastmaster's opening, so the copy has to
 		// say whose it is rather than letting its position imply the Toastmaster
 		// (or, under MCF's variant, the General Evaluator) delivers it.
-		const held = slideLayout({
-			kind: "wordOfDay",
-			word: "Synergy",
-			definition: "cooperation",
-			example: null,
-			presenter: { role: "Grammarian", name: "Mona" },
-		});
+		const held = slideLayout(
+			{
+				kind: "wordOfDay",
+				word: "Synergy",
+				definition: "cooperation",
+				example: null,
+				presenter: { role: "Grammarian", name: "Mona" },
+			},
+			null,
+		);
 		expect(held.chrome === "content" && held.body).toMatchObject({
 			form: "word",
 			presenter: "Presented by the Grammarian · Mona",
@@ -1068,36 +1134,45 @@ describe("slideLayout bodies", () => {
 
 		// Unclaimed: still the Grammarian's, just nobody's yet — the role alone,
 		// never "Presented by the Grammarian · — open —".
-		const open = slideLayout({
-			kind: "wordOfDay",
-			word: "Synergy",
-			definition: "cooperation",
-			example: null,
-			presenter: { role: "Grammarian", name: "— open —" },
-		});
+		const open = slideLayout(
+			{
+				kind: "wordOfDay",
+				word: "Synergy",
+				definition: "cooperation",
+				example: null,
+				presenter: { role: "Grammarian", name: "— open —" },
+			},
+			null,
+		);
 		expect(open.chrome === "content" && open.body).toMatchObject({
 			presenter: "Presented by the Grammarian",
 		});
 
 		// The club's own name for the role, so a renamed Grammarian is credited
 		// as the club calls them (#368).
-		const renamed = slideLayout({
-			kind: "wordOfDay",
-			word: "Synergy",
-			definition: "cooperation",
-			example: null,
-			presenter: { role: "Wordsmith", name: "Mona" },
-		});
+		const renamed = slideLayout(
+			{
+				kind: "wordOfDay",
+				word: "Synergy",
+				definition: "cooperation",
+				example: null,
+				presenter: { role: "Wordsmith", name: "Mona" },
+			},
+			null,
+		);
 		expect(renamed.chrome === "content" && renamed.body).toMatchObject({
 			presenter: "Presented by the Wordsmith · Mona",
 		});
 	});
 
 	it("awards is a numbered list of the categories", () => {
-		const l = slideLayout({
-			kind: "awards",
-			categories: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
-		});
+		const l = slideLayout(
+			{
+				kind: "awards",
+				categories: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
+			},
+			null,
+		);
 		expect(l.chrome === "content" && l.body).toMatchObject({
 			form: "numbered",
 			items: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
@@ -1110,13 +1185,16 @@ describe("slideLayout bodies", () => {
 	// for the ten minutes the word is actually being used. No example, and no
 	// presenter credit, because nobody is presenting it here.
 	it("table topics reminds the room of the Word of the Day (#355)", () => {
-		const l = slideLayout({
-			kind: "tableTopics",
-			master: "Rasheed",
-			timing: "1–2 minutes per speaker",
-			word: "Momentum",
-			definition: "impetus gained by a moving object",
-		});
+		const l = slideLayout(
+			{
+				kind: "tableTopics",
+				master: "Rasheed",
+				timing: "1–2 minutes per speaker",
+				word: "Momentum",
+				definition: "impetus gained by a moving object",
+			},
+			null,
+		);
 		if (l.chrome === "content" && l.body.form === "bullets") {
 			expect(l.body.items).toEqual([
 				"Table Topic Master: Rasheed",
@@ -1131,25 +1209,31 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("table topics shows the word with no definition, and neither when unset", () => {
-		const wordOnly = slideLayout({
-			kind: "tableTopics",
-			master: "Rasheed",
-			timing: "1–2 minutes per speaker",
-			word: "Momentum",
-			definition: null,
-		});
+		const wordOnly = slideLayout(
+			{
+				kind: "tableTopics",
+				master: "Rasheed",
+				timing: "1–2 minutes per speaker",
+				word: "Momentum",
+				definition: null,
+			},
+			null,
+		);
 		if (wordOnly.chrome === "content" && wordOnly.body.form === "bullets") {
 			expect(wordOnly.body.items).toContain("Word of the Day: “Momentum”");
 			expect(wordOnly.body.note).toBeNull();
 		} else throw new Error("expected bullets");
 
-		const none = slideLayout({
-			kind: "tableTopics",
-			master: "Rasheed",
-			timing: "1–2 minutes per speaker",
-			word: null,
-			definition: null,
-		});
+		const none = slideLayout(
+			{
+				kind: "tableTopics",
+				master: "Rasheed",
+				timing: "1–2 minutes per speaker",
+				word: null,
+				definition: null,
+			},
+			null,
+		);
 		if (none.chrome === "content" && none.body.form === "bullets") {
 			expect(none.body.items).toEqual([
 				"Table Topic Master: Rasheed",
@@ -1164,7 +1248,7 @@ describe("slideLayout bodies", () => {
 		// A first cut deliberately: the meeting's recorded guests could be named
 		// here, but a guest who came without being booked in is the common case and
 		// a slide that lists only the known ones reads as excluding the rest.
-		const l = slideLayout({ kind: "guestComments" });
+		const l = slideLayout({ kind: "guestComments" }, null);
 		expect(l.chrome === "content" && l.header).toBe("Guest Comments");
 		if (l.chrome === "content" && l.body.form === "centered") {
 			expect(l.body.lines).toEqual([
@@ -1175,10 +1259,13 @@ describe("slideLayout bodies", () => {
 	});
 
 	it("reminders maps non-blank lines to trimmed muted lines, blanks to spacers", () => {
-		const l = slideLayout({
-			kind: "reminders",
-			text: "  Bring a guest  \n\nRenew dues",
-		});
+		const l = slideLayout(
+			{
+				kind: "reminders",
+				text: "  Bring a guest  \n\nRenew dues",
+			},
+			null,
+		);
 		if (l.chrome === "content" && l.body.form === "centered") {
 			expect(l.body.lines).toEqual([
 				{ role: "muted", text: "Bring a guest" },
@@ -1200,17 +1287,20 @@ describe("slideLayout bodies", () => {
  */
 describe("templated-meeting layouts (#agenda-templates)", () => {
 	const bulletsOf = (slide: Slide) => {
-		const l = slideLayout(slide);
+		const l = slideLayout(slide, null);
 		if (l.chrome !== "content" || l.body.form !== "bullets")
 			throw new Error("expected a bullets content body");
 		return l.body;
 	};
 
 	it("a section band is a dark splash, so a round announces itself", () => {
-		const l = slideLayout({
-			kind: "templateSection",
-			title: "PREPARED SPEECH CONTEST",
-		});
+		const l = slideLayout(
+			{
+				kind: "templateSection",
+				title: "PREPARED SPEECH CONTEST",
+			},
+			null,
+		);
 		if (l.chrome !== "splash") throw new Error("expected a splash");
 		expect(l.headline).toBe("PREPARED SPEECH CONTEST");
 		expect(l.tone).toBe("dark");

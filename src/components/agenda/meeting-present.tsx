@@ -21,6 +21,7 @@ import {
 	type SlideLayout,
 	SPLASH_LOGO_HEIGHT_PCT,
 	SPLASH_LOGO_MAX_WIDTH_PCT,
+	SPLASH_RULE_WIDTH_PCT,
 	slideLayout,
 	slideName,
 } from "#/lib/slide-layout";
@@ -460,18 +461,23 @@ function Splash({
 	layout: Extract<SlideLayout, { chrome: "splash" }>;
 }) {
 	const dark = layout.tone === "dark";
-	// Which URL failed, rather than a boolean: the presenter walks from the
-	// opening splash to the closing one through the SAME component instance
-	// (both render <Splash/> in the same position), so a boolean would need an
-	// effect to clear and a new logo would inherit the old one's failure.
-	const [failedUrl, setFailedUrl] = useState<string | null>(null);
 	// #725: the club's mark REPLACES the word — the two never stack. Decided from
 	// the image that actually LOADED, not from the URL: a logo the browser cannot
 	// fetch must fall back to the word rather than leave the splash with neither,
 	// and `ClubLogo` carries no error handling of its own (it is shared with the
 	// print surfaces, where a broken image is a gap rather than a wrong word).
+	//
+	// A plain boolean, and nothing resets it, because nothing has to. `Splash`
+	// and `ContentSlide` are sibling branches of one ternary above, so React
+	// unmounts this component the moment any content slide renders and the state
+	// goes with it — a presenter stepping from the opening splash to the closing
+	// one crosses at least one content slide in every deck the builder produces.
+	// The only decks where the two splashes are adjacent carry the SAME
+	// `logoUrl` on both, so a URL-keyed version would fall back there too; the
+	// keying would be machinery with no case that distinguishes it.
+	const [logoFailed, setLogoFailed] = useState(false);
 	const logoUrl = layout.logoUrl;
-	const showLogo = logoUrl != null && failedUrl !== logoUrl;
+	const showLogo = logoUrl != null && !logoFailed;
 	return (
 		<div
 			className="flex h-full w-full flex-col items-center justify-center px-[8cqw] text-center"
@@ -498,7 +504,7 @@ function Splash({
 			{showLogo && (
 				<span
 					style={{ display: "contents" }}
-					onError={() => setFailedUrl(logoUrl)}
+					onError={() => setLogoFailed(true)}
 				>
 					<ClubLogo
 						logoUrl={logoUrl}
@@ -519,9 +525,16 @@ function Splash({
 					Toastmasters
 				</div>
 			)}
+			{/* The width is shared with the `.pptx` (#725): the two renderers each
+			    carried their own number and disagreed, 58% here against 45% there,
+			    so "the logo is no wider than the rule" was true on screen and
+			    false in the downloaded deck. */}
 			<div
-				className="my-[3.4cqw] h-px w-[58cqw]"
-				style={{ background: dark ? "rgba(255,255,255,.55)" : NAVY }}
+				className="my-[3.4cqw] h-px"
+				style={{
+					width: cqw(SPLASH_RULE_WIDTH_PCT),
+					background: dark ? "rgba(255,255,255,.55)" : NAVY,
+				}}
 			/>
 			<div
 				className="text-[6.4cqw] font-extrabold leading-tight text-balance"

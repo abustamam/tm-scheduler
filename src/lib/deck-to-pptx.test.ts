@@ -479,6 +479,65 @@ describe("club logo on the bookend splashes (#496, #725)", () => {
 		}
 	});
 
+	/** `renderSplash`'s plate padding, in inches. Copied, and pinned below. */
+	const PLATE_PAD_IN = 0.08;
+
+	// The horizontal half of the same sentence, and the one #725's review caught.
+	// `SPLASH_LOGO_MAX_WIDTH_PCT` is documented as "exactly the width of the rule
+	// beneath it" — which was true of the projected splash, where both are drawn
+	// from the same constant, and FALSE here: the rule was a hard-coded `w: 6` on
+	// a 13.33in frame (45%) while the box was 58%, so a max-width wordmark
+	// overhung its own rule by ~0.87in a side in the downloaded deck. The
+	// vertical assertion above passes throughout; only a width comparison sees
+	// it. Measured against the RENDERED rule, not a restated proportion.
+	it("keeps the logo and its plate within the rule's width", () => {
+		const deck = logoDeck();
+		const pptx = deckToPptx(PptxGenJS, deck, {
+			...LOGO,
+			// 10:1 — the widest shape the ceiling has to hold, and the only one
+			// that can reach the rule's edge at all.
+			width: 2000,
+			height: 200,
+		});
+		for (const i of [0, deck.length - 1]) {
+			// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs internals
+			const objects = (pptx as any).slides[i]._slideObjects as any[];
+			const line = objects.find((o) => o.options?.line && o.options?.h === 0);
+			expect(line, "no rule on the splash").toBeTruthy();
+			const ruleLeft = line.options.x as number;
+			const ruleRight = ruleLeft + (line.options.w as number);
+			expect(line.options.w).toBeGreaterThan(0);
+
+			const plate = objects.find(
+				(o) => o.options?.fill?.color === "FFFFFF" && o.options?.w,
+			);
+			const [img] = slideImages(pptx, i);
+
+			// The MARK is what the ceiling governs, and it must fit outright.
+			expect(
+				img.options.x,
+				"the mark overhangs the rule's left edge",
+			).toBeGreaterThanOrEqual(ruleLeft - 0.01);
+			expect(
+				img.options.x + img.options.w,
+				"the mark overhangs the rule's right edge",
+			).toBeLessThanOrEqual(ruleRight + 0.01);
+
+			// The plate may exceed it by `renderSplash`'s own `pad` and nothing
+			// else — the same bound the projected splash puts on `ClubLogo`'s 4px,
+			// so the two surfaces state one rule in their own units rather than
+			// one of them quietly allowing more.
+			expect(
+				ruleLeft - plate.options.x,
+				"the plate exceeds the rule by more than its padding",
+			).toBeLessThanOrEqual(PLATE_PAD_IN + 0.01);
+			expect(
+				plate.options.x + plate.options.w - ruleRight,
+				"the plate exceeds the rule by more than its padding",
+			).toBeLessThanOrEqual(PLATE_PAD_IN + 0.01);
+		}
+	});
+
 	it("places the closing splash's logo exactly where the opening one sits", () => {
 		const square = { ...LOGO, width: 512, height: 512 };
 		expect(splashImage(square, "closing")).toEqual(
@@ -493,8 +552,9 @@ describe("club logo on the bookend splashes (#496, #725)", () => {
 
 	it("fits a wide wordmark to the box without exceeding either dimension", () => {
 		const { w, h } = titleImage({ ...LOGO, width: 1200, height: 300 });
-		// 4:1 source stays 4:1, and is width-limited inside the box: at 52% of
-		// the frame the box is now wider than four times its own height.
+		// 4:1 source stays 4:1, and is width-limited inside the box: at
+		// `SPLASH_LOGO_MAX_WIDTH_PCT` of the frame the box is now wider than four
+		// times its own height.
 		expect(w / h).toBeCloseTo(4, 3);
 		expect(w).toBeLessThanOrEqual(BOX_W_IN + 1e-6);
 		expect(h).toBeLessThanOrEqual(BOX_H_IN + 1e-6);
