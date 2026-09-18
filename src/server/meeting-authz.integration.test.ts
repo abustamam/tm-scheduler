@@ -36,7 +36,7 @@ const {
 	resolveVoteCounterAuthz,
 	resolveWordOfTheDayAuthz,
 } = await import("./meeting-authz-logic");
-const { applyMeetingUpdate } = await import("./meetings-logic");
+const { applyMeetingMetaPatch } = await import("./meetings-logic");
 const { startImpersonation } = await import("./impersonation-logic");
 
 /** Add a Toastmaster of the Day role def + slot to the meeting; optionally
@@ -397,7 +397,7 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 			? utcToZonedWallTime(current.scheduledAt, "America/Chicago")
 			: "";
 		await expect(
-			applyMeetingUpdate({
+			applyMeetingMetaPatch({
 				meetingId: club.meetingId,
 				actorMemberId: club.memberId,
 				scheduledAt: wall,
@@ -409,7 +409,7 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 
 	it("rejects a TMOD reschedule (date/time change, canReschedule=false)", async () => {
 		await expect(
-			applyMeetingUpdate({
+			applyMeetingMetaPatch({
 				meetingId: club.meetingId,
 				actorMemberId: club.memberId,
 				scheduledAt: "2099-01-01T12:00",
@@ -426,7 +426,7 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 			? utcToZonedWallTime(current.scheduledAt, "America/Chicago")
 			: "";
 		await expect(
-			applyMeetingUpdate({
+			applyMeetingMetaPatch({
 				meetingId: club.meetingId,
 				actorMemberId: club.memberId,
 				scheduledAt: wall,

@@ -8,17 +8,21 @@
  * already prove the grant ladders. What neither covers is the WRITE the focused
  * editors actually make — and that is where this feature's own risk lives:
  *
- *   1. **`updateMeeting` is a full REPLACE.** A theme-only save nulls the
- *      club's location, Word of the Day, definition, example, announcements and
- *      notes. The control at the bottom of this file reproduces exactly that
- *      against the real writer, so the assertions beside it can demonstrably
- *      fail — a preservation test with no control passes on a fixture that had
- *      nothing to preserve.
- *   2. **A self-serve Toastmaster may not reschedule.** The editor resubmits the
- *      meeting's current wall time, and `applyMeetingUpdate` compares to the
- *      MINUTE. Get that wrong and the save is refused as an attempted move — a
- *      failure no unit test of the payload builder can see, because it depends
- *      on `zonedWallTimeToUtc` round-tripping what `utcToZonedWallTime` emitted.
+ *   1. **A theme save must leave the rest of the meeting alone.** It used to be
+ *      a full REPLACE, so a theme-only save nulled the club's location, Word of
+ *      the Day, definition, example, announcements and notes unless the editor
+ *      echoed all six back. #772 made the writer a PATCH, so the preservation
+ *      below is now a property of the WRITER rather than of every caller's
+ *      memory — and the control at the bottom of this file, which used to
+ *      reproduce the damage, is what says so: it sends the bare payload that
+ *      erased six fields and asserts they survive.
+ *   2. **A self-serve Toastmaster may not reschedule.** Since #772 the editor
+ *      omits `scheduledAt` entirely rather than resubmitting the meeting's wall
+ *      time for `applyMeetingMetaPatch` to compare TO THE MINUTE, so the
+ *      round-trip hazard is gone; what is left to prove is that omitting it is
+ *      not read as a move. The admin dialog still sends it, so the comparison
+ *      itself still has to work — `meeting-meta-patch.integration.test.ts`
+ *      covers that arm.
  *
  * The denial cases are stated in the editors' terms rather than the resolvers':
  * the question this file answers is "can the Grammarian who tapped their chat
@@ -39,7 +43,6 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
-import { themeOnlyUpdate } from "#/lib/meeting-meta-update";
 import {
 	cleanup,
 	hasTestDb,
@@ -54,16 +57,17 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { resolveMeetingAgendaAuthz, resolveWordOfTheDayAuthz } = await import(
 	"./meeting-authz-logic"
 );
-const { applyMeetingUpdate, applyWordOfTheDayUpdate } = await import(
+const { applyMeetingMetaPatch, applyWordOfTheDayUpdate } = await import(
 	"./meetings-logic"
 );
 
-/** The stored meta a theme-only save must carry back. Distinct values, so a
+/** The stored meta a theme-only save must leave alone. Distinct values, so a
  *  payload that crosses two fields fails rather than passing on a shared one. */
 const STORED_META = {
 	location: "The Old Library, Room 5",
-	// #731 — required by `MeetingMetaEcho`; the join link is nulled by a
-	// theme-only save that omits it, exactly like the fields around it.
+	// #731. The costliest of these to lose: for an online-only club the join link
+	// is the room, and the save that used to take it is one a TMOD makes from
+	// their phone on meeting night.
 	joinUrl: "https://zoom.us/j/1234567890",
 	wordOfTheDay: "ineffable",
 	wodDefinition: "too great to be expressed in words",
@@ -143,14 +147,11 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 			selfMemberId,
 		});
 		if (!authz.allowed) return { allowed: false as const };
-		await applyMeetingUpdate({
-			...themeOnlyUpdate({
-				meetingId: club.meetingId,
-				selfMemberId,
-				scheduledAt: wallTime,
-				theme,
-				current: STORED_META,
-			}),
+		// The payload the editor actually sends since #772: the theme, and nothing
+		// it is not editing. No `scheduledAt`, no echo of the other six fields.
+		await applyMeetingMetaPatch({
+			meetingId: club.meetingId,
+			theme,
 			actorMemberId: authz.actorMemberId,
 			canReschedule: authz.via === "admin",
 		});
@@ -263,8 +264,8 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 		 * is the assertion that notices if that ever stops being true.
 		 *
 		 * It is a real risk rather than a theoretical one: the obvious "fix" for a
-		 * future Grammarian-editable field is to widen this writer toward
-		 * `applyMeetingUpdate`, which IS a full replace.
+		 * future Grammarian-editable field is to widen this writer toward the
+		 * general one, which reaches every meta column.
 		 */
 		it("a Grammarian saving only the Word of the Day leaves the join link intact", async () => {
 			await addRoleSlot(club, "Grammarian", club.memberId);
@@ -328,11 +329,11 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 		});
 
 		it("does not move the meeting, and is not refused as a reschedule", async () => {
-			// The self-serve TMOD carries `canReschedule = false`, and the writer
-			// compares the resubmitted wall time to the stored one TO THE MINUTE.
-			// This is the half a pure test of `themeOnlyUpdate` cannot reach: it
-			// depends on `zonedWallTimeToUtc` round-tripping what
-			// `utcToZonedWallTime` produced.
+			// The self-serve TMOD carries `canReschedule = false`. Before #772 the
+			// editor had to resubmit the meeting's wall time and this test turned on
+			// `zonedWallTimeToUtc` round-tripping what `utcToZonedWallTime` produced;
+			// now it omits the field, and what is proved is that saying nothing about
+			// the time neither moves it nor reads as a move.
 			await addRoleSlot(club, "Toastmaster of the Day", club.memberId);
 			const before = await readMeeting(club.meetingId);
 			await saveTheme(club.memberId, "New beginnings");
@@ -343,19 +344,25 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 			expect(after?.lengthMinutes).toBe(before?.lengthMinutes);
 		});
 
-		// The CONTROL. Without it the preservation test above could pass against a
-		// writer that preserved by accident, and the reader has no way to see how
-		// close the failure is. This is the payload a focused editor writes if it
-		// does not round-trip — it is accepted, it reports success, and it takes
-		// six fields with it.
-		it("CONTROL: the same save without the round trip erases six fields", async () => {
+		/**
+		 * The old CONTROL, inverted — and it is the most useful test in this file to
+		 * read, because it is the diff.
+		 *
+		 * It used to send this exact payload to prove the damage was real and close:
+		 * a bare `{ meetingId, scheduledAt, theme }` was accepted, reported success,
+		 * and took SIX fields with it. Those six `toBeNull()` assertions are the
+		 * `toBe(STORED_META.…)` ones below. Keeping the case rather than deleting it
+		 * keeps the repro in the file the fix has to satisfy: if the writer ever
+		 * goes back to naming columns it was not given, this fails first.
+		 */
+		it("the bare payload that used to erase six fields now preserves them", async () => {
 			await addRoleSlot(club, "Toastmaster of the Day", club.memberId);
 			const authz = await resolveMeetingAgendaAuthz({
 				meetingId: club.meetingId,
 				selfMemberId: club.memberId,
 			});
 			expect(authz.allowed).toBe(true);
-			await applyMeetingUpdate({
+			await applyMeetingMetaPatch({
 				meetingId: club.meetingId,
 				scheduledAt: wallTime,
 				theme: "New beginnings",
@@ -364,15 +371,13 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 			});
 			const after = await readMeeting(club.meetingId);
 			expect(after?.theme).toBe("New beginnings");
-			expect(after?.location).toBeNull();
-			// #731 rides the same cliff, which is why `MeetingMetaEcho` makes it a
-			// REQUIRED property rather than an optional one.
-			expect(after?.joinUrl).toBeNull();
-			expect(after?.wordOfTheDay).toBeNull();
-			expect(after?.wodDefinition).toBeNull();
-			expect(after?.wodExample).toBeNull();
-			expect(after?.notes).toBeNull();
-			expect(after?.reminders).toBeNull();
+			expect(after?.location).toBe(STORED_META.location);
+			expect(after?.joinUrl).toBe(STORED_META.joinUrl);
+			expect(after?.wordOfTheDay).toBe(STORED_META.wordOfTheDay);
+			expect(after?.wodDefinition).toBe(STORED_META.wodDefinition);
+			expect(after?.wodExample).toBe(STORED_META.wodExample);
+			expect(after?.notes).toBe(STORED_META.notes);
+			expect(after?.reminders).toBe(STORED_META.reminders);
 		});
 	});
 });

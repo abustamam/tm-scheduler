@@ -7,7 +7,7 @@
  *     bunx vitest run src/server/meeting-manage.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -16,8 +16,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
-import { utcToZonedWallTime } from "#/lib/datetime";
-import { themeOnlyUpdate } from "#/lib/meeting-meta-update";
+import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
 	hasTestDb,
@@ -34,7 +33,7 @@ const {
 	applyMoveSpeakerSlot,
 	applyRemoveSpeakerSlot,
 } = await import("./slots-logic");
-const { applyMeetingUpdate, applyCreateMeeting } = await import(
+const { applyMeetingMetaPatch, applyCreateMeeting } = await import(
 	"./meetings-logic"
 );
 const { resolveMeetingAgendaAuthz } = await import("./meeting-authz-logic");
@@ -119,18 +118,58 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 	});
 
-	it("updateMeeting writes fields + logs meeting_edit", async () => {
-		await applyMeetingUpdate({
+	/**
+	 * `meeting_edit` rows for THIS run's meeting, newest first.
+	 *
+	 * Scoped and ordered because vitest runs test FILES in parallel against one
+	 * shared `tm_test` and several suites write that action — an unscoped read
+	 * here returns another file's row. Measured: adding the #772 meta-patch suite
+	 * made the unscoped version of the join-link assertion below fail 2 runs in 3.
+	 */
+	const scopedMetaEdits = () =>
+		testDb
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.action, "meeting_edit"),
+					eq(activityLog.clubId, club.clubId),
+					eq(activityLog.targetId, club.meetingId),
+				),
+			)
+			.orderBy(desc(activityLog.createdAt))
+			.limit(1);
+
+	it("updateMeeting writes the fields it is given + logs meeting_edit", async () => {
+		await applyMeetingMetaPatch({
 			meetingId: club.meetingId,
 			actorMemberId: club.memberId,
 			scheduledAt: "2026-08-01T18:30",
 			theme: "  New Beginnings  ",
 			wordOfTheDay: "verve",
 		});
-		const [m] = await testDb
-			.select()
-			.from(activityLog)
-			.where(eq(activityLog.action, "meeting_edit"));
+		// The title says "writes the fields it is given", so assert the COLUMNS —
+		// and `scheduledAt` in particular, which is the only place in the repo that
+		// pins the patch writer storing a time it WAS given (the meta-patch suite
+		// covers only "stays put when omitted").
+		const [row] = await testDb
+			.select({
+				theme: meetings.theme,
+				wordOfTheDay: meetings.wordOfTheDay,
+				scheduledAt: meetings.scheduledAt,
+			})
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		expect(row.theme).toBe("New Beginnings");
+		expect(row.wordOfTheDay).toBe("verve");
+		const [clubRow] = await testDb
+			.select({ timezone: clubs.timezone })
+			.from(clubs)
+			.where(eq(clubs.id, club.clubId));
+		expect(row.scheduledAt.getTime()).toBe(
+			zonedWallTimeToUtc("2026-08-01T18:30", clubRow.timezone).getTime(),
+		);
+		const [m] = await scopedMetaEdits();
 		expect(m).toBeTruthy();
 	});
 
@@ -157,7 +196,7 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 	});
 
 	it("updateMeeting persists a per-meeting length override", async () => {
-		await applyMeetingUpdate({
+		await applyMeetingMetaPatch({
 			meetingId: club.meetingId,
 			actorMemberId: club.memberId,
 			scheduledAt: "2026-08-01T18:30",
@@ -171,7 +210,7 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 			.update(meetings)
 			.set({ lengthMinutes: 45 })
 			.where(eq(meetings.id, club.meetingId));
-		await applyMeetingUpdate({
+		await applyMeetingMetaPatch({
 			meetingId: club.meetingId,
 			actorMemberId: club.memberId,
 			scheduledAt: "2026-08-01T18:30",
@@ -182,17 +221,17 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 	/**
 	 * The video-call join link (#731).
 	 *
-	 * Two of these are the ones a happy-path suite would skip, and both are
-	 * costly in the same direction — an online club losing its join link is the
-	 * club losing the meeting:
+	 * The two cases a happy-path suite would skip are both here, and #772 moved
+	 * one of them from one side to the other. An online club losing its join link
+	 * is the club losing the meeting, so:
 	 *
-	 *   1. a theme-only save must PRESERVE the link (the data-loss case), and
-	 *   2. omitting the field must still CLEAR it, which is what makes (1) a
-	 *      requirement of every caller rather than a nicety.
+	 *   1. a theme-only save must PRESERVE the link, and
+	 *   2. omitting the field must ALSO preserve it — which it now does because
+	 *      the writer is a patch, where before that was the clearing case and (1)
+	 *      held only because every caller remembered to echo the link back.
 	 *
-	 * Both assert against the stored column, not against the payload — the echo's
-	 * own unit test covers the payload, and a test that stopped there could not
-	 * see a writer that ignored it.
+	 * Both assert against the stored column, not against the payload: a writer
+	 * that ignored its input would satisfy any payload-shaped assertion.
 	 */
 	describe("join link (#731)", () => {
 		const LINK = "https://zoom.us/j/1234567890";
@@ -215,7 +254,7 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		}
 
 		const update = (joinUrl?: string | null) =>
-			applyMeetingUpdate({
+			applyMeetingMetaPatch({
 				meetingId: club.meetingId,
 				actorMemberId: club.memberId,
 				scheduledAt: wallTime,
@@ -252,51 +291,41 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		});
 
 		/**
-		 * THE data-loss case. A focused editor that posts
-		 * `{ meetingId, scheduledAt, theme }` and nothing else nulls the column —
-		 * see the header of `#/lib/meeting-meta-update`. For an online-only club
-		 * that is the room itself, deleted by a Toastmaster typing a theme.
+		 * THE data-loss case, and the one #772 fixed at the source. A focused editor
+		 * posts `{ meetingId, theme }` and nothing else; for an online-only club the
+		 * link is the room itself, and it used to be deleted by a Toastmaster typing
+		 * a theme unless that editor remembered to echo it back.
 		 */
-		it("survives a theme-only save that echoes the stored meta", async () => {
+		it("survives a theme-only save", async () => {
 			await givenStoredLink();
-			await applyMeetingUpdate({
-				...themeOnlyUpdate({
-					meetingId: club.meetingId,
-					selfMemberId: club.memberId,
-					scheduledAt: wallTime,
-					theme: "New beginnings",
-					current: {
-						location: "The Old Library, Room 5",
-						joinUrl: LINK,
-						wordOfTheDay: null,
-						wodDefinition: null,
-						wodExample: null,
-						notes: null,
-						reminders: null,
-					},
-				}),
+			await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
 				actorMemberId: club.memberId,
+				theme: "New beginnings",
 			});
 			expect(await joinUrlOf(club.meetingId)).toBe(LINK);
 		});
 
-		it("is CLEARED by a save that omits it — which is why the echo is required", async () => {
-			// The mirror of the test above, and the reason `MeetingMetaEcho` makes
-			// `joinUrl` a required property rather than an optional one. If this
-			// ever starts passing with the link intact, the writer has stopped being
-			// a full replace and the echo's contract needs rereading, not deleting.
+		it("survives a save that omits it — no echo required (#772)", async () => {
+			// This test used to assert the OPPOSITE, and said that if it ever passed
+			// with the link intact the writer had stopped being a full replace. It
+			// has: omission is now "leave it alone", and clearing is `null` or a
+			// blank string, asserted above.
 			await givenStoredLink();
 			await update(undefined);
+			expect(await joinUrlOf(club.meetingId)).toBe(LINK);
+		});
+
+		it("is still CLEARED by an explicit null", async () => {
+			await givenStoredLink();
+			await update(null);
 			expect(await joinUrlOf(club.meetingId)).toBeNull();
 		});
 
 		it("records the PRIOR link in the meeting_edit audit entry", async () => {
 			await givenStoredLink();
 			await update("https://meet.google.com/abc-defg-hij");
-			const [entry] = await testDb
-				.select({ detail: activityLog.detail })
-				.from(activityLog)
-				.where(eq(activityLog.action, "meeting_edit"));
+			const [entry] = await scopedMetaEdits();
 			const detail = entry.detail as {
 				before: { joinUrl: string | null };
 				after: { joinUrl: string | null };
@@ -325,7 +354,7 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		/**
 		 * AC 2 — WHO may write the link.
 		 *
-		 * Every case above calls `applyMeetingUpdate` directly, and that function
+		 * Every case above calls `applyMeetingMetaPatch` directly, and that function
 		 * runs no authorization at all: it takes `actorMemberId` and
 		 * `canReschedule` already resolved. So none of them says anything about the
 		 * ladder, and asserting "it rides the existing ladder" without exercising it
@@ -404,7 +433,7 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 					selfMemberId: who.selfMemberId ?? null,
 				});
 				if (!authz.allowed) return false;
-				await applyMeetingUpdate({
+				await applyMeetingMetaPatch({
 					meetingId: club.meetingId,
 					actorMemberId: authz.actorMemberId,
 					scheduledAt: currentWallTime,

@@ -175,7 +175,9 @@ describe("JOIN_URL_FIELD — the cap measures the STORED value (#731)", () => {
 	 * The property that makes measuring the normalized value a PERMANENT fix
 	 * rather than one that merely moves the threshold: a value this field
 	 * accepted, once stored, re-normalizes to itself. So the dialog resending it
-	 * and `themeOnlyUpdate` echoing it can never trip the cap.
+	 * can never trip the cap. (Before #772 a focused editor echoing the stored
+	 * link rode the same property; there is no echo now, so the dialog resending
+	 * it is the only path that needs idempotence.)
 	 */
 	it("normalization is idempotent, so a stored value always re-validates", () => {
 		for (const input of [

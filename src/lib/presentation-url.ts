@@ -31,7 +31,7 @@
  * not a real link" reason; userinfo belongs on that list.
  *
  * Blast radius is new writes only. The non-test callers are write paths
- * (`slots-logic.ts`, and #731's `applyCreateMeeting` / `applyMeetingUpdate`);
+ * (`slots-logic.ts`, and #731's `applyCreateMeeting` / `applyMeetingMetaPatch`);
  * nothing re-validates a stored column, so no existing row changes meaning —
  * except on the #731 meeting page, which re-runs this at render and will now
  * draw nothing for such a row. That is the intended direction.

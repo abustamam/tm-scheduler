@@ -160,18 +160,54 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 	});
 }
 
-export interface MeetingUpdateInput {
+/**
+ * A meeting-meta PATCH (#772). Every FREE-TEXT field is a TRI-STATE, and the
+ * distinction is the whole point of this interface:
+ *
+ *   omitted / `undefined`  leave the stored value alone
+ *   `null` or blank        clear it
+ *   a value                store it, trimmed
+ *
+ * The two NUMERIC fields are not tri-states and do not generalise from the
+ * seven above. `meetingNumber` clears on null (back to derived, #358), but
+ * `lengthMinutes` has nothing to clear TO — `meetings.length_minutes` is
+ * `notNull().default(90)` — so for it omission is the only "leave it alone" and
+ * there is no null state at all. `scheduledAt` is the same: a wall-time string
+ * resolved against the club's timezone, with no "clear the date". Tidying
+ * `lengthMinutes`'s `!= null` into `!== undefined` to match the loop would
+ * write NULL into a NOT NULL column; the integration suite pins that.
+ *
+ * This replaced a full-REPLACE writer that wrote `theme: input.theme?.trim() ||
+ * null` and the identical line for six more free-text columns, so omission
+ * meant *null it*. A one-field editor therefore had to echo six values it was
+ * not editing (via an echo helper, deleted with this change) or silently erase
+ * the club's location, Word of the Day, announcements and notes while
+ * reporting success. Worse, that echo was a page-load SNAPSHOT: a Toastmaster
+ * saving a theme wrote back the Word of the Day as it had been when their page
+ * loaded, reverting a Grammarian's save from ten minutes earlier — a LOST
+ * UPDATE, one-directional, on two duties usually done the same evening.
+ *
+ * The patch closes both by never naming a column it was not given: the `set`
+ * this builds is SPARSE, so an untouched column is absent from the SQL rather
+ * than rewritten with a value the caller believed was current.
+ */
+export interface MeetingMetaPatchInput {
 	meetingId: string;
 	actorMemberId: string | null;
-	/** HTML datetime-local value, interpreted in the club timezone. */
-	scheduledAt: string;
-	/** Meeting length in minutes. Omit to leave the current length unchanged. */
-	lengthMinutes?: number | null;
+	/** HTML datetime-local value, interpreted in the club timezone. Omit to keep
+	 *  the current time — a partial editor no longer has to resubmit it, which is
+	 *  what the `canReschedule` comparison below used to force. */
+	scheduledAt?: string;
+	/** Meeting length in minutes. Omit to leave the current length unchanged.
+	 *  NOT nullable, unlike the free-text fields: the column is `notNull()` with
+	 *  a default, and the wire schema has no `.nullable()` either. */
+	lengthMinutes?: number;
 	theme?: string | null;
 	location?: string | null;
-	/** Raw video-call join link (#731). A full-REPLACE field like the free-text
-	 *  ones beside it: omit it and the stored link is CLEARED, which is exactly
-	 *  what `MeetingMetaEcho` exists to stop a one-field editor from doing. */
+	/** Raw video-call join link (#731). Normalized by
+	 *  `normalizePresentationUrl`, so `"tbd"`, `"n/a"` and
+	 *  `"javascript:alert(1)"` all clear it — but OMITTING it now preserves the
+	 *  stored link, which for an online-only club is the room itself. */
 	joinUrl?: string | null;
 	wordOfTheDay?: string | null;
 	wodDefinition?: string | null;
@@ -190,53 +226,73 @@ export interface MeetingUpdateInput {
 	canReschedule?: boolean;
 }
 
-/** Update a meeting's meta (incl. reschedule) and log a `meeting_edit`. */
-export async function applyMeetingUpdate(input: MeetingUpdateInput) {
+/** The free-text columns the patch owns, each with the same tri-state. Listed
+ *  once so the loop below and the audit entry cannot disagree about the set. */
+const META_TEXT_FIELDS = [
+	"theme",
+	"location",
+	"wordOfTheDay",
+	"wodDefinition",
+	"wodExample",
+	"notes",
+	"reminders",
+] as const;
+
+/** Update a meeting's meta (incl. reschedule) and log a `meeting_edit`.
+ *  Omitted fields are left alone — see `MeetingMetaPatchInput`. */
+export async function applyMeetingMetaPatch(input: MeetingMetaPatchInput) {
+	// ONE round trip, not two. The club is needed for its timezone alone, and
+	// only when the caller sent `scheduledAt` — which since #772 the focused
+	// editors never do. `meetings.club_id` is `notNull().references(clubs.id)`,
+	// so the relation always resolves.
 	const meeting = await db.query.meetings.findFirst({
 		where: eq(meetings.id, input.meetingId),
+		with: { club: true },
 	});
 	if (!meeting) throw new Error("Meeting not found.");
-	const club = await db.query.clubs.findFirst({
-		where: eq(clubs.id, meeting.clubId),
-	});
+	const club = meeting.club;
 	if (!club) throw new Error("Club not found.");
 
-	const next = {
-		scheduledAt: zonedWallTimeToUtc(input.scheduledAt, club.timezone),
-		// Keep the current length when the caller omits it (null/undefined).
-		lengthMinutes:
-			input.lengthMinutes != null ? input.lengthMinutes : meeting.lengthMinutes,
-		theme: input.theme?.trim() || null,
-		location: input.location?.trim() || null,
-		// Server-authoritative (#731). `""`, `"tbd"`, `"n/a"` and
-		// `"javascript:alert(1)"` all land on null; a bare host is coerced to
-		// `https://`. Reuses the `speeches.presentation_url` validator rather than
-		// growing a second one.
-		joinUrl: normalizePresentationUrl(input.joinUrl),
-		wordOfTheDay: input.wordOfTheDay?.trim() || null,
-		wodDefinition: input.wodDefinition?.trim() || null,
-		wodExample: input.wodExample?.trim() || null,
-		notes: input.notes?.trim() || null,
-		reminders: input.reminders?.trim() || null,
-		// Omitted (undefined) leaves the stored number untouched — the dialog only
-		// sends this field when the admin actually typed one (#358).
-		meetingNumber:
-			input.meetingNumber === undefined
-				? meeting.meetingNumber
-				: input.meetingNumber,
-	};
+	// SPARSE by construction: a key is present only because the caller sent that
+	// field. `Partial<>` rather than the full row type is the type-level half of
+	// the same claim.
+	const next: Partial<typeof meetings.$inferInsert> = {};
+	for (const field of META_TEXT_FIELDS) {
+		const value = input[field];
+		// Blank and whitespace-only collapse to null alongside an explicit null:
+		// the officer clearing an input and the caller passing null are the same
+		// edit, and every reader of these columns already treats "" as absent.
+		if (value !== undefined) next[field] = value?.trim() || null;
+	}
+	if (input.joinUrl !== undefined) {
+		// Server-authoritative (#731). Reuses the `speeches.presentation_url`
+		// validator rather than growing a second one.
+		next.joinUrl = normalizePresentationUrl(input.joinUrl);
+	}
+	if (input.scheduledAt !== undefined) {
+		next.scheduledAt = zonedWallTimeToUtc(input.scheduledAt, club.timezone);
+	}
+	if (input.lengthMinutes != null) next.lengthMinutes = input.lengthMinutes;
+	if (input.meetingNumber !== undefined) {
+		next.meetingNumber = input.meetingNumber;
+	}
 
 	// Reschedule (date/time or length change) is an admin-only decision. A
-	// self-serve TMOD (canReschedule=false) may edit meta but must re-submit the
-	// meeting's current time unchanged; any actual move is rejected (ADR-0010).
+	// self-serve TMOD (canReschedule=false) may edit meta but must not move the
+	// meeting; any actual move is rejected (ADR-0010). Omitting both fields is
+	// the ordinary partial-editor case and reaches this check as "no move".
 	const canReschedule = input.canReschedule ?? true;
 	if (!canReschedule) {
 		// datetime-local input is minute-precision, so compare to the minute:
 		// re-submitting the current time (rounded) is a no-op, not a reschedule.
+		// The dialog still sends it, so this arm has to stay.
 		const toMinute = (d: Date) => Math.floor(d.getTime() / 60000);
 		const timeChanged =
+			next.scheduledAt !== undefined &&
 			toMinute(next.scheduledAt) !== toMinute(meeting.scheduledAt);
-		const lengthChanged = next.lengthMinutes !== meeting.lengthMinutes;
+		const lengthChanged =
+			next.lengthMinutes !== undefined &&
+			next.lengthMinutes !== meeting.lengthMinutes;
 		if (timeChanged || lengthChanged) {
 			throw new Error(
 				"Only an admin or VP Education can reschedule this meeting.",
@@ -244,29 +300,48 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 		}
 	}
 
+	// Drop keys whose value is ALREADY what is stored. Deliberately after the
+	// authorization check above, so that check sees exactly what the caller sent
+	// rather than what survived a normalization step.
+	//
+	// This is what makes "the entry is the diff" true for the DIALOG too, not just
+	// for a one-field editor. The dialog prefills every input from the row and
+	// resubmits the lot, so without this every admin save named all eleven columns
+	// in its `meeting_edit` entry — indistinguishable from the pre-#772 full-row
+	// snapshot — and an officer reading the activity log to find who changed the
+	// location could not tell which entry did it. It also stops the UPDATE naming
+	// columns nothing changed.
+	for (const key of Object.keys(next) as (keyof typeof next)[]) {
+		const proposed = next[key];
+		const stored = meeting[key as keyof typeof meeting];
+		const unchanged =
+			proposed instanceof Date && stored instanceof Date
+				? proposed.getTime() === stored.getTime()
+				: proposed === stored;
+		if (unchanged) delete next[key];
+	}
+
+	// An empty patch is a save with nothing in it — a `set` with no keys is a
+	// drizzle error, and an audit entry naming no change is noise. Reachable from
+	// the dialog now that an unchanged resubmit drops out above.
+	const changed = Object.keys(next) as (keyof typeof next)[];
+	if (changed.length === 0) return { clubId: meeting.clubId };
+
 	await db.transaction(async (tx) => {
 		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));
+		// `before` mirrors `after` key for key, and both name only what actually
+		// MOVED (unchanged keys were dropped above) — so the entry reads as the
+		// diff it is rather than eleven columns of which two changed.
+		const before: Record<string, unknown> = {};
+		for (const key of changed)
+			before[key] = meeting[key as keyof typeof meeting];
 		await logActivity(tx, {
 			clubId: meeting.clubId,
 			actorMemberId: input.actorMemberId,
 			action: "meeting_edit",
 			targetType: "meeting",
 			targetId: input.meetingId,
-			detail: {
-				before: {
-					theme: meeting.theme,
-					wordOfTheDay: meeting.wordOfTheDay,
-					wodDefinition: meeting.wodDefinition,
-					wodExample: meeting.wodExample,
-					location: meeting.location,
-					joinUrl: meeting.joinUrl,
-					notes: meeting.notes,
-					reminders: meeting.reminders,
-					scheduledAt: meeting.scheduledAt,
-					lengthMinutes: meeting.lengthMinutes,
-				},
-				after: next,
-			},
+			detail: { before, after: next },
 		});
 	});
 

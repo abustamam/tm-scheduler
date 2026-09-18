@@ -10,7 +10,7 @@
  * in this club."), and a 500's stack names file paths.
  *
  * **Nothing maps by message text.** The shared logic modules throw plain
- * `Error`s with sentences (`guests-logic.ts:68`, `meetings-logic.ts:198`), and
+ * `Error`s with sentences (`guests-logic.ts:68`, `meetings-logic.ts`), and
  * a reworded sentence would silently turn a handled case into an unhandled one
  * with no test able to see it. So a tool makes its OWN check and throws the
  * code; it never inspects a message to decide what happened. The one sanctioned
