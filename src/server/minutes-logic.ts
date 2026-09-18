@@ -948,8 +948,18 @@ export async function setAward(input: {
 	// Read through the module that owns disqualification, so this gate and the
 	// ballot's own filter cannot drift: `disqualificationFor` is THE reader of
 	// the `kind:id` key, and `writeInKey` below is the same fold the ballot
-	// matches by. Loaded before the transaction because it is a plain read of
-	// current state — a ruling lifted a moment ago must let the tap through.
+	// matches by.
+	//
+	// This is a CHECK-THEN-WRITE, and CODING_STANDARDS ("Put the predicate in
+	// the STATEMENT") says what that costs: a ruling committed between this read
+	// and the insert is missed, and the award lands. Moving the read inside the
+	// transaction would not close it — under READ COMMITTED a statement there
+	// sees the same thing — so the only close is a conditional insert, which
+	// cannot report WHICH ruling refused the write. The reason string is what
+	// the acceptance criteria ask the officer to be told, and both sides of the
+	// window are human taps on a console, so the trade is taken knowingly rather
+	// than by placement. The read is out here because it needs nothing from the
+	// transaction.
 	const disqualified = await loadDisqualifications(input.meetingId);
 	await db.transaction(async (tx) => {
 		let memberId: string | null = null;
@@ -982,13 +992,22 @@ export async function setAward(input: {
 			input.category,
 			candidate,
 		);
-		// Thrown, not silently dropped: the console renders this message verbatim
-		// in a toast, and the officer holding the tally needs to know WHY the
-		// name they tapped was refused. Throwing inside the transaction also
-		// rolls back a guest the inline arm may just have created.
+		// Thrown, not silently dropped: the officer holding the tally needs to
+		// know WHY the name they tapped was refused. The vote-counter console
+		// renders this verbatim in a toast; the minutes panel's offline path has
+		// no toast on a DRAIN and surfaces it as the sync error instead, which
+		// stops the drain and offers Retry — so the message has to stand alone in
+		// both. Throwing inside the transaction also rolls back a guest the
+		// inline arm may just have created.
+		//
+		// "Ruled out" rather than "disqualified" deliberately: `voting-logic`
+		// already says "That candidate is already disqualified in this award."
+		// on the same console for a DIFFERENT thing (a second ruling on one
+		// candidate), and two messages one word apart meaning different things is
+		// how an officer mid-meeting reads the wrong one.
 		if (ruledOut) {
 			throw new Error(
-				`That candidate is disqualified in this award: ${ruledOut.reason}`,
+				`That candidate was ruled out of this award: ${ruledOut.reason}`,
 			);
 		}
 		await tx

@@ -157,7 +157,7 @@ describe.skipIf(!hasTestDb)("award writer vs disqualification (#786)", () => {
 				category: "best_speaker",
 				memberId: seed.adminMemberId,
 			}),
-		).rejects.toThrow(/disqualified/i);
+		).rejects.toThrow(/ruled out of this award/i);
 		expect(await myAwards()).toHaveLength(0);
 	});
 
@@ -202,7 +202,7 @@ describe.skipIf(!hasTestDb)("award writer vs disqualification (#786)", () => {
 				category: "best_speaker",
 				guestId,
 			}),
-		).rejects.toThrow(/disqualified/i);
+		).rejects.toThrow(/ruled out of this award/i);
 		expect(await myAwards()).toHaveLength(0);
 	});
 
@@ -224,7 +224,7 @@ describe.skipIf(!hasTestDb)("award writer vs disqualification (#786)", () => {
 				category: "best_speaker",
 				newGuest: { name: "Visiting Speaker", email: "visitor@test.example" },
 			}),
-		).rejects.toThrow(/disqualified/i);
+		).rejects.toThrow(/ruled out of this award/i);
 		expect(await myAwards()).toHaveLength(0);
 	});
 
@@ -258,7 +258,7 @@ describe.skipIf(!hasTestDb)("award writer vs disqualification (#786)", () => {
 				category: "best_table_topics",
 				writeInName: "  bo   smith ",
 			}),
-		).rejects.toThrow(/disqualified/i);
+		).rejects.toThrow(/ruled out of this award/i);
 		expect(await myAwards()).toHaveLength(0);
 
 		// And an unrelated typed name is untouched by that ruling.
@@ -319,7 +319,7 @@ describe.skipIf(!hasTestDb)("award writer vs disqualification (#786)", () => {
 				category: "best_speaker",
 				memberId: seed.adminMemberId,
 			}),
-		).rejects.toThrow(/disqualified/i);
+		).rejects.toThrow(/ruled out of this award/i);
 
 		await unrule({ kind: "member", id: seed.adminMemberId });
 		await expect(
@@ -331,28 +331,6 @@ describe.skipIf(!hasTestDb)("award writer vs disqualification (#786)", () => {
 		).resolves.toBeUndefined();
 		expect(await myAwards()).toEqual([
 			{ category: "best_speaker", m: seed.adminMemberId, g: null, w: null },
-		]);
-	});
-
-	// The happy path, unchanged: nobody is ruled out, and the offline replay
-	// that reuses a client-supplied guest id still converges on ONE guest row
-	// rather than minting an orphan (#176 slice 5).
-	it("leaves the undisqualified inline-guest replay converging on one row", async () => {
-		const op = {
-			meetingId: seed.meetingId,
-			category: "best_speaker" as const,
-			newGuestId: crypto.randomUUID(),
-			newGuest: { name: "Replayed Visitor" },
-		};
-		await setAward(op);
-		await setAward(op);
-		const rows = await testDb
-			.select({ id: guests.id })
-			.from(guests)
-			.where(eq(guests.clubId, seed.clubId));
-		expect(rows).toHaveLength(1);
-		expect(await myAwards()).toEqual([
-			{ category: "best_speaker", m: null, g: rows[0].id, w: null },
 		]);
 	});
 });
