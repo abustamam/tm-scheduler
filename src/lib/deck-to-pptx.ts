@@ -31,13 +31,18 @@ const GOLD = "f3dd94";
 import {
 	inchesOfWidth,
 	SLIDE_BODY_BOTTOM_PCT,
+	SLIDE_FOOTER_HEIGHT_PCT,
 	SLIDE_HEADER_GAP_PCT,
 	SLIDE_INSET_PCT,
 } from "#/lib/slide-spacing";
 
 const W = 13.33;
 const H = 7.5;
-const FOOT_H = 1.13; // ~8.5% of width
+/** #724: derived, not the hand-copied `1.13` that used to sit here under the
+ *  comment `~8.5% of width`. The comment was right and the number was 0.003in
+ *  out, which is the smaller half of the problem — the larger half is that
+ *  nothing tied it to the `h-[8.5cqw]` it was copied from. */
+const FOOT_H = inchesOfWidth(SLIDE_FOOTER_HEIGHT_PCT, W);
 
 /**
  * A resolved club logo: the encoded bytes plus the image's INTRINSIC pixel
@@ -236,11 +241,14 @@ function renderContent(
 		h: FOOT_H,
 		fill: { color: NAVY },
 	});
-	// GavelUp origin mark on deck chrome (ADR-0024).
+	// GavelUp origin mark on deck chrome (ADR-0024). At `INSET`, not the `0.67`
+	// it carried until #724 — the band is full-bleed, so this mark is the only
+	// thing in the footer that can line up with the rule and the body above it,
+	// and at 0.67 (5.03% of W) it stood 0.4in inside them.
 	s.addText("GavelUp", {
-		x: 0.67,
+		x: INSET,
 		y: H - FOOT_H + 0.18,
-		w: 2.5,
+		w: FOOT_MARK_W,
 		h: FOOT_H - 0.36,
 		align: "left",
 		valign: "middle",
@@ -248,26 +256,31 @@ function renderContent(
 		fontSize: 15,
 		color: "FFFFFF",
 	});
+	// Right-aligned, and given the whole rest of the inset width rather than a
+	// hand-placed `x: W - 5.0, w: 4.33` pair whose only job was to land its RIGHT
+	// edge on the old 0.67. Stated as one inset on each side, it now reads the
+	// way the HTML footer's `justify-between` inside one padding does.
 	s.addText(
 		[
 			{ text: club, options: { breakLine: true, bold: true, fontSize: 15 } },
 			{ text: date, options: { fontSize: 12, color: "D9E4EC" } },
 		],
 		{
-			x: W - 5.0,
+			x: INSET + FOOT_MARK_W,
 			y: H - FOOT_H + 0.18,
-			w: 4.33,
+			w: W - 2 * INSET - FOOT_MARK_W,
 			h: FOOT_H - 0.36,
 			align: "right",
 			valign: "middle",
 			color: "FFFFFF",
 		},
 	);
-	// Trademark fine print, centered along the very bottom of the navy band.
+	// Trademark fine print, centered along the very bottom of the navy band,
+	// inside the same inset as everything else on the slide.
 	s.addText(TOASTMASTERS_DISCLAIMER, {
-		x: 0.3,
+		x: INSET,
 		y: H - 0.27,
-		w: W - 0.6,
+		w: W - 2 * INSET,
 		h: 0.22,
 		align: "center",
 		valign: "middle",
@@ -281,6 +294,11 @@ function renderContent(
 // and `meeting-present.tsx` each carried independently, so the export and the
 // screen agreed with each other while both indented the body past its own rule.
 const INSET = inchesOfWidth(SLIDE_INSET_PCT, W);
+/** Width reserved for the "GavelUp" mark at the footer's left. Not a proportion
+ *  worth sharing with the HTML deck, which sizes that mark by its own text: it
+ *  is here only so the club/date block beside it can claim "the rest of the
+ *  inset width" rather than be hand-placed against the right edge. */
+const FOOT_MARK_W = 2.5;
 /** Rule bottom, from the header block below. */
 const RULE_BOTTOM = 1.5 + 0.09;
 const BODY_Y = RULE_BOTTOM + inchesOfWidth(SLIDE_HEADER_GAP_PCT, W);

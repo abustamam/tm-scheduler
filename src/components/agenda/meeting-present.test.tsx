@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
@@ -17,9 +20,12 @@ import {
 } from "#/lib/slide-layout";
 import {
 	cqw,
+	SLIDE_BODY_BOTTOM_PCT,
+	SLIDE_FOOTER_HEIGHT_PCT,
 	SLIDE_HEADER_GAP_PCT,
 	SLIDE_INSET_PCT,
 } from "#/lib/slide-spacing";
+import { readSource } from "#/test/guard-source";
 import { MeetingPresent } from "./meeting-present";
 
 // `MeetingPresent` polls `getVoteParticipation` for the bare-count badge
@@ -782,8 +788,17 @@ describe("a templated meeting's deck (#agenda-templates)", () => {
  * independently: each carried a 6% header inset and a 7-7.5% body inset, so the
  * body sat indented past its own rule on BOTH surfaces, and it never read as a
  * bug because the surfaces agreed with each other.
+ *
+ * #724 added the FOOTER, which #359 left out, and retuned the body's bottom
+ * clearance. Same failure one band lower and for two more quarters: the navy
+ * band carried `px-[5cqw]` and `h-[8.5cqw]` here and `x: 0.67` / `FOOT_H = 1.13`
+ * there, four literals agreeing with each other and with nothing on their own
+ * slide. What is asserted below is again the RELATIONSHIP — the footer's mark
+ * stands on the same left edge as the rule and the body — plus one binding to
+ * the constants, because the relationship alone cannot tell a shared derivation
+ * from two literals that happen to match, which is the state this deck was in.
  */
-describe("content-slide spacing (#359)", () => {
+describe("content-slide spacing (#359, #724)", () => {
 	afterEach(() => cleanup());
 
 	const contentDeck: Slide[] = [
@@ -796,7 +811,8 @@ describe("content-slide spacing (#359)", () => {
 		},
 	];
 
-	/** The header element and the scaled body's measuring box. */
+	/** The three bands of a content slide: the header element, the scaled body's
+	 *  measuring box, and the navy footer. */
 	function boxes() {
 		const { container } = renderPresent({ deck: contentDeck });
 		const header = container.querySelector("header");
@@ -804,7 +820,13 @@ describe("content-slide spacing (#359)", () => {
 		// The measuring box is the header's next sibling — see `ContentSlide`.
 		const body = header.nextElementSibling as HTMLElement | null;
 		if (!body) throw new Error("no body box rendered");
-		return { header: header as HTMLElement, body };
+		const footer = container.querySelector("footer");
+		if (!footer) throw new Error("no content-slide footer rendered");
+		return {
+			header: header as HTMLElement,
+			body,
+			footer: footer as HTMLElement,
+		};
 	}
 
 	it("gives the header and the body one shared left inset", () => {
@@ -839,5 +861,61 @@ describe("content-slide spacing (#359)", () => {
 		const { header, body } = boxes();
 		expect(header.style.paddingLeft).toBe(cqw(SLIDE_INSET_PCT));
 		expect(body.style.paddingTop).toBe(cqw(SLIDE_HEADER_GAP_PCT));
+	});
+
+	it("stands the footer's mark on the same left edge as the header and body (#724)", () => {
+		// The band itself is full-bleed, so its TEXT inset is the only thing that
+		// can line up with the slide above it. At `px-[5cqw]` against an 8% body it
+		// did not, by 3% of frame width — ~0.4in on the exported deck.
+		const { header, body, footer } = boxes();
+		expect(footer.style.paddingLeft).toBeTruthy();
+		expect(footer.style.paddingLeft).toBe(header.style.paddingLeft);
+		expect(footer.style.paddingLeft).toBe(body.style.paddingLeft);
+		expect(footer.style.paddingRight).toBe(header.style.paddingRight);
+	});
+
+	it("sizes the footer band from the shared proportion (#724)", () => {
+		// `h-[8.5cqw]` here and `FOOT_H = 1.13` (commented "~8.5% of width") there
+		// were one proportion kept by hand in two files — and the copy was 0.003in
+		// out. The .pptx half of this assertion is in `deck-to-pptx.test.ts`.
+		const { footer } = boxes();
+		expect(footer.style.height).toBe(cqw(SLIDE_FOOTER_HEIGHT_PCT));
+		expect(footer.style.paddingLeft).toBe(cqw(SLIDE_INSET_PCT));
+	});
+
+	it("leaves the body real clearance above the navy band (#724)", () => {
+		// The existing assertion above only says top > bottom, which `1.5` against
+		// `4` satisfied while the body sat 2.7x closer to a solid block of navy
+		// than to a hairline rule. This is the floor that value fails: the bottom
+		// clearance is at least half the gap under the rule. It brackets the
+		// constant from below the way `paddingTop > paddingBottom` brackets it from
+		// above, so a retune in either direction has to stay between them.
+		const { body } = boxes();
+		const num = (v: string) => Number.parseFloat(v);
+		expect(num(body.style.paddingBottom)).toBeGreaterThanOrEqual(
+			num(body.style.paddingTop) / 2,
+		);
+		expect(body.style.paddingBottom).toBe(cqw(SLIDE_BODY_BOTTOM_PCT));
+	});
+
+	it("names the spacing constants in the footer's own markup (#724)", () => {
+		// The one hole the assertions above cannot cover. A rendered `8.5cqw` is
+		// indistinguishable from `cqw(SLIDE_FOOTER_HEIGHT_PCT)` once it reaches the
+		// style attribute, so a hand-written literal that happens to match today's
+		// value passes every one of them and drifts the moment the constant is
+		// tuned — which is the whole history of this band.
+		//
+		// A must-BE-present grep, so it reads through `readSource`: a comment that
+		// merely MENTIONS the constant would otherwise satisfy it (see
+		// `src/test/guard-source.ts`). Scoped to the `<footer>` opening tag rather
+		// than the file, so an unrelated use elsewhere cannot stand in for it.
+		const source = readSource(
+			resolve(dirname(fileURLToPath(import.meta.url)), "meeting-present.tsx"),
+		);
+		const open = source.indexOf("<footer");
+		expect(open, "no <footer> in meeting-present.tsx").toBeGreaterThan(-1);
+		const tag = source.slice(open, source.indexOf(">", open) + 1);
+		expect(tag).toContain("SLIDE_FOOTER_HEIGHT_PCT");
+		expect(tag).toContain("SLIDE_INSET_PCT");
 	});
 });
