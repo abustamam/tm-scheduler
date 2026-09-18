@@ -6,9 +6,34 @@ export interface MeetingUpdateFormContext {
 }
 
 /**
+ * Read one text input as a PATCH field (#772).
+ *
+ *   absent  → `undefined` — the input was not rendered, so leave the column
+ *             alone. `meetingNumber` is admin-only, and a self-serve TMOD's save
+ *             must not wipe the club's number.
+ *   blank   → `null` — the officer cleared the input, which is an edit.
+ *   a value → trimmed.
+ *
+ * The blank arm is the one that matters. `applyMeetingMetaPatch` leaves an
+ * omitted field alone, so a blanked input arriving as `undefined` would make
+ * this dialog — the only surface that can clear these fields — silently keep the
+ * old value and report success. Under the full-REPLACE writer this returned
+ * `undefined` for blank and the server nulled it; that is exactly the coupling
+ * #772 removed, and it has to be undone HERE in the same change.
+ */
+const patchField = (
+	form: FormData,
+	name: string,
+): string | null | undefined => {
+	const raw = form.get(name);
+	if (raw == null) return undefined;
+	return String(raw).trim() || null;
+};
+
+/**
  * Build the `updateMeeting` payload from the "Edit meeting" form. Pure so it can
- * be unit-tested without rendering the Radix dialog. Empty text fields become
- * `undefined`; the server (`applyMeetingUpdate`) normalizes each to `null`.
+ * be unit-tested without rendering the Radix dialog. Every text field is a patch
+ * field — see `patchField`.
  */
 export function meetingUpdateFromForm(
 	form: FormData,
@@ -30,12 +55,12 @@ export function meetingUpdateFromForm(
 		lengthMinutes: lengthRaw ? Number(lengthRaw) : undefined,
 		meetingNumber:
 			numberRaw === null ? undefined : numberRaw ? Number(numberRaw) : null,
-		theme: String(form.get("theme") ?? "").trim() || undefined,
-		location: String(form.get("location") ?? "").trim() || undefined,
-		wordOfTheDay: String(form.get("wordOfTheDay") ?? "").trim() || undefined,
-		wodDefinition: String(form.get("wodDefinition") ?? "").trim() || undefined,
-		wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
-		notes: String(form.get("notes") ?? "").trim() || undefined,
-		reminders: String(form.get("reminders") ?? "").trim() || undefined,
+		theme: patchField(form, "theme"),
+		location: patchField(form, "location"),
+		wordOfTheDay: patchField(form, "wordOfTheDay"),
+		wodDefinition: patchField(form, "wodDefinition"),
+		wodExample: patchField(form, "wodExample"),
+		notes: patchField(form, "notes"),
+		reminders: patchField(form, "reminders"),
 	};
 }

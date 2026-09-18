@@ -28,7 +28,7 @@
  * ## Which reader
  *
  * `readSource` blanks comments, which is correct for "this pattern must BE
- * present" — a route file whose header MENTIONS `themeOnlyUpdate` would
+ * present" — a route file whose header MENTIONS the payload builder would
  * otherwise satisfy the assertion after the call was deleted, and both of these
  * route files carry long headers naming most of what follows. The negatives
  * read RAW, per `guard-source.ts`: the stripper is a lexer that does not track
@@ -354,22 +354,49 @@ describe("saving hands back to the personal page", () => {
 });
 
 describe("the writes go through the tested payload builders", () => {
-	it("the theme editor builds its payload with themeOnlyUpdate", () => {
-		expect(editors).toContain("themeOnlyUpdate({");
-		expect(editors).toMatch(
-			/updateMeeting\(\{[\s\S]{0,80}data: themeOnlyUpdate\(\{/,
+	/**
+	 * Inverted by #772, and the direction is the whole change. `updateMeeting` was
+	 * a full REPLACE, so this pair used to REQUIRE a nine-field payload assembled
+	 * by `themeOnlyUpdate` from the page's loader snapshot — and forbid a
+	 * hand-rolled one. It is now a PATCH, so the correct payload is the small one,
+	 * and the echo is the bug: it wrote back a snapshot, reverting a Word of the
+	 * Day the Grammarian had saved after this page loaded.
+	 *
+	 * These are source greps because a route file cannot be imported by vitest at
+	 * all; the payload itself is asserted in
+	 * `src/components/club/personal-meeting-editors.test.tsx`.
+	 */
+	it("the theme editor sends the theme and the two identity fields, nothing more", () => {
+		const payload = editors.slice(
+			editors.indexOf("updateMeeting({"),
+			editors.indexOf('"Theme saved."'),
 		);
-		// Every field the writer would otherwise NULL reaches the builder in one
-		// object, so a partial `current` cannot be assembled by hand at the call
-		// site and drift from `MeetingMetaEcho`.
-		expect(editors).toContain("current: props.meeting");
+		expect(payload).toContain("meetingId: props.meeting.id");
+		expect(payload).toContain("selfMemberId: props.memberId");
+		expect(payload).toContain("theme,");
+		for (const field of [
+			"location",
+			"joinUrl",
+			"wordOfTheDay",
+			"wodDefinition",
+			"wodExample",
+			"notes",
+			"reminders",
+			"scheduledAt",
+		]) {
+			expect(
+				payload,
+				`${field} must not be on the theme payload — see #772`,
+			).not.toMatch(new RegExp(`^\\s*${field}:`, "m"));
+		}
 	});
 
-	it("no hand-rolled updateMeeting payload survives beside it", () => {
-		// RAW. `updateMeeting({ data: { meetingId: …, theme } })` type-checks, saves
-		// successfully, and erases the club's location, Word of the Day,
-		// announcements and notes on the same request.
-		expect(rawEditors).not.toMatch(/updateMeeting\(\{\s*data:\s*\{/);
+	it("the deleted echo is not reachable from here", () => {
+		// `themeOnlyUpdate` / `MeetingMetaEcho` went with #772. A reimplementation
+		// under either name is the lost update coming back.
+		expect(rawEditors).not.toContain("themeOnlyUpdate");
+		expect(rawEditors).not.toContain("MeetingMetaEcho");
+		expect(rawEditors).not.toContain("meeting-meta-update");
 	});
 
 	it("the word editor sends all three WOD fields on every save", () => {
@@ -390,7 +417,7 @@ describe("the writes go through the tested payload builders", () => {
 		// `personalMeetingHref`, which wants the URL spelling the visitor arrived
 		// with, so a file-wide negative fails on correct code.
 		expect(editors).toMatch(
-			/themeOnlyUpdate\(\{[\s\S]{0,120}meetingId: props\.meeting\.id/,
+			/updateMeeting\(\{[\s\S]{0,120}meetingId: props\.meeting\.id/,
 		);
 		expect(editors).toMatch(
 			/updateWordOfTheDay\(\{[\s\S]{0,200}meetingId: props\.meeting\.id/,

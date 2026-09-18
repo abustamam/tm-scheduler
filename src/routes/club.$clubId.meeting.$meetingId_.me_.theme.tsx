@@ -17,14 +17,17 @@
 // ## Which loader, and why the whole meeting payload
 //
 // This page renders one input, so loading the full agenda payload looks
-// gratuitous. It is not. `updateMeeting` is a full REPLACE — `applyMeetingUpdate`
-// writes `location: input.location?.trim() || null` and the same line for the
-// Word of the Day, its definition and example, the announcements and the notes —
-// so a save that posts only a theme ERASES all six, silently, reporting success.
-// The existing "Edit meeting" dialog never trips over this because it prefills
-// every field from the stored row and resubmits the lot. A focused editor has to
-// do the same, so it needs the same row. `#/lib/meeting-meta-update` is where
-// that round trip lives and is tested.
+// gratuitous — and since #772 it largely IS. It used to be load-bearing:
+// `updateMeeting` was a full REPLACE, so a save that posted only a theme erased
+// the location, the Word of the Day with its definition and example, the
+// announcements and the notes, and this editor had to read all six in order to
+// echo them back. `applyMeetingMetaPatch` leaves what it is not given alone, so
+// the only row this page still needs is the theme itself plus what the checklist
+// and the blocked-window card render.
+//
+// Narrowing the read is a separate change — `TODOS/theme-word-subroutes-666.md`
+// has it as P3 and says why it was waiting on this one — and the fork below is
+// shared with the word editor, which does still need the WOD columns.
 //
 // The `context.shell` fork is the meeting page's, verbatim, and is asserted by
 // `public-meeting-contact.guard.test.ts`: an anonymous visitor holding a chat

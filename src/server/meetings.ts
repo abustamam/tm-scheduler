@@ -60,7 +60,7 @@ import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
 	applyMeetingDigitalVoting,
-	applyMeetingUpdate,
+	applyMeetingMetaPatch,
 	applyReopenMeeting,
 	applyWordOfTheDayUpdate,
 	loadPublicUpcomingMeetings,
@@ -662,7 +662,7 @@ const createMeetingSchema = z.object({
 	location: MEETING_FIELDS.location.optional(),
 	// #731. LENGTH only, and measured against the NORMALIZED value — see
 	// `JOIN_URL_FIELD`. The stored value's SHAPE comes from
-	// `normalizePresentationUrl` in `applyCreateMeeting` / `applyMeetingUpdate`.
+	// `normalizePresentationUrl` in `applyCreateMeeting` / `applyMeetingMetaPatch`.
 	joinUrl: JOIN_URL_FIELD.optional(),
 	theme: MEETING_FIELDS.theme.optional(),
 	wordOfTheDay: WOD_FIELDS.word.optional(),
@@ -681,30 +681,37 @@ export const createMeeting = createServerFn({ method: "POST" })
 
 // No `actorMemberId` on the wire (#396) — see `speakerSlotSchema` in slots.ts:
 // the agenda-editor guard resolves who the caller is and that is what is logged.
+// A PATCH, not a replace (#772). Every field is `.nullable().optional()` and the
+// three states travel end to end: absent means leave the column alone, `null`
+// means clear it, a value means store it. `.nullable()` is what makes the middle
+// state expressible on the wire at all — without it a caller could only clear a
+// field by sending `""`, which reads as a mistake rather than an intent.
 const updateMeetingSchema = z.object({
 	meetingId: uuid,
 	/** Self-asserted TMOD member id (public page). Null for authed admin. */
 	selfMemberId: uuid.nullable().optional(),
-	scheduledAt: z.string().min(1),
+	// Optional since #772: a partial editor no longer resubmits the meeting's
+	// current wall time, which it previously had to get right TO THE MINUTE or
+	// the `canReschedule` check refused the save as an attempted reschedule.
+	scheduledAt: z.string().min(1).optional(),
 	lengthMinutes: z.number().int().positive().optional(),
-	location: MEETING_UPDATE_FIELDS.location.optional(),
-	// #731. A full-REPLACE field like the rest: omitting it CLEARS the stored
-	// link, which is why `MeetingMetaEcho` carries it — see
-	// `#/lib/meeting-meta-update`. Rejects rather than truncates, and measures
-	// the NORMALIZED length; `JOIN_URL_FIELD` carries both reasons.
-	joinUrl: JOIN_URL_FIELD.optional(),
-	theme: MEETING_UPDATE_FIELDS.theme.optional(),
-	wordOfTheDay: WOD_UPDATE_FIELDS.word.optional(),
-	wodDefinition: WOD_UPDATE_FIELDS.definition.optional(),
-	wodExample: WOD_UPDATE_FIELDS.example.optional(),
-	notes: MEETING_UPDATE_FIELDS.notes.optional(),
-	reminders: MEETING_UPDATE_FIELDS.reminders.optional(),
+	location: MEETING_UPDATE_FIELDS.location.nullable().optional(),
+	// #731. Rejects rather than truncates, and measures the NORMALIZED length;
+	// `JOIN_URL_FIELD` carries both reasons.
+	joinUrl: JOIN_URL_FIELD.nullable().optional(),
+	theme: MEETING_UPDATE_FIELDS.theme.nullable().optional(),
+	wordOfTheDay: WOD_UPDATE_FIELDS.word.nullable().optional(),
+	wodDefinition: WOD_UPDATE_FIELDS.definition.nullable().optional(),
+	wodExample: WOD_UPDATE_FIELDS.example.nullable().optional(),
+	notes: MEETING_UPDATE_FIELDS.notes.nullable().optional(),
+	reminders: MEETING_UPDATE_FIELDS.reminders.nullable().optional(),
 	// The club's meeting number (#358). Nullable = cleared back to derived.
 	meetingNumber: z.number().int().positive().nullable().optional(),
 });
 
-/** Edit a meeting's meta. Admin/VPE (may also reschedule) OR the meeting's
- *  self-asserted TMOD (meta only — reschedule rejected). AUTHED or self-assert. */
+/** Edit a meeting's meta — a PATCH: an omitted field is left alone (#772).
+ *  Admin/VPE (may also reschedule) OR the meeting's self-asserted TMOD (meta
+ *  only — reschedule rejected). AUTHED or self-assert. */
 export const updateMeeting = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updateMeetingSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -712,7 +719,7 @@ export const updateMeeting = createServerFn({ method: "POST" })
 			meetingId: data.meetingId,
 			selfMemberId: data.selfMemberId ?? null,
 		});
-		return applyMeetingUpdate({
+		return applyMeetingMetaPatch({
 			...data,
 			actorMemberId: authz.actorMemberId,
 			canReschedule: authz.via === "admin",

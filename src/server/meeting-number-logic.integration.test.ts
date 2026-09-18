@@ -21,7 +21,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { freezeMeetingNumber, resolveMeetingNumber } = await import(
 	"./meeting-number-logic"
 );
-const { applyCompleteMeeting, applyMeetingUpdate } = await import(
+const { applyCompleteMeeting, applyMeetingMetaPatch } = await import(
 	"./meetings-logic"
 );
 
@@ -132,7 +132,7 @@ describe.skipIf(!hasTestDb)("meeting numbers (#358)", () => {
 		const last = await addMeeting(-1);
 		const next = await addMeeting(6);
 
-		await applyMeetingUpdate({
+		await applyMeetingMetaPatch({
 			meetingId: last,
 			actorMemberId: null,
 			scheduledAt: wallTime(await scheduledAtOf(last)),

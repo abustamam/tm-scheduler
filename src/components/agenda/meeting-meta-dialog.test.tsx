@@ -8,9 +8,9 @@
 // of its four behaviours are decisions this component makes and no other module
 // can see:
 //
-//  1. the field is always SENT, blank included — `updateMeeting` is a full
-//     REPLACE, so omitting it is indistinguishable from clearing it, and a
-//     dialog that only sent a non-empty value could never clear one;
+//  1. the field is always SENT, blank included — since #772 `updateMeeting` is a
+//     PATCH, so an omitted key means "leave the stored link alone" and a dialog
+//     that only sent a non-empty value could never clear one;
 //  2. a non-empty value that normalizes to null is REFUSED before the round
 //     trip, because the server would store null for `"tbd"` just as happily and
 //     the officer would be told the meeting saved while the link quietly went;
@@ -143,9 +143,9 @@ describe("what the dialog sends", () => {
 	});
 
 	it("sends an empty string when the officer clears the field, which CLEARS the link", async () => {
-		// Not `undefined`. `updateMeeting` is a full replace, so both land on null
-		// — but a dialog that omitted the key could never distinguish "leave it"
-		// from "clear it", and this is the only surface that can clear it at all.
+		// Not `undefined`, and since #772 that is the whole difference: an omitted
+		// key leaves the stored link alone, so `""` is the only way this dialog —
+		// the only surface that can clear the link at all — says "clear it".
 		const { user, input, save } = setup({
 			joinUrl: "https://zoom.us/j/1234567890",
 		});
@@ -156,8 +156,8 @@ describe("what the dialog sends", () => {
 	});
 
 	it("always carries the key, even when the club never had a link", async () => {
-		// The omission this guards is the data-loss shape `MeetingMetaEcho`
-		// documents, seen from the other side.
+		// Sending the key unconditionally is what makes a cleared field reach the
+		// server as a clear rather than as silence.
 		const { user, save } = setup();
 		await user.click(save);
 		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
@@ -179,8 +179,9 @@ describe("what the dialog sends", () => {
  *   link set → open → clear the field → CANCEL → reopen → save a theme
  *   → the club's join link is deleted.
  *
- * Which is the data-loss `MeetingMetaEcho` exists to prevent, reintroduced on
- * the client. These are the regression.
+ * Data loss on the client, where no writer-side patch can help: the dialog sends
+ * this field on every save, so a stale value in it IS an edit. These are the
+ * regression.
  */
 describe("the field re-reads the row on every open", () => {
 	it("discards an edit that was cancelled rather than saved", async () => {

@@ -39,14 +39,9 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
-import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate } from "#/lib/format";
 import { isMeetingLocked, resolveMeetingViewer } from "#/lib/meeting-lifecycle";
 import { MEETING_LIMITS } from "#/lib/meeting-limits";
-import {
-	type MeetingMetaEcho,
-	themeOnlyUpdate,
-} from "#/lib/meeting-meta-update";
 import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { canEditWordOfTheDay } from "#/lib/meeting-viewer";
 import { personalMeetingHref } from "#/lib/role-duties";
@@ -54,8 +49,13 @@ import { WOD_LIMITS } from "#/lib/wod-limits";
 import { updateMeeting, updateWordOfTheDay } from "#/server/meetings";
 
 /** The meeting fields both editors read. A structural subset of the meeting row
- *  the shared loaders return, so a route hands its `meeting` straight over. */
-export interface EditorMeeting extends MeetingMetaEcho {
+ *  the shared loaders return, so a route hands its `meeting` straight over.
+ *
+ *  Deliberately NARROW since #772: it carries what these two forms PREFILL and
+ *  no longer the six meta fields a theme save used to echo back. Widening it to
+ *  cover the meeting row again would be the first half of reintroducing that
+ *  lost update. */
+export interface EditorMeeting {
 	/** The RESOLVED uuid. Both writers validate `z.string().uuid()`, so the
 	 *  `$meetingId` URL segment (a club-local date key) would be rejected at the
 	 *  write, after the page had already rendered fine. */
@@ -64,7 +64,15 @@ export interface EditorMeeting extends MeetingMetaEcho {
 	 *  for anything that crossed a server fn. */
 	scheduledAt: Date | string;
 	status: string;
+	/** Prefills the theme editor. */
 	theme: string | null;
+	/** Prefill the WORD editor, which is the only reason these three are here:
+	 *  `applyWordOfTheDayUpdate` owns exactly these columns and replaces all
+	 *  three, so that form has to show what is stored or a save loses the two
+	 *  fields the officer did not retype. */
+	wordOfTheDay: string | null;
+	wodDefinition: string | null;
+	wodExample: string | null;
 }
 
 /** One slot, reduced to what `deriveMeetingRoleFlags` matches on. */
@@ -256,11 +264,13 @@ const THEME_BLURB =
 /**
  * The Toastmaster of the Day's focused theme editor.
  *
- * Writes through `updateMeeting`, which is a full REPLACE — see
- * `#/lib/meeting-meta-update`. `themeOnlyUpdate` is what stops a one-field save
- * from nulling the club's location, Word of the Day, announcements and notes,
- * and it is not optional decoration: without it this component is a data-loss
- * bug that reports success.
+ * Writes through `updateMeeting`, which since #772 is a PATCH: the payload is
+ * the theme and the two identity fields, and every column it does not name is
+ * left alone by `applyMeetingMetaPatch`. It used to send six more, echoed off
+ * the page's loader snapshot, because the writer nulled what it was not given —
+ * which meant a theme save silently reverted a Word of the Day the Grammarian
+ * had entered after this page loaded. The small payload is the fix; a field
+ * added back to it is that bug returning.
  */
 export function PersonalThemeEditor(props: EditorProps) {
 	const { viewer, when, backHref } = useEditorContext(props);
@@ -298,7 +308,7 @@ export function PersonalThemeEditor(props: EditorProps) {
 					void run(
 						() =>
 							updateMeeting({
-								data: themeOnlyUpdate({
+								data: {
 									meetingId: props.meeting.id,
 									// ALWAYS sent, signed in or not. `isSignedIn` is not "is an
 									// admin": `publicShellDecision` returns `shell: true` for
@@ -319,16 +329,14 @@ export function PersonalThemeEditor(props: EditorProps) {
 									// this — `club.$clubId.meeting.$meetingId.tsx:944` branches
 									// on `canManage`, never on having a session.
 									selfMemberId: props.memberId,
-									// The meeting's CURRENT wall time, resubmitted unchanged.
-									// A self-serve TMOD carries `canReschedule = false` and any
-									// actual move is rejected — see ADR-0010.
-									scheduledAt: utcToZonedWallTime(
-										new Date(props.meeting.scheduledAt),
-										props.timezone,
-									),
+									// The theme, and NOTHING else (#772). `updateMeeting` is a
+									// patch: what is absent is left alone. Sending the six other
+									// meta fields — which this editor did until #772, because the
+									// writer nulled what it was not given — wrote back a
+									// page-load snapshot and reverted whatever the Grammarian had
+									// saved since. Blank clears, which is a legitimate edit.
 									theme,
-									current: props.meeting,
-								}),
+								},
 							}),
 						"Theme saved.",
 					);
