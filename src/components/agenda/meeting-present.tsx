@@ -28,6 +28,7 @@ import {
 import {
 	cqw,
 	SLIDE_BODY_BOTTOM_PCT,
+	SLIDE_FOOTER_HEIGHT_PCT,
 	SLIDE_HEADER_GAP_PCT,
 	SLIDE_HEADER_TOP_PCT,
 	SLIDE_INSET_PCT,
@@ -652,9 +653,21 @@ function ContentSlide({
 					)}
 				</div>
 			</div>
+			{/* The footer's height and side inset come from the same module the
+			    header and body read (#724). It used to carry its own `h-[8.5cqw]`
+			    and `px-[5cqw]`, matching the .pptx's own two literals and matching
+			    nothing on its own slide — the "GavelUp" mark stood 3% of frame
+			    width inside the body text above it. Tailwind arbitrary values
+			    cannot take a runtime constant, so these are style props like the
+			    header's, not classes. */}
 			<footer
-				className="flex h-[8.5cqw] flex-col justify-center gap-[0.7cqw] px-[5cqw]"
-				style={{ background: NAVY }}
+				className="flex flex-col justify-center gap-[0.7cqw]"
+				style={{
+					background: NAVY,
+					height: cqw(SLIDE_FOOTER_HEIGHT_PCT),
+					paddingLeft: cqw(SLIDE_INSET_PCT),
+					paddingRight: cqw(SLIDE_INSET_PCT),
+				}}
 			>
 				<div className="flex items-center justify-between">
 					{/* GavelUp origin mark on deck chrome (ADR-0024). */}
