@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
+
+import {
+	createMemoryHistory,
+	createRootRoute,
+	createRoute,
+	createRouter,
+	Link,
+	RouterProvider,
+} from "@tanstack/react-router";
 import {
 	act,
 	cleanup,
 	fireEvent,
 	render,
 	screen,
+	waitFor,
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -1585,12 +1595,24 @@ describe("member identity link (#727)", () => {
 			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
 		);
 		const link = screen.getByRole("link", { name: "Ayesha Khan" });
+		// The LITERAL first, so `grep -rn text-inherit src/` finds this gate. The
+		// regex below is the real assertion and catches the deletion on its own —
+		// but it spells the utility as `text-(inherit|…`, so a reviewer grepping
+		// for the class concluded the fix was ungated and flagged it. A gate a
+		// reasonable grep cannot find is a gate the next reader deletes.
+		expect(
+			link.className,
+			"the member link must carry `text-inherit` — without a text-* utility " +
+				"it renders the base-layer anchor colour (#328f97, 3.81:1, under AA).",
+		).toContain("text-inherit");
 		expect(
 			/\btext-(inherit|\[|[a-z]+-\d)/.test(link.className),
 			"the member link must set its own text-* colour utility or it renders " +
 				"the base-layer anchor colour (#328f97, 3.81:1, under AA) — see " +
 				"CODING_STANDARDS.md's layered text-link entry. Do NOT fix this with " +
-				"a :not() arm or !important.",
+				"a :not() arm or !important. This arm is the general one: switching " +
+				"to a different text-* utility is a deliberate change, so update the " +
+				"literal above with it rather than deleting this.",
 		).toBe(true);
 	});
 
@@ -1636,6 +1658,8 @@ describe("member identity link (#727)", () => {
 							preferredName: null,
 							email: null,
 							phoneRaw: null,
+							stage: "prospect",
+							convertedMembershipId: null,
 						},
 					},
 				}}
@@ -1661,5 +1685,98 @@ describe("member identity link (#727)", () => {
 		expect(
 			screen.queryByRole("button", { name: /Edit Nadia Farouk/i }),
 		).toBeNull();
+	});
+});
+
+/**
+ * The member link must NOT preload on touch (#727 review).
+ *
+ * `router.tsx` sets `defaultPreload: "intent"` with `defaultPreloadStaleTime: 0`,
+ * and the router fires `doPreload()` on TOUCHSTART with no delay. This rail is a
+ * ~40-row pinned column that on an iPad is scrolled by DRAGGING, and `flex-1` in
+ * `IDENTITY_NAME_CLASS` makes each anchor the full remaining width of its row —
+ * so a drag starts on an anchor nearly every time, and `/members/$id`'s loader
+ * is a `Promise.all` over four server fns. That is four requests per scroll
+ * gesture, on club wifi, mid-meeting, for a page nobody opened.
+ *
+ * Driven rather than grepped. A source assertion on `preload={false}` would pass
+ * on a prop the router had stopped honouring, and the thing that matters is
+ * whether a loader RUNS. The seam is a real memory router carrying the same
+ * `defaultPreload` settings the app uses, with a spy for `/members/$id`'s
+ * loader; the CONTROL below is an ordinary `<Link>` in the same router, which
+ * preloads — without it this would pass on a jsdom that never dispatches
+ * touchstart to the router at all.
+ */
+describe("member link preloading (#727 review)", () => {
+	afterEach(() => cleanup());
+
+	async function mountWithMemberRoute(ui: React.ReactNode) {
+		const loader = vi.fn(async () => ({}));
+		const rootRoute = createRootRoute({ component: () => ui });
+		const membersRoute = createRoute({
+			getParentRoute: () => rootRoute,
+			path: "/members/$id",
+			loader,
+			component: () => null,
+		});
+		const router = createRouter({
+			routeTree: rootRoute.addChildren([membersRoute]),
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+			// The app's own settings (`src/router.tsx`) — the whole point is to
+			// reproduce the behaviour this Link opts out of.
+			defaultPreload: "intent",
+			defaultPreloadStaleTime: 0,
+		});
+		render(<RouterProvider router={router} />);
+		await waitFor(() => expect(router.state.status).toBe("idle"));
+		return { loader };
+	}
+
+	it("CONTROL: an ordinary Link in this router does preload on touch", async () => {
+		// The pre-fix behaviour, and the thing that makes the assertion below able
+		// to fail. If touchstart never reached the router, the real test would pass
+		// for the wrong reason and go on passing after the fix was reverted.
+		const { loader } = await mountWithMemberRoute(
+			<Link to="/members/$id" params={{ id: "m1" }}>
+				Ayesha Khan
+			</Link>,
+		);
+		fireEvent.touchStart(screen.getByRole("link", { name: "Ayesha Khan" }));
+		await waitFor(() => expect(loader).toHaveBeenCalled());
+	});
+
+	it("the rail's member name does NOT preload on touch", async () => {
+		const { loader } = await mountWithMemberRoute(
+			<MeetingAttendancePanel
+				mode="plan"
+				roster={[
+					{
+						id: "m1",
+						name: "Ayesha Khan",
+						preferredName: null,
+						phone: null,
+						email: null,
+					},
+				]}
+				plan={[]}
+				rungOverride={{}}
+				roleByMemberId={{}}
+				meetingDate="Tue 19 Aug"
+				shareUrl="https://club.example/m"
+				locked={false}
+				canViewMemberDetail={true}
+				onWriteRung={vi.fn()}
+				onContacted={vi.fn()}
+			/>,
+		);
+		fireEvent.touchStart(screen.getByRole("link", { name: "Ayesha Khan" }));
+		// Give the router the same window the control above resolved in.
+		await new Promise((r) => setTimeout(r, 50));
+		expect(
+			loader,
+			"a touch on the rail's member name must not run /members/$id's loader " +
+				"(four server fns) — the rail is drag-scrolled and each anchor is the " +
+				"full width of its row. Keep `preload={false}` on that Link.",
+		).not.toHaveBeenCalled();
 	});
 });

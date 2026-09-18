@@ -67,6 +67,8 @@ const GUEST_EDIT = {
 			preferredName: "Nadi",
 			email: "nadia@example.com",
 			phoneRaw: "415-555-2671 x12",
+			stage: "prospect",
+			convertedMembershipId: null,
 		},
 	},
 };
@@ -454,6 +456,136 @@ describe("AttendanceGuestsGroup", () => {
 			expect((screen.getByLabelText("Email") as HTMLInputElement).value).toBe(
 				"nadia.new@example.com",
 			);
+		});
+
+		it("tells the officer when the guest has already JOINED the roster", async () => {
+			// The dropped-prop bug, and why `joined` is derived from the row rather
+			// than passed. `applyConvertGuestToMember` re-points role slots and sets
+			// `stage: "joined"` but never touches `meeting_attendance`, so a visitor
+			// who joins at tonight's meeting is still on tonight's rail with an edit
+			// control — and the officer fixing an email needs telling they are
+			// editing the dead guest row, not the new member's roster record.
+			await renderUnderMemoryRouter(
+				<AttendanceGuestsGroup
+					{...base}
+					guestEdit={{
+						...GUEST_EDIT,
+						fields: {
+							g1: {
+								...GUEST_EDIT.fields.g1,
+								stage: "joined",
+								convertedMembershipId: "mem-1",
+							},
+						},
+					}}
+				/>,
+			);
+			await userEvent.click(
+				screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+			);
+			expect(
+				(await screen.findByRole("dialog")).textContent,
+				"a joined guest's dialog must say their roster details are edited " +
+					"on the roster — the rail's call site used to omit the `joined` " +
+					"prop and silently got the visitor copy",
+			).toMatch(/already a member/i);
+		});
+
+		it("does NOT claim a STRANDED conversion is a member (#618)", async () => {
+			// `stage: "joined"` with a null pointer means the membership was removed
+			// from the roster after the convert. Reading the stage alone would tell
+			// the officer to go edit a roster record that no longer exists. Same
+			// predicate VP Membership uses to decide whether to offer Delete.
+			await renderUnderMemoryRouter(
+				<AttendanceGuestsGroup
+					{...base}
+					guestEdit={{
+						...GUEST_EDIT,
+						fields: {
+							g1: {
+								...GUEST_EDIT.fields.g1,
+								stage: "joined",
+								convertedMembershipId: null,
+							},
+						},
+					}}
+				/>,
+			);
+			await userEvent.click(
+				screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+			);
+			expect((await screen.findByRole("dialog")).textContent).not.toMatch(
+				/already a member/i,
+			);
+		});
+
+		it("surfaces a REFUSED write, keeps the dialog open, and claims no success", async () => {
+			// The catch branch, untested until now — including the one refusal that
+			// actually happens: `applyUpdateGuest` rejects a phone or email that
+			// already belongs to another club guest, because `captureGuestVisit`
+			// dedups on exactly those keys and allowing the clash would leave two
+			// rows matching one submission.
+			updateGuest.mockRejectedValueOnce(
+				new Error("Another guest already uses that phone number."),
+			);
+			toastError.mockClear();
+			toastSuccess.mockClear();
+			await renderUnderMemoryRouter(
+				<AttendanceGuestsGroup {...base} guestEdit={GUEST_EDIT} />,
+			);
+			await userEvent.click(
+				screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+			);
+			fireEvent.submit(
+				(await screen.findByLabelText("Name")).closest(
+					"form",
+				) as HTMLFormElement,
+			);
+			await vi.waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+			// The SERVER's message, not a generic one — it names the clash, which is
+			// the only thing that tells the officer which field to change.
+			expect(toastError).toHaveBeenCalledWith(
+				"Another guest already uses that phone number.",
+			);
+			// No success toast for a write that did not happen, and the dialog stays
+			// up so the field they just typed is still there to fix.
+			expect(toastSuccess).not.toHaveBeenCalled();
+			expect(screen.queryByRole("dialog")).not.toBeNull();
+		});
+
+		it("does not double-toast when the REFRESH fails after a committed write", async () => {
+			// The two phases fail in different worlds. One `try` around both fired
+			// success-then-error for a single action, over a change that was already
+			// in the database — and "something went wrong" about a committed write
+			// is the more damaging of the two errors.
+			toastError.mockClear();
+			toastSuccess.mockClear();
+			await renderUnderMemoryRouter(
+				<AttendanceGuestsGroup
+					{...base}
+					guestEdit={{
+						...GUEST_EDIT,
+						onSaved: vi.fn(async () => {
+							throw new Error("network");
+						}),
+					}}
+				/>,
+			);
+			await userEvent.click(
+				screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+			);
+			fireEvent.submit(
+				(await screen.findByLabelText("Name")).closest(
+					"form",
+				) as HTMLFormElement,
+			);
+			await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+			expect(toastSuccess).toHaveBeenCalledTimes(1);
+			expect(
+				toastError,
+				"a refresh failure must not be reported as a failed save — the write " +
+					"committed, the view is merely stale",
+			).not.toHaveBeenCalled();
 		});
 
 		it("still edits a guest who is present because of a role", async () => {

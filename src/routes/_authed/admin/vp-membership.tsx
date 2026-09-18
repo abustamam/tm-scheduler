@@ -809,7 +809,6 @@ function GuestEditDelete({
 			<GuestEditDialog
 				guest={guest}
 				clubId={clubId}
-				joined={joined}
 				open={editOpen}
 				onOpenChange={setEditOpen}
 			/>

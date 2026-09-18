@@ -117,17 +117,25 @@ describe("meeting rail identity wiring (#727)", () => {
 		);
 	});
 
-	it("evicts those rows when the viewer changes", () => {
-		// The guest pipeline carries every club guest's email and phone. The
-		// shared club laptop gets handed on BEFORE anyone signs out, which is the
-		// case #576 built the sibling `tmod-plan` eviction for, so "same session"
-		// is not a reason to keep it. `myId` is the trigger for both.
-		const at = src.indexOf('removeQueries({ queryKey: ["guest-pipeline"');
+	it("evicts those rows through the SAME key it fetched them with", () => {
+		// The guest pipeline carries every club guest's email and phone, so the
+		// entry is dropped rather than left to the five-minute default gcTime.
+		//
+		// Anchored on the NAMED key, not on a `["guest-pipeline", …` literal. The
+		// literal version of this assertion was worse than useless: it forced the
+		// eviction to hand-write its own copy of the key — so the guard defended
+		// the duplication it existed to prevent — and being a prefix match it
+		// passed on `["guest-pipeline", meeting.id]`, which evicts nothing at all.
+		const at = src.indexOf("removeQueries({ queryKey: guestPipelineKey })");
 		expect(
 			at,
-			"expected the guest-pipeline cache to be evicted on a viewer change",
+			"expected the guest-pipeline cache to be evicted through guestPipelineKey",
 		).toBeGreaterThan(-1);
 		expect(src.slice(at, at + 200)).toContain("myId");
+		// The key must be memoised, or it is a new array every render and the
+		// effect above tears down and re-runs each time — evicting the query it
+		// has just fetched, on every render.
+		expect(src).toMatch(/const guestPipelineKey = useMemo\(/);
 	});
 
 	it("prefills the dialog from the STORED phone column", () => {

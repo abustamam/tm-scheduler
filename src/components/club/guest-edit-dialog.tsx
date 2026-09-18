@@ -13,6 +13,7 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { isStrandedConvertedGuest } from "#/lib/guest-convert";
 import { firstNameOf } from "#/lib/person-name";
 import { updateGuest } from "#/server/guest-pipeline";
 
@@ -44,6 +45,24 @@ export interface GuestEditFields {
 	 * handing over the coalesced value has to say so.
 	 */
 	phoneRaw: string | null;
+	/**
+	 * The pipeline stage and the conversion pointer — NOT written by this form,
+	 * carried so the dialog can work out for itself whether this guest has
+	 * already joined the roster (see `joined` below).
+	 *
+	 * They are here rather than as a `joined` PROP because the prop was
+	 * droppable and got dropped: VP Membership passed `joined={joined}` and the
+	 * meeting rail's call site did not, so a guest who joined at tonight's
+	 * meeting — still on tonight's rail, because `applyConvertGuestToMember`
+	 * re-points role slots and sets `stage: "joined"` but never touches
+	 * `meeting_attendance` — opened a dialog that said "Fix X's name and contact
+	 * details" instead of telling the officer they were editing a dead guest row.
+	 * A field the type REQUIRES cannot be forgotten at one of two call sites;
+	 * a boolean prop with a default can. `PipelineGuestRow` carries both, so VP
+	 * Membership's row still assigns straight in.
+	 */
+	stage: string;
+	convertedMembershipId: string | null;
 }
 
 /**
@@ -76,21 +95,12 @@ export interface GuestEditFields {
 export function GuestEditDialog({
 	guest,
 	clubId,
-	joined = false,
 	open,
 	onOpenChange,
 	onSaved,
 }: {
 	guest: GuestEditFields;
 	clubId: string;
-	/**
-	 * This guest has already been converted onto the roster, so the dialog says
-	 * which record is being edited. The guest row is still the record of the
-	 * VISITOR and is always safe to correct — `applyUpdateGuest` allows it at
-	 * every stage — but their ROSTER details live on the roster, and someone
-	 * opening this to fix a member's email needs telling.
-	 */
-	joined?: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	/**
@@ -118,6 +128,20 @@ export function GuestEditDialog({
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
 
+	// DERIVED here, not passed in — see `GuestEditFields.stage`. This guest has
+	// already been converted onto the roster, so the description says which
+	// record is being edited: the guest row is still the record of the VISITOR
+	// and is always safe to correct (`applyUpdateGuest` allows every stage), but
+	// their ROSTER details live on the roster, and someone who opened this to fix
+	// a member's email needs telling.
+	//
+	// STRANDED is not joined (#618): converted once, then the membership was
+	// removed from the roster, which nulls `converted_membership_id` and leaves
+	// the stage saying `joined` forever. Same predicate VP Membership uses to
+	// decide whether to offer Delete, from the same helper, so the two cannot
+	// disagree about what "joined" means.
+	const joined = guest.stage === "joined" && !isStrandedConvertedGuest(guest);
+
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		const form = new FormData(e.currentTarget);
@@ -128,16 +152,33 @@ export function GuestEditDialog({
 		}
 		setBusy(true);
 		try {
-			await updateGuest({
-				data: {
-					clubId,
-					guestId: guest.id,
-					name,
-					preferredName: String(form.get("preferredName") ?? "").trim() || null,
-					email: String(form.get("email") ?? "").trim() || null,
-					phone: String(form.get("phone") ?? "").trim() || null,
-				},
-			});
+			// TWO phases with SEPARATE failure handling, because they fail in
+			// different worlds. Wrapping both in one `try` — which this did — fires
+			// `toast.success` and then `toast.error` for a single action whenever the
+			// refresh rejects, over a write that has already COMMITTED, and leaves
+			// the dialog open with no indication which half went wrong.
+			try {
+				await updateGuest({
+					data: {
+						clubId,
+						guestId: guest.id,
+						name,
+						preferredName:
+							String(form.get("preferredName") ?? "").trim() || null,
+						email: String(form.get("email") ?? "").trim() || null,
+						phone: String(form.get("phone") ?? "").trim() || null,
+					},
+				});
+			} catch (err) {
+				// The write itself. This is the user's error to see and act on —
+				// `applyUpdateGuest` refuses a phone/email that already belongs to
+				// another club guest, and that message names the clash. Stay open so
+				// they can fix the field they just typed.
+				toast.error(
+					err instanceof Error ? err.message : "Something went wrong.",
+				);
+				return;
+			}
 			toast.success("Guest updated.");
 			// REFRESH FIRST, CLOSE LAST — both halves matter.
 			//
@@ -152,11 +193,17 @@ export function GuestEditDialog({
 			// pre-#727 `busy` flag covered, and the same reasoning
 			// `DeclineReleaseDialog` carries on the meeting route ("stays OPEN until
 			// the write resolves, with both controls disabled").
-			await onSaved?.();
-			await router.invalidate();
+			try {
+				await onSaved?.();
+				await router.invalidate();
+			} catch {
+				// The write LANDED; this is a stale view, not a failed save, and
+				// saying "something went wrong" about a change that is in the database
+				// is the more damaging error of the two. Swallowed deliberately: the
+				// success toast already told the truth, and the next navigation or
+				// refetch repairs the display.
+			}
 			onOpenChange(false);
-		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {
 			setBusy(false);
 		}

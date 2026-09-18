@@ -54,7 +54,12 @@ function filesMatching(root: string, pattern: RegExp): string[] {
 			if (entry.isDirectory()) {
 				if (entry.name !== "node_modules") walk(full);
 			} else if (
-				entry.name.endsWith(".tsx") &&
+				// `.ts` AS WELL AS `.tsx`. Arm 1 below is JSX-only, but arm 2 (the
+				// `preferredName: String(form.get(` payload builder) is plain
+				// TypeScript — a shared submit handler lifted into a `.ts` module is
+				// exactly the third copy this census exists to catch, and a
+				// `.tsx`-only walk cannot see it.
+				(entry.name.endsWith(".tsx") || entry.name.endsWith(".ts")) &&
 				!entry.name.includes(".test.")
 			) {
 				if (pattern.test(readFileSync(full, "utf8"))) {

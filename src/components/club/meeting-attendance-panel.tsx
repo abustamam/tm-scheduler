@@ -179,12 +179,30 @@ function PanelIdentityLine({
 				 * ink, which is the plain branch's colour by construction.
 				 *
 				 * Nothing in-process can see this: jsdom loads no stylesheet and
-				 * `bun run test` never parses `styles.css` as CSS. The panel suite
-				 * therefore asserts the CLASS; the cascade itself is only verifiable
-				 * against a real build. */
+				 * `bun run test` never parses `styles.css` as CSS. The gate is
+				 * therefore a CLASS assertion — this file's suite, "paints the link
+				 * with its OWN text utility" — and the cascade itself was checked
+				 * once against a real build (base rule inside `@layer base`,
+				 * `.text-inherit` inside `@layer utilities`, so utilities wins). The
+				 * build check is evidence, not a gate; the class assertion is the
+				 * gate, and deleting the utility fails it. */
 				<Link
 					to="/members/$id"
 					params={{ id: linkToMemberId }}
+					/* `preload={false}`, against the router's `defaultPreload: "intent"`
+					 * (`router.tsx`). "intent" fires `doPreload()` on TOUCHSTART with no
+					 * delay and `defaultPreloadStaleTime: 0` re-fetches every time, and
+					 * `/members/$id`'s loader is a `Promise.all` over FOUR server fns
+					 * (profile, pathways, path options, enrollments).
+					 *
+					 * This rail is a ~40-row PINNED column, which on the iPad it is run
+					 * from is scrolled by dragging — and `flex-1` in
+					 * `IDENTITY_NAME_CLASS` makes each anchor the full remaining width
+					 * of the row, so a drag starts on an anchor nearly every time. Every
+					 * such touch would fire four server fns for a page nobody is opening,
+					 * on club wifi, mid-meeting. Desktop loses a hover prefetch; that is
+					 * the trade, and it is the right way round. */
+					preload={false}
 					className={cn(IDENTITY_NAME_CLASS, "text-inherit hover:underline")}
 				>
 					{name}

@@ -652,13 +652,19 @@ function MeetingView() {
 	// capability sees. The conservative direction, and the necessary one — this
 	// form turns a blank field into `null` on save, so a dialog opened over rows
 	// that never arrived would wipe the record it was opened to fix.
-	// ONE key expression, read by the fetch, by the post-save refresh and by the
-	// viewer-change eviction below. Written out three times it is three places to
-	// get a cache key subtly wrong, and every way of getting it wrong is silent:
-	// a refresh that misses leaves a stale prefill (which SAVES the old value on
-	// the next submit), and an eviction that misses leaves a visitor's email and
-	// phone in the cache for the next person to pick up the laptop.
-	const guestPipelineKey = ["guest-pipeline", clubUuid] as const;
+	// ONE key, read by the fetch, by the post-save refresh and by the eviction
+	// below — and `useMemo`'d so it can actually BE that one key. A fresh array
+	// every render cannot go in the eviction effect's deps (the effect would tear
+	// down and re-run every render, removing the query it just fetched), which is
+	// what had the eviction hand-writing its own copy of the literal. Written out
+	// three times it is three places to get a cache key subtly wrong, and every
+	// way of getting it wrong is silent: a refresh that misses leaves a stale
+	// prefill, which SAVES the old value on the next submit; an eviction that
+	// misses leaves a visitor's email and phone in the cache.
+	const guestPipelineKey = useMemo(
+		() => ["guest-pipeline", clubUuid] as const,
+		[clubUuid],
+	);
 	const { data: guestPipeline } = useQuery({
 		queryKey: guestPipelineKey,
 		queryFn: () => getGuestPipeline({ data: clubUuid }),
@@ -702,6 +708,11 @@ function MeetingView() {
 								// `phoneRaw`, the stored column — NEVER `g.phone`, which is
 								// coalesced to E.164 for display. See `GuestEditFields`.
 								phoneRaw: g.phoneRaw,
+								// Not written by the form — the dialog derives "already a
+								// member" from these, so its description is right on a guest
+								// who joined at THIS meeting and is still on tonight's rail.
+								stage: g.stage,
+								convertedMembershipId: g.convertedMembershipId,
 							},
 						]),
 					),
@@ -719,20 +730,26 @@ function MeetingView() {
 			queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] });
 		};
 	}, [queryClient, meeting.id, myId]);
-	// The guest pipeline gets the same treatment, for the same reason and in its
-	// own effect (#727). It carries every club guest's email and phone, and the
-	// case the eviction above was built for is the club laptop being handed on —
-	// which happens BEFORE anyone signs out, so "they are still the same session"
-	// is not a reason to keep it. A separate effect rather than a second line in
-	// the one above because that statement is pinned verbatim by
-	// `attendance-panel-wiring.guard.test.ts`; the trigger (`myId`) and the
-	// behaviour are identical either way.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: same shape as the eviction above — myId is the TRIGGER, and guestPipelineKey is rebuilt every render, so the CLUB id is what belongs in the deps
+	// The guest pipeline gets the same treatment, in its own effect (#727),
+	// because it carries every club guest's email and phone.
+	//
+	// What this actually buys, stated honestly: it drops the entry on UNMOUNT —
+	// navigating away from the meeting, or closing the page. The `myId` trigger
+	// is carried for symmetry with the eviction above and is very nearly inert
+	// here, because the one viewer class that can hold this entry is a signed-in
+	// admin, and the "not you? re-pick" flow that changes `myId` does not change
+	// who is signed in. So the shared-laptop case is covered only to the extent
+	// that the next person navigates; it is NOT the guarantee the roster eviction
+	// above gives. Signing out is what clears it properly.
+	//
+	// A separate effect rather than a second line in the one above because that
+	// statement is pinned verbatim by `attendance-panel-wiring.guard.test.ts`.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: myId is the TRIGGER, not a value the body reads — the same shape as the eviction above
 	useEffect(() => {
 		return () => {
-			queryClient.removeQueries({ queryKey: ["guest-pipeline", clubUuid] });
+			queryClient.removeQueries({ queryKey: guestPipelineKey });
 		};
-	}, [queryClient, clubUuid, myId]);
+	}, [queryClient, guestPipelineKey, myId]);
 	const fetchedPlan = tmodPanelData?.plan ?? [];
 	// The panel needs the CONTACT-bearing roster (`loaderRoster`), not the public
 	// one the assign picker falls back to — without phone and email every row
@@ -1928,6 +1945,19 @@ function MeetingView() {
 							// the absence of. The target route is `_authed` and enforces its
 							// own access either way; what this decides is whether a viewer
 							// who cannot follow the link is shown one.
+							//
+							// KNOWN GAP, deliberately out of scope for #727: a superadmin
+							// on a `read_write` impersonation session satisfies
+							// `canManageClub` with no membership, but `publicShellDecision`
+							// sets `activeClubId` only for `memberOfViewed` — and
+							// `/members/$id` resolves the member out of
+							// `context.activeClubId`. So for that one viewer the links
+							// render and land on the empty shape. Not a leak (the profile
+							// read is club-scoped, so the wrong club returns nothing), and
+							// not this issue's to fix: the cause is how `activeClubId` is
+							// resolved for impersonation, which the issue's Out of Scope
+							// list rules out ("Changing how canManage … is resolved").
+							// Recorded here rather than left silent.
 							canViewMemberDetail={effectiveCanManage}
 							// Roll mode's guest edit (#727). `undefined` for everyone else,
 							// so their guest names stay plain text with no disabled control

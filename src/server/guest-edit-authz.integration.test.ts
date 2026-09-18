@@ -22,29 +22,55 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, officerTerms } from "#/db/schema";
+import { guests, officerTerms, people, user } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { canManageClub, requireClubRole } = await import("#/server/guards");
+const {
+	canManageClub,
+	NO_PERMISSION_MESSAGE,
+	NOT_A_MEMBER_MESSAGE,
+	requireClubRole,
+} = await import("#/server/guards");
 const { applyUpdateGuest } = await import("#/server/guest-pipeline-logic");
 
 describe.skipIf(!hasTestDb)("guest-edit authorization (#727)", () => {
 	let seed: SeededClub;
 	let guestId: string;
-	/** A user with no membership in the seeded club at all. */
+	/** A REAL signed-in user — row in `user`, row in `people` — who simply has no
+	 *  membership in this club. A bare `randomUUID()` would exercise a nonexistent
+	 *  ACCOUNT instead, which is a different rejection on a different branch and
+	 *  says nothing about the cross-club case the payload's `clubId` makes
+	 *  reachable. */
 	let outsiderUserId: string;
+	/** Tracked so `afterEach` can delete it BY ID. `cleanup` cascades from the
+	 *  club and then deletes the people who had memberships in it — this person
+	 *  has none, so it survives and leaks into the next run (CLAUDE.md's
+	 *  club-less-row trap). */
+	let outsiderPersonId: string;
 
 	beforeEach(async () => {
 		seed = await seedClub();
 		outsiderUserId = randomUUID();
+		await testDb.insert(user).values({
+			id: outsiderUserId,
+			name: "Outsider User",
+			email: `outsider-${outsiderUserId}@test.example`,
+			emailVerified: true,
+		});
+		outsiderPersonId = await seedPerson({
+			name: "Outsider User",
+			email: `outsider-${outsiderUserId}@test.example`,
+			userId: outsiderUserId,
+		});
 		const [row] = await testDb
 			.insert(guests)
 			.values({
@@ -60,6 +86,10 @@ describe.skipIf(!hasTestDb)("guest-edit authorization (#727)", () => {
 	});
 
 	afterEach(async () => {
+		// Only the id this run created — an unscoped delete would take another
+		// suite's in-flight rows, since vitest runs files in parallel against one
+		// shared `tm_test`.
+		await testDb.delete(people).where(eq(people.id, outsiderPersonId));
 		await cleanup(seed.clubId, [
 			seed.adminUserId,
 			seed.memberUserId,
@@ -74,7 +104,7 @@ describe.skipIf(!hasTestDb)("guest-edit authorization (#727)", () => {
 		// without going anywhere near the UI that decides whether to draw a button.
 		await expect(
 			requireClubRole(seed.memberUserId, seed.clubId, ["admin"]),
-		).rejects.toThrow(/permission/i);
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
 	});
 
 	it("REJECTS a signed-in user who is not in this club", async () => {
@@ -82,9 +112,14 @@ describe.skipIf(!hasTestDb)("guest-edit authorization (#727)", () => {
 		// reachable: the meeting page hands `clubId` to the dialog, so a caller can
 		// name any club they like. `requireMembership` is what refuses, and it
 		// refuses before the guest id is ever looked at.
+		//
+		// The MESSAGE, not a bare `.rejects.toThrow()`. Unpatterned, this passes on
+		// any throw at all — including the connection error a mis-seeded fixture
+		// produces, which is how a rejection test comes to pass for a reason that
+		// has nothing to do with authorization.
 		await expect(
 			requireClubRole(outsiderUserId, seed.clubId, ["admin"]),
-		).rejects.toThrow();
+		).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
 	});
 
 	it("ACCEPTS a real admin, and the write lands", async () => {
