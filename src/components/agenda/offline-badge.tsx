@@ -95,21 +95,24 @@ const wrap: React.CSSProperties = {
  *
  * The ground is WHITE at 0.85, not "no background", and that is the one value
  * here that is not taste. The component takes no host prop, so a single style
- * has to stay legible on every ground it is mounted over, and those run the
- * full range: the Print toolbar's `#fff` (`print-theme.tsx`'s
+ * has to stay legible on every ground it is mounted over. There are exactly
+ * two mounts (`present.tsx`, `print.tsx`) and between them five grounds, and
+ * they run the full range: the Print toolbar's `#fff` (`print-theme.tsx`'s
  * `PRINT_TOOLBAR_STYLE`), the Present view's `bg-black` letterbox bars, the
- * content slide's off-white `GROUND` (`#f3f4f4`) and the dark splash's navy
- * (`#0a4f78`) — see `meeting-present.tsx:35-42`. Bare ink cannot serve both
- * ends of that range, so the chip carries just enough ground of its own.
+ * content slide's off-white `GROUND`, and both ends of the dark splash's navy
+ * gradient — see `meeting-present.tsx`. Bare ink cannot serve both ends of
+ * that range, so the chip carries just enough ground of its own.
  *
  * What that buys, measured as WCAG contrast of `PILL_INK` over `PILL_GROUND`
- * composited on each of those four: 7.58 (toolbar) / 5.36 (black bar) / 7.47
- * (content slide) / 5.90 (navy splash). The floor is the black bar at 5.36:1,
- * against AA's 4.5:1 for normal text — and against the 5.65:1 the loud green
- * pill had on the same ground, so this is quieter WITHOUT being harder to
- * read. `offline-badge.test.tsx` recomputes all four rather than trusting this
- * comment; jsdom loads no stylesheet and can see nothing about legibility on
- * its own.
+ * composited on each: 7.58 (toolbar) / 5.36 (black bar) / 7.47 (content slide)
+ * / 5.90 (splash top) / 5.63 (splash bottom). The floor is the black bar at
+ * 5.36:1, against AA's 4.5:1 for normal text — and against the 5.65:1 the loud
+ * green pill had on the same ground, so this is quieter WITHOUT being harder
+ * to read. `offline-badge.test.tsx` recomputes all five rather than trusting
+ * this comment, and READS the five grounds out of the host files rather than
+ * copying them here, so a host that repaints its chrome fails there instead of
+ * leaving a stale copy green. jsdom loads no stylesheet and can see nothing
+ * about legibility on its own.
  *
  * Nice property of pure white as the ground: on the white Print toolbar the
  * chip composites to the toolbar's own colour, so it reads as bare text there
