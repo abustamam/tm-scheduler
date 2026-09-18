@@ -1,13 +1,32 @@
 // @vitest-environment jsdom
+
+import {
+	createMemoryHistory,
+	createRootRoute,
+	createRoute,
+	createRouter,
+	Link,
+	RouterProvider,
+} from "@tanstack/react-router";
 import {
 	act,
 	cleanup,
 	fireEvent,
 	render,
+	screen,
+	waitFor,
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderUnderMemoryRouter } from "#/test/router-harness";
+
+// The panel reaches the shared `GuestEditDialog` through `AttendanceGuestsGroup`
+// (#727), and that dialog imports the `updateGuest` server fn — a server-fn
+// module pulls `#/db` → `pg` → `DATABASE_URL` at import time, unset under
+// jsdom. Stubbing it is what keeps this suite able to mount the panel at all.
+vi.mock("#/server/guest-pipeline", () => ({ updateGuest: vi.fn() }));
+
 import { MeetingAttendancePanel } from "./meeting-attendance-panel";
 
 const roster = [
@@ -1483,5 +1502,281 @@ describe("roll mode", () => {
 			/>,
 		);
 		getByText(/1 change saved on this device/);
+	});
+});
+
+/**
+ * #727 — the member name is a link to `/members/$id`, for a viewer the SERVER
+ * has already resolved as able to manage the club, and plain text for everyone
+ * else.
+ *
+ * The gate itself is a prop, and a prop-driven gate is exactly the shape that
+ * ships the wrong audience with a green suite (#319: `VisitCta` was fully
+ * tested and shown to the wrong people because every test injected the prop
+ * itself). So these assert what the COMPONENT does with each answer, and
+ * `attendance-panel-wiring.guard.test.ts` asserts the route expression that
+ * computes it. Neither half is sufficient alone.
+ */
+describe("member identity link (#727)", () => {
+	afterEach(() => cleanup());
+
+	const linkProps = {
+		mode: "plan" as const,
+		roster: [
+			{
+				id: "m1",
+				name: "Ayesha Khan",
+				preferredName: null,
+				phone: null,
+				email: null,
+			},
+		],
+		plan: [],
+		rungOverride: {},
+		roleByMemberId: {},
+		meetingDate: "Tue 19 Aug",
+		shareUrl: "https://club.example/m",
+		locked: false,
+		onWriteRung: vi.fn(),
+		onContacted: vi.fn(),
+	};
+
+	it("renders PLAIN TEXT without the capability", async () => {
+		// The default. `canViewMemberDetail` is optional so plan mode's existing
+		// callers need no change, which means the default is what an un-wired
+		// caller gets — and it has to be the closed one.
+		await renderUnderMemoryRouter(<MeetingAttendancePanel {...linkProps} />);
+		expect(screen.getByText("Ayesha Khan")).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "Ayesha Khan" })).toBeNull();
+	});
+
+	it("links the name to that member's detail page WITH the capability", async () => {
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
+		);
+		const link = screen.getByRole("link", { name: "Ayesha Khan" });
+		// The ID in the href, not merely "a link exists": the row holds the id and
+		// a link built from the wrong one lands on a stranger's profile (or, since
+		// `/members/$id` is `_authed`, on a sign-in wall) with nothing visibly
+		// wrong on this page.
+		expect(link.getAttribute("href")).toBe("/members/m1");
+	});
+
+	it("keeps the two-line clamp on the LINKED name (criterion 11)", async () => {
+		// `name` is unbounded user data and the rail is ~292px wide. The clamp has
+		// to be on the element holding the TEXT, so swapping a `<span>` for an
+		// `<a>` is the classic way to lose it — and jsdom performs no layout, so
+		// the rendered height is not measurable here (CLAUDE.md's jsdom trap).
+		// What IS assertable is that the link carries the same box the plain span
+		// does, which is the property the shared class constant exists to hold.
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
+		);
+		const link = screen.getByRole("link", { name: "Ayesha Khan" });
+		expect(link.className).toContain("line-clamp-2");
+		expect(link.className).toContain("break-words");
+		expect(link.className).toContain("min-w-0");
+	});
+
+	it("paints the link with its OWN text utility, not the base-layer anchor colour", async () => {
+		// `styles.css` colours every bare `a` inside `@layer base`
+		// (`var(--lagoon-deep)`, #328f97 — 3.81:1 on white, UNDER AA at this
+		// `text-sm` size; CODING_STANDARDS.md records that exact number and that
+		// exact failure). Layer order beats specificity in Tailwind v4, so a
+		// component's own `text-*` utility wins with nothing to enrol — and
+		// omitting one is not neutral, it opts INTO the failing colour, and makes
+		// the linked branch a different ink from the plain-text branch that
+		// `IDENTITY_NAME_CLASS` promises it cannot drift from.
+		//
+		// jsdom loads no stylesheet and `bun run test` never parses `styles.css`
+		// as CSS, so no in-process test can see the cascade. The class is the
+		// assertable half; the cascade itself is only verifiable against a build.
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
+		);
+		const link = screen.getByRole("link", { name: "Ayesha Khan" });
+		// The LITERAL first, so `grep -rn text-inherit src/` finds this gate. The
+		// regex below is the real assertion and catches the deletion on its own —
+		// but it spells the utility as `text-(inherit|…`, so a reviewer grepping
+		// for the class concluded the fix was ungated and flagged it. A gate a
+		// reasonable grep cannot find is a gate the next reader deletes.
+		expect(
+			link.className,
+			"the member link must carry `text-inherit` — without a text-* utility " +
+				"it renders the base-layer anchor colour (#328f97, 3.81:1, under AA).",
+		).toContain("text-inherit");
+		expect(
+			/\btext-(inherit|\[|[a-z]+-\d)/.test(link.className),
+			"the member link must set its own text-* colour utility or it renders " +
+				"the base-layer anchor colour (#328f97, 3.81:1, under AA) — see " +
+				"CODING_STANDARDS.md's layered text-link entry. Do NOT fix this with " +
+				"a :not() arm or !important. This arm is the general one: switching " +
+				"to a different text-* utility is a deliberate change, so update the " +
+				"literal above with it rather than deleting this.",
+		).toBe(true);
+	});
+
+	it("links the name in ROLL mode too", async () => {
+		// Roll mode is meeting day, which is when "who is this person?" is asked
+		// out loud. The two modes render different row components, so a fix wired
+		// into one of them leaves the other dead — which is the exact failure
+		// `PanelRow`/`PanelIdentityLine` were extracted to prevent.
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel
+				{...linkProps}
+				mode="roll"
+				attendance={[]}
+				onSetAttendance={vi.fn()}
+				canViewMemberDetail={true}
+			/>,
+		);
+		expect(
+			screen.getByRole("link", { name: "Ayesha Khan" }).getAttribute("href"),
+		).toBe("/members/m1");
+	});
+
+	it("passes the guest-edit capability down to the Guests group", async () => {
+		// The panel is the only path from the route to that group, and `guestEdit`
+		// is OPTIONAL there — so dropping it here type-checks, lints clean, and
+		// silently removes the control. The group's own suite covers what it does
+		// with the capability; this covers that it ever arrives.
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel
+				{...linkProps}
+				mode="roll"
+				attendance={[]}
+				onSetAttendance={vi.fn()}
+				guests={[{ guestId: "g1", name: "Nadia Farouk", fromRole: false }]}
+				clubGuests={[]}
+				guestEdit={{
+					clubId: "c1",
+					onSaved: vi.fn(),
+					fields: {
+						g1: {
+							id: "g1",
+							name: "Nadia Farouk",
+							preferredName: null,
+							email: null,
+							phoneRaw: null,
+							stage: "prospect",
+							convertedMembershipId: null,
+						},
+					},
+				}}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+		).toBeTruthy();
+	});
+
+	it("leaves the guest name plain when the panel is given no capability", async () => {
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel
+				{...linkProps}
+				mode="roll"
+				attendance={[]}
+				onSetAttendance={vi.fn()}
+				guests={[{ guestId: "g1", name: "Nadia Farouk", fromRole: false }]}
+				clubGuests={[]}
+			/>,
+		);
+		expect(screen.getByText("Nadia Farouk")).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /Edit Nadia Farouk/i }),
+		).toBeNull();
+	});
+});
+
+/**
+ * The member link must NOT preload on touch (#727 review).
+ *
+ * `router.tsx` sets `defaultPreload: "intent"` with `defaultPreloadStaleTime: 0`,
+ * and the router fires `doPreload()` on TOUCHSTART with no delay. This rail is a
+ * ~40-row pinned column that on an iPad is scrolled by DRAGGING, and `flex-1` in
+ * `IDENTITY_NAME_CLASS` makes each anchor the full remaining width of its row —
+ * so a drag starts on an anchor nearly every time, and `/members/$id`'s loader
+ * is a `Promise.all` over four server fns. That is four requests per scroll
+ * gesture, on club wifi, mid-meeting, for a page nobody opened.
+ *
+ * Driven rather than grepped. A source assertion on `preload={false}` would pass
+ * on a prop the router had stopped honouring, and the thing that matters is
+ * whether a loader RUNS. The seam is a real memory router carrying the same
+ * `defaultPreload` settings the app uses, with a spy for `/members/$id`'s
+ * loader; the CONTROL below is an ordinary `<Link>` in the same router, which
+ * preloads — without it this would pass on a jsdom that never dispatches
+ * touchstart to the router at all.
+ */
+describe("member link preloading (#727 review)", () => {
+	afterEach(() => cleanup());
+
+	async function mountWithMemberRoute(ui: React.ReactNode) {
+		const loader = vi.fn(async () => ({}));
+		const rootRoute = createRootRoute({ component: () => ui });
+		const membersRoute = createRoute({
+			getParentRoute: () => rootRoute,
+			path: "/members/$id",
+			loader,
+			component: () => null,
+		});
+		const router = createRouter({
+			routeTree: rootRoute.addChildren([membersRoute]),
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+			// The app's own settings (`src/router.tsx`) — the whole point is to
+			// reproduce the behaviour this Link opts out of.
+			defaultPreload: "intent",
+			defaultPreloadStaleTime: 0,
+		});
+		render(<RouterProvider router={router} />);
+		await waitFor(() => expect(router.state.status).toBe("idle"));
+		return { loader };
+	}
+
+	it("CONTROL: an ordinary Link in this router does preload on touch", async () => {
+		// The pre-fix behaviour, and the thing that makes the assertion below able
+		// to fail. If touchstart never reached the router, the real test would pass
+		// for the wrong reason and go on passing after the fix was reverted.
+		const { loader } = await mountWithMemberRoute(
+			<Link to="/members/$id" params={{ id: "m1" }}>
+				Ayesha Khan
+			</Link>,
+		);
+		fireEvent.touchStart(screen.getByRole("link", { name: "Ayesha Khan" }));
+		await waitFor(() => expect(loader).toHaveBeenCalled());
+	});
+
+	it("the rail's member name does NOT preload on touch", async () => {
+		const { loader } = await mountWithMemberRoute(
+			<MeetingAttendancePanel
+				mode="plan"
+				roster={[
+					{
+						id: "m1",
+						name: "Ayesha Khan",
+						preferredName: null,
+						phone: null,
+						email: null,
+					},
+				]}
+				plan={[]}
+				rungOverride={{}}
+				roleByMemberId={{}}
+				meetingDate="Tue 19 Aug"
+				shareUrl="https://club.example/m"
+				locked={false}
+				canViewMemberDetail={true}
+				onWriteRung={vi.fn()}
+				onContacted={vi.fn()}
+			/>,
+		);
+		fireEvent.touchStart(screen.getByRole("link", { name: "Ayesha Khan" }));
+		// Give the router the same window the control above resolved in.
+		await new Promise((r) => setTimeout(r, 50));
+		expect(
+			loader,
+			"a touch on the rail's member name must not run /members/$id's loader " +
+				"(four server fns) — the rail is drag-scrolled and each anchor is the " +
+				"full width of its row. Keep `preload={false}` on that Link.",
+		).not.toHaveBeenCalled();
 	});
 });

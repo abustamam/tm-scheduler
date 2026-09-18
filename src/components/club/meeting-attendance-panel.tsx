@@ -1,6 +1,10 @@
+import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { AttendanceGuestsGroup } from "#/components/club/attendance-guests-group";
+import {
+	AttendanceGuestsGroup,
+	type GuestEditCapability,
+} from "#/components/club/attendance-guests-group";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import {
 	SyncStatus,
@@ -107,6 +111,25 @@ function PanelRow({ children }: { children: ReactNode }) {
 	);
 }
 
+/** The name's own box, shared BY VALUE between the plain-text and the linked
+ *  branch below (#727) so the two cannot drift.
+ *
+ *  `break-words` wraps an unbroken name rather than cutting it off;
+ *  `line-clamp-2` is the other half of spec §3 and the half that was never
+ *  implemented. `name` is unbounded user data, so with neither a truncation nor
+ *  a clamp one member can grow their row without limit and push the rest of a
+ *  40-row rail off screen. Two lines, not one: `line-clamp-1` would reintroduce
+ *  the single-line cutoff `truncate` was removed to fix.
+ *
+ *  Wrapping a clamped span in a link is the classic way to lose that — the
+ *  clamp has to be on the element that holds the TEXT, and an `<a>` placed
+ *  inside a clamped `<span>` (or a bare `<a>` given only `hover:underline`)
+ *  renders an unbounded name at full height. One constant, applied to whichever
+ *  element is the text box, is what makes the linked row obey the same ceiling
+ *  as the plain one. */
+const IDENTITY_NAME_CLASS =
+	"line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium";
+
 /** Identity line. The name owns it — at 2-4 characters the role code costs it
  *  almost nothing, which is the whole reason the code replaced the full role name
  *  here.
@@ -118,21 +141,75 @@ function PanelRow({ children }: { children: ReactNode }) {
 function PanelIdentityLine({
 	name,
 	role,
+	linkToMemberId,
 }: {
 	name: string;
 	role: PanelRowRole | null;
+	/**
+	 * Non-null ⇒ render the name as a link to this member's detail page (#727).
+	 * Null ⇒ plain text, which is what every viewer without the capability gets.
+	 *
+	 * An ID rather than a boolean beside `m.id` because the row already holds
+	 * the id and a boolean would let a caller say "link it" without saying WHO
+	 * — and `/members/$id` is `_authed`, so a wrong id is a sign-in wall rather
+	 * than a visible mistake. The gate itself lives at the route: the target
+	 * enforces its own access, but rendering a link a viewer cannot follow just
+	 * dead-ends them, so the capability decides whether it appears at all.
+	 */
+	linkToMemberId: string | null;
 }) {
 	return (
 		<div className="flex items-start gap-1.5">
-			{/* `break-words` wraps an unbroken name rather than cutting it off;
-			 *  `line-clamp-2` is the other half of spec §3 and the half that was never
-			 *  implemented. `name` is unbounded user data, so with neither a truncation
-			 *  nor a clamp one member can grow their row without limit and push the
-			 *  rest of a 40-row rail off screen. Two lines, not one: `line-clamp-1`
-			 *  would reintroduce the single-line cutoff `truncate` was removed to fix. */}
-			<span className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium">
-				{name}
-			</span>
+			{linkToMemberId ? (
+				/* `text-inherit` is NOT decoration — without a `text-*` utility this
+				 * anchor is painted by `styles.css`'s `@layer base { a { color:
+				 * var(--lagoon-deep) } }`, which is #328f97: 3.81:1 on white, UNDER
+				 * AA, on a `text-sm` name (see CODING_STANDARDS.md's layered-text-link
+				 * entry, where that exact number and that exact failure are recorded).
+				 * It would also have made the two branches render different INK while
+				 * the constant below promises they cannot drift — true of the box,
+				 * false of the colour.
+				 *
+				 * A utility is the whole fix and the only sanctioned one: Tailwind v4
+				 * declares `@layer theme, base, components, utilities`, layer order
+				 * beats specificity, so a component setting its own `text-*` wins with
+				 * nothing to enrol. Do NOT reach for a `:not()` arm or `!important` —
+				 * the standards entry records that reopening 26 anchors at once.
+				 * `text-inherit` specifically, so the linked name carries the row's own
+				 * ink, which is the plain branch's colour by construction.
+				 *
+				 * Nothing in-process can see this: jsdom loads no stylesheet and
+				 * `bun run test` never parses `styles.css` as CSS. The gate is
+				 * therefore a CLASS assertion — this file's suite, "paints the link
+				 * with its OWN text utility" — and the cascade itself was checked
+				 * once against a real build (base rule inside `@layer base`,
+				 * `.text-inherit` inside `@layer utilities`, so utilities wins). The
+				 * build check is evidence, not a gate; the class assertion is the
+				 * gate, and deleting the utility fails it. */
+				<Link
+					to="/members/$id"
+					params={{ id: linkToMemberId }}
+					/* `preload={false}`, against the router's `defaultPreload: "intent"`
+					 * (`router.tsx`). "intent" fires `doPreload()` on TOUCHSTART with no
+					 * delay and `defaultPreloadStaleTime: 0` re-fetches every time, and
+					 * `/members/$id`'s loader is a `Promise.all` over FOUR server fns
+					 * (profile, pathways, path options, enrollments).
+					 *
+					 * This rail is a ~40-row PINNED column, which on the iPad it is run
+					 * from is scrolled by dragging — and `flex-1` in
+					 * `IDENTITY_NAME_CLASS` makes each anchor the full remaining width
+					 * of the row, so a drag starts on an anchor nearly every time. Every
+					 * such touch would fire four server fns for a page nobody is opening,
+					 * on club wifi, mid-meeting. Desktop loses a hover prefetch; that is
+					 * the trade, and it is the right way round. */
+					preload={false}
+					className={cn(IDENTITY_NAME_CLASS, "text-inherit hover:underline")}
+				>
+					{name}
+				</Link>
+			) : (
+				<span className={IDENTITY_NAME_CLASS}>{name}</span>
+			)}
 			{/* No `mt-0.5` on the badge below: under `items-start` its inner text
 			 *  centre already lands within a pixel of the name's (11px vs 10px
 			 *  against Tailwind v4 defaults — `text-xs`/`py-0.5`/1px border against
@@ -185,6 +262,7 @@ function AttendanceRow({
 	locked,
 	meetingDate,
 	shareUrl,
+	linkIdentity,
 	pending,
 	onWriteRung,
 	onContacted,
@@ -193,6 +271,8 @@ function AttendanceRow({
 	locked: boolean;
 	meetingDate: string;
 	shareUrl: string;
+	/** #727 — see the panel's `canViewMemberDetail` prop. */
+	linkIdentity: boolean;
 	pending: boolean;
 	onWriteRung: (memberId: string, next: PlanStatus | null) => void;
 	onContacted: (memberId: string) => void;
@@ -268,7 +348,11 @@ function AttendanceRow({
 
 	return (
 		<PanelRow>
-			<PanelIdentityLine name={m.name} role={m.role} />
+			<PanelIdentityLine
+				name={m.name}
+				role={m.role}
+				linkToMemberId={linkIdentity ? m.id : null}
+			/>
 			<PanelActionLine>
 				<NudgeButtons
 					{...nudgeMode}
@@ -610,6 +694,7 @@ function RollAttendanceRow({
 	meetingDate,
 	shareUrl,
 	hideContact,
+	linkIdentity,
 	pending,
 	busy,
 	onSetAttendance,
@@ -628,6 +713,8 @@ function RollAttendanceRow({
 	 *  TRUE and useful for an active member with nothing on file ("go add a
 	 *  number"), and only wrong for someone who has left the club. */
 	hideContact: boolean;
+	/** #727 — see the panel's `canViewMemberDetail` prop. */
+	linkIdentity: boolean;
 	pending: boolean;
 	busy: boolean;
 	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
@@ -640,7 +727,11 @@ function RollAttendanceRow({
 		// right-aligned on the rail's one right edge, holding the icon-only contact
 		// drafts and the status control inside its fixed track.
 		<PanelRow>
-			<PanelIdentityLine name={row.name} role={row.role} />
+			<PanelIdentityLine
+				name={row.name}
+				role={row.role}
+				linkToMemberId={linkIdentity ? row.id : null}
+			/>
 			<PanelActionLine>
 				{hideContact || row.departed ? null : (
 					// `iconOnly`, which this row was missing. The prop's own doc says it
@@ -706,6 +797,8 @@ export function MeetingAttendancePanel({
 	onSetAttendance,
 	guests,
 	clubGuests,
+	canViewMemberDetail = false,
+	guestEdit,
 	onAddGuest,
 	onRemoveGuest,
 	sync,
@@ -779,6 +872,27 @@ export function MeetingAttendancePanel({
 	 *  empty group. */
 	guests?: MinutesGuestRow[];
 	clubGuests?: { id: string; name: string }[];
+	/**
+	 * #727. The viewer may open a member's detail page, so BOTH modes render the
+	 * name as a link to `/members/$id`; everyone else gets plain text.
+	 *
+	 * A prop rather than a check here, and the route is where the value is
+	 * computed, because the answer is not this component's to give: this panel
+	 * renders on a route that is NOT under `_authed`, so "may see member detail"
+	 * has to be a capability the SERVER already resolved. Defaults false so
+	 * plan mode's existing callers need no change — which also means dropping it
+	 * at the call site is silent, and `attendance-panel-wiring.guard.test.ts` is
+	 * what watches for that.
+	 */
+	canViewMemberDetail?: boolean;
+	/**
+	 * Roll mode only (#727). Present ⇒ a guest's name opens the shared edit
+	 * dialog; absent ⇒ plain text, with no disabled control hinting at what the
+	 * viewer cannot do. Carries the stored fields as well as the permission —
+	 * see `GuestEditCapability` for why a dialog over blank fields would be
+	 * destructive rather than merely wrong.
+	 */
+	guestEdit?: GuestEditCapability;
 	onAddGuest?: (payload: {
 		guestId?: string;
 		newGuest?: { name: string; email?: string; phone?: string };
@@ -1073,6 +1187,7 @@ export function MeetingAttendancePanel({
 										meetingDate={meetingDate}
 										shareUrl={shareUrl}
 										hideContact={hideContact}
+										linkIdentity={canViewMemberDetail}
 										pending={pendingId === row.id}
 										busy={busy}
 										onSetAttendance={setAttendance}
@@ -1085,6 +1200,7 @@ export function MeetingAttendancePanel({
 										locked={writesLocked}
 										meetingDate={meetingDate}
 										shareUrl={shareUrl}
+										linkIdentity={canViewMemberDetail}
 										pending={pendingId === m.id}
 										onWriteRung={writeRung}
 										onContacted={contacted}
@@ -1112,6 +1228,7 @@ export function MeetingAttendancePanel({
 							guests={guests}
 							clubGuests={clubGuests ?? []}
 							locked={writesLocked || busy}
+							guestEdit={guestEdit}
 							onAddGuest={onAddGuest ?? (() => {})}
 							onRemoveGuest={onRemoveGuest ?? (() => {})}
 						/>

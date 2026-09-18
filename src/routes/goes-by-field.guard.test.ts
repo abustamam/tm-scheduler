@@ -13,17 +13,64 @@
 // (3) does the same thing one step earlier: the field renders blank, and blank
 // saves as null.
 //
-// A source grep (the public-meeting-contact.guard.test.ts pattern) because
-// these are route files: the repo has no route-render tests, the server halves
-// are covered by integration tests that call `applyMemberEdit`/
+// A source grep (the public-meeting-contact.guard.test.ts pattern): the member
+// form is a route file and the repo has no route-render tests, the server
+// halves are covered by integration tests that call `applyMemberEdit`/
 // `applyUpdateGuest` directly, and this wiring sits between the two where no
 // existing test can see it.
-import { dirname, resolve } from "node:path";
+//
+// The GUEST form moved out of `_authed/admin/vp-membership.tsx` into the shared
+// `components/club/guest-edit-dialog.tsx` at #727, when the meeting page's
+// attendance rail became a second caller. This guard is the reason the move had
+// to be a LIFT rather than a copy: it reads ONE file per form, so a second copy
+// of the guest form would have been unguarded, and the failure it guards
+// against is silent — a mismatch makes `form.get` return null, the handler
+// sends null, and every save wipes the stored name while the form still looks
+// like it works.
+// ## Mutation evidence for the census (2026-09-17, run in this worktree)
+//
+//   a THIRD copy of the dialog, with its input renamed to `name="goesBy"`
+//     (the case an attribute-only sweep is blind to) .................... FAILS
+//   the payload arm re-spelled so it no longer matches ................. FAILS
+//     (the vacuity floor: it fails the per-arm test, not the union)
+//
+// The round-trip assertions above were mutation-checked the same way: breaking
+// the form key in `guest-edit-dialog.tsx` fails the first pair.
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
+
+/** Every non-test `.tsx` under `root` whose RAW source matches `pattern`,
+ *  as paths relative to `root` with forward slashes. */
+function filesMatching(root: string, pattern: RegExp): string[] {
+	const out: string[] = [];
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name !== "node_modules") walk(full);
+			} else if (
+				// `.ts` AS WELL AS `.tsx`. Arm 1 below is JSX-only, but arm 2 (the
+				// `preferredName: String(form.get(` payload builder) is plain
+				// TypeScript — a shared submit handler lifted into a `.ts` module is
+				// exactly the third copy this census exists to catch, and a
+				// `.tsx`-only walk cannot see it.
+				(entry.name.endsWith(".tsx") || entry.name.endsWith(".ts")) &&
+				!entry.name.includes(".test.")
+			) {
+				if (pattern.test(readFileSync(full, "utf8"))) {
+					out.push(relative(root, full).split("\\").join("/"));
+				}
+			}
+		}
+	};
+	walk(root);
+	return out;
+}
 /**
  * Comments are blanked FIRST (see `#/test/guard-source`), then whitespace is
  * collapsed so Biome's line-wrapping can't fool the matches. The order is
@@ -44,7 +91,9 @@ const FORMS = [
 		row: "member",
 	},
 	{
-		file: "_authed/admin/vp-membership.tsx",
+		// NOT `_authed/admin/vp-membership.tsx` any more (#727). The form lives in
+		// the shared dialog; VP Membership and the meeting rail both render it.
+		file: "../components/club/guest-edit-dialog.tsx",
 		what: "guest",
 		row: "guest",
 	},
@@ -83,6 +132,67 @@ describe("the Goes by field round-trips (#486)", () => {
 	it("finds the forms it claims to guard (so a route rename can't make this vacuous)", () => {
 		for (const { file } of FORMS) {
 			expect(read(file)).toContain("preferredName");
+		}
+	});
+
+	/**
+	 * The two files above and no others. This guard reads ONE file per form, so a
+	 * third copy anywhere — the obvious shortcut when a surface wants the same
+	 * dialog — is completely unguarded, and the failure mode is silent and
+	 * destructive: a `name` / `form.get` mismatch makes the save send `null`,
+	 * wiping the stored value while the form still looks like it works. It is
+	 * also why #727 had to LIFT the guest form rather than copy it.
+	 *
+	 * TWO patterns, deliberately, because a single one is a PROXY for the thing
+	 * that matters rather than the thing itself:
+	 *
+	 *  · `name="preferredName"` catches a copy that renders the input.
+	 *  · `preferredName: …form.get("…")` catches a copy that renders the input
+	 *    under a DIFFERENT name and reads it back into the same payload field —
+	 *    the case an attribute-only sweep is blind to, and the one that carries
+	 *    the mismatch hazard in the first place.
+	 *
+	 * Either one alone is satisfiable by a copy that avoids that one spelling, so
+	 * the union is the census and the fixture below pins that BOTH arms actually
+	 * fire. Reads RAW, not comment-blind: this is an offender-list sweep, so a
+	 * comment quoting either pattern can only ADD a false offender (a loud
+	 * failure, the safe direction), while blanking comments would LOOSEN it.
+	 */
+	const GUEST_FORM_PATTERNS = [
+		/name="preferredName"/,
+		/preferredName:\s*String\(form\.get\(/,
+	];
+	const EXPECTED_FORM_FILES = [
+		"components/club/guest-edit-dialog.tsx",
+		"routes/_authed/members.$id.tsx",
+	].sort();
+
+	it("there are exactly TWO of these forms in the tree (#727)", () => {
+		const src = resolve(ROUTES, "..");
+		const found = [
+			...new Set(GUEST_FORM_PATTERNS.flatMap((p) => filesMatching(src, p))),
+		].sort();
+		expect(
+			found,
+			"a third copy of the goes-by form appeared. This guard reads one file " +
+				"per form, so the new copy is unguarded — import the shared component " +
+				"instead, or add it to FORMS above and say why a third form exists.",
+		).toEqual(EXPECTED_FORM_FILES);
+	});
+
+	it("BOTH census patterns fire, so neither arm is carrying the other", () => {
+		// The vacuity floor. A pattern that matches nothing makes the union above
+		// pass on the other arm alone, which is precisely the single-proxy census
+		// this was widened to stop being — and it would read as a green guard.
+		// Asserted per-arm rather than on the union for that reason.
+		const src = resolve(ROUTES, "..");
+		for (const pattern of GUEST_FORM_PATTERNS) {
+			expect(
+				filesMatching(src, pattern).sort(),
+				`the census arm ${pattern} matches nothing it should. If the forms ` +
+					"legitimately changed shape, re-point the pattern — do not delete " +
+					"it, or the union silently narrows to a single lexical proxy.",
+			).toEqual(EXPECTED_FORM_FILES);
 		}
 	});
 });
