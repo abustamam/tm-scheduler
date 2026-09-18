@@ -116,7 +116,14 @@ async function fileToBase64(file: File): Promise<string> {
  */
 export const CLUB_LOGO_COPY = {
 	sectionTitle: "Club logo",
-	sectionDescription: "Shown on the printed meeting agenda.",
+	// Names every surface, not just print. This said "Shown on the printed
+	// meeting agenda." until #725 put the mark on the projected splashes and in
+	// the export, at which point an officer reading it had no reason to upload a
+	// logo for the thing the ROOM sees. A club deciding whether to upload one is
+	// the only reader this line has, so it has to list where the upload lands.
+	// Adding a surface? Add it here — ADR-0024 has the full list.
+	sectionDescription:
+		"Shown on the printed agenda, role sheets and Word of the Day poster, on the projected slides, and in the .pptx export.",
 	currentLabel: "Current logo",
 	uploadCta: "Upload a logo",
 	replaceCta: "Replace logo",

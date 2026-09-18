@@ -519,6 +519,19 @@ describe("Club settings — logo copy is derived from the shared limits", () => 
 		await renderRoute(loaderData());
 		expect(await screen.findByText(CLUB_LOGO_COPY.helpText)).toBeTruthy();
 	});
+
+	it("renders the section description, naming every surface, where the admin can see it", async () => {
+		// Same reasoning as the help text one above, for the line that answers
+		// "why would I upload this at all". It said print only until #725 put the
+		// mark on the projected splashes and in the export, so a club deciding
+		// whether to upload one was reading a list that was missing the surface
+		// their ROOM sees. The constant holding the right string proves nothing;
+		// this is the assertion that makes it about a user.
+		await renderRoute(loaderData());
+		expect(
+			await screen.findByText(CLUB_LOGO_COPY.sectionDescription),
+		).toBeTruthy();
+	});
 });
 describe("Club settings — upload write path (onUploadLogo)", () => {
 	it("submits the exact payload shape on Save (clubId, base64, mime, attested), shows a success toast, and invalidates the router", async () => {
