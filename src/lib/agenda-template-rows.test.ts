@@ -39,6 +39,7 @@ function beat(
 		markGreen: null,
 		markYellow: null,
 		markRed: null,
+		clubGoverned: false,
 		...over,
 	};
 }
@@ -970,9 +971,11 @@ describe("refreshTableTopicsMarks (#679)", () => {
 	/** What materialisation freezes for a club that had stated nothing. */
 	const FROZEN_STANDARD = { markGreen: 1, markYellow: 1.5, markRed: 2 };
 
-	/** The materialised segment: a ROLE beat with the Table Topics key that
-	 *  carries marks. `flex` is set because the real one has it, and is
-	 *  deliberately NOT part of the predicate — see the `flex: false` case. */
+	/** The materialised segment: the ROLE beat `materialiseRunOfShow` marked
+	 *  `clubGoverned` (#683). It carries the Table Topics key and the frozen
+	 *  marks too, because the real one does — but neither is what selects it any
+	 *  more, which is what the vote-row case below is about. `flex` is set for
+	 *  the same reason and is deliberately NOT part of the predicate. */
 	const segment = (over: Partial<TemplateBeatRow> = {}) =>
 		beat({
 			sortOrder: 0,
@@ -980,6 +983,7 @@ describe("refreshTableTopicsMarks (#679)", () => {
 			label: "Table Topics Master",
 			roleKey: "table_topics_master",
 			flex: true,
+			clubGoverned: true,
 			...FROZEN_STANDARD,
 			...over,
 		});
@@ -1045,17 +1049,26 @@ describe("refreshTableTopicsMarks (#679)", () => {
 	it("touches ONLY the segment — not the vote, the hand-off, or another role", () => {
 		// The run of show gives THREE beats `table_topics_master` and `beatSeed`
 		// labels all three "Table Topics Master", so neither the key nor the label
-		// identifies the row. What separates them is that only the segment CARRIES
-		// MARKS — verified against a real materialised template, which holds three
-		// rows with that key and one with marks.
+		// identifies the row. Until #683 what separated them was that only the
+		// segment CARRIED MARKS; now it is the stored `clubGoverned` column, and
+		// the vote row below carries marks an officer set precisely to show that
+		// the old separator no longer decides anything.
 		const beats = [
 			segment(),
-			// The Best Table Topics vote: same key and label, no marks.
+			// The Best Table Topics vote: same key and label, and — this is the
+			// #683 case — timer marks the officer put there. Under the inferred
+			// predicate this row started matching, so the refresh overwrote the
+			// officer's 0:30-1:00 with the club's speaking window and the editor
+			// replaced its inputs with read-only text, on a row they were not
+			// editing and could not get back without deleting it.
 			beat({
 				sortOrder: 1,
 				kind: "role",
 				label: "Table Topics Master",
 				roleKey: "table_topics_master",
+				markGreen: 0.5,
+				markYellow: 0.75,
+				markRed: 1,
 			}),
 			// The GE hand-off: same again.
 			beat({
@@ -1078,11 +1091,9 @@ describe("refreshTableTopicsMarks (#679)", () => {
 		];
 		const out = refreshTableTopicsMarks(beats, MCF);
 		expect(marksOf(out[0])).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
-		expect(marksOf(out[1])).toEqual({
-			green: null,
-			yellow: null,
-			red: null,
-		});
+		// ABSOLUTE, and deliberately NOT the club's 1 / 1.75 / 2.5: the officer's
+		// own numbers, unchanged. This is the assertion #683 exists for.
+		expect(marksOf(out[1])).toEqual({ green: 0.5, yellow: 0.75, red: 1 });
 		expect(marksOf(out[2])).toEqual({
 			green: null,
 			yellow: null,
@@ -1094,43 +1105,72 @@ describe("refreshTableTopicsMarks (#679)", () => {
 		expect({ ...out[0], ...FROZEN_STANDARD }).toEqual(segment());
 	});
 
-	it("does not INVENT marks on a row that has none", () => {
-		// `addAgendaRow` writes null marks, so an officer who adds a row and points
-		// it at the Table Topics Master must not watch a timer card appear — and an
-		// officer who deliberately cleared all three (legal: `assertMarks` allows 0
-		// or 3) must not watch them come back.
-		const cleared = segment({
-			markGreen: null,
-			markYellow: null,
-			markRed: null,
+	it("does not INVENT marks on a row the club does not own", () => {
+		// `addAgendaRow` writes null marks AND an ungoverned row, so an officer who
+		// adds a row and points it at the Table Topics Master must not watch a
+		// timer card appear on it.
+		const added = beat({
+			sortOrder: 0,
+			kind: "role",
+			label: "Table Topics Master",
+			roleKey: "table_topics_master",
 		});
-		expect(marksOf(refreshTableTopicsMarks([cleared], MCF)[0])).toEqual({
+		expect(marksOf(refreshTableTopicsMarks([added], MCF)[0])).toEqual({
 			green: null,
 			yellow: null,
 			red: null,
 		});
 	});
 
-	it("ignores a PARTIAL mark set, one clause at a time", () => {
-		// The predicate tests all three columns separately, so a fixture that nulls
-		// all three leaves any ONE of the clauses deletable with the suite green.
-		// Each case below is the only thing excluding its row.
+	it("refreshes a GOVERNED row whose marks were cleared (#683)", () => {
+		// The case that proves the marker REPLACED the inference rather than
+		// sitting beside it, and it is a real regression rather than a hypothetical
+		// one: under the old predicate a governed row that lost its marks stopped
+		// matching, so it was never refreshed again — no timer window on the run
+		// sheet, the agenda or the deck, while the Timer's role sheet kept printing
+		// the club's. One packet, two windows. The Undo path could mint exactly
+		// this row, and `assertMarks` permits clearing all three outright.
 		//
-		// Reachable rather than theoretical: `assertMarks` allows 0 or 3 on the
-		// write path, but these rows predate it and a script writes what it likes.
-		// `resolveMarks` collapses a partial set to null, so refreshing one would
-		// mean the editor showing a timer card the printed sheet does not.
+		// Re-adding ANY marks clause to `isTableTopicsSegment` fails here and
+		// nowhere else.
+		const cleared = segment({
+			markGreen: null,
+			markYellow: null,
+			markRed: null,
+		});
+		expect(marksOf(refreshTableTopicsMarks([cleared], MCF)[0])).toEqual({
+			green: 1,
+			yellow: 1.75,
+			red: 2.5,
+		});
+	});
+
+	it("repairs a PARTIAL mark set on a governed row, one hole at a time", () => {
+		// `resolveMarks` collapses a partial set to null, so a governed row with a
+		// hole in it renders NO timer card while the Timer's role sheet prints the
+		// club's — the same self-contradicting packet, reached from the other side.
+		// Rows like this predate `assertMarks` and a script writes what it likes.
+		//
+		// Three separate cases rather than one all-null fixture: a predicate that
+		// regrew a per-column clause would be caught by exactly one of them.
 		for (const hole of ["markGreen", "markYellow", "markRed"] as const) {
 			const partial = segment({ [hole]: null });
 			expect(
 				marksOf(refreshTableTopicsMarks([partial], MCF)[0]),
-				`${hole} alone must exclude the row`,
-			).toEqual(marksOf(partial));
+				`${hole} alone must not stop the refresh`,
+			).toEqual({ green: 1, yellow: 1.75, red: 2.5 });
 		}
 	});
 
 	it("ignores a SECTION row that happens to carry the key", () => {
-		const band = segment({ kind: "section", label: "TABLE TOPICS" });
+		// The TABLE TOPICS band. It is not governed — `materialiseRunOfShow` marks
+		// one ROLE beat and `assertGovernable` refuses to mark anything else — so
+		// the marker is what excludes it, as it is for every other row.
+		const band = segment({
+			kind: "section",
+			label: "TABLE TOPICS",
+			clubGoverned: false,
+		});
 		expect(marksOf(refreshTableTopicsMarks([band], MCF)[0])).toEqual({
 			green: 1,
 			yellow: 1.5,

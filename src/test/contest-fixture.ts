@@ -33,6 +33,7 @@ function beat(
 		markGreen: null,
 		markYellow: null,
 		markRed: null,
+		clubGoverned: false,
 		...over,
 	};
 }

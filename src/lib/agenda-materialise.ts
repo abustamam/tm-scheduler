@@ -6,7 +6,10 @@ import {
 	type RoleGroup,
 } from "./agenda-runsheet";
 import type { TemplateBeatSeed } from "./agenda-template-rows";
-import type { TableTopicsLimits } from "./table-topics-limits";
+import {
+	TABLE_TOPICS_ROLE_KEY,
+	type TableTopicsLimits,
+} from "./table-topics-limits";
 
 /**
  * Turn the code-derived run of show into rows a club can edit.
@@ -86,6 +89,9 @@ export function materialiseRunOfShow(
 	 * numbers. Passing the club's window here still matters — the stored row
 	 * should be right on the day it is written, and it is what a template COPY
 	 * (`copyTemplateForMeeting`) carries forward.
+	 *
+	 * WHICH row the refresh re-derives is decided here too, and stored: see
+	 * {@link clubGovernedIndex} and `meeting_template_beats.club_governed` (#683).
 	 */
 	tableTopicsLimits: TableTopicsLimits | null,
 ): TemplateBeatSeed[] {
@@ -97,6 +103,7 @@ export function materialiseRunOfShow(
 		tableTopicsLimits,
 	});
 	const opensAt = bandOpensAt(beats);
+	const governed = clubGovernedIndex(beats);
 
 	const out: TemplateBeatSeed[] = [];
 	let band = 0;
@@ -112,9 +119,37 @@ export function materialiseRunOfShow(
 		if (beat.kind === "role" && beat.preamble != null) {
 			out.push(preambleSeed(beat.preamble, repeatsRoleKeyOf(beat), out.length));
 		}
-		out.push(beatSeed(beat, out.length));
+		out.push(beatSeed(beat, out.length, i === governed));
 	});
 	return out;
+}
+
+/**
+ * The index of the ONE beat the club's Table Topics window governs, or -1 (#683).
+ *
+ * This is the same shape of question `isTableTopicsSegment` used to ask at
+ * render time, and it is safe HERE and was not there. The input is the
+ * CODE-DERIVED run of show, authored two files away and identical for every
+ * club: three beats carry `table_topics_master` and exactly one of them declares
+ * `marks`, because `buildRunOfShow` writes them on the speaking segment and
+ * nowhere else. Nobody can edit it between here and the answer. What broke was
+ * asking the same question of a STORED row months later, where the marks are a
+ * field on the agenda editor's own form.
+ *
+ * `findIndex`, so the answer is at most one beat no matter what the run of show
+ * grows into — "at most one governed row per meeting" is then structural rather
+ * than a property of today's beat list. A run of show that ever declares Table
+ * Topics marks on a second beat governs the first and leaves the second alone,
+ * which is wrong quietly rather than wrong loudly; the alternative, governing
+ * both, is the multi-row overwrite #683 is about.
+ */
+function clubGovernedIndex(beats: Beat[]): number {
+	return beats.findIndex(
+		(b) =>
+			b.kind === "role" &&
+			b.roleKey === TABLE_TOPICS_ROLE_KEY &&
+			b.marks != null,
+	);
 }
 
 /**
@@ -161,6 +196,7 @@ function preambleSeed(
 		markGreen: null,
 		markYellow: null,
 		markRed: null,
+		clubGoverned: false,
 	};
 }
 
@@ -178,6 +214,7 @@ function sectionSeed(label: string, sortOrder: number): TemplateBeatSeed {
 		markGreen: null,
 		markYellow: null,
 		markRed: null,
+		clubGoverned: false,
 	};
 }
 
@@ -200,11 +237,19 @@ function repeatsRoleKeyOf(beat: Beat): string | null {
 		: null;
 }
 
-function beatSeed(beat: Beat, sortOrder: number): TemplateBeatSeed {
+function beatSeed(
+	beat: Beat,
+	sortOrder: number,
+	/** True on the ONE beat {@link clubGovernedIndex} picked (#683): the club's
+	 *  Table Topics window owns this row's marks from here on, and
+	 *  `refreshTableTopicsMarks` re-derives them at every render. */
+	clubGoverned: boolean,
+): TemplateBeatSeed {
 	const isRole = beat.kind === "role";
 	const repeats = repeatsRoleKeyOf(beat);
 	const marks = isRole ? beat.marks : null;
 	return {
+		clubGoverned,
 		sortOrder,
 		kind: beat.kind,
 		label: isRole ? beat.roleName : beat.who,

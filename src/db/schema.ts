@@ -1528,6 +1528,37 @@ export const meetingTemplateBeats = pgTable(
 		markGreen: real("mark_green"),
 		markYellow: real("mark_yellow"),
 		markRed: real("mark_red"),
+		/**
+		 * Whether the CLUB owns this row's three marks (#683).
+		 *
+		 * Exactly one thing today: the club's Table Topics window
+		 * (`clubs.table_topics_*_seconds`) governs this row, so
+		 * `refreshTableTopicsMarks` re-derives its marks at every render and the
+		 * agenda editor offers the officer a read-only window instead of three
+		 * inputs whose value the next render would discard.
+		 *
+		 * STORED rather than inferred, and that is the whole point of the column.
+		 * #679 decided the question by predicate — role key plus all three marks
+		 * present — over the row's CURRENT contents, which are exactly what the
+		 * officer edits. The run of show gives THREE beats `table_topics_master`
+		 * (the segment, the Best Table Topics vote, the GE hand-off), so setting
+		 * timer marks on the vote row made it start matching: the refresh pass
+		 * overwrote its marks with the club's speaking window and the editor
+		 * locked its fields, on a row the officer was not editing, with
+		 * delete-and-re-add the only way back. Every inferred property has that
+		 * shape — #682 had already removed `flex` from the predicate for the
+		 * mirror of it — because the inputs themselves are what the officer
+		 * controls. A stored marker is the only kind of answer an edit cannot
+		 * accidentally change.
+		 *
+		 * Written by `materialiseRunOfShow` on the one beat that declares the
+		 * club's window, and by the agenda editor's own un-govern / re-govern
+		 * control. NOT NULL with a `false` default, so every other writer —
+		 * `addAgendaRow`'s placeholder, a contest seed, a template copy — mints an
+		 * ungoverned row without naming the column. The one-time backfill in the
+		 * migration marks the pre-existing materialised rows, one per template.
+		 */
+		clubGoverned: boolean("club_governed").notNull().default(false),
 	},
 	(t) => [
 		uniqueIndex("meeting_template_beats_order_unique").on(

@@ -57,6 +57,7 @@ function row(over: Partial<AgendaDraftRow> & { id: string }): AgendaDraftRow {
 		markGreen: null,
 		markYellow: null,
 		markRed: null,
+		clubGoverned: false,
 		...over,
 	};
 }
@@ -127,6 +128,11 @@ const TT_ROW = row({
 	label: "Table Topics Master",
 	roleKey: "table_topics_master",
 	flex: true,
+	// The STORED marker is what makes this the club's row since #683 — not the
+	// role key, and not the presence of the three marks. The marks stay on the
+	// fixture because this file is about what the officer SEES, and what they see
+	// is these numbers as clocks.
+	clubGoverned: true,
 	...CLUB_MARKS,
 });
 
@@ -207,14 +213,118 @@ describe("the club-owned Table Topics row in the agenda editor (#679)", () => {
 		expect(screen.queryByTestId("agenda-row-club-marks-ev")).toBeNull();
 	});
 
-	it("keeps the inputs on a Table Topics row with NO marks", async () => {
-		// The predicate's marks clause, seen from the UI. An officer who added a
-		// row and pointed it at the Table Topics Master must still be able to set
-		// its marks — the render path does not refresh it, so locking the fields
-		// would leave three blank controls and no way back.
-		await renderEditor([row({ id: "bare", roleKey: "table_topics_master" })]);
+	it("keeps the inputs on an UNGOVERNED Table Topics row", async () => {
+		// An officer who added a row and pointed it at the Table Topics Master must
+		// still be able to set its marks — the render path does not refresh it, so
+		// locking the fields would leave three blank controls and no way back. Since
+		// #683 this is decided by the absent marker rather than by absent marks,
+		// which is why the fixture below carries a full set of them: under the old
+		// predicate this row was governed, and that was the bug.
+		await renderEditor([
+			row({
+				id: "bare",
+				roleKey: "table_topics_master",
+				markGreen: 0.5,
+				markYellow: 0.75,
+				markRed: 1,
+			}),
+		]);
 		await openDetail(0);
-		expect(screen.getByLabelText("Green mark minute")).toBeTruthy();
+		const green = screen.getByLabelText(
+			"Green mark minute",
+		) as HTMLInputElement;
+		expect(green.value).toBe("0.5");
+		expect(green.disabled).toBe(false);
 		expect(screen.queryByTestId("agenda-row-club-marks-bare")).toBeNull();
+	});
+});
+
+/**
+ * The way out, and the way back (#683).
+ *
+ * Governance used to be a one-way door: the only exit from the read-only panel
+ * above was deleting the row and re-adding it, which loses its label, its note,
+ * its minutes and its place in the agenda. These cases drive the two controls
+ * and assert the PATCH each one sends, because what the button writes is the
+ * whole of what it does.
+ */
+describe("the un-govern and re-govern controls (#683)", () => {
+	const UN_GOVERN = "Use a different window for this meeting";
+	const RE_GOVERN = "Follow the club's Table Topics window";
+
+	async function renderWith(rows: AgendaDraftRow[]) {
+		const onUpdateRow = vi.fn(async () => ({}) as never);
+		await renderUnderMemoryRouter(
+			<AgendaEditor
+				draft={draftWith(rows)}
+				clubUuid={CLUB_UUID}
+				onAddRow={vi.fn(async () => rows[0] as AgendaDraftRow)}
+				onUpdateRow={onUpdateRow}
+				onRemoveRow={noop}
+				onMoveRow={noop}
+				onRefresh={noop}
+				onAddRole={noop}
+				planRoleRemoval={vi.fn(async () => [])}
+				onRemoveRole={noop}
+			/>,
+		);
+		return onUpdateRow;
+	}
+
+	async function click(name: string) {
+		const { default: userEvent } = await import("@testing-library/user-event");
+		await userEvent.setup().click(screen.getByRole("button", { name }));
+	}
+
+	it("sends the marks ALONG WITH the flag, so the window does not jump", async () => {
+		// The stored row can still hold the materialisation snapshot while the
+		// panel shows the club's CURRENT window (`loadAgendaDraft` refreshes on the
+		// way out). Un-governing without carrying the displayed numbers would drop
+		// the officer into three inputs holding a window they never chose and were
+		// not shown — the app changing their timing at the moment they took it over.
+		const onUpdateRow = await renderWith([TT_ROW]);
+		await openDetail(0);
+		await click(UN_GOVERN);
+		expect(onUpdateRow).toHaveBeenCalledWith("tt", {
+			clubGoverned: false,
+			markGreen: 1,
+			markYellow: 1.8833333333333333,
+			markRed: 2.75,
+		});
+	});
+
+	it("offers the way BACK on an ungoverned Table Topics row", async () => {
+		const onUpdateRow = await renderWith([
+			row({
+				id: "own",
+				roleKey: "table_topics_master",
+				markGreen: 1,
+				markYellow: 2,
+				markRed: 3,
+			}),
+		]);
+		await openDetail(0);
+		await click(RE_GOVERN);
+		// The flag alone: the club's window is re-derived at the next render, so
+		// sending marks here would write numbers the refresh immediately replaces.
+		expect(onUpdateRow).toHaveBeenCalledWith("own", { clubGoverned: true });
+	});
+
+	it("offers exactly ONE of the two on the Table Topics row", async () => {
+		// Both at once would be incoherent, and neither would be the original bug.
+		await renderWith([TT_ROW]);
+		await openDetail(0);
+		expect(screen.getByRole("button", { name: UN_GOVERN })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: RE_GOVERN })).toBeNull();
+	});
+
+	it("offers NEITHER on a row the club's window cannot govern", async () => {
+		// The vacuity control. An editor that showed "Follow the club's Table Topics
+		// window" on every row would pass the case above and put a button on the
+		// evaluator row that the server refuses.
+		await renderWith([TT_ROW, EVALUATOR_ROW]);
+		await openDetail(1);
+		expect(screen.queryByRole("button", { name: UN_GOVERN })).toBeNull();
+		expect(screen.queryByRole("button", { name: RE_GOVERN })).toBeNull();
 	});
 });

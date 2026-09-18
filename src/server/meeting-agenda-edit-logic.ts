@@ -27,7 +27,10 @@ import {
 import { generateSlotRows } from "#/lib/agenda";
 import { materialiseRunOfShow } from "#/lib/agenda-materialise";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
-import { refreshTableTopicsMarks } from "#/lib/agenda-template-rows";
+import {
+	isClubGovernable,
+	refreshTableTopicsMarks,
+} from "#/lib/agenda-template-rows";
 import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
@@ -79,6 +82,18 @@ export type AgendaDraftRow = {
 	markGreen: number | null;
 	markYellow: number | null;
 	markRed: number | null;
+	/**
+	 * Whether the CLUB owns this row's marks (#683) — the stored answer
+	 * `isTableTopicsSegment` reads, on the draft side of the same structural
+	 * `MarkedBeat` the render path's `TemplateBeatRow` satisfies.
+	 *
+	 * Load-bearing twice over, so it is required here for the same reason `flex`
+	 * above is. The editor shows this row's window as read-only text rather than
+	 * three inputs whose value the next render would discard; and it is what the
+	 * un-govern control writes, which is the only way an officer gets those
+	 * inputs back without deleting the row.
+	 */
+	clubGoverned: boolean;
 };
 
 export type AgendaDraftRole = {
@@ -336,6 +351,11 @@ export async function loadAgendaDraft(
 				markGreen: meetingTemplateBeats.markGreen,
 				markYellow: meetingTemplateBeats.markYellow,
 				markRed: meetingTemplateBeats.markRed,
+				// See `AgendaDraftRow.clubGoverned` (#683). Omit it and every row
+				// reads as ungoverned: `refreshTableTopicsMarks` below then matches
+				// nothing, and the editor shows the frozen snapshot as an editable
+				// window while every print surface shows the club's.
+				clubGoverned: meetingTemplateBeats.clubGoverned,
 			})
 			.from(meetingTemplateBeats)
 			.where(eq(meetingTemplateBeats.templateId, tpl.id))
@@ -785,6 +805,47 @@ function assertRepeatBinding(
 }
 
 /**
+ * Only a row the club's Table Topics window COULD govern may claim it (#683).
+ *
+ * `clubGoverned` is patchable so the editor's un-govern control has somewhere to
+ * write, and the moment a boolean is patchable the mirror question arrives: what
+ * stops `{clubGoverned: true}` on an arbitrary beat? Nothing upstream — the row
+ * id is caller-supplied and the control that sends this is client-side. Without
+ * this floor an officer (or a crafted request) could hand any row to
+ * `refreshTableTopicsMarks`, which would then overwrite its marks with the
+ * club's speaking window at every render — the exact damage #683 is about, moved
+ * from an accident to a request.
+ *
+ * Checked against the MERGED row, for the same reason `assertMarks` and
+ * `assertRepeatBinding` are: the reachable route is two legal patches. Govern
+ * the Table Topics row, then point it at a different role. The second patch is
+ * unremarkable on its own and the row it composes is the illegal one.
+ *
+ * Turning governance OFF is always allowed: that is the recovery path, and a row
+ * that should not have been governed must not need to stay that way to be
+ * un-governed.
+ */
+function assertGovernable(
+	current: RoleBinding & { clubGoverned: boolean },
+	patch: { clubGoverned?: boolean; roleKey?: string | null },
+): void {
+	const clubGoverned =
+		"clubGoverned" in patch
+			? (patch.clubGoverned ?? false)
+			: current.clubGoverned;
+	if (!clubGoverned) return;
+	const roleKey =
+		"roleKey" in patch ? (patch.roleKey ?? null) : current.roleKey;
+	// The SAME predicate the editor asks before offering the control, imported
+	// rather than restated — see `isClubGovernable`.
+	if (!isClubGovernable({ kind: current.kind, roleKey })) {
+		throw new Error(
+			"Only the Table Topics row can follow the club's speaking window.",
+		);
+	}
+}
+
+/**
  * `roleKey` / `repeatsRoleKey` must name a role this template actually
  * declares, or be left null. `agenda-template-rows.ts`'s `toRow` documents
  * the read-side consequence of skipping this check: "A beat naming a role the
@@ -934,6 +995,9 @@ type RowLookup = {
 	sortOrder: number;
 	templateId: string;
 	label: string;
+	/** The row's CURRENT governance, so `assertGovernable` can check the merged
+	 *  result rather than the patch in isolation (#683). */
+	clubGoverned: boolean;
 } & MarkFields &
 	RoleBinding;
 
@@ -1060,6 +1124,7 @@ async function findRow(
 			markGreen: meetingTemplateBeats.markGreen,
 			markYellow: meetingTemplateBeats.markYellow,
 			markRed: meetingTemplateBeats.markRed,
+			clubGoverned: meetingTemplateBeats.clubGoverned,
 		})
 		.from(meetingTemplateBeats)
 		.where(
@@ -1126,6 +1191,7 @@ async function translateRow(
 			markGreen: meetingTemplateBeats.markGreen,
 			markYellow: meetingTemplateBeats.markYellow,
 			markRed: meetingTemplateBeats.markRed,
+			clubGoverned: meetingTemplateBeats.clubGoverned,
 		})
 		.from(meetingTemplateBeats)
 		.where(
@@ -1236,6 +1302,10 @@ export async function addAgendaRow(input: {
 			markGreen: row.markGreen,
 			markYellow: row.markYellow,
 			markRed: row.markRed,
+			// Always false on a placeholder — the column defaults to it and this
+			// insert names no beat the club's window governs. Stated rather than
+			// assumed because the editor decides what controls to offer from it.
+			clubGoverned: row.clubGoverned,
 		};
 	});
 }
@@ -1259,6 +1329,13 @@ export async function updateAgendaRow(input: {
 			| "markGreen"
 			| "markYellow"
 			| "markRed"
+			// The un-govern control (#683). Patchable because the bug being fixed is
+			// that governance was ONE-WAY: an officer who reached it had no path
+			// back but deleting the row and re-adding it, which loses its label,
+			// note, minutes and position. Restricted at the write below to rows the
+			// club's Table Topics window could actually govern, so this cannot be
+			// used to make an arbitrary beat claim the club's window.
+			| "clubGoverned"
 		>
 	>;
 }): Promise<void> {
@@ -1300,6 +1377,7 @@ export async function updateAgendaRow(input: {
 		// run BEFORE `ensureAgendaDraft`, so a refused patch triggers no fork.
 		assertMarks(found, patch);
 		assertRepeatBinding(found, patch);
+		assertGovernable(found, patch);
 
 		const { templateId } = await ensureAgendaDraft(tx, input.meetingId);
 		// Against the FINAL templateId: a fork copies meeting_template_roles too,
@@ -1323,6 +1401,7 @@ export async function updateAgendaRow(input: {
 			// here — the exact hole `assertMarks` exists to refuse.
 			assertMarks(target, patch);
 			assertRepeatBinding(target, patch);
+			assertGovernable(target, patch);
 		}
 		// Scoped to THIS meeting's template either way: the row id is
 		// caller-supplied, and without the template predicate an officer of one

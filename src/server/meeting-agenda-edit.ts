@@ -248,6 +248,15 @@ const patchInput = rowInput.extend({
 			// reason unrelated to the change. A boolean has no bound of its own to
 			// add, so the end is where it belongs.
 			flex: z.boolean().optional(),
+			// The un-govern / re-govern control (#683). Also last, and also a
+			// boolean with no bound — same reason as `flex` above.
+			//
+			// Nothing here decides WHICH row may carry it: the floor is
+			// `assertGovernable` in `meeting-agenda-edit-logic.ts`, checked against
+			// the merged row inside the transaction, because the legal answer
+			// depends on the row's stored `kind` and `role_key` and a validator sees
+			// only the patch.
+			clubGoverned: z.boolean().optional(),
 		})
 		.refine((p) => Object.keys(p).length > 0, {
 			message: "Patch must set at least one field.",

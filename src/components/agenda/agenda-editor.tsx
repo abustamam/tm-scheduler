@@ -36,6 +36,7 @@ import {
 } from "#/lib/agenda-runsheet";
 import {
 	buildTemplateRowsWithSource,
+	isClubGovernable,
 	isTableTopicsSegment,
 } from "#/lib/agenda-template-rows";
 import { buildTimeline } from "#/lib/agenda-timing";
@@ -102,6 +103,7 @@ export type RowPatch = Partial<
 		| "markGreen"
 		| "markYellow"
 		| "markRed"
+		| "clubGoverned"
 	>
 >;
 
@@ -791,6 +793,15 @@ function AgendaTableRow({
 							markGreen: snapshot.markGreen,
 							markYellow: snapshot.markYellow,
 							markRed: snapshot.markRed,
+							// And the governance, for the same reason (#683). The
+							// placeholder `addAgendaRow` inserts is ungoverned — the column
+							// defaults to false — so without this, deleting the Table Topics
+							// row and undoing silently detaches it from the club's window
+							// for good: never refreshed again, no timer window on the run
+							// sheet, the agenda or the deck, while the Timer's role sheet
+							// keeps printing the club's. Exactly the packet this feature
+							// exists to stop, reached by a misclick and an Undo.
+							clubGoverned: snapshot.clubGoverned,
 						});
 						// The restore is TWO calls and only `onAddRow` invalidates, so
 						// without this the officer is left looking at the placeholder
@@ -1288,6 +1299,11 @@ function RowDetail({
 	//
 	// The values shown are already the club's: `loadAgendaDraft` refreshes the
 	// rows it hands over.
+	//
+	// Since #683 the predicate reads a STORED column rather than inferring from
+	// the row's marks, which is what makes the two controls below possible at
+	// all: an inferred answer could not be turned off, because the only way to
+	// stop matching was to clear the very fields the match had hidden.
 	const marksFromClub = isTableTopicsSegment(row);
 	return (
 		<tr className="border-b bg-muted/20">
@@ -1401,6 +1417,34 @@ function RowDetail({
 								it in <ClubSettingsLink clubUuid={clubUuid} /> under Table
 								Topics speaking limits.
 							</p>
+							{/* The way back (#683). Until this existed, governance was a
+							    one-way door: the only exit was deleting the row and adding a
+							    new one, which loses its label, its note, its minutes and its
+							    place in the agenda. The three marks travel WITH the patch, so
+							    the numbers the officer was just looking at are the ones the
+							    inputs open on — the stored copy can still be the
+							    materialisation snapshot, and having it jump to a different
+							    window at the moment of un-governing would read as the app
+							    changing their timing for them. */}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="self-start"
+								disabled={!editable}
+								onClick={() =>
+									void runAction(() =>
+										onUpdateRow(row.id, {
+											clubGoverned: false,
+											markGreen: row.markGreen,
+											markYellow: row.markYellow,
+											markRed: row.markRed,
+										}),
+									)
+								}
+							>
+								Use a different window for this meeting
+							</Button>
 						</div>
 					) : (
 						<div className="grid grid-cols-3 gap-3">
@@ -1448,6 +1492,30 @@ function RowDetail({
 							</div>
 						</div>
 					)}
+
+					{/* The door the other way (#683). An un-govern that could not be
+					    reversed would be the same trap as the governance it undoes, one
+					    click further along — and this is the row the club's window is
+					    FOR, so "put it back" has to be an offer rather than something
+					    the officer reconstructs by typing the club's numbers in. Offered
+					    only on a row the club's window could actually govern, and the
+					    server refuses the rest (`assertGovernable`). */}
+					{!marksFromClub && isClubGovernable(row) ? (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							className="self-start"
+							disabled={!editable}
+							onClick={() =>
+								void runAction(() =>
+									onUpdateRow(row.id, { clubGoverned: true }),
+								)
+							}
+						>
+							Follow the club's Table Topics window
+						</Button>
+					) : null}
 				</div>
 			</td>
 		</tr>

@@ -41,6 +41,7 @@ const draft: AgendaDraft = {
 			markGreen: null,
 			markYellow: null,
 			markRed: null,
+			clubGoverned: false,
 		},
 		{
 			id: "r2",
@@ -56,6 +57,7 @@ const draft: AgendaDraft = {
 			markGreen: null,
 			markYellow: null,
 			markRed: null,
+			clubGoverned: false,
 		},
 	],
 	roles: [
@@ -98,6 +100,7 @@ const noopHandlers = {
 		markGreen: null,
 		markYellow: null,
 		markRed: null,
+		clubGoverned: false,
 	}),
 	onUpdateRow: vi.fn().mockResolvedValue(undefined),
 	onRemoveRow: vi.fn().mockResolvedValue(undefined),
@@ -577,6 +580,7 @@ describe("AgendaEditor repeat blocks", () => {
 					markGreen: null,
 					markYellow: null,
 					markRed: null,
+					clubGoverned: false,
 				},
 				{
 					id: "b-silence",
@@ -592,6 +596,7 @@ describe("AgendaEditor repeat blocks", () => {
 					markGreen: null,
 					markYellow: null,
 					markRed: null,
+					clubGoverned: false,
 				},
 			],
 		};
@@ -892,6 +897,7 @@ describe("AgendaEditor delete undo", () => {
 					markGreen: 5,
 					markYellow: 6,
 					markRed: 7,
+					clubGoverned: false,
 				},
 			],
 		};
@@ -930,6 +936,7 @@ describe("AgendaEditor delete undo", () => {
 			markGreen: 5,
 			markYellow: 6,
 			markRed: 7,
+			clubGoverned: false,
 		});
 	});
 
@@ -976,6 +983,7 @@ describe("AgendaEditor delete undo", () => {
 								markGreen: null,
 								markYellow: null,
 								markRed: null,
+								clubGoverned: false,
 							};
 							const at =
 								afterRowId === null
@@ -1034,6 +1042,7 @@ describe("AgendaEditor delete undo", () => {
 					markGreen: 5,
 					markYellow: 6,
 					markRed: 7,
+					clubGoverned: false,
 				},
 			],
 		};
@@ -1068,6 +1077,7 @@ describe("AgendaEditor delete undo", () => {
 								markGreen: null,
 								markYellow: null,
 								markRed: null,
+								clubGoverned: false,
 							};
 							const at =
 								afterRowId === null
@@ -1171,6 +1181,7 @@ describe("AgendaEditor delete undo", () => {
 								markGreen: null,
 								markYellow: null,
 								markRed: null,
+								clubGoverned: false,
 							};
 							const at =
 								afterRowId === null
