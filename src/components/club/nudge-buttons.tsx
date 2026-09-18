@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import { buildNudge } from "#/lib/nudge";
 import { detectPlatform } from "#/lib/platform";
+import type { RoleDuty } from "#/lib/role-duties";
 
 interface NudgeButtonsBase {
 	name: string;
@@ -27,7 +28,19 @@ interface NudgeButtonsBase {
 export type NudgeButtonsProps = NudgeButtonsBase &
 	(
 		| { mode: "attendance" | "arriving" }
-		| { mode: "confirm" | "recruit"; roleName: string }
+		| {
+				mode: "confirm" | "recruit";
+				roleName: string;
+				/** What the role still owes (#667), ALREADY filtered by the
+				 *  registry's `done` — the caller passes `outstandingDuties(...)`.
+				 *  On the role arm only, mirroring `NudgeInput`: a role-less draft
+				 *  has no duty to name. */
+				duties?: readonly RoleDuty[];
+				/** The recipient's own meeting page, from `personalNudgeUrl`.
+				 *  Absent (a guest holder has no member identity) falls the draft
+				 *  back to `shareUrl`. */
+				personalUrl?: string | null;
+		  }
 	);
 
 /**
@@ -91,7 +104,17 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	// exist on it.
 	const nudge = buildNudge(
 		props.mode === "confirm" || props.mode === "recruit"
-			? { ...common, mode: props.mode, roleName: props.roleName }
+			? {
+					...common,
+					mode: props.mode,
+					roleName: props.roleName,
+					// Carried on the SAME branch as `roleName`, for the same reason:
+					// these three fields exist together on the role arm and a spread of
+					// `props` would put the duty clause back in reach of a draft that
+					// names no role.
+					duties: props.duties,
+					personalUrl: props.personalUrl,
+				}
 			: { ...common, mode: props.mode },
 	);
 

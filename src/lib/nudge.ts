@@ -4,8 +4,15 @@
 // The app only ever DRAFTS; the human sends.
 
 import { mailtoHref } from "#/lib/mailto";
+import type { RoleIdentity } from "#/lib/meeting-roles";
 import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
+import {
+	type DutyContext,
+	dutiesForRole,
+	personalMeetingHref,
+	type RoleDuty,
+} from "#/lib/role-duties";
 import { whatsappHref } from "#/lib/whatsapp";
 
 export type NudgeMode = "confirm" | "recruit" | "attendance" | "arriving";
@@ -55,6 +62,33 @@ export type NudgeInput =
 			/** The role being asked about. Role-specific asks stay on the slot
 			 *  cards and in "Nudge someone" (spec D5). */
 			roleName: string;
+			/**
+			 * What this role still OWES (#667), already filtered — pass
+			 * `outstandingDuties(...)` below, never `dutiesForRole` raw.
+			 *
+			 * On the role-carrying arms ONLY, for the reason the union itself
+			 * exists: `attendance` and `arriving` address someone with no role, so
+			 * a role's duties can never be theirs to do. An optional field on the
+			 * base would typecheck on both and hand a duty clause to a draft whose
+			 * sentence names no role at all.
+			 *
+			 * A DONE duty must not appear here. Suppression is the requirement
+			 * rather than a nicety: a nudge about a job already finished teaches
+			 * the recipient these messages are not worth reading, which costs more
+			 * than the nudge gains.
+			 */
+			duties?: readonly RoleDuty[];
+			/**
+			 * The recipient's OWN meeting page (#665), which this draft links to
+			 * instead of the public agenda so they can act in one tap. Build it
+			 * with `personalNudgeUrl` below.
+			 *
+			 * Optional, and the fallback is load-bearing: a slot can be held by a
+			 * GUEST, who has no `members` row and therefore no `?as=` identity to
+			 * seed. That draft still has a role to confirm, so it keeps `shareUrl`
+			 * rather than losing its link.
+			 */
+			personalUrl?: string | null;
 	  });
 
 export interface Nudge {
@@ -82,9 +116,156 @@ function messageFor(i: NudgeInput): string {
 	if (i.mode === "arriving") {
 		return `Hi ${who}, we've started our ${i.meetingDate} meeting — are you on your way? Agenda here: ${i.shareUrl}`;
 	}
-	return i.mode === "confirm"
-		? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${i.shareUrl}`
-		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${i.shareUrl}`;
+	// The personal page when the recipient has one, else the public agenda. A
+	// BLANK string counts as absent, not as a link: the surfaces that build this
+	// fall back to `""` for a viewer who may not have it (the agenda's own
+	// `shareUrl` prop does the same), and `??` would happily draft "Details: ".
+	const link = i.personalUrl || i.shareUrl;
+	const owed = i.duties ?? [];
+	if (i.mode === "confirm") {
+		// TWO templates rather than one with an optional tail, because the
+		// no-duty draft has to stay BYTE-IDENTICAL to the one officers already
+		// send — five of the nine standard roles have no data-backed duty, so
+		// that is the common case, and it is the case an interpolated empty
+		// clause leaves reading "…meeting — you'll also need to . Details:".
+		return owed.length === 0
+			? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${link}`
+			: `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting — you'll also need to ${dutyClauseList(owed)}. Confirm and do that here: ${link}`;
+	}
+	// "You'd", not "you'll": a recruit draft is asking, and stating what they
+	// WILL do to someone who has not said yes is the same presumption the
+	// `attendance`/`arriving` split exists to avoid one mode over.
+	return owed.length === 0
+		? `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${link}`
+		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? You'd also need to ${dutyClauseList(owed)}. Info here: ${link}`;
+}
+
+/**
+ * The owed duties as ONE readable phrase: "set the meeting theme", or "set the
+ * meeting theme and add your speech details", or "a, b and c".
+ *
+ * Joined here rather than rendered one sentence per duty, because a draft that
+ * repeats "you'll also need to …" three times reads like a form letter — and
+ * the whole premise of these drafts is that a human wrote them.
+ */
+function dutyClauseList(duties: readonly RoleDuty[]): string {
+	const clauses = duties.map((duty) => duty.clause);
+	if (clauses.length < 2) return clauses[0] ?? "";
+	return `${clauses.slice(0, -1).join(", ")} and ${clauses[clauses.length - 1]}`;
+}
+
+/**
+ * The duties this role still owes, decided by the registry's OWN `done` (#660)
+ * rather than by a predicate written here.
+ *
+ * This one-line filter is the whole point of the issue's "the draft and the
+ * checklist cannot disagree": the personal page's checklist calls
+ * `duty.done(ctx)` on the same objects from the same map, so "is the theme
+ * set?" is answered once, in `role-duties.ts`, for both surfaces. A caller that
+ * hand-rolled `if (!meeting.theme)` would read the app's own `TBA` sentinel as
+ * a finished speech on the speech duty and diverge silently.
+ *
+ * It lives beside the draft builder rather than in the registry because it is
+ * the shape `buildNudge` takes; the registry stays the thing that knows what a
+ * duty IS.
+ */
+export function outstandingDuties(
+	role: RoleIdentity,
+	ctx: DutyContext,
+): readonly RoleDuty[] {
+	return dutiesForRole(role).filter((duty) => !duty.done(ctx));
+}
+
+/**
+ * Outstanding duties keyed by MEMBER, for the attendance rail (#667).
+ *
+ * The rail cannot derive them for itself: a row carries a `PanelRole`, which is
+ * a short code and a base role NAME and nothing else — no key, no speech title
+ * — so the route builds this from the same `slots` array it hands
+ * `buildPanelRoleMap` and passes it down.
+ *
+ * FIRST slot wins, and that is not a tidiness choice. `buildPanelRoleMap` gives
+ * a double-booked member the FIRST slot's role name ("slots arrives ordered by
+ * the role's sortOrder, so that is the more prominent role"), and the rail's
+ * draft names exactly that role. Built last-wins, this map would name one role
+ * in the sentence and list the OTHER role's duty in the same breath.
+ *
+ * `hasTiming` is deliberately not in `meeting`, so a Timer's `timing` duty is
+ * always outstanding here. That is the truthful answer for a draft: a
+ * `meeting_timings` row only exists once timing starts during the meeting, and
+ * `loadMeetingDetail` loads none — see #667's amendment for why adding one is
+ * not worth putting this on `src/server/meetings.ts`.
+ */
+export function outstandingDutiesByMember(
+	slots: readonly {
+		assigneeId: string | null;
+		roleName: string;
+		roleKey?: string | null;
+		speechTitle?: string | null;
+	}[],
+	meeting: Pick<DutyContext, "theme" | "wordOfTheDay">,
+): Record<string, readonly RoleDuty[]> {
+	const byMember: Record<string, readonly RoleDuty[]> = {};
+	for (const slot of slots) {
+		if (!slot.assigneeId || slot.assigneeId in byMember) continue;
+		byMember[slot.assigneeId] = outstandingDuties(
+			{ roleName: slot.roleName, roleKey: slot.roleKey },
+			{
+				theme: meeting.theme,
+				wordOfTheDay: meeting.wordOfTheDay,
+				// Per-SLOT, never per-member: a member can hold two speaker slots and
+				// one finished title must not silence the draft about the other.
+				speechTitle: slot.speechTitle,
+			},
+		);
+	}
+	return byMember;
+}
+
+/**
+ * What a surface needs to address the personal meeting page to ONE member.
+ *
+ * One object rather than three loose strings, because the three are only ever
+ * correct together and a component that took them apart could be wired with a
+ * club slug in the meeting slot and still typecheck.
+ */
+export interface PersonalNudgeBase {
+	/** Absolute origin, or `""` during SSR — the same split `shareUrl` makes,
+	 *  for the same reason (`window` exists only on the client). */
+	origin: string;
+	/** The club's URL segment — the slug, as the route reads it. */
+	clubId: string;
+	/** The meeting's `$meetingId` URL segment: a club-local date key, a
+	 *  date-HHmm key, or a uuid. All three resolve. */
+	meetingKey: string;
+}
+
+/**
+ * The link a role draft points at: the recipient's own meeting page (#665),
+ * carrying the `?as=` seed that tells it whose page it is.
+ *
+ * The PATH comes from `personalMeetingHref` in the duty registry, never a
+ * literal assembled here — the registry hands out the links INTO the duty
+ * editors, so it owns the link back out, and a second spelling of `/me` is
+ * exactly the drift that leaves a nudge pointing at a 404 after a route move.
+ *
+ * `?as=` grants nothing (ADR-0026): it seeds the same unverified identity the
+ * page's own "Who are you?" picker sets, and only when the browser holds no
+ * conflicting pick of its own.
+ */
+export function personalNudgeUrl(
+	base: PersonalNudgeBase,
+	memberId: string,
+): string {
+	const path = personalMeetingHref({
+		clubId: base.clubId,
+		meetingId: base.meetingKey,
+	});
+	// The id is a uuid from our own roster, so the encode is belt-and-braces —
+	// but it is the one value here that did not come from a route segment, and
+	// an unescaped `&` in a query value is how a link silently addresses
+	// somebody else.
+	return `${base.origin}${path}?as=${encodeURIComponent(memberId)}`;
 }
 
 function subjectFor(i: NudgeInput): string {

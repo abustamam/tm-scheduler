@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildNudge } from "./nudge";
+import { buildPanelRoleMap } from "#/lib/attendance-panel";
+import {
+	GRAMMARIAN_ROLE_KEY,
+	TIMER_ROLE_KEY,
+	TMOD_ROLE_KEY,
+} from "#/lib/meeting-roles";
+import { dutiesForRole, personalMeetingHref } from "#/lib/role-duties";
+import {
+	buildNudge,
+	outstandingDuties,
+	outstandingDutiesByMember,
+	personalNudgeUrl,
+} from "./nudge";
 
 const base = {
 	name: "Jane",
@@ -326,5 +338,437 @@ describe("buildNudge", () => {
 		const r = buildNudge({ ...base, mode: "confirm" });
 		expect(r.whatsappUrl).toBeUndefined();
 		expect(r.mailtoUrl).toBeUndefined();
+	});
+});
+
+/**
+ * Duty-aware drafts (#667).
+ *
+ * Every fixture takes its clauses from the REGISTRY (`dutiesForRole`) rather
+ * than from a literal spelled here. A restated clause agrees with whichever
+ * copy the test author had in mind and stops agreeing with the checklist the
+ * recipient actually lands on — which is the exact disagreement the shared
+ * registry exists to prevent, reintroduced inside its own test.
+ */
+const grammarian = { roleName: "Grammarian", roleKey: GRAMMARIAN_ROLE_KEY };
+const tmod = { roleName: "Toastmaster of the Day", roleKey: TMOD_ROLE_KEY };
+const timer = { roleName: "Timer", roleKey: TIMER_ROLE_KEY };
+const speaker = { roleName: "Speaker", roleKey: "speaker" };
+
+describe("outstandingDuties", () => {
+	it("keeps a duty nobody has done yet", () => {
+		expect(outstandingDuties(grammarian, {}).map((d) => d.id)).toEqual([
+			"word_of_the_day",
+		]);
+	});
+
+	it("drops a duty the data says is finished", () => {
+		// The registry still OWNS the duty — the filter is what removes it, which
+		// is the difference between "this role has no job" and "the job is done".
+		expect(dutiesForRole(grammarian)).toHaveLength(1);
+		expect(
+			outstandingDuties(grammarian, { wordOfTheDay: "Ebullient" }),
+		).toEqual([]);
+	});
+
+	it("reads a blank answer as not done, like the checklist does", () => {
+		// `"  "` is the case a hand-rolled `if (!theme)` gets wrong, and getting it
+		// wrong here silently suppresses the nudge that exists to get a real one.
+		expect(outstandingDuties(tmod, { theme: "   " })).toHaveLength(1);
+	});
+
+	it("reads the TBA sentinel as not done", () => {
+		// A blank speech title is STORED as "TBA", so a non-blank check reads the
+		// app's own placeholder as a finished speech.
+		expect(outstandingDuties(speaker, { speechTitle: "TBA" })).toHaveLength(1);
+		expect(outstandingDuties(speaker, { speechTitle: "My talk" })).toEqual([]);
+	});
+
+	it("gives a role with nothing recordable no clauses at all", () => {
+		// Five of the nine standard roles. This is the COMMON case, which is why
+		// the empty draft below has to stay byte-identical.
+		expect(outstandingDuties({ roleName: "Ah-Counter" }, {})).toEqual([]);
+	});
+});
+
+describe("buildNudge duty clauses (#667)", () => {
+	const link = "https://gavelup.app/club/mcf/meeting/abc/me?as=m1";
+
+	it("names what the role still owes, and links somewhere they can do it", () => {
+		const r = buildNudge({
+			...base,
+			roleName: "Grammarian",
+			email: "j@x.io",
+			mode: "confirm",
+			duties: outstandingDuties(grammarian, {}),
+			personalUrl: link,
+		});
+		expect(r.message).toBe(
+			"Hi Jane, just confirming you're our Grammarian for the Thu, Jul 23 meeting — " +
+				`you'll also need to set the Word of the Day. Confirm and do that here: ${link}`,
+		);
+	});
+
+	it("says nothing about a job already done, and still reads as a sentence", () => {
+		// Suppression is the requirement, not a nicety: a nudge about a finished
+		// job teaches the recipient these messages are not worth reading.
+		const r = buildNudge({
+			...base,
+			roleName: "Grammarian",
+			email: "j@x.io",
+			mode: "confirm",
+			duties: outstandingDuties(grammarian, { wordOfTheDay: "Ebullient" }),
+			personalUrl: link,
+		});
+		expect(r.message).toBe(
+			`Hi Jane, just confirming you're our Grammarian for the Thu, Jul 23 meeting. Details: ${link}`,
+		);
+		// The dangling-clause failures, each asserted rather than implied by the
+		// exact match above: an empty list must not leave the em dash, the lead-in
+		// or the word it was going to interpolate.
+		expect(r.message).not.toContain("Word of the Day");
+		expect(r.message).not.toContain("you'll also need to");
+		expect(r.message).not.toContain("—");
+	});
+
+	it("leaves a duty-less role's draft byte-identical apart from the link", () => {
+		// The property the issue states outright, checked as a property rather
+		// than as a second copy of the template: swap the URL back and the two
+		// strings must be the same bytes.
+		const today = buildNudge({ ...base, email: "j@x.io", mode: "confirm" });
+		const now = buildNudge({
+			...base,
+			email: "j@x.io",
+			mode: "confirm",
+			duties: outstandingDuties({ roleName: "Ah-Counter" }, {}),
+			personalUrl: link,
+		});
+		expect(now.message.replace(link, base.shareUrl)).toBe(today.message);
+		// And the subject line — the other half of a mail draft — is untouched.
+		expect(now.mailtoUrl?.split("&body=")[0]).toBe(
+			today.mailtoUrl?.split("&body=")[0],
+		);
+	});
+
+	it("reads several outstanding duties as a list, not a run-on", () => {
+		const r = buildNudge({
+			...base,
+			roleName: "Toastmaster of the Day",
+			email: "j@x.io",
+			mode: "confirm",
+			// No single role owns three today; the builder must still be the thing
+			// that decides how a list reads, rather than the registry happening to
+			// hold one duty per role.
+			duties: [
+				...outstandingDuties(tmod, {}),
+				...outstandingDuties(grammarian, {}),
+				...outstandingDuties(speaker, {}),
+			],
+			personalUrl: link,
+		});
+		expect(r.message).toContain(
+			"you'll also need to set the meeting theme, set the Word of the Day and add your speech details.",
+		);
+		// The two shapes a naive join produces, both of which a reader notices.
+		expect(r.message).not.toContain(", and ");
+		expect(r.message).not.toContain("day set");
+	});
+
+	it("joins exactly two duties with `and`, no comma", () => {
+		const r = buildNudge({
+			...base,
+			roleName: "Toastmaster of the Day",
+			mode: "confirm",
+			duties: [...outstandingDuties(tmod, {}), ...outstandingDuties(timer, {})],
+		});
+		expect(r.message).toContain(
+			"you'll also need to set the meeting theme and time the speeches.",
+		);
+	});
+
+	it("asks rather than tells in a recruit draft", () => {
+		// "You'd", not "you'll": nobody has said yes yet.
+		const r = buildNudge({
+			...base,
+			roleName: "Grammarian",
+			email: "j@x.io",
+			mode: "recruit",
+			duties: outstandingDuties(grammarian, {}),
+			personalUrl: link,
+		});
+		expect(r.message).toBe(
+			"Hi Jane, would you be open to taking Grammarian at our Thu, Jul 23 meeting? " +
+				`You'd also need to set the Word of the Day. Info here: ${link}`,
+		);
+		expect(r.message).not.toContain("you'll also need");
+	});
+
+	it("tells a Timer they will be timing the speeches (#730 duty, #667 amendment)", () => {
+		// `hasTiming` is absent from every nudge caller's context — a
+		// `meeting_timings` row only exists once timing starts during the meeting,
+		// and `loadMeetingDetail` loads none — so an absent field reads as NOT
+		// DONE and the clause is the truthful thing to send.
+		const r = buildNudge({
+			...base,
+			email: "j@x.io",
+			mode: "confirm",
+			duties: outstandingDuties(timer, {}),
+			personalUrl: link,
+		});
+		expect(r.message).toContain("you'll also need to time the speeches.");
+	});
+
+	it("drops the timing clause once a timing exists, and still reads", () => {
+		const r = buildNudge({
+			...base,
+			email: "j@x.io",
+			mode: "confirm",
+			duties: outstandingDuties(timer, { hasTiming: true }),
+			personalUrl: link,
+		});
+		expect(r.message).toBe(
+			`Hi Jane, just confirming you're our Timer for the Thu, Jul 23 meeting. Details: ${link}`,
+		);
+		expect(r.message).not.toContain("time the speeches");
+	});
+
+	it("carries the Timer's clause into a recruit draft too", () => {
+		const r = buildNudge({
+			...base,
+			mode: "recruit",
+			duties: outstandingDuties(timer, {}),
+		});
+		expect(r.message).toContain("You'd also need to time the speeches.");
+	});
+
+	it("carries the clause into BOTH channel payloads, not just the message", () => {
+		// The message is what a reviewer reads; the hrefs are what the recipient
+		// gets. Dropping `message` out of either payload leaves the assertion
+		// above green.
+		const r = buildNudge({
+			...base,
+			roleName: "Grammarian",
+			phone: "14155552671",
+			email: "j@x.io",
+			mode: "confirm",
+			duties: outstandingDuties(grammarian, {}),
+			personalUrl: link,
+		});
+		const waText = decodeURIComponent(
+			new URL(r.whatsappUrl ?? "").searchParams.get("text") ?? "",
+		);
+		expect(waText).toContain("set the Word of the Day");
+		expect(waText).toContain(link);
+		const mailBody = decodeURIComponent(r.mailtoUrl?.split("&body=")[1] ?? "");
+		expect(mailBody).toContain("set the Word of the Day");
+		expect(mailBody).toContain(link);
+	});
+
+	it("still escapes a hostile address once the draft carries duty text", () => {
+		// `mailto.guard.test.ts` exists because this sink is a draft a VPE TAPS TO
+		// SEND. #667 adds text to that draft, so the escape is re-asserted against
+		// the new body rather than assumed to have survived.
+		const r = buildNudge({
+			...base,
+			roleName: "Grammarian",
+			email: "ada@club.org?bcc=attacker@evil.com&body=I resign",
+			mode: "confirm",
+			duties: outstandingDuties(grammarian, {}),
+			personalUrl: link,
+		});
+		const sections = (r.mailtoUrl ?? "").split("?");
+		expect(sections).toHaveLength(2);
+		const params = new URLSearchParams(sections[1]);
+		expect([...params.keys()]).toEqual(["subject", "body"]);
+		expect(params.get("body")).toBe(r.message);
+		expect(sections[1]).not.toContain("bcc");
+	});
+
+	it("keeps the role-less modes out of all of it", () => {
+		// The union is what enforces this, so the compile-time half is asserted
+		// with `@ts-expect-error` (typecheck fails if the error ever stops being
+		// an error) and the runtime half by the message itself.
+		const n = buildNudge({
+			name: "Sam Rivera",
+			phone: null,
+			email: null,
+			meetingDate: "Tue 19 Aug",
+			shareUrl: "https://club.example/m",
+			mode: "attendance",
+			// @ts-expect-error — `duties` and `personalUrl` live on the ROLE arms.
+			// A draft that names no role has no duty to name and no checklist to
+			// send anyone to; this is the same rule `roleName` is on the union for.
+			duties: outstandingDuties(grammarian, {}),
+		});
+		expect(n.message).not.toContain("also need");
+		expect(n.message).toContain("https://club.example/m");
+	});
+});
+
+describe("personalNudgeUrl (#665 link, #667 producer)", () => {
+	const target = { clubId: "mcf", meetingKey: "2026-09-09" };
+
+	it("is the registry's own personal path plus the `?as=` seed", () => {
+		// Asserted against `personalMeetingHref`, never against a literal `/me`:
+		// the registry owns where a duty is done and therefore the way back, and
+		// a second spelling here is how a draft comes to point at a 404.
+		expect(
+			personalNudgeUrl({ origin: "https://gavelup.app", ...target }, "m1"),
+		).toBe(
+			`https://gavelup.app${personalMeetingHref({
+				clubId: target.clubId,
+				meetingId: target.meetingKey,
+			})}?as=m1`,
+		);
+	});
+
+	it("stays relative during SSR, like the share link beside it", () => {
+		expect(personalNudgeUrl({ origin: "", ...target }, "m1")).toBe(
+			"/club/mcf/meeting/2026-09-09/me?as=m1",
+		);
+	});
+
+	it("escapes the id, so it cannot open a second query parameter", () => {
+		expect(personalNudgeUrl({ origin: "", ...target }, "m1&admin=1")).toBe(
+			"/club/mcf/meeting/2026-09-09/me?as=m1%26admin%3D1",
+		);
+	});
+
+	it("is what a role draft links to, with `shareUrl` as the fallback", () => {
+		const personal = personalNudgeUrl(
+			{ origin: "https://x.test", ...target },
+			"m1",
+		);
+		const withLink = buildNudge({
+			...base,
+			mode: "confirm",
+			personalUrl: personal,
+		});
+		expect(withLink.message).toContain(personal);
+		expect(withLink.message).not.toContain(base.shareUrl);
+		// A GUEST holder has no `members` row and so no `?as=` identity. The draft
+		// keeps its link rather than losing it — and a BLANK personal URL (what a
+		// surface gated off passes) falls back the same way `??` would not.
+		for (const personalUrl of [null, undefined, ""]) {
+			const guest = buildNudge({ ...base, mode: "confirm", personalUrl });
+			expect(guest.message).toContain(base.shareUrl);
+		}
+	});
+});
+
+describe("outstandingDutiesByMember", () => {
+	const slot = (over: {
+		assigneeId: string | null;
+		roleName: string;
+		roleKey?: string | null;
+		speechTitle?: string | null;
+		roleDefinitionId?: string;
+		slotIndex?: number;
+	}) => ({
+		roleDefinitionId: over.roleDefinitionId ?? `rd-${over.roleName}`,
+		slotIndex: over.slotIndex ?? 0,
+		status: "claimed" as const,
+		speechTitle: null,
+		roleKey: null,
+		...over,
+	});
+
+	it("keys the rail's duties by member", () => {
+		const map = outstandingDutiesByMember(
+			[
+				slot({
+					assigneeId: "m1",
+					roleName: "Grammarian",
+					roleKey: GRAMMARIAN_ROLE_KEY,
+				}),
+			],
+			{ theme: null, wordOfTheDay: null },
+		);
+		expect(map.m1?.map((d) => d.id)).toEqual(["word_of_the_day"]);
+	});
+
+	it("suppresses a duty the meeting already has an answer for", () => {
+		const map = outstandingDutiesByMember(
+			[
+				slot({
+					assigneeId: "m1",
+					roleName: "Toastmaster of the Day",
+					roleKey: TMOD_ROLE_KEY,
+				}),
+			],
+			{ theme: "Beginnings", wordOfTheDay: null },
+		);
+		expect(map.m1).toEqual([]);
+	});
+
+	it("reads speech titles per SLOT, so one finished talk cannot silence the other", () => {
+		const slots = [
+			slot({
+				assigneeId: "m1",
+				roleName: "Speaker",
+				roleKey: "speaker",
+				speechTitle: "My finished talk",
+				slotIndex: 0,
+			}),
+			slot({
+				assigneeId: "m2",
+				roleName: "Speaker",
+				roleKey: "speaker",
+				speechTitle: "TBA",
+				slotIndex: 1,
+			}),
+		];
+		const map = outstandingDutiesByMember(slots, {});
+		expect(map.m1).toEqual([]);
+		expect(map.m2?.map((d) => d.id)).toEqual(["speech_details"]);
+	});
+
+	it("skips open and guest-held slots, which have no member to key on", () => {
+		const map = outstandingDutiesByMember(
+			[
+				slot({
+					assigneeId: null,
+					roleName: "Grammarian",
+					roleKey: GRAMMARIAN_ROLE_KEY,
+				}),
+			],
+			{},
+		);
+		expect(Object.keys(map)).toEqual([]);
+	});
+
+	it("leaves a Timer's timing duty outstanding, since no caller loads timings", () => {
+		const map = outstandingDutiesByMember(
+			[slot({ assigneeId: "m1", roleName: "Timer", roleKey: TIMER_ROLE_KEY })],
+			{},
+		);
+		expect(map.m1?.map((d) => d.id)).toEqual(["timing"]);
+	});
+
+	it("takes the SAME slot of a double-booked member that the rail's badge does", () => {
+		// The rail names ONE role per member and this map lists ONE role's duties;
+		// built with opposite tie-breaks they would name the Grammarian and list
+		// the Toastmaster's theme in the same sentence. Asserted against
+		// `buildPanelRoleMap` itself rather than against "first wins", so the two
+		// cannot drift apart without a failure here.
+		const slots = [
+			slot({
+				assigneeId: "m1",
+				roleName: "Toastmaster of the Day",
+				roleKey: TMOD_ROLE_KEY,
+				roleDefinitionId: "rd-tmod",
+			}),
+			slot({
+				assigneeId: "m1",
+				roleName: "Grammarian",
+				roleKey: GRAMMARIAN_ROLE_KEY,
+				roleDefinitionId: "rd-gram",
+			}),
+		];
+		const named = buildPanelRoleMap(slots).m1?.roleName;
+		expect(named).toBe("Toastmaster of the Day");
+		expect(outstandingDutiesByMember(slots, {}).m1).toEqual(
+			outstandingDuties({ roleName: named ?? "", roleKey: TMOD_ROLE_KEY }, {}),
+		);
 	});
 });

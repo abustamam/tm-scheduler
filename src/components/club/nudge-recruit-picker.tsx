@@ -14,6 +14,8 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+import { type PersonalNudgeBase, personalNudgeUrl } from "#/lib/nudge";
+import type { RoleDuty } from "#/lib/role-duties";
 
 export interface RecruitTarget {
 	id: string;
@@ -68,15 +70,26 @@ export function buildRecruitTargets(
  */
 export function NudgeRecruitPicker({
 	roleName,
+	duties,
 	meetingDate,
 	shareUrl,
+	personalNudgeBase,
 	targets,
 	onContacted,
 	onUncontacted,
 }: {
 	roleName: string;
+	/** What this OPEN role still owes (#667) — already filtered by the registry's
+	 *  `done`, so a Toastmaster ask stays quiet about a theme somebody has
+	 *  already set. Per-ROLE rather than per-target: nobody holds the slot yet,
+	 *  so the only completions that can suppress a clause are the meeting-wide
+	 *  ones the caller already resolved. */
+	duties?: readonly RoleDuty[];
 	meetingDate: string;
 	shareUrl: string;
+	/** Where the draft's personal link points (#667). The `?as=` seed is built
+	 *  per PICKED member, which is why this is the base and not a finished URL. */
+	personalNudgeBase?: PersonalNudgeBase | null;
 	targets: RecruitTarget[];
 	/** Mark a member contacted (auto-fired on nudge tap, or manual toggle). `via`
 	 *  distinguishes the nudge-draft tap ("nudge") from the manual checkbox
@@ -124,8 +137,14 @@ export function NudgeRecruitPicker({
 							phone={livePicked.phone}
 							email={livePicked.email}
 							roleName={roleName}
+							duties={duties}
 							meetingDate={meetingDate}
 							shareUrl={shareUrl}
+							personalUrl={
+								personalNudgeBase
+									? personalNudgeUrl(personalNudgeBase, livePicked.id)
+									: null
+							}
 							mode="recruit"
 							onContacted={() => onContacted?.(livePicked.id, "nudge")}
 						/>
