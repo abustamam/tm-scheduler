@@ -11,6 +11,9 @@ import {
 	footerDate,
 	type Line,
 	type SlideLayout,
+	SPLASH_LOGO_HEIGHT_PCT,
+	SPLASH_LOGO_MAX_WIDTH_PCT,
+	SPLASH_RULE_WIDTH_PCT,
 	slideLayout,
 } from "./slide-layout";
 
@@ -69,7 +72,9 @@ export function deckToPptx(
 	const club = title?.clubName ?? "";
 
 	for (const slide of deck) {
-		const layout = slideLayout(slide);
+		// The club's logo is deck-level context, read off the title slide like
+		// `club` and `fdate` above, so the CLOSING splash carries it too (#725).
+		const layout = slideLayout(slide, title?.logoUrl ?? null);
 		const s = pptx.addSlide();
 		if (layout.chrome === "splash") renderSplash(pptx, s, layout, logo);
 		else renderContent(pptx, s, layout, club, fdate);
@@ -86,14 +91,25 @@ function renderSplash(
 	const dark = layout.tone === "dark";
 	s.background = { color: dark ? NAVY : GROUND };
 
-	// The club's own logo, only on the opening title splash (`layout.logoUrl` is
-	// set there and nowhere else) and only when the caller actually resolved the
-	// bytes. Placed in the empty headroom ABOVE the program name at y=1.35 so
-	// nothing else on the slide moves: a deck with a logo and one without are
-	// identical below y=1.2.
-	if (layout.logoUrl && logo) {
-		const BOX_W = 4;
-		const BOX_H = 0.85;
+	// The club's own logo, on the two splashes that carry a `logoUrl` — the
+	// opening title and the closing thank-you (#725) — and only when the caller
+	// actually resolved the bytes.
+	//
+	// `logo` and not just `layout.logoUrl` is what decides, and it decides for
+	// the WORD below as well. The bytes are fetched in the browser at click time
+	// (`pptx-download-button.tsx`) and that fetch can fail, so keying the
+	// fallback on the URL would hand a club whose logo 404s a splash carrying
+	// neither a mark nor the word — worse than either branch on its own.
+	const placed = layout.logoUrl !== null ? logo : null;
+	if (placed) {
+		// The same proportions the projected splash uses, in inches. The box now
+		// spans the headroom the word "Toastmasters" used to occupy (it ends at
+		// y=2.25) as well as the strip above it, because on a splash with a logo
+		// the word is not rendered at all. Everything from the rule at y=2.5 down
+		// is untouched, so a deck with a logo and one without still agree there.
+		const BOX_W = inchesOfWidth(SPLASH_LOGO_MAX_WIDTH_PCT, W);
+		const BOX_H = inchesOfWidth(SPLASH_LOGO_HEIGHT_PCT, W);
+		const BOX_Y = 0.3;
 		// Contain the image by hand. `sizing: { type: "contain" }` does NOT do
 		// this: pptxgenjs derives its crop math from the w/h passed alongside it,
 		// not from the image's intrinsic size, so a box and a sizing hint of the
@@ -101,11 +117,11 @@ function renderSplash(
 		// 4in x 0.85in frame — a square club crest came out smeared to 4.7:1 in
 		// the downloaded file while rendering correctly on the projected splash.
 		// Hence `ClubLogoAsset` carrying the intrinsic size.
-		const scale = Math.min(BOX_W / logo.width, BOX_H / logo.height);
-		const w = logo.width * scale;
-		const h = logo.height * scale;
+		const scale = Math.min(BOX_W / placed.width, BOX_H / placed.height);
+		const w = placed.width * scale;
+		const h = placed.height * scale;
 		const x = (W - w) / 2;
-		const y = 0.35 + (BOX_H - h) / 2;
+		const y = BOX_Y + (BOX_H - h) / 2;
 		// Light plate behind it, the same treatment every other surface gives the
 		// logo: an uploaded image is arbitrary, and a dark logo on this deck's
 		// dark tone would otherwise be invisible. On the light tone the plate is
@@ -120,23 +136,34 @@ function renderSplash(
 			line: { type: "none" },
 			rectRadius: 0.06,
 		});
-		s.addImage({ data: logo.dataUri, x, y, w, h });
+		s.addImage({ data: placed.dataUri, x, y, w, h });
 	}
-	// Nominative word use, not the official wordmark image (ADR-0024).
-	s.addText("Toastmasters", {
-		x: 0.8,
-		y: 1.35,
-		w: W - 1.6,
-		h: 0.9,
-		align: "center",
-		bold: true,
-		fontSize: 40,
-		color: dark ? "FFFFFF" : NAVY,
-	});
+	// Nominative word use, not the official wordmark image (ADR-0024). Rendered
+	// only when no logo landed on this slide: the mark replaces the word rather
+	// than stacking under it (#725), and a splash never shows both.
+	if (!placed) {
+		s.addText("Toastmasters", {
+			x: 0.8,
+			y: 1.35,
+			w: W - 1.6,
+			h: 0.9,
+			align: "center",
+			bold: true,
+			fontSize: 40,
+			color: dark ? "FFFFFF" : NAVY,
+		});
+	}
+	// Derived, not a literal (#725). This was `w: 6` — 45% of the frame — while
+	// the projected splash drew the same rule at 58%, so the logo ceiling that
+	// says "the width of the rule" held on screen and overhung by 0.87in a side
+	// here. Two hand-kept copies of a proportion drift; one derivation cannot,
+	// which is the whole argument `slide-spacing.ts` makes for the content
+	// slides.
+	const RULE_W = inchesOfWidth(SPLASH_RULE_WIDTH_PCT, W);
 	s.addShape(pptx.ShapeType.line, {
-		x: (W - 6) / 2,
+		x: (W - RULE_W) / 2,
 		y: 2.5,
-		w: 6,
+		w: RULE_W,
 		h: 0,
 		line: { color: dark ? "FFFFFF" : NAVY, width: 1 },
 	});

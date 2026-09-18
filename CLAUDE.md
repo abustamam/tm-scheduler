@@ -171,7 +171,7 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The five browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The six browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -211,6 +211,20 @@ slide's body box and asserts a shrunk body lands inside it rather than behind th
 split — `fitScale` (`src/lib/slide-fit.ts`) is the seam, the box's padding comes from the
 `slide-spacing` constants, a pre-fix control overflows beside it, and a source guard pins that
 `useFitTransform` actually calls it.
+
+`src/components/agenda/splash-logo-geometry.test.ts` (#725) is the sixth, and it is the one that
+gates a proportion shared by TWO renderers. The club's mark on a splash is sized from
+`SPLASH_LOGO_HEIGHT_PCT` / `SPLASH_LOGO_MAX_WIDTH_PCT` / `SPLASH_RULE_WIDTH_PCT`
+(`src/lib/slide-layout.ts`), read as `cqw()` on screen and `inchesOfWidth()` in the `.pptx` — and
+the ceiling's own sentence is "no wider than the rule beneath it", which is a claim about
+GEOMETRY, not about a number. #725 shipped it asserted as a literal and it was true on screen and
+false in the export, where the rule was a hard-coded 45% against the mark's 58%, so a wide
+wordmark overhung its own rule by 0.87in a side in the downloaded deck with every gate green. Both
+halves now measure the RENDERED rule — this suite on screen, `deck-to-pptx.test.ts` in the export
+— and each bounds the white plate's overhang by that renderer's own padding, so the two surfaces
+state one rule in their own units. The lesson is the general one: when a constant is shared by two
+renderers, assert it against what each RENDERS, because a literal restated in the test agrees with
+whichever renderer the author had in mind.
 
 No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
 `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.

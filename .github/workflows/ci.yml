@@ -53,16 +53,19 @@ jobs:
       # fails to apply, and keeps the test schema honest to the migration history.
       - name: Apply migrations
         run: DATABASE_URL=$TEST_DATABASE_URL bun run db:migrate
-      # Five suites drive headless Chrome and FAIL rather than skip when no
+      # Six suites drive headless Chrome and FAIL rather than skip when no
       # browser is present in CI: print-page-count.test.tsx counts printed
       # sheets, print-density.test.tsx measures how large the type actually
       # prints once FitPage has scaled the sheet,
       # pinned-column-reachability.test.ts checks that the bottom of each
       # sticky column can still be scrolled to,
       # dialog-keyboard-reachability.test.ts checks that a dialog's controls
-      # stay inside the viewport an on-screen keyboard leaves, and
+      # stay inside the viewport an on-screen keyboard leaves,
       # slide-fit-geometry.test.ts checks that a shrunk slide body lands inside
-      # its box rather than behind the footer. ubuntu-latest ships
+      # its box rather than behind the footer, and
+      # splash-logo-geometry.test.ts checks that the club's mark on a splash is
+      # sized from the shared proportions and stays inside the rule beneath it.
+      # ubuntu-latest ships
       # google-chrome-stable today, so no install step is needed — but that is an
       # image detail outside this repo, so the dependency is named here. If this
       # job starts failing with "CI has no Chrome on PATH", add a browser setup

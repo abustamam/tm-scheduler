@@ -19,6 +19,9 @@ import {
 	footerDate,
 	type Line,
 	type SlideLayout,
+	SPLASH_LOGO_HEIGHT_PCT,
+	SPLASH_LOGO_MAX_WIDTH_PCT,
+	SPLASH_RULE_WIDTH_PCT,
 	slideLayout,
 	slideName,
 } from "#/lib/slide-layout";
@@ -220,8 +223,12 @@ export function MeetingPresent({
 	}, [next, prev, onExit, overview, cursor, last, openOverview, jumpTo]);
 
 	const slide = deck[i];
-	const layout = slideLayout(slide);
 	const title = deck.find((s) => s.kind === "title");
+	// The club's logo is deck-level, read off the title slide the same way the
+	// content footer's club name and date are, and handed to `slideLayout` so the
+	// CLOSING splash can carry it too (#725) without a second copy of the URL
+	// riding on the thank-you slide.
+	const layout = slideLayout(slide, title?.logoUrl ?? null);
 	const fdate = title ? footerDate(title.scheduledAt, title.timezone) : "";
 	// The QR + badge (#510) — null on every non-vote slide, which `ContentSlide`
 	// reads as "render the body alone, exactly as before". Also null on a vote
@@ -454,6 +461,23 @@ function Splash({
 	layout: Extract<SlideLayout, { chrome: "splash" }>;
 }) {
 	const dark = layout.tone === "dark";
+	// #725: the club's mark REPLACES the word — the two never stack. Decided from
+	// the image that actually LOADED, not from the URL: a logo the browser cannot
+	// fetch must fall back to the word rather than leave the splash with neither,
+	// and `ClubLogo` carries no error handling of its own (it is shared with the
+	// print surfaces, where a broken image is a gap rather than a wrong word).
+	//
+	// A plain boolean, and nothing resets it, because nothing has to. `Splash`
+	// and `ContentSlide` are sibling branches of one ternary above, so React
+	// unmounts this component the moment any content slide renders and the state
+	// goes with it — a presenter stepping from the opening splash to the closing
+	// one crosses at least one content slide in every deck the builder produces.
+	// The only decks where the two splashes are adjacent carry the SAME
+	// `logoUrl` on both, so a URL-keyed version would fall back there too; the
+	// keying would be machinery with no case that distinguishes it.
+	const [logoFailed, setLogoFailed] = useState(false);
+	const logoUrl = layout.logoUrl;
+	const showLogo = logoUrl != null && !logoFailed;
 	return (
 		<div
 			className="flex h-full w-full flex-col items-center justify-center px-[8cqw] text-center"
@@ -466,29 +490,51 @@ function Splash({
 					: { background: GROUND, color: INK }
 			}
 		>
-			{/* The club's OWN uploaded logo, above the program name it belongs to.
-			    Sized in cqw like everything else on a slide, so it scales with
-			    whatever this is projected onto. Renders nothing when the club has
-			    no logo, leaving the splash exactly as it was. */}
-			<ClubLogo
-				logoUrl={layout.logoUrl ?? null}
-				height="9cqw"
-				maxWidth="46cqw"
-			/>
-			{/* Nominative word use, not the official wordmark image (ADR-0024). */}
+			{/* The club's OWN uploaded logo, standing where the program name used to
+			    and at the size that headroom buys (#725). Sized in cqw like
+			    everything else on a slide, so it scales with whatever this is
+			    projected onto, and bounded in BOTH dimensions because a club
+			    uploads whatever it has.
+
+			    `display: contents` on the wrapper so the plate stays a direct flex
+			    child of the column and the layout is what it would be without it;
+			    the wrapper exists only to catch the image's `error`, which does not
+			    bubble natively but does reach an ancestor handler through React's
+			    own dispatch. */}
+			{showLogo && (
+				<span
+					style={{ display: "contents" }}
+					onError={() => setLogoFailed(true)}
+				>
+					<ClubLogo
+						logoUrl={logoUrl}
+						height={cqw(SPLASH_LOGO_HEIGHT_PCT)}
+						maxWidth={cqw(SPLASH_LOGO_MAX_WIDTH_PCT)}
+					/>
+				</span>
+			)}
+			{/* Nominative word use, not the official wordmark image (ADR-0024).
+			    Renders only when no logo is on the slide, which is what makes a
+			    club WITHOUT one — and a club whose logo failed to load — get the
+			    splash exactly as it has always been. */}
+			{!showLogo && (
+				<div
+					className="font-display font-semibold tracking-[-0.01em]"
+					style={{ fontSize: "6cqw", color: dark ? "#ffffff" : NAVY }}
+				>
+					Toastmasters
+				</div>
+			)}
+			{/* The width is shared with the `.pptx` (#725): the two renderers each
+			    carried their own number and disagreed, 58% here against 45% there,
+			    so "the logo is no wider than the rule" was true on screen and
+			    false in the downloaded deck. */}
 			<div
-				className="font-display font-semibold tracking-[-0.01em]"
+				className="my-[3.4cqw] h-px"
 				style={{
-					fontSize: "6cqw",
-					color: dark ? "#ffffff" : NAVY,
-					marginTop: layout.logoUrl ? "2.2cqw" : undefined,
+					width: cqw(SPLASH_RULE_WIDTH_PCT),
+					background: dark ? "rgba(255,255,255,.55)" : NAVY,
 				}}
-			>
-				Toastmasters
-			</div>
-			<div
-				className="my-[3.4cqw] h-px w-[58cqw]"
-				style={{ background: dark ? "rgba(255,255,255,.55)" : NAVY }}
 			/>
 			<div
 				className="text-[6.4cqw] font-extrabold leading-tight text-balance"
