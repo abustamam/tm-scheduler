@@ -9,6 +9,9 @@ import { offlineVisitKey, relativeTime } from "#/lib/offline-status";
  * Online + cached → a quiet "Available offline" pill (trust, no action needed).
  * Offline → a banner naming how stale the cached agenda is.
  *
+ * The pill is deliberately recessive (#726) — see `PILL_INK` below for why it
+ * still carries a ground of its own, and what that costs in contrast.
+ *
  * The two states are positioned differently on purpose (#361). The online pill
  * used to float `position: fixed` top-center, which put a passive reassurance
  * message on top of the one thing we want people to read; it now renders inline
@@ -83,24 +86,61 @@ const wrap: React.CSSProperties = {
 	pointerEvents: "none",
 };
 
+/**
+ * The pill's ink and ground (#726). Neutral slate rather than the saturated
+ * green this shipped with, no border, 11px at weight 500, and a 5px dot — the
+ * pill is pure reassurance that is on screen for a whole meeting, including on
+ * a projected wall, so it should be findable if you look for it and ignorable
+ * if you are not.
+ *
+ * The ground is WHITE at 0.85, not "no background", and that is the one value
+ * here that is not taste. The component takes no host prop, so a single style
+ * has to stay legible on every ground it is mounted over. There are exactly
+ * two mounts (`present.tsx`, `print.tsx`) and between them five grounds, and
+ * they run the full range: the Print toolbar's `#fff` (`print-theme.tsx`'s
+ * `PRINT_TOOLBAR_STYLE`), the Present view's `bg-black` letterbox bars, the
+ * content slide's off-white `GROUND`, and both ends of the dark splash's navy
+ * gradient — see `meeting-present.tsx`. Bare ink cannot serve both ends of
+ * that range, so the chip carries just enough ground of its own.
+ *
+ * What that buys, measured as WCAG contrast of `PILL_INK` over `PILL_GROUND`
+ * composited on each: 7.58 (toolbar) / 5.36 (black bar) / 7.47 (content slide)
+ * / 5.90 (splash top) / 5.63 (splash bottom). The floor is the black bar at
+ * 5.36:1, against AA's 4.5:1 for normal text — and against the 5.65:1 the loud
+ * green pill had on the same ground, so this is quieter WITHOUT being harder
+ * to read. `offline-badge.test.tsx` recomputes all five rather than trusting
+ * this comment, and READS the five grounds out of the host files rather than
+ * copying them here, so a host that repaints its chrome fails there instead of
+ * leaving a stale copy green. jsdom loads no stylesheet and can see nothing
+ * about legibility on its own.
+ *
+ * Nice property of pure white as the ground: on the white Print toolbar the
+ * chip composites to the toolbar's own colour, so it reads as bare text there
+ * and only grows a visible plate where the ground is dark enough to need one.
+ */
+const PILL_INK = "#475569";
+const PILL_GROUND = "rgba(255, 255, 255, 0.85)";
+
 const pill: React.CSSProperties = {
 	display: "inline-flex",
 	alignItems: "center",
-	gap: 6,
-	padding: "3px 10px",
+	gap: 5,
+	padding: "2px 8px",
 	borderRadius: 999,
-	fontSize: 12,
-	fontWeight: 600,
-	color: "#3f6212",
-	background: "rgba(240, 253, 244, 0.92)",
-	border: "1px solid rgba(101, 163, 13, 0.35)",
+	fontSize: 11,
+	fontWeight: 500,
+	color: PILL_INK,
+	// `backgroundColor`, not the `background` shorthand: the test reads this
+	// value back off the rendered node to recompute the ratios above, and
+	// jsdom's shorthand expansion is not something to stake that on.
+	backgroundColor: PILL_GROUND,
 };
 
 const dot: React.CSSProperties = {
-	width: 7,
-	height: 7,
+	width: 5,
+	height: 5,
 	borderRadius: 999,
-	background: "#65a30d",
+	backgroundColor: "#94a3b8",
 };
 
 const banner: React.CSSProperties = {
