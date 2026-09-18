@@ -1568,6 +1568,32 @@ describe("member identity link (#727)", () => {
 		expect(link.className).toContain("min-w-0");
 	});
 
+	it("paints the link with its OWN text utility, not the base-layer anchor colour", async () => {
+		// `styles.css` colours every bare `a` inside `@layer base`
+		// (`var(--lagoon-deep)`, #328f97 — 3.81:1 on white, UNDER AA at this
+		// `text-sm` size; CODING_STANDARDS.md records that exact number and that
+		// exact failure). Layer order beats specificity in Tailwind v4, so a
+		// component's own `text-*` utility wins with nothing to enrol — and
+		// omitting one is not neutral, it opts INTO the failing colour, and makes
+		// the linked branch a different ink from the plain-text branch that
+		// `IDENTITY_NAME_CLASS` promises it cannot drift from.
+		//
+		// jsdom loads no stylesheet and `bun run test` never parses `styles.css`
+		// as CSS, so no in-process test can see the cascade. The class is the
+		// assertable half; the cascade itself is only verifiable against a build.
+		await renderUnderMemoryRouter(
+			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
+		);
+		const link = screen.getByRole("link", { name: "Ayesha Khan" });
+		expect(
+			/\btext-(inherit|\[|[a-z]+-\d)/.test(link.className),
+			"the member link must set its own text-* colour utility or it renders " +
+				"the base-layer anchor colour (#328f97, 3.81:1, under AA) — see " +
+				"CODING_STANDARDS.md's layered text-link entry. Do NOT fix this with " +
+				"a :not() arm or !important.",
+		).toBe(true);
+	});
+
 	it("links the name in ROLL mode too", async () => {
 		// Roll mode is meeting day, which is when "who is this person?" is asked
 		// out loud. The two modes render different row components, so a fix wired
@@ -1602,6 +1628,7 @@ describe("member identity link (#727)", () => {
 				clubGuests={[]}
 				guestEdit={{
 					clubId: "c1",
+					onSaved: vi.fn(),
 					fields: {
 						g1: {
 							id: "g1",

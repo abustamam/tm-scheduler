@@ -161,10 +161,31 @@ function PanelIdentityLine({
 	return (
 		<div className="flex items-start gap-1.5">
 			{linkToMemberId ? (
+				/* `text-inherit` is NOT decoration — without a `text-*` utility this
+				 * anchor is painted by `styles.css`'s `@layer base { a { color:
+				 * var(--lagoon-deep) } }`, which is #328f97: 3.81:1 on white, UNDER
+				 * AA, on a `text-sm` name (see CODING_STANDARDS.md's layered-text-link
+				 * entry, where that exact number and that exact failure are recorded).
+				 * It would also have made the two branches render different INK while
+				 * the constant below promises they cannot drift — true of the box,
+				 * false of the colour.
+				 *
+				 * A utility is the whole fix and the only sanctioned one: Tailwind v4
+				 * declares `@layer theme, base, components, utilities`, layer order
+				 * beats specificity, so a component setting its own `text-*` wins with
+				 * nothing to enrol. Do NOT reach for a `:not()` arm or `!important` —
+				 * the standards entry records that reopening 26 anchors at once.
+				 * `text-inherit` specifically, so the linked name carries the row's own
+				 * ink, which is the plain branch's colour by construction.
+				 *
+				 * Nothing in-process can see this: jsdom loads no stylesheet and
+				 * `bun run test` never parses `styles.css` as CSS. The panel suite
+				 * therefore asserts the CLASS; the cascade itself is only verifiable
+				 * against a real build. */
 				<Link
 					to="/members/$id"
 					params={{ id: linkToMemberId }}
-					className={cn(IDENTITY_NAME_CLASS, "hover:underline")}
+					className={cn(IDENTITY_NAME_CLASS, "text-inherit hover:underline")}
 				>
 					{name}
 				</Link>

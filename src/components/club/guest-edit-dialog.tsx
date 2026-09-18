@@ -79,6 +79,7 @@ export function GuestEditDialog({
 	joined = false,
 	open,
 	onOpenChange,
+	onSaved,
 }: {
 	guest: GuestEditFields;
 	clubId: string;
@@ -92,6 +93,27 @@ export function GuestEditDialog({
 	joined?: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
+	/**
+	 * Refresh whatever holds this guest's fields OUTSIDE the router's loaders,
+	 * awaited before the dialog closes.
+	 *
+	 * `router.invalidate()` below re-runs route LOADERS and nothing else. VP
+	 * Membership's row is loader-fetched, so it needs no more than that. The
+	 * meeting rail's is not: its fields come from a TanStack Query cache entry
+	 * (`["guest-pipeline", clubId]`), which `router.invalidate()` never touches —
+	 * so without this the rail's badge NAME updated (that comes from the meeting
+	 * payload) while the dialog kept prefilling the PRE-EDIT email, phone and
+	 * goes-by. Reopen and save again and the first edit is silently reverted:
+	 * a blank-field save writes `null`, and a stale-field save writes the old
+	 * value, which is the same data loss one step further on. That is the exact
+	 * hazard `GuestEditCapability` exists to make unrepresentable, and stale rows
+	 * do it as surely as absent ones.
+	 *
+	 * Optional HERE (VP Membership has nothing extra to refresh) and REQUIRED on
+	 * `GuestEditCapability`, so a caller that feeds the dialog from a query has
+	 * to say how that query gets refreshed. The compiler is the reminder.
+	 */
+	onSaved?: () => void | Promise<void>;
 }) {
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
@@ -117,12 +139,22 @@ export function GuestEditDialog({
 				},
 			});
 			toast.success("Guest updated.");
-			onOpenChange(false);
-			// Both call sites read this guest out of their route's loader — VP
-			// Membership from `getGuestPipeline`, the rail from the meeting payload —
-			// so invalidating here is what makes the edit visible at either, rather
-			// than each remembering to refresh.
+			// REFRESH FIRST, CLOSE LAST — both halves matter.
+			//
+			// Refresh: `onSaved` covers a caller whose fields live outside the
+			// loaders (see its doc), `router.invalidate()` covers the loader-backed
+			// ones. Both call sites need the second; only the rail needs the first.
+			//
+			// Close last, rather than the other way round, because this dialog is
+			// MODAL: while it is up nothing behind it is tappable, which is the only
+			// in-flight guard the surface has. Closing first re-arms VP Membership's
+			// Edit and Delete buttons for the length of the refetch — the window the
+			// pre-#727 `busy` flag covered, and the same reasoning
+			// `DeclineReleaseDialog` carries on the meeting route ("stays OPEN until
+			// the write resolves, with both controls disabled").
+			await onSaved?.();
 			await router.invalidate();
+			onOpenChange(false);
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {

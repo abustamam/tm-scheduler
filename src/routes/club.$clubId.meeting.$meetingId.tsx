@@ -652,8 +652,15 @@ function MeetingView() {
 	// capability sees. The conservative direction, and the necessary one — this
 	// form turns a blank field into `null` on save, so a dialog opened over rows
 	// that never arrived would wipe the record it was opened to fix.
+	// ONE key expression, read by the fetch, by the post-save refresh and by the
+	// viewer-change eviction below. Written out three times it is three places to
+	// get a cache key subtly wrong, and every way of getting it wrong is silent:
+	// a refresh that misses leaves a stale prefill (which SAVES the old value on
+	// the next submit), and an eviction that misses leaves a visitor's email and
+	// phone in the cache for the next person to pick up the laptop.
+	const guestPipelineKey = ["guest-pipeline", clubUuid] as const;
 	const { data: guestPipeline } = useQuery({
-		queryKey: ["guest-pipeline", clubUuid],
+		queryKey: guestPipelineKey,
 		queryFn: () => getGuestPipeline({ data: clubUuid }),
 		enabled: panelMode === "roll" && showRollPanel,
 	});
@@ -677,6 +684,13 @@ function MeetingView() {
 		effectiveCanManage && guestPipeline
 			? {
 					clubId: clubUuid,
+					// `router.invalidate()` inside the dialog re-runs LOADERS, and these
+					// rows are not loader-fetched — so without this the badge name
+					// refreshed and the dialog kept prefilling the pre-edit contact
+					// details, and the next save wrote them back over the edit that had
+					// just landed. Required by `GuestEditCapability` for that reason.
+					onSaved: () =>
+						queryClient.invalidateQueries({ queryKey: guestPipelineKey }),
 					fields: Object.fromEntries(
 						guestPipeline.map((g) => [
 							g.id,
@@ -699,18 +713,26 @@ function MeetingView() {
 	// laptop that gets passed around at a meeting: "not you? re-pick" would
 	// otherwise leave the previous Toastmaster's copy of every member's phone and
 	// email sitting in the cache (#576 review).
-	//
-	// The guest pipeline above is deliberately NOT evicted here. This eviction
-	// exists for the anonymous roster PICK — "not you? re-pick" on a shared
-	// laptop — and that identity never carries `canManage`, so it never fetched
-	// the pipeline in the first place; the cache entry belongs to a real signed-in
-	// admin session, which a re-pick does not end.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: myId is the TRIGGER, not a value the body reads — a change of viewer is exactly when the previous viewer's cached contact roster must be dropped
 	useEffect(() => {
 		return () => {
 			queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] });
 		};
 	}, [queryClient, meeting.id, myId]);
+	// The guest pipeline gets the same treatment, for the same reason and in its
+	// own effect (#727). It carries every club guest's email and phone, and the
+	// case the eviction above was built for is the club laptop being handed on —
+	// which happens BEFORE anyone signs out, so "they are still the same session"
+	// is not a reason to keep it. A separate effect rather than a second line in
+	// the one above because that statement is pinned verbatim by
+	// `attendance-panel-wiring.guard.test.ts`; the trigger (`myId`) and the
+	// behaviour are identical either way.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: same shape as the eviction above — myId is the TRIGGER, and guestPipelineKey is rebuilt every render, so the CLUB id is what belongs in the deps
+	useEffect(() => {
+		return () => {
+			queryClient.removeQueries({ queryKey: ["guest-pipeline", clubUuid] });
+		};
+	}, [queryClient, clubUuid, myId]);
 	const fetchedPlan = tmodPanelData?.plan ?? [];
 	// The panel needs the CONTACT-bearing roster (`loaderRoster`), not the public
 	// one the assign picker falls back to — without phone and email every row

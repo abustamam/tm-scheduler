@@ -27,6 +27,18 @@
 // COMMENT-BLIND (`readSource`): every assertion is "must BE present", and the
 // route documents these gates in prose right beside them, so a raw read would
 // keep passing after the expression itself was changed.
+// ## Mutation evidence (2026-09-17, run in this worktree)
+//
+// A guard that has never been seen to fail is a guard nobody has checked. Each
+// of these was applied to the route, this file run, and the mutation reverted:
+//
+//   effectiveCanManage -> canManage on the link prop ................... FAILS
+//   `guestEdit={guestEdit}` deleted from the call site ................. FAILS
+//   `phoneRaw: g.phoneRaw` -> `g.phone` ................................ FAILS
+//   `effectiveCanManage && guestPipeline` -> `guestPipeline` ........... FAILS
+//   `enabled` losing either conjunct (phase, or capability) ............ FAILS
+//
+// Re-run them if you change what is asserted here.
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -91,6 +103,33 @@ describe("meeting rail identity wiring (#727)", () => {
 		);
 	});
 
+	it("refreshes those rows after a save, through the same key it fetched them with", () => {
+		// `router.invalidate()` inside the dialog re-runs LOADERS and cannot reach
+		// a TanStack Query entry, so without `onSaved` the dialog keeps prefilling
+		// the PRE-EDIT contact details and the next save writes them back over the
+		// edit that just landed. `GuestEditCapability` requires the field, so
+		// omitting it is a type error — what a source assertion adds is that it
+		// refreshes the RIGHT key: an `onSaved` pointed at some other query
+		// type-checks, runs, and reverts exactly as silently.
+		expect(src).toContain("const guestPipelineKey =");
+		expect(src).toMatch(
+			/onSaved: \(\) =>\s*queryClient\.invalidateQueries\(\{ queryKey: guestPipelineKey \}\)/,
+		);
+	});
+
+	it("evicts those rows when the viewer changes", () => {
+		// The guest pipeline carries every club guest's email and phone. The
+		// shared club laptop gets handed on BEFORE anyone signs out, which is the
+		// case #576 built the sibling `tmod-plan` eviction for, so "same session"
+		// is not a reason to keep it. `myId` is the trigger for both.
+		const at = src.indexOf('removeQueries({ queryKey: ["guest-pipeline"');
+		expect(
+			at,
+			"expected the guest-pipeline cache to be evicted on a viewer change",
+		).toBeGreaterThan(-1);
+		expect(src.slice(at, at + 200)).toContain("myId");
+	});
+
 	it("prefills the dialog from the STORED phone column", () => {
 		// `phoneRaw` and `phone` are both `string | null` on the same row and both
 		// hold plausible numbers, so binding to the wrong one type-checks and still
@@ -114,7 +153,7 @@ describe("meeting rail identity wiring (#727)", () => {
 		// contact details down on every pre-meeting render. The phase test alone
 		// is worse: it would fetch for a viewer with no capability, and the
 		// server's refusal is not a reason to have asked.
-		const queryAt = src.indexOf('queryKey: ["guest-pipeline"');
+		const queryAt = src.indexOf("queryKey: guestPipelineKey");
 		expect(
 			queryAt,
 			"expected the guest-pipeline useQuery in the route",

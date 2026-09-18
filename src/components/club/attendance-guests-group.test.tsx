@@ -11,11 +11,14 @@ import { renderUnderMemoryRouter } from "#/test/router-harness";
 // test asserts the payload at. `vi.mock` factories are hoisted above imports,
 // so the fns come from `vi.hoisted` rather than a plain top-level const (see
 // season-grid.test.tsx).
-const { updateGuest, toastSuccess, toastError } = vi.hoisted(() => ({
-	updateGuest: vi.fn(async () => ({ ok: true })),
-	toastSuccess: vi.fn(),
-	toastError: vi.fn(),
-}));
+const { updateGuest, toastSuccess, toastError, onSavedSpy } = vi.hoisted(
+	() => ({
+		updateGuest: vi.fn(async () => ({ ok: true })),
+		toastSuccess: vi.fn(),
+		toastError: vi.fn(),
+		onSavedSpy: vi.fn(async () => {}),
+	}),
+);
 vi.mock("#/server/guest-pipeline", () => ({ updateGuest }));
 vi.mock("sonner", () => ({
 	toast: { success: toastSuccess, error: toastError },
@@ -54,6 +57,9 @@ const base = {
  *  differ can tell the bindings apart. */
 const GUEST_EDIT = {
 	clubId: "c1",
+	// The refresher the capability REQUIRES. Its own test below drives it; the
+	// rest of the suite only needs it to exist, which is the compiler's point.
+	onSaved: onSavedSpy,
 	fields: {
 		g1: {
 			id: "g1",
@@ -351,6 +357,103 @@ describe("AttendanceGuestsGroup", () => {
 					phone: "415-555-2671 x12",
 				},
 			});
+		});
+
+		it("refreshes the rows the prefill comes from, and only closes once it has", async () => {
+			// The second-save-reverts-the-first bug, and the reason `onSaved` is
+			// REQUIRED on the capability rather than optional.
+			//
+			// `GuestEditDialog` calls `router.invalidate()`, which re-runs route
+			// LOADERS. The rail's `fields` do not come from a loader — they come
+			// from a TanStack Query entry the route owns — so `invalidate()` cannot
+			// reach them. Without `onSaved` the badge NAME refreshed (that is
+			// loader-backed) while the dialog kept prefilling the PRE-EDIT email,
+			// phone and goes-by; the next save then wrote those stale values back
+			// over the edit that had just landed. Silent data loss, and the same
+			// hazard a blank prefill causes, one step further on.
+			// A GATED refresher, held open until this test releases it. An
+			// immediately-resolving spy cannot see the ordering at all: every await
+			// after it is a microtask, so by the time an assertion runs the dialog
+			// has already closed either way, and the test passes on both orders.
+			let release: (() => void) | undefined;
+			const gatedOnSaved = vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						release = resolve;
+					}),
+			);
+			await renderUnderMemoryRouter(
+				<AttendanceGuestsGroup
+					{...base}
+					guestEdit={{ ...GUEST_EDIT, onSaved: gatedOnSaved }}
+				/>,
+			);
+			await userEvent.click(
+				screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+			);
+			fireEvent.submit(
+				(await screen.findByLabelText("Name")).closest(
+					"form",
+				) as HTMLFormElement,
+			);
+			await vi.waitFor(() => expect(gatedOnSaved).toHaveBeenCalledTimes(1));
+			// ORDER, not merely "it was called": the refresh is AWAITED before the
+			// close, so the modal keeps the surface behind it inert for the whole
+			// write-and-refetch window. Closing first re-arms the call site's other
+			// controls mid-flight — the VP Membership drift that reordering fixed.
+			expect(
+				screen.queryByRole("dialog"),
+				"onSaved must be awaited while the dialog is still open — closing " +
+					"first drops the modal's in-flight guard for the length of the refetch",
+			).not.toBeNull();
+			// …and it does eventually close, so the assertion above is not passing
+			// on a dialog that simply never closes.
+			release?.();
+			await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		});
+
+		it("re-reads the row on REOPEN, so a second save carries the first one's values", async () => {
+			// The other half: the group must hold the guest's ID, not a captured row.
+			// A captured object would keep rendering the pre-edit values however
+			// faithfully `onSaved` refreshed the map behind it — and a form field
+			// showing a stale value SAVES that stale value.
+			const { rerender } = render(
+				<AttendanceGuestsGroup {...base} guestEdit={GUEST_EDIT} />,
+			);
+			// OPEN once first, so the group has had the chance to capture a row.
+			// Without this the test cannot tell "re-reads on every open" from
+			// "reads the current props the first time", and a group that
+			// snapshotted the row on open would pass it.
+			await userEvent.click(
+				screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+			);
+			expect(
+				((await screen.findByLabelText("Goes by")) as HTMLInputElement).value,
+			).toBe("Nadi");
+			await userEvent.keyboard("{Escape}");
+			await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+			// The refreshed map, as the route would hand it back after `onSaved`.
+			const refreshed = {
+				...GUEST_EDIT,
+				fields: {
+					g1: {
+						...GUEST_EDIT.fields.g1,
+						preferredName: "Nads",
+						email: "nadia.new@example.com",
+					},
+				},
+			};
+			rerender(<AttendanceGuestsGroup {...base} guestEdit={refreshed} />);
+			await userEvent.click(
+				screen.getByRole("button", { name: /Edit Nadia Farouk/i }),
+			);
+			expect(
+				(await screen.findByLabelText("Goes by")) as HTMLInputElement,
+			).toHaveProperty("value", "Nads");
+			expect((screen.getByLabelText("Email") as HTMLInputElement).value).toBe(
+				"nadia.new@example.com",
+			);
 		});
 
 		it("still edits a guest who is present because of a role", async () => {

@@ -24,6 +24,12 @@
  *    deletes text, and the stripper is a lexer: a `//` inside a string blanks
  *    the rest of its line and could erase a real call.
  */
+// ## Mutation evidence (2026-09-17, run in this worktree)
+//
+//   `requireClubRole(…, ["admin"])` deleted from updateGuest ........... FAILS
+//   the same gate widened to `["admin", "member"]` ..................... FAILS
+//
+// Both were applied to `guest-pipeline.ts`, this file run, and reverted.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";

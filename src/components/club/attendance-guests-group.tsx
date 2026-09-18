@@ -41,10 +41,29 @@ import type { MinutesGuestRow } from "#/server/minutes-logic";
  */
 export interface GuestEditCapability {
 	clubId: string;
-	/** The stored, editable fields, keyed by `guestId`. A guest missing from
-	 *  this map renders as plain text — the same as having no capability at
-	 *  all, and for the same reason: no row, nothing safe to prefill. */
-	fields: Readonly<Record<string, GuestEditFields>>;
+	/**
+	 * The stored, editable fields, keyed by `guestId`. A guest missing from this
+	 * map renders as plain text — the same as having no capability at all, and
+	 * for the same reason: no row, nothing safe to prefill.
+	 *
+	 * `Partial<Record<…>>`, not a bare `Record`. `noUncheckedIndexedAccess` is
+	 * NOT set in this repo's tsconfig (only `strict`), so a bare `Record` types
+	 * every lookup as a present `GuestEditFields` — which makes the absence check
+	 * below one the COMPILER believes can never be false, on the guard the whole
+	 * design rests on. A later reader is then entitled to delete it as dead code.
+	 * `Partial` makes the absence the compiler's business rather than a comment's.
+	 */
+	fields: Readonly<Partial<Record<string, GuestEditFields>>>;
+	/**
+	 * Refresh `fields` after a save, awaited before the dialog closes.
+	 *
+	 * REQUIRED, unlike the dialog's own optional prop. A caller that supplies
+	 * this capability is by definition holding the rows somewhere of its own —
+	 * `router.invalidate()` cannot reach a TanStack Query cache — so without a
+	 * refresher the second save on one guest silently reverts the first. Making
+	 * it required means that cannot be forgotten quietly.
+	 */
+	onSaved: () => void | Promise<void>;
 }
 
 /**
@@ -80,10 +99,10 @@ export function AttendanceGuestsGroup({
 	onRemoveGuest: (guestId: string) => void;
 }) {
 	const [open, setOpen] = useState(false);
-	// The guest whose edit dialog is up, by id — never the row itself. The rows
-	// re-derive on every loader invalidate (the dialog triggers one on save), so
-	// holding the object would keep rendering the values as they were BEFORE the
-	// save that closed it.
+	// The guest whose edit dialog is up, by id — never the row itself. `fields` is
+	// refreshed after every save (`guestEdit.onSaved`), so an id re-reads the NEW
+	// row on the next open while a captured object would keep rendering the values
+	// as they were before the save that closed it.
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const presentIds = new Set(guests.map((g) => g.guestId));
 	const addableClubGuests = clubGuests.filter((g) => !presentIds.has(g.id));
@@ -284,6 +303,7 @@ export function AttendanceGuestsGroup({
 					guest={editing}
 					clubId={guestEdit.clubId}
 					open={true}
+					onSaved={guestEdit.onSaved}
 					onOpenChange={(next) => {
 						if (!next) setEditingId(null);
 					}}
