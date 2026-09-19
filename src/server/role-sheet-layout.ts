@@ -7,7 +7,7 @@
  * template; passing a `RoleSheetFill` pre-fills the header + speaker rows so the
  * blank and filled variants stay visually identical apart from the filled cells.
  *
- * **Editing this file makes `public/role-sheets/*.pdf` stale.** Those five files
+ * **Editing this file makes `public/role-sheets/*.pdf` stale.** Those six files
  * are checked-in build artifacts, and `/resources` and the meeting page serve
  * THEM, not this module — so a change here that is not followed by
  * `bun run build:role-sheets` ships the old sheet to the club. It has happened
@@ -38,7 +38,10 @@ import {
 	type ReactNode,
 } from "react";
 import type { RoleSheetKey } from "../data/role-sheets";
-import { EVALUATION_TIMING_ASK } from "../lib/agenda-runsheet";
+import {
+	EVALUATION_TIMING_ASK,
+	SPEECH_OBJECTIVES_ASK,
+} from "../lib/agenda-runsheet";
 import { TOASTMASTERS_DISCLAIMER } from "../lib/brand";
 import { cap } from "../lib/cap";
 import {
@@ -82,8 +85,14 @@ export interface RoleSheetFill {
 	date: string;
 	/**
 	 * Ordered, display-ready speaker labels (assignee name, optionally with the
-	 * speech title). Pre-fills the first column of the **Timer's** log only;
-	 * blank rows remain for unfilled slots.
+	 * speech title). Pre-fills the first column of the **Timer's** log and of the
+	 * **Toastmaster's** pairing table; blank rows remain for unfilled slots.
+	 *
+	 * Those are the two sheets whose rows are ASSIGNMENTS: the Timer compares
+	 * each against a booked time, and the Toastmaster reads each one out and
+	 * introduces its evaluator (#719). The Toastmaster's evaluator column stays
+	 * blank to write in — the pairing is on the agenda in their other hand, and
+	 * this fill carries no evaluator data to print there.
 	 *
 	 * The Ah-Counter's sheet used to take these too and no longer does (#509):
 	 * that role listens to everyone who takes the floor, so a pre-printed list of
@@ -486,7 +495,72 @@ function sheet(
 	return h(Document, {}, sheetPage(title, subtitle, body, fill));
 }
 
-// ---- The five sheets -------------------------------------------------------
+// ---- The six sheets --------------------------------------------------------
+
+/**
+ * The Toastmaster's script (#719).
+ *
+ * The sheet that did not exist. #719's acceptance criterion 8 asked for "the
+ * matching line on the Toastmaster's printed role sheet", and there was no such
+ * sheet to add a line to: the other five all belong to functionaries, and the
+ * person actually running the meeting — the one holding the room between every
+ * segment, and now the one asked to introduce each speech's evaluator — had
+ * only the agenda.
+ *
+ * So the sheet is built around the beat that motivated it. The pairing TABLE is
+ * the half a script cannot carry: the agenda names each speech's evaluator, but
+ * the Toastmaster reads it standing up, and a row to have already written the
+ * pairing into is what makes the introduction land rather than being hunted for
+ * mid-sentence.
+ */
+function toastmaster(fill?: RoleSheetFill): ReactNode {
+	return sheet(
+		"Toastmaster's script",
+		"Host the meeting: open each segment, and introduce each speech's evaluator before the speech.",
+		[
+			...script(sheetScripts(fill?.roleNames).toastmaster),
+			h(
+				Text,
+				{ key: "a", style: s.sectionTitle },
+				"Speakers and their evaluators",
+			),
+			h(
+				View,
+				{ key: "b" },
+				table(
+					[
+						{ label: "Speaker · speech", flex: 3 },
+						{ label: "Evaluator", flex: 2 },
+						{ label: "Objectives & time", flex: 2.4 },
+					],
+					// FOUR rows, not the Timer's ten. This table is the booked
+					// speakers and nothing else — the Timer's log also absorbs Table
+					// Topics respondents, evaluators and the functionary reports as
+					// they happen, which is what its blank tail is for. No meeting on
+					// record books more than three prepared speeches, and
+					// `RENDER_CAPS.speakerRows` bounds the filled case at eight either
+					// way; the rows this sheet does not spend go to the script above it
+					// and the notes below, which is where a first-time Toastmaster
+					// actually needs the room.
+					filledRows(fill?.speakers ?? [], 4),
+				),
+			),
+			h(Text, { key: "c", style: s.sectionTitle }, "Notes & announcements"),
+			// FOUR ruled lines, and that is the whole remaining budget rather than a
+			// round number. Measured against the "every role sheet fits on one page"
+			// suite's worst fill — eight pre-filled speakers, an 80-character club
+			// name and a club logo — this sheet is exactly full at four and spills at
+			// five. A "Today's theme:" field sat here in the first draft and cost the
+			// fifth line; it went because the script's opening cue already says the
+			// theme is on the agenda, so the field asked the Toastmaster to copy out
+			// something they are holding. Re-measure before adding anything; do not
+			// assume there is slack, and do not assume there is none (the Ah-Counter's
+			// sheet had nine rows of it — see `ahCounter`).
+			h(View, { key: "c-lines" }, ...lines(4)),
+		],
+		fill,
+	);
+}
 
 /**
  * The standard assignment windows printed on the Timer's sheet, held as MINUTES
@@ -871,6 +945,10 @@ export interface SheetRoleNames {
 	ah_counter: string;
 	vote_counter: string;
 	general_evaluator: string;
+	/** A speech evaluator — the role the Toastmaster now introduces before each
+	 *  prepared speech (#719). Distinct from `general_evaluator`, which a club
+	 *  may rename independently and often does. */
+	evaluator: string;
 	table_topics_master: string;
 	toastmaster_of_the_day: string;
 }
@@ -889,6 +967,7 @@ export const CANONICAL_SHEET_ROLE_NAMES: SheetRoleNames = {
 	ah_counter: "Ah-Counter",
 	vote_counter: "Ballot Counter",
 	general_evaluator: "General Evaluator",
+	evaluator: "Evaluator",
 	table_topics_master: "Table Topics Master",
 	toastmaster_of_the_day: "Toastmaster",
 };
@@ -909,6 +988,51 @@ export function sheetScripts(
 	tableTopicsLimits?: TableTopicsLimits | null,
 ): Record<RoleSheetKey, ScriptCue[]> {
 	return {
+		toastmaster: [
+			{
+				when: "When the President hands you the meeting",
+				say: `Thank you, and welcome. I'm your ${n.toastmaster_of_the_day}. Our theme today is on your agenda — listen for it, and use it when you speak.`,
+			},
+			{
+				when: "When you introduce the functionaries",
+				// Names the Grammarian, and only the Grammarian, because the agenda
+				// row this answers does the same: the Word of the Day is delivered at
+				// this moment and nowhere else, while the rest of the functionaries
+				// simply explain themselves. See the functionary-intro beat in
+				// `agenda-runsheet.ts`, whose `{roles:…}` token lists whoever this
+				// club actually runs.
+				say: `Every meeting runs on the people counting, timing and listening. I'll ask each of them to explain their role — and our ${n.grammarian} will give us the Word of the Day.`,
+			},
+			{
+				// The #719 beat, and the reason this sheet exists.
+				//
+				// The shared constant lands in the `when` rather than in the `say`,
+				// and that is grammar rather than preference: `SPEECH_OBJECTIVES_ASK`
+				// is third person ("asks for…") because its other reader is an agenda
+				// ROW describing what the Toastmaster does, and no spoken sentence can
+				// take it unbent. Bending it would mean a second copy of the same
+				// English, which is precisely what `EVALUATION_TIMING_ASK` exists to
+				// prevent. So the `when` quotes the agenda row verbatim — which is
+				// also what the Toastmaster is looking at in the moment — and the
+				// `say` is this sheet's own words for carrying it out. The Timer's
+				// merged cue already has this shape: its `when` carries the shared
+				// verb phrase and its `say` carries the derived numbers.
+				when: `Before each prepared speech — your agenda row names that speech's ${n.evaluator} and ${SPEECH_OBJECTIVES_ASK}`,
+				say: `Evaluating this speech is our ${n.evaluator}, named on your agenda. Before we begin — would you give us the objectives for this project, and the time our speaker is working to?`,
+			},
+			{
+				when: "When the last prepared speech ends",
+				say: `Thank you to our speakers. ${n.timer}, your report please — then we'll vote for Best Speaker.`,
+			},
+			{
+				when: `When you hand the room to the ${n.table_topics_master}`,
+				say: `Now the part nobody gets to prepare for. Our ${n.table_topics_master} will take us through Table Topics.`,
+			},
+			{
+				when: "When you present the awards",
+				say: `Our ${n.vote_counter} has the results. Please join me in congratulating today's winners.`,
+			},
+		],
 		timer: [
 			{
 				when: "When you are introduced with the other functionaries",
@@ -987,6 +1111,7 @@ export function sheetScripts(
 }
 
 const BUILDERS: Record<RoleSheetKey, (fill?: RoleSheetFill) => ReactNode> = {
+	toastmaster,
 	timer,
 	"ah-counter": ahCounter,
 	grammarian,
