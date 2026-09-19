@@ -21,6 +21,7 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { AgendaEditor } from "#/components/agenda/agenda-editor";
 import { BackLink } from "#/components/back-link";
+import { getAuthContext } from "#/server/auth-context";
 import {
 	addAgendaRoleFn,
 	addAgendaRowFn,
@@ -35,6 +36,38 @@ import {
 export const Route = createFileRoute(
 	"/club/$clubId/meeting/$meetingId_/agenda",
 )({
+	// Sign-in gate (#769). The `/club/$clubId` shell above this route is
+	// deliberately PUBLIC — a guest reaches the sign-up sheet through it — so
+	// nothing between `/` and here checks for a session. This route is not
+	// public: its loader's first act is `getAgendaDraft`, whose handler opens
+	// with `requireMeetingTemplateEditor`, and a plain `throw new Error` out of
+	// a loader is an error boundary, not a redirect. So an officer whose
+	// session expired, or anyone following a shared link, got HTTP 500 and
+	// "Something went wrong!" where every `_authed` page sends them to sign in.
+	//
+	// The check has to be "is there a SESSION", not "is this an editor". The
+	// parent's `shell` is false for a signed-in non-member too, and bouncing
+	// them to /signin would loop: they are already signed in, so signing in
+	// again returns them here to be bounced again. A signed-in visitor who may
+	// not edit still reaches the loader and still gets its error — that is a
+	// permission failure, and it is not what this guard is for.
+	beforeLoad: async ({ context, location }) => {
+		// `shell` is true only when `publicShellDecision` saw a user, so it is a
+		// session the parent has already proven. Re-asking would mean a second
+		// `getAuthContext` — a server round trip on every navigation in, and on
+		// SSR a second pass over memberships, officer positions and the schedule
+		// top-up — for an answer we hold. Falling through when it is false is
+		// safe under any later change to what `shell` means: the call below is
+		// the authority, this is only the fast path.
+		if (context.shell) return;
+		const ctx = await getAuthContext();
+		if (!ctx.user) {
+			throw redirect({
+				to: "/signin",
+				search: { redirect: location.href },
+			});
+		}
+	},
 	loader: async ({ params }) => {
 		const draft = await getAgendaDraft({
 			data: { meetingId: params.meetingId },
