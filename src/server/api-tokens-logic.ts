@@ -106,17 +106,32 @@ export interface ResolvedApiToken {
 	userId: string;
 }
 
+/** The pooled client, or a transaction handle to run this read against. */
+type Conn =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 /**
  * The active token row for a raw bearer value, or null.
  *
  * Null covers every rejection the endpoint answers 401 to — unknown, malformed,
  * and revoked alike — deliberately: telling a caller which of those it was
  * distinguishes "this token existed" from "it never did".
+ *
+ * `conn` exists for one caller, and it is the reason this stayed ONE function
+ * (#776). A write tool authenticates, opens a transaction, and then WAITS on the
+ * club's advisory lock; re-proving the credential on the other side of that wait
+ * has to read against `tx`, not the pool, or it re-reads a snapshot from before
+ * the revocation landed. Inlining the hash-and-not-revoked predicate at that
+ * call site instead would put two copies of "is this token good" in the tree,
+ * and the copy is how the up-front check and the after-the-lock check start
+ * disagreeing about what a revoked token is.
  */
 export async function resolveActiveApiToken(
 	rawToken: string,
+	conn: Conn = db,
 ): Promise<ResolvedApiToken | null> {
-	const [row] = await db
+	const [row] = await conn
 		.select({ id: apiTokens.id, userId: apiTokens.userId })
 		.from(apiTokens)
 		.where(
