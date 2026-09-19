@@ -348,15 +348,18 @@ describe.skipIf(!hasTestDb)(
 			});
 		});
 
-		it("reports an ambiguous line with MASKED candidates", async () => {
+		it("reports an ambiguous line as a COUNT, naming no candidate", async () => {
 			// A shared number under a name that does not agree: #488 says these are
 			// two prospects, and a transcriber gets asked rather than guessed at.
 			//
-			// The candidates are the one thing in this result the caller did NOT send
-			// — they are guests already on file — so masking them is the half of D9
-			// that still protects something. `toPublicBlocking` is what does it, and
-			// it is a SEPARATE projection from `toPublicPlan` because `blocking` is a
-			// sibling of the plan rather than a field inside it.
+			// The candidates are the one thing in this result the caller did NOT
+			// send — they are guests already on file — so they are the half of D9
+			// that still protects something, and `toPublicBlocking` DROPS them
+			// rather than masking them. Masking the email and phone while passing
+			// the NAME through was the shape this shipped with, and for
+			// `phone_name_disagree` that name is by construction different from
+			// what the model transcribed. The caller no longer resolves an
+			// ambiguity either way, so a count is the whole message it can use.
 			await testDb.insert(guests).values({
 				clubId: seed.clubId,
 				name: "Samir Patel",
@@ -379,7 +382,14 @@ describe.skipIf(!hasTestDb)(
 			const serialized = JSON.stringify(p.blocking);
 			expect(serialized).not.toContain("5551234567");
 			expect(serialized).not.toContain("samir@example.com");
-			expect(serialized).toContain("s•••@example.com");
+			// Not even the NAME, which is the value a mask would have left behind.
+			expect(serialized).not.toContain("Samir Patel");
+			// What survives is what the caller can act on: how many lines need a
+			// human, and why.
+			expect(p.blocking[0]?.detail).toMatchObject({
+				reason: "phone_name_disagree",
+				candidateCount: 1,
+			});
 			expect(await guestRows()).toHaveLength(1);
 			expect(await attendanceRows()).toHaveLength(0);
 		});

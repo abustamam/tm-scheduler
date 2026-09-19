@@ -34,9 +34,11 @@ let ticking = false;
  * producer failure is logged but never blocks the send pass — delivery of
  * already-queued reminders must still happen, and neither blocks the sweep.
  *
- * `DISABLE_REMINDER_POLLER=1` therefore means no sweep either: pending rows
- * accumulate rather than expiring out. That is the same trade the reminder rows
- * already make, and the rows are small and cascade with their club.
+ * `DISABLE_REMINDER_POLLER=1` stops the two delivery passes and NOT the sweep —
+ * see `startReminderPoller`. A pending plan holds a visitor's unmasked name,
+ * email and phone, and the sweep is the only thing in the system that deletes
+ * one, so letting the send flag disable it turned a 48-hour retention window
+ * into an indefinite one.
  *
  * Overlap guard: if the previous tick is still in flight when the interval fires
  * (a slow send batch), skip this one so ticks never stack up in the single
@@ -66,23 +68,60 @@ async function tick(): Promise<void> {
 			);
 		}
 
-		try {
-			const swept = await sweepExpiredPendingPlans();
-			if (swept.deleted > 0) {
-				console.log(
-					`[guest-book] swept ${swept.deleted} expired pending plan(s)`,
-				);
-			}
-		} catch (err) {
-			// Housekeeping. A failure here must never look like a delivery failure
-			// or stop the next tick.
-			console.error("[guest-book] pending-plan sweep failed:", err);
-		}
+		await sweepTick();
 	} catch (err) {
 		console.error("[reminders] poll tick failed:", err);
 	} finally {
 		ticking = false;
 	}
+}
+
+/**
+ * Delete guest-book pending plans past their grace window (#806).
+ *
+ * Its own function because it has its own lifecycle: it runs on the delivery
+ * tick AND on a sweep-only timer when delivery is disabled. It is the only
+ * thing that removes a row carrying a visitor's unmasked name, email and phone,
+ * so "this process must not send" must not silently mean "this process must not
+ * delete".
+ *
+ * Never throws: a failure here must not look like a delivery failure or stop
+ * the next tick.
+ */
+async function sweepTick(): Promise<void> {
+	if (process.env.DISABLE_GUEST_BOOK_SWEEP === "1") return;
+	try {
+		const swept = await sweepExpiredPendingPlans();
+		if (swept.deleted > 0) {
+			console.log(
+				`[guest-book] swept ${swept.deleted} expired pending plan(s)`,
+			);
+		}
+	} catch (err) {
+		console.error("[guest-book] pending-plan sweep failed:", err);
+	}
+}
+
+/**
+ * The retention timer a send-disabled process still runs.
+ *
+ * Same interval as the delivery poller and the same `unref`, so it cannot hold
+ * the process open on its own.
+ */
+function startSweepOnlyTimer(): boolean {
+	if (process.env.DISABLE_GUEST_BOOK_SWEEP === "1") {
+		console.log("[guest-book] sweep disabled via DISABLE_GUEST_BOOK_SWEEP");
+		return false;
+	}
+	const intervalMs = resolveIntervalMs();
+	timer = setInterval(() => {
+		void sweepTick();
+	}, intervalMs);
+	timer.unref?.();
+	console.log(
+		`[guest-book] retention sweep started (interval=${intervalMs}ms)`,
+	);
+	return true;
 }
 
 /**
@@ -93,8 +132,16 @@ async function tick(): Promise<void> {
 export function startReminderPoller(): boolean {
 	if (timer) return false;
 	if (process.env.DISABLE_REMINDER_POLLER === "1") {
+		// The SWEEP still runs. `DISABLE_REMINDER_POLLER` says "this process
+		// must not SEND"; the guest-book sweep sends nothing — it is the only
+		// thing in the system that deletes a pending plan, and a pending plan
+		// holds a visitor's unmasked name, email and phone. Inheriting the send
+		// flag turned a 48-hour retention window into an indefinite one, with
+		// no user-facing way to discard a row. A worker that should not send has
+		// every reason to still sweep; a deployment that wants neither sets
+		// `DISABLE_GUEST_BOOK_SWEEP=1` and owns the retention itself.
 		console.log("[reminders] poller disabled via DISABLE_REMINDER_POLLER");
-		return false;
+		return startSweepOnlyTimer();
 	}
 	const intervalMs = resolveIntervalMs();
 	timer = setInterval(() => {

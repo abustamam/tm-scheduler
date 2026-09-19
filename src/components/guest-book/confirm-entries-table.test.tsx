@@ -159,6 +159,76 @@ describe("the confirm table shows the real values (#806)", () => {
 		expect(document.body.textContent).toContain("will not be recorded");
 	});
 
+	it("restores the stored name rather than sending a blank one", () => {
+		// A name has no empty form and the server's validator refuses one, so
+		// blanking the box must put the stored value back rather than fire an
+		// edit the server will reject and the page will toast about.
+		const onEdit = vi.fn();
+		const onDraft = vi.fn();
+		render(
+			<ConfirmEntriesTable
+				entries={ENTRIES}
+				lines={LINES}
+				blocking={BLOCKING}
+				busy={false}
+				onEdit={onEdit}
+				draft={() => undefined}
+				onDraft={onDraft}
+			/>,
+		);
+		fireEvent.blur(screen.getByDisplayValue("Vera Real"), {
+			target: { value: "   " },
+		});
+		expect(onEdit).not.toHaveBeenCalled();
+		expect(onDraft).toHaveBeenCalledWith("e1", "name", "Vera Real");
+	});
+
+	it("shows an emptied draft instead of refilling from the stored value", () => {
+		// `draft()` returns `undefined` for "no draft" and `""` for "the reader
+		// just cleared this box". Collapsing the two with `||` would make the
+		// field refill itself from storage the moment it was emptied.
+		render(
+			<ConfirmEntriesTable
+				entries={ENTRIES}
+				lines={LINES}
+				blocking={BLOCKING}
+				busy={false}
+				onEdit={() => {}}
+				draft={(id, field) =>
+					id === "e1" && field === "email" ? "" : undefined
+				}
+				onDraft={() => {}}
+			/>,
+		);
+		expect(screen.queryByDisplayValue("vera@example.com")).toBeNull();
+	});
+
+	it("disables every control while a save is in flight", () => {
+		// Two PATCHes racing on one row would have the second overwrite the
+		// first's re-plan, so the table goes inert until the server answers.
+		render(
+			<ConfirmEntriesTable
+				entries={ENTRIES}
+				lines={LINES}
+				blocking={BLOCKING}
+				busy={true}
+				onEdit={() => {}}
+				draft={() => undefined}
+				onDraft={() => {}}
+			/>,
+		);
+		for (const el of screen.getAllByRole("textbox")) {
+			expect((el as HTMLInputElement).disabled).toBe(true);
+		}
+		expect(
+			(screen.getByLabelText("Resolve Priya Raman") as HTMLSelectElement)
+				.disabled,
+		).toBe(true);
+		for (const b of screen.getAllByRole("button", { name: "Drop" })) {
+			expect((b as HTMLButtonElement).disabled).toBe(true);
+		}
+	});
+
 	it("does not send an edit when a field is left unchanged", () => {
 		// Blur fires on every tab-through. Sending a PATCH for each one would
 		// re-plan the page — and hand back a new planHash — for nothing.

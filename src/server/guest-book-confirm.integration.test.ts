@@ -19,7 +19,7 @@
  *     bunx vitest run src/server/guest-book-confirm.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -54,6 +54,38 @@ const {
 } = await import("#/server/guest-book-pending-logic");
 
 type View = Awaited<ReturnType<typeof loadPendingPlan>>;
+
+/**
+ * Resolve once something is parked on a ROW lock of the pending-plan table,
+ * or fail loudly.
+ *
+ * Scoped to the relation rather than counting every ungranted lock in the
+ * database: vitest runs test FILES in parallel against one `tm_test`, and a
+ * global waiter count would be satisfied by an unrelated suite's contention —
+ * which would let the race case below pass without its race ever happening.
+ */
+async function awaitRowLockWaiter(): Promise<void> {
+	const deadline = Date.now() + 3000;
+	while (Date.now() < deadline) {
+		// Read through `pg_stat_activity`, not `pg_locks.relation`. A statement
+		// blocked on a row another transaction has locked waits on a
+		// `transactionid` lock, and those carry NO relation — so the obvious
+		// `JOIN pg_class ON c.oid = l.relation` finds nothing and the wait looks
+		// like it never happened. MEASURED: that spelling timed out at 3s while
+		// the UPDATE was demonstrably parked.
+		const res = await testDb.execute<{ n: number }>(sql`
+			SELECT count(*)::int AS n
+			FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock'
+			  AND query ILIKE '%guest_book_pending_plans%'
+		`);
+		if (Number(res.rows[0]?.n ?? 0) > 0) return;
+		await new Promise((r) => setTimeout(r, 25));
+	}
+	throw new Error(
+		"the PATCH never parked on the pending-plan row lock — the race this test sets up did not happen, so the assertions below would prove nothing",
+	);
+}
 
 /** Narrow to the editable state, failing loudly with what came back instead. */
 function editable(view: View) {
@@ -456,12 +488,186 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 			planHash: view.planHash,
 		});
 		expect(second.ok).toBe(false);
-		expect(second.message).toMatch(/already been recorded/i);
+		// The UP-FRONT sentence specifically. The locked guard inside
+		// `applyGuestBookPlan` says something different on purpose, so this
+		// assertion cannot pass for the wrong reason — the serial path never
+		// opens a transaction, and a regex matching both sentences would report
+		// the locked guard as covered when nothing had reached it. The race that
+		// does reach it lives in
+		// `guest-book-confirm-revocation.integration.test.ts`.
+		expect(second.message).toBe("That page has already been recorded.");
 		expect(second.view.status).toBe("applied");
 
 		const afterSecond = await rows();
 		expect(afterSecond.guests).toHaveLength(afterFirst.guests.length);
 		expect(afterSecond.attendance).toHaveLength(afterFirst.attendance.length);
+	});
+
+	it("cannot write PII back into a tombstone when an apply wins the race", async () => {
+		// THE case the `applied_at IS NULL` predicate on the PATCH exists for,
+		// and the serial case below cannot reach it: `patchPendingPlan` answers
+		// from its own unlocked pre-read and never opens the UPDATE at all.
+		//
+		// MEASURED: with only the serial case, deleting the predicate left all
+		// 23 cases in this file green — the same shape as the locked
+		// double-apply guard, which is why both now have a race driving them.
+		//
+		// The interleaving is made deterministic with a ROW lock rather than
+		// sleeps: a held `FOR UPDATE` parks the PATCH's UPDATE after its read
+		// has already seen `applied_at` null. Under READ COMMITTED the UPDATE
+		// re-evaluates its WHERE against the row version the tombstone left, so
+		// the predicate is exactly what decides whether the write lands.
+		const id = await preview([{ name: "Raced", email: "raced@example.com" }]);
+		const view = editable(await load(id));
+		const entryId = view.entries[0]?.id as string;
+
+		let commit!: () => void;
+		const held = new Promise<void>((resolve) => {
+			commit = resolve;
+		});
+		const tombstone = testDb.transaction(async (tx) => {
+			await tx
+				.select({ id: guestBookPendingPlans.id })
+				.from(guestBookPendingPlans)
+				.where(eq(guestBookPendingPlans.id, id))
+				.for("update");
+			await tx
+				.update(guestBookPendingPlans)
+				.set({ appliedAt: new Date(), entries: null })
+				.where(eq(guestBookPendingPlans.id, id));
+			await held;
+		});
+
+		const patch = patchPendingPlan({
+			pendingId: id,
+			userId: seed.adminUserId,
+			edit: { kind: "field", id: entryId, field: "email", value: "new@x.com" },
+		});
+		// The control: the PATCH is parked on the row lock, so its pre-read is
+		// already behind it and a refusal below cannot be that pre-read firing.
+		//
+		// `finally` because the transaction above holds a row lock the club
+		// cascade in `afterEach` would then queue behind — a failed control
+		// would otherwise time the whole file's teardown out instead of
+		// reporting itself.
+		try {
+			await awaitRowLockWaiter();
+		} finally {
+			commit();
+			await tombstone;
+		}
+		const after = await patch;
+
+		// The claim. `entries` stays null: no visitor name, email or phone is at
+		// rest on an applied row.
+		const [stored] = await testDb
+			.select({
+				entries: guestBookPendingPlans.entries,
+				appliedAt: guestBookPendingPlans.appliedAt,
+			})
+			.from(guestBookPendingPlans)
+			.where(eq(guestBookPendingPlans.id, id));
+		expect(stored?.appliedAt).not.toBeNull();
+		expect(stored?.entries).toBeNull();
+		// And the page it hands back is what is actually stored, not the stale
+		// row the PATCH had read.
+		expect(after.status).toBe("applied");
+	});
+
+	it("refuses a PATCH against an applied tombstone, and writes no PII back", async () => {
+		// The tombstone is the point: `entries` is nulled when the write lands so
+		// no visitor contact detail sits here at rest. An unconditional PATCH
+		// would put it all back — the reader has the page open in one tab and
+		// clicks Record in another, and the blur fires afterwards.
+		const id = await preview([
+			{ name: "Done With", email: "done@example.com" },
+		]);
+		const view = editable(await load(id));
+		const entryId = view.entries[0]?.id as string;
+		await applyPendingPlan({
+			pendingId: id,
+			userId: seed.adminUserId,
+			planHash: view.planHash,
+		});
+
+		const patched = await patchPendingPlan({
+			pendingId: id,
+			userId: seed.adminUserId,
+			edit: { kind: "field", id: entryId, field: "name", value: "Rewritten" },
+		});
+		expect(patched.status).toBe("applied");
+
+		const [stored] = await testDb
+			.select({ entries: guestBookPendingPlans.entries })
+			.from(guestBookPendingPlans)
+			.where(eq(guestBookPendingPlans.id, id));
+		expect(stored?.entries).toBeNull();
+	});
+
+	it("refuses a PATCH against an expired plan, and stores nothing", async () => {
+		const id = await preview([{ name: "Too Late To Edit" }]);
+		const entryId = editable(await load(id)).entries[0]?.id as string;
+		await testDb
+			.update(guestBookPendingPlans)
+			.set({ expiresAt: new Date(Date.now() - 60_000) })
+			.where(eq(guestBookPendingPlans.id, id));
+
+		const patched = await patchPendingPlan({
+			pendingId: id,
+			userId: seed.adminUserId,
+			edit: { kind: "field", id: entryId, field: "name", value: "Rewritten" },
+		});
+		expect(patched.status).toBe("expired");
+
+		const [stored] = await testDb
+			.select({ entries: guestBookPendingPlans.entries })
+			.from(guestBookPendingPlans)
+			.where(eq(guestBookPendingPlans.id, id));
+		expect(stored?.entries?.[0]?.name).toBe("Too Late To Edit");
+	});
+
+	it("refuses a resolve naming a guest of ANOTHER club", async () => {
+		// `patchSchema` validates only that `guestId` is a uuid, so the single
+		// thing standing between a client-supplied id and this club's attendance
+		// is `plan()`'s `byId.get(answer)` miss — built from
+		// `loadGuestMatchCandidates(conn, club.clubId)`, this club's guests only.
+		const other = await seedClub();
+		try {
+			const [foreign] = await testDb
+				.insert(guests)
+				.values({ clubId: other.clubId, name: "Outsider", stage: "prospect" })
+				.returning({ id: guests.id });
+			const id = await preview([{ name: "Who Is This" }]);
+			const before = editable(await load(id));
+
+			const answered = editable(
+				await patchPendingPlan({
+					pendingId: id,
+					userId: seed.adminUserId,
+					edit: {
+						kind: "resolve",
+						id: before.entries[0]?.id as string,
+						// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+						resolve: { kind: "existing", guestId: foreign!.id },
+					},
+				}),
+			);
+			expect(answered.lines[0]?.outcome).toBe("ambiguous");
+			expect(answered.blocking[0]?.code).toBe("AMBIGUOUS_GUEST");
+
+			const result = await applyPendingPlan({
+				pendingId: id,
+				userId: seed.adminUserId,
+				planHash: answered.planHash,
+			});
+			expect(result.ok).toBe(false);
+			// And nothing attached the other club's guest to this meeting.
+			const after = await rows();
+			expect(after.attendance).toHaveLength(0);
+			expect(after.guests).toHaveLength(0);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
 	});
 
 	// --- AC8: a stale plan ------------------------------------------------
@@ -619,6 +825,47 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		expect(after.attendance).toHaveLength(1);
 	});
 
+	it("refuses a row stored in a shape this release cannot read", async () => {
+		// The deploy boundary. `entries` is `jsonb` typed by a compile-time cast,
+		// migrations apply at container startup with no drain, and a pending row
+		// lives for up to 48h — so the first release that changes `PendingEntry`
+		// reads the previous one's rows. Without a parse those values go straight
+		// into `guests.name/email/phone`.
+		//
+		// Written directly, because a row this release cannot produce is exactly
+		// the point: this is what the PREVIOUS release's shape looks like from
+		// here.
+		const [row] = await testDb
+			.insert(guestBookPendingPlans)
+			.values({
+				clubId: seed.clubId,
+				meetingDate: pastMeetingDate,
+				createdByUserId: seed.adminUserId,
+				// No `id` on the entry — the field every drop, edit and blocking
+				// mapping is keyed on.
+				entries: [{ name: "Shapeless" }] as never,
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+			})
+			.returning({ id: guestBookPendingPlans.id });
+		// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+		const id = row!.id;
+
+		const view = await load(id);
+		expect(view).toMatchObject({ status: "unplannable", reason: "UNREADABLE" });
+		// It says what to do next rather than failing silently.
+		expect(view.status === "unplannable" && view.message).toMatch(
+			/older version/i,
+		);
+
+		const result = await applyPendingPlan({
+			pendingId: id,
+			userId: seed.adminUserId,
+			planHash: "whatever",
+		});
+		expect(result.ok).toBe(false);
+		expect((await rows()).guests).toHaveLength(0);
+	});
+
 	// --- AC16: an McpError becomes a page state ---------------------------
 
 	it("renders a blocked state for a meeting that has not happened yet", async () => {
@@ -744,7 +991,13 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 			})
 			.where(eq(guestBookPendingPlans.id, applied));
 
-		await sweepExpiredPendingPlans();
+		const swept = await sweepExpiredPendingPlans();
+		// Exactly the two this test aged past the window. The DELETE is unscoped
+		// by construction (the poller sweeps the whole table), and vitest runs
+		// test FILES in parallel against one `tm_test` — so a larger number means
+		// it took another file's in-flight rows, which must be visible rather
+		// than silent.
+		expect(swept.deleted).toBe(2);
 
 		const left = await testDb
 			.select({ id: guestBookPendingPlans.id })

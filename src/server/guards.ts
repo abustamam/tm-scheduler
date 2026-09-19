@@ -352,7 +352,16 @@ export async function assertStillClubAdmin(
 			.where(eq(clubs.id, clubId))
 			.limit(1);
 		if (!club) throw new Error("Club not found.");
-		const session = await getActiveImpersonation(userId, clubId);
+		// `conn`, not the pooled client: this runs inside a transaction that
+		// already holds a connection and the club's advisory lock, and a second
+		// pool checkout there is bounded by nothing (the 5s `lock_timeout` does
+		// not cover a pool wait).
+		const session = await getActiveImpersonation(
+			userId,
+			clubId,
+			new Date(),
+			conn,
+		);
 		if (session?.mode === "read_write") {
 			// The takedown arm still applies to them (see `requireReadWriteImpersonation`).
 			assertNotArchived(club);

@@ -72,7 +72,9 @@ const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { applyPendingPlan, loadPendingPlan } = await import(
 	"#/server/guest-book-pending-logic"
 );
-const { NOT_A_MEMBER_MESSAGE } = await import("#/server/guards");
+const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
+	"#/server/guards"
+);
 
 /** Take the club's advisory lock on a connection of its own and hold it. */
 function holdClubLock(clubId: string) {
@@ -336,6 +338,12 @@ describe.skipIf(!hasTestDb)("the confirm apply across the lock wait", () => {
 
 		const result = await apply;
 		expect(result.ok).toBe(false);
+		// WHICH refusal fired, not just that one did. This is the only case that
+		// reaches the `NO_PERMISSION_MESSAGE` arm of the mapping — an officer who
+		// is still an active MEMBER but no longer holds an office — and the
+		// deleted original pinned the same distinction as a FORBIDDEN code.
+		expect(result.message).toBe(NO_PERMISSION_MESSAGE);
+		expect(result.view).toEqual({ status: "not_found" });
 		expect(await rows()).toEqual({ guests: 0, attendance: 0 });
 	});
 
@@ -370,6 +378,46 @@ describe.skipIf(!hasTestDb)("the confirm apply across the lock wait", () => {
 			.from(members)
 			.where(eq(members.id, seed.memberId));
 		expect(who?.clubRole).toBe("member");
+	});
+
+	it("applies ONCE when a second click lands while the first is queued", async () => {
+		// The `applied_at IS NULL` guard inside the locked transaction is the
+		// only thing standing between a double-click and a page recorded twice,
+		// and it is unreachable serially: `applyPendingPlan` answers from its own
+		// cheap pre-read before a transaction is ever opened. So this drives the
+		// race the guard exists for — B commits while A is parked on the club
+		// lock — and asserts on the sentence only the LOCKED guard says.
+		const { pendingId, planHash } = await pendingFor(seed.adminUserId, token);
+		const lock = holdClubLock(seed.clubId);
+		await lock.acquired;
+
+		const first = applyPendingPlan({
+			pendingId,
+			userId: seed.adminUserId,
+			planHash,
+		});
+		// The control: A is inside its transaction and past every pre-read.
+		await awaitLockWaiter(seed.clubId);
+
+		const second = applyPendingPlan({
+			pendingId,
+			userId: seed.adminUserId,
+			planHash,
+		});
+		await lock.release();
+
+		const [a, b] = await Promise.all([first, second]);
+		const winners = [a, b].filter((r) => r.ok);
+		const losers = [a, b].filter((r) => !r.ok);
+		expect(winners).toHaveLength(1);
+		expect(losers).toHaveLength(1);
+		// Not "That page has already been recorded." — that is the pre-read's
+		// sentence, and matching it here would mean the locked guard never ran.
+		expect(losers[0]?.message).toBe(
+			"That page was recorded while this one was open.",
+		);
+		// The claim that matters: one guest, one attendance row, not two.
+		expect(await rows()).toEqual({ guests: 1, attendance: 1 });
 	});
 
 	it("still applies when nothing changed during the wait", async () => {

@@ -581,13 +581,21 @@ export function toPublicPlan(p: GuestBookPlan, meetingNumber: number | null) {
 		summary: planSummary(p),
 		entries: p.entries.map((e) => ({
 			index: e.index,
+			// The name the CALLER sent, which it already has. Contrast
+			// `matchedName` below.
 			name: e.source.name,
 			emailMasked: maskEmail(e.source.email),
 			phoneMasked: maskPhone(e.source.phone),
 			outcome: e.outcome,
 			guestId: e.guestId,
 			via: e.via,
-			matchedName: e.matchedName,
+			// A BOOLEAN, not the name. `matchedName` is set precisely when the
+			// stored guest's name DIFFERS from what was transcribed — so it is,
+			// by construction, a name the model has not seen, and returning it
+			// put a club guest's real name into the transcript. What the caller
+			// can act on is that the two disagree; WHICH name is on file is a
+			// question for the confirm page, which shows it unmasked.
+			matchedNameDiffers: e.matchedName !== null,
 			minutesRecipient: e.minutesRecipient,
 		})),
 	};
@@ -597,10 +605,22 @@ export function toPublicPlan(p: GuestBookPlan, meetingNumber: number | null) {
  * The blocking list as an MCP caller sees it.
  *
  * The SECOND projection, and the one that is easy to forget: `blocking` is a
- * sibling of `plan` in `plan()`'s return, so `toPublicPlan` cannot reach it —
- * and an `AMBIGUOUS_GUEST` item's candidate list carries a guest's real email
- * and phone, which is precisely why the item is worth showing at all. Every
- * other code's `detail` carries no contact and passes through unchanged.
+ * sibling of `plan` in `plan()`'s return, so `toPublicPlan` cannot reach it.
+ *
+ * An `AMBIGUOUS_GUEST` item's candidates are dropped entirely rather than
+ * masked. Masking the email and phone and passing the NAME through was the
+ * shape this shipped with, and it leaked the one thing the list is made of:
+ * candidates are guests already on file, so their names are values the model
+ * has not seen — and for `phone_name_disagree` the name is, by construction,
+ * different from what the model transcribed.
+ *
+ * Dropping rather than masking is what the new flow makes correct. The caller
+ * no longer resolves an ambiguity — the confirm page does, with everything
+ * unmasked — so an identity it must not act on is cost with no benefit. The
+ * COUNT is what it can still use: "2 lines need your attention" is the whole
+ * message it has to carry.
+ *
+ * Every other code's `detail` holds no contact and passes through unchanged.
  */
 export function toPublicBlocking(
 	blocking: McpBlockingItem[],
@@ -613,12 +633,7 @@ export function toPublicBlocking(
 			...item,
 			detail: {
 				reason: detail.reason,
-				candidates: detail.candidates.map((c) => ({
-					guestId: c.guestId,
-					name: c.name,
-					emailMasked: maskEmail(c.email),
-					phoneMasked: maskPhone(c.phone),
-				})),
+				candidateCount: detail.candidates.length,
 			},
 		};
 	});

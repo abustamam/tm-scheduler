@@ -43,6 +43,23 @@ describe("server-fn modules keep db logic out of the client bundle", () => {
 			f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.endsWith("-logic.ts"),
 	);
 
+	/** The subset the rule applies to: modules that really define server fns. */
+	const swept = files.filter((f) =>
+		/createServerFn\s*\(/.test(readSource(join(serverDir, f))),
+	);
+
+	it("sweeps the server-fn modules, and exempts only pure helpers", () => {
+		// The floor the narrowing below needs. A regex that stopped matching
+		// would empty this set and every case after it — silently, and in the
+		// direction that ships `#/db` to the browser.
+		expect(swept.length).toBeGreaterThanOrEqual(40);
+		expect(swept).toContain("guest-book-pending.ts");
+		// And the file the comment-blind narrowing exists for: zod only, no way
+		// to reach `#/db`, and its only mention of `createServerFn` is prose
+		// explaining why a validator must not live inside one (#806).
+		expect(swept).not.toContain("guest-book-pending-schemas.ts");
+	});
+
 	for (const file of files) {
 		// Deliberately NOT `#/test/guard-source` (which blanks comments). This
 		// asserts an offender list is EMPTY, so a comment can only ever add a false

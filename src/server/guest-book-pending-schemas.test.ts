@@ -22,6 +22,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	applySchema,
+	parseStoredEntries,
 	patchSchema,
 	pendingIdSchema,
 } from "./guest-book-pending-schemas";
@@ -135,6 +136,53 @@ describe("patchSchema (#806)", () => {
 				},
 			}).success,
 		).toBe(false);
+	});
+});
+
+describe("parseStoredEntries (#806)", () => {
+	// The deploy boundary: a pending row written by the previous release is
+	// still readable for up to 48h, and `$type<PendingEntry[]>()` is a
+	// compile-time cast that checks none of it. These are the shapes that must
+	// be refused rather than half-understood, because `applyGuestBookPlan`
+	// writes the values straight into `guests`.
+	it("accepts a row this release wrote", () => {
+		expect(
+			parseStoredEntries([
+				{ id: "e1", name: "Vera Real", email: "vera@example.com" },
+				{ id: "e2", name: "Dropped", dropped: true },
+				{ id: "e3", name: "Answered", resolve: { kind: "new" } },
+				{
+					id: "e4",
+					name: "Resolved",
+					resolve: { kind: "existing", guestId: GUEST },
+				},
+			]),
+		).toHaveLength(4);
+	});
+
+	it("refuses a row missing a field this release depends on", () => {
+		// The id is what every drop, edit and blocking-item mapping is keyed on.
+		// A row without one is not a plan this code can render.
+		expect(parseStoredEntries([{ name: "No Id" }])).toBeNull();
+		expect(parseStoredEntries([{ id: "e1" }])).toBeNull();
+	});
+
+	it("refuses a resolve shape it does not understand", () => {
+		expect(
+			parseStoredEntries([
+				{ id: "e1", name: "X", resolve: { kind: "maybe", guestId: GUEST } },
+			]),
+		).toBeNull();
+	});
+
+	it("refuses a value that is not an array at all", () => {
+		expect(parseStoredEntries({ entries: [] })).toBeNull();
+		expect(parseStoredEntries("[]")).toBeNull();
+	});
+
+	it("returns null for an absent column, which is the applied tombstone", () => {
+		expect(parseStoredEntries(null)).toBeNull();
+		expect(parseStoredEntries(undefined)).toBeNull();
 	});
 });
 

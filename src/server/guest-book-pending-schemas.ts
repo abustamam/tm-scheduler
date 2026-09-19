@@ -79,6 +79,58 @@ export const patchSchema = z
 		}
 	});
 
+/**
+ * The STORED shape of `guest_book_pending_plans.entries`.
+ *
+ * `jsonb("entries").$type<PendingEntry[]>()` is a compile-time cast and nothing
+ * else — drizzle hands back whatever is in the column. That is fine while one
+ * release wrote every row, and it stops being fine at a deploy boundary:
+ * migrations apply at container startup with no drain, and a pending row lives
+ * for up to 48 hours, so the first release that renames or requires a field on
+ * `PendingEntry` reads the previous release's rows as if they were its own —
+ * and `applyGuestBookPlan` writes `e.write.name` / `email` / `phone` straight
+ * into `guests` with nothing validating in between.
+ *
+ * So the read boundary parses. `parseStoredEntries` returns null for anything
+ * this release cannot understand, and both readers turn that into a refusal
+ * that names the problem rather than a plan built from a half-understood row.
+ */
+const storedEntrySchema = z.object({
+	id: z.string().min(1),
+	name: z.string().min(1),
+	preferredName: z.string().optional(),
+	email: z.string().optional(),
+	phone: z.string().optional(),
+	dropped: z.boolean().optional(),
+	resolve: z
+		.discriminatedUnion("kind", [
+			z.object({ kind: z.literal("existing"), guestId: z.string().min(1) }),
+			z.object({ kind: z.literal("new") }),
+		])
+		.optional(),
+});
+
+export const storedEntriesSchema = z.array(storedEntrySchema);
+
+/**
+ * Stored entries this release can act on, or null.
+ *
+ * Null covers three cases and they all mean the same thing to a reader: the
+ * column is missing, it holds something this code does not understand, or a
+ * field it now depends on is absent.
+ */
+export function parseStoredEntries(
+	raw: unknown,
+): z.infer<typeof storedEntriesSchema> | null {
+	if (raw === null || raw === undefined) return null;
+	const parsed = storedEntriesSchema.safeParse(raw);
+	return parsed.success ? parsed.data : null;
+}
+
+/** What a reader says when `parseStoredEntries` returns null for a stored row. */
+export const UNREADABLE_ENTRIES_MESSAGE =
+	"This transcription was stored by an older version of GavelUp and can no longer be read. Transcribe the page again.";
+
 export const applySchema = z.object({
 	pendingId: z.string().uuid(),
 	/** The hash the page last rendered. Opaque here; compared inside the lock. */

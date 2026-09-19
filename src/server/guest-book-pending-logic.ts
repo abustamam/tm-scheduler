@@ -38,7 +38,7 @@
  * wrappers keep `requireUser()`, which is what the archive-gate sweep
  * classifies on, and add nothing else.
  */
-import { eq, lt } from "drizzle-orm";
+import { and, eq, isNull, lt } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, guestBookPendingPlans } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
@@ -63,6 +63,10 @@ import {
 	type ApplyGuestBookPlanResult,
 	applyGuestBookPlan,
 } from "#/server/guest-book-apply";
+import {
+	parseStoredEntries,
+	UNREADABLE_ENTRIES_MESSAGE,
+} from "#/server/guest-book-pending-schemas";
 import {
 	type AmbiguousGuestDetail,
 	type GuestBookCandidate,
@@ -167,6 +171,13 @@ interface PendingRow {
 	meetingDate: string;
 	createdByUserId: string;
 	entries: PendingEntry[] | null;
+	/**
+	 * The column held something this release cannot parse.
+	 *
+	 * Distinct from `entries: null`, which is the applied tombstone and means
+	 * "there is deliberately nothing here". See `parseStoredEntries`.
+	 */
+	entriesUnreadable: boolean;
 	expiresAt: Date;
 	appliedAt: Date | null;
 }
@@ -204,7 +215,15 @@ async function readRow(pendingId: string): Promise<PendingRow | null> {
 		.innerJoin(clubs, eq(clubs.id, guestBookPendingPlans.clubId))
 		.where(eq(guestBookPendingPlans.id, pendingId))
 		.limit(1);
-	return row ?? null;
+	if (!row) return null;
+	// PARSE, do not trust the column's compile-time type. See
+	// `parseStoredEntries` for the deploy boundary this closes.
+	const entries = parseStoredEntries(row.entries);
+	return {
+		...row,
+		entries,
+		entriesUnreadable: row.entries !== null && entries === null,
+	};
 }
 
 type Resolved =
@@ -265,6 +284,15 @@ async function renderPendingPlan(row: PendingRow): Promise<PendingPlanView> {
 		};
 	}
 	if (isPendingPlanExpired(row)) return { ...header, status: "expired" };
+	if (row.entriesUnreadable) {
+		return {
+			...header,
+			status: "unplannable",
+			reason: "UNREADABLE",
+			message: UNREADABLE_ENTRIES_MESSAGE,
+			entries: [],
+		};
+	}
 
 	const entries = row.entries ?? [];
 	const club = { clubId: row.clubId, timezone: row.timezone };
@@ -284,8 +312,13 @@ async function renderPendingPlan(row: PendingRow): Promise<PendingPlanView> {
 		// a page STATE here. Letting one escape would surface as a route error
 		// boundary on a URL whose whole job is to explain what is wrong (AC16).
 		// Anything that is not an `McpError` is a real failure and is rethrown.
+		//
+		// There is deliberately no `ARCHIVED` arm here. `resolvePending` calls
+		// the archive gate before `plan()` is ever reached, so an archived club
+		// has already rendered `ARCHIVED` and cannot arrive; `NOT_RECORDABLE` is
+		// in fact `plan()`'s only throw today. An arm no caller can produce is
+		// the same drift `blocking-codes.guard.test.ts` was built to remove.
 		if (err instanceof McpError) {
-			if (err.code === "ARCHIVED") return ARCHIVED;
 			return {
 				...header,
 				status: "unplannable",
@@ -384,15 +417,34 @@ export async function patchPendingPlan(input: {
 	// An applied or expired plan is not editable. Re-rendering rather than
 	// throwing keeps one mapping for the page: it gets the same view it would
 	// have got from a fresh load.
-	if (row.appliedAt || isPendingPlanExpired(row)) {
+	if (row.appliedAt || isPendingPlanExpired(row) || row.entriesUnreadable) {
 		return renderPendingPlan(row);
 	}
 
 	const entries = applyPendingEntryEdit(row.entries ?? [], input.edit);
-	await db
+	// `applied_at IS NULL` in the WHERE, not just in the check above.
+	//
+	// The read that produced `row` is not locked, so an apply can commit between
+	// it and this write — the reader has the page open in one tab and clicks
+	// Record in another. An unconditional UPDATE would then put the visitor
+	// names, emails and phones back into the row the apply had just nulled,
+	// which is the whole point of the tombstone. The predicate makes the
+	// check-then-write atomic; zero rows means the apply won the race.
+	const written = await db
 		.update(guestBookPendingPlans)
 		.set({ entries })
-		.where(eq(guestBookPendingPlans.id, input.pendingId));
+		.where(
+			and(
+				eq(guestBookPendingPlans.id, input.pendingId),
+				isNull(guestBookPendingPlans.appliedAt),
+			),
+		);
+	if ((written.rowCount ?? 0) === 0) {
+		// Re-read rather than render `row`: what is on screen has to be what is
+		// stored, and what is stored is now the tombstone.
+		const after = await readRow(input.pendingId);
+		return after ? renderPendingPlan(after) : NOT_FOUND;
+	}
 
 	return renderPendingPlan({ ...row, entries });
 }
@@ -426,12 +478,14 @@ export async function applyPendingPlan(input: {
 	}
 	const { row, actorMemberId } = resolved;
 
-	if (row.appliedAt || isPendingPlanExpired(row)) {
+	if (row.appliedAt || isPendingPlanExpired(row) || row.entriesUnreadable) {
 		return {
 			ok: false,
 			message: row.appliedAt
 				? "That page has already been recorded."
-				: "That confirmation link has expired.",
+				: row.entriesUnreadable
+					? UNREADABLE_ENTRIES_MESSAGE
+					: "That confirmation link has expired.",
 			view: await renderPendingPlan(row),
 			applied: null,
 		};
@@ -490,9 +544,10 @@ export async function applyPendingPlan(input: {
 			}
 		}
 		if (!(err instanceof McpError)) throw err;
-		if (err.code === "ARCHIVED") {
-			return { ok: false, message: err.message, view: ARCHIVED, applied: null };
-		}
+		// No `ARCHIVED` arm, for the same reason as the render path: the archive
+		// refusal inside the lock comes from `assertStillClubAdmin` as a plain
+		// `Error` carrying `CLUB_ARCHIVED_MESSAGE`, which the branch above
+		// already handles. `applyGuestBookPlan` raises no `McpError("ARCHIVED")`.
 		if (err.code === "NOT_FOUND") {
 			return {
 				ok: false,

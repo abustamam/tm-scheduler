@@ -2711,9 +2711,26 @@ export const guestBookPendingPlans = pgTable(
 		appliedAt: timestamp("applied_at"),
 	},
 	(t) => [
-		// The sweep's only predicate. Plain CREATE INDEX: `CONCURRENTLY` cannot
-		// run inside the transaction the startup migrator uses.
+		// The sweep's only predicate. Plain CREATE INDEX, and what makes that
+		// acceptable is the table SIZE, so state it: the index is built in the
+		// same transaction as the CREATE TABLE, over a relation with zero rows,
+		// so the SHARE lock is held for no measurable time. `CONCURRENTLY` is
+		// not an option regardless — it cannot run inside the single transaction
+		// the startup migrator uses, and `scripts/migrate.ts` exits non-zero from
+		// the Dockerfile CMD, so attempting it fails the Railway deploy closed.
 		index("guest_book_pending_plans_sweep_idx").on(t.expiresAt),
+		// The cascade side. Deleting a club fires a cascade through this table,
+		// and an unindexed FK column costs one sequential scan per delete — the
+		// same reasoning `club_action_items_owner_idx` records a few hundred
+		// lines up. Retention normally bounds this table to ~48h of rows, which
+		// is what makes it cheap today; it stops bounding anything the moment a
+		// deployment sets `DISABLE_GUEST_BOOK_SWEEP`.
+		//
+		// `created_by_user_id` is deliberately NOT indexed to match: nothing in
+		// this application deletes a `user` row (schema.ts records that
+		// `db.delete(user)` appears nowhere), so that cascade never fires, and an
+		// index nothing uses is a write cost on every insert.
+		index("guest_book_pending_plans_club_idx").on(t.clubId),
 	],
 );
 
