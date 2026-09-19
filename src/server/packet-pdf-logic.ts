@@ -3,17 +3,17 @@
  * wants for the night, plus however many copies of the Word of the Day poster
  * it needs for its room.
  *
- * Printing for a meeting was six separate actions — five individual role-sheet
- * downloads and a separate browser print of the poster — and missing one meant
- * a functionary sitting down with no sheet.
+ * Printing for a meeting was one download per role sheet plus a separate browser
+ * print of the poster — a trip per piece — and missing one meant a functionary
+ * sitting down with no sheet.
  *
  * ASSEMBLED, NOT CONCATENATED. `@react-pdf/renderer` documents cannot nest, so
  * this builds ONE `Document` from pages: `buildRoleSheetPage` unwraps each
  * sheet's page and `buildWordPosterPage` produces the poster's, rather than
  * rendering several PDFs and merging bytes (which would need a merge
- * dependency) or re-implementing five layouts (which is the drift this repo
- * has already paid for once — the print CSS was three divergent copies until
- * v1.8.4.0).
+ * dependency) or re-implementing every sheet's layout a second time (which is
+ * the drift this repo has already paid for once — the print CSS was three
+ * divergent copies until v1.8.4.0).
  *
  * Server-only: touches `#/db` and react-pdf, so no client route may import it.
  * The client picker reads `#/lib/meeting-packet`, which is pure.
@@ -22,6 +22,7 @@ import { Document, renderToBuffer } from "@react-pdf/renderer";
 import { createElement as h } from "react";
 import {
 	clampPosterCopies,
+	PACKET_PIECES,
 	type PacketPieceKey,
 	packetPageCount,
 } from "#/lib/meeting-packet";
@@ -30,8 +31,6 @@ import {
 	buildRoleSheetPage,
 	cap,
 	RENDER_CAPS,
-	type RoleSheetKey,
-	roleSheetByKey,
 } from "#/server/role-sheet-layout";
 import { loadRoleSheetFill } from "#/server/role-sheets-pdf-logic";
 import { buildWordPosterPage } from "#/server/word-poster-layout";
@@ -42,8 +41,8 @@ import { buildWordPosterPage } from "#/server/word-poster-layout";
  * the selection arrives from a query string.
  *
  * The bound is arithmetic, not a check: `clampPosterCopies` caps the poster at
- * `WORD_POSTER_COPIES.max` (12) and the pieces are a closed set of five sheets,
- * so a packet cannot exceed 17 pages however hostile the query string. An
+ * `WORD_POSTER_COPIES.max` (12) and the pieces are a closed set of six sheets,
+ * so a packet cannot exceed 18 pages however hostile the query string. An
  * explicit `MAX_PACKET_PAGES` guard was written here first and removed — it was
  * unreachable, which a test proved by failing to trip it, and an unreachable
  * guard is worse than none: it reads as the thing keeping the render bounded
@@ -77,20 +76,22 @@ export async function renderPacketPdf(
 	// Deduped and re-ordered to the canonical order, so `?piece=timer&piece=timer`
 	// cannot print the same sheet twice and the packet's page order does not
 	// depend on the order of the query string.
+	//
+	// READ FROM `PACKET_PIECES`, NEVER RESTATED. A hand-written copy of that list
+	// sat here and was missing `toastmaster` (#719), and every layer that could
+	// have caught it was pointing the wrong way: the `as PacketPieceKey[]` cast on
+	// the literal asserted membership, which is precisely what defeats the
+	// exhaustiveness a widened union would otherwise have failed on, and
+	// `packetPageCount` runs BELOW this filter, so it counted what survived rather
+	// than what was asked for. The picker ticked the Toastmaster's script, the
+	// route accepted `?piece=toastmaster`, and a packet of exactly that sheet
+	// rendered zero pages and answered 404 with every gate green. One list, which
+	// is the same argument this module's docblock makes for reading the caps from
+	// `lib/` rather than assuming them here.
 	const wanted = new Set(selection);
-	const sheetKeys = (["word-poster"] as PacketPieceKey[])
-		.concat(
-			(
-				[
-					"timer",
-					"ah-counter",
-					"grammarian",
-					"ballot-counter",
-					"general-evaluator",
-				] as PacketPieceKey[]
-			).filter((k) => wanted.has(k)),
-		)
-		.filter((k) => wanted.has(k));
+	const sheetKeys = PACKET_PIECES.map((p) => p.key).filter((k) =>
+		wanted.has(k),
+	);
 
 	const pages = packetPageCount(sheetKeys, copies);
 	if (pages === 0) return null;
@@ -116,14 +117,18 @@ export async function renderPacketPdf(
 		}
 	}
 	for (const key of sheetKeys) {
+		// Narrowed, not cast: `PacketPieceKey` is `RoleSheetKey | "word-poster"`,
+		// so taking the poster out here leaves a key the builder accepts without an
+		// assertion — and an assertion is what hid the missing sheet above.
+		//
+		// An unknown key cannot reach this loop, so there is no lookup guarding it:
+		// the filter above admits only keys the registry lists, and the route drops
+		// an unknown `?piece=` before that. A guard here would be unreachable, and
+		// an unreachable guard reads as the thing keeping a stale bookmark safe
+		// while something else does the work — the same trap as the page ceiling
+		// this file deliberately does not have.
 		if (key === "word-poster") continue;
-		// Unknown keys are dropped rather than throwing: the query string is
-		// user-controlled and a stale bookmark should print the rest of the packet,
-		// not fail it.
-		if (!roleSheetByKey(key)) continue;
-		children.push(
-			buildRoleSheetPage(key as RoleSheetKey, fill, `sheet-${key}`),
-		);
+		children.push(buildRoleSheetPage(key, fill, `sheet-${key}`));
 	}
 
 	const buf = await renderToBuffer(

@@ -11,7 +11,8 @@
  * are checked-in build artifacts, and `/resources` and the meeting page serve
  * THEM, not this module — so a change here that is not followed by
  * `bun run build:role-sheets` ships the old sheet to the club. It has happened
- * twice: #507 printed "Amber" on all five while this file said "Yellow", and the
+ * twice: #507 printed "Amber" on all five sheets then existing while this file
+ * said "Yellow", and the
  * Ah-Counter's log sat on `main` drawing one table column ~1.25× wider than the
  * nine equal columns declared below. `role-sheet-artifacts.test.ts` (#515) now
  * fails you instead of a club noticing.
@@ -141,8 +142,8 @@ const C = {
 
 // PAGE BUDGET. Several values below (title/metaRow/sectionTitle/note margins,
 // `th`/`td` padding, `td.minHeight`, `blankLine` height) were tightened in #509
-// because the "What to say" block pushed three of the five sheets onto a second
-// page. They are load-bearing, not cosmetic: relaxing one can silently spill a
+// because the "What to say" block pushed three of the five sheets then existing
+// onto a second page. They are load-bearing, not cosmetic: relaxing one can silently spill a
 // sheet. The constraint is pinned by "every role sheet fits on one page" in
 // role-sheet-layout.test.ts — a different file, which is why it is restated here.
 const s = StyleSheet.create({
@@ -383,7 +384,8 @@ function metaField(label: string, value?: string, flex = 1): ReactNode {
 	//
 	// `maxLines`/`textOverflow` make the header's HEIGHT independent of what the
 	// club is called. A wrapped header adds one line, and one line is enough to
-	// push the Timer's sheet — the densest of the five — onto a second page.
+	// push the Timer's sheet — the one #509 measured with the least room to spare
+	// — onto a second page.
 	// This half is pinned by "every role sheet fits on one page"; removing it
 	// fails that suite on the long-club-name fills.
 	//
@@ -1183,12 +1185,21 @@ export const RENDER_CAPS = {
 	 *
 	 * Chosen against that guarantee, not just against cost. `filledRows` pads to
 	 * 10 but does not truncate, so each pre-filled speaker past the fold adds a
-	 * row. Measured on the Timer's sheet, which is the densest of the five:
+	 * row. Measured on the Timer's sheet, the densest of the five that existed
+	 * when the measurement was taken:
 	 *
 	 *   speakers   no logo   with logo
 	 *      8         1 page    1 page
 	 *      9         1 page    2 pages   <- the club logo (#496) costs ~2 rows
 	 *     10         1 page    2 pages
+	 *
+	 * The Toastmaster's script (#719) arrived after that table and takes these
+	 * rows too (`filledRows(fill?.speakers ?? [], 4)`), so this cap bounds it as
+	 * well — but the numbers above were NOT re-measured on it. Its own budget is
+	 * recorded where it is spent, in `toastmaster`'s notes comment, against the
+	 * same worst fill; and "every role sheet fits on one page" iterates
+	 * `ROLE_SHEETS`, so the guarantee itself is gated for six sheets whichever
+	 * one turns out to be tightest.
 	 *
 	 * Two earlier values were wrong for the same reason, each caught one review
 	 * later: 24 (chosen for cost alone) and 10 (chosen against the no-logo
@@ -1275,7 +1286,7 @@ export function buildRoleSheetDoc(
 /**
  * One sheet as a PAGE, for the meeting packet (#589).
  *
- * Unwraps the `Document` the builders return rather than duplicating the five
+ * Unwraps the `Document` the builders return rather than duplicating the six
  * layouts — react-pdf documents cannot nest, and two copies of a sheet's layout
  * is exactly the drift this module exists to prevent (it was three divergent
  * copies of the print CSS until v1.8.4.0). `props.children` is the single Page

@@ -7,7 +7,8 @@
  * `public/role-sheets/*.pdf` are build artifacts of `src/server/role-sheet-layout.ts`,
  * produced by `bun run build:role-sheets` and committed. Nothing verified that
  * the two agreed, and they have already disagreed in production twice: #507
- * shipped five sheets printing "Amber" while the layout said "Yellow", and
+ * shipped every sheet then existing printing "Amber" while the layout said
+ * "Yellow", and
  * `ah-counter.pdf` shipped a table column ~1.25× wider than the layout's nine
  * equal columns — a difference no amount of asserting on the in-memory document
  * can see, because the file on disk is what `/resources` actually serves.
@@ -31,7 +32,8 @@
  * (`build:role-sheets` then `git diff --exit-code`) could not be made stable,
  * citing `timer.pdf`'s content stream compressing to 4838 bytes committed
  * against 4472 fresh. **That reading was wrong**, and review caught it. The gap
- * was a STALE CORPUS, not entropy: all five committed streams were uniformly
+ * was a STALE CORPUS, not entropy: all five committed streams as they then
+ * stood were uniformly
  * LARGER than a fresh render of byte-identical inflated content (timer
  * 4838→4472, ah-counter 6661→4864, grammarian 2368→2245, ballot-counter
  * 3258→2813, general-evaluator 2028→1933). One-directional across every file is
@@ -41,14 +43,17 @@
  * - Two fresh renders in one process produce byte-identical compressed streams.
  * - Normalising ONLY `/CreationDate` and the trailer `/ID` — both fixed-length,
  *   so no offset shifts — makes a fresh render byte-identical to the committed
- *   file, for all five sheets.
+ *   file, for all five sheets IN THAT CORPUS. `toastmaster.pdf` (#719) landed
+ *   afterwards and is NOT part of this measurement — it is gated by the content
+ *   comparison below like the rest, but nobody has re-run the byte-identity
+ *   check with six sheets in the directory.
  *
  * So the alternative is viable and nobody should be told otherwise. This gate
  * stays the one that runs for four reasons that survive the correction: it is
  * already inside `bun run test` and needs no workflow step, it names the
  * OPERATOR that changed instead of saying two binaries differ, it is indifferent
- * to the compressor so a `react-pdf` or zlib bump costs no re-baselining of five
- * binaries, and it does not depend on cross-platform byte determinism at all.
+ * to the compressor so a `react-pdf` or zlib bump costs no re-baselining of the
+ * committed binaries, and it does not depend on cross-platform byte determinism at all.
  *
  * That last one is the honest open question: every measurement above ran on one
  * macOS arm64 machine (bun 1.2.8, node 22.6.0). Whether CI's `ubuntu-latest`
