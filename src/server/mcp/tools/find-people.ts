@@ -9,7 +9,9 @@
  * `•••-4567` — through the one serializer (`toMcpGuest`), which is enough to
  * confirm a match and not enough to write to anyone. Members carry NO contact at
  * all: nothing in these tools needs it, and the meeting page's holder-contact
- * reader is gated for a reason (#37).
+ * reader is gated for a reason (#37). A member's `preferredName` is a NAME and
+ * not an exception to that rule (#776 item 4, decided on #788) — it sits beside
+ * the full name this reader already publishes to anyone.
  *
  * Both sides read through existing readers rather than new queries:
  * `loadPublicClubRoster` for members (which carries its own archive gate) and
@@ -60,13 +62,13 @@ export const findPeopleTool: McpToolDefinition = {
 
 		const people = [
 			...roster.map((m) => ({
+				// `preferredName` rides through the one serializer with everything
+				// else (#776 item 4). It used to be hardcoded `null` here because
+				// `loadPublicClubRoster` did not select the column, which made one
+				// list answer the same field two ways: a guest's "goes by" name was
+				// populated and a member's never was, so a caller reading the roster
+				// concluded nobody on it had one.
 				...toMcpMember(m),
-				// `loadPublicClubRoster` does not select `members.preferred_name`,
-				// and widening a PUBLIC reader's payload is not this PR's business —
-				// #637 is what that shape costs. A member's "goes by" name is
-				// visible on the club's own surfaces; a caller that needs it has
-				// them.
-				preferredName: null,
 				officerPositions: m.officerPositions,
 			})),
 			...guests.map((g) => ({
