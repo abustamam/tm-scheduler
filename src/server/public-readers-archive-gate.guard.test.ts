@@ -54,7 +54,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { readSource } from "#/test/guard-source";
+import { readSource, stripComments } from "#/test/guard-source";
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = resolve(SELF, "../../..");
@@ -891,15 +891,144 @@ describe("API routes are enrolled in the archive gate (#555)", () => {
 		"health.ts": "liveness probe; reads nothing",
 	};
 
-	/** Any of these counts as gating on the archive. */
-	// `isClubArchived` is the pure predicate from `#/lib/club-archive`, and it is
-	// here because a caller that has ALREADY joined `clubs.archived_at` onto the
-	// row it resolved must not issue a second query for the same fact — that is
-	// exactly what #566 removed from the membership guards. `assertClubNotArchived`
-	// is for a caller holding a club id and no resolved row; a caller holding the
-	// row reads the flag off it. Both are gates; only the cost differs.
-	const API_GATES =
-		/isReadableClub|isReadableClubForMeeting|isReadableClubForMember|assertClubNotArchived|isClubArchived/;
+	/**
+	 * The four gates whose NAME is enough, because calling one is already acting.
+	 *
+	 * `isReadableClub` and its two siblings return a value the call site cannot
+	 * usefully ignore, and `assertClubNotArchived` throws by itself. Naming one
+	 * and discarding what it gives you is not a shape that compiles into anything.
+	 */
+	const ACTING_GATES =
+		/isReadableClub|isReadableClubForMeeting|isReadableClubForMember|assertClubNotArchived/;
+
+	/**
+	 * The fifth gate, which needs more than its name (#776 item 3).
+	 *
+	 * `isClubArchived` is the pure predicate from `#/lib/club-archive`, and it
+	 * earned a place here because a caller that has ALREADY joined
+	 * `clubs.archived_at` onto the row it resolved must not issue a second query
+	 * for the same fact — exactly what #566 removed from the membership guards.
+	 * `assertClubNotArchived` is for a caller holding a club id and no resolved
+	 * row; a caller holding the row reads the flag off it. Both are gates; only
+	 * the cost differs.
+	 *
+	 * But it was added to the same flat alternation as the other four, and it is
+	 * not like them: it is a BOOLEAN, and its result can be thrown away.
+	 * `isClubArchived({ archivedAt: row.archivedAt });` as a bare statement
+	 * satisfied a regex looking for the name, so every FUTURE route under
+	 * `src/routes/api/` could clear this sweep by merely mentioning the
+	 * identifier. It was widened for the MCP delegate, which genuinely does gate;
+	 * the discrimination loss was repo-wide.
+	 *
+	 * So the name is necessary and not sufficient. The predicate's RESULT has to
+	 * reach a conditional that throws, or a filter — either directly
+	 * (`if (isClubArchived(row)) throw …`) or through the name it is bound to,
+	 * which is the shape `authz-logic.ts` uses: the flag is stored on each club
+	 * (`archived: isClubArchived(…)`), then thrown on in `authorizeToken` and
+	 * filtered on in `authenticateToken`.
+	 */
+	const ARCHIVED_PREDICATE = "isClubArchived";
+
+	/** The text inside the parens opening at `open`, and the index just past them. */
+	function balanced(
+		src: string,
+		open: number,
+	): { text: string; end: number } | null {
+		let depth = 0;
+		for (let i = open; i < src.length; i++) {
+			if (src[i] === "(") depth += 1;
+			else if (src[i] === ")") {
+				depth -= 1;
+				if (depth === 0) return { text: src.slice(open + 1, i), end: i + 1 };
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The statement an `if (…)` guards — its block, or the single statement up to
+	 * the next `;`.
+	 *
+	 * Sliced exactly rather than read from a fixed window after the condition. A
+	 * window is the over-capture trap `serverFnBody` above records: a `throw`
+	 * belonging to the NEXT statement would land inside it and report a
+	 * conditional throw that is not one.
+	 */
+	function guardedStatement(src: string, from: number): string {
+		let i = from;
+		while (i < src.length && /\s/.test(src[i] as string)) i += 1;
+		if (src[i] === "{") {
+			let depth = 0;
+			for (let j = i; j < src.length; j++) {
+				if (src[j] === "{") depth += 1;
+				else if (src[j] === "}") {
+					depth -= 1;
+					if (depth === 0) return src.slice(i, j + 1);
+				}
+			}
+			return src.slice(i);
+		}
+		const end = src.indexOf(";", i);
+		return end === -1 ? src.slice(i) : src.slice(i, end + 1);
+	}
+
+	/** Every `if` condition whose guarded statement throws. */
+	function throwingConditions(src: string): string[] {
+		const out: string[] = [];
+		for (const m of src.matchAll(/\bif\s*\(/g)) {
+			const cond = balanced(src, (m.index ?? 0) + m[0].length - 1);
+			if (!cond) continue;
+			if (/\bthrow\b/.test(guardedStatement(src, cond.end)))
+				out.push(cond.text);
+		}
+		return out;
+	}
+
+	/** Every `.filter(…)` argument. */
+	function filterArguments(src: string): string[] {
+		const out: string[] = [];
+		for (const m of src.matchAll(/\.filter\s*\(/g)) {
+			const arg = balanced(src, (m.index ?? 0) + m[0].length - 1);
+			if (arg) out.push(arg.text);
+		}
+		return out;
+	}
+
+	/**
+	 * The predicate call itself, plus every name its result is bound to.
+	 *
+	 * Empty when the identifier is never CALLED, so an import or a mention cannot
+	 * open the door on its own.
+	 */
+	function archivedTokens(src: string): string[] {
+		if (!new RegExp(`\\b${ARCHIVED_PREDICATE}\\s*\\(`).test(src)) return [];
+		const tokens = new Set<string>([ARCHIVED_PREDICATE]);
+		const bound = new RegExp(
+			`([A-Za-z_$][\\w$]*)\\s*[:=]\\s*(?:await\\s+)?${ARCHIVED_PREDICATE}\\s*\\(`,
+			"g",
+		);
+		for (const m of src.matchAll(bound)) tokens.add(m[1] as string);
+		return [...tokens];
+	}
+
+	/** Does this source ACT on `isClubArchived`, rather than merely name it? */
+	function actsOnArchivedPredicate(src: string): boolean {
+		const tokens = archivedTokens(src);
+		if (tokens.length === 0) return false;
+		const conditions = throwingConditions(src);
+		const filters = filterArguments(src);
+		return tokens.some((token) => {
+			const re = new RegExp(`\\b${token.replace(/[$]/g, "\\$&")}\\b`);
+			return (
+				conditions.some((c) => re.test(c)) || filters.some((f) => re.test(f))
+			);
+		});
+	}
+
+	/** The whole question this sweep asks of one source file. */
+	function gatesOnArchive(src: string): boolean {
+		return ACTING_GATES.test(src) || actsOnArchivedPredicate(src);
+	}
 
 	/**
 	 * Routes whose gate lives in the `-logic` seam they delegate to, not in the
@@ -957,9 +1086,95 @@ describe("API routes are enrolled in the archive gate (#555)", () => {
 			const via = API_GATED_VIA[file];
 			const src = readStripped(resolve(via ? ROOT : apiDir, via ?? file));
 			expect(
-				API_GATES.test(src),
-				`${file} is a public HTTP endpoint under src/routes/api, which the createServerFn sweep above does not walk. Gate it on clubs.archived_at (isReadableClub / isReadableClubForMeeting / assertClubNotArchived), or add it to API_NO_GATE with the reason it needs none. The Pathways ingest sat here ungated and let a live token write into a taken-down club (#555).`,
+				gatesOnArchive(src),
+				`${file} is a public HTTP endpoint under src/routes/api, which the createServerFn sweep above does not walk. Gate it on clubs.archived_at (isReadableClub / isReadableClubForMeeting / assertClubNotArchived), or read the flag off a row you already resolved with isClubArchived and THROW or FILTER on the result — naming that predicate and discarding what it returns does not count (#776). Failing all of those, add the route to API_NO_GATE with the reason it needs none. The Pathways ingest sat here ungated and let a live token write into a taken-down club (#555).`,
 			).toBe(true);
 		});
 	}
+
+	/**
+	 * The predicate is only worth having if it can say NO (#776 item 3).
+	 *
+	 * Every case above asserts `true`, so a `gatesOnArchive` that returned `true`
+	 * unconditionally would leave the whole sweep green — which is what the old
+	 * flat alternation effectively did for any file that typed the identifier.
+	 * These fixtures are the other half.
+	 */
+	describe("the isClubArchived arm discriminates (#776 item 3)", () => {
+		const authz = readStripped(resolve(ROOT, "src/server/mcp/authz-logic.ts"));
+
+		it("passes the MCP delegate, and on the NARROWED arm", () => {
+			// It genuinely gates: `archived: isClubArchived(…)` on every club,
+			// `if (club.archived) throw ARCHIVED` in authorizeToken, and
+			// `.filter((c) => !c.archived)` in authenticateToken.
+			expect(gatesOnArchive(authz)).toBe(true);
+			// And it is the narrowed arm doing the work — none of the other four
+			// appear in that module, so this case cannot be passing for free.
+			expect(ACTING_GATES.test(authz)).toBe(false);
+			expect(actsOnArchivedPredicate(authz)).toBe(true);
+		});
+
+		it("refuses a call whose result is discarded", () => {
+			// The whole hole: this satisfied the old alternation.
+			const src = `const rows = await load(clubId);\n\tisClubArchived({ archivedAt: rows[0].archivedAt });\n\treturn rows;\n`;
+			expect(src).toContain("isClubArchived");
+			expect(gatesOnArchive(src)).toBe(false);
+		});
+
+		it("refuses a result that is bound and then ignored", () => {
+			const src = `const archived = isClubArchived(row);\n\treturn rows;\n`;
+			expect(gatesOnArchive(src)).toBe(false);
+		});
+
+		it("refuses the identifier when it is imported and never called", () => {
+			const src = `import { isClubArchived } from "#/lib/club-archive";\n\treturn rows;\n`;
+			expect(gatesOnArchive(src)).toBe(false);
+		});
+
+		it("refuses the identifier when it appears only in a comment", () => {
+			// Belt and braces with `readStripped`: the sweep reads comment-blind, and
+			// the predicate would refuse this even if it did not.
+			const src = stripComments(
+				`// gated: if (isClubArchived(row)) throw new Error("archived");\n\treturn rows;\n`,
+			);
+			expect(gatesOnArchive(src)).toBe(false);
+		});
+
+		it("refuses a throw that is merely NEARBY the check", () => {
+			// `guardedStatement` slices the statement the condition actually guards,
+			// so an unrelated throw a few lines down is not borrowed as a gate. A
+			// fixed look-ahead window would accept this.
+			const src = [
+				"const archived = isClubArchived(row);",
+				"if (archived) { logger.warn('archived'); }",
+				"if (!row) { throw new Error('not found'); }",
+				"return rows;",
+			].join("\n");
+			expect(gatesOnArchive(src)).toBe(false);
+		});
+
+		it("accepts a throwing conditional, directly or through the bound name", () => {
+			expect(
+				gatesOnArchive(
+					`if (isClubArchived(row)) throw new McpError("ARCHIVED", MSG);\n`,
+				),
+			).toBe(true);
+			expect(
+				gatesOnArchive(
+					`const archived = isClubArchived(row);\n\tif (archived) {\n\t\tthrow new Error(CLUB_ARCHIVED_MESSAGE);\n\t}\n`,
+				),
+			).toBe(true);
+		});
+
+		it("accepts a filter over the flag", () => {
+			expect(
+				gatesOnArchive(`return rows.filter((c) => !isClubArchived(c));\n`),
+			).toBe(true);
+			expect(
+				gatesOnArchive(
+					`const all = rows.map((r) => ({ ...r, archived: isClubArchived(r) }));\n\treturn all.filter((c) => !c.archived);\n`,
+				),
+			).toBe(true);
+		});
+	});
 });
