@@ -269,6 +269,166 @@ describe.skipIf(!hasTestDb)("applyMeetingMetaPatch", () => {
 			).rejects.toThrow(/reschedule/i);
 		});
 	});
+
+	/**
+	 * The meeting number is ADMIN-ONLY, and until #792 it was admin-only in the
+	 * DIALOG only — `applyMeetingMetaPatch` applied it with no privilege check at
+	 * all, and the `canReschedule` arm above covered `scheduledAt` and
+	 * `lengthMinutes` and nothing else.
+	 *
+	 * Why it is worse than a one-row edit. `deriveMeetingNumber` treats a stored
+	 * number as the ANCHOR later meetings count forward from, so one write
+	 * renumbers every later un-numbered meeting in the club, and `null`
+	 * un-anchors a number an admin had frozen. And the grant it rode is the
+	 * widest one here: `resolveMeetingAgendaAuthz`'s `tmod-self-assert` arm needs
+	 * NO SESSION — it matches a self-asserted `selfMemberId` against the
+	 * meeting's Toastmaster slot, and the #317 identity gate hands an anonymous
+	 * link-holder the roster to pick that id from. So the club's numbering was
+	 * writable by anyone holding a meeting's public link.
+	 *
+	 * These assert the STORED column after each refusal, not just the throw: a
+	 * guard placed after the UPDATE would satisfy `rejects.toThrow` and still
+	 * have renumbered the club.
+	 */
+	describe("the meeting number is admin-only", () => {
+		async function numberOf() {
+			const [m] = await testDb
+				.select({ n: meetings.meetingNumber })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			return m.n;
+		}
+		async function storeNumber(n: number | null) {
+			await testDb
+				.update(meetings)
+				.set({ meetingNumber: n })
+				.where(eq(meetings.id, club.meetingId));
+		}
+
+		it("refuses a self-serve TMOD who sets one", async () => {
+			await expect(
+				applyMeetingMetaPatch({
+					meetingId: club.meetingId,
+					actorMemberId: club.memberId,
+					canReschedule: false,
+					meetingNumber: 56,
+				}),
+			).rejects.toThrow();
+			expect(await numberOf()).toBeNull();
+		});
+
+		/**
+		 * The other direction, and the one a "can't set a number" fix written from
+		 * the title alone would miss: passing `null` CLEARS the anchor. A club
+		 * whose VPE had frozen #56 onto a completed meeting loses it, and every
+		 * meeting after it falls back to the previous anchor — or to no number at
+		 * all when there is none.
+		 */
+		it("refuses a self-serve TMOD who clears one", async () => {
+			await storeNumber(56);
+			await expect(
+				applyMeetingMetaPatch({
+					meetingId: club.meetingId,
+					actorMemberId: club.memberId,
+					canReschedule: false,
+					meetingNumber: null,
+				}),
+			).rejects.toThrow();
+			expect(await numberOf()).toBe(56);
+		});
+
+		/**
+		 * PRESENCE, not change — deliberately stricter than the reschedule check
+		 * beside it, which forgives a resubmitted time because the dialog sends one
+		 * on every save. No non-admin surface sends a number at all (the input
+		 * lives inside the dialog's `canReschedule` branch, and
+		 * `meetingUpdateFromForm` maps an unrendered input to `undefined`), so
+		 * there is no resubmit to forgive.
+		 *
+		 * It also pins WHERE the check sits: before the unchanged-key drop, which
+		 * is what makes it read what the caller SENT. Moving it after that drop
+		 * would let this case through — harmless on its own, but the same move
+		 * makes the guard depend on a normalization step rather than on the input.
+		 */
+		it("refuses a TMOD resubmitting the number already stored", async () => {
+			await storeNumber(56);
+			await expect(
+				applyMeetingMetaPatch({
+					meetingId: club.meetingId,
+					actorMemberId: club.memberId,
+					canReschedule: false,
+					meetingNumber: 56,
+				}),
+			).rejects.toThrow();
+			expect(await numberOf()).toBe(56);
+		});
+
+		/** A refused number takes the whole patch with it. The realistic payload is
+		 *  mixed — a forged save would carry the theme the TMOD may edit alongside
+		 *  the number they may not — and a guard that ran after the UPDATE would
+		 *  leave the legal half written and report failure. */
+		it("writes nothing when a refused number rides along with a legal edit", async () => {
+			await expect(
+				applyMeetingMetaPatch({
+					meetingId: club.meetingId,
+					actorMemberId: club.memberId,
+					canReschedule: false,
+					theme: "New beginnings",
+					meetingNumber: 56,
+				}),
+			).rejects.toThrow();
+			expect(await numberOf()).toBeNull();
+			expect((await metaOf()).theme).toBe(STORED.theme);
+		});
+
+		/** Says what was refused. An officer told they may not "reschedule" after
+		 *  touching a number would go looking for a date they never typed, so the
+		 *  number gets its own message rather than reusing the one below it. */
+		it("names the number, not a reschedule", async () => {
+			const err = await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+				canReschedule: false,
+				meetingNumber: 56,
+			}).then(
+				() => null,
+				(e: Error) => e,
+			);
+			expect(err, "the patch resolved instead of refusing").not.toBeNull();
+			expect(err?.message).toMatch(/number/i);
+			expect(err?.message).not.toMatch(/reschedule/i);
+		});
+
+		/**
+		 * The positive control, and it is not decoration: a writer that refused
+		 * `meetingNumber` unconditionally satisfies every assertion above while
+		 * breaking the #358 workflow the field exists for (the VPE types the club's
+		 * last real number and the meetings after it renumber themselves).
+		 */
+		it("still lets an admin set one", async () => {
+			await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+				meetingNumber: 56,
+			});
+			expect(await numberOf()).toBe(56);
+		});
+
+		/** The over-broad control: the gate is on the FIELD, not on the meeting. A
+		 *  TMOD's ordinary meta save must still land on a numbered meeting. */
+		it("still lets a TMOD edit meta on a numbered meeting", async () => {
+			await storeNumber(56);
+			await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+				canReschedule: false,
+				theme: "New beginnings",
+			});
+			expect((await metaOf()).theme).toBe("New beginnings");
+			expect(await numberOf()).toBe(56);
+		});
+	});
+
 	/**
 	 * THE lost update, recorded in `TODOS/theme-word-subroutes-666.md` before it
 	 * was fixable. The old echo carried six values captured ONCE at page load and
