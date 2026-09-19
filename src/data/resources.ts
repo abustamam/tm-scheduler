@@ -5,6 +5,8 @@
  * it safely.
  */
 
+import { ROLE_SHEETS } from "#/data/role-sheets";
+
 export type ResourceCategory = "Pathways" | "Roles" | "Meeting";
 
 export type ResourceIcon = "book" | "clock" | "list" | "users" | "doc" | "star";
@@ -58,19 +60,17 @@ export const resources: Resource[] = [
 		tone: "palm",
 		title: "Meeting roles",
 		desc: "What each role does — plus printable sheets for the hands-on roles.",
-		downloads: [
-			{ label: "Timer's log", href: "/role-sheets/timer.pdf" },
-			{ label: "Ah-Counter's log", href: "/role-sheets/ah-counter.pdf" },
-			{ label: "Grammarian's log", href: "/role-sheets/grammarian.pdf" },
-			{
-				label: "Ballot / Vote Counter tally",
-				href: "/role-sheets/ballot-counter.pdf",
-			},
-			{
-				label: "General Evaluator notes",
-				href: "/role-sheets/general-evaluator.pdf",
-			},
-		],
+		// DERIVED, not listed. This was five hand-written entries, and
+		// `toastmaster.pdf` (#719) shipped into `public/role-sheets/` without one:
+		// the sheet was committed, rendered, gated by the artifacts test and
+		// downloadable at its own URL, and the only page that advertises these
+		// sheets to the public never mentioned it. Nothing could catch that —
+		// `resources.guard.test.ts` walks downloads and checks each PDF exists,
+		// which is the direction that was already fine.
+		downloads: ROLE_SHEETS.map((s) => ({
+			label: s.title,
+			href: `/role-sheets/${s.file}`,
+		})),
 	},
 	{
 		slug: "evaluation-crc",

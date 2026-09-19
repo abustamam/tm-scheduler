@@ -10,8 +10,13 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ROLE_SHEETS } from "#/data/role-sheets";
 import { clubs, meetings, meetingVoteSessions } from "#/db/schema";
-import { defaultPacketSelection } from "#/lib/meeting-packet";
+import {
+	defaultPacketSelection,
+	PACKET_PIECES,
+	WORD_POSTER_COPIES,
+} from "#/lib/meeting-packet";
 import {
 	cleanup,
 	hasTestDb,
@@ -75,6 +80,26 @@ describe.skipIf(!hasTestDb)("meeting packet (#589)", () => {
 		expect(pageCount(out?.bytes as Uint8Array)).toBe(1);
 	});
 
+	// EVERY piece, enumerated from the registry rather than listed here — a
+	// packet of exactly one piece is a real request, because the picker lets a
+	// club untick everything else.
+	//
+	// This is the shape that shipped broken (#719): the renderer held a SECOND,
+	// hand-written copy of the sheet list with `toastmaster` missing from it, so
+	// the picker ticked the Toastmaster's script, the route accepted
+	// `?piece=toastmaster`, and the packet came back 404 "Meeting not found."
+	// Nothing downstream could betray it — `packetPageCount` runs AFTER the drop,
+	// so the reported page count agreed with the sheet that was never rendered.
+	// A test that restates the list by hand agrees with whichever copy its author
+	// was reading, which is why this one cannot.
+	it.each(
+		PACKET_PIECES.map((p) => p.key),
+	)("renders a page for a packet of nothing but %s", async (key) => {
+		const out = await renderPacketPdf(seed.meetingId, [key], 1);
+		expect(out).not.toBeNull();
+		expect(pageCount(out?.bytes as Uint8Array)).toBe(1);
+	});
+
 	it("does not print the same sheet twice when a piece is repeated", async () => {
 		// The selection comes off a query string, where `?piece=timer&piece=timer`
 		// costs nothing to send.
@@ -112,22 +137,25 @@ describe.skipIf(!hasTestDb)("meeting packet (#589)", () => {
 
 	it("cannot be made unbounded from the query string", async () => {
 		// There is no page-ceiling guard, deliberately: the clamp plus a closed
-		// set of five sheets bounds a packet at 17 pages arithmetically, and an
+		// set of six sheets bounds a packet at 18 pages arithmetically, and an
 		// explicit ceiling written here first proved unreachable. This pins the
 		// arithmetic instead — the number a hostile `?copies=` can actually reach.
-		const out = await renderPacketPdf(
-			seed.meetingId,
-			[
-				"word-poster",
-				"timer",
-				"ah-counter",
-				"grammarian",
-				"ballot-counter",
-				"general-evaluator",
-			],
-			99999,
-		);
-		expect(pageCount(out?.bytes as Uint8Array)).toBe(17);
+		//
+		// The selection is ENUMERATED FROM THE REGISTRY, never listed here. This
+		// test claimed to pin the MAXIMUM packet while hand-listing five sheets,
+		// and was numerically correct only because the renderer was dropping the
+		// sixth: both copies of the list were wrong in the same direction, so the
+		// gate read green over a 404. A hand-written maximum can only ever be as
+		// complete as its author's memory of the registry.
+		const everything = PACKET_PIECES.map((p) => p.key);
+		const ceiling = ROLE_SHEETS.length + WORD_POSTER_COPIES.max;
+		// Stated twice on purpose. The derivation is what makes the assertion
+		// below unable to go blind; the literal is the number `packet-pdf-logic.ts`
+		// claims in prose, so a seventh sheet fails HERE and sends someone to that
+		// docblock rather than letting it quietly go stale.
+		expect(ceiling).toBe(18);
+		const out = await renderPacketPdf(seed.meetingId, everything, 99999);
+		expect(pageCount(out?.bytes as Uint8Array)).toBe(ceiling);
 	});
 
 	it("clamps an absurd copy count instead of rendering it", async () => {
