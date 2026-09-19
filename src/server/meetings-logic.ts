@@ -215,13 +215,28 @@ export interface MeetingMetaPatchInput {
 	notes?: string | null;
 	reminders?: string | null;
 	/** The club's meeting number (#358). Omit to leave the current one alone;
-	 *  pass null to clear it back to provisional/derived. */
+	 *  pass null to clear it back to provisional/derived. ADMIN-ONLY — gated by
+	 *  `canReschedule` below, which is why it is the one patch field a self-serve
+	 *  TMOD cannot send at all. */
 	meetingNumber?: number | null;
 	/**
-	 * Whether the caller may reschedule (change `scheduledAt`/`lengthMinutes`).
-	 * Defaults to true (admin). A self-serve TMOD passes false: an attempt to
-	 * move the date/time or length is rejected — reschedule stays admin-only
-	 * (ADR-0010).
+	 * Whether the caller holds the ADMIN grant. Defaults to true (admin). A
+	 * self-serve TMOD passes false, and three fields are then refused:
+	 * `scheduledAt` and `lengthMinutes` (rescheduling is a club decision,
+	 * ADR-0010) and `meetingNumber` (#792).
+	 *
+	 * The name says "reschedule" because that was the first field it gated; read
+	 * it as "this caller is an admin". `updateMeeting` derives it from
+	 * `authz.via === "admin"` and nothing else, so it is the admin arm of the
+	 * meeting-agenda authz rather than a per-field capability.
+	 *
+	 * `meetingNumber` joined the list late and the omission was NOT cosmetic:
+	 * `deriveMeetingNumber` treats a stored number as the ANCHOR later meetings
+	 * count forward from, so ONE write renumbers every later un-numbered meeting
+	 * in the club (and null un-anchors an admin's frozen number). The
+	 * `tmod-self-assert` arm grants with no session at all, so before #792 an
+	 * anonymous holder of a meeting's public link who could name the Toastmaster's
+	 * member id could renumber the club's season.
 	 */
 	canReschedule?: boolean;
 }
@@ -283,6 +298,23 @@ export async function applyMeetingMetaPatch(input: MeetingMetaPatchInput) {
 	// the ordinary partial-editor case and reaches this check as "no move".
 	const canReschedule = input.canReschedule ?? true;
 	if (!canReschedule) {
+		// The meeting number is admin-only too (#792), and unlike the two below it
+		// is refused on PRESENCE rather than on an actual change. The leniency
+		// below exists only because the dialog resubmits the stored time on every
+		// save; NO non-admin surface sends a number at all — the input lives inside
+		// the dialog's `canReschedule` branch and `meetingUpdateFromForm` maps an
+		// unrendered input to `undefined` — so "sent it" and "changed it" are the
+		// same event here, and the stricter form is the one that cannot be walked
+		// past by guessing the stored value.
+		//
+		// Its own message, not the reschedule one: an officer told they may not
+		// "reschedule" after touching a number would go looking for a date they
+		// never typed.
+		if (input.meetingNumber !== undefined) {
+			throw new Error(
+				"Only an admin or VP Education can set this meeting's number.",
+			);
+		}
 		// datetime-local input is minute-precision, so compare to the minute:
 		// re-submitting the current time (rounded) is a no-op, not a reschedule.
 		// The dialog still sends it, so this arm has to stay.

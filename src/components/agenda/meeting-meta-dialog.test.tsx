@@ -306,3 +306,41 @@ describe("the time a non-rescheduling viewer sends", () => {
 		expect(sentData().data.scheduledAt).toBeTruthy();
 	});
 });
+
+/**
+ * The meeting number, for the same viewer (#792).
+ *
+ * The server refuses `meetingNumber` from a non-admin on PRESENCE, not on an
+ * actual change, and the safety of that strictness rests on a claim about this
+ * component: the number input lives inside the `canReschedule` branch, so a
+ * self-serve TMOD's form has no such field and `meetingUpdateFromForm` maps an
+ * unrendered input to `undefined`. The mapping half is tested in
+ * `meeting-meta-form.test.ts`; this is the RENDERING half, and without it the
+ * claim is only asserted where it is easiest to keep true.
+ *
+ * It matters because a `readOnly` input still appears in `FormData`. Showing the
+ * club's number to the TMOD for reference — a plausible, well-meant change — would
+ * make every self-serve Toastmaster save throw "Only an admin or VP Education can
+ * set this meeting's number", with every other test in the repo still green.
+ */
+describe("the meeting number a non-rescheduling viewer sends", () => {
+	it("sends nothing at all — not the stored number, not a clear", async () => {
+		const user = userEvent.setup();
+		render(dialog(true, { meetingNumber: 56 }, false));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		// `undefined`, not an absent key: `meetingUpdateFromForm` names the field
+		// unconditionally, and `undefined` is the value the server's guard reads.
+		expect(sentData().data.meetingNumber).toBeUndefined();
+	});
+
+	it("still sends it for an admin, who has the field", async () => {
+		// The CONTROL. Without it the assertion above passes on a dialog that never
+		// sends the number at all, which would break #358's whole workflow.
+		const user = userEvent.setup();
+		render(dialog(true, { meetingNumber: 56 }, true));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect(sentData().data.meetingNumber).toBe(56);
+	});
+});

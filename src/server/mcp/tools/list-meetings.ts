@@ -19,57 +19,27 @@ import { and, asc, count, eq, gte, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, roleSlots } from "#/db/schema";
+import {
+	addMonthsToLocalDate,
+	clubLocalParts,
+	localDate,
+} from "#/lib/club-local-date";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import { deriveMeetingNumber } from "#/lib/meeting-number";
 import { ensureScheduleToppedUp } from "#/server/schedule-topup-logic";
 import { authorizeToken } from "../authz-logic";
 import type { McpToolDefinition } from "../tool";
 
-/** A club-local calendar date. The only date shape these tools speak. */
-export const localDate = z
-	.string()
-	.regex(/^\d{4}-\d{2}-\d{2}$/, "Use a club-local date, YYYY-MM-DD.");
+// `get_agenda` reads `clubLocalParts` through this module. Re-exported rather
+// than repointed because `get-agenda.ts` is outside #776's declared change set;
+// the helper itself now lives in `#/lib/club-local-date` with the other three.
+export { clubLocalParts };
 
 const inputSchema = {
 	clubId: z.string().uuid(),
 	from: localDate.optional().describe("Club-local date, inclusive."),
 	to: localDate.optional().describe("Club-local date, inclusive."),
 };
-
-const WEEKDAYS = [
-	"Sunday",
-	"Monday",
-	"Tuesday",
-	"Wednesday",
-	"Thursday",
-	"Friday",
-	"Saturday",
-] as const;
-
-/**
- * `YYYY-MM-DD` plus N months, as a calendar date — no timezone involved.
- *
- * Built from the UTC-midnight instant of the date so `setUTCMonth` does the
- * month-end clamping (31 Jan + 1 month → 3 Mar, JavaScript's own rule). Only
- * used for the default upper bound of a search window, where landing a day or
- * two either side of "three months out" changes nothing.
- */
-export function addMonthsToLocalDate(date: string, months: number): string {
-	const d = new Date(`${date}T00:00:00Z`);
-	d.setUTCMonth(d.getUTCMonth() + months);
-	return d.toISOString().slice(0, 10);
-}
-
-/** The club-local `YYYY-MM-DD` and `HH:mm` of an instant, plus its weekday. */
-export function clubLocalParts(instant: Date, timezone: string) {
-	const wall = utcToZonedWallTime(instant, timezone);
-	const date = wall.slice(0, 10);
-	// Read the weekday off the club-local DATE, not off the instant: `new
-	// Date("2026-09-16")` is parsed as UTC midnight, which is the same calendar
-	// day everywhere, so `getUTCDay` on it is the club-local weekday.
-	const weekday = WEEKDAYS[new Date(`${date}T00:00:00Z`).getUTCDay()];
-	return { date, time: wall.slice(11, 16), weekday };
-}
 
 export const listMeetingsTool: McpToolDefinition = {
 	name: "list_meetings",
