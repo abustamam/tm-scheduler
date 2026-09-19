@@ -1,4 +1,5 @@
 import { ROLE_SHEETS, type RoleSheetKey } from "#/data/role-sheets";
+import { isTmodRoleName, TMOD_ROLE_KEY } from "#/lib/meeting-roles";
 
 /**
  * What goes in a printed meeting packet, and what is ticked when the dialog
@@ -92,11 +93,32 @@ export interface PacketContext {
  * without configuring anything, which is the point.
  *
  * `general-evaluator` and `ballot-counter` are the two that motivated this.
- * The other three map to the functionaries almost every club runs, so in
- * practice they are ticked and the derivation is invisible — which is the
- * correct outcome, not a sign it is doing nothing.
+ * The rest map to the Toastmaster and the functionaries almost every club
+ * runs, so in practice they are ticked and the derivation is invisible — which
+ * is the correct outcome, not a sign it is doing nothing.
  */
-const SHEET_ROLE: Record<RoleSheetKey, { key: string; name: string }> = {
+const SHEET_ROLE: Record<
+	RoleSheetKey,
+	{
+		key: string;
+		name: string;
+		/** Overrides the exact-name fallback below for a role that answers to
+		 *  more than one canonical name. Only the Toastmaster of the Day does. */
+		matchesName?: (name: string) => boolean;
+	}
+> = {
+	toastmaster: {
+		key: TMOD_ROLE_KEY,
+		name: "Toastmaster of the Day",
+		// The standard template answers to the bare "Toastmaster" as well, and
+		// `meeting-roles.ts` is where that pair of canonical names lives. Reading
+		// it rather than restating one of them here: a key-NULL role definition
+		// literally named "Toastmaster" would otherwise open the packet dialog
+		// with the Toastmaster's script unticked — the exact silent-derivation
+		// failure `clubRunsRole`'s own docblock is about, on the one sheet a
+		// first-time host needs most.
+		matchesName: isTmodRoleName,
+	},
 	timer: { key: "timer", name: "Timer" },
 	"ah-counter": { key: "ah_counter", name: "Ah-Counter" },
 	grammarian: { key: "grammarian", name: "Grammarian" },
@@ -120,10 +142,11 @@ const SHEET_ROLE: Record<RoleSheetKey, { key: string; name: string }> = {
  */
 function clubRunsRole(roles: readonly PacketRole[], sheet: RoleSheetKey) {
 	const want = SHEET_ROLE[sheet];
+	const named =
+		want.matchesName ??
+		((name: string) => name.toLowerCase() === want.name.toLowerCase());
 	return roles.some((r) =>
-		r.key != null
-			? r.key === want.key
-			: r.name.toLowerCase() === want.name.toLowerCase(),
+		r.key != null ? r.key === want.key : named(r.name),
 	);
 }
 

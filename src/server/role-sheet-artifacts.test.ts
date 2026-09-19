@@ -2,11 +2,12 @@
  * The gate that keeps `public/role-sheets/*.pdf` honest to
  * `src/server/role-sheet-layout.ts` (#515).
  *
- * Those five PDFs are build artifacts. `bun run build:role-sheets` renders them
+ * Those six PDFs are build artifacts. `bun run build:role-sheets` renders them
  * and a human commits the result, and until this file existed the ONLY thing
  * keeping them in step with the layout was remembering to run that script.
  * Forgetting has shipped wrong sheets to a live club twice: #507 printed "Amber"
- * on all five while the layout said "Yellow", and `ah-counter.pdf` sat on `main`
+ * on all five sheets then existing while the layout said "Yellow", and
+ * `ah-counter.pdf` sat on `main`
  * with one table column ~1.25× wider than the layout's nine equal columns.
  *
  * Every other role-sheet assertion in this repo — the "What to say" block, the
@@ -34,7 +35,7 @@ import {
 import { buildRoleSheetDoc, ROLE_SHEETS } from "./role-sheet-layout";
 
 /**
- * Derived from this file, not `process.cwd()`, so the gate reads the same five
+ * Derived from this file, not `process.cwd()`, so the gate reads the same six
  * files however vitest was invoked.
  */
 const SHEETS_DIR = resolve(
