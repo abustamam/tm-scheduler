@@ -21,7 +21,6 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { AgendaEditor } from "#/components/agenda/agenda-editor";
 import { BackLink } from "#/components/back-link";
-import { getAuthContext } from "#/server/auth-context";
 import {
 	addAgendaRoleFn,
 	addAgendaRowFn,
@@ -45,23 +44,19 @@ export const Route = createFileRoute(
 	// session expired, or anyone following a shared link, got HTTP 500 and
 	// "Something went wrong!" where every `_authed` page sends them to sign in.
 	//
-	// The check has to be "is there a SESSION", not "is this an editor". The
-	// parent's `shell` is false for a signed-in non-member too, and bouncing
-	// them to /signin would loop: they are already signed in, so signing in
-	// again returns them here to be bounced again. A signed-in visitor who may
-	// not edit still reaches the loader and still gets its error — that is a
-	// permission failure, and it is not what this guard is for.
-	beforeLoad: async ({ context, location }) => {
-		// `shell` is true only when `publicShellDecision` saw a user, so it is a
-		// session the parent has already proven. Re-asking would mean a second
-		// `getAuthContext` — a server round trip on every navigation in, and on
-		// SSR a second pass over memberships, officer positions and the schedule
-		// top-up — for an answer we hold. Falling through when it is false is
-		// safe under any later change to what `shell` means: the call below is
-		// the authority, this is only the fast path.
-		if (context.shell) return;
-		const ctx = await getAuthContext();
-		if (!ctx.user) {
+	// The check has to be "is there a SESSION", not "is this an editor", which
+	// is why it reads the parent's `hasSession` rather than its `shell`. `shell`
+	// is false for a signed-in NON-member exactly as it is for a guest, so a
+	// gate written against it would bounce someone who is already signed in to
+	// /signin, which returns them here to be bounced again. A signed-in visitor
+	// who may not edit still reaches the loader and still gets its error — that
+	// is a permission failure, and it is not what this guard is for.
+	//
+	// No server call of its own: `hasSession` is the parent's `getAuthContext()`
+	// answer, already resolved for this navigation. Asking again would re-run
+	// the schedule top-up that call performs, twice inside one request.
+	beforeLoad: ({ context, location }) => {
+		if (!context.hasSession) {
 			throw redirect({
 				to: "/signin",
 				search: { redirect: location.href },

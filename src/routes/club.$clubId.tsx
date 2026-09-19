@@ -44,6 +44,17 @@ export const Route = createFileRoute("/club/$clubId")({
 			shell: decision.shell,
 			effectiveMemberId: decision.effectiveMemberId,
 			authCtx: decision.shell ? ctx : null,
+			// Load-bearing, and NOT the same question as `shell`: the agenda
+			// editor's sign-in gate (#769) reads this to decide whether to bounce
+			// a visitor to /signin. `shell` is false for a signed-in non-member
+			// exactly as it is for a guest, so a gate written against it would
+			// send an already-authenticated visitor to sign in and back here to
+			// be bounced again; `authCtx` is null on that same branch, so it
+			// cannot answer either. Keep this "is there a session" and nothing
+			// narrower, and keep it HERE: `ctx` is already resolved for this
+			// navigation, and a second `getAuthContext()` in the same request
+			// re-runs the schedule top-up above it.
+			hasSession: !!ctx.user,
 		};
 	},
 	component: ClubShell,

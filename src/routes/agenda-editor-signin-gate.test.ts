@@ -15,30 +15,17 @@
  * it targets. The route itself cannot be mounted in vitest (it needs a
  * router, a loader context and a session), so the guard is invoked directly.
  *
- * Three behaviours, and the second two are the ones easy to lose:
- *
- * 1. No session → redirect to `/signin`, carrying this url so the magic link
- *    lands back on the editor.
- * 2. A session that may NOT edit still falls through. Bouncing it to /signin
- *    would loop — it is already signed in, so signing in again returns it
- *    here to be bounced again. The parent's `shell` is false for a signed-in
- *    non-member exactly as it is for a guest, so a gate written against
- *    `shell` alone is the loop.
- * 3. A signed-in member of the viewed club never calls `getAuthContext` at
- *    all. The parent already proved that session; re-asking costs a server
- *    round trip per navigation and, on SSR, a second pass over memberships,
- *    officer positions and the schedule top-up.
+ * Two behaviours, and the second is the one easy to lose. Both cases below
+ * carry the parent's `shell` alongside its `hasSession`, because the whole
+ * point of the gate reading `hasSession` is that the two differ: a gate
+ * rewritten against `shell` still type-checks and still passes the first
+ * test, and only the second one catches it.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-// Both server-fn modules the route imports reach `#/db` at import time
-// ("DATABASE_URL is not set" in a unit context). `getAuthContext` is mocked
-// because it is the call under test; the agenda-edit module because the
-// beforeLoad never reaches it and the loader never runs here.
-const getAuthContext = vi.fn();
-vi.mock("#/server/auth-context", () => ({
-	getAuthContext: () => getAuthContext(),
-}));
+// The route imports `#/server/meeting-agenda-edit`, which reaches `#/db` at
+// import time ("DATABASE_URL is not set" in a unit context). The beforeLoad
+// never touches it and the loader never runs here.
 vi.mock("#/server/meeting-agenda-edit", () => ({
 	addAgendaRoleFn: vi.fn(),
 	addAgendaRowFn: vi.fn(),
@@ -55,37 +42,31 @@ import { Route } from "./club.$clubId.meeting.$meetingId_.agenda";
 const HREF =
 	"/club/thr-speaking-club/meeting/6b971d60-654e-45b2-b5bb-271f026fe586/agenda";
 
-/** Invoke the real guard with the parent shell's `shell` flag and a url. */
-async function runBeforeLoad(shell: boolean) {
+/** Invoke the real guard with the parent shell's context and a url. */
+async function runBeforeLoad(context: { shell: boolean; hasSession: boolean }) {
 	const beforeLoad = Route.options.beforeLoad as unknown as (args: {
-		context: { shell: boolean };
+		context: { shell: boolean; hasSession: boolean };
 		location: { href: string };
 	}) => unknown;
 	if (!beforeLoad) {
 		throw new Error("the agenda editor route lost its sign-in guard");
 	}
-	return await beforeLoad({ context: { shell }, location: { href: HREF } });
+	return await beforeLoad({ context, location: { href: HREF } });
 }
 
 /** The thrown value, or `undefined` when the guard let the load through. */
-async function thrownBy(shell: boolean) {
+async function thrownBy(context: { shell: boolean; hasSession: boolean }) {
 	try {
-		await runBeforeLoad(shell);
+		await runBeforeLoad(context);
 		return undefined;
 	} catch (e) {
 		return e;
 	}
 }
 
-beforeEach(() => {
-	getAuthContext.mockReset();
-});
-
 describe("agenda editor sign-in gate (#769)", () => {
 	it("sends a signed-out visitor to /signin instead of the error boundary", async () => {
-		getAuthContext.mockResolvedValue({ user: null });
-
-		const thrown = await thrownBy(false);
+		const thrown = await thrownBy({ shell: false, hasSession: false });
 
 		// TanStack's redirect() throws a Response carrying the nav options; the
 		// `to` on it is what separates a 307 from the 500 this issue is about.
@@ -109,28 +90,14 @@ describe("agenda editor sign-in gate (#769)", () => {
 
 	it("does NOT bounce a signed-in visitor who may not edit (no /signin loop)", async () => {
 		// Signed in, but not a member of the viewed club — `shell` is false here
-		// for exactly the same reason it is false for a guest. Redirecting would
-		// send an already-authenticated user to sign in, which returns them here.
-		getAuthContext.mockResolvedValue({ user: { id: "user-1" } });
-
-		const thrown = await thrownBy(false);
+		// for exactly the same reason it is false for a guest, while `hasSession`
+		// is true. Redirecting would send an already-authenticated user to sign
+		// in, which returns them here.
+		const thrown = await thrownBy({ shell: false, hasSession: true });
 
 		expect(
 			thrown,
 			"a signed-in visitor must fall through to the loader's own permission error",
 		).toBeUndefined();
-	});
-
-	it("asks nothing more of the server when the parent already proved the session", async () => {
-		// `shell` is true only where `publicShellDecision` saw a user AND a
-		// membership in the viewed club — the officer case, i.e. every normal
-		// load of this page. A second getAuthContext here would be a round trip
-		// per navigation in, for an answer the context already holds.
-		getAuthContext.mockRejectedValue(
-			new Error("getAuthContext must not be called on the fast path"),
-		);
-
-		await expect(runBeforeLoad(true)).resolves.toBeUndefined();
-		expect(getAuthContext).not.toHaveBeenCalled();
 	});
 });
