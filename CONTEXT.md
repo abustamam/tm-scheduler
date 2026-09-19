@@ -119,6 +119,36 @@ the nouns in `src/db/schema.ts`.
   `joinedAt` today) or reuse the person's existing one, re-point the guest's role-slot
   assignments to the new member, stamp the guest `stage: joined` + `converted_membership_id`
   (the guest row persists as history — its past attendance stays), and log `member_add`.
+  **Reusing a LAPSED membership REACTIVATES it** (#501) — it does not refuse and route the
+  admin to the roster. `inactive` hides a membership from the roster, the sign-up sheet, the
+  season grid and every picker, so reusing one untouched produced a "member" nobody could see,
+  holding re-pointed role slots the picker could not display. Converting asserts they are a
+  member now, so the wake-up is the admin's intent; it is never SILENT, because Person dedup
+  can match the wrong human (#561) and the notice is the moment that becomes visible. The
+  result carries `reactivated` (true only for reuse of a row that was not already active — reuse
+  of a live one is ordinary dedup), the board shows one line on the existing success toast
+  (`CONVERT_REACTIVATED_MESSAGE`), and the `member_add` detail records `reactivatedFrom` so the
+  log is distinguishable from a fresh join. **Undo reverses it**: `reactivatedFrom` is what
+  `applyUndoGuestConversion` restores, since a reused row is deliberately never deleted — the
+  key is OPTIONAL, so conversions recorded before #501 still parse and stay undoable.
+  **The wake-up restores VISIBILITY, never AUTHORITY.** `members.status = 'active'` IS the
+  write-authorization gate (`requireMembership` sends a non-active membership to
+  `requireReadWriteImpersonation`) and deactivation never cleared `club_role`, so waking a row
+  that lapsed as `admin` used to hand back full club-admin access from a guest card showing no
+  role — on a row chosen by dedup that can match the wrong human. The same statement therefore
+  writes an elevated `club_role` back down to `member`, records `demotedFrom` beside
+  `reactivatedFrom`, and says so in the toast (`CONVERT_DEMOTED_MESSAGE`) with the member page
+  as the one-click remedy. Undo restores the role with the lapse, which grants nothing: the row
+  returns to `inactive` in the same write. **Reuse of an ALREADY-ACTIVE admin is left alone** —
+  that is ordinary dedup of a sitting admin, and demoting there would be a real regression.
+  **Officer terms are the known residue.** Effective-admin (#202) grants admin for any open
+  `officer_terms` row whatever `club_role` says, and deactivation does not close those either,
+  so a membership that lapsed while holding office comes back a full admin. Convert deliberately
+  does not close the term — an office is a governance fact read by the printed agenda, the
+  officer home, the COT seats and the onboarding checklist, and undo refuses outright for a
+  membership carrying any term, so a close written here could never be reversed. It reports
+  instead: `retainedOfficerPositions` drives `CONVERT_OFFICER_ADMIN_MESSAGE`, and
+  `guest-convert-privilege.integration.test.ts` pins the hole in the gate's own terms.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

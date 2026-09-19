@@ -347,7 +347,30 @@ type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
  *  reactivating restores them everywhere. Logs member_edit with the status
  *  before/after. On an active→inactive transition their UPCOMING, non-cancelled
  *  role slots are released (mirrors applyMemberRemove); past slots are left
- *  untouched. */
+ *  untouched.
+ *
+ *  **"Restores them everywhere" is true HERE and deliberately NOT true of the
+ *  other reactivation path.** There are two, and they mean different things
+ *  (#501 review):
+ *
+ *  - THIS one is an admin on the roster naming a member and saying "they are
+ *    back". It writes `{ status }` and nothing else, so `club_role` and any
+ *    open officer term survive untouched and the member returns with exactly
+ *    the standing they lapsed with. That is the intent: the admin picked this
+ *    human on purpose.
+ *  - `applyConvertGuestToMember`'s REUSE branch wakes a lapsed membership as a
+ *    side effect of converting a GUEST, and the row it lands on is chosen by
+ *    Person dedup, which can match the wrong human (#561). So it writes an
+ *    elevated `club_role` back DOWN to `member` and tells the admin it did.
+ *    Reactivating there asserts visibility, never authority.
+ *
+ *  The asymmetry is load-bearing because `status` IS the write-authorization
+ *  gate: `requireMembership` sends a non-active membership to
+ *  `requireReadWriteImpersonation`, so nothing below `status` is ever consulted
+ *  while a membership is lapsed and a stale `club_role: admin` is invisible
+ *  until something sets `status` back. That is why this fn may leave it alone
+ *  and convert may not. If a third reactivation path ever appears, it has to
+ *  choose one of these two meanings explicitly — and say which, here. */
 export async function applySetMemberStatus(input: SetStatusInput) {
 	const [current] = await db
 		.select()
