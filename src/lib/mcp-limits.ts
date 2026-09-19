@@ -123,7 +123,9 @@ export async function readBodyWithinCap(
 		try {
 			const text = await request.text();
 			const bytes = new TextEncoder().encode(text).byteLength;
-			return bytes > maxBytes ? { kind: "too-large" } : { kind: "body", text, bytes };
+			return bytes > maxBytes
+				? { kind: "too-large" }
+				: { kind: "body", text, bytes };
 		} catch {
 			return { kind: "unreadable" };
 		}

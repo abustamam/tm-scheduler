@@ -41,7 +41,10 @@ describe("the caps themselves (#776 item 1)", () => {
 
 describe("parseDeclaredContentLength (#776 item 7)", () => {
 	it("reads a plain byte count", () => {
-		expect(parseDeclaredContentLength("0")).toEqual({ kind: "length", bytes: 0 });
+		expect(parseDeclaredContentLength("0")).toEqual({
+			kind: "length",
+			bytes: 0,
+		});
 		expect(parseDeclaredContentLength("2000000")).toEqual({
 			kind: "length",
 			bytes: 2_000_000,

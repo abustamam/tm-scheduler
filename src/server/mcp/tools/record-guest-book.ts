@@ -46,6 +46,7 @@ import { and, eq, gte, lt } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { guests, meetingAttendance, meetings } from "#/db/schema";
+import { localDate, nextLocalDate } from "#/lib/club-local-date";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import { MAX_GUEST_BOOK_ENTRIES } from "#/lib/mcp-limits";
 import { planHash as computePlanHash } from "#/lib/mcp-plan";
@@ -68,7 +69,6 @@ import { type McpBlockingItem, McpError } from "../errors";
 import { lockClub } from "../lock";
 import { maskEmail, maskPhone } from "../serialize";
 import type { McpToolDefinition } from "../tool";
-import { localDate } from "./list-meetings";
 
 const entrySchema = z.object({
 	name: z.string().trim().min(1).max(200),
@@ -152,13 +152,6 @@ interface GuestBookPlan {
 		theme: string | null;
 	};
 	entries: PlannedEntry[];
-}
-
-/** `YYYY-MM-DD` + 1 day, as a calendar date. */
-function nextLocalDate(date: string): string {
-	const d = new Date(`${date}T00:00:00Z`);
-	d.setUTCDate(d.getUTCDate() + 1);
-	return d.toISOString().slice(0, 10);
 }
 
 type Conn =
