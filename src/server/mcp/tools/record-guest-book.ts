@@ -47,6 +47,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { guests, meetingAttendance, meetings } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
+import { MAX_GUEST_BOOK_ENTRIES } from "#/lib/mcp-limits";
 import { planHash as computePlanHash } from "#/lib/mcp-plan";
 import {
 	ATTENDANCE_BEFORE_MEETING_MESSAGE,
@@ -68,9 +69,6 @@ import { lockClub } from "../lock";
 import { maskEmail, maskPhone } from "../serialize";
 import type { McpToolDefinition } from "../tool";
 import { localDate } from "./list-meetings";
-
-/** The paper book is one page at a time; 100 lines is far more than one page. */
-export const MAX_GUEST_BOOK_ENTRIES = 100;
 
 const entrySchema = z.object({
 	name: z.string().trim().min(1).max(200),

@@ -19,6 +19,7 @@
  * them.
  */
 import { z } from "zod";
+import { MAX_FIND_PEOPLE_RESULTS } from "#/lib/mcp-limits";
 import { loadGuestPipeline } from "#/server/guest-pipeline-logic";
 import { loadPublicClubRoster } from "#/server/members-logic";
 import { authorizeToken } from "../authz-logic";
@@ -33,9 +34,6 @@ const inputSchema = {
 		.optional()
 		.describe("Case-insensitive substring of a name. Omit to list everyone."),
 };
-
-/** How many rows one call returns. A club's roster and live prospect list. */
-const MAX_RESULTS = 200;
 
 export const findPeopleTool: McpToolDefinition = {
 	name: "find_people",
@@ -91,8 +89,8 @@ export const findPeopleTool: McpToolDefinition = {
 			clubId: club.clubId,
 			// Say when the list was cut rather than silently returning a prefix: a
 			// caller that believes it has everyone will conclude a name is absent.
-			truncated: matched.length > MAX_RESULTS,
-			people: matched.slice(0, MAX_RESULTS),
+			truncated: matched.length > MAX_FIND_PEOPLE_RESULTS,
+			people: matched.slice(0, MAX_FIND_PEOPLE_RESULTS),
 		};
 	},
 };
