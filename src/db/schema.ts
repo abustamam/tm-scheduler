@@ -2722,9 +2722,10 @@ export const guestBookPendingPlans = pgTable(
 		// The cascade side. Deleting a club fires a cascade through this table,
 		// and an unindexed FK column costs one sequential scan per delete — the
 		// same reasoning `club_action_items_owner_idx` records a few hundred
-		// lines up. Retention normally bounds this table to ~48h of rows, which
-		// is what makes it cheap today; it stops bounding anything the moment a
-		// deployment sets `DISABLE_GUEST_BOOK_SWEEP`.
+		// lines up. The sweep bounds this table to ~48h of rows and cannot be
+		// turned off, so the scan would be small; the index is here because a
+		// cascade scan that is small today is the kind that stops being small
+		// quietly, and it costs one btree write per preview.
 		//
 		// `created_by_user_id` is deliberately NOT indexed to match: nothing in
 		// this application deletes a `user` row (schema.ts records that

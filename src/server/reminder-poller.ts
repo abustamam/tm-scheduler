@@ -85,11 +85,23 @@ async function tick(): Promise<void> {
  * so "this process must not send" must not silently mean "this process must not
  * delete".
  *
+ * There is NO flag to turn it off, deliberately. A switch that disables the
+ * deletion of personal data is a switch that gets set for some unrelated
+ * operational reason and never unset, which is precisely the bug that put this
+ * function here: the sweep used to inherit `DISABLE_REMINDER_POLLER`, a flag
+ * about SENDING, and a 48-hour retention window quietly became an indefinite
+ * one. A second flag would be the same mistake one level down. Retention is a
+ * property of this system, not a setting.
+ *
+ * The knob that does exist is the WINDOW — `PENDING_PLAN_TTL_MS` and
+ * `PENDING_PLAN_GRACE_MS` in `src/lib/guest-book-pending.ts`. A deployment that
+ * wants confirm links to live longer lengthens those; nothing wants them to
+ * live forever.
+ *
  * Never throws: a failure here must not look like a delivery failure or stop
  * the next tick.
  */
 async function sweepTick(): Promise<void> {
-	if (process.env.DISABLE_GUEST_BOOK_SWEEP === "1") return;
 	try {
 		const swept = await sweepExpiredPendingPlans();
 		if (swept.deleted > 0) {
@@ -109,10 +121,6 @@ async function sweepTick(): Promise<void> {
  * the process open on its own.
  */
 function startSweepOnlyTimer(): boolean {
-	if (process.env.DISABLE_GUEST_BOOK_SWEEP === "1") {
-		console.log("[guest-book] sweep disabled via DISABLE_GUEST_BOOK_SWEEP");
-		return false;
-	}
 	const intervalMs = resolveIntervalMs();
 	timer = setInterval(() => {
 		void sweepTick();
@@ -132,14 +140,14 @@ function startSweepOnlyTimer(): boolean {
 export function startReminderPoller(): boolean {
 	if (timer) return false;
 	if (process.env.DISABLE_REMINDER_POLLER === "1") {
-		// The SWEEP still runs. `DISABLE_REMINDER_POLLER` says "this process
-		// must not SEND"; the guest-book sweep sends nothing — it is the only
-		// thing in the system that deletes a pending plan, and a pending plan
-		// holds a visitor's unmasked name, email and phone. Inheriting the send
-		// flag turned a 48-hour retention window into an indefinite one, with
-		// no user-facing way to discard a row. A worker that should not send has
-		// every reason to still sweep; a deployment that wants neither sets
-		// `DISABLE_GUEST_BOOK_SWEEP=1` and owns the retention itself.
+		// The SWEEP still runs, and there is no way to stop it (see `sweepTick`).
+		// `DISABLE_REMINDER_POLLER` says "this process must not SEND"; the
+		// guest-book sweep sends nothing — it is the only thing in the system
+		// that deletes a pending plan, and a pending plan holds a visitor's
+		// unmasked name, email and phone. Inheriting the send flag turned a
+		// 48-hour retention window into an indefinite one, with no user-facing
+		// way to discard a row. A worker that should not send has every reason
+		// to still sweep.
 		console.log("[reminders] poller disabled via DISABLE_REMINDER_POLLER");
 		return startSweepOnlyTimer();
 	}
