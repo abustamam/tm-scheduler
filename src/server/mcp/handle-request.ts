@@ -38,16 +38,15 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import {
+	MAX_MCP_BODY_BYTES,
+	parseDeclaredContentLength,
+	readBodyWithinCap,
+} from "#/lib/mcp-limits";
 import { parseBearerToken } from "#/server/pathways-ingest-logic";
 import { authenticateToken, McpUnauthorizedError } from "./authz-logic";
 import { McpError, toMcpError } from "./errors";
 import { MCP_TOOLS } from "./tools";
-
-/**
- * 1 MB, checked BEFORE parsing and before the token is trusted — the shape
- * `/api/pathways/ingest` already uses. A 100-entry guest-book page is a few KB.
- */
-const MAX_BODY_BYTES = 1_000_000;
 
 /**
  * Sent at MCP `initialize`. This is the protocol the write tools depend on, and
@@ -135,24 +134,39 @@ function buildServer(rawToken: string | null): McpServer {
 export async function handleMcpRequest(request: Request): Promise<Response> {
 	const rawToken = parseBearerToken(request.headers.get("authorization"));
 
-	// Reject an oversized body before reading it. Declared content-length first
-	// (cheap), then the actual text, to cover a chunked body that declares none.
-	const declared = Number(request.headers.get("content-length") ?? "0");
-	if (declared > MAX_BODY_BYTES) {
+	// Bound the body BEFORE it is in memory, and before the token is trusted.
+	//
+	// `content-length` is the caller's to write, so it can only REJECT early —
+	// it can never authorise a read. It used to be the only pre-read check, and
+	// it was read as `Number(header ?? "0")`: an absent header became 0 and a
+	// chunked body of any size sailed past, `abc` became NaN and failed the `>`
+	// comparison silently. The real ceiling then ran after `await
+	// request.text()`, by which point the whole body was already a string here.
+	// So the 1 MB was a label on a 413, not a bound on memory.
+	//
+	// Now the header is parsed without coercion (a malformed one is refused
+	// rather than guessed at) and the ceiling is enforced WHILE the body
+	// streams, cancelling the stream at the byte that crosses it. MEASURED: a
+	// 64 MB chunked body reads 16 of its 1000 chunks (`mcp-limits.test.ts`).
+	const declared = parseDeclaredContentLength(
+		request.headers.get("content-length"),
+	);
+	if (declared.kind === "malformed") {
+		return json({ error: "Malformed content-length header." }, 400);
+	}
+	if (declared.kind === "length" && declared.bytes > MAX_MCP_BODY_BYTES) {
 		return json({ error: "Body too large." }, 413);
 	}
-	let text: string;
-	try {
-		text = await request.text();
-	} catch {
+	const read = await readBodyWithinCap(request, MAX_MCP_BODY_BYTES);
+	if (read.kind === "too-large") {
+		return json({ error: "Body too large." }, 413);
+	}
+	if (read.kind === "unreadable") {
 		return json({ error: "Could not read request body." }, 400);
-	}
-	if (text.length > MAX_BODY_BYTES) {
-		return json({ error: "Body too large." }, 413);
 	}
 	let body: unknown;
 	try {
-		body = JSON.parse(text);
+		body = JSON.parse(read.text);
 	} catch {
 		return json({ error: "Body must be JSON." }, 400);
 	}
