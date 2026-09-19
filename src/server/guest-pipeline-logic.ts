@@ -45,6 +45,7 @@ import {
 	UNDO_NOT_CONVERTED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
+import type { OfficerPosition } from "#/lib/officers";
 import { namesAgree } from "#/lib/person-name";
 import {
 	coalesceToE164,
@@ -55,6 +56,7 @@ import { normalizedEmail } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
+import { getOpenOfficerPositions } from "./officers-logic";
 
 /** The pipeline stages a guest may occupy (#208 / ADR-0018). */
 export type GuestStage = "prospect" | "following_up" | "joined" | "lost";
@@ -1123,6 +1125,26 @@ export interface ConvertGuestResult {
 	 * would cry wolf and admins would learn to ignore it.
 	 */
 	reactivated: boolean;
+	/**
+	 * The elevated `club_role` the wake-up wrote back down to `member`, or
+	 * absent when the reused row was not elevated (#501 review).
+	 *
+	 * `"admin"` is the only reachable value — `club_role` is only
+	 * (admin, member) and `member` is the floor being written to. Present ONLY
+	 * alongside `reactivated`: reuse of an already-active admin is ordinary
+	 * dedup and is left alone.
+	 */
+	demotedFrom?: "admin";
+	/**
+	 * Open officer positions the woken membership still holds (#202).
+	 *
+	 * Effective-admin's other source, and convert deliberately does not touch
+	 * it — see the read in `applyConvertGuestToMember`. Non-empty means the
+	 * demotion above did NOT actually remove admin access, which is why this
+	 * reaches the UI rather than staying a server-side fact. Always `[]` on
+	 * every path that did not reactivate.
+	 */
+	retainedOfficerPositions: OfficerPosition[];
 }
 
 /**
@@ -1133,7 +1155,9 @@ export interface ConvertGuestResult {
  * phone match is not enough); (2) create the Membership for this club (`clubRole: member`,
  * `joinedAt: today`) — or reuse the person's existing membership so we never
  * violate one-membership-per-person-per-club, REACTIVATING that row when it had
- * lapsed (#501) and saying so through `reactivated`; (3) re-point every role slot the
+ * lapsed (#501) — and writing its `club_role` back down to `member` when it was
+ * elevated, because waking a membership restores visibility, never authority —
+ * saying so through `reactivated` / `demotedFrom`; (3) re-point every role slot the
  * guest holds to the new member (member-XOR-guest holds — set member + clear
  * guest together); (4) stamp the guest `stage: joined` with
  * `converted_membership_id` (the row PERSISTS, its past attendance stays as
@@ -1273,13 +1297,28 @@ export async function applyConvertGuestToMember(
 		}
 
 		// 2. Membership — reuse the person's existing one in this club, else create.
+		//
+		// LOCKED, and the lock is what makes the wake-up below honest. Convert
+		// locks the GUEST row, not the membership, so reading the status and
+		// branching in JS would race a concurrent roster deactivation. #501 first
+		// shipped this as a single conditional UPDATE to dodge that — but the
+		// privilege decision needs the row's PRIOR `club_role`, and Postgres
+		// `RETURNING` hands back post-update values, so there is nothing to read
+		// the old role out of. `FOR UPDATE` is the honest way to get both: undo
+		// already takes exactly this lock on exactly this row, in the same order
+		// (guest first, then membership), so the two cannot deadlock.
 		const [existingMembership] = await tx
-			.select({ id: members.id })
+			.select({
+				id: members.id,
+				status: members.status,
+				clubRole: members.clubRole,
+			})
 			.from(members)
 			.where(
 				and(eq(members.personId, personId), eq(members.clubId, input.clubId)),
 			)
-			.limit(1);
+			.limit(1)
+			.for("update");
 		let membershipId: string;
 		// Which status convert woke this membership OUT of, when it reused a
 		// lapsed one. Recorded in step 5 for the same reason `createdMembership`
@@ -1287,6 +1326,16 @@ export async function applyConvertGuestToMember(
 		// the fact distinguishes a membership convert reactivated from one that
 		// was active all along.
 		let reactivatedFrom: "inactive" | undefined;
+		// The elevated `club_role` the wake-up wrote back DOWN, when it found one.
+		// Recorded for the same two reasons, plus a third: the roster needs to be
+		// able to restore it deliberately, and a demotion nothing recorded is one
+		// nobody can distinguish from a membership that was never an admin.
+		let demotedFrom: "admin" | undefined;
+		// Open officer terms the woken membership still holds. NOT a write — see
+		// the comment at the read. Disclosed to the admin because they are the
+		// residue of the demotion: effective-admin (#202) means the access the
+		// demotion just removed is still granted by the term.
+		let retainedOfficerPositions: OfficerPosition[] = [];
 		if (existingMembership) {
 			membershipId = existingMembership.id;
 			// #501: wake a LAPSED membership, or the convert leaves the member
@@ -1300,24 +1349,76 @@ export async function applyConvertGuestToMember(
 			//
 			// An admin converting someone is asserting they are a member now, so
 			// reactivating is the right answer — but never a SILENT one: Person dedup
-			// can match the wrong human (#561), and the notice this flag drives is
+			// can match the wrong human (#561), and the notice these flags drive is
 			// the admin's chance to notice.
 			//
-			// Written as a CONDITIONAL UPDATE rather than reading the status and
-			// branching in JS. The select above took no lock (convert locks the
-			// GUEST row, not the membership), so a read-then-write would race a
-			// concurrent roster deactivation and either miss the wake-up or report a
-			// reactivation that did not happen. `RETURNING` is then the honest
-			// answer to "did this actually change a row".
-			const [woken] = await tx
-				.update(members)
-				.set({ status: "active" })
-				.where(and(eq(members.id, membershipId), ne(members.status, "active")))
-				.returning({ id: members.id });
 			// `membership_status` is only (active, inactive) — see `schema.ts` — so
 			// "not active" is `inactive` and nothing else. Do NOT widen this to a
-			// status the enum cannot hold.
-			if (woken) reactivatedFrom = "inactive";
+			// status the enum cannot hold; `guest-convert-privilege.guard.test.ts`
+			// fails on the widening rather than letting this record a wrong prior
+			// state.
+			if (existingMembership.status !== "active") {
+				reactivatedFrom = "inactive";
+				// The WAKE-UP IS A PRIVILEGE GRANT, and that is the half #501 missed.
+				// `members.status === 'active'` is the write-authorization gate itself
+				// — `requireMembership` sends a non-active membership to
+				// `requireReadWriteImpersonation`, which refuses an ordinary caller —
+				// and `applySetMemberStatus` never cleared `club_role` on the way out.
+				// So a membership that lapsed while it said `admin` came back as a
+				// full club admin, from a guest card that shows no role, behind a
+				// toast whose only extra sentence was "(was inactive)". Dedup can land
+				// on the wrong human (#561), so the person handed that access is not
+				// even reliably the person the admin was looking at.
+				//
+				// Restoring VISIBILITY is what the convert asserts; restoring
+				// AUTHORITY is a separate decision an admin must make deliberately,
+				// and `ClubRoleControl` on the member page makes it one click.
+				//
+				// Only on the wake-up path. Reuse of an ALREADY-ACTIVE admin is
+				// ordinary dedup of a sitting admin and is left completely alone —
+				// demoting there would be a privilege regression convert has no
+				// business performing.
+				//
+				// No `assertKeepsAnActiveAdmin` here (contrast `applySetMemberStatus`
+				// / `applySetMemberRole`): the row being demoted is INACTIVE at this
+				// instant, so it is not in the active-admin count, and demoting it in
+				// the same statement that activates it cannot lower a count it was
+				// never part of. A club already at zero active admins stays at zero —
+				// which is where this convert found it.
+				if (existingMembership.clubRole !== "member") {
+					demotedFrom = existingMembership.clubRole;
+				}
+				await tx
+					.update(members)
+					.set({
+						status: "active",
+						...(demotedFrom ? { clubRole: "member" as const } : {}),
+					})
+					.where(eq(members.id, membershipId));
+				// Effective-admin's OTHER source (#202): any open `officer_terms` row
+				// makes a membership a full admin whatever `club_role` says, and
+				// deactivation does not close those either — so a lapsed row can carry
+				// one, and waking it hands back exactly the access the demotion above
+				// just removed.
+				//
+				// Convert READS this and does not write it, deliberately. An officer
+				// term is a governance fact about who the club's President IS — read
+				// by the printed agenda's officer grid, the officer home, the COT
+				// seats behind DCP goal 9 and the onboarding checklist — and vacating
+				// one as a side effect of a guest-card button is not a VP-Membership
+				// decision. It is also not reversible here: `applyUndoGuestConversion`
+				// refuses outright for a membership carrying ANY officer_terms row, so
+				// a close written here could never be undone by the same control that
+				// undoes the rest of the conversion.
+				//
+				// Read through `getOpenOfficerPositions`, the same seam `guards.ts`
+				// gates on, so the sentence the admin is shown cannot drift from the
+				// access they actually have.
+				retainedOfficerPositions = await getOpenOfficerPositions(
+					tx,
+					membershipId,
+				);
+			}
 		} else {
 			// #617: refuse rather than silently duplicate a human.
 			//
@@ -1386,14 +1487,15 @@ export async function applyConvertGuestToMember(
 				// detach the guest without deleting a membership another conversion
 				// is the author of.
 				//
-				// It also never reactivates, and that is structural rather than an
-				// omission (#501). This branch lives in the `else` of
+				// It also never reactivates or demotes, and that is structural
+				// rather than an omission (#501). This branch lives in the `else` of
 				// `if (existingMembership)`, so the only row it can ever observe is
 				// one a CONCURRENT convert just committed — and the insert above
-				// hardcodes `status: "active"`. A membership that was already
-				// lapsed is found by the first select and takes the reuse branch
-				// instead. `reactivatedFrom` therefore stays undefined here by
-				// construction; do not "fix" this into the reactivating path.
+				// hardcodes `status: "active"` and the default `clubRole: "member"`.
+				// A membership that was already lapsed is found by the first select
+				// and takes the reuse branch instead. `reactivatedFrom` and
+				// `demotedFrom` therefore stay undefined here by construction; do
+				// not "fix" this into the reactivating path.
 				const [raced] = await tx
 					.select({ id: members.id })
 					.from(members)
@@ -1443,11 +1545,19 @@ export async function applyConvertGuestToMember(
 			// conversion reversible (#618). A record without them predates undo and
 			// is refused rather than half-replayed — see `applyUndoGuestConversion`.
 			//
-			// `reactivatedFrom` is written only when there was a lapse to record, so
-			// the key's PRESENCE is the claim — which is also what lets records
-			// written before #501 read as "reactivated nothing", correctly, rather
-			// than as unreplayable. It is the audit signal the issue asks for too:
-			// without it this row is indistinguishable from a fresh join.
+			// `reactivatedFrom` and `demotedFrom` are written only when there was
+			// something to record, so each key's PRESENCE is the claim — which is
+			// also what lets records written before #501 read as "reactivated
+			// nothing", correctly, rather than as unreplayable. They are the audit
+			// signal the issue asks for too: without them this row is
+			// indistinguishable from a fresh join, and the demotion in particular
+			// is a permission change with no `member_edit` of its own to explain
+			// it.
+			//
+			// `retainedOfficerPositions` is deliberately NOT recorded. Nothing was
+			// written, so there is nothing for undo to replay, and a snapshot of
+			// who held office at convert time would be a second, staler copy of a
+			// fact `officer_terms` already stores with its own history.
 			detail: {
 				name,
 				fromGuestId: input.guestId,
@@ -1456,6 +1566,7 @@ export async function applyConvertGuestToMember(
 				createdMembership,
 				createdPerson,
 				...(reactivatedFrom ? { reactivatedFrom } : {}),
+				...(demotedFrom ? { demotedFrom } : {}),
 			},
 		});
 
@@ -1464,6 +1575,8 @@ export async function applyConvertGuestToMember(
 			membershipId,
 			personId,
 			reactivated: reactivatedFrom !== undefined,
+			...(demotedFrom ? { demotedFrom } : {}),
+			retainedOfficerPositions,
 		};
 	});
 }
@@ -1708,6 +1821,14 @@ type ConversionRecord = {
 	 * every record written before #501 shipped.
 	 */
 	reactivatedFrom?: "inactive";
+	/**
+	 * The `club_role` the wake-up wrote back down to `member` (#501 review).
+	 * `club_role` is only (admin, member) and `member` is the floor written to,
+	 * so `admin` is the sole reachable value. Absent whenever `reactivatedFrom`
+	 * is — the demotion only ever rides the wake-up — and also on a wake-up of a
+	 * row that was an ordinary member already.
+	 */
+	demotedFrom?: "admin";
 };
 
 /**
@@ -1722,14 +1843,24 @@ type ConversionRecord = {
  * slots is a real and ordinary case, so emptiness cannot mean "no record"; only
  * the key being missing can.
  *
- * `reactivatedFrom` is the ONE field that may be absent, and its optionality is
- * deliberate (#501). This function is also what `loadGuestPipeline` reads to
- * decide whether the board OFFERS Undo at all, so requiring the new key would
- * have silently taken the Undo button off every conversion recorded before #501
- * shipped. Absent means "convert reactivated nothing", which is true of all of
- * them. A value the enum cannot hold reads as absent rather than as a mismatch,
- * for the same reason: a conversion is not unreplayable because a field the
- * undo can simply skip is malformed.
+ * `reactivatedFrom` and `demotedFrom` are the two fields that may be ABSENT,
+ * and that optionality is deliberate (#501). This function is also what
+ * `loadGuestPipeline` reads to decide whether the board OFFERS Undo at all, so
+ * requiring either key would have silently taken the Undo button off every
+ * conversion recorded before #501 shipped. Absent means "convert changed
+ * nothing there", which is true of all of them.
+ *
+ * ABSENT and MALFORMED are not the same claim, and the first draft of #501
+ * conflated them (`d.reactivatedFrom === "inactive" ? … : undefined`). A
+ * record that SAYS it reactivated but says it in a value the enum cannot hold
+ * is corrupt, and reading it as "reactivated nothing" downgrades a corrupt
+ * claim into a confident one: the undo would run, report success, and leave a
+ * membership permanently `active` that the record was trying to tell us had
+ * lapsed. The same shape, one field over, would leave an admin's permissions
+ * on. So a PRESENT key must parse or the whole record is refused — the admin
+ * gets `UNDO_NO_RECORD_MESSAGE` and the roster-removal fallback, which is the
+ * honest outcome for a record nobody can replay. Absence keeps meaning
+ * absence, which is what keeps pre-#501 records undoable.
  */
 function readConversionRecord(detail: unknown): ConversionRecord | null {
 	if (!detail || typeof detail !== "object") return null;
@@ -1738,12 +1869,25 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 	if (!Array.isArray(d.slotIds)) return null;
 	if (typeof d.createdMembership !== "boolean") return null;
 	if (typeof d.createdPerson !== "boolean") return null;
+	// Parse first, then reject PRESENT-BUT-UNPARSED. Splitting it this way is
+	// what keeps "absent" and "malformed" from collapsing into each other: the
+	// ternary is the parse, and the line under it is the only thing that can
+	// tell an omitted key from a value the enum cannot hold.
+	const reactivatedFrom =
+		d.reactivatedFrom === "inactive" ? ("inactive" as const) : undefined;
+	if (d.reactivatedFrom !== undefined && reactivatedFrom === undefined) {
+		return null;
+	}
+	const demotedFrom =
+		d.demotedFrom === "admin" ? ("admin" as const) : undefined;
+	if (d.demotedFrom !== undefined && demotedFrom === undefined) return null;
 	return {
 		personId: d.personId,
 		slotIds: d.slotIds.filter((s): s is string => typeof s === "string"),
 		createdMembership: d.createdMembership,
 		createdPerson: d.createdPerson,
-		reactivatedFrom: d.reactivatedFrom === "inactive" ? "inactive" : undefined,
+		reactivatedFrom,
+		demotedFrom,
 	};
 }
 
@@ -1774,8 +1918,13 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  *     stop being convert's reverse. Restored only when `reactivatedFrom` is
  *     present, which is why that key is optional: every record written before
  *     #501 correctly says "reactivated nothing".
+ *   - WHETHER that wake-up wrote an elevated `club_role` back down to `member`.
+ *     Same argument one column over: the row survives the undo, so a demotion
+ *     nothing put back would make convert-then-undo a silent permission change.
+ *     It grants nothing on the way back — the same statement returns the row to
+ *     `inactive`, which `requireMembership` refuses whatever the role says.
  *
- * So convert records all three, and a conversion older than that record is refused
+ * So convert records all four, and a conversion older than that record is refused
  * (`UNDO_NO_RECORD_MESSAGE`) rather than half-reversed. That refusal is not a
  * dead end: removing the member from the roster still works, and #632 made the
  * guest card recover its controls when it does.
@@ -1941,7 +2090,7 @@ export async function applyUndoGuestConversion(
 		// slots would return to OPEN instead of to the guest.
 		if (record.createdMembership) {
 			await tx.delete(members).where(eq(members.id, membershipId));
-		} else if (record.reactivatedFrom) {
+		} else if (record.reactivatedFrom || record.demotedFrom) {
 			// Convert woke a lapsed membership (#501), so undo has to put the lapse
 			// back or it stops being convert's reverse: the row is REUSED, not
 			// created, so the delete above correctly leaves it standing — and
@@ -1949,14 +2098,25 @@ export async function applyUndoGuestConversion(
 			// convert-then-undo, which is precisely the state the admin used undo to
 			// get out of.
 			//
-			// An `else if` rather than a second `if`, because the two are mutually
-			// exclusive by construction: `reactivatedFrom` is only ever written on
-			// the REUSE branch, where `createdMembership` is false. Stating that as
-			// structure keeps a malformed record from writing to a row this
-			// transaction has already deleted.
+			// The `club_role` the wake-up wrote down is restored in the SAME
+			// statement, for the same reason and with no privilege consequence: the
+			// row is going back to `inactive` in this very `set`, and a non-active
+			// membership is refused by `requireMembership` whatever its role says.
+			// Restoring only the status would quietly make undo a demotion tool —
+			// convert-then-undo would leave a former admin's row saying `member`
+			// with nothing anywhere recording that convert is what changed it.
+			//
+			// An `else if` rather than a second `if`, because these are mutually
+			// exclusive with `createdMembership` by construction: both keys are
+			// only ever written on the REUSE branch, where `createdMembership` is
+			// false. Stating that as structure keeps a malformed record from
+			// writing to a row this transaction has already deleted.
 			await tx
 				.update(members)
-				.set({ status: record.reactivatedFrom })
+				.set({
+					...(record.reactivatedFrom ? { status: record.reactivatedFrom } : {}),
+					...(record.demotedFrom ? { clubRole: record.demotedFrom } : {}),
+				})
 				.where(eq(members.id, membershipId));
 		}
 
@@ -1975,11 +2135,35 @@ export async function applyUndoGuestConversion(
 			action: "member_remove",
 			targetType: "member",
 			targetId: membershipId,
+			// `membershipDeleted: false` used to be the whole story for a REUSED
+			// row, and it left the log unable to explain the thing a human
+			// actually sees: the member vanishes from the roster, the sign-up
+			// sheet and every picker, and nothing anywhere says why. That is the
+			// mirror of the bug #501 exists to fix — a status write with no
+			// visible record — only pointing the other way, and it is worse here
+			// because this write is the one that TAKES a member away.
+			//
+			// Recorded on this row rather than as a separate `member_edit`: one
+			// action, one entry, and `applySetMemberStatus`'s `member_edit` would
+			// claim an independent roster decision that nobody made. Each key is
+			// present only when undo actually wrote that column, so absence keeps
+			// meaning "this undo left it alone" — same discipline as the
+			// conversion record these are replayed from.
 			detail: {
 				name: guest.name,
 				undoneGuestId: input.guestId,
 				slotIds: record.slotIds,
 				membershipDeleted: record.createdMembership,
+				...(record.createdMembership
+					? {}
+					: {
+							...(record.reactivatedFrom
+								? { statusRestoredTo: record.reactivatedFrom }
+								: {}),
+							...(record.demotedFrom
+								? { clubRoleRestoredTo: record.demotedFrom }
+								: {}),
+						}),
 			},
 		});
 

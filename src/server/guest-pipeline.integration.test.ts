@@ -1929,10 +1929,14 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 	 * a convert that set the flag and wrote nothing.
 	 */
 	describe("convert onto a LAPSED membership (#501)", () => {
-		/** A person with a lapsed membership in the seeded club. */
+		/** A person with a lapsed membership in the seeded club. `clubRole`
+		 *  defaults to the column's own default (`member`); pass `admin` for the
+		 *  privilege cases — deactivation never cleared it, so an admin that
+		 *  lapsed is the ordinary shape of that row, not a contrived one. */
 		async function lapsedMember(
 			name: string,
 			contact: { email?: string; phone?: string },
+			clubRole: "admin" | "member" = "member",
 		) {
 			const personId = await trackedPerson({
 				name,
@@ -1941,7 +1945,13 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 			const [m] = await testDb
 				.insert(members)
-				.values({ clubId: seed.clubId, personId, name, status: "inactive" })
+				.values({
+					clubId: seed.clubId,
+					personId,
+					name,
+					status: "inactive",
+					clubRole,
+				})
 				.returning({ id: members.id });
 			if (!m) throw new Error("Failed to seed lapsed membership");
 			return { personId, membershipId: m.id };
@@ -1954,6 +1964,15 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				.where(eq(members.id, membershipId))
 				.limit(1);
 			return m?.status;
+		}
+
+		async function roleOf(membershipId: string) {
+			const [m] = await testDb
+				.select({ clubRole: members.clubRole })
+				.from(members)
+				.where(eq(members.id, membershipId))
+				.limit(1);
+			return m?.clubRole;
 		}
 
 		/** The newest `member_add` detail this guest's conversion wrote. */
@@ -2230,6 +2249,376 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// lapse, so undo must not invent one. `active` here is the CONVERT's
 			// write surviving, which is the correct residue.
 			expect(await statusOf(membershipId)).toBe("active");
+		});
+
+		/**
+		 * What the wake-up does to PERMISSIONS (#501 review).
+		 *
+		 * `members.status === 'active'` is not a display flag, it is the
+		 * write-authorization gate: `requireMembership` sends a non-active
+		 * membership to `requireReadWriteImpersonation`, which refuses an
+		 * ordinary caller. Deactivation never cleared `club_role`, so a
+		 * membership that lapsed while it said `admin` was one `status` write
+		 * away from full club-admin access — and #501's wake-up is that write,
+		 * fired from a guest card that shows no role, by dedup that can match the
+		 * wrong human (#561).
+		 *
+		 * Asserted on the COLUMN rather than through the returned flag, for the
+		 * same reason the status cases above are: a test that only read
+		 * `demotedFrom` would pass on a convert that set the flag and wrote
+		 * nothing. `guest-convert-privilege.integration.test.ts` states the same
+		 * claim once more in the GATE's own terms, which is the only form of it
+		 * that is actually about security.
+		 */
+		describe("and what it does to permissions", () => {
+			/** The newest `member_remove` detail this guest's undo wrote. */
+			async function undoDetail(guestId: string) {
+				const [row] = await testDb
+					.select({ detail: activityLog.detail })
+					.from(activityLog)
+					.where(
+						and(
+							eq(activityLog.clubId, seed.clubId),
+							eq(activityLog.action, "member_remove"),
+							sql`${activityLog.detail}->>'undoneGuestId' = ${guestId}`,
+						),
+					)
+					.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+					.limit(1);
+				return row?.detail as Record<string, unknown> | undefined;
+			}
+
+			/** A lapsed ADMIN, a guest who dedups onto them, and the convert. */
+			async function convertOntoLapsedAdmin(name: string) {
+				const email = `${name.toLowerCase().replace(/\W+/g, "-")}-${randomUUID()}@example.com`;
+				const seeded = await lapsedMember(name, { email }, "admin");
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name,
+					email,
+				});
+				const res = await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+				return { ...seeded, guestId, res };
+			}
+
+			it("writes a lapsed ADMIN's club role back down to member", async () => {
+				// The bug, stated as the column it lives in. Before this, the row
+				// came back `status: active, club_role: admin` — a full club admin
+				// restored by a VP-Membership button whose toast said "(was
+				// inactive)".
+				const { membershipId, res } =
+					await convertOntoLapsedAdmin("Prior Admin");
+
+				expect(res.reactivated).toBe(true);
+				expect(res.demotedFrom).toBe("admin");
+				expect(await statusOf(membershipId)).toBe("active");
+				expect(await roleOf(membershipId)).toBe("member");
+			});
+
+			it("records the demotion in the activity log", async () => {
+				// A permission change with no record is one nobody can audit or
+				// reverse: `club_role` carries no history of its own, so absent this
+				// key the row is indistinguishable from a membership that was never
+				// an admin at all.
+				const { guestId } = await convertOntoLapsedAdmin("Logged Admin");
+
+				const detail = await conversionDetail(guestId);
+				expect(detail?.demotedFrom).toBe("admin");
+				expect(detail?.reactivatedFrom).toBe("inactive");
+			});
+
+			it("leaves an ordinary lapsed member's role alone, and says nothing", async () => {
+				// The commonest wake-up by far. A `demotedFrom` written here would
+				// report a permission change that never happened, and the toast
+				// would start warning on the ordinary path — which is how a real
+				// warning stops being read. ABSENT, not merely falsy:
+				// `readConversionRecord` reads presence.
+				const email = `plain-${randomUUID()}@example.com`;
+				const { membershipId } = await lapsedMember("Plain Lapsed", { email });
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Plain Lapsed",
+					email,
+				});
+
+				const res = await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				expect(res.reactivated).toBe(true);
+				expect(res.demotedFrom).toBeUndefined();
+				expect(await roleOf(membershipId)).toBe("member");
+				expect(await conversionDetail(guestId)).not.toHaveProperty(
+					"demotedFrom",
+				);
+			});
+
+			it("does NOT demote an admin whose membership was already active", async () => {
+				// Ordinary dedup onto a SITTING admin — a VP-Membership converting a
+				// guest who turns out to be the club president. Demoting here would
+				// be a privilege regression convert has no business performing, and
+				// it is the mistake a "convert always writes the role down" fix
+				// makes. The demotion rides the wake-up or it does not happen.
+				const email = `sitting-${randomUUID()}@example.com`;
+				const personId = await trackedPerson({
+					name: "Sitting Admin",
+					email,
+				});
+				const [m] = await testDb
+					.insert(members)
+					.values({
+						clubId: seed.clubId,
+						personId,
+						name: "Sitting Admin",
+						clubRole: "admin",
+					})
+					.returning({ id: members.id });
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Sitting Admin",
+					email,
+				});
+
+				const res = await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				expect(res.membershipId).toBe(m?.id);
+				expect(res.reactivated).toBe(false);
+				expect(res.demotedFrom).toBeUndefined();
+				expect(await roleOf(m?.id ?? "")).toBe("admin");
+			});
+
+			it("reports an open officer term that still grants admin", async () => {
+				// Effective-admin's OTHER source (#202): any open `officer_terms`
+				// row is full admin whatever `club_role` says, and deactivation does
+				// not close those either. Convert deliberately does not close them —
+				// an office is a governance fact, read by the printed agenda and the
+				// COT seats, and `applyUndoGuestConversion` refuses outright for a
+				// membership carrying any term, so a close written here could never
+				// be undone. What convert owes the admin instead is the truth, and
+				// this is the field that carries it: without it the demotion notice
+				// would tell them the access was removed when it was not.
+				const email = `officer-${randomUUID()}@example.com`;
+				const { membershipId } = await lapsedMember(
+					"Lapsed Officer",
+					{ email },
+					"admin",
+				);
+				await testDb
+					.insert(officerTerms)
+					.values({ membershipId, position: "president", termEnd: null });
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Lapsed Officer",
+					email,
+				});
+
+				const res = await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				expect(res.demotedFrom).toBe("admin");
+				expect(res.retainedOfficerPositions).toEqual(["president"]);
+				// Read, not written: the term is exactly as it was.
+				const terms = await testDb
+					.select({ termEnd: officerTerms.termEnd })
+					.from(officerTerms)
+					.where(eq(officerTerms.membershipId, membershipId));
+				expect(terms).toHaveLength(1);
+				expect(terms[0]?.termEnd).toBeNull();
+			});
+
+			it("reports no officer positions when there are none", async () => {
+				// The field is always present, so the UI never has to guard on
+				// undefined — and empty must mean empty, not "we did not look".
+				const { res } = await convertOntoLapsedAdmin("No Office");
+				expect(res.retainedOfficerPositions).toEqual([]);
+			});
+
+			it("undo puts the admin role back along with the lapse", async () => {
+				// Undo is convert's reverse or it is nothing. Restoring only the
+				// status would quietly make undo a DEMOTION tool: the row would come
+				// back `inactive, member`, with `club_role` silently changed by a
+				// pair of actions that claim to cancel out.
+				//
+				// It grants nothing on the way back — the same statement returns the
+				// row to `inactive`, which `requireMembership` refuses whatever the
+				// role says. That is why this is safe to restore and the convert's
+				// own wake-up was not.
+				const { membershipId, guestId } =
+					await convertOntoLapsedAdmin("Undo Admin");
+				expect(await roleOf(membershipId)).toBe("member");
+
+				const res = await applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				expect(res.membershipDeleted).toBe(false);
+				expect(await statusOf(membershipId)).toBe("inactive");
+				expect(await roleOf(membershipId)).toBe("admin");
+			});
+
+			it("records what undo restored on the member_remove row", async () => {
+				// The member vanishes from the roster, the sign-up sheet and every
+				// picker the instant undo runs, and `membershipDeleted: false` was
+				// the whole story the log told — so nothing anywhere explained the
+				// disappearance. That is the mirror of the bug #501 exists to fix,
+				// pointing the other way, and worse, because this write is the one
+				// that TAKES a member away.
+				const { guestId } = await convertOntoLapsedAdmin("Audited Undo");
+				await applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				const detail = await undoDetail(guestId);
+				expect(detail?.membershipDeleted).toBe(false);
+				expect(detail?.statusRestoredTo).toBe("inactive");
+				expect(detail?.clubRoleRestoredTo).toBe("admin");
+			});
+
+			it("records nothing about a status undo did not write", async () => {
+				// A conversion that CREATED the membership deletes it on undo, and a
+				// deleted row has no status to restore. Keys that appear on every
+				// entry regardless stop being evidence of anything — absence has to
+				// keep meaning "undo left it alone".
+				const guestId = await seedGuest(seed.clubId, "Fresh Undo");
+				const conv = await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+				strayPeople.push(conv.personId);
+				await applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				const detail = await undoDetail(guestId);
+				expect(detail?.membershipDeleted).toBe(true);
+				expect(detail).not.toHaveProperty("statusRestoredTo");
+				expect(detail).not.toHaveProperty("clubRoleRestoredTo");
+			});
+
+			it("REFUSES to undo a record whose reactivatedFrom the enum can't hold", async () => {
+				// A present-but-malformed claim is not an absent one. Coercing it to
+				// `undefined` — which is what the first cut of #501 did — downgrades
+				// "this conversion woke something and I can't tell you what" into
+				// "it woke nothing", and undo then reports success while leaving the
+				// membership permanently `active`. The same shape one column over
+				// leaves an admin's permissions on.
+				//
+				// Absence still parses (the case above this one proves it), which is
+				// what keeps every pre-#501 record undoable. Only PRESENCE is held
+				// to the enum.
+				const email = `corrupt-${randomUUID()}@example.com`;
+				const { membershipId } = await lapsedMember("Corrupt Record", {
+					email,
+				});
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Corrupt Record",
+					email,
+				});
+				await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+				const [row] = await testDb
+					.select({ id: activityLog.id, detail: activityLog.detail })
+					.from(activityLog)
+					.where(
+						and(
+							eq(activityLog.clubId, seed.clubId),
+							eq(activityLog.action, "member_add"),
+							sql`${activityLog.detail}->>'fromGuestId' = ${guestId}`,
+						),
+					)
+					.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+					.limit(1);
+				if (!row) throw new Error("No conversion record");
+				await testDb
+					.update(activityLog)
+					.set({
+						detail: {
+							...(row.detail as Record<string, unknown>),
+							reactivatedFrom: "suspended",
+						},
+					})
+					.where(eq(activityLog.id, row.id));
+
+				await expect(
+					applyUndoGuestConversion({
+						clubId: seed.clubId,
+						guestId,
+						actorMemberId: seed.adminMemberId,
+					}),
+				).rejects.toThrow(UNDO_NO_RECORD_MESSAGE);
+				// Refused whole: the membership is untouched and the guest is still
+				// joined, which is the state the roster-removal fallback expects.
+				expect(await statusOf(membershipId)).toBe("active");
+				// And the board stops OFFERING the button, rather than showing one
+				// that always fails — same validator, same answer.
+				expect(
+					(await pipelineRow(seed.clubId, guestId)).conversionUndoable,
+				).toBe(false);
+			});
+
+			it("REFUSES to undo a record whose demotedFrom the enum can't hold", async () => {
+				// The same rule on the key that carries a PERMISSION. Read loosely,
+				// undo would leave the membership at `member` and report success,
+				// and the only record that it had ever been an admin is the string
+				// it just ignored.
+				const { guestId, membershipId } =
+					await convertOntoLapsedAdmin("Corrupt Role");
+				const [row] = await testDb
+					.select({ id: activityLog.id, detail: activityLog.detail })
+					.from(activityLog)
+					.where(
+						and(
+							eq(activityLog.clubId, seed.clubId),
+							eq(activityLog.action, "member_add"),
+							sql`${activityLog.detail}->>'fromGuestId' = ${guestId}`,
+						),
+					)
+					.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+					.limit(1);
+				if (!row) throw new Error("No conversion record");
+				await testDb
+					.update(activityLog)
+					.set({
+						detail: {
+							...(row.detail as Record<string, unknown>),
+							demotedFrom: "superadmin",
+						},
+					})
+					.where(eq(activityLog.id, row.id));
+
+				await expect(
+					applyUndoGuestConversion({
+						clubId: seed.clubId,
+						guestId,
+						actorMemberId: seed.adminMemberId,
+					}),
+				).rejects.toThrow(UNDO_NO_RECORD_MESSAGE);
+				expect(await roleOf(membershipId)).toBe("member");
+			});
 		});
 	});
 

@@ -22,7 +22,7 @@ import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
 import {
-	CONVERT_REACTIVATED_MESSAGE,
+	convertNoticeDescription,
 	isStrandedConvertedGuest,
 } from "#/lib/guest-convert";
 import { mailtoHref } from "#/lib/mailto";
@@ -143,17 +143,24 @@ function VpMembership() {
 			// there is one, and #501 made it WAKE that row when it had lapsed —
 			// otherwise the new member was hidden from the roster, the sign-up
 			// sheet, the season grid and every picker, behind this very toast
-			// saying it had worked. The notice rides the existing success surface
-			// rather than a dialog: it is information, not a decision.
+			// saying it had worked. That wake-up also writes an elevated
+			// `club_role` back down, and may leave an open officer term standing
+			// that grants admin anyway. The notice rides the existing success
+			// surface rather than a dialog: it is information, not a decision.
 			//
-			// Only on `reactivated`, which the server sets only when the reused row
-			// was NOT already active. Reuse of a live membership is ordinary dedup,
-			// and a notice fired on the common path is one admins learn to ignore.
+			// Composed by `convertNoticeDescription` rather than assembled here,
+			// because which sentences apply is a rule with a wrong answer in it —
+			// the demotion line overstates what happened when an officer term
+			// survives. A pure function is the half a unit test can hold.
+			//
+			// Silent unless the server reported a reactivation, which it does only
+			// when the reused row was NOT already active. Reuse of a live
+			// membership is ordinary dedup, and a notice fired on the common path
+			// is one admins learn to ignore.
+			const description = convertNoticeDescription(res);
 			toast.success(
 				`${guest.name} is now a member. 🎉`,
-				res.reactivated
-					? { description: CONVERT_REACTIVATED_MESSAGE }
-					: undefined,
+				description ? { description } : undefined,
 			);
 			await router.invalidate();
 		} catch (err) {
