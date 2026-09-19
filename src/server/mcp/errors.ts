@@ -46,12 +46,25 @@ export type McpErrorCode =
  * Codes that appear in a PREVIEW's `blocking` list. These are not errors — the
  * preview succeeded and is telling the caller what it cannot do yet. Apply
  * returns `BLOCKED` while any remain. Each item carries its entry index.
+ *
+ * **Every code here is emitted by a tool, and `blocking-codes.guard.test.ts`
+ * holds that.** This union shipped with two that nothing raised —
+ * `MEETING_LOCKED` and `FIELD_TOO_LONG` — and a declared code nothing emits is
+ * worse than an absent one: the next reader assumes the case is handled.
+ *
+ * `MEETING_LOCKED` was checked before it was dropped, and its absence is
+ * PARITY rather than a gap: `record_guest_book` gates attendance on
+ * `meetingDateReached` and `minutes-logic.ts` gates the browser path on exactly
+ * the same condition, so neither surface consults the meeting lock here.
+ * `FIELD_TOO_LONG` had no call site either — the entry schema's `.max()` bounds
+ * reject an over-long field as a zod `VALIDATION` error before any plan is
+ * built, which is the right shape for a length the caller can see itself.
+ * Re-add either the day a tool actually raises it.
  */
 export type McpBlockingCode =
 	| "NO_MEETING_ON_DATE"
 	| "AMBIGUOUS_DATE"
 	| "AMBIGUOUS_GUEST"
-	| "MEETING_LOCKED"
 	| "INVALID_PHONE"
 	/**
 	 * The address on the line is not a valid email.
@@ -63,8 +76,7 @@ export type McpBlockingCode =
 	 * the club's minutes email (`minutes-email-port-logic.ts:54`), and
 	 * `resolveMinutesRecipients` only checks that the string is non-empty.
 	 */
-	| "INVALID_EMAIL"
-	| "FIELD_TOO_LONG";
+	| "INVALID_EMAIL";
 
 export interface McpBlockingItem {
 	code: McpBlockingCode;

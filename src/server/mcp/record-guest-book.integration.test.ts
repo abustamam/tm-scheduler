@@ -100,7 +100,24 @@ describe.skipIf(!hasTestDb)("record_guest_book (#773)", () => {
 
 		// `seedClub`'s meeting is in the FUTURE, which is deliberately not
 		// recordable. Add one a week back for the recordable cases.
-		const past = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+		//
+		// Anchored at MIDDAY club-local rather than at whatever time of day the
+		// suite happens to run. "Blocks a date with TWO meetings" seeds its second
+		// meeting an hour after this one, and a bare `Date.now() - 7 days` put
+		// this at the current wall-clock time: between 23:00 and 23:59
+		// America/Chicago the second meeting landed on the NEXT club-local day, the
+		// date named one meeting rather than two, and `AMBIGUOUS_DATE` never fired.
+		// MEASURED at 23:08 CDT — `p.plan` came back as a real plan, not null. One
+		// hour in twenty-four, so it reads as a flake rather than as the wall-clock
+		// time bomb `seedClub` warns about in the same words.
+		const { utcToZonedWallTime, zonedWallTimeToUtc } = await import(
+			"#/lib/datetime"
+		);
+		const weekAgo = utcToZonedWallTime(
+			new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+			"America/Chicago",
+		).slice(0, 10);
+		const past = zonedWallTimeToUtc(`${weekAgo}T12:00`, "America/Chicago");
 		const [row] = await testDb
 			.insert(meetings)
 			.values({
@@ -114,7 +131,6 @@ describe.skipIf(!hasTestDb)("record_guest_book (#773)", () => {
 		pastMeetingId = row!.id;
 		// The seeded club's timezone is the schema default (America/Chicago), so
 		// derive the club-local day rather than assuming it matches UTC.
-		const { utcToZonedWallTime } = await import("#/lib/datetime");
 		pastMeetingDate = utcToZonedWallTime(past, "America/Chicago").slice(0, 10);
 	});
 
