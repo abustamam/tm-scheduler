@@ -8,7 +8,10 @@ export interface AuthContextLite {
 }
 
 export interface ShellDecision {
-	/** Render <AppShell> (signed-in member of the viewed club, and it's active). */
+	/** Render <AppShell> (signed-in member of the viewed club, and it's active).
+	 *  NOT a session flag — false for a signed-in non-member too. A gate asking
+	 *  "is anyone signed in" wants `hasSession` off the `/club/$clubId` route
+	 *  context instead (#769); reading this one loops them through /signin. */
 	shell: boolean;
 	/** The session member id to act as (non-null only when `shell`). */
 	effectiveMemberId: string | null;

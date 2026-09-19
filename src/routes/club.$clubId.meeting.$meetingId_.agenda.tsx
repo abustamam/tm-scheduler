@@ -35,6 +35,34 @@ import {
 export const Route = createFileRoute(
 	"/club/$clubId/meeting/$meetingId_/agenda",
 )({
+	// Sign-in gate (#769). The `/club/$clubId` shell above this route is
+	// deliberately PUBLIC — a guest reaches the sign-up sheet through it — so
+	// nothing between `/` and here checks for a session. This route is not
+	// public: its loader's first act is `getAgendaDraft`, whose handler opens
+	// with `requireMeetingTemplateEditor`, and a plain `throw new Error` out of
+	// a loader is an error boundary, not a redirect. So an officer whose
+	// session expired, or anyone following a shared link, got HTTP 500 and
+	// "Something went wrong!" where every `_authed` page sends them to sign in.
+	//
+	// The check has to be "is there a SESSION", not "is this an editor", which
+	// is why it reads the parent's `hasSession` rather than its `shell`. `shell`
+	// is false for a signed-in NON-member exactly as it is for a guest, so a
+	// gate written against it would bounce someone who is already signed in to
+	// /signin, which returns them here to be bounced again. A signed-in visitor
+	// who may not edit still reaches the loader and still gets its error — that
+	// is a permission failure, and it is not what this guard is for.
+	//
+	// No server call of its own: `hasSession` is the parent's `getAuthContext()`
+	// answer, already resolved for this navigation. Asking again would re-run
+	// the schedule top-up that call performs, twice inside one request.
+	beforeLoad: ({ context, location }) => {
+		if (!context.hasSession) {
+			throw redirect({
+				to: "/signin",
+				search: { redirect: location.href },
+			});
+		}
+	},
 	loader: async ({ params }) => {
 		const draft = await getAgendaDraft({
 			data: { meetingId: params.meetingId },
