@@ -62,8 +62,17 @@ export type ClubLogoAsset = {
  *   carrying ~340 KB of base64 on the deck descriptor would put it in the SSR
  *   payload of every present and meeting page — the exact cost the separate
  *   `club_logos` table exists to avoid. The caller fetches the same public URL
- *   the projected deck already displays, so it is normally warm in the HTTP
- *   cache and the export works offline too.
+ *   the projected deck already displays, so a second export in a sitting is
+ *   normally an HTTP-cache hit.
+ *
+ *   That cache is NOT what makes the export work offline, and this said it was
+ *   until #514. The route answers a bounded `max-age` with `must-revalidate`
+ *   since #517 — deliberately not `immutable`, which had disabled #556's
+ *   takedown eviction — and `must-revalidate` forbids serving it with no
+ *   network. Offline comes from the service worker's `ASSET_CACHE`, which a
+ *   `fetch()` could not reach at all until #514 taught `isCacheableAsset` to
+ *   match the crest by path as well as by `request.destination`. See
+ *   `fetchClubLogo` in `pptx-download-button.tsx`, which does the fetching.
  */
 export function deckToPptx(
 	Pptx: PptxCtor,

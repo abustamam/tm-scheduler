@@ -870,6 +870,104 @@ describe("the crest is cacheable by PATH, not only by destination (#514)", () =>
 			"chunk",
 		]);
 	});
+
+	/**
+	 * Being cacheable is not the same as being CACHED, and the gap bounds the fix.
+	 *
+	 * `isCacheableAsset` decides what the worker HANDLES when something asks for the
+	 * crest. On the surface the export button actually sits on, nothing asks: the
+	 * pretty meeting page renders no `<ClubLogo>` at all. So before these cases a
+	 * toolbar export was offline-capable only if Present or Print had SEPARATELY
+	 * been opened online at the same `?v=` — an ordering a club has no way to know
+	 * about. Priming reads the crest out of a primed document's HTML, which is the
+	 * only path that fills `ASSET_CACHE` without a surface that shows it being
+	 * viewed.
+	 */
+	describe("a primed document brings its crest with it (#514)", () => {
+		const PRESENT_CHUNK = "/_build/assets/present-ab12cd.js";
+		/** The Present splash's markup, reduced to the two attributes priming reads. */
+		const presentDoc = (logo: string) =>
+			`<script src="${PRESENT_CHUNK}"></script><img src="${logo}" alt="">`;
+
+		/** What a visit to the pretty meeting page primes, in the order it primes it. */
+		function queueVisit() {
+			sw.nextFetch.push(response(200, "AGENDA"));
+			sw.nextFetch.push(
+				response(200, presentDoc(LOGO_V1), {
+					url: `${ORIGIN}${MEETING}/present`,
+				}),
+			);
+			sw.nextFetch.push(response(200, "CHUNK"));
+			sw.nextFetch.push(response(200, "the club crest"));
+			sw.nextFetch.push(
+				response(200, "PRINT", { url: `${ORIGIN}${MEETING}/print` }),
+			);
+		}
+
+		it("primes the crest from a document, not only from a page someone viewed", async () => {
+			queueVisit();
+
+			// A visit to the PRETTY MEETING PAGE — where the export button is, and the
+			// one surface here that renders no crest of its own.
+			await sw.dispatchFetch(request(MEETING));
+
+			// Drained, and asserted here rather than left to `afterEach`: `nextFetch` is
+			// shared across phases, so a crest that was never fetched would otherwise
+			// leak its 200 into the offline phase of the case below and be answered from
+			// the NETWORK while reading as a cache hit.
+			expect(
+				sw.nextFetch,
+				"the primed Present document did not pull its crest",
+			).toHaveLength(0);
+			expect(
+				sw.cacheFor("gavelup-assets-v3").entries.get(`${ORIGIN}${LOGO_V1}`),
+			).toBe("the club crest");
+		});
+
+		it("serves that crest to an offline export — the whole point", async () => {
+			queueVisit();
+			await sw.dispatchFetch(request(MEETING));
+			expect(sw.nextFetch, "nothing was primed").toHaveLength(0);
+
+			// Wifi cut, then Export .pptx. `fetchClubLogo` reads the crest with
+			// `fetch()`, whose destination is empty — the read #514 made reachable.
+			sw.nextFetch.push(new Error("offline"));
+			const served = await sw.dispatchFetch(request(LOGO_V1, AS_FETCH));
+			expect(served?.body).toBe("the club crest");
+		});
+
+		it("restores the crest the activation sweep just purged", async () => {
+			// The post-deploy window, and why the sweep and the re-prime are ordered the
+			// way they are inside `activate`. The sweep drops EVERY club's crest (#556's
+			// takedown lever, since `ASSET_CACHE` is deliberately not version-bumped),
+			// and re-priming the open pages restored the documents and not the mark they
+			// show — so the first export after any edit to `sw.js` was crest-less,
+			// offline, silently. Every edit to this file opens that window.
+			sw.seed("gavelup-assets-v3", { [`${ORIGIN}${LOGO_V1}`]: "STALE CREST" });
+			sw.openClients = [`${ORIGIN}${MEETING}/present`];
+			sw.nextFetch.push(
+				response(200, "AGENDA", { url: `${ORIGIN}${MEETING}` }),
+			);
+			sw.nextFetch.push(
+				response(200, presentDoc(LOGO_V1), {
+					url: `${ORIGIN}${MEETING}/present`,
+				}),
+			);
+			sw.nextFetch.push(
+				response(200, "SHEET", { url: `${ORIGIN}${MEETING}/print` }),
+			);
+			sw.nextFetch.push(response(200, "CHUNK"));
+			sw.nextFetch.push(response(200, "the club crest"));
+
+			await sw.activate();
+
+			// The FRESH body, not the seeded one — which is what says the sweep ran
+			// first and the re-prime put a crest back, rather than the seed surviving.
+			expect(
+				sw.cacheFor("gavelup-assets-v3").entries.get(`${ORIGIN}${LOGO_V1}`),
+			).toBe("the club crest");
+		});
+	});
 });
 
 /**
@@ -1172,10 +1270,16 @@ describe("priming a document also primes its build assets (#362)", () => {
 		// the thing doing the work. A foreign origin whose path is SHAPED like
 		// build output is the case only the origin check can refuse, and it is
 		// also the realistic one (a CDN mirroring the same layout).
+		//
+		// The crest arm needs the same crossing and gets it here: `/api/club/x/logo`
+		// is now primed on purpose (the suite above), so the case that can only be
+		// refused by the origin check is a FOREIGN url shaped like the crest route.
+		// It used to sit in this list as a same-origin exclusion, which stopped
+		// being true the moment a document could prime one.
 		const doc = docWith(
 			"https://cdn.example/_build/assets/tracker-00ff11.js",
 			"https://cdn.example/tracker.js",
-			"/api/club/x/logo",
+			"https://cdn.example/api/club/x/logo?v=1700000000000",
 			"/dashboard",
 			CHUNK,
 		);

@@ -156,7 +156,15 @@ async function primeOpenMeetingPages() {
  * A non-meeting offline route (`/meetings/<id>`) has no siblings; it primes
  * itself.
  */
-/** Build output a primed document may pull in. Mirrors `isCacheableAsset`. */
+/**
+ * Hashed build output a primed document may pull in.
+ *
+ * ONE of the two path arms `isCacheableAsset` matches, not the whole of it:
+ * `LOGO_PATH` above is the other, and has been since #514. This said "Mirrors
+ * `isCacheableAsset`" until that clause landed, which is the shape of comment
+ * worth distrusting — a claim about ANOTHER function, with nothing to fail when
+ * that function changes.
+ */
 const ASSET_PATH = /^\/(?:_build|assets)\//;
 
 /** Ceiling on assets primed per document (#362). See `primeAssetsOf`. */
@@ -241,13 +249,21 @@ async function primeOne(cache, href) {
  * to advance it. On the night, that is its own bug report.
  *
  * Parsed with a regex rather than a real parser because a service worker has no
- * DOM. That is acceptable HERE and would not be in general: the only thing read
- * out is `/_build/` and `/assets/` paths, which are hashed build output, so a
- * mis-parse's worst case is a URL that 404s and is skipped — never wrong
- * content. Read through `ASSET_PATH`, the same constant `isCacheableAsset`
- * falls back to. (It is only PART of what that predicate matches: the crest is
- * cacheable too, by `LOGO_PATH`, but it is not build output and is not primed
- * from a document here — the page's own `<img>` fetches it.)
+ * DOM. That is acceptable HERE and would not be in general: the only things read
+ * out are the SAME two path arms `isCacheableAsset` matches — `ASSET_PATH` for
+ * hashed build output, `LOGO_PATH` for the club's crest — and both are anchored,
+ * so a mis-parse's worst case is a URL that 404s and is skipped, never wrong
+ * content. Reading exactly those two is what makes a primed document carry
+ * everything a later request against that document can be answered from.
+ *
+ * The crest arm is what bounds the offline `.pptx` export (#514). Priming is
+ * the only path that puts a crest in `ASSET_CACHE` without a surface rendering
+ * `<ClubLogo>` being VIEWED online, and the pretty meeting page renders none —
+ * so its toolbar export could reach a cached crest only if Present or Print had
+ * separately been opened online at the same `?v=`. Same line closes the
+ * post-deploy window: `activate`'s sweep purges every crest (see there), and
+ * before this `primeOpenMeetingPages` restored the documents and not the mark
+ * they show, so the first export after any `sw.js` edit was crest-less offline.
  */
 async function primeAssetsOf(response, documentUrl) {
 	let html;
@@ -270,12 +286,19 @@ async function primeAssetsOf(response, documentUrl) {
 			continue;
 		}
 		if (assetUrl.origin !== self.location.origin) continue;
-		if (!ASSET_PATH.test(assetUrl.pathname)) continue;
+		if (
+			!ASSET_PATH.test(assetUrl.pathname) &&
+			!LOGO_PATH.test(assetUrl.pathname)
+		) {
+			continue;
+		}
 		if (seen.has(assetUrl.href)) continue;
 		seen.add(assetUrl.href);
-		// Already held: skip. These paths are content-hashed, so a cached copy can
-		// never be the stale one — which is what keeps the repeat cost of priming
-		// on EVERY visit down to the documents alone.
+		// Already held: skip. Every path reaching here is versioned in its URL —
+		// build output by content hash, the crest by `clubLogoUrl`'s `?v=<updatedAt>`
+		// — and this match is EXACT, so a cached copy can never be the stale one: a
+		// replaced crest arrives under a URL that misses. That is what keeps the
+		// repeat cost of priming on EVERY visit down to the documents alone.
 		if (await cache.match(assetUrl.href)) continue;
 		try {
 			const asset = await fetch(assetUrl.href);
@@ -500,6 +523,13 @@ async function networkFirst(event, request, url, cacheName) {
 // and which `isCacheableAsset` matches by path instead (#514). Note `cache.match` is
 // EXACT here (no `ignoreSearch` fallback, unlike `networkFirst`), which is why
 // `clubLogoUrl` must keep emitting `?v=`; see that module's header.
+//
+// The eviction is an ONLINE mechanism, and the `.catch(() => cached)` below is
+// why: offline there is no 404 to read, so a device that primed a crest keeps
+// serving it after a logo removal or a club archive until it is next online,
+// where one request self-heals it. Not a behaviour to fix here — a cache that
+// stopped answering whenever the network was down would be no offline cache at
+// all — but not a thing to leave implied either.
 //
 // The revalidation is registered with `event.waitUntil` because the response
 // resolves from cache first: without it the browser may terminate the worker as
