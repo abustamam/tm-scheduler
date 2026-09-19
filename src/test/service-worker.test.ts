@@ -41,6 +41,16 @@ const LOGO = "/api/club/11111111-1111-1111-1111-111111111111/logo";
 const LOGO_V1 = `${LOGO}?v=1700000000000`;
 const LOGO_V2 = `${LOGO}?v=1800000000000`;
 const AS_IMAGE = { mode: "no-cors", destination: "image" };
+/**
+ * What `fetch(url)` produces, and the whole of #514: a request created that way
+ * carries an EMPTY `destination`, which is the field `isCacheableAsset` keys on.
+ *
+ * Overriding `mode` is load-bearing, not tidiness. The request builder defaults
+ * to `mode: "navigate"`, and the fetch handler returns at the navigate branch
+ * before `isCacheableAsset` is ever reached — so without `mode: "cors"` these
+ * cases would pass identically with and without the fix and prove nothing.
+ */
+const AS_FETCH = { mode: "cors", destination: "" };
 
 interface FakeRequest {
 	url: string;
@@ -171,7 +181,12 @@ interface Harness {
 	seed(name: string, entries: Record<string, string>): FakeCache;
 }
 
-function loadServiceWorker(): Harness {
+/**
+ * Evaluate the worker. `source` defaults to the real file; the only caller that
+ * passes anything else is #514's pre-fix control, which hands over a copy with
+ * the fix removed so the bug can be reproduced here rather than described.
+ */
+function loadServiceWorker(source: string = SW_SOURCE): Harness {
 	const listeners = new Map<string, ((event: unknown) => void)[]>();
 	const cacheStore = new Map<string, FakeCache>();
 	const opened: string[] = [];
@@ -251,11 +266,7 @@ function loadServiceWorker(): Harness {
 
 	// `new Function` rather than an import: sw.js is a classic worker script with
 	// no exports, and its three globals arrive as parameters that shadow them.
-	new Function("self", "caches", "fetch", SW_SOURCE)(
-		selfApi,
-		cachesApi,
-		fetchApi,
-	);
+	new Function("self", "caches", "fetch", source)(selfApi, cachesApi, fetchApi);
 
 	function handlersFor(type: string): ((event: unknown) => void)[] {
 		const found = listeners.get(type) ?? [];
@@ -686,6 +697,175 @@ describe("service worker takedown eviction (#556)", () => {
 		// Only gavelup-* caches are ours to drop.
 		expect([...sw.caches.keys()]).toContain("unrelated-cache");
 		// The crest is gone; the hashed chunk survives.
+		expect([...sw.cacheFor("gavelup-assets-v3").entries.values()]).toEqual([
+			"chunk",
+		]);
+	});
+});
+
+/**
+ * Strip #514's clause back out of the worker, for the pre-fix control below.
+ *
+ * Only inside `isCacheableAsset` — `LOGO_PATH` is read in two other places (the
+ * activation sweep, and `staleWhileRevalidate`'s forced revalidation) that
+ * predate this change and must stay, or the control would be reproducing some
+ * other bug.
+ *
+ * Throws rather than returning the source unchanged when it finds nothing to
+ * remove. A control that silently strips nothing is a control that asserts the
+ * PATCHED worker fails, which would be a false red — but a loud one, since the
+ * clause is what makes the assertion below pass. Failing here says why.
+ */
+function withoutLogoClause(source: string): string {
+	const start = source.indexOf("function isCacheableAsset(");
+	const end = source.indexOf("\n}", start);
+	if (start < 0 || end < 0) {
+		throw new Error("could not find isCacheableAsset in public/sw.js");
+	}
+	const predicate = source.slice(start, end);
+	const lines = predicate.split("\n");
+	// The CLAUSE, not merely a line of prose mentioning it — the comment above it
+	// names `LOGO_PATH` too, so a filter that only counted removals would call
+	// itself satisfied by deleting the explanation.
+	if (!lines.some((line) => /LOGO_PATH\.test\(/.test(line))) {
+		throw new Error(
+			"the pre-#514 control removed nothing: isCacheableAsset no longer tests LOGO_PATH, so this control proves nothing",
+		);
+	}
+	const stripped = lines
+		.filter((line) => !line.includes("LOGO_PATH"))
+		.join("\n");
+	return source.slice(0, start) + stripped + source.slice(end);
+}
+
+/**
+ * The crest must reach the asset cache for a `fetch()`, not only for an `<img>`
+ * (#514).
+ *
+ * Present mode renders the club's crest offline because the splash's `<img>`
+ * arrives with `destination === "image"`, which `isCacheableAsset` allows into
+ * `ASSET_CACHE`. The `.pptx` export reads the SAME url — `fetchClubLogo` in
+ * `src/components/club/pptx-download-button.tsx` — with `fetch()`, whose
+ * destination is the empty string. So the worker never called `respondWith` for
+ * it and the very cache the `<img>` beside it had just populated went
+ * unconsulted: the projected splash showed the crest and the downloaded deck did
+ * not.
+ *
+ * Why it was not merely theoretical, and is less so now. The export degrades
+ * rather than failing, so the only symptom is a missing image, and it was masked
+ * by the browser's own HTTP cache — a DIFFERENT cache with a different eviction
+ * policy, which #517 then weakened deliberately (`immutable` → a bounded
+ * `LOGO_MAX_AGE_SECONDS` with `must-revalidate`, so #556's takedown eviction
+ * could reach a cached crest at all). The SW cache carries more of the offline
+ * guarantee than it did when this was filed.
+ */
+describe("the crest is cacheable by PATH, not only by destination (#514)", () => {
+	let sw: Harness;
+
+	beforeEach(() => {
+		sw = loadServiceWorker();
+	});
+
+	afterEach(() => {
+		// Same balance guard as the eviction suite: both directions, so over- and
+		// under-fetching are visible.
+		expect(
+			sw.nextFetch,
+			"a queued fetch result went unused — the worker fetched fewer times than the test expected",
+		).toHaveLength(0);
+		expect(
+			sw.surplusFetches,
+			"the worker fetched more times than the test queued",
+		).toBe(0);
+	});
+
+	it("intercepts and caches an EMPTY-destination crest GET", async () => {
+		sw.nextFetch.push(response(200, "the club crest"));
+		const res = await sw.dispatchFetch(request(LOGO_V1, AS_FETCH));
+
+		// Not `undefined`: the worker handled it rather than falling through to the
+		// network, which is the whole of the bug.
+		expect(res?.body).toBe("the club crest");
+		expect([...sw.cacheFor("gavelup-assets-v3").entries]).toEqual([
+			[`${ORIGIN}${LOGO_V1}`, "the club crest"],
+		]);
+		// And it lands on the crest's own branch of `staleWhileRevalidate`, so the
+		// takedown revalidation (#517) reaches this route too rather than being
+		// served by the HTTP cache.
+		expect(sw.fetchInits.at(-1)?.cache).toBe("no-cache");
+	});
+
+	it("reproduces the bug against the pre-#514 worker: nothing intercepted", async () => {
+		// The control. Without it the assertion above is only evidence that the
+		// patched worker works — not that the unpatched one was broken, which is
+		// the claim the issue makes.
+		const unpatched = loadServiceWorker(withoutLogoClause(SW_SOURCE));
+		expect(
+			await unpatched.dispatchFetch(request(LOGO_V1, AS_FETCH)),
+			"the pre-#514 worker intercepted the fetch() — the control is not reproducing the bug",
+		).toBeUndefined();
+		expect(unpatched.caches.size).toBe(0);
+		// That same worker still handles the `<img>`, which is why the bug was
+		// invisible: the splash cached a crest the export could not read back.
+		unpatched.nextFetch.push(response(200, "the club crest"));
+		await unpatched.dispatchFetch(request(LOGO_V1, AS_IMAGE));
+		expect(unpatched.cacheFor("gavelup-assets-v3").entries.size).toBe(1);
+	});
+
+	it("serves the crest from cache with the network down — the offline repro", async () => {
+		// Primed by the `<img>` on the page the export is launched from, which is
+		// how this is primed in life: Present is open, the crest is on screen.
+		sw.nextFetch.push(response(200, "the club crest"));
+		await sw.dispatchFetch(request(LOGO_V1, AS_IMAGE));
+
+		sw.nextFetch.push(new Error("offline"));
+		const offline = await sw.dispatchFetch(request(LOGO_V1, AS_FETCH));
+		expect(offline?.body).toBe("the club crest");
+	});
+
+	it("still caches and serves the <img> path", async () => {
+		sw.nextFetch.push(response(200, "the club crest"));
+		await sw.dispatchFetch(request(LOGO_V1, AS_IMAGE));
+		sw.nextFetch.push(new Error("offline"));
+		const offline = await sw.dispatchFetch(request(LOGO_V1, AS_IMAGE));
+		expect(offline?.body).toBe("the club crest");
+	});
+
+	it("does not intercept a path that merely CONTAINS the crest route", async () => {
+		// The one case that can genuinely fail. Both are same-origin GETs with an
+		// empty destination, so nothing but `LOGO_PATH`'s anchoring stops them —
+		// and an unanchored match would start writing arbitrary API responses into
+		// the offline asset cache.
+		expect(
+			await sw.dispatchFetch(request(`${LOGO}/extra`, AS_FETCH)),
+		).toBeUndefined();
+		expect(
+			await sw.dispatchFetch(request(`/proxy${LOGO}`, AS_FETCH)),
+		).toBeUndefined();
+		expect(sw.caches.size).toBe(0);
+	});
+
+	it("keeps the caches a device already holds — no version bump rides along", async () => {
+		// A bump drops that cache wholesale on the next activation, and neither is
+		// wanted here: `ASSET_CACHE` is deliberately un-bumped (the activate sweep
+		// is what removes a taken-down crest, #556) and the nav cache has nothing
+		// to do with this change. Asserted through `activate`'s own sweep rather
+		// than against the source text, so it is the worker's behaviour that is
+		// pinned: a changed constant makes these seeded names unowned and they go.
+		sw.seed("gavelup-nav-v4", { [`${ORIGIN}${MEETING}`]: "primed agenda" });
+		sw.seed("gavelup-assets-v3", {
+			[`${ORIGIN}/_build/assets/app-abc123.js`]: "chunk",
+		});
+
+		await sw.activate();
+
+		expect([...sw.caches.keys()].sort()).toEqual([
+			"gavelup-assets-v3",
+			"gavelup-nav-v4",
+		]);
+		expect([...sw.cacheFor("gavelup-nav-v4").entries.values()]).toEqual([
+			"primed agenda",
+		]);
 		expect([...sw.cacheFor("gavelup-assets-v3").entries.values()]).toEqual([
 			"chunk",
 		]);

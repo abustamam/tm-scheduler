@@ -244,7 +244,10 @@ async function primeOne(cache, href) {
  * DOM. That is acceptable HERE and would not be in general: the only thing read
  * out is `/_build/` and `/assets/` paths, which are hashed build output, so a
  * mis-parse's worst case is a URL that 404s and is skipped — never wrong
- * content. Same match set `isCacheableAsset` uses, from the same constant.
+ * content. Read through `ASSET_PATH`, the same constant `isCacheableAsset`
+ * falls back to. (It is only PART of what that predicate matches: the crest is
+ * cacheable too, by `LOGO_PATH`, but it is not build output and is not primed
+ * from a document here — the page's own `<img>` fetches it.)
  */
 async function primeAssetsOf(response, documentUrl) {
 	let html;
@@ -320,6 +323,20 @@ function isCacheableAsset(url, request) {
 	if (["script", "style", "font", "image", "worker"].includes(request.destination)) {
 		return true;
 	}
+	// The club crest by PATH as well as by destination (#514).
+	//
+	// An `<img>` arrives here with `destination === "image"` and is cached — that
+	// is what makes the projected splash render offline. The `.pptx` export reads
+	// the SAME url with `fetch()`, and a request created that way has an EMPTY
+	// destination, so without this clause the worker declined to handle it and the
+	// very cache the `<img>` on that page had just populated was never consulted.
+	// The downloaded deck then silently lost the crest the splash beside it was
+	// still showing.
+	//
+	// Safe to widen: `LOGO_PATH` is anchored, and the fetch handler has already
+	// returned for every cross-origin request and every non-GET before this runs,
+	// so the clause can only ever match this app's own crest endpoint.
+	if (LOGO_PATH.test(url.pathname)) return true;
 	return ASSET_PATH.test(url.pathname);
 }
 
@@ -477,8 +494,10 @@ async function networkFirst(event, request, url, cacheName) {
 
 // Serve cache immediately, refresh it in the background for next time.
 //
-// A club's own uploaded logo (`/api/club/:id/logo`) lands here — `destination` is
-// `"image"` — so the takedown eviction applies to it too. Note `cache.match` is
+// A club's own uploaded logo (`/api/club/:id/logo`) lands here by TWO routes, so
+// the takedown eviction applies to both: the splash's `<img>`, whose destination
+// is `"image"`, and the `.pptx` export's `fetch()`, whose destination is empty
+// and which `isCacheableAsset` matches by path instead (#514). Note `cache.match` is
 // EXACT here (no `ignoreSearch` fallback, unlike `networkFirst`), which is why
 // `clubLogoUrl` must keep emitting `?v=`; see that module's header.
 //
