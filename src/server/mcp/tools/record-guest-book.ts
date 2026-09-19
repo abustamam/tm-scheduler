@@ -42,11 +42,21 @@
  * The caller never needs the full plan: it echoes the hash back verbatim, and
  * the apply rebuilds the full plan server-side from the same input.
  */
-import { and, eq, gte, lt } from "drizzle-orm";
+import { and, eq, gte, isNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { guests, meetingAttendance, meetings } from "#/db/schema";
+import {
+	clubs,
+	guests,
+	meetingAttendance,
+	meetings,
+	members,
+	officerTerms,
+} from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import { localDate, nextLocalDate } from "#/lib/club-local-date";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
+import { MAX_GUEST_BOOK_ENTRIES } from "#/lib/mcp-limits";
 import { planHash as computePlanHash } from "#/lib/mcp-plan";
 import {
 	ATTENDANCE_BEFORE_MEETING_MESSAGE,
@@ -55,6 +65,7 @@ import {
 import { deriveMeetingNumber } from "#/lib/meeting-number";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "#/server/activity";
+import { resolveActiveApiToken } from "#/server/api-tokens-logic";
 import { loadClubDefaultCountryCode } from "#/server/clubs-logic";
 import {
 	type GuestMatchCandidate,
@@ -62,15 +73,15 @@ import {
 	matchGuest,
 	normalizePhone,
 } from "#/server/guest-pipeline-logic";
-import { authorizeToken, type TokenClub } from "../authz-logic";
+import {
+	authorizeToken,
+	McpUnauthorizedError,
+	type TokenClub,
+} from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
 import { lockClub } from "../lock";
 import { maskEmail, maskPhone } from "../serialize";
 import type { McpToolDefinition } from "../tool";
-import { localDate } from "./list-meetings";
-
-/** The paper book is one page at a time; 100 lines is far more than one page. */
-export const MAX_GUEST_BOOK_ENTRIES = 100;
 
 const entrySchema = z.object({
 	name: z.string().trim().min(1).max(200),
@@ -117,7 +128,27 @@ interface PlannedEntry {
 	via: "email" | "phone" | "resolved" | null;
 	/** The existing guest's name, when it differs from what is written down. */
 	matchedName: string | null;
-	/** This line will be a default recipient of the minutes email. */
+	/**
+	 * This line ADDS someone to the minutes email's default recipients — it is a
+	 * delta, not a membership test (#776 item 2, decided on #787).
+	 *
+	 * False for an `already_present` guest who has an email: they will receive
+	 * the minutes, and this call is not what put them on the list. The docstring
+	 * used to read "this line will be a default recipient of the minutes email",
+	 * which is the OTHER reading and is false for exactly that guest.
+	 *
+	 * The delta is the right reading and stays, for two reasons. The question a
+	 * transcriber is asking before approving is "how many people does this page
+	 * ADD", and every other counter in the same summary is a delta count
+	 * (`matched`, `new`, `ambiguous`, `already_present` are all outcomes of THIS
+	 * call). A total would be a property of the meeting's guest list, which is
+	 * not what a preview of one page is reporting on.
+	 *
+	 * The failure mode of the delta reading is an officer re-previewing a page
+	 * that was already transcribed, seeing 0, and concluding the minutes will
+	 * reach nobody. `probablyAlreadyTranscribed` in the same summary is what
+	 * answers that, and it is true in exactly that case.
+	 */
 	minutesRecipient: boolean;
 	/** Exactly what an apply would insert for a `new` line. */
 	write: {
@@ -156,16 +187,100 @@ interface GuestBookPlan {
 	entries: PlannedEntry[];
 }
 
-/** `YYYY-MM-DD` + 1 day, as a calendar date. */
-function nextLocalDate(date: string): string {
-	const d = new Date(`${date}T00:00:00Z`);
-	d.setUTCDate(d.getUTCDate() + 1);
-	return d.toISOString().slice(0, 10);
-}
-
 type Conn =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * The message `authorizeToken` gives a caller with no admin or officer standing.
+ *
+ * Restated here rather than imported because `authz-logic.ts` does not export
+ * it. The two must not drift — a caller whose grant is revoked mid-apply should
+ * get the same sentence as one who never had it — so
+ * `record-guest-book-revocation.integration.test.ts` asserts the up-front
+ * refusal and the after-the-lock refusal are byte-identical.
+ */
+const NOT_AN_ADMIN_MESSAGE = "You are not an admin or officer of that club.";
+
+/**
+ * Re-prove the caller's grant AFTER the club lock is held (#776 item 8).
+ *
+ * `authorizeToken` runs before the transaction opens, and the transaction then
+ * WAITS on `pg_advisory_xact_lock`. Everything the re-plan re-reads inside that
+ * transaction — the meetings, the guests, who is already present — is re-read
+ * against `tx`, and three things were not: the caller's own membership, the
+ * club's `archived_at`, and the BEARER TOKEN's own `revoked_at`. So a
+ * membership deactivated, an officer term ended, a club taken down, or the
+ * credential itself revoked while this apply queued still committed its writes.
+ * The window is bounded by `lock.ts`'s 5s `lock_timeout`, which is why this was
+ * P3 and not P2 — 5 seconds of a revoked grant is still a revoked grant.
+ *
+ * The token is the one of the three that is checked FIRST, and it is the one
+ * that matters most in practice. Deactivating a membership and ending a term
+ * are slow, HR-shaped events that nobody does to stop something happening in
+ * the next five seconds. Revoking a token is the fast lever — it is what a
+ * person reaches for the moment they believe the credential has leaked — so an
+ * apply that survives its revocation is the one that survives the response to
+ * an incident. Checking it first also matches `authorizeToken`, which resolves
+ * the token before it looks at any membership.
+ *
+ * The credential check reuses `resolveActiveApiToken` with `conn` rather than
+ * re-deriving "hash matches and `revoked_at` is null" here; the membership
+ * check is instead scoped to the ONE row `authorizeToken` already resolved,
+ * NOT a second call to `adminClubsForUser`. Both choices are the same choice:
+ * the shared question ("is this token good") stays in one place, and the
+ * narrower question ("is THIS grant still good", one row) is asked directly
+ * rather than by re-deriving every club the token can act on.
+ *
+ * After the credential, the order matches `authorizeToken`: membership next, so
+ * someone who is no longer a member keeps the "not an admin" answer and never
+ * learns the club was archived; then the archive, so a real admin is told the
+ * club was taken down.
+ */
+async function assertStillAuthorized(
+	conn: Conn,
+	club: TokenClub,
+	rawToken: string | null,
+): Promise<void> {
+	// `McpUnauthorizedError` and not an `McpError`: a revoked credential is the
+	// same fact here as at the front door, and it gets the same sentence.
+	// `handle-request.ts` renders one thrown from inside a tool call as
+	// `FORBIDDEN` with that message, because by then the HTTP 401 has sailed.
+	if (!rawToken || !(await resolveActiveApiToken(rawToken, conn))) {
+		throw new McpUnauthorizedError();
+	}
+
+	const [row] = await conn
+		.select({
+			status: members.status,
+			clubRole: members.clubRole,
+			archivedAt: clubs.archivedAt,
+			officerTermId: officerTerms.id,
+		})
+		.from(members)
+		.innerJoin(clubs, eq(clubs.id, members.clubId))
+		// A LEFT JOIN over open terms yields one null row when there are none and
+		// N rows when there are, so `limit(1)` still answers "does an open term
+		// exist" correctly either way.
+		.leftJoin(
+			officerTerms,
+			and(
+				eq(officerTerms.membershipId, members.id),
+				isNull(officerTerms.termEnd),
+			),
+		)
+		.where(eq(members.id, club.membershipId))
+		.limit(1);
+
+	const stillGranted =
+		row !== undefined &&
+		row.status === "active" &&
+		(row.clubRole === "admin" || row.officerTermId !== null);
+	if (!stillGranted) throw new McpError("FORBIDDEN", NOT_AN_ADMIN_MESSAGE);
+	if (isClubArchived({ archivedAt: row.archivedAt })) {
+		throw new McpError("ARCHIVED", CLUB_ARCHIVED_MESSAGE);
+	}
+}
 
 /**
  * Build the full plan. Shared by the preview and by the re-plan inside the
@@ -499,8 +614,12 @@ function toPublicPlan(p: GuestBookPlan, meetingNumber: number | null) {
 		meeting: { ...p.meeting, meetingNumber },
 		summary: {
 			...counts,
-			// "How many people will this page add to the minutes email" is the
-			// question a transcriber most wants answered before saying yes.
+			// "How many people will this page ADD to the minutes email" is the
+			// question a transcriber most wants answered before saying yes, and
+			// the DELTA is the answer to it (#776 item 2, decided on #787). A
+			// second run of the same page therefore reports 0 here and `true`
+			// below, which together say "this changes nothing" rather than "the
+			// minutes will reach nobody". See `PlannedEntry.minutesRecipient`.
 			minutesRecipients: p.entries.filter((e) => e.minutesRecipient).length,
 			// When EVERY line is already present, the likeliest explanation is that
 			// this page was transcribed before — worth saying, because the apply
@@ -569,6 +688,12 @@ export const recordGuestBookTool: McpToolDefinition = {
 			// Serialise MCP applies on this club before reading anything, so the
 			// re-plan below sees a state no other apply can move underneath it.
 			await lockClub(tx, club.clubId);
+
+			// The grant was proved before this transaction opened, and the lock
+			// above may have made it wait. Re-prove it against `tx` now that the
+			// lock is held, for the same reason the plan is rebuilt here: what was
+			// true when the caller asked is not what this apply writes against.
+			await assertStillAuthorized(tx, club, ctx.rawToken);
 
 			const {
 				plan: fresh,
