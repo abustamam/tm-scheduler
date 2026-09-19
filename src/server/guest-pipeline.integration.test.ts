@@ -81,6 +81,10 @@ const {
 const { applyAssignGuestToSlot, listClubGuests } = await import(
 	"#/server/guests-logic"
 );
+// The roster the season grid and every role picker read (`listMembers` serves
+// it verbatim). Imported here so #501's "the member is invisible" can be stated
+// in the READER's terms rather than as a column value.
+const { loadPublicClubRoster } = await import("#/server/members-logic");
 
 /**
  * A guest signing the book AT a meeting, then that meeting receding into the
@@ -1599,13 +1603,24 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(res.personId).toBe(personId);
 			expect(res.membershipId).toBe(winnerId);
 
+			// It never reactivates, and that is structural rather than an omission
+			// (#501). This branch lives in the `else` of `if (existingMembership)`,
+			// so the only row it can EVER observe is one a concurrent convert just
+			// committed — and that insert hardcodes `status: "active"`. A
+			// pre-existing lapsed membership is found by the first select and takes
+			// the reuse branch instead, so "the raced path behaves like the unraced
+			// one" would be false by construction. Pinned here so a later reader
+			// does not "fix" the recovery branch into the reactivating path.
+			expect(res.reactivated).toBe(false);
+
 			const rows = await testDb
-				.select({ id: members.id })
+				.select({ id: members.id, status: members.status })
 				.from(members)
 				.where(
 					and(eq(members.clubId, seed.clubId), eq(members.personId, personId)),
 				);
 			expect(rows).toHaveLength(1);
+			expect(rows[0]?.status).toBe("active");
 		});
 	});
 
@@ -1896,6 +1911,325 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					actorMemberId: null,
 				}),
 			).rejects.toThrow(/already been converted/i);
+		});
+	});
+
+	/**
+	 * Convert onto a LAPSED membership (#501).
+	 *
+	 * Lapse-then-return is ordinary Toastmasters behaviour, and the reuse branch
+	 * left the membership's status alone — so the convert reported success,
+	 * stamped the guest `joined`, and produced a member who was invisible on the
+	 * roster, the sign-up sheet, the season grid and every picker. `inactive` is
+	 * not a soft label (`schema.ts`): it is what those readers filter on.
+	 *
+	 * The status is asserted on the ROW rather than through the flag, and the
+	 * visibility is asserted through a real reader, because the two are what a
+	 * human would look at. A test that only checked `reactivated` would pass on
+	 * a convert that set the flag and wrote nothing.
+	 */
+	describe("convert onto a LAPSED membership (#501)", () => {
+		/** A person with a lapsed membership in the seeded club. */
+		async function lapsedMember(
+			name: string,
+			contact: { email?: string; phone?: string },
+		) {
+			const personId = await trackedPerson({
+				name,
+				email: contact.email ?? null,
+				phone: contact.phone ? toStoredPhone(contact.phone, "1") : null,
+			});
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name, status: "inactive" })
+				.returning({ id: members.id });
+			if (!m) throw new Error("Failed to seed lapsed membership");
+			return { personId, membershipId: m.id };
+		}
+
+		async function statusOf(membershipId: string) {
+			const [m] = await testDb
+				.select({ status: members.status })
+				.from(members)
+				.where(eq(members.id, membershipId))
+				.limit(1);
+			return m?.status;
+		}
+
+		/** The newest `member_add` detail this guest's conversion wrote. */
+		async function conversionDetail(guestId: string) {
+			const [row] = await testDb
+				.select({ detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "member_add"),
+						sql`${activityLog.detail}->>'fromGuestId' = ${guestId}`,
+					),
+				)
+				.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+				.limit(1);
+			return row?.detail as Record<string, unknown> | undefined;
+		}
+
+		it("reactivates the membership the EMAIL dedup landed on", async () => {
+			const email = `lapsed-${randomUUID()}@example.com`;
+			const { membershipId } = await lapsedMember("Dana Lapsed", { email });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Dana Lapsed",
+				email,
+			});
+
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			// Reuse, not a second roster row — that half already held.
+			expect(res.membershipId).toBe(membershipId);
+			expect(res.reactivated).toBe(true);
+			// …and this is the half that did not: the bug was `{ ok: true }` over
+			// a row still saying `inactive`.
+			expect(await statusOf(membershipId)).toBe("active");
+		});
+
+		it("reactivates a membership matched by PHONE rather than email", async () => {
+			// The other arm of the dedup, and the one the issue's repro names
+			// second. It reaches the same reuse branch, so the fix covers it — but
+			// only a test says so, and "the email case works" is not evidence about
+			// a different query.
+			const phone = uniquePhone();
+			const { membershipId } = await lapsedMember("Kai Lapsed", { phone });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Kai Lapsed",
+				phone,
+			});
+
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(res.membershipId).toBe(membershipId);
+			expect(res.reactivated).toBe(true);
+			expect(await statusOf(membershipId)).toBe("active");
+		});
+
+		it("puts the returning guest back in the roster the pickers read", async () => {
+			// The actual complaint, stated in the reader's own terms rather than in
+			// the column's. `loadPublicClubRoster` is what `listMembers` serves to
+			// the season grid and the role pickers, and it filters
+			// `status <> 'inactive'` — so this is the assertion that would have
+			// caught the bug with no knowledge of which column caused it.
+			//
+			// The slot is the aggravating case from the issue: step 3 re-points a
+			// guest-held slot onto this membership, so before the fix a claimed
+			// slot ended up owned by someone the picker could not display.
+			const email = `roster-${randomUUID()}@example.com`;
+			const { membershipId } = await lapsedMember("Robin Roster", { email });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Robin Roster",
+				email,
+			});
+			const slotId = await seedGuestRoleSlot(
+				seed.meetingId,
+				seed.roleDefinitionId,
+				guestId,
+			);
+
+			// Invisible BEFORE the convert — the control. Without it this test
+			// passes on a roster reader that never filtered at all.
+			const before = await loadPublicClubRoster(seed.clubId);
+			expect(before.map((m) => m.id)).not.toContain(membershipId);
+
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const after = await loadPublicClubRoster(seed.clubId);
+			expect(after.map((m) => m.id)).toContain(membershipId);
+
+			const [slot] = await testDb
+				.select({ memberId: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId))
+				.limit(1);
+			expect(slot?.memberId).toBe(membershipId);
+		});
+
+		it("records the prior status in the activity log", async () => {
+			// Without it the `member_add` row is indistinguishable from a fresh
+			// join, and undo has nothing to restore from.
+			const email = `logged-${randomUUID()}@example.com`;
+			await lapsedMember("Logged Lapsed", { email });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Logged Lapsed",
+				email,
+			});
+
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const detail = await conversionDetail(guestId);
+			expect(detail?.reactivatedFrom).toBe("inactive");
+			expect(detail?.createdMembership).toBe(false);
+			expect(detail?.name).toBe("Logged Lapsed");
+		});
+
+		it("does NOT claim a reactivation when the membership was already active", async () => {
+			// Ordinary dedup. The notice exists so an admin notices a rejoin — and
+			// one that fires on the common path is one they learn to ignore, which
+			// is the failure mode this asserts against. The key must be ABSENT, not
+			// merely falsy: `readConversionRecord` reads its presence.
+			const email = `active-${randomUUID()}@example.com`;
+			const personId = await trackedPerson({ name: "Ever Active", email });
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name: "Ever Active" })
+				.returning({ id: members.id });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Ever Active",
+				email,
+			});
+
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(res.membershipId).toBe(m?.id);
+			expect(res.reactivated).toBe(false);
+			expect(await statusOf(m?.id ?? "")).toBe("active");
+			expect(await conversionDetail(guestId)).not.toHaveProperty(
+				"reactivatedFrom",
+			);
+		});
+
+		it("does NOT claim a reactivation when it created the membership", async () => {
+			// The flag means REUSE-OF-A-LAPSED-ROW, not success. A flag that were
+			// simply true on every convert would satisfy the two tests above's
+			// happy halves and mislead on the commonest path of all.
+			const guestId = await seedGuest(seed.clubId, "Brand New");
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			strayPeople.push(res.personId);
+
+			expect(res.reactivated).toBe(false);
+			expect(await statusOf(res.membershipId)).toBe("active");
+			expect(await conversionDetail(guestId)).not.toHaveProperty(
+				"reactivatedFrom",
+			);
+		});
+
+		it("undo puts the lapse back", async () => {
+			// Undo leaves a REUSED membership standing (#618), so without the
+			// restore a convert-then-undo would leave a lapsed member permanently
+			// `active` and undo would stop being convert's reverse.
+			const email = `undo-${randomUUID()}@example.com`;
+			const { membershipId } = await lapsedMember("Undo Lapsed", { email });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Undo Lapsed",
+				email,
+			});
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(await statusOf(membershipId)).toBe("active");
+
+			const res = await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			// Still standing — it was never this conversion's to delete…
+			expect(res.membershipDeleted).toBe(false);
+			expect(await statusOf(membershipId)).toBe("inactive");
+			// …and hidden again from the readers that made this bug visible.
+			const roster = await loadPublicClubRoster(seed.clubId);
+			expect(roster.map((m) => m.id)).not.toContain(membershipId);
+		});
+
+		it("undo of a record with no reactivatedFrom still runs and touches no status", async () => {
+			// Every conversion recorded before #501 is this shape, which is why the
+			// key is OPTIONAL in `readConversionRecord`. Requiring it would have
+			// made those records unreplayable — and, because the board decides
+			// whether to OFFER Undo from the same validator, would have taken the
+			// button off them with no error anywhere.
+			const email = `legacy-${randomUUID()}@example.com`;
+			const { membershipId } = await lapsedMember("Legacy Record", { email });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Legacy Record",
+				email,
+			});
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			// Rewrite the record into the pre-#501 shape, keeping every key #618
+			// needs. Deliberately NOT `stripRecord`, which removes those too and so
+			// would refuse for an unrelated reason.
+			const [row] = await testDb
+				.select({ id: activityLog.id, detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "member_add"),
+						sql`${activityLog.detail}->>'fromGuestId' = ${guestId}`,
+					),
+				)
+				.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+				.limit(1);
+			if (!row) throw new Error("No conversion record");
+			const { reactivatedFrom: _dropped, ...legacy } = row.detail as Record<
+				string,
+				unknown
+			>;
+			expect(_dropped).toBe("inactive");
+			await testDb
+				.update(activityLog)
+				.set({ detail: legacy })
+				.where(eq(activityLog.id, row.id));
+
+			// Still OFFERED on the board — the half a server-only assertion misses.
+			expect((await pipelineRow(seed.clubId, guestId)).conversionUndoable).toBe(
+				true,
+			);
+
+			const res = await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(res.membershipDeleted).toBe(false);
+			// Left exactly as the convert left it: the record says nothing about a
+			// lapse, so undo must not invent one. `active` here is the CONVERT's
+			// write surviving, which is the correct residue.
+			expect(await statusOf(membershipId)).toBe("active");
 		});
 	});
 

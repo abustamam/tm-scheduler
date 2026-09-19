@@ -133,6 +133,12 @@ const convertSchema = z.object({
  * Convert a guest to a club member: dedup/link the Person, create the
  * Membership, re-point the guest's role slots, freeze the guest at stage=joined
  * with its membership pointer, and log the change. AUTHED — admin-only.
+ *
+ * Returns `applyConvertGuestToMember`'s result whole, `reactivated` included
+ * (#501) — the flag saying convert reused a LAPSED membership and woke it. The
+ * VP-Membership board is the only call site and turns it into a one-line notice
+ * on the existing success toast; a handler that picked fields off the result
+ * would be where that flag silently stopped reaching the admin.
  */
 export const convertGuestToMember = createServerFn({ method: "POST" })
 	.validator((input: unknown) => convertSchema.parse(input))

@@ -119,6 +119,18 @@ the nouns in `src/db/schema.ts`.
   `joinedAt` today) or reuse the person's existing one, re-point the guest's role-slot
   assignments to the new member, stamp the guest `stage: joined` + `converted_membership_id`
   (the guest row persists as history — its past attendance stays), and log `member_add`.
+  **Reusing a LAPSED membership REACTIVATES it** (#501) — it does not refuse and route the
+  admin to the roster. `inactive` hides a membership from the roster, the sign-up sheet, the
+  season grid and every picker, so reusing one untouched produced a "member" nobody could see,
+  holding re-pointed role slots the picker could not display. Converting asserts they are a
+  member now, so the wake-up is the admin's intent; it is never SILENT, because Person dedup
+  can match the wrong human (#561) and the notice is the moment that becomes visible. The
+  result carries `reactivated` (true only for reuse of a row that was not already active — reuse
+  of a live one is ordinary dedup), the board shows one line on the existing success toast
+  (`CONVERT_REACTIVATED_MESSAGE`), and the `member_add` detail records `reactivatedFrom` so the
+  log is distinguishable from a fresh join. **Undo reverses it**: `reactivatedFrom` is what
+  `applyUndoGuestConversion` restores, since a reused row is deliberately never deleted — the
+  key is OPTIONAL, so conversions recorded before #501 still parse and stay undoable.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

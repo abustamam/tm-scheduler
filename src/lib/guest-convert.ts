@@ -28,6 +28,29 @@
 export const CONVERT_NAME_CLASH_MESSAGE =
 	"Someone with this name is already on the roster. If it's the same person, use “Already a member?” on this card to link them — their guest history carries across. If it's a different person who happens to share the name, add them from the Roster page instead.";
 
+/**
+ * Told to the admin when convert REUSED a membership that had lapsed, and woke
+ * it back up (#501).
+ *
+ * `inactive` is not a soft label — a lapsed membership is hidden from the
+ * roster, the sign-up sheet, the season grid and every role picker — so a
+ * convert that reused one silently left the new member invisible everywhere a
+ * human would look, with a success toast and a `joined` guest card saying
+ * otherwise. Convert now reactivates, which is what the admin meant; this
+ * sentence is the half that stops the reactivation from being silent.
+ *
+ * It names the PRIOR status rather than only the outcome, because the thing the
+ * admin needs the chance to notice is that this human was already on the roster
+ * once. Person dedup can match the wrong human (#561), held back only by
+ * `namesAgree` — an explicit notice is the moment that becomes visible.
+ *
+ * Shown ONLY when the reuse branch fired on a membership that was not already
+ * `active`. Reuse of a live membership is ordinary dedup; a notice there would
+ * fire on the common path and teach admins to ignore it.
+ */
+export const CONVERT_REACTIVATED_MESSAGE =
+	"Reactivated an existing lapsed membership (was inactive).";
+
 /** Refusal when the target of a link is not a member of this club. */
 export const LINK_MEMBER_NOT_IN_CLUB_MESSAGE =
 	"That member isn't on this club's roster.";
