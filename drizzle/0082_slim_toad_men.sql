@@ -1,0 +1,1 @@
+CREATE INDEX "guest_book_pending_plans_club_idx" ON "guest_book_pending_plans" USING btree ("club_id");

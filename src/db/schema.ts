@@ -31,6 +31,10 @@ export {
 	verification,
 } from "./auth-schema";
 
+// The stored shape of `guest_book_pending_plans.entries` (#806). Type-only, so
+// it contributes nothing at runtime and drizzle-kit's schema read is unaffected
+// — same standing as the import above, and relative for the same reason.
+import type { PendingEntry } from "../lib/guest-book-pending";
 // One number, one declaration. `clubs`'s Table Topics CHECK interpolates the
 // ceiling rather than writing 600 into the SQL, so the constraint and every
 // application layer cannot state different limits. `table-topics-limits.ts`
@@ -2658,6 +2662,75 @@ export const clubActionItems = pgTable(
 			"club_action_items_resolution_paired",
 			sql`(${t.resolvedAt} is null) = (${t.resolution} is null)`,
 		),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Guest-book pending plans (#806) — a page of the paper guest book that an LLM
+// has transcribed and a human has not yet confirmed.
+//
+// `record_guest_book` is preview-only: it writes ONE row here and hands back a
+// link. Nothing reaches `guests` or `meeting_attendance` until someone opens
+// that link signed in, checks the values against the page in front of them, and
+// applies.
+//
+// `meeting_date`, NOT `meeting_id`. The planner keys on the club-local DATE and
+// returns no plan at all when that date names zero meetings or two, so there is
+// not always an id to write down. Storing what was ASKED and re-resolving it on
+// every render keeps the rule the whole preview→apply mechanism rests on: the
+// plan is re-derived from live data each time, and nothing is trusted across
+// the gap.
+//
+// `entries` is NULLABLE and is nulled on apply, in the same statement that sets
+// `applied_at`. That leaves a tombstone: "already applied" stays distinguishable
+// from "never existed" — which a re-opened link needs — while no visitor's name,
+// email or phone sits here at rest after the write has landed.
+// ---------------------------------------------------------------------------
+
+export const guestBookPendingPlans = pgTable(
+	"guest_book_pending_plans",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// Club-local, as the caller named it. `mode: "string"` so it round-trips
+		// as the `YYYY-MM-DD` the planner takes, with no timezone in the middle.
+		meetingDate: date("meeting_date", { mode: "string" }).notNull(),
+		// The only user who may open the link. Not a membership: the row must not
+		// outlive the standing that made it, so admin is re-proved on every read
+		// rather than frozen here.
+		createdByUserId: text("created_by_user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		entries: jsonb("entries").$type<PendingEntry[]>(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		// created_at + 24h. Past this the link renders "expired" rather than
+		// applying; the sweep removes the row a further 24h later.
+		expiresAt: timestamp("expires_at").notNull(),
+		appliedAt: timestamp("applied_at"),
+	},
+	(t) => [
+		// The sweep's only predicate. Plain CREATE INDEX, and what makes that
+		// acceptable is the table SIZE, so state it: the index is built in the
+		// same transaction as the CREATE TABLE, over a relation with zero rows,
+		// so the SHARE lock is held for no measurable time. `CONCURRENTLY` is
+		// not an option regardless — it cannot run inside the single transaction
+		// the startup migrator uses, and `scripts/migrate.ts` exits non-zero from
+		// the Dockerfile CMD, so attempting it fails the Railway deploy closed.
+		index("guest_book_pending_plans_sweep_idx").on(t.expiresAt),
+		// The cascade side. Deleting a club fires a cascade through this table,
+		// and an unindexed FK column costs one sequential scan per delete — the
+		// same reasoning `club_action_items_owner_idx` records a few hundred
+		// lines up. Retention normally bounds this table to ~48h of rows, which
+		// is what makes it cheap today; it stops bounding anything the moment a
+		// deployment sets `DISABLE_GUEST_BOOK_SWEEP`.
+		//
+		// `created_by_user_id` is deliberately NOT indexed to match: nothing in
+		// this application deletes a `user` row (schema.ts records that
+		// `db.delete(user)` appears nowhere), so that cascade never fires, and an
+		// index nothing uses is a write cost on every insert.
+		index("guest_book_pending_plans_club_idx").on(t.clubId),
 	],
 );
 

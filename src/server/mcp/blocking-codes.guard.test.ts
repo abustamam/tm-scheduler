@@ -27,6 +27,26 @@ import { readSource, stripComments } from "#/test/guard-source";
 const SELF = fileURLToPath(import.meta.url);
 const MCP_DIR = resolve(SELF, "..");
 const ERRORS = resolve(MCP_DIR, "errors.ts");
+const SERVER_DIR = resolve(MCP_DIR, "..");
+
+/**
+ * Files OUTSIDE `src/server/mcp/` that raise blocking codes, enrolled by hand.
+ *
+ * #806 moved `plan()` to `src/server/guest-book-plan.ts` so the session-authorized
+ * confirm page could share it — `mcp-authz.guard.test.ts` fails any file under
+ * `src/server/mcp/` that imports a session guard, so the apply could not stay in
+ * that tree and the planner moved with it. All five codes are raised inside
+ * `plan()`, so without this the sweep below would report every one of them as
+ * declared-but-never-emitted and five cases would turn red on a move that
+ * changed no behaviour.
+ *
+ * The right fix was to re-point the sweep, not to relax it: a declared code
+ * nothing emits is exactly the drift #776 item 6 removed. Add a path here when a
+ * blocking code is genuinely raised outside the MCP tree, and nowhere else — the
+ * existence assertion below fails if a path in this list stops existing, so a
+ * later rename cannot leave a silently-empty enrolment behind.
+ */
+const ENROLLED_OUTSIDE_MCP = ["../guest-book-plan.ts"] as const;
 
 /**
  * The string members of `export type McpBlockingCode = …`, read out of source.
@@ -68,7 +88,7 @@ function mcpSources(dir = MCP_DIR, prefix = ""): string[] {
 
 describe("the blocking-code vocabulary (#776 item 6)", () => {
 	const codes = declaredBlockingCodes();
-	const files = mcpSources();
+	const files = [...mcpSources(), ...ENROLLED_OUTSIDE_MCP];
 
 	// Vacuity floor. A parse that returned [] would make every case below pass
 	// by having nothing to check, which is the failure shape this guard exists
@@ -88,6 +108,28 @@ describe("the blocking-code vocabulary (#776 item 6)", () => {
 	it("finds the tool modules to search", () => {
 		expect(files).toContain("tools/record-guest-book.ts");
 		expect(files.length).toBeGreaterThanOrEqual(5);
+	});
+
+	// The enrolment above is the only hand-written part of the sweep, and a path
+	// in it that no longer exists would silently contribute nothing — which is
+	// the failure shape the whole guard exists to prevent, one level up. Assert
+	// the files are real, and that the one enrolled for #806 is really where the
+	// codes are raised.
+	it("the files enrolled from outside src/server/mcp/ exist and raise codes", () => {
+		for (const rel of ENROLLED_OUTSIDE_MCP) {
+			const src = readSource(resolve(MCP_DIR, rel));
+			expect(
+				src.length,
+				`${rel} is enrolled but empty or missing`,
+			).toBeGreaterThan(0);
+			expect(
+				/blocking\.push\(/.test(src),
+				`${rel} is enrolled in this sweep but pushes no blocking item. Either it moved again — re-point the enrolment — or it should not be listed.`,
+			).toBe(true);
+		}
+		expect(resolve(MCP_DIR, ENROLLED_OUTSIDE_MCP[0])).toBe(
+			resolve(SERVER_DIR, "guest-book-plan.ts"),
+		);
 	});
 
 	for (const code of codes) {
