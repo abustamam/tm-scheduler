@@ -85,7 +85,9 @@ const keys = [...schemaBody.matchAll(/^\t(\w+):/gm)].map((m) => m[1]);
  *                  and there is no "clear the date".
  *   lengthMinutes  `if (input.lengthMinutes != null)` — a positive integer with
  *                  no clear state either; the club default is the fallback.
- *   meetingNumber  a number, already tri-state via `=== undefined` (#358).
+ *   meetingNumber  a number, already tri-state via `=== undefined` (#358), and
+ *                  ADMIN-ONLY since #792 — `applyMeetingMetaPatch` refuses it on
+ *                  PRESENCE when the caller is not an admin.
  *
  * A new FREE-TEXT field does not belong here. It belongs in `META_TEXT_FIELDS`.
  */
