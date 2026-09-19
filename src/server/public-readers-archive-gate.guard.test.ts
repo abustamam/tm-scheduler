@@ -892,11 +892,39 @@ describe("API routes are enrolled in the archive gate (#555)", () => {
 	};
 
 	/**
-	 * The four gates whose NAME is enough, because calling one is already acting.
+	 * The four gates this sweep accepts on their NAME alone.
 	 *
-	 * `isReadableClub` and its two siblings return a value the call site cannot
-	 * usefully ignore, and `assertClubNotArchived` throws by itself. Naming one
-	 * and discarding what it gives you is not a shape that compiles into anything.
+	 * What that buys is exactly one thing: one of these identifiers appears in
+	 * the comment-stripped source. It is NOT a check that the gate is called, and
+	 * NOT a check that an answer is looked at.
+	 *
+	 * This comment used to claim otherwise — that naming one and discarding what
+	 * it gives you "is not a shape that compiles into anything" — and that is
+	 * false. MEASURED (#776): each shape below was written as a real file under
+	 * `src/routes/api/` and run through this sweep, `bun run typecheck` and
+	 * `biome check`. All three clear all three gates:
+	 *
+	 *   - `import type { assertClubNotArchived } …` used only as
+	 *     `type Gate = typeof assertClubNotArchived`;
+	 *   - a value import of `isReadableClub` read only from a type position;
+	 *   - `await isReadableClub(clubId);` as a bare statement, answer thrown
+	 *     away, club content served underneath it. `biome.json` turns on
+	 *     `recommended` and nothing else, and `noFloatingPromises` is not in
+	 *     that set, so no other gate here sees this one.
+	 *
+	 * Only a fourth shape — a bare unused import — is stopped anywhere, and not
+	 * by this sweep: `noUnusedLocals` gives it TS6133.
+	 *
+	 * The incompleteness is pre-existing and is deliberately LEFT. Narrowing
+	 * these four is its own change with its own blast radius: every call site of
+	 * all four across the repo, not only the routes walked here. `isClubArchived`
+	 * next door got a result-check for a different reason — it was WIDENED INTO
+	 * this alternation for the MCP delegate, and a pure boolean's natural call
+	 * shape IS the bare statement, so for that one the discrimination loss was
+	 * new and repo-wide. Here it is the status quo, and the honest thing is to
+	 * say what the regex gives rather than to claim a guarantee it does not.
+	 * `describe("the name-only arm checks the NAME, not the call")` below pins
+	 * these three so the claim stays measured.
 	 */
 	const ACTING_GATES =
 		/isReadableClub|isReadableClubForMeeting|isReadableClubForMember|assertClubNotArchived/;
@@ -1173,6 +1201,50 @@ describe("API routes are enrolled in the archive gate (#555)", () => {
 			expect(
 				gatesOnArchive(
 					`const all = rows.map((r) => ({ ...r, archived: isClubArchived(r) }));\n\treturn all.filter((c) => !c.archived);\n`,
+				),
+			).toBe(true);
+		});
+	});
+
+	/**
+	 * What the four-name alternation actually accepts (#776).
+	 *
+	 * The sibling above exists because a claim about `isClubArchived` went
+	 * untested and was wrong. The `ACTING_GATES` docstring carried the same kind
+	 * of untested claim about the other four, and it was wrong the same way.
+	 * These are that claim, measured.
+	 *
+	 * They assert the CURRENT behaviour deliberately — each fixture gates nothing
+	 * and clears this sweep anyway, and each was also run as a real file under
+	 * `src/routes/api/` through `bun run typecheck` and `biome check` before
+	 * being written down. Narrowing `ACTING_GATES` to demand a call, or a used
+	 * result, is a good change and out of #776's scope; when someone makes it,
+	 * these fail and point at the docstring that has to move with it.
+	 */
+	describe("the name-only arm checks the NAME, not the call (#776)", () => {
+		it("accepts an import that is never called", () => {
+			expect(
+				gatesOnArchive(
+					`import { isReadableClub } from "#/server/club-readable-logic";\n\nexport type Unused = typeof isReadableClub;\n`,
+				),
+			).toBe(true);
+		});
+
+		it("accepts a type-only import of the gate that throws by itself", () => {
+			expect(
+				gatesOnArchive(
+					`import type { assertClubNotArchived } from "#/server/guards";\n\nexport type Gate = typeof assertClubNotArchived;\n`,
+				),
+			).toBe(true);
+		});
+
+		it("accepts a call whose answer is thrown away", () => {
+			// The shape with teeth: it reads as a gate, runs as a no-op, and the
+			// lint gate cannot see it — `noFloatingPromises` is not in biome's
+			// `recommended` set, which is all `biome.json` enables.
+			expect(
+				gatesOnArchive(
+					`await isReadableClub(clubId);\n\treturn serveClubContent(clubId);\n`,
 				),
 			).toBe(true);
 		});

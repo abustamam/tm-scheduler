@@ -65,6 +65,7 @@ import {
 import { deriveMeetingNumber } from "#/lib/meeting-number";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "#/server/activity";
+import { resolveActiveApiToken } from "#/server/api-tokens-logic";
 import { loadClubDefaultCountryCode } from "#/server/clubs-logic";
 import {
 	type GuestMatchCandidate,
@@ -72,7 +73,11 @@ import {
 	matchGuest,
 	normalizePhone,
 } from "#/server/guest-pipeline-logic";
-import { authorizeToken, type TokenClub } from "../authz-logic";
+import {
+	authorizeToken,
+	McpUnauthorizedError,
+	type TokenClub,
+} from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
 import { lockClub } from "../lock";
 import { maskEmail, maskPhone } from "../serialize";
@@ -203,26 +208,48 @@ const NOT_AN_ADMIN_MESSAGE = "You are not an admin or officer of that club.";
  * `authorizeToken` runs before the transaction opens, and the transaction then
  * WAITS on `pg_advisory_xact_lock`. Everything the re-plan re-reads inside that
  * transaction — the meetings, the guests, who is already present — is re-read
- * against `tx`, and two things were not: the caller's own membership and the
- * club's `archived_at`. So a membership deactivated, an officer term ended, or
- * a club taken down while this apply queued still committed its writes. The
- * window is bounded by `lock.ts`'s 5s `lock_timeout`, which is why this was P3
- * and not P2 — 5 seconds of a revoked grant is still a revoked grant.
+ * against `tx`, and three things were not: the caller's own membership, the
+ * club's `archived_at`, and the BEARER TOKEN's own `revoked_at`. So a
+ * membership deactivated, an officer term ended, a club taken down, or the
+ * credential itself revoked while this apply queued still committed its writes.
+ * The window is bounded by `lock.ts`'s 5s `lock_timeout`, which is why this was
+ * P3 and not P2 — 5 seconds of a revoked grant is still a revoked grant.
  *
- * Scoped to the ONE membership row `authorizeToken` already resolved, not a
- * re-derivation of every club the token can act on. `adminClubsForUser` is the
- * shared answer to "which clubs", and a second copy of that query is how the
- * two would drift; this asks the narrower question "is THIS grant still good",
- * which has one row in it.
+ * The token is the one of the three that is checked FIRST, and it is the one
+ * that matters most in practice. Deactivating a membership and ending a term
+ * are slow, HR-shaped events that nobody does to stop something happening in
+ * the next five seconds. Revoking a token is the fast lever — it is what a
+ * person reaches for the moment they believe the credential has leaked — so an
+ * apply that survives its revocation is the one that survives the response to
+ * an incident. Checking it first also matches `authorizeToken`, which resolves
+ * the token before it looks at any membership.
  *
- * The order matches `authorizeToken`: membership first, so someone who is no
- * longer a member keeps the "not an admin" answer and never learns the club was
- * archived; then the archive, so a real admin is told the club was taken down.
+ * The credential check reuses `resolveActiveApiToken` with `conn` rather than
+ * re-deriving "hash matches and `revoked_at` is null" here; the membership
+ * check is instead scoped to the ONE row `authorizeToken` already resolved,
+ * NOT a second call to `adminClubsForUser`. Both choices are the same choice:
+ * the shared question ("is this token good") stays in one place, and the
+ * narrower question ("is THIS grant still good", one row) is asked directly
+ * rather than by re-deriving every club the token can act on.
+ *
+ * After the credential, the order matches `authorizeToken`: membership next, so
+ * someone who is no longer a member keeps the "not an admin" answer and never
+ * learns the club was archived; then the archive, so a real admin is told the
+ * club was taken down.
  */
 async function assertStillAuthorized(
 	conn: Conn,
 	club: TokenClub,
+	rawToken: string | null,
 ): Promise<void> {
+	// `McpUnauthorizedError` and not an `McpError`: a revoked credential is the
+	// same fact here as at the front door, and it gets the same sentence.
+	// `handle-request.ts` renders one thrown from inside a tool call as
+	// `FORBIDDEN` with that message, because by then the HTTP 401 has sailed.
+	if (!rawToken || !(await resolveActiveApiToken(rawToken, conn))) {
+		throw new McpUnauthorizedError();
+	}
+
 	const [row] = await conn
 		.select({
 			status: members.status,
@@ -666,7 +693,7 @@ export const recordGuestBookTool: McpToolDefinition = {
 			// above may have made it wait. Re-prove it against `tx` now that the
 			// lock is held, for the same reason the plan is rebuilt here: what was
 			// true when the caller asked is not what this apply writes against.
-			await assertStillAuthorized(tx, club);
+			await assertStillAuthorized(tx, club, ctx.rawToken);
 
 			const {
 				plan: fresh,

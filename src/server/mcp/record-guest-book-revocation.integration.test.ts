@@ -4,11 +4,27 @@
  * `record_guest_book` authorizes, THEN opens a transaction, and that
  * transaction waits on `pg_advisory_xact_lock`. Everything the re-plan re-reads
  * inside it is read against `tx` — the meetings, the guests, who is already
- * present — and two things were not: the caller's own membership and the club's
- * `archived_at`. A revocation landing during the wait still committed.
+ * present — and three things were not: the caller's own membership, the club's
+ * `archived_at`, and the bearer token's own `revoked_at`. A revocation landing
+ * during the wait still committed.
  *
  * The window is bounded to 5 seconds by `lock.ts`'s `lock_timeout`, which is
  * why this was low priority and not urgent. It is still a window.
+ *
+ * ## Three grants, and the third is the one people actually pull
+ *
+ * Deactivating a membership and ending an officer term are slow, HR-shaped
+ * events. Revoking a TOKEN is the fast lever — the leaked-credential response —
+ * so it gets its own case here, and the re-check asks about it first.
+ *
+ * ## Both arms of the membership disjunction
+ *
+ * `assertStillAuthorized` grants on `clubRole === "admin" || officerTermId !==
+ * null`, and `seedClub` creates no officer terms at all, so every case built on
+ * the seeded admin exercises only the `clubRole` half. If the officer half
+ * broke, every officer-only caller in the product would be refused and a suite
+ * of admin cases would stay green. The officer cases below open a real term on
+ * the seeded `club_role: "member"` and drive the same race through it.
  *
  * ## How the race is made deterministic
  *
@@ -37,6 +53,7 @@ import {
 	meetingAttendance,
 	meetings,
 	members,
+	officerTerms,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { utcToZonedWallTime } from "#/lib/datetime";
@@ -114,8 +131,39 @@ describe.skipIf(!hasTestDb)("record_guest_book across the lock wait", () => {
 	let token: string;
 	let meetingDate: string;
 
-	function call(args: Record<string, unknown>) {
-		return recordGuestBookTool.handler(args, { rawToken: token });
+	/** Call the tool as the seeded admin, or as whoever holds `as`. */
+	function call(args: Record<string, unknown>, as: string = token) {
+		return recordGuestBookTool.handler(args, { rawToken: as });
+	}
+
+	/** A fresh personal access token for `userId`; returns the raw value. */
+	async function mintToken(userId: string): Promise<string> {
+		const raw = `tmk_${randomUUID().replaceAll("-", "")}`;
+		await testDb
+			.insert(apiTokens)
+			.values({ userId, tokenHash: hashApiToken(raw) });
+		return raw;
+	}
+
+	/**
+	 * Make the seeded `club_role: "member"` an effective admin the only OTHER way
+	 * there is — an open officer term — and hand back a token of their own.
+	 *
+	 * This is what reaches the `officerTermId !== null` arm of the re-check.
+	 * Nothing in `seedClub` creates an officer term, so without this the arm is
+	 * unexercised by the whole suite. Cascades away with the club.
+	 */
+	async function seedOfficer(): Promise<{ token: string; termId: string }> {
+		const [term] = await testDb
+			.insert(officerTerms)
+			.values({
+				membershipId: seed.memberId,
+				position: "secretary",
+				termStart: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+			})
+			.returning({ id: officerTerms.id });
+		if (!term) throw new Error("failed to open an officer term");
+		return { token: await mintToken(seed.memberUserId), termId: term.id };
 	}
 
 	async function rows() {
@@ -134,11 +182,7 @@ describe.skipIf(!hasTestDb)("record_guest_book across the lock wait", () => {
 
 	beforeEach(async () => {
 		seed = await seedClub();
-		const raw = `tmk_${randomUUID().replaceAll("-", "")}`;
-		await testDb
-			.insert(apiTokens)
-			.values({ userId: seed.adminUserId, tokenHash: hashApiToken(raw) });
-		token = raw;
+		token = await mintToken(seed.adminUserId);
 
 		const past = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 		const [row] = await testDb
@@ -154,13 +198,23 @@ describe.skipIf(!hasTestDb)("record_guest_book across the lock wait", () => {
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 	});
 
-	/** A fresh preview, so the apply below carries a hash that matches. */
-	async function previewHash() {
-		const p = (await call({
-			clubId: seed.clubId,
-			meetingDate,
-			entries: [{ name: "Wanda Visitor", email: "wanda@example.com" }],
-		})) as Preview;
+	/**
+	 * A fresh preview, so the apply below carries a hash that matches.
+	 *
+	 * Taken as `as`, never as a fixed caller: the plan hash is computed over the
+	 * requesting USER's id as well as the plan, so an officer's apply previewed
+	 * by the admin would fail `PLAN_STALE` and prove nothing about the officer
+	 * arm.
+	 */
+	async function previewHash(as: string = token) {
+		const p = (await call(
+			{
+				clubId: seed.clubId,
+				meetingDate,
+				entries: [{ name: "Wanda Visitor", email: "wanda@example.com" }],
+			},
+			as,
+		)) as Preview;
 		expect(p.blocking).toEqual([]);
 		expect(p.planHash).toBeTruthy();
 		return p.planHash as string;
@@ -270,6 +324,115 @@ describe.skipIf(!hasTestDb)("record_guest_book across the lock wait", () => {
 		expect(afterTheLock?.code).toBe("FORBIDDEN");
 		expect(upFront?.code).toBe("FORBIDDEN");
 		expect(afterTheLock?.message).toBe(upFront?.message);
+	});
+
+	it("refuses an apply whose TOKEN was revoked while it waited", async () => {
+		// The membership and the club are untouched here — only the credential is
+		// pulled, which is the lever a person actually reaches for when they think
+		// a token has leaked.
+		const planHash = await previewHash();
+		const lock = holdClubLock(seed.clubId);
+		await lock.acquired;
+
+		const apply = call({
+			clubId: seed.clubId,
+			meetingDate,
+			entries: [{ name: "Wanda Visitor", email: "wanda@example.com" }],
+			planHash,
+		});
+		await awaitLockWaiter(seed.clubId);
+
+		await testDb
+			.update(apiTokens)
+			.set({ revokedAt: new Date() })
+			.where(eq(apiTokens.tokenHash, hashApiToken(token)));
+		await lock.release();
+
+		// `McpUnauthorizedError`, the same class and the same sentence the front
+		// door gives a revoked token. `handle-request.ts` renders one thrown from
+		// inside a tool call as FORBIDDEN, because the 401 has already sailed.
+		const err = await apply.then(
+			() => null,
+			(e: unknown) => e as Error,
+		);
+		expect(err?.name).toBe("McpUnauthorizedError");
+		expect(err?.message).toBe("Invalid or revoked token.");
+		expect(await rows()).toEqual({ guests: 0, attendance: 0 });
+
+		// The membership is still good — so the refusal above was the credential
+		// check and nothing else.
+		const [still] = await testDb
+			.select({ clubRole: members.clubRole, status: members.status })
+			.from(members)
+			.where(eq(members.id, seed.adminMemberId));
+		expect(still).toMatchObject({ clubRole: "admin", status: "active" });
+	});
+
+	it("refuses an officer whose TERM was closed while it waited", async () => {
+		// The other arm of `clubRole === "admin" || officerTermId !== null`. This
+		// caller is `club_role: "member"` throughout: the term is the whole grant,
+		// so closing it is the only thing that can refuse them.
+		const officer = await seedOfficer();
+		const planHash = await previewHash(officer.token);
+		const lock = holdClubLock(seed.clubId);
+		await lock.acquired;
+
+		const apply = call(
+			{
+				clubId: seed.clubId,
+				meetingDate,
+				entries: [{ name: "Wanda Visitor", email: "wanda@example.com" }],
+				planHash,
+			},
+			officer.token,
+		);
+		await awaitLockWaiter(seed.clubId);
+
+		await testDb
+			.update(officerTerms)
+			.set({ termEnd: new Date() })
+			.where(eq(officerTerms.id, officer.termId));
+		await lock.release();
+
+		await expect(apply).rejects.toMatchObject({
+			code: "FORBIDDEN",
+			message: "You are not an admin or officer of that club.",
+		});
+		expect(await rows()).toEqual({ guests: 0, attendance: 0 });
+	});
+
+	it("still applies for an officer-only caller when nothing changed", async () => {
+		// The control the case above needs. Without it, a re-check that refused
+		// every officer — by reading the disjunction as `clubRole === "admin"`
+		// alone — would pass that test for the wrong reason, and every
+		// officer-only caller in the product would be broken with the suite green.
+		const officer = await seedOfficer();
+		const planHash = await previewHash(officer.token);
+		const lock = holdClubLock(seed.clubId);
+		await lock.acquired;
+
+		const apply = call(
+			{
+				clubId: seed.clubId,
+				meetingDate,
+				entries: [{ name: "Wanda Visitor", email: "wanda@example.com" }],
+				planHash,
+			},
+			officer.token,
+		);
+		await awaitLockWaiter(seed.clubId);
+		await lock.release();
+
+		await expect(apply).resolves.toMatchObject({ applied: true });
+		expect(await rows()).toEqual({ guests: 1, attendance: 1 });
+
+		// And they really were officer-only — not an admin who would have passed
+		// the other arm.
+		const [who] = await testDb
+			.select({ clubRole: members.clubRole })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(who?.clubRole).toBe("member");
 	});
 
 	it("still applies when nothing changed during the wait", async () => {
