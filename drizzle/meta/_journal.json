@@ -568,6 +568,13 @@
       "when": 1789693440683,
       "tag": "0080_magical_baron_strucker",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1789836878311,
+      "tag": "0081_little_major_mapleleaf",
+      "breakpoints": true
     }
   ]
 }

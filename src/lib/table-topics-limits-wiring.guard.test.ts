@@ -485,12 +485,37 @@ describe("table topics limits wiring (#443)", () => {
 		const specifiers = [...schema.matchAll(/\bfrom\s+"([^"]+)"/g)].map(
 			(m) => m[1],
 		);
-		const outsideDb = specifiers.filter((s) => !s.startsWith("./"));
+		// Whole-statement `import type` is ERASED before the bundle exists — that
+		// is the entire meaning of the form — so it can pull in no runtime graph
+		// and is not what this case is about. Separated rather than lumped in
+		// (#806 added `../lib/guest-book-pending` this way, for the stored shape
+		// of `guest_book_pending_plans.entries`): an exact list over BOTH kinds
+		// would fail on an import that cannot possibly break a container start,
+		// and the pressure would then be to loosen the value-import list, which
+		// is the half that matters.
+		//
+		// Deliberately only `import type { … } from`, never an inline
+		// `import { type X }` — the second form keeps its statement whenever any
+		// specifier beside it is a value, so it is not a safe blanket exemption.
+		const typeOnly = new Set(
+			[...schema.matchAll(/^import\s+type\s+[\s\S]*?from\s+"([^"]+)"/gm)].map(
+				(m) => m[1] as string,
+			),
+		);
+		const outsideDb = specifiers.filter(
+			(s) => !s.startsWith("./") && !typeOnly.has(s as string),
+		);
 		expect(outsideDb.sort()).toEqual([
 			"../lib/table-topics-limits",
 			"drizzle-orm",
 			"drizzle-orm/pg-core",
 		]);
+		// Non-vacuity: the split above only holds while the parse can see a
+		// type-only import at all. If the regex stopped matching, every such
+		// import would fall back into `outsideDb` — noisy but safe — and if it
+		// started matching everything, this case would exempt the whole file.
+		expect([...typeOnly].every((s) => specifiers.includes(s))).toBe(true);
+		expect(typeOnly.has("drizzle-orm/pg-core")).toBe(false);
 		expect(schema, "no bare side-effect import").not.toMatch(
 			/^import\s+"[^"]+";/m,
 		);

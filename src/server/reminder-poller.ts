@@ -6,6 +6,7 @@
 // Server-only: imports `#/db` transitively (via notifications-logic). It is
 // referenced solely from the Nitro plugin — never from a client route — so it
 // stays out of the client bundle.
+import { sweepExpiredPendingPlans } from "./guest-book-pending-logic";
 import { processDueNotifications } from "./notifications-logic";
 import { produceRoleReminders } from "./role-reminders-logic";
 
@@ -24,12 +25,18 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let ticking = false;
 
 /**
- * Run one poll tick: ENQUEUE-then-SEND. First the role-reminder producer (#272)
- * tops up the queue with reminders for upcoming slot holders; then the delivery
- * loop (#271) drains everything currently due. The producer is idempotent (a
- * partial unique index makes a re-enqueue a no-op), so running it every tick is
- * safe and needs no separate cadence. A producer failure is logged but never
- * blocks the send pass — delivery of already-queued reminders must still happen.
+ * Run one poll tick: ENQUEUE-then-SEND, then SWEEP. First the role-reminder
+ * producer (#272) tops up the queue with reminders for upcoming slot holders;
+ * then the delivery loop (#271) drains everything currently due; then the
+ * guest-book pending-plan sweep (#806) removes confirm links past their grace
+ * window. The producer is idempotent (a partial unique index makes a re-enqueue
+ * a no-op), so running it every tick is safe and needs no separate cadence. A
+ * producer failure is logged but never blocks the send pass — delivery of
+ * already-queued reminders must still happen, and neither blocks the sweep.
+ *
+ * `DISABLE_REMINDER_POLLER=1` therefore means no sweep either: pending rows
+ * accumulate rather than expiring out. That is the same trade the reminder rows
+ * already make, and the rows are small and cascade with their club.
  *
  * Overlap guard: if the previous tick is still in flight when the interval fires
  * (a slow send batch), skip this one so ticks never stack up in the single
@@ -57,6 +64,19 @@ async function tick(): Promise<void> {
 			console.log(
 				`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed} stale=${result.stale}`,
 			);
+		}
+
+		try {
+			const swept = await sweepExpiredPendingPlans();
+			if (swept.deleted > 0) {
+				console.log(
+					`[guest-book] swept ${swept.deleted} expired pending plan(s)`,
+				);
+			}
+		} catch (err) {
+			// Housekeeping. A failure here must never look like a delivery failure
+			// or stop the next tick.
+			console.error("[guest-book] pending-plan sweep failed:", err);
 		}
 	} catch (err) {
 		console.error("[reminders] poll tick failed:", err);

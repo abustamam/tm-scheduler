@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 /**
  * Guard against the client-bundle leak that broke production twice
@@ -47,8 +48,25 @@ describe("server-fn modules keep db logic out of the client bundle", () => {
 		// asserts an offender list is EMPTY, so a comment can only ever add a false
 		// offender — stripping would LOOSEN the guard, not harden it. That is the
 		// opposite direction from the "pattern must BE present" guards.
-		const src = readFileSync(join(serverDir, file), "utf8");
-		if (!src.includes("createServerFn")) continue; // pure helper module — exempt
+		const path = join(serverDir, file);
+		const src = readFileSync(path, "utf8");
+		// WHICH files to sweep is read COMMENT-BLIND, and for a real `createServerFn`
+		// CALL rather than any mention of the name.
+		//
+		// This is the opposite reader from the offender assertion below, and the
+		// two questions are opposite: "is this a module that DEFINES server fns"
+		// is a must-BE-present test, where a comment naming the call satisfies a
+		// raw read while defining nothing — so a pure helper gets pulled into a
+		// rule it is exempt from, purely for its prose.
+		// `guest-book-pending-schemas.ts` (#806) is that file: it imports zod and
+		// nothing else, it cannot leak `#/db` by construction, and its header
+		// explains at length why a validator must NOT live inside a server-fn
+		// module. Every real module here has `export const x = createServerFn(`,
+		// which survives comment-stripping untouched.
+		//
+		// The offender list below still reads RAW, where stripping could only
+		// ever hide a genuine export.
+		if (!/createServerFn\s*\(/.test(readSource(path))) continue;
 
 		it(`${file} exports only createServerFns and types`, () => {
 			const offenders = topLevelExports(src).filter(

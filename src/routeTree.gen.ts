@@ -41,6 +41,7 @@ import { Route as AuthedSuperadminDuplicatePeopleRouteImport } from './routes/_a
 import { Route as AuthedSuperadminClubIdRouteImport } from './routes/_authed/superadmin/$clubId'
 import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
+import { Route as AuthedGuestBookPlanIdRouteImport } from './routes/_authed/guest-book.$planId'
 import { Route as AuthedAdminVpeDashboardRouteImport } from './routes/_authed/admin/vpe-dashboard'
 import { Route as AuthedAdminVpMembershipRouteImport } from './routes/_authed/admin/vp-membership'
 import { Route as AuthedAdminSyncTokensRouteImport } from './routes/_authed/admin/sync-tokens'
@@ -229,6 +230,11 @@ const AuthedMeetingsIdRoute = AuthedMeetingsIdRouteImport.update({
   path: '/meetings/$id',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedGuestBookPlanIdRoute = AuthedGuestBookPlanIdRouteImport.update({
+  id: '/guest-book/$planId',
+  path: '/guest-book/$planId',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedAdminVpeDashboardRoute = AuthedAdminVpeDashboardRouteImport.update({
   id: '/admin/vpe-dashboard',
   path: '/admin/vpe-dashboard',
@@ -402,6 +408,7 @@ export interface FileRoutesByFullPath {
   '/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/admin/vp-membership': typeof AuthedAdminVpMembershipRoute
   '/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
+  '/guest-book/$planId': typeof AuthedGuestBookPlanIdRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
@@ -459,6 +466,7 @@ export interface FileRoutesByTo {
   '/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/admin/vp-membership': typeof AuthedAdminVpMembershipRoute
   '/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
+  '/guest-book/$planId': typeof AuthedGuestBookPlanIdRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
@@ -520,6 +528,7 @@ export interface FileRoutesById {
   '/_authed/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/_authed/admin/vp-membership': typeof AuthedAdminVpMembershipRoute
   '/_authed/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
+  '/_authed/guest-book/$planId': typeof AuthedGuestBookPlanIdRoute
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/_authed/members/$id': typeof AuthedMembersIdRoute
   '/_authed/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
@@ -581,6 +590,7 @@ export interface FileRouteTypes {
     | '/admin/sync-tokens'
     | '/admin/vp-membership'
     | '/admin/vpe-dashboard'
+    | '/guest-book/$planId'
     | '/meetings/$id'
     | '/members/$id'
     | '/superadmin/$clubId'
@@ -638,6 +648,7 @@ export interface FileRouteTypes {
     | '/admin/sync-tokens'
     | '/admin/vp-membership'
     | '/admin/vpe-dashboard'
+    | '/guest-book/$planId'
     | '/meetings/$id'
     | '/members/$id'
     | '/superadmin/$clubId'
@@ -698,6 +709,7 @@ export interface FileRouteTypes {
     | '/_authed/admin/sync-tokens'
     | '/_authed/admin/vp-membership'
     | '/_authed/admin/vpe-dashboard'
+    | '/_authed/guest-book/$planId'
     | '/_authed/meetings/$id'
     | '/_authed/members/$id'
     | '/_authed/superadmin/$clubId'
@@ -981,6 +993,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedMeetingsIdRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/guest-book/$planId': {
+      id: '/_authed/guest-book/$planId'
+      path: '/guest-book/$planId'
+      fullPath: '/guest-book/$planId'
+      preLoaderRoute: typeof AuthedGuestBookPlanIdRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/admin/vpe-dashboard': {
       id: '/_authed/admin/vpe-dashboard'
       path: '/admin/vpe-dashboard'
@@ -1200,6 +1219,7 @@ interface AuthedRouteChildren {
   AuthedAdminSyncTokensRoute: typeof AuthedAdminSyncTokensRoute
   AuthedAdminVpMembershipRoute: typeof AuthedAdminVpMembershipRoute
   AuthedAdminVpeDashboardRoute: typeof AuthedAdminVpeDashboardRoute
+  AuthedGuestBookPlanIdRoute: typeof AuthedGuestBookPlanIdRoute
   AuthedMeetingsIdRoute: typeof AuthedMeetingsIdRoute
   AuthedMembersIdRoute: typeof AuthedMembersIdRoute
   AuthedMeetingsIndexRoute: typeof AuthedMeetingsIndexRoute
@@ -1226,6 +1246,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminSyncTokensRoute: AuthedAdminSyncTokensRoute,
   AuthedAdminVpMembershipRoute: AuthedAdminVpMembershipRoute,
   AuthedAdminVpeDashboardRoute: AuthedAdminVpeDashboardRoute,
+  AuthedGuestBookPlanIdRoute: AuthedGuestBookPlanIdRoute,
   AuthedMeetingsIdRoute: AuthedMeetingsIdRoute,
   AuthedMembersIdRoute: AuthedMembersIdRoute,
   AuthedMeetingsIndexRoute: AuthedMeetingsIndexRoute,
