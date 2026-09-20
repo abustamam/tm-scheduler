@@ -59,6 +59,7 @@ import { asc, eq } from "drizzle-orm";
 import type { db } from "#/db";
 import { clubMeetingRecurrence, clubs, meetings } from "#/db/schema";
 import {
+	type AgendaCreateMeta,
 	type AgendaEntry,
 	type AgendaFieldChange,
 	type AgendaMetaField,
@@ -68,7 +69,6 @@ import {
 	missingTimeMessage,
 	normalizeMetaValue,
 } from "#/lib/agenda-upsert";
-import { MEETING_LOCKED_BLOCKING_MESSAGE } from "#/lib/assign-roles-plan";
 import {
 	localDateWeekday,
 	localDateWeekdayIndex,
@@ -76,8 +76,12 @@ import {
 } from "#/lib/club-local-date";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { planHash } from "#/lib/mcp-plan";
-import { isMeetingLocked } from "#/lib/meeting-lifecycle";
+import {
+	isMeetingLocked,
+	MEETING_LOCKED_BLOCKING_MESSAGE,
+} from "#/lib/meeting-lifecycle";
 import { deriveMeetingNumber } from "#/lib/meeting-number";
+import { UPSERT_AGENDAS_TOOL } from "#/lib/pending-plan";
 import { type McpBlockingItem, McpError } from "#/server/mcp/errors";
 
 type Conn =
@@ -120,7 +124,7 @@ export interface AgendaCreateLine extends AgendaLineBase {
 	/** Club-local `HH:MM` the meeting would start at. */
 	time: string;
 	location: string | null;
-	meta: ReturnType<typeof agendaCreateMeta>;
+	meta: AgendaCreateMeta;
 }
 
 export interface AgendaUpdateLine extends AgendaLineBase {
@@ -137,11 +141,20 @@ export type AgendaPlanLine = AgendaCreateLine | AgendaUpdateLine;
 /**
  * What the apply executes, and the ONLY thing the hash is taken over.
  *
- * Deliberately excludes the meeting numbers below: they are derived from the
- * club's whole spine, so completing an unrelated meeting elsewhere in the
- * season would change every provisional number and fail an outstanding link as
- * stale for a reason that has nothing to do with it. Same rule, same sentence,
- * as `GuestBookPlan`.
+ * The rule is about REACH, not about how a fact was derived. Almost everything
+ * here is read from live state — a change's `from` side is the whole point of
+ * the hash — so "live-derived" cannot be the exclusion test. What is excluded
+ * is anything that moves because of a meeting this plan does NOT name: the
+ * meeting numbers below are derived from the club's whole spine, so completing
+ * an unrelated meeting elsewhere in the season would change every provisional
+ * number and fail an outstanding link as stale for a reason that has nothing to
+ * do with it.
+ *
+ * `warnings` is therefore INSIDE, deliberately. `meeting_cancelled` is read
+ * from live state like the numbers are, but it is a fact about a meeting this
+ * plan names by date — so a reader who was shown "this meeting is cancelled",
+ * or was not, should look again before it is written. Same rule, different
+ * side of it, as `GuestBookPlan`.
  */
 export interface AgendaPlan {
 	lines: AgendaPlanLine[];
@@ -224,7 +237,9 @@ export async function plan(
 	const [clubRow] = await conn
 		.select({
 			defaultMeetingMinutes: clubs.defaultMeetingMinutes,
-			ruleEnabled: clubMeetingRecurrence.enabled,
+			// `enabled` is deliberately NOT read. A DISABLED rule still supplies a
+			// time and a weekday — see below — so selecting it would be a column
+			// nothing branches on.
 			ruleWeekday: clubMeetingRecurrence.weekday,
 			ruleTimeOfDay: clubMeetingRecurrence.timeOfDay,
 			ruleLocation: clubMeetingRecurrence.location,
@@ -239,14 +254,18 @@ export async function plan(
 	// says "stop materialising meetings", not "the club has forgotten when it
 	// meets" — and a caller naming a date explicitly is not asking for top-up.
 	// Only the ABSENCE of a row means there is nothing to fall back on.
+	//
+	// Both halves are null-CHECKED rather than cast. The left join makes every
+	// rule column nullable, and `weekday` is `notNull()` on a row that exists, so
+	// an `as number` would be true today and silently wrong the day that column
+	// changes — the kind of claim that survives typecheck and fails at runtime.
 	const rule =
-		clubRow.ruleTimeOfDay === null
+		clubRow.ruleTimeOfDay === null || clubRow.ruleWeekday === null
 			? null
 			: {
-					weekday: clubRow.ruleWeekday as number,
+					weekday: clubRow.ruleWeekday,
 					timeOfDay: clubRow.ruleTimeOfDay,
 					location: clubRow.ruleLocation,
-					enabled: clubRow.ruleEnabled as boolean,
 				};
 
 	const spine: MeetingRow[] = await conn
@@ -389,7 +408,9 @@ export function agendaPlanHash(input: {
 	plan: AgendaPlan;
 }): string {
 	return planHash({
-		tool: "upsert_agendas",
+		// The shared constant, NOT a literal. `PlanHashInput.tool` is `string`,
+		// so a typo here typechecks and fails every outstanding link as stale.
+		tool: UPSERT_AGENDAS_TOOL,
 		clubId: input.clubId,
 		userId: input.userId,
 		plan: input.plan,

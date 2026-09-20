@@ -49,8 +49,14 @@ export function holdClubLock(clubId: string) {
 	};
 }
 
-/** How many sessions are WAITING on this club's advisory lock right now. */
-export async function waitersOnClubLock(clubId: string): Promise<number> {
+/**
+ * How many sessions are WAITING on this club's advisory lock right now.
+ *
+ * Module-private: `awaitLockWaiter` is the only caller, and an exported helper
+ * nothing imports is dead weight that neither Biome nor `noUnusedLocals` can
+ * see. Export it the day a suite needs the raw count.
+ */
+async function waitersOnClubLock(clubId: string): Promise<number> {
 	const res = await testDb.execute<{ n: number }>(sql`
 		SELECT count(*)::int AS n
 		FROM pg_locks

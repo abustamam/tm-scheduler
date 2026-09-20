@@ -46,6 +46,7 @@ import {
 	AGENDA_UNREADABLE_MESSAGE,
 } from "#/lib/agenda-upsert";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
+import { UPSERT_AGENDAS_TOOL } from "#/lib/pending-plan";
 import { logActivity } from "#/server/activity";
 import {
 	type AgendaPlanClub,
@@ -60,9 +61,6 @@ import { McpError } from "#/server/mcp/errors";
 import { applyPendingPlanLocked } from "#/server/mcp-pending-apply";
 import { insertMeetingWithSlots } from "#/server/meeting-create-logic";
 import { applyMeetingMetaPatch } from "#/server/meetings-logic";
-
-/** The tool this apply claims rows for. Matched in the `FOR UPDATE`'s WHERE. */
-const AGENDA_TOOL = "upsert_agendas" as const;
 
 export interface ApplyAgendaPlanInput {
 	pendingId: string;
@@ -89,7 +87,7 @@ export async function applyAgendaPlan(
 ): Promise<ApplyAgendaPlanResult> {
 	return applyPendingPlanLocked<ApplyAgendaPlanResult>({
 		pendingId: input.pendingId,
-		tool: AGENDA_TOOL,
+		tool: UPSERT_AGENDAS_TOOL,
 		clubId: input.club.clubId,
 		userId: input.userId,
 		copy: {

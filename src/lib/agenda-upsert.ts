@@ -19,8 +19,16 @@
  */
 
 /**
- * The meeting-meta columns this tool may write, listed ONCE so the diff, the
- * create insert and the patch call cannot disagree about the set.
+ * The meeting-meta columns this tool may write.
+ *
+ * The list is the source for the DIFF, for `AgendaCreateMeta`, and for the
+ * confirm table's create rows — each derives from it by TYPE, so a sixth field
+ * added here fails to compile until every one of them handles it. What it does
+ * NOT reach is `NewMeeting.meta` (`meeting-create-logic.ts`), which spells its
+ * four columns out: that is the INSERT's own contract, shared with callers that
+ * know nothing about this tool, and coupling it here would be the worse trade.
+ * An earlier draft of this sentence claimed the set was listed once for all
+ * four readers, and the confirm table was hardcoding its own copy at the time.
  *
  * `notes` and `reminders` are deliberately absent although
  * `applyMeetingMetaPatch` owns them. `reminders` feeds the reminder poller,
@@ -128,13 +136,17 @@ export function agendaFieldChanges(
  * `NewMeeting` already carries, defaulted from the club's recurrence rule when
  * the entry does not name one. Splitting it out here is what lets the create
  * branch pass one object through without the caller re-deciding the split.
+ *
+ * Derived from `AGENDA_META_FIELDS` rather than spelled out, so a sixth field
+ * added there is a compile error here rather than a column silently never
+ * written on a create.
  */
-export function agendaCreateMeta(entry: AgendaEntry): {
-	theme: string | null;
-	wordOfTheDay: string | null;
-	wodDefinition: string | null;
-	wodExample: string | null;
-} {
+export type AgendaCreateMeta = Omit<
+	Record<AgendaMetaField, string | null>,
+	"location"
+>;
+
+export function agendaCreateMeta(entry: AgendaEntry): AgendaCreateMeta {
 	return {
 		theme: normalizeMetaValue(entry.theme) ?? null,
 		wordOfTheDay: normalizeMetaValue(entry.wordOfTheDay) ?? null,
@@ -207,9 +219,8 @@ export function agendaPlanConfirmUrl(
  * rendering and the click (AC13).
  *
  * The plan-time sentence is `MEETING_LOCKED_BLOCKING_MESSAGE`
- * (`#/lib/assign-roles-plan`), imported rather than re-spelled: one fact about
- * the meeting lock, one sentence, wherever the tool that first declared it
- * happens to live. This one is DIFFERENT on purpose and by the same rule as
+ * (`#/lib/meeting-lifecycle`), imported rather than re-spelled: one fact about
+ * the meeting lock, one sentence, in the module that owns the lock. This one is DIFFERENT on purpose and by the same rule as
  * `AGENDA_APPLIED_WHILE_OPEN_MESSAGE` — the plan-time refusal short-circuits
  * every serial case, so a test can only prove the in-lock check fires if the
  * in-lock check says something only it says. `agenda-upsert.test.ts` asserts

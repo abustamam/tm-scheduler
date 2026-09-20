@@ -21,7 +21,12 @@
  * halves in a real browser, because jsdom performs no layout and every source
  * grep here is satisfied by a class string that lays out wrong.
  */
-import { AGENDA_FIELD_LABEL } from "#/lib/agenda-upsert";
+import {
+	AGENDA_FIELD_LABEL,
+	AGENDA_META_FIELDS,
+	type AgendaCreateMeta,
+	type AgendaMetaField,
+} from "#/lib/agenda-upsert";
 import type { AgendaPlanLine, AgendaWarning } from "#/server/agenda-plan";
 import type { AgendaBlockingItem } from "#/server/agenda-plan-pending-logic";
 
@@ -82,7 +87,10 @@ export function AgendaDiffTable(props: AgendaDiffTableProps) {
 						<th className={HEAD}>Meeting</th>
 						<th className={HEAD}>What happens</th>
 						<th className={HEAD}>Changes</th>
-						<th className={HEAD}>Notes</th>
+						{/* NOT "Notes": `notes` is a meeting column this tool deliberately
+					    refuses to write, and a column headed with its name would read
+					    as one the plan sets. */}
+						<th className={HEAD}>Heads-up</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -202,27 +210,27 @@ function Value({ value }: { value: string | null }) {
 	);
 }
 
-/** What a create would write, listed the same way an update's diff is. */
+/**
+ * What a create would write, listed the same way an update's diff is.
+ *
+ * DERIVED from `AGENDA_META_FIELDS` rather than from a hardcoded tuple. The
+ * earlier version spelled all five names here, so a sixth field added to the
+ * tool would have been planned, written and audited — and rendered nowhere on
+ * the page whose whole job is to show what the write will do, with every gate
+ * green. Spreading `meta` into a `Record<AgendaMetaField, …>` is what makes
+ * that a compile error instead.
+ */
 function CreateMeta({
 	meta,
 	location,
 }: {
-	meta: {
-		theme: string | null;
-		wordOfTheDay: string | null;
-		wodDefinition: string | null;
-		wodExample: string | null;
-	};
+	meta: AgendaCreateMeta;
 	location: string | null;
 }) {
-	const fields = [
-		["theme", meta.theme],
-		["wordOfTheDay", meta.wordOfTheDay],
-		["wodDefinition", meta.wodDefinition],
-		["wodExample", meta.wodExample],
-		["location", location],
-	] as const;
-	const set = fields.filter(([, value]) => value !== null);
+	const byField: Record<AgendaMetaField, string | null> = { ...meta, location };
+	const set = AGENDA_META_FIELDS.map(
+		(field) => [field, byField[field]] as const,
+	).filter(([, value]) => value !== null);
 	if (set.length === 0) {
 		return (
 			<span className="text-[var(--sea-ink-soft)]">

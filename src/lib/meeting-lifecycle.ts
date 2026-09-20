@@ -10,6 +10,27 @@ import { type MeetingViewer, meetingViewer } from "./meeting-viewer";
 export const MEETING_LOCKED_MESSAGE = "This meeting is locked.";
 
 /**
+ * What a PREVIEW says about a completed meeting, as a blocking item, and
+ * deliberately NOT `MEETING_LOCKED_MESSAGE` above.
+ *
+ * The two say different things on purpose: the banner is what a reader sees on
+ * a locked meeting, and this is what a plan says about a change it will not
+ * make. #806's lesson is the reason they must stay distinct — a guard inside a
+ * locked transaction is unreachable by a serial test when a cheaper pre-check
+ * answers first, and doubly so when both refusals say the same words.
+ *
+ * It lives HERE, beside `isMeetingLocked`, because the lock is not one tool's
+ * idea. `assign_roles` declared it first (#809) and `upsert_agendas` raises the
+ * same item for the same fact (#808); a second tool importing it out of the
+ * first tool's planner made #808 depend on #809 for a sentence about neither.
+ * `assign-roles-plan.ts` re-exports it, so no importer of that module had to be
+ * edited in the change that moved it — `export … from`, not a wrapper, so the
+ * two spellings cannot drift into two sentences.
+ */
+export const MEETING_LOCKED_BLOCKING_MESSAGE =
+	"That meeting is completed, so its agenda no longer accepts changes.";
+
+/**
  * Rejection copy for recording attendance before the meeting day.
  *
  * Attendance is the RECORD of who was in the room, so it cannot exist for a

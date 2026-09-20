@@ -38,7 +38,7 @@ import {
 	type AgendaEntry,
 } from "#/lib/agenda-upsert";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
-import { isPendingPlanExpired } from "#/lib/pending-plan";
+import { isPendingPlanExpired, UPSERT_AGENDAS_TOOL } from "#/lib/pending-plan";
 import {
 	type AgendaPlanLine,
 	agendaPlanHash,
@@ -62,8 +62,8 @@ import {
 	resolvePending,
 } from "#/server/mcp-pending-logic";
 
-/** The tool every read and write in this module names. See `resolvePending`. */
-export const AGENDA_PLAN_TOOL = "upsert_agendas" as const;
+/** The tool every read in this module names. See `resolvePending`. */
+export const AGENDA_PLAN_TOOL = UPSERT_AGENDAS_TOOL;
 
 /**
  * A blocking item as the confirm page needs it.

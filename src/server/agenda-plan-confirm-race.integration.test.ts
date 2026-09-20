@@ -27,8 +27,8 @@ import {
 	AGENDA_APPLIED_WHILE_OPEN_MESSAGE,
 	AGENDA_MEETING_LOCKED_IN_LOCK_MESSAGE,
 } from "#/lib/agenda-upsert";
-import { MEETING_LOCKED_BLOCKING_MESSAGE } from "#/lib/assign-roles-plan";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
+import { MEETING_LOCKED_BLOCKING_MESSAGE } from "#/lib/meeting-lifecycle";
 import { awaitLockWaiter, holdClubLock } from "#/test/club-lock";
 import {
 	cleanup,

@@ -45,7 +45,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { mcpPendingPlans } from "#/db/schema";
 import { agendaPlanConfirmUrl } from "#/lib/agenda-upsert";
-import { pendingPlanExpiresAt } from "#/lib/pending-plan";
+import { pendingPlanExpiresAt, UPSERT_AGENDAS_TOOL } from "#/lib/pending-plan";
 import { appBaseUrl } from "#/lib/unsubscribe-token";
 import { agendaPlanHash, agendaPlanSummary, plan } from "#/server/agenda-plan";
 import { agendaEntriesSchema } from "#/server/agenda-plan-pending-schemas";
@@ -102,7 +102,7 @@ export const upsertAgendasTool: McpToolDefinition = {
 				// The discriminator every read of this row filters on (#812). One
 				// table serves every MCP write tool, so an id alone does not say
 				// what shape its payload has.
-				tool: "upsert_agendas",
+				tool: UPSERT_AGENDAS_TOOL,
 				// What was ASKED, not what was planned. A pending link is open for
 				// up to a day and the page re-plans on every render, so storing
 				// "set the theme to Harvest" survives a meeting being rescheduled

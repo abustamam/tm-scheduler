@@ -19,7 +19,12 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubMeetingRecurrence, clubs, meetings } from "#/db/schema";
+import {
+	clubMeetingRecurrence,
+	clubs,
+	meetings,
+	roleDefinitions,
+} from "#/db/schema";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { MAX_BATCH } from "#/lib/meeting-recurrence";
 import {
@@ -127,6 +132,26 @@ describe.skipIf(!hasTestDb)("the agenda planner's query budget", () => {
 		expect(readsOf(statements, "meetings")).toHaveLength(1);
 		expect(readsOf(statements, "role_definitions")).toHaveLength(0);
 		expect(statements).toHaveLength(2);
+	});
+
+	it("the spy can SEE a role_definitions read, so the zero above means something", () => {
+		// The control the assertion above needs, and it is not optional.
+		// `statementsDuring` spies on the POOL, so a table read only ever inside a
+		// transaction is invisible to it — and a `toHaveLength(0)` on such a table
+		// passes whether or not the read happened. A control for a NEIGHBOURING
+		// table is not a control for this one.
+		//
+		// So prove the pattern matches a real read of THIS table through THIS
+		// harness. With this case green, the zero above is a measurement; without
+		// it, the zero is just a regex that never matched anything.
+		return statementsDuring(() =>
+			testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.clubId, seed.clubId)),
+		).then((statements) => {
+			expect(readsOf(statements, "role_definitions")).toHaveLength(1);
+		});
 	});
 
 	it("plans all 52 correctly while doing it", async () => {

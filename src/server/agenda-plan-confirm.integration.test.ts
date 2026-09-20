@@ -23,7 +23,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { AGENDA_ALREADY_APPLIED_MESSAGE } from "#/lib/agenda-upsert";
-import { zonedWallTimeToUtc } from "#/lib/datetime";
+import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
 	hasTestDb,
@@ -42,6 +42,7 @@ const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { applyPendingPlan, loadPendingPlan } = await import(
 	"#/server/agenda-plan-pending-logic"
 );
+const { applyMeetingMetaPatch } = await import("#/server/meetings-logic");
 
 const TUESDAY = "2027-03-02";
 const NEXT_TUESDAY = "2027-03-09";
@@ -51,6 +52,8 @@ const TUESDAY_INDEX = 2;
 interface Preview {
 	pendingId: string;
 	confirmUrl: string;
+	/** The plan as the TOOL returned it — see the AC4 case for why that matters. */
+	plan: { action: string; date: string }[];
 	blocking: { code: string; entryIndex?: number }[];
 }
 
@@ -191,6 +194,62 @@ describe.skipIf(!hasTestDb)("the agenda confirm flow", () => {
 					{ date: NEXT_TUESDAY, theme: "Autumn" },
 				],
 			});
+		});
+
+		it("plans against the calendar the top-up just materialised, not the one it found (AC4)", async () => {
+			// AC1's "zero `meetings` rows are written" is a claim about the TOOL,
+			// and the case above measures it on a club whose rule is paused. With
+			// a LIVE rule the preview really does create meetings, because
+			// `ensureScheduleToppedUp` runs first by design — and that is the
+			// whole point of AC4, not an exception to AC1.
+			//
+			// What it buys is this: a club's recurrence rule materialises future
+			// meetings on authenticated READS (ADR-0021), which token calls never
+			// reach. Without the top-up an LLM planning months out would see a
+			// calendar the browser does not, and would propose CREATING the very
+			// meetings the club is about to generate for itself — duplicates on
+			// every date, or an `AMBIGUOUS_DATE` block once both existed.
+			//
+			// The rule here is anchored ON the dates the plan names, so the top-up
+			// reaches them. A preview that ran before it would classify both as
+			// `create`; one that ran after classifies both as `update`.
+			await testDb
+				.update(clubMeetingRecurrence)
+				.set({ enabled: true })
+				.where(eq(clubMeetingRecurrence.clubId, seed.clubId));
+
+			const before = (await clubMeetings()).length;
+			const preview_ = await preview([
+				{ date: TUESDAY, theme: "Harvest" },
+				{ date: NEXT_TUESDAY, theme: "Autumn" },
+			]);
+
+			// Non-vacuity: the top-up really did run. Without this the assertion
+			// below passes on a club where nothing could have been materialised at
+			// all, which is the paused-rule case wearing a different hat.
+			expect(
+				(await clubMeetings()).length,
+				"the top-up created nothing, so this case proves nothing about the order the two run in",
+			).toBeGreaterThan(before);
+
+			// Asserted on the plan the TOOL returned, NOT on the confirm page's.
+			// The page re-plans on every render, and by then the top-up has run
+			// whatever order the tool called it in — so a page-side assertion here
+			// is green under the very mutation this case exists to catch
+			// (measured: moving the call below `plan()` left it passing).
+			expect(
+				preview_.plan.map((line) => line.action),
+				"the tool proposed creating meetings its own top-up had already made, so the top-up ran after planning",
+			).toStrictEqual(["update", "update"]);
+
+			// And the pending row is still the only thing the TOOL wrote: every
+			// meeting on those dates came from the club's own rule.
+			const plannedDates = (await clubMeetings())
+				.map((m) =>
+					utcToZonedWallTime(m.scheduledAt, club.timezone).slice(0, 10),
+				)
+				.filter((d) => d === TUESDAY || d === NEXT_TUESDAY);
+			expect(plannedDates.sort()).toStrictEqual([TUESDAY, NEXT_TUESDAY]);
 		});
 
 		it("stores a row even when a date blocks, so the page can explain it", async () => {
@@ -513,6 +572,56 @@ describe.skipIf(!hasTestDb)("the agenda confirm flow", () => {
 			});
 			if (view.status !== "applied") throw new Error(view.status);
 			expect(view.applied).toMatchObject({ created: 1, updated: 0 });
+		});
+
+		it("rolls back a patched meeting when the batch fails, and would NOT without tx", async () => {
+			// The all-or-nothing claim, measured at the seam it rests on.
+			//
+			// `applyMeetingMetaPatch` takes `conn: DbOrTx = db`. The apply threads
+			// its transaction through, and every write in the batch commits or
+			// none does — but nothing in the happy path can tell a threaded call
+			// from an unthreaded one, because both succeed. The difference only
+			// shows when the caller rolls back, and the CONTROL below is what
+			// makes the first half mean something: the same call on the default
+			// connection survives its caller's rollback, which is the silent
+			// half-applied batch this parameter exists to prevent.
+			const meetingId = await seedMeeting(TUESDAY, "19:00", { theme: "Old" });
+
+			await expect(
+				testDb.transaction(async (tx) => {
+					await applyMeetingMetaPatch(
+						{ meetingId, actorMemberId: null, theme: "Threaded" },
+						tx,
+					);
+					throw new Error("batch failed after this line landed");
+				}),
+			).rejects.toThrow("batch failed");
+			const [threaded] = await testDb
+				.select({ theme: meetings.theme })
+				.from(meetings)
+				.where(eq(meetings.id, meetingId));
+			expect(threaded?.theme).toBe("Old");
+			expect(await activity("meeting_edit")).toHaveLength(0);
+
+			// THE CONTROL. Same rollback, no `tx` — the write survives.
+			await expect(
+				testDb.transaction(async () => {
+					await applyMeetingMetaPatch({
+						meetingId,
+						actorMemberId: null,
+						theme: "Unthreaded",
+					});
+					throw new Error("batch failed after this line landed");
+				}),
+			).rejects.toThrow("batch failed");
+			const [unthreaded] = await testDb
+				.select({ theme: meetings.theme })
+				.from(meetings)
+				.where(eq(meetings.id, meetingId));
+			expect(
+				unthreaded?.theme,
+				"the unthreaded call rolled back too, so this suite cannot tell a threaded write from an unthreaded one and `agenda-plan-connections.guard.test.ts` is the only thing holding the rule",
+			).toBe("Unthreaded");
 		});
 
 		it("renders a payload it cannot read rather than applying half of it", async () => {

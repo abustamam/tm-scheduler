@@ -23,7 +23,7 @@ import {
 	agendaPlanConfirmUrl,
 	normalizeMetaValue,
 } from "./agenda-upsert";
-import { MEETING_LOCKED_BLOCKING_MESSAGE } from "./assign-roles-plan";
+import { MEETING_LOCKED_BLOCKING_MESSAGE } from "./meeting-lifecycle";
 
 const EMPTY: Record<AgendaMetaField, string | null> = {
 	theme: null,
