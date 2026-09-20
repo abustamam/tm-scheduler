@@ -14,6 +14,10 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	brokenStreamRequest,
+	streamingRequest,
+} from "#/test/streaming-request";
+import {
 	parseDeclaredContentLength,
 	readBodyWithinCap,
 } from "./request-body-limits";
@@ -65,34 +69,6 @@ describe("parseDeclaredContentLength (#776 item 7)", () => {
 		}
 	});
 });
-
-/** A POST whose body is a stream, plus a counter of how much was pulled. */
-function streamingRequest(chunk: Uint8Array, chunks: number) {
-	const pulled = { chunks: 0, bytes: 0, cancelled: false };
-	let sent = 0;
-	const body = new ReadableStream<Uint8Array>({
-		pull(controller) {
-			if (sent >= chunks) {
-				controller.close();
-				return;
-			}
-			sent += 1;
-			pulled.chunks += 1;
-			pulled.bytes += chunk.byteLength;
-			controller.enqueue(chunk);
-		},
-		cancel() {
-			pulled.cancelled = true;
-		},
-	});
-	const request = new Request("https://club.test/api/mcp", {
-		method: "POST",
-		body,
-		// Required by undici for a streaming request body.
-		duplex: "half",
-	} as RequestInit & { duplex: "half" });
-	return { request, pulled };
-}
 
 describe("readBodyWithinCap (#776 item 7)", () => {
 	it("returns a body under the cap unchanged, with its true byte size", async () => {
@@ -153,7 +129,11 @@ describe("readBodyWithinCap (#776 item 7)", () => {
 		// handler answered 413 having held every byte of it; this one reads ~17
 		// chunks and cancels the stream.
 		const chunk = new Uint8Array(64 * 1024).fill(0x61);
-		const { request, pulled } = streamingRequest(chunk, 1000);
+		const { request, pulled } = streamingRequest(
+			"https://club.test/api/mcp",
+			chunk,
+			1000,
+		);
 
 		const res = await readBodyWithinCap(request, ONE_MB);
 
@@ -166,17 +146,8 @@ describe("readBodyWithinCap (#776 item 7)", () => {
 	});
 
 	it("reports an unreadable body rather than throwing", async () => {
-		const body = new ReadableStream<Uint8Array>({
-			pull(controller) {
-				controller.error(new Error("connection reset"));
-			},
-		});
 		const res = await readBodyWithinCap(
-			new Request("https://club.test/api/mcp", {
-				method: "POST",
-				body,
-				duplex: "half",
-			} as RequestInit & { duplex: "half" }),
+			brokenStreamRequest("https://club.test/api/mcp"),
 			ONE_MB,
 		);
 		expect(res).toEqual({ kind: "unreadable" });

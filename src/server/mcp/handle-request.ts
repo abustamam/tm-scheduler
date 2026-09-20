@@ -147,7 +147,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 	// Now the header is parsed without coercion (a malformed one is refused
 	// rather than guessed at) and the ceiling is enforced WHILE the body
 	// streams, cancelling the stream at the byte that crosses it. MEASURED: a
-	// 64 MB chunked body reads 16 of its 1000 chunks (`mcp-limits.test.ts`).
+	// 64 MB chunked body reads 16 of its 1000 chunks
+	// (`request-body-limits.test.ts`, where the reader and its measurement moved
+	// when `/api/pathways/ingest` became the second caller — #800).
 	const declared = parseDeclaredContentLength(
 		request.headers.get("content-length"),
 	);

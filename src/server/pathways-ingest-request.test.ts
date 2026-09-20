@@ -18,6 +18,10 @@
  * oversized body, that it is never reached at all.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	brokenStreamRequest,
+	streamingRequest as makeStreamingRequest,
+} from "#/test/streaming-request";
 
 class FakeIngestError extends Error {
 	constructor(
@@ -41,59 +45,31 @@ vi.mock("#/server/pathways-ingest-logic", () => ({
 	},
 }));
 
-const { handlePathwaysIngestRequest } = await import(
-	"#/server/pathways-ingest-request"
-);
+const { handlePathwaysIngestRequest, handlePathwaysIngestPreflight } =
+	await import("#/server/pathways-ingest-request");
 const { MAX_INGEST_BODY_BYTES } = await import("#/lib/pathways-ingest-limits");
-
-/**
- * A POST whose body is a stream, plus a counter of what was pulled off it.
- *
- * The counter is the point: it is the only way to tell a cap that bounds memory
- * from one that merely reports on a body it already holds.
- */
-function streamingRequest(
-	chunk: Uint8Array,
-	chunks: number,
-	headers: Record<string, string> = {},
-) {
-	const pulled = { chunks: 0, bytes: 0, cancelled: false };
-	let sent = 0;
-	const body = new ReadableStream<Uint8Array>({
-		pull(controller) {
-			if (sent >= chunks) {
-				controller.close();
-				return;
-			}
-			sent += 1;
-			pulled.chunks += 1;
-			pulled.bytes += chunk.byteLength;
-			controller.enqueue(chunk);
-		},
-		cancel() {
-			pulled.cancelled = true;
-		},
-	});
-	const request = new Request("https://club.test/api/pathways/ingest", {
-		method: "POST",
-		headers,
-		body,
-		// Required by undici for a streaming request body.
-		duplex: "half",
-	} as RequestInit & { duplex: "half" });
-	return { request, pulled };
-}
 
 /** A POST with a buffered body, and whatever headers the caller wants on it. */
 function bufferedRequest(
 	body: string,
 	headers: Record<string, string> = {},
 ): Request {
-	return new Request("https://club.test/api/pathways/ingest", {
+	return new Request(INGEST_URL, {
 		method: "POST",
 		headers,
 		body,
 	});
+}
+
+const INGEST_URL = "https://club.test/api/pathways/ingest";
+
+/** The shared harness (`#/test/streaming-request`), bound to this endpoint's URL. */
+function streamingRequest(
+	chunk: Uint8Array,
+	chunks: number,
+	headers: Record<string, string> = {},
+) {
+	return makeStreamingRequest(INGEST_URL, chunk, chunks, headers);
 }
 
 const SYNC_RESULT = { membersMatched: 3, rowsWritten: 7 };
@@ -116,6 +92,55 @@ describe("the ingest ceiling itself", () => {
 	it("is not the MCP endpoint's cap — the two are different numbers", async () => {
 		const { MAX_MCP_BODY_BYTES } = await import("#/lib/mcp-limits");
 		expect(MAX_INGEST_BODY_BYTES).not.toBe(MAX_MCP_BODY_BYTES);
+	});
+});
+
+describe("the CORS preflight", () => {
+	// It moved out of the route file with the POST handler, so it is reachable
+	// now and gets asserted rather than assumed.
+	it("answers 204 with no body", () => {
+		const res = handlePathwaysIngestPreflight();
+		expect(res.status).toBe(204);
+		expect(res.body).toBeNull();
+	});
+
+	it("grants the extension's origin, method and headers", () => {
+		const res = handlePathwaysIngestPreflight();
+		expect(Object.fromEntries(res.headers)).toMatchObject({
+			"access-control-allow-origin": "*",
+			"access-control-allow-methods": "POST, OPTIONS",
+			"access-control-allow-headers": "authorization, content-type",
+			"access-control-max-age": "86400",
+		});
+	});
+
+	it("answers every POST with the same headers it promises at preflight", async () => {
+		// A preflight that grants what the response does not carry is a CORS
+		// failure the extension reads as a network error, with no status to log.
+		const preflight = Object.fromEntries(
+			handlePathwaysIngestPreflight().headers,
+		);
+		const chunk = new Uint8Array(64 * 1024).fill(0x61);
+		const { request } = streamingRequest(chunk, 200);
+		for (const res of [
+			await handlePathwaysIngestRequest(request),
+			await handlePathwaysIngestRequest(bufferedRequest("{not json")),
+			await handlePathwaysIngestRequest(
+				bufferedRequest(JSON.stringify({ pages: [] })),
+			),
+		]) {
+			for (const [k, v] of Object.entries(preflight)) {
+				if (k.startsWith("access-control-allow-origin")) {
+					expect(res.headers.get(k)).toBe(v);
+				}
+			}
+			expect(res.headers.get("access-control-allow-methods")).toBe(
+				preflight["access-control-allow-methods"],
+			);
+			expect(res.headers.get("access-control-allow-headers")).toBe(
+				preflight["access-control-allow-headers"],
+			);
+		}
 	});
 });
 
@@ -199,17 +224,8 @@ describe("an oversized body is refused without being read (#800)", () => {
 	});
 
 	it("answers 400 when the connection drops mid-body", async () => {
-		const body = new ReadableStream<Uint8Array>({
-			pull(controller) {
-				controller.error(new Error("connection reset"));
-			},
-		});
 		const res = await handlePathwaysIngestRequest(
-			new Request("https://club.test/api/pathways/ingest", {
-				method: "POST",
-				body,
-				duplex: "half",
-			} as RequestInit & { duplex: "half" }),
+			brokenStreamRequest(INGEST_URL),
 		);
 
 		expect(res.status).toBe(400);
@@ -236,17 +252,38 @@ describe("an oversized body is refused without being read (#800)", () => {
 	});
 
 	it("rejects regardless of the token — absent, junk, or well-formed", async () => {
+		// Every shape the cap can be reached by, against every shape of
+		// credential. The endpoint reads the body before anything authenticates,
+		// so "it needs no token" is the claim, not a detail.
 		const chunk = new Uint8Array(64 * 1024).fill(0x61);
 		const matrix: Record<string, string>[] = [
 			{},
 			{ authorization: "Bearer gup_not-a-real-token" },
 			{ authorization: "Basic hunter2" },
 		];
+		const multiByte = "🎤".repeat(1_500_000);
 		for (const headers of matrix) {
-			const { request, pulled } = streamingRequest(chunk, 200, headers);
-			const res = await handlePathwaysIngestRequest(request);
-			expect(res.status, JSON.stringify(headers)).toBe(413);
-			expect(pulled.bytes, JSON.stringify(headers)).toBeLessThan(7_000_000);
+			const label = JSON.stringify(headers);
+
+			// Chunked, no declared length.
+			const streamed = streamingRequest(chunk, 200, headers);
+			const chunkedRes = await handlePathwaysIngestRequest(streamed.request);
+			expect(chunkedRes.status, `chunked ${label}`).toBe(413);
+			expect(streamed.pulled.bytes, `chunked ${label}`).toBeLessThan(7_000_000);
+
+			// Buffered, over the cap in BYTES while under it in code units.
+			const byteRes = await handlePathwaysIngestRequest(
+				bufferedRequest(multiByte, headers),
+			);
+			expect(byteRes.status, `multi-byte ${label}`).toBe(413);
+
+			// A content-length that is not a byte count.
+			const malformed = streamingRequest(chunk, 200, {
+				...headers,
+				"content-length": "abc",
+			});
+			const malformedRes = await handlePathwaysIngestRequest(malformed.request);
+			expect(malformedRes.status, `malformed ${label}`).toBe(400);
 		}
 		expect(ingestForToken).not.toHaveBeenCalled();
 	});

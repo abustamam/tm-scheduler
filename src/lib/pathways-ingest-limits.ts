@@ -16,8 +16,13 @@
 /**
  * ~5 MB — the largest request body `/api/pathways/ingest` will read.
  *
- * A full 30-member club sync with details is under 1 MB, so this only trips on
- * hostile or garbage input. Enforced by `readBodyWithinCap` WHILE the body
+ * ASSUMED, not measured: the "a full 30-member club sync with details is under
+ * 1 MB" that justifies it is inherited prose, and nothing here has costed what
+ * `JSON.parse` plus the sync pipeline actually spend on a 5 MB body in the one
+ * process that serves the whole app (ADR-0007). #800 put the ceiling's VALUE
+ * out of scope, so it is carried across unchanged and labelled rather than
+ * re-picked. Measuring the cost curve is what would let it move — see
+ * `CODING_STANDARDS.md` ("Test coverage") on caps picked without one. Enforced by `readBodyWithinCap` WHILE the body
  * streams in (and before the `gup_` token is looked at, because the body is
  * read before anything authenticates), so the number bounds memory rather than
  * labelling a 413.

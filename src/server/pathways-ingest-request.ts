@@ -25,7 +25,7 @@ import {
  * because auth is a Bearer token, never a cookie (no credentialed CORS), so `*` grants
  * no ambient authority.
  */
-export const CORS_HEADERS: Record<string, string> = {
+const CORS_HEADERS: Record<string, string> = {
 	"access-control-allow-origin": "*",
 	"access-control-allow-methods": "POST, OPTIONS",
 	"access-control-allow-headers": "authorization, content-type",
