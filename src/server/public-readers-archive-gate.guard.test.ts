@@ -423,12 +423,12 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
  * because for reads the two are interchangeable and swapping them typechecks.
  * Writes have no such sibling pair: the gate is one call, and what varies is
- * WHERE it lives. NINE of these gate in a `-logic` seam — which is strictly
- * better, because a seam is reachable from vitest — and two gate in the handler
- * because their logic is inline there and lifting it out is a refactor #555 was
- * not.
+ * WHERE it lives. TEN of these gate in a `-logic` seam — which is strictly
+ * better, because a seam is reachable from vitest — and ONE gates in the
+ * handler because its logic is inline there and lifting it out is a refactor
+ * #555 was not. It was two until #809 extracted `releaseSlotCore`.
  *
- * Of the nine, seven are executed by `public-writers-archive-gate.integration.test.ts`.
+ * Of the ten, eight are executed by `public-writers-archive-gate.integration.test.ts`.
  * The other two are executed beside the rest of their own feature's cases,
  * because each needs a fixture that suite does not build: `confirmSlotCore` in
  * `slots-confirm.integration.test.ts` (a CLAIMED slot and a holder), and
@@ -439,10 +439,9 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * So each row names the file the gate is IN. That is weaker than checking the
  * handler itself, and the weakness is stated rather than papered over: this
  * asserts the gate exists in the module that owns the write, not that this
- * particular write reaches it. The integration suite is what proves the seven
- * seam-gated ones actually refuse; for the two handler-gated ones this guard is
- * the only gate there is, which is exactly why moving them into seams is
- * recorded in TODOS.md rather than left implied.
+ * particular write reaches it. The integration suite is what proves the
+ * seam-gated ones actually refuse; for the one remaining handler-gated row
+ * (`updateSpeakerDetails`) this guard is the only gate there is.
  */
 const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 	// `addMember` used to head this list. It came off at #616, which admin-gated
@@ -509,11 +508,21 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 		file: "src/server/slots-logic.ts",
 		gate: "assertClubNotArchived",
 	},
-	// Handler-gated: the logic is inline in `slots.ts`, so the gate is in the
-	// handler body and this guard is its only cover.
+	// Was handler-gated, and is not any more. #809 extracted `releaseSlotCore`
+	// so `assign_roles` could clear a slot inside its batch, and the gate moved
+	// with the logic — which is strictly better, because a handler body is
+	// unreachable from vitest and this row was previously the ONLY cover for a
+	// session-less write to a taken-down club.
+	//
+	// Re-pointed rather than deleted, and it is weaker here than the row it
+	// replaced: `slots-logic.ts` names `assertClubNotArchived` in three separate
+	// functions, so a file-level `toContain` passes even with the release gate
+	// gone. `public-writers-archive-gate.integration.test.ts` executes the
+	// refusal, which is what actually holds; this row only says the module still
+	// has a gate to find.
 	{
 		fn: "releaseSlot",
-		file: "src/server/slots.ts",
+		file: "src/server/slots-logic.ts",
 		gate: "assertClubNotArchived",
 	},
 	{

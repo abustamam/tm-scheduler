@@ -141,6 +141,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			result: { tools: { name: string }[] };
 		};
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
+			"assign_roles",
 			"find_people",
 			"get_agenda",
 			"list_meetings",

@@ -3,9 +3,9 @@
  *
  * The body READER that enforces the last of them moved to
  * `#/lib/request-body-limits` when `/api/pathways/ingest` became its second
- * caller (#800). Nothing about it was MCP-specific; these three numbers are.
+ * caller (#800). Nothing about it was MCP-specific; these numbers are.
  *
- * **Why they live here and not beside their callers.** Each of these three
+ * **Why they live here and not beside their callers.** Each of these
  * numbers was first written in the module that reads it — `MAX_BODY_BYTES` in
  * `handle-request.ts`, `MAX_RESULTS` in `find-people.ts`,
  * `MAX_GUEST_BOOK_ENTRIES` in `record-guest-book.ts` — and every one of those
@@ -28,6 +28,16 @@
  * the hash and the locked section stay cheap.
  */
 export const MAX_GUEST_BOOK_ENTRIES = 100;
+
+/**
+ * How many assignments one `assign_roles` call may carry (#809).
+ *
+ * A meeting's agenda is a few dozen slots at the very most, so 100 is "the
+ * whole agenda and then some" — big enough that no real call is refused, small
+ * enough that the batch's transaction stays short while it holds a `FOR UPDATE`
+ * row lock on every slot it names.
+ */
+export const MAX_ROLE_ASSIGNMENTS = 100;
 
 /**
  * How many people one `find_people` call returns.

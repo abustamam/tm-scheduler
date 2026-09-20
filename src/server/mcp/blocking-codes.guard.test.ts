@@ -96,9 +96,17 @@ describe("the blocking-code vocabulary (#776 item 6)", () => {
 	it("parses the union out of errors.ts", () => {
 		expect(codes.length).toBeGreaterThanOrEqual(4);
 		expect(codes).toContain("NO_MEETING_ON_DATE");
-		// The two dropped in #776 stay dropped until something raises them.
-		expect(codes).not.toContain("MEETING_LOCKED");
+		// `FIELD_TOO_LONG`, dropped in #776, stays dropped until something raises
+		// it: an over-long field is a zod `VALIDATION` rejection before any plan
+		// is built.
 		expect(codes).not.toContain("FIELD_TOO_LONG");
+		// `MEETING_LOCKED` came BACK at #809, and the sweep below is what makes
+		// that legitimate rather than a re-run of the drift #776 removed:
+		// `assign_roles` edits the agenda, which a completed meeting has refused
+		// since #150, so a tool now pushes it. Asserted positively here so this
+		// case keeps saying something — the negative it replaced would otherwise
+		// just be deleted.
+		expect(codes).toContain("MEETING_LOCKED");
 		// The slice stops at its own declaration: `McpErrorCode`'s members are a
 		// different vocabulary and must not leak in.
 		expect(codes).not.toContain("FORBIDDEN");
@@ -107,6 +115,7 @@ describe("the blocking-code vocabulary (#776 item 6)", () => {
 
 	it("finds the tool modules to search", () => {
 		expect(files).toContain("tools/record-guest-book.ts");
+		expect(files).toContain("tools/assign-roles.ts");
 		expect(files.length).toBeGreaterThanOrEqual(5);
 	});
 

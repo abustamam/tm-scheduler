@@ -9,6 +9,12 @@ import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
+// Either the pooled client or a caller's transaction, so this can run inside a
+// batch that is already holding row locks.
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 /** Contact fields for a brand-new club guest (name required, contact optional). */
 export type NewGuestInput = {
 	name: string;
@@ -49,13 +55,37 @@ export async function listClubGuests(clubId: string) {
  * this helper trusts that gate and only validates the guest is club-scoped.
  * Returns the slot's club id and the resolved guest id.
  */
-export async function applyAssignGuestToSlot(input: {
-	slotId: string;
-	guestId?: string | null;
-	newGuest?: NewGuestInput;
-	actorMemberId: string | null;
-}): Promise<{ clubId: string; guestId: string }> {
-	const [slot] = await db
+export async function applyAssignGuestToSlot(
+	input: {
+		slotId: string;
+		guestId?: string | null;
+		newGuest?: NewGuestInput;
+		actorMemberId: string | null;
+	},
+	/**
+	 * Which connection to run on. Defaults to the pooled client, so every
+	 * existing caller is unchanged — it opens its own transaction exactly as
+	 * before.
+	 *
+	 * `assign_roles` passes its `tx` (#809), and that is the whole point of the
+	 * parameter: a batch mixing members, guests and clears must apply entirely
+	 * or not at all, and a guest assignment that opened its OWN transaction
+	 * would commit independently of the rest. It would also take a second
+	 * pooled connection while the caller's transaction holds `FOR UPDATE` row
+	 * locks — the pool is 10 and nothing bounds a pool wait.
+	 *
+	 * Every read below runs on `conn` too, not only the writes. Threading the
+	 * transaction into `db.transaction` and leaving the slot SELECT and
+	 * `loadClubDefaultCountryCode` on `db` would take that second connection
+	 * anyway, which is the failure this parameter exists to prevent.
+	 *
+	 * Given a transaction, `conn.transaction` opens a SAVEPOINT rather than a
+	 * second transaction: a throw in here still aborts the caller's batch,
+	 * because the error propagates.
+	 */
+	conn: DbOrTx = db,
+): Promise<{ clubId: string; guestId: string }> {
+	const [slot] = await conn
 		.select({
 			id: roleSlots.id,
 			assignedMemberId: roleSlots.assignedMemberId,
@@ -68,9 +98,9 @@ export async function applyAssignGuestToSlot(input: {
 	if (!slot) throw new Error("Role not found.");
 
 	// Club default country code for E.164 normalization on write (#295).
-	const cc = await loadClubDefaultCountryCode(slot.clubId);
+	const cc = await loadClubDefaultCountryCode(slot.clubId, conn);
 
-	return db.transaction(async (tx) => {
+	return conn.transaction(async (tx) => {
 		let guestId: string;
 		if (input.newGuest) {
 			const name = input.newGuest.name.trim();

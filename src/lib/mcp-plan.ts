@@ -1,19 +1,34 @@
 /**
  * The preview→apply mechanism's ONE canonicalizer and hash (#773, design D5).
  *
- * Every MCP write tool plans first and returns `{plan, planHash}`; the caller
- * shows the plan to a human and calls again with that hash, and apply re-plans
- * inside its transaction and refuses when the hash no longer matches. That
- * makes the hash a correctness surface, not a convenience: an UNSTABLE field
- * anywhere in a plan — a timestamp, a `Date`, a set iterated in database order
- * — makes every apply fail as `PLAN_STALE`, which reads from the outside
+ * An MCP write tool whose write is DEFERRED plans first and returns
+ * `{plan, planHash}`; the caller shows the plan to a human and the apply
+ * re-plans inside its transaction and refuses when the hash no longer matches.
+ * That makes the hash a correctness surface, not a convenience: an UNSTABLE
+ * field anywhere in a plan — a timestamp, a `Date`, a set iterated in database
+ * order — makes every apply fail as `PLAN_STALE`, which reads from the outside
  * exactly like a database race and is close to undebuggable from a transcript.
  *
  * So there is one canonicalizer, here, in a module with no database import and
- * no tool knowledge. Three tools sharing it (PR1's `record_guest_book`, then
- * `upsert_agendas` and `assign_roles`) is the only way the later two inherit a
+ * no tool knowledge. Tools sharing it is the only way a later one inherits a
  * mechanism that is already proven rather than re-deriving a subtly different
  * one. No tool hashes for itself.
+ *
+ * ## `assign_roles` is the exemption, and it is deliberate
+ *
+ * This header used to say EVERY write tool returns `{plan, planHash}`, which
+ * was true when only `record_guest_book` existed and stopped being true at
+ * #809. `assign_roles` returns a plan and no hash: it plans and applies in ONE
+ * call, inside one transaction that already holds a `FOR UPDATE` row lock on
+ * every slot it names, so there is no window between the plan and the write
+ * for a hash to detect. Its plan is the ACCOUNT of what happened rather than
+ * something a human approves first.
+ *
+ * The rule that decides which shape a tool gets is stated in
+ * `src/server/mcp/tools/assign-roles.ts`: a confirm page — and therefore a
+ * stored plan and a hash — when the write is hard to see or hard to undo. A
+ * hash on a same-call apply would be ceremony that proves nothing, and a
+ * reader finding one would reasonably assume a preview step exists.
  *
  * Canonical form, and why each rule:
  *   - Object keys SORTED. A plan is assembled from database rows and literal

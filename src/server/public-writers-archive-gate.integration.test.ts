@@ -67,6 +67,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import {
 	cleanup,
 	hasTestDb,
@@ -78,6 +79,7 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { captureGuestVisit } = await import("#/server/guest-pipeline-logic");
+const { releaseSlotCore } = await import("#/server/slots-logic");
 const {
 	castVote,
 	joinBallotAsGuest,
@@ -307,17 +309,104 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		/**
-		 * `releaseSlot` and `updateSpeakerDetails` are the two that could NOT be moved
-		 * into a seam: their logic is inline in the `createServerFn` handler, and
-		 * lifting it out is a refactor this change is not. So they gate in the handler
-		 * and are covered by the source guard
-		 * (`public-readers-archive-gate.guard.test.ts`) instead, which is stated here
-		 * rather than left for a reader to notice the absence.
+		 * #809 moved `releaseSlot`'s gate into `releaseSlotCore`, so it joins the
+		 * seam-gated cases above — and it had to, rather than merely being allowed
+		 * to. MEASURED: with the call deleted from the core, the re-pointed
+		 * `WRITE_GATES` row still passes, because that row is a file-level
+		 * `toContain` and `slots-logic.ts` names `assertClubNotArchived` in three
+		 * separate functions. The guard says the module has a gate; only this says
+		 * a release reaches one.
 		 *
-		 * What IS assertable is the input to their gate: both pass
-		 * `slot.clubId` from their own `roleSlots → meetings` join, so this pins that
-		 * the join resolves the club the gate needs. A source guard can see the call;
-		 * only this can see that the argument is right.
+		 * `assign_roles` reaches the same core from a bearer token, which is what
+		 * makes the move worth more than tidiness: without it the MCP path would
+		 * have had no archive gate of its own on the clear arm.
+		 */
+		it("releaseSlotCore — refused, and the slot keeps its holder", async () => {
+			const s = await seedLiveClub();
+			const hold = () =>
+				testDb
+					.update(roleSlots)
+					.set({ assignedMemberId: s.memberId, status: "claimed" })
+					.where(eq(roleSlots.id, s.slotId));
+			const holderOf = async () =>
+				(
+					await testDb
+						.select({ assignedMemberId: roleSlots.assignedMemberId })
+						.from(roleSlots)
+						.where(eq(roleSlots.id, s.slotId))
+				)[0]?.assignedMemberId ?? null;
+
+			// BEFORE: the same clear against the LIVE club succeeds.
+			await hold();
+			await testDb.transaction((tx) =>
+				releaseSlotCore(tx, {
+					slotId: s.slotId,
+					actorMemberId: s.adminMemberId,
+				}),
+			);
+			expect(await holderOf()).toBeNull();
+
+			// AFTER: archived, and the holder stays put.
+			await hold();
+			await archive(s.clubId);
+			await expect(
+				testDb.transaction((tx) =>
+					releaseSlotCore(tx, {
+						slotId: s.slotId,
+						actorMemberId: s.adminMemberId,
+					}),
+				),
+			).rejects.toThrow(ARCHIVED);
+			expect(await holderOf()).toBe(s.memberId);
+		});
+
+		/**
+		 * The ORDER, which a presence check cannot see — the same property
+		 * `timings.integration.test.ts` asserts for `recordTiming`.
+		 *
+		 * With the lock check first, an archived club's COMPLETED meeting answers
+		 * "This meeting is locked", which both discloses meeting state the
+		 * takedown was meant to end and answers differently from the same club's
+		 * scheduled meeting. Takedown outranks every other reason to refuse.
+		 */
+		it("releaseSlotCore — an archived club's COMPLETED meeting still says archived", async () => {
+			const s = await seedLiveClub();
+			await testDb
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, s.meetingId));
+			await archive(s.clubId);
+
+			// Asserted on the MESSAGE rather than with `rejects.not.toThrow`, which
+			// passes for a call that threw the wrong thing as readily as for one
+			// that threw the right thing.
+			const message = await testDb
+				.transaction((tx) =>
+					releaseSlotCore(tx, {
+						slotId: s.slotId,
+						actorMemberId: s.adminMemberId,
+					}),
+				)
+				.then(
+					() => "it did not throw at all",
+					(err: unknown) => (err as Error).message,
+				);
+			expect(message).toBe(CLUB_ARCHIVED_MESSAGE);
+			expect(message).not.toBe(MEETING_LOCKED_MESSAGE);
+		});
+
+		/**
+		 * `updateSpeakerDetails` is the one that could NOT be moved into a seam:
+		 * its logic is inline in the `createServerFn` handler, and lifting it out
+		 * is a refactor this change is not. So it gates in the handler and is
+		 * covered by the source guard (`public-readers-archive-gate.guard.test.ts`)
+		 * instead, which is stated here rather than left for a reader to notice
+		 * the absence.
+		 *
+		 * What IS assertable is the input to its gate: it passes `slot.clubId`
+		 * from its own `roleSlots → meetings` join, so this pins that the join
+		 * resolves the club the gate needs. A source guard can see the call; only
+		 * this can see that the argument is right.
 		 */
 		it("a slot's resolved clubId is the meeting's club — the value the handler gates on", async () => {
 			const s = await seedLiveClub();

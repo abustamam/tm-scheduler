@@ -212,8 +212,19 @@ function assertNotArchived(club: { archivedAt: Date | null }): void {
  *  the id from the meeting row it just loaded — but the earlier `if (club && …)`
  *  form would have GRANTED on an unknown id, which is the wrong default for the
  *  function whose whole job is to deny. */
-export async function assertClubNotArchived(clubId: string): Promise<void> {
-	const [club] = await db
+export async function assertClubNotArchived(
+	clubId: string,
+	/**
+	 * Which connection to ask. Defaults to the pooled client. `releaseSlotCore`
+	 * passes its caller's `tx` (#809): the gate now runs UNDER the slot's row
+	 * lock, and a read on `db` from inside that transaction would take a SECOND
+	 * pooled connection while the first holds the lock — the pool is 10 and
+	 * nothing bounds a pool wait. Same parameter, and the same reason,
+	 * `getMembership` and `getActiveImpersonation` took theirs (#806).
+	 */
+	conn: DbOrTx = db,
+): Promise<void> {
+	const [club] = await conn
 		.select({ archivedAt: clubs.archivedAt })
 		.from(clubs)
 		.where(eq(clubs.id, clubId))

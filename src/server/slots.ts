@@ -25,6 +25,7 @@ import {
 	editSlotSpeech,
 	markComingOnSelfClaim,
 	reassignSlotCore,
+	releaseSlotCore,
 } from "./slots-logic";
 import {
 	speakerDetailsSchema,
@@ -136,17 +137,32 @@ const releaseSchema = z.object({
 });
 
 /** Release a slot back to open. Only the assignee may do this (trust-based).
- *  PUBLIC — no session required; trust guard via requireMemberInClub. */
+ *  PUBLIC — no session required; trust guard via requireMemberInClub.
+ *
+ *  The write, the archive gate and the lock check all live in
+ *  `releaseSlotCore` since #809, so vitest can execute them; what stays here is
+ *  the one thing that cannot move, `requestWriteActor`. It is a REQUEST-scoped
+ *  read — it resolves the caller's session, if any, and credits them rather
+ *  than the member id they asserted (#396) — and `assign_roles` calls the same
+ *  core with an actor it resolved from a bearer token instead.
+ *
+ *  That does move the archive gate to AFTER the actor is resolved, where it used
+ *  to run first. The ordering that matters is preserved inside the core —
+ *  archive before the meeting lock, which is the one CODING_STANDARDS names,
+ *  because a takedown must not answer differently for a completed meeting than
+ *  for a scheduled one. What changes is narrower: an anonymous caller naming a
+ *  member id that is not on this club's roster now hears about the member
+ *  rather than about the takedown, which discloses less, not more. `claimSlot`
+ *  and `reassignSlot` beside it resolve their actor first and have no archive
+ *  gate at all. */
 export const releaseSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => releaseSchema.parse(input))
 	.handler(async ({ data }) => {
+		// Cheap pre-read solely to resolve clubId for the actor guard; the
+		// authoritative read-and-write happens under a row lock in
+		// `releaseSlotCore`. Same shape as `reassignSlot` below.
 		const [slot] = await db
-			.select({
-				id: roleSlots.id,
-				assignedMemberId: roleSlots.assignedMemberId,
-				clubId: meetings.clubId,
-				meetingStatus: meetings.status,
-			})
+			.select({ clubId: meetings.clubId })
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 			.where(eq(roleSlots.id, data.slotId))
@@ -155,12 +171,6 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
-		// #555. PUBLIC — no session, so `requireMembership` never runs and the
-		// archive check never arrives for free. Before the lock check, because a
-		// taken-down club should refuse for the reason it was taken down rather
-		// than for the meeting's status.
-		await assertClubNotArchived(slot.clubId);
-		assertMeetingNotLocked(slot.meetingStatus);
 
 		// Trust guard + actor provenance (#396): the actor must be a roster member
 		// of THIS slot's club, and a signed-in caller is credited as themselves.
@@ -171,31 +181,11 @@ export const releaseSlot = createServerFn({ method: "POST" })
 			claimedActorMemberId: data.actorMemberId,
 		});
 
-		return db.transaction(async (tx) => {
-			// Release unlinks the speech (speech_id → NULL) but never deletes it:
-			// the speech persists Person-owned and unscheduled (ADR-0009).
-			await tx
-				.update(roleSlots)
-				.set({
-					assignedMemberId: null,
-					assignedGuestId: null,
-					status: "open",
-					claimedAt: null,
-					speechId: null,
-				})
-				.where(eq(roleSlots.id, slot.id));
+		await db.transaction((tx) =>
+			releaseSlotCore(tx, { slotId: data.slotId, actorMemberId }),
+		);
 
-			await logActivity(tx, {
-				clubId: slot.clubId,
-				actorMemberId,
-				action: "release",
-				targetType: "slot",
-				targetId: data.slotId,
-				detail: { fromMemberId: slot.assignedMemberId },
-			});
-
-			return { ok: true as const };
-		});
+		return { ok: true as const };
 	});
 
 const confirmSchema = z.object({
