@@ -17,7 +17,8 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Binaries that can drive `--print-to-pdf`, most preferred first.
@@ -163,6 +164,35 @@ ${css}
 }
 
 /**
+ * The environment every Chrome in this repo is launched with.
+ *
+ * Its whole job is `FONTCONFIG_FILE`. These suites run with the host resolver
+ * mapped to NOTFOUND, so Fraunces and Manrope never load and every layout is
+ * drawn in a fallback — and which fallback was a property of the MACHINE, not
+ * of this repo. A stock Ubuntu desktop lands on Noto Sans; GitHub's
+ * `ubuntu-latest` lands on DejaVu Sans, and the difference is enough to move
+ * the editorial agenda's fit scale from 0.7239 to 0.71603 against a 0.72
+ * floor. So the density gate failed on a developer's machine and passed in CI
+ * on identical code — the worst shape a gate can have, because the honest
+ * reading of a red gate that CI calls green is "ignore the gate".
+ *
+ * `print-fonts.conf` pins it, and says what it actually redirects (the family
+ * that resolves is `system-ui`, not the CSS generic at the end of the stack).
+ * Linux only: macOS Chrome uses CoreText and ignores fontconfig, so there the
+ * variable is simply still present. `print-fonts.test.ts` MEASURES the
+ * resulting face rather than trusting this, because a fontconfig that fails to
+ * apply — wrong platform, or a malformed file, which is discarded whole and in
+ * silence — looks exactly like one that worked.
+ */
+export const CHROME_ENV: NodeJS.ProcessEnv = {
+	...process.env,
+	FONTCONFIG_FILE: join(
+		dirname(fileURLToPath(import.meta.url)),
+		"print-fonts.conf",
+	),
+};
+
+/**
  * Whether the one-off Chrome warm-up below has already run this process.
  * Module-level so every consumer of `printedPageCount` gets it without having
  * to remember a `beforeAll`.
@@ -215,7 +245,7 @@ function warmChrome(chrome: string): void {
 			],
 			// Generous: this is the call that pays the first-run cost, and it is
 			// allowed to be slow precisely so the measured ones are not.
-			{ stdio: "pipe", timeout: 60_000 },
+			{ stdio: "pipe", timeout: 60_000, env: CHROME_ENV },
 		);
 	} catch {
 		// Swallowed on purpose — see the doc comment. A failed warm-up must never
@@ -272,7 +302,7 @@ export function printedPageCount(html: string): number {
 			// larger value here means a hung browser blocks the worker past the
 			// point vitest would have reported, and the failure names the wrong
 			// cause. Normal cost is ~360ms per surface.
-			{ stdio: "pipe", timeout: 10_000 },
+			{ stdio: "pipe", timeout: 10_000, env: CHROME_ENV },
 		);
 		return countPdfPages(readFileSync(pdfPath));
 	} finally {
@@ -386,7 +416,7 @@ export function measuredHeights(
 				"--dump-dom",
 				`file://${htmlPath}`,
 			],
-			{ encoding: "utf8", stdio: "pipe", timeout: 10_000 },
+			{ encoding: "utf8", stdio: "pipe", timeout: 10_000, env: CHROME_ENV },
 		);
 		const title = dom.match(/<title>([^<]*)<\/title>/)?.[1];
 		const parts = title?.split("|") ?? [];

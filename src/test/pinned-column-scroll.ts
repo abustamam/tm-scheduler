@@ -43,7 +43,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compile } from "tailwindcss";
-import { findChrome } from "./print-page-count";
+import { CHROME_ENV, findChrome } from "./print-page-count";
 
 // `fileURLToPath`, not `new URL(…).pathname`: the latter hands back a
 // percent-encoded path, so a checkout under a directory with a space in it
@@ -268,6 +268,9 @@ export function probeColumn(opts: {
 				encoding: "utf8",
 				stdio: ["ignore", "pipe", "ignore"],
 				timeout: 30_000,
+				// Same pinned fallback faces as every other Chrome here; see
+				// `CHROME_ENV`.
+				env: CHROME_ENV,
 			},
 		);
 		const title = /<title>([^<]*)<\/title>/.exec(dom)?.[1] ?? "";

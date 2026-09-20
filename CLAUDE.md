@@ -273,9 +273,30 @@ CHROME_PATH="$HOME/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome
 
 Numbers measured through this harness are NOT comparable to the deployed page: it runs with
 `--host-resolver-rules=MAP * ~NOTFOUND`, so Fraunces and Manrope never load and the platform's
-substitute has its own metrics. That substitute also differs between macOS and CI's Ubuntu and moves
-where lines wrap, which is why the point floors in `src/lib/agenda-print-type.ts` carry a wide margin
-and the exact declared sizes are pinned by a separate assertion.
+substitute has its own metrics. That is why the point floors in `src/lib/agenda-print-type.ts` carry
+a wide margin and the exact declared sizes are pinned by a separate assertion.
+
+**Which substitute it is was the MACHINE's answer, not the repo's, until #813's follow-up.** A stock Ubuntu
+desktop resolves the sans stack to Noto Sans and CI's `ubuntu-latest` to DejaVu Sans, and that alone
+moved the editorial agenda's fit scale from 0.7239 to 0.71603 against `MIN_FIT_SCALE` of 0.72 — so
+`print-density.test.tsx` and `ballot-qr-print-fit.test.tsx` failed on a developer's machine and
+passed in CI on identical code, for months. A gate that CI calls green teaches everyone to ignore
+it, and these are the only gates here that see print at all. `src/test/print-fonts.conf` now pins
+the fallback and `print-page-count.ts` sets it as `FONTCONFIG_FILE` on every Chrome it launches
+(`CHROME_ENV`, which the other two browser harnesses import). Three things worth knowing:
+
+- **It redirects `system-ui`, not the CSS generic.** The stack is
+  `'Manrope', ui-sans-serif, system-ui, sans-serif` and `system-ui` is the family that resolves;
+  prepending to fontconfig's `sans-serif` pattern is what moves it. A box declaring `sans-serif`
+  alone measures 739 whatever the rule says. There is deliberately no serif rule — the same
+  prepend leaves the serif stack at 694 whichever face it names, so one would be decoration.
+- **A malformed conf fails SILENTLY.** XML forbids a doubled hyphen inside a comment, and
+  fontconfig answers an unparseable file by discarding it whole and falling back. Every wrapper
+  still looks healthy: the path resolves, the file exists, Chrome starts, and only the numbers
+  disagree. `src/test/print-fonts.test.ts` measures the resulting face (940 pinned, 828 on Noto
+  Sans) so that shows up as one named red test.
+- **Linux only.** macOS Chrome uses CoreText and ignores fontconfig, so there the variable is
+  still present and the canary is what says so.
 
 **Read the lint gate with `--diagnostic-level=error`.** `src/db/seed.ts` carries ~118 pre-existing
 `noNonNullAssertion` warnings, which Biome does not fail on, so the tail of a `bun run check` run is
