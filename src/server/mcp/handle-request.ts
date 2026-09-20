@@ -38,11 +38,11 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { MAX_MCP_BODY_BYTES } from "#/lib/mcp-limits";
 import {
-	MAX_MCP_BODY_BYTES,
 	parseDeclaredContentLength,
 	readBodyWithinCap,
-} from "#/lib/mcp-limits";
+} from "#/lib/request-body-limits";
 import { parseBearerToken } from "#/server/pathways-ingest-logic";
 import { authenticateToken, McpUnauthorizedError } from "./authz-logic";
 import { McpError, toMcpError } from "./errors";
