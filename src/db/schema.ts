@@ -34,7 +34,7 @@ export {
 // The stored shape of `guest_book_pending_plans.entries` (#806). Type-only, so
 // it contributes nothing at runtime and drizzle-kit's schema read is unaffected
 // — same standing as the import above, and relative for the same reason.
-import type { PendingEntry } from "../lib/guest-book-pending";
+import type { McpPendingTool } from "../lib/pending-plan";
 // One number, one declaration. `clubs`'s Table Topics CHECK interpolates the
 // ceiling rather than writing 600 into the SQL, so the constraint and every
 // application layer cannot state different limits. `table-topics-limits.ts`
@@ -2702,44 +2702,65 @@ export const clubActionItems = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Guest-book pending plans (#806) — a page of the paper guest book that an LLM
-// has transcribed and a human has not yet confirmed.
+// MCP pending plans (#806, generalised by #812) — a write an LLM has proposed
+// and a human has not yet confirmed.
 //
-// `record_guest_book` is preview-only: it writes ONE row here and hands back a
-// link. Nothing reaches `guests` or `meeting_attendance` until someone opens
-// that link signed in, checks the values against the page in front of them, and
-// applies.
+// A write tool reachable over `/api/mcp` is preview-only: it writes ONE row
+// here and hands back a link. Nothing reaches the domain tables until someone
+// opens that link signed in, checks the values against whatever they are
+// transcribing from, and applies.
 //
-// `meeting_date`, NOT `meeting_id`. The planner keys on the club-local DATE and
-// returns no plan at all when that date names zero meetings or two, so there is
-// not always an id to write down. Storing what was ASKED and re-resolving it on
-// every render keeps the rule the whole preview→apply mechanism rests on: the
-// plan is re-derived from live data each time, and nothing is trusted across
-// the gap.
+// ONE table, discriminated by `tool`, because the LIFECYCLE is the same for
+// every such tool — one club, one creator, an expiry, a grace window, a sweep,
+// and an apply that happens exactly once under a lock. #806 shipped that
+// lifecycle for `record_guest_book` and #808 needed it again for
+// `upsert_agendas`; two copies of a retention-and-authorization lifecycle is
+// how one copy gets a fix and the other does not, and this one holds visitor
+// names, emails and phone numbers.
 //
-// `entries` is NULLABLE and is nulled on apply, in the same statement that sets
-// `applied_at`. That leaves a tombstone: "already applied" stays distinguishable
-// from "never existed" — which a re-opened link needs — while no visitor's name,
-// email or phone sits here at rest after the write has landed.
+// `payload`, NOT a column per fact, and the meeting DATE is the reason this is
+// a new table rather than a rename. `guest_book_pending_plans.meeting_date` was
+// `date NOT NULL` because a guest-book page belongs to exactly one meeting;
+// `upsert_agendas` carries many dates and has no single value for it. A
+// nullable column meaningful for one tool and always-null for the other is two
+// tables wearing one name, so the date moved into the guest book's own payload
+// — which is also #806's own rule restated: store what was ASKED and re-derive
+// everything else on every render, so nothing is trusted across the gap.
+//
+// `payload` is NULLABLE and each tool tombstones it on apply, in the same
+// statement that sets `applied_at`. That leaves "already applied"
+// distinguishable from "never existed" — which a re-opened link needs — while
+// no personal data sits here at rest after the write it justified has landed.
+// The guest book keeps its `meetingDate` and drops its `entries`, because the
+// applied page still says which meeting the visitors are on.
 // ---------------------------------------------------------------------------
 
-export const guestBookPendingPlans = pgTable(
-	"guest_book_pending_plans",
+export const mcpPendingPlans = pgTable(
+	"mcp_pending_plans",
 	{
 		id: uuid("id").defaultRandom().primaryKey(),
 		clubId: uuid("club_id")
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
-		// Club-local, as the caller named it. `mode: "string"` so it round-trips
-		// as the `YYYY-MM-DD` the planner takes, with no timezone in the middle.
-		meetingDate: date("meeting_date", { mode: "string" }).notNull(),
+		// WHICH tool proposed this write, and the discriminator every read filters
+		// on. Merging the tables means an id no longer says what shape its payload
+		// has, so a guest-book id opened at an agenda page would otherwise pass the
+		// creator check and reach a renderer built for a different shape. Two
+		// tables made that unrepresentable; one table makes it a missing WHERE, so
+		// `resolvePending` takes the expected tool and answers not-found on a
+		// mismatch. `$type` is a compile-time cast and nothing else — a value this
+		// release has never heard of simply matches no reader's WHERE.
+		tool: text("tool").notNull().$type<McpPendingTool>(),
+		// The tool's own shape, parsed at every read boundary. `jsonb` is typed
+		// `unknown` deliberately: the shared lifecycle cannot know what is in here,
+		// and each tool's schema module is what turns it into something readable.
+		payload: jsonb("payload"),
 		// The only user who may open the link. Not a membership: the row must not
 		// outlive the standing that made it, so admin is re-proved on every read
 		// rather than frozen here.
 		createdByUserId: text("created_by_user_id")
 			.notNull()
 			.references(() => user.id, { onDelete: "cascade" }),
-		entries: jsonb("entries").$type<PendingEntry[]>(),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		// created_at + 24h. Past this the link renders "expired" rather than
 		// applying; the sweep removes the row a further 24h later.
@@ -2754,7 +2775,11 @@ export const guestBookPendingPlans = pgTable(
 		// not an option regardless — it cannot run inside the single transaction
 		// the startup migrator uses, and `scripts/migrate.ts` exits non-zero from
 		// the Dockerfile CMD, so attempting it fails the Railway deploy closed.
-		index("guest_book_pending_plans_sweep_idx").on(t.expiresAt),
+		//
+		// NOT `(tool, expires_at)`: the sweep is deliberately tool-BLIND — one
+		// pass removes every expired row whatever made it — and reports the
+		// breakdown from `RETURNING tool` rather than by running a pass per tool.
+		index("mcp_pending_plans_sweep_idx").on(t.expiresAt),
 		// The cascade side. Deleting a club fires a cascade through this table,
 		// and an unindexed FK column costs one sequential scan per delete — the
 		// same reasoning `club_action_items_owner_idx` records a few hundred
@@ -2766,8 +2791,9 @@ export const guestBookPendingPlans = pgTable(
 		// `created_by_user_id` is deliberately NOT indexed to match: nothing in
 		// this application deletes a `user` row (schema.ts records that
 		// `db.delete(user)` appears nowhere), so that cascade never fires, and an
-		// index nothing uses is a write cost on every insert.
-		index("guest_book_pending_plans_club_idx").on(t.clubId),
+		// index nothing uses is a write cost on every insert. `tool` is not
+		// indexed either: every read of it is already keyed by the primary key.
+		index("mcp_pending_plans_club_idx").on(t.clubId),
 	],
 );
 

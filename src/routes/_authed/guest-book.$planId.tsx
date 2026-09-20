@@ -161,8 +161,17 @@ function GuestBookConfirm() {
 				{/* Carries no visitor data: `entries` was nulled when the write
 				    landed, and this state never had any to render. */}
 				<p className="text-sm text-[var(--sea-ink-soft)]">
+					{/* `meetingDate` comes out of the payload since #812 and is null
+					    only when the payload's envelope did not parse. An applied
+					    tombstone keeps its date, so this arm normally has one — but
+					    "the meeting of  in X" is the shape a bare interpolation
+					    would leave if it ever did not. */}
 					This page was recorded on {formatMeetingDate(view.appliedAt)}. The
-					visitors are on the meeting of {view.meetingDate} in {view.clubName}.
+					visitors are on{" "}
+					{view.meetingDate
+						? `the meeting of ${view.meetingDate}`
+						: "the meeting it was transcribed for"}{" "}
+					in {view.clubName}.
 				</p>
 			</Shell>
 		);
@@ -175,7 +184,9 @@ function GuestBookConfirm() {
 					{view.message}
 				</p>
 				<p className="mt-2 text-sm text-[var(--sea-ink-soft)]">
-					{view.clubName} · {view.meetingDate} · {view.entries.length} line
+					{view.clubName}
+					{view.meetingDate ? ` · ${view.meetingDate}` : ""} ·{" "}
+					{view.entries.length} line
 					{view.entries.length === 1 ? "" : "s"} transcribed. Nothing has been
 					recorded.
 				</p>

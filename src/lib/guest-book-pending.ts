@@ -59,42 +59,52 @@ export interface PendingEntry {
 	resolve?: PendingEntryResolve;
 }
 
-/** A pending plan is openable for a day. */
-export const PENDING_PLAN_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * The lifecycle arithmetic, RE-EXPORTED from `src/lib/pending-plan.ts` (#812).
+ *
+ * The expiry, the grace window and the sweep cutoff were defined here while the
+ * guest book was the only tool with a pending plan. They belong to the
+ * lifecycle, not to this tool, and the lifecycle now serves more than one — so
+ * they moved, and are re-exported here so that no importer of this module had
+ * to be edited in the change that moved them.
+ *
+ * `export … from`, not a wrapper: a re-export is the same symbol, so the two
+ * spellings cannot drift into two different windows.
+ */
+export {
+	isPendingPlanExpired,
+	PENDING_PLAN_GRACE_MS,
+	PENDING_PLAN_TTL_MS,
+	pendingPlanExpiresAt,
+	pendingPlanSweepCutoff,
+} from "./pending-plan";
 
 /**
- * And survives, unopenable, for a day after that.
+ * What a re-opened link says when the page was recorded BEFORE this call
+ * started — the cheap, unlocked pre-check's sentence.
  *
- * The grace window is what keeps AC11 and AC12 from racing: a plan that has
- * just expired renders an "expired" state — which is an explanation — rather
- * than vanishing into "never existed", which reads like a bug. The sweep only
- * removes rows past BOTH windows.
+ * Declared beside its sibling below because the pair carries a constraint no
+ * single declaration can state: the two must differ. They used to read
+ * identically, and that made the locked guard untestable — the pre-check
+ * short-circuits every serial case, so an assertion matching both sentences
+ * passed without the locked guard ever running (#806, shipped twice).
+ * `mcp-pending-lifecycle.guard.test.ts` asserts they are not equal.
  */
-export const PENDING_PLAN_GRACE_MS = 24 * 60 * 60 * 1000;
-
-export function pendingPlanExpiresAt(createdAt: Date): Date {
-	return new Date(createdAt.getTime() + PENDING_PLAN_TTL_MS);
-}
-
-/** Past its window: readable as "expired", not appliable. */
-export function isPendingPlanExpired(
-	row: { expiresAt: Date },
-	now: Date = new Date(),
-): boolean {
-	return row.expiresAt.getTime() <= now.getTime();
-}
+export const ALREADY_RECORDED_MESSAGE = "That page has already been recorded.";
 
 /**
- * The instant the sweep deletes below: rows whose `expires_at` is older than
- * this are past BOTH windows and go, applied or not.
- *
- * One arithmetic, read by the SQL predicate the poller runs and by the test
- * that pins the boundary, so "expired" and "swept" cannot drift into a gap
- * where a row is gone while the page still promises an explanation.
+ * What the LOCKED double-apply guard says: the page was recorded by another
+ * click while this one waited on the club lock. Only that guard says this.
  */
-export function pendingPlanSweepCutoff(now: Date = new Date()): Date {
-	return new Date(now.getTime() - PENDING_PLAN_GRACE_MS);
-}
+export const RECORDED_WHILE_OPEN_MESSAGE =
+	"That page was recorded while this one was open.";
+
+/** What the locked guard says for a link that expired during the wait. */
+export const EXPIRED_IN_LOCK_MESSAGE =
+	"That confirmation link has expired. Transcribe the page again.";
+
+/** What a tool's own pre-check says for a link that had already expired. */
+export const EXPIRED_MESSAGE = "That confirmation link has expired.";
 
 /** The lines the planner is handed: stored order, dropped rows removed. */
 export function livePendingEntries(entries: PendingEntry[]): PendingEntry[] {

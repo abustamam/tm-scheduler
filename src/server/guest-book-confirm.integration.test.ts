@@ -25,13 +25,19 @@ import {
 	activityLog,
 	apiTokens,
 	clubs,
-	guestBookPendingPlans,
 	guests,
+	mcpPendingPlans,
 	meetingAttendance,
 	meetings,
 	members,
 } from "#/db/schema";
-import { PENDING_PLAN_GRACE_MS } from "#/lib/guest-book-pending";
+// Through the guest-book module deliberately: #812 moved the arithmetic into
+// `src/lib/pending-plan.ts` and re-exported it from here, and an importer that
+// needed no edit is what AC8 claims.
+import {
+	PENDING_PLAN_GRACE_MS,
+	type PendingEntry,
+} from "#/lib/guest-book-pending";
 import {
 	cleanup,
 	hasTestDb,
@@ -46,12 +52,13 @@ const { recordGuestBookTool } = await import(
 	"#/server/mcp/tools/record-guest-book"
 );
 const { hashApiToken } = await import("#/server/api-tokens-logic");
-const {
-	applyPendingPlan,
-	loadPendingPlan,
-	patchPendingPlan,
-	sweepExpiredPendingPlans,
-} = await import("#/server/guest-book-pending-logic");
+const { applyPendingPlan, loadPendingPlan, patchPendingPlan } = await import(
+	"#/server/guest-book-pending-logic"
+);
+// The sweep is the LIFECYCLE's, not this tool's, since #812.
+const { resolvePending, sweepExpiredPendingPlans } = await import(
+	"#/server/mcp-pending-logic"
+);
 
 type View = Awaited<ReturnType<typeof loadPendingPlan>>;
 
@@ -77,7 +84,7 @@ async function awaitRowLockWaiter(): Promise<void> {
 			SELECT count(*)::int AS n
 			FROM pg_stat_activity
 			WHERE wait_event_type = 'Lock'
-			  AND query ILIKE '%guest_book_pending_plans%'
+			  AND query ILIKE '%mcp_pending_plans%'
 		`);
 		if (Number(res.rows[0]?.n ?? 0) > 0) return;
 		await new Promise((r) => setTimeout(r, 25));
@@ -93,6 +100,35 @@ function editable(view: View) {
 		throw new Error(`expected an editable plan, got ${view.status}`);
 	}
 	return view;
+}
+
+/**
+ * The row as it is actually stored, with this tool's payload unpacked (#812).
+ *
+ * `meetingDate` and `entries` live inside the shared `payload` column now, so
+ * every "what is on the row" assertion reads through one projection rather than
+ * re-spelling the payload shape twenty times — and a change to that shape moves
+ * this function, not the cases.
+ */
+async function storedRow(id: string) {
+	const [row] = await testDb
+		.select({
+			tool: mcpPendingPlans.tool,
+			payload: mcpPendingPlans.payload,
+			appliedAt: mcpPendingPlans.appliedAt,
+		})
+		.from(mcpPendingPlans)
+		.where(eq(mcpPendingPlans.id, id));
+	const payload = row?.payload as
+		| { meetingDate?: string; entries?: PendingEntry[] | null }
+		| null
+		| undefined;
+	return {
+		tool: row?.tool ?? null,
+		appliedAt: row?.appliedAt ?? null,
+		meetingDate: payload?.meetingDate ?? null,
+		entries: payload?.entries ?? null,
+	};
 }
 
 describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
@@ -235,6 +271,78 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		expect(await load(id)).toEqual({ status: "not_found" });
 	});
 
+	// --- #812: the tool discriminator -------------------------------------
+
+	it("is not found when the id is opened with a DIFFERENT tool", async () => {
+		// The check that only exists because the tables merged. Two tables made
+		// "a guest-book id opened at the agenda page" unrepresentable; one table
+		// makes it a missing WHERE, and the failure is silent — both pages load
+		// by id and check the creator, so a mismatched id would pass that check
+		// and reach a renderer built for another shape.
+		const id = await preview([{ name: "Wrong Door", email: "wd@x.com" }]);
+		// The control: it really does resolve for its OWN tool, so the refusal
+		// below cannot be some unrelated reason.
+		const own = await resolvePending(id, seed.adminUserId, "record_guest_book");
+		expect(own.ok).toBe(true);
+
+		const wrong = await resolvePending(id, seed.adminUserId, "upsert_agendas");
+		// Not a render, and not an error. The same answer a wrong id gets.
+		expect(wrong).toEqual({ ok: false, refusal: { status: "not_found" } });
+	});
+
+	it("does not render another tool's row through the guest-book page", async () => {
+		// The consequence, stated on the surface the reader actually opens. This
+		// row's payload has no `entries` and no `meetingDate` at all — a guest
+		// book page built from it would draw an empty plan, which is exactly the
+		// silent failure the discriminator removes.
+		const [row] = await testDb
+			.insert(mcpPendingPlans)
+			.values({
+				clubId: seed.clubId,
+				tool: "upsert_agendas",
+				createdByUserId: seed.adminUserId,
+				payload: { meetings: [{ date: pastMeetingDate, theme: "Not ours" }] },
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+			})
+			.returning({ id: mcpPendingPlans.id });
+		// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+		const id = row!.id;
+
+		expect(await load(id)).toEqual({ status: "not_found" });
+
+		// And it cannot be edited or applied through this tool either — the
+		// discriminator is on every read, not only the load path.
+		const patched = await patchPendingPlan({
+			pendingId: id,
+			userId: seed.adminUserId,
+			edit: { kind: "field", id: "whatever", field: "name", value: "Nope" },
+		});
+		expect(patched).toEqual({ status: "not_found" });
+
+		const applied = await applyPendingPlan({
+			pendingId: id,
+			userId: seed.adminUserId,
+			planHash: "whatever",
+		});
+		expect(applied.ok).toBe(false);
+		expect(applied.view).toEqual({ status: "not_found" });
+
+		// The foreign row is untouched: a refusal must not write.
+		const [after] = await testDb
+			.select({
+				tool: mcpPendingPlans.tool,
+				appliedAt: mcpPendingPlans.appliedAt,
+				payload: mcpPendingPlans.payload,
+			})
+			.from(mcpPendingPlans)
+			.where(eq(mcpPendingPlans.id, id));
+		expect(after?.tool).toBe("upsert_agendas");
+		expect(after?.appliedAt).toBeNull();
+		expect(after?.payload).toEqual({
+			meetings: [{ date: pastMeetingDate, theme: "Not ours" }],
+		});
+	});
+
 	// --- AC15: the archive gate on the READ path --------------------------
 
 	it("refuses the page and its PATCH once the club is archived", async () => {
@@ -261,11 +369,7 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		expect(patched.status).toBe("archived");
 
 		// And the edit did not land: a refused PATCH must not have written.
-		const [stored] = await testDb
-			.select({ entries: guestBookPendingPlans.entries })
-			.from(guestBookPendingPlans)
-			.where(eq(guestBookPendingPlans.id, id));
-		expect(stored?.entries?.[0]?.name).toBe("Taken Down");
+		expect((await storedRow(id)).entries?.[0]?.name).toBe("Taken Down");
 
 		// Archiving is reversible, so put it back before cleanup cascades.
 		await testDb
@@ -450,16 +554,15 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 			planHash: view.planHash,
 		});
 
-		const [stored] = await testDb
-			.select({
-				entries: guestBookPendingPlans.entries,
-				appliedAt: guestBookPendingPlans.appliedAt,
-			})
-			.from(guestBookPendingPlans)
-			.where(eq(guestBookPendingPlans.id, id));
-		expect(stored?.appliedAt).not.toBeNull();
+		const stored = await storedRow(id);
+		expect(stored.appliedAt).not.toBeNull();
 		// No visitor contact details at rest once the write they justified landed.
-		expect(stored?.entries).toBeNull();
+		expect(stored.entries).toBeNull();
+		// The DATE survives the tombstone, and it has to: the applied page still
+		// says which meeting the visitors ended up on. That is the one field #812
+		// moved out of a column and into the payload, so a tombstone that erased
+		// the whole payload would take it with it.
+		expect(stored.meetingDate).toBe(pastMeetingDate);
 
 		const reopened = await load(id);
 		expect(reopened.status).toBe("applied");
@@ -527,14 +630,17 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		});
 		const tombstone = testDb.transaction(async (tx) => {
 			await tx
-				.select({ id: guestBookPendingPlans.id })
-				.from(guestBookPendingPlans)
-				.where(eq(guestBookPendingPlans.id, id))
+				.select({ id: mcpPendingPlans.id })
+				.from(mcpPendingPlans)
+				.where(eq(mcpPendingPlans.id, id))
 				.for("update");
 			await tx
-				.update(guestBookPendingPlans)
-				.set({ appliedAt: new Date(), entries: null })
-				.where(eq(guestBookPendingPlans.id, id));
+				.update(mcpPendingPlans)
+				.set({
+					appliedAt: new Date(),
+					payload: { meetingDate: pastMeetingDate, entries: null },
+				})
+				.where(eq(mcpPendingPlans.id, id));
 			await held;
 		});
 
@@ -560,15 +666,9 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 
 		// The claim. `entries` stays null: no visitor name, email or phone is at
 		// rest on an applied row.
-		const [stored] = await testDb
-			.select({
-				entries: guestBookPendingPlans.entries,
-				appliedAt: guestBookPendingPlans.appliedAt,
-			})
-			.from(guestBookPendingPlans)
-			.where(eq(guestBookPendingPlans.id, id));
-		expect(stored?.appliedAt).not.toBeNull();
-		expect(stored?.entries).toBeNull();
+		const stored = await storedRow(id);
+		expect(stored.appliedAt).not.toBeNull();
+		expect(stored.entries).toBeNull();
 		// And the page it hands back is what is actually stored, not the stale
 		// row the PATCH had read.
 		expect(after.status).toBe("applied");
@@ -596,21 +696,16 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 			edit: { kind: "field", id: entryId, field: "name", value: "Rewritten" },
 		});
 		expect(patched.status).toBe("applied");
-
-		const [stored] = await testDb
-			.select({ entries: guestBookPendingPlans.entries })
-			.from(guestBookPendingPlans)
-			.where(eq(guestBookPendingPlans.id, id));
-		expect(stored?.entries).toBeNull();
+		expect((await storedRow(id)).entries).toBeNull();
 	});
 
 	it("refuses a PATCH against an expired plan, and stores nothing", async () => {
 		const id = await preview([{ name: "Too Late To Edit" }]);
 		const entryId = editable(await load(id)).entries[0]?.id as string;
 		await testDb
-			.update(guestBookPendingPlans)
+			.update(mcpPendingPlans)
 			.set({ expiresAt: new Date(Date.now() - 60_000) })
-			.where(eq(guestBookPendingPlans.id, id));
+			.where(eq(mcpPendingPlans.id, id));
 
 		const patched = await patchPendingPlan({
 			pendingId: id,
@@ -618,12 +713,7 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 			edit: { kind: "field", id: entryId, field: "name", value: "Rewritten" },
 		});
 		expect(patched.status).toBe("expired");
-
-		const [stored] = await testDb
-			.select({ entries: guestBookPendingPlans.entries })
-			.from(guestBookPendingPlans)
-			.where(eq(guestBookPendingPlans.id, id));
-		expect(stored?.entries?.[0]?.name).toBe("Too Late To Edit");
+		expect((await storedRow(id)).entries?.[0]?.name).toBe("Too Late To Edit");
 	});
 
 	it("refuses a resolve naming a guest of ANOTHER club", async () => {
@@ -836,17 +926,22 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		// the point: this is what the PREVIOUS release's shape looks like from
 		// here.
 		const [row] = await testDb
-			.insert(guestBookPendingPlans)
+			.insert(mcpPendingPlans)
 			.values({
 				clubId: seed.clubId,
-				meetingDate: pastMeetingDate,
+				tool: "record_guest_book",
 				createdByUserId: seed.adminUserId,
-				// No `id` on the entry — the field every drop, edit and blocking
+				// The ENVELOPE is fine and the transcription is not, which is the
+				// likelier of the two failures and the one that keeps a date: no
+				// `id` on the entry — the field every drop, edit and blocking
 				// mapping is keyed on.
-				entries: [{ name: "Shapeless" }] as never,
+				payload: {
+					meetingDate: pastMeetingDate,
+					entries: [{ name: "Shapeless" }],
+				},
 				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
 			})
-			.returning({ id: guestBookPendingPlans.id });
+			.returning({ id: mcpPendingPlans.id });
 		// biome-ignore lint/style/noNonNullAssertion: insert returns a row
 		const id = row!.id;
 
@@ -890,15 +985,18 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 			.insert(meetings)
 			.values({ clubId: seed.clubId, scheduledAt: soon, status: "scheduled" });
 		const [row] = await testDb
-			.insert(guestBookPendingPlans)
+			.insert(mcpPendingPlans)
 			.values({
 				clubId: seed.clubId,
-				meetingDate: futureDate,
+				tool: "record_guest_book",
 				createdByUserId: seed.adminUserId,
-				entries: [{ id: "e1", name: "Too Early" }],
+				payload: {
+					meetingDate: futureDate,
+					entries: [{ id: "e1", name: "Too Early" }],
+				},
 				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
 			})
-			.returning({ id: guestBookPendingPlans.id });
+			.returning({ id: mcpPendingPlans.id });
 		// biome-ignore lint/style/noNonNullAssertion: insert returns a row
 		const id = row!.id;
 
@@ -950,9 +1048,9 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		// One minute past the deadline: expired, but well inside the grace window
 		// the sweep respects.
 		await testDb
-			.update(guestBookPendingPlans)
+			.update(mcpPendingPlans)
 			.set({ expiresAt: new Date(Date.now() - 60_000) })
-			.where(eq(guestBookPendingPlans.id, id));
+			.where(eq(mcpPendingPlans.id, id));
 
 		expect((await load(id)).status).toBe("expired");
 		const result = await applyPendingPlan({
@@ -973,36 +1071,47 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		const now = Date.now();
 		// Expired, inside the grace window: still renders an explanation.
 		await testDb
-			.update(guestBookPendingPlans)
+			.update(mcpPendingPlans)
 			.set({ expiresAt: new Date(now - 60_000) })
-			.where(eq(guestBookPendingPlans.id, inside));
+			.where(eq(mcpPendingPlans.id, inside));
 		// Past it, unapplied.
 		await testDb
-			.update(guestBookPendingPlans)
+			.update(mcpPendingPlans)
 			.set({ expiresAt: new Date(now - PENDING_PLAN_GRACE_MS - 60_000) })
-			.where(eq(guestBookPendingPlans.id, outside));
+			.where(eq(mcpPendingPlans.id, outside));
 		// Past it, applied — a tombstone is swept on the same rule.
 		await testDb
-			.update(guestBookPendingPlans)
+			.update(mcpPendingPlans)
 			.set({
 				expiresAt: new Date(now - PENDING_PLAN_GRACE_MS - 60_000),
 				appliedAt: new Date(now),
-				entries: null,
+				payload: { meetingDate: pastMeetingDate, entries: null },
 			})
-			.where(eq(guestBookPendingPlans.id, applied));
+			.where(eq(mcpPendingPlans.id, applied));
 
 		const swept = await sweepExpiredPendingPlans();
-		// Exactly the two this test aged past the window. The DELETE is unscoped
-		// by construction (the poller sweeps the whole table), and vitest runs
-		// test FILES in parallel against one `tm_test` — so a larger number means
-		// it took another file's in-flight rows, which must be visible rather
-		// than silent.
-		expect(swept.deleted).toBe(2);
+		// Exactly the two this test aged past the window, counted for THIS TOOL.
+		//
+		// The DELETE is unscoped by construction — the poller sweeps the whole
+		// table, and since #812 that table serves every MCP write tool — and
+		// vitest runs test FILES in parallel against one `tm_test`. Asserting
+		// `deleted` would therefore be reddened by an agenda suite's in-flight
+		// rows for a reason that has nothing to do with the guest book. The
+		// per-tool count keeps the assertion EXACT rather than fuzzy: a larger
+		// number here still means the sweep took another guest-book file's rows,
+		// which is what this case was written to make visible.
+		expect(swept.byTool.record_guest_book).toBe(2);
+		// And the total is at least those two — a `byTool` that did not add up to
+		// `deleted` would report a retention that had not run.
+		expect(swept.deleted).toBeGreaterThanOrEqual(2);
+		expect(Object.values(swept.byTool).reduce((a, b) => a + b, 0)).toBe(
+			swept.deleted,
+		);
 
 		const left = await testDb
-			.select({ id: guestBookPendingPlans.id })
-			.from(guestBookPendingPlans)
-			.where(eq(guestBookPendingPlans.clubId, seed.clubId));
+			.select({ id: mcpPendingPlans.id })
+			.from(mcpPendingPlans)
+			.where(eq(mcpPendingPlans.clubId, seed.clubId));
 		expect(left.map((r) => r.id)).toEqual([inside]);
 		// The row inside the window still explains itself, which is what stops
 		// AC11 and AC12 racing.
