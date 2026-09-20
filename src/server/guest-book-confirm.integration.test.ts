@@ -59,6 +59,7 @@ const { applyPendingPlan, loadPendingPlan, patchPendingPlan } = await import(
 const { resolvePending, sweepExpiredPendingPlans } = await import(
 	"#/server/mcp-pending-logic"
 );
+const { applyPendingPlanLocked } = await import("#/server/mcp-pending-apply");
 
 type View = Awaited<ReturnType<typeof loadPendingPlan>>;
 
@@ -341,6 +342,48 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		expect(after?.payload).toEqual({
 			meetings: [{ date: pastMeetingDate, theme: "Not ours" }],
 		});
+	});
+
+	it("refuses inside the lock too, before any tool body can run", async () => {
+		// MEASURED, and the reason this case is here rather than a comment: the
+		// locked `FOR UPDATE` filters on the tool as well, and deleting that
+		// predicate left all 27 cases in this file GREEN. `applyPendingPlan`
+		// resolves first, so nothing reachable through the confirm page can get
+		// past the up-front check with a mismatched tool — which makes the
+		// in-lock predicate look like dead defence until a SECOND tool calls the
+		// skeleton without resolving first, and then it is the only thing
+		// standing between that tool and another tool's row.
+		//
+		// So the skeleton is driven directly, which is the interface a second
+		// tool would use.
+		const id = await preview([{ name: "Locked Out" }]);
+		let bodyRan = false;
+
+		await expect(
+			applyPendingPlanLocked({
+				pendingId: id,
+				tool: "upsert_agendas",
+				clubId: seed.clubId,
+				userId: seed.adminUserId,
+				copy: {
+					notFound: "That plan no longer exists.",
+					alreadyApplied: "already",
+					expired: "expired",
+				},
+				apply: async () => {
+					bodyRan = true;
+					return { result: null, tombstone: null };
+				},
+			}),
+		).rejects.toThrow("That plan no longer exists.");
+		// THE claim. A refusal that happened after the body ran would have let a
+		// tool plan against a payload shaped for another one.
+		expect(bodyRan).toBe(false);
+
+		// And the row is untouched — not claimed, not tombstoned.
+		const stored = await storedRow(id);
+		expect(stored.appliedAt).toBeNull();
+		expect(stored.entries).toHaveLength(1);
 	});
 
 	// --- AC15: the archive gate on the READ path --------------------------
