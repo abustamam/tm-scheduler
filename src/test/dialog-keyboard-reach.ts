@@ -49,7 +49,7 @@ import {
 	DIALOG_VIEWPORT_TOP,
 	type ViewportBox,
 } from "#/lib/dialog-viewport";
-import { findChrome } from "./print-page-count";
+import { CHROME_ENV, findChrome } from "./print-page-count";
 
 /**
  * The box a soft keyboard leaves behind, in layout-viewport coordinates.
@@ -247,6 +247,9 @@ export function probeDialog(opts: {
 				encoding: "utf8",
 				stdio: ["ignore", "pipe", "ignore"],
 				timeout: 30_000,
+				// Same pinned fallback faces as every other Chrome here; see
+				// `CHROME_ENV`.
+				env: CHROME_ENV,
 			},
 		);
 		const title = /<title>([^<]*)<\/title>/.exec(dom)?.[1] ?? "";
