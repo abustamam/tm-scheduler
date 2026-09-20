@@ -54,6 +54,7 @@ import {
 import {
 	type AssignmentPlanLine,
 	findDuplicateSlots,
+	MEETING_LOCKED_BLOCKING_MESSAGE,
 	OPEN_LABEL,
 	planLine,
 } from "#/lib/assign-roles-plan";
@@ -84,21 +85,6 @@ const inputSchema = {
 };
 
 type Assignment = z.infer<typeof assignmentSchema>;
-
-/**
- * The up-front lock refusal, which is deliberately NOT
- * `MEETING_LOCKED_MESSAGE`.
- *
- * `reassignSlotCore` and `releaseSlotCore` each assert the lock again under
- * the slot's row lock, raising that shared constant — and that assertion is
- * the ENFORCEMENT, while the blocking item below is the explanation. #806's
- * lesson is why the two sentences differ: a guard inside a locked transaction
- * is unreachable by a serial test when a cheaper pre-check answers first, and
- * doubly so when both refusals say the same words. Different sentences let a
- * test say which one ran.
- */
-export const MEETING_LOCKED_BLOCKING_MESSAGE =
-	"That meeting is completed, so its agenda no longer accepts changes.";
 
 /** Which of the three things one assignment asks for. */
 function kindOf(a: Assignment): "member" | "guest" | "clear" {
@@ -277,7 +263,7 @@ export const assignRolesTool: McpToolDefinition = {
 			}
 
 			const plan = args.assignments.map((a, index) =>
-				describe(index, a, locked, targetMembers, targetGuests),
+				planLineFor(index, a, { locked, targetMembers, targetGuests }),
 			);
 
 			for (const a of args.assignments) {
@@ -457,13 +443,16 @@ async function loadTargetGuests(
  * `reassignSlotCore` applies under the lock — so the plan is computed from the
  * same two Person ids that decide the write, not from a guess about it.
  */
-function describe(
+function planLineFor(
 	index: number,
 	a: Assignment,
-	locked: Map<string, LockedSlot>,
-	targetMembers: Map<string, TargetMember>,
-	targetGuests: Map<string, TargetGuest>,
+	batch: {
+		locked: Map<string, LockedSlot>;
+		targetMembers: Map<string, TargetMember>;
+		targetGuests: Map<string, TargetGuest>;
+	},
 ): AssignmentPlanLine {
+	const { locked, targetMembers, targetGuests } = batch;
 	// Present: every absent slot blocked the call before this runs.
 	// biome-ignore lint/style/noNonNullAssertion: validated above
 	const slot = locked.get(a.slotId)!;

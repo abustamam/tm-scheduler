@@ -1447,11 +1447,23 @@ async function resolveConfirmGrant(
  * The browser path reaches this with an open slot only when the slot was
  * released between the page load and the click, so this changes the feed for a
  * race and for `assign_roles`, and for nothing else.
+ *
+ * It does NOT fix the same sentence for a GUEST-held slot, and that limit is
+ * worth stating because the obvious reading of the paragraph above is that it
+ * does. A guest-held slot is `claimed` with a null `assigned_member_id`, so
+ * taking it for a member still logs `reassign` with `fromMemberId: null` and
+ * still renders "someone → Sam". Carrying a `fromGuestId` here would not be
+ * enough on its own: `activity-feed-logic.ts:218` resolves `fromName` from
+ * `fromMemberId` alone, so that case needs the feed changed too.
+ *
+ * #809 specified returning `wasOpen` so a caller could pick the action without
+ * re-reading. Deciding it HERE, under the lock, is the same fix by a shorter
+ * route, and returning the flag as well would be surface nothing reads.
  */
 export async function reassignSlotCore(
 	tx: DbOrTx,
 	args: { slotId: string; memberId: string; actorMemberId: string | null },
-): Promise<{ clubId: string; wasOpen: boolean }> {
+): Promise<{ clubId: string }> {
 	// Lock only the role_slots row; FOR UPDATE on the joined role_definitions /
 	// meetings catalog rows is unnecessary (they don't change under us).
 	const [slot] = await tx
@@ -1539,7 +1551,7 @@ export async function reassignSlotCore(
 				},
 	});
 
-	return { clubId: slot.clubId, wasOpen };
+	return { clubId: slot.clubId };
 }
 
 /**
@@ -1571,10 +1583,12 @@ export async function reassignSlotCore(
  * the gate lived in `slots.ts` the only thing covering a session-less write to
  * a taken-down club was a source grep. `public-writers-archive-gate.integration.test.ts`
  * now executes it. `public-readers-archive-gate.guard.test.ts`'s `WRITE_GATES`
- * row is re-pointed at this file — but that row is a file-level `toContain` and
- * this module names `assertClubNotArchived` three times, so the guard would
- * stay green with the call below deleted. The behavioural case is the cover;
- * the guard only says the module still has one.
+ * row is re-pointed at this file — but that row is a file-level `toContain`,
+ * and this module calls `assertClubNotArchived` from a SECOND function
+ * (`confirmSlotCore`) besides naming it on the import line, so the guard stays
+ * green with the call below deleted. MEASURED: deleting it left every case in
+ * that guard passing and turned the two behavioural cases red. The guard only
+ * says the module still has a gate somewhere.
  *
  * Release unlinks the slot's speech (`speech_id` → NULL) and never deletes it:
  * the speech persists Person-owned and unscheduled (ADR-0009).
@@ -1582,24 +1596,16 @@ export async function reassignSlotCore(
 export async function releaseSlotCore(
 	conn: DbOrTx,
 	args: { slotId: string; actorMemberId: string | null },
-): Promise<{
-	clubId: string;
-	/** Prior member holder, or null. What the activity row names. */
-	fromMemberId: string | null;
-	/** Prior guest holder, or null. Guests and members are mutually exclusive. */
-	fromGuestId: string | null;
-	/** Whether a linked speech was unlinked (it still exists, unscheduled). */
-	unlinkedSpeech: boolean;
-}> {
+): Promise<{ clubId: string }> {
 	// Lock only the role_slots row; the joined meetings row does not change
 	// under us. Same shape as `reassignSlotCore`, so a clear and a reassign of
 	// the same slot serialize against each other.
 	const [slot] = await conn
 		.select({
 			id: roleSlots.id,
+			// The only column the body reads: the activity row names the prior
+			// member holder, exactly as the handler's did before the extraction.
 			assignedMemberId: roleSlots.assignedMemberId,
-			assignedGuestId: roleSlots.assignedGuestId,
-			speechId: roleSlots.speechId,
 			clubId: meetings.clubId,
 			meetingStatus: meetings.status,
 		})
@@ -1637,12 +1643,10 @@ export async function releaseSlotCore(
 		detail: { fromMemberId: slot.assignedMemberId },
 	});
 
-	return {
-		clubId: slot.clubId,
-		fromMemberId: slot.assignedMemberId,
-		fromGuestId: slot.assignedGuestId,
-		unlinkedSpeech: slot.speechId !== null,
-	};
+	// `clubId` alone, matching `reassignSlotCore`. The prior holder and the
+	// unlinked speech were returned too until review: nothing read them, and an
+	// unread field is a claim about a caller that does not exist.
+	return { clubId: slot.clubId };
 }
 
 /**

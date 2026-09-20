@@ -3,8 +3,14 @@
  *
  * The extraction to `releaseSlotCore` was worth making because a handler body
  * is unreachable from vitest: the archive gate, the lock check and the write
- * are now executed by `public-writers-archive-gate.integration.test.ts` and
- * `slots-release.integration.test.ts` instead of merely grepped for. The two
+ * are now EXECUTED by `public-writers-archive-gate.integration.test.ts`
+ * instead of merely grepped for.
+ *
+ * An earlier draft of this sentence also named `slots-release.integration.test.ts`,
+ * which has never existed. That is the failure `CODING_STANDARDS.md` calls out
+ * as uncatchable by mutation — a confident claim about coverage, checkable in
+ * one `find`, false on the day it was written — and it was the sentence
+ * justifying the extraction. Cite a suite only after opening it. The two
  * assertions here are about the half that could NOT move, and each pins a
  * different failure.
  *

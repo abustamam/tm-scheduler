@@ -396,6 +396,51 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		/**
+		 * The LOCK check, which the two cases above cannot reach.
+		 *
+		 * Both of them archive the club first, so `assertClubNotArchived` throws
+		 * before `assertMeetingNotLocked` is evaluated — the ordering case
+		 * proves exactly that. So on a LIVE club the lock line had no cover at
+		 * all: in the core, in the handler it moved out of, or in any source
+		 * guard. It is also the second endpoint for the claim `assign_roles`
+		 * makes about its own refusal, that the two sentences differ.
+		 *
+		 * Not strictly an archive case, but it belongs beside its sibling: the
+		 * pair is what shows the two gates are independent and ordered.
+		 */
+		it("releaseSlotCore — a LIVE club's completed meeting refuses with the lock message", async () => {
+			const s = await seedLiveClub();
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: s.memberId, status: "claimed" })
+				.where(eq(roleSlots.id, s.slotId));
+			await testDb
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, s.meetingId));
+
+			const message = await testDb
+				.transaction((tx) =>
+					releaseSlotCore(tx, {
+						slotId: s.slotId,
+						actorMemberId: s.adminMemberId,
+					}),
+				)
+				.then(
+					() => "it did not throw at all",
+					(err: unknown) => (err as Error).message,
+				);
+			expect(message).toBe(MEETING_LOCKED_MESSAGE);
+			// The club is live, so this is the lock talking and not the archive.
+			expect(message).not.toBe(CLUB_ARCHIVED_MESSAGE);
+			const [row] = await testDb
+				.select({ assignedMemberId: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, s.slotId));
+			expect(row?.assignedMemberId).toBe(s.memberId);
+		});
+
+		/**
 		 * `updateSpeakerDetails` is the one that could NOT be moved into a seam:
 		 * its logic is inline in the `createServerFn` handler, and lifting it out
 		 * is a refactor this change is not. So it gates in the handler and is

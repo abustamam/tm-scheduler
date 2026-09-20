@@ -27,6 +27,8 @@ import {
 	speeches,
 	user,
 } from "#/db/schema";
+import { MEETING_LOCKED_BLOCKING_MESSAGE } from "#/lib/assign-roles-plan";
+import { MAX_ROLE_ASSIGNMENTS } from "#/lib/mcp-limits";
 import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import {
 	cleanup,
@@ -57,6 +59,24 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const spy = vi.hoisted(() => ({
 	/** Fail the Nth guest assignment of the current call. 0 = never. */
 	failOnCall: 0,
+	/**
+	 * Refuse a call that did not bring the caller's transaction.
+	 *
+	 * Checked HERE rather than after the tool returns, because after is too
+	 * late to be useful: MEASURED, an un-threaded seam opens its own
+	 * transaction and blocks forever on the row lock the batch already holds,
+	 * so the call never returns and the case dies of a 30s timeout naming
+	 * neither connections nor pools. Throwing at the seam beats the deadlock to
+	 * it and says what is wrong.
+	 *
+	 * ON by default, and that is the point: every case that reaches this seam
+	 * through the tool is a case the deadlock would otherwise swallow. MEASURED
+	 * with the `tx` argument dropped — armed for one case only, the suite still
+	 * took 182s because the other guest-touching cases timed out around it; on
+	 * by default it fails in seconds with this sentence. The CONTROL case
+	 * deliberately calls with no connection and turns it off.
+	 */
+	requireConn: true,
 	calls: [] as { slotId: string; conn: unknown }[],
 }));
 
@@ -69,6 +89,11 @@ vi.mock("#/server/guests-logic", async (importOriginal) => {
 			conn?: Parameters<typeof actual.applyAssignGuestToSlot>[1],
 		) => {
 			spy.calls.push({ slotId: input.slotId, conn });
+			if (spy.requireConn && conn === undefined) {
+				throw new Error(
+					"applyAssignGuestToSlot was called without the caller's transaction — it would open its own and deadlock on the batch's row locks",
+				);
+			}
 			if (spy.failOnCall !== 0 && spy.calls.length === spy.failOnCall) {
 				throw new Error("injected failure at the last assignment");
 			}
@@ -78,9 +103,6 @@ vi.mock("#/server/guests-logic", async (importOriginal) => {
 });
 
 const { assignRolesTool } = await import("#/server/mcp/tools/assign-roles");
-const { MEETING_LOCKED_BLOCKING_MESSAGE } = await import(
-	"#/server/mcp/tools/assign-roles"
-);
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { applyAssignGuestToSlot } = await import("#/server/guests-logic");
 
@@ -221,6 +243,7 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 
 	beforeEach(async () => {
 		spy.failOnCall = 0;
+		spy.requireConn = true;
 		spy.calls.length = 0;
 		seed = await seedClub();
 		token = await mintToken(seed.adminUserId);
@@ -324,6 +347,9 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 			// same end state with this list empty, which is the only thing that
 			// tells the two implementations apart.
 			expect(spy.calls.map((c) => c.slotId)).toEqual([seed.slotId]);
+			// And it brought the batch's transaction, not the pooled client —
+			// `spy.requireConn` above already refused anything else at the seam.
+			expect(spy.calls.every((c) => c.conn !== testDb)).toBe(true);
 			expect(await actionsFor(seed.slotId)).toEqual(["reassign"]);
 		});
 
@@ -378,6 +404,29 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 		});
 	});
 
+	it("renders a GUEST holder on the left of the arrow", async () => {
+		// `fromName` is `holderName ?? guestHolderName` and only the member arm
+		// was ever read, so the guest alias and its LEFT JOIN could be deleted
+		// and a guest-held slot would plan as `open → Sam` with every assertion
+		// green — which is precisely the "someone came off a role you never
+		// mentioned" case the plan exists to show.
+		const guestId = await addGuest(seed.clubId, "Visitor Vera");
+		await call({
+			meetingId: seed.meetingId,
+			assignments: [{ slotId: seed.slotId, guestId }],
+		});
+
+		const res = (await call({
+			meetingId: seed.meetingId,
+			assignments: [{ slotId: seed.slotId, memberId: otherMemberId }],
+		})) as Applied;
+
+		expect(res.plan[0]?.change).toBe("Visitor Vera → Sam Second");
+		const row = await slotState(seed.slotId);
+		expect(row?.assignedMemberId).toBe(otherMemberId);
+		expect(row?.assignedGuestId).toBeNull();
+	});
+
 	describe("a speech survives the slot it was on (ADR-0009)", () => {
 		it("release unlinks the speech, keeps it Person-owned, and the plan says so", async () => {
 			const { slotId, speechId } = await addSpeakerSlotWithSpeech(
@@ -421,6 +470,37 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 			expect((await slotState(slotId))?.speechId).toBeNull();
 		});
 
+		it("a GUEST taking a speaker slot unlinks the speech and says so", async () => {
+			// Every other guest case in this file targets a Timer slot with no
+			// speech, so the branch that emits the sentence for a guest was
+			// asserted by nothing — on the one arm whose seam is mocked.
+			const { slotId, speechId } = await addSpeakerSlotWithSpeech(
+				seed.memberId,
+				seed.personId,
+				3,
+			);
+			const guestId = await addGuest(seed.clubId, "Visitor Vera");
+
+			const res = (await call({
+				meetingId: seed.meetingId,
+				assignments: [{ slotId, guestId }],
+			})) as Applied;
+
+			expect(res.plan[0]?.speech).toBe(
+				`Member User's speech "Ice Breaker" returns to Member User's unscheduled speeches.`,
+			);
+			const row = await slotState(slotId);
+			expect(row?.assignedGuestId).toBe(guestId);
+			// A guest cannot own a Person-owned speech, so the link goes — and
+			// the speech itself survives, still owned by the member it came off.
+			expect(row?.speechId).toBeNull();
+			const [persisted] = await testDb
+				.select({ personId: speeches.personId })
+				.from(speeches)
+				.where(eq(speeches.id, speechId));
+			expect(persisted?.personId).toBe(seed.personId);
+		});
+
 		it("reassign to the SAME person keeps it, and the plan stays silent", async () => {
 			const { slotId, speechId } = await addSpeakerSlotWithSpeech(
 				seed.memberId,
@@ -451,10 +531,18 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 			} catch (err) {
 				const e = err as {
 					code?: string;
+					message?: string;
 					detail?: { blocking?: BlockingItem[] };
 				};
 				expect(e.code).toBe("BLOCKED");
-				return e.detail?.blocking ?? [];
+				const items = e.detail?.blocking ?? [];
+				// The message counts PROBLEMS, not assignments — a locked meeting
+				// is one item belonging to the call rather than to any line — and
+				// both plural branches occur in the cases below.
+				expect(e.message).toBe(
+					`Nothing was changed — ${items.length} problem${items.length === 1 ? "" : "s"} to fix first.`,
+				);
+				return items;
 			}
 			throw new Error("expected the call to block");
 		}
@@ -590,6 +678,12 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 			// sentence would make it impossible to say which ran (#806's lesson).
 			expect(blocking[0]?.message).toBe(MEETING_LOCKED_BLOCKING_MESSAGE);
 			expect(blocking[0]?.message).not.toBe(MEETING_LOCKED_MESSAGE);
+			// Stated against the constant, the line above passes for any value it
+			// could hold, empty string included. One absolute anchor so a garbled
+			// constant fails somewhere.
+			expect(MEETING_LOCKED_BLOCKING_MESSAGE).toContain(
+				"no longer accepts changes",
+			);
 			expect((await slotState(seed.slotId))?.assignedMemberId).toBeNull();
 		});
 
@@ -622,6 +716,31 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 				"NOT_A_MEMBER",
 				"SLOT_NOT_IN_MEETING",
 			]);
+		});
+	});
+
+	describe("the batch bounds are enforced, not just declared", () => {
+		it("refuses more assignments than the cap", async () => {
+			// `mcp-limits.test.ts` pins the VALUE absolutely; nothing pinned that
+			// the tool applies it, so `.max(MAX_ROLE_ASSIGNMENTS)` could be
+			// deleted with the whole suite green. The cap bounds how long one
+			// meeting's agenda stays locked, so an unenforced one is a self-DoS
+			// shape rather than a cosmetic gap.
+			const assignments = Array.from(
+				{ length: MAX_ROLE_ASSIGNMENTS + 1 },
+				() => ({ slotId: randomUUID(), clear: true as const }),
+			);
+			await expect(
+				call({ meetingId: seed.meetingId, assignments }),
+			).rejects.toThrow();
+			// Refused by the schema, so nothing was read or locked.
+			expect((await slotState(seed.slotId))?.assignedMemberId).toBeNull();
+		});
+
+		it("refuses an empty batch", async () => {
+			await expect(
+				call({ meetingId: seed.meetingId, assignments: [] }),
+			).rejects.toThrow();
 		});
 	});
 
@@ -790,6 +909,8 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 
 		it("CONTROL: the same seam called with no conn does reach the pool, and still works", async () => {
 			const guestId = await addGuest(seed.clubId, "Visitor Vera");
+			// The one call that is SUPPOSED to arrive without a connection.
+			spy.requireConn = false;
 
 			// The vacuity control for the case above: it proves the spy can see
 			// these tables at all, so "no reads" there is a real absence. It is
@@ -808,6 +929,19 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 			// that a `conn` on the transaction alone would have missed.
 			expect(readsOf(statements, "clubs").length).toBeGreaterThan(0);
 			expect((await slotState(seed.slotId))?.assignedGuestId).toBe(guestId);
+
+			// `guests` needs its OWN floor and does not get one from the call
+			// above: `applyAssignGuestToSlot` reads the guest row INSIDE
+			// `conn.transaction`, so that read is on a PoolClient the spy never
+			// wraps whether or not the connection was threaded. MEASURED while
+			// reviewing: the control's pool sees two statements, `role_slots`
+			// and `clubs`, and no `guests` — which made the `guests` line in the
+			// case above a measurement in name only. A direct pooled read is
+			// what shows the table is visible to this technique at all.
+			const direct = await statementsDuring(() =>
+				testDb.select().from(guests).where(eq(guests.clubId, seed.clubId)),
+			);
+			expect(readsOf(direct, "guests").length).toBeGreaterThan(0);
 		});
 	});
 });

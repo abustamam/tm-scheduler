@@ -515,9 +515,10 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 	// session-less write to a taken-down club.
 	//
 	// Re-pointed rather than deleted, and it is weaker here than the row it
-	// replaced: `slots-logic.ts` names `assertClubNotArchived` in three separate
-	// functions, so a file-level `toContain` passes even with the release gate
-	// gone. `public-writers-archive-gate.integration.test.ts` executes the
+	// replaced: `slots-logic.ts` calls `assertClubNotArchived` from a SECOND
+	// function (`confirmSlotCore`) besides naming it on its import line, so a
+	// file-level `toContain` passes even with the release gate gone. MEASURED
+	// by deleting that call: every case in this file stayed green. `public-writers-archive-gate.integration.test.ts` executes the
 	// refusal, which is what actually holds; this row only says the module still
 	// has a gate to find.
 	{

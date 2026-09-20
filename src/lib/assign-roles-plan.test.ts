@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
 	changeLabel,
 	findDuplicateSlots,
+	MEETING_LOCKED_BLOCKING_MESSAGE,
 	OPEN_LABEL,
 	planLine,
 	speechSentence,
@@ -110,6 +111,17 @@ describe("a plan line names the change (#809)", () => {
 
 	it("renders the arrow in one place", () => {
 		expect(changeLabel("open", "Sam")).toBe("open → Sam");
+	});
+
+	// Pinned absolutely, and in a suite that runs without a database. The
+	// integration case asserts it is NOT `MEETING_LOCKED_MESSAGE`, which is the
+	// property that matters; on its own that passes for any value the constant
+	// could hold, empty string included.
+	it("states the lock refusal in its own words", () => {
+		expect(MEETING_LOCKED_BLOCKING_MESSAGE).toContain(
+			"no longer accepts changes",
+		);
+		expect(MEETING_LOCKED_BLOCKING_MESSAGE.length).toBeGreaterThan(20);
 	});
 });
 

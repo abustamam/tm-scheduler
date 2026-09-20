@@ -8,6 +8,7 @@ import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
 // Either the pooled client or a caller's transaction, so this can run inside a
 // batch that is already holding row locks.
@@ -90,12 +91,29 @@ export async function applyAssignGuestToSlot(
 			id: roleSlots.id,
 			assignedMemberId: roleSlots.assignedMemberId,
 			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
 		})
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.where(eq(roleSlots.id, input.slotId))
 		.limit(1);
 	if (!slot) throw new Error("Role not found.");
+
+	// The lock choke point (#150), which this seam has never had. Every other
+	// way onto an agenda asserts it — `claimSlot` and `releaseSlotCore` in their
+	// own bodies, `reassignSlotCore` under its row lock — and a guest
+	// assignment is an agenda mutation like any other, so a completed meeting
+	// must refuse it too. Until #809 it did not: `assignGuestSlot` gates on the
+	// club admin role and nothing else, so an admin could put a visitor on a
+	// locked agenda from the browser.
+	//
+	// Found by the review of #809, which needed to state where each of the
+	// three apply arms enforces the lock and could not say it truthfully for
+	// this one. `assign_roles` blocks a locked meeting up front and holds the
+	// meeting row `FOR UPDATE` for the batch, so that path was covered — but by
+	// a lock whose load-bearing role nothing recorded, rather than by the
+	// assertion its siblings make.
+	assertMeetingNotLocked(slot.meetingStatus);
 
 	// Club default country code for E.164 normalization on write (#295).
 	const cc = await loadClubDefaultCountryCode(slot.clubId, conn);

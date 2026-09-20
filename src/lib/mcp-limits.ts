@@ -35,7 +35,12 @@ export const MAX_GUEST_BOOK_ENTRIES = 100;
  * A meeting's agenda is a few dozen slots at the very most, so 100 is "the
  * whole agenda and then some" — big enough that no real call is refused, small
  * enough that the batch's transaction stays short while it holds a `FOR UPDATE`
- * row lock on every slot it names.
+ * row lock on every slot it names and on the meeting row.
+ *
+ * MEASURED at the cap against local Postgres: 216 / 247 / 216 ms for a full
+ * 100-assignment batch mixing all three kinds. The apply loop is sequential, so
+ * cost is linear in the batch — re-measure before raising this, because what it
+ * bounds is how long one meeting's agenda is locked against every other writer.
  */
 export const MAX_ROLE_ASSIGNMENTS = 100;
 
