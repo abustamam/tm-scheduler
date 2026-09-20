@@ -110,6 +110,16 @@ function editable(view: View) {
  * every "what is on the row" assertion reads through one projection rather than
  * re-spelling the payload shape twenty times — and a change to that shape moves
  * this function, not the cases.
+ *
+ * THROWS on a missing row, and that is the whole reason this is not four
+ * `?? null`s. MEASURED: while it coalesced an absent row to nulls, the applied
+ * tombstone case below passed with the row DELETED outright — `entries` came
+ * back null either way, so the assertion could no longer tell "tombstoned" from
+ * "gone", which is the one distinction the tombstone exists to make. On `main`
+ * the same line read `stored?.entries` off a direct select and got `undefined`,
+ * which failed. A projection that swallows absence weakens every caller at once,
+ * so absence fails here instead — the same "fail loudly with what came back"
+ * shape as `editable` above.
  */
 async function storedRow(id: string) {
 	const [row] = await testDb
@@ -120,13 +130,14 @@ async function storedRow(id: string) {
 		})
 		.from(mcpPendingPlans)
 		.where(eq(mcpPendingPlans.id, id));
-	const payload = row?.payload as
+	if (!row) throw new Error(`pending row ${id} is gone, not merely tombstoned`);
+	const payload = row.payload as
 		| { meetingDate?: string; entries?: PendingEntry[] | null }
 		| null
 		| undefined;
 	return {
-		tool: row?.tool ?? null,
-		appliedAt: row?.appliedAt ?? null,
+		tool: row.tool,
+		appliedAt: row.appliedAt,
 		meetingDate: payload?.meetingDate ?? null,
 		entries: payload?.entries ?? null,
 	};
@@ -739,7 +750,12 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 			edit: { kind: "field", id: entryId, field: "name", value: "Rewritten" },
 		});
 		expect(patched.status).toBe("applied");
-		expect((await storedRow(id)).entries).toBeNull();
+		const stored = await storedRow(id);
+		expect(stored.entries).toBeNull();
+		// PAIRED with `appliedAt`, like the other tombstone case. `entries: null`
+		// alone is what a swept row and a tombstoned row have in common; only
+		// `applied_at` says which one this is.
+		expect(stored.appliedAt).not.toBeNull();
 	});
 
 	it("refuses a PATCH against an expired plan, and stores nothing", async () => {
@@ -1144,12 +1160,14 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		// number here still means the sweep took another guest-book file's rows,
 		// which is what this case was written to make visible.
 		expect(swept.byTool.record_guest_book).toBe(2);
-		// And the total is at least those two — a `byTool` that did not add up to
-		// `deleted` would report a retention that had not run.
+		// The total is at least those two. Deliberately NOT
+		// `sum(byTool) === deleted`: both are built from the same returned rows,
+		// so that comparison is tautological over the implementation and cannot
+		// fail for any input.
 		expect(swept.deleted).toBeGreaterThanOrEqual(2);
-		expect(Object.values(swept.byTool).reduce((a, b) => a + b, 0)).toBe(
-			swept.deleted,
-		);
+		// What CAN fail: this tool is named in the breakdown at all. A sweep that
+		// reported a total and an empty map would satisfy every other line here.
+		expect(Object.keys(swept.byTool)).toContain("record_guest_book");
 
 		const left = await testDb
 			.select({ id: mcpPendingPlans.id })

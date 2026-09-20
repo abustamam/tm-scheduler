@@ -31,9 +31,9 @@ export {
 	verification,
 } from "./auth-schema";
 
-// The stored shape of `guest_book_pending_plans.entries` (#806). Type-only, so
-// it contributes nothing at runtime and drizzle-kit's schema read is unaffected
-// — same standing as the import above, and relative for the same reason.
+// The `tool` discriminator's vocabulary (#812). Type-only, so it contributes
+// nothing at runtime and drizzle-kit's schema read is unaffected — same
+// standing as the import above, and relative for the same reason.
 import type { McpPendingTool } from "../lib/pending-plan";
 // One number, one declaration. `clubs`'s Table Topics CHECK interpolates the
 // ceiling rather than writing 600 into the SQL, so the constraint and every

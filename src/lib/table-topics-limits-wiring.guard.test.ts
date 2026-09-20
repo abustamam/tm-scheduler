@@ -488,8 +488,9 @@ describe("table topics limits wiring (#443)", () => {
 		// Whole-statement `import type` is ERASED before the bundle exists — that
 		// is the entire meaning of the form — so it can pull in no runtime graph
 		// and is not what this case is about. Separated rather than lumped in
-		// (#806 added `../lib/guest-book-pending` this way, for the stored shape
-		// of `guest_book_pending_plans.entries`): an exact list over BOTH kinds
+		// (#812 has `../lib/pending-plan` this way, for the `tool` column's
+		// vocabulary; #806 had `../lib/guest-book-pending` before it): an exact
+		// list over BOTH kinds
 		// would fail on an import that cannot possibly break a container start,
 		// and the pressure would then be to loosen the value-import list, which
 		// is the half that matters.

@@ -189,9 +189,15 @@ describe("the guest-book confirm wrappers delegate (#806)", () => {
 		// And the confirm page must not have grown its own copy back. A second
 		// spelling of the archive gate here would pass the assertion above while
 		// the shared one rotted unnoticed.
+		//
+		// RAW, not `logic` — this is the "must be ABSENT" class, where stripping
+		// only ever deletes text and so could erase a real offender from view
+		// (`src/test/guard-source.ts`). The presence sweeps above keep using the
+		// comment-blind read, which is the other half of the same rule.
+		const logicRaw = readFileSync(LOGIC, "utf8");
 		for (const call of ["assertClubNotArchived(", "requireClubRole("]) {
 			expect(
-				logic.includes(call),
+				logicRaw.includes(call),
 				`guest-book-pending-logic.ts calls ${call} again — the lifecycle owns that check since #812, and a second copy is what the extraction removed.`,
 			).toBe(false);
 		}

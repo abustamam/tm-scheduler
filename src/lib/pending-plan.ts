@@ -13,10 +13,17 @@
  * and the sweep's own report. `src/server/mcp-pending-logic.ts` owns the reads
  * and the sweep; `src/server/mcp-pending-apply.ts` owns the locked claim.
  *
- * Client-safe on purpose, and a LEAF: `src/db/schema.ts` imports
- * `McpPendingTool` from here, and that file is bundled into two standalone
- * scripts that gate every container start (`table-topics-limits-wiring.guard.test.ts`
- * holds the rule). Nothing here may import anything.
+ * Client-safe on purpose, and a LEAF: nothing here may import anything.
+ *
+ * `src/db/schema.ts` imports `McpPendingTool` from this module, and that file
+ * is bundled into two standalone scripts that gate every container start. The
+ * leaf rule is therefore load-bearing — but it is NOT enforced for this module,
+ * and saying otherwise would be worse than saying nothing.
+ * `table-topics-limits-wiring.guard.test.ts` pins the leaf property of
+ * `src/lib/table-topics-limits.ts` by name and of no other module, and its
+ * `outsideDb` sweep exempts whole-statement `import type` — which is exactly
+ * how schema.ts imports this. So a value import added here would be caught by
+ * neither. Keep it a leaf by hand until something enforces it.
  */
 
 /**
@@ -37,6 +44,19 @@ export const MCP_PENDING_TOOLS = [
 ] as const;
 
 export type McpPendingTool = (typeof MCP_PENDING_TOOLS)[number];
+
+/**
+ * The guest book's own member, named once.
+ *
+ * Every read of a `record_guest_book` row filters on this value, and it was
+ * spelled three times: two `as const` declarations and a bare literal at the
+ * insert. `$type<McpPendingTool>` catches a TYPO in any of them, so the drift
+ * that survives typecheck is one copy moving to the OTHER valid member —
+ * measured, that reds 8 integration cases immediately rather than failing
+ * silently, so this is tidiness and not a latent bug. It is still the shape
+ * this change exists to remove.
+ */
+export const RECORD_GUEST_BOOK_TOOL: McpPendingTool = "record_guest_book";
 
 /** A pending plan is openable for a day. */
 export const PENDING_PLAN_TTL_MS = 24 * 60 * 60 * 1000;

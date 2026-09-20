@@ -47,6 +47,7 @@ import {
 	type PendingEntryEdit,
 	pendingPlanArgs,
 } from "#/lib/guest-book-pending";
+import { RECORD_GUEST_BOOK_TOOL } from "#/lib/pending-plan";
 import { loadClubDefaultCountryCode } from "#/server/clubs-logic";
 import { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } from "#/server/guards";
 import {
@@ -74,7 +75,7 @@ import {
 } from "#/server/mcp-pending-logic";
 
 /** The tool every read and write in this module names. See `resolvePending`. */
-export const GUEST_BOOK_TOOL = "record_guest_book" as const;
+export const GUEST_BOOK_TOOL = RECORD_GUEST_BOOK_TOOL;
 
 /**
  * A blocking item as the confirm page needs it: keyed to the STORED entry, not
@@ -408,7 +409,21 @@ export async function patchPendingPlan(input: {
 	// An applied or expired plan is not editable. Re-rendering rather than
 	// throwing keeps one mapping for the page: it gets the same view it would
 	// have got from a fresh load.
-	if (row.appliedAt || isPendingPlanExpired(row) || row.entriesUnreadable) {
+	//
+	// `meetingDate === null` is listed EXPLICITLY rather than left to
+	// `entriesUnreadable`, even though `withPayload` sets the two together
+	// today. The UPDATE below rewrites the whole payload from `row.meetingDate`,
+	// so a null one would write an envelope this release cannot parse — turning
+	// a readable transcription into an unreadable one, which is the row's own
+	// data destroying itself. Inheriting that safety from an invariant in
+	// another function is how it gets broken by an edit that looks unrelated;
+	// naming it here also narrows the type, so the UPDATE is compile-enforced.
+	if (
+		row.appliedAt ||
+		isPendingPlanExpired(row) ||
+		row.entriesUnreadable ||
+		row.meetingDate === null
+	) {
 		return renderPendingPlan(row);
 	}
 
@@ -484,7 +499,8 @@ export async function applyPendingPlan(input: {
 		return {
 			ok: false,
 			// The CHEAP, unlocked pre-check's sentence. It is deliberately not the
-			// one the locked guard gives — see `RECORDED_WHILE_OPEN_MESSAGE`.
+			// one the locked guard gives — see `RECORDED_WHILE_OPEN_MESSAGE`,
+			// and `pending-plan.test.ts` for the assertion that they differ.
 			message: row.appliedAt
 				? ALREADY_RECORDED_MESSAGE
 				: unreadable

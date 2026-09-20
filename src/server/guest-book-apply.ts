@@ -42,6 +42,7 @@ import {
 	pendingPlanArgs,
 	RECORDED_WHILE_OPEN_MESSAGE,
 } from "#/lib/guest-book-pending";
+import { RECORD_GUEST_BOOK_TOOL } from "#/lib/pending-plan";
 import { logActivity } from "#/server/activity";
 import {
 	parseGuestBookPayload,
@@ -52,7 +53,7 @@ import { McpError } from "#/server/mcp/errors";
 import { applyPendingPlanLocked } from "#/server/mcp-pending-apply";
 
 /** The tool this apply claims rows for. Matched in the `FOR UPDATE`'s WHERE. */
-const GUEST_BOOK_TOOL = "record_guest_book" as const;
+const GUEST_BOOK_TOOL = RECORD_GUEST_BOOK_TOOL;
 
 export interface ApplyGuestBookPlanInput {
 	pendingId: string;
@@ -101,7 +102,7 @@ export async function applyGuestBookPlan(
 			// cheap pre-check short-circuits every serial case, so an assertion
 			// matching both sentences passed without the locked guard ever
 			// running. A test can only prove it fires if it says something only
-			// it says. `mcp-pending-lifecycle.guard.test.ts` holds the pair apart.
+			// it says. `src/lib/pending-plan.test.ts` asserts the pair differs.
 			alreadyApplied: RECORDED_WHILE_OPEN_MESSAGE,
 			expired: EXPIRED_IN_LOCK_MESSAGE,
 		},

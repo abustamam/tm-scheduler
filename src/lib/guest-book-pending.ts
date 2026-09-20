@@ -88,7 +88,7 @@ export {
  * identically, and that made the locked guard untestable — the pre-check
  * short-circuits every serial case, so an assertion matching both sentences
  * passed without the locked guard ever running (#806, shipped twice).
- * `mcp-pending-lifecycle.guard.test.ts` asserts they are not equal.
+ * `src/lib/pending-plan.test.ts` asserts they are not equal.
  */
 export const ALREADY_RECORDED_MESSAGE = "That page has already been recorded.";
 
