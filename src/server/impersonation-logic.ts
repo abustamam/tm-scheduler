@@ -31,6 +31,11 @@ export function ttlForMode(mode: ImpersonationMode): number {
 	return mode === "read_write" ? IMPERSONATION_RW_TTL_MS : IMPERSONATION_TTL_MS;
 }
 
+/** The pooled client or a drizzle transaction handle (mirrors `activity.ts`). */
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 export interface ActiveImpersonation {
 	id: string;
 	clubId: string;
@@ -56,8 +61,16 @@ export interface ActiveImpersonation {
 export async function getActiveImpersonationForUser(
 	superadminUserId: string,
 	now: Date = new Date(),
+	/**
+	 * Which connection to ask. Defaults to the pooled client, which is what
+	 * every route guard wants. `assertStillClubAdmin` passes a `tx` (#806): it
+	 * runs INSIDE a transaction that already holds a pooled connection and the
+	 * club's advisory lock, and reaching for a second connection there is a
+	 * self-DoS shape — node-postgres' pool is 10 and nothing bounds a pool wait.
+	 */
+	conn: DbOrTx = db,
 ): Promise<ActiveImpersonation | null> {
-	const [row] = await db
+	const [row] = await conn
 		.select({
 			id: impersonationSessions.id,
 			clubId: impersonationSessions.clubId,
@@ -88,8 +101,14 @@ export async function getActiveImpersonation(
 	superadminUserId: string,
 	clubId: string,
 	now: Date = new Date(),
+	/** See `getActiveImpersonationForUser`. */
+	conn: DbOrTx = db,
 ): Promise<ActiveImpersonation | null> {
-	const active = await getActiveImpersonationForUser(superadminUserId, now);
+	const active = await getActiveImpersonationForUser(
+		superadminUserId,
+		now,
+		conn,
+	);
 	return active && active.clubId === clubId ? active : null;
 }
 

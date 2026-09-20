@@ -27,12 +27,14 @@ import {
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
 import { toStoredPhone } from "#/lib/phone";
-import { writeInNameSchema } from "#/lib/write-in-limits";
+import { writeInKey, writeInNameSchema } from "#/lib/write-in-limits";
 import type { MinutesActionItems } from "./action-items-logic";
 import { loadActionItemsForMinutes } from "./action-items-logic";
 import {
 	type AwardCandidate,
+	disqualificationFor,
 	loadAwardCandidates,
+	loadDisqualifications,
 } from "./award-candidates-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { findGuestForContact } from "./guest-pipeline-logic";
@@ -921,6 +923,15 @@ export async function moveTableTopicsSpeaker(input: {
  * INLINE new guest (`newGuest` present). Threaded to `resolveGuestId` so a
  * lost-ack offline replay reuses the same guest row instead of minting an orphan.
  * The online path never passes it, so it keeps the fresh-random-id behaviour.
+ *
+ * DISQUALIFICATION is enforced here (#786), and this is its third enforcement
+ * point rather than a courtesy: #723 hides a ruled-out name on the ballot and
+ * refuses a vote for one in `castVote`, but confirming the WINNER is a separate
+ * human tap, and until this check a request naming a ruled-out candidate wrote
+ * `meeting_awards` — which the minutes, the emailed minutes and the public
+ * minutes PDF all render as the club's official result. A stale console is
+ * enough to produce one: the ballot polls every 5s, so a ruling made seconds
+ * ago leaves a tappable winner button on someone else's screen.
  */
 export async function setAward(input: {
 	meetingId: string;
@@ -934,22 +945,70 @@ export async function setAward(input: {
 	writeInName?: string | null;
 }): Promise<void> {
 	const clubId = await getMeetingClubId(input.meetingId);
+	// Read through the module that owns disqualification, so this gate and the
+	// ballot's own filter cannot drift: `disqualificationFor` is THE reader of
+	// the `kind:id` key, and `writeInKey` below is the same fold the ballot
+	// matches by.
+	//
+	// This is a CHECK-THEN-WRITE, and CODING_STANDARDS ("Put the predicate in
+	// the STATEMENT") says what that costs: a ruling committed between this read
+	// and the insert is missed, and the award lands. Moving the read inside the
+	// transaction would not close it — under READ COMMITTED a statement there
+	// sees the same thing — so the only close is a conditional insert, which
+	// cannot report WHICH ruling refused the write. The reason string is what
+	// the acceptance criteria ask the officer to be told, and both sides of the
+	// window are human taps on a console, so the trade is taken knowingly rather
+	// than by placement. The read is out here because it needs nothing from the
+	// transaction.
+	const disqualified = await loadDisqualifications(input.meetingId);
 	await db.transaction(async (tx) => {
 		let memberId: string | null = null;
 		let guestId: string | null = null;
 		let writeInName: string | null = null;
+		// The resolved candidate, carried alongside the three columns so ONE
+		// check below covers all three arms. It has to be the RESOLVED one: an
+		// inline `newGuest` does not always mint a row — since #773 it matches a
+		// returning visitor by contact first — so a check over the raw input
+		// would see nothing to check and let a ruled-out guest through.
+		let candidate: { kind: "member" | "guest" | "writeIn"; id: string };
 		if (input.memberId) {
 			await requireMemberInMeetingClub(input.memberId, clubId);
 			memberId = input.memberId;
+			candidate = { kind: "member", id: memberId };
 		} else if (input.guestId || input.newGuest) {
 			guestId = await resolveGuestId(tx, clubId, input, input.newGuestId);
+			candidate = { kind: "guest", id: guestId };
 		} else if (input.writeInName) {
 			// Re-validated here rather than trusted from the caller: this is the
 			// same string class the public ballot accepts, and it lands in the
 			// table the minutes PDF renders.
 			writeInName = writeInNameSchema.parse(input.writeInName);
+			candidate = { kind: "writeIn", id: writeInKey(writeInName) };
 		} else {
 			throw new Error("Provide a member or guest for the award.");
+		}
+		const ruledOut = disqualificationFor(
+			disqualified,
+			input.category,
+			candidate,
+		);
+		// Thrown, not silently dropped: the officer holding the tally needs to
+		// know WHY the name they tapped was refused. The vote-counter console
+		// renders this verbatim in a toast; the minutes panel's offline path has
+		// no toast on a DRAIN and surfaces it as the sync error instead, which
+		// stops the drain and offers Retry — so the message has to stand alone in
+		// both. Throwing inside the transaction also rolls back a guest the
+		// inline arm may just have created.
+		//
+		// "Ruled out" rather than "disqualified" deliberately: `voting-logic`
+		// already says "That candidate is already disqualified in this award."
+		// on the same console for a DIFFERENT thing (a second ruling on one
+		// candidate), and two messages one word apart meaning different things is
+		// how an officer mid-meeting reads the wrong one.
+		if (ruledOut) {
+			throw new Error(
+				`That candidate was ruled out of this award: ${ruledOut.reason}`,
+			);
 		}
 		await tx
 			.insert(meetingAwards)

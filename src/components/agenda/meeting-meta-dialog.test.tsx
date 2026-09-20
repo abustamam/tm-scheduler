@@ -8,9 +8,9 @@
 // of its four behaviours are decisions this component makes and no other module
 // can see:
 //
-//  1. the field is always SENT, blank included — `updateMeeting` is a full
-//     REPLACE, so omitting it is indistinguishable from clearing it, and a
-//     dialog that only sent a non-empty value could never clear one;
+//  1. the field is always SENT, blank included — since #772 `updateMeeting` is a
+//     PATCH, so an omitted key means "leave the stored link alone" and a dialog
+//     that only sent a non-empty value could never clear one;
 //  2. a non-empty value that normalizes to null is REFUSED before the round
 //     trip, because the server would store null for `"tbd"` just as happily and
 //     the officer would be told the meeting saved while the link quietly went;
@@ -65,6 +65,7 @@ const meeting = (over: Record<string, unknown> = {}) =>
 const dialog = (
 	open: boolean,
 	over: Record<string, unknown> = {},
+	canReschedule = true,
 ): ReactElement => (
 	<MeetingMetaDialog
 		open={open}
@@ -72,7 +73,7 @@ const dialog = (
 		meeting={meeting(over)}
 		timezone="America/Chicago"
 		selfMemberId={null}
-		canReschedule
+		canReschedule={canReschedule}
 		onSaved={vi.fn(async () => {})}
 	/>
 );
@@ -143,9 +144,9 @@ describe("what the dialog sends", () => {
 	});
 
 	it("sends an empty string when the officer clears the field, which CLEARS the link", async () => {
-		// Not `undefined`. `updateMeeting` is a full replace, so both land on null
-		// — but a dialog that omitted the key could never distinguish "leave it"
-		// from "clear it", and this is the only surface that can clear it at all.
+		// Not `undefined`, and since #772 that is the whole difference: an omitted
+		// key leaves the stored link alone, so `""` is the only way this dialog —
+		// the only surface that can clear the link at all — says "clear it".
 		const { user, input, save } = setup({
 			joinUrl: "https://zoom.us/j/1234567890",
 		});
@@ -156,8 +157,8 @@ describe("what the dialog sends", () => {
 	});
 
 	it("always carries the key, even when the club never had a link", async () => {
-		// The omission this guards is the data-loss shape `MeetingMetaEcho`
-		// documents, seen from the other side.
+		// Sending the key unconditionally is what makes a cleared field reach the
+		// server as a clear rather than as silence.
 		const { user, save } = setup();
 		await user.click(save);
 		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
@@ -179,8 +180,9 @@ describe("what the dialog sends", () => {
  *   link set → open → clear the field → CANCEL → reopen → save a theme
  *   → the club's join link is deleted.
  *
- * Which is the data-loss `MeetingMetaEcho` exists to prevent, reintroduced on
- * the client. These are the regression.
+ * Data loss on the client, where no writer-side patch can help: the dialog sends
+ * this field on every save, so a stale value in it IS an edit. These are the
+ * regression.
  */
 describe("the field re-reads the row on every open", () => {
 	it("discards an edit that was cancelled rather than saved", async () => {
@@ -269,5 +271,76 @@ describe("the inline error", () => {
 		expect(await screen.findByText(JOIN_URL_ERROR)).toBeTruthy();
 		await user.type(input, "x");
 		await waitFor(() => expect(screen.queryByText(JOIN_URL_ERROR)).toBeNull());
+	});
+});
+
+/**
+ * The time, for a viewer who may not change it (#772).
+ *
+ * `meeting-agenda.tsx` mounts this dialog on `viewer.canEditMeetingMeta` — which
+ * includes a self-serve Toastmaster who is NOT an admin — and passes
+ * `canReschedule={viewer.canManage}`, false for exactly that person. It used to
+ * resubmit the meeting's stored wall time on their behalf, and the writer
+ * compared that against a FRESH read: so if an admin moved the meeting while this
+ * tab was open, the TMOD's next save was refused with "Only an admin or VP
+ * Education can reschedule this meeting" and the edit they actually made was
+ * lost. No race needed, just a stale tab. Saying nothing about the time cannot be
+ * read as a move.
+ */
+describe("the time a non-rescheduling viewer sends", () => {
+	it("omits scheduledAt entirely", async () => {
+		const user = userEvent.setup();
+		render(dialog(true, {}, false));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect("scheduledAt" in sentData().data).toBe(false);
+	});
+
+	it("still sends it for an admin, who picks it from the form", async () => {
+		// The CONTROL. Without it the assertion above passes on a dialog that never
+		// sends the field at all, which would break rescheduling outright.
+		const user = userEvent.setup();
+		render(dialog(true, {}, true));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect(sentData().data.scheduledAt).toBeTruthy();
+	});
+});
+
+/**
+ * The meeting number, for the same viewer (#792).
+ *
+ * The server refuses `meetingNumber` from a non-admin on PRESENCE, not on an
+ * actual change, and the safety of that strictness rests on a claim about this
+ * component: the number input lives inside the `canReschedule` branch, so a
+ * self-serve TMOD's form has no such field and `meetingUpdateFromForm` maps an
+ * unrendered input to `undefined`. The mapping half is tested in
+ * `meeting-meta-form.test.ts`; this is the RENDERING half, and without it the
+ * claim is only asserted where it is easiest to keep true.
+ *
+ * It matters because a `readOnly` input still appears in `FormData`. Showing the
+ * club's number to the TMOD for reference — a plausible, well-meant change — would
+ * make every self-serve Toastmaster save throw "Only an admin or VP Education can
+ * set this meeting's number", with every other test in the repo still green.
+ */
+describe("the meeting number a non-rescheduling viewer sends", () => {
+	it("sends nothing at all — not the stored number, not a clear", async () => {
+		const user = userEvent.setup();
+		render(dialog(true, { meetingNumber: 56 }, false));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		// `undefined`, not an absent key: `meetingUpdateFromForm` names the field
+		// unconditionally, and `undefined` is the value the server's guard reads.
+		expect(sentData().data.meetingNumber).toBeUndefined();
+	});
+
+	it("still sends it for an admin, who has the field", async () => {
+		// The CONTROL. Without it the assertion above passes on a dialog that never
+		// sends the number at all, which would break #358's whole workflow.
+		const user = userEvent.setup();
+		render(dialog(true, { meetingNumber: 56 }, true));
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect(sentData().data.meetingNumber).toBe(56);
 	});
 });

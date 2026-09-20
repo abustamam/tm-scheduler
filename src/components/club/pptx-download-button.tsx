@@ -223,11 +223,13 @@ async function decodedPixelSize(
  * `immutable` any more (#517): that disabled #556's eviction, because the
  * service worker revalidates with a plain `fetch` the browser's own HTTP cache
  * satisfied, so `response.ok` stayed true and an archived club's crest could
- * never be evicted. See `CODING_STANDARDS.md`. Note it is NOT served from the
- * service worker's asset cache either — `isCacheableAsset` keys on
- * `request.destination`, and a `fetch()` has an empty destination, so the SW
- * never handles this request even though the `<img>` on the same page
- * populated its cache.
+ * never be evicted. See `CODING_STANDARDS.md`. The service worker's asset cache
+ * is the real offline guarantee behind that, and reaching it took #514: the
+ * splash's `<img>` populates it because `isCacheableAsset` keys on
+ * `request.destination`, but a `fetch()` has an EMPTY destination, so this read
+ * went unhandled and the offline deck lost the crest the splash beside it was
+ * still showing. `isCacheableAsset` now also matches the crest by path
+ * (`LOGO_PATH`), so both routes to it are cached and served alike.
  */
 export async function fetchClubLogo(
 	logoUrl: string | null,

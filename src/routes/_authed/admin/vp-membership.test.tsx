@@ -22,9 +22,24 @@
 // server-fn modules (they reach `#/db` → `pg`, which must not load under
 // jsdom), stub `Route.useLoaderData`, and render `Route.options.component`
 // directly rather than running the real loader.
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PipelineGuestRow } from "#/server/guest-pipeline";
+import {
+	CONVERT_DEMOTED_MESSAGE,
+	CONVERT_REACTIVATED_MESSAGE,
+	type ConvertNotice,
+} from "#/lib/guest-convert";
+import {
+	convertGuestToMember,
+	type PipelineGuestRow,
+} from "#/server/guest-pipeline";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/guest-pipeline", () => ({
@@ -323,5 +338,105 @@ describe("VP Membership guest card — undo a conversion (#618)", () => {
 		expect(
 			screen.queryByRole("button", { name: /undo conversion/i }),
 		).toBeNull();
+	});
+});
+
+/**
+ * The reactivation notice (#501).
+ *
+ * Convert reuses the person's existing membership in this club when there is
+ * one, and it now WAKES that row when it had lapsed — `inactive` hides a
+ * membership from the roster, the sign-up sheet, the season grid and every
+ * picker, so the old behaviour produced a member nobody could see behind a
+ * success toast saying it had worked. The wake-up is deliberately not silent:
+ * Person dedup can match the wrong human (#561), and this line is the admin's
+ * chance to notice.
+ *
+ * The gate is the FLAG → COPY seam, which is the only conditional logic the UI
+ * half introduced. The copy is imported from `#/lib/guest-convert` rather than
+ * retyped here, so a reworded constant cannot leave the assertion agreeing with
+ * a sentence the app no longer ships. What this cannot see is sonner's own
+ * rendering of `description` — the module is mocked, as every toast test in
+ * this repo mocks it.
+ */
+describe("VP Membership guest card — reactivation notice (#501)", () => {
+	function prospect() {
+		return guestRow({ name: "Returning Guest", stage: "prospect" });
+	}
+
+	async function clickConvert(
+		result: Partial<ConvertNotice> & { reactivated: boolean },
+	) {
+		vi.spyOn(window, "confirm").mockReturnValue(true);
+		vi.mocked(convertGuestToMember).mockResolvedValue({
+			ok: true,
+			membershipId: "44444444-4444-4444-8444-444444444444",
+			personId: "55555555-5555-4555-8555-555555555555",
+			retainedOfficerPositions: [],
+			...result,
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+		} as any);
+		await renderRoute([prospect()]);
+		fireEvent.click(screen.getByRole("button", { name: /convert/i }));
+		await waitFor(() => expect(convertGuestToMember).toHaveBeenCalled());
+		await waitFor(() => expect(toast.success).toHaveBeenCalled());
+		return vi.mocked(toast.success).mock.calls.at(-1);
+	}
+
+	it("says a lapsed membership was reactivated, and names the prior status", async () => {
+		const call = await clickConvert({ reactivated: true });
+
+		expect(call?.[0]).toContain("Returning Guest");
+		expect(call?.[1]).toEqual({ description: CONVERT_REACTIVATED_MESSAGE });
+		// The prior status is the half that makes this worth showing: "we did
+		// something" is not information, "this human was already on your roster
+		// and had lapsed" is. Asserted on the constant's VALUE so a rewrite that
+		// drops it fails here rather than passing on an identity comparison.
+		expect(CONVERT_REACTIVATED_MESSAGE).toMatch(/inactive/i);
+	});
+
+	it("says nothing extra when convert did not reactivate anything", async () => {
+		// The common path: a fresh membership, or reuse of one that was already
+		// active. A notice here would cry wolf and admins would learn to ignore
+		// it — so the ABSENCE is the invariant, not merely "some other text".
+		const call = await clickConvert({ reactivated: false });
+
+		expect(call?.[0]).toContain("Returning Guest");
+		expect(call?.[1]).toBeUndefined();
+	});
+
+	it("says the club role was written back down, and where to undo that", async () => {
+		// A SILENT demotion is its own bug. The admin is looking at a guest card
+		// that shows no role at all, so unless the toast says so, the one thing
+		// they cannot discover is that converting this guest changed somebody's
+		// permissions — and they may have wanted that person back as an admin.
+		const call = await clickConvert({
+			reactivated: true,
+			demotedFrom: "admin",
+		});
+
+		const description = (call?.[1] as { description: string }).description;
+		expect(description).toContain(CONVERT_REACTIVATED_MESSAGE);
+		expect(description).toContain(CONVERT_DEMOTED_MESSAGE);
+		// The remedy, asserted on the VALUE: a notice that reports a demotion
+		// without naming where to reverse it leaves the admin hunting.
+		expect(CONVERT_DEMOTED_MESSAGE).toMatch(/member page/i);
+	});
+
+	it("warns that an open officer term grants admin anyway", async () => {
+		// The demotion line alone would be a lie here: effective-admin (#202)
+		// means the open term confers exactly the access `club_role` just lost,
+		// and convert deliberately does not close terms. Both sentences, or the
+		// admin is told the hole is shut when it is not.
+		const call = await clickConvert({
+			reactivated: true,
+			demotedFrom: "admin",
+			retainedOfficerPositions: ["president"],
+		});
+
+		const description = (call?.[1] as { description: string }).description;
+		expect(description).toContain(CONVERT_DEMOTED_MESSAGE);
+		expect(description).toContain("President");
+		expect(description).toMatch(/full club admin/i);
 	});
 });

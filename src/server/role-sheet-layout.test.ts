@@ -14,6 +14,7 @@ import {
 	EVALUATION_MARKS,
 	EVALUATION_TIMING_ASK,
 	expandRunSheet,
+	SPEECH_OBJECTIVES_ASK,
 	TABLE_TOPICS_MARKS,
 } from "#/lib/agenda-runsheet";
 import { TABLE_TOPICS_ROLE_KEY } from "#/lib/table-topics-limits";
@@ -549,6 +550,40 @@ describe("role sheets carry a spoken script (#509)", () => {
 					.timer.map((c) => c.say)
 					.join(" | "),
 			).toContain("For each evaluation:");
+		});
+
+		// #719's acceptance criterion 8: the Toastmaster now has a sheet, and the
+		// line on it must be the SAME instruction the agenda row carries rather
+		// than a second copy of the same English. `EVALUATION_TIMING_ASK` above is
+		// the pattern; this is the pair it was a pattern for.
+		it("speaks the same speech-objectives ask the agenda prints", () => {
+			// Structural, like every lookup in this describe: `preamble` is set on
+			// exactly one beat in the whole run of show, so a reword of the row
+			// cannot send this hunting for prose that has moved.
+			const preambles = template.flatMap((b) =>
+				"preamble" in b && b.preamble != null ? [b.preamble] : [],
+			);
+			expect(preambles).toHaveLength(1);
+			expect(preambles[0].detail).toContain(SPEECH_OBJECTIVES_ASK);
+
+			// The sheet and the row read the SAME exported constant, so a reword
+			// moves both together or fails to compile. Asserted on the RENDERED
+			// document, not on `sheetScripts`: a builder that stopped calling
+			// `script()` would leave the strings correct and the page blank — the
+			// #319 shape this file's own #520 suite was rewritten for.
+			expect(wordsOf("toastmaster")).toContain(SPEECH_OBJECTIVES_ASK);
+		});
+
+		// The control for the pair above. Both assertions there are "contains",
+		// which pass for any constant long enough to be distinctive — including one
+		// reworded down to a word the surrounding prose happens to use. Pin that
+		// the sheet does not merely echo the ask but carries the other half of the
+		// beat too, in its own words: WHO is being introduced, which is the thing
+		// the room could not hear before #719.
+		it("introduces the evaluator as well as asking for the objectives", () => {
+			const words = wordsOf("toastmaster");
+			expect(words).toContain("Evaluating this speech is our Evaluator");
+			expect(words).toContain("Before each prepared speech");
 		});
 
 		// The lookup is by ROLE KEY, not by `b.marks === TABLE_TOPICS_MARKS` (#679).
@@ -1176,6 +1211,7 @@ describe("sheet scripts adopt the club's role names (#520)", () => {
 		timer: "Timekeeper",
 		grammarian: "Wordsmith",
 		general_evaluator: "Lead Evaluator",
+		evaluator: "Coach",
 		table_topics_master: "Topics Host",
 		vote_counter: "Teller",
 		toastmaster_of_the_day: "Host",
@@ -1207,6 +1243,7 @@ describe("sheet scripts adopt the club's role names (#520)", () => {
 		).join(" | ");
 
 	it("names the sheet's OWN role as the club does", () => {
+		expect(spoken(RENAMED, "toastmaster")).toContain("I'm your Host");
 		expect(spoken(RENAMED, "timer")).toContain("I'm your Timekeeper");
 		expect(spoken(RENAMED, "grammarian")).toContain("I'm your Wordsmith");
 		expect(spoken(RENAMED, "ballot-counter")).toContain("I'm your Teller");
@@ -1219,6 +1256,12 @@ describe("sheet scripts adopt the club's role names (#520)", () => {
 	// General Evaluator's sheet cueing a role by OUR name while the agenda in the
 	// same hand used the club's.
 	it("names OTHER roles as the club does, in cross-references", () => {
+		// The Toastmaster's sheet cross-references more roles than any other, and
+		// the #719 cue names one NO other sheet does: a speech evaluator, which a
+		// club renames independently of its General Evaluator.
+		expect(spoken(RENAMED, "toastmaster")).toContain("that speech's Coach");
+		expect(spoken(RENAMED, "toastmaster")).toContain("our Coach, named on");
+		expect(spoken(RENAMED, "toastmaster")).toContain("Timekeeper, your report");
 		expect(spoken(RENAMED, "general-evaluator")).toContain("Timekeeper, would");
 		expect(spoken(RENAMED, "timer")).toContain(
 			"When the Topics Host or the Lead Evaluator asks you",
@@ -1233,6 +1276,7 @@ describe("sheet scripts adopt the club's role names (#520)", () => {
 		// this would ship as, and a per-sentence assertion would not see it.
 		const all = (
 			[
+				"toastmaster",
 				"timer",
 				"ah-counter",
 				"grammarian",
@@ -1243,6 +1287,8 @@ describe("sheet scripts adopt the club's role names (#520)", () => {
 			.map((k) => spoken(RENAMED, k))
 			.join(" | ");
 		for (const canonical of [
+			"I'm your Toastmaster",
+			"that speech's Evaluator",
 			"I'm your Timer",
 			"I'm your Grammarian",
 			"I'm your Ballot Counter",
@@ -1260,6 +1306,7 @@ describe("sheet scripts adopt the club's role names (#520)", () => {
 		// optional.
 		expect(spoken(undefined, "timer")).toContain("I'm your Timer");
 		expect(spoken(undefined, "general-evaluator")).toContain("Timer, would");
+		expect(spoken(undefined, "toastmaster")).toContain("I'm your Toastmaster");
 	});
 
 	it("caps a role name before it reaches the renderer", () => {

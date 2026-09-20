@@ -10,6 +10,7 @@ import {
 
 /** A club running everything, so each test turns exactly one thing off. */
 const ALL_ROLES = [
+	{ key: "toastmaster_of_the_day", name: "Toastmaster of the Day" },
 	{ key: "timer", name: "Timer" },
 	{ key: "ah_counter", name: "Ah-Counter" },
 	{ key: "grammarian", name: "Grammarian" },
@@ -30,6 +31,7 @@ describe("defaultPacketSelection", () => {
 	it("offers every piece to a club that runs every role", () => {
 		expect(ctx()).toEqual([
 			"word-poster",
+			"toastmaster",
 			"timer",
 			"ah-counter",
 			"grammarian",
@@ -135,7 +137,7 @@ describe("PACKET_PIECES", () => {
 		const keys = PACKET_PIECES.map((p) => p.key);
 		expect(keys).toContain("word-poster");
 		expect(new Set(keys).size).toBe(keys.length);
-		expect(keys).toHaveLength(6);
+		expect(keys).toHaveLength(7);
 	});
 });
 
@@ -180,6 +182,31 @@ describe("defaultPacketSelection with unkeyed roles", () => {
 				hasWord: false,
 			}),
 		).toEqual(["timer"]);
+	});
+
+	it("takes either canonical name for the Toastmaster of the Day", () => {
+		// The one sheet whose role answers to two canonical names (#719). Both are
+		// read off `meeting-roles.ts` rather than restated here, so the packet's
+		// derivation and the app's capability check cannot disagree about which
+		// unkeyed role is the host.
+		for (const name of ["Toastmaster of the Day", "toastmaster"]) {
+			expect(
+				defaultPacketSelection({
+					roles: [{ key: null, name }],
+					usesDigitalVoting: false,
+					hasWord: false,
+				}),
+				name,
+			).toEqual(["toastmaster"]);
+		}
+		// …and the look-alikes #464 closed are still not the host.
+		expect(
+			defaultPacketSelection({
+				roles: [{ key: null, name: "Toastmaster Evaluator" }],
+				usesDigitalVoting: false,
+				hasWord: false,
+			}),
+		).toEqual([]);
 	});
 
 	it("does not match an unrelated custom role by accident", () => {

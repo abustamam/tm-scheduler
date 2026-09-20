@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 /**
  * Guard against the client-bundle leak that broke production twice
@@ -42,13 +43,47 @@ describe("server-fn modules keep db logic out of the client bundle", () => {
 			f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.endsWith("-logic.ts"),
 	);
 
+	/** The subset the rule applies to: modules that really define server fns. */
+	const swept = files.filter((f) =>
+		/createServerFn\s*\(/.test(readSource(join(serverDir, f))),
+	);
+
+	it("sweeps the server-fn modules, and exempts only pure helpers", () => {
+		// The floor the narrowing below needs. A regex that stopped matching
+		// would empty this set and every case after it — silently, and in the
+		// direction that ships `#/db` to the browser.
+		expect(swept.length).toBeGreaterThanOrEqual(40);
+		expect(swept).toContain("guest-book-pending.ts");
+		// And the file the comment-blind narrowing exists for: zod only, no way
+		// to reach `#/db`, and its only mention of `createServerFn` is prose
+		// explaining why a validator must not live inside one (#806).
+		expect(swept).not.toContain("guest-book-pending-schemas.ts");
+	});
+
 	for (const file of files) {
 		// Deliberately NOT `#/test/guard-source` (which blanks comments). This
 		// asserts an offender list is EMPTY, so a comment can only ever add a false
 		// offender — stripping would LOOSEN the guard, not harden it. That is the
 		// opposite direction from the "pattern must BE present" guards.
-		const src = readFileSync(join(serverDir, file), "utf8");
-		if (!src.includes("createServerFn")) continue; // pure helper module — exempt
+		const path = join(serverDir, file);
+		const src = readFileSync(path, "utf8");
+		// WHICH files to sweep is read COMMENT-BLIND, and for a real `createServerFn`
+		// CALL rather than any mention of the name.
+		//
+		// This is the opposite reader from the offender assertion below, and the
+		// two questions are opposite: "is this a module that DEFINES server fns"
+		// is a must-BE-present test, where a comment naming the call satisfies a
+		// raw read while defining nothing — so a pure helper gets pulled into a
+		// rule it is exempt from, purely for its prose.
+		// `guest-book-pending-schemas.ts` (#806) is that file: it imports zod and
+		// nothing else, it cannot leak `#/db` by construction, and its header
+		// explains at length why a validator must NOT live inside a server-fn
+		// module. Every real module here has `export const x = createServerFn(`,
+		// which survives comment-stripping untouched.
+		//
+		// The offender list below still reads RAW, where stripping could only
+		// ever hide a genuine export.
+		if (!/createServerFn\s*\(/.test(readSource(path))) continue;
 
 		it(`${file} exports only createServerFns and types`, () => {
 			const offenders = topLevelExports(src).filter(

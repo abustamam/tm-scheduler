@@ -22,10 +22,20 @@ describe("meetingUpdateFromForm", () => {
 		expect(data.reminders).toBe("Bring a guest\nRenew dues");
 	});
 
-	it("omits reminders (undefined) when the field is blank or absent", () => {
+	/**
+	 * Blank vs absent, and the writer is why (#772). `applyMeetingMetaPatch`
+	 * leaves an OMITTED field alone, so a blank input has to arrive as an explicit
+	 * `null` — otherwise this dialog, which is the only surface that can clear
+	 * these fields, silently keeps the old value and reports success. Under the
+	 * old full-REPLACE writer `undefined` cleared it, and this test asserted that.
+	 */
+	it("sends null for a rendered field the officer blanked, so it CLEARS", () => {
 		expect(
 			meetingUpdateFromForm(form({ reminders: "   " }), ctx).reminders,
-		).toBeUndefined();
+		).toBeNull();
+	});
+
+	it("omits a field the form never rendered, so it is left alone", () => {
 		expect(meetingUpdateFromForm(form({}), ctx).reminders).toBeUndefined();
 	});
 

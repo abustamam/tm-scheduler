@@ -120,6 +120,28 @@ export function candidatesIn(html: string): string[] {
 export type ColumnProbe = {
 	/** Computed `overflow-y` of the element expected to be the scroller. */
 	overflowY: string;
+	/**
+	 * Computed `overflow-x` of the same element (#806).
+	 *
+	 * The horizontal half of this harness exists for a DIFFERENT failure from
+	 * the vertical one and needs its own three fields. A table too wide for a
+	 * phone either scrolls inside its own box or drags the whole DOCUMENT
+	 * sideways, and the second is the bug: the page header, the summary and the
+	 * Apply button all leave the screen with it, so the reader has to scroll
+	 * back to find the control they were reaching for. Nothing about vertical
+	 * reachability can see that.
+	 */
+	overflowX: string;
+	/** Does the scroller's content exceed its box HORIZONTALLY at this viewport? */
+	overflowsX: boolean;
+	/** How far the scroller actually moved when driven to the right. */
+	scrolledRightBy: number;
+	/**
+	 * Does the DOCUMENT itself scroll sideways? The control that makes the bug a
+	 * bug: a container that scrolls is only a fix while the page around it does
+	 * not scroll too.
+	 */
+	documentOverflowsX: boolean;
 	/** Does the scroller's content exceed its box at this viewport? */
 	overflows: boolean;
 	/** How far the scroller actually moved when driven to the bottom. */
@@ -174,10 +196,18 @@ export function probeColumn(opts: {
 			var r = el.getBoundingClientRect();
 			return r.top >= 0 && r.bottom <= vh && r.height > 0;
 		}
+		var cs = getComputedStyle(s);
+		var doc = document.documentElement;
 		var out = {
-			overflowY: getComputedStyle(s).overflowY,
-			overflows: s.scrollHeight > s.clientHeight ? 1 : 0
+			overflowY: cs.overflowY,
+			overflowX: cs.overflowX,
+			overflows: s.scrollHeight > s.clientHeight ? 1 : 0,
+			overflowsX: s.scrollWidth > s.clientWidth ? 1 : 0,
+			documentOverflowsX: doc.scrollWidth > doc.clientWidth ? 1 : 0
 		};
+		s.scrollLeft = s.scrollWidth;
+		out.scrolledRightBy = s.scrollLeft;
+		s.scrollLeft = 0;
 		s.scrollTop = s.scrollHeight;
 		out.scrolledBy = s.scrollTop;
 		out.tailVisibleAfterScroll = inView(tail) ? 1 : 0;
@@ -254,8 +284,12 @@ export function probeColumn(opts: {
 		const flag = (k: string) => kv.get(k) === "1";
 		return {
 			overflowY: kv.get("overflowY") ?? "",
+			overflowX: kv.get("overflowX") ?? "",
 			overflows: flag("overflows"),
+			overflowsX: flag("overflowsX"),
 			scrolledBy: Number(kv.get("scrolledBy") ?? "0"),
+			scrolledRightBy: Number(kv.get("scrolledRightBy") ?? "0"),
+			documentOverflowsX: flag("documentOverflowsX"),
 			tailVisibleAfterScroll: flag("tailVisibleAfterScroll"),
 			chromeVisibleAfterScroll: flag("chromeVisibleAfterScroll"),
 			tailReachableByPageScroll: flag("tailReachableByPageScroll"),

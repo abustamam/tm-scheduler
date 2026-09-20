@@ -99,10 +99,13 @@ export const MEETING_FIELDS = {
  * The UPDATE-path validators, which TRUNCATE.
  *
  * `updateMeetingSchema` covers the WHOLE meeting — date, location, theme,
- * notes, announcements and the Word of the Day together — and the form prefills
- * and resubmits all of it. A single value stored before these caps existed
- * would otherwise fail `.parse()` and block saving the meeting's DATE, with no
- * way to repair the offending field except through the form it blocks.
+ * notes, announcements and the Word of the Day together — and the DIALOG
+ * prefills and resubmits all of it. A single value stored before these caps
+ * existed would otherwise fail `.parse()` and block saving the meeting's DATE,
+ * with no way to repair the offending field except through the form it blocks.
+ * (#772 made the schema a patch, so a focused editor sends one field and is not
+ * exposed to another field's stored value; the dialog still sends everything,
+ * which is what keeps this split necessary.)
  *
  * This is the same split, for the same reason, that the same schema already
  * applies to the Word of the Day via [[wod-limits]] — `updateMeetingSchema`
@@ -139,19 +142,20 @@ export const MEETING_UPDATE_FIELDS = {
  * ## Why not `z.string().max(2048)` on the input
  *
  * That was the first cut and it was wrong in a way that reads as correct. The
- * stored value is not the input: `applyMeetingUpdate` writes
+ * stored value is not the input: `applyMeetingMetaPatch` writes
  * `normalizePresentationUrl(input.joinUrl)`, and normalization GROWS the string
  * — percent-encoding is up to 6x (measured: `https://zoom.us/j/` + "é"×1000 is
  * 1018 characters in and **6018** stored), and a bare host gains `https://`.
  *
  * So an input cap admits values the column cannot round-trip, and that is a
  * LOCKOUT, not a cosmetic gap. `updateMeetingSchema` covers the whole meeting;
- * the edit dialog resends the stored link on every save and `themeOnlyUpdate`
- * echoes it, so once an over-long value is stored the meeting's date, theme,
- * Word of the Day and notes all stop being savable. `/me/theme` has no join-link
- * input at all, so a TMOD is hard-blocked with no way to repair it — and the
- * write is reachable through the session-less `tmod-self-assert` arm, so it is
- * an unauthenticated denial of service on one meeting record.
+ * the edit dialog resends the stored link on every save, so once an over-long
+ * value is stored the meeting's date, theme, Word of the Day and notes all stop
+ * being savable through it. (Since #772 a FOCUSED editor no longer resends the
+ * link, so `/me/theme` is no longer hard-blocked by one — but the dialog is the
+ * only surface that can repair the link, and it is the surface that jams.) The
+ * write is reachable through the session-less `tmod-self-assert` arm, so it is an
+ * unauthenticated denial of service on one meeting record.
  *
  * Measuring the normalized value closes it for good, because normalization is
  * idempotent (asserted in the test beside this file): a value that passed once

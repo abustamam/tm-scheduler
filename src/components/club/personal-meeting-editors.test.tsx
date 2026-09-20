@@ -11,11 +11,12 @@
 //
 // ## The two cases worth reading first
 //
-// 1. **A theme save must not erase the rest of the meeting.** `updateMeeting`
-//    is a full REPLACE, so the payload assertion below is not thoroughness — it
-//    is the whole reason `themeOnlyUpdate` exists. Drop the echo and this file
-//    fails; ship without it and a Toastmaster setting a theme silently clears
-//    the club's location, Word of the Day, announcements and notes.
+// 1. **A theme save must send NOTHING but the theme (#772).** `updateMeeting` is
+//    a patch: an omitted field is left alone. This editor used to echo six
+//    stored values back because the writer nulled what it was not given, and
+//    since that echo was a page-load snapshot it reverted whatever another
+//    officer had saved since. So the payload assertion below runs the other way
+//    now — a field reappearing on this payload is that lost update returning.
 // 2. **A key-NULL look-alike role is denied (#464).** "Toastmaster Assistant"
 //    and "Grammarian Assistant" are exactly what `createClubRole` produces —
 //    every club-invented role carries a NULL key — and both must be refused the
@@ -41,8 +42,9 @@ beforeEach(() => vi.clearAllMocks());
 const MEMBER = "33333333-3333-4333-8333-333333333333";
 const OTHER = "44444444-4444-4444-8444-444444444444";
 
-/** The stored meta a theme-only save must carry back untouched. Each value is
- *  distinct so a payload that crosses two fields fails. */
+/** The stored meta on the rendered meeting. Each value is distinct so a payload
+ *  that crosses two fields fails — and since #772 none of it may travel on a
+ *  theme save at all. */
 const STORED = {
 	id: "22222222-2222-4222-8222-222222222222",
 	// Comfortably in the future, so `isMeetingOver`'s day check is false whenever
@@ -51,7 +53,7 @@ const STORED = {
 	status: "scheduled",
 	theme: "Old theme",
 	location: "The Old Library, Room 5",
-	// #731 — required by `MeetingMetaEcho`, which `EditorMeeting` extends.
+	// #731 — on the row the editor renders, and pointedly NOT on its payload.
 	joinUrl: "https://zoom.us/j/1234567890",
 	wordOfTheDay: "ineffable",
 	wodDefinition: "too great to be expressed in words",
@@ -199,7 +201,7 @@ describe("PersonalThemeEditor — the save", () => {
 		);
 	});
 
-	it("sends the new theme AND echoes every other stored field", async () => {
+	it("sends ONLY the theme — no field it is not editing (#772)", async () => {
 		const p = await renderTheme();
 		const input = screen.getByLabelText("Theme");
 		await userEvent.clear(input);
@@ -209,14 +211,26 @@ describe("PersonalThemeEditor — the save", () => {
 		await waitFor(() => expect(updateMeeting).toHaveBeenCalledTimes(1));
 		const data = themePayload();
 		expect(data.theme).toBe("New beginnings");
-		// `updateMeeting` NULLS every field it is not given. Without these six the
-		// club loses all of it on one tap, with the write reporting success.
-		expect(data.location).toBe(STORED.location);
-		expect(data.wordOfTheDay).toBe(STORED.wordOfTheDay);
-		expect(data.wodDefinition).toBe(STORED.wodDefinition);
-		expect(data.wodExample).toBe(STORED.wodExample);
-		expect(data.notes).toBe(STORED.notes);
-		expect(data.reminders).toBe(STORED.reminders);
+		// The INVERSION of this file's original assertion, and the point of #772.
+		// This editor used to echo six stored values back because the writer
+		// nulled what it was not given; the echo was a page-load snapshot, so it
+		// also reverted whatever another officer had saved in the meantime. A
+		// patch writer means the right payload is the SMALL one, and a field
+		// appearing here again is that lost update coming back.
+		for (const field of [
+			"location",
+			"joinUrl",
+			"wordOfTheDay",
+			"wodDefinition",
+			"wodExample",
+			"notes",
+			"reminders",
+		]) {
+			expect(
+				(data as Record<string, unknown>)[field],
+				`${field} must not ride along on a theme save`,
+			).toBeUndefined();
+		}
 		expect(p.onSaved).toHaveBeenCalledTimes(1);
 	});
 
@@ -229,16 +243,15 @@ describe("PersonalThemeEditor — the save", () => {
 		expect(themePayload().meetingId).toBe(STORED.id);
 	});
 
-	it("resubmits the meeting's current wall time, so it reads as a no-op", async () => {
+	it("says nothing about the time (#772)", async () => {
 		await renderTheme();
 		await userEvent.click(screen.getByRole("button", { name: /save theme/i }));
 		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
-		// `applyMeetingUpdate` compares to the MINUTE for a caller who may not
-		// reschedule, so this has to be the wall time in the club's zone.
-		const { utcToZonedWallTime } = await import("#/lib/datetime");
-		expect(themePayload().scheduledAt).toBe(
-			utcToZonedWallTime(STORED.scheduledAt, "America/Chicago"),
-		);
+		// It used to resubmit the meeting's wall time, which `applyMeetingUpdate`
+		// compared TO THE MINUTE for a caller who may not reschedule — so a
+		// timezone or rounding slip here refused a theme save as an attempted
+		// reschedule. Omitting it cannot read as a move.
+		expect(themePayload().scheduledAt).toBeUndefined();
 	});
 
 	it("self-asserts the member id for an anonymous caller", async () => {

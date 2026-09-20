@@ -9,7 +9,9 @@
  * `•••-4567` — through the one serializer (`toMcpGuest`), which is enough to
  * confirm a match and not enough to write to anyone. Members carry NO contact at
  * all: nothing in these tools needs it, and the meeting page's holder-contact
- * reader is gated for a reason (#37).
+ * reader is gated for a reason (#37). A member's `preferredName` is a NAME and
+ * not an exception to that rule (#776 item 4, decided on #788) — it sits beside
+ * the full name this reader already publishes to anyone.
  *
  * Both sides read through existing readers rather than new queries:
  * `loadPublicClubRoster` for members (which carries its own archive gate) and
@@ -19,6 +21,7 @@
  * them.
  */
 import { z } from "zod";
+import { MAX_FIND_PEOPLE_RESULTS } from "#/lib/mcp-limits";
 import { loadGuestPipeline } from "#/server/guest-pipeline-logic";
 import { loadPublicClubRoster } from "#/server/members-logic";
 import { authorizeToken } from "../authz-logic";
@@ -33,9 +36,6 @@ const inputSchema = {
 		.optional()
 		.describe("Case-insensitive substring of a name. Omit to list everyone."),
 };
-
-/** How many rows one call returns. A club's roster and live prospect list. */
-const MAX_RESULTS = 200;
 
 export const findPeopleTool: McpToolDefinition = {
 	name: "find_people",
@@ -62,13 +62,13 @@ export const findPeopleTool: McpToolDefinition = {
 
 		const people = [
 			...roster.map((m) => ({
+				// `preferredName` rides through the one serializer with everything
+				// else (#776 item 4). It used to be hardcoded `null` here because
+				// `loadPublicClubRoster` did not select the column, which made one
+				// list answer the same field two ways: a guest's "goes by" name was
+				// populated and a member's never was, so a caller reading the roster
+				// concluded nobody on it had one.
 				...toMcpMember(m),
-				// `loadPublicClubRoster` does not select `members.preferred_name`,
-				// and widening a PUBLIC reader's payload is not this PR's business —
-				// #637 is what that shape costs. A member's "goes by" name is
-				// visible on the club's own surfaces; a caller that needs it has
-				// them.
-				preferredName: null,
 				officerPositions: m.officerPositions,
 			})),
 			...guests.map((g) => ({
@@ -91,8 +91,8 @@ export const findPeopleTool: McpToolDefinition = {
 			clubId: club.clubId,
 			// Say when the list was cut rather than silently returning a prefix: a
 			// caller that believes it has everyone will conclude a name is absent.
-			truncated: matched.length > MAX_RESULTS,
-			people: matched.slice(0, MAX_RESULTS),
+			truncated: matched.length > MAX_FIND_PEOPLE_RESULTS,
+			people: matched.slice(0, MAX_FIND_PEOPLE_RESULTS),
 		};
 	},
 };

@@ -37,6 +37,30 @@ import {
 export interface PublicRosterMember {
 	id: string;
 	name: string;
+	/**
+	 * The membership's own "goes by" name (#776 item 4, decided on #788).
+	 *
+	 * A NAME, not contact: the "members carry no contact" rule (#37) is about
+	 * phone and email and is untouched by this column. It was added because
+	 * `find_people` declared the field and returned a hardcoded `null` for every
+	 * member while the guests in the same list carried theirs — one result
+	 * answering the same question two ways depending on `kind`, which reads as
+	 * "nobody on the roster has a preferred name".
+	 *
+	 * `members.preferred_name` only. There is no COALESCE onto
+	 * `people.preferred_name` here, deliberately: that fallback belongs to the
+	 * contact reader (`meeting-contacts-logic.ts`), and reaching for it would
+	 * mean joining `people` onto a PUBLIC, session-less reader to surface a name
+	 * a member set in a DIFFERENT club. Null here means this club has none on
+	 * file, which is the club's own record.
+	 *
+	 * OPTIONAL on the interface, always present on the row. `loadPublicClubRoster`
+	 * is the only producer and always selects the column; the `?` is for the
+	 * picker fixtures that build a `MemberRow` by hand and have no use for a
+	 * "goes by" name. `find-people.integration.test.ts` is the behavioural gate
+	 * that the reader really does populate it.
+	 */
+	preferredName?: string | null;
 	officerPositions: OfficerPosition[];
 }
 
@@ -59,7 +83,11 @@ export async function loadPublicClubRoster(
 ): Promise<PublicRosterMember[]> {
 	if (!(await isReadableClub(clubId))) return [];
 	const roster = await db
-		.select({ id: members.id, name: members.name })
+		.select({
+			id: members.id,
+			name: members.name,
+			preferredName: members.preferredName,
+		})
 		.from(members)
 		.where(and(eq(members.clubId, clubId), ne(members.status, "inactive")))
 		.orderBy(asc(members.name));
@@ -67,6 +95,7 @@ export async function loadPublicClubRoster(
 	return roster.map((m) => ({
 		id: m.id,
 		name: m.name,
+		preferredName: m.preferredName,
 		officerPositions: officers.get(m.id) ?? [],
 	}));
 }
@@ -318,7 +347,30 @@ type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
  *  reactivating restores them everywhere. Logs member_edit with the status
  *  before/after. On an active→inactive transition their UPCOMING, non-cancelled
  *  role slots are released (mirrors applyMemberRemove); past slots are left
- *  untouched. */
+ *  untouched.
+ *
+ *  **"Restores them everywhere" is true HERE and deliberately NOT true of the
+ *  other reactivation path.** There are two, and they mean different things
+ *  (#501 review):
+ *
+ *  - THIS one is an admin on the roster naming a member and saying "they are
+ *    back". It writes `{ status }` and nothing else, so `club_role` and any
+ *    open officer term survive untouched and the member returns with exactly
+ *    the standing they lapsed with. That is the intent: the admin picked this
+ *    human on purpose.
+ *  - `applyConvertGuestToMember`'s REUSE branch wakes a lapsed membership as a
+ *    side effect of converting a GUEST, and the row it lands on is chosen by
+ *    Person dedup, which can match the wrong human (#561). So it writes an
+ *    elevated `club_role` back DOWN to `member` and tells the admin it did.
+ *    Reactivating there asserts visibility, never authority.
+ *
+ *  The asymmetry is load-bearing because `status` IS the write-authorization
+ *  gate: `requireMembership` sends a non-active membership to
+ *  `requireReadWriteImpersonation`, so nothing below `status` is ever consulted
+ *  while a membership is lapsed and a stale `club_role: admin` is invisible
+ *  until something sets `status` back. That is why this fn may leave it alone
+ *  and convert may not. If a third reactivation path ever appears, it has to
+ *  choose one of these two meanings explicitly — and say which, here. */
 export async function applySetMemberStatus(input: SetStatusInput) {
 	const [current] = await db
 		.select()

@@ -1,13 +1,14 @@
 /**
- * Client-safe registry of the five club role sheets (#310, #311). Just the keys
- * and labels the UI and the download route need — NO `@react-pdf/renderer` and
+ * Client-safe registry of the six club role sheets (#310, #311, #719). Just the
+ * keys and labels the UI and the download route need — NO `@react-pdf/renderer` and
  * NO `#/db`, so this is safe to import from client components (the visual PDF
  * layout lives in `src/server/role-sheet-layout.ts`, which pulls in react-pdf
  * and must never reach the browser bundle).
  */
 
-/** The five role sheets, keyed by their `public/role-sheets/<key>.pdf` slug. */
+/** The six role sheets, keyed by their `public/role-sheets/<key>.pdf` slug. */
 export type RoleSheetKey =
+	| "toastmaster"
 	| "timer"
 	| "ah-counter"
 	| "grammarian"
@@ -22,8 +23,22 @@ export interface RoleSheetInfo {
 	title: string;
 }
 
-/** The five sheets in agenda order. `file` is the blank static PDF name. */
+/**
+ * The six sheets in agenda order. `file` is the blank static PDF name.
+ *
+ * The Toastmaster leads, because agenda order is the order the holder first
+ * speaks and the Toastmaster opens the meeting — and because this list is what
+ * the printed packet collates in (`meeting-packet.ts`), so whoever is stapling
+ * gets the sheet that runs the meeting off the top of the stack rather than
+ * fished out of the middle. Same reasoning the poster's position already
+ * carries there.
+ */
 export const ROLE_SHEETS: RoleSheetInfo[] = [
+	{
+		key: "toastmaster",
+		file: "toastmaster.pdf",
+		title: "Toastmaster's script",
+	},
 	{ key: "timer", file: "timer.pdf", title: "Timer's log" },
 	{ key: "ah-counter", file: "ah-counter.pdf", title: "Ah-Counter's log" },
 	{ key: "grammarian", file: "grammarian.pdf", title: "Grammarian's log" },
