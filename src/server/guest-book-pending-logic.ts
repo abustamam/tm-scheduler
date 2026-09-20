@@ -237,13 +237,26 @@ function withPayload(row: PendingPlanRow): GuestBookPendingRow {
  * be a second read path whose WHERE could forget the tool discriminator. Every
  * caller already holds the user id it was resolved with a moment earlier, so the
  * repeat is three cheap queries on a path that has just re-planned.
+ *
+ * Returns the REFUSAL, not null, when the re-resolve declines. An earlier cut
+ * flattened both refusals to null and every caller rendered `not_found` — so a
+ * club taken down between the write landing and this re-read answered
+ * "that link doesn't point at anything" where a fresh load of the same row
+ * answers "this club is archived". The row is the same row and the reader is
+ * the same reader; two sentences for one fact is the drift, and it is
+ * unreachable by any test because the window has no seam to park on. Carrying
+ * the refusal through costs one union and removes the discrepancy instead of
+ * documenting it.
  */
-async function reread(
-	pendingId: string,
-	userId: string,
-): Promise<GuestBookPendingRow | null> {
+type Reread =
+	| { ok: true; row: GuestBookPendingRow }
+	| { ok: false; refusal: PendingPlanView };
+
+async function reread(pendingId: string, userId: string): Promise<Reread> {
 	const resolved = await resolvePending(pendingId, userId, GUEST_BOOK_TOOL);
-	return resolved.ok ? withPayload(resolved.row) : null;
+	return resolved.ok
+		? { ok: true, row: withPayload(resolved.row) }
+		: { ok: false, refusal: resolved.refusal };
 }
 
 /**
@@ -454,7 +467,7 @@ export async function patchPendingPlan(input: {
 		// Re-read rather than render `row`: what is on screen has to be what is
 		// stored, and what is stored is now the tombstone.
 		const after = await reread(input.pendingId, input.userId);
-		return after ? renderPendingPlan(after) : NOT_FOUND;
+		return after.ok ? renderPendingPlan(after.row) : after.refusal;
 	}
 
 	return renderPendingPlan({ ...row, entries });
@@ -526,7 +539,7 @@ export async function applyPendingPlan(input: {
 		return {
 			ok: true,
 			message: null,
-			view: after ? await renderPendingPlan(after) : NOT_FOUND,
+			view: after.ok ? await renderPendingPlan(after.row) : after.refusal,
 			applied,
 		};
 	} catch (err) {
@@ -582,7 +595,7 @@ export async function applyPendingPlan(input: {
 		return {
 			ok: false,
 			message: err.message,
-			view: after ? await renderPendingPlan(after) : NOT_FOUND,
+			view: after.ok ? await renderPendingPlan(after.row) : after.refusal,
 			applied: null,
 		};
 	}

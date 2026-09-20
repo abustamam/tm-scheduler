@@ -432,6 +432,50 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 			.where(eq(clubs.id, seed.clubId));
 	});
 
+	it("renders no visitor data once the club is archived after a successful apply", async () => {
+		// #812 routed the post-apply re-read through `resolvePending`, where
+		// `main`'s re-read was ungated — a real behaviour change on a path with
+		// no seam to park on: the club is taken down between the write landing
+		// and the re-read that builds the view.
+		//
+		// This case covers the REACHABLE half, and says so rather than claiming
+		// the race. A takedown after the apply has returned must not render the
+		// visitor's name and email on the next read of that link — which is what
+		// the archive gate on the load path exists to stop, and what an ungated
+		// re-read would have let through one last time. The unreachable half is
+		// now consistent by construction instead of by test: `reread` carries the
+		// refusal through rather than flattening it, so every path answers
+		// "archived" for an archived club and none of them answers "not found".
+		const id = await preview([
+			{ name: "Archived Midway", email: "midway@example.com" },
+		]);
+		const view = editable(await load(id));
+
+		const applied = await applyPendingPlan({
+			pendingId: id,
+			userId: seed.adminUserId,
+			planHash: view.planHash,
+		});
+		expect(applied.ok).toBe(true);
+
+		// The takedown lands after the write, before the next read of the row.
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seed.clubId));
+
+		const after = await load(id);
+		expect(after).toEqual({ status: "archived", message: expect.any(String) });
+		expect(JSON.stringify(after)).not.toContain("midway@example.com");
+		expect(JSON.stringify(after)).not.toContain("Archived Midway");
+
+		// Archiving is reversible, so put it back before cleanup cascades.
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: null })
+			.where(eq(clubs.id, seed.clubId));
+	});
+
 	// --- AC7: edits survive, and the index map holds ----------------------
 
 	it("persists an edit and hands back a FRESH planHash", async () => {
