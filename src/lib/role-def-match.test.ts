@@ -1,6 +1,7 @@
 /**
- * Unit tests for the rule that decides whether a member keeps a role they
- * claimed when their meeting's shape changes.
+ * Unit tests for role identity: how a role's `key` is derived, and the rule
+ * that decides whether a member keeps a role they claimed when their meeting's
+ * shape changes.
  *
  * Reachable as a plain unit test only because the rule lives in `lib/` rather
  * than beside its three callers, all of which import `#/db` at load — the
@@ -8,7 +9,11 @@
  * imports `#/db` is unassertable".
  */
 import { describe, expect, it } from "vitest";
-import { distinctRoleDefs, matchRoleDefs } from "./role-def-match";
+import {
+	deriveRoleKey,
+	distinctRoleDefs,
+	matchRoleDefs,
+} from "./role-def-match";
 
 const chair = { id: "old-chair", key: "contest_chair", name: "Contest Chair" };
 const timer = { id: "old-timer", key: null, name: "Timer" };
@@ -87,5 +92,45 @@ describe("distinctRoleDefs", () => {
 			{ id: "d1", key: "speaker", name: "Speaker" },
 			{ id: "d2", key: null, name: "Timer" },
 		]);
+	});
+});
+
+describe("deriveRoleKey", () => {
+	it("slugifies a name to snake_case", () => {
+		expect(deriveRoleKey("Zoom Master", new Set())).toBe("zoom_master");
+	});
+
+	it("collapses runs of non-alphanumerics and trims the ends", () => {
+		// Every non `[a-z0-9]` becomes `_`, so punctuation and accents alike are
+		// separators rather than characters. The migration's SQL reproduces this
+		// rule character for character, which is why it is stated here rather
+		// than left to a snapshot.
+		expect(deriveRoleKey("  Zoom — Master!! ", new Set())).toBe("zoom_master");
+		expect(deriveRoleKey("Sergeant-at-Arms", new Set())).toBe(
+			"sergeant_at_arms",
+		);
+	});
+
+	it("falls back to `role` when nothing survives", () => {
+		expect(deriveRoleKey("!!!", new Set())).toBe("role");
+		expect(deriveRoleKey("", new Set())).toBe("role");
+	});
+
+	it("suffixes until free, skipping a taken suffix too", () => {
+		// `taken` is the CLUB's keys (#801) — `role_definitions_club_key_unique`
+		// is what binds, not a template's own index. A caller that passed one
+		// template's keys would derive a key already held elsewhere in the club
+		// and the insert would fail at the database.
+		expect(deriveRoleKey("Timer", new Set(["timer"]))).toBe("timer_2");
+		expect(deriveRoleKey("Timer", new Set(["timer", "timer_2"]))).toBe(
+			"timer_3",
+		);
+	});
+
+	it("is case-insensitive about the name but not about the taken set", () => {
+		expect(deriveRoleKey("TIMER", new Set())).toBe("timer");
+		// Keys are always lower-case, so an upper-case entry in `taken` is not a
+		// collision — stated so the rule is not mistaken for a fold.
+		expect(deriveRoleKey("Timer", new Set(["TIMER"]))).toBe("timer");
 	});
 });

@@ -15,6 +15,7 @@ import {
 	meetings,
 	meetingTemplateRoles,
 	meetingTemplates,
+	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
@@ -243,16 +244,20 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		// Task 3b, part A. Task 3 made converting a meeting deep-copy its template
-		// into a PRIVATE `meeting_templates` row with materialized `role_definitions`
-		// pointing at the copy. `meeting_templates.meeting_id` is ON DELETE CASCADE
-		// to `meetings`, but `role_definitions.template_id` is ON DELETE RESTRICT —
-		// so deleting a converted meeting cascades toward its private template and
-		// is then blocked by that RESTRICT. `reconcileEmptyShells` (the recurrence
-		// pruner) deletes whatever `findPristineEmptyMeetingIds` returns; a
-		// converted contest meeting with every slot unclaimed and every content
-		// field blank satisfied every existing check, so it used to be pruned and
-		// the delete threw a foreign-key violation — an officer editing their
-		// club's recurrence pattern got a 500.
+		// into a PRIVATE `meeting_templates` row. `reconcileEmptyShells` (the
+		// recurrence pruner) deletes whatever `findPristineEmptyMeetingIds`
+		// returns, and a converted contest meeting with every slot unclaimed and
+		// every content field blank satisfied every existing check — so it used to
+		// be pruned, and an officer editing their club's recurrence pattern got a
+		// 500. A converted meeting is NOT an empty shell whatever its fields say:
+		// someone chose that shape for it.
+		//
+		// The delete itself no longer throws (#801): the `role_definitions
+		// .template_id` RESTRICT that used to block it holds nothing now that role
+		// identity lives in the club's bank. So the exclusion below is the whole
+		// of the guard rather than a belt beside a database brace, and the second
+		// test measures the change of footing rather than asserting the old
+		// hazard still exists.
 		describe("findPristineEmptyMeetingIds vs a converted meeting", () => {
 			const createdTemplateIds: string[] = [];
 
@@ -315,7 +320,15 @@ describe.skipIf(!hasTestDb)(
 				expect(await findPristineEmptyMeetingIds([meetingId])).toEqual([]);
 			});
 
-			it("proves the hazard is real: deleting a converted meeting throws on role_definitions' RESTRICT", async () => {
+			it("deleting a converted meeting now succeeds, so the exclusion above is the ONLY guard (#801)", async () => {
+				// This asserted the opposite until #801 — the delete threw on
+				// `role_definitions_template_id_meeting_templates_id_fk`, because a
+				// conversion materialized definitions against the private copy.
+				// Nothing points at a template any more, so the cascade runs clean:
+				// the meeting goes, its private copy goes with it, and the club KEEPS
+				// the role the conversion resolved. Inverting the assertion rather
+				// than deleting it is the point — a reader has to be able to see that
+				// `findPristineEmptyMeetingIds` is now load-bearing on its own.
 				const source = await makeTemplate();
 				const meetingId = await emptyMeeting(41);
 				await applyTemplateConversion({
@@ -324,10 +337,32 @@ describe.skipIf(!hasTestDb)(
 					templateId: source,
 					actorMemberId: null,
 				});
+				const banked = await testDb
+					.select({ id: roleDefinitions.id })
+					.from(roleDefinitions)
+					.where(
+						and(
+							eq(roleDefinitions.clubId, club.clubId),
+							eq(roleDefinitions.key, "contest_chair"),
+						),
+					);
+				expect(banked).toHaveLength(1);
 
-				await expect(
-					testDb.delete(meetings).where(eq(meetings.id, meetingId)),
-				).rejects.toThrow();
+				await testDb.delete(meetings).where(eq(meetings.id, meetingId));
+
+				expect(
+					await testDb
+						.select({ id: meetings.id })
+						.from(meetings)
+						.where(eq(meetings.id, meetingId)),
+				).toEqual([]);
+				// The club's role survived the meeting that introduced it.
+				expect(
+					await testDb
+						.select({ id: roleDefinitions.id })
+						.from(roleDefinitions)
+						.where(eq(roleDefinitions.id, banked[0]?.id ?? "")),
+				).toHaveLength(1);
 			});
 		});
 	},

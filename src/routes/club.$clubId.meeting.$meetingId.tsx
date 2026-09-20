@@ -77,7 +77,7 @@ import {
 	resolveMeetingViewer,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
-import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
+import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { outstandingDutiesByMember } from "#/lib/nudge";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
@@ -291,6 +291,7 @@ function MeetingView() {
 		tableTopicsMinSeconds,
 		tableTopicsMaxSeconds,
 		clubRoles,
+		pairedRoleDefinitionIds,
 		clubGuests,
 		roster: loaderRoster,
 		plan,
@@ -843,7 +844,20 @@ function MeetingView() {
 				topic: null,
 			}));
 
-	const pairedIds = pairedRoleIds(clubRoles);
+	// The SERVER's answer, not a second derivation of it (#801). This used to be
+	// `pairedRoleIds(clubRoles)`, which was right while `clubRoles` was the
+	// meeting's own shape — it is the club's whole role bank now, so the
+	// heuristic inside `pairedRoleIds` would answer for the CLUB and name the
+	// standard Speaker on a contest. `loadMeetingDetail` resolves the pair
+	// against the meeting's declared shape, which is the same set
+	// `applyAddRoleSlot` and `applyRemoveRoleSlot` refuse on, so the picker below
+	// and the agenda's own paired-slot affordances cannot disagree with the
+	// server. An array on the wire because a `Set` does not survive the
+	// server-fn boundary.
+	const pairedIds = useMemo(
+		() => new Set(pairedRoleDefinitionIds),
+		[pairedRoleDefinitionIds],
+	);
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
 	// RELATIVE during SSR, absolute after hydration — `window` exists only on the
 	// client, and `NudgeButtons` keeps its links off the server render entirely

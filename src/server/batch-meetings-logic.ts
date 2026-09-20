@@ -7,7 +7,7 @@
 // ONE transaction, fetching the club's role definitions ONCE and reusing them.
 // No activity-log entry — single-create doesn't log creation, so batch keeps
 // parity.
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings, roleDefinitions } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
@@ -52,17 +52,19 @@ export async function applyBatchCreateMeetings(
 	const defs = await db
 		.select()
 		.from(roleDefinitions)
-		// Standard roles ONLY. A templated meeting is always CONVERTED, never
-		// auto-created, so this path is unconditionally the club's own shape.
-		// Without the template scope every meeting created after a club runs one
-		// contest would gain that contest's Chief Judge, Judges and Contestants,
-		// because `generateSlotRows` filters on `enabled` and not on `template_id`.
-		.where(
-			and(
-				eq(roleDefinitions.clubId, input.clubId),
-				isNull(roleDefinitions.templateId),
-			),
-		)
+		// The club's whole BANK, and `standing` is what keeps a contest role off an
+		// ordinary meeting (#801). `generateSlotRows` filters `standing && enabled`
+		// and this bare `select()` carries the real column, so the gate is closed
+		// by DATA rather than by anything written here;
+		// `template-role-leak.integration.test.ts` measures that end to end.
+		//
+		// An `isNull(roleDefinitions.templateId)` used to sit beside the club id,
+		// under a comment calling the template scope the only thing stopping this
+		// club's Chief Judge and Contestants from landing on every meeting. 0083
+		// pinned `template_id` NULL with a CHECK, so that predicate matched every
+		// row and the sentence describing it was false. Removed rather than left
+		// as decoration a reader would trust.
+		.where(eq(roleDefinitions.clubId, input.clubId))
 		.orderBy(asc(roleDefinitions.sortOrder));
 
 	// Existing meetings' local dates (any status) occupy their calendar date.

@@ -14,8 +14,9 @@ import { db } from "#/db";
 import { roleDefinitions, roleSlots } from "#/db/schema";
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { MAX_ROLE_REPEAT_SLOTS } from "#/lib/meeting-template-limits";
+import { deriveRoleKey } from "#/lib/role-def-match";
 import { isReadableClub } from "./club-readable-logic";
-import { roleDefScopeOnly } from "./meeting-templates-logic";
+import { isUniqueViolation } from "./pg-errors";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
 
 const roleCategory = z.enum([
@@ -42,38 +43,46 @@ export interface RoleDefinitionRow {
 	 *  stay in this list — never deleted, never hidden from admin — they just
 	 *  stop being offered anywhere a role is filled. */
 	enabled: boolean;
+	/** Whether this role is part of the club's STANDARD meeting shape (#801).
+	 *  False for a role that reached the bank from a template (a contest's Chief
+	 *  Judge) or from an agenda's Roles panel: the club owns it, can fill it and
+	 *  can attach it to any meeting, but no ordinary meeting generates a slot for
+	 *  it. Carried on the row so `/admin/roles` can SAY so — a role listed
+	 *  without that mark reads as one the club runs every week. */
+	standing: boolean;
 }
 
-/** The club's role template, ordered by sortOrder then name, each annotated with
- *  how many existing slots reference it (so the UI can disable deletion) and
- *  whether it's enabled. By default includes disabled roles (the admin-only
- *  listing keeps them visible/retrievable, #368); pass `onlyEnabled: true` for
- *  any surface that OFFERS a role to be filled — the single tested path both
- *  `getPublicClubRoles` (the printable sheet) and `loadMeetingDetail`'s
- *  "+ Add role" picker (`meetings.ts`) route through, so that rule lives in one
- *  place instead of being re-expressed as a separate filter/query at each
- *  call site where it could drift. */
+/** The club's whole role BANK, ordered by sortOrder then name, each annotated
+ *  with how many existing slots reference it (so the UI can disable deletion),
+ *  whether it's enabled, and whether it is part of the club's standard meeting
+ *  shape. By default includes disabled roles (the admin-only listing keeps them
+ *  visible/retrievable, #368); pass `onlyEnabled: true` for any surface that
+ *  OFFERS a role to be filled — the single tested path both `getPublicClubRoles`
+ *  (the printable sheet) and `loadMeetingDetail`'s "+ Add role" picker
+ *  (`meetings.ts`) route through, so that rule lives in one place instead of
+ *  being re-expressed as a separate filter/query at each call site where it
+ *  could drift.
+ *
+ *  NO `standing` FILTER, for any caller, and that is a decision rather than an
+ *  omission (#801). `standing` gates slot AUTO-GENERATION; every caller here is
+ *  a LISTING. Filtering would offer zero contest roles on a contest meeting —
+ *  the exact failure the old comment at `meetings.ts` recorded — and would hide
+ *  every role an officer creates from an agenda until the Roles-panel picker
+ *  lands. `/admin/roles` renders the flag instead, so a non-standing role is
+ *  visible and marked rather than absent.
+ *
+ *  The `templateId` option is gone with the model it belonged to. It existed
+ *  because role identity was per (club, template), so the picker had to name a
+ *  template to see a contest's roles at all — and naming one made the club's own
+ *  bank invisible, which is the bug #801 fixes. One scope now: the club. */
 export async function listRoleDefinitions(
 	clubId: string,
 	opts?: {
 		onlyEnabled?: boolean;
 		withSlotCounts?: boolean;
-		/** Which slot source to list (#agenda-templates). `null` (the default) is
-		 *  the club's OWN standard roles — what `/admin/roles` edits. A meeting
-		 *  template's id lists that template's materialized roles instead.
-		 *
-		 *  A parameter rather than a hard `isNull` inside this function, because
-		 *  `loadMeetingDetail`'s "+ Add role" picker routes through here too
-		 *  (`meetings.ts:322`): hard-coding the standard scope would offer a
-		 *  contest meeting only the club's standard roles, leaving no way to add
-		 *  a contestant and no way to change the contestant count. */
-		templateId?: string | null;
 	},
 ): Promise<RoleDefinitionRow[]> {
-	const where = [
-		eq(roleDefinitions.clubId, clubId),
-		roleDefScopeOnly(opts?.templateId ?? null),
-	];
+	const where = [eq(roleDefinitions.clubId, clubId)];
 	if (opts?.onlyEnabled) where.push(eq(roleDefinitions.enabled, true));
 
 	const base = {
@@ -85,6 +94,7 @@ export async function listRoleDefinitions(
 		isSpeakerRole: roleDefinitions.isSpeakerRole,
 		description: roleDefinitions.description,
 		enabled: roleDefinitions.enabled,
+		standing: roleDefinitions.standing,
 	};
 	const order = [
 		asc(roleDefinitions.sortOrder),
@@ -149,12 +159,12 @@ function normalizeDescription(value: string | null | undefined): string | null {
 }
 
 // `MAX_ROLE_REPEAT_SLOTS`, not a re-typed literal (#task-10 review): this
-// table is also what a template's roles get MATERIALIZED into
-// (`materializeTemplateRoles`), and `roleDefScopeOnly` shows this module's own
-// scope predicate does not exclude a materialized (`templateId` non-null)
-// row from these writers. `agenda-template-rows.ts`'s `buildTemplateRows` now
-// caps a non-repeating role beat's slot count at render time regardless, but
-// a literal `20` here would silently stop tracking that constant the next
+// table is also where a template's roles get RESOLVED to
+// (`materializeTemplateRoles`), and since #801 there is only one scope — the
+// club — so these writers reach a role that arrived from a contest as readily
+// as one the club invented. `agenda-template-rows.ts`'s `buildTemplateRows`
+// now caps a non-repeating role beat's slot count at render time regardless,
+// but a literal `20` here would silently stop tracking that constant the next
 // time it changes — exactly the divergence that review went looking for.
 const defaultCountField = z.number().int().min(0).max(MAX_ROLE_REPEAT_SLOTS);
 
@@ -169,29 +179,61 @@ export const createRoleSchema = z.object({
 export type CreateRoleInput = z.infer<typeof createRoleSchema>;
 
 /** Append a new custom role to the club's template. New roles sort last (max
- *  sortOrder + 1). The caller is responsible for the admin authorization
- *  check (see `createClubRole`). Affects only meetings generated afterwards —
- *  existing meetings' slots are untouched. */
+ *  sortOrder + 1) and are STANDING — created from club settings, this is a role
+ *  the club intends to run. The caller is responsible for the admin
+ *  authorization check (see `createClubRole`). Affects only meetings generated
+ *  afterwards — existing meetings' slots are untouched.
+ *
+ *  Writes a `key` since #801, where it wrote none. A NULL key looked harmless
+ *  while identity was per (club, template) — `matchesRole` falls back to name
+ *  for exactly these rows — but `meeting_template_roles.key` is NOT NULL, so a
+ *  club-invented role could never be DECLARED by any agenda: under key binding
+ *  it was a role no meeting shape could name. Uniquified against the club's own
+ *  keys, which is what `role_definitions_club_key_unique` binds on. */
 export async function applyRoleDefinitionCreate(input: CreateRoleInput) {
-	const [{ maxSort }] = await db
-		.select({
-			maxSort: sql<number>`coalesce(max(${roleDefinitions.sortOrder}), -1)::int`,
-		})
+	const existing = await db
+		.select({ key: roleDefinitions.key, sortOrder: roleDefinitions.sortOrder })
 		.from(roleDefinitions)
 		.where(eq(roleDefinitions.clubId, input.clubId));
+	const maxSort = existing.reduce((max, r) => Math.max(max, r.sortOrder), -1);
+	const key = deriveRoleKey(
+		input.name,
+		new Set(existing.flatMap((r) => (r.key == null ? [] : [r.key]))),
+	);
 
-	const [row] = await db
-		.insert(roleDefinitions)
-		.values({
-			clubId: input.clubId,
-			name: input.name,
-			category: input.category,
-			defaultCount: input.defaultCount,
-			sortOrder: maxSort + 1,
-			isSpeakerRole: input.isSpeakerRole ?? false,
-			description: normalizeDescription(input.description),
-		})
-		.returning({ id: roleDefinitions.id });
+	// The read above and this write are not one atomic step, and nothing locks
+	// the club — two admins adding the same role name at once both derive the
+	// same free key. `role_definitions_club_key_unique` settles it, which is
+	// correct; what was wrong is what the LOSER saw. Nothing translated the
+	// 23505, so it travelled through `createClubRole` to the roles page's
+	// `toast.error(err.message)` and showed an officer the raw
+	// `duplicate key value violates unique constraint …`. Caught here, in a
+	// sentence that says what to do about it. `materializeTemplateRoles` takes
+	// the other route out of the same race (`onConflictDoNothing`) because there
+	// the loser wants no row; here the caller is owed one or an explanation.
+	let row: { id: string } | undefined;
+	try {
+		[row] = await db
+			.insert(roleDefinitions)
+			.values({
+				clubId: input.clubId,
+				key,
+				name: input.name,
+				category: input.category,
+				defaultCount: input.defaultCount,
+				sortOrder: maxSort + 1,
+				isSpeakerRole: input.isSpeakerRole ?? false,
+				description: normalizeDescription(input.description),
+			})
+			.returning({ id: roleDefinitions.id });
+	} catch (err) {
+		if (isUniqueViolation(err)) {
+			throw new Error(
+				`Another role using the name "${input.name}" was just added. Try again.`,
+			);
+		}
+		throw err;
+	}
 	if (!row) throw new Error("Failed to create role.");
 	return { id: row.id };
 }
@@ -291,6 +333,10 @@ export async function applyRoleDefinitionSetEnabled(
 		.select({
 			name: roleDefinitions.name,
 			defaultCount: roleDefinitions.defaultCount,
+			// #801. Enabling a NON-standing role must backfill nothing — see
+			// `syncSlotsForRoleEnabledChange`'s `standing` param. Read here rather
+			// than there so the sync stays a pure function of what it is handed.
+			standing: roleDefinitions.standing,
 		})
 		.from(roleDefinitions)
 		.where(
@@ -330,6 +376,13 @@ export async function applyRoleDefinitionSetEnabled(
 	 * one off before this existed can put it back.
 	 */
 	if (!input.enabled) {
+		// STANDING rows only (#801). `pickSpeakerAndEvaluatorRoles` takes the
+		// lowest-`sortOrder` speaker role, and the bank now also holds roles that
+		// arrived from a template — a contest's Contestant is `isSpeakerRole` with
+		// the template's own sort order. Over the whole bank it could become "the
+		// club's speaker role" and let the real Speaker be disabled, which is the
+		// orphaned-pairing failure this guard exists to prevent, reached from the
+		// other side.
 		const defs = await db
 			.select({
 				id: roleDefinitions.id,
@@ -339,7 +392,12 @@ export async function applyRoleDefinitionSetEnabled(
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 			})
 			.from(roleDefinitions)
-			.where(eq(roleDefinitions.clubId, input.clubId));
+			.where(
+				and(
+					eq(roleDefinitions.clubId, input.clubId),
+					eq(roleDefinitions.standing, true),
+				),
+			);
 		if (pairedRoleIds(defs).has(input.roleId)) {
 			throw new Error(
 				`${current.name} can't be disabled — every meeting needs speakers and their evaluators. ` +
@@ -364,6 +422,7 @@ export async function applyRoleDefinitionSetEnabled(
 		roleName: current.name,
 		defaultCount: current.defaultCount,
 		enabled: input.enabled,
+		standing: current.standing,
 		actorMemberId: input.actorMemberId,
 	});
 	return {

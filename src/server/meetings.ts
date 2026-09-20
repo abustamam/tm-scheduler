@@ -17,6 +17,7 @@ import {
 	MEETING_FIELDS,
 	MEETING_UPDATE_FIELDS,
 } from "#/lib/meeting-limits";
+import { pairedRoleIds } from "#/lib/meeting-roles";
 import {
 	localDateKey,
 	localDayRange,
@@ -53,6 +54,7 @@ import { resolveMeetingNumber } from "./meeting-number-logic";
 import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
 import { loadMeetingSlots } from "./meeting-slots-logic";
 import {
+	loadMeetingShapeDefs,
 	loadTemplateContent,
 	loadTemplateKey,
 } from "./meeting-templates-logic";
@@ -317,32 +319,66 @@ async function loadMeetingDetail(
 		}
 	}
 
-	// Club role template for the "+ Add role" picker — management-only, like the
+	// Club role bank for the "+ Add role" picker — management-only, like the
 	// roster. Ordered like the roles page. Disabled roles (#368) are excluded via
 	// `listRoleDefinitions`'s `onlyEnabled` — this picker OFFERS a role to be
 	// filled, which is exactly what a "skeleton crew" club turned a role off to
 	// stop; the roles admin page is where a disabled role stays visible. Routed
 	// through the same helper `getPublicClubRoles` uses so "only enabled" is one
 	// tested rule, not a second SQL filter that could drift from it.
-	// Scoped to THIS meeting's shape (#agenda-templates): a templated meeting
-	// offers its template's roles, not the club's standard ones. Unscoped, a
-	// contest's picker lists Toastmaster and Grammarian and offers no way to add
-	// a contestant.
-	const clubRoles = canManage
-		? (
-				await listRoleDefinitions(meeting.clubId, {
-					onlyEnabled: true,
-					templateId: meeting.templateId,
-				})
-			).map((r) => ({
-				id: r.id,
-				name: r.name,
-				category: r.category,
-				defaultCount: r.defaultCount,
-				sortOrder: r.sortOrder,
-				isSpeakerRole: r.isSpeakerRole,
-			}))
-		: [];
+	//
+	// The WHOLE bank since #801, standing and non-standing alike, where this
+	// used to be scoped to the meeting's own shape. That scoping was forced by
+	// the old model — role identity was per (club, template), so a contest's
+	// Contestant was only visible under the contest's id — and it cost the
+	// mirror case exactly: on a templated meeting the picker could not reach the
+	// club's own Timer, which is the reported bug. One bank now, so a contest
+	// offers the club's standard roles alongside its own.
+	//
+	// WHICH roles are the paired Speaker/Evaluator pair is answered HERE, against
+	// the meeting's declared SHAPE, and shipped beside the bank (#801).
+	//
+	// `club.$clubId.meeting.$meetingId.tsx` used to answer it itself, by running
+	// `pairedRoleIds` over `clubRoles`. That worked only while `clubRoles` WAS
+	// the meeting's shape. It is the club's whole bank now, so the heuristic —
+	// lowest-`sortOrder` `isSpeakerRole` role, evaluator-category role with the
+	// most places — answers for the CLUB: on a contest it names the standard
+	// Speaker rather than Contestant. Two things then go wrong, and only the
+	// first is about the picker. `addableRoles` offers Contestant, which
+	// `applyAddRoleSlot` refuses; and `<MeetingAgenda pairedRoleIds>` marks the
+	// wrong slots, so the evaluator rows that drive "who evaluates whom" lose
+	// their affordance and unrelated rows gain it. Filtering the bank here
+	// instead would fix the first and leave the second, because the client would
+	// still be computing its own answer from a set the real pair had just been
+	// removed from.
+	//
+	// So the server sends the ANSWER, not a set to re-derive it from — the same
+	// set `applyAddRoleSlot` and `applyRemoveRoleSlot` check against, so the
+	// picker, the agenda's affordances and the refusal cannot disagree. An ARRAY
+	// because a `Set` does not survive the server-fn boundary.
+	//
+	// Gated on `canManage` exactly like `clubRoles`, so a non-manager's payload
+	// carries neither and the consumer's own `effectiveCanManage` gate sees the
+	// empty set it saw before.
+	const [clubRoles, pairedRoleDefinitionIds] = canManage
+		? await (async () => {
+				const [bank, shape] = await Promise.all([
+					listRoleDefinitions(meeting.clubId, { onlyEnabled: true }),
+					loadMeetingShapeDefs(db, meeting.clubId, meeting.templateId),
+				]);
+				return [
+					bank.map((r) => ({
+						id: r.id,
+						name: r.name,
+						category: r.category,
+						defaultCount: r.defaultCount,
+						sortOrder: r.sortOrder,
+						isSpeakerRole: r.isSpeakerRole,
+					})),
+					[...pairedRoleIds(shape)],
+				] as const;
+			})()
+		: ([[], []] as const);
 
 	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.
 	// Management-only, like the roster; guests never appear on the public view.
@@ -460,6 +496,7 @@ async function loadMeetingDetail(
 		roster,
 		clubGuests,
 		clubRoles,
+		pairedRoleDefinitionIds,
 	};
 }
 

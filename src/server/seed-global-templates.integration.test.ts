@@ -19,7 +19,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/seed-global-templates.integration.test.ts
  */
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetingTemplateBeats,
@@ -194,24 +194,35 @@ describe.skipIf(!hasTestDb)(
 			}
 		});
 
-		it("leaves the club's materialized role definitions and their slots intact", async () => {
+		it("leaves the club's resolved role definitions and their slots intact", async () => {
 			const s = { ...CONTEST_TEMPLATE, key: `seed_live-${RUN}` };
 			const templateId = await seedTemplate(s);
 			created.push(templateId);
 
-			// The club runs a contest: its role definitions are materialized from the
-			// template, and a slot points at one of them.
+			// The club runs a contest: the template's declared roles resolve onto
+			// its BANK (#801 — one row per (club, key), `template_id` NULL, minted
+			// non-standing), and a slot points at one of them. Scoped by KEY rather
+			// than by `template_id`, which no longer distinguishes anything.
 			await materializeTemplateRoles(testDb, club.clubId, templateId);
+			const contestKeys = s.roles.map((r) => r.key);
 			const defs = await testDb
-				.select({ id: roleDefinitions.id, key: roleDefinitions.key })
+				.select({
+					id: roleDefinitions.id,
+					key: roleDefinitions.key,
+					templateId: roleDefinitions.templateId,
+					standing: roleDefinitions.standing,
+				})
 				.from(roleDefinitions)
 				.where(
 					and(
 						eq(roleDefinitions.clubId, club.clubId),
-						eq(roleDefinitions.templateId, templateId),
+						inArray(roleDefinitions.key, contestKeys),
 					),
 				);
 			expect(defs.length).toBe(s.roles.length);
+			expect(defs.every((d) => d.templateId === null)).toBe(true);
+			// Non-standing: the club owns them, no ordinary meeting generates them.
+			expect(defs.every((d) => d.standing === false)).toBe(true);
 
 			// A claimed contest role: a slot on the club's materialized definition, on
 			// the meeting `seedClub` created. Unconditional — an earlier cut guarded
@@ -232,14 +243,14 @@ describe.skipIf(!hasTestDb)(
 			// Now re-seed, which DELETES the template's own roles and beats.
 			await seedTemplate(s);
 
-			// The club's materialized definitions are untouched — same ids, same count.
+			// The club's bank rows are untouched — same ids, same count.
 			const after = await testDb
 				.select({ id: roleDefinitions.id })
 				.from(roleDefinitions)
 				.where(
 					and(
 						eq(roleDefinitions.clubId, club.clubId),
-						eq(roleDefinitions.templateId, templateId),
+						inArray(roleDefinitions.key, contestKeys),
 					),
 				);
 			expect(after.map((r) => r.id).sort()).toEqual(
@@ -270,7 +281,6 @@ describe.skipIf(!hasTestDb)(
 				.where(
 					and(
 						eq(roleDefinitions.clubId, club.clubId),
-						eq(roleDefinitions.templateId, templateId),
 						eq(roleDefinitions.key, "chief_judge"),
 					),
 				);
@@ -286,7 +296,6 @@ describe.skipIf(!hasTestDb)(
 				.where(
 					and(
 						eq(roleDefinitions.clubId, club.clubId),
-						eq(roleDefinitions.templateId, templateId),
 						eq(roleDefinitions.key, "chief_judge"),
 					),
 				);

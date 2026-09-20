@@ -1279,6 +1279,30 @@ export const roleDefinitions = pgTable(
 		// (src/lib/agenda.ts); existing meetings' already-generated slots are
 		// untouched. Default true — every seeded/custom role starts active.
 		enabled: boolean("enabled").notNull().default(true),
+		// Is this role part of the club's STANDARD meeting shape? (#801)
+		//
+		// The third column of a three-way split, and the reason it is not folded
+		// onto `enabled`. `meeting_template_roles` is the DECLARATION (which roles
+		// a shape uses, how many places, in what order); this table is IDENTITY
+		// plus the club's standing defaults; and `standing` is the question
+		// `template_id` used to answer as a side effect of tagging identity — "keep
+		// this off ordinary meetings".
+		//
+		// `enabled` keeps its exact #368 meaning (the skeleton-crew switch) and is
+		// NOT a substitute: a contest role promoted at `enabled = false` would
+		// generate zero Contestant slots on the contest itself, and would list in
+		// /admin/roles as merely switched off, where enabling it routes through
+		// `syncSlotsForRoleEnabledChange` and puts an open Chief Judge on every
+		// upcoming meeting — the exact leak `template-role-leak.integration.test.ts`
+		// exists to prevent.
+		//
+		// GATES SLOT AUTO-GENERATION AND NOTHING ELSE. `generateSlotRows`
+		// (src/lib/agenda.ts) filters `standing AND enabled`; so do the two
+		// backfills in `slots-logic.ts`. No LISTING filters on it — /admin/roles,
+		// the public role sheet and the meeting page's "+ Add role" picker all show
+		// the whole bank, because a role an officer added from an agenda has to be
+		// manageable and attachable the moment it exists.
+		standing: boolean("standing").notNull().default(true),
 		// Stable, immutable identity for one of the 9 standard roles (ROLE_TEMPLATE,
 		// src/lib/role-template.ts), independent of the human-editable `name` a club
 		// can rename via updateClubRole. Agenda beats BIND by this key (#368,
@@ -1287,19 +1311,22 @@ export const roleDefinitions = pgTable(
 		// sheet since #445. NULL for a club-invented custom role, which has no
 		// canonical identity to key on; those bind by name instead.
 		key: text("key"),
-		// The meeting template that owns this role definition, NULL for the club's
-		// own standard roles — which is every row that existed before agenda
-		// templates. A template's roles are COPIED here on first use because
-		// `role_slots.role_definition_id` is NOT NULL and restricting, so a
-		// claimable contest role has to be a real row (spec D2).
+		// DEAD as of #801, and kept only so a code-only revert fails loudly.
 		//
-		// Every reader that selects role definitions by club is choosing a SLOT
-		// SOURCE and must scope on this, not just the admin listing — leaving it
-		// unscoped puts the contest's Chief Judge and Contestants on every
-		// standard meeting created afterwards.
+		// It used to tag a role definition with the meeting template that owned
+		// it, which made "the same conceptual role" a DIFFERENT row per template:
+		// every conversion minted a second Timer, and `role_slots
+		// .role_definition_id` — what every history query joins on — pointed at
+		// whichever fork happened to exist, so a hand-added functionary carried no
+		// history and the season grid printed "Timer 1" / "Timer 2". Identity now
+		// lives once per (club, key) in this table; a shape's role LIST lives in
+		// `meeting_template_roles`; and "keep this off ordinary meetings" lives in
+		// `standing` above.
 		//
-		// ON DELETE RESTRICT: a template whose roles are materialized somewhere
-		// cannot be deleted out from under the slots referencing them. Disable it.
+		// The CHECK below pins it NULL for every row. Dropping the column is a
+		// follow-up once the constraint has held across a few deploys; until then
+		// a revert that tries to fork again fails at the database instead of
+		// silently re-forking.
 		templateId: uuid("template_id").references(
 			(): AnyPgColumn => meetingTemplates.id,
 			{ onDelete: "restrict" },
@@ -1307,21 +1334,30 @@ export const roleDefinitions = pgTable(
 	},
 	(t) => [
 		index("role_definitions_club_idx").on(t.clubId),
-		// Every scoped query filters on BOTH columns; `role_definitions_club_idx`
-		// alone cannot serve them.
-		index("role_definitions_club_template_idx").on(t.clubId, t.templateId),
-		// TWO partial indexes, not one widened to (club_id, template_id, key).
-		// Postgres treats NULLs as DISTINCT, so folding template_id into a single
-		// index would leave every STANDARD role (template_id IS NULL) effectively
-		// unconstrained — a club could then hold two standard Timers and nothing
-		// would fail. Splitting keeps the original guarantee verbatim and adds the
-		// same guarantee per template (spec D3).
+		// `role_definitions_club_template_idx` (on (club_id, template_id)) is
+		// dropped alongside it, by the same argument: with `template_id` pinned
+		// NULL its second column is constant, so it indexes exactly what
+		// `role_definitions_club_idx` above already indexes and costs a write on
+		// every role change to do it.
+		//
+		// ONE partial index now, not two. `role_definitions_club_template_key_unique`
+		// (on (club_id, template_id, key) where template_id is not null) is dropped
+		// by 0083: with every row's `template_id` NULL its predicate matches
+		// nothing, and leaving a dead index beside a live one invites the next
+		// reader to believe per-template identity still exists.
+		//
+		// This one's predicate is deliberately UNCHANGED. It already reads
+		// `key is not null and template_id is null`, which under the new invariant
+		// is exactly one row per (club_id, key) — the constraint #801 binds on.
+		// CLAUDE.md records that `db:push` silently ignores a changed predicate on
+		// an existing partial index; not touching it avoids that trap entirely.
 		uniqueIndex("role_definitions_club_key_unique")
 			.on(t.clubId, t.key)
 			.where(sql`${t.key} is not null and ${t.templateId} is null`),
-		uniqueIndex("role_definitions_club_template_key_unique")
-			.on(t.clubId, t.templateId, t.key)
-			.where(sql`${t.key} is not null and ${t.templateId} is not null`),
+		// The invariant #801 establishes, stated at the database. A code-only
+		// revert then fails on its first attempted fork rather than quietly
+		// re-splitting a club's role identities.
+		check("role_definitions_template_id_null", sql`${t.templateId} is null`),
 	],
 );
 
