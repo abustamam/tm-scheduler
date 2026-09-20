@@ -303,6 +303,96 @@ describe.skipIf(!hasTestDb)(
 			});
 		});
 
+		/**
+		 * PAIRING, which is the half `standing` does not reach on its own.
+		 *
+		 * `standing` gates `generateSlotRows`, so a promoted contest role puts no
+		 * SLOT on an ordinary meeting — that is what every test above measures. It
+		 * does not gate `pickSpeakerAndEvaluatorRoles`, which the three creation
+		 * paths reach through `linkEvaluatorsToSpeakers` holding the same
+		 * unfiltered bank they generated slots from. That heuristic takes the
+		 * lowest-`sortOrder` `isSpeakerRole` row, and this fixture's Contestant is
+		 * one, at 20, under the club's Speaker at 30 — so it WINS the pick, holds
+		 * no slot here, and leaves `speakerByIndex` empty. Every evaluator on every
+		 * meeting created from the day the club's first contest resolved comes out
+		 * unlinked.
+		 *
+		 * Worth its own gate because nothing else would say so: the create reports
+		 * success, the slots are all correct, and the missing links heal silently
+		 * on the first speaker edit (`realignEvaluatorPairs`).
+		 */
+		describe("regression: `standing` and evaluator pairing", () => {
+			beforeEach(async () => {
+				// `seedClub` gives the club a Timer and nothing else, so the paired
+				// lineup this is about has to be seeded — ordinary standing bank rows,
+				// at the club template's own sort orders.
+				await testDb.insert(roleDefinitions).values([
+					{
+						clubId: club.clubId,
+						key: `speaker_${RUN}`,
+						name: "Speaker",
+						category: "speaker",
+						defaultCount: 2,
+						sortOrder: 30,
+						isSpeakerRole: true,
+					},
+					{
+						clubId: club.clubId,
+						key: `evaluator_${RUN}`,
+						name: "Evaluator",
+						category: "evaluator",
+						defaultCount: 2,
+						sortOrder: 40,
+						isSpeakerRole: false,
+					},
+				]);
+			});
+
+			it("the contest role actually outranks the Speaker, or the test below is vacuous", async () => {
+				// The pair could otherwise be picked correctly for the trivial reason
+				// that nothing contested it.
+				const [rogue] = await testDb
+					.select({
+						sortOrder: roleDefinitions.sortOrder,
+						isSpeakerRole: roleDefinitions.isSpeakerRole,
+						standing: roleDefinitions.standing,
+					})
+					.from(roleDefinitions)
+					.where(
+						and(
+							eq(roleDefinitions.clubId, club.clubId),
+							eq(roleDefinitions.key, "contestant_prepared"),
+						),
+					);
+				expect(rogue?.isSpeakerRole).toBe(true);
+				expect(rogue?.standing).toBe(false);
+				expect(rogue?.sortOrder).toBeLessThan(30);
+			});
+
+			it("links every evaluator to its speaker even though a non-standing speaker role sorts first", async () => {
+				const { meetingId } = await applyCreateMeeting({
+					clubId: club.clubId,
+					scheduledAt: "2026-07-23T18:45",
+					location: `Leak pairing ${RUN}`,
+				});
+				const links = await testDb
+					.select({ id: roleSlots.id, evaluates: roleSlots.evaluatesSlotId })
+					.from(roleSlots)
+					.innerJoin(
+						roleDefinitions,
+						eq(roleSlots.roleDefinitionId, roleDefinitions.id),
+					)
+					.where(
+						and(
+							eq(roleSlots.meetingId, meetingId),
+							eq(roleDefinitions.category, "evaluator"),
+						),
+					);
+				expect(links).toHaveLength(2);
+				expect(links.filter((l) => l.evaluates === null)).toEqual([]);
+			});
+		});
+
 		it("ensureScheduleToppedUp builds auto-materialized meetings from standard roles only", async () => {
 			await testDb.insert(clubMeetingRecurrence).values({
 				clubId: club.clubId,

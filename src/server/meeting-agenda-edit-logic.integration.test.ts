@@ -1459,6 +1459,58 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		expect(slots).toHaveLength(2);
 	});
 
+	it("REFUSES to attach a role the club has turned OFF, instead of declaring one that can never get a slot", async () => {
+		// `standing` and `enabled` are not the same claim, and only the first is
+		// one an attach overrides. A non-standing role is not in the club's
+		// standard shape, so putting it on THIS agenda is exactly the point; a
+		// disabled role is one the club does not run at all (#368).
+		//
+		// Attaching it anyway inserted a declaration whose places never generated
+		// — `generateSlotRows` drops it on `enabled` — and left no way to add one
+		// by hand either, since `applyAddRoleSlot` refuses on the same flag. The
+		// role sat on the agenda with no slots and no route to any.
+		await givePrivateTemplate();
+		await testDb
+			.update(roleDefinitions)
+			.set({ key: "timer", enabled: false })
+			.where(eq(roleDefinitions.id, club.roleDefinitionId));
+
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				name: "Timer",
+				category: "functionary",
+				defaultCount: 1,
+				isSpeakerRole: false,
+			}),
+		).rejects.toThrow(/turned off for this club/);
+
+		// It refuses rather than falling through to CREATE: a second "Timer" row
+		// would be the ambiguity `matchRoleDefs` exists to avoid.
+		const named = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.name, "Timer"),
+				),
+			);
+		expect(named).toHaveLength(1);
+
+		// And nothing was generated on the way out — still just the seeded slot.
+		const slots = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(
+				and(
+					eq(roleSlots.meetingId, club.meetingId),
+					eq(roleSlots.roleDefinitionId, club.roleDefinitionId),
+				),
+			);
+		expect(slots).toHaveLength(1);
+	});
+
 	it("MINTS a non-standing bank role when no club role has that name", async () => {
 		await givePrivateTemplate();
 		const role = await addAgendaRole({

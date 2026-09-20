@@ -4,7 +4,11 @@
 import { eq } from "drizzle-orm";
 import type { db } from "#/db";
 import { meetings, roleSlots } from "#/db/schema";
-import { generateSlotRows, type SlotGenInput } from "#/lib/agenda";
+import {
+	generateSlotRows,
+	generatesSlots,
+	type SlotGenInput,
+} from "#/lib/agenda";
 import {
 	pickSpeakerAndEvaluatorRoles,
 	type RoleDefLite,
@@ -103,7 +107,18 @@ export async function linkEvaluatorsToSpeakers(
 	let speakerRoleId: string;
 	let evaluatorRoleId: string | null;
 	try {
-		({ speakerRoleId, evaluatorRoleId } = pickSpeakerAndEvaluatorRoles(defs));
+		// The SAME set `generateSlotRows` just emitted `inserted` from, never the
+		// caller's whole bank. The three creation paths each `select()` every
+		// `role_definitions` row for the club, and since #801 that bank holds
+		// non-standing roles too — a promoted contest role, or one `addAgendaRole`
+		// minted for a single agenda. `pickSpeakerAndEvaluatorRoles` tie-breaks on
+		// `sortOrder` and knows nothing about `standing`, so such a row can WIN the
+		// pick while holding no slot here, which leaves `speakerByIndex` empty and
+		// every evaluator below unlinked. Measured: 2 links become 0 the moment a
+		// non-standing `isSpeakerRole` row sits below the club's Speaker.
+		({ speakerRoleId, evaluatorRoleId } = pickSpeakerAndEvaluatorRoles(
+			defs.filter(generatesSlots),
+		));
 	} catch {
 		return;
 	}

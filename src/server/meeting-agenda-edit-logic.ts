@@ -1649,6 +1649,22 @@ export async function addAgendaRole(input: {
 		}
 		let attach = named[0];
 
+		// A role the club has TURNED OFF (#368) is refused rather than attached,
+		// and this is the one bank flag a declaration does not outrank. `standing`
+		// says "not part of the standard shape", which is exactly what attaching
+		// one to this agenda overrides; `enabled` says the club does not run the
+		// role at all, and `applyAddRoleSlot` refuses on it for the same reason.
+		// Without this the attach inserted a declaration whose places never
+		// generated — `generateSlotRows` drops it on `enabled` — and the officer
+		// could not add one by hand either, so the role sat on the agenda with no
+		// slots and no way to get any. Its OWN sentence, not `applyAddRoleSlot`'s,
+		// so a test can tell which refusal ran.
+		if (attach && !attach.enabled) {
+			throw new Error(
+				`"${attach.name}" is turned off for this club. Turn it back on in the club's role settings before putting it on an agenda.`,
+			);
+		}
+
 		if (!attach) {
 			// CREATE. Uniquified against the CLUB's keys —
 			// `role_definitions_club_key_unique` is the binding constraint, not the

@@ -25,6 +25,23 @@ export type SlotGenInput = {
 	standing?: boolean;
 };
 
+/** Whether a definition AUTO-GENERATES slots: standing (absent means standing,
+ *  see `SlotGenInput.standing`) and enabled.
+ *
+ *  Exported because `generateSlotRows` is not the only caller that has to ask.
+ *  `linkEvaluatorsToSpeakers` pairs the slots this predicate's answer produced,
+ *  so it must derive the speaker/evaluator pair from the SAME set. Deriving it
+ *  from the club's whole bank instead is a silent regression (#801): the bank
+ *  now holds non-standing roles, `pickSpeakerAndEvaluatorRoles` tie-breaks on
+ *  `sortOrder`, and `addAgendaRole` mints at a TEMPLATE-LOCAL sort order — a
+ *  0-based index (`materialiseForMeeting`) that lands around 17, under the
+ *  club's Speaker at 30. So a minted speaker-flagged role wins the pick, holds
+ *  no slots, and every evaluator on every meeting created afterwards is left
+ *  unlinked. One predicate, both callers, so the two cannot drift. */
+export function generatesSlots(def: SlotGenInput): boolean {
+	return (def.standing ?? true) && def.enabled;
+}
+
 /** Generate one slot row per (definition × defaultCount), 0-based slotIndex.
  *  Definitions with `enabled: false` (#368 — a club's "skeleton crew" roles it
  *  has turned off) are skipped entirely: no slots are generated for them, but
@@ -44,15 +61,13 @@ export function generateSlotRows(
 	defs: SlotGenInput[],
 	meetingId: string,
 ): { meetingId: string; roleDefinitionId: string; slotIndex: number }[] {
-	return defs
-		.filter((def) => (def.standing ?? true) && def.enabled)
-		.flatMap((def) =>
-			Array.from({ length: def.defaultCount }, (_, i) => ({
-				meetingId,
-				roleDefinitionId: def.id,
-				slotIndex: i,
-			})),
-		);
+	return defs.filter(generatesSlots).flatMap((def) =>
+		Array.from({ length: def.defaultCount }, (_, i) => ({
+			meetingId,
+			roleDefinitionId: def.id,
+			slotIndex: i,
+		})),
+	);
 }
 
 /** Build the count of slots per role name (for numbering repeated roles). */
