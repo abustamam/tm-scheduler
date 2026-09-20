@@ -24,6 +24,11 @@ import { getOpenOfficerPositions } from "./officers-logic";
 
 export type ClubRole = "admin" | "member";
 
+/** The pooled client or a drizzle transaction handle (mirrors `activity.ts`). */
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 /**
  * The two DENIAL messages the write guards throw, exported so a caller that has
  * to tell a denial apart from an infrastructure failure compares against THIS
@@ -100,8 +105,18 @@ export async function requireUser() {
  *   4. Then oldest, then id — a total order, so two queries in one request can
  *      never disagree.
  */
-export async function getMembership(userId: string, clubId: string) {
-	const [membership] = await db
+export async function getMembership(
+	userId: string,
+	clubId: string,
+	/**
+	 * Which connection to ask. Defaults to the pooled client, which is what
+	 * every route guard wants. `assertStillClubAdmin` passes a `tx` so the
+	 * re-check inside a locked apply reads the same snapshot as the re-plan
+	 * beside it rather than a second, later view of the club (#806).
+	 */
+	conn: DbOrTx = db,
+) {
+	const [membership] = await conn
 		.select({
 			id: members.id,
 			clubId: members.clubId,
@@ -290,6 +305,75 @@ export async function requireClubRole(
 	) {
 		return membership;
 	}
+	throw new Error(NO_PERMISSION_MESSAGE);
+}
+
+/**
+ * `requireClubRole(userId, clubId, ["admin"])`, re-asked against an open
+ * TRANSACTION after a lock has been taken (#806).
+ *
+ * A session apply authorizes, THEN opens a transaction, and that transaction
+ * WAITS on the club's advisory lock. Everything the re-plan reads inside it is
+ * read against `tx`; the caller's own standing was not, so a membership
+ * deactivated, an officer term closed, or a club taken down while the apply
+ * queued still committed its writes. `record_guest_book` learned this as #776
+ * item 8; this is the same fix for the session path, minus the bearer token,
+ * which that path does not have.
+ *
+ * It is the SAME FUNCTION as `requireClubRole`, not a restatement of it. Two
+ * copies of an authorization sentence is how one member gets told different
+ * things about the same club by two paths, and
+ * `guest-book-confirm-revocation.integration.test.ts` asserts the up-front and
+ * after-the-lock refusals are byte-identical. That parity is structural here:
+ * the membership, the archive check and the effective-admin fallback are the
+ * same three reads, in the same order, differing only in the connection.
+ *
+ * The ONE difference is deliberate: there is no impersonation arm.
+ * `requireReadWriteImpersonation` marks the request so `logActivity` attributes
+ * the write to the real superadmin, and re-running it inside the transaction
+ * would mark a second time. A read-write impersonating superadmin has already
+ * passed `requireClubRole` up front; what this re-check asks is whether the
+ * REAL membership that granted the apply is still good, and a memberless
+ * superadmin has none to re-ask about. So it re-checks the archive for them —
+ * which is the arm that can move under a takedown — and leaves the grant alone.
+ */
+export async function assertStillClubAdmin(
+	conn: DbOrTx,
+	userId: string,
+	clubId: string,
+): Promise<void> {
+	const membership = await getMembership(userId, clubId, conn);
+	if (!membership || membership.status !== "active") {
+		// Parity with `requireMembership`, which falls through to the
+		// impersonation arm and throws this when there is none.
+		const [club] = await conn
+			.select({ archivedAt: clubs.archivedAt })
+			.from(clubs)
+			.where(eq(clubs.id, clubId))
+			.limit(1);
+		if (!club) throw new Error("Club not found.");
+		// `conn`, not the pooled client: this runs inside a transaction that
+		// already holds a connection and the club's advisory lock, and a second
+		// pool checkout there is bounded by nothing (the 5s `lock_timeout` does
+		// not cover a pool wait).
+		const session = await getActiveImpersonation(
+			userId,
+			clubId,
+			new Date(),
+			conn,
+		);
+		if (session?.mode === "read_write") {
+			// The takedown arm still applies to them (see `requireReadWriteImpersonation`).
+			assertNotArchived(club);
+			return;
+		}
+		throw new Error(NOT_A_MEMBER_MESSAGE);
+	}
+	// From the row just read, not a second query — same as `requireMembership`.
+	assertNotArchived(membership);
+	if (membership.clubRole === "admin") return;
+	// Effective-admin (#202): an elected officer is a full admin.
+	if ((await getOpenOfficerPositions(conn, membership.id)).length > 0) return;
 	throw new Error(NO_PERMISSION_MESSAGE);
 }
 
