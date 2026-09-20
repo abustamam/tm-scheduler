@@ -28,7 +28,8 @@
  *
  * ## How the race is made deterministic
  *
- * A second connection takes the club's advisory lock and HOLDS it. The apply is
+ * The harness is `src/test/club-lock.ts`, shared with `upsert_agendas` since
+ * #808. A second connection takes the club's advisory lock and HOLDS it. The apply is
  * then started and blocks. `pg_locks` is polled until an ungranted advisory
  * lock on this club's key appears — that observation is the control: it proves
  * the apply is already inside its transaction and past the up-front check, so a
@@ -42,7 +43,7 @@
  *     bunx vitest run src/server/guest-book-confirm-revocation.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	apiTokens,
@@ -55,6 +56,7 @@ import {
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { utcToZonedWallTime } from "#/lib/datetime";
+import { awaitLockWaiter, holdClubLock } from "#/test/club-lock";
 import {
 	cleanup,
 	hasTestDb,
@@ -75,54 +77,6 @@ const { applyPendingPlan, loadPendingPlan } = await import(
 const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
 	"#/server/guards"
 );
-
-/** Take the club's advisory lock on a connection of its own and hold it. */
-function holdClubLock(clubId: string) {
-	let letGo!: () => void;
-	let taken!: () => void;
-	const held = new Promise<void>((resolve) => {
-		letGo = resolve;
-	});
-	const acquired = new Promise<void>((resolve) => {
-		taken = resolve;
-	});
-	const finished = testDb.transaction(async (tx) => {
-		await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${clubId}))`);
-		taken();
-		await held;
-	});
-	return {
-		acquired,
-		async release() {
-			letGo();
-			await finished;
-		},
-	};
-}
-
-/** How many sessions are WAITING on this club's advisory lock right now. */
-async function waitersOnClubLock(clubId: string): Promise<number> {
-	const res = await testDb.execute<{ n: number }>(sql`
-		SELECT count(*)::int AS n
-		FROM pg_locks
-		WHERE locktype = 'advisory'
-		  AND NOT granted
-		  AND objid::bigint = (hashtext(${clubId})::bigint & 4294967295)
-	`);
-	return Number(res.rows[0]?.n ?? 0);
-}
-
-/** Resolve once the apply is parked on the lock, or fail loudly. */
-async function awaitLockWaiter(clubId: string): Promise<void> {
-	const deadline = Date.now() + 3000;
-	while (Date.now() < deadline) {
-		if ((await waitersOnClubLock(clubId)) > 0) return;
-		await new Promise((r) => setTimeout(r, 25));
-	}
-	throw new Error(
-		"the apply never parked on the club advisory lock — the race this test sets up did not happen, so a refusal below would prove nothing",
-	);
-}
 
 describe.skipIf(!hasTestDb)("the confirm apply across the lock wait", () => {
 	let seed: SeededClub;

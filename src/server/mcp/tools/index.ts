@@ -19,6 +19,7 @@ import { findPeopleTool } from "./find-people";
 import { getAgendaTool } from "./get-agenda";
 import { listMeetingsTool } from "./list-meetings";
 import { recordGuestBookTool } from "./record-guest-book";
+import { upsertAgendasTool } from "./upsert-agendas";
 import { whoamiTool } from "./whoami";
 
 export const MCP_TOOLS: McpToolDefinition[] = [
@@ -28,4 +29,5 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	findPeopleTool,
 	recordGuestBookTool,
 	assignRolesTool,
+	upsertAgendasTool,
 ];

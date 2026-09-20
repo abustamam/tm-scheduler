@@ -46,7 +46,14 @@ const SERVER_DIR = resolve(MCP_DIR, "..");
  * existence assertion below fails if a path in this list stops existing, so a
  * later rename cannot leave a silently-empty enrolment behind.
  */
-const ENROLLED_OUTSIDE_MCP = ["../guest-book-plan.ts"] as const;
+const ENROLLED_OUTSIDE_MCP = [
+	"../guest-book-plan.ts",
+	// #808 for the same reason: `upsert_agendas` previews and the confirm page
+	// re-plans through the same `plan()`, so the planner is session-reachable and
+	// cannot sit under `src/server/mcp/`. `AMBIGUOUS_DATE`, `MEETING_LOCKED` and
+	// `MISSING_TIME` are all raised there.
+	"../agenda-plan.ts",
+] as const;
 
 /**
  * The string members of `export type McpBlockingCode = …`, read out of source.
@@ -136,9 +143,12 @@ describe("the blocking-code vocabulary (#776 item 6)", () => {
 				`${rel} is enrolled in this sweep but pushes no blocking item. Either it moved again — re-point the enrolment — or it should not be listed.`,
 			).toBe(true);
 		}
-		expect(resolve(MCP_DIR, ENROLLED_OUTSIDE_MCP[0])).toBe(
+		expect(
+			ENROLLED_OUTSIDE_MCP.map((rel) => resolve(MCP_DIR, rel)),
+		).toStrictEqual([
 			resolve(SERVER_DIR, "guest-book-plan.ts"),
-		);
+			resolve(SERVER_DIR, "agenda-plan.ts"),
+		]);
 	});
 
 	for (const code of codes) {

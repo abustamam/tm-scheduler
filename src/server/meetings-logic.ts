@@ -29,6 +29,15 @@ import { freezeMeetingNumber } from "./meeting-number-logic";
 import { loadPublicClubRoster } from "./members-logic";
 import { closeAllVotesTx } from "./voting-logic";
 
+/**
+ * A connection: the pool, or a transaction handle (mirrors
+ * `meeting-create-logic.ts`). Only `applyMeetingMetaPatch` takes one today —
+ * see the note on its `conn` parameter.
+ */
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 export interface UpcomingMeetingRow {
 	id: string;
 	scheduledAt: Date;
@@ -256,13 +265,25 @@ const META_TEXT_FIELDS = [
 ] as const;
 
 /** Update a meeting's meta (incl. reschedule) and log a `meeting_edit`.
- *  Omitted fields are left alone — see `MeetingMetaPatchInput`. */
-export async function applyMeetingMetaPatch(input: MeetingMetaPatchInput) {
+ *  Omitted fields are left alone — see `MeetingMetaPatchInput`.
+ *
+ *  `conn` defaults to `db` and every browser caller leaves it so. It exists for
+ *  `upsert_agendas` (#808), whose apply already holds the club's advisory lock
+ *  inside a transaction of its own: calling this on `db` from in there would
+ *  write on a SECOND pooled connection while that lock is held, and — worse —
+ *  those writes would not roll back with the batch, which is the whole
+ *  all-or-nothing guarantee. Passing `tx` makes the UPDATE and its
+ *  `meeting_edit` part of the caller's transaction; drizzle turns the inner
+ *  `conn.transaction` below into a SAVEPOINT rather than a second one. */
+export async function applyMeetingMetaPatch(
+	input: MeetingMetaPatchInput,
+	conn: DbOrTx = db,
+) {
 	// ONE round trip, not two. The club is needed for its timezone alone, and
 	// only when the caller sent `scheduledAt` — which since #772 the focused
 	// editors never do. `meetings.club_id` is `notNull().references(clubs.id)`,
 	// so the relation always resolves.
-	const meeting = await db.query.meetings.findFirst({
+	const meeting = await conn.query.meetings.findFirst({
 		where: eq(meetings.id, input.meetingId),
 		with: { club: true },
 	});
@@ -361,7 +382,7 @@ export async function applyMeetingMetaPatch(input: MeetingMetaPatchInput) {
 	const changed = Object.keys(next) as (keyof typeof next)[];
 	if (changed.length === 0) return { clubId: meeting.clubId };
 
-	await db.transaction(async (tx) => {
+	await conn.transaction(async (tx) => {
 		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));
 		// `before` mirrors `after` key for key, and both name only what actually
 		// MOVED (unchanged keys were dropped above) — so the entry reads as the

@@ -147,6 +147,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_agenda",
 			"list_meetings",
 			"record_guest_book",
+			"upsert_agendas",
 			"whoami",
 		]);
 	});
@@ -447,6 +448,18 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					// biome-ignore lint/style/noNonNullAssertion: insert returns a row
 					{ slotId: seed.slotId, guestId: contactful!.id },
 				],
+			}),
+			// #808. It reads no guest and writes no guest, so on the face of it
+			// it cannot leak one — which is exactly the reasoning that would keep
+			// it out of a HAND-WRITTEN sweep and is why the sweep is derived. It
+			// echoes free text the caller sent and re-reads a club's meetings, and
+			// the day either of those grows a guest name this case is already
+			// watching. A `time` is passed because this club has no standing
+			// recurrence rule, so without one the entry would block on
+			// `MISSING_TIME` and the plan it is being swept for would be empty.
+			toolsCall("upsert_agendas", {
+				clubId: seed.clubId,
+				meetings: [{ date: "2027-03-02", time: "19:00", theme: "Harvest" }],
 			}),
 		];
 		for (const call of calls) {

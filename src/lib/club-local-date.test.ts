@@ -1,6 +1,7 @@
 /**
- * The four club-local date helpers, now that they live somewhere a test can
- * import them without a database (#776 item 5).
+ * The club-local date helpers, now that they live somewhere a test can import
+ * them without a database (#776 item 5, plus the two weekday readers #808
+ * added).
  *
  * The move is behaviour-preserving, so the cases here are the ones that pin
  * WHY each is written the way it is: calendar arithmetic rather than instant
@@ -13,6 +14,8 @@ import {
 	addMonthsToLocalDate,
 	clubLocalParts,
 	localDate,
+	localDateWeekday,
+	localDateWeekdayIndex,
 	nextLocalDate,
 } from "./club-local-date";
 
@@ -126,5 +129,39 @@ describe("clubLocalParts", () => {
 		expect(
 			clubLocalParts(new Date("2026-11-01T07:30:00Z"), "America/Chicago"),
 		).toEqual({ date: "2026-11-01", time: "01:30", weekday: "Sunday" });
+	});
+});
+
+describe("localDateWeekdayIndex / localDateWeekday (#808)", () => {
+	it("numbers Sunday 0, matching getUTCDay and club_meeting_recurrence.weekday", () => {
+		// The INDEX is what `upsert_agendas` compares a proposed date against, and
+		// `club_meeting_recurrence.weekday` stores 0 = Sunday. An off-by-one here
+		// would warn `weekday_mismatch` on every date the club actually meets.
+		expect(localDateWeekdayIndex("2027-02-28")).toBe(0);
+		expect(localDateWeekdayIndex("2027-03-02")).toBe(2);
+		expect(localDateWeekdayIndex("2027-03-06")).toBe(6);
+	});
+
+	it("names the same day the index picks", () => {
+		// The two spellings exist because two readers want different things —
+		// a plan line renders a name, the rule check compares a number. Deriving
+		// one from the other at each call site is how they drift.
+		expect(localDateWeekday("2027-02-28")).toBe("Sunday");
+		expect(localDateWeekday("2027-03-02")).toBe("Tuesday");
+	});
+
+	it("agrees with clubLocalParts for the same club-local date", () => {
+		const parts = clubLocalParts(
+			new Date("2026-09-17T00:30:00Z"),
+			"America/Chicago",
+		);
+		expect(localDateWeekday(parts.date)).toBe(parts.weekday);
+	});
+
+	it("is calendar arithmetic, so no timezone can move it", () => {
+		// A club-local date is the same calendar day everywhere; reading its
+		// weekday must not depend on where the reader is.
+		expect(localDateWeekday("2027-03-02")).toBe("Tuesday");
+		expect(localDateWeekdayIndex("2027-03-02")).toBe(2);
 	});
 });
