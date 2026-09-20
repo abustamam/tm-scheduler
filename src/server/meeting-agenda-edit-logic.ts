@@ -43,7 +43,7 @@ import {
 	MAX_TEMPLATE_LABEL_CHARS,
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
-import { deriveRoleKey } from "#/lib/role-def-match";
+import { deriveRoleKey, foldRoleName } from "#/lib/role-def-match";
 import type { TableTopicsLimits } from "#/lib/table-topics-limits";
 import { logActivity } from "./activity";
 import { loadMeetingSlots } from "./meeting-slots-logic";
@@ -53,6 +53,7 @@ import {
 	materializeTemplateRoles,
 	type ReleasedHolder,
 } from "./meeting-templates-logic";
+import { isDeadlock, isUniqueViolation } from "./pg-errors";
 
 export type { ReleasedHolder };
 
@@ -220,10 +221,12 @@ async function materialiseForMeeting(
 					slotsUnordered: roleDefinitions.slotsUnordered,
 				})
 				.from(roleDefinitions)
+				// No `isNull(templateId)` beside these: 0083 pinned the column NULL
+				// with a CHECK, so it matched every row. `role_definitions_club_key_unique`
+				// is what keeps `byKey` below unambiguous.
 				.where(
 					and(
 						eq(roleDefinitions.clubId, clubId),
-						isNull(roleDefinitions.templateId),
 						inArray(roleDefinitions.key, namedKeys),
 					),
 				);
@@ -443,24 +446,6 @@ const AGENDA_CONCURRENT_EDIT_MESSAGE =
  */
 const AGENDA_DEADLOCK_MESSAGE =
 	"Someone else was changing this meeting. Please try again.";
-
-/** SQLSTATE `code`, wherever the driver hung it: drizzle wraps a `pg` error as
- *  the `cause` of its own, and a bare `pg` error carries `code` itself. */
-function isSqlState(err: unknown, code: string): boolean {
-	const direct = (err as { code?: unknown } | null)?.code;
-	const wrapped = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
-	return direct === code || wrapped === code;
-}
-
-/** SQLSTATE 23505 — a unique index rejected an insert. */
-function isUniqueViolation(err: unknown): boolean {
-	return isSqlState(err, "23505");
-}
-
-/** SQLSTATE 40P01 — Postgres chose this transaction as a deadlock victim. */
-function isDeadlock(err: unknown): boolean {
-	return isSqlState(err, "40P01");
-}
 
 /** What `ensureAgendaDraft` resolved: the meeting's own private template id,
  *  and whether this call is the one that just forked it. */
@@ -1613,8 +1598,8 @@ export async function addAgendaRole(input: {
 				`This agenda has too many roles (max ${MAX_TEMPLATE_ROLES}).`,
 			);
 		}
-		const wanted = input.name.trim().toLowerCase();
-		if (declared.some((r) => r.name.trim().toLowerCase() === wanted)) {
+		const wanted = foldRoleName(input.name);
+		if (declared.some((r) => foldRoleName(r.name) === wanted)) {
 			throw new Error(`"${input.name}" is already on this agenda.`);
 		}
 		const sortOrder =
@@ -1641,7 +1626,7 @@ export async function addAgendaRole(input: {
 		// `select()` returned last would attach a member's history to a coin
 		// flip. Falling through to CREATE is wrong too — it would mint a third —
 		// so this is refused outright and the officer renames one.
-		const named = bank.filter((r) => r.name.trim().toLowerCase() === wanted);
+		const named = bank.filter((r) => foldRoleName(r.name) === wanted);
 		if (named.length > 1) {
 			throw new Error(
 				`This club has more than one role called "${input.name}". Rename one in club settings first.`,
@@ -1733,7 +1718,11 @@ export async function addAgendaRole(input: {
 		// Offset past any slot this meeting already holds for the role. A removal
 		// takes every slot with it, so the usual case is zero — but a slot can
 		// survive its declaration (a conversion keeps a matched role's slots), and
-		// restarting at 0 would collide on `(meeting, definition, slot_index)`.
+		// restarting at 0 would DUPLICATE an index the meeting already holds.
+		// Nothing rejects that — there is no unique index on
+		// `(meeting_id, role_definition_id, slot_index)`, and 0083's header says
+		// why it declines to add one — so the duplicate would simply exist, and
+		// `slotLabel` would number two rows "Timer 1".
 		const held = await tx
 			.select({ slotIndex: roleSlots.slotIndex })
 			.from(roleSlots)

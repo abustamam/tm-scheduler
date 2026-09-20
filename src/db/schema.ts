@@ -1334,7 +1334,12 @@ export const roleDefinitions = pgTable(
 	},
 	(t) => [
 		index("role_definitions_club_idx").on(t.clubId),
-		index("role_definitions_club_template_idx").on(t.clubId, t.templateId),
+		// `role_definitions_club_template_idx` (on (club_id, template_id)) is
+		// dropped alongside it, by the same argument: with `template_id` pinned
+		// NULL its second column is constant, so it indexes exactly what
+		// `role_definitions_club_idx` above already indexes and costs a write on
+		// every role change to do it.
+		//
 		// ONE partial index now, not two. `role_definitions_club_template_key_unique`
 		// (on (club_id, template_id, key) where template_id is not null) is dropped
 		// by 0083: with every row's `template_id` NULL its predicate matches

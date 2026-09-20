@@ -33,6 +33,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { deriveRoleKey } from "#/lib/role-def-match";
 import {
 	cleanup,
 	hasTestDb,
@@ -77,6 +78,29 @@ function foldStatements(): string[] {
 		"the migration must still carry its hand-written fold",
 	).toBe(15);
 	return statements;
+}
+
+/**
+ * 0083's OWN slug expression, lifted out of the shipped file: the `base := …;`
+ * assignment from step 1b's DO block, anchored on the `candidate :=` that
+ * follows it.
+ *
+ * EXTRACTED rather than restated. Step 1b claims to reproduce `deriveRoleKey`
+ * "character for character", and a copy of the expression pasted into this file
+ * would agree with whichever engine the author had in mind — which is exactly
+ * how the one real divergence survived being written down as exact. Reading it
+ * off the migration means the two can only be compared, never assumed.
+ */
+function sqlSlugExpression(): string {
+	// COMMENT-BLIND, and that is not tidiness: the paragraph in 0083 explaining
+	// this gate quotes `base := …` itself, so a raw match found the PROSE first
+	// and handed Postgres a query made of English. Strip `--` lines before
+	// matching and only real statements can answer.
+	const sqlOnly = readFileSync(MIGRATION, "utf8").replace(/^\s*--.*$/gm, "");
+	const [, expr] =
+		sqlOnly.match(/base := ([\s\S]*?);\s*\n\s*candidate := base;/) ?? [];
+	if (!expr) throw new Error("0083 step 1b no longer has a `base :=` slug");
+	return expr.replace(/r\.name/g, "n.name");
 }
 
 class Rollback extends Error {}
@@ -880,5 +904,58 @@ describe.skipIf(!hasTestDb)("0083 folds role identity into the bank", () => {
 		expect(result[0]?.roleDefinitionId).toBe(club.roleDefinitionId);
 		expect(result[0]?.assignedMemberId).toBe(club.memberId);
 		expect(result[0]?.status).toBe("confirmed");
+	});
+});
+
+/**
+ * The claim step 1b makes about itself: its slug is `deriveRoleKey`'s,
+ * "character for character".
+ *
+ * Two engines implementing one rule is the shape `CLAUDE.md` records for
+ * `SPLASH_LOGO_*` — a literal restated in a test agrees with whichever renderer
+ * the author had in mind, so each side has to be MEASURED. Here that means
+ * running the migration's own expression in Postgres and `deriveRoleKey` in
+ * node over the same names.
+ *
+ * `İstanbul` is the case that was actually wrong and the reason the fold now
+ * goes through `foldRoleName`: JS applies Unicode FULL case mapping, so
+ * `"İ".toLowerCase()` is `i` plus a combining dot above, the dot is not
+ * `[a-z0-9]`, and the slug came out `i_stanbul` against Postgres's `istanbul`.
+ * `U+0130` is the only unconditional lowercase special-case in Unicode, so it
+ * is the whole of the divergence — the rest of this list is the control that
+ * says so.
+ */
+describe.skipIf(!hasTestDb)("0083's slug matches deriveRoleKey", () => {
+	const NAMES = [
+		"İstanbul Chair",
+		"Zoom Master",
+		"Ah-Counter",
+		"Sergeant-at-Arms",
+		"  Zoom — Master!! ",
+		"Café Host",
+		"Straße Keeper",
+		"🎤 Host",
+		"TIMER",
+		"___",
+		"ÀÉÎÕÜ",
+		"",
+	];
+
+	it("agrees with Postgres on every name, including the dotted capital I", async () => {
+		const expr = sqlSlugExpression();
+		// The expression is the migration's, so a step-1b rewrite that changes the
+		// rule fails here rather than silently diverging from the TS.
+		expect(expr).toContain("[^a-z0-9]");
+
+		for (const name of NAMES) {
+			const res = await testDb.execute(
+				sql`select ${sql.raw(expr)} as slug from (select ${name}::text as name) n`,
+			);
+			const fromSql = String(res.rows[0]?.slug ?? "");
+			expect(
+				deriveRoleKey(name, new Set()),
+				`name: ${JSON.stringify(name)}`,
+			).toBe(fromSql);
+		}
 	});
 });

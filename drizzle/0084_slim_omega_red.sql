@@ -1,0 +1,11 @@
+-- #801 follow-on. `role_definitions_club_template_idx` is on
+-- (club_id, template_id), and 0083 pinned `template_id` NULL with a CHECK — so
+-- its second column is constant and it indexes exactly what
+-- `role_definitions_club_idx` already indexes, while still costing a write on
+-- every role change.
+--
+-- Same argument 0083 used to drop `role_definitions_club_template_key_unique`:
+-- a dead index left beside a live one tells the next reader that per-template
+-- identity still exists. Separate migration rather than an edit to 0083, which
+-- has already been applied to the dev and test databases.
+DROP INDEX "role_definitions_club_template_idx";

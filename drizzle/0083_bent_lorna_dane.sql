@@ -103,6 +103,17 @@ WHERE rd.id = p.id AND p.claimants = 1;
 -- the suffix has to avoid BOTH the keys already in the table and the ones this
 -- pass is assigning as it goes.
 --
+-- "Character for character" is GATED, not asserted:
+-- `role-identity-fold.integration.test.ts` lifts the `base := …` expression
+-- below out of this file and runs it in Postgres against `deriveRoleKey` in
+-- node, over a list of names. It has to, because the two engines did NOT agree
+-- when that sentence was first written. `lower()` here folds `İ` (U+0130) to a
+-- single `i`; JS applies Unicode FULL case mapping, so `"İ".toLowerCase()` is
+-- `i` plus a combining dot, the dot is not `[a-z0-9]`, and `İstanbul` slugged
+-- to `i_stanbul` against this statement's `istanbul`. `deriveRoleKey` now folds
+-- U+0130 before lowercasing (`foldRoleName`), which is the only unconditional
+-- lowercase special-case in Unicode and so the whole of the divergence.
+--
 -- "FREE" MEANS FREE AMONG BANK ROWS, and the `template_id IS NULL` on the
 -- EXISTS below is load-bearing rather than tidy scoping. The binding constraint
 -- is `role_definitions_club_key_unique`, which is partial on exactly that

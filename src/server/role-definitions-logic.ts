@@ -16,6 +16,7 @@ import { pairedRoleIds } from "#/lib/meeting-roles";
 import { MAX_ROLE_REPEAT_SLOTS } from "#/lib/meeting-template-limits";
 import { deriveRoleKey } from "#/lib/role-def-match";
 import { isReadableClub } from "./club-readable-logic";
+import { isUniqueViolation } from "./pg-errors";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
 
 const roleCategory = z.enum([
@@ -200,19 +201,39 @@ export async function applyRoleDefinitionCreate(input: CreateRoleInput) {
 		new Set(existing.flatMap((r) => (r.key == null ? [] : [r.key]))),
 	);
 
-	const [row] = await db
-		.insert(roleDefinitions)
-		.values({
-			clubId: input.clubId,
-			key,
-			name: input.name,
-			category: input.category,
-			defaultCount: input.defaultCount,
-			sortOrder: maxSort + 1,
-			isSpeakerRole: input.isSpeakerRole ?? false,
-			description: normalizeDescription(input.description),
-		})
-		.returning({ id: roleDefinitions.id });
+	// The read above and this write are not one atomic step, and nothing locks
+	// the club — two admins adding the same role name at once both derive the
+	// same free key. `role_definitions_club_key_unique` settles it, which is
+	// correct; what was wrong is what the LOSER saw. Nothing translated the
+	// 23505, so it travelled through `createClubRole` to the roles page's
+	// `toast.error(err.message)` and showed an officer the raw
+	// `duplicate key value violates unique constraint …`. Caught here, in a
+	// sentence that says what to do about it. `materializeTemplateRoles` takes
+	// the other route out of the same race (`onConflictDoNothing`) because there
+	// the loser wants no row; here the caller is owed one or an explanation.
+	let row: { id: string } | undefined;
+	try {
+		[row] = await db
+			.insert(roleDefinitions)
+			.values({
+				clubId: input.clubId,
+				key,
+				name: input.name,
+				category: input.category,
+				defaultCount: input.defaultCount,
+				sortOrder: maxSort + 1,
+				isSpeakerRole: input.isSpeakerRole ?? false,
+				description: normalizeDescription(input.description),
+			})
+			.returning({ id: roleDefinitions.id });
+	} catch (err) {
+		if (isUniqueViolation(err)) {
+			throw new Error(
+				`Another role using the name "${input.name}" was just added. Try again.`,
+			);
+		}
+		throw err;
+	}
 	if (!row) throw new Error("Failed to create role.");
 	return { id: row.id };
 }

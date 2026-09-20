@@ -51,7 +51,7 @@
  */
 export function deriveRoleKey(name: string, taken: Set<string>): string {
 	const base =
-		[...name.toLowerCase()]
+		[...foldRoleName(name)]
 			.map((c) => (/[a-z0-9]/.test(c) ? c : "_"))
 			.join("")
 			.replace(/_+/g, "_")
@@ -61,6 +61,36 @@ export function deriveRoleKey(name: string, taken: Set<string>): string {
 		const candidate = `${base}_${n}`;
 		if (!taken.has(candidate)) return candidate;
 	}
+}
+
+/**
+ * The ONE name fold: what `deriveRoleKey` slugs from, what `matchRoleDefs`
+ * compares on, and what migration 0083 spells as `lower(btrim(…))`. Callers
+ * that need "the same name" use this rather than writing `.toLowerCase()` a
+ * fourth time — three spellings of it had already drifted apart, two of them
+ * under comments claiming to be this rule.
+ *
+ * `U+0130` (dotted capital I) is folded BEFORE lowercasing, and that is the
+ * whole reason this is a function rather than `.trim().toLowerCase()`. JS
+ * applies Unicode FULL case mapping, so `"İ".toLowerCase()` is TWO code points
+ * — `i` plus a combining dot above — and the combining dot is not `[a-z0-9]`,
+ * so `deriveRoleKey` below turns it into an underscore: `İstanbul` slugs to
+ * `i_stanbul` while Postgres `lower()` gives a single `i` and 0083 slugs
+ * `istanbul`. MEASURED against this repo's own Postgres. `U+0130` is the only
+ * unconditional lowercase special-case in Unicode, so handling it is the whole
+ * of the divergence, and handling it is what makes 0083's "character for
+ * character" claim true.
+ *
+ * The `trim` matches `btrim`: `addAgendaRole`'s validator does not trim the
+ * name it stores, so an untrimmed row is reachable and " Timer" has to fold
+ * onto "Timer". It costs the slug nothing — leading whitespace became a leading
+ * underscore that the slug already stripped.
+ */
+export function foldRoleName(name: string): string {
+	return name
+		.replace(/\u0130/g, "i")
+		.trim()
+		.toLowerCase();
 }
 
 /** The half of a role definition that survives a copy. */
@@ -97,7 +127,7 @@ export function matchRoleDefs<T extends RoleIdentity>(
 	const byName = new Map<string, T | null>();
 	for (const candidate of to) {
 		if (candidate.key != null) byKey.set(candidate.key, candidate);
-		const nameKey = candidate.name.toLowerCase();
+		const nameKey = foldRoleName(candidate.name);
 		byName.set(nameKey, byName.has(nameKey) ? null : candidate);
 	}
 
@@ -106,7 +136,7 @@ export function matchRoleDefs<T extends RoleIdentity>(
 		const hit =
 			def.key != null
 				? byKey.get(def.key)
-				: (byName.get(def.name.toLowerCase()) ?? undefined);
+				: (byName.get(foldRoleName(def.name)) ?? undefined);
 		if (hit) matched.set(def.id, hit);
 	}
 	return matched;
