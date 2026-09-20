@@ -4,7 +4,8 @@
  * #806 shipped the lifecycle for `record_guest_book`; #808 needed it again for
  * `upsert_agendas` and, as filed, would have built a second copy of the table,
  * the creator-only and archive checks, the expiry, the retention sweep and the
- * locked-apply skeleton. Two copies of a retention-and-authorization lifecycle
+ * locked-apply skeleton. It did not: #808 shipped enrolled here, which is the
+ * measurement this file was written to take. Two copies of a retention-and-authorization lifecycle
  * is how one copy gets a fix and the other does not — and this one holds
  * visitor names, emails and phone numbers.
  *
@@ -43,6 +44,10 @@ const ARITHMETIC = "lib/pending-plan.ts";
 const TOOL_INSERT = "server/mcp/tools/record-guest-book.ts";
 const GUEST_BOOK_LOGIC = "server/guest-book-pending-logic.ts";
 const GUEST_BOOK_APPLY = "server/guest-book-apply.ts";
+/** #808's own two halves: the tool that writes a row, and the apply that claims it. */
+const AGENDA_TOOL_INSERT = "server/mcp/tools/upsert-agendas.ts";
+const AGENDA_LOGIC = "server/agenda-plan-pending-logic.ts";
+const AGENDA_APPLY = "server/agenda-plan-apply.ts";
 
 /**
  * Every non-test `.ts`/`.tsx` under `src/`, as a `/`-joined path from `src/`.
@@ -121,6 +126,9 @@ describe("the pending-plan lifecycle is extracted, and stays extracted (#812)", 
 			TOOL_INSERT,
 			GUEST_BOOK_LOGIC,
 			GUEST_BOOK_APPLY,
+			AGENDA_TOOL_INSERT,
+			AGENDA_LOGIC,
+			AGENDA_APPLY,
 		]) {
 			expect(ALL, `${owner} is not in the sweep`).toContain(owner);
 		}
@@ -135,12 +143,18 @@ describe("the pending-plan lifecycle is extracted, and stays extracted (#812)", 
 		// writing contact details back over a tombstone. That predicate is about
 		// this tool's own payload, not about the lifecycle, and the case below
 		// pins it to that single use.
+		//
+		// `upsert_agendas` (#808) is enrolled for its INSERT only — the second
+		// tool through the machine, and the measurement of whether the extraction
+		// held. Its confirm page has no PATCH at all, so unlike the guest book it
+		// names the table in exactly one place.
 		const owners = new Set([
 			SCHEMA,
 			LIFECYCLE,
 			APPLY,
 			TOOL_INSERT,
 			GUEST_BOOK_LOGIC,
+			AGENDA_TOOL_INSERT,
 		]);
 		const offenders = filesNaming(P.table).filter((rel) => !owners.has(rel));
 		expect(
@@ -169,7 +183,14 @@ describe("the pending-plan lifecycle is extracted, and stays extracted (#812)", 
 			`${LIFECYCLE} no longer compares the creator — the page that shows a visitor's unmasked email is open to any admin of the club.`,
 		).toBe(true);
 
-		for (const rel of [GUEST_BOOK_LOGIC, GUEST_BOOK_APPLY, TOOL_INSERT]) {
+		for (const rel of [
+			GUEST_BOOK_LOGIC,
+			GUEST_BOOK_APPLY,
+			TOOL_INSERT,
+			AGENDA_LOGIC,
+			AGENDA_APPLY,
+			AGENDA_TOOL_INSERT,
+		]) {
 			const src = raw(rel);
 			for (const call of [
 				"assertClubNotArchived(",
@@ -276,6 +297,30 @@ describe("the pending-plan lifecycle is extracted, and stays extracted (#812)", 
 			/\bfrom\(\s*mcpPendingPlans\s*\)/.test(raw(GUEST_BOOK_LOGIC)),
 			`${GUEST_BOOK_LOGIC} selects from the pending table again.`,
 		).toBe(false);
+	});
+
+	it("the agenda plan's reads go through the lifecycle, not around it", () => {
+		// The SECOND tool through the machine (#808), and the one that says
+		// whether the extraction held: #812 was written on the claim that
+		// `upsert_agendas` would inherit the lifecycle rather than clone it.
+		const logic = stripped(AGENDA_LOGIC);
+		expect(
+			logic.includes("resolvePending("),
+			`${AGENDA_LOGIC} no longer calls resolvePending — its reads are no longer going through the four ordered checks.`,
+		).toBe(true);
+		expect(
+			/applyPendingPlanLocked\s*[<(]/.test(stripped(AGENDA_APPLY)),
+			`${AGENDA_APPLY} no longer calls applyPendingPlanLocked — it has grown its own lock and its own applied_at guard back.`,
+		).toBe(true);
+		// And it reaches the table through neither. Unlike the guest book there
+		// is no PATCH path here, so the agenda page touches `mcp_pending_plans`
+		// not at all.
+		for (const rel of [AGENDA_LOGIC, AGENDA_APPLY]) {
+			expect(
+				P.table.test(raw(rel)),
+				`${rel} names mcp_pending_plans directly. The lifecycle owns that table; this page reads through resolvePending and writes through applyPendingPlanLocked.`,
+			).toBe(false);
+		}
 	});
 
 	// Mutation verification, per the repo's convention. A source guard has no

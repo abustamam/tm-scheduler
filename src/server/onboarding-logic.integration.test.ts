@@ -123,21 +123,38 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 
 	it("rejects a duplicate club number and writes nothing (transaction rolls back)", async () => {
 		const number = uniqueNumber();
+		// PER-RUN names, and the reason is the two assertions at the bottom.
+		//
+		// Both are ABSENCE assertions over an UNSCOPED select on a shared table,
+		// and vitest runs test FILES in parallel against one `tm_test` — so a
+		// literal name here is answered by whatever any other suite has in flight.
+		// `pathways-sync.integration.test.ts` seeds a club named exactly
+		// "Second Club", and this case failed on it: the rollback worked, the
+		// select found the other file's row, and the failure pointed at this
+		// transaction. MEASURED — one red in a full run, green on the next two.
+		//
+		// An absence assertion cannot be scoped by id (the whole claim is that no
+		// row was created), so the value itself has to be one nothing else can
+		// produce. Do not tidy these back to literals.
+		const run = randomUUID().slice(0, 8);
+		const secondName = `Second Club ${run}`;
+		const secondEmail = `second-${run}@example.com`;
+
 		const first = await createClubWithAdmin({
-			clubName: "First Club",
+			clubName: `First Club ${run}`,
 			clubNumber: number,
 			adminName: "First Admin",
-			adminEmail: "first@example.com",
+			adminEmail: `first-${run}@example.com`,
 			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(first.clubId);
 
 		await expect(
 			createClubWithAdmin({
-				clubName: "Second Club",
+				clubName: secondName,
 				clubNumber: number, // duplicate
 				adminName: "Second Admin",
-				adminEmail: "second@example.com",
+				adminEmail: secondEmail,
 				timezone: DEFAULT_CLUB_TIMEZONE,
 			}),
 		).rejects.toThrow(/already exists/i);
@@ -146,12 +163,12 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const secondClub = await testDb
 			.select({ id: clubs.id })
 			.from(clubs)
-			.where(eq(clubs.name, "Second Club"));
+			.where(eq(clubs.name, secondName));
 		expect(secondClub.length).toBe(0);
 		const orphanPerson = await testDb
 			.select({ id: people.id })
 			.from(people)
-			.where(eq(people.email, "second@example.com"));
+			.where(eq(people.email, secondEmail));
 		expect(orphanPerson.length).toBe(0);
 	});
 

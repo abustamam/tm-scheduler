@@ -20,20 +20,20 @@
 export const OPEN_LABEL = "open";
 
 /**
- * `assign_roles`' up-front lock refusal, which is deliberately NOT
- * `MEETING_LOCKED_MESSAGE` (`#/lib/meeting-lifecycle`).
+ * `assign_roles`' up-front lock refusal, RE-EXPORTED from
+ * `#/lib/meeting-lifecycle` since #808.
  *
- * `reassignSlotCore` and `releaseSlotCore` each assert the lock again under
- * the slot's row lock, raising that shared constant — and for those two arms
- * that assertion is the ENFORCEMENT, while the blocking item below is the
- * explanation. #806's lesson is why the two sentences differ: a guard inside a
- * locked transaction is unreachable by a serial test when a cheaper pre-check
- * answers first, and doubly so when both refusals say the same words.
- * Different sentences let a test say which one ran.
+ * It was declared here when `assign_roles` was the only tool that raised it.
+ * `upsert_agendas` raises the same item about the same fact, and importing it
+ * out of THIS module made #808's planner depend on #809's for a sentence about
+ * neither — so it moved to the module that owns the lock, beside
+ * `isMeetingLocked` and the banner copy it is deliberately distinct from. The
+ * re-export is what let that move edit no importer; `export … from` is the same
+ * symbol, so the two spellings cannot drift into two sentences.
  *
- * It lives HERE rather than beside the tool for this module's founding
- * reason: the tool imports `#/db` at load, so a sentence declared there is
- * pinned only by a suite that silently skips without `TEST_DATABASE_URL`.
+ * `reassignSlotCore` and `releaseSlotCore` each assert the lock again under the
+ * slot's row lock, raising `MEETING_LOCKED_MESSAGE` — for those two arms that
+ * assertion is the ENFORCEMENT and this blocking item is the explanation.
  *
  * All THREE apply arms assert it, but only since #809: `applyAssignGuestToSlot`
  * named `assertMeetingNotLocked` nowhere and did not read `meetings.status` at
@@ -43,8 +43,7 @@ export const OPEN_LABEL = "open";
  * state where each arm enforces the lock; the gate now lives in the seam beside
  * its siblings, and `guests.integration.test.ts` executes it.
  */
-export const MEETING_LOCKED_BLOCKING_MESSAGE =
-	"That meeting is completed, so its agenda no longer accepts changes.";
+export { MEETING_LOCKED_BLOCKING_MESSAGE } from "./meeting-lifecycle";
 
 /** One planned change, in the order the caller sent it. */
 export interface AssignmentPlanLine {

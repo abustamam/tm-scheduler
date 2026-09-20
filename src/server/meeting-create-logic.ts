@@ -37,6 +37,25 @@ export interface NewMeeting {
 	/** Copied from the club default at insert (copy-at-insert). */
 	lengthMinutes: number;
 	location: string | null;
+	/**
+	 * Meeting meta written in the SAME insert (#808).
+	 *
+	 * Omitted by the two callers that predate it (`applyBatchCreateMeetings`,
+	 * `ensureScheduleToppedUp`), which create blank meetings for a human to fill
+	 * in later — so the default below keeps their behaviour exactly.
+	 *
+	 * `upsert_agendas` supplies it, and the reason it is a field here rather
+	 * than an insert-then-patch at the call site is the AUDIT: patching a
+	 * meeting created a millisecond earlier logs a `meeting_create` AND a
+	 * `meeting_edit` for one user action, and doubles the write. One insert,
+	 * one row, one log line.
+	 */
+	meta?: {
+		theme: string | null;
+		wordOfTheDay: string | null;
+		wodDefinition: string | null;
+		wodExample: string | null;
+	};
 }
 
 /**
@@ -44,8 +63,11 @@ export interface NewMeeting {
  * `ON CONFLICT (club_id, scheduled_at) DO NOTHING`. Returns the new meeting id,
  * or `null` when a meeting already occupied that exact instant (or a concurrent
  * writer won the race) — the unique `(club_id, scheduled_at)` index is the
- * concurrency backstop for the read-triggered top-up. `theme`/`wordOfTheDay`/
- * `notes` are left blank; the caller passes an already-resolved `location`.
+ * concurrency backstop for the read-triggered top-up. The caller passes an
+ * already-resolved `location`, and an optional `meta` (#808) — without it
+ * `theme`/`wordOfTheDay`/`wodDefinition`/`wodExample` are written blank, which
+ * is what the batch create and the top-up both want. `notes` is never written
+ * here by anyone.
  */
 export async function insertMeetingWithSlots(
 	conn: DbOrTx,
@@ -59,8 +81,15 @@ export async function insertMeetingWithSlots(
 			scheduledAt: m.scheduledAt,
 			lengthMinutes: m.lengthMinutes,
 			location: m.location,
-			theme: null,
-			wordOfTheDay: null,
+			// Named EXPLICITLY rather than left to the column defaults, so a
+			// caller that supplies no meta writes the same blank row it always
+			// did. `notes` has no `meta` counterpart on purpose — #808 excluded
+			// it from `upsert_agendas` (it renders on printed agendas), and no
+			// other caller has ever set it at insert.
+			theme: m.meta?.theme ?? null,
+			wordOfTheDay: m.meta?.wordOfTheDay ?? null,
+			wodDefinition: m.meta?.wodDefinition ?? null,
+			wodExample: m.meta?.wodExample ?? null,
 			notes: null,
 		})
 		.onConflictDoNothing()

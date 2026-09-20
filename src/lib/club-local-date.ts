@@ -70,6 +70,29 @@ export function nextLocalDate(date: string): string {
 	return d.toISOString().slice(0, 10);
 }
 
+/**
+ * The weekday INDEX of a club-local `YYYY-MM-DD` — 0 = Sunday, matching
+ * `Date.getUTCDay()`, `RecurrenceInput.Weekday` and
+ * `club_meeting_recurrence.weekday`.
+ *
+ * Numeric as well as named because the two readers want different things:
+ * `upsert_agendas` compares a proposed date against the club's stored rule,
+ * which is an integer, while a plan line renders a name. Deriving one from the
+ * other at each call site is how the two spellings drift.
+ *
+ * Read off the DATE, not off an instant: `new Date("2026-09-16")` is parsed as
+ * UTC midnight, which is the same calendar day everywhere, so `getUTCDay` on it
+ * is the club-local weekday.
+ */
+export function localDateWeekdayIndex(date: string): number {
+	return new Date(`${date}T00:00:00Z`).getUTCDay();
+}
+
+/** The weekday NAME of a club-local `YYYY-MM-DD`. */
+export function localDateWeekday(date: string): Weekday {
+	return WEEKDAYS[localDateWeekdayIndex(date)] as Weekday;
+}
+
 /** The club-local `YYYY-MM-DD` and `HH:mm` of an instant, plus its weekday. */
 export function clubLocalParts(
 	instant: Date,
@@ -77,11 +100,5 @@ export function clubLocalParts(
 ): { date: string; time: string; weekday: Weekday } {
 	const wall = utcToZonedWallTime(instant, timezone);
 	const date = wall.slice(0, 10);
-	// Read the weekday off the club-local DATE, not off the instant: `new
-	// Date("2026-09-16")` is parsed as UTC midnight, which is the same calendar
-	// day everywhere, so `getUTCDay` on it is the club-local weekday.
-	const weekday = WEEKDAYS[
-		new Date(`${date}T00:00:00Z`).getUTCDay()
-	] as Weekday;
-	return { date, time: wall.slice(11, 16), weekday };
+	return { date, time: wall.slice(11, 16), weekday: localDateWeekday(date) };
 }

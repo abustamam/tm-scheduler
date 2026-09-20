@@ -64,8 +64,9 @@ export type McpErrorCode =
  * neither surface consulted the meeting lock. `assign_roles` (#809) is a
  * different surface — it edits the AGENDA, which `assertMeetingNotLocked` has
  * refused on a completed meeting since #150 — so the case is now real and the
- * code is raised. The rule the two decisions share is the one worth keeping: a
- * code is declared when a tool pushes it, and on no other grounds.
+ * code is raised, and `upsert_agendas` (#808) raises it too. The rule the two
+ * decisions share is the one worth keeping: a code is declared when a tool
+ * pushes it, and on no other grounds.
  */
 export type McpBlockingCode =
 	| "NO_MEETING_ON_DATE"
@@ -80,9 +81,22 @@ export type McpBlockingCode =
 	 * the slot's row lock, which is what actually holds — a meeting completed
 	 * between the check and the write is refused there. Both refusals exist on
 	 * purpose and they say different sentences, so a test can tell which one
-	 * ran.
+	 * ran. `upsert_agendas` (#808) has the same pair: its planner pushes this
+	 * item so the confirm page can explain it, and its apply re-plans inside the
+	 * club lock and refuses again with a sentence only that path says.
 	 */
 	| "MEETING_LOCKED"
+	/**
+	 * There is no meeting on that date and no standing rule to take a start time
+	 * from, so `upsert_agendas` cannot create one (#808).
+	 *
+	 * Blocking rather than a zod rejection, and the choice is the one
+	 * `INVALID_EMAIL` records below: whether `time` is required depends on the
+	 * CLUB, which a schema cannot see. A call naming a season's worth of dates
+	 * would otherwise be rejected whole because one of them fell outside the
+	 * club's standing rule.
+	 */
+	| "MISSING_TIME"
 	/** The slot does not belong to the meeting the call names (#809). */
 	| "SLOT_NOT_IN_MEETING"
 	/** The member id is not an active roster member of this club (#809). */

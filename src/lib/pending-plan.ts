@@ -58,6 +58,19 @@ export type McpPendingTool = (typeof MCP_PENDING_TOOLS)[number];
  */
 export const RECORD_GUEST_BOOK_TOOL: McpPendingTool = "record_guest_book";
 
+/**
+ * The agenda tool's member, named once for the same reason (#808).
+ *
+ * It was spelled four times on its first cut — two `as const` declarations
+ * under two different names, a bare literal at the insert, and a bare literal
+ * in the plan hash — which is exactly the shape the note above says this file
+ * exists to remove. The hash copy is the one that bites: `PlanHashInput.tool`
+ * is `tool: string`, not `McpPendingTool`, so a typo there is invisible to
+ * `tsc` AND to every test, and it would fail every outstanding confirm link as
+ * `PLAN_STALE` for up to 48 hours after the deploy that introduced it.
+ */
+export const UPSERT_AGENDAS_TOOL: McpPendingTool = "upsert_agendas";
+
 /** A pending plan is openable for a day. */
 export const PENDING_PLAN_TTL_MS = 24 * 60 * 60 * 1000;
 
