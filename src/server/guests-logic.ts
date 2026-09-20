@@ -8,6 +8,13 @@ import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { assertMeetingNotLocked } from "./meeting-authz-logic";
+
+// Either the pooled client or a caller's transaction, so this can run inside a
+// batch that is already holding row locks.
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 /** Contact fields for a brand-new club guest (name required, contact optional). */
 export type NewGuestInput = {
@@ -49,17 +56,42 @@ export async function listClubGuests(clubId: string) {
  * this helper trusts that gate and only validates the guest is club-scoped.
  * Returns the slot's club id and the resolved guest id.
  */
-export async function applyAssignGuestToSlot(input: {
-	slotId: string;
-	guestId?: string | null;
-	newGuest?: NewGuestInput;
-	actorMemberId: string | null;
-}): Promise<{ clubId: string; guestId: string }> {
-	const [slot] = await db
+export async function applyAssignGuestToSlot(
+	input: {
+		slotId: string;
+		guestId?: string | null;
+		newGuest?: NewGuestInput;
+		actorMemberId: string | null;
+	},
+	/**
+	 * Which connection to run on. Defaults to the pooled client, so every
+	 * existing caller is unchanged — it opens its own transaction exactly as
+	 * before.
+	 *
+	 * `assign_roles` passes its `tx` (#809), and that is the whole point of the
+	 * parameter: a batch mixing members, guests and clears must apply entirely
+	 * or not at all, and a guest assignment that opened its OWN transaction
+	 * would commit independently of the rest. It would also take a second
+	 * pooled connection while the caller's transaction holds `FOR UPDATE` row
+	 * locks — the pool is 10 and nothing bounds a pool wait.
+	 *
+	 * Every read below runs on `conn` too, not only the writes. Threading the
+	 * transaction into `db.transaction` and leaving the slot SELECT and
+	 * `loadClubDefaultCountryCode` on `db` would take that second connection
+	 * anyway, which is the failure this parameter exists to prevent.
+	 *
+	 * Given a transaction, `conn.transaction` opens a SAVEPOINT rather than a
+	 * second transaction: a throw in here still aborts the caller's batch,
+	 * because the error propagates.
+	 */
+	conn: DbOrTx = db,
+): Promise<{ clubId: string; guestId: string }> {
+	const [slot] = await conn
 		.select({
 			id: roleSlots.id,
 			assignedMemberId: roleSlots.assignedMemberId,
 			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
 		})
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -67,10 +99,26 @@ export async function applyAssignGuestToSlot(input: {
 		.limit(1);
 	if (!slot) throw new Error("Role not found.");
 
-	// Club default country code for E.164 normalization on write (#295).
-	const cc = await loadClubDefaultCountryCode(slot.clubId);
+	// The lock choke point (#150), which this seam has never had. Every other
+	// way onto an agenda asserts it — `claimSlot` and `releaseSlotCore` in their
+	// own bodies, `reassignSlotCore` under its row lock — and a guest
+	// assignment is an agenda mutation like any other, so a completed meeting
+	// must refuse it too. Until #809 it did not: `assignGuestSlot` gates on the
+	// club admin role and nothing else, so an admin could put a visitor on a
+	// locked agenda from the browser.
+	//
+	// Found by the review of #809, which needed to state where each of the
+	// three apply arms enforces the lock and could not say it truthfully for
+	// this one. `assign_roles` blocks a locked meeting up front and holds the
+	// meeting row `FOR UPDATE` for the batch, so that path was covered — but by
+	// a lock whose load-bearing role nothing recorded, rather than by the
+	// assertion its siblings make.
+	assertMeetingNotLocked(slot.meetingStatus);
 
-	return db.transaction(async (tx) => {
+	// Club default country code for E.164 normalization on write (#295).
+	const cc = await loadClubDefaultCountryCode(slot.clubId, conn);
+
+	return conn.transaction(async (tx) => {
 		let guestId: string;
 		if (input.newGuest) {
 			const name = input.newGuest.name.trim();

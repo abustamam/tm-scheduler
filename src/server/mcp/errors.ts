@@ -52,20 +52,51 @@ export type McpErrorCode =
  * `MEETING_LOCKED` and `FIELD_TOO_LONG` — and a declared code nothing emits is
  * worse than an absent one: the next reader assumes the case is handled.
  *
- * `MEETING_LOCKED` was checked before it was dropped, and its absence is
- * PARITY rather than a gap: `record_guest_book` gates attendance on
- * `meetingDateReached` and `minutes-logic.ts` gates the browser path on exactly
- * the same condition, so neither surface consults the meeting lock here.
- * `FIELD_TOO_LONG` had no call site either — the entry schema's `.max()` bounds
- * reject an over-long field as a zod `VALIDATION` error before any plan is
- * built, which is the right shape for a length the caller can see itself.
- * Re-add either the day a tool actually raises it.
+ * `FIELD_TOO_LONG` stays dropped. It had no call site — the entry schema's
+ * `.max()` bounds reject an over-long field as a zod `VALIDATION` error before
+ * any plan is built, which is the right shape for a length the caller can see
+ * itself. Re-add it the day a tool actually raises it.
+ *
+ * `MEETING_LOCKED` is BACK, and the #776 reasoning that dropped it was correct
+ * for the surface that existed then rather than wrong. Dropping it was parity:
+ * `record_guest_book` gates attendance on `meetingDateReached` and
+ * `minutes-logic.ts` gates the browser path on exactly the same condition, so
+ * neither surface consulted the meeting lock. `assign_roles` (#809) is a
+ * different surface — it edits the AGENDA, which `assertMeetingNotLocked` has
+ * refused on a completed meeting since #150 — so the case is now real and the
+ * code is raised. The rule the two decisions share is the one worth keeping: a
+ * code is declared when a tool pushes it, and on no other grounds.
  */
 export type McpBlockingCode =
 	| "NO_MEETING_ON_DATE"
 	| "AMBIGUOUS_DATE"
 	| "AMBIGUOUS_GUEST"
 	| "INVALID_PHONE"
+	/**
+	 * The meeting is completed, so its agenda no longer accepts changes (#150).
+	 *
+	 * The blocking item is the EXPLANATION, not the enforcement.
+	 * `reassignSlotCore` and `releaseSlotCore` each assert the lock again under
+	 * the slot's row lock, which is what actually holds — a meeting completed
+	 * between the check and the write is refused there. Both refusals exist on
+	 * purpose and they say different sentences, so a test can tell which one
+	 * ran.
+	 */
+	| "MEETING_LOCKED"
+	/** The slot does not belong to the meeting the call names (#809). */
+	| "SLOT_NOT_IN_MEETING"
+	/** The member id is not an active roster member of this club (#809). */
+	| "NOT_A_MEMBER"
+	/** The guest id is not a guest of this club (#809). */
+	| "NOT_A_GUEST"
+	/**
+	 * The same slot appears twice in one call (#809).
+	 *
+	 * Blocking rather than last-write-wins: a batch nobody can see silently
+	 * discarding one of two instructions about the same slot is a surprise, and
+	 * the caller can fix it by sending one.
+	 */
+	| "DUPLICATE_SLOT"
 	/**
 	 * The address on the line is not a valid email.
 	 *
@@ -81,7 +112,11 @@ export type McpBlockingCode =
 export interface McpBlockingItem {
 	code: McpBlockingCode;
 	/**
-	 * Index into the call's `entries` array, so a caller can point at the line.
+	 * Index into the call's own input array, so a caller can point at the line
+	 * that caused it — `entries` for `record_guest_book`, `assignments` for
+	 * `assign_roles`. The name predates the second tool and is kept rather than
+	 * split, because every consumer branches on `code` and reads this the same
+	 * way whatever the array is called.
 	 *
 	 * ABSENT when the problem is the call as a whole rather than one line —
 	 * "there is no meeting on that date" belongs to no entry. An index of `-1`

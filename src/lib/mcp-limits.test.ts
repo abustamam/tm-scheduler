@@ -1,7 +1,7 @@
 /**
  * The MCP caps, asserted as VALUES (#776 item 1).
  *
- * This is the whole reason the three numbers moved out of the tool modules:
+ * This is the whole reason these numbers moved out of the tool modules:
  * while they lived beside `db`, no test could import them, so nothing in the
  * suite disagreed with any value they might have had.
  *
@@ -13,6 +13,7 @@ import {
 	MAX_FIND_PEOPLE_RESULTS,
 	MAX_GUEST_BOOK_ENTRIES,
 	MAX_MCP_BODY_BYTES,
+	MAX_ROLE_ASSIGNMENTS,
 } from "./mcp-limits";
 
 describe("the caps themselves (#776 item 1)", () => {
@@ -20,6 +21,7 @@ describe("the caps themselves (#776 item 1)", () => {
 		expect(MAX_GUEST_BOOK_ENTRIES).toBe(100);
 		expect(MAX_FIND_PEOPLE_RESULTS).toBe(200);
 		expect(MAX_MCP_BODY_BYTES).toBe(1_000_000);
+		expect(MAX_ROLE_ASSIGNMENTS).toBe(100);
 	});
 
 	it("are whole positive numbers — a cap of 0 or 1.5 is a bug, not a policy", () => {
@@ -27,6 +29,7 @@ describe("the caps themselves (#776 item 1)", () => {
 			MAX_GUEST_BOOK_ENTRIES,
 			MAX_FIND_PEOPLE_RESULTS,
 			MAX_MCP_BODY_BYTES,
+			MAX_ROLE_ASSIGNMENTS,
 		]) {
 			expect(Number.isSafeInteger(cap)).toBe(true);
 			expect(cap).toBeGreaterThan(0);

@@ -37,6 +37,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { handleMcpRequest } = await import("#/server/mcp/handle-request");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
+const { MCP_TOOLS } = await import("#/server/mcp/tools");
 
 /** A JSON-RPC POST to /api/mcp, with an optional bearer token and cookie. */
 function mcpRequest(
@@ -141,6 +142,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			result: { tools: { name: string }[] };
 		};
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
+			"assign_roles",
 			"find_people",
 			"get_agenda",
 			"list_meetings",
@@ -396,13 +398,16 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 	it("returns no raw guest email or phone from ANY tool", async () => {
 		const email = "raw.address@example.com";
 		const phone = "+15551234567";
-		await testDb.insert(guests).values({
-			clubId: seed.clubId,
-			name: "Contactful Guest",
-			email,
-			phone,
-			stage: "prospect",
-		});
+		const [contactful] = await testDb
+			.insert(guests)
+			.values({
+				clubId: seed.clubId,
+				name: "Contactful Guest",
+				email,
+				phone,
+				stage: "prospect",
+			})
+			.returning({ id: guests.id });
 
 		// `record_guest_book` needs a meeting whose club-local day has ARRIVED, or
 		// it returns `plan: null` and its masking code never runs — which is how
@@ -431,6 +436,18 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				meetingDate: pastDate,
 				entries: [{ name: "Contactful Guest", email }],
 			}),
+			// #809. It names this guest twice — once assigning, once in the plan
+			// line's `to` — and it reads `guests` with its own select rather than
+			// through `toMcpGuest`, which `serialize.ts` calls THE serializer
+			// every guest passes through. That is exactly the shape this sweep is
+			// the compensating control for, so the tool has to be in it.
+			toolsCall("assign_roles", {
+				meetingId: seed.meetingId,
+				assignments: [
+					// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+					{ slotId: seed.slotId, guestId: contactful!.id },
+				],
+			}),
 		];
 		for (const call of calls) {
 			const { raw } = await readToolResult(
@@ -443,6 +460,16 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				"5551234567",
 			);
 		}
+
+		// DERIVED completeness, the `mcp-authz.guard.test.ts` pattern: a
+		// hand-written list cannot fail for the case it exists to catch. #809
+		// added its tool to the registry assertion 280 lines above this one and
+		// not to the sweep, and nothing noticed — so the next tool fails HERE
+		// until someone writes it a call, rather than shipping unswept.
+		expect(
+			[...new Set(calls.map((c) => c.params.name))].sort(),
+			"a tool is registered but not swept for unmasked guest contact. Add a call for it above; do not delete this case.",
+		).toEqual(MCP_TOOLS.map((t) => t.name).sort());
 
 		// The masked forms ARE there — otherwise this test would pass on a tool
 		// that simply returned nothing.

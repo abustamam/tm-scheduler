@@ -1432,7 +1432,33 @@ async function resolveConfirmGrant(
  *
  * Deliberately allows assigning an *open* slot (admin/VPE assign-to-member
  * flows) — the guarantee here is atomicity, not a status precondition. Returns
- * the slot's club id so the caller can trust-guard/log against it.
+ * the slot's club id so the caller can trust-guard/log against it, and
+ * `wasOpen` so a caller can describe what it did without re-reading.
+ *
+ * **`wasOpen` is read under the row lock, and so is the activity action it
+ * decides** (#809). Whether the slot was open is only true-or-false under the
+ * lock this function takes; a caller reading it beforehand would be doing a
+ * check-then-act on exactly the field the lock exists to serialize. So the log
+ * is written here rather than by the caller, and it names what actually
+ * happened: assigning an OPEN slot is a `claim`, taking it off someone else is
+ * a `reassign`. Before #809 it was always `reassign`, which
+ * `activity-format.ts` renders as "reassigned Timer: someone → Sam" — a
+ * sentence with a `from` nobody can supply, because there was no prior holder.
+ * The browser path reaches this with an open slot only when the slot was
+ * released between the page load and the click, so this changes the feed for a
+ * race and for `assign_roles`, and for nothing else.
+ *
+ * It does NOT fix the same sentence for a GUEST-held slot, and that limit is
+ * worth stating because the obvious reading of the paragraph above is that it
+ * does. A guest-held slot is `claimed` with a null `assigned_member_id`, so
+ * taking it for a member still logs `reassign` with `fromMemberId: null` and
+ * still renders "someone → Sam". Carrying a `fromGuestId` here would not be
+ * enough on its own: `activity-feed-logic.ts:218` resolves `fromName` from
+ * `fromMemberId` alone, so that case needs the feed changed too.
+ *
+ * #809 specified returning `wasOpen` so a caller could pick the action without
+ * re-reading. Deciding it HERE, under the lock, is the same fix by a shorter
+ * route, and returning the flag as well would be surface nothing reads.
  */
 export async function reassignSlotCore(
 	tx: DbOrTx,
@@ -1508,18 +1534,118 @@ export async function reassignSlotCore(
 		});
 	}
 
+	const wasOpen = slot.status === "open";
 	await logActivity(tx, {
 		clubId: slot.clubId,
 		actorMemberId: args.actorMemberId,
-		action: "reassign",
+		action: wasOpen ? "claim" : "reassign",
 		targetType: "slot",
 		targetId: args.slotId,
-		detail: {
-			fromMemberId: slot.assignedMemberId,
-			memberId: args.memberId,
-		},
+		// `claim` carries no `fromMemberId` — `claimSlot`'s own log does not
+		// either, and on an open slot there is nothing for it to name.
+		detail: wasOpen
+			? { memberId: args.memberId }
+			: {
+					fromMemberId: slot.assignedMemberId,
+					memberId: args.memberId,
+				},
 	});
 
+	return { clubId: slot.clubId };
+}
+
+/**
+ * Clear a slot back to `open`, atomically (#809).
+ *
+ * Extracted from `releaseSlot`'s handler body, which is where this logic lived
+ * from the start. Three things about the extraction are load-bearing.
+ *
+ * **It takes the caller's connection and the row lock.** `assign_roles` clears
+ * slots inside a batch that must apply entirely or not at all, so this cannot
+ * open a transaction of its own — and it re-reads the slot `FOR UPDATE` the way
+ * `reassignSlotCore` does, because the handler's shape (read the row on `db`,
+ * remember `assigned_member_id` for the log, then write in a transaction) is a
+ * check-then-act the moment it sits inside a batch that is otherwise
+ * lock-serialized. The archive gate reads through `conn` for the same reason a
+ * second connection is the thing to avoid here at all: the batch is already
+ * holding locks.
+ *
+ * **`actorMemberId` is an ARGUMENT, not something this resolves.** Release is
+ * the honour-system clear any club member may perform from a shared link with
+ * no session at all, and the handler resolves the actor through
+ * `requestWriteActor` — a REQUEST-scoped read that the MCP path has no way to
+ * supply. Pulling that resolution in here would make the seam unreachable from
+ * the tool; `reassignSlotCore` takes its actor the same way and for the same
+ * reason.
+ *
+ * **The archive gate moved here with the logic**, and that is the whole reason
+ * the move is worth making: a handler body is unreachable from vitest, so while
+ * the gate lived in `slots.ts` the only thing covering a session-less write to
+ * a taken-down club was a source grep. `public-writers-archive-gate.integration.test.ts`
+ * now executes it. `public-readers-archive-gate.guard.test.ts`'s `WRITE_GATES`
+ * row is re-pointed at this file — but that row is a file-level `toContain`,
+ * and this module calls `assertClubNotArchived` from a SECOND function
+ * (`confirmSlotCore`) besides naming it on the import line, so the guard stays
+ * green with the call below deleted. MEASURED: deleting it left every case in
+ * that guard passing and turned the two behavioural cases red. The guard only
+ * says the module still has a gate somewhere.
+ *
+ * Release unlinks the slot's speech (`speech_id` → NULL) and never deletes it:
+ * the speech persists Person-owned and unscheduled (ADR-0009).
+ */
+export async function releaseSlotCore(
+	conn: DbOrTx,
+	args: { slotId: string; actorMemberId: string | null },
+): Promise<{ clubId: string }> {
+	// Lock only the role_slots row; the joined meetings row does not change
+	// under us. Same shape as `reassignSlotCore`, so a clear and a reassign of
+	// the same slot serialize against each other.
+	const [slot] = await conn
+		.select({
+			id: roleSlots.id,
+			// The only column the body reads: the activity row names the prior
+			// member holder, exactly as the handler's did before the extraction.
+			assignedMemberId: roleSlots.assignedMemberId,
+			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
+		})
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(eq(roleSlots.id, args.slotId))
+		.limit(1)
+		.for("update", { of: roleSlots });
+	if (!slot) throw new Error("Role not found.");
+
+	// #555. PUBLIC — no session, so `requireMembership` never runs and the
+	// archive check never arrives for free. Before the lock check, because a
+	// taken-down club should refuse for the reason it was taken down rather than
+	// for the meeting's status.
+	await assertClubNotArchived(slot.clubId, conn);
+	assertMeetingNotLocked(slot.meetingStatus);
+
+	await conn
+		.update(roleSlots)
+		.set({
+			assignedMemberId: null,
+			assignedGuestId: null,
+			status: "open",
+			claimedAt: null,
+			speechId: null,
+		})
+		.where(eq(roleSlots.id, slot.id));
+
+	await logActivity(conn, {
+		clubId: slot.clubId,
+		actorMemberId: args.actorMemberId,
+		action: "release",
+		targetType: "slot",
+		targetId: args.slotId,
+		detail: { fromMemberId: slot.assignedMemberId },
+	});
+
+	// `clubId` alone, matching `reassignSlotCore`. The prior holder and the
+	// unlinked speech were returned too until review: nothing read them, and an
+	// unread field is a claim about a caller that does not exist.
 	return { clubId: slot.clubId };
 }
 

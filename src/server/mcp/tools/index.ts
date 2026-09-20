@@ -14,6 +14,7 @@
  * ungated `getMeeting` with the guard green.
  */
 import type { McpToolDefinition } from "../tool";
+import { assignRolesTool } from "./assign-roles";
 import { findPeopleTool } from "./find-people";
 import { getAgendaTool } from "./get-agenda";
 import { listMeetingsTool } from "./list-meetings";
@@ -26,4 +27,5 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	getAgendaTool,
 	findPeopleTool,
 	recordGuestBookTool,
+	assignRolesTool,
 ];

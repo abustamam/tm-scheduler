@@ -11,7 +11,8 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members, roleSlots } from "#/db/schema";
+import { guests, meetings, members, roleSlots } from "#/db/schema";
+import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import { projectGrid } from "#/lib/season-grid-view";
 import {
 	cleanup,
@@ -188,6 +189,53 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 
 		const guestList = await listClubGuests(seed.clubId);
 		expect(guestList.map((g) => g.name)).toContain("Visitor V");
+	});
+
+	/**
+	 * The lock choke point (#150) reached this seam only at #809.
+	 *
+	 * Before/after, like the archive-gate suite: a write that throws for a
+	 * completed meeting proves nothing on its own, because an unrelated fixture
+	 * problem throws too. So the live half runs first, and the assertion the
+	 * refusal has to carry is that the slot is UNCHANGED — a throw after a
+	 * partial write looks identical from the caller's side.
+	 */
+	it("refuses a completed meeting, and leaves the slot alone", async () => {
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Locked-Out Lou" })
+			.returning({ id: guests.id });
+		// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+		const guestId = g!.id;
+
+		// LIVE: the same call lands.
+		await applyAssignGuestToSlot({
+			slotId: seed.slotId,
+			guestId,
+			actorMemberId: seed.adminMemberId,
+		});
+		expect((await slotState(seed.slotId))?.assignedGuestId).toBe(guestId);
+
+		// Clear it, complete the meeting, and try again.
+		await testDb
+			.update(roleSlots)
+			.set({ assignedGuestId: null, status: "open" })
+			.where(eq(roleSlots.id, seed.slotId));
+		await testDb
+			.update(meetings)
+			.set({ status: "completed" })
+			.where(eq(meetings.id, seed.meetingId));
+
+		await expect(
+			applyAssignGuestToSlot({
+				slotId: seed.slotId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			}),
+		).rejects.toThrow(MEETING_LOCKED_MESSAGE);
+		const row = await slotState(seed.slotId);
+		expect(row?.assignedGuestId).toBeNull();
+		expect(row?.status).toBe("open");
 	});
 
 	describe("a guest who is now a member (#637)", () => {

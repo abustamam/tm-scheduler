@@ -17,6 +17,12 @@ import { refuseTableTopicsSeconds } from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
 import { closeClubVotesTx } from "./voting-logic";
 
+// Either the pooled client or a caller's transaction, so a read inside someone
+// else's transaction does not reach for a second pooled connection.
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 /**
  * The country code to normalize this club's phone numbers with (#295) — the
  * club's own setting, or `DEFAULT_COUNTRY_CODE` when it hasn't set one.
@@ -33,8 +39,19 @@ import { closeClubVotesTx } from "./voting-logic";
  */
 export async function loadClubDefaultCountryCode(
 	clubId: string,
+	/**
+	 * Which connection to ask. Defaults to the pooled client, which is what
+	 * every request-scoped caller wants. `applyAssignGuestToSlot` passes its
+	 * caller's `tx` (#809): `assign_roles` applies a whole batch in one
+	 * transaction holding `FOR UPDATE` row locks, and a read on `db` from in
+	 * there takes a SECOND pooled connection — node-postgres' pool is 10 and
+	 * nothing bounds a pool wait, so that is a self-DoS shape rather than an
+	 * inefficiency. Same reason `getMembership` and `getActiveImpersonation`
+	 * took theirs (#806).
+	 */
+	conn: DbOrTx = db,
 ): Promise<string> {
-	const [row] = await db
+	const [row] = await conn
 		.select({ cc: clubs.defaultCountryCode })
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
