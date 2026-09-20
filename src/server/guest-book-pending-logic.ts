@@ -7,64 +7,55 @@
  * precedent: a transport property invisible to the whole suite.) So the
  * wrappers in `guest-book-pending.ts` resolve the session and delegate, and
  * everything that DECIDES lives here, where an integration test can call it
- * directly:
+ * directly.
  *
- *   - creator-only (AC5),
- *   - the archive gate on the READ path (AC15),
- *   - expiry and its grace window (AC11, AC12),
+ * ## What is here, and what is one module over (#812)
+ *
+ * The LIFECYCLE is shared with every other MCP write tool and lives in
+ * `src/server/mcp-pending-logic.ts`: the four ordered resolution checks
+ * (exists-and-is-this-tool's, creator-only, the archive gate, still-an-admin),
+ * and the sweep. `src/server/mcp-pending-apply.ts` owns the locked claim, and
+ * `src/lib/pending-plan.ts` owns the expiry arithmetic. None of that is
+ * guest-book knowledge, and two copies of a retention-and-authorization
+ * lifecycle is how one copy gets a fix and the other does not — this one holds
+ * visitor names, emails and phone numbers.
+ *
+ * What stays here is what only this tool can say about its own payload:
+ *
+ *   - reading `{ meetingDate, entries }` out of the shared `payload` column,
+ *   - re-planning it and projecting the page,
  *   - mapping an `McpError` out of `plan()` onto a page state, so no MCP error
- *     ever reaches a route error boundary (AC16),
- *   - and the sweep the poller runs.
+ *     ever reaches a route error boundary,
+ *   - and the edit path, whose `applied_at IS NULL` predicate is what stops an
+ *     in-flight PATCH writing contact details back over a tombstone.
  *
- * The WRITE is delegated to `guest-book-apply.ts`, which owns the lock, the
- * in-transaction re-check and the `applied_at IS NULL` guard.
- *
- * ## Why the read path carries its own archive gate
- *
- * `public-readers-archive-gate.guard.test.ts:548` drops any `src/server/`
- * server fn whose body calls a `require*` guard from its sweep. The wrappers
- * call `requireUser()`, so they are dropped — and a load path that checked only
- * the session and the creator would keep that guard green while rendering a
- * taken-down club's visitor names, emails and phone numbers. The gate is
- * therefore called explicitly, by name, on every path through this module.
- *
- * ## Why `requireClubRole` runs here and not in the wrapper
- *
- * It gates on a CLUB, and the input names only a pending plan, so the row has
- * to be read before the guard can be asked anything. Reading it in the wrapper
- * would put the lookup — and then the not-found and the creator comparison that
- * depend on it — in exactly the place no test can execute. AC5 and AC15 are
- * assertions about that check, so it lives where they can reach it. The
- * wrappers keep `requireUser()`, which is what the archive-gate sweep
- * classifies on, and add nothing else.
+ * The WRITE is delegated to `guest-book-apply.ts`, which fills in the shared
+ * locked skeleton with this tool's re-plan, hash comparison and inserts.
  */
-import { and, eq, isNull, lt } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, guestBookPendingPlans } from "#/db/schema";
+import { mcpPendingPlans } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
+	ALREADY_RECORDED_MESSAGE,
 	applyPendingEntryEdit,
+	EXPIRED_MESSAGE,
 	entryIdForBlockingIndex,
 	isPendingPlanExpired,
 	livePendingEntries,
 	type PendingEntry,
 	type PendingEntryEdit,
 	pendingPlanArgs,
-	pendingPlanSweepCutoff,
 } from "#/lib/guest-book-pending";
+import { RECORD_GUEST_BOOK_TOOL } from "#/lib/pending-plan";
 import { loadClubDefaultCountryCode } from "#/server/clubs-logic";
-import {
-	assertClubNotArchived,
-	NO_PERMISSION_MESSAGE,
-	NOT_A_MEMBER_MESSAGE,
-	requireClubRole,
-} from "#/server/guards";
+import { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } from "#/server/guards";
 import {
 	type ApplyGuestBookPlanResult,
 	applyGuestBookPlan,
 } from "#/server/guest-book-apply";
 import {
-	parseStoredEntries,
+	parseGuestBookPayload,
 	UNREADABLE_ENTRIES_MESSAGE,
 } from "#/server/guest-book-pending-schemas";
 import {
@@ -76,10 +67,15 @@ import {
 	planSummary,
 } from "#/server/guest-book-plan";
 import { type McpBlockingCode, McpError } from "#/server/mcp/errors";
+import {
+	PENDING_ARCHIVED,
+	PENDING_NOT_FOUND,
+	type PendingPlanRow,
+	resolvePending,
+} from "#/server/mcp-pending-logic";
 
-type Conn =
-	| typeof db
-	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+/** The tool every read and write in this module names. See `resolvePending`. */
+export const GUEST_BOOK_TOOL = RECORD_GUEST_BOOK_TOOL;
 
 /**
  * A blocking item as the confirm page needs it: keyed to the STORED entry, not
@@ -126,7 +122,16 @@ export interface PendingPlanHeader {
 	pendingId: string;
 	clubId: string;
 	clubName: string;
-	meetingDate: string;
+	/**
+	 * Club-local, read out of the payload rather than off a column since #812.
+	 *
+	 * Null ONLY when the payload's envelope did not parse — a release this one
+	 * has never seen wrote the row, so there is no date to name. Every other
+	 * state has one, the applied tombstone included: its page still says which
+	 * meeting the visitors ended up on, so apply keeps the date and drops the
+	 * transcription.
+	 */
+	meetingDate: string | null;
 	/** ISO, for rendering. */
 	expiresAt: string;
 }
@@ -163,32 +168,36 @@ export type PendingPlanView =
 			planHash: string;
 	  } & PendingPlanHeader);
 
-interface PendingRow {
-	id: string;
-	clubId: string;
-	clubName: string;
-	timezone: string;
-	meetingDate: string;
-	createdByUserId: string;
+/**
+ * A pending row, joined to its club and with this tool's payload parsed out.
+ *
+ * The lifecycle fields come from `PendingPlanRow`; the two below are what
+ * `parseGuestBookPayload` made of the shared `payload` column.
+ */
+interface GuestBookPendingRow extends PendingPlanRow {
+	/**
+	 * Club-local, as the caller named it, read out of the payload.
+	 *
+	 * Null ONLY when not even the payload's envelope is readable — a release
+	 * this one has never seen wrote the row. Every other state has a date,
+	 * including the applied tombstone, whose page still says which meeting the
+	 * visitors are on.
+	 */
+	meetingDate: string | null;
 	entries: PendingEntry[] | null;
 	/**
-	 * The column held something this release cannot parse.
+	 * The payload held something this release cannot parse.
 	 *
 	 * Distinct from `entries: null`, which is the applied tombstone and means
-	 * "there is deliberately nothing here". See `parseStoredEntries`.
+	 * "there is deliberately nothing here". See `parseGuestBookPayload`.
 	 */
 	entriesUnreadable: boolean;
-	expiresAt: Date;
-	appliedAt: Date | null;
 }
 
-const NOT_FOUND: PendingPlanView = { status: "not_found" };
-const ARCHIVED: PendingPlanView = {
-	status: "archived",
-	message: CLUB_ARCHIVED_MESSAGE,
-};
+const NOT_FOUND: PendingPlanView = { ...PENDING_NOT_FOUND };
+const ARCHIVED: PendingPlanView = { ...PENDING_ARCHIVED };
 
-function headerOf(row: PendingRow): PendingPlanHeader {
+function headerOf(row: GuestBookPendingRow): PendingPlanHeader {
 	return {
 		pendingId: row.id,
 		clubId: row.clubId,
@@ -198,75 +207,56 @@ function headerOf(row: PendingRow): PendingPlanHeader {
 	};
 }
 
-async function readRow(pendingId: string): Promise<PendingRow | null> {
-	const [row] = await db
-		.select({
-			id: guestBookPendingPlans.id,
-			clubId: guestBookPendingPlans.clubId,
-			clubName: clubs.name,
-			timezone: clubs.timezone,
-			meetingDate: guestBookPendingPlans.meetingDate,
-			createdByUserId: guestBookPendingPlans.createdByUserId,
-			entries: guestBookPendingPlans.entries,
-			expiresAt: guestBookPendingPlans.expiresAt,
-			appliedAt: guestBookPendingPlans.appliedAt,
-		})
-		.from(guestBookPendingPlans)
-		.innerJoin(clubs, eq(clubs.id, guestBookPendingPlans.clubId))
-		.where(eq(guestBookPendingPlans.id, pendingId))
-		.limit(1);
-	if (!row) return null;
+/** Read this tool's payload off a row the lifecycle has already resolved. */
+function withPayload(row: PendingPlanRow): GuestBookPendingRow {
 	// PARSE, do not trust the column's compile-time type. See
-	// `parseStoredEntries` for the deploy boundary this closes.
-	const entries = parseStoredEntries(row.entries);
+	// `parseGuestBookPayload` for the deploy boundary this closes.
+	const payload = parseGuestBookPayload(row.payload);
+	if (!payload) {
+		return {
+			...row,
+			meetingDate: null,
+			entries: null,
+			entriesUnreadable: true,
+		};
+	}
 	return {
 		...row,
-		entries,
-		entriesUnreadable: row.entries !== null && entries === null,
+		meetingDate: payload.meetingDate,
+		entries: payload.entries,
+		entriesUnreadable: payload.entriesUnreadable,
 	};
 }
 
-type Resolved =
-	| { ok: true; row: PendingRow; actorMemberId: string | null }
-	| { ok: false; view: PendingPlanView };
-
 /**
- * The four checks every path through this module starts with, in this order,
- * and the order is the point.
+ * Re-read one row, for the places that need to see what is stored NOW after a
+ * write they did not fully control.
  *
- *   1. The row exists.
- *   2. The caller is its CREATOR. Not "an admin of the club": the confirm page
- *      shows unmasked visitor contact details that only the person who
- *      transcribed the page has a reason to be reading, and AC5 makes even
- *      another admin of the same club a not-found.
- *   3. The club is not archived. After the creator check, so this never tells a
- *      stranger that a club exists — and the creator, who was an admin when
- *      they made the row, is owed the real explanation rather than a not-found.
- *   4. The creator still qualifies as an admin. A pending row must not outlive
- *      the standing that made it, and when that standing is gone the answer is
- *      not-found again: there is no page for them either way, and a permission
- *      message would confirm the plan exists.
+ * Through `resolvePending` rather than a second SELECT of its own: the four
+ * ordered checks have exactly one definition, and a private re-read here would
+ * be a second read path whose WHERE could forget the tool discriminator. Every
+ * caller already holds the user id it was resolved with a moment earlier, so the
+ * repeat is three cheap queries on a path that has just re-planned.
+ *
+ * Returns the REFUSAL, not null, when the re-resolve declines. An earlier cut
+ * flattened both refusals to null and every caller rendered `not_found` — so a
+ * club taken down between the write landing and this re-read answered
+ * "that link doesn't point at anything" where a fresh load of the same row
+ * answers "this club is archived". The row is the same row and the reader is
+ * the same reader; two sentences for one fact is the drift, and it is
+ * unreachable by any test because the window has no seam to park on. Carrying
+ * the refusal through costs one union and removes the discrepancy instead of
+ * documenting it.
  */
-async function resolvePending(
-	pendingId: string,
-	userId: string,
-): Promise<Resolved> {
-	const row = await readRow(pendingId);
-	if (!row) return { ok: false, view: NOT_FOUND };
-	if (row.createdByUserId !== userId) return { ok: false, view: NOT_FOUND };
+type Reread =
+	| { ok: true; row: GuestBookPendingRow }
+	| { ok: false; refusal: PendingPlanView };
 
-	try {
-		await assertClubNotArchived(row.clubId);
-	} catch {
-		return { ok: false, view: ARCHIVED };
-	}
-
-	try {
-		const membership = await requireClubRole(userId, row.clubId, ["admin"]);
-		return { ok: true, row, actorMemberId: membership.id };
-	} catch {
-		return { ok: false, view: NOT_FOUND };
-	}
+async function reread(pendingId: string, userId: string): Promise<Reread> {
+	const resolved = await resolvePending(pendingId, userId, GUEST_BOOK_TOOL);
+	return resolved.ok
+		? { ok: true, row: withPayload(resolved.row) }
+		: { ok: false, refusal: resolved.refusal };
 }
 
 /**
@@ -274,7 +264,9 @@ async function resolvePending(
  * apply — one mapping, so the three can never render different things about
  * the same row.
  */
-async function renderPendingPlan(row: PendingRow): Promise<PendingPlanView> {
+async function renderPendingPlan(
+	row: GuestBookPendingRow,
+): Promise<PendingPlanView> {
 	const header = headerOf(row);
 	if (row.appliedAt) {
 		return {
@@ -284,7 +276,11 @@ async function renderPendingPlan(row: PendingRow): Promise<PendingPlanView> {
 		};
 	}
 	if (isPendingPlanExpired(row)) return { ...header, status: "expired" };
-	if (row.entriesUnreadable) {
+	// `meetingDate === null` means the payload's envelope did not parse, which is
+	// the same answer as an unreadable transcription: a release this one has never
+	// seen wrote the row. Checked together so the plan below can take a date that
+	// is definitely a string.
+	if (row.entriesUnreadable || row.meetingDate === null) {
 		return {
 			...header,
 			status: "unplannable",
@@ -293,6 +289,7 @@ async function renderPendingPlan(row: PendingRow): Promise<PendingPlanView> {
 			entries: [],
 		};
 	}
+	const meetingDate = row.meetingDate;
 
 	const entries = row.entries ?? [];
 	const club = { clubId: row.clubId, timezone: row.timezone };
@@ -303,7 +300,7 @@ async function renderPendingPlan(row: PendingRow): Promise<PendingPlanView> {
 		planned = await plan(
 			db,
 			club,
-			{ meetingDate: row.meetingDate, ...pendingPlanArgs(entries) },
+			{ meetingDate, ...pendingPlanArgs(entries) },
 			countryCode,
 		);
 	} catch (err) {
@@ -393,9 +390,13 @@ export async function loadPendingPlan(input: {
 	pendingId: string;
 	userId: string;
 }): Promise<PendingPlanView> {
-	const resolved = await resolvePending(input.pendingId, input.userId);
-	if (!resolved.ok) return resolved.view;
-	return renderPendingPlan(resolved.row);
+	const resolved = await resolvePending(
+		input.pendingId,
+		input.userId,
+		GUEST_BOOK_TOOL,
+	);
+	if (!resolved.ok) return resolved.refusal;
+	return renderPendingPlan(withPayload(resolved.row));
 }
 
 /**
@@ -410,14 +411,32 @@ export async function patchPendingPlan(input: {
 	userId: string;
 	edit: PendingEntryEdit;
 }): Promise<PendingPlanView> {
-	const resolved = await resolvePending(input.pendingId, input.userId);
-	if (!resolved.ok) return resolved.view;
-	const { row } = resolved;
+	const resolved = await resolvePending(
+		input.pendingId,
+		input.userId,
+		GUEST_BOOK_TOOL,
+	);
+	if (!resolved.ok) return resolved.refusal;
+	const row = withPayload(resolved.row);
 
 	// An applied or expired plan is not editable. Re-rendering rather than
 	// throwing keeps one mapping for the page: it gets the same view it would
 	// have got from a fresh load.
-	if (row.appliedAt || isPendingPlanExpired(row) || row.entriesUnreadable) {
+	//
+	// `meetingDate === null` is listed EXPLICITLY rather than left to
+	// `entriesUnreadable`, even though `withPayload` sets the two together
+	// today. The UPDATE below rewrites the whole payload from `row.meetingDate`,
+	// so a null one would write an envelope this release cannot parse — turning
+	// a readable transcription into an unreadable one, which is the row's own
+	// data destroying itself. Inheriting that safety from an invariant in
+	// another function is how it gets broken by an edit that looks unrelated;
+	// naming it here also narrows the type, so the UPDATE is compile-enforced.
+	if (
+		row.appliedAt ||
+		isPendingPlanExpired(row) ||
+		row.entriesUnreadable ||
+		row.meetingDate === null
+	) {
 		return renderPendingPlan(row);
 	}
 
@@ -430,20 +449,25 @@ export async function patchPendingPlan(input: {
 	// names, emails and phones back into the row the apply had just nulled,
 	// which is the whole point of the tombstone. The predicate makes the
 	// check-then-write atomic; zero rows means the apply won the race.
+	//
+	// The WHOLE payload is rewritten, not a field inside it: `meetingDate` is
+	// carried through from what was parsed, so an edit cannot drop it. The tool
+	// is in the WHERE too, for the same reason every other read has it.
 	const written = await db
-		.update(guestBookPendingPlans)
-		.set({ entries })
+		.update(mcpPendingPlans)
+		.set({ payload: { meetingDate: row.meetingDate, entries } })
 		.where(
 			and(
-				eq(guestBookPendingPlans.id, input.pendingId),
-				isNull(guestBookPendingPlans.appliedAt),
+				eq(mcpPendingPlans.id, input.pendingId),
+				eq(mcpPendingPlans.tool, GUEST_BOOK_TOOL),
+				isNull(mcpPendingPlans.appliedAt),
 			),
 		);
 	if ((written.rowCount ?? 0) === 0) {
 		// Re-read rather than render `row`: what is on screen has to be what is
 		// stored, and what is stored is now the tombstone.
-		const after = await readRow(input.pendingId);
-		return after ? renderPendingPlan(after) : NOT_FOUND;
+		const after = await reread(input.pendingId, input.userId);
+		return after.ok ? renderPendingPlan(after.row) : after.refusal;
 	}
 
 	return renderPendingPlan({ ...row, entries });
@@ -472,20 +496,29 @@ export async function applyPendingPlan(input: {
 	userId: string;
 	planHash: string;
 }): Promise<ApplyPendingResult> {
-	const resolved = await resolvePending(input.pendingId, input.userId);
+	const resolved = await resolvePending(
+		input.pendingId,
+		input.userId,
+		GUEST_BOOK_TOOL,
+	);
 	if (!resolved.ok) {
-		return { ok: false, message: null, view: resolved.view, applied: null };
+		return { ok: false, message: null, view: resolved.refusal, applied: null };
 	}
-	const { row, actorMemberId } = resolved;
+	const { actorMemberId } = resolved;
+	const row = withPayload(resolved.row);
 
-	if (row.appliedAt || isPendingPlanExpired(row) || row.entriesUnreadable) {
+	const unreadable = row.entriesUnreadable || row.meetingDate === null;
+	if (row.appliedAt || isPendingPlanExpired(row) || unreadable) {
 		return {
 			ok: false,
+			// The CHEAP, unlocked pre-check's sentence. It is deliberately not the
+			// one the locked guard gives — see `RECORDED_WHILE_OPEN_MESSAGE`,
+			// and `pending-plan.test.ts` for the assertion that they differ.
 			message: row.appliedAt
-				? "That page has already been recorded."
-				: row.entriesUnreadable
+				? ALREADY_RECORDED_MESSAGE
+				: unreadable
 					? UNREADABLE_ENTRIES_MESSAGE
-					: "That confirmation link has expired.",
+					: EXPIRED_MESSAGE,
 			view: await renderPendingPlan(row),
 			applied: null,
 		};
@@ -502,11 +535,11 @@ export async function applyPendingPlan(input: {
 		});
 		// Re-read: the row is a tombstone now, and the applied view is built from
 		// what is actually stored rather than from what this function assumed.
-		const after = await readRow(input.pendingId);
+		const after = await reread(input.pendingId, input.userId);
 		return {
 			ok: true,
 			message: null,
-			view: after ? await renderPendingPlan(after) : NOT_FOUND,
+			view: after.ok ? await renderPendingPlan(after.row) : after.refusal,
 			applied,
 		};
 	} catch (err) {
@@ -558,34 +591,12 @@ export async function applyPendingPlan(input: {
 		}
 		// `PLAN_STALE`, `BLOCKED` and anything else: nothing was written, so show
 		// the plan as it stands NOW beside the sentence saying why.
-		const after = await readRow(input.pendingId);
+		const after = await reread(input.pendingId, input.userId);
 		return {
 			ok: false,
 			message: err.message,
-			view: after ? await renderPendingPlan(after) : NOT_FOUND,
+			view: after.ok ? await renderPendingPlan(after.row) : after.refusal,
 			applied: null,
 		};
 	}
-}
-
-/**
- * Delete pending rows past the grace window — applied tombstones and abandoned
- * plans alike.
- *
- * Exported and called by the reminder poller, like every other poller pass:
- * a pass with no exported home cannot be called by a test, and AC12 is an
- * assertion about exactly where the boundary falls.
- *
- * The boundary is `pendingPlanSweepCutoff`, the same arithmetic the "expired"
- * page state is measured against, so the two windows cannot drift apart into a
- * gap where a row is gone but the page still promises an explanation.
- */
-export async function sweepExpiredPendingPlans(
-	conn: Conn = db,
-	now: Date = new Date(),
-): Promise<{ deleted: number }> {
-	const result = await conn
-		.delete(guestBookPendingPlans)
-		.where(lt(guestBookPendingPlans.expiresAt, pendingPlanSweepCutoff(now)));
-	return { deleted: result.rowCount ?? 0 };
 }

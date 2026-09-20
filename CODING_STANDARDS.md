@@ -660,3 +660,48 @@ it replaced. And a service worker's background revalidation needs `cache: "no-ca
 origin 404 at all — scoped to the crest, since the rest of that cache is hashed build output whose
 URL changes every deploy and can never go stale.
 
+
+**The MCP pending-plan lifecycle has ONE definition, and `mcp_pending_plans` is one table
+discriminated by `tool`** (#812). Every `/api/mcp` write tool is preview-only: it stores what was
+proposed, hands back a link, and a human confirms it signed in. Nothing about that row's
+lifecycle belongs to a tool — one club, one creator, an expiry, a grace window, a sweep, and an
+apply that happens exactly once under a lock — so it lives once:
+`resolvePending` / `sweepExpiredPendingPlans` in `src/server/mcp-pending-logic.ts`,
+`applyPendingPlanLocked` in `src/server/mcp-pending-apply.ts`, the arithmetic in
+`src/lib/pending-plan.ts`. Per-tool planning and per-tool pages deliberately do NOT move: an
+agenda diff and a guest table share no markup and no plan shape.
+
+#806 shipped that lifecycle for `record_guest_book` and #808 would have built a second copy of
+all of it. Two copies of a retention-and-authorization lifecycle is how one copy gets a fix and
+the other does not, and this one holds visitors' names, emails and phone numbers.
+
+Three things a reader needs, each with the failure behind it.
+
+- **Every read names the tool it expects, in the WHERE.** Two tables made "a guest-book id
+  opened at the agenda page" unrepresentable; one table makes it a missing predicate, and the
+  failure is SILENT — both pages load by id and check the creator, so a mismatched id passes
+  that check and reaches a renderer built for another shape, drawing an empty plan over live
+  contact details because `payload.meetings` is simply undefined. `resolvePending` takes the
+  tool and answers `not_found` on a mismatch, and the locked `FOR UPDATE` filters on it too.
+  That second predicate is unreachable through any confirm page — the pre-check refuses first —
+  so deleting it left 27 integration cases green; it is driven DIRECTLY instead, which is the
+  interface a second tool would use.
+- **The date belongs in the payload, not a column.** `upsert_agendas` carries many dates and has
+  no single value for one, and a column meaningful for one tool and always-null for the other is
+  two tables wearing one name. Same rule the preview→apply machine already rests on: store what
+  was ASKED and re-derive everything else on every render. The payload parse is therefore TWO
+  steps — an unreadable transcription does not make the meeting date unreadable, and the page's
+  header renders that date.
+- **A migration that replaces this table must carry its rows.** `drizzle-kit generate` emits
+  `CREATE TABLE` + `DROP TABLE`, which is right about the shape and loses everything. A confirm
+  link lives up to 48h and migrations apply at container startup with no drain, so a deploy
+  landing mid-window breaks every link already handed out — as a not-found on a URL someone was
+  told to open. 0085 is hand-edited to `INSERT … SELECT` before the drop, ids preserved.
+
+Guarded by `mcp-pending-lifecycle.guard.test.ts` (one definition each of the four ordered
+checks, the arithmetic, the sweep and the locked skeleton, swept from source and derived rather
+than listed), `mcp-pending-migration.integration.test.ts` (the real `drizzle/0085_*.sql` run
+against a scratch database holding a pre-migration row) and
+`guest-book-pending-wiring.guard.test.ts`. The behaviour is
+`guest-book-confirm.integration.test.ts` and `guest-book-confirm-revocation.integration.test.ts`;
+both races there are mutation-verified, and each turns exactly one case red.

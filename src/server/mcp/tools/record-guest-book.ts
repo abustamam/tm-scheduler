@@ -50,7 +50,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "#/db";
-import { guestBookPendingPlans } from "#/db/schema";
+import { mcpPendingPlans } from "#/db/schema";
 import { localDate } from "#/lib/club-local-date";
 import {
 	guestBookConfirmUrl,
@@ -191,16 +191,25 @@ export const recordGuestBookTool: McpToolDefinition = {
 		const entries = toPendingEntries(args.entries, args.resolve);
 		const createdAt = new Date();
 		const [row] = await db
-			.insert(guestBookPendingPlans)
+			.insert(mcpPendingPlans)
 			.values({
 				clubId: club.clubId,
-				meetingDate: args.meetingDate,
+				// The discriminator every read of this row filters on (#812). One
+				// table now serves every MCP write tool, so an id alone no longer
+				// says what shape its payload has.
+				tool: "record_guest_book",
+				// The meeting DATE lives in the payload rather than a column, and
+				// that is why #812 is a new table rather than a rename: a column
+				// that is `NOT NULL` for this tool and meaningless for a tool
+				// carrying many dates is two tables wearing one name. It is also
+				// this flow's own rule restated — store what was ASKED and
+				// re-resolve it on every render.
+				payload: { meetingDate: args.meetingDate, entries },
 				createdByUserId: user.id,
-				entries,
 				createdAt,
 				expiresAt: pendingPlanExpiresAt(createdAt),
 			})
-			.returning({ id: guestBookPendingPlans.id });
+			.returning({ id: mcpPendingPlans.id });
 		if (!row) throw new McpError("INTERNAL", "Failed to store that page.");
 
 		const confirmUrl = guestBookConfirmUrl(appBaseUrl(), row.id);

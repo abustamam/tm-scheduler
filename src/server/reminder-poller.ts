@@ -6,7 +6,8 @@
 // Server-only: imports `#/db` transitively (via notifications-logic). It is
 // referenced solely from the Nitro plugin — never from a client route — so it
 // stays out of the client bundle.
-import { sweepExpiredPendingPlans } from "./guest-book-pending-logic";
+import { describePendingSweep } from "#/lib/pending-plan";
+import { sweepExpiredPendingPlans } from "./mcp-pending-logic";
 import { processDueNotifications } from "./notifications-logic";
 import { produceRoleReminders } from "./role-reminders-logic";
 
@@ -28,8 +29,8 @@ let ticking = false;
  * Run one poll tick: ENQUEUE-then-SEND, then SWEEP. First the role-reminder
  * producer (#272) tops up the queue with reminders for upcoming slot holders;
  * then the delivery loop (#271) drains everything currently due; then the
- * guest-book pending-plan sweep (#806) removes confirm links past their grace
- * window. The producer is idempotent (a partial unique index makes a re-enqueue
+ * MCP pending-plan sweep (#806, shared by every write tool since #812) removes
+ * confirm links past their grace window. The producer is idempotent (a partial unique index makes a re-enqueue
  * a no-op), so running it every tick is safe and needs no separate cadence. A
  * producer failure is logged but never blocks the send pass — delivery of
  * already-queued reminders must still happen, and neither blocks the sweep.
@@ -77,7 +78,7 @@ async function tick(): Promise<void> {
 }
 
 /**
- * Delete guest-book pending plans past their grace window (#806).
+ * Delete MCP pending plans past their grace window (#806, #812).
  *
  * Its own function because it has its own lifecycle: it runs on the delivery
  * tick AND on a sweep-only timer when delivery is disabled. It is the only
@@ -94,7 +95,7 @@ async function tick(): Promise<void> {
  * property of this system, not a setting.
  *
  * The knob that does exist is the WINDOW — `PENDING_PLAN_TTL_MS` and
- * `PENDING_PLAN_GRACE_MS` in `src/lib/guest-book-pending.ts`. A deployment that
+ * `PENDING_PLAN_GRACE_MS` in `src/lib/pending-plan.ts`. A deployment that
  * wants confirm links to live longer lengthens those; nothing wants them to
  * live forever.
  *
@@ -103,14 +104,16 @@ async function tick(): Promise<void> {
  */
 async function sweepTick(): Promise<void> {
 	try {
-		const swept = await sweepExpiredPendingPlans();
-		if (swept.deleted > 0) {
-			console.log(
-				`[guest-book] swept ${swept.deleted} expired pending plan(s)`,
-			);
-		}
+		// PER TOOL, since #812. One sweep now serves every MCP write tool's
+		// retention, so a bare total stops saying which one actually ran — and
+		// this is the only thing in the system that deletes these rows. The line
+		// is built by a pure function in `src/lib/pending-plan.ts` because
+		// `sweepTick` is private to a module that starts timers on import, so a
+		// template written here is a template no test can read.
+		const line = describePendingSweep(await sweepExpiredPendingPlans());
+		if (line) console.log(line);
 	} catch (err) {
-		console.error("[guest-book] pending-plan sweep failed:", err);
+		console.error("[mcp-pending] pending-plan sweep failed:", err);
 	}
 }
 
@@ -127,7 +130,7 @@ function startSweepOnlyTimer(): boolean {
 	}, intervalMs);
 	timer.unref?.();
 	console.log(
-		`[guest-book] retention sweep started (interval=${intervalMs}ms)`,
+		`[mcp-pending] retention sweep started (interval=${intervalMs}ms)`,
 	);
 	return true;
 }
@@ -142,7 +145,7 @@ export function startReminderPoller(): boolean {
 	if (process.env.DISABLE_REMINDER_POLLER === "1") {
 		// The SWEEP still runs, and there is no way to stop it (see `sweepTick`).
 		// `DISABLE_REMINDER_POLLER` says "this process must not SEND"; the
-		// guest-book sweep sends nothing — it is the only thing in the system
+		// pending-plan sweep sends nothing — it is the only thing in the system
 		// that deletes a pending plan, and a pending plan holds a visitor's
 		// unmasked name, email and phone. Inheriting the send flag turned a
 		// 48-hour retention window into an indefinite one, with no user-facing

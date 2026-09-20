@@ -16,11 +16,12 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	apiTokens,
-	guestBookPendingPlans,
 	guests,
+	mcpPendingPlans,
 	meetingAttendance,
 	meetings,
 } from "#/db/schema";
+import type { PendingEntry } from "#/lib/guest-book-pending";
 import {
 	cleanup,
 	hasTestDb,
@@ -95,18 +96,40 @@ describe.skipIf(!hasTestDb)(
 				.where(eq(meetingAttendance.meetingId, meetingId));
 		}
 
+		/**
+		 * The pending rows this club owns, with the payload read back as this
+		 * tool stores it (#812).
+		 *
+		 * `meetingDate` and `entries` are inside `payload` since the lifecycle
+		 * was shared: one table now serves every MCP write tool, and a date
+		 * column meaningful for this one and always-null for a tool carrying many
+		 * would be two tables wearing one name. Projected back into the flat shape
+		 * the assertions below already read, so the payload move stays a change to
+		 * this helper rather than to every case.
+		 */
 		async function pendingRows() {
-			return testDb
+			const rows = await testDb
 				.select({
-					id: guestBookPendingPlans.id,
-					meetingDate: guestBookPendingPlans.meetingDate,
-					createdByUserId: guestBookPendingPlans.createdByUserId,
-					entries: guestBookPendingPlans.entries,
-					expiresAt: guestBookPendingPlans.expiresAt,
-					appliedAt: guestBookPendingPlans.appliedAt,
+					id: mcpPendingPlans.id,
+					tool: mcpPendingPlans.tool,
+					payload: mcpPendingPlans.payload,
+					createdByUserId: mcpPendingPlans.createdByUserId,
+					expiresAt: mcpPendingPlans.expiresAt,
+					appliedAt: mcpPendingPlans.appliedAt,
 				})
-				.from(guestBookPendingPlans)
-				.where(eq(guestBookPendingPlans.clubId, seed.clubId));
+				.from(mcpPendingPlans)
+				.where(eq(mcpPendingPlans.clubId, seed.clubId));
+			return rows.map((row) => {
+				const payload = row.payload as {
+					meetingDate?: string;
+					entries?: PendingEntry[] | null;
+				} | null;
+				return {
+					...row,
+					meetingDate: payload?.meetingDate ?? null,
+					entries: payload?.entries ?? null,
+				};
+			});
 		}
 
 		beforeEach(async () => {
@@ -215,6 +238,9 @@ describe.skipIf(!hasTestDb)(
 			expect(pending).toHaveLength(1);
 			expect(pending[0]?.id).toBe(p.pendingId);
 			expect(pending[0]?.createdByUserId).toBe(seed.adminUserId);
+			// The discriminator every read of this row filters on (#812). Without
+			// it the row is reachable by a page built for another tool's shape.
+			expect(pending[0]?.tool).toBe("record_guest_book");
 			expect(pending[0]?.meetingDate).toBe(pastMeetingDate);
 			expect(pending[0]?.appliedAt).toBeNull();
 			expect(pending[0]?.entries).toHaveLength(3);

@@ -80,20 +80,29 @@ export const patchSchema = z
 	});
 
 /**
- * The STORED shape of `guest_book_pending_plans.entries`.
+ * The STORED shape of a `record_guest_book` pending plan's `payload`.
  *
- * `jsonb("entries").$type<PendingEntry[]>()` is a compile-time cast and nothing
- * else — drizzle hands back whatever is in the column. That is fine while one
- * release wrote every row, and it stops being fine at a deploy boundary:
- * migrations apply at container startup with no drain, and a pending row lives
- * for up to 48 hours, so the first release that renames or requires a field on
- * `PendingEntry` reads the previous release's rows as if they were its own —
- * and `applyGuestBookPlan` writes `e.write.name` / `email` / `phone` straight
- * into `guests` with nothing validating in between.
+ * `jsonb("payload")` is `unknown` and nothing else — drizzle hands back whatever
+ * is in the column. That is fine while one release wrote every row, and it stops
+ * being fine at a deploy boundary: migrations apply at container startup with no
+ * drain, and a pending row lives for up to 48 hours, so the first release that
+ * renames or requires a field reads the previous release's rows as if they were
+ * its own — and `applyGuestBookPlan` writes `e.write.name` / `email` / `phone`
+ * straight into `guests` with nothing validating in between.
  *
- * So the read boundary parses. `parseStoredEntries` returns null for anything
- * this release cannot understand, and both readers turn that into a refusal
- * that names the problem rather than a plan built from a half-understood row.
+ * So the read boundary parses, and it parses in TWO steps rather than one,
+ * because the payload carries two things whose failures are not the same event.
+ * The meeting date is the ENVELOPE — the page's header renders it, and an
+ * unreadable line does not make the date unreadable. Parsing them together
+ * would lose a perfectly good date to a transcription shape from a previous
+ * release, and the page would then have nothing to say beyond "something is
+ * wrong".
+ *
+ * `meetingDate` lives in the payload, NOT in a column, since #812. One table
+ * now serves every MCP write tool, and `upsert_agendas` carries many dates and
+ * has no single value for one — a column meaningful for one tool and always-null
+ * for the other is two tables wearing one name. It is also #806's own rule
+ * restated: store what was ASKED and re-derive everything else.
  */
 const storedEntrySchema = z.object({
 	id: z.string().min(1),
@@ -112,22 +121,60 @@ const storedEntrySchema = z.object({
 
 export const storedEntriesSchema = z.array(storedEntrySchema);
 
-/**
- * Stored entries this release can act on, or null.
- *
- * Null covers three cases and they all mean the same thing to a reader: the
- * column is missing, it holds something this code does not understand, or a
- * field it now depends on is absent.
- */
-export function parseStoredEntries(
-	raw: unknown,
-): z.infer<typeof storedEntriesSchema> | null {
-	if (raw === null || raw === undefined) return null;
-	const parsed = storedEntriesSchema.safeParse(raw);
-	return parsed.success ? parsed.data : null;
+/** Club-local `YYYY-MM-DD`, exactly as the caller named it. */
+const storedMeetingDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** What this release can make of one stored `record_guest_book` payload. */
+export interface StoredGuestBookPayload {
+	meetingDate: string;
+	/**
+	 * The transcribed lines, or null.
+	 *
+	 * Null means there are deliberately none: the applied tombstone. Distinct
+	 * from `entriesUnreadable`, which means the column held something this
+	 * release cannot parse.
+	 */
+	entries: z.infer<typeof storedEntriesSchema> | null;
+	entriesUnreadable: boolean;
 }
 
-/** What a reader says when `parseStoredEntries` returns null for a stored row. */
+/**
+ * Parse one stored payload, or null when not even its envelope is readable.
+ *
+ * Null is the honest answer to "a release this one has never seen wrote this
+ * row": there is no meeting date to render and no transcription to show, so a
+ * reader can only say what to do next. An unreadable ENTRY list is the narrower
+ * and far likelier case, and it keeps the date — see the header above.
+ */
+export function parseGuestBookPayload(
+	raw: unknown,
+): StoredGuestBookPayload | null {
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+		return null;
+	const record = raw as Record<string, unknown>;
+	const date = storedMeetingDateSchema.safeParse(record.meetingDate);
+	if (!date.success) return null;
+	// An ABSENT `entries` key reads as the tombstone, not as corruption: the
+	// applied row writes `{ meetingDate, entries: null }`, and a payload that
+	// simply says nothing about entries is saying the same thing. Corruption is
+	// `entries` PRESENT in a shape this release cannot read, which is the case
+	// below.
+	const rawEntries = record.entries;
+	if (rawEntries === null || rawEntries === undefined) {
+		return { meetingDate: date.data, entries: null, entriesUnreadable: false };
+	}
+	const entries = storedEntriesSchema.safeParse(rawEntries);
+	if (!entries.success) {
+		return { meetingDate: date.data, entries: null, entriesUnreadable: true };
+	}
+	return {
+		meetingDate: date.data,
+		entries: entries.data,
+		entriesUnreadable: false,
+	};
+}
+
+/** What a reader says when a stored payload cannot be read. */
 export const UNREADABLE_ENTRIES_MESSAGE =
 	"This transcription was stored by an older version of GavelUp and can no longer be read. Transcribe the page again.";
 

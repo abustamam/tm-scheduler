@@ -45,6 +45,8 @@ vi.mock("#/db", () => ({ db: {} }));
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WRAPPERS = resolve(HERE, "guest-book-pending.ts");
 const LOGIC = resolve(HERE, "guest-book-pending-logic.ts");
+/** The SHARED lifecycle the four ordered checks moved into (#812). */
+const LIFECYCLE = resolve(HERE, "mcp-pending-logic.ts");
 
 /** Comment-blind — for "the call must BE present" assertions only. */
 const stripped = readSource(WRAPPERS);
@@ -162,16 +164,42 @@ describe("the guest-book confirm wrappers delegate (#806)", () => {
 		// `guest-book-confirm.integration.test.ts` — this only pins that the
 		// calls still exist, so deleting those cases cannot quietly delete the
 		// gate too.
+		//
+		// RE-POINTED by #812. The creator/archive/still-an-admin trio moved into
+		// the shared lifecycle (`mcp-pending-logic.ts`), so the confirm page
+		// reaches them through `resolvePending` and the gates are asserted where
+		// they now live. Asserting the old spellings against this module would
+		// have gone green the moment someone re-inlined them — which is the
+		// duplication the extraction removed — so each call is checked in the
+		// file that is supposed to own it.
 		const logic = readSource(LOGIC);
-		for (const call of [
-			"assertClubNotArchived(",
-			"requireClubRole(",
-			"isPendingPlanExpired(",
-		]) {
+		for (const call of ["resolvePending(", "isPendingPlanExpired("]) {
 			expect(
 				logic.includes(call),
 				`guest-book-pending-logic.ts no longer calls ${call} — the confirm page's ${call.slice(0, -1)} gate is gone.`,
 			).toBe(true);
+		}
+		const lifecycle = readSource(LIFECYCLE);
+		for (const call of ["assertClubNotArchived(", "requireClubRole("]) {
+			expect(
+				lifecycle.includes(call),
+				`mcp-pending-logic.ts no longer calls ${call} — every confirm page's ${call.slice(0, -1)} gate is gone, not just this one's.`,
+			).toBe(true);
+		}
+		// And the confirm page must not have grown its own copy back. A second
+		// spelling of the archive gate here would pass the assertion above while
+		// the shared one rotted unnoticed.
+		//
+		// RAW, not `logic` — this is the "must be ABSENT" class, where stripping
+		// only ever deletes text and so could erase a real offender from view
+		// (`src/test/guard-source.ts`). The presence sweeps above keep using the
+		// comment-blind read, which is the other half of the same rule.
+		const logicRaw = readFileSync(LOGIC, "utf8");
+		for (const call of ["assertClubNotArchived(", "requireClubRole("]) {
+			expect(
+				logicRaw.includes(call),
+				`guest-book-pending-logic.ts calls ${call} again — the lifecycle owns that check since #812, and a second copy is what the extraction removed.`,
+			).toBe(false);
 		}
 	});
 
