@@ -115,6 +115,8 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 				defaultCount: 4,
 				sortOrder: 20,
 				isSpeakerRole: true,
+				// #624: speaking order is drawn on the day, so the slots carry none.
+				slotsUnordered: true,
 			},
 		]);
 		await testDb.insert(meetingTemplateBeats).values([
@@ -457,6 +459,76 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			expect(second.map((r) => r.id).sort()).toEqual(
 				first.map((r) => r.id).sort(),
 			);
+		});
+
+		it("RAISES slots_unordered on a bank row a declaration resolves onto", async () => {
+			// The one declared column a RESOLVE still has to carry onto an existing
+			// row. `slots_unordered` is a fact about the SHAPE (#624), not a club
+			// preference: a contest's speaking order is drawn by lot after the sheet
+			// has printed, so `slotLabel` must print a bare "Contestant". Under the
+			// per-template model every conversion copied it onto a fresh row and the
+			// question never arose.
+			//
+			// Every live reader takes the flag off the BANK ROW, so a club holding
+			// `contestant_prepared` at false — which `addAgendaRole`'s create path
+			// mints, having no such field — would number its contestants again with
+			// every other gate green.
+			const [invented] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: club.clubId,
+					key: "contestant_prepared",
+					name: "Contestant",
+					category: "speaker",
+					isSpeakerRole: true,
+					slotsUnordered: false,
+					standing: false,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!invented) throw new Error("bank insert failed");
+
+			const id = await makeContestTemplate();
+			await materializeTemplateRoles(testDb, club.clubId, id);
+
+			const [after] = await testDb
+				.select({
+					id: roleDefinitions.id,
+					slotsUnordered: roleDefinitions.slotsUnordered,
+				})
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, invented.id));
+			// Same row — resolved, not replaced — carrying the declaration's flag.
+			expect(after?.id).toBe(invented.id);
+			expect(after?.slotsUnordered).toBe(true);
+		});
+
+		it("never LOWERS it, so a second shape cannot renumber an older meeting", async () => {
+			// ONE WAY, because the flag is read at RENDER time off a club-wide row.
+			// A full sync would let two shapes declaring the same key differently
+			// flap it, and the last conversion would change how an ALREADY-PRINTED
+			// meeting's roster reads.
+			const [banked] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: club.clubId,
+					key: "contest_chair",
+					name: "Contest Chair",
+					category: "leadership",
+					slotsUnordered: true,
+					standing: false,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!banked) throw new Error("bank insert failed");
+
+			// `makeContestTemplate` declares `contest_chair` ORDERED.
+			const id = await makeContestTemplate();
+			await materializeTemplateRoles(testDb, club.clubId, id);
+
+			const [after] = await testDb
+				.select({ slotsUnordered: roleDefinitions.slotsUnordered })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, banked.id));
+			expect(after?.slotsUnordered).toBe(true);
 		});
 
 		it("does NOT overwrite a club's rename on re-materialize", async () => {

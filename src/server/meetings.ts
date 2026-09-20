@@ -335,33 +335,50 @@ async function loadMeetingDetail(
 	// club's own Timer, which is the reported bug. One bank now, so a contest
 	// offers the club's standard roles alongside its own.
 	//
-	// The meeting's PAIRED roles are filtered out here rather than only on the
-	// client. `club.$clubId.meeting.$meetingId.tsx` runs `pairedRoleIds` over
-	// whatever this returns, and that heuristic (lowest-`sortOrder` speaker role)
-	// answers for the CLUB over a bank that now also holds a contest's roles —
-	// on a contest it would name the standard Speaker and leave Contestant
-	// offered, which `applyAddRoleSlot` then refuses. Resolving the pair against
-	// the meeting's declared shape is the server's job; it is the same set
-	// `applyAddRoleSlot` checks against, so the picker and the refusal agree.
-	const clubRoles = canManage
+	// WHICH roles are the paired Speaker/Evaluator pair is answered HERE, against
+	// the meeting's declared SHAPE, and shipped beside the bank (#801).
+	//
+	// `club.$clubId.meeting.$meetingId.tsx` used to answer it itself, by running
+	// `pairedRoleIds` over `clubRoles`. That worked only while `clubRoles` WAS
+	// the meeting's shape. It is the club's whole bank now, so the heuristic —
+	// lowest-`sortOrder` `isSpeakerRole` role, evaluator-category role with the
+	// most places — answers for the CLUB: on a contest it names the standard
+	// Speaker rather than Contestant. Two things then go wrong, and only the
+	// first is about the picker. `addableRoles` offers Contestant, which
+	// `applyAddRoleSlot` refuses; and `<MeetingAgenda pairedRoleIds>` marks the
+	// wrong slots, so the evaluator rows that drive "who evaluates whom" lose
+	// their affordance and unrelated rows gain it. Filtering the bank here
+	// instead would fix the first and leave the second, because the client would
+	// still be computing its own answer from a set the real pair had just been
+	// removed from.
+	//
+	// So the server sends the ANSWER, not a set to re-derive it from — the same
+	// set `applyAddRoleSlot` and `applyRemoveRoleSlot` check against, so the
+	// picker, the agenda's affordances and the refusal cannot disagree. An ARRAY
+	// because a `Set` does not survive the server-fn boundary.
+	//
+	// Gated on `canManage` exactly like `clubRoles`, so a non-manager's payload
+	// carries neither and the consumer's own `effectiveCanManage` gate sees the
+	// empty set it saw before.
+	const [clubRoles, pairedRoleDefinitionIds] = canManage
 		? await (async () => {
 				const [bank, shape] = await Promise.all([
 					listRoleDefinitions(meeting.clubId, { onlyEnabled: true }),
 					loadMeetingShapeDefs(db, meeting.clubId, meeting.templateId),
 				]);
-				const paired = pairedRoleIds(shape);
-				return bank
-					.filter((r) => !paired.has(r.id))
-					.map((r) => ({
+				return [
+					bank.map((r) => ({
 						id: r.id,
 						name: r.name,
 						category: r.category,
 						defaultCount: r.defaultCount,
 						sortOrder: r.sortOrder,
 						isSpeakerRole: r.isSpeakerRole,
-					}));
+					})),
+					[...pairedRoleIds(shape)],
+				] as const;
 			})()
-		: [];
+		: ([[], []] as const);
 
 	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.
 	// Management-only, like the roster; guests never appear on the public view.
@@ -479,6 +496,7 @@ async function loadMeetingDetail(
 		roster,
 		clubGuests,
 		clubRoles,
+		pairedRoleDefinitionIds,
 	};
 }
 

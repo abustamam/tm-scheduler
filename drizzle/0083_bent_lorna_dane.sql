@@ -30,11 +30,30 @@ ALTER TABLE "role_definitions" ADD COLUMN "standing" boolean DEFAULT true NOT NU
 -- available: a club-invented role has `key = NULL` because
 -- `applyRoleDefinitionCreate` never wrote one before #801.
 --
--- Three guards, each of which would otherwise break the partial unique index
--- this fold has to leave satisfied:
---   * `dupes = 1`  — two keyless bank rows sharing a name would both adopt.
---   * `keys = 1`   — a name mapping to two different fork keys has no answer.
---   * NOT EXISTS   — the key must be free among this club's keyed bank rows.
+-- FOUR guards, and the fourth is the one that is not obvious. Each protects
+-- `role_definitions_club_key_unique`, which this statement must leave
+-- satisfied — and a violation here ABORTS THE MIGRATION, which under the
+-- Railway startup CMD aborts the whole deploy with no in-band remedy.
+--
+--   * `dupes = 1`      — two keyless bank rows sharing a NAME would both adopt.
+--   * `keys = 1`       — a name mapping to two different fork keys has no answer.
+--   * NOT EXISTS       — the key must be free among this club's keyed bank rows.
+--   * `claimants = 1`  — two keyless bank rows with DIFFERENT names must not
+--     adopt the same key. The three guards above are all per-NAME, and the
+--     NOT EXISTS reads the pre-statement snapshot, so nothing else asks whether
+--     this one UPDATE is about to write the same (club_id, key) twice. It is
+--     reachable: two forks can share a key under different names, because
+--     `materializeTemplateRoles` preserved a club's rename (#445) while
+--     `applyTemplateConversion` deep-copied the template — so a club can hold
+--     forks "Timekeeper" and "Timer" both keyed `timer`, beside keyless bank
+--     rows named "Timer" and "Timekeeper". Every per-name guard passes and both
+--     bank rows claim `timer`.
+--
+-- A contested key is left to step 1b rather than awarded to one of the
+-- claimants: picking would fold a member's history onto a role chosen by an
+-- `id` comparison. Both rows keep their own slugified key and stay two roles,
+-- which is the same outcome as the case below.
+--
 -- A club-invented role RENAMED in settings after it was forked matches on
 -- neither key nor name and is unfoldable from data alone; it stays two roles.
 WITH fork AS (
@@ -54,18 +73,24 @@ WITH fork AS (
 		count(*) OVER (PARTITION BY rd.club_id, lower(btrim(rd.name))) AS dupes
 	FROM role_definitions rd
 	WHERE rd.template_id IS NULL AND rd.key IS NULL
+), pick AS (
+	SELECT
+		b.id,
+		f.key,
+		count(*) OVER (PARTITION BY b.club_id, f.key) AS claimants
+	FROM bare b
+	JOIN fork f ON f.club_id = b.club_id AND f.lname = b.lname
+	WHERE b.dupes = 1
+		AND f.keys = 1
+		AND NOT EXISTS (
+			SELECT 1 FROM role_definitions o
+			WHERE o.club_id = b.club_id AND o.template_id IS NULL AND o.key = f.key
+		)
 )
 UPDATE role_definitions rd
-SET key = f.key
-FROM bare b
-JOIN fork f ON f.club_id = b.club_id AND f.lname = b.lname
-WHERE rd.id = b.id
-	AND b.dupes = 1
-	AND f.keys = 1
-	AND NOT EXISTS (
-		SELECT 1 FROM role_definitions o
-		WHERE o.club_id = b.club_id AND o.template_id IS NULL AND o.key = f.key
-	);
+SET key = p.key
+FROM pick p
+WHERE rd.id = p.id AND p.claimants = 1;
 --> statement-breakpoint
 -- STEP 1b. Every remaining keyless row gets a slugified key, uniquified within
 -- the club. `meeting_template_roles.key` is NOT NULL, so a keyless bank role
@@ -77,6 +102,23 @@ WHERE rd.id = b.id
 -- then `_2`, `_3` … until free. A loop rather than a window function because
 -- the suffix has to avoid BOTH the keys already in the table and the ones this
 -- pass is assigning as it goes.
+--
+-- "FREE" MEANS FREE AMONG BANK ROWS, and the `template_id IS NULL` on the
+-- EXISTS below is load-bearing rather than tidy scoping. The binding constraint
+-- is `role_definitions_club_key_unique`, which is partial on exactly that
+-- predicate, so a key held only by a FORK is not taken — and colliding with one
+-- is the OUTCOME THIS STEP WANTS: step 2 groups by (club_id, key), so landing
+-- on the fork's key is what folds the pair. Without the filter a bank row is
+-- pushed off its own key by a row that is about to be deleted. Measured: bank
+-- "Ah Counter" (keyless) beside fork "Ah-Counter" keyed `ah_counter` — step 1a
+-- misses on the punctuation, this step assigned `ah_counter_2`, step 2 grouped
+-- them apart, and the club's slot history ended up on the promoted fork at
+-- `standing = false`, where `generateSlotRows` would never place it on an
+-- ordinary meeting again.
+--
+-- Safe against this pass's own writes because the loop is SEQUENTIAL and every
+-- row it writes is a bank row: a key assigned on an earlier iteration is
+-- visible to the EXISTS on a later one.
 DO $fold801$
 DECLARE
 	r record;
@@ -105,7 +147,9 @@ BEGIN
 		n := 1;
 		WHILE EXISTS (
 			SELECT 1 FROM role_definitions o
-			WHERE o.club_id = r.club_id AND o.key = candidate
+			WHERE o.club_id = r.club_id
+			  AND o.template_id IS NULL
+			  AND o.key = candidate
 		) LOOP
 			n := n + 1;
 			candidate := base || '_' || n;
@@ -151,15 +195,21 @@ WITH ranked AS (
 )
 SELECT id AS loser_id, survivor_id, club_id, key FROM ranked WHERE rn > 1;
 --> statement-breakpoint
--- The (meeting, survivor) groups the re-point is about to touch, captured
--- BEFORE it runs — afterwards the losers are gone and the question cannot be
--- asked. Step 4 renumbers exactly these and nothing else.
+-- The slots the re-point is about to MOVE, captured BEFORE it runs —
+-- afterwards the losers are gone and the question cannot be asked. Step 4 needs
+-- both halves of this: which (meeting, survivor) groups to renumber, and which
+-- slots within them arrived from a loser.
+DROP TABLE IF EXISTS role_fold_801_moved;
+--> statement-breakpoint
+CREATE TEMP TABLE role_fold_801_moved AS
+SELECT rs.id, rs.meeting_id, f.survivor_id AS role_definition_id
+FROM role_slots rs
+JOIN role_fold_801 f ON f.loser_id = rs.role_definition_id;
+--> statement-breakpoint
 DROP TABLE IF EXISTS role_fold_801_groups;
 --> statement-breakpoint
 CREATE TEMP TABLE role_fold_801_groups AS
-SELECT DISTINCT rs.meeting_id, f.survivor_id AS role_definition_id
-FROM role_slots rs
-JOIN role_fold_801 f ON f.loser_id = rs.role_definition_id;
+SELECT DISTINCT meeting_id, role_definition_id FROM role_fold_801_moved;
 --> statement-breakpoint
 -- STEP 3. Move every loser's slots onto the survivor. This is the repair: a
 -- slot assigned on a forked definition now reads as the surviving bank role
@@ -176,23 +226,37 @@ WHERE rs.role_definition_id = f.loser_id;
 -- live case reaches it, where the meeting kept a bank-row slot at index 0 and
 -- the hand-added fork generated its own index 0.
 --
--- `ORDER BY slot_index, id` is the exact tiebreak `realignEvaluatorPairs` uses,
--- so relative order is unchanged and any later positional re-derivation lands
--- on the same pairing. That matters because `evaluates_slot_id` is STORED but
--- re-derived positionally from `slot_index` on the next speaker edit: a reorder
--- here would silently re-pair evaluators long after the deploy. Nothing in this
--- migration writes `evaluates_slot_id` itself.
+-- FOLDED-IN SLOTS GO LAST, and that is the whole of this ordering. It is NOT
+-- enough to keep the pre-existing slots in their own relative order — an
+-- earlier draft ordered by `(slot_index, id)` alone, which does exactly that
+-- and is still wrong.
+--
+-- `evaluates_slot_id` is STORED, but `realignEvaluatorPairs`
+-- (`slots-logic.ts`) never reads it: on the next speaker add, remove or move it
+-- sorts each paired role's slots and OVERWRITES evaluator i's pointer with
+-- speaker i. The pairing is therefore positional over the COMBINED array, so
+-- inserting one folded-in evaluator ahead of the existing ones shifts every
+-- later evaluator by one — a silent re-pairing that surfaces on an edit made
+-- days after the deploy, not on the deploy itself.
+--
+-- Appending both roles' folded-in slots preserves the correspondence in both
+-- directions: the pre-existing speakers and evaluators keep positions 0..k-1
+-- pairwise, and the arriving ones take k..n-1 in their own former order, where
+-- they were already paired with each other. `(slot_index, id)` within each half
+-- is `realignEvaluatorPairs`' own tiebreak, so the halves are ordered the way
+-- it would order them.
 WITH ordered AS (
 	SELECT
 		rs.id,
 		row_number() OVER (
 			PARTITION BY rs.meeting_id, rs.role_definition_id
-			ORDER BY rs.slot_index, rs.id
+			ORDER BY (m.id IS NOT NULL), rs.slot_index, rs.id
 		) - 1 AS new_index
 	FROM role_slots rs
 	JOIN role_fold_801_groups g
 		ON g.meeting_id = rs.meeting_id
 		AND g.role_definition_id = rs.role_definition_id
+	LEFT JOIN role_fold_801_moved m ON m.id = rs.id
 )
 UPDATE role_slots rs
 SET slot_index = o.new_index
@@ -203,6 +267,8 @@ WHERE rs.id = o.id AND rs.slot_index <> o.new_index;
 DELETE FROM role_definitions rd USING role_fold_801 f WHERE rd.id = f.loser_id;
 --> statement-breakpoint
 DROP TABLE role_fold_801_groups;
+--> statement-breakpoint
+DROP TABLE role_fold_801_moved;
 --> statement-breakpoint
 DROP TABLE role_fold_801;
 --> statement-breakpoint

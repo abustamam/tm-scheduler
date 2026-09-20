@@ -26,7 +26,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetings,
 	meetingTemplates,
@@ -40,6 +40,14 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
+
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+// Imported AFTER the mock: `slots-logic` reads `#/db` at load. Only
+// `realignEvaluatorPairs` is used, and it takes the caller's transaction
+// handle, so it re-derives the pairing inside the same uncommitted fold the
+// assertions read.
+const { realignEvaluatorPairs } = await import("./slots-logic");
 
 const MIGRATION = resolve(process.cwd(), "drizzle/0083_bent_lorna_dane.sql");
 
@@ -67,7 +75,7 @@ function foldStatements(): string[] {
 	expect(
 		statements.length,
 		"the migration must still carry its hand-written fold",
-	).toBe(12);
+	).toBe(15);
 	return statements;
 }
 
@@ -136,9 +144,10 @@ describe.skipIf(!hasTestDb)("0083 folds role identity into the bank", () => {
 		return t.id;
 	}
 
-	/** Set by the recency fixture below, read by its assertion — the seed and
-	 *  the read are separate callbacks of `foldWith`. */
+	/** Set by a fixture, read by its assertion — the seed and the read are
+	 *  separate callbacks of `foldWith`. */
 	let seededPastSlotId = "";
+	let bankEvaluatorRoleId = "";
 
 	async function defsFor(tx: Tx, key: string) {
 		return tx
@@ -311,6 +320,132 @@ describe.skipIf(!hasTestDb)("0083 folds role identity into the bank", () => {
 		expect(result[0]?.name).toBe(`Zoom Master ${RUN}`);
 	});
 
+	it("REFUSES to award a key two different bare rows both claim, rather than aborting", async () => {
+		// A unique violation here does not corrupt anything — it ABORTS THE
+		// MIGRATION, and under the Railway startup CMD that aborts the deploy
+		// with no in-band remedy. Step 1a's other three guards are all per-NAME,
+		// so none of them asks whether one UPDATE is about to write the same
+		// (club_id, key) twice.
+		//
+		// Reachable: `materializeTemplateRoles` preserved a club's rename (#445)
+		// while `applyTemplateConversion` deep-copied the template, so two private
+		// copies can hold the SAME key under DIFFERENT names — and a club that
+		// invented roles by both names has two keyless bank rows to match them.
+		// Two templates rather than one because
+		// `role_definitions_club_template_key_unique` still stood in that world.
+		const result = await foldWith(
+			async (tx) => {
+				const t1 = await makeTemplate(tx, "contest_a");
+				const t2 = await makeTemplate(tx, "contest_b");
+				// `seedClub`'s own role is the first keyless bank row, named "Timer".
+				await tx.insert(roleDefinitions).values({
+					clubId: club.clubId,
+					name: "Timekeeper",
+					category: "functionary",
+				});
+				await tx.insert(roleDefinitions).values([
+					{
+						clubId: club.clubId,
+						templateId: t1,
+						key: "timer",
+						name: "Timer",
+						category: "functionary" as const,
+					},
+					{
+						clubId: club.clubId,
+						templateId: t2,
+						key: "timer",
+						name: "Timekeeper",
+						category: "functionary" as const,
+					},
+				]);
+				return null;
+			},
+			async (tx) =>
+				tx
+					.select({ name: roleDefinitions.name, key: roleDefinitions.key })
+					.from(roleDefinitions)
+					.where(eq(roleDefinitions.clubId, club.clubId)),
+		);
+
+		// Getting here at all is most of the assertion: without the `claimants`
+		// guard the statement raises
+		// `duplicate key value violates unique constraint
+		// "role_definitions_club_key_unique"` and every later step is unreached.
+		const byName = Object.fromEntries(result.map((r) => [r.name, r.key]));
+		// Neither bare row adopted the contested key — picking one would fold a
+		// member's history onto a role chosen by an id comparison. They keep
+		// their own slugs and stay two roles, exactly like the rename case.
+		expect(byName.Timer).toBe("timer");
+		expect(byName.Timekeeper).toBe("timekeeper");
+		expect(new Set(result.map((r) => r.key)).size).toBe(result.length);
+	});
+
+	it("lets a bare row take a key only a FORK holds, so the pair folds", async () => {
+		// Step 1b's EXISTS is scoped to BANK rows, and that scoping is what makes
+		// the fold reachable rather than merely tidy. `role_definitions_club_key_
+		// unique` is partial on `template_id is null`, so a key held only by a
+		// fork is free — and landing on it is the OUTCOME, because step 2 groups
+		// by (club_id, key).
+		//
+		// Measured on the shape step 1a cannot catch: the club's "Ah Counter"
+		// against the template's "Ah-Counter". The names differ by punctuation, so
+		// the name match misses; unscoped, the EXISTS then pushed the bank row to
+		// `ah_counter_2`, the two never folded, and the club's slot history ended
+		// up on the promoted fork at `standing = false` — where `generateSlotRows`
+		// would never place it on an ordinary meeting again.
+		const result = await foldWith(
+			async (tx) => {
+				const templateId = await makeTemplate(tx, "punctuation");
+				await tx
+					.update(roleDefinitions)
+					.set({ name: "Ah Counter", key: null })
+					.where(eq(roleDefinitions.id, club.roleDefinitionId));
+				const [fork] = await tx
+					.insert(roleDefinitions)
+					.values({
+						clubId: club.clubId,
+						templateId,
+						key: "ah_counter",
+						name: "Ah-Counter",
+						category: "functionary",
+					})
+					.returning({ id: roleDefinitions.id });
+				if (!fork) throw new Error("fork insert failed");
+				await tx.insert(roleSlots).values({
+					meetingId: club.meetingId,
+					roleDefinitionId: fork.id,
+					slotIndex: 3,
+					assignedMemberId: club.memberId,
+					status: "claimed",
+				});
+				return null;
+			},
+			async (tx) => ({
+				defs: await defsFor(tx, "ah_counter"),
+				slots: await tx
+					.select({
+						roleDefinitionId: roleSlots.roleDefinitionId,
+						assignedMemberId: roleSlots.assignedMemberId,
+					})
+					.from(roleSlots)
+					.where(eq(roleSlots.meetingId, club.meetingId)),
+			}),
+		);
+
+		// ONE row, and it is the CLUB's — standing, so ordinary meetings keep
+		// generating it.
+		expect(result.defs.map((d) => d.id)).toEqual([club.roleDefinitionId]);
+		expect(result.defs[0]?.standing).toBe(true);
+		expect(result.defs[0]?.name).toBe("Ah Counter");
+		// And the fork's claimed slot came with it.
+		const held = result.slots.filter(
+			(s) => s.assignedMemberId === club.memberId,
+		);
+		expect(held).toHaveLength(1);
+		expect(held[0]?.roleDefinitionId).toBe(club.roleDefinitionId);
+	});
+
 	it("gives every remaining keyless row a slugified, per-club-unique key", async () => {
 		// Step 1b, and the reason it matters: `meeting_template_roles.key` is NOT
 		// NULL, so a keyless bank role could never be declared by any agenda.
@@ -361,19 +496,17 @@ describe.skipIf(!hasTestDb)("0083 folds role identity into the bank", () => {
 		expect(new Set(result.map((r) => r.key)).size).toBe(result.length);
 	});
 
-	it("renumbers ORDER-PRESERVING, so a stored evaluator pairing still re-derives the same way", async () => {
-		// `evaluates_slot_id` is stored but `realignEvaluatorPairs` re-derives it
-		// POSITIONALLY from `slot_index` on the next speaker edit — so a fold that
-		// reordered slots would silently re-pair evaluators long after the deploy.
-		// Step 4's `ORDER BY slot_index, id` is that function's exact tiebreak.
-		//
-		// Slot ids are SUPPLIED rather than defaulted, and that is what makes the
-		// assertion deterministic instead of probabilistic: `id` is the tiebreak
-		// within a collided index, so a test that lets `gen_random_uuid()` choose
-		// can only assert contiguity — which a reordering renumber satisfies too.
-		const A = "0000ff01-0000-4000-8000-000000000001";
-		const B = "0000ff01-0000-4000-8000-000000000002";
-		const C = "0000ff01-0000-4000-8000-000000000003";
+	it("renumbers with FOLDED-IN SLOTS LAST, not merely contiguously", async () => {
+		// Slot ids are SUPPLIED rather than defaulted, and the bank slot is given
+		// the HIGHEST original index on purpose. Both choices exist to make this
+		// distinguish the shipped rule from the one an earlier draft shipped:
+		// ordering by `(slot_index, id)` alone keeps the pre-existing slots in
+		// their own relative order and is still contiguous, so a test that lets
+		// `gen_random_uuid()` choose, or that puts the bank slot first, passes
+		// either way.
+		const A = "0000ff01-0000-4000-8000-000000000001"; // bank, index 5
+		const B = "0000ff01-0000-4000-8000-000000000002"; // fork, index 0
+		const C = "0000ff01-0000-4000-8000-000000000003"; // fork, index 1
 		const result = await foldWith(
 			async (tx) => {
 				const templateId = await makeTemplate(tx, "order");
@@ -393,10 +526,6 @@ describe.skipIf(!hasTestDb)("0083 folds role identity into the bank", () => {
 					})
 					.returning({ id: roleDefinitions.id });
 				if (!fork) throw new Error("fork insert failed");
-				// Replace `seedClub`'s slot so every id on this meeting is chosen
-				// here. A (0, A) on the bank row and a (0, B) on the fork COLLIDE
-				// once the fork's slots are re-pointed; (1, C) was already behind
-				// both and must stay behind them.
 				await tx
 					.delete(roleSlots)
 					.where(eq(roleSlots.meetingId, club.meetingId));
@@ -405,7 +534,7 @@ describe.skipIf(!hasTestDb)("0083 folds role identity into the bank", () => {
 						id: A,
 						meetingId: club.meetingId,
 						roleDefinitionId: club.roleDefinitionId,
-						slotIndex: 0,
+						slotIndex: 5,
 					},
 					{
 						id: B,
@@ -440,9 +569,10 @@ describe.skipIf(!hasTestDb)("0083 folds role identity into the bank", () => {
 		);
 
 		expect(result).toHaveLength(3);
-		// Contiguous from 0 — and in the ONE order `(slot_index, id)` gives, which
-		// is `realignEvaluatorPairs`' own. A renumber that sorted any other way
-		// would still be contiguous and would still fail here.
+		// The slot that was already on the surviving role keeps its place at the
+		// FRONT despite having the highest old index; the two that arrived take
+		// the tail in their own former order. Ordering by `(slot_index, id)`
+		// alone gives [B, C, A] and is equally contiguous.
 		expect(
 			result
 				.slice()
@@ -452,9 +582,179 @@ describe.skipIf(!hasTestDb)("0083 folds role identity into the bank", () => {
 		// And nothing else on a slot moved.
 		expect(result.every((s) => s.evaluatesSlotId === null)).toBe(true);
 		expect(result.filter((s) => s.status === "claimed")).toHaveLength(2);
-		expect(result.find((s) => s.id === C)?.assignedMemberId).toBe(
-			club.adminMemberId,
+	});
+
+	it("keeps a stored evaluator pairing through the fold AND the next speaker edit", async () => {
+		// The reason "folded-in last" is not a tidiness preference.
+		// `realignEvaluatorPairs` never READS `evaluates_slot_id` — it overwrites
+		// evaluator i's pointer with speaker i from the two roles' sorted arrays.
+		// So the fold changes the pairing by changing ARRAY MEMBERSHIP, and the
+		// damage surfaces on an edit made days later rather than on the deploy.
+		//
+		// Driven through the real function rather than asserted about: it takes a
+		// `DbOrTx`, so it re-derives inside this transaction.
+		// `applyAddSpeakerSlot` could not be used — it opens a transaction of its
+		// own on another pooled connection, which cannot see an uncommitted fold.
+		//
+		// The ids are chosen so the FORK's slots sort AHEAD of the bank's within
+		// their index on the speaker side and BEHIND on the evaluator side. Under
+		// `(slot_index, id)` alone the two roles then interleave differently and
+		// E0 ends up evaluating the contest speaker; under the shipped rule both
+		// roles append, and every pair survives.
+		const S0 = "0000ff02-0000-4000-8000-0000000000b1";
+		const S1 = "0000ff02-0000-4000-8000-0000000000b2";
+		const SF = "0000ff02-0000-4000-8000-0000000000a1"; // sorts BEFORE S0
+		const E0 = "0000ff02-0000-4000-8000-0000000000c1";
+		const E1 = "0000ff02-0000-4000-8000-0000000000c2";
+		const EF = "0000ff02-0000-4000-8000-0000000000d1"; // sorts AFTER E0
+		const result = await foldWith(
+			async (tx) => {
+				const templateId = await makeTemplate(tx, "pairing");
+				// The club's own paired roles.
+				await tx
+					.update(roleDefinitions)
+					.set({
+						key: "speaker",
+						name: "Speaker",
+						category: "speaker",
+						isSpeakerRole: true,
+						sortOrder: 10,
+					})
+					.where(eq(roleDefinitions.id, club.roleDefinitionId));
+				const [bankEval] = await tx
+					.insert(roleDefinitions)
+					.values({
+						clubId: club.clubId,
+						key: "evaluator",
+						name: "Evaluator",
+						category: "evaluator",
+						defaultCount: 3,
+						sortOrder: 20,
+					})
+					.returning({ id: roleDefinitions.id });
+				// The contest's forks of the same two keys.
+				const forks = await tx
+					.insert(roleDefinitions)
+					.values([
+						{
+							clubId: club.clubId,
+							templateId,
+							key: "speaker",
+							name: "Contestant",
+							category: "speaker" as const,
+							isSpeakerRole: true,
+							sortOrder: 10,
+						},
+						{
+							clubId: club.clubId,
+							templateId,
+							key: "evaluator",
+							name: "Contest Evaluator",
+							category: "evaluator" as const,
+							defaultCount: 3,
+							sortOrder: 20,
+						},
+					])
+					.returning({ id: roleDefinitions.id, key: roleDefinitions.key });
+				const forkSpeaker = forks.find((f) => f.key === "speaker");
+				const forkEval = forks.find((f) => f.key === "evaluator");
+				if (!bankEval || !forkSpeaker || !forkEval) {
+					throw new Error("fixture insert failed");
+				}
+				bankEvaluatorRoleId = bankEval.id;
+
+				await tx
+					.delete(roleSlots)
+					.where(eq(roleSlots.meetingId, club.meetingId));
+				await tx.insert(roleSlots).values([
+					{
+						id: S0,
+						meetingId: club.meetingId,
+						roleDefinitionId: club.roleDefinitionId,
+						slotIndex: 0,
+					},
+					{
+						id: S1,
+						meetingId: club.meetingId,
+						roleDefinitionId: club.roleDefinitionId,
+						slotIndex: 1,
+					},
+					{
+						id: SF,
+						meetingId: club.meetingId,
+						roleDefinitionId: forkSpeaker.id,
+						slotIndex: 0,
+					},
+				]);
+				// Evaluators second, so their `evaluates_slot_id` can point at the
+				// speaker slots above — the STORED pairing this test is about.
+				await tx.insert(roleSlots).values([
+					{
+						id: E0,
+						meetingId: club.meetingId,
+						roleDefinitionId: bankEval.id,
+						slotIndex: 0,
+						evaluatesSlotId: S0,
+					},
+					{
+						id: E1,
+						meetingId: club.meetingId,
+						roleDefinitionId: bankEval.id,
+						slotIndex: 1,
+						evaluatesSlotId: S1,
+					},
+					{
+						id: EF,
+						meetingId: club.meetingId,
+						roleDefinitionId: forkEval.id,
+						slotIndex: 0,
+						evaluatesSlotId: SF,
+					},
+				]);
+				return null;
+			},
+			async (tx) => {
+				// THE NEXT SPEAKER EDIT. `applyAddSpeakerSlot` inserts a speaker and
+				// its evaluator and then realigns; this is that, minus the meeting
+				// lock and the activity row, neither of which touches the pairing.
+				const [newSpeaker] = await tx
+					.insert(roleSlots)
+					.values({
+						meetingId: club.meetingId,
+						roleDefinitionId: club.roleDefinitionId,
+						slotIndex: 99,
+					})
+					.returning({ id: roleSlots.id });
+				if (!newSpeaker) throw new Error("speaker insert failed");
+				await tx.insert(roleSlots).values({
+					meetingId: club.meetingId,
+					roleDefinitionId: bankEvaluatorRoleId,
+					slotIndex: 99,
+					evaluatesSlotId: newSpeaker.id,
+				});
+				await realignEvaluatorPairs(
+					tx,
+					club.meetingId,
+					club.roleDefinitionId,
+					bankEvaluatorRoleId,
+				);
+				return tx
+					.select({
+						id: roleSlots.id,
+						evaluatesSlotId: roleSlots.evaluatesSlotId,
+					})
+					.from(roleSlots)
+					.where(eq(roleSlots.meetingId, club.meetingId));
+			},
 		);
+
+		const pairOf = (id: string) =>
+			result.find((r) => r.id === id)?.evaluatesSlotId;
+		// Every pair the meeting carried BEFORE the fold still holds after a
+		// speaker was added on top of it.
+		expect(pairOf(E0)).toBe(S0);
+		expect(pairOf(E1)).toBe(S1);
+		expect(pairOf(EF)).toBe(SF);
 	});
 
 	it("is a NO-OP on a second run", async () => {

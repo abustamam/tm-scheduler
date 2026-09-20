@@ -302,6 +302,7 @@ function detail() {
 		roster: [],
 		clubGuests: [],
 		clubRoles: [],
+		pairedRoleDefinitionIds: [],
 	};
 }
 

@@ -777,8 +777,22 @@ async function lockMeetingForSlotEdit(
  * stored `evaluates_slot_id` never disagrees with the numbers on the cards.
  * A meeting left crossed by the old sticky-follows-the-person pairing heals on
  * its next edit; untouched meetings (past ones included) keep their history.
+ *
+ * NOTE THAT IT NEVER READS `evaluates_slot_id` — it OVERWRITES it, positionally,
+ * from the two roles' sorted slot arrays. So the stored pointer is an output of
+ * this function, not an input, and anything that changes either array's
+ * MEMBERSHIP changes the pairing on the next edit even though it wrote no
+ * pointer itself. Migration 0083's fold is exactly that: it moves slots between
+ * role definitions, so it orders the arriving ones LAST precisely so the
+ * positions this function derives are the ones it derived before.
+ *
+ * EXPORTED for that gate (`role-identity-fold.integration.test.ts`). It takes a
+ * `DbOrTx`, so a test can drive the real re-derivation inside its own
+ * transaction — which `applyAddSpeakerSlot` cannot do, since it opens a
+ * transaction of its own on another pooled connection and could not see an
+ * uncommitted fold.
  */
-async function realignEvaluatorPairs(
+export async function realignEvaluatorPairs(
 	tx: DbOrTx,
 	meetingId: string,
 	speakerRoleId: string,

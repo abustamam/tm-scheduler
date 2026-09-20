@@ -25,6 +25,7 @@ import {
 	speeches,
 } from "#/db/schema";
 import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
+import { pairedRoleIds } from "#/lib/meeting-roles";
 import {
 	cleanup,
 	hasTestDb,
@@ -42,6 +43,7 @@ const {
 } = await import("./meeting-templates-logic");
 const { loadMeetingSlots } = await import("./meeting-slots-logic");
 const { applyAddSpeakerSlot, applyAddRoleSlot } = await import("./slots-logic");
+const { loadMeetingShapeDefs } = await import("./meeting-templates-logic");
 const { listRoleDefinitions } = await import("./role-definitions-logic");
 
 describe.skipIf(!hasTestDb)("meeting template conversion", () => {
@@ -550,6 +552,60 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 			expect(
 				after.filter((s) => s.roleDefinitionId === club.roleDefinitionId),
 			).toHaveLength(0);
+		});
+
+		it("names the PAIRED roles from the declared shape, which the bank cannot answer", async () => {
+			// The seam `loadMeetingDetail` ships to the client as
+			// `pairedRoleDefinitionIds` (#801). `club.$clubId.meeting.$meetingId.tsx`
+			// used to compute this itself with `pairedRoleIds(clubRoles)`, which was
+			// right while `clubRoles` WAS the meeting's shape — it is the whole bank
+			// now, so the heuristic answers for the CLUB.
+			//
+			// Both sides asserted, because the point is that they DISAGREE: the
+			// picker would offer a Contestant `applyAddRoleSlot` then refuses, and
+			// `<MeetingAgenda pairedRoleIds>` would mark the wrong slots, taking the
+			// "who evaluates whom" affordance off the real evaluator rows.
+			await testDb
+				.update(roleDefinitions)
+				.set({ isSpeakerRole: true, key: "speaker", name: "Speaker" })
+				.where(eq(roleDefinitions.id, club.roleDefinitionId));
+			await convert(templateId);
+			const [m] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const [contestant] = await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, club.clubId),
+						eq(roleDefinitions.key, "contestant_prepared"),
+					),
+				);
+
+			const shape = await loadMeetingShapeDefs(
+				testDb,
+				club.clubId,
+				m?.templateId ?? null,
+			);
+			const fromShape = pairedRoleIds(shape);
+			expect([...fromShape]).toEqual([contestant?.id]);
+
+			// Over the BANK the same heuristic names the club's Speaker instead —
+			// the wrong answer for this meeting, and the reason the server sends
+			// the answer rather than a set to re-derive it from.
+			const bank = await testDb
+				.select({
+					id: roleDefinitions.id,
+					category: roleDefinitions.category,
+					defaultCount: roleDefinitions.defaultCount,
+					sortOrder: roleDefinitions.sortOrder,
+					isSpeakerRole: roleDefinitions.isSpeakerRole,
+				})
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.clubId, club.clubId));
+			expect([...pairedRoleIds(bank)]).toEqual([club.roleDefinitionId]);
 		});
 
 		it("'+ Add role' on a contest offers the club's standard roles too, and they attach", async () => {

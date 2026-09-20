@@ -356,6 +356,48 @@ export async function materializeTemplateRoles(
 			),
 		);
 	const held = new Set(bank.flatMap((r) => (r.key == null ? [] : [r.key])));
+
+	// `slots_unordered` is the one declared column a RESOLVE still has to carry
+	// onto an existing bank row, and it is carried ONE WAY: false → true, never
+	// back.
+	//
+	// It is not a club preference. #624 made it a fact about the SHAPE — a
+	// contest's speaking order is drawn by lot at the briefing, after the sheet
+	// has printed, so `slotLabel` must print a bare "Contestant" rather than
+	// asserting "Contestant 1..N" off sign-up order. Under the per-template
+	// model every conversion copied the declaration's value onto a fresh row and
+	// the question never arose; resolving onto an existing bank row, it does —
+	// a club holding `contestant_prepared` at false (minted by `addAgendaRole`'s
+	// create path, which has no such field to set) would number its contestants
+	// again with every gate green.
+	//
+	// Every live reader takes the flag off the BANK ROW — `meeting-slots-logic`,
+	// and three reads in `meeting-agenda-edit-logic`; the only references to
+	// `meetingTemplateRoles.slotsUnordered` outside the two writers here are in
+	// test files. So carrying it on `DeclaredRoleDef` would be decoration, and
+	// this UPDATE is where the correction actually lands.
+	//
+	// ONE WAY because the flag is read at RENDER time off a club-wide row: a
+	// full sync would let two shapes declaring the same key differently flap it
+	// back and forth, and the last conversion would change how an OLDER
+	// meeting's roster prints. Raising is monotone, and can only ever collapse
+	// numbering for a role some shape says is unordered.
+	const raise = declared
+		.filter((r) => r.slotsUnordered && held.has(r.key))
+		.map((r) => r.key);
+	if (raise.length > 0) {
+		await conn
+			.update(roleDefinitions)
+			.set({ slotsUnordered: true })
+			.where(
+				and(
+					roleDefScope(clubId),
+					inArray(roleDefinitions.key, raise),
+					eq(roleDefinitions.slotsUnordered, false),
+				),
+			);
+	}
+
 	const missing = declared.filter((r) => !held.has(r.key));
 	if (missing.length === 0) return;
 
