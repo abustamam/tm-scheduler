@@ -171,7 +171,7 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The six browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The eight browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -226,6 +226,27 @@ state one rule in their own units. The lesson is the general one: when a constan
 renderers, assert it against what each RENDERS, because a literal restated in the test agrees with
 whichever renderer the author had in mind.
 
+`src/components/agenda/ballot-qr-print-fit.test.tsx` (#717) is the seventh, and it is the one that
+says why a ceiling is not a floor. The bug is a printed ballot QR too SMALL to scan; the regression
+that fixing it can ship is a sheet too TALL to stay on one page — so it bounds BOTH directions, and
+states the floor as an absolute printed number rather than against `FOOTER_QR_PX`. Its own first
+draft did the latter, and a bound expressed against the constant under test gets LOOSER as that
+constant shrinks: `FitPage` scales the sheet by `(PAGE_H - 2) / height`, so a smaller code means a
+shorter sheet means more slack. Putting the constant back to the 32px #717 was filed about left
+every assertion in the two print suites beside it green — blind to precisely the regression it was
+written for. Mutate a size constant in BOTH directions, and never state a bound in terms of the
+number it exists to constrain.
+
+`src/components/guest-book/confirm-table-geometry.test.ts` (#806) is the eighth, and it is the
+pinned-column lesson on the other axis. Six columns do not fit the 375px phone an officer actually
+transcribes a guest book on, and a too-wide table either scrolls its own BOX or scrolls the
+DOCUMENT — and the second slides the heading, the summary counts and the "Record this page" button
+off the screen along with it. `overflow-x-auto` being PRESENT is the half that is not the bug: a
+scroller whose child has no `min-w` floor never overflows, and one inside a parent with no width
+constraint hands the overflow to the document instead. Both satisfy every grep, and only a browser
+tells them apart. Same construction as its neighbours — the real `className` strings read out of
+source, synthetic markup between them, and a pre-fix control that reproduces the bug.
+
 No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
 `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
 With none present those tests **skip locally**, so `bun run test` still works for someone without a
@@ -237,8 +258,9 @@ diagnosable. Beside that job's ONLY — the `extension` job is `working-director
 runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
 same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
-**On macOS all five skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
-puts nothing on `PATH` under any of those four names. This is a macOS-only gap: on Linux, where this
+**On macOS all eight skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+puts nothing on `PATH` under any of those four binary names — that is the `CHROME_BINARIES`
+lookup list, which is still four, and not the suite count above. This is a macOS-only gap: on Linux, where this
 repo is usually developed, `google-chrome` resolves and these gates run locally as normal. Do NOT
 "fix" it by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES` — that binary
 answers `--version`, so `findChrome` accepts it, but it never returns from `--print-to-pdf` under the
