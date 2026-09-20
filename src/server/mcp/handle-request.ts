@@ -38,11 +38,11 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { MAX_MCP_BODY_BYTES } from "#/lib/mcp-limits";
 import {
-	MAX_MCP_BODY_BYTES,
 	parseDeclaredContentLength,
 	readBodyWithinCap,
-} from "#/lib/mcp-limits";
+} from "#/lib/request-body-limits";
 import { parseBearerToken } from "#/server/pathways-ingest-logic";
 import { authenticateToken, McpUnauthorizedError } from "./authz-logic";
 import { McpError, toMcpError } from "./errors";
@@ -147,7 +147,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 	// Now the header is parsed without coercion (a malformed one is refused
 	// rather than guessed at) and the ceiling is enforced WHILE the body
 	// streams, cancelling the stream at the byte that crosses it. MEASURED: a
-	// 64 MB chunked body reads 16 of its 1000 chunks (`mcp-limits.test.ts`).
+	// 64 MB chunked body reads 16 of its 1000 chunks
+	// (`request-body-limits.test.ts`, where the reader and its measurement moved
+	// when `/api/pathways/ingest` became the second caller — #800).
 	const declared = parseDeclaredContentLength(
 		request.headers.get("content-length"),
 	);
