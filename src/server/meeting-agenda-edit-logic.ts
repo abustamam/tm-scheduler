@@ -43,7 +43,7 @@ import {
 	MAX_TEMPLATE_LABEL_CHARS,
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
-import { matchRoleDefs } from "#/lib/role-def-match";
+import { deriveRoleKey } from "#/lib/role-def-match";
 import type { TableTopicsLimits } from "#/lib/table-topics-limits";
 import { logActivity } from "./activity";
 import { loadMeetingSlots } from "./meeting-slots-logic";
@@ -52,7 +52,6 @@ import {
 	type DbOrTx,
 	materializeTemplateRoles,
 	type ReleasedHolder,
-	roleDefScope,
 } from "./meeting-templates-logic";
 
 export type { ReleasedHolder };
@@ -620,62 +619,20 @@ async function resolveAgendaDraft(
 		return { templateId: raced.id, forked: false };
 	}
 
-	// `copyTemplateForMeeting` only copies the `meeting_template_roles`
-	// DECLARATIONS, not the materialized `role_definitions` every
-	// `roleDefScope` reader — including the "+ Add role" picker
-	// (`meetings.ts`) — actually queries. Without this, a meeting just
-	// forked off a SHARED template points `templateId` at a template with NO
-	// role_definitions at all, and the picker comes back empty (task-8b).
-	// Idempotent, and a no-op cost when the source declared no roles.
-	await materializeTemplateRoles(conn, meeting.clubId, copyId);
-
-	// Re-point THIS MEETING's own slots from the OLD (still-shared)
-	// definitions to the freshly materialized ones, matched through
-	// `matchRoleDefs` — the shared key-then-name rule, which
-	// `applyTemplateConversion` now runs too so a conversion and a first edit
-	// keep exactly the same slots. See that helper's own docblock for why the
-	// either/or is strict.
+	// `copyTemplateForMeeting` copies the `meeting_template_roles`
+	// DECLARATIONS; this resolves each declared key onto the club's BANK and
+	// mints a bank row only for a key the club does not hold yet. Idempotent,
+	// and a no-op cost when the source declared no roles.
 	//
-	// Do NOT move the OLD definitions by updating their own `templateId`:
-	// `role_definitions` is keyed per (club, template), not per meeting, so a
-	// SIBLING meeting still on the shared template may still reference them
-	// — only this meeting's own `role_slots` rows are touched, by exact
-	// `meetingId` + old `roleDefinitionId`, never the definitions themselves.
-	const oldDefs = await conn
-		.select({
-			id: roleDefinitions.id,
-			key: roleDefinitions.key,
-			name: roleDefinitions.name,
-		})
-		.from(roleDefinitions)
-		.where(roleDefScope(meeting.clubId, meeting.templateId));
-	if (oldDefs.length > 0) {
-		const newDefs = await conn
-			.select({
-				id: roleDefinitions.id,
-				key: roleDefinitions.key,
-				name: roleDefinitions.name,
-			})
-			.from(roleDefinitions)
-			.where(roleDefScope(meeting.clubId, copyId));
-
-		// Unmatched definitions are simply absent from the map — a keyed role
-		// the template no longer declares, or an unkeyed one with no (or an
-		// ambiguous) name match: those slots stay pointing at the old, still
-		// valid definition rather than the fork inventing a delete/orphan
-		// behavior here, which is `removeAgendaRole`'s job.
-		for (const [oldDefId, def] of matchRoleDefs(oldDefs, newDefs)) {
-			await conn
-				.update(roleSlots)
-				.set({ roleDefinitionId: def.id })
-				.where(
-					and(
-						eq(roleSlots.meetingId, meetingId),
-						eq(roleSlots.roleDefinitionId, oldDefId),
-					),
-				);
-		}
-	}
+	// NO RE-POINT FOLLOWS, and its absence is the point (#801). A fork used to
+	// materialize a second `role_definitions` row per declared role under the
+	// copy's own template id, and then move this meeting's slots onto those
+	// fresh ids — so every private agenda detached its own slots from the club's
+	// role history. Identity now lives once per (club, key): the copy's
+	// declarations resolve to the SAME bank rows the meeting's slots already
+	// point at, so there is nothing to move and `loadRoleRecency` and the season
+	// grid keep reading through.
+	await materializeTemplateRoles(conn, meeting.clubId, copyId);
 
 	await conn
 		.update(meetings)
@@ -1582,47 +1539,43 @@ export async function moveAgendaRow(input: {
 // `forked` branching at all.
 // ---------------------------------------------------------------------------
 
-/** `Zoom Master` → `zoom_master`, uniquified against the template's own keys.
- *  Keys are the stable, rename-proof identity every surface binds on (#368), so
- *  they are derived once at creation and never follow a later rename. */
-function deriveRoleKey(name: string, taken: Set<string>): string {
-	const base =
-		[...name.toLowerCase()]
-			.map((c) => (/[a-z0-9]/.test(c) ? c : "_"))
-			.join("")
-			.replace(/_+/g, "_")
-			.replace(/^_|_$/g, "") || "role";
-	if (!taken.has(base)) return base;
-	for (let n = 2; ; n++) {
-		const candidate = `${base}_${n}`;
-		if (!taken.has(candidate)) return candidate;
-	}
-}
-
 /**
- * Add a role to the meeting's own template and materialize it immediately.
- * A role with no `role_definitions` row can never own a slot
- * (`role_slots.role_definition_id` is NOT NULL and restricting), so an
- * unmaterialized role would be a row nobody could ever sign up for.
+ * Add a role to the meeting's own template, ATTACHING the club's existing role
+ * of that name where one exists and minting a new bank role only where none
+ * does (#801).
  *
- * Materializes by inserting exactly ONE `role_definitions` row for the new
- * role — not by calling `materializeTemplateRoles` again for the WHOLE role
- * set at `templateId`. Two reasons, neither of them data pollution anymore:
- * `ensureAgendaDraft`'s fork (task-8b) already materializes every
- * PRE-EXISTING declared role and re-points this meeting's own slots onto
- * them, in the SAME transaction, before this function's own logic ever
- * runs — so by the time control reaches here, `templateId`'s current role
- * set is already correctly materialized, and re-running the whole-set call
- * would just repeat that work, a no-op per row via `onConflictDoNothing` but
- * still a wasted read-and-attempt over every OTHER role for the sake of
- * adding one. And `materializeTemplateRoles` returns `void`, not the row(s)
- * it inserted, while this call needs the fresh row's `id` back immediately —
- * `generateSlotRows([def], meetingId)` a few lines down can't run without
- * it. (Before task-8b, this insert being scoped to one row was ALSO what
- * kept the whole-set call from re-inserting every pre-existing role as a
- * second, orphaned `role_definitions` row parallel to the ones the meeting's
- * slots still referenced on the old shared template — that hazard is now the
- * fork's job to prevent, not this function's.)
+ * This is the reported bug's fix. Every name typed here used to mint a fresh
+ * `role_definitions` row tagged to this agenda's private template — so three
+ * standard functionaries hand-added to a live club's special meeting became
+ * three FORKS of roles the club had run for years, carrying none of their
+ * history: `loadRoleRecency`'s "last served" and the season grid both key on
+ * `role_slots.role_definition_id`, and the grid rendered the fork beside the
+ * original as "Timer 1" / "Timer 2". Only the member profile agreed with
+ * itself, because it keys on the NAME.
+ *
+ * Two paths, one shape:
+ *
+ * - ATTACH. A bank role whose name matches (case-insensitively) is declared on
+ *   this template — key, name, category, `is_speaker_role` and `default_count`
+ *   all taken from the BANK ROW, not from the form. The role's identity is the
+ *   club's; what this call decides is that the agenda uses it. Slots generate
+ *   against the bank id, which is what makes the attach retroactively repair
+ *   history rather than start a new one.
+ * - CREATE. No bank role by that name: mint one from the form at
+ *   `standing = false` — the club owns it and can manage it in /admin/roles
+ *   from this moment, but no ordinary meeting will generate a slot for it —
+ *   then attach exactly as above.
+ *
+ * A name ALREADY on this agenda is reported, not inserted.
+ * `meeting_template_roles_key_unique` would otherwise surface a raw Postgres
+ * unique violation, and a plain insert is no longer protected the way it was:
+ * `removeAgendaRole` used to delete the `role_definitions` row alongside the
+ * declaration, so a key free of a declaration was free everywhere. It
+ * deliberately does not any more — the bank row OUTLIVES its declarations, and
+ * that is what makes re-adding a removed name re-attach the same row.
+ *
+ * `sortOrder` is the existing append convention (current max + 10) on both
+ * paths; it is a property of this agenda's ordering, not of the role.
  */
 export async function addAgendaRole(input: {
 	meetingId: string;
@@ -1647,73 +1600,154 @@ export async function addAgendaRole(input: {
 			.limit(1);
 		if (!meeting) throw new Error("Meeting not found.");
 
-		const existing = await tx
+		const declared = await tx
 			.select({
 				key: meetingTemplateRoles.key,
+				name: meetingTemplateRoles.name,
 				sortOrder: meetingTemplateRoles.sortOrder,
 			})
 			.from(meetingTemplateRoles)
 			.where(eq(meetingTemplateRoles.templateId, templateId));
-		if (existing.length >= MAX_TEMPLATE_ROLES) {
+		if (declared.length >= MAX_TEMPLATE_ROLES) {
 			throw new Error(
 				`This agenda has too many roles (max ${MAX_TEMPLATE_ROLES}).`,
 			);
 		}
-		const key = deriveRoleKey(input.name, new Set(existing.map((r) => r.key)));
+		const wanted = input.name.trim().toLowerCase();
+		if (declared.some((r) => r.name.trim().toLowerCase() === wanted)) {
+			throw new Error(`"${input.name}" is already on this agenda.`);
+		}
 		const sortOrder =
-			existing.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 10;
+			declared.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 10;
+
+		// The club's whole BANK, not this template's rows: one scope since #801,
+		// and the name match is what an officer typing "Timer" means.
+		const bank = await tx
+			.select({
+				id: roleDefinitions.id,
+				key: roleDefinitions.key,
+				name: roleDefinitions.name,
+				category: roleDefinitions.category,
+				defaultCount: roleDefinitions.defaultCount,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
+				slotsUnordered: roleDefinitions.slotsUnordered,
+				enabled: roleDefinitions.enabled,
+			})
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, meeting.clubId));
+		// An AMBIGUOUS name matches nothing, the same rule `matchRoleDefs`
+		// applies: `role_definitions` has no unique index on (club_id, name), so
+		// two rows can share one, and landing on whichever an unordered
+		// `select()` returned last would attach a member's history to a coin
+		// flip. Falling through to CREATE is wrong too — it would mint a third —
+		// so this is refused outright and the officer renames one.
+		const named = bank.filter((r) => r.name.trim().toLowerCase() === wanted);
+		if (named.length > 1) {
+			throw new Error(
+				`This club has more than one role called "${input.name}". Rename one in club settings first.`,
+			);
+		}
+		let attach = named[0];
+
+		if (!attach) {
+			// CREATE. Uniquified against the CLUB's keys —
+			// `role_definitions_club_key_unique` is the binding constraint, not the
+			// template's own index (see `deriveRoleKey`).
+			const key = deriveRoleKey(
+				input.name,
+				new Set(bank.flatMap((r) => (r.key == null ? [] : [r.key]))),
+			);
+			const [minted] = await tx
+				.insert(roleDefinitions)
+				.values({
+					clubId: meeting.clubId,
+					key,
+					name: input.name,
+					category: input.category,
+					defaultCount: input.defaultCount,
+					sortOrder,
+					isSpeakerRole: input.isSpeakerRole,
+					// The club's role from here on, but NOT part of its standard
+					// meeting shape: the next meeting created generates no slot for it.
+					standing: false,
+				})
+				.returning({
+					id: roleDefinitions.id,
+					key: roleDefinitions.key,
+					name: roleDefinitions.name,
+					category: roleDefinitions.category,
+					defaultCount: roleDefinitions.defaultCount,
+					isSpeakerRole: roleDefinitions.isSpeakerRole,
+					slotsUnordered: roleDefinitions.slotsUnordered,
+					enabled: roleDefinitions.enabled,
+				});
+			if (!minted) throw new Error("Failed to add the agenda role.");
+			attach = minted;
+		}
+
+		// A bank row minted before #801's key backfill, or by anything that ever
+		// wrote none. `meeting_template_roles.key` is NOT NULL, so such a role
+		// cannot be declared at all — say so rather than letting Postgres.
+		if (attach.key == null) {
+			throw new Error(
+				`"${attach.name}" has no key and can't be added to an agenda. Re-create it in club settings.`,
+			);
+		}
+		if (declared.some((r) => r.key === attach.key)) {
+			throw new Error(`"${attach.name}" is already on this agenda.`);
+		}
 
 		await tx.insert(meetingTemplateRoles).values({
 			templateId,
-			key,
-			name: input.name,
-			category: input.category,
-			defaultCount: input.defaultCount,
+			key: attach.key,
+			name: attach.name,
+			category: attach.category,
+			defaultCount: attach.defaultCount,
 			sortOrder,
-			isSpeakerRole: input.isSpeakerRole,
+			isSpeakerRole: attach.isSpeakerRole,
+			slotsUnordered: attach.slotsUnordered,
 		});
 
-		// Materialize just this one role — see the docblock above for why NOT
-		// `materializeTemplateRoles`.
+		// Against the BANK id. `standing: true` is passed explicitly rather than
+		// read off the row: this is a deliberate attach, and a declaration
+		// outranks the bank's standing flag exactly as it does in
+		// `loadDeclaredRoleDefs`. An attached role that is non-standing still
+		// gets its places here.
 		//
-		// A PLAIN insert, deliberately, and it rests on an invariant held
-		// elsewhere: `deriveRoleKey` uniquifies against `meeting_template_roles`
-		// ONLY, so (clubId, templateId, key) can be free of a declaration and
-		// still be TAKEN in `role_definitions` if anything ever leaves one
-		// behind. `removeAgendaRole` is the only thing that can, and it deletes
-		// by (club, template, key) rather than by the ids a slot resolved to,
-		// precisely so it cannot. That was not true until this fix wave — a role
-		// removed while holding no slot orphaned its definition, and re-adding
-		// the same name surfaced a raw
-		// `role_definitions_club_template_key_unique` violation, permanently.
-		// Anything that weakens that delete has to come back here first.
-		const [def] = await tx
-			.insert(roleDefinitions)
-			.values({
-				clubId: meeting.clubId,
-				templateId,
-				key,
-				name: input.name,
-				category: input.category,
-				defaultCount: input.defaultCount,
-				sortOrder,
-				isSpeakerRole: input.isSpeakerRole,
-			})
-			.returning({
-				id: roleDefinitions.id,
-				defaultCount: roleDefinitions.defaultCount,
-				enabled: roleDefinitions.enabled,
-			});
-		if (!def) throw new Error("Failed to add the agenda role.");
-		const rows = generateSlotRows([def], input.meetingId);
+		// Offset past any slot this meeting already holds for the role. A removal
+		// takes every slot with it, so the usual case is zero — but a slot can
+		// survive its declaration (a conversion keeps a matched role's slots), and
+		// restarting at 0 would collide on `(meeting, definition, slot_index)`.
+		const held = await tx
+			.select({ slotIndex: roleSlots.slotIndex })
+			.from(roleSlots)
+			.where(
+				and(
+					eq(roleSlots.meetingId, input.meetingId),
+					eq(roleSlots.roleDefinitionId, attach.id),
+				),
+			);
+		const base =
+			held.length === 0 ? 0 : Math.max(...held.map((s) => s.slotIndex)) + 1;
+		const rows = generateSlotRows(
+			[
+				{
+					id: attach.id,
+					defaultCount: attach.defaultCount,
+					enabled: attach.enabled,
+					standing: true,
+				},
+			],
+			input.meetingId,
+		).map((r) => ({ ...r, slotIndex: r.slotIndex + base }));
 		if (rows.length > 0) await tx.insert(roleSlots).values(rows);
 
 		return {
-			key,
-			name: input.name,
-			category: input.category,
-			defaultCount: input.defaultCount,
-			isSpeakerRole: input.isSpeakerRole,
+			key: attach.key,
+			name: attach.name,
+			category: attach.category,
+			defaultCount: attach.defaultCount,
+			isSpeakerRole: attach.isSpeakerRole,
 		};
 	});
 }
@@ -1807,56 +1841,34 @@ export async function planRoleRemoval(input: {
 
 /**
  * Remove a role from the meeting's own template: its slots (released before
- * they disappear, same as `applyTemplateConversion`), its own
- * `role_definitions` row if this meeting's template privately owns it, and
- * every beat bound to it — by `roleKey` (the beat IS the role's own row) OR
- * `repeatsRoleKey` (a beat inside that role's repeat block that names it
- * without owning it — e.g. the contest's ballot minute). `buildTemplateRows`
- * drops a beat naming an undeclared role rather than rendering it, so leaving
- * either binding behind is an invisible row that would silently reappear if
- * the key were ever reused.
+ * they disappear, same as `applyTemplateConversion`) and every beat bound to
+ * it — by `roleKey` (the beat IS the role's own row) OR `repeatsRoleKey` (a
+ * beat inside that role's repeat block that names it without owning it — e.g.
+ * the contest's ballot minute). `buildTemplateRows` drops a beat naming an
+ * undeclared role rather than rendering it, so leaving either binding behind is
+ * an invisible row that would silently reappear if the key were ever reused.
+ *
+ * NEVER the `role_definitions` row (#801). This used to delete it, by
+ * (club, template, key), and that was correct while a role's identity was
+ * MATERIALIZED per (club, template): the row was this agenda's private copy and
+ * nothing else could be pointing at it. There are no private copies now. The
+ * row this removal would reach is the club's own Timer — the one every past
+ * meeting's slots reference and every history query joins on — so deleting it
+ * would either hit `role_slots.role_definition_id`'s RESTRICT from another
+ * meeting or destroy the club's role. Removing a role from ONE agenda is a
+ * statement about that agenda, not about the club.
+ *
+ * What that costs, and why it is not a leak: the bank row now outlives its
+ * declarations. `/admin/roles` lists it (marked non-standing, so an officer can
+ * see what it is and delete it there if it is genuinely unwanted), and
+ * `addAgendaRole` re-ATTACHES it when the same name is typed again — which is
+ * why that function's insert is find-and-attach rather than the plain insert
+ * that used to depend on this delete.
  *
  * The slots to release are resolved via `resolveHeldSlotsForRole` — by what
- * THIS meeting's own `role_slots` actually reference, never by matching
- * `role_definitions.templateId` against `ensureAgendaDraft`'s resolved
- * `templateId` — see that helper's docblock for why the latter silently
- * missed the fork case entirely. `role_slots.meetingId` is the exact tenant
- * boundary there, so no club/template predicate is needed to keep this
- * scoped to the caller's own meeting.
- *
- * The `role_definitions` row is deleted by (club, template, KEY) — the
- * template being `ensureAgendaDraft`'s resolved, this-meeting's-own private
- * one — and NOT by the ids `resolveHeldSlotsForRole` returned. That
- * distinction is the whole of this paragraph, because deleting by resolved id
- * makes the delete conditional on a SLOT existing, and a role can legitimately
- * hold none: `addAgendaRole` accepts `defaultCount: 0` (the editor's Places
- * field coerces empty to 0), and `applyRemoveRoleSlot` has no last-slot guard.
- * With no slot there is nothing to resolve, so the definition outlived its own
- * declaration and its beats — staying `enabled` and template-scoped, which
- * kept the meeting page's "+ Add role" picker offering a role the agenda no
- * longer declared, and, worse, made the name PERMANENTLY unusable on that
- * meeting: `deriveRoleKey` uniquifies against `meeting_template_roles` only,
- * so re-adding derived the same key and the plain insert in `addAgendaRole`
- * violated `role_definitions_club_template_key_unique` with a raw Postgres
- * string. Keying on the role key is a strict superset of the resolved ids
- * within this template, so nothing that used to be deleted stops being.
- *
- * The `templateId` predicate is the OWNERSHIP GATE, and it is load-bearing
- * rather than incidental scoping. `role_definitions` is keyed per (club,
- * template), NOT per meeting — two meetings of ONE club that both still point
- * at the same SHARED template also share its materialized definitions, so
- * deleting a row this meeting's slot merely REFERENCES (rather than privately
- * owns) would either hit `role_slots.role_definition_id`'s RESTRICT from the
- * OTHER meeting's still-live slot (an unrelated meeting's edit throwing on this
- * one's removal) or, worse, silently remove a definition a sibling meeting's
- * unconverted agenda still declares. `templateId` here is this meeting's own
- * private copy BY CONSTRUCTION (`ensureAgendaDraft` forks one if it has to), so
- * the gate holds on the fork path too. Leaving a still-shared definition alone
- * is deliberate, not a leak: this meeting's own slots for it are still fully
- * released and deleted either way. A correct fix that also reconciles the
- * SHARED row (copy-then-repoint only this meeting's slots) is bigger than
- * this task and is filed separately — do not "fix" this by materializing on
- * fork and repointing inside `ensureAgendaDraft`.
+ * THIS meeting's own `role_slots` actually reference. `role_slots.meetingId` is
+ * the exact tenant boundary there, so no club/template predicate is needed to
+ * keep this scoped to the caller's own meeting.
  *
  * Rejects an undeclared `roleKey` BEFORE `ensureAgendaDraft` runs, against the
  * meeting's current (possibly still-shared) template — the same reason
@@ -1943,22 +1955,8 @@ export async function removeAgendaRole(input: {
 				);
 		}
 
-		// OUTSIDE the `defIds` block, and keyed on the ROLE KEY rather than on
-		// the ids those slots resolved to — see the docblock above. A role that
-		// holds no slot resolves no ids at all, and this delete is exactly as
-		// necessary there. Still ownership-gated: `roleDefScope` pins (club,
-		// template), and `templateId` is this meeting's own private copy, so a
-		// definition merely REFERENCED through a still-shared template is left in
-		// place. After the slot deletes, never before —
-		// `role_slots.role_definition_id` is ON DELETE RESTRICT.
-		await tx
-			.delete(roleDefinitions)
-			.where(
-				and(
-					roleDefScope(owner.clubId, templateId),
-					eq(roleDefinitions.key, input.roleKey),
-				),
-			);
+		// NO `role_definitions` DELETE HERE — see the docblock. The row is the
+		// club's, not this agenda's.
 
 		// One statement, not two — either binding shape (`roleKey` or
 		// `repeatsRoleKey`, correction 2) removes the beat; a future edit to

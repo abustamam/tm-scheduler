@@ -26,6 +26,7 @@ import {
 	meetingTemplates,
 	roleDefinitions,
 } from "#/db/schema";
+import { materializeTemplateRoles } from "#/server/meeting-templates-logic";
 import {
 	cleanup,
 	hasTestDb,
@@ -130,61 +131,39 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 			expect(rows.filter((r) => r.key === null)).toHaveLength(3);
 		});
 
-		it("allows a template role to reuse a standard key", async () => {
+		it("REFUSES a role definition tagged with a template at all (#801)", async () => {
+			// `role_definitions_template_id_null`. Role identity lives once per
+			// (club, key) now; a shape's role LIST lives in `meeting_template_roles`.
+			// The CHECK is what makes a code-only revert of #801 fail LOUDLY on its
+			// first attempted fork rather than quietly re-splitting a club's roles.
+			// Asserted by NAME, not just "it throws": this is the one gate standing
+			// between the old model and the new one, and a grep for it has to land.
 			const templateId = await makeTemplate("speech_contest");
-			await standardRole("timer", "Timer");
-			await testDb.insert(roleDefinitions).values({
-				clubId: club.clubId,
-				name: "Contest Timer",
-				category: "functionary",
-				key: "timer",
-				templateId,
-			});
-			const rows = await clubRoles();
-			expect(rows.filter((r) => r.key === "timer")).toHaveLength(2);
-		});
-
-		it("rejects two roles sharing a key within ONE template", async () => {
-			const templateId = await makeTemplate("speech_contest");
-			await testDb.insert(roleDefinitions).values({
-				clubId: club.clubId,
-				name: "Contest Timer",
-				category: "functionary",
-				key: "timer",
-				templateId,
-			});
 			await expect(
 				testDb.insert(roleDefinitions).values({
 					clubId: club.clubId,
-					name: "Another Contest Timer",
-					category: "functionary",
-					key: "timer",
-					templateId,
-				}),
-			).rejects.toThrow();
-		});
-
-		it("allows the same key in TWO different templates", async () => {
-			const a = await makeTemplate("speech_contest");
-			const b = await makeTemplate("business_meeting");
-			await testDb.insert(roleDefinitions).values([
-				{
-					clubId: club.clubId,
 					name: "Contest Timer",
 					category: "functionary",
-					key: "timer",
-					templateId: a,
+					key: "contest_timer",
+					templateId,
+				}),
+				// The SQLSTATE and the constraint NAME, not a bare "threw something":
+				// both live on `.cause`, the underlying `pg` error, because drizzle's
+				// own message is only "Failed query: insert into …".
+			).rejects.toMatchObject({
+				cause: {
+					code: "23514",
+					constraint: "role_definitions_template_id_null",
 				},
-				{
-					clubId: club.clubId,
-					name: "Business Timer",
-					category: "functionary",
-					key: "timer",
-					templateId: b,
-				},
-			]);
-			const rows = await clubRoles();
-			expect(rows.filter((r) => r.key === "timer")).toHaveLength(2);
+			});
+		});
+
+		it("REFUSES a second row for one (club, key), whatever it is called", async () => {
+			// The per-template sibling index is gone (dropped by 0083), so this one
+			// partial index is now the WHOLE of role identity: a club holds exactly
+			// one Timer, and every meeting shape that declares `timer` resolves to it.
+			await standardRole("timer", "Timer");
+			await expect(standardRole("timer", "Contest Timer")).rejects.toThrow();
 		});
 	});
 
@@ -245,21 +224,40 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 			).toHaveLength(0);
 		});
 
-		it("RESTRICTS deleting a template whose roles are materialized", async () => {
+		it("lets a template whose roles a club has RESOLVED be deleted (#801)", async () => {
+			// The inverse of what this asserted before, and the whole of the
+			// deadlock #801 closed. `role_definitions.template_id` is ON DELETE
+			// RESTRICT and every conversion used to materialize rows pointing at
+			// the private copy, so the copy could never be deleted and the declared
+			// `meeting_templates.meeting_id` cascade could never fire. With every
+			// row's `template_id` NULL that RESTRICT can no longer block anything:
+			// the club KEEPS its Chief Judge (the row its slots and history join
+			// on) and the template row goes.
 			const templateId = await makeTemplate("speech_contest");
-			await testDb.insert(roleDefinitions).values({
-				clubId: club.clubId,
+			await testDb.insert(meetingTemplateRoles).values({
+				templateId,
+				key: "chief_judge",
 				name: "Chief Judge",
 				category: "leadership",
-				key: "chief_judge",
-				templateId,
 			});
-			// Disable, never delete — this is why `meeting_templates.enabled` exists.
-			await expect(
-				testDb
-					.delete(meetingTemplates)
-					.where(eq(meetingTemplates.id, templateId)),
-			).rejects.toThrow();
+			await materializeTemplateRoles(testDb, club.clubId, templateId);
+			const before = await clubRoles();
+			expect(before.filter((r) => r.key === "chief_judge")).toHaveLength(1);
+
+			await testDb
+				.delete(meetingTemplates)
+				.where(eq(meetingTemplates.id, templateId));
+
+			// The DECLARATION cascaded away with the template; the club's ROLE did
+			// not. That split is the model.
+			expect(
+				await testDb
+					.select()
+					.from(meetingTemplateRoles)
+					.where(eq(meetingTemplateRoles.templateId, templateId)),
+			).toHaveLength(0);
+			const after = await clubRoles();
+			expect(after.filter((r) => r.key === "chief_judge")).toHaveLength(1);
 		});
 	});
 
@@ -396,20 +394,24 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 	});
 
 	/**
-	 * The shape a conversion to a template that declares ANY role produces —
-	 * which is every seeded one — and the one the cascade CANNOT reach:
-	 * `role_definitions.template_id` is ON DELETE RESTRICT, and
-	 * `materializeTemplateRoles` writes one row per declared role against the
-	 * private copy. So deleting the meeting aborts.
+	 * The shape a conversion produces, and the cascade that could NOT fire
+	 * before #801.
 	 *
-	 * This is the behaviour, not a bug being asserted as correct — nothing in
-	 * production hits it because the only deleter (`recurrence-rule-logic.ts`)
-	 * refuses any meeting with a `template_id`. Pinning it here means a future
-	 * deleter that forgets that guard fails a test instead of failing a club's
-	 * database, and it means the `meetingId` docblock in `schema.ts` (which now
-	 * says exactly this) has something holding it true.
+	 * `role_definitions.template_id` is ON DELETE RESTRICT, and every conversion
+	 * used to materialize one row per declared role against the private copy —
+	 * so deleting the meeting aborted on a foreign key, and
+	 * `meeting_templates.meeting_id`'s declared CASCADE was unreachable for any
+	 * copy a real conversion produced. Nothing broke in production only because
+	 * the single deleter (`recurrence-rule-logic.ts`) refuses a meeting with a
+	 * `template_id` at all.
+	 *
+	 * Role identity now lives in the club's bank with `template_id` pinned NULL,
+	 * so nothing holds that RESTRICT and the cascade fires as declared. Asserted
+	 * from the same fixture, inverted, because the club's ROLE surviving the
+	 * meeting is the half that matters: its slots go with the meeting, its
+	 * history of every OTHER meeting does not.
 	 */
-	it("REFUSES to delete a meeting whose private template has materialized roles", async () => {
+	it("DELETES a meeting whose private template resolved roles, keeping the club's roles (#801)", async () => {
 		const [m] = await testDb
 			.insert(meetings)
 			.values({
@@ -428,60 +430,48 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 			})
 			.returning({ id: meetingTemplates.id });
 		if (!t) throw new Error("template insert failed");
-		// What `materializeTemplateRoles` writes on every conversion.
-		const [def] = await testDb
-			.insert(roleDefinitions)
-			.values({
-				clubId: club.clubId,
-				templateId: t.id,
-				key: `contest_chair_${RUN}`,
-				name: "Contest Chair",
-				category: "leadership",
-				defaultCount: 1,
-				sortOrder: 10,
-			})
-			.returning({ id: roleDefinitions.id });
-		if (!def) throw new Error("role definition insert failed");
-
-		// The SQLSTATE and the constraint NAME, not a bare "threw something": an
-		// unrelated failure would satisfy `.rejects.toThrow()` and this test
-		// exists to say WHICH foreign key blocks the delete. Drizzle's own
-		// message is only "Failed query: delete from …"; both live on `.cause`,
-		// the underlying `pg` error — the same shape
-		// `attendance-plan-logic.integration.test.ts` asserts against.
-		await expect(
-			testDb.delete(meetings).where(eq(meetings.id, m.id)),
-		).rejects.toMatchObject({
-			cause: {
-				code: "23503",
-				constraint: "role_definitions_template_id_meeting_templates_id_fk",
-			},
+		await testDb.insert(meetingTemplateRoles).values({
+			templateId: t.id,
+			key: `contest_chair_${RUN}`,
+			name: "Contest Chair",
+			category: "leadership",
+			defaultCount: 1,
+			sortOrder: 10,
 		});
+		// What a conversion writes now: a BANK row, non-standing, no template tag.
+		await materializeTemplateRoles(testDb, club.clubId, t.id);
+		const [def] = await testDb
+			.select({
+				id: roleDefinitions.id,
+				templateId: roleDefinitions.templateId,
+				standing: roleDefinitions.standing,
+			})
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.key, `contest_chair_${RUN}`));
+		expect(def?.templateId).toBeNull();
+		expect(def?.standing).toBe(false);
 
-		// Nothing partially applied: the meeting and its copy both survive.
+		await testDb.delete(meetings).where(eq(meetings.id, m.id));
+
+		// Meeting gone, private copy cascaded, club's role still there.
 		expect(
 			await testDb
 				.select({ id: meetings.id })
 				.from(meetings)
 				.where(eq(meetings.id, m.id)),
-		).toHaveLength(1);
-		expect(
-			await testDb
-				.select({ id: meetingTemplates.id })
-				.from(meetingTemplates)
-				.where(eq(meetingTemplates.id, t.id)),
-		).toHaveLength(1);
-
-		// Retiring the definitions first is what makes the delete possible —
-		// the order `applyTemplateConversion` already uses.
-		await testDb.delete(roleDefinitions).where(eq(roleDefinitions.id, def.id));
-		await testDb.delete(meetings).where(eq(meetings.id, m.id));
+		).toEqual([]);
 		expect(
 			await testDb
 				.select({ id: meetingTemplates.id })
 				.from(meetingTemplates)
 				.where(eq(meetingTemplates.id, t.id)),
 		).toEqual([]);
+		expect(
+			await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, def?.id ?? "")),
+		).toHaveLength(1);
 	});
 
 	it("carries handoff on a template beat, defaulting false", async () => {

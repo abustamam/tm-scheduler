@@ -77,6 +77,21 @@ describe.skipIf(!hasTestDb)(
 		 *  definitions of both; and one standard-scope row that happens to share the
 		 *  contestant key. Returns the ids the assertions read back. */
 		async function seedPreMigration(tx: Tx) {
+			// 0072 ran in a world where a `role_definitions` row could be tagged
+			// with a template. 0083 (#801) pinned `template_id` NULL with a CHECK,
+			// which makes that world unbuildable — so the fixture drops the
+			// constraint to reconstruct it. Inside the SAME transaction the
+			// assertions run in, which `flagsAfterBackfill` always rolls back:
+			// Postgres DDL is transactional, so the constraint is restored whether
+			// the body throws or not. Dropping it permanently, or replaying against
+			// bank rows instead, would both silently turn this into a test of
+			// something 0072 never did — its second UPDATE is scoped
+			// `AND template_id IS NOT NULL` and would match nothing.
+			await tx.execute(
+				sql.raw(
+					'ALTER TABLE "role_definitions" DROP CONSTRAINT "role_definitions_template_id_null"',
+				),
+			);
 			const [tpl] = await tx
 				.insert(meetingTemplates)
 				.values({

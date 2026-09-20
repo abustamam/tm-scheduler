@@ -412,6 +412,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Timer",
 			defaultCount: 1,
 			enabled: false,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(result.keptClaimedMeetings).toBe(0);
@@ -432,6 +433,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Timer",
 			defaultCount: 1,
 			enabled: false,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(result.keptClaimedMeetings).toBe(1);
@@ -462,6 +464,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Timer",
 			defaultCount: 2,
 			enabled: false,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(result.keptClaimedMeetings).toBe(1);
@@ -490,6 +493,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Timer",
 			defaultCount: 1,
 			enabled: false,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(await slotsFor(past.id, club.roleDefinitionId)).toHaveLength(1);
@@ -515,6 +519,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Timer",
 			defaultCount: 1,
 			enabled: false,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(await slotsFor(cancelled.id, club.roleDefinitionId)).toHaveLength(1);
@@ -532,6 +537,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Grammarian",
 			defaultCount: 1,
 			enabled: true,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(result.keptClaimedMeetings).toBe(0);
@@ -567,6 +573,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Grammarian",
 			defaultCount: 1,
 			enabled: true,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(await slotsFor(past.id, grammarian)).toHaveLength(0);
@@ -587,6 +594,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Jokemaster",
 			defaultCount: 0,
 			enabled: true,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(await slotsFor(club.meetingId, joke)).toHaveLength(0);
@@ -602,6 +610,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Timer",
 			defaultCount: 1,
 			enabled: true,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(await slotsFor(club.meetingId, club.roleDefinitionId)).toHaveLength(
@@ -627,6 +636,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Speaker",
 			defaultCount: 1,
 			enabled: true,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(result.meetingsChanged).toBe(0);
@@ -653,6 +663,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Evaluator",
 			defaultCount: 3,
 			enabled: true,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(result.meetingsChanged).toBe(0);
@@ -672,6 +683,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 				roleName: "Timer",
 				defaultCount: 1,
 				enabled: false,
+				standing: true,
 				actorMemberId: club.adminMemberId,
 			});
 			expect(result.keptClaimedMeetings).toBe(0);
@@ -717,6 +729,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Timer",
 			defaultCount: 1,
 			enabled: false,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(result.keptClaimedMeetings).toBe(2);
@@ -738,6 +751,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 			roleName: "Timer",
 			defaultCount: 1,
 			enabled: false,
+			standing: true,
 			actorMemberId: club.adminMemberId,
 		});
 		expect(result.keptClaimedMeetings).toBe(1);

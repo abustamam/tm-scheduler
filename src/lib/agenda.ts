@@ -5,6 +5,24 @@ export type SlotGenInput = {
 	id: string;
 	defaultCount: number;
 	enabled: boolean;
+	/** `role_definitions.standing` (#801) — is this role part of the club's
+	 *  STANDARD meeting shape? A promoted contest role sits in the same bank as
+	 *  the club's Timer and must never auto-generate onto an ordinary meeting.
+	 *
+	 *  OPTIONAL, and absent means standing, for one reason and against one risk.
+	 *  The reason: the three meeting-creation paths (`meetings-logic`,
+	 *  `batch-meetings-logic`, `schedule-topup-logic`) each `select()` the whole
+	 *  `role_definitions` row, so they carry the real column and the gate is
+	 *  closed by DATA, not by this default. The risk it accepts is a future
+	 *  hand-built projection that omits the column and silently reads as
+	 *  standing — which is what `template-role-leak.integration.test.ts` measures
+	 *  end-to-end rather than by grepping for the field.
+	 *
+	 *  A caller that is ATTACHING a role on purpose (`addAgendaRole`, and
+	 *  `resolveMeetingRoleDefs`'s declaration arm) passes `standing: true`
+	 *  explicitly: a declaration outranks the bank's flags, and saying so at the
+	 *  call site is what keeps that rule readable. */
+	standing?: boolean;
 };
 
 /** Generate one slot row per (definition × defaultCount), 0-based slotIndex.
@@ -12,13 +30,22 @@ export type SlotGenInput = {
  *  has turned off) are skipped entirely: no slots are generated for them, but
  *  the definition row itself is untouched (disable, not delete — delete is
  *  blocked by `role_slots.role_definition_id`'s ON DELETE RESTRICT once any
- *  meeting has used the role). */
+ *  meeting has used the role).
+ *
+ *  So are definitions with `standing: false` (#801 — a role that lives in the
+ *  club's bank but is not part of its standard meeting shape, e.g. a contest's
+ *  Chief Judge). This filter is UNCONDITIONAL and the function stays a dumb
+ *  filter over the flags it is handed: it has no meeting context and cannot
+ *  tell a templated meeting from a standard one. A templated meeting's declared
+ *  roles get through because `resolveMeetingRoleDefs` synthesizes
+ *  `standing: true` on a declaration-resolved row — the declaration is the
+ *  authority there, and that seam is where the distinction can be made. */
 export function generateSlotRows(
 	defs: SlotGenInput[],
 	meetingId: string,
 ): { meetingId: string; roleDefinitionId: string; slotIndex: number }[] {
 	return defs
-		.filter((def) => def.enabled)
+		.filter((def) => (def.standing ?? true) && def.enabled)
 		.flatMap((def) =>
 			Array.from({ length: def.defaultCount }, (_, i) => ({
 				meetingId,

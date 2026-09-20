@@ -21,7 +21,7 @@ import { logActivity } from "./activity";
 import { setPlanStatus } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireClubRole } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
-import { roleDefScope } from "./meeting-templates-logic";
+import { loadMeetingShapeDefs, roleDefScope } from "./meeting-templates-logic";
 import { resolveProjectDisplay } from "./project-picker-logic";
 
 // Either the main db client or a drizzle transaction — so speech helpers can run
@@ -42,22 +42,17 @@ async function clubRoles(
 ): Promise<
 	SpeakerEvaluatorRoles & { speakerEnabled: boolean; evaluatorEnabled: boolean }
 > {
-	const defs = await db
-		.select({
-			id: roleDefinitions.id,
-			category: roleDefinitions.category,
-			defaultCount: roleDefinitions.defaultCount,
-			sortOrder: roleDefinitions.sortOrder,
-			isSpeakerRole: roleDefinitions.isSpeakerRole,
-			enabled: roleDefinitions.enabled,
-		})
-		.from(roleDefinitions)
-		// Scoped to the MEETING's shape. Unscoped, a contest meeting's
-		// "+ Add speaker" resolves through `pickSpeakerAndEvaluatorRoles`, which
-		// takes the lowest `sortOrder` speaker role across the union — the club's
-		// standard Speaker — and adds a slot that renders nowhere on the contest
-		// sheet, leaving no in-product way to change the contestant count.
-		.where(roleDefScope(clubId, templateId));
+	// Scoped to the MEETING's SHAPE, never the whole bank. Over the union, a
+	// contest meeting's "+ Add speaker" resolves through
+	// `pickSpeakerAndEvaluatorRoles`, which takes the lowest `sortOrder` speaker
+	// role — the club's standard Speaker — and adds a slot that renders nowhere
+	// on the contest sheet, leaving no in-product way to change the contestant
+	// count. The mirror case is what makes `standing` load-bearing on the
+	// STANDARD arm since #801: the bank now holds the contest's own roles too,
+	// so without it a promoted Contestant is a candidate on every ordinary
+	// meeting. A union is wrong in both directions; it is not an optimisation
+	// this could take.
+	const defs = await loadMeetingShapeDefs(db, clubId, templateId);
 	const picked = pickSpeakerAndEvaluatorRoles(defs);
 	const enabledOf = (id: string | null) =>
 		id ? (defs.find((d) => d.id === id)?.enabled ?? false) : false;
@@ -155,8 +150,16 @@ export async function applyAddSpeakerSlot(input: {
 	return { clubId: meeting.clubId };
 }
 
-/** The club's role defs in the shape `pairedRoleIds` needs, plus name/id/enabled. */
-async function clubRoleDefs(clubId: string, templateId: string | null) {
+/** The club's whole role BANK in the shape `pairedRoleIds` needs, plus
+ *  name/id/enabled/standing.
+ *
+ *  The ATTACHABLE set, which since #801 is no longer the same question as "what
+ *  is this meeting made of" (`loadMeetingShapeDefs`). It deliberately carries
+ *  non-standing rows: attaching the club's own Timer to a special meeting is
+ *  the reported bug, and a contest role an officer wants on a second contest is
+ *  the same request from the other side. `standing` gates AUTO-GENERATION, not
+ *  what a person may choose on purpose. */
+async function clubRoleDefs(clubId: string) {
 	return db
 		.select({
 			id: roleDefinitions.id,
@@ -166,14 +169,26 @@ async function clubRoleDefs(clubId: string, templateId: string | null) {
 			sortOrder: roleDefinitions.sortOrder,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			enabled: roleDefinitions.enabled,
+			standing: roleDefinitions.standing,
 		})
 		.from(roleDefinitions)
-		.where(roleDefScope(clubId, templateId));
+		.where(roleDefScope(clubId));
 }
 
 /** Add one open slot of an arbitrary non-paired role to a meeting. Duplicates
  *  allowed (next slotIndex). Rejects the speaker/paired-evaluator roles (those
- *  go through the +/- speaker buttons) and roles from another club. */
+ *  go through the +/- speaker buttons) and roles from another club.
+ *
+ *  TWO different role sets, and that is the whole of #801's read-side fix. The
+ *  ATTACHABLE set is the club's bank, so a meeting on a custom agenda can reach
+ *  its own club's Timer — it could not before, because one either/or predicate
+ *  answered both questions and this call simply threw "Role not found for this
+ *  club." The PAIRED set is the meeting's declared shape, so "add speakers with
+ *  the speaker controls" still names the right pair on a contest (Contestant)
+ *  and on an ordinary meeting (Speaker).
+ *
+ *  Rejects on `enabled`, never on `standing`: a non-standing role is one the
+ *  club is not scheduled to run by default, not one it has turned off. */
 export async function applyAddRoleSlot(input: {
 	meetingId: string;
 	roleDefinitionId: string;
@@ -185,11 +200,16 @@ export async function applyAddRoleSlot(input: {
 	if (!meeting) throw new Error("Meeting not found.");
 	assertMeetingNotLocked(meeting.status);
 
-	const defs = await clubRoleDefs(meeting.clubId, meeting.templateId);
+	const defs = await clubRoleDefs(meeting.clubId);
 	const role = defs.find((d) => d.id === input.roleDefinitionId);
 	if (!role) throw new Error("Role not found for this club.");
 	if (!role.enabled) throw new Error("This role is currently disabled.");
-	if (pairedRoleIds(defs).has(role.id)) {
+	const shape = await loadMeetingShapeDefs(
+		db,
+		meeting.clubId,
+		meeting.templateId,
+	);
+	if (pairedRoleIds(shape).has(role.id)) {
 		throw new Error("Add speakers with the speaker controls.");
 	}
 
@@ -252,8 +272,11 @@ export async function applyRemoveRoleSlot(input: {
 		throw new Error("Release the role before removing it.");
 	}
 
-	const defs = await clubRoleDefs(slot.clubId, slot.templateId);
-	if (pairedRoleIds(defs).has(slot.roleDefinitionId)) {
+	// The meeting's declared SHAPE, matching `applyAddRoleSlot`'s paired check —
+	// the two have to name the same pair or a role becomes addable but not
+	// removable.
+	const shape = await loadMeetingShapeDefs(db, slot.clubId, slot.templateId);
+	if (pairedRoleIds(shape).has(slot.roleDefinitionId)) {
 		throw new Error("Remove speakers with the speaker controls.");
 	}
 
@@ -286,16 +309,26 @@ type BackfillChangeLabel = "template_sync" | "role_enabled";
  *  count-based top-up would fight a club that intentionally removed a slot).
  *  Shared "add missing slots" walk behind both the "Update upcoming meetings
  *  to match" admin action and the role enable-toggle backfill (#368). Returns
- *  how many meetings changed and the distinct role names added. */
+ *  how many meetings changed and the distinct role names added.
+ *
+ *  `standing AND enabled` is enforced HERE rather than at the two callers, and
+ *  that placement is the whole point (#801). Before, a contest role could not
+ *  reach an ordinary meeting through either caller because `roleDefScope`'s
+ *  template axis excluded it three layers up; now the bank holds every role and
+ *  `standing` is the only thing between a promoted Chief Judge and an open slot
+ *  on every upcoming meeting. One gate at the one statement that writes, not
+ *  two predicates at two call sites that can drift. */
 async function backfillMissingRoleSlots(input: {
 	clubId: string;
 	meetingIds: string[];
-	defs: { id: string; name: string }[];
+	defs: { id: string; name: string; standing: boolean; enabled: boolean }[];
 	actorMemberId: string | null;
 	changeLabel: BackfillChangeLabel;
 }): Promise<{ meetingsChanged: number; rolesAdded: string[] }> {
 	const rolesAdded = new Set<string>();
 	let meetingsChanged = 0;
+	const defs = input.defs.filter((d) => d.standing && d.enabled);
+	if (defs.length === 0) return { meetingsChanged: 0, rolesAdded: [] };
 
 	await db.transaction(async (tx) => {
 		for (const meetingId of input.meetingIds) {
@@ -304,7 +337,7 @@ async function backfillMissingRoleSlots(input: {
 				.from(roleSlots)
 				.where(eq(roleSlots.meetingId, meetingId));
 			const presentIds = new Set(present.map((s) => s.roleDefinitionId));
-			const missing = input.defs.filter((d) => !presentIds.has(d.id));
+			const missing = defs.filter((d) => !presentIds.has(d.id));
 			if (missing.length === 0) continue;
 
 			await tx.insert(roleSlots).values(
@@ -342,11 +375,17 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 	clubId: string;
 	actorMemberId: string | null;
 }) {
-	const defs = await clubRoleDefs(input.clubId, null);
+	// The club's STANDARD shape, which is what "update upcoming meetings to
+	// match" means. `loadMeetingShapeDefs(…, null)` filters `standing`, so a
+	// contest role promoted into the bank (#801) is not a candidate here — the
+	// regression this button is closest to causing, since `roleDefScope`'s
+	// template axis used to be the only thing holding it out.
+	const defs = await loadMeetingShapeDefs(db, input.clubId, null);
 	const paired = pairedRoleIds(defs);
 	// `enabled` matters here (#368): without it, disabling a role (e.g.
 	// Ah-Counter) and then clicking this button would re-add it to every
 	// upcoming meeting — exactly the workflow the toggle exists to prevent.
+	// `backfillMissingRoleSlots` re-applies both flags at the write itself.
 	const standard = defs.filter(
 		(d) => d.defaultCount >= 1 && d.enabled && !paired.has(d.id),
 	);
@@ -509,6 +548,12 @@ export async function syncSlotsForRoleEnabledChange(input: {
 	roleName: string;
 	defaultCount: number;
 	enabled: boolean;
+	/** `role_definitions.standing` (#801). A NON-standing role is not part of
+	 *  the club's standard meeting shape, so enabling it must backfill nothing:
+	 *  `enabled` says "the club still runs this role", `standing` says "on every
+	 *  ordinary meeting", and only the second is a claim about upcoming
+	 *  agendas. Passed in by the caller, which has already read the row. */
+	standing: boolean;
 	actorMemberId: string | null;
 }): Promise<{
 	keptClaimedMeetings: number;
@@ -530,7 +575,7 @@ export async function syncSlotsForRoleEnabledChange(input: {
 		return { ...result, rolesAdded: [] };
 	}
 
-	const defs = await clubRoleDefs(input.clubId, null);
+	const defs = await loadMeetingShapeDefs(db, input.clubId, null);
 	const isPaired = pairedRoleIds(defs).has(input.roleDefinitionId);
 	if (isPaired || input.defaultCount < 1) {
 		return { keptClaimedMeetings: 0, meetingsChanged: 0, rolesAdded: [] };
@@ -539,7 +584,14 @@ export async function syncSlotsForRoleEnabledChange(input: {
 	const result = await backfillMissingRoleSlots({
 		clubId: input.clubId,
 		meetingIds,
-		defs: [{ id: input.roleDefinitionId, name: input.roleName }],
+		defs: [
+			{
+				id: input.roleDefinitionId,
+				name: input.roleName,
+				standing: input.standing,
+				enabled: true,
+			},
+		],
 		actorMemberId: input.actorMemberId,
 		changeLabel: "role_enabled",
 	});

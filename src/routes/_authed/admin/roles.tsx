@@ -60,7 +60,14 @@ function RolesManager() {
 	// Speaker + its paired Evaluator can't be turned off (#512) — the server
 	// refuses it, so don't render a button that only errors. Same helper the
 	// +/- speaker controls use, so "paired" means one thing across the app.
-	const paired = pairedRoleIds(roles);
+	//
+	// Over the STANDING roles only, matching `applyRoleDefinitionSetEnabled`'s
+	// own guard (#801). This list is the whole bank now, and a role that arrived
+	// from a contest is `isSpeakerRole` with the template's sort order — over the
+	// union the heuristic could name IT as the club's speaker, hiding Disable on
+	// a contest role and offering it on the real Speaker, which the server then
+	// refuses.
+	const paired = pairedRoleIds(roles.filter((r) => r.standing));
 	const router = useRouter();
 	const clubId = adminClub.clubId;
 
@@ -317,6 +324,23 @@ function RoleCard({
 								{role.enabled ? null : (
 									<Badge variant="secondary" className="font-normal">
 										Disabled
+									</Badge>
+								)}
+								{/* #801. This page lists the club's WHOLE role bank, which
+								    since the role-identity change also holds roles that
+								    arrived from a meeting template (a contest's Chief
+								    Judge) or were typed into an agenda's Roles panel. They
+								    are the club's roles — fillable, editable, and the row
+								    every history query for that role joins on — but no
+								    ordinary meeting generates a slot for them. Unmarked,
+								    they read as roles the club runs every week. */}
+								{role.standing ? null : (
+									<Badge
+										variant="outline"
+										className="font-normal"
+										title="Not part of the standard meeting shape — new meetings generate no slot for this role. It's still available to add to any agenda."
+									>
+										Not on standard meetings
 									</Badge>
 								)}
 							</Label>

@@ -18,7 +18,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/meeting-templates-logic.integration.test.ts
  */
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetings,
@@ -138,18 +138,37 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 		return tpl.id;
 	}
 
-	/** Role definitions belonging to THIS club, optionally to one template. */
+	/** Role definitions belonging to THIS club — its whole bank, or just the rows
+	 *  a template's declarations RESOLVE to.
+	 *
+	 *  Narrowed by declared KEY since #801, where it used to filter
+	 *  `role_definitions.template_id`. There is no template axis on this table any
+	 *  more: a declaration and a bank row meet on (club, key), which is the join
+	 *  `loadDeclaredRoleDefs` performs and therefore the one a test of it should
+	 *  reproduce. */
 	async function clubRoleDefs(templateId?: string) {
+		if (templateId === undefined) {
+			return testDb
+				.select()
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.clubId, club.clubId));
+		}
+		const declared = await testDb
+			.select({ key: meetingTemplateRoles.key })
+			.from(meetingTemplateRoles)
+			.where(eq(meetingTemplateRoles.templateId, templateId));
+		if (declared.length === 0) return [];
 		return testDb
 			.select()
 			.from(roleDefinitions)
 			.where(
-				templateId === undefined
-					? eq(roleDefinitions.clubId, club.clubId)
-					: and(
-							eq(roleDefinitions.clubId, club.clubId),
-							eq(roleDefinitions.templateId, templateId),
-						),
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					inArray(
+						roleDefinitions.key,
+						declared.map((d) => d.key),
+					),
+				),
 			);
 	}
 
@@ -377,7 +396,7 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 	});
 
 	describe("materializeTemplateRoles", () => {
-		it("copies template roles into role_definitions, scoped to the template", async () => {
+		it("resolves declared roles into the club's BANK, non-standing (#801)", async () => {
 			const id = await makeContestTemplate();
 			await materializeTemplateRoles(testDb, club.clubId, id);
 			const rows = await clubRoleDefs(id);
@@ -388,6 +407,33 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			const contestant = rows.find((r) => r.key === "contestant_prepared");
 			expect(contestant?.defaultCount).toBe(4);
 			expect(contestant?.isSpeakerRole).toBe(true);
+			// The two halves of the new model, both asserted: the row is the CLUB's
+			// (no template tag, so every history query joins straight through it),
+			// and it is NOT part of the club's standard meeting shape.
+			expect(rows.every((r) => r.templateId === null)).toBe(true);
+			expect(rows.every((r) => r.standing === false)).toBe(true);
+		});
+
+		it("resolves an EXISTING bank role instead of minting a second one", async () => {
+			// The reported bug, at its source. The club already runs a Timer; a
+			// template that declares `timer` must attach to it, not fork it —
+			// `role_slots.role_definition_id` is what every history query joins on.
+			await testDb
+				.update(roleDefinitions)
+				.set({ key: "contest_chair" })
+				.where(eq(roleDefinitions.id, club.roleDefinitionId));
+			const before = await clubRoleDefs();
+			const id = await makeContestTemplate();
+			await materializeTemplateRoles(testDb, club.clubId, id);
+			const after = await clubRoleDefs();
+			// One new row (`contestant_prepared`), not two: `contest_chair` resolved.
+			expect(after).toHaveLength(before.length + 1);
+			const kept = after.find((r) => r.key === "contest_chair");
+			expect(kept?.id).toBe(club.roleDefinitionId);
+			// And the club's own row keeps its name and its standing — resolving a
+			// declaration onto it says nothing about the club's standard shape.
+			expect(kept?.name).toBe("Timer");
+			expect(kept?.standing).toBe(true);
 		});
 
 		it("is idempotent — a second materialize adds nothing", async () => {
@@ -395,6 +441,22 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			await materializeTemplateRoles(testDb, club.clubId, id);
 			await materializeTemplateRoles(testDb, club.clubId, id);
 			expect(await clubRoleDefs(id)).toHaveLength(2);
+		});
+
+		it("resolves TWO templates declaring the same key to ONE bank row", async () => {
+			// The old model minted a row per (club, template), so a `judge` in two
+			// shapes was two identities and a member's history split between them.
+			// Identity is per (club, key) now, so the second template's resolve
+			// finds the first's row.
+			const a = await makeContestTemplate();
+			const b = await makeContestTemplate();
+			await materializeTemplateRoles(testDb, club.clubId, a);
+			const first = await clubRoleDefs(a);
+			await materializeTemplateRoles(testDb, club.clubId, b);
+			const second = await clubRoleDefs(b);
+			expect(second.map((r) => r.id).sort()).toEqual(
+				first.map((r) => r.id).sort(),
+			);
 		});
 
 		it("does NOT overwrite a club's rename on re-materialize", async () => {
@@ -405,7 +467,7 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 				.set({ name: "Contest Chairman", defaultCount: 6 })
 				.where(
 					and(
-						eq(roleDefinitions.templateId, id),
+						eq(roleDefinitions.clubId, club.clubId),
 						eq(roleDefinitions.key, "contest_chair"),
 					),
 				);
@@ -421,7 +483,7 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 	});
 
 	describe("resolveMeetingRoleDefs", () => {
-		it("resolves the club's ENABLED standard defs when the template is null", async () => {
+		it("resolves the club's STANDING, ENABLED defs when the template is null", async () => {
 			const defs = await resolveMeetingRoleDefs(testDb, club.clubId, null);
 			const standard = await testDb
 				.select()
@@ -429,7 +491,7 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 				.where(
 					and(
 						eq(roleDefinitions.clubId, club.clubId),
-						isNull(roleDefinitions.templateId),
+						eq(roleDefinitions.standing, true),
 						eq(roleDefinitions.enabled, true),
 					),
 				);
@@ -448,15 +510,47 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 		});
 
 		/**
-		 * Pins the pure-read contract. If materialization creeps back inside this
-		 * function, this test fails — which is the point: the conversion preview
-		 * depends on being able to ask the question without taking the action.
+		 * The inverse of the contract this pinned before #801, and the docblock on
+		 * `resolveMeetingRoleDefs` says why the change is safe: it has exactly one
+		 * non-test caller, already inside a transaction, and the conversion PREVIEW
+		 * does not come here at all (it reads the template's own declarations
+		 * through `resolveConversionTargetRoles`, which still writes nothing).
+		 *
+		 * Resolving to NOTHING was the alternative, and it is worse: a declaration
+		 * the club has no bank row for would drop out of the meeting's shape
+		 * silently. Minting mirrors what `materialiseForMeeting` already does for
+		 * the same question — a row owned by nobody is what an unstaffed role
+		 * already looks like.
 		 */
-		it("resolves EMPTY for a template whose roles are not materialized", async () => {
+		it("MINTS a bank row at standing=false for a declared key the club lacks", async () => {
 			const id = await makeContestTemplate();
-			expect(await resolveMeetingRoleDefs(testDb, club.clubId, id)).toEqual([]);
-			// And it wrote nothing while answering.
 			expect(await clubRoleDefs(id)).toHaveLength(0);
+
+			const defs = await resolveMeetingRoleDefs(testDb, club.clubId, id);
+			expect(defs.map((d) => d.key).sort()).toEqual([
+				"contest_chair",
+				"contestant_prepared",
+			]);
+			const minted = await clubRoleDefs(id);
+			expect(minted).toHaveLength(2);
+			expect(minted.every((r) => r.standing === false)).toBe(true);
+			// The declaration is the authority for a TEMPLATED meeting, so the rows
+			// it hands back read standing/enabled true however the bank row is
+			// flagged — that synthesis is what lets `generateSlotRows` stay a dumb
+			// filter and still emit every Contestant slot.
+			expect(defs.every((d) => d.standing === true)).toBe(true);
+			expect(defs.every((d) => d.enabled === true)).toBe(true);
+		});
+
+		it("is idempotent — a second resolve mints nothing further", async () => {
+			const id = await makeContestTemplate();
+			await resolveMeetingRoleDefs(testDb, club.clubId, id);
+			const first = await clubRoleDefs();
+			await resolveMeetingRoleDefs(testDb, club.clubId, id);
+			const second = await clubRoleDefs();
+			expect(second.map((r) => r.id).sort()).toEqual(
+				first.map((r) => r.id).sort(),
+			);
 		});
 
 		it("resolves only the template's defs once materialized", async () => {
@@ -487,10 +581,11 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			// would silently drop a required contest position.
 			const id = await makeContestTemplate();
 			await materializeTemplateRoles(testDb, club.clubId, id);
+			const ids = (await clubRoleDefs(id)).map((r) => r.id);
 			await testDb
 				.update(roleDefinitions)
 				.set({ enabled: false })
-				.where(eq(roleDefinitions.templateId, id));
+				.where(inArray(roleDefinitions.id, ids));
 			expect(
 				await resolveMeetingRoleDefs(testDb, club.clubId, id),
 			).toHaveLength(2);
@@ -498,43 +593,50 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 	});
 	describe("listRoleDefinitions scoping", () => {
 		/**
-		 * The SEVENTH reader. `listRoleDefinitions` also feeds
-		 * `loadMeetingDetail`'s "+ Add role" picker (`meetings.ts:322`), so a hard
-		 * `isNull(templateId)` inside it would offer a contest meeting only the
-		 * club's standard roles — no contestant, and no way to change the
-		 * contestant count, which is the entire premise of the repeat mechanism.
+		 * The SEVENTH reader, and the one #801 turned inside out.
+		 *
+		 * `listRoleDefinitions` feeds `/admin/roles`, the public role sheet, and
+		 * `loadMeetingDetail`'s "+ Add role" picker. It used to take a `templateId`
+		 * because role identity was per (club, template): naming a template was the
+		 * only way to see a contest's roles — and naming one made the club's own
+		 * bank invisible, which is exactly how a meeting on a custom agenda ended
+		 * up with no way to attach the club's Timer. There is ONE scope now, the
+		 * club, and NO `standing` filter: a non-standing role has to be listable or
+		 * it is unmanageable.
 		 */
-		it("lists the club's OWN roles by default, never a template's", async () => {
+		it("lists the club's own roles AND the ones a contest brought in", async () => {
 			const id = await makeContestTemplate();
 			await materializeTemplateRoles(testDb, club.clubId, id);
 			const rows = await listRoleDefinitions(club.clubId);
-			expect(rows.map((r) => r.name)).not.toContain("Contest Chair");
-			expect(rows.length).toBeGreaterThan(0);
+			const names = rows.map((r) => r.name);
+			expect(names).toContain("Timer");
+			expect(names).toContain("Contest Chair");
+			expect(names).toContain("Contestant");
 		});
 
-		it("lists the TEMPLATE's roles when given a templateId", async () => {
+		it("marks a contest-derived role as NOT standing, rather than hiding it", async () => {
 			const id = await makeContestTemplate();
 			await materializeTemplateRoles(testDb, club.clubId, id);
-			const rows = await listRoleDefinitions(club.clubId, { templateId: id });
-			expect(rows.map((r) => r.name).sort()).toEqual([
-				"Contest Chair",
-				"Contestant",
-			]);
+			const rows = await listRoleDefinitions(club.clubId);
+			expect(rows.find((r) => r.name === "Contest Chair")?.standing).toBe(
+				false,
+			);
+			expect(rows.find((r) => r.name === "Timer")?.standing).toBe(true);
 		});
 
-		it("still honours onlyEnabled within a scope", async () => {
+		it("still honours onlyEnabled", async () => {
 			const id = await makeContestTemplate();
 			await materializeTemplateRoles(testDb, club.clubId, id);
+			const ids = (await clubRoleDefs(id)).map((r) => r.id);
 			await testDb
 				.update(roleDefinitions)
 				.set({ enabled: false })
-				.where(eq(roleDefinitions.templateId, id));
-			expect(
-				await listRoleDefinitions(club.clubId, {
-					templateId: id,
-					onlyEnabled: true,
-				}),
-			).toEqual([]);
+				.where(inArray(roleDefinitions.id, ids));
+			const names = (
+				await listRoleDefinitions(club.clubId, { onlyEnabled: true })
+			).map((r) => r.name);
+			expect(names).not.toContain("Contest Chair");
+			expect(names).toContain("Timer");
 		});
 	});
 });

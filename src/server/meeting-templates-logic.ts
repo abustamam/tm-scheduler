@@ -229,46 +229,104 @@ export async function loadTemplateKey(
 }
 
 /**
- * The ONE definition of "which role definitions does this meeting draw slots
- * from" — the club's ENABLED standard roles when there is no template, the
- * template's materialized roles when there is.
+ * The club's role BANK — every `role_definitions` row it owns, standing or not.
  *
- * Exported so every reader shares one predicate instead of each spelling it
- * out. Six modules select role definitions by club, and each is choosing a slot
- * source; leaving any of them unscoped puts the contest's Chief Judge and
- * Contestants on every standard meeting created afterwards.
+ * Narrowed to club-only by #801. It used to carry a template axis too
+ * (`roleDefScopeOnly`, an exclusive OR on `template_id`), and that either/or is
+ * exactly what made the reported bug unrecoverable from the UI: a meeting on a
+ * custom agenda could see ONLY that agenda's role definitions, never its own
+ * club's bank, so attaching the club's Timer to a special meeting was
+ * unreachable and the officer fell through to the free-text form, which forked.
  *
- * SCOPE ONLY — deliberately no `enabled` filter. `slots-logic`'s readers need
- * the unfiltered set: `clubRoles` computes `speakerEnabled` by looking up the
- * picked role's flag, and `applyAddRoleSlot` distinguishes "role not found"
- * from "this role is currently disabled". Filtering here would make the first
- * silently answer for the second and flip a user-visible error message.
- * `resolveMeetingRoleDefs` applies `enabled` itself, where it belongs.
+ * SCOPE ONLY — deliberately no `enabled` and no `standing` filter. Callers
+ * apply those where they belong: `slots-logic`'s `applyAddRoleSlot`
+ * distinguishes "role not found" from "this role is currently disabled", and
+ * filtering here would make the first silently answer for the second.
  */
-export function roleDefScope(clubId: string, templateId: string | null) {
-	return and(eq(roleDefinitions.clubId, clubId), roleDefScopeOnly(templateId));
+export function roleDefScope(clubId: string) {
+	return eq(roleDefinitions.clubId, clubId);
 }
 
-/** The template half of `roleDefScope`, for callers that already constrain the
- *  club themselves (`listRoleDefinitions` builds an array of predicates). */
-export function roleDefScopeOnly(templateId: string | null) {
-	return templateId === null
-		? isNull(roleDefinitions.templateId)
-		: eq(roleDefinitions.templateId, templateId);
+/** A declaration resolved onto the club's bank: the DECLARATION's shape
+ *  columns, the BANK's identity columns.
+ *
+ *  `standing` is REQUIRED here, narrowing `SlotGenInput`'s optional field. It
+ *  is optional there so a fixture need not invent it; it is required here
+ *  because every producer of this type either reads the column or synthesizes
+ *  it deliberately, and the two backfills in `slots-logic` gate on it. A
+ *  resolver that forgot it should not compile. */
+type DeclaredRoleDef = MeetingSlotDefs & RoleIdentity & { standing: boolean };
+
+/**
+ * The bank rows a template's declarations resolve to, joined by (club, key).
+ *
+ * PURE READ, and the shape half of the split #801 introduced: which roles a
+ * meeting uses, how many places and in what order comes from
+ * `meeting_template_roles`; WHICH ROW each one is — the id every history query
+ * joins on, and the name the club actually calls it — comes from the bank. A
+ * declared key with no bank row is simply absent here; `materializeTemplateRoles`
+ * is what mints it.
+ *
+ * `standing` and `enabled` are SYNTHESIZED true. This is the seam that makes
+ * "the declaration outranks the flags" true, and it has to live here:
+ * `generateSlotRows` is a pure function over `SlotGenInput` with no meeting
+ * context, so it cannot tell a templated meeting from a standard one and must
+ * stay a dumb filter over the flags it is handed. A contest's Chief Judge is
+ * non-standing in the bank precisely so it never lands on an ordinary meeting,
+ * and it still has to generate its slot on the contest itself.
+ */
+async function loadDeclaredRoleDefs(
+	conn: DbOrTx,
+	clubId: string,
+	templateId: string,
+): Promise<DeclaredRoleDef[]> {
+	const rows = await conn
+		.select({
+			id: roleDefinitions.id,
+			name: roleDefinitions.name,
+			category: roleDefinitions.category,
+			key: meetingTemplateRoles.key,
+			defaultCount: meetingTemplateRoles.defaultCount,
+			sortOrder: meetingTemplateRoles.sortOrder,
+			isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
+		})
+		.from(meetingTemplateRoles)
+		.innerJoin(
+			roleDefinitions,
+			and(
+				eq(roleDefinitions.clubId, clubId),
+				eq(roleDefinitions.key, meetingTemplateRoles.key),
+			),
+		)
+		.where(eq(meetingTemplateRoles.templateId, templateId))
+		.orderBy(asc(meetingTemplateRoles.sortOrder), asc(roleDefinitions.name));
+	return rows.map((r) => ({ ...r, standing: true, enabled: true }));
 }
 
 /**
- * Copy a template's roles into this club's `role_definitions`, tagged with the
- * template. Idempotent on `(club_id, template_id, key)` via the partial unique
- * index, and `DO NOTHING` rather than `DO UPDATE` so a club's own rename of a
- * materialized role survives every later re-application — the club's name is
- * what every surface labels with (#445), and re-materializing must not undo it.
+ * Resolve a template's declared roles against the club's BANK, minting a bank
+ * row only for a key the club genuinely does not have yet.
  *
- * Copy-once is the same contract `ROLE_TEMPLATE` already has: it seeds
- * `role_definitions` at club creation and editing the constant later reaches no
- * existing club. There is no escape hatch for pushing a seed change to clubs
- * that already used the template: `scripts/resync-template-roles.ts` is
- * specified but not written (TODOS.md, "Agenda templates").
+ * This replaced a copy (#801). It used to insert one `role_definitions` row per
+ * declaration, tagged `template_id`, on EVERY conversion — and since
+ * `applyTemplateConversion` deep-copies the template first, re-converting the
+ * same meeting minted another full set under a fresh template id, with no
+ * ceiling. Three standard functionaries hand-added to a live club's special
+ * meeting carried no history for exactly that reason: the slot pointed at a
+ * fork, and `loadRoleRecency` and the season grid both key on
+ * `role_slots.role_definition_id`.
+ *
+ * A minted row is NON-STANDING: it is the club's role now — attachable,
+ * manageable in /admin/roles, and the target of every future history query for
+ * that key — but it is not part of the club's standard meeting shape, so no
+ * ordinary meeting generates a slot for it. `standing`, not `enabled`: see
+ * `role_definitions.standing` in `schema.ts` for why folding the two breaks in
+ * both directions.
+ *
+ * `DO NOTHING` rather than `DO UPDATE`, as before, so a club's own rename of a
+ * role survives every later re-application — the club's name is what every
+ * surface labels with (#445). Idempotent: a second call resolves every key and
+ * mints nothing.
  *
  * Required at all because `role_slots.role_definition_id` is NOT NULL and
  * restricting: a claimable contest role has to be a real `role_definitions` row.
@@ -278,19 +336,34 @@ export async function materializeTemplateRoles(
 	clubId: string,
 	templateId: string,
 ): Promise<void> {
-	const roles = await conn
+	const declared = await conn
 		.select()
 		.from(meetingTemplateRoles)
 		.where(eq(meetingTemplateRoles.templateId, templateId))
 		.orderBy(asc(meetingTemplateRoles.sortOrder));
-	if (roles.length === 0) return;
+	if (declared.length === 0) return;
+
+	const bank = await conn
+		.select({ key: roleDefinitions.key })
+		.from(roleDefinitions)
+		.where(
+			and(
+				roleDefScope(clubId),
+				inArray(
+					roleDefinitions.key,
+					declared.map((r) => r.key),
+				),
+			),
+		);
+	const held = new Set(bank.flatMap((r) => (r.key == null ? [] : [r.key])));
+	const missing = declared.filter((r) => !held.has(r.key));
+	if (missing.length === 0) return;
 
 	await conn
 		.insert(roleDefinitions)
 		.values(
-			roles.map((r) => ({
+			missing.map((r) => ({
 				clubId,
-				templateId,
 				key: r.key,
 				name: r.name,
 				category: r.category,
@@ -299,8 +372,14 @@ export async function materializeTemplateRoles(
 				isSpeakerRole: r.isSpeakerRole,
 				slotsUnordered: r.slotsUnordered,
 				description: r.description,
+				// Its own club's role from here on, but NOT part of the club's
+				// standard meeting shape.
+				standing: false,
 			})),
 		)
+		// Two officers converting two meetings to the same template at once both
+		// read an empty bank for a key. `role_definitions_club_key_unique` settles
+		// it; this makes the loser a no-op rather than a 500.
 		.onConflictDoNothing();
 }
 
@@ -447,28 +526,83 @@ export async function copyTemplateForMeeting(
 }
 
 /**
- * PURE READ. The role definitions a meeting's slots are generated from.
+ * The role definitions a meeting's slots are generated from: the club's
+ * STANDING, enabled bank roles when there is no template, the template's
+ * declarations resolved onto the bank when there is.
  *
- * Deliberately does NOT materialize. A function named `resolve…` that quietly
- * INSERTs is a surprise for the next caller, and it made the conversion preview
- * impossible to build on: showing an officer what a change would do must not
- * itself change anything, so a preview could not call a resolver that writes
- * and would have had to duplicate this predicate. One rule, two callers.
+ * WRITES, on one narrow path, and its docblock used to say the opposite. It
+ * promised a PURE READ because "a function named `resolve…` that quietly
+ * INSERTs is a surprise for the next caller" — a claim about future callers,
+ * so #801 rewrote the claim rather than leaving it contradicting the code.
+ * What made it safe to change is that the surprise it was protecting against
+ * never materialised: `resolveMeetingRoleDefs` has exactly ONE non-test caller,
+ * `applyTemplateConversion`, already inside `database.transaction`. Rendering a
+ * templated meeting never comes here (the meeting page joins `role_slots` to
+ * `role_definitions` directly), and the conversion PREVIEW still does not —
+ * it goes through `resolveConversionTargetRoles`, which reads the template's
+ * own declarations and writes nothing.
  *
- * For a template this club has never used the result is EMPTY — the caller must
- * call `materializeTemplateRoles` first, which `applyTemplateConversion` does as
- * its own explicit step.
+ * The write is `materializeTemplateRoles`: a declared key with no bank row
+ * mints one at `standing = false` rather than resolving to nothing. Reachable
+ * for a template authored but never materialized for this club, and for a
+ * declaration stranded by a bank-role delete. It mirrors the precedent
+ * `materialiseForMeeting` set for the same question
+ * (`meeting-agenda-edit-logic.ts`): an unresolvable key falls back rather than
+ * dropping the row, because a row owned by nobody is what an unstaffed role
+ * already looks like. IDEMPOTENT — a second resolve mints nothing, because the
+ * first one's rows now resolve by key.
+ *
+ * The two arms differ in which flags they honour, and deliberately.
+ * `standing AND enabled` is the club's own switchboard over its OWN standard
+ * shape. A template's roles are the contest's fixed shape, not a menu:
+ * `loadDeclaredRoleDefs` synthesizes both flags true, so honouring the bank's
+ * copy would silently drop a required position from the run of show.
  */
 export async function resolveMeetingRoleDefs(
 	conn: DbOrTx,
 	clubId: string,
 	templateId: string | null,
-): Promise<(MeetingSlotDefs & RoleIdentity)[]> {
+): Promise<DeclaredRoleDef[]> {
+	if (templateId !== null)
+		await materializeTemplateRoles(conn, clubId, templateId);
+	return loadMeetingShapeDefs(conn, clubId, templateId, { onlyEnabled: true });
+}
+
+/**
+ * PURE READ of the same rule `resolveMeetingRoleDefs` resolves: which role
+ * definitions make up this meeting's SHAPE. Never mints.
+ *
+ * The seam `slots-logic` reads through, and it is the reason the reported bug
+ * has two halves rather than one. "Which roles is this meeting made of" and
+ * "which roles may an officer attach to it" used to be the same query with the
+ * same either/or predicate, so scoping the first correctly (a contest's
+ * "+ Add speaker" must resolve Contestant, not the club's Speaker) forced the
+ * second to be wrong (a contest's "+ Add role" could not reach the club's
+ * Timer). Two functions now: this one for shape, `roleDefScope` for the bank.
+ *
+ * `onlyEnabled` applies to the STANDARD arm only, and there is nothing to apply
+ * on the other: a declaration-resolved row synthesizes `enabled: true` because
+ * the declaration is the authority for a templated meeting. The standard arm's
+ * callers split on it — `generateSlotRows`' inputs want enabled roles only,
+ * while `clubRoles` needs the unfiltered set to tell "the club's Speaker is
+ * disabled" from "this club has no speaker role".
+ */
+export async function loadMeetingShapeDefs(
+	conn: DbOrTx,
+	clubId: string,
+	templateId: string | null,
+	opts?: { onlyEnabled?: boolean },
+): Promise<DeclaredRoleDef[]> {
+	if (templateId !== null)
+		return loadDeclaredRoleDefs(conn, clubId, templateId);
+	const where = [roleDefScope(clubId), eq(roleDefinitions.standing, true)];
+	if (opts?.onlyEnabled) where.push(eq(roleDefinitions.enabled, true));
 	return conn
 		.select({
 			id: roleDefinitions.id,
 			defaultCount: roleDefinitions.defaultCount,
 			enabled: roleDefinitions.enabled,
+			standing: roleDefinitions.standing,
 			category: roleDefinitions.category,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			sortOrder: roleDefinitions.sortOrder,
@@ -479,15 +613,7 @@ export async function resolveMeetingRoleDefs(
 			name: roleDefinitions.name,
 		})
 		.from(roleDefinitions)
-		.where(
-			templateId === null
-				? // A club's `enabled` flag is its skeleton-crew switch over its OWN
-					// roles. A template's roles are the contest's fixed shape, not a
-					// menu — honouring the flag there would silently drop a required
-					// position from the run of show.
-					and(roleDefScope(clubId, null), eq(roleDefinitions.enabled, true))
-				: roleDefScope(clubId, templateId),
-		)
+		.where(and(...where))
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));
 }
 
@@ -562,9 +688,12 @@ type TargetRole = RoleIdentity & { defaultCount: number };
  * built a brand-new copy whose defs share none of those ids and released every
  * claim. Same predicate, different ARGUMENT.
  *
- * For `null` it is the club's own ENABLED standard roles, which the apply
+ * For `null` it is the club's own STANDING, enabled roles, which the apply
  * reads through `resolveMeetingRoleDefs(conn, clubId, null)` — the same rows,
- * no copy involved.
+ * no copy involved. Both flags, matching that function exactly: a non-standing
+ * bank role (a promoted contest role, or one an officer added from an agenda)
+ * is not part of the club's standard shape, so converting a meeting BACK to
+ * standard must neither keep nor create a slot for it.
  */
 async function resolveConversionTargetRoles(
 	conn: DbOrTx,
@@ -580,7 +709,11 @@ async function resolveConversionTargetRoles(
 			})
 			.from(roleDefinitions)
 			.where(
-				and(roleDefScope(clubId, null), eq(roleDefinitions.enabled, true)),
+				and(
+					roleDefScope(clubId),
+					eq(roleDefinitions.standing, true),
+					eq(roleDefinitions.enabled, true),
+				),
 			);
 	}
 	return conn
@@ -798,13 +931,11 @@ export async function applyTemplateConversion(input: {
 		// `meeting_id` has to be cleared before that insert, not after.
 		// (Nulling `meetings.template_id` would not do this: that column and
 		// `meeting_templates.meeting_id` are different columns on different
-		// tables.) The row can't be fully DELETEd yet either:
-		// `role_definitions.template_id` is ON DELETE RESTRICT and still points
-		// at it — materialized when this very copy was made — and those
-		// `role_definitions` rows can't go until the `role_slots` referencing
-		// them are reconciled below, which needs the NEW template's defs, which
-		// don't exist until the copy is inserted. So: detach now, retire in full
-		// once the new shape is in place.
+		// tables.) The row still can't be DELETEd here, for the one remaining
+		// reason: `meetings.template_id` is ON DELETE RESTRICT and still points
+		// at it until the update near the end of this transaction. Since #801 no
+		// `role_definitions` row points at a template at all, so the second,
+		// independent RESTRICT this used to have to unwind is gone.
 		if (previousPrivateId !== null) {
 			await tx
 				.update(meetingTemplates)
@@ -824,31 +955,35 @@ export async function applyTemplateConversion(input: {
 						meetingId,
 					});
 
-		// Materialize EXPLICITLY, as its own step. `resolveMeetingRoleDefs` is a
-		// pure read, so the write has to be visible here rather than hidden inside
-		// a function named `resolve…`. Idempotent.
-		if (effectiveTemplateId !== null) {
-			await materializeTemplateRoles(tx, clubId, effectiveTemplateId);
-		}
+		// Resolving a templated meeting's defs MINTS a bank row for any declared
+		// key the club does not hold yet — see `resolveMeetingRoleDefs`, which
+		// used to promise a pure read and no longer does. Idempotent, and this
+		// call is the only writer, so the step no longer needs spelling out
+		// separately here.
 		const defs = await resolveMeetingRoleDefs(tx, clubId, effectiveTemplateId);
 		const current = await loadSlotsForConversion(tx, meetingId);
 		// The SAME derivation `planTemplateConversion` ran — `matchRoleDefs` over
-		// the current definitions and the target ones. `defs` are the freshly
-		// materialized rows, so their ids differ from anything the preview saw,
-		// but their KEYS are the template's own declarations verbatim, which is
-		// exactly what the preview matched against.
+		// the current definitions and the target ones. `defs` carry the template's
+		// own declaration keys verbatim, which is exactly what the preview matched
+		// against; since #801 they also carry the same BANK ids the meeting's
+		// slots already point at, which is what makes the loop below a no-op.
 		const { plan, matched } = planConversion(current, defs);
 		const keepDefIds = new Set(matched.keys());
 
 		// Re-point, do not tear down. A slot whose role the target set still
 		// declares is the SAME role — the officer re-picked the shape it already
 		// had, or moved to a template that shares the position — so the member
-		// who claimed it keeps it. Only the row it points at changes, because
-		// `role_definitions` is materialized per (club, template) and the copy
-		// this transaction just made carries fresh ids.
+		// who claimed it keeps it.
 		//
-		// This is what makes re-applying a template stop being a full teardown,
-		// and it is not a nicety: a released holder CANNOT be notified
+		// A NO-OP for every matched role since #801: both sides live in the bank's
+		// one id space, so `def.id === oldDefId` and the `continue` below fires
+		// every time. Kept rather than deleted because `matchRoleDefs` can still
+		// legitimately map two ids together — an unkeyed legacy row matched by
+		// name onto a keyed bank row is the case the migration's step 1 could not
+		// fold — and a slot pointing at the loser still has to move. What is gone
+		// is the id churn a conversion used to cause on EVERY role.
+		//
+		// It was never a nicety: a released holder CANNOT be notified
 		// (`notifications.slot_id` is NOT NULL and cascades from `role_slots`,
 		// see this function's docblock), so every avoidable release is a member
 		// who silently loses a role they agreed to.
@@ -928,19 +1063,19 @@ export async function applyTemplateConversion(input: {
 			.where(eq(meetings.id, meetingId));
 
 		// Retire the superseded private copy now, not earlier: `meetings.template_id`
-		// no longer references it (just updated above, satisfying its own RESTRICT),
-		// and every role_slot that used to reference its materialized
-		// role_definitions was just reconciled — either RE-POINTED at the new
-		// copy's matching definition or deleted with `doomedIds`. Those two arms
-		// are exhaustive over `current` by construction (`matched` decides which),
-		// and a private copy's definitions are referenced by this meeting's slots
-		// alone, so nothing else can still be holding the RESTRICT.
-		// role_definitions has to go first: it is ALSO ON DELETE RESTRICT against
-		// meeting_templates, independently of the meetings.template_id one above.
+		// no longer references it (just updated above, satisfying its own RESTRICT).
+		//
+		// The `meeting_templates` row and nothing else. This used to delete the
+		// copy's `role_definitions` first, because those were per-copy rows that
+		// held a second, independent RESTRICT against it — the fork mechanism #801
+		// deleted. Under bank identity there ARE no per-copy definitions to
+		// retire: the outgoing copy's declarations resolved onto the club's own
+		// bank rows, which the new shape may well still be using and which carry
+		// this meeting's history either way. Deleting a bank row here would either
+		// hit `role_slots.role_definition_id`'s RESTRICT from a sibling meeting or
+		// destroy the club's Timer. The declarations themselves cascade with the
+		// template row.
 		if (previousPrivateId !== null) {
-			await tx
-				.delete(roleDefinitions)
-				.where(roleDefScope(clubId, previousPrivateId));
 			await tx
 				.delete(meetingTemplates)
 				.where(eq(meetingTemplates.id, previousPrivateId));

@@ -17,6 +17,7 @@ import {
 	MEETING_FIELDS,
 	MEETING_UPDATE_FIELDS,
 } from "#/lib/meeting-limits";
+import { pairedRoleIds } from "#/lib/meeting-roles";
 import {
 	localDateKey,
 	localDayRange,
@@ -53,6 +54,7 @@ import { resolveMeetingNumber } from "./meeting-number-logic";
 import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
 import { loadMeetingSlots } from "./meeting-slots-logic";
 import {
+	loadMeetingShapeDefs,
 	loadTemplateContent,
 	loadTemplateKey,
 } from "./meeting-templates-logic";
@@ -317,31 +319,48 @@ async function loadMeetingDetail(
 		}
 	}
 
-	// Club role template for the "+ Add role" picker — management-only, like the
+	// Club role bank for the "+ Add role" picker — management-only, like the
 	// roster. Ordered like the roles page. Disabled roles (#368) are excluded via
 	// `listRoleDefinitions`'s `onlyEnabled` — this picker OFFERS a role to be
 	// filled, which is exactly what a "skeleton crew" club turned a role off to
 	// stop; the roles admin page is where a disabled role stays visible. Routed
 	// through the same helper `getPublicClubRoles` uses so "only enabled" is one
 	// tested rule, not a second SQL filter that could drift from it.
-	// Scoped to THIS meeting's shape (#agenda-templates): a templated meeting
-	// offers its template's roles, not the club's standard ones. Unscoped, a
-	// contest's picker lists Toastmaster and Grammarian and offers no way to add
-	// a contestant.
+	//
+	// The WHOLE bank since #801, standing and non-standing alike, where this
+	// used to be scoped to the meeting's own shape. That scoping was forced by
+	// the old model — role identity was per (club, template), so a contest's
+	// Contestant was only visible under the contest's id — and it cost the
+	// mirror case exactly: on a templated meeting the picker could not reach the
+	// club's own Timer, which is the reported bug. One bank now, so a contest
+	// offers the club's standard roles alongside its own.
+	//
+	// The meeting's PAIRED roles are filtered out here rather than only on the
+	// client. `club.$clubId.meeting.$meetingId.tsx` runs `pairedRoleIds` over
+	// whatever this returns, and that heuristic (lowest-`sortOrder` speaker role)
+	// answers for the CLUB over a bank that now also holds a contest's roles —
+	// on a contest it would name the standard Speaker and leave Contestant
+	// offered, which `applyAddRoleSlot` then refuses. Resolving the pair against
+	// the meeting's declared shape is the server's job; it is the same set
+	// `applyAddRoleSlot` checks against, so the picker and the refusal agree.
 	const clubRoles = canManage
-		? (
-				await listRoleDefinitions(meeting.clubId, {
-					onlyEnabled: true,
-					templateId: meeting.templateId,
-				})
-			).map((r) => ({
-				id: r.id,
-				name: r.name,
-				category: r.category,
-				defaultCount: r.defaultCount,
-				sortOrder: r.sortOrder,
-				isSpeakerRole: r.isSpeakerRole,
-			}))
+		? await (async () => {
+				const [bank, shape] = await Promise.all([
+					listRoleDefinitions(meeting.clubId, { onlyEnabled: true }),
+					loadMeetingShapeDefs(db, meeting.clubId, meeting.templateId),
+				]);
+				const paired = pairedRoleIds(shape);
+				return bank
+					.filter((r) => !paired.has(r.id))
+					.map((r) => ({
+						id: r.id,
+						name: r.name,
+						category: r.category,
+						defaultCount: r.defaultCount,
+						sortOrder: r.sortOrder,
+						isSpeakerRole: r.isSpeakerRole,
+					}));
+			})()
 		: [];
 
 	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.

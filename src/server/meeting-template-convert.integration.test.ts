@@ -41,6 +41,8 @@ const {
 	planTemplateConversion,
 } = await import("./meeting-templates-logic");
 const { loadMeetingSlots } = await import("./meeting-slots-logic");
+const { applyAddSpeakerSlot, applyAddRoleSlot } = await import("./slots-logic");
+const { listRoleDefinitions } = await import("./role-definitions-logic");
 
 describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 	let club: SeededClub;
@@ -201,13 +203,19 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 				.update(meetings)
 				.set({ templateId })
 				.where(eq(meetings.id, club.meetingId));
+			// Scoped by declared KEY: since #801 a resolved role is an ordinary bank
+			// row, so `template_id` no longer selects "the roles this template
+			// brought in".
 			const sharedDefs = await testDb
 				.select({ id: roleDefinitions.id, key: roleDefinitions.key })
 				.from(roleDefinitions)
 				.where(
 					and(
 						eq(roleDefinitions.clubId, club.clubId),
-						eq(roleDefinitions.templateId, templateId),
+						inArray(roleDefinitions.key, [
+							"contest_chair",
+							"contestant_prepared",
+						]),
 					),
 				);
 			expect(sharedDefs.length).toBe(2);
@@ -391,8 +399,10 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 		 * was reporting zero.
 		 *
 		 * Key-matching removes the situation instead of warning about it. The slot
-		 * survives; only the `role_definitions` row it points at moves, to the
-		 * fresh copy's own.
+		 * survives — and since #801 it does not even move: both sides live in the
+		 * club's one role bank, so the re-point loop in `applyTemplateConversion`
+		 * is a no-op for every matched role and `role_definition_id` is unchanged.
+		 * That is the assertion below, inverted from what it was.
 		 */
 		it("keeps a claimed slot's holder when re-applying the SAME template", async () => {
 			await convert(templateId);
@@ -407,8 +417,10 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 			expect(plan.claimedSlotsReleased).toBe(0);
 			expect(plan.releasedHolders).toEqual([]);
 
-			// The same slot ROW is still there, still held, and now pointing at
-			// the new private copy's definition rather than the retired one.
+			// The same slot ROW is still there, still held, and still pointing at
+			// the SAME `role_definitions` row — the club's. That identity is what
+			// makes the assign picker's "last served" and the season grid keep
+			// reading through a re-conversion.
 			const [after] = await testDb
 				.select({
 					id: roleSlots.id,
@@ -418,26 +430,160 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 				.from(roleSlots)
 				.where(eq(roleSlots.id, slot.id));
 			expect(after?.memberId).toBe(club.memberId);
-			expect(after?.roleDefinitionId).not.toBe(slot.roleDefinitionId);
-			const [m] = await testDb
-				.select({ templateId: meetings.templateId })
-				.from(meetings)
-				.where(eq(meetings.id, club.meetingId));
+			expect(after?.roleDefinitionId).toBe(slot.roleDefinitionId);
+			// And the row it points at is a plain bank row, not tagged to the
+			// private copy the meeting now names.
 			const [def] = await testDb
 				.select({ templateId: roleDefinitions.templateId })
 				.from(roleDefinitions)
 				.where(eq(roleDefinitions.id, after?.roleDefinitionId ?? ""));
-			expect(def?.templateId).toBe(m?.templateId);
+			expect(def?.templateId).toBeNull();
+		});
+	});
+
+	/**
+	 * The club's role BANK across a conversion (#801). One table, one row per
+	 * (club, key) — so a conversion is a change of SHAPE, never a minting of new
+	 * identities, and everything keyed on `role_slots.role_definition_id` keeps
+	 * reading through.
+	 */
+	describe("the club's role bank across a conversion", () => {
+		async function bank() {
+			return testDb
+				.select({
+					id: roleDefinitions.id,
+					key: roleDefinitions.key,
+					name: roleDefinitions.name,
+					standing: roleDefinitions.standing,
+				})
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.clubId, club.clubId));
+		}
+
+		it("mints NOTHING for a key the club's bank already holds", async () => {
+			await testDb
+				.update(roleDefinitions)
+				.set({ key: "contest_chair" })
+				.where(eq(roleDefinitions.id, club.roleDefinitionId));
+			const before = await bank();
+			await convert(templateId);
+			const after = await bank();
+			// Only `contestant_prepared` is new; `contest_chair` resolved onto the
+			// club's own row, which keeps its NAME and its standing.
+			expect(after).toHaveLength(before.length + 1);
+			const chair = after.find((r) => r.key === "contest_chair");
+			expect(chair?.id).toBe(club.roleDefinitionId);
+			expect(chair?.name).toBe("Timer");
+			expect(chair?.standing).toBe(true);
+		});
+
+		it("converting the SAME meeting twice leaves the row count unchanged", async () => {
+			await convert(templateId);
+			const afterFirst = await bank();
+			await convert(templateId);
+			const afterSecond = await bank();
+			// By ID, not by count: a mint-and-delete pair would keep the count and
+			// still have broken every slot's history.
+			expect(afterSecond.map((r) => r.id).sort()).toEqual(
+				afterFirst.map((r) => r.id).sort(),
+			);
+		});
+
+		it("generates every Contestant slot even though the bank row is NON-standing", async () => {
+			// The load-bearing half of the three-column split. `generateSlotRows`
+			// filters `standing AND enabled`, and the contest's own roles are
+			// non-standing precisely so they never land on an ordinary meeting —
+			// so a templated meeting only gets its full shape because
+			// `resolveMeetingRoleDefs` synthesizes `standing: true` from the
+			// DECLARATION. Parked on `enabled` instead, this would be zero slots.
+			await convert(templateId);
+			const [contestant] = await testDb
+				.select({
+					id: roleDefinitions.id,
+					standing: roleDefinitions.standing,
+				})
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, club.clubId),
+						eq(roleDefinitions.key, "contestant_prepared"),
+					),
+				);
+			expect(contestant?.standing).toBe(false);
+			const slots = await slotsFor(club.meetingId);
+			expect(
+				slots.filter((s) => s.roleDefinitionId === contestant?.id),
+			).toHaveLength(3);
+		});
+
+		it("'+ Add speaker' on a contest adds a CONTESTANT, not the club's Speaker", async () => {
+			// The club's standard speaker role, which must NOT win on a contest —
+			// `clubRoles` resolves the meeting's declared SHAPE, so a union here
+			// would take the lowest-`sortOrder` speaker role across both and add a
+			// slot that renders nowhere on the contest sheet.
+			await testDb
+				.update(roleDefinitions)
+				.set({ isSpeakerRole: true, key: "speaker", name: "Speaker" })
+				.where(eq(roleDefinitions.id, club.roleDefinitionId));
+			await convert(templateId);
+			const [contestant] = await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, club.clubId),
+						eq(roleDefinitions.key, "contestant_prepared"),
+					),
+				);
+			const before = await slotsFor(club.meetingId);
+
+			await applyAddSpeakerSlot({
+				meetingId: club.meetingId,
+				actorMemberId: null,
+			});
+
+			const after = await slotsFor(club.meetingId);
+			expect(after).toHaveLength(before.length + 1);
+			expect(
+				after.filter((s) => s.roleDefinitionId === contestant?.id),
+			).toHaveLength(4);
+			expect(
+				after.filter((s) => s.roleDefinitionId === club.roleDefinitionId),
+			).toHaveLength(0);
+		});
+
+		it("'+ Add role' on a contest offers the club's standard roles too, and they attach", async () => {
+			// The reported bug, from the read side: the picker used to be scoped to
+			// the meeting's template, so a contest could not reach the club's own
+			// Timer and the officer fell through to the free-text form, which
+			// forked. One bank now.
+			await convert(templateId);
+			const offered = await listRoleDefinitions(club.clubId, {
+				onlyEnabled: true,
+			});
+			const names = offered.map((r) => r.name);
+			expect(names).toContain("Timer"); // the club's own standard role
+			expect(names).toContain("Contest Chair"); // and the contest's
+
+			await applyAddRoleSlot({
+				meetingId: club.meetingId,
+				roleDefinitionId: club.roleDefinitionId,
+				actorMemberId: null,
+			});
+			const slots = await slotsFor(club.meetingId);
+			expect(
+				slots.filter((s) => s.roleDefinitionId === club.roleDefinitionId),
+			).toHaveLength(1);
 		});
 	});
 
 	describe("unordered slots (#624)", () => {
 		/** The flag on `meeting_template_roles` reaches the two rows the grid
-		 *  actually reads through: the club's materialized `role_definitions`
-		 *  (which own the slots) and the private per-meeting copy of the template
-		 *  (which re-materializes on a later re-conversion). Either one missing
-		 *  and the sheet numbers contestants again. */
-		it("copies the flag onto the materialized definition and the private copy's role", async () => {
+		 *  actually reads through: the club's own `role_definitions` (which own the
+		 *  slots) and the private per-meeting copy of the template (which resolves
+		 *  again on a later re-conversion). Either one missing and the sheet
+		 *  numbers contestants again. */
+		it("copies the flag onto the club's bank role and the private copy's role", async () => {
 			await convert(templateId);
 			const [m] = await testDb
 				.select({ templateId: meetings.templateId })
@@ -455,7 +601,10 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 				.where(
 					and(
 						eq(roleDefinitions.clubId, club.clubId),
-						eq(roleDefinitions.templateId, privateId),
+						inArray(roleDefinitions.key, [
+							"contest_chair",
+							"contestant_prepared",
+						]),
 					),
 				);
 			expect(
@@ -803,8 +952,8 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 		it("does not retire a GLOBAL template when a meeting converts away from it", async () => {
 			// Simulate the pre-Task-3 shape directly, bypassing
 			// applyTemplateConversion: a meeting whose template_id points at a
-			// SHARED template, materialized the old way (role_definitions tagged
-			// with the SOURCE's own id, not a private copy's).
+			// SHARED template, with the template's roles already resolved into the
+			// club's bank.
 			await materializeTemplateRoles(testDb, club.clubId, templateId);
 			await testDb
 				.update(meetings)
@@ -824,16 +973,23 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 				.where(eq(meetingTemplates.id, templateId));
 			expect(survivors).toHaveLength(1);
 
+			// And the club KEEPS the roles that conversion brought in. Retiring the
+			// outgoing shape must never reach into the bank: those rows are the
+			// club's, carry its history, and a sibling meeting may still be using
+			// them.
 			const defs = await testDb
 				.select({ id: roleDefinitions.id })
 				.from(roleDefinitions)
 				.where(
 					and(
 						eq(roleDefinitions.clubId, club.clubId),
-						eq(roleDefinitions.templateId, templateId),
+						inArray(roleDefinitions.key, [
+							"contest_chair",
+							"contestant_prepared",
+						]),
 					),
 				);
-			expect(defs.length).toBeGreaterThan(0);
+			expect(defs).toHaveLength(2);
 		});
 	});
 

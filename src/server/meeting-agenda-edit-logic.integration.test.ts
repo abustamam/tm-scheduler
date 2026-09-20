@@ -309,13 +309,13 @@ async function seedForeignRole(roleKey: string): Promise<{
 		.insert(roleDefinitions)
 		.values({
 			clubId: other.clubId,
-			templateId: t.id,
 			key: roleKey,
 			name: "Foreign Zoom Master",
 			category: "functionary",
 			defaultCount: 1,
 			sortOrder: 10,
 			isSpeakerRole: false,
+			standing: false,
 		})
 		.returning({ id: roleDefinitions.id });
 	if (!def) throw new Error("role definition insert failed");
@@ -1363,7 +1363,16 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		expect(slots).toHaveLength(1);
 	});
 
-	it("derives a unique key when two roles share a name", async () => {
+	it("REPORTS a name already on this agenda instead of forking it (#801)", async () => {
+		// This used to derive `judge_2` and mint a SECOND `role_definitions` row,
+		// which is the reported bug in miniature: one conceptual role, two
+		// identities, and `role_slots.role_definition_id` — what every history
+		// query joins on — split between them. A name the agenda already carries
+		// is a mistake, not a request for a second role.
+		//
+		// Reported, not left to Postgres: `meeting_template_roles_key_unique`
+		// would otherwise surface a raw unique violation, and `runAction` toasts
+		// `err.message` verbatim at the officer.
 		await givePrivateTemplate();
 		const a = await addAgendaRole({
 			meetingId: club.meetingId,
@@ -1372,14 +1381,112 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			defaultCount: 1,
 			isSpeakerRole: false,
 		});
-		const b = await addAgendaRole({
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				name: "Judge",
+				category: "functionary",
+				defaultCount: 1,
+				isSpeakerRole: false,
+			}),
+		).rejects.toThrow(/already on this agenda/i);
+
+		// Still exactly one bank row, and still exactly one declaration.
+		const defs = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, a.key),
+				),
+			);
+		expect(defs).toHaveLength(1);
+		const draft = await loadAgendaDraft(club.meetingId);
+		expect(draft?.roles.filter((r) => r.name === "Judge")).toHaveLength(1);
+	});
+
+	it("ATTACHES the club's existing role when its name is typed, minting nothing", async () => {
+		// The reported bug's fix, end to end. The club already runs a Timer
+		// (`seedClub`); typing "Timer" into a special meeting's Roles panel must
+		// attach THAT row, so the slot carries the club's history rather than
+		// starting a fresh one.
+		await givePrivateTemplate();
+		await testDb
+			.update(roleDefinitions)
+			.set({ key: "timer" })
+			.where(eq(roleDefinitions.id, club.roleDefinitionId));
+		const before = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, club.clubId));
+
+		const role = await addAgendaRole({
 			meetingId: club.meetingId,
-			name: "Judge",
+			name: "Timer",
+			category: "leadership",
+			defaultCount: 3,
+			isSpeakerRole: true,
+		});
+
+		// No new row at all.
+		const after = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, club.clubId));
+		expect(after.map((r) => r.id).sort()).toEqual(
+			before.map((r) => r.id).sort(),
+		);
+		expect(role.key).toBe("timer");
+		// The BANK row's shape wins over the form's: identity, category, places
+		// and the speaker flag all belong to the club's role, and this call only
+		// decides that the agenda uses it.
+		expect(role.category).toBe("functionary");
+		expect(role.isSpeakerRole).toBe(false);
+		expect(role.defaultCount).toBe(1);
+
+		// The generated slot points at the club's own row.
+		const slots = await testDb
+			.select({ roleDefinitionId: roleSlots.roleDefinitionId })
+			.from(roleSlots)
+			.where(
+				and(
+					eq(roleSlots.meetingId, club.meetingId),
+					eq(roleSlots.roleDefinitionId, club.roleDefinitionId),
+				),
+			);
+		// The seeded open slot, plus the one this attach generated.
+		expect(slots).toHaveLength(2);
+	});
+
+	it("MINTS a non-standing bank role when no club role has that name", async () => {
+		await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Wrangler",
 			category: "functionary",
 			defaultCount: 1,
 			isSpeakerRole: false,
 		});
-		expect(a.key).not.toBe(b.key);
+		const [minted] = await testDb
+			.select({
+				standing: roleDefinitions.standing,
+				templateId: roleDefinitions.templateId,
+				key: roleDefinitions.key,
+			})
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.name, "Zoom Wrangler"),
+				),
+			);
+		// The club's role from here on — manageable in /admin/roles immediately —
+		// but NOT part of its standard meeting shape, so the next meeting created
+		// generates no slot for it.
+		expect(minted?.standing).toBe(false);
+		expect(minted?.templateId).toBeNull();
+		expect(minted?.key).toBe(role.key);
 	});
 
 	it("refuses to add past the role ceiling", async () => {
@@ -1462,34 +1569,18 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		);
 	});
 
-	it("materializes a pre-existing role under the fork's private copy, and re-points this meeting's own slot to it, without duplicating on a later add (task-8b)", async () => {
-		// A meeting still on a shared template, with "chair" already
-		// materialized against the SHARED templateId (the legacy shape — see
-		// `resolveHeldSlotsForRole`'s docblock). Adding "Zoom Master" forks a
-		// private copy.
+	it("forking to add a role leaves a pre-existing role's slot exactly where it was (task-8b, #801)", async () => {
+		// A meeting still on a shared template, with the club's own "chair" bank
+		// row and a slot on it. Adding "Zoom Master" forks a private copy.
 		//
-		// Before task-8b, `ensureAgendaDraft`'s fork materialized NOTHING, so
-		// "chair" stayed un-migrated under the shared templateId and this
-		// meeting's own "chair" slot stayed pointed at it too — the exact bug
-		// that left the "+ Add role" picker empty. `ensureAgendaDraft` now
-		// materializes the copied template's WHOLE declared role set and
-		// re-points this meeting's own slots to match
-		// (task-8b-brief.md), so "chair" now gets its OWN row under the
-		// private copy and the meeting's slot follows it there — this test's
-		// old expectations (one "chair" row, unmoved, still on `shared.id`)
-		// described the bug, not the contract.
-		//
-		// The second `addAgendaRole` call below is NOT a regression guard
-		// against `addAgendaRole` itself calling the whole-set
-		// `materializeTemplateRoles` again: if it did, the attempt to
-		// re-insert "chair" would hit
-		// `role_definitions_club_template_key_unique` and
-		// `onConflictDoNothing` would swallow it silently, leaving the SAME
-		// count this test asserts either way. That hazard is defanged by the
-		// unique index, not by this assertion. What this section actually
-		// pins is the steady state: the fork leaves exactly two "chair" rows
-		// (the untouched original plus the one it materialized), and a
-		// second, unrelated `addAgendaRole` call does not disturb that count.
+		// Task 8b made that fork materialize a SECOND "chair" row under the copy
+		// and re-point this meeting's slot onto it — correct under the old model,
+		// where identity was per (club, template), and the reason a meeting that
+		// had merely been EDITED lost the club's history for every role on it.
+		// The fork now resolves the copied declarations onto the same bank rows
+		// the slots already reference, so there is one "chair" row and its id
+		// never moves. That is the assertion, and it is the inverse of what this
+		// test made before.
 		const [shared] = await testDb
 			.insert(meetingTemplates)
 			.values({
@@ -1512,13 +1603,13 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			.insert(roleDefinitions)
 			.values({
 				clubId: club.clubId,
-				templateId: shared.id,
 				key: "chair",
 				name: "Chair",
 				category: "leadership",
 				defaultCount: 1,
 				sortOrder: 0,
 				isSpeakerRole: false,
+				standing: false,
 			})
 			.returning({ id: roleDefinitions.id });
 		if (!chairDef) throw new Error("role definition insert failed");
@@ -1551,11 +1642,8 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			.where(eq(meetings.id, club.meetingId));
 		const privateTemplateId = afterFirstAdd?.templateId;
 		if (!privateTemplateId) throw new Error("meeting has no template");
-		expect(privateTemplateId).not.toBe(shared.id);
+		expect(privateTemplateId).not.toBe(shared.id); // confirms a fork happened
 
-		// "chair" now has TWO rows: the untouched original under the shared
-		// template (a sibling meeting may still need it), and a fresh one the
-		// fork materialized under the meeting's own new private template.
 		const chairDefs = await testDb
 			.select({
 				id: roleDefinitions.id,
@@ -1568,28 +1656,17 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 					eq(roleDefinitions.key, "chair"),
 				),
 			);
-		expect(chairDefs).toHaveLength(2);
-		const original = chairDefs.find((d) => d.id === chairDef.id);
-		expect(original?.templateId).toBe(shared.id);
-		const forked = chairDefs.find((d) => d.id !== chairDef.id);
-		if (!forked) throw new Error("no forked chair definition");
-		expect(forked.templateId).toBe(privateTemplateId);
+		expect(chairDefs.map((d) => d.id)).toEqual([chairDef.id]);
+		expect(chairDefs[0]?.templateId).toBeNull();
 
-		// The meeting's own pre-existing "chair" slot followed to the new
-		// definition — same slot id, new role_definition_id.
+		// The meeting's own pre-existing "chair" slot did not move.
 		const [chairSlotAfter] = await testDb
 			.select({ roleDefinitionId: roleSlots.roleDefinitionId })
 			.from(roleSlots)
 			.where(eq(roleSlots.id, chairSlot.id));
-		expect(chairSlotAfter?.roleDefinitionId).toBe(forked.id);
+		expect(chairSlotAfter?.roleDefinitionId).toBe(chairDef.id);
 
-		// A second, unrelated `addAgendaRole` call — now against the
-		// already-private template, so `ensureAgendaDraft` takes the early
-		// "own" return and never touches "chair" at all — leaves the count
-		// exactly where the fork put it. (Per the comment above this test's
-		// fixture, this cannot distinguish that from a hypothetical
-		// regression that re-ran the whole-set materialize instead: the
-		// unique index would silently no-op the re-insert either way.)
+		// A second, unrelated `addAgendaRole` call leaves that untouched.
 		await addAgendaRole({
 			meetingId: club.meetingId,
 			name: "Ballot Counter",
@@ -1606,7 +1683,7 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 					eq(roleDefinitions.key, "chair"),
 				),
 			);
-		expect(chairDefsAfterSecondAdd).toHaveLength(2);
+		expect(chairDefsAfterSecondAdd.map((d) => d.id)).toEqual([chairDef.id]);
 	});
 
 	it("makes an added role's key immediately usable by a beat's roleKey", async () => {
@@ -1725,10 +1802,12 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		expect(after?.rows.map((r) => r.id)).not.toContain(anyRow.id);
 		expect(after?.rows.map((r) => r.id)).not.toContain(repeatBoundRow.id);
 
-		// The role_definitions row and its slot are gone too, not just the
-		// template-side declaration.
+		// Its SLOT is gone. Its `role_definitions` row is NOT (#801): removing a
+		// role from one agenda is a statement about that agenda, and the row is
+		// the club's — the one every past meeting's slots and every history
+		// query join on.
 		const defs = await testDb
-			.select({ id: roleDefinitions.id })
+			.select({ id: roleDefinitions.id, standing: roleDefinitions.standing })
 			.from(roleDefinitions)
 			.where(
 				and(
@@ -1736,7 +1815,18 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 					eq(roleDefinitions.key, role.key),
 				),
 			);
-		expect(defs).toHaveLength(0);
+		expect(defs).toHaveLength(1);
+		expect(defs[0]?.standing).toBe(false);
+		const slotsLeft = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(
+				and(
+					eq(roleSlots.meetingId, club.meetingId),
+					eq(roleSlots.roleDefinitionId, defs[0]?.id ?? ""),
+				),
+			);
+		expect(slotsLeft).toHaveLength(0);
 
 		// The now-undeclared key is immediately refused again, same as any other
 		// key the template has never declared.
@@ -1751,14 +1841,20 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		).rejects.toThrow(/not a role this template declares/i);
 	});
 
-	it("deletes the role_definitions row of a role holding NO slot, so its name stays reusable", async () => {
+	it("KEEPS the role_definitions row of a role holding NO slot, and re-adding re-attaches it", async () => {
 		// A role can legitimately hold zero slots: `addAgendaRole` accepts
 		// `defaultCount: 0`, and `agenda-editor.tsx`'s Places field coerces an
 		// EMPTY input to 0, so this happens by accident rather than only on
-		// purpose. `resolveHeldSlotsForRole` resolves the doomed definitions
-		// THROUGH this meeting's own slots, so with no slot there is nothing to
-		// resolve — which is exactly why the definition delete must not be
-		// conditional on having resolved one.
+		// purpose. It used to be the case that MATTERED most — the definition
+		// outlived its declaration, the picker kept offering an undeclared role,
+		// and re-adding the same name hit a raw unique violation permanently,
+		// because `deriveRoleKey` uniquified against `meeting_template_roles`
+		// only and the plain insert had nothing left to protect it.
+		//
+		// #801 removes the hazard rather than the row. The bank row outliving its
+		// declaration IS the model, `addAgendaRole` is find-and-attach, and the
+		// picker lists the club's whole bank on purpose. Same fixture, three
+		// inverted assertions.
 		await givePrivateTemplate();
 		const role = await addAgendaRole({
 			meetingId: club.meetingId,
@@ -1781,16 +1877,7 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 				),
 			);
 		expect(slotsBefore).toHaveLength(0);
-
-		const released = await removeAgendaRole({
-			meetingId: club.meetingId,
-			roleKey: role.key,
-			actorMemberId: null,
-		});
-		expect(released).toHaveLength(0);
-
-		// [[SYMPTOM 1]] The definition outlives its own declaration and its beats.
-		const orphans = await testDb
+		const [before] = await testDb
 			.select({ id: roleDefinitions.id })
 			.from(roleDefinitions)
 			.where(
@@ -1799,28 +1886,40 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 					eq(roleDefinitions.key, role.key),
 				),
 			);
-		expect(orphans).toHaveLength(0);
+		if (!before) throw new Error("no bank row was minted");
 
-		// [[SYMPTOM 2]] It stays `enabled` and template-scoped, so the meeting
-		// page's "+ Add role" picker keeps offering a role the agenda no longer
-		// declares. That picker reads `role_definitions`, never
-		// `meeting_template_roles`, so the declaration delete alone is invisible
-		// to it.
-		const draft = await loadAgendaDraft(club.meetingId);
-		if (!draft) throw new Error("no draft");
+		const released = await removeAgendaRole({
+			meetingId: club.meetingId,
+			roleKey: role.key,
+			actorMemberId: null,
+		});
+		expect(released).toHaveLength(0);
+
+		// The row survives the removal, as the same row.
+		const after = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(after.map((r) => r.id)).toEqual([before.id]);
+
+		// And it stays MANAGEABLE: /admin/roles and the meeting page's picker
+		// both read `listRoleDefinitions`, which lists the whole bank. A role an
+		// officer created from an agenda has to be reachable the moment it
+		// exists, not only once the Roles-panel picker lands.
 		const offered = await listRoleDefinitions(club.clubId, {
 			onlyEnabled: true,
-			templateId: draft.templateId,
 		});
-		expect(offered.map((r) => r.name)).not.toContain("Zoom Master");
+		expect(offered.map((r) => r.name)).toContain("Zoom Master");
+		expect(offered.find((r) => r.name === "Zoom Master")?.standing).toBe(false);
 
-		// [[SYMPTOM 3]] and the worst one: `deriveRoleKey` uniquifies against
-		// `meeting_template_roles` ONLY, so re-adding the same name derives the
-		// SAME key and the plain insert violates
-		// `role_definitions_club_template_key_unique` — permanently, since
-		// nothing in the product can clear the orphan. Asserting the KEY rather
-		// than merely "it resolved" is what proves the re-add reused the freed
-		// name instead of quietly becoming `zoom_master_2`.
+		// Re-adding the same name RE-ATTACHES the same row rather than colliding
+		// or forking. Asserting the id, not just the key: the key alone would be
+		// satisfied by a fresh row carrying the freed name.
 		const again = await addAgendaRole({
 			meetingId: club.meetingId,
 			name: "Zoom Master",
@@ -1829,9 +1928,19 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			isSpeakerRole: false,
 		});
 		expect(again.key).toBe(role.key);
+		const readded = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(readded.map((r) => r.id)).toEqual([before.id]);
 	});
 
-	it("deletes the role_definitions row when the meeting's last slot for the role was removed first", async () => {
+	it("KEEPS the role_definitions row when the meeting's last slot was removed first", async () => {
 		// The second route to the same zero-slot state, and the one an officer
 		// reaches without ever touching the Places field: `applyRemoveRoleSlot`
 		// (the meeting page's per-slot remove) has no last-slot guard, so every
@@ -1871,7 +1980,8 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			actorMemberId: null,
 		});
 
-		const orphans = await testDb
+		// Still exactly one bank row for the key — not deleted, not duplicated.
+		const survivors = await testDb
 			.select({ id: roleDefinitions.id })
 			.from(roleDefinitions)
 			.where(
@@ -1880,7 +1990,7 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 					eq(roleDefinitions.key, role.key),
 				),
 			);
-		expect(orphans).toHaveLength(0);
+		expect(survivors).toHaveLength(1);
 		const again = await addAgendaRole({
 			meetingId: club.meetingId,
 			name: "Ballot Counter",
@@ -1889,6 +1999,22 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			isSpeakerRole: false,
 		});
 		expect(again.key).toBe(role.key);
+		// Re-attached, and the places came from the BANK row (2), not from the
+		// `defaultCount: 1` this call passed — the role's shape is the club's.
+		const reattached = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.where(
+				and(
+					eq(roleSlots.meetingId, club.meetingId),
+					eq(roleDefinitions.id, survivors[0]?.id ?? ""),
+				),
+			);
+		expect(reattached).toHaveLength(2);
 	});
 
 	it("leaves sortOrder at 0..N-1 with no gaps after removing a role's beats", async () => {
@@ -2059,21 +2185,21 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			roleKey: "zoom_master",
 			minutes: 1,
 		});
-		// Materialized directly against the SHARED templateId — the shape
-		// `materializeTemplateRoles`'s two call sites never produce today, but
-		// which legacy (pre-per-meeting-template) meetings still have, per
-		// `loadAgendaDraft`'s "correction 1" docblock.
+		// The club's BANK row for the declared key — what a conversion resolves
+		// to since #801, and what BOTH meetings' slots point at. That sharing is
+		// the model, not the legacy accident it used to be, which is exactly why
+		// `removeAgendaRole` must not delete the row.
 		const [def] = await testDb
 			.insert(roleDefinitions)
 			.values({
 				clubId: club.clubId,
-				templateId: shared.id,
 				key: "zoom_master",
 				name: "Zoom Master",
 				category: "functionary",
 				defaultCount: 1,
 				sortOrder: 0,
 				isSpeakerRole: false,
+				standing: false,
 			})
 			.returning({ id: roleDefinitions.id });
 		if (!def) throw new Error("role definition insert failed");
@@ -2136,9 +2262,8 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			.where(eq(roleSlots.id, slot1.id));
 		expect(slot1After).toHaveLength(0);
 
-		// The shared definition is NOT owned by meeting 1's newly forked
-		// private template, so it survives — meeting 2's still-live slot
-		// depends on it.
+		// The club's role survives — meeting 2's still-live slot depends on it,
+		// and so does every past meeting that ever ran it.
 		const defAfter = await testDb
 			.select({ id: roleDefinitions.id })
 			.from(roleDefinitions)
@@ -2252,34 +2377,37 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Task 8b: `ensureAgendaDraft`'s fork left `role_definitions` (and therefore
+// Task 8b, rewritten for #801.
+//
+// `ensureAgendaDraft`'s fork used to leave `role_definitions` (and therefore
 // `role_slots`) behind on the OLD shared template, so a meeting converted
 // before per-meeting private templates existed got its `meetings.template_id`
 // flipped to a private copy with NO materialized roles at all — emptying the
-// "+ Add role" picker (`meetings.ts:358-363`, `listRoleDefinitions`) the
-// moment an officer made its very first edit. See
-// `.superpowers/sdd/2026-08-21-configurable-agendas/task-8b-brief.md`.
+// "+ Add role" picker the moment an officer made its very first edit. Task 8b
+// fixed that by materializing the copy's roles and RE-POINTING this meeting's
+// slots onto the fresh rows.
+//
+// That re-point is now gone, because the thing it translated between is gone.
+// Role identity lives once per (club, key); a fork resolves the copied
+// template's declarations onto the SAME bank rows the meeting's slots already
+// point at, so no id moves and nothing needs translating. The symptom this
+// block was written around is still what it guards — a fork must never leave
+// the picker empty or a slot stranded — but the mechanism it measures is the
+// resolve, and the strongest assertion available is now that
+// `role_definition_id` DOES NOT CHANGE.
 // ---------------------------------------------------------------------------
 describe.skipIf(!hasTestDb)(
-	"ensureAgendaDraft materializes and re-points role_definitions on fork (task-8b)",
+	"ensureAgendaDraft resolves role_definitions on fork (task-8b, #801)",
 	() => {
 		/**
-		 * A shared (club-less) template declaring "zoom_master", materialized
-		 * DIRECTLY against the shared templateId — the shape
-		 * `materializeTemplateRoles`'s two call sites never produce today but
-		 * which every meeting converted before per-meeting private templates
-		 * existed is actually in (same fixture shape as the `removeAgendaRole`
-		 * fork tests above). Optionally also declares "timer" and materializes
-		 * it with a NULL `key` — data shaped like `matchesRole`'s docblock calls
-		 * "data predating #368".
+		 * A shared (club-less) template declaring "zoom_master", with the club's
+		 * own BANK row for that key — the shape a club is in after one conversion.
+		 * `bankRole` controls whether the bank row exists at all, so a test can
+		 * also exercise the fork resolving a key the club has never held.
 		 */
 		async function seedSharedTemplateWithRoles(opts?: {
-			nullKeySecondRole?: boolean;
-		}): Promise<{
-			sharedTemplateId: string;
-			zoomDefId: string;
-			timerDefId?: string;
-		}> {
+			bankRole?: boolean;
+		}): Promise<{ sharedTemplateId: string; zoomDefId: string | null }> {
 			const suffix = Math.random().toString(36).slice(2, 8);
 			const [shared] = await testDb
 				.insert(meetingTemplates)
@@ -2300,59 +2428,24 @@ describe.skipIf(!hasTestDb)(
 				sortOrder: 0,
 				isSpeakerRole: false,
 			});
+			if (opts?.bankRole === false) {
+				return { sharedTemplateId: shared.id, zoomDefId: null };
+			}
 			const [zoomDef] = await testDb
 				.insert(roleDefinitions)
 				.values({
 					clubId: club.clubId,
-					templateId: shared.id,
 					key: "zoom_master",
 					name: "Zoom Master",
 					category: "functionary",
 					defaultCount: 1,
 					sortOrder: 0,
 					isSpeakerRole: false,
+					standing: false,
 				})
 				.returning({ id: roleDefinitions.id });
 			if (!zoomDef) throw new Error("role definition insert failed");
-
-			let timerDefId: string | undefined;
-			if (opts?.nullKeySecondRole) {
-				// The TEMPLATE declares "timer" with a key — `meeting_template_roles
-				// .key` is NOT NULL, so a freshly materialized row always has one.
-				// This meeting's EXISTING materialized definition does not: it was
-				// seeded directly, standing in for a row that predates the `key`
-				// column doing any binding at all.
-				await testDb.insert(meetingTemplateRoles).values({
-					templateId: shared.id,
-					key: "timer",
-					name: "Timer",
-					category: "functionary",
-					defaultCount: 1,
-					sortOrder: 10,
-					isSpeakerRole: false,
-				});
-				const [timerDef] = await testDb
-					.insert(roleDefinitions)
-					.values({
-						clubId: club.clubId,
-						templateId: shared.id,
-						key: null,
-						name: "Timer",
-						category: "functionary",
-						defaultCount: 1,
-						sortOrder: 10,
-						isSpeakerRole: false,
-					})
-					.returning({ id: roleDefinitions.id });
-				if (!timerDef) throw new Error("role definition insert failed");
-				timerDefId = timerDef.id;
-			}
-
-			return {
-				sharedTemplateId: shared.id,
-				zoomDefId: zoomDef.id,
-				timerDefId,
-			};
+			return { sharedTemplateId: shared.id, zoomDefId: zoomDef.id };
 		}
 
 		/** Puts `club.meetingId` on the shared template with one open "zoom_master"
@@ -2387,9 +2480,26 @@ describe.skipIf(!hasTestDb)(
 			return beat.id;
 		}
 
-		it("[[SYMPTOM]] leaves the '+ Add role' picker empty until fixed — a fork must materialize the copied template's roles", async () => {
+		async function bankRows(key: string) {
+			return testDb
+				.select({
+					id: roleDefinitions.id,
+					templateId: roleDefinitions.templateId,
+					standing: roleDefinitions.standing,
+				})
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, club.clubId),
+						eq(roleDefinitions.key, key),
+					),
+				);
+		}
+
+		it("[[SYMPTOM]] never leaves the '+ Add role' picker empty, and mints no second row", async () => {
 			const { sharedTemplateId, zoomDefId } =
 				await seedSharedTemplateWithRoles();
+			if (!zoomDefId) throw new Error("no bank role seeded");
 			const beatId = await putMeetingOnSharedTemplate(
 				sharedTemplateId,
 				zoomDefId,
@@ -2412,17 +2522,58 @@ describe.skipIf(!hasTestDb)(
 			if (!newTemplateId) throw new Error("meeting has no template");
 			expect(newTemplateId).not.toBe(sharedTemplateId); // confirms a fork happened
 
-			// This IS the symptom: before the fix, the private copy has no
-			// materialized role_definitions at all, so this comes back empty.
+			// The picker reads the club's whole bank now, not one template's rows,
+			// so the original symptom is unreachable by construction — and this also
+			// pins the OTHER half: the fork resolved "zoom_master" onto the row that
+			// already existed rather than minting a second one.
 			const picker = await listRoleDefinitions(club.clubId, {
 				onlyEnabled: true,
-				templateId: newTemplateId,
 			});
-			expect(picker.length).toBeGreaterThan(0);
 			expect(picker.map((r) => r.name)).toContain("Zoom Master");
+			expect(await bankRows("zoom_master")).toHaveLength(1);
 		});
 
-		it("re-points the meeting's own slot to the new definition, keeping its assignee, evaluatesSlotId pairing and speech", async () => {
+		it("MINTS a bank row when the fork's template declares a key the club lacks", async () => {
+			// The other arm of `materializeTemplateRoles` on the fork path: a
+			// template authored but never converted for this club. Minted
+			// non-standing, so no ordinary meeting picks it up afterwards.
+			const { sharedTemplateId } = await seedSharedTemplateWithRoles({
+				bankRole: false,
+			});
+			expect(await bankRows("zoom_master")).toHaveLength(0);
+			const [beat] = await testDb
+				.insert(meetingTemplateBeats)
+				.values({
+					templateId: sharedTemplateId,
+					sortOrder: 0,
+					kind: "role",
+					label: "Zoom slot",
+					roleKey: "zoom_master",
+					minutes: 1,
+				})
+				.returning({ id: meetingTemplateBeats.id });
+			if (!beat) throw new Error("beat insert failed");
+			await testDb
+				.update(meetings)
+				.set({ templateId: sharedTemplateId })
+				.where(eq(meetings.id, club.meetingId));
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: beat.id,
+				patch: { minutes: 4 },
+			});
+
+			const minted = await bankRows("zoom_master");
+			expect(minted).toHaveLength(1);
+			expect(minted[0]?.templateId).toBeNull();
+			expect(minted[0]?.standing).toBe(false);
+		});
+
+		it("KEEPS every slot's role_definition_id, assignee, pairing and speech across a fork", async () => {
+			// The assertion task-8b could not make, and the reason the re-point was
+			// needed at all. An id that never moves is what keeps `loadRoleRecency`
+			// and the season grid reading through a private agenda.
 			const { sharedTemplateId } = await seedSharedTemplateWithRoles();
 			await testDb.insert(meetingTemplateRoles).values([
 				{
@@ -2448,7 +2599,6 @@ describe.skipIf(!hasTestDb)(
 				.insert(roleDefinitions)
 				.values({
 					clubId: club.clubId,
-					templateId: sharedTemplateId,
 					key: "speaker",
 					name: "Speaker",
 					category: "speaker",
@@ -2461,7 +2611,6 @@ describe.skipIf(!hasTestDb)(
 				.insert(roleDefinitions)
 				.values({
 					clubId: club.clubId,
-					templateId: sharedTemplateId,
 					key: "evaluator",
 					name: "Evaluator",
 					category: "evaluator",
@@ -2527,13 +2676,6 @@ describe.skipIf(!hasTestDb)(
 				patch: { minutes: 7 },
 			});
 
-			const [after] = await testDb
-				.select({ templateId: meetings.templateId })
-				.from(meetings)
-				.where(eq(meetings.id, club.meetingId));
-			const newTemplateId = after?.templateId;
-			if (!newTemplateId) throw new Error("meeting has no template");
-
 			const [speakerAfter] = await testDb
 				.select({
 					roleDefinitionId: roleSlots.roleDefinitionId,
@@ -2547,12 +2689,7 @@ describe.skipIf(!hasTestDb)(
 			expect(speakerAfter.assignedMemberId).toBe(club.memberId);
 			expect(speakerAfter.speechId).toBe(speech.id);
 			expect(speakerAfter.status).toBe("claimed");
-			expect(speakerAfter.roleDefinitionId).not.toBe(speakerDef.id);
-			const [speakerDefAfter] = await testDb
-				.select({ templateId: roleDefinitions.templateId })
-				.from(roleDefinitions)
-				.where(eq(roleDefinitions.id, speakerAfter.roleDefinitionId));
-			expect(speakerDefAfter?.templateId).toBe(newTemplateId);
+			expect(speakerAfter.roleDefinitionId).toBe(speakerDef.id);
 
 			const [evalAfter] = await testDb
 				.select({
@@ -2564,19 +2701,14 @@ describe.skipIf(!hasTestDb)(
 				.where(eq(roleSlots.id, evalSlot.id));
 			if (!evalAfter) throw new Error("evaluator slot vanished");
 			expect(evalAfter.assignedMemberId).toBe(club.adminMemberId);
-			// The slot's OWN id never changes — only role_definition_id does — so
-			// a pairing by slot id survives the fork untouched.
 			expect(evalAfter.evaluatesSlotId).toBe(speakerSlot.id);
-			const [evalDefAfter] = await testDb
-				.select({ templateId: roleDefinitions.templateId })
-				.from(roleDefinitions)
-				.where(eq(roleDefinitions.id, evalAfter.roleDefinitionId));
-			expect(evalDefAfter?.templateId).toBe(newTemplateId);
+			expect(evalAfter.roleDefinitionId).toBe(evalDef.id);
 		});
 
 		it("leaves a sibling meeting on the same shared template untouched", async () => {
 			const { sharedTemplateId, zoomDefId } =
 				await seedSharedTemplateWithRoles();
+			if (!zoomDefId) throw new Error("no bank role seeded");
 			const beatId = await putMeetingOnSharedTemplate(
 				sharedTemplateId,
 				zoomDefId,
@@ -2608,20 +2740,15 @@ describe.skipIf(!hasTestDb)(
 				patch: { minutes: 9 },
 			});
 
-			// The sibling's own slot is completely untouched — still the OLD def.
+			// Both meetings still reference the club's one Zoom Master — sharing a
+			// role definition between a private agenda and a shared one is the model
+			// now, not a leak to be untangled.
 			const [slot2After] = await testDb
 				.select({ roleDefinitionId: roleSlots.roleDefinitionId })
 				.from(roleSlots)
 				.where(eq(roleSlots.id, slot2.id));
 			expect(slot2After?.roleDefinitionId).toBe(zoomDefId);
-
-			// The old shared definition was left alone, not moved to the fork's
-			// new private template.
-			const [zoomDefAfter] = await testDb
-				.select({ templateId: roleDefinitions.templateId })
-				.from(roleDefinitions)
-				.where(eq(roleDefinitions.id, zoomDefId));
-			expect(zoomDefAfter?.templateId).toBe(sharedTemplateId);
+			expect(await bankRows("zoom_master")).toHaveLength(1);
 
 			// The sibling's own agenda (still reading the untouched shared
 			// template) still declares the role.
@@ -2632,6 +2759,7 @@ describe.skipIf(!hasTestDb)(
 		it("a second write does not fork again or duplicate definitions", async () => {
 			const { sharedTemplateId, zoomDefId } =
 				await seedSharedTemplateWithRoles();
+			if (!zoomDefId) throw new Error("no bank role seeded");
 			const beatId = await putMeetingOnSharedTemplate(
 				sharedTemplateId,
 				zoomDefId,
@@ -2666,215 +2794,7 @@ describe.skipIf(!hasTestDb)(
 				.from(meetings)
 				.where(eq(meetings.id, club.meetingId));
 			expect(afterSecond?.templateId).toBe(privateId); // no second fork
-
-			const defsUnderPrivate = await testDb
-				.select({ id: roleDefinitions.id })
-				.from(roleDefinitions)
-				.where(
-					and(
-						eq(roleDefinitions.clubId, club.clubId),
-						eq(roleDefinitions.templateId, privateId),
-					),
-				);
-			expect(defsUnderPrivate).toHaveLength(1); // not duplicated
-		});
-
-		it("matches a NULL-key old definition to the new one by name, so the slot is re-pointed rather than orphaned", async () => {
-			const { sharedTemplateId, timerDefId } =
-				await seedSharedTemplateWithRoles({ nullKeySecondRole: true });
-			if (!timerDefId) throw new Error("timer definition missing");
-
-			const [beat] = await testDb
-				.insert(meetingTemplateBeats)
-				.values({
-					templateId: sharedTemplateId,
-					sortOrder: 0,
-					kind: "role",
-					label: "Timer slot",
-					roleKey: "timer",
-					minutes: 1,
-				})
-				.returning({ id: meetingTemplateBeats.id });
-			if (!beat) throw new Error("beat insert failed");
-			await testDb
-				.update(meetings)
-				.set({ templateId: sharedTemplateId })
-				.where(eq(meetings.id, club.meetingId));
-			const [timerSlot] = await testDb
-				.insert(roleSlots)
-				.values({
-					meetingId: club.meetingId,
-					roleDefinitionId: timerDefId,
-					slotIndex: 0,
-					assignedMemberId: club.memberId,
-					status: "claimed",
-				})
-				.returning({ id: roleSlots.id });
-			if (!timerSlot) throw new Error("slot insert failed");
-
-			await updateAgendaRow({
-				meetingId: club.meetingId,
-				rowId: beat.id,
-				patch: { minutes: 2 },
-			});
-
-			const [after] = await testDb
-				.select({ templateId: meetings.templateId })
-				.from(meetings)
-				.where(eq(meetings.id, club.meetingId));
-			const newTemplateId = after?.templateId;
-			if (!newTemplateId) throw new Error("meeting has no template");
-
-			const [timerSlotAfter] = await testDb
-				.select({
-					roleDefinitionId: roleSlots.roleDefinitionId,
-					assignedMemberId: roleSlots.assignedMemberId,
-				})
-				.from(roleSlots)
-				.where(eq(roleSlots.id, timerSlot.id));
-			if (!timerSlotAfter) throw new Error("timer slot vanished");
-			// Not silently orphaned: the assignee survives...
-			expect(timerSlotAfter.assignedMemberId).toBe(club.memberId);
-			// ...and the slot was actually re-pointed, not left on the old def.
-			expect(timerSlotAfter.roleDefinitionId).not.toBe(timerDefId);
-
-			const [newDef] = await testDb
-				.select({
-					templateId: roleDefinitions.templateId,
-					key: roleDefinitions.key,
-					name: roleDefinitions.name,
-				})
-				.from(roleDefinitions)
-				.where(eq(roleDefinitions.id, timerSlotAfter.roleDefinitionId));
-			// Now belongs to the meeting's OWN (new, private) template...
-			expect(newDef?.templateId).toBe(newTemplateId);
-			expect(newDef?.name).toBe("Timer");
-			// ...and matched by name landed it on the freshly materialized row,
-			// which (unlike the old one) DOES carry a key — `materializeTemplateRoles`
-			// always copies `meeting_template_roles.key`, which is NOT NULL.
-			expect(newDef?.key).toBe("timer");
-
-			// The OLD null-key definition was left alone, not moved or deleted.
-			const [oldDefAfter] = await testDb
-				.select({ templateId: roleDefinitions.templateId })
-				.from(roleDefinitions)
-				.where(eq(roleDefinitions.id, timerDefId));
-			expect(oldDefAfter?.templateId).toBe(sharedTemplateId);
-		});
-
-		it("skips an ambiguous NULL-key name match rather than picking a definition nondeterministically", async () => {
-			const { sharedTemplateId } = await seedSharedTemplateWithRoles();
-			// Two DIFFERENT keyed roles sharing the SAME display name "Chair" —
-			// no unique index stops that, and `addAgendaRole`'s own "derives a
-			// unique key when two roles share a name" test proves it's a real
-			// shape, not a contrived one.
-			await testDb.insert(meetingTemplateRoles).values([
-				{
-					templateId: sharedTemplateId,
-					key: "chair_a",
-					name: "Chair",
-					category: "leadership",
-					defaultCount: 1,
-					sortOrder: 20,
-					isSpeakerRole: false,
-				},
-				{
-					templateId: sharedTemplateId,
-					key: "chair_b",
-					name: "Chair",
-					category: "leadership",
-					defaultCount: 1,
-					sortOrder: 30,
-					isSpeakerRole: false,
-				},
-			]);
-			await testDb.insert(roleDefinitions).values([
-				{
-					clubId: club.clubId,
-					templateId: sharedTemplateId,
-					key: "chair_a",
-					name: "Chair",
-					category: "leadership",
-					defaultCount: 1,
-					sortOrder: 20,
-					isSpeakerRole: false,
-				},
-				{
-					clubId: club.clubId,
-					templateId: sharedTemplateId,
-					key: "chair_b",
-					name: "Chair",
-					category: "leadership",
-					defaultCount: 1,
-					sortOrder: 30,
-					isSpeakerRole: false,
-				},
-			]);
-
-			// The OLD definition this meeting's slot actually references: NULL
-			// key, the same ambiguous "Chair" name as the two new ones above.
-			const [ambiguousDef] = await testDb
-				.insert(roleDefinitions)
-				.values({
-					clubId: club.clubId,
-					templateId: sharedTemplateId,
-					key: null,
-					name: "Chair",
-					category: "leadership",
-					defaultCount: 1,
-					sortOrder: 10,
-					isSpeakerRole: false,
-				})
-				.returning({ id: roleDefinitions.id });
-			if (!ambiguousDef) throw new Error("role definition insert failed");
-
-			const [beat] = await testDb
-				.insert(meetingTemplateBeats)
-				.values({
-					templateId: sharedTemplateId,
-					sortOrder: 0,
-					kind: "event",
-					label: "Opening remarks",
-					minutes: 1,
-				})
-				.returning({ id: meetingTemplateBeats.id });
-			if (!beat) throw new Error("beat insert failed");
-			await testDb
-				.update(meetings)
-				.set({ templateId: sharedTemplateId })
-				.where(eq(meetings.id, club.meetingId));
-			const [ambiguousSlot] = await testDb
-				.insert(roleSlots)
-				.values({
-					meetingId: club.meetingId,
-					roleDefinitionId: ambiguousDef.id,
-					slotIndex: 0,
-					assignedMemberId: club.memberId,
-					status: "claimed",
-				})
-				.returning({ id: roleSlots.id });
-			if (!ambiguousSlot) throw new Error("slot insert failed");
-
-			await updateAgendaRow({
-				meetingId: club.meetingId,
-				rowId: beat.id,
-				patch: { minutes: 3 },
-			});
-
-			// NOT migrated — an ambiguous name match is skipped, never guessed
-			// at nondeterministically.
-			const [ambiguousSlotAfter] = await testDb
-				.select({
-					roleDefinitionId: roleSlots.roleDefinitionId,
-					assignedMemberId: roleSlots.assignedMemberId,
-				})
-				.from(roleSlots)
-				.where(eq(roleSlots.id, ambiguousSlot.id));
-			if (!ambiguousSlotAfter) throw new Error("ambiguous slot vanished");
-			expect(ambiguousSlotAfter.roleDefinitionId).toBe(ambiguousDef.id);
-			// Not lost either — still assigned, just left where it was rather
-			// than silently landing on "chair_a" or "chair_b".
-			expect(ambiguousSlotAfter.assignedMemberId).toBe(club.memberId);
+			expect(await bankRows("zoom_master")).toHaveLength(1); // not duplicated
 		});
 	},
 );
@@ -3319,53 +3239,61 @@ describe.skipIf(!hasTestDb)("translation onto a diverged private copy", () => {
  * The deadlock the `FOR UPDATE` lock introduced, reproduced rather than
  * asserted about.
  *
- * `ensureAgendaDraft` takes `meetings FOR UPDATE` FIRST and re-points this
- * meeting's `role_slots` late; `applyTemplateConversion` writes `role_slots`
- * first and updates `meetings` LAST. Opposite orders over the same two
- * resources is a lock cycle, Postgres breaks it with SQLSTATE 40P01, and that
- * is not a unique violation — so before the catch, `runAction` toasted the
- * driver's own `deadlock detected` at an officer.
+ * `ensureAgendaDraft` takes `meetings FOR UPDATE` FIRST and writes its other
+ * resources late; a conversion reaches those resources first and updates
+ * `meetings` LAST. Opposite orders over the same two resources is a lock cycle,
+ * Postgres breaks it with SQLSTATE 40P01, and that is not a unique violation —
+ * so before the catch, `runAction` toasted the driver's own `deadlock detected`
+ * at an officer.
  *
- * Which pair cycles is worth being exact about, because the obvious one does
- * NOT. `meeting_templates.meeting_id` is a foreign key, so inserting a private
- * copy takes `FOR KEY SHARE` on the referenced `meetings` row — which the
- * edit's `FOR UPDATE` conflicts with. That serializes the two INSERT-vs-lock
- * orderings completely: whichever side reaches `meetings` first, the other
- * simply waits. `role_slots` is the resource with no such interlock, and the
- * conversion arm that reaches it with no `meetings` lock held at all is the
- * one that removes a template (`templateId === null`), which inserts nothing
- * and therefore takes nothing until its final update.
+ * WHICH resource cycles changed with #801, and the reasoning is worth keeping
+ * because the obvious candidate still does NOT work. `meeting_templates
+ * .meeting_id` is a foreign key, so inserting a private copy takes
+ * `FOR KEY SHARE` on the referenced `meetings` row — which the edit's
+ * `FOR UPDATE` conflicts with. That serializes the two INSERT-vs-lock orderings
+ * completely: whichever side reaches `meetings` first, the other simply waits.
  *
- * The conversion side is played by hand — hold this meeting's slots, then ask
- * for its `meetings` row — because `applyTemplateConversion` opens its own
- * transaction and offers nowhere to pause between those two writes. Hand-played
- * so the cycle is BUILT rather than raced for; a version that just fires both
- * concurrently deadlocks on some interleavings and passes vacuously on the
- * rest. The ordering below decides only the VICTIM, since each waiter arms its
- * own `deadlock_timeout` (1s here) when it begins waiting and whichever fires
- * first runs the detector and aborts itself. Making the agenda edit wait first
- * makes it the side that reports.
+ * It used to be `role_slots`, because the fork RE-POINTED this meeting's slots
+ * onto freshly materialized definitions. That re-point is gone — ids no longer
+ * move — so the fork never touches `role_slots` at all, and the old cycle
+ * cannot be built. The resource that replaced it is `role_definitions`:
+ * `materializeTemplateRoles` INSERTs a bank row for a declared key the club
+ * does not hold, and `role_definitions_club_key_unique` makes a concurrent
+ * insert of the SAME (club, key) wait on the first writer — even under
+ * `ON CONFLICT DO NOTHING`, which waits and then does nothing. Same shape,
+ * same translation, a resource the code still reaches.
+ *
+ * The conversion side is played by hand — hold the contested (club, key), then
+ * ask for the `meetings` row — because `applyTemplateConversion` opens its own
+ * transaction and offers nowhere to pause between those two writes.
+ * Hand-played so the cycle is BUILT rather than raced for; a version that just
+ * fires both concurrently deadlocks on some interleavings and passes vacuously
+ * on the rest. The ordering below decides only the VICTIM, since each waiter
+ * arms its own `deadlock_timeout` (1s here) when it begins waiting and
+ * whichever fires first runs the detector and aborts itself. Making the agenda
+ * edit wait first makes it the side that reports.
  */
 describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
-	/** Block until a backend is actually WAITING to write `role_slots` — polled
-	 *  rather than slept for, so the cycle is confirmed built instead of
+	/** Block until a backend is actually WAITING to write `role_definitions` —
+	 *  polled rather than slept for, so the cycle is confirmed built instead of
 	 *  assumed. Matched on the statement text as well as the wait, since a
 	 *  parallel test FILE sharing `tm_test` can be waiting on something else. */
-	async function waitForBlockedSlotWrite(): Promise<void> {
+	async function waitForBlockedRoleDefWrite(): Promise<void> {
 		for (let i = 0; i < 150; i++) {
 			const waiting = await testDb.execute(
 				sql`select count(*)::int as n from pg_stat_activity
 				    where datname = current_database()
 				      and wait_event_type = 'Lock'
-				      and query ilike 'update "role_slots"%'`,
+				      and query ilike 'insert into "role_definitions"%'`,
 			);
 			if (Number(waiting.rows[0]?.n ?? 0) > 0) return;
 			await new Promise((r) => setTimeout(r, 20));
 		}
-		throw new Error("the agenda edit never blocked on role_slots");
+		throw new Error("the agenda edit never blocked on role_definitions");
 	}
 
 	it("reports a deadlock as a sentence, not the driver's message", async () => {
+		const contestedKey = `deadlock_role_${crypto.randomUUID().slice(0, 8)}`;
 		const [shared] = await testDb
 			.insert(meetingTemplates)
 			.values({
@@ -3375,56 +3303,35 @@ describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
 			.returning({ id: meetingTemplates.id });
 		if (!shared) throw new Error("template insert failed");
 		madeTemplates.push(shared.id);
-		// A DECLARED role, materialized directly against the shared template and
-		// claimed by a slot on this meeting — the pre-private-copy shape. It is
-		// what makes `ensureAgendaDraft`'s re-point step reach `role_slots` at
-		// all; without a matched definition the fork writes no slot and there is
-		// no second resource to cycle over.
+		// A DECLARED role the club does NOT hold a bank row for — so the fork's
+		// `materializeTemplateRoles` step has an INSERT to make, which is the
+		// second resource the cycle needs. With the key already banked it would
+		// resolve silently and take nothing.
 		await testDb.insert(meetingTemplateRoles).values({
 			templateId: shared.id,
-			key: "zoom_master",
+			key: contestedKey,
 			name: "Zoom Master",
 			category: "functionary",
 			defaultCount: 1,
 			sortOrder: 0,
 			isSpeakerRole: false,
 		});
-		const [zoomDef] = await testDb
-			.insert(roleDefinitions)
-			.values({
-				clubId: club.clubId,
-				templateId: shared.id,
-				key: "zoom_master",
-				name: "Zoom Master",
-				category: "functionary",
-				defaultCount: 1,
-				sortOrder: 0,
-				isSpeakerRole: false,
-			})
-			.returning({ id: roleDefinitions.id });
-		if (!zoomDef) throw new Error("role definition insert failed");
 		await testDb.insert(meetingTemplateBeats).values({
 			templateId: shared.id,
 			sortOrder: 0,
 			kind: "role",
 			label: "Zoom slot",
-			roleKey: "zoom_master",
+			roleKey: contestedKey,
 			minutes: 1,
 		});
 		await testDb
 			.update(meetings)
 			.set({ templateId: shared.id })
 			.where(eq(meetings.id, club.meetingId));
-		await testDb.insert(roleSlots).values({
-			meetingId: club.meetingId,
-			roleDefinitionId: zoomDef.id,
-			slotIndex: 0,
-			status: "open",
-		});
 
-		let slotsLocked!: () => void;
-		const conversionHasSlots = new Promise<void>((r) => {
-			slotsLocked = r;
+		let roleKeyHeld!: () => void;
+		const conversionHasRoleKey = new Promise<void>((r) => {
+			roleKeyHeld = r;
 		});
 		let releaseConversion!: () => void;
 		const conversionGate = new Promise<void>((r) => {
@@ -3435,14 +3342,20 @@ describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
 		const ROLLBACK = new Error("rollback the hand-played conversion");
 
 		const conversion = testDb.transaction(async (tx) => {
-			// The conversion's re-point/release writes, in lock terms: this
-			// meeting's slots, held while it still holds nothing on `meetings`.
-			await tx
-				.select({ id: roleSlots.id })
-				.from(roleSlots)
-				.where(eq(roleSlots.meetingId, club.meetingId))
-				.for("update");
-			slotsLocked();
+			// The conversion's own materialize, in lock terms: it claims
+			// (club, contestedKey) in `role_definitions_club_key_unique` while
+			// holding nothing on `meetings`.
+			await tx.insert(roleDefinitions).values({
+				clubId: club.clubId,
+				key: contestedKey,
+				name: "Zoom Master",
+				category: "functionary",
+				defaultCount: 1,
+				sortOrder: 0,
+				isSpeakerRole: false,
+				standing: false,
+			});
+			roleKeyHeld();
 			await conversionGate;
 			// Its final statement — and the second half of the cycle, since the
 			// edit is holding this row `FOR UPDATE`.
@@ -3453,19 +3366,15 @@ describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
 			throw ROLLBACK;
 		});
 
-		// Started only once the conversion holds the slots, so the edit takes
-		// `meetings` cleanly and blocks on the re-point.
-		await conversionHasSlots;
+		// Started only once the conversion holds the key, so the edit takes
+		// `meetings` cleanly and blocks on the materialize.
+		await conversionHasRoleKey;
 		const edit = testDb.transaction((tx) =>
 			ensureAgendaDraft(tx, club.meetingId),
 		);
-		await waitForBlockedSlotWrite();
+		await waitForBlockedRoleDefWrite();
 		// Cushion, so the edit's `deadlock_timeout` is armed comfortably before
 		// the conversion's and the victim is not decided by the poll interval.
-		// It also absorbs a false positive from the poll: a parallel test file
-		// blocked on its own `role_slots` write would release the conversion
-		// early, and 250ms is far longer than the handful of statements the
-		// edit needs to reach its own wait.
 		await new Promise((r) => setTimeout(r, 250));
 		releaseConversion();
 		const [conversionResult, editResult] = await Promise.allSettled([
