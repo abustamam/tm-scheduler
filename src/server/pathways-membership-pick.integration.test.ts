@@ -459,11 +459,17 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 		// case fails and nothing else in the file does.
 		it("is total: a created_at tie still resolves, on the primary key", async () => {
 			const sameInstant = new Date("2026-03-01T00:00:00.000Z");
-			const descendingIds = [
-				"00000000-0000-4000-8000-000000000823",
-				"00000000-0000-4000-8000-000000000822",
-				"00000000-0000-4000-8000-000000000821",
-			];
+			// PER-RUN, like every other key this suite seeds. These were three FIXED
+			// uuids, which is a primary-key collision the moment two runs of this
+			// file overlap — vitest runs files in parallel against one shared
+			// `tm_test`, and `tm_test` is shared with other agents besides. Only the
+			// last three hex digits vary: a uuid orders by its bytes, so descending
+			// suffixes are descending ids whatever the random prefix is, which is
+			// the property this case needs.
+			const runPrefix = randomUUID().slice(0, 33);
+			const descendingIds = ["823", "822", "821"].map(
+				(suffix) => `${runPrefix}${suffix}`,
+			);
 			for (const memberId of descendingIds) {
 				await addMembership({
 					clubRole: "admin",

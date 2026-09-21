@@ -205,19 +205,32 @@ function staleWaivers(picks: Pick[], filed: Record<string, string>): string[] {
 }
 
 /**
- * One `unorderedPicks`-visible statement, for the synthetic sweeps the two
- * waiver tests run their rule over. Shaped like the real picks: destructured,
+ * One `unorderedPicks`-visible statement, for the synthetic sweeps the tests
+ * below run their rules over. Shaped like the real picks: destructured,
  * selecting out of `members`, resolving `people.user_id`.
+ *
+ * `limit: false` is not decoration — it is the only thing here that reaches the
+ * detector's destructure arm. All four real pick sites carry `.limit(1)` today,
+ * so a helper that always emits one leaves that arm unexercised and a
+ * limit-only detector green on the whole tree. See `finds a destructure that
+ * never says .limit(1)`.
  */
-function pickStatement(opts: { binding: string; ordered?: boolean }): string {
-	return [
-		`\tconst [${opts.binding}] = await db`,
+function pickStatement(opts: {
+	binding: string;
+	ordered?: boolean;
+	/** `false` for the pre-#822 shape: one row kept with no `.limit(1)` at all. */
+	limit?: boolean;
+}): string {
+	const chain = [
 		"\t\t.select({ id: members.id })",
 		"\t\t.from(members)",
 		"\t\t.where(and(eq(people.userId, userId)))",
-		...(opts.ordered ? ["\t\t.orderBy(members.createdAt, members.id)"] : []),
-		"\t\t.limit(1);",
-	].join("\n");
+	];
+	if (opts.ordered) chain.push("\t\t.orderBy(members.createdAt, members.id)");
+	if (opts.limit ?? true) chain.push("\t\t.limit(1)");
+	// The `;` goes on whatever the last link is: a drizzle chain carries no
+	// terminator of its own, and the detector slices to the first one.
+	return `${[`\tconst [${opts.binding}] = await db`, ...chain].join("\n")};`;
 }
 
 describe("single-row membership picks are ordered (#804)", () => {
@@ -291,8 +304,18 @@ describe("single-row membership picks are ordered (#804)", () => {
 			"src/server/synthetic.ts:waivedPick is waived for ONE statement (#822), and the sweep found 2",
 		]);
 
+		// ZERO, the other side of `!== 1` and the half the docblock claims. A
+		// waiver whose key the sweep cannot place is covering nothing, so it is
+		// reported too. Without this the rule could be written `> 1` — the natural
+		// way to spell "no inheriting" — and every other assertion here passes.
+		expect(
+			miscoveredWaivers(both, { "src/server/synthetic.ts:noSuchPick": "#804" }),
+		).toEqual([
+			"src/server/synthetic.ts:noSuchPick is waived for ONE statement (#804), and the sweep found 0",
+		]);
+
 		// The control, without which the rule could be "report every waiver" and
-		// the case above would not notice: ONE pick under the same key is clean.
+		// the cases above would not notice: ONE pick under the same key is clean.
 		const oneUnderOne = [
 			"export async function waivedPick(userId: string) {",
 			pickStatement({ binding: "m" }),
@@ -359,6 +382,46 @@ describe("single-row membership picks are ordered (#804)", () => {
 		).toEqual([
 			"src/server/synthetic.ts:stillUnordered names see the ticket, which is not an issue number",
 		]);
+	});
+
+	// The detector's SECOND arm, which no real source file can exercise any more:
+	// all four pick sites carry `.limit(1)` today, so deleting the destructure
+	// clause from `unorderedPicks` leaves every other case in this file green. The
+	// shape below is `selfMemberIdInClub` as #822 found it — one row kept off an
+	// unordered result with no limit anywhere — which is the revision this guard
+	// exists to have caught, and the claim its docblock makes.
+	it("finds a destructure that never says .limit(1) (the pre-#822 shape)", () => {
+		const unlimited = [
+			"export async function selfMemberIdInClub(userId: string) {",
+			pickStatement({ binding: "m", limit: false }),
+			"\treturn m?.id ?? null;",
+			"}",
+		].join("\n");
+		// The fixture has to BE limit-free or it exercises the other arm and this
+		// case quietly stops being about anything. MEASURED: make `pickStatement`
+		// ignore `limit: false` and every assertion below stays green without this
+		// line — the same vacuity this test exists to close, one level down.
+		expect(unlimited).not.toContain(".limit(");
+
+		const got = unorderedPicks(unlimited, "src/server/synthetic.ts");
+		expect(got.map((p) => p.where)).toEqual([
+			"src/server/synthetic.ts:2 (selfMemberIdInClub)",
+		]);
+		expect(got[0]?.ordered).toBe(false);
+
+		// ...and the same unlimited shape WITH an ordering is not an offender, so
+		// the arm reports a missing ORDER BY rather than reporting every
+		// destructure it meets.
+		const fixed = [
+			"export async function selfMemberIdInClub(userId: string) {",
+			pickStatement({ binding: "m", limit: false, ordered: true }),
+			"\treturn m?.id ?? null;",
+			"}",
+		].join("\n");
+		expect(fixed).not.toContain(".limit(");
+		expect(
+			unorderedPicks(fixed, "src/server/synthetic.ts").map((p) => p.ordered),
+		).toEqual([true]);
 	});
 
 	// A guard's own bug is invisible to a green sweep, and this one HAD one that a
