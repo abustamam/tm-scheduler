@@ -1,8 +1,11 @@
 /**
  * DB-backed gate for #803: `applyAddRoleSlot` must take the meeting lock FIRST
  * and decide everything the insert depends on from behind it
- * (`lockMeetingForSlotEdit`, ADR-0005), the way `applyAddSpeakerSlot` already
- * does. TWO races, one lock, one row:
+ * (`lockMeetingForSlotEdit`, ADR-0005). The three other slot mutations in
+ * `slots-logic.ts` now do the same — the review round that added the status and
+ * shape pairs below moved `applyAddSpeakerSlot`, `applyRemoveSpeakerSlot` and
+ * `applyMoveSlot` onto the locked row too, since each resolved its role ids from
+ * an unlocked `templateId`. THREE races, one lock, one row:
  *
  * - NUMBERING. "Which slot is the next index" is not a property of one row, so
  *   a per-row guard cannot answer it, and there is deliberately NO unique index
@@ -16,12 +19,17 @@
  *   takes. Gated on a copy read before the transaction, READ COMMITTED lets a
  *   concurrent "complete meeting" commit inside the window and the slot lands on
  *   a completed meeting — the gate having passed on a value that is no longer
- *   true. `templateId` rides the same read (it picks the shape that decides
- *   whether a role is a paired speaker role, so a conversion committing in that
- *   window admits a slot the speaker controls own); it is the same row behind
- *   the same lock re-read at the same moment, and is not separately gated here.
+ *   true.
+ * - SHAPE. `templateId` is the other meeting-row column the add gates on: it
+ *   picks the declared shape, and the shape is what says whether a role belongs
+ *   to the paired speaker/evaluator lineup the "+ Add role" path must refuse. A
+ *   conversion committing in the window admits a slot the speaker controls own.
+ *   It gets its own pair rather than riding on STATUS, because "same row, same
+ *   lock" is an argument about the fix and not a demonstration of it — and the
+ *   round that first made that argument left the speaker paths reading this same
+ *   column unlocked.
  *
- * EACH of those two has its own pre-fix CONTROL: the shape this path actually
+ * EACH of the three has its own pre-fix CONTROL: the shape this path actually
  * had, driven through the same harness as the assertion beside it and asserted
  * to still reproduce the bug. Without one, "the fixed code did the right thing"
  * is equally satisfied by two calls that merely never overlapped, and the suite
@@ -30,23 +38,36 @@
  * The `Promise.all` test near the bottom is the one with NO control, and it is
  * labelled SMOKE for that reason rather than presented as the acceptance check:
  * whether two overlapping adds collide depends on how their two await profiles
- * happen to line up, so it CAN pass against the broken shape. The two
- * deterministic pairs are what this suite actually proves.
+ * happen to line up, so it CAN pass against the broken shape. It does still
+ * assert the indices — see its own docblock for what a red there means. The
+ * three deterministic pairs are what this suite actually proves.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/role-slot-index-lock.integration.test.ts
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import {
+	activityLog,
+	meetings,
+	meetingTemplateRoles,
+	meetingTemplates,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
+import {
+	pairedRoleIds,
+	pickSpeakerAndEvaluatorRoles,
+} from "#/lib/meeting-roles";
 import {
 	cleanup,
 	hasTestDb,
 	openBlockingTx,
 	type SeededClub,
 	seedClub,
+	type TestTx,
 	testDb,
 	waitForLockWait,
 } from "#/test/db";
@@ -54,17 +75,27 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { applyAddRoleSlot, applyAddSpeakerSlot } = await import("./slots-logic");
-// The REAL gate, so the status control below cannot drift from the thing it
-// mirrors — the only difference between the two is where the row came from.
+// The REAL gates, so the two controls below cannot drift from the things they
+// mirror — the only difference in each is where the meeting row came from.
 const { assertMeetingNotLocked } = await import("./meeting-authz-logic");
+const { loadMeetingShapeDefs } = await import("./meeting-templates-logic");
 
-/** Add a non-paired role def to the seeded club; return its id. */
-async function addRole(clubId: string, name: string): Promise<string> {
+/** Add a non-paired role def to the seeded club; return its id.
+ *
+ *  `key` is what a template's declared role JOINS to (`loadDeclaredRoleDefs`
+ *  matches on club + key), so it is per-run: vitest runs files in parallel
+ *  against one shared `tm_test` and `role_definitions_club_key_unique` is real. */
+async function addRole(
+	clubId: string,
+	name: string,
+	key?: string,
+): Promise<string> {
 	const [row] = await testDb
 		.insert(roleDefinitions)
 		.values({
 			clubId,
 			name,
+			key: key ?? null,
 			category: "functionary",
 			defaultCount: 1,
 			sortOrder: 50,
@@ -180,6 +211,68 @@ async function statusGatedOutsideTheLock(
 	});
 }
 
+/**
+ * The same shape for the OTHER meeting-row column: `templateId` read with no
+ * lock, the paired-role gate applied to the shape it names, and only the insert
+ * taken under the lock. The real `loadMeetingShapeDefs` and `pairedRoleIds`,
+ * again so the control cannot drift from the gate it mirrors.
+ */
+async function shapeGatedOutsideTheLock(
+	meetingId: string,
+	roleDefinitionId: string,
+) {
+	const meeting = await testDb.query.meetings.findFirst({
+		where: eq(meetings.id, meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+	const shape = await loadMeetingShapeDefs(
+		testDb,
+		meeting.clubId,
+		meeting.templateId,
+	);
+	if (pairedRoleIds(shape).has(roleDefinitionId)) {
+		throw new Error("Add speakers with the speaker controls.");
+	}
+	await testDb.transaction(async (tx) => {
+		await lockMeetingRow(tx, meetingId);
+		await tx
+			.insert(roleSlots)
+			.values({ meetingId, roleDefinitionId, slotIndex: 0 });
+	});
+}
+
+/**
+ * The shape `applyAddSpeakerSlot` had before the review round: WHICH role "+ Add
+ * speaker" means resolved from an unlocked `templateId`, and only the insert
+ * behind the lock.
+ *
+ * This one is worth stating plainly, because it is not a refusal that goes wrong
+ * — it is the slot landing on the WRONG ROLE. `templateId` selects the meeting's
+ * shape and the shape names the speaker lineup, so an add resolved against the
+ * old shape inserts into the lineup the meeting no longer runs, on a meeting
+ * that by then declares a different one.
+ */
+async function speakerRoleResolvedOutsideTheLock(meetingId: string) {
+	const meeting = await testDb.query.meetings.findFirst({
+		where: eq(meetings.id, meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+	const shape = await loadMeetingShapeDefs(
+		testDb,
+		meeting.clubId,
+		meeting.templateId,
+	);
+	const { speakerRoleId } = pickSpeakerAndEvaluatorRoles(shape);
+	await testDb.transaction(async (tx) => {
+		await lockMeetingRow(tx, meetingId);
+		await tx.insert(roleSlots).values({
+			meetingId,
+			roleDefinitionId: speakerRoleId,
+			slotIndex: 0,
+		});
+	});
+}
+
 const sleep = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -188,15 +281,70 @@ describe.skipIf(!hasTestDb)(
 	() => {
 		let club: SeededClub;
 		let roleId: string;
+		let roleKey: string;
+		const createdTemplateIds: string[] = [];
 
 		beforeEach(async () => {
 			club = await seedClub();
 			// A role the meeting has no slots of yet, so the first index is 0.
-			roleId = await addRole(club.clubId, "Vote Counter");
+			// Per-run key: `templateMakingTheRoleASpeaker` joins a template's
+			// declared role to this one on (club, key), and `tm_test` is shared.
+			roleKey = `vote_counter-${crypto.randomUUID().slice(0, 8)}`;
+			roleId = await addRole(club.clubId, "Vote Counter", roleKey);
 		});
 		afterEach(async () => {
+			// `cleanup` FIRST, then the templates — `meetings.template_id` is ON
+			// DELETE RESTRICT, so a template still referenced by a live meeting
+			// cannot go. Cascading the club takes the meeting out of the way, and
+			// then these are deletable. Same order and same reason as
+			// `meeting-template-convert.integration.test.ts`, whose header documents
+			// that a template outliving `cleanup` is the leak being avoided.
 			await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+			if (createdTemplateIds.length > 0) {
+				await testDb
+					.delete(meetingTemplates)
+					.where(inArray(meetingTemplates.id, createdTemplateIds));
+				createdTemplateIds.length = 0;
+			}
 		});
+
+		/**
+		 * A template whose declared shape calls THIS run's role the speaker role.
+		 * The point of it is the contrast: under `template_id = NULL` the seeded
+		 * club has no speaker role at all, so `pairedRoleIds` is empty and `roleId`
+		 * is addable; under this template it is the paired lineup and
+		 * `applyAddRoleSlot` must refuse it. Nothing about the role row changes —
+		 * the only thing that moves is one column on the meeting.
+		 *
+		 * GLOBAL (`clubId: null`), which is not incidental. A club-owned template
+		 * and its meeting both cascade from `DELETE FROM clubs`, and the RESTRICT on
+		 * `meetings.template_id` can fire if the template goes first, aborting the
+		 * whole teardown. The convert suite's fixture is global for the same reason;
+		 * a per-run key keeps two parallel files from colliding on
+		 * `meeting_templates_global_key_unique`.
+		 */
+		async function templateMakingTheRoleASpeaker(): Promise<string> {
+			const [tpl] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: null,
+					key: `slot-index-lock-${crypto.randomUUID().slice(0, 8)}`,
+					name: "Slot index lock fixture",
+				})
+				.returning({ id: meetingTemplates.id });
+			if (!tpl) throw new Error("Failed to insert template");
+			createdTemplateIds.push(tpl.id);
+			await testDb.insert(meetingTemplateRoles).values({
+				templateId: tpl.id,
+				key: roleKey,
+				name: "Contestant",
+				category: "speaker",
+				defaultCount: 3,
+				sortOrder: 10,
+				isSpeakerRole: true,
+			});
+			return tpl.id;
+		}
 
 		/**
 		 * Run `add` against a meeting another writer already holds: the writer
@@ -267,24 +415,35 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		/**
-		 * Run `add` against a meeting that is BEING COMPLETED: a writer takes the
-		 * meeting row, sets `status = 'completed'`, and commits only once `add` is
+		 * Run `add` against a meeting whose ROW is being changed under it: a writer
+		 * takes the meeting row, applies `change`, and commits only once `add` is
 		 * PROVABLY parked behind that lock. What `add` does next says which copy of
-		 * `status` its gate judged.
+		 * the row its gates judged.
 		 *
-		 * `waitForLockWait` rather than the sleep above, because here the wait IS
-		 * what discriminates: it reads `pg_blocking_pids`, so the interleaving
-		 * asserted on is the one that actually happened rather than one the
-		 * scheduler happened to produce on a shared `tm_test` running ~50 suites at
-		 * once. Let the writer commit early and BOTH arms take the uncontended
-		 * path, where both refuse and the pair passes having proved nothing.
+		 * One harness for both meeting-row columns, because the race is one race —
+		 * `status` and `templateId` sit on the same row behind the same lock, and
+		 * only the writer's UPDATE differs.
+		 *
+		 * `waitForLockWait` rather than the sleep above: it reads
+		 * `pg_blocking_pids`, so the writer does not commit until the subject is
+		 * provably parked behind it, on a shared `tm_test` running ~50 suites at
+		 * once. Deleting it was measured, and the result is worth writing down
+		 * because it is not uniform — the STATUS control goes red immediately
+		 * (its gate is the first thing its subject does, so the commit beats it),
+		 * while the SHAPE and SPEAKER controls stay green (their unlocked read is
+		 * already in flight by the time `commit()` is called, so they still win by
+		 * luck). Treat the wait as what makes the interleaving RELIABLE and each
+		 * control as what makes a failed interleaving VISIBLE: every control here
+		 * reads the pre-commit value, so if the writer ever did land first, the
+		 * control would see the new one and go red rather than the pair passing
+		 * having proved nothing.
 		 */
-		async function raceAgainstACompletingMeeting(add: () => Promise<unknown>) {
+		async function raceAgainstAMeetingRowChange(
+			change: (tx: TestTx) => Promise<unknown>,
+			add: () => Promise<unknown>,
+		) {
 			const writer = await openBlockingTx(async (tx) => {
-				await tx
-					.update(meetings)
-					.set({ status: "completed" })
-					.where(eq(meetings.id, club.meetingId));
+				await change(tx);
 			});
 			// Attached to immediately: the fixed arm REJECTS, and a rejection with no
 			// handler yet is an unhandled one before the assertion can read it.
@@ -300,6 +459,21 @@ describe.skipIf(!hasTestDb)(
 			};
 		}
 
+		/** The writer's UPDATE for the status half: the meeting completes. */
+		const completeIt = (tx: TestTx) =>
+			tx
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, club.meetingId));
+
+		/** The writer's UPDATE for the shape half: the meeting is converted to a
+		 *  template under which this role is the paired speaker lineup. */
+		const convertItTo = (templateId: string) => (tx: TestTx) =>
+			tx
+				.update(meetings)
+				.set({ templateId })
+				.where(eq(meetings.id, club.meetingId));
+
 		/**
 		 * CONTROL for the status half, through that harness. Gated on a row read
 		 * before the transaction, the add sails past a meeting that is completed by
@@ -307,7 +481,7 @@ describe.skipIf(!hasTestDb)(
 		 */
 		it("CONTROL: status gated outside the lock adds to a completed meeting", async () => {
 			expect(
-				await raceAgainstACompletingMeeting(() =>
+				await raceAgainstAMeetingRowChange(completeIt, () =>
 					statusGatedOutsideTheLock(club.meetingId, roleId),
 				),
 			).toEqual({ outcome: "resolved", indices: [0] });
@@ -321,7 +495,7 @@ describe.skipIf(!hasTestDb)(
 		 */
 		it("re-reads status under the lock, so a completing meeting wins the race", async () => {
 			expect(
-				await raceAgainstACompletingMeeting(() =>
+				await raceAgainstAMeetingRowChange(completeIt, () =>
 					applyAddRoleSlot({
 						meetingId: club.meetingId,
 						roleDefinitionId: roleId,
@@ -335,16 +509,98 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		/**
+		 * CONTROL for the shape half. `templateId` is the quieter of the two
+		 * meeting-row reads and the easier one to argue is harmless, which is why it
+		 * gets its own pair rather than riding on the status one: gated on a row
+		 * read before the transaction, the add sees the OLD shape — where this club
+		 * has no speaker role at all — and lands a slot that the meeting's new shape
+		 * says belongs to the "+ Add speaker" controls.
+		 */
+		it("CONTROL: shape gated outside the lock adds a role the new template pairs", async () => {
+			const templateId = await templateMakingTheRoleASpeaker();
+			expect(
+				await raceAgainstAMeetingRowChange(convertItTo(templateId), () =>
+					shapeGatedOutsideTheLock(club.meetingId, roleId),
+				),
+			).toEqual({ outcome: "resolved", indices: [0] });
+		});
+
+		/**
+		 * The assertion that control makes meaningful. Same interleaving, same
+		 * template, and the only thing that differs is which function runs: refusing
+		 * with the speaker-controls message is `templateId` having been read from
+		 * the locked row, and the shape judged from THAT.
+		 */
+		it("re-reads templateId under the lock, so a converting meeting wins the race", async () => {
+			const templateId = await templateMakingTheRoleASpeaker();
+			expect(
+				await raceAgainstAMeetingRowChange(convertItTo(templateId), () =>
+					applyAddRoleSlot({
+						meetingId: club.meetingId,
+						roleDefinitionId: roleId,
+						actorMemberId: club.adminMemberId,
+					}),
+				),
+			).toEqual({
+				outcome: "rejected: Add speakers with the speaker controls.",
+				indices: [],
+			});
+		});
+
+		/**
+		 * CONTROL for the speaker path, which is the same race arriving as a
+		 * WRONG-ROLE write rather than a wrong refusal. The club has its own Speaker
+		 * role, the meeting is being converted to a template whose speaker lineup is
+		 * this run's role instead, and an add resolved from the pre-transaction copy
+		 * puts its slot on the club's Speaker — so nothing lands on `roleId`.
+		 */
+		it("CONTROL: speaker role resolved outside the lock adds to the old lineup", async () => {
+			await addSpeakerAndEvaluatorRoles(club.clubId);
+			const templateId = await templateMakingTheRoleASpeaker();
+			expect(
+				await raceAgainstAMeetingRowChange(convertItTo(templateId), () =>
+					speakerRoleResolvedOutsideTheLock(club.meetingId),
+				),
+			).toEqual({ outcome: "resolved", indices: [] });
+		});
+
+		/**
+		 * The assertion that control makes meaningful, and the gate on the review
+		 * round that moved `applyAddSpeakerSlot` onto the locked row. Same
+		 * interleaving, same template: the slot landing on `roleId` is `clubRoles`
+		 * having been resolved from the `templateId` the lock holds.
+		 */
+		it("resolves the speaker role under the lock, so the new shape's lineup gets the slot", async () => {
+			await addSpeakerAndEvaluatorRoles(club.clubId);
+			const templateId = await templateMakingTheRoleASpeaker();
+			expect(
+				await raceAgainstAMeetingRowChange(convertItTo(templateId), () =>
+					applyAddSpeakerSlot({
+						meetingId: club.meetingId,
+						actorMemberId: club.adminMemberId,
+					}),
+				),
+			).toEqual({ outcome: "resolved", indices: [0] });
+		});
+
+		/**
 		 * SMOKE, NOT THE GATE — it has no control and cannot have one of the same
 		 * kind. Whether two `Promise.all`ed adds overlap where it matters is up to
-		 * how their two await profiles happen to line up, so this ASYMMETRICALLY
-		 * reports: a failure here is real (it caught the hoisted-read mutation on
-		 * one run), a pass means only that this run serialized. Kept for the part
-		 * that is not scheduling-dependent — two overlapping calls both returning
-		 * rather than erroring — and never read as the acceptance check. The two
-		 * deterministic pairs above are what prove the property.
+		 * how their two await profiles happen to line up.
+		 *
+		 * BE CLEAR ABOUT WHAT IT ASSERTS, because a reader who thinks this only
+		 * checks that nothing threw will misdiagnose a red here. It asserts the
+		 * indices, `[0, 1]` — the same duplicate check as the deterministic pairs
+		 * above, and the reason it is demoted rather than deleted. That assertion
+		 * reports ASYMMETRICALLY: against correct code the lock serializes the two
+		 * calls and `[0, 1]` is deterministic, so this will not flake red on its
+		 * own and a failure here is a REAL duplicate worth chasing; against a broken
+		 * shape it may or may not catch it (it did catch the hoisted-read mutation
+		 * on one run, and would not have on another). So its passing proves nothing
+		 * and it is never the acceptance check. The three deterministic pairs above
+		 * are what prove the property.
 		 */
-		it("SMOKE (no control): two overlapping adds both land without erroring", async () => {
+		it("SMOKE (no control): two overlapping adds land at 0 and 1", async () => {
 			await Promise.all([
 				applyAddRoleSlot({
 					meetingId: club.meetingId,
