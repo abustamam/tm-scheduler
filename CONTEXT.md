@@ -798,6 +798,30 @@ runs in the Dockerfile `CMD` after migrations, beside the Pathways catalog seede
 manual script until v1.23.0.0 and production was never seeded, so "Change meeting type" offered
 every club an empty picker for two releases.
 
+**Proven actor** — a member id that came from the caller's OWN active membership in the club being
+written to, resolved from a magic-link session. Its opposite is an **asserted** actor: a member id
+that arrived on the wire and was validated only as a real, active member of this club.
+`resolveWriteActorWithProof` (`src/server/write-actor-logic.ts`) returns which one answered
+(`proof: "session" | "asserted"`), and `requireSessionActor` beside it is the gate that accepts
+nothing else — refusing with `SIGN_IN_REQUIRED_MESSAGE` for no session and `NOT_ON_ROSTER_MESSAGE`
+for a session that is not on this roster (`#/lib/write-proof`, where the client matches both by
+TEXT, because an `Error` subclass does not survive a `createServerFn` round trip). **Member ids are
+public identifiers, not credentials** (#574): they ship in the public meeting payload because the
+sheet has to render a roster for somebody to pick their name out of, so an asserted actor carries
+exactly the weight of a name written on a paper sign-up sheet. `requireMemberInClub` validates that
+a member id is on this roster and reads no session at all — it must never be mistaken for one.
+
+**Fill a blank** — the one thing an unverified picker may still do (ADR-0026): write a value where
+there is currently none, taking nothing away from anyone. Claiming an OPEN role, giving a first
+attendance answer, confirming a role you hold and casting a first vote all fill a blank. Releasing,
+reassigning, editing someone's speech details, changing or clearing an answer, and changing a vote
+do not, and need a proven actor. Two qualifiers carry their own weight: filling a blank is refused
+when the caller's OWN recorded answer is `not_coming` (otherwise an outsider marks a member absent
+and then claims roles in their name — two blanks filled, real damage done), and a vote may be
+changed unverified only from the device that cast it. The adversary the rule is drawn against is an
+outsider holding the club's public link, against whom the activity log — an after-the-fact record —
+is no defence. `write-proof.guard.test.ts` classifies every POST server fn against it.
+
 ## Scope
 
 **MVP (built):** magic-link auth, schedule view, meeting detail with one-tap claim, speaker-
@@ -816,8 +840,13 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
 
 - A slot moves to `claimed` only via a conditional update guarding against double-claims
   (ADR-0005). Never set `assigned_user_id` without that guard.
-- Only an active member of a meeting's club may claim its slots; only the assignee or a
-  club `admin`/`vpe` may release.
+- Only an active member of a meeting's club may claim its slots. **Release is sheet-parity: ANY
+  member of the club may release or clear any slot**, and the activity log records who did
+  (`releaseSlot`, `src/server/slots.ts`; `reassignSlot` mirrors it). This line said "only the
+  assignee or a club `admin`/`vpe` may release" until #761 checked it against the code, where it
+  had not been true for some time — a paper sign-up sheet is the model, and anybody standing at
+  one can cross a name out. ADR-0026 is what narrows it: from its children on, release needs a
+  SESSION bound to a member of the club, because it takes something away from somebody.
 - A meeting's **agenda content** — meta (theme, Word of the Day, notes, location) and slot
   assignment / count — may be edited by a club `admin`/`vpe` **or** by the self-asserted
   member holding that meeting's Toastmaster (TMOD) slot. **Reschedule, cancel, and status
@@ -827,13 +856,19 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   that meeting's **Grammarian** slot — a narrower capability than the TMOD's, on the same
   self-assert trust (#296).
 - A meeting's **planned attendance** rides that same self-assert trust since #576, and is NOT
-  agenda content, so it has its own ladder: `resolveActor` (`src/server/attendance-plan.ts`) has
+  agenda content, so it has its own ladder: `resolveActor` (`src/server/attendance-actor-logic.ts`,
+  called from `attendance-plan.ts` — it was extracted and this line kept pointing at the caller) has
   three arms — club `admin` → this meeting's TMOD → self — and `viaManager` (either of the first
   two), not a session, is what admits a write of ANY member's rung including the officer-private
   `reached_out`. Three things stay narrower than the write. **Clearing** a rung that is not the
   caller's own answer stays on the OFFICER arm (`via === "officer"`, which requires a session),
   because deleting someone else's record of having asked is not what the panel is for. A TMOD
-  write may only ever REPLACE `reached_out`, never a member's real `coming` / `not_coming`. And on
+  write **of `reached_out` itself** may only ever REPLACE `reached_out` — `demoteFrom` is set only
+  when `status === "reached_out"` (`attendance-plan.ts`), so a TMOD writing a member's `coming` or
+  `not_coming` is NOT floored and overwrites whatever is there. This line claimed the floor covered
+  every TMOD write until #761 read the predicate. ADR-0026 is where that gap gets closed, by the
+  attendance child: changing an existing answer stops being something an asserted caller can do at
+  all. And on
   the read (`getTmodPanelData` → `loadTmodPanelData`) the rungs and member NAMES ride the claim
   while phone and email require a real session whose own membership IS the TMOD — see the
   **Planned attendance** entry above and `getPublicMeetingByKey`'s PII rule. Which arm granted a

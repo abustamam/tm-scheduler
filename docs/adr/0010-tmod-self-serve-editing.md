@@ -1,6 +1,6 @@
 # ADR-0010: TMOD self-serve meeting editing (interim, no-auth)
 
-Status: Accepted
+Status: Accepted; trust model amended by [ADR-0026](0026-unverified-picker-fills-blanks.md)
 
 ## Context
 
@@ -79,3 +79,25 @@ using the **same self-assert trust level as claiming** — no token, no session.
   marker for that follow-up.
 - Reschedule/cancel/status remain a genuine `admin`/`vpe` boundary, so the destructive
   meeting-lifecycle actions never ride on self-assert.
+
+## AMENDMENT (#761, 2026-09-20): the interim has a shape and a date
+
+"Interim by design", above, said the self-assert gate should be replaced when real per-member auth
+lands. It has landed — magic-link sign-in binds a session to a `Person` and a `Person` to a
+membership (#756 / #758) — so [ADR-0026](0026-unverified-picker-fills-blanks.md) replaces "eventually,
+all of it" with a line that can actually be drawn: **an unverified picker may fill a blank, and
+anything that removes, overwrites or rules on somebody needs a session bound to that member.**
+
+The adversary is named there and it is not a misbehaving member: it is an outsider holding the
+public link, against whom an after-the-fact activity log is no defence at all.
+
+Two things follow for the scope this ADR granted.
+
+- **The TMOD, Grammarian, Timer and Vote Counter consoles move to sessions in Phase 2** (#747 /
+  #752), not before. They are classified `console-asserted` in
+  `src/server/write-proof.guard.test.ts` until then — which is the change #761 actually made to
+  them: the debt is now recorded and swept rather than remembered.
+- **Member ids are public identifiers, not credentials.** They ship in the public sheet's payload
+  because the sheet has to render the roster. Nothing in the self-assert model ever depended on
+  one being hard to guess, and ADR-0026 says so explicitly so no future code mistakes
+  `requireMemberInClub` for a session check.

@@ -12,6 +12,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
+import { showWriteError } from "#/components/write-error-toast";
 import { formatMeetingDate } from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
 import type { StoredMember } from "#/lib/member-identity";
@@ -142,7 +143,7 @@ export function SeasonGrid({
 				action: { label: "Undo", onClick: () => release(slotId, memberId) },
 			});
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Couldn't claim role.");
+			showWriteError(err, "Couldn't claim role.");
 		} finally {
 			setBusySlotId(null);
 		}
@@ -158,9 +159,7 @@ export function SeasonGrid({
 				action: { label: "Undo", onClick: () => claim(slotId) },
 			});
 		} catch (err) {
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't release role.",
-			);
+			showWriteError(err, "Couldn't release role.");
 		} finally {
 			setBusySlotId(null);
 		}
@@ -189,7 +188,7 @@ export function SeasonGrid({
 				},
 			});
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Couldn't update.");
+			showWriteError(err, "Couldn't update.");
 		} finally {
 			setBusyMeetingId(null);
 		}
@@ -219,7 +218,7 @@ export function SeasonGrid({
 				},
 			);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Couldn't update.");
+			showWriteError(err, "Couldn't update.");
 		} finally {
 			setBusyMeetingId(null);
 		}
@@ -246,7 +245,7 @@ export function SeasonGrid({
 					: "Role released — they're marked unavailable.",
 			);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Couldn't update.");
+			showWriteError(err, "Couldn't update.");
 		} finally {
 			setBusyMeetingId(null);
 		}

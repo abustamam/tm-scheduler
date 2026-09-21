@@ -19,7 +19,19 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, impersonationSessions, members, user } from "#/db/schema";
+import {
+	activityLog,
+	clubs,
+	impersonationSessions,
+	members,
+	user,
+} from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import {
+	MEMBERSHIP_INACTIVE_MESSAGE,
+	NOT_ON_ROSTER_MESSAGE,
+	SIGN_IN_REQUIRED_MESSAGE,
+} from "#/lib/write-proof";
 import { logActivity } from "#/server/activity";
 import {
 	cleanup,
@@ -30,6 +42,11 @@ import {
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+/** `rejects.toThrow` takes a SUBSTRING, so a test for one of two refusals that
+ *  share a prefix would pass on the wrong one. Anchor both ends. */
+const exactly = (message: string) =>
+	new RegExp(`^${message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
 // The request-scoped impersonation marker is keyed on the object `getRequest()`
 // returns (see impersonation-actor.ts), and outside a real request that throws
@@ -44,7 +61,12 @@ vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	},
 }));
 
-const { resolveWriteActor } = await import("./write-actor-logic");
+const {
+	requestWriteActorWithProof,
+	resolveSessionActor,
+	resolveWriteActor,
+	resolveWriteActorWithProof,
+} = await import("./write-actor-logic");
 const { loadActivity } = await import("./activity-feed-logic");
 const { getImpersonatedWriteActor } = await import("./impersonation-actor");
 const { startImpersonation } = await import("./impersonation-logic");
@@ -333,3 +355,377 @@ describe.skipIf(!hasTestDb)(
 		});
 	},
 );
+
+/**
+ * The write-proof seam (#761, ADR-0026).
+ *
+ * `resolveWriteActor` collapsed both arms to a bare member id, so no caller
+ * could tell a signed-in member from somebody who picked a name out of "Who
+ * are you?". `resolveWriteActorWithProof` is the same resolution with the arm
+ * reported, and `resolveWriteActor` is now a projection of it — which is why
+ * the suite above still passes unchanged and is the real regression test for
+ * "no write changes behaviour".
+ */
+describe.skipIf(!hasTestDb)("resolveWriteActorWithProof (#761)", () => {
+	let clubA: SeededClub;
+	let clubB: SeededClub;
+
+	beforeEach(async () => {
+		clubA = await seedClub();
+		clubB = await seedClub();
+	});
+	afterEach(async () => {
+		await cleanup(clubA.clubId, [clubA.adminUserId, clubA.memberUserId]);
+		await cleanup(clubB.clubId, [clubB.adminUserId, clubB.memberUserId]);
+	});
+
+	it("reports `session` for a signed-in active member of this club", async () => {
+		const resolved = await resolveWriteActorWithProof({
+			clubId: clubA.clubId,
+			sessionUserId: clubA.adminUserId,
+			// Asserted and ignored, exactly as before — the session wins.
+			claimedActorMemberId: clubA.memberId,
+		});
+		expect(resolved).toEqual({
+			memberId: clubA.adminMemberId,
+			proof: "session",
+		});
+	});
+
+	it("reports `asserted` for a session-less caller naming a roster member", async () => {
+		const resolved = await resolveWriteActorWithProof({
+			clubId: clubA.clubId,
+			sessionUserId: null,
+			claimedActorMemberId: clubA.memberId,
+		});
+		expect(resolved).toEqual({ memberId: clubA.memberId, proof: "asserted" });
+	});
+
+	it("reports `asserted` for a session that is not on THIS club's roster", async () => {
+		// The case that makes `proof` worth having: a real magic-link session, and
+		// on club A's sheet it buys nothing. A signed-in visitor is, for a club
+		// they are not a member of, exactly an anonymous visitor — so this arm is
+		// asserted, not session, and #761's children refuse it for anything past
+		// filling a blank.
+		const resolved = await resolveWriteActorWithProof({
+			clubId: clubA.clubId,
+			sessionUserId: clubB.memberUserId,
+			claimedActorMemberId: clubA.memberId,
+		});
+		expect(resolved).toEqual({ memberId: clubA.memberId, proof: "asserted" });
+	});
+
+	it("returns null with no session and no name-pick", async () => {
+		expect(
+			await resolveWriteActorWithProof({
+				clubId: clubA.clubId,
+				sessionUserId: null,
+				claimedActorMemberId: null,
+			}),
+		).toBeNull();
+	});
+
+	it("still throws on a cross-club asserted actor", async () => {
+		// The #396 forgery. Adding a proof field must not soften the club scoping.
+		await expect(
+			resolveWriteActorWithProof({
+				clubId: clubA.clubId,
+				sessionUserId: null,
+				claimedActorMemberId: clubB.memberId,
+			}),
+		).rejects.toThrow(/not found in this club/i);
+	});
+
+	it("returns the SAME ids resolveWriteActor returned before the seam", async () => {
+		// Expected values written out, not derived from the function under test.
+		// The first version of this compared `resolveWriteActor(input)` against
+		// `resolveWriteActorWithProof(input)?.memberId ?? null` — which IS
+		// `resolveWriteActor`'s body since #761, so it asserted f(x) === f(x) and
+		// could not fail. What matters is that ~29 live call sites still receive
+		// what they received on `e51f6ca`, so those are the literals.
+		const cases: {
+			name: string;
+			sessionUserId: string | null;
+			claimedActorMemberId: string | null;
+			expected: () => string | null;
+		}[] = [
+			{
+				name: "signed-in member, asserted id ignored",
+				sessionUserId: clubA.adminUserId,
+				claimedActorMemberId: clubA.memberId,
+				expected: () => clubA.adminMemberId,
+			},
+			{
+				name: "anonymous name-pick",
+				sessionUserId: null,
+				claimedActorMemberId: clubA.memberId,
+				expected: () => clubA.memberId,
+			},
+			{
+				name: "session for another club falls back to the name-pick",
+				sessionUserId: clubB.memberUserId,
+				claimedActorMemberId: clubA.memberId,
+				expected: () => clubA.memberId,
+			},
+			{
+				name: "nobody to credit",
+				sessionUserId: null,
+				claimedActorMemberId: null,
+				expected: () => null,
+			},
+		];
+		for (const c of cases) {
+			const input = {
+				clubId: clubA.clubId,
+				sessionUserId: c.sessionUserId,
+				claimedActorMemberId: c.claimedActorMemberId,
+			};
+			expect(await resolveWriteActor(input), c.name).toBe(c.expected());
+		}
+	});
+
+	it("credits nobody under impersonation, and marks the request", async () => {
+		// The arm the issue's Testing Plan names and the block above was missing.
+		// The behaviour is correct through the projection — the suite at the top
+		// of this file proves it for `resolveWriteActor` — but "correct by
+		// inheritance" is not the same as covered, and this is the one arm where
+		// the new return type has NO member id to carry a proof on.
+		const superadminId = randomUUID();
+		await testDb.insert(user).values({
+			id: superadminId,
+			name: "Super Admin",
+			email: `super-${superadminId}@test.example`,
+			emailVerified: true,
+			isSuperadmin: true,
+		});
+		requestRef = { id: "req" };
+		try {
+			await startImpersonation(superadminId, {
+				clubId: clubA.clubId,
+				mode: "read_write",
+				reason: "fixing a broken agenda",
+			});
+			// Asserting a real, active member of THIS club, so club scoping cannot
+			// be what saves us.
+			expect(
+				await resolveWriteActorWithProof({
+					clubId: clubA.clubId,
+					sessionUserId: superadminId,
+					claimedActorMemberId: clubA.memberId,
+				}),
+			).toBeNull();
+			expect(getImpersonatedWriteActor()).toBe(superadminId);
+		} finally {
+			requestRef = null;
+			await cleanup(clubA.clubId, [superadminId]);
+		}
+	});
+
+	it("requestWriteActorWithProof resolves through the request session", async () => {
+		// `getSessionUser()` answers null outside a request context, so what this
+		// reaches is the anonymous arm — which is the whole branch the wrapper
+		// owns: it must pass `claimedActorMemberId` through and default it to
+		// null. Without this the wrapper had zero exercised branches in the diff.
+		expect(
+			await requestWriteActorWithProof({
+				clubId: clubA.clubId,
+				claimedActorMemberId: clubA.memberId,
+			}),
+		).toEqual({ memberId: clubA.memberId, proof: "asserted" });
+		expect(
+			await requestWriteActorWithProof({ clubId: clubA.clubId }),
+		).toBeNull();
+	});
+});
+
+/**
+ * `requireSessionActor` — the gate for a write that needs a PROVEN actor.
+ *
+ * Exercised through `resolveSessionActor`, which takes the session id
+ * explicitly; `requireSessionActor` is the two-line request wrapper around it
+ * (`getSessionUser()` returns null outside a request context, so the wrapper
+ * itself is not reachable from vitest — the same split `resolveWriteActor` /
+ * `requestWriteActor` already use, and `write-proof.guard.test.ts` pins that
+ * the wrapper still reads the session).
+ */
+describe.skipIf(!hasTestDb)("requireSessionActor (#761)", () => {
+	let club: SeededClub;
+	let other: SeededClub;
+	let superadminId: string;
+
+	async function seedSuperadmin(): Promise<string> {
+		const id = randomUUID();
+		await testDb.insert(user).values({
+			id,
+			name: "Super Admin",
+			email: `super-${id}@test.example`,
+			emailVerified: true,
+			isSuperadmin: true,
+		});
+		return id;
+	}
+
+	beforeEach(async () => {
+		club = await seedClub();
+		other = await seedClub();
+		superadminId = await seedSuperadmin();
+		requestRef = { id: "req" };
+	});
+	afterEach(async () => {
+		requestRef = null;
+		await cleanup(club.clubId, [
+			club.adminUserId,
+			club.memberUserId,
+			superadminId,
+		]);
+		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+	});
+
+	it("refuses a caller with no session, with the message the toast matches", async () => {
+		await expect(
+			resolveSessionActor({ clubId: club.clubId, sessionUserId: null }),
+		).rejects.toThrow(exactly(SIGN_IN_REQUIRED_MESSAGE));
+	});
+
+	it("resolves a signed-in active member to their own membership", async () => {
+		expect(
+			await resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: club.memberUserId,
+			}),
+		).toEqual({ memberId: club.memberId });
+	});
+
+	it("refuses a signed-in user who is not on THIS club's roster", async () => {
+		// A different refusal from the one above, on purpose: signing in again
+		// cannot help, so the toast offers no "Sign in" action and the message
+		// names the fix. This is also where sign-in binding's three refusals land
+		// (#756/#758/#759 — no email, two clubs, a shared address).
+		await expect(
+			resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: other.memberUserId,
+			}),
+		).rejects.toThrow(exactly(NOT_ON_ROSTER_MESSAGE));
+	});
+
+	it("tells a LAPSED member to get reactivated, not to add their email", async () => {
+		// A third refusal, not the not-on-roster one. `membership_status` has
+		// exactly two values, so an inactive member IS on the roster — telling
+		// them to ask an officer to add their email sends them to fix something
+		// that is not broken, and the entire reason these messages are split is
+		// that each names the fix that works.
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, club.memberId));
+		await expect(
+			resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: club.memberUserId,
+			}),
+		).rejects.toThrow(exactly(MEMBERSHIP_INACTIVE_MESSAGE));
+	});
+
+	it("refuses an ACTIVE member of an ARCHIVED club", async () => {
+		// Archiving is the takedown lever (ADR-0016 / ADR-0024): it locks out
+		// every member and admin, and every sibling gate enforces that —
+		// `requireMembership` via `assertNotArchived` on the row it just read.
+		// Without this, `requireSessionActor` would be the only
+		// membership-resolving WRITE gate in the repo that grants on a taken-down
+		// club, and every Phase 1 child adopting it would inherit the hole.
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		await expect(
+			resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: club.memberUserId,
+			}),
+		).rejects.toThrow(exactly(CLUB_ARCHIVED_MESSAGE));
+	});
+
+	it("refuses an impersonating superadmin on an ARCHIVED club", async () => {
+		// The memberless arm has no row to read the flag off, so it takes the
+		// querying assert — the same parity `requireReadWriteImpersonation` states
+		// in its own comment: a real admin cannot act on an archived club, so
+		// neither can the superadmin impersonating one. Checked separately because
+		// it is a DIFFERENT call on a different code path, and a fix that covered
+		// only the membership arm would leave this one granting.
+		await startImpersonation(superadminId, {
+			clubId: club.clubId,
+			mode: "read_write",
+			reason: "fixing a broken agenda",
+		});
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		await expect(
+			resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: superadminId,
+			}),
+		).rejects.toThrow(exactly(CLUB_ARCHIVED_MESSAGE));
+		// And the request is NOT marked: the refusal happens before the mark, so
+		// a blocked write leaves no impersonation footprint on the next one.
+		expect(getImpersonatedWriteActor()).toBeNull();
+	});
+
+	it("still grants on a club that is NOT archived — the control", async () => {
+		// Without this the three archive cases above could pass for any reason at
+		// all, including the gate refusing everything.
+		expect(
+			await resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: club.memberUserId,
+			}),
+		).toEqual({ memberId: club.memberId });
+	});
+
+	it("admits a read_write impersonation and credits the superadmin", async () => {
+		await startImpersonation(superadminId, {
+			clubId: club.clubId,
+			mode: "read_write",
+			reason: "fixing a broken agenda",
+		});
+		expect(
+			await resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: superadminId,
+			}),
+		).toEqual({ memberId: null });
+		// Null is not "nobody" here — the request is marked, so `logActivity`
+		// stamps `impersonated_by` with the real person (ADR-0016 / #246).
+		expect(getImpersonatedWriteActor()).toBe(superadminId);
+	});
+
+	it("refuses a read_only impersonation — that mode is write-blind", async () => {
+		// The one place this deliberately differs from `resolveWriteActorWithProof`,
+		// which marks BOTH modes. There nothing is authorized (the surface already
+		// admits anonymous callers, so recognising a read-only session only stops
+		// a write being laundered under a member's name). Here a grant IS being
+		// made, and ADR-0020's read-only mode must not make one.
+		await startImpersonation(superadminId, { clubId: club.clubId });
+		await expect(
+			resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: superadminId,
+			}),
+		).rejects.toThrow(exactly(NOT_ON_ROSTER_MESSAGE));
+		expect(getImpersonatedWriteActor()).toBeNull();
+	});
+
+	it("refuses a superadmin with no session for THIS club", async () => {
+		// The control that proves the two above are not passing for some unrelated
+		// reason: no impersonation session at all, same call, refused.
+		await expect(
+			resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: superadminId,
+			}),
+		).rejects.toThrow(exactly(NOT_ON_ROSTER_MESSAGE));
+		expect(getImpersonatedWriteActor()).toBeNull();
+	});
+});

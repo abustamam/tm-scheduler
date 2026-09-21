@@ -29,7 +29,6 @@ import {
 	type PendingDecline,
 } from "#/components/club/decline-release-dialog";
 import { DigitalVotingSwitch } from "#/components/club/digital-voting-switch";
-
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
@@ -50,6 +49,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { Label } from "#/components/ui/label";
+import { showWriteError } from "#/components/write-error-toast";
 import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
@@ -268,6 +268,16 @@ function MeetingNotFound() {
 	);
 }
 
+/**
+ * Plain error text, still used by the five Ballot Counter console handlers and
+ * the digital-voting switch below.
+ *
+ * Everything else in this file went through `showWriteError` in #761, which
+ * adds a "Sign in" action to the two write-proof refusals and is otherwise
+ * identical to this. The vote surfaces are deliberately NOT converted: the
+ * ballots child issue owns their error display, and doing it here would have it
+ * land twice.
+ */
 function errMessage(err: unknown) {
 	return err instanceof Error ? err.message : "Something went wrong.";
 }
@@ -1087,7 +1097,7 @@ function MeetingView() {
 			// reverting to empty would silently erase a rung the officer did not
 			// touch.
 			setRungOverride((o) => ({ ...o, [memberId]: previous }));
-			toast.error(e instanceof Error ? e.message : "Couldn't save that.");
+			showWriteError(e, "Couldn't save that.");
 			// Released HERE rather than in a `finally`, because the success path
 			// hands the release to the invalidate above; a `finally` would release
 			// a second time and drop another concurrent write's refcount.
@@ -1357,7 +1367,7 @@ function MeetingView() {
 			setAddRoleOpen(false);
 			await router.invalidate();
 		} catch (err) {
-			toast.error(errMessage(err));
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setAddRoleBusy(false);
 		}
@@ -1370,7 +1380,7 @@ function MeetingView() {
 			toast.success("Meeting closed out and locked.");
 			await router.invalidate();
 		} catch (err) {
-			toast.error(errMessage(err));
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setLifecycleBusy(false);
 		}
@@ -1383,7 +1393,7 @@ function MeetingView() {
 			toast.success("Meeting reopened for edits.");
 			await router.invalidate();
 		} catch (err) {
-			toast.error(errMessage(err));
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setLifecycleBusy(false);
 		}
@@ -1741,7 +1751,7 @@ function MeetingView() {
 								});
 								await router.invalidate();
 							} catch (err) {
-								toast.error(errMessage(err));
+								showWriteError(err, "Something went wrong.");
 							}
 						}}
 						onUncontacted={async (memberId) => {
@@ -1755,7 +1765,7 @@ function MeetingView() {
 								});
 								await router.invalidate();
 							} catch (err) {
-								toast.error(errMessage(err));
+								showWriteError(err, "Something went wrong.");
 							}
 						}}
 					/>
