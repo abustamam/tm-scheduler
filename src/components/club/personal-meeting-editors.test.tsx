@@ -349,35 +349,75 @@ describe("PersonalWordEditor — the save", () => {
 		).toBe(STORED.wodExample);
 	});
 
-	it("carries the untouched definition and example back with a changed word", async () => {
-		// `applyWordOfTheDayUpdate` nulls what it is not given, so a word-only
-		// payload clears the definition the Grammarian never touched.
-		const p = await renderWord();
-		const word = screen.getByLabelText("Word");
-		await userEvent.clear(word);
-		await userEvent.type(word, "loquacious");
+	/** Retype one input, leaving the other two as they were seeded. */
+	async function retype(label: string, value: string) {
+		const input = screen.getByLabelText(label);
+		await userEvent.clear(input);
+		if (value) await userEvent.type(input, value);
 		await userEvent.click(
 			screen.getByRole("button", { name: /save word of the day/i }),
 		);
-
 		await waitFor(() => expect(updateWordOfTheDay).toHaveBeenCalledTimes(1));
-		const data = wordPayload();
+		return wordPayload();
+	}
+
+	it("sends the changed word and OMITS the two fields nobody touched", async () => {
+		// Inverted by #793, and the direction is the whole change. This used to
+		// assert the untouched definition and example rode along, because
+		// `applyWordOfTheDayUpdate` nulled what it was not given. They came off a
+		// page-load snapshot, so that save wrote back an example the Toastmaster had
+		// added since. The writer is a patch now: absent means leave it alone, and a
+		// field reappearing here is that lost update returning.
+		const p = await renderWord();
+		const data = await retype("Word", "loquacious");
 		expect(data.wordOfTheDay).toBe("loquacious");
-		expect(data.wodDefinition).toBe(STORED.wodDefinition);
-		expect(data.wodExample).toBe(STORED.wodExample);
+		// `in`, not `toBeUndefined`: an absent key and a key holding `undefined`
+		// read the same to the writer but not to a reader of this payload, and the
+		// contract is that the editor SAYS NOTHING about a field it did not edit.
+		expect("wodDefinition" in data).toBe(false);
+		expect("wodExample" in data).toBe(false);
 		expect(data.meetingId).toBe(STORED.id);
 		expect(data.selfMemberId).toBe(MEMBER);
 		expect(p.onSaved).toHaveBeenCalledTimes(1);
 	});
 
-	it("sends a cleared field as undefined, which the writer stores as null", async () => {
+	it("sends a blanked input as an explicit clear, not as silence", async () => {
+		// The half a patch writer breaks if the form is not changed in the same
+		// breath (#772's trap, hit here by #793): an officer clearing the example
+		// means to clear it, and an omission now means the opposite.
 		await renderWord();
-		await userEvent.clear(screen.getByLabelText("Example sentence"));
+		const data = await retype("Example sentence", "");
+		expect("wodExample" in data).toBe(true);
+		expect(data.wodExample).toBe("");
+		expect("wordOfTheDay" in data).toBe(false);
+	});
+
+	it("treats a field retyped to what it already said as NOT an edit", async () => {
+		// The difference between diffing the seed and flagging onChange, and the
+		// reason it is the seed: a Grammarian who clicks into the definition,
+		// retypes it identically and saves must not write that page-load value over
+		// whatever is stored now.
+		await renderWord();
+		const data = await retype("Definition", STORED.wodDefinition);
+		expect("wodDefinition" in data).toBe(false);
+	});
+
+	it("sends nothing but the identity fields when nothing was edited", async () => {
+		await renderWord();
 		await userEvent.click(
 			screen.getByRole("button", { name: /save word of the day/i }),
 		);
-		await waitFor(() => expect(updateWordOfTheDay).toHaveBeenCalled());
-		expect(wordPayload().wodExample).toBeUndefined();
+		await waitFor(() => expect(updateWordOfTheDay).toHaveBeenCalledTimes(1));
+		expect(Object.keys(wordPayload()).sort()).toEqual([
+			"meetingId",
+			"selfMemberId",
+		]);
+	});
+
+	it("trims what it does send", async () => {
+		await renderWord();
+		const data = await retype("Word", "  loquacious  ");
+		expect(data.wordOfTheDay).toBe("loquacious");
 	});
 
 	it("does NOT hand back to the personal page when the write fails", async () => {

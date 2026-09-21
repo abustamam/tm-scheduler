@@ -264,6 +264,22 @@ const META_TEXT_FIELDS = [
 	"reminders",
 ] as const;
 
+/**
+ * The three of those columns the NARROW Word-of-the-Day writer owns (#793).
+ *
+ * A subset, and the `satisfies` is what says so to the compiler rather than to a
+ * reader: renaming a column above without renaming it here is a type error, so
+ * the two lists cannot drift into naming different columns while both still look
+ * right. It stays a separate list rather than a slice because the two writers are
+ * deliberately separate — the Grammarian grant reaches exactly these three and
+ * must not inherit a field added to the general patch.
+ */
+const WOD_TEXT_FIELDS = [
+	"wordOfTheDay",
+	"wodDefinition",
+	"wodExample",
+] as const satisfies readonly (typeof META_TEXT_FIELDS)[number][];
+
 /** Update a meeting's meta (incl. reschedule) and log a `meeting_edit`.
  *  Omitted fields are left alone — see `MeetingMetaPatchInput`.
  *
@@ -406,6 +422,9 @@ export async function applyMeetingMetaPatch(
 export interface WordOfTheDayUpdateInput {
 	meetingId: string;
 	actorMemberId: string | null;
+	/** The same tri-state the general patch gives its text columns (#793): omit
+	 *  to leave the stored value alone, pass `null` or a blank string to clear
+	 *  it, pass a value to store it trimmed. */
 	wordOfTheDay?: string | null;
 	wodDefinition?: string | null;
 	wodExample?: string | null;
@@ -416,7 +435,18 @@ export interface WordOfTheDayUpdateInput {
  * a `meeting_edit` (#296). Least-privilege by construction: the narrow WOD-edit
  * capability (grammarian / TMOD / admin) funnels through here, and this function
  * physically cannot touch theme/location/times/notes — so granting it never
- * risks the rest of the meeting meta. Empty values trim to null.
+ * risks the rest of the meeting meta.
+ *
+ * A PATCH since #793, for the reason `applyMeetingMetaPatch` is one. It used to
+ * REPLACE all three columns, so an omitted field was not "leave it alone" but
+ * "null it", and every caller had to echo the two fields it was not editing back
+ * off a page-load snapshot. #772 closed that class on the general writer and
+ * left this one, whose narrower reach made the damage narrower but not absent:
+ * within these three columns the interleave still ran, and it needed no race —
+ * the Grammarian's editor never revalidates, so the window is the life of the
+ * tab. Open `…/me/word` with no example stored, have the Toastmaster add one
+ * through the Edit-meeting dialog, save the word, and the sentence was gone with
+ * the save reporting success.
  */
 export async function applyWordOfTheDayUpdate(input: WordOfTheDayUpdateInput) {
 	const meeting = await db.query.meetings.findFirst({
@@ -424,28 +454,46 @@ export async function applyWordOfTheDayUpdate(input: WordOfTheDayUpdateInput) {
 	});
 	if (!meeting) throw new Error("Meeting not found.");
 
-	const next = {
-		wordOfTheDay: input.wordOfTheDay?.trim() || null,
-		wodDefinition: input.wodDefinition?.trim() || null,
-		wodExample: input.wodExample?.trim() || null,
-	};
+	// SPARSE, exactly as the general patch builds its `set`: a key is here only
+	// because the caller sent that field. Seeding it from the stored row instead
+	// would pass every "an omitted field is unchanged" assertion while writing
+	// columns the caller never sent — which is the lost update coming back.
+	const next: Partial<typeof meetings.$inferInsert> = {};
+	for (const field of WOD_TEXT_FIELDS) {
+		const value = input[field];
+		// Blank and whitespace-only collapse to null alongside an explicit null:
+		// the Grammarian clearing an input and a caller passing null are the same
+		// edit, and every reader of these columns already treats "" as absent.
+		if (value !== undefined) next[field] = value?.trim() || null;
+	}
+
+	// Drop keys already holding what is stored, so the `meeting_edit` entry is the
+	// DIFF rather than three columns of which one moved — the same reason
+	// `applyMeetingMetaPatch` does it, and what makes the empty-patch return below
+	// reachable from a save the officer changed nothing in.
+	for (const key of Object.keys(next) as (keyof typeof next)[]) {
+		if (next[key] === meeting[key as keyof typeof meeting]) delete next[key];
+	}
+
+	const changed = Object.keys(next) as (keyof typeof next)[];
+	// A `set` with no keys is a drizzle error, and an audit entry naming no change
+	// is noise. Reachable: the editor sends only what was edited, so pressing Save
+	// having typed nothing sends nothing.
+	if (changed.length === 0) return { clubId: meeting.clubId };
 
 	await db.transaction(async (tx) => {
 		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));
+		// `before` mirrors `after` key for key, and both name only what moved.
+		const before: Record<string, unknown> = {};
+		for (const key of changed)
+			before[key] = meeting[key as keyof typeof meeting];
 		await logActivity(tx, {
 			clubId: meeting.clubId,
 			actorMemberId: input.actorMemberId,
 			action: "meeting_edit",
 			targetType: "meeting",
 			targetId: input.meetingId,
-			detail: {
-				before: {
-					wordOfTheDay: meeting.wordOfTheDay,
-					wodDefinition: meeting.wodDefinition,
-					wodExample: meeting.wodExample,
-				},
-				after: next,
-			},
+			detail: { before, after: next },
 		});
 	});
 

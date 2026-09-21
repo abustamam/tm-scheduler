@@ -66,17 +66,17 @@ export interface EditorMeeting {
 	status: string;
 	/** Prefills the theme editor. */
 	theme: string | null;
-	/** Prefill the WORD editor, which is the only reason these three are here:
-	 *  `applyWordOfTheDayUpdate` owns exactly these columns and REPLACES all
-	 *  three, so that form has to show what is stored or a save loses the two
-	 *  fields the officer did not retype.
+	/** Prefill the WORD editor — and since #793 that is ALL they do. They are what
+	 *  the three inputs show on arrival, and the same values the submit compares
+	 *  against to decide which columns the officer actually edited; a field that
+	 *  still reads as it was seeded is omitted from the payload rather than
+	 *  written back. `applyWordOfTheDayUpdate` is a patch now, so an omitted field
+	 *  is left alone.
 	 *
-	 *  Read that as the limit of what #772 closed, not as a contradiction of it.
-	 *  These three ARE still a page-load snapshot echo, so the same lost update
-	 *  survives WITHIN the Word of the Day: a `wodExample` the Toastmaster adds
-	 *  through the Edit-meeting dialog after this page loaded is reverted when the
-	 *  Grammarian saves their word. #772 changed the general meta writer only;
-	 *  giving `applyWordOfTheDayUpdate` the same tri-state is its own change. */
+	 *  That closes the last of the class #772 closed on the general meta writer.
+	 *  These three used to ride EVERY save straight off this snapshot, so a
+	 *  `wodExample` the Toastmaster added through the Edit-meeting dialog after
+	 *  this page loaded was reverted the moment the Grammarian saved their word. */
 	wordOfTheDay: string | null;
 	wodDefinition: string | null;
 	wodExample: string | null;
@@ -373,23 +373,89 @@ const WORD_TITLE = "Set the Word of the Day";
 const WORD_BLURB =
 	"One word for the club to work into what they say — the definition and an example help everyone use it.";
 
+/** What the three inputs hold, keyed by the input rather than by the column. The
+ *  two spellings are kept apart on purpose: the payload's keys are the COLUMN
+ *  names, and `WOD_PATCH_FIELDS` below is the one place that pairs them. */
+interface WordOfTheDayDraft {
+	word: string;
+	definition: string;
+	example: string;
+}
+
+/** column ← input. The enrolment list for `wordOfTheDayPatch`: a fourth
+ *  Word-of-the-Day field is edited by adding a row here, and
+ *  `personal-duty-routes.guard.test.ts` reads it back against
+ *  `updateWordOfTheDaySchema` so one added to the wire and forgotten here fails. */
+const WOD_PATCH_FIELDS = [
+	["wordOfTheDay", "word"],
+	["wodDefinition", "definition"],
+	["wodExample", "example"],
+] as const satisfies readonly (readonly [string, keyof WordOfTheDayDraft])[];
+
+/**
+ * The Word-of-the-Day payload: ONLY the fields the officer actually edited
+ * (#793).
+ *
+ * Three states, and the middle one is the trap. A field reading as it was seeded
+ * is OMITTED, which `applyWordOfTheDayUpdate` leaves alone — that is the fix. A
+ * field the officer BLANKED travels as `""`, which that writer clears, and it has
+ * to: flipping a writer to patch semantics silently removes a form's only way to
+ * clear a field unless the form changes in the same breath (#772 learned this on
+ * the meeting dialog). `""` rather than `null` because `updateWordOfTheDaySchema`
+ * types these as plain strings on the wire; the writer treats the two the same.
+ *
+ * Seed-versus-current rather than an onChange "touched" flag, because the two
+ * differ exactly where it matters: typing into a field and typing it back is not
+ * an edit, and echoing it would write a page-load snapshot over whatever another
+ * officer stored since — the bug this function exists to prevent.
+ *
+ * Not exported: every arm is driven through the rendered form in
+ * `personal-meeting-editors.test.tsx`, which is the assertion that matters —
+ * what the officer's typing turns into on the wire.
+ */
+function wordOfTheDayPatch(
+	seed: WordOfTheDayDraft,
+	current: WordOfTheDayDraft,
+): { wordOfTheDay?: string; wodDefinition?: string; wodExample?: string } {
+	const patch: {
+		wordOfTheDay?: string;
+		wodDefinition?: string;
+		wodExample?: string;
+	} = {};
+	for (const [column, field] of WOD_PATCH_FIELDS) {
+		const next = current[field].trim();
+		if (next !== seed[field].trim()) patch[column] = next;
+	}
+	return patch;
+}
+
 /**
  * The Grammarian's focused Word-of-the-Day editor.
  *
  * Writes through `updateWordOfTheDay`, which touches the three WOD columns and
  * physically cannot reach any other meta — so unlike the theme editor above it
- * needs no echo of the rest of the meeting. It still submits all THREE fields
- * every time, because that writer nulls what it is not given: saving a word
- * without carrying the definition back would clear the definition.
+ * needs no echo of the rest of the meeting. Since #793 it needs no echo of the
+ * Word of the Day either: that writer is a patch, so the payload is what
+ * `wordOfTheDayPatch` found the officer had changed and nothing else. It used to
+ * submit all three on every save, off a page-load snapshot, because the writer
+ * nulled what it was not given — and a field reappearing on this payload
+ * unconditionally is that lost update returning.
  */
 export function PersonalWordEditor(props: EditorProps) {
 	const { viewer, when, backHref } = useEditorContext(props);
 	const { saving, run } = useDutySave(props.onSaved);
-	const [word, setWord] = useState(props.meeting.wordOfTheDay ?? "");
-	const [definition, setDefinition] = useState(
-		props.meeting.wodDefinition ?? "",
-	);
-	const [example, setExample] = useState(props.meeting.wodExample ?? "");
+	// FROZEN at mount, deliberately: the diff below must be against what the
+	// inputs were seeded with, not against whatever `props.meeting` says by the
+	// time Save is pressed. Reading the live prop would make a field the officer
+	// never touched look edited the moment the loader refreshed under them.
+	const [seed] = useState<WordOfTheDayDraft>(() => ({
+		word: props.meeting.wordOfTheDay ?? "",
+		definition: props.meeting.wodDefinition ?? "",
+		example: props.meeting.wodExample ?? "",
+	}));
+	const [word, setWord] = useState(seed.word);
+	const [definition, setDefinition] = useState(seed.definition);
+	const [example, setExample] = useState(seed.example);
 
 	const blocked = editorBlockedReason({
 		status: props.meeting.status,
@@ -425,11 +491,12 @@ export function PersonalWordEditor(props: EditorProps) {
 								data: {
 									meetingId: props.meeting.id,
 									selfMemberId: props.memberId,
-									// Blank → undefined, which the writer stores as null. All
-									// three travel on every save; see the component docblock.
-									wordOfTheDay: word.trim() || undefined,
-									wodDefinition: definition.trim() || undefined,
-									wodExample: example.trim() || undefined,
+									// ONLY what the officer edited (#793). Spread, so an
+									// untouched field is an ABSENT KEY rather than a key holding
+									// `undefined` — the payload then says on the wire what the
+									// contract says, and naming one of these three columns here
+									// unconditionally is the snapshot echo coming back.
+									...wordOfTheDayPatch(seed, { word, definition, example }),
 								},
 							}),
 						"Word of the day saved.",

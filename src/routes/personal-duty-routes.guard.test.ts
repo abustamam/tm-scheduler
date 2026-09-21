@@ -354,6 +354,16 @@ describe("saving hands back to the personal page", () => {
 });
 
 describe("the writes go through the tested payload builders", () => {
+	/** `updateWordOfTheDaySchema`'s own keys — the wire contract the word
+	 *  editor's payload is swept against, both ways (#793). */
+	const wodSchemaKeys = (() => {
+		const src = readSource(resolve(ROOT, "src/server/meetings.ts"));
+		const start = src.indexOf("const updateWordOfTheDaySchema = z.object({");
+		expect(start, "updateWordOfTheDaySchema not found").toBeGreaterThan(-1);
+		const body = src.slice(start, src.indexOf("});", start));
+		return [...body.matchAll(/^\t(\w+):/gm)].map((m) => m[1]);
+	})();
+
 	/**
 	 * Inverted by #772, and the direction is the whole change. `updateMeeting` was
 	 * a full REPLACE, so this pair used to REQUIRE a nine-field payload assembled
@@ -409,12 +419,54 @@ describe("the writes go through the tested payload builders", () => {
 		expect(rawEditors).not.toContain("meeting-meta-update");
 	});
 
-	it("the word editor sends all three WOD fields on every save", () => {
-		// `applyWordOfTheDayUpdate` nulls what it is not given, so a payload
-		// missing the definition clears a definition nobody edited.
-		expect(editors).toMatch(
-			/updateWordOfTheDay\(\{[\s\S]{0,400}wordOfTheDay:[\s\S]{0,200}wodDefinition:[\s\S]{0,200}wodExample:/,
+	it("the word editor sends only the fields the officer edited", () => {
+		// Inverted by #793, the same way and for the same reason the theme pair
+		// above was inverted by #772. `applyWordOfTheDayUpdate` used to null what it
+		// was not given, so this assertion REQUIRED all three fields on every save —
+		// and since they were seeded from a page-load snapshot, the save wrote back
+		// a `wodExample` the Toastmaster had added since. That writer is a patch
+		// now, so the correct payload names no column at all: the three reach it
+		// only through `wordOfTheDayPatch`, which omits what was not edited.
+		const payload = editors.slice(
+			editors.indexOf("updateWordOfTheDay({"),
+			editors.indexOf('"Word of the day saved."'),
 		);
+		expect(payload).toContain("meetingId: props.meeting.id");
+		expect(payload).toContain("selfMemberId: props.memberId");
+		expect(payload).toContain("...wordOfTheDayPatch(seed, {");
+		// DERIVED from `updateWordOfTheDaySchema`, not hand-listed, so a fourth
+		// Word-of-the-Day column added to the wire is auto-enrolled into this
+		// negative rather than being the one field that may be echoed.
+		const forbidden = wodSchemaKeys.filter(
+			(k) => !["meetingId", "selfMemberId"].includes(k),
+		);
+		// Vacuity floor: the three WOD columns.
+		expect(forbidden.length).toBeGreaterThanOrEqual(3);
+		for (const field of forbidden) {
+			expect(
+				payload,
+				`${field} must not be named on the word payload — see #793`,
+			).not.toMatch(new RegExp(`^\\s*${field}:`, "m"));
+		}
+	});
+
+	it("every WOD field on the wire is enrolled in the payload builder", () => {
+		// The mirror failure of the negative above, and the one it cannot see: a
+		// fourth column added to `updateWordOfTheDaySchema` and to the form, and
+		// never paired in `WOD_PATCH_FIELDS`. Nothing throws — the input renders,
+		// the officer types, Save reports success and the value is never sent.
+		const pairs = editors.slice(
+			editors.indexOf("const WOD_PATCH_FIELDS = ["),
+			editors.indexOf("] as const satisfies"),
+		);
+		expect(pairs.length, "WOD_PATCH_FIELDS not found").toBeGreaterThan(20);
+		const unpaired = wodSchemaKeys
+			.filter((k) => !["meetingId", "selfMemberId"].includes(k))
+			.filter((k) => !pairs.includes(`"${k}"`));
+		expect(
+			unpaired,
+			`updateWordOfTheDaySchema fields the word editor never sends: ${unpaired.join(", ")}`,
+		).toEqual([]);
 	});
 
 	it("both editors write against the RESOLVED meeting uuid", () => {
