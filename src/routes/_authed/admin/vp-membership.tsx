@@ -144,14 +144,15 @@ function VpMembership() {
 			// otherwise the new member was hidden from the roster, the sign-up
 			// sheet, the season grid and every picker, behind this very toast
 			// saying it had worked. That wake-up also writes an elevated
-			// `club_role` back down, and may leave an open officer term standing
-			// that grants admin anyway. The notice rides the existing success
-			// surface rather than a dialog: it is information, not a decision.
+			// `club_role` back down, and ends any open officer term the row was
+			// still carrying (#805) — both would otherwise hand back club-admin
+			// authority. The notice rides the existing success surface rather than
+			// a dialog: it is information, not a decision.
 			//
 			// Composed by `convertNoticeDescription` rather than assembled here,
 			// because which sentences apply is a rule with a wrong answer in it —
-			// the demotion line overstates what happened when an officer term
-			// survives. A pure function is the half a unit test can hold.
+			// two permission changes can ride one button press and either can be
+			// absent. A pure function is the half a unit test can hold.
 			//
 			// Silent unless the server reported a reactivation, which it does only
 			// when the reused row was NOT already active. Reuse of a live

@@ -141,14 +141,30 @@ the nouns in `src/db/schema.ts`.
   as the one-click remedy. Undo restores the role with the lapse, which grants nothing: the row
   returns to `inactive` in the same write. **Reuse of an ALREADY-ACTIVE admin is left alone** —
   that is ordinary dedup of a sitting admin, and demoting there would be a real regression.
-  **Officer terms are the known residue.** Effective-admin (#202) grants admin for any open
-  `officer_terms` row whatever `club_role` says, and deactivation does not close those either,
-  so a membership that lapsed while holding office comes back a full admin. Convert deliberately
-  does not close the term — an office is a governance fact read by the printed agenda, the
-  officer home, the COT seats and the onboarding checklist, and undo refuses outright for a
-  membership carrying any term, so a close written here could never be reversed. It reports
-  instead: `retainedOfficerPositions` drives `CONVERT_OFFICER_ADMIN_MESSAGE`, and
-  `guest-convert-privilege.integration.test.ts` pins the hole in the gate's own terms.
+  **The wake-up ends any open officer term too** (#805). Effective-admin (#202) grants admin for
+  any open `officer_terms` row whatever `club_role` says, and deactivation closes a term no more
+  than it clears a role — so a membership that lapsed while holding office used to come back a
+  full admin through the term, with `CONVERT_DEMOTED_MESSAGE` saying the access had been removed.
+  Convert now closes those terms in the same transaction (`closeOpenOfficerTerms`, the exact
+  inverse of the seam `guards.ts` grants from), reports them as `closedOfficerPositions` driving
+  `CONVERT_OFFICER_TERM_CLOSED_MESSAGE`, and records them in the `member_add` detail. **This is
+  not convert vacating a live office:** everywhere the GATE and the AGENDA look, the office was
+  already vacant — `currentOfficersForClub` skips an inactive holder, so the printed agenda showed
+  the position as Open, and `loadOfficerSeats` filters on `status = 'active'`, so the COT seats
+  never listed them — and what the wake-up silently did was REINSTATE it on a row Person dedup
+  chose (#561). Not every reader, and the difference is visible: `currentOfficersByMember` (roster,
+  member profile) and `getOnboardingChecklist` are status-unaware, so a lapsed President HAS been
+  rendering as President on the roster, and the checklist's "Assign officer roles" row goes from
+  complete to incomplete for a club whose only open term was that one. Both movements are the
+  correct direction. Scoped to the wake-up branch only: reuse of an ALREADY-ACTIVE membership
+  never reaches it, so a sitting President who is deduped keeps their office. **Nothing reverses it, and nothing has to:** undo refuses any
+  membership carrying an `officer_terms` row open OR closed, and terms are closed rather than
+  deleted (#100), so every conversion this touches was already un-undoable before the close and
+  still is. The remedy is the member edit form's office checkboxes, which the notice names —
+  though `applyImportMembers` re-opens a term from a members CSV that still names them, silently
+  and with no activity row (#819).
+  `guest-convert-privilege.integration.test.ts` pins all of it in the gate's own terms, including
+  that coupling.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

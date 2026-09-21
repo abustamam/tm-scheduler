@@ -1,7 +1,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { db } from "#/db";
 import { officerTerms } from "#/db/schema";
-import type { OfficerPosition } from "#/lib/officers";
+import { type OfficerPosition, officerRank } from "#/lib/officers";
 
 // The shared client OR a drizzle transaction handle, the same union
 // `officer-terms-logic.ts` takes and for the same reason: a caller that is
@@ -32,4 +32,65 @@ export async function getOpenOfficerPositions(
 			),
 		);
 	return rows.map((r) => r.position);
+}
+
+/**
+ * End every OPEN officer term a membership holds, returning the positions it
+ * actually closed, President first (#805).
+ *
+ * The exact inverse of {@link getOpenOfficerPositions}, deliberately in the
+ * same module as it. That function is the seam `guards.ts` grants
+ * effective-admin from — any open term makes a membership a full club admin
+ * whatever `club_role` says (#202) — so the query that REVOKES that grant has
+ * to match the query that confers it, predicate for predicate. Two copies of
+ * "which terms are open" in two modules is how a revocation ends up closing a
+ * different set from the one the gate reads.
+ *
+ * `UPDATE … RETURNING` rather than a select followed by a write, so the
+ * positions handed back are the rows this statement actually closed rather than
+ * a set read beforehand. The caller shows that list to a human, so over- and
+ * under-stating it are both bugs.
+ *
+ * That is a reporting property, NOT a concurrency one, and the difference is
+ * worth stating because it is easy to credit the wrong thing: one statement
+ * does not stop a term being OPENED underneath it. What does is the caller's
+ * lock. Convert holds `FOR UPDATE` on the `members` row, and inserting an
+ * `officer_terms` row takes `FOR KEY SHARE` on the membership it references for
+ * the FK check — which conflicts, so a concurrent assignment waits. A caller
+ * that does NOT hold that lock gets no such guarantee from this function.
+ *
+ * Rows are CLOSED, never deleted — `term_end` is set and the history stays, the
+ * same way removing an office from the member edit form does (#100). That is
+ * what keeps `applyUndoGuestConversion`'s refusal ("this member has an officer
+ * term of their own now") covering every conversion that calls this: the row is
+ * still there afterwards to be counted.
+ *
+ * Not `reconcileOfficerTerms(client, id, [])`, which would do the same thing
+ * through the roster editor's desired-set path: that function's contract is
+ * "make the open set exactly `desired`", and every other caller passes a
+ * line-up a human chose. This verb is "end what is open", it needs no desired
+ * set, and it is one statement rather than one per term.
+ */
+export async function closeOpenOfficerTerms(
+	database: Database,
+	membershipId: string,
+): Promise<OfficerPosition[]> {
+	const now = new Date();
+	const rows = await database
+		.update(officerTerms)
+		.set({ termEnd: now, updatedAt: now })
+		.where(
+			and(
+				eq(officerTerms.membershipId, membershipId),
+				isNull(officerTerms.termEnd),
+			),
+		)
+		.returning({ position: officerTerms.position });
+	// Canonical order, because this list is read aloud in a toast. Postgres
+	// returns updated rows in no defined order, so without this the same two
+	// offices could be named "Treasurer and President" on one convert and
+	// "President and Treasurer" on the next.
+	return rows
+		.map((r) => r.position)
+		.sort((a, b) => officerRank(a) - officerRank(b));
 }

@@ -80,23 +80,59 @@ export const CONVERT_DEMOTED_MESSAGE =
 	"Their club role was set back to Member — waking a lapsed membership never restores admin access. Make them an admin again from their member page if that's what you meant.";
 
 /**
- * Told to the admin when the woken membership STILL confers admin, because it
- * holds an open officer term (#202's effective-admin: every officer is a full
- * admin, whatever `club_role` says).
+ * Told to the admin when waking that lapsed membership ALSO ended the open
+ * officer term(s) it was still carrying (#805).
  *
- * This sentence exists because the one above would otherwise be a lie. Convert
- * writes `club_role` down; it deliberately does NOT close officer terms — a term
- * is a governance fact about who the club's President is, read by the printed
- * agenda, the officer home, the COT seats and the onboarding checklist, and
- * vacating one from a guest card is not a VP-Membership decision. Deactivation
- * does not close them either, so a lapsed row can carry one.
+ * Effective-admin (#202) makes any open `officer_terms` row a full club admin
+ * whatever `club_role` says, and deactivation closes a term no more than it
+ * clears a role — so a membership that lapsed while holding office used to come
+ * back a full admin through the term, and the demotion sentence above it was a
+ * lie. Convert now ends the term in the same statement, and this is the
+ * sentence that stops THAT from being silent.
  *
- * The residue is therefore real and this is where it becomes visible: the
- * membership is active again and its open term grants exactly the access the
- * demotion just removed. Ending the term is a checkbox on the member edit form.
+ * It is not a governance write against a sitting officer. Everywhere the GATE
+ * and the AGENDA look, the office was already vacant: `currentOfficersForClub`
+ * skips an inactive holder, so the printed agenda has been showing the position
+ * as Open, and `loadOfficerSeats` filters on `status = 'active'`, so the COT
+ * seats behind DCP goal 9 never listed them. What the wake-up silently did was
+ * REINSTATE it, to both, on a row Person dedup picked (#561).
+ *
+ * Not every reader — `currentOfficersByMember` (the roster and the member
+ * profile) and the onboarding checklist are status-unaware, so a lapsed
+ * President HAS been rendering as President on the roster and the checklist's
+ * "Assign officer roles" row can flip back to incomplete. See the close itself
+ * in `applyConvertGuestToMember` for why both movements are the right
+ * direction.
+ *
+ * Names the remedy for the same reason the demotion sentence does — an admin
+ * who genuinely means to bring a former President back has to be able to see
+ * what happened and put it right, and the member edit form's office checkboxes
+ * do it in one click. That form is not the only way back: `applyImportMembers`
+ * re-opens a term from a members CSV that still names them, silently and with
+ * no activity row (#819), which is why the
+ * sentence points at the deliberate control rather than describing the state.
+ *
+ * Shown ONLY alongside `CONVERT_REACTIVATED_MESSAGE`: the close rides the
+ * wake-up and never fires on its own. Reuse of an ALREADY-ACTIVE officer is
+ * ordinary dedup of a sitting officer and is left completely alone — vacating
+ * an office THERE would be the governance write this deliberately is not.
  */
-export const CONVERT_OFFICER_ADMIN_MESSAGE = (offices: string): string =>
-	`They still hold an open officer term (${offices}), and every officer is a full club admin — end the term on their member page if that isn't right.`;
+export const CONVERT_OFFICER_TERM_CLOSED_MESSAGE = (
+	positions: OfficerPosition[],
+): string => {
+	const offices = listRoles(positions.map((p) => OFFICER_POSITION_LABELS[p]));
+	// The labels and the plural are formatted HERE rather than at the call site
+	// because the sentence is the only thing that knows whether it is talking
+	// about one office or three, and a caller that pre-joined the names has
+	// already thrown that away.
+	const term = positions.length === 1 ? "officer term" : "officer terms";
+	return (
+		`Their open ${term} (${offices}) ended with it — every officer is a full ` +
+		`club admin, so waking a lapsed membership would otherwise have restored ` +
+		`exactly the access we just removed. Give the office back on their member ` +
+		`page if that's what you meant.`
+	);
+};
 
 /** The shape `convertNoticeDescription` reads — the privilege half of
  *  `ConvertGuestResult`, restated here so this module stays free of `#/db`. */
@@ -104,8 +140,9 @@ export interface ConvertNotice {
 	reactivated: boolean;
 	/** The elevated club role convert wrote down to `member`, if it did. */
 	demotedFrom?: "admin";
-	/** Open officer positions the woken membership still holds. */
-	retainedOfficerPositions: OfficerPosition[];
+	/** Open officer positions the wake-up ended, because they would otherwise
+	 *  have handed back the very admin access `demotedFrom` just removed. */
+	closedOfficerPositions: OfficerPosition[];
 }
 
 /**
@@ -114,9 +151,9 @@ export interface ConvertNotice {
  *
  * A function rather than three conditionals at the call site because the
  * sentences COMPOSE, and the composition is the part with a wrong answer in it:
- * the demotion notice alone overstates what happened when an officer term
- * survives it, and the officer notice alone is a non-sequitur without the
- * reactivation that made the term live again. Keeping them together in one pure
+ * the demotion notice alone is incomplete when an office was ended beside it,
+ * and the officer notice alone is a non-sequitur without the reactivation that
+ * would have made the term live again. Keeping them together in one pure
  * function is what lets `guest-convert.test.ts` assert every combination
  * without a database or a rendered toast.
  *
@@ -131,15 +168,9 @@ export function convertNoticeDescription(
 	if (!result.reactivated) return undefined;
 	const lines = [CONVERT_REACTIVATED_MESSAGE];
 	if (result.demotedFrom) lines.push(CONVERT_DEMOTED_MESSAGE);
-	if (result.retainedOfficerPositions.length > 0) {
+	if (result.closedOfficerPositions.length > 0) {
 		lines.push(
-			CONVERT_OFFICER_ADMIN_MESSAGE(
-				listRoles(
-					result.retainedOfficerPositions.map(
-						(p) => OFFICER_POSITION_LABELS[p],
-					),
-				),
-			),
+			CONVERT_OFFICER_TERM_CLOSED_MESSAGE(result.closedOfficerPositions),
 		);
 	}
 	return lines.join(" ");

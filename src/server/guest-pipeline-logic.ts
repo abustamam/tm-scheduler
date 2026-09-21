@@ -56,7 +56,7 @@ import { normalizedEmail } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
-import { getOpenOfficerPositions } from "./officers-logic";
+import { closeOpenOfficerTerms } from "./officers-logic";
 
 /** The pipeline stages a guest may occupy (#208 / ADR-0018). */
 export type GuestStage = "prospect" | "following_up" | "joined" | "lost";
@@ -1136,13 +1136,39 @@ export interface ConvertGuestResult {
 	 */
 	demotedFrom?: "admin";
 	/**
-	 * Open officer positions the woken membership still holds (#202).
+	 * Open officer positions the wake-up ENDED, because effective-admin (#202)
+	 * would otherwise have handed back through them exactly the access
+	 * `demotedFrom` just removed (#805).
 	 *
-	 * Effective-admin's other source, and convert deliberately does not touch
-	 * it — see the read in `applyConvertGuestToMember`. Non-empty means the
-	 * demotion above did NOT actually remove admin access, which is why this
-	 * reaches the UI rather than staying a server-side fact. Always `[]` on
-	 * every path that did not reactivate.
+	 * Non-empty means this convert changed who the club's officers are, which
+	 * is why it reaches the UI rather than staying a server-side fact — it is
+	 * the same disclosure obligation as `demotedFrom`, one table over. Always
+	 * `[]` on every path that did not reactivate: a sitting officer that convert
+	 * merely deduped onto is left completely alone.
+	 */
+	closedOfficerPositions: OfficerPosition[];
+	/**
+	 * @deprecated Always `[]`. Shipped ONLY so a tab loaded before this deploy
+	 * does not throw, and removable in the NEXT release that touches this file —
+	 * once no client older than #805 can still be open, delete this field and
+	 * the line that emits it. Nothing in this repo reads it; the only reader it
+	 * exists for is a bundle that is no longer being served.
+	 *
+	 * This field is the #504 hazard one axis over: not the server fn's METHOD
+	 * but its response SHAPE. The URL is derived from the file and export name,
+	 * so it is byte-identical across an auto-deploy, and a client loaded before
+	 * it keeps posting to the new server quite happily. What it then does is
+	 * `result.retainedOfficerPositions.length` — unguarded, because the field
+	 * was required — and that throws a TypeError AFTER the transaction has
+	 * committed: the admin sees `toast.error("Cannot read properties of
+	 * undefined")` on a convert that SUCCEEDED, and `router.invalidate()` never
+	 * runs, so the board still shows the guest as a prospect. It fires only when
+	 * `reactivated` is true, which is exactly the converts this feature changed.
+	 *
+	 * Empty rather than the closed positions: the old client's sentence said the
+	 * term still stood, which is now false. `[]` makes the stale tab silent
+	 * about offices and correct about everything else, and the fresh tab reads
+	 * `closedOfficerPositions` for the real notice.
 	 */
 	retainedOfficerPositions: OfficerPosition[];
 }
@@ -1156,8 +1182,9 @@ export interface ConvertGuestResult {
  * `joinedAt: today`) — or reuse the person's existing membership so we never
  * violate one-membership-per-person-per-club, REACTIVATING that row when it had
  * lapsed (#501) — and writing its `club_role` back down to `member` when it was
- * elevated, because waking a membership restores visibility, never authority —
- * saying so through `reactivated` / `demotedFrom`; (3) re-point every role slot the
+ * elevated AND ending any officer term it was still carrying (#805), because
+ * waking a membership restores visibility, never authority — saying so through
+ * `reactivated` / `demotedFrom` / `closedOfficerPositions`; (3) re-point every role slot the
  * guest holds to the new member (member-XOR-guest holds — set member + clear
  * guest together); (4) stamp the guest `stage: joined` with
  * `converted_membership_id` (the row PERSISTS, its past attendance stays as
@@ -1331,11 +1358,10 @@ export async function applyConvertGuestToMember(
 		// able to restore it deliberately, and a demotion nothing recorded is one
 		// nobody can distinguish from a membership that was never an admin.
 		let demotedFrom: "admin" | undefined;
-		// Open officer terms the woken membership still holds. NOT a write — see
-		// the comment at the read. Disclosed to the admin because they are the
-		// residue of the demotion: effective-admin (#202) means the access the
-		// demotion just removed is still granted by the term.
-		let retainedOfficerPositions: OfficerPosition[] = [];
+		// Open officer terms the wake-up ended (#805). Disclosed to the admin
+		// because closing them changes who the club's officers are — the same
+		// obligation `demotedFrom` carries, one table over.
+		let closedOfficerPositions: OfficerPosition[] = [];
 		if (existingMembership) {
 			membershipId = existingMembership.id;
 			// #501: wake a LAPSED membership, or the convert leaves the member
@@ -1395,29 +1421,60 @@ export async function applyConvertGuestToMember(
 						...(demotedFrom ? { clubRole: "member" as const } : {}),
 					})
 					.where(eq(members.id, membershipId));
-				// Effective-admin's OTHER source (#202): any open `officer_terms` row
-				// makes a membership a full admin whatever `club_role` says, and
-				// deactivation does not close those either — so a lapsed row can carry
-				// one, and waking it hands back exactly the access the demotion above
-				// just removed.
+				// Effective-admin's OTHER source (#202), and the half the demotion
+				// above cannot reach: any open `officer_terms` row makes a membership
+				// a full admin whatever `club_role` says, and deactivation closes a
+				// term no more than it clears a role. So a lapsed row can carry one,
+				// and #501 shipped a wake-up that handed back through the term exactly
+				// the access the statement above had just removed — with
+				// `CONVERT_DEMOTED_MESSAGE` telling the admin otherwise (#805).
 				//
-				// Convert READS this and does not write it, deliberately. An officer
-				// term is a governance fact about who the club's President IS — read
-				// by the printed agenda's officer grid, the officer home, the COT
-				// seats behind DCP goal 9 and the onboarding checklist — and vacating
-				// one as a side effect of a guest-card button is not a VP-Membership
-				// decision. It is also not reversible here: `applyUndoGuestConversion`
-				// refuses outright for a membership carrying ANY officer_terms row, so
-				// a close written here could never be undone by the same control that
-				// undoes the rest of the conversion.
+				// Ended here, in the same transaction, through the exact inverse of
+				// the seam `guards.ts` grants from, so the revocation and the grant
+				// cannot read different sets of terms.
 				//
-				// Read through `getOpenOfficerPositions`, the same seam `guards.ts`
-				// gates on, so the sentence the admin is shown cannot drift from the
-				// access they actually have.
-				retainedOfficerPositions = await getOpenOfficerPositions(
-					tx,
-					membershipId,
-				);
+				// ## Why this is not convert vacating a live office
+				//
+				// The office was already vacant everywhere THE GATE AND THE AGENDA
+				// look. Both of those readers drop an inactive holder:
+				// `currentOfficersForClub` skips `status === "inactive"`, so the
+				// printed agenda's officer grid has been showing the position as Open,
+				// and `loadOfficerSeats` filters on `status = 'active'`, so the COT
+				// seats behind DCP goal 9 never listed them. The club has been running
+				// without this officer for as long as the membership has been lapsed.
+				// What the wake-up silently did was REINSTATE them — to the agenda and
+				// to the gate — on a membership Person dedup chose, and dedup can land
+				// on the wrong human (#561).
+				//
+				// It is NOT every reader, and the difference is visible. Three are
+				// status-unaware and DO change here: `currentOfficersByMember` backs
+				// the roster (`club.ts:40`) and the member profile (`club.ts:136`),
+				// which is why a lapsed President has been rendering as President
+				// there; and `getOnboardingChecklist` asks only whether the club has
+				// ANY open term, so a club whose only officer is this lapsed one had
+				// its "Assign officer roles" row COMPLETE before the convert and
+				// INCOMPLETE after. That is the honest cost of this write, and it is
+				// the correct direction on all three: the roster stops naming a
+				// non-member as an officer, and the checklist stops counting one.
+				//
+				// Only on the wake-up path, and that is the whole scope of the
+				// governance claim: reuse of an ALREADY-ACTIVE membership never
+				// reaches this branch, so a sitting President deduped by a convert
+				// keeps their office untouched. Vacating one THERE would be the
+				// VP-Membership-button-as-governance-write this deliberately is not.
+				//
+				// ## Why nothing has to reverse it
+				//
+				// `applyUndoGuestConversion` refuses outright for a membership
+				// carrying ANY `officer_terms` row, open or closed. A membership this
+				// branch writes to HAD an open term a moment ago, and terms are closed
+				// rather than deleted (#100), so the row is still there to be counted:
+				// every conversion this close touches was already un-undoable before
+				// it, and still is. There is therefore no half-reversed state to
+				// record against — `guest-convert-privilege.integration.test.ts` pins
+				// that coupling. The remedy is the member edit form's office
+				// checkboxes, which `CONVERT_OFFICER_TERM_CLOSED_MESSAGE` names.
+				closedOfficerPositions = await closeOpenOfficerTerms(tx, membershipId);
 			}
 		} else {
 			// #617: refuse rather than silently duplicate a human.
@@ -1554,10 +1611,18 @@ export async function applyConvertGuestToMember(
 			// is a permission change with no `member_edit` of its own to explain
 			// it.
 			//
-			// `retainedOfficerPositions` is deliberately NOT recorded. Nothing was
-			// written, so there is nothing for undo to replay, and a snapshot of
-			// who held office at convert time would be a second, staler copy of a
-			// fact `officer_terms` already stores with its own history.
+			// `closedOfficerPositions` is recorded for the reason `demotedFrom` is
+			// and no other: it is a permission change with no `member_edit` of its
+			// own to explain it, and without the key this row is indistinguishable
+			// from a convert that ended nobody's office (#805). Written only when
+			// something was closed, so its PRESENCE is the claim and records
+			// predating this read correctly as "closed nothing".
+			//
+			// NOT a replay record. `readConversionRecord` does not parse it and
+			// undo never reaches it — undo refuses any membership carrying an
+			// officer term, which is every membership this key can appear on.
+			// `officer_terms` keeps its own history with the real dates; a second
+			// copy here would only be a staler one.
 			detail: {
 				name,
 				fromGuestId: input.guestId,
@@ -1567,6 +1632,9 @@ export async function applyConvertGuestToMember(
 				createdPerson,
 				...(reactivatedFrom ? { reactivatedFrom } : {}),
 				...(demotedFrom ? { demotedFrom } : {}),
+				...(closedOfficerPositions.length > 0
+					? { closedOfficerPositions }
+					: {}),
 			},
 		});
 
@@ -1576,7 +1644,10 @@ export async function applyConvertGuestToMember(
 			personId,
 			reactivated: reactivatedFrom !== undefined,
 			...(demotedFrom ? { demotedFrom } : {}),
-			retainedOfficerPositions,
+			closedOfficerPositions,
+			// One release only — see the field's docblock. Delete this line and
+			// the field together in the next release that touches this file.
+			retainedOfficerPositions: [],
 		};
 	});
 }
@@ -2038,6 +2109,15 @@ export async function applyUndoGuestConversion(
 			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("dues records"));
 		}
 
+		// ANY term, open or CLOSED — and the closed half is load-bearing since
+		// #805. Convert's wake-up ends the open terms a lapsed membership was
+		// carrying, and `officer_terms` rows are closed rather than deleted
+		// (#100), so a membership convert wrote to that way still carries a row
+		// here. That is what makes the close safe to write with nothing to
+		// reverse it: every conversion it touches was already refused by this
+		// check before the close existed, and still is, so an undo can never
+		// half-reverse one. Narrowing this to OPEN terms would quietly break that
+		// — `guest-convert-privilege.integration.test.ts` fails you first.
 		const [terms] = await tx
 			.select({ n: count() })
 			.from(officerTerms)
