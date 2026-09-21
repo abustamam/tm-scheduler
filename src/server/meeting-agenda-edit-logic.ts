@@ -104,6 +104,96 @@ export type AgendaDraftRole = {
 	isSpeakerRole: boolean;
 };
 
+/**
+ * A role in the club's BANK that this agenda does not yet declare — one entry
+ * of the Roles panel's picker (#802).
+ *
+ * Same five fields an `AgendaDraftRole` carries, plus `standing`, because the
+ * picker has to SAY which of them are not part of the club's standard meeting
+ * shape. Attaching one changes neither `standing` nor `enabled`: the club's
+ * answer to "do we run this every week" is not what putting it on one night's
+ * agenda is deciding.
+ */
+export type AttachableRole = AgendaDraftRole & {
+	/** #801's flag, carried so the picker can mark the role rather than merely
+	 *  listing it. A contest's Chief Judge and a role an officer typed into some
+	 *  other agenda are both `false`, and both are perfectly attachable. */
+	standing: boolean;
+};
+
+/** One row of the club's bank as `attachableBankRoles` reads it.
+ *
+ *  Spelled out rather than intersected with `AttachableRole`, because the two
+ *  differ on `key` and an intersection cannot narrow a field — `string & (string
+ *  | null)` is `string`, so the nullable column would have been typed away
+ *  exactly where the null matters. */
+type BankRoleRow = {
+	/** NULL for a bank row minted before #801 wrote keys. */
+	key: string | null;
+	name: string;
+	category: AgendaDraftRole["category"];
+	defaultCount: number;
+	isSpeakerRole: boolean;
+	standing: boolean;
+	/** #368's skeleton-crew switch. */
+	enabled: boolean;
+};
+
+/**
+ * The club bank roles this agenda could attach: the bank MINUS what it already
+ * declares, minus the rows `addAgendaRole` would refuse anyway.
+ *
+ * The invariant is that the picker offers exactly what attaching will accept,
+ * so every exclusion here mirrors a refusal in `addAgendaRole` rather than
+ * inventing a policy of its own:
+ *
+ * - a NULL `key` cannot be declared at all (`meeting_template_roles.key` is NOT
+ *   NULL), and `addAgendaRole` says so;
+ * - a role the club TURNED OFF (#368) is refused there, because a declaration
+ *   whose places `generateSlotRows` drops is a role on the agenda that can
+ *   never get a slot. This is also the rule `listRoleDefinitions`' `onlyEnabled`
+ *   states for every surface that OFFERS a role to be filled;
+ * - a key this template already declares, and — separately — a NAME it already
+ *   declares, which is the check `addAgendaRole` makes first and the one that
+ *   catches a club role sharing a renamed declaration's name.
+ *
+ * `standing` is deliberately NOT an exclusion. Offering only the standard shape
+ * is the whole gap #802 exists to close: a contest's Chief Judge, and a role an
+ * officer typed into last month's agenda, are the club's roles and attach
+ * exactly like any other. They are MARKED, not hidden.
+ *
+ * An AMBIGUOUS name — two bank rows the club named the same thing — is left IN
+ * the list even though `addAgendaRole` refuses it, and that is the one place
+ * this deliberately does not mirror a refusal. That refusal's sentence is
+ * actionable ("Rename one in club settings first"), and hiding a role the club
+ * owns from the only picker that lists it would leave the officer with no way
+ * to learn why.
+ *
+ * Pure, and exported, so the set arithmetic is assertable without a database.
+ */
+export function attachableBankRoles(
+	bank: readonly BankRoleRow[],
+	declared: readonly { key: string; name: string }[],
+): AttachableRole[] {
+	const declaredKeys = new Set(declared.map((r) => r.key));
+	const declaredNames = new Set(declared.map((r) => foldRoleName(r.name)));
+	return bank.flatMap((role) => {
+		if (role.key == null || !role.enabled) return [];
+		if (declaredKeys.has(role.key)) return [];
+		if (declaredNames.has(foldRoleName(role.name))) return [];
+		return [
+			{
+				key: role.key,
+				name: role.name,
+				category: role.category,
+				defaultCount: role.defaultCount,
+				isSpeakerRole: role.isSpeakerRole,
+				standing: role.standing,
+			},
+		];
+	});
+}
+
 export type AgendaDraft = {
 	templateId: string;
 	templateName: string;
@@ -112,6 +202,22 @@ export type AgendaDraft = {
 	editable: boolean;
 	rows: AgendaDraftRow[];
 	roles: AgendaDraftRole[];
+	/**
+	 * The club's OTHER roles — everything in the bank this agenda does not
+	 * already declare, each marked with whether it is part of the club's
+	 * standard meeting shape (#802).
+	 *
+	 * REQUIRED, not optional, and that is the point of the field. Before it the
+	 * Roles panel's only affordance was a free-text box, so attaching the club's
+	 * own Timer meant already knowing it was called "Timer" — an officer could
+	 * not SEE what their club has, and the four functionaries the run of show
+	 * never names as a beat's `roleKey` (`timer`, `ah_counter`, `grammarian`,
+	 * `vote_counter`) were unreachable from this panel without being told they
+	 * exist. An empty array is a club whose whole bank is already on this
+	 * agenda; an absent one would be a picker that silently renders nothing,
+	 * which looks identical.
+	 */
+	attachableRoles: AttachableRole[];
 	/**
 	 * Everything below exists so the CLIENT can compute the running clock, by
 	 * calling the same three pure functions the print route calls
@@ -335,7 +441,7 @@ export async function loadAgendaDraft(
 	// names cannot have been deleted.
 	if (!tpl) return null;
 
-	const [rows, roles, slots] = await Promise.all([
+	const [rows, roles, slots, bank] = await Promise.all([
 		database
 			.select({
 				id: meetingTemplateBeats.id,
@@ -376,6 +482,27 @@ export async function loadAgendaDraft(
 		// The SAME loader the meeting page and the print route use, so the
 		// editor's clock cannot disagree with theirs about what a slot is.
 		loadMeetingSlots(meetingId),
+		// The club's whole role BANK (#802), which the Roles panel's picker is
+		// built from. ONE scope since #801 — the club — so this is a plain
+		// indexed read on `role_definitions_club_idx` with no template axis and
+		// no aggregate; `attachableBankRoles` below does the subtraction.
+		//
+		// Ordered the way `/admin/roles` orders the same rows, so the picker
+		// lists a club's roles in the order that club arranged them rather than
+		// in whatever order Postgres returned.
+		database
+			.select({
+				key: roleDefinitions.key,
+				name: roleDefinitions.name,
+				category: roleDefinitions.category,
+				defaultCount: roleDefinitions.defaultCount,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
+				standing: roleDefinitions.standing,
+				enabled: roleDefinitions.enabled,
+			})
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, meeting.clubId))
+			.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name)),
 	]);
 
 	return {
@@ -404,6 +531,7 @@ export async function loadAgendaDraft(
 			maxSeconds: meeting.tableTopicsMaxSeconds,
 		}),
 		roles,
+		attachableRoles: attachableBankRoles(bank, roles),
 	};
 }
 

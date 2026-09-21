@@ -83,6 +83,15 @@ function isRoleAlreadyGone(err: unknown): boolean {
 	);
 }
 
+/**
+ * One entry of the Roles panel's club-bank picker (#802).
+ *
+ * Read off `AgendaDraft` rather than imported by name: `meeting-agenda-edit.ts`
+ * re-exports the four types the editor already used, and an indexed access
+ * needs no sixth. It is the same type `loadAgendaDraft` builds.
+ */
+type AttachableRole = AgendaDraft["attachableRoles"][number];
+
 const CATEGORY_LABELS: Record<AgendaDraftRole["category"], string> = {
 	leadership: "Leadership",
 	speaker: "Speaker",
@@ -255,7 +264,7 @@ export function AgendaEditor({
 	planRoleRemoval,
 	onRemoveRole,
 }: AgendaEditorProps) {
-	const { editable, roles } = draft;
+	const { editable, roles, attachableRoles } = draft;
 
 	// The draft is the server's truth; this is what the officer is typing. Keyed
 	// on `draft.rows` identity so a structural mutation (add/remove/move, which
@@ -482,6 +491,7 @@ export function AgendaEditor({
 
 			<RolesPanel
 				roles={roles}
+				attachable={attachableRoles}
 				editable={editable}
 				onAddRole={onAddRole}
 				planRoleRemoval={planRoleRemoval}
@@ -1606,12 +1616,16 @@ type RolePhase =
 
 function RolesPanel({
 	roles,
+	attachable,
 	editable,
 	onAddRole,
 	planRoleRemoval,
 	onRemoveRole,
 }: {
 	roles: AgendaDraftRole[];
+	/** The club's bank minus what this agenda already declares (#802) — see
+	 *  `attachableBankRoles`. Empty means the whole bank is already here. */
+	attachable: AttachableRole[];
 	editable: boolean;
 	onAddRole: (role: NewAgendaRole) => Promise<unknown>;
 	planRoleRemoval: (roleKey: string) => Promise<ReleasedHolder[]>;
@@ -1625,6 +1639,52 @@ function RolesPanel({
 	const [defaultCount, setDefaultCount] = useState("1");
 	const [isSpeakerRole, setIsSpeakerRole] = useState(false);
 	const [addBusy, setAddBusy] = useState(false);
+	const [pickedKey, setPickedKey] = useState("");
+	const [attachBusy, setAttachBusy] = useState(false);
+
+	const [standing, nonStanding] = useMemo(
+		() => [
+			attachable.filter((r) => r.standing),
+			attachable.filter((r) => !r.standing),
+		],
+		[attachable],
+	);
+
+	/**
+	 * Attach a bank role this agenda does not yet declare.
+	 *
+	 * Goes through the SAME `onAddRole` the create form below uses, because
+	 * `addAgendaRole` is find-and-attach-or-create keyed on the NAME (#801): a
+	 * name the club's bank already holds attaches that row — same
+	 * `role_definitions.id`, so the assign picker's "last served" carries the
+	 * club's whole history for it — and only a name nothing matches mints
+	 * anything. Handing it the picked role's own name is therefore the attach
+	 * path by construction, and no second server fn exists to get wrong.
+	 *
+	 * `category` / `defaultCount` / `isSpeakerRole` are sent from the bank row
+	 * and then IGNORED by the attach path, which takes all three off the bank
+	 * row it resolved. They matter in exactly one case: the club renamed this
+	 * role between the page load and this click, so the name now matches
+	 * nothing and the create arm runs. Sending the bank's values rather than
+	 * form defaults is what keeps that rare miss from also inventing a
+	 * one-place non-speaking Functionary out of a four-place Contestant.
+	 */
+	async function attachRole(role: AttachableRole) {
+		setAttachBusy(true);
+		try {
+			await onAddRole({
+				name: role.name,
+				category: role.category,
+				defaultCount: role.defaultCount,
+				isSpeakerRole: role.isSpeakerRole,
+			});
+			setPickedKey("");
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setAttachBusy(false);
+		}
+	}
 
 	/**
 	 * Removing a role releases its slots, and a released holder cannot be
@@ -1698,9 +1758,9 @@ function RolesPanel({
 	const activeRole = phase.kind === "idle" ? null : phase.role;
 
 	return (
-		<div className="flex flex-col gap-3 rounded-lg border p-3">
+		<div className="flex flex-col gap-4 rounded-lg border p-3">
 			<h2 className="font-semibold text-sm">Roles</h2>
-			<ul className="flex flex-col gap-1">
+			<ul aria-label="On this agenda" className="flex flex-col gap-1">
 				{roles.map((role) => (
 					<li
 						key={role.key}
@@ -1732,11 +1792,84 @@ function RolesPanel({
 				))}
 			</ul>
 
+			{/* The picker #802 exists for. Before it, the only way to put a role on
+			    an agenda was to TYPE a name you already knew, so an officer could
+			    not see what their own club has — and `timer`, `ah_counter`,
+			    `grammarian` and `vote_counter` are never a beat's own `roleKey`, so
+			    a standard meeting's materialised agenda declares five roles and
+			    lists five, with those four reachable only by someone who had been
+			    told they exist.
+
+			    A `<select>` rather than a row of buttons: this panel has to stay
+			    usable at 400px, and a club's bank runs past a dozen roles. The
+			    non-standing ones are grouped into their own `<optgroup>`, which is
+			    the mark AC 1 asks for — a role that arrived from a contest, or that
+			    someone typed into another night's agenda, is perfectly attachable
+			    but should not read as part of the club's weekly shape. */}
+			{editable && attachable.length > 0 ? (
+				<div className="flex flex-col gap-1">
+					<Label htmlFor="attach-club-role">From your club's roles</Label>
+					<div className="flex flex-wrap items-center gap-2">
+						<select
+							id="attach-club-role"
+							className="h-9 min-w-0 flex-1 rounded-md border border-input bg-transparent px-3 text-sm"
+							value={pickedKey}
+							onChange={(e) => setPickedKey(e.target.value)}
+						>
+							<option value="">Choose a role…</option>
+							{standing.map((role) => (
+								<option key={role.key} value={role.key}>
+									{role.name} ({CATEGORY_LABELS[role.category]},{" "}
+									{role.defaultCount}{" "}
+									{role.defaultCount === 1 ? "slot" : "slots"})
+								</option>
+							))}
+							{nonStanding.length > 0 ? (
+								<optgroup label="Not on standard meetings">
+									{nonStanding.map((role) => (
+										<option key={role.key} value={role.key}>
+											{role.name} ({CATEGORY_LABELS[role.category]},{" "}
+											{role.defaultCount}{" "}
+											{role.defaultCount === 1 ? "slot" : "slots"})
+										</option>
+									))}
+								</optgroup>
+							) : null}
+						</select>
+						<Button
+							type="button"
+							size="sm"
+							disabled={attachBusy || pickedKey === ""}
+							onClick={() => {
+								const role = attachable.find((r) => r.key === pickedKey);
+								if (role) void attachRole(role);
+							}}
+						>
+							{attachBusy ? (
+								<Loader2 className="size-4 animate-spin" aria-hidden="true" />
+							) : null}
+							Add to agenda
+						</Button>
+					</div>
+					<p className="text-muted-foreground text-xs">
+						Adding one here puts it on this agenda only. It stays exactly as the
+						club has it — nothing about the role itself changes.
+					</p>
+				</div>
+			) : null}
+
 			{editable ? (
 				<form
 					className="flex flex-wrap items-end gap-2"
 					onSubmit={submitAddRole}
 				>
+					<div className="flex w-full flex-col gap-1">
+						<h3 className="font-medium text-sm">Create a new role</h3>
+						<p className="text-muted-foreground text-xs">
+							Only for a role your club does not have yet. It joins the club's
+							roles, off the standard meeting shape.
+						</p>
+					</div>
 					<div className="flex flex-col gap-1">
 						<Label htmlFor="new-role-name">New role name</Label>
 						<Input

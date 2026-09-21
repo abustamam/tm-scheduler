@@ -26,6 +26,9 @@ const draft: AgendaDraft = {
 	timeZone: "America/Chicago",
 	lengthMinutes: 90,
 	geIntroducesFunctionaries: false,
+	// The club-bank picker's entries (#802). Empty here: this suite is about the
+	// rows and the clock, and `roles-panel-picker.test.tsx` covers the picker.
+	attachableRoles: [],
 	rows: [
 		{
 			id: "r1",
