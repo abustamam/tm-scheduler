@@ -59,11 +59,13 @@ export const getAttendanceLapse = createServerFn({ method: "GET" })
  *
  * Admin-gated like its three neighbours, and it takes NO speaker filter on the
  * wire on purpose. `loadEvaluatorPairings` accepts one so a member-facing
- * caller (#681) can reuse the query, but a filter reachable from the client
- * here would be a second, weaker way into the same rows: this fn's gate is
- * club-wide admin, so whatever it accepts it serves for the whole club. The
- * member-facing surface needs its own fn with its own gate — one that proves
- * the caller IS the speaker — not a parameter on this one.
+ * caller (#681) can reuse the HISTORY read — only that half: the loader
+ * hard-filters to past meetings, and #681 also asks who evaluates the member
+ * NEXT, which needs a forward-looking query of its own. A filter reachable from
+ * the client here would be a second, weaker way into the same rows: this fn's
+ * gate is club-wide admin, so whatever it accepts it serves for the whole club.
+ * The member-facing surface needs its own fn with its own gate — one that
+ * proves the caller IS the speaker — not a parameter on this one.
  */
 export const getEvaluatorPairings = createServerFn({ method: "GET" })
 	.validator((input: unknown) => clubScoped.parse(input))

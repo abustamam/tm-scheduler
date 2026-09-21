@@ -11,8 +11,10 @@
 // can act on — a row whose only signal is an amber swatch passes every server
 // assertion. And the stat tile counts REPEAT rows out of a list that holds
 // every speaker with any history, so a dropped filter would put the club's
-// whole speaking roster behind a "repeat evaluators" number with the server
-// suite entirely green — the same shape as #530's `isLapsed` filter.
+// whole speaking roster behind that number with the server suite entirely green
+// — the same shape as #530's `isLapsed` filter. Nothing outside this file can
+// see the tile's WORDING either, which is how it shipped counting speakers
+// under a label that named evaluators.
 //
 // Pattern follows vpe-upcoming-claim.test.tsx: mock the server-fn module (it
 // reaches `#/db` → `pg`, which must not load under jsdom), stub
@@ -91,10 +93,20 @@ async function renderRoute(pairings: EvaluatorPairingRow[]) {
 	await waitFor(() => expect(router.state.status).toBe("idle"));
 }
 
-/** The "Repeat evaluators" stat tile's number. */
+/** The repeat stat tile's LABEL text, exactly as the tile renders it. */
+const REPEAT_STAT_LABEL = "Speakers with a repeat";
+
+/** The repeat stat tile's number. */
 function repeatStat() {
-	const label = screen.getByText("Repeat evaluators", { selector: "div" });
+	const label = screen.getByText(REPEAT_STAT_LABEL, { selector: "div" });
 	return label.parentElement?.querySelector("span")?.textContent;
+}
+
+/** The repeat stat tile's small print, beside the number. */
+function repeatStatNote() {
+	const label = screen.getByText(REPEAT_STAT_LABEL, { selector: "div" });
+	const spans = label.parentElement?.querySelectorAll("span");
+	return spans?.[1]?.textContent;
 }
 
 describe("VPE dashboard — Evaluator pairings (#709)", () => {
@@ -225,6 +237,59 @@ describe("VPE dashboard — Evaluator pairings (#709)", () => {
 		// "who last evaluated this speaker" for everybody else.
 		expect(screen.getByText("Repeat Speaker")).toBeTruthy();
 		expect(screen.getByText("Varied Speaker")).toBeTruthy();
+	});
+
+	it("counts SPEAKERS in the repeat tile, and says so in the label", async () => {
+		// The units test. The tile's number is `pairings.filter(hasRepeat).length`
+		// — one entry per SPEAKER — and it shipped under "Repeat evaluators /
+		// same pairing twice", which reads as a count of pairings or of people
+		// doing the evaluating. Every gate was green: the number was right for
+		// what it counted and nothing compared it to the words beside it.
+		//
+		// This fixture makes the three candidate readings different numbers, so
+		// swapping the count without the label (or the label without the count)
+		// fails here:
+		//   speakers with a repeat        2  ← what the tile holds
+		//   repeated speaker↔evaluator    3
+		//   distinct repeat evaluators    3
+		await renderRoute([
+			pairingRow({
+				memberId: "a",
+				name: "Once Repeated",
+				recent: [
+					evaluation({ evaluatorKey: "x", meetingId: "m1", repeat: true }),
+					evaluation({ evaluatorKey: "x", meetingId: "m2", repeat: true }),
+				],
+			}),
+			pairingRow({
+				memberId: "b",
+				name: "Twice Repeated",
+				// TWO different evaluators each doubled: still ONE speaker.
+				recent: [
+					evaluation({ evaluatorKey: "y", meetingId: "m3", repeat: true }),
+					evaluation({ evaluatorKey: "y", meetingId: "m4", repeat: true }),
+					evaluation({ evaluatorKey: "z", meetingId: "m5", repeat: true }),
+					evaluation({ evaluatorKey: "z", meetingId: "m6", repeat: true }),
+				],
+			}),
+			pairingRow({
+				memberId: "c",
+				name: "Varied Speaker",
+				recent: [
+					evaluation({ evaluatorKey: "p", meetingId: "m7" }),
+					evaluation({ evaluatorKey: "q", meetingId: "m8" }),
+				],
+			}),
+		]);
+
+		expect(repeatStat()).toBe("2");
+		// The words have to name the same unit as the number. Pinned exactly,
+		// because "Repeat evaluators" is the wording that was wrong.
+		expect(
+			screen.getByText(REPEAT_STAT_LABEL, { selector: "div" }),
+		).toBeTruthy();
+		expect(repeatStatNote()).toBe("same evaluator twice");
+		expect(screen.queryByText("Repeat evaluators")).toBeNull();
 	});
 
 	it("links each speaker to their profile", async () => {

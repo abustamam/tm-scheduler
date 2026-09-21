@@ -93,14 +93,20 @@ export interface PairingInput {
  * 2. **Repeats are counted AFTER truncation.** A duplicate outside the shown
  *    window would otherwise put a "repeat" marker on a row whose second
  *    occurrence the officer cannot see — a claim the surface does not support.
- *    The flag means exactly "the same name is in this list twice".
+ *    The flag means exactly "the same name is in this list twice". The
+ *    truncation stays here even though `loadEvaluatorPairings` now also bounds
+ *    its result set to the same five per speaker in SQL: THIS is where the
+ *    window is defined and unit-tested without a database, and the SQL bound is
+ *    a scan bound that mirrors it. A caller handing this fold a wider list must
+ *    still get five.
  *
  * 3. **A guest evaluator is a pairing.** Evaluator slots can be held by a
  *    non-member guest (#151), and dropping those would under-report the very
  *    repeat the section exists to catch — silently, since nothing on the page
- *    would hint that a row was missing. Only a pairing with NO assignee at all
- *    is dropped, which is the defensive half: the loader filters to held slots,
- *    which by construction carry one.
+ *    would hint that a row was missing. Only a pairing with no COMPLETE
+ *    assignee — an identity and a name — is dropped, which is the defensive
+ *    half: the loader filters to held slots, which by construction carry one,
+ *    and joins the name off an FK.
  *
  * 4. **Ordering never depends on the caller.** Pairs are sorted here rather
  *    than trusted from SQL, and tie-broken all the way down to the evaluator
@@ -108,11 +114,13 @@ export interface PairingInput {
  *    club), or two meetings sharing a `scheduled_at`, cannot make the
  *    TRUNCATION window's membership arbitrary. A pairing could otherwise enter
  *    or leave the shown five between loader runs: the nondeterminism class #437
- *    removed.
+ *    removed. `loadEvaluatorPairings`' `ROW_NUMBER()` window mirrors this
+ *    comparator term for term for the same reason — a SQL bound that ranked
+ *    ties differently would hand the fold a different five, and the fold cannot
+ *    see what SQL discarded.
  */
 export function groupEvaluatorPairings(
 	pairs: PairingInput[],
-	limit: number = EVALUATOR_PAIRING.recentPerSpeaker,
 ): EvaluatorPairingRow[] {
 	interface Bucket {
 		memberId: string;
@@ -123,13 +131,20 @@ export function groupEvaluatorPairings(
 	const bySpeaker = new Map<string, Bucket>();
 
 	for (const p of pairs) {
-		// Rule 3's defensive half: an evaluator slot with neither a member nor a
-		// guest has nobody in it, so it is not a pairing at all.
+		// Rule 3's defensive half: a pairing needs BOTH an identity and a name,
+		// and anything less is DROPPED rather than filled in. An earlier draft
+		// coalesced the name to a literal "Someone", which is worse than dropping
+		// twice over: it is unreachable from the loader (both name columns come
+		// off a LEFT JOIN whose ON is an FK-backed id, and `members.name` /
+		// `guests.name` are NOT NULL), so nothing could ever test it; and were it
+		// somehow reached it would render a chip that reads like a real evaluation
+		// the officer then cannot look up.
 		const evaluatorKey = p.evaluatorMemberId ?? p.evaluatorGuestId;
-		if (!evaluatorKey) continue;
 		const isGuest = p.evaluatorMemberId === null;
-		const evaluatorName =
-			(isGuest ? p.evaluatorGuestName : p.evaluatorMemberName) ?? "Someone";
+		const evaluatorName = isGuest
+			? p.evaluatorGuestName
+			: p.evaluatorMemberName;
+		if (!evaluatorKey || evaluatorName === null) continue;
 
 		let bucket = bySpeaker.get(p.speakerMemberId);
 		if (!bucket) {
@@ -161,8 +176,11 @@ export function groupEvaluatorPairings(
 					a.meetingId.localeCompare(b.meetingId) ||
 					a.evaluatorKey.localeCompare(b.evaluatorKey),
 			);
-		// Rule 2 — truncate, THEN count.
-		const shown = sorted.slice(0, limit);
+		// Rule 2 — truncate, THEN count. `EVALUATOR_PAIRING.recentPerSpeaker` is
+		// read directly rather than taken as a parameter: a `limit` argument put
+		// an unbounded window one call away from the constant the suite pins
+		// absolutely, and no caller ever passed one.
+		const shown = sorted.slice(0, EVALUATOR_PAIRING.recentPerSpeaker);
 		const counts = new Map<string, number>();
 		for (const p of shown) {
 			counts.set(p.evaluatorKey, (counts.get(p.evaluatorKey) ?? 0) + 1);

@@ -71,7 +71,13 @@ function VpeDashboard() {
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
 	const lapsed = lapse.filter((m) => m.isLapsed);
-	const repeatPairings = pairings.filter((p) => p.hasRepeat);
+	// SPEAKERS, not pairings and not evaluators — one row per speaker, kept if
+	// some evaluator appears twice in that speaker's shown window. A speaker
+	// repeated by two different evaluators is one entry here, not two, so the
+	// tile below has to say "speakers" or it is reporting a number it does not
+	// hold. It said "Repeat evaluators / same pairing twice" over exactly this
+	// count until the units were checked.
+	const speakersWithRepeat = pairings.filter((p) => p.hasRepeat);
 
 	const stats = [
 		{ label: "Active members", value: String(rotation.length), note: "roster" },
@@ -93,10 +99,10 @@ function VpeDashboard() {
 			note: "top of queue",
 		},
 		{
-			label: "Repeat evaluators",
-			value: String(repeatPairings.length),
-			note: "same pairing twice",
-			amber: repeatPairings.length > 0,
+			label: "Speakers with a repeat",
+			value: String(speakersWithRepeat.length),
+			note: "same evaluator twice",
+			amber: speakersWithRepeat.length > 0,
 		},
 	];
 

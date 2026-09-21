@@ -3,6 +3,7 @@
 // that `EVALUATOR_PAIRING.recentPerSpeaker` is assertable without one. A
 // constant defined in a module that imports `#/db` throws `DATABASE_URL is not
 // set` here, which is how a window silently becomes any value at all.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	EVALUATOR_PAIRING,
@@ -209,6 +210,31 @@ describe("groupEvaluatorPairings", () => {
 		expect(rows).toEqual([]);
 	});
 
+	it("drops a pairing whose evaluator has no NAME, rather than inventing one", () => {
+		// The fold used to coalesce a missing name to the literal "Someone".
+		// Nothing could reach it (both name columns come off a LEFT JOIN on an
+		// FK-backed id, and `members.name` / `guests.name` are NOT NULL) and so
+		// nothing tested it — and had it ever fired it would have rendered a chip
+		// reading like a real evaluation the officer then cannot look up. An
+		// identity with no name is half a pairing; half a pairing is dropped.
+		const rows = groupEvaluatorPairings([
+			pair({ daysAgo: 7, evaluatorMemberId: "a", evaluatorMemberName: null }),
+			pair({
+				daysAgo: 14,
+				evaluatorMemberId: null,
+				evaluatorMemberName: null,
+				evaluatorGuestId: "g1",
+				evaluatorGuestName: null,
+			}),
+			pair({ daysAgo: 21, evaluatorMemberId: "b", evaluatorMemberName: "Bo" }),
+		]);
+
+		expect(rows[0]?.recent.map((p) => p.evaluatorName)).toEqual(["Bo"]);
+		expect(
+			rows.flatMap((r) => r.recent).some((p) => p.evaluatorName === "Someone"),
+		).toBe(false);
+	});
+
 	it("sorts repeat rows first, then by most recent evaluation", () => {
 		const rows = groupEvaluatorPairings([
 			// Speaker A: evaluated most recently, no repeat.
@@ -275,5 +301,58 @@ describe("groupEvaluatorPairings", () => {
 
 	it("returns no rows for no pairings", () => {
 		expect(groupEvaluatorPairings([])).toEqual([]);
+	});
+});
+
+/**
+ * A source guard, and the only deterministic gate on a term that otherwise has
+ * none.
+ *
+ * `loadEvaluatorPairings` bounds its result set with `ROW_NUMBER() OVER
+ * (PARTITION BY speaker ORDER BY …) <= recentPerSpeaker`, so SQL — not the fold
+ * — decides WHICH five reach the fold, and the fold cannot see what SQL
+ * discarded. The two orderings therefore have to be the same list, and the
+ * integration suite proves it for the terms that can differ by a VALUE.
+ *
+ * The last term cannot be proved that way. Delete
+ * `coalesce(assigned_member_id, assigned_guest_id)` from the window and the two
+ * evaluators of one speech at one meeting tie on every remaining column, so
+ * Postgres returns an ARBITRARY one — not a wrong one. Measured on this repo,
+ * the integration test that asserts the fifth pairing caught that deletion in 1
+ * run out of 5. A gate that fires a fifth of the time teaches people to re-run
+ * it, which is worse than no gate. Reading the two comparators out of source
+ * and checking they agree fires every time, for the same deletion.
+ */
+describe("the SQL window and this fold order pairings the same way", () => {
+	const src = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
+
+	/** Positions of `needles` in `haystack`; -1 for any that is missing. */
+	const order = (haystack: string, needles: string[]) =>
+		needles.map((n) => haystack.indexOf(n));
+
+	it("names the same three terms, in the same order, on both sides", () => {
+		const windowClause = src("../server/reporting-logic.ts").match(
+			/row_number\(\) over \(([\s\S]*?)\)`/,
+		)?.[1];
+		expect(windowClause).toBeTruthy();
+		const sqlTerms = order(windowClause ?? "", [
+			"${meetings.scheduledAt} desc",
+			"${meetings.id} asc",
+			"coalesce(${roleSlots.assignedMemberId}, ${roleSlots.assignedGuestId}) asc",
+		]);
+		expect(sqlTerms).not.toContain(-1);
+		expect([...sqlTerms].sort((a, b) => a - b)).toEqual(sqlTerms);
+
+		const comparator = src("./evaluator-pairing.ts").match(
+			/\.sort\(\s*\(a, b\) =>([\s\S]*?)\);/,
+		)?.[1];
+		expect(comparator).toBeTruthy();
+		const foldTerms = order(comparator ?? "", [
+			"b.scheduledAt.getTime() - a.scheduledAt.getTime()",
+			"a.meetingId.localeCompare(b.meetingId)",
+			"a.evaluatorKey.localeCompare(b.evaluatorKey)",
+		]);
+		expect(foldTerms).not.toContain(-1);
+		expect([...foldTerms].sort((a, b) => a - b)).toEqual(foldTerms);
 	});
 });
