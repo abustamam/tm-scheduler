@@ -2,12 +2,13 @@
 // session-aware guard in `guards.ts` so the db-touching branch logic is
 // directly integration-testable by mocking `#/db`. This module must never be
 // imported by client components (it touches `db`/`pg`).
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
 	meetings,
 	members,
+	officerTerms,
 	people,
 	roleDefinitions,
 	roleSlots,
@@ -110,7 +111,66 @@ async function resolveAdminGrant(
 		})
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
+		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
+		// Joined for the ORDER BY alone — the count is never selected, and no arm
+		// below grants on an officer term. See the ordering note under the query.
+		.leftJoin(
+			officerTerms,
+			and(
+				eq(officerTerms.membershipId, members.id),
+				isNull(officerTerms.termEnd),
+			),
+		)
 		.where(and(eq(people.userId, sessionUserId), eq(members.clubId, clubId)))
+		// `members.id` is the primary key, so every selected column OF `members` is
+		// functionally dependent on it and needs no explicit grouping. Nothing here
+		// crosses a join into another table's columns, so this one key is enough.
+		.groupBy(members.id)
+		// The SAME five-key total order `getMembership` carries (`guards.ts`), copied
+		// rather than shared (#804). This used to be a bare `.limit(1)`: `people
+		// .user_id` has only a plain non-unique index (`people_user_idx`), so one
+		// human reachable through two Person rows in one club is representable, and
+		// Postgres was free to return either. The admin arm below could grant on one
+		// request and fall through to `tmod-self-assert` on the next with no change
+		// in data between them — and on a request it DID grant, the `memberId` it
+		// returns is the `actorMemberId` `logActivity` stamps (#396), so the audit
+		// trail could name the other duplicate.
+		//
+		// Deliberately a COPY, not a call into `getMembership`: that resolver
+		// additionally joins `clubs` and returns `archivedAt`/`clubId`/`personId`,
+		// which would change both the cost and the shape on this hot path. Unifying
+		// the two into one seam is its own change with its own blast radius.
+		//
+		// THE TWO ORDERINGS MUST MOVE TOGETHER, and the reason each key is where it
+		// is written out once, over `getMembership` in `guards.ts` — read it there
+		// before touching either. `meeting-authz-membership-pick.integration.test.ts`
+		// asserts the two resolvers agree on the SAME fixture, which is what fails
+		// when only one of them changes.
+		//
+		// Two things that are true THERE and not here, so nobody reasons from the
+		// wrong half:
+		//
+		// · Keys 1 and 2 are not what refuses a lapsed admin in THIS function — the
+		//   `status === "active"` check below is, and the grant decision is
+		//   invariant to swapping them. In `getMembership` the polarity genuinely
+		//   is load-bearing, because `canManageClub` reads `clubRole` with no
+		//   status check at all. Do not read the ordering as making the check below
+		//   redundant: delete it and an inactive admin duplicate grants.
+		// · "Two queries cannot disagree" means on ONE snapshot. Two statements
+		//   read different MVCC snapshots, so this orders the rows a statement
+		//   sees, not the rows two statements see. `getMembership` takes
+		//   `conn: DbOrTx = db` so a caller inside a lock can pin the snapshot
+		//   (`assertStillClubAdmin`, #806); this has no such parameter and cannot
+		//   join a locked re-check. No live consequence today — all three
+		//   resolvers here are called from route guards only — but that is a fact
+		//   about the callers, not a guarantee of this function.
+		.orderBy(
+			sql`(${members.status} = 'active') desc`,
+			sql`(${members.clubRole} = 'admin') desc`,
+			desc(sql`count(${officerTerms.id})`),
+			members.createdAt,
+			members.id,
+		)
 		.limit(1);
 	if (
 		membership &&
