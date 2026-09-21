@@ -31,7 +31,7 @@ import type { MinutesGuestRow } from "#/server/minutes-logic";
  * control hinting at what a viewer cannot do.
  *
  * It carries the DATA as well as the permission, and it has to: the meeting
- * payload projects guests to `{ id, name }` (see `meetings.ts`'s `clubGuests`
+ * payload projects guests to `{ id, name, stage }` (see `meetings.ts`'s `clubGuests`
  * comment — guest contact has never ridden on this page) and `MinutesGuestRow`
  * carries no contact either. A dialog opened over blank fields does not merely
  * look wrong: the form's handler turns an empty field into `null`, so the first
@@ -84,7 +84,7 @@ export function AttendanceGuestsGroup({
 	onRemoveGuest,
 }: {
 	guests: MinutesGuestRow[];
-	clubGuests: { id: string; name: string }[];
+	clubGuests: { id: string; name: string; stage?: string }[];
 	locked: boolean;
 	/**
 	 * #727. Omitted ⇒ guest names are plain text, which is what every viewer
@@ -99,6 +99,7 @@ export function AttendanceGuestsGroup({
 	onRemoveGuest: (guestId: string) => void;
 }) {
 	const [open, setOpen] = useState(false);
+	const [search, setSearch] = useState("");
 	// The guest whose edit dialog is up, by id — never the row itself. `fields` is
 	// refreshed after every save (`guestEdit.onSaved`), so an id re-reads the NEW
 	// row on the next open while a captured object would keep rendering the values
@@ -190,7 +191,13 @@ export function AttendanceGuestsGroup({
 					</span>
 				) : null}
 			</div>
-			<Popover open={open} onOpenChange={setOpen}>
+			<Popover
+				open={open}
+				onOpenChange={(next) => {
+					setOpen(next);
+					setSearch("");
+				}}
+			>
 				<PopoverTrigger asChild>
 					<Button type="button" size="sm" variant="outline" disabled={locked}>
 						+ Add guest
@@ -199,30 +206,38 @@ export function AttendanceGuestsGroup({
 				<PopoverContent className="w-72 space-y-3">
 					{addableClubGuests.length > 0 ? (
 						<Command>
-							<CommandInput placeholder="Search guests…" />
+							<CommandInput
+								placeholder="Search guests…"
+								value={search}
+								onValueChange={setSearch}
+							/>
 							<CommandList>
 								<CommandEmpty>No matching guests.</CommandEmpty>
 								<CommandGroup heading="Existing guests">
-									{addableClubGuests.map((g) => (
-										<CommandItem
-											key={g.id}
-											value={`${g.name} ${g.id}`}
-											disabled={locked}
-											onSelect={() => {
-												// Belt as well as braces. `disabled` above is cmdk's,
-												// which does remove the select listener rather than
-												// merely styling the row — but the guarantee is stated
-												// HERE, where the write actually leaves, rather than
-												// inherited from a library's internals. Same reason the
-												// form below carries one.
-												if (locked) return;
-												onAddGuest({ guestId: g.id });
-												setOpen(false);
-											}}
-										>
-											{g.name}
-										</CommandItem>
-									))}
+									{addableClubGuests
+										.filter(
+											(g) => g.stage !== "lost" || search.trim().length > 0,
+										)
+										.map((g) => (
+											<CommandItem
+												key={g.id}
+												value={`${g.name} ${g.id}`}
+												disabled={locked}
+												onSelect={() => {
+													// Belt as well as braces. `disabled` above is cmdk's,
+													// which does remove the select listener rather than
+													// merely styling the row — but the guarantee is stated
+													// HERE, where the write actually leaves, rather than
+													// inherited from a library's internals. Same reason the
+													// form below carries one.
+													if (locked) return;
+													onAddGuest({ guestId: g.id });
+													setOpen(false);
+												}}
+											>
+												{g.name}
+											</CommandItem>
+										))}
 								</CommandGroup>
 							</CommandList>
 						</Command>

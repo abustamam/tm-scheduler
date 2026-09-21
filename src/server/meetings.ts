@@ -395,7 +395,7 @@ async function loadMeetingDetail(
 	// module-private function in a `createServerFn` module: unreachable from
 	// vitest, so the copy had no coverage while the seam beside it did.
 	//
-	// Projected to `{ id, name }` deliberately. `listClubGuests` also selects
+	// Projected to `{ id, name, stage }` deliberately. `listClubGuests` also selects
 	// `email` and `phone` for the VP-Membership board, and the meeting payload
 	// has never carried guest contact details — passing its rows straight
 	// through would widen PII on this page as a side effect of a bug fix.
@@ -403,6 +403,7 @@ async function loadMeetingDetail(
 		? (await listClubGuests(meeting.clubId)).map((g) => ({
 				id: g.id,
 				name: g.name,
+				stage: g.stage,
 			}))
 		: [];
 
