@@ -31,12 +31,7 @@ import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
-import {
-	OFFICER_POSITION_LABELS,
-	OFFICER_POSITIONS,
-	type OfficerPosition,
-	officerPositionLabel,
-} from "#/lib/officers";
+import { OFFICER_POSITION_LABELS, officerPositionLabel } from "#/lib/officers";
 import { INVITE_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	buildImportPreview,
@@ -746,6 +741,7 @@ function CsvUploadDialog({
 	const [fileName, setFileName] = useState<string | null>(null);
 	const [csv, setCsv] = useState<string | null>(null);
 	const [preview, setPreview] = useState<CsvPreview | null>(null);
+	const [selectedOfficers, setSelectedOfficers] = useState<string[]>([]);
 	const [previewing, setPreviewing] = useState(false);
 	const [committing, setCommitting] = useState(false);
 
@@ -753,6 +749,7 @@ function CsvUploadDialog({
 		setFileName(null);
 		setCsv(null);
 		setPreview(null);
+		setSelectedOfficers([]);
 		setPreviewing(false);
 		setCommitting(false);
 	}
@@ -764,6 +761,7 @@ function CsvUploadDialog({
 		if (!file) return;
 		setFileName(file.name);
 		setPreview(null);
+		setSelectedOfficers([]);
 		setCsv(null);
 		setPreviewing(true);
 		try {
@@ -785,14 +783,22 @@ function CsvUploadDialog({
 		if (!csv || !preview) return;
 		setCommitting(true);
 		try {
-			const result = await commitMemberUpload({ data: { clubId, csv } });
+			const result = await commitMemberUpload({
+				data: { clubId, csv, officerApprovals: selectedOfficers },
+			});
 			const { membersCreated, membersUpdated } = result.stats;
 			toast.success(
-				`Imported ${membersCreated} new, updated ${membersUpdated}` +
+				`Imported ${membersCreated} new, updated ${membersUpdated} · ${result.officerGrants} officer grants · ${result.stats.skippedOfficerAssignments} officer assignments skipped` +
 					(result.unpaidSkipped > 0
 						? ` · ${result.unpaidSkipped} unpaid skipped`
 						: ""),
 			);
+			if (result.officerRefreshRequired.length) {
+				toast.info(
+					`Roster imported. ${result.officerRefreshRequired.join(" ")}`,
+					{ duration: 15000 },
+				);
+			}
 			onOpenChange(false);
 			reset();
 			await router.invalidate();
@@ -890,6 +896,59 @@ function CsvUploadDialog({
 								</p>
 							) : null}
 
+							<section
+								aria-label="Officer access changes"
+								className="space-y-3 rounded-lg border border-[var(--line)] p-3"
+							>
+								<h3 className="font-semibold">Officer access changes</h3>
+								<p className="text-sm text-[var(--sea-ink-soft)]">
+									Each selected office grants full club-admin access. Leave
+									unchecked to import the roster without granting access.
+									Existing offices are kept.
+								</p>
+								{preview.officerAccessChanges.length === 0 ? (
+									<p className="text-sm">No officer grants proposed.</p>
+								) : (
+									preview.officerAccessChanges.map((change) => (
+										<label
+											key={change.rowIndex}
+											className="flex items-start gap-3 text-sm"
+										>
+											<input
+												type="checkbox"
+												checked={selectedOfficers.includes(change.approval)}
+												disabled={committing}
+												onChange={(e) =>
+													setSelectedOfficers((current) =>
+														e.target.checked
+															? [...current, change.approval]
+															: current.filter(
+																	(token) => token !== change.approval,
+																),
+													)
+												}
+											/>
+											<span>
+												<strong>
+													{change.name} —{" "}
+													{OFFICER_POSITION_LABELS[change.position]}
+												</strong>
+												<br />
+												{change.email ?? "No email"}
+												{change.customerId
+													? ` · Customer ID ${change.customerId}`
+													: ""}
+												<br />
+												<span className="text-xs text-[var(--sea-ink-soft)]">
+													{change.personId ? "Existing person" : "New person"} ·
+													Import row {change.rowIndex + 1}
+												</span>
+											</span>
+										</label>
+									))
+								)}
+							</section>
+
 							{preview.rows.length > 0 ? (
 								<div className="max-h-[300px] overflow-auto rounded-lg border border-[var(--line)]">
 									<table className="w-full text-xs">
@@ -971,10 +1030,6 @@ const ISSUE_LABELS: Record<PreviewRow["issues"][number], string> = {
 	duplicate: "Duplicate",
 };
 
-// Native <select> styled to match the shadcn <Input> (no shadcn Select in ui/).
-const MEMBER_SELECT_CLASS =
-	"h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
-
 // Friendlier, single-row phrasings of the shared import issues (ISSUE_LABELS is
 // tuned for the dense bulk-preview table).
 const ADD_ISSUE_MESSAGE: Record<RowIssue, string> = {
@@ -986,9 +1041,8 @@ const ADD_ISSUE_MESSAGE: Record<RowIssue, string> = {
 /**
  * Quick single-member add (VPE). A one-row wrapper over `bulkImportMembers`, so
  * it inherits the same server-side dedupe, email validation, E.164 phone
- * normalization and officer-term wiring as Bulk import — just a form instead of
- * a paste box. Only the name is required; picking an office opens a current
- * officer term (President / VP Education also default the member to club-admin),
+ * normalization as Bulk import — just a form instead of
+ * a paste box. Only the name is required; officer access is assigned separately,
  * exactly like an imported row.
  */
 function AddMemberDialog({
@@ -1006,20 +1060,13 @@ function AddMemberDialog({
 	const [name, setName] = useState("");
 	const [email, setEmail] = useState("");
 	const [phone, setPhone] = useState("");
-	const [office, setOffice] = useState<OfficerPosition | "">("");
 	const [busy, setBusy] = useState(false);
-
-	// Office travels to the server as free text (its label); parseOfficerPosition
-	// maps it back to the enum, matching how pasted rows are handled.
-	const officeText = office ? OFFICER_POSITION_LABELS[office] : "";
 
 	// Validate the single row through the same preview builder Bulk import uses,
 	// so a blank name / bad email / duplicate is caught before we ever submit.
 	const preview: PreviewRow | null = name.trim()
-		? (buildImportPreview(
-				[{ name, email, phone, office: officeText }],
-				existing,
-			)[0] ?? null)
+		? (buildImportPreview([{ name, email, phone, office: "" }], existing)[0] ??
+			null)
 		: null;
 	const blockingIssue =
 		preview && !preview.willImport ? preview.issues[0] : null;
@@ -1029,7 +1076,6 @@ function AddMemberDialog({
 		setName("");
 		setEmail("");
 		setPhone("");
-		setOffice("");
 	}
 
 	async function onSubmit() {
@@ -1037,7 +1083,7 @@ function AddMemberDialog({
 		setBusy(true);
 		try {
 			const result = await bulkImportMembers({
-				data: { clubId, rows: [{ name, email, phone, office: officeText }] },
+				data: { clubId, rows: [{ name, email, phone, office: "" }] },
 			});
 			if (result.inserted === 1) {
 				toast.success(`Added ${name.trim()}.`);
@@ -1062,8 +1108,8 @@ function AddMemberDialog({
 				<DialogHeader>
 					<DialogTitle>Add member</DialogTitle>
 					<DialogDescription>
-						Add one person to the roster. Only a name is required — email, phone
-						and office are optional.
+						Add one person to the roster. Only a name is required — email and
+						phone are optional.
 					</DialogDescription>
 				</DialogHeader>
 
@@ -1118,29 +1164,9 @@ function AddMemberDialog({
 							/>
 						</div>
 
-						<div className="space-y-1.5">
-							<Label htmlFor="add-member-office">
-								Office{" "}
-								<span className="font-normal text-[var(--sea-ink-soft)]">
-									optional
-								</span>
-							</Label>
-							<select
-								id="add-member-office"
-								value={office}
-								onChange={(e) =>
-									setOffice(e.target.value as OfficerPosition | "")
-								}
-								className={MEMBER_SELECT_CLASS}
-							>
-								<option value="">No office</option>
-								{OFFICER_POSITIONS.map((p) => (
-									<option key={p} value={p}>
-										{OFFICER_POSITION_LABELS[p]}
-									</option>
-								))}
-							</select>
-						</div>
+						<p className="text-sm text-[var(--sea-ink-soft)]">
+							Assign officer access from the member's profile after adding them.
+						</p>
 
 						{blockingIssue ? (
 							<p className="text-sm font-semibold text-[var(--warning-strong)]">
@@ -1208,7 +1234,8 @@ function BulkImportDialog({
 			});
 			toast.success(
 				`Imported ${result.inserted} member${result.inserted === 1 ? "" : "s"}.` +
-					(result.skipped > 0 ? ` Skipped ${result.skipped}.` : ""),
+					(result.skipped > 0 ? ` Skipped ${result.skipped}.` : "") +
+					` Officer assignments skipped: ${result.skippedOfficerAssignments}.`,
 			);
 			onOpenChange(false);
 			reset();
@@ -1229,7 +1256,9 @@ function BulkImportDialog({
 						Paste rows as{" "}
 						<span className="font-semibold">name, email, phone</span> (office
 						optional) — one per line. Comma-separated or copy straight from a
-						spreadsheet (tab-separated). Review the preview, then import.
+						spreadsheet (tab-separated). Officer columns are skipped; assign
+						access from member profiles or Upload TM CSV. Review the preview,
+						then import.
 					</DialogDescription>
 				</DialogHeader>
 

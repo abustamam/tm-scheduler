@@ -8,9 +8,9 @@
  * non-blank email → new person), then upsert the Membership for (club, person).
  * People are global (club-less); memberships are the per-club roster row.
  */
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "#/db";
-import { members, officerTerms, people } from "#/db/schema";
+import { members, people } from "#/db/schema";
 import { batchSharedEmails, type MappedMember } from "#/lib/members-csv";
 import {
 	classifyMembership,
@@ -19,10 +19,9 @@ import {
 } from "#/lib/members-import-plan";
 import { toStoredPhone } from "#/lib/phone";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
-import {
-	currentOfficersFor,
-	openOfficerTermIfAbsent,
-} from "./officer-terms-logic";
+export type ImportConnection =
+	| typeof db
+	| Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export interface ImportStats {
 	peopleCreated: number;
@@ -37,11 +36,8 @@ export interface ImportStats {
 	/** Rows whose "Current Position" was non-blank but unparseable (left null,
 	 *  logged as a warning — like the ambiguous-name skip). */
 	unparseablePosition: number;
-	/** Rows naming an office for a membership whose officer terms have all been
-	 *  ENDED — declined and logged rather than re-opened (#819). An open term is
-	 *  a club-admin grant (#202), so this count is the import saying "the file
-	 *  asked to put somebody back in office and I did not". */
-	skippedEndedOffice: number;
+	/** Parsed assignments not applied: roster import never grants access. */
+	skippedOfficerAssignments: number;
 }
 
 /**
@@ -65,12 +61,13 @@ export interface ImportStats {
  */
 export async function loadPersonCandidates(
 	clubId: string,
+	conn: ImportConnection = db,
 ): Promise<ExistingPersonRow[]> {
 	// Plain `select`, not `selectDistinct`: the join cannot fan out, so the DISTINCT
 	// would be a HashAggregate over the whole `people` table for nothing.
 	// `members_club_person_unique` guarantees at most one membership per
 	// (club, person), and `people.id` is in the projection anyway.
-	return db
+	return conn
 		.select({
 			id: people.id,
 			customerId: people.customerId,
@@ -83,40 +80,6 @@ export async function loadPersonCandidates(
 			members,
 			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
 		);
-}
-
-/**
- * Has anyone ever ENDED an office on this membership? True when an
- * `officer_terms` row carries a `term_end` — the shape every deliberate
- * vacating leaves behind, because terms here are closed and never deleted
- * (#100): the member edit form's checkboxes (`reconcileOfficerTerms`) and the
- * guest convert's wake-up (`closeOpenOfficerTerms`, #805) both write exactly
- * this row.
- *
- * It is the whole predicate behind the import declining to open a term, and it
- * is deliberately NOT scoped to the position the CSV names. Effective-admin
- * (#202) is granted for ANY open term whatever the office is, so a per-position
- * rule would refuse to restore the presidency it just withdrew and then hand
- * back the identical access one column over as Treasurer.
- *
- * Nor is it "recent", which is the version of this rule with a number in it.
- * There is no window that makes a silent privilege write acceptable on one side
- * of it, and any window would have to be re-justified whenever a club's officer
- * year moved. "A human has already decided the offices on this membership" does
- * not expire.
- */
-async function hasEndedOfficerTerm(membershipId: string): Promise<boolean> {
-	const [ended] = await db
-		.select({ id: officerTerms.id })
-		.from(officerTerms)
-		.where(
-			and(
-				eq(officerTerms.membershipId, membershipId),
-				isNotNull(officerTerms.termEnd),
-			),
-		)
-		.limit(1);
-	return Boolean(ended);
 }
 
 /**
@@ -133,11 +96,17 @@ async function hasEndedOfficerTerm(membershipId: string): Promise<boolean> {
 export async function importPeopleAndMembers(
 	clubId: string,
 	rawRows: MappedMember[],
+	options: {
+		conn?: ImportConnection;
+		onResolved?: (rowIndex: number, membershipId: string) => void;
+		countryCode?: string;
+	} = {},
 ): Promise<ImportStats> {
 	// Standardize every imported phone to E.164 on write (#295) with the club's
 	// default country code, before the shared planner decides person/membership
 	// fills — so both the CLI runner and the VPE upload commit store E.164.
-	const cc = await loadClubDefaultCountryCode(clubId);
+	const conn = options.conn ?? db;
+	const cc = options.countryCode ?? (await loadClubDefaultCountryCode(clubId));
 	const rows: MappedMember[] = rawRows.map((r) => ({
 		...r,
 		phone: toStoredPhone(r.phone, cc),
@@ -145,7 +114,7 @@ export async function importPeopleAndMembers(
 
 	// Load all people once; keep the in-memory list in sync as we insert so
 	// duplicate rows within a single run resolve against freshly-created people.
-	const existing = await loadPersonCandidates(clubId);
+	const existing = await loadPersonCandidates(clubId, conn);
 
 	const stats: ImportStats = {
 		peopleCreated: 0,
@@ -156,14 +125,14 @@ export async function importPeopleAndMembers(
 		ambiguous: 0,
 		skippedBlankName: 0,
 		unparseablePosition: 0,
-		skippedEndedOffice: 0,
+		skippedOfficerAssignments: 0,
 	};
 
 	// Emails shared by 2+ distinct names within this batch must never merge —
 	// force each such row to a distinct person (mirrors the backfill's scan).
 	const sharedEmails = batchSharedEmails(rows);
 
-	for (const row of rows) {
+	for (const [rowIndex, row] of rows.entries()) {
 		if (!row.name) {
 			stats.skippedBlankName++;
 			continue;
@@ -210,7 +179,7 @@ export async function importPeopleAndMembers(
 			// right to: this call site read `.set(pdRest)` when the field was merely
 			// destructured away, and putting `email` back into that object would
 			// have restored the removed cross-club writer with every gate green.
-			await db
+			await conn
 				.update(people)
 				.set({
 					customerId: pd.set.customerId,
@@ -224,7 +193,7 @@ export async function importPeopleAndMembers(
 			current.phone = pd.set.phone;
 		} else {
 			if (pd.kind === "ambiguous") stats.ambiguous++;
-			const [created] = await db
+			const [created] = await conn
 				.insert(people)
 				.values(pd.values)
 				.returning({ id: people.id });
@@ -242,7 +211,7 @@ export async function importPeopleAndMembers(
 
 		// Membership: one row per (club, person). Fill-only name/email/phone so an
 		// in-app edit is never clobbered; joined_at is per-club and always set.
-		const [existingMember] = await db
+		const [existingMember] = await conn
 			.select({
 				id: members.id,
 				name: members.name,
@@ -256,20 +225,20 @@ export async function importPeopleAndMembers(
 		const md = classifyMembership(row, existingMember);
 		let membershipId: string;
 		if (md.kind === "update" && existingMember) {
-			await db
+			await conn
 				.update(members)
 				.set(md.set)
 				.where(eq(members.id, existingMember.id));
 			membershipId = existingMember.id;
 			stats.membersUpdated++;
 		} else if (md.kind === "insert") {
-			// This loop runs on the bare `db` handle with NO transaction, so the
+			// CLI imports use the bare `db` handle, so the
 			// SELECT above and this INSERT are separated by an arbitrary gap — two
 			// admins importing overlapping rosters is the widest window in the app
 			// for a double-add. The unique index (#489) closes it; DO NOTHING plus a
 			// re-read turns losing that race into a no-op update instead of a 500
 			// that strands the import partway through a file.
-			const [created] = await db
+			const [created] = await conn
 				.insert(members)
 				.values({ clubId, personId, ...md.values })
 				.onConflictDoNothing({ target: [members.clubId, members.personId] })
@@ -284,7 +253,7 @@ export async function importPeopleAndMembers(
 				// phone while still reporting the member as "updated", and the
 				// overlapping-import case this branch exists for is precisely when
 				// the two admins' files do NOT carry identical data.
-				const [raced] = await db
+				const [raced] = await conn
 					.select({
 						id: members.id,
 						name: members.name,
@@ -299,7 +268,7 @@ export async function importPeopleAndMembers(
 				if (!raced) throw new Error("Failed to insert member");
 				const racedMd = classifyMembership(row, raced);
 				if (racedMd.kind === "update") {
-					await db
+					await conn
 						.update(members)
 						.set(racedMd.set)
 						.where(eq(members.id, raced.id));
@@ -311,61 +280,8 @@ export async function importPeopleAndMembers(
 			continue; // unreachable — update ⟺ existingMember present
 		}
 
-		// Officer term (#100): the CSV's current position SEEDS an office, and
-		// seeding is the whole of its remit. termStart is unknown from the export
-		// (null). Idempotent across reruns. Two conditions have to hold, and they
-		// decline for different reasons:
-		//
-		// 1. The membership holds no office right now. An in-app assignment is the
-		//    source of truth and this file never overwrites or adds to one.
-		// 2. Nobody has ENDED an office on this membership. That is the #819 half,
-		//    and it is not a refinement of the first — before #805 it could not
-		//    fire at all, because deactivating a member closed no terms, so a
-		//    lapsed officer always still held an open one and condition 1 stopped
-		//    here. #805 made convert close them, which turned a guaranteed no-op
-		//    into a guaranteed hit: the next roster export naming that person
-		//    President re-opened the term the convert had just ended.
-		//
-		// What makes that worth a branch of its own is WHICH row this is. An open
-		// `officer_terms` row grants full club-admin through `requireClubRole`
-		// whatever `club_role` says (#202), so opening one is a privilege write.
-		// Of the two callers of `openOfficerTermIfAbsent` this is the one that can
-		// reach a membership it did not create: `applyBulkImport`
-		// (members-logic.ts) runs the same call inside a loop that has just
-		// INSERTED the membership, writes a real `term_start`, and logs a
-		// `member_add` beside it. This call site has none of those three.
-		// #805's premise is that restoring that authority is a deliberate act,
-		// disclosed in a toast and recorded in the activity log; an import
-		// discloses neither, reports counts rather than permissions, and writes a
-		// null `term_start` that does not even read as a fresh election.
-		//
-		// So the import declines and SAYS SO — a counted, logged no-op rather than
-		// a silent one. Restoring the office stays where #805 left it: the member
-		// edit form's checkboxes, one click, with a `member_edit` row behind it.
-		//
-		// This does not narrow to the convert case, and should not. An admin who
-		// unchecks every office on the member page has made the same decision by
-		// the same act, and a CSV undoing it a week later was already wrong —
-		// invisibly, because nothing had ever put a closed term in front of this
-		// branch to make it observable.
-		if (row.officerPosition) {
-			const open = await currentOfficersFor(membershipId);
-			if (open.length === 0) {
-				if (await hasEndedOfficerTerm(membershipId)) {
-					stats.skippedEndedOffice++;
-					console.warn(
-						`SKIP office "${row.officerPosition}" for ${row.name} — this membership's officer term was ended in the app; re-open it on the member page if it is current`,
-					);
-				} else {
-					await openOfficerTermIfAbsent(
-						db,
-						membershipId,
-						row.officerPosition,
-						null,
-					);
-				}
-			}
-		}
+		if (row.officerPosition) stats.skippedOfficerAssignments++;
+		options.onResolved?.(rowIndex, membershipId);
 	}
 
 	return stats;

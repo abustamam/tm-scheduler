@@ -12,9 +12,9 @@
  *     preview) and delegates the writes to the SAME `importPeopleAndMembers`
  *     the seed script uses, returning an audit summary.
  */
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "#/db";
-import { members } from "#/db/schema";
+import { activityLog, members } from "#/db/schema";
 import { isPaid, mapRow, parseCsv } from "#/lib/members-csv";
 import {
 	type ExistingMembershipRow,
@@ -23,12 +23,26 @@ import {
 	planImport,
 } from "#/lib/members-import-plan";
 import { toStoredPhone } from "#/lib/phone";
+import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { assertStillClubAdmin, getMembership } from "./guards";
 import {
 	type ImportStats,
 	importPeopleAndMembers,
 	loadPersonCandidates,
 } from "./import-members-logic";
+import {
+	importHash,
+	lockOfficerImport,
+	type OfficerAccessChange,
+	planOfficerAccess,
+	readOfficerApproval,
+	signOfficerApproval,
+} from "./import-officer-approval";
+import {
+	currentOfficersFor,
+	openOfficerTermIfAbsent,
+} from "./officer-terms-logic";
 
 /** Columns the Toastmasters export always carries — a cheap sanity gate so a
  *  wrong file fails loudly instead of silently producing an empty import. */
@@ -52,6 +66,7 @@ function parseAndValidate(csv: string): Record<string, string>[] {
 }
 
 export interface ImportPreviewResult {
+	officerAccessChanges: OfficerAccessChange[];
 	/** Rows in the file (before the PaidMember filter). */
 	totalRows: number;
 	/** Rows that pass the PaidMember filter (the only ones imported). */
@@ -66,6 +81,7 @@ export interface ImportPreviewResult {
 export async function previewMemberImport(
 	clubId: string,
 	csv: string,
+	userId?: string,
 ): Promise<ImportPreviewResult> {
 	const parsed = parseAndValidate(csv);
 	const paid = parsed.filter(isPaid);
@@ -94,7 +110,31 @@ export async function previewMemberImport(
 		.where(eq(members.clubId, clubId));
 
 	const plan = planImport(existingPeople, existingMemberships, mapped);
+	const officerAccessChanges: OfficerAccessChange[] = [];
+	if (userId) {
+		await db.transaction(
+			async (tx) => {
+				await assertStillClubAdmin(tx, userId, clubId);
+				const proposals = await planOfficerAccess(tx, clubId, mapped, userId);
+				for (const [rowIndex, proposal] of proposals) {
+					officerAccessChanges.push({
+						...proposal.change,
+						approval: signOfficerApproval({
+							userId,
+							clubId,
+							csvHash: importHash(csv),
+							rowIndex,
+							state: proposal.state,
+						}),
+					});
+				}
+			},
+			{ isolationLevel: "repeatable read" },
+		);
+	}
+
 	return {
+		officerAccessChanges,
 		totalRows: parsed.length,
 		paidRows: paid.length,
 		unpaidSkipped: parsed.length - paid.length,
@@ -104,6 +144,8 @@ export async function previewMemberImport(
 }
 
 export interface ImportCommitResult {
+	officerGrants: number;
+	officerRefreshRequired: string[];
 	stats: ImportStats;
 	totalRows: number;
 	paidRows: number;
@@ -114,13 +156,145 @@ export interface ImportCommitResult {
 export async function commitMemberImport(
 	clubId: string,
 	csv: string,
+	approval?: { userId: string; officerApprovals?: string[] },
 ): Promise<ImportCommitResult> {
 	const parsed = parseAndValidate(csv);
 	const paid = parsed.filter(isPaid);
 	const mapped = paid.map(mapRow);
-	const stats = await importPeopleAndMembers(clubId, mapped);
+	let officerGrants = 0;
+	const officerRefreshRequired: string[] = [];
+	const csvHash = importHash(csv);
+	const selected = [...new Set(approval?.officerApprovals ?? [])].flatMap(
+		(token) => {
+			const signed = readOfficerApproval(token);
+			if (
+				!signed ||
+				signed.userId !== approval?.userId ||
+				signed.clubId !== clubId ||
+				signed.csvHash !== csvHash
+			) {
+				officerRefreshRequired.push(
+					"Officer approval is invalid or expired; refresh preview and approve again.",
+				);
+				return [];
+			}
+			return [{ signed, token }];
+		},
+	);
+	const cc = await loadClubDefaultCountryCode(clubId);
+	const stats =
+		selected.length && approval
+			? await db
+					.transaction(async (tx) => {
+						await lockOfficerImport(tx);
+						await assertStillClubAdmin(tx, approval.userId, clubId);
+						const normalized = mapped.map((r) => ({
+							...r,
+							phone: toStoredPhone(r.phone, cc),
+						}));
+						const current = await planOfficerAccess(
+							tx,
+							clubId,
+							normalized,
+							approval.userId,
+						);
+						const valid = new Map<number, string>();
+						for (const { signed, token } of selected) {
+							const proposal = current.get(signed.rowIndex);
+							const approvalId = importHash(token);
+							const [used] = await tx
+								.select({ id: activityLog.id })
+								.from(activityLog)
+								.where(
+									and(
+										eq(activityLog.clubId, clubId),
+										sql`${activityLog.detail}->>'approvalId' = ${approvalId}`,
+									),
+								)
+								.limit(1);
+							if (used || !proposal || proposal.state !== signed.state) {
+								officerRefreshRequired.push(
+									`Row ${signed.rowIndex + 1}: refresh preview and approve officer access again.`,
+								);
+								continue;
+							}
+							valid.set(signed.rowIndex, approvalId);
+						}
+						const resolved = new Map<number, string>();
+						const imported = await importPeopleAndMembers(clubId, mapped, {
+							conn: tx,
+							countryCode: cc,
+							onResolved: (i, id) => {
+								resolved.set(i, id);
+							},
+						});
+						const actor = await getMembership(approval.userId, clubId, tx);
+						for (const [rowIndex, approvalId] of valid) {
+							const membershipId = resolved.get(rowIndex);
+							const position = mapped[rowIndex].officerPosition;
+							if (
+								!membershipId ||
+								!position ||
+								(await currentOfficersFor(membershipId, tx)).length
+							) {
+								officerRefreshRequired.push(
+									`Row ${rowIndex + 1}: officer access changed; refresh preview.`,
+								);
+								continue;
+							}
+							if (
+								await openOfficerTermIfAbsent(
+									tx,
+									membershipId,
+									position,
+									new Date(),
+								)
+							) {
+								await logActivity(tx, {
+									clubId,
+									actorMemberId: actor?.status === "active" ? actor.id : null,
+									impersonatedBy:
+										actor?.status === "active" ? null : approval.userId,
+									action: "member_edit",
+									targetType: "member",
+									targetId: membershipId,
+									detail: {
+										source: "csv_officer_approval",
+										approvalId,
+										approvedBy: approval.userId,
+										officersAdded: [position],
+										row: rowIndex + 1,
+										csvHash,
+									},
+								});
+								officerGrants++;
+								imported.skippedOfficerAssignments--;
+							}
+						}
+						return imported;
+					})
+					.catch(async (error: unknown) => {
+						const cause =
+							error instanceof Error && "cause" in error ? error.cause : error;
+						const code =
+							cause && typeof cause === "object" && "code" in cause
+								? cause.code
+								: null;
+						if (code !== "55P03" && code !== "40P01") throw error;
+						officerGrants = 0;
+						officerRefreshRequired.splice(
+							0,
+							officerRefreshRequired.length,
+							"Officer access is being changed elsewhere; roster imported without grants. Refresh preview and approve again.",
+						);
+						return importPeopleAndMembers(clubId, mapped);
+					})
+			: await importPeopleAndMembers(clubId, mapped);
+
 	return {
 		stats,
+		officerGrants,
+		officerRefreshRequired,
 		totalRows: parsed.length,
 		paidRows: paid.length,
 		unpaidSkipped: parsed.length - paid.length,

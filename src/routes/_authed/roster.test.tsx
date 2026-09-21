@@ -390,3 +390,103 @@ describe("roster table — phone column", () => {
 		}
 	});
 });
+
+describe("CSV officer approvals", () => {
+	it.each([
+		false,
+		true,
+	])("starts unchecked and submits only selected grants (select=%s)", async (select) => {
+		const { fireEvent, waitFor } = await import("@testing-library/react");
+		const { previewMemberUpload, commitMemberUpload } = await import(
+			"#/server/upload-members"
+		);
+		vi.mocked(previewMemberUpload).mockResolvedValue({
+			totalRows: 1,
+			paidRows: 1,
+			unpaidSkipped: 0,
+			summary: {
+				toInsert: 1,
+				toUpdate: 0,
+				toSkip: 0,
+				peopleCreated: 1,
+				peopleMatched: 0,
+				ambiguous: 0,
+				unparseablePositions: 0,
+			},
+			rows: [
+				{
+					name: "Pat",
+					email: "pat@example.com",
+					phone: null,
+					joinedAt: null,
+					action: "insert",
+					note: null,
+				},
+			],
+			officerAccessChanges: [
+				{
+					rowIndex: 0,
+					name: "Pat",
+					email: "pat@example.com",
+					customerId: "123",
+					personId: null,
+					position: "president",
+					approval: "signed-proposal",
+				},
+			],
+		});
+		vi.mocked(commitMemberUpload).mockResolvedValue({
+			totalRows: 1,
+			paidRows: 1,
+			unpaidSkipped: 0,
+			stats: {
+				peopleCreated: 1,
+				peopleMatchedByCustomerId: 0,
+				peopleMatchedByEmail: 0,
+				membersCreated: 1,
+				membersUpdated: 0,
+				ambiguous: 0,
+				skippedBlankName: 0,
+				unparseablePosition: 0,
+				skippedOfficerAssignments: select ? 0 : 1,
+			},
+			officerGrants: select ? 1 : 0,
+			officerRefreshRequired: [],
+		});
+		await renderRoute([], { canManage: true });
+		fireEvent.click(screen.getByRole("button", { name: "Upload TM CSV" }));
+		const input = document.querySelector('input[type="file"]');
+		if (!input) throw new Error("Missing CSV file input");
+		fireEvent.change(input, {
+			target: {
+				files: [{ name: "roster.csv", text: async () => "csv-content" }],
+			},
+		});
+		const checkbox = await screen.findByRole("checkbox", {
+			name: /Pat.*President/,
+		});
+		expect((checkbox as HTMLInputElement).checked).toBe(false);
+		expect(screen.getByText("Officer access changes")).toBeTruthy();
+		fireEvent.click(checkbox);
+		fireEvent.change(input, {
+			target: {
+				files: [{ name: "replacement.csv", text: async () => "csv-content" }],
+			},
+		});
+		const refreshed = await screen.findByRole("checkbox", {
+			name: /Pat.*President/,
+		});
+		expect((refreshed as HTMLInputElement).checked).toBe(false);
+		if (select) fireEvent.click(refreshed);
+		fireEvent.click(screen.getByRole("button", { name: "Import 1 member" }));
+		await waitFor(() =>
+			expect(commitMemberUpload).toHaveBeenCalledWith({
+				data: {
+					clubId: CLUB_ID,
+					csv: "csv-content",
+					officerApprovals: select ? ["signed-proposal"] : [],
+				},
+			}),
+		);
+	});
+});

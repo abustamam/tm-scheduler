@@ -278,6 +278,7 @@ export function planImport(
 	existingPeople: ExistingPersonRow[],
 	existingMemberships: ExistingMembershipRow[],
 	rows: MappedMember[],
+	onResolved?: (rowIndex: number, person: ExistingPersonRow) => void,
 ): ImportPlan {
 	const people = existingPeople.map((p) => ({ ...p }));
 	const membershipByPerson = new Map<string, ExistingMembershipRow>();
@@ -296,7 +297,7 @@ export function planImport(
 	const previewRows: PreviewRow[] = [];
 	let synthCounter = 0;
 
-	for (const row of rows) {
+	for (const [rowIndex, row] of rows.entries()) {
 		if (!row.name) {
 			summary.toSkip++;
 			previewRows.push({
@@ -340,6 +341,8 @@ export function planImport(
 			});
 		}
 
+		const resolvedPerson = people.find((p) => p.id === personId);
+		if (resolvedPerson) onResolved?.(rowIndex, resolvedPerson);
 		const existingMember = membershipByPerson.get(personId);
 		const md = classifyMembership(row, existingMember);
 		if (md.kind === "update" && existingMember) {
