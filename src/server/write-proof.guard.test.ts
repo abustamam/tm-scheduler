@@ -49,6 +49,20 @@
  * And the fourth, which the issue asks for separately: an entry with
  * `reason: ""` fails `every exception carries a reason`.
  *
+ * #824 added a fifth and a sixth, measured the same way and reverted:
+ *
+ *  (e) **Deleting `setActiveClub`'s new gate fails.** Removing
+ *      `await requireUser();` from `src/server/auth-context.ts#setActiveClub`
+ *      → `every POST server fn proves a session or is classified` failed naming
+ *      `auth-context.ts#setActiveClub`. That is the default sweep doing its job
+ *      now that the fn is no longer waived.
+ *  (f) **Putting the waiver BACK fails.** Restoring the
+ *      `auth-context.ts#setActiveClub` row in `NON_WRITE_POSTS` → `setActiveClub
+ *      is swept by default, not waived (#824)` failed; the same row in
+ *      `WRITE_PROOF_EXCEPTIONS` failed it and the count case together. (f) is
+ *      the one that matters: a waiver silences (e), so without it the gate is
+ *      two edits from gone with every suite green.
+ *
  * ## Reading mode
  *
  * Comment-blind (`readSource`, see `src/test/guard-source.ts`). The gate
@@ -274,26 +288,29 @@ const WRITE_PROOF_EXCEPTIONS: Record<
  * and inflate the count the issue pins.
  *
  * The bar for an entry is high and it is not "harmless": it is **mints no row,
- * mutates no row, and grants nothing that is not re-derived on read**. One fn
- * clears it today, and `public-readers-archive-gate.guard.test.ts`'s
- * `REVIEWED_UNGATED` already carries the same conclusion for the same fn with
- * the same reason, which is the review this leans on rather than a fresh one.
+ * mutates no row, and grants nothing that is not re-derived on read**.
  *
  * **Every entry is keyed to an OPEN issue**, the shape
  * `membership-pick-ordering.guard.test.ts`'s `FILED` uses: a waiver pointing at
  * a number somebody can close is a debt that has been FILED, which is the only
  * honest form. A waiver whose reason is only prose is a decision nobody
  * revisits.
+ *
+ * **EMPTY since #824, and that is the shape working.** It held exactly one fn,
+ * `auth-context.ts#setActiveClub`, keyed to the issue that would decide it. #824
+ * decided: the handler calls `await requireUser()` now, so the default-`session`
+ * sweep covers it and a row here would only hide that gate being deleted — the
+ * same reason #762's three retired rows left `WRITE_PROOF_EXCEPTIONS` outright
+ * rather than being reclassified.
+ *
+ * Kept rather than deleted, with its bar and its issue-key rule intact. The next
+ * session-less non-write POST wants this vocabulary to already exist, so that
+ * the choice in front of its author is "which bucket" and not "invent one" —
+ * inventing one is how a write ends up filed under a class that does not fit.
+ * The two cases below are vacuous while it is empty; they are the shape an entry
+ * must satisfy on the day one arrives, not a claim about today.
  */
-const NON_WRITE_POSTS: Record<string, string> = {
-	// Writes a session-preference COOKIE and no row; `getAuthContext`
-	// re-validates it against live memberships on every read, so a session-less
-	// caller setting it gains nothing. #761's inventory counted 29 session-less
-	// POST fns and this is the thirtieth it did not count — reported rather than
-	// filed quietly under WRITE_PROOF_EXCEPTIONS, and #824 is where the
-	// maintainer chooses between gating it and keeping this line.
-	"auth-context.ts#setActiveClub": "#824",
-};
+const NON_WRITE_POSTS: Record<string, string> = {};
 
 /**
  * Calls that PROVE a session: each reads the session itself and throws without
@@ -589,6 +606,38 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 				`It must branch on the resolved proof AND pass \`onlyIfAbsent: true\` to setPlanStatus on the asserted path. ` +
 				`Re-classify the row rather than deleting this assertion — an unproven write that overwrites is what #699 was.`,
 		).toEqual([]);
+	});
+
+	it("setActiveClub is swept by default, not waived (#824)", () => {
+		// The regression this change can ship is not the gate being deleted — the
+		// default sweep above already catches that, and it was measured doing so.
+		// It is the WAIVER coming back: re-adding an `auth-context.ts#setActiveClub`
+		// row to either map drops the fn from that sweep, and the gate can then be
+		// removed with every suite green. That is the state #824 closed, so it is
+		// the state worth pinning.
+		//
+		// Both maps, because either one silences the sweep, and the fn's presence
+		// in POST_FNS first: a rename would make the two absence assertions pass
+		// by describing nothing.
+		//
+		// `Object.keys(…)` + `not.toContain`, NOT `not.toHaveProperty`. The key
+		// carries dots (`auth-context.ts#…`) and `toHaveProperty` reads a dotted
+		// string as a PATH, so its absence half can be satisfied by the traversal
+		// failing rather than by the waiver being gone — a false pass in exactly
+		// the direction that matters here.
+		const key = "auth-context.ts#setActiveClub";
+		expect(
+			POST_FNS.has(key),
+			`${key} is no longer a POST createServerFn. #824 gated it on a session; re-point this case rather than deleting it.`,
+		).toBe(true);
+		expect(
+			Object.keys(WRITE_PROOF_EXCEPTIONS),
+			`${key} writes a cookie and no row, so it has no write trust model to classify. #824 gated it on requireUser instead — do not waive it back.`,
+		).not.toContain(key);
+		expect(
+			Object.keys(NON_WRITE_POSTS),
+			`${key} was this map's only entry until #824 gated it. A row here exempts it from the default sweep above, so the gate could then be deleted with every suite green — which is the state #824 closed.`,
+		).not.toContain(key);
 	});
 
 	it("holds exactly the 26 exceptions left after #762", () => {
