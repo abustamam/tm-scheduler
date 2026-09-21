@@ -59,6 +59,12 @@ function SeasonGridPage() {
 					count={count}
 					showContact
 					currentMemberId={currentMemberId}
+					// Always a session here — this route is under `_authed`, and
+					// `currentMemberId` comes from the auth context rather than from a
+					// name-pick. Passed explicitly because the grid defaults to the
+					// narrow side (#762), so an officer who omitted it would silently
+					// lose the release and the un-decline.
+					currentMemberSource="session"
 					canManageOthers={canManageOthers}
 					clubId={activeClubId ?? undefined}
 					onOrientationChange={(v) =>

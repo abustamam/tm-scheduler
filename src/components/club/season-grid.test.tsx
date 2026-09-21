@@ -27,6 +27,7 @@ import { renderUnderMemoryRouter } from "#/test/router-harness";
 const {
 	claimSlot,
 	clearAvailability,
+	markUnavailableReleasing,
 	releaseSlot,
 	setAvailability,
 	toastSuccess,
@@ -34,6 +35,7 @@ const {
 } = vi.hoisted(() => ({
 	claimSlot: vi.fn(async () => ({ ok: true })),
 	clearAvailability: vi.fn(async () => ({ ok: true })),
+	markUnavailableReleasing: vi.fn(async () => ({ ok: true, released: 1 })),
 	releaseSlot: vi.fn(async () => ({ ok: true })),
 	// #762: the handler REPORTS how the caller's identity was established, and
 	// the grid reads it to decide whether to offer Undo. A mock returning a bare
@@ -46,7 +48,7 @@ const {
 vi.mock("#/server/slots", () => ({ claimSlot, releaseSlot }));
 vi.mock("#/server/availability", () => ({
 	clearAvailability,
-	markUnavailableReleasing: vi.fn(),
+	markUnavailableReleasing,
 	setAvailability,
 }));
 vi.mock("sonner", () => ({
@@ -117,15 +119,26 @@ const membersData: SeasonGridData = {
 
 // Members × Meetings as an admin (canManageOthers): every row's cell renders
 // through the editable `<MemberRolePicker>`-wrapped button, not `<GridCell>`.
-async function renderMembersGrid() {
+async function renderMembersGrid(
+	over: {
+		currentMemberSource?: "anon" | "session";
+		currentMemberId?: string;
+		canManageOthers?: boolean;
+		data?: SeasonGridData;
+	} = {},
+) {
 	const rootRoute = createRootRoute({
 		component: () => (
 			<SeasonGrid
-				data={membersData}
+				data={over.data ?? membersData}
 				orientation="members"
 				count="all"
-				currentMemberId="admin-1"
-				canManageOthers
+				currentMemberId={over.currentMemberId ?? "admin-1"}
+				// #762: WHERE that id came from. The grid defaults to `"anon"` (the
+				// narrow side), so every case that wants the officer behaviour has to
+				// say so — which is the point.
+				currentMemberSource={over.currentMemberSource ?? "session"}
+				canManageOthers={over.canManageOthers ?? true}
 				clubId="club-1"
 			/>
 		),
@@ -263,7 +276,7 @@ describe("SeasonGrid availability Undo is gated on the write's proof (#762)", ()
 	/** The header chip marks the VIEWER unavailable for that meeting — the one
 	 *  availability write reachable in one click from this fixture. */
 	async function markSelfUnavailable() {
-		await renderMembersGrid();
+		await renderMembersGrid({ currentMemberId: "c1" });
 		const chip = await screen.findByRole("button", { name: /^Can't go —/ });
 		await userEvent.click(chip);
 		await waitFor(() => expect(setAvailability).toHaveBeenCalledTimes(1));
@@ -304,6 +317,147 @@ describe("SeasonGrid availability Undo is gated on the write's proof (#762)", ()
 		setAvailability.mockResolvedValueOnce({ ok: true } as never);
 		const options = await markSelfUnavailable();
 		expect(options?.action).toBeUndefined();
+	});
+});
+
+describe("SeasonGrid: a control shown to an anon viewer must not refuse (#762)", () => {
+	// The defect class, swept rather than patched: three of this grid's writes
+	// are session-gated (`clearAvailability` twice, `markUnavailableReleasing`
+	// once) while every control reaching them keys on `currentMemberId` — which
+	// is a localStorage name-pick on the public sheet.
+
+	/** The viewer HOLDS a role in the only meeting, and has already declined in
+	 *  the un-decline cases. `c1` is the member axis, so it is also the viewer. */
+	const holdsRole: SeasonGridData = {
+		...membersData,
+		cells: [
+			{
+				slotId: "slot-1",
+				meetingId: "m1",
+				roleDefinitionId: "ti",
+				slotIndex: 0,
+				memberId: "c1",
+				guestId: null,
+				status: "claimed",
+			},
+		],
+	};
+	const declined: SeasonGridData = {
+		...membersData,
+		unavailable: [{ memberId: "c1", meetingId: "m1" }],
+	};
+
+	afterEach(() => {
+		setAvailability.mockClear();
+		clearAvailability.mockClear();
+		markUnavailableReleasing.mockClear();
+		toastSuccess.mockClear();
+		toastError.mockClear();
+	});
+
+	it("a ROLE-HOLDER with no session records the answer instead of dead-ending", async () => {
+		// The gap this closes. `markUnavailableReleasing` refuses an asserted
+		// caller, and there was no fallback — so a member who picked their name on
+		// the public sheet, holds Timer and taps "Can't go" was shown a dialog
+		// promising a release and then told to sign in. The ANSWER was lost with
+		// it. ADR-0026 permits that first answer explicitly; it is the release
+		// that is withheld.
+		await renderMembersGrid({
+			data: holdsRole,
+			currentMemberId: "c1",
+			currentMemberSource: "anon",
+			canManageOthers: false,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Can't go —/ }),
+		);
+		await waitFor(() => expect(setAvailability).toHaveBeenCalledTimes(1));
+		expect(markUnavailableReleasing).not.toHaveBeenCalled();
+		// And no confirm dialog: it exists to get consent for a release that is
+		// not going to happen.
+		expect(screen.queryByText(/Release &/)).toBeNull();
+	});
+
+	it("a ROLE-HOLDER with a session still gets the release confirm — the control", async () => {
+		// Without this the fallback above would pass equally well with the
+		// release removed from the grid entirely.
+		await renderMembersGrid({
+			data: holdsRole,
+			currentMemberId: "c1",
+			currentMemberSource: "session",
+			canManageOthers: false,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Can't go —/ }),
+		);
+		expect(await screen.findByText(/Release &/)).toBeTruthy();
+		expect(setAvailability).not.toHaveBeenCalled();
+	});
+
+	it("an ALREADY-DECLINED anon viewer keeps the state and loses the control", async () => {
+		// Un-declining is `clearAvailability`, session-gated. The pill still says
+		// "Not going" — it is the only thing on that column carrying the answer —
+		// but it is no longer a button, so it cannot be tapped into a refusal by
+		// mouse, keyboard or screen reader.
+		await renderMembersGrid({
+			data: declined,
+			currentMemberId: "c1",
+			currentMemberSource: "anon",
+			canManageOthers: false,
+		});
+		expect(await screen.findByText("Not going")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /^Not going —/ })).toBeNull();
+		expect(clearAvailability).not.toHaveBeenCalled();
+	});
+
+	it("the picker drops 'Mark yourself available' for an anon viewer", async () => {
+		// The same write one affordance over: the cell's role picker carries the
+		// un-decline as a menu row, and it is `clearAvailability` there too. Found
+		// by sweeping the three session-gated writes rather than by patching the
+		// sites the review named — the header chip and this row share one gate and
+		// nothing but a sweep pairs them.
+		await renderMembersGrid({
+			data: declined,
+			currentMemberId: "c1",
+			currentMemberSource: "anon",
+			canManageOthers: false,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Edit Carla Nguyen/ }),
+		);
+		expect(
+			screen.queryByRole("button", { name: /mark yourself available/i }),
+		).toBeNull();
+		expect(clearAvailability).not.toHaveBeenCalled();
+	});
+
+	it("the picker KEEPS it for a signed-in viewer — the control", async () => {
+		await renderMembersGrid({
+			data: declined,
+			currentMemberId: "c1",
+			currentMemberSource: "session",
+			canManageOthers: false,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Edit Carla Nguyen/ }),
+		);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /mark yourself available/i }),
+		);
+		await waitFor(() => expect(clearAvailability).toHaveBeenCalledTimes(1));
+	});
+
+	it("an ALREADY-DECLINED signed-in viewer can still take it back", async () => {
+		await renderMembersGrid({
+			data: declined,
+			currentMemberId: "c1",
+			currentMemberSource: "session",
+			canManageOthers: false,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Not going —/ }),
+		);
+		await waitFor(() => expect(clearAvailability).toHaveBeenCalledTimes(1));
 	});
 });
 

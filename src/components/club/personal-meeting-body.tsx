@@ -153,6 +153,21 @@ export function PersonalMeetingBody({
 	// already has — see the header's third rule for why it is the one piece of
 	// state a decline may branch on.
 	const canRelease = !canRepick;
+	// ADR-0026's line on THIS page's two buttons, not just its decline. An
+	// asserted viewer may fill a blank and may not change an answer, so once
+	// `planStatus` holds one, both buttons are controls the server refuses —
+	// and the decline half would run a confirm dialog saying "we'll let the team
+	// know" on the way to that refusal. `meeting-personal-strip.tsx` made the
+	// same split for the same writes; this page is the surface that split
+	// matters most on, because it is where the nudge link lands.
+	//
+	// `reached_out` deliberately does NOT count: it is the officer's record of
+	// having ASKED, the seam treats it as still-blank (`UNANSWERED_RUNGS`), and
+	// it is the state a nudged member arrives in. Counting it would refuse the
+	// round trip this page exists for.
+	const answered =
+		view.planStatus === "coming" || view.planStatus === "not_coming";
+	const canAnswer = canRelease || !answered;
 
 	// `isMeetingOver`, NOT `isMeetingLocked`. Locked is `status === "completed"`
 	// only, and clubs routinely never press Complete — so last month's meeting
@@ -291,7 +306,11 @@ export function PersonalMeetingBody({
 			{/* Passed `writesClosed` so a stored answer never reads "Tap below" with
 			    nothing below it — the normal end state of every link that outlived
 			    its meeting in a chat thread. */}
-			<AnswerState status={view.planStatus} writesClosed={writesClosed} />
+			<AnswerState
+				status={view.planStatus}
+				writesClosed={writesClosed}
+				canChange={canAnswer}
+			/>
 
 			{writesClosed ? (
 				<p className="rounded-md border border-[var(--line)] p-3 text-muted-foreground text-sm">
@@ -300,6 +319,15 @@ export function PersonalMeetingBody({
 						: locked
 							? "This meeting is finished, so answers are closed."
 							: "This meeting has passed, so answers are closed."}
+				</p>
+			) : !canAnswer ? (
+				// Answered already, with no session to change it. The ANSWER itself is
+				// above (`AnswerState`); this says what would let them change it, and
+				// it is text rather than a link for the reason the strip gives — a
+				// refusal that is actually attempted still carries a real one-tap
+				// link through `showWriteError`.
+				<p className="rounded-md border border-[var(--line)] p-3 text-muted-foreground text-sm">
+					Sign in to change your answer.
 				</p>
 			) : (
 				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -646,18 +674,30 @@ export function PersonalMeetingLoading({ meetingKey }: { meetingKey: string }) {
 export function AnswerState({
 	status,
 	writesClosed,
+	canChange = true,
 }: {
 	status: PersonalMeetingView["planStatus"];
 	/** Past tense and no call to action once nothing can be changed. */
 	writesClosed: boolean;
+	/** False for an asserted viewer who has already answered (#762): the window
+	 *  is open, but changing an answer needs a session, so "Tap below" would
+	 *  point at buttons that are no longer there. Defaults true — the
+	 *  `writesClosed` half already carried the only other reason to drop it. */
+	canChange?: boolean;
 }) {
+	// ONE flag for both reasons the call to action must go. They differ in COPY
+	// (past tense vs present) and the caller owns that distinction; what they
+	// share is that there is nothing below to tap.
+	const offerChange = !writesClosed && canChange;
 	if (status === "coming") {
 		return (
 			<p className="flex items-center gap-2 text-sm">
 				<CheckCircle2 aria-hidden className="size-4 shrink-0" />
 				{writesClosed
 					? "You said you were coming."
-					: "You've said you're coming. Changed your mind? Tap below."}
+					: offerChange
+						? "You've said you're coming. Changed your mind? Tap below."
+						: "You've said you're coming."}
 			</p>
 		);
 	}
@@ -667,7 +707,9 @@ export function AnswerState({
 				<XCircle aria-hidden className="size-4 shrink-0" />
 				{writesClosed
 					? "You said you couldn't make it."
-					: "You've said you can't make it. Changed your mind? Tap below."}
+					: offerChange
+						? "You've said you can't make it. Changed your mind? Tap below."
+						: "You've said you can't make it."}
 			</p>
 		);
 	}

@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Loader2, Lock, Plus, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import {
@@ -48,6 +48,7 @@ export function SeasonGrid({
 	orientation,
 	count,
 	currentMemberId,
+	currentMemberSource = "anon",
 	canManageOthers = false,
 	clubId,
 	clubSlug,
@@ -63,6 +64,25 @@ export function SeasonGrid({
 	/** When set, the grid becomes interactive as this member: claim/release
 	 *  roles (Roles × Meetings) and toggle availability (Members × Meetings). */
 	currentMemberId?: string | null;
+	/**
+	 * WHERE `currentMemberId` came from (#762, ADR-0026) — a session bound to
+	 * this club's roster, or a localStorage name-pick.
+	 *
+	 * Named for the pairing rather than as a bare `isSignedIn`, because the two
+	 * facts have to agree and a separate boolean is two flags with nothing
+	 * keeping them in step — the objection `meeting-personal-strip.tsx` makes
+	 * about identity in its own header.
+	 *
+	 * It exists because three of this grid's writes are session-gated
+	 * (`clearAvailability` twice, `markUnavailableReleasing` once) while every
+	 * control that reaches them keys on `currentMemberId` alone. That mismatch IS
+	 * the bug: an anonymous roster pick was shown a confirm dialog promising to
+	 * free their role and got "you need to be signed in", losing the answer too.
+	 *
+	 * Defaults to `"anon"`, the narrow side. A caller that forgets it loses the
+	 * release and the un-decline; the opposite default loses a member's answer.
+	 */
+	currentMemberSource?: "anon" | "session";
 	/** An officer/admin: may toggle ANY member's availability (Members ×
 	 *  Meetings), not just their own row. Attribution stays `currentMemberId`. */
 	canManageOthers?: boolean;
@@ -87,6 +107,10 @@ export function SeasonGrid({
 	const showContactCols = orientation === "members" && showContact;
 	const contactByMember = new Map(data.members.map((m) => [m.id, m]));
 	const meetingStatus = memberMeetingStatus(data, currentMemberId ?? null);
+	// The two session-gated capabilities this grid offers: releasing a role while
+	// declining, and taking a decline back. Both refuse an asserted caller
+	// server-side (ADR-0026), so both have to disappear rather than refuse.
+	const provenIdentity = currentMemberSource === "session";
 	const labelHead = orientation === "roles" ? "Role" : "Member";
 	const anchorRef = useRef<HTMLTableCellElement>(null);
 	const selfRowRef = useRef<HTMLTableRowElement>(null);
@@ -276,8 +300,12 @@ export function SeasonGrid({
 	) {
 		if (!status || !currentMemberId) return;
 		if (status.declined) {
-			clearUnavailable(currentMemberId, m.id);
-		} else if (status.heldRoleLabels.length > 0) {
+			// Un-declining is `clearAvailability`, which needs a session. The chip
+			// is not even rendered as a button without one (see its own note), so
+			// this branch is unreachable for an asserted viewer — belt and braces,
+			// because the render and the handler are far apart in this file.
+			if (provenIdentity) clearUnavailable(currentMemberId, m.id);
+		} else if (status.heldRoleLabels.length > 0 && provenIdentity) {
 			setConfirm({
 				memberId: currentMemberId,
 				memberName: null,
@@ -286,6 +314,11 @@ export function SeasonGrid({
 				date: formatMeetingDate(m.scheduledAt, m.timezone),
 			});
 		} else {
+			// Includes the ROLE-HOLDER with no session, which is the case that used
+			// to dead-end. ADR-0026 allows their first answer and forbids the
+			// release, so they get the answer: `setAvailability`, which frees
+			// nothing. Before this they were shown a dialog promising a release and
+			// then refused, and the answer was lost with it.
 			markUnavailable(currentMemberId, m.id);
 		}
 	}
@@ -302,7 +335,9 @@ export function SeasonGrid({
 			(o) => o.state === "mine",
 		);
 		const m = data.meetings.find((x) => x.id === meetingId);
-		if (held.length > 0) {
+		// `provenIdentity`, same as the header chip: a caller who cannot free the
+		// role still gets to record the answer rather than a refusal.
+		if (held.length > 0 && provenIdentity) {
 			setConfirm({
 				memberId: targetMemberId,
 				memberName: isOwnRow ? null : targetName,
@@ -405,6 +440,14 @@ export function SeasonGrid({
 										!!clubId &&
 										!m.isPast &&
 										!m.isCompleted;
+									// A DECLINE is a first answer an asserted caller may give
+									// (`setAvailability`); taking it back is `clearAvailability`,
+									// which needs a session (ADR-0026). So the pill stays — it is
+									// the state signal, and dropping it would hide the answer —
+									// but for an asserted viewer it stops being a control.
+									// `meeting-personal-strip.tsx` makes the same split for the
+									// same write.
+									const chipIsControl = !status?.declined || provenIdentity;
 									const header = (
 										<>
 											<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
@@ -451,14 +494,20 @@ export function SeasonGrid({
 												{header}
 											</MeetingLink>
 											{chipVisible ? (
-												<button
-													type="button"
+												<Chip
+													as={chipIsControl ? "button" : "span"}
 													disabled={busyMeetingId === m.id}
-													onClick={() => onHeaderAvailability(m, status)}
+													onClick={
+														chipIsControl
+															? () => onHeaderAvailability(m, status)
+															: undefined
+													}
 													title={
-														status?.declined
-															? "Tap if you can make it after all"
-															: "Mark yourself unavailable — I can't make this one"
+														chipIsControl
+															? status?.declined
+																? "Tap if you can make it after all"
+																: "Mark yourself unavailable — I can't make this one"
+															: "Sign in to say you can make it after all"
 													}
 													aria-label={`${
 														status?.declined ? "Not going" : "Can't go"
@@ -493,7 +542,7 @@ export function SeasonGrid({
 													) : (
 														"Can't go"
 													)}
-												</button>
+												</Chip>
 											) : null}
 										</th>
 									);
@@ -620,6 +669,9 @@ export function SeasonGrid({
 																	isOwnRow,
 																)
 															}
+															// Un-declining needs a session, so the item is not
+															// rendered without one rather than refusing on tap.
+															canMarkAvailable={provenIdentity}
 															onMarkAvailable={() =>
 																clearUnavailable(targetMemberId, m.id)
 															}
@@ -804,5 +856,62 @@ export function SeasonGrid({
 				</DialogContent>
 			</Dialog>
 		</div>
+	);
+}
+
+/**
+ * The header availability pill, as a CONTROL or as bare STATE (#762).
+ *
+ * An asserted viewer may decline a meeting (`setAvailability` fills a blank)
+ * and may not take it back (`clearAvailability` needs a session, ADR-0026), so
+ * once they have declined the pill has to keep saying "Not going" while
+ * ceasing to be tappable. Rendering it as a `<span>` is what makes that true
+ * for a keyboard and a screen reader as well as for a mouse — a `disabled`
+ * button would dim the one thing on that column that still carries the answer.
+ *
+ * Polymorphic rather than two copies of the element: the class string it wears
+ * is ~10 lines of tap-target and dark-mode reasoning (see the call site), and a
+ * second copy is how the two drift. `cursor-default` is appended for the span —
+ * tailwind-merge keeps the last of a conflicting pair — so the only class that
+ * would actively lie about tappability is the one that goes.
+ */
+function Chip({
+	as,
+	disabled,
+	onClick,
+	title,
+	className,
+	"aria-label": ariaLabel,
+	children,
+}: {
+	as: "button" | "span";
+	disabled?: boolean;
+	onClick?: () => void;
+	title?: string;
+	className?: string;
+	"aria-label"?: string;
+	children: ReactNode;
+}) {
+	if (as === "span") {
+		// No `aria-label`: an unlabelled `<span>` is not an accessibility node, so
+		// a name on it is unreliable — and the date it would add is the column
+		// header immediately above. The visible text is the answer.
+		return (
+			<span title={title} className={cn(className, "cursor-default")}>
+				{children}
+			</span>
+		);
+	}
+	return (
+		<button
+			type="button"
+			disabled={disabled}
+			onClick={onClick}
+			title={title}
+			aria-label={ariaLabel}
+			className={className}
+		>
+			{children}
+		</button>
 	);
 }

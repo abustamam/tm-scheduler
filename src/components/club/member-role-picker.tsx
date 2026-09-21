@@ -33,6 +33,7 @@ export function MemberRolePicker({
 	canReassign,
 	actorMemberId,
 	declined,
+	canMarkAvailable = true,
 	onMarkUnavailable,
 	onMarkAvailable,
 	onChanged,
@@ -49,6 +50,20 @@ export function MemberRolePicker({
 	canReassign: boolean;
 	actorMemberId: string;
 	declined: boolean;
+	/**
+	 * Whether taking a decline BACK is offered (#762, ADR-0026).
+	 *
+	 * `onMarkAvailable` reaches `clearAvailability`, which destroys an answer a
+	 * person put there and so needs a session bound to this club's roster;
+	 * `onMarkUnavailable` reaches `setAvailability`, which an asserted roster
+	 * pick may still use to fill a blank. So the two halves of this one item
+	 * have different gates, and the un-decline half has to disappear rather
+	 * than refuse on tap.
+	 *
+	 * Defaults TRUE so the officer surfaces that have always had a session need
+	 * no change; the public season grid passes its own answer.
+	 */
+	canMarkAvailable?: boolean;
 	onMarkUnavailable: () => void;
 	onMarkAvailable: () => void;
 	onChanged: () => void | Promise<void>;
@@ -158,23 +173,29 @@ export function MemberRolePicker({
 						);
 					})}
 				</div>
-				<div className="border-t border-[var(--line)] p-1">
-					<button
-						type="button"
-						disabled={busy !== null}
-						onClick={() => {
-							setOpen(false);
-							if (declined) onMarkAvailable();
-							else onMarkUnavailable();
-						}}
-						className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)]"
-					>
-						<UserMinus className="size-4 shrink-0" aria-hidden />
-						{declined
-							? `Mark ${isOwnRow ? "yourself" : "them"} available`
-							: `Mark ${isOwnRow ? "yourself" : "them"} not available`}
-					</button>
-				</div>
+				{/* The un-decline half is session-gated (#762); with no session the
+				    row is not rendered at all rather than refusing on tap. The
+				    DECLINE half stays — an asserted caller may still record a first
+				    answer. */}
+				{declined && !canMarkAvailable ? null : (
+					<div className="border-t border-[var(--line)] p-1">
+						<button
+							type="button"
+							disabled={busy !== null}
+							onClick={() => {
+								setOpen(false);
+								if (declined) onMarkAvailable();
+								else onMarkUnavailable();
+							}}
+							className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)]"
+						>
+							<UserMinus className="size-4 shrink-0" aria-hidden />
+							{declined
+								? `Mark ${isOwnRow ? "yourself" : "them"} available`
+								: `Mark ${isOwnRow ? "yourself" : "them"} not available`}
+						</button>
+					</div>
+				)}
 			</PopoverContent>
 		</Popover>
 	);

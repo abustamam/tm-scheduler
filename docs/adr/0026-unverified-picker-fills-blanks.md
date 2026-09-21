@@ -61,6 +61,13 @@ freeing the roles you held does not.
 | Change a vote | only from the casting device | yes (member voters) |
 | Role consoles | Phase 2 | Phase 2 |
 
+"Blank" includes a row holding only `reached_out` (#762). That rung is the officer's record of
+having ASKED, not a reply, so a member answering over it takes nothing away from anyone — the same
+sentence `CLEARABLE_ASK` and `SELF_SERVICE_RUNGS` are already built on. It is not a nicety: the
+officer's nudge draft INSERTS `reached_out` onto a blank row and the member answers from the
+session-less personal meeting page, so counting the ask as an answer refuses the round trip the
+ladder exists for. See the third consequence below for what that costs.
+
 Two rows need their qualifier read carefully.
 
 - **"unless your answer is `not_coming`"** is what stops the obvious hole in "filling a blank is
@@ -111,6 +118,27 @@ class of debt it is.
   They were outside #761's cited files AND outside its own call-site inventory; whichever child
   flips those three writes converts them, because that is the change that makes their refusal
   reachable.
+- **An outsider can now overwrite `reached_out` with an answer, for exactly the members an
+  officer is chasing.** This is the one place the attendance child WIDENS what an unverified
+  caller may do, and it follows from treating the ask as a blank (above) plus `setAvailability`'s
+  deliberate absence of a `demoteFrom` — writing `not_coming` over `reached_out` is "they asked,
+  the member answered", which is the ladder working. The set it applies to is not random: it is
+  precisely the members an officer has contacted and not heard back from, and a forged
+  `not_coming` there is indistinguishable from the reply the officer is waiting for. The trade is
+  deliberate and it is the narrower one — the alternative refuses every nudged member their own
+  answer — but it is a real widening, it is new relative to the rest of this decision, and it is
+  recorded here rather than left as a property nobody wrote down. It closes with the role consoles
+  in Phase 2, when `reached_out` stops being writable without a session at all.
+- **A control that a session gates must not be SHOWN to a viewer without one.** The refusal being
+  well-worded is not enough: a season grid that offers "Undo" on a toast that just said the write
+  worked, or a personal page that asks "give up your role?" and then says "sign in", teaches that
+  the product is broken rather than that the write is gated. So visibility and the gate are one
+  decision — wherever a control's visibility keys on a member id while its handler keys on a
+  session, the two conditions have to agree, and the client predicts the SERVER's answer per arm
+  rather than a proxy for it. #762's review found six instances of the mismatch in one change,
+  including one where predicting with a proxy silently dropped ADR-0016 admin parity for an
+  impersonating superadmin. The state stays visible when the control goes; only the affordance
+  is removed.
 - **Nothing here is retroactive.** No grant changes when this ADR lands; #761 lays the seam, the
   refusal UX and the guard, and the Phase 1 children (slots, attendance, ballots, the role-card
   flag) each flip their own rows against the table above.

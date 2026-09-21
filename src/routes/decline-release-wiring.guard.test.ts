@@ -166,29 +166,44 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		// `tmod`. Reading `isTmod` here would put the copy back out of step with the
 		// server on exactly that row.
 		const body = fnBody(SRC, "declineFreesRoles");
-		expect(body).toContain("canManage || memberId === myId");
+		expect(body).toContain("canManage ||");
+		expect(body).toContain("memberId === myId");
 		expect(
 			fnBody(RAW, "declineFreesRoles"),
 			"the own-row TMOD case releases server-side, so this must not exclude it",
 		).not.toContain("isTmod");
 	});
 
-	it("predicts the SESSION as well as the arm (#762)", () => {
-		// ADR-0026 added a second input to the same prediction, and it outranks
-		// the arm: freeing roles needs a session bound to a member of this club,
-		// so an anonymous roster pick releases nothing through ANY arm. The
-		// server refuses the REQUEST rather than downgrading it, which is the
-		// half that makes this a call-site rule — sending the flag anyway loses
-		// the member's answer as well as the release.
-		//
-		// `isSignedIn` is the route's own name for the session that
-		// `useEffectiveMember` was handed, so it is the same fact the server
-		// reads, not a second guess at it.
+	it("requires a session on the SELF arm, and only there (#762)", () => {
+		// ADR-0026 added a second input to this prediction, and it applies PER ARM.
+		// The self arm admits an anonymous roster pick — that is #699 — so it needs
+		// the session term. The officer arm does not: `canManage` is already the
+		// server's own answer for it, granting on an admin membership or a
+		// `read_write` impersonation and refusing `read_only`, which is what
+		// `requireClubRole(admin)` and `requireSessionActor` both do.
 		const body = fnBody(SRC, "declineFreesRoles");
 		expect(
 			body,
 			"an asserted caller frees nothing, so the dialog must not promise a release and the payload must not ask for one",
-		).toContain("isSignedIn &&");
+		).toContain("isSignedIn && memberId === myId");
+	});
+
+	it("never gates the OFFICER arm on isSignedIn — the impersonation regression", () => {
+		// The mutation this case exists for, and it SHIPPED in #762's first client
+		// cut: `isSignedIn && (canManage || memberId === myId)`. `isSignedIn` here
+		// is `effectiveMemberId && authCtx?.user`, and an impersonating superadmin
+		// has no `effectiveMemberId` — so the one principal ADR-0016 / #246 gives
+		// full admin parity was predicted to free nothing. The dialog told them the
+		// role stayed, `commitRung` stripped the flag, and the member ended up
+		// `not_coming` while still holding every role. No error, no toast, nothing
+		// to notice — which is why it needs a guard rather than a comment.
+		//
+		// Verbatim: a comment-blind read would let the paragraph above satisfy the
+		// very pattern it warns against.
+		expect(
+			fnBody(RAW, "declineFreesRoles"),
+			"canManage is already the server's answer for the officer arm; gating it on a session proxy silently drops admin parity",
+		).not.toMatch(/isSignedIn\s*&&\s*\(/);
 	});
 
 	it("downgrades the opt-in rather than sending one that throws (#762)", () => {

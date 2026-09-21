@@ -271,6 +271,7 @@ function AttendanceRow({
 	duties,
 	personalNudgeBase,
 	linkIdentity,
+	canClearRung,
 	pending,
 	onWriteRung,
 	onContacted,
@@ -288,6 +289,8 @@ function AttendanceRow({
 	personalNudgeBase?: PersonalNudgeBase | null;
 	/** #727 — see the panel's `canViewMemberDetail` prop. */
 	linkIdentity: boolean;
+	/** #762 — see the panel's own prop of the same name. */
+	canClearRung: boolean;
 	pending: boolean;
 	onWriteRung: (memberId: string, next: PlanStatus | null) => void;
 	onContacted: (memberId: string) => void;
@@ -302,17 +305,26 @@ function AttendanceRow({
 	// whose own row reads "Not coming" — the panel showing the officer a decline
 	// and then handing them a message asserting acceptance.
 	//
-	// #663 shrank the case rather than removing it. A confirmed decline written
-	// from this rail now FREES the roles the member held, so "declined but still
-	// holding a slot" is no longer the normal outcome of the control right beside
-	// this draft. It remains reachable four ways: a self-asserted Toastmaster
-	// declining for SOMEONE ELSE, which records the rung and deliberately keeps
-	// their slot; a decline sent without the `releaseHeldRoles` opt-in, which is
-	// what a tab loaded before the #663 deploy does; a row written before #663 at
-	// all; and the season grid's own `setAvailability`, which writes the rung
-	// without releasing. So the branch stays, and so does the re-ask copy — it is
-	// the honest draft for a member who is down as absent and still on the
-	// programme.
+	// #663 shrank the case rather than removing it, and #762 CHANGED which ways
+	// are left. A confirmed decline written from this rail frees the roles the
+	// member held, so "declined but still holding a slot" is not the normal
+	// outcome of the control beside this draft. It remains reachable five ways:
+	// an ASSERTED caller declining at all, which since #762 never frees roles on
+	// any arm and is the commonest of these — the personal meeting page's
+	// session-less decline and the season grid's role-holder both land here; a
+	// signed-in Toastmaster declining for SOMEONE ELSE, which records the rung
+	// and deliberately keeps their slot; a decline sent without the
+	// `releaseHeldRoles` opt-in, which is what a tab loaded before the #663
+	// deploy does; a row written before #663 at all; and the season grid's own
+	// `setAvailability`, which writes the rung without releasing.
+	//
+	// The first item used to read "a self-asserted Toastmaster declining for
+	// someone else". That is now TWO different refusals wearing one sentence —
+	// an asserted caller is refused the release by proof, a signed-in TMOD on
+	// another's row is withheld it by `mayRelease` — and only the second is the
+	// product ceiling the sentence was describing. So the branch stays, and so
+	// does the re-ask copy: it is the honest draft for a member who is down as
+	// absent and still on the programme.
 	const nudgeMode =
 		m.role && m.status !== "not_coming"
 			? {
@@ -482,14 +494,21 @@ function AttendanceRow({
 					 *  again. To say they are OUT, the officer picks "Not coming",
 					 *  which is an explicit answer and does outrank the inference. */}
 					<DropdownMenuContent align="end">
-						{MENU.map((item) => (
-							<DropdownMenuItem
-								key={item.label}
-								onSelect={() => onWriteRung(m.id, item.status)}
-							>
-								{item.label}
-							</DropdownMenuItem>
-						))}
+						{/* "No answer" (`status: null`) is the one item that DELETES, and
+						    since #762 deleting an answer needs a session — see
+						    `canClearRung`. Dropped rather than disabled: a disabled row in
+						    a four-item menu reads as a transient state, and the officer
+						    this rail is written for always has the session anyway. */}
+						{MENU.filter((item) => canClearRung || item.status !== null).map(
+							(item) => (
+								<DropdownMenuItem
+									key={item.label}
+									onSelect={() => onWriteRung(m.id, item.status)}
+								>
+									{item.label}
+								</DropdownMenuItem>
+							),
+						)}
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</PanelActionLine>
@@ -822,6 +841,7 @@ export function MeetingAttendancePanel({
 	phaseCompleted = false,
 	busy = false,
 	onWriteRung,
+	canClearRung = false,
 	onContacted,
 	onSetAttendance,
 	guests,
@@ -914,6 +934,20 @@ export function MeetingAttendancePanel({
 		memberId: string,
 		next: PlanStatus | null,
 	) => void | Promise<void>;
+	/**
+	 * Whether the rung menu offers "No answer" (#762, ADR-0026).
+	 *
+	 * That item is the only one here that DELETES — `clearPlannedAttendance` —
+	 * and ADR-0026 puts destroying an answer behind a session bound to this
+	 * club's roster. Plan mode is reachable WITHOUT one: a self-asserted
+	 * Toastmaster gets this rail through `needsTmodPlan`, on the honour-system
+	 * claim #576 admits and #747 retires. For them every tap on "No answer" came
+	 * back "you need to be signed in".
+	 *
+	 * Defaults false, the narrow side: a caller that has not thought about it
+	 * loses a menu item rather than showing one that refuses.
+	 */
+	canClearRung?: boolean;
 	onContacted: (memberId: string) => void | Promise<void>;
 	/** Roll mode only. Fired by a chip or a dashed suggestion. */
 	onSetAttendance?: (
@@ -1256,6 +1290,7 @@ export function MeetingAttendancePanel({
 										duties={dutiesByMemberId.get(m.id)}
 										personalNudgeBase={personalNudgeBase}
 										linkIdentity={canViewMemberDetail}
+										canClearRung={canClearRung}
 										pending={pendingId === m.id}
 										onWriteRung={writeRung}
 										onContacted={contacted}
