@@ -9,11 +9,12 @@
  * A `-logic.ts` so `#/db` never leaks into the client bundle (server-modules
  * guard). Never imported by client code.
  */
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	bcmProjectProgress,
 	members,
+	officerTerms,
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
@@ -201,10 +202,25 @@ export async function resolveMemberSubject(
 /**
  * May this signed-in viewer see the subject's completion marks?
  *
- * Self, or an admin of the club the picker was opened in. Anything else — a
- * fellow member, a signed-in visitor, an admin of some other club — gets the
- * option list with no progress on it. `clubRole` is only admin|member, with VP
- * Education and President mapping to admin, so the gate is `["admin"]`.
+ * Self, or an ACTIVE admin of the club the picker was opened in. Anything
+ * else — a fellow member, a signed-in visitor, an admin of some other club, a
+ * lapsed admin of this one — gets the option list with no progress on it.
+ * `clubRole` is only admin|member, with VP Education and President mapping to
+ * admin, so the gate is `["admin"]`.
+ *
+ * The `status` check is #822 and is the half that needed NO duplicate rows to
+ * reach: this read the `clubRole` of whatever membership came back and checked
+ * no status at all, so an `inactive` admin — someone who did not renew, whose
+ * row `requireMembership` and `requireClubRole` already refuse — kept the
+ * capability to read another member's Pathways completion marks. Nothing
+ * downstream re-checks, because the boolean IS the decision: `getProjectOptions`
+ * passes it straight to `listProjectOptions` as `includeProgress`.
+ *
+ * `canManageClub` is the one sibling that also reads `clubRole` with no status
+ * check, and it is NOT a precedent — `getMembership`'s ordering is what covers
+ * it, and that ordering is a thing this function did not have either. Requiring
+ * active here rather than leaning on key 1 is deliberate: key 1 only ranks rows
+ * that exist, so a lapsed admin who is the ONLY membership still comes back.
  *
  * Returns a boolean rather than throwing: failing to prove admin is not an
  * error here, it just means a plainer picker.
@@ -212,7 +228,9 @@ export async function resolveMemberSubject(
  * Queries the membership directly rather than calling `guards.getMembership`.
  * That module imports Better-Auth, and `slots-logic.ts` imports this one for
  * `resolveProjectDisplay` — routing through it would drag the whole auth graph
- * into every suite that mocks only `#/db`, which hangs them.
+ * into every suite that mocks only `#/db`, which hangs them. That reason is
+ * about the IMPORT, not about the ordering, which is why the order below is
+ * copied rather than the call being re-routed.
  */
 export async function viewerMaySeeProgress(input: {
 	userId: string;
@@ -224,14 +242,67 @@ export async function viewerMaySeeProgress(input: {
 	if (mine.includes(input.personId)) return true;
 
 	const [membership] = await db
-		.select({ clubRole: members.clubRole })
+		.select({ clubRole: members.clubRole, status: members.status })
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
+		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
+		// Joined for the ORDER BY alone — the count is never selected, and an open
+		// term grants nothing here (this gate reads `clubRole`, not effective-admin).
+		// See the ordering note under the query.
+		.leftJoin(
+			officerTerms,
+			and(
+				eq(officerTerms.membershipId, members.id),
+				isNull(officerTerms.termEnd),
+			),
+		)
 		.where(
 			and(eq(people.userId, input.userId), eq(members.clubId, input.clubId)),
 		)
+		// `members.id` is the primary key, so every selected column OF `members` is
+		// functionally dependent on it and needs no explicit grouping. Nothing here
+		// crosses a join into another table's columns, so this one key is enough.
+		.groupBy(members.id)
+		// The SAME five-key total order `getMembership` carries (`guards.ts`), one of
+		// the two copies #822 adds after `resolveAdminGrant`'s (#821) — four sites,
+		// one order. This used to be a bare `.limit(1)`: `people.user_id` has only a
+		// plain non-unique index
+		// (`people_user_idx`), so one human reachable through two Person rows in one
+		// club is representable, and Postgres was free to return either. The same
+		// admin could see a member's Pathways completion marks on one request and a
+		// plainer picker on the next, with no change in data between them.
+		//
+		// Deliberately a COPY rather than a call into `getMembership` — but for a
+		// reason this file already had, and a different one from `resolveAdminGrant`:
+		// `guards.ts` imports Better-Auth and `slots-logic.ts` imports THIS module,
+		// so re-routing drags the auth graph into every suite mocking only `#/db`.
+		// See the docblock.
+		//
+		// ALL FOUR ORDERINGS MUST MOVE TOGETHER, and the reason each key is where it
+		// is written out once, over `getMembership` in `guards.ts` — read it there
+		// before touching any of them. `pathways-membership-pick.integration.test.ts`
+		// asserts this resolver and `getMembership` name the SAME membership on one
+		// fixture, which is what fails when only one of the copies changes.
+		//
+		// Key 1 is NOT what refuses a lapsed admin here — the `status === "active"`
+		// check below is, exactly as in `resolveAdminGrant`. MEASURED: swapping keys
+		// 1 and 2 leaves all 15 cases in the suite green, because whichever of the
+		// two rows the swap picks, the check refuses it. The polarity is kept for
+		// agreement with `getMembership`, where it genuinely decides (`canManageClub`
+		// reads `clubRole` with no status check at all), not because it decides here.
+		// The direction that does NOT hold: deleting the check below and keeping the
+		// ordering re-opens the bug on a single lapsed-admin membership, which is the
+		// only shape #822 was actually reachable in. One case gates that, and it is
+		// the one that needs no duplicate.
+		.orderBy(
+			sql`(${members.status} = 'active') desc`,
+			sql`(${members.clubRole} = 'admin') desc`,
+			desc(sql`count(${officerTerms.id})`),
+			members.createdAt,
+			members.id,
+		)
 		.limit(1);
-	return membership?.clubRole === "admin";
+	return membership?.status === "active" && membership.clubRole === "admin";
 }
 
 /** The free-text triple a picked project stands for. */

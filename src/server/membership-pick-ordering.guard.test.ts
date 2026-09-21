@@ -7,9 +7,11 @@
  * #471 fixed `getMembership`; #804 found the same defect in
  * `resolveAdminGrant`, written after it, and fixed it by COPYING the order —
  * deliberately, because routing the hot path through the guard resolver would
- * change its cost and its returned shape. Two copies is a decision; a third
- * arriving silently is how #804 happened in the first place, and the gap was
- * four months.
+ * change its cost and its returned shape. #822 then found two more and copied
+ * it again, for its own reason (`guards.ts` imports Better-Auth, which the
+ * Pathways modules cannot pull in). Four sites carrying one order is a
+ * decision; a FIFTH arriving silently is how #804 happened in the first place,
+ * and the gap was four months.
  *
  * So this sweeps for the SHAPE rather than for a name: any statement that
  * resolves `people.user_id` to a `members` row and keeps ONE of them must
@@ -43,14 +45,13 @@ const SERVER = resolve(ROOT, "src/server");
  * covers ONE pick`), so a second pick landing under a waived name fails even if
  * the attribution below is wrong about which function it sits in.
  *
- * Both are #822: `viewerMaySeeProgress` gates who may see another member's
- * Pathways progress (and checks no `status` at all), `selfMemberIdInClub`
- * decides which membership a written progress mark is attributed to.
+ * EMPTY as of #822, which ordered the two this list was created holding —
+ * `viewerMaySeeProgress` and `selfMemberIdInClub`. The mechanism stays: `a
+ * filed waiver names an issue` is what forces an entry OUT when its pick
+ * becomes ordered, and it is the reason this went empty in the same change
+ * rather than aging into decoration.
  */
-const FILED: Record<string, string> = {
-	"src/server/project-picker-logic.ts:viewerMaySeeProgress": "#822",
-	"src/server/progress-marks-logic.ts:selfMemberIdInClub": "#822",
-};
+const FILED: Record<string, string> = {};
 
 /** Every `*.ts` under `src/server`, recursively, excluding tests. */
 function sourceFiles(dir: string): string[] {
