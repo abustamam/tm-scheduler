@@ -143,9 +143,12 @@ export async function releaseSlotsAndMarkUnavailable(
 			// "auditable afterwards" is not auditable while an honour-system TMOD
 			// release and an officer's look identical in the feed.
 			grantedVia: via,
-			// Always `"session"` past the gate above, and recorded anyway: the feed
-			// reader should not have to know which writers happen to be gated
-			// today to tell a proven write from an asserted one.
+			// Always `"session"` past the gate above, and recorded anyway, so a
+			// feed reader is not left inferring it from which writers happen to be
+			// gated this month. It is a one-way signal and not a discriminator:
+			// `proof` is optional on the seam and the three remaining session-less
+			// plan writers pass none, so an ABSENT value means "no ladder to read
+			// it off, or written before #762" — never "not asserted".
 			proof,
 		});
 

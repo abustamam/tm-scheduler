@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activityLog, meetingAttendancePlan, members } from "#/db/schema";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
+	ASSERTED_OVERWRITE_MESSAGE,
 	CLEARABLE_ASK,
 	clearPlanStatus,
 	getPlanStatus,
@@ -669,6 +670,164 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 					.from(activityLog)
 					.where(eq(activityLog.clubId, club.clubId));
 				expect(after.length).toBe(before.length);
+			});
+
+			it("treats an officer's `reached_out` as still blank — the nudge round trip", async () => {
+				// THE regression #762's review caught, and it kills the feature the
+				// ladder exists for. The officer taps the member's WhatsApp draft,
+				// which INSERTs `reached_out` onto a blank row; the member then opens
+				// the session-less personal meeting page to answer. With
+				// `reached_out` counted as "answered", BOTH of their answers refuse —
+				// the officer asked and the member cannot reply.
+				//
+				// `reached_out` is the officer's record of having ASKED, never a
+				// reply, which is the same sentence CLEARABLE_ASK and
+				// SELF_SERVICE_RUNGS are built on. So it is a blank for this purpose.
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "reached_out",
+					actorMemberId: club.adminMemberId,
+				});
+
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "coming",
+					actorMemberId: club.memberId,
+					proof: "asserted",
+					onlyIfAbsent: true,
+				});
+				expect(res.changed).toBe(true);
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe("coming");
+				// And it LOGS, because something changed — the silent-no-op branch is
+				// for a row that already said the same thing.
+				const logs = await testDb
+					.select({ detail: activityLog.detail })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+				expect(logs).toHaveLength(2);
+				expect(logs[1]?.detail).toMatchObject({
+					status: "coming",
+					proof: "asserted",
+				});
+			});
+
+			it("the other direction too — declining over the ask", async () => {
+				// Both answers, because the bug refused both and a one-answer test
+				// would leave half the round trip broken.
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "reached_out",
+					actorMemberId: club.adminMemberId,
+				});
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "not_coming",
+					actorMemberId: club.memberId,
+					proof: "asserted",
+					onlyIfAbsent: true,
+				});
+				expect(res.changed).toBe(true);
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe("not_coming");
+			});
+
+			it("stays atomic when two first answers race", async () => {
+				// The property the single-statement form buys, and the reason the
+				// conflict arm is an UPDATE with a floor rather than a read followed
+				// by a write. Both requests see no row; exactly one may land, and the
+				// loser must be refused rather than overwrite the winner.
+				//
+				// Two DIFFERENT statuses on purpose: with the same one, a broken
+				// implementation that let both through would still leave the right
+				// row behind and only the log count would notice.
+				const answer = (status: "coming" | "not_coming") =>
+					setPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status,
+						actorMemberId: club.memberId,
+						proof: "asserted" as const,
+						onlyIfAbsent: true as const,
+					});
+				const results = await Promise.allSettled([
+					answer("coming"),
+					answer("not_coming"),
+				]);
+				const landed = results.filter((r) => r.status === "fulfilled");
+				const refused = results.filter((r) => r.status === "rejected");
+				expect(landed).toHaveLength(1);
+				expect(refused).toHaveLength(1);
+				expect((refused[0] as PromiseRejectedResult).reason).toMatchObject({
+					message: SIGN_IN_REQUIRED_MESSAGE,
+				});
+				// One row, one log — not two of either.
+				const logs = await testDb
+					.select({ id: activityLog.id })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+				expect(logs).toHaveLength(1);
+			});
+
+			it("REFUSES an unfloored asserted overwrite as a programming error", async () => {
+				// The invariant the union cannot state (ASSERTED_OVERWRITE_MESSAGE).
+				// `onlyIfAbsent: true` implies `proof: "asserted"` structurally, but
+				// the converse does not fit — one legitimate asserted write is the
+				// `reached_out` exemption, which carries a floor. So the residue is
+				// checked here: asserted, no floor, not fill-blank is a miswired
+				// caller, and it must fail loudly rather than write.
+				await expect(
+					setPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status: "not_coming",
+						actorMemberId: club.memberId,
+						proof: "asserted",
+					}),
+				).rejects.toThrow(ASSERTED_OVERWRITE_MESSAGE);
+				// Refused BEFORE the database was touched.
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBeNull();
+			});
+
+			it("still allows the asserted write that names a floor — the Phase 2 exemption", async () => {
+				// The control beside it, and the reason the invariant is stated as
+				// "fill a blank OR name a floor" rather than a flat ban: an asserted
+				// Toastmaster writing `reached_out` carries `["reached_out"]` and is
+				// the debt ADR-0026 dates rather than closes (#747). Without this, a
+				// stricter rule would look equally correct and would break the panel.
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "reached_out",
+					actorMemberId: club.memberId,
+					proof: "asserted",
+					demoteFrom: ["reached_out"],
+				});
+				expect(res.changed).toBe(true);
 			});
 
 			it("does NOT block an unrestricted write over the same row — the control", async () => {

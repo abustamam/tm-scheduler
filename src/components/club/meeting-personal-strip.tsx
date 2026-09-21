@@ -20,6 +20,25 @@ import type { AttendanceStatus } from "#/server/minutes-logic";
  * record of having asked — a member offering it about themselves is
  * nonsense, and the server rejects a self-write of it, so it is never one of
  * the choices rendered here.
+ *
+ * ## The undo is SESSION-ONLY since #762
+ *
+ * Clearing a row back to "no answer" destroys an answer a person put there, so
+ * ADR-0026 puts `clearPlannedAttendance` behind a session — which makes the
+ * inline undo, for an `anon` viewer, a control that cannot run. Offering it
+ * anyway means every tap ends in a refusal toast, and the one surface that
+ * exists to make answering easy would teach that answering is broken.
+ *
+ * So `source` decides: a session keeps the undo chip; an anonymous viewer gets
+ * the same sentence as a plain statement, with one line saying what would let
+ * them change it. That line is deliberately TEXT and not a link — the strip
+ * mounts in tests with no router, and a sign-in `<Link>` here would trade a
+ * dead control for a dead import. The refusal path still carries a real
+ * one-tap link wherever a write is actually attempted (`showWriteError`).
+ *
+ * ADR-0026 decided this directly rather than inheriting it: "a same-device undo
+ * for a mis-tapped answer" was considered and declined, because the device is
+ * not the person.
  */
 export function MeetingPersonalStrip({
 	source,
@@ -94,6 +113,19 @@ export function MeetingPersonalStrip({
 					>
 						{spinner}I can't make this one
 					</Button>
+				</div>
+			) : source === "anon" ? (
+				// No session ⇒ no undo (see the header). The STATEMENT is the same
+				// sentence the chip carries, minus the affordance that would refuse.
+				<div className="flex flex-wrap items-baseline gap-x-2">
+					<p className="text-sm font-medium">
+						{myStatus === "coming"
+							? "You'll be there."
+							: "You can't make this one."}
+					</p>
+					<p className="text-muted-foreground text-xs">
+						Sign in to change your answer.
+					</p>
 				</div>
 			) : (
 				<Button

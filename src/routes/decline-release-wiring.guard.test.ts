@@ -173,6 +173,41 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		).not.toContain("isTmod");
 	});
 
+	it("predicts the SESSION as well as the arm (#762)", () => {
+		// ADR-0026 added a second input to the same prediction, and it outranks
+		// the arm: freeing roles needs a session bound to a member of this club,
+		// so an anonymous roster pick releases nothing through ANY arm. The
+		// server refuses the REQUEST rather than downgrading it, which is the
+		// half that makes this a call-site rule — sending the flag anyway loses
+		// the member's answer as well as the release.
+		//
+		// `isSignedIn` is the route's own name for the session that
+		// `useEffectiveMember` was handed, so it is the same fact the server
+		// reads, not a second guess at it.
+		const body = fnBody(SRC, "declineFreesRoles");
+		expect(
+			body,
+			"an asserted caller frees nothing, so the dialog must not promise a release and the payload must not ask for one",
+		).toContain("isSignedIn &&");
+	});
+
+	it("downgrades the opt-in rather than sending one that throws (#762)", () => {
+		// The confirm still passes `true` — it is the one call site that has
+		// shown someone what would happen, and that stays pinned above. What is
+		// new is that `commitRung` re-enters WITHOUT the flag when this viewer's
+		// decline would free nothing, so the rung still lands by the same path
+		// every other caller takes. Deleted, the anonymous member who taps
+		// "Can't make it" gets a refusal instead of an answer recorded.
+		const body = fnBody(SRC, "commitRung");
+		expect(body).toContain(
+			"if (releaseHeldRoles && !declineFreesRoles(memberId))",
+		);
+		expect(
+			body,
+			"the downgrade must re-enter the SAME writer, not write a second way",
+		).toMatch(/return commitRung\(memberId, next, via\);/);
+	});
+
 	it("hands the dialog what it needs to tell the truth", () => {
 		// `willRelease` picks between "this frees the role" and "that stays
 		// theirs". Dropped, the prop defaults to nothing and the dialog promises a

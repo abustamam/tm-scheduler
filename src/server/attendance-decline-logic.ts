@@ -266,7 +266,11 @@ export async function declinePlannedAttendance(
 		// `SIGN_IN_REQUIRED_MESSAGE` out of the seam.
 		const { changed } =
 			actor.proof === "asserted"
-				? await setPlanStatus(database, { ...rung, onlyIfAbsent: true })
+				? await setPlanStatus(database, {
+						...rung,
+						proof: "asserted",
+						onlyIfAbsent: true,
+					})
 				: await setPlanStatus(database, rung);
 		return { ok: true as const, changed, released: 0 };
 	}

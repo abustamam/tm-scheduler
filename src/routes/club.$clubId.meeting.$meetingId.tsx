@@ -968,7 +968,14 @@ function MeetingView() {
 	 * server's.
 	 */
 	function declineFreesRoles(memberId: string): boolean {
-		return canManage || memberId === myId;
+		// #762 / ADR-0026, and it is the FIRST term because it outranks the arm:
+		// freeing roles needs a session bound to a member of this club, whichever
+		// arm would otherwise admit the caller. An anonymous roster pick reaches
+		// the `self` arm and used to release through it — that is #699 — so the
+		// server now refuses the request outright rather than downgrading it, and
+		// a dialog that still promised a release would be promising a write that
+		// throws before anything lands.
+		return isSignedIn && (canManage || memberId === myId);
 	}
 
 	async function writeRung(
@@ -1014,6 +1021,17 @@ function MeetingView() {
 		 *  the rung, free nothing"; see the field's note in `attendance-plan.ts`. */
 		releaseHeldRoles = false,
 	) {
+		// #762: the opt-in survives only if this viewer's decline would actually
+		// free anything. It cannot for an anonymous roster pick, and the server
+		// refuses the REQUEST rather than downgrading it — so sending the flag
+		// anyway loses the member's answer entirely instead of recording it.
+		//
+		// Re-entered with the flag defaulted, so the rung still lands by exactly
+		// the path every other caller takes. One level only: the inner call passes
+		// no flag, so the condition cannot hold twice.
+		if (releaseHeldRoles && !declineFreesRoles(memberId)) {
+			return commitRung(memberId, next, via);
+		}
 		// Roll back to what the UI was ACTUALLY showing, not the loader's
 		// snapshot: nothing here awaits an invalidate before this runs, and for a
 		// plain member `effectivePlan` is ALWAYS `[]` — so a lookup in it alone

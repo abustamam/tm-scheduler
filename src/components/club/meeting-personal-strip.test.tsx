@@ -61,6 +61,11 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 	it("marked unavailable: chip carries the state and the inline undo", async () => {
 		const onSetStatus = vi.fn();
 		renderStrip({
+			// SESSION. Since #762 the undo is `clearPlannedAttendance`, which
+			// destroys an answer and so needs one; an anon fixture here would
+			// render the statement instead and this case would stop being about
+			// the chip. The variant assertions below are the whole point of it.
+			source: "session",
 			member: MEMBER,
 			myStatus: "not_coming",
 			onSetStatus,
@@ -79,6 +84,40 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 		expect(chip.dataset.variant).not.toBe("outline");
 		await userEvent.click(chip);
 		expect(onSetStatus).toHaveBeenCalledWith(null);
+	});
+
+	it("anon viewer who has answered: a STATEMENT, never an undo that refuses (#762)", async () => {
+		// `clearPlannedAttendance` needs a session (ADR-0026), so the inline undo
+		// is a control this viewer cannot run. Offering it means every tap ends
+		// in a refusal toast, and the surface that exists to make answering easy
+		// teaches that answering is broken.
+		const onSetStatus = vi.fn();
+		renderStrip({ member: MEMBER, myStatus: "not_coming", onSetStatus });
+		expect(screen.queryByRole("button", { name: /undo/i })).toBeNull();
+		// The same sentence, minus the affordance — the state signal must not go
+		// with the control.
+		expect(screen.getByText(/you can't make this one\./i)).toBeTruthy();
+		expect(screen.getByText(/sign in to change your answer/i)).toBeTruthy();
+		expect(onSetStatus).not.toHaveBeenCalled();
+	});
+
+	it("anon viewer who said COMING gets the matching statement", async () => {
+		// Both rungs, because the chip carried both and a one-rung test would
+		// leave the other reading the wrong sentence.
+		renderStrip({ member: MEMBER, myStatus: "coming" });
+		expect(screen.getByText(/you'll be there\./i)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /undo/i })).toBeNull();
+	});
+
+	it("anon viewer with NO answer still gets both buttons — the control", async () => {
+		// The fill-blank write is still open to them, so the answer buttons must
+		// survive. Without this, removing the undo could pass equally well with
+		// the whole anon control gone.
+		renderStrip({ member: MEMBER, myStatus: null });
+		expect(screen.getByRole("button", { name: /i'll be there/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /i can't make this one/i }),
+		).toBeTruthy();
 	});
 
 	it("meeting over: attendance statement replaces the chip", () => {
@@ -162,7 +201,7 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 		const onSetStatus = vi.fn();
 		const { getByRole } = render(
 			<MeetingPersonalStrip
-				source="anon"
+				source="session"
 				member={{ id: "m1", name: "Ayesha" } as never}
 				promptIdentity={() => {}}
 				over={false}

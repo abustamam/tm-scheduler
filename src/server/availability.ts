@@ -23,9 +23,13 @@
 //     Toastmaster acting on ANOTHER member's row: a product ceiling on how much
 //     one honour-system caller can sweep in a few honest taps, and deliberately
 //     not a security claim (see `attendance-decline-logic.ts`). Since #762 the
-//     security claim is a SEPARATE gate on both endpoints — freeing roles needs
-//     a proven session — and both seams execute that refusal rather than
-//     describing it.
+//     security claim is a SEPARATE gate on both endpoints — releasing THROUGH
+//     THESE TWO needs a proven session — and both seams execute that refusal
+//     rather than describing it. Stated that narrowly on purpose: `releaseSlot`
+//     (`slots.ts`) reaches the identical end state one slot at a time, still
+//     session-less, nulling the same five columns, and it is `pending-proof`
+//     until the slots child lands. What these two close is the SWEEP, not the
+//     capability.
 //   · The rail's refuses once the meeting is OVER, not merely completed.
 //
 // Folding the two together would have to pick one of each, so they stay
@@ -134,25 +138,53 @@ export const setAvailability = createServerFn({ method: "POST" })
 		// session was read. `logActivity` is null-aware by design (ADR-0016 /
 		// #246), so the id is passed along as-is rather than falling back to the
 		// member — that would file the superadmin's write under their name.
+		//
+		// The proof falls back to the WEAKER value, matching the same fallback in
+		// `attendance-actor-logic.ts` and for its reason: an unknown must fail
+		// closed. The first draft of this line said `"session"` and it was wrong in
+		// the one way that matters — `resolveWriteActorWithProof` returns null for
+		// BOTH impersonation modes, so a READ-ONLY superadmin session would have
+		// taken the unrestricted overwrite branch here while `resolveActor` and
+		// `requireSessionActor` both refuse them and ADR-0020 calls that mode
+		// write-blind. The cost is that a read_write impersonation gets fill-blank
+		// mode on this one legacy delegate; the officer's real surface is
+		// `setPlannedAttendance`, where the same principal resolves through
+		// `requireClubRole` and comes back `"session"`, so admin parity (#246) is
+		// unaffected where it is actually exercised.
 		const answer = {
 			memberId: data.memberId,
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
 			status: "not_coming" as const,
 			actorMemberId: actor?.memberId ?? null,
-			proof: actor?.proof ?? ("session" as const),
+			proof: actor?.proof ?? ("asserted" as const),
 			// Deliberately NO `demoteFrom`. Writing `not_coming` over an officer's
 			// `reached_out` is the ladder working: they asked, the member answered.
 			// Restricting this would silently discard the answer, which is a worse
 			// loss than the "we asked them" bit it would have preserved.
 		};
 		if (answer.proof === "asserted") {
-			await setPlanStatus(db, { ...answer, onlyIfAbsent: true });
+			await setPlanStatus(db, {
+				...answer,
+				proof: "asserted",
+				onlyIfAbsent: true,
+			});
 		} else {
 			await setPlanStatus(db, answer);
 		}
 
-		return { ok: true as const };
+		// `proof` is RETURNED (#762 review), and it is the only thing this fn can
+		// tell a caller that the caller cannot work out for itself. The season
+		// grid offers "Undo" on this toast, and undo is `clearAvailability`, which
+		// now needs a session — so a grid that offers it to everyone offers half
+		// its viewers a control whose every tap ends in a refusal.
+		//
+		// The grid has no session signal of its own (it is mounted by both the
+		// public club shell and the authed schedule), and the honest answer is not
+		// a second guess at one: it is what the write that JUST LANDED actually
+		// resolved to, from the same resolution that decided the write's mode.
+		// Additive, so a tab loaded before this deploy simply ignores it.
+		return { ok: true as const, proof: answer.proof };
 	});
 
 /** Take a member's "not coming" back to "no answer" (row absent).

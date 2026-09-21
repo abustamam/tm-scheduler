@@ -39,6 +39,27 @@
 //      ⇒ one tap releases the just-assigned role with no confirmation and no
 //      undo. Only the COPY varies on `holdsRole`; the dialog always appears.
 //
+// ## The decline branches on the VIEWER, not on the view (#762, ADR-0026)
+//
+// Rules 1 and 2 forbid branching on `holdsRole` because it goes stale in the
+// chat thread. `canRepick` does not: it is false exactly when the page was
+// rendered for a signed-in member, and a session does not evaporate between
+// render and tap. So the decline picks its ENDPOINT from it.
+//
+// It has to. This page IS the nudge link's destination and its audience is
+// session-less by construction — a name in a WhatsApp message, not an account
+// — and `markUnavailableReleasing` now refuses an asserted caller outright
+// rather than downgrading. Left unconditional, the single button this page
+// exists for would have thrown for almost everyone who taps it, losing the
+// answer as well as the release. So a session-less decline records the rung
+// through `setPlannedAttendance` and frees nothing, which is what that caller
+// was always going to get, and the copy says so instead of promising a
+// release that will not happen.
+//
+// The role, if they hold one, stays theirs on the agenda and the officer sees
+// them on the Not Available list — the pre-#663 behaviour, and the reason the
+// dialog's session-less copy points at the officer rather than at the slot.
+//
 // ## Tap targets: `min-h-11` at the call site, not a new size variant
 //
 // `lg` is already the largest non-icon size in `buttonVariants` and it is
@@ -127,6 +148,11 @@ export function PersonalMeetingBody({
 		view.club.timezone,
 	);
 	const holdsRole = view.roles.length > 0;
+	// `canRepick` is true for a name-picked viewer and false for a signed-in
+	// member, so this is the session question asked in the vocabulary the page
+	// already has — see the header's third rule for why it is the one piece of
+	// state a decline may branch on.
+	const canRelease = !canRepick;
 
 	// `isMeetingOver`, NOT `isMeetingLocked`. Locked is `status === "completed"`
 	// only, and clubs routinely never press Complete — so last month's meeting
@@ -168,8 +194,9 @@ export function PersonalMeetingBody({
 						},
 					});
 					toast.success("Great — see you there.");
-				} else {
-					// Unconditional — see rule 1 in the header.
+				} else if (canRelease) {
+					// Unconditional WITHIN this arm — see rule 1 in the header. The arm
+					// itself is chosen by the viewer's session, not by the view.
 					const { released } = await markUnavailableReleasing({
 						data: {
 							memberId: view.member.id,
@@ -180,6 +207,26 @@ export function PersonalMeetingBody({
 					toast.success(
 						released > 0
 							? `Thanks — we've let the team know and freed up your ${released === 1 ? "role" : "roles"}.`
+							: "Thanks — we've let the team know.",
+					);
+				} else {
+					// Session-less: record the answer and free nothing. `releaseHeldRoles`
+					// is left at its `false` default rather than sent as false, so this
+					// is byte-for-byte the payload a pre-#663 client sends.
+					await setPlannedAttendance({
+						data: {
+							memberId: view.member.id,
+							meetingId: meetingUuid,
+							status: "not_coming",
+						},
+					});
+					// `holdsRole` for COPY only, which rules 1 and 2 explicitly allow.
+					// It can be stale in the "role assigned since load" direction, and
+					// the consequence of being wrong here is a sentence that omits the
+					// role — not a write that does the wrong thing.
+					toast.success(
+						holdsRole
+							? "Thanks — we've let the team know. An officer will find cover for your role."
 							: "Thanks — we've let the team know.",
 					);
 				}
@@ -196,7 +243,14 @@ export function PersonalMeetingBody({
 				setPending(null);
 			}
 		},
-		[meetingUuid, onChanged, view.club.id, view.member.id],
+		[
+			canRelease,
+			holdsRole,
+			meetingUuid,
+			onChanged,
+			view.club.id,
+			view.member.id,
+		],
 	);
 
 	// ALWAYS confirms — see rule 2 in the header. `holdsRole` picks the copy, and
@@ -374,12 +428,18 @@ export function PersonalMeetingBody({
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>
-							{holdsRole ? "Give up your role?" : "Tell us you can't make it?"}
+							{canRelease && holdsRole
+								? "Give up your role?"
+								: "Tell us you can't make it?"}
 						</DialogTitle>
 						<DialogDescription>
-							{holdsRole
-								? `You're ${listRoles(view.roles.map((r) => r.roleName))} for ${when}. Telling us you can't make it frees the role up for someone else, and we can't put it back automatically.`
-								: `We'll let the team know you can't make the ${when} meeting. If any role has been assigned to you since this page loaded, it will be freed up too.`}
+							{canRelease
+								? holdsRole
+									? `You're ${listRoles(view.roles.map((r) => r.roleName))} for ${when}. Telling us you can't make it frees the role up for someone else, and we can't put it back automatically.`
+									: `We'll let the team know you can't make the ${when} meeting. If any role has been assigned to you since this page loaded, it will be freed up too.`
+								: holdsRole
+									? `You're ${listRoles(view.roles.map((r) => r.roleName))} for ${when}. We'll let the team know you can't make it and an officer will find cover — your role stays yours until they do.`
+									: `We'll let the team know you can't make the ${when} meeting.`}
 						</DialogDescription>
 					</DialogHeader>
 					<DialogFooter>
@@ -389,7 +449,7 @@ export function PersonalMeetingBody({
 							disabled={busy}
 							onClick={() => setConfirmRelease(false)}
 						>
-							{holdsRole ? "Keep my role" : "Cancel"}
+							{canRelease && holdsRole ? "Keep my role" : "Cancel"}
 						</Button>
 						<Button
 							variant="destructive"
@@ -398,7 +458,9 @@ export function PersonalMeetingBody({
 							aria-busy={pending === "release"}
 							onClick={() => void sendAnswer(false)}
 						>
-							{holdsRole ? "Release & mark me away" : "Yes, I can't make it"}
+							{canRelease && holdsRole
+								? "Release & mark me away"
+								: "Yes, I can't make it"}
 							{pending === "release" ? <SavingIndicator /> : null}
 						</Button>
 					</DialogFooter>

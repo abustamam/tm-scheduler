@@ -169,7 +169,11 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		// rung that is an ANSWER inherits the fill-blank rule rather than the
 		// exemption. (`not_coming` never reaches here — it returned above.)
 		if (proof === "asserted" && data.status !== "reached_out") {
-			const filled = await setPlanStatus(db, { ...answer, onlyIfAbsent: true });
+			const filled = await setPlanStatus(db, {
+				...answer,
+				proof: "asserted",
+				onlyIfAbsent: true,
+			});
 			return { ...filled, released: 0 };
 		}
 		const written = await setPlanStatus(db, {

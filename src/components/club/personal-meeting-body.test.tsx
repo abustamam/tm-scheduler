@@ -145,7 +145,11 @@ function deferred() {
 
 describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 	it("asks before releasing a role, and writes NOTHING until confirmed", async () => {
-		await renderBody(makeView());
+		// SIGNED IN (`canRepick: false`). Since #762 the releasing writer is the
+		// signed-in caller's arm — `markUnavailableReleasing` refuses an asserted
+		// one outright — so an anonymous fixture here would exercise the plain
+		// write and this case would stop being about the confirm at all.
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);
@@ -174,7 +178,7 @@ describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 	});
 
 	it("keeps the role when the confirm is dismissed", async () => {
-		await renderBody(makeView());
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);
@@ -182,11 +186,11 @@ describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 		expect(markUnavailableReleasing).not.toHaveBeenCalled();
 	});
 
-	it("declines through the RELEASING writer, never a plain not_coming", async () => {
+	it("declines through the RELEASING writer when the viewer is signed in", async () => {
 		// `setPlannedAttendance({status:"not_coming"})` would leave the member
 		// declined and still holding the role — the contradiction this page exists
-		// to prevent.
-		await renderBody(makeView());
+		// to prevent, and still the wrong write for a caller who CAN release.
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);
@@ -195,6 +199,53 @@ describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 		);
 		expect(markUnavailableReleasing).toHaveBeenCalledTimes(1);
 		expect(setPlannedAttendance).not.toHaveBeenCalled();
+	});
+
+	it("declines through the PLAIN writer when the viewer has no session (#762)", async () => {
+		// The mirror, and the reason this page needed a client change at all.
+		// `markUnavailableReleasing` now refuses an asserted caller rather than
+		// downgrading, and this page is the nudge link's destination — its
+		// audience is a name in a WhatsApp message, not an account. Left
+		// unconditional, the one button the page exists for would throw for almost
+		// everyone who taps it, losing the ANSWER as well as the release.
+		//
+		// `canRepick` defaults to true here, which is that viewer.
+		await renderBody(makeView());
+		await userEvent.click(
+			screen.getByRole("button", { name: "Can't make it" }),
+		);
+		await userEvent.click(
+			screen.getByRole("button", { name: "Yes, I can't make it" }),
+		);
+		expect(markUnavailableReleasing).not.toHaveBeenCalled();
+		expect(setPlannedAttendance).toHaveBeenCalledTimes(1);
+		expect(setPlannedAttendance).toHaveBeenCalledWith({
+			data: expect.objectContaining({ status: "not_coming" }),
+		});
+		// `releaseHeldRoles` is LEFT OFF rather than sent as false — byte-for-byte
+		// the payload a pre-#663 client sends, which is what the server's zod
+		// default exists to make safe.
+		expect(setPlannedAttendance).not.toHaveBeenCalledWith({
+			data: expect.objectContaining({ releaseHeldRoles: expect.anything() }),
+		});
+	});
+
+	it("still ASKS a session-less viewer first, and still says what will happen", async () => {
+		// The confirm is not the release's dialog, it is the decision's — so it
+		// stays on the arm that frees nothing, where the decision is still "tell
+		// the club you are out". What changes is the PROMISE: an anonymous viewer
+		// must not be told a role is being freed when the write frees nothing.
+		await renderBody(makeView());
+		await userEvent.click(
+			screen.getByRole("button", { name: "Can't make it" }),
+		);
+		expect(await screen.findByText("Tell us you can't make it?")).toBeTruthy();
+		expect(screen.queryByText("Give up your role?")).toBeNull();
+		expect(setPlannedAttendance).not.toHaveBeenCalled();
+		expect(
+			screen.getByText(/an officer will find cover/i),
+			"the copy must say where the role actually goes, not promise a release",
+		).toBeTruthy();
 	});
 });
 
@@ -436,7 +487,7 @@ describe("PersonalMeetingBody — in-flight answers (#676)", () => {
 			await d.promise;
 			return { ok: true, released: 1 };
 		}) as never);
-		await renderBody(makeView());
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);
@@ -517,7 +568,7 @@ describe("PersonalMeetingBody — tap targets (#676)", () => {
 	});
 
 	it("floors the destructive commit and its way out", async () => {
-		await renderBody(makeView());
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);

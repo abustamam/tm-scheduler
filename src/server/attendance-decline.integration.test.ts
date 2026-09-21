@@ -608,6 +608,38 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			expect(await planSetLogs(seed.meetingId)).toHaveLength(1);
 		});
 
+		it("answers OVER an officer's reached_out — the nudge round trip", async () => {
+			// The regression #762's review caught, on the seam the nudge link's
+			// "Can't make it" reaches. The officer taps the member's WhatsApp draft,
+			// which INSERTs `reached_out` onto a blank row; the member then opens
+			// the session-less personal meeting page and answers. Counting the ASK
+			// as an answer refused them — the officer asked and the member could not
+			// reply, which is the whole feature.
+			//
+			// `reached_out` is the officer's record of having asked, never a reply,
+			// so it is still a blank for ADR-0026's purposes (UNANSWERED_RUNGS).
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "reached_out",
+			});
+			const { changed } = await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: false,
+			});
+			expect(changed).toBe(true);
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"not_coming",
+			);
+			expect((await planSetLogs(seed.meetingId))[0]?.detail).toMatchObject({
+				status: "not_coming",
+				proof: "asserted",
+			});
+		});
+
 		it("REFUSES to overwrite an answer that says something else", async () => {
 			// The bug, on the rung that carries it: a member who said `coming` is
 			// flipped to `not_coming` by anyone who can read their id, they lose

@@ -172,7 +172,7 @@ export function SeasonGrid({
 		const self = targetMemberId === currentMemberId;
 		setBusyMeetingId(meetingId);
 		try {
-			await setAvailability({
+			const { proof } = await setAvailability({
 				data: {
 					memberId: targetMemberId,
 					actorMemberId: currentMemberId,
@@ -181,11 +181,28 @@ export function SeasonGrid({
 				},
 			});
 			await onChanged?.();
+			// UNDO ONLY FOR A PROVEN WRITER (#762, ADR-0026). Undo is
+			// `clearAvailability`, which destroys an answer and so needs a session;
+			// this write is open to an anonymous roster pick and reports which of
+			// the two just happened. Offering the action regardless would put a
+			// control on the one toast that says "it worked" whose every tap comes
+			// back "you need to be signed in" — teaching that the grid is broken
+			// rather than that the undo is gated.
+			//
+			// Read from the RESPONSE rather than guessed on the client: this
+			// component is mounted by the public club shell and by the authed
+			// schedule, and a second local notion of "am I signed in" is two flags
+			// that have to agree with the server and nothing making them.
+			const undoable = proof === "session";
 			toast.success(self ? "Marked unavailable." : "Marked them unavailable.", {
-				action: {
-					label: "Undo",
-					onClick: () => clearUnavailable(targetMemberId, meetingId),
-				},
+				...(undoable
+					? {
+							action: {
+								label: "Undo",
+								onClick: () => clearUnavailable(targetMemberId, meetingId),
+							},
+						}
+					: {}),
 			});
 		} catch (err) {
 			showWriteError(err, "Couldn't update.");

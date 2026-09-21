@@ -374,7 +374,31 @@ const DERIVED_GATES: { call: string; file: string; mustCall: string }[] = [
 	},
 ];
 
-const GATE_CALL = new RegExp(`(?:${SESSION_GATES.join("|")})\\s*\\(`);
+/**
+ * A gate call that is actually AWAITED.
+ *
+ * The `await` is not decoration, and the first version of this regex did not
+ * require it. MEASURED during #762's review: replacing
+ * `await requireSessionActor({ clubId: meeting.clubId });` with
+ * `void requireSessionActor({ clubId: meeting.clubId }).catch(() => {});` in
+ * `clearPlannedAttendance` left 198 files and 3255 server tests green, plus
+ * typecheck and biome — the refusal became an unhandled rejection and the
+ * write went ahead. Deleting the call outright WAS caught, so the guard was
+ * catching the careless edit and missing the plausible one.
+ *
+ * Every real gate call in `src/server` is `await <gate>(` today (68 + 60 + 11
+ * `requireUser`, 8 `requireMeetingTemplateEditor`, 3 each of
+ * `requireSessionActor` and `gateAdmin`), so requiring it costs nothing and
+ * closes the shape. Comment-blind, so the prose that names these functions is
+ * not a gate.
+ */
+const GATE_CALL = new RegExp(`await\\s+(?:${SESSION_GATES.join("|")})\\s*\\(`);
+
+/** A seam invoked with the shared db client — `setPlanStatus(db, {`,
+ *  `clearPlanStatus(db, {`, `releaseSlotsAndMarkUnavailable(db, {`. It is the
+ *  shape every write in these modules takes, and `loadMeeting`-style reads use
+ *  `db.select(` instead, so it marks the point a gate must already have run. */
+const DB_WRITE_CALL = "(db, ";
 
 /**
  * `<file>#<Name>` → its comment-blind body, for every POST server fn.
@@ -469,6 +493,32 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			`These POST server fns succeed with NO session and are not classified: ${offenders.join(", ")}.\n` +
 				`Add a session gate (${SESSION_GATES.join(" / ")}), or classify it in WRITE_PROOF_EXCEPTIONS with a reason.\n` +
 				`A gate that takes a userId ARGUMENT (requireClubRole, requireMembership, requireClubAdminView, requireSuperadmin) does not count, and requireMemberInClub reads no session at all.`,
+		).toEqual([]);
+	});
+
+	it("a session gate is AWAITED and runs before the write it guards", () => {
+		// Two failure shapes the presence check above cannot see, both measured:
+		// a gate whose rejection is swallowed (`void …catch()`), and a gate that
+		// runs after the write has already landed. The first is handled by
+		// GATE_CALL requiring `await` — see its note. This is the second.
+		//
+		// Behaviourally invisible, like everything else about these handlers: a
+		// `createServerFn` body cannot be invoked in vitest, so nothing but the
+		// source can see the ORDER. The same reason `attendance-plan-authz` pins
+		// the archive gate's position rather than executing it.
+		const offenders: string[] = [];
+		for (const [key, body] of POST_FNS) {
+			if (key in WRITE_PROOF_EXCEPTIONS || key in NON_WRITE_POSTS) continue;
+			const gate = body.search(GATE_CALL);
+			// No gate at all is the assertion above's finding, not this one's.
+			if (gate === -1) continue;
+			const write = body.indexOf(DB_WRITE_CALL);
+			if (write !== -1 && write < gate) offenders.push(key);
+		}
+		expect(
+			offenders,
+			`These POST server fns reach a db seam before their session gate: ${offenders.join(", ")}.\n` +
+				`A gate that runs after the write refuses nothing — move it above the first \`${DB_WRITE_CALL}\` call.`,
 		).toEqual([]);
 	});
 

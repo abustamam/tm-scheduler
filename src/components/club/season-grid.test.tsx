@@ -24,17 +24,30 @@ import { renderUnderMemoryRouter } from "#/test/router-harness";
 // mount in jsdom; claimSlot/releaseSlot are the ones this test exercises.
 // `vi.mock` factories are hoisted above imports, so the mock fns must be
 // created via `vi.hoisted` rather than plain top-level `const`s.
-const { claimSlot, releaseSlot, toastSuccess, toastError } = vi.hoisted(() => ({
+const {
+	claimSlot,
+	clearAvailability,
+	releaseSlot,
+	setAvailability,
+	toastSuccess,
+	toastError,
+} = vi.hoisted(() => ({
 	claimSlot: vi.fn(async () => ({ ok: true })),
+	clearAvailability: vi.fn(async () => ({ ok: true })),
 	releaseSlot: vi.fn(async () => ({ ok: true })),
+	// #762: the handler REPORTS how the caller's identity was established, and
+	// the grid reads it to decide whether to offer Undo. A mock returning a bare
+	// `{ ok: true }` models a server that never shipped, so the default here is
+	// the session case and the anon case sets its own.
+	setAvailability: vi.fn(async () => ({ ok: true, proof: "session" })),
 	toastSuccess: vi.fn(),
 	toastError: vi.fn(),
 }));
 vi.mock("#/server/slots", () => ({ claimSlot, releaseSlot }));
 vi.mock("#/server/availability", () => ({
-	clearAvailability: vi.fn(),
+	clearAvailability,
 	markUnavailableReleasing: vi.fn(),
-	setAvailability: vi.fn(),
+	setAvailability,
 }));
 vi.mock("sonner", () => ({
 	toast: { success: toastSuccess, error: toastError },
@@ -236,6 +249,61 @@ describe("SeasonGrid prospective claim + undo", () => {
 		expect(claimSlot).not.toHaveBeenCalled();
 		expect(toastSuccess).not.toHaveBeenCalled();
 		expect(toastError).not.toHaveBeenCalled();
+	});
+});
+
+describe("SeasonGrid availability Undo is gated on the write's proof (#762)", () => {
+	afterEach(() => {
+		setAvailability.mockClear();
+		clearAvailability.mockClear();
+		toastSuccess.mockClear();
+		toastError.mockClear();
+	});
+
+	/** The header chip marks the VIEWER unavailable for that meeting — the one
+	 *  availability write reachable in one click from this fixture. */
+	async function markSelfUnavailable() {
+		await renderMembersGrid();
+		const chip = await screen.findByRole("button", { name: /^Can't go —/ });
+		await userEvent.click(chip);
+		await waitFor(() => expect(setAvailability).toHaveBeenCalledTimes(1));
+		expect(toastSuccess).toHaveBeenCalledTimes(1);
+		return toastSuccess.mock.calls[0]?.[1] as
+			| { action?: { label: string; onClick: () => void } }
+			| undefined;
+	}
+
+	it("offers Undo when the write was SESSION-proven", async () => {
+		// The control, and it is the half that matters most: the undo is the
+		// product, and a gate that removed it for everyone would satisfy the
+		// negative below.
+		const options = await markSelfUnavailable();
+		expect(options?.action?.label).toBe("Undo");
+		options?.action?.onClick();
+		await waitFor(() => expect(clearAvailability).toHaveBeenCalledTimes(1));
+	});
+
+	it("withholds Undo when the write was only ASSERTED", async () => {
+		// Undo is `clearAvailability`, which destroys an answer and so needs a
+		// session (ADR-0026). Offered to an anonymous roster pick it is a control
+		// whose every tap comes back "you need to be signed in" — on the one toast
+		// that just said the write worked.
+		setAvailability.mockResolvedValueOnce({ ok: true, proof: "asserted" });
+		const options = await markSelfUnavailable();
+		expect(options?.action).toBeUndefined();
+		// The toast itself still fires: the write DID land, and saying nothing
+		// would be worse than saying it without an undo.
+		expect(toastSuccess.mock.calls[0]?.[0]).toMatch(/marked unavailable/i);
+		expect(clearAvailability).not.toHaveBeenCalled();
+	});
+
+	it("withholds Undo when the server reports no proof at all", async () => {
+		// Fails CLOSED on a shape it does not recognise — a tab that outlived a
+		// deploy, or a field renamed. The alternative default is a control that
+		// refuses, which is the thing being removed.
+		setAvailability.mockResolvedValueOnce({ ok: true } as never);
+		const options = await markSelfUnavailable();
+		expect(options?.action).toBeUndefined();
 	});
 });
 

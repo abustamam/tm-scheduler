@@ -48,7 +48,11 @@ import {
 	user,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
-import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
+import {
+	NOT_ON_ROSTER_MESSAGE,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import {
 	cleanup,
 	hasTestDb,
@@ -95,6 +99,7 @@ const { clearPlanStatus, SELF_SERVICE_RUNGS, setPlanStatus } = await import(
 );
 const { releaseSlotsAndMarkUnavailable } = await import("./availability-logic");
 const { SELF_ONLY_MESSAGE } = await import("./attendance-actor-logic");
+const { requireSessionActor } = await import("./write-actor-logic");
 
 // ---------------------------------------------------------------------------
 // Helpers — mirror the delegating handler bodies against testDb
@@ -126,7 +131,11 @@ async function setAvailabilityPublic(
 		proof,
 	};
 	if (proof === "asserted") {
-		await setPlanStatus(testDb, { ...answer, onlyIfAbsent: true });
+		await setPlanStatus(testDb, {
+			...answer,
+			proof: "asserted",
+			onlyIfAbsent: true,
+		});
 	} else {
 		await setPlanStatus(testDb, answer);
 	}
@@ -218,10 +227,37 @@ describe.skipIf(!hasTestDb)("availability (set + clear)", () => {
 		expect(log).toHaveLength(1);
 		// The rung lives in the detail, not the action name — an assertion on the
 		// action alone cannot tell "not coming" from "coming".
+		//
+		// `proof` beside it (#762, AC1). It is what distinguishes this row from
+		// one the member wrote from their own signed-in device, and the two are
+		// otherwise byte-identical in the feed.
 		expect(log[0]?.detail).toMatchObject({
 			memberId: seed.memberId,
 			status: "not_coming",
+			proof: "asserted",
 		});
+	});
+
+	it("setAvailability answers OVER an officer's reached_out — the nudge round trip", async () => {
+		// The delegate's own comment has always said this is the ladder working:
+		// "they asked, the member answered". #762's first cut broke it by counting
+		// `reached_out` as an answer, which refused the member's reply on the one
+		// path the officer's nudge link leads to. The seam now treats the ASK as
+		// still-blank; this is that claim exercised through the delegate's body.
+		await setPlanStatus(testDb, {
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			status: "reached_out",
+			actorMemberId: seed.adminMemberId,
+		});
+
+		await expect(
+			setAvailabilityPublic(seed.memberId, seed.meetingId, seed.clubId),
+		).resolves.toEqual({ ok: true });
+		expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+			"not_coming",
+		);
 	});
 
 	it("setAvailability is idempotent — re-sending the same answer is a no-op", async () => {
@@ -319,6 +355,82 @@ describe.skipIf(!hasTestDb)("availability (set + clear)", () => {
 		).resolves.toEqual({ ok: true });
 	});
 });
+
+/**
+ * AC5 / AC7 — the gate the three session-only handlers reach (#762).
+ *
+ * `clearPlannedAttendance`, `clearAvailability` and `markUnavailableReleasing`
+ * each open with `await requireSessionActor({ clubId })`, and a
+ * `createServerFn` body cannot be invoked in vitest — so the HANDLER's refusal
+ * is pinned by source (`write-proof.guard.test.ts`, which since #762 also
+ * requires the call to be awaited and to precede the first db seam, both
+ * measured against a mutant). What source cannot say is what that call
+ * actually DOES, and "the gate is present" is worth nothing if the gate grants.
+ *
+ * So this drives `requireSessionActor` itself, through the same request-session
+ * mock the suite already installs — the real function the handlers call, not a
+ * reproduction of it. Each of the three refusals has a different FIX, which is
+ * the whole reason ADR-0026 splits them, so each is asserted by message.
+ */
+describe.skipIf(!hasTestDb)(
+	"the session gate behind the clear/release fns",
+	() => {
+		let seed: SeededClub;
+		let extraUserIds: string[];
+
+		beforeEach(async () => {
+			seed = await seedClub();
+			sessionUserId = null;
+			extraUserIds = [];
+		});
+
+		afterEach(async () => {
+			sessionUserId = null;
+			await cleanup(seed.clubId, [
+				seed.adminUserId,
+				seed.memberUserId,
+				...extraUserIds,
+			]);
+		});
+
+		it("refuses a caller with NO session, with the message the toast matches", async () => {
+			// AC5. `SIGN_IN_REQUIRED_MESSAGE` IS the wire format — an Error subclass
+			// does not survive a createServerFn round trip — so the text is what makes
+			// the client render a "Sign in" action instead of a bare string.
+			await expect(
+				requireSessionActor({ clubId: seed.clubId }),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+		});
+
+		it("refuses a signed-in user who is not on THIS club's roster", async () => {
+			// AC7, and a DIFFERENT refusal on purpose: offering "Sign in" to someone
+			// already signed in is the worst possible answer. The magic link makes
+			// anyone a session, so a session is not the property that grants.
+			const outsider = await addSignedInMember(seed.clubId, "Outsider");
+			extraUserIds.push(outsider.userId);
+			// Same user, a club they are not on.
+			const other = await seedClub();
+			try {
+				sessionUserId = outsider.userId;
+				await expect(
+					requireSessionActor({ clubId: other.clubId }),
+				).rejects.toThrow(NOT_ON_ROSTER_MESSAGE);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("GRANTS an active member of this club — the control", async () => {
+			// Without this the two refusals above pass just as well with the gate
+			// refusing everyone, which would take the clear and the release off every
+			// surface rather than off the unproven ones.
+			sessionUserId = seed.memberUserId;
+			await expect(
+				requireSessionActor({ clubId: seed.clubId }),
+			).resolves.toEqual({ memberId: seed.memberId });
+		});
+	},
+);
 
 describe.skipIf(!hasTestDb)("releaseSlotsAndMarkUnavailable (#204)", () => {
 	let seed: SeededClub;
