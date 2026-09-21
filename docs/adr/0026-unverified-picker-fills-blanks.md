@@ -104,6 +104,13 @@ class of debt it is.
   working for the common case — arriving, picking your name, taking an open role — and asks for a
   session at the moments that used to be free. Every refusal carries a one-tap sign-in link back
   to the page it happened on, because a refusal with no route out of it is worse than the risk.
+  `showWriteError` (`src/components/write-error-toast.ts`) is the one place that renders that, and
+  a refusal surface that does not route through it shows a dead-end toast instead. **Two do not
+  yet**, both wrapping `claimSlot` / `reassignSlot` / `releaseSlot`, all three `pending-proof`:
+  `src/components/club/assign-slot-sheet.tsx` and `src/components/club/member-role-picker.tsx`.
+  They were outside #761's cited files AND outside its own call-site inventory; whichever child
+  flips those three writes converts them, because that is the change that makes their refusal
+  reachable.
 - **Nothing here is retroactive.** No grant changes when this ADR lands; #761 lays the seam, the
   refusal UX and the guard, and the Phase 1 children (slots, attendance, ballots, the role-card
   flag) each flip their own rows against the table above.

@@ -8,11 +8,18 @@
  * catch the write nobody remembered to add, which is how the two failures this
  * repo has already shipped both arrived: #341 and #318 each added an ungated
  * public reader and nothing failed, and #560's minutes leak sat behind a guard
- * that was green. So the candidate set here is DERIVED — every
- * `export const <Name> = createServerFn({ method: "POST" })` under
- * `src/server/`, keyed `<file>#<Name>` — and **a POST fn that is not in the
- * exceptions map below is `session` by default.** A new write with no session
- * gate fails on the day it is written, not on the day somebody sweeps again.
+ * that was green. So the candidate set here is DERIVED: every
+ * `export const <Name> = createServerFn(…)` whose method is not `GET`, in the
+ * non-test, non-`*-logic.ts` modules directly under `src/server/`, keyed
+ * `<file>#<Name>`. **A POST fn that is not in the exceptions map below is
+ * `session` by default**, so a new write with no session gate fails on the day
+ * it is written rather than on the day somebody sweeps again.
+ *
+ * Both narrowings in that sentence — non-recursive, and `-logic.ts` excluded —
+ * are argued at `postServerFns`, and the second is CHECKED rather than
+ * trusted, because a candidate silently leaving the set is the exact shape this
+ * guard exists to catch. The method filter fails closed for the same reason: a
+ * declaration whose method cannot be read is swept, not skipped.
  *
  * The map is the debt register, not the rule. Each class says what kind of debt
  * it is and which issue retires it; the Phase 1 children (slots, attendance,
@@ -55,11 +62,46 @@ import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { readSource, serverFnDeclarations } from "#/test/guard-source";
+import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
+import {
+	readSource,
+	serverFnDeclarations,
+	TOP_LEVEL_BOUNDARY,
+} from "#/test/guard-source";
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = resolve(SELF, "../../..");
 const SERVER = resolve(ROOT, "src/server");
+
+/**
+ * One `export async function <name>(…)` declaration, sliced to the next
+ * top-level one.
+ *
+ * The same slicing `serverFnDeclarations` does, for the plain functions the
+ * gates are: a fixed-width window past the name crosses into whatever follows,
+ * and then a NEIGHBOUR's `requireUser` satisfies an assertion about this
+ * function. That is #565, and having it inside the check that validates the
+ * gates would be the worst place for it.
+ */
+function namedFunctionBody(source: string, name: string): string {
+	const at = source.search(
+		new RegExp(`^(?:export )?(?:async )?function ${name}\\(`, "m"),
+	);
+	if (at === -1) {
+		throw new Error(
+			`${name} is no longer declared as a function where this guard expects it. Re-point the entry rather than deleting it.`,
+		);
+	}
+	const lines = source.slice(at).split("\n");
+	let offset = 0;
+	for (let i = 0; i < lines.length; i++) {
+		if (i > 0 && TOP_LEVEL_BOUNDARY.test(lines[i] as string)) {
+			return source.slice(at, at + offset);
+		}
+		offset += (lines[i] as string).length + 1;
+	}
+	return source.slice(at);
+}
 
 /**
  * Why a POST fn is allowed to succeed without a session.
@@ -69,7 +111,12 @@ const SERVER = resolve(ROOT, "src/server");
  * - `console-asserted` — Phase 2 debt. A role console (TMOD, Grammarian, Timer,
  *   Vote Counter) granting on an asserted role holder; #747 / #752 move these
  *   to sessions.
- * - `public-intake` — no identity at all, bounded intake from a public link.
+ * - `public-intake` — no SESSION and no asserted member id; a bounded write
+ *   from a public link. Not "no identity at all", which was this line's first
+ *   wording and is false for `joinBallot`: it takes a typed name and looks it
+ *   up club-scoped, returning the existing guest row when there is one (#765).
+ *   The class is about where the identity comes from — a person typing their
+ *   own name into an intake form — not about there being none.
  * - `pending-proof` — Phase 1 debt, flipped by its own child issue.
  */
 type WriteProofClass =
@@ -206,8 +253,10 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	},
 
 	// --- Public intake ------------------------------------------------------
-	// No identity is claimed at all. Both mint a row from a public link and are
-	// bounded by their own club lock and archive gate.
+	// Neither carries a session or an asserted member id. Both mint a row from a
+	// public link, from a name the person types themselves, and both are bounded
+	// — `joinBallot` on name length and rows per meeting, and it resolves an
+	// existing guest rather than duplicating one (#765).
 	"guest-pipeline.ts#submitGuestBook": {
 		class: "public-intake",
 		reason: "bounded guest intake",
@@ -232,56 +281,89 @@ const WRITE_PROOF_EXCEPTIONS: Record<
  * clears it today, and `public-readers-archive-gate.guard.test.ts`'s
  * `REVIEWED_UNGATED` already carries the same conclusion for the same fn with
  * the same reason, which is the review this leans on rather than a fresh one.
- * Reported in #761's PR body rather than quietly filed: the issue's inventory
- * counted 29 session-less POST fns and this is the thirtieth it did not count.
+ *
+ * **Every entry is keyed to an OPEN issue**, the shape
+ * `membership-pick-ordering.guard.test.ts`'s `FILED` uses: a waiver pointing at
+ * a number somebody can close is a debt that has been FILED, which is the only
+ * honest form. A waiver whose reason is only prose is a decision nobody
+ * revisits.
  */
 const NON_WRITE_POSTS: Record<string, string> = {
-	"auth-context.ts#setActiveClub":
-		"writes a session-preference COOKIE and no row; `getAuthContext` re-validates it against live memberships on every read, so a session-less caller setting it gains nothing (same conclusion as REVIEWED_UNGATED in public-readers-archive-gate.guard.test.ts)",
+	// Writes a session-preference COOKIE and no row; `getAuthContext`
+	// re-validates it against live memberships on every read, so a session-less
+	// caller setting it gains nothing. #761's inventory counted 29 session-less
+	// POST fns and this is the thirtieth it did not count — reported rather than
+	// filed quietly under WRITE_PROOF_EXCEPTIONS, and #824 is where the
+	// maintainer chooses between gating it and keeping this line.
+	"auth-context.ts#setActiveClub": "#824",
 };
 
 /**
  * Calls that PROVE a session: each reads the session itself and throws without
  * one, so a body containing one cannot be reached by an anonymous caller.
  *
- * **`requireClubRole`, `requireMembership`, `requireClubAdminView` and
- * `requireSuperadmin` are deliberately absent.** Each takes a `userId`
- * ARGUMENT (`guards.ts:254`, `:272`, `:406`, `:432`), so it proves a session
- * only when that id came from one — which is a property of the call site, not
- * of the name. **`requireMemberInClub` must never be added**: it reads no
- * session at all (`guards.ts:562-571`) and takes a member id straight off the
- * wire, which is precisely the asserted identity this guard exists to tell
- * apart.
- *
- * Every identifier here cites the `file:line` where it reads the session and
- * throws without one, and `each session gate really reads the session` below
- * checks those citations still hold rather than trusting the comment.
+ * NO `file:line` citations, and that is a correction. The first version of this
+ * carried them, copied from #761's inventory at `78cba28`, under a comment
+ * saying the test below "checks those citations still hold rather than trusting
+ * the comment". It did not — nothing read them — and five of six were already
+ * stale when the branch opened: `requireMembership :272` and
+ * `requireSuperadmin :432` landed on comment lines, `requireClubRole :254` on a
+ * `markImpersonatedWrite` call, and `requireMemberInClub :562-571` was really
+ * at `:657-666`. A MEASURED claim that is actually ASSUMED is worse than no
+ * claim, so what is recorded here now is the DELEGATION, which
+ * {@link DERIVED_GATES} checks, and the disqualifying property, which
+ * {@link FORBIDDEN_GATES} checks.
  */
-const SESSION_GATES: { call: string; readsSessionAt: string }[] = [
-	// `const user = await getSessionUser(); if (!user) throw …`
-	{ call: "requireUser", readsSessionAt: "src/server/guards.ts:62-68" },
-	// #761's own gate. `requireSessionActor` → `getSessionUser()` →
-	// `resolveSessionActor`, which throws SIGN_IN_REQUIRED_MESSAGE on a null
-	// session and NOT_ON_ROSTER_MESSAGE on a session with no membership here.
-	{
-		call: "requireSessionActor",
-		readsSessionAt: "src/server/write-actor-logic.ts",
-	},
+const SESSION_GATES: string[] = [
+	"requireUser",
+	"requireSessionActor",
 	// Module-private to `minutes.ts`, and the only `gateAdmin` in the tree.
-	// `const currentUser = await requireUser();` on its first line.
-	{ call: "gateAdmin", readsSessionAt: "src/server/minutes.ts:106-110" },
-	// `const user = await requireUser();` before it resolves the meeting's club.
+	"gateAdmin",
+	"requireMeetingTemplateEditor",
+];
+
+/**
+ * Gates that must NEVER be admitted, and the property that disqualifies each.
+ *
+ * The first four take a `userId` ARGUMENT, so each proves a session only when
+ * that id came from one — a property of the call site, not of the name.
+ * `requireMemberInClub` is worse: it takes a MEMBER id straight off the wire and
+ * reads no session at all, which is precisely the asserted identity this guard
+ * exists to tell apart. Both claims are checked below against `guards.ts`.
+ *
+ * A written conflict worth knowing about, because both claims are in the tree:
+ * `public-readers-archive-gate.guard.test.ts`'s `SESSION_GUARDS` DOES list
+ * `MemberInClub`, and calls a match there "the strongest exemption the sweep
+ * grants". It is wrong there for the same reason it would be wrong here, and
+ * #761's review measured the cost — five POST writes exempted from that archive
+ * sweep on that basis alone, two of which (`claimSlot`, `reassignSlot`) have no
+ * archive check anywhere in their chain. Filed as **#825**. Not fixed here:
+ * re-enrolling them changes which endpoints that guard sweeps, which is its own
+ * change. This list does not follow it.
+ */
+const FORBIDDEN_GATES: { call: string; why: string }[] = [
+	{ call: "requireClubRole", why: "takes a userId argument" },
+	{ call: "requireMembership", why: "takes a userId argument" },
+	{ call: "requireClubAdminView", why: "takes a userId argument" },
+	{ call: "requireSuperadmin", why: "takes a userId argument" },
 	{
-		call: "requireMeetingTemplateEditor",
-		readsSessionAt: "src/server/meeting-templates-logic.ts:73-84",
+		call: "requireMemberInClub",
+		why: "takes a MEMBER id off the wire and reads no session at all",
 	},
 ];
 
-/** Where each non-primitive gate is defined, and the primitive it delegates to.
- *  Checked below so a gate cannot keep its exemption after losing its session
- *  read — the failure mode that let `SELF_ASSERT_GUARDS` hide 14 endpoints in
- *  the archive sweep next door. */
+/**
+ * Where each admitted gate is defined, and the session read it must still
+ * reach.
+ *
+ * Every entry in {@link SESSION_GATES} appears here — `requireUser` included,
+ * whose own delegation to `getSessionUser` is the root the other three stand
+ * on. A gate that keeps its exemption after losing its session read is the
+ * failure mode that let `SELF_ASSERT_GUARDS` hide 14 endpoints in the archive
+ * sweep next door, and checking is the only thing that stops it.
+ */
 const DERIVED_GATES: { call: string; file: string; mustCall: string }[] = [
+	{ call: "requireUser", file: "guards.ts", mustCall: "getSessionUser(" },
 	{ call: "gateAdmin", file: "minutes.ts", mustCall: "requireUser(" },
 	{
 		call: "requireMeetingTemplateEditor",
@@ -295,28 +377,52 @@ const DERIVED_GATES: { call: string; file: string; mustCall: string }[] = [
 	},
 ];
 
-const GATE_CALL = new RegExp(
-	`(?:${SESSION_GATES.map((g) => g.call).join("|")})\\s*\\(`,
-);
+const GATE_CALL = new RegExp(`(?:${SESSION_GATES.join("|")})\\s*\\(`);
 
-/** `<file>#<Name>` → its comment-blind body, for every POST server fn. */
+/**
+ * `<file>#<Name>` → its comment-blind body, for every POST server fn.
+ *
+ * Two narrowings, both deliberate and both worth stating because the header
+ * above describes the candidate set as "every `createServerFn` under
+ * `src/server/`" and this is what that actually means:
+ *
+ *  - **`readdirSync` is NOT recursive**, so `src/server/mcp/` is out of scope.
+ *    That surface authenticates on a bearer token rather than a session
+ *    (`mcp/authz-logic.ts`) and `mcp-pending-lifecycle.guard.test.ts` is its
+ *    sweep; classifying it by session gates would be the wrong question.
+ *  - **`*-logic.ts` is excluded.** Those modules are the db-touching seams that
+ *    `server-modules.guard.test.ts` forbids from exporting `createServerFn`s at
+ *    all, so the set is empty by construction. `POST fns live only in the files
+ *    this sweep reads` below checks that rather than trusting it — otherwise a
+ *    POST fn landing in a `-logic.ts` would drop out silently, which is exactly
+ *    the shape this guard exists to catch.
+ *
+ * Fails CLOSED on the method: anything that is not a readable `"GET"` is a
+ * candidate. A declaration naming no method reports `"UNKNOWN"`
+ * (`serverFnDeclarations`), and skipping what cannot be read is how a sweep
+ * loses an endpoint to a declaration STYLE.
+ */
 function postServerFns(): Map<string, string> {
 	const out = new Map<string, string>();
-	const files = readdirSync(SERVER)
+	for (const file of serverFiles()) {
+		for (const decl of serverFnDeclarations(
+			readSource(resolve(SERVER, file)),
+		)) {
+			if (decl.method === "GET") continue;
+			out.set(`${file}#${decl.name}`, decl.body);
+		}
+	}
+	return out;
+}
+
+/** The non-test, non-`-logic` modules directly under `src/server`. */
+function serverFiles(): string[] {
+	return readdirSync(SERVER)
 		.filter(
 			(f) =>
 				f.endsWith(".ts") && !f.includes(".test.") && !f.endsWith("-logic.ts"),
 		)
 		.sort();
-	for (const file of files) {
-		for (const decl of serverFnDeclarations(
-			readSource(resolve(SERVER, file)),
-		)) {
-			if (decl.method !== "POST") continue;
-			out.set(`${file}#${decl.name}`, decl.body);
-		}
-	}
-	return out;
 }
 
 const POST_FNS = postServerFns();
@@ -327,6 +433,24 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 	// sweep. Both floors are well under today's counts and well over zero.
 	it("finds the POST server fns at all", () => {
 		expect(POST_FNS.size).toBeGreaterThan(100);
+	});
+
+	it("POST fns live only in the files this sweep reads", () => {
+		// The exclusion above is safe only while it is EMPTY. A `createServerFn`
+		// in a `-logic.ts` would be invisible here and would violate
+		// `server-modules.guard.test.ts` at the same time, so this is a
+		// belt-and-braces check on a set that should never grow.
+		const strays: string[] = [];
+		for (const f of readdirSync(SERVER)) {
+			if (!f.endsWith("-logic.ts")) continue;
+			for (const decl of serverFnDeclarations(readSource(resolve(SERVER, f)))) {
+				strays.push(`${f}#${decl.name}`);
+			}
+		}
+		expect(
+			strays,
+			`A createServerFn in a *-logic.ts module is invisible to this sweep and unclassifiable: ${strays.join(", ")}. Move it to its server-fn module (server-modules.guard.test.ts has the reason).`,
+		).toEqual([]);
 	});
 
 	it("finds default-`session` fns to check, not only exceptions", () => {
@@ -346,7 +470,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		expect(
 			offenders,
 			`These POST server fns succeed with NO session and are not classified: ${offenders.join(", ")}.\n` +
-				`Add a session gate (${SESSION_GATES.map((g) => g.call).join(" / ")}), or classify it in WRITE_PROOF_EXCEPTIONS with a reason.\n` +
+				`Add a session gate (${SESSION_GATES.join(" / ")}), or classify it in WRITE_PROOF_EXCEPTIONS with a reason.\n` +
 				`A gate that takes a userId ARGUMENT (requireClubRole, requireMembership, requireClubAdminView, requireSuperadmin) does not count, and requireMemberInClub reads no session at all.`,
 		).toEqual([]);
 	});
@@ -405,42 +529,67 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 });
 
 describe("the session gates themselves (#761)", () => {
-	it("never admits a gate that takes a userId argument", () => {
-		// These four are the plausible-looking additions. Each proves a session
-		// only if the id it was handed came from one, which is a property of the
-		// CALL SITE — so admitting them by name is how 14 endpoints hid behind
-		// `SELF_ASSERT_GUARDS` in the archive sweep next door.
-		const names = SESSION_GATES.map((g) => g.call);
-		for (const forbidden of [
-			"requireClubRole",
-			"requireMembership",
-			"requireClubAdminView",
-			"requireSuperadmin",
-			"requireMemberInClub",
-		]) {
+	it("never admits a gate that does not read the session itself", () => {
+		// Each of these is a plausible-looking addition that would exempt every
+		// caller BY NAME rather than by proof — which is how 14 endpoints hid
+		// behind `SELF_ASSERT_GUARDS` in the archive sweep next door.
+		for (const f of FORBIDDEN_GATES) {
 			expect(
-				names,
-				`${forbidden} does not read the session itself — it takes a userId (or a member id, for requireMemberInClub) as an argument. Admitting it here exempts every caller by name rather than by proof.`,
-			).not.toContain(forbidden);
+				SESSION_GATES,
+				`${f.call} ${f.why}, so it does not prove a session on its own.`,
+			).not.toContain(f.call);
+		}
+	});
+
+	it("the forbidden gates really are what this says they are", () => {
+		// The claims in FORBIDDEN_GATES, CHECKED rather than asserted in prose —
+		// the correction #761's review forced, after five of six `file:line`
+		// citations here turned out to be stale under a comment claiming a test
+		// verified them.
+		//
+		// Reads the DECLARATION, sliced to its own end: a whole-file grep would be
+		// satisfied by a neighbour, which is the #565 shape.
+		const guards = readSource(resolve(SERVER, "guards.ts"));
+		for (const f of FORBIDDEN_GATES) {
+			const decl = namedFunctionBody(guards, f.call);
+			if (f.call === "requireMemberInClub") {
+				// The strongest claim in this file, and the one that most needs to be
+				// a test: "reads no session at all". If this fn ever gains one, the
+				// reason it is forbidden evaporates and the sentence above becomes a
+				// lie that nothing catches.
+				expect(
+					decl,
+					`requireMemberInClub now reads the session. The whole reason it is forbidden from SESSION_GATES is that it does not — re-decide, do not just delete the row.`,
+				).not.toMatch(/getSessionUser\(|requireUser\(/);
+			} else {
+				// "Takes a userId argument" — the property that makes the name
+				// insufficient. Checked on the signature, which is the first line of
+				// the slice.
+				expect(
+					decl.slice(0, decl.indexOf(")") + 1),
+					`${f.call} no longer takes a userId argument, so the reason it is forbidden from SESSION_GATES has changed. Re-decide rather than editing the comment.`,
+				).toContain("userId: string");
+			}
 		}
 	});
 
 	it("each session gate really reads the session", () => {
-		// The citation beside each entry in SESSION_GATES is a claim. This checks
-		// it, so a gate cannot keep its exemption after its `requireUser` is
-		// refactored away — comment-blind, because this is a "must BE present"
-		// assertion and a comment naming `requireUser` would satisfy it.
+		// Every gate's delegation, checked against its own DECLARATION rather than
+		// a fixed-width window. The first version read `src.slice(at, at + 900)`,
+		// which crosses declaration boundaries — the #565 over-capture shape, in
+		// the very check that validates the gates: a neighbour's `requireUser`
+		// would have satisfied it for a gate that had lost its own.
+		//
+		// Comment-blind, because this is a "must BE present" assertion and a
+		// comment naming `requireUser` would satisfy a raw read after the call was
+		// deleted.
 		for (const g of DERIVED_GATES) {
-			const src = readSource(resolve(SERVER, g.file));
-			const at = src.indexOf(`${g.call}(`);
-			expect(at, `${g.call} is no longer defined in ${g.file}`).toBeGreaterThan(
-				-1,
+			const decl = namedFunctionBody(
+				readSource(resolve(SERVER, g.file)),
+				g.call,
 			);
-			// The definition plus enough of its body to hold the delegation. Its
-			// own call site would also match `${g.call}(`, so search from the first
-			// occurrence forward and require the delegation within the same region.
 			expect(
-				src.slice(at, at + 900),
+				decl,
 				`${g.call} (${g.file}) no longer calls ${g.mustCall} — it is in SESSION_GATES claiming to read the session and throw without one, and every POST fn behind it is exempt on that claim.`,
 			).toContain(g.mustCall);
 		}
@@ -452,8 +601,15 @@ describe("the session gates themselves (#761)", () => {
 		// "Sign in" toast action recognises the refusal by its text. If
 		// `requireUser` stops raising exactly this, every refusal it produces
 		// degrades to a plain toast with nothing failing.
-		expect(readSource(resolve(SERVER, "guards.ts"))).toContain(
-			'throw new Error("You need to be signed in to do that.")',
-		);
+		//
+		// INTERPOLATED, not restated. A literal here would false-FAIL on a reword
+		// that both sides made together, which is the failure that teaches people
+		// to edit the guard instead of reading it.
+		expect(
+			namedFunctionBody(
+				readSource(resolve(SERVER, "guards.ts")),
+				"requireUser",
+			),
+		).toContain(`throw new Error("${SIGN_IN_REQUIRED_MESSAGE}")`);
 	});
 });

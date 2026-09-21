@@ -17,8 +17,17 @@
  * could tell them apart. ADR-0026 draws the line: an asserted caller may **fill
  * a blank**, and anything that removes, overwrites or rules on someone needs a
  * session bound to that member. This module is the client-safe half of that
- * seam — the type, the two refusal strings, and the matchers a toast uses to
- * recognise them coming back off the wire.
+ * seam, and it holds four things:
+ *
+ *  - the {@link WriteProof} type;
+ *  - the three refusal strings a proven-actor gate can raise
+ *    ({@link SIGN_IN_REQUIRED_MESSAGE}, {@link NOT_ON_ROSTER_MESSAGE},
+ *    {@link MEMBERSHIP_INACTIVE_MESSAGE}) and the two matchers a toast uses to
+ *    recognise the ones that change how it renders;
+ *  - {@link signInHref}, which builds the link a refusal offers;
+ *  - {@link safeRedirect} and {@link DEFAULT_SIGN_IN_REDIRECT}, which decide
+ *    what `/signin` will accept back — the inverse of `signInHref`, and the
+ *    reason it lives beside it rather than in the route.
  *
  * ## Why the refusals are STRINGS
  *
@@ -60,6 +69,26 @@ export const SIGN_IN_REQUIRED_MESSAGE = "You need to be signed in to do that.";
 export const NOT_ON_ROSTER_MESSAGE =
 	"Your account isn't linked to this club's roster. Ask an officer to add your email.";
 
+/**
+ * "Your membership here is not active."
+ *
+ * A THIRD refusal, because `membership_status` has exactly two values and a
+ * proven-actor gate admits only `active` — so without it a lapsed member is told
+ * their account "isn't linked to this club's roster" and to ask an officer to
+ * add their email. Their email IS on the roster; the remedy is reactivation, and
+ * `guards.ts` already says so in its own words for the other direction ("That
+ * member is inactive, reactivate them first."). Splitting the refusals is only
+ * worth anything if each one names the fix that actually works, which is the
+ * whole argument for not collapsing this back into the one above.
+ *
+ * Deliberately has NO matcher and no toast branch. Like an ordinary write
+ * refusal it wants its own text and no action — which is exactly what
+ * `showWriteError`'s default branch already renders — so a matcher would add a
+ * case that did nothing but drift.
+ */
+export const MEMBERSHIP_INACTIVE_MESSAGE =
+	"Your membership in this club isn't active. Ask an officer to reactivate it.";
+
 /** True when a server write refused because the caller had no session. */
 export function isSignInRequiredError(err: unknown): boolean {
 	return err instanceof Error && err.message === SIGN_IN_REQUIRED_MESSAGE;
@@ -87,33 +116,64 @@ export function signInHref(path: string): string {
 export const DEFAULT_SIGN_IN_REDIRECT = "/officers";
 
 /**
+ * Every character a redirect may contain: RFC 3986's unreserved set, sub-delims,
+ * and the `:@/?#%[]` a path, query and fragment need.
+ *
+ * An ALLOWLIST, and that is the whole point. The first version of this function
+ * was a prefix denylist — not `//`, not `/\` — and #761's review measured five
+ * payloads that survived it and still resolved off-origin, because URL parsing
+ * STRIPS ASCII tab, LF and CR before it decides what an origin is. So
+ * `/<TAB>/evil.example` (reachable as `?redirect=/%09/evil.example`) parses as
+ * `//evil.example`. A denylist has to anticipate every character the parser
+ * removes; an allowlist only has to name the ones a real path uses, and a
+ * control character is not one of them. Whitespace and non-ASCII are refused
+ * along with them: what this validates is `location.pathname + location.search`,
+ * which the browser has already percent-encoded.
+ */
+const REDIRECT_CHARS = /^[A-Za-z0-9\-._~!$&'()*+,;=:@/?#%[\]]*$/;
+
+/** Longer than any route this app produces; bounds the work and the log line. */
+const MAX_REDIRECT_LENGTH = 2048;
+
+/**
  * Keep a `?redirect=` only when it is a path on THIS origin.
  *
  * `/signin` hands its `redirect` straight to Better-Auth as `callbackURL`, and
- * before #761 nothing checked it. Every refusal in the product now links here
- * with a redirect, which turns a route that forwards whatever it is given into
- * a one-click open redirector carrying a freshly-minted magic-link session.
+ * before #761 nothing in the route checked it. Every refusal in the product now
+ * links here with a redirect, which turns a route that forwards whatever it is
+ * given into a one-click open redirector carrying a freshly-minted magic-link
+ * session.
  *
- * Two rejections, and the second is the one a naive check misses:
+ * Four conditions, each closing a different escape:
  *
- *  - anything not starting with `/` — `https://evil.example`, `javascript:…`,
- *    a bare `evil.example`;
- *  - anything starting with `//` — a protocol-relative URL. It passes
- *    "starts with a slash" and every browser reads `//evil.example` as
- *    `https://evil.example`. `/\` is the same trick with the other slash, which
- *    browsers normalise, so it is refused too.
+ *  - **a string**, so a repeated `?redirect=` (which arrives as an array) or a
+ *    missing one falls back;
+ *  - **bounded length**;
+ *  - **starts with `/` and not `//`** — a protocol-relative URL passes "starts
+ *    with a slash" and every browser reads `//evil.example` as
+ *    `https://evil.example`;
+ *  - **every character in {@link REDIRECT_CHARS}**, which is what stops the
+ *    parser-stripped control characters described there, and `\` with them.
  *
- * Deliberately NOT a `new URL(value, origin)` round trip: that parses on the
- * server too, where `origin` is not what the browser will use, and it silently
- * accepts a same-origin absolute URL — a shape no caller here produces and one
- * more thing to be wrong about.
+ * Deliberately NOT a `new URL(value, origin)` round trip: that needs an origin,
+ * which on the server is not the one the browser will use, and it silently
+ * accepts a same-origin ABSOLUTE url — a shape no caller here produces and one
+ * more thing to be wrong about. `write-proof.test.ts` uses the URL parser the
+ * other way round, as the ORACLE: whatever this returns must resolve on-origin.
+ *
+ * This is the first line, not the only one. Better-Auth applies its own
+ * character allowlist to `callbackURL` and rejected all five of the payloads
+ * above on 1.6.22 (measured during #761's review), so nothing was reachable in
+ * production. But this function is exported from a general-purpose client-safe
+ * module, and the next caller may have no second line at all.
  */
 export function safeRedirect(
 	value: unknown,
 	fallback: string = DEFAULT_SIGN_IN_REDIRECT,
 ): string {
 	if (typeof value !== "string") return fallback;
-	if (!value.startsWith("/")) return fallback;
-	if (value.startsWith("//") || value.startsWith("/\\")) return fallback;
+	if (value.length === 0 || value.length > MAX_REDIRECT_LENGTH) return fallback;
+	if (!value.startsWith("/") || value.startsWith("//")) return fallback;
+	if (!REDIRECT_CHARS.test(value)) return fallback;
 	return value;
 }

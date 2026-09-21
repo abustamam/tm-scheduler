@@ -10,10 +10,10 @@
  * plain toast with no "Sign in" action and nothing fails. The server half of
  * that pairing is pinned in `write-proof.guard.test.ts`.
  */
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 import {
 	isNotOnRosterError,
 	isSignInRequiredError,
@@ -53,17 +53,22 @@ describe("write-proof error matchers", () => {
 		// in `#/db`, which throws without `DATABASE_URL` — so a unit test that
 		// imported them would be a DB-backed test wearing a unit test's clothes.
 		//
+		// COMMENT-BLIND (`readSource`), not `readFileSync`. These are the "must BE
+		// present" class, where a comment naming the pattern satisfies a raw
+		// `toContain` after the real code is deleted — a false PASS, and the exact
+		// bypass `src/test/guard-source.ts` exists to close. Sharper than usual
+		// here because #761 itself adds a `signin.tsx` comment naming
+		// `safeRedirect`, which a raw read below would have matched.
+		//
 		// `requireUser` is the gate behind ~90 POST fns and raises the message
 		// verbatim.
-		expect(
-			readFileSync(resolve(ROOT, "src/server/guards.ts"), "utf8"),
-		).toContain(`throw new Error("${SIGN_IN_REQUIRED_MESSAGE}")`);
+		expect(readSource(resolve(ROOT, "src/server/guards.ts"))).toContain(
+			`throw new Error("${SIGN_IN_REQUIRED_MESSAGE}")`,
+		);
 		// And `slots-logic.ts` ALIASES this constant rather than restating the
 		// text — which is the only thing that keeps `confirmSlot`'s refusal
 		// matchable after somebody rewords one of the two.
-		expect(
-			readFileSync(resolve(ROOT, "src/server/slots-logic.ts"), "utf8"),
-		).toContain(
+		expect(readSource(resolve(ROOT, "src/server/slots-logic.ts"))).toContain(
 			"export const CONFIRM_NEEDS_SIGN_IN_MESSAGE = SIGN_IN_REQUIRED_MESSAGE;",
 		);
 	});
@@ -113,6 +118,82 @@ describe("safeRedirect", () => {
 		expect(safeRedirect("/\\evil.example")).toBe("/officers");
 	});
 
+	it("refuses the characters URL parsing STRIPS before deciding an origin", () => {
+		// The five payloads #761's review measured past the original prefix
+		// denylist. ASCII tab, LF and CR are removed by the parser, so each of
+		// these becomes `//evil.example` — which is why the check is an allowlist
+		// now and not a longer list of forbidden prefixes. Reachable through the
+		// query string as `?redirect=/%09/evil.example` and friends.
+		for (const payload of [
+			"/\t/evil.example",
+			"/\n/evil.example",
+			"/\r/evil.example",
+			"/\t\t/evil.example",
+			"/\r\n/evil.example",
+		]) {
+			expect(safeRedirect(payload)).toBe("/officers");
+		}
+	});
+
+	it("never resolves off-origin — measured with the WHATWG URL parser", () => {
+		// The PROPERTY, not a payload list: whatever this function returns, a
+		// browser resolving it against the app's origin must stay on that origin.
+		// Using the real parser as the ORACLE is what makes this able to catch a
+		// payload nobody thought of — a hand-written expectation per input can
+		// only ever re-state the author's model of URL parsing, which is exactly
+		// the model that was wrong.
+		const base = "https://gavelup.app";
+		const payloads = [
+			"/club/x/meeting/y",
+			"/officers?from=toast&x=1#frag",
+			"//evil.example",
+			"///evil.example",
+			"/\\evil.example",
+			"/\\\\evil.example",
+			"/\t/evil.example",
+			"/\n//evil.example",
+			"/\r/evil.example",
+			" //evil.example",
+			"\t//evil.example",
+			"https://evil.example",
+			"http://evil.example",
+			"javascript:alert(1)",
+			"data:text/html,<script>alert(1)</script>",
+			"evil.example",
+			"/%2f%2fevil.example",
+			"/%09/evil.example",
+			"/\u0000/evil.example",
+			"/path/\u2028evil",
+			`/${"a".repeat(5000)}`,
+			"",
+		];
+		for (const payload of payloads) {
+			const kept = safeRedirect(payload);
+			expect(
+				new URL(kept, base).origin,
+				`safeRedirect(${JSON.stringify(payload)}) returned ${JSON.stringify(kept)}, which resolves off-origin.`,
+			).toBe(base);
+		}
+	});
+
+	it("keeps every path the app can actually produce", () => {
+		// The other direction, so the allowlist cannot be tightened into
+		// uselessness: a redirect here is `location.pathname + location.search`,
+		// already percent-encoded by the browser.
+		for (const path of [
+			"/",
+			"/officers",
+			"/club/9f0b.../meeting/2026-09-20",
+			"/club/x/meeting/y?tab=agenda&role=Toastmaster",
+			"/me?year=2026-2027",
+			"/admin/club-settings#logo",
+			"/search?q=caf%C3%A9",
+			"/a_b-c.d~e/f",
+		]) {
+			expect(safeRedirect(path)).toBe(path);
+		}
+	});
+
 	it("refuses a non-string, and takes a caller's fallback", () => {
 		expect(safeRedirect(undefined)).toBe("/officers");
 		expect(safeRedirect(42)).toBe("/officers");
@@ -124,7 +205,9 @@ describe("safeRedirect", () => {
 		// The half a unit test cannot see: a correct function the route does not
 		// call. #319's defect was exactly this — both components well covered, the
 		// bug in the expression at the call site.
-		const route = readFileSync(resolve(ROOT, "src/routes/signin.tsx"), "utf8");
+		// Comment-blind: this file's own comment in `signin.tsx` names
+		// `safeRedirect`, so a raw read would pass with the call deleted.
+		const route = readSource(resolve(ROOT, "src/routes/signin.tsx"));
 		expect(route).toContain("redirect: safeRedirect(search.redirect)");
 		expect(route).toContain("callbackURL: redirect");
 	});

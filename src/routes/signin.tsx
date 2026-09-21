@@ -20,11 +20,18 @@ export const Route = createFileRoute("/signin")({
 	// non-officers straight to their dashboard (#542), the member home.
 	//
 	// `redirect` goes straight to Better-Auth as `callbackURL` below, so it must
-	// be a path on THIS origin — `safeRedirect` (`#/lib/write-proof`, tested in
-	// `write-proof.test.ts`) is the whole check. #761 makes every write refusal
-	// in the product link here with a redirect, which is what turns an
-	// unvalidated forward into a one-click open redirector carrying a
-	// freshly-minted session.
+	// be a path on THIS origin. #761 makes every write refusal in the product
+	// link here with a redirect, which is what turns an unvalidated forward into
+	// a one-click open redirector carrying a freshly-minted session.
+	//
+	// TWO lines, in this order. `safeRedirect` (`#/lib/write-proof`, tested in
+	// `write-proof.test.ts`) is the first; Better-Auth's own `callbackURL`
+	// allowlist is the second, and it is a real one — it rejected all five of the
+	// control-character payloads that got past this route's ORIGINAL prefix check
+	// on 1.6.22 (measured during #761's review), which is why none of them was
+	// ever reachable. Do not read that as "the route's check is decorative": it
+	// is a dependency's behaviour on a pinned version, not a contract, and this
+	// route is the half this repo owns.
 	validateSearch: (search: Record<string, unknown>) => ({
 		redirect: safeRedirect(search.redirect),
 	}),

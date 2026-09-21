@@ -33,12 +33,19 @@
  *
  * This module touches `db` and must never be imported by client code.
  */
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import {
+	MEMBERSHIP_INACTIVE_MESSAGE,
 	NOT_ON_ROSTER_MESSAGE,
 	SIGN_IN_REQUIRED_MESSAGE,
 	type WriteProof,
 } from "#/lib/write-proof";
-import { getMembership, getSessionUser, requireMemberInClub } from "./guards";
+import {
+	assertClubNotArchived,
+	getMembership,
+	getSessionUser,
+	requireMemberInClub,
+} from "./guards";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
 
@@ -182,9 +189,22 @@ export async function requestWriteActorWithProof(input: {
 	});
 }
 
-/** What a proven actor resolves to. `memberId` is null ONLY for an impersonating
- *  superadmin, who has no membership in the club and is credited as themselves
- *  by `logActivity`. */
+/**
+ * What a proven actor resolves to.
+ *
+ * `memberId` is null ONLY for an impersonating superadmin, who has no
+ * membership in the club and is credited as themselves by `logActivity` (which
+ * is null-aware by design, ADR-0016 / #246).
+ *
+ * **Handle the null; do not thread it into a query or a write.** Both natural
+ * call-site shapes fail SILENTLY: `eq(column, null)` compiles to `= NULL`,
+ * which is never true and matches nothing, and `.set({ memberId })` writes a
+ * NULL column rather than refusing. Neither errors and neither shows up in a
+ * test that only exercises the signed-in member. A caller that cannot represent
+ * "the superadmin did this" should branch on the null explicitly rather than
+ * pass it along — this note is here because #761 ships the type with no call
+ * sites, and the Phase 1 children are the first to add them.
+ */
 export interface SessionActor {
 	memberId: string | null;
 }
@@ -205,11 +225,23 @@ export async function resolveSessionActor(input: {
 	if (!input.sessionUserId) throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 	const membership = await getMembership(input.sessionUserId, input.clubId);
 	if (membership && membership.status === "active") {
+		// ARCHIVE, from the row just read rather than a second query — that is why
+		// `getMembership` selects `clubs.archived_at` at all (#566).
+		//
+		// `guards.ts` cannot lend its private `assertNotArchived` here, so this
+		// raises the identical sentence out of `#/lib/club-archive`, which is the
+		// shape that file's own doc comment sanctions for a write that cannot call
+		// the assert. Without it this would be the only membership-resolving write
+		// gate in the repo that grants on a taken-down club — and archiving IS the
+		// takedown lever (ADR-0016 / ADR-0024), so every Phase 1 child adopting
+		// this gate would inherit the hole.
+		if (isClubArchived(membership)) throw new Error(CLUB_ARCHIVED_MESSAGE);
 		return { memberId: membership.id };
 	}
-	// Checked AFTER the membership, matching `resolveWriteActorWithProof`'s
-	// order: a superadmin who is also a real member of this club acts as
-	// themselves rather than disappearing into an impersonated write.
+	// Checked AFTER the membership, matching `requireMembership` (`guards.ts`)
+	// and `resolveWriteActorWithProof`: a superadmin who is also a real member of
+	// this club acts as themselves rather than disappearing into an impersonated
+	// write.
 	//
 	// `read_write` ONLY, unlike `resolveWriteActorWithProof`, which marks both
 	// modes. That difference is the difference between attribution and
@@ -224,10 +256,27 @@ export async function resolveSessionActor(input: {
 		input.clubId,
 	);
 	if (session && session.mode === "read_write") {
+		// Memberless, so there is no row to read the archive flag off — the
+		// querying assert, exactly as `requireReadWriteImpersonation` does it, and
+		// for its reason: a real admin cannot act on an archived club, so neither
+		// can the superadmin impersonating one.
+		await assertClubNotArchived(input.clubId);
 		markImpersonatedWrite(input.sessionUserId);
 		return { memberId: null };
 	}
-	throw new Error(NOT_ON_ROSTER_MESSAGE);
+	// Three refusals, not two, because they have three different fixes. A caller
+	// with an INACTIVE membership is on this roster — telling them to ask an
+	// officer to add their email sends them to fix something that is not broken.
+	// `membership_status` has exactly two values, so `membership` being present
+	// at all here means inactive.
+	//
+	// Nothing about the archived club is disclosed on this arm: a non-member
+	// hears about their own membership rather than about the takedown, which is
+	// the same trade `requireMembership` makes with NOT_A_MEMBER and which
+	// discloses less, not more.
+	throw new Error(
+		membership ? MEMBERSHIP_INACTIVE_MESSAGE : NOT_ON_ROSTER_MESSAGE,
+	);
 }
 
 /**
@@ -241,12 +290,14 @@ export async function resolveSessionActor(input: {
  * `requireSuperadmin`, which take a `userId` argument and therefore prove a
  * session only when that id came from one.
  *
- * Two refusals, deliberately distinct, because they have different fixes:
- * `SIGN_IN_REQUIRED_MESSAGE` (no session — the toast offers "Sign in") and
+ * Four refusals, deliberately distinct, because they have four different fixes:
+ * `SIGN_IN_REQUIRED_MESSAGE` (no session — the toast offers "Sign in"),
  * `NOT_ON_ROSTER_MESSAGE` (a session that is not on this roster — signing in
- * again cannot help, so the toast offers nothing and says to ask an officer).
- * Collapsing them into one message would send a member whose email is not on
- * the roster round the magic-link loop forever.
+ * again cannot help, so the toast offers nothing and says to ask an officer),
+ * `MEMBERSHIP_INACTIVE_MESSAGE` (on the roster, lapsed — the fix is
+ * reactivation, not an email), and `CLUB_ARCHIVED_MESSAGE` (the club is taken
+ * down and nobody may write to it, member or not). Collapsing any pair would
+ * send somebody to fix something that is not broken.
  */
 export async function requireSessionActor(input: {
 	clubId: string;
