@@ -1,5 +1,5 @@
 /**
- * A THIRD copy of the membership pick must not arrive unordered (#804).
+ * A FIFTH copy of the membership pick must not arrive unordered (#804).
  *
  * `people.user_id` carries only a plain non-unique index (`people_user_idx`),
  * so one human reachable through two Person rows in one club is representable
@@ -7,9 +7,11 @@
  * #471 fixed `getMembership`; #804 found the same defect in
  * `resolveAdminGrant`, written after it, and fixed it by COPYING the order —
  * deliberately, because routing the hot path through the guard resolver would
- * change its cost and its returned shape. Two copies is a decision; a third
- * arriving silently is how #804 happened in the first place, and the gap was
- * four months.
+ * change its cost and its returned shape. #822 then found two more and copied
+ * it again, for its own reason (`guards.ts` imports Better-Auth, which the
+ * Pathways modules cannot pull in). Four sites carrying one order is a
+ * decision; a FIFTH arriving silently is how #804 happened in the first place,
+ * and the gap was four months.
  *
  * So this sweeps for the SHAPE rather than for a name: any statement that
  * resolves `people.user_id` to a `members` row and keeps ONE of them must
@@ -43,14 +45,19 @@ const SERVER = resolve(ROOT, "src/server");
  * covers ONE pick`), so a second pick landing under a waived name fails even if
  * the attribution below is wrong about which function it sits in.
  *
- * Both are #822: `viewerMaySeeProgress` gates who may see another member's
- * Pathways progress (and checks no `status` at all), `selfMemberIdInClub`
- * decides which membership a written progress mark is attributed to.
+ * EMPTY as of #822, which ordered the two this list was created holding —
+ * `viewerMaySeeProgress` and `selfMemberIdInClub`.
+ *
+ * An empty list is why the two rules over it are FUNCTIONS —
+ * `miscoveredWaivers` and `staleWaivers` below — rather than loops written
+ * inside their own tests. A loop over an empty map executes zero `expect()`
+ * calls, so a rule spelled that way passes whatever it says, and the next entry
+ * filed is the first time anyone finds out whether it still works. Both tests
+ * run their rule over THIS list and over a synthetic sweep that carries real
+ * entries, so the code that would judge a future waiver is the code exercised
+ * today.
  */
-const FILED: Record<string, string> = {
-	"src/server/project-picker-logic.ts:viewerMaySeeProgress": "#822",
-	"src/server/progress-marks-logic.ts:selfMemberIdInClub": "#822",
-};
+const FILED: Record<string, string> = {};
 
 /** Every `*.ts` under `src/server`, recursively, excluding tests. */
 function sourceFiles(dir: string): string[] {
@@ -108,9 +115,13 @@ function declarations(src: string): { at: number; name: string }[] {
  *
  * Sliced from the line the chain's `await` sits on to the `;` that ends it — a
  * drizzle builder chain carries no statement terminator of its own. "Single
- * row" is `.limit(1)` OR an array destructure (`const [m] = await …`), because
- * `selfMemberIdInClub` has neither a limit nor an ordering and takes the first
- * row of an unordered result, which is the same arbitrary pick.
+ * row" is `.limit(1)` OR an array destructure (`const [m] = await …`), and the
+ * destructure arm is not redundant: a chain can keep one row without ever
+ * saying `.limit(1)`. `selfMemberIdInClub` did exactly that until #822 ordered
+ * it — no limit, no ordering, just the first row of an unordered result, which
+ * is the same arbitrary pick by a quieter spelling. It carries both now, so a
+ * limit-only detector would find it today; it would have MISSED it on the
+ * revision this guard exists to have caught, which is why the arm stays.
  *
  * Attribution FAILS CLOSED: a statement with no preceding declaration reports
  * `?`, which is in no waiver.
@@ -140,6 +151,86 @@ function unorderedPicks(src: string, rel: string): Pick[] {
 		i = src.indexOf("eq(people.userId", i + 1);
 	}
 	return found;
+}
+
+/**
+ * Waivers that do not cover exactly ONE statement.
+ *
+ * The leak, closed independently of attribution: even if the walk above
+ * credited a newly-added statement to a waived function, the waiver stops
+ * covering it the moment it covers two — which is the observable the injected
+ * `leakyNewPick` produced and the empty offender list hid. Zero is reported for
+ * the same reason it is in `staleWaivers`: a waiver the sweep cannot place is
+ * covering nothing.
+ */
+function miscoveredWaivers(
+	picks: Pick[],
+	filed: Record<string, string>,
+): string[] {
+	const out: string[] = [];
+	for (const [key, issue] of Object.entries(filed)) {
+		const under = picks.filter((p) => p.key === key);
+		if (under.length !== 1) {
+			out.push(
+				`${key} is waived for ONE statement (${issue}), and the sweep found ${under.length}`,
+			);
+		}
+	}
+	return out;
+}
+
+/**
+ * Waivers that no longer describe filed debt. Three directions:
+ *
+ *  · an issue reference that is not `#<digits>` — a waiver nobody can trace is
+ *    a comment, not a filing;
+ *  · a key the sweep no longer finds, which is stale and must go;
+ *  · a pick that is now ORDERED, which is a fix that landed without the debt
+ *    being closed — how a waiver list turns into decoration.
+ */
+function staleWaivers(picks: Pick[], filed: Record<string, string>): string[] {
+	const out: string[] = [];
+	for (const [key, issue] of Object.entries(filed)) {
+		if (!/^#\d+$/.test(issue)) {
+			out.push(`${key} names ${issue}, which is not an issue number`);
+		}
+		const pick = picks.find((p) => p.key === key);
+		if (!pick) {
+			out.push(`FILED names ${key}, which the sweep no longer finds`);
+		} else if (pick.ordered) {
+			out.push(`${key} is ordered now — drop it from FILED and close ${issue}`);
+		}
+	}
+	return out;
+}
+
+/**
+ * One `unorderedPicks`-visible statement, for the synthetic sweeps the tests
+ * below run their rules over. Shaped like the real picks: destructured,
+ * selecting out of `members`, resolving `people.user_id`.
+ *
+ * `limit: false` is not decoration — it is the only thing here that reaches the
+ * detector's destructure arm. All four real pick sites carry `.limit(1)` today,
+ * so a helper that always emits one leaves that arm unexercised and a
+ * limit-only detector green on the whole tree. See `finds a destructure that
+ * never says .limit(1)`.
+ */
+function pickStatement(opts: {
+	binding: string;
+	ordered?: boolean;
+	/** `false` for the pre-#822 shape: one row kept with no `.limit(1)` at all. */
+	limit?: boolean;
+}): string {
+	const chain = [
+		"\t\t.select({ id: members.id })",
+		"\t\t.from(members)",
+		"\t\t.where(and(eq(people.userId, userId)))",
+	];
+	if (opts.ordered) chain.push("\t\t.orderBy(members.createdAt, members.id)");
+	if (opts.limit ?? true) chain.push("\t\t.limit(1)");
+	// The `;` goes on whatever the last link is: a drizzle chain carries no
+	// terminator of its own, and the detector slices to the first one.
+	return `${[`\tconst [${opts.binding}] = await db`, ...chain].join("\n")};`;
 }
 
 describe("single-row membership picks are ordered (#804)", () => {
@@ -186,35 +277,151 @@ describe("single-row membership picks are ordered (#804)", () => {
 	});
 
 	it("a waiver covers ONE pick, so a new one cannot inherit it", () => {
-		// The leak, closed independently of attribution. Even if the walk above
-		// credited a newly-added statement to a waived function, the waiver stops
-		// covering it the moment it covers two — which is the observable the
-		// injected `leakyNewPick` produced and the empty offender list hid.
-		for (const key of Object.keys(FILED)) {
-			const under = picks.filter((p) => p.key === key);
-			expect(
-				under.map((p) => p.where),
-				`${key} is waived for ONE statement (${FILED[key]}), and the sweep found ${under.length}. A second pick in the same function is new work, not covered debt — order it, or give it its own issue.`,
-			).toHaveLength(1);
-		}
+		expect(
+			miscoveredWaivers(picks, FILED),
+			"A second pick under a waived name is new work, not covered debt — order it, or give it its own issue.",
+		).toEqual([]);
+
+		// FILED is empty, so the line above says nothing about the RULE — it is
+		// the real list passing vacuously, which is what it should do. The rule
+		// itself is exercised here, on the leak spelled as a fixture: two picks
+		// inside ONE waived function, found whatever the attribution walk thinks.
+		const twoUnderOne = [
+			"export async function waivedPick(userId: string) {",
+			pickStatement({ binding: "m" }),
+			pickStatement({ binding: "n" }),
+			"\treturn m?.id ?? n?.id ?? null;",
+			"}",
+		].join("\n");
+		const both = unorderedPicks(twoUnderOne, "src/server/synthetic.ts");
+		expect(both.map((p) => p.key)).toEqual([
+			"src/server/synthetic.ts:waivedPick",
+			"src/server/synthetic.ts:waivedPick",
+		]);
+		expect(
+			miscoveredWaivers(both, { "src/server/synthetic.ts:waivedPick": "#822" }),
+		).toEqual([
+			"src/server/synthetic.ts:waivedPick is waived for ONE statement (#822), and the sweep found 2",
+		]);
+
+		// ZERO, the other side of `!== 1` and the half the docblock claims. A
+		// waiver whose key the sweep cannot place is covering nothing, so it is
+		// reported too. Without this the rule could be written `> 1` — the natural
+		// way to spell "no inheriting" — and every other assertion here passes.
+		expect(
+			miscoveredWaivers(both, { "src/server/synthetic.ts:noSuchPick": "#804" }),
+		).toEqual([
+			"src/server/synthetic.ts:noSuchPick is waived for ONE statement (#804), and the sweep found 0",
+		]);
+
+		// The control, without which the rule could be "report every waiver" and
+		// the cases above would not notice: ONE pick under the same key is clean.
+		const oneUnderOne = [
+			"export async function waivedPick(userId: string) {",
+			pickStatement({ binding: "m" }),
+			"\treturn m?.id ?? null;",
+			"}",
+		].join("\n");
+		expect(
+			miscoveredWaivers(
+				unorderedPicks(oneUnderOne, "src/server/synthetic.ts"),
+				{
+					"src/server/synthetic.ts:waivedPick": "#822",
+				},
+			),
+		).toEqual([]);
 	});
 
 	it("a filed waiver names an issue, and is not a way to hide a fix", () => {
-		// Two directions. A waiver whose fn no longer exists is stale and must go;
-		// a waiver on a pick that is now ORDERED is a fix that landed without the
-		// debt being closed, which is how a waiver list turns into decoration.
-		for (const [key, issue] of Object.entries(FILED)) {
-			expect(issue).toMatch(/^#\d+$/);
-			const pick = picks.find((p) => p.key === key);
-			expect(
-				pick,
-				`FILED names ${key}, which the sweep no longer finds`,
-			).toBeDefined();
-			expect(
-				pick?.ordered,
-				`${key} is ordered now — drop it from FILED and close ${issue}`,
-			).toBe(false);
-		}
+		expect(
+			staleWaivers(picks, FILED),
+			"A FILED entry names a traceable issue, is still found by the sweep, and is still unordered.",
+		).toEqual([]);
+
+		// Empty list again, so the rule runs over a synthetic sweep carrying both
+		// shapes: a pick still unordered, and one that has since been fixed.
+		const src = [
+			"export async function stillUnordered(userId: string) {",
+			pickStatement({ binding: "m" }),
+			"\treturn m?.id ?? null;",
+			"}",
+			"",
+			"export async function nowOrdered(userId: string) {",
+			pickStatement({ binding: "n", ordered: true }),
+			"\treturn n?.id ?? null;",
+			"}",
+		].join("\n");
+		const got = unorderedPicks(src, "src/server/synthetic.ts");
+		expect(got.map((p) => [p.key, p.ordered])).toEqual([
+			["src/server/synthetic.ts:stillUnordered", false],
+			["src/server/synthetic.ts:nowOrdered", true],
+		]);
+
+		// The shape a live waiver has: traceable, found, still unordered.
+		expect(
+			staleWaivers(got, { "src/server/synthetic.ts:stillUnordered": "#822" }),
+		).toEqual([]);
+		// A fix that landed without the debt closing — the direction that turns a
+		// waiver list into decoration.
+		expect(
+			staleWaivers(got, { "src/server/synthetic.ts:nowOrdered": "#822" }),
+		).toEqual([
+			"src/server/synthetic.ts:nowOrdered is ordered now — drop it from FILED and close #822",
+		]);
+		// A waiver whose function the sweep no longer finds.
+		expect(
+			staleWaivers(got, { "src/server/synthetic.ts:deletedPick": "#804" }),
+		).toEqual([
+			"FILED names src/server/synthetic.ts:deletedPick, which the sweep no longer finds",
+		]);
+		// ...and one that traces to nothing, which is a comment, not a filing.
+		expect(
+			staleWaivers(got, {
+				"src/server/synthetic.ts:stillUnordered": "see the ticket",
+			}),
+		).toEqual([
+			"src/server/synthetic.ts:stillUnordered names see the ticket, which is not an issue number",
+		]);
+	});
+
+	// The detector's SECOND arm, which no real source file can exercise any more:
+	// all four pick sites carry `.limit(1)` today, so deleting the destructure
+	// clause from `unorderedPicks` leaves every other case in this file green. The
+	// shape below is `selfMemberIdInClub` as #822 found it — one row kept off an
+	// unordered result with no limit anywhere — which is the revision this guard
+	// exists to have caught, and the claim its docblock makes.
+	it("finds a destructure that never says .limit(1) (the pre-#822 shape)", () => {
+		const unlimited = [
+			"export async function selfMemberIdInClub(userId: string) {",
+			pickStatement({ binding: "m", limit: false }),
+			"\treturn m?.id ?? null;",
+			"}",
+		].join("\n");
+		// The fixture has to BE limit-free or it exercises the other arm and this
+		// case quietly stops being about anything. MEASURED: make `pickStatement`
+		// ignore `limit: false` and every assertion below stays green without this
+		// line — the same vacuity this test exists to close, one level down.
+		expect(unlimited).not.toContain(".limit(");
+
+		const got = unorderedPicks(unlimited, "src/server/synthetic.ts");
+		expect(got.map((p) => p.where)).toEqual([
+			"src/server/synthetic.ts:2 (selfMemberIdInClub)",
+		]);
+		expect(got[0]?.ordered).toBe(false);
+
+		// ...and the same unlimited shape WITH an ordering is not an offender, so
+		// the arm reports a missing ORDER BY rather than reporting every
+		// destructure it meets.
+		const fixed = [
+			"export async function selfMemberIdInClub(userId: string) {",
+			pickStatement({ binding: "m", limit: false, ordered: true }),
+			"\treturn m?.id ?? null;",
+			"}",
+		].join("\n");
+		expect(fixed).not.toContain(".limit(");
+		expect(
+			unorderedPicks(fixed, "src/server/synthetic.ts").map((p) => p.ordered),
+		).toEqual([true]);
 	});
 
 	// A guard's own bug is invisible to a green sweep, and this one HAD one that a
