@@ -68,6 +68,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
+import { showWriteError } from "#/components/write-error-toast";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { listRoles } from "#/lib/list-roles";
 import { isMeetingLocked, isMeetingOver } from "#/lib/meeting-lifecycle";
@@ -189,9 +190,7 @@ export function PersonalMeetingBody({
 				setPending(null);
 				await onChanged();
 			} catch (err) {
-				toast.error(
-					err instanceof Error ? err.message : "Couldn't save that answer.",
-				);
+				showWriteError(err, "Couldn't save that answer.");
 				// Deliberately NOT closing the dialog here: a failed release must stay
 				// open to retry rather than dismissing itself behind a toast.
 				setPending(null);

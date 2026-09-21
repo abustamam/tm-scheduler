@@ -36,6 +36,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { showWriteError } from "#/components/write-error-toast";
 import {
 	buildRoleCounts,
 	slotAccessibleLabel,
@@ -191,10 +192,6 @@ const CATEGORY_LABELS: Record<string, string> = {
 	functionary: "Functionaries",
 };
 
-function errMessage(err: unknown) {
-	return err instanceof Error ? err.message : "Something went wrong.";
-}
-
 /**
  * The shared meeting agenda: roles/slots, speeches, and the union of slot
  * actions, each gated by the `viewer` capabilities object. It renders the same
@@ -319,7 +316,7 @@ export function MeetingAgenda({
 			await fn();
 			await actions.onMutated();
 		} catch (err) {
-			toast.error(errMessage(err));
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setBusySlotId(null);
 		}
@@ -1108,7 +1105,7 @@ function ClaimSheet({
 			toast.success(`You're on as ${slot.roleName}.`);
 			await onClaimed();
 		} catch (err) {
-			toast.error(errMessage(err));
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setSubmitting(false);
 		}
@@ -1153,7 +1150,7 @@ function ClaimSheet({
 			setProjectId(null);
 			await onClaimed();
 		} catch (err) {
-			toast.error(errMessage(err));
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setSubmitting(false);
 		}

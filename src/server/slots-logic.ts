@@ -17,6 +17,7 @@ import {
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
+import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { setPlanStatus } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireClubRole } from "./guards";
@@ -1233,9 +1234,15 @@ export type ConfirmSlotVia = "officer" | "self";
 export const NOT_THE_SLOT_HOLDER_MESSAGE =
 	"Only the member who holds this role can confirm it.";
 
-/** Raised when the officer arm is taken with no session at all. */
-export const CONFIRM_NEEDS_SIGN_IN_MESSAGE =
-	"You need to be signed in to do that.";
+/** Raised when the officer arm is taken with no session at all.
+ *
+ *  An ALIAS, not a copy (#761). This string and `requireUser`'s were already
+ *  identical by hand; the client now matches it through
+ *  `isSignInRequiredError` to decide whether a refusal toast offers a "Sign in"
+ *  action, so a divergence here would silently downgrade that toast to a plain
+ *  one with nothing failing. Kept exported under this name because
+ *  `slots-confirm.integration.test.ts` and its callers read it. */
+export const CONFIRM_NEEDS_SIGN_IN_MESSAGE = SIGN_IN_REQUIRED_MESSAGE;
 
 /**
  * Confirm a claimed slot, from either of two arms (#661).

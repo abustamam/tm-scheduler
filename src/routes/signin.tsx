@@ -13,13 +13,20 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { authClient } from "#/lib/auth-client";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { safeRedirect } from "#/lib/write-proof";
 
 export const Route = createFileRoute("/signin")({
 	// Default post-sign-in landing is the Officer home (#202); it redirects
 	// non-officers straight to their dashboard (#542), the member home.
+	//
+	// `redirect` goes straight to Better-Auth as `callbackURL` below, so it must
+	// be a path on THIS origin — `safeRedirect` (`#/lib/write-proof`, tested in
+	// `write-proof.test.ts`) is the whole check. #761 makes every write refusal
+	// in the product link here with a redirect, which is what turns an
+	// unvalidated forward into a one-click open redirector carrying a
+	// freshly-minted session.
 	validateSearch: (search: Record<string, unknown>) => ({
-		redirect:
-			typeof search.redirect === "string" ? search.redirect : "/officers",
+		redirect: safeRedirect(search.redirect),
 	}),
 	component: SignIn,
 });

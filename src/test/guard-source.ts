@@ -79,3 +79,113 @@ export function stripComments(source: string): string {
 export function readSource(path: string): string {
 	return stripComments(readFileSync(path, "utf8"));
 }
+
+/**
+ * The top-level declaration a slice must stop at.
+ *
+ * Exported because two guards slice against it: this module's
+ * {@link serverFnDeclarations}, and `public-readers-archive-gate.guard.test.ts`'s
+ * own `exportedFnBody`, which slices `export async function` declarations the
+ * same way.
+ */
+export const TOP_LEVEL_BOUNDARY =
+	/^(?:\/\*\*|\/\/|export |const |let |var |function |async function |class |type |interface |enum |declare )/;
+
+/** One `export const <name> = createServerFn({ method: "<method>" })…` declaration. */
+export interface ServerFnDeclaration {
+	name: string;
+	/** `"GET"` or `"POST"`, read off the `createServerFn({ method: … })` call. */
+	method: string;
+	/** The declaration's text, from its `export const` to the next top-level one. */
+	body: string;
+}
+
+/**
+ * Every `createServerFn` declaration in one module, each sliced from its own
+ * `export const` to the next TOP-LEVEL declaration (or EOF).
+ *
+ * Lived in `public-readers-archive-gate.guard.test.ts` until #761 needed the
+ * same slices for `write-proof.guard.test.ts`. Both guards now import it, and
+ * `guard-source.test.ts` beside this file holds the self-test that proves the
+ * slicing, so the property is pinned once rather than per consumer.
+ *
+ * ## Why statement-scoped, and why THIS boundary
+ *
+ * Statement-scoped rather than whole-file on purpose: `meetings.ts` holds both
+ * the public key readers AND authed fns that legitimately call the ungated
+ * `resolveMeetingKey`, so a whole-file "must not contain" assertion would be
+ * unsatisfiable and a whole-file "must contain" one would be satisfied by a
+ * DIFFERENT function's correct call.
+ *
+ * Two earlier attempts were each wrong in one direction. Slicing to the next
+ * `export` over-captured every non-exported declaration in between plus the
+ * following export's JSDoc — `listUpcomingMeetings` absorbed
+ * `const pastMeetingsInput = …`, `getMeetingByKey` absorbed
+ * `getPublicMeetingByKey`'s doc comment. Slicing to a literal `\n});` then
+ * over-captured in a way nobody could see (#565): every `createServerFn` closes
+ * at ONE TAB (`\t});`) because `.handler(` is chained one level in, so that
+ * pattern never matched a declaration's own terminator. It matched the next
+ * column-0 `});` — usually a later `z.object({…})` — and the slice ran straight
+ * through whatever sat between.
+ *
+ * That is not a tidiness problem. Both consuming guards classify a fn by what
+ * its slice CONTAINS, so a swallowed neighbour LENDS its `require*` call to the
+ * fn being classified: `getMinutes` absorbed `gateAdmin`, matched THAT
+ * function's `requireUser`, and was filed as session-guarded and skipped by the
+ * archive sweep — which is how the #560 minutes leak reached production behind
+ * 54/54 green. Measured across `src/server` at the time of the fix: 40 of 162
+ * slices over-captured, one of them by 11,000 characters.
+ *
+ * ## Reading mode is the CALLER's choice
+ *
+ * This takes a source STRING, not a path, because the two assertion classes in
+ * `src/test/guard-source.ts`'s own rule need opposite readers and both slice.
+ * Pass {@link readSource} output for a "must BE present" assertion and raw
+ * `readFileSync` for an offender sweep.
+ */
+export function serverFnDeclarations(source: string): ServerFnDeclaration[] {
+	const out: ServerFnDeclaration[] = [];
+	for (const m of source.matchAll(
+		/^export const (\w+) = createServerFn\(\{\s*method:\s*"(\w+)"/gm,
+	)) {
+		const start = m.index ?? 0;
+		out.push({
+			name: m[1] as string,
+			method: m[2] as string,
+			body: sliceDeclaration(source, start),
+		});
+	}
+	return out;
+}
+
+/**
+ * The body of ONE named `createServerFn` declaration.
+ *
+ * Throws when the name is absent rather than returning `""`: a guard keyed on a
+ * name that was renamed or removed must be re-pointed, not silently satisfied
+ * by an empty slice.
+ */
+export function serverFnBody(source: string, name: string): string {
+	const start = source.indexOf(`export const ${name} = createServerFn`);
+	if (start === -1) {
+		throw new Error(
+			`${name} not found — it was renamed or removed. Re-point this guard rather than deleting the case.`,
+		);
+	}
+	return sliceDeclaration(source, start);
+}
+
+/** Slice from `start` to the line that begins the next top-level declaration. */
+function sliceDeclaration(source: string, start: number): string {
+	const lines = source.slice(start).split("\n");
+	let offset = 0;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] as string;
+		// i > 0 skips the declaration's own opening line.
+		if (i > 0 && TOP_LEVEL_BOUNDARY.test(line)) {
+			return source.slice(start, start + offset);
+		}
+		offset += line.length + 1;
+	}
+	return source.slice(start);
+}

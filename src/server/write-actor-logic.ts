@@ -33,6 +33,11 @@
  *
  * This module touches `db` and must never be imported by client code.
  */
+import {
+	NOT_ON_ROSTER_MESSAGE,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import { getMembership, getSessionUser, requireMemberInClub } from "./guards";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
@@ -69,9 +74,44 @@ export interface WriteActorInput {
 export async function resolveWriteActor(
 	input: WriteActorInput,
 ): Promise<string | null> {
+	return (await resolveWriteActorWithProof(input))?.memberId ?? null;
+}
+
+/** A resolved actor and how their identity was established. */
+export interface ResolvedWriteActor {
+	memberId: string;
+	proof: WriteProof;
+}
+
+/**
+ * {@link resolveWriteActor}, but saying WHICH of its two arms answered (#761).
+ *
+ * Identical resolution order, identical throws, identical impersonation
+ * handling — the only new information is the `proof` field, and `resolveWriteActor`
+ * is now a projection of this function so the two can never diverge. **No call
+ * site changes in #761:** this lays the seam the Phase 1 children (slots,
+ * attendance, ballots, the role-card flag) read to decide whether an asserted
+ * caller may proceed, per ADR-0026.
+ *
+ * `proof: "session"` means the member id came from the caller's OWN active
+ * membership in `clubId`, resolved from their session. `proof: "asserted"` means
+ * it came off the wire and was only club-scoped — a real, active member of this
+ * club, and nothing more. Member ids are public identifiers (they ship in the
+ * public sheet payload), not credentials, so "asserted" carries exactly the
+ * weight of a name written on a paper sign-up sheet.
+ *
+ * Null still means the two legitimate no-credit cases `resolveWriteActor`
+ * documents: an impersonated write, or nobody to credit at all. Neither is an
+ * actor, so neither carries a proof.
+ */
+export async function resolveWriteActorWithProof(
+	input: WriteActorInput,
+): Promise<ResolvedWriteActor | null> {
 	if (input.sessionUserId) {
 		const membership = await getMembership(input.sessionUserId, input.clubId);
-		if (membership && membership.status === "active") return membership.id;
+		if (membership && membership.status === "active") {
+			return { memberId: membership.id, proof: "session" };
+		}
 		// An impersonating superadmin has no membership in this club, so without
 		// this branch they fall through to the asserted arm and the write lands
 		// under whatever roster name the client sent, with `impersonated_by` NULL.
@@ -101,7 +141,7 @@ export async function resolveWriteActor(
 		input.claimedActorMemberId,
 		input.clubId,
 	);
-	return member.id;
+	return { memberId: member.id, proof: "asserted" };
 }
 
 /**
@@ -123,5 +163,97 @@ export async function requestWriteActor(input: {
 		clubId: input.clubId,
 		sessionUserId: user?.id ?? null,
 		claimedActorMemberId: input.claimedActorMemberId ?? null,
+	});
+}
+
+/**
+ * {@link resolveWriteActorWithProof} with the session read from the current
+ * request — what a handler calls when it needs to KNOW which arm answered.
+ */
+export async function requestWriteActorWithProof(input: {
+	clubId: string;
+	claimedActorMemberId?: string | null;
+}): Promise<ResolvedWriteActor | null> {
+	const user = await getSessionUser();
+	return resolveWriteActorWithProof({
+		clubId: input.clubId,
+		sessionUserId: user?.id ?? null,
+		claimedActorMemberId: input.claimedActorMemberId ?? null,
+	});
+}
+
+/** What a proven actor resolves to. `memberId` is null ONLY for an impersonating
+ *  superadmin, who has no membership in the club and is credited as themselves
+ *  by `logActivity`. */
+export interface SessionActor {
+	memberId: string | null;
+}
+
+/**
+ * {@link requireSessionActor} with the session passed in explicitly, so it is
+ * directly testable (`write-actor.integration.test.ts`) — the same split
+ * `resolveWriteActor` / `requestWriteActor` already use.
+ *
+ * Note what it does NOT take: a `claimedActorMemberId`. That absence is the
+ * whole point. There is no arm here that reads an identity off the wire, so no
+ * future edit can add one without changing this signature.
+ */
+export async function resolveSessionActor(input: {
+	clubId: string;
+	sessionUserId: string | null | undefined;
+}): Promise<SessionActor> {
+	if (!input.sessionUserId) throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+	const membership = await getMembership(input.sessionUserId, input.clubId);
+	if (membership && membership.status === "active") {
+		return { memberId: membership.id };
+	}
+	// Checked AFTER the membership, matching `resolveWriteActorWithProof`'s
+	// order: a superadmin who is also a real member of this club acts as
+	// themselves rather than disappearing into an impersonated write.
+	//
+	// `read_write` ONLY, unlike `resolveWriteActorWithProof`, which marks both
+	// modes. That difference is the difference between attribution and
+	// authorization. There, nothing is authorized — the surface already admits
+	// anonymous callers, so recognising a read-only session takes a capability
+	// away (the ability to launder a write under a member's name) and grants
+	// none. Here a grant IS being made, and ADR-0020's read-only mode is
+	// write-blind, so a read-only session must fall through to the refusal below
+	// exactly as any other signed-in non-member does.
+	const session = await getActiveImpersonation(
+		input.sessionUserId,
+		input.clubId,
+	);
+	if (session && session.mode === "read_write") {
+		markImpersonatedWrite(input.sessionUserId);
+		return { memberId: null };
+	}
+	throw new Error(NOT_ON_ROSTER_MESSAGE);
+}
+
+/**
+ * The gate for a write that needs a **proven** actor — a magic-link session
+ * bound to a member of this club (#761, ADR-0026).
+ *
+ * Use it where an asserted name is not enough: removing, overwriting or ruling
+ * on someone. It reads the session itself and throws without one, which is what
+ * makes it a session gate `write-proof.guard.test.ts` recognises — unlike
+ * `requireClubRole` / `requireMembership` / `requireClubAdminView` /
+ * `requireSuperadmin`, which take a `userId` argument and therefore prove a
+ * session only when that id came from one.
+ *
+ * Two refusals, deliberately distinct, because they have different fixes:
+ * `SIGN_IN_REQUIRED_MESSAGE` (no session — the toast offers "Sign in") and
+ * `NOT_ON_ROSTER_MESSAGE` (a session that is not on this roster — signing in
+ * again cannot help, so the toast offers nothing and says to ask an officer).
+ * Collapsing them into one message would send a member whose email is not on
+ * the roster round the magic-link loop forever.
+ */
+export async function requireSessionActor(input: {
+	clubId: string;
+}): Promise<SessionActor> {
+	const user = await getSessionUser();
+	return resolveSessionActor({
+		clubId: input.clubId,
+		sessionUserId: user?.id ?? null,
 	});
 }

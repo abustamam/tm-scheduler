@@ -54,7 +54,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { readSource, stripComments } from "#/test/guard-source";
+import {
+	readSource,
+	serverFnBody,
+	serverFnDeclarations,
+	stripComments,
+	TOP_LEVEL_BOUNDARY,
+} from "#/test/guard-source";
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = resolve(SELF, "../../..");
@@ -65,59 +71,13 @@ const readStripped = (abs: string) => readSource(abs);
 const readRaw = (abs: string) => readFileSync(abs, "utf8");
 
 /**
- * The body of one `export const <name> = createServerFn…` declaration, sliced
- * from its call site to the next top-level `export` (or EOF).
- *
- * Statement-scoped rather than whole-file on purpose: `meetings.ts` holds both
- * the public key readers AND authed fns that legitimately call the ungated
- * `resolveMeetingKey`, so a whole-file "must not contain" assertion would be
- * unsatisfiable and a whole-file "must contain" one would be satisfied by a
- * DIFFERENT function's correct call.
+ * The declaration slicer — `serverFnBody` and the `TOP_LEVEL_BOUNDARY` it stops
+ * at — moved to `src/test/guard-source.ts` in #761, where
+ * `write-proof.guard.test.ts` also imports it, and where
+ * `guard-source.test.ts` holds the self-test that proves a slice stops at its
+ * own declaration (#565). The reasons this slicing is statement-scoped, and the
+ * two earlier boundaries that were each wrong in one direction, live with it.
  */
-const TOP_LEVEL_BOUNDARY =
-	/^(?:\/\*\*|\/\/|export |const |let |var |function |async function |class |type |interface |enum |declare )/;
-
-function serverFnBody(source: string, name: string): string {
-	const start = source.indexOf(`export const ${name} = createServerFn`);
-	if (start === -1) {
-		throw new Error(
-			`${name} not found — it was renamed or removed. Re-point this guard rather than deleting the case.`,
-		);
-	}
-	// End at the next TOP-LEVEL declaration (or the doc comment introducing it),
-	// which is the only boundary that is both tight and reliable here.
-	//
-	// Two earlier attempts were each wrong in one direction. Slicing to the next
-	// `export` over-captured every non-exported declaration in between plus the
-	// following export's JSDoc — `listUpcomingMeetings` absorbed
-	// `const pastMeetingsInput = …`, `getMeetingByKey` absorbed
-	// `getPublicMeetingByKey`'s doc comment. Slicing to a literal `\n});` then
-	// over-captured in a way nobody could see (#565): every `createServerFn` here
-	// closes at ONE TAB (`\t});`) because `.handler(` is chained one level in, so
-	// that pattern never matched a declaration's own terminator. It matched the
-	// next column-0 `});` — usually a later `z.object({…})` — and the slice ran
-	// straight through whatever sat between.
-	//
-	// That is not a tidiness problem. `SESSION_GUARDS` is tested against this
-	// slice, so a swallowed neighbour LENDS its `require*` call to the fn being
-	// classified: `getMinutes` absorbed `gateAdmin`, matched THAT function's
-	// `requireUser`, and was filed as session-guarded and skipped by the sweep
-	// below — which is how the #560 minutes leak reached production behind 54/54
-	// green. Measured across `src/server` at the time of the fix: 40 of 162 slices
-	// over-captured, one of them by 11,000 characters. `bodyStopsAtItsOwnDeclaration`
-	// now fails on any recurrence rather than leaving it invisible.
-	const lines = source.slice(start).split("\n");
-	let offset = 0;
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i] as string;
-		// i > 0 skips the declaration's own opening line.
-		if (i > 0 && TOP_LEVEL_BOUNDARY.test(line)) {
-			return source.slice(start, start + offset);
-		}
-		offset += line.length + 1;
-	}
-	return source.slice(start);
-}
 
 /**
  * The body of one `export async function <name>(…)` declaration, sliced the same
@@ -641,44 +601,18 @@ describe("every session-less server fn is enrolled in the gate (#544)", () => {
 		expect(files.length).toBeGreaterThan(20);
 	});
 
-	// The check that would have caught #565 on the day it was written. Every
-	// classification below is only as good as the slice it reads, and an
-	// over-capturing slice fails SILENTLY and in the dangerous direction: it lends
-	// a neighbour's `require*` to the fn being classified, so the fn drops out of
-	// the sweep entirely. Assert the shape of the slices, not just the verdicts.
-	it("slices a server fn's body without running past its own declaration", () => {
-		const offenders: string[] = [];
-		for (const file of files) {
-			const src = readRaw(resolve(dir, file));
-			for (const m of src.matchAll(/^export const (\w+) = createServerFn/gm)) {
-				const fn = m[1];
-				if (!fn) continue;
-				const body = serverFnBody(src, fn);
-				// A column-0 declaration inside the slice means it swallowed a sibling.
-				// Skipping the first line, which is the declaration's own.
-				const rest = body.slice(body.indexOf("\n") + 1);
-				const bled = rest
-					.split("\n")
-					.find((line) => TOP_LEVEL_BOUNDARY.test(line));
-				if (bled !== undefined) {
-					offenders.push(`${file}:${fn} → swallowed "${bled.slice(0, 60)}"`);
-				}
-			}
-		}
-		expect(
-			offenders,
-			`serverFnBody ran past a declaration's own end. Whatever it swallowed is now read as part of that fn, so a neighbour's require* call can classify it as session-guarded and drop it from the sweep below — that is #565, and it is how #560's minutes leak survived this guard.\n${offenders.join("\n")}`,
-		).toEqual([]);
-	});
+	// The #565 slicing check that used to sit here — that a slice stops at its
+	// own declaration's end rather than lending a neighbour's `require*` to the
+	// fn being classified — moved to `src/test/guard-source.test.ts` with the
+	// slicer itself (#761), because `write-proof.guard.test.ts` now reads the
+	// same slices and the property belongs beside the code, not inside one
+	// consumer. Every classification below still depends on it.
 
 	const anonymous: { file: string; fn: string }[] = [];
 	const selfAsserted: { file: string; fn: string }[] = [];
 	for (const file of files) {
 		const src = readRaw(resolve(dir, file));
-		for (const m of src.matchAll(/^export const (\w+) = createServerFn/gm)) {
-			const fn = m[1];
-			if (!fn) continue;
-			const body = serverFnBody(src, fn);
+		for (const { name: fn, body } of serverFnDeclarations(src)) {
 			if (SESSION_GUARDS.test(body)) continue;
 			// Reachable WITHOUT a session, but covered: the guard's own resolver
 			// asserts the archive, which `SELF_ASSERT_RESOLVERS` proves above. Held
