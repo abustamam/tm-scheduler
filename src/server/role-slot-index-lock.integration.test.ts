@@ -1,22 +1,37 @@
 /**
- * DB-backed gate for #803: `applyAddRoleSlot` must decide a new slot's
- * `slot_index` UNDER the meeting lock, the way `applyAddSpeakerSlot` already
- * does (`lockMeetingForSlotEdit`, ADR-0005 — "which slot is the next index" is
- * not a property of one row, so a per-row guard cannot answer it).
+ * DB-backed gate for #803: `applyAddRoleSlot` must take the meeting lock FIRST
+ * and decide everything the insert depends on from behind it
+ * (`lockMeetingForSlotEdit`, ADR-0005), the way `applyAddSpeakerSlot` already
+ * does. TWO races, one lock, one row:
  *
- * There is deliberately NO unique index on
- * `(meeting_id, role_definition_id, slot_index)` — see #803's Out of Scope, it
- * is the maintainer's step after an audit, because a create that fails on
- * pre-existing data would block the whole deploy at container startup. So
- * nothing in the database catches a duplicate: the serialization IS the
- * constraint here, which is why every assertion below is on the rows that
- * actually land rather than on a grep for the lock call.
+ * - NUMBERING. "Which slot is the next index" is not a property of one row, so
+ *   a per-row guard cannot answer it, and there is deliberately NO unique index
+ *   on `(meeting_id, role_definition_id, slot_index)` — see #803's Out of Scope,
+ *   it is the maintainer's step after an audit, because a create that fails on
+ *   pre-existing data would block the whole deploy at container startup. So
+ *   nothing in the database catches a duplicate: the serialization IS the
+ *   constraint here, which is why every assertion below is on the rows that
+ *   actually land rather than on a grep for the lock call.
+ * - STATUS. `assertMeetingNotLocked` reads `status` off the EXACT row the lock
+ *   takes. Gated on a copy read before the transaction, READ COMMITTED lets a
+ *   concurrent "complete meeting" commit inside the window and the slot lands on
+ *   a completed meeting — the gate having passed on a value that is no longer
+ *   true. `templateId` rides the same read (it picks the shape that decides
+ *   whether a role is a paired speaker role, so a conversion committing in that
+ *   window admits a slot the speaker controls own); it is the same row behind
+ *   the same lock re-read at the same moment, and is not separately gated here.
  *
- * The first test is a pre-fix CONTROL: the shape this path had — the next index
- * read on a pre-transaction snapshot — driven through the same harness as the
- * lock assertion below, and asserted to still produce the duplicate. Without it,
- * "two adds produced 0 and 1" is equally satisfied by two calls that merely
- * never overlapped, and the suite would pass against the bug it exists to catch.
+ * EACH of those two has its own pre-fix CONTROL: the shape this path actually
+ * had, driven through the same harness as the assertion beside it and asserted
+ * to still reproduce the bug. Without one, "the fixed code did the right thing"
+ * is equally satisfied by two calls that merely never overlapped, and the suite
+ * would pass against the bug it exists to catch.
+ *
+ * The `Promise.all` test near the bottom is the one with NO control, and it is
+ * labelled SMOKE for that reason rather than presented as the acceptance check:
+ * whether two overlapping adds collide depends on how their two await profiles
+ * happen to line up, so it CAN pass against the broken shape. The two
+ * deterministic pairs are what this suite actually proves.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
@@ -25,17 +40,23 @@
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activityLog, meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { applyAddRoleSlot, applyAddSpeakerSlot } = await import("./slots-logic");
+// The REAL gate, so the status control below cannot drift from the thing it
+// mirrors — the only difference between the two is where the row came from.
+const { assertMeetingNotLocked } = await import("./meeting-authz-logic");
 
 /** Add a non-paired role def to the seeded club; return its id. */
 async function addRole(clubId: string, name: string): Promise<string> {
@@ -135,6 +156,30 @@ async function unlockedAddRoleSlot(
 	});
 }
 
+/**
+ * The OTHER shape `applyAddRoleSlot` had before this fix: the meeting row —
+ * `status` included — read with no lock, the lock gate applied to that copy, and
+ * only the insert taken under the lock. Calls the real `assertMeetingNotLocked`
+ * on purpose; the one thing that differs from the shipped function is WHERE the
+ * row it judges came from, which is the whole of the finding.
+ */
+async function statusGatedOutsideTheLock(
+	meetingId: string,
+	roleDefinitionId: string,
+) {
+	const meeting = await testDb.query.meetings.findFirst({
+		where: eq(meetings.id, meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+	assertMeetingNotLocked(meeting.status);
+	await testDb.transaction(async (tx) => {
+		await lockMeetingRow(tx, meetingId);
+		await tx
+			.insert(roleSlots)
+			.values({ meetingId, roleDefinitionId, slotIndex: 0 });
+	});
+}
+
 const sleep = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -204,22 +249,6 @@ describe.skipIf(!hasTestDb)(
 			).toEqual([0, 0]);
 		});
 
-		it("two concurrent adds of the same role get consecutive indices", async () => {
-			await Promise.all([
-				applyAddRoleSlot({
-					meetingId: club.meetingId,
-					roleDefinitionId: roleId,
-					actorMemberId: club.adminMemberId,
-				}),
-				applyAddRoleSlot({
-					meetingId: club.meetingId,
-					roleDefinitionId: roleId,
-					actorMemberId: club.adminMemberId,
-				}),
-			]);
-			expect(await indicesFor(club.meetingId, roleId)).toEqual([0, 1]);
-		});
-
 		/**
 		 * The lock is only worth taking if the numbering read is BEHIND it. Same
 		 * harness as the control, and the only thing that differs is which function
@@ -235,6 +264,100 @@ describe.skipIf(!hasTestDb)(
 					}),
 				),
 			).toEqual([0, 1]);
+		});
+
+		/**
+		 * Run `add` against a meeting that is BEING COMPLETED: a writer takes the
+		 * meeting row, sets `status = 'completed'`, and commits only once `add` is
+		 * PROVABLY parked behind that lock. What `add` does next says which copy of
+		 * `status` its gate judged.
+		 *
+		 * `waitForLockWait` rather than the sleep above, because here the wait IS
+		 * what discriminates: it reads `pg_blocking_pids`, so the interleaving
+		 * asserted on is the one that actually happened rather than one the
+		 * scheduler happened to produce on a shared `tm_test` running ~50 suites at
+		 * once. Let the writer commit early and BOTH arms take the uncontended
+		 * path, where both refuse and the pair passes having proved nothing.
+		 */
+		async function raceAgainstACompletingMeeting(add: () => Promise<unknown>) {
+			const writer = await openBlockingTx(async (tx) => {
+				await tx
+					.update(meetings)
+					.set({ status: "completed" })
+					.where(eq(meetings.id, club.meetingId));
+			});
+			// Attached to immediately: the fixed arm REJECTS, and a rejection with no
+			// handler yet is an unhandled one before the assertion can read it.
+			const settled = add().then(
+				() => "resolved",
+				(e: unknown) => `rejected: ${(e as Error).message}`,
+			);
+			await waitForLockWait('from "meetings"', writer.pid);
+			await writer.commit();
+			return {
+				outcome: await settled,
+				indices: await indicesFor(club.meetingId, roleId),
+			};
+		}
+
+		/**
+		 * CONTROL for the status half, through that harness. Gated on a row read
+		 * before the transaction, the add sails past a meeting that is completed by
+		 * the time it writes — a slot on a locked agenda, which is the bug.
+		 */
+		it("CONTROL: status gated outside the lock adds to a completed meeting", async () => {
+			expect(
+				await raceAgainstACompletingMeeting(() =>
+					statusGatedOutsideTheLock(club.meetingId, roleId),
+				),
+			).toEqual({ outcome: "resolved", indices: [0] });
+		});
+
+		/**
+		 * The assertion that control makes meaningful: same interleaving, and the
+		 * only thing that differs is which function runs. Refusing — and leaving no
+		 * row behind — is `status` having been read from the row the lock holds
+		 * rather than from a copy taken before it.
+		 */
+		it("re-reads status under the lock, so a completing meeting wins the race", async () => {
+			expect(
+				await raceAgainstACompletingMeeting(() =>
+					applyAddRoleSlot({
+						meetingId: club.meetingId,
+						roleDefinitionId: roleId,
+						actorMemberId: club.adminMemberId,
+					}),
+				),
+			).toEqual({
+				outcome: `rejected: ${MEETING_LOCKED_MESSAGE}`,
+				indices: [],
+			});
+		});
+
+		/**
+		 * SMOKE, NOT THE GATE — it has no control and cannot have one of the same
+		 * kind. Whether two `Promise.all`ed adds overlap where it matters is up to
+		 * how their two await profiles happen to line up, so this ASYMMETRICALLY
+		 * reports: a failure here is real (it caught the hoisted-read mutation on
+		 * one run), a pass means only that this run serialized. Kept for the part
+		 * that is not scheduling-dependent — two overlapping calls both returning
+		 * rather than erroring — and never read as the acceptance check. The two
+		 * deterministic pairs above are what prove the property.
+		 */
+		it("SMOKE (no control): two overlapping adds both land without erroring", async () => {
+			await Promise.all([
+				applyAddRoleSlot({
+					meetingId: club.meetingId,
+					roleDefinitionId: roleId,
+					actorMemberId: club.adminMemberId,
+				}),
+				applyAddRoleSlot({
+					meetingId: club.meetingId,
+					roleDefinitionId: roleId,
+					actorMemberId: club.adminMemberId,
+				}),
+			]);
+			expect(await indicesFor(club.meetingId, roleId)).toEqual([0, 1]);
 		});
 
 		/**
