@@ -8,16 +8,73 @@
 // stripped and drags `pg` → `Buffer` into the browser (ReferenceError: Buffer
 // is not defined). Keeping the db logic here keeps `pg` server-side. See the
 // header of `members-logic.ts` and `server-modules.guard.test.ts`.
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { alias, QueryBuilder } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
-import { roleDefinitions, roleSlots } from "#/db/schema";
+import {
+	meetingTemplateRoles,
+	meetingTemplates,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { MAX_ROLE_REPEAT_SLOTS } from "#/lib/meeting-template-limits";
 import { deriveRoleKey } from "#/lib/role-def-match";
 import { isReadableClub } from "./club-readable-logic";
 import { isUniqueViolation } from "./pg-errors";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
+
+/** How many slots reference a role — `listRoleDefinitions`' `withSlotCounts`. */
+const slotCount = sql<number>`count(${roleSlots.id})::int`;
+
+/**
+ * How many of the club's own PRIVATE per-meeting agendas declare a role —
+ * `listRoleDefinitions`' `withAgendaCounts` (#802).
+ *
+ * A correlated SUBQUERY, not a third leftJoin, and that is load-bearing:
+ * joined beside `role_slots`, one role's rows would be the CROSS PRODUCT of its
+ * slots and its declarations, so a plain `count()` on either side would report
+ * the other side's cardinality back multiplied. Independent of the outer join,
+ * `slotCount` above keeps the exact shape and the exact number it had before
+ * this existed.
+ *
+ * BUILT rather than written as a `sql` template, which is also not a style
+ * choice. Drizzle omits the table qualifier on an interpolated column whenever
+ * the query it is building has a single table — true of three of
+ * `listRoleDefinitions`' four branches — so the hand-written version emitted
+ * `where "key" = "key" and "club_id" = "club_id"`, which Postgres resolves
+ * against the SUBQUERY's own tables: every row matches and the count comes back
+ * as every declaration in the table. (The fourth branch joins `role_slots`,
+ * qualifies everything, and was correct — so one source produced two different
+ * answers depending on a flag it does not read.) A builder carrying its own
+ * join qualifies every identifier, including the correlation back out to
+ * `role_definitions`, which is the whole point.
+ *
+ * `role_definitions.key` may be NULL for a bank row minted before #801 wrote
+ * keys; `= NULL` is NULL, so such a role counts 0 — correct, since
+ * `meeting_template_roles.key` is NOT NULL and no agenda can declare it.
+ *
+ * Module scope, because every part of it is constant: two table aliases and a
+ * query shape. Building it per call would put the cost on the no-session and
+ * hover-preloaded readers, which are exactly the callers that never ask for it.
+ */
+const declarations = alias(meetingTemplateRoles, "decl");
+const declaringTemplates = alias(meetingTemplates, "decl_tpl");
+const agendaCount = sql<number>`(${new QueryBuilder()
+	.select({ n: sql<number>`count(*)::int` })
+	.from(declarations)
+	.innerJoin(
+		declaringTemplates,
+		eq(declaringTemplates.id, declarations.templateId),
+	)
+	.where(
+		and(
+			eq(declarations.key, roleDefinitions.key),
+			eq(declaringTemplates.clubId, roleDefinitions.clubId),
+			isNotNull(declaringTemplates.meetingId),
+		),
+	)})`;
 
 const roleCategory = z.enum([
 	"leadership",
@@ -39,6 +96,20 @@ export interface RoleDefinitionRow {
 	 *  aggregate join over `role_slots`, which only the admin roles page needs.
 	 *  See `listRoleDefinitions`'s `withSlotCounts`. */
 	slotCount?: number;
+	/** How many of this club's own PRIVATE per-meeting agendas currently declare
+	 *  this role (#802) — the number that tells a non-standing role nobody uses
+	 *  apart from one carrying three nights' worth of slots.
+	 *
+	 *  `undefined` unless the caller asked, for the same reason `slotCount` above
+	 *  is: see `listRoleDefinitions`'s `withAgendaCounts`.
+	 *
+	 *  PRIVATE templates only (`meeting_templates.meeting_id IS NOT NULL`), and
+	 *  only this club's. `meeting_template_roles` has no `club_id` and the seeded
+	 *  contest template is `clubId: null`, so ONE declaration row on a shared or
+	 *  global template is a row every club shares — counting it would report the
+	 *  same number to every club on earth regardless of what that club has
+	 *  actually scheduled. */
+	agendaCount?: number;
 	/** Whether new meetings generate slots for this role (#368). Disabled roles
 	 *  stay in this list — never deleted, never hidden from admin — they just
 	 *  stop being offered anywhere a role is filled. */
@@ -71,6 +142,12 @@ export interface RoleDefinitionRow {
  *  lands. `/admin/roles` renders the flag instead, so a non-standing role is
  *  visible and marked rather than absent.
  *
+ *  `withAgendaCounts` (#802) is the second opt-in aggregate, and it is a
+ *  SIBLING of `withSlotCounts` rather than part of it. Both are off by default
+ *  for the reason the comment inside records; the grouping on `/admin/roles`
+ *  needs to say how many agendas a non-standing role is actually carrying, and
+ *  nothing else does.
+ *
  *  The `templateId` option is gone with the model it belonged to. It existed
  *  because role identity was per (club, template), so the picker had to name a
  *  template to see a contest's roles at all — and naming one made the club's own
@@ -80,6 +157,7 @@ export async function listRoleDefinitions(
 	opts?: {
 		onlyEnabled?: boolean;
 		withSlotCounts?: boolean;
+		withAgendaCounts?: boolean;
 	},
 ): Promise<RoleDefinitionRow[]> {
 	const where = [eq(roleDefinitions.clubId, clubId)];
@@ -110,7 +188,13 @@ export async function listRoleDefinitions(
 	// — they are reachable unauthenticated and the router preloads on hover
 	// (`defaultPreload: "intent"`, `preloadStaleTime: 0`), so a hover would
 	// otherwise fire the aggregate.
-	if (!opts?.withSlotCounts) {
+	//
+	// Four spelled-out branches rather than a conditionally-built query. Drizzle
+	// types a `.select()` off the object literal it is handed, so a conditional
+	// spread makes the row type a union the return annotation then has to
+	// launder; and what a caller pays for is exactly the thing worth being able
+	// to read off the page.
+	if (!opts?.withSlotCounts && !opts?.withAgendaCounts) {
 		return db
 			.select(base)
 			.from(roleDefinitions)
@@ -118,8 +202,26 @@ export async function listRoleDefinitions(
 			.orderBy(...order);
 	}
 
+	if (!opts?.withSlotCounts) {
+		return db
+			.select({ ...base, agendaCount })
+			.from(roleDefinitions)
+			.where(and(...where))
+			.orderBy(...order);
+	}
+
+	if (!opts?.withAgendaCounts) {
+		return db
+			.select({ ...base, slotCount })
+			.from(roleDefinitions)
+			.leftJoin(roleSlots, eq(roleSlots.roleDefinitionId, roleDefinitions.id))
+			.where(and(...where))
+			.groupBy(roleDefinitions.id)
+			.orderBy(...order);
+	}
+
 	return db
-		.select({ ...base, slotCount: sql<number>`count(${roleSlots.id})::int` })
+		.select({ ...base, slotCount, agendaCount })
 		.from(roleDefinitions)
 		.leftJoin(roleSlots, eq(roleSlots.roleDefinitionId, roleDefinitions.id))
 		.where(and(...where))

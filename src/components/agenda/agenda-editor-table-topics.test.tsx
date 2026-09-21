@@ -89,6 +89,8 @@ function draftWith(rows: AgendaDraftRow[]): AgendaDraft {
 		timeZone: "America/Chicago",
 		lengthMinutes: 90,
 		geIntroducesFunctionaries: false,
+		// #802's club-bank picker; nothing here reads it.
+		attachableRoles: [],
 	};
 }
 

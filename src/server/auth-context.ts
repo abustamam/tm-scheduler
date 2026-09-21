@@ -10,7 +10,7 @@ import {
 	loadUserClubMemberships,
 } from "./auth-context-logic";
 import { loadPersonDisplayName } from "./auth-context-person-logic";
-import { getSessionUser } from "./guards";
+import { getSessionUser, requireUser } from "./guards";
 import { getActiveImpersonationForUser } from "./impersonation-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
 import { ensureScheduleToppedUp } from "./schedule-topup-logic";
@@ -186,12 +186,46 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
  * `getAuthContext` re-validates it against live memberships on read, so this is
  * a plain setter (a bad value simply falls back to the default). The client
  * invalidates the router afterward to re-run loaders with the new active club.
+ *
+ * ## Why the session gate (#824)
+ *
+ * This is a POST fn, and until #824 it read no session at all — the thirtieth
+ * such fn, and the one #761's inventory of twenty-nine did not count. It was
+ * waived in `write-proof.guard.test.ts`'s `NON_WRITE_POSTS` on the grounds that
+ * it mints no row, which was TRUE and is not the same as the gate being right.
+ * The choice it persists is a signed-in user's own preference, so a session is
+ * the honest gate, and gating it retires the only entry that map ever held
+ * rather than leaving a fifth bucket beside the four-class write taxonomy.
+ *
+ * Nothing loses a capability, and that was checked rather than assumed. An
+ * anonymous visitor's cookie is never READ: `getAuthContext` returns early with
+ * `activeClubId: null` above, before the `getCookie` call, so a session-less
+ * caller setting it already accomplished nothing. Both call sites already
+ * require a session by construction — `ClubSwitcher` renders nothing until
+ * `clubs.length > 1` (empty with no session), and `club.$clubId.tsx` calls this
+ * only on `publicShellDecision`'s `switchActiveTo`, which is non-null only for a
+ * signed-in member of the viewed club. A guest navigating between clubs reads
+ * `clubUuid` off the route params and never touches this cookie.
+ *
+ * The one reachable behaviour change is a session that expired between page load
+ * and the click: the switcher now shows the server's refusal instead of a silent
+ * no-op, which is the branch `club-switcher.test.tsx` already covers (#392).
+ *
+ * ## What it deliberately does NOT gate
+ *
+ * Membership in `data.clubId`. A signed-in user may still set the cookie to any
+ * club UUID, including one they do not belong to, and that is the design:
+ * `resolveActiveClubId` intersects the cookie with their live memberships on
+ * every read, so a club they are not in resolves to their default and grants
+ * nothing. Adding a membership check here would duplicate that filter in a
+ * second place and make the two able to disagree.
  */
 export const setActiveClub = createServerFn({ method: "POST" })
 	.validator((input: unknown) =>
 		z.object({ clubId: z.string().uuid() }).parse(input),
 	)
 	.handler(async ({ data }) => {
+		await requireUser();
 		setCookie(ACTIVE_CLUB_COOKIE, data.clubId, {
 			path: "/",
 			httpOnly: true,

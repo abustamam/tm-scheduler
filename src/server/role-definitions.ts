@@ -20,16 +20,30 @@ import { applyTemplateSyncToUpcomingMeetings } from "./slots-logic";
 const uuid = z.string().uuid();
 
 /** The club's role template (ordered), each annotated with how many existing
- *  slots reference it. Backs the admin role-template manager. AUTHED — any
- *  active member of the club may read. */
+ *  slots reference it and how many of the club's agendas declare it. Backs the
+ *  admin role-template manager. AUTHED — any active member of the club may
+ *  read. */
 export const listClubRoles = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubViewAccess(currentUser.id, clubId);
 		// The one caller that reads `slotCount` — the admin page disables deleting
-		// a role that existing meeting slots reference.
-		return listRoleDefinitions(clubId, { withSlotCounts: true });
+		// a role that existing meeting slots reference — and, since #802, the one
+		// that reads `agendaCount`, which its "Not on standard meetings" section
+		// uses to tell a role nobody has put on an agenda from one carrying three.
+		//
+		// BOTH aggregates are turned on HERE rather than in `listRoleDefinitions`,
+		// and this handler is the whole of "passed only by the /admin/roles
+		// loader": that loader is this server fn's only caller, and its validator
+		// takes a bare club uuid, so there is nowhere else a flag could come from.
+		// `getPublicClubRoles` (no session) and `loadMeetingDetail`'s "+ Add role"
+		// picker (preloaded on hover) go through `listRoleDefinitions` without
+		// either flag and issue neither the join nor the subquery.
+		return listRoleDefinitions(clubId, {
+			withSlotCounts: true,
+			withAgendaCounts: true,
+		});
 	});
 
 /** The club's role template (ordered), for the PUBLIC printable role sheet

@@ -423,7 +423,22 @@ export function SeasonGrid({
 			    columns this way" hint (retracting at scroll end), and a mask on the
 			    bordered element would fade the border itself. */}
 			<div className="rounded-xl border">
-				<div className="scroll-fade-r overflow-auto rounded-xl">
+				{/* `relative` is NOT decoration, and it is the whole of #820.
+				    `overflow-auto` clips a normal-flow child, but an ABSOLUTELY
+				    positioned descendant lays out against its nearest POSITIONED
+				    ancestor — and without one that is the initial containing block,
+				    i.e. the viewport, which no `overflow` here can reach. The
+				    `sr-only` contact labels `WhatsAppPhoneLink` renders in the phone
+				    column are exactly that: Tailwind's `sr-only` is
+				    `position:absolute`, so they sat at the table's right edge and
+				    dragged `documentElement.scrollWidth` out with them. MEASURED on
+				    production at a 375px viewport: 876px of document scroll against a
+				    360px client width, with this box already clipping a 978px table
+				    into 326px correctly — which is why the page scrolled sideways and
+				    read as the scroller's bug when it was not. Same one-line remedy as
+				    the guest-book confirm table (#806); `season-grid-geometry.test.ts`
+				    is the gate, with a control that removes this class. */}
+				<div className="relative scroll-fade-r overflow-auto rounded-xl">
 					<table className="border-separate border-spacing-1">
 						<thead>
 							<tr>

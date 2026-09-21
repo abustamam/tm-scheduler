@@ -15,10 +15,11 @@
  * A `-logic.ts` so `#/db` never leaks into the client bundle (server-modules
  * guard). Never imported by client code.
  */
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	members,
+	officerTerms,
 	pathEnrollments,
 	pathwaysPaths,
 	pathwaysProjects,
@@ -123,7 +124,25 @@ export async function selfPersonId(userId: string): Promise<string | null> {
 	return resolveUserPersonId(userId);
 }
 
-/** The signed-in user's membership id in a club, for mark attribution. */
+/**
+ * The signed-in user's membership id in a club, for mark attribution.
+ *
+ * NOT a grant — nothing branches on what this returns. It supplies
+ * `markedByMemberId` on a progress mark (`markMyProject`, and `resolveMarkAuthz`
+ * for the admin-acting-for-a-member path), so what an arbitrary pick moves is
+ * which membership a written mark is ATTRIBUTED to. Same family as #396's
+ * "derive the actor from the session": a record nobody reads at write time and
+ * everybody reads later.
+ *
+ * NO status filter, deliberately, and this is the one place it differs from
+ * `viewerMaySeeProgress` beside it. Authorization for a mark is person-level and
+ * happens before this is called (`resolveMarkAuthz`, `requireClubRole`); this
+ * only names the row to credit. Filtering to active would hand `null` — "marked
+ * by nobody" — to a member whose roster row lapsed between the mark and the
+ * read, which loses attribution the caller already earned. The ordering carries
+ * the preference instead: an active membership out-ranks a lapsed one, and the
+ * lapsed row is still named when it is all there is.
+ */
 export async function selfMemberIdInClub(
 	userId: string,
 	clubId: string,
@@ -132,7 +151,43 @@ export async function selfMemberIdInClub(
 		.select({ id: members.id })
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
-		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)));
+		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
+		// Joined for the ORDER BY alone — the count is never selected.
+		.leftJoin(
+			officerTerms,
+			and(
+				eq(officerTerms.membershipId, members.id),
+				isNull(officerTerms.termEnd),
+			),
+		)
+		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)))
+		// `members.id` is the primary key, so `members.id` in the select is
+		// functionally dependent on it and needs no further grouping. Nothing here
+		// crosses a join into another table's columns, so this one key is enough.
+		.groupBy(members.id)
+		// The SAME five-key total order `getMembership` carries (`guards.ts`), the
+		// third and last copy of it (#822) — `resolveAdminGrant` (#821) and
+		// `viewerMaySeeProgress` are the others, and THE COPIES MUST MOVE TOGETHER.
+		// The reason each key is where it is lives over `getMembership`; read it
+		// there before touching any of them.
+		//
+		// This had neither an ordering NOR a `.limit(1)`: it destructured the first
+		// row of an unordered multi-row result, which is the same arbitrary pick by
+		// a different spelling. `people.user_id` has only a plain non-unique index
+		// (`people_user_idx`), so one human reachable through two Person rows in one
+		// club is representable, and two marks ticked a second apart could be
+		// credited to two different memberships.
+		.orderBy(
+			sql`(${members.status} = 'active') desc`,
+			sql`(${members.clubRole} = 'admin') desc`,
+			desc(sql`count(${officerTerms.id})`),
+			members.createdAt,
+			members.id,
+		)
+		// Explicit now that the row is chosen rather than happened upon. The
+		// destructure already discarded the rest; this stops the database
+		// materialising them.
+		.limit(1);
 	return m?.id ?? null;
 }
 

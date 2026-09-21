@@ -55,11 +55,17 @@ export function MeetingWordOfTheDayDialog({
 				data: {
 					meetingId: meeting.id,
 					selfMemberId,
-					wordOfTheDay:
-						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
-					wodDefinition:
-						String(form.get("wodDefinition") ?? "").trim() || undefined,
-					wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
+					// TRIMMED, not `|| undefined` (#793). This form renders all three
+					// inputs and submits all three, so what it sends is what the
+					// Grammarian sees — and a blanked input has to reach the writer as
+					// `""`, which clears, rather than as silence, which no longer does.
+					// `applyWordOfTheDayUpdate` became a patch in the same change, and a
+					// patch writer removes a form's only way to clear a field unless the
+					// form is changed in the same breath; that is the trap #772 hit on
+					// the meeting-meta dialog one file over.
+					wordOfTheDay: String(form.get("wordOfTheDay") ?? "").trim(),
+					wodDefinition: String(form.get("wodDefinition") ?? "").trim(),
+					wodExample: String(form.get("wodExample") ?? "").trim(),
 				},
 			});
 			toast.success("Word of the day updated.");

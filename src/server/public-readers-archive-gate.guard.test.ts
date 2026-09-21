@@ -313,7 +313,6 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	// archiving to remove. The club list is archive-filtered at its own seam now.
 	getAuthContext:
 		"session plumbing; the club list it returns is archive-filtered in loadUserClubMemberships (#560)",
-	setActiveClub: "writes a session preference",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
 	// Each of these resolves the meeting's club and then runs requireUser +

@@ -23,6 +23,13 @@
  *      not read as a move. The admin dialog still sends it, so the comparison
  *      itself still has to work — `meeting-meta-patch.integration.test.ts`
  *      covers that arm.
+ *   3. **A Word-of-the-Day save must leave the rest of the WORD alone (#793).**
+ *      The same class as (1), one writer over and one scope in: #772 closed it
+ *      on the general writer, and `applyWordOfTheDayUpdate` went on replacing
+ *      all three of its own columns — so a Grammarian saving a word reverted an
+ *      example the Toastmaster had added since their page loaded. The tri-state
+ *      cases below are that writer's half; the editor's half (which fields it
+ *      sends at all) is in `personal-meeting-editors.test.tsx`.
  *
  * The denial cases are stated in the editors' terms rather than the resolvers':
  * the question this file answers is "can the Grammarian who tapped their chat
@@ -158,10 +165,17 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 		return { allowed: true as const, via: authz.via };
 	}
 
-	/** The Word-of-the-Day save the route makes, end to end. */
+	/** The Word-of-the-Day save the route makes, end to end.
+	 *
+	 *  Each field is the writer's tri-state since #793: omit it to leave the
+	 *  column alone, pass `null` or `""` to clear it, pass a value to store it. */
 	async function saveWord(
 		selfMemberId: string | null,
-		wod: { word?: string; definition?: string; example?: string },
+		wod: {
+			word?: string | null;
+			definition?: string | null;
+			example?: string | null;
+		},
 	) {
 		const authz = await resolveWordOfTheDayAuthz({
 			meetingId: club.meetingId,
@@ -243,18 +257,108 @@ describe.skipIf(!hasTestDb)("focused duty editors — the writes", () => {
 			);
 		});
 
-		it("carries an untouched definition and example back with a new word", async () => {
-			// `applyWordOfTheDayUpdate` nulls what it is not given, so the editor
-			// submits all three every time. A word-only payload is the bug.
+		/**
+		 * Inverted by #793. It used to send all three and assert the two it was not
+		 * editing survived, because the writer nulled what it was not given — the
+		 * shape #772 removed from the general writer. Now the word-only payload IS
+		 * the correct one, and the two columns it says nothing about are the
+		 * writer's responsibility rather than every caller's memory.
+		 */
+		it("a word-only save leaves the definition and the example alone", async () => {
 			await addRoleSlot(club, "Grammarian", club.memberId);
-			await saveWord(club.memberId, {
-				word: "loquacious",
-				definition: STORED_META.wodDefinition,
-				example: STORED_META.wodExample,
-			});
+			await saveWord(club.memberId, { word: "loquacious" });
 			const after = await readMeeting(club.meetingId);
+			expect(after?.wordOfTheDay).toBe("loquacious");
 			expect(after?.wodDefinition).toBe(STORED_META.wodDefinition);
 			expect(after?.wodExample).toBe(STORED_META.wodExample);
+		});
+
+		/**
+		 * The #793 reproduction, step for step, and the reason the case is written
+		 * from an EMPTY start rather than from `STORED_META`: the Grammarian's page
+		 * loaded when there was no example, so the stale snapshot they used to write
+		 * back was `null` — and a `null` echoed over a `null` is invisible. What
+		 * makes it a bug is the Toastmaster adding one in between, through the
+		 * general writer, which is where the Edit-meeting dialog goes.
+		 *
+		 * No concurrency is needed. The focused route never revalidates, so the
+		 * window is the life of the tab.
+		 */
+		it("survives a wodExample the Toastmaster added after the Grammarian's page loaded", async () => {
+			await addRoleSlot(club, "Grammarian", club.memberId);
+			// 1. The Grammarian opens …/me/word. The snapshot has all three empty.
+			await testDb
+				.update(meetings)
+				.set({ wordOfTheDay: null, wodDefinition: null, wodExample: null })
+				.where(eq(meetings.id, club.meetingId));
+
+			// 2. The Toastmaster adds an example through the Edit-meeting dialog.
+			await applyMeetingMetaPatch({
+				meetingId: club.meetingId,
+				wodExample: "an ineffable joy",
+				actorMemberId: club.adminMemberId,
+			});
+
+			// 3. The Grammarian saves the word and definition they typed. Their
+			//    example input still holds the empty snapshot, so it is not edited
+			//    and does not travel.
+			await saveWord(club.memberId, {
+				word: "ineffable",
+				definition: "too great to be expressed in words",
+			});
+
+			const after = await readMeeting(club.meetingId);
+			expect(after?.wordOfTheDay).toBe("ineffable");
+			expect(after?.wodDefinition).toBe("too great to be expressed in words");
+			// The assertion the issue was filed for.
+			expect(after?.wodExample).toBe("an ineffable joy");
+		});
+
+		it("clears a column sent as an explicit null, and only that one", async () => {
+			await addRoleSlot(club, "Grammarian", club.memberId);
+			await saveWord(club.memberId, { example: null });
+			const after = await readMeeting(club.meetingId);
+			expect(after?.wodExample).toBe(null);
+			expect(after?.wordOfTheDay).toBe(STORED_META.wordOfTheDay);
+			expect(after?.wodDefinition).toBe(STORED_META.wodDefinition);
+		});
+
+		it("clears a column sent as a blank string, which is what the forms send", async () => {
+			// Both Word-of-the-Day surfaces express a cleared input as `""` rather
+			// than `null`, because `updateWordOfTheDaySchema` types these as plain
+			// strings on the wire. If this stopped clearing, the only way a club has
+			// to remove a Word of the Day would silently report success and do
+			// nothing — the trap #772 hit on the meeting dialog.
+			await addRoleSlot(club, "Grammarian", club.memberId);
+			await saveWord(club.memberId, { word: "", definition: "   " });
+			const after = await readMeeting(club.meetingId);
+			expect(after?.wordOfTheDay).toBe(null);
+			expect(after?.wodDefinition).toBe(null);
+			expect(after?.wodExample).toBe(STORED_META.wodExample);
+		});
+
+		it("stores a value trimmed without touching the other two", async () => {
+			await addRoleSlot(club, "Grammarian", club.memberId);
+			await saveWord(club.memberId, { definition: "  talking a great deal  " });
+			const after = await readMeeting(club.meetingId);
+			expect(after?.wodDefinition).toBe("talking a great deal");
+			expect(after?.wordOfTheDay).toBe(STORED_META.wordOfTheDay);
+			expect(after?.wodExample).toBe(STORED_META.wodExample);
+		});
+
+		it("accepts a save that changes nothing, rather than throwing on an empty set", async () => {
+			// Reachable from the editor now that it sends only what was edited:
+			// pressing Save having typed nothing sends neither of the three. An
+			// UPDATE with no columns is a drizzle error, so the writer has to return
+			// early — and it must not log a `meeting_edit` naming no change either.
+			await addRoleSlot(club, "Grammarian", club.memberId);
+			const before = await readMeeting(club.meetingId);
+			const result = await saveWord(club.memberId, {});
+			expect(result.allowed).toBe(true);
+			const after = await readMeeting(club.meetingId);
+			expect(after?.wordOfTheDay).toBe(before?.wordOfTheDay);
+			expect(after?.wodDefinition).toBe(before?.wodDefinition);
+			expect(after?.wodExample).toBe(before?.wodExample);
 		});
 
 		/**

@@ -82,6 +82,8 @@ const DRAFT: AgendaDraft = {
 	timeZone: "America/Chicago",
 	lengthMinutes: 90,
 	geIntroducesFunctionaries: false,
+	// #802's club-bank picker; nothing here reads it.
+	attachableRoles: [],
 };
 
 const noop = vi.fn(async () => ({}) as never);

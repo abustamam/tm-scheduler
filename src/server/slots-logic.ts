@@ -38,6 +38,7 @@ type DbOrTx =
  *  no paired evaluator role at all, which is the safe default for a caller
  *  that only checks the flag before inserting. */
 async function clubRoles(
+	conn: DbOrTx,
 	clubId: string,
 	templateId: string | null,
 ): Promise<
@@ -53,7 +54,13 @@ async function clubRoles(
 	// so without it a promoted Contestant is a candidate on every ordinary
 	// meeting. A union is wrong in both directions; it is not an optimisation
 	// this could take.
-	const defs = await loadMeetingShapeDefs(db, clubId, templateId);
+	//
+	// `templateId` is the caller's to supply, and it must come off the row the
+	// caller holds LOCKED (`lockMeetingForSlotEdit`) — it is a meeting-row column,
+	// and which shape it names decides which role ids this returns. Resolved from
+	// a pre-transaction copy, a conversion committing in the window sends the
+	// insert to the other shape's Speaker.
+	const defs = await loadMeetingShapeDefs(conn, clubId, templateId);
 	const picked = pickSpeakerAndEvaluatorRoles(defs);
 	const enabledOf = (id: string | null) =>
 		id ? (defs.find((d) => d.id === id)?.enabled ?? false) : false;
@@ -69,6 +76,39 @@ function nextIndex(indices: number[]): number {
 	return indices.length === 0 ? 0 : Math.max(...indices) + 1;
 }
 
+/**
+ * The numbering read, taken on the caller's transaction — which is the whole
+ * point of it being one function. "What is the next index" is a DECISION, not a
+ * lookup, so it is only correct while `lockMeetingForSlotEdit` holds the meeting
+ * row; computed on a pre-transaction snapshot, two concurrent adds resolve the
+ * same answer and both insert it, and nothing in the database says no
+ * (`role_slots` constrains only `speech_id`). Both add paths route through here
+ * so there is ONE place where "read under the lock" is true or false.
+ *
+ * What is load-bearing is the ORDER — this call must come after the caller's
+ * `lockMeetingForSlotEdit`, because that is the statement that parks a second
+ * writer. Passing `db` instead of `tx` from that position measures the same on
+ * `tm_test` (READ COMMITTED gives the other connection a post-commit snapshot
+ * too), so the type is the cheap half; the placement is the half a reader has
+ * to check, and `role-slot-index-lock.integration.test.ts` is what checks it.
+ */
+async function nextIndexUnderLock(
+	tx: DbOrTx,
+	meetingId: string,
+	roleDefinitionId: string,
+): Promise<number> {
+	const existing = await tx
+		.select({ slotIndex: roleSlots.slotIndex })
+		.from(roleSlots)
+		.where(
+			and(
+				eq(roleSlots.meetingId, meetingId),
+				eq(roleSlots.roleDefinitionId, roleDefinitionId),
+			),
+		);
+	return nextIndex(existing.map((s) => s.slotIndex));
+}
+
 /** Add one Speaker slot (+ a paired Evaluator slot, count-parity). Reached from
  *  a PUBLIC, no-session path (a self-asserted TMOD, see `requireMeetingAgendaEditor`
  *  in `guards.ts`), so it must independently enforce `enabled` (#368) — the roles
@@ -81,33 +121,40 @@ export async function applyAddSpeakerSlot(input: {
 	meetingId: string;
 	actorMemberId: string | null;
 }) {
-	const meeting = await db.query.meetings.findFirst({
-		where: eq(meetings.id, input.meetingId),
-	});
-	if (!meeting) throw new Error("Meeting not found.");
-	const { speakerRoleId, evaluatorRoleId, speakerEnabled, evaluatorEnabled } =
-		await clubRoles(meeting.clubId, meeting.templateId);
-	if (!speakerEnabled) {
-		throw new Error("This club's Speaker role is currently disabled.");
-	}
-
-	await db.transaction(async (tx) => {
-		await lockMeetingForSlotEdit(tx, input.meetingId);
-		// Read under the lock: computed OUTSIDE the transaction, two concurrent
-		// adds both resolved the same "next" index and both inserted it.
-		const existing = await tx
-			.select({
-				roleDefinitionId: roleSlots.roleDefinitionId,
-				slotIndex: roleSlots.slotIndex,
-			})
-			.from(roleSlots)
-			.where(eq(roleSlots.meetingId, input.meetingId));
-		const idxFor = (roleId: string) =>
-			nextIndex(
-				existing
-					.filter((s) => s.roleDefinitionId === roleId)
-					.map((s) => s.slotIndex),
-			);
+	return db.transaction(async (tx) => {
+		// Lock first, then resolve WHICH roles this meeting's "+ Add speaker" means
+		// from the row it returns. `clubRoles` is driven by `templateId`, a
+		// meeting-row column: read from a pre-transaction copy, a conversion
+		// committing in the window resolves the OTHER shape's Speaker, and the pair
+		// lands on a lineup the meeting no longer has. Same row, same lock, same
+		// reason as `applyAddRoleSlot`.
+		//
+		// NOT the status gate — that one lives in `requireMeetingAgendaEditor`
+		// (`meeting-authz-logic.ts`) because this path is public and session-less,
+		// and it still runs outside any transaction. Closing that window means
+		// touching an authorization file; it is tracked separately, and this
+		// comment is here so the next reader does not mistake the lock below for
+		// covering it.
+		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+		const { speakerRoleId, evaluatorRoleId, speakerEnabled, evaluatorEnabled } =
+			await clubRoles(tx, meeting.clubId, meeting.templateId);
+		if (!speakerEnabled) {
+			throw new Error("This club's Speaker role is currently disabled.");
+		}
+		// BOTH numbering reads happen here, before either insert, so neither index
+		// is derived from a row this same call just wrote. A null evaluator index
+		// IS the "skip the evaluator insert" decision — the disabled-paired-role
+		// case (#368) — so the insert below gates on it rather than re-testing
+		// `evaluatorEnabled` and leaving two places that could disagree.
+		const speakerIndex = await nextIndexUnderLock(
+			tx,
+			input.meetingId,
+			speakerRoleId,
+		);
+		const evaluatorIndex =
+			evaluatorRoleId && evaluatorEnabled
+				? await nextIndexUnderLock(tx, input.meetingId, evaluatorRoleId)
+				: null;
 		// `returning` so the evaluator can point at this speaker (#512). The pair
 		// is already established here — the "+ Add speaker" button creates both
 		// rows in this one transaction — but until now the link was never written
@@ -118,14 +165,14 @@ export async function applyAddSpeakerSlot(input: {
 			.values({
 				meetingId: input.meetingId,
 				roleDefinitionId: speakerRoleId,
-				slotIndex: idxFor(speakerRoleId),
+				slotIndex: speakerIndex,
 			})
 			.returning({ id: roleSlots.id });
-		if (evaluatorRoleId && evaluatorEnabled) {
+		if (evaluatorRoleId && evaluatorIndex !== null) {
 			await tx.insert(roleSlots).values({
 				meetingId: input.meetingId,
 				roleDefinitionId: evaluatorRoleId,
-				slotIndex: idxFor(evaluatorRoleId),
+				slotIndex: evaluatorIndex,
 				// The realign below re-points every link positionally anyway; writing
 				// the pair here keeps the insert self-consistent on its own.
 				evaluatesSlotId: speaker.id,
@@ -147,8 +194,8 @@ export async function applyAddSpeakerSlot(input: {
 			targetId: input.meetingId,
 			detail: { change: "speaker_added" },
 		});
+		return { clubId: meeting.clubId };
 	});
-	return { clubId: meeting.clubId };
 }
 
 /** The club's whole role BANK in the shape `pairedRoleIds` needs, plus
@@ -160,8 +207,8 @@ export async function applyAddSpeakerSlot(input: {
  *  the reported bug, and a contest role an officer wants on a second contest is
  *  the same request from the other side. `standing` gates AUTO-GENERATION, not
  *  what a person may choose on purpose. */
-async function clubRoleDefs(clubId: string) {
-	return db
+async function clubRoleDefs(conn: DbOrTx, clubId: string) {
+	return conn
 		.select({
 			id: roleDefinitions.id,
 			name: roleDefinitions.name,
@@ -195,37 +242,45 @@ export async function applyAddRoleSlot(input: {
 	roleDefinitionId: string;
 	actorMemberId: string | null;
 }) {
-	const meeting = await db.query.meetings.findFirst({
-		where: eq(meetings.id, input.meetingId),
-	});
-	if (!meeting) throw new Error("Meeting not found.");
-	assertMeetingNotLocked(meeting.status);
+	return db.transaction(async (tx) => {
+		// THE LOCK COMES FIRST, and every gate below reads the row it returns
+		// (#803, review). Numbering was only half of what was racing here: two of
+		// the checks are themselves meeting-ROW reads, and both decide whether the
+		// insert may happen at all.
+		//
+		// `status` is the plain one — under READ COMMITTED a concurrent "complete
+		// meeting" commits between an unlocked read of it and this insert, and the
+		// slot lands on a completed meeting. `templateId` is the quieter one: it
+		// picks the meeting's declared SHAPE, and the shape is what decides whether
+		// this role is a paired speaker/evaluator role the "+ Add role" path must
+		// refuse. Converting a meeting to a template that calls this role a
+		// Contestant, committed in that same window, admits a slot the speaker
+		// controls own.
+		//
+		// The one read here the lock does NOT govern is `clubRoleDefs` — the club's
+		// role bank is club-scoped and no meeting row decides it. It runs on `tx`
+		// for one snapshot rather than because it needs the lock.
+		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+		assertMeetingNotLocked(meeting.status);
 
-	const defs = await clubRoleDefs(meeting.clubId);
-	const role = defs.find((d) => d.id === input.roleDefinitionId);
-	if (!role) throw new Error("Role not found for this club.");
-	if (!role.enabled) throw new Error("This role is currently disabled.");
-	const shape = await loadMeetingShapeDefs(
-		db,
-		meeting.clubId,
-		meeting.templateId,
-	);
-	if (pairedRoleIds(shape).has(role.id)) {
-		throw new Error("Add speakers with the speaker controls.");
-	}
-
-	const existing = await db
-		.select({ slotIndex: roleSlots.slotIndex })
-		.from(roleSlots)
-		.where(
-			and(
-				eq(roleSlots.meetingId, input.meetingId),
-				eq(roleSlots.roleDefinitionId, input.roleDefinitionId),
-			),
+		const defs = await clubRoleDefs(tx, meeting.clubId);
+		const role = defs.find((d) => d.id === input.roleDefinitionId);
+		if (!role) throw new Error("Role not found for this club.");
+		if (!role.enabled) throw new Error("This role is currently disabled.");
+		const shape = await loadMeetingShapeDefs(
+			tx,
+			meeting.clubId,
+			meeting.templateId,
 		);
-	const slotIndex = nextIndex(existing.map((s) => s.slotIndex));
+		if (pairedRoleIds(shape).has(role.id)) {
+			throw new Error("Add speakers with the speaker controls.");
+		}
 
-	await db.transaction(async (tx) => {
+		const slotIndex = await nextIndexUnderLock(
+			tx,
+			input.meetingId,
+			input.roleDefinitionId,
+		);
 		await tx.insert(roleSlots).values({
 			meetingId: input.meetingId,
 			roleDefinitionId: input.roleDefinitionId,
@@ -242,8 +297,8 @@ export async function applyAddRoleSlot(input: {
 				roleDefinitionId: input.roleDefinitionId,
 			},
 		});
+		return { clubId: meeting.clubId };
 	});
-	return { clubId: meeting.clubId };
 }
 
 /** Remove one unclaimed, non-paired slot from a meeting. Rejects a claimed slot
@@ -625,20 +680,18 @@ export async function applyRemoveSpeakerSlot(input: {
 	meetingId: string;
 	actorMemberId: string | null;
 }) {
-	const meeting = await db.query.meetings.findFirst({
-		where: eq(meetings.id, input.meetingId),
-	});
-	if (!meeting) throw new Error("Meeting not found.");
-	const { speakerRoleId, evaluatorRoleId } = await clubRoles(
-		meeting.clubId,
-		meeting.templateId,
-	);
-
 	// Read under the meeting lock, like the add path: which slot is "the top
 	// unclaimed one" and which evaluator is paired to it are DECISIONS, and a
-	// concurrent add or reorder moves both answers.
+	// concurrent add or reorder moves both answers. WHICH ROLES those questions
+	// are about is a decision too — `clubRoles` resolves it from `templateId`, a
+	// column on the very row locked below — so it is inside as well.
 	return db.transaction(async (tx) => {
-		await lockMeetingForSlotEdit(tx, input.meetingId);
+		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+		const { speakerRoleId, evaluatorRoleId } = await clubRoles(
+			tx,
+			meeting.clubId,
+			meeting.templateId,
+		);
 		const slots = await tx
 			.select({
 				id: roleSlots.id,
@@ -754,20 +807,31 @@ export async function applyRemoveSpeakerSlot(input: {
  * opposite orders can (two officers reordering the same lineup in opposite
  * directions was an AB-BA deadlock, surfacing as a 500).
  *
+ * RETURNS THE LOCKED ROW, and a caller that gates on `status` or `templateId`
+ * must read them from THAT copy rather than from one taken before the
+ * transaction. Both columns live on this very row: under READ COMMITTED a
+ * concurrent "complete meeting" or template change commits between an unlocked
+ * read of them and the insert that follows, and the write then lands on a
+ * meeting the gate it passed would now refuse. `mcp/tools/assign-roles.ts` takes
+ * this same row `FOR UPDATE` to re-read `status` for exactly that reason.
+ *
  * Does NOT serialize against `claimSlot`, which locks the slot row instead — see
  * TODOS.md for the remove-vs-claim window that leaves open.
  */
-async function lockMeetingForSlotEdit(
-	tx: DbOrTx,
-	meetingId: string,
-): Promise<void> {
+async function lockMeetingForSlotEdit(tx: DbOrTx, meetingId: string) {
 	const [locked] = await tx
-		.select({ id: meetings.id })
+		.select({
+			id: meetings.id,
+			clubId: meetings.clubId,
+			status: meetings.status,
+			templateId: meetings.templateId,
+		})
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.for("update")
 		.limit(1);
 	if (!locked) throw new Error("Meeting not found.");
+	return locked;
 }
 
 /**
@@ -871,12 +935,23 @@ async function applyMoveSlot(
 			meetingId: roleSlots.meetingId,
 			roleDefinitionId: roleSlots.roleDefinitionId,
 			slotIndex: roleSlots.slotIndex,
-			clubId: meetings.clubId,
-			templateId: meetings.templateId,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 		})
 		.from(roleSlots)
-		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		// No join to `meetings` any more, deliberately: `clubId` and `templateId`
+		// are meeting-ROW columns that gate the write, so they come off the LOCKED
+		// row below and a copy taken here would be exactly the stale one.
+		//
+		// What this read still supplies is deliberate too, and none of it is a
+		// meeting-row column. `meetingId` says which meeting to lock; `slotIndex`
+		// and `roleDefinitionId` scope the sibling read and `movedThePairedLineup`
+		// below, both re-derived inside the lock from the slot rows themselves. And
+		// `isSpeakerRole` is judged UNLOCKED by the speaker arm of `kindOk`, which
+		// is correct rather than an oversight: it is a column on the club's role
+		// BANK, not on the meeting, and `loadMeetingSlots` reads that same bank
+		// column to decide which cards render reorder arrows. Judging it from the
+		// bank is what keeps the gate and the arrows agreeing; putting it behind
+		// the meeting lock would not make it fresher, only differently stale.
 		.innerJoin(
 			roleDefinitions,
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
@@ -891,43 +966,50 @@ async function applyMoveSlot(
 		);
 	}
 
-	const { speakerRoleId, evaluatorRoleId } = await clubRoles(
-		target.clubId,
-		target.templateId,
-	);
-	// The slot must actually BE of the kind this endpoint reorders. Both public
-	// server fns take a bare `slotId`, so without this the caller's CHOICE of
-	// endpoint decided the activity label while the swap ran on whatever role the
-	// slot happened to hold — `moveEvaluatorSlot(<a speaker slot>)` reordered
-	// speakers and wrote "reordered evaluators" into the feed.
-	//
-	// The two arms are deliberately ASYMMETRIC, because they mirror what the
-	// agenda actually renders arrows on. Speaker arrows appear on every
-	// `isSpeakerRole` card, and `isSpeakerRole` is a free checkbox on any
-	// club-invented role — a second contestant lineup, a "Debater" — so narrowing
-	// this arm to the one PICKED speaker role would have made the arrows on those
-	// cards start erroring, a capability regression for a shape that worked
-	// before. Evaluator arrows render only for the paired evaluator role (the
-	// General Evaluator gets none), so that arm stays exact.
-	const kindOk =
-		kind === "speaker"
-			? target.isSpeakerRole
-			: evaluatorRoleId !== null && target.roleDefinitionId === evaluatorRoleId;
-	if (!kindOk) {
-		throw new Error(
-			kind === "speaker"
-				? "That slot is not a speaker slot."
-				: "That slot is not an evaluator slot.",
+	return db.transaction(async (tx) => {
+		const meeting = await lockMeetingForSlotEdit(tx, target.meetingId);
+		// Resolved from the LOCKED row: `templateId` names the meeting's shape, and
+		// the shape is what says which role is the paired evaluator — the fact both
+		// the `kind` check below and the pairing realign at the end turn on. A
+		// conversion committing between an unlocked read and those decisions points
+		// them at the other shape's lineup.
+		const { speakerRoleId, evaluatorRoleId } = await clubRoles(
+			tx,
+			meeting.clubId,
+			meeting.templateId,
 		);
-	}
-	// Only the PICKED pair carries positional links, so reordering some other
-	// speaker-flagged lineup must not re-point them.
-	const movedThePairedLineup =
-		target.roleDefinitionId === speakerRoleId ||
-		target.roleDefinitionId === evaluatorRoleId;
+		// The slot must actually BE of the kind this endpoint reorders. Both public
+		// server fns take a bare `slotId`, so without this the caller's CHOICE of
+		// endpoint decided the activity label while the swap ran on whatever role the
+		// slot happened to hold — `moveEvaluatorSlot(<a speaker slot>)` reordered
+		// speakers and wrote "reordered evaluators" into the feed.
+		//
+		// The two arms are deliberately ASYMMETRIC, because they mirror what the
+		// agenda actually renders arrows on. Speaker arrows appear on every
+		// `isSpeakerRole` card, and `isSpeakerRole` is a free checkbox on any
+		// club-invented role — a second contestant lineup, a "Debater" — so narrowing
+		// this arm to the one PICKED speaker role would have made the arrows on those
+		// cards start erroring, a capability regression for a shape that worked
+		// before. Evaluator arrows render only for the paired evaluator role (the
+		// General Evaluator gets none), so that arm stays exact.
+		const kindOk =
+			kind === "speaker"
+				? target.isSpeakerRole
+				: evaluatorRoleId !== null &&
+					target.roleDefinitionId === evaluatorRoleId;
+		if (!kindOk) {
+			throw new Error(
+				kind === "speaker"
+					? "That slot is not a speaker slot."
+					: "That slot is not an evaluator slot.",
+			);
+		}
+		// Only the PICKED pair carries positional links, so reordering some other
+		// speaker-flagged lineup must not re-point them.
+		const movedThePairedLineup =
+			target.roleDefinitionId === speakerRoleId ||
+			target.roleDefinitionId === evaluatorRoleId;
 
-	await db.transaction(async (tx) => {
-		await lockMeetingForSlotEdit(tx, target.meetingId);
 		// The lineup is read INSIDE the lock: "which slot sits next to this one"
 		// is the decision this function exists to make, and a concurrent add or
 		// reorder changes the answer. Read outside, two officers acting at once
@@ -976,7 +1058,7 @@ async function applyMoveSlot(
 			);
 		}
 		await logActivity(tx, {
-			clubId: target.clubId,
+			clubId: meeting.clubId,
 			actorMemberId: input.actorMemberId,
 			action: "meeting_edit",
 			targetType: "meeting",
@@ -986,8 +1068,8 @@ async function applyMoveSlot(
 					kind === "speaker" ? "speaker_reordered" : "evaluator_reordered",
 			},
 		});
+		return { clubId: meeting.clubId };
 	});
-	return { clubId: target.clubId };
 }
 
 /** Swap a speaker slot's position with its neighbor (up = lower index), then
