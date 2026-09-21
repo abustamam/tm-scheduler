@@ -26,14 +26,21 @@
  * down in the same statement; the first two cases below are that claim stated
  * where it actually matters.
  *
- * The last case is the one to read before changing anything here. It pins a
- * residual hole ON PURPOSE.
+ * The last three cases are the OTHER half, which #501 left open and #805 shut:
+ * effective-admin (#202) grants admin for any open `officer_terms` row whatever
+ * `club_role` says, so a membership that lapsed while holding office used to
+ * come back a full admin no matter what the demotion wrote. They run the same
+ * gate, and the last one pins the coupling that makes the fix safe to write
+ * with nothing to reverse it.
  */
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { guests, members, officerTerms, people, user } from "#/db/schema";
-import { UNDO_MEMBER_HAS_ACCOUNT_MESSAGE } from "#/lib/guest-convert";
+import {
+	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
+	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
+} from "#/lib/guest-convert";
 import {
 	cleanup,
 	hasTestDb,
@@ -58,9 +65,15 @@ describe.skipIf(!hasTestDb)("convert onto a lapsed membership: access", () => {
 	let returneeUserId: string;
 	let returneePersonId: string;
 	let returneeEmail: string;
+	/** A SECOND human with no sign-in account, seeded only by the undo case —
+	 *  tracked here so the cleanup can delete it by id whether or not it ran. */
+	let orphanPersonId: string | null;
+	let orphanEmail: string;
 
 	beforeEach(async () => {
 		seed = await seedClub();
+		orphanPersonId = null;
+		orphanEmail = `orphan-${randomUUID()}@test.example`;
 		returneeUserId = randomUUID();
 		returneeEmail = `returnee-${returneeUserId}@test.example`;
 		await testDb.insert(user).values({
@@ -93,6 +106,14 @@ describe.skipIf(!hasTestDb)("convert onto a lapsed membership: access", () => {
 			returneeUserId,
 		]);
 		await testDb.delete(people).where(eq(people.id, returneePersonId));
+		// `cleanup` cascades from the club and takes this Person's membership
+		// with it, but the Person itself is global (ADR-0008) and survives — so
+		// it is deleted by id here, after the cascade, exactly like the returnee
+		// above. Vitest runs files in parallel against one shared `tm_test`, so
+		// nothing here may delete unscoped.
+		if (orphanPersonId) {
+			await testDb.delete(people).where(eq(people.id, orphanPersonId));
+		}
 	});
 
 	/** A lapsed membership for the returnee, at the given stored role. */
@@ -216,31 +237,17 @@ describe.skipIf(!hasTestDb)("convert onto a lapsed membership: access", () => {
 		).resolves.toBeTruthy();
 	});
 
-	it("an OPEN OFFICER TERM still confers admin after the convert — known, disclosed", async () => {
-		// READ THIS BEFORE "FIXING" IT. This case pins behaviour the review
-		// deliberately did not change, and it is a real residual hole:
+	it("an OPEN OFFICER TERM does not confer admin after the convert", async () => {
+		// The second source of effective-admin, and the one the demotion cannot
+		// reach. #501 wrote `club_role` down and left the term alone, so a member
+		// who lapsed while holding office came back a FULL CLUB ADMIN with a
+		// toast that said their access had been removed. #805 ends the term in
+		// the same transaction.
 		//
-		// Effective-admin (#202) grants `admin` to any membership holding an open
-		// `officer_terms` row, whatever `club_role` says. `applySetMemberStatus`
-		// does not close officer terms on deactivation any more than it clears
-		// `club_role`, so a lapsed row can carry one — and the wake-up makes it
-		// live again. The demotion above therefore does NOT remove admin access
-		// for a member who lapsed while holding office.
-		//
-		// Convert does not close the term, for three reasons, none of them
-		// oversight: an office is a governance fact about who the club's
-		// President IS (read by the printed agenda's officer grid, the officer
-		// home, the COT seats behind DCP goal 9, the onboarding checklist), and
-		// vacating one as a side effect of a guest-card button is not a
-		// VP-Membership decision; `applyUndoGuestConversion` refuses outright for
-		// a membership carrying ANY officer_terms row, so a close written by
-		// convert could never be undone by the control that undoes the rest of
-		// the conversion; and the club would silently lose an officer from every
-		// one of those surfaces at the same moment.
-		//
-		// What convert owes the admin instead is the truth, so
-		// `retainedOfficerPositions` carries it to the toast. If the decision
-		// changes, this test is where it changes — and the notice copy with it.
+		// Read the assertion order: `demotedFrom` is undefined here ON PURPOSE.
+		// The stored role was already `member`, which is exactly why the demotion
+		// can never be what closes this — the gate answers `admin` off the term
+		// alone.
 		const membershipId = await lapsedMembership("member");
 		await testDb.insert(officerTerms).values({
 			membershipId,
@@ -250,21 +257,116 @@ describe.skipIf(!hasTestDb)("convert onto a lapsed membership: access", () => {
 		});
 		const guestId = await guestForReturnee();
 
-		// Refused while lapsed: `requireMembership` rejects before effective-admin
-		// is ever consulted, so the open term grants nothing today.
+		// The control. Refused while lapsed, because `requireMembership` rejects
+		// before effective-admin is ever consulted — so "refused after the
+		// convert" would also pass on a gate that refuses everyone, and this file
+		// would be a broken feature wearing a secure-looking suite.
 		await expect(
 			requireClubRole(returneeUserId, seed.clubId, ["admin"]),
 		).rejects.toThrow();
 
 		const res = await convert(guestId);
-		// Nothing to demote — the stored role was already `member`, which is
-		// exactly why the demotion cannot be what closes this hole.
 		expect(res.demotedFrom).toBeUndefined();
-		expect(res.retainedOfficerPositions).toEqual(["president"]);
+		expect(res.closedOfficerPositions).toEqual(["president"]);
 
-		// And now they are a full club admin again.
+		// The member IS back — asserting the refusal without this would pass on a
+		// convert that never reactivated anything.
+		await expect(
+			requireClubRole(returneeUserId, seed.clubId, ["member"]),
+		).resolves.toBeTruthy();
+		// …and is not an admin. In the gate's own terms, which is the only level
+		// this claim can be made at: authorization is a function, not a column.
 		await expect(
 			requireClubRole(returneeUserId, seed.clubId, ["admin"]),
-		).resolves.toBeTruthy();
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+	});
+
+	it("closes the term rather than deleting it, so the office stays history", async () => {
+		// `officer_terms` rows are never deleted on removal (#100) — closing one
+		// is how the member edit form vacates an office, and the closed row is
+		// what officer recognition and term reporting read. A convert that
+		// DELETED the row would take a real term out of the club's history to fix
+		// an access bug, and nothing else in this file would notice.
+		const membershipId = await lapsedMembership("member");
+		const termStart = new Date("2020-07-01T00:00:00Z");
+		await testDb.insert(officerTerms).values({
+			membershipId,
+			position: "president",
+			termStart,
+			termEnd: null,
+		});
+
+		await convert(await guestForReturnee());
+
+		const terms = await testDb
+			.select({
+				termStart: officerTerms.termStart,
+				termEnd: officerTerms.termEnd,
+			})
+			.from(officerTerms)
+			.where(eq(officerTerms.membershipId, membershipId));
+		expect(terms).toHaveLength(1);
+		expect(terms[0]?.termEnd).toBeInstanceOf(Date);
+		// The span the club actually served is intact — only its end is written.
+		expect(terms[0]?.termStart?.toISOString()).toBe(termStart.toISOString());
+	});
+
+	it("undo still refuses every conversion that ended a term", async () => {
+		// THE COUPLING. #805 closes an office with nothing recorded to reopen it,
+		// and that is only honest because this refusal exists: undo rejects a
+		// membership carrying ANY `officer_terms` row, open or closed, and the
+		// close leaves the row standing. So a conversion this feature writes to
+		// was already un-undoable BEFORE the close and still is — there is no
+		// state where undo puts the membership back and leaves the office
+		// vacated.
+		//
+		// The returnee here holds no sign-in account on purpose: without that,
+		// `UNDO_MEMBER_HAS_ACCOUNT_MESSAGE` fires first and this would pass while
+		// proving nothing about officer terms at all.
+		const [p] = await testDb
+			.insert(people)
+			.values({ name: "Accountless Officer", email: orphanEmail })
+			.returning({ id: people.id });
+		if (!p) throw new Error("Failed to seed person");
+		orphanPersonId = p.id;
+		const [m] = await testDb
+			.insert(members)
+			.values({
+				clubId: seed.clubId,
+				personId: orphanPersonId,
+				name: "Accountless Officer",
+				email: orphanEmail,
+				status: "inactive",
+				clubRole: "member",
+			})
+			.returning({ id: members.id });
+		if (!m) throw new Error("Failed to seed lapsed membership");
+		await testDb.insert(officerTerms).values({
+			membershipId: m.id,
+			position: "treasurer",
+			termStart: new Date(),
+			termEnd: null,
+		});
+		const [g] = await testDb
+			.insert(guests)
+			.values({
+				clubId: seed.clubId,
+				name: "Accountless Officer",
+				email: orphanEmail,
+				stage: "prospect",
+			})
+			.returning({ id: guests.id });
+		if (!g) throw new Error("Failed to seed guest");
+
+		const res = await convert(g.id);
+		expect(res.closedOfficerPositions).toEqual(["treasurer"]);
+
+		await expect(
+			applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId: g.id,
+				actorMemberId: seed.adminMemberId,
+			}),
+		).rejects.toThrow(UNDO_MEMBER_HAS_HISTORY_MESSAGE("an officer term"));
 	});
 });

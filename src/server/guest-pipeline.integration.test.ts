@@ -2397,16 +2397,16 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				expect(await roleOf(m?.id ?? "")).toBe("admin");
 			});
 
-			it("reports an open officer term that still grants admin", async () => {
+			it("ends the open officer term the wake-up would have revived", async () => {
 				// Effective-admin's OTHER source (#202): any open `officer_terms`
 				// row is full admin whatever `club_role` says, and deactivation does
-				// not close those either. Convert deliberately does not close them —
-				// an office is a governance fact, read by the printed agenda and the
-				// COT seats, and `applyUndoGuestConversion` refuses outright for a
-				// membership carrying any term, so a close written here could never
-				// be undone. What convert owes the admin instead is the truth, and
-				// this is the field that carries it: without it the demotion notice
-				// would tell them the access was removed when it was not.
+				// not close those either — so before #805 the demotion one column
+				// over removed nothing, and the toast said it had. The term is ended
+				// in the same transaction.
+				//
+				// CLOSED, not deleted (#100): the history stays, which is also what
+				// keeps `applyUndoGuestConversion`'s officer-term refusal covering
+				// this conversion afterwards.
 				const email = `officer-${randomUUID()}@example.com`;
 				const { membershipId } = await lapsedMember(
 					"Lapsed Officer",
@@ -2429,8 +2429,56 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				});
 
 				expect(res.demotedFrom).toBe("admin");
-				expect(res.retainedOfficerPositions).toEqual(["president"]);
-				// Read, not written: the term is exactly as it was.
+				expect(res.closedOfficerPositions).toEqual(["president"]);
+				const terms = await testDb
+					.select({ termEnd: officerTerms.termEnd })
+					.from(officerTerms)
+					.where(eq(officerTerms.membershipId, membershipId));
+				expect(terms).toHaveLength(1);
+				expect(terms[0]?.termEnd).toBeInstanceOf(Date);
+			});
+
+			it("leaves a SITTING officer's term alone when it only deduped", async () => {
+				// The scope of the governance claim, stated where it can fail.
+				// Reuse of an ALREADY-ACTIVE membership never reaches the wake-up
+				// branch, so converting a guest that dedups onto the club's sitting
+				// President must not vacate the presidency — that would be the
+				// guest-card-as-governance-write #805 deliberately is not.
+				const email = `sitting-officer-${randomUUID()}@example.com`;
+				const [person] = await testDb
+					.insert(people)
+					.values({ name: "Sitting Officer", email })
+					.returning({ id: people.id });
+				const [m] = await testDb
+					.insert(members)
+					.values({
+						clubId: seed.clubId,
+						personId: person?.id ?? "",
+						name: "Sitting Officer",
+						email,
+						status: "active",
+						clubRole: "member",
+					})
+					.returning({ id: members.id });
+				const membershipId = m?.id ?? "";
+				await testDb
+					.insert(officerTerms)
+					.values({ membershipId, position: "president", termEnd: null });
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Sitting Officer",
+					email,
+				});
+
+				const res = await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				expect(res.membershipId).toBe(membershipId);
+				expect(res.reactivated).toBe(false);
+				expect(res.closedOfficerPositions).toEqual([]);
 				const terms = await testDb
 					.select({ termEnd: officerTerms.termEnd })
 					.from(officerTerms)
@@ -2443,7 +2491,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				// The field is always present, so the UI never has to guard on
 				// undefined — and empty must mean empty, not "we did not look".
 				const { res } = await convertOntoLapsedAdmin("No Office");
-				expect(res.retainedOfficerPositions).toEqual([]);
+				expect(res.closedOfficerPositions).toEqual([]);
 			});
 
 			it("undo puts the admin role back along with the lapse", async () => {

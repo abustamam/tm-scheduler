@@ -372,7 +372,7 @@ describe("VP Membership guest card — reactivation notice (#501)", () => {
 			ok: true,
 			membershipId: "44444444-4444-4444-8444-444444444444",
 			personId: "55555555-5555-4555-8555-555555555555",
-			retainedOfficerPositions: [],
+			closedOfficerPositions: [],
 			...result,
 			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
 		} as any);
@@ -423,15 +423,15 @@ describe("VP Membership guest card — reactivation notice (#501)", () => {
 		expect(CONVERT_DEMOTED_MESSAGE).toMatch(/member page/i);
 	});
 
-	it("warns that an open officer term grants admin anyway", async () => {
-		// The demotion line alone would be a lie here: effective-admin (#202)
-		// means the open term confers exactly the access `club_role` just lost,
-		// and convert deliberately does not close terms. Both sentences, or the
-		// admin is told the hole is shut when it is not.
+	it("names the officer term the wake-up ended, beside the demotion", async () => {
+		// Two permission changes in one button press (#805): the stored role goes
+		// down, and the open term that would have granted the same access through
+		// effective-admin (#202) is ended with it. Both sentences, or the admin
+		// is told less than the convert actually did to someone's standing.
 		const call = await clickConvert({
 			reactivated: true,
 			demotedFrom: "admin",
-			retainedOfficerPositions: ["president"],
+			closedOfficerPositions: ["president"],
 		});
 
 		const description = (call?.[1] as { description: string }).description;

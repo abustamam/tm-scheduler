@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	CONVERT_DEMOTED_MESSAGE,
-	CONVERT_OFFICER_ADMIN_MESSAGE,
+	CONVERT_OFFICER_TERM_CLOSED_MESSAGE,
 	CONVERT_REACTIVATED_MESSAGE,
 	convertNoticeDescription,
 	isStrandedConvertedGuest,
@@ -11,8 +11,8 @@ import {
  * The convert toast's description line (#501 + its privilege review).
  *
  * Three facts can be true at once — the wake-up, the demotion that rides it,
- * and the officer term that survives both — and which sentences apply is the
- * only conditional logic the UI half of this feature has. It lives in `lib/`
+ * and the officer term ended beside it (#805) — and which sentences apply is
+ * the only conditional logic the UI half of this feature has. It lives in `lib/`
  * precisely so it can be asserted without a database, a toast, or a rendered
  * card: `vp-membership.test.tsx` can only see that the composed string reached
  * sonner, and the integration suite can only see the flags the server set.
@@ -27,7 +27,7 @@ describe("convertNoticeDescription", () => {
 		expect(
 			convertNoticeDescription({
 				reactivated: false,
-				retainedOfficerPositions: [],
+				closedOfficerPositions: [],
 			}),
 		).toBeUndefined();
 	});
@@ -42,7 +42,7 @@ describe("convertNoticeDescription", () => {
 			convertNoticeDescription({
 				reactivated: false,
 				demotedFrom: "admin",
-				retainedOfficerPositions: ["president"],
+				closedOfficerPositions: ["president"],
 			}),
 		).toBeUndefined();
 	});
@@ -50,7 +50,7 @@ describe("convertNoticeDescription", () => {
 	it("reports a bare reactivation with the prior status and nothing else", () => {
 		const text = convertNoticeDescription({
 			reactivated: true,
-			retainedOfficerPositions: [],
+			closedOfficerPositions: [],
 		});
 
 		expect(text).toBe(CONVERT_REACTIVATED_MESSAGE);
@@ -66,7 +66,7 @@ describe("convertNoticeDescription", () => {
 			convertNoticeDescription({
 				reactivated: true,
 				demotedFrom: "admin",
-				retainedOfficerPositions: [],
+				closedOfficerPositions: [],
 			}) ?? "";
 
 		expect(text).toContain(CONVERT_REACTIVATED_MESSAGE);
@@ -78,15 +78,16 @@ describe("convertNoticeDescription", () => {
 		expect(text).toMatch(/member page/i);
 	});
 
-	it("names the office that still grants admin, in its display label", () => {
-		// Effective-admin's other source (#202). Convert writes `club_role` down
-		// and deliberately leaves officer terms alone, so this sentence is what
-		// keeps the one above it from being a lie.
+	it("names the offices it ended, in their display labels and canonical order", () => {
+		// Effective-admin's other source (#202), now ended rather than reported
+		// (#805). The sentence still has to say WHICH offices: this is a
+		// governance change the admin may need to put back, and "an officer term"
+		// is not something you can act on.
 		const text =
 			convertNoticeDescription({
 				reactivated: true,
 				demotedFrom: "admin",
-				retainedOfficerPositions: ["president", "treasurer"],
+				closedOfficerPositions: ["president", "treasurer"],
 			}) ?? "";
 
 		// The LABEL, not the enum value: `vp_education` in a toast is a database
@@ -94,23 +95,41 @@ describe("convertNoticeDescription", () => {
 		expect(text).toContain("President and Treasurer");
 		expect(text).not.toMatch(/vp_|sergeant_at_arms/);
 		expect(text).toMatch(/full club admin/i);
+		// The remedy, asserted on the composed text: a notice that reports an
+		// office being vacated without naming where to give it back leaves the
+		// admin hunting — the same obligation the demotion line carries.
+		expect(text).toMatch(/member page/i);
 	});
 
-	it("warns about the office even when the role needed no demotion", () => {
+	it("says 'officer term' for one office and 'officer terms' for several", () => {
+		// A Membership may hold several offices at once (Secretary + Treasurer is
+		// the common pair), and the plural is the one part of this sentence that
+		// is computed rather than written. Getting it from the LIST rather than
+		// the joined string is why the message takes positions: a caller that
+		// pre-joined the labels has already thrown the count away.
+		expect(CONVERT_OFFICER_TERM_CLOSED_MESSAGE(["secretary"])).toContain(
+			"open officer term (Secretary)",
+		);
+		expect(
+			CONVERT_OFFICER_TERM_CLOSED_MESSAGE(["secretary", "treasurer"]),
+		).toContain("open officer terms (Secretary and Treasurer)");
+	});
+
+	it("reports the office even when the role needed no demotion", () => {
 		// The dangerous combination the other cases miss: an ordinary member who
 		// lapsed while holding an office. Nothing is demoted — there was nothing
-		// elevated to demote — and the wake-up still hands back full admin
-		// through the open term. Gating the officer sentence on `demotedFrom`
-		// would swallow exactly this case.
+		// elevated to demote — and before #805 the wake-up handed back full admin
+		// through the open term anyway. Gating the officer sentence on
+		// `demotedFrom` would swallow exactly this case.
 		const text =
 			convertNoticeDescription({
 				reactivated: true,
-				retainedOfficerPositions: ["secretary"],
+				closedOfficerPositions: ["secretary"],
 			}) ?? "";
 
 		expect(text).toContain(CONVERT_REACTIVATED_MESSAGE);
 		expect(text).not.toContain(CONVERT_DEMOTED_MESSAGE);
-		expect(text).toContain(CONVERT_OFFICER_ADMIN_MESSAGE("Secretary"));
+		expect(text).toContain(CONVERT_OFFICER_TERM_CLOSED_MESSAGE(["secretary"]));
 	});
 });
 
