@@ -106,6 +106,44 @@ describe("AttendanceGuestsGroup", () => {
 		expect(onAddGuest).toHaveBeenCalledWith({ guestId: "g2" });
 	});
 
+	it("only shows lost guests while searching and adds the existing record", async () => {
+		const onAddGuest = vi.fn();
+		render(
+			<AttendanceGuestsGroup
+				{...base}
+				clubGuests={[{ id: "lost", name: "Returning Visitor", stage: "lost" }]}
+				onAddGuest={onAddGuest}
+			/>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: /\+ Add guest/ }));
+		expect(
+			screen.queryByRole("option", { name: /Returning Visitor/ }),
+		).toBeNull();
+		const search = screen.getByPlaceholderText("Search guests…");
+		await userEvent.type(search, "Returning");
+		expect(
+			await screen.findByRole("option", { name: /Returning Visitor/ }),
+		).toBeTruthy();
+		await userEvent.clear(search);
+		expect(
+			screen.queryByRole("option", { name: /Returning Visitor/ }),
+		).toBeNull();
+		await userEvent.type(search, "nobody");
+		expect(
+			screen.queryByRole("option", { name: /Returning Visitor/ }),
+		).toBeNull();
+		await userEvent.clear(search);
+		await userEvent.type(search, "Returning");
+		await userEvent.click(
+			await screen.findByRole("option", { name: /Returning Visitor/ }),
+		);
+		expect(onAddGuest).toHaveBeenCalledWith({ guestId: "lost" });
+		await userEvent.click(screen.getByRole("button", { name: /\+ Add guest/ }));
+		expect(
+			screen.queryByRole("option", { name: /Returning Visitor/ }),
+		).toBeNull();
+	});
+
 	it("excludes a club guest already present at the meeting from the add-picker", async () => {
 		const { getByRole, queryByRole } = render(
 			<AttendanceGuestsGroup {...base} />,

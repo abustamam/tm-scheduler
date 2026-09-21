@@ -102,6 +102,28 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 		expect(all.filter((x) => x.name === "Nadia Visitor")).toHaveLength(1);
 	});
 
+	it("offers a lost guest for adding attendance using their existing record", async () => {
+		const [returning] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Returning Visitor", stage: "lost" })
+			.returning({ id: guests.id });
+		if (!returning) throw new Error("Failed to seed returning guest");
+
+		expect(await listClubGuests(seed.clubId)).toContainEqual(
+			expect.objectContaining({ id: returning.id, name: "Returning Visitor" }),
+		);
+
+		const { addGuestPresent, loadMinutes } = await import("./minutes-logic");
+		await addGuestPresent({ meetingId: seed.meetingId, guestId: returning.id });
+		expect((await loadMinutes(seed.meetingId)).guests).toContainEqual(
+			expect.objectContaining({
+				guestId: returning.id,
+				name: "Returning Visitor",
+			}),
+		);
+		expect(await listClubGuests(seed.clubId)).toHaveLength(1);
+	});
+
 	it("clears a member assignee when a guest is assigned (mutual exclusivity)", async () => {
 		await testDb
 			.update(roleSlots)

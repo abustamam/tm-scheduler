@@ -23,14 +23,15 @@ export type NewGuestInput = {
 	phone?: string | null;
 };
 
-/** A club's guests, for the admin assign picker. Club-scoped, name-ordered.
- *  Excludes `joined` (converted) guests — they are members now and get assigned
- *  as members — and `lost` guests; only live prospects appear (#208 / ADR-0018). */
+/** A club's guests, for attendance and assignment pickers. Club-scoped, name-ordered.
+ *  Includes lost guests so returning visitors can reuse their existing record.
+ *  Excludes joined guests — they are members now and get assigned as members. */
 export async function listClubGuests(clubId: string) {
 	return db
 		.select({
 			id: guests.id,
 			name: guests.name,
+			stage: guests.stage,
 			email: guests.email,
 			phone: guests.phone,
 		})
@@ -38,7 +39,7 @@ export async function listClubGuests(clubId: string) {
 		.where(
 			and(
 				eq(guests.clubId, clubId),
-				inArray(guests.stage, ["prospect", "following_up"]),
+				inArray(guests.stage, ["prospect", "following_up", "lost"]),
 			),
 		)
 		.orderBy(asc(guests.name));

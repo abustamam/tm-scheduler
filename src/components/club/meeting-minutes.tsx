@@ -78,7 +78,7 @@ type MeetingMinutesProps = {
 	 */
 	meetingDayReached: boolean;
 	canEdit: boolean;
-	clubGuests: { id: string; name: string }[];
+	clubGuests: { id: string; name: string; stage?: string }[];
 	/**
 	 * The shared offline-write-queue handle (#176). Instantiated ONCE per
 	 * meeting by the route (`useOfflineMinutes`) so a second future consumer —
@@ -507,7 +507,7 @@ function AwardsSection({
 	canEdit: boolean;
 	busy: boolean;
 	roster: { memberId: string; name: string }[];
-	clubGuests: { id: string; name: string }[];
+	clubGuests: { id: string; name: string; stage?: string }[];
 	onSet: (
 		category: AwardCategory,
 		payload: {
@@ -524,7 +524,7 @@ function AwardsSection({
 	// to the full roster when nobody was recorded so an award can always be set.
 	function eligibleFor(category: AwardCategory): {
 		roster: { memberId: string; name: string }[];
-		clubGuests: { id: string; name: string }[];
+		clubGuests: { id: string; name: string; stage?: string }[];
 	} {
 		const elig = minutes.awardEligible[category];
 		const memberIds = new Set(elig.memberIds);
