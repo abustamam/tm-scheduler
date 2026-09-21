@@ -128,10 +128,11 @@ type WriteProofClass =
 /**
  * The POST fns that are NOT `session`, each with the reason it is not.
  *
- * Exactly the 29 the #761 inventory found (11 `pending-proof`,
- * 16 `console-asserted`, 2 `public-intake`). Adding a row is a decision about a
- * write's trust model, not a way to get green — a genuinely session-less write
- * that turns up unclassified is a finding to report, not an entry to make.
+ * The 29 the #761 inventory found, less the five #762 retired: 26 today
+ * (6 `pending-proof`, 16 `console-asserted`, 2 `public-intake`,
+ * 2 `fill-blank`). Adding a row is a decision about a write's trust model, not
+ * a way to get green — a genuinely session-less write that turns up
+ * unclassified is a finding to report, not an entry to make.
  *
  * NOT exported, though #761 specified it as `export`: Biome's
  * `lint/suspicious/noExportsInTest` is an ERROR in this repo's gate, and CI's
@@ -155,28 +156,24 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	},
 	"slots.ts#confirmSlot": { class: "pending-proof", reason: "slots child" },
 
-	// --- Phase 1: the attendance child --------------------------------------
+	// --- Phase 1: the attendance child, RETIRED by #762 ---------------------
 	// A first answer fills a blank and frees nothing; changing or clearing one,
-	// and the release arms, are what need a proven actor.
+	// and the release arms, are what need a proven actor. Both survivors write a
+	// rung an asserted roster pick is allowed to SET and not to CHANGE — the
+	// seam refuses the overwrite with `SIGN_IN_REQUIRED_MESSAGE`.
+	//
+	// Their three siblings are gone from this map rather than reclassified, and
+	// that is the retirement working: `clearPlannedAttendance`,
+	// `clearAvailability` and `markUnavailableReleasing` each call
+	// `requireSessionActor` in their own handler now, so the default-`session`
+	// sweep covers them and a row here would only hide a gate being deleted.
 	"attendance-plan.ts#setPlannedAttendance": {
-		class: "pending-proof",
-		reason: "attendance child",
-	},
-	"attendance-plan.ts#clearPlannedAttendance": {
-		class: "pending-proof",
-		reason: "attendance child",
+		class: "fill-blank",
+		reason: "ADR-0026",
 	},
 	"availability.ts#setAvailability": {
-		class: "pending-proof",
-		reason: "attendance child",
-	},
-	"availability.ts#clearAvailability": {
-		class: "pending-proof",
-		reason: "attendance child",
-	},
-	"availability.ts#markUnavailableReleasing": {
-		class: "pending-proof",
-		reason: "attendance child",
+		class: "fill-blank",
+		reason: "ADR-0026",
 	},
 
 	// --- Phase 1: the ballots child -----------------------------------------
@@ -508,10 +505,52 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).toEqual([]);
 	});
 
-	it("holds exactly the 29 exceptions the #761 inventory found", () => {
-		// The count is pinned, not just the shape. A thirtieth arriving silently
-		// is the thing to notice — either a new session-less write, or a child
-		// issue's row landing without its sibling being retired.
+	it("every `fill-blank` exception actually writes in fill-blank mode", () => {
+		// The class is a CLAIM about the handler, and until #762 nothing checked
+		// any of the four. That is not hypothetical: replacing
+		// `setPlannedAttendance`'s `if (proof === "asserted" && …)` with
+		// `if (false)` was measured against this branch and left every other suite
+		// in the repo GREEN — a `createServerFn` body cannot be invoked in vitest,
+		// so the fill-blank decision of the two fns that make it is reachable by
+		// source text and nothing else (CODING_STANDARDS.md, "WRITES are closed
+		// too").
+		//
+		// BOTH halves, because each is deletable while the other stands. Without
+		// the branch, a fn that still names `onlyIfAbsent: true` takes it on no
+		// path; without the write mode, a fn that still reads the proof does
+		// nothing with the answer. Either one alone re-opens #699 on that
+		// endpoint, silently, with this map still calling it `fill-blank`.
+		const offenders: string[] = [];
+		for (const [key, { class: cls }] of Object.entries(
+			WRITE_PROOF_EXCEPTIONS,
+		)) {
+			if (cls !== "fill-blank") continue;
+			const body = POST_FNS.get(key) ?? "";
+			if (!body.includes('proof === "asserted"')) {
+				offenders.push(`${key} (never branches on the proof)`);
+			}
+			if (!body.includes("onlyIfAbsent: true")) {
+				offenders.push(`${key} (never asks the seam for a fill-blank write)`);
+			}
+		}
+		expect(
+			offenders,
+			`A \`fill-blank\` row claims the fn admits an asserted caller ONLY to fill an empty value (ADR-0026): ${offenders.join(", ")}.\n` +
+				`It must branch on the resolved proof AND pass \`onlyIfAbsent: true\` to setPlanStatus on the asserted path. ` +
+				`Re-classify the row rather than deleting this assertion — an unproven write that overwrites is what #699 was.`,
+		).toEqual([]);
+	});
+
+	it("holds exactly the 26 exceptions left after #762", () => {
+		// The count is pinned, not just the shape. A twenty-seventh arriving
+		// silently is the thing to notice — either a new session-less write, or a
+		// child issue's row landing without its sibling being retired.
+		//
+		// #762 moved five of the eleven `pending-proof` rows the #761 inventory
+		// found: two became `fill-blank` and three left the map entirely for the
+		// default `session` sweep. `fill-blank` is counted from here on, because a
+		// class that is in the vocabulary and in nobody's total is a class a row
+		// can be parked in without moving any number anyone reads.
 		const byClass = (c: WriteProofClass) =>
 			Object.values(WRITE_PROOF_EXCEPTIONS).filter((v) => v.class === c).length;
 		expect({
@@ -519,11 +558,13 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			pendingProof: byClass("pending-proof"),
 			consoleAsserted: byClass("console-asserted"),
 			publicIntake: byClass("public-intake"),
+			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 29,
-			pendingProof: 11,
+			total: 26,
+			pendingProof: 6,
 			consoleAsserted: 16,
 			publicIntake: 2,
+			fillBlank: 2,
 		});
 	});
 });

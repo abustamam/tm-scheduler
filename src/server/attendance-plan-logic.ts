@@ -5,6 +5,7 @@ import {
 	meetingAttendancePlan,
 	members,
 } from "#/db/schema";
+import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 
 // Either the main db client or a drizzle transaction — so callers writing
@@ -48,6 +49,111 @@ export const SELF_SERVICE_RUNGS: readonly AttendancePlanStatus[] = [
 export const CLEARABLE_ASK: readonly AttendancePlanStatus[] = ["reached_out"];
 
 /**
+ * What every `setPlanStatus` call carries, whichever write mode it picks.
+ *
+ * Split from the two modes below so the mutually-exclusive pair is expressed in
+ * the TYPE rather than in a comment — see {@link SetPlanStatusArgs}.
+ */
+interface SetPlanStatusCommon {
+	memberId: string;
+	meetingId: string;
+	clubId: string;
+	status: AttendancePlanStatus;
+	/** Null is a decision, not an omission: an impersonated write resolves to
+	 *  null and `logActivity` stamps the real superadmin for it. */
+	actorMemberId: string | null;
+	/** How the change happened. Recorded in the activity detail only. */
+	via?: "nudge" | "manual";
+	/** WHICH authorization arm admitted the write, recorded in the activity
+	 *  detail. An honour-system TMOD write and a session-authenticated
+	 *  officer's are otherwise indistinguishable in the feed — and for a grant
+	 *  whose defence is "it is auditable afterwards", the arm is the one thing
+	 *  that has to be persisted (#576 review). Optional so the existing
+	 *  callers that have no ladder (`setAvailability`, the self-claim path)
+	 *  need no change. */
+	grantedVia?: "officer" | "tmod" | "self";
+	/** HOW the actor's identity was established, recorded as `detail.proof`
+	 *  (#762, ADR-0026).
+	 *
+	 *  `grantedVia` beside it answers a DIFFERENT question and neither implies
+	 *  the other: two of the three arms admit a signed-in member and an
+	 *  asserted roster pick alike, so a feed carrying only the arm cannot say
+	 *  whether the row in front of you was written by the person it names. The
+	 *  pair is what makes an honour-system write auditable rather than merely
+	 *  attributed.
+	 *
+	 *  Optional, so the callers with no ladder to read it off — `setContacted`,
+	 *  `markComingOnSelfClaim` — need no change; absent means the detail simply
+	 *  omits the key, as `grantedVia` already does. */
+	proof?: WriteProof;
+}
+
+/**
+ * The two write modes, mutually exclusive BY TYPE (#762).
+ *
+ * `demoteFrom` narrows which existing rows may be overwritten; `onlyIfAbsent`
+ * refuses to overwrite at all. A call carrying both would be asking the
+ * database two incompatible questions in one statement, and the shape that
+ * would actually be written — the `onConflictDoNothing` arm — silently ignores
+ * the other, so the union is what stops a caller believing a floor applied when
+ * nothing was floored.
+ */
+export type SetPlanStatusArgs = SetPlanStatusCommon &
+	(
+		| {
+				/** Overwrite an EXISTING row only when its status is one of these. Omit
+				 *  to overwrite any, which is right for a deliberate answer: moving UP
+				 *  the ladder from `reached_out` to `coming`/`not_coming` is the whole
+				 *  point of the feature, and a caller recording the member's answer
+				 *  must never be blocked from it. Two callers move the other way and do
+				 *  need it:
+				 *
+				 *  - `setContacted` passes `["reached_out"]` so ticking "contacted" can
+				 *    never demote a real answer back to "I asked them". Without it, an
+				 *    officer working from a list that rendered a moment ago erases the
+				 *    decline that arrived since — and because `unavailableMembers` is
+				 *    `not_coming` only, that member silently drops off the meeting
+				 *    page's Not Available list AND loses the warning in the assign
+				 *    picker, so the VPE hands a role to someone who said they cannot
+				 *    come.
+				 *  - `markComingOnSelfClaim` passes `["reached_out", "not_coming"]`,
+				 *    which both skips the redundant write when the row already says
+				 *    `coming` and makes that de-dup ATOMIC. It used to be a SELECT
+				 *    followed by an upsert, and two concurrent claims by the same
+				 *    member both read "not coming yet" and both logged.
+				 *
+				 *  Note the list names the statuses that may be REPLACED, not the ones
+				 *  that may be written; a caller wanting "re-affirming the same rung
+				 *  still logs" includes `args.status` in its own list. */
+				demoteFrom?: readonly AttendancePlanStatus[];
+				onlyIfAbsent?: false;
+		  }
+		| {
+				/** FILL A BLANK and nothing else — ADR-0026's line, drawn for a caller
+				 *  whose identity was only asserted (#762).
+				 *
+				 *  An unverified roster pick may record a member's FIRST answer,
+				 *  because a blank row and a name typed on a paper sign-up sheet carry
+				 *  the same weight. It may not change one, because changing one
+				 *  destroys something a person put there and nothing about the request
+				 *  says the two people are the same.
+				 *
+				 *  Three outcomes, and the middle one is why this is not simply a
+				 *  refusal: no row ⇒ insert and log, as any other write;
+				 *  a row that ALREADY says `status` ⇒ `changed: false`, no throw and
+				 *  no log, so re-tapping an answer you already gave is a no-op rather
+				 *  than a lecture; a row saying anything else ⇒
+				 *  {@link SIGN_IN_REQUIRED_MESSAGE}, which the client turns into a
+				 *  toast carrying a one-tap sign-in link.
+				 *
+				 *  The insert and the conflict test are ONE statement, so two
+				 *  simultaneous first answers cannot both insert. */
+				onlyIfAbsent: true;
+				demoteFrom?: undefined;
+		  }
+	);
+
+/**
  * THE only module that reads or writes `meeting_attendance_plan`, apart from the
  * membership merge (`membership-collapse-logic.ts`), which re-points `member_id`
  * in raw SQL and is waived by name in `attendance-plan-store.guard.test.ts`.
@@ -71,73 +177,67 @@ export const CLEARABLE_ASK: readonly AttendancePlanStatus[] = ["reached_out"];
  */
 export async function setPlanStatus(
 	database: DbOrTx,
-	args: {
-		memberId: string;
-		meetingId: string;
-		clubId: string;
-		status: AttendancePlanStatus;
-		/** Null is a decision, not an omission: an impersonated write resolves to
-		 *  null and `logActivity` stamps the real superadmin for it. */
-		actorMemberId: string | null;
-		/** How the change happened. Recorded in the activity detail only. */
-		via?: "nudge" | "manual";
-		/** WHICH authorization arm admitted the write, recorded in the activity
-		 *  detail. An honour-system TMOD write and a session-authenticated
-		 *  officer's are otherwise indistinguishable in the feed — and for a grant
-		 *  whose defence is "it is auditable afterwards", the arm is the one thing
-		 *  that has to be persisted (#576 review). Optional so the existing
-		 *  callers that have no ladder (`setAvailability`, the self-claim path)
-		 *  need no change. */
-		grantedVia?: "officer" | "tmod" | "self";
-		/** Overwrite an EXISTING row only when its status is one of these. Omit to
-		 *  overwrite any, which is right for a deliberate answer: moving UP the
-		 *  ladder from `reached_out` to `coming`/`not_coming` is the whole point of
-		 *  the feature, and a caller recording the member's answer must never be
-		 *  blocked from it. Two callers move the other way and do need it:
-		 *
-		 *  - `setContacted` passes `["reached_out"]` so ticking "contacted" can
-		 *    never demote a real answer back to "I asked them". Without it, an
-		 *    officer working from a list that rendered a moment ago erases the
-		 *    decline that arrived since — and because `unavailableMembers` is
-		 *    `not_coming` only, that member silently drops off the meeting page's
-		 *    Not Available list AND loses the warning in the assign picker, so the
-		 *    VPE hands a role to someone who said they cannot come.
-		 *  - `markComingOnSelfClaim` passes `["reached_out", "not_coming"]`, which
-		 *    both skips the redundant write when the row already says `coming` and
-		 *    makes that de-dup ATOMIC. It used to be a SELECT followed by an
-		 *    upsert, and two concurrent claims by the same member both read "not
-		 *    coming yet" and both logged.
-		 *
-		 *  Note the list names the statuses that may be REPLACED, not the ones that
-		 *  may be written; a caller wanting "re-affirming the same rung still logs"
-		 *  includes `args.status` in its own list. */
-		demoteFrom?: readonly AttendancePlanStatus[];
-	},
+	args: SetPlanStatusArgs,
 ): Promise<{ ok: true; changed: boolean }> {
-	const written = await database
-		.insert(meetingAttendancePlan)
-		.values({
-			memberId: args.memberId,
-			meetingId: args.meetingId,
-			status: args.status,
-		})
-		.onConflictDoUpdate({
-			target: [meetingAttendancePlan.memberId, meetingAttendancePlan.meetingId],
-			// `now()` rather than `new Date()`: `created_at` defaults to the DATABASE
-			// clock, and stamping this one from the Node process clock lets skew
-			// between the app container and Railway's managed Postgres produce
-			// `updated_at < created_at`, or order two app instances' writes wrongly.
-			set: { status: args.status, updatedAt: sql`now()` },
-			...(args.demoteFrom
-				? { setWhere: inArray(meetingAttendancePlan.status, args.demoteFrom) }
-				: {}),
-		})
-		.returning({ id: meetingAttendancePlan.id });
+	const values = {
+		memberId: args.memberId,
+		meetingId: args.meetingId,
+		status: args.status,
+	};
+	const target = [
+		meetingAttendancePlan.memberId,
+		meetingAttendancePlan.meetingId,
+	];
+	const written = args.onlyIfAbsent
+		? await database
+				.insert(meetingAttendancePlan)
+				.values(values)
+				.onConflictDoNothing({ target })
+				.returning({ id: meetingAttendancePlan.id })
+		: await database
+				.insert(meetingAttendancePlan)
+				.values(values)
+				.onConflictDoUpdate({
+					target,
+					// `now()` rather than `new Date()`: `created_at` defaults to the
+					// DATABASE clock, and stamping this one from the Node process clock
+					// lets skew between the app container and Railway's managed Postgres
+					// produce `updated_at < created_at`, or order two app instances'
+					// writes wrongly.
+					set: { status: args.status, updatedAt: sql`now()` },
+					...(args.demoteFrom
+						? {
+								setWhere: inArray(
+									meetingAttendancePlan.status,
+									args.demoteFrom,
+								),
+							}
+						: {}),
+				})
+				.returning({ id: meetingAttendancePlan.id });
 
-	// Nothing written ⇒ the guard refused the demotion. Log nothing: a `plan_set`
-	// row for a change that did not happen is a lie the activity feed then tells
-	// forever.
-	if (written.length === 0) return { ok: true as const, changed: false };
+	// Nothing written ⇒ the `demoteFrom` floor refused the demotion, or a row was
+	// already there and `onlyIfAbsent` refused to touch it. Log nothing either
+	// way: a `plan_set` row for a change that did not happen is a lie the
+	// activity feed then tells forever.
+	if (written.length === 0) {
+		if (args.onlyIfAbsent) {
+			// Read back through the SAME `database` handle, so a caller inside a
+			// transaction compares against its own uncommitted state rather than
+			// against the world as it was before.
+			const current = await getPlanStatus(database, {
+				memberId: args.memberId,
+				meetingId: args.meetingId,
+			});
+			// An answer that already says what this write says is not an overwrite,
+			// so it is not the thing ADR-0026 refuses. Refusing it anyway would
+			// make a double-tap — or a retried request off a flaky mobile
+			// connection — look like a permission failure to the member who gave
+			// the answer in the first place.
+			if (current !== args.status) throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+		return { ok: true as const, changed: false };
+	}
 
 	await logActivity(database, {
 		clubId: args.clubId,
@@ -150,6 +250,7 @@ export async function setPlanStatus(
 			status: args.status,
 			via: args.via ?? "manual",
 			...(args.grantedVia ? { grantedVia: args.grantedVia } : {}),
+			...(args.proof ? { proof: args.proof } : {}),
 		},
 	});
 	return { ok: true as const, changed: true };

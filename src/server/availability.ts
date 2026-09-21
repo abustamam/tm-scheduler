@@ -22,18 +22,28 @@
 //     it", both of which confirm first. The rail's withholds the release from a
 //     Toastmaster acting on ANOTHER member's row: a product ceiling on how much
 //     one honour-system caller can sweep in a few honest taps, and deliberately
-//     not a security claim (see `attendance-decline-logic.ts`, and the RESIDUAL
-//     case in `attendance-decline.integration.test.ts` that executes the hole).
+//     not a security claim (see `attendance-decline-logic.ts`). Since #762 the
+//     security claim is a SEPARATE gate on both endpoints — freeing roles needs
+//     a proven session — and both seams execute that refusal rather than
+//     describing it.
 //   · The rail's refuses once the meeting is OVER, not merely completed.
 //
 // Folding the two together would have to pick one of each, so they stay
 // separate.
 //
-// All three are PUBLIC and session-less. The two `setAvailability` /
-// `clearAvailability` delegates therefore name the rungs they may touch
-// (`SELF_SERVICE_RUNGS`) rather than trusting the plan seam to know who is
-// calling: that seam is `attendance-plan-logic.ts`, and it genuinely cannot
-// know — it takes a `DbOrTx` and no session.
+// All three used to be PUBLIC and session-less. #762 (ADR-0026) split them:
+// `setAvailability` still is, and `clearAvailability` and
+// `markUnavailableReleasing` are not — they DESTROY something a person put
+// there (an answer, a programme's worth of role assignments), which is the side
+// of the line that needs a session bound to a member of this club. Each names
+// `requireSessionActor` in its own handler.
+//
+// The two `setAvailability` / `clearAvailability` delegates still name the
+// rungs they may touch (`SELF_SERVICE_RUNGS`) rather than trusting the plan
+// seam to know who is calling: that seam is `attendance-plan-logic.ts`, and it
+// genuinely cannot know — it takes a `DbOrTx` and no session. What it CAN be
+// told is how the caller's identity was established, which is the `proof`
+// `setAvailability` now passes and the `onlyIfAbsent` mode it picks from it.
 //
 // `markUnavailableReleasing` is the exception since #675, and the distinction is
 // worth keeping straight because it is what the missing gate hid behind. ITS
@@ -54,7 +64,11 @@ import {
 import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
-import { requestWriteActor } from "./write-actor-logic";
+import {
+	requestWriteActor,
+	requestWriteActorWithProof,
+	requireSessionActor,
+} from "./write-actor-logic";
 
 /** Load a meeting's status (for the #150 lock) and its OWNING club, or throw if
  *  it's missing. The club is read from the meeting rather than trusted from the
@@ -86,11 +100,20 @@ const availabilitySchema = z.object({
 });
 
 /** Mark a member as unavailable for a meeting — the `not_coming` rung.
- *  Idempotent (the seam upserts). PUBLIC — no session required.
- *  `requireMemberInClub` is a trust guard on the SUBJECT, not an authorization
- *  check on the CALLER; #675 audited this pair and left it, because writing
- *  `not_coming` releases nothing and the member's own answer is recoverable by
- *  re-answering. See TODOS/release-roles-subject-check-675.md. */
+ *  Idempotent (the seam upserts). PUBLIC — still no session required, and
+ *  deliberately so: this is the season grid's own toggle and the honour-system
+ *  sign-up sheet is the product (ADR-0010).
+ *
+ *  What a session-less caller may do NARROWED with #762, though. `requireMemberInClub`
+ *  is a trust guard on the SUBJECT, not an authorization check on the CALLER,
+ *  and #675 audited this pair and left it on the grounds that writing
+ *  `not_coming` releases nothing and is recoverable by re-answering. ADR-0026
+ *  disagrees with the second half: re-answering needs the member to NOTICE, and
+ *  a row flipped to "not coming" takes them off the assign picker and out of the
+ *  season grid's offers in the meantime. So an ASSERTED caller may fill a blank
+ *  and may re-affirm the answer already there; changing one raises
+ *  `SIGN_IN_REQUIRED_MESSAGE` from the seam, which the grid renders as a toast
+ *  carrying a one-tap sign-in link. */
 export const setAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
@@ -98,31 +121,47 @@ export const setAvailability = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const actorMemberId = await requestWriteActor({
+		// `…WithProof` (#762). The subject default stays — this endpoint has no
+		// ladder and never had one, so the claim only decides who is CREDITED —
+		// but the arm that answered now decides how much the write may do.
+		const actor = await requestWriteActorWithProof({
 			clubId: meeting.clubId,
 			claimedActorMemberId: data.actorMemberId ?? data.memberId,
 		});
-
-		await setPlanStatus(db, {
+		// Null is the impersonating superadmin and NOTHING else here: the claim is
+		// always present (it defaults to the subject), so the "nobody to credit"
+		// arm is unreachable, and the impersonation arm is only taken after a real
+		// session was read. `logActivity` is null-aware by design (ADR-0016 /
+		// #246), so the id is passed along as-is rather than falling back to the
+		// member — that would file the superadmin's write under their name.
+		const answer = {
 			memberId: data.memberId,
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
-			status: "not_coming",
-			actorMemberId,
+			status: "not_coming" as const,
+			actorMemberId: actor?.memberId ?? null,
+			proof: actor?.proof ?? ("session" as const),
 			// Deliberately NO `demoteFrom`. Writing `not_coming` over an officer's
 			// `reached_out` is the ladder working: they asked, the member answered.
 			// Restricting this would silently discard the answer, which is a worse
 			// loss than the "we asked them" bit it would have preserved.
-		});
+		};
+		if (answer.proof === "asserted") {
+			await setPlanStatus(db, { ...answer, onlyIfAbsent: true });
+		} else {
+			await setPlanStatus(db, answer);
+		}
 
 		return { ok: true as const };
 	});
 
 /** Take a member's "not coming" back to "no answer" (row absent).
- *  PUBLIC — no session required. `requireMemberInClub` proves the SUBJECT is on
- *  the roster; it proves nothing about the caller. What bounds this one is the
- *  self-service floor it hands the seam below, which keeps an officer's
- *  `reached_out` out of reach of a session-less delete. */
+ *  SIGNED IN since #762 — a clear DESTROYS an answer a person put there, which
+ *  is the side of ADR-0026's line that needs a session bound to a member of this
+ *  club. `requireMemberInClub` proves the SUBJECT is on the roster and proves
+ *  nothing about the caller; the self-service floor below keeps an officer's
+ *  `reached_out` out of reach; neither of those is the check that says the
+ *  person clearing the row is entitled to. */
 export const clearAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
@@ -130,6 +169,11 @@ export const clearAvailability = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
+		// The RETURN is deliberately unused: this gate answers "may this request
+		// write at all", and who to CREDIT is the existing resolution below, which
+		// is unchanged. Binding the result would also import the null hazard
+		// documented on `SessionActor` for no gain.
+		await requireSessionActor({ clubId: meeting.clubId });
 		const actorMemberId = await requestWriteActor({
 			clubId: meeting.clubId,
 			claimedActorMemberId: data.actorMemberId ?? data.memberId,
@@ -174,6 +218,11 @@ export const markUnavailableReleasing = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
+		// #762. The seam refuses an asserted caller itself — that is where the
+		// check is testable — so this is the explicit, readable half: a write
+		// surface that frees another person's roles names its session gate in its
+		// own handler rather than inheriting one four files away.
+		await requireSessionActor({ clubId: meeting.clubId });
 		const { released } = await releaseSlotsAndMarkUnavailable(db, {
 			memberId: data.memberId,
 			meetingId: data.meetingId,

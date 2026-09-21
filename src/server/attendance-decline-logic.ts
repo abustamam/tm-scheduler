@@ -43,15 +43,31 @@
  * NOTHING to the subject and returns `via: "self"`, which releases — so the
  * cheap forgery is to omit `claimedActorMemberId` entirely, one request per
  * member, and it logs the victim as the actor.
- * `availability.integration.test.ts:468` has asserted exactly that for the
- * sibling endpoint since #675, and the case below marked THE RESIDUAL asserts it
- * here.
  *
  * That is the product's identity model (#317) — the same honour system
- * `claimSlot` and `releaseSlot` run on — and closing it is a much larger change
- * than this one. What the arm gate buys is a real but narrower thing: a
- * Toastmaster running the panel cannot sweep a meeting's whole programme in a
- * few honest taps. Keep it for that. Do not defend it as authorization.
+ * `claimSlot` and `releaseSlot` run on. What the arm gate buys is a real but
+ * narrower thing: a Toastmaster running the panel cannot sweep a meeting's
+ * whole programme in a few honest taps. Keep it for that. Do not defend it as
+ * authorization.
+ *
+ * ## The PROOF gate is the authorization, and it is a separate line (#762)
+ *
+ * ADR-0026 closed the residual that paragraph describes, and closed it
+ * somewhere else on purpose. `mayRelease` reads the ARM, which two kinds of
+ * caller reach; the gate below reads {@link ResolvedActor.proof}, which is the
+ * only thing that separates them. A caller asking to free roles without a
+ * session bound to a member of this club is refused with
+ * `SIGN_IN_REQUIRED_MESSAGE` before anything is written — including the rung,
+ * because they asked for a destructive write and got none of it, and a partial
+ * success reported as a plain `released: 0` is how a caller concludes the roles
+ * are still theirs when the answer has changed underneath them.
+ *
+ * Refused on the FLAG rather than on `releasing`, so the refusal does not
+ * depend on the product ceiling agreeing: an asserted Toastmaster asking to
+ * free another member's roles is told to sign in, not silently downgraded to a
+ * rung write they did not ask for. The two gates are therefore independent —
+ * deleting either leaves the other doing its own job — which is the property
+ * the ceiling/boundary split exists to have.
  *
  * ## Why the branch lives HERE
  *
@@ -76,6 +92,7 @@ import { eq } from "drizzle-orm";
 import type { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import { isMeetingOver } from "#/lib/meeting-lifecycle";
+import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import { type ResolvedActor, resolveActor } from "./attendance-actor-logic";
 import { setPlanStatus } from "./attendance-plan-logic";
 import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
@@ -212,6 +229,17 @@ export async function declinePlannedAttendance(
 		claimedActorMemberId: args.claimedActorMemberId,
 	});
 
+	// THE AUTHORIZATION LINE (#762, ADR-0026), and it is deliberately not the
+	// one below. Freeing a member's roles is destructive and has no undo —
+	// re-claiming a freed slot runs `attachSpeechToSlot`, which INSERTs a new
+	// speech row and orphans the original — so it needs a session bound to a
+	// member of this club, whichever arm admitted the caller. Read the seam
+	// header for why this is separate from `mayRelease` and why it keys off the
+	// FLAG rather than off `releasing`.
+	if (args.releaseHeldRoles && actor.proof !== "session") {
+		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+	}
+
 	// BOTH conditions, and the flag first: a caller that did not ask for a
 	// release never reaches the arm question at all.
 	const releasing = args.releaseHeldRoles && mayRelease(actor, args.memberId);
@@ -220,15 +248,26 @@ export async function declinePlannedAttendance(
 		// Byte-for-byte what `setPlannedAttendance` wrote for this rung before
 		// #663, including the absent `demoteFrom` — a deliberate answer may
 		// overwrite whatever is on the row, which is the ladder working.
-		const { changed } = await setPlanStatus(database, {
+		const rung = {
 			memberId: args.memberId,
 			meetingId: args.meetingId,
 			clubId: args.clubId,
-			status: "not_coming",
+			status: "not_coming" as const,
 			actorMemberId: actor.actorMemberId,
 			via: args.via,
 			grantedVia: actor.via,
-		});
+			proof: actor.proof,
+		};
+		// …unless the identity was only ASSERTED, in which case "overwrite
+		// whatever is on the row" is precisely what ADR-0026 takes away. An
+		// unverified pick may record a member's FIRST answer and nothing more;
+		// changing one — including changing `coming` to `not_coming`, which is
+		// how a member loses their place on a programme — raises
+		// `SIGN_IN_REQUIRED_MESSAGE` out of the seam.
+		const { changed } =
+			actor.proof === "asserted"
+				? await setPlanStatus(database, { ...rung, onlyIfAbsent: true })
+				: await setPlanStatus(database, rung);
 		return { ok: true as const, changed, released: 0 };
 	}
 

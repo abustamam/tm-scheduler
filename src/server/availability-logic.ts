@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { db } from "#/db";
 import { roleSlots } from "#/db/schema";
+import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { resolveActor } from "./attendance-actor-logic";
 import { setPlanStatus } from "./attendance-plan-logic";
@@ -32,6 +33,20 @@ type Database = typeof db;
  * covered by a source grep and nothing else, while a seam is reachable and
  * therefore provable. `availability.integration.test.ts` executes all four
  * outcomes against a real database.
+ *
+ * ## And the ladder is not enough on its own (#762, ADR-0026)
+ *
+ * The ladder above answers WHICH arm, not HOW the identity was established, and
+ * two of its three arms admit a caller who merely typed a member id into the
+ * payload — the self arm's last fallback admitting one who typed nothing at
+ * all. So the gate it restored still left the whole of #699 reachable here:
+ * every role a member holds, back to `open` with `speech_id = null`, from a
+ * request carrying no session, credited to the victim.
+ *
+ * This fn releases UNCONDITIONALLY — that is the difference between it and the
+ * rail's decline — so there is no first-answer case to preserve and no ceiling
+ * to negotiate with. A `proof` that is not `"session"` is refused outright,
+ * before the transaction opens, so nothing partial lands.
  *
  * The archive assert is this arm's OWN, not a duplicate for its own sake. This
  * path takes a self-asserted member id with no session, so `requireMembership`'s
@@ -84,12 +99,15 @@ export async function releaseSlotsAndMarkUnavailable(
 	// (#396/#246) — a decision, not an omission: `logActivity` stamps the real
 	// superadmin for it, so it must NOT fall back to the member or the write
 	// lands under their name.
-	const { actorMemberId, via } = await resolveActor({
+	const { actorMemberId, via, proof } = await resolveActor({
 		clubId: args.clubId,
 		meetingId: args.meetingId,
 		memberId: args.memberId,
 		claimedActorMemberId: args.claimedActorMemberId,
 	});
+	// ADR-0026, and the reason the ladder alone was never enough here: see the
+	// header. Before the transaction, so a refusal leaves nothing behind.
+	if (proof !== "session") throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 	return database.transaction(async (tx) => {
 		const released = await tx
 			.update(roleSlots)
@@ -125,6 +143,10 @@ export async function releaseSlotsAndMarkUnavailable(
 			// "auditable afterwards" is not auditable while an honour-system TMOD
 			// release and an officer's look identical in the feed.
 			grantedVia: via,
+			// Always `"session"` past the gate above, and recorded anyway: the feed
+			// reader should not have to know which writers happen to be gated
+			// today to tell a proven write from an asserted one.
+			proof,
 		});
 
 		for (const slot of released) {
@@ -134,7 +156,7 @@ export async function releaseSlotsAndMarkUnavailable(
 				action: "release",
 				targetType: "slot",
 				targetId: slot.id,
-				detail: { fromMemberId: args.memberId },
+				detail: { fromMemberId: args.memberId, proof },
 			});
 		}
 		return { released: released.length };
