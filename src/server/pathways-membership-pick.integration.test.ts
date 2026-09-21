@@ -42,14 +42,24 @@
  * The ordinary single-membership behaviour of both surfaces is
  * `project-picker.integration.test.ts` and `progress-marks.integration.test.ts`;
  * this file adds only the duplicate-Person precondition they do not construct,
- * plus the lapsed-admin case that needs no duplicate.
+ * plus the two cases that need no duplicate at all: the lapsed admin the
+ * `status` check must refuse, and the lapsed membership `selfMemberIdInClub`
+ * must still name.
  *
  * What each mutation costs, measured on this suite rather than asserted:
  *
  *  · drop the `status` check → 1 case (the lapsed admin with no duplicate).
  *  · drop `viewerMaySeeProgress`'s ORDER BY → 2 (the admin duplicate, and
  *    repeated calls), and the second failed on 3 of 3 runs.
- *  · revert `selfMemberIdInClub` to its pre-fix query → 8 of its 9.
+ *  · revert `selfMemberIdInClub` to its pre-fix query → 8 of its 10, on 3 of 3
+ *    runs. The two that survive are the ones the ordering does not reach: the
+ *    null case, and the lapsed-ONLY case, which is about a filter that is not
+ *    there rather than about which row wins.
+ *  · ADD a `status` filter to `selfMemberIdInClub` — the "symmetry with
+ *    `viewerMaySeeProgress`" change — → 1, the lapsed-only case, and nothing
+ *    else. That is the whole reason it exists: every other fixture here pairs
+ *    a lapsed row with a live one, and over those a filter and key 1 return
+ *    the same membership, so all 15 without it stayed green.
  *  · swap keys 1 and 2 in `viewerMaySeeProgress` → 0. In `selfMemberIdInClub`
  *    → 1. The polarity is only observable where no status check stands in
  *    front of it, which is why the note sits on that case and not on the
@@ -297,6 +307,29 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 	// written progress mark is CREDITED to, which is invisible until someone asks
 	// who ticked the box. Same family as #396.
 	describe("selfMemberIdInClub", () => {
+		// The NO-status-filter decision, and the only case here that holds it.
+		// This function names attribution, not a grant, so it deliberately filters
+		// nothing — but every other fixture in this describe pairs a lapsed row
+		// against a live one, and wherever both rows exist a filter and key 1 are
+		// indistinguishable: both return the active membership. So a `status`
+		// filter added for symmetry with `viewerMaySeeProgress` beside it would
+		// leave all of them green.
+		//
+		// One membership, lapsed, no duplicate — the shape a filter changes. It
+		// would hand back `null`, which `markMyProject` writes as "marked by
+		// nobody", losing attribution for a member whose roster row lapsed between
+		// the mark and the read. The ordering carries the preference instead: an
+		// active row out-ranks a lapsed one, and the lapsed row is still named when
+		// it is all there is.
+		it("still names a LAPSED membership when it is the only one", async () => {
+			const lapsed = await addMembership({
+				clubRole: "member",
+				status: "inactive",
+			});
+
+			await expectIdAgreesWithGuardPath(lapsed);
+		});
+
 		// Key 1, and this is where its POLARITY is load-bearing — the boolean
 		// surface above cannot see it, because a status check refuses the lapsed row
 		// there whichever way the two keys are ordered. Here there is no such check
