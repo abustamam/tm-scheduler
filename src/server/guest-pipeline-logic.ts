@@ -1147,6 +1147,30 @@ export interface ConvertGuestResult {
 	 * merely deduped onto is left completely alone.
 	 */
 	closedOfficerPositions: OfficerPosition[];
+	/**
+	 * @deprecated Always `[]`. Shipped ONLY so a tab loaded before this deploy
+	 * does not throw, and removable in the NEXT release that touches this file —
+	 * once no client older than #805 can still be open, delete this field and
+	 * the line that emits it. Nothing in this repo reads it; the only reader it
+	 * exists for is a bundle that is no longer being served.
+	 *
+	 * This field is the #504 hazard one axis over: not the server fn's METHOD
+	 * but its response SHAPE. The URL is derived from the file and export name,
+	 * so it is byte-identical across an auto-deploy, and a client loaded before
+	 * it keeps posting to the new server quite happily. What it then does is
+	 * `result.retainedOfficerPositions.length` — unguarded, because the field
+	 * was required — and that throws a TypeError AFTER the transaction has
+	 * committed: the admin sees `toast.error("Cannot read properties of
+	 * undefined")` on a convert that SUCCEEDED, and `router.invalidate()` never
+	 * runs, so the board still shows the guest as a prospect. It fires only when
+	 * `reactivated` is true, which is exactly the converts this feature changed.
+	 *
+	 * Empty rather than the closed positions: the old client's sentence said the
+	 * term still stood, which is now false. `[]` makes the stale tab silent
+	 * about offices and correct about everything else, and the fresh tab reads
+	 * `closedOfficerPositions` for the real notice.
+	 */
+	retainedOfficerPositions: OfficerPosition[];
 }
 
 /**
@@ -1411,8 +1435,8 @@ export async function applyConvertGuestToMember(
 				//
 				// ## Why this is not convert vacating a live office
 				//
-				// The office was ALREADY vacant everywhere a human looks. Every
-				// status-aware reader of `officer_terms` drops an inactive holder:
+				// The office was already vacant everywhere THE GATE AND THE AGENDA
+				// look. Both of those readers drop an inactive holder:
 				// `currentOfficersForClub` skips `status === "inactive"`, so the
 				// printed agenda's officer grid has been showing the position as Open,
 				// and `loadOfficerSeats` filters on `status = 'active'`, so the COT
@@ -1420,8 +1444,18 @@ export async function applyConvertGuestToMember(
 				// without this officer for as long as the membership has been lapsed.
 				// What the wake-up silently did was REINSTATE them — to the agenda and
 				// to the gate — on a membership Person dedup chose, and dedup can land
-				// on the wrong human (#561). Ending the term makes the table agree
-				// with what those readers already render.
+				// on the wrong human (#561).
+				//
+				// It is NOT every reader, and the difference is visible. Three are
+				// status-unaware and DO change here: `currentOfficersByMember` backs
+				// the roster (`club.ts:40`) and the member profile (`club.ts:136`),
+				// which is why a lapsed President has been rendering as President
+				// there; and `getOnboardingChecklist` asks only whether the club has
+				// ANY open term, so a club whose only officer is this lapsed one had
+				// its "Assign officer roles" row COMPLETE before the convert and
+				// INCOMPLETE after. That is the honest cost of this write, and it is
+				// the correct direction on all three: the roster stops naming a
+				// non-member as an officer, and the checklist stops counting one.
 				//
 				// Only on the wake-up path, and that is the whole scope of the
 				// governance claim: reuse of an ALREADY-ACTIVE membership never
@@ -1611,6 +1645,9 @@ export async function applyConvertGuestToMember(
 			reactivated: reactivatedFrom !== undefined,
 			...(demotedFrom ? { demotedFrom } : {}),
 			closedOfficerPositions,
+			// One release only — see the field's docblock. Delete this line and
+			// the field together in the next release that touches this file.
+			retainedOfficerPositions: [],
 		};
 	});
 }

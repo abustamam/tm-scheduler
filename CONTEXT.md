@@ -148,16 +148,21 @@ the nouns in `src/db/schema.ts`.
   Convert now closes those terms in the same transaction (`closeOpenOfficerTerms`, the exact
   inverse of the seam `guards.ts` grants from), reports them as `closedOfficerPositions` driving
   `CONVERT_OFFICER_TERM_CLOSED_MESSAGE`, and records them in the `member_add` detail. **This is
-  not convert vacating a live office:** every status-aware reader of `officer_terms` already
-  drops an inactive holder — `currentOfficersForClub` skips them, so the printed agenda showed
+  not convert vacating a live office:** everywhere the GATE and the AGENDA look, the office was
+  already vacant — `currentOfficersForClub` skips an inactive holder, so the printed agenda showed
   the position as Open, and `loadOfficerSeats` filters on `status = 'active'`, so the COT seats
-  never listed them — so the office was already vacant everywhere a human looks, and what the
-  wake-up silently did was REINSTATE it on a row Person dedup chose (#561). Scoped to the wake-up
-  branch only: reuse of an ALREADY-ACTIVE membership never reaches it, so a sitting President who
-  is deduped keeps their office. **Nothing reverses it, and nothing has to:** undo refuses any
+  never listed them — and what the wake-up silently did was REINSTATE it on a row Person dedup
+  chose (#561). Not every reader, and the difference is visible: `currentOfficersByMember` (roster,
+  member profile) and `getOnboardingChecklist` are status-unaware, so a lapsed President HAS been
+  rendering as President on the roster, and the checklist's "Assign officer roles" row goes from
+  complete to incomplete for a club whose only open term was that one. Both movements are the
+  correct direction. Scoped to the wake-up branch only: reuse of an ALREADY-ACTIVE membership
+  never reaches it, so a sitting President who is deduped keeps their office. **Nothing reverses it, and nothing has to:** undo refuses any
   membership carrying an `officer_terms` row open OR closed, and terms are closed rather than
   deleted (#100), so every conversion this touches was already un-undoable before the close and
-  still is. The remedy is the member edit form's office checkboxes, which the notice names.
+  still is. The remedy is the member edit form's office checkboxes, which the notice names —
+  though `applyImportMembers` re-opens a term from a members CSV that still names them, silently
+  and with no activity row (#819).
   `guest-convert-privilege.integration.test.ts` pins all of it in the gate's own terms, including
   that coupling.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still

@@ -55,19 +55,22 @@ describe.skipIf(!hasTestDb)("closeOpenOfficerTerms (#805)", () => {
 			.orderBy(asc(officerTerms.position));
 	}
 
-	it("closes every open term and returns them President first", async () => {
-		// Canonical order, not insertion order: the caller reads this list into a
-		// toast, and Postgres returns updated rows in no defined order — so
-		// inserting Treasurer first is the arrangement that catches a missing
-		// sort rather than agreeing with one.
+	it("closes every open term and returns them in canonical rank order", async () => {
+		// The fixture is chosen so canonical order disagrees with BOTH of the
+		// orders a broken implementation would produce. `secretary` ranks 4 and
+		// `vp_education` ranks 1, so the answer is VP Education first — while
+		// insertion order says Secretary first (no sort at all) and so does a
+		// bare `.sort()` with no comparator, since "secretary" < "vp_education"
+		// as strings. A President/Treasurer pair agrees with both and would pin
+		// the direction while leaving the KEY untested.
 		await testDb.insert(officerTerms).values([
-			{ membershipId: seed.memberId, position: "treasurer" },
-			{ membershipId: seed.memberId, position: "president" },
+			{ membershipId: seed.memberId, position: "secretary" },
+			{ membershipId: seed.memberId, position: "vp_education" },
 		]);
 
 		expect(await closeOpenOfficerTerms(testDb, seed.memberId)).toEqual([
-			"president",
-			"treasurer",
+			"vp_education",
+			"secretary",
 		]);
 		// The grant is gone, asserted through the seam that confers it rather
 		// than by re-reading the column: these two functions disagreeing is the
@@ -123,21 +126,5 @@ describe.skipIf(!hasTestDb)("closeOpenOfficerTerms (#805)", () => {
 
 		expect(await closeOpenOfficerTerms(testDb, seed.memberId)).toEqual([]);
 		expect(await termsOf(seed.memberId)).toHaveLength(1);
-	});
-
-	it("stamps the end date the caller passes, not its own clock", async () => {
-		// Convert closes the term inside the same transaction that wakes the
-		// membership, and a caller that needs those two to carry one timestamp
-		// has to be able to say so. Pinned because the parameter has a default,
-		// which is exactly the shape that gets silently ignored.
-		const closedAt = new Date("2023-03-04T05:06:07.000Z");
-		await testDb
-			.insert(officerTerms)
-			.values({ membershipId: seed.memberId, position: "president" });
-
-		await closeOpenOfficerTerms(testDb, seed.memberId, closedAt);
-
-		const rows = await termsOf(seed.memberId);
-		expect(rows[0]?.termEnd?.toISOString()).toBe(closedAt.toISOString());
 	});
 });

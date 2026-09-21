@@ -46,12 +46,18 @@ export async function getOpenOfficerPositions(
  * "which terms are open" in two modules is how a revocation ends up closing a
  * different set from the one the gate reads.
  *
- * ONE statement, not a read followed by writes: `UPDATE … RETURNING` closes the
- * rows and reports them in the same round trip, so the positions handed back
- * are exactly the ones this call ended — never a snapshot taken before a
- * concurrent close, which is what a select-then-update would disclose. The
- * caller shows that list to a human, so over- and under-stating it are both
- * bugs.
+ * `UPDATE … RETURNING` rather than a select followed by a write, so the
+ * positions handed back are the rows this statement actually closed rather than
+ * a set read beforehand. The caller shows that list to a human, so over- and
+ * under-stating it are both bugs.
+ *
+ * That is a reporting property, NOT a concurrency one, and the difference is
+ * worth stating because it is easy to credit the wrong thing: one statement
+ * does not stop a term being OPENED underneath it. What does is the caller's
+ * lock. Convert holds `FOR UPDATE` on the `members` row, and inserting an
+ * `officer_terms` row takes `FOR KEY SHARE` on the membership it references for
+ * the FK check — which conflicts, so a concurrent assignment waits. A caller
+ * that does NOT hold that lock gets no such guarantee from this function.
  *
  * Rows are CLOSED, never deleted — `term_end` is set and the history stays, the
  * same way removing an office from the member edit form does (#100). That is
@@ -68,11 +74,11 @@ export async function getOpenOfficerPositions(
 export async function closeOpenOfficerTerms(
 	database: Database,
 	membershipId: string,
-	closedAt: Date = new Date(),
 ): Promise<OfficerPosition[]> {
+	const now = new Date();
 	const rows = await database
 		.update(officerTerms)
-		.set({ termEnd: closedAt, updatedAt: closedAt })
+		.set({ termEnd: now, updatedAt: now })
 		.where(
 			and(
 				eq(officerTerms.membershipId, membershipId),

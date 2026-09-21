@@ -90,19 +90,27 @@ export const CONVERT_DEMOTED_MESSAGE =
  * lie. Convert now ends the term in the same statement, and this is the
  * sentence that stops THAT from being silent.
  *
- * It is not a governance write against a sitting officer. Every status-aware
- * reader of `officer_terms` already treats an inactive holder as no officer at
- * all — `currentOfficersForClub` skips them, so the printed agenda has been
- * showing the office as Open, and `loadOfficerSeats` filters on
- * `status = 'active'`, so the COT seats behind DCP goal 9 never listed them.
- * The office was already vacant everywhere a human looks; what the wake-up
- * silently did was REINSTATE it, to the agenda and to the gate, on a row Person
- * dedup picked (#561).
+ * It is not a governance write against a sitting officer. Everywhere the GATE
+ * and the AGENDA look, the office was already vacant: `currentOfficersForClub`
+ * skips an inactive holder, so the printed agenda has been showing the position
+ * as Open, and `loadOfficerSeats` filters on `status = 'active'`, so the COT
+ * seats behind DCP goal 9 never listed them. What the wake-up silently did was
+ * REINSTATE it, to both, on a row Person dedup picked (#561).
+ *
+ * Not every reader — `currentOfficersByMember` (the roster and the member
+ * profile) and the onboarding checklist are status-unaware, so a lapsed
+ * President HAS been rendering as President on the roster and the checklist's
+ * "Assign officer roles" row can flip back to incomplete. See the close itself
+ * in `applyConvertGuestToMember` for why both movements are the right
+ * direction.
  *
  * Names the remedy for the same reason the demotion sentence does — an admin
  * who genuinely means to bring a former President back has to be able to see
  * what happened and put it right, and the member edit form's office checkboxes
- * do it in one click.
+ * do it in one click. That form is not the only way back: `applyImportMembers`
+ * re-opens a term from a members CSV that still names them, silently and with
+ * no activity row (#819), which is why the
+ * sentence points at the deliberate control rather than describing the state.
  *
  * Shown ONLY alongside `CONVERT_REACTIVATED_MESSAGE`: the close rides the
  * wake-up and never fires on its own. Reuse of an ALREADY-ACTIVE officer is

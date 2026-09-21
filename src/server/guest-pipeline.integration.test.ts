@@ -2317,6 +2317,13 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				expect(res.demotedFrom).toBe("admin");
 				expect(await statusOf(membershipId)).toBe("active");
 				expect(await roleOf(membershipId)).toBe("member");
+				// DELETE THIS WITH THE FIELD, one release after #805 — see
+				// `ConvertGuestResult.retainedOfficerPositions`. It is here so the
+				// back-compat shim cannot be tidied away early: a tab loaded before
+				// the deploy reads `result.retainedOfficerPositions.length`
+				// unguarded, and on THIS path (`reactivated` true) that would throw
+				// after the transaction had already committed.
+				expect(res.retainedOfficerPositions).toEqual([]);
 			});
 
 			it("records the demotion in the activity log", async () => {
@@ -2436,6 +2443,11 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					.where(eq(officerTerms.membershipId, membershipId));
 				expect(terms).toHaveLength(1);
 				expect(terms[0]?.termEnd).toBeInstanceOf(Date);
+				// Recorded, for the reason `demotedFrom` is: vacating an office is a
+				// permission change with no `member_edit` of its own to explain it,
+				// and `officer_terms` alone cannot say WHO ended the term or why.
+				const detail = await conversionDetail(guestId);
+				expect(detail?.closedOfficerPositions).toEqual(["president"]);
 			});
 
 			it("leaves a SITTING officer's term alone when it only deduped", async () => {
@@ -2490,8 +2502,16 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			it("reports no officer positions when there are none", async () => {
 				// The field is always present, so the UI never has to guard on
 				// undefined — and empty must mean empty, not "we did not look".
-				const { res } = await convertOntoLapsedAdmin("No Office");
+				const { res, guestId } = await convertOntoLapsedAdmin("No Office");
 				expect(res.closedOfficerPositions).toEqual([]);
+				// ABSENT from the log, not an empty array: each key's PRESENCE is
+				// the claim that convert wrote that column, the same discipline
+				// `demotedFrom` keeps two cases up. An empty array recorded here
+				// would read as "we ended nothing, deliberately" on every ordinary
+				// wake-up in the club's history.
+				expect(await conversionDetail(guestId)).not.toHaveProperty(
+					"closedOfficerPositions",
+				);
 			});
 
 			it("undo puts the admin role back along with the lapse", async () => {

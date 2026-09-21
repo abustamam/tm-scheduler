@@ -99,6 +99,13 @@ describe("convertNoticeDescription", () => {
 		// office being vacated without naming where to give it back leaves the
 		// admin hunting — the same obligation the demotion line carries.
 		expect(text).toMatch(/member page/i);
+		// WHAT HAPPENED, which is the half every assertion above is blind to:
+		// the four of them are satisfied verbatim by the sentence this replaced
+		// ("They still hold an open officer term (President and Treasurer), and
+		// every officer is a full club admin…"), which says the exact opposite.
+		// A revert to the reporting-only behaviour has to fail HERE.
+		expect(text).toMatch(/ended/i);
+		expect(text).not.toMatch(/still hold/i);
 	});
 
 	it("says 'officer term' for one office and 'officer terms' for several", () => {
