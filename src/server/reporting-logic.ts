@@ -18,10 +18,13 @@ import {
 	max,
 	min,
 	ne,
+	or,
 	sql,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
+	guests,
 	meetingAttendance,
 	meetings,
 	members,
@@ -34,6 +37,10 @@ import {
 	type AttendanceLapseRow,
 	scoreAttendanceLapse,
 } from "#/lib/attendance-lapse";
+import {
+	type EvaluatorPairingRow,
+	groupEvaluatorPairings,
+} from "#/lib/evaluator-pairing";
 
 /** A slot only counts as "held" once it's claimed or confirmed. */
 const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
@@ -345,6 +352,98 @@ export async function loadOverdueMembers(
 			upcomingRoleAt: upcoming.get(r.memberId),
 		};
 	});
+}
+
+/**
+ * Evaluator pairing history for a club (#709) — who has evaluated whom.
+ *
+ * The question this answers is not the one #146's assign-picker annotation
+ * answers. That reports when a member last held a role, INCLUDING when they
+ * last evaluated anyone; it cannot report who evaluated *this speaker*, and
+ * that is the question that produces variety. Without it the assigner is
+ * remembering several meetings back, and repeats go unnoticed.
+ *
+ * **No new tables (ADR-0005).** The pairing is already in the schema:
+ * `role_slots.evaluates_slot_id` points from an evaluator slot at the speaker
+ * slot it evaluates, written at meeting creation and maintained by
+ * `slots-logic.ts`. `meetings.ts` and `my-activity-logic.ts` already self-join
+ * through it WITHIN one meeting; this is the same self-join read ACROSS
+ * meetings.
+ *
+ * The pointer is the whole definition of a pairing, so nothing here filters on
+ * `role_definitions.category = 'evaluator'` or on `is_speaker_role`. A club can
+ * name its roles anything, and adding a second, redundant test for
+ * "is this really an evaluator slot" could only ever drop real pairings.
+ *
+ * Both filters are shared verbatim with the sections beside it: past
+ * (`lt(now)`, the exact complement of `loadUpcomingRoleClaims`' `gte(now)`) and
+ * `ne(status, 'cancelled')`. The meeting joined is the EVALUATOR slot's, which
+ * is the speaker slot's too — the pointer is only ever set within one meeting.
+ *
+ * `speakerMemberIds` narrows the SPEAKER axis. The dashboard passes nothing and
+ * gets the active roster; a caller naming ids has already decided whose history
+ * it wants, so the active-roster filter steps aside rather than silently
+ * returning an empty history for a member who has gone inactive. #681 (a
+ * speaker seeing who has evaluated *them*) is that caller — it needs its own
+ * authz, not its own query.
+ */
+export async function loadEvaluatorPairings(
+	clubId: string,
+	opts?: { speakerMemberIds?: string[] },
+): Promise<EvaluatorPairingRow[]> {
+	const now = new Date();
+	const speaker = alias(members, "speaker_member");
+	const speakerSlot = alias(roleSlots, "speaker_slot");
+	const evaluatorMember = alias(members, "evaluator_member");
+	const evaluatorGuest = alias(guests, "evaluator_guest");
+
+	const scoped = opts?.speakerMemberIds;
+
+	const rows = await db
+		.select({
+			speakerMemberId: speaker.id,
+			speakerName: speaker.name,
+			speakerJoinedAt: speaker.joinedAt,
+			evaluatorMemberId: roleSlots.assignedMemberId,
+			evaluatorGuestId: roleSlots.assignedGuestId,
+			evaluatorMemberName: evaluatorMember.name,
+			evaluatorGuestName: evaluatorGuest.name,
+			meetingId: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+		})
+		.from(roleSlots)
+		.innerJoin(speakerSlot, eq(speakerSlot.id, roleSlots.evaluatesSlotId))
+		.innerJoin(speaker, eq(speaker.id, speakerSlot.assignedMemberId))
+		.innerJoin(
+			meetings,
+			and(
+				eq(meetings.id, roleSlots.meetingId),
+				eq(meetings.clubId, clubId),
+				lt(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		// LEFT, both of them: the evaluator is a member OR a guest, never both
+		// (`role_slots_single_assignee`), so an inner join on either would drop
+		// exactly the other kind.
+		.leftJoin(
+			evaluatorMember,
+			eq(evaluatorMember.id, roleSlots.assignedMemberId),
+		)
+		.leftJoin(evaluatorGuest, eq(evaluatorGuest.id, roleSlots.assignedGuestId))
+		.where(
+			and(
+				eq(speaker.clubId, clubId),
+				scoped ? inArray(speaker.id, scoped) : eq(speaker.status, "active"),
+				inArray(roleSlots.status, [...HELD_SLOT_STATUSES]),
+				or(
+					isNotNull(roleSlots.assignedMemberId),
+					isNotNull(roleSlots.assignedGuestId),
+				),
+			),
+		);
+
+	return groupEvaluatorPairings(rows);
 }
 
 /**
