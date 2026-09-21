@@ -29,18 +29,29 @@
  *   round that first made that argument left the speaker paths reading this same
  *   column unlocked.
  *
- * EACH of the three has its own pre-fix CONTROL: the shape this path actually
- * had, driven through the same harness as the assertion beside it and asserted
- * to still reproduce the bug. Without one, "the fixed code did the right thing"
- * is equally satisfied by two calls that merely never overlapped, and the suite
+ * Three races, FOUR pairs: the SHAPE race is gated twice, once on
+ * `applyAddRoleSlot` (where it arrives as a wrong refusal) and once on
+ * `applyAddSpeakerSlot` (where it arrives as a slot on the wrong lineup).
+ * Each pair is a pre-fix CONTROL — the shape that path actually had — driven
+ * through the same harness as the assertion beside it and asserted to still
+ * reproduce the bug. Without one, "the fixed code did the right thing" is
+ * equally satisfied by two calls that merely never overlapped, and the suite
  * would pass against the bug it exists to catch.
+ *
+ * KNOWN GAP, so the paragraph above does not read as more than it is. The review
+ * round moved THREE functions onto the locked row and only `applyAddSpeakerSlot`
+ * has a race test here. `applyRemoveSpeakerSlot` and `applyMoveSlot` took the
+ * same change for the same reason, and their behaviour is covered by
+ * `meeting-manage.integration.test.ts`, but the RACE property is unproven for
+ * both: nothing in this repo would go red if either regressed to resolving its
+ * role ids from an unlocked `templateId`.
  *
  * The `Promise.all` test near the bottom is the one with NO control, and it is
  * labelled SMOKE for that reason rather than presented as the acceptance check:
  * whether two overlapping adds collide depends on how their two await profiles
  * happen to line up, so it CAN pass against the broken shape. It does still
- * assert the indices — see its own docblock for what a red there means. The
- * three deterministic pairs are what this suite actually proves.
+ * assert the indices — see its own docblock for what a red there means. The four
+ * deterministic pairs are what this suite actually proves.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
@@ -82,9 +93,13 @@ const { loadMeetingShapeDefs } = await import("./meeting-templates-logic");
 
 /** Add a non-paired role def to the seeded club; return its id.
  *
- *  `key` is what a template's declared role JOINS to (`loadDeclaredRoleDefs`
- *  matches on club + key), so it is per-run: vitest runs files in parallel
- *  against one shared `tm_test` and `role_definitions_club_key_unique` is real. */
+ *  `key` exists for the template join and nothing else: `loadDeclaredRoleDefs`
+ *  matches a template's declared role to the club's bank on (club, key), so
+ *  `templateMakingTheRoleASpeaker` needs one to point at. NOT a collision guard
+ *  — `role_definitions_club_key_unique` is scoped to `club_id` and `seedClub()`
+ *  mints a fresh club per run, so no two parallel files can meet here. It is
+ *  suffixed per run only to keep the key and the template's key derived from one
+ *  value, so the join cannot silently miss. */
 async function addRole(
 	clubId: string,
 	name: string,
@@ -286,9 +301,9 @@ describe.skipIf(!hasTestDb)(
 
 		beforeEach(async () => {
 			club = await seedClub();
-			// A role the meeting has no slots of yet, so the first index is 0.
-			// Per-run key: `templateMakingTheRoleASpeaker` joins a template's
-			// declared role to this one on (club, key), and `tm_test` is shared.
+			// A role the meeting has no slots of yet, so the first index is 0. The
+			// key is what `templateMakingTheRoleASpeaker` joins its declared role to
+			// — see `addRole` for why it is suffixed, which is not collision.
 			roleKey = `vote_counter-${crypto.randomUUID().slice(0, 8)}`;
 			roleId = await addRole(club.clubId, "Vote Counter", roleKey);
 		});
@@ -427,16 +442,24 @@ describe.skipIf(!hasTestDb)(
 		 * `waitForLockWait` rather than the sleep above: it reads
 		 * `pg_blocking_pids`, so the writer does not commit until the subject is
 		 * provably parked behind it, on a shared `tm_test` running ~50 suites at
-		 * once. Deleting it was measured, and the result is worth writing down
-		 * because it is not uniform — the STATUS control goes red immediately
-		 * (its gate is the first thing its subject does, so the commit beats it),
-		 * while the SHAPE and SPEAKER controls stay green (their unlocked read is
-		 * already in flight by the time `commit()` is called, so they still win by
-		 * luck). Treat the wait as what makes the interleaving RELIABLE and each
-		 * control as what makes a failed interleaving VISIBLE: every control here
-		 * reads the pre-commit value, so if the writer ever did land first, the
-		 * control would see the new one and go red rather than the pair passing
-		 * having proved nothing.
+		 * once.
+		 *
+		 * Deleting it was measured, and the measurement is recorded here WITHOUT an
+		 * explanation because none was established. On one run each, the STATUS
+		 * control went red and the SHAPE and SPEAKER controls stayed green — even
+		 * though all three issue the same unlocked `meetings.findFirst` as their
+		 * first statement, at the same point relative to `commit()`, so whatever
+		 * separates them is not the position of that read. It may be nothing more
+		 * than run-to-run variance in an unsynchronised race; it was not run enough
+		 * times to say. Do not reason from the asymmetry, and do not remove the wait
+		 * on the strength of two of the three surviving it.
+		 *
+		 * What the measurement does settle is the division of labour, and that is
+		 * the part to rely on: the wait is what makes the interleaving RELIABLE, and
+		 * each control is what makes a failed interleaving VISIBLE. Every control
+		 * here reads the pre-commit value, so a writer that ever did land first
+		 * turns the CONTROL red rather than letting the pair pass having proved
+		 * nothing.
 		 */
 		async function raceAgainstAMeetingRowChange(
 			change: (tx: TestTx) => Promise<unknown>,
@@ -597,8 +620,8 @@ describe.skipIf(!hasTestDb)(
 		 * own and a failure here is a REAL duplicate worth chasing; against a broken
 		 * shape it may or may not catch it (it did catch the hoisted-read mutation
 		 * on one run, and would not have on another). So its passing proves nothing
-		 * and it is never the acceptance check. The three deterministic pairs above
-		 * are what prove the property.
+		 * and it is never the acceptance check. The FOUR deterministic pairs above
+		 * — numbering, status, shape, speaker — are what prove the property.
 		 */
 		it("SMOKE (no control): two overlapping adds land at 0 and 1", async () => {
 			await Promise.all([

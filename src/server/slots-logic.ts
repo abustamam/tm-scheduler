@@ -938,10 +938,20 @@ async function applyMoveSlot(
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 		})
 		.from(roleSlots)
-		// No join to `meetings` any more, deliberately. This read's only job is to
-		// find WHICH meeting to lock; `clubId` and `templateId` come off the LOCKED
-		// row below, because both gate the write and a copy taken here is exactly
-		// the stale one.
+		// No join to `meetings` any more, deliberately: `clubId` and `templateId`
+		// are meeting-ROW columns that gate the write, so they come off the LOCKED
+		// row below and a copy taken here would be exactly the stale one.
+		//
+		// What this read still supplies is deliberate too, and none of it is a
+		// meeting-row column. `meetingId` says which meeting to lock; `slotIndex`
+		// and `roleDefinitionId` scope the sibling read and `movedThePairedLineup`
+		// below, both re-derived inside the lock from the slot rows themselves. And
+		// `isSpeakerRole` is judged UNLOCKED by the speaker arm of `kindOk`, which
+		// is correct rather than an oversight: it is a column on the club's role
+		// BANK, not on the meeting, and `loadMeetingSlots` reads that same bank
+		// column to decide which cards render reorder arrows. Judging it from the
+		// bank is what keeps the gate and the arrows agreeing; putting it behind
+		// the meeting lock would not make it fresher, only differently stale.
 		.innerJoin(
 			roleDefinitions,
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
