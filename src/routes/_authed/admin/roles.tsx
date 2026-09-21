@@ -71,9 +71,38 @@ function RolesManager() {
 	const router = useRouter();
 	const clubId = adminClub.clubId;
 
-	async function reorder(index: number, dir: -1 | 1) {
+	/**
+	 * The two sections this page renders since #802, each holding the role's
+	 * index in the WHOLE `roles` array.
+	 *
+	 * The index is carried rather than recomputed because `reorder` below sends
+	 * `orderedIds` for the entire bank — one `sort_order` sequence, shared by
+	 * both sections — so a position within a section is not a position the
+	 * server can be told about. Splitting the array and reordering by the split
+	 * index would have written a club's roles back in an order nobody asked for.
+	 */
+	const sections = [
+		{
+			key: "standing" as const,
+			entries: roles.flatMap((role, i) => (role.standing ? [{ role, i }] : [])),
+		},
+		{
+			key: "non-standing" as const,
+			entries: roles.flatMap((role, i) => (role.standing ? [] : [{ role, i }])),
+		},
+	];
+
+	/**
+	 * Swap two roles' places in the club's single ordering.
+	 *
+	 * Takes both WHOLE-ARRAY indices rather than an index and a direction: with
+	 * the list split into two sections, a role's visual neighbour is its
+	 * neighbour WITHIN its section, which need not be adjacent in `roles`. The
+	 * caller reads it off the section it is rendering; everything else is
+	 * unchanged, and the roles between the two swapped positions keep theirs.
+	 */
+	async function reorder(index: number, target: number) {
 		const next = [...roles];
-		const target = index + dir;
 		if (target < 0 || target >= next.length) return;
 		[next[index], next[target]] = [next[target], next[index]];
 		try {
@@ -139,21 +168,48 @@ function RolesManager() {
 				</Button>
 			</div>
 
-			<div className="space-y-3">
-				{roles.map((role, i) => (
-					<RoleCard
-						key={role.id}
-						clubId={clubId}
-						role={role}
-						isPaired={paired.has(role.id)}
-						isFirst={i === 0}
-						isLast={i === roles.length - 1}
-						onMoveUp={() => reorder(i, -1)}
-						onMoveDown={() => reorder(i, 1)}
-						onChanged={() => router.invalidate()}
-					/>
-				))}
-			</div>
+			{sections.map(({ key, entries }) =>
+				entries.length === 0 ? null : (
+					<section key={key} className="space-y-3">
+						{/* #802. #801 marked a non-standing role with an inline badge on
+						    its own card, deliberately, so nothing was invisible while this
+						    issue was pending. A badge says what a role is NOT; it cannot
+						    say what the officer actually needs to decide, which is whether
+						    a role that is off the standard shape is off it and unused or
+						    off it and carrying three nights' agendas. The section plus the
+						    count below replace the badge. */}
+						{key === "non-standing" ? (
+							<div className="space-y-1 border-t border-[var(--line)] pt-6">
+								<h2 className="font-display text-xl font-semibold tracking-[-0.02em]">
+									Not on standard meetings
+								</h2>
+								<p className="text-sm text-muted-foreground">
+									Your club's roles that a new meeting generates no slot for — a
+									contest's roles, and anything added straight to one night's
+									agenda. They are fillable and editable exactly like the rest,
+									and any agenda can pick them up from its Roles panel.
+								</p>
+							</div>
+						) : null}
+						{entries.map(({ role, i }, position) => (
+							<RoleCard
+								key={role.id}
+								clubId={clubId}
+								role={role}
+								isPaired={paired.has(role.id)}
+								isFirst={position === 0}
+								isLast={position === entries.length - 1}
+								// The neighbour WITHIN this section, by whole-array index —
+								// see `reorder`. Guarded by `isFirst`/`isLast`, so the reads
+								// below are never out of range.
+								onMoveUp={() => reorder(i, entries[position - 1]?.i ?? i)}
+								onMoveDown={() => reorder(i, entries[position + 1]?.i ?? i)}
+								onChanged={() => router.invalidate()}
+							/>
+						))}
+					</section>
+				),
+			)}
 
 			<AddRoleForm
 				clubId={clubId}
@@ -281,6 +337,12 @@ function RoleCard({
 	// `listClubRoles` does); treat an unasked count as "not referenced".
 	const slotCount = role.slotCount ?? 0;
 	const referenced = slotCount > 0;
+	// Same rule for `agendaCount` (#802): opt-in, so an unasked count says
+	// nothing rather than claiming zero. Two DIFFERENT numbers — `slotCount` is
+	// how many slots exist (what blocks a delete), this is how many of the club's
+	// own per-meeting agendas DECLARE the role, which is what says whether a role
+	// off the standard shape is actually in use.
+	const agendaCount = role.agendaCount;
 
 	return (
 		<form
@@ -326,23 +388,13 @@ function RoleCard({
 										Disabled
 									</Badge>
 								)}
-								{/* #801. This page lists the club's WHOLE role bank, which
-								    since the role-identity change also holds roles that
-								    arrived from a meeting template (a contest's Chief
-								    Judge) or were typed into an agenda's Roles panel. They
-								    are the club's roles — fillable, editable, and the row
-								    every history query for that role joins on — but no
-								    ordinary meeting generates a slot for them. Unmarked,
-								    they read as roles the club runs every week. */}
-								{role.standing ? null : (
-									<Badge
-										variant="outline"
-										className="font-normal"
-										title="Not part of the standard meeting shape — new meetings generate no slot for this role. It's still available to add to any agenda."
-									>
-										Not on standard meetings
-									</Badge>
-								)}
+								{/* #801's inline "Not on standard meetings" badge was here.
+								    #802 moved that fact to the section heading, where it is
+								    stated once for the group instead of repeated on every
+								    card, and spent the room on the agenda count below — the
+								    half a badge cannot carry, because "not standing" does
+								    not distinguish a role nobody uses from one carrying
+								    three nights' agendas. */}
 							</Label>
 							<Input
 								id={`name-${role.id}`}
@@ -461,6 +513,13 @@ function RoleCard({
 							intact.
 						</p>
 					) : null}
+					{agendaCount === undefined ? null : (
+						<p className="text-xs text-muted-foreground">
+							{agendaCount === 0
+								? "No meeting agenda lists this role right now."
+								: `Listed on ${agendaCount} meeting agenda${agendaCount === 1 ? "" : "s"}.`}
+						</p>
+					)}
 				</div>
 			</div>
 		</form>
