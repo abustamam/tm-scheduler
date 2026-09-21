@@ -214,22 +214,27 @@ export async function applyAddRoleSlot(input: {
 		throw new Error("Add speakers with the speaker controls.");
 	}
 
-	const existing = await db
-		.select({ slotIndex: roleSlots.slotIndex })
-		.from(roleSlots)
-		.where(
-			and(
-				eq(roleSlots.meetingId, input.meetingId),
-				eq(roleSlots.roleDefinitionId, input.roleDefinitionId),
-			),
-		);
-	const slotIndex = nextIndex(existing.map((s) => s.slotIndex));
-
 	await db.transaction(async (tx) => {
+		await lockMeetingForSlotEdit(tx, input.meetingId);
+		// Read under the lock, like `applyAddSpeakerSlot` (#803). Computed OUTSIDE
+		// the transaction, two concurrent adds of the same role both resolved the
+		// same "next" index and both inserted it — and nothing in the database
+		// says no, since `role_slots` constrains only `speech_id`. The validation
+		// reads above stay where they are: they answer questions about the CLUB's
+		// roles, which this meeting's lock does not govern anyway.
+		const existing = await tx
+			.select({ slotIndex: roleSlots.slotIndex })
+			.from(roleSlots)
+			.where(
+				and(
+					eq(roleSlots.meetingId, input.meetingId),
+					eq(roleSlots.roleDefinitionId, input.roleDefinitionId),
+				),
+			);
 		await tx.insert(roleSlots).values({
 			meetingId: input.meetingId,
 			roleDefinitionId: input.roleDefinitionId,
-			slotIndex,
+			slotIndex: nextIndex(existing.map((s) => s.slotIndex)),
 		});
 		await logActivity(tx, {
 			clubId: meeting.clubId,
