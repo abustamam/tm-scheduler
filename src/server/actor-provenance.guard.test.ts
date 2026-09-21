@@ -272,12 +272,22 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 		// `resolveWriteActor` from the ladder would leave two of the three public
 		// modules satisfying the inverse assertion through a module that resolves
 		// nothing.
+		//
+		// EITHER NAME, since #762. The ladder now calls
+		// `resolveWriteActorWithProof`, which is the same resolution — same order,
+		// same throws, same club-scoping, with `resolveWriteActor` defined as a
+		// projection of it so the two cannot answer differently — plus the
+		// `proof` the attendance writes read to tell a signed-in member from an
+		// asserted roster pick (ADR-0026). The property this case exists to pin is
+		// that the caller is CLUB-SCOPED through that module rather than compared
+		// as a raw payload id, and both names have it; a literal that admits only
+		// the projection would have failed a change that strengthened the ladder.
 		const src = readSource(join(serverDir, "attendance-actor-logic.ts"));
 		expect(src).toMatch(/from "\.\/write-actor-logic"/);
 		expect(
 			src,
-			"the ladder must club-scope the caller through resolveWriteActor, not compare a raw payload id",
-		).toContain("resolveWriteActor({");
+			"the ladder must club-scope the caller through resolveWriteActor (or its WithProof twin), not compare a raw payload id",
+		).toMatch(/resolveWriteActor(?:WithProof)?\(\{/);
 	});
 
 	it("the no-auth allowlist has not grown", () => {

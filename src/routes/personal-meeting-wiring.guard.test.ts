@@ -184,15 +184,37 @@ describe("personal meeting body → duty wiring (#665)", () => {
 		expect(rawBody).not.toMatch(/if \(holdsRole\)\s*\{\s*setConfirmRelease/);
 	});
 
-	it("declines through the releasing writer, never a plain not_coming", () => {
+	it("declines through the releasing writer for a caller who can release", () => {
 		// Positive on the shape rather than the spelling of the control flow.
 		expect(body).toMatch(
 			/markUnavailableReleasing\(\{[\s\S]{0,240}memberId: view\.member\.id/,
 		);
-		// RAW negative: a plain not_coming write leaves the member declined and
-		// still holding the role.
+	});
+
+	it("picks the writer off the SESSION, never off the cached role list", () => {
+		// The negative here used to be "no plain `not_coming` write exists" —
+		// correct until #762, and a straight rule while both callers could
+		// release. ADR-0026 ended that: `markUnavailableReleasing` refuses an
+		// asserted caller outright rather than downgrading, and this page IS the
+		// nudge link's destination, so its audience is session-less by
+		// construction. Unconditional, the one button the page exists for would
+		// throw for almost everyone who taps it and lose the answer with the
+		// release. The plain write is now the RIGHT write for that caller.
+		//
+		// So what is pinned instead is WHICH input chooses. `canRelease` is
+		// `!canRepick` — false exactly when the page was rendered for a name-picked
+		// viewer, and a session does not evaporate between render and tap.
+		// `holdsRole` DOES go stale in the chat thread, and choosing on it is the
+		// documented first-cut bug this file's neighbours guard: role assigned
+		// after load ⇒ plain write ⇒ declined AND still holding the role.
+		expect(body).toContain("const canRelease = !canRepick;");
+		expect(body).toMatch(/\} else if \(canRelease\) \{/);
+		// RAW negative: the branch must never be taken on the cached role list.
 		expect(rawBody).not.toMatch(
-			/setPlannedAttendance\(\{[\s\S]{0,280}status: "not_coming"/,
+			/(?:else )?if \(holdsRole\)\s*\{\s*(?:const|await) /,
+		);
+		expect(rawBody).not.toMatch(
+			/holdsRole\s*\?\s*await markUnavailableReleasing/,
 		);
 	});
 });

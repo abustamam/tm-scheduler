@@ -68,6 +68,12 @@ function renderPanel(
 		meetingDate: "Tue 19 Aug",
 		shareUrl: "https://club.example/m",
 		locked: false,
+		// The officer this rail is written for always has a session, and every
+		// case below is about what the rung menu WRITES rather than about who may
+		// reach it. `canClearRung` defaults FALSE on the panel (#762, the narrow
+		// side), so leaving it out here would silently drop "No answer" from the
+		// menu and the pair assertion below would stop covering it.
+		canClearRung: true,
 		onWriteRung: vi.fn(),
 		onContacted: vi.fn(),
 		...over,
@@ -133,6 +139,27 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// Exactly ONE write. Without this a second call carrying a different status
 		// would still satisfy the assertion above.
 		expect(props.onWriteRung).toHaveBeenCalledTimes(1);
+	});
+
+	it("hides 'No answer' from a viewer with no session (#762)", async () => {
+		// "No answer" is the menu's only DELETE (`clearPlannedAttendance`), and
+		// ADR-0026 puts destroying an answer behind a session. Plan mode is
+		// reachable WITHOUT one — a self-asserted Toastmaster gets this rail
+		// through the route's `needsTmodPlan`, on the honour-system claim #576
+		// admits and #747 retires — and for them every tap on that item came back
+		// "you need to be signed in".
+		const { props, getByRole, findByRole, queryByRole } = renderPanel({
+			canClearRung: false,
+		});
+		await userEvent.click(getByRole("button", { name: /Ayesha Khan status/i }));
+		// The other three survive: an asserted caller may still record a FIRST
+		// answer, so removing the whole menu would take away the thing the rail is
+		// for. Without this the hide could pass by emptying it.
+		expect(await findByRole("menuitem", { name: "Coming" })).toBeTruthy();
+		expect(getByRole("menuitem", { name: "Asked" })).toBeTruthy();
+		expect(getByRole("menuitem", { name: "Not coming" })).toBeTruthy();
+		expect(queryByRole("menuitem", { name: "No answer" })).toBeNull();
+		expect(props.onWriteRung).not.toHaveBeenCalled();
 	});
 
 	it("disables the chips on a locked meeting rather than hiding them", () => {

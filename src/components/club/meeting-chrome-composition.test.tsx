@@ -50,7 +50,13 @@ async function renderHeader(opts: {
 	await renderUnderMemoryRouter(
 		<>
 			<MeetingPersonalStrip
-				source="anon"
+				// SESSION, since #762. This whole file is about the answered-state
+				// CHIP not wearing a second `bg-primary` beside the phase primary,
+				// and an anon viewer no longer gets a chip at all — ADR-0026 puts
+				// the undo it carries behind a session, so an anon fixture would
+				// pass every case here by rendering nothing to collide. `session`
+				// is the viewer the chip exists for, and therefore the strict case.
+				source="session"
 				member={MEMBER}
 				promptIdentity={vi.fn()}
 				over={opts.over}

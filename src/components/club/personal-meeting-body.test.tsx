@@ -145,7 +145,11 @@ function deferred() {
 
 describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 	it("asks before releasing a role, and writes NOTHING until confirmed", async () => {
-		await renderBody(makeView());
+		// SIGNED IN (`canRepick: false`). Since #762 the releasing writer is the
+		// signed-in caller's arm — `markUnavailableReleasing` refuses an asserted
+		// one outright — so an anonymous fixture here would exercise the plain
+		// write and this case would stop being about the confirm at all.
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);
@@ -174,7 +178,7 @@ describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 	});
 
 	it("keeps the role when the confirm is dismissed", async () => {
-		await renderBody(makeView());
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);
@@ -182,11 +186,11 @@ describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 		expect(markUnavailableReleasing).not.toHaveBeenCalled();
 	});
 
-	it("declines through the RELEASING writer, never a plain not_coming", async () => {
+	it("declines through the RELEASING writer when the viewer is signed in", async () => {
 		// `setPlannedAttendance({status:"not_coming"})` would leave the member
 		// declined and still holding the role — the contradiction this page exists
-		// to prevent.
-		await renderBody(makeView());
+		// to prevent, and still the wrong write for a caller who CAN release.
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);
@@ -195,6 +199,53 @@ describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 		);
 		expect(markUnavailableReleasing).toHaveBeenCalledTimes(1);
 		expect(setPlannedAttendance).not.toHaveBeenCalled();
+	});
+
+	it("declines through the PLAIN writer when the viewer has no session (#762)", async () => {
+		// The mirror, and the reason this page needed a client change at all.
+		// `markUnavailableReleasing` now refuses an asserted caller rather than
+		// downgrading, and this page is the nudge link's destination — its
+		// audience is a name in a WhatsApp message, not an account. Left
+		// unconditional, the one button the page exists for would throw for almost
+		// everyone who taps it, losing the ANSWER as well as the release.
+		//
+		// `canRepick` defaults to true here, which is that viewer.
+		await renderBody(makeView());
+		await userEvent.click(
+			screen.getByRole("button", { name: "Can't make it" }),
+		);
+		await userEvent.click(
+			screen.getByRole("button", { name: "Yes, I can't make it" }),
+		);
+		expect(markUnavailableReleasing).not.toHaveBeenCalled();
+		expect(setPlannedAttendance).toHaveBeenCalledTimes(1);
+		expect(setPlannedAttendance).toHaveBeenCalledWith({
+			data: expect.objectContaining({ status: "not_coming" }),
+		});
+		// `releaseHeldRoles` is LEFT OFF rather than sent as false — byte-for-byte
+		// the payload a pre-#663 client sends, which is what the server's zod
+		// default exists to make safe.
+		expect(setPlannedAttendance).not.toHaveBeenCalledWith({
+			data: expect.objectContaining({ releaseHeldRoles: expect.anything() }),
+		});
+	});
+
+	it("still ASKS a session-less viewer first, and still says what will happen", async () => {
+		// The confirm is not the release's dialog, it is the decision's — so it
+		// stays on the arm that frees nothing, where the decision is still "tell
+		// the club you are out". What changes is the PROMISE: an anonymous viewer
+		// must not be told a role is being freed when the write frees nothing.
+		await renderBody(makeView());
+		await userEvent.click(
+			screen.getByRole("button", { name: "Can't make it" }),
+		);
+		expect(await screen.findByText("Tell us you can't make it?")).toBeTruthy();
+		expect(screen.queryByText("Give up your role?")).toBeNull();
+		expect(setPlannedAttendance).not.toHaveBeenCalled();
+		expect(
+			screen.getByText(/an officer will find cover/i),
+			"the copy must say where the role actually goes, not promise a release",
+		).toBeTruthy();
 	});
 });
 
@@ -297,8 +348,11 @@ describe("PersonalMeetingBody — what it renders", () => {
 		).toBeTruthy();
 	});
 
-	it("shows a stored answer and still allows changing it", async () => {
-		await renderBody(makeView({ planStatus: "not_coming" }));
+	it("shows a stored answer and still allows changing it, when signed in", async () => {
+		// SIGNED IN. Changing an answer is an overwrite, which ADR-0026 puts
+		// behind a session — so an anonymous fixture would render the statement
+		// and no buttons, and this case would stop being about the control.
+		await renderBody(makeView({ planStatus: "not_coming" }), false);
 		expect(screen.getByText(/You've said you can't make it/)).toBeTruthy();
 		expect(
 			(
@@ -307,6 +361,36 @@ describe("PersonalMeetingBody — what it renders", () => {
 				}) as HTMLButtonElement
 			).disabled,
 		).toBe(false);
+	});
+
+	it("offers an anon viewer who ALREADY answered no buttons at all (#762)", async () => {
+		// The surface P1 was about, one step further on. Changing `not_coming` to
+		// `coming` is an overwrite and `setPlanStatus`'s read-back throws — and
+		// the decline half would run a confirm dialog saying "we'll let the team
+		// know" on the way to that refusal. Its sibling strip made this split
+		// already; this page is where it matters most, because it is where the
+		// nudge link lands.
+		await renderBody(makeView({ planStatus: "not_coming" }));
+		expect(screen.getByText(/You've said you can't make it/)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /I'll be there/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /Can't make it/ })).toBeNull();
+		expect(screen.getByText(/sign in to change your answer/i)).toBeTruthy();
+		// And the state line drops its "Tap below" — there is nothing below.
+		expect(screen.queryByText(/Tap below/)).toBeNull();
+	});
+
+	it("still answers for an anon viewer with NO answer yet — the control", async () => {
+		// Also the NUDGE ROUND TRIP, and the type is what makes that automatic:
+		// `PersonalMeetingView["planStatus"]` is `coming | not_coming | null`,
+		// because `personal-meeting-logic.ts` maps the officer's `reached_out` to
+		// null before this page ever sees it. So "has already answered" here
+		// cannot accidentally include the ASK — the seam collapsed it, and `tsc`
+		// rejects a fixture that tries to say otherwise (measured: a
+		// `planStatus: "reached_out"` fixture is a type error, which is how this
+		// case replaced one).
+		await renderBody(makeView({ planStatus: null }));
+		expect(screen.getByRole("button", { name: "I'll be there" })).toBeTruthy();
+		expect(screen.queryByText(/sign in to change your answer/i)).toBeNull();
 	});
 
 	it("shows the duty checklist, with state readable without the icon", async () => {
@@ -436,7 +520,7 @@ describe("PersonalMeetingBody — in-flight answers (#676)", () => {
 			await d.promise;
 			return { ok: true, released: 1 };
 		}) as never);
-		await renderBody(makeView());
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);
@@ -517,7 +601,7 @@ describe("PersonalMeetingBody — tap targets (#676)", () => {
 	});
 
 	it("floors the destructive commit and its way out", async () => {
-		await renderBody(makeView());
+		await renderBody(makeView(), false);
 		await userEvent.click(
 			screen.getByRole("button", { name: "Can't make it" }),
 		);

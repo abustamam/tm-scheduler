@@ -17,17 +17,25 @@
  * which are called directly. PR 2 deletes the delegates entirely.
  *
  * That limitation is exactly why #675's gate went into the SEAM and not into
- * `markUnavailableReleasing`'s handler body: the third block below CALLS the
- * gate, so a deleted subject check fails here instead of only in a source grep.
+ * `markUnavailableReleasing`'s handler body, and why #762's went in beside it:
+ * the third block below CALLS both, so a deleted subject check or a deleted
+ * proof check fails here instead of only in a source grep.
  * `availability-authz.guard.test.ts` covers the one half a behavioural test
  * cannot reach — that the handler hands the seam the client's RAW assertion
  * rather than defaulting it to the subject, which would make the gate vacuous
  * while every assertion below still passed.
  *
+ * #762 (ADR-0026) is why so many cases here now set `sessionUserId`. The seam
+ * releases unconditionally, so it admits only a caller whose identity came from
+ * a session bound to a member of this club; the ARM cases still exist and still
+ * differ from one another, and each needed a signed-in caller or it would have
+ * become a test of the new gate rather than of the arm.
+ *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/availability.integration.test.ts
  */
+import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -37,8 +45,14 @@ import {
 	members,
 	roleDefinitions,
 	roleSlots,
+	user,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import {
+	NOT_ON_ROSTER_MESSAGE,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import {
 	cleanup,
 	hasTestDb,
@@ -85,26 +99,56 @@ const { clearPlanStatus, SELF_SERVICE_RUNGS, setPlanStatus } = await import(
 );
 const { releaseSlotsAndMarkUnavailable } = await import("./availability-logic");
 const { SELF_ONLY_MESSAGE } = await import("./attendance-actor-logic");
+const { requireSessionActor } = await import("./write-actor-logic");
 
 // ---------------------------------------------------------------------------
 // Helpers — mirror the delegating handler bodies against testDb
 // ---------------------------------------------------------------------------
 
+/**
+ * What `setAvailability`'s handler now does, reproduced (see the HONEST
+ * LIMITATION above — a `createServerFn` body cannot be invoked here).
+ *
+ * `proof` defaults to `"asserted"` because that is what the handler resolves
+ * for the caller this endpoint exists for: a season-grid visitor with no
+ * session who picked a name off the roster. #762 gave that caller the
+ * `onlyIfAbsent` mode — fill a blank, re-affirm the same answer, and refuse to
+ * change one — and a helper that kept passing the unrestricted write would
+ * model an endpoint the product no longer has.
+ */
 async function setAvailabilityPublic(
 	memberId: string,
 	meetingId: string,
 	clubId: string,
+	proof: WriteProof = "asserted",
 ) {
-	await setPlanStatus(testDb, {
+	const answer = {
 		memberId,
 		meetingId,
 		clubId,
-		status: "not_coming",
+		status: "not_coming" as const,
 		actorMemberId: memberId,
-	});
+		proof,
+	};
+	if (proof === "asserted") {
+		await setPlanStatus(testDb, {
+			...answer,
+			proof: "asserted",
+			onlyIfAbsent: true,
+		});
+	} else {
+		await setPlanStatus(testDb, answer);
+	}
 	return { ok: true as const };
 }
 
+/**
+ * What `clearAvailability`'s handler does to the SEAM. Its own session gate —
+ * `requireSessionActor`, added by #762 because a clear destroys an answer a
+ * person put there — lives in the handler body and so is invisible here; the
+ * default-`session` sweep in `write-proof.guard.test.ts` is what holds it,
+ * which is the same division of labour this file's header describes.
+ */
 async function clearAvailabilityPublic(
 	memberId: string,
 	meetingId: string,
@@ -183,15 +227,47 @@ describe.skipIf(!hasTestDb)("availability (set + clear)", () => {
 		expect(log).toHaveLength(1);
 		// The rung lives in the detail, not the action name — an assertion on the
 		// action alone cannot tell "not coming" from "coming".
+		//
+		// `proof` beside it (#762, AC1). It is what distinguishes this row from
+		// one the member wrote from their own signed-in device, and the two are
+		// otherwise byte-identical in the feed.
 		expect(log[0]?.detail).toMatchObject({
 			memberId: seed.memberId,
 			status: "not_coming",
+			proof: "asserted",
 		});
 	});
 
-	it("setAvailability is idempotent (the seam upserts)", async () => {
+	it("setAvailability answers OVER an officer's reached_out — the nudge round trip", async () => {
+		// The delegate's own comment has always said this is the ladder working:
+		// "they asked, the member answered". #762's first cut broke it by counting
+		// `reached_out` as an answer, which refused the member's reply on the one
+		// path the officer's nudge link leads to. The seam now treats the ASK as
+		// still-blank; this is that claim exercised through the delegate's body.
+		await setPlanStatus(testDb, {
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			status: "reached_out",
+			actorMemberId: seed.adminMemberId,
+		});
+
+		await expect(
+			setAvailabilityPublic(seed.memberId, seed.meetingId, seed.clubId),
+		).resolves.toEqual({ ok: true });
+		expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+			"not_coming",
+		);
+	});
+
+	it("setAvailability is idempotent — re-sending the same answer is a no-op", async () => {
 		await setAvailabilityPublic(seed.memberId, seed.meetingId, seed.clubId);
-		// Second call should not throw
+		// Second call should not throw. Since #762 that is a claim about the
+		// `onlyIfAbsent` mode rather than about the upsert: a row already saying
+		// `not_coming` is left alone and nothing is logged, and only a row saying
+		// something ELSE raises. A member double-tapping "can't make it", or a
+		// request retried off a flaky connection, must not read as a permission
+		// failure.
 		await expect(
 			setAvailabilityPublic(seed.memberId, seed.meetingId, seed.clubId),
 		).resolves.toEqual({ ok: true });
@@ -199,6 +275,50 @@ describe.skipIf(!hasTestDb)("availability (set + clear)", () => {
 		const rows = await planRows(seed.memberId, seed.meetingId);
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.status).toBe("not_coming");
+		expect(await planSetLogs(seed.meetingId)).toHaveLength(1);
+	});
+
+	it("setAvailability REFUSES to overwrite a different answer when the caller is only asserted (#762)", async () => {
+		// The bug ADR-0026 closes on this endpoint. A member who said `coming` is
+		// flipped to `not_coming` by anyone who can read their member id off the
+		// public season grid; they drop out of the assign picker and off the
+		// programme, and getting it back needs them to notice.
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			status: "coming",
+		});
+		await expect(
+			setAvailabilityPublic(seed.memberId, seed.meetingId, seed.clubId),
+		).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+		expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+			"coming",
+		);
+		expect(await planSetLogs(seed.meetingId)).toHaveLength(0);
+	});
+
+	it("setAvailability still overwrites for a SESSION-proven caller", async () => {
+		// The control. Without it the refusal above passes just as well with the
+		// endpoint broken for everyone, and the member correcting their own answer
+		// from their own signed-in device is the case the product is for.
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			status: "coming",
+		});
+		await setAvailabilityPublic(
+			seed.memberId,
+			seed.meetingId,
+			seed.clubId,
+			"session",
+		);
+		expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+			"not_coming",
+		);
+		expect((await planSetLogs(seed.meetingId))[0]?.detail).toMatchObject({
+			status: "not_coming",
+			proof: "session",
+		});
 	});
 
 	it("clearAvailability removes the row (back to no answer) and logs a null rung", async () => {
@@ -236,12 +356,93 @@ describe.skipIf(!hasTestDb)("availability (set + clear)", () => {
 	});
 });
 
+/**
+ * AC5 / AC7 — the gate the three session-only handlers reach (#762).
+ *
+ * `clearPlannedAttendance`, `clearAvailability` and `markUnavailableReleasing`
+ * each open with `await requireSessionActor({ clubId })`, and a
+ * `createServerFn` body cannot be invoked in vitest — so the HANDLER's refusal
+ * is pinned by source (`write-proof.guard.test.ts`, which since #762 also
+ * requires the call to be awaited and to precede the first db seam, both
+ * measured against a mutant). What source cannot say is what that call
+ * actually DOES, and "the gate is present" is worth nothing if the gate grants.
+ *
+ * So this drives `requireSessionActor` itself, through the same request-session
+ * mock the suite already installs — the real function the handlers call, not a
+ * reproduction of it. Each of the three refusals has a different FIX, which is
+ * the whole reason ADR-0026 splits them, so each is asserted by message.
+ */
+describe.skipIf(!hasTestDb)(
+	"the session gate behind the clear/release fns",
+	() => {
+		let seed: SeededClub;
+		let extraUserIds: string[];
+
+		beforeEach(async () => {
+			seed = await seedClub();
+			sessionUserId = null;
+			extraUserIds = [];
+		});
+
+		afterEach(async () => {
+			sessionUserId = null;
+			await cleanup(seed.clubId, [
+				seed.adminUserId,
+				seed.memberUserId,
+				...extraUserIds,
+			]);
+		});
+
+		it("refuses a caller with NO session, with the message the toast matches", async () => {
+			// AC5. `SIGN_IN_REQUIRED_MESSAGE` IS the wire format — an Error subclass
+			// does not survive a createServerFn round trip — so the text is what makes
+			// the client render a "Sign in" action instead of a bare string.
+			await expect(
+				requireSessionActor({ clubId: seed.clubId }),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+		});
+
+		it("refuses a signed-in user who is not on THIS club's roster", async () => {
+			// AC7, and a DIFFERENT refusal on purpose: offering "Sign in" to someone
+			// already signed in is the worst possible answer. The magic link makes
+			// anyone a session, so a session is not the property that grants.
+			const outsider = await addSignedInMember(seed.clubId, "Outsider");
+			extraUserIds.push(outsider.userId);
+			// Same user, a club they are not on.
+			const other = await seedClub();
+			try {
+				sessionUserId = outsider.userId;
+				await expect(
+					requireSessionActor({ clubId: other.clubId }),
+				).rejects.toThrow(NOT_ON_ROSTER_MESSAGE);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("GRANTS an active member of this club — the control", async () => {
+			// Without this the two refusals above pass just as well with the gate
+			// refusing everyone, which would take the clear and the release off every
+			// surface rather than off the unproven ones.
+			sessionUserId = seed.memberUserId;
+			await expect(
+				requireSessionActor({ clubId: seed.clubId }),
+			).resolves.toEqual({ memberId: seed.memberId });
+		});
+	},
+);
+
 describe.skipIf(!hasTestDb)("releaseSlotsAndMarkUnavailable (#204)", () => {
 	let seed: SeededClub;
 
 	beforeEach(async () => {
 		seed = await seedClub();
-		sessionUserId = null;
+		// SIGNED IN as the subject for this whole block since #762: this seam
+		// releases UNCONDITIONALLY, so ADR-0026 puts every call behind a session
+		// bound to a member of this club. The block is about WHAT the release
+		// does — slots opened, speech kept, rung written, one transaction — and
+		// those are unchanged; the authorization cases live in the block below.
+		sessionUserId = seed.memberUserId;
 	});
 
 	afterEach(async () => {
@@ -329,6 +530,36 @@ async function addRosterMember(clubId: string, name: string): Promise<string> {
 	return m.id;
 }
 
+/**
+ * A roster member who can also SIGN IN — a Person carrying `user_id`, plus the
+ * `user` row behind it.
+ *
+ * `addRosterMember` above deliberately makes neither, and since #762 that is
+ * the difference between a caller who may free roles and one who may not. A
+ * case that wants to prove an ARM still behaves as it did needs a member with a
+ * user behind them, or it proves only that the new gate fires.
+ *
+ * The returned `userId` must reach `cleanup`: `user` rows are referenced across
+ * clubs, so the club cascade does not take them.
+ */
+async function addSignedInMember(
+	clubId: string,
+	name: string,
+): Promise<{ memberId: string; userId: string }> {
+	const userId = randomUUID();
+	const email = `${userId}@test.example`;
+	await testDb
+		.insert(user)
+		.values({ id: userId, name, email, emailVerified: true });
+	const personId = await seedPerson({ name, email, userId });
+	const [m] = await testDb
+		.insert(members)
+		.values({ clubId, personId, name, email })
+		.returning({ id: members.id });
+	if (!m) throw new Error("Failed to insert member");
+	return { memberId: m.id, userId };
+}
+
 /** Give the meeting a Toastmaster of the Day slot held by `memberId`. Keyless
  *  and canonically named — the shape `createClubRole` actually writes, and the
  *  one `findTmodSlot`'s name fallback has to keep resolving. */
@@ -384,10 +615,14 @@ describe.skipIf(!hasTestDb)(
 		let seed: SeededClub;
 		/** A second ACTIVE roster member of the same club, holding no office. */
 		let otherMemberId: string;
+		/** `user` rows a case created itself — referenced across clubs, so the
+		 *  club cascade does not take them and `cleanup` needs them by id. */
+		let extraUserIds: string[];
 
 		beforeEach(async () => {
 			seed = await seedClub();
 			sessionUserId = null;
+			extraUserIds = [];
 			otherMemberId = await addRosterMember(seed.clubId, "Someone Else");
 			// The subject holds the seeded slot in every case below, so a write that
 			// is wrongly admitted is VISIBLE as a released slot rather than only as a
@@ -404,7 +639,11 @@ describe.skipIf(!hasTestDb)(
 
 		afterEach(async () => {
 			sessionUserId = null;
-			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+			await cleanup(seed.clubId, [
+				seed.adminUserId,
+				seed.memberUserId,
+				...extraUserIds,
+			]);
 		});
 
 		it("REJECTS a different, non-officer member who asserts themselves as the actor", async () => {
@@ -447,7 +686,10 @@ describe.skipIf(!hasTestDb)(
 			expect(await planRows(otherMemberId, seed.meetingId)).toHaveLength(0);
 		});
 
-		it("lets the SUBJECT release their own roles", async () => {
+		it("lets the SUBJECT release their own roles, signed in", async () => {
+			// SIGNED IN since #762: the self arm still releases, and what changed is
+			// that reaching it now takes a session bound to this member.
+			sessionUserId = seed.memberUserId;
 			const { released } = await releaseSlotsAndMarkUnavailable(testDb, {
 				memberId: seed.memberId,
 				claimedActorMemberId: seed.memberId,
@@ -460,29 +702,96 @@ describe.skipIf(!hasTestDb)(
 			expect(rows[0]?.status).toBe("not_coming");
 			const [log] = await planSetLogs(seed.meetingId);
 			expect(log?.actorMemberId).toBe(seed.memberId);
-			// WHICH arm admitted it is persisted, so an honour-system grant and a
-			// session-authenticated one are distinguishable in the feed afterwards.
-			expect(log?.detail).toMatchObject({ grantedVia: "self" });
+			// WHICH arm admitted it and HOW the identity behind it was established.
+			// They answer different questions — two of the three arms admit both
+			// kinds of caller — so the feed carries both.
+			expect(log?.detail).toMatchObject({
+				grantedVia: "self",
+				proof: "session",
+			});
 		});
 
-		it("admits an anonymous caller who asserts NOTHING as the subject", async () => {
-			// Stated as a test rather than left implied, because it is the residual
-			// this fix deliberately does not close and the docblock's claim about it
-			// should be executable. With no session and no assertion the ladder
-			// resolves the caller TO the subject — the product's identity model
-			// (#317), the same honour system `claimSlot` and `releaseSlot` run on.
-			// It is also the live personal-meeting-page path: that call site sends no
-			// `actorMemberId` at all, so breaking this breaks a member declining
-			// their own meeting.
-			const { released } = await releaseSlotsAndMarkUnavailable(testDb, {
-				memberId: seed.memberId,
-				meetingId: seed.meetingId,
-				clubId: seed.clubId,
-			});
-			expect(released).toBe(1);
-			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
-				"not_coming",
-			);
+		it("REFUSES an anonymous caller who asserts NOTHING — the closed residual (#699)", async () => {
+			// This case used to assert the opposite, and it was right to: #675 could
+			// not close the hole, so it executed it instead of describing it. With
+			// no session and no assertion the ladder resolves the caller TO the
+			// subject, so one request per member — with no id to guess, and credited
+			// to the victim — emptied a meeting's whole programme, `speech_id` and
+			// all, with no undo.
+			//
+			// #762 closes it on the PROOF (ADR-0026): asserting nothing resolves as
+			// `proof: "asserted"`, exactly like asserting the victim's own id, and
+			// this seam releases unconditionally so it admits only `"session"`.
+			//
+			// The live personal-meeting-page path goes through here with no
+			// `actorMemberId`, so a member declining their own meeting now signs in
+			// first; `personal-meeting-body.tsx` already renders the refusal as a
+			// toast carrying a one-tap sign-in link (#761).
+			await expect(
+				releaseSlotsAndMarkUnavailable(testDb, {
+					memberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+
+			// Refused, not partially applied — and the RUNG matters as much as the
+			// slot: a refusal that still recorded "not coming" would drop the member
+			// out of the assign picker while leaving them on the programme.
+			const [slot] = await testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId))
+				.limit(1);
+			expect(slot?.assignedMemberId).toBe(seed.memberId);
+			expect(slot?.status).toBe("claimed");
+			expect(await planRows(seed.memberId, seed.meetingId)).toHaveLength(0);
+			expect(await planSetLogs(seed.meetingId)).toHaveLength(0);
+		});
+
+		it("REFUSES a caller who asserts the SUBJECT's own id", async () => {
+			// The shape an attacker reaches for first, because the id is public —
+			// `loadMeetingDetail` ships it as `assigneeId`. It resolves to the same
+			// place as asserting nothing, so both have to be executed or a
+			// half-applied fix looks complete.
+			await expect(
+				releaseSlotsAndMarkUnavailable(testDb, {
+					memberId: seed.memberId,
+					claimedActorMemberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+			const [slot] = await testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId))
+				.limit(1);
+			expect(slot?.assignedMemberId).toBe(seed.memberId);
+			expect(await planRows(seed.memberId, seed.meetingId)).toHaveLength(0);
+		});
+
+		it("REFUSES an asserted Toastmaster of THIS meeting", async () => {
+			// The widest asserted shape on this seam: the Toastmaster's member id is
+			// published on the public agenda payload, so before #762 any visitor who
+			// read the agenda could release any member's roles through this arm.
+			// Left out, a fix that only handled the self arm would look complete.
+			await addTmodSlot(seed, otherMemberId);
+			await expect(
+				releaseSlotsAndMarkUnavailable(testDb, {
+					memberId: seed.memberId,
+					claimedActorMemberId: otherMemberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+			const [slot] = await testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId))
+				.limit(1);
+			expect(slot?.assignedMemberId).toBe(seed.memberId);
+			expect(await planRows(seed.memberId, seed.meetingId)).toHaveLength(0);
 		});
 
 		it("lets a club OFFICER release another member's roles, credited to the officer", async () => {
@@ -517,21 +826,43 @@ describe.skipIf(!hasTestDb)(
 			expect(relLog?.actorMemberId).toBe(seed.adminMemberId);
 		});
 
-		it("lets THIS meeting's Toastmaster release another member's roles with no session", async () => {
-			// The middle arm (#576): an honour-system claim, scoped to the meeting
-			// being written. It is what keeps the season grid's act-on-behalf-of path
-			// working for the member actually running the meeting.
-			await addTmodSlot(seed, otherMemberId);
+		it("lets THIS meeting's SIGNED-IN Toastmaster release another member's roles", async () => {
+			// The middle arm (#576), scoped to the meeting being written. It is what
+			// keeps the season grid's act-on-behalf-of path working for the member
+			// actually running the meeting, and it survives #762 — with a session
+			// behind it, which is the half that changed. The refusal case above is
+			// its asserted twin; this is the control that keeps the arm from being
+			// deleted rather than narrowed.
+			const tmod = await addSignedInMember(seed.clubId, "Signed-in TMOD");
+			extraUserIds.push(tmod.userId);
+			await addTmodSlot(seed, tmod.memberId);
+			sessionUserId = tmod.userId;
 			const { released } = await releaseSlotsAndMarkUnavailable(testDb, {
 				memberId: seed.memberId,
-				claimedActorMemberId: otherMemberId,
+				claimedActorMemberId: tmod.memberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
 			});
 			expect(released).toBe(1);
 			const [setLog] = await planSetLogs(seed.meetingId);
-			expect(setLog?.actorMemberId).toBe(otherMemberId);
-			expect(setLog?.detail).toMatchObject({ grantedVia: "tmod" });
+			expect(setLog?.actorMemberId).toBe(tmod.memberId);
+			expect(setLog?.detail).toMatchObject({
+				grantedVia: "tmod",
+				proof: "session",
+			});
+			// The release rows carry the proof too — they are the only record that
+			// survives the write they describe.
+			const [relLog] = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.targetId, seed.slotId),
+						eq(activityLog.action, "release"),
+					),
+				)
+				.limit(1);
+			expect(relLog?.detail).toMatchObject({ proof: "session" });
 		});
 
 		// A BEFORE/AFTER pair, per `public-writers-archive-gate.integration.test.ts`:
@@ -564,10 +895,14 @@ describe.skipIf(!hasTestDb)(
 			).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
 		});
 
-		it("refuses the write once the club is archived — on the session-less self arm", async () => {
-			// The arm that needs its OWN assert: no session means `requireMembership`
-			// (#186) and `requireClubRole` never run, so nothing else in this path
-			// reads `clubs.archived_at`.
+		it("refuses the write once the club is archived — on the self arm", async () => {
+			// The arm that needs its OWN assert. It is a plain member, so
+			// `requireClubRole` denies and `requireMembership`'s archive check
+			// (#186) never answers for this path; the seam's
+			// `assertClubNotArchived` runs BEFORE the ladder, so it is what refuses
+			// here rather than any check further down. Takedown outranks every other
+			// reason to refuse (ADR-0016) — including, since #762, the sign-in one.
+			sessionUserId = seed.memberUserId;
 			await expect(
 				releaseSlotsAndMarkUnavailable(testDb, {
 					memberId: seed.memberId,

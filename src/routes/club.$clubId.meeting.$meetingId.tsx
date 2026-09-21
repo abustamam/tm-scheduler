@@ -968,7 +968,29 @@ function MeetingView() {
 	 * server's.
 	 */
 	function declineFreesRoles(memberId: string): boolean {
-		return canManage || memberId === myId;
+		// #762 / ADR-0026: freeing roles needs `proof: "session"`, so this predicts
+		// the SERVER's answer per arm rather than gating the whole expression on
+		// one proxy for a session.
+		//
+		// `canManage` stands alone because it is already that answer for the
+		// officer arm: `canManageClub` grants on an admin membership OR a
+		// `read_write` impersonation and refuses `read_only`, which is exactly what
+		// `requireClubRole(admin)` resolves inside `resolveActor` and exactly what
+		// `requireSessionActor` admits. An earlier draft hoisted the session term
+		// in front of the whole disjunction, and that was a silent ADR-0016 / #246
+		// admin-parity regression: `isSignedIn` here is `effectiveMemberId &&
+		// authCtx?.user`, and an impersonating superadmin has NO `effectiveMemberId`
+		// (see the note where `managerActorId` is derived). So the one principal
+		// with full admin parity was predicted to free nothing, the dialog told them
+		// the role stays, the flag was stripped — and the member was marked
+		// `not_coming` while still holding every role, with no error and nothing on
+		// screen to notice.
+		//
+		// The SELF arm is the one that needs the session term, and only it: an
+		// anonymous roster pick reaches it — that is #699 — and the server refuses
+		// the request outright rather than downgrading, so a dialog that promised a
+		// release would be promising a write that throws before anything lands.
+		return canManage || (isSignedIn && memberId === myId);
 	}
 
 	async function writeRung(
@@ -1014,6 +1036,17 @@ function MeetingView() {
 		 *  the rung, free nothing"; see the field's note in `attendance-plan.ts`. */
 		releaseHeldRoles = false,
 	) {
+		// #762: the opt-in survives only if this viewer's decline would actually
+		// free anything. It cannot for an anonymous roster pick, and the server
+		// refuses the REQUEST rather than downgrading it — so sending the flag
+		// anyway loses the member's answer entirely instead of recording it.
+		//
+		// Re-entered with the flag defaulted, so the rung still lands by exactly
+		// the path every other caller takes. One level only: the inner call passes
+		// no flag, so the condition cannot hold twice.
+		if (releaseHeldRoles && !declineFreesRoles(memberId)) {
+			return commitRung(memberId, next, via);
+		}
 		// Roll back to what the UI was ACTUALLY showing, not the loader's
 		// snapshot: nothing here awaits an invalidate before this runs, and for a
 		// plain member `effectivePlan` is ALWAYS `[]` — so a lookup in it alone
@@ -2008,6 +2041,22 @@ function MeetingView() {
 							// list rules out ("Changing how canManage … is resolved").
 							// Recorded here rather than left silent.
 							canViewMemberDetail={effectiveCanManage}
+							// #762 / ADR-0026. "No answer" is the rung menu's only DELETE
+							// (`clearPlannedAttendance`), and destroying an answer needs a
+							// session this club's roster admits. `canManage` covers the
+							// officer and the `read_write` impersonation that
+							// `requireSessionActor` also admits; `isSignedIn` covers the
+							// plain member and the signed-in Toastmaster. What it
+							// deliberately excludes is the SELF-ASSERTED Toastmaster, who
+							// reaches this rail through `needsTmodPlan` on an honour-system
+							// claim (#576, retired by #747) and for whom every tap on that
+							// item came back "you need to be signed in".
+							//
+							// `canManage`, not `effectiveCanManage`: this predicts the
+							// SERVER, and an admin previewing as a member still carries the
+							// session the server reads — the same distinction
+							// `declineFreesRoles` makes two hundred lines up.
+							canClearRung={canManage || isSignedIn}
 							// Roll mode's guest edit (#727). `undefined` for everyone else,
 							// so their guest names stay plain text with no disabled control
 							// hinting at what they cannot do. Carries the stored fields with

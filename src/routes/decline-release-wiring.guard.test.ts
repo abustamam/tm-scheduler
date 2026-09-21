@@ -166,11 +166,61 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		// `tmod`. Reading `isTmod` here would put the copy back out of step with the
 		// server on exactly that row.
 		const body = fnBody(SRC, "declineFreesRoles");
-		expect(body).toContain("canManage || memberId === myId");
+		expect(body).toContain("canManage ||");
+		expect(body).toContain("memberId === myId");
 		expect(
 			fnBody(RAW, "declineFreesRoles"),
 			"the own-row TMOD case releases server-side, so this must not exclude it",
 		).not.toContain("isTmod");
+	});
+
+	it("requires a session on the SELF arm, and only there (#762)", () => {
+		// ADR-0026 added a second input to this prediction, and it applies PER ARM.
+		// The self arm admits an anonymous roster pick — that is #699 — so it needs
+		// the session term. The officer arm does not: `canManage` is already the
+		// server's own answer for it, granting on an admin membership or a
+		// `read_write` impersonation and refusing `read_only`, which is what
+		// `requireClubRole(admin)` and `requireSessionActor` both do.
+		const body = fnBody(SRC, "declineFreesRoles");
+		expect(
+			body,
+			"an asserted caller frees nothing, so the dialog must not promise a release and the payload must not ask for one",
+		).toContain("isSignedIn && memberId === myId");
+	});
+
+	it("never gates the OFFICER arm on isSignedIn — the impersonation regression", () => {
+		// The mutation this case exists for, and it SHIPPED in #762's first client
+		// cut: `isSignedIn && (canManage || memberId === myId)`. `isSignedIn` here
+		// is `effectiveMemberId && authCtx?.user`, and an impersonating superadmin
+		// has no `effectiveMemberId` — so the one principal ADR-0016 / #246 gives
+		// full admin parity was predicted to free nothing. The dialog told them the
+		// role stayed, `commitRung` stripped the flag, and the member ended up
+		// `not_coming` while still holding every role. No error, no toast, nothing
+		// to notice — which is why it needs a guard rather than a comment.
+		//
+		// Verbatim: a comment-blind read would let the paragraph above satisfy the
+		// very pattern it warns against.
+		expect(
+			fnBody(RAW, "declineFreesRoles"),
+			"canManage is already the server's answer for the officer arm; gating it on a session proxy silently drops admin parity",
+		).not.toMatch(/isSignedIn\s*&&\s*\(/);
+	});
+
+	it("downgrades the opt-in rather than sending one that throws (#762)", () => {
+		// The confirm still passes `true` — it is the one call site that has
+		// shown someone what would happen, and that stays pinned above. What is
+		// new is that `commitRung` re-enters WITHOUT the flag when this viewer's
+		// decline would free nothing, so the rung still lands by the same path
+		// every other caller takes. Deleted, the anonymous member who taps
+		// "Can't make it" gets a refusal instead of an answer recorded.
+		const body = fnBody(SRC, "commitRung");
+		expect(body).toContain(
+			"if (releaseHeldRoles && !declineFreesRoles(memberId))",
+		);
+		expect(
+			body,
+			"the downgrade must re-enter the SAME writer, not write a second way",
+		).toMatch(/return commitRung\(memberId, next, via\);/);
 	});
 
 	it("hands the dialog what it needs to tell the truth", () => {

@@ -145,6 +145,12 @@ function ClubHome() {
 					orientation={view}
 					count={count}
 					currentMemberId={member?.id ?? null}
+					// WHERE that id came from (#762). This shell serves both a
+					// signed-in member and an anonymous name-pick, and three of the
+					// grid's writes need a session — `useEffectiveMember` has already
+					// answered the question, so the grid reads its answer rather than
+					// forming a second one.
+					currentMemberSource={source}
 					clubId={clubUuid}
 					clubSlug={clubId}
 					requireIdentity={requireIdentity}

@@ -8,7 +8,9 @@
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activityLog, meetingAttendancePlan, members } from "#/db/schema";
+import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
+	ASSERTED_OVERWRITE_MESSAGE,
 	CLEARABLE_ASK,
 	clearPlanStatus,
 	getPlanStatus,
@@ -554,6 +556,308 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 					meetingId: club.meetingId,
 				}),
 			).toBe("not_coming");
+		});
+
+		describe("onlyIfAbsent — fill a blank and nothing else (#762)", () => {
+			// ADR-0026's line, in the seam. `demoteFrom` above narrows WHICH rows
+			// may be overwritten; this one refuses to overwrite at all, and it is
+			// the mode every session-less answer write runs in. All three outcomes
+			// are asserted, because the middle one is what keeps it a fill-blank
+			// rule rather than a one-shot one — and a two-case test (blank
+			// succeeds, different refuses) passes just as well with the equal case
+			// throwing at the member who gave the answer.
+
+			it("inserts and logs when there is no row", async () => {
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "coming",
+					actorMemberId: club.memberId,
+					proof: "asserted",
+					onlyIfAbsent: true,
+				});
+				expect(res.changed).toBe(true);
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe("coming");
+				const logs = await testDb
+					.select({ detail: activityLog.detail })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+				expect(logs).toHaveLength(1);
+				expect(logs[0]?.detail).toMatchObject({
+					status: "coming",
+					proof: "asserted",
+				});
+			});
+
+			it("is a silent no-op when the row already says the same thing", async () => {
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "coming",
+					actorMemberId: club.memberId,
+				});
+				const before = await testDb
+					.select({ id: activityLog.id })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "coming",
+					actorMemberId: club.memberId,
+					proof: "asserted",
+					onlyIfAbsent: true,
+				});
+				expect(res.changed).toBe(false);
+
+				const after = await testDb
+					.select({ id: activityLog.id })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+				expect(
+					after.length,
+					"a re-sent answer must not file a second plan_set — the feed would show a change that did not happen",
+				).toBe(before.length);
+			});
+
+			it("REFUSES, with the sign-in message, when the row says anything else", async () => {
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "coming",
+					actorMemberId: club.memberId,
+				});
+				const before = await testDb
+					.select({ id: activityLog.id })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+
+				await expect(
+					setPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status: "not_coming",
+						actorMemberId: club.memberId,
+						proof: "asserted",
+						onlyIfAbsent: true,
+					}),
+					// The MESSAGE, not merely that it threw: `SIGN_IN_REQUIRED_MESSAGE`
+					// IS the wire format an `Error` survives a createServerFn round trip
+					// as, and it is what makes the client's toast offer "Sign in"
+					// instead of rendering a bare string (#761).
+				).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+
+				// Refused, not partially applied, and silent in the feed.
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe("coming");
+				const after = await testDb
+					.select({ id: activityLog.id })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+				expect(after.length).toBe(before.length);
+			});
+
+			it("treats an officer's `reached_out` as still blank — the nudge round trip", async () => {
+				// THE regression #762's review caught, and it kills the feature the
+				// ladder exists for. The officer taps the member's WhatsApp draft,
+				// which INSERTs `reached_out` onto a blank row; the member then opens
+				// the session-less personal meeting page to answer. With
+				// `reached_out` counted as "answered", BOTH of their answers refuse —
+				// the officer asked and the member cannot reply.
+				//
+				// `reached_out` is the officer's record of having ASKED, never a
+				// reply, which is the same sentence CLEARABLE_ASK and
+				// SELF_SERVICE_RUNGS are built on. So it is a blank for this purpose.
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "reached_out",
+					actorMemberId: club.adminMemberId,
+				});
+
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "coming",
+					actorMemberId: club.memberId,
+					proof: "asserted",
+					onlyIfAbsent: true,
+				});
+				expect(res.changed).toBe(true);
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe("coming");
+				// And it LOGS, because something changed — the silent-no-op branch is
+				// for a row that already said the same thing.
+				const logs = await testDb
+					.select({ detail: activityLog.detail })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+				expect(logs).toHaveLength(2);
+				expect(logs[1]?.detail).toMatchObject({
+					status: "coming",
+					proof: "asserted",
+				});
+			});
+
+			it("the other direction too — declining over the ask", async () => {
+				// Both answers, because the bug refused both and a one-answer test
+				// would leave half the round trip broken.
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "reached_out",
+					actorMemberId: club.adminMemberId,
+				});
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "not_coming",
+					actorMemberId: club.memberId,
+					proof: "asserted",
+					onlyIfAbsent: true,
+				});
+				expect(res.changed).toBe(true);
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe("not_coming");
+			});
+
+			it("stays atomic when two first answers race", async () => {
+				// The property the single-statement form buys, and the reason the
+				// conflict arm is an UPDATE with a floor rather than a read followed
+				// by a write. Both requests see no row; exactly one may land, and the
+				// loser must be refused rather than overwrite the winner.
+				//
+				// Two DIFFERENT statuses on purpose: with the same one, a broken
+				// implementation that let both through would still leave the right
+				// row behind and only the log count would notice.
+				const answer = (status: "coming" | "not_coming") =>
+					setPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status,
+						actorMemberId: club.memberId,
+						proof: "asserted" as const,
+						onlyIfAbsent: true as const,
+					});
+				const results = await Promise.allSettled([
+					answer("coming"),
+					answer("not_coming"),
+				]);
+				const landed = results.filter((r) => r.status === "fulfilled");
+				const refused = results.filter((r) => r.status === "rejected");
+				expect(landed).toHaveLength(1);
+				expect(refused).toHaveLength(1);
+				expect((refused[0] as PromiseRejectedResult).reason).toMatchObject({
+					message: SIGN_IN_REQUIRED_MESSAGE,
+				});
+				// One row, one log — not two of either.
+				const logs = await testDb
+					.select({ id: activityLog.id })
+					.from(activityLog)
+					.where(eq(activityLog.clubId, club.clubId));
+				expect(logs).toHaveLength(1);
+			});
+
+			it("REFUSES an unfloored asserted overwrite as a programming error", async () => {
+				// The invariant the union cannot state (ASSERTED_OVERWRITE_MESSAGE).
+				// `onlyIfAbsent: true` implies `proof: "asserted"` structurally, but
+				// the converse does not fit — one legitimate asserted write is the
+				// `reached_out` exemption, which carries a floor. So the residue is
+				// checked here: asserted, no floor, not fill-blank is a miswired
+				// caller, and it must fail loudly rather than write.
+				await expect(
+					setPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status: "not_coming",
+						actorMemberId: club.memberId,
+						proof: "asserted",
+					}),
+				).rejects.toThrow(ASSERTED_OVERWRITE_MESSAGE);
+				// Refused BEFORE the database was touched.
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBeNull();
+			});
+
+			it("still allows the asserted write that names a floor — the Phase 2 exemption", async () => {
+				// The control beside it, and the reason the invariant is stated as
+				// "fill a blank OR name a floor" rather than a flat ban: an asserted
+				// Toastmaster writing `reached_out` carries `["reached_out"]` and is
+				// the debt ADR-0026 dates rather than closes (#747). Without this, a
+				// stricter rule would look equally correct and would break the panel.
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "reached_out",
+					actorMemberId: club.memberId,
+					proof: "asserted",
+					demoteFrom: ["reached_out"],
+				});
+				expect(res.changed).toBe(true);
+			});
+
+			it("does NOT block an unrestricted write over the same row — the control", async () => {
+				// Without this the three cases above pass with `setPlanStatus`
+				// permanently refusing every overwrite, which would break the officer
+				// correcting a wrong answer and the member correcting their own from
+				// a signed-in device.
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "coming",
+					actorMemberId: club.memberId,
+				});
+				const res = await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "not_coming",
+					actorMemberId: club.memberId,
+					proof: "session",
+				});
+				expect(res.changed).toBe(true);
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe("not_coming");
+			});
 		});
 
 		it("onlyFrom refuses to delete a rung outside the list", async () => {

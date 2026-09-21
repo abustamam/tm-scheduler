@@ -39,6 +39,27 @@
 //      ⇒ one tap releases the just-assigned role with no confirmation and no
 //      undo. Only the COPY varies on `holdsRole`; the dialog always appears.
 //
+// ## The decline branches on the VIEWER, not on the view (#762, ADR-0026)
+//
+// Rules 1 and 2 forbid branching on `holdsRole` because it goes stale in the
+// chat thread. `canRepick` does not: it is false exactly when the page was
+// rendered for a signed-in member, and a session does not evaporate between
+// render and tap. So the decline picks its ENDPOINT from it.
+//
+// It has to. This page IS the nudge link's destination and its audience is
+// session-less by construction — a name in a WhatsApp message, not an account
+// — and `markUnavailableReleasing` now refuses an asserted caller outright
+// rather than downgrading. Left unconditional, the single button this page
+// exists for would have thrown for almost everyone who taps it, losing the
+// answer as well as the release. So a session-less decline records the rung
+// through `setPlannedAttendance` and frees nothing, which is what that caller
+// was always going to get, and the copy says so instead of promising a
+// release that will not happen.
+//
+// The role, if they hold one, stays theirs on the agenda and the officer sees
+// them on the Not Available list — the pre-#663 behaviour, and the reason the
+// dialog's session-less copy points at the officer rather than at the slot.
+//
 // ## Tap targets: `min-h-11` at the call site, not a new size variant
 //
 // `lg` is already the largest non-icon size in `buttonVariants` and it is
@@ -127,6 +148,26 @@ export function PersonalMeetingBody({
 		view.club.timezone,
 	);
 	const holdsRole = view.roles.length > 0;
+	// `canRepick` is true for a name-picked viewer and false for a signed-in
+	// member, so this is the session question asked in the vocabulary the page
+	// already has — see the header's third rule for why it is the one piece of
+	// state a decline may branch on.
+	const canRelease = !canRepick;
+	// ADR-0026's line on THIS page's two buttons, not just its decline. An
+	// asserted viewer may fill a blank and may not change an answer, so once
+	// `planStatus` holds one, both buttons are controls the server refuses —
+	// and the decline half would run a confirm dialog saying "we'll let the team
+	// know" on the way to that refusal. `meeting-personal-strip.tsx` made the
+	// same split for the same writes; this page is the surface that split
+	// matters most on, because it is where the nudge link lands.
+	//
+	// `reached_out` deliberately does NOT count: it is the officer's record of
+	// having ASKED, the seam treats it as still-blank (`UNANSWERED_RUNGS`), and
+	// it is the state a nudged member arrives in. Counting it would refuse the
+	// round trip this page exists for.
+	const answered =
+		view.planStatus === "coming" || view.planStatus === "not_coming";
+	const canAnswer = canRelease || !answered;
 
 	// `isMeetingOver`, NOT `isMeetingLocked`. Locked is `status === "completed"`
 	// only, and clubs routinely never press Complete — so last month's meeting
@@ -168,8 +209,9 @@ export function PersonalMeetingBody({
 						},
 					});
 					toast.success("Great — see you there.");
-				} else {
-					// Unconditional — see rule 1 in the header.
+				} else if (canRelease) {
+					// Unconditional WITHIN this arm — see rule 1 in the header. The arm
+					// itself is chosen by the viewer's session, not by the view.
 					const { released } = await markUnavailableReleasing({
 						data: {
 							memberId: view.member.id,
@@ -180,6 +222,26 @@ export function PersonalMeetingBody({
 					toast.success(
 						released > 0
 							? `Thanks — we've let the team know and freed up your ${released === 1 ? "role" : "roles"}.`
+							: "Thanks — we've let the team know.",
+					);
+				} else {
+					// Session-less: record the answer and free nothing. `releaseHeldRoles`
+					// is left at its `false` default rather than sent as false, so this
+					// is byte-for-byte the payload a pre-#663 client sends.
+					await setPlannedAttendance({
+						data: {
+							memberId: view.member.id,
+							meetingId: meetingUuid,
+							status: "not_coming",
+						},
+					});
+					// `holdsRole` for COPY only, which rules 1 and 2 explicitly allow.
+					// It can be stale in the "role assigned since load" direction, and
+					// the consequence of being wrong here is a sentence that omits the
+					// role — not a write that does the wrong thing.
+					toast.success(
+						holdsRole
+							? "Thanks — we've let the team know. An officer will find cover for your role."
 							: "Thanks — we've let the team know.",
 					);
 				}
@@ -196,7 +258,14 @@ export function PersonalMeetingBody({
 				setPending(null);
 			}
 		},
-		[meetingUuid, onChanged, view.club.id, view.member.id],
+		[
+			canRelease,
+			holdsRole,
+			meetingUuid,
+			onChanged,
+			view.club.id,
+			view.member.id,
+		],
 	);
 
 	// ALWAYS confirms — see rule 2 in the header. `holdsRole` picks the copy, and
@@ -237,7 +306,11 @@ export function PersonalMeetingBody({
 			{/* Passed `writesClosed` so a stored answer never reads "Tap below" with
 			    nothing below it — the normal end state of every link that outlived
 			    its meeting in a chat thread. */}
-			<AnswerState status={view.planStatus} writesClosed={writesClosed} />
+			<AnswerState
+				status={view.planStatus}
+				writesClosed={writesClosed}
+				canChange={canAnswer}
+			/>
 
 			{writesClosed ? (
 				<p className="rounded-md border border-[var(--line)] p-3 text-muted-foreground text-sm">
@@ -246,6 +319,15 @@ export function PersonalMeetingBody({
 						: locked
 							? "This meeting is finished, so answers are closed."
 							: "This meeting has passed, so answers are closed."}
+				</p>
+			) : !canAnswer ? (
+				// Answered already, with no session to change it. The ANSWER itself is
+				// above (`AnswerState`); this says what would let them change it, and
+				// it is text rather than a link for the reason the strip gives — a
+				// refusal that is actually attempted still carries a real one-tap
+				// link through `showWriteError`.
+				<p className="rounded-md border border-[var(--line)] p-3 text-muted-foreground text-sm">
+					Sign in to change your answer.
 				</p>
 			) : (
 				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -374,12 +456,18 @@ export function PersonalMeetingBody({
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>
-							{holdsRole ? "Give up your role?" : "Tell us you can't make it?"}
+							{canRelease && holdsRole
+								? "Give up your role?"
+								: "Tell us you can't make it?"}
 						</DialogTitle>
 						<DialogDescription>
-							{holdsRole
-								? `You're ${listRoles(view.roles.map((r) => r.roleName))} for ${when}. Telling us you can't make it frees the role up for someone else, and we can't put it back automatically.`
-								: `We'll let the team know you can't make the ${when} meeting. If any role has been assigned to you since this page loaded, it will be freed up too.`}
+							{canRelease
+								? holdsRole
+									? `You're ${listRoles(view.roles.map((r) => r.roleName))} for ${when}. Telling us you can't make it frees the role up for someone else, and we can't put it back automatically.`
+									: `We'll let the team know you can't make the ${when} meeting. If any role has been assigned to you since this page loaded, it will be freed up too.`
+								: holdsRole
+									? `You're ${listRoles(view.roles.map((r) => r.roleName))} for ${when}. We'll let the team know you can't make it and an officer will find cover — your role stays yours until they do.`
+									: `We'll let the team know you can't make the ${when} meeting.`}
 						</DialogDescription>
 					</DialogHeader>
 					<DialogFooter>
@@ -389,7 +477,7 @@ export function PersonalMeetingBody({
 							disabled={busy}
 							onClick={() => setConfirmRelease(false)}
 						>
-							{holdsRole ? "Keep my role" : "Cancel"}
+							{canRelease && holdsRole ? "Keep my role" : "Cancel"}
 						</Button>
 						<Button
 							variant="destructive"
@@ -398,7 +486,9 @@ export function PersonalMeetingBody({
 							aria-busy={pending === "release"}
 							onClick={() => void sendAnswer(false)}
 						>
-							{holdsRole ? "Release & mark me away" : "Yes, I can't make it"}
+							{canRelease && holdsRole
+								? "Release & mark me away"
+								: "Yes, I can't make it"}
 							{pending === "release" ? <SavingIndicator /> : null}
 						</Button>
 					</DialogFooter>
@@ -584,18 +674,30 @@ export function PersonalMeetingLoading({ meetingKey }: { meetingKey: string }) {
 export function AnswerState({
 	status,
 	writesClosed,
+	canChange = true,
 }: {
 	status: PersonalMeetingView["planStatus"];
 	/** Past tense and no call to action once nothing can be changed. */
 	writesClosed: boolean;
+	/** False for an asserted viewer who has already answered (#762): the window
+	 *  is open, but changing an answer needs a session, so "Tap below" would
+	 *  point at buttons that are no longer there. Defaults true — the
+	 *  `writesClosed` half already carried the only other reason to drop it. */
+	canChange?: boolean;
 }) {
+	// ONE flag for both reasons the call to action must go. They differ in COPY
+	// (past tense vs present) and the caller owns that distinction; what they
+	// share is that there is nothing below to tap.
+	const offerChange = !writesClosed && canChange;
 	if (status === "coming") {
 		return (
 			<p className="flex items-center gap-2 text-sm">
 				<CheckCircle2 aria-hidden className="size-4 shrink-0" />
 				{writesClosed
 					? "You said you were coming."
-					: "You've said you're coming. Changed your mind? Tap below."}
+					: offerChange
+						? "You've said you're coming. Changed your mind? Tap below."
+						: "You've said you're coming."}
 			</p>
 		);
 	}
@@ -605,7 +707,9 @@ export function AnswerState({
 				<XCircle aria-hidden className="size-4 shrink-0" />
 				{writesClosed
 					? "You said you couldn't make it."
-					: "You've said you can't make it. Changed your mind? Tap below."}
+					: offerChange
+						? "You've said you can't make it. Changed your mind? Tap below."
+						: "You've said you can't make it."}
 			</p>
 		);
 	}

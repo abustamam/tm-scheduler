@@ -13,6 +13,7 @@ import {
 } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import { requireSessionActor } from "./write-actor-logic";
 
 /**
  * The planned-attendance write surface (D6, 2026-08-11): one entry point for the
@@ -127,7 +128,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 				via: data.via,
 			});
 		}
-		const { actorMemberId, viaManager, via } = await resolveActor({
+		const { actorMemberId, viaManager, via, proof } = await resolveActor({
 			clubId: meeting.clubId,
 			meetingId: data.meetingId,
 			memberId: data.memberId,
@@ -146,7 +147,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		// present and 0 here, rather than absent, so a caller reading it does not
 		// have to narrow a union to find out whether anything was freed — the
 		// route's decline toast is the reader.
-		const written = await setPlanStatus(db, {
+		const answer = {
 			memberId: data.memberId,
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
@@ -154,6 +155,29 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 			actorMemberId,
 			via: data.via,
 			grantedVia: via,
+			proof,
+		};
+		// ADR-0026's line, on the rung the member actually answers with (#762).
+		// An ASSERTED caller — a roster pick with no session behind it, which
+		// includes one who named nobody and was resolved to the subject — may
+		// record a FIRST answer and may re-send the one already there, and may
+		// not change it. `reached_out` is the exception and keeps its existing
+		// treatment: it is not an answer, it is an officer's record of having
+		// asked, its own `viaManager` check above already bounds who writes it,
+		// and the TMOD console it belongs to moves to sessions in Phase 2 (#747).
+		// Stated as `!== "reached_out"` rather than `=== "coming"` so a fourth
+		// rung that is an ANSWER inherits the fill-blank rule rather than the
+		// exemption. (`not_coming` never reaches here — it returned above.)
+		if (proof === "asserted" && data.status !== "reached_out") {
+			const filled = await setPlanStatus(db, {
+				...answer,
+				proof: "asserted",
+				onlyIfAbsent: true,
+			});
+			return { ...filled, released: 0 };
+		}
+		const written = await setPlanStatus(db, {
+			...answer,
 			// `via: "nudge"` is the AUTO-advance behind a WhatsApp/email tap: the
 			// officer tapped "message them" and the rung moved as a SIDE EFFECT,
 			// with no rung in front of them to overrule. It must never demote a
@@ -205,6 +229,14 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
+		// #762 / ADR-0026. A clear DESTROYS an answer a person put there, and the
+		// ladder below cannot tell a signed-in member from a visitor who typed
+		// their id — on the anonymous path `claimedActorMemberId` defaults to the
+		// subject, so its self-only arm admits any roster member. The RETURN is
+		// deliberately unused: this answers "may this request write at all", and
+		// the resolution below still answers who to credit and which floor
+		// applies.
+		await requireSessionActor({ clubId: meeting.clubId });
 		const { actorMemberId, via } = await resolveActor({
 			clubId: meeting.clubId,
 			meetingId: data.meetingId,

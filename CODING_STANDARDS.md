@@ -454,12 +454,33 @@ would read "all contacted, nobody declined". Only an OFFICER's deliberate menu p
 which is what keeps "Asked" from silently no-opping on a row that already answered for the one
 caller a session authenticated), and `clearPlanStatus`'s `onlyFrom`
 names the statuses a delete may remove, and since #573 it is **REQUIRED** — there is no
-"clear whatever is there" any more, and its absence used to be the hole. The two floors are exact
-COMPLEMENTS, defined beside each other: `SELF_SERVICE_RUNGS` (`coming | not_coming`) is what a
-self/TMOD caller may clear, `CLEARABLE_ASK` (`reached_out`) is what an officer may clear. A member
-clears an ANSWER; an officer clears the ASK; neither may erase the other's. So a plain member and a
+"clear whatever is there" any more, and its absence used to be the hole. The two CLEAR floors are
+exact COMPLEMENTS, defined beside each other: `SELF_SERVICE_RUNGS` (`coming | not_coming`) is what
+a self/TMOD caller may clear, `CLEARABLE_ASK` (`reached_out`) is what an officer may clear. A
+member clears an ANSWER; an officer clears the ASK; neither may erase the other's. So a plain
+member and a
 self-asserted Toastmaster still cannot erase an officer's `reached_out` — which deleting a
 `meeting_outreach` row used to require an admin to do — and an officer can no longer erase a reply.
+
+**Since #762 there is a THIRD write mode, and "the two floors" above now names only the clear
+pair.** `setPlanStatus`'s `onlyIfAbsent` is the fill-blank write ADR-0026 gives a caller whose
+identity was only ASSERTED — a roster pick with no session behind it, which is most of this
+product's write traffic. It is not a floor in the `demoteFrom` sense: it refuses to overwrite an
+ANSWER at all, raising `SIGN_IN_REQUIRED_MESSAGE` so the client can offer a one-tap sign-in link,
+while re-sending the answer already on the row is a silent no-op so a double-tap does not read as a
+permission failure. What it treats as still-blank is `UNANSWERED_RUNGS` (`reached_out`) — the same
+sentence `CLEARABLE_ASK` is built on, because an officer's ask is not a reply, and getting that
+wrong breaks the nudge round trip the ladder exists for: the WhatsApp draft inserts `reached_out`
+onto a blank row and the member answers from a session-less page. Three constants, three claims
+about `reached_out`, all currently `["reached_out"]` and deliberately not collapsed: an officer may
+delete it, a member may answer over it, and a member may not set it.
+
+The mode and the proof travel together in the TYPE — `onlyIfAbsent: true` requires
+`proof: "asserted"` — and the converse is a runtime invariant
+(`ASSERTED_OVERWRITE_MESSAGE`) rather than a union arm, because one legitimate asserted write is
+NOT fill-blank: an asserted Toastmaster writing `reached_out` carries `demoteFrom: ["reached_out"]`
+and is the Phase 2 debt #747 closes. So the rule the seam enforces is "an asserted write fills a
+blank or names a floor", and a caller that does neither throws before touching the database.
 Do NOT restate the officer half as "`viaManager` gets the unrestricted clear": an earlier draft of
 this paragraph did, that was the first cut of #576 and never HEAD, and the two sentences
 contradicted each other four lines apart. The write ladder widened to `viaManager`; the delete

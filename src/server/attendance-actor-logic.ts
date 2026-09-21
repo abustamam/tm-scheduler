@@ -28,8 +28,19 @@
  * is why the guard earns its place by making a dishonest assertion fail loudly
  * rather than by making forgery impossible.
  *
+ * WHICH IS WHY EVERY ARM NOW REPORTS ITS {@link ResolvedActor.proof} (#762,
+ * ADR-0026). The paragraph above describes a ladder that cannot tell a
+ * magic-link session bound to a member from a visitor who typed that member's
+ * id — both come back `via: "self"` — so every caller of this function got one
+ * answer for two very different requests, and the destructive ones (free every
+ * role, erase an answer) were admitted on the weaker of them. The arms and
+ * their order are UNCHANGED; what is new is that the answer now carries how the
+ * identity was established, so a caller can admit an asserted pick for a first
+ * answer and refuse it for an overwrite.
+ *
  * This module touches `db` and must never be imported by client code.
  */
+import type { WriteProof } from "#/lib/write-proof";
 import {
 	getSessionUser,
 	NO_PERMISSION_MESSAGE,
@@ -38,7 +49,7 @@ import {
 	requireClubRole,
 } from "./guards";
 import { loadTmodMemberId } from "./meeting-authz-logic";
-import { resolveWriteActor } from "./write-actor-logic";
+import { resolveWriteActorWithProof } from "./write-actor-logic";
 
 /** The rejection an asserted non-manager caller gets when they name a subject
  *  that is not themselves. Exported so a test compares against THIS string
@@ -67,6 +78,21 @@ export interface ResolvedActor {
 	 *  next reader does not have to re-derive the distinction from
 	 *  `actorMemberId`, which is the mistake the note above describes. */
 	via: "officer" | "tmod" | "self";
+	/** HOW the acting identity was established (#762, ADR-0026).
+	 *
+	 *  Orthogonal to {@link via}, and that is the point: two of the three arms
+	 *  answer for both kinds of caller. `self` is a signed-in member answering
+	 *  for themselves AND a visitor who typed that member's id into the
+	 *  payload; `tmod` is the meeting's Toastmaster signed in AND anyone who
+	 *  read their id off the public agenda payload. Only `officer` is
+	 *  `"session"` by construction, because `requireClubRole` is the one arm
+	 *  that starts from a session.
+	 *
+	 *  So a caller deciding whether a write may DESTROY something must read
+	 *  this and not the arm. `mayRelease` in `attendance-decline-logic.ts`
+	 *  reads the arm, and it is documented there as a product ceiling rather
+	 *  than authorization for exactly this reason. */
+	proof: WriteProof;
 }
 
 /** Denials that legitimately mean "not an officer HERE" and so fall through to
@@ -117,7 +143,13 @@ export async function resolveActor(args: {
 			}
 		}
 		if (membership) {
-			return { actorMemberId: membership.id, viaManager: true, via: "officer" };
+			// `"session"` without consulting anything: this arm is reached only
+			// through `requireClubRole`, which starts from `getSessionUser` above.
+			// It is the ONLY arm where the proof is a property of the code path
+			// rather than of the request.
+			const actorMemberId = membership.id;
+			const proof = "session";
+			return { actorMemberId, viaManager: true, via: "officer", proof };
 		}
 	}
 
@@ -132,7 +164,12 @@ export async function resolveActor(args: {
 	// write self-assert as its own target, so writing the TMOD's row would grant
 	// TMOD powers over it — wrong, and useless for the panel. The self arm keeps
 	// the subject default below, for a caller who asserted nothing.
-	let caller = await resolveWriteActor({
+	//
+	// `…WithProof` rather than `resolveWriteActor` (#762): that projection drops
+	// exactly the bit both remaining arms need. It resolves identically — same
+	// order, same throws, same impersonation handling — and `resolveWriteActor`
+	// is a projection of it, so the two cannot answer differently.
+	let resolved = await resolveWriteActorWithProof({
 		clubId: args.clubId,
 		sessionUserId: user?.id ?? null,
 		claimedActorMemberId: args.claimedActorMemberId ?? null,
@@ -155,24 +192,43 @@ export async function resolveActor(args: {
 	//
 	// Skipped entirely when there is no caller to match, which is what keeps the
 	// slot join off the request for a caller who asserted nothing.
-	if (caller) {
+	//
+	// The proof comes STRAIGHT off the resolution — an honour-system Toastmaster
+	// and a signed-in one both land here, and telling them apart is the whole
+	// reason #762 could take the destructive writes off this arm without taking
+	// the arm itself away (the panel is Phase 2, #747).
+	if (resolved) {
+		const caller = resolved.memberId;
 		const tmodMemberId = await loadTmodMemberId(args.meetingId);
 		if (tmodMemberId && caller === tmodMemberId) {
-			return { actorMemberId: caller, viaManager: true, via: "tmod" };
+			const { proof } = resolved;
+			return { actorMemberId: caller, viaManager: true, via: "tmod", proof };
 		}
 	}
 	// Not an officer and not this meeting's TMOD: a plain member, an anonymous
 	// roster pick, or a signed-in user with no membership in THIS club. A caller
 	// who asserted nothing falls back to the subject default, preserving the
 	// pre-#576 anonymous self-write path.
-	if (caller === null) {
-		caller = await resolveWriteActor({
+	//
+	// That fallback carries no extra weight for naming nobody: the proof it
+	// comes back with is `"asserted"`, because that is what
+	// `resolveWriteActorWithProof` answers for a claim with no session behind
+	// it — this function does not have to special-case it. #699 is exactly the
+	// request that lands here, and before #762 it was the QUIETEST forgery
+	// available, since the activity row then credits the victim as the actor.
+	if (resolved === null) {
+		resolved = await resolveWriteActorWithProof({
 			clubId: args.clubId,
 			sessionUserId: user?.id ?? null,
 			claimedActorMemberId: args.memberId,
 		});
 	}
-	const actor = caller;
+	const actor = resolved?.memberId ?? null;
 	if (actor !== args.memberId) throw new Error(SELF_ONLY_MESSAGE);
-	return { actorMemberId: actor, viaManager: false, via: "self" };
+	// `resolved` is non-null past that throw — `actor` was read off it and
+	// matched a string id — but TypeScript cannot narrow one name through the
+	// other. The fallback names the WEAKER proof rather than asserting, so an
+	// edit that makes it reachable fails closed instead of granting.
+	const proof = resolved?.proof ?? "asserted";
+	return { actorMemberId: actor, viaManager: false, via: "self", proof };
 }

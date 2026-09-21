@@ -12,8 +12,15 @@
  *    pre-#663 client would send its usual request and get a destructive release
  *    with no dialog and no toast. The first block below is that regression test,
  *    and it is the one that matters most: everything after it passes `true`.
- * 2. The ARM. A product ceiling, NOT a security boundary — see the seam's header
- *    and THE RESIDUAL case below, which executes the hole and asserts it is open.
+ * 2. The ARM. A product ceiling, NOT a security boundary — see the seam's
+ *    header. The boundary is the third gate, added by #762.
+ * 2b. The PROOF (#762, ADR-0026). Freeing roles needs a session bound to a
+ *    member of this club, whichever arm admitted the caller, so every case
+ *    below that releases now signs someone in. The case that used to be
+ *    marked THE RESIDUAL executed the hole and asserted it was open; it now
+ *    asserts the refusal, and the arm cases beside it keep their own meaning
+ *    only because their callers have sessions — an anonymous fixture there
+ *    would pass with `mayRelease` deleted.
  * 3. The meeting window. `assertMeetingNotLocked` is `status === "completed"`
  *    only, and clubs routinely never press Complete.
  *
@@ -34,6 +41,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/attendance-decline.integration.test.ts
  */
+import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -45,8 +53,10 @@ import {
 	roleDefinitions,
 	roleSlots,
 	speeches,
+	user,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
 	cleanup,
 	hasTestDb,
@@ -137,6 +147,39 @@ async function addRosterMember(clubId: string, name: string): Promise<string> {
 	return m.id;
 }
 
+/**
+ * A roster member who can also SIGN IN — a Person carrying `user_id`, plus the
+ * `user` row behind it.
+ *
+ * `addRosterMember` above deliberately makes neither, and since #762 that is
+ * the difference between a caller who may free roles and one who may not. The
+ * arms that used to be reachable anonymously (self, TMOD) still exist and still
+ * differ from each other; what changed is that reaching them for a DESTRUCTIVE
+ * write needs a session. A test that wants to prove the ARM still behaves as it
+ * did therefore needs a member with a user behind them, or it proves only that
+ * the new gate fires.
+ *
+ * The caller must pass the returned `userId` to `cleanup`: `user` rows are
+ * referenced across clubs, so the club cascade does not take them.
+ */
+async function addSignedInMember(
+	clubId: string,
+	name: string,
+): Promise<{ memberId: string; userId: string }> {
+	const userId = randomUUID();
+	const email = `${userId}@test.example`;
+	await testDb
+		.insert(user)
+		.values({ id: userId, name, email, emailVerified: true });
+	const personId = await seedPerson({ name, email, userId });
+	const [m] = await testDb
+		.insert(members)
+		.values({ clubId, personId, name, email })
+		.returning({ id: members.id });
+	if (!m) throw new Error("Failed to insert member");
+	return { memberId: m.id, userId };
+}
+
 /** A second slot on the seeded meeting, held by `memberId`. Returns its id. */
 async function addHeldSlot(
 	club: SeededClub,
@@ -182,16 +225,25 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 	let seed: SeededClub;
 	/** A second ACTIVE roster member of the same club, holding no office. */
 	let otherMemberId: string;
+	/** `user` rows a case created itself. They are referenced across clubs, so
+	 *  the club cascade does not take them — `cleanup` needs them by id or the
+	 *  next run of this file inherits them. */
+	let extraUserIds: string[];
 
 	beforeEach(async () => {
 		seed = await seedClub();
 		sessionUserId = null;
+		extraUserIds = [];
 		otherMemberId = await addRosterMember(seed.clubId, "Someone Else");
 	});
 
 	afterEach(async () => {
 		sessionUserId = null;
-		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		await cleanup(seed.clubId, [
+			seed.adminUserId,
+			seed.memberUserId,
+			...extraUserIds,
+		]);
 	});
 
 	/** Put the subject on the seeded slot, so a write that is wrongly admitted is
@@ -393,7 +445,11 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 
 	describe("the self arm", () => {
 		it("frees the member's own roles when they answer for themselves", async () => {
+			// SIGNED IN since #762: the arm is the same one, and the release is the
+			// same release, but freeing roles needs a session bound to a member of
+			// this club. `seed.memberUserId` is the user behind `seed.memberId`.
 			await holdSeededSlot();
+			sessionUserId = seed.memberUserId;
 			const { released } = await declinePlannedAttendance(testDb, {
 				memberId: seed.memberId,
 				claimedActorMemberId: seed.memberId,
@@ -405,12 +461,17 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
 				"not_coming",
 			);
+			// BOTH halves of the provenance: which arm admitted it, and how the
+			// identity behind it was established. They answer different questions
+			// and #762 is the reason the second one exists.
 			expect((await planSetLogs(seed.meetingId))[0]?.detail).toMatchObject({
 				grantedVia: "self",
+				proof: "session",
 			});
 		});
 
 		it("records the rung with nothing to free when the member holds no role", async () => {
+			sessionUserId = seed.memberUserId;
 			const { released, changed } = await declinePlannedAttendance(testDb, {
 				memberId: seed.memberId,
 				claimedActorMemberId: seed.memberId,
@@ -444,37 +505,231 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			expect(await planRows(seed.memberId, seed.meetingId)).toHaveLength(0);
 		});
 
-		it("THE RESIDUAL: an anonymous caller who asserts NOTHING releases the subject's roles", async () => {
-			// Executed, not described, because an earlier draft of this change
-			// defended the arm gate as a security boundary and this is the case that
-			// disproves it. With no session and no claim, `resolveActor`'s last arm
-			// resolves the caller TO the subject and returns `via: "self"` — a
-			// releasing arm. So the cheap forgery is to OMIT the claim, once per
-			// member, and it is quieter than asserting one: the feed credits the
-			// victim as the actor.
+		it("REFUSES an anonymous caller who asserts NOTHING — the closed residual (#699)", async () => {
+			// This case used to assert the opposite, and it was RIGHT to: #663 could
+			// not close the hole and a comment claiming otherwise would have been a
+			// lie. What it executed was the cheapest forgery the product had. With
+			// no session and no claim, `resolveActor`'s last arm resolves the caller
+			// TO the subject and returned `via: "self"` — a releasing arm — so one
+			// request per member emptied a meeting's whole programme, quieter than
+			// asserting an id because the feed then credits the victim as the actor.
 			//
-			// That is the product's identity model (#317), the same honour system
-			// `claimSlot` and `releaseSlot` run on, and closing it is a much larger
-			// change than #663. `availability.integration.test.ts` has asserted the
-			// same residual for the sibling endpoint since #675. The arm gate is a
-			// product ceiling on what a Toastmaster can do in a few honest taps; it
-			// is not authorization, and this test is here so nobody re-describes it
-			// as one.
+			// #762 closes it on the PROOF rather than on the arm (ADR-0026). Naming
+			// nobody resolves as `proof: "asserted"`, exactly like naming the victim,
+			// and freeing roles needs `"session"`. The arm gate is untouched and is
+			// still a product ceiling, not authorization — which is now a statement
+			// about a gate that is no longer the only thing standing there.
 			await holdSeededSlot();
-			const { released } = await declinePlannedAttendance(testDb, {
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: true,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+
+			// Refused, not partially applied. The throw alone would pass for a
+			// fixture that broke for an unrelated reason, and the RUNG matters as
+			// much as the slot: a refusal that still recorded "not coming" would
+			// take the member off the assign picker while leaving them on the
+			// programme.
+			const slot = await seededSlot();
+			expect(slot?.assignedMemberId).toBe(seed.memberId);
+			expect(slot?.status).toBe("claimed");
+			expect(await planRows(seed.memberId, seed.meetingId)).toHaveLength(0);
+			expect(await planSetLogs(seed.meetingId)).toHaveLength(0);
+			expect(await releaseLogs([seed.slotId])).toHaveLength(0);
+		});
+
+		it("REFUSES a release that names the victim as the actor", async () => {
+			// The other half of the same forgery, and the one an attacker reaches
+			// for first because the id is public — `loadMeetingDetail` ships it as
+			// `assigneeId`. Naming the subject and naming nobody resolve to the same
+			// place, so both have to be executed or a fix that only handled the
+			// no-claim shape would look complete.
+			await holdSeededSlot();
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: seed.memberId,
+					claimedActorMemberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: true,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+			expect((await seededSlot())?.assignedMemberId).toBe(seed.memberId);
+			expect(await planRows(seed.memberId, seed.meetingId)).toHaveLength(0);
+		});
+	});
+
+	describe("an ASSERTED answer fills a blank and nothing else (#762)", () => {
+		// The non-releasing rung write, which stays open to a session-less caller
+		// because the honour-system sign-up sheet IS the product (ADR-0010). What
+		// #762 takes away is the OVERWRITE.
+		it("records a first answer, logging proof: asserted", async () => {
+			const { changed, released } = await declinePlannedAttendance(testDb, {
 				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
-				releaseHeldRoles: true,
+				releaseHeldRoles: false,
 			});
-			expect(released).toBe(1);
-			expect((await seededSlot())?.status).toBe("open");
-			const [log] = await planSetLogs(seed.meetingId);
-			expect(log?.detail).toMatchObject({ grantedVia: "self" });
-			expect(
-				log?.actorMemberId,
-				"the write is credited to the SUBJECT, which is what makes this quiet",
-			).toBe(seed.memberId);
+			expect(changed).toBe(true);
+			expect(released).toBe(0);
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"not_coming",
+			);
+			const logs = await planSetLogs(seed.meetingId);
+			expect(logs).toHaveLength(1);
+			expect(logs[0]?.detail).toMatchObject({
+				status: "not_coming",
+				grantedVia: "self",
+				proof: "asserted",
+			});
+		});
+
+		it("re-sending the SAME answer is a quiet no-op, not a refusal", async () => {
+			// The case that makes this a fill-blank rule rather than a one-shot
+			// one. A double-tap, or a retry off a flaky mobile connection, must not
+			// read as a permission failure to the member who gave the answer.
+			const args = {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: false,
+			};
+			await declinePlannedAttendance(testDb, args);
+			const { changed } = await declinePlannedAttendance(testDb, args);
+			expect(changed).toBe(false);
+			// And nothing is logged twice: a `plan_set` for a change that did not
+			// happen is a lie the feed tells forever.
+			expect(await planSetLogs(seed.meetingId)).toHaveLength(1);
+		});
+
+		it("answers OVER an officer's reached_out — the nudge round trip", async () => {
+			// The regression #762's review caught, on the seam the nudge link's
+			// "Can't make it" reaches. The officer taps the member's WhatsApp draft,
+			// which INSERTs `reached_out` onto a blank row; the member then opens
+			// the session-less personal meeting page and answers. Counting the ASK
+			// as an answer refused them — the officer asked and the member could not
+			// reply, which is the whole feature.
+			//
+			// `reached_out` is the officer's record of having asked, never a reply,
+			// so it is still a blank for ADR-0026's purposes (UNANSWERED_RUNGS).
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "reached_out",
+			});
+			const { changed } = await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: false,
+			});
+			expect(changed).toBe(true);
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"not_coming",
+			);
+			expect((await planSetLogs(seed.meetingId))[0]?.detail).toMatchObject({
+				status: "not_coming",
+				proof: "asserted",
+			});
+		});
+
+		it("REFUSES to overwrite an answer that says something else", async () => {
+			// The bug, on the rung that carries it: a member who said `coming` is
+			// flipped to `not_coming` by anyone who can read their id, they lose
+			// their place on the programme, and re-answering needs them to NOTICE.
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "coming",
+			});
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: seed.memberId,
+					claimedActorMemberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: false,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"coming",
+			);
+			expect(await planSetLogs(seed.meetingId)).toHaveLength(0);
+		});
+
+		it("REFUSES the overwrite through the no-caller fallback too", async () => {
+			// Same row, same refusal, reached by asserting NOTHING. The fallback
+			// resolves the caller to the subject, so without this the fix could be
+			// half-applied and the cheaper shape would still work.
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "coming",
+			});
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: false,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"coming",
+			);
+		});
+
+		it("REFUSES the overwrite on an asserted TMOD arm", async () => {
+			// The widest of the three asserted shapes: the Toastmaster's id is
+			// published on the public agenda payload, so this arm is reachable by
+			// any visitor who reads the agenda. The arm keeps the rung write it is
+			// there for — recording who is not coming is the panel's job — and
+			// loses the overwrite, which is what "that arm loses its destructive
+			// writes now" means.
+			await addTmodSlot(seed, otherMemberId);
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "coming",
+			});
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: seed.memberId,
+					claimedActorMemberId: otherMemberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: false,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"coming",
+			);
+		});
+
+		it("still lets an asserted TMOD record a FIRST answer for someone", async () => {
+			// The control beside it. Without this the refusal above would pass just
+			// as well with the whole TMOD arm deleted, which is a different and
+			// larger change than the one #762 makes.
+			await addTmodSlot(seed, otherMemberId);
+			const { changed } = await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: otherMemberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: false,
+			});
+			expect(changed).toBe(true);
+			expect((await planSetLogs(seed.meetingId))[0]?.detail).toMatchObject({
+				grantedVia: "tmod",
+				proof: "asserted",
+			});
 		});
 	});
 
@@ -484,12 +739,21 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			// meeting's whole programme in a few taps. The rung is still written —
 			// they run the meeting, and recording who is not coming is the panel's
 			// job.
+			//
+			// The Toastmaster here SIGNS IN, and that is what keeps this a test of
+			// the ceiling. Since #762 an asserted caller asking for a release is
+			// refused outright, so an anonymous fixture would pass with `mayRelease`
+			// deleted, inverted, or gone — the guard-vacuity shape, on the one gate
+			// this block exists for.
 			await holdSeededSlot();
-			await addTmodSlot(seed, otherMemberId);
+			const tmod = await addSignedInMember(seed.clubId, "Signed-in TMOD");
+			extraUserIds.push(tmod.userId);
+			await addTmodSlot(seed, tmod.memberId);
+			sessionUserId = tmod.userId;
 
 			const { released } = await declinePlannedAttendance(testDb, {
 				memberId: seed.memberId,
-				claimedActorMemberId: otherMemberId,
+				claimedActorMemberId: tmod.memberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
 				releaseHeldRoles: true,
@@ -508,8 +772,33 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 				"not_coming",
 			);
 			const [log] = await planSetLogs(seed.meetingId);
-			expect(log?.actorMemberId).toBe(otherMemberId);
-			expect(log?.detail).toMatchObject({ grantedVia: "tmod" });
+			expect(log?.actorMemberId).toBe(tmod.memberId);
+			expect(log?.detail).toMatchObject({
+				grantedVia: "tmod",
+				proof: "session",
+			});
+		});
+
+		it("REFUSES an asserted Toastmaster asking for a release, rather than quietly writing the rung", async () => {
+			// The two gates are independent, and this is what that buys. Without
+			// it, an asserted TMOD on another member's row would be refused by
+			// `mayRelease` and silently fall through to a rung write — the caller
+			// asked to free roles, freed none, and is told nothing went wrong.
+			// Refusing on the FLAG means "sign in" instead, which is an answer the
+			// person can act on.
+			await holdSeededSlot();
+			await addTmodSlot(seed, otherMemberId);
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: seed.memberId,
+					claimedActorMemberId: otherMemberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: true,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+			expect((await seededSlot())?.assignedMemberId).toBe(seed.memberId);
+			expect(await planRows(seed.memberId, seed.meetingId)).toHaveLength(0);
 		});
 
 		it("DOES free the Toastmaster's own roles on their own row", async () => {
@@ -522,6 +811,7 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			// would keep them on the programme, with nothing explaining why.
 			const tmodSlotId = await addTmodSlot(seed, seed.memberId);
 			await holdSeededSlot();
+			sessionUserId = seed.memberUserId;
 
 			const { released } = await declinePlannedAttendance(testDb, {
 				memberId: seed.memberId,
