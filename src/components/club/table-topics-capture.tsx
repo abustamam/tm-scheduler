@@ -49,7 +49,7 @@ export function TableTopicsCapture({
 	canEdit: boolean;
 	busy: boolean;
 	roster: { memberId: string; name: string }[];
-	clubGuests: { id: string; name: string }[];
+	clubGuests: { id: string; name: string; stage?: string }[];
 	onAdd: (payload: {
 		memberId?: string;
 		guestId?: string;
@@ -166,7 +166,7 @@ export function AssigneePicker({
 }: {
 	label: string;
 	roster: { memberId: string; name: string }[];
-	clubGuests: { id: string; name: string }[];
+	clubGuests: { id: string; name: string; stage?: string }[];
 	busy: boolean;
 	onPick: (payload: {
 		memberId?: string;
@@ -175,8 +175,15 @@ export function AssigneePicker({
 	}) => void;
 }) {
 	const [open, setOpen] = useState(false);
+	const [search, setSearch] = useState("");
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
+		<Popover
+			open={open}
+			onOpenChange={(next) => {
+				setOpen(next);
+				setSearch("");
+			}}
+		>
 			<PopoverTrigger asChild>
 				<Button type="button" size="sm" variant="outline" disabled={busy}>
 					{label}
@@ -184,7 +191,11 @@ export function AssigneePicker({
 			</PopoverTrigger>
 			<PopoverContent className="w-72 space-y-3">
 				<Command>
-					<CommandInput placeholder="Search members…" />
+					<CommandInput
+						placeholder="Search members and guests…"
+						value={search}
+						onValueChange={setSearch}
+					/>
 					<CommandList>
 						<CommandEmpty>No matching people.</CommandEmpty>
 						<CommandGroup heading="Members">
@@ -204,22 +215,24 @@ export function AssigneePicker({
 						</CommandGroup>
 						{clubGuests.length > 0 ? (
 							<CommandGroup heading="Guests">
-								{clubGuests.map((g) => (
-									<CommandItem
-										key={g.id}
-										value={`g ${g.name} ${g.id}`}
-										disabled={busy}
-										onSelect={() => {
-											onPick({ guestId: g.id });
-											setOpen(false);
-										}}
-									>
-										{g.name}
-										<Badge variant="outline" className="ml-auto">
-											Guest
-										</Badge>
-									</CommandItem>
-								))}
+								{clubGuests
+									.filter((g) => g.stage !== "lost" || search.trim().length > 0)
+									.map((g) => (
+										<CommandItem
+											key={g.id}
+											value={`g ${g.name} ${g.id}`}
+											disabled={busy}
+											onSelect={() => {
+												onPick({ guestId: g.id });
+												setOpen(false);
+											}}
+										>
+											{g.name}
+											<Badge variant="outline" className="ml-auto">
+												Guest
+											</Badge>
+										</CommandItem>
+									))}
 							</CommandGroup>
 						) : null}
 					</CommandList>

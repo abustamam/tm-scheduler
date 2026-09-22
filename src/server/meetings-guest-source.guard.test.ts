@@ -65,7 +65,7 @@ describe("meetings.ts sources guests only through listClubGuests (#637)", () => 
 		expect(schemaImport).toMatch(/\bmeetings,/);
 		expect(
 			schemaImport,
-			"meetings.ts imported the `guests` table again — the assign picker's list belongs to listClubGuests, which filters out joined and lost guests",
+			"meetings.ts imported the `guests` table again — the assign picker's list belongs to listClubGuests, which filters out joined guests",
 		).not.toMatch(/\bguests,/);
 	});
 
@@ -80,7 +80,7 @@ describe("meetings.ts sources guests only through listClubGuests (#637)", () => 
 	it("does not select guest contact columns onto the meeting payload", () => {
 		// `listClubGuests` also returns `email` and `phone` for the VP-Membership
 		// board. The meeting payload has never carried guest contact details, so
-		// the call site projects to `{ id, name }`. Passing the seam's rows through
+		// the call site projects to `{ id, name, stage }`. Passing the seam's rows through
 		// unprojected would widen PII on this page as a silent side effect.
 		const src = readFileSync(MEETINGS, "utf8");
 		const at = src.indexOf("listClubGuests(");
@@ -90,7 +90,7 @@ describe("meetings.ts sources guests only through listClubGuests (#637)", () => 
 		expect(callSite).toMatch(/\bname:/);
 		expect(
 			callSite,
-			"the meeting payload's guest rows must stay {id, name}",
+			"the meeting payload's guest rows must stay {id, name, stage}",
 		).not.toMatch(/\b(email|phone)\b/);
 	});
 });

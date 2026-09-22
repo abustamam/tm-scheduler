@@ -52,7 +52,7 @@ export function AssignSlotSheet({
 	onAssigned,
 }: {
 	slot: AssignSlot | null;
-	roster: { id: string; name: string }[];
+	roster: { id: string; name: string; stage?: string }[];
 	roleByMemberId: Record<string, string>;
 	unavailableIds: string[];
 	roleRecency: RoleRecency;
@@ -61,11 +61,17 @@ export function AssignSlotSheet({
 	 *  self-serve/TMOD view. */
 	allowGuests?: boolean;
 	/** Existing club guests to pick from (admin path only). */
-	clubGuests?: { id: string; name: string }[];
+	clubGuests?: { id: string; name: string; stage?: string }[];
 	onOpenChange: (open: boolean) => void;
 	onAssigned: () => void | Promise<void>;
 }) {
 	const [busy, setBusy] = useState(false);
+	const [guestSearch, setGuestSearch] = useState("");
+	const [searchSlotId, setSearchSlotId] = useState(slot?.id);
+	if (searchSlotId !== slot?.id) {
+		setSearchSlotId(slot?.id);
+		setGuestSearch("");
+	}
 	// Revive the ISO recency for the role being assigned into Dates for the rows.
 	const lastServedAt: Record<string, Date> = {};
 	if (slot) {
@@ -230,19 +236,36 @@ export function AssignSlotSheet({
 								picker or roster.
 							</p>
 							{clubGuests.length > 0 ? (
-								<div className="flex flex-wrap gap-2">
-									{clubGuests.map((g) => (
-										<Button
-											key={g.id}
-											type="button"
-											size="sm"
-											variant="secondary"
-											disabled={busy}
-											onClick={() => void assignGuest({ guestId: g.id })}
-										>
-											{g.name}
-										</Button>
-									))}
+								<div className="space-y-2">
+									<Input
+										placeholder="Search guests…"
+										aria-label="Search guests"
+										value={guestSearch}
+										onChange={(event) => setGuestSearch(event.target.value)}
+									/>
+									<div className="flex flex-wrap gap-2">
+										{clubGuests
+											.filter(
+												(g) =>
+													(g.stage !== "lost" ||
+														guestSearch.trim().length > 0) &&
+													g.name
+														.toLowerCase()
+														.includes(guestSearch.trim().toLowerCase()),
+											)
+											.map((g) => (
+												<Button
+													key={g.id}
+													type="button"
+													size="sm"
+													variant="secondary"
+													disabled={busy}
+													onClick={() => void assignGuest({ guestId: g.id })}
+												>
+													{g.name}
+												</Button>
+											))}
+									</div>
 								</div>
 							) : null}
 							<form onSubmit={onCreateGuest} className="space-y-2">
