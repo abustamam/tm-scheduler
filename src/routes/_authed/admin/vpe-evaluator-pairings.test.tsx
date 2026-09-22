@@ -46,13 +46,21 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+/**
+ * The current year, so the dated fixtures below stay "this year" whenever the
+ * suite runs. The chip prints the year only when it is NOT the current one, so
+ * a fixture pinned to a literal year would start rendering "Aug 10, 2026" the
+ * January after it was written and fail for a reason unrelated to the code.
+ */
+const THIS_YEAR = new Date().getFullYear();
+
 function evaluation(over: Partial<EvaluationPair> = {}): EvaluationPair {
 	return {
 		evaluatorKey: "eval-1",
 		evaluatorName: "Sam Chen",
 		isGuest: false,
 		meetingId: "meeting-1",
-		scheduledAt: new Date("2026-08-10T18:00:00Z"),
+		scheduledAt: new Date(`${THIS_YEAR}-08-10T18:00:00Z`),
 		repeat: false,
 		...over,
 	};
@@ -124,13 +132,13 @@ describe("VPE dashboard — Evaluator pairings (#709)", () => {
 						evaluatorKey: "a",
 						evaluatorName: "Sam Chen",
 						meetingId: "m1",
-						scheduledAt: new Date("2026-08-10T18:00:00Z"),
+						scheduledAt: new Date(`${THIS_YEAR}-08-10T18:00:00Z`),
 					}),
 					evaluation({
 						evaluatorKey: "b",
 						evaluatorName: "Dana Lee",
 						meetingId: "m2",
-						scheduledAt: new Date("2026-06-12T18:00:00Z"),
+						scheduledAt: new Date(`${THIS_YEAR}-06-12T18:00:00Z`),
 					}),
 				],
 			}),
@@ -143,6 +151,34 @@ describe("VPE dashboard — Evaluator pairings (#709)", () => {
 		// naming only the evaluator cannot answer "how recently".
 		expect(screen.getByText("Aug 10")).toBeTruthy();
 		expect(screen.getByText("Jun 12")).toBeTruthy();
+	});
+
+	it("dates a pairing from another year with its year", async () => {
+		// The window is the last five EVALUATIONS with no date floor, so a member
+		// who speaks twice a year carries pairings from years back. Those are
+		// exactly the ones the assigner should discount, and a year-less "Aug 10"
+		// reads the same whether it was this summer or four summers ago — with the
+		// row sorted and the tile counted on a repeat nobody current took part in.
+		await renderRoute([
+			pairingRow({
+				recent: [
+					evaluation({
+						evaluatorKey: "a",
+						meetingId: "m1",
+						scheduledAt: new Date(`${THIS_YEAR}-08-10T18:00:00Z`),
+					}),
+					evaluation({
+						evaluatorKey: "a",
+						meetingId: "m0",
+						scheduledAt: new Date(`${THIS_YEAR - 4}-08-10T18:00:00Z`),
+						repeat: true,
+					}),
+				],
+			}),
+		]);
+
+		expect(screen.getByText("Aug 10")).toBeTruthy();
+		expect(screen.getByText(`Aug 10, ${THIS_YEAR - 4}`)).toBeTruthy();
 	});
 
 	it("marks a guest evaluator as a guest, in words", async () => {

@@ -13,7 +13,11 @@ import {
 	type EvaluationPair,
 	type EvaluatorPairingRow,
 } from "#/lib/evaluator-pairing";
-import { formatMeetingDate, formatShortDate } from "#/lib/format";
+import {
+	formatHistoryDate,
+	formatMeetingDate,
+	formatShortDate,
+} from "#/lib/format";
 import { formatTenure } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import {
@@ -535,8 +539,12 @@ function PairingChip({ pair }: { pair: EvaluationPair }) {
 				{pair.evaluatorName}
 				{pair.isGuest ? " (guest)" : ""}
 			</span>
+			{/* Year shown when it is not this year. The window is the last FIVE
+			    evaluations, not the last N months, so a rare speaker's chips can
+			    be years old — and a year-less date reads exactly like this
+			    year's, letting a stale repeat drive "vary the next one". */}
 			<span className="whitespace-nowrap text-[var(--sea-ink-soft)]">
-				{formatShortDate(pair.scheduledAt)}
+				{formatHistoryDate(pair.scheduledAt)}
 			</span>
 		</span>
 	);

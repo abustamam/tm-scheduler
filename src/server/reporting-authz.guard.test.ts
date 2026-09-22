@@ -33,6 +33,7 @@ describe("VPE reporting fn authz gating (#530)", () => {
 		"getSpeakerRotation",
 		"getOverdueMembers",
 		"getAttendanceLapse",
+		"getEvaluatorPairings",
 	]) {
 		it(`${fn} requires a signed-in user`, () => {
 			expect(handlerBody(fn)).toMatch(/await\s+requireUser\(/);
@@ -52,12 +53,15 @@ describe("VPE reporting fn authz gating (#530)", () => {
 	}
 
 	it("exposes no reporting fn without an admin gate", () => {
-		// Catches a FOURTH fn added later without a gate, which the per-name
-		// assertions above cannot see.
+		// Catches a FIFTH fn added later without a gate, which the per-name
+		// assertions above cannot see. It sees only that the gate is NAMED, not
+		// that it is awaited — so a new fn is not covered until it is also added
+		// to the list above. #709's `getEvaluatorPairings` shipped a review round
+		// held by this sweep alone.
 		const exports = [
 			...src.matchAll(/export const (\w+) = createServerFn/g),
 		].map((m) => m[1]);
-		expect(exports.length).toBeGreaterThanOrEqual(3);
+		expect(exports.length).toBeGreaterThanOrEqual(4);
 		for (const name of exports) {
 			expect(handlerBody(name)).toContain("requireClubAdminView(");
 		}

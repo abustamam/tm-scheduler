@@ -3,8 +3,9 @@
 // that `EVALUATOR_PAIRING.recentPerSpeaker` is assertable without one. A
 // constant defined in a module that imports `#/db` throws `DATABASE_URL is not
 // set` here, which is how a window silently becomes any value at all.
-import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 import {
 	EVALUATOR_PAIRING,
 	groupEvaluatorPairings,
@@ -324,7 +325,10 @@ describe("groupEvaluatorPairings", () => {
  * and checking they agree fires every time, for the same deletion.
  */
 describe("the SQL window and this fold order pairings the same way", () => {
-	const src = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
+	// Comment-blind (see `#/test/guard-source`): "this pattern must BE present"
+	// is the assertion shape a prose comment satisfies for free, and both files
+	// describe their own ordering in comments that name these very terms.
+	const src = (p: string) => readSource(resolve(__dirname, p));
 
 	/** Positions of `needles` in `haystack`; -1 for any that is missing. */
 	const order = (haystack: string, needles: string[]) =>
@@ -343,10 +347,19 @@ describe("the SQL window and this fold order pairings the same way", () => {
 		expect(sqlTerms).not.toContain(-1);
 		expect([...sqlTerms].sort((a, b) => a - b)).toEqual(sqlTerms);
 
-		const comparator = src("./evaluator-pairing.ts").match(
-			/\.sort\(\s*\(a, b\) =>([\s\S]*?)\);/,
-		)?.[1];
+		// Anchored inside `groupEvaluatorPairings`, which holds TWO sorts: the
+		// per-speaker one the SQL window mirrors, and the row sort beneath it
+		// (repeats first) that it must not. Taking the first `.sort(` in the
+		// file would be right only while they stay in this order, so the anchor
+		// says which one it means and checks the other comes after.
+		const fold = src("./evaluator-pairing.ts");
+		const fnStart = fold.indexOf("export function groupEvaluatorPairings");
+		expect(fnStart).toBeGreaterThan(-1);
+		const body = fold.slice(fnStart);
+		const sortMatch = /\.sort\(\s*\(a, b\) =>([\s\S]*?)\);/.exec(body);
+		const comparator = sortMatch?.[1];
 		expect(comparator).toBeTruthy();
+		expect(sortMatch?.index ?? -1).toBeLessThan(body.indexOf("rows.sort("));
 		const foldTerms = order(comparator ?? "", [
 			"b.scheduledAt.getTime() - a.scheduledAt.getTime()",
 			"a.meetingId.localeCompare(b.meetingId)",
