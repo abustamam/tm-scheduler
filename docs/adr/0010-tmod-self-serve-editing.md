@@ -97,6 +97,18 @@ Two things follow for the scope this ADR granted.
   #752), not before. They are classified `console-asserted` in
   `src/server/write-proof.guard.test.ts` until then — which is the change #761 actually made to
   them: the debt is now recorded and swept rather than remembered.
+
+  **AMENDED by #747: they did not move, and the gate above is narrower than "self-asserted
+  `memberId` equals the slot assignee" instead.** Requiring a session would have cost the
+  account-less Toastmaster the whole workflow this ADR exists for, so what #747 changed is the
+  asymmetry rather than the trust level: **a self-assert never overrides a session.** A caller with
+  NO session and the slot holder's id is granted exactly as before. A caller WITH a session must
+  assert their own membership in this club, and a session that resolves to no membership here — an
+  outsider holding an account, or a read-only impersonating superadmin — is refused rather than
+  falling through to the anonymous arm. One seam decides it for all four arms
+  (`resolveSelfAssertGrant`, `src/server/meeting-authz-logic.ts`), because the defect was one shape
+  copied four times and four in-place fixes would have left the fifth to inherit it. The 16
+  `console-asserted` rows stay; ADR-0026's Decision table carries the rule.
 - **Member ids are public identifiers, not credentials.** They ship in the public sheet's payload
   because the sheet has to render the roster. Nothing in the self-assert model ever depended on
   one being hard to guess, and ADR-0026 says so explicitly so no future code mistakes

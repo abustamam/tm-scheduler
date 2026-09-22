@@ -123,8 +123,21 @@ function namedFunctionBody(source: string, name: string): string {
  * - `fill-blank` — accepts an asserted identity only to fill an EMPTY value.
  *   ADR-0026's line: an unverified picker may fill a blank, and nothing else.
  * - `console-asserted` — Phase 2 debt. A role console (TMOD, Grammarian, Timer,
- *   Vote Counter) granting on an asserted role holder; #747 / #752 move these
- *   to sessions.
+ *   Vote Counter) granting on an asserted role holder.
+ *
+ *   **#747 did NOT retire any of these, and that is the decision rather than an
+ *   omission.** It bound the self-assert to the session where one EXISTS — a
+ *   signed-in caller must now assert their own membership, and a session with no
+ *   membership in this club is refused outright — but it deliberately left the
+ *   session-LESS path alone, because the Toastmaster running the agenda from
+ *   their phone with no account is the workflow ADR-0010 built and #747's
+ *   grilling kept. So every row below still succeeds with no session, which is
+ *   exactly what this class asserts, and the count is unchanged.
+ *
+ *   What #747 removed is narrower and is not visible here: an asserted identity
+ *   can no longer OVERRIDE a proven one. The class stays until a console
+ *   genuinely requires a session, which is a product decision about the
+ *   account-less role holder and not a refactor.
  * - `public-intake` — no SESSION and no asserted member id; a bounded write
  *   from a public link. Not "no identity at all", which was this line's first
  *   wording and is false for `joinBallot`: it takes a typed name and looks it
@@ -198,6 +211,14 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	// Each grants on a SELF-ASSERTED role holder — the meeting's TMOD,
 	// Grammarian, Timer or Vote Counter. ADR-0010 called that interim; ADR-0026
 	// puts a date on it.
+	//
+	// #747 landed and moved NONE of them, on purpose: it bound the self-assert to
+	// the session where there is one (`resolveSelfAssertGrant`,
+	// `meeting-authz-logic.ts`) and left the anonymous path untouched, so all
+	// fifteen behind those three resolvers still succeed with no session. The
+	// sixteenth, `timings.ts#recordTiming`, is not behind them at all — it
+	// attributes through `resolveWriteActor` — so #747 could not have reached it
+	// either way. See the class note above.
 	"meetings.ts#updateMeeting": {
 		class: "console-asserted",
 		reason: "Phase 2 (#747 / #752)",

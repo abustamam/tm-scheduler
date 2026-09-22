@@ -822,6 +822,31 @@ changed unverified only from the device that cast it. The adversary the rule is 
 outsider holding the club's public link, against whom the activity log — an after-the-fact record —
 is no defence. `write-proof.guard.test.ts` classifies every POST server fn against it.
 
+**Self-assert** — a caller telling the server which roster member they are, by sending that
+member's id, with nothing backing the claim. It is the identity model of every public meeting
+surface (ADR-0010): pick your name out of "Who are you?" and write. It is **not** the same as an
+**asserted actor** (above) even though both start from an id off the wire — an asserted actor is an
+attribution question ("who does this row credit"), a self-assert is an authorization one ("may this
+caller do the thing"). The difference has a home each: `resolveWriteActorWithProof`
+(`src/server/write-actor-logic.ts`) for the first, `resolveSelfAssertGrant`
+(`src/server/meeting-authz-logic.ts`) for the second.
+
+A self-assert grants only where a SLOT backs it. The four role-console arms — agenda meta and Word
+of the Day for the Toastmaster, Word of the Day for the Grammarian, and the Ballot Counter gate —
+each grant when the asserted id is that meeting's assignee for their slot, which is tighter than
+claiming a role: you must already hold it. Two rules bound it, and both were bought with a bug.
+**Identify the slot by `role_definitions.key`, never by display name** (#464) — a club that renames
+its Toastmaster still has one, and a club that invents "Toastmaster Assistant" does not get the
+capability. And **a self-assert never overrides a session** (#747, ADR-0026): with no session the
+grant is unchanged, but a signed-in caller must assert their OWN membership in this club, and a
+session with no membership here is refused rather than falling back to the anonymous arm. Before
+that, an ordinary signed-in member could assert anyone's id — and since `actorMemberId` records the
+ASSERTED identity, the forged write landed in the club's permanent audit trail under the innocent
+member's name. Member ids are public (see **Proven actor**), so nothing here ever depended on one
+being hard to obtain. `self-assert-binding.guard.test.ts` keeps the decision in one place, which is
+the durable half: the defect was one shape copied four times, so four in-place fixes would have
+left the fifth arm to inherit it.
+
 ## Scope
 
 **MVP (built):** magic-link auth, schedule view, meeting detail with one-tap claim, speaker-

@@ -59,7 +59,7 @@ freeing the roles you held does not.
 | Release, reassign, edit speech details | no | any member of the club |
 | First vote | yes | yes |
 | Change a vote | only from the casting device | yes (member voters) |
-| Role consoles | Phase 2 | Phase 2 |
+| Role consoles (TMOD, Grammarian, Ballot Counter) | yes, if you hold the slot | yes, if the slot is YOUR membership |
 
 "Blank" includes a row holding only `reached_out` (#762). That rung is the officer's record of
 having ASKED, not a reply, so a member answering over it takes nothing away from anyone — the same
@@ -68,7 +68,22 @@ officer's nudge draft INSERTS `reached_out` onto a blank row and the member answ
 session-less personal meeting page, so counting the ask as an answer refuses the round trip the
 ladder exists for. See the third consequence below for what that costs.
 
-Two rows need their qualifier read carefully.
+Three rows need their qualifier read carefully.
+
+- **"yes, if the slot is YOUR membership"** is the role-console row, decided by #747 and
+  narrower than the "Phase 2, Phase 2" placeholder it replaces. The consoles did NOT move to
+  sessions, and that was the finding rather than a deferral: the person running a meeting from
+  their phone with no account is the workflow ADR-0010 built, and taking it away would cost a real
+  member a real capability to close a hole that has a cheaper closure. What #747 closed instead is
+  the asymmetry — **a self-assert never overrides a session.** An anonymous caller holding the
+  slot is unchanged; a caller WITH a session must assert their own membership in this club, and a
+  session that resolves to no membership here (an outsider with an account, a read-only
+  impersonating superadmin) is refused rather than falling back to the anonymous arm. The cost
+  lands on exactly the population "Members who cannot bind fall back to an officer" already names,
+  below — a member who has a session for some OTHER club and no membership here now loses the
+  console they could previously self-assert into.
+
+Two further rows need the same care.
 
 - **"unless your answer is `not_coming`"** is what stops the obvious hole in "filling a blank is
   harmless": an outsider who first marks a member `not_coming` and then claims roles in their name
@@ -85,18 +100,34 @@ club, and `proof: "asserted"` when it came off the wire and was only club-scoped
 distinct messages — "you need to be signed in" (offer the sign-in link) and "your account isn't
 linked to this club's roster" (signing in again cannot help; ask an officer).
 
+**There is a second seam, and it answers a different question.** `resolveSelfAssertGrant`
+(`src/server/meeting-authz-logic.ts`, #747) is the one place the role-console row above is decided:
+it takes the session's own membership in this club and the slot's assignee, and returns whether the
+self-assert grants. The two are not interchangeable and must not be collapsed.
+`resolveWriteActorWithProof` answers *who a write is credited to* — its asserted arm accepts any
+active member of the club, which is precisely what must not authorize a console — and it THROWS on
+an id that is not on the roster, where the resolvers return a decision object. The vocabulary is
+shared ("session" vs "asserted" means one thing, `#/lib/write-proof`); the decision is not.
+`self-assert-binding.guard.test.ts` holds the role-console half to one comparison site, so the
+next arm cannot be written inline the way the first four were.
+
 `write-proof.guard.test.ts` makes the classification a property of the tree rather than a memory:
 every POST server fn needs a session gate or an entry in `WRITE_PROOF_EXCEPTIONS` saying which
 class of debt it is.
 
 ## Consequences
 
-- **The role consoles move to sessions in Phase 2, not now.** The TMOD, Grammarian, Timer and Vote
-  Counter consoles each grant on a self-asserted role holder, and each is a person running a
-  meeting from their phone with no time to check email. #747 and #752 own that migration; until
-  they land, those 16 server fns are classified `console-asserted` and carry the same trust they
-  have carried since ADR-0010. Recording them is the change — they were indistinguishable from
-  genuinely-public intake before.
+- **The role consoles did NOT move to sessions, and will not.** This consequence used to read
+  "move to sessions in Phase 2, not now", naming #747 and #752 as the migration that would do it.
+  #747 looked at the migration and declined it. The reason is the one this ADR gives everywhere
+  else: the TMOD, Grammarian, Timer and Ballot Counter consoles are each a person running a meeting
+  from their phone with no time to check email, and requiring a session there takes a capability
+  from a real member to close a hole that a narrower rule closes completely. The narrower rule is
+  **a self-assert never overrides a session**, and it is the role-console row in the Decision table
+  above. All 16 server fns stay classified `console-asserted` — they still succeed with no session,
+  which is what that class asserts — and `write-proof.guard.test.ts` says so at the class rather
+  than promising a retirement that is not coming. #752 inherits the seam #747 built and decides the
+  disqualify console's own row against it.
 - **Members who cannot bind fall back to an officer.** No email on the roster, a Person in two or
   more clubs (#759), a shared family address: all three produce a session with no membership here,
   so every right-hand-column write refuses with `NOT_ON_ROSTER_MESSAGE`. That is a real cost, paid
@@ -139,6 +170,9 @@ class of debt it is.
   including one where predicting with a proxy silently dropped ADR-0016 admin parity for an
   impersonating superadmin. The state stays visible when the control goes; only the affordance
   is removed.
-- **Nothing here is retroactive.** No grant changes when this ADR lands; #761 lays the seam, the
+- **Nothing here is retroactive.** No grant changed when this ADR landed; #761 laid the seam, the
   refusal UX and the guard, and the Phase 1 children (slots, attendance, ballots, the role-card
-  flag) each flip their own rows against the table above.
+  flag) each flip their own rows against the table above. #747 is the first child to narrow a grant
+  that previously succeeded: a signed-in caller can no longer assert somebody else's id into a role
+  console. The anonymous arm it sits beside is untouched, so the flow the public link exists for is
+  the same flow it was.
