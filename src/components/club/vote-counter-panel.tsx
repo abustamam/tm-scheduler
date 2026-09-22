@@ -92,6 +92,7 @@ export function VoteCounterPanel({
 	meetingId,
 	selfMemberId,
 	sessionMemberId,
+	canManageClub,
 	onSetWinner,
 	onClearWinner,
 }: {
@@ -111,6 +112,23 @@ export function VoteCounterPanel({
 	 * has to keep in step.
 	 */
 	sessionMemberId: string | null;
+	/**
+	 * The viewer is a club admin **as the server understands it** — `canManage`
+	 * from the route, which `canManageClub` grants on an admin membership OR a
+	 * `read_write` impersonation and refuses for `read_only` (#752, ADR-0016).
+	 *
+	 * A SECOND signal rather than folding into `sessionMemberId`, for the reason
+	 * `declineFreesRoles` in the meeting route spells out at length: the client
+	 * must predict the server's answer PER ARM, and the two arms here have
+	 * different evidence. An impersonating superadmin has full admin parity
+	 * server-side (`resolveAdminGrant` returns granted on the impersonation
+	 * before the self-assert arm is reached) and yet has NO `effectiveMemberId`,
+	 * so `sessionMemberId` is null for them. Gating the whole prediction on that
+	 * one proxy would hide the ruling controls from the one principal the gate
+	 * allows outright, and tell them to sign in while they are signed in — the
+	 * exact ADR-0016 regression #762's review caught in six places at once.
+	 */
+	canManageClub: boolean;
 	/** Calls the EXISTING setAward path the minutes UI already uses — the winner
 	 *  lives in `meeting_awards`, not in the vote tables. */
 	onSetWinner: (
@@ -122,10 +140,17 @@ export function VoteCounterPanel({
 	/** Calls the EXISTING clearAward path — see the doc comment above. */
 	onClearWinner: (category: AwardCategory) => void;
 }) {
-	/** Whether this viewer may reach the two ruling controls at all (#752). The
-	 *  gate decides; this only predicts it, and predicts the SERVER's condition
-	 *  rather than a proxy for it. */
-	const canRule = sessionMemberId !== null;
+	/**
+	 * Whether this viewer may reach the two ruling controls at all (#752).
+	 *
+	 * The gate decides; this only predicts it, per ARM rather than through one
+	 * proxy. `canManageClub` stands alone because it is already the server's
+	 * answer for the admin arm, which `resolveVoteCounterAuthz` reaches BEFORE
+	 * the self-assert arm and which a `read_write` impersonating superadmin
+	 * satisfies with no membership id at all. The session term is the one the
+	 * self-assert arm needs, and only it.
+	 */
+	const canRule = canManageClub || sessionMemberId !== null;
 	const qc = useQueryClient();
 	const tally = useQuery({
 		queryKey: ["vote-tally", meetingId],

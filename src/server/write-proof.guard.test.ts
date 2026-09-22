@@ -365,8 +365,11 @@ const SESSION_GATES: string[] = [
 	"gateAdmin",
 	"requireMeetingTemplateEditor",
 	// #752. Admitted because it reads the session ITSELF and throws without one
-	// before delegating — `DERIVED_GATES` below checks that, which is the whole
-	// reason a name can be added here at all. Its sibling
+	// before delegating — `DERIVED_GATES` checks the READ and
+	// `DERIVED_GATE_REFUSALS` checks the THROW, which together are the whole
+	// reason a name can be added here at all. Both halves are needed: this is
+	// the only admitted gate that DELEGATES to one admitting anonymous callers,
+	// so the read alone proves nothing. Its sibling
 	// `requireVoteCounterCapability` is deliberately NOT admitted and must never
 	// be: that one grants the anonymous Ballot Counter, which is the exemption
 	// this guard exists to tell apart from a proven one.
@@ -430,6 +433,39 @@ const DERIVED_GATES: { call: string; file: string; mustCall: string }[] = [
 		call: "requireSignedInVoteCounter",
 		file: "guards.ts",
 		mustCall: "getSessionUser(",
+	},
+];
+
+/**
+ * Gates whose exemption also rests on what they do with the session they read,
+ * not only on reading one.
+ *
+ * {@link DERIVED_GATES} above checks the READ. For most entries that is the
+ * whole claim, because the read IS the gate — `requireUser` has nothing else in
+ * it. `requireSignedInVoteCounter` is different: it reads, and then DELEGATES to
+ * a gate that admits an anonymous caller, so the refusal in between is the only
+ * thing separating the two. Deleting that one line leaves `getSessionUser(`
+ * sitting in the body, so `DERIVED_GATES` passes, `GATE_CALL` still matches the
+ * name in both handlers so the sweep passes, and `voting-authz.guard.test.ts`
+ * reads only `voting.ts` so it passes too — re-admitting every anonymous caller
+ * to a gate three guard files trust as session-proving. MEASURED: that deletion
+ * left this whole file green before this block existed, and the only red was the
+ * DB-backed integration suite, which `describe.skipIf(!hasTestDb)` removes
+ * entirely from a `bun run test` with no `TEST_DATABASE_URL`.
+ *
+ * The throw is asserted by its MESSAGE constant rather than a bare `throw`,
+ * because the message is the wire format the console renders too — a gate that
+ * throws something else has broken the other half of the same policy.
+ */
+const DERIVED_GATE_REFUSALS: {
+	call: string;
+	file: string;
+	mustContain: string;
+}[] = [
+	{
+		call: "requireSignedInVoteCounter",
+		file: "guards.ts",
+		mustContain: "throw new Error(RULING_NEEDS_SESSION_MESSAGE)",
 	},
 ];
 
@@ -683,7 +719,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 	});
 
 	it("holds exactly the 24 exceptions left after #762 and #752", () => {
-		// The count is pinned, not just the shape. A twenty-seventh arriving
+		// The count is pinned, not just the shape. A twenty-fifth arriving
 		// silently is the thing to notice — either a new session-less write, or a
 		// child issue's row landing without its sibling being retired.
 		//
@@ -780,6 +816,23 @@ describe("the session gates themselves (#761)", () => {
 				decl,
 				`${g.call} (${g.file}) no longer calls ${g.mustCall} — it is in SESSION_GATES claiming to read the session and throw without one, and every POST fn behind it is exempt on that claim.`,
 			).toContain(g.mustCall);
+		}
+	});
+
+	// The other half of the claim, for the gates that DELEGATE. See
+	// DERIVED_GATE_REFUSALS: reading the session is not a gate unless something
+	// is done with the answer, and for `requireSignedInVoteCounter` the thing
+	// done with it is one line that every other guard in the tree is blind to.
+	it("a delegating gate still REFUSES when there is no session", () => {
+		for (const g of DERIVED_GATE_REFUSALS) {
+			const decl = namedFunctionBody(
+				readSource(resolve(SERVER, g.file)),
+				g.call,
+			);
+			expect(
+				decl,
+				`${g.call} (${g.file}) reads the session but no longer refuses without one — it delegates to a gate that admits an anonymous caller, so this line is the whole of its exemption. Every POST fn behind it is classified session-proving on this claim.`,
+			).toContain(g.mustContain);
 		}
 	});
 

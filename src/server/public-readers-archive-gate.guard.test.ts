@@ -435,13 +435,24 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 		file: "src/server/voting-logic.ts",
 		gate: "assertClubNotArchived",
 	},
-	// #723. Session-less for the same reason open/close are: the Vote Counter
-	// operates this console through a self-asserted member id, not a login. Both
-	// gate in the `disqualifyCandidate` / `undoDisqualification` seams rather
-	// than the handlers, so vitest can execute the check —
+	// #723. Both gate in the `disqualifyCandidate` / `undoDisqualification`
+	// seams rather than the handlers, so vitest can execute the check —
 	// `voting.integration.test.ts` covers the rest of their behaviour and
 	// `public-writers-archive-gate.integration.test.ts` is where the refusal
 	// itself is proved.
+	//
+	// **These two are NO LONGER session-less (#752)**, unlike open/close beside
+	// them: their handlers call `requireSignedInVoteCounter`, which refuses
+	// before the capability when there is no session. The rows stay, and
+	// deliberately, for two reasons. The classification is unchanged —
+	// `requireSignedInVoteCounter(` matches neither `SESSION_GUARDS` nor
+	// `SELF_ASSERT_GUARDS`, so the sweep still files them under `anonymous` and
+	// still demands a wiring — and, more to the point, the archive gate they
+	// name is the one in the SEAM, which is where it belongs: an authorization
+	// change must not be able to quietly remove an archive check by moving the
+	// endpoint into a different trust class. Do not "promote" them to
+	// `SESSION_GUARDS`; that regex's exemption is the strongest this file grants
+	// and is reserved for the named gates whose claim it can check.
 	{
 		fn: "disqualifyCandidateFn",
 		file: "src/server/voting-logic.ts",

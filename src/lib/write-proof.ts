@@ -20,9 +20,10 @@
  * seam, and it holds four things:
  *
  *  - the {@link WriteProof} type;
- *  - the three refusal strings a proven-actor gate can raise
+ *  - the four refusal strings a proven-actor gate can raise
  *    ({@link SIGN_IN_REQUIRED_MESSAGE}, {@link NOT_ON_ROSTER_MESSAGE},
- *    {@link MEMBERSHIP_INACTIVE_MESSAGE}) and the two matchers a toast uses to
+ *    {@link MEMBERSHIP_INACTIVE_MESSAGE}, {@link RULING_NEEDS_SESSION_MESSAGE})
+ *    and the two matchers a toast uses to
  *    recognise the ones that change how it renders;
  *  - {@link signInHref}, which builds the link a refusal offers;
  *  - {@link safeRedirect} and {@link DEFAULT_SIGN_IN_REDIRECT}, which decide
@@ -203,6 +204,20 @@ export function safeRedirect(
  * action, which `showWriteError`'s default branch already renders. The sign-in
  * route is named IN the sentence rather than offered as a button, because the
  * person who most needs it is not the person holding the phone.
+ *
+ * **"club admin", not "officer", and the narrowing is measured.** #752 specified
+ * this sentence as "ask an officer", which is true of the GATE — the officer
+ * retry inside `requireVoteCounterCapability` grants an elected officer holding
+ * an open term — and false of the SCREEN. Signing in makes the session win in
+ * `useEffectiveMember`, so `myId` stops matching the Vote Counter slot and
+ * `isVoteCounter` goes false; `canManage` is `canManageClub`, which is
+ * `clubRole === "admin"` or a `read_write` impersonation and does NOT include
+ * that officer. Both terms of the console's own section gate are therefore false
+ * for them and the whole Ballot Counter console disappears. A refusal that names
+ * a route which removes the console is worse than one that names none, so the
+ * copy names only what works: a club admin signing in here, or the Ballot
+ * Counter signing in as themselves. The officer's unreachable capability is its
+ * own issue; the server grant is unchanged and still asserted.
  */
 export const RULING_NEEDS_SESSION_MESSAGE =
-	"Ruling a candidate out needs a signed-in officer — ask an officer to sign in on this device, or sign in yourself.";
+	"Ruling a candidate out needs a signed-in club admin — ask an admin to sign in on this device, or sign in yourself.";

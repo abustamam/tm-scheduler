@@ -40,6 +40,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	impersonationSessions,
 	members,
 	officerTerms,
 	people,
@@ -280,6 +281,66 @@ describe.skipIf(!hasTestDb)(
 				allowed: true,
 				via: "admin",
 				actorMemberId: officer.memberId,
+			});
+		});
+
+		// The ORDERING the gate's own comment claims, which nothing else can see.
+		//
+		// The session check runs BEFORE the capability, so an anonymous caller
+		// gets the same refusal whether or not their guess at the meeting exists.
+		// Move it after and this flips to "Meeting not found." — which tells a
+		// caller with no session that their id was wrong, i.e. that a different id
+		// would have been right. Every other anonymous case here uses a live
+		// meeting whose slot resolves, so they would all still be red on a
+		// reorder; none of them can tell a refusal from a DISCLOSING refusal.
+		it("refuses an anonymous caller the SAME way for a meeting that does not exist", async () => {
+			await addVoteCounterSlot(club, club.memberId);
+			await expect(
+				requireSignedInVoteCounter({
+					meetingId: randomUUID(),
+					selfMemberId: club.memberId,
+				}),
+			).rejects.toThrow(RULING_NEEDS_SESSION_MESSAGE);
+		});
+
+		// The ADMIN arm through THIS gate, for the principal the console predicts
+		// with `canManageClub` rather than with the session member id.
+		//
+		// The client half is pinned in `vote-counter-panel.test.tsx`; without this
+		// the two are asserted against different things and the claim that they
+		// "agree by construction" holds only for the self-assert arm, where it is
+		// true by identity. If they disagreed, the result is a rendered button that
+		// refuses — the outage AC6 is about, arriving by the other door.
+		it("ALLOWS a read_write impersonating superadmin — ADR-0016 parity", async () => {
+			await addVoteCounterSlot(club, club.memberId);
+			const superId = randomUUID();
+			await testDb.insert(user).values({
+				id: superId,
+				name: "Platform Admin",
+				email: `${superId}@test.example`,
+				emailVerified: true,
+				isSuperadmin: true,
+			});
+			extraUserIds.push(superId);
+			await testDb.insert(impersonationSessions).values({
+				superadminUserId: superId,
+				clubId: club.clubId,
+				mode: "read_write",
+				// Required for `read_write` by `startImpersonationSchema` (#246) and
+				// surfaced in the club's activity feed. Not enforced by the column, so
+				// written here to match what the real start path produces.
+				reason: "Support request during the meeting.",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+			});
+			sessionUserId = superId;
+			await expect(
+				requireSignedInVoteCounter({ meetingId: club.meetingId }),
+			).resolves.toMatchObject({
+				allowed: true,
+				via: "admin",
+				// NULL, and that is the point: this principal has no membership id
+				// at all, which is why the console cannot predict them from one.
+				actorMemberId: null,
 			});
 		});
 

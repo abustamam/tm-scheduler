@@ -69,6 +69,16 @@ const candidateRef = z.union([
  * guard-test slice-ordering reason above: the source-grep needs ONE stable
  * substring, `requireVoteCounter(`, that cannot bleed into a neighboring
  * export's body.
+ *
+ * THREE exports use it now, not five. `disqualifyCandidateFn` and
+ * `undoDisqualificationFn` call `requireSignedInVoteCounter` from `guards.ts`
+ * directly (#752), and that needs no local wrapper for the reason above: the
+ * name is DECLARED in another module, so the only text of it in this file is
+ * the import at the top, which is outside every export's slice. The two gate
+ * names are disjoint as substrings — `requireSignedInVoteCounter(` does not
+ * contain `requireVoteCounter(` — which is what lets `voting-authz.guard.test.ts`
+ * assert each export's gate in BOTH directions. Do not rename either toward the
+ * other.
  */
 async function requireVoteCounter(data: {
 	meetingId: string;

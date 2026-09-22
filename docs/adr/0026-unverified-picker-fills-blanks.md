@@ -82,11 +82,16 @@ Four rows need their qualifier read carefully.
   permanent record naming an innocent member as its author. The rest of the console — open, close,
   tally, Table Topics capture, award set/clear — stays anonymous deliberately, because those are
   length-capped, inert writes to the club's own record, visible to the room on a shared screen and
-  repairable by any admin. `requireSignedInVoteCounter` (`guards.ts`) is the one gate; the officer
-  retry inside it is what makes the refusal's "ask an officer to sign in on this device" true, and
-  that refusal is its own message (`RULING_NEEDS_SESSION_MESSAGE`) rather than
+  repairable by any admin. `requireSignedInVoteCounter` (`guards.ts`) is the one gate, and the
+  officer retry inside it is kept, so the grant is any club admin, any elected officer with an open
+  term, a `read_write` impersonating superadmin, or the Ballot Counter signed in as themselves. The
+  refusal is its own message (`RULING_NEEDS_SESSION_MESSAGE`) rather than
   `SIGN_IN_REQUIRED_MESSAGE`, because a console whose other five controls still work cannot answer
-  "you need to be signed in" without reading as an outage.
+  "you need to be signed in" without reading as an outage — and it names only the club admin and
+  the Ballot Counter, because an elected officer who is not an admin is granted by the gate and
+  cannot reach the console at all (`canManageClub` excludes #202's effective-admin, and signing in
+  stops them matching the slot). That gap is pre-existing and filed separately; the copy names
+  routes that work rather than the full grant.
 
 - **"yes, if the slot is one of YOUR memberships"** is the role-console row #747 decided, and it
   covers **only the four arms in `src/server/meeting-authz-logic.ts`** — the row below it is the

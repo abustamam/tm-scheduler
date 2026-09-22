@@ -1924,6 +1924,15 @@ function MeetingView() {
 									// the value the server-side seam resolves, so the console's
 									// prediction and the gate's answer agree by construction.
 									sessionMemberId={managerActorId}
+									// The admin arm, predicted on its own. `canManage`, not
+									// `effectiveCanManage` (the server keys off the SESSION, and
+									// a previewing admin still carries one), and NOT folded into
+									// the line above: an impersonating superadmin has full admin
+									// parity server-side and no `effectiveMemberId`, so gating
+									// on `managerActorId` alone would hide the ruling controls
+									// from the one principal the gate allows outright — see
+									// `declineFreesRoles` for the same bug caught once already.
+									canManageClub={canManage}
 									onSetWinner={handleSetVoteWinner}
 									onClearWinner={handleClearVoteWinner}
 								/>

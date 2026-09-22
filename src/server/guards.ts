@@ -678,10 +678,18 @@ export async function requireVoteCounterCapability(input: {
  * Two awaits in a handler is two things a later edit can drop one of. Here there
  * is one call and no way to obtain the capability without having passed the
  * session check, and the existing officer retry inside
- * {@link requireVoteCounterCapability} comes along intact — which is what makes
- * the refusal message's "ask an officer to sign in on this device" true: any
- * club admin OR elected officer holding an open term who signs in on that phone
- * gets the capability, and so does the Ballot Counter signing in as themselves.
+ * {@link requireVoteCounterCapability} comes along intact, so the GRANT is any
+ * club admin, any elected officer holding an open term, a `read_write`
+ * impersonating superadmin, or the Ballot Counter signing in as themselves.
+ *
+ * **The refusal copy names only two of those four, deliberately.** An elected
+ * officer who is not a club admin can be granted here and cannot REACH the
+ * console: signing in makes the session win in `useEffectiveMember`, so they
+ * stop matching the Vote Counter slot, and `canManageClub` does not include
+ * #202's effective-admin — both terms of the console's section gate go false and
+ * the whole panel disappears. So the copy says "ask an admin", which works. The
+ * officer's unreachable capability is a separate, pre-existing gap and is filed
+ * as its own issue; nothing here narrows the grant.
  *
  * The refusal is {@link RULING_NEEDS_SESSION_MESSAGE} rather than
  * `SIGN_IN_REQUIRED_MESSAGE` or the generic permission error, and the console
@@ -695,9 +703,18 @@ export async function requireSignedInVoteCounter(input: {
 }): Promise<VoteCounterAuthz> {
 	// Before the capability, not after: a caller with no session can never pass
 	// it, so resolving first would cost a meeting read and three joins to reach
-	// the same refusal — and, worse, would let an anonymous caller learn from the
-	// timing or from a thrown archive/"meeting not found" error whether their
-	// guess at the slot was right.
+	// the same refusal — and, worse, would let an anonymous caller learn from a
+	// thrown archive/"meeting not found" error whether their guess was right.
+	// Pinned, because a reorder is invisible to every case that uses a meeting
+	// which EXISTS: `disqualify-session-gate.integration.test.ts` refuses a
+	// nonexistent meeting id and asserts it gets this same message.
+	//
+	// The cost of putting it here is a second `getSessionUser()` on the allowed
+	// path, since `requireVoteCounterCapability` opens with its own. Accepted
+	// rather than threaded through as an argument: ruling a candidate out is a
+	// human-paced action a handful of times per meeting, and adding a parameter
+	// to a gate five other server fns call to save one session read on this one
+	// is the wrong trade.
 	const sessionUser = await getSessionUser();
 	if (!sessionUser) throw new Error(RULING_NEEDS_SESSION_MESSAGE);
 	return requireVoteCounterCapability(input);

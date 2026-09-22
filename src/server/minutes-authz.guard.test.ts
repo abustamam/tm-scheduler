@@ -72,6 +72,41 @@ describe("minutes capability boundary (#510)", () => {
 				"requireVoteCounterCapability(",
 			);
 		});
+
+		// The NOT-half, added by #752, and it is the half this file was missing.
+		//
+		// #752 made `disqualifyCandidateFn` / `undoDisqualificationFn` require a
+		// session while these five stay reachable by the account-less Ballot
+		// Counter — that is the whole shape of the change, and "the anonymous
+		// Ballot Counter retains all five #510 capabilities" is the regression it
+		// names as the one it could ship. Nothing here could have caught that:
+		// adding `await requireUser()` to `setMinutesAward` was MEASURED against
+		// this branch and left the entire 8,401-test suite green.
+		//
+		// Neither neighbouring guard covers it. `write-proof.guard.test.ts` skips
+		// any fn listed in `WRITE_PROOF_EXCEPTIONS` before it checks for a gate, so
+		// a row that quietly STARTS proving a session is silently exempt there and
+		// its pinned `consoleAsserted` count does not move. And the DB-backed
+		// `disqualify-session-gate.integration.test.ts` proves the shared GATE
+		// still admits an anonymous caller — which is real, and is not this: the
+		// regression vector is per-fn, since #752 is itself an example of a handler
+		// swapping gates without the gate changing.
+		//
+		// RAW, not SOURCE: this is an offenders-must-be-empty check, and stripping
+		// comments could only loosen it — the same split the file header states.
+		it(`${name} does NOT require a session — the anonymous Ballot Counter keeps it (#752)`, () => {
+			const body = exportBody(RAW, name);
+			for (const gate of [
+				"requireUser(",
+				"gateAdmin(",
+				"requireSignedInVoteCounter(",
+			]) {
+				expect(
+					body,
+					`${name} is one of the five capabilities #510 hands a non-admin Ballot Counter, who has no account. Adding ${gate} takes it away mid-meeting from the person running the ballot. #752 deliberately moved ONLY the disqualify pair; if this one is meant to follow, that is a product decision — change this list, do not delete the case.`,
+				).not.toContain(gate);
+			}
+		});
 	}
 
 	for (const name of ADMIN_ONLY) {

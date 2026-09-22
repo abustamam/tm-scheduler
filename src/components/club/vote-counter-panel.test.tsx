@@ -72,7 +72,9 @@ function tally(over: Partial<Record<string, ReturnType<typeof category>>>) {
  * right way round: the ruling control existing is the normal state, and its
  * absence is what a reader should have to opt into.
  */
-function renderPanel(over: { sessionMemberId?: string | null } = {}) {
+function renderPanel(
+	over: { sessionMemberId?: string | null; canManageClub?: boolean } = {},
+) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const utils = render(
 		<QueryClientProvider client={qc}>
@@ -82,6 +84,10 @@ function renderPanel(over: { sessionMemberId?: string | null } = {}) {
 				sessionMemberId={
 					over.sessionMemberId === undefined ? SELF : over.sessionMemberId
 				}
+				// Default FALSE — the non-admin Ballot Counter, which is the console's
+				// own reason to exist. An admin default would make every case here an
+				// admin case and the session arm would go untested.
+				canManageClub={over.canManageClub ?? false}
 				onSetWinner={vi.fn()}
 				onClearWinner={vi.fn()}
 			/>
@@ -680,6 +686,46 @@ describe("VoteCounterPanel ruling controls need a session (#752)", () => {
 			speaker.queryAllByRole("button", { name: /^Undo disqualification/ }),
 		).toEqual([]);
 		expect(speaker.getByText(RULING_NEEDS_SESSION_MESSAGE)).toBeTruthy();
+	});
+
+	// The ADMIN ARM, and the reason `canManageClub` is a second prop rather than
+	// folded into `sessionMemberId`.
+	//
+	// A `read_write` impersonating superadmin (ADR-0016 / #246) has full admin
+	// parity server-side — `resolveAdminGrant` returns granted on the
+	// impersonation, BEFORE the self-assert arm is reached — and has no
+	// `effectiveMemberId`, so the route's `managerActorId` is null for them.
+	// Predicting with that one proxy hid the controls from the one principal the
+	// gate allows outright, and told them to sign in while signed in. Caught in
+	// review here; #762's review caught the same shape in six places at once.
+	// BOTH controls, and the fixture carries a `disqualified` row for that reason
+	// alone. An earlier draft had only `results`, so it never reached the Undo
+	// button — and gating Undo on `sessionMemberId !== null` while leaving
+	// Disqualify on the full expression then SURVIVED the whole suite. That is
+	// half the ADR-0016 regression this very test exists to prevent, so the
+	// fixture has to be able to render both.
+	it("keeps BOTH controls for a club admin with NO session member id (impersonation)", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana")],
+					disqualified: [
+						{ ...member("m-2", "Bo", 2), reason: "Did not use the word" },
+					],
+				}),
+			}),
+		);
+		renderPanel({ sessionMemberId: null, canManageClub: true });
+
+		const speaker = card("Best Speaker");
+		expect(
+			await speaker.findByRole("button", { name: "Disqualify Ana" }),
+		).toBeTruthy();
+		expect(
+			speaker.getByRole("button", { name: "Undo disqualification of Bo" }),
+		).toBeTruthy();
+		expect(speaker.queryByText(RULING_NEEDS_SESSION_MESSAGE)).toBeNull();
 	});
 
 	// The notice is positional, not global: it appears where the missing controls
