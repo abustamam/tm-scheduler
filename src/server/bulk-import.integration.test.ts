@@ -61,7 +61,7 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 		// long-distance prefix, not a 12th digit, so it becomes the `+1` rather
 		// than being prepended to (`+119165968820`).
 		expect(alice.phone).toBe("+19165968820");
-		// Pasted free-text office parsed into the enum and opened as a current term.
+		// Pasted office text cannot grant access.
 		const aliceTerms = await testDb
 			.select({ position: officerTerms.position })
 			.from(officerTerms)
@@ -71,7 +71,9 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 					isNull(officerTerms.termEnd),
 				),
 			);
-		expect(aliceTerms.map((t) => t.position)).toEqual(["president"]);
+		expect(aliceTerms).toEqual([]);
+		expect(alice.clubRole).toBe("member");
+		expect(result.skippedOfficerAssignments).toBe(1);
 
 		const [bob] = await testDb
 			.select()

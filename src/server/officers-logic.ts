@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { db } from "#/db";
-import { officerTerms } from "#/db/schema";
+import { members, officerTerms } from "#/db/schema";
 import { type OfficerPosition, officerRank } from "#/lib/officers";
 
 // The shared client OR a drizzle transaction handle, the same union
@@ -51,13 +51,9 @@ export async function getOpenOfficerPositions(
  * a set read beforehand. The caller shows that list to a human, so over- and
  * under-stating it are both bugs.
  *
- * That is a reporting property, NOT a concurrency one, and the difference is
- * worth stating because it is easy to credit the wrong thing: one statement
- * does not stop a term being OPENED underneath it. What does is the caller's
- * lock. Convert holds `FOR UPDATE` on the `members` row, and inserting an
- * `officer_terms` row takes `FOR KEY SHARE` on the membership it references for
- * the FK check — which conflicts, so a concurrent assignment waits. A caller
- * that does NOT hold that lock gets no such guarantee from this function.
+ * A membership row lock serializes this with assignments, including callers
+ * that pass a bare database handle. Nested transactions retain that lock until
+ * the caller's outer transaction commits.
  *
  * Rows are CLOSED, never deleted — `term_end` is set and the history stays, the
  * same way removing an office from the member edit form does (#100). That is
@@ -75,22 +71,29 @@ export async function closeOpenOfficerTerms(
 	database: Database,
 	membershipId: string,
 ): Promise<OfficerPosition[]> {
-	const now = new Date();
-	const rows = await database
-		.update(officerTerms)
-		.set({ termEnd: now, updatedAt: now })
-		.where(
-			and(
-				eq(officerTerms.membershipId, membershipId),
-				isNull(officerTerms.termEnd),
-			),
-		)
-		.returning({ position: officerTerms.position });
-	// Canonical order, because this list is read aloud in a toast. Postgres
-	// returns updated rows in no defined order, so without this the same two
-	// offices could be named "Treasurer and President" on one convert and
-	// "President and Treasurer" on the next.
-	return rows
-		.map((r) => r.position)
-		.sort((a, b) => officerRank(a) - officerRank(b));
+	return database.transaction(async (tx) => {
+		await tx
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.id, membershipId))
+			.for("update");
+		const now = new Date();
+		const rows = await tx
+			.update(officerTerms)
+			.set({ termEnd: now, updatedAt: now })
+			.where(
+				and(
+					eq(officerTerms.membershipId, membershipId),
+					isNull(officerTerms.termEnd),
+				),
+			)
+			.returning({ position: officerTerms.position });
+		// Canonical order, because this list is read aloud in a toast. Postgres
+		// returns updated rows in no defined order, so without this the same two
+		// offices could be named "Treasurer and President" on one convert and
+		// "President and Treasurer" on the next.
+		return rows
+			.map((r) => r.position)
+			.sort((a, b) => officerRank(a) - officerRank(b));
+	});
 }
