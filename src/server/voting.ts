@@ -1,6 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireVoteCounterCapability } from "./guards";
+import {
+	requireSignedInVoteCounter,
+	requireVoteCounterCapability,
+} from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	castVote,
@@ -156,9 +159,23 @@ export const closeVoteFn = createServerFn({ method: "POST" })
 const disqualifySchema = operateSchema.extend({ candidate: candidateRef });
 
 /**
- * Rule a candidate out of one award (#723). GATED — Ballot Counter or club
- * admin, exactly as `openVoteFn` / `closeVoteFn` are, and enrolled in
- * `voting-authz.guard.test.ts`'s GATED list alongside them.
+ * Rule a candidate out of one award (#723). GATED — and SINCE #752 the gate is
+ * `requireSignedInVoteCounter` rather than the `requireVoteCounter` its
+ * neighbours call: the Ballot Counter capability PLUS a session.
+ *
+ * This is the only capability in the whole self-assert set that publishes free
+ * text about a NAMED THIRD PARTY, rendered on every polling phone beside their
+ * name as an official ruling — and its attribution outlives it, because
+ * `logActivity` records `vote_disqualify` with the asserted actor and the reason
+ * text, and `undoDisqualificationFn` below deletes the disqualification row but
+ * NOT that log entry. So a forged ruling leaves a permanent record naming an
+ * innocent member as its author, and nothing in the product can remove it. The
+ * argument in full, including why the other five #510 capabilities stay
+ * anonymous, is on `requireSignedInVoteCounter` (`guards.ts`).
+ *
+ * The officer retry comes along inside that gate, so the refusal's "ask an
+ * officer to sign in on this device" is true; `disqualify-session-gate.integration.test.ts`
+ * asserts each of the four callers it names.
  *
  * The lock assert is deliberate and matches open/close rather than
  * `getVoteTally`: disqualifying is an operation on a LIVE vote, not a read of
@@ -177,7 +194,7 @@ export const disqualifyCandidateFn = createServerFn({ method: "POST" })
 		disqualifySchema.extend({ reason: z.string() }).parse(input),
 	)
 	.handler(async ({ data }) => {
-		const authz = await requireVoteCounter(data);
+		const authz = await requireSignedInVoteCounter(data);
 		assertMeetingNotLocked(authz.meetingStatus);
 		await disqualifyCandidate({
 			meetingId: data.meetingId,
@@ -191,11 +208,15 @@ export const disqualifyCandidateFn = createServerFn({ method: "POST" })
 	});
 
 /** Undo a disqualification (#723) — the candidate returns to the ballot and
- *  their prior votes to the tally. Same gate, same lock, same reasons. */
+ *  their prior votes to the tally. Same gate, same lock, same reasons, and
+ *  since #752 that includes the session: undoing is itself a ruling ON a named
+ *  member's record, it writes its own `vote_disqualify_undo` activity entry under
+ *  the asserted actor, and leaving it anonymous would let the same caller the
+ *  gate above refuses simply erase a legitimate Ballot Counter's ruling. */
 export const undoDisqualificationFn = createServerFn({ method: "POST" })
 	.validator((input: unknown) => disqualifySchema.parse(input))
 	.handler(async ({ data }) => {
-		const authz = await requireVoteCounter(data);
+		const authz = await requireSignedInVoteCounter(data);
 		assertMeetingNotLocked(authz.meetingStatus);
 		await undoDisqualification({
 			meetingId: data.meetingId,

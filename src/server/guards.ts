@@ -4,6 +4,7 @@ import { db } from "#/db";
 import { clubs, members, officerTerms, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
 import {
@@ -639,6 +640,67 @@ export async function requireVoteCounterCapability(input: {
 		};
 	}
 	throw new Error("Only the Ballot Counter or a club admin can do that.");
+}
+
+/**
+ * The Ballot Counter capability, plus a SESSION (#752) — the gate
+ * `disqualifyCandidateFn` and `undoDisqualificationFn` call, and the only place
+ * in this feature where the two conditions are both required.
+ *
+ * ## Why one capability is cut out of an otherwise anonymous set
+ *
+ * #747 bound every SIGNED-IN self-assert caller to their own identity. It could
+ * not touch the caller with no session, because there is nothing to bind
+ * against — so for that caller the only remaining lever is WHAT may be written,
+ * and ADR-0026's own sentence decides it: an unverified picker may fill a blank,
+ * anything that RULES on somebody needs a session.
+ *
+ * Ruling a candidate out is the one capability in the whole self-assert set that
+ * publishes free text about a NAMED THIRD PARTY, rendered on every polling phone
+ * beside their name as an official ruling. And its attribution outlives it:
+ * `logActivity` records `vote_disqualify` with the ASSERTED actor and the reason
+ * text, and the undo deletes the disqualification row but NOT the log entry — so
+ * a forged ruling leaves a permanent record naming an innocent member as its
+ * author, which nothing in the product can remove.
+ *
+ * Everything else stays anonymous, deliberately: the five capabilities #510
+ * handed a non-admin Ballot Counter (open, close, tally, Table Topics
+ * add/remove/move, award set/clear) all keep calling
+ * {@link requireVoteCounterCapability} directly. Those are writes to the club's
+ * own record — length-capped, inert, visible to the room on a shared screen and
+ * repairable by any admin — and they are the workflow the honour system was
+ * chosen for. **The cut falls INSIDE the Ballot Counter arm, not between the
+ * four self-assert arms**, and `disqualify-session-gate.integration.test.ts`
+ * asserts both halves against one seeded caller so they cannot drift.
+ *
+ * ## Why the check is here and not a second `await` at the call site
+ *
+ * Two awaits in a handler is two things a later edit can drop one of. Here there
+ * is one call and no way to obtain the capability without having passed the
+ * session check, and the existing officer retry inside
+ * {@link requireVoteCounterCapability} comes along intact — which is what makes
+ * the refusal message's "ask an officer to sign in on this device" true: any
+ * club admin OR elected officer holding an open term who signs in on that phone
+ * gets the capability, and so does the Ballot Counter signing in as themselves.
+ *
+ * The refusal is {@link RULING_NEEDS_SESSION_MESSAGE} rather than
+ * `SIGN_IN_REQUIRED_MESSAGE` or the generic permission error, and the console
+ * renders the SAME constant in place of the control. See that constant for why
+ * a console whose other five controls still work cannot answer "you need to be
+ * signed in" without reading as an outage.
+ */
+export async function requireSignedInVoteCounter(input: {
+	meetingId: string;
+	selfMemberId?: string | null;
+}): Promise<VoteCounterAuthz> {
+	// Before the capability, not after: a caller with no session can never pass
+	// it, so resolving first would cost a meeting read and three joins to reach
+	// the same refusal — and, worse, would let an anonymous caller learn from the
+	// timing or from a thrown archive/"meeting not found" error whether their
+	// guess at the slot was right.
+	const sessionUser = await getSessionUser();
+	if (!sessionUser) throw new Error(RULING_NEEDS_SESSION_MESSAGE);
+	return requireVoteCounterCapability(input);
 }
 
 /** Fetch a roster member by id (server-only, no auth check). */

@@ -131,13 +131,22 @@ function namedFunctionBody(source: string, name: string): string {
  *   membership in this club is refused outright — but it deliberately left the
  *   session-LESS path alone, because the Toastmaster running the agenda from
  *   their phone with no account is the workflow ADR-0010 built and #747's
- *   grilling kept. So every row below still succeeds with no session, which is
- *   exactly what this class asserts, and the count is unchanged.
+ *   grilling kept. What #747 removed is narrower and is not visible here: an
+ *   asserted identity can no longer OVERRIDE a proven one.
  *
- *   What #747 removed is narrower and is not visible here: an asserted identity
- *   can no longer OVERRIDE a proven one. The class stays until a console
- *   genuinely requires a session, which is a product decision about the
- *   account-less role holder and not a refactor.
+ *   **#752 retired exactly two, and the cut is inside one console rather than
+ *   across the class.** `disqualifyCandidateFn` / `undoDisqualificationFn` now
+ *   call `requireSignedInVoteCounter` and are swept by default; every other row
+ *   still succeeds with no session, which is what this class asserts. The
+ *   Ballot Counter console itself is NOT retired — its other five capabilities
+ *   (open, close, tally, Table Topics capture, award set/clear) stay here, so a
+ *   future sweep must not read "#752 shipped" as "the Vote Counter rows can
+ *   go". Ruling on a named third party is the property that moved, not the
+ *   console.
+ *
+ *   The class stays for the rest until a console genuinely requires a session,
+ *   which is a product decision about the account-less role holder and not a
+ *   refactor.
  * - `public-intake` — no SESSION and no asserted member id; a bounded write
  *   from a public link. Not "no identity at all", which was this line's first
  *   wording and is false for `joinBallot`: it takes a typed name and looks it
@@ -155,11 +164,11 @@ type WriteProofClass =
 /**
  * The POST fns that are NOT `session`, each with the reason it is not.
  *
- * The 29 the #761 inventory found, less the five #762 retired: 26 today
- * (6 `pending-proof`, 16 `console-asserted`, 2 `public-intake`,
- * 2 `fill-blank`). Adding a row is a decision about a write's trust model, not
- * a way to get green — a genuinely session-less write that turns up
- * unclassified is a finding to report, not an entry to make.
+ * The 29 the #761 inventory found, less the five #762 retired and the two #752
+ * retired: 24 today (6 `pending-proof`, 14 `console-asserted`, 2
+ * `public-intake`, 2 `fill-blank`). Adding a row is a decision about a write's
+ * trust model, not a way to get green — a genuinely session-less write that
+ * turns up unclassified is a finding to report, not an entry to make.
  *
  * NOT exported, though #761 specified it as `export`: Biome's
  * `lint/suspicious/noExportsInTest` is an ERROR in this repo's gate, and CI's
@@ -271,14 +280,14 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 		class: "console-asserted",
 		reason: "Phase 2 (#747 / #752)",
 	},
-	"voting.ts#disqualifyCandidateFn": {
-		class: "console-asserted",
-		reason: "Phase 2 (#747 / #752)",
-	},
-	"voting.ts#undoDisqualificationFn": {
-		class: "console-asserted",
-		reason: "Phase 2 (#747 / #752)",
-	},
+	// `voting.ts#disqualifyCandidateFn` and `voting.ts#undoDisqualificationFn`
+	// were here until #752 and are now swept by DEFAULT — they call
+	// `requireSignedInVoteCounter`, which is in SESSION_GATES below. Recorded as
+	// a comment rather than silently absent because "the row is gone" and "the
+	// row was never written" look identical, and re-adding either one would
+	// waive the first console capability in this repo that genuinely requires a
+	// session. They are the ONLY two rows the `console-asserted` class has ever
+	// retired.
 	"timings.ts#recordTiming": {
 		class: "console-asserted",
 		reason: "Phase 2 (#747 / #752)",
@@ -355,6 +364,13 @@ const SESSION_GATES: string[] = [
 	// Module-private to `minutes.ts`, and the only `gateAdmin` in the tree.
 	"gateAdmin",
 	"requireMeetingTemplateEditor",
+	// #752. Admitted because it reads the session ITSELF and throws without one
+	// before delegating — `DERIVED_GATES` below checks that, which is the whole
+	// reason a name can be added here at all. Its sibling
+	// `requireVoteCounterCapability` is deliberately NOT admitted and must never
+	// be: that one grants the anonymous Ballot Counter, which is the exemption
+	// this guard exists to tell apart from a proven one.
+	"requireSignedInVoteCounter",
 ];
 
 /**
@@ -408,6 +424,11 @@ const DERIVED_GATES: { call: string; file: string; mustCall: string }[] = [
 	{
 		call: "requireSessionActor",
 		file: "write-actor-logic.ts",
+		mustCall: "getSessionUser(",
+	},
+	{
+		call: "requireSignedInVoteCounter",
+		file: "guards.ts",
 		mustCall: "getSessionUser(",
 	},
 ];
@@ -661,7 +682,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).not.toContain(key);
 	});
 
-	it("holds exactly the 26 exceptions left after #762", () => {
+	it("holds exactly the 24 exceptions left after #762 and #752", () => {
 		// The count is pinned, not just the shape. A twenty-seventh arriving
 		// silently is the thing to notice — either a new session-less write, or a
 		// child issue's row landing without its sibling being retired.
@@ -671,6 +692,12 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		// default `session` sweep. `fill-blank` is counted from here on, because a
 		// class that is in the vocabulary and in nobody's total is a class a row
 		// can be parked in without moving any number anyone reads.
+		//
+		// #752 then took two `console-asserted` rows — the disqualify pair, which
+		// now require a session — so that class reads 14 rather than 16. It is
+		// the first time this class has shrunk, and the pair is the whole of it:
+		// the other five Ballot Counter capabilities are still here, so a drop to
+		// 9 would mean the console went with them.
 		const byClass = (c: WriteProofClass) =>
 			Object.values(WRITE_PROOF_EXCEPTIONS).filter((v) => v.class === c).length;
 		expect({
@@ -680,9 +707,9 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			publicIntake: byClass("public-intake"),
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 26,
+			total: 24,
 			pendingProof: 6,
-			consoleAsserted: 16,
+			consoleAsserted: 14,
 			publicIntake: 2,
 			fillBlank: 2,
 		});

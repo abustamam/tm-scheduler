@@ -60,6 +60,7 @@ freeing the roles you held does not.
 | First vote | yes | yes |
 | Change a vote | only from the casting device | yes (member voters) |
 | Role consoles in `meeting-authz-logic.ts` (TMOD agenda + WOD, Grammarian WOD, Ballot Counter) | yes, if you hold the slot | yes, if the slot is one of YOUR memberships |
+| Rule a candidate out of an award, or undo that ruling | no (#752) | yes, if the slot is one of YOUR memberships — or any admin / elected officer |
 | Every other console (Timer, the TMOD attendance panel, the live tally) | Phase 2 | Phase 2 |
 
 "Blank" includes a row holding only `reached_out` (#762). That rung is the officer's record of
@@ -69,7 +70,23 @@ officer's nudge draft INSERTS `reached_out` onto a blank row and the member answ
 session-less personal meeting page, so counting the ask as an answer refuses the round trip the
 ladder exists for. See the third consequence below for what that costs.
 
-Three rows need their qualifier read carefully.
+Four rows need their qualifier read carefully.
+
+- **The disqualify row is an EXCEPTION carved out of the row above it, not a fifth arm** (#752).
+  The Ballot Counter console is still a role console and still grants on the slot; what needs a
+  session is one capability WITHIN it — ruling a candidate out, and undoing that ruling. The cut is
+  there because that is the only capability in the whole self-assert set that publishes free text
+  about a NAMED THIRD PARTY, rendered on every polling phone beside their name as an official
+  ruling, and because its attribution outlives it: `logActivity` records the asserted actor and the
+  reason, the undo deletes the ruling row and cannot delete that entry, so a forged ruling leaves a
+  permanent record naming an innocent member as its author. The rest of the console — open, close,
+  tally, Table Topics capture, award set/clear — stays anonymous deliberately, because those are
+  length-capped, inert writes to the club's own record, visible to the room on a shared screen and
+  repairable by any admin. `requireSignedInVoteCounter` (`guards.ts`) is the one gate; the officer
+  retry inside it is what makes the refusal's "ask an officer to sign in on this device" true, and
+  that refusal is its own message (`RULING_NEEDS_SESSION_MESSAGE`) rather than
+  `SIGN_IN_REQUIRED_MESSAGE`, because a console whose other five controls still work cannot answer
+  "you need to be signed in" without reading as an outage.
 
 - **"yes, if the slot is one of YOUR memberships"** is the role-console row #747 decided, and it
   covers **only the four arms in `src/server/meeting-authz-logic.ts`** — the row below it is the
@@ -122,7 +139,8 @@ class of debt it is.
 
 ## Consequences
 
-- **The role consoles stay session-less for now; #747 narrowed the rule they run under instead.**
+- **The role consoles stay session-less for now, less one capability; #747 narrowed the rule they
+  run under and #752 took the disqualify pair out of them.**
   This consequence used to read "move to sessions in Phase 2, not now", naming #747 and #752 as the
   migration. #747 did not make that move, and what it decided is narrower than the sentence it
   replaces: on the four arms in `meeting-authz-logic.ts`, **a self-assert never overrides a
@@ -130,10 +148,13 @@ class of debt it is.
   everywhere else — a console is a person running a meeting from their phone with no time to check
   email, and requiring a session there takes a capability from a real member. Whether any console
   eventually requires one stays open: it is a product decision about the account-less role holder,
-  not a refactor, and #752 owns the disqualify console's own row. All 16 server fns stay classified
-  `console-asserted`, because they still succeed with no session, which is exactly what that class
-  asserts; `write-proof.guard.test.ts` says so at the class rather than carrying a promised
-  retirement nobody has scheduled.
+  not a refactor. **#752 answered that question for exactly two of the 16 server fns** — the
+  disqualify pair, per the Decision row above — and they are the only rows the `console-asserted`
+  class has ever retired, leaving 14. What moved is a PROPERTY (ruling on a named third party), not a
+  console: the Ballot Counter's other five capabilities are still classified `console-asserted`, so
+  "#752 shipped" must not be read as "the Vote Counter rows can go". The remaining 14 still succeed
+  with no session, which is exactly what that class asserts; `write-proof.guard.test.ts` says so at
+  the class rather than carrying a promised retirement nobody has scheduled.
 - **Members who cannot bind fall back to an officer.** No email on the roster, a Person in two or
   more clubs (#759), a shared family address: all three produce a session with no membership here,
   so every right-hand-column write refuses with `NOT_ON_ROSTER_MESSAGE`. That is a real cost, paid

@@ -1917,6 +1917,13 @@ function MeetingView() {
 								<VoteCounterPanel
 									meetingId={meeting.id}
 									selfMemberId={myId}
+									// #752. NOT `myId`, which is the localStorage name-pick and
+									// is non-null for exactly the anonymous caller the ruling
+									// gate refuses. `managerActorId` is `session?.id ?? null` —
+									// the session's own membership id in this club — which is
+									// the value the server-side seam resolves, so the console's
+									// prediction and the gate's answer agree by construction.
+									sessionMemberId={managerActorId}
 									onSetWinner={handleSetVoteWinner}
 									onClearWinner={handleClearVoteWinner}
 								/>

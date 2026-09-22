@@ -177,3 +177,32 @@ export function safeRedirect(
 	if (!REDIRECT_CHARS.test(value)) return fallback;
 	return value;
 }
+
+/**
+ * "Ruling a candidate out is not one of the anonymous console's capabilities."
+ *
+ * A FOURTH refusal, and it is not a variant of {@link SIGN_IN_REQUIRED_MESSAGE}
+ * even though both mean "no session". That one is the product's general answer
+ * to a write that needs one; this one answers a caller who is holding a console
+ * that still works — they can open the vote, close it, read the tally, capture
+ * Table Topics and set the winner, and only this one control refused. "You need
+ * to be signed in to do that" in the middle of a working console reads as an
+ * outage, which is the surface #714 was filed about, so the copy names the
+ * capability and both ways back: an officer signing in on this device, or the
+ * Ballot Counter signing in as themselves (#752).
+ *
+ * Exported from here, client-safe, because the CONSOLE has to say the same
+ * sentence: `VoteCounterPanel` renders it in place of the Disqualify control
+ * when the viewer has no session, and the gate throws it for the hand-crafted
+ * POST the UI cannot cover. One constant is what stops the two halves of one
+ * policy from being worded differently — the module note above applies, the
+ * text IS the wire format.
+ *
+ * Deliberately has NO matcher and no toast branch, for
+ * {@link MEMBERSHIP_INACTIVE_MESSAGE}'s reason: it wants its own text and no
+ * action, which `showWriteError`'s default branch already renders. The sign-in
+ * route is named IN the sentence rather than offered as a button, because the
+ * person who most needs it is not the person holding the phone.
+ */
+export const RULING_NEEDS_SESSION_MESSAGE =
+	"Ruling a candidate out needs a signed-in officer — ask an officer to sign in on this device, or sign in yourself.";
