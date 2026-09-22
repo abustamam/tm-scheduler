@@ -22,6 +22,30 @@ const GATED = [
 ];
 
 /**
+ * The two that additionally require a SESSION (#752), and the three that
+ * deliberately do NOT.
+ *
+ * Both halves are asserted, and the second is the one a sweep cannot state.
+ * #752 cuts INSIDE the Ballot Counter arm (the reason is on
+ * `requireSignedInVoteCounter`, `guards.ts`): the ruling pair needs a session,
+ * while open, close and the tally stay reachable by the account-less Ballot
+ * Counter, because that is the workflow ADR-0010 was written for and #510
+ * handed them. Without the NOT half, "require
+ * a session everywhere in this file" reads as strictly safer and would silently
+ * take the whole console away from a Ballot Counter with no account, mid-meeting
+ * — the exact regression #752 names as the one this change could ship.
+ *
+ * The two gate names are disjoint as SUBSTRINGS, which is what lets one grep
+ * separate them: `requireSignedInVoteCounter(` does not contain
+ * `requireVoteCounter(`. Both directions are asserted per export below, so a
+ * swap in either direction fails rather than half-matching.
+ */
+const SESSION_GATE = "requireSignedInVoteCounter(";
+const ANON_GATE = "requireVoteCounter(";
+const SESSION_GATED = ["disqualifyCandidateFn", "undoDisqualificationFn"];
+const ANON_GATED = GATED.filter((n) => !SESSION_GATED.includes(n));
+
+/**
  * The slice of SOURCE covering just `name`'s export — from its `export const`
  * line up to whichever other GATED export comes next, or EOF. Bounding to the
  * NEXT export (rather than a fixed-length window) matters: mutation-testing
@@ -46,9 +70,29 @@ function gatedExportBody(name: string): string {
 }
 
 describe("voting server fns are gated (#510)", () => {
-	for (const name of GATED) {
+	for (const name of ANON_GATED) {
 		it(`${name} calls requireVoteCounter`, () => {
-			expect(gatedExportBody(name)).toContain("requireVoteCounter(");
+			expect(gatedExportBody(name)).toContain(ANON_GATE);
+		});
+
+		// The NOT half of #752 (see SESSION_GATED): these three must stay
+		// reachable with no session at all.
+		it(`${name} does NOT require a session`, () => {
+			expect(gatedExportBody(name)).not.toContain(SESSION_GATE);
+		});
+	}
+
+	for (const name of SESSION_GATED) {
+		it(`${name} calls requireSignedInVoteCounter (#752)`, () => {
+			expect(gatedExportBody(name)).toContain(SESSION_GATE);
+		});
+
+		// And does NOT also call the anonymous gate. Not redundant: the refusal
+		// has to be unconditional, and a body holding BOTH calls is how a
+		// "keep the old path for compatibility" edit would look — the session
+		// check would then sit beside a call that already granted.
+		it(`${name} does not ALSO call the anonymous gate`, () => {
+			expect(gatedExportBody(name)).not.toContain(ANON_GATE);
 		});
 	}
 

@@ -502,10 +502,22 @@ the nouns in `src/db/schema.ts`.
   schema comment states: `num_nonnulls(...) = 1` rather than `<= 1` (both id columns cascade, so a
   candidate-less row is unreachable), and `candidate_write_in` holding the FOLDED `writeInKey` rather
   than the display spelling (so ruling out "Bob Smith" also refuses a ballot typed "bob smith", and so
-  the unique index enforces "not twice" in the database). Gated exactly as open/close are, logged to
+  the unique index enforces "not twice" in the database). Logged to
   `activity_log` on both the set and the undo — the reason travels in `detail`, because it is gone
   from the row once undone. Deliberately NOT on the printed agenda or the projected deck: it is
   live-meeting state.
+  **Gated more narrowly than open/close since #752: the ruling and its undo need a SESSION**
+  (`requireSignedInVoteCounter`, `guards.ts`), where the console's other five capabilities still
+  answer the account-less Ballot Counter ADR-0010 was written for. The cut falls inside the Vote
+  Counter arm rather than between the four self-assert arms, and this record is why: it is the one
+  capability in that set that publishes free text about a NAMED third party, and the log line above
+  is the half that outlives it — the undo deletes the row and cannot delete the entry, so a forged
+  ruling leaves a permanent record naming an innocent member as its author. The GRANT keeps the
+  officer retry — any club admin, any elected officer with an open term, a `read_write`
+  impersonating superadmin, or the Ballot Counter signed in as themselves — but the refusal copy
+  (`RULING_NEEDS_SESSION_MESSAGE`, `lib/write-proof.ts`, rendered by the console in place of the two
+  controls) names only the admin and the Ballot Counter, because a non-admin officer who signs in
+  loses the console entirely and so cannot act on advice to sign in (#844).
 - **Offline write queue** — the single write channel for a meeting's minutes record (attendance,
   Table Topics speakers, awards) on the venue wifi this product actually runs on (#176; hardened and
   made load-bearing by roll call in v1.20.0.0). One IndexedDB store

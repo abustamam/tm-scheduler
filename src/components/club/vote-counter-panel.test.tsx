@@ -4,6 +4,7 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DISQUALIFICATION_PRESETS } from "#/lib/disqualification";
+import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
 
 // `vi.mock` factories are hoisted above imports, so the mock fns come from
 // `vi.hoisted` — the same pattern `ballot.test.tsx` uses, so each test can point
@@ -64,13 +65,29 @@ function tally(over: Partial<Record<string, ReturnType<typeof category>>>) {
 	};
 }
 
-function renderPanel() {
+/**
+ * `sessionMemberId` defaults to SELF — a SIGNED-IN Ballot Counter — so every
+ * case written before #752 keeps the console it was written against. The
+ * anonymous viewer is the exception and says so at its call site, which is the
+ * right way round: the ruling control existing is the normal state, and its
+ * absence is what a reader should have to opt into.
+ */
+function renderPanel(
+	over: { sessionMemberId?: string | null; canManageClub?: boolean } = {},
+) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const utils = render(
 		<QueryClientProvider client={qc}>
 			<VoteCounterPanel
 				meetingId={MEETING_ID}
 				selfMemberId={SELF}
+				sessionMemberId={
+					over.sessionMemberId === undefined ? SELF : over.sessionMemberId
+				}
+				// Default FALSE — the non-admin Ballot Counter, which is the console's
+				// own reason to exist. An admin default would make every case here an
+				// admin case and the session arm would go untested.
+				canManageClub={over.canManageClub ?? false}
 				onSetWinner={vi.fn()}
 				onClearWinner={vi.fn()}
 			/>
@@ -565,5 +582,257 @@ describe("VoteCounterPanel disqualification (#723)", () => {
 		// slow round trip.
 		expect(await speaker.findByText(/Only the Ballot Counter/)).toBeTruthy();
 		expect(speaker.getByLabelText(/Reason Ana can't win/)).toBeTruthy();
+	});
+});
+
+/**
+ * The console affordance half of #752.
+ *
+ * The gate is the security boundary and refuses independently — that half is
+ * `disqualify-session-gate.integration.test.ts`, and nothing here weakens it.
+ * What these cases are about is the OTHER failure: an account-less Ballot
+ * Counter reaching a control that cannot work and hitting a refusal mid-meeting
+ * with the room watching, which converts a deliberate policy into what looks
+ * like an outage — the surface #714 was filed about. ADR-0026 states it as a
+ * rule: a control a session gates must not be SHOWN to a viewer without one, and
+ * the state stays visible when the affordance goes.
+ *
+ * The prediction is exact rather than a proxy. `sessionMemberId` is the route's
+ * `managerActorId` (`session?.id ?? null`) — the same value the server-side seam
+ * computes — so client and server agree by construction rather than by a rule
+ * somebody has to maintain. It is a SEPARATE prop from `selfMemberId`, which is
+ * the localStorage name-pick and is non-null for exactly the caller being
+ * refused.
+ */
+describe("VoteCounterPanel ruling controls need a session (#752)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
+
+	// AC6.
+	it("hides the Disqualify control and names the way out when there is no session", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana"), member("m-2", "Bo")],
+				}),
+			}),
+		);
+		renderPanel({ sessionMemberId: null });
+
+		const speaker = card("Best Speaker");
+		// The candidates are still THERE — only the affordance goes.
+		expect(await speaker.findByText("Ana")).toBeTruthy();
+		expect(speaker.getByText("Bo")).toBeTruthy();
+		expect(speaker.queryAllByRole("button", { name: /^Disqualify / })).toEqual(
+			[],
+		);
+		// Imported, not retyped: the console and the gate say ONE sentence, and a
+		// literal here would let the two be reworded apart.
+		expect(speaker.getByText(RULING_NEEDS_SESSION_MESSAGE)).toBeTruthy();
+	});
+
+	// AC7 — the inverse, and the half that stops "hide it always" from passing.
+	it("renders the Disqualify control when there IS a session", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana"), member("m-2", "Bo")],
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		expect(
+			await speaker.findAllByRole("button", { name: /^Disqualify / }),
+		).toHaveLength(2);
+		expect(speaker.queryByText(RULING_NEEDS_SESSION_MESSAGE)).toBeNull();
+	});
+
+	// UNDO is gated by the same server-fn pair and therefore by the same rule.
+	// #752's acceptance criteria name only the Disqualify control, and leaving
+	// Undo reachable would reproduce the exact failure those criteria exist to
+	// prevent: a control that refuses, on a ruling already announced to the room,
+	// with no way for the person holding the phone to tell policy from breakage.
+	it("hides Undo too, and keeps the ruling itself visible", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					disqualified: [
+						{
+							...member("m-1", "Ana", 3),
+							reason: "Spoke outside the qualifying window",
+						},
+					],
+				}),
+			}),
+		);
+		renderPanel({ sessionMemberId: null });
+
+		const speaker = card("Best Speaker");
+		// The record the room was told about is still on screen, with its reason
+		// and its excluded count — this is a read the anonymous Ballot Counter
+		// still needs in order to say that sentence out loud.
+		expect(await speaker.findByText("Ana")).toBeTruthy();
+		expect(
+			speaker.getByText("Spoke outside the qualifying window"),
+		).toBeTruthy();
+		expect(speaker.getByText(/3 votes excluded/)).toBeTruthy();
+		expect(
+			speaker.queryAllByRole("button", { name: /^Undo disqualification/ }),
+		).toEqual([]);
+		expect(speaker.getByText(RULING_NEEDS_SESSION_MESSAGE)).toBeTruthy();
+	});
+
+	// The ADMIN ARM, and the reason `canManageClub` is a second prop rather than
+	// folded into `sessionMemberId`.
+	//
+	// A `read_write` impersonating superadmin (ADR-0016 / #246) has full admin
+	// parity server-side — `resolveAdminGrant` returns granted on the
+	// impersonation, BEFORE the self-assert arm is reached — and has no
+	// `effectiveMemberId`, so the route's `managerActorId` is null for them.
+	// Predicting with that one proxy hid the controls from the one principal the
+	// gate allows outright, and told them to sign in while signed in. Caught in
+	// review here; #762's review caught the same shape in six places at once.
+	// BOTH controls, and the fixture carries a `disqualified` row for that reason
+	// alone. An earlier draft had only `results`, so it never reached the Undo
+	// button — and gating Undo on `sessionMemberId !== null` while leaving
+	// Disqualify on the full expression then SURVIVED the whole suite. That is
+	// half the ADR-0016 regression this very test exists to prevent, so the
+	// fixture has to be able to render both.
+	it("keeps BOTH controls for a club admin with NO session member id (impersonation)", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana")],
+					disqualified: [
+						{ ...member("m-2", "Bo", 2), reason: "Did not use the word" },
+					],
+				}),
+			}),
+		);
+		renderPanel({ sessionMemberId: null, canManageClub: true });
+
+		const speaker = card("Best Speaker");
+		expect(
+			await speaker.findByRole("button", { name: "Disqualify Ana" }),
+		).toBeTruthy();
+		expect(
+			speaker.getByRole("button", { name: "Undo disqualification of Bo" }),
+		).toBeTruthy();
+		expect(speaker.queryByText(RULING_NEEDS_SESSION_MESSAGE)).toBeNull();
+	});
+
+	// `reasonFor` is STATE, so it outlives the prop that opened the form. Found by
+	// an adversarial review pass: the panel stays mounted when a session ends (the
+	// route re-renders with `managerActorId` null), and the row's Disqualify button
+	// would vanish while the form it opened stayed on screen with a live submit
+	// path — the affordance ADR-0026 says must go, still reachable by the one
+	// caller who already had it open.
+	it("closes an OPEN reason form if the session goes away underneath it", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana")],
+				}),
+			}),
+		);
+		const { rerender, qc } = renderPanel();
+
+		const speaker = card("Best Speaker");
+		await userEvent.click(
+			await speaker.findByRole("button", { name: "Disqualify Ana" }),
+		);
+		expect(speaker.getByLabelText(/Reason Ana can't win/)).toBeTruthy();
+
+		// The session ends. Same mounted component, new props.
+		rerender(
+			<QueryClientProvider client={qc}>
+				<VoteCounterPanel
+					meetingId={MEETING_ID}
+					selfMemberId={SELF}
+					sessionMemberId={null}
+					canManageClub={false}
+					onSetWinner={vi.fn()}
+					onClearWinner={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const after = card("Best Speaker");
+		expect(after.queryByLabelText(/Reason Ana can't win/)).toBeNull();
+		expect(after.queryAllByRole("button", { name: /^Disqualify / })).toEqual(
+			[],
+		);
+		expect(after.getByText(RULING_NEEDS_SESSION_MESSAGE)).toBeTruthy();
+		expect(disqualifyCandidateFn).not.toHaveBeenCalled();
+
+		// And the row is CLEARED, not merely hidden. A session can come BACK —
+		// `sessionMemberId` is `authClient.useSession()`'s answer — and hiding
+		// alone leaves `reasonFor` set, so the grant returning would re-render a
+		// blank form on a row nobody re-opened (the form's own text state went
+		// with the unmount). Restoring the session is the only way to see the
+		// difference between clearing and hiding.
+		rerender(
+			<QueryClientProvider client={qc}>
+				<VoteCounterPanel
+					meetingId={MEETING_ID}
+					selfMemberId={SELF}
+					sessionMemberId={SELF}
+					canManageClub={false}
+					onSetWinner={vi.fn()}
+					onClearWinner={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+		const restored = card("Best Speaker");
+		expect(
+			await restored.findByRole("button", { name: "Disqualify Ana" }),
+		).toBeTruthy();
+		expect(restored.queryByLabelText(/Reason Ana can't win/)).toBeNull();
+	});
+
+	// The notice is positional, not global: it appears where the missing controls
+	// would have been, and a card with nothing to rule on says nothing. Without
+	// this the copy renders three times on an empty console, which is how a
+	// well-meant explanation becomes noise nobody reads.
+	it("says nothing on a card with no candidates and no rulings", async () => {
+		getVoteTally.mockResolvedValue(tally({}));
+		renderPanel({ sessionMemberId: null });
+
+		expect(await screen.findByText("Best Speaker")).toBeTruthy();
+		expect(screen.queryByText(RULING_NEEDS_SESSION_MESSAGE)).toBeNull();
+	});
+
+	// The five #510 capabilities stay reachable for this viewer. The console
+	// losing its open/close button alongside the ruling one is the regression
+	// #752 names, and it is one line away — gating the CARD rather than the
+	// control.
+	it("leaves Open/Close voting and Set winner alone", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: false,
+					results: [member("m-1", "Ana", 4)],
+				}),
+			}),
+		);
+		renderPanel({ sessionMemberId: null });
+
+		const speaker = card("Best Speaker");
+		// Await the CANDIDATE, not the toggle: the open/close button renders from
+		// the first paint with no tally at all, so awaiting it returns before the
+		// query resolves and every assertion after it reads an empty card — a
+		// green that says nothing.
+		expect(await speaker.findByText(/^Ana/)).toBeTruthy();
+		expect(speaker.getByRole("button", { name: /Open voting/ })).toBeTruthy();
+		expect(speaker.getByRole("button", { name: "Set winner" })).toBeTruthy();
+		expect(speaker.getByRole("button", { name: "Clear winner" })).toBeTruthy();
 	});
 });

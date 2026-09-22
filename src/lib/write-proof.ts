@@ -20,9 +20,10 @@
  * seam, and it holds four things:
  *
  *  - the {@link WriteProof} type;
- *  - the three refusal strings a proven-actor gate can raise
+ *  - the four refusal strings a proven-actor gate can raise
  *    ({@link SIGN_IN_REQUIRED_MESSAGE}, {@link NOT_ON_ROSTER_MESSAGE},
- *    {@link MEMBERSHIP_INACTIVE_MESSAGE}) and the two matchers a toast uses to
+ *    {@link MEMBERSHIP_INACTIVE_MESSAGE}, {@link RULING_NEEDS_SESSION_MESSAGE})
+ *    and the two matchers a toast uses to
  *    recognise the ones that change how it renders;
  *  - {@link signInHref}, which builds the link a refusal offers;
  *  - {@link safeRedirect} and {@link DEFAULT_SIGN_IN_REDIRECT}, which decide
@@ -177,3 +178,46 @@ export function safeRedirect(
 	if (!REDIRECT_CHARS.test(value)) return fallback;
 	return value;
 }
+
+/**
+ * "Ruling a candidate out is not one of the anonymous console's capabilities."
+ *
+ * A FOURTH refusal, and it is not a variant of {@link SIGN_IN_REQUIRED_MESSAGE}
+ * even though both mean "no session". That one is the product's general answer
+ * to a write that needs one; this one answers a caller who is holding a console
+ * that still works — they can open the vote, close it, read the tally, capture
+ * Table Topics and set the winner, and only this one control refused. "You need
+ * to be signed in to do that" in the middle of a working console reads as an
+ * outage, which is the surface #714 was filed about, so the copy names the
+ * capability and both ways back — see the "club admin, not officer" note below
+ * for which two routes those are and why they are not the whole grant (#752).
+ *
+ * Exported from here, client-safe, because the CONSOLE has to say the same
+ * sentence: `VoteCounterPanel` renders it in place of the Disqualify control
+ * when the viewer has no session, and the gate throws it for the hand-crafted
+ * POST the UI cannot cover. One constant is what stops the two halves of one
+ * policy from being worded differently — the module note above applies, the
+ * text IS the wire format.
+ *
+ * Deliberately has NO matcher and no toast branch, for
+ * {@link MEMBERSHIP_INACTIVE_MESSAGE}'s reason: it wants its own text and no
+ * action, which `showWriteError`'s default branch already renders. The sign-in
+ * route is named IN the sentence rather than offered as a button, because the
+ * person who most needs it is not the person holding the phone.
+ *
+ * **"club admin", not "officer", and the narrowing is measured.** #752 specified
+ * this sentence as "ask an officer", which is true of the GATE — the officer
+ * retry inside `voteCounterCapabilityFor` grants an elected officer holding an
+ * open term — and false of the SCREEN. Signing in makes the session win in
+ * `useEffectiveMember`, so `myId` stops matching the Vote Counter slot and
+ * `isVoteCounter` goes false; `canManage` is `canManageClub`, which is
+ * `clubRole === "admin"` or a `read_write` impersonation and does NOT include
+ * that officer. Both terms of the console's own section gate are therefore false
+ * for them and the whole Ballot Counter console disappears. A refusal that names
+ * a route which removes the console is worse than one that names none, so the
+ * copy names only what works: a club admin signing in here, or the Ballot
+ * Counter signing in as themselves. The officer's unreachable capability is
+ * #844; the server grant is unchanged and still asserted.
+ */
+export const RULING_NEEDS_SESSION_MESSAGE =
+	"Ruling a candidate out needs a signed-in club admin — ask an admin to sign in on this device, or sign in yourself.";

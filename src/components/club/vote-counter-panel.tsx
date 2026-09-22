@@ -7,6 +7,7 @@ import {
 	DISQUALIFICATION_LIMITS,
 	DISQUALIFICATION_PRESETS,
 } from "#/lib/disqualification";
+import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
 import type { AwardCategory } from "#/server/minutes-logic";
 import {
 	closeVoteFn,
@@ -74,15 +75,60 @@ function candidatePayload(r: {
  * load-bearing, not an oversight: the closed-vote list below carries counts
  * because the winner is picked off them, and showing them while the vote runs
  * would put a live leaderboard in front of the person announcing the result.
+ *
+ * DISQUALIFICATION AND ITS UNDO ALSO NEED A SESSION (#752), and those two alone.
+ * WHY those two and not their neighbours is argued on
+ * `requireSignedInVoteCounter` (`guards.ts`), which is the boundary and refuses
+ * independently of anything rendered here.
+ *
+ * What this component adds is the other half: the account-less Ballot Counter
+ * must never REACH a control that cannot work, because a refusal mid-meeting
+ * with the room watching reads as an outage rather than as policy (ADR-0026's
+ * "a control that a session gates must not be SHOWN to a viewer without one").
+ * Everything else on this console is unchanged for that viewer: open, close,
+ * tally, Table Topics capture, set and clear winner.
  */
 export function VoteCounterPanel({
 	meetingId,
 	selfMemberId,
+	sessionMemberId,
+	canManageClub,
 	onSetWinner,
 	onClearWinner,
 }: {
 	meetingId: string;
 	selfMemberId: string | null;
+	/**
+	 * The viewer's own membership id in this club **from their session**, or null
+	 * when they have none (#752).
+	 *
+	 * A SEPARATE prop from `selfMemberId` rather than a `isSignedIn` boolean, and
+	 * both halves of that matter. Separate, because `selfMemberId` is the
+	 * localStorage name-pick and is non-null for exactly the caller being
+	 * refused — reusing it would predict the opposite of the server's answer. A
+	 * member id rather than a flag, because the route passes `managerActorId`
+	 * (`session?.id ?? null`), which is the same value the server-side seam
+	 * resolves, so the two agree by construction instead of by a rule somebody
+	 * has to keep in step.
+	 */
+	sessionMemberId: string | null;
+	/**
+	 * The viewer is a club admin **as the server understands it** — `canManage`
+	 * from the route, which `canManageClub` grants on an admin membership OR a
+	 * `read_write` impersonation and refuses for `read_only` (#752, ADR-0016).
+	 *
+	 * A SECOND signal rather than folding into `sessionMemberId`, for the reason
+	 * `declineFreesRoles` in the meeting route spells out at length: the client
+	 * must predict the server's answer PER ARM, and the two arms here have
+	 * different evidence. An impersonating superadmin has full admin parity
+	 * server-side (`resolveAdminGrant` returns granted on the impersonation
+	 * before the self-assert arm is reached) and yet has NO `effectiveMemberId`,
+	 * so `sessionMemberId` is null for them. Gating the whole prediction on that
+	 * one proxy would hide the ruling controls from the one principal the gate
+	 * allows outright, and tell them to sign in while they are signed in — the
+	 * exact ADR-0016 regression #762's review caught in six places at once.
+	 */
+	canManageClub: boolean;
 	/** Calls the EXISTING setAward path the minutes UI already uses — the winner
 	 *  lives in `meeting_awards`, not in the vote tables. */
 	onSetWinner: (
@@ -94,6 +140,17 @@ export function VoteCounterPanel({
 	/** Calls the EXISTING clearAward path — see the doc comment above. */
 	onClearWinner: (category: AwardCategory) => void;
 }) {
+	/**
+	 * Whether this viewer may reach the two ruling controls at all (#752).
+	 *
+	 * The gate decides; this only predicts it, per ARM rather than through one
+	 * proxy. `canManageClub` stands alone because it is already the server's
+	 * answer for the admin arm, which `resolveVoteCounterAuthz` reaches BEFORE
+	 * the self-assert arm and which a `read_write` impersonating superadmin
+	 * satisfies with no membership id at all. The session term is the one the
+	 * self-assert arm needs, and only it.
+	 */
+	const canRule = canManageClub || sessionMemberId !== null;
 	const qc = useQueryClient();
 	const tally = useQuery({
 		queryKey: ["vote-tally", meetingId],
@@ -118,6 +175,17 @@ export function VoteCounterPanel({
 	 *  One at a time across the whole console: the form takes over the row it
 	 *  belongs to, and two open at once on a laptop mid-meeting is noise. */
 	const [reasonFor, setReasonFor] = useState<string | null>(null);
+
+	// Clear the open row when the grant goes away, rather than only hiding it.
+	// `reasonFor` is state and `open` below is derived, so suppressing the derived
+	// value alone leaves the key set — and `sessionMemberId` is
+	// `authClient.useSession()`'s answer, which can drop and come back on a
+	// mounted panel. On the way back that would re-render a BLANK ReasonForm on a
+	// row nobody re-opened, because the form's own `text` state went with the
+	// unmount. Set-during-render rather than an effect: React re-renders this
+	// component immediately with the new state and never commits the intermediate
+	// output, so there is no flash of the stale form and no extra paint.
+	if (!canRule && reasonFor !== null) setReasonFor(null);
 
 	const disqualify = useMutation({
 		mutationFn: (v: {
@@ -217,7 +285,15 @@ export function VoteCounterPanel({
 				 */
 				const candidateRow = (r: TallyEntry, trailing?: React.ReactNode) => {
 					const key = rowKey(r);
-					const open = reasonFor === key;
+					// `&& canRule`, because `reasonFor` is STATE and outlives the prop
+					// that opened it. The panel stays mounted across a session ending
+					// (the route re-renders with `managerActorId` null), and without
+					// this the row's Disqualify button disappears while the form it
+					// opened stays on screen with a live submit path — the affordance
+					// ADR-0026 says must go, still reachable by the one caller who
+					// already had it open. Belt and braces with the gate, which refuses
+					// either way.
+					const open = reasonFor === key && canRule;
 					return (
 						<div key={key} className="flex flex-col gap-2">
 							<div className="flex items-start justify-between gap-3">
@@ -227,25 +303,30 @@ export function VoteCounterPanel({
 								</span>
 								{open ? null : (
 									<div className="flex items-center gap-1">
-										<Button
-											size="sm"
-											variant="ghost"
-											className="text-muted-foreground"
-											// Scoped to THIS row. `disqualify.isPending` is one flag
-											// for one shared mutation, so the bare form greyed every
-											// Disqualify button in every category while one was in
-											// flight — the one-flag-many-rows shape `ballot.tsx`
-											// documents having already fixed for `send.isPending`.
-											disabled={
-												disqualify.isPending &&
-												disqualify.variables?.key === key
-											}
-											onClick={() => openReasonForm(key)}
-										>
-											<Ban className="mr-1 size-4" aria-hidden />
-											<span className="sr-only">Disqualify {r.name}</span>
-											<span aria-hidden>Disqualify</span>
-										</Button>
+										{/* #752. The row keeps its name, its count and its
+										    `trailing` control (Set winner); only the ruling
+										    affordance goes, and the card says once why. */}
+										{canRule ? (
+											<Button
+												size="sm"
+												variant="ghost"
+												className="text-muted-foreground"
+												// Scoped to THIS row. `disqualify.isPending` is one flag
+												// for one shared mutation, so the bare form greyed every
+												// Disqualify button in every category while one was in
+												// flight — the one-flag-many-rows shape `ballot.tsx`
+												// documents having already fixed for `send.isPending`.
+												disabled={
+													disqualify.isPending &&
+													disqualify.variables?.key === key
+												}
+												onClick={() => openReasonForm(key)}
+											>
+												<Ban className="mr-1 size-4" aria-hidden />
+												<span className="sr-only">Disqualify {r.name}</span>
+												<span aria-hidden>Disqualify</span>
+											</Button>
+										) : null}
 										{trailing}
 									</div>
 								)}
@@ -305,6 +386,27 @@ export function VoteCounterPanel({
 						<p className="mt-2 text-sm text-muted-foreground">
 							{total} {total === 1 ? "vote" : "votes"} in
 						</p>
+
+						{/* #752. Said ONCE per card, immediately above the lists whose
+						    controls are missing, and only on a card that would otherwise
+						    have offered one — per row it would repeat for every candidate,
+						    and once for the whole console it would sit too far from the
+						    absence it explains. A card with nothing to rule on says
+						    nothing.
+
+						    The sentence is imported from `#/lib/write-proof`, which is
+						    where the GATE's refusal also comes from, so the console and
+						    the server cannot be reworded apart. It names both routes back
+						    rather than offering a "Sign in" button, because the person who
+						    most often needs to act is an officer standing next to the
+						    phone, not the person holding it. */}
+						{!canRule &&
+						t &&
+						(t.results.length > 0 || t.disqualified.length > 0) ? (
+							<p className="mt-2 text-xs text-muted-foreground">
+								{RULING_NEEDS_SESSION_MESSAGE}
+							</p>
+						) : null}
 
 						{/* While the vote is OPEN: names with no counts, so a candidate can
 						    be ruled out mid-vote without turning this into a live
@@ -410,34 +512,43 @@ export function VoteCounterPanel({
 														: `${r.count} ${r.count === 1 ? "vote" : "votes"} excluded`}
 													<span className="block text-xs">{r.reason}</span>
 												</span>
-												<Button
-													size="sm"
-													variant="ghost"
-													// Scoped to this row, like the disqualify control:
-													// one shared mutation must not grey every Undo in
-													// the console.
-													disabled={busy}
-													onClick={() =>
-														undo.mutate({
-															category,
-															candidate: candidatePayload(r),
-															key,
-														})
-													}
-												>
-													{busy ? (
-														<Loader2
-															className="mr-1 size-4 animate-spin"
-															aria-hidden
-														/>
-													) : (
-														<Undo2 className="mr-1 size-4" aria-hidden />
-													)}
-													<span className="sr-only">
-														Undo disqualification of {r.name}
-													</span>
-													<span aria-hidden>Undo</span>
-												</Button>
+												{/* #752, same rule as the Disqualify control above:
+												    undoing is itself a ruling on a named member's
+												    record, it is gated by the same server fn pair,
+												    and it is the correction path for something
+												    already announced to the room — the worst place
+												    to discover a refusal. The ruling, its reason and
+												    its excluded count all stay rendered. */}
+												{canRule ? (
+													<Button
+														size="sm"
+														variant="ghost"
+														// Scoped to this row, like the disqualify control:
+														// one shared mutation must not grey every Undo in
+														// the console.
+														disabled={busy}
+														onClick={() =>
+															undo.mutate({
+																category,
+																candidate: candidatePayload(r),
+																key,
+															})
+														}
+													>
+														{busy ? (
+															<Loader2
+																className="mr-1 size-4 animate-spin"
+																aria-hidden
+															/>
+														) : (
+															<Undo2 className="mr-1 size-4" aria-hidden />
+														)}
+														<span className="sr-only">
+															Undo disqualification of {r.name}
+														</span>
+														<span aria-hidden>Undo</span>
+													</Button>
+												) : null}
 											</div>
 											{/* A failed undo used to say NOTHING: the row stayed put,
 											    the button re-enabled, and "nothing happened" is

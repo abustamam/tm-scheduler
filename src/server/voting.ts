@@ -1,6 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireVoteCounterCapability } from "./guards";
+import {
+	requireSignedInVoteCounter,
+	requireVoteCounterCapability,
+} from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	castVote,
@@ -66,6 +69,16 @@ const candidateRef = z.union([
  * guard-test slice-ordering reason above: the source-grep needs ONE stable
  * substring, `requireVoteCounter(`, that cannot bleed into a neighboring
  * export's body.
+ *
+ * THREE exports use it now, not five. `disqualifyCandidateFn` and
+ * `undoDisqualificationFn` call `requireSignedInVoteCounter` from `guards.ts`
+ * directly (#752), and that needs no local wrapper for the reason above: the
+ * name is DECLARED in another module, so the only text of it in this file is
+ * the import at the top, which is outside every export's slice. The two gate
+ * names are disjoint as substrings — `requireSignedInVoteCounter(` does not
+ * contain `requireVoteCounter(` — which is what lets `voting-authz.guard.test.ts`
+ * assert each export's gate in BOTH directions. Do not rename either toward the
+ * other.
  */
 async function requireVoteCounter(data: {
 	meetingId: string;
@@ -156,9 +169,18 @@ export const closeVoteFn = createServerFn({ method: "POST" })
 const disqualifySchema = operateSchema.extend({ candidate: candidateRef });
 
 /**
- * Rule a candidate out of one award (#723). GATED — Ballot Counter or club
- * admin, exactly as `openVoteFn` / `closeVoteFn` are, and enrolled in
- * `voting-authz.guard.test.ts`'s GATED list alongside them.
+ * Rule a candidate out of one award (#723). GATED — and SINCE #752 the gate is
+ * `requireSignedInVoteCounter` rather than the `requireVoteCounter` its
+ * neighbours call: the Ballot Counter capability PLUS a session.
+ *
+ * WHY this one capability and not its neighbours — the free text about a named
+ * third party, and the activity-log entry the undo cannot remove — is argued in
+ * full on `requireSignedInVoteCounter` (`guards.ts`), and this comment points at
+ * it rather than being a second copy. That is not stylistic: #752's review found
+ * the officer→admin correction had been applied to four of five restatements of
+ * this paragraph, leaving a comment here quoting copy that no longer existed.
+ * `disqualify-session-gate.integration.test.ts` asserts the callers the gate
+ * admits.
  *
  * The lock assert is deliberate and matches open/close rather than
  * `getVoteTally`: disqualifying is an operation on a LIVE vote, not a read of
@@ -177,7 +199,7 @@ export const disqualifyCandidateFn = createServerFn({ method: "POST" })
 		disqualifySchema.extend({ reason: z.string() }).parse(input),
 	)
 	.handler(async ({ data }) => {
-		const authz = await requireVoteCounter(data);
+		const authz = await requireSignedInVoteCounter(data);
 		assertMeetingNotLocked(authz.meetingStatus);
 		await disqualifyCandidate({
 			meetingId: data.meetingId,
@@ -191,11 +213,15 @@ export const disqualifyCandidateFn = createServerFn({ method: "POST" })
 	});
 
 /** Undo a disqualification (#723) — the candidate returns to the ballot and
- *  their prior votes to the tally. Same gate, same lock, same reasons. */
+ *  their prior votes to the tally. Same gate, same lock, same reasons, and
+ *  since #752 that includes the session: undoing is itself a ruling ON a named
+ *  member's record, it writes its own `vote_disqualify_undo` activity entry under
+ *  the asserted actor, and leaving it anonymous would let the same caller the
+ *  gate above refuses simply erase a legitimate Ballot Counter's ruling. */
 export const undoDisqualificationFn = createServerFn({ method: "POST" })
 	.validator((input: unknown) => disqualifySchema.parse(input))
 	.handler(async ({ data }) => {
-		const authz = await requireVoteCounter(data);
+		const authz = await requireSignedInVoteCounter(data);
 		assertMeetingNotLocked(authz.meetingStatus);
 		await undoDisqualification({
 			meetingId: data.meetingId,
