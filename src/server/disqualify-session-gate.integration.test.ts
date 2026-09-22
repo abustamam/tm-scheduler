@@ -281,12 +281,17 @@ describe.skipIf(!hasTestDb)(
 			).resolves.toMatchObject({ allowed: true, via: "admin" });
 		});
 
-		// AC4. The fallback the console's copy literally points at ("ask an
-		// officer to sign in on this device"), so it is asserted rather than
-		// assumed. It runs through `requireVoteCounterCapability`'s existing
-		// `requireClubRole` retry — `resolveVoteCounterAuthz` reads `club_role`
-		// only and does NOT grant this member (pinned next door) — so deleting
-		// that retry makes the refusal message a lie.
+		// AC4. The elected officer is part of the GRANT but is deliberately NOT
+		// named by the console's copy, which says "ask an admin": signing in makes
+		// the session win in `useEffectiveMember`, so a non-admin officer stops
+		// matching the slot and loses the console entirely (#844). The grant is
+		// asserted here anyway, because it is what the gate does and what the ADR
+		// records.
+		//
+		// It runs through `voteCounterCapabilityFor`'s `requireClubRole` retry —
+		// `resolveVoteCounterAuthz` reads `club_role` only and does NOT grant this
+		// member (pinned next door) — so deleting that retry narrows the gate
+		// silently.
 		it("ALLOWS a signed-in ELECTED OFFICER with an open term and club_role member", async () => {
 			await addVoteCounterSlot(club, club.memberId);
 			const officer = await addSignedInMember(club.clubId, "VP Education");
@@ -395,12 +400,19 @@ describe.skipIf(!hasTestDb)(
 			sessionUserId = intruder.userId;
 			// Alive for the gate's own read, gone for every read after it.
 			sessionDiesAfterReads = 1;
+			// The MESSAGE, not a bare `toThrow()`. A bare one is satisfied by
+			// `RULING_NEEDS_SESSION_MESSAGE` or "Meeting not found." just as well,
+			// neither of which is the mechanism this case claims — and the identical
+			// scenario minus the evaporation (above) pins its refusal for exactly
+			// this reason. `NO_PERMISSION_MESSAGE` is #747's binding refusing a
+			// signed-in caller who asserted somebody else's id, which is what must
+			// happen when the session is read once.
 			await expect(
 				requireSignedInVoteCounter({
 					meetingId: club.meetingId,
 					selfMemberId: club.memberId,
 				}),
-			).rejects.toThrow();
+			).rejects.toThrow(NO_PERMISSION_MESSAGE);
 		});
 
 		// The property underneath that case, stated directly so it cannot be
@@ -417,6 +429,29 @@ describe.skipIf(!hasTestDb)(
 					selfMemberId: club.memberId,
 				}),
 			).resolves.toMatchObject({ allowed: true });
+			expect(sessionReads).toBe(1);
+		});
+
+		// BOTH arms, because the case above only reaches one. A self-asserting
+		// Ballot Counter is granted by `resolveVoteCounterAuthz` and returns at
+		// `if (authz.allowed) return authz;` — so the officer retry, the very
+		// branch the gate's docblock says "comes along intact", never runs there.
+		// It is also the branch with the extra work (`requireClubRole` →
+		// `requireMembership`), so it is where a reintroduced read would hide.
+		it("resolves the session exactly once on the OFFICER-retry arm too", async () => {
+			await addVoteCounterSlot(club, club.memberId);
+			const officer = await addSignedInMember(club.clubId, "VP Membership");
+			extraUserIds.push(officer.userId);
+			await testDb.insert(officerTerms).values({
+				membershipId: officer.memberId,
+				position: "vp_membership",
+				termStart: new Date("2026-07-01"),
+			});
+			sessionUserId = officer.userId;
+			sessionReads = 0;
+			await expect(
+				requireSignedInVoteCounter({ meetingId: club.meetingId }),
+			).resolves.toMatchObject({ allowed: true, via: "admin" });
 			expect(sessionReads).toBe(1);
 		});
 

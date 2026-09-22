@@ -176,6 +176,17 @@ export function VoteCounterPanel({
 	 *  belongs to, and two open at once on a laptop mid-meeting is noise. */
 	const [reasonFor, setReasonFor] = useState<string | null>(null);
 
+	// Clear the open row when the grant goes away, rather than only hiding it.
+	// `reasonFor` is state and `open` below is derived, so suppressing the derived
+	// value alone leaves the key set — and `sessionMemberId` is
+	// `authClient.useSession()`'s answer, which can drop and come back on a
+	// mounted panel. On the way back that would re-render a BLANK ReasonForm on a
+	// row nobody re-opened, because the form's own `text` state went with the
+	// unmount. Set-during-render rather than an effect: React re-renders this
+	// component immediately with the new state and never commits the intermediate
+	// output, so there is no flash of the stale form and no extra paint.
+	if (!canRule && reasonFor !== null) setReasonFor(null);
+
 	const disqualify = useMutation({
 		mutationFn: (v: {
 			category: AwardCategory;

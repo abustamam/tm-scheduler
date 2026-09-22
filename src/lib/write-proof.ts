@@ -207,8 +207,8 @@ export function safeRedirect(
  *
  * **"club admin", not "officer", and the narrowing is measured.** #752 specified
  * this sentence as "ask an officer", which is true of the GATE — the officer
- * retry inside `requireVoteCounterCapability` grants an elected officer holding
- * an open term — and false of the SCREEN. Signing in makes the session win in
+ * retry inside `voteCounterCapabilityFor` grants an elected officer holding an
+ * open term — and false of the SCREEN. Signing in makes the session win in
  * `useEffectiveMember`, so `myId` stops matching the Vote Counter slot and
  * `isVoteCounter` goes false; `canManage` is `canManageClub`, which is
  * `clubRole === "admin"` or a `read_write` impersonation and does NOT include

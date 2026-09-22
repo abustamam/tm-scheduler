@@ -713,7 +713,7 @@ async function voteCounterCapabilityFor(
  * Two awaits in a handler is two things a later edit can drop one of. Here there
  * is one call and no way to obtain the capability without having passed the
  * session check, and the existing officer retry inside
- * {@link requireVoteCounterCapability} comes along intact, so the GRANT is any
+ * {@link voteCounterCapabilityFor} comes along intact, so the GRANT is any
  * club admin, any elected officer holding an open term, a `read_write`
  * impersonating superadmin, or the Ballot Counter signing in as themselves.
  *

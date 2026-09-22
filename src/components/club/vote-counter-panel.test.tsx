@@ -772,6 +772,30 @@ describe("VoteCounterPanel ruling controls need a session (#752)", () => {
 		);
 		expect(after.getByText(RULING_NEEDS_SESSION_MESSAGE)).toBeTruthy();
 		expect(disqualifyCandidateFn).not.toHaveBeenCalled();
+
+		// And the row is CLEARED, not merely hidden. A session can come BACK —
+		// `sessionMemberId` is `authClient.useSession()`'s answer — and hiding
+		// alone leaves `reasonFor` set, so the grant returning would re-render a
+		// blank form on a row nobody re-opened (the form's own text state went
+		// with the unmount). Restoring the session is the only way to see the
+		// difference between clearing and hiding.
+		rerender(
+			<QueryClientProvider client={qc}>
+				<VoteCounterPanel
+					meetingId={MEETING_ID}
+					selfMemberId={SELF}
+					sessionMemberId={SELF}
+					canManageClub={false}
+					onSetWinner={vi.fn()}
+					onClearWinner={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+		const restored = card("Best Speaker");
+		expect(
+			await restored.findByRole("button", { name: "Disqualify Ana" }),
+		).toBeTruthy();
+		expect(restored.queryByLabelText(/Reason Ana can't win/)).toBeNull();
 	});
 
 	// The notice is positional, not global: it appears where the missing controls
