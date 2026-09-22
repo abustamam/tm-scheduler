@@ -21,9 +21,20 @@ import {
 
 // Re-export Better-Auth's generated tables so the single `schema` namespace
 // imported by the db client (and the Drizzle adapter) sees user/session/etc.
+// The OAuth tables (#842 / ADR-0027) ride the same re-export: the Drizzle
+// adapter looks a model up by name in THIS namespace, so a table missing here
+// fails at runtime on the first token request, not at build time.
 export {
 	account,
 	accountRelations,
+	jwks,
+	oauthAccessToken,
+	oauthClient,
+	oauthClientAssertion,
+	oauthClientResource,
+	oauthConsent,
+	oauthRefreshToken,
+	oauthResource,
 	session,
 	sessionRelations,
 	user,

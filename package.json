@@ -46,6 +46,7 @@
     "ext:zip:firefox": "cd extension && bunx wxt zip -b firefox"
   },
   "dependencies": {
+    "@better-auth/mcp": "1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@react-pdf/renderer": "^4.5.1",
     "@tailwindcss/vite": "^4.1.18",
@@ -57,7 +58,7 @@
     "@tanstack/react-router-ssr-query": "^1.167.1",
     "@tanstack/react-start": "^1.168.26",
     "@tanstack/router-plugin": "^1.132.0",
-    "better-auth": "^1.5.3",
+    "better-auth": "1.7.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

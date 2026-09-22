@@ -79,7 +79,24 @@ fastest way to comply.
 - **Better-Auth** for authentication (`src/lib/auth.ts`), mounted at `src/routes/api/auth/$.ts`
   via the `server.handlers` pattern. **Magic-link is the only** sign-in method: `src/lib/auth.ts`
   uses the Better-Auth `magicLink` plugin with the Drizzle adapter (`drizzleAdapter(db, { provider: "pg" })`)
-  and the `tanstackStartCookies` plugin — no email+password, no OAuth.
+  and the `tanstackStartCookies` plugin — no email+password, and no OAuth *sign-in*.
+  **That same instance IS an OAuth 2.1 authorization server** (#842 / ADR-0027): `jwt()` +
+  `mcp()` from `@better-auth/mcp` make it issue access tokens for `/api/mcp`, so claude.ai
+  can connect from Anthropic's cloud. OAuth authorizes a CLIENT against a session the person
+  already has — it adds no way to sign in, and one that finds no session lands on `/signin`.
+  Three things that bite:
+  **`tanstackStartCookies()` must be LAST in the plugins array** (it forwards `Set-Cookie`
+  from an `after` hook, so a plugin behind it can set a cookie that never reaches the
+  response — Better Auth logs a startup warning, which is the only signal);
+  **`BETTER_AUTH_URL` is now load-bearing at import**, because `mcp()` validates the resource
+  URL at construction and a missing one takes the app down at boot rather than on first
+  sign-in; and **Dynamic Client Registration is deliberately off**, so adding either
+  `allow*ClientRegistration` option opens a public client-writing endpoint on gavelup.app —
+  `well-known-discovery.integration.test.ts` fails you first, by row count rather than by
+  status. The two discovery documents are served at the ORIGIN ROOT by
+  `src/routes/[.]well-known.$.ts`, which forwards an ALLOWLISTED pair to `auth.handler`
+  rather than rebuilding them; the two are not forwarded alike, and
+  `src/lib/well-known-forward.ts` says why.
   Magic-link delivery goes through **Resend** (`src/lib/email.ts`, `src/lib/magic-link-email.ts`) when `RESEND_API_KEY` is set; with no key it falls back to logging the URL to the server console (dev). The React client is
   `src/lib/auth-client.ts` (`authClient.useSession()` / `signOut()`, see
   `src/routes/_authed.tsx`).
@@ -359,7 +376,13 @@ and the club role sheets, HTML and PDF), digital voting (`meeting_vote_sessions`
 table is a SPARSE override of TI's own window dates, so **row absent = the
 default**, see `CONTEXT.md`'s **Club Officer Training (COT)** entry), and
 notifications (drained by an in-process poller, ADR-0023). Better-Auth's tables
-live in `src/db/auth-schema.ts`. See `CONTEXT.md` for the glossary.
+live in `src/db/auth-schema.ts` — hand-maintained, and since #842 that file also carries the
+eight OAuth tables (`jwks` + seven from `@better-auth/mcp`). **Adding a Better Auth plugin
+means adding its tables there AND re-exporting them from `schema.ts`**: the Drizzle adapter
+resolves a model by export NAME in that namespace, so a missing one is a 500 on a user's
+first request with every build gate green. `auth-schema-oauth-tables.guard.test.ts` reads the
+expected set off the plugins, not off a list — it caught #842's own issue body naming five
+tables where 1.7.5 declares seven. See `CONTEXT.md` for the glossary.
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
 Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then
 `bun run db:generate` + `bun run db:migrate` (do NOT `db:push` the dev DB — see the `db:migrate`
