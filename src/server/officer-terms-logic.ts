@@ -120,48 +120,56 @@ export async function currentOfficersForClub(
  * desired office not already open, and CLOSE (set term_end = now, retaining
  * history) each open office no longer desired. Idempotent — a no-op when the
  * open set already equals `desired`. Runs on whatever client/tx is passed so it
- * can share the caller's transaction. Returns what changed (for activity logs).
+ * can share the caller's transaction. Lock the membership before reading terms
+ * so a waiting writer re-reads the preceding writer's result.
  */
 export async function reconcileOfficerTerms(
 	client: DbClient,
 	membershipId: string,
 	desired: OfficerPosition[],
 ): Promise<{ added: OfficerPosition[]; closed: OfficerPosition[] }> {
-	const desiredSet = new Set(desired);
-	const open = await client
-		.select({ id: officerTerms.id, position: officerTerms.position })
-		.from(officerTerms)
-		.where(
-			and(
-				eq(officerTerms.membershipId, membershipId),
-				isNull(officerTerms.termEnd),
-			),
-		);
-	const openPositions = new Set(open.map((r) => r.position));
-	const now = new Date();
+	return client.transaction(async (tx) => {
+		await tx
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.id, membershipId))
+			.for("update");
+		const desiredSet = new Set(desired);
+		const open = await tx
+			.select({ id: officerTerms.id, position: officerTerms.position })
+			.from(officerTerms)
+			.where(
+				and(
+					eq(officerTerms.membershipId, membershipId),
+					isNull(officerTerms.termEnd),
+				),
+			);
+		const openPositions = new Set(open.map((r) => r.position));
+		const now = new Date();
 
-	const closed: OfficerPosition[] = [];
-	for (const r of open) {
-		if (!desiredSet.has(r.position)) {
-			await client
-				.update(officerTerms)
-				.set({ termEnd: now, updatedAt: now })
-				.where(eq(officerTerms.id, r.id));
-			closed.push(r.position);
+		const closed: OfficerPosition[] = [];
+		for (const r of open) {
+			if (!desiredSet.has(r.position)) {
+				await tx
+					.update(officerTerms)
+					.set({ termEnd: now, updatedAt: now })
+					.where(eq(officerTerms.id, r.id));
+				closed.push(r.position);
+			}
 		}
-	}
 
-	const added: OfficerPosition[] = [];
-	for (const position of desired) {
-		if (!openPositions.has(position)) {
-			await client
-				.insert(officerTerms)
-				.values({ membershipId, position, termStart: now });
-			added.push(position);
+		const added: OfficerPosition[] = [];
+		for (const position of desired) {
+			if (!openPositions.has(position)) {
+				await tx
+					.insert(officerTerms)
+					.values({ membershipId, position, termStart: now });
+				added.push(position);
+			}
 		}
-	}
 
-	return { added: sortByRank(added), closed: sortByRank(closed) };
+		return { added: sortByRank(added), closed: sortByRank(closed) };
+	});
 }
 
 /**
@@ -175,20 +183,25 @@ export async function openOfficerTermIfAbsent(
 	position: OfficerPosition,
 	termStart: Date | null,
 ): Promise<boolean> {
-	const [existing] = await client
-		.select({ id: officerTerms.id })
-		.from(officerTerms)
-		.where(
-			and(
-				eq(officerTerms.membershipId, membershipId),
-				eq(officerTerms.position, position),
-				isNull(officerTerms.termEnd),
-			),
-		)
-		.limit(1);
-	if (existing) return false;
-	await client
-		.insert(officerTerms)
-		.values({ membershipId, position, termStart });
-	return true;
+	return client.transaction(async (tx) => {
+		await tx
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.id, membershipId))
+			.for("update");
+		const [existing] = await tx
+			.select({ id: officerTerms.id })
+			.from(officerTerms)
+			.where(
+				and(
+					eq(officerTerms.membershipId, membershipId),
+					eq(officerTerms.position, position),
+					isNull(officerTerms.termEnd),
+				),
+			)
+			.limit(1);
+		if (existing) return false;
+		await tx.insert(officerTerms).values({ membershipId, position, termStart });
+		return true;
+	});
 }

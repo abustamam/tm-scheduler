@@ -23,6 +23,13 @@ export type ImportConnection =
 	| typeof db
 	| Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+export type ImportWrite = (
+	kind: "person" | "member",
+	rowIndex: number,
+	id: string | null,
+	work: (conn: ImportConnection) => Promise<{ id: string }[]>,
+) => Promise<{ id: string }[]>;
+
 export interface ImportStats {
 	peopleCreated: number;
 	peopleMatchedByCustomerId: number;
@@ -98,7 +105,12 @@ export async function importPeopleAndMembers(
 	rawRows: MappedMember[],
 	options: {
 		conn?: ImportConnection;
-		onResolved?: (rowIndex: number, membershipId: string) => void;
+		onResolved?: (
+			rowIndex: number,
+			membershipId: string,
+			personId: string,
+		) => void;
+		write?: ImportWrite;
 		countryCode?: string;
 	} = {},
 ): Promise<ImportStats> {
@@ -106,6 +118,8 @@ export async function importPeopleAndMembers(
 	// default country code, before the shared planner decides person/membership
 	// fills — so both the CLI runner and the VPE upload commit store E.164.
 	const conn = options.conn ?? db;
+	const write: ImportWrite =
+		options.write ?? ((_kind, _rowIndex, _id, work) => work(conn));
 	const cc = options.countryCode ?? (await loadClubDefaultCountryCode(clubId));
 	const rows: MappedMember[] = rawRows.map((r) => ({
 		...r,
@@ -179,24 +193,26 @@ export async function importPeopleAndMembers(
 			// right to: this call site read `.set(pdRest)` when the field was merely
 			// destructured away, and putting `email` back into that object would
 			// have restored the removed cross-club writer with every gate green.
-			await conn
-				.update(people)
-				.set({
-					customerId: pd.set.customerId,
-					name: pd.set.name,
-					phone: pd.set.phone,
-					originalJoinDate: pd.set.originalJoinDate,
-				})
-				.where(eq(people.id, personId));
+			await write("person", rowIndex, personId, async (conn) =>
+				conn
+					.update(people)
+					.set({
+						customerId: pd.set.customerId,
+						name: pd.set.name,
+						phone: pd.set.phone,
+						originalJoinDate: pd.set.originalJoinDate,
+					})
+					.where(eq(people.id, personId))
+					.returning({ id: people.id }),
+			);
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
 			current.phone = pd.set.phone;
 		} else {
 			if (pd.kind === "ambiguous") stats.ambiguous++;
-			const [created] = await conn
-				.insert(people)
-				.values(pd.values)
-				.returning({ id: people.id });
+			const [created] = await write("person", rowIndex, null, async (conn) =>
+				conn.insert(people).values(pd.values).returning({ id: people.id }),
+			);
 			if (!created) throw new Error("Failed to insert person");
 			personId = created.id;
 			existing.push({
@@ -225,10 +241,13 @@ export async function importPeopleAndMembers(
 		const md = classifyMembership(row, existingMember);
 		let membershipId: string;
 		if (md.kind === "update" && existingMember) {
-			await conn
-				.update(members)
-				.set(md.set)
-				.where(eq(members.id, existingMember.id));
+			await write("member", rowIndex, existingMember.id, async (conn) =>
+				conn
+					.update(members)
+					.set(md.set)
+					.where(eq(members.id, existingMember.id))
+					.returning({ id: members.id }),
+			);
 			membershipId = existingMember.id;
 			stats.membersUpdated++;
 		} else if (md.kind === "insert") {
@@ -238,11 +257,13 @@ export async function importPeopleAndMembers(
 			// for a double-add. The unique index (#489) closes it; DO NOTHING plus a
 			// re-read turns losing that race into a no-op update instead of a 500
 			// that strands the import partway through a file.
-			const [created] = await conn
-				.insert(members)
-				.values({ clubId, personId, ...md.values })
-				.onConflictDoNothing({ target: [members.clubId, members.personId] })
-				.returning({ id: members.id });
+			const [created] = await write("member", rowIndex, null, async (conn) =>
+				conn
+					.insert(members)
+					.values({ clubId, personId, ...md.values })
+					.onConflictDoNothing({ target: [members.clubId, members.personId] })
+					.returning({ id: members.id }),
+			);
 			if (created) {
 				membershipId = created.id;
 				stats.membersCreated++;
@@ -268,10 +289,13 @@ export async function importPeopleAndMembers(
 				if (!raced) throw new Error("Failed to insert member");
 				const racedMd = classifyMembership(row, raced);
 				if (racedMd.kind === "update") {
-					await conn
-						.update(members)
-						.set(racedMd.set)
-						.where(eq(members.id, raced.id));
+					await write("member", rowIndex, raced.id, async (conn) =>
+						conn
+							.update(members)
+							.set(racedMd.set)
+							.where(eq(members.id, raced.id))
+							.returning({ id: members.id }),
+					);
 				}
 				membershipId = raced.id;
 				stats.membersUpdated++;
@@ -281,7 +305,7 @@ export async function importPeopleAndMembers(
 		}
 
 		if (row.officerPosition) stats.skippedOfficerAssignments++;
-		options.onResolved?.(rowIndex, membershipId);
+		options.onResolved?.(rowIndex, membershipId, personId);
 	}
 
 	return stats;

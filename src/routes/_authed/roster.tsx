@@ -906,6 +906,9 @@ function CsvUploadDialog({
 									unchecked to import the roster without granting access.
 									Existing offices are kept.
 								</p>
+								{preview.officerAccessUnavailable && (
+									<output>{preview.officerAccessUnavailable}</output>
+								)}
 								{preview.officerAccessChanges.length === 0 ? (
 									<p className="text-sm">No officer grants proposed.</p>
 								) : (
