@@ -173,19 +173,14 @@ const disqualifySchema = operateSchema.extend({ candidate: candidateRef });
  * `requireSignedInVoteCounter` rather than the `requireVoteCounter` its
  * neighbours call: the Ballot Counter capability PLUS a session.
  *
- * This is the only capability in the whole self-assert set that publishes free
- * text about a NAMED THIRD PARTY, rendered on every polling phone beside their
- * name as an official ruling — and its attribution outlives it, because
- * `logActivity` records `vote_disqualify` with the asserted actor and the reason
- * text, and `undoDisqualificationFn` below deletes the disqualification row but
- * NOT that log entry. So a forged ruling leaves a permanent record naming an
- * innocent member as its author, and nothing in the product can remove it. The
- * argument in full, including why the other five #510 capabilities stay
- * anonymous, is on `requireSignedInVoteCounter` (`guards.ts`).
- *
- * The officer retry comes along inside that gate, so the refusal's "ask an
- * officer to sign in on this device" is true; `disqualify-session-gate.integration.test.ts`
- * asserts each of the four callers it names.
+ * WHY this one capability and not its neighbours — the free text about a named
+ * third party, and the activity-log entry the undo cannot remove — is argued in
+ * full on `requireSignedInVoteCounter` (`guards.ts`), and this comment points at
+ * it rather than being a second copy. That is not stylistic: #752's review found
+ * the officer→admin correction had been applied to four of five restatements of
+ * this paragraph, leaving a comment here quoting copy that no longer existed.
+ * `disqualify-session-gate.integration.test.ts` asserts the callers the gate
+ * admits.
  *
  * The lock assert is deliberate and matches open/close rather than
  * `getVoteTally`: disqualifying is an operation on a LIVE vote, not a read of

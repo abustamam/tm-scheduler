@@ -189,8 +189,8 @@ export function safeRedirect(
  * Table Topics and set the winner, and only this one control refused. "You need
  * to be signed in to do that" in the middle of a working console reads as an
  * outage, which is the surface #714 was filed about, so the copy names the
- * capability and both ways back: an officer signing in on this device, or the
- * Ballot Counter signing in as themselves (#752).
+ * capability and both ways back — see the "club admin, not officer" note below
+ * for which two routes those are and why they are not the whole grant (#752).
  *
  * Exported from here, client-safe, because the CONSOLE has to say the same
  * sentence: `VoteCounterPanel` renders it in place of the Disqualify control

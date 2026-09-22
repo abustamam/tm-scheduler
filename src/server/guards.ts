@@ -615,7 +615,42 @@ export async function requireVoteCounterCapability(input: {
 	meetingId: string;
 	selfMemberId?: string | null;
 }): Promise<VoteCounterAuthz> {
-	const sessionUser = await getSessionUser();
+	return voteCounterCapabilityFor(await getSessionUser(), input);
+}
+
+/**
+ * The body of the gate above, against a session the CALLER has already resolved.
+ *
+ * Split out by #752's review, and the reason is a fail-open race rather than
+ * tidiness. `requireSignedInVoteCounter` below reads the session, refuses
+ * without one, and then delegates here — so before this split the request read
+ * the session TWICE, and the two reads can disagree.
+ *
+ * They disagree in the dangerous direction. If the second read comes back null,
+ * `resolveAdminGrant` short-circuits on `!sessionUserId` to an empty membership
+ * set, `sessionOf` reports `{ present: false }`, and `resolveSelfAssertGrant`
+ * takes its anonymous arm — which GRANTS on `selfMemberId === slotMemberId`
+ * alone. That is precisely the hole #752 exists to close, reopened for a caller
+ * who holds any valid session at the first read and none at the second.
+ *
+ * Two ways to get there, and the second is worse than the first. A caller can
+ * race their own sign-out against their own request, free to retry until it
+ * lands. And `getSessionUser` SWALLOWS exceptions (`catch { return null }`), so
+ * a transient auth or pool failure on the second read is indistinguishable from
+ * "no session" — no attacker timing needed, and correlated with load.
+ *
+ * One read, passed as a REQUIRED argument rather than an optional override:
+ * `undefined` meaning "go and read it" would be ambiguous with `null` meaning
+ * "there is none", which is the confusion `SelfAssertSession`'s discriminated
+ * union exists to make unrepresentable one module over.
+ */
+async function voteCounterCapabilityFor(
+	sessionUser: Awaited<ReturnType<typeof getSessionUser>>,
+	input: {
+		meetingId: string;
+		selfMemberId?: string | null;
+	},
+): Promise<VoteCounterAuthz> {
 	const authz = await resolveVoteCounterAuthz({
 		meetingId: input.meetingId,
 		sessionUserId: sessionUser?.id ?? null,
@@ -701,23 +736,23 @@ export async function requireSignedInVoteCounter(input: {
 	meetingId: string;
 	selfMemberId?: string | null;
 }): Promise<VoteCounterAuthz> {
+	// ONE read, and it is threaded into the capability rather than taken again
+	// there. Reading twice is not a cost question, it is a correctness one: the
+	// two reads can disagree, and the disagreement FAILS OPEN straight back onto
+	// the anonymous self-assert arm. The full argument is on
+	// `voteCounterCapabilityFor` above, and
+	// `disqualify-session-gate.integration.test.ts` reproduces it with a session
+	// that evaporates between reads.
+	const sessionUser = await getSessionUser();
+	if (!sessionUser) throw new Error(RULING_NEEDS_SESSION_MESSAGE);
 	// Before the capability, not after: a caller with no session can never pass
 	// it, so resolving first would cost a meeting read and three joins to reach
 	// the same refusal — and, worse, would let an anonymous caller learn from a
 	// thrown archive/"meeting not found" error whether their guess was right.
 	// Pinned, because a reorder is invisible to every case that uses a meeting
-	// which EXISTS: `disqualify-session-gate.integration.test.ts` refuses a
-	// nonexistent meeting id and asserts it gets this same message.
-	//
-	// The cost of putting it here is a second `getSessionUser()` on the allowed
-	// path, since `requireVoteCounterCapability` opens with its own. Accepted
-	// rather than threaded through as an argument: ruling a candidate out is a
-	// human-paced action a handful of times per meeting, and adding a parameter
-	// to a gate five other server fns call to save one session read on this one
-	// is the wrong trade.
-	const sessionUser = await getSessionUser();
-	if (!sessionUser) throw new Error(RULING_NEEDS_SESSION_MESSAGE);
-	return requireVoteCounterCapability(input);
+	// which EXISTS: the same file refuses a nonexistent meeting id and asserts it
+	// gets this message.
+	return voteCounterCapabilityFor(sessionUser, input);
 }
 
 /** Fetch a roster member by id (server-only, no auth check). */

@@ -728,6 +728,52 @@ describe("VoteCounterPanel ruling controls need a session (#752)", () => {
 		expect(speaker.queryByText(RULING_NEEDS_SESSION_MESSAGE)).toBeNull();
 	});
 
+	// `reasonFor` is STATE, so it outlives the prop that opened the form. Found by
+	// an adversarial review pass: the panel stays mounted when a session ends (the
+	// route re-renders with `managerActorId` null), and the row's Disqualify button
+	// would vanish while the form it opened stayed on screen with a live submit
+	// path — the affordance ADR-0026 says must go, still reachable by the one
+	// caller who already had it open.
+	it("closes an OPEN reason form if the session goes away underneath it", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana")],
+				}),
+			}),
+		);
+		const { rerender, qc } = renderPanel();
+
+		const speaker = card("Best Speaker");
+		await userEvent.click(
+			await speaker.findByRole("button", { name: "Disqualify Ana" }),
+		);
+		expect(speaker.getByLabelText(/Reason Ana can't win/)).toBeTruthy();
+
+		// The session ends. Same mounted component, new props.
+		rerender(
+			<QueryClientProvider client={qc}>
+				<VoteCounterPanel
+					meetingId={MEETING_ID}
+					selfMemberId={SELF}
+					sessionMemberId={null}
+					canManageClub={false}
+					onSetWinner={vi.fn()}
+					onClearWinner={vi.fn()}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const after = card("Best Speaker");
+		expect(after.queryByLabelText(/Reason Ana can't win/)).toBeNull();
+		expect(after.queryAllByRole("button", { name: /^Disqualify / })).toEqual(
+			[],
+		);
+		expect(after.getByText(RULING_NEEDS_SESSION_MESSAGE)).toBeTruthy();
+		expect(disqualifyCandidateFn).not.toHaveBeenCalled();
+	});
+
 	// The notice is positional, not global: it appears where the missing controls
 	// would have been, and a card with nothing to rule on says nothing. Without
 	// this the copy renders three times on an empty console, which is how a

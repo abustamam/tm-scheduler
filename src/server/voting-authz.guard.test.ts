@@ -26,11 +26,11 @@ const GATED = [
  * deliberately do NOT.
  *
  * Both halves are asserted, and the second is the one a sweep cannot state.
- * #752 cuts INSIDE the Ballot Counter arm: ruling a candidate out publishes free
- * text about a named third party and leaves an activity-log entry the undo
- * cannot remove, so it needs a session — while open, close and the tally stay
- * reachable by the account-less Ballot Counter, because that is the workflow
- * ADR-0010 was written for and #510 handed them. Without the NOT half, "require
+ * #752 cuts INSIDE the Ballot Counter arm (the reason is on
+ * `requireSignedInVoteCounter`, `guards.ts`): the ruling pair needs a session,
+ * while open, close and the tally stay reachable by the account-less Ballot
+ * Counter, because that is the workflow ADR-0010 was written for and #510
+ * handed them. Without the NOT half, "require
  * a session everywhere in this file" reads as strictly safer and would silently
  * take the whole console away from a Ballot Counter with no account, mid-meeting
  * — the exact regression #752 names as the one this change could ship.

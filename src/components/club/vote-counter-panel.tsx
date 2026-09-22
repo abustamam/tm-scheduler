@@ -77,16 +77,16 @@ function candidatePayload(r: {
  * would put a live leaderboard in front of the person announcing the result.
  *
  * DISQUALIFICATION AND ITS UNDO ALSO NEED A SESSION (#752), and those two alone.
- * They are the only capabilities here that publish free text about a named third
- * party — and whose attribution outlives them, since the undo removes the ruling
- * row but not its activity-log entry. `requireSignedInVoteCounter` (`guards.ts`)
- * is the boundary and refuses independently of anything rendered here; what this
- * component does is make sure the account-less Ballot Counter never REACHES a
- * control that cannot work, because a refusal mid-meeting with the room watching
- * reads as an outage rather than as policy (ADR-0026's "a control that a session
- * gates must not be SHOWN to a viewer without one"). Everything else on this
- * console is unchanged for that viewer: open, close, tally, Table Topics
- * capture, set and clear winner.
+ * WHY those two and not their neighbours is argued on
+ * `requireSignedInVoteCounter` (`guards.ts`), which is the boundary and refuses
+ * independently of anything rendered here.
+ *
+ * What this component adds is the other half: the account-less Ballot Counter
+ * must never REACH a control that cannot work, because a refusal mid-meeting
+ * with the room watching reads as an outage rather than as policy (ADR-0026's
+ * "a control that a session gates must not be SHOWN to a viewer without one").
+ * Everything else on this console is unchanged for that viewer: open, close,
+ * tally, Table Topics capture, set and clear winner.
  */
 export function VoteCounterPanel({
 	meetingId,
@@ -274,7 +274,15 @@ export function VoteCounterPanel({
 				 */
 				const candidateRow = (r: TallyEntry, trailing?: React.ReactNode) => {
 					const key = rowKey(r);
-					const open = reasonFor === key;
+					// `&& canRule`, because `reasonFor` is STATE and outlives the prop
+					// that opened it. The panel stays mounted across a session ending
+					// (the route re-renders with `managerActorId` null), and without
+					// this the row's Disqualify button disappears while the form it
+					// opened stays on screen with a live submit path — the affordance
+					// ADR-0026 says must go, still reachable by the one caller who
+					// already had it open. Belt and braces with the gate, which refuses
+					// either way.
+					const open = reasonFor === key && canRule;
 					return (
 						<div key={key} className="flex flex-col gap-2">
 							<div className="flex items-start justify-between gap-3">

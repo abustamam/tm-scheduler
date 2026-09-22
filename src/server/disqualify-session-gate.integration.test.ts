@@ -70,6 +70,16 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
  * process cannot have.
  */
 let sessionUserId: string | null = null;
+/**
+ * How many times `auth.api.getSession` has been asked THIS test, and an optional
+ * cap after which it starts answering null.
+ *
+ * Both exist for one case: the gate must resolve the session ONCE. A second read
+ * is not a performance detail — it can disagree with the first, and the
+ * disagreement grants. See "evaporates between reads" below.
+ */
+let sessionReads = 0;
+let sessionDiesAfterReads: number | null = null;
 const request = { headers: new Headers() };
 vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
@@ -78,8 +88,16 @@ vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 vi.mock("#/lib/auth", () => ({
 	auth: {
 		api: {
-			getSession: async () =>
-				sessionUserId ? { user: { id: sessionUserId } } : null,
+			getSession: async () => {
+				sessionReads += 1;
+				if (
+					sessionDiesAfterReads !== null &&
+					sessionReads > sessionDiesAfterReads
+				) {
+					return null;
+				}
+				return sessionUserId ? { user: { id: sessionUserId } } : null;
+			},
 		},
 	},
 }));
@@ -160,9 +178,13 @@ describe.skipIf(!hasTestDb)(
 			club = await seedClub();
 			extraUserIds = [];
 			sessionUserId = null;
+			sessionReads = 0;
+			sessionDiesAfterReads = null;
 		});
 		afterEach(async () => {
 			sessionUserId = null;
+			sessionReads = 0;
+			sessionDiesAfterReads = null;
 			await cleanup(club.clubId, [
 				club.adminUserId,
 				club.memberUserId,
@@ -344,6 +366,60 @@ describe.skipIf(!hasTestDb)(
 			});
 		});
 
+		// THE RACE, reproduced deterministically. Found by an adversarial review
+		// pass on this branch; the first draft of the gate had it.
+		//
+		// The gate used to read the session, refuse without one, and then call
+		// `requireVoteCounterCapability`, which read it AGAIN. If that second read
+		// comes back null, `resolveAdminGrant` short-circuits on `!sessionUserId`
+		// to an empty membership set, `sessionOf` reports `{ present: false }`, and
+		// `resolveSelfAssertGrant` takes its ANONYMOUS arm — granting on
+		// `selfMemberId === slotMemberId` alone. So a caller holding any valid
+		// session at the first read and none at the second forges a ruling
+		// attributed to the innocent slot holder: exactly the hole #752 closes.
+		//
+		// Reachable two ways, and the second needs no timing at all. A caller can
+		// race their own sign-out against their own request and retry until it
+		// lands; and `getSessionUser` SWALLOWS exceptions (`catch { return null }`),
+		// so a transient auth or pool failure on the second read is
+		// indistinguishable from "no session" — which here means "grant".
+		//
+		// The intruder is deliberately a real signed-in member of this club who is
+		// NOT the Ballot Counter, asserting the Ballot Counter's published id. With
+		// one session read they are bound by #747 and refused. With two they were
+		// granted.
+		it("REFUSES a signed-in forger whose session evaporates between reads", async () => {
+			await addVoteCounterSlot(club, club.memberId);
+			const intruder = await addSignedInMember(club.clubId, "Races The Gate");
+			extraUserIds.push(intruder.userId);
+			sessionUserId = intruder.userId;
+			// Alive for the gate's own read, gone for every read after it.
+			sessionDiesAfterReads = 1;
+			await expect(
+				requireSignedInVoteCounter({
+					meetingId: club.meetingId,
+					selfMemberId: club.memberId,
+				}),
+			).rejects.toThrow();
+		});
+
+		// The property underneath that case, stated directly so it cannot be
+		// satisfied by the refusal arriving for some other reason: the gate asks
+		// for the session EXACTLY ONCE. Two reads of mutable auth state is the bug
+		// above, whatever the second read happens to return on the day.
+		it("resolves the session exactly once per call", async () => {
+			await addVoteCounterSlot(club, club.memberId);
+			sessionUserId = club.memberUserId;
+			sessionReads = 0;
+			await expect(
+				requireSignedInVoteCounter({
+					meetingId: club.meetingId,
+					selfMemberId: club.memberId,
+				}),
+			).resolves.toMatchObject({ allowed: true });
+			expect(sessionReads).toBe(1);
+		});
+
 		// A session that resolves to NO membership in this club — an outsider
 		// holding an account. #747 refuses them at the seam rather than letting
 		// them fall back to the anonymous arm, and that has to survive a gate
@@ -382,9 +458,13 @@ describe.skipIf(!hasTestDb)(
 		beforeEach(async () => {
 			club = await seedClub();
 			sessionUserId = null;
+			sessionReads = 0;
+			sessionDiesAfterReads = null;
 		});
 		afterEach(async () => {
 			sessionUserId = null;
+			sessionReads = 0;
+			sessionDiesAfterReads = null;
 			await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 		});
 
