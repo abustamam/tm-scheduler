@@ -22,6 +22,7 @@ import { logActivity } from "./activity";
 import { setPlanStatus } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireClubRole } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { loadMeetingShapeDefs, roleDefScope } from "./meeting-templates-logic";
 import { resolveProjectDisplay } from "./project-picker-logic";
 
@@ -122,20 +123,9 @@ export async function applyAddSpeakerSlot(input: {
 	actorMemberId: string | null;
 }) {
 	return db.transaction(async (tx) => {
-		// Lock first, then resolve WHICH roles this meeting's "+ Add speaker" means
-		// from the row it returns. `clubRoles` is driven by `templateId`, a
-		// meeting-row column: read from a pre-transaction copy, a conversion
-		// committing in the window resolves the OTHER shape's Speaker, and the pair
-		// lands on a lineup the meeting no longer has. Same row, same lock, same
-		// reason as `applyAddRoleSlot`.
-		//
-		// NOT the status gate — that one lives in `requireMeetingAgendaEditor`
-		// (`meeting-authz-logic.ts`) because this path is public and session-less,
-		// and it still runs outside any transaction. Closing that window means
-		// touching an authorization file; it is tracked separately, and this
-		// comment is here so the next reader does not mistake the lock below for
-		// covering it.
+		// Status and shape decisions must use the row acquired after any lock wait.
 		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+		assertMeetingNotLocked(meeting.status);
 		const { speakerRoleId, evaluatorRoleId, speakerEnabled, evaluatorEnabled } =
 			await clubRoles(tx, meeting.clubId, meeting.templateId);
 		if (!speakerEnabled) {
@@ -307,50 +297,58 @@ export async function applyRemoveRoleSlot(input: {
 	slotId: string;
 	actorMemberId: string | null;
 }) {
-	const [slot] = await db
-		.select({
-			id: roleSlots.id,
-			meetingId: roleSlots.meetingId,
-			roleDefinitionId: roleSlots.roleDefinitionId,
-			status: roleSlots.status,
-			assignedMemberId: roleSlots.assignedMemberId,
-			clubId: meetings.clubId,
-			templateId: meetings.templateId,
-			meetingStatus: meetings.status,
-		})
+	// Locate first, then lock meeting before slot, matching the lineup editors.
+	const [target] = await db
+		.select({ meetingId: roleSlots.meetingId })
 		.from(roleSlots)
-		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.where(eq(roleSlots.id, input.slotId))
 		.limit(1);
-	if (!slot) throw new Error("Role not found.");
-	assertMeetingNotLocked(slot.meetingStatus);
-	if (slot.assignedMemberId || slot.status !== "open") {
-		throw new Error("Release the role before removing it.");
-	}
+	if (!target) throw new Error("Role not found.");
 
-	// The meeting's declared SHAPE, matching `applyAddRoleSlot`'s paired check —
-	// the two have to name the same pair or a role becomes addable but not
-	// removable.
-	const shape = await loadMeetingShapeDefs(db, slot.clubId, slot.templateId);
-	if (pairedRoleIds(shape).has(slot.roleDefinitionId)) {
-		throw new Error("Remove speakers with the speaker controls.");
-	}
-
-	await db.transaction(async (tx) => {
+	return db.transaction(async (tx) => {
+		const meeting = await lockMeetingForSlotEdit(tx, target.meetingId);
+		assertMeetingNotLocked(meeting.status);
+		const [slot] = await tx
+			.select()
+			.from(roleSlots)
+			.where(
+				and(
+					eq(roleSlots.id, input.slotId),
+					eq(roleSlots.meetingId, meeting.id),
+				),
+			)
+			.for("update")
+			.limit(1);
+		if (!slot) throw new Error("Role not found.");
+		if (
+			slot.assignedMemberId ||
+			slot.assignedGuestId ||
+			slot.status !== "open"
+		) {
+			throw new Error("Release the role before removing it.");
+		}
+		const shape = await loadMeetingShapeDefs(
+			tx,
+			meeting.clubId,
+			meeting.templateId,
+		);
+		if (pairedRoleIds(shape).has(slot.roleDefinitionId)) {
+			throw new Error("Remove speakers with the speaker controls.");
+		}
 		await tx.delete(roleSlots).where(eq(roleSlots.id, input.slotId));
 		await logActivity(tx, {
-			clubId: slot.clubId,
+			clubId: meeting.clubId,
 			actorMemberId: input.actorMemberId,
 			action: "meeting_edit",
 			targetType: "meeting",
-			targetId: slot.meetingId,
+			targetId: meeting.id,
 			detail: {
 				change: "role_removed",
 				roleDefinitionId: slot.roleDefinitionId,
 			},
 		});
+		return { clubId: meeting.clubId };
 	});
-	return { clubId: slot.clubId };
 }
 
 /** `detail.change` values `backfillMissingRoleSlots` can log — a plain `string`
@@ -374,20 +372,35 @@ type BackfillChangeLabel = "template_sync" | "role_enabled";
  *  `standing` is the only thing between a promoted Chief Judge and an open slot
  *  on every upcoming meeting. One gate at the one statement that writes, not
  *  two predicates at two call sites that can drift. */
-async function backfillMissingRoleSlots(input: {
-	clubId: string;
-	meetingIds: string[];
-	defs: { id: string; name: string; standing: boolean; enabled: boolean }[];
-	actorMemberId: string | null;
-	changeLabel: BackfillChangeLabel;
-}): Promise<{ meetingsChanged: number; rolesAdded: string[] }> {
+async function backfillMissingRoleSlots(
+	input: {
+		clubId: string;
+		meetingIds: string[];
+		defs: { id: string; name: string; standing: boolean; enabled: boolean }[];
+		actorMemberId: string | null;
+		changeLabel: BackfillChangeLabel;
+	},
+	conn: DbOrTx = db,
+): Promise<{ meetingsChanged: number; rolesAdded: string[] }> {
 	const rolesAdded = new Set<string>();
 	let meetingsChanged = 0;
 	const defs = input.defs.filter((d) => d.standing && d.enabled);
 	if (defs.length === 0) return { meetingsChanged: 0, rolesAdded: [] };
 
-	await db.transaction(async (tx) => {
-		for (const meetingId of input.meetingIds) {
+	await conn.transaction(async (tx) => {
+		// Multi-meeting backfills acquire locks in the same order, independent of query order.
+		for (const meetingId of [...new Set(input.meetingIds)].sort()) {
+			const meeting = await lockMeetingForSlotEdit(tx, meetingId);
+			// Candidate ids came from an unlocked query. Preserve each caller's
+			// eligibility rules if a conversion/reschedule/cancellation won the lock.
+			if (
+				meeting.clubId !== input.clubId ||
+				meeting.templateId !== null ||
+				meeting.scheduledAt <= new Date() ||
+				(input.changeLabel === "role_enabled" && meeting.status === "cancelled")
+			)
+				continue;
+			assertMeetingNotLocked(meeting.status);
 			const present = await tx
 				.select({ roleDefinitionId: roleSlots.roleDefinitionId })
 				.from(roleSlots)
@@ -478,8 +491,11 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
  *  are not cancelled. Used by the role enable/disable toggle (#368): past
  *  meetings are the club's history and cancelled ones aren't going to run, so
  *  neither should gain or lose slots when a role's `enabled` flag flips. */
-async function futureNonCancelledMeetingIds(clubId: string): Promise<string[]> {
-	const rows = await db
+async function futureNonCancelledMeetingIds(
+	clubId: string,
+	conn: DbOrTx = db,
+): Promise<string[]> {
+	const rows = await conn
 		.select({ id: meetings.id })
 		.from(meetings)
 		.where(
@@ -598,25 +614,28 @@ async function removeOpenRoleSlots(
  *  assigned to someone — always 0 when enabling) and `meetingsChanged` +
  *  `rolesAdded` (0 / `[]` when disabling, or when enabling was a no-op) so the
  *  caller can build an informative toast either way. */
-export async function syncSlotsForRoleEnabledChange(input: {
-	clubId: string;
-	roleDefinitionId: string;
-	roleName: string;
-	defaultCount: number;
-	enabled: boolean;
-	/** `role_definitions.standing` (#801). A NON-standing role is not part of
-	 *  the club's standard meeting shape, so enabling it must backfill nothing:
-	 *  `enabled` says "the club still runs this role", `standing` says "on every
-	 *  ordinary meeting", and only the second is a claim about upcoming
-	 *  agendas. Passed in by the caller, which has already read the row. */
-	standing: boolean;
-	actorMemberId: string | null;
-}): Promise<{
+export async function syncSlotsForRoleEnabledChange(
+	input: {
+		clubId: string;
+		roleDefinitionId: string;
+		roleName: string;
+		defaultCount: number;
+		enabled: boolean;
+		/** `role_definitions.standing` (#801). A NON-standing role is not part of
+		 *  the club's standard meeting shape, so enabling it must backfill nothing:
+		 *  `enabled` says "the club still runs this role", `standing` says "on every
+		 *  ordinary meeting", and only the second is a claim about upcoming
+		 *  agendas. Passed in by the caller, which has already read the row. */
+		standing: boolean;
+		actorMemberId: string | null;
+	},
+	conn: DbOrTx = db,
+): Promise<{
 	keptClaimedMeetings: number;
 	meetingsChanged: number;
 	rolesAdded: string[];
 }> {
-	const meetingIds = await futureNonCancelledMeetingIds(input.clubId);
+	const meetingIds = await futureNonCancelledMeetingIds(input.clubId, conn);
 	if (meetingIds.length === 0) {
 		return { keptClaimedMeetings: 0, meetingsChanged: 0, rolesAdded: [] };
 	}
@@ -631,26 +650,29 @@ export async function syncSlotsForRoleEnabledChange(input: {
 		return { ...result, rolesAdded: [] };
 	}
 
-	const defs = await loadMeetingShapeDefs(db, input.clubId, null);
+	const defs = await loadMeetingShapeDefs(conn, input.clubId, null);
 	const isPaired = pairedRoleIds(defs).has(input.roleDefinitionId);
 	if (isPaired || input.defaultCount < 1) {
 		return { keptClaimedMeetings: 0, meetingsChanged: 0, rolesAdded: [] };
 	}
 
-	const result = await backfillMissingRoleSlots({
-		clubId: input.clubId,
-		meetingIds,
-		defs: [
-			{
-				id: input.roleDefinitionId,
-				name: input.roleName,
-				standing: input.standing,
-				enabled: true,
-			},
-		],
-		actorMemberId: input.actorMemberId,
-		changeLabel: "role_enabled",
-	});
+	const result = await backfillMissingRoleSlots(
+		{
+			clubId: input.clubId,
+			meetingIds,
+			defs: [
+				{
+					id: input.roleDefinitionId,
+					name: input.roleName,
+					standing: input.standing,
+					enabled: true,
+				},
+			],
+			actorMemberId: input.actorMemberId,
+			changeLabel: "role_enabled",
+		},
+		conn,
+	);
 	return { keptClaimedMeetings: 0, ...result };
 }
 
@@ -687,6 +709,7 @@ export async function applyRemoveSpeakerSlot(input: {
 	// column on the very row locked below — so it is inside as well.
 	return db.transaction(async (tx) => {
 		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+		assertMeetingNotLocked(meeting.status);
 		const { speakerRoleId, evaluatorRoleId } = await clubRoles(
 			tx,
 			meeting.clubId,
@@ -791,50 +814,6 @@ export async function applyRemoveSpeakerSlot(input: {
 }
 
 /**
- * Serialize every slot mutation for one meeting on the MEETING row.
- *
- * The reads that decide numbering and pairing used to run on a pre-transaction
- * snapshot, which is not good enough once those reads DECIDE something: two
- * concurrent "+ Add speaker" calls each computed the same next `slot_index` and
- * both inserted it (no unique index stops them, measured as `[0, 1, 1]`), and a
- * reorder racing an add could compute evaluator targets from the pre-move order
- * and commit them afterwards — links silently describing an order the meeting no
- * longer has, which is the one thing positional pairing promises.
- *
- * The MEETING row rather than the slot rows, for two reasons: a slot edit
- * changes which slots exist, so there is no fixed row set to lock up front, and
- * one lock per meeting cannot deadlock the way two swap targets locked in
- * opposite orders can (two officers reordering the same lineup in opposite
- * directions was an AB-BA deadlock, surfacing as a 500).
- *
- * RETURNS THE LOCKED ROW, and a caller that gates on `status` or `templateId`
- * must read them from THAT copy rather than from one taken before the
- * transaction. Both columns live on this very row: under READ COMMITTED a
- * concurrent "complete meeting" or template change commits between an unlocked
- * read of them and the insert that follows, and the write then lands on a
- * meeting the gate it passed would now refuse. `mcp/tools/assign-roles.ts` takes
- * this same row `FOR UPDATE` to re-read `status` for exactly that reason.
- *
- * Does NOT serialize against `claimSlot`, which locks the slot row instead — see
- * TODOS.md for the remove-vs-claim window that leaves open.
- */
-async function lockMeetingForSlotEdit(tx: DbOrTx, meetingId: string) {
-	const [locked] = await tx
-		.select({
-			id: meetings.id,
-			clubId: meetings.clubId,
-			status: meetings.status,
-			templateId: meetings.templateId,
-		})
-		.from(meetings)
-		.where(eq(meetings.id, meetingId))
-		.for("update")
-		.limit(1);
-	if (!locked) throw new Error("Meeting not found.");
-	return locked;
-}
-
-/**
  * Positional pairing (Evaluator N ↔ Speaker N): renumber both paired roles'
  * slots densely (0..n-1, by current order) and point evaluator i at speaker i
  * (surplus evaluators at nothing). Runs inside every mutation that changes
@@ -888,13 +867,7 @@ export async function realignEvaluatorPairs(
 				inArray(roleSlots.roleDefinitionId, roleIds),
 			),
 		);
-	// `id` breaks a tie on `slotIndex`. Duplicate indices are constructible — two
-	// concurrent adds each compute the next index from a read taken before their
-	// transaction, and no unique index stops them — and Postgres does not promise
-	// a return order, so without the tiebreaker the same rows could renumber
-	// differently on two runs. Pairing stays consistent with the numbering either
-	// way (one `speakers` array drives both), but "which tied slot became 1" is
-	// worth being reproducible.
+	// Stable ordering also heals duplicate indices left by older unlocked writers.
 	const ofRole = (roleId: string) =>
 		rows
 			.filter((r) => r.roleDefinitionId === roleId)
@@ -929,45 +902,41 @@ async function applyMoveSlot(
 	},
 	kind: "speaker" | "evaluator",
 ) {
-	const [target] = await db
-		.select({
-			id: roleSlots.id,
-			meetingId: roleSlots.meetingId,
-			roleDefinitionId: roleSlots.roleDefinitionId,
-			slotIndex: roleSlots.slotIndex,
-			isSpeakerRole: roleDefinitions.isSpeakerRole,
-		})
+	const [located] = await db
+		.select({ meetingId: roleSlots.meetingId })
 		.from(roleSlots)
-		// No join to `meetings` any more, deliberately: `clubId` and `templateId`
-		// are meeting-ROW columns that gate the write, so they come off the LOCKED
-		// row below and a copy taken here would be exactly the stale one.
-		//
-		// What this read still supplies is deliberate too, and none of it is a
-		// meeting-row column. `meetingId` says which meeting to lock; `slotIndex`
-		// and `roleDefinitionId` scope the sibling read and `movedThePairedLineup`
-		// below, both re-derived inside the lock from the slot rows themselves. And
-		// `isSpeakerRole` is judged UNLOCKED by the speaker arm of `kindOk`, which
-		// is correct rather than an oversight: it is a column on the club's role
-		// BANK, not on the meeting, and `loadMeetingSlots` reads that same bank
-		// column to decide which cards render reorder arrows. Judging it from the
-		// bank is what keeps the gate and the arrows agreeing; putting it behind
-		// the meeting lock would not make it fresher, only differently stale.
-		.innerJoin(
-			roleDefinitions,
-			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-		)
 		.where(eq(roleSlots.id, input.slotId))
 		.limit(1);
-	if (!target) {
-		throw new Error(
-			kind === "speaker"
-				? "Speaker slot not found."
-				: "Evaluator slot not found.",
-		);
-	}
+	const notFound =
+		kind === "speaker"
+			? "Speaker slot not found."
+			: "Evaluator slot not found.";
+	if (!located) throw new Error(notFound);
 
 	return db.transaction(async (tx) => {
-		const meeting = await lockMeetingForSlotEdit(tx, target.meetingId);
+		const meeting = await lockMeetingForSlotEdit(tx, located.meetingId);
+		assertMeetingNotLocked(meeting.status);
+		// A conversion can repoint a slot to a different bank role while we wait.
+		const [target] = await tx
+			.select({
+				id: roleSlots.id,
+				meetingId: roleSlots.meetingId,
+				roleDefinitionId: roleSlots.roleDefinitionId,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
+			})
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.where(
+				and(
+					eq(roleSlots.id, input.slotId),
+					eq(roleSlots.meetingId, meeting.id),
+				),
+			)
+			.limit(1);
+		if (!target) throw new Error(notFound);
 		// Resolved from the LOCKED row: `templateId` names the meeting's shape, and
 		// the shape is what says which role is the paired evaluator — the fact both
 		// the `kind` check below and the pairing realign at the end turn on. A

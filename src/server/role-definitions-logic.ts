@@ -508,17 +508,7 @@ export async function applyRoleDefinitionSetEnabled(
 		}
 	}
 
-	await db
-		.update(roleDefinitions)
-		.set({ enabled: input.enabled })
-		.where(
-			and(
-				eq(roleDefinitions.id, input.roleId),
-				eq(roleDefinitions.clubId, input.clubId),
-			),
-		);
-
-	const result = await syncSlotsForRoleEnabledChange({
+	const syncInput = {
 		clubId: input.clubId,
 		roleDefinitionId: input.roleId,
 		roleName: current.name,
@@ -526,7 +516,33 @@ export async function applyRoleDefinitionSetEnabled(
 		enabled: input.enabled,
 		standing: current.standing,
 		actorMemberId: input.actorMemberId,
-	});
+	};
+	const setFlag = (
+		conn: typeof db | Parameters<Parameters<(typeof db)["transaction"]>[0]>[0],
+	) =>
+		conn
+			.update(roleDefinitions)
+			.set({ enabled: input.enabled })
+			.where(
+				and(
+					eq(roleDefinitions.id, input.roleId),
+					eq(roleDefinitions.clubId, input.clubId),
+				),
+			);
+
+	let result: Awaited<ReturnType<typeof syncSlotsForRoleEnabledChange>>;
+	if (input.enabled) {
+		// Backfill can refuse a completed meeting. Keep the flag and slots atomic,
+		// taking meeting locks before the role-row UPDATE, like conversion does.
+		result = await db.transaction(async (tx) => {
+			const synced = await syncSlotsForRoleEnabledChange(syncInput, tx);
+			await setFlag(tx);
+			return synced;
+		});
+	} else {
+		await setFlag(db);
+		result = await syncSlotsForRoleEnabledChange(syncInput);
+	}
 	return {
 		ok: true as const,
 		keptClaimedMeetings: result.keptClaimedMeetings,

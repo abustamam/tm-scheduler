@@ -3287,45 +3287,11 @@ describe.skipIf(!hasTestDb)("translation onto a diverged private copy", () => {
 	});
 });
 
-/**
- * The deadlock the `FOR UPDATE` lock introduced, reproduced rather than
- * asserted about.
- *
- * `ensureAgendaDraft` takes `meetings FOR UPDATE` FIRST and writes its other
- * resources late; a conversion reaches those resources first and updates
- * `meetings` LAST. Opposite orders over the same two resources is a lock cycle,
- * Postgres breaks it with SQLSTATE 40P01, and that is not a unique violation —
- * so before the catch, `runAction` toasted the driver's own `deadlock detected`
- * at an officer.
- *
- * WHICH resource cycles changed with #801, and the reasoning is worth keeping
- * because the obvious candidate still does NOT work. `meeting_templates
- * .meeting_id` is a foreign key, so inserting a private copy takes
- * `FOR KEY SHARE` on the referenced `meetings` row — which the edit's
- * `FOR UPDATE` conflicts with. That serializes the two INSERT-vs-lock orderings
- * completely: whichever side reaches `meetings` first, the other simply waits.
- *
- * It used to be `role_slots`, because the fork RE-POINTED this meeting's slots
- * onto freshly materialized definitions. That re-point is gone — ids no longer
- * move — so the fork never touches `role_slots` at all, and the old cycle
- * cannot be built. The resource that replaced it is `role_definitions`:
- * `materializeTemplateRoles` INSERTs a bank row for a declared key the club
- * does not hold, and `role_definitions_club_key_unique` makes a concurrent
- * insert of the SAME (club, key) wait on the first writer — even under
- * `ON CONFLICT DO NOTHING`, which waits and then does nothing. Same shape,
- * same translation, a resource the code still reaches.
- *
- * The conversion side is played by hand — hold the contested (club, key), then
- * ask for the `meetings` row — because `applyTemplateConversion` opens its own
- * transaction and offers nowhere to pause between those two writes.
- * Hand-played so the cycle is BUILT rather than raced for; a version that just
- * fires both concurrently deadlocks on some interleavings and passes vacuously
- * on the rest. The ordering below decides only the VICTIM, since each waiter
- * arms its own `deadlock_timeout` (1s here) when it begins waiting and
- * whichever fires first runs the detector and aborts itself. Making the agenda
- * edit wait first makes it the side that reports.
+/** Exercise deadlock error translation with a synthetic reverse-order writer.
+ * Actual template conversion now takes the meeting lock first (#835), so this
+ * deliberately hostile ordering is not a reproduction of that production path.
  */
-describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
+describe.skipIf(!hasTestDb)("ensureAgendaDraft deadlock translation", () => {
 	/** Block until a backend is actually WAITING to write `role_definitions` —
 	 *  polled rather than slept for, so the cycle is confirmed built instead of
 	 *  assumed. Matched on the statement text as well as the wait, since a
@@ -3394,7 +3360,7 @@ describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
 		const ROLLBACK = new Error("rollback the hand-played conversion");
 
 		const conversion = testDb.transaction(async (tx) => {
-			// The conversion's own materialize, in lock terms: it claims
+			// The synthetic writer claims
 			// (club, contestedKey) in `role_definitions_club_key_unique` while
 			// holding nothing on `meetings`.
 			await tx.insert(roleDefinitions).values({
