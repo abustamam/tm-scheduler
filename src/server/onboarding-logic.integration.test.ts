@@ -173,18 +173,19 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 	});
 
 	it("allows editing the admin email while the Person is unlinked", async () => {
+		const runId = randomUUID();
 		const res = await createClubWithAdmin({
 			clubName: "Editable Club",
 			clubNumber: uniqueNumber(),
 			adminName: "Edit Me",
-			adminEmail: "old@example.com",
+			adminEmail: `old-${runId}@test.example`,
 			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(res.clubId);
 
 		const out = await updateUnclaimedAdminEmail({
 			clubId: res.clubId,
-			email: "new@example.com",
+			email: `new-${runId}@test.example`,
 		});
 		expect(out.ok).toBe(true);
 		expect(out.personId).toBe(res.personId);
@@ -193,7 +194,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			.select({ email: people.email })
 			.from(people)
 			.where(eq(people.id, res.personId));
-		expect(person.email).toBe("new@example.com");
+		expect(person.email).toBe(`new-${runId}@test.example`);
 	});
 
 	it("the corrected admin email reaches the column sign-in actually matches", async () => {
