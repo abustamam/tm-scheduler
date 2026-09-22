@@ -546,31 +546,9 @@ export async function loadAgendaDraft(
 const AGENDA_CONCURRENT_EDIT_MESSAGE =
 	"Another change to this agenda was saved at the same moment. Reload and try again.";
 
-/**
- * What an officer reads when Postgres broke a lock cycle by killing this
- * transaction — again a sentence, never `deadlock detected`.
- *
- * Reachable because `ensureAgendaDraft` and `applyTemplateConversion` take the
- * same two resources in OPPOSITE orders on one meeting: this function takes
- * `meetings FOR UPDATE` first and re-points that meeting's `role_slots` late,
- * while a conversion writes `role_slots` first and updates `meetings` last.
- * A conversion and a first agenda edit in flight together therefore deadlock,
- * and 40P01 is not a unique violation, so without this the driver's own
- * message reached the toast.
- *
- * Note it is `role_slots` that cycles, NOT `meeting_templates`, even though
- * that is the pair the two lock orders appear to fight over.
- * `meeting_templates.meeting_id` is a foreign key, so inserting a private copy
- * takes `FOR KEY SHARE` on the referenced `meetings` row — which conflicts
- * with the `FOR UPDATE` above and serializes those two orderings completely,
- * with no cycle available. The conversion arm that reaches `role_slots`
- * holding nothing on `meetings` is the one that REMOVES a template
- * (`templateId === null`), which inserts no copy and so takes no key share.
- * `meeting-agenda-edit-logic.integration.test.ts` builds exactly that cycle.
- *
- * No automatic retry: the loser's transaction is already rolled back, and a
- * silent retry would re-run a write the officer has no way to know happened
- * twice. Asking is honest and the case is rare.
+/** Translate a database deadlock into a retryable user-facing refusal.
+ * Conversion now locks the meeting first too (#835); the integration test uses
+ * an intentionally reversed synthetic writer to exercise this error fallback.
  */
 const AGENDA_DEADLOCK_MESSAGE =
 	"Someone else was changing this meeting. Please try again.";

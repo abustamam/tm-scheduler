@@ -338,7 +338,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(m.joinedAt).not.toBeNull();
 	});
 
-	it("opens an officer term for the parsed position on a fresh membership", async () => {
+	it("does not grant the parsed office on a fresh membership", async () => {
 		const clubId = await club();
 		await importPeopleAndMembers(clubId, [
 			row({
@@ -352,12 +352,12 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.select()
 			.from(members)
 			.where(eq(members.clubId, clubId));
-		expect(await openOffices(m.id)).toEqual(["vp_education"]);
+		expect(await openOffices(m.id)).toEqual([]);
 	});
 
 	it("fill-only: never touches a membership that already holds an office", async () => {
 		const clubId = await club();
-		// First import opens a president term.
+		// Import the roster without granting the CSV office.
 		await importPeopleAndMembers(clubId, [
 			row({
 				customerId: "PN-K",
@@ -370,7 +370,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.select()
 			.from(members)
 			.where(eq(members.clubId, clubId));
-		// A VPE later corrects it in-app to secretary (close president, open secretary).
+		// A VPE explicitly assigns secretary in-app.
 		const { reconcileOfficerTerms } = await import(
 			"#/server/officer-terms-logic"
 		);

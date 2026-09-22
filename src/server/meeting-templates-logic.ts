@@ -41,6 +41,7 @@ import {
 	linkEvaluatorsToSpeakers,
 	type MeetingSlotDefs,
 } from "./meeting-create-logic";
+import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 
 export type DbOrTx =
 	| typeof db
@@ -927,19 +928,10 @@ export async function applyTemplateConversion(input: {
 	}
 
 	return database.transaction(async (tx) => {
-		const [meeting] = await tx
-			.select({
-				id: meetings.id,
-				status: meetings.status,
-				clubId: meetings.clubId,
-				templateId: meetings.templateId,
-			})
-			.from(meetings)
-			.where(eq(meetings.id, meetingId))
-			.limit(1);
-		if (!meeting || meeting.clubId !== clubId) {
-			throw new Error("Meeting not found.");
-		}
+		// Lock before copying templates or reading slots: the conversion plan must
+		// include slot edits committed while we waited.
+		const meeting = await lockMeetingForSlotEdit(tx, meetingId);
+		if (meeting.clubId !== clubId) throw new Error("Meeting not found.");
 		// The canonical lock (#150 / ADR-0012) covers `completed`. A CANCELLED
 		// meeting is not locked by it, but reshaping one is equally pointless, so
 		// it is refused here rather than by widening the shared helper — every

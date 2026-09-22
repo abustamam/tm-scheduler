@@ -32,14 +32,23 @@ export const previewMemberUpload = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return previewMemberImport(data.clubId, data.csv);
+		return previewMemberImport(data.clubId, data.csv, user.id);
 	});
 
 /** Commit the upload after the admin confirms the preview. */
 export const commitMemberUpload = createServerFn({ method: "POST" })
-	.validator((i: unknown) => uploadSchema.parse(i))
+	.validator((i: unknown) =>
+		uploadSchema
+			.extend({
+				officerApprovals: z.array(z.string().max(4096)).max(1000).default([]),
+			})
+			.parse(i),
+	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return commitMemberImport(data.clubId, data.csv);
+		return commitMemberImport(data.clubId, data.csv, {
+			userId: user.id,
+			officerApprovals: data.officerApprovals,
+		});
 	});

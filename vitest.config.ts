@@ -7,8 +7,8 @@ export default defineConfig({
 	},
 	test: {
 		environment: "node",
-		include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
 		setupFiles: ["src/test/setup-env.ts"],
+		include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
 		// Vitest's 5s/10s defaults are sized for pure unit tests. ~50 of our suites
 		// are DB-backed and run in parallel against ONE Postgres, so a test that
 		// takes ~1.5s alone can exceed 5s purely from connection + CPU contention

@@ -12,7 +12,6 @@ import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
 import {
-	defaultClubRoleForOffices,
 	OFFICER_POSITIONS,
 	type OfficerPosition,
 	parseOfficerPosition,
@@ -27,7 +26,6 @@ import { collapseMemberships } from "./membership-collapse-logic";
 import {
 	currentOfficersByMember,
 	currentOfficersFor,
-	openOfficerTermIfAbsent,
 	reconcileOfficerTerms,
 } from "./officer-terms-logic";
 
@@ -644,6 +642,7 @@ export const bulkImportSchema = z.object({
 type BulkImportInput = z.infer<typeof bulkImportSchema> & RosterActor;
 
 export interface BulkImportResult {
+	skippedOfficerAssignments: number;
 	insertedIds: string[];
 	inserted: number;
 	skipped: number;
@@ -668,8 +667,16 @@ export async function applyBulkImport(
 
 	const preview = buildImportPreview(input.rows, existing);
 	const toInsert = preview.filter((r) => r.willImport);
+	const skippedOfficerAssignments = input.rows.filter((r) =>
+		parseOfficerPosition(r.office),
+	).length;
 	if (toInsert.length === 0) {
-		return { insertedIds: [], inserted: 0, skipped: preview.length };
+		return {
+			insertedIds: [],
+			inserted: 0,
+			skipped: preview.length,
+			skippedOfficerAssignments,
+		};
 	}
 
 	// Club default country code for E.164 normalization on write (#295), loaded
@@ -689,11 +696,6 @@ export async function applyBulkImport(
 				.values({ name, email, phone })
 				.returning({ id: people.id });
 			if (!person) throw new Error("Failed to insert person.");
-			// Pasted office is free text; parse to the enum (unparseable → null).
-			const office = parseOfficerPosition(row.office);
-			// Default the membership's role from its office (President / VP Education
-			// ⇒ admin), stored explicitly (ADR-0008 Phase B / #99).
-			const clubRole = defaultClubRoleForOffices(office ? [office] : []);
 			const [m] = await tx
 				.insert(members)
 				.values({
@@ -702,15 +704,11 @@ export async function applyBulkImport(
 					name,
 					email,
 					phone,
-					clubRole,
+					clubRole: "member",
 				})
 				.returning({ id: members.id });
 			if (!m) throw new Error("Failed to insert member.");
 			ids.push(m.id);
-			// Open a current officer term for the parsed office (#100).
-			if (office) {
-				await openOfficerTermIfAbsent(tx, m.id, office, new Date());
-			}
 			await logActivity(tx, {
 				clubId: input.clubId,
 				actorMemberId: input.actorMemberId,
@@ -724,6 +722,7 @@ export async function applyBulkImport(
 	});
 
 	return {
+		skippedOfficerAssignments,
 		insertedIds,
 		inserted: insertedIds.length,
 		skipped: preview.length - insertedIds.length,

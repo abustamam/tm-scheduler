@@ -19,10 +19,16 @@ import {
 } from "#/lib/members-import-plan";
 import { toStoredPhone } from "#/lib/phone";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
-import {
-	currentOfficersFor,
-	openOfficerTermIfAbsent,
-} from "./officer-terms-logic";
+export type ImportConnection =
+	| typeof db
+	| Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export type ImportWrite = (
+	kind: "person" | "member",
+	rowIndex: number,
+	id: string | null,
+	work: (conn: ImportConnection) => Promise<{ id: string }[]>,
+) => Promise<{ id: string }[]>;
 
 export interface ImportStats {
 	peopleCreated: number;
@@ -37,6 +43,8 @@ export interface ImportStats {
 	/** Rows whose "Current Position" was non-blank but unparseable (left null,
 	 *  logged as a warning — like the ambiguous-name skip). */
 	unparseablePosition: number;
+	/** Parsed assignments not applied: roster import never grants access. */
+	skippedOfficerAssignments: number;
 }
 
 /**
@@ -60,12 +68,13 @@ export interface ImportStats {
  */
 export async function loadPersonCandidates(
 	clubId: string,
+	conn: ImportConnection = db,
 ): Promise<ExistingPersonRow[]> {
 	// Plain `select`, not `selectDistinct`: the join cannot fan out, so the DISTINCT
 	// would be a HashAggregate over the whole `people` table for nothing.
 	// `members_club_person_unique` guarantees at most one membership per
 	// (club, person), and `people.id` is in the projection anyway.
-	return db
+	return conn
 		.select({
 			id: people.id,
 			customerId: people.customerId,
@@ -94,11 +103,24 @@ export async function loadPersonCandidates(
 export async function importPeopleAndMembers(
 	clubId: string,
 	rawRows: MappedMember[],
+	options: {
+		conn?: ImportConnection;
+		onResolved?: (
+			rowIndex: number,
+			membershipId: string,
+			personId: string,
+		) => void;
+		write?: ImportWrite;
+		countryCode?: string;
+	} = {},
 ): Promise<ImportStats> {
 	// Standardize every imported phone to E.164 on write (#295) with the club's
 	// default country code, before the shared planner decides person/membership
 	// fills — so both the CLI runner and the VPE upload commit store E.164.
-	const cc = await loadClubDefaultCountryCode(clubId);
+	const conn = options.conn ?? db;
+	const write: ImportWrite =
+		options.write ?? ((_kind, _rowIndex, _id, work) => work(conn));
+	const cc = options.countryCode ?? (await loadClubDefaultCountryCode(clubId));
 	const rows: MappedMember[] = rawRows.map((r) => ({
 		...r,
 		phone: toStoredPhone(r.phone, cc),
@@ -106,7 +128,7 @@ export async function importPeopleAndMembers(
 
 	// Load all people once; keep the in-memory list in sync as we insert so
 	// duplicate rows within a single run resolve against freshly-created people.
-	const existing = await loadPersonCandidates(clubId);
+	const existing = await loadPersonCandidates(clubId, conn);
 
 	const stats: ImportStats = {
 		peopleCreated: 0,
@@ -117,13 +139,14 @@ export async function importPeopleAndMembers(
 		ambiguous: 0,
 		skippedBlankName: 0,
 		unparseablePosition: 0,
+		skippedOfficerAssignments: 0,
 	};
 
 	// Emails shared by 2+ distinct names within this batch must never merge —
 	// force each such row to a distinct person (mirrors the backfill's scan).
 	const sharedEmails = batchSharedEmails(rows);
 
-	for (const row of rows) {
+	for (const [rowIndex, row] of rows.entries()) {
 		if (!row.name) {
 			stats.skippedBlankName++;
 			continue;
@@ -170,24 +193,26 @@ export async function importPeopleAndMembers(
 			// right to: this call site read `.set(pdRest)` when the field was merely
 			// destructured away, and putting `email` back into that object would
 			// have restored the removed cross-club writer with every gate green.
-			await db
-				.update(people)
-				.set({
-					customerId: pd.set.customerId,
-					name: pd.set.name,
-					phone: pd.set.phone,
-					originalJoinDate: pd.set.originalJoinDate,
-				})
-				.where(eq(people.id, personId));
+			await write("person", rowIndex, personId, async (conn) =>
+				conn
+					.update(people)
+					.set({
+						customerId: pd.set.customerId,
+						name: pd.set.name,
+						phone: pd.set.phone,
+						originalJoinDate: pd.set.originalJoinDate,
+					})
+					.where(eq(people.id, personId))
+					.returning({ id: people.id }),
+			);
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
 			current.phone = pd.set.phone;
 		} else {
 			if (pd.kind === "ambiguous") stats.ambiguous++;
-			const [created] = await db
-				.insert(people)
-				.values(pd.values)
-				.returning({ id: people.id });
+			const [created] = await write("person", rowIndex, null, async (conn) =>
+				conn.insert(people).values(pd.values).returning({ id: people.id }),
+			);
 			if (!created) throw new Error("Failed to insert person");
 			personId = created.id;
 			existing.push({
@@ -202,7 +227,7 @@ export async function importPeopleAndMembers(
 
 		// Membership: one row per (club, person). Fill-only name/email/phone so an
 		// in-app edit is never clobbered; joined_at is per-club and always set.
-		const [existingMember] = await db
+		const [existingMember] = await conn
 			.select({
 				id: members.id,
 				name: members.name,
@@ -216,24 +241,29 @@ export async function importPeopleAndMembers(
 		const md = classifyMembership(row, existingMember);
 		let membershipId: string;
 		if (md.kind === "update" && existingMember) {
-			await db
-				.update(members)
-				.set(md.set)
-				.where(eq(members.id, existingMember.id));
+			await write("member", rowIndex, existingMember.id, async (conn) =>
+				conn
+					.update(members)
+					.set(md.set)
+					.where(eq(members.id, existingMember.id))
+					.returning({ id: members.id }),
+			);
 			membershipId = existingMember.id;
 			stats.membersUpdated++;
 		} else if (md.kind === "insert") {
-			// This loop runs on the bare `db` handle with NO transaction, so the
+			// CLI imports use the bare `db` handle, so the
 			// SELECT above and this INSERT are separated by an arbitrary gap — two
 			// admins importing overlapping rosters is the widest window in the app
 			// for a double-add. The unique index (#489) closes it; DO NOTHING plus a
 			// re-read turns losing that race into a no-op update instead of a 500
 			// that strands the import partway through a file.
-			const [created] = await db
-				.insert(members)
-				.values({ clubId, personId, ...md.values })
-				.onConflictDoNothing({ target: [members.clubId, members.personId] })
-				.returning({ id: members.id });
+			const [created] = await write("member", rowIndex, null, async (conn) =>
+				conn
+					.insert(members)
+					.values({ clubId, personId, ...md.values })
+					.onConflictDoNothing({ target: [members.clubId, members.personId] })
+					.returning({ id: members.id }),
+			);
 			if (created) {
 				membershipId = created.id;
 				stats.membersCreated++;
@@ -244,7 +274,7 @@ export async function importPeopleAndMembers(
 				// phone while still reporting the member as "updated", and the
 				// overlapping-import case this branch exists for is precisely when
 				// the two admins' files do NOT carry identical data.
-				const [raced] = await db
+				const [raced] = await conn
 					.select({
 						id: members.id,
 						name: members.name,
@@ -259,10 +289,13 @@ export async function importPeopleAndMembers(
 				if (!raced) throw new Error("Failed to insert member");
 				const racedMd = classifyMembership(row, raced);
 				if (racedMd.kind === "update") {
-					await db
-						.update(members)
-						.set(racedMd.set)
-						.where(eq(members.id, raced.id));
+					await write("member", rowIndex, raced.id, async (conn) =>
+						conn
+							.update(members)
+							.set(racedMd.set)
+							.where(eq(members.id, raced.id))
+							.returning({ id: members.id }),
+					);
 				}
 				membershipId = raced.id;
 				stats.membersUpdated++;
@@ -271,21 +304,8 @@ export async function importPeopleAndMembers(
 			continue; // unreachable — update ⟺ existingMember present
 		}
 
-		// Officer term (#100): the CSV's current position opens a term ONLY when
-		// the membership currently holds NO office — never overwriting or adding to
-		// an in-app assignment (the source of truth). termStart is unknown from the
-		// export (null). Idempotent across reruns.
-		if (row.officerPosition) {
-			const open = await currentOfficersFor(membershipId);
-			if (open.length === 0) {
-				await openOfficerTermIfAbsent(
-					db,
-					membershipId,
-					row.officerPosition,
-					null,
-				);
-			}
-		}
+		if (row.officerPosition) stats.skippedOfficerAssignments++;
+		options.onResolved?.(rowIndex, membershipId, personId);
 	}
 
 	return stats;

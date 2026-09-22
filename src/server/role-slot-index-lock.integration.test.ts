@@ -159,7 +159,8 @@ async function indicesFor(meetingId: string, roleId: string) {
 	return rows.map((r) => r.slotIndex);
 }
 
-/** What `lockMeetingForSlotEdit` takes, so a test can hold it from outside. */
+/** Stronger than the production NO KEY UPDATE lock: also parks legacy unlocked
+ * inserts at their FK check, keeping the stale-read controls observable. */
 async function lockMeetingRow(
 	tx: Parameters<Parameters<(typeof testDb)["transaction"]>[0]>[0],
 	meetingId: string,
@@ -639,12 +640,7 @@ describe.skipIf(!hasTestDb)(
 			expect(await indicesFor(club.meetingId, roleId)).toEqual([0, 1]);
 		});
 
-		/**
-		 * Both paths now take the SAME single meeting row, which is the property
-		 * `lockMeetingForSlotEdit`'s docblock says makes it deadlock-free. Worth
-		 * asserting rather than assuming: this fix is what puts a second entry
-		 * point on that lock.
-		 */
+		/** Smoke check that the two add paths serialize on their shared meeting row. */
 		it("an add-role racing an add-speaker on one meeting does not deadlock", async () => {
 			const { speakerRoleId } = await addSpeakerAndEvaluatorRoles(club.clubId);
 			const results = await Promise.allSettled([

@@ -284,9 +284,9 @@ export async function resolveMeetingAgendaAuthz(
 	// discloses meeting state the takedown was meant to end and answers
 	// differently from the same club's scheduled meeting.
 	await assertMeetingClubNotArchived(clubId);
-	// Lock choke point (#150): a completed meeting rejects every agenda edit that
-	// funnels through here (update meta, add/remove/move speaker). Reopen is a
-	// separate admin path and does not run this.
+	// Early refusal for both grant arms. Slot writers recheck status inside their
+	// meeting-row lock; this preflight alone cannot protect a later write from
+	// concurrent completion. Reopen is a separate admin path.
 	assertMeetingNotLocked(meeting.status);
 	const { tmodMemberId } = await loadRoleSlotAssignees(input.meetingId);
 
