@@ -7,7 +7,10 @@ type Transaction = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 /** Serialize slot membership, numbering and pairing decisions on the meeting.
  * Take this before slot/template locks and read status/shape from the returned
  * row. Multi-meeting callers must acquire meeting locks in ascending id order.
- * Claim writers lock slots separately; a meeting lock alone does not exclude them.
+ * NO KEY UPDATE excludes other editors and status/template updates, but permits
+ * FK KEY SHARE: a claim holding a slot can insert its attendance row while an
+ * editor waits for that slot, without a meeting/slot deadlock. Claim writers
+ * still need a slot-level guard; this meeting lock alone does not exclude them.
  */
 export async function lockMeetingForSlotEdit(
 	tx: Transaction,
@@ -23,7 +26,7 @@ export async function lockMeetingForSlotEdit(
 		})
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
-		.for("update")
+		.for("no key update")
 		.limit(1);
 	if (!locked) throw new Error("Meeting not found.");
 	return locked;

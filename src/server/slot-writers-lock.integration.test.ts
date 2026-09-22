@@ -1,9 +1,10 @@
 /** #835: real lock waits, followed by assertions on committed slots and audit rows. */
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	meetingAttendancePlan,
 	meetings,
 	meetingTemplateRoles,
 	meetingTemplates,
@@ -25,6 +26,7 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const {
 	applyAddSpeakerSlot,
+	markComingOnSelfClaim,
 	applyRemoveSpeakerSlot,
 	applyMoveSpeakerSlot,
 	applyMoveEvaluatorSlot,
@@ -32,6 +34,8 @@ const {
 	applyTemplateSyncToUpcomingMeetings,
 	syncSlotsForRoleEnabledChange,
 } = await import("./slots-logic");
+const { lockMeetingForSlotEdit } = await import("./meeting-slot-lock");
+const { logActivity } = await import("./activity");
 const { applyTemplateConversion } = await import("./meeting-templates-logic");
 const { applyRoleDefinitionSetEnabled } = await import(
 	"./role-definitions-logic"
@@ -58,6 +62,8 @@ async function race(
 	return outcome;
 }
 
+// Deliberately stronger than the production lock: stale, unlocked inserts must
+// park at their FK check so the legacy-writer mutations remain deterministic.
 async function lock(tx: TestTx, meetingId: string) {
 	await tx
 		.select({ id: meetings.id })
@@ -400,29 +406,161 @@ describe.skipIf(!hasTestDb)(
 			expect(await logs()).toEqual([]);
 		});
 
-		it("remove role preserves a claim committed while it waits for the slot", async () => {
-			const result = await race(
-				async (tx) => {
-					await tx
-						.update(roleSlots)
-						.set({ assignedMemberId: club.memberId, status: "confirmed" })
-						.where(eq(roleSlots.id, club.slotId));
-				},
-				() =>
-					applyRemoveRoleSlot({
-						slotId: club.slotId,
-						actorMemberId: club.adminMemberId,
-					}),
+		it("remove role lets self-claim insert attendance before refusing the claimed slot", async () => {
+			expect(
+				await testDb
+					.select()
+					.from(meetingAttendancePlan)
+					.where(eq(meetingAttendancePlan.meetingId, club.meetingId)),
+			).toEqual([]);
+			let claimTx!: TestTx;
+			const claim = await openBlockingTx(async (tx) => {
+				claimTx = tx;
+				// claimSlot's conditional write, paused before its attendance helper.
+				const updated = await tx
+					.update(roleSlots)
+					.set({
+						assignedMemberId: club.memberId,
+						assignedGuestId: null,
+						status: "claimed",
+						claimedAt: new Date(),
+					})
+					.where(
+						and(eq(roleSlots.id, club.slotId), eq(roleSlots.status, "open")),
+					)
+					.returning({ id: roleSlots.id });
+				expect(updated).toEqual([{ id: club.slotId }]);
+			});
+			const removal = applyRemoveRoleSlot({
+				slotId: club.slotId,
+				actorMemberId: club.adminMemberId,
+			}).then(
+				() => null,
+				(error: unknown) => error,
 			);
-			expect(result.error).toBe("Release the role before removing it.");
+			let claimError: unknown = null;
+			try {
+				// Removal now holds the meeting and is blocked specifically by the claim's slot.
+				await waitForLockWait('from "role_slots"', claim.pid);
+				// Exercise the real helper: with no existing plan row, this INSERT's
+				// FK needs KEY SHARE on the meeting. FOR UPDATE here would form a cycle.
+				await markComingOnSelfClaim(claimTx, {
+					memberId: club.memberId,
+					actorMemberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+				});
+				await logActivity(claimTx, {
+					clubId: club.clubId,
+					actorMemberId: club.memberId,
+					action: "claim",
+					targetType: "slot",
+					targetId: club.slotId,
+					detail: { memberId: club.memberId },
+				});
+			} catch (error) {
+				claimError = error;
+			} finally {
+				await claim.commit();
+				await removal;
+			}
+			expect(claimError).toBeNull();
+			expect(await removal).toMatchObject({
+				message: "Release the role before removing it.",
+			});
 			expect(await slots()).toMatchObject([
-				{
-					id: club.slotId,
-					assignedMemberId: club.memberId,
-					status: "confirmed",
-				},
+				{ id: club.slotId, assignedMemberId: club.memberId, status: "claimed" },
 			]);
-			expect(await logs()).toEqual([]);
+			expect(
+				await testDb
+					.select()
+					.from(meetingAttendancePlan)
+					.where(eq(meetingAttendancePlan.meetingId, club.meetingId)),
+			).toMatchObject([{ memberId: club.memberId, status: "coming" }]);
+			expect((await logs()).map((row) => row.action).sort()).toEqual([
+				"claim",
+				"plan_set",
+			]);
+		});
+
+		it.each([
+			"sync",
+			"enable",
+			"conversion",
+		] as const)("%s serializes against the production meeting lock", async (kind) => {
+			await testDb.delete(roleSlots).where(eq(roleSlots.id, club.slotId));
+			const writer = await openBlockingTx(async (tx) => {
+				await lockMeetingForSlotEdit(tx, club.meetingId);
+				await tx.insert(roleSlots).values({
+					meetingId: club.meetingId,
+					roleDefinitionId: club.roleDefinitionId,
+					slotIndex: 0,
+				});
+			});
+			const pending = (
+				kind === "sync" ? sync() : kind === "enable" ? enable() : convert()
+			).then(
+				(value) => ({ value, error: null }),
+				(error: unknown) => ({ value: null, error }),
+			);
+			try {
+				// Matches the SQL actually executing in PostgreSQL, not a source string.
+				await waitForLockWait("for no key update", writer.pid);
+			} finally {
+				await writer.commit();
+				await pending;
+			}
+			expect((await pending).error).toBeNull();
+			expect((await slots()).map((slot) => slot.slotIndex)).toEqual([0]);
+			if (kind !== "conversion") expect(await logs()).toEqual([]);
+		});
+
+		it.each([
+			"status",
+			"templateId",
+		] as const)("the production lock blocks a concurrent %s UPDATE", async (column) => {
+			const templateId =
+				column === "templateId"
+					? await template([
+							{
+								key: "speaker",
+								name: "Speaker",
+								category: "speaker",
+								isSpeakerRole: true,
+							},
+						])
+					: null;
+			const writer = await openBlockingTx(async (tx) => {
+				await lockMeetingForSlotEdit(tx, club.meetingId);
+			});
+			const pending = testDb
+				.update(meetings)
+				.set(column === "status" ? { status: "completed" } : { templateId })
+				.where(eq(meetings.id, club.meetingId))
+				.then(
+					() => null,
+					(error: unknown) => error,
+				);
+			try {
+				await waitForLockWait('update "meetings"', writer.pid);
+				const [before] = await testDb
+					.select()
+					.from(meetings)
+					.where(eq(meetings.id, club.meetingId));
+				expect(before.status).toBe("scheduled");
+				expect(before.templateId).toBeNull();
+			} finally {
+				await writer.commit();
+				await pending;
+			}
+			expect(await pending).toBeNull();
+			const [after] = await testDb
+				.select()
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			expect(after[column]).toBe(
+				column === "status" ? "completed" : templateId,
+			);
 		});
 
 		for (const actor of ["admin", "tmod"] as const) {
