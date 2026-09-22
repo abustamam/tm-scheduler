@@ -90,7 +90,7 @@ Four rows need their qualifier read carefully.
   "you need to be signed in" without reading as an outage — and it names only the club admin and
   the Ballot Counter, because an elected officer who is not an admin is granted by the gate and
   cannot reach the console at all (`canManageClub` excludes #202's effective-admin, and signing in
-  stops them matching the slot). That gap is pre-existing and filed separately; the copy names
+  stops them matching the slot). That gap is pre-existing and is filed as #844; the copy names
   routes that work rather than the full grant.
 
 - **"yes, if the slot is one of YOUR memberships"** is the role-console row #747 decided, and it

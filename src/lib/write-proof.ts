@@ -216,8 +216,8 @@ export function safeRedirect(
  * for them and the whole Ballot Counter console disappears. A refusal that names
  * a route which removes the console is worse than one that names none, so the
  * copy names only what works: a club admin signing in here, or the Ballot
- * Counter signing in as themselves. The officer's unreachable capability is its
- * own issue; the server grant is unchanged and still asserted.
+ * Counter signing in as themselves. The officer's unreachable capability is
+ * #844; the server grant is unchanged and still asserted.
  */
 export const RULING_NEEDS_SESSION_MESSAGE =
 	"Ruling a candidate out needs a signed-in club admin — ask an admin to sign in on this device, or sign in yourself.";

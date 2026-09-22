@@ -517,7 +517,7 @@ the nouns in `src/db/schema.ts`.
   impersonating superadmin, or the Ballot Counter signed in as themselves — but the refusal copy
   (`RULING_NEEDS_SESSION_MESSAGE`, `lib/write-proof.ts`, rendered by the console in place of the two
   controls) names only the admin and the Ballot Counter, because a non-admin officer who signs in
-  loses the console entirely and so cannot act on advice to sign in.
+  loses the console entirely and so cannot act on advice to sign in (#844).
 - **Offline write queue** — the single write channel for a meeting's minutes record (attendance,
   Table Topics speakers, awards) on the venue wifi this product actually runs on (#176; hardened and
   made load-bearing by roll call in v1.20.0.0). One IndexedDB store

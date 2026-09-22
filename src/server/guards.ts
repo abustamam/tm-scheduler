@@ -688,8 +688,8 @@ export async function requireVoteCounterCapability(input: {
  * stop matching the Vote Counter slot, and `canManageClub` does not include
  * #202's effective-admin — both terms of the console's section gate go false and
  * the whole panel disappears. So the copy says "ask an admin", which works. The
- * officer's unreachable capability is a separate, pre-existing gap and is filed
- * as its own issue; nothing here narrows the grant.
+ * officer's unreachable capability is a separate, pre-existing gap, filed as
+ * #844; nothing here narrows the grant.
  *
  * The refusal is {@link RULING_NEEDS_SESSION_MESSAGE} rather than
  * `SIGN_IN_REQUIRED_MESSAGE` or the generic permission error, and the console
