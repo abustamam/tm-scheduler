@@ -8,12 +8,13 @@
  *     bunx vitest run src/server/meeting-authz.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubs,
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	user,
@@ -470,11 +471,19 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 describe.skipIf(!hasTestDb)("self-assert binds to the session (#747)", () => {
 	let club: SeededClub;
 	const extraUsers: string[] = [];
+	const extraPeople: string[] = [];
 
 	beforeEach(async () => {
 		club = await seedClub();
+		extraPeople.length = 0;
 	});
 	afterEach(async () => {
+		// `members.person_id` cascades from `people`, so this takes the duplicate
+		// memberships with it. Scoped to the ids THIS run created — `tm_test` is
+		// shared and vitest runs files in parallel.
+		if (extraPeople.length > 0) {
+			await testDb.delete(people).where(inArray(people.id, extraPeople));
+		}
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 		for (const id of extraUsers.splice(0)) {
 			await testDb.delete(user).where(eq(user.id, id));
@@ -731,6 +740,56 @@ describe.skipIf(!hasTestDb)("self-assert binds to the session (#747)", () => {
 		expect(authz.via).toBe("admin");
 		// Memberless, so `logActivity` stamps the real superadmin instead.
 		expect(authz.actorMemberId).toBeNull();
+	});
+
+	it.each(
+		ARMS,
+	)("$arm: grants the holder whose slot sits on their SECOND membership here", async ({
+		key,
+		roleName,
+		via,
+		resolve,
+	}) => {
+		// `people.user_id` carries only a non-unique index, so one human
+		// reachable through two Person rows in ONE club is representable — and
+		// `resolveAdminGrant`'s five-key ORDER BY exists to make the ADMIN answer
+		// deterministic (#804), not to say which membership the human *is*.
+		//
+		// This fixture puts the slot on the membership the order does NOT pick:
+		// the seeded `club.memberId` is active and older, so it wins keys 1 and
+		// 4, and the duplicate below loses. Binding against the picked row alone
+		// refuses this caller — and refuses them ONLY while signed in, which is
+		// the incoherence #747 exists to remove rather than to relocate.
+		const personId = await seedPerson({
+			name: "Dup Human",
+			userId: club.memberUserId,
+		});
+		extraPeople.push(personId);
+		const [second] = await testDb
+			.insert(members)
+			.values({ clubId: club.clubId, personId, name: "Dup Human" })
+			.returning({ id: members.id });
+		if (!second) throw new Error("failed to seed the second membership");
+		await addKeyedSlot(key, roleName, second.id);
+
+		const authz = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: club.memberUserId,
+			selfMemberId: second.id,
+		});
+		expect(authz.allowed).toBe(true);
+		expect(authz.via).toBe(via);
+		expect(authz.actorMemberId).toBe(second.id);
+
+		// The fixture really is the contested one: the ordered pick is the OTHER
+		// membership, so a grant here cannot have come from the picked row. A
+		// case that silently seeded only one membership would pass either way.
+		const admin = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: club.memberUserId,
+			selfMemberId: club.memberId,
+		});
+		expect(admin.allowed).toBe(false);
 	});
 
 	it("a club admin signed in is still granted via admin, not via a self-assert", async () => {

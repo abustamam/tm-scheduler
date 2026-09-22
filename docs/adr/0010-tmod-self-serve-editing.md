@@ -98,17 +98,20 @@ Two things follow for the scope this ADR granted.
   `src/server/write-proof.guard.test.ts` until then — which is the change #761 actually made to
   them: the debt is now recorded and swept rather than remembered.
 
-  **AMENDED by #747: they did not move, and the gate above is narrower than "self-asserted
-  `memberId` equals the slot assignee" instead.** Requiring a session would have cost the
-  account-less Toastmaster the whole workflow this ADR exists for, so what #747 changed is the
-  asymmetry rather than the trust level: **a self-assert never overrides a session.** A caller with
-  NO session and the slot holder's id is granted exactly as before. A caller WITH a session must
-  assert their own membership in this club, and a session that resolves to no membership here — an
-  outsider holding an account, or a read-only impersonating superadmin — is refused rather than
-  falling through to the anonymous arm. One seam decides it for all four arms
-  (`resolveSelfAssertGrant`, `src/server/meeting-authz-logic.ts`), because the defect was one shape
-  copied four times and four in-place fixes would have left the fifth to inherit it. The 16
-  `console-asserted` rows stay; ADR-0026's Decision table carries the rule.
+  **AMENDED by #747, for the FOUR arms in `src/server/meeting-authz-logic.ts` only** — TMOD agenda
+  meta, TMOD Word of the Day, Grammarian Word of the Day, and the Ballot Counter gate. The Timer
+  and the TMOD attendance panel are untouched and remain as this bullet describes them. On those
+  four, the gate above is narrower than "self-asserted `memberId` equals the slot assignee":
+  requiring a session would have cost the account-less Toastmaster the whole workflow this ADR
+  exists for, so #747 changed the asymmetry rather than the trust level. **A self-assert never
+  overrides a session.** A caller with NO session and the slot holder's id is granted exactly as
+  before. A caller WITH a session must assert a membership of their own in this club — any of them,
+  not the one an ordering ranks first — and a session that resolves to no membership here, an
+  outsider holding an account or a read-only impersonating superadmin, is refused rather than
+  falling through to the anonymous arm. One seam decides it for all four
+  (`resolveSelfAssertGrant`), because the defect was one shape copied four times and four in-place
+  fixes would have left the fifth to inherit it. The 16 `console-asserted` rows stay; ADR-0026's
+  Decision table carries the rule and the scope.
 - **Member ids are public identifiers, not credentials.** They ship in the public sheet's payload
   because the sheet has to render the roster. Nothing in the self-assert model ever depended on
   one being hard to guess, and ADR-0026 says so explicitly so no future code mistakes

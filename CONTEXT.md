@@ -831,21 +831,28 @@ caller do the thing"). The difference has a home each: `resolveWriteActorWithPro
 (`src/server/write-actor-logic.ts`) for the first, `resolveSelfAssertGrant`
 (`src/server/meeting-authz-logic.ts`) for the second.
 
-A self-assert grants only where a SLOT backs it. The four role-console arms — agenda meta and Word
-of the Day for the Toastmaster, Word of the Day for the Grammarian, and the Ballot Counter gate —
-each grant when the asserted id is that meeting's assignee for their slot, which is tighter than
-claiming a role: you must already hold it. Two rules bound it, and both were bought with a bug.
-**Identify the slot by `role_definitions.key`, never by display name** (#464) — a club that renames
-its Toastmaster still has one, and a club that invents "Toastmaster Assistant" does not get the
-capability. And **a self-assert never overrides a session** (#747, ADR-0026): with no session the
-grant is unchanged, but a signed-in caller must assert their OWN membership in this club, and a
-session with no membership here is refused rather than falling back to the anonymous arm. Before
-that, an ordinary signed-in member could assert anyone's id — and since `actorMemberId` records the
-ASSERTED identity, the forged write landed in the club's permanent audit trail under the innocent
-member's name. Member ids are public (see **Proven actor**), so nothing here ever depended on one
-being hard to obtain. `self-assert-binding.guard.test.ts` keeps the decision in one place, which is
-the durable half: the defect was one shape copied four times, so four in-place fixes would have
-left the fifth arm to inherit it.
+A self-assert grants only where a SLOT backs it. **Identify the slot by `role_definitions.key`,
+never by display name** (#464) — a club that renames its Toastmaster still has one, and a club that
+invents "Toastmaster Assistant" does not get the capability.
+
+**A self-assert never overrides a session** (#747, ADR-0026) — and the scope of that sentence is
+exactly the four role-console arms in `src/server/meeting-authz-logic.ts`: agenda meta and Word of
+the Day for the Toastmaster, Word of the Day for the Grammarian, and the Ballot Counter gate. On
+those four, with no session the grant is unchanged, a signed-in caller must assert a membership of
+their own in this club, and a session with no membership here is refused rather than falling back
+to the anonymous arm. Before that, an ordinary signed-in member could assert anyone's id — and
+since `actorMemberId` records the ASSERTED identity, the forged write landed in the club's
+permanent audit trail under the innocent member's name. Member ids are public (see **Proven
+actor**), so nothing here ever depended on one being hard to obtain.
+
+**The rule is not yet repo-wide, and the boundary is the module.** Other surfaces still take an
+asserted member id on its own terms — the TMOD attendance panel's own three-arm ladder
+(`resolveActor`, `src/server/attendance-plan.ts` / `attendance-actor-logic.ts`) is the nearest
+one, and it resolves through `resolveWriteActorWithProof`, whose asserted arm accepts any active
+member of the club. Read the sentence above as scoped to the module its guard sweeps, not as a
+property of every self-assert in the tree. `self-assert-binding.guard.test.ts` keeps the decision
+in one place *within that module*, which is the durable half there: the defect was one shape copied
+four times, so four in-place fixes would have left the fifth arm to inherit it.
 
 ## Scope
 

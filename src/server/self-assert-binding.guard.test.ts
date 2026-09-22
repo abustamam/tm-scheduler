@@ -35,18 +35,27 @@
 //
 // ## Mutation record — MEASURED, not assumed
 //
-// Verified against this branch and reverted (see the PR body for the exact
-// output):
+// Each was injected against this branch, observed red, and reverted. No
+// `file:line` citations: this repo has already been burnt by a comment claiming
+// a test verified citations that had gone stale (`write-proof.guard.test.ts`
+// says so at its own `SESSION_GATES`), and what is recorded here is the SHAPE,
+// which is what the assertions actually read.
 //
 //  (a) Putting one arm's comparison back — restoring
 //      `if (input.selfMemberId && tmodMemberId && input.selfMemberId === tmodMemberId)`
 //      in `resolveMeetingAgendaAuthz` — failed `no arm reads selfMemberId
-//      outside the seam` naming that line.
+//      outside the seam`, naming both lines of it.
 //  (b) The BINDING evasion — `const claimed = input.selfMemberId;` followed by a
 //      comparison on `claimed` — failed the same case, which a comparison-only
 //      matcher would have missed.
 //  (c) Deleting an arm's `resolveSelfAssertGrant` call failed the census below,
 //      so "no offenders" cannot be satisfied by the arms simply going away.
+//  (d) Narrowing to the CLAIM instead of the slot (`const verified =
+//      args.selfMemberId`) failed `the seam credits the SLOT-derived id`; so did
+//      crediting `args.selfMemberId` at the return site. **Both left every
+//      behavioural test green**, including the unit case that reads like it
+//      covers this — the two values are equal by then, so only the source can
+//      tell them apart. That pair is the reason the case exists.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,8 +98,8 @@ function blankSeamRegions(src: string): string {
 const blank = (s: string) => s.replace(/[^\n]/g, " ");
 
 /**
- * The seam's declaration, from the start of its leading doc comment to the next
- * top-level boundary.
+ * Where the seam's declaration starts and ends — from the start of its leading
+ * doc comment to the next top-level boundary.
  *
  * The doc comment is INCLUDED on purpose: the seam explains itself in prose that
  * names `selfMemberId`, and a raw read would otherwise report its own
@@ -99,7 +108,7 @@ const blank = (s: string) => s.replace(/[^\n]/g, " ");
  * doc comment was deleted would swallow the PRECEDING function instead, which is
  * a silent loosening in exactly the region that matters.
  */
-function blankSeamDeclaration(src: string): string {
+function seamRange(src: string): { start: number; body: number; end: number } {
 	const at = src.search(new RegExp(`^export function ${SEAM}\\(`, "m"));
 	if (at === -1) {
 		throw new Error(
@@ -122,6 +131,17 @@ function blankSeamDeclaration(src: string): string {
 		}
 		offset += (lines[i] as string).length + 1;
 	}
+	return { start, body: at, end };
+}
+
+/** The seam's CODE, doc comment excluded — what the provenance case reads. */
+function seamDeclaration(src: string): string {
+	const { body, end } = seamRange(src);
+	return src.slice(body, end);
+}
+
+function blankSeamDeclaration(src: string): string {
+	const { start, end } = seamRange(src);
 	return src.slice(0, start) + blank(src.slice(start, end)) + src.slice(end);
 }
 
@@ -198,6 +218,39 @@ describe("a self-assert is decided in one place (#747)", () => {
 			seamCallCount(src),
 			`Fewer than four \`${SEAM}\` call sites. Either an arm stopped routing through the seam, or one was deleted — the first is the #747 regression and the offender list above cannot see it.`,
 		).toBeGreaterThanOrEqual(4);
+	});
+
+	it("the seam credits the SLOT-derived id, not the claim off the wire", () => {
+		// The one property here that NO behavioural test can reach. Past the
+		// seam's equality check the claim and the slot are the same VALUE, so
+		// `actorMemberId: <either>` behaves identically — `self-assert-grant.test.ts`
+		// says so at the case that would otherwise appear to cover it. The
+		// difference is not behaviour, it is PROVENANCE: `actorMemberId` is what
+		// `logActivity` stamps (#396), and it must come from the row the server
+		// read rather than from the payload, or the audit trail's source is the
+		// thing the audit trail exists to doubt.
+		//
+		// Enforced structurally rather than by matching one spelling: the seam
+		// narrows to a single `verified` binding taken from `slotMemberId`, so
+		// there is no second name in scope to credit by mistake. This pins both
+		// halves — the binding's source, and that nothing downstream re-reads the
+		// claim.
+		const seam = seamDeclaration(src);
+		expect(
+			seam,
+			"The seam no longer narrows to a single `const verified = args.slotMemberId`. That binding is what makes crediting the payload impossible to write by accident; restoring two names in scope re-opens it silently, because both spellings behave identically.",
+		).toContain("const verified = args.slotMemberId;");
+		expect(
+			seam,
+			"The seam credits something other than `verified`. `actorMemberId` is what `logActivity` stamps (#396) and must come from the row the SERVER read.",
+		).toContain("actorMemberId: verified");
+		const afterNarrowing = seam.slice(
+			seam.indexOf("const verified = args.slotMemberId;"),
+		);
+		expect(
+			afterNarrowing.includes("selfMemberId"),
+			"The seam reads the claimed id again AFTER narrowing to `verified`. Everything past that point must use the slot-derived value.",
+		).toBe(false);
 	});
 
 	it("the real module names all four grant arms it gates", () => {
