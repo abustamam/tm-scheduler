@@ -8,18 +8,24 @@
  *     bunx vitest run src/server/meeting-authz.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubs,
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	user,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { utcToZonedWallTime } from "#/lib/datetime";
+import {
+	GRAMMARIAN_ROLE_KEY,
+	TMOD_ROLE_KEY,
+	VOTE_COUNTER_ROLE_KEY,
+} from "#/lib/meeting-roles";
 import {
 	cleanup,
 	hasTestDb,
@@ -434,5 +440,375 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 				canReschedule: false,
 			}),
 		).rejects.toThrow(/reschedule/i);
+	});
+});
+
+/**
+ * A self-assert never overrides a session (#747, ADR-0026).
+ *
+ * The bug: all four self-assert arms in `meeting-authz-logic.ts` granted on
+ * `selfMemberId === <slot>MemberId` and consulted `sessionUserId` nowhere, so an
+ * ordinary signed-in member fell past the admin arm and could assert ANYONE's
+ * id — and `activity_log` then credited the write to the innocent member whose
+ * id was asserted, because `actorMemberId` is the asserted identity. The
+ * activity log is not the safety net ADR-0010 called it; under impersonation it
+ * is the amplifier.
+ *
+ * **Every case is run against all four arms**, by name, rather than against the
+ * one that prompted the filing. That is the finding: it was one SHAPE copied
+ * four times, so a fixture that exercises one arm says nothing about the other
+ * three — and the arms are spread across three resolvers with three different
+ * result shapes, which is how four copies went unnoticed.
+ *
+ * **Each refusal is paired with its anonymous control.** A refusal assertion on
+ * its own passes for any reason at all, including a broken fixture whose slot
+ * was never assigned; running the identical call with no session and seeing it
+ * GRANT is what pins the refusal to the session and nothing else. It is also
+ * the acceptance criterion in its own right — the account-less Toastmaster
+ * running the agenda from their phone is the workflow this model exists for,
+ * and #747 must leave it byte for byte unchanged.
+ */
+describe.skipIf(!hasTestDb)("self-assert binds to the session (#747)", () => {
+	let club: SeededClub;
+	const extraUsers: string[] = [];
+	const extraPeople: string[] = [];
+
+	beforeEach(async () => {
+		club = await seedClub();
+		extraPeople.length = 0;
+	});
+	afterEach(async () => {
+		// `members.person_id` cascades from `people`, so this takes the duplicate
+		// memberships with it. Scoped to the ids THIS run created — `tm_test` is
+		// shared and vitest runs files in parallel.
+		if (extraPeople.length > 0) {
+			await testDb.delete(people).where(inArray(people.id, extraPeople));
+		}
+		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+		for (const id of extraUsers.splice(0)) {
+			await testDb.delete(user).where(eq(user.id, id));
+		}
+	});
+
+	/** Seed a KEYED role slot on the meeting, optionally assigned. Keyed rather
+	 *  than name-matched so the fixture cannot fail for a #464 reason. */
+	async function addKeyedSlot(
+		key: string,
+		name: string,
+		assignedMemberId: string | null,
+	): Promise<void> {
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				name,
+				key,
+				category: "functionary",
+				isSpeakerRole: false,
+				sortOrder: 50,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: club.meetingId,
+			roleDefinitionId: def.id,
+			status: assignedMemberId ? "claimed" : "open",
+			assignedMemberId,
+		});
+	}
+
+	/** A signed-in account that is on NO roster in this club — an outsider
+	 *  holding an account, which is what acceptance criterion 4 is about. */
+	async function addOutsiderUser(): Promise<string> {
+		const id = randomUUID();
+		await testDb.insert(user).values({
+			id,
+			name: "Outsider",
+			email: `outsider-${id}@test.example`,
+			emailVerified: true,
+		});
+		extraUsers.push(id);
+		return id;
+	}
+
+	/** A superadmin account, for the two impersonation arms. */
+	async function addSuperadminUser(): Promise<string> {
+		const id = randomUUID();
+		await testDb.insert(user).values({
+			id,
+			name: "Super User",
+			email: `su-${id}@test.example`,
+			emailVerified: true,
+			isSuperadmin: true,
+		});
+		extraUsers.push(id);
+		return id;
+	}
+
+	/** The common shape of the three resolvers' answers, so one table can drive
+	 *  all four arms. `via` and `actorMemberId` are on every one of them. */
+	type Answer = {
+		allowed: boolean;
+		via: string | null;
+		actorMemberId: string | null;
+	};
+
+	const ARMS: {
+		arm: string;
+		key: string;
+		roleName: string;
+		via: string;
+		resolve: (input: {
+			meetingId: string;
+			sessionUserId?: string | null;
+			selfMemberId?: string | null;
+		}) => Promise<Answer>;
+	}[] = [
+		{
+			arm: "agenda meta (TMOD)",
+			key: TMOD_ROLE_KEY,
+			roleName: "Toastmaster of the Day",
+			via: "tmod-self-assert",
+			resolve: resolveMeetingAgendaAuthz,
+		},
+		{
+			arm: "Word of the Day (TMOD)",
+			key: TMOD_ROLE_KEY,
+			roleName: "Toastmaster of the Day",
+			via: "tmod-self-assert",
+			resolve: resolveWordOfTheDayAuthz,
+		},
+		{
+			arm: "Word of the Day (Grammarian)",
+			key: GRAMMARIAN_ROLE_KEY,
+			roleName: "Grammarian",
+			via: "grammarian-self-assert",
+			resolve: resolveWordOfTheDayAuthz,
+		},
+		{
+			arm: "Ballot Counter",
+			key: VOTE_COUNTER_ROLE_KEY,
+			roleName: "Ballot Counter",
+			via: "vote-counter-self-assert",
+			resolve: resolveVoteCounterAuthz,
+		},
+	];
+
+	it.each(
+		ARMS,
+	)("$arm: refuses a signed-in member asserting somebody else's id", async ({
+		key,
+		roleName,
+		via,
+		resolve,
+	}) => {
+		// The reported bug, per arm. `club.memberUserId` is an ordinary active
+		// member — not an admin, so they fall past the admin arm — and the id
+		// they assert is the role holder's, which the public meeting payload
+		// ships to any visitor (`slots[].assigneeId`).
+		const holder = await addRosterMember(club.clubId, "Real Holder");
+		await addKeyedSlot(key, roleName, holder);
+
+		const forged = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: club.memberUserId,
+			selfMemberId: holder,
+		});
+		expect(forged.allowed).toBe(false);
+		expect(forged.via).toBeNull();
+		// The audit trail is half the harm: before #747 this returned `holder`,
+		// so the forged write landed in the club's permanent log under the name
+		// of the member who did not make it.
+		expect(forged.actorMemberId).toBeNull();
+
+		// The control. Identical call, no session — still granted, so the
+		// refusal above is the session and not the fixture.
+		const anonymous = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: null,
+			selfMemberId: holder,
+		});
+		expect(anonymous.allowed).toBe(true);
+		expect(anonymous.via).toBe(via);
+		expect(anonymous.actorMemberId).toBe(holder);
+	});
+
+	it.each(
+		ARMS,
+	)("$arm: grants the holder who is signed in as themselves", async ({
+		key,
+		roleName,
+		via,
+		resolve,
+	}) => {
+		// The cost side of the change, and it must be zero. A signed-in role
+		// holder's client sends their own membership id (`useEffectiveMember`
+		// lets the session win over the localStorage name-pick), so this is what
+		// every honest signed-in Toastmaster actually sends.
+		await addKeyedSlot(key, roleName, club.memberId);
+		const authz = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: club.memberUserId,
+			selfMemberId: club.memberId,
+		});
+		expect(authz.allowed).toBe(true);
+		expect(authz.via).toBe(via);
+		expect(authz.actorMemberId).toBe(club.memberId);
+	});
+
+	it.each(
+		ARMS,
+	)("$arm: refuses a signed-in account with no membership in this club", async ({
+		key,
+		roleName,
+		via,
+		resolve,
+	}) => {
+		// An outsider holding an account is not an anonymous visitor and must
+		// not be treated as one: they are exactly the adversary ADR-0026 names,
+		// and falling back to the anonymous arm would make holding an account
+		// strictly better than not holding one.
+		const holder = await addRosterMember(club.clubId, "Real Holder");
+		await addKeyedSlot(key, roleName, holder);
+		const outsider = await addOutsiderUser();
+
+		const authz = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: outsider,
+			selfMemberId: holder,
+		});
+		expect(authz.allowed).toBe(false);
+		expect(authz.via).toBeNull();
+
+		const anonymous = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: null,
+			selfMemberId: holder,
+		});
+		expect(anonymous.allowed).toBe(true);
+		expect(anonymous.via).toBe(via);
+	});
+
+	it.each(ARMS)("$arm: refuses a READ-ONLY impersonating superadmin", async ({
+		key,
+		roleName,
+		resolve,
+	}) => {
+		// ADR-0020's read-only mode is write-blind by construction, and a
+		// memberless superadmin session hit the self-assert arms before #747 —
+		// so the one principal the platform most needs to keep attributable
+		// could write under a member's name with `impersonated_by` null.
+		const holder = await addRosterMember(club.clubId, "Real Holder");
+		await addKeyedSlot(key, roleName, holder);
+		const su = await addSuperadminUser();
+		await startImpersonation(su, { clubId: club.clubId });
+
+		const authz = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: su,
+			selfMemberId: holder,
+		});
+		expect(authz.allowed).toBe(false);
+		expect(authz.via).toBeNull();
+	});
+
+	it.each(
+		ARMS,
+	)("$arm: a READ_WRITE impersonating superadmin is unaffected", async ({
+		key,
+		roleName,
+		resolve,
+	}) => {
+		// #246 promises full admin parity under a read_write impersonation, and
+		// the admin arm returns BEFORE any self-assert runs — so this arm must
+		// not move. Asserted per arm because "the admin arm runs first" is a
+		// property of three separate resolvers, not of one.
+		const holder = await addRosterMember(club.clubId, "Real Holder");
+		await addKeyedSlot(key, roleName, holder);
+		const su = await addSuperadminUser();
+		await startImpersonation(su, {
+			clubId: club.clubId,
+			mode: "read_write",
+			reason: "fixing the agenda",
+		});
+
+		const authz = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: su,
+			selfMemberId: holder,
+		});
+		expect(authz.allowed).toBe(true);
+		expect(authz.via).toBe("admin");
+		// Memberless, so `logActivity` stamps the real superadmin instead.
+		expect(authz.actorMemberId).toBeNull();
+	});
+
+	it.each(
+		ARMS,
+	)("$arm: grants the holder whose slot sits on their SECOND membership here", async ({
+		key,
+		roleName,
+		via,
+		resolve,
+	}) => {
+		// `people.user_id` carries only a non-unique index, so one human
+		// reachable through two Person rows in ONE club is representable — and
+		// `resolveAdminGrant`'s five-key ORDER BY exists to make the ADMIN answer
+		// deterministic (#804), not to say which membership the human *is*.
+		//
+		// This fixture puts the slot on the membership the order does NOT pick:
+		// the seeded `club.memberId` is active and older, so it wins keys 1 and
+		// 4, and the duplicate below loses. Binding against the picked row alone
+		// refuses this caller — and refuses them ONLY while signed in, which is
+		// the incoherence #747 exists to remove rather than to relocate.
+		const personId = await seedPerson({
+			name: "Dup Human",
+			userId: club.memberUserId,
+		});
+		extraPeople.push(personId);
+		const [second] = await testDb
+			.insert(members)
+			.values({ clubId: club.clubId, personId, name: "Dup Human" })
+			.returning({ id: members.id });
+		if (!second) throw new Error("failed to seed the second membership");
+		await addKeyedSlot(key, roleName, second.id);
+
+		const authz = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: club.memberUserId,
+			selfMemberId: second.id,
+		});
+		expect(authz.allowed).toBe(true);
+		expect(authz.via).toBe(via);
+		expect(authz.actorMemberId).toBe(second.id);
+
+		// The fixture really is the contested one: the ordered pick is the OTHER
+		// membership, so a grant here cannot have come from the picked row. A
+		// case that silently seeded only one membership would pass either way.
+		const admin = await resolve({
+			meetingId: club.meetingId,
+			sessionUserId: club.memberUserId,
+			selfMemberId: club.memberId,
+		});
+		expect(admin.allowed).toBe(false);
+	});
+
+	it("a club admin signed in is still granted via admin, not via a self-assert", async () => {
+		// The precedence the whole change rests on: the admin arm returns first, so
+		// an admin who ALSO holds the Toastmaster slot is credited as an admin and
+		// keeps `canReschedule`. Without this, binding the self-assert could
+		// silently demote an admin to the narrower grant on the meetings they run.
+		await addKeyedSlot(TMOD_ROLE_KEY, "Toastmaster of the Day", club.memberId);
+		await testDb
+			.update(members)
+			.set({ clubRole: "admin" })
+			.where(eq(members.id, club.memberId));
+		const authz = await resolveMeetingAgendaAuthz({
+			meetingId: club.meetingId,
+			sessionUserId: club.memberUserId,
+			selfMemberId: club.memberId,
+		});
+		expect(authz.allowed).toBe(true);
+		expect(authz.via).toBe("admin");
+		expect(authz.actorMemberId).toBe(club.memberId);
 	});
 });

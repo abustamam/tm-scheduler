@@ -94,16 +94,62 @@ export interface MeetingAgendaAuthz {
  * request so the write is attributed to the real superadmin. A `read_only`
  * session never grants — writes stay blind to it by construction.
  *
- * Returns `granted` plus the membership id to credit the write to (#396) — null
- * for the memberless impersonation arm, where `logActivity` records the real
- * superadmin in `impersonated_by` instead.
+ * Returns three things:
+ *
+ *  - `granted`, the admin decision;
+ *  - `memberId`, the membership id to credit the write to (#396) — null for the
+ *    memberless impersonation arm, where `logActivity` records the real
+ *    superadmin in `impersonated_by` instead;
+ *  - `membershipIds`, **every membership this human holds in this club**,
+ *    whatever its role or status, empty when they have no session or are not on
+ *    this roster.
+ *
+ * ## Why a SET, and why that is not the same question the ORDER answers
+ *
+ * The five-key order below exists to make ONE row the answer, deterministically,
+ * because the admin grant and `actorMemberId` must not flip between requests
+ * (#804). #747 needs a different question off the same rows — *is this asserted
+ * id one of MINE* — and the answer to that is the whole set. `people.user_id`
+ * carries only a non-unique index, so one human reachable through two Person
+ * rows in one club is representable (the comment under the query says so), and
+ * binding against the top-ranked row alone would refuse a signed-in member who
+ * genuinely holds the slot on their OTHER membership. That refusal would land
+ * only on the signed-in path, which is exactly the incoherence
+ * `resolveSelfAssertGrant` rejects for the lapsed member below.
+ *
+ * So `picked` decides the admin arm and `membershipIds` binds the identity, from
+ * ONE read. Two reads would be two MVCC snapshots, and the admin arm could then
+ * grant off a row the self-assert arm never saw.
+ *
+ * ## Two things about the spelling, both load-bearing
+ *
+ * **The rest-destructure replaces `.limit(1)`, and keeps the order doing its
+ * job.** `picked` is byte-for-byte the row `.limit(1)` returned — the first of
+ * the same ordered result — so the admin decision and the credited id are
+ * unchanged. Nothing else about the query moved.
+ *
+ * **The statement stays HERE, destructured, rather than being lifted into its
+ * own loader or rewritten as a plain array assignment.**
+ * `membership-pick-ordering.guard.test.ts` sweeps for statements that resolve
+ * `people.user_id` to a `members` row and keep a single one — by `.limit(1)` OR
+ * by a `const [` destructure — and requires each to carry an `ORDER BY`. It
+ * anchors its vacuity floor on the key `meeting-authz-logic.ts:resolveAdminGrant`.
+ * Moving the statement out renames that key; spelling it `const rows = await db…`
+ * drops it from the sweep. Either one leaves that guard asserting nothing, so
+ * change this shape only together with that file.
  */
 async function resolveAdminGrant(
 	sessionUserId: string | null | undefined,
 	clubId: string,
-): Promise<{ granted: boolean; memberId: string | null }> {
-	if (!sessionUserId) return { granted: false, memberId: null };
-	const [membership] = await db
+): Promise<{
+	granted: boolean;
+	memberId: string | null;
+	membershipIds: readonly string[];
+}> {
+	if (!sessionUserId) {
+		return { granted: false, memberId: null, membershipIds: [] };
+	}
+	const [picked, ...alsoMine] = await db
 		.select({
 			id: members.id,
 			clubRole: members.clubRole,
@@ -170,21 +216,147 @@ async function resolveAdminGrant(
 			desc(sql`count(${officerTerms.id})`),
 			members.createdAt,
 			members.id,
-		)
-		.limit(1);
-	if (
-		membership &&
-		membership.status === "active" &&
-		membership.clubRole === "admin"
-	) {
-		return { granted: true, memberId: membership.id };
+		);
+	// `picked` answers the admin arm; the whole set binds the identity. `picked`
+	// is listed first because `alsoMine` is the REST of the same ordered result —
+	// dropping it here would silently re-narrow the binding to one row.
+	const membershipIds = picked ? [picked.id, ...alsoMine.map((m) => m.id)] : [];
+	if (picked && picked.status === "active" && picked.clubRole === "admin") {
+		return { granted: true, memberId: picked.id, membershipIds };
 	}
 	const session = await getActiveImpersonation(sessionUserId, clubId);
 	if (session?.mode === "read_write") {
 		markImpersonatedWrite(sessionUserId);
-		return { granted: true, memberId: null };
+		return { granted: true, memberId: null, membershipIds };
 	}
-	return { granted: false, memberId: null };
+	return { granted: false, memberId: null, membershipIds };
+}
+
+/**
+ * What the caller's session is, for `resolveSelfAssertGrant`.
+ *
+ * A discriminated union rather than a flag beside a nullable set, so "no session
+ * but here are my memberships" and "signed in, and the set was forgotten" are
+ * both unrepresentable. Those two are not cosmetic: the first would read as
+ * anonymous and grant, and the second would refuse every signed-in caller
+ * including the honest slot holder. The distinction that matters is present vs
+ * absent, NOT empty vs non-empty — a session with an empty set is an outsider
+ * holding an account, and it must refuse rather than fall back to the anonymous
+ * arm.
+ */
+export type SelfAssertSession =
+	/** No session at all: the honour-system caller ADR-0010 is built for. */
+	| { present: false }
+	/** Signed in. `membershipIds` is EVERY membership this human holds in this
+	 *  club — empty when they are on no roster here. */
+	| { present: true; membershipIds: readonly string[] };
+
+/**
+ * Build a {@link SelfAssertSession} from what a resolver already has.
+ *
+ * The ONE place `sessionUserId` becomes the `present` discriminant, so the three
+ * resolvers cannot disagree about what "has a session" means — and so an
+ * impersonating superadmin, whose `membershipIds` is empty, still reads as
+ * present and is refused rather than falling through to the anonymous arm.
+ */
+function sessionOf(
+	sessionUserId: string | null | undefined,
+	membershipIds: readonly string[],
+): SelfAssertSession {
+	return sessionUserId ? { present: true, membershipIds } : { present: false };
+}
+
+/**
+ * **A self-assert never overrides a session** (#747, ADR-0026).
+ *
+ * THE one place in this module that compares a self-asserted member id against a
+ * role slot. Four arms route through it — agenda meta (TMOD), Word of the Day
+ * (TMOD), Word of the Day (Grammarian), and the Ballot Counter gate — and
+ * `self-assert-binding.guard.test.ts` fails if a fifth is written inline instead.
+ * That guard is the durable half: the bug was never one arm, it was one SHAPE
+ * copied four times, and four in-place fixes would leave the shape intact.
+ *
+ * The rules, in order:
+ *
+ *  - no `selfMemberId`, no `slotMemberId`, or they differ → refuse. Unchanged:
+ *    the slot is still what authorizes, and an unassigned slot still grants
+ *    nobody (ADR-0010).
+ *  - **no session → grant.** The Toastmaster running the agenda from their phone
+ *    with no account is the workflow this model exists for, and it keeps working
+ *    byte for byte. Nothing about the anonymous path changes here.
+ *  - **a session one of whose memberships in this club IS the asserted id →
+ *    grant.** The client already sends exactly this (`useEffectiveMember` lets
+ *    the session win over the localStorage name-pick), so an honest signed-in
+ *    role holder pays nothing.
+ *  - **a session that is anything else → refuse.** That includes a signed-in
+ *    member asserting somebody ELSE's id, which is the bug, and it includes a
+ *    session with NO membership in this club at all — an outsider holding an
+ *    account, and a read-only impersonating superadmin with them. (A `read_write`
+ *    impersonator never reaches here; the admin arm returns first.)
+ *
+ * Three things this deliberately does NOT do.
+ *
+ * **It does not bind against ONE membership.** `membershipIds` is the whole set
+ * the caller holds in this club, because the question here is "is this id one of
+ * mine", not "is it my top-ranked row". A human reachable through two Person rows
+ * in one club is representable (`resolveAdminGrant`'s query comment), so binding
+ * against the ordered pick alone would refuse a signed-in member who genuinely
+ * holds the slot on their other membership — and refuse them ONLY when signed in,
+ * which is the same incoherence the lapsed-member note below rejects.
+ *
+ * **It does not require the membership to be ACTIVE.** Every other session gate
+ * in the repo does (`resolveSessionActor`, `resolveAdminGrant`), and they are
+ * asking a different question: those grant a capability BECAUSE of the
+ * membership, so a lapsed one must not. Here the slot grants the capability and
+ * the membership only answers "is that id yours". Refusing a lapsed member who
+ * holds the slot would leave them strictly worse off signed in than signed out,
+ * since the anonymous arm above grants them — an incoherence, not a tightening.
+ *
+ * **It does not go through `resolveWriteActorWithProof`** (`write-actor-logic.ts`),
+ * which also distinguishes a session-derived member id from an asserted one. That
+ * seam answers who a write is CREDITED to, and its own module draws the line:
+ * "the difference between attribution and authorization". Three concrete reasons
+ * it is the wrong route here, kept where the next reader will look for them:
+ * its asserted arm GRANTS any active member of the club, which is precisely what
+ * must not authorize here; it THROWS (`requireMemberInClub`) where these
+ * resolvers return `allowed: false`, and a slot held by a since-deactivated
+ * member would start raising out of a resolver whose contract is a decision
+ * object; and it re-reads the membership through `getMembership`, adding a second
+ * query and a second snapshot to a resolver that already has the row. What IS
+ * shared is the vocabulary — "session" vs "asserted" means one thing across the
+ * repo (`#/lib/write-proof`), and this is that distinction applied to a grant.
+ *
+ * Pure, so the truth table is directly testable (`self-assert-grant.test.ts`).
+ */
+export function resolveSelfAssertGrant(args: {
+	/** The member id the caller claims to be, off the wire. */
+	selfMemberId: string | null | undefined;
+	/** This meeting's assignee for the slot the arm keys off, or null. */
+	slotMemberId: string | null;
+	/** What the caller's session is, if any. */
+	session: SelfAssertSession;
+}): { granted: boolean; actorMemberId: string | null } {
+	const refused = { granted: false, actorMemberId: null } as const;
+	if (
+		!args.selfMemberId ||
+		!args.slotMemberId ||
+		args.selfMemberId !== args.slotMemberId
+	) {
+		return refused;
+	}
+	// ONE name from here down, and that is deliberate. Past the equality above the
+	// claim and the slot are the same VALUE, so any later mention of
+	// `args.selfMemberId` would be interchangeable with this one — an edit that
+	// swapped them would be undetectable by any test, while quietly moving both
+	// the binding and the credited id onto the payload. `verified` is the value
+	// read from the row the SERVER loaded, which is the source #396 requires for
+	// `actorMemberId`, and there is no second name in scope to confuse it with.
+	// `self-assert-binding.guard.test.ts` pins that in the source, which is the
+	// only place it is visible.
+	const verified = args.slotMemberId;
+	const granted = { granted: true, actorMemberId: verified } as const;
+	if (!args.session.present) return granted;
+	return args.session.membershipIds.includes(verified) ? granted : refused;
 }
 
 /**
@@ -290,7 +462,9 @@ export async function resolveMeetingAgendaAuthz(
 	assertMeetingNotLocked(meeting.status);
 	const { tmodMemberId } = await loadRoleSlotAssignees(input.meetingId);
 
-	// Admin path (session admin or read_write impersonation, #246).
+	// Admin path (session admin or read_write impersonation, #246). Also hands
+	// back the caller's own membership in this club, which the self-assert arm
+	// below binds against without a second read (#747).
 	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
 	if (admin.granted) {
 		return {
@@ -302,19 +476,20 @@ export async function resolveMeetingAgendaAuthz(
 		};
 	}
 
-	// TMOD self-assert path: caller holds this meeting's TMOD slot.
-	if (
-		input.selfMemberId &&
-		tmodMemberId &&
-		input.selfMemberId === tmodMemberId
-	) {
+	// TMOD self-assert path: caller holds this meeting's TMOD slot, and — when
+	// they have a session — that slot is their own membership (#747).
+	const tmod = resolveSelfAssertGrant({
+		selfMemberId: input.selfMemberId,
+		slotMemberId: tmodMemberId,
+		session: sessionOf(input.sessionUserId, admin.membershipIds),
+	});
+	if (tmod.granted) {
 		return {
 			clubId,
 			allowed: true,
 			via: "tmod-self-assert",
 			tmodMemberId,
-			// Verified against the slot above, so it is safe to credit.
-			actorMemberId: tmodMemberId,
+			actorMemberId: tmod.actorMemberId,
 		};
 	}
 
@@ -376,34 +551,39 @@ export async function resolveWordOfTheDayAuthz(
 			actorMemberId: admin.memberId,
 		};
 	}
+	// Both self-assert arms below read the SAME session, so it is built once —
+	// two calls to `sessionOf` would be two chances to pass a different one.
+	const session = sessionOf(input.sessionUserId, admin.membershipIds);
 
-	if (
-		input.selfMemberId &&
-		tmodMemberId &&
-		input.selfMemberId === tmodMemberId
-	) {
+	const tmod = resolveSelfAssertGrant({
+		selfMemberId: input.selfMemberId,
+		slotMemberId: tmodMemberId,
+		session,
+	});
+	if (tmod.granted) {
 		return {
 			clubId,
 			allowed: true,
 			via: "tmod-self-assert",
 			tmodMemberId,
 			grammarianMemberId,
-			actorMemberId: tmodMemberId,
+			actorMemberId: tmod.actorMemberId,
 		};
 	}
 
-	if (
-		input.selfMemberId &&
-		grammarianMemberId &&
-		input.selfMemberId === grammarianMemberId
-	) {
+	const grammarian = resolveSelfAssertGrant({
+		selfMemberId: input.selfMemberId,
+		slotMemberId: grammarianMemberId,
+		session,
+	});
+	if (grammarian.granted) {
 		return {
 			clubId,
 			allowed: true,
 			via: "grammarian-self-assert",
 			tmodMemberId,
 			grammarianMemberId,
-			actorMemberId: grammarianMemberId,
+			actorMemberId: grammarian.actorMemberId,
 		};
 	}
 
@@ -456,7 +636,6 @@ export async function resolveVoteCounterAuthz(
 	// why the archive gate cannot be folded into `assertMeetingNotLocked`.
 	await assertMeetingClubNotArchived(clubId);
 	const { voteCounterMemberId } = await loadRoleSlotAssignees(input.meetingId);
-
 	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
 	if (admin.granted) {
 		return {
@@ -469,18 +648,18 @@ export async function resolveVoteCounterAuthz(
 		};
 	}
 
-	if (
-		input.selfMemberId &&
-		voteCounterMemberId &&
-		input.selfMemberId === voteCounterMemberId
-	) {
+	const voteCounter = resolveSelfAssertGrant({
+		selfMemberId: input.selfMemberId,
+		slotMemberId: voteCounterMemberId,
+		session: sessionOf(input.sessionUserId, admin.membershipIds),
+	});
+	if (voteCounter.granted) {
 		return {
 			clubId,
 			allowed: true,
 			via: "vote-counter-self-assert",
 			voteCounterMemberId,
-			// Verified against the slot above, so it is safe to credit.
-			actorMemberId: voteCounterMemberId,
+			actorMemberId: voteCounter.actorMemberId,
 			meetingStatus: meeting.status,
 		};
 	}

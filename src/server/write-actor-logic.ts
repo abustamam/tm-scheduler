@@ -110,6 +110,21 @@ export interface ResolvedWriteActor {
  * Null still means the two legitimate no-credit cases `resolveWriteActor`
  * documents: an impersonated write, or nobody to credit at all. Neither is an
  * actor, so neither carries a proof.
+ *
+ * **Not the seam for an AUTHORIZATION decision**, and #747 is where that was
+ * settled rather than assumed. Its four role-console arms need the same
+ * underlying fact — is this asserted id the caller's own membership — and route
+ * through `resolveSelfAssertGrant` (`meeting-authz-logic.ts`) instead, for three
+ * reasons worth knowing before the next caller reaches for this one. This
+ * function's asserted arm GRANTS any active member of the club, which is exactly
+ * what must not authorize a console. It THROWS (`requireMemberInClub`) on an id
+ * that is not on the roster, where an authz resolver returns `allowed: false`
+ * and every caller has a refusal path rather than an error path. And it re-reads
+ * the membership through `getMembership`, so a resolver that already holds the
+ * row would take a second query and a second MVCC snapshot to ask a question it
+ * can already answer. The VOCABULARY is shared — "session" vs "asserted" means
+ * one thing repo-wide (`#/lib/write-proof`) — and that is the part worth
+ * sharing; the decision is not.
  */
 export async function resolveWriteActorWithProof(
 	input: WriteActorInput,
