@@ -62,6 +62,41 @@ export function formatShortDate(value: Date | string, timeZone?: string) {
 }
 
 /**
+ * `formatShortDate`, plus the year whenever it is not `now`'s: "Aug 10" for a
+ * date this year, "Aug 10, 2022" for one that is not.
+ *
+ * For a surface whose window is a COUNT rather than a date range. The VPE
+ * dashboard's evaluator pairings (#709) show a speaker's last five evaluations
+ * with no date floor, so a member who speaks rarely can carry pairings years
+ * old — and the date on the chip is the only thing that says so. Year-less,
+ * that chip read exactly like this year's and a stale repeat drove the "vary
+ * the next one" signal. The neighbouring sections keep `formatShortDate`
+ * because their windows are bounded in time and the year is implied.
+ *
+ * Compared in `timeZone` on both sides, so a New Year's Eve evaluation is
+ * "last year" in the club's zone rather than the runtime's.
+ */
+export function formatHistoryDate(
+	value: Date | string,
+	options: { now?: Date; timeZone?: string } = {},
+) {
+	const d = typeof value === "string" ? new Date(value) : value;
+	const { now = new Date(), timeZone } = options;
+	const yearOf = new Intl.DateTimeFormat("en-US", {
+		year: "numeric",
+		timeZone,
+	});
+	return new Intl.DateTimeFormat(undefined, {
+		month: "short",
+		day: "numeric",
+		...(yearOf.format(d) === yearOf.format(now)
+			? {}
+			: { year: "numeric" as const }),
+		timeZone,
+	}).format(d);
+}
+
+/**
  * Format a CALENDAR DAY ("YYYY-MM-DD") as e.g. "Aug 10", or "Aug 10, 2026" with
  * `{ withYear: true }`.
  *

@@ -15,13 +15,17 @@ import {
 	inArray,
 	isNotNull,
 	lt,
+	lte,
 	max,
 	min,
 	ne,
+	or,
 	sql,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
+	guests,
 	meetingAttendance,
 	meetings,
 	members,
@@ -34,6 +38,11 @@ import {
 	type AttendanceLapseRow,
 	scoreAttendanceLapse,
 } from "#/lib/attendance-lapse";
+import {
+	EVALUATOR_PAIRING,
+	type EvaluatorPairingRow,
+	groupEvaluatorPairings,
+} from "#/lib/evaluator-pairing";
 
 /** A slot only counts as "held" once it's claimed or confirmed. */
 const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
@@ -345,6 +354,194 @@ export async function loadOverdueMembers(
 			upcomingRoleAt: upcoming.get(r.memberId),
 		};
 	});
+}
+
+/**
+ * Evaluator pairing history for a club (#709) — who has evaluated whom.
+ *
+ * The question this answers is not the one #146's assign-picker annotation
+ * answers. That reports when a member last held a role, INCLUDING when they
+ * last evaluated anyone; it cannot report who evaluated *this speaker*, and
+ * that is the question that produces variety. Without it the assigner is
+ * remembering several meetings back, and repeats go unnoticed.
+ *
+ * **No new tables (ADR-0005).** The pairing is already in the schema:
+ * `role_slots.evaluates_slot_id` points from an evaluator slot at the speaker
+ * slot it evaluates, written at meeting creation and maintained by
+ * `slots-logic.ts`. `meetings.ts` and `my-activity-logic.ts` already self-join
+ * through it WITHIN one meeting; this is the same self-join read ACROSS
+ * meetings.
+ *
+ * The pointer is the whole definition of a pairing, so nothing here filters on
+ * `role_definitions.category = 'evaluator'` or on `is_speaker_role`. A club can
+ * name its roles anything, and adding a second, redundant test for
+ * "is this really an evaluator slot" could only ever drop real pairings.
+ *
+ * Both filters are shared verbatim with the sections beside it: past
+ * (`lt(now)`, the exact complement of `loadUpcomingRoleClaims`' `gte(now)`) and
+ * `ne(status, 'cancelled')`. The meeting joined is the EVALUATOR slot's, which
+ * is the speaker slot's too — the pointer is only ever set within one meeting.
+ *
+ * **The window is bounded in SQL, not only in JS.** `EVALUATOR_PAIRING
+ * .recentPerSpeaker` caps what the section RENDERS; on its own it caps nothing
+ * this function fetches, and the first draft shipped exactly that — every held,
+ * past, non-cancelled pairing in the club, for all time, truncated to five per
+ * speaker after the rows had already crossed the wire. Its neighbour
+ * `loadAttendanceLapse` bounds itself at the query (`.limit(ATTENDANCE_LAPSE
+ * .windowMeetings)`) and this now does too, with the shape a per-GROUP top-N
+ * needs: `ROW_NUMBER() OVER (PARTITION BY <speaker> ORDER BY <newest first>)`
+ * in a subquery, filtered to `<= recentPerSpeaker` outside it. A plain
+ * `.limit()` cannot express it — it would cut the whole result set, so one
+ * prolific speaker would eat the entire budget and the rest of the roster would
+ * silently lose their history.
+ *
+ * Be precise about what that buys: the result set is bounded, not the scan.
+ * Postgres still reads every qualifying pairing to rank it. What no longer
+ * grows without limit is what is transferred and what `groupEvaluatorPairings`
+ * holds in memory — five rows per active speaker, whatever the club's age.
+ *
+ * The window's ORDER BY mirrors the fold's comparator term for term (newest
+ * first, then meeting id, then the evaluator's id via the same COALESCE that
+ * produces `evaluatorKey`). That is load-bearing rather than tidy: the fold
+ * cannot see what SQL discarded, so an ORDER BY that broke ties differently
+ * would hand it a different five at every tie — two evaluators of one speaker
+ * at one meeting, or two meetings sharing a `scheduled_at`.
+ *
+ * `speakerMemberIds` narrows the SPEAKER axis. The dashboard passes nothing and
+ * gets the active roster; a caller naming ids has already decided whose history
+ * it wants, so the active-roster filter steps aside rather than silently
+ * returning an empty history for a member who has gone inactive. #681 (a
+ * speaker seeing who has evaluated them **and who evaluates them next**) is the
+ * caller that seam is for — but only for its FIRST half. This query hard-filters
+ * `lt(meetings.scheduledAt, now)`, so it can serve the history and nothing else;
+ * the forward-looking half needs its own query, not a parameter on this one.
+ * What #681 does NOT need is its own copy of the history read, and what it must
+ * NOT do is reach it through `getEvaluatorPairings`, whose gate is club-wide
+ * admin (see `reporting.ts`).
+ */
+export async function loadEvaluatorPairings(
+	clubId: string,
+	opts?: { speakerMemberIds?: string[] },
+): Promise<EvaluatorPairingRow[]> {
+	const now = new Date();
+	const speaker = alias(members, "speaker_member");
+	const speakerSlot = alias(roleSlots, "speaker_slot");
+	const evaluatorMember = alias(members, "evaluator_member");
+	const evaluatorGuest = alias(guests, "evaluator_guest");
+
+	const scoped = opts?.speakerMemberIds;
+
+	// Every column is wrapped so it carries an explicit output name, and every
+	// wrapper carries `.mapWith(<its column>)`. Both halves are load-bearing and
+	// neither is obvious:
+	//
+	// - Drizzle emits a plain column inside a subquery WITHOUT an alias, so
+	//   `speaker.id` and `meetings.id` would both surface as `"id"` and the three
+	//   `name` columns all as `"name"`; Postgres then rejects the outer select
+	//   with `column reference "id" is ambiguous`. Loud, but only at runtime.
+	// - `sql<T>` is an assertion the compiler cannot check against the driver,
+	//   and for the two timestamps it would have been a LIE. drizzle's
+	//   node-postgres session overrides pg's TIMESTAMP/TIMESTAMPTZ/DATE parsers
+	//   to hand back raw strings, leaving the decoding to each column's
+	//   `mapFromDriverValue` — which a bare `sql` expression does not have. Read
+	//   that way, `scheduledAt` arrives as a string and the fold dies on
+	//   `.getTime()`; `joinedAt` arrives as a string and reaches `formatTenure`
+	//   in the browser with every server gate green. `.mapWith` puts the
+	//   column's own decoder back. It is an identity for the uuid and text
+	//   columns and is spelled out on all nine anyway, so that a tenth added by
+	//   copy-paste inherits the safe shape.
+	const ranked = db
+		.select({
+			speakerMemberId: sql<string>`${speaker.id}`
+				.mapWith(speaker.id)
+				.as("speaker_member_id"),
+			speakerName: sql<string>`${speaker.name}`
+				.mapWith(speaker.name)
+				.as("speaker_name"),
+			speakerJoinedAt: sql<Date | null>`${speaker.joinedAt}`
+				.mapWith(speaker.joinedAt)
+				.as("speaker_joined_at"),
+			evaluatorMemberId: sql<string | null>`${roleSlots.assignedMemberId}`
+				.mapWith(roleSlots.assignedMemberId)
+				.as("evaluator_member_id"),
+			evaluatorGuestId: sql<string | null>`${roleSlots.assignedGuestId}`
+				.mapWith(roleSlots.assignedGuestId)
+				.as("evaluator_guest_id"),
+			evaluatorMemberName: sql<string | null>`${evaluatorMember.name}`
+				.mapWith(evaluatorMember.name)
+				.as("evaluator_member_name"),
+			evaluatorGuestName: sql<string | null>`${evaluatorGuest.name}`
+				.mapWith(evaluatorGuest.name)
+				.as("evaluator_guest_name"),
+			meetingId: sql<string>`${meetings.id}`
+				.mapWith(meetings.id)
+				.as("pairing_meeting_id"),
+			scheduledAt: sql<Date>`${meetings.scheduledAt}`
+				.mapWith(meetings.scheduledAt)
+				.as("pairing_scheduled_at"),
+			// `${meetings.id} asc` is inert today — `meetings_club_scheduled_unique`
+			// makes two meetings of ONE club sharing a `scheduled_at` impossible,
+			// and this query is club-scoped. It stays because the invariant worth
+			// keeping checkable is "this ORDER BY and the fold's comparator are the
+			// same list", not "the same list except where an index currently hides
+			// the difference". The term that does fire is the COALESCE: two
+			// evaluators of one speaker at one meeting tie on both columns above.
+			rank: sql<number>`row_number() over (
+				partition by ${speaker.id}
+				order by ${meetings.scheduledAt} desc,
+					${meetings.id} asc,
+					coalesce(${roleSlots.assignedMemberId}, ${roleSlots.assignedGuestId}) asc
+			)`.as("pairing_rank"),
+		})
+		.from(roleSlots)
+		.innerJoin(speakerSlot, eq(speakerSlot.id, roleSlots.evaluatesSlotId))
+		.innerJoin(speaker, eq(speaker.id, speakerSlot.assignedMemberId))
+		.innerJoin(
+			meetings,
+			and(
+				eq(meetings.id, roleSlots.meetingId),
+				eq(meetings.clubId, clubId),
+				lt(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		// LEFT, both of them: the evaluator is a member OR a guest, never both
+		// (`role_slots_single_assignee`), so an inner join on either would drop
+		// exactly the other kind.
+		.leftJoin(
+			evaluatorMember,
+			eq(evaluatorMember.id, roleSlots.assignedMemberId),
+		)
+		.leftJoin(evaluatorGuest, eq(evaluatorGuest.id, roleSlots.assignedGuestId))
+		.where(
+			and(
+				eq(speaker.clubId, clubId),
+				scoped ? inArray(speaker.id, scoped) : eq(speaker.status, "active"),
+				inArray(roleSlots.status, [...HELD_SLOT_STATUSES]),
+				or(
+					isNotNull(roleSlots.assignedMemberId),
+					isNotNull(roleSlots.assignedGuestId),
+				),
+			),
+		)
+		.as("ranked_pairings");
+
+	const rows = await db
+		.select({
+			speakerMemberId: ranked.speakerMemberId,
+			speakerName: ranked.speakerName,
+			speakerJoinedAt: ranked.speakerJoinedAt,
+			evaluatorMemberId: ranked.evaluatorMemberId,
+			evaluatorGuestId: ranked.evaluatorGuestId,
+			evaluatorMemberName: ranked.evaluatorMemberName,
+			evaluatorGuestName: ranked.evaluatorGuestName,
+			meetingId: ranked.meetingId,
+			scheduledAt: ranked.scheduledAt,
+		})
+		.from(ranked)
+		.where(lte(ranked.rank, EVALUATOR_PAIRING.recentPerSpeaker));
+
+	return groupEvaluatorPairings(rows);
 }
 
 /**

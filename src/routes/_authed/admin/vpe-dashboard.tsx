@@ -8,11 +8,21 @@ import {
 } from "#/lib/attendance-lapse";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { formatMeetingDate, formatShortDate } from "#/lib/format";
+import {
+	EVALUATOR_PAIRING,
+	type EvaluationPair,
+	type EvaluatorPairingRow,
+} from "#/lib/evaluator-pairing";
+import {
+	formatHistoryDate,
+	formatMeetingDate,
+	formatShortDate,
+} from "#/lib/format";
 import { formatTenure } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import {
 	getAttendanceLapse,
+	getEvaluatorPairings,
 	getOverdueMembers,
 	getSpeakerRotation,
 } from "#/server/reporting";
@@ -29,13 +39,22 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 	},
 	loader: async ({ context }) => {
 		const club = effectiveAdminClub(context);
-		if (!club) return { rotation: [], overdue: [], lapse: [], clubName: "" };
-		const [rotation, overdue, lapse] = await Promise.all([
+		if (!club) {
+			return {
+				rotation: [],
+				overdue: [],
+				lapse: [],
+				pairings: [],
+				clubName: "",
+			};
+		}
+		const [rotation, overdue, lapse, pairings] = await Promise.all([
 			getSpeakerRotation({ data: { clubId: club.clubId } }),
 			getOverdueMembers({ data: { clubId: club.clubId } }),
 			getAttendanceLapse({ data: { clubId: club.clubId } }),
+			getEvaluatorPairings({ data: { clubId: club.clubId } }),
 		]);
-		return { rotation, overdue, lapse, clubName: club.name };
+		return { rotation, overdue, lapse, pairings, clubName: club.name };
 	},
 	component: VpeDashboard,
 });
@@ -51,11 +70,18 @@ function pathwaySummary(row: SpeakerRotationRow): string | null {
 }
 
 function VpeDashboard() {
-	const { rotation, overdue, lapse } = Route.useLoaderData();
+	const { rotation, overdue, lapse, pairings } = Route.useLoaderData();
 
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
 	const lapsed = lapse.filter((m) => m.isLapsed);
+	// SPEAKERS, not pairings and not evaluators — one row per speaker, kept if
+	// some evaluator appears twice in that speaker's shown window. A speaker
+	// repeated by two different evaluators is one entry here, not two, so the
+	// tile below has to say "speakers" or it is reporting a number it does not
+	// hold. It said "Repeat evaluators / same pairing twice" over exactly this
+	// count until the units were checked.
+	const speakersWithRepeat = pairings.filter((p) => p.hasRepeat);
 
 	const stats = [
 		{ label: "Active members", value: String(rotation.length), note: "roster" },
@@ -75,6 +101,12 @@ function VpeDashboard() {
 			label: "Never spoken",
 			value: String(neverSpoken),
 			note: "top of queue",
+		},
+		{
+			label: "Speakers with a repeat",
+			value: String(speakersWithRepeat.length),
+			note: "same evaluator twice",
+			amber: speakersWithRepeat.length > 0,
 		},
 	];
 
@@ -161,6 +193,24 @@ function VpeDashboard() {
 					rotation.map((r, i) => (
 						<RotationRow key={r.memberId} row={r} rank={i + 1} />
 					))
+				)}
+			</Section>
+
+			{/* Evaluator pairings (#709). Here rather than in a standalone view, and
+			    that is a direct instruction: #154 was closed wontfix because a
+			    per-role scheduling view would fragment the VPE surface across three
+			    places, and said any further breakdown should fold into THIS
+			    dashboard. It sits last because it is a lookup the assigner reaches
+			    for while assigning, not an alert — unlike the three above it, an
+			    empty result here is not good news, it is just no history. */}
+			<Section
+				title="Evaluator pairings"
+				subtitle={`Who has evaluated whom — the last ${EVALUATOR_PAIRING.recentPerSpeaker} evaluations of each speaker, repeats first. Guests who evaluated are included.`}
+			>
+				{pairings.length === 0 ? (
+					<EmptyRow>No evaluations recorded yet.</EmptyRow>
+				) : (
+					pairings.map((p) => <PairingRow key={p.memberId} row={p} />)
 				)}
 			</Section>
 		</PageContainer>
@@ -405,6 +455,98 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 			</div>
 			<Chevron />
 		</Link>
+	);
+}
+
+/**
+ * One speaker and the people who have evaluated them (#709).
+ *
+ * Laid out as identity-then-chips INSIDE one grid cell rather than as its own
+ * column, unlike the three rows above. Those hide their extra columns below
+ * `sm` and send the officer to the member profile for the rest; here the
+ * evaluator list IS the row, so hiding it would leave a row that says nothing
+ * on the phone a VPE actually assigns roles from. Wrapping chips cost nothing
+ * at desktop width and stay readable at 375px.
+ */
+function PairingRow({ row }: { row: EvaluatorPairingRow }) {
+	return (
+		<Link
+			to="/members/$id"
+			params={{ id: row.memberId }}
+			className={cn(ROW_CLASS, "grid-cols-[1fr_28px] sm:grid-cols-[1fr_34px]")}
+		>
+			<div className="min-w-0">
+				<MemberIdentity
+					memberId={row.memberId}
+					name={row.name}
+					joinedAt={row.joinedAt}
+				/>
+				{/* Indented to clear the 38px avatar plus its 12px gap, so the chips
+				    line up under the name rather than under the picture. */}
+				<div className="mt-2 pl-[50px]">
+					<div className="flex flex-wrap items-center gap-1.5">
+						{row.recent.map((p) => (
+							<PairingChip key={`${p.meetingId}:${p.evaluatorKey}`} pair={p} />
+						))}
+					</div>
+					{/* The repeat statement is TEXT, not just the amber chips. Colour
+					    alone carries nothing for a screen reader and little for the
+					    ~8% of men who cannot separate these two swatches, and this
+					    line is the only thing on the row that says what to DO. */}
+					<div
+						className={cn(
+							"mt-1 text-xs",
+							row.hasRepeat
+								? "font-bold text-[var(--warning-foreground)]"
+								: "text-[var(--sea-ink-soft)]",
+						)}
+					>
+						{row.hasRepeat
+							? "Repeated evaluator — vary the next one"
+							: `${row.distinctEvaluators} different evaluator${
+									row.distinctEvaluators === 1 ? "" : "s"
+								}`}
+					</div>
+				</div>
+			</div>
+			<Chevron />
+		</Link>
+	);
+}
+
+/**
+ * One past evaluation: who, and when.
+ *
+ * The guest suffix is spelled out rather than implied by styling, for the
+ * reason #709 lists it as an acceptance criterion: an evaluator who is not on
+ * the roster is exactly the pairing an assigner would otherwise not think to
+ * count, and a chip that looks like every other one hides that.
+ */
+function PairingChip({ pair }: { pair: EvaluationPair }) {
+	return (
+		<span
+			className={cn(
+				"inline-flex max-w-full items-baseline gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold",
+				pair.repeat
+					? "border-[var(--warning)] bg-[var(--warning-soft)] text-[var(--warning-foreground)]"
+					: "border-[var(--line)] text-[var(--sea-ink)]",
+			)}
+		>
+			{/* The NAME wraps and the date does not: a long name in a
+			    `whitespace-nowrap` chip overflows the row, and `Section`'s
+			    `overflow-hidden` then clips it away entirely at 375px. */}
+			<span className="min-w-0 break-words">
+				{pair.evaluatorName}
+				{pair.isGuest ? " (guest)" : ""}
+			</span>
+			{/* Year shown when it is not this year. The window is the last FIVE
+			    evaluations, not the last N months, so a rare speaker's chips can
+			    be years old — and a year-less date reads exactly like this
+			    year's, letting a stale repeat drive "vary the next one". */}
+			<span className="whitespace-nowrap text-[var(--sea-ink-soft)]">
+				{formatHistoryDate(pair.scheduledAt)}
+			</span>
+		</span>
 	);
 }
 

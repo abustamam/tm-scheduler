@@ -57,6 +57,8 @@ async function renderRoute(lapse: AttendanceLapseRow[]) {
 		rotation: [],
 		overdue: [],
 		lapse,
+		// #709 added a fourth loader key; this file asserts nothing about it.
+		pairings: [],
 		clubName: "Downtown Club",
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);

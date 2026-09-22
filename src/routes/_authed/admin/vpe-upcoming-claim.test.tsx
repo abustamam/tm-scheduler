@@ -109,6 +109,8 @@ async function renderRoute(data: {
 		rotation: data.rotation ?? [],
 		overdue: data.overdue ?? [],
 		lapse: data.lapse ?? [],
+		// #709 added a fourth loader key; this file asserts nothing about it.
+		pairings: [],
 		clubName: "Harbor City Speakers",
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);

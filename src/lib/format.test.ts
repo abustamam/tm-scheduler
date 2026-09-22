@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	formatCalendarDay,
+	formatHistoryDate,
 	formatMeetingTime,
 	formatMeetingTimeRange,
 	formatShortDate,
@@ -22,6 +23,54 @@ describe("formatShortDate", () => {
 		expect(formatShortDate(new Date("2026-01-05T12:00:00Z"), "UTC")).toBe(
 			"Jan 5",
 		);
+	});
+});
+
+describe("formatHistoryDate (#709)", () => {
+	const now = new Date("2026-09-22T12:00:00Z");
+
+	it("reads like formatShortDate for a date in the current year", () => {
+		expect(
+			formatHistoryDate("2026-08-10T18:00:00Z", { now, timeZone: "UTC" }),
+		).toBe("Aug 10");
+	});
+
+	it("adds the year for a date in any other year", () => {
+		// A speaker's five most recent evaluations can be years old, and without
+		// this the stale one reads exactly like this year's.
+		expect(
+			formatHistoryDate("2022-08-10T18:00:00Z", { now, timeZone: "UTC" }),
+		).toBe("Aug 10, 2022");
+		expect(
+			formatHistoryDate("2027-01-03T18:00:00Z", { now, timeZone: "UTC" }),
+		).toBe("Jan 3, 2027");
+	});
+
+	it("decides 'this year' in the given zone, not the runtime's", () => {
+		// 03:00 UTC on Jan 1 is still Dec 31 in Los Angeles — last year there.
+		expect(
+			formatHistoryDate("2026-01-01T03:00:00Z", {
+				now,
+				timeZone: "America/Los_Angeles",
+			}),
+		).toBe("Dec 31, 2025");
+		expect(
+			formatHistoryDate("2026-01-01T03:00:00Z", { now, timeZone: "UTC" }),
+		).toBe("Jan 1");
+	});
+
+	it("defaults `now` to the current time", () => {
+		const thisYear = new Date().getFullYear();
+		expect(
+			formatHistoryDate(new Date(Date.UTC(thisYear, 5, 15, 12)), {
+				timeZone: "UTC",
+			}),
+		).toBe("Jun 15");
+		expect(
+			formatHistoryDate(new Date(Date.UTC(thisYear - 3, 5, 15, 12)), {
+				timeZone: "UTC",
+			}),
+		).toBe(`Jun 15, ${thisYear - 3}`);
 	});
 });
 
