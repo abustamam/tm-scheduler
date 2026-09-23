@@ -72,6 +72,25 @@ export const auth = betterAuth({
 			},
 		},
 	},
+	// #847 — where the client address comes from. Better Auth reads only
+	// `x-forwarded-for` by default; Railway's edge publishes the client in
+	// `X-Real-IP` instead, so resolution returned null on EVERY request since
+	// launch: `session.ip_address` held the empty string on all of them, and the
+	// limiter below fell back to one bucket per path shared by all traffic — 5
+	// magic-link requests a minute for the whole app, not 5 each.
+	//
+	// This list REPLACES the default rather than extending it, and that is half
+	// the fix: `x-forwarded-for` is client-settable, and with no
+	// `trustedProxies` a single-entry value is trusted as-is, so leaving it
+	// consulted lets a caller pick its own rate-limit bucket per request. List
+	// only headers the edge sets. If a future host needs `x-forwarded-for`,
+	// configure `trustedProxies` so the chain is walked from a known proxy —
+	// do not add it here bare.
+	advanced: {
+		ipAddress: {
+			ipAddressHeaders: ["x-real-ip"],
+		},
+	},
 	rateLimit: {
 		enabled: true,
 		// Global default: 20 requests per 60 s (covers all auth endpoints).

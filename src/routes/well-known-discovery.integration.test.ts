@@ -304,6 +304,103 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		expect(sawRefusal).toBe(true);
 	});
 
+	describe("rate-limit buckets are per client, keyed on X-Real-IP (#847)", () => {
+		/**
+		 * A per-run client address in TEST-NET-3, so no two runs — and no other
+		 * test in this file — share a bucket. The limiter's store is an
+		 * in-process Map that lives as long as the worker, and every request
+		 * with no `x-real-ip` falls back to `127.0.0.1` under test, which is the
+		 * bucket the "still meters the magic-link path" test above drains.
+		 */
+		const base = randomBytes(1)[0] ?? 0;
+		let issued = 0;
+		/** Distinct on every call within a run: a counter from a random start. */
+		const clientIp = () => `203.0.113.${1 + ((base + issued++) % 254)}`;
+		let emailCount = 0;
+
+		/** One magic-link request as a Railway-fronted client would send it. */
+		function magicLink(headers: Record<string, string>) {
+			const email = `ip-bucket-${SUFFIX}-${emailCount++}@example.com`;
+			seededEmails.add(email);
+			return handler(
+				new Request(`${ORIGIN}${AUTH_BASE_PATH}/sign-in/magic-link`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						origin: ORIGIN,
+						...headers,
+					},
+					body: JSON.stringify({ email, callbackURL: "/" }),
+				}),
+			);
+		}
+
+		/** Spend the whole 5/60s allowance for `ip`, asserting none of it was refused. */
+		async function exhaust(ip: string, extra: () => Record<string, string>) {
+			for (let i = 0; i < 5; i++) {
+				const response = await magicLink({ "x-real-ip": ip, ...extra() });
+				expect(response.status, `request ${i + 1} from ${ip}`).not.toBe(429);
+			}
+		}
+
+		it("reads x-real-ip and nothing else", async () => {
+			// Pinned as configuration because the spoofing test below cannot catch
+			// `x-forwarded-for` added AFTER `x-real-ip`: the first header that
+			// resolves wins, so a request carrying both never reaches the second.
+			// It still matters — a request arriving without `x-real-ip` would then
+			// be keyed on a value the client chose.
+			const { auth } = await import("#/lib/auth");
+			expect(auth.options.advanced?.ipAddress?.ipAddressHeaders).toEqual([
+				"x-real-ip",
+			]);
+		});
+
+		it("refuses the 6th magic-link request from one client, and not a different client's first", async () => {
+			const first = clientIp();
+			const second = clientIp();
+
+			await exhaust(first, () => ({}));
+			expect((await magicLink({ "x-real-ip": first })).status).toBe(429);
+			// The bug this issue is about: one shared bucket meant a second client
+			// was refused here too.
+			expect((await magicLink({ "x-real-ip": second })).status).not.toBe(429);
+		});
+
+		it("does not let a client choose its bucket with x-forwarded-for", async () => {
+			// Rotating a single-entry x-forwarded-for is what the default config
+			// trusted. With it no longer consulted, all six share one bucket.
+			const ip = clientIp();
+			let n = 0;
+			const spoof = () => ({ "x-forwarded-for": `198.51.100.${++n}` });
+			await exhaust(ip, spoof);
+			expect((await magicLink({ "x-real-ip": ip, ...spoof() })).status).toBe(
+				429,
+			);
+		});
+
+		it("records the client address on the session it creates", async () => {
+			// `session.ip_address` is written from the same resolution the limiter
+			// uses, and in production it held the empty string on every row. The
+			// session is created by the VERIFY request, so that is the one that
+			// carries the header.
+			const ip = clientIp();
+			const email = `ip-session-${SUFFIX}@example.com`;
+			seededEmails.add(email);
+			const { auth } = await import("#/lib/auth");
+			await auth.api.signInMagicLink({
+				body: { email, callbackURL: "/" },
+				headers: new Headers(),
+			});
+			const verifyUrl = takeDevMagicLink(email);
+			if (!verifyUrl) throw new Error(`no magic link captured for ${email}`);
+			await handler(new Request(verifyUrl, { headers: { "x-real-ip": ip } }));
+			const rows = await testDb.execute<{ ip_address: string | null }>(
+				sql`select s.ip_address from session s join "user" u on u.id = s.user_id where u.email = ${email}`,
+			);
+			expect(rows.rows.map((row) => row.ip_address)).toEqual([ip]);
+		});
+	});
+
 	it("does not hand arbitrary origin-root paths to the auth handler", async () => {
 		// The splat catches every `.well-known` path. This is the assertion that
 		// it stays two documents wide against the REAL handler, not just against
