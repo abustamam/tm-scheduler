@@ -97,7 +97,8 @@ fastest way to comply.
   `src/routes/[.]well-known.$.ts`, which forwards an ALLOWLISTED pair to `auth.handler`
   rather than rebuilding them; the two are not forwarded alike, and
   `src/lib/well-known-forward.ts` says why.
-  **`/api/mcp` accepts two credential kinds** (#843), split by prefix in `handle-request.ts`:
+  **`/api/mcp` accepts two credential kinds** (#843) — how people connect, and the maintainer's
+  register/rotate/revoke runbook, is `docs/claude-connector.md` — split by prefix in `handle-request.ts`:
   `tmk_…` is a personal token (Claude Code, pasted into a header), anything else is an OAuth
   access token (claude.ai) verified by `src/server/mcp/oauth-credential.ts` — the ONLY file on
   the MCP path allowed to import `#/lib/auth`, and `mcp-authz.guard.test.ts` holds that by
