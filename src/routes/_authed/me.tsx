@@ -3,6 +3,7 @@ import { Bell, CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ApiTokensSection } from "#/components/api-tokens-section";
+import { ConnectedAppsSection } from "#/components/connected-apps-section";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
@@ -109,6 +110,10 @@ function MyCommitments() {
 			{/* Renders nothing unless the user is an admin or officer somewhere
 			    (#773). That check is server-side — see `ApiTokensSection`. */}
 			<ApiTokensSection />
+
+			{/* Shown to everyone signed in (#851): removing an app is not a
+			    privilege, it is the only way to cut one off. */}
+			<ConnectedAppsSection />
 
 			{needsSpeechDetails.length > 0 ? (
 				<div className="rounded-xl border border-[var(--warning)]/40 bg-[var(--warning-soft)] p-4">

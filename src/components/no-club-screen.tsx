@@ -20,6 +20,7 @@ export function NoClubScreen({
 	onSignOut,
 	isSuperadmin = false,
 	hasArchivedClub = false,
+	accountControls,
 }: {
 	/** The signed-in user's email, so they can tell which account they're in. */
 	email: string;
@@ -36,6 +37,8 @@ export function NoClubScreen({
 	 * identity archiving exists to remove.
 	 */
 	hasArchivedClub?: boolean;
+	/** Rendered below the card: controls a club-less person still needs. */
+	accountControls?: React.ReactNode;
 }) {
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-[var(--foam)] font-sans text-[var(--sea-ink)]">
@@ -52,7 +55,7 @@ export function NoClubScreen({
 				</Button>
 			</header>
 
-			<main className="flex flex-1 items-center justify-center px-5 py-12">
+			<main className="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-12">
 				<div className="w-full max-w-md rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-7 text-center shadow-[0_1px_0_var(--inset-glint)_inset,0_18px_44px_rgba(23,58,64,.10)] sm:p-9">
 					<span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-[var(--sand)] text-[var(--lagoon-deep)]">
 						<Users className="size-6" aria-hidden />
@@ -97,6 +100,12 @@ export function NoClubScreen({
 						and try again with that address.
 					</p>
 				</div>
+				{/* Account-level controls that must stay reachable with no club,
+				    such as disconnecting an app (#851). A slot rather than the
+				    section itself, so this screen stays presentational. */}
+				{accountControls ? (
+					<div className="w-full max-w-md text-left">{accountControls}</div>
+				) : null}
 			</main>
 
 			<footer className="border-t border-[var(--line)] px-5 py-4 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)] sm:px-8">

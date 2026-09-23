@@ -81,13 +81,17 @@ club you are not an officer of.
 
 ## Disconnecting
 
-**There is no disconnect button in GavelUp yet.** Removing the connector in claude.ai stops
-Claude from using it. To revoke GavelUp's side too, ask the maintainer (see
-[Revoking one person](#revoking-one-person)). Access already granted keeps working for up to an
-hour after it is revoked, because access tokens are checked without a database lookup.
+Open **`/me`** in GavelUp. Under **Connected apps** is every app you've approved, with when you
+approved it and when it last renewed its access. Click **Disconnect** next to one and confirm.
 
-If you lose your phone: remove the connector from claude.ai on the web, and tell the
-maintainer.
+That ends GavelUp's side: the app can no longer renew its access, and the next time it asks to
+connect you see the approval screen again. Access it already holds keeps working for up to an
+hour, because access tokens are checked without a database lookup.
+
+Removing the connector in claude.ai only stops Claude from using it; GavelUp's side stays live
+for up to 30 days until you disconnect it on `/me` as well.
+
+If you lose your phone: sign in to GavelUp from another device and disconnect on `/me`.
 
 ## Connecting Claude Code
 
@@ -169,15 +173,19 @@ issued keep working until they expire (up to an hour).
 
 ### Revoking one person
 
-There is no UI. In the Postgres service:
+A person disconnects their own apps on `/me` ([Disconnecting](#disconnecting)). This is the
+fallback for revoking SOMEONE ELSE — a lost account, or a person who can't sign in. In the
+Postgres service:
 
 ```bash
 railway ssh --service Postgres -- psql -X -c "
-  delete from oauth_refresh_token where user_id = (select id from \"user\" where email = '<email>');
-  delete from oauth_consent       where user_id = (select id from \"user\" where email = '<email>');"
+  delete from oauth_consent       where user_id = (select id from \"user\" where email = '<email>');
+  delete from oauth_refresh_token where user_id = (select id from \"user\" where email = '<email>');"
 ```
 
-Their current access token keeps working for up to an hour. Ending their officer term or
+Consent goes first. Since #851 a trigger (migration 0087) refuses any new refresh token for a
+person with no consent, so once the consent is gone nothing can mint a token that the second line
+would miss. Their current access token keeps working for up to an hour. Ending their officer term or
 membership is immediate: every call re-checks club roles live.
 
 ### Checking it's up
@@ -193,14 +201,12 @@ how claude.ai finds where to sign in. The second must return JSON naming
 
 ### Making it easier
 
-Two things stand between this and "any officer can connect in a minute":
+One thing stands between this and "any officer can connect in a minute": **everyone shares one
+client secret.** Handing it out works for a few trusted officers, but a leaked secret means
+rotating it, and rotating disconnects everyone. The fix is to let claude.ai register itself:
+MCP's Client ID Metadata Documents (`@better-auth/cimd`, named in ADR-0027 as the path "when
+this opens to other officers"). Then connecting is **paste the URL, sign in, approve** — no ID,
+no secret, and nothing for the maintainer to do per person. It is recorded as open in ADR-0027
+("Known and left open").
 
-1. **Everyone shares one client secret.** Handing it out works for a few trusted officers, but a
-   leaked secret means rotating it, and rotating disconnects everyone. The fix is to let
-   claude.ai register itself: MCP's Client ID Metadata Documents (`@better-auth/cimd`, named in
-   ADR-0027 as the path "when this opens to other officers"). Then connecting is **paste the
-   URL, sign in, approve** — no ID, no secret, and nothing for the maintainer to do per person.
-2. **No self-service disconnect.** Before more than a handful of people connect, `/me` needs a
-   "Connected apps" list with a Disconnect button, so revoking isn't a SQL query.
-
-Both are recorded as open in ADR-0027 ("Known and left open").
+Self-service disconnect, the other half, shipped in #851: `/me`'s **Connected apps** list.
