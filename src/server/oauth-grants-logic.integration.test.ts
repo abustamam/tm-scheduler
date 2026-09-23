@@ -555,6 +555,37 @@ describe.skipIf(!hasTestDb)(
 				expect(await listConnectedApps(x.id)).toEqual([]);
 			});
 
+			it("report the newest token as last active, even a revoked one", async () => {
+				const client = await freshClient("orphan-active");
+				const x = await freshUser();
+				await grantWithRefresh(client, x.cookie);
+				await grantWithRefresh(client, x.cookie);
+				await testDb.execute(
+					sql`delete from oauth_consent where user_id = ${x.id} and client_id = ${client.clientId}`,
+				);
+				// One live token, aged; one newer token, revoked (a rotated-out row).
+				const [live, rotated] = (
+					await testDb.execute<{ id: string }>(
+						sql`select id from oauth_refresh_token where user_id = ${x.id} and client_id = ${client.clientId} order by id`,
+					)
+				).rows.map((r) => r.id);
+				await testDb.execute(
+					sql`update oauth_refresh_token set created_at = created_at - interval '2 hours' where id = ${live}`,
+				);
+				await testDb.execute(
+					sql`update oauth_refresh_token set revoked = now() where id = ${rotated}`,
+				);
+				const [newest] = (
+					await testDb.execute<{ ms: number }>(
+						sql`select ${epochMs("created_at")} as ms from oauth_refresh_token where id = ${rotated}`,
+					)
+				).rows;
+
+				const [app, ...rest] = await listConnectedApps(x.id);
+				expect(rest).toEqual([]);
+				expect(app?.lastActiveAt?.getTime()).toBe(newest?.ms);
+			});
+
 			it("are not listed once expired or revoked", async () => {
 				const client = await freshClient("orphan-dead");
 				const x = await freshUser();

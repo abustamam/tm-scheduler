@@ -298,17 +298,20 @@ export async function sessionUserId(
 	return session.user.id;
 }
 
+/** What `/oauth2/token` answers; `refresh_token` only with `offline_access`. */
+export interface TokenResponse {
+	access_token: string;
+	token_type: string;
+	refresh_token?: string;
+}
+
 /** Redeem an authorization code at `/oauth2/token`, `client_secret_post`. */
 export async function redeemCode(
 	loaded: LoadedAuth,
 	client: RegisteredClient,
 	code: string,
 	verifier: string,
-): Promise<{
-	access_token: string;
-	token_type: string;
-	refresh_token?: string;
-}> {
+): Promise<TokenResponse> {
 	const response = await loaded.handler(
 		new Request(`${TEST_ISSUER}/oauth2/token`, {
 			method: "POST",
@@ -330,11 +333,7 @@ export async function redeemCode(
 	if (!response.ok) {
 		throw new Error(`token ${response.status}: ${await response.text()}`);
 	}
-	return (await response.json()) as {
-		access_token: string;
-		token_type: string;
-		refresh_token?: string;
-	};
+	return (await response.json()) as TokenResponse;
 }
 
 /**
@@ -359,11 +358,7 @@ export async function mintGrant(
 	client: RegisteredClient,
 	userCookie: string,
 	extra: Record<string, string> = {},
-): Promise<{
-	access_token: string;
-	token_type: string;
-	refresh_token?: string;
-}> {
+): Promise<TokenResponse> {
 	const { location, verifier } = await startAuthorize(
 		loaded,
 		client,

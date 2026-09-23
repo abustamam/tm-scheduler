@@ -110,15 +110,18 @@ export async function listConnectedApps(
 				eq(oauthConsent.userId, oauthRefreshToken.userId),
 			),
 		)
-		.where(
-			and(
-				eq(oauthRefreshToken.userId, userId),
+		.where(and(eq(oauthRefreshToken.userId, userId), isNull(oauthConsent.id)))
+		.groupBy(oauthRefreshToken.clientId, oauthClient.name)
+		// Listed only while at least one token is LIVE, but `lastActiveAt` is
+		// taken over every token, revoked or not, exactly as for a consented app.
+		// Filtering in WHERE would report an older live token's time over a newer
+		// rotated one.
+		.having(
+			sql`bool_or(${and(
 				isNull(oauthRefreshToken.revoked),
 				gt(oauthRefreshToken.expiresAt, new Date()),
-				isNull(oauthConsent.id),
-			),
-		)
-		.groupBy(oauthRefreshToken.clientId, oauthClient.name);
+			)})`,
+		);
 
 	return [
 		...consented.map((r) => ({
