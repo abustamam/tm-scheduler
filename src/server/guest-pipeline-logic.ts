@@ -1712,9 +1712,16 @@ export async function applyConvertGuestToMember(
 	// dedup above now prevents a convert from creating.
 	const probe = written as { personId: string; email: string } | null;
 	if (probe) {
-		const obstacle = await rosterConflictFor(probe.personId, probe.email);
-		if (obstacle === "shared_address") {
-			return { ...result, rosterConflict: obstacle };
+		// The convert has COMMITTED by now. A failure here must not surface as a
+		// failed convert: the admin would retry, and the retry refuses because the
+		// guest has already joined. Losing the notice is the lesser harm.
+		try {
+			const obstacle = await rosterConflictFor(probe.personId, probe.email);
+			if (obstacle === "shared_address") {
+				return { ...result, rosterConflict: obstacle };
+			}
+		} catch (err) {
+			console.error("convert: shared-address check failed after commit", err);
 		}
 	}
 	return result;

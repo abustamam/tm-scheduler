@@ -150,8 +150,16 @@ export function resolvePersonDecision(
 	sharedEmails: Set<string>,
 ): PersonDecision {
 	const emailNorm = norm(row.email);
+	// A Customer-ID hit wins over the batch's shared-email override. The override
+	// is about not FUSING two people on one address; a row naming an existing
+	// member number is not a fusion, and forcing it to `ambiguous` skipped the
+	// `foreign` post-check below and sent an insert carrying a Customer ID that
+	// `people_customer_id_unique` already holds — a throw mid-file, with no
+	// transaction to undo the rows before it (#759 review).
+	const cid = norm(row.customerId);
+	const cidHit = cid !== "" && existing.some((p) => norm(p.customerId) === cid);
 	const match =
-		emailNorm !== "" && sharedEmails.has(emailNorm)
+		!cidHit && emailNorm !== "" && sharedEmails.has(emailNorm)
 			? ({ kind: "ambiguous" } as const)
 			: resolvePerson(
 					{ customerId: row.customerId, email: row.email },
@@ -222,6 +230,38 @@ export function addressConflictFor(
 	const key = normalizeAddress(address);
 	if (!key || subject?.linked) return false;
 	return (holders.get(key) ?? []).some((id) => id !== subject?.id);
+}
+
+/**
+ * {@link addressConflictFor} over the snapshot AND the addresses earlier rows
+ * of this same file wrote, then records this row's write. Called by BOTH the
+ * planner and the writer, in row order, so the two count identically.
+ *
+ * The snapshot alone missed a collision the file itself creates: two rows with
+ * the same name and address but different Customer IDs are two Persons, and
+ * `batchSharedEmails` only flags DIFFERENT names, so nothing reported that
+ * neither could then sign in. A row already counted `ambiguous` skips the
+ * in-file half — that collision is the ambiguous count, and reporting it twice
+ * under two names would train admins to ignore both.
+ */
+export function checkWrittenAddress(
+	snapshot: ReadonlyMap<string, readonly string[]>,
+	writtenInFile: Map<string, string[]>,
+	address: string | null,
+	subject: { id: string; linked: boolean } | null,
+	personId: string,
+	countedAmbiguous: boolean,
+): boolean {
+	const conflict =
+		addressConflictFor(snapshot, address, subject) ||
+		(!countedAmbiguous && addressConflictFor(writtenInFile, address, subject));
+	const key = normalizeAddress(address);
+	if (key) {
+		const ids = writtenInFile.get(key) ?? [];
+		if (!ids.includes(personId)) ids.push(personId);
+		writtenInFile.set(key, ids);
+	}
+	return conflict;
 }
 
 /**
@@ -407,6 +447,7 @@ export function planImport(
 	const membershipByPerson = new Map<string, ExistingMembershipRow>();
 	for (const m of existingMemberships) membershipByPerson.set(m.personId, m);
 	const sharedEmails = batchSharedEmails(rows);
+	const writtenInFile = new Map<string, string[]>();
 
 	const summary: PlanSummary = {
 		toInsert: 0,
@@ -487,10 +528,13 @@ export function planImport(
 		if (resolvedPerson) onResolved?.(rowIndex, resolvedPerson);
 		const existingMember = membershipByPerson.get(personId);
 		const md = classifyMembership(row, existingMember);
-		const conflict = addressConflictFor(
+		const conflict = checkWrittenAddress(
 			addressHolders,
+			writtenInFile,
 			writtenAddress(md),
 			subject,
+			personId,
+			pd.kind === "ambiguous",
 		);
 		if (conflict) summary.addressConflicts++;
 		if (md.kind === "update" && existingMember) {

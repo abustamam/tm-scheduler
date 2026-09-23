@@ -421,6 +421,68 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 	});
 });
 
+describe("planImport — review fixes (#759)", () => {
+	it("refuses a foreign Customer ID even when the row's email is shared in the file", () => {
+		// The shared-email override used to run FIRST, forcing `ambiguous` and
+		// skipping the foreign post-check — and the writer then inserted a
+		// Customer ID the unique index already held, throwing mid-file.
+		const plan = planImport(
+			[
+				{
+					id: "v",
+					customerId: "PN-V",
+					email: null,
+					name: "Vic",
+					phone: null,
+					heldBy: "other_club_only",
+					linked: false,
+				},
+			],
+			[],
+			[
+				row({ customerId: "PN-V", name: "Vic", email: "fam@x.io" }),
+				row({ name: "Sam", email: "fam@x.io" }),
+			],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.foreignSkipped).toBe(1);
+		expect(plan.rows[0]?.action).toBe("skip");
+		expect(plan.summary.peopleCreated).toBe(1);
+	});
+
+	it("reports an address two rows of the SAME file give two different Persons", () => {
+		// Same name, so `batchSharedEmails` does not flag them, but different
+		// Customer IDs, so they are two Persons on one address: neither can bind.
+		const plan = planImport(
+			[],
+			[],
+			[
+				row({ customerId: "PN-1", name: "Alex Smith", email: "alex@x.io" }),
+				row({ customerId: "PN-2", name: "Alex Smith", email: "Alex@x.io" }),
+			],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.ambiguous).toBe(0);
+		expect(plan.summary.peopleCreated).toBe(2);
+		expect(plan.summary.addressConflicts).toBe(1);
+		expect(plan.rows[1]?.note).toBe(ADDRESS_CONFLICT_NOTE);
+	});
+
+	it("does not re-report the in-file collision the ambiguous count already covers", () => {
+		const plan = planImport(
+			[],
+			[],
+			[
+				row({ name: "Pat", email: "fam@x.io" }),
+				row({ name: "Sam", email: "fam@x.io" }),
+			],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.ambiguous).toBe(2);
+		expect(plan.summary.addressConflicts).toBe(0);
+	});
+});
+
 describe("addressConflictFor", () => {
 	const holders = new Map([["x@x.io", ["p1"]]]);
 

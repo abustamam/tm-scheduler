@@ -14,7 +14,7 @@ import { db } from "#/db";
 import { members, people } from "#/db/schema";
 import { batchSharedEmails, type MappedMember } from "#/lib/members-csv";
 import {
-	addressConflictFor,
+	checkWrittenAddress,
 	classifyMembership,
 	type ExistingPersonRow,
 	resolvePersonDecision,
@@ -242,6 +242,7 @@ export async function importPeopleAndMembers(
 	// Emails shared by 2+ distinct names within this batch must never merge —
 	// force each such row to a distinct person (mirrors the backfill's scan).
 	const sharedEmails = batchSharedEmails(rows);
+	const writtenInFile = new Map<string, string[]>();
 
 	for (const [rowIndex, row] of rows.entries()) {
 		if (!row.name) {
@@ -355,7 +356,16 @@ export async function importPeopleAndMembers(
 		// Counted from the NON-raced decision, as the preview counts it. The
 		// raced branch below reconciles against a row a concurrent writer made,
 		// which no preview could have seen.
-		if (addressConflictFor(addressHolders, writtenAddress(md), subject)) {
+		if (
+			checkWrittenAddress(
+				addressHolders,
+				writtenInFile,
+				writtenAddress(md),
+				subject,
+				personId,
+				pd.kind === "ambiguous",
+			)
+		) {
 			stats.addressConflicts++;
 		}
 		let membershipId: string;

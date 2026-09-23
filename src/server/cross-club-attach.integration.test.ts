@@ -364,6 +364,53 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			expect(stats.addressConflicts).toBe(0);
 		});
 
+		it("skips a foreign Customer ID whose email is shared in the file, without throwing", async () => {
+			// Before the review fix the shared-email override ran first, the row
+			// became an INSERT carrying an existing Customer ID, and the unique
+			// index threw partway through the file.
+			await person(victimClub.clubId, { customerId: `PN-V-${n}` });
+			const fam = `fam-${n}@x.io`;
+			const text = csv([
+				{ customerId: `PN-V-${n}`, name: "Victim", email: fam },
+				{ name: `Sam ${n}`, email: fam },
+			]);
+
+			const preview = await previewMemberImport(attackerClub.clubId, text);
+			const { stats } = await commitMemberImport(attackerClub.clubId, text);
+
+			expect(preview.summary.foreignSkipped).toBe(1);
+			expect(stats.foreignSkipped).toBe(1);
+			expect(stats.membersCreated).toBe(preview.summary.toInsert);
+			for (const m of await rosterOf(attackerClub.clubId)) {
+				personIds.push(m.personId);
+			}
+		});
+
+		it("reports an address two same-named rows give two Persons, preview and commit alike", async () => {
+			const text = csv([
+				{
+					customerId: `PN-1-${n}`,
+					name: "Alex Smith",
+					email: `alex-${n}@x.io`,
+				},
+				{
+					customerId: `PN-2-${n}`,
+					name: "Alex Smith",
+					email: `alex-${n}@x.io`,
+				},
+			]);
+
+			const preview = await previewMemberImport(attackerClub.clubId, text);
+			const { stats } = await commitMemberImport(attackerClub.clubId, text);
+
+			expect(preview.summary.addressConflicts).toBe(1);
+			expect(stats.addressConflicts).toBe(1);
+			expect(stats.peopleCreated).toBe(2);
+			for (const m of await rosterOf(attackerClub.clubId)) {
+				personIds.push(m.personId);
+			}
+		});
+
 		it("previews exactly what the commit then does", async () => {
 			await person(victimClub.clubId, { customerId: `PN-V-${n}` });
 			const shared = `shared-${n}@x.io`;

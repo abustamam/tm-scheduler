@@ -63,6 +63,7 @@ async function main() {
 			`matched-by-email=${stats.peopleMatchedByEmail} ambiguous=${stats.ambiguous}\n` +
 			`      members: created=${stats.membersCreated} updated=${stats.membersUpdated} ` +
 			`skipped-blank-name=${stats.skippedBlankName} skipped-unpaid=${skippedUnpaid} ` +
+			`skipped-other-club=${stats.foreignSkipped} shared-address=${stats.addressConflicts} ` +
 			`unparseable-position=${stats.unparseablePosition} ` +
 			`skipped-officer-assignments=${stats.skippedOfficerAssignments} (CLI never grants officer access)`,
 	);
