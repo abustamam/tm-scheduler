@@ -101,9 +101,15 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		// Signing in mints a `user`, a `session` and a `verification`. The first
 		// draft cleaned up only the client row — which the test two lines above
 		// asserts was never created — and left eight users behind per run.
+		//
+		// A magic-link `verification` row keys on the TOKEN; the email lives in
+		// the JSON `value`. Matching `identifier` alone deleted nothing, and an
+		// unconsumed link has no user to cascade from, so every run left one row
+		// per magic-link request behind. The column is `text`, so `value` is
+		// matched on its quoted JSON spelling.
 		for (const email of seededEmails) {
 			await testDb.execute(
-				sql`delete from verification where identifier like ${`%${email}%`}`,
+				sql`delete from verification where identifier like ${`%${email}%`} or value like ${`%"${email}"%`}`,
 			);
 			await testDb.execute(sql`delete from "user" where email = ${email}`);
 		}
@@ -288,6 +294,7 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		// The mutation this closes: exempting by wildcard, or keying the rule off
 		// something broad enough to take the sign-in limit with it.
 		let sawRefusal = false;
+		seededEmails.add(`ratelimit-${SUFFIX}@example.com`);
 		for (let i = 0; i < 12; i++) {
 			const response = await handler(
 				new Request(`${ORIGIN}${AUTH_BASE_PATH}/sign-in/magic-link`, {
