@@ -49,7 +49,7 @@ export const findPeopleTool: McpToolDefinition = {
 	},
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
-		const { club } = await authorizeToken(ctx.rawToken, args.clubId);
+		const { club } = await authorizeToken(ctx, args.clubId);
 
 		const [roster, guests] = await Promise.all([
 			loadPublicClubRoster(club.clubId),

@@ -126,10 +126,7 @@ export const assignRolesTool: McpToolDefinition = {
 		const args = z.object(inputSchema).parse(input);
 		// The club comes from the meeting and from nothing else. This tool takes
 		// no clubId at all, so there is no second id to disagree with it.
-		const { club } = await authorizeTokenForMeeting(
-			ctx.rawToken,
-			args.meetingId,
-		);
+		const { club } = await authorizeTokenForMeeting(ctx, args.meetingId);
 		// The token's membership in THIS club is the actor every write is
 		// credited to. `requestWriteActor` is the browser's equivalent and is
 		// request-scoped, which is why `releaseSlotCore` takes its actor as an

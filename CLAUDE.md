@@ -97,6 +97,17 @@ fastest way to comply.
   `src/routes/[.]well-known.$.ts`, which forwards an ALLOWLISTED pair to `auth.handler`
   rather than rebuilding them; the two are not forwarded alike, and
   `src/lib/well-known-forward.ts` says why.
+  **`/api/mcp` accepts two credential kinds** (#843), split by prefix in `handle-request.ts`:
+  `tmk_…` is a personal token (Claude Code, pasted into a header), anything else is an OAuth
+  access token (claude.ai) verified by `src/server/mcp/oauth-credential.ts` — the ONLY file on
+  the MCP path allowed to import `#/lib/auth`, and `mcp-authz.guard.test.ts` holds that by
+  resolved path. Both resolve to a user id and nothing else, so clubs and attribution are the
+  same for both. The client is registered with `scripts/register-oauth-client.ts`, never by
+  INSERT. Two traps in the browser half: the provider sends `/signin` and `/oauth/consent` a
+  SIGNED query, so neither page may let the router rewrite its search (a changed
+  `validateSearch` 307s and breaks the signature — read `window.location.search` raw); and
+  Better Auth's magic-link verify decodes `callbackURL` twice, so a callback carrying `%XX`
+  goes through `magicLinkCallbackURL` (`src/lib/magic-link-callback.ts`) or lands corrupted.
   Magic-link delivery goes through **Resend** (`src/lib/email.ts`, `src/lib/magic-link-email.ts`) when `RESEND_API_KEY` is set; with no key it falls back to logging the URL to the server console (dev). The React client is
   `src/lib/auth-client.ts` (`authClient.useSession()` / `signOut()`, see
   `src/routes/_authed.tsx`).

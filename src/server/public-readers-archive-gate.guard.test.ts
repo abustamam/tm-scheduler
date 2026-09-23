@@ -313,6 +313,11 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	// archiving to remove. The club list is archive-filtered at its own seam now.
 	getAuthContext:
 		"session plumbing; the club list it returns is archive-filtered in loadUserClubMemberships (#560)",
+	// OAuth consent plumbing (#843). Reads the caller's own session and an OAuth
+	// client's public name by id; no club is named, read or returned, so there
+	// is nothing for an archive to take down.
+	getOAuthConsentClient:
+		"auth plumbing for /oauth/consent; returns the signed-in person's own email and an OAuth client's public name, no club-owned data (#843)",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
 	// Each of these resolves the meeting's club and then runs requireUser +

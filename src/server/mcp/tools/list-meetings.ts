@@ -53,7 +53,7 @@ export const listMeetingsTool: McpToolDefinition = {
 	},
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
-		const { club } = await authorizeToken(ctx.rawToken, args.clubId);
+		const { club } = await authorizeToken(ctx, args.clubId);
 
 		// Before planning, before reading, outside any transaction (D6).
 		await ensureScheduleToppedUp(club.clubId);

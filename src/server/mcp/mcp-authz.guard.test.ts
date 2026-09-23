@@ -35,9 +35,33 @@
  * blind to a cookie arriving through a helper or a re-export. The behavioural
  * half lives in `mcp-route.integration.test.ts`: a real session cookie with no
  * `Authorization` header gets 401 and writes nothing.
+ *
+ * ## `#/lib/auth` is an allow-list of one (#843)
+ *
+ * The OAuth branch needs Better Auth, and `#/lib/auth` is where every
+ * cookie-reading API lives — `auth.api.getSession`, `getSessionFromCtx`,
+ * `auth.handler`. None of those is on the name list above, and a list of names
+ * is exactly the shape this repo has paid for twice: it passes for the symbol
+ * nobody thought of. So the rule for that module is inverted: across the MCP
+ * tree and the route, ONE file may import it (`oauth-credential.ts`), and it
+ * may take ONE binding (`auth`), which it passes straight to the verifier.
+ *
+ * Specifiers are RESOLVED to a file and compared as paths, so `#/lib/auth`,
+ * `@/lib/auth` and `../../lib/auth` are the same import; dynamic `import()`,
+ * `require()` and `export … from` count as imports. Each of those is a way a
+ * cookie reaches this tree while a string match stays green, and each has a
+ * synthetic offender below — every production file passes, so the tree alone
+ * can never show the matcher failing.
+ *
+ * What this does NOT cover, measured rather than assumed: TRANSITIVE reach.
+ * Today `find-people`, `record-guest-book` and `assign-roles` already reach
+ * `#/lib/auth` through shared logic modules (`guest-pipeline-logic` →
+ * `guards`, for one), so a transitive rule would have to waive most of the
+ * tree on day one. The name list above covers the dangerous functions those
+ * modules export; the behavioural test covers the rest.
  */
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { readSource } from "#/test/guard-source";
@@ -48,6 +72,13 @@ vi.mock("#/db", () => ({ db: {} }));
 const mcpDir = dirname(fileURLToPath(import.meta.url));
 const toolsDir = join(mcpDir, "tools");
 const routeFile = resolve(mcpDir, "../../routes/api/mcp.ts");
+const srcDir = resolve(mcpDir, "../..");
+/** The module the allow-list is about. */
+const AUTH_MODULE = join(srcDir, "lib/auth.ts");
+/** The one file under the MCP tree allowed to import it, and what it may take. */
+const AUTH_IMPORT_ALLOWED: Record<string, readonly string[]> = {
+	[join(mcpDir, "oauth-credential.ts")]: ["auth"],
+};
 
 /**
  * Tools allowed to call `authenticateToken` instead of `authorizeToken`, with
@@ -224,14 +255,14 @@ describe("every MCP tool authorizes (#773)", () => {
 		const compliant = `
 			import { authorizeToken } from "../authz-logic";
 			export const xTool = { name: "x", config: {}, handler: async (i, c) => {
-				const { club } = await authorizeToken(c.rawToken, i.clubId);
+				const { club } = await authorizeToken(c, i.clubId);
 				return club;
 			}};
 		`;
 		const byMeeting = `
 			import { authorizeTokenForMeeting } from "../authz-logic";
 			export const yTool = { handler: async (i, c) =>
-				authorizeTokenForMeeting(c.rawToken, i.meetingId) };
+				authorizeTokenForMeeting(c, i.meetingId) };
 		`;
 		const forgot = `
 			import { db } from "#/db";
@@ -290,5 +321,261 @@ describe("nothing on the MCP path reads a session cookie (#773)", () => {
 		expect(importedBindings(imported)).toContain("requireClubRole");
 		expect(importedBindings(renamed)).toContain("requireUser");
 		expect(importedBindings(mentioned)).toEqual([]);
+	});
+});
+
+/** One import or re-export of a module, as written in source. */
+interface ModuleReference {
+	specifier: string;
+	/** Named bindings taken; `*` for a namespace or star re-export, or for a
+	 *  dynamic `import()` / `require()`, whose bindings cannot be read. */
+	bindings: string[];
+}
+
+/**
+ * Every module a source file references: static `import`, `import type`,
+ * `export … from`, `export * from`, dynamic `import(...)` and `require(...)`.
+ *
+ * Deliberately a SUPERSET: it also matches those shapes inside comments and
+ * strings. This feeds an assertion that an offender list is EMPTY, so a false
+ * positive shows up as a red test someone reads, and a false negative is a
+ * cookie on the bearer-only path that nobody sees.
+ */
+function moduleReferences(src: string): ModuleReference[] {
+	const out: ModuleReference[] = [];
+	const statics =
+		/\b(import|export)\s+(type\s+)?([^;'"]*?)\s*from\s*["']([^"']+)["']/g;
+	for (const m of src.matchAll(statics)) {
+		const clause = (m[3] ?? "").trim();
+		const specifier = m[4] ?? "";
+		const bindings: string[] = [];
+		const named = /\{([^}]*)\}/.exec(clause);
+		if (named) {
+			for (const part of (named[1] ?? "").split(",")) {
+				const name = part
+					.trim()
+					.replace(/^type\s+/, "")
+					.split(/\s+as\s+/)[0]
+					?.trim();
+				if (name) bindings.push(name);
+			}
+		}
+		const rest = clause
+			.replace(/\{[^}]*\}/, "")
+			.replace(/,/g, " ")
+			.trim();
+		if (rest.includes("*")) bindings.push("*");
+		else if (rest && m[1] === "import") bindings.push(`default:${rest}`);
+		out.push({ specifier, bindings });
+	}
+	const sideEffect = /\bimport\s*["']([^"']+)["']/g;
+	for (const m of src.matchAll(sideEffect)) {
+		out.push({ specifier: m[1] ?? "", bindings: ["*"] });
+	}
+	const dynamic = /\b(?:import|require)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
+	for (const m of src.matchAll(dynamic)) {
+		out.push({ specifier: m[1] ?? "", bindings: ["*"] });
+	}
+	return out;
+}
+
+/**
+ * The file a specifier names, or null for a package or an unresolvable path.
+ * Both aliases map to `src/` (`package.json` imports, `components.json`).
+ */
+function resolveSpecifier(fromFile: string, specifier: string): string | null {
+	let base: string;
+	if (specifier.startsWith("#/") || specifier.startsWith("@/")) {
+		base = join(srcDir, specifier.slice(2));
+	} else if (specifier.startsWith(".")) {
+		base = resolve(dirname(fromFile), specifier);
+	} else {
+		return null;
+	}
+	base = base.replace(/\.(?:m?js|tsx?)$/, "");
+	for (const candidate of [
+		`${base}.ts`,
+		`${base}.tsx`,
+		join(base, "index.ts"),
+		base,
+	]) {
+		if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+	}
+	return null;
+}
+
+/** What a file takes from `#/lib/auth` that it is not allowed to. */
+function authImportViolations(file: string, src: string): string[] {
+	const allowed = AUTH_IMPORT_ALLOWED[file];
+	const out: string[] = [];
+	for (const ref of moduleReferences(src)) {
+		if (resolveSpecifier(file, ref.specifier) !== AUTH_MODULE) continue;
+		if (!allowed) {
+			out.push(`imports ${ref.specifier} at all`);
+			continue;
+		}
+		for (const binding of ref.bindings) {
+			if (!allowed.includes(binding)) {
+				out.push(`takes ${binding} from ${ref.specifier}`);
+			}
+		}
+		// A re-export hands the module on to every importer of THIS file, which
+		// defeats the allow-list for the whole tree.
+		if (/\bexport\b/.test(src) && reExportsAuth(file, src)) {
+			out.push(`re-exports ${ref.specifier}`);
+		}
+	}
+	return [...new Set(out)];
+}
+
+/** True when a file re-exports anything from `#/lib/auth`. */
+function reExportsAuth(file: string, src: string): boolean {
+	const reExport = /\bexport\s+(?:type\s+)?[^;'"]*?\s*from\s*["']([^"']+)["']/g;
+	for (const m of src.matchAll(reExport)) {
+		if (resolveSpecifier(file, m[1] ?? "") === AUTH_MODULE) return true;
+	}
+	return false;
+}
+
+describe("only oauth-credential.ts imports #/lib/auth, and only `auth` (#843)", () => {
+	const files = [...sourceFiles(mcpDir), routeFile];
+
+	it("resolves the module it guards, and the one permitted importer exists", () => {
+		// A guard keyed on a path that no longer exists passes on every tree.
+		expect(existsSync(AUTH_MODULE)).toBe(true);
+		for (const file of Object.keys(AUTH_IMPORT_ALLOWED)) {
+			expect(files).toContain(file);
+		}
+	});
+
+	it("the permitted importer really does import it — the entry is not dead", () => {
+		// If `oauth-credential.ts` stopped importing `auth`, the allow-list would
+		// still hold an entry that permits a future file to take it silently.
+		const [file] = Object.keys(AUTH_IMPORT_ALLOWED);
+		const refs = moduleReferences(readFileSync(file as string, "utf8")).filter(
+			(r) => resolveSpecifier(file as string, r.specifier) === AUTH_MODULE,
+		);
+		expect(refs.flatMap((r) => r.bindings)).toEqual(["auth"]);
+	});
+
+	it("the allow-list has exactly one entry", () => {
+		// Growing it widens the set of files on the bearer-only path that can
+		// reach a cookie-reading API, so it must break a test and be argued for.
+		expect(
+			Object.keys(AUTH_IMPORT_ALLOWED).map((f) => relative(srcDir, f)),
+		).toEqual(["server/mcp/oauth-credential.ts"]);
+	});
+
+	for (const file of files) {
+		const rel = file.slice(file.indexOf("/src/") + 1);
+		it(`${rel} takes nothing from #/lib/auth it is not allowed to`, () => {
+			// Raw source, not `readSource`: this asserts an offender list is EMPTY,
+			// and blanking comments could only ever remove an offender.
+			const violations = authImportViolations(file, readFileSync(file, "utf8"));
+			expect(
+				violations,
+				`${rel} ${violations.join("; ")}. /api/mcp is bearer-only, and #/lib/auth ` +
+					`is where every cookie-reading API lives. Verify credentials through ` +
+					`src/server/mcp/oauth-credential.ts, or argue for widening ` +
+					`AUTH_IMPORT_ALLOWED in review.`,
+			).toEqual([]);
+		});
+	}
+
+	// The self-tests. Every production file passes, so without these the sweep
+	// above is green whether or not the matcher can see anything at all. One
+	// synthetic offender per evasion the issue names, each placed where a real
+	// file would be so that relative specifiers resolve the way they would.
+	describe("the matcher fails each evasion", () => {
+		const tool = join(mcpDir, "tools", "synthetic.ts");
+		const inMcp = join(mcpDir, "synthetic.ts");
+		const permitted = join(mcpDir, "oauth-credential.ts");
+
+		it("a static import in a tool file", () => {
+			const src = `import { auth } from "#/lib/auth";`;
+			expect(authImportViolations(tool, src)).not.toEqual([]);
+		});
+
+		it("the route file, not only src/server/mcp/**", () => {
+			expect(files).toContain(routeFile);
+			const src = `import { auth } from "#/lib/auth";`;
+			expect(authImportViolations(routeFile, src)).not.toEqual([]);
+		});
+
+		it("every spelling of the module: #/, @/, and relative", () => {
+			for (const spec of [
+				"#/lib/auth",
+				"@/lib/auth",
+				"../../../lib/auth",
+				"../../../lib/auth.ts",
+			]) {
+				const src = `import { auth } from "${spec}";`;
+				expect(authImportViolations(tool, src), spec).not.toEqual([]);
+			}
+			// …and from the mcp dir itself, one level shallower.
+			expect(
+				authImportViolations(inMcp, `import { auth } from "../../lib/auth";`),
+			).not.toEqual([]);
+		});
+
+		it("a dynamic import() and a require()", () => {
+			expect(
+				authImportViolations(
+					inMcp,
+					`const { auth } = await import("#/lib/auth");`,
+				),
+			).not.toEqual([]);
+			expect(
+				authImportViolations(
+					inMcp,
+					`const { auth } = require("../../lib/auth");`,
+				),
+			).not.toEqual([]);
+		});
+
+		it("a re-export, star or named", () => {
+			expect(
+				authImportViolations(inMcp, `export * from "#/lib/auth";`),
+			).not.toEqual([]);
+			expect(
+				authImportViolations(inMcp, `export { auth } from "#/lib/auth";`),
+			).not.toEqual([]);
+			// Even from the permitted file: re-exporting hands the module on to
+			// every importer of it, which defeats the allow-list for the tree.
+			expect(
+				authImportViolations(permitted, `export { auth } from "#/lib/auth";`),
+			).not.toEqual([]);
+		});
+
+		it("the permitted file taking a second binding, a namespace, or a default", () => {
+			for (const src of [
+				`import { auth, type Session } from "#/lib/auth";`,
+				`import * as authModule from "#/lib/auth";`,
+				`import authDefault from "#/lib/auth";`,
+				`const m = await import("#/lib/auth");`,
+			]) {
+				expect(authImportViolations(permitted, src), src).not.toEqual([]);
+			}
+		});
+
+		it("and is NOT fooled into failing a lookalike module or the permitted import", () => {
+			// The controls: without these, a matcher that flagged everything would
+			// pass every case above.
+			expect(
+				authImportViolations(
+					tool,
+					`import { authClient } from "#/lib/auth-client";`,
+				),
+			).toEqual([]);
+			expect(
+				authImportViolations(
+					tool,
+					`import { x } from "#/lib/auth-init-status";`,
+				),
+			).toEqual([]);
+			expect(
+				authImportViolations(permitted, `import { auth } from "#/lib/auth";`),
+			).toEqual([]);
+		});
 	});
 });

@@ -1,5 +1,5 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import { Button } from "#/components/ui/button";
 import {
@@ -13,7 +13,27 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { authClient } from "#/lib/auth-client";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { magicLinkCallbackURL } from "#/lib/magic-link-callback";
+import {
+	isOAuthAuthorizeTarget,
+	isSignedOAuthQuery,
+	oauthAuthorizeContinuation,
+} from "#/lib/oauth-continuation";
 import { safeRedirect } from "#/lib/write-proof";
+
+/**
+ * True when the provider sent this visit (#843): a signed authorize query, not
+ * a `?redirect=`. Read off the router's PARSED search, which is enough to say
+ * which kind of visit it is and not enough to rebuild the query — see
+ * `#/lib/oauth-continuation` for why the component reads the raw string.
+ */
+function isOAuthPrompt(search: Record<string, unknown>): boolean {
+	return (
+		typeof search.sig === "string" &&
+		search.sig.length > 0 &&
+		search.client_id !== undefined
+	);
+}
 
 export const Route = createFileRoute("/signin")({
 	// Default post-sign-in landing is the Officer home (#202); it redirects
@@ -32,15 +52,28 @@ export const Route = createFileRoute("/signin")({
 	// ever reachable. Do not read that as "the route's check is decorative": it
 	// is a dependency's behaviour on a pinned version, not a contract, and this
 	// route is the half this repo owns.
-	validateSearch: (search: Record<string, unknown>) => ({
-		redirect: safeRedirect(search.redirect),
-	}),
+	//
+	// An OAuth prompt from the provider (#843) gets NO `redirect` added. Adding
+	// one makes the server 307 to a re-serialised URL, which mangles the
+	// provider's signed query (`#/lib/oauth-continuation` has the measurement);
+	// the component builds the continuation from the untouched URL instead.
+	validateSearch: (search: Record<string, unknown>): { redirect?: string } =>
+		isOAuthPrompt(search) ? {} : { redirect: safeRedirect(search.redirect) },
 	component: SignIn,
 });
 
 function SignIn() {
-	const { redirect } = Route.useSearch();
+	const search = Route.useSearch();
 	const router = useRouter();
+	// Copy only, so it is read after hydration: SSR has no `window`, and the
+	// value that matters is recomputed from the live URL at submit.
+	const [connecting, setConnecting] = useState(false);
+	useEffect(() => {
+		setConnecting(
+			isSignedOAuthQuery(window.location.search) ||
+				isOAuthAuthorizeTarget(search.redirect),
+		);
+	}, [search.redirect]);
 	const [email, setEmail] = useState("");
 	const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">(
 		"idle",
@@ -51,9 +84,18 @@ function SignIn() {
 		e.preventDefault();
 		setStatus("sending");
 		setError(null);
+		// Where the magic link lands. For an OAuth prompt that is the authorize
+		// request replayed — so the flow resumes in whichever browser opens the
+		// link — and it goes through `safeRedirect` like any other target.
+		const continuation = oauthAuthorizeContinuation(window.location.search);
+		const redirect =
+			search.redirect ??
+			(continuation ? safeRedirect(continuation) : safeRedirect(undefined));
+		// Escaped for Better Auth's double decode, or a signed OAuth query
+		// arrives with its `%2B`s turned into spaces (`#/lib/magic-link-callback`).
 		const { error } = await authClient.signIn.magicLink({
 			email,
-			callbackURL: redirect,
+			callbackURL: magicLinkCallbackURL(redirect),
 		});
 		if (error) {
 			setStatus("error");
@@ -71,8 +113,9 @@ function SignIn() {
 				<CardHeader>
 					<CardTitle className="font-display text-xl">Sign in</CardTitle>
 					<CardDescription>
-						Enter your email and we&apos;ll send you a magic link to sign in. No
-						password needed.
+						{connecting
+							? "An app is asking to connect to your GavelUp account. Sign in first, and you'll be asked to approve it next."
+							: "Enter your email and we'll send you a magic link to sign in. No password needed."}
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
@@ -82,7 +125,9 @@ function SignIn() {
 							<p className="text-muted-foreground">
 								We sent a sign-in link to{" "}
 								<span className="font-medium text-foreground">{email}</span>.
-								Open it on this device to finish signing in.
+								{connecting
+									? " Open it in this browser if you can. If you open it on another device, you'll finish approving the connection there instead — this tab won't move on by itself."
+									: " Open it on this device to finish signing in."}
 							</p>
 							{import.meta.env.DEV ? (
 								<p className="text-muted-foreground">

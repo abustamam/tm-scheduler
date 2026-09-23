@@ -43,10 +43,7 @@ export const getAgendaTool: McpToolDefinition = {
 	},
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
-		const { club } = await authorizeTokenForMeeting(
-			ctx.rawToken,
-			args.meetingId,
-		);
+		const { club } = await authorizeTokenForMeeting(ctx, args.meetingId);
 
 		const [meeting] = await db
 			.select({

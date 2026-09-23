@@ -4,8 +4,10 @@ import { handleMcpRequest } from "#/server/mcp/handle-request";
 /**
  * POST /api/mcp — MCP over Streamable HTTP, stateless (#773 / #771).
  *
- * Auth is a per-USER Bearer token (`Authorization: Bearer tmk_…`), never a
- * session cookie. The token identifies a person; each tool then resolves that
+ * Auth is a per-USER Bearer credential, never a session cookie, in one of two
+ * kinds (#843): a personal `tmk_…` token, or an OAuth access token claude.ai
+ * obtained through `/oauth/consent`. `handleMcpRequest` tells them apart by
+ * prefix. Either way the credential identifies a person; each tool then resolves that
  * person's membership in whichever club its input names, so every write is
  * credited to a real `actor_member_id`. Contrast `/api/pathways/ingest`, whose
  * `gup_` token IS a club and credits its writes to nobody.
@@ -25,6 +27,8 @@ import { handleMcpRequest } from "#/server/mcp/handle-request";
  * Connect with:
  *   claude mcp add --transport http gavelup https://<host>/api/mcp \
  *     --header "Authorization: Bearer tmk_..."
+ * or, from claude.ai, add a custom connector at the same URL with the client
+ * ID and secret `scripts/register-oauth-client.ts` printed.
  */
 export const Route = createFileRoute("/api/mcp")({
 	server: {

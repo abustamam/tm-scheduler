@@ -143,11 +143,97 @@ mechanics:
   warning when it is not, and #842 tripped it: a cookie-integration plugin forwards
   `Set-Cookie` from an `after` hook, so any plugin behind it can set a cookie that never
   reaches the response. The consent round trip #843 builds is cookie-carrying.
-- Deleting a user cascades to their access and refresh tokens, so account deletion is
-  already connector revocation. Signing out of a browser session does **not** revoke a
+- Deleting a user cascades to their refresh tokens and to any stored access-token rows, so
+  account deletion is connector revocation. An access token issued as a JWT is not a row
+  that cascade can reach, though — it stays cryptographically valid until it expires — so
+  `/api/mcp` refuses it by looking the `sub` up on every call (#843), and a deleted user's
+  token 401s there. Signing out of a browser session does **not** revoke a
   connector: `oauth_refresh_token.session_id` is `set null` rather than `cascade`, which is
   the plugin's choice and the right one — a person signing out of the web app should not
   silently disconnect their phone.
-- Nothing in #842 completes an authorization. `/oauth/consent` is declared in config and
-  does not exist; `/signin` does. #843 builds the round trip and makes `/api/mcp` accept an
-  OAuth token.
+- Nothing in #842 completes an authorization. #843 builds the round trip and makes
+  `/api/mcp` accept an OAuth token; the next section records how.
+
+## #843: `/api/mcp` accepts the token, and the round trip exists
+
+### Two credential kinds, split by prefix, verified by the library
+
+`handle-request.ts` reads the bearer value and branches before anything else: `tmk_…` goes
+down the personal-token path exactly as before; anything else — including no credential at
+all — goes to `oauth-credential.ts`, which hands the request to `@better-auth/mcp`'s
+`requireMcpAuth`. That verifies the JWT against GavelUp's own JWKS and checks signature,
+issuer, audience and expiry; the audience is `mcpResourceUrl()`, the same function
+`auth.ts` gives `mcp()` as the resource it binds tokens to, so the value a token is issued
+for and the value it is checked against cannot drift. **Audience and issuer enforcement is
+configuration, not code this repo wrote.** The integration suite proves it with tokens
+signed by the real key and exactly one claim wrong.
+
+Wrapping the whole route in `requireMcpAuth` would have rejected every `tmk_` token, which
+is why the branch comes first. After it, both kinds resolve to a `user.id` and nothing else:
+`adminClubsForUser`, the archive rule and the `actor_member_id` a write is credited to are
+the same code for both. `AuthenticatedToken.tokenId` became `credential: McpCredential`, a
+union no authorization decision reads. `touchApiToken` fires only on the personal branch,
+because an OAuth token has no `api_tokens` row.
+
+Every 401 now carries `WWW-Authenticate: Bearer resource_metadata="…"`, including the `tmk_`
+ones. That header is how an MCP client learns where to authorize; a bare 401 dead-ends the
+claude.ai connect flow with nothing to act on.
+
+**The JWKS is fetched over HTTP from this same server.** `requireMcpAuth` takes a JWKS URL
+and nothing else, so it GETs `<BETTER_AUTH_URL>/api/auth/jwks` out through Railway's edge
+and back, caching the key set for five minutes. `BETTER_AUTH_URL` therefore has to be the
+canonical origin (the fetch refuses redirects), and a token naming an unknown `kid` forces a
+refetch that the auth rate limiter meters like any other request.
+
+### The cookie guard is an allow-list of one
+
+Adding the OAuth branch brought `#/lib/auth` onto the bearer-only path, and that module is
+where every cookie-reading API lives. `mcp-authz.guard.test.ts` keeps its deny-list of
+cookie-reading function names and adds the inverse for this module: across
+`src/server/mcp/**` and the route, only `oauth-credential.ts` may import it, and only the
+`auth` binding. Specifiers are resolved to paths, so `#/`, `@/` and relative spellings are
+one import; dynamic `import()`, `require()` and re-exports count. Transitive reach is
+deliberately NOT covered — three tools already reach `#/lib/auth` through shared logic
+modules — so the behavioural test (a real session cookie, no header, 401 and no write)
+remains the half that covers it.
+
+### Sign-in and consent: what the provider actually sends
+
+The provider does not send `?redirect=`. It sends the browser to `/signin?<authorize
+query>` or `/oauth/consent?<authorize query>` with a signature over the query appended
+(`exp`, `ba_iat`, `sig`, a repeated `ba_param`). Two things follow, both measured in a
+browser rather than read in docs:
+
+- **The pages must not let the router touch that query.** TanStack re-serialises search on
+  the server and 307s whenever `validateSearch` changes it, and the re-serialised form
+  (`ba_param` as a JSON array, numeric-looking values parsed as numbers) no longer matches
+  the signature. `/signin` adds nothing to a provider prompt's search, `/oauth/consent`
+  passes its search through untouched, and both read `window.location.search` raw.
+- **Sign-in resumes by replaying the authorize request**, with the signing parameters
+  stripped (`#/lib/oauth-continuation`). A signed-in person reaching authorize is sent on to
+  consent with a freshly signed query, so this works wherever the magic link is opened —
+  the cross-device case lands on consent in the second browser and completes there — and
+  it is immune to the ten-minute expiry on the consent query itself.
+
+**Better Auth 1.7.5's magic-link verify decodes its `callbackURL` twice** (`decodeURIComponent`
+on a query value the router already decoded). A base64 signature's `%2B` came back as `+`,
+read as a space, and the consent POST failed with `invalid_signature`. `/signin` escapes
+every `%` in the callback (`#/lib/magic-link-callback`) so the second decode is an exact
+inverse, and `oauth-consent.integration.test.ts` pins the double decode itself so the escape
+is removed the day the library stops doing it.
+
+The consent screen names the client from a server-side lookup by id, never from its URL.
+Declining posts `accept: false` and then stays on the page to say nothing was connected,
+rather than following the provider's redirect back to the client with `access_denied` —
+and rather than redirecting to `/me`, which `_authed` replaces with its "not in a club yet"
+gate for an account with no membership.
+
+### Registering the client
+
+`scripts/register-oauth-client.ts` calls Better Auth's own `/oauth2/create-client` (and
+`/oauth2/client/rotate-secret`) as a named superadmin. It mints a five-minute session by
+inserting the row directly and signing its token as Better Auth signs a cookie, then
+deletes it — NOT through `internalAdapter.createSession`, whose `session.create.after` hook
+reconciles `SUPERADMIN_EMAILS` two-way and, run locally with production's `DATABASE_URL`
+and that variable unset, would revoke the maintainer's own flag. It refuses a second client
+with the same name without `--force`, and prints the secret once.

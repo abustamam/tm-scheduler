@@ -3,17 +3,28 @@
  *
  * TWO entry points, and every tool calls exactly one:
  *
- *   - `authenticateToken(raw)` — resolves the token to a user and the clubs
+ *   - `authenticateToken(ctx)` — resolves the credential to a user and the clubs
  *     where they hold an active admin membership or an open officer term. Only
  *     `whoami` uses it, because `whoami` is what TELLS the caller which clubs
  *     exist and so has no `clubId` to check against.
- *   - `authorizeToken(raw, clubId)` — authenticate, then prove an active
+ *   - `authorizeToken(ctx, clubId)` — authenticate, then prove an active
  *     admin-or-officer membership in THAT club, then prove the club is not
  *     archived.
  *
  * Splitting them is what makes "no unauthenticated tool" machine-checkable
  * without an exemption list: the guard derives the tool set from the directory
  * and fails any tool calling neither, with `whoami` waived by name and reason.
+ *
+ * ## Two credential kinds, one identity (#843)
+ *
+ * `ctx` is either a personal `tmk_` token, resolved here against `api_tokens`,
+ * or an OAuth access token that `oauth-credential.ts` has already verified at
+ * the HTTP layer. The two differ ONLY in how the user id is found. Everything
+ * after that — `adminClubsForUser`, the archive rule, the `actor_member_id` a
+ * write is credited to — is the same code for both, so an OAuth call gets
+ * exactly the clubs and attribution a `tmk_` call gets and cannot get more.
+ * Keep it that way: a branch on `credential.kind` below the resolve is a
+ * second authorization model.
  *
  * ## What this module must never import, and why
  *
@@ -58,10 +69,12 @@ import {
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import {
+	API_TOKEN_PREFIX,
 	resolveActiveApiToken,
 	touchApiToken,
 } from "#/server/api-tokens-logic";
 import { McpError } from "./errors";
+import type { McpToolContext } from "./tool";
 
 /** A club the token owner may act on, as `whoami` reports it. */
 export interface TokenClub {
@@ -78,8 +91,16 @@ export interface TokenClub {
 	archived: boolean;
 }
 
+/**
+ * Which credential authenticated the call. Nothing reads it to decide an
+ * authorization question — see "Two credential kinds" above.
+ */
+export type McpCredential =
+	| { kind: "personal"; tokenId: string }
+	| { kind: "oauth"; tokenId: string; clientId: string };
+
 export interface AuthenticatedToken {
-	tokenId: string;
+	credential: McpCredential;
 	user: { id: string; name: string; email: string };
 	/**
 	 * Clubs the owner may act on: active admin or open officer term, NOT
@@ -100,8 +121,8 @@ export interface AuthenticatedToken {
 }
 
 /**
- * Thrown when the bearer token is missing, unknown or revoked. The ROUTE maps
- * this to HTTP 401 before any tool runs — it is not an `McpError`, because it is
+ * Thrown when the bearer token is missing, unknown or revoked, or names a user
+ * that no longer exists. The ROUTE maps this to HTTP 401 before any tool runs — it is not an `McpError`, because it is
  * not a tool result.
  */
 export class McpUnauthorizedError extends Error {
@@ -111,8 +132,42 @@ export class McpUnauthorizedError extends Error {
 	}
 }
 
+/** True when a bearer value is a personal token rather than an OAuth one. */
+export function isPersonalToken(raw: string): boolean {
+	return raw.startsWith(API_TOKEN_PREFIX);
+}
+
 /**
- * Resolve a raw bearer token to its owner and the clubs they may act on.
+ * Who a credential identifies, and — for a personal token — the row to stamp.
+ *
+ * The personal branch is the ONLY one that returns a token to touch:
+ * `touchApiToken` writes `api_tokens.last_used_at`, and an OAuth token has no
+ * row there.
+ */
+export async function resolveCredential(
+	ctx: McpToolContext,
+): Promise<{ userId: string; credential: McpCredential; touch?: string }> {
+	if ("oauthGrant" in ctx) {
+		const { userId, clientId, tokenId } = ctx.oauthGrant;
+		return { userId, credential: { kind: "oauth", tokenId, clientId } };
+	}
+	const rawToken = ctx.rawToken;
+	if (!rawToken) throw new McpUnauthorizedError("Missing bearer token.");
+	// Not a personal token, so not something `api_tokens` can hold. Refused
+	// without a query rather than hashed and looked up: `handle-request` only
+	// routes `tmk_` values here, so this is the belt to that brace.
+	if (!isPersonalToken(rawToken)) throw new McpUnauthorizedError();
+	const tok = await resolveActiveApiToken(rawToken);
+	if (!tok) throw new McpUnauthorizedError();
+	return {
+		userId: tok.userId,
+		credential: { kind: "personal", tokenId: tok.id },
+		touch: tok.id,
+	};
+}
+
+/**
+ * Resolve a credential to its owner and the clubs they may act on.
  *
  * The club list is computed from LIVE membership rows on every call, never
  * stored on the token: ending someone's officer term or deactivating their
@@ -124,32 +179,34 @@ export class McpUnauthorizedError extends Error {
  * be NAMED by a tool result.
  */
 export async function authenticateToken(
-	rawToken: string | null,
+	ctx: McpToolContext,
 ): Promise<AuthenticatedToken> {
-	if (!rawToken) throw new McpUnauthorizedError("Missing bearer token.");
-	const tok = await resolveActiveApiToken(rawToken);
-	if (!tok) throw new McpUnauthorizedError();
+	const { userId, credential, touch } = await resolveCredential(ctx);
 
 	const [owner] = await db
 		.select({ id: user.id, name: user.name, email: user.email })
 		.from(user)
-		.where(eq(user.id, tok.userId))
+		.where(eq(user.id, userId))
 		.limit(1);
-	// The FK cascades on user delete, so this is unreachable through the product;
-	// fail closed rather than inventing an identity for the token.
+	// A personal token's FK cascades on user delete, so for it this is
+	// unreachable through the product. An OAuth access token is a signed JWT
+	// that outlives its user until it expires — so here it is reachable, and
+	// failing closed is the whole answer.
 	if (!owner) throw new McpUnauthorizedError();
 
-	const all = await adminClubsForUser(tok.userId);
+	const all = await adminClubsForUser(userId);
 
 	// Telemetry for the `/me` token list. Outside any apply transaction (D10),
 	// and never allowed to fail the call it accompanied — a missing timestamp is
 	// a cosmetic loss, a failed tool call is not.
-	await touchApiToken(tok.id).catch((err) => {
-		console.error("[mcp] failed to stamp token last_used_at:", err);
-	});
+	if (touch) {
+		await touchApiToken(touch).catch((err) => {
+			console.error("[mcp] failed to stamp token last_used_at:", err);
+		});
+	}
 
 	return {
-		tokenId: tok.id,
+		credential,
 		user: { id: owner.id, name: owner.name, email: owner.email },
 		clubs: all.filter((c) => !c.archived),
 		membershipsIncludingArchived: all,
@@ -242,10 +299,10 @@ export interface AuthorizedClub extends AuthenticatedToken {
  * enumerate the platform's clubs.
  */
 export async function authorizeToken(
-	rawToken: string | null,
+	ctx: McpToolContext,
 	clubId: string,
 ): Promise<AuthorizedClub> {
-	const auth = await authenticateToken(rawToken);
+	const auth = await authenticateToken(ctx);
 	const club = auth.membershipsIncludingArchived.find(
 		(c) => c.clubId === clubId,
 	);
@@ -288,8 +345,8 @@ export async function clubIdForMeeting(meetingId: string): Promise<string> {
  * never decide what the call is checked against.
  */
 export async function authorizeTokenForMeeting(
-	rawToken: string | null,
+	ctx: McpToolContext,
 	meetingId: string,
 ): Promise<AuthorizedClub> {
-	return authorizeToken(rawToken, await clubIdForMeeting(meetingId));
+	return authorizeToken(ctx, await clubIdForMeeting(meetingId));
 }

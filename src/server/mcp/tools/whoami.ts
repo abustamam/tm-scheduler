@@ -22,7 +22,7 @@ export const whoamiTool: McpToolDefinition = {
 			"needs a clubId or a meetingId from here.",
 	},
 	handler: async (_input, ctx) => {
-		const auth = await authenticateToken(ctx.rawToken);
+		const auth = await authenticateToken(ctx);
 		return {
 			user: auth.user,
 			clubs: auth.clubs.map((c) => ({

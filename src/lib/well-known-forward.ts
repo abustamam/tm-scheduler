@@ -58,8 +58,33 @@ export const MCP_RESOURCE_PATH = "/api/mcp";
 /** Where `mcp()` sends an unauthenticated authorize request (`src/routes/signin.tsx`). */
 export const AUTH_SIGNIN_PATH = "/signin";
 
-/** Where `mcp()` sends a request needing consent. Built in #843; declared here because the provider reads it at construction. */
+/** Where `mcp()` sends a request needing consent (`src/routes/oauth.consent.tsx`). */
 export const AUTH_CONSENT_PATH = "/oauth/consent";
+
+/**
+ * The MCP protected resource this authorization server issues tokens for
+ * (#842 / ADR-0027) — and, since #843, the audience `/api/mcp` REQUIRES on
+ * every access token it accepts. One function for both, so the value the
+ * provider binds a token to and the value the endpoint checks it against
+ * cannot drift apart.
+ *
+ * `mcp()` validates this at CONSTRUCTION — HTTPS, or HTTP on a loopback host,
+ * and no query or fragment — so a missing or malformed `BETTER_AUTH_URL`
+ * fails at import rather than on the first sign-in. That is the direction we
+ * want: `BETTER_AUTH_URL` is already required (CLAUDE.md, "Environment"), and
+ * an authorization server whose issuer is `undefined` must not start at all.
+ * The explicit throw is here so the failure names the cause; the library's own
+ * `TypeError` would say only that the resource URL is not absolute.
+ */
+export function mcpResourceUrl(): string {
+	const base = (process.env.BETTER_AUTH_URL ?? "").replace(/\/+$/, "");
+	if (!base) {
+		throw new Error(
+			"BETTER_AUTH_URL is required: it is the OAuth issuer and the base of the MCP resource identifier (ADR-0027).",
+		);
+	}
+	return `${base}${MCP_RESOURCE_PATH}`;
+}
 
 const AUTHORIZATION_SERVER_METADATA = "/.well-known/oauth-authorization-server";
 const PROTECTED_RESOURCE_METADATA = "/.well-known/oauth-protected-resource";
