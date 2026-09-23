@@ -90,6 +90,46 @@ const FORWARDS = new Map<string, string>([
 	],
 ]);
 
+/**
+ * The paths Better Auth's RATE LIMITER sees for the forwarded documents.
+ *
+ * `auth.handler` meters a request before it routes it — `onRequestRateLimit`
+ * runs ahead of every plugin `onRequest` hook — so forwarding discovery into
+ * the handler puts both documents behind this repo's global
+ * `{ window: 60, max: 20 }`. Measured before this existed: the 21st discovery
+ * request in a minute returned 429.
+ *
+ * That alone would be survivable. What is not: when Better Auth cannot resolve
+ * a client IP (any `x-forwarded-for` with more than one hop, unless
+ * `trustedProxies` is configured), it falls back to ONE SHARED BUCKET PER PATH
+ * and logs a warning saying so. Behind a proxy that makes the limit global —
+ * every claude.ai fetch sharing 20 requests a minute with every scanner that
+ * finds the endpoint. A connector that discovers intermittently is worse than
+ * one that never works, because it looks like a claude.ai bug.
+ *
+ * So the limiter is switched OFF for exactly these paths (`src/lib/auth.ts`
+ * builds its `customRules` from this list). A finite limit would not help: with
+ * one shared bucket, ANY ceiling is something a single caller can exhaust to
+ * lock everyone else out. What makes that safe here is what these documents
+ * are — public, unauthenticated, byte-identical per deploy, served with
+ * `Cache-Control: public, max-age=15` by the provider itself, and reaching no
+ * database. Exempting them also REMOVES a memory-growth vector rather than
+ * adding one, since each metered path+IP mints an entry in an in-process Map.
+ *
+ * Derived from `FORWARDS` rather than written out, so widening the allowlist
+ * cannot silently leave a document metered. The normalization mirrors
+ * `normalizePathname`: the handler strips its own base path before matching.
+ */
+export const DISCOVERY_RATE_LIMIT_PATHS: readonly string[] = Array.from(
+	new Set(
+		Array.from(FORWARDS.values(), (target) =>
+			target.startsWith(`${AUTH_BASE_PATH}/`)
+				? target.slice(AUTH_BASE_PATH.length)
+				: target,
+		),
+	),
+);
+
 /** The only method either document answers. */
 const ALLOWED_METHOD = "GET";
 

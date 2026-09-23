@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	AUTH_BASE_PATH,
+	DISCOVERY_RATE_LIMIT_PATHS,
 	MCP_RESOURCE_PATH,
 	resolveWellKnownForward,
 	serveWellKnownDiscovery,
@@ -100,6 +101,42 @@ describe("resolveWellKnownForward", () => {
 		expect(
 			resolveWellKnownForward("/.well-known/anything-else", "POST"),
 		).toEqual({ kind: "not-found" });
+	});
+});
+
+describe("DISCOVERY_RATE_LIMIT_PATHS", () => {
+	it("names every path the handler will meter, with its base path stripped", () => {
+		// Stated as absolute literals, NOT rebuilt from the constants under test:
+		// a list derived from `FORWARDS` and then compared against `FORWARDS`
+		// agrees with itself no matter what either one says. These are the exact
+		// strings Better Auth's `normalizePathname` produces for the forwarded
+		// requests, which is what its `customRules` keys are matched against.
+		expect([...DISCOVERY_RATE_LIMIT_PATHS].sort()).toEqual([
+			"/.well-known/oauth-authorization-server",
+			"/.well-known/oauth-protected-resource",
+			"/.well-known/oauth-protected-resource/api/mcp",
+		]);
+	});
+
+	it("covers every distinct target the allowlist forwards to", () => {
+		// The drift this closes: widening the allowlist without exempting the new
+		// document leaves it metered, and a metered document is one a single
+		// caller can lock claude.ai out of. Counted rather than eyeballed, so a
+		// fifth entry fails here instead of shipping silently.
+		const targets = new Set(
+			["", AUTH_BASE_PATH].flatMap(() =>
+				[
+					`${AUTH_BASE_PATH}/.well-known/oauth-authorization-server`,
+					"/.well-known/oauth-protected-resource",
+					`/.well-known/oauth-protected-resource${MCP_RESOURCE_PATH}`,
+				].map((t) =>
+					t.startsWith(`${AUTH_BASE_PATH}/`)
+						? t.slice(AUTH_BASE_PATH.length)
+						: t,
+				),
+			),
+		);
+		expect(new Set(DISCOVERY_RATE_LIMIT_PATHS)).toEqual(targets);
 	});
 });
 

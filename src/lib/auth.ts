@@ -4,6 +4,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { jwt, magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
+import { recordAuthInitFailure } from "#/lib/auth-init-status";
 import { captureDevMagicLink, isDevLoginEnabled } from "#/lib/dev-login";
 import { sendEmail } from "#/lib/email";
 import {
@@ -15,6 +16,7 @@ import { reconcileSuperadminFlag } from "#/lib/superadmin";
 import {
 	AUTH_CONSENT_PATH,
 	AUTH_SIGNIN_PATH,
+	DISCOVERY_RATE_LIMIT_PATHS,
 	MCP_RESOURCE_PATH,
 } from "#/lib/well-known-forward";
 import { linkPersonToUser } from "#/server/account-link-logic";
@@ -78,6 +80,14 @@ export const auth = betterAuth({
 		// Tighter rule for the magic-link sign-in path to prevent email-bomb / account-enumeration.
 		customRules: {
 			"/sign-in/magic-link": { window: 60, max: 5 },
+			// …and OFF for the two OAuth discovery documents (#842). They only reach
+			// this limiter because `src/routes/[.]well-known.$.ts` forwards them into
+			// `auth.handler`, and metering them breaks the connector this change
+			// exists to enable. `DISCOVERY_RATE_LIMIT_PATHS` carries the reasoning and
+			// is derived from the forwarder's own allowlist, so the two cannot drift.
+			...Object.fromEntries(
+				DISCOVERY_RATE_LIMIT_PATHS.map((path) => [path, false as const]),
+			),
 		},
 	},
 	plugins: [
@@ -130,6 +140,27 @@ export const auth = betterAuth({
 			loginPage: AUTH_SIGNIN_PATH,
 			consentPage: AUTH_CONSENT_PATH,
 			resource: mcpResourceUrl(),
+			// DCR being off is NOT what closes client registration. `/oauth2/register`
+			// reads `allowDynamicClientRegistration` and refuses; `/oauth2/create-client`
+			// does NOT — it is a separate, routed endpoint carrying only
+			// `sessionMiddleware`, and `assertClientPrivileges` is a NO-OP unless this
+			// callback exists. Probed on a live server before this line was added: a
+			// plain member (`is_superadmin = f`) POSTing their own session got 201 with
+			// a client_id, a client_secret, their own `redirect_uris`, their own
+			// `client_name`, and `resources: [".../api/mcp"]` auto-attached.
+			//
+			// That is a consent-phishing primitive the moment #843 ships the consent
+			// screen: register "GavelUp Calendar Sync" pointing at your own server,
+			// send another member an `/oauth2/authorize` link on the REAL origin, and
+			// redeem their code against `/api/mcp`.
+			//
+			// This one callback is the whole enumeration: the provider calls
+			// `assertClientPrivileges` at every create/read/update/delete/list/rotate
+			// site, so a future endpoint is covered without editing a list here. It
+			// fails closed — a caller with no user is denied — and superadmin is the
+			// repo's existing authority for "the maintainer" (ADR-0016), which is what
+			// #843's out-of-band registration script runs as.
+			clientPrivileges: async ({ user }) => user?.isSuperadmin === true,
 		}),
 		// LAST, and Better Auth logs a warning at startup if it is not: a cookie
 		// integration plugin forwards `Set-Cookie` into the framework's cookie
@@ -153,10 +184,12 @@ export const auth = betterAuth({
  *
  * Two things that observer is worth:
  *
- * - In production it names the cause ONCE at boot. Without it, a seed that
- *   fails — migrations lagging behind the image, most plausibly — surfaces as
- *   every auth request failing with the same opaque error and no first line
- *   saying why.
+ * - In production it names the cause ONCE at boot, and marks the process
+ *   unhealthy so the platform recycles it. Without that, a seed that fails —
+ *   migrations lagging behind the image, most plausibly — surfaces as every
+ *   auth request failing with the same opaque error, no first line saying why,
+ *   and `/api/health` still answering 200. The failure is NOT OAuth-scoped and
+ *   it never clears: `#/lib/auth-init-status` has the three reasons why.
  * - In tests it is the difference between a readable failure and a red build
  *   with green assertions. Around seventeen suites reach this module
  *   transitively (`#/server/guards`) while mocking `#/db` as `{}`, which was
@@ -168,8 +201,9 @@ export const auth = betterAuth({
  * (`createBetterAuth` → `pendingSchemaCheck.catch(…)`).
  */
 void auth.$context.catch((err) => {
+	recordAuthInitFailure(err);
 	console.error(
-		"better-auth init failed — OAuth resource seeding or schema check did not complete; every auth request will fail with this error",
+		"better-auth init failed — OAuth resource seeding or schema check did not complete; every auth request will fail with this error until the process restarts",
 		err,
 	);
 });

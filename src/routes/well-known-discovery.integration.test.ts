@@ -21,10 +21,11 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/routes/well-known-discovery.integration.test.ts
  */
+import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "drizzle-orm";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	AUTH_BASE_PATH,
 	MCP_RESOURCE_PATH,
@@ -41,20 +42,70 @@ const PROTECTED_RESOURCE = "/.well-known/oauth-protected-resource";
 /** The issuer every discovery document must name: Better Auth's base URL. */
 const ISSUER = `${ORIGIN}${AUTH_BASE_PATH}`;
 
+/** Per-run, so rows this file writes cannot collide with a parallel suite's. */
+const SUFFIX = randomBytes(4).toString("hex");
+const PROBE_CLIENT_NAME = `unauthorized probe ${SUFFIX}`;
+
 describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 	let handler: (request: Request) => Promise<Response>;
+	let takeDevMagicLink: (email: string) => string | undefined;
 
 	beforeAll(async () => {
-		// Before the import, not after: `#/db` throws at module load on an unset
-		// `DATABASE_URL`, and `setup-env.ts` deliberately does not fill it in —
-		// a test must never be one missing export away from the dev database.
-		process.env.DATABASE_URL ??= process.env.TEST_DATABASE_URL;
+		// Assigned, NOT `??=`. With `??=`, a `DATABASE_URL` already in the
+		// environment stays put, and then the handler under test writes to THAT
+		// database while `countOauthClients()` reads `TEST_DATABASE_URL` — so the
+		// row-count assertions below compare a database nothing touched and
+		// cannot fail, while the probes land in the developer's dev data.
+		process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 		// `BETTER_AUTH_URL` is filled by `setup-env.ts`, and it is what makes the
 		// MCP resource a legal loopback HTTP URL rather than a rejected one.
 		expect(process.env.BETTER_AUTH_URL).toBe(ORIGIN);
+		// Lets `signedInMember` complete a real sign-in with no inbox: `auth.ts`'s
+		// `sendMagicLink` stashes the verify URL when this is on. It is a sign-in
+		// bypass, so it is set here rather than in `setup-env.ts`, and
+		// `dev-login.test.ts` guards that it can never be on in production.
+		process.env.ENABLE_DEV_LOGIN = "1";
 		const { auth } = await import("#/lib/auth");
 		handler = auth.handler;
+		({ takeDevMagicLink } = await import("#/lib/dev-login"));
 	});
+
+	afterAll(async () => {
+		// Scoped to this run's own name. `cleanup()` cascades from a club and
+		// these rows have none, so nothing else would ever remove them.
+		await testDb.execute(
+			sql`delete from oauth_client where name = ${PROBE_CLIENT_NAME}`,
+		);
+	});
+
+	/**
+	 * A real session cookie for a brand-new, non-superadmin user.
+	 *
+	 * Goes through Better Auth's own magic-link verify endpoint rather than
+	 * minting or signing a cookie by hand, so what the assertions exercise is
+	 * the same session middleware a browser would hit. The email is per-run and
+	 * previously unseen, so the user it creates is exactly the case under
+	 * test: an ordinary member with no elevated flag.
+	 */
+	async function signedInMember(): Promise<{ cookie: string }> {
+		const email = `oauth-probe-${SUFFIX}@example.com`;
+		const { auth } = await import("#/lib/auth");
+		await auth.api.signInMagicLink({
+			body: { email, callbackURL: "/" },
+			headers: new Headers(),
+		});
+		const verifyUrl = takeDevMagicLink(email);
+		if (!verifyUrl) throw new Error(`no magic link captured for ${email}`);
+		const verified = await handler(new Request(verifyUrl));
+		const setCookie = verified.headers.get("set-cookie");
+		if (!setCookie) throw new Error("verify returned no Set-Cookie");
+		const cookie = setCookie
+			.split(",")
+			.map((part) => part.trim().split(";")[0])
+			.filter((pair) => pair.includes("="))
+			.join("; ");
+		return { cookie };
+	}
 
 	const get = (pathname: string) =>
 		serveWellKnownDiscovery(new Request(`${ORIGIN}${pathname}`), handler);
@@ -113,6 +164,75 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		);
 		expect(response.ok).toBe(false);
 		expect(await countOauthClients()).toBe(before);
+	});
+
+	it("refuses client creation for a member who is not a superadmin", async () => {
+		// `/oauth2/register` is not the only registration path, and DCR being off
+		// does not close this one: `/oauth2/create-client` is separately routed,
+		// carries only `sessionMiddleware`, and `assertClientPrivileges` is inert
+		// unless `clientPrivileges` is passed. Before that callback existed, a
+		// plain member got 201 with a client_id, a client_secret and their own
+		// redirect_uris — verified against a live server.
+		//
+		// Driven through `auth.handler` with a real session cookie rather than
+		// `auth.api.*`, because the session middleware is half of what is under
+		// test. The Origin header is required: without it the request dies at the
+		// CSRF origin check, which would make this pass for the wrong reason.
+		const { cookie } = await signedInMember();
+		const before = await countOauthClients();
+		const response = await handler(
+			new Request(`${ORIGIN}${AUTH_BASE_PATH}/oauth2/create-client`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					origin: ORIGIN,
+					cookie,
+				},
+				body: JSON.stringify({
+					redirect_uris: ["https://attacker.example/cb"],
+					client_name: PROBE_CLIENT_NAME,
+				}),
+			}),
+		);
+		expect(response.status).toBe(401);
+		// The row count is the assertion that matters: a handler can reject the
+		// response after it has already written.
+		expect(await countOauthClients()).toBe(before);
+	});
+
+	it("exempts the discovery documents from the auth rate limiter", async () => {
+		// The global rule is 20 requests per 60s and the limiter runs BEFORE the
+		// plugin hooks, so without the exemption the 21st discovery request in a
+		// minute is a 429 — and when the client IP cannot be resolved (any
+		// multi-hop x-forwarded-for) every caller shares ONE bucket, which behind
+		// a proxy makes that limit global. 40 is comfortably past the ceiling.
+		for (let i = 0; i < 40; i++) {
+			const response = await get(PROTECTED_RESOURCE);
+			expect(
+				response.status,
+				`request ${i + 1} was metered — the customRules exemption is not matching`,
+			).toBe(200);
+		}
+	});
+
+	it("still meters the magic-link path — the exemption is not a blanket one", async () => {
+		// The mutation this closes: exempting by wildcard, or keying the rule off
+		// something broad enough to take the sign-in limit with it.
+		let sawRefusal = false;
+		for (let i = 0; i < 12; i++) {
+			const response = await handler(
+				new Request(`${ORIGIN}${AUTH_BASE_PATH}/sign-in/magic-link`, {
+					method: "POST",
+					headers: { "content-type": "application/json", origin: ORIGIN },
+					body: JSON.stringify({
+						email: `ratelimit-${SUFFIX}@example.com`,
+						callbackURL: "/",
+					}),
+				}),
+			);
+			if (response.status === 429) sawRefusal = true;
+		}
+		expect(sawRefusal).toBe(true);
 	});
 
 	it("does not hand arbitrary origin-root paths to the auth handler", async () => {
