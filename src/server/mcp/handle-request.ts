@@ -155,8 +155,20 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 		return serveMcp(request, { rawToken });
 	}
 	try {
-		return await serveWithOAuthCredential(request, (verified, oauthGrant) =>
-			serveMcp(verified, { oauthGrant }),
+		return await serveWithOAuthCredential(
+			request,
+			async (verified, oauthGrant) => {
+				// Caught HERE, so the catch below only ever sees the verifier. Without
+				// this, anything `serveMcp` threw after a good token was logged and
+				// answered as "could not verify", which sends a diagnosis the wrong
+				// way.
+				try {
+					return await serveMcp(verified, { oauthGrant });
+				} catch (err) {
+					console.error("[mcp] request failed after OAuth verification:", err);
+					return json({ error: "Could not handle that request." }, 500);
+				}
+			},
 		);
 	} catch (err) {
 		// Better Auth answers every token it can judge with a challenge. What

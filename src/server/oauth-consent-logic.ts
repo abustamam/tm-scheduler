@@ -14,7 +14,13 @@ export type ConsentClientLookup =
 	| { signedIn: false }
 	| {
 			signedIn: true;
-			/** Who is approving — shown so a cross-device sign-in names the account. */
+			/**
+			 * Who is approving. The id goes back with the decision
+			 * (`#/lib/oauth-consent-binding`), so Approve cannot connect an
+			 * account other than the one this screen named.
+			 */
+			userId: string;
+			/** Shown so a cross-device sign-in names the account. */
 			email: string;
 			/** Null when the provider could not identify the client. */
 			client: { clientId: string; name: string | null } | null;
@@ -43,6 +49,7 @@ export async function lookupConsentClient(
 		});
 		return {
 			signedIn: true,
+			userId: session.user.id,
 			email: session.user.email,
 			client: {
 				clientId: client.client_id,
@@ -51,6 +58,11 @@ export async function lookupConsentClient(
 		};
 	} catch (err) {
 		console.error("[oauth] consent could not identify client:", err);
-		return { signedIn: true, email: session.user.email, client: null };
+		return {
+			signedIn: true,
+			userId: session.user.id,
+			email: session.user.email,
+			client: null,
+		};
 	}
 }

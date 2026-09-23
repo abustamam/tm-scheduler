@@ -22,8 +22,23 @@
  * `SUPERADMIN_EMAILS` two-way. Run locally with production's `DATABASE_URL`
  * and no `SUPERADMIN_EMAILS` exported, it would REVOKE the maintainer's own
  * superadmin flag — and then refuse to register the client for want of it.
+ *
+ * The session also carries Better Auth's signed `dont_remember` cookie. Without
+ * it, the session middleware judges a row that expires in five minutes to be
+ * overdue for renewal — renewal is keyed on `expiresAt - expiresIn + updateAge`
+ * — and the first request quietly extended it to SEVEN DAYS (reproduced by the
+ * #843 review). The `finally` below deletes it either way; the cookie is what
+ * keeps a crash between the two from leaving a week-long superadmin session.
+ *
+ * ## Who can rotate
+ *
+ * The provider lets only the client's CREATOR rotate its secret, and
+ * `oauth_client.user_id` cascades on user delete: deleting the superadmin who
+ * ran this deletes claude.ai's client, and every member's connection with it.
+ * The rotate hint below names the creator for that reason.
  */
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { makeSignature } from "better-auth/crypto";
 import { eq } from "drizzle-orm";
 import type { db as appDb } from "#/db";
 import { oauthClient, session, user } from "#/db/auth-schema";
@@ -39,11 +54,13 @@ export interface RegisterArgs {
 	clientId?: string;
 }
 
-export const USAGE = `Usage:
-  bun run scripts/register-oauth-client.ts --as <superadmin email> \\
+export const USAGE = `Usage (in the deployed service, via railway ssh):
+  node .output/register-oauth-client.mjs --as <superadmin email> \\
     --name <client name> --redirect-uri <uri> [--force]
-  bun run scripts/register-oauth-client.ts --as <superadmin email> \\
+  node .output/register-oauth-client.mjs --as <creator email> \\
     --rotate-secret <client_id>
+
+Locally: bun run scripts/register-oauth-client.ts with the same arguments.
 
 Runs against DATABASE_URL, with BETTER_AUTH_URL and BETTER_AUTH_SECRET as the
 deployed server has them — the secret signs the session, and a different one
@@ -94,24 +111,38 @@ type Handler = (request: Request) => Promise<Response>;
 export interface RegisterDeps {
 	db: Db;
 	handler: Handler;
-	/** `(await auth.$context)` — the secret, base URL and cookie name. */
+	/** `(await auth.$context)` — the secret, base URL and cookie names. */
 	context: {
 		secret: string;
 		baseURL: string;
-		authCookies: { sessionToken: { name: string } };
+		authCookies: {
+			sessionToken: { name: string };
+			dontRememberToken: { name: string };
+		};
 	};
 }
 
-export type RegisterOutcome =
+/**
+ * What the script did. `sessionLeft` is set when the work succeeded but the
+ * temporary session could not be deleted: the outcome still carries the
+ * secret, because losing it would strand a committed registration (or, on
+ * rotate, lock out a connector whose old secret just stopped working).
+ */
+export type RegisterOutcome = (
 	| { kind: "created"; clientId: string; clientSecret: string }
 	| { kind: "rotated"; clientId: string; clientSecret: string }
-	| { kind: "exists"; clientIds: string[] }
-	| { kind: "refused"; reason: string };
+	| { kind: "exists"; clients: { clientId: string; creatorEmail: string | null }[] }
+	| { kind: "refused"; reason: string }
+) & { sessionLeft?: string };
 
-/** Better Auth's signed-cookie encoding (`better-call`'s `signCookieValue`). */
-function signCookieValue(value: string, secret: string): string {
-	const signature = createHmac("sha256", secret).update(value).digest("base64");
-	return encodeURIComponent(`${value}.${signature}`);
+/** Better Auth's signed-cookie encoding: `value.base64(HMAC)`, URI-encoded. */
+async function signedCookie(
+	name: string,
+	value: string,
+	secret: string,
+): Promise<string> {
+	const signature = await makeSignature(value, secret);
+	return `${name}=${encodeURIComponent(`${value}.${signature}`)}`;
 }
 
 /**
@@ -119,11 +150,11 @@ function signCookieValue(value: string, secret: string): string {
  * Refuses unless that user is a superadmin in the database — the same read
  * `clientPrivileges` does, checked first so the failure names the cause.
  */
-async function withSuperadminSession<T>(
+async function withSuperadminSession(
 	deps: RegisterDeps,
 	email: string,
-	run: (cookie: string) => Promise<T>,
-): Promise<T | { kind: "refused"; reason: string }> {
+	run: (cookie: string) => Promise<RegisterOutcome>,
+): Promise<RegisterOutcome> {
 	const [owner] = await deps.db
 		.select({ id: user.id, isSuperadmin: user.isSuperadmin })
 		.from(user)
@@ -149,11 +180,27 @@ async function withSuperadminSession<T>(
 		updatedAt: new Date(),
 		userAgent: "scripts/register-oauth-client.ts",
 	});
+	const { secret, authCookies } = deps.context;
+	const cookie = [
+		await signedCookie(authCookies.sessionToken.name, token, secret),
+		await signedCookie(authCookies.dontRememberToken.name, "true", secret),
+	].join("; ");
+	let outcome: RegisterOutcome | undefined;
 	try {
-		const cookie = `${deps.context.authCookies.sessionToken.name}=${signCookieValue(token, deps.context.secret)}`;
-		return await run(cookie);
+		outcome = await run(cookie);
+		return outcome;
 	} finally {
-		await deps.db.delete(session).where(eq(session.id, id));
+		// Never let a failed delete replace the outcome: it may carry the only
+		// copy of a secret. Report the leftover session instead.
+		try {
+			await deps.db.delete(session).where(eq(session.id, id));
+		} catch (err) {
+			console.error(
+				`[register-oauth-client] could not delete session ${id}; it expires within five minutes:`,
+				err,
+			);
+			if (outcome) outcome.sessionLeft = id;
+		}
 	}
 }
 
@@ -214,11 +261,12 @@ export async function registerOAuthClient(
 	// silently mints a duplicate leaves a live credential nobody knows to
 	// revoke.
 	const existing = await deps.db
-		.select({ clientId: oauthClient.clientId })
+		.select({ clientId: oauthClient.clientId, creatorEmail: user.email })
 		.from(oauthClient)
+		.leftJoin(user, eq(user.id, oauthClient.userId))
 		.where(eq(oauthClient.name, name));
 	if (existing.length > 0 && !args.force) {
-		return { kind: "exists", clientIds: existing.map((c) => c.clientId) };
+		return { kind: "exists", clients: existing };
 	}
 
 	return withSuperadminSession(deps, args.as, async (cookie) => {
@@ -258,8 +306,16 @@ export function describeOutcome(
 	outcome: RegisterOutcome,
 	args: RegisterArgs,
 ): { lines: string[]; exitCode: number } {
-	const rotateHint = (clientId: string) =>
-		`  bun run scripts/register-oauth-client.ts --as ${args.as} --rotate-secret ${clientId}`;
+	// Only the client's creator may rotate it, so the hint names them.
+	const rotateHint = (clientId: string, creator: string | null) =>
+		`  ${RUN_COMMAND} --as ${creator ?? "<the email that created it>"} --rotate-secret ${clientId}`;
+	const leftover = outcome.sessionLeft
+		? [
+				"",
+				`WARNING: the temporary session ${outcome.sessionLeft} could not be deleted.`,
+				`It expires by itself within five minutes; to remove it now: delete from session where id = '${outcome.sessionLeft}';`,
+			]
+		: [];
 	switch (outcome.kind) {
 		case "created":
 		case "rotated":
@@ -268,7 +324,7 @@ export function describeOutcome(
 				lines: [
 					outcome.kind === "created"
 						? `Registered OAuth client "${args.name}".`
-						: "Rotated the client secret. The old one stops working now.",
+						: "Rotated the client secret. The old secret stops working now; access tokens already issued stay valid until they expire, within an hour.",
 					"",
 					`  Client ID:     ${outcome.clientId}`,
 					`  Client secret: ${outcome.clientSecret}`,
@@ -277,20 +333,29 @@ export function describeOutcome(
 					"plain text anywhere. Paste both into claude.ai's connector Advanced",
 					"settings now. Do not put them in a file, an env template, the repo,",
 					"or a PR. If it is lost, rotate it:",
-					rotateHint(outcome.clientId),
+					rotateHint(outcome.clientId, args.as),
+					...leftover,
 				],
 			};
 		case "exists":
 			return {
 				exitCode: 1,
 				lines: [
-					`A client named "${args.name}" already exists: ${outcome.clientIds.join(", ")}`,
-					"Nothing was created. To get a new secret for it, rotate it:",
-					...outcome.clientIds.map(rotateHint),
+					`A client named "${args.name}" already exists: ${outcome.clients.map((c) => c.clientId).join(", ")}`,
+					"Nothing was created. To get a new secret for it, rotate it (only its creator can):",
+					...outcome.clients.map((c) => rotateHint(c.clientId, c.creatorEmail)),
 					"To create a SECOND client with the same name anyway, pass --force.",
 				],
 			};
 		case "refused":
-			return { exitCode: 1, lines: [`Refused: ${outcome.reason}`] };
+			return { exitCode: 1, lines: [`Refused: ${outcome.reason}`, ...leftover] };
 	}
 }
+
+/**
+ * How the script is run where it will actually be run: the Railway runtime
+ * image has Node and `.output/` only — no Bun, no `scripts/` — so `bun run
+ * build` bundles it to `.output/register-oauth-client.mjs`
+ * (`build:register-oauth-client`).
+ */
+export const RUN_COMMAND = "node .output/register-oauth-client.mjs";

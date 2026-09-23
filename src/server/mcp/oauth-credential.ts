@@ -37,8 +37,13 @@
  *   OAuth call fail.
  * - A token naming a `kid` the cache does not hold forces a refetch, and that
  *   fetch is metered by the auth rate limiter like any other `/api/auth`
- *   request. A legitimate token's `kid` is cached, so it is unaffected until
- *   the cache expires.
+ *   request — from the server's own address, so every such fetch shares one
+ *   bucket. Left alone, that is an anonymous denial of service: junk tokens
+ *   with random `kid`s drain the bucket and the next legitimate refresh fails.
+ *   `kidGate` below refuses an unknown `kid` before the verifier ever sees it,
+ *   checking against the key set read IN PROCESS (`auth.api.getJwks`, no HTTP),
+ *   so only tokens signed by a real key can cost a fetch. `createKidGate` in
+ *   `oauth-claims.ts` has the measurement and the policy.
  *
  * Tests route that one URL to `auth.handler` in-process
  * (`routeJwksToHandler` in `#/test/oauth-flow`); nothing else is stubbed.
@@ -46,19 +51,41 @@
 import { requireMcpAuth } from "@better-auth/mcp";
 import { auth } from "#/lib/auth";
 import { mcpResourceUrl } from "#/lib/well-known-forward";
-import { grantFromClaims, unauthorizedResponse } from "./oauth-claims";
+import {
+	accessTokenFrom,
+	createKidGate,
+	grantFromClaims,
+	unauthorizedResponse,
+} from "./oauth-claims";
 import type { VerifiedOAuthGrant } from "./tool";
+
+/** GavelUp's signing-key ids, read in process — never over HTTP. */
+const kidGate = createKidGate(async () => {
+	const { keys } = await auth.api.getJwks();
+	return keys.flatMap((key) => (typeof key.kid === "string" ? [key.kid] : []));
+});
 
 /**
  * Verify the request's access token, then run `handler` with the grant it
  * carries. A missing, malformed, expired, wrong-audience or wrong-issuer
  * token never reaches `handler`: Better Auth answers it with a 401 and an
- * RFC 9728 `WWW-Authenticate` challenge.
+ * RFC 9728 `WWW-Authenticate` challenge. A token naming a key GavelUp does
+ * not have is refused the same way, before the verifier can fetch for it.
  */
-export function serveWithOAuthCredential(
+export async function serveWithOAuthCredential(
 	request: Request,
 	handler: (request: Request, grant: VerifiedOAuthGrant) => Promise<Response>,
 ): Promise<Response> {
+	// EVERY token the verifier would read passes the gate. A header this parser
+	// cannot reduce to one token (embedded whitespace, two joined headers, an
+	// odd scheme) is refused here rather than skipped: the verifier's own
+	// parser is more lenient and would still read — and fetch for — its `kid`.
+	// No header at all goes on, and the verifier refuses it without a fetch.
+	const header = request.headers.get("authorization");
+	const token = accessTokenFrom(header);
+	if (header !== null && (token === null || !(await kidGate.admits(token)))) {
+		return unauthorizedResponse("invalid access token");
+	}
 	return requireMcpAuth(
 		auth,
 		async (verified, claims) => {

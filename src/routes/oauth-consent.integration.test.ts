@@ -147,6 +147,95 @@ describe.skipIf(!hasTestDb)(
 			expect(accepted.status).toBe(200);
 		});
 
+		it("prompt=login does not loop: the resumed authorize reaches consent", async () => {
+			// Two review passes reproduced the loop against the real provider: the
+			// replayed authorize still said prompt=login, so a person who had just
+			// signed in was sent back to /signin, which mailed another link.
+			const start = await oauth.startAuthorize(loaded, client, null, {
+				prompt: "login",
+				max_age: "0",
+			});
+			expect(start.location.pathname).toBe("/signin");
+			const continuation = oauthAuthorizeContinuation(
+				start.location.search,
+			) as string;
+			const verified = await oauth.openMagicLink(
+				loaded,
+				freshEmail(),
+				magicLinkCallbackURL(continuation),
+			);
+			const resumed = await oauth.follow(
+				loaded,
+				continuation,
+				oauth.cookieHeaderFrom(verified),
+			);
+			const next = new URL(
+				resumed.headers.get("location") ?? "",
+				oauth.TEST_ORIGIN,
+			);
+			expect(next.pathname).toBe("/oauth/consent");
+		});
+
+		describe("Approve connects the account the screen showed, or nothing", () => {
+			it("refuses an approval sent with a DIFFERENT account's session, and records nothing for it", async () => {
+				// Consent opened as A; the person then signs in as B in another tab
+				// and presses Approve on the still-open page that reads "A".
+				const a = freshEmail();
+				const b = freshEmail();
+				const cookieA = await oauth.signInCookie(loaded, a);
+				const cookieB = await oauth.signInCookie(loaded, b);
+				const { location } = await oauth.startAuthorize(
+					loaded,
+					client,
+					cookieA,
+				);
+				const shownUser = await oauth.sessionUserId(loaded, cookieA);
+
+				const res = await oauth.postConsent(
+					loaded,
+					cookieB,
+					location.search.slice(1),
+					true,
+					shownUser,
+				);
+				expect(res.status).toBe(400);
+				expect(((await res.json()) as { error?: string }).error).toBe(
+					"account_changed",
+				);
+				expect(await consentRows(b)).toBe(0);
+				expect(await consentRows(a)).toBe(0);
+			});
+
+			it("refuses an approval that names no account at all", async () => {
+				const email = freshEmail();
+				const cookie = await oauth.signInCookie(loaded, email);
+				const { location } = await oauth.startAuthorize(loaded, client, cookie);
+				const res = await oauth.postConsent(
+					loaded,
+					cookie,
+					location.search.slice(1),
+					true,
+					null,
+				);
+				expect(res.status).toBe(400);
+				expect(await consentRows(email)).toBe(0);
+			});
+
+			it("still approves when the account matches (control)", async () => {
+				const email = freshEmail();
+				const cookie = await oauth.signInCookie(loaded, email);
+				const { location } = await oauth.startAuthorize(loaded, client, cookie);
+				const res = await oauth.postConsent(
+					loaded,
+					cookie,
+					location.search.slice(1),
+					true,
+				);
+				expect(res.status).toBe(200);
+				expect(await consentRows(email)).toBe(1);
+			});
+		});
+
 		it("PIN: Better Auth's magic link decodes its callback twice", async () => {
 			// Why `magicLinkCallbackURL` exists. An UNESCAPED callback holding `%2B`
 			// comes back as `+`, which a query parser then reads as a space — the
@@ -207,6 +296,7 @@ describe.skipIf(!hasTestDb)(
 				);
 				expect(lookup).toEqual({
 					signedIn: true,
+					userId: await oauth.sessionUserId(loaded, cookie),
 					email,
 					client: { clientId: client.clientId, name: CLIENT_NAME },
 				});
@@ -227,7 +317,12 @@ describe.skipIf(!hasTestDb)(
 					new Headers({ cookie }),
 					"no-such-client",
 				);
-				expect(lookup).toEqual({ signedIn: true, email, client: null });
+				expect(lookup).toEqual({
+					signedIn: true,
+					userId: await oauth.sessionUserId(loaded, cookie),
+					email,
+					client: null,
+				});
 			});
 		});
 	},

@@ -1,7 +1,7 @@
 /**
  * Turning the OAuth provider's sign-in and consent redirects back into
- * something this app can act on (#843 / ADR-0027). Client-safe: no imports
- * beyond the path constants.
+ * something this app can act on (#843 / ADR-0027). Client-safe: it imports
+ * only `zod` and the path constants.
  *
  * ## What the provider actually sends, which is not `?redirect=`
  *
@@ -73,6 +73,22 @@ export function isSignedOAuthQuery(search: string): boolean {
 	return Boolean(params.get("sig") && params.get("client_id"));
 }
 
+/**
+ * The same test against the router's PARSED search, for `validateSearch`,
+ * which never sees the raw string. Same rule: a non-empty `sig` and a
+ * non-empty `client_id`. The router parses an all-digit value as a number,
+ * so a client id is accepted as either.
+ */
+export function isSignedOAuthSearch(search: Record<string, unknown>): boolean {
+	const { sig, client_id: clientId } = search;
+	return (
+		typeof sig === "string" &&
+		sig.length > 0 &&
+		((typeof clientId === "string" && clientId.length > 0) ||
+			typeof clientId === "number")
+	);
+}
+
 /** The authorize endpoint a continuation replays. */
 const AUTHORIZE_PATH = `${AUTH_BASE_PATH}/oauth2/authorize`;
 
@@ -103,5 +119,36 @@ export function oauthAuthorizeContinuation(search: string): string | null {
 	for (const name of SIGNATURE_PARAMS) params.delete(name);
 	// Never part of an authorize request; it is `/signin`'s own parameter.
 	params.delete("redirect");
+	dropSatisfiedReauthentication(params);
 	return `${AUTHORIZE_PATH}?${params.toString()}`;
+}
+
+/**
+ * Remove the parts of the request that demand a FRESH sign-in —
+ * `prompt=login`, `prompt=create`, and `max_age` — because by the time the
+ * continuation runs, one has just happened.
+ *
+ * Without this the flow loops: the replayed authorize still says
+ * `prompt=login`, the provider sends the now signed-in person back to
+ * `/signin`, another magic link goes out, and so on until the magic-link rate
+ * limit stops it (reproduced against the installed provider by two review
+ * passes). The provider's own resume path drops the same three — after
+ * checking the session is newer than the signed `ba_iat` — and this path
+ * throws `ba_iat` away with the signature.
+ *
+ * Dropping them from an UNSIGNED query is safe for the one reason that
+ * matters: a continuation is only ever the callback of a magic link, so it
+ * runs immediately after the person proved control of their inbox, which is
+ * exactly what `prompt=login` and `max_age` ask for. Other prompt values
+ * (`consent`, `select_account`) are left alone.
+ */
+function dropSatisfiedReauthentication(params: URLSearchParams): void {
+	params.delete("max_age");
+	const prompt = params.get("prompt");
+	if (prompt === null) return;
+	const kept = prompt
+		.split(" ")
+		.filter((value) => value && value !== "login" && value !== "create");
+	if (kept.length > 0) params.set("prompt", kept.join(" "));
+	else params.delete("prompt");
 }

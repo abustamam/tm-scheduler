@@ -21,9 +21,10 @@ import type { ZodRawShape } from "zod";
 /**
  * An OAuth access token that has ALREADY been verified — signature, issuer,
  * audience, expiry — by Better Auth's resource-server handler at the HTTP
- * layer (`oauth-credential.ts`, #843). Only `handle-request.ts` constructs one,
- * and only from verified claims; nothing a caller sends reaches these fields
- * any other way.
+ * layer (`oauth-credential.ts`, #843). Only `grantFromClaims`
+ * (`oauth-claims.ts`) builds one, and only from claims `requireMcpAuth` has
+ * already verified; `handle-request.ts` passes it straight to the tools.
+ * Nothing a caller sends reaches these fields any other way.
  */
 export interface VerifiedOAuthGrant {
 	/** The token's `sub`: the GavelUp user it was issued to. */

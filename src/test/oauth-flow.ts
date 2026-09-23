@@ -217,6 +217,8 @@ export async function startAuthorize(
 	loaded: LoadedAuth,
 	client: RegisteredClient,
 	cookie: string | null,
+	/** Further authorize parameters, e.g. `{ prompt: "login" }`. */
+	extra: Record<string, string> = {},
 ): Promise<AuthorizeRedirect> {
 	const verifier = randomBytes(32).toString("base64url");
 	const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -229,6 +231,7 @@ export async function startAuthorize(
 		code_challenge_method: "S256",
 		state: randomBytes(8).toString("hex"),
 		resource: TEST_RESOURCE,
+		...extra,
 	}).toString();
 	const response = await loaded.handler(
 		new Request(url, {
@@ -254,7 +257,17 @@ export async function postConsent(
 	cookie: string,
 	oauthQuery: string,
 	accept: boolean,
+	/**
+	 * The user the consent screen displayed, sent as `expected_user_id`
+	 * (`#/lib/oauth-consent-binding`). By default the cookie's own user, as the
+	 * page would send it; `null` omits the field.
+	 */
+	expectedUserId?: string | null,
 ): Promise<Response> {
+	const expected =
+		expectedUserId === undefined
+			? await sessionUserId(loaded, cookie)
+			: expectedUserId;
 	return loaded.handler(
 		new Request(`${TEST_ISSUER}/oauth2/consent`, {
 			method: "POST",
@@ -264,9 +277,25 @@ export async function postConsent(
 				cookie,
 				"x-real-ip": clientIp(),
 			},
-			body: JSON.stringify({ accept, oauth_query: oauthQuery }),
+			body: JSON.stringify({
+				accept,
+				oauth_query: oauthQuery,
+				...(expected === null ? {} : { expected_user_id: expected }),
+			}),
 		}),
 	);
+}
+
+/** The user a session cookie belongs to. */
+export async function sessionUserId(
+	loaded: LoadedAuth,
+	cookie: string,
+): Promise<string> {
+	const session = await loaded.auth.api.getSession({
+		headers: new Headers({ cookie }),
+	});
+	if (!session) throw new Error("cookie carries no session");
+	return session.user.id;
 }
 
 /** Redeem an authorization code at `/oauth2/token`, `client_secret_post`. */

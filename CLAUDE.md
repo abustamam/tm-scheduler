@@ -102,8 +102,11 @@ fastest way to comply.
   access token (claude.ai) verified by `src/server/mcp/oauth-credential.ts` — the ONLY file on
   the MCP path allowed to import `#/lib/auth`, and `mcp-authz.guard.test.ts` holds that by
   resolved path. Both resolve to a user id and nothing else, so clubs and attribution are the
-  same for both. The client is registered with `scripts/register-oauth-client.ts`, never by
-  INSERT. Two traps in the browser half: the provider sends `/signin` and `/oauth/consent` a
+  same for both. The verifier fetches its JWKS over HTTP from this same server, so
+  `oauth-credential.ts` refuses an unknown `kid` BEFORE it (a flood of junk `kid`s otherwise
+  drains the rate-limit bucket every refetch shares, and real calls 500). The client is
+  registered with `scripts/register-oauth-client.ts` — `node .output/register-oauth-client.mjs`
+  in production, since the image has no Bun — never by INSERT. Two traps in the browser half: the provider sends `/signin` and `/oauth/consent` a
   SIGNED query, so neither page may let the router rewrite its search (a changed
   `validateSearch` 307s and breaks the signature — read `window.location.search` raw); and
   Better Auth's magic-link verify decodes `callbackURL` twice, so a callback carrying `%XX`

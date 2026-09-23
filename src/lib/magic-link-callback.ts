@@ -21,10 +21,13 @@
  * turns each `%25` back into `%` and touches nothing else, because a path that
  * passed `safeRedirect` holds no other character `decodeURIComponent` reads.
  *
- * `magic-link-callback.integration.test.ts` drives a real sign-in through the
- * real handler and asserts where it lands, so the day Better Auth stops
- * double-decoding, that test fails instead of every callback quietly gaining
- * literal `%25`s.
+ * The "PIN: Better Auth's magic link decodes its callback twice" case in
+ * `src/routes/oauth-consent.integration.test.ts` drives a real sign-in
+ * through the real handler and asserts where it lands, so the day Better Auth
+ * stops double-decoding, that test fails instead of every callback quietly
+ * gaining literal `%25`s. Only `/signin` escapes today: the other
+ * magic-link senders (`account-invite.ts`, `dev-login.ts`) pass fixed paths
+ * with nothing to decode.
  */
 export function magicLinkCallbackURL(path: string): string {
 	return path.replaceAll("%", "%25");

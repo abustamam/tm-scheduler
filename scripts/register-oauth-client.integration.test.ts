@@ -67,11 +67,19 @@ describe("parseRegisterArgs", () => {
 
 describe.skipIf(!hasTestDb)("registerOAuthClient (#843)", () => {
 	const SUFFIX = randomBytes(4).toString("hex");
-	const NAME = `registration probe ${SUFFIX}`;
 	const SUPER_EMAIL = `register-super-${SUFFIX}@example.com`;
 	const PLAIN_EMAIL = `register-plain-${SUFFIX}@example.com`;
 	const userIds: string[] = [];
+	const names: string[] = [];
+	let nameCount = 0;
 	let deps: RegisterDeps;
+
+	/** A name no other test uses, so each case builds its own state. */
+	const freshName = () => {
+		const name = `registration probe ${SUFFIX} ${nameCount++}`;
+		names.push(name);
+		return name;
+	};
 
 	beforeAll(async () => {
 		for (const [email, isSuperadmin] of [
@@ -91,37 +99,51 @@ describe.skipIf(!hasTestDb)("registerOAuthClient (#843)", () => {
 			});
 		}
 		const { auth } = await import("#/lib/auth");
-		deps = { db: testDb as never, handler: auth.handler, context: await auth.$context };
+		deps = {
+			db: testDb as never,
+			handler: auth.handler,
+			context: await auth.$context,
+		};
 	});
 
 	afterAll(async () => {
-		await testDb.delete(oauthClient).where(eq(oauthClient.name, NAME));
+		if (names.length > 0) {
+			await testDb.delete(oauthClient).where(inArray(oauthClient.name, names));
+		}
+		await testDb.delete(session).where(inArray(session.userId, userIds));
 		await testDb.delete(user).where(inArray(user.id, userIds));
 	});
 
-	const register = (overrides: Partial<RegisterArgs> = {}) =>
+	const register = (name: string, overrides: Partial<RegisterArgs> = {}) =>
 		registerOAuthClient(deps, {
 			mode: "register",
 			as: SUPER_EMAIL,
-			name: NAME,
+			name,
 			redirectUri: "https://client.example/callback",
 			force: false,
 			...overrides,
 		});
 
-	const sessionsFor = async (id: string) =>
+	const clientsNamed = (name: string) =>
+		testDb.select().from(oauthClient).where(eq(oauthClient.name, name));
+
+	const sessionsOf = async (id: string) =>
 		(await testDb.select().from(session).where(eq(session.userId, id))).length;
 
-	it("refuses a user who is not a superadmin, and writes no client", async () => {
-		const outcome = await register({ as: PLAIN_EMAIL });
-		expect(outcome.kind).toBe("refused");
-		expect(
-			await testDb.select().from(oauthClient).where(eq(oauthClient.name, NAME)),
-		).toEqual([]);
+	it("refuses a user who is not a superadmin, naming why, and mints no session", async () => {
+		const name = freshName();
+		const outcome = await register(name, { as: PLAIN_EMAIL });
+		expect(outcome).toMatchObject({
+			kind: "refused",
+			reason: expect.stringMatching(/not a superadmin/),
+		});
+		expect(await clientsNamed(name)).toEqual([]);
+		expect(await sessionsOf(userIds[1] as string)).toBe(0);
 	});
 
 	it("creates a confidential client bound to /api/mcp, and prints the secret once", async () => {
-		const outcome = await register();
+		const name = freshName();
+		const outcome = await register(name);
 		expect(outcome.kind).toBe("created");
 		if (outcome.kind !== "created") return;
 		const [row] = await testDb
@@ -145,67 +167,132 @@ describe.skipIf(!hasTestDb)("registerOAuthClient (#843)", () => {
 		const printed = describeOutcome(outcome, {
 			mode: "register",
 			as: SUPER_EMAIL,
-			name: NAME,
+			name,
 			force: false,
 		}).lines.join("\n");
 		expect(printed.split(outcome.clientSecret).length - 1).toBe(1);
 		expect(printed).toContain("cannot be recovered");
+		expect(printed).toContain("node .output/register-oauth-client.mjs");
 	});
 
-	it("refuses a rerun with the same name, naming the client and how to rotate", async () => {
-		const outcome = await register();
+	it("refuses a rerun with the same name, naming the client, its creator and how to rotate", async () => {
+		const name = freshName();
+		expect((await register(name)).kind).toBe("created");
+		const outcome = await register(name);
 		expect(outcome.kind).toBe("exists");
 		const { lines, exitCode } = describeOutcome(outcome, {
 			mode: "register",
-			as: SUPER_EMAIL,
-			name: NAME,
+			as: PLAIN_EMAIL,
+			name,
 			force: false,
 		});
 		expect(exitCode).toBe(1);
-		expect(lines.join("\n")).toContain("--rotate-secret");
-		expect(
-			(await testDb.select().from(oauthClient).where(eq(oauthClient.name, NAME)))
-				.length,
-		).toBe(1);
+		// The hint names the CREATOR, not whoever ran the script: the provider
+		// lets only the creator rotate.
+		expect(lines.join("\n")).toContain(`--as ${SUPER_EMAIL} --rotate-secret`);
+		expect(await clientsNamed(name)).toHaveLength(1);
 	});
 
 	it("--force makes a second one", async () => {
-		expect((await register({ force: true })).kind).toBe("created");
-		expect(
-			(await testDb.select().from(oauthClient).where(eq(oauthClient.name, NAME)))
-				.length,
-		).toBe(2);
+		const name = freshName();
+		expect((await register(name)).kind).toBe("created");
+		expect((await register(name, { force: true })).kind).toBe("created");
+		expect(await clientsNamed(name)).toHaveLength(2);
 	});
 
 	it("rotates a secret", async () => {
-		const [row] = await testDb
-			.select({ clientId: oauthClient.clientId, secret: oauthClient.clientSecret })
+		const created = await register(freshName());
+		if (created.kind !== "created") throw new Error("no client to rotate");
+		const [before] = await testDb
+			.select({ secret: oauthClient.clientSecret })
 			.from(oauthClient)
-			.where(eq(oauthClient.name, NAME))
-			.limit(1);
+			.where(eq(oauthClient.clientId, created.clientId));
 		const outcome = await registerOAuthClient(deps, {
 			mode: "rotate",
 			as: SUPER_EMAIL,
-			clientId: row?.clientId,
+			clientId: created.clientId,
 			force: false,
 		});
 		expect(outcome.kind).toBe("rotated");
 		const [after] = await testDb
 			.select({ secret: oauthClient.clientSecret })
 			.from(oauthClient)
-			.where(eq(oauthClient.clientId, row?.clientId as string));
-		expect(after?.secret).not.toBe(row?.secret);
+			.where(eq(oauthClient.clientId, created.clientId));
+		expect(after?.secret).not.toBe(before?.secret);
 	});
 
-	it("leaves no session behind, and never flips the superadmin flag", async () => {
-		// The minted session is deleted in `finally`, and it is inserted
-		// directly rather than through the sign-in hook that would reconcile
-		// SUPERADMIN_EMAILS — which, unset here, would revoke the flag.
-		expect(await sessionsFor(userIds[0] as string)).toBe(0);
+	it("never renews its five-minute session, and deletes it", async () => {
+		// Without the signed `dont_remember` cookie, Better Auth's session
+		// middleware extends a five-minute row to seven days on first use.
+		const expiries: number[] = [];
+		const watching: RegisterDeps = {
+			...deps,
+			handler: async (request) => {
+				const res = await deps.handler(request);
+				const rows = await testDb
+					.select({ expiresAt: session.expiresAt })
+					.from(session)
+					.where(eq(session.userId, userIds[0] as string));
+				for (const r of rows) expiries.push(r.expiresAt.getTime());
+				return res;
+			},
+		};
+		const outcome = await registerOAuthClient(watching, {
+			mode: "register",
+			as: SUPER_EMAIL,
+			name: freshName(),
+			redirectUri: "https://client.example/callback",
+			force: false,
+		});
+		expect(outcome.kind).toBe("created");
+		expect(expiries.length).toBeGreaterThan(0);
+		for (const at of expiries) {
+			expect(at - Date.now()).toBeLessThan(10 * 60 * 1000);
+		}
+		expect(await sessionsOf(userIds[0] as string)).toBe(0);
 		const [owner] = await testDb
 			.select({ isSuperadmin: user.isSuperadmin })
 			.from(user)
 			.where(eq(user.email, SUPER_EMAIL));
 		expect(owner?.isSuperadmin).toBe(true);
+	});
+
+	it("keeps the secret when the session cannot be deleted, and says so", async () => {
+		// A failed delete in `finally` used to replace the outcome, losing the
+		// only copy of a secret the registration had already committed.
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
+		const failingDelete = new Proxy(testDb, {
+			get: (target, prop, receiver) =>
+				prop === "delete"
+					? () => {
+							throw new Error("delete failed");
+						}
+					: Reflect.get(target, prop, receiver),
+		});
+		const name = freshName();
+		const outcome = await registerOAuthClient(
+			{ ...deps, db: failingDelete as never },
+			{
+				mode: "register",
+				as: SUPER_EMAIL,
+				name,
+				redirectUri: "https://client.example/callback",
+				force: false,
+			},
+		);
+		expect(outcome.kind).toBe("created");
+		if (outcome.kind !== "created") return;
+		expect(outcome.clientSecret.length).toBeGreaterThan(0);
+		expect(outcome.sessionLeft).toBeTruthy();
+		const printed = describeOutcome(outcome, {
+			mode: "register",
+			as: SUPER_EMAIL,
+			name,
+			force: false,
+		}).lines.join("\n");
+		expect(printed).toContain(outcome.clientSecret);
+		expect(printed).toContain(`could not be deleted`);
+		log.mockRestore();
+		await testDb.delete(session).where(eq(session.id, outcome.sessionLeft as string));
 	});
 });

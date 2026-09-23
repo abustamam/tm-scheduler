@@ -8,6 +8,7 @@ import { magicLinkCallbackURL } from "./magic-link-callback";
 import {
 	isOAuthAuthorizeTarget,
 	isSignedOAuthQuery,
+	isSignedOAuthSearch,
 	oauthAuthorizeContinuation,
 	oauthQueryFromLocation,
 	parseConsentQuery,
@@ -126,5 +127,40 @@ describe("the other helpers", () => {
 				ok: false,
 			});
 		}
+	});
+});
+
+describe("the continuation drops the re-authentication it has just satisfied", () => {
+	const withParams = (extra: string) =>
+		oauthAuthorizeContinuation(`?${SIGNED}&${extra}`) as string;
+	const paramsOf = (url: string) =>
+		new URL(url, "https://gavelup.app").searchParams;
+
+	it("removes prompt=login and prompt=create, and max_age", () => {
+		// Kept, the replayed authorize sends a signed-in person straight back to
+		// /signin, which mails another link: a loop.
+		expect(paramsOf(withParams("prompt=login")).has("prompt")).toBe(false);
+		expect(paramsOf(withParams("prompt=create")).has("prompt")).toBe(false);
+		expect(paramsOf(withParams("max_age=0")).has("max_age")).toBe(false);
+	});
+
+	it("keeps any other prompt value", () => {
+		expect(paramsOf(withParams("prompt=login+consent")).get("prompt")).toBe(
+			"consent",
+		);
+		expect(paramsOf(withParams("prompt=select_account")).get("prompt")).toBe(
+			"select_account",
+		);
+	});
+});
+
+describe("isSignedOAuthSearch", () => {
+	it("agrees with isSignedOAuthQuery on the router's parsed search", () => {
+		expect(isSignedOAuthSearch({ sig: "s", client_id: "c" })).toBe(true);
+		// The router parses an all-digit id as a number.
+		expect(isSignedOAuthSearch({ sig: "s", client_id: 12345 })).toBe(true);
+		expect(isSignedOAuthSearch({ sig: "s", client_id: "" })).toBe(false);
+		expect(isSignedOAuthSearch({ sig: "", client_id: "c" })).toBe(false);
+		expect(isSignedOAuthSearch({ redirect: "/me" })).toBe(false);
 	});
 });

@@ -1,6 +1,11 @@
 import { mcp } from "@better-auth/mcp";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import {
+	APIError,
+	createAuthMiddleware,
+	getSessionFromCtx,
+} from "better-auth/api";
 import { jwt, magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
@@ -12,6 +17,10 @@ import {
 	buildMagicLinkEmail,
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
+import {
+	CONSENT_ACCOUNT_CHANGED,
+	consentAccountMismatch,
+} from "#/lib/oauth-consent-binding";
 import { isSuperadminUser, reconcileSuperadminFlag } from "#/lib/superadmin";
 import {
 	AUTH_CONSENT_PATH,
@@ -49,6 +58,29 @@ export const auth = betterAuth({
 				},
 			},
 		},
+	},
+	// #843 — Approve connects the account the consent screen showed, or
+	// nothing. Better Auth records the grant for whichever session cookie comes
+	// with the POST, and its signed query names no user, so a screen opened as
+	// A and approved after signing in as B in another tab connected B while
+	// still reading "Signed in as A". `#/lib/oauth-consent-binding` has the
+	// rule; `/oauth/consent` sends the id it displayed.
+	hooks: {
+		before: createAuthMiddleware(async (ctx) => {
+			if (ctx.path !== "/oauth2/consent") return;
+			const session = await getSessionFromCtx(ctx);
+			// No session is not an account CHANGE: the endpoint's own session
+			// middleware answers it with a 401, which the page reports as having
+			// been signed out rather than as "someone else".
+			if (!session) return;
+			if (consentAccountMismatch(ctx.body, session.user.id)) {
+				throw new APIError("BAD_REQUEST", {
+					error: CONSENT_ACCOUNT_CHANGED,
+					error_description:
+						"The signed-in account changed since this page was opened.",
+				});
+			}
+		}),
 	},
 	// #847 — where the client address comes from. Better Auth reads only
 	// `x-forwarded-for` by default; Railway's edge publishes the client in

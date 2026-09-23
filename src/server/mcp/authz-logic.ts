@@ -137,21 +137,18 @@ export function isPersonalToken(raw: string): boolean {
 	return raw.startsWith(API_TOKEN_PREFIX);
 }
 
-/**
- * Who a credential identifies, and — for a personal token — the row to stamp.
- *
- * The personal branch is the ONLY one that returns a token to touch:
- * `touchApiToken` writes `api_tokens.last_used_at`, and an OAuth token has no
- * row there.
- */
+/** Who a credential identifies, and which kind of credential it was. */
 export async function resolveCredential(
 	ctx: McpToolContext,
-): Promise<{ userId: string; credential: McpCredential; touch?: string }> {
+): Promise<{ userId: string; credential: McpCredential }> {
 	if ("oauthGrant" in ctx) {
 		const { userId, clientId, tokenId } = ctx.oauthGrant;
 		return { userId, credential: { kind: "oauth", tokenId, clientId } };
 	}
 	const rawToken = ctx.rawToken;
+	// `handle-request` routes a missing credential to the OAuth branch, so over
+	// HTTP this is unreachable; it stays for direct callers (the tool suites
+	// call handlers with a context of their own), which must fail closed too.
 	if (!rawToken) throw new McpUnauthorizedError("Missing bearer token.");
 	// Not a personal token, so not something `api_tokens` can hold. Refused
 	// without a query rather than hashed and looked up: `handle-request` only
@@ -162,7 +159,6 @@ export async function resolveCredential(
 	return {
 		userId: tok.userId,
 		credential: { kind: "personal", tokenId: tok.id },
-		touch: tok.id,
 	};
 }
 
@@ -181,7 +177,7 @@ export async function resolveCredential(
 export async function authenticateToken(
 	ctx: McpToolContext,
 ): Promise<AuthenticatedToken> {
-	const { userId, credential, touch } = await resolveCredential(ctx);
+	const { userId, credential } = await resolveCredential(ctx);
 
 	const [owner] = await db
 		.select({ id: user.id, name: user.name, email: user.email })
@@ -198,9 +194,11 @@ export async function authenticateToken(
 
 	// Telemetry for the `/me` token list. Outside any apply transaction (D10),
 	// and never allowed to fail the call it accompanied — a missing timestamp is
-	// a cosmetic loss, a failed tool call is not.
-	if (touch) {
-		await touchApiToken(touch).catch((err) => {
+	// a cosmetic loss, a failed tool call is not. Personal tokens only:
+	// `touchApiToken` writes `api_tokens.last_used_at`, and an OAuth token has
+	// no row there.
+	if (credential.kind === "personal") {
+		await touchApiToken(credential.tokenId).catch((err) => {
 			console.error("[mcp] failed to stamp token last_used_at:", err);
 		});
 	}

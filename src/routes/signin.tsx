@@ -17,23 +17,10 @@ import { magicLinkCallbackURL } from "#/lib/magic-link-callback";
 import {
 	isOAuthAuthorizeTarget,
 	isSignedOAuthQuery,
+	isSignedOAuthSearch,
 	oauthAuthorizeContinuation,
 } from "#/lib/oauth-continuation";
 import { safeRedirect } from "#/lib/write-proof";
-
-/**
- * True when the provider sent this visit (#843): a signed authorize query, not
- * a `?redirect=`. Read off the router's PARSED search, which is enough to say
- * which kind of visit it is and not enough to rebuild the query — see
- * `#/lib/oauth-continuation` for why the component reads the raw string.
- */
-function isOAuthPrompt(search: Record<string, unknown>): boolean {
-	return (
-		typeof search.sig === "string" &&
-		search.sig.length > 0 &&
-		search.client_id !== undefined
-	);
-}
 
 export const Route = createFileRoute("/signin")({
 	// Default post-sign-in landing is the Officer home (#202); it redirects
@@ -56,9 +43,13 @@ export const Route = createFileRoute("/signin")({
 	// An OAuth prompt from the provider (#843) gets NO `redirect` added. Adding
 	// one makes the server 307 to a re-serialised URL, which mangles the
 	// provider's signed query (`#/lib/oauth-continuation` has the measurement);
-	// the component builds the continuation from the untouched URL instead.
+	// the component builds the continuation from the untouched URL instead. The
+	// parsed search is enough to say WHICH kind of visit this is, and not
+	// enough to rebuild the query.
 	validateSearch: (search: Record<string, unknown>): { redirect?: string } =>
-		isOAuthPrompt(search) ? {} : { redirect: safeRedirect(search.redirect) },
+		isSignedOAuthSearch(search)
+			? {}
+			: { redirect: safeRedirect(search.redirect) },
 	component: SignIn,
 });
 
@@ -126,9 +117,15 @@ function SignIn() {
 								We sent a sign-in link to{" "}
 								<span className="font-medium text-foreground">{email}</span>.
 								{connecting
-									? " Open it in this browser if you can. If you open it on another device, you'll finish approving the connection there instead — this tab won't move on by itself."
+									? " Open it and you'll be asked to approve the connection."
 									: " Open it on this device to finish signing in."}
 							</p>
+							{connecting ? (
+								<p className="text-muted-foreground">
+									If the link opens on another device, finish there. This page
+									won't move on by itself.
+								</p>
+							) : null}
 							{import.meta.env.DEV ? (
 								<p className="text-muted-foreground">
 									(Dev: the link is printed in the server console.)

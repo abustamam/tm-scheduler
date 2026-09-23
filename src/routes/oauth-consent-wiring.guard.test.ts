@@ -48,6 +48,29 @@ describe("/oauth/consent is the page mcp() sends consent to", () => {
 		expect(consent).toMatch(/fetch\(CONSENT_ENDPOINT,/);
 	});
 
+	it("sends the displayed account with the decision, and auth.ts refuses a mismatch", () => {
+		// The page half and the server half of one rule: either alone is not a
+		// binding. The integration suite proves the refusal against the real
+		// provider; this pins that both halves are still wired.
+		expect(consent).toContain("[CONSENT_ACCOUNT_FIELD]: expectedUserId");
+		expect(consent).toContain("decide(true, userId)");
+		expect(authConfig).toMatch(
+			/if \(ctx\.path !== "\/oauth2\/consent"\) return;[\s\S]*?consentAccountMismatch\(ctx\.body, session\??\.user\.id\)[\s\S]*?throw new APIError/,
+		);
+	});
+
+	it("is served with anti-framing headers", () => {
+		expect(consent).toContain('"X-Frame-Options": "DENY"');
+		expect(consent).toContain(
+			'"Content-Security-Policy": "frame-ancestors \'none\'"',
+		);
+	});
+
+	it("navigates through the testable seam, not window.location directly", () => {
+		expect(consent).toContain("assignLocation(next)");
+		expect(consent).not.toMatch(/window\.location\.(assign|replace)\(/);
+	});
+
 	it("takes the client's name from the server lookup, never from its URL", () => {
 		expect(consent).toContain("getOAuthConsentClient(");
 		expect(consent).toContain("lookup.client?.name");
@@ -65,8 +88,8 @@ describe("/oauth/consent is the page mcp() sends consent to", () => {
 
 describe("/signin resumes an OAuth flow", () => {
 	it("adds nothing to a provider prompt's search", () => {
-		expect(signin).toContain(
-			"isOAuthPrompt(search) ? {} : { redirect: safeRedirect(search.redirect) }",
+		expect(signin).toMatch(
+			/isSignedOAuthSearch\(search\)\s*\?\s*\{\}\s*:\s*\{ redirect: safeRedirect\(search\.redirect\) \}/,
 		);
 	});
 

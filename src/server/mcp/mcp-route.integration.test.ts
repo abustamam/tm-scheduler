@@ -581,12 +581,18 @@ describe.skipIf(!hasTestDb)(
 		const emails = new Set<string>([SUPERADMIN_EMAIL]);
 		let loaded: Awaited<ReturnType<typeof oauth.loadAuthForTest>>;
 		let restoreFetch: () => void;
+		let jwksFetches = 0;
 		let client: Awaited<ReturnType<typeof oauth.registerClient>>;
 		let seed: SeededClub;
 
 		beforeAll(async () => {
 			loaded = await oauth.loadAuthForTest(SUPERADMIN_EMAIL);
-			restoreFetch = oauth.routeJwksToHandler(loaded.handler);
+			// Counted, so the forged-kid case can assert the verifier never
+			// fetched for a key GavelUp does not have.
+			restoreFetch = oauth.routeJwksToHandler((request) => {
+				jwksFetches += 1;
+				return loaded.handler(request);
+			});
 			const superCookie = await oauth.signInCookie(loaded, SUPERADMIN_EMAIL);
 			client = await oauth.registerClient(
 				loaded,
@@ -682,6 +688,71 @@ describe.skipIf(!hasTestDb)(
 				clubs: [{ clubId: seed.clubId, via: "admin" }],
 			});
 		});
+
+		it("refuses a flood of forged-kid tokens without a single JWKS fetch, and still serves a real one", async () => {
+			// The anonymous denial of service four review passes found: the
+			// verifier refetches the JWKS for every unknown `kid`, from this
+			// server's own address, so ~21 junk tokens a minute drained the shared
+			// rate-limit bucket and the next real refresh failed with a 500.
+			const junk = (kid: string) =>
+				`${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt", kid })).toString("base64url")}.e30.c2ln`;
+			const before = jwksFetches;
+			for (let i = 0; i < 30; i++) {
+				const res = await whoami(junk(`forged-${SUFFIX}-${i}`));
+				expect(res.status).toBe(401);
+				expect(res.headers.get("www-authenticate")).toContain(
+					"resource_metadata=",
+				);
+			}
+			expect(jwksFetches - before).toBe(0);
+			const r = await readToolResult(await whoami(await signedWith({})));
+			expect(r.status).toBe(200);
+		});
+
+		it("closes every gate bypass the re-review reproduced, each without a fetch", async () => {
+			// Each of these once reached the verifier, which then fetched: a `kid`
+			// spelled like the gate's own sentinels, a numeric `kid`, and a token
+			// with embedded whitespace that this gate's parser skipped and the
+			// verifier's more lenient one still read.
+			const header = (h: Record<string, unknown>) =>
+				Buffer.from(JSON.stringify({ alg: "EdDSA", ...h })).toString(
+					"base64url",
+				);
+			const before = jwksFetches;
+			for (const token of [
+				`${header({ kid: "absent" })}.e30.c2ln`,
+				`${header({ kid: "malformed" })}.e30.c2ln`,
+				`${header({ kid: 12345 })}.e30.c2ln`,
+				`${header({ kid: `ws-${SUFFIX}` })}.e 30.AA`,
+			]) {
+				for (let i = 0; i < 3; i++) {
+					const res = await whoami(token);
+					expect(res.status, token).toBe(401);
+				}
+			}
+			expect(jwksFetches - before).toBe(0);
+		});
+
+		for (const [label, overrides] of [
+			["whose subject is the client itself", "client"],
+			["that carries no jti", "no-jti"],
+		] as const) {
+			it(`401s a correctly signed token ${label} — not issued to a person`, async () => {
+				const token = await signedWith(
+					overrides === "client"
+						? { sub: client.clientId }
+						: { jti: undefined },
+				);
+				const res = await whoami(token);
+				expect(res.status).toBe(401);
+				expect(res.headers.get("www-authenticate")).toContain(
+					"resource_metadata=",
+				);
+				expect(JSON.stringify(await res.json())).toContain(
+					"not issued to a person",
+				);
+			});
+		}
 
 		it("the signed-claims helper produces a token the endpoint accepts (control)", async () => {
 			// Without this, the three refusals below could pass because `signJWT`

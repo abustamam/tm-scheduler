@@ -179,11 +179,23 @@ Every 401 now carries `WWW-Authenticate: Bearer resource_metadata="…"`, includ
 ones. That header is how an MCP client learns where to authorize; a bare 401 dead-ends the
 claude.ai connect flow with nothing to act on.
 
-**The JWKS is fetched over HTTP from this same server.** `requireMcpAuth` takes a JWKS URL
-and nothing else, so it GETs `<BETTER_AUTH_URL>/api/auth/jwks` out through Railway's edge
-and back, caching the key set for five minutes. `BETTER_AUTH_URL` therefore has to be the
-canonical origin (the fetch refuses redirects), and a token naming an unknown `kid` forces a
-refetch that the auth rate limiter meters like any other request.
+**The JWKS is fetched over HTTP from this same server, and that was an anonymous denial of
+service until the review caught it.** `requireMcpAuth` takes a JWKS URL and nothing else, so
+it GETs `<BETTER_AUTH_URL>/api/auth/jwks` out through Railway's edge and back, caching the key
+set for five minutes. `BETTER_AUTH_URL` therefore has to be the canonical origin (the fetch
+refuses redirects). Worse, the verifier refetches for every `kid` it has not cached, with no
+cooldown and before checking any signature — and every such fetch arrives from the server's
+own address, in one 20-a-minute rate-limit bucket. About 21 junk tokens a minute kept that
+bucket empty, and the next legitimate refresh (cache expiry, key rotation) failed: every
+claude.ai call answered 500. Four review passes found it independently. `oauth-credential.ts`
+now refuses an unknown `kid` BEFORE the verifier, against the key set read in process
+(`auth.api.getJwks`, no HTTP), reloading at most once every thirty seconds on a miss; so only
+a token signed by a real key can cost a fetch.
+
+Every 401 on the endpoint — both branches — is the JSON-RPC error envelope Better Auth uses,
+with the same `WWW-Authenticate` value. A verifier that could not run at all is a 500 with no
+challenge, because a 401 would send claude.ai back through consent on every call of an
+outage; and a failure after a good token is logged as that, not as "could not verify".
 
 ### The cookie guard is an allow-list of one
 
@@ -213,7 +225,12 @@ browser rather than read in docs:
   stripped (`#/lib/oauth-continuation`). A signed-in person reaching authorize is sent on to
   consent with a freshly signed query, so this works wherever the magic link is opened —
   the cross-device case lands on consent in the second browser and completes there — and
-  it is immune to the ten-minute expiry on the consent query itself.
+  it is immune to the ten-minute expiry on the consent query itself. The replay also drops
+  `prompt=login`, `prompt=create` and `max_age`: kept, they sent a person who had just signed
+  in straight back to `/signin`, in a loop the review reproduced. The provider's own resume
+  path drops the same three after checking the signed `ba_iat`; this one may drop them
+  unsigned because it only ever runs as a magic-link callback, i.e. immediately after a
+  fresh sign-in.
 
 **Better Auth 1.7.5's magic-link verify decodes its `callbackURL` twice** (`decodeURIComponent`
 on a query value the router already decoded). A base64 signature's `%2B` came back as `+`,
@@ -223,17 +240,63 @@ inverse, and `oauth-consent.integration.test.ts` pins the double decode itself s
 is removed the day the library stops doing it.
 
 The consent screen names the client from a server-side lookup by id, never from its URL.
-Declining posts `accept: false` and then stays on the page to say nothing was connected,
-rather than following the provider's redirect back to the client with `access_denied` —
-and rather than redirecting to `/me`, which `_authed` replaces with its "not in a club yet"
-gate for an account with no membership.
+Four things it does that the obvious version would not, each found in review:
+
+- **Approve connects the account the screen showed, or nothing.** Better Auth records the
+  grant for whichever session cookie arrives, and its signed query names no user, so a screen
+  opened as A and approved after signing in as B in another tab connected B. The page sends
+  the displayed user's id, and a `hooks.before` in `src/lib/auth.ts` refuses the consent POST
+  unless it is the session's user (`#/lib/oauth-consent-binding`) — a missing id is refused
+  too.
+- **Decline stays put** and says the request was not approved, OFFERING the provider's
+  `access_denied` redirect as "Return to the app" so the client can stop waiting, rather than
+  following it on its own — and rather than redirecting to `/me`, which `_authed` replaces
+  with its "not in a club yet" gate for an account with no membership. It no longer says
+  "nothing was connected": a decline does not revoke an earlier approval.
+- **A lost approval response is reported as unknown**, with no Decline left to press: the
+  approval may have been recorded, and a decline would not undo it.
+- **It is served with `X-Frame-Options: DENY` and `frame-ancestors 'none'`**, since
+  one-click Approve is a clickjacking target.
+
+Its copy states what the server enforces, not what a client might do: some changes apply as
+soon as the app makes them (`assign_roles` has no preview step).
 
 ### Registering the client
 
 `scripts/register-oauth-client.ts` calls Better Auth's own `/oauth2/create-client` (and
-`/oauth2/client/rotate-secret`) as a named superadmin. It mints a five-minute session by
-inserting the row directly and signing its token as Better Auth signs a cookie, then
-deletes it — NOT through `internalAdapter.createSession`, whose `session.create.after` hook
-reconciles `SUPERADMIN_EMAILS` two-way and, run locally with production's `DATABASE_URL`
-and that variable unset, would revoke the maintainer's own flag. It refuses a second client
-with the same name without `--force`, and prints the secret once.
+`/oauth2/client/rotate-secret`) as a named superadmin. `bun run build` bundles it to
+`.output/register-oauth-client.mjs`, because the runtime image has Node and `.output/` only;
+in production it is `node .output/register-oauth-client.mjs` inside the service. It mints a
+five-minute session by inserting the row directly and signing its token as Better Auth signs
+a cookie, then deletes it — NOT through `internalAdapter.createSession`, whose
+`session.create.after` hook reconciles `SUPERADMIN_EMAILS` two-way and, run locally with
+production's `DATABASE_URL` and that variable unset, would revoke the maintainer's own flag.
+The session carries the signed `dont_remember` cookie, without which the session middleware
+extended it to seven days on first use. A failure to delete it is reported beside the secret
+rather than replacing it. It refuses a second client with the same name without `--force`,
+and prints the secret once.
+
+Only a client's creator may rotate its secret, and `oauth_client.user_id` cascades on user
+delete: **deleting the superadmin who registered claude.ai's client deletes the client**, and
+every member's connection with it.
+
+### Known and left open
+
+Each raised in review and deliberately not fixed here:
+
+- **No OAuth scopes are checked**; any access token for the `/api/mcp` audience carries full
+  authority (decision 4 above). Harmless while one hand-registered client exists; it stops
+  being harmless when a second is registered.
+- **No way to revoke a connection** from the app. Access tokens are JWTs valid for an hour
+  with no revocation check; refresh tokens last thirty days. Revoking means deleting the
+  person's `oauth_consent` and `oauth_refresh_token` rows by hand.
+- **A client the person already approved gets a code without a consent screen** on a later
+  authorize, including one started by someone else's link. What that permits depends on
+  claude.ai binding `state` to its own session, which this repo cannot see.
+- **Two concurrent runs of the registration script** can both pass the duplicate-name check.
+  It is run by one operator, by hand.
+- **A newly rotated signing key can be refused for up to thirty seconds** by the `kid` gate's
+  miss cooldown, and junk tokens can keep that window open. The answer is a 401 rather than a
+  500. No key rotation is configured, so it would take a manual one to hit this.
+- **Only `/oauth/consent` refuses to be framed.** `/signin` is still frameable; it has no
+  one-click action to hijack.
