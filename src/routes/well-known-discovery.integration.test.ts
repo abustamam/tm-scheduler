@@ -49,6 +49,19 @@ const ALLOWED_CLIENT_NAME = `superadmin probe ${SUFFIX}`;
 const SUPERADMIN_PROBE_EMAIL = `oauth-admin-${SUFFIX}@example.com`;
 /** Every user this file signs in, so `afterAll` deletes its own rows and no others. */
 const seededEmails = new Set<string>();
+/**
+ * This file mutates two process-global env vars, and vitest reuses a worker
+ * across test FILES — so leaving them set leaks a sign-in bypass and a
+ * superadmin allowlist into whatever runs next in the same process.
+ * `superadmin.integration.test.ts`, `impersonation.integration.test.ts`,
+ * `dev-login.test.ts` and `public-readers-archive-gate.guard.test.ts` all read
+ * one of them. Saved here and restored in `afterAll`, the way
+ * `superadmin.integration.test.ts` already does with its own `prevEnv`.
+ */
+const PREV_ENV = {
+	SUPERADMIN_EMAILS: process.env.SUPERADMIN_EMAILS,
+	ENABLE_DEV_LOGIN: process.env.ENABLE_DEV_LOGIN,
+};
 
 describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 	let handler: (request: Request) => Promise<Response>;
@@ -93,6 +106,10 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 				sql`delete from verification where identifier like ${`%${email}%`}`,
 			);
 			await testDb.execute(sql`delete from "user" where email = ${email}`);
+		}
+		for (const [key, value] of Object.entries(PREV_ENV)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
 		}
 	});
 
