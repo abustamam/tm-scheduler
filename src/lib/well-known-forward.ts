@@ -99,18 +99,22 @@ const FORWARDS = new Map<string, string>([
  * `{ window: 60, max: 20 }`. Measured before this existed: the 21st discovery
  * request in a minute returned 429.
  *
- * That alone would be survivable. What is not: when Better Auth cannot resolve
- * a client IP (any `x-forwarded-for` with more than one hop, unless
- * `trustedProxies` is configured), it falls back to ONE SHARED BUCKET PER PATH
- * and logs a warning saying so. Behind a proxy that makes the limit global —
- * every claude.ai fetch sharing 20 requests a minute with every scanner that
- * finds the endpoint. A connector that discovers intermittently is worse than
- * one that never works, because it looks like a claude.ai bug.
+ * That alone would be survivable. What was not, when this was written: Better
+ * Auth could not resolve a client IP on Railway at all, and falls back to ONE
+ * SHARED BUCKET PER PATH when it cannot — every claude.ai fetch sharing 20
+ * requests a minute with every scanner that finds the endpoint. #847 fixed the
+ * resolution (`advanced.ipAddress` in `src/lib/auth.ts` reads Railway's
+ * `X-Real-IP`), so buckets are now per client. The fallback still exists for a
+ * request that arrives without that header, and a connector that discovers
+ * intermittently is worse than one that never works, because it looks like a
+ * claude.ai bug.
  *
  * So the limiter is switched OFF for exactly these paths (`src/lib/auth.ts`
- * builds its `customRules` from this list). A finite limit would not help: with
- * one shared bucket, ANY ceiling is something a single caller can exhaust to
- * lock everyone else out. What makes that safe here is what these documents
+ * builds its `customRules` from this list). Per-client buckets do not make a
+ * limit worth having here: a cloud client fetches from shared egress
+ * addresses, so traffic from many users can land in one bucket, and any
+ * ceiling is then something one of them can exhaust for the rest. What makes
+ * exemption safe is what these documents
  * are — public, unauthenticated, byte-identical per deploy, served with
  * `Cache-Control: public, max-age=15` by the provider itself, and reaching no
  * database. Exempting them also REMOVES a memory-growth vector rather than
