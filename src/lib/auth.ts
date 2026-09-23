@@ -5,6 +5,7 @@ import {
 	APIError,
 	createAuthMiddleware,
 	getSessionFromCtx,
+	isAPIError,
 } from "better-auth/api";
 import { jwt, magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
@@ -21,6 +22,7 @@ import {
 	CONSENT_ACCOUNT_CHANGED,
 	consentAccountMismatch,
 } from "#/lib/oauth-consent-binding";
+import { isRefreshRefusal } from "#/lib/oauth-refresh-refusal";
 import { isSuperadminUser, reconcileSuperadminFlag } from "#/lib/superadmin";
 import {
 	AUTH_CONSENT_PATH,
@@ -99,6 +101,38 @@ export const auth = betterAuth({
 	advanced: {
 		ipAddress: {
 			ipAddressHeaders: ["x-real-ip"],
+		},
+	},
+	// #851: migration 0087's trigger refuses a refresh token for a user with no
+	// consent, which is what makes Disconnect final. The provider sees a failed
+	// INSERT and Better Auth would answer an empty 500; this makes it the
+	// `invalid_grant` a client knows to reconnect on. Throwing an APIError from
+	// here is how the router turns it into the response.
+	//
+	// Setting `onError` REPLACES Better Auth's default logging, so the other
+	// arm reproduces it: an APIError is logged only when it is a 500, since
+	// every 401 and 400 passes through here too, and anything else is logged
+	// by name.
+	onAPIError: {
+		onError(error, ctx) {
+			if (isRefreshRefusal(error)) {
+				throw new APIError("BAD_REQUEST", {
+					error: "invalid_grant",
+					error_description: "this app was disconnected",
+				});
+			}
+			if (isAPIError(error)) {
+				if (error.status === "INTERNAL_SERVER_ERROR") {
+					ctx.logger.error(error.status, error);
+				}
+				return;
+			}
+			ctx.logger.error(
+				error && typeof error === "object" && "name" in error
+					? String(error.name)
+					: "",
+				error,
+			);
 		},
 	},
 	rateLimit: {

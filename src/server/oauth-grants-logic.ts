@@ -209,6 +209,16 @@ async function pendingCodeIds(
  * reconnected, would wipe out their NEW connection. A deleted token is simply
  * unknown ("invalid_grant").
  *
+ * One interleaving is left open, knowingly. The trigger asks whether a consent
+ * exists NOW, not whether it is the one the mint began under. So a rotation
+ * that passes its first statement, then waits while this commits AND the
+ * person reconnects the same app, would insert its token under the new
+ * consent, carrying the old grant's scopes. That needs a whole reconnect
+ * (sign-in and approval, seconds) to complete inside a gap between two
+ * statements that is normally milliseconds, and it yields access the person
+ * has just re-approved. Binding tokens to a consent generation would close it;
+ * it was judged not worth a second schema change (#853 review).
+ *
  * What is not ended here: an access token already issued. They are JWTs checked
  * without a revocation lookup (ADR-0027), so one keeps working until it
  * expires, within the hour.

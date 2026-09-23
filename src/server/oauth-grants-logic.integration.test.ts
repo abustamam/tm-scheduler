@@ -629,6 +629,23 @@ describe.skipIf(!hasTestDb)(
 				expect(await refreshCount(x.id, client.clientId)).toBe(0);
 			});
 
+			it("a refresh the trigger refuses answers 400 invalid_grant, not an empty 500", async () => {
+				const client = await freshClient("refused-mint");
+				const x = await freshUser();
+				const token = await grantWithRefresh(client, x.cookie);
+				// What Better Auth's own /oauth2/delete-consent leaves: a live token
+				// with no consent. Renewing it reaches the provider's rotation, whose
+				// INSERT the trigger refuses.
+				await testDb.execute(
+					sql`delete from oauth_consent where user_id = ${x.id} and client_id = ${client.clientId}`,
+				);
+				const refused = await oauth.refreshGrant(loaded, client, token);
+				expect(refused.status).toBe(400);
+				expect(((await refused.json()) as { error: string }).error).toBe(
+					"invalid_grant",
+				);
+			});
+
 			it("replaying a disconnected token cannot wipe out a later reconnection", async () => {
 				const client = await freshClient("replay");
 				const x = await freshUser();
