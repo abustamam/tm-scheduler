@@ -29,9 +29,11 @@ import { toStoredPhone } from "#/lib/phone";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -47,9 +49,8 @@ const { importPeopleAndMembers } = await import("./import-members-logic");
 const { previewMemberImport, commitMemberImport } = await import(
 	"./upload-members-logic"
 );
-const { applyConvertGuestToMember, captureGuestVisit } = await import(
-	"./guest-pipeline-logic"
-);
+const { applyConvertGuestToMember, captureGuestVisit, lockClubConverts } =
+	await import("./guest-pipeline-logic");
 const { bindVerifiedPerson } = await import("./account-link-logic");
 
 /** Minimal mapped-CSV row builder (all fields default to null). */
@@ -329,9 +330,12 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			}
 		});
 
-		it("reports no conflict for a row resolving to a Person already linked to an account", async () => {
+		it("reports a linked subject's fill that locks out a hidden member who has not signed in", async () => {
+			// The linked Person keeps their own sign-in, but the victim in another
+			// club, whose roster row already carries the address, can now never
+			// bind: arm 3 of the bind rule sees a second Person carrying it.
 			const shared = `linked-${n}@x.io`;
-			await person(victimClub.clubId, { rosterEmail: shared });
+			const victim = await person(victimClub.clubId, { rosterEmail: shared });
 			const userId = await account(`own-${n}@x.io`);
 			await person(attackerClub.clubId, {
 				customerId: `PN-K-${n}`,
@@ -342,8 +346,29 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				row({ customerId: `PN-K-${n}`, name: "Linked", email: shared }),
 			]);
 
-			// The fill DOES happen — nothing a CSV writes can move a linked
-			// Person's sign-in, which is why it is not reported.
+			expect(stats.membersUpdated).toBe(1);
+			expect(stats.addressConflicts).toBe(1);
+			// The lockout the report names is real, not hypothetical.
+			const victimUser = await account(shared);
+			expect(
+				await bindVerifiedPerson({ personId: victim, userId: victimUser }),
+			).toBe(false);
+		});
+
+		it("reports no conflict when everyone carrying the address is already bound", async () => {
+			const shared = `bound-${n}@x.io`;
+			const other = await account(`other-${n}@x.io`);
+			await person(victimClub.clubId, { rosterEmail: shared, userId: other });
+			const userId = await account(`own-${n}@x.io`);
+			await person(attackerClub.clubId, {
+				customerId: `PN-K-${n}`,
+				userId,
+			});
+
+			const stats = await importPeopleAndMembers(attackerClub.clubId, [
+				row({ customerId: `PN-K-${n}`, name: "Linked", email: shared }),
+			]);
+
 			expect(stats.membersUpdated).toBe(1);
 			expect(stats.addressConflicts).toBe(0);
 		});
@@ -532,6 +557,53 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 
 			expect(res.reactivated).toBe(false);
 			expect(res.rosterConflict).toBe("shared_address");
+		});
+
+		it("waits for a concurrent convert in the same club instead of duplicating the visitor", async () => {
+			// Dedup sees only COMMITTED roster rows here, so two converts of one
+			// visitor from two guest cards, run at once, each minted a Person. The
+			// blocker below plays the first convert: it holds the club's convert
+			// lock and has an uncommitted roster row for the visitor.
+			const email = `concurrent-${n}@x.io`;
+			const name = `Concurrent ${n}`;
+			// Captured BEFORE the blocker opens: the guest book takes a club row
+			// lock, which would wait on the blocker's roster-row FK lock.
+			const { guestId } = await captureGuestVisit({
+				clubId: attackerClub.clubId,
+				name,
+				email,
+			});
+			let firstPerson = "";
+			const first = await openBlockingTx(async (tx) => {
+				await lockClubConverts(tx, attackerClub.clubId);
+				const [p] = await tx
+					.insert(people)
+					.values({ name, email })
+					.returning({ id: people.id });
+				firstPerson = p?.id ?? "";
+				await tx.insert(members).values({
+					clubId: attackerClub.clubId,
+					personId: firstPerson,
+					name,
+					email,
+				});
+			});
+
+			const second = applyConvertGuestToMember({
+				clubId: attackerClub.clubId,
+				guestId,
+				actorMemberId: attackerClub.adminMemberId,
+			});
+			// Without the lock this never blocks: it mints a second Person at once.
+			await waitForLockWait("pg_advisory_xact_lock", first.pid);
+			await first.commit();
+
+			const res = await second;
+			expect(res.personId).toBe(firstPerson);
+			const rows = (await rosterOf(attackerClub.clubId)).filter(
+				(m) => m.name === name,
+			);
+			expect(rows).toHaveLength(1);
 		});
 
 		it("reports nothing when the address is the new member's alone", async () => {

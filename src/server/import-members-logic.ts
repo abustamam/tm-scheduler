@@ -14,6 +14,7 @@ import { db } from "#/db";
 import { members, people } from "#/db/schema";
 import { batchSharedEmails, type MappedMember } from "#/lib/members-csv";
 import {
+	type AddressHolder,
 	checkWrittenAddress,
 	classifyMembership,
 	type ExistingPersonRow,
@@ -150,27 +151,31 @@ export async function loadPersonCandidates(
 export async function loadAddressHolders(
 	addresses: (string | null)[],
 	conn: ImportConnection = db,
-): Promise<Map<string, string[]>> {
+): Promise<Map<string, AddressHolder[]>> {
 	const wanted = [
 		...new Set(
 			addresses.map(normalizeEmail).filter((a): a is string => a !== null),
 		),
 	];
-	const holders = new Map<string, string[]>();
+	const holders = new Map<string, AddressHolder[]>();
 	if (wanted.length === 0) return holders;
 	// `sql.param`, not a bare array: the template expands a JS array into one
 	// bind per element, and a large file would run past the protocol's limit.
+	// Joined to `people` for `user_id`: whether a holder is already bound to an
+	// account decides whether this address can still lock them out.
 	const address = normalizedEmail(members.email);
 	const rows = await conn
 		.selectDistinct({
 			address: sql<string>`${address}`,
 			personId: members.personId,
+			userId: people.userId,
 		})
 		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
 		.where(sql`${address} = any(${sql.param(wanted)}::text[])`);
 	for (const r of rows) {
 		const list = holders.get(r.address) ?? [];
-		list.push(r.personId);
+		list.push({ id: r.personId, linked: r.userId !== null });
 		holders.set(r.address, list);
 	}
 	return holders;
@@ -242,7 +247,7 @@ export async function importPeopleAndMembers(
 	// Emails shared by 2+ distinct names within this batch must never merge —
 	// force each such row to a distinct person (mirrors the backfill's scan).
 	const sharedEmails = batchSharedEmails(rows);
-	const writtenInFile = new Map<string, string[]>();
+	const writtenInFile = new Map<string, AddressHolder[]>();
 
 	for (const [rowIndex, row] of rows.entries()) {
 		if (!row.name) {
@@ -272,7 +277,7 @@ export async function importPeopleAndMembers(
 
 		let personId: string;
 		// The Person the address check is about, or null for a row creating one.
-		let subject: { id: string; linked: boolean } | null = null;
+		let subject: AddressHolder | null = null;
 		if (pd.kind === "customerId" || pd.kind === "email") {
 			const current = existing.find((p) => p.id === pd.id);
 			if (!current) continue; // unreachable — match ids come from `existing`

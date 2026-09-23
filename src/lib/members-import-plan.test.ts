@@ -3,6 +3,7 @@ import type { MappedMember } from "./members-csv";
 import { batchSharedEmails } from "./members-csv";
 import {
 	ADDRESS_CONFLICT_NOTE,
+	type AddressHolders,
 	addressConflictFor,
 	classifyMembership,
 	type ExistingMembershipRow,
@@ -16,7 +17,10 @@ import {
 
 /** A Person the importing club holds, not linked to an account. */
 const HERE = { heldBy: "this_club", linked: false } as const;
-const NO_HOLDERS = new Map<string, string[]>();
+const NO_HOLDERS: AddressHolders = new Map();
+/** An address held by unlinked Persons. */
+const held = (address: string, ...ids: string[]): AddressHolders =>
+	new Map([[address, ids.map((id) => ({ id, linked: false }))]]);
 
 /** Minimal mapped-CSV row builder (all fields default to null). */
 function row(over: Partial<MappedMember>): MappedMember {
@@ -362,7 +366,7 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 			[],
 			[],
 			[row({ name: "New", email: "Shared@x.io" })],
-			new Map([["shared@x.io", ["someone-else"]]]),
+			held("shared@x.io", "someone-else"),
 		);
 		expect(plan.summary.addressConflicts).toBe(1);
 		expect(plan.rows[0]?.action).toBe("insert");
@@ -386,7 +390,7 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 			],
 			[{ id: "m1", personId: "p1", name: "Ada", email: null, phone: null }],
 			[row({ customerId: "PN-1", name: "Ada", email: "ada@x.io" })],
-			new Map([["ada@x.io", ["p1"]]]),
+			held("ada@x.io", "p1"),
 		);
 		expect(plan.summary.toUpdate).toBe(1);
 		expect(plan.rows[0]?.note).toContain("Fills email");
@@ -415,7 +419,7 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 				},
 			],
 			[row({ customerId: "PN-1", name: "Ada", email: "taken@x.io" })],
-			new Map([["taken@x.io", ["someone-else"]]]),
+			held("taken@x.io", "someone-else"),
 		);
 		expect(plan.summary.addressConflicts).toBe(0);
 	});
@@ -484,7 +488,7 @@ describe("planImport — review fixes (#759)", () => {
 });
 
 describe("addressConflictFor", () => {
-	const holders = new Map([["x@x.io", ["p1"]]]);
+	const holders = held("x@x.io", "p1");
 
 	it("excludes the row's own Person", () => {
 		expect(
@@ -499,10 +503,26 @@ describe("addressConflictFor", () => {
 		expect(addressConflictFor(holders, " X@x.io ", null)).toBe(true);
 	});
 
-	it("reports nothing for a linked subject, or for no address", () => {
+	it("reports a linked subject when another holder has not signed in yet", () => {
+		// The linked subject keeps their own sign-in, but arm 3 now refuses the
+		// OTHER holder, who may be in a club the importing admin cannot see. An
+		// earlier cut returned early here and hid exactly that lockout.
 		expect(
 			addressConflictFor(holders, "x@x.io", { id: "p2", linked: true }),
+		).toBe(true);
+	});
+
+	it("reports nothing when everyone involved is already bound, or for no address", () => {
+		const bound: AddressHolders = new Map([
+			["x@x.io", [{ id: "p1", linked: true }]],
+		]);
+		expect(
+			addressConflictFor(bound, "x@x.io", { id: "p2", linked: true }),
 		).toBe(false);
+		// An unlinked subject is still blocked by a linked holder.
+		expect(
+			addressConflictFor(bound, "x@x.io", { id: "p2", linked: false }),
+		).toBe(true);
 		expect(addressConflictFor(holders, null, null)).toBe(false);
 		expect(addressConflictFor(holders, "  ", null)).toBe(false);
 	});

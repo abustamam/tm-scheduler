@@ -1182,6 +1182,21 @@ export interface ConvertGuestResult {
 }
 
 /**
+ * The per-club convert lock: a transaction-scoped advisory lock, released at
+ * commit or rollback. Exported so a test can hold the SAME key and prove a
+ * convert waits on it; the key is namespaced so no other advisory user of this
+ * database can collide with it by accident.
+ */
+export async function lockClubConverts(
+	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+	clubId: string,
+): Promise<void> {
+	await tx.execute(
+		sql`select pg_advisory_xact_lock(hashtextextended(${`guest-convert:${clubId}`}, 0))`,
+	);
+}
+
+/**
  * Convert-to-member (ADR-0018): promote a guest into a club Membership.
  *
  * Transactional: (1) dedup the Person by email→phone-with-name-agreement (link
@@ -1227,6 +1242,15 @@ export async function applyConvertGuestToMember(
 		if (guest.stage === "joined") {
 			throw new Error("This guest has already been converted to a member.");
 		}
+		// Then serialize every convert in this CLUB, not just this guest (#759
+		// review). The dedup below matches only a Person whose roster row here is
+		// COMMITTED, so two different guest cards for one visitor converted at
+		// once each saw nothing, each minted a Person, and the unique index could
+		// not collide across two new person ids — a duplicate roster row. Before
+		// #759 both matched one global Person and the index caught it. Taken
+		// AFTER the guest lock and released at commit; nothing that holds it
+		// waits on a guest row, so the two cannot deadlock.
+		await lockClubConverts(tx, input.clubId);
 
 		const name = guest.name.trim();
 		// A "goes by" name recorded while they were a guest survives the promotion

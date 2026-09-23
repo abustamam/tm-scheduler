@@ -202,34 +202,51 @@ export function resolvePersonDecision(
 		: { kind: "insert", values: personValues(row) };
 }
 
+/** A Person carrying an address on a roster row, as the conflict check sees
+ *  them: whether they are bound to an account decides whose sign-in a shared
+ *  address can still break. */
+export interface AddressHolder {
+	id: string;
+	linked: boolean;
+}
+
+/** Normalised address → the distinct Persons whose roster rows carry it. */
+export type AddressHolders = ReadonlyMap<string, readonly AddressHolder[]>;
+
 /**
- * Would writing `address` onto this row's roster entry share it with ANOTHER
- * Person's roster row, in any club (#759)? The CSV twin of the member edit
- * form's `personEmailObstacle`: reported, never refused — `members.email` is
- * the club's own column — because arm 3 of the bind rule then refuses BOTH
- * Persons, and one of them is a member the importing admin cannot see.
+ * Would writing `address` onto this row's roster entry leave SOMEONE unable to
+ * sign in (#759)? Arm 3 of the bind rule refuses a Person when any OTHER
+ * Person's roster row carries their address, so one shared address can lock
+ * out both people. Reported, never refused, like the member edit form:
+ * `members.email` is the club's own column.
  *
- * `holders` is `loadAddressHolders`' snapshot: normalised address → the
- * distinct Persons whose roster rows carry it. Both sides of the import call
- * this one function, which is what keeps the preview and the commit agreeing.
+ * `holders` is `loadAddressHolders`' snapshot. Both sides of the import call
+ * this one function, which keeps the preview and the commit agreeing.
  *
  * - `address` is what the import WRITES ({@link writtenAddress}), never the CSV
  *   cell: fill-only leaves an existing address in place, and reporting the
  *   cell would name an obstacle the import does not create.
  * - `subject` is the Person the row resolved to, or null for a row creating
- *   one — which has no Person yet, so every holder counts. A row's own Person
- *   is never its own conflict, or every re-import would report the club's
- *   roster against itself.
- * - A linked subject reports nothing, matching `personEmailObstacle`.
+ *   one (no Person yet, never linked). A row's own Person is never its own
+ *   conflict, or every re-import would report the club's roster against itself.
+ * - It is a conflict when an unlinked Person is on EITHER side: the subject,
+ *   whose own bind the other holders now block, or any other holder, whose
+ *   bind this write now blocks. Only when everyone involved is already bound
+ *   to an account can nobody's sign-in change. An earlier cut returned early
+ *   on a linked subject, as the edit form's `personEmailObstacle` does, and so
+ *   hid the one lockout the report exists for: the OTHER holder, often in a
+ *   club the importing admin cannot see (#854 review).
  */
 export function addressConflictFor(
-	holders: ReadonlyMap<string, readonly string[]>,
+	holders: AddressHolders,
 	address: string | null,
-	subject: { id: string; linked: boolean } | null,
+	subject: AddressHolder | null,
 ): boolean {
 	const key = normalizeAddress(address);
-	if (!key || subject?.linked) return false;
-	return (holders.get(key) ?? []).some((id) => id !== subject?.id);
+	if (!key) return false;
+	const others = (holders.get(key) ?? []).filter((h) => h.id !== subject?.id);
+	if (others.length === 0) return false;
+	return !subject?.linked || others.some((h) => !h.linked);
 }
 
 /**
@@ -241,14 +258,14 @@ export function addressConflictFor(
  * the same name and address but different Customer IDs are two Persons, and
  * `batchSharedEmails` only flags DIFFERENT names, so nothing reported that
  * neither could then sign in. A row already counted `ambiguous` skips the
- * in-file half — that collision is the ambiguous count, and reporting it twice
+ * in-file half: that collision is the ambiguous count, and reporting it twice
  * under two names would train admins to ignore both.
  */
 export function checkWrittenAddress(
-	snapshot: ReadonlyMap<string, readonly string[]>,
-	writtenInFile: Map<string, string[]>,
+	snapshot: AddressHolders,
+	writtenInFile: Map<string, AddressHolder[]>,
 	address: string | null,
-	subject: { id: string; linked: boolean } | null,
+	subject: AddressHolder | null,
 	personId: string,
 	countedAmbiguous: boolean,
 ): boolean {
@@ -257,9 +274,11 @@ export function checkWrittenAddress(
 		(!countedAmbiguous && addressConflictFor(writtenInFile, address, subject));
 	const key = normalizeAddress(address);
 	if (key) {
-		const ids = writtenInFile.get(key) ?? [];
-		if (!ids.includes(personId)) ids.push(personId);
-		writtenInFile.set(key, ids);
+		const holders = writtenInFile.get(key) ?? [];
+		if (!holders.some((h) => h.id === personId)) {
+			holders.push({ id: personId, linked: subject?.linked ?? false });
+		}
+		writtenInFile.set(key, holders);
 	}
 	return conflict;
 }
@@ -440,14 +459,14 @@ export function planImport(
 	existingPeople: ExistingPersonRow[],
 	existingMemberships: ExistingMembershipRow[],
 	rows: MappedMember[],
-	addressHolders: ReadonlyMap<string, readonly string[]>,
+	addressHolders: AddressHolders,
 	onResolved?: (rowIndex: number, person: ExistingPersonRow) => void,
 ): ImportPlan {
 	const people = existingPeople.map((p) => ({ ...p }));
 	const membershipByPerson = new Map<string, ExistingMembershipRow>();
 	for (const m of existingMemberships) membershipByPerson.set(m.personId, m);
 	const sharedEmails = batchSharedEmails(rows);
-	const writtenInFile = new Map<string, string[]>();
+	const writtenInFile = new Map<string, AddressHolder[]>();
 
 	const summary: PlanSummary = {
 		toInsert: 0,
@@ -496,7 +515,7 @@ export function planImport(
 		}
 		let personId: string;
 		// The Person the address check is about, or null for a row creating one.
-		let subject: { id: string; linked: boolean } | null = null;
+		let subject: AddressHolder | null = null;
 		if (pd.kind === "customerId" || pd.kind === "email") {
 			const current = people.find((p) => p.id === pd.id);
 			if (!current) continue; // unreachable
