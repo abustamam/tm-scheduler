@@ -304,7 +304,11 @@ export async function redeemCode(
 	client: RegisteredClient,
 	code: string,
 	verifier: string,
-): Promise<{ access_token: string; token_type: string }> {
+): Promise<{
+	access_token: string;
+	token_type: string;
+	refresh_token?: string;
+}> {
 	const response = await loaded.handler(
 		new Request(`${TEST_ISSUER}/oauth2/token`, {
 			method: "POST",
@@ -329,6 +333,7 @@ export async function redeemCode(
 	return (await response.json()) as {
 		access_token: string;
 		token_type: string;
+		refresh_token?: string;
 	};
 }
 
@@ -341,10 +346,29 @@ export async function mintAccessToken(
 	client: RegisteredClient,
 	userCookie: string,
 ): Promise<string> {
+	return (await mintGrant(loaded, client, userCookie)).access_token;
+}
+
+/**
+ * The same grant as `mintAccessToken`, returning the whole token response.
+ * `extra` goes to authorize: `{ scope: "offline_access" }` is what gets a
+ * `refresh_token` back, which `refreshGrant` then redeems (#851).
+ */
+export async function mintGrant(
+	loaded: LoadedAuth,
+	client: RegisteredClient,
+	userCookie: string,
+	extra: Record<string, string> = {},
+): Promise<{
+	access_token: string;
+	token_type: string;
+	refresh_token?: string;
+}> {
 	const { location, verifier } = await startAuthorize(
 		loaded,
 		client,
 		userCookie,
+		extra,
 	);
 	let codeUrl = location;
 	// A user who has already consented to this client goes straight to the
@@ -367,8 +391,31 @@ export async function mintAccessToken(
 	}
 	const code = codeUrl.searchParams.get("code");
 	if (!code) throw new Error(`no code in ${codeUrl.href}`);
-	const tokens = await redeemCode(loaded, client, code, verifier);
-	return tokens.access_token;
+	return redeemCode(loaded, client, code, verifier);
+}
+
+/** `POST /oauth2/token` with `grant_type=refresh_token`, as claude.ai renews. */
+export function refreshGrant(
+	loaded: LoadedAuth,
+	client: RegisteredClient,
+	refreshToken: string,
+): Promise<Response> {
+	return loaded.handler(
+		new Request(`${TEST_ISSUER}/oauth2/token`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/x-www-form-urlencoded",
+				"x-real-ip": clientIp(),
+			},
+			body: new URLSearchParams({
+				grant_type: "refresh_token",
+				refresh_token: refreshToken,
+				client_id: client.clientId,
+				client_secret: client.clientSecret,
+				resource: TEST_RESOURCE,
+			}).toString(),
+		}),
+	);
 }
 
 /**
