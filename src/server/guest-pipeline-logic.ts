@@ -52,7 +52,7 @@ import {
 	DEFAULT_COUNTRY_CODE,
 	toStoredPhone,
 } from "#/lib/phone";
-import { normalizedEmail } from "./account-link-logic";
+import { normalizedEmail, rosterConflictFor } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
@@ -1171,6 +1171,29 @@ export interface ConvertGuestResult {
 	 * `closedOfficerPositions` for the real notice.
 	 */
 	retainedOfficerPositions: OfficerPosition[];
+	/**
+	 * The address this convert wrote onto the new roster row is already on
+	 * ANOTHER Person's roster row, so neither can sign in until each has their
+	 * own (#759). Absent otherwise. Reported, never refused — the member edit
+	 * form's policy — and computed after commit; see the end of
+	 * `applyConvertGuestToMember` for why that matters.
+	 */
+	rosterConflict?: "shared_address";
+}
+
+/**
+ * The per-club convert lock: a transaction-scoped advisory lock, released at
+ * commit or rollback. Exported so a test can hold the SAME key and prove a
+ * convert waits on it; the key is namespaced so no other advisory user of this
+ * database can collide with it by accident.
+ */
+export async function lockClubConverts(
+	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+	clubId: string,
+): Promise<void> {
+	await tx.execute(
+		sql`select pg_advisory_xact_lock(hashtextextended(${`guest-convert:${clubId}`}, 0))`,
+	);
 }
 
 /**
@@ -1194,9 +1217,27 @@ export async function applyConvertGuestToMember(
 	input: ConvertGuestInput,
 ): Promise<ConvertGuestResult> {
 	const cc = await loadClubDefaultCountryCode(input.clubId);
+	// The roster row this convert CREATED and the address it wrote there, for
+	// the shared-address check after commit (see the end of this function).
+	let written: { personId: string; email: string } | null = null;
 
-	return db.transaction(async (tx) => {
-		// Lock the guest row FIRST, and re-check `stage` under that lock.
+	const result = await db.transaction(async (tx) => {
+		// Serialize every convert in this CLUB, not just this guest (#759 review).
+		// The dedup below matches only a Person whose roster row here is
+		// COMMITTED, so two different guest cards for one visitor converted at
+		// once each saw nothing, each minted a Person, and the unique index could
+		// not collide across two new person ids — a duplicate roster row. Before
+		// #759 both matched one global Person and the index caught it.
+		//
+		// BEFORE the guest lock, and that order is load-bearing. Taken after it,
+		// a convert waiting here held its guest row while it waited, and a slot
+		// reassignment onto that guest (`applyAssignGuestToSlot`, whose FK check
+		// needs the guest row) could sit between two converts: the lock holder
+		// waiting on the slot, the slot writer on the guest, the guest's convert
+		// on this lock — a deadlock with no retry. Waiting here holds nothing.
+		await lockClubConverts(tx, input.clubId);
+
+		// Then lock the guest row, and re-check `stage` under that lock.
 		//
 		// The unique index (#489) only catches a double-add once both racers have
 		// resolved the SAME Person. Two concurrent converts of one CONTACTLESS
@@ -1227,7 +1268,9 @@ export async function applyConvertGuestToMember(
 		const phone = toStoredPhone(guest.phone, cc);
 		const digits = normalizePhone(phone);
 		// 1. Person dedup (email → phone+name → create). People are global
-		//    (club-less), so a wrong match here reaches across every club.
+		//    (club-less), so both arms match only a Person THIS club already
+		//    holds (#759) — an unscoped match reached across every club, and
+		//    attaching a stranger's Person here denies them sign-in.
 		//
 		//    Email leads because it identifies ONE human. Phone does not: a shared
 		//    household or work number is ordinary in a guest book (a member brings
@@ -1264,12 +1307,22 @@ export async function applyConvertGuestToMember(
 			// `listDuplicatePeople` unless it coalesces the same way, because one
 			// row's `people.email` is NULL.
 			//
-			// Scoped to `input.clubId` by the join, so no other club's contact record
-			// can reach this conversion.
+			// BOTH halves match only a Person THIS club already holds (#759), and
+			// that is the INNER join's doing. A club-scoped LEFT join (what this was)
+			// scopes the `members.email` half and nothing else: `people.email` is
+			// global, so the OR matched a Person in any club. Without it, a guest
+			// typed with a stranger's address attached that stranger's Person to
+			// this club, and a Person two clubs hold cannot bind an account by any
+			// route (`rosterPermitsBind`): the convert denied them sign-in from a
+			// club neither they nor their officers can see. A Person no club holds
+			// is refused too — attaching one would make this club's roster row the
+			// only vouching row for their account. A refused match falls through to
+			// the fresh-Person arm below, which is safe here as it is not in the
+			// importer: a guest carries no Customer ID to collide with.
 			const candidates = await tx
 				.selectDistinct({ id: people.id, createdAt: people.createdAt })
 				.from(people)
-				.leftJoin(
+				.innerJoin(
 					members,
 					and(
 						eq(members.personId, people.id),
@@ -1287,9 +1340,21 @@ export async function applyConvertGuestToMember(
 		if (!personId && digits) {
 			// Every phone match is a CANDIDATE, not a result — scan them for one
 			// whose name agrees rather than taking the first row and hoping.
+			//
+			// Club-scoped for the reason the email arm is (#759): this had no scope
+			// at all, so a guest carrying a stranger's phone and name attached the
+			// stranger's Person to this club. One row per Person by construction —
+			// `members_club_person_unique` — so the join cannot fan out.
 			const candidates = await tx
 				.select({ id: people.id, name: people.name })
 				.from(people)
+				.innerJoin(
+					members,
+					and(
+						eq(members.personId, people.id),
+						eq(members.clubId, input.clubId),
+					),
+				)
 				.where(
 					sql`regexp_replace(coalesce(${people.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
 				)
@@ -1490,9 +1555,11 @@ export async function applyConvertGuestToMember(
 			// every picker, with the human's history split across both.
 			//
 			// The check sits HERE, at the membership insert, not at the Person
-			// insert where #617 first proposed it. A guest whose email dedupes onto
-			// a Person from ANOTHER club skips the fresh-Person path entirely and
-			// would still add a duplicate name to THIS club's roster. What must be
+			// insert where #617 first proposed it. When it was written, a guest whose
+			// email deduped onto a Person from ANOTHER club skipped the fresh-Person
+			// path and could still add a duplicate name here; #759 club-scoped the
+			// dedup, so that route is closed, but the race branch below still
+			// reaches this insert with a Person it did not create. What must be
 			// unique is a name within a club, so the guard belongs where the
 			// club-scoped row is written.
 			//
@@ -1538,11 +1605,20 @@ export async function applyConvertGuestToMember(
 			if (m) {
 				membershipId = m.id;
 				createdMembership = true;
+				if (email) written = { personId, email };
 			} else {
 				// The conflict branch: a concurrent convert won and created this row.
 				// It is not ours, so `createdMembership` stays false and an undo will
 				// detach the guest without deleting a membership another conversion
 				// is the author of.
+				//
+				// Since #759 the dedup above matches only a Person this club ALREADY
+				// holds, which takes the reuse branch; a fresh Person is invisible to
+				// every other transaction. So nothing ordinary reaches here any more
+				// — it would take the matched roster row being deleted and re-added
+				// between the dedup and the locked SELECT. Kept because the unique
+				// index is still the guarantee and a raw violation would poison the
+				// transaction; its integration test went with the route to it.
 				//
 				// It also never reactivates or demotes, and that is structural
 				// rather than an omission (#501). This branch lives in the `else` of
@@ -1650,6 +1726,35 @@ export async function applyConvertGuestToMember(
 			retainedOfficerPositions: [],
 		};
 	});
+
+	// Did the address this convert wrote leave someone unable to sign in (#759)?
+	// Reported, never refused — the member edit form's policy, and the CSV
+	// importer's. Asked AFTER the transaction commits, not inside it:
+	// `rosterConflictFor` reads the module-level `db`, so in flight it runs on a
+	// different pooled connection, cannot see the membership just inserted, and
+	// answers `no_vouching_row` — which the narrowing below discards, leaving the
+	// conflict silently unreported on exactly the path it exists for.
+	//
+	// Only a roster row this convert CREATED is checked. Reuse writes no address,
+	// so any obstacle there predates it, and a fresh Person is never linked.
+	// Narrowed to `shared_address`: the other two arms are properties of the
+	// subject's own memberships, and `multiple_clubs` is what the club-scoped
+	// dedup above now prevents a convert from creating.
+	const probe = written as { personId: string; email: string } | null;
+	if (probe) {
+		// The convert has COMMITTED by now. A failure here must not surface as a
+		// failed convert: the admin would retry, and the retry refuses because the
+		// guest has already joined. Losing the notice is the lesser harm.
+		try {
+			const obstacle = await rosterConflictFor(probe.personId, probe.email);
+			if (obstacle === "shared_address") {
+				return { ...result, rosterConflict: obstacle };
+			}
+		} catch (err) {
+			console.error("convert: shared-address check failed after commit", err);
+		}
+	}
+	return result;
 }
 
 export interface LinkGuestInput {

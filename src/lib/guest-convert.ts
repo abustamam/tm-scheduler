@@ -10,6 +10,7 @@
  */
 import { listRoles } from "#/lib/list-roles";
 import { OFFICER_POSITION_LABELS, type OfficerPosition } from "#/lib/officers";
+import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 
 /**
  * Refusal when this club already has a roster member whose name agrees with the
@@ -143,6 +144,9 @@ export interface ConvertNotice {
 	/** Open officer positions the wake-up ended, because they would otherwise
 	 *  have handed back the very admin access `demotedFrom` just removed. */
 	closedOfficerPositions: OfficerPosition[];
+	/** The address convert wrote is on another Person's roster row too (#759).
+	 *  Independent of `reactivated`: it fires on a FRESH membership. */
+	rosterConflict?: "shared_address";
 }
 
 /**
@@ -158,22 +162,33 @@ export interface ConvertNotice {
  * without a database or a rendered toast.
  *
  * Silent on the ordinary path by construction: a fresh membership and a reuse
- * of an already-active one both arrive with `reactivated: false` and no
- * positions, and a notice that fires on the common path is one admins learn to
- * ignore.
+ * of an already-active one both arrive with `reactivated: false`, no positions
+ * and no roster conflict, and a notice that fires on the common path is one
+ * admins learn to ignore.
+ *
+ * Two independent halves (#759). The privilege sentences ride a reactivation
+ * and are gated on it; the shared-address sentence is NOT — it fires on a
+ * fresh membership, which is exactly the case that used to return early here,
+ * so it is emitted whether or not anything was woken. Its copy is the edit
+ * form's own (`ROSTER_CONFLICT_COPY`), not a fourth phrasing of one refusal.
  */
 export function convertNoticeDescription(
 	result: ConvertNotice,
 ): string | undefined {
-	if (!result.reactivated) return undefined;
-	const lines = [CONVERT_REACTIVATED_MESSAGE];
-	if (result.demotedFrom) lines.push(CONVERT_DEMOTED_MESSAGE);
-	if (result.closedOfficerPositions.length > 0) {
-		lines.push(
-			CONVERT_OFFICER_TERM_CLOSED_MESSAGE(result.closedOfficerPositions),
-		);
+	const lines: string[] = [];
+	if (result.reactivated) {
+		lines.push(CONVERT_REACTIVATED_MESSAGE);
+		if (result.demotedFrom) lines.push(CONVERT_DEMOTED_MESSAGE);
+		if (result.closedOfficerPositions.length > 0) {
+			lines.push(
+				CONVERT_OFFICER_TERM_CLOSED_MESSAGE(result.closedOfficerPositions),
+			);
+		}
 	}
-	return lines.join(" ");
+	if (result.rosterConflict) {
+		lines.push(ROSTER_CONFLICT_COPY[result.rosterConflict]);
+	}
+	return lines.length > 0 ? lines.join(" ") : undefined;
 }
 
 /** Refusal when the target of a link is not a member of this club. */

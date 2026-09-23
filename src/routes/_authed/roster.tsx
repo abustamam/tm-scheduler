@@ -791,6 +791,12 @@ function CsvUploadDialog({
 				`Imported ${membersCreated} new, updated ${membersUpdated} · ${result.officerGrants} officer grants · ${result.stats.skippedOfficerAssignments} officer assignments skipped` +
 					(result.unpaidSkipped > 0
 						? ` · ${result.unpaidSkipped} unpaid skipped`
+						: "") +
+					(result.stats.foreignSkipped > 0
+						? ` · ${result.stats.foreignSkipped} on another club's roster skipped`
+						: "") +
+					(result.stats.addressConflicts > 0
+						? ` · ${result.stats.addressConflicts} with a shared email`
 						: ""),
 			);
 			if (result.officerRefreshRequired.length) {
@@ -883,6 +889,22 @@ function CsvUploadDialog({
 									</span>
 								) : null}
 							</div>
+
+							{/* Their own lines, never folded into "skipped" above: that
+							    count means a blank name, and a foreign row is a
+							    different reason the admin should be able to see
+							    (#759). Names no club and no person — the importing
+							    admin has no business learning either. */}
+							{preview.summary.foreignSkipped > 0 ? (
+								<p className="text-xs text-[var(--warning-strong)]">
+									{`${preview.summary.foreignSkipped} row(s) skipped: their member number or email belongs to someone on another club's roster, so they can't be added from this file.`}
+								</p>
+							) : null}
+							{preview.summary.addressConflicts > 0 ? (
+								<p className="text-xs text-[var(--warning-strong)]">
+									{`${preview.summary.addressConflicts} row(s) will be imported with an email another member already has on their roster entry — neither can sign in until each has their own address.`}
+								</p>
+							) : null}
 
 							{preview.summary.ambiguous > 0 ||
 							preview.summary.unparseablePositions > 0 ? (

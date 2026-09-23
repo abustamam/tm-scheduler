@@ -553,9 +553,33 @@ describe.skipIf(!hasTestDb)("explicit CSV officer approval", () => {
 		if (kind === "club") {
 			const other = await seedClub();
 			try {
+				// The other club must HOLD this member too. Otherwise the row resolves
+				// to a Person only this club holds, which the other club's import now
+				// refuses outright (#759), and it proposes no office to replay. Same
+				// `text`, so the csv hash matches and only the club can refuse it.
+				const [held] = await testDb
+					.select({ personId: members.personId, name: members.name })
+					.from(members)
+					.where(eq(members.id, seed.memberId));
+				if (!held) throw new Error("seeded member missing");
+				await testDb.insert(members).values({
+					clubId: other.clubId,
+					personId: held.personId,
+					name: held.name,
+				});
 				token = (
 					await logic.previewMemberImport(other.clubId, text, other.adminUserId)
 				).officerAccessChanges[0].approval;
+				// Drop it again before `cleanup`, which deletes every Person the
+				// club's roster names — including this club's member.
+				await testDb
+					.delete(members)
+					.where(
+						and(
+							eq(members.clubId, other.clubId),
+							eq(members.personId, held.personId),
+						),
+					);
 			} finally {
 				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 			}

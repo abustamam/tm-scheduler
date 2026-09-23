@@ -386,14 +386,26 @@ the incident list), `roster-obstacle.guard.test.ts` (the complement),
 ### Still open, and deliberately so
 
 - **A member two clubs genuinely hold cannot bind by any route** until one
-  membership is removed. That is the status quo before #756 and what the issue
-  specified; supporting them safely needs the attach gate below.
-- **The attach primitive is ungated.** A club admin can pull an arbitrary Person
-  into their own club — the CSV importer matches Customer ID globally, the guest
-  conversion matches phone plus name — and thereby put them in the refused state.
-  Under this rule that is a DENIAL, not a takeover, and it is visible and
-  repairable; it is still the root cause every predicate here has tripped over,
-  and gating it is its own change.
+  membership is removed. That is the status quo before #756, and #759's prod
+  count (one such member, across two clubs) closed building support for it: the
+  one case is handled by hand. It is also why the CSV importer now SKIPS a row
+  naming another club's member rather than adding them — a legitimate second
+  club gets the same refusal as an attacking one.
+- **The attach is gated (#759); a shared address is still reported, not
+  refused.** The importer and the guest convert used to resolve a Person
+  globally and mint a membership for them, pulling another club's member into
+  the refused state above. Now the importer refuses a Customer-ID or
+  person-level-email match onto a Person only another club holds
+  (`ExistingPersonRow.heldBy`, a post-check in `resolvePersonDecision`), and the
+  convert dedups only onto a Person the converting club already holds. What
+  remains is arm 3: a roster row carrying an address another Person's row
+  already carries makes BOTH unbindable, and a CSV row or a converted guest can
+  still write one. That stays a report — `ImportStats.addressConflicts`,
+  `ConvertGuestResult.rosterConflict`, and the edit form's
+  `personEmailObstacle` — because `members.email` is the club's own column, and
+  refusing it on one surface while the others report would make three answers to
+  one question. It is visible where it is written, and the repair is giving each
+  member their own address.
 - **READ COMMITTED phantom:** the bind's predicate is one statement, but a
   membership committed after its snapshot is invisible to it.
 - **`people_email_backup` is temporary.** Drop it by removing it from `schema.ts`

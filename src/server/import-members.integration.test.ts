@@ -116,31 +116,39 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(ppl).toHaveLength(1);
 	});
 
-	it("shares one person across clubs, matched by email (no Customer ID)", async () => {
+	it("does NOT attach another club's Person matched by email (#759)", async () => {
+		// This test used to assert the opposite — one Person, two clubs' roster
+		// rows — and that shape is the attack #759 closes. A Person two clubs hold
+		// cannot bind an account by any route, so a club whose CSV reached another
+		// club's member by email locked them out of sign-in. The row is refused
+		// (not minted as a new Person, which would duplicate the human) and
+		// counted; the one genuine dual-club member in production is handled by
+		// hand. The match is still case-insensitive: that is what reaches them.
 		const clubA = await club();
 		const clubB = await club();
+		const n = randomUUID().slice(0, 8);
 		await importPeopleAndMembers(clubA, [
-			row({ name: "Cy", email: "cy@x.io" }),
+			row({ name: "Cy", email: `cy-${n}@x.io` }),
 		]);
 		const statsB = await importPeopleAndMembers(clubB, [
-			row({ name: "Cy", email: "CY@x.io" }), // case-insensitive email
+			row({ name: "Cy", email: `CY-${n}@x.io` }),
 		]);
 
-		expect(statsB.peopleMatchedByEmail).toBe(1);
+		expect(statsB.foreignSkipped).toBe(1);
+		expect(statsB.peopleMatchedByEmail).toBe(0);
 		expect(statsB.peopleCreated).toBe(0);
-		expect(statsB.membersCreated).toBe(1);
+		expect(statsB.membersCreated).toBe(0);
 
 		const cyPeople = await testDb
 			.select()
 			.from(people)
-			.where(eq(people.email, "cy@x.io"));
+			.where(eq(people.email, `cy-${n}@x.io`));
 		expect(cyPeople).toHaveLength(1);
-		// Same person, two memberships.
 		const memberships = await testDb
-			.select({ id: members.id })
+			.select({ clubId: members.clubId })
 			.from(members)
 			.where(eq(members.personId, cyPeople[0].id));
-		expect(memberships).toHaveLength(2);
+		expect(memberships).toEqual([{ clubId: clubA }]);
 	});
 
 	it("never merges a shared email across distinct people", async () => {
@@ -208,13 +216,17 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// and the importer's own address reached a Person another club holds. #755
 		// answered that with a blast-radius predicate on the write; #756 removes the
 		// write. Kept as a regression pin because the reason it is safe changed.
+		//
+		// It also said nothing about the MEMBERSHIP the row minted in club B, and
+		// that silence was #759: the roster row, not the re-key, is what made Vic
+		// unable to sign in. The row counts below are that half.
 		const clubA = await club();
 		const clubB = await club();
 		const n = randomUUID().slice(0, 8);
 		await importPeopleAndMembers(clubA, [
 			row({ customerId: `PN-VIC-${n}`, name: "Vic" }),
 		]);
-		await importPeopleAndMembers(clubB, [
+		const stats = await importPeopleAndMembers(clubB, [
 			row({
 				customerId: `PN-VIC-${n}`,
 				name: "Vic",
@@ -223,10 +235,23 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		]);
 
 		const [vic] = await testDb
-			.select({ email: people.email })
+			.select({ id: people.id, email: people.email })
 			.from(people)
 			.where(eq(people.customerId, `PN-VIC-${n}`));
 		expect(vic?.email).toBeNull();
+		expect(stats.foreignSkipped).toBe(1);
+		const clubBRoster = await testDb
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.clubId, clubB));
+		expect(clubBRoster, "a roster row minted in the attacker's club").toEqual(
+			[],
+		);
+		const vicMemberships = await testDb
+			.select({ clubId: members.clubId })
+			.from(members)
+			.where(eq(members.personId, vic?.id ?? ""));
+		expect(vicMemberships).toEqual([{ clubId: clubA }]);
 	});
 
 	it("re-matches a member whose person-level address was cleared", async () => {

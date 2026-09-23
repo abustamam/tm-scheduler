@@ -79,7 +79,9 @@ export async function planOfficerAccess(
 	const { identities, roster, terms } = snapshot;
 	const resolved = new Map<number, ExistingPersonRow>();
 	const createdAt = new Map<string, number>();
-	planImport(candidates, roster, rows, (i, person) => {
+	// No address holders: this pass reads only which Person each row resolves
+	// to, and a `foreign` row resolves to none, so it proposes no office.
+	planImport(candidates, roster, rows, new Map(), (i, person) => {
 		resolved.set(i, { ...person });
 		if (
 			!identities.some((p) => p.id === person.id) &&

@@ -36,6 +36,7 @@ import {
 	CONVERT_REACTIVATED_MESSAGE,
 	type ConvertNotice,
 } from "#/lib/guest-convert";
+import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	convertGuestToMember,
 	type PipelineGuestRow,
@@ -438,5 +439,18 @@ describe("VP Membership guest card — reactivation notice (#501)", () => {
 		expect(description).toContain(CONVERT_DEMOTED_MESSAGE);
 		expect(description).toContain("President");
 		expect(description).toMatch(/full club admin/i);
+	});
+
+	it("says a fresh member's email is already on another roster entry (#759)", async () => {
+		// A FRESH membership — `reactivated: false` — which the notice used to be
+		// structurally silent on. It is the only convert that writes an address.
+		const call = await clickConvert({
+			reactivated: false,
+			rosterConflict: "shared_address",
+		});
+
+		expect(call?.[1]).toEqual({
+			description: ROSTER_CONFLICT_COPY.shared_address,
+		});
 	});
 });

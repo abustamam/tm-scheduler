@@ -6,6 +6,7 @@ import {
 	convertNoticeDescription,
 	isStrandedConvertedGuest,
 } from "./guest-convert";
+import { ROSTER_CONFLICT_COPY } from "./roster-conflict-copy";
 
 /**
  * The convert toast's description line (#501 + its privilege review).
@@ -137,6 +138,48 @@ describe("convertNoticeDescription", () => {
 		expect(text).toContain(CONVERT_REACTIVATED_MESSAGE);
 		expect(text).not.toContain(CONVERT_DEMOTED_MESSAGE);
 		expect(text).toContain(CONVERT_OFFICER_TERM_CLOSED_MESSAGE(["secretary"]));
+	});
+});
+
+describe("convertNoticeDescription — shared roster address (#759)", () => {
+	it("speaks on a FRESH membership, which used to return before any line", () => {
+		// The composer opened with `if (!reactivated) return undefined`, so the
+		// one convert this can happen on — a fresh Person, a fresh roster row —
+		// was structurally silent. The admin must hear that the address they
+		// just wrote has locked two members out.
+		expect(
+			convertNoticeDescription({
+				reactivated: false,
+				closedOfficerPositions: [],
+				rosterConflict: "shared_address",
+			}),
+		).toBe(ROSTER_CONFLICT_COPY.shared_address);
+	});
+
+	it("rides after the privilege lines when both apply", () => {
+		const text =
+			convertNoticeDescription({
+				reactivated: true,
+				demotedFrom: "admin",
+				closedOfficerPositions: [],
+				rosterConflict: "shared_address",
+			}) ?? "";
+		expect(text.startsWith(CONVERT_REACTIVATED_MESSAGE)).toBe(true);
+		expect(text).toContain(CONVERT_DEMOTED_MESSAGE);
+		expect(text.endsWith(ROSTER_CONFLICT_COPY.shared_address)).toBe(true);
+	});
+
+	it("still keeps a stray demotion silent without a reactivation", () => {
+		// The restructure must not un-gate the privilege half: only the
+		// conflict line escapes the `reactivated` gate.
+		expect(
+			convertNoticeDescription({
+				reactivated: false,
+				demotedFrom: "admin",
+				closedOfficerPositions: ["president"],
+				rosterConflict: "shared_address",
+			}),
+		).toBe(ROSTER_CONFLICT_COPY.shared_address);
 	});
 });
 
