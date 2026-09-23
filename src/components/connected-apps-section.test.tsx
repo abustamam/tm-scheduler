@@ -21,13 +21,13 @@ vi.mock("sonner", () => ({
 
 import { ConnectedAppsSection } from "./connected-apps-section";
 
-function renderSection() {
+function renderSection(props: { hideWhenEmpty?: boolean } = {}) {
 	const qc = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
 	return render(
 		<QueryClientProvider client={qc}>
-			<ConnectedAppsSection />
+			<ConnectedAppsSection {...props} />
 		</QueryClientProvider>,
 	);
 }
@@ -83,7 +83,8 @@ describe("ConnectedAppsSection (#851)", () => {
 		getConnectedApps.mockResolvedValue([CLAUDE]);
 		disconnectConnectedApp.mockResolvedValue({
 			consentsDeleted: 1,
-			refreshTokensRevoked: 1,
+			refreshTokensDeleted: 1,
+			codesDeleted: 0,
 		});
 		renderSection();
 
@@ -107,6 +108,57 @@ describe("ConnectedAppsSection (#851)", () => {
 		expect(
 			await screen.findByText("No apps are connected to your account."),
 		).toBeTruthy();
+	});
+
+	it("a failed load says so and offers Retry, never the empty state", async () => {
+		const user = userEvent.setup();
+		getConnectedApps.mockRejectedValueOnce(new Error("network down"));
+		renderSection();
+		expect(
+			await screen.findByText("Couldn't load your connected apps."),
+		).toBeTruthy();
+		expect(
+			screen.queryByText("No apps are connected to your account."),
+		).toBeNull();
+
+		getConnectedApps.mockResolvedValue([CLAUDE]);
+		await user.click(screen.getByRole("button", { name: "Retry" }));
+		expect(
+			await screen.findByRole("button", { name: "Disconnect" }),
+		).toBeTruthy();
+	});
+
+	it("labels an app that still has access with no approval on file", async () => {
+		getConnectedApps.mockResolvedValue([{ ...CLAUDE, approvedAt: null }]);
+		renderSection();
+		const [row] = await screen.findAllByRole("listitem");
+		expect(row?.textContent).toContain("Still has access, approval removed");
+	});
+
+	describe("hideWhenEmpty (the no-club screen)", () => {
+		it("renders nothing when the person holds no grant", async () => {
+			getConnectedApps.mockResolvedValue([]);
+			const { container } = renderSection({ hideWhenEmpty: true });
+			await vi.waitFor(() => expect(getConnectedApps).toHaveBeenCalledTimes(1));
+			await new Promise((r) => setTimeout(r, 0));
+			expect(container.textContent).toBe("");
+		});
+
+		it("renders the section when the person holds one", async () => {
+			getConnectedApps.mockResolvedValue([CLAUDE]);
+			renderSection({ hideWhenEmpty: true });
+			expect(
+				await screen.findByRole("button", { name: "Disconnect" }),
+			).toBeTruthy();
+		});
+
+		it("still renders a failed load, so a grant is never hidden by an error", async () => {
+			getConnectedApps.mockRejectedValueOnce(new Error("network down"));
+			renderSection({ hideWhenEmpty: true });
+			expect(
+				await screen.findByText("Couldn't load your connected apps."),
+			).toBeTruthy();
+		});
 	});
 
 	it("keeping the app closes the dialog without a write", async () => {

@@ -38,7 +38,18 @@ function appLabel(app: ConnectedApp): string {
  * promising "immediately", which is what the token section can say and this one
  * cannot.
  */
-export function ConnectedAppsSection() {
+export function ConnectedAppsSection({
+	hideWhenEmpty = false,
+}: {
+	/**
+	 * Render nothing unless the person holds at least one grant. For the
+	 * no-club screen (#851), where a club-less person otherwise has no route to
+	 * `/me` at all: the section must be reachable there, but an empty "Connected
+	 * apps" box on a page about joining a club is noise for everyone else. A
+	 * failed load still renders, so a person with a grant is never shown nothing.
+	 */
+	hideWhenEmpty?: boolean;
+} = {}) {
 	const qc = useQueryClient();
 	const [pending, setPending] = useState<ConnectedApp | null>(null);
 	// Held separately so the dialog's copy survives its closing animation.
@@ -69,6 +80,12 @@ export function ConnectedAppsSection() {
 	const rows = apps.data ?? [];
 	const now = Date.now();
 
+	if (
+		hideWhenEmpty &&
+		(apps.isLoading || (apps.isSuccess && rows.length === 0))
+	)
+		return null;
+
 	return (
 		<div className="space-y-3 rounded-xl border bg-card p-4">
 			<div className="min-w-0">
@@ -83,6 +100,21 @@ export function ConnectedAppsSection() {
 
 			{apps.isLoading ? (
 				<Loader2 className="size-4 animate-spin" />
+			) : apps.isError ? (
+				// Never fall through to the empty state: "No apps are connected"
+				// after a failed load is false reassurance to someone who came here
+				// to cut an app off.
+				<div className="flex items-center justify-between gap-3 text-sm">
+					<p className="text-destructive">Couldn't load your connected apps.</p>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={apps.isFetching}
+						onClick={() => apps.refetch()}
+					>
+						Retry
+					</Button>
+				</div>
 			) : rows.length > 0 ? (
 				<ul className="space-y-2">
 					{rows.map((app) => (
@@ -105,7 +137,7 @@ export function ConnectedAppsSection() {
 								<div className="text-muted-foreground">
 									{app.approvedAt
 										? `Approved ${new Date(app.approvedAt).toLocaleDateString()}`
-										: "Approved"}
+										: "Still has access, approval removed"}
 									{" · "}
 									{app.lastActiveAt
 										? `Last active ${relativeTime(new Date(app.lastActiveAt).getTime(), now)}`

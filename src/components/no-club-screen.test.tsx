@@ -94,4 +94,15 @@ describe("NoClubScreen", () => {
 		const link = screen.getByRole("link", { name: /superadmin/i });
 		expect(link.getAttribute("href")).toBe("/superadmin");
 	});
+
+	it("renders account controls a club-less person still needs (#851)", () => {
+		render(
+			<NoClubScreen
+				email="jane@club.org"
+				onSignOut={() => {}}
+				accountControls={<p>Connected apps stand-in</p>}
+			/>,
+		);
+		expect(screen.getByText("Connected apps stand-in")).toBeTruthy();
+	});
 });

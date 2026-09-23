@@ -179,11 +179,13 @@ Postgres service:
 
 ```bash
 railway ssh --service Postgres -- psql -X -c "
-  delete from oauth_refresh_token where user_id = (select id from \"user\" where email = '<email>');
-  delete from oauth_consent       where user_id = (select id from \"user\" where email = '<email>');"
+  delete from oauth_consent       where user_id = (select id from \"user\" where email = '<email>');
+  delete from oauth_refresh_token where user_id = (select id from \"user\" where email = '<email>');"
 ```
 
-Their current access token keeps working for up to an hour. Ending their officer term or
+Consent goes first. Since #851 a trigger (migration 0087) refuses any new refresh token for a
+person with no consent, so once the consent is gone nothing can mint a token that the second line
+would miss. Their current access token keeps working for up to an hour. Ending their officer term or
 membership is immediate: every call re-checks club roles live.
 
 ### Checking it's up

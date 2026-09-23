@@ -57,3 +57,21 @@ describe("connected-apps server fns act as the session's user (#851)", () => {
 		);
 	});
 });
+
+describe("a club-less person can still reach Disconnect (#851)", () => {
+	// `_authed.tsx` renders `NoClubScreen` INSTEAD of the outlet when the person
+	// has no club, so `/me` never mounts for them. The slot is the only route
+	// to the section; a route component cannot be mounted in jsdom without a
+	// router context, so this pins the wiring by source.
+	const AUTHED = readSource(resolve(__dirname, "../routes/_authed.tsx"));
+
+	it("passes the Connected apps section into the no-club screen", () => {
+		const start = AUTHED.indexOf("<NoClubScreen");
+		expect(start).toBeGreaterThan(-1);
+		// Up to the early return that closes the no-club branch.
+		const element = AUTHED.slice(start, AUTHED.indexOf(");", start));
+		expect(element).toContain(
+			"accountControls={<ConnectedAppsSection hideWhenEmpty />}",
+		);
+	});
+});

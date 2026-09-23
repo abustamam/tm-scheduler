@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { AppShell, shellPropsFromContext } from "#/components/app-shell";
+import { ConnectedAppsSection } from "#/components/connected-apps-section";
 import { NoClubScreen } from "#/components/no-club-screen";
 import { authClient } from "#/lib/auth-client";
 import { getAuthContext } from "#/server/auth-context";
@@ -73,6 +74,9 @@ function WorkspaceLayout() {
 				onSignOut={handleSignOut}
 				isSuperadmin={isSuperadmin}
 				hasArchivedClub={archivedClubCount > 0}
+				// A club-less person never reaches `/me`, so a grant they still
+				// hold would otherwise be undisconnectable (#851).
+				accountControls={<ConnectedAppsSection hideWhenEmpty />}
 			/>
 		);
 	}

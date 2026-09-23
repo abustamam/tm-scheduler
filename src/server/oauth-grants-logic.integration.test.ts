@@ -13,8 +13,11 @@
  *     bunx vitest run src/server/oauth-grants-logic.integration.test.ts
  */
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { oauthConsent } from "#/db/schema";
 import { hasTestDb, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -28,9 +31,10 @@ type Loaded = Awaited<ReturnType<typeof oauth.loadAuthForTest>>;
 type Client = Awaited<ReturnType<typeof oauth.registerClient>>;
 
 /**
- * `testDb` whose transactions run `before` just ahead of statement 2 of
- * `disconnectApp`, the consent delete. `before` may throw (the atomicity test)
- * or commit a row on another connection (the race test). The pattern of
+ * `testDb` whose transactions run `before` just ahead of `disconnectApp`'s
+ * LAST statement, the consent delete — after the lock is held and the tokens
+ * and codes are gone. `before` may throw (the atomicity test) or start a mint
+ * on another connection (the race test). The pattern of
  * `register-oauth-client.integration.test.ts`, one level down, because the
  * statements run on the tx and not on the db. It follows the chain
  * `disconnectApp` builds, `delete().where().returning()`, so `before` runs
@@ -49,17 +53,20 @@ function beforeConsentDelete(before: () => Promise<void>): typeof testDb {
 								new Proxy(tx, {
 									get: (t, p, r) =>
 										p === "delete"
-											? (table: unknown) => ({
-													where: (w: unknown) => ({
-														returning: async (f: unknown) => {
-															await before();
-															const real = (
-																t.delete as unknown as (x: unknown) => Chain
-															)(table);
-															return real.where(w).returning(f);
-														},
-													}),
-												})
+											? (table: unknown) => {
+													const real = (
+														t.delete as unknown as (x: unknown) => Chain
+													)(table);
+													if (table !== oauthConsent) return real;
+													return {
+														where: (w: unknown) => ({
+															returning: async (f: unknown) => {
+																await before();
+																return real.where(w).returning(f);
+															},
+														}),
+													};
+												}
 											: Reflect.get(t, p, r),
 								}),
 							),
@@ -67,6 +74,11 @@ function beforeConsentDelete(before: () => Promise<void>): typeof testDb {
 				: Reflect.get(target, prop, receiver),
 	});
 }
+
+const TRIGGER_MIGRATION = readFileSync(
+	resolve(__dirname, "../../drizzle/0087_oauth_refresh_requires_consent.sql"),
+	"utf8",
+);
 
 /** A timestamp column as epoch ms, read as Drizzle maps it (as UTC). */
 const epochMs = (column: string) =>
@@ -101,13 +113,17 @@ describe.skipIf(!hasTestDb)(
 			return client;
 		}
 
-		/** A real grant carrying a refresh token. */
+		/**
+		 * A real grant carrying a refresh token. The consent covers `email` too,
+		 * so a later `email`-only authorize issues a code silently — one that
+		 * mints no refresh token on redemption (`pendingCode`).
+		 */
 		async function grantWithRefresh(
 			client: Client,
 			cookie: string,
 		): Promise<string> {
 			const tokens = await oauth.mintGrant(loaded, client, cookie, {
-				scope: "offline_access",
+				scope: "email offline_access",
 			});
 			if (!tokens.refresh_token)
 				throw new Error("grant issued no refresh token");
@@ -122,23 +138,83 @@ describe.skipIf(!hasTestDb)(
 			const consent = await testDb.execute<{ row: string }>(
 				sql`select c::text as row from oauth_consent c where c.user_id = ${userId} and c.client_id = ${clientId} order by c.id`,
 			);
+			const codes = await testDb.execute<{ row: string }>(
+				sql`select v::text as row from verification v where ${pendingCodeOf(userId, clientId)} order by v.id`,
+			);
 			return {
 				refresh: refresh.rows.map((r) => r.row),
 				consent: consent.rows.map((r) => r.row),
+				codes: codes.rows.map((r) => r.row),
 			};
 		}
 
-		async function liveRefreshCount(
+		/** The provider's pending authorization codes for a user × client. */
+		function pendingCodeOf(userId: string, clientId: string) {
+			return sql`case when value like '{"type":"authorization_code",%'
+				then (value::jsonb ->> 'userId') = ${userId}
+					and (value::jsonb -> 'query' ->> 'client_id') = ${clientId}
+				else false end`;
+		}
+
+		async function refreshCount(
 			userId: string,
 			clientId: string,
 		): Promise<number> {
 			const rows = await testDb.execute<{ n: string }>(
-				sql`select count(*)::text as n from oauth_refresh_token where user_id = ${userId} and client_id = ${clientId} and revoked is null`,
+				sql`select count(*)::text as n from oauth_refresh_token where user_id = ${userId} and client_id = ${clientId}`,
 			);
 			return Number(rows.rows[0]?.n ?? "-1");
 		}
 
+		/**
+		 * An authorization code for a user who has ALREADY consented, issued and
+		 * not redeemed — what an app holds between the redirect and its token call.
+		 */
+		async function pendingCode(
+			client: Client,
+			cookie: string,
+			scope: string,
+		): Promise<{ code: string; verifier: string }> {
+			const { location, verifier } = await oauth.startAuthorize(
+				loaded,
+				client,
+				cookie,
+				{ scope },
+			);
+			const code = location.searchParams.get("code");
+			if (!code) throw new Error(`authorize issued no code: ${location.href}`);
+			return { code, verifier };
+		}
+
+		/** The text of a failed query, including Postgres's own message. */
+		function errorText(e: unknown): string {
+			const err = e as { message?: string; cause?: { message?: string } };
+			return `${err.message ?? ""} ${err.cause?.message ?? ""}`;
+		}
+
+		async function insertRawRefresh(
+			id: string,
+			clientId: string,
+			userId: string,
+		) {
+			// The id leads the statement as a comment so `pg_stat_activity.query`,
+			// which shows bind placeholders rather than values, can name it.
+			return testDb.execute(
+				sql`${sql.raw(`/* ${id.replace(/[^a-z0-9-]/gi, "")} */`)} insert into oauth_refresh_token (id, token, client_id, user_id, scopes, created_at, expires_at)
+					values (${id}, ${`tok-${id}`}, ${clientId}, ${userId}, array['offline_access'], now(), now() + interval '30 days')`,
+			);
+		}
+
 		beforeAll(async () => {
+			// `tm_test` is push-synced locally, and `db:push` cannot see a trigger
+			// (CI migrates it, so there it is already present). Applying the
+			// migration's own SQL, which is idempotent, means this suite proves
+			// the file that ships rather than a copy of it.
+			for (const statement of TRIGGER_MIGRATION.split(
+				"--> statement-breakpoint",
+			)) {
+				await testDb.execute(sql.raw(statement));
+			}
 			loaded = await oauth.loadAuthForTest(SUPERADMIN);
 			superCookie = await oauth.signInCookie(loaded, SUPERADMIN);
 		});
@@ -230,17 +306,27 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		describe("disconnectApp", () => {
-			it("revokes every live refresh token AND deletes the consent", async () => {
+			it("deletes every refresh token, every pending code AND the consent", async () => {
 				const client = await freshClient("disconnect");
 				const x = await freshUser();
 				await grantWithRefresh(client, x.cookie);
 				await grantWithRefresh(client, x.cookie);
-				expect(await liveRefreshCount(x.id, client.clientId)).toBe(2);
+				await pendingCode(client, x.cookie, "email");
+				const before = await snapshot(x.id, client.clientId);
+				expect(before.refresh).toHaveLength(2);
+				expect(before.codes).toHaveLength(1);
 
 				const result = await disconnectApp(x.id, client.clientId);
-				expect(result).toEqual({ consentsDeleted: 1, refreshTokensRevoked: 2 });
-				expect(await liveRefreshCount(x.id, client.clientId)).toBe(0);
-				expect((await snapshot(x.id, client.clientId)).consent).toEqual([]);
+				expect(result).toEqual({
+					consentsDeleted: 1,
+					refreshTokensDeleted: 2,
+					codesDeleted: 1,
+				});
+				expect(await snapshot(x.id, client.clientId)).toEqual({
+					refresh: [],
+					consent: [],
+					codes: [],
+				});
 				expect(await listConnectedApps(x.id)).toEqual([]);
 			});
 
@@ -250,12 +336,19 @@ describe.skipIf(!hasTestDb)(
 				const y = await freshUser();
 				await grantWithRefresh(client, x.cookie);
 				await grantWithRefresh(client, y.cookie);
+				await pendingCode(client, x.cookie, "email");
+				await pendingCode(client, y.cookie, "email");
 				const yBefore = await snapshot(y.id, client.clientId);
 				expect(yBefore.refresh).toHaveLength(1);
 				expect(yBefore.consent).toHaveLength(1);
+				expect(yBefore.codes).toHaveLength(1);
 
 				const result = await disconnectApp(x.id, client.clientId);
-				expect(result).toEqual({ consentsDeleted: 1, refreshTokensRevoked: 1 });
+				expect(result).toEqual({
+					consentsDeleted: 1,
+					refreshTokensDeleted: 1,
+					codesDeleted: 1,
+				});
 				expect(await snapshot(y.id, client.clientId)).toEqual(yBefore);
 			});
 
@@ -264,23 +357,26 @@ describe.skipIf(!hasTestDb)(
 				const x = await freshUser();
 				const y = await freshUser();
 				await grantWithRefresh(client, y.cookie);
+				await pendingCode(client, y.cookie, "email");
 				const yBefore = await snapshot(y.id, client.clientId);
+				const zeros = {
+					consentsDeleted: 0,
+					refreshTokensDeleted: 0,
+					codesDeleted: 0,
+				};
 
-				expect(await disconnectApp(x.id, `no-such-client-${SUFFIX}`)).toEqual({
-					consentsDeleted: 0,
-					refreshTokensRevoked: 0,
-				});
-				expect(await disconnectApp(x.id, client.clientId)).toEqual({
-					consentsDeleted: 0,
-					refreshTokensRevoked: 0,
-				});
+				expect(await disconnectApp(x.id, `no-such-client-${SUFFIX}`)).toEqual(
+					zeros,
+				);
+				expect(await disconnectApp(x.id, client.clientId)).toEqual(zeros);
 				expect(await snapshot(y.id, client.clientId)).toEqual(yBefore);
 			});
 
-			it("is atomic: a failing consent delete rolls the revocations back", async () => {
+			it("is atomic: a failing consent delete rolls the token and code deletes back", async () => {
 				const client = await freshClient("atomic");
 				const x = await freshUser();
 				await grantWithRefresh(client, x.cookie);
+				await pendingCode(client, x.cookie, "email");
 				const before = await snapshot(x.id, client.clientId);
 
 				const failing = beforeConsentDelete(async () => {
@@ -290,27 +386,115 @@ describe.skipIf(!hasTestDb)(
 					disconnectApp(x.id, client.clientId, failing),
 				).rejects.toThrow("delete failed");
 				expect(await snapshot(x.id, client.clientId)).toEqual(before);
-				expect(await liveRefreshCount(x.id, client.clientId)).toBe(1);
 			});
 
-			it("catches a rotation that commits between the first revoke and the last", async () => {
+			it("a mint racing the disconnect waits on its lock, then is refused", async () => {
 				const client = await freshClient("race");
 				const x = await freshUser();
 				await grantWithRefresh(client, x.cookie);
 
-				// Stand in for a refresh that read the old token before statement 1 and
-				// commits its NEW row while the disconnect is still open: inserted on a
-				// separate connection, so it is committed before statement 3 starts.
+				// Stand in for the provider inserting a rotated refresh token, or one
+				// minted by a code redeemed a moment ago, while the disconnect is open:
+				// on a separate connection, after the tokens were deleted and before the
+				// consent is. Without the lock its insert would find the consent still
+				// there, commit, and survive the transaction.
 				const racingId = `racing-${SUFFIX}`;
-				const racing = beforeConsentDelete(async () => {
-					await testDb.execute(
-						sql`insert into oauth_refresh_token (id, token, client_id, user_id, scopes, created_at, expires_at)
-						values (${racingId}, ${`tok-${racingId}`}, ${client.clientId}, ${x.id}, array['offline_access'], now(), now() + interval '30 days')`,
+				let racing: Promise<unknown> | undefined;
+				const withRace = beforeConsentDelete(async () => {
+					racing = insertRawRefresh(racingId, client.clientId, x.id).catch(
+						(e: unknown) => e,
 					);
+					// Proceed only once the insert is actually waiting on a lock, so
+					// the test cannot pass by the insert simply running late.
+					const deadline = Date.now() + 5_000;
+					for (;;) {
+						const waiting = await testDb.execute<{ n: string }>(
+							sql`select count(*)::text as n from pg_stat_activity where wait_event_type = 'Lock' and query like ${`%${racingId}%`} and pid <> pg_backend_pid()`,
+						);
+						if (waiting.rows[0]?.n === "1") break;
+						if (Date.now() > deadline) {
+							throw new Error("the racing mint never waited on the lock");
+						}
+						await new Promise((r) => setTimeout(r, 25));
+					}
 				});
-				const result = await disconnectApp(x.id, client.clientId, racing);
-				expect(result).toEqual({ consentsDeleted: 1, refreshTokensRevoked: 2 });
-				expect(await liveRefreshCount(x.id, client.clientId)).toBe(0);
+
+				await disconnectApp(x.id, client.clientId, withRace);
+				const outcome = await racing;
+				expect(errorText(outcome)).toContain("holds no oauth_consent");
+				expect(await refreshCount(x.id, client.clientId)).toBe(0);
+			});
+		});
+
+		describe("the consent trigger (migration 0087)", () => {
+			it("refuses a refresh token for a user with no consent for the client", async () => {
+				const client = await freshClient("trigger");
+				const x = await freshUser();
+				const refused = await insertRawRefresh(
+					`orphan-${SUFFIX}`,
+					client.clientId,
+					x.id,
+				).catch((e: unknown) => e);
+				expect(errorText(refused)).toContain("holds no oauth_consent");
+				expect(await refreshCount(x.id, client.clientId)).toBe(0);
+			});
+
+			it("exempts a client registered with skip_consent", async () => {
+				const client = await freshClient("skip-consent");
+				const x = await freshUser();
+				await testDb.execute(
+					sql`update oauth_client set skip_consent = true where client_id = ${client.clientId}`,
+				);
+				await insertRawRefresh(`skip-${SUFFIX}`, client.clientId, x.id);
+				expect(await refreshCount(x.id, client.clientId)).toBe(1);
+			});
+		});
+
+		describe("orphaned refresh tokens", () => {
+			it("are listed with no approval date, and Disconnect removes them", async () => {
+				const client = await freshClient("orphan");
+				const x = await freshUser();
+				await grantWithRefresh(client, x.cookie);
+				// What Better Auth's own /oauth2/delete-consent leaves behind.
+				await testDb.execute(
+					sql`delete from oauth_consent where user_id = ${x.id} and client_id = ${client.clientId}`,
+				);
+
+				const [app, ...rest] = await listConnectedApps(x.id);
+				expect(rest).toEqual([]);
+				expect(app?.clientId).toBe(client.clientId);
+				expect(app?.name).toBe(`grants orphan ${SUFFIX}`);
+				expect(app?.approvedAt).toBeNull();
+				expect(app?.lastActiveAt).toBeInstanceOf(Date);
+
+				expect(await disconnectApp(x.id, client.clientId)).toEqual({
+					consentsDeleted: 0,
+					refreshTokensDeleted: 1,
+					codesDeleted: 0,
+				});
+				expect(await listConnectedApps(x.id)).toEqual([]);
+			});
+
+			it("are not listed once expired or revoked", async () => {
+				const client = await freshClient("orphan-dead");
+				const x = await freshUser();
+				await grantWithRefresh(client, x.cookie);
+				await grantWithRefresh(client, x.cookie);
+				await testDb.execute(
+					sql`delete from oauth_consent where user_id = ${x.id} and client_id = ${client.clientId}`,
+				);
+				const ids = (
+					await testDb.execute<{ id: string }>(
+						sql`select id from oauth_refresh_token where user_id = ${x.id} and client_id = ${client.clientId} order by id`,
+					)
+				).rows.map((r) => r.id);
+				await testDb.execute(
+					sql`update oauth_refresh_token set revoked = now() where id = ${ids[0]}`,
+				);
+				await testDb.execute(
+					sql`update oauth_refresh_token set expires_at = now() - interval '1 minute' where id = ${ids[1]}`,
+				);
+				expect(await listConnectedApps(x.id)).toEqual([]);
 			});
 		});
 
@@ -355,6 +539,56 @@ describe.skipIf(!hasTestDb)(
 				});
 				expect(again.location.pathname).toBe("/oauth/consent");
 				expect(again.location.searchParams.get("code")).toBeNull();
+			});
+
+			it("a code issued before the disconnect cannot be redeemed after it", async () => {
+				const client = await freshClient("late-code");
+				const x = await freshUser();
+				await grantWithRefresh(client, x.cookie);
+				// No offline_access, so no refresh token is minted on redemption and
+				// only the code delete stands between this code and an access token.
+				const held = await pendingCode(client, x.cookie, "email");
+				// Control: an identical code redeems while the grant is live.
+				const control = await pendingCode(client, x.cookie, "email");
+				await oauth.redeemCode(loaded, client, control.code, control.verifier);
+
+				await disconnectApp(x.id, client.clientId);
+
+				await expect(
+					oauth.redeemCode(loaded, client, held.code, held.verifier),
+				).rejects.toThrow(/invalid_grant/);
+			});
+
+			it("an offline code redeemed after the disconnect mints no refresh token", async () => {
+				const client = await freshClient("late-offline");
+				const x = await freshUser();
+				await grantWithRefresh(client, x.cookie);
+				const held = await pendingCode(client, x.cookie, "offline_access");
+
+				await disconnectApp(x.id, client.clientId);
+
+				await expect(
+					oauth.redeemCode(loaded, client, held.code, held.verifier),
+				).rejects.toThrow();
+				expect(await refreshCount(x.id, client.clientId)).toBe(0);
+			});
+
+			it("replaying a disconnected token cannot wipe out a later reconnection", async () => {
+				const client = await freshClient("replay");
+				const x = await freshUser();
+				const old = await grantWithRefresh(client, x.cookie);
+				await disconnectApp(x.id, client.clientId);
+				// The person reconnects: consent screen again, a new grant.
+				const fresh = await grantWithRefresh(client, x.cookie);
+
+				// A stale retry of the disconnected token. Had it been kept as a
+				// revoked row, the provider would read it as token theft and delete
+				// every refresh token for this user × client, the new one included.
+				const replay = await oauth.refreshGrant(loaded, client, old);
+				expect(replay.status).toBe(400);
+
+				const renewed = await oauth.refreshGrant(loaded, client, fresh);
+				expect(renewed.status).toBe(200);
 			});
 		});
 	},

@@ -3,11 +3,12 @@ import { z } from "zod";
 import { requireUser } from "./guards";
 import {
 	type ConnectedApp,
+	type DisconnectResult,
 	disconnectApp,
 	listConnectedApps,
 } from "./oauth-grants-logic";
 
-export type { ConnectedApp } from "./oauth-grants-logic";
+export type { ConnectedApp, DisconnectResult } from "./oauth-grants-logic";
 
 /**
  * The OAuth apps a person has connected (#851), managed on `/me` beside their
@@ -35,11 +36,7 @@ export const disconnectConnectedApp = createServerFn({ method: "POST" })
 	.validator((i: unknown) =>
 		z.object({ clientId: z.string().min(1).max(512) }).parse(i),
 	)
-	.handler(
-		async ({
-			data,
-		}): Promise<{ consentsDeleted: number; refreshTokensRevoked: number }> => {
-			const user = await requireUser();
-			return disconnectApp(user.id, data.clientId);
-		},
-	);
+	.handler(async ({ data }): Promise<DisconnectResult> => {
+		const user = await requireUser();
+		return disconnectApp(user.id, data.clientId);
+	});

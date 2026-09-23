@@ -610,6 +610,13 @@
       "when": 1790115688308,
       "tag": "0086_spicy_multiple_man",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1790192181113,
+      "tag": "0087_oauth_refresh_requires_consent",
+      "breakpoints": true
     }
   ]
 }
