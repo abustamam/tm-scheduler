@@ -19,7 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { members, people, user } from "#/db/schema";
+import { guests, members, people, user } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
 import {
 	ADDRESS_CONFLICT_NOTE,
@@ -596,6 +596,17 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			});
 			// Without the lock this never blocks: it mints a second Person at once.
 			await waitForLockWait("pg_advisory_xact_lock", first.pid);
+			// And while it waits it holds NOTHING — in particular not its guest row.
+			// Taking the guest lock first let a slot reassignment onto this guest
+			// deadlock against two converts (#854 review). NOWAIT errors at once if
+			// the row is locked, instead of hanging the test.
+			await testDb.transaction(async (tx) => {
+				await tx
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.id, guestId))
+					.for("update", { noWait: true });
+			});
 			await first.commit();
 
 			const res = await second;

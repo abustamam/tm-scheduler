@@ -1222,7 +1222,22 @@ export async function applyConvertGuestToMember(
 	let written: { personId: string; email: string } | null = null;
 
 	const result = await db.transaction(async (tx) => {
-		// Lock the guest row FIRST, and re-check `stage` under that lock.
+		// Serialize every convert in this CLUB, not just this guest (#759 review).
+		// The dedup below matches only a Person whose roster row here is
+		// COMMITTED, so two different guest cards for one visitor converted at
+		// once each saw nothing, each minted a Person, and the unique index could
+		// not collide across two new person ids — a duplicate roster row. Before
+		// #759 both matched one global Person and the index caught it.
+		//
+		// BEFORE the guest lock, and that order is load-bearing. Taken after it,
+		// a convert waiting here held its guest row while it waited, and a slot
+		// reassignment onto that guest (`applyAssignGuestToSlot`, whose FK check
+		// needs the guest row) could sit between two converts: the lock holder
+		// waiting on the slot, the slot writer on the guest, the guest's convert
+		// on this lock — a deadlock with no retry. Waiting here holds nothing.
+		await lockClubConverts(tx, input.clubId);
+
+		// Then lock the guest row, and re-check `stage` under that lock.
 		//
 		// The unique index (#489) only catches a double-add once both racers have
 		// resolved the SAME Person. Two concurrent converts of one CONTACTLESS
@@ -1242,15 +1257,6 @@ export async function applyConvertGuestToMember(
 		if (guest.stage === "joined") {
 			throw new Error("This guest has already been converted to a member.");
 		}
-		// Then serialize every convert in this CLUB, not just this guest (#759
-		// review). The dedup below matches only a Person whose roster row here is
-		// COMMITTED, so two different guest cards for one visitor converted at
-		// once each saw nothing, each minted a Person, and the unique index could
-		// not collide across two new person ids — a duplicate roster row. Before
-		// #759 both matched one global Person and the index caught it. Taken
-		// AFTER the guest lock and released at commit; nothing that holds it
-		// waits on a guest row, so the two cannot deadlock.
-		await lockClubConverts(tx, input.clubId);
 
 		const name = guest.name.trim();
 		// A "goes by" name recorded while they were a guest survives the promotion
