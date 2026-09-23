@@ -20,7 +20,7 @@
  * its own names everyone's grant at once. A caller can only ever touch their
  * own rows for a client, whatever client id they send.
  */
-import { and, desc, eq, gt, inArray, isNull, like, max } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, like, max, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	oauthClient,
@@ -164,6 +164,7 @@ async function pendingCodeIds(
 			and(
 				like(verification.value, '{"type":"authorization_code",%'),
 				like(verification.value, `%"userId":"${likeLiteral(userId)}"%`),
+				like(verification.value, `%"client_id":"${likeLiteral(clientId)}"%`),
 			),
 		);
 	return candidates
@@ -252,12 +253,16 @@ export async function disconnectApp(
 			.returning({ id: oauthRefreshToken.id });
 
 		const codeIds = await pendingCodeIds(tx, userId, clientId);
+		// One array parameter, not one parameter per id: Postgres caps a
+		// statement at 65,535 binds, and a failed delete here would roll back
+		// the token deletes above and leave the app connected.
 		const codes =
 			codeIds.length === 0
 				? []
 				: await tx
 						.delete(verification)
-						.where(inArray(verification.id, codeIds))
+						// `sql.param`, or Drizzle expands the array into a bind per id.
+						.where(sql`${verification.id} = any(${sql.param(codeIds)}::text[])`)
 						.returning({ id: verification.id });
 
 		const consents = await tx

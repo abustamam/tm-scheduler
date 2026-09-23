@@ -428,6 +428,30 @@ describe.skipIf(!hasTestDb)(
 				expect((await snapshot(y.id, client.clientId)).codes).toEqual(yCodes);
 			});
 
+			it("survives more pending codes than Postgres allows bind parameters", async () => {
+				const client = await freshClient("backlog");
+				const x = await freshUser();
+				await grantWithRefresh(client, x.cookie);
+				// Expired codes are never swept, so a backlog only grows. 70,000 is
+				// past the 65,535 binds one statement may carry.
+				const BACKLOG = 70_000;
+				await testDb.execute(
+					sql`insert into verification (id, identifier, value, expires_at, created_at, updated_at)
+						select ${`backlog-${SUFFIX}-`} || g, ${`backlog-${SUFFIX}-`} || g,
+							${`{"type":"authorization_code","query":{"client_id":"${client.clientId}"},"userId":"${x.id}"}`},
+							now() - interval '1 day', now(), now()
+						from generate_series(1, ${BACKLOG}) g`,
+				);
+
+				const result = await disconnectApp(x.id, client.clientId);
+				expect(result).toEqual({
+					consentsDeleted: 1,
+					refreshTokensDeleted: 1,
+					codesDeleted: BACKLOG,
+				});
+				expect((await snapshot(x.id, client.clientId)).codes).toEqual([]);
+			});
+
 			it("is atomic: a failing consent delete rolls the token and code deletes back", async () => {
 				const client = await freshClient("atomic");
 				const x = await freshUser();

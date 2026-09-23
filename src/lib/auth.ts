@@ -109,10 +109,11 @@ export const auth = betterAuth({
 	// `invalid_grant` a client knows to reconnect on. Throwing an APIError from
 	// here is how the router turns it into the response.
 	//
-	// Setting `onError` REPLACES Better Auth's default logging, so the other
-	// arm reproduces it: an APIError is logged only when it is a 500, since
-	// every 401 and 400 passes through here too, and anything else is logged
-	// by name.
+	// Setting `onError` REPLACES Better Auth's default logging, so the rest
+	// reproduces it (better-auth/dist/api/index.mjs, `onError`): a schema error
+	// by message, an APIError only when it is a 500 (every 401 and 400 passes
+	// through here too), anything else by name. The default's extra message
+	// line at an explicit `logger.level` is omitted; this config sets none.
 	onAPIError: {
 		onError(error, ctx) {
 			if (isRefreshRefusal(error)) {
@@ -120,6 +121,18 @@ export const auth = betterAuth({
 					error: "invalid_grant",
 					error_description: "this app was disconnected",
 				});
+			}
+			// The default's first branch: a schema problem is logged by message
+			// whatever its status, because that is the one an operator needs.
+			if (
+				error &&
+				typeof error === "object" &&
+				"message" in error &&
+				typeof error.message === "string" &&
+				/column|relation|table|does not exist/.test(error.message)
+			) {
+				ctx.logger.error(error.message);
+				return;
 			}
 			if (isAPIError(error)) {
 				if (error.status === "INTERNAL_SERVER_ERROR") {
