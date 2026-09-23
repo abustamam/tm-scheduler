@@ -155,9 +155,10 @@ function VpMembership() {
 			// absent. A pure function is the half a unit test can hold.
 			//
 			// Silent unless the server reported a reactivation, which it does only
-			// when the reused row was NOT already active. Reuse of a live
-			// membership is ordinary dedup, and a notice fired on the common path
-			// is one admins learn to ignore.
+			// when the reused row was NOT already active, or a shared roster
+			// address (#759), which it reports on a FRESH membership too. Reuse of
+			// a live membership is ordinary dedup, and a notice fired on the
+			// common path is one admins learn to ignore.
 			const description = convertNoticeDescription(res);
 			toast.success(
 				`${guest.name} is now a member. 🎉`,

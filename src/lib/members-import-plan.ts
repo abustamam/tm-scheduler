@@ -45,6 +45,30 @@ export interface ExistingPersonRow {
 	email: string | null;
 	name: string;
 	phone: string | null;
+	/**
+	 * Which clubs hold this Person, relative to the importing one (#759).
+	 *
+	 * - `this_club` — a roster row exists for (importing club, person), ANY
+	 *   status. No status filter: the bind rule counts every membership, and
+	 *   every scar in this area (#755, #756) came from narrowing a set that
+	 *   should not have been narrowed.
+	 * - `other_club_only` — held by at least one other club and not by this one.
+	 *   A match onto such a Person is REFUSED ({@link PersonDecision} `foreign`):
+	 *   attaching it would give them a second club, `rosterPermitsBind` refuses
+	 *   a Person two clubs hold, and so the import would stop a stranger signing
+	 *   in from a club neither they nor their officers can see.
+	 * - `nobody` — no memberships anywhere. Stays matchable: removing a member
+	 *   and undoing a guest conversion both leave such Persons behind, and
+	 *   refusing them would break remove-then-reimport AND attempt an insert
+	 *   whose Customer ID collides with `people_customer_id_unique`.
+	 *
+	 * A Person created earlier in the SAME batch is `this_club`, truthfully: its
+	 * membership in the importing club is inserted immediately after it.
+	 */
+	heldBy: "this_club" | "other_club_only" | "nobody";
+	/** `people.user_id` is set — bound to an account, so nothing a CSV writes
+	 *  to a roster row can change their sign-in. */
+	linked: boolean;
 }
 
 /** An existing per-club membership row (the roster row a row may update). */
@@ -96,7 +120,17 @@ export type PersonDecision =
 	| { kind: "customerId"; id: string; set: MatchedPersonValues }
 	| { kind: "email"; id: string; set: MatchedPersonValues }
 	| { kind: "insert"; values: PersonValues }
-	| { kind: "ambiguous"; values: PersonValues };
+	| { kind: "ambiguous"; values: PersonValues }
+	/**
+	 * The row matched a Person only ANOTHER club holds (#759). Skipped outright
+	 * — no Person insert, no membership, no officer term — and counted.
+	 *
+	 * Not "mint a fresh Person instead": `people.customer_id` is UNIQUE, so a
+	 * fresh row keeping the Customer ID throws mid-file (the writer runs with no
+	 * transaction), and one dropping it matches nothing next time and mints
+	 * another Person and roster row on every import, without bound.
+	 */
+	| { kind: "foreign"; reason: "customerId" | "email" };
 
 /**
  * Decide a row's Person, mirroring `importPeopleAndMembers` exactly:
@@ -106,6 +140,9 @@ export type PersonDecision =
  * the original join date — and carries NO `email` at all (#756): a CSV may fill
  * this club's roster row, never re-key an existing human's identity. An INSERT
  * still carries it; see {@link MatchedPersonValues}.
+ *
+ * A match onto a Person only ANOTHER club holds is `foreign` instead (#759):
+ * the row writes nothing. See {@link ExistingPersonRow.heldBy}.
  */
 export function resolvePersonDecision(
 	row: MappedMember,
@@ -127,6 +164,17 @@ export function resolvePersonDecision(
 		if (!current) {
 			return { kind: "insert", values: personValues(row) };
 		}
+		// A POST-check on the Person `resolvePerson` chose, never a pre-filter of
+		// the list it chooses from (#759). It returns on the first Customer-ID
+		// hit, so dropping foreign candidates beforehand lets a row carrying
+		// ANOTHER club's member number fall through to the email arm — and from
+		// there either to `insert`, minting the very Person this refuses, or to a
+		// local email match, silently attaching the row to a DIFFERENT member of
+		// this club. The Customer ID is the stronger identifier and a row claiming
+		// a foreign one is the attack shape, so it is refused outright.
+		if (current.heldBy === "other_club_only") {
+			return { kind: "foreign", reason: match.kind };
+		}
 		// No `email` — a match does not re-key an existing Person's identity
 		// (#756). The address still reaches the club's own roster row through
 		// `classifyMembership` below.
@@ -144,6 +192,57 @@ export function resolvePersonDecision(
 	return match.kind === "ambiguous"
 		? { kind: "ambiguous", values: personValues(row) }
 		: { kind: "insert", values: personValues(row) };
+}
+
+/**
+ * Would writing `address` onto this row's roster entry share it with ANOTHER
+ * Person's roster row, in any club (#759)? The CSV twin of the member edit
+ * form's `personEmailObstacle`: reported, never refused — `members.email` is
+ * the club's own column — because arm 3 of the bind rule then refuses BOTH
+ * Persons, and one of them is a member the importing admin cannot see.
+ *
+ * `holders` is `loadAddressHolders`' snapshot: normalised address → the
+ * distinct Persons whose roster rows carry it. Both sides of the import call
+ * this one function, which is what keeps the preview and the commit agreeing.
+ *
+ * - `address` is what the import WRITES ({@link writtenAddress}), never the CSV
+ *   cell: fill-only leaves an existing address in place, and reporting the
+ *   cell would name an obstacle the import does not create.
+ * - `subject` is the Person the row resolved to, or null for a row creating
+ *   one — which has no Person yet, so every holder counts. A row's own Person
+ *   is never its own conflict, or every re-import would report the club's
+ *   roster against itself.
+ * - A linked subject reports nothing, matching `personEmailObstacle`.
+ */
+export function addressConflictFor(
+	holders: ReadonlyMap<string, readonly string[]>,
+	address: string | null,
+	subject: { id: string; linked: boolean } | null,
+): boolean {
+	const key = normalizeAddress(address);
+	if (!key || subject?.linked) return false;
+	return (holders.get(key) ?? []).some((id) => id !== subject?.id);
+}
+
+/**
+ * The JS spelling of `normalizeEmail` (`account-link-logic.ts`), restated
+ * because this module is pure and that one imports `#/db`. Keep the two in
+ * step; `members-import-plan.test.ts` pins them against each other.
+ */
+export function normalizeAddress(
+	value: string | null | undefined,
+): string | null {
+	return value?.trim().toLowerCase() || null;
+}
+
+/**
+ * The address a membership decision newly WRITES, or null: a fresh roster
+ * row's address, or an empty one the fill-only update fills. An address the
+ * update merely preserves is not new, and is not checked.
+ */
+export function writtenAddress(md: MembershipDecision): string | null {
+	if (md.kind === "insert") return md.values.email;
+	return md.fills.find((f) => f.field === "email")?.to ?? null;
 }
 
 function personValues(row: MappedMember): PersonValues {
@@ -238,8 +337,14 @@ export interface PlanSummary {
 	toInsert: number;
 	/** Existing memberships that would be fill-only updated. */
 	toUpdate: number;
-	/** Rows skipped (blank name). */
+	/** Rows skipped (blank name). Does NOT include `foreignSkipped`. */
 	toSkip: number;
+	/** Rows refused because they matched a Person only another club holds
+	 *  (#759). Its own count, never folded into `toSkip`. */
+	foreignSkipped: number;
+	/** Rows imported whose written address another Person's roster row already
+	 *  carries, in any club — neither can then sign in (#759). */
+	addressConflicts: number;
 	/** New Person records created (a subset drives `toInsert`). */
 	peopleCreated: number;
 	/** Rows matched to an existing Person (Customer ID or email). */
@@ -257,6 +362,23 @@ export interface ImportPlan {
 
 function isoOrNull(d: Date | null): string | null {
 	return d ? d.toISOString() : null;
+}
+
+/** Why a `foreign` row was skipped, as its preview note (#759). Names no
+ *  club and no person: the importing admin has no business learning either. */
+export const FOREIGN_SKIP_NOTE: Record<"customerId" | "email", string> = {
+	customerId:
+		"Skipped — this member number belongs to someone on another club's roster",
+	email: "Skipped — this email belongs to someone on another club's roster",
+};
+
+/** Added to a row's note when the address it writes is shared (#759). */
+export const ADDRESS_CONFLICT_NOTE =
+	"Another member already has this email on their roster entry, so neither can sign in until each has their own";
+
+function withConflict(note: string | null, conflict: boolean): string | null {
+	if (!conflict) return note;
+	return note ? `${note} · ${ADDRESS_CONFLICT_NOTE}` : ADDRESS_CONFLICT_NOTE;
 }
 
 function updateNote(fills: FieldFill[], joinedAt: Date | null): string {
@@ -278,6 +400,7 @@ export function planImport(
 	existingPeople: ExistingPersonRow[],
 	existingMemberships: ExistingMembershipRow[],
 	rows: MappedMember[],
+	addressHolders: ReadonlyMap<string, readonly string[]>,
 	onResolved?: (rowIndex: number, person: ExistingPersonRow) => void,
 ): ImportPlan {
 	const people = existingPeople.map((p) => ({ ...p }));
@@ -289,6 +412,8 @@ export function planImport(
 		toInsert: 0,
 		toUpdate: 0,
 		toSkip: 0,
+		foreignSkipped: 0,
+		addressConflicts: 0,
 		peopleCreated: 0,
 		peopleMatched: 0,
 		ambiguous: 0,
@@ -316,11 +441,26 @@ export function planImport(
 		}
 
 		const pd = resolvePersonDecision(row, people, sharedEmails);
+		if (pd.kind === "foreign") {
+			summary.foreignSkipped++;
+			previewRows.push({
+				name: row.name,
+				email: row.email,
+				phone: row.phone,
+				joinedAt: isoOrNull(row.joinedAt),
+				action: "skip",
+				note: FOREIGN_SKIP_NOTE[pd.reason],
+			});
+			continue;
+		}
 		let personId: string;
+		// The Person the address check is about, or null for a row creating one.
+		let subject: { id: string; linked: boolean } | null = null;
 		if (pd.kind === "customerId" || pd.kind === "email") {
 			const current = people.find((p) => p.id === pd.id);
 			if (!current) continue; // unreachable
 			personId = current.id;
+			subject = { id: current.id, linked: current.linked };
 			summary.peopleMatched++;
 			// `current.email` is deliberately NOT updated — the commit does not write
 			// it on a match either, and mirroring a write that does not happen is
@@ -338,6 +478,8 @@ export function planImport(
 				email: pd.values.email,
 				name: pd.values.name,
 				phone: pd.values.phone,
+				heldBy: "this_club",
+				linked: false,
 			});
 		}
 
@@ -345,6 +487,12 @@ export function planImport(
 		if (resolvedPerson) onResolved?.(rowIndex, resolvedPerson);
 		const existingMember = membershipByPerson.get(personId);
 		const md = classifyMembership(row, existingMember);
+		const conflict = addressConflictFor(
+			addressHolders,
+			writtenAddress(md),
+			subject,
+		);
+		if (conflict) summary.addressConflicts++;
 		if (md.kind === "update" && existingMember) {
 			summary.toUpdate++;
 			previewRows.push({
@@ -353,7 +501,7 @@ export function planImport(
 				phone: row.phone,
 				joinedAt: isoOrNull(row.joinedAt),
 				action: "update",
-				note: updateNote(md.fills, row.joinedAt),
+				note: withConflict(updateNote(md.fills, row.joinedAt), conflict),
 			});
 			// Mirror the fill-only write so a later same-person row sees it.
 			membershipByPerson.set(personId, {
@@ -370,10 +518,12 @@ export function planImport(
 				phone: row.phone,
 				joinedAt: isoOrNull(row.joinedAt),
 				action: "insert",
-				note:
+				note: withConflict(
 					pd.kind === "ambiguous"
 						? "New — shares an email with another member; added separately"
 						: null,
+					conflict,
+				),
 			});
 			membershipByPerson.set(personId, {
 				id: `__new_member_${personId}`,

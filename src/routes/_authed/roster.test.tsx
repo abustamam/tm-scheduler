@@ -413,6 +413,8 @@ describe("CSV officer approvals", () => {
 				toInsert: 1,
 				toUpdate: 0,
 				toSkip: 0,
+				foreignSkipped: 0,
+				addressConflicts: 0,
 				peopleCreated: 1,
 				peopleMatched: 0,
 				ambiguous: 0,
@@ -455,6 +457,8 @@ describe("CSV officer approvals", () => {
 				membersUpdated: 0,
 				ambiguous: 0,
 				skippedBlankName: 0,
+				foreignSkipped: 0,
+				addressConflicts: 0,
 				unparseablePosition: 0,
 				skippedOfficerAssignments: select === true ? 0 : 1,
 			},
@@ -505,5 +509,67 @@ describe("CSV officer approvals", () => {
 				},
 			}),
 		);
+	});
+});
+
+/**
+ * The two counts #759 adds to the import preview. Each is its OWN line: the
+ * existing "skipped" count means a blank name, and folding a foreign row into
+ * it would make one number mean two things.
+ */
+describe("CSV import preview — cross-club counts (#759)", () => {
+	async function preview(summary: {
+		toSkip: number;
+		foreignSkipped: number;
+		addressConflicts: number;
+	}) {
+		const { fireEvent } = await import("@testing-library/react");
+		const { previewMemberUpload } = await import("#/server/upload-members");
+		vi.mocked(previewMemberUpload).mockResolvedValue({
+			officerAccessChanges: [],
+			totalRows: 3,
+			paidRows: 3,
+			unpaidSkipped: 0,
+			summary: {
+				toInsert: 1,
+				toUpdate: 0,
+				peopleCreated: 1,
+				peopleMatched: 0,
+				ambiguous: 0,
+				unparseablePositions: 0,
+				...summary,
+			},
+			rows: [],
+		});
+		await renderRoute([], { canManage: true });
+		fireEvent.click(screen.getByRole("button", { name: "Upload TM CSV" }));
+		const input = document.querySelector('input[type="file"]');
+		if (!input) throw new Error("Missing CSV file input");
+		fireEvent.change(input, {
+			target: { files: [{ name: "r.csv", text: async () => "csv" }] },
+		});
+		await screen.findByText(/new$/);
+	}
+
+	it("renders foreign skips and shared addresses as distinct lines", async () => {
+		await preview({ toSkip: 1, foreignSkipped: 2, addressConflicts: 3 });
+
+		expect(
+			screen.getByText(/^2 row\(s\) skipped: .*another club's roster/),
+		).toBeTruthy();
+		expect(
+			screen.getByText(/^3 row\(s\) will be imported with an email/),
+		).toBeTruthy();
+		// The blank-name count keeps its own number, unmerged.
+		const counts = screen.getByText(/to update$/).parentElement;
+		expect(counts?.textContent).toContain("1 skipped");
+		expect(counts?.textContent).not.toContain("3 skipped");
+	});
+
+	it("says nothing about either when both are zero", async () => {
+		await preview({ toSkip: 0, foreignSkipped: 0, addressConflicts: 0 });
+
+		expect(screen.queryByText(/another club's roster/)).toBeNull();
+		expect(screen.queryByText(/will be imported with an email/)).toBeNull();
 	});
 });

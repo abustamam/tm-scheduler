@@ -2,12 +2,21 @@ import { describe, expect, it } from "vitest";
 import type { MappedMember } from "./members-csv";
 import { batchSharedEmails } from "./members-csv";
 import {
+	ADDRESS_CONFLICT_NOTE,
+	addressConflictFor,
 	classifyMembership,
 	type ExistingMembershipRow,
 	type ExistingPersonRow,
+	FOREIGN_SKIP_NOTE,
+	normalizeAddress,
 	planImport,
 	resolvePersonDecision,
+	writtenAddress,
 } from "./members-import-plan";
+
+/** A Person the importing club holds, not linked to an account. */
+const HERE = { heldBy: "this_club", linked: false } as const;
+const NO_HOLDERS = new Map<string, string[]>();
 
 /** Minimal mapped-CSV row builder (all fields default to null). */
 function row(over: Partial<MappedMember>): MappedMember {
@@ -32,8 +41,16 @@ describe("resolvePersonDecision", () => {
 			email: "ada@x.io",
 			name: "Ada",
 			phone: null,
+			...HERE,
 		},
-		{ id: "p2", customerId: null, email: "bob@x.io", name: "Bob", phone: "+1" },
+		{
+			id: "p2",
+			customerId: null,
+			email: "bob@x.io",
+			name: "Bob",
+			phone: "+1",
+			...HERE,
+		},
 	];
 
 	it("matches by Customer ID and fills only empty person fields", () => {
@@ -121,16 +138,22 @@ describe("planImport", () => {
 				email: "ada@x.io",
 				name: "Ada",
 				phone: null,
+				...HERE,
 			},
 		];
 		const memberships: ExistingMembershipRow[] = [
 			{ id: "m1", personId: "p1", name: "Ada", email: "ada@x.io", phone: null },
 		];
-		const plan = planImport(people, memberships, [
-			row({ name: "Ada", email: "ada@x.io", phone: "+1" }), // update (fills phone)
-			row({ name: "Bob", email: "bob@x.io" }), // insert
-			row({ name: "" }), // skip (blank name)
-		]);
+		const plan = planImport(
+			people,
+			memberships,
+			[
+				row({ name: "Ada", email: "ada@x.io", phone: "+1" }), // update (fills phone)
+				row({ name: "Bob", email: "bob@x.io" }), // insert
+				row({ name: "" }), // skip (blank name)
+			],
+			NO_HOLDERS,
+		);
 		expect(plan.summary.toUpdate).toBe(1);
 		expect(plan.summary.toInsert).toBe(1);
 		expect(plan.summary.toSkip).toBe(1);
@@ -150,6 +173,7 @@ describe("planImport", () => {
 				row({ name: "Pat", email: "fam@x.io" }),
 				row({ name: "Sam", email: "fam@x.io" }),
 			],
+			NO_HOLDERS,
 		);
 		expect(plan.summary.toInsert).toBe(2);
 		expect(plan.summary.ambiguous).toBe(2);
@@ -164,15 +188,297 @@ describe("planImport", () => {
 				email: "ada@x.io",
 				name: "Ada",
 				phone: "+1",
+				...HERE,
 			},
 		];
 		const memberships: ExistingMembershipRow[] = [
 			{ id: "m1", personId: "p1", name: "Ada", email: "ada@x.io", phone: "+1" },
 		];
-		const plan = planImport(people, memberships, [
-			row({ customerId: "PN-1", name: "Ada", email: "ada@x.io", phone: "+1" }),
-		]);
+		const plan = planImport(
+			people,
+			memberships,
+			[
+				row({
+					customerId: "PN-1",
+					name: "Ada",
+					email: "ada@x.io",
+					phone: "+1",
+				}),
+			],
+			NO_HOLDERS,
+		);
 		expect(plan.summary.toUpdate).toBe(1);
 		expect(plan.summary.toInsert).toBe(0);
+	});
+});
+
+/**
+ * The cross-club attach gate (#759). A match onto a Person only ANOTHER club
+ * holds would give them a second club, and `rosterPermitsBind` refuses a Person
+ * two clubs hold — so an import could deny a stranger sign-in from a club they
+ * cannot see. These pin the planner half; the integration suite pins the writer
+ * against the same decisions.
+ */
+describe("resolvePersonDecision — heldBy gate (#759)", () => {
+	const person = (
+		over: Partial<ExistingPersonRow> & { id: string },
+	): ExistingPersonRow => ({
+		customerId: null,
+		email: null,
+		name: "Someone",
+		phone: null,
+		...HERE,
+		...over,
+	});
+
+	it("refuses a Customer-ID match onto a Person only another club holds", () => {
+		const d = resolvePersonDecision(
+			row({ customerId: "PN-V", name: "Vic" }),
+			[person({ id: "v", customerId: "PN-V", heldBy: "other_club_only" })],
+			new Set(),
+		);
+		expect(d).toEqual({ kind: "foreign", reason: "customerId" });
+	});
+
+	it("refuses an email match onto a Person only another club holds", () => {
+		const d = resolvePersonDecision(
+			row({ name: "Vic", email: "VIC@x.io" }),
+			[person({ id: "v", email: "vic@x.io", heldBy: "other_club_only" })],
+			new Set(),
+		);
+		expect(d).toEqual({ kind: "foreign", reason: "email" });
+	});
+
+	it("post-checks: a foreign Customer ID is refused even when the email matches a LOCAL member", () => {
+		// The ordering the spec names. Filtering foreign candidates out first
+		// would let this row fall through to the email arm and silently attach
+		// it to `local` — a DIFFERENT member of this club.
+		const d = resolvePersonDecision(
+			row({ customerId: "PN-V", name: "Vic", email: "loc@x.io" }),
+			[
+				person({ id: "v", customerId: "PN-V", heldBy: "other_club_only" }),
+				person({ id: "local", email: "loc@x.io" }),
+			],
+			new Set(),
+		);
+		expect(d).toEqual({ kind: "foreign", reason: "customerId" });
+	});
+
+	it("still matches a Person nobody holds — an orphan left by a remove or an undo", () => {
+		// Refusing would make the writer insert a row carrying the orphan's
+		// Customer ID, which `people_customer_id_unique` rejects mid-file.
+		const d = resolvePersonDecision(
+			row({ customerId: "PN-O", name: "Orphan" }),
+			[person({ id: "o", customerId: "PN-O", heldBy: "nobody" })],
+			new Set(),
+		);
+		expect(d.kind).toBe("customerId");
+	});
+
+	it("still matches a Person this club holds, whatever the membership's status", () => {
+		// `this_club` is ANY roster row here; the loader applies no status filter,
+		// so an inactive member is as matchable as an active one.
+		const d = resolvePersonDecision(
+			row({ name: "Kim", email: "kim@x.io" }),
+			[person({ id: "k", email: "kim@x.io", heldBy: "this_club" })],
+			new Set(),
+		);
+		expect(d.kind).toBe("email");
+	});
+});
+
+describe("planImport — foreign rows and shared addresses (#759)", () => {
+	it("renders a foreign row as a skip with a reason, on its own counter", () => {
+		const plan = planImport(
+			[
+				{
+					id: "v",
+					customerId: "PN-V",
+					email: null,
+					name: "Vic",
+					phone: null,
+					heldBy: "other_club_only",
+					linked: false,
+				},
+			],
+			[],
+			[row({ customerId: "PN-V", name: "Vic" }), row({ name: "" })],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.foreignSkipped).toBe(1);
+		// NOT folded into the blank-name count, which keeps its one meaning.
+		expect(plan.summary.toSkip).toBe(1);
+		expect(plan.summary.toInsert).toBe(0);
+		expect(plan.summary.peopleCreated).toBe(0);
+		expect(plan.rows[0]).toMatchObject({
+			action: "skip",
+			note: FOREIGN_SKIP_NOTE.customerId,
+		});
+	});
+
+	it("does not tell the officer-approval pass about a foreign row", () => {
+		// `planOfficerAccess` builds its proposals from `onResolved`. A foreign row
+		// resolving to the foreign Person would propose granting an office on a
+		// membership the commit never creates.
+		const seen: number[] = [];
+		planImport(
+			[
+				{
+					id: "v",
+					customerId: "PN-V",
+					email: null,
+					name: "Vic",
+					phone: null,
+					heldBy: "other_club_only",
+					linked: false,
+				},
+			],
+			[],
+			[row({ customerId: "PN-V", name: "Vic", officerPosition: "president" })],
+			NO_HOLDERS,
+			(i) => seen.push(i),
+		);
+		expect(seen).toEqual([]);
+	});
+
+	it("resolves a second row for the same NEW person to the first, not as foreign", () => {
+		const plan = planImport(
+			[],
+			[],
+			[
+				row({ customerId: "PN-N", name: "Nia" }),
+				row({ customerId: "PN-N", name: "Nia" }),
+			],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.foreignSkipped).toBe(0);
+		expect(plan.summary.peopleCreated).toBe(1);
+		expect(plan.summary.toInsert).toBe(1);
+		expect(plan.summary.toUpdate).toBe(1);
+	});
+
+	it("counts and notes a row whose written address another Person carries", () => {
+		const plan = planImport(
+			[],
+			[],
+			[row({ name: "New", email: "Shared@x.io" })],
+			new Map([["shared@x.io", ["someone-else"]]]),
+		);
+		expect(plan.summary.addressConflicts).toBe(1);
+		expect(plan.rows[0]?.action).toBe("insert");
+		expect(plan.rows[0]?.note).toBe(ADDRESS_CONFLICT_NOTE);
+	});
+
+	it("never reports a row's own Person against itself", () => {
+		// The row matches p1 and FILLS its empty roster address with one only p1
+		// already carries. Without the own-Person exclusion every such fill —
+		// and every re-import — would report the club's roster against itself.
+		const plan = planImport(
+			[
+				{
+					id: "p1",
+					customerId: "PN-1",
+					email: null,
+					name: "Ada",
+					phone: null,
+					...HERE,
+				},
+			],
+			[{ id: "m1", personId: "p1", name: "Ada", email: null, phone: null }],
+			[row({ customerId: "PN-1", name: "Ada", email: "ada@x.io" })],
+			new Map([["ada@x.io", ["p1"]]]),
+		);
+		expect(plan.summary.toUpdate).toBe(1);
+		expect(plan.rows[0]?.note).toContain("Fills email");
+		expect(plan.summary.addressConflicts).toBe(0);
+	});
+
+	it("reports nothing when fill-only keeps the roster row's own address", () => {
+		const plan = planImport(
+			[
+				{
+					id: "p1",
+					customerId: "PN-1",
+					email: null,
+					name: "Ada",
+					phone: null,
+					...HERE,
+				},
+			],
+			[
+				{
+					id: "m1",
+					personId: "p1",
+					name: "Ada",
+					email: "own@x.io",
+					phone: null,
+				},
+			],
+			[row({ customerId: "PN-1", name: "Ada", email: "taken@x.io" })],
+			new Map([["taken@x.io", ["someone-else"]]]),
+		);
+		expect(plan.summary.addressConflicts).toBe(0);
+	});
+});
+
+describe("addressConflictFor", () => {
+	const holders = new Map([["x@x.io", ["p1"]]]);
+
+	it("excludes the row's own Person", () => {
+		expect(
+			addressConflictFor(holders, "x@x.io", { id: "p1", linked: false }),
+		).toBe(false);
+		expect(
+			addressConflictFor(holders, "x@x.io", { id: "p2", linked: false }),
+		).toBe(true);
+	});
+
+	it("counts every holder for a row creating a Person", () => {
+		expect(addressConflictFor(holders, " X@x.io ", null)).toBe(true);
+	});
+
+	it("reports nothing for a linked subject, or for no address", () => {
+		expect(
+			addressConflictFor(holders, "x@x.io", { id: "p2", linked: true }),
+		).toBe(false);
+		expect(addressConflictFor(holders, null, null)).toBe(false);
+		expect(addressConflictFor(holders, "  ", null)).toBe(false);
+	});
+});
+
+describe("writtenAddress", () => {
+	it("is the fill, not the CSV cell, on an update", () => {
+		// Fill-only leaves an existing address in place, so the CSV's differing
+		// address is never written and must not be checked.
+		const kept = classifyMembership(row({ name: "A", email: "new@x.io" }), {
+			name: "A",
+			email: "old@x.io",
+			phone: null,
+		});
+		expect(writtenAddress(kept)).toBeNull();
+		const filled = classifyMembership(row({ name: "A", email: "new@x.io" }), {
+			name: "A",
+			email: null,
+			phone: null,
+		});
+		expect(writtenAddress(filled)).toBe("new@x.io");
+		expect(
+			writtenAddress(classifyMembership(row({ email: "i@x.io" }), undefined)),
+		).toBe("i@x.io");
+	});
+});
+
+describe("normalizeAddress", () => {
+	it("spells the operation exactly as account-link-logic's normalizeEmail", async () => {
+		// Restated because this module is pure and that one imports `#/db`; this
+		// pins the two together so the conflict map's keys cannot drift from the
+		// addresses they are looked up by.
+		const src = await import("node:fs").then((fs) =>
+			fs.readFileSync("src/server/account-link-logic.ts", "utf8"),
+		);
+		expect(src).toContain("return value?.trim().toLowerCase() || null;");
+		for (const v of [" A@B.io\t", "", null, undefined, "x"]) {
+			expect(normalizeAddress(v)).toBe(v?.trim().toLowerCase() || null);
+		}
 	});
 });

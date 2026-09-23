@@ -245,18 +245,33 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 	let strayPeople: string[] = [];
 
 	/** Insert a Person for a test and register it for teardown. */
-	async function trackedPerson(values: {
-		name: string;
-		email?: string | null;
-		phone?: string | null;
-	}): Promise<string> {
+	async function trackedPerson(
+		values: {
+			name: string;
+			email?: string | null;
+			phone?: string | null;
+		},
+		// Give the Person a roster row in this club. Convert dedups only onto a
+		// Person the converting club already holds (#759), so a dedup fixture
+		// needs one; leave it off to seed a Person convert must NOT reach.
+		opts: { heldHere?: boolean } = {},
+	): Promise<string> {
 		const [p] = await testDb
 			.insert(people)
 			.values(values)
 			.returning({ id: people.id });
 		if (!p) throw new Error("Failed to insert person");
 		strayPeople.push(p.id);
+		if (opts.heldHere) await holdHere(p.id, values.name);
 		return p.id;
+	}
+
+	/** A roster row for `personId` in the seeded club, with no contact of its
+	 *  own — so a match can only have come through the Person. */
+	async function holdHere(personId: string, name: string): Promise<void> {
+		await testDb
+			.insert(members)
+			.values({ clubId: seed.clubId, personId, name });
 	}
 
 	beforeEach(async () => {
@@ -1145,10 +1160,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// all Person-scoped, so every speech and Pathways enrollment the newcomer
 			// ever records would have filed under the wrong human.
 			const shared = uniquePhone();
-			const spouse = await trackedPerson({
-				name: "Jane Doe",
-				phone: toStoredPhone(shared, "1"),
-			});
+			const spouse = await trackedPerson(
+				{ name: "Jane Doe", phone: toStoredPhone(shared, "1") },
+				{ heldHere: true },
+			);
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,
@@ -1172,10 +1187,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		it("still fuses onto a phone match when the name agrees", async () => {
 			// The guard must not cost us the dedupe it qualifies.
 			const shared = uniquePhone();
-			const self = await trackedPerson({
-				name: "Jamie Rivera",
-				phone: toStoredPhone(shared, "1"),
-			});
+			const self = await trackedPerson(
+				{ name: "Jamie Rivera", phone: toStoredPhone(shared, "1") },
+				{ heldHere: true },
+			);
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,
@@ -1197,14 +1212,14 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// been `candidates[0]` and the oldest-first ordering could have been
 			// deleted, with the whole suite still green.
 			const shared = uniquePhone();
-			const older = await trackedPerson({
-				name: "Jane Doe",
-				phone: toStoredPhone(shared, "1"),
-			});
-			const newer = await trackedPerson({
-				name: "John Doe",
-				phone: toStoredPhone(shared, "1"),
-			});
+			const older = await trackedPerson(
+				{ name: "Jane Doe", phone: toStoredPhone(shared, "1") },
+				{ heldHere: true },
+			);
+			const newer = await trackedPerson(
+				{ name: "John Doe", phone: toStoredPhone(shared, "1") },
+				{ heldHere: true },
+			);
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,
@@ -1226,11 +1241,14 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// disagree the email is the one to trust.
 			const shared = uniquePhone();
 			const email = `both-${randomUUID()}@example.com`;
-			const byPhone = await trackedPerson({
-				name: "Pat Doe",
-				phone: toStoredPhone(shared, "1"),
-			});
-			const byEmail = await trackedPerson({ name: "Pat Doe", email });
+			const byPhone = await trackedPerson(
+				{ name: "Pat Doe", phone: toStoredPhone(shared, "1") },
+				{ heldHere: true },
+			);
+			const byEmail = await trackedPerson(
+				{ name: "Pat Doe", email },
+				{ heldHere: true },
+			);
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,
@@ -1353,14 +1371,14 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// backdate the other, so heap order disagrees with createdAt order —
 			// otherwise a seq scan returns the right answer without any ORDER BY.
 			const shared = uniquePhone();
-			const newer = await trackedPerson({
-				name: "Jamie Rivera",
-				phone: toStoredPhone(shared, "1"),
-			});
-			const older = await trackedPerson({
-				name: "Jamie Rivera",
-				phone: toStoredPhone(shared, "1"),
-			});
+			const newer = await trackedPerson(
+				{ name: "Jamie Rivera", phone: toStoredPhone(shared, "1") },
+				{ heldHere: true },
+			);
+			const older = await trackedPerson(
+				{ name: "Jamie Rivera", phone: toStoredPhone(shared, "1") },
+				{ heldHere: true },
+			);
 			await testDb
 				.update(people)
 				.set({ createdAt: new Date("2020-01-01T00:00:00Z") })
@@ -1386,8 +1404,18 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// shared by 2+. Otherwise promoting email to the FIRST key would just
 			// move the household fusion from the phone branch to the email branch.
 			const shared = `family-${randomUUID()}@example.com`;
-			const one = await trackedPerson({ name: "Pat Family", email: shared });
-			const two = await trackedPerson({ name: "Sam Family", email: shared });
+			// Both held by this club, or neither is a candidate and the test passes
+			// for a reason unrelated to the ambiguity guard (#759). The second is
+			// not named "Sam Family": a fresh Person would then clash with its
+			// roster row by name and the convert would refuse instead.
+			const one = await trackedPerson(
+				{ name: "Pat Family", email: shared },
+				{ heldHere: true },
+			);
+			const two = await trackedPerson(
+				{ name: "Robin Family", email: shared },
+				{ heldHere: true },
+			);
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,
@@ -1465,6 +1493,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					phone: toStoredPhone(shared, "1"),
 				})
 				.returning({ id: people.id });
+			// Held by this club, so both converts dedup onto it (#759) and race on
+			// reusing its ONE roster row rather than on inserting a second.
+			await holdHere(person?.id ?? "", "Casey Lane");
 
 			// Two distinct guest rows (one carries only email, the other only phone)
 			// that both dedupe onto that one Person.
@@ -1557,71 +1588,6 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.id).toBe(g?.membershipId);
 		});
-
-		it("re-reads the winner's row when it LOSES the insert race", async () => {
-			// The `Promise.all` case above happens to serialize, so it never reaches
-			// the recovery branch. Force it: hold a transaction open that has already
-			// inserted the membership, let the convert's SELECT miss it (READ
-			// COMMITTED can't see an uncommitted row), then commit. The convert's
-			// INSERT is parked on the unique index at that moment; it wakes to a
-			// conflict, gets zero rows from DO NOTHING, and must recover by reading
-			// rather than throwing "Failed to create membership".
-			const email = `loser-${randomUUID()}@example.com`;
-			const [person] = await testDb
-				.insert(people)
-				.values({ name: "Robin Park", email })
-				.returning({ id: people.id });
-			const personId = person?.id ?? "";
-			const { guestId } = await captureGuestVisit({
-				clubId: seed.clubId,
-				name: "Robin Park",
-				email,
-			});
-
-			// The winner: inserts the membership, then holds the transaction open so
-			// its row lock — and its invisibility to READ COMMITTED — both persist.
-			let winnerId = "";
-			const winner = await openBlockingTx(async (tx) => {
-				const [row] = await tx
-					.insert(members)
-					.values({ clubId: seed.clubId, personId, name: "Robin Park" })
-					.returning({ id: members.id });
-				winnerId = row?.id ?? "";
-			});
-
-			const convert = applyConvertGuestToMember({
-				clubId: seed.clubId,
-				guestId,
-				actorMemberId: seed.adminMemberId,
-			});
-			// Poll for the real thing rather than sleeping a guessed interval: the
-			// convert has passed its SELECT and is now parked on the unique index.
-			await waitForLockWait('insert into "members"', winner.pid);
-			await winner.commit();
-
-			const res = await convert;
-			expect(res.personId).toBe(personId);
-			expect(res.membershipId).toBe(winnerId);
-
-			// It never reactivates, and that is structural rather than an omission
-			// (#501). This branch lives in the `else` of `if (existingMembership)`,
-			// so the only row it can EVER observe is one a concurrent convert just
-			// committed — and that insert hardcodes `status: "active"`. A
-			// pre-existing lapsed membership is found by the first select and takes
-			// the reuse branch instead, so "the raced path behaves like the unraced
-			// one" would be false by construction. Pinned here so a later reader
-			// does not "fix" the recovery branch into the reactivating path.
-			expect(res.reactivated).toBe(false);
-
-			const rows = await testDb
-				.select({ id: members.id, status: members.status })
-				.from(members)
-				.where(
-					and(eq(members.clubId, seed.clubId), eq(members.personId, personId)),
-				);
-			expect(rows).toHaveLength(1);
-			expect(rows[0]?.status).toBe("active");
-		});
 	});
 
 	describe("convert to member", () => {
@@ -1665,6 +1631,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				.insert(people)
 				.values({ name: "Robert Smith", email, preferredName: null })
 				.returning({ id: people.id });
+			await holdHere(existing?.id ?? "", "Robert Smith");
 
 			const guestId = await seedGuest(seed.clubId, "Robert Smith");
 			await applyUpdateGuest({
@@ -1879,6 +1846,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				.insert(people)
 				.values({ name: "Existing Human", phone: "+15559990000" })
 				.returning({ id: people.id });
+			await holdHere(existingPerson?.id ?? "", "Existing Human");
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,

@@ -37,6 +37,7 @@ import {
 import {
 	type ImportStats,
 	importPeopleAndMembers,
+	loadAddressHolders,
 	loadPersonCandidates,
 } from "./import-members-logic";
 import {
@@ -113,7 +114,16 @@ export async function previewMemberImport(
 		.from(members)
 		.where(eq(members.clubId, clubId));
 
-	const plan = planImport(existingPeople, existingMemberships, mapped);
+	// Through the same loader the writer calls internally, for the same reason
+	// as `loadPersonCandidates` above: the conflict count is a promise about
+	// what the commit will report.
+	const addressHolders = await loadAddressHolders(mapped.map((r) => r.email));
+	const plan = planImport(
+		existingPeople,
+		existingMemberships,
+		mapped,
+		addressHolders,
+	);
 	const officerAccessChanges: OfficerAccessChange[] = [];
 	let officerAccessUnavailable: string | undefined;
 	if (userId) {
