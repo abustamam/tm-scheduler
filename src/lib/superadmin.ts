@@ -52,6 +52,35 @@ export function isSuperadminEmail(
  * resolved flag (false for an unknown user). Called from the sign-in hook so
  * adding an email grants on the user's next sign-in and removing it revokes.
  */
+/**
+ * Is this user a superadmin? Read from the DATABASE, never from a session.
+ *
+ * The distinction is load-bearing and it has already cost one bug (#842 review).
+ * Better Auth's adapter builds the session `user` object from the fields IT
+ * knows about — `transformOutput` iterates its own table schema, and this repo
+ * declares no `user.additionalFields` — so `session.user.isSuperadmin` is
+ * `undefined` no matter what the column says. A gate written against it is not
+ * a strict gate, it is `() => false`: it denies the maintainer too, and a test
+ * that only checks the denial cannot tell the two apart.
+ *
+ * `requireSuperadmin` in `src/server/guards.ts` has always read the column for
+ * this reason. This is the same read, exported for callers outside the
+ * server-fn guards — `mcp()`'s `clientPrivileges` in `src/lib/auth.ts` — that
+ * need the answer rather than a throw.
+ */
+export async function isSuperadminUser(
+	userId: string | undefined,
+	client: DbClient = db,
+): Promise<boolean> {
+	if (!userId) return false;
+	const [row] = await client
+		.select({ isSuperadmin: user.isSuperadmin })
+		.from(user)
+		.where(eq(user.id, userId))
+		.limit(1);
+	return row?.isSuperadmin === true;
+}
+
 export async function reconcileSuperadminFlag(
 	userId: string,
 	client: DbClient = db,

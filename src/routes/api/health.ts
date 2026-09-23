@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { authInitFailure } from "#/lib/auth-init-status";
+import { authHealthResponse } from "#/lib/auth-init-status";
 
 // Liveness endpoint for the platform healthcheck (Railway). Returns 200 with no
 // auth and no DB access, so it stays green independent of sign-in state and of
@@ -11,17 +11,19 @@ import { authInitFailure } from "#/lib/auth-init-status";
 // the one init promise that `auth.handler` awaits, and a rejection there fails
 // EVERY request, magic-link sign-in included, for the life of the process even
 // after the database recovers. A restart is the only fix, so the probe has to
-// ask for one. `#/lib/auth-init-status` carries the reasoning and is why this
-// is a synchronous flag read rather than an `await auth.$context`: the route
-// keeps its no-auth, no-DB, never-hangs properties, and a pending init still
-// answers 200 so the probe does not flap during the first moments of a deploy.
+// ask for one — on Railway a failing probe means this DEPLOY does not get
+// promoted and the previous release keeps serving, which is the right outcome
+// for a release whose auth cannot start. `#/lib/auth-init-status` carries the
+// reasoning and owns the decision, so both branches are reachable from a test:
+// a `createFileRoute` handler body is not (#544), and a ternary left inline
+// here would be gated only by source greps that an inversion satisfies. The
+// read is synchronous rather than `await auth.$context` so the route keeps its
+// no-auth, no-DB, never-hangs properties, and a pending init still answers 200
+// so the probe does not flap during the first moments of a deploy.
 export const Route = createFileRoute("/api/health")({
 	server: {
 		handlers: {
-			GET: () =>
-				authInitFailure()
-					? new Response("auth init failed", { status: 503 })
-					: new Response("ok", { status: 200 }),
+			GET: () => authHealthResponse(),
 		},
 	},
 });

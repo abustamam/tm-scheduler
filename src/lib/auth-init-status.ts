@@ -37,24 +37,65 @@
  * because this flag is set from the one init promise and nothing else.
  *
  * The coupling worth knowing: this module is inert unless something imports
- * `#/lib/auth`. On the server that is guaranteed — `src/routes/api/auth/$.ts`
- * and `src/server/guards.ts` both do, and Nitro bundles every route at startup.
+ * `#/lib/auth`. At server start that is guaranteed by the nitro startup plugin
+ * rather than by route bundling — `src/server/reminder-poller.nitro.ts` →
+ * `reminder-poller.ts` → `mcp-pending-logic.ts` → `#/server/guards` →
+ * `#/lib/auth` — so init has run, and the flag is settled, before the platform
+ * polls the healthcheck.
  */
 
+/**
+ * Whether a rejection happened, tracked SEPARATELY from what it carried.
+ *
+ * Testing the value for truthiness would reintroduce the silent 200 this
+ * module exists to remove: `auth.$context` can reject with a falsy reason —
+ * `undefined`, `""`, `0`, anything a `throw` of a non-Error produces — and a
+ * flag that is just the value would then report healthy on a dead process.
+ */
+let initFailed = false;
 let initFailure: unknown;
 
 /** Called once by `src/lib/auth.ts` when Better Auth's init promise rejects. */
 export function recordAuthInitFailure(error: unknown): void {
+	initFailed = true;
 	initFailure = error;
 }
 
 /**
- * The init error, or `undefined` while init is pending OR after it succeeded.
+ * Did init fail? `false` while pending OR after success.
  *
  * Pending and succeeded are deliberately indistinguishable: both mean "no
  * reason to recycle this container", and a probe that failed during the ~35ms
  * before init resolves would flap on every deploy.
  */
+export function authInitFailed(): boolean {
+	return initFailed;
+}
+
+/** What it rejected with, for logging. Never the basis of the health decision. */
 export function authInitFailure(): unknown {
 	return initFailure;
+}
+
+/**
+ * The healthcheck's answer, decided HERE rather than in the route.
+ *
+ * `src/routes/api/health.ts` is a `createFileRoute` handler, and a handler body
+ * cannot be reached from a test (#544) — so a decision left inline is gated
+ * only by source greps, and inverting the ternary satisfies every grep anyone
+ * would write while making a healthy container answer 503 on the path
+ * `railway.json` names as `healthcheckPath`. No deploy would go live. Putting
+ * it here makes both branches executable, and this module still imports
+ * nothing, so the route keeps its no-auth, no-DB properties.
+ */
+export function authHealthResponse(): Response {
+	return authInitFailed()
+		? new Response("auth init failed", { status: 503 })
+		: new Response("ok", { status: 200 });
+}
+
+/** Test-only reset. Production has no path that clears the flag. */
+export function resetAuthInitStatusForTest(): void {
+	initFailed = false;
+	initFailure = undefined;
 }

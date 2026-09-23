@@ -12,7 +12,7 @@ import {
 	buildMagicLinkEmail,
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
-import { reconcileSuperadminFlag } from "#/lib/superadmin";
+import { isSuperadminUser, reconcileSuperadminFlag } from "#/lib/superadmin";
 import {
 	AUTH_CONSENT_PATH,
 	AUTH_SIGNIN_PATH,
@@ -160,7 +160,17 @@ export const auth = betterAuth({
 			// fails closed — a caller with no user is denied — and superadmin is the
 			// repo's existing authority for "the maintainer" (ADR-0016), which is what
 			// #843's out-of-band registration script runs as.
-			clientPrivileges: async ({ user }) => user?.isSuperadmin === true,
+			//
+			// The flag is read from the DATABASE, not from `user.isSuperadmin`. That
+			// property is always `undefined`: Better Auth's adapter builds the session
+			// user from its OWN table schema and this repo declares no
+			// `user.additionalFields`. The first draft of this gate tested it
+			// directly, which made the callback `() => false` — the hole was closed
+			// against the maintainer as well, and the test below passed anyway because
+			// it only asserted the refusal. `isSuperadminUser` is the same read
+			// `requireSuperadmin` has always done, and the positive case is now
+			// asserted beside the negative one.
+			clientPrivileges: async ({ user }) => isSuperadminUser(user?.id),
 		}),
 		// LAST, and Better Auth logs a warning at startup if it is not: a cookie
 		// integration plugin forwards `Set-Cookie` into the framework's cookie
@@ -185,10 +195,12 @@ export const auth = betterAuth({
  * Two things that observer is worth:
  *
  * - In production it names the cause ONCE at boot, and marks the process
- *   unhealthy so the platform recycles it. Without that, a seed that fails —
+ *   unhealthy so `/api/health` fails — on Railway that means this DEPLOY is not
+ *   promoted and the previous release keeps serving, which is what should
+ *   happen to a release whose auth cannot start. Without it, a seed that fails —
  *   migrations lagging behind the image, most plausibly — surfaces as every
  *   auth request failing with the same opaque error, no first line saying why,
- *   and `/api/health` still answering 200. The failure is NOT OAuth-scoped and
+ *   and the healthcheck still answering 200. The failure is NOT OAuth-scoped and
  *   it never clears: `#/lib/auth-init-status` has the three reasons why.
  * - In tests it is the difference between a readable failure and a red build
  *   with green assertions. Around seventeen suites reach this module

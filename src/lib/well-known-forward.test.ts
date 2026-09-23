@@ -118,25 +118,19 @@ describe("DISCOVERY_RATE_LIMIT_PATHS", () => {
 		]);
 	});
 
-	it("covers every distinct target the allowlist forwards to", () => {
+	it("exempts one path per distinct document, with no duplicates", () => {
 		// The drift this closes: widening the allowlist without exempting the new
 		// document leaves it metered, and a metered document is one a single
-		// caller can lock claude.ai out of. Counted rather than eyeballed, so a
-		// fifth entry fails here instead of shipping silently.
-		const targets = new Set(
-			["", AUTH_BASE_PATH].flatMap(() =>
-				[
-					`${AUTH_BASE_PATH}/.well-known/oauth-authorization-server`,
-					"/.well-known/oauth-protected-resource",
-					`/.well-known/oauth-protected-resource${MCP_RESOURCE_PATH}`,
-				].map((t) =>
-					t.startsWith(`${AUTH_BASE_PATH}/`)
-						? t.slice(AUTH_BASE_PATH.length)
-						: t,
-				),
-			),
+		// caller can lock claude.ai out of. A first draft of this test rebuilt the
+		// expectation with the SAME ternary the implementation uses, so it agreed
+		// with the code for any value — the trap CLAUDE.md names. The literal list
+		// above is the real assertion; this one only pins that the derivation
+		// de-duplicates, since the two authorization-server spellings share a
+		// target and must not produce two identical keys.
+		expect(DISCOVERY_RATE_LIMIT_PATHS).toHaveLength(
+			new Set(DISCOVERY_RATE_LIMIT_PATHS).size,
 		);
-		expect(new Set(DISCOVERY_RATE_LIMIT_PATHS)).toEqual(targets);
+		expect(DISCOVERY_RATE_LIMIT_PATHS).toHaveLength(3);
 	});
 });
 

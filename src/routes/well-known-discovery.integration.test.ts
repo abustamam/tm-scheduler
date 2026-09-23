@@ -45,6 +45,10 @@ const ISSUER = `${ORIGIN}${AUTH_BASE_PATH}`;
 /** Per-run, so rows this file writes cannot collide with a parallel suite's. */
 const SUFFIX = randomBytes(4).toString("hex");
 const PROBE_CLIENT_NAME = `unauthorized probe ${SUFFIX}`;
+const ALLOWED_CLIENT_NAME = `superadmin probe ${SUFFIX}`;
+const SUPERADMIN_PROBE_EMAIL = `oauth-admin-${SUFFIX}@example.com`;
+/** Every user this file signs in, so `afterAll` deletes its own rows and no others. */
+const seededEmails = new Set<string>();
 
 describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 	let handler: (request: Request) => Promise<Response>;
@@ -65,17 +69,31 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		// bypass, so it is set here rather than in `setup-env.ts`, and
 		// `dev-login.test.ts` guards that it can never be on in production.
 		process.env.ENABLE_DEV_LOGIN = "1";
+		// Set BEFORE the import so `session.create.after`'s reconcile grants the
+		// flag on this run's superadmin probe, and on nobody else.
+		process.env.SUPERADMIN_EMAILS = SUPERADMIN_PROBE_EMAIL;
 		const { auth } = await import("#/lib/auth");
 		handler = auth.handler;
 		({ takeDevMagicLink } = await import("#/lib/dev-login"));
 	});
 
 	afterAll(async () => {
-		// Scoped to this run's own name. `cleanup()` cascades from a club and
-		// these rows have none, so nothing else would ever remove them.
+		// Scoped to this run's own names and emails. `cleanup()` cascades from a
+		// club and every row here is club-less, so nothing else would ever remove
+		// them — and vitest runs test FILES in parallel against one `tm_test`, so
+		// an unscoped delete would take a neighbouring suite's in-flight rows.
 		await testDb.execute(
-			sql`delete from oauth_client where name = ${PROBE_CLIENT_NAME}`,
+			sql`delete from oauth_client where name in (${PROBE_CLIENT_NAME}, ${ALLOWED_CLIENT_NAME})`,
 		);
+		// Signing in mints a `user`, a `session` and a `verification`. The first
+		// draft cleaned up only the client row — which the test two lines above
+		// asserts was never created — and left eight users behind per run.
+		for (const email of seededEmails) {
+			await testDb.execute(
+				sql`delete from verification where identifier like ${`%${email}%`}`,
+			);
+			await testDb.execute(sql`delete from "user" where email = ${email}`);
+		}
 	});
 
 	/**
@@ -87,8 +105,14 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 	 * previously unseen, so the user it creates is exactly the case under
 	 * test: an ordinary member with no elevated flag.
 	 */
-	async function signedInMember(): Promise<{ cookie: string }> {
-		const email = `oauth-probe-${SUFFIX}@example.com`;
+	async function signedInMember(
+		kind: "member" | "superadmin" = "member",
+	): Promise<{ cookie: string }> {
+		const email =
+			kind === "superadmin"
+				? SUPERADMIN_PROBE_EMAIL
+				: `oauth-probe-${SUFFIX}@example.com`;
+		seededEmails.add(email);
 		const { auth } = await import("#/lib/auth");
 		await auth.api.signInMagicLink({
 			body: { email, callbackURL: "/" },
@@ -198,6 +222,34 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		// The row count is the assertion that matters: a handler can reject the
 		// response after it has already written.
 		expect(await countOauthClients()).toBe(before);
+	});
+
+	it("still allows a superadmin to register one — the gate is not just 'deny'", async () => {
+		// This is the assertion that makes the one above mean something. A
+		// `clientPrivileges` callback that denies EVERYONE passes the refusal test
+		// perfectly, and that is exactly what shipped in the first draft of this
+		// fix: it read `user.isSuperadmin` off the session, which Better Auth's
+		// adapter never populates, so the maintainer's own registration script
+		// would have got a 401 too. Without this case, nothing tells the two
+		// apart.
+		const { cookie } = await signedInMember("superadmin");
+		const before = await countOauthClients();
+		const response = await handler(
+			new Request(`${ORIGIN}${AUTH_BASE_PATH}/oauth2/create-client`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					origin: ORIGIN,
+					cookie,
+				},
+				body: JSON.stringify({
+					redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+					client_name: ALLOWED_CLIENT_NAME,
+				}),
+			}),
+		);
+		expect(response.status).toBe(201);
+		expect(await countOauthClients()).toBe(before + 1);
 	});
 
 	it("exempts the discovery documents from the auth rate limiter", async () => {

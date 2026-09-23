@@ -119,6 +119,14 @@ const FORWARDS = new Map<string, string>([
  * Derived from `FORWARDS` rather than written out, so widening the allowlist
  * cannot silently leave a document metered. The normalization mirrors
  * `normalizePathname`: the handler strips its own base path before matching.
+ *
+ * One consequence of matching the NORMALIZED path, measured rather than
+ * assumed: each key also exempts its `/api/auth`-prefixed spelling. For the
+ * authorization-server document that is the same document and is intended;
+ * for the other two it means three URLs that 404 are now unmetered. Those
+ * paths reach no database and build no document, and everything else stays
+ * metered — `/sign-in/magic-link`, `get-session` and `jwks` were each still
+ * refused at request 21 with this in place.
  */
 export const DISCOVERY_RATE_LIMIT_PATHS: readonly string[] = Array.from(
 	new Set(
