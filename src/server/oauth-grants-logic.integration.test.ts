@@ -148,12 +148,15 @@ describe.skipIf(!hasTestDb)(
 			};
 		}
 
-		/** The provider's pending authorization codes for a user × client. */
+		/**
+		 * The provider's pending authorization codes for a user × client. Text
+		 * matching, not a jsonb cast: the NUL-state regression below plants a row
+		 * Postgres cannot parse, and a cast here would make every snapshot throw.
+		 */
 		function pendingCodeOf(userId: string, clientId: string) {
-			return sql`case when value like '{"type":"authorization_code",%'
-				then (value::jsonb ->> 'userId') = ${userId}
-					and (value::jsonb -> 'query' ->> 'client_id') = ${clientId}
-				else false end`;
+			return sql`value like '{"type":"authorization_code",%'
+				and value like ${`%"userId":"${userId}"%`}
+				and value like ${`%"client_id":"${clientId}"%`}`;
 		}
 
 		async function refreshCount(
@@ -220,6 +223,13 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		afterAll(async () => {
+			// Pending codes are keyed by a hashed code, not an email, so
+			// `cleanupOAuth` cannot find them. Scoped to this run's clients.
+			for (const c of clients) {
+				await testDb.execute(
+					sql`delete from verification where value like '{"type":"authorization_code",%' and value like ${`%"client_id":"${c.clientId}"%`}`,
+				);
+			}
 			await oauth.cleanupOAuth(
 				clients.map((c) => c.clientId),
 				[...emails],
@@ -370,6 +380,52 @@ describe.skipIf(!hasTestDb)(
 				);
 				expect(await disconnectApp(x.id, client.clientId)).toEqual(zeros);
 				expect(await snapshot(y.id, client.clientId)).toEqual(yBefore);
+			});
+
+			it("leaves the caller's grant to ANOTHER app untouched", async () => {
+				const kept = await freshClient("kept");
+				const dropped = await freshClient("dropped");
+				const x = await freshUser();
+				await grantWithRefresh(kept, x.cookie);
+				await grantWithRefresh(dropped, x.cookie);
+				await pendingCode(kept, x.cookie, "email");
+				await pendingCode(dropped, x.cookie, "email");
+				const keptBefore = await snapshot(x.id, kept.clientId);
+				expect(keptBefore.codes).toHaveLength(1);
+
+				expect(await disconnectApp(x.id, dropped.clientId)).toEqual({
+					consentsDeleted: 1,
+					refreshTokensDeleted: 1,
+					codesDeleted: 1,
+				});
+				expect(await snapshot(x.id, kept.clientId)).toEqual(keptBefore);
+			});
+
+			it("is not blocked by someone else's code that Postgres cannot parse", async () => {
+				const client = await freshClient("nul-state");
+				const x = await freshUser();
+				const y = await freshUser();
+				await grantWithRefresh(client, x.cookie);
+				await grantWithRefresh(client, y.cookie);
+				// `state=%00` is accepted by the provider and stored as "\u0000":
+				// valid JSON that `::json` and `::jsonb` both refuse to read.
+				const { location } = await oauth.startAuthorize(
+					loaded,
+					client,
+					y.cookie,
+					{ scope: "email", state: "\u0000" },
+				);
+				expect(location.searchParams.get("code")).toBeTruthy();
+				const yCodes = (await snapshot(y.id, client.clientId)).codes;
+				expect(yCodes).toHaveLength(1);
+				expect(yCodes[0]).toMatch(/\\+u0000/);
+
+				expect(await disconnectApp(x.id, client.clientId)).toEqual({
+					consentsDeleted: 1,
+					refreshTokensDeleted: 1,
+					codesDeleted: 0,
+				});
+				expect((await snapshot(y.id, client.clientId)).codes).toEqual(yCodes);
 			});
 
 			it("is atomic: a failing consent delete rolls the token and code deletes back", async () => {

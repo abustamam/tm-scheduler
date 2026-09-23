@@ -20,7 +20,7 @@
  * its own names everyone's grant at once. A caller can only ever touch their
  * own rows for a client, whatever client id they send.
  */
-import { and, desc, eq, gt, isNull, max, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, like, max } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	oauthClient,
@@ -136,6 +136,56 @@ export async function listConnectedApps(
 	];
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Ids of the authorization codes issued to `userId` for `clientId` and not yet
+ * redeemed. The provider stores each as a `verification` row whose value is
+ * `JSON.stringify({ type: "authorization_code", query, userId, ... })`.
+ *
+ * Parsed HERE, not in SQL. `query` carries the client's own authorize
+ * parameters, and a `state` of `%00` serialises as `"\u0000"`: valid JSON that
+ * Postgres refuses to extract any field from, `json` and `jsonb` alike. One such
+ * row, anyone's, cast inside the delete would abort every user's disconnect and
+ * roll back their token deletes with it. The LIKEs only narrow the candidates
+ * (a string value cannot contain an unescaped `"userId":"`); `JSON.parse` is the
+ * check, and a row it cannot read is skipped rather than fatal.
+ */
+async function pendingCodeIds(
+	tx: Tx,
+	userId: string,
+	clientId: string,
+): Promise<string[]> {
+	const likeLiteral = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+	const candidates = await tx
+		.select({ id: verification.id, value: verification.value })
+		.from(verification)
+		.where(
+			and(
+				like(verification.value, '{"type":"authorization_code",%'),
+				like(verification.value, `%"userId":"${likeLiteral(userId)}"%`),
+			),
+		);
+	return candidates
+		.filter((row) => {
+			try {
+				const parsed = JSON.parse(row.value) as {
+					type?: unknown;
+					userId?: unknown;
+					query?: { client_id?: unknown };
+				};
+				return (
+					parsed.type === "authorization_code" &&
+					parsed.userId === userId &&
+					parsed.query?.client_id === clientId
+				);
+			} catch {
+				return false;
+			}
+		})
+		.map((row) => row.id);
+}
+
 /**
  * End `userId`'s grant to `clientId`. One transaction, in this order:
  *
@@ -191,18 +241,14 @@ export async function disconnectApp(
 			)
 			.returning({ id: oauthRefreshToken.id });
 
-		// The provider stores a code's grant as `JSON.stringify({ type, query,
-		// userId, ... })`. The CASE keeps the jsonb cast off every other kind of
-		// verification row, magic-link tokens among them, which need not be JSON.
-		const codes = await tx
-			.delete(verification)
-			.where(
-				sql`case when ${verification.value} like '{"type":"authorization_code",%'
-					then (${verification.value}::jsonb ->> 'userId') = ${userId}
-						and (${verification.value}::jsonb -> 'query' ->> 'client_id') = ${clientId}
-					else false end`,
-			)
-			.returning({ id: verification.id });
+		const codeIds = await pendingCodeIds(tx, userId, clientId);
+		const codes =
+			codeIds.length === 0
+				? []
+				: await tx
+						.delete(verification)
+						.where(inArray(verification.id, codeIds))
+						.returning({ id: verification.id });
 
 		const consents = await tx
 			.delete(oauthConsent)
