@@ -14,3 +14,7 @@ export function assignLocation(url: string): void {
 export function replaceLocation(url: string): void {
 	window.location.replace(url);
 }
+
+export function reloadLocation(): void {
+	window.location.reload();
+}

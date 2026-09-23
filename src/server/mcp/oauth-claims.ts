@@ -107,6 +107,15 @@ export function jwsKey(token: string): JwsKey {
 	}
 }
 
+/**
+ * How long the known key set is trusted, and the least time between two
+ * reloads an unknown `kid` can force. The cooldown is the denial-of-service
+ * fix: at 0 every junk token costs a load again. `oauth-credential.test.ts`
+ * bounds both against ABSOLUTE numbers, not against these constants.
+ */
+export const KID_GATE_TTL_MS = 5 * 60 * 1000;
+export const KID_GATE_MISS_COOLDOWN_MS = 30 * 1000;
+
 export interface KidGateOptions {
 	/** How long a loaded key set is trusted before it is reloaded. */
 	ttlMs?: number;
@@ -142,8 +151,8 @@ export function createKidGate(
 	loadKids: () => Promise<readonly string[]>,
 	options: KidGateOptions = {},
 ): { admits: (token: string) => Promise<boolean> } {
-	const ttlMs = options.ttlMs ?? 5 * 60 * 1000;
-	const missCooldownMs = options.missCooldownMs ?? 30 * 1000;
+	const ttlMs = options.ttlMs ?? KID_GATE_TTL_MS;
+	const missCooldownMs = options.missCooldownMs ?? KID_GATE_MISS_COOLDOWN_MS;
 	const now = options.now ?? Date.now;
 	let known: { kids: ReadonlySet<string>; loadedAt: number } | null = null;
 	let inFlight: Promise<ReadonlySet<string>> | null = null;

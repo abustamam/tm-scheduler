@@ -51,6 +51,42 @@ const oauth = await import("#/test/oauth-flow");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { MCP_TOOLS } = await import("#/server/mcp/tools");
 
+/**
+ * A REAL session cookie for `userId`: a session row, and its token signed the
+ * way Better Auth signs its own cookie (`better-call`'s `signCookieValue`).
+ *
+ * An unsigned token is not one. Better Auth refuses it before it ever looks
+ * the session up, so a bearer-only test that sends one proves nothing — it
+ * would stay green if `/api/mcp` started accepting browser sessions, which is
+ * the one regression the test exists for (Codex, reviewing #849: both the
+ * #773 case and #843's copy of it sent an unsigned UUID). Every caller asserts
+ * `getSession` accepts the cookie before asserting that `/api/mcp` refuses it.
+ */
+async function realSessionCookie(userId: string): Promise<string> {
+	const token = randomUUID().replaceAll("-", "");
+	await testDb.insert(session).values({
+		id: randomUUID(),
+		token,
+		userId,
+		expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+		updatedAt: new Date(),
+	});
+	const { makeSignature } = await import("better-auth/crypto");
+	const signature = await makeSignature(
+		token,
+		process.env.BETTER_AUTH_SECRET as string,
+	);
+	const cookie = `better-auth.session_token=${encodeURIComponent(`${token}.${signature}`)}`;
+	const { auth } = await import("#/lib/auth");
+	const resolved = await auth.api.getSession({
+		headers: new Headers({ cookie }),
+	});
+	// The positive control: without it, a 401 below could mean the cookie was
+	// never a session at all.
+	expect(resolved?.user.id, "Better Auth must accept this cookie").toBe(userId);
+	return cookie;
+}
+
 /** A JSON-RPC POST to /api/mcp, with an optional bearer token and cookie. */
 function mcpRequest(
 	body: unknown,
@@ -201,16 +237,10 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		// The behavioural half of the bearer-only claim. The import grep in
 		// `mcp-authz.guard.test.ts` is blind to a cookie reaching the path through
 		// a helper or a re-export, and this is the one claim in the design where
-		// being wrong is a security hole rather than a bug. So: a REAL session row
-		// for a REAL club admin, sent as the app's own cookie.
-		const token = randomUUID();
-		await testDb.insert(session).values({
-			id: randomUUID(),
-			token,
-			userId: seed.adminUserId,
-			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-			updatedAt: new Date(),
-		});
+		// being wrong is a security hole rather than a bug. So: a REAL session for
+		// a REAL club admin, sent as the app's own signed cookie, which Better
+		// Auth itself accepts.
+		const cookie = await realSessionCookie(seed.adminUserId);
 
 		const before = await testDb
 			.select({ id: guests.id })
@@ -224,7 +254,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					meetingDate: "2026-01-01",
 					entries: [{ name: "Should Not Exist" }],
 				}),
-				{ cookie: `better-auth.session_token=${token}` },
+				{ cookie },
 			),
 		);
 		expect(res.status).toBe(401);
@@ -855,21 +885,12 @@ describe.skipIf(!hasTestDb)(
 		// --- AC5a: every 401 says where to authorize -------------------------
 
 		it("every 401 carries a WWW-Authenticate challenge naming metadata that resolves", async () => {
-			const cookieToken = randomUUID();
-			await testDb.insert(session).values({
-				id: randomUUID(),
-				token: cookieToken,
-				userId: seed.adminUserId,
-				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-				updatedAt: new Date(),
-			});
+			const cookie = await realSessionCookie(seed.adminUserId);
 			const cases: [string, Request][] = [
 				["no credential", mcpRequest(toolsCall("whoami"))],
 				[
 					"a session cookie and no credential",
-					mcpRequest(toolsCall("whoami"), {
-						cookie: `better-auth.session_token=${cookieToken}`,
-					}),
+					mcpRequest(toolsCall("whoami"), { cookie }),
 				],
 				[
 					"a malformed OAuth token",

@@ -42,7 +42,11 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card";
-import { assignLocation, replaceLocation } from "#/lib/browser-location";
+import {
+	assignLocation,
+	reloadLocation,
+	replaceLocation,
+} from "#/lib/browser-location";
 import {
 	CONSENT_ACCOUNT_CHANGED,
 	CONSENT_ACCOUNT_FIELD,
@@ -301,7 +305,7 @@ function OutcomeCard({ outcome }: { outcome: Outcome }) {
 					<Button
 						variant="outline"
 						className="w-full sm:w-auto"
-						onClick={() => window.location.reload()}
+						onClick={reloadLocation}
 					>
 						Reload
 					</Button>

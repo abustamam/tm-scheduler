@@ -351,6 +351,49 @@ describe("createKidGate", () => {
 		expect(loads).toHaveBeenCalledTimes(1);
 	});
 
+	// The PRODUCTION defaults, with only the clock injected. Every case above
+	// passes its own timings, so without these a default of 0 — which reopens
+	// the junk-kid flood — or of an hour — which strands a rotated key — would
+	// leave the suite green. Bounded by absolute numbers chosen here, never by
+	// the constants under test (CODING_STANDARDS.md, "Test coverage").
+	describe("with its production defaults", () => {
+		function defaultGate(kids: string[][]) {
+			let t = 0;
+			const loads = vi.fn(async () => kids.shift() ?? []);
+			const g = createKidGate(loads, { now: () => t });
+			return { g, loads, advance: (ms: number) => (t += ms) };
+		}
+
+		it("costs at most one load for a flood lasting five seconds", async () => {
+			const { g, loads, advance } = defaultGate([["real"]]);
+			await g.admits(jws({ kid: "real" }));
+			for (let i = 0; i < 50; i++) {
+				advance(100);
+				await g.admits(jws({ kid: `forged-${i}` }));
+			}
+			expect(loads).toHaveBeenCalledTimes(1);
+		});
+
+		it("admits a rotated key within a minute", async () => {
+			const { g, advance } = defaultGate([["old"], ["old", "new"]]);
+			await g.admits(jws({ kid: "old" }));
+			expect(await g.admits(jws({ kid: "new" }))).toBe(false);
+			advance(60_000);
+			expect(await g.admits(jws({ kid: "new" }))).toBe(true);
+		});
+
+		it("re-reads a stale key set within ten minutes, and not on every request", async () => {
+			const { g, loads, advance } = defaultGate([["a"], ["b"]]);
+			await g.admits(jws({ kid: "a" }));
+			advance(1_000);
+			await g.admits(jws({ kid: "a" }));
+			expect(loads).toHaveBeenCalledTimes(1);
+			advance(10 * 60 * 1000);
+			expect(await g.admits(jws({ kid: "a" }))).toBe(false);
+			expect(loads).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	it("throws, rather than refusing, when the key set cannot be read", async () => {
 		const g = createKidGate(async () => {
 			throw new Error("db down");

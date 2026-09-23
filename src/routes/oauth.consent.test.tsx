@@ -16,10 +16,15 @@ vi.mock("#/server/oauth-consent", () => ({ getOAuthConsentClient: vi.fn() }));
 // `window.location`'s methods cannot be spied on in jsdom.
 vi.mock("#/lib/browser-location", () => ({
 	assignLocation: vi.fn(),
+	reloadLocation: vi.fn(),
 	replaceLocation: vi.fn(),
 }));
 
-import { assignLocation, replaceLocation } from "#/lib/browser-location";
+import {
+	assignLocation,
+	reloadLocation,
+	replaceLocation,
+} from "#/lib/browser-location";
 import { Route } from "./oauth.consent";
 
 /**
@@ -202,6 +207,8 @@ describe("/oauth/consent", () => {
 			name: "You're signed in as someone else now",
 		});
 		expect(assignLocation).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+		expect(reloadLocation).toHaveBeenCalledOnce();
 	});
 
 	it("shows a plain error when the provider refuses the approval, and lets them try again", async () => {

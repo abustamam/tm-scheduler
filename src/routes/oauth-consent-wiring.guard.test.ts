@@ -68,7 +68,7 @@ describe("/oauth/consent is the page mcp() sends consent to", () => {
 
 	it("navigates through the testable seam, not window.location directly", () => {
 		expect(consent).toContain("assignLocation(next)");
-		expect(consent).not.toMatch(/window\.location\.(assign|replace)\(/);
+		expect(consent).not.toMatch(/window\.location\.(assign|replace|reload)\(/);
 	});
 
 	it("takes the client's name from the server lookup, never from its URL", () => {
