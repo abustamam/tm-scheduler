@@ -17,6 +17,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ResourcesIndexRouteImport } from './routes/resources.index'
 import { Route as ResourcesEvaluationResourcesRouteImport } from './routes/resources.evaluation-resources'
 import { Route as ResourcesSlugRouteImport } from './routes/resources.$slug'
+import { Route as OauthConsentRouteImport } from './routes/oauth.consent'
 import { Route as ClubClubIdRouteImport } from './routes/club.$clubId'
 import { Route as ApiMcpRouteImport } from './routes/api/mcp'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
@@ -109,6 +110,11 @@ const ResourcesEvaluationResourcesRoute =
 const ResourcesSlugRoute = ResourcesSlugRouteImport.update({
   id: '/resources/$slug',
   path: '/resources/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthConsentRoute = OauthConsentRouteImport.update({
+  id: '/oauth/consent',
+  path: '/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClubClubIdRoute = ClubClubIdRouteImport.update({
@@ -408,6 +414,7 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
+  '/oauth/consent': typeof OauthConsentRoute
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
   '/resources/': typeof ResourcesIndexRoute
@@ -468,6 +475,7 @@ export interface FileRoutesByTo {
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
   '/resources': typeof ResourcesIndexRoute
@@ -532,6 +540,7 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
+  '/oauth/consent': typeof OauthConsentRoute
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
   '/resources/': typeof ResourcesIndexRoute
@@ -596,6 +605,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/mcp'
     | '/club/$clubId'
+    | '/oauth/consent'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
     | '/resources/'
@@ -656,6 +666,7 @@ export interface FileRouteTypes {
     | '/api/dev-login'
     | '/api/health'
     | '/api/mcp'
+    | '/oauth/consent'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
     | '/resources'
@@ -719,6 +730,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/mcp'
     | '/club/$clubId'
+    | '/oauth/consent'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
     | '/resources/'
@@ -775,6 +787,7 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMcpRoute: typeof ApiMcpRoute
   ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
+  OauthConsentRoute: typeof OauthConsentRoute
   ResourcesSlugRoute: typeof ResourcesSlugRoute
   ResourcesEvaluationResourcesRoute: typeof ResourcesEvaluationResourcesRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
@@ -848,6 +861,13 @@ declare module '@tanstack/react-router' {
       path: '/resources/$slug'
       fullPath: '/resources/$slug'
       preLoaderRoute: typeof ResourcesSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/consent': {
+      id: '/oauth/consent'
+      path: '/oauth/consent'
+      fullPath: '/oauth/consent'
+      preLoaderRoute: typeof OauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/club/$clubId': {
@@ -1337,6 +1357,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ApiMcpRoute: ApiMcpRoute,
   ClubClubIdRoute: ClubClubIdRouteWithChildren,
+  OauthConsentRoute: OauthConsentRoute,
   ResourcesSlugRoute: ResourcesSlugRoute,
   ResourcesEvaluationResourcesRoute: ResourcesEvaluationResourcesRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,

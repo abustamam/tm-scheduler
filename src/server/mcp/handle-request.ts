@@ -23,10 +23,21 @@
  *
  * ## Authentication happens here, before any tool runs
  *
- * The token is read off the `Authorization` header and passed down as opaque
- * context; each tool resolves it itself (`authz-logic`). A missing, unknown or
- * revoked token is a 401 at the HTTP layer rather than a tool error, because a
- * caller with no valid credential should not learn which tools exist.
+ * Two credential kinds reach this endpoint, told apart by prefix (#843):
+ *
+ * - `tmk_…` — a personal token (Claude Code, pasted into a header). Passed
+ *   down as opaque context; each tool resolves it itself (`authz-logic`).
+ * - anything else, or nothing — tried as an OAuth access token (claude.ai).
+ *   Better Auth verifies it HERE, before the body is read, and each tool is
+ *   handed the verified grant rather than the token.
+ *
+ * The prefix decides the path outright, so the two never race and a
+ * malformed credential fails once. A missing, unknown, revoked, expired or
+ * wrong-audience credential is a 401 at the HTTP layer rather than a tool
+ * error, because a caller with no valid credential should not learn which
+ * tools exist — and every one of those 401s carries a `WWW-Authenticate`
+ * challenge naming the protected-resource metadata, which is how an MCP
+ * client finds out where to authorize.
  *
  * NO cookie is read, anywhere on this path. Bearer-only is what makes a
  * cross-site POST harmless: it carries no ambient credential. A guard test
@@ -44,8 +55,15 @@ import {
 	readBodyWithinCap,
 } from "#/lib/request-body-limits";
 import { parseBearerToken } from "#/server/pathways-ingest-logic";
-import { authenticateToken, McpUnauthorizedError } from "./authz-logic";
+import {
+	authenticateToken,
+	isPersonalToken,
+	McpUnauthorizedError,
+} from "./authz-logic";
 import { McpError, toMcpError } from "./errors";
+import { unauthorizedResponse } from "./oauth-claims";
+import { serveWithOAuthCredential } from "./oauth-credential";
+import type { McpToolContext } from "./tool";
 import { MCP_TOOLS } from "./tools";
 
 /**
@@ -70,8 +88,8 @@ function json(data: unknown, status: number): Response {
 	return Response.json(data, { status });
 }
 
-/** Build a server with every registered tool bound to this request's token. */
-function buildServer(rawToken: string | null): McpServer {
+/** Build a server with every registered tool bound to this request's credential. */
+function buildServer(ctx: McpToolContext): McpServer {
 	const server = new McpServer(
 		{ name: "gavelup", version: "1" },
 		{ instructions: INSTRUCTIONS },
@@ -92,7 +110,7 @@ function buildServer(rawToken: string | null): McpServer {
 			// handlers take a bare record and re-parse, so the two meet here.
 			(async (args: Record<string, unknown>) => {
 				try {
-					const result = await tool.handler(args ?? {}, { rawToken });
+					const result = await tool.handler(args ?? {}, ctx);
 					return {
 						content: [
 							{ type: "text" as const, text: JSON.stringify(result, null, 2) },
@@ -133,7 +151,41 @@ function buildServer(rawToken: string | null): McpServer {
 
 export async function handleMcpRequest(request: Request): Promise<Response> {
 	const rawToken = parseBearerToken(request.headers.get("authorization"));
+	if (rawToken !== null && isPersonalToken(rawToken)) {
+		return serveMcp(request, { rawToken });
+	}
+	try {
+		return await serveWithOAuthCredential(
+			request,
+			async (verified, oauthGrant) => {
+				// Caught HERE, so the catch below only ever sees the verifier. Without
+				// this, anything `serveMcp` threw after a good token was logged and
+				// answered as "could not verify", which sends a diagnosis the wrong
+				// way.
+				try {
+					return await serveMcp(verified, { oauthGrant });
+				} catch (err) {
+					console.error("[mcp] request failed after OAuth verification:", err);
+					return json({ error: "Could not handle that request." }, 500);
+				}
+			},
+		);
+	} catch (err) {
+		// Better Auth answers every token it can judge with a challenge. What
+		// reaches here is the verifier failing to judge at all — the JWKS fetch
+		// timing out or refused — which is our outage, not the caller's bad
+		// credential, so it is a 500 rather than a 401 that would send claude.ai
+		// back through consent for nothing.
+		console.error("[mcp] could not verify an OAuth access token:", err);
+		return json({ error: "Could not verify that token." }, 500);
+	}
+}
 
+/** Everything after the credential kind is known: limits, auth, dispatch. */
+async function serveMcp(
+	request: Request,
+	ctx: McpToolContext,
+): Promise<Response> {
 	// Bound the body BEFORE it is in memory, and before the token is trusted.
 	//
 	// `content-length` is the caller's to write, so it can only REJECT early —
@@ -198,20 +250,22 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 	}
 
 	// Authenticate BEFORE building the server, so an invalid credential never
-	// reaches the protocol layer and never learns which tools exist. This also
-	// stamps `last_used_at`; every tool authenticates again for itself, which is
-	// a few hundred microseconds and keeps each tool's check its own.
+	// reaches the protocol layer and never learns which tools exist. For a
+	// personal token this also stamps `last_used_at`; every tool authenticates
+	// again for itself, which is a few hundred microseconds and keeps each
+	// tool's check its own. An OAuth grant is already verified by now, so this
+	// is where a token for a since-deleted user is refused.
 	try {
-		await authenticateToken(rawToken);
+		await authenticateToken(ctx);
 	} catch (err) {
 		if (err instanceof McpUnauthorizedError) {
-			return json({ error: err.message }, 401);
+			return unauthorizedResponse(err.message);
 		}
 		console.error("[mcp] authentication failed:", err);
 		return json({ error: "Could not verify that token." }, 500);
 	}
 
-	const server = buildServer(rawToken);
+	const server = buildServer(ctx);
 	const transport = new WebStandardStreamableHTTPServerTransport({
 		// Stateless: no session storage, and each POST stands alone.
 		sessionIdGenerator: undefined,

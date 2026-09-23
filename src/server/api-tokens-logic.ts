@@ -26,9 +26,16 @@ import { apiTokens } from "#/db/schema";
  * The prefix differs from `sync_tokens`' `gup_` so a pasted token says which
  * kind it is before anything tries to resolve it — the two are accepted by
  * different endpoints and mean different things (a club vs. a person).
+ *
+ * `/api/mcp` also reads the prefix to decide which KIND of credential it was
+ * handed (#843): `tmk_` is this personal token, anything else is tried as an
+ * OAuth access token. So the prefix is load-bearing, not cosmetic — a token
+ * minted without it would be sent down the OAuth path and 401 there.
  */
+export const API_TOKEN_PREFIX = "tmk_";
+
 export function generateRawApiToken(): string {
-	return `tmk_${randomBytes(32).toString("base64url")}`;
+	return `${API_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
 }
 
 export function hashApiToken(raw: string): string {

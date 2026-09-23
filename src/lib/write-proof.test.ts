@@ -209,6 +209,28 @@ describe("safeRedirect", () => {
 		// `safeRedirect`, so a raw read would pass with the call deleted.
 		const route = readSource(resolve(ROOT, "src/routes/signin.tsx"));
 		expect(route).toContain("redirect: safeRedirect(search.redirect)");
-		expect(route).toContain("callbackURL: redirect");
+		// #843 escapes the target for Better Auth's double decode
+		// (`#/lib/magic-link-callback`); the value escaped is still the
+		// validated one, and an OAuth continuation goes through `safeRedirect`
+		// on its way there too.
+		expect(route).toContain("callbackURL: magicLinkCallbackURL(redirect)");
+		expect(route).toContain("safeRedirect(continuation)");
+	});
+
+	it("keeps an OAuth authorize continuation intact (#843)", () => {
+		// The URL `/signin` sends a magic link back to when the OAuth provider
+		// asked for a sign-in: a same-origin path carrying an encoded
+		// `redirect_uri` and `resource`, a `+`-joined scope and a base64url
+		// PKCE challenge. It must survive untouched — a future tightening of
+		// `REDIRECT_CHARS` or the length cap would otherwise send every
+		// connector sign-in to /officers, with nothing failing but the flow.
+		const continuation =
+			"/api/auth/oauth2/authorize?response_type=code" +
+			"&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback" +
+			"&state=aB-_c%2Bd%2Fe%3D&client_id=kOjdqUmnrmVBfTCNFXYyRkbaacVBunXn" +
+			"&code_challenge=TeL2kvahUkECukK-NLFnpwXqp8sYYuobfmK9MfbAiak" +
+			"&code_challenge_method=S256&resource=https%3A%2F%2Fgavelup.app%2Fapi%2Fmcp" +
+			"&scope=openid+profile+email+offline_access";
+		expect(safeRedirect(continuation)).toBe(continuation);
 	});
 });

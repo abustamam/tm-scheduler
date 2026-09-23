@@ -78,7 +78,7 @@ export const upsertAgendasTool: McpToolDefinition = {
 	},
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
-		const { club, user } = await authorizeToken(ctx.rawToken, args.clubId);
+		const { club, user } = await authorizeToken(ctx, args.clubId);
 
 		// Before planning, before reading, outside any transaction. See the header.
 		await ensureScheduleToppedUp(club.clubId);

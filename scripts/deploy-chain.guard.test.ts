@@ -102,3 +102,28 @@ describe("the deploy chain seeds meeting_templates on every boot", () => {
 		).toContain("seed-templates.ts");
 	});
 });
+
+/**
+ * The OAuth client registration script ships in the runtime image (#843).
+ *
+ * Unlike the seeds above it is run by hand, not at boot, so it is not in
+ * `CMD`: what must hold is that `bun run build` bundles it into `.output/`,
+ * which is the only part of the build the runtime image keeps. It shipped
+ * first as a Bun-only script, and the documented production command could
+ * not run: the image has Node and `.output/`, no Bun and no `scripts/`.
+ */
+describe("the OAuth client registration script is bundled into .output", () => {
+	it("build runs build:register-oauth-client, which writes a Node bundle to .output", () => {
+		const pkg = loadPackageJson();
+		expect(pkg.scripts?.build).toContain("build:register-oauth-client");
+		const step = pkg.scripts?.["build:register-oauth-client"] ?? "";
+		expect(step).toContain("scripts/register-oauth-client.ts");
+		expect(step).toContain("--target node");
+		expect(step).toContain("--outfile .output/register-oauth-client.mjs");
+	});
+
+	it("the Dockerfile keeps .output in the runtime image", () => {
+		const src = readSource(DOCKERFILE);
+		expect(src).toMatch(/^COPY --from=build \/app\/\.output \.\/\.output$/m);
+	});
+});

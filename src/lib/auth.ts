@@ -1,6 +1,11 @@
 import { mcp } from "@better-auth/mcp";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import {
+	APIError,
+	createAuthMiddleware,
+	getSessionFromCtx,
+} from "better-auth/api";
 import { jwt, magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
@@ -12,36 +17,18 @@ import {
 	buildMagicLinkEmail,
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
+import {
+	CONSENT_ACCOUNT_CHANGED,
+	consentAccountMismatch,
+} from "#/lib/oauth-consent-binding";
 import { isSuperadminUser, reconcileSuperadminFlag } from "#/lib/superadmin";
 import {
 	AUTH_CONSENT_PATH,
 	AUTH_SIGNIN_PATH,
 	DISCOVERY_RATE_LIMIT_PATHS,
-	MCP_RESOURCE_PATH,
+	mcpResourceUrl,
 } from "#/lib/well-known-forward";
 import { linkPersonToUser } from "#/server/account-link-logic";
-
-/**
- * The MCP protected resource this authorization server issues tokens for
- * (#842 / ADR-0027).
- *
- * `mcp()` validates this at CONSTRUCTION — HTTPS, or HTTP on a loopback host,
- * and no query or fragment — so a missing or malformed `BETTER_AUTH_URL` now
- * fails at import rather than on the first sign-in. That is the direction we
- * want: `BETTER_AUTH_URL` is already required (CLAUDE.md, "Environment"), and
- * an authorization server whose issuer is `undefined` must not start at all.
- * The explicit throw is here so the failure names the cause; the library's own
- * `TypeError` would say only that the resource URL is not absolute.
- */
-function mcpResourceUrl(): string {
-	const base = (process.env.BETTER_AUTH_URL ?? "").replace(/\/+$/, "");
-	if (!base) {
-		throw new Error(
-			"BETTER_AUTH_URL is required: it is the OAuth issuer and the base of the MCP resource identifier (ADR-0027).",
-		);
-	}
-	return `${base}${MCP_RESOURCE_PATH}`;
-}
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
@@ -71,6 +58,29 @@ export const auth = betterAuth({
 				},
 			},
 		},
+	},
+	// #843 — Approve connects the account the consent screen showed, or
+	// nothing. Better Auth records the grant for whichever session cookie comes
+	// with the POST, and its signed query names no user, so a screen opened as
+	// A and approved after signing in as B in another tab connected B while
+	// still reading "Signed in as A". `#/lib/oauth-consent-binding` has the
+	// rule; `/oauth/consent` sends the id it displayed.
+	hooks: {
+		before: createAuthMiddleware(async (ctx) => {
+			if (ctx.path !== "/oauth2/consent") return;
+			const session = await getSessionFromCtx(ctx);
+			// No session is not an account CHANGE: the endpoint's own session
+			// middleware answers it with a 401, which the page reports as having
+			// been signed out rather than as "someone else".
+			if (!session) return;
+			if (consentAccountMismatch(ctx.body, session.user.id)) {
+				throw new APIError("BAD_REQUEST", {
+					error: CONSENT_ACCOUNT_CHANGED,
+					error_description:
+						"The signed-in account changed since this page was opened.",
+				});
+			}
+		}),
 	},
 	// #847 — where the client address comes from. Better Auth reads only
 	// `x-forwarded-for` by default; Railway's edge publishes the client in
@@ -151,10 +161,10 @@ export const auth = betterAuth({
 		// endpoint is absent from discovery entirely. claude.ai is one
 		// hand-registered confidential client. ADR-0027 has the reasoning.
 		//
-		// Neither page named here exists as a completed flow yet — `/signin` does,
-		// `/oauth/consent` does not, and nothing in #842 completes an
-		// authorization. Both are declared now because the provider reads them at
-		// construction; #843 builds the consent round trip.
+		// Both pages are this app's (#843). The provider sends each a SIGNED copy
+		// of the authorize query, not a `?redirect=`: `/signin` turns it back into
+		// an authorize URL for its magic link (`#/lib/oauth-continuation`), and
+		// `/oauth/consent` posts it to `/oauth2/consent` as `oauth_query`.
 		mcp({
 			loginPage: AUTH_SIGNIN_PATH,
 			consentPage: AUTH_CONSENT_PATH,

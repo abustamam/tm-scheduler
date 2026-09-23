@@ -11,11 +11,21 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/mcp/mcp-route.integration.test.ts
  */
-import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomBytes, randomUUID } from "node:crypto";
+import { and, eq, inArray } from "drizzle-orm";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { session, user } from "#/db/auth-schema";
 import {
+	activityLog,
 	apiTokens,
 	clubs,
 	guests,
@@ -23,6 +33,7 @@ import {
 	meetings,
 	officerTerms,
 	people,
+	roleSlots,
 } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import {
@@ -36,8 +47,45 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { handleMcpRequest } = await import("#/server/mcp/handle-request");
+const oauth = await import("#/test/oauth-flow");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { MCP_TOOLS } = await import("#/server/mcp/tools");
+
+/**
+ * A REAL session cookie for `userId`: a session row, and its token signed the
+ * way Better Auth signs its own cookie (`better-call`'s `signCookieValue`).
+ *
+ * An unsigned token is not one. Better Auth refuses it before it ever looks
+ * the session up, so a bearer-only test that sends one proves nothing — it
+ * would stay green if `/api/mcp` started accepting browser sessions, which is
+ * the one regression the test exists for (Codex, reviewing #849: both the
+ * #773 case and #843's copy of it sent an unsigned UUID). Every caller asserts
+ * `getSession` accepts the cookie before asserting that `/api/mcp` refuses it.
+ */
+async function realSessionCookie(userId: string): Promise<string> {
+	const token = randomUUID().replaceAll("-", "");
+	await testDb.insert(session).values({
+		id: randomUUID(),
+		token,
+		userId,
+		expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+		updatedAt: new Date(),
+	});
+	const { makeSignature } = await import("better-auth/crypto");
+	const signature = await makeSignature(
+		token,
+		process.env.BETTER_AUTH_SECRET as string,
+	);
+	const cookie = `better-auth.session_token=${encodeURIComponent(`${token}.${signature}`)}`;
+	const { auth } = await import("#/lib/auth");
+	const resolved = await auth.api.getSession({
+		headers: new Headers({ cookie }),
+	});
+	// The positive control: without it, a 401 below could mean the cookie was
+	// never a session at all.
+	expect(resolved?.user.id, "Better Auth must accept this cookie").toBe(userId);
+	return cookie;
+}
 
 /** A JSON-RPC POST to /api/mcp, with an optional bearer token and cookie. */
 function mcpRequest(
@@ -189,16 +237,10 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		// The behavioural half of the bearer-only claim. The import grep in
 		// `mcp-authz.guard.test.ts` is blind to a cookie reaching the path through
 		// a helper or a re-export, and this is the one claim in the design where
-		// being wrong is a security hole rather than a bug. So: a REAL session row
-		// for a REAL club admin, sent as the app's own cookie.
-		const token = randomUUID();
-		await testDb.insert(session).values({
-			id: randomUUID(),
-			token,
-			userId: seed.adminUserId,
-			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-			updatedAt: new Date(),
-		});
+		// being wrong is a security hole rather than a bug. So: a REAL session for
+		// a REAL club admin, sent as the app's own signed cookie, which Better
+		// Auth itself accepts.
+		const cookie = await realSessionCookie(seed.adminUserId);
 
 		const before = await testDb
 			.select({ id: guests.id })
@@ -212,7 +254,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					meetingDate: "2026-01-01",
 					entries: [{ name: "Should Not Exist" }],
 				}),
-				{ cookie: `better-auth.session_token=${token}` },
+				{ cookie },
 			),
 		);
 		expect(res.status).toBe(401);
@@ -550,3 +592,399 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		expect(res.headers.get("access-control-allow-origin")).toBeNull();
 	});
 });
+
+/**
+ * The second credential kind (#843): an OAuth access token, minted by a REAL
+ * authorization-code grant through GavelUp's own `auth.handler` — magic-link
+ * sign-in, authorize with PKCE, consent, token redemption — so what `/api/mcp`
+ * is asked to accept is exactly what claude.ai would present. See
+ * `#/test/oauth-flow` for why nothing here signs a token by hand, except the
+ * three tokens that exist to be WRONG, which are signed by the real key via
+ * the jwt plugin so that the one thing wrong with each is the thing named.
+ */
+describe.skipIf(!hasTestDb)(
+	"/api/mcp with an OAuth access token (#843)",
+	() => {
+		const SUFFIX = randomBytes(4).toString("hex");
+		const SUPERADMIN_EMAIL = `oauth-route-admin-${SUFFIX}@example.com`;
+		/** Every email a magic link went to, so their verification rows are removed. */
+		const emails = new Set<string>([SUPERADMIN_EMAIL]);
+		let loaded: Awaited<ReturnType<typeof oauth.loadAuthForTest>>;
+		let restoreFetch: () => void;
+		let jwksFetches = 0;
+		let client: Awaited<ReturnType<typeof oauth.registerClient>>;
+		let seed: SeededClub;
+
+		beforeAll(async () => {
+			loaded = await oauth.loadAuthForTest(SUPERADMIN_EMAIL);
+			// Counted, so the forged-kid case can assert the verifier never
+			// fetched for a key GavelUp does not have.
+			restoreFetch = oauth.routeJwksToHandler((request) => {
+				jwksFetches += 1;
+				return loaded.handler(request);
+			});
+			const superCookie = await oauth.signInCookie(loaded, SUPERADMIN_EMAIL);
+			client = await oauth.registerClient(
+				loaded,
+				superCookie,
+				`mcp-route probe ${SUFFIX}`,
+			);
+		});
+
+		afterAll(async () => {
+			restoreFetch();
+			await oauth.cleanupOAuth(client ? [client.clientId] : [], [...emails]);
+			loaded.restoreEnv();
+		});
+
+		beforeEach(async () => {
+			seed = await seedClub();
+		});
+
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		});
+
+		/** A seeded user's email — `seedClub` derives it from the id. */
+		const emailOf = (kind: "admin" | "member", userId: string) =>
+			`${kind}-${userId}@test.example`;
+
+		/** An access token for a seeded user, via the full grant. */
+		async function accessTokenFor(
+			kind: "admin" | "member",
+			userId: string,
+		): Promise<string> {
+			const email = emailOf(kind, userId);
+			emails.add(email);
+			const cookie = await oauth.signInCookie(loaded, email);
+			return oauth.mintAccessToken(loaded, client, cookie);
+		}
+
+		async function mintPersonalToken(userId: string): Promise<string> {
+			const raw = `tmk_${randomUUID().replaceAll("-", "")}`;
+			await testDb
+				.insert(apiTokens)
+				.values({ userId, tokenHash: hashApiToken(raw), name: "test" });
+			return raw;
+		}
+
+		/**
+		 * A JWT signed by GavelUp's REAL key with these claims. Starts from claims a
+		 * valid token carries, so each negative case changes exactly one of them —
+		 * and `signedWith({})` is the positive control proving the rest is right.
+		 */
+		async function signedWith(
+			overrides: Record<string, unknown>,
+		): Promise<string> {
+			const now = Math.floor(Date.now() / 1000);
+			const { token } = await loaded.auth.api.signJWT({
+				body: {
+					payload: {
+						sub: seed.adminUserId,
+						aud: oauth.TEST_RESOURCE,
+						iss: oauth.TEST_ISSUER,
+						client_id: client.clientId,
+						azp: client.clientId,
+						jti: randomUUID(),
+						iat: now,
+						exp: now + 600,
+						...overrides,
+					},
+				},
+			});
+			return token;
+		}
+
+		const whoami = (token: string | null) =>
+			handleMcpRequest(mcpRequest(toolsCall("whoami"), { token }));
+
+		// --- AC2: same user, same clubs --------------------------------------
+
+		it("resolves to the same user and clubs as that user's tmk_ token", async () => {
+			const accessToken = await accessTokenFor("admin", seed.adminUserId);
+			const personal = await mintPersonalToken(seed.adminUserId);
+
+			const viaOAuth = await readToolResult(await whoami(accessToken));
+			const viaPersonal = await readToolResult(await whoami(personal));
+
+			expect(viaOAuth.status).toBe(200);
+			expect(viaOAuth.isError).toBe(false);
+			// The whole payload, not a field: a divergence anywhere — a club missing,
+			// a different membershipId, a different `via` — is a second authorization
+			// model, which is what the shared resolve exists to prevent.
+			expect(viaOAuth.body).toEqual(viaPersonal.body);
+			expect(viaOAuth.body).toMatchObject({
+				user: { id: seed.adminUserId },
+				clubs: [{ clubId: seed.clubId, via: "admin" }],
+			});
+		});
+
+		it("refuses a flood of forged-kid tokens without a single JWKS fetch, and still serves a real one", async () => {
+			// The anonymous denial of service four review passes found: the
+			// verifier refetches the JWKS for every unknown `kid`, from this
+			// server's own address, so ~21 junk tokens a minute drained the shared
+			// rate-limit bucket and the next real refresh failed with a 500.
+			const junk = (kid: string) =>
+				`${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt", kid })).toString("base64url")}.e30.c2ln`;
+			const before = jwksFetches;
+			for (let i = 0; i < 30; i++) {
+				const res = await whoami(junk(`forged-${SUFFIX}-${i}`));
+				expect(res.status).toBe(401);
+				expect(res.headers.get("www-authenticate")).toContain(
+					"resource_metadata=",
+				);
+			}
+			expect(jwksFetches - before).toBe(0);
+			const r = await readToolResult(await whoami(await signedWith({})));
+			expect(r.status).toBe(200);
+		});
+
+		it("closes every gate bypass the re-review reproduced, each without a fetch", async () => {
+			// Each of these once reached the verifier, which then fetched: a `kid`
+			// spelled like the gate's own sentinels, a numeric `kid`, and a token
+			// with embedded whitespace that this gate's parser skipped and the
+			// verifier's more lenient one still read.
+			const header = (h: Record<string, unknown>) =>
+				Buffer.from(JSON.stringify({ alg: "EdDSA", ...h })).toString(
+					"base64url",
+				);
+			const before = jwksFetches;
+			for (const token of [
+				`${header({ kid: "absent" })}.e30.c2ln`,
+				`${header({ kid: "malformed" })}.e30.c2ln`,
+				`${header({ kid: 12345 })}.e30.c2ln`,
+				`${header({ kid: `ws-${SUFFIX}` })}.e 30.AA`,
+			]) {
+				for (let i = 0; i < 3; i++) {
+					const res = await whoami(token);
+					expect(res.status, token).toBe(401);
+				}
+			}
+			expect(jwksFetches - before).toBe(0);
+		});
+
+		for (const [label, overrides] of [
+			["whose subject is the client itself", "client"],
+			["that carries no jti", "no-jti"],
+		] as const) {
+			it(`401s a correctly signed token ${label} — not issued to a person`, async () => {
+				const token = await signedWith(
+					overrides === "client"
+						? { sub: client.clientId }
+						: { jti: undefined },
+				);
+				const res = await whoami(token);
+				expect(res.status).toBe(401);
+				expect(res.headers.get("www-authenticate")).toContain(
+					"resource_metadata=",
+				);
+				expect(JSON.stringify(await res.json())).toContain(
+					"not issued to a person",
+				);
+			});
+		}
+
+		it("the signed-claims helper produces a token the endpoint accepts (control)", async () => {
+			// Without this, the three refusals below could pass because `signJWT`
+			// makes tokens the verifier rejects for some OTHER reason.
+			const r = await readToolResult(await whoami(await signedWith({})));
+			expect(r.status).toBe(200);
+			expect(r.isError).toBe(false);
+		});
+
+		// --- AC3 / AC4: audience, issuer, expiry -----------------------------
+
+		for (const [label, overrides] of [
+			["audience is a different resource", { aud: "https://evil.example/mcp" }],
+			[
+				"audience is the userinfo endpoint alone",
+				{ aud: `${oauth.TEST_ISSUER}/oauth2/userinfo` },
+			],
+			[
+				"issuer is a different server",
+				{ iss: "https://evil.example/api/auth" },
+			],
+			[
+				"token has expired",
+				{
+					iat: Math.floor(Date.now() / 1000) - 7200,
+					exp: Math.floor(Date.now() / 1000) - 3600,
+				},
+			],
+		] as const) {
+			it(`401s with a challenge, and runs no tool, when the ${label}`, async () => {
+				const before = await testDb
+					.select({ id: roleSlots.id, status: roleSlots.status })
+					.from(roleSlots)
+					.where(eq(roleSlots.meetingId, seed.meetingId));
+
+				const res = await handleMcpRequest(
+					mcpRequest(
+						toolsCall("assign_roles", {
+							meetingId: seed.meetingId,
+							assignments: [{ slotId: seed.slotId, memberId: seed.memberId }],
+						}),
+						{ token: await signedWith(overrides) },
+					),
+				);
+				expect(res.status).toBe(401);
+				expect(res.headers.get("www-authenticate")).toContain(
+					"resource_metadata=",
+				);
+
+				const after = await testDb
+					.select({ id: roleSlots.id, status: roleSlots.status })
+					.from(roleSlots)
+					.where(eq(roleSlots.meetingId, seed.meetingId));
+				expect(after).toEqual(before);
+			});
+		}
+
+		it("401s an access token whose user has since been deleted", async () => {
+			// A signed JWT outlives its user until it expires; the FK cascade that
+			// makes this unreachable for a `tmk_` token does nothing for it.
+			const email = `oauth-gone-${SUFFIX}@example.com`;
+			emails.add(email);
+			const cookie = await oauth.signInCookie(loaded, email);
+			const accessToken = await oauth.mintAccessToken(loaded, client, cookie);
+			expect((await whoami(accessToken)).status).toBe(200);
+
+			await testDb.delete(user).where(eq(user.email, email));
+			const res = await whoami(accessToken);
+			expect(res.status).toBe(401);
+			expect(res.headers.get("www-authenticate")).toContain(
+				"resource_metadata=",
+			);
+		});
+
+		// --- AC6: no api_tokens write ----------------------------------------
+
+		it("does NOT stamp any api_tokens row on an OAuth call", async () => {
+			const personal = await mintPersonalToken(seed.adminUserId);
+			const accessToken = await accessTokenFor("admin", seed.adminUserId);
+
+			const r = await readToolResult(await whoami(accessToken));
+			expect(r.isError).toBe(false);
+
+			const rows = await testDb
+				.select({ lastUsedAt: apiTokens.lastUsedAt })
+				.from(apiTokens)
+				.where(eq(apiTokens.userId, seed.adminUserId));
+			expect(rows).toEqual([{ lastUsedAt: null }]);
+
+			// …and the personal token, used, still is — so the assertion above is
+			// about which credential was presented, not a broken stamp.
+			await whoami(personal);
+			const [stamped] = await testDb
+				.select({ lastUsedAt: apiTokens.lastUsedAt })
+				.from(apiTokens)
+				.where(eq(apiTokens.tokenHash, hashApiToken(personal)));
+			expect(stamped?.lastUsedAt).toBeInstanceOf(Date);
+		});
+
+		// --- AC5a: every 401 says where to authorize -------------------------
+
+		it("every 401 carries a WWW-Authenticate challenge naming metadata that resolves", async () => {
+			const cookie = await realSessionCookie(seed.adminUserId);
+			const cases: [string, Request][] = [
+				["no credential", mcpRequest(toolsCall("whoami"))],
+				[
+					"a session cookie and no credential",
+					mcpRequest(toolsCall("whoami"), { cookie }),
+				],
+				[
+					"a malformed OAuth token",
+					mcpRequest(toolsCall("whoami"), { token: "not.a.jwt" }),
+				],
+				[
+					"an unknown tmk_ token",
+					mcpRequest(toolsCall("whoami"), { token: "tmk_not_a_real_token" }),
+				],
+			];
+			const challenges = new Set<string>();
+			for (const [label, request] of cases) {
+				const res = await handleMcpRequest(request);
+				expect(res.status, label).toBe(401);
+				const header = res.headers.get("www-authenticate");
+				expect(header, `${label} had no WWW-Authenticate`).toMatch(
+					/^Bearer resource_metadata="[^"]+"/,
+				);
+				challenges.add(header as string);
+			}
+			// One value across both branches: the `tmk_` refusal is built in this
+			// repo (`oauth-claims.ts`), the others by Better Auth, and a client
+			// that reads them must not be told two different things.
+			expect([...challenges]).toHaveLength(1);
+
+			// Fetch the URL the challenge names, through the same root route
+			// production serves it on. A challenge pointing at a 404 is how a
+			// connector dead-ends with no diagnosis.
+			const url = /resource_metadata="([^"]+)"/.exec(
+				[...challenges][0] ?? "",
+			)?.[1];
+			expect(url).toBe(
+				`${oauth.TEST_ORIGIN}/.well-known/oauth-protected-resource/api/mcp`,
+			);
+			const { serveWellKnownDiscovery } = await import(
+				"#/lib/well-known-forward"
+			);
+			const doc = await serveWellKnownDiscovery(
+				new Request(url as string),
+				loaded.handler,
+			);
+			expect(doc.status).toBe(200);
+			expect((await doc.json()).resource).toBe(oauth.TEST_RESOURCE);
+		});
+
+		// --- a write, credited to the right member ---------------------------
+
+		it("applies a write over OAuth and credits it to the token owner's membership", async () => {
+			const accessToken = await accessTokenFor("admin", seed.adminUserId);
+			const r = await readToolResult(
+				await handleMcpRequest(
+					mcpRequest(
+						toolsCall("assign_roles", {
+							meetingId: seed.meetingId,
+							assignments: [{ slotId: seed.slotId, memberId: seed.memberId }],
+						}),
+						{ token: accessToken },
+					),
+				),
+			);
+			expect(r.isError, r.raw).toBe(false);
+
+			const [slot] = await testDb
+				.select({ assignedMemberId: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId));
+			expect(slot?.assignedMemberId).toBe(seed.memberId);
+
+			const actors = await testDb
+				.select({ actorMemberId: activityLog.actorMemberId })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.targetId, seed.slotId),
+					),
+				);
+			expect(actors.length).toBeGreaterThan(0);
+			expect(actors.every((a) => a.actorMemberId === seed.adminMemberId)).toBe(
+				true,
+			);
+		});
+
+		it("FORBIDs an OAuth user who is a plain member, exactly as a tmk_ token would", async () => {
+			const accessToken = await accessTokenFor("member", seed.memberUserId);
+			const r = await readToolResult(
+				await handleMcpRequest(
+					mcpRequest(toolsCall("list_meetings", { clubId: seed.clubId }), {
+						token: accessToken,
+					}),
+				),
+			);
+			expect(r.isError).toBe(true);
+			expect(r.body).toMatchObject({ error: { code: "FORBIDDEN" } });
+		});
+	},
+);

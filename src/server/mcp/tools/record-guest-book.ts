@@ -161,7 +161,7 @@ export const recordGuestBookTool: McpToolDefinition = {
 	},
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
-		const { club, user } = await authorizeToken(ctx.rawToken, args.clubId);
+		const { club, user } = await authorizeToken(ctx, args.clubId);
 
 		// The old contract's second call. Refused before anything else runs, so a
 		// stale client cannot reach a plan it has no way to apply.
