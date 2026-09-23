@@ -506,6 +506,37 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 		file: "src/server/slots.ts",
 		gate: "assertClubNotArchived",
 	},
+	// #825 — the five that `requireMemberInClub` hid from this sweep while it sat
+	// in `SESSION_GUARDS`. `claimSlot` and `reassignSlot` had NO archive gate;
+	// both now gate in their cores (`claimSlotCore`, `reassignSlotCore`), which
+	// `public-writers-archive-gate.integration.test.ts` executes. The other three
+	// already asserted it directly and were covered by accident of that, not by
+	// this table; now they are recorded rather than inferred from a regex.
+	{
+		fn: "claimSlot",
+		file: "src/server/slots-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "reassignSlot",
+		file: "src/server/slots-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "setPlannedAttendance",
+		file: "src/server/attendance-plan.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "setAvailability",
+		file: "src/server/availability.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "markUnavailableReleasing",
+		file: "src/server/availability.ts",
+		gate: "assertClubNotArchived",
+	},
 	// #730 — the Timer's measured times. Session-less by design (the Timer taps
 	// a link out of a chat thread), and it MINTS rows: without this gate an
 	// archived club would keep accreting a record of its meetings while every
@@ -531,7 +562,20 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
  * makes has to be TRUE, not just plausible from the name. Three names sat here
  * for which it was false — see `SELF_ASSERT_GUARDS`. */
 const SESSION_GUARDS =
-	/require(User|Membership|ClubRole|ClubViewAccess|ClubAdminView|Superadmin|MemberInClub)\w*\(/;
+	/require(User|Membership|ClubRole|ClubViewAccess|ClubAdminView|Superadmin)\w*\(/;
+
+/**
+ * Guards that read NO session, and so must never match `SESSION_GUARDS`.
+ *
+ * `requireMemberInClub` sat in that regex until #825. It takes a member id off
+ * the wire and checks only that it is an active member of the club — which is
+ * the asserted identity, not a session — so every endpoint behind it was
+ * dropped from this sweep by NAME. Five POST writes were exempt on that basis
+ * alone, and two of them (`claimSlot`, `reassignSlot`) had no archive gate
+ * anywhere in their chain. `write-proof.guard.test.ts` forbids it from its own
+ * `SESSION_GATES` for the same reason; the two files now agree.
+ */
+const SESSIONLESS_GUARDS = ["requireMemberInClub"];
 
 /**
  * Guards that admit a SESSION-LESS caller, and therefore do NOT exempt their
@@ -700,6 +744,15 @@ describe("the sweep's session classification is honest", () => {
 		});
 	}
 
+	for (const guard of SESSIONLESS_GUARDS) {
+		it(`${guard} is not classified as session-bearing (#825)`, () => {
+			expect(
+				SESSION_GUARDS.test(`${guard}(`),
+				`${guard} reads no session — it checks a member id taken off the wire — so matching SESSION_GUARDS drops every endpoint behind it from the sweep by NAME. #825 found two writes hidden that way with no archive gate at all.`,
+			).toBe(false);
+		});
+	}
+
 	it("keeps the two classifications disjoint", () => {
 		const overlap = SELF_ASSERT_NAMES.filter((g) =>
 			SESSION_GUARDS.test(`${g}(`),
@@ -782,9 +835,11 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		// `disqualifyCandidateFn` / `undoDisqualificationFn` (#723) are the tenth
 		// and eleventh, also genuinely new — the Vote Counter operates that console
 		// through a self-asserted member id, exactly as they do open/close.
+		// #825 added five more — not new writes, but ones `requireMemberInClub`
+		// had classified out of the sweep by name.
 		// The count is the vacuity guard, so it moves deliberately with the table
 		// rather than being loosened to `toBeGreaterThan`.
-		expect(WRITE_GATES).toHaveLength(11);
+		expect(WRITE_GATES).toHaveLength(16);
 	});
 
 	it("does not also waive a write it claims to gate", () => {

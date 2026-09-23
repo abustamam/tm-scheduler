@@ -20,10 +20,9 @@ import {
 	applyMoveSpeakerSlot,
 	applyRemoveRoleSlot,
 	applyRemoveSpeakerSlot,
-	attachSpeechToSlot,
+	claimSlotCore,
 	confirmSlotCore,
 	editSlotSpeech,
-	markComingOnSelfClaim,
 	reassignSlotCore,
 	releaseSlotCore,
 } from "./slots-logic";
@@ -42,24 +41,18 @@ const claimSchema = z.object({
 
 /** Claim an open slot for the given member. Speaker details are optional; a
  *  blank/missing speech title defaults to "TBA".
- *  PUBLIC — no session required; trust guard via requireMemberInClub. */
+ *  PUBLIC — no session required; trust guard via requireMemberInClub.
+ *
+ *  The write, the archive gate and the lock check live in `claimSlotCore`
+ *  (#825), for the reason `releaseSlot` below gives for its own core. */
 export const claimSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => claimSchema.parse(input))
 	.handler(async ({ data }) => {
+		// Cheap pre-read solely to resolve clubId for the trust guard; the
+		// authoritative read-and-write happens in `claimSlotCore`.
 		const [slot] = await db
-			.select({
-				id: roleSlots.id,
-				status: roleSlots.status,
-				meetingId: roleSlots.meetingId,
-				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				clubId: meetings.clubId,
-				meetingStatus: meetings.status,
-			})
+			.select({ clubId: meetings.clubId })
 			.from(roleSlots)
-			.innerJoin(
-				roleDefinitions,
-				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-			)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
@@ -67,7 +60,6 @@ export const claimSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
-		assertMeetingNotLocked(slot.meetingStatus);
 		// Trust guard: memberId must be a roster member of this club.
 		await requireMemberInClub(data.memberId, slot.clubId);
 		// Actor provenance (#396): a signed-in caller is credited as themselves; an
@@ -77,58 +69,16 @@ export const claimSlot = createServerFn({ method: "POST" })
 			claimedActorMemberId: data.actorMemberId,
 		});
 
-		return db.transaction(async (tx) => {
-			// Conditional UPDATE is the race guard: only one claim can flip 'open'.
-			const updated = await tx
-				.update(roleSlots)
-				.set({
-					assignedMemberId: data.memberId,
-					assignedGuestId: null,
-					status: "claimed",
-					claimedAt: new Date(),
-				})
-				.where(and(eq(roleSlots.id, data.slotId), eq(roleSlots.status, "open")))
-				.returning({ id: roleSlots.id });
-
-			if (updated.length === 0) {
-				throw new Error("Sorry — this role was just claimed by someone else.");
-			}
-
-			if (slot.isSpeakerRole) {
-				// Claiming a speaker slot captures a Speech owned by the claimant's
-				// Person (ADR-0009). Pure-TBA/empty input creates none — the slot
-				// stays TBA (speech_id NULL) until a speech is attached later.
-				const [claimant] = await tx
-					.select({ personId: members.personId })
-					.from(members)
-					.where(eq(members.id, data.memberId))
-					.limit(1);
-				if (!claimant) throw new Error("Claiming member not found.");
-				await attachSpeechToSlot(tx, {
-					slotId: data.slotId,
-					personId: claimant.personId,
-					input: data.speakerDetails,
-				});
-			}
-
-			await markComingOnSelfClaim(tx, {
+		await db.transaction((tx) =>
+			claimSlotCore(tx, {
+				slotId: data.slotId,
 				memberId: data.memberId,
 				actorMemberId,
-				meetingId: slot.meetingId,
-				clubId: slot.clubId,
-			});
+				speakerDetails: data.speakerDetails,
+			}),
+		);
 
-			await logActivity(tx, {
-				clubId: slot.clubId,
-				actorMemberId,
-				action: "claim",
-				targetType: "slot",
-				targetId: data.slotId,
-				detail: { memberId: data.memberId },
-			});
-
-			return { ok: true as const };
-		});
+		return { ok: true as const };
 	});
 
 const releaseSchema = z.object({
@@ -153,8 +103,8 @@ const releaseSchema = z.object({
  *  for a scheduled one. What changes is narrower: an anonymous caller naming a
  *  member id that is not on this club's roster now hears about the member
  *  rather than about the takedown, which discloses less, not more. `claimSlot`
- *  and `reassignSlot` beside it resolve their actor first and have no archive
- *  gate at all. */
+ *  and `reassignSlot` beside it have the same shape since #825, gated in
+ *  `claimSlotCore` and `reassignSlotCore`. */
 export const releaseSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => releaseSchema.parse(input))
 	.handler(async ({ data }) => {

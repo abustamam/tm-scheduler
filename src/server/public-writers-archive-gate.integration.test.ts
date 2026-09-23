@@ -79,7 +79,9 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { captureGuestVisit } = await import("#/server/guest-pipeline-logic");
-const { releaseSlotCore } = await import("#/server/slots-logic");
+const { claimSlotCore, reassignSlotCore, releaseSlotCore } = await import(
+	"#/server/slots-logic"
+);
 const {
 	castVote,
 	joinBallotAsGuest,
@@ -438,6 +440,125 @@ describe.skipIf(!hasTestDb)(
 				.from(roleSlots)
 				.where(eq(roleSlots.id, s.slotId));
 			expect(row?.assignedMemberId).toBe(s.memberId);
+		});
+
+		/**
+		 * #825. `claimSlot` and `reassignSlot` had NO archive gate anywhere in
+		 * their chain, and `public-readers-archive-gate.guard.test.ts` could not
+		 * see it: `requireMemberInClub` sat in its `SESSION_GUARDS` regex and
+		 * dropped both from the sweep by name. Both now gate in their cores, so
+		 * the refusal is executed here rather than grepped for — the guard's rows
+		 * for them are file-level `toContain`s on a module that names the gate in
+		 * several functions, and would stay green with either call deleted.
+		 */
+		const holderOf = async (slotId: string) =>
+			(
+				await testDb
+					.select({
+						assignedMemberId: roleSlots.assignedMemberId,
+						status: roleSlots.status,
+					})
+					.from(roleSlots)
+					.where(eq(roleSlots.id, slotId))
+			)[0] ?? null;
+		const reopen = (slotId: string) =>
+			testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: null, status: "open", claimedAt: null })
+				.where(eq(roleSlots.id, slotId));
+		const messageOf = (p: Promise<unknown>) =>
+			p.then(
+				() => "it did not throw at all",
+				(err: unknown) => (err as Error).message,
+			);
+
+		it("claimSlotCore — refused, and the slot stays open", async () => {
+			const s = await seedLiveClub();
+			const claim = () =>
+				testDb.transaction((tx) =>
+					claimSlotCore(tx, {
+						slotId: s.slotId,
+						memberId: s.memberId,
+						actorMemberId: s.memberId,
+					}),
+				);
+
+			// BEFORE: the same claim against the LIVE club succeeds.
+			await claim();
+			expect(await holderOf(s.slotId)).toEqual({
+				assignedMemberId: s.memberId,
+				status: "claimed",
+			});
+
+			// AFTER: archived, and nothing is written.
+			await reopen(s.slotId);
+			await archive(s.clubId);
+			await expect(claim()).rejects.toThrow(ARCHIVED);
+			expect(await holderOf(s.slotId)).toEqual({
+				assignedMemberId: null,
+				status: "open",
+			});
+		});
+
+		it("claimSlotCore — an archived club's COMPLETED meeting still says archived", async () => {
+			const s = await seedLiveClub();
+			await testDb
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, s.meetingId));
+			await archive(s.clubId);
+
+			const message = await messageOf(
+				testDb.transaction((tx) =>
+					claimSlotCore(tx, {
+						slotId: s.slotId,
+						memberId: s.memberId,
+						actorMemberId: s.memberId,
+					}),
+				),
+			);
+			expect(message).toBe(CLUB_ARCHIVED_MESSAGE);
+		});
+
+		it("reassignSlotCore — refused, and the slot keeps its holder", async () => {
+			const s = await seedLiveClub();
+			const reassignTo = (memberId: string) =>
+				testDb.transaction((tx) =>
+					reassignSlotCore(tx, {
+						slotId: s.slotId,
+						memberId,
+						actorMemberId: s.adminMemberId,
+					}),
+				);
+
+			// BEFORE: reassigning on the LIVE club succeeds.
+			await reassignTo(s.memberId);
+			expect((await holderOf(s.slotId))?.assignedMemberId).toBe(s.memberId);
+
+			// AFTER: archived, and the holder stays put.
+			await archive(s.clubId);
+			await expect(reassignTo(s.adminMemberId)).rejects.toThrow(ARCHIVED);
+			expect((await holderOf(s.slotId))?.assignedMemberId).toBe(s.memberId);
+		});
+
+		it("reassignSlotCore — an archived club's COMPLETED meeting still says archived", async () => {
+			const s = await seedLiveClub();
+			await testDb
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, s.meetingId));
+			await archive(s.clubId);
+
+			const message = await messageOf(
+				testDb.transaction((tx) =>
+					reassignSlotCore(tx, {
+						slotId: s.slotId,
+						memberId: s.memberId,
+						actorMemberId: s.adminMemberId,
+					}),
+				),
+			);
+			expect(message).toBe(CLUB_ARCHIVED_MESSAGE);
 		});
 
 		/**
