@@ -1,0 +1,153 @@
+# ADR-0027: GavelUp is an OAuth 2.1 authorization server, for MCP clients only
+
+Status: Accepted
+
+Relates to: ADR-0004 (magic-link-only authentication), #771 (MCP tracking), #773 (MCP PR1),
+#842 (this change), #843 (the connector works).
+
+## Context
+
+`/api/mcp` shipped in #773 and it only works from a machine you own. The credential is a
+personal `tmk_` bearer token pasted into `~/.claude.json`, so driving GavelUp from an LLM
+means Claude Code, which means your laptop is awake. The thing an officer actually wants is
+to say "Dana told me she wants to speak at the next meeting" from a phone and have the
+agenda change.
+
+That means claude.ai, and claude.ai's custom-connector UI takes a remote MCP URL plus an
+optional OAuth Client ID and Client Secret. There is no field for a static `Authorization`
+header, and Anthropic connects from its own cloud IP ranges rather than from your machine.
+`gavelup.app` is already publicly reachable, so OAuth is the only missing piece.
+
+ADR-0004 says magic link is the only way in. That stops being the whole story the moment
+GavelUp issues access tokens: there is now a second credential type, with its own lifetime,
+its own revocation surface and its own consent record.
+
+## Decision
+
+**Better Auth becomes the OAuth 2.1 authorization server**, via `@better-auth/mcp`
+registered in `src/lib/auth.ts` alongside `jwt()`. The issuer is Better Auth's own base URL,
+`<BETTER_AUTH_URL>/api/auth`, and the protected resource it binds tokens to is
+`<BETTER_AUTH_URL>/api/mcp`.
+
+**Magic link remains the only *human* authentication.** OAuth authorizes a *client* against
+a session the person already has; it adds no new way to become that person. An OAuth
+authorization that finds no session sends the browser to `/signin`, which is the same magic
+link it has always been. ADR-0004 is extended here, not replaced.
+
+Five decisions inside that, each one a door deliberately left shut:
+
+### 1. The authorization server lives IN the app, not in front of it
+
+The alternative is a hosted identity provider (Auth0, Clerk, WorkOS) with GavelUp as a
+relying party. Rejected because the thing being authorized is *this* app's session and
+*this* app's roster identity: `session.create.after` links a signed-in account to its
+roster `Person` and reconciles the superadmin flag, and every MCP tool resolves that
+person's membership in whichever club its input names. An external IdP would mint an
+identity GavelUp then has to map back, which is the mapping that already exists — and it
+would add a vendor to the sign-in path of a single-maintainer MVP.
+
+### 2. The built-in `mcp()` plugin in better-auth 1.6 was rejected; we bumped instead
+
+`better-auth@1.6.22` shipped its own `mcp()` plugin, so this could have been done with no
+dependency change. Two things found by reading its source say otherwise:
+
+- It is built on `oidc-provider`, which prints its own deprecation notice on load.
+- **Its `/mcp/register` endpoint is unauthenticated and ungated.** The handler calls
+  `getSessionFromCtx(ctx)` and then uses `session?.session.userId` with optional chaining —
+  it never throws on a missing session, carries no `sessionMiddleware`, and never reads
+  `allowDynamicClientRegistration`. Adopting it would have put a public endpoint on
+  gavelup.app that writes client rows for anyone, and closing it would have meant
+  maintaining a route block by hand.
+
+So the change bumps `better-auth` 1.6.22 → 1.7.5 and adds `@better-auth/mcp@1.7.5`, where
+registration is opt-in and absent from discovery when off. The bump is the riskiest line in
+the whole change — it owns every magic-link sign-in — which is why #842 shipped it as its
+own deploy, with the four integration points (Drizzle adapter import path, TanStack cookie
+plugin, the `sendMagicLink` metadata signature, and the `session.create.after` hooks plus
+the rate-limit rules) verified by an actual sign-in rather than by the suite alone.
+
+### 3. Dynamic Client Registration is OFF
+
+claude.ai is one confidential client, registered out of band; its ID and secret go into
+claude.ai's own Advanced settings. DCR would let any caller create a client row on a public
+endpoint, and it buys nothing while the answer to "how many clients are there" is one.
+
+Neither `allowDynamicClientRegistration` nor `allowUnauthenticatedClientRegistration` is
+passed, so `registration_endpoint` is absent from the discovery documents entirely and a
+client never tries it. `well-known-discovery.integration.test.ts` asserts both the absent key
+and — the assertion that actually matters — that a registration attempt writes no
+`oauth_client` row, because a handler that records the client and then rejects the response
+looks identical from outside.
+
+`@better-auth/cimd` is the right answer when this opens to ChatGPT or to other officers. It
+buys nothing today.
+
+### 4. No OAuth scopes
+
+An OAuth access token carries the same authority as a `tmk_` token. The write protection
+that matters here is the preview-then-apply handshake in
+`src/server/mcp/handle-request.ts`, not a scope string, and scopes only start paying rent
+when someone who is not the maintainer reads the consent screen. Revisit when a second
+person connects.
+
+### 5. `tmk_` tokens keep working
+
+One endpoint, two credential kinds, discriminated by the `tmk_` prefix. #842 changes nothing
+about how `/api/mcp` authenticates; #843 adds the OAuth arm beside the existing one.
+
+## The part that does not come for free: discovery at the root
+
+Better Auth is mounted at `/api/auth`, and an OAuth client looks for an authorization server
+at the **origin root** — RFC 8414 for `oauth-authorization-server`, RFC 9728 for
+`oauth-protected-resource`. `src/routes/api/auth/$.ts` catches `/api/auth/*` and nothing
+else, so both root URLs were 404.
+
+`src/routes/[.]well-known.$.ts` serves them. Three things about it are decisions rather than
+mechanics:
+
+- **It forwards rather than rebuilding the documents.** The bodies name the provider's
+  endpoints, grants and signing algorithms, and whether DCR is on. Restating any of that
+  would be a second source of truth that goes stale on a library bump — and
+  `registration_endpoint` would then be absent because the route forgot it rather than
+  because the provider has DCR off.
+- **The two documents are NOT forwarded alike, and where Better Auth serves them is not
+  where it looks.** Both come from plugin `onRequest` hooks matching the full request
+  pathname, and `auth.handler` runs those hooks before it routes. The MCP plugin matches
+  RFC 9728 metadata at the bare root path, so that one forwards unchanged. The OAuth
+  provider matches RFC 8414 metadata at `/.well-known/oauth-authorization-server<issuerPath>`
+  and `<issuerPath>/.well-known/oauth-authorization-server` — the bare root path is in
+  neither set, so it is rewritten onto `/api/auth`. This was established by probe, not from
+  the docs.
+- **It is an allowlist, not a catch-all.** A splat route is handed every `.well-known` path
+  under the origin; passing them all to `auth.handler` would make the route quietly
+  responsible for whatever path a dependency claims in a future patch bump. Two exact
+  document names are answered and everything else 404s.
+
+## Consequences
+
+- Six new tables plus `jwks` and `oauth_resource` — eight in all — hand-merged into
+  `src/db/auth-schema.ts` from the installed plugins and re-exported from `src/db/schema.ts`,
+  which is where the Drizzle adapter looks a model up. `auth-schema-oauth-tables.guard.test.ts`
+  reads the expected set off the plugins rather than from a list, because a list passes
+  forever while a patch bump adds a table. It caught one immediately: #842's issue body
+  named five OAuth tables and 1.7.5 declares seven.
+- The migration is additive — new tables, no column changes, no backfill — so a revert
+  leaves them orphaned and unread. Forward-only, per the startup-migration pattern in
+  ADR-0007. No down-migration.
+- `BETTER_AUTH_URL` is now load-bearing at import: `mcp()` validates the resource URL at
+  construction, so a missing or malformed value takes the app down at boot rather than on
+  the first sign-in. That is the intended direction — an authorization server whose issuer
+  is `undefined` must not start — and `src/lib/auth.ts` throws with the cause named rather
+  than letting the library's `TypeError` surface.
+- `tanstackStartCookies()` must stay LAST in the plugins array. Better Auth logs a startup
+  warning when it is not, and #842 tripped it: a cookie-integration plugin forwards
+  `Set-Cookie` from an `after` hook, so any plugin behind it can set a cookie that never
+  reaches the response. The consent round trip #843 builds is cookie-carrying.
+- Deleting a user cascades to their access and refresh tokens, so account deletion is
+  already connector revocation. Signing out of a browser session does **not** revoke a
+  connector: `oauth_refresh_token.session_id` is `set null` rather than `cascade`, which is
+  the plugin's choice and the right one — a person signing out of the web app should not
+  silently disconnect their phone.
+- Nothing in #842 completes an authorization. `/oauth/consent` is declared in config and
+  does not exist; `/signin` does. #843 builds the round trip and makes `/api/mcp` accept an
+  OAuth token.

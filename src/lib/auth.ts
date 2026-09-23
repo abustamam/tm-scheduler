@@ -1,8 +1,10 @@
+import { mcp } from "@better-auth/mcp";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { magicLink } from "better-auth/plugins";
+import { jwt, magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
+import { recordAuthInitFailure } from "#/lib/auth-init-status";
 import { captureDevMagicLink, isDevLoginEnabled } from "#/lib/dev-login";
 import { sendEmail } from "#/lib/email";
 import {
@@ -10,8 +12,36 @@ import {
 	buildMagicLinkEmail,
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
-import { reconcileSuperadminFlag } from "#/lib/superadmin";
+import { isSuperadminUser, reconcileSuperadminFlag } from "#/lib/superadmin";
+import {
+	AUTH_CONSENT_PATH,
+	AUTH_SIGNIN_PATH,
+	DISCOVERY_RATE_LIMIT_PATHS,
+	MCP_RESOURCE_PATH,
+} from "#/lib/well-known-forward";
 import { linkPersonToUser } from "#/server/account-link-logic";
+
+/**
+ * The MCP protected resource this authorization server issues tokens for
+ * (#842 / ADR-0027).
+ *
+ * `mcp()` validates this at CONSTRUCTION — HTTPS, or HTTP on a loopback host,
+ * and no query or fragment — so a missing or malformed `BETTER_AUTH_URL` now
+ * fails at import rather than on the first sign-in. That is the direction we
+ * want: `BETTER_AUTH_URL` is already required (CLAUDE.md, "Environment"), and
+ * an authorization server whose issuer is `undefined` must not start at all.
+ * The explicit throw is here so the failure names the cause; the library's own
+ * `TypeError` would say only that the resource URL is not absolute.
+ */
+function mcpResourceUrl(): string {
+	const base = (process.env.BETTER_AUTH_URL ?? "").replace(/\/+$/, "");
+	if (!base) {
+		throw new Error(
+			"BETTER_AUTH_URL is required: it is the OAuth issuer and the base of the MCP resource identifier (ADR-0027).",
+		);
+	}
+	return `${base}${MCP_RESOURCE_PATH}`;
+}
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
@@ -50,6 +80,14 @@ export const auth = betterAuth({
 		// Tighter rule for the magic-link sign-in path to prevent email-bomb / account-enumeration.
 		customRules: {
 			"/sign-in/magic-link": { window: 60, max: 5 },
+			// …and OFF for the two OAuth discovery documents (#842). They only reach
+			// this limiter because `src/routes/[.]well-known.$.ts` forwards them into
+			// `auth.handler`, and metering them breaks the connector this change
+			// exists to enable. `DISCOVERY_RATE_LIMIT_PATHS` carries the reasoning and
+			// is derived from the forwarder's own allowlist, so the two cannot drift.
+			...Object.fromEntries(
+				DISCOVERY_RATE_LIMIT_PATHS.map((path) => [path, false as const]),
+			),
 		},
 	},
 	plugins: [
@@ -77,6 +115,107 @@ export const auth = betterAuth({
 				await sendEmail({ to: email, subject, html, text });
 			},
 		}),
+		// #842 / ADR-0027 — GavelUp becomes an OAuth 2.1 authorization server so
+		// claude.ai can reach `/api/mcp` from Anthropic's cloud, where a pasted
+		// `tmk_` bearer token cannot go.
+		//
+		// `jwt()` is not optional decoration: `mcp()` signs access tokens with it
+		// and serves the JWKS `requireMcpAuth` verifies against. It must come
+		// FIRST — `getIssuer` reads the jwt plugin's options to decide the issuer.
+		jwt(),
+		// `mcp()` IS the OAuth provider (it wraps `oauthProvider()` internally), so
+		// registering a separate `oauthProvider()` alongside it is an error.
+		//
+		// Dynamic Client Registration is deliberately OFF: neither
+		// `allowDynamicClientRegistration` nor
+		// `allowUnauthenticatedClientRegistration` is passed, so the registration
+		// endpoint is absent from discovery entirely. claude.ai is one
+		// hand-registered confidential client. ADR-0027 has the reasoning.
+		//
+		// Neither page named here exists as a completed flow yet — `/signin` does,
+		// `/oauth/consent` does not, and nothing in #842 completes an
+		// authorization. Both are declared now because the provider reads them at
+		// construction; #843 builds the consent round trip.
+		mcp({
+			loginPage: AUTH_SIGNIN_PATH,
+			consentPage: AUTH_CONSENT_PATH,
+			resource: mcpResourceUrl(),
+			// DCR being off is NOT what closes client registration. `/oauth2/register`
+			// reads `allowDynamicClientRegistration` and refuses; `/oauth2/create-client`
+			// does NOT — it is a separate, routed endpoint carrying only
+			// `sessionMiddleware`, and `assertClientPrivileges` is a NO-OP unless this
+			// callback exists. Probed on a live server before this line was added: a
+			// plain member (`is_superadmin = f`) POSTing their own session got 201 with
+			// a client_id, a client_secret, their own `redirect_uris`, their own
+			// `client_name`, and `resources: [".../api/mcp"]` auto-attached.
+			//
+			// That is a consent-phishing primitive the moment #843 ships the consent
+			// screen: register "GavelUp Calendar Sync" pointing at your own server,
+			// send another member an `/oauth2/authorize` link on the REAL origin, and
+			// redeem their code against `/api/mcp`.
+			//
+			// This one callback is the whole enumeration: the provider calls
+			// `assertClientPrivileges` at every create/read/update/delete/list/rotate
+			// site, so a future endpoint is covered without editing a list here. It
+			// fails closed — a caller with no user is denied — and superadmin is the
+			// repo's existing authority for "the maintainer" (ADR-0016), which is what
+			// #843's out-of-band registration script runs as.
+			//
+			// The flag is read from the DATABASE, not from `user.isSuperadmin`. That
+			// property is always `undefined`: Better Auth's adapter builds the session
+			// user from its OWN table schema and this repo declares no
+			// `user.additionalFields`. The first draft of this gate tested it
+			// directly, which made the callback `() => false` — the hole was closed
+			// against the maintainer as well, and the test below passed anyway because
+			// it only asserted the refusal. `isSuperadminUser` is the same read
+			// `requireSuperadmin` has always done, and the positive case is now
+			// asserted beside the negative one.
+			clientPrivileges: async ({ user }) => isSuperadminUser(user?.id),
+		}),
+		// LAST, and Better Auth logs a warning at startup if it is not: a cookie
+		// integration plugin forwards `Set-Cookie` into the framework's cookie
+		// store from an `after` hook, so any plugin registered behind it can set a
+		// cookie that never reaches the response. #842 put `mcp()` after this and
+		// tripped exactly that warning — the OAuth flows #843 builds are
+		// cookie-carrying, so the failure would have been a consent round trip
+		// that silently loses its session.
 		tanstackStartCookies(),
 	],
+});
+
+/**
+ * Report a failed Better Auth init instead of letting it reject unobserved.
+ *
+ * Since #842 this module does DATABASE I/O at import: `mcp()`'s `init` seeds an
+ * `oauth_resource` row for the configured resource. `betterAuth()` starts that
+ * eagerly and keeps ONE promise for it, which `auth.handler` awaits — so a
+ * failure already reaches every real caller, and attaching a handler here hides
+ * nothing. The promise stays rejected; this only gives it an observer.
+ *
+ * Two things that observer is worth:
+ *
+ * - In production it names the cause ONCE at boot, and marks the process
+ *   unhealthy so `/api/health` fails — on Railway that means this DEPLOY is not
+ *   promoted and the previous release keeps serving, which is what should
+ *   happen to a release whose auth cannot start. Without it, a seed that fails —
+ *   migrations lagging behind the image, most plausibly — surfaces as every
+ *   auth request failing with the same opaque error, no first line saying why,
+ *   and the healthcheck still answering 200. The failure is NOT OAuth-scoped and
+ *   it never clears: `#/lib/auth-init-status` has the three reasons why.
+ * - In tests it is the difference between a readable failure and a red build
+ *   with green assertions. Around seventeen suites reach this module
+ *   transitively (`#/server/guards`) while mocking `#/db` as `{}`, which was
+ *   honest until the init write existed. Vitest reports an unhandled rejection
+ *   and exits non-zero while every test passes — the exact shape
+ *   `src/test/setup-env.ts` documents for the same failure mode.
+ *
+ * Better Auth does the same thing one layer down with its own schema check
+ * (`createBetterAuth` → `pendingSchemaCheck.catch(…)`).
+ */
+void auth.$context.catch((err) => {
+	recordAuthInitFailure(err);
+	console.error(
+		"better-auth init failed — OAuth resource seeding or schema check did not complete; every auth request will fail with this error until the process restarts",
+		err,
+	);
 });

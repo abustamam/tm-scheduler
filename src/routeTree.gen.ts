@@ -29,6 +29,7 @@ import { Route as AuthedNextRouteImport } from './routes/_authed/next'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
+import { Route as DotwellKnownSplatRouteImport } from './routes/[.]well-known.$'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
 import { Route as AuthedSuperadminIndexRouteImport } from './routes/_authed/superadmin/index'
 import { Route as AuthedMeetingsIndexRouteImport } from './routes/_authed/meetings.index'
@@ -169,6 +170,11 @@ const AuthedActivityRoute = AuthedActivityRouteImport.update({
   id: '/activity',
   path: '/activity',
   getParentRoute: () => AuthedRoute,
+} as any)
+const DotwellKnownSplatRoute = DotwellKnownSplatRouteImport.update({
+  id: '/.well-known/$',
+  path: '/.well-known/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ClubClubIdIndexRoute = ClubClubIdIndexRouteImport.update({
   id: '/',
@@ -389,6 +395,7 @@ export interface FileRoutesByFullPath {
   '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
   '/unsubscribe': typeof UnsubscribeRoute
+  '/.well-known/$': typeof DotwellKnownSplatRoute
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
@@ -450,6 +457,7 @@ export interface FileRoutesByTo {
   '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
   '/unsubscribe': typeof UnsubscribeRoute
+  '/.well-known/$': typeof DotwellKnownSplatRoute
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
@@ -511,6 +519,7 @@ export interface FileRoutesById {
   '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
   '/unsubscribe': typeof UnsubscribeRoute
+  '/.well-known/$': typeof DotwellKnownSplatRoute
   '/_authed/activity': typeof AuthedActivityRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/me': typeof AuthedMeRoute
@@ -574,6 +583,7 @@ export interface FileRouteTypes {
     | '/claim'
     | '/signin'
     | '/unsubscribe'
+    | '/.well-known/$'
     | '/activity'
     | '/dashboard'
     | '/me'
@@ -635,6 +645,7 @@ export interface FileRouteTypes {
     | '/claim'
     | '/signin'
     | '/unsubscribe'
+    | '/.well-known/$'
     | '/activity'
     | '/dashboard'
     | '/me'
@@ -695,6 +706,7 @@ export interface FileRouteTypes {
     | '/claim'
     | '/signin'
     | '/unsubscribe'
+    | '/.well-known/$'
     | '/_authed/activity'
     | '/_authed/dashboard'
     | '/_authed/me'
@@ -758,6 +770,7 @@ export interface RootRouteChildren {
   ClaimRoute: typeof ClaimRoute
   SigninRoute: typeof SigninRoute
   UnsubscribeRoute: typeof UnsubscribeRoute
+  DotwellKnownSplatRoute: typeof DotwellKnownSplatRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMcpRoute: typeof ApiMcpRoute
@@ -920,6 +933,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/activity'
       preLoaderRoute: typeof AuthedActivityRouteImport
       parentRoute: typeof AuthedRoute
+    }
+    '/.well-known/$': {
+      id: '/.well-known/$'
+      path: '/.well-known/$'
+      fullPath: '/.well-known/$'
+      preLoaderRoute: typeof DotwellKnownSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/club/$clubId/': {
       id: '/club/$clubId/'
@@ -1312,6 +1332,7 @@ const rootRouteChildren: RootRouteChildren = {
   ClaimRoute: ClaimRoute,
   SigninRoute: SigninRoute,
   UnsubscribeRoute: UnsubscribeRoute,
+  DotwellKnownSplatRoute: DotwellKnownSplatRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiMcpRoute: ApiMcpRoute,

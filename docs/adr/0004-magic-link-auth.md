@@ -21,3 +21,12 @@ at `src/routes/api/auth/$.ts`.
   (e.g. Resend / SES) must be wired before production** (tracked as a Phase-2 / pre-launch
   issue).
 - Requires `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` in the environment.
+
+## Extended by ADR-0027
+
+`docs/adr/0027-oauth-authorization-server-for-mcp.md` (#842) makes the same Better Auth
+instance an OAuth 2.1 authorization server, so claude.ai can reach `/api/mcp` from
+Anthropic's cloud. "No OAuth" above stays true of **sign-in**: OAuth authorizes a *client*
+against a session the person already has, and an authorization that finds no session lands
+on `/signin` and the same magic link. What changes is that GavelUp now also issues access
+tokens — a second credential type, with its own lifetime and revocation surface.
