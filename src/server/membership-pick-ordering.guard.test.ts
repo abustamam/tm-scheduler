@@ -1,5 +1,6 @@
 /**
- * A FIFTH copy of the membership pick must not arrive unordered (#804).
+ * A FIFTH membership pick must not arrive unordered (#804), and every pick
+ * orders by the ONE shared definition (#838).
  *
  * `people.user_id` carries only a plain non-unique index (`people_user_idx`),
  * so one human reachable through two Person rows in one club is representable
@@ -9,14 +10,22 @@
  * deliberately, because routing the hot path through the guard resolver would
  * change its cost and its returned shape. #822 then found two more and copied
  * it again, for its own reason (`guards.ts` imports Better-Auth, which the
- * Pathways modules cannot pull in). Four sites carrying one order is a
- * decision; a FIFTH arriving silently is how #804 happened in the first place,
- * and the gap was four months.
+ * Pathways modules cannot pull in). #838 replaced the four copies with one
+ * import, `membershipPickOrder()` (`membership-pick-order.ts`), so the order can
+ * no longer drift between authorization and attribution. A FIFTH pick arriving
+ * silently is how #804 happened in the first place, and the gap was four months.
  *
  * So this sweeps for the SHAPE rather than for a name: any statement that
  * resolves `people.user_id` to a `members` row and keeps ONE of them must
- * carry an `ORDER BY`. That is the property — not which keys, which is the
- * business rule the two integration suites assert against real rows.
+ * carry an `ORDER BY`, and that `ORDER BY` must be the shared one. Which keys
+ * the shared one holds is the business rule the two integration suites assert
+ * against real rows, and `membership-pick-order.test.ts` pins in SQL.
+ *
+ * The two rules are separate on purpose. "Ordered" still keys on `.orderBy(`
+ * being present at all, so dropping a site's order is reported as an UNORDERED
+ * pick (the #804 defect) rather than folded into "not the shared order" — the
+ * second rule is what refuses a hand-written copy, which is how drift would
+ * come back.
  *
  * Deliberately narrow, to stay honest rather than large. It says nothing about
  * queries that fan out over every linked Person (`userPersonIds`,
@@ -59,6 +68,21 @@ const SERVER = resolve(ROOT, "src/server");
  */
 const FILED: Record<string, string> = {};
 
+/**
+ * Ordered picks that deliberately do NOT use the shared membership order, each
+ * with its reason. Not debt, unlike `FILED`: these pick a membership only as a
+ * route to a Person-level value, and order by the PERSON so they agree with
+ * `resolveUserPersonId` rather than with the authorization pick.
+ *
+ * Kept honest the same way as `FILED`: an entry the sweep no longer finds, one
+ * that now uses the shared order, or one on an unordered pick is reported
+ * (`staleOwnOrders`).
+ */
+const OWN_ORDER: Record<string, string> = {
+	"src/server/auth-context-person-logic.ts:loadPersonDisplayName":
+		"a display NAME, not a membership: tie-broken on people.createdAt/id to match resolveUserPersonId (#707)",
+};
+
 /** Every `*.ts` under `src/server`, recursively, excluding tests. */
 function sourceFiles(dir: string): string[] {
 	const out: string[] = [];
@@ -77,6 +101,16 @@ interface Pick {
 	key: string;
 	where: string;
 	ordered: boolean;
+	/** Orders by the shared `membershipPickOrder()` (#838), not a local copy. */
+	shared: boolean;
+	/**
+	 * Left-joins `officerTerms` ON the shared `membershipPickOpenTermJoin()`.
+	 * Key 3 of the shared order COUNTS rows of that join, so the order is only
+	 * the shared order when the join is the shared join too: a hand-written
+	 * join that drops `isNull(termEnd)` counts closed terms under an ORDER BY
+	 * that looks correct.
+	 */
+	joined: boolean;
 }
 
 /**
@@ -146,6 +180,14 @@ function unorderedPicks(src: string, rel: string): Pick[] {
 				key: `${rel}:${fn}`,
 				where: `${rel}:${line} (${fn})`,
 				ordered: stmt.includes(".orderBy("),
+				// `,?` so a formatter's trailing comma on a wrapped call still matches.
+				shared: /\.orderBy\(\s*\.\.\.membershipPickOrder\(\)\s*,?\s*\)/.test(
+					stmt,
+				),
+				joined:
+					/\.leftJoin\(\s*officerTerms\s*,\s*membershipPickOpenTermJoin\(\)\s*,?\s*\)/.test(
+						stmt,
+					),
 			});
 		}
 		i = src.indexOf("eq(people.userId", i + 1);
@@ -205,6 +247,47 @@ function staleWaivers(picks: Pick[], filed: Record<string, string>): string[] {
 }
 
 /**
+ * Picks on the shared ORDER without the shared JOIN. A function, like the
+ * waiver rules, so the synthetic sweep below exercises the same code the real
+ * tree is judged by — on a clean tree this returns `[]` whatever it says.
+ */
+function unjoinedSharedPicks(picks: Pick[]): string[] {
+	return picks.filter((p) => p.shared && !p.joined).map((p) => p.where);
+}
+
+/**
+ * `OWN_ORDER` entries that no longer describe ONE deliberate, different order.
+ *
+ * Keyed `<file>:<fn>` like `FILED`, so the same leak applies: a second pick
+ * landing inside an exempt function would inherit the exemption. So an entry
+ * must cover exactly one statement, which is checked before anything else.
+ */
+function staleOwnOrders(
+	picks: Pick[],
+	ownOrder: Record<string, string>,
+): string[] {
+	const out: string[] = [];
+	for (const key of Object.keys(ownOrder)) {
+		const under = picks.filter((p) => p.key === key);
+		const pick = under[0];
+		if (under.length > 1) {
+			out.push(
+				`OWN_ORDER exempts ONE statement under ${key}, and the sweep found ${under.length}`,
+			);
+		} else if (!pick) {
+			out.push(`OWN_ORDER names ${key}, which the sweep no longer finds`);
+		} else if (pick.shared) {
+			out.push(`${key} uses the shared order now — drop it from OWN_ORDER`);
+		} else if (!pick.ordered) {
+			out.push(
+				`${key} is not ordered at all — OWN_ORDER is for a deliberate different order`,
+			);
+		}
+	}
+	return out;
+}
+
+/**
  * One `unorderedPicks`-visible statement, for the synthetic sweeps the tests
  * below run their rules over. Shaped like the real picks: destructured,
  * selecting out of `members`, resolving `people.user_id`.
@@ -217,16 +300,32 @@ function staleWaivers(picks: Pick[], filed: Record<string, string>): string[] {
  */
 function pickStatement(opts: {
 	binding: string;
-	ordered?: boolean;
+	/** `true` for a local order, `"shared"` for the #838 spread. */
+	ordered?: boolean | "shared";
+	/**
+	 * The `officerTerms` join: `"shared"` for `membershipPickOpenTermJoin()`,
+	 * `"inline"` for a hand-written one with no `isNull(termEnd)`. Defaults to
+	 * `"shared"` alongside a shared order, and to none otherwise.
+	 */
+	join?: "shared" | "inline" | "none";
 	/** `false` for the pre-#822 shape: one row kept with no `.limit(1)` at all. */
 	limit?: boolean;
 }): string {
-	const chain = [
-		"\t\t.select({ id: members.id })",
-		"\t\t.from(members)",
-		"\t\t.where(and(eq(people.userId, userId)))",
-	];
-	if (opts.ordered) chain.push("\t\t.orderBy(members.createdAt, members.id)");
+	const chain = ["\t\t.select({ id: members.id })", "\t\t.from(members)"];
+	const join = opts.join ?? (opts.ordered === "shared" ? "shared" : "none");
+	if (join === "shared") {
+		chain.push("\t\t.leftJoin(officerTerms, membershipPickOpenTermJoin())");
+	} else if (join === "inline") {
+		chain.push(
+			"\t\t.leftJoin(officerTerms, eq(officerTerms.membershipId, members.id))",
+		);
+	}
+	chain.push("\t\t.where(and(eq(people.userId, userId)))");
+	if (opts.ordered === "shared") {
+		chain.push("\t\t.orderBy(...membershipPickOrder())");
+	} else if (opts.ordered) {
+		chain.push("\t\t.orderBy(members.createdAt, members.id)");
+	}
 	if (opts.limit ?? true) chain.push("\t\t.limit(1)");
 	// The `;` goes on whatever the last link is: a drizzle chain carries no
 	// terminator of its own, and the detector slices to the first one.
@@ -272,8 +371,131 @@ describe("single-row membership picks are ordered (#804)", () => {
 			.map((p) => p.where);
 		expect(
 			offenders,
-			`These keep ONE membership row out of a people.user_id lookup with no ORDER BY, so which row they get is arbitrary — the defect #471 fixed in getMembership and #804 fixed in resolveAdminGrant. Copy the five-key order from guards.ts (active, admin, open officer terms, oldest, id), or add "<file>:<fn>" to FILED with the issue that owns it.`,
+			`These keep ONE membership row out of a people.user_id lookup with no ORDER BY, so which row they get is arbitrary — the defect #471 fixed in getMembership and #804 fixed in resolveAdminGrant. Order by membershipPickOrder() from membership-pick-order.ts (active, admin, open officer terms, oldest, id), or add "<file>:<fn>" to FILED with the issue that owns it.`,
 		).toEqual([]);
+	});
+
+	it("every ordered pick uses the SHARED order, not a copy of it (#838)", () => {
+		// No waiver list: a pick that is ordered but not by the shared definition
+		// is the drift #838 removed, and there is no reason to file one.
+		const copies = picks
+			.filter((p) => p.ordered && !p.shared && !OWN_ORDER[p.key])
+			.map((p) => p.where);
+		expect(
+			copies,
+			"These order a people.user_id membership pick by something other than `.orderBy(...membershipPickOrder())`. Four copies of one order were how authorization and attribution could drift apart; import it from membership-pick-order.ts.",
+		).toEqual([]);
+		expect(
+			staleOwnOrders(picks, OWN_ORDER),
+			"An OWN_ORDER entry must cover ONE statement, still be found, and still order by something other than the shared definition.",
+		).toEqual([]);
+		// The shared order counts rows of the shared join; with any other join
+		// it is a different order under the same spelling.
+		expect(
+			unjoinedSharedPicks(picks),
+			"These order by membershipPickOrder() without `.leftJoin(officerTerms, membershipPickOpenTermJoin())`. Key 3 counts that join's rows, so a hand-written join (one missing isNull(termEnd) counts CLOSED terms) silently changes the order.",
+		).toEqual([]);
+		// Non-vacuous on the real tree: the four named sites are found, shared
+		// AND joined.
+		expect(picks.filter((p) => p.shared && p.joined).map((p) => p.key)).toEqual(
+			expect.arrayContaining([
+				"src/server/guards.ts:getMembership",
+				"src/server/meeting-authz-logic.ts:resolveAdminGrant",
+				"src/server/project-picker-logic.ts:viewerMaySeeProgress",
+				"src/server/progress-marks-logic.ts:selfMemberIdInClub",
+			]),
+		);
+
+		// The rule itself, on a synthetic sweep carrying all three shapes: a local
+		// copy (reported), the shared spread (clean), and no order at all — which
+		// is NOT this rule's to report, because the unordered rule above owns it.
+		const src = [
+			"export async function localCopy(userId: string) {",
+			pickStatement({ binding: "m", ordered: true }),
+			"\treturn m?.id ?? null;",
+			"}",
+			"",
+			"export async function sharedOrder(userId: string) {",
+			pickStatement({ binding: "n", ordered: "shared" }),
+			"\treturn n?.id ?? null;",
+			"}",
+			"",
+			"export async function noOrder(userId: string) {",
+			pickStatement({ binding: "o" }),
+			"\treturn o?.id ?? null;",
+			"}",
+			"",
+			// The review's case: the shared order over a hand-written join that
+			// drops `isNull(termEnd)`, so key 3 counts closed terms.
+			"export async function sharedOrderInlineJoin(userId: string) {",
+			pickStatement({ binding: "p", ordered: "shared", join: "inline" }),
+			"\treturn p?.id ?? null;",
+			"}",
+			"",
+			// A formatter-wrapped call with a trailing comma is still the shared
+			// order and the shared join.
+			"export async function trailingComma(userId: string) {",
+			"\tconst [q] = await db",
+			"\t\t.select({ id: members.id })",
+			"\t\t.from(members)",
+			"\t\t.leftJoin(",
+			"\t\t\tofficerTerms,",
+			"\t\t\tmembershipPickOpenTermJoin(),",
+			"\t\t)",
+			"\t\t.where(and(eq(people.userId, userId)))",
+			"\t\t.orderBy(",
+			"\t\t\t...membershipPickOrder(),",
+			"\t\t)",
+			"\t\t.limit(1);",
+			"\treturn q?.id ?? null;",
+			"}",
+		].join("\n");
+		const got = unorderedPicks(src, "src/server/synthetic.ts");
+		expect(got.map((p) => [p.key, p.ordered, p.shared, p.joined])).toEqual([
+			["src/server/synthetic.ts:localCopy", true, false, false],
+			["src/server/synthetic.ts:sharedOrder", true, true, true],
+			["src/server/synthetic.ts:noOrder", false, false, false],
+			["src/server/synthetic.ts:sharedOrderInlineJoin", true, true, false],
+			["src/server/synthetic.ts:trailingComma", true, true, true],
+		]);
+		// The join rule over the same sweep reports exactly the inline-join pick.
+		expect(unjoinedSharedPicks(got)).toEqual([
+			"src/server/synthetic.ts:32 (sharedOrderInlineJoin)",
+		]);
+		// ...and the OWN_ORDER staleness rule over the same sweep: a live entry is
+		// clean; one now on the shared order, one the sweep cannot find, and one
+		// on an UNORDERED pick are each reported.
+		expect(
+			staleOwnOrders(got, { "src/server/synthetic.ts:localCopy": "why" }),
+		).toEqual([]);
+		expect(
+			staleOwnOrders(got, {
+				"src/server/synthetic.ts:sharedOrder": "why",
+				"src/server/synthetic.ts:gone": "why",
+				"src/server/synthetic.ts:noOrder": "why",
+			}),
+		).toEqual([
+			"src/server/synthetic.ts:sharedOrder uses the shared order now — drop it from OWN_ORDER",
+			"OWN_ORDER names src/server/synthetic.ts:gone, which the sweep no longer finds",
+			"src/server/synthetic.ts:noOrder is not ordered at all — OWN_ORDER is for a deliberate different order",
+		]);
+		// ONE statement per exemption: a second pick landing inside an exempt
+		// function must not inherit it, even when the first is a valid own order.
+		const twoUnderOneExempt = [
+			"export async function exemptPick(userId: string) {",
+			pickStatement({ binding: "m", ordered: true }),
+			pickStatement({ binding: "n" }),
+			"\treturn m?.id ?? n?.id ?? null;",
+			"}",
+		].join("\n");
+		expect(
+			staleOwnOrders(
+				unorderedPicks(twoUnderOneExempt, "src/server/synthetic.ts"),
+				{ "src/server/synthetic.ts:exemptPick": "why" },
+			),
+		).toEqual([
+			"OWN_ORDER exempts ONE statement under src/server/synthetic.ts:exemptPick, and the sweep found 2",
+		]);
 	});
 
 	it("a waiver covers ONE pick, so a new one cannot inherit it", () => {
