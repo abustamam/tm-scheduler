@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { MarketingShell } from "#/components/marketing/marketing-shell";
-import { FOUNDER_BLURB } from "#/lib/brand";
+import { CONTACT_MAILTO, FOUNDER_BLURB } from "#/lib/brand";
 
 const TITLE = "About GavelUp";
 const DESCRIPTION =
@@ -89,6 +89,27 @@ function AboutPage() {
 							<li key={fact}>{fact}</li>
 						))}
 					</ul>
+				</section>
+
+				<section aria-labelledby="about-contact" className="mt-10">
+					<h2
+						id="about-contact"
+						className="font-display text-2xl font-semibold tracking-[-0.01em]"
+					>
+						Get in touch
+					</h2>
+					<p className="mt-3 text-base leading-relaxed">
+						GavelUp is invite-only for now. To bring it to your club or
+						district,{" "}
+						<Link to="/request-access" className="font-semibold underline">
+							request access
+						</Link>
+						. For anything else,{" "}
+						<a href={CONTACT_MAILTO} className="font-semibold underline">
+							email us
+						</a>
+						.
+					</p>
 				</section>
 			</main>
 		</MarketingShell>

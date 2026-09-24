@@ -4,9 +4,13 @@
 // says exactly the confirmed blurb and nothing more, and that the data section
 // describes rather than promises. The disclaimer is the marketing guard's
 // (`marketing-disclaimer.guard.test.ts`), which enrols this route by content.
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { FOUNDER_BLURB, TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import {
+	CONTACT_MAILTO,
+	FOUNDER_BLURB,
+	TOASTMASTERS_DISCLAIMER,
+} from "#/lib/brand";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 import { Route } from "./about";
 
@@ -56,5 +60,18 @@ describe("/about", () => {
 		for (const banned of [/\bnever\b/i, /\bsell/i, /\bguarantee/i]) {
 			expect(text).not.toMatch(banned);
 		}
+	});
+
+	it("points 'Get in touch' at the request form and the contact address", async () => {
+		await mount();
+		const section = within(sectionFor("Get in touch"));
+		expect(
+			section
+				.getByRole("link", { name: "request access" })
+				.getAttribute("href"),
+		).toBe("/request-access");
+		expect(
+			section.getByRole("link", { name: "email us" }).getAttribute("href"),
+		).toBe(CONTACT_MAILTO);
 	});
 });
