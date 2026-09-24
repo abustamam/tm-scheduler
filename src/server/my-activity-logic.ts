@@ -65,7 +65,7 @@ export interface SpeechLog {
  * speech HAS an evaluator slot (`hasEvaluatorSlot`), which is what lets an
  * upcoming speech say "Evaluator not yet assigned".
  */
-const HELD_EVALUATOR_STATUSES: ReadonlySet<string> = new Set([
+const HELD_EVALUATOR_STATUSES: ReadonlySet<SpeechLogRow["status"]> = new Set([
 	"claimed",
 	"confirmed",
 ]);
@@ -173,16 +173,14 @@ export async function loadSpeechLog(
 		);
 
 	// Step 3: group in JS.
-	const bySpeech = new Map<
-		string,
-		{ hasSlot: boolean; evaluators: Map<string, SpeechLogEvaluator> }
-	>();
+	// A key's PRESENCE is `hasEvaluatorSlot`; its map is the held evaluators.
+	const bySpeech = new Map<string, Map<string, SpeechLogEvaluator>>();
 	for (const e of evaluatorRows) {
 		if (!e.evaluatesSlotId) continue;
-		let entry = bySpeech.get(e.evaluatesSlotId);
-		if (!entry) {
-			entry = { hasSlot: true, evaluators: new Map() };
-			bySpeech.set(e.evaluatesSlotId, entry);
+		let held = bySpeech.get(e.evaluatesSlotId);
+		if (!held) {
+			held = new Map();
+			bySpeech.set(e.evaluatesSlotId, held);
 		}
 		if (!HELD_EVALUATOR_STATUSES.has(e.status)) continue;
 		const name = e.memberName ?? e.guestName;
@@ -195,7 +193,7 @@ export async function loadSpeechLog(
 				? `g:${e.guestId}`
 				: null;
 		if (name === null || key === null) continue;
-		entry.evaluators.set(key, {
+		held.set(key, {
 			name,
 			isGuest: e.memberName === null,
 		});
@@ -203,15 +201,13 @@ export async function loadSpeechLog(
 
 	return {
 		rows: speechRows.map((r) => {
-			const entry = bySpeech.get(r.slotId);
+			const held = bySpeech.get(r.slotId);
 			return {
 				...r,
-				evaluators: entry
-					? [...entry.evaluators.values()].sort((a, b) =>
-							a.name.localeCompare(b.name),
-						)
+				evaluators: held
+					? [...held.values()].sort((a, b) => a.name.localeCompare(b.name))
 					: [],
-				hasEvaluatorSlot: entry?.hasSlot ?? false,
+				hasEvaluatorSlot: held !== undefined,
 			};
 		}),
 		truncated,
@@ -221,6 +217,14 @@ export async function loadSpeechLog(
 /**
  * The signed-in user's speech history across EVERY club they belong to.
  * Backs the dashboard speech log. No linked membership ⇒ empty log.
+ *
+ * LAPSED MEMBERSHIPS COUNT, deliberately — this is not a missing gate.
+ * `userMemberIds` skips the `members.status = 'active'` filter the club
+ * switcher applies (#437): a membership going inactive does not un-give the
+ * speeches, so a former member still sees their own history, and the
+ * evaluators of it, from that club. What IS excluded is an ARCHIVED club (the
+ * `archived_at` predicate in `loadSpeechLog`), because archiving is a platform
+ * takedown rather than a change in the user's own standing.
  */
 export async function loadMySpeechLog(
 	userId: string,

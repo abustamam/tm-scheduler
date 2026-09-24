@@ -18,6 +18,7 @@ import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
+import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -47,7 +48,7 @@ import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	speechLogEvaluatorLabel,
 	validateSpeechLogSearch,
-} from "#/lib/speech-log-evaluator";
+} from "#/lib/speech-log";
 import {
 	SPEECH_SCHEDULE_STATE_LABELS,
 	type SpeechScheduleState,
@@ -362,23 +363,10 @@ function MemberDetail() {
 							);
 						})
 					)}
-					{speechLogTruncated || allSpeeches ? (
-						<div className="border-t border-[var(--line)] px-5 py-2.5 text-right text-xs">
-							{allSpeeches ? (
-								<Link to="/members/$id" params={{ id: member.id }} search={{}}>
-									Show recent
-								</Link>
-							) : (
-								<Link
-									to="/members/$id"
-									params={{ id: member.id }}
-									search={{ speeches: "all" }}
-								>
-									Show all
-								</Link>
-							)}
-						</div>
-					) : null}
+					<SpeechLogToggle
+						truncated={speechLogTruncated}
+						allSpeeches={allSpeeches}
+					/>
 				</div>
 
 				{/* Side cards */}

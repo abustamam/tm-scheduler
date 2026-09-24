@@ -3,6 +3,7 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import { speechLogEvaluatorNames } from "#/lib/speech-log";
 import { loadClubMembers, loadMemberProfile } from "./club-logic";
 import { requireClubViewAccess, requireUser } from "./guards";
 import { loadMySpeechLog, loadSpeechLog } from "./my-activity-logic";
@@ -200,14 +201,15 @@ export const getMemberProfile = createServerFn({ method: "GET" })
  *
  * TWO RESPONSE SHAPES, keyed on whether an input was sent, and that is the
  * stale-tab contract rather than an accident. Before #681 this fn took no input
- * and returned a bare `SpeechLogRow[]`, which the dashboard loader `.map`s. A
- * tab loaded before the deploy keeps calling it with no input, so it still gets
- * that bare array of the newest 6 — an object there would throw in the old
- * render (`speeches.map is not a function`) and blank the dashboard instead of
- * merely losing the evaluator text. The current dashboard always sends an
- * input, and gets the rows plus `speechLogTruncated` for its "Show all" link.
- * The method stays GET for the same reason (CLAUDE.md: a server fn's method is
- * part of its wire contract).
+ * and returned a bare `SpeechLogRow[]` whose rows carried `evaluatorName`, and
+ * the dashboard loader `.map`s it. A tab loaded before the deploy keeps calling
+ * it with no input, so it still gets that bare array of the newest 6, each row
+ * still carrying `evaluatorName`. An object there would throw in the old render
+ * (`speeches.map is not a function`) and blank the dashboard. The current
+ * dashboard always sends an input, and gets the rows plus `speechLogTruncated`
+ * for its "Show all" link. `list-my-speeches-stale-tab.guard.test.ts` pins both
+ * halves. The method stays GET for the same reason (CLAUDE.md: a server fn's
+ * method is part of its wire contract).
  */
 export const listMySpeeches = createServerFn({ method: "GET" })
 	.validator((input: unknown) =>
@@ -219,6 +221,14 @@ export const listMySpeeches = createServerFn({ method: "GET" })
 			currentUser.id,
 			data?.allSpeeches ? null : SPEECH_LOG_DEFAULT_LIMIT,
 		);
-		if (data === undefined) return rows;
+		// Legacy shape for a pre-#681 tab: a bare array, and each row still
+		// carries `evaluatorName` (the field that render reads) so the stale
+		// dashboard keeps showing the evaluator rather than silently dropping it.
+		if (data === undefined) {
+			return rows.map((r) => ({
+				...r,
+				evaluatorName: speechLogEvaluatorNames(r.evaluators),
+			}));
+		}
 		return { speeches: rows, speechLogTruncated: truncated };
 	});

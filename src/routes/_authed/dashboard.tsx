@@ -8,11 +8,12 @@ import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resour
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { SpeechLogDate } from "#/components/speech-log-date";
+import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { formatMeetingDate } from "#/lib/format";
 import {
 	speechLogEvaluatorLabel,
 	validateSpeechLogSearch,
-} from "#/lib/speech-log-evaluator";
+} from "#/lib/speech-log";
 import {
 	SPEECH_SCHEDULE_STATE_LABELS,
 	type SpeechScheduleState,
@@ -341,33 +342,6 @@ function Dashboard() {
 				</div>
 			</div>
 		</PageContainer>
-	);
-}
-
-/**
- * The speech log's footer link (#681): "Show all" when the default window cut
- * speeches off, "Show recent" once `?speeches=all` is set, nothing otherwise.
- */
-function SpeechLogToggle({
-	truncated,
-	allSpeeches,
-}: {
-	truncated: boolean;
-	allSpeeches: boolean;
-}) {
-	if (!truncated && !allSpeeches) return null;
-	return (
-		<div className="border-t border-[var(--line)] px-5 py-2.5 text-right text-xs">
-			{allSpeeches ? (
-				<Link to="/dashboard" search={{}}>
-					Show recent
-				</Link>
-			) : (
-				<Link to="/dashboard" search={{ speeches: "all" }}>
-					Show all
-				</Link>
-			)}
-		</div>
 	);
 }
 

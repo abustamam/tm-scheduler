@@ -1035,6 +1035,30 @@ describe.skipIf(!hasTestDb)("speech log evaluators (#681)", () => {
 		expect(rows[0].evaluators).toEqual([{ name: ADMIN_NAME, isGuest: false }]);
 	});
 
+	// A CLAIMED-only evaluator, whose identity is asserted on its own. The two
+	// fixtures above that use "claimed" pair it with a person who also holds a
+	// CONFIRMED slot, so dropping "claimed" from the held set left them green.
+	it("counts an evaluator who has only claimed the slot", async () => {
+		const [claimer] = await testDb
+			.insert(members)
+			.values({
+				clubId: club.clubId,
+				personId: await seedPerson({ name: `Cleo Claimer ${run}` }),
+				name: `Cleo Claimer ${run}`,
+				clubRole: "member",
+				status: "active",
+			})
+			.returning({ id: members.id });
+		const slotId = await speech(3, [
+			{ memberId: claimer.id, status: "claimed" },
+		]);
+		const { rows } = await log(6);
+		expect(rows.map((r) => r.slotId)).toEqual([slotId]);
+		expect(rows[0].evaluators).toEqual([
+			{ name: `Cleo Claimer ${run}`, isGuest: false },
+		]);
+	});
+
 	// The fan-out defect: the evaluator LEFT JOIN made the limit count pairs.
 	// Six speeches, the NEWEST with two evaluators; a pair-counting limit would
 	// return the doubled speech twice and drop the oldest.

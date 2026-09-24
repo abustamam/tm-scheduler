@@ -1,5 +1,8 @@
 /**
- * The evaluator line of one speech-log row (#681), in one place.
+ * Speech-log helpers shared by the dashboard and the member profile (#681):
+ * the evaluator line of one row, and the `?speeches=all` search validator.
+ *
+ * The evaluator line, in one place.
  *
  * Both speech logs render it — the dashboard's (every club the user is in) and
  * the member profile's (one club) — and before this module each wrote its own
@@ -23,6 +26,19 @@ function joinNames(names: string[]): string {
 }
 
 /**
+ * Every held evaluator as one display string ("Ana and Jane Doe (guest)"), or
+ * `null` for none. The label below builds on it, and `listMySpeeches` sends it
+ * as the legacy `evaluatorName` to a tab loaded before #681 deployed.
+ */
+export function speechLogEvaluatorNames(
+	evaluators: SpeechLogEvaluator[],
+): string | null {
+	return evaluators.length === 0
+		? null
+		: joinNames(evaluators.map(displayName));
+}
+
+/**
  * What the row says about its evaluator, or `null` for nothing at all.
  *
  * - past, held: `Evaluated by Ana` / `Evaluated by Ana and Jane Doe (guest)`
@@ -42,7 +58,7 @@ export function speechLogEvaluatorLabel(input: {
 }): string | null {
 	const { evaluators, hasEvaluatorSlot, isUpcoming } = input;
 	if (evaluators.length > 0) {
-		const names = joinNames(evaluators.map(displayName));
+		const names = speechLogEvaluatorNames(evaluators);
 		if (!isUpcoming) return `Evaluated by ${names}`;
 		return `${evaluators.length === 1 ? "Evaluator" : "Evaluators"}: ${names}`;
 	}

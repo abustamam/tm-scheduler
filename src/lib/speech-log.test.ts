@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { speechLogEvaluatorLabel } from "./speech-log-evaluator";
+import { speechLogEvaluatorLabel, speechLogEvaluatorNames } from "./speech-log";
 
 const ana = { name: "Ana", isGuest: false };
 const bo = { name: "Bo", isGuest: false };
@@ -97,5 +97,18 @@ describe("speechLogEvaluatorLabel (#681)", () => {
 				isUpcoming,
 			}),
 		).toBeNull();
+	});
+});
+
+// The legacy `evaluatorName` a pre-#681 tab reads (see `listMySpeeches`).
+describe("speechLogEvaluatorNames (#681)", () => {
+	it("is null with no evaluators", () => {
+		expect(speechLogEvaluatorNames([])).toBeNull();
+	});
+
+	it("joins every held evaluator, guests suffixed", () => {
+		expect(speechLogEvaluatorNames([ana, jane])).toBe(
+			"Ana and Jane Doe (guest)",
+		);
 	});
 });
