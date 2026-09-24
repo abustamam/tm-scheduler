@@ -12,8 +12,11 @@
  *
  * **Agreement is the property, not stability.** A wrong-but-consistent pick is
  * stable, and every case here that can name a specific membership also asserts
- * `getMembership` names the same one — which is what fails if only one of the
- * two deliberately-duplicated orderings is ever changed.
+ * `getMembership` names the same one. Since #838 both order by the one shared
+ * `membershipPickOrder()` (`membership-pick-order.ts`), so there are no longer
+ * two orderings to drift apart; agreement is still asserted, because the two
+ * QUERIES remain separate (different joins, grouping and shape), and a join or
+ * grouping change in one could still make them disagree.
  *
  * Two observables. `allowed`/`via` is the authorization answer, and
  * `actorMemberId` is the membership `logActivity` credits the write to (#396),
@@ -60,7 +63,7 @@ const {
 	resolveWordOfTheDayAuthz,
 } = await import("./meeting-authz-logic");
 // The reference ordering. Imported so agreement is ASSERTED rather than assumed
-// from the two queries looking alike — they are separate copies by design.
+// from the two queries looking alike — they share an ORDER (#838), not a query.
 const { getMembership } = await import("./guards");
 
 describe.skipIf(!hasTestDb)(
@@ -300,8 +303,9 @@ describe.skipIf(!hasTestDb)(
 		// this file exercised it (`termEnd` appeared zero times). The closed-term
 		// row is written FIRST and ties on every key above: drop the predicate and
 		// both count 1, the tie falls to `created_at`, and the closed-term row wins.
-		// The same case exists in `membership-resolution.integration.test.ts`, but
-		// that one gates `getMembership`'s copy of the order, not this one.
+		// The same case exists in `membership-resolution.integration.test.ts`
+		// through `getMembership`; both read the shared join condition (#838), and
+		// this one gates it through the resolver that grants.
 		it("ignores a CLOSED officer term when ranking", async () => {
 			const closedTerm = await addMembership({
 				clubRole: "admin",
@@ -359,10 +363,11 @@ describe.skipIf(!hasTestDb)(
 		// property of the plan, not a guarantee, which is why the key stays — but
 		// a comment claiming this case pins it would have been false.
 		//
-		// What it DOES pin is the thing the copy costs: flipping `getMembership`'s
-		// terminator to `desc(members.id)` — the two orderings drifting apart on
-		// one key — fails THIS case and nothing else in the file. It is the gate on
-		// "the two orderings must move together", not on the terminator itself.
+		// Before #838 it pinned what the COPY cost: flipping only `getMembership`'s
+		// terminator to `desc(members.id)` failed this case and nothing else. There
+		// is one terminator now, so that drift is unrepresentable; the key itself
+		// is pinned as rendered SQL by `membership-pick-order.test.ts`, which does
+		// not depend on the plan Postgres picks.
 		it("is total: a created_at tie still resolves, on the primary key", async () => {
 			const sameInstant = new Date("2026-03-01T00:00:00.000Z");
 			const descendingIds = [

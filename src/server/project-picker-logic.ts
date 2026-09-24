@@ -9,7 +9,7 @@
  * A `-logic.ts` so `#/db` never leaks into the client bundle (server-modules
  * guard). Never imported by client code.
  */
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	bcmProjectProgress,
@@ -25,6 +25,10 @@ import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
 import { cap } from "#/lib/cap";
 import { defaultOpenLevel, levelLabel } from "#/lib/pathways-catalog";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
+import {
+	membershipPickOpenTermJoin,
+	membershipPickOrder,
+} from "./membership-pick-order";
 import { userPersonIds } from "./person-identity-logic";
 
 export interface PickerProject {
@@ -229,8 +233,9 @@ export async function resolveMemberSubject(
  * That module imports Better-Auth, and `slots-logic.ts` imports this one for
  * `resolveProjectDisplay` — routing through it would drag the whole auth graph
  * into every suite that mocks only `#/db`, which hangs them. That reason is
- * about the IMPORT, not about the ordering, which is why the order below is
- * copied rather than the call being re-routed.
+ * about the IMPORT, not about the ordering, which is why the order below comes
+ * from `membership-pick-order.ts` (no db, no auth) rather than the call being
+ * re-routed.
  */
 export async function viewerMaySeeProgress(input: {
 	userId: string;
@@ -245,17 +250,10 @@ export async function viewerMaySeeProgress(input: {
 		.select({ clubRole: members.clubRole, status: members.status })
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
-		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
-		// Joined for the ORDER BY alone — the count is never selected, and an open
-		// term grants nothing here (this gate reads `clubRole`, not effective-admin).
-		// See the ordering note under the query.
-		.leftJoin(
-			officerTerms,
-			and(
-				eq(officerTerms.membershipId, members.id),
-				isNull(officerTerms.termEnd),
-			),
-		)
+		// Open terms only, joined for the ORDER BY alone (key 3) — the count is never selected, and
+		// an open term grants nothing here (this gate reads `clubRole`, not
+		// effective-admin).
+		.leftJoin(officerTerms, membershipPickOpenTermJoin())
 		.where(
 			and(eq(people.userId, input.userId), eq(members.clubId, input.clubId)),
 		)
@@ -263,26 +261,21 @@ export async function viewerMaySeeProgress(input: {
 		// functionally dependent on it and needs no explicit grouping. Nothing here
 		// crosses a join into another table's columns, so this one key is enough.
 		.groupBy(members.id)
-		// The SAME five-key total order `getMembership` carries (`guards.ts`), one of
-		// the two copies #822 adds after `resolveAdminGrant`'s (#821) — four sites,
-		// one order. This used to be a bare `.limit(1)`: `people.user_id` has only a
-		// plain non-unique index
-		// (`people_user_idx`), so one human reachable through two Person rows in one
-		// club is representable, and Postgres was free to return either. The same
-		// admin could see a member's Pathways completion marks on one request and a
-		// plainer picker on the next, with no change in data between them.
+		// The shared five-key total order (`membership-pick-order.ts`, #838), the
+		// same one `getMembership`, `resolveAdminGrant` and `selfMemberIdInClub`
+		// use. This used to be a bare `.limit(1)` (#822): `people.user_id` has only
+		// a plain non-unique index (`people_user_idx`), so one human reachable
+		// through two Person rows in one club is representable, and Postgres was
+		// free to return either. The same admin could see a member's Pathways
+		// completion marks on one request and a plainer picker on the next, with
+		// no change in data between them.
 		//
-		// Deliberately a COPY rather than a call into `getMembership` — but for a
-		// reason this file already had, and a different one from `resolveAdminGrant`:
-		// `guards.ts` imports Better-Auth and `slots-logic.ts` imports THIS module,
-		// so re-routing drags the auth graph into every suite mocking only `#/db`.
-		// See the docblock.
-		//
-		// ALL FOUR ORDERINGS MUST MOVE TOGETHER, and the reason each key is where it
-		// is written out once, over `getMembership` in `guards.ts` — read it there
-		// before touching any of them. `pathways-membership-pick.integration.test.ts`
-		// asserts this resolver and `getMembership` name the SAME membership on one
-		// fixture, which is what fails when only one of the copies changes.
+		// The ORDER is shared, not the call: `guards.ts` imports Better-Auth and
+		// `slots-logic.ts` imports THIS module, so re-routing through
+		// `getMembership` drags the auth graph into every suite mocking only
+		// `#/db`. The shared module imports neither. See the docblock.
+		// `pathways-membership-pick.integration.test.ts` asserts this resolver and
+		// `getMembership` name the SAME membership on one fixture.
 		//
 		// Key 1 is NOT what refuses a lapsed admin here — the `status === "active"`
 		// check below is, exactly as in `resolveAdminGrant`. MEASURED: swapping keys
@@ -294,13 +287,7 @@ export async function viewerMaySeeProgress(input: {
 		// ordering re-opens the bug on a single lapsed-admin membership, which is the
 		// only shape #822 was actually reachable in. One case gates that, and it is
 		// the one that needs no duplicate.
-		.orderBy(
-			sql`(${members.status} = 'active') desc`,
-			sql`(${members.clubRole} = 'admin') desc`,
-			desc(sql`count(${officerTerms.id})`),
-			members.createdAt,
-			members.id,
-		)
+		.orderBy(...membershipPickOrder())
 		.limit(1);
 	return membership?.status === "active" && membership.clubRole === "admin";
 }
