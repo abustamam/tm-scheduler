@@ -48,8 +48,12 @@
 #      `git checkout` people fell back to wiped a fix on #831. The baseline run
 #      below already proves the tree, edits and all, is green before mutating.
 #
-#   5. Paths are made absolute before the script moves to the repo root, so it
-#      can be run from a subdirectory without mutating or testing the wrong file.
+#   5. Paths are made absolute before the script moves to the repo root, so
+#      `scripts/mutate.sh` run from a subdirectory does not mutate or test the
+#      wrong file. `bun run mutate` cannot get this: Bun starts the script in
+#      the package root and passes no INIT_CWD, so the caller's directory is
+#      gone before this line runs. Through Bun, paths are repo-root-relative,
+#      and a miss says so rather than just "no such file".
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -67,7 +71,11 @@ else
 	MODE=perl; EXPR="$1"; LABEL="$2"; shift 2
 fi
 
-[ -f "$FILE" ] || die "no such file: $FILE"
+VIA_BUN=""
+[ -n "${npm_lifecycle_event:-}" ] && VIA_BUN="
+     (under \`bun run\` paths are relative to the repo root, whatever directory
+     you ran it from; run scripts/mutate.sh directly to use relative paths)"
+[ -f "$FILE" ] || die "no such file: $FILE$VIA_BUN"
 command -v perl >/dev/null || die "perl not found"
 
 # Guard 5 — absolute paths, so the cd below cannot retarget them.
@@ -75,7 +83,7 @@ abspath() { printf '%s/%s' "$(cd "$(dirname "$1")" && pwd)" "$(basename "$1")"; 
 FILE="$(abspath "$FILE")"
 TARGETS=()
 for t in "$@"; do
-	[ -e "$t" ] || die "no such test path: $t"
+	[ -e "$t" ] || die "no such test path: $t$VIA_BUN"
 	TARGETS+=("$(abspath "$t")")
 done
 
@@ -83,6 +91,11 @@ cd "$(git rev-parse --show-toplevel)" || die "not in a git repo"
 
 : "${TEST_DATABASE_URL:=postgresql://dev:dev@localhost:5432/tm_test}"
 export TEST_DATABASE_URL   # or ~630 integration tests silently skip and read green
+# The summary parse below greps plain text; an ANSI code between "Tests" and
+# the count would read as "collected NO tests". Vitest 4 does not colour that
+# line today, even under CI=true or FORCE_COLOR=1, but nothing promises it.
+export NO_COLOR=1
+unset FORCE_COLOR
 
 run_suite() {
 	if [ ${#TARGETS[@]} -eq 0 ]; then

@@ -76,6 +76,20 @@ describe("scripts/mutate.sh", () => {
 		expect(readFileSync(TARGET, "utf8")).toBe(TARGET_SRC);
 	}, 120_000);
 
+	it("under `bun run`, says a relative path from a subdirectory is read from the repo root", () => {
+		const env = Object.fromEntries(
+			Object.entries(process.env).filter(([k]) => !k.startsWith("VITEST")),
+		);
+		const r = spawnSync(
+			"bun",
+			["run", "mutate", "target.ts", "--literal", "a", "b", "l", "target.test.ts"],
+			{ cwd: DIR, env, encoding: "utf8" },
+		);
+		expect(r.status).not.toBe(0);
+		expect(`${r.stdout}${r.stderr}`).toContain("relative to the repo root");
+		expect(readFileSync(TARGET, "utf8")).toBe(TARGET_SRC);
+	}, 60_000);
+
 	it("aborts, rather than reporting, when --literal does not match exactly once", () => {
 		const r = mutate([TARGET, "--literal", '"x"', '"y"', "ambiguous", TEST]);
 		expect(r.code).not.toBe(0);
