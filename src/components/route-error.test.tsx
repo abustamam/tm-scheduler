@@ -17,7 +17,8 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
-import { renderToString } from "react-dom/server";
+import { hydrateRoot, type Root } from "react-dom/client";
+import { renderToReadableStream, renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RouteError } from "./route-error";
 
@@ -85,6 +86,13 @@ function makeRouter(opts: {
 		loader,
 		component: () => <p>Agenda loaded</p>,
 	});
+	const ssrRenderBoomRoute = createRoute({
+		getParentRoute: () => rootRoute,
+		path: "/club/$clubId/render-boom",
+		component: function AlwaysThrows(): never {
+			throw secretError();
+		},
+	});
 	const renderBoomRoute = createRoute({
 		getParentRoute: () => rootRoute,
 		path: "/render-boom",
@@ -97,6 +105,7 @@ function makeRouter(opts: {
 			boomRoute,
 			plainBoomRoute,
 			renderBoomRoute,
+			ssrRenderBoomRoute,
 		]),
 		history: createMemoryHistory({
 			initialEntries: [opts.at ?? "/club/thr/boom"],
@@ -193,15 +202,18 @@ describe("RouteError (#878)", () => {
 		expect(screen.queryByText("Something went wrong")).toBeNull();
 	});
 
-	it("links back to the club on a club route", async () => {
+	it("offers Back to club BESIDE Go home on a club route, never instead of it", async () => {
+		// When the club layout or the club page is what failed, "Back to club" is
+		// the page that just errored; "Go home" must still be there as the way out.
 		const { router } = makeRouter({ fails: Number.POSITIVE_INFINITY });
 		render(<RouterProvider router={router} />);
-		const link = await screen.findByRole("link", { name: "Back to club" });
-		expect(link.getAttribute("href")?.split("?")[0]).toBe("/club/thr");
-		expect(screen.queryByRole("link", { name: "Go home" })).toBeNull();
+		const club = await screen.findByRole("link", { name: "Back to club" });
+		expect(club.getAttribute("href")).toBe("/club/thr?view=roles&count=8");
+		const home = screen.getByRole("link", { name: "Go home" });
+		expect(home.getAttribute("href")).toBe("/");
 	});
 
-	it("links home when there is no club in the URL", async () => {
+	it("offers only Go home when there is no club in the URL", async () => {
 		const { router } = makeRouter({
 			fails: Number.POSITIVE_INFINITY,
 			at: "/boom",
@@ -209,6 +221,28 @@ describe("RouteError (#878)", () => {
 		render(<RouterProvider router={router} />);
 		const link = await screen.findByRole("link", { name: "Go home" });
 		expect(link.getAttribute("href")).toBe("/");
+		expect(screen.queryByRole("link", { name: "Back to club" })).toBeNull();
+	});
+
+	it("renders on CLIENT NAVIGATION from a working page to one that throws", async () => {
+		const { router } = makeRouter({
+			fails: Number.POSITIVE_INFINITY,
+			at: "/",
+		});
+		const { container } = render(<RouterProvider router={router} />);
+		expect(await screen.findByText("Home page")).toBeTruthy();
+
+		await act(async () => {
+			await router.navigate({
+				to: "/club/$clubId/boom" as never,
+				params: { clubId: "thr" } as never,
+			});
+		});
+
+		expect(await screen.findByText("Something went wrong")).toBeTruthy();
+		expect(screen.queryByText("Home page")).toBeNull();
+		expect(screen.getByText("App shell nav")).toBeTruthy();
+		expectNoLeak(container.textContent ?? "");
 	});
 
 	it("renders on the server too, with no message or stack, and logs it there", async () => {
@@ -231,6 +265,79 @@ describe("RouteError (#878)", () => {
 					args[1].message === SECRET,
 			),
 		).toBe(true);
+	});
+});
+
+describe("a route COMPONENT that throws during SSR (#878 review)", () => {
+	let consoleError: ReturnType<typeof vi.spyOn>;
+	let root: Root | undefined;
+	beforeEach(() => {
+		consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+	});
+	afterEach(() => {
+		act(() => root?.unmount());
+		root = undefined;
+		document.body.innerHTML = "";
+		vi.restoreAllMocks();
+	});
+
+	it("streams an empty boundary on the server, then hydrates into the branded page", async () => {
+		// React has no server-side error boundaries: a component that throws while
+		// streaming leaves its Suspense boundary empty (`<!--$!-->`) and marks it
+		// for client rendering, so the server CANNOT render RouteError here — a
+		// loader error it can (the SSR test above). What the member must get is
+		// the branded page once the client takes over, not a blank page and not
+		// TanStack's default. `renderToReadableStream` is what TanStack Start's
+		// `renderRouterToStream` calls.
+		const server = makeRouter({
+			fails: 0,
+			isServer: true,
+			at: "/club/thr/render-boom",
+		}).router;
+		await server.load();
+		const stream = await renderToReadableStream(
+			<RouterProvider router={server} />,
+			{ onError: () => {} },
+		);
+		await stream.allReady;
+		const html = await new Response(stream).text();
+		expect(html).toContain("App shell nav");
+		expect(html).toContain("<!--$!-->");
+		expect(html).not.toContain("Something went wrong");
+
+		const container = document.createElement("div");
+		container.innerHTML = html;
+		document.body.appendChild(container);
+		const client = makeRouter({ fails: 0, at: "/club/thr/render-boom" }).router;
+		await client.load();
+		await act(async () => {
+			root = hydrateRoot(container, <RouterProvider router={client} />, {
+				onRecoverableError: () => {},
+			});
+		});
+
+		await waitFor(() =>
+			expect(container.textContent).toContain("Something went wrong"),
+		);
+		expect(container.textContent).toContain("Try again");
+		expect(container.textContent).toContain("Go home");
+		expect(container.textContent).toContain("App shell nav");
+		// No SSR copy of RouteError ran, so the browser-side log is the only one.
+		await waitFor(() =>
+			expect(
+				consoleError.mock.calls.some(
+					(args: unknown[]) =>
+						args[0] === "[route-error]" &&
+						args[1] instanceof Error &&
+						args[1].message === SECRET,
+				),
+			).toBe(true),
+		);
+		// React's dev build writes the message into the fallback's <template>; the
+		// hydrated page must not keep it (the production stream never carries it).
+		expectNoLeak(container.textContent ?? "");
+		expectNoLeak(container.innerHTML);
 	});
 });
 

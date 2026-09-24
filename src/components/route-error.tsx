@@ -5,7 +5,7 @@ import {
 	useRouter,
 } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { StatusScreen } from "#/components/not-found";
+import { StatusScreen } from "#/components/status-screen";
 import { Button } from "#/components/ui/button";
 
 /**
@@ -24,6 +24,13 @@ import { Button } from "#/components/ui/button";
  * another member's name. The error goes to the console instead — on the server
  * during SSR (where the router renders this directly, with no `onCatch` and no
  * effects), and in the browser after mount.
+ *
+ * A route COMPONENT that throws during SSR is the one case the server cannot
+ * render this for: React has no server-side error boundaries, so the stream
+ * leaves that route's Suspense boundary empty and marks it for client
+ * rendering. The client then re-renders it, the boundary catches the throw,
+ * and this page appears once the bundle hydrates. `route-error.test.tsx` pins
+ * that round trip; a loader error, by contrast, renders here on the server.
  */
 export function RouteError({ error }: ErrorComponentProps) {
 	const router = useRouter();
@@ -54,19 +61,24 @@ export function RouteError({ error }: ErrorComponentProps) {
 					<Button type="button" onClick={retry}>
 						Try again
 					</Button>
-					<Button asChild variant="outline">
-						{clubId ? (
+					{/* Beside "Go home", never instead of it: when the club layout or the
+					    club page itself is what failed, this link is the page that just
+					    errored, and "Go home" is the only way out. */}
+					{clubId ? (
+						<Button asChild variant="outline">
 							<Link
 								to="/club/$clubId"
 								params={{ clubId }}
-								// The club index's own defaults (`validateSearch`).
+								// Required by the club index's `validateSearch`; these are its
+								// own defaults, so the link lands on the default view.
 								search={{ view: "roles", count: 8 }}
 							>
 								Back to club
 							</Link>
-						) : (
-							<Link to="/">Go home</Link>
-						)}
+						</Button>
+					) : null}
+					<Button asChild variant="outline">
+						<Link to="/">Go home</Link>
 					</Button>
 				</>
 			}
