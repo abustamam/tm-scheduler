@@ -155,8 +155,8 @@ export async function selfMemberIdInClub(
 		.select({ id: members.id })
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
-		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
-		// Joined for the ORDER BY alone — the count is never selected.
+		// Open terms only, joined for the ORDER BY alone (key 3) — the count is
+		// never selected.
 		.leftJoin(officerTerms, membershipPickOpenTermJoin())
 		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)))
 		// `members.id` is the primary key, so `members.id` in the select is

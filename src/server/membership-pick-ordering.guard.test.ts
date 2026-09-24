@@ -103,6 +103,14 @@ interface Pick {
 	ordered: boolean;
 	/** Orders by the shared `membershipPickOrder()` (#838), not a local copy. */
 	shared: boolean;
+	/**
+	 * Left-joins `officerTerms` ON the shared `membershipPickOpenTermJoin()`.
+	 * Key 3 of the shared order COUNTS rows of that join, so the order is only
+	 * the shared order when the join is the shared join too: a hand-written
+	 * join that drops `isNull(termEnd)` counts closed terms under an ORDER BY
+	 * that looks correct.
+	 */
+	joined: boolean;
 }
 
 /**
@@ -172,7 +180,14 @@ function unorderedPicks(src: string, rel: string): Pick[] {
 				key: `${rel}:${fn}`,
 				where: `${rel}:${line} (${fn})`,
 				ordered: stmt.includes(".orderBy("),
-				shared: /\.orderBy\(\s*\.\.\.membershipPickOrder\(\)\s*\)/.test(stmt),
+				// `,?` so a formatter's trailing comma on a wrapped call still matches.
+				shared: /\.orderBy\(\s*\.\.\.membershipPickOrder\(\)\s*,?\s*\)/.test(
+					stmt,
+				),
+				joined:
+					/\.leftJoin\(\s*officerTerms\s*,\s*membershipPickOpenTermJoin\(\)\s*,?\s*\)/.test(
+						stmt,
+					),
 			});
 		}
 		i = src.indexOf("eq(people.userId", i + 1);
@@ -231,15 +246,35 @@ function staleWaivers(picks: Pick[], filed: Record<string, string>): string[] {
 	return out;
 }
 
-/** `OWN_ORDER` entries that no longer describe a deliberate, different order. */
+/**
+ * Picks on the shared ORDER without the shared JOIN. A function, like the
+ * waiver rules, so the synthetic sweep below exercises the same code the real
+ * tree is judged by — on a clean tree this returns `[]` whatever it says.
+ */
+function unjoinedSharedPicks(picks: Pick[]): string[] {
+	return picks.filter((p) => p.shared && !p.joined).map((p) => p.where);
+}
+
+/**
+ * `OWN_ORDER` entries that no longer describe ONE deliberate, different order.
+ *
+ * Keyed `<file>:<fn>` like `FILED`, so the same leak applies: a second pick
+ * landing inside an exempt function would inherit the exemption. So an entry
+ * must cover exactly one statement, which is checked before anything else.
+ */
 function staleOwnOrders(
 	picks: Pick[],
 	ownOrder: Record<string, string>,
 ): string[] {
 	const out: string[] = [];
 	for (const key of Object.keys(ownOrder)) {
-		const pick = picks.find((p) => p.key === key);
-		if (!pick) {
+		const under = picks.filter((p) => p.key === key);
+		const pick = under[0];
+		if (under.length > 1) {
+			out.push(
+				`OWN_ORDER exempts ONE statement under ${key}, and the sweep found ${under.length}`,
+			);
+		} else if (!pick) {
 			out.push(`OWN_ORDER names ${key}, which the sweep no longer finds`);
 		} else if (pick.shared) {
 			out.push(`${key} uses the shared order now — drop it from OWN_ORDER`);
@@ -267,14 +302,25 @@ function pickStatement(opts: {
 	binding: string;
 	/** `true` for a local order, `"shared"` for the #838 spread. */
 	ordered?: boolean | "shared";
+	/**
+	 * The `officerTerms` join: `"shared"` for `membershipPickOpenTermJoin()`,
+	 * `"inline"` for a hand-written one with no `isNull(termEnd)`. Defaults to
+	 * `"shared"` alongside a shared order, and to none otherwise.
+	 */
+	join?: "shared" | "inline" | "none";
 	/** `false` for the pre-#822 shape: one row kept with no `.limit(1)` at all. */
 	limit?: boolean;
 }): string {
-	const chain = [
-		"\t\t.select({ id: members.id })",
-		"\t\t.from(members)",
-		"\t\t.where(and(eq(people.userId, userId)))",
-	];
+	const chain = ["\t\t.select({ id: members.id })", "\t\t.from(members)"];
+	const join = opts.join ?? (opts.ordered === "shared" ? "shared" : "none");
+	if (join === "shared") {
+		chain.push("\t\t.leftJoin(officerTerms, membershipPickOpenTermJoin())");
+	} else if (join === "inline") {
+		chain.push(
+			"\t\t.leftJoin(officerTerms, eq(officerTerms.membershipId, members.id))",
+		);
+	}
+	chain.push("\t\t.where(and(eq(people.userId, userId)))");
 	if (opts.ordered === "shared") {
 		chain.push("\t\t.orderBy(...membershipPickOrder())");
 	} else if (opts.ordered) {
@@ -341,10 +387,17 @@ describe("single-row membership picks are ordered (#804)", () => {
 		).toEqual([]);
 		expect(
 			staleOwnOrders(picks, OWN_ORDER),
-			"An OWN_ORDER entry must still be found, and still order by something other than the shared definition.",
+			"An OWN_ORDER entry must cover ONE statement, still be found, and still order by something other than the shared definition.",
 		).toEqual([]);
-		// Non-vacuous on the real tree: the four named sites are found AND shared.
-		expect(picks.filter((p) => p.shared).map((p) => p.key)).toEqual(
+		// The shared order counts rows of the shared join; with any other join
+		// it is a different order under the same spelling.
+		expect(
+			unjoinedSharedPicks(picks),
+			"These order by membershipPickOrder() without `.leftJoin(officerTerms, membershipPickOpenTermJoin())`. Key 3 counts that join's rows, so a hand-written join (one missing isNull(termEnd) counts CLOSED terms) silently changes the order.",
+		).toEqual([]);
+		// Non-vacuous on the real tree: the four named sites are found, shared
+		// AND joined.
+		expect(picks.filter((p) => p.shared && p.joined).map((p) => p.key)).toEqual(
 			expect.arrayContaining([
 				"src/server/guards.ts:getMembership",
 				"src/server/meeting-authz-logic.ts:resolveAdminGrant",
@@ -371,12 +424,43 @@ describe("single-row membership picks are ordered (#804)", () => {
 			pickStatement({ binding: "o" }),
 			"\treturn o?.id ?? null;",
 			"}",
+			"",
+			// The review's case: the shared order over a hand-written join that
+			// drops `isNull(termEnd)`, so key 3 counts closed terms.
+			"export async function sharedOrderInlineJoin(userId: string) {",
+			pickStatement({ binding: "p", ordered: "shared", join: "inline" }),
+			"\treturn p?.id ?? null;",
+			"}",
+			"",
+			// A formatter-wrapped call with a trailing comma is still the shared
+			// order and the shared join.
+			"export async function trailingComma(userId: string) {",
+			"\tconst [q] = await db",
+			"\t\t.select({ id: members.id })",
+			"\t\t.from(members)",
+			"\t\t.leftJoin(",
+			"\t\t\tofficerTerms,",
+			"\t\t\tmembershipPickOpenTermJoin(),",
+			"\t\t)",
+			"\t\t.where(and(eq(people.userId, userId)))",
+			"\t\t.orderBy(",
+			"\t\t\t...membershipPickOrder(),",
+			"\t\t)",
+			"\t\t.limit(1);",
+			"\treturn q?.id ?? null;",
+			"}",
 		].join("\n");
 		const got = unorderedPicks(src, "src/server/synthetic.ts");
-		expect(got.map((p) => [p.key, p.ordered, p.shared])).toEqual([
-			["src/server/synthetic.ts:localCopy", true, false],
-			["src/server/synthetic.ts:sharedOrder", true, true],
-			["src/server/synthetic.ts:noOrder", false, false],
+		expect(got.map((p) => [p.key, p.ordered, p.shared, p.joined])).toEqual([
+			["src/server/synthetic.ts:localCopy", true, false, false],
+			["src/server/synthetic.ts:sharedOrder", true, true, true],
+			["src/server/synthetic.ts:noOrder", false, false, false],
+			["src/server/synthetic.ts:sharedOrderInlineJoin", true, true, false],
+			["src/server/synthetic.ts:trailingComma", true, true, true],
+		]);
+		// The join rule over the same sweep reports exactly the inline-join pick.
+		expect(unjoinedSharedPicks(got)).toEqual([
+			"src/server/synthetic.ts:32 (sharedOrderInlineJoin)",
 		]);
 		// ...and the OWN_ORDER staleness rule over the same sweep: a live entry is
 		// clean; one now on the shared order, one the sweep cannot find, and one
@@ -394,6 +478,23 @@ describe("single-row membership picks are ordered (#804)", () => {
 			"src/server/synthetic.ts:sharedOrder uses the shared order now — drop it from OWN_ORDER",
 			"OWN_ORDER names src/server/synthetic.ts:gone, which the sweep no longer finds",
 			"src/server/synthetic.ts:noOrder is not ordered at all — OWN_ORDER is for a deliberate different order",
+		]);
+		// ONE statement per exemption: a second pick landing inside an exempt
+		// function must not inherit it, even when the first is a valid own order.
+		const twoUnderOneExempt = [
+			"export async function exemptPick(userId: string) {",
+			pickStatement({ binding: "m", ordered: true }),
+			pickStatement({ binding: "n" }),
+			"\treturn m?.id ?? n?.id ?? null;",
+			"}",
+		].join("\n");
+		expect(
+			staleOwnOrders(
+				unorderedPicks(twoUnderOneExempt, "src/server/synthetic.ts"),
+				{ "src/server/synthetic.ts:exemptPick": "why" },
+			),
+		).toEqual([
+			"OWN_ORDER exempts ONE statement under src/server/synthetic.ts:exemptPick, and the sweep found 2",
 		]);
 	});
 

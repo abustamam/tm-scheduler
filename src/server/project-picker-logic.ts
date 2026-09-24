@@ -250,8 +250,7 @@ export async function viewerMaySeeProgress(input: {
 		.select({ clubRole: members.clubRole, status: members.status })
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
-		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
-		// Joined for the ORDER BY alone (key 3) — the count is never selected, and
+		// Open terms only, joined for the ORDER BY alone (key 3) — the count is never selected, and
 		// an open term grants nothing here (this gate reads `clubRole`, not
 		// effective-admin).
 		.leftJoin(officerTerms, membershipPickOpenTermJoin())

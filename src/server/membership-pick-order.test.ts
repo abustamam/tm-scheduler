@@ -8,6 +8,7 @@
  * `TEST_DATABASE_URL`, where those suites skip.
  */
 import { resolve } from "node:path";
+import { SQL } from "drizzle-orm";
 import { QueryBuilder } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import { members, officerTerms } from "#/db/schema";
@@ -31,8 +32,12 @@ function render() {
 describe("membershipPickOrder (#838)", () => {
 	it("renders the five keys, in order, with their directions", () => {
 		const sql = render();
-		const orderBy = sql.slice(sql.indexOf(" order by ") + " order by ".length);
-		expect(orderBy).toBe(
+		const start = sql.indexOf(" order by ") + " order by ".length;
+		const end = sql.indexOf(" limit ", start);
+		// Both clauses must be present, or the slice below is not the ORDER BY.
+		expect(start).toBeGreaterThan(" order by ".length - 1);
+		expect(end).toBeGreaterThan(start);
+		expect(sql.slice(start, end)).toBe(
 			[
 				`("members"."status" = 'active') desc`,
 				`("members"."club_role" = 'admin') desc`,
@@ -40,7 +45,7 @@ describe("membershipPickOrder (#838)", () => {
 				// Ascending, with Postgres' default NULLS LAST — no explicit
 				// direction, exactly as every copy before #838 spelled it.
 				`"members"."created_at"`,
-				`"members"."id" limit $1`,
+				`"members"."id"`,
 			].join(", "),
 		);
 	});
@@ -52,11 +57,28 @@ describe("membershipPickOrder (#838)", () => {
 	});
 
 	it("hands each query its own fragments", () => {
-		// Functions, not shared constants: two builders must not hold one object.
-		const [a] = membershipPickOrder();
-		const [b] = membershipPickOrder();
-		expect(a).not.toBe(b);
-		expect(membershipPickOpenTermJoin()).not.toBe(membershipPickOpenTermJoin());
+		// Functions, not shared constants: two builders must not hold one SQL
+		// object. Checked per SQL KEY (the first three — the last two are table
+		// columns, which every query shares by construction) and down to the
+		// chunk array, so `return [...CONST]` over shared SQL constants, or a
+		// fresh wrapper around one shared inner fragment, both fail here.
+		const first = membershipPickOrder();
+		const second = membershipPickOrder();
+		for (const i of [0, 1, 2] as const) {
+			expect(first[i]).toBeInstanceOf(SQL);
+			expect(second[i]).not.toBe(first[i]);
+			expect(second[i].queryChunks).not.toBe(first[i].queryChunks);
+			// `desc(sql...)` nests the counted fragment one level down.
+			for (const [j, chunk] of first[i].queryChunks.entries()) {
+				if (chunk instanceof SQL) {
+					expect(second[i].queryChunks[j]).not.toBe(chunk);
+				}
+			}
+		}
+		const joinA = membershipPickOpenTermJoin();
+		const joinB = membershipPickOpenTermJoin();
+		expect(joinB).not.toBe(joinA);
+		expect(joinB.queryChunks).not.toBe(joinA.queryChunks);
 	});
 
 	it("imports nothing that reaches a database, auth or request context", () => {

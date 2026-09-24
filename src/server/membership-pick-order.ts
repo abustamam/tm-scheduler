@@ -76,14 +76,15 @@ import { members, officerTerms } from "#/db/schema";
  * (membership_id, term_end).
  */
 export function membershipPickOpenTermJoin(): SQL {
-	// `and()` of two defined conditions is never undefined; the fallback is for
-	// the type only.
-	return (
-		and(
-			eq(officerTerms.membershipId, members.id),
-			isNull(officerTerms.termEnd),
-		) ?? sql`false`
+	const on = and(
+		eq(officerTerms.membershipId, members.id),
+		isNull(officerTerms.termEnd),
 	);
+	// `and()` of two defined conditions is never undefined; this narrows the
+	// type. It THROWS rather than falling back to a constant, because any
+	// constant join condition would silently zero or inflate key 3's count.
+	if (!on) throw new Error("membershipPickOpenTermJoin: empty join condition");
+	return on;
 }
 
 /** The five ORDER BY keys, strongest membership first. Spread into `.orderBy`. */

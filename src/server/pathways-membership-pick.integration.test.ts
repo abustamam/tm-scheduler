@@ -298,6 +298,37 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 			await expectBooleanAgreesWithGuardPath(false);
 		});
 
+		// ── Officer terms, open or CLOSED, grant nothing here ─────────────
+		// This gate reads `clubRole`, not effective-admin, so an officer term on a
+		// plain-member row must not unlock another member's record — a CLOSED one
+		// least of all (#838 review). The closed-term row is written FIRST and
+		// carries the most terms, so a join that dropped `isNull(termEnd)` would
+		// rank it first under key 3.
+		//
+		// Honest about what this can and cannot gate: the boolean reads only
+		// `status` and `clubRole`, and rows tied on those two carry the SAME
+		// status and role, so keys 3-5 choose between equal answers. Removing
+		// `isNull(termEnd)` from the shared join leaves this green; the cases that
+		// gate that predicate are the `selfMemberIdInClub` closed-term case below
+		// and its twin in `meeting-authz-membership-pick`. What this pins is the
+		// DIRECTION: no officer-term shape — open, closed, or several — turns a
+		// plain active member into someone who may read the record, and the answer
+		// still agrees with what `getMembership`'s chosen row implies.
+		it("does not grant off an officer term, open or CLOSED, on a plain member", async () => {
+			await addMembership({
+				clubRole: "member",
+				status: "active",
+				closedTerms: 2,
+			});
+			await addMembership({
+				clubRole: "member",
+				status: "active",
+				openTerms: 1,
+			});
+
+			await expectBooleanAgreesWithGuardPath(false);
+		});
+
 		// The zero-row end of the query — a signed-in account with no Person linked
 		// into this club at all. Seeds no duplicate, deliberately: every other case
 		// here seeds at least one, so nothing else reaches it.
