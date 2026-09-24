@@ -385,15 +385,13 @@ const SESSION_GATES: string[] = [
  * reads no session at all, which is precisely the asserted identity this guard
  * exists to tell apart. Both claims are checked below against `guards.ts`.
  *
- * A written conflict worth knowing about, because both claims are in the tree:
- * `public-readers-archive-gate.guard.test.ts`'s `SESSION_GUARDS` DOES list
- * `MemberInClub`, and calls a match there "the strongest exemption the sweep
- * grants". It is wrong there for the same reason it would be wrong here, and
- * #761's review measured the cost — five POST writes exempted from that archive
- * sweep on that basis alone, two of which (`claimSlot`, `reassignSlot`) have no
- * archive check anywhere in their chain. Filed as **#825**. Not fixed here:
- * re-enrolling them changes which endpoints that guard sweeps, which is its own
- * change. This list does not follow it.
+ * `public-readers-archive-gate.guard.test.ts`'s `SESSION_GUARDS` used to list
+ * `MemberInClub` and call a match there "the strongest exemption the sweep
+ * grants". It was wrong there for the same reason it would be wrong here: five
+ * POST writes were exempted from that archive sweep on that basis alone, two of
+ * which (`claimSlot`, `reassignSlot`) had no archive check anywhere in their
+ * chain. #825 removed it, gated those two, and pinned it out of that regex with
+ * its own case (`SESSIONLESS_GUARDS`). The two files now agree.
  */
 const FORBIDDEN_GATES: { call: string; why: string }[] = [
 	{ call: "requireClubRole", why: "takes a userId argument" },

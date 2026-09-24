@@ -387,25 +387,30 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
  * because for reads the two are interchangeable and swapping them typechecks.
  * Writes have no such sibling pair: the gate is one call, and what varies is
- * WHERE it lives. TEN of these gate in a `-logic` seam — which is strictly
- * better, because a seam is reachable from vitest — and ONE gates in the
- * handler because its logic is inline there and lifting it out is a refactor
- * #555 was not. It was two until #809 extracted `releaseSlotCore`.
+ * WHERE it lives. FOURTEEN of these gate in a `-logic` seam — which is
+ * strictly better, because a seam is reachable from vitest — and FOUR gate in
+ * the handler's own server-fn module: `updateSpeakerDetails` (`slots.ts`),
+ * whose logic is inline there, and the three `requireMemberInClub` writes #825
+ * re-enrolled (`setPlannedAttendance`, `setAvailability`,
+ * `markUnavailableReleasing`), which assert directly in their handlers.
  *
- * Of the ten, eight are executed by `public-writers-archive-gate.integration.test.ts`.
- * The other two are executed beside the rest of their own feature's cases,
- * because each needs a fixture that suite does not build: `confirmSlotCore` in
- * `slots-confirm.integration.test.ts` (a CLAIMED slot and a holder), and
+ * Of the fourteen, ten are executed by
+ * `public-writers-archive-gate.integration.test.ts`. The other four are executed
+ * beside the rest of their own feature's cases, because each needs a fixture
+ * that suite does not build: `confirmSlotCore` in
+ * `slots-confirm.integration.test.ts` (a CLAIMED slot and a holder),
  * `recordTiming` in `timings.integration.test.ts` (a meeting whose Timer slot is
- * assigned, plus a timeable slot to record against). That suite also asserts the
- * ORDER — archive before the meeting window — which a presence check cannot see.
+ * assigned, plus a timeable slot to record against — that suite also asserts
+ * the ORDER, archive before the meeting window), and the two clears, whose gate
+ * is `requireSessionActor`'s, in `write-actor.integration.test.ts`.
  *
  * So each row names the file the gate is IN. That is weaker than checking the
  * handler itself, and the weakness is stated rather than papered over: this
  * asserts the gate exists in the module that owns the write, not that this
- * particular write reaches it. The integration suite is what proves the
- * seam-gated ones actually refuse; for the one remaining handler-gated row
- * (`updateSpeakerDetails`) this guard is the only gate there is.
+ * particular write reaches it. The integration suites are what prove the
+ * seam-gated ones actually refuse, and `slots.transport.test.ts` executes the three
+ * slot handlers to prove they still reach their cores; for the four handler-gated rows
+ * this guard is the only gate there is.
  */
 const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 	// `addMember` used to head this list. It came off at #616, which admin-gated
@@ -506,6 +511,53 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 		file: "src/server/slots.ts",
 		gate: "assertClubNotArchived",
 	},
+	// #825 — the five that `requireMemberInClub` hid from this sweep while it sat
+	// in `SESSION_GUARDS`. `claimSlot` and `reassignSlot` had NO archive gate;
+	// both now gate in their cores (`claimSlotCore`, `reassignSlotCore`), which
+	// `public-writers-archive-gate.integration.test.ts` executes. The other three
+	// already asserted it directly and were covered by accident of that, not by
+	// this table; now they are recorded rather than inferred from a regex.
+	{
+		fn: "claimSlot",
+		file: "src/server/slots-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "reassignSlot",
+		file: "src/server/slots-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "setPlannedAttendance",
+		file: "src/server/attendance-plan.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "setAvailability",
+		file: "src/server/availability.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "markUnavailableReleasing",
+		file: "src/server/availability.ts",
+		gate: "assertClubNotArchived",
+	},
+	// Also surfaced by #825's review, and by a different false classification:
+	// both bodies mention `requireUser()` in a COMMENT, and the sweep used to
+	// test raw text, so prose exempted them. Their real gate is
+	// `requireSessionActor`, whose member arm refuses an archived club off the
+	// membership row it already read; `write-actor.integration.test.ts` executes
+	// that refusal.
+	{
+		fn: "clearPlannedAttendance",
+		file: "src/server/write-actor-logic.ts",
+		gate: "isClubArchived(membership)",
+	},
+	{
+		fn: "clearAvailability",
+		file: "src/server/write-actor-logic.ts",
+		gate: "isClubArchived(membership)",
+	},
 	// #730 — the Timer's measured times. Session-less by design (the Timer taps
 	// a link out of a chat thread), and it MINTS rows: without this gate an
 	// archived club would keep accreting a record of its meetings while every
@@ -531,7 +583,20 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
  * makes has to be TRUE, not just plausible from the name. Three names sat here
  * for which it was false — see `SELF_ASSERT_GUARDS`. */
 const SESSION_GUARDS =
-	/require(User|Membership|ClubRole|ClubViewAccess|ClubAdminView|Superadmin|MemberInClub)\w*\(/;
+	/require(User|Membership|ClubRole|ClubViewAccess|ClubAdminView|Superadmin)\w*\(/;
+
+/**
+ * Guards that read NO session, and so must never match `SESSION_GUARDS`.
+ *
+ * `requireMemberInClub` sat in that regex until #825. It takes a member id off
+ * the wire and checks only that it is an active member of the club — which is
+ * the asserted identity, not a session — so every endpoint behind it was
+ * dropped from this sweep by NAME. Five POST writes were exempt on that basis
+ * alone, and two of them (`claimSlot`, `reassignSlot`) had no archive gate
+ * anywhere in their chain. `write-proof.guard.test.ts` forbids it from its own
+ * `SESSION_GATES` for the same reason; the two files now agree.
+ */
+const SESSIONLESS_GUARDS = ["requireMemberInClub"];
 
 /**
  * Guards that admit a SESSION-LESS caller, and therefore do NOT exempt their
@@ -628,12 +693,17 @@ describe("every session-less server fn is enrolled in the gate (#544)", () => {
 	for (const file of files) {
 		const src = readRaw(resolve(dir, file));
 		for (const { name: fn, body } of serverFnDeclarations(src)) {
-			if (SESSION_GUARDS.test(body)) continue;
+			// Discovery reads RAW (above); CLASSIFICATION reads code. A comment
+			// naming `requireUser()` is not a call, and until #825's review it was
+			// enough to exempt an endpoint: `clearAvailability` and
+			// `clearPlannedAttendance` both sat out of this sweep on prose alone.
+			const code = stripComments(body);
+			if (SESSION_GUARDS.test(code)) continue;
 			// Reachable WITHOUT a session, but covered: the guard's own resolver
 			// asserts the archive, which `SELF_ASSERT_RESOLVERS` proves above. Held
 			// separately from the session exemption so the two reasons never merge
 			// back into one regex — that merge is what hid 11 endpoints.
-			if (SELF_ASSERT_GUARDS.test(body)) {
+			if (SELF_ASSERT_GUARDS.test(code)) {
 				selfAsserted.push({ file, fn });
 				continue;
 			}
@@ -697,6 +767,15 @@ describe("the sweep's session classification is honest", () => {
 				SELF_ASSERT_GUARDS.test(`${guard}(`),
 				`${guard} matches neither regex, so the sweep will demand a WIRINGS/WRITE_GATES/REVIEWED_UNGATED row for every endpoint behind it instead of resting on the resolver gate.`,
 			).toBe(true);
+		});
+	}
+
+	for (const guard of SESSIONLESS_GUARDS) {
+		it(`${guard} is not classified as session-bearing (#825)`, () => {
+			expect(
+				SESSION_GUARDS.test(`${guard}(`),
+				`${guard} reads no session — it checks a member id taken off the wire — so matching SESSION_GUARDS drops every endpoint behind it from the sweep by NAME. #825 found two writes hidden that way with no archive gate at all.`,
+			).toBe(false);
 		});
 	}
 
@@ -771,6 +850,14 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		});
 	}
 
+	// Handler-to-core wiring for `claimSlot` / `reassignSlot` / `releaseSlot`
+	// is NOT checked here. The rows above are file-level and say `slots-logic.ts`
+	// names the gate; a text check that each handler names its core was tried
+	// in #825's review and passed with the call inside `if (false)` or a string.
+	// `slots.transport.test.ts` executes the handlers instead and asserts the
+	// core is called, in the handler's transaction, and that its archive
+	// refusal reaches the caller.
+
 	// Vacuity checks: an empty table would pass every case above.
 	it("covers every write that was waived as a #544 follow-up", () => {
 		// Was 8, then 7. `addMember` came out when #616 made it admin-gated: it is
@@ -782,9 +869,12 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		// `disqualifyCandidateFn` / `undoDisqualificationFn` (#723) are the tenth
 		// and eleventh, also genuinely new — the Vote Counter operates that console
 		// through a self-asserted member id, exactly as they do open/close.
+		// #825 added seven more, none of them new writes: five that
+		// `requireMemberInClub` had classified out of the sweep by name, and two
+		// that a comment naming `requireUser()` had classified out by prose.
 		// The count is the vacuity guard, so it moves deliberately with the table
 		// rather than being loosened to `toBeGreaterThan`.
-		expect(WRITE_GATES).toHaveLength(11);
+		expect(WRITE_GATES).toHaveLength(18);
 	});
 
 	it("does not also waive a write it claims to gate", () => {

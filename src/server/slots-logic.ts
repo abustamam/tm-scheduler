@@ -1482,6 +1482,104 @@ async function resolveConfirmGrant(
 }
 
 /**
+ * Claim an OPEN slot for a member (#825).
+ *
+ * Extracted from `claimSlot`'s handler body for the reason #809 extracted
+ * `releaseSlotCore`: the handler is PUBLIC and session-less, so the archive
+ * check never arrives through `requireMembership`, and a gate in a handler body
+ * is unreachable from vitest. It had no archive gate at all before this, while
+ * `releaseSlot` beside it did — so an archived club kept accepting claims from
+ * its sign-up link and minting `activity_log` rows for them.
+ *
+ * Takes the caller's transaction and the resolved actor, like its siblings: the
+ * trust guard and `requestWriteActor` are request-scoped and stay in the
+ * handler. The conditional UPDATE is still the race guard — only one claim can
+ * flip `open` — so the read here takes no row lock; it exists to gate.
+ */
+export async function claimSlotCore(
+	tx: DbOrTx,
+	args: {
+		slotId: string;
+		memberId: string;
+		actorMemberId: string | null;
+		speakerDetails?: SpeechInput;
+	},
+): Promise<{ clubId: string }> {
+	const [slot] = await tx
+		.select({
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
+			meetingId: roleSlots.meetingId,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(eq(roleSlots.id, args.slotId))
+		.limit(1);
+	if (!slot) throw new Error("Role not found.");
+
+	// Before the lock check: a takedown answers for the reason it was taken down,
+	// not for the meeting's status.
+	await assertClubNotArchived(slot.clubId, tx);
+	assertMeetingNotLocked(slot.meetingStatus);
+
+	// Conditional UPDATE is the race guard: only one claim can flip 'open'.
+	const updated = await tx
+		.update(roleSlots)
+		.set({
+			assignedMemberId: args.memberId,
+			assignedGuestId: null,
+			status: "claimed",
+			claimedAt: new Date(),
+		})
+		.where(and(eq(roleSlots.id, args.slotId), eq(roleSlots.status, "open")))
+		.returning({ id: roleSlots.id });
+
+	if (updated.length === 0) {
+		throw new Error("Sorry — this role was just claimed by someone else.");
+	}
+
+	if (slot.isSpeakerRole) {
+		// Claiming a speaker slot captures a Speech owned by the claimant's
+		// Person (ADR-0009). Pure-TBA/empty input creates none — the slot
+		// stays TBA (speech_id NULL) until a speech is attached later.
+		const [claimant] = await tx
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, args.memberId))
+			.limit(1);
+		if (!claimant) throw new Error("Claiming member not found.");
+		await attachSpeechToSlot(tx, {
+			slotId: args.slotId,
+			personId: claimant.personId,
+			input: args.speakerDetails,
+		});
+	}
+
+	await markComingOnSelfClaim(tx, {
+		memberId: args.memberId,
+		actorMemberId: args.actorMemberId,
+		meetingId: slot.meetingId,
+		clubId: slot.clubId,
+	});
+
+	await logActivity(tx, {
+		clubId: slot.clubId,
+		actorMemberId: args.actorMemberId,
+		action: "claim",
+		targetType: "slot",
+		targetId: args.slotId,
+		detail: { memberId: args.memberId },
+	});
+
+	return { clubId: slot.clubId };
+}
+
+/**
  * Reassign a slot to a different member, atomically (ADR-0005). MUST run inside
  * a caller-provided transaction: it re-reads the slot **with a FOR UPDATE row
  * lock** so the read that decides the speech keep-or-unlink and the write happen
@@ -1544,6 +1642,12 @@ export async function reassignSlotCore(
 		.limit(1)
 		.for("update", { of: roleSlots });
 	if (!slot) throw new Error("Role not found.");
+	// #825. `reassignSlot` is PUBLIC and session-less, so `requireMembership`
+	// never runs and the archive check never arrives for free; it had none at
+	// all until this. Here rather than in the handler so vitest can execute it,
+	// and before the lock check for the reason `releaseSlotCore` gives. Through
+	// `tx`, because `assign_roles` calls this inside a batch holding locks.
+	await assertClubNotArchived(slot.clubId, tx);
 	// Lock choke point (#150): reassign/claim-to-member on a completed meeting is
 	// rejected here under the row lock.
 	assertMeetingNotLocked(slot.meetingStatus);
