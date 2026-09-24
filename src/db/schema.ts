@@ -2511,7 +2511,18 @@ export const activityLog = pgTable(
 		detail: jsonb("detail"), // { before?, after?, ... }
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
-	(t) => [index("activity_log_club_created_idx").on(t.clubId, t.createdAt)],
+	(t) => [
+		index("activity_log_club_created_idx").on(t.clubId, t.createdAt),
+		// The CSV importer's release lookup (#855, `loadPersonCandidates`): the
+		// latest `member_remove` naming a Person, keyed on `detail->>'personId'`.
+		// Partial and on the expression, so it holds only removals and the
+		// lookup stays bounded as the log grows. The query must spell the SAME
+		// expression and the SAME literal action predicate, or the planner
+		// cannot prove the index applies and scans the log per orphan.
+		index("activity_log_member_remove_person_idx")
+			.on(sql`(${t.detail} ->> 'personId')`)
+			.where(sql`${t.action} = 'member_remove'`),
+	],
 );
 
 // ---------------------------------------------------------------------------

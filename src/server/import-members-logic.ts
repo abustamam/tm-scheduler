@@ -119,7 +119,10 @@ export async function loadPersonCandidates(
 		.from(removal)
 		.where(
 			and(
-				eq(removal.action, "member_remove"),
+				// A literal, not a bound parameter, and the same `->>` text form:
+				// both must match `activity_log_member_remove_person_idx` exactly
+				// for the planner to use it.
+				sql`${removal.action} = 'member_remove'`,
 				sql`${removal.detail} ->> 'personId' = ${people.id}::text`,
 			),
 		)

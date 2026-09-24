@@ -617,6 +617,13 @@
       "when": 1790192181113,
       "tag": "0087_oauth_refresh_requires_consent",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1790279618924,
+      "tag": "0088_gorgeous_bishop",
+      "breakpoints": true
     }
   ]
 }
