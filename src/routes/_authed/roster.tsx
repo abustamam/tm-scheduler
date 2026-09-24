@@ -31,6 +31,7 @@ import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
+import { foreignSkipSummary } from "#/lib/members-import-plan";
 import { OFFICER_POSITION_LABELS, officerPositionLabel } from "#/lib/officers";
 import { INVITE_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
@@ -898,7 +899,7 @@ function CsvUploadDialog({
 							    admin has no business learning either. */}
 							{preview.summary.foreignSkipped > 0 ? (
 								<p className="text-xs text-[var(--warning-strong)]">
-									{`${preview.summary.foreignSkipped} row(s) skipped: their member number or email belongs to someone who is not on this club's roster, so they can't be added from a file.`}
+									{foreignSkipSummary(preview.summary.foreignSkipped)}
 								</p>
 							) : null}
 							{preview.summary.addressConflicts > 0 ? (

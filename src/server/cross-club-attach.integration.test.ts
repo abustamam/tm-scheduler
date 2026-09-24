@@ -570,6 +570,25 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			expect(await clubsHolding(byEmail)).toEqual([]);
 		});
 
+		it("scopes a release to the Person it names, not to every orphan", async () => {
+			// A club holding ANY removal record must not thereby own every
+			// unrecorded orphan: the lookup is keyed on the removed Person.
+			const q = await person(victimClub.clubId, {
+				name: `Removed ${n}`,
+				customerId: `PN-Q-${n}`,
+			});
+			await removeFrom(victimClub.clubId, q);
+			const p = await person(null, { customerId: `PN-P-${n}` });
+
+			const stats = await importPeopleAndMembers(victimClub.clubId, [
+				row({ customerId: `PN-P-${n}`, name: "Never removed" }),
+			]);
+
+			expect(stats.foreignSkipped).toBe(1);
+			expect(stats.membersCreated).toBe(0);
+			expect(await clubsHolding(p)).toEqual([]);
+		});
+
 		it("follows the LATEST removal: removed by A, re-added and removed by B, is B's alone", async () => {
 			const moved = await person(victimClub.clubId, {
 				customerId: `PN-M-${n}`,

@@ -851,13 +851,17 @@ describe.skipIf(!hasTestDb)("explicit CSV officer approval", () => {
 		text = csv([`${customerId},First-time,,PaidMember,Club President`]);
 		const p = await preview();
 		const personId = await seedPerson({ name: "Resolved later", customerId });
-		// Released by this club earlier, as `applyMemberRemove` records it: only
-		// that club may re-attach a Person no club holds (#855).
-		await testDb.insert(activityLog).values({
+		// Released by this club through the real removal: only that club may
+		// re-attach a Person no club holds (#855).
+		const [removed] = await testDb
+			.insert(members)
+			.values({ clubId: seed.clubId, personId, name: "Resolved later" })
+			.returning({ id: members.id });
+		const { applyMemberRemove } = await import("./members-logic");
+		await applyMemberRemove({
 			clubId: seed.clubId,
-			action: "member_remove",
-			targetType: "member",
-			detail: { name: "Resolved later", personId },
+			memberId: removed?.id ?? "",
+			actorMemberId: null,
 		});
 		try {
 			const result = await commit(

@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, clubs, members, officerTerms, people } from "#/db/schema";
+import { clubs, members, officerTerms, people } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
 import {
 	cleanup,
@@ -79,6 +79,36 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const id = await makeClub();
 		clubIds.push(id);
 		return id;
+	}
+
+	/**
+	 * A Person no club holds, released by `clubId` through the real
+	 * `applyMemberRemove` (#855): a roster row, then its removal. The state
+	 * after is the same one the race tests need (no membership anywhere), and
+	 * only the releasing club may match it, so the removal record is written
+	 * by the writer the importer reads rather than restated here.
+	 */
+	async function releasedPerson(
+		clubId: string,
+		customerId: string,
+		name: string,
+	): Promise<string> {
+		const { applyMemberRemove } = await import("#/server/members-logic");
+		const [person] = await testDb
+			.insert(people)
+			.values({ customerId, name })
+			.returning({ id: people.id });
+		const personId = person?.id ?? "";
+		const [m] = await testDb
+			.insert(members)
+			.values({ clubId, personId, name })
+			.returning({ id: members.id });
+		await applyMemberRemove({
+			clubId,
+			memberId: m?.id ?? "",
+			actorMemberId: null,
+		});
+		return personId;
 	}
 
 	it("creates one person + one membership per fresh row", async () => {
@@ -421,20 +451,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// writer inserts the membership and holds it uncommitted, so the import
 		// reads "no membership", then parks on the unique index.
 		const clubId = await club();
-		const [person] = await testDb
-			.insert(people)
-			.values({ customerId: "PN-RACE", name: "Racing Member" })
-			.returning({ id: people.id });
-		const personId = person?.id ?? "";
-		// Removed from this club earlier, as `applyMemberRemove` records it: a
-		// Person no club holds is matchable only by the club that released them
-		// (#855), and the race below needs the row to match.
-		await testDb.insert(activityLog).values({
-			clubId,
-			action: "member_remove",
-			targetType: "member",
-			detail: { name: "Removed", personId },
-		});
+		const personId = await releasedPerson(clubId, "PN-RACE", "Racing Member");
 
 		let winnerId = "";
 		const winner = await openBlockingTx(async (tx) => {
@@ -488,20 +505,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// The recovery reconciles, but must not CLOBBER: fill-only means the row
 		// already present wins on any field it has.
 		const clubId = await club();
-		const [person] = await testDb
-			.insert(people)
-			.values({ customerId: "PN-FILL", name: "Fill Only" })
-			.returning({ id: people.id });
-		const personId = person?.id ?? "";
-		// Removed from this club earlier, as `applyMemberRemove` records it: a
-		// Person no club holds is matchable only by the club that released them
-		// (#855), and the race below needs the row to match.
-		await testDb.insert(activityLog).values({
-			clubId,
-			action: "member_remove",
-			targetType: "member",
-			detail: { name: "Removed", personId },
-		});
+		const personId = await releasedPerson(clubId, "PN-FILL", "Fill Only");
 
 		const winner = await openBlockingTx(async (tx) => {
 			await tx.insert(members).values({

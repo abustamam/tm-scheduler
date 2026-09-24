@@ -62,6 +62,20 @@ export interface ExistingPersonRow {
 	 *   importing club (#855). Matchable, which keeps remove-then-reimport
 	 *   working for the club that did the removing. The latest, not any: a
 	 *   Person removed by A, re-added by B and removed by B is B's alone.
+	 *
+	 *   This is what makes the concurrent-import race safe, and it is the ONLY
+	 *   thing that does. The attach is still decided from the snapshot
+	 *   `loadPersonCandidates` took at the start of the file, and the writer
+	 *   has no transaction: the membership insert is `onConflictDoNothing` on
+	 *   (club, person), which merges two writers in the SAME club and does
+	 *   nothing about two DIFFERENT clubs. Two clubs importing one orphan at
+	 *   once, if both could match, would each see an unheld Person, each
+	 *   insert, and leave them held by two clubs, which no bind can recover.
+	 *   That cannot happen here because at most one club can ever match an
+	 *   orphan: the latest removal names exactly one club. Any new path that
+	 *   attaches an EXISTING Person no club holds (another importer, a convert
+	 *   arm, a restore) reopens the race unless it is held to the same
+	 *   single-club rule or serialised.
 	 * - `nobody` — no memberships anywhere and no such removal record. REFUSED
 	 *   like `other_club_only` (#855). An orphan keeps its person-scoped history
 	 *   (speeches, Pathways), and the roster row an import would mint is then the
@@ -461,12 +475,19 @@ function isoOrNull(d: Date | null): string | null {
  * belongs to someone another club still holds. "Not on this club's roster" is
  * true of both and says nothing more.
  */
+const NOT_ON_THIS_ROSTER =
+	"belongs to someone who is not on this club's roster, so they can't be added from a file";
+
 export const FOREIGN_SKIP_NOTE: Record<"customerId" | "email", string> = {
-	customerId:
-		"Skipped — this member number belongs to someone who is not on this club's roster, so they can't be added from a file",
-	email:
-		"Skipped — this email belongs to someone who is not on this club's roster, so they can't be added from a file",
+	customerId: `Skipped — this member number ${NOT_ON_THIS_ROSTER}`,
+	email: `Skipped — this email ${NOT_ON_THIS_ROSTER}`,
 };
+
+/** The preview's one-line summary of every `foreign` row, from the same
+ *  phrase as {@link FOREIGN_SKIP_NOTE} so the two cannot drift apart. */
+export function foreignSkipSummary(count: number): string {
+	return `${count} row(s) skipped: their member number or email ${NOT_ON_THIS_ROSTER}.`;
+}
 
 /** Added to a row's note when the address it writes is shared (#759). */
 export const ADDRESS_CONFLICT_NOTE =
