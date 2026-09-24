@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { user } from "#/db/auth-schema";
 import {
 	clubs,
+	guests,
 	meetings,
 	members,
 	pathwaysPaths,
@@ -309,7 +310,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	});
 
 	it("speech log covers every club, not one arbitrary membership", async () => {
-		const log = await loadMySpeechLog(userId, 6);
+		const log = (await loadMySpeechLog(userId, 6)).rows;
 		const titles = log.map((r) => r.speechTitle);
 		expect(titles).toContain(inA.speechTitle);
 		expect(titles).toContain(inB.speechTitle);
@@ -319,7 +320,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	// Ordering is a documented promise of this query ("most recent first") and
 	// the dashboard renders it in the returned order.
 	it("speech log returns most-recent first, across clubs", async () => {
-		const log = await loadMySpeechLog(userId, 6);
+		const log = (await loadMySpeechLog(userId, 6)).rows;
 		expect(log.map((r) => r.speechTitle)).toEqual([
 			inA.speechTitle, // now - 7d
 			inB.speechTitle, // now - 14d
@@ -327,7 +328,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	});
 
 	it("speech log honours the limit, keeping the newest", async () => {
-		const log = await loadMySpeechLog(userId, 1);
+		const log = (await loadMySpeechLog(userId, 1)).rows;
 		expect(log).toHaveLength(1);
 		expect(log[0].speechTitle).toBe(inA.speechTitle);
 	});
@@ -336,7 +337,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	// member profile render is pinned here — a broken join or a dropped column
 	// shows up as a diff instead of passing unnoticed (CLAUDE.md coverage trap #2).
 	it("speech log row carries every rendered field", async () => {
-		const log = await loadMySpeechLog(userId, 6);
+		const log = (await loadMySpeechLog(userId, 6)).rows;
 		expect(log[0]).toEqual({
 			slotId: inA.speechSlotId,
 			scheduledAt: inA.speechAt,
@@ -346,7 +347,8 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			pathwayPath: "Path A",
 			projectLevel: "Level A",
 			// Resolved through the evaluator self-join, not the speaker's row.
-			evaluatorName: "Evaluator Human A",
+			evaluators: [{ name: "Evaluator Human A", isGuest: false }],
+			hasEvaluatorSlot: true,
 			status: "confirmed",
 		});
 	});
@@ -448,11 +450,13 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	// The defect was not only "too few rows" — it was that WHICH rows you got
 	// was down to Postgres row order, so two calls in one request could disagree.
 	it("returns the same answer on repeated calls", async () => {
-		const runs = await Promise.all([
-			loadMySpeechLog(userId, 6),
-			loadMySpeechLog(userId, 6),
-			loadMySpeechLog(userId, 6),
-		]);
+		const runs = (
+			await Promise.all([
+				loadMySpeechLog(userId, 6),
+				loadMySpeechLog(userId, 6),
+				loadMySpeechLog(userId, 6),
+			])
+		).map((r) => r.rows);
 		// Agreement alone proves nothing: three sequential scans of a two-row
 		// result never diverge in one Postgres process, so this passed even with
 		// the ORDER BY deleted outright. Pin the EXPECTED sequence on every run
@@ -471,7 +475,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			email: `${strangerId}@test.example`,
 		});
 		try {
-			expect(await loadMySpeechLog(strangerId, 6)).toEqual([]);
+			expect((await loadMySpeechLog(strangerId, 6)).rows).toEqual([]);
 			expect(await loadMyCommitments(strangerId)).toEqual([]);
 		} finally {
 			await testDb.delete(user).where(eq(user.id, strangerId));
@@ -482,11 +486,13 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	// member, one club. Widening the resolver must not widen that surface, or a
 	// member's club profile would start showing another club's speeches.
 	it("club-scoped speech log still shows only that club's speeches", async () => {
-		const scoped = await loadSpeechLog([inA.memberId], clubA.clubId, 6);
+		const scoped = (await loadSpeechLog([inA.memberId], clubA.clubId, 6)).rows;
 		expect(scoped.map((r) => r.speechTitle)).toEqual([inA.speechTitle]);
 
 		// ...and passing the other club's id yields nothing for that member.
-		expect(await loadSpeechLog([inA.memberId], clubB.clubId, 6)).toEqual([]);
+		expect((await loadSpeechLog([inA.memberId], clubB.clubId, 6)).rows).toEqual(
+			[],
+		);
 	});
 
 	// The empty-list guards are an optimization, not a correctness fix: drizzle
@@ -495,7 +501,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	// skipped instead — that is the only observable the guard actually controls.
 	it("empty member list short-circuits without querying the db", async () => {
 		const selectSpy = vi.spyOn(testDb, "select");
-		expect(await loadSpeechLog([], null, 6)).toEqual([]);
+		expect((await loadSpeechLog([], null, 6)).rows).toEqual([]);
 		expect(selectSpy).not.toHaveBeenCalled();
 	});
 
@@ -890,3 +896,244 @@ describe.skipIf(!hasTestDb)(
 		});
 	},
 );
+
+/**
+ * #681: a speaker sees who evaluated them and who evaluates them next.
+ *
+ * The speech log dropped guest evaluators, fanned a doubly-evaluated speech out
+ * into two rows (and so let the 6-row window lose a real speech), could not
+ * tell "no evaluator slot" from "slot nobody holds", kept cancelled meetings,
+ * and could not show more than 6 rows. Each case below is one of those.
+ *
+ * The seeded member is the SPEAKER; evaluators are the seeded admin (a member
+ * with a different name) and a guest whose name carries a per-run suffix.
+ */
+describe.skipIf(!hasTestDb)("speech log evaluators (#681)", () => {
+	let club: SeededClub;
+	let speakerRoleId: string;
+	let evaluatorRoleId: string;
+	let guestId: string;
+	let guestName: string;
+	const run = randomUUID().slice(0, 8);
+	const ADMIN_NAME = `Ana Admin ${run}`;
+
+	beforeEach(async () => {
+		club = await seedClub();
+		await testDb
+			.update(members)
+			.set({ name: ADMIN_NAME })
+			.where(eq(members.id, club.adminMemberId));
+		const [speakerRole] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				name: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+			})
+			.returning({ id: roleDefinitions.id });
+		const [evaluatorRole] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				name: "Evaluator",
+				category: "evaluator",
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		speakerRoleId = speakerRole.id;
+		evaluatorRoleId = evaluatorRole.id;
+		guestName = `Jane Visitor ${run}`;
+		const [guest] = await testDb
+			.insert(guests)
+			.values({ clubId: club.clubId, name: guestName })
+			.returning({ id: guests.id });
+		guestId = guest.id;
+	});
+
+	afterEach(async () => {
+		// Guests, meetings, slots and role defs all cascade from the club.
+		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+	});
+
+	type EvaluatorSeed = {
+		memberId?: string;
+		guestId?: string;
+		status?: "open" | "claimed" | "confirmed";
+	};
+
+	/** One speaker slot held by the seeded member, `days` from now (negative = past). */
+	async function speech(
+		days: number,
+		evaluators: EvaluatorSeed[] = [],
+		meetingStatus: "scheduled" | "completed" | "cancelled" = days < 0
+			? "completed"
+			: "scheduled",
+	): Promise<string> {
+		const [meeting] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date(Date.now() + days * DAY),
+				status: meetingStatus,
+			})
+			.returning({ id: meetings.id });
+		const [slot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: meeting.id,
+				roleDefinitionId: speakerRoleId,
+				assignedMemberId: club.memberId,
+				status: "confirmed",
+			})
+			.returning({ id: roleSlots.id });
+		for (const [i, e] of evaluators.entries()) {
+			await testDb.insert(roleSlots).values({
+				meetingId: meeting.id,
+				roleDefinitionId: evaluatorRoleId,
+				slotIndex: i,
+				assignedMemberId: e.memberId ?? null,
+				assignedGuestId: e.guestId ?? null,
+				evaluatesSlotId: slot.id,
+				status: e.status ?? "confirmed",
+			});
+		}
+		return slot.id;
+	}
+
+	async function log(limit: number | null) {
+		return loadSpeechLog([club.memberId], club.clubId, limit);
+	}
+
+	it("returns a guest evaluator, flagged as a guest", async () => {
+		const slotId = await speech(-7, [{ guestId }]);
+		const { rows } = await log(6);
+		expect(rows.map((r) => r.slotId)).toEqual([slotId]);
+		expect(rows[0].evaluators).toEqual([{ name: guestName, isGuest: true }]);
+		expect(rows[0].hasEvaluatorSlot).toBe(true);
+	});
+
+	it("a speech with two evaluators is ONE row carrying both, ordered by name", async () => {
+		const slotId = await speech(-7, [
+			{ guestId },
+			{ memberId: club.adminMemberId },
+		]);
+		const { rows } = await log(6);
+		expect(rows.map((r) => r.slotId)).toEqual([slotId]);
+		expect(rows[0].evaluators).toEqual([
+			{ name: ADMIN_NAME, isGuest: false },
+			{ name: guestName, isGuest: true },
+		]);
+	});
+
+	it("one person holding two evaluator slots on a speech appears once", async () => {
+		await speech(-7, [
+			{ memberId: club.adminMemberId },
+			{ memberId: club.adminMemberId, status: "claimed" },
+		]);
+		const { rows } = await log(6);
+		expect(rows[0].evaluators).toEqual([{ name: ADMIN_NAME, isGuest: false }]);
+	});
+
+	// A CLAIMED-only evaluator, whose identity is asserted on its own. The two
+	// fixtures above that use "claimed" pair it with a person who also holds a
+	// CONFIRMED slot, so dropping "claimed" from the held set left them green.
+	it("counts an evaluator who has only claimed the slot", async () => {
+		const [claimer] = await testDb
+			.insert(members)
+			.values({
+				clubId: club.clubId,
+				personId: await seedPerson({ name: `Cleo Claimer ${run}` }),
+				name: `Cleo Claimer ${run}`,
+				clubRole: "member",
+				status: "active",
+			})
+			.returning({ id: members.id });
+		const slotId = await speech(3, [
+			{ memberId: claimer.id, status: "claimed" },
+		]);
+		const { rows } = await log(6);
+		expect(rows.map((r) => r.slotId)).toEqual([slotId]);
+		expect(rows[0].evaluators).toEqual([
+			{ name: `Cleo Claimer ${run}`, isGuest: false },
+		]);
+	});
+
+	// The fan-out defect: the evaluator LEFT JOIN made the limit count pairs.
+	// Six speeches, the NEWEST with two evaluators; a pair-counting limit would
+	// return the doubled speech twice and drop the oldest.
+	it("the limit counts speeches, not speech-evaluator pairs", async () => {
+		const ids: string[] = [];
+		for (let d = 1; d <= 6; d++) {
+			ids.push(
+				await speech(
+					-d,
+					d === 1 ? [{ guestId }, { memberId: club.adminMemberId }] : [],
+				),
+			);
+		}
+		const { rows, truncated } = await log(6);
+		expect(rows.map((r) => r.slotId)).toEqual(ids);
+		expect(truncated).toBe(false);
+	});
+
+	it("an evaluator slot nobody holds sets hasEvaluatorSlot with no evaluators", async () => {
+		// Two shapes of "not held": an open slot with no assignee, and an OPEN
+		// slot that still names a member (a stale assignee is not an evaluator).
+		await speech(5, [
+			{ status: "open" },
+			{ memberId: club.adminMemberId, status: "open" },
+		]);
+		const noSlot = await speech(10);
+		const { rows } = await log(6);
+		const [later, sooner] = rows;
+		expect(later.slotId).toBe(noSlot);
+		expect(later.hasEvaluatorSlot).toBe(false);
+		expect(later.evaluators).toEqual([]);
+		expect(sooner.hasEvaluatorSlot).toBe(true);
+		expect(sooner.evaluators).toEqual([]);
+	});
+
+	it("excludes a speech whose meeting was cancelled", async () => {
+		const kept = await speech(-14);
+		// Newer than the kept one, so a dropped filter sorts it FIRST.
+		await speech(-7, [{ guestId }], "cancelled");
+		const { rows } = await log(6);
+		expect(rows.map((r) => r.slotId)).toEqual([kept]);
+	});
+
+	it("truncated is false at exactly the limit and true one past it", async () => {
+		const ids: string[] = [];
+		for (let d = 1; d <= 6; d++) ids.push(await speech(-d));
+		const atLimit = await log(6);
+		expect(atLimit.rows).toHaveLength(6);
+		expect(atLimit.truncated).toBe(false);
+
+		const oldest = await speech(-30);
+		const past = await log(6);
+		expect(past.rows.map((r) => r.slotId)).toEqual(ids);
+		expect(past.truncated).toBe(true);
+
+		// null = every speech, never truncated.
+		const all = await log(null);
+		expect(all.rows.map((r) => r.slotId)).toEqual([...ids, oldest]);
+		expect(all.truncated).toBe(false);
+	});
+
+	// The cross-club log reaches no guard, so the archive predicate inside the
+	// query is the only thing keeping a taken-down club's evaluator names —
+	// guest names included — off a member's dashboard.
+	it("excludes an archived club's speeches", async () => {
+		const slotId = await speech(-7, [{ guestId }]);
+		expect((await log(6)).rows.map((r) => r.slotId)).toEqual([slotId]);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		expect(await log(6)).toEqual({ rows: [], truncated: false });
+		expect(await loadMySpeechLog(club.memberUserId, 6)).toEqual({
+			rows: [],
+			truncated: false,
+		});
+	});
+});

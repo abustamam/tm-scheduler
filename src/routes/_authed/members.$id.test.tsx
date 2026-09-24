@@ -83,6 +83,7 @@ afterEach(() => {
 
 const CLUB_ID = "11111111-1111-4111-8111-111111111111";
 const MEMBER_ID = "22222222-2222-4222-8222-222222222222";
+const NOW = new Date("2026-09-24T12:00:00Z").getTime();
 
 /** The `member` half of `getMemberProfile`'s payload, with what the view reads. */
 function profileMember(over: Record<string, unknown> = {}) {
@@ -110,7 +111,10 @@ function profileMember(over: Record<string, unknown> = {}) {
 	};
 }
 
-async function renderRoute(over: Record<string, unknown> = {}) {
+async function renderRoute(
+	over: Record<string, unknown> = {},
+	loaderOver: Record<string, unknown> = {},
+) {
 	vi.spyOn(Route, "useRouteContext").mockReturnValue({
 		clubs: [
 			{
@@ -134,6 +138,10 @@ async function renderRoute(over: Record<string, unknown> = {}) {
 		openSpeakerSlots: [],
 		pathOptions: [],
 		enrollments: [],
+		speechLogTruncated: false,
+		allSpeeches: false,
+		now: NOW,
+		...loaderOver,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 
@@ -406,5 +414,81 @@ describe("member profile — edit dialog save feedback", () => {
 			/Member not found/,
 		);
 		expect(toast.success).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * #681. The profile's speech-log sub-line used to be
+ * `sub || (evaluatorName ? … : roleName)`, so a speech with ANY project, path
+ * or level — every Pathways speech — never showed its evaluator.
+ */
+describe("member profile — speech log evaluators (#681)", () => {
+	function speechRow(over: Record<string, unknown> = {}) {
+		return {
+			slotId: "33333333-3333-4333-8333-333333333333",
+			scheduledAt: new Date("2026-09-10T18:00:00Z"),
+			roleName: "Speaker",
+			speechTitle: "My Ice Breaker",
+			projectName: "Ice Breaker",
+			pathwayPath: "Presentation Mastery",
+			projectLevel: "Level 1",
+			evaluators: [
+				{ name: "Sam Chen", isGuest: false },
+				{ name: "Jane Doe", isGuest: true },
+			],
+			hasEvaluatorSlot: true,
+			status: "confirmed",
+			...over,
+		};
+	}
+
+	it("shows the evaluator beside a Pathways project sub-line", async () => {
+		await renderRoute({}, { speechLog: [speechRow()] });
+		expect(
+			screen.getByText(
+				"Ice Breaker · Presentation Mastery · Level 1 · Evaluated by Sam Chen and Jane Doe (guest)",
+			),
+		).toBeTruthy();
+	});
+
+	it("says an upcoming speech's evaluator is not yet assigned", async () => {
+		await renderRoute(
+			{},
+			{
+				speechLog: [
+					speechRow({
+						scheduledAt: new Date("2026-10-01T18:00:00Z"),
+						evaluators: [],
+					}),
+				],
+			},
+		);
+		expect(
+			screen.getByText(
+				"Ice Breaker · Presentation Mastery · Level 1 · Evaluator not yet assigned",
+			),
+		).toBeTruthy();
+	});
+
+	it("offers Show all only when the log was truncated", async () => {
+		await renderRoute({}, { speechLog: [speechRow()] });
+		expect(screen.queryByRole("link", { name: "Show all" })).toBeNull();
+		cleanup();
+
+		await renderRoute(
+			{},
+			{ speechLog: [speechRow()], speechLogTruncated: true },
+		);
+		const link = screen.getByRole("link", { name: "Show all" });
+		expect(link.getAttribute("href")).toContain("speeches=all");
+		expect(screen.getByText("most recent 1")).toBeTruthy();
+	});
+
+	it("offers Show recent once every speech is shown", async () => {
+		await renderRoute({}, { speechLog: [speechRow()], allSpeeches: true });
+		expect(screen.queryByRole("link", { name: "Show all" })).toBeNull();
+		const link = screen.getByRole("link", { name: "Show recent" });
+		expect(link.getAttribute("href")).not.toContain("speeches=");
+		expect(screen.getByText("all 1")).toBeTruthy();
 	});
 });
