@@ -1,5 +1,5 @@
 import { getRequest } from "@tanstack/react-start/server";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, officerTerms, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
@@ -15,6 +15,10 @@ import {
 	type VoteCounterAuthz,
 	type WordOfTheDayAuthz,
 } from "./meeting-authz-logic";
+import {
+	membershipPickOpenTermJoin,
+	membershipPickOrder,
+} from "./membership-pick-order";
 import { getOpenOfficerPositions } from "./officers-logic";
 
 // IMPORTANT: this module touches `db`/`pg` and must never be imported by a
@@ -83,28 +87,11 @@ export async function requireUser() {
  * That is worse here than at the read surfaces #437 fixed. Every caller below
  * branches on the row's `status`, `clubRole`, or `id`, so an arbitrary pick
  * could flip an authorization answer between two requests for one user. The
- * ordering is therefore both deterministic AND privilege-conservative:
- *
- *   1. ACTIVE first — a lapsed membership must never out-rank a current one,
- *      which also closes the gap where `canManageClub` (which does not check
- *      status) could grant management off an inactive admin row.
- *   2. ADMIN next — the human genuinely holds an admin membership here, so
- *      denying it because the other duplicate was returned first is the bug.
- *      This grants nothing new: `people.user_id` is written by
- *      `bindVerifiedPerson` (`account-link-logic.ts`), under
- *      `isNull(people.userId)` plus a match on the magic-link-verified email,
- *      and by `mergePeople`'s keeper adoption (superadmin, and
- *      `checkMergeBlocks` refuses two linked Persons) — so every linked Person
- *      is still the same human either way.
- *   3. Open OFFICER TERM next — effective-admin (#202) is granted by
- *      `getOpenOfficerPositions(membership.id)`, which reads ONE membership.
- *      Without this, two non-admin duplicates could hide the officer term on
- *      the row that was not picked, and the holder would silently lose
- *      effective-admin. Ordering by it makes the single-row pick correct for
- *      that consumer too, rather than fixing the pick and leaving the grant
- *      looking at the wrong row.
- *   4. Then oldest, then id — a total order, so two queries in one request can
- *      never disagree.
+ * ordering is therefore both deterministic AND privilege-conservative: active,
+ * then admin, then most open officer terms, then oldest, then id. It is
+ * `membershipPickOrder()` (`membership-pick-order.ts`), SHARED with the other
+ * three single-membership picks since #838 so authorization and attribution
+ * cannot drift apart; the reason each key sits where it does is written there.
  */
 export async function getMembership(
 	userId: string,
@@ -135,14 +122,8 @@ export async function getMembership(
 		.innerJoin(people, eq(people.id, members.personId))
 		// A `members` row implies its club via FK, so this cannot drop a row.
 		.innerJoin(clubs, eq(clubs.id, members.clubId))
-		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
-		.leftJoin(
-			officerTerms,
-			and(
-				eq(officerTerms.membershipId, members.id),
-				isNull(officerTerms.termEnd),
-			),
-		)
+		// Open terms only, for key 3 of the shared order.
+		.leftJoin(officerTerms, membershipPickOpenTermJoin())
 		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)))
 		// `members.id` is the primary key, so every selected column OF `members` is
 		// functionally dependent on it and needs no explicit grouping. That
@@ -150,13 +131,7 @@ export async function getMembership(
 		// unless it is grouped explicitly, even though the FK makes it single-valued
 		// per member. Verified by EXPLAIN, not assumed.
 		.groupBy(members.id, clubs.archivedAt)
-		.orderBy(
-			sql`(${members.status} = 'active') desc`,
-			sql`(${members.clubRole} = 'admin') desc`,
-			desc(sql`count(${officerTerms.id})`),
-			members.createdAt,
-			members.id,
-		)
+		.orderBy(...membershipPickOrder())
 		.limit(1);
 	return membership ?? null;
 }

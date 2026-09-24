@@ -31,7 +31,10 @@
  * stable. Every case that can name a membership also asserts `getMembership`
  * names the same one, and every boolean case asserts the boolean equals what
  * `getMembership`'s own chosen row implies — which is what fails if only one of
- * the now-four copies of the order is ever changed.
+ * the four queries' joins or grouping is ever changed. (The ORDER itself is one
+ * shared definition since #838, `membershipPickOrder()`, so it can no longer
+ * drift between them; its keys are pinned as SQL by
+ * `membership-pick-order.test.ts`.)
  *
  * Where a fixture has a contested pick it writes the row that must LOSE first,
  * so an unordered scan returns it and the case fails without the ordering. Two
@@ -64,10 +67,12 @@
  *    → 1. The polarity is only observable where no status check stands in
  *    front of it, which is why the note sits on that case and not on the
  *    boolean one that reads like it.
- *  · flip `getMembership`'s terminator to `desc(members.id)` → 1 (the
- *    primary-key case). That is the gate on "the copies move together"; the
- *    terminator itself is not uniquely gated, because `GROUP BY members.id`
- *    already sorts the group on that column under the plan Postgres picks.
+ *  · before #838, flipping only `getMembership`'s terminator to
+ *    `desc(members.id)` → 1 (the primary-key case): the gate on the copies
+ *    drifting. One shared order makes that drift unrepresentable. The
+ *    terminator is not uniquely gated HERE, because `GROUP BY members.id`
+ *    already sorts the group on that column under the plan Postgres picks —
+ *    `membership-pick-order.test.ts` pins it as rendered SQL instead.
  *
  * `tm_test` is shared with other agents. A run that fails cases no mutation
  * could reach — the zero-row refusals, both functions at once — is that, not
@@ -96,7 +101,7 @@ const { selfMemberIdInClub, resolveMarkAuthz } = await import(
 	"./progress-marks-logic"
 );
 // The reference ordering. Imported so agreement is ASSERTED rather than assumed
-// from the queries looking alike — they are separate copies by design, and
+// from the queries looking alike — they share an ORDER (#838), not a query, and
 // `guards.ts` is deliberately NOT mocked here for the same reason.
 const { getMembership } = await import("./guards");
 
@@ -453,10 +458,10 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 		// What this pins, measured the same way #821 measured its twin: NOT the
 		// terminator in isolation — deleting `members.id` from the ORDER BY leaves
 		// it green, because the `GROUP BY members.id` beneath already sorts the
-		// group on that column under the plan Postgres picks. What it DOES pin is
-		// the cost of the copy: flip `getMembership`'s terminator to
-		// `desc(members.id)` — the orderings drifting apart on one key — and this
-		// case fails and nothing else in the file does.
+		// group on that column under the plan Postgres picks. Before #838 it
+		// pinned the cost of the copy (flip only `getMembership`'s terminator and
+		// this case alone failed); one shared order makes that unrepresentable,
+		// and `membership-pick-order.test.ts` pins the key as rendered SQL.
 		it("is total: a created_at tie still resolves, on the primary key", async () => {
 			const sameInstant = new Date("2026-03-01T00:00:00.000Z");
 			// PER-RUN, like every other key this suite seeds. These were three FIXED
