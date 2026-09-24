@@ -392,6 +392,99 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 	});
 
 	/**
+	 * #858: the archive gate is read UNDER the club lock, not only before the
+	 * transaction.
+	 *
+	 * The pre-transaction `assertClubNotArchived` is check-then-act, so a serial
+	 * "archive, then capture" test passes with or without the in-lock read — the
+	 * pre-check alone refuses it. Only an interleaving can tell them apart: the
+	 * takedown's `UPDATE clubs` holds the row, uncommitted, so the pre-check reads
+	 * `archived_at` as null and lets the visitor through; the capture then parks on
+	 * its own club lock; and only then does the takedown commit.
+	 */
+	describe("archive gate under the club lock (#858)", () => {
+		async function archiveMidCapture(
+			input: Parameters<typeof captureGuestVisit>[0],
+		) {
+			const writer = await openBlockingTx(async (tx) => {
+				await tx
+					.update(clubs)
+					.set({ archivedAt: new Date() })
+					.where(eq(clubs.id, seed.clubId));
+			});
+			const pending = captureGuestVisit(input);
+			pending.catch(() => {});
+			try {
+				// Parked on the in-transaction club lock — i.e. PAST the pre-check,
+				// which is exactly the window the issue is about.
+				await waitForLockWait('from "clubs"', writer.pid);
+			} finally {
+				await writer.commit();
+			}
+			return pending;
+		}
+
+		it("a club archived after the pre-check collects no NEW guest", async () => {
+			const email = `late-${randomUUID()}@example.com`;
+			await expect(
+				archiveMidCapture({
+					clubId: seed.clubId,
+					name: "Late Visitor",
+					email,
+					phone: uniquePhone(),
+				}),
+			).rejects.toThrow("This club has been archived.");
+			expect(
+				await testDb
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.clubId, seed.clubId)),
+			).toHaveLength(0);
+		});
+
+		it("a RETURNING guest's contact fill-in and visit are refused too", async () => {
+			const meetingId = await seedMeetingInProgress(seed.clubId);
+			const email = `back-${randomUUID()}@example.com`;
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Returning Visitor",
+				email,
+			});
+			// Nothing recorded yet against today's meeting beyond the first visit's
+			// own row; drop it so a second write would be observable.
+			await testDb
+				.delete(meetingAttendance)
+				.where(eq(meetingAttendance.guestId, first.guestId));
+
+			await expect(
+				archiveMidCapture({
+					clubId: seed.clubId,
+					name: "Returning Visitor",
+					email,
+					phone: uniquePhone(),
+				}),
+			).rejects.toThrow("This club has been archived.");
+
+			const [row] = await testDb
+				.select({ phone: guests.phone })
+				.from(guests)
+				.where(eq(guests.id, first.guestId));
+			expect(row?.phone).toBeNull();
+			expect(
+				await testDb
+					.select({ id: meetingAttendance.id })
+					.from(meetingAttendance)
+					.where(
+						and(
+							eq(meetingAttendance.meetingId, meetingId),
+							eq(meetingAttendance.guestId, first.guestId),
+						),
+					),
+			).toHaveLength(0);
+		});
+	});
+
+	/**
 	 * #397: the dedup key is the E.164 form, and the promotion to E.164 now
 	 * always applies — `loadClubDefaultCountryCode` falls back to the app default
 	 * for a club that never set one (`seedClub` doesn't). Before this, a club with
