@@ -372,10 +372,12 @@ the nouns in `src/db/schema.ts`.
   `buildPlanPanel` (`src/lib/attendance-panel.ts`) resolves a DISPLAY status per member: an
   explicit `coming` / `not_coming` wins, because their own word outranks anything inferred; else a
   **confirmed role slot** on this meeting reads as `coming` with the row flagged `assumed`; else
-  the stored `reached_out`, else nothing. It writes NOTHING — the table still has no row, and the
-  seam's readers (`listComingForMeeting`, `listPlanForMeetings`) still report stored rungs only, so
-  the rail's coming COUNT is deliberately a superset of theirs and a second consumer of "who is
-  coming" has to decide which of the two it means. Two properties hold it together. A derived
+  the stored `reached_out`, else nothing. It writes NOTHING — the table still has no row. The rail
+  and roll mode share the rule (`resolveEffectiveRung`, fed by `buildPanelRoleMap`, #664), so the
+  panel's two modes give one answer to "who is coming". The inference is deliberately
+  CLIENT-SIDE: the seam's readers (`listComingForMeeting`, `listPlanForMeetings`) report stored
+  rungs only, so the rail's coming COUNT is a superset of theirs and a server consumer asking "who
+  is coming" gets the narrower answer. Two properties hold it together. A derived
   Coming must never render identically to an answered one, which is what `assumed` carries to the
   row; and ranking a confirmed slot ABOVE `reached_out` is load-bearing rather than cosmetic — a
   confirmed member has no plan row, so messaging them inserts `reached_out`, and ranked the other
@@ -403,11 +405,10 @@ the nouns in `src/db/schema.ts`.
   (**Attendance / Presence** above), so the plan now has a consumer downstream of itself: a rung is
   what roll mode SUGGESTS on meeting day. Two things not to assume about that. The seam is
   untouched by roll mode (`attendance-plan-logic.ts` has zero changes in v1.20.0.0), and the
-  DERIVED `assumed` Coming does **not** reach it — `buildRollPanel` reads the raw rungs, so a
+  DERIVED `assumed` Coming reaches roll through the same `resolveEffectiveRung` (#664): a
   confirmed role-holder who never replied reads `Coming · assumed` in the rail on Monday and gets
-  **no** dashed `Present?` on Wednesday. That divergence is deliberate-for-now rather than settled
-  (it appeared when v1.19.0.0 merged into the roll branch, and neither side's tests could see it);
-  it is documented at the derivation site and filed P1 in `TODOS.md`.
+  a muted dashed `Present?` on Wednesday, flagged `suggestionAssumed` and announced as "their
+  confirmed role suggests". Still a suggestion — nothing is recorded until the officer taps it.
 - **Table Topics speaker** — an impromptu participant who answered a Table Topic
   (`table_topics_speakers`), captured as an ordered list of member-or-guest (XOR) + optional
   topic text. Distinct from the **Table Topics Master** role (the role definition that runs the

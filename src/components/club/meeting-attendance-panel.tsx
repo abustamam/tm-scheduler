@@ -652,7 +652,16 @@ function RollChip({
 		// is the one the dashed border and the "?" carry visually and nothing carried
 		// otherwise — and it is what stops this reading like the menu trigger beside
 		// it, whose name deliberately omits the word "status".
-		const suggestionAnnouncement = `${row.name} status: not recorded — the plan suggests ${ROLL_LABELS[suggestion]}. Tap to record it.`;
+		//
+		// An ASSUMED suggestion (#664) names its real source: a confirmed role, not
+		// the plan — nobody answered. Same split plan mode's assumed Coming makes:
+		// the words ride the announcement, and the visible label is muted rather
+		// than lengthened, because the commit button's 140px is already measured
+		// against "Excused?".
+		const source = row.suggestionAssumed
+			? "their confirmed role suggests"
+			: "the plan suggests";
+		const suggestionAnnouncement = `${row.name} status: not recorded — ${source} ${ROLL_LABELS[suggestion]}. Tap to record it.`;
 		return (
 			// The SAME `w-44` track a recorded row's trigger fills (the 176px is
 			// measured — see `AttendanceRow`'s trigger), so the two row shapes share
@@ -665,7 +674,11 @@ function RollChip({
 				<Button
 					variant="outline"
 					size="sm"
-					className="flex-1 border-dashed"
+					className={cn(
+						"flex-1 border-dashed",
+						row.suggestionAssumed &&
+							"text-muted-foreground hover:text-muted-foreground",
+					)}
 					disabled={disabled}
 					onClick={() => onSetAttendance(row.id, suggestion)}
 				>
@@ -1082,10 +1095,10 @@ export function MeetingAttendancePanel({
 	// collapsing it into `??` alongside the Map above would silently turn an
 	// optimistic CLEAR back into the server's old rung.
 	// Shared by BOTH modes: roll mode reads this same plan as its suggestion
-	// source, so the optimistic override applies there too. Note it reads the
-	// raw rungs — `buildPlanPanel`'s `assumed` Coming (a confirmed role slot
-	// standing in for an answer, v1.19.0.0) is derived INSIDE that function and
-	// does not reach roll's suggestions. Deliberate for now, filed as a P1.
+	// source, so the optimistic override applies there too. These are the raw
+	// rungs; both builders then apply the same `resolveEffectiveRung`, so a
+	// confirmed role-holder with no answer is `Coming · assumed` in plan mode and
+	// an assumed `Present?` in roll mode (#664).
 	const effectivePlan = roster
 		.map((m) => ({
 			memberId: m.id,
