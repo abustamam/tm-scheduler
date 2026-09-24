@@ -13,7 +13,7 @@
  * The typed box sends no key, and its name path is pinned here unchanged.
  *
  * Run with:
- *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
+ *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/add-agenda-role-by-key.integration.test.ts
  */
 import { and, eq } from "drizzle-orm";
@@ -40,6 +40,9 @@ const { addAgendaRole } = await import("./meeting-agenda-edit-logic");
 const RUN = Math.random().toString(36).slice(2, 8);
 
 let club: SeededClub;
+// A second club, seeded only by the tests that need one; cleaned up beside
+// the first.
+let other: SeededClub | null = null;
 
 beforeEach(async () => {
 	club = await seedClub();
@@ -63,13 +66,22 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+	if (other) {
+		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		other = null;
+	}
 });
 
-async function bankRole(key: string, name: string) {
+async function bankRole(
+	key: string,
+	name: string,
+	opts: { clubId?: string; enabled?: boolean } = {},
+) {
 	const [row] = await testDb
 		.insert(roleDefinitions)
 		.values({
-			clubId: club.clubId,
+			clubId: opts.clubId ?? club.clubId,
+			enabled: opts.enabled ?? true,
 			key,
 			name,
 			category: "functionary",
@@ -102,6 +114,18 @@ async function slotRoleIds() {
 		.from(roleSlots)
 		.where(eq(roleSlots.meetingId, club.meetingId));
 	return rows.map((r) => r.roleDefinitionId);
+}
+
+async function declaredKeys() {
+	const rows = await testDb
+		.select({ key: meetingTemplateRoles.key })
+		.from(meetingTemplateRoles)
+		.innerJoin(
+			meetings,
+			eq(meetings.templateId, meetingTemplateRoles.templateId),
+		)
+		.where(eq(meetings.id, club.meetingId));
+	return rows.map((r) => r.key);
 }
 
 const PICKED = {
@@ -171,15 +195,7 @@ describe.skipIf(!hasTestDb)("addAgendaRole — picked by key (#836)", () => {
 
 		expect(await bankIds()).toEqual(before);
 		expect(await slotRoleIds()).not.toContain(b);
-		const declared = await testDb
-			.select({ key: meetingTemplateRoles.key })
-			.from(meetingTemplateRoles)
-			.innerJoin(
-				meetings,
-				eq(meetings.templateId, meetingTemplateRoles.templateId),
-			)
-			.where(eq(meetings.id, club.meetingId));
-		expect(declared).toHaveLength(0);
+		expect(await declaredKeys()).toEqual([]);
 	});
 
 	it("refuses a picked role whose CURRENT name is already on the agenda", async () => {
@@ -225,6 +241,90 @@ describe.skipIf(!hasTestDb)("addAgendaRole — picked by key (#836)", () => {
 			}),
 		).resolves.toMatchObject({ key: `a_${RUN}`, name: `Other ${RUN}` });
 		expect(await slotRoleIds()).toContain(a);
+	});
+
+	it("attaches THIS club's row when another club holds the same key", async () => {
+		other = await seedClub();
+		const theirs = await bankRole(`timer_${RUN}`, `Timer ${RUN}`, {
+			clubId: other.clubId,
+		});
+		const ours = await bankRole(`timer_${RUN}`, `Timer ${RUN}`);
+
+		const added = await addAgendaRole({
+			meetingId: club.meetingId,
+			key: `timer_${RUN}`,
+			name: `Timer ${RUN}`,
+			...PICKED,
+		});
+
+		expect(added.key).toBe(`timer_${RUN}`);
+		const slots = await slotRoleIds();
+		expect(slots).toContain(ours);
+		expect(slots).not.toContain(theirs);
+	});
+
+	it("refuses a key only ANOTHER club holds, and attaches nothing", async () => {
+		other = await seedClub();
+		const theirs = await bankRole(`only_${RUN}`, `Only ${RUN}`, {
+			clubId: other.clubId,
+		});
+		const before = await bankIds();
+
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				key: `only_${RUN}`,
+				name: `Only ${RUN}`,
+				...PICKED,
+			}),
+		).rejects.toThrow(/no longer one of this club's roles/);
+
+		expect(await slotRoleIds()).not.toContain(theirs);
+		expect(await bankIds()).toEqual(before);
+		expect(await declaredKeys()).toEqual([]);
+	});
+
+	it("refuses a picked role the club has turned off", async () => {
+		const a = await bankRole(`off_${RUN}`, `Off ${RUN}`, { enabled: false });
+
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				key: `off_${RUN}`,
+				name: `Off ${RUN}`,
+				...PICKED,
+			}),
+		).rejects.toThrow(`"Off ${RUN}" is turned off for this club.`);
+
+		expect(await slotRoleIds()).not.toContain(a);
+		expect(await declaredKeys()).toEqual([]);
+	});
+
+	it("refuses a picked role already on the agenda under an OLDER name, cleanly", async () => {
+		// The declaration keeps the name it was attached under; the bank row has
+		// since been renamed, so only the key check can see the duplicate — and
+		// it must say so rather than let the unique index throw.
+		const a = await bankRole(`a_${RUN}`, `Clock ${RUN}`);
+		await addAgendaRole({
+			meetingId: club.meetingId,
+			key: `a_${RUN}`,
+			name: `Clock ${RUN}`,
+			...PICKED,
+		});
+		await rename(a, `Chrono ${RUN}`);
+		const slotsBefore = await slotRoleIds();
+
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				key: `a_${RUN}`,
+				name: `Chrono ${RUN}`,
+				...PICKED,
+			}),
+		).rejects.toThrow(`"Chrono ${RUN}" is already on this agenda.`);
+
+		expect(await slotRoleIds()).toEqual(slotsBefore);
+		expect(await declaredKeys()).toEqual([`a_${RUN}`]);
 	});
 
 	it("keeps the typed path by NAME when no key is sent", async () => {

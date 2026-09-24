@@ -1746,12 +1746,6 @@ export async function addAgendaRole(input: {
 			})
 			.from(roleDefinitions)
 			.where(eq(roleDefinitions.clubId, meeting.clubId));
-		// An AMBIGUOUS name matches nothing, the same rule `matchRoleDefs`
-		// applies: `role_definitions` has no unique index on (club_id, name), so
-		// two rows can share one, and landing on whichever an unordered
-		// `select()` returned last would attach a member's history to a coin
-		// flip. Falling through to CREATE is wrong too — it would mint a third —
-		// so this is refused outright and the officer renames one.
 		let attach: (typeof bank)[number] | undefined;
 		if (input.key != null) {
 			// PICKED (#836): by key, never by name. See the docblock.
@@ -1766,6 +1760,13 @@ export async function addAgendaRole(input: {
 				throw new Error(`"${attach.name}" is already on this agenda.`);
 			}
 		} else {
+			// An AMBIGUOUS name matches nothing, the same rule `matchRoleDefs`
+			// applies: `role_definitions` has no unique index on (club_id, name),
+			// so two rows can share one, and landing on whichever an unordered
+			// `select()` returned last would attach a member's history to a coin
+			// flip. Falling through to CREATE is wrong too — it would mint a
+			// third — so this is refused outright and the officer renames one. A
+			// picked KEY cannot be ambiguous: `role_definitions_club_key_unique`.
 			const named = bank.filter((r) => foldRoleName(r.name) === wanted);
 			if (named.length > 1) {
 				throw new Error(
