@@ -28,6 +28,6 @@ export const ACCESS_REQUEST_MAILTO =
 export const FOUNDER_BLURB =
 	"GavelUp is built by Rasheed Bustamam, a Toastmaster since 2012 and a Distinguished Toastmaster (DTM).";
 
-/** The cost line shown on the marketing pages that include it (/, /tour, /districts, /request-access). */
+/** The pilot cost line for marketing pages. Shown today on `/`, under the hero. */
 export const PILOT_PRICING_LINE =
 	"Free for clubs during the pilot. Running a district? Ask us about it.";

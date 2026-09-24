@@ -30,9 +30,11 @@ export const FOOTER_LINKS: MarketingLink[] = [
 /**
  * The shared chrome for every marketing page (`/` today, more to come, #865):
  * header, footer, and the Toastmasters International non-affiliation disclaimer
- * (ADR-0024). `marketing-disclaimer.guard.test.ts` requires every non-app route
- * to render this (or `ResourcesShell`), so a new marketing page cannot ship
- * without the disclaimer.
+ * (ADR-0024). `marketing-disclaimer.guard.test.ts` requires every anonymous,
+ * non-club route to render this (or `ResourcesShell`) unless it is named in
+ * that guard's `EXEMPT` list with a reason (signin, claim, oauth.consent and
+ * unsubscribe are, today), so a new marketing page cannot ship without the
+ * disclaimer.
  *
  * Markup and classes moved verbatim from `index.tsx`, so `/` is visually
  * unchanged.

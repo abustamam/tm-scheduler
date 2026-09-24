@@ -12,16 +12,19 @@
 // Source greps rather than render tests for the same reason as the club guard:
 // what is protected is coverage of a route SET, including routes that do not
 // exist yet. Every read is comment-blind (`#/test/guard-source`), so a comment
-// that mentions `<MarketingShell` cannot stand in for the element.
-import { readdirSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+// that mentions `<MarketingShell` cannot stand in for the element. That
+// includes the one "must NOT be present" check (the <header>/<footer> ban at
+// the bottom), deliberately — see the note there.
+import { readdirSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const ROUTES = resolve(ROOT, "src/routes");
-const MARKETING_SHELL = "src/components/marketing/marketing-shell.tsx";
+const MARKETING_DIR = "src/components/marketing";
+const MARKETING_SHELL = `${MARKETING_DIR}/marketing-shell.tsx`;
 const RESOURCES_SHELL = "src/components/resources/resources-shell.tsx";
 
 const read = (rel: string) => readSource(resolve(ROOT, rel));
@@ -54,17 +57,36 @@ const exportsRoute = (file: string) =>
 	/^export const Route\s*=/m.test(readRoute(file));
 
 /**
- * Files DIRECTLY in `src/routes/` only: `_authed/` and `api/` are directories
- * and so drop out here, which is intended (signed-in pages and API handlers).
+ * Top-level directories under `src/routes/` that hold no marketing pages:
+ * signed-in pages (`_authed/`, whose layout's <AppShell> carries the
+ * disclaimer) and API handlers (`api/`). Every OTHER directory is walked, so a
+ * future `src/routes/districts/index.tsx` enrols like a flat route does.
  */
-const routeFiles = readdirSync(ROUTES)
-	.filter((f) => statSync(resolve(ROUTES, f)).isFile())
-	.filter((f) => /\.tsx?$/.test(f) && exportsRoute(f))
-	.sort();
+const SKIPPED_DIRS = new Set(["_authed", "api"]);
 
+/** Every route file under `src/routes/`, walked RECURSIVELY, as a routes-relative path. */
+function walkRoutes(dir: string = ROUTES): string[] {
+	return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+		const abs = join(dir, e.name);
+		const rel = relative(ROUTES, abs);
+		if (e.isDirectory()) return SKIPPED_DIRS.has(rel) ? [] : walkRoutes(abs);
+		return /\.tsx?$/.test(e.name) && exportsRoute(rel) ? [rel] : [];
+	});
+}
+
+const routeFiles = walkRoutes().sort();
+
+/** `club.*` routes are the club guard's (`public-disclaimer.guard.test.ts`). */
 const enrolled = routeFiles.filter(
-	(f) => !f.startsWith("club.") && !(f in EXEMPT),
+	(f) => !basename(f).startsWith("club.") && !(f in EXEMPT),
 );
+
+/** Component files in the marketing directory, other than the shell itself. */
+const marketingComponents = readdirSync(resolve(ROOT, MARKETING_DIR))
+	.filter((f) => f.endsWith(".tsx") && !f.includes(".test."))
+	.map((f) => `${MARKETING_DIR}/${f}`)
+	.filter((f) => f !== MARKETING_SHELL)
+	.sort();
 
 describe("marketing surfaces carry the TI non-affiliation disclaimer (#865)", () => {
 	it("MarketingShell renders the canonical constant, not inlined wording", () => {
@@ -77,6 +99,9 @@ describe("marketing surfaces carry the TI non-affiliation disclaimer (#865)", ()
 
 	it("ResourcesShell renders the disclaimer on its anonymous branch", () => {
 		const src = read(RESOURCES_SHELL);
+		expect(src).toMatch(
+			/import\s*\{[^}]*\bTOASTMASTERS_DISCLAIMER\b[^}]*\}\s*from\s*"#\/lib\/brand"/,
+		);
 		const close = src.indexOf("</AppShell>");
 		expect(
 			close,
@@ -111,12 +136,27 @@ describe("marketing surfaces carry the TI non-affiliation disclaimer (#865)", ()
 		});
 	}
 
-	// AC2 of #865: the marketing header/footer live in ONE file. A marketing
-	// route that renders the shell and ALSO hand-rolls a <header>/<footer> is
-	// the drift this extraction exists to end.
-	for (const file of enrolled) {
+	// AC2 of #865: the marketing header/footer live in ONE file,
+	// marketing-shell.tsx. A marketing route or marketing component that
+	// hand-rolls a <header>/<footer> is the drift this extraction exists to end.
+	//
+	// Read comment-STRIPPED even though this is a "must NOT be present" check,
+	// which guard-source.ts says should read raw: a commented-out <header> is
+	// not a hand-rolled one, so stripping cannot hide a real violation here.
+	it("finds marketing components besides the shell (so the ban can't be vacuous)", () => {
+		expect(marketingComponents).toContain(`${MARKETING_DIR}/founder-note.tsx`);
+	});
+
+	for (const file of [
+		...enrolled.map((f) => `src/routes/${f}`),
+		...marketingComponents,
+	]) {
 		it(`${file} does not hand-roll its own <header>/<footer>`, () => {
-			expect(readRoute(file)).not.toMatch(/<(header|footer)\b/);
+			expect(
+				read(file),
+				`${file} renders its own <header>/<footer>; marketing chrome lives ` +
+					`only in ${MARKETING_SHELL}.`,
+			).not.toMatch(/<(header|footer)\b/);
 		});
 	}
 });
