@@ -8,9 +8,11 @@
  * DELETE. An id-only DELETE parked on the claim's row lock re-matches `id =`
  * after the claim commits and removes the newly claimed slot.
  *
- * Every race here is real: the claim runs in its own transaction and holds its
- * row lock, the removal is proven blocked BY that transaction's pid before the
- * claim commits, and the assertions read committed rows. The claim is the real
+ * The race cases race for real: the claim runs in its own transaction and
+ * holds its row lock, the removal is proven blocked BY that transaction's pid
+ * before the claim commits, and the assertions read committed rows. The last
+ * three cases race nothing. They are controls: a held claim on a slot the
+ * removal did not choose, and the uncontended paired and legacy removals. The claim is the real
  * `claimSlotCore`, or its conditional UPDATE followed by the real attendance and
  * audit helpers while the removal is already parked, which is the ordering that
  * would deadlock if the removal locked the meeting any stronger than it does.
@@ -35,8 +37,14 @@ import {
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
-const { applyRemoveSpeakerSlot, claimSlotCore, markComingOnSelfClaim } =
-	await import("./slots-logic");
+const {
+	applyRemoveSpeakerSlot,
+	claimSlotCore,
+	evaluatorClaimedMessage,
+	markComingOnSelfClaim,
+	SPEAKER_CLAIMED_MESSAGE,
+} = await import("./slots-logic");
+const { applyAssignGuestToSlot } = await import("./guests-logic");
 const { logActivity } = await import("./activity");
 
 describe.skipIf(!hasTestDb)(
@@ -207,9 +215,9 @@ describe.skipIf(!hasTestDb)(
 			});
 		};
 
-		const SPEAKER_REFUSAL = "Release a speaker before removing a slot.";
-		const EVALUATOR_REFUSAL =
-			"Release the evaluator for Speaker 2 before removing that speaker.";
+		const SPEAKER_REFUSAL = SPEAKER_CLAIMED_MESSAGE;
+		// Speaker 2, i.e. slotIndex 1: the removal's only candidate below.
+		const EVALUATOR_REFUSAL = evaluatorClaimedMessage(1);
 
 		for (const shape of [
 			"whole claimSlotCore",
@@ -259,6 +267,37 @@ describe.skipIf(!hasTestDb)(
 			});
 		}
 
+		it.each([
+			["speaker", SPEAKER_REFUSAL],
+			["evaluator", EVALUATOR_REFUSAL],
+		] as const)("a concurrent GUEST assignment of the chosen %s survives", async (which, message) => {
+			const { roleIds, speakers, evaluators } = await lineup({ paired: true });
+			const target = which === "speaker" ? speakers[1] : evaluators[1];
+			const before = await pairedSlots(roleIds);
+			// The real guest seam, on the blocker's transaction: it sets
+			// assigned_guest_id with assigned_member_id NULL, which the re-check has
+			// to count as claimed on its own.
+			const error = await race(async (tx) => {
+				await applyAssignGuestToSlot(
+					{
+						slotId: target.id,
+						newGuest: { name: "Visiting Guest" },
+						actorMemberId: club.adminMemberId,
+					},
+					tx,
+				);
+			});
+			expect(error).toBe(message);
+			const after = await pairedSlots(roleIds);
+			expect(after.map((s) => s.id)).toEqual(before.map((s) => s.id));
+			const held = after.find((s) => s.id === target.id);
+			expect(held?.assignedGuestId).toBeTruthy();
+			expect(held).toMatchObject({ assignedMemberId: null, status: "claimed" });
+			expect((await logs()).some((l) => l.change === "speaker_removed")).toBe(
+				false,
+			);
+		});
+
 		it("legacy unpaired fallback: a claim of the chosen evaluator survives", async () => {
 			const { roleIds, evaluators } = await lineup({ paired: false });
 			const before = await pairedSlots(roleIds);
@@ -280,8 +319,24 @@ describe.skipIf(!hasTestDb)(
 			// Evaluator 1 is being claimed and held open; the removal wants Sp2 + Ev2.
 			const blocker = await openBlockingTx(fullClaim(evaluators[0].id));
 			try {
-				// Completes while the claim is still uncommitted: only the pair is locked.
-				expect(await remove()).toBeNull();
+				// Completes while the claim is still uncommitted: only the pair is
+				// locked. Bounded, so a regression that locks the whole lineup fails
+				// here by name instead of parking until the claim commits, which would
+				// never happen, and wedging afterEach behind it.
+				const BLOCKED = Symbol("blocked");
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const outcome = await Promise.race([
+					remove(),
+					new Promise<typeof BLOCKED>((r) => {
+						timer = setTimeout(() => r(BLOCKED), 3000);
+					}),
+				]);
+				clearTimeout(timer);
+				expect(
+					outcome,
+					"removal blocked on a claim of a slot it did not choose",
+				).not.toBe(BLOCKED);
+				expect(outcome).toBeNull();
 			} finally {
 				await blocker.commit();
 			}

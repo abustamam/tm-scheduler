@@ -696,6 +696,14 @@ function topUnclaimed(
 	return open[0]?.id ?? null;
 }
 
+/** The release-first refusals of "− speaker". Each is raised from two places,
+ *  the committed lineup read and the re-check under the pair's row locks (#840),
+ *  and a race must read exactly like the case it raced, so both come from here. */
+export const SPEAKER_CLAIMED_MESSAGE =
+	"Release a speaker before removing a slot.";
+export const evaluatorClaimedMessage = (speakerSlotIndex: number) =>
+	`Release the evaluator for Speaker ${speakerSlotIndex + 1} before removing that speaker.`;
+
 /** Remove one unclaimed Speaker slot together with the evaluator paired to THAT
  *  speaker (#512). */
 export async function applyRemoveSpeakerSlot(input: {
@@ -731,8 +739,7 @@ export async function applyRemoveSpeakerSlot(input: {
 			slots.find((s) => s.id === id)?.roleDefinitionId ?? "";
 
 		const speakerId = topUnclaimed(slots, speakerRoleId, roleOf);
-		if (!speakerId)
-			throw new Error("Release a speaker before removing a slot.");
+		if (!speakerId) throw new Error(SPEAKER_CLAIMED_MESSAGE);
 
 		/**
 		 * Remove the evaluator paired to THIS speaker, not the highest unclaimed one.
@@ -775,9 +782,7 @@ export async function applyRemoveSpeakerSlot(input: {
 			// would not find out until the agenda printed.
 			if (claimed(pairedEvaluator)) {
 				const speaker = slots.find((s) => s.id === speakerId);
-				throw new Error(
-					`Release the evaluator for Speaker ${(speaker?.slotIndex ?? 0) + 1} before removing that speaker.`,
-				);
+				throw new Error(evaluatorClaimedMessage(speaker?.slotIndex ?? 0));
 			}
 			evaluatorId = pairedEvaluator.id;
 		} else {
@@ -799,11 +804,21 @@ export async function applyRemoveSpeakerSlot(input: {
 		// the newly claimed slot.
 		//
 		// Only the two CHOSEN rows are locked, not the whole lineup, and in id
-		// order. Locking every paired slot would let this wait on a speaker slot a
-		// speech relink holds (`speeches-logic.ts` moves a speech between two slots
-		// in one transaction, in no fixed order, without the meeting lock) while
-		// already holding the one it moves to, which is a cycle; the chosen rows
-		// were open in the committed read, so no such relink holds them.
+		// order. Against claim, release, reassign, guest assignment and
+		// `assign_roles` (meeting first, then slots by id) this lock is cycle-free:
+		// each of those holds at most one slot, or takes the meeting before its
+		// slots. Locking every paired slot would ADD a cycle with a speech relink
+		// (`attachSpeechToOpenSlot` in `speeches-logic.ts` unlinks the speech's
+		// current slot, then writes the target, without the meeting lock).
+		//
+		// NOT cycle-free overall. `realignEvaluatorPairs` below runs after the
+		// deletes and updates the surviving speakers and evaluators in POSITION
+		// order, not id order. A relink of a speech already on claimed speaker O
+		// to chosen speaker T locks O and waits on T while this holds T; when O
+		// sits after T, the realign renumbers O and waits on the relink, and
+		// Postgres aborts one side as a deadlock. That
+		// cycle predates #840 (the old id-only DELETE held T just the same), needs
+		// a relink onto the very slot being removed, and is left for the realign.
 		//
 		// A claim that landed in the window is refused with the same release-first
 		// messages as one that landed before, and the throw rolls back the whole
@@ -828,7 +843,7 @@ export async function applyRemoveSpeakerSlot(input: {
 			.for("update");
 		const lockedSpeaker = current.find((s) => s.id === speakerId);
 		if (!lockedSpeaker || claimed(lockedSpeaker))
-			throw new Error("Release a speaker before removing a slot.");
+			throw new Error(SPEAKER_CLAIMED_MESSAGE);
 		const lockedEvaluator = evaluatorId
 			? current.find((s) => s.id === evaluatorId)
 			: undefined;
@@ -839,7 +854,7 @@ export async function applyRemoveSpeakerSlot(input: {
 			const speaker = slots.find((s) => s.id === speakerId);
 			throw new Error(
 				pairedEvaluator
-					? `Release the evaluator for Speaker ${(speaker?.slotIndex ?? 0) + 1} before removing that speaker.`
+					? evaluatorClaimedMessage(speaker?.slotIndex ?? 0)
 					: "That evaluator slot was just claimed. Try removing the speaker again.",
 			);
 		}
