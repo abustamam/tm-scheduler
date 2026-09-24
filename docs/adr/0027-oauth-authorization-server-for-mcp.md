@@ -3,7 +3,8 @@
 Status: Accepted
 
 Relates to: ADR-0004 (magic-link-only authentication), #771 (MCP tracking), #773 (MCP PR1),
-#842 (this change), #843 (the connector works).
+#842 (this change), #843 (the connector works), #851 (connected apps and Disconnect), #852
+(CIMD self-registration, officers only).
 
 ## Context
 
@@ -80,7 +81,7 @@ and — the assertion that actually matters — that a registration attempt writ
 looks identical from outside.
 
 `@better-auth/cimd` is the right answer when this opens to ChatGPT or to other officers. It
-buys nothing today.
+buys nothing today. (#852 adopted it; see the section at the end. DCR stays off.)
 
 ### 4. No OAuth scopes
 
@@ -287,9 +288,13 @@ Each raised in review and deliberately not fixed here:
 - **No OAuth scopes are checked**; any access token for the `/api/mcp` audience carries full
   authority (decision 4 above). Harmless while one hand-registered client exists; it stops
   being harmless when a second is registered.
-- **No way to revoke a connection** from the app. Access tokens are JWTs valid for an hour
-  with no revocation check; refresh tokens last thirty days. Revoking means deleting the
-  person's `oauth_consent` and `oauth_refresh_token` rows by hand.
+- ~~No way to revoke a connection from the app.~~ Closed by #851: `/me` → **Connected apps**
+  (`disconnectApp`, `src/server/oauth-grants-logic.ts`) removes a person's consent, refresh
+  tokens and pending codes, and migration 0087 refuses a refresh token for anyone with no consent
+  row, so a disconnect cannot be outlived. The trigger exempts a client registered with
+  `skip_consent`; no client here has it, and a CIMD client never gets it. **What stays open:** an
+  access token already issued keeps working until it expires, within the hour, because access
+  tokens are JWTs checked with no database lookup.
 - **A client the person already approved gets a code without a consent screen** on a later
   authorize, including one started by someone else's link. What that permits depends on
   claude.ai binding `state` to its own session, which this repo cannot see.
@@ -300,3 +305,62 @@ Each raised in review and deliberately not fixed here:
   500. No key rotation is configured, so it would take a manual one to hit this.
 - **Only `/oauth/consent` refuses to be framed.** `/signin` is still frameable; it has no
   one-click action to hijack.
+
+## #852: claude.ai identifies itself by URL, and only officers may approve
+
+### Client ID Metadata Documents, allowlisted to hosted Claude
+
+Every officer connecting claude.ai through the one confidential client shared its secret, so a
+leak forced a rotation and a rotation disconnected everyone. claude.ai's recommended mode is a
+Client ID Metadata Document: its `client_id` is a URL Anthropic hosts
+(`https://claude.ai/oauth/mcp-oauth-client-metadata`), and the authorization server fetches the
+document there to learn the client's name and redirect URIs. `@better-auth/cimd` (pinned at
+1.7.5 like the other Better Auth packages) is registered after `mcp()` and before
+`tanstackStartCookies()`. Installing it is also what advertises
+`client_id_metadata_document_supported: true` and turns on the `none` token auth method — claude.ai
+chooses CIMD only when discovery carries both, and otherwise falls back to DCR, which stays off.
+
+Left open, CIMD is a public endpoint that fetches whatever URL a caller names and writes a client
+row from it, and every consent screen would name whatever that document claimed. So the plugin's
+`isMetadataDocumentUrlAllowed` hook admits only `CIMD_ALLOWED_CLIENT_IDS`
+(`src/lib/oauth-connector-clients.ts`), by exact string — not a prefix, not an origin, because
+`claude.ai` hosts more than one document. Claude Code's (loopback redirects) is deliberately not
+on it; Claude Code keeps using `tmk_` tokens. The hook runs before any fetch, and the fetch itself
+goes through the plugin's Node transport (resolve once, public addresses only, pinned, no
+redirects), re-exported from `src/lib/cimd-transport.ts` so tests serve a fixture of the live
+document instead of calling claude.ai.
+
+A refused id is logged once at info level, JSON-quoted and truncated because it is caller-supplied.
+That line is how the next client's URL is discovered — ChatGPT supports CIMD but does not publish
+its URL — after which adding it is one entry in the set and a fixture test.
+
+`onClientCreated` and `originBoundFields` stay at their defaults and no CIMD client is given
+`skip_consent`, so every CIMD client goes through the consent screen and is covered by the
+migration 0087 trigger that makes Disconnect final.
+
+### Officers only, at the consent POST
+
+The first rule about WHO may connect: `mayUseConnector` (`src/server/connector-eligibility.ts`),
+an active admin membership or an open officer term in a non-archived club. It is the only place the
+rule is written; `/me`'s token minting and the consent screen both call it, and a guard holds that
+nothing else turns `adminClubsForUser` into a yes/no. The consent hook in `src/lib/auth.ts` refuses
+an APPROVAL from anyone else with 403 `not_an_officer` before the provider writes anything; a
+decline is always allowed, so the app can stop waiting. The page reads the same predicate and
+shows a non-officer Decline only.
+
+It applies at the consent POST and nowhere else. A person who approved a client earlier gets later
+codes without the consent screen (provider behaviour), so the gate does not re-run for them. That
+is acceptable because authority is re-checked on every `/api/mcp` call: a token belonging to
+someone who is no longer an officer gets `FORBIDDEN` from every club-scoped tool, exactly as a
+member's `tmk_` token does.
+
+### Retiring the shared-secret client
+
+Not code: once the maintainer has connected through CIMD in production, the old confidential
+`claude.ai` client is deleted by hand (runbook in `docs/claude-connector.md`), and its consents
+and refresh tokens cascade. Until then it keeps working. The registration script stays for a
+future confidential client.
+
+### Known and left open (#852)
+
+- **The metadata cache is per process.** A restart refetches Claude's document on its next use.

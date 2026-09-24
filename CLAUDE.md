@@ -105,8 +105,18 @@ fastest way to comply.
   resolved path. Both resolve to a user id and nothing else, so clubs and attribution are the
   same for both. The verifier fetches its JWKS over HTTP from this same server, so
   `oauth-credential.ts` refuses an unknown `kid` BEFORE it (a flood of junk `kid`s otherwise
-  drains the rate-limit bucket every refetch shares, and real calls 500). The client is
-  registered with `scripts/register-oauth-client.ts` — `node .output/register-oauth-client.mjs`
+  drains the rate-limit bucket every refetch shares, and real calls 500). **claude.ai needs no
+  registered client** (#852): `cimd()` from `@better-auth/cimd` lets it identify itself by a
+  Client ID Metadata Document URL, and `isMetadataDocumentUrlAllowed` admits only
+  `CIMD_ALLOWED_CLIENT_IDS` (`src/lib/oauth-connector-clients.ts`) by EXACT match, before any
+  fetch — widen that set, never the match, or `/oauth2/authorize` fetches whatever URL a caller
+  names and writes a client row from it. It sits after `mcp()`, before `tanstackStartCookies()`.
+  Tests `vi.mock("#/lib/cimd-transport")` and serve `src/test/fixtures/claude-cimd-metadata.json`.
+  Only officers may APPROVE a connection: `mayUseConnector` (`src/server/connector-eligibility.ts`)
+  is the one statement of that rule, checked in the consent `hooks.before` and read by `/me` and
+  `/oauth/consent` — so a test that approves must sign in as an admin or officer of an open club.
+  A confidential client, if one is ever needed again, is registered with
+  `scripts/register-oauth-client.ts` — `node .output/register-oauth-client.mjs`
   in production, since the image has no Bun — never by INSERT. Two traps in the browser half: the provider sends `/signin` and `/oauth/consent` a
   SIGNED query, so neither page may let the router rewrite its search (a changed
   `validateSearch` 307s and breaks the signature — read `window.location.search` raw); and

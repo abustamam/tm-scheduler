@@ -48,6 +48,7 @@
     "ext:zip:firefox": "cd extension && bunx wxt zip -b firefox"
   },
   "dependencies": {
+    "@better-auth/cimd": "1.7.5",
     "@better-auth/mcp": "1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@react-pdf/renderer": "^4.5.1",

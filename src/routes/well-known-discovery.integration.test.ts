@@ -174,6 +174,19 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		expect(body.token_endpoint).toBe(`${ISSUER}/oauth2/token`);
 	});
 
+	it("advertises Client ID Metadata Documents and public clients — what makes claude.ai choose CIMD (#852)", async () => {
+		// claude.ai picks CIMD only when BOTH are present; with either missing it
+		// falls back to Dynamic Client Registration, which is off here, and the
+		// connection fails. The confidential methods stay, for the hand-registered
+		// client. That `registration_endpoint` is still absent is the case below.
+		const body = await (await get(AUTH_SERVER)).json();
+		expect(body.client_id_metadata_document_supported).toBe(true);
+		expect(body.token_endpoint_auth_methods_supported).toContain("none");
+		expect(body.token_endpoint_auth_methods_supported).toContain(
+			"client_secret_post",
+		);
+	});
+
 	it("answers the issuer-path-inserted alias with a byte-identical document", async () => {
 		// Not "also 200": a client that discovers through the alias and a client
 		// that discovers through the bare path must be configuring themselves

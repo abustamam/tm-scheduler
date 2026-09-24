@@ -13,27 +13,30 @@ There are two ways in, and they reach the same seven tools with the same authori
 | **Claude Code** (your terminal) | A personal `tmk_` token pasted into a header | You, from `/me` |
 
 What either one can do is exactly what **you** can do: it acts in every club where you are an
-admin or hold an open officer term, and nowhere else. A plain member who connects gets nothing
-to act on. Every write is credited to you, the same as if you had made it in the app.
+admin or hold an open officer term, and nowhere else. Every write is credited to you, the same as
+if you had made it in the app.
+
+**Connecting is for club officers, for now.** You need to be an admin, or hold an open officer
+term, in at least one club that is not archived — the same rule `/me` applies before it offers
+you a token. A plain member who tries sees "Only club officers can connect apps to GavelUp right
+now." with only a Decline button.
 
 ---
 
 ## Connecting claude.ai
 
-You need a GavelUp account that is an admin or officer of a club, and the connector's **client
-ID and client secret** from the maintainer (see [For the maintainer](#for-the-maintainer)
-below — claude.ai has no way to register itself with GavelUp yet).
+You need a GavelUp account that is an admin or officer of a club. Nothing else: there is no
+client ID or secret to ask anyone for.
 
 1. In claude.ai, open **Settings → Connectors → Add custom connector**.
-2. **URL:** `https://gavelup.app/api/mcp`
-3. Open **Advanced settings** and paste the **client ID** and **client secret**.
-4. Click **Add**, then **Connect**. claude.ai opens GavelUp:
+2. **URL:** `https://gavelup.app/api/mcp`. Leave **Advanced settings** empty.
+3. Click **Add**, then **Connect**. claude.ai opens GavelUp:
    - If you are not signed in, enter your email and open the magic link. **If the link opens in a
      different browser from the one you started in, finish there** — the first tab will not move
      on by itself. That is expected, not a failure.
-   - You land on **Connect claude.ai?** Check the "Signed in as …" line is the account you mean
+   - You land on **Connect Claude?** Check the "Signed in as …" line is the account you mean
      to connect, then **Approve**.
-5. You are sent back to claude.ai, connected.
+4. You are sent back to claude.ai, connected.
 
 Connectors added on the web appear in the Claude phone and desktop apps automatically. There is
 nothing to set up on the phone.
@@ -114,6 +117,7 @@ Revoke the token on `/me` to disconnect; that takes effect on the next call.
 | "This approval link has expired or was changed" | The approval page is valid for ten minutes. Start again from Claude |
 | "You're signed in as someone else now" | You signed in to a different GavelUp account in another tab. Reload and check the account |
 | "We couldn't confirm the connection" | The network dropped mid-approval. Check claude.ai; if it isn't connected, connect again |
+| "Only club officers can connect apps to GavelUp right now" | The account you signed in with is not an admin or officer of any open club. Decline, or sign in as the account that is |
 | Every tool answers `FORBIDDEN` | The account you connected is not an admin or officer of that club |
 | `ARCHIVED` | That club has been archived; it can't be changed from anywhere |
 | The magic link says it has expired | Links work once, for five minutes. Ask for a new one |
@@ -125,27 +129,45 @@ Revoke the token on `/me` to disconnect; that takes effect on the next call.
 Everything below needs production access. Design and trade-offs are in
 [ADR-0027](adr/0027-oauth-authorization-server-for-mcp.md).
 
-### The one client
+### How claude.ai is identified
 
-claude.ai connects as ONE confidential OAuth client, registered by hand (Dynamic Client
-Registration is deliberately off). As of 2026-09-23 production holds exactly one:
+claude.ai identifies itself by URL: its OAuth `client_id` is
+`https://claude.ai/oauth/mcp-oauth-client-metadata`, a Client ID Metadata Document (CIMD) that
+Anthropic hosts. On first use GavelUp fetches that document, learns the client's name ("Claude")
+and redirect URI from it, and records an `oauth_client` row with no secret. Nobody registers
+anything and there is no shared secret to leak or rotate (#852, ADR-0027).
 
-| Field | Value |
-|---|---|
-| Name | `claude.ai` |
-| Redirect URI | `https://claude.ai/api/mcp/auth_callback` |
-| Auth method | `client_secret_post` |
-| Owner | the superadmin who ran the registration script |
+GavelUp fetches **only** the URLs in `CIMD_ALLOWED_CLIENT_IDS` (`src/lib/oauth-connector-clients.ts`),
+by exact match. Today that is hosted Claude alone — Claude Code keeps using `tmk_` tokens. Any
+other `https://` client id is refused before it is fetched, and logged once:
 
-Everyone who connects claude.ai uses **this client's ID and secret**. That is the main thing
-that makes it awkward to hand out (see [Making it easier](#making-it-easier)).
+```
+[oauth] refused CIMD client_id "https://…"
+```
 
-**Deleting the owner's GavelUp account deletes the client** (`oauth_client.user_id` cascades),
-and every member's connection with it.
+That line is how a new client's URL is found: attempt a connection from it, read the line in the
+Railway logs, then add the URL to the set with a fixture test beside Claude's.
 
-### Registering (or re-registering) the client
+**Retiring the shared-secret client.** Before #852, claude.ai connected as one hand-registered
+confidential client named `claude.ai`. It keeps working until it is deleted. Once you have
+connected through CIMD in production at least once, delete it in the Postgres service:
 
-The script ships in the runtime image as a Node bundle — the image has no Bun. In the deployed
+```bash
+railway ssh --service Postgres -- psql -X -c "
+  delete from oauth_client where name = 'claude.ai'
+    and client_id <> 'https://claude.ai/oauth/mcp-oauth-client-metadata';"
+```
+
+Its consents and refresh tokens go with it (they cascade), so anyone still on the old client
+reconnects — now with just the URL.
+
+**Deleting a confidential client's owner deletes the client** (`oauth_client.user_id` cascades),
+and every connection made through it. A CIMD client has no owner.
+
+### Registering a confidential client
+
+claude.ai does not need this any more. It stays for the day another client has to be registered
+by hand with a secret. The script ships in the runtime image as a Node bundle — the image has no Bun. In the deployed
 web service:
 
 ```bash
@@ -157,19 +179,16 @@ node .output/register-oauth-client.mjs --as <your superadmin email> \
 It prints the client ID and secret **once**; the secret is stored hashed and cannot be
 recovered. It refuses to create a second client with the same name unless you pass `--force`.
 
-If claude.ai ever changes its redirect URI, a connect attempt fails with an OAuth
-`redirect_uri` error. Start adding the connector with any client ID, read `redirect_uri=` off
-the GavelUp error page's URL, and register that value.
-
 ### Rotating the secret
 
 ```bash
 node .output/register-oauth-client.mjs --as <the client's owner> --rotate-secret <client_id>
 ```
 
-Only the account that created the client can rotate it. **Rotating breaks every connected
-member's connector** until they paste the new secret into Advanced settings; tokens already
-issued keep working until they expire (up to an hour).
+For a confidential client only; a CIMD client has no secret. Only the account that created the
+client can rotate it. **Rotating breaks every connection made through that client** until the new
+secret is pasted into its settings; tokens already issued keep working until they expire (up to an
+hour).
 
 ### Revoking one person
 
@@ -193,20 +212,12 @@ membership is immediate: every call re-checks club roles live.
 ```bash
 curl -s -o /dev/null -D - -X POST https://gavelup.app/api/mcp | grep -i www-authenticate
 curl -s https://gavelup.app/.well-known/oauth-protected-resource/api/mcp
+curl -s https://gavelup.app/.well-known/oauth-authorization-server
 ```
 
 The first must print a `www-authenticate: Bearer resource_metadata="…"` line — that header is
 how claude.ai finds where to sign in. The second must return JSON naming
-`https://gavelup.app/api/mcp`.
-
-### Making it easier
-
-One thing stands between this and "any officer can connect in a minute": **everyone shares one
-client secret.** Handing it out works for a few trusted officers, but a leaked secret means
-rotating it, and rotating disconnects everyone. The fix is to let claude.ai register itself:
-MCP's Client ID Metadata Documents (`@better-auth/cimd`, named in ADR-0027 as the path "when
-this opens to other officers"). Then connecting is **paste the URL, sign in, approve** — no ID,
-no secret, and nothing for the maintainer to do per person. It is recorded as open in ADR-0027
-("Known and left open").
-
-Self-service disconnect, the other half, shipped in #851: `/me`'s **Connected apps** list.
+`https://gavelup.app/api/mcp`. The third must carry `"client_id_metadata_document_supported":true`,
+list `"none"` in `token_endpoint_auth_methods_supported`, and have **no** `registration_endpoint`:
+claude.ai uses CIMD only when it sees the first two, and would otherwise try Dynamic Client
+Registration, which is off.
