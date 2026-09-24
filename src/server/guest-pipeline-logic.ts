@@ -2170,6 +2170,14 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  * global (ADR-0008), deleting it could cascade further than this undo's remit,
  * and an orphan Person is visible to the merge tool — which is the recoverable
  * direction this file keeps choosing.
+ *
+ * Whenever the membership is deleted, created Person or not, the
+ * `member_remove` names its Person in `detail.personId`, the release record
+ * `applyMemberRemove` also writes and the CSV importer reads (#855). Without it
+ * the Person is held by no club and named by no removal, so a roster CSV
+ * carrying the guest's email skips the row on every import, in this club too
+ * (#875). An undo that keeps a reused membership releases nothing and names
+ * nobody.
  */
 export async function applyUndoGuestConversion(
 	input: UndoConversionInput,
@@ -2384,6 +2392,7 @@ export async function applyUndoGuestConversion(
 				undoneGuestId: input.guestId,
 				slotIds: record.slotIds,
 				membershipDeleted: record.createdMembership,
+				...(record.createdMembership ? { personId: record.personId } : {}),
 				...(record.createdMembership
 					? {}
 					: {
