@@ -647,8 +647,21 @@ list — count there.)
 `releaseSlot`/`updateSpeakerDetails` are the two still in that position (their logic is inline in
 `slots.ts`), recorded in `TODOS/legacy-2026-09.md`.
 
-**Where a write already holds a club lock, gate INSIDE it; everywhere else the assert is right.**
-This rule has no live instance as of #630, and it is stated here rather than dropped because the
+**Where a write already holds a club lock, gate INSIDE it; everywhere else the unlocked assert is
+an accepted trade-off, not a race-free gate.** `assertClubNotArchived` is a plain, unlocked
+`SELECT` of `clubs.archived_at`, and `archiveClub` writes that column with a plain `UPDATE`, so
+nothing orders the two. A session-less write can read the club as live, pass the gate, and commit
+its rows anyway in the milliseconds after an archive lands: a claimed slot, an attendance answer, a
+vote, an `activity_log` row. Every session-less writer shares that check-then-act window, and it is
+a KNOWN LIMIT, accepted by the maintainer on 2026-09-24 (#857): archiving is a rare admin action,
+the window is milliseconds wide, and the residue is one write's rows in a club every read already
+reports as gone. Closing it would mean reading `archived_at` `FOR SHARE` inside every writer's
+transaction at once, with lock ordering against the slot `FOR UPDATE` locks the cores take and
+`assign_roles`'s multi-slot batch — so do not add the lock to one write alone, which leaves the rest
+open and buys nothing. The in-lock rule below still stands where a lock already exists, because
+there the fix costs no extra statement.
+
+The in-lock half has no live instance as of #630, and it is stated here rather than dropped because the
 reasoning does not depend on the function that demonstrated it. That function was `applySelfAdd`,
 the anonymous "I'm new — add me" roster self-add. It took a `FOR UPDATE` on the club row for its
 throttle, and #555 read `archived_at` out of that same locked row instead of calling
@@ -664,12 +677,9 @@ obvious candidate does the opposite. `captureGuestVisit` calls `assertClubNotArc
 its transaction, and then takes `SELECT id FROM clubs … FOR UPDATE` inside it for the guest-book
 throttle — a lock it could gate in, on a path that mints a `guests` row carrying a name, an email
 and a phone. So it is a pre-check with a lock available, which is the shape this rule argues
-against, and it is the one place the rule would still apply if someone moved the check. That has
-not been done and is not a #630 regression: it is how #555 shipped it. It is parked in
-`TODOS/remove-self-add-630.md` rather than filed, because the window is a few milliseconds wide on
-a superadmin takedown and the residual row is a guest in a club every read already reports as
-gone — but a reader looking for the worked example should find this note instead of assuming the
-guest book is one.
+against, and it is the one place the rule still applies. It is not a #630 regression: it is how
+#555 shipped it. #858 moves that check inside the guest-book lock; until it lands, a reader looking
+for the worked example should find this note instead of assuming the guest book already is one.
 
 **The enrollment sweep is now closed on both shapes**, having been closed on neither. The
 `\n});` body-slicing bug is fixed (#565) and `bodyStopsAtItsOwnDeclaration` fails on any
