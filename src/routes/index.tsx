@@ -5,9 +5,10 @@ import {
 	MonitorPlay,
 	UserPlus,
 } from "lucide-react";
-import { BrandMark } from "#/components/brand-mark";
+import { FounderNote } from "#/components/marketing/founder-note";
+import { MarketingShell } from "#/components/marketing/marketing-shell";
 import { Button } from "#/components/ui/button";
-import { ACCESS_REQUEST_MAILTO, TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { ACCESS_REQUEST_MAILTO, PILOT_PRICING_LINE } from "#/lib/brand";
 import { homeRedirectTarget } from "#/lib/home-route";
 import { getAuthContext } from "#/server/auth-context";
 
@@ -202,27 +203,7 @@ function MemberRoleList() {
 
 function Landing() {
 	return (
-		// No background colour here, deliberately (#612). styles.css gives `body`
-		// a layered treatment — three radial washes on --hero-a/--hero-b over a
-		// sand → foam → bg-base ramp, with dark-mode variants — and this page set
-		// `bg-[var(--foam)]`, flat-filling straight over all of it. The landing
-		// page was the one surface discarding the app's own atmosphere, and it is
-		// the surface that most needs it.
-		<div className="flex min-h-svh flex-col text-[var(--sea-ink)]">
-			<header className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-5 sm:px-8">
-				<BrandMark />
-				<nav className="flex items-center gap-1">
-					<Button asChild variant="ghost" className="font-semibold">
-						<Link to="/resources">Resources</Link>
-					</Button>
-					<Button asChild variant="ghost" className="font-semibold">
-						<Link to="/signin" search={{ redirect: "/officers" }}>
-							Sign in
-						</Link>
-					</Button>
-				</nav>
-			</header>
-
+		<MarketingShell>
 			<main className="flex-1">
 				{/* Hero */}
 				<section className="mx-auto grid w-full max-w-6xl items-center gap-10 px-5 py-12 sm:px-8 lg:grid-cols-2 lg:gap-14 lg:py-20">
@@ -261,6 +242,10 @@ function Landing() {
 							New club? GavelUp is invite-only while it's young — send a note
 							and we'll set your club up ourselves.
 						</p>
+						<p className="mt-2 text-sm font-semibold text-[var(--sea-ink)]">
+							{PILOT_PRICING_LINE}
+						</p>
+						<FounderNote className="mt-4" />
 					</div>
 
 					<MemberRoleList />
@@ -307,32 +292,6 @@ function Landing() {
 					</div>
 				</section>
 			</main>
-
-			<footer className="border-t border-[var(--line)]">
-				<div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-[var(--sea-ink-soft)] sm:px-8">
-					<div className="flex flex-wrap items-center justify-between gap-3">
-						<BrandMark size="sm" />
-						<div className="flex items-center gap-4">
-							<Link
-								to="/resources"
-								className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
-							>
-								Resources
-							</Link>
-							<Link
-								to="/signin"
-								search={{ redirect: "/officers" }}
-								className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
-							>
-								Sign in
-							</Link>
-						</div>
-					</div>
-					<p className="max-w-3xl text-xs leading-relaxed">
-						{TOASTMASTERS_DISCLAIMER}
-					</p>
-				</div>
-			</footer>
-		</div>
+		</MarketingShell>
 	);
 }
