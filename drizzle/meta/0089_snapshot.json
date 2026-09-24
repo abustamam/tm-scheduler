@@ -1,5 +1,5 @@
 {
-  "id": "8ee45243-1166-4a1d-91d7-5700aaa3f529",
+  "id": "83cadfc0-d6ff-4bac-8ff7-52f41c2d4278",
   "prevId": "d9a671f2-4128-4f16-bf9d-2522a4a1f07b",
   "version": "7",
   "dialect": "postgresql",
@@ -21,8 +21,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "first_reason": {
-          "name": "first_reason",
+        "reason": {
+          "name": "reason",
           "type": "text",
           "primaryKey": false,
           "notNull": true

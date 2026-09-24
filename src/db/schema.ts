@@ -2879,17 +2879,19 @@ export const accessRequests = pgTable(
 );
 
 /**
- * One row per alert WINDOW (#866): the maintainer is told once that a cap on
- * the request-access form tripped, not once per rejected request. `window_key`
- * is the UTC day, and a trip that finds the day's row only bumps `trips`, so a
- * flood produces one email that says how big it was. Delivered by the poller
- * with the same bookkeeping as `notifications`.
+ * One row per alert WINDOW and REASON (#866): the maintainer is told once per
+ * UTC day per kind of trip that the request-access form hit a limit, not once
+ * per rejected request. Keyed by reason as well as day so a benign trip (one
+ * address resubmitting just after midnight) cannot use up the day's only alert
+ * and silence a later flood. `window_key` is `<day>:<reason>`; a trip that
+ * finds its row only bumps `trips`. Delivered by the poller with the same
+ * bookkeeping as `notifications`.
  */
 export const accessRequestAlerts = pgTable("access_request_alerts", {
 	id: uuid("id").primaryKey().defaultRandom(),
 	windowKey: text("window_key").notNull().unique(),
-	// The first cap that tripped in the window: per_email | global | notify.
-	firstReason: text("first_reason").notNull(),
+	// per_email | global | notify | undelivered — see `CapReason`.
+	reason: text("reason").notNull(),
 	trips: integer("trips").notNull().default(1),
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.notNull()

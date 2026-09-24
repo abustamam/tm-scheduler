@@ -308,15 +308,19 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	},
 	// The request-access form (#866). A prospect asks for a club or district
 	// before any account exists, so there is no session to prove. What bounds
-	// it, all in `access-requests-logic.ts`: a honeypot and a client-measured
-	// minimum fill time (both answered with a silent success); a per-email, a
-	// global and a notification cap per 24h, counted and written under ONE
-	// advisory lock so concurrent posts cannot overshoot them; and one alert to
-	// the maintainer per day when any cap trips. NOT bounded per client IP.
+	// it, all in `access-requests-logic.ts`:
+	//   - ADMISSION: a honeypot and a client-measured minimum fill time (both
+	//     answered with a silent success); per 24h of created_at, a per-email,
+	//     a global and a notification cap, counted and written under one
+	//     advisory lock that is TRIED, never waited on (held → "busy"), so
+	//     concurrent posts can neither overshoot a cap nor queue on the pool;
+	//   - DELIVERY: at most MAX_SENDS_PER_TICK request emails per poller tick;
+	//   - ALERTS: one per reason per UTC day.
+	// NOT bounded per client IP.
 	"access-requests.ts#submitAccessRequest": {
 		class: "public-intake",
 		reason:
-			"access-request intake: honeypot + fill time, per-email/global/notify caps under an advisory lock, no per-IP cap (#866)",
+			"access-request intake: honeypot + fill time; per-email/global/notify admission caps per 24h under a try-lock (held = busy); ≤MAX_SENDS_PER_TICK emails per poller tick; no per-IP cap (#866)",
 	},
 };
 

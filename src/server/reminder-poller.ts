@@ -45,12 +45,16 @@ let ticking = false;
  * one, so letting the send flag disable it turned a 48-hour retention window
  * into an indefinite one.
  *
+ * Every pass has its own try, so any one failing still lets the rest run.
+ * Exported for `reminder-poller.test.ts`, which proves exactly that; nothing
+ * else calls it.
+ *
  * Overlap guard: if the previous tick is still in flight when the interval fires
  * (a slow send batch), skip this one so ticks never stack up in the single
  * process. A thrown error is logged and swallowed — the poller must survive a
  * bad tick and keep running.
  */
-async function tick(): Promise<void> {
+export async function runReminderTick(): Promise<void> {
 	if (ticking) return;
 	ticking = true;
 	try {
@@ -66,16 +70,22 @@ async function tick(): Promise<void> {
 			console.error("[reminders] producer failed:", err);
 		}
 
-		const result = await processDueNotifications();
-		if (result.due > 0) {
-			console.log(
-				`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed} stale=${result.stale}`,
-			);
+		// Its own try (#866): a reminder-pass throw must not skip the
+		// access-request delivery or the retention sweep below.
+		try {
+			const result = await processDueNotifications();
+			if (result.due > 0) {
+				console.log(
+					`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed} stale=${result.stale}`,
+				);
+			}
+		} catch (err) {
+			console.error("[reminders] send pass failed:", err);
 		}
 
 		// The request-access form's emails (#866): request notifications and the
-		// once-a-day cap alert. Its own try so a failure here neither hides nor
-		// is hidden by the reminder pass above.
+		// per-reason cap alerts. Its own try, like the pass above, so neither can
+		// hide the other or stop the sweep.
 		try {
 			const mail = await deliverAccessRequestMail();
 			if (mail.sent + mail.failed + mail.alertsSent + mail.alertsFailed > 0) {
@@ -187,7 +197,7 @@ export function startReminderPoller(): boolean {
 	}
 	const intervalMs = resolveIntervalMs();
 	timer = setInterval(() => {
-		void tick();
+		void runReminderTick();
 	}, intervalMs);
 	// Don't let the interval alone hold the process open — clean shutdown wins.
 	timer.unref?.();

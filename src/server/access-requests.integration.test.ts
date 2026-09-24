@@ -39,6 +39,7 @@ import {
 	alertWindowKey,
 	deliverAccessRequestMail,
 	LIMITS,
+	MAX_SENDS_PER_TICK,
 	submitAccessRequestLogic,
 	sweepExpiredAccessRequests,
 } from "./access-requests-logic";
@@ -46,7 +47,11 @@ import {
 	type AccessRequestFormInput,
 	accessRequestSchema,
 } from "./access-requests-schemas";
-import { MAX_SEND_ATTEMPTS, RETRY_BACKOFF_MS } from "./notifications-logic";
+import {
+	MAX_SEND_ATTEMPTS,
+	type NotificationDeps,
+	RETRY_BACKOFF_MS,
+} from "./notifications-logic";
 
 const RUN = randomUUID();
 const RUN_DOMAIN = `run-${RUN}.test`;
@@ -124,8 +129,61 @@ function makeDeps(now: () => Date = () => new Date()) {
 	return { deps: { sendEmail, now }, sent, sendEmail };
 }
 
-const deliver = (deps: ReturnType<typeof makeDeps>["deps"]) =>
+const deliver = (deps: NotificationDeps) =>
 	deliverAccessRequestMail(deps, { scope: SCOPE });
+
+/**
+ * Run two delivery ticks with a barrier that forces the overlap rather than
+ * hoping for it:
+ *   A selects every due row, claims the first and blocks in its first send;
+ *   B starts only then, selects the rest (A's first is inside its backoff),
+ *   claims one and blocks in ITS send until A has finished;
+ *   A resumes and walks the rest while B still holds its row unsent.
+ * A claim that checks only "not yet sent" lets A take B's row again here; the
+ * attempts-token claim is what refuses it. Returns every send, in order.
+ */
+async function overlappingTicks(): Promise<SendEmailParams[]> {
+	const sends: SendEmailParams[] = [];
+	let startB!: () => void;
+	const bStarted = new Promise<void>((r) => {
+		startB = r;
+	});
+	let bInSend!: () => void;
+	const bSending = new Promise<void>((r) => {
+		bInSend = r;
+	});
+	let aFinished!: () => void;
+	const aDone = new Promise<void>((r) => {
+		aFinished = r;
+	});
+	let aFirst = true;
+	const depsA = {
+		now: () => new Date(),
+		sendEmail: async (p: SendEmailParams) => {
+			sends.push(p);
+			if (aFirst) {
+				aFirst = false;
+				startB();
+				await bSending;
+			}
+		},
+	};
+	const depsB = {
+		now: () => new Date(),
+		sendEmail: async (p: SendEmailParams) => {
+			sends.push(p);
+			bInSend();
+			await aDone;
+		},
+	};
+	const tickA = deliver(depsA).then((r) => {
+		aFinished();
+		return r;
+	});
+	const tickB = bStarted.then(() => deliver(depsB));
+	await Promise.all([tickA, tickB]);
+	return sends;
+}
 
 describe("LIMITS", () => {
 	it("pins the four production caps and the retention window as literals", () => {
@@ -136,6 +194,7 @@ describe("LIMITS", () => {
 			notify24h: 40,
 		});
 		expect(ACCESS_REQUEST_RETENTION_DAYS).toBe(180);
+		expect(MAX_SENDS_PER_TICK).toBe(5);
 	});
 });
 
@@ -252,7 +311,7 @@ describe.skipIf(!hasTestDb)("submitAccessRequestLogic (#866)", () => {
 		});
 		expect(await runRows()).toHaveLength(SMALL.perEmail24h + 1);
 		const [alert] = await runAlerts();
-		expect(alert).toMatchObject({ firstReason: "per_email", trips: 1 });
+		expect(alert).toMatchObject({ reason: "per_email", trips: 1 });
 	});
 
 	it("at the global cap, writes nothing, answers busy, and alerts", async () => {
@@ -260,7 +319,7 @@ describe.skipIf(!hasTestDb)("submitAccessRequestLogic (#866)", () => {
 		expect(await submit()).toEqual({ ok: false, reason: "busy" });
 		expect(await runRows()).toHaveLength(SMALL.global24h);
 		const [alert] = await runAlerts();
-		expect(alert).toMatchObject({ firstReason: "global", trips: 1 });
+		expect(alert).toMatchObject({ reason: "global", trips: 1 });
 	});
 
 	it("at the notification cap, saves the row un-notified and alerts", async () => {
@@ -271,43 +330,94 @@ describe.skipIf(!hasTestDb)("submitAccessRequestLogic (#866)", () => {
 		expect(saved).toHaveLength(1);
 		expect(saved[0]?.notified).toBe(false);
 		const [alert] = await runAlerts();
-		expect(alert).toMatchObject({ firstReason: "notify", trips: 1 });
+		expect(alert).toMatchObject({ reason: "notify", trips: 1 });
 	});
 
-	it("records ONE alert per window however many trips, counting them", async () => {
+	it("records ONE alert per window per reason however many trips, counting them", async () => {
 		await seedRows(SMALL.global24h);
 		for (let i = 0; i < 4; i++) await submit();
 		const alerts = await runAlerts();
 		expect(alerts).toHaveLength(1);
-		expect(alerts[0]).toMatchObject({ firstReason: "global", trips: 4 });
-		expect(alerts[0]?.windowKey).toBe(alertWindowKey(new Date(), SCOPE));
+		expect(alerts[0]).toMatchObject({ reason: "global", trips: 4 });
+		expect(alerts[0]?.windowKey).toBe(
+			alertWindowKey(new Date(), "global", SCOPE),
+		);
+	});
+
+	it("keys alerts by reason, so a benign per-email trip cannot silence a later flood", async () => {
+		// Just after midnight: one address resubmits past its cap.
+		const email = freshEmail();
+		for (let i = 0; i <= SMALL.perEmail24h; i++) await submit({ email });
+		// Later the same day: the form fills up.
+		await seedRows(SMALL.global24h);
+		await submit();
+		const alerts = await runAlerts();
+		// Both are there, each its own row, each unsent and so each still due.
+		// (The second admission above also trips this suite's notify cap of 1.)
+		expect(alerts.map((a) => a.reason)).toEqual(
+			expect.arrayContaining(["per_email", "global"]),
+		);
+		expect(new Set(alerts.map((a) => a.windowKey)).size).toBe(alerts.length);
+		expect(alerts.every((a) => a.sentAt === null)).toBe(true);
+	});
+
+	it("answers busy at once, writing nothing, when another submission holds the lock", async () => {
+		// Hold the submission lock on a separate connection, as a stalled or
+		// flooding holder would, and prove a submit does not wait behind it.
+		const holder = await testDb.$client.connect();
+		try {
+			await holder.query("begin");
+			await holder.query(
+				"select pg_advisory_xact_lock(hashtextextended('access-requests:submit', 0))",
+			);
+			const started = Date.now();
+			expect(await submit()).toEqual({ ok: false, reason: "busy" });
+			expect(Date.now() - started).toBeLessThan(1000);
+			expect(await runRows()).toHaveLength(0);
+		} finally {
+			await holder.query("rollback");
+			holder.release();
+		}
+		// Released: the same submission now goes through.
+		expect(await submit()).toEqual({ ok: true });
 	});
 
 	it("holds every cap under concurrency: parallel submits cannot overshoot", async () => {
-		// One email, many racing submissions: without the lock each counts the
-		// same zero rows and all of them insert.
+		// The lock is TRIED, so a racer that finds it held answers busy rather
+		// than waiting. Whatever mix of busy and admitted results a race gives,
+		// what is WRITTEN must never exceed a cap. Without the lock each racer
+		// counts the same zero rows and every one of them inserts.
 		const email = freshEmail();
 		const racers = 8;
-		const results = await Promise.all(
-			Array.from({ length: racers }, () => submit({ email })),
-		);
-		expect((await runRows()).length).toBe(SMALL.perEmail24h);
-		expect(results.filter((r) => r.ok && r.alreadyReceived)).toHaveLength(
-			racers - SMALL.perEmail24h,
-		);
+		for (let round = 0; round < 3; round++) {
+			const results = await Promise.all(
+				Array.from({ length: racers }, () => submit({ email })),
+			);
+			const written = (await runRows()).length;
+			expect(written).toBeLessThanOrEqual(SMALL.perEmail24h);
+			// Every racer got an answer that matches what was written.
+			const admitted = results.filter((r) => r.ok && !r.alreadyReceived);
+			expect(admitted.length).toBe(written);
+			await testDb
+				.delete(accessRequests)
+				.where(like(accessRequests.email, SCOPE.emailLike));
+		}
 
 		// Distinct emails racing for the day's one notification slot.
-		await testDb
-			.delete(accessRequests)
-			.where(like(accessRequests.email, SCOPE.emailLike));
-		await Promise.all(
-			Array.from({ length: racers }, () =>
-				submit({}, { ...SMALL, global24h: 1000 }),
-			),
-		);
-		const rows = await runRows();
-		expect(rows).toHaveLength(racers);
-		expect(rows.filter((r) => r.notified)).toHaveLength(SMALL.notify24h);
+		for (let round = 0; round < 3; round++) {
+			await Promise.all(
+				Array.from({ length: racers }, () =>
+					submit({}, { ...SMALL, global24h: 1000 }),
+				),
+			);
+			const rows = await runRows();
+			expect(rows.filter((r) => r.notified).length).toBeLessThanOrEqual(
+				SMALL.notify24h,
+			);
+			await testDb
+				.delete(accessRequests)
+				.where(like(accessRequests.email, SCOPE.emailLike));
+		}
 	});
 });
 
@@ -342,13 +452,81 @@ describe.skipIf(!hasTestDb)("deliverAccessRequestMail (#866)", () => {
 	});
 
 	it("sends each row once when two poller ticks overlap", async () => {
-		for (let i = 0; i < 4; i++) await submit({}, { ...SMALL, notify24h: 10 });
+		const roomy = { ...SMALL, global24h: 1000, notify24h: 10 };
+		const emails = [freshEmail(), freshEmail(), freshEmail(), freshEmail()];
+		for (const email of emails) {
+			expect(await submit({ email }, roomy)).toEqual({ ok: true });
+		}
+		expect(await runAlerts()).toHaveLength(0);
+
+		const sends = await overlappingTicks();
+
+		const requestMail = sends.filter((m) =>
+			m.subject.startsWith("GavelUp access request"),
+		);
+		expect(requestMail.map((m) => m.replyTo).sort()).toEqual(
+			[...emails].sort(),
+		);
+		// And every row is marked sent exactly once.
+		const rows = await runRows();
+		expect(rows.every((r) => r.notifySentAt !== null)).toBe(true);
+	});
+
+	it("sends each alert once when two poller ticks overlap", async () => {
+		const reasons = ["per_email", "global", "notify", "undelivered"] as const;
+		await testDb.insert(accessRequestAlerts).values(
+			reasons.map((reason) => ({
+				windowKey: `${SCOPE.alertKey}:overlap:${reason}`,
+				reason,
+			})),
+		);
+		const sends = await overlappingTicks();
+		const alertMail = sends.filter((m) => m.subject.includes("hit a limit"));
+		expect(alertMail).toHaveLength(reasons.length);
+		expect(new Set(alertMail.map((m) => m.idempotencyKey)).size).toBe(
+			reasons.length,
+		);
+	});
+
+	it("carries a stable idempotency key per row and per alert", async () => {
+		await submit();
+		const [row] = await runRows();
+		await seedRows(SMALL.global24h);
+		await submit();
+		const [alert] = await runAlerts();
 		const { deps, sent } = makeDeps();
-		// Both ticks read the same due rows before either claims; the
-		// attempts-token claim is what stops the second from sending them too.
-		await Promise.all([deliver(deps), deliver(deps), deliver(deps)]);
-		expect(sent).toHaveLength(4);
-		expect(new Set(sent.map((m) => m.replyTo)).size).toBe(4);
+		await deliver(deps);
+		const keys = sent.map((m) => m.idempotencyKey);
+		expect(keys).toContain(`access-request/${row?.id}`);
+		expect(keys).toContain(`access-request-alert/${alert?.id}`);
+	});
+
+	it("stamps each claim with its own time, not the batch's start", async () => {
+		const roomy = { ...SMALL, global24h: 1000, notify24h: 10 };
+		await submit({}, roomy);
+		await submit({}, roomy);
+		let clock = Date.now();
+		// Every call advances the clock a minute: a claim stamped from a single
+		// batch-start value would give both rows the same time.
+		const { deps } = makeDeps(() => {
+			clock += 60_000;
+			return new Date(clock);
+		});
+		await deliver(deps);
+		const stamps = (await runRows()).map((r) =>
+			r.notifyLastAttemptedAt?.getTime(),
+		);
+		expect(new Set(stamps).size).toBe(2);
+	});
+
+	it("sends at most MAX_SENDS_PER_TICK request emails per tick, oldest first", async () => {
+		const roomy = { ...SMALL, global24h: 1000, notify24h: 100 };
+		const total = MAX_SENDS_PER_TICK + 2;
+		for (let i = 0; i < total; i++) await submit({}, roomy);
+		const { deps, sent } = makeDeps();
+		expect((await deliver(deps)).sent).toBe(MAX_SENDS_PER_TICK);
+		expect((await deliver(deps)).sent).toBe(2);
+		expect(sent).toHaveLength(total);
 	});
 
 	it("never emails a row that did not claim a notification slot", async () => {
@@ -393,6 +571,29 @@ describe.skipIf(!hasTestDb)("deliverAccessRequestMail (#866)", () => {
 		errSpy.mockRestore();
 	});
 
+	it("raises an undelivered alert when a request uses its last attempt", async () => {
+		await seedRows(1, {
+			notified: true,
+			notifyAttempts: MAX_SEND_ATTEMPTS - 2,
+		});
+		let clock = Date.now();
+		const { deps, sendEmail } = makeDeps(() => new Date(clock));
+		sendEmail.mockRejectedValue(new Error("Resend down"));
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		// Second-to-last attempt fails: not yet undelivered.
+		await deliver(deps);
+		expect(await runAlerts()).toHaveLength(0);
+
+		// Last attempt fails: one undelivered alert.
+		clock += RETRY_BACKOFF_MS + 1000;
+		await deliver(deps);
+		const alerts = await runAlerts();
+		expect(alerts).toHaveLength(1);
+		expect(alerts[0]).toMatchObject({ reason: "undelivered", trips: 1 });
+		errSpy.mockRestore();
+	});
+
 	it("sends the window's cap alert once, with no requester data in it", async () => {
 		await seedRows(SMALL.global24h);
 		const secret = freshEmail();
@@ -401,11 +602,10 @@ describe.skipIf(!hasTestDb)("deliverAccessRequestMail (#866)", () => {
 
 		const result = await deliver(deps);
 		expect(result.alertsSent).toBe(1);
-		const alertMail = sent.filter((m) => m.subject.includes("hit a cap"));
+		const alertMail = sent.filter((m) => m.subject.includes("hit a limit"));
 		expect(alertMail).toHaveLength(1);
-		expect(alertMail[0]?.text).toContain(
-			"Rejections or un-emailed requests so far this window: 3",
-		);
+		expect(alertMail[0]?.subject).toContain("(global)");
+		expect(alertMail[0]?.text).toContain("Times so far this window: 3");
 		expect(alertMail[0]?.text).not.toContain(secret);
 
 		// More trips the same day do not send another.
@@ -455,12 +655,12 @@ describe.skipIf(!hasTestDb)("sweepExpiredAccessRequests (#866)", () => {
 		await testDb.insert(accessRequestAlerts).values([
 			{
 				windowKey: `${SCOPE.alertKey}:old`,
-				firstReason: "global",
+				reason: "global",
 				createdAt: old,
 			},
 			{
 				windowKey: `${SCOPE.alertKey}:new`,
-				firstReason: "global",
+				reason: "global",
 				createdAt: recent,
 			},
 		]);

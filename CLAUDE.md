@@ -412,7 +412,7 @@ table is a SPARSE override of TI's own window dates, so **row absent = the
 default**, see `CONTEXT.md`'s **Club Officer Training (COT)** entry),
 notifications (drained by an in-process poller, ADR-0023), and access requests
 (`access_requests` / `access_request_alerts`, #866 — the public request-access form's rows and
-its once-a-day cap alert; club-less, delivered by the same poller, and deleted after 180 days by
+its per-reason daily alerts; club-less, delivered by the same poller, and deleted after 180 days by
 its sweep). Better-Auth's tables
 live in `src/db/auth-schema.ts` — hand-maintained, and since #842 that file also carries the
 eight OAuth tables (`jwks` + seven from `@better-auth/mcp`). **Adding a Better Auth plugin

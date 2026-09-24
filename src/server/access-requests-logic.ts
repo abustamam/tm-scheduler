@@ -8,8 +8,11 @@
 //   - a per-email cap, a global cap, and a separate cap on how many requests
 //     the maintainer is emailed about, all counted and written under ONE
 //     transaction-scoped advisory lock, so concurrent submissions cannot
-//     overshoot them;
-//   - one alert per UTC day when any cap trips, not one per rejection.
+//     overshoot them. The lock is TRIED, never waited on: a submission that
+//     finds it held answers "busy" at once, so a flood cannot park the app's
+//     pooled connections behind it;
+//   - one alert per UTC day PER REASON when a cap trips, not one per rejection;
+//   - on delivery, at most `MAX_SENDS_PER_TICK` request emails per poller tick.
 // There is no per-IP cap: see the PR for #866 — the client IP Railway hands
 // the app could not be verified as unspoofable.
 //
@@ -63,7 +66,21 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 const LOCK_KEY = "access-requests:submit";
 
-export type CapReason = "per_email" | "global" | "notify";
+/**
+ * Why an alert row exists. The first three are admission caps tripping;
+ * `undelivered` is a claimed request whose notification used every retry.
+ */
+export type CapReason = "per_email" | "global" | "notify" | "undelivered";
+
+/**
+ * The DELIVERY bound, separate from the admission caps. `notify24h` bounds how
+ * many requests are ADMITTED for a notification per 24h of `created_at`; it
+ * does not bound when they are sent. With the poller down, queued rows would
+ * otherwise drain as one burst when it comes back. So one tick sends at most
+ * this many request emails, and at most this many alerts — at the default 60s
+ * interval, 5 a minute.
+ */
+export const MAX_SENDS_PER_TICK = 5;
 
 export type SubmitAccessRequestResult =
 	| { ok: true; alreadyReceived?: true }
@@ -89,26 +106,31 @@ export type SubmitAccessRequestOptions = {
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-/** The alert window a trip at `now` belongs to: the UTC day. */
-export function alertWindowKey(now: Date, scope?: AccessRequestScope): string {
-	const day = now.toISOString().slice(0, 10);
-	return scope?.alertKey ? `${scope.alertKey}:${day}` : day;
+/** The alert window a trip at `now` belongs to: the UTC day, per reason. */
+export function alertWindowKey(
+	now: Date,
+	reason: CapReason,
+	scope?: AccessRequestScope,
+): string {
+	const key = `${now.toISOString().slice(0, 10)}:${reason}`;
+	return scope?.alertKey ? `${scope.alertKey}:${key}` : key;
 }
 
 /**
- * Record that a cap tripped. The FIRST trip in a window inserts the alert the
- * poller will send; every later one only bumps `trips`, so the maintainer gets
- * one email per window however many requests were turned away.
+ * Record that a cap tripped. The FIRST trip of a reason in a window inserts the
+ * alert the poller will send; every later one only bumps `trips`, so the
+ * maintainer gets one email per reason per window however many requests were
+ * turned away.
  */
 async function recordCapTrip(
-	tx: Tx,
+	tx: Tx | typeof db,
 	reason: CapReason,
 	now: Date,
 	scope?: AccessRequestScope,
 ): Promise<void> {
 	await tx
 		.insert(accessRequestAlerts)
-		.values({ windowKey: alertWindowKey(now, scope), firstReason: reason })
+		.values({ windowKey: alertWindowKey(now, reason, scope), reason })
 		.onConflictDoUpdate({
 			target: accessRequestAlerts.windowKey,
 			set: { trips: sql`${accessRequestAlerts.trips} + 1` },
@@ -125,9 +147,15 @@ async function recordCapTrip(
  * 5. insert the row, CLAIMING a notification slot (`notified = true`) if the
  *    day's notification cap has room.
  *
- * Steps 3-5 run in one transaction under `pg_advisory_xact_lock`, so they are
- * one atomic check-then-write: concurrent submissions queue on the lock and each
- * counts the rows the previous one committed. Nothing here sends email — the
+ * Steps 3-5 run in one transaction under an advisory lock, so they are one
+ * atomic check-then-write: each holder counts the rows the previous one
+ * committed. The lock is taken with `pg_advisory_xact_lock`'s TRY form: a
+ * submission that finds it held answers `busy` immediately and writes nothing.
+ * Waiting instead would hold a pooled connection for the length of the queue on
+ * an anonymous endpoint, and `src/db/index.ts` shares a pool of 10 with the
+ * whole app (the reasoning `src/server/mcp/lock.ts` gives for bounding its own
+ * wait). The locked section is three counts and an insert, so two real people
+ * colliding inside it is rare, and a `busy` there costs them a retry. Nothing here sends email — the
  * poller delivers claimed rows, so a Resend failure is retried rather than lost.
  * Any cap trip in 3-5 also records the window's alert, inside the same lock.
  */
@@ -146,9 +174,12 @@ export async function submitAccessRequestLogic(
 		: undefined;
 
 	return db.transaction(async (tx) => {
-		await tx.execute(
-			sql`select pg_advisory_xact_lock(hashtextextended(${LOCK_KEY}, 0))`,
+		const locked = await tx.execute<{ locked: boolean }>(
+			sql`select pg_try_advisory_xact_lock(hashtextextended(${LOCK_KEY}, 0)) as locked`,
 		);
+		if (locked.rows[0]?.locked !== true) {
+			return { ok: false, reason: "busy" } as const;
+		}
 
 		// 3. Per-email cap. Email is already lowercased + trimmed by the schema.
 		const [perEmail] = await tx
@@ -211,15 +242,23 @@ const errorText = (err: unknown) =>
 	(err instanceof Error ? err.message : String(err)).slice(0, 1000);
 
 /**
- * Send every claimed-but-unsent request notification and every unsent alert.
- * Each row is claimed by bumping its attempts counter from the value read, so
- * two overlapping ticks cannot both send it; a failure records the error and
- * leaves the row for a retry after `RETRY_BACKOFF_MS`, up to `MAX_SEND_ATTEMPTS`.
- * Never throws for a single row's failure.
+ * Send up to `limit` (default `MAX_SENDS_PER_TICK`) claimed-but-unsent request
+ * notifications, oldest first, and up to as many unsent alerts. Each row is
+ * claimed by bumping its attempts counter from the value read, so two
+ * overlapping ticks cannot both send it; the claim stamps its own time, so a
+ * slow batch cannot leave a row looking claimed earlier than it was. Each send
+ * carries a stable Resend idempotency key, so a send that went through but
+ * whose bookkeeping failed is not delivered again on retry. A failure records
+ * the error and leaves the row for a retry after `RETRY_BACKOFF_MS`; the
+ * request that uses its last attempt records an `undelivered` alert. Never
+ * throws for a single row's failure.
  */
 export async function deliverAccessRequestMail(
 	deps: NotificationDeps = defaultNotificationDeps,
-	{ limit = 50, scope }: { limit?: number; scope?: AccessRequestScope } = {},
+	{
+		limit = MAX_SENDS_PER_TICK,
+		scope,
+	}: { limit?: number; scope?: AccessRequestScope } = {},
 ): Promise<AccessRequestDeliveryResult> {
 	const result = { sent: 0, failed: 0, alertsSent: 0, alertsFailed: 0 };
 	const now = deps.now();
@@ -250,7 +289,7 @@ export async function deliverAccessRequestMail(
 			.update(accessRequests)
 			.set({
 				notifyAttempts: row.notifyAttempts + 1,
-				notifyLastAttemptedAt: now,
+				notifyLastAttemptedAt: deps.now(),
 			})
 			.where(
 				and(
@@ -265,6 +304,7 @@ export async function deliverAccessRequestMail(
 			await deps.sendEmail({
 				to: ACCESS_REQUEST_NOTIFY_EMAIL,
 				replyTo: row.email,
+				idempotencyKey: `access-request/${row.id}`,
 				...buildAccessRequestEmail(row),
 			});
 			await db
@@ -283,6 +323,17 @@ export async function deliverAccessRequestMail(
 				err,
 			);
 			result.failed++;
+			// That was its last attempt: it will never be sent, so say so once.
+			if (row.notifyAttempts + 1 >= MAX_SEND_ATTEMPTS) {
+				try {
+					await recordCapTrip(db, "undelivered", deps.now(), scope);
+				} catch (alertErr) {
+					console.error(
+						"[access-requests] could not record an undelivered alert:",
+						alertErr,
+					);
+				}
+			}
 		}
 	}
 
@@ -302,12 +353,13 @@ export async function deliverAccessRequestMail(
 					: undefined,
 			),
 		)
+		.orderBy(accessRequestAlerts.createdAt)
 		.limit(limit);
 
 	for (const alert of alerts) {
 		const won = await db
 			.update(accessRequestAlerts)
-			.set({ attempts: alert.attempts + 1, lastAttemptedAt: now })
+			.set({ attempts: alert.attempts + 1, lastAttemptedAt: deps.now() })
 			.where(
 				and(
 					eq(accessRequestAlerts.id, alert.id),
@@ -320,6 +372,7 @@ export async function deliverAccessRequestMail(
 		try {
 			await deps.sendEmail({
 				to: ACCESS_REQUEST_NOTIFY_EMAIL,
+				idempotencyKey: `access-request-alert/${alert.id}`,
 				...buildCapAlertEmail(alert),
 			});
 			await db
@@ -446,6 +499,8 @@ const REASON_TEXT: Record<string, string> = {
 	global: "the form reached its daily cap and started answering “busy”",
 	notify:
 		"more requests arrived than the daily email cap; the rest are saved but were not emailed",
+	undelivered:
+		"a request's notification failed on every retry; the row is saved but you were never emailed about it",
 };
 
 /** The once-per-window cap alert. Carries no requester data, only counts. */
@@ -454,14 +509,14 @@ export function buildCapAlertEmail(alert: AccessRequestAlertRow): {
 	html: string;
 	text: string;
 } {
-	const why = REASON_TEXT[alert.firstReason] ?? alert.firstReason;
-	const subject = "GavelUp: the request-access form hit a cap";
+	const why = REASON_TEXT[alert.reason] ?? alert.reason;
+	const subject = `GavelUp: the request-access form hit a limit (${alert.reason})`;
 	const lines = [
 		`Window: ${alert.windowKey} (UTC)`,
-		`First cap to trip: ${alert.firstReason} (${why})`,
-		`Rejections or un-emailed requests so far this window: ${alert.trips}`,
+		`Reason: ${alert.reason} (${why})`,
+		`Times so far this window: ${alert.trips}`,
 		"",
-		"You get one of these per day at most. Read the rows with:",
+		"You get at most one of these per reason per day. Read the rows with:",
 		"select * from access_requests order by created_at desc limit 50;",
 	];
 	const text = lines.join("\n");

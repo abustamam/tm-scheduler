@@ -2,7 +2,7 @@ CREATE TYPE "public"."access_request_kind" AS ENUM('club', 'district');--> state
 CREATE TABLE "access_request_alerts" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"window_key" text NOT NULL,
-	"first_reason" text NOT NULL,
+	"reason" text NOT NULL,
 	"trips" integer DEFAULT 1 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"sent_at" timestamp with time zone,
