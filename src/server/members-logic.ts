@@ -611,7 +611,20 @@ export async function applyMemberRemove(input: RemoveInput) {
 				detail: { fromMemberId: input.memberId },
 			});
 		}
-		await tx.delete(members).where(eq(members.id, input.memberId));
+		// RETURNING, scoped to id AND club, and checked. The read above is outside
+		// this transaction, so a concurrent removal of the same row can land in
+		// between; a delete that removes nothing must not log a removal. The log
+		// row is the release record the CSV importer trusts (#855), and a stale
+		// second removal writing it would make this club the Person's releaser
+		// after another club had since removed them. Throwing rolls back the
+		// slot releases above with it.
+		const [deleted] = await tx
+			.delete(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.returning({ id: members.id, personId: members.personId });
+		if (!deleted) throw new Error("Member not found.");
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: input.actorMemberId,
@@ -623,7 +636,7 @@ export async function applyMemberRemove(input: RemoveInput) {
 			// removal is the LATEST naming them (`loadPersonCandidates`). Only an
 			// unlinked Person gets here (`personHasAccount` above), which is exactly
 			// the kind that rule is about. App-written, never client text.
-			detail: { name: member.name, personId: member.personId },
+			detail: { name: member.name, personId: deleted.personId },
 		});
 	});
 	return { ok: true as const };

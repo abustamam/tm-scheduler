@@ -17,9 +17,11 @@
  *     bunx vitest run src/server/cross-club-attach.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members, people, user } from "#/db/schema";
+import * as schema from "#/db/schema";
+import { activityLog, guests, members, people, user } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
 import {
 	ADDRESS_CONFLICT_NOTE,
@@ -45,7 +47,9 @@ vi.mock("@tanstack/react-start/server", () => ({
 	},
 }));
 
-const { importPeopleAndMembers } = await import("./import-members-logic");
+const { importPeopleAndMembers, loadPersonCandidates } = await import(
+	"./import-members-logic"
+);
 const { previewMemberImport, commitMemberImport } = await import(
 	"./upload-members-logic"
 );
@@ -509,6 +513,43 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			await applyMemberRemove({ clubId, memberId: m.id, actorMemberId: null });
 		}
 
+		/** How many `member_remove` rows in `clubId` name `personId`. */
+		async function removalsNaming(clubId: string, personId: string) {
+			const rows = await testDb
+				.select({ id: activityLog.id })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, clubId),
+						eq(activityLog.action, "member_remove"),
+						eq(activityLog.targetType, "member"),
+						sql`${activityLog.detail} ->> 'personId' = ${personId}`,
+					),
+				);
+			return rows.length;
+		}
+
+		/** Pin the one removal `clubId` wrote for `personId` to an id and time. */
+		async function pinRemoval(
+			clubId: string,
+			personId: string,
+			id: string,
+			createdAt: Date,
+		) {
+			const pinned = await testDb
+				.update(activityLog)
+				.set({ id, createdAt })
+				.where(
+					and(
+						eq(activityLog.clubId, clubId),
+						eq(activityLog.action, "member_remove"),
+						sql`${activityLog.detail} ->> 'personId' = ${personId}`,
+					),
+				)
+				.returning({ id: activityLog.id });
+			expect(pinned).toHaveLength(1);
+		}
+
 		it("lets the removing club re-import by Customer ID: no new Person, one roster row", async () => {
 			const removed = await person(victimClub.clubId, {
 				customerId: `PN-R-${n}`,
@@ -611,6 +652,150 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			expect(fromB.foreignSkipped).toBe(0);
 			expect(fromB.membersCreated).toBe(1);
 			expect(await clubsHolding(moved)).toEqual([attackerClub.clubId]);
+		});
+
+		it("writes no removal for a stale second removal that deletes nothing", async () => {
+			// P is held by A and B. A's first removal (the blocker) deletes A's row
+			// and holds it; A's second removal read that row before it went, so it
+			// parks on the same delete. B then removes its own row and commits.
+			// When the blocker commits, the second A removal deletes ZERO rows —
+			// and before the fix it still logged the NEWEST removal naming P,
+			// handing A the release B had just taken.
+			const p = await person(victimClub.clubId, { customerId: `PN-S-${n}` });
+			await testDb
+				.insert(members)
+				.values({ clubId: attackerClub.clubId, personId: p, name: "Shared" });
+			const [aRow] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(eq(members.clubId, victimClub.clubId), eq(members.personId, p)),
+				);
+			const aMemberId = aRow?.id ?? "";
+
+			const first = await openBlockingTx(async (tx) => {
+				await tx.delete(members).where(eq(members.id, aMemberId));
+			});
+			const second = applyMemberRemove({
+				clubId: victimClub.clubId,
+				memberId: aMemberId,
+				actorMemberId: null,
+			});
+			second.catch(() => {});
+			await waitForLockWait('delete from "members"', first.pid);
+			await removeFrom(attackerClub.clubId, p);
+			await first.commit();
+
+			await expect(second).rejects.toThrow("Member not found.");
+			expect(await removalsNaming(victimClub.clubId, p)).toBe(0);
+			const rows = [row({ customerId: `PN-S-${n}`, name: "Shared" })];
+			expect(
+				(await importPeopleAndMembers(victimClub.clubId, rows)).foreignSkipped,
+			).toBe(1);
+			expect(
+				(await importPeopleAndMembers(attackerClub.clubId, rows))
+					.membersCreated,
+			).toBe(1);
+		});
+
+		it("breaks a created_at tie between two removals by the later id", async () => {
+			// Two removals in one instant: the id tie-break decides, so the
+			// answer is stable across preview and commit rather than arbitrary.
+			const p = await person(victimClub.clubId, { customerId: `PN-T-${n}` });
+			await removeFrom(victimClub.clubId, p);
+			await testDb
+				.insert(members)
+				.values({ clubId: attackerClub.clubId, personId: p, name: "Tied" });
+			await removeFrom(attackerClub.clubId, p);
+			const at = new Date("2026-01-01T00:00:00Z");
+			const tail = randomUUID().slice(-12);
+			await pinRemoval(
+				victimClub.clubId,
+				p,
+				`00000000-0000-4000-8000-${tail}`,
+				at,
+			);
+			await pinRemoval(
+				attackerClub.clubId,
+				p,
+				`ffffffff-ffff-4fff-bfff-${tail}`,
+				at,
+			);
+			const rows = [row({ customerId: `PN-T-${n}`, name: "Tied" })];
+
+			expect(
+				(await importPeopleAndMembers(victimClub.clubId, rows)).foreignSkipped,
+			).toBe(1);
+			expect(
+				(await importPeopleAndMembers(attackerClub.clubId, rows))
+					.membersCreated,
+			).toBe(1);
+		});
+
+		it("ignores a newer activity row of another action naming the same Person", async () => {
+			// Only a removal releases. A later row of any other action whose detail
+			// happens to carry the same key must not move the release.
+			const p = await person(victimClub.clubId, { customerId: `PN-X-${n}` });
+			await removeFrom(victimClub.clubId, p);
+			await testDb.insert(activityLog).values({
+				clubId: attackerClub.clubId,
+				action: "member_edit",
+				targetType: "member",
+				detail: { personId: p },
+				createdAt: new Date(Date.now() + 60_000),
+			});
+			const rows = [row({ customerId: `PN-X-${n}`, name: "Edited" })];
+
+			expect(
+				(await importPeopleAndMembers(attackerClub.clubId, rows))
+					.foreignSkipped,
+			).toBe(1);
+			expect(
+				(await importPeopleAndMembers(victimClub.clubId, rows)).membersCreated,
+			).toBe(1);
+		});
+
+		it("looks the release up through activity_log_member_remove_person_idx", async () => {
+			// The index only helps if the lookup spells its expression and its
+			// partial predicate the way the index does; otherwise the planner
+			// cannot prove it applies and scans the log once per orphan. Seqscans
+			// are priced out so the plan shows whether the index is USABLE, which
+			// is the property, rather than whether this table is big enough.
+			let captured: { text: string; params: unknown[] } | null = null;
+			const capturing = drizzle(process.env.TEST_DATABASE_URL ?? "", {
+				schema,
+				logger: {
+					logQuery(text, params) {
+						if (text.includes('"latest_removal"')) captured = { text, params };
+					},
+				},
+			});
+			try {
+				await loadPersonCandidates(victimClub.clubId, capturing as never);
+			} finally {
+				await capturing.$client.end();
+			}
+			const query = captured as { text: string; params: unknown[] } | null;
+			if (!query) throw new Error("the release lookup was not captured");
+			const client = await testDb.$client.connect();
+			let plan: string;
+			try {
+				await client.query("begin");
+				await client.query("set local enable_seqscan = off");
+				const res = await client.query(`explain ${query.text}`, query.params);
+				plan = res.rows
+					.map((r: Record<string, string>) => r["QUERY PLAN"])
+					.join("\n");
+			} finally {
+				await client.query("rollback");
+				client.release();
+			}
+			expect(plan).toContain("activity_log_member_remove_person_idx");
+			// Named is not enough: with seqscans priced out the planner will walk
+			// the whole partial index with a filter when only the PREDICATE
+			// matches. An Index Cond on the expression is what proves the lookup
+			// is keyed on it.
+			expect(plan).toMatch(/Index Cond: \(\(detail ->> 'personId'::text\) = /);
 		});
 
 		it("previews exactly what the commit then does, for both clubs", async () => {

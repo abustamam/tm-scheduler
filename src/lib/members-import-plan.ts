@@ -62,20 +62,28 @@ export interface ExistingPersonRow {
 	 *   importing club (#855). Matchable, which keeps remove-then-reimport
 	 *   working for the club that did the removing. The latest, not any: a
 	 *   Person removed by A, re-added by B and removed by B is B's alone.
+	 *   Known limit, accepted 2026-09-24: `activity_log` cascades on club
+	 *   delete, so deleting B hands the release back to A's older removal. No
+	 *   app path deletes a club (archive is the takedown), so it is not fixed.
 	 *
-	 *   This is what makes the concurrent-import race safe, and it is the ONLY
-	 *   thing that does. The attach is still decided from the snapshot
+	 *   Between CSV imports, this is what makes the concurrent-import race
+	 *   safe, and it is the only thing that does. The attach is still decided from the snapshot
 	 *   `loadPersonCandidates` took at the start of the file, and the writer
 	 *   has no transaction: the membership insert is `onConflictDoNothing` on
 	 *   (club, person), which merges two writers in the SAME club and does
 	 *   nothing about two DIFFERENT clubs. Two clubs importing one orphan at
 	 *   once, if both could match, would each see an unheld Person, each
 	 *   insert, and leave them held by two clubs, which no bind can recover.
-	 *   That cannot happen here because at most one club can ever match an
-	 *   orphan: the latest removal names exactly one club. Any new path that
-	 *   attaches an EXISTING Person no club holds (another importer, a convert
-	 *   arm, a restore) reopens the race unless it is held to the same
-	 *   single-club rule or serialised.
+	 *   That cannot happen between two IMPORTS because at most one club can
+	 *   ever match an orphan by file: the latest removal names exactly one
+	 *   club. It is not a universal guarantee. Superadmin onboarding
+	 *   (`onboarding-logic.ts`, `findBestPersonByEmail`) already attaches an
+	 *   existing Person by a global email lookup with no release check, so an
+	 *   onboarding racing the releasing club's import can still leave one
+	 *   Person held by two clubs. Any further path that attaches an EXISTING
+	 *   Person no club holds (another importer, a convert arm, a restore)
+	 *   reopens the race the same way unless it is held to the single-club
+	 *   rule or serialised.
 	 * - `nobody` — no memberships anywhere and no such removal record. REFUSED
 	 *   like `other_club_only` (#855). An orphan keeps its person-scoped history
 	 *   (speeches, Pathways), and the roster row an import would mint is then the
