@@ -630,9 +630,11 @@ the same `archived_at` predicate into `loadMyCommitments`' query (#560) — a re
 through none of those points cannot be covered by fixing one of them. The service worker evicts a
 taken-down club's pages and crest on a 404/410 (#556).
 
-**WRITES are closed too, since #555, and they close differently from reads.** A read collapses an
-archived club into not-found; a write THROWS, because every write already has an error path to its
-caller and silently accepting one that will never be readable is worse than saying the club is gone.
+**WRITES are closed too, since #555, and they close differently from reads** (in steady state:
+an archive landing mid-write is a known, accepted window, see "Where a write already holds a club
+lock" below). A read collapses an archived club into not-found; a write THROWS, because every
+write already has an error path to its caller and silently accepting one that will never be
+readable is worse than saying the club is gone.
 `assertClubNotArchived` (exported from `guards.ts`) is the call, and the message lives in
 `#/lib/club-archive` as `CLUB_ARCHIVED_MESSAGE` so a caller that cannot use the assert still raises
 the same sentence. One such caller exists today, and it arrived in v1.26.0.0: the per-meeting
@@ -650,36 +652,35 @@ list — count there.)
 **Where a write already holds a club lock, gate INSIDE it; everywhere else the unlocked assert is
 an accepted trade-off, not a race-free gate.** `assertClubNotArchived` is a plain, unlocked
 `SELECT` of `clubs.archived_at`, and `archiveClub` writes that column with a plain `UPDATE`, so
-nothing orders the two. A session-less write can read the club as live, pass the gate, and commit
-its rows anyway in the milliseconds after an archive lands: a claimed slot, an attendance answer, a
-vote, an `activity_log` row. Every session-less writer shares that check-then-act window, and it is
-a KNOWN LIMIT, accepted by the maintainer on 2026-09-24 (#857): archiving is a rare admin action,
-the window is milliseconds wide, and the residue is one write's rows in a club every read already
+nothing orders the two. A write can read the club as live, pass the gate, and commit its rows
+anyway in the milliseconds after an archive lands: a claimed slot, an attendance answer, a vote, an
+`activity_log` row. Every writer shares that check-then-act window, session-authed ones included
+(`assign_roles` is authenticated and has it too), and it is a KNOWN LIMIT, accepted by the
+maintainer on 2026-09-24 (#857): archiving is a superadmin takedown, rare by construction, the
+window is milliseconds wide, and the residue is one write's rows in a club every read already
 reports as gone. Closing it would mean reading `archived_at` `FOR SHARE` inside every writer's
 transaction at once, with lock ordering against the slot `FOR UPDATE` locks the cores take and
-`assign_roles`'s multi-slot batch — so do not add the lock to one write alone, which leaves the rest
-open and buys nothing. The in-lock rule below still stands where a lock already exists, because
-there the fix costs no extra statement.
+`assign_roles`'s multi-slot batch — so do not add the lock to one write alone, which leaves the
+rest open and buys nothing. The in-lock half below still stands where a lock already exists,
+because there the fix costs no extra statement.
 
-The in-lock half has no live instance as of #630, and it is stated here rather than dropped because the
-reasoning does not depend on the function that demonstrated it. That function was `applySelfAdd`,
-the anonymous "I'm new — add me" roster self-add. It took a `FOR UPDATE` on the club row for its
-throttle, and #555 read `archived_at` out of that same locked row instead of calling
-`assertClubNotArchived` before the transaction. The placement was the whole point: a pre-check is
-check-then-act, so a club archived between the check and the insert still gets the rows, and that
-path minted a `people` row PLUS a `members` row — the race would have left exactly the PII the
-takedown was meant to stop collecting. Reading `archived_at` inside the lock answered both
-questions against one row version and cost no extra round trip, because the statement was already
-there. #616 admin-gated the only caller and #630 deleted both.
+The in-lock half was first demonstrated by `applySelfAdd`, the anonymous "I'm new — add me" roster
+self-add. It took a `FOR UPDATE` on the club row for its throttle, and #555 read `archived_at` out
+of that same locked row instead of calling `assertClubNotArchived` before the transaction. The
+placement was the whole point: a pre-check is check-then-act, so a club archived between the check
+and the insert still gets the rows, and that path minted a `people` row PLUS a `members` row — the
+race would have left exactly the PII the takedown was meant to stop collecting. Reading
+`archived_at` inside the lock answered both questions against one row version and cost no extra
+round trip, because the statement was already there. #616 admin-gated the only caller and #630
+deleted both.
 
-Do NOT repoint that example at a surviving session-less writer without checking, because the
-obvious candidate does the opposite. `captureGuestVisit` calls `assertClubNotArchived` FIRST, before
-its transaction, and then takes `SELECT id FROM clubs … FOR UPDATE` inside it for the guest-book
-throttle — a lock it could gate in, on a path that mints a `guests` row carrying a name, an email
-and a phone. So it is a pre-check with a lock available, which is the shape this rule argues
-against, and it is the one place the rule still applies. It is not a #630 regression: it is how
-#555 shipped it. #858 moves that check inside the guest-book lock; until it lands, a reader looking
-for the worked example should find this note instead of assuming the guest book already is one.
+The live instance is `captureGuestVisit`, the guest-book write that mints a `guests` row carrying a
+name, an email and a phone. It takes `SELECT … FROM clubs … FOR UPDATE` inside its transaction for
+the guest-book throttle, and since #858 it reads `archived_at` under that lock on both the
+new-guest and the returning-guest paths, rather than calling `assertClubNotArchived` before the
+transaction as #555 first shipped it. Keep it that way: moving the check back out in front of the
+transaction reopens the window on the one session-less path that mints PII, where a lock to gate in
+is already held.
 
 **The enrollment sweep is now closed on both shapes**, having been closed on neither. The
 `\n});` body-slicing bug is fixed (#565) and `bodyStopsAtItsOwnDeclaration` fails on any
