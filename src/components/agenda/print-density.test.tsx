@@ -622,12 +622,16 @@ describe.skipIf(!hasChrome)(
 			//
 			//   before #719 ............ 6.244pt, raw 0.7239 — squeezed onto ONE sheet
 			//   after  #719 ............ 8.625pt, raw 0.6778 — FLOWS onto two
+			//   after 2026-09-24 ....... raw 0.7807 — back on ONE sheet
 			//
-			// A three-speaker club's editorial agenda gains a sheet. #719's AC 9
-			// anticipated the cost and asked that it be measured; this is what makes
-			// it a number a future change breaks, in EITHER direction — recover the
-			// sheet and this fails too, deliberately, so the recovery is recorded
-			// rather than absorbed.
+			// #719 cost a three-speaker club's editorial agenda a sheet. MCF's real
+			// 2026-09-24 agenda then flowed onto two in a member's browser (0.7259
+			// in ours — the same cliff, a font's width away), and tightening the
+			// layout's vertical rhythm (beat/roster/hand-off padding, detail
+			// line-height, header and section gaps) recovered it. This stays a
+			// number a future change breaks in EITHER direction: lose the sheet
+			// again and this fails, so the regression is recorded rather than
+			// absorbed.
 			//
 			// This is the only harness in the repo that can see it.
 			// `print-page-count.test.tsx` structurally cannot: `FitPage`'s flow
@@ -639,23 +643,7 @@ describe.skipIf(!hasChrome)(
 			// `FitPage` itself branches on, so comparing against it here asks the
 			// same question the runtime does.
 			const denserRaw = (PAGE_H - 2) / agendaHeight(denser);
-			expect(denserRaw).toBeLessThan(MIN_FIT_SCALE);
-
-			// …and the CONTROL that makes the line above a measurement of #719
-			// rather than of "three speeches is a lot of rows": the same agenda
-			// without the three preamble bands still fits one sheet, at raw 0.7239 —
-			// 0.0039 above the cliff, so the next copy addition of any size was
-			// going to tip it and #719 is what did. #563 is the issue about this
-			// layout being out of room. Nothing shorter fixes it: the cost is the
-			// ROWS, not their text, and four copy variants measured identically at
-			// 6.366pt on the two-speaker fixture above.
-			const withoutPreambles = denser.filter(
-				(r) => !r.detail.includes("asks for the speech objectives"),
-			);
-			expect(denser.length - withoutPreambles.length).toBe(3);
-			expect(
-				(PAGE_H - 2) / agendaHeight(withoutPreambles),
-			).toBeGreaterThanOrEqual(MIN_FIT_SCALE);
+			expect(denserRaw).toBeGreaterThanOrEqual(MIN_FIT_SCALE);
 
 			// The floor still holds, and is not vacuous in the direction that
 			// matters: a layout that got here by shrinking its own type would report

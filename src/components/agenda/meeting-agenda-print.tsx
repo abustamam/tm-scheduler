@@ -332,7 +332,7 @@ function RolesRoster({
 							display: "flex",
 							justifyContent: "space-between",
 							alignItems: large ? "baseline" : "center",
-							padding: boxed ? "6px 14px" : large ? "9px 0" : "5px 0",
+							padding: boxed ? "6px 14px" : large ? "9px 0" : "3px 0",
 							borderBottom:
 								boxed && pos.lastInColumn
 									? undefined
@@ -739,7 +739,8 @@ function RunNarrative({
 		flex: 1,
 		fontSize: type.detail,
 		color: MUTED,
-		lineHeight: 1.4,
+		// 1.3 on editorial: every detail line is paid for in type size there.
+		lineHeight: lg ? 1.4 : 1.3,
 		// A note's own line breaks (the editor's Note is multi-line).
 		whiteSpace: "pre-line" as const,
 	};
@@ -772,7 +773,7 @@ function RunNarrative({
 							key={rowKey(lead, gi)}
 							row={lead}
 							fontSize={lg ? 11.5 : 10}
-							padding={lg ? "4px 0 4px 83px" : "3px 0 3px 69px"}
+							padding={lg ? "4px 0 4px 83px" : "1px 0 1px 69px"}
 							nameTheGroup={nameTheGroup}
 						/>
 					);
@@ -782,7 +783,7 @@ function RunNarrative({
 						style={{
 							borderLeft: `4px solid ${beatColor(g)}`,
 							background: isHighlighted(g) ? MINT : undefined,
-							padding: lg ? "11px 0 11px 15px" : "6px 0 6px 11px",
+							padding: lg ? "11px 0 11px 15px" : "3px 0 3px 11px",
 							borderBottom: gi < groups.length - 1 ? HAIR : undefined,
 						}}
 					>
@@ -895,7 +896,7 @@ function HeaderBand({ header }: { header: AgendaHeader }) {
 			style={{
 				background: `linear-gradient(125deg, ${LAGOON}, ${INK})`,
 				color: "#fff",
-				padding: "22px 38px",
+				padding: "16px 38px",
 			}}
 		>
 			<div style={{ display: "flex", alignItems: "center", gap: 18 }}>
@@ -1004,7 +1005,7 @@ function EditorialLayout({
 			</div>
 
 			<div
-				style={{ display: "flex", gap: 22, padding: "18px 38px 0", flex: 1 }}
+				style={{ display: "flex", gap: 22, padding: "14px 38px 0", flex: 1 }}
 			>
 				{/* left rail — officers + venue */}
 				<div style={{ flex: "none", width: 212 }}>
@@ -1120,7 +1121,7 @@ function EditorialLayout({
 							display: "flex",
 							justifyContent: "space-between",
 							alignItems: "baseline",
-							margin: "18px 0 8px",
+							margin: "10px 0 6px",
 						}}
 					>
 						<Kick>Run of Show</Kick>
