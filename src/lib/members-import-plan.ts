@@ -93,10 +93,12 @@ export interface ExistingPersonRow {
 	 *
 	 *   Orphans with no removal record, and so refused by every club: Persons
 	 *   whose club was deleted (the cascade writes no `member_remove`, and takes
-	 *   the club's activity log with it), Persons left by a guest-convert undo
-	 *   (its `member_remove` carries no `personId`), Persons absorbed by a
-	 *   member merge, and anyone removed before #855 recorded `personId`. All
-	 *   conservative: re-adding them is a deliberate act, not a file.
+	 *   the club's activity log with it), Persons absorbed by a member merge,
+	 *   anyone removed before #855 recorded `personId`, and Persons left by a
+	 *   guest-convert undo that ran before #875 made its `member_remove` carry
+	 *   `personId` (an undo since then releases the Person to the undoing club,
+	 *   like a roster removal). All conservative: re-adding them is a
+	 *   deliberate act, not a file.
 	 *
 	 * A Person created earlier in the SAME batch is `this_club`, truthfully: its
 	 * membership in the importing club is inserted immediately after it.
