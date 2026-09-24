@@ -56,6 +56,16 @@ describe("AssistantDemo", () => {
 		expect(screen.getByText(assistantLine)).toBeTruthy();
 	});
 
+	it("with motion but no IntersectionObserver, renders both bubbles on mount", () => {
+		mockReducedMotion(false);
+		// jsdom has none by default; stub it away explicitly so this cannot
+		// pass because an earlier test left one behind.
+		vi.stubGlobal("IntersectionObserver", undefined);
+		render(<AssistantDemo />);
+		expect(screen.getByText(userLine)).toBeTruthy();
+		expect(screen.getByText(assistantLine)).toBeTruthy();
+	});
+
 	it("with motion, waits for view, then reveals the bubbles 700ms apart", () => {
 		vi.useFakeTimers();
 		mockReducedMotion(false);
@@ -79,8 +89,9 @@ describe("AssistantDemo", () => {
 		render(<AssistantDemo />);
 		expect(screen.getByText("Beta")).toBeTruthy();
 		expect(screen.getByText(AI_CONNECTOR_SETUP_LINE)).toBeTruthy();
-		expect(AI_CONNECTOR_SETUP_LINE).toBe(
-			"For club officers. Tested with Claude; ask us to switch it on for your club.",
-		);
+		// There is no per-club switch since #873 (`mayUseConnector` admits any
+		// admin or officer of an open club), so the line must not promise one.
+		expect(AI_CONNECTOR_SETUP_LINE).toMatch(/^For club officers\./);
+		expect(AI_CONNECTOR_SETUP_LINE).not.toMatch(/switch it on|ask us/i);
 	});
 });
