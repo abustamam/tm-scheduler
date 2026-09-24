@@ -17,12 +17,22 @@ export const TOASTMASTERS_DISCLAIMER =
 	'GavelUp is an independent product and is not affiliated with, endorsed by, or sponsored by Toastmasters International. "Toastmasters International," "Toastmasters," and related trademarks are the property of Toastmasters International.';
 
 /**
- * The "Request access" mailto used by the invite-only front door (`index.tsx`)
- * and the signed-in "you're not in a club yet" screen (#267). Single source of
- * truth so the support address can't drift between surfaces.
+ * The inbox access requests (#866) and support contact both land in. Bare
+ * address, so the server can send to it. {@link CONTACT_MAILTO} spells the same
+ * address as a static literal (`mailto.guard.test.ts` forbids gluing a value
+ * onto the scheme outside `mailto.ts`), and `request-access.test.tsx` pins that
+ * the two still name one inbox.
  */
-export const ACCESS_REQUEST_MAILTO =
-	"mailto:rasheed.bustamam@gmail.com?subject=GavelUp%20access%20request";
+export const ACCESS_REQUEST_NOTIFY_EMAIL = "rasheed.bustamam@gmail.com";
+
+/**
+ * A plain "contact us" mailto, for support questions (the club-logo
+ * attestation note, the request form's "busy" fallback). NOT the way to ask
+ * for access: that is the `/request-access` form (#866), which saves a row and
+ * emails {@link ACCESS_REQUEST_NOTIFY_EMAIL}.
+ */
+export const CONTACT_MAILTO =
+	"mailto:rasheed.bustamam@gmail.com?subject=GavelUp";
 
 /** Short founder line for marketing pages. Only facts the maintainer has confirmed. */
 export const FOUNDER_BLURB =

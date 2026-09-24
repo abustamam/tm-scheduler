@@ -2820,6 +2820,53 @@ export const mcpPendingPlans = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Access requests (#866)
+//
+// What the public `/request-access` form writes: a prospect asking for a club
+// (or a district) to be set up. Session-less and anonymous, so it mints PII
+// (a name and an email) from a form anyone can POST — the caps that bound it
+// live in `src/server/access-requests-logic.ts`. No foreign keys and no
+// `club_id`: a request precedes any club, so it is not club-scoped and the
+// archive gate does not apply. Nothing in the app reads these rows; the
+// maintainer gets an email per request and reads the table by psql.
+// ---------------------------------------------------------------------------
+
+export const accessRequestKindEnum = pgEnum("access_request_kind", [
+	"club",
+	"district",
+]);
+
+export const accessRequests = pgTable(
+	"access_requests",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		kind: accessRequestKindEnum("kind").notNull(),
+		name: text("name").notNull(),
+		// Stored lowercased + trimmed, so the per-email cap counts one address
+		// once however it was typed.
+		email: text("email").notNull(),
+		clubName: text("club_name"),
+		clubNumber: text("club_number"),
+		districtNumber: text("district_number"),
+		message: text("message"),
+		// First-touch marketing attribution (`src/lib/marketing-ref.ts`), or null.
+		ref: text("ref"),
+		// True once the maintainer's notification email went out. A failed send
+		// leaves it false and the row stays: the request is never lost.
+		notified: boolean("notified").notNull().default(false),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		// The per-email cap: rows for this email in the last 24h.
+		index("access_requests_email_created_idx").on(t.email, t.createdAt),
+		// The global and notification caps: rows in the last 24h.
+		index("access_requests_created_idx").on(t.createdAt),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Relations
 // ---------------------------------------------------------------------------
 

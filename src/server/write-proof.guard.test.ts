@@ -165,8 +165,8 @@ type WriteProofClass =
  * The POST fns that are NOT `session`, each with the reason it is not.
  *
  * The 29 the #761 inventory found, less the five #762 retired and the two #752
- * retired: 24 today (6 `pending-proof`, 14 `console-asserted`, 2
- * `public-intake`, 2 `fill-blank`). Adding a row is a decision about a write's
+ * retired, plus #866's request-access form: 25 today (6 `pending-proof`, 14
+ * `console-asserted`, 3 `public-intake`, 2 `fill-blank`). Adding a row is a decision about a write's
  * trust model, not a way to get green — a genuinely session-less write that
  * turns up unclassified is a finding to report, not an entry to make.
  *
@@ -305,6 +305,14 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	"voting.ts#joinBallot": {
 		class: "public-intake",
 		reason: "bounded guest intake",
+	},
+	// The request-access form (#866). A prospect asks for a club or district,
+	// before any account exists, so there is no session to prove. Bounded by a
+	// honeypot, a minimum fill time, a per-email cap, a global cap, and a
+	// separate cap on notification emails (`access-requests-logic.ts`).
+	"access-requests.ts#submitAccessRequest": {
+		class: "public-intake",
+		reason: "bounded access-request intake (#866)",
 	},
 };
 
@@ -716,7 +724,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).not.toContain(key);
 	});
 
-	it("holds exactly the 24 exceptions left after #762 and #752", () => {
+	it("holds exactly the 25 exceptions: 24 left after #762 and #752, plus #866", () => {
 		// The count is pinned, not just the shape. A twenty-fifth arriving
 		// silently is the thing to notice — either a new session-less write, or a
 		// child issue's row landing without its sibling being retired.
@@ -732,6 +740,9 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		// the first time this class has shrunk, and the pair is the whole of it:
 		// the other five Ballot Counter capabilities are still here, so a drop to
 		// 9 would mean the console went with them.
+		//
+		// #866 added one `public-intake` row, the request-access form, so that
+		// class reads 3 and the total 25.
 		const byClass = (c: WriteProofClass) =>
 			Object.values(WRITE_PROOF_EXCEPTIONS).filter((v) => v.class === c).length;
 		expect({
@@ -741,10 +752,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			publicIntake: byClass("public-intake"),
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 24,
+			total: 25,
 			pendingProof: 6,
 			consoleAsserted: 14,
-			publicIntake: 2,
+			publicIntake: 3,
 			fillBlank: 2,
 		});
 	});

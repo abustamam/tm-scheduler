@@ -17,6 +17,8 @@ export interface SendEmailParams {
 	text: string;
 	/** Optional file attachments (e.g. a minutes PDF). Omit for plain mail. */
 	attachments?: EmailAttachment[];
+	/** Optional Reply-To address (sent as Resend's `reply_to`). Omit for none. */
+	replyTo?: string;
 }
 
 /**
@@ -34,6 +36,7 @@ export async function sendEmail({
 	html,
 	text,
 	attachments,
+	replyTo,
 }: SendEmailParams): Promise<void> {
 	const apiKey = process.env.RESEND_API_KEY;
 	const from = process.env.EMAIL_FROM || DEFAULT_FROM;
@@ -47,17 +50,22 @@ export async function sendEmail({
 		const attachmentNote = attachments?.length
 			? ` attachments=${attachments.length} (${attachments.map((a) => a.filename).join(", ")})`
 			: "";
+		const replyToNote = replyTo ? ` reply_to=${replyTo}` : "";
 		console.log(
-			`\n[email:dev] to=${toLabel} subject=${subject}${attachmentNote}\n${text}\n`,
+			`\n[email:dev] to=${toLabel} subject=${subject}${replyToNote}${attachmentNote}\n${text}\n`,
 		);
 		return;
 	}
 
-	// Only include `attachments` in the body when present, so attachment-less
-	// sends produce a byte-identical request to before this field existed.
+	// Only include `attachments` / `reply_to` in the body when present, so a
+	// send that uses neither produces a byte-identical request to before these
+	// fields existed.
 	const body: Record<string, unknown> = { from, to, subject, html, text };
 	if (attachments?.length) {
 		body.attachments = attachments;
+	}
+	if (replyTo) {
+		body.reply_to = replyTo;
 	}
 
 	let res: Response;
