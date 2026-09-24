@@ -37,11 +37,12 @@ describe("/about", () => {
 		).toBeTruthy();
 		sectionFor("Who's behind GavelUp");
 		sectionFor("What happens to your club's data");
+		sectionFor("Get in touch");
 		// The shell's footer, i.e. the TI disclaimer, is on the page.
 		expect(screen.getByText(TOASTMASTERS_DISCLAIMER)).toBeTruthy();
 	});
 
-	// AC2: while FOUNDER_SECTIONS is empty the founder section is the blurb and
+	// AC2: while FOUNDER_PARAGRAPHS is empty the founder section is the blurb and
 	// only the blurb. Anything more is an unconfirmed claim about a real person.
 	it("says exactly FOUNDER_BLURB about the founder, in one paragraph", async () => {
 		await mount();

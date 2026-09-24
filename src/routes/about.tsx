@@ -27,9 +27,10 @@ export const Route = createFileRoute("/about")({
  * EMPTY on purpose. The site is public, so every sentence here is a claim about
  * a real person, and only the blurb's facts are confirmed. The fuller bio is a
  * `ready-for-human` copy issue (#871): it appends here, and nothing else in the
- * page changes. `about.test.tsx` pins that an empty array renders nothing.
+ * page changes. `about.test.tsx` pins that, while this is empty, the section
+ * holds exactly one paragraph and it equals `FOUNDER_BLURB`.
  */
-const FOUNDER_SECTIONS: string[] = [];
+const FOUNDER_PARAGRAPHS: string[] = [];
 
 /**
  * "What happens to your club's data" (#869): one sentence per fact the code
@@ -42,7 +43,10 @@ const FOUNDER_SECTIONS: string[] = [];
  * - hosting: `docs/adr/0007-railway-managed-paas.md`
  * - sign-in: `src/lib/auth.ts` (the `magicLink` plugin is the only sign-in)
  * - claiming: `claimSlot` in `src/server/slots.ts` (session-less, name-pick)
- * - connector: `maskEmail` / `maskPhone` in `src/server/mcp/serialize.ts` (`find_people`)
+ * - connector: `maskEmail` / `maskPhone` in `src/server/mcp/serialize.ts`, as
+ *   `find_people` returns guests. Scoped to LOOKUPS on purpose: guest-book
+ *   transcription (`record_guest_book`) sends Claude's plaintext reading of the
+ *   photo IN, so "Claude only ever sees masked contact" would be false.
  * - scripts: no analytics dependency in `package.json`; the one inline script
  *   in `src/routes/__root.tsx` applies the saved theme
  */
@@ -50,7 +54,7 @@ const DATA_FACTS = [
 	"GavelUp runs on Railway, and your club's data lives in a managed PostgreSQL database there.",
 	"You sign in with a link emailed to you, so GavelUp stores no passwords.",
 	"Members can claim roles from your club's shared sheet without creating an account.",
-	"When your club connects Claude, guests' email addresses and phone numbers reach it masked.",
+	"When Claude looks up guests in GavelUp, their email addresses and phone numbers come back masked.",
 	"GavelUp loads no advertising or third-party analytics scripts.",
 ];
 
@@ -70,7 +74,7 @@ function AboutPage() {
 						Who's behind GavelUp
 					</h2>
 					<p className="mt-3 text-base leading-relaxed">{FOUNDER_BLURB}</p>
-					{FOUNDER_SECTIONS.map((text) => (
+					{FOUNDER_PARAGRAPHS.map((text) => (
 						<p key={text} className="mt-3 text-base leading-relaxed">
 							{text}
 						</p>
