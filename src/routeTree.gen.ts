@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
+import { Route as TourRouteImport } from './routes/tour'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as AuthedRouteImport } from './routes/_authed'
@@ -75,6 +76,11 @@ import { Route as ApiMeetingsIdRoleSheetsSheetPdfRouteImport } from './routes/ap
 const UnsubscribeRoute = UnsubscribeRouteImport.update({
   id: '/unsubscribe',
   path: '/unsubscribe',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TourRoute = TourRouteImport.update({
+  id: '/tour',
+  path: '/tour',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SigninRoute = SigninRouteImport.update({
@@ -400,6 +406,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
+  '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/activity': typeof AuthedActivityRoute
@@ -463,6 +470,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
+  '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/activity': typeof AuthedActivityRoute
@@ -526,6 +534,7 @@ export interface FileRoutesById {
   '/_authed': typeof AuthedRouteWithChildren
   '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
+  '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/_authed/activity': typeof AuthedActivityRoute
@@ -591,6 +600,7 @@ export interface FileRouteTypes {
     | '/'
     | '/claim'
     | '/signin'
+    | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
     | '/activity'
@@ -654,6 +664,7 @@ export interface FileRouteTypes {
     | '/'
     | '/claim'
     | '/signin'
+    | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
     | '/activity'
@@ -716,6 +727,7 @@ export interface FileRouteTypes {
     | '/_authed'
     | '/claim'
     | '/signin'
+    | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
     | '/_authed/activity'
@@ -781,6 +793,7 @@ export interface RootRouteChildren {
   AuthedRoute: typeof AuthedRouteWithChildren
   ClaimRoute: typeof ClaimRoute
   SigninRoute: typeof SigninRoute
+  TourRoute: typeof TourRoute
   UnsubscribeRoute: typeof UnsubscribeRoute
   DotwellKnownSplatRoute: typeof DotwellKnownSplatRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
@@ -812,6 +825,13 @@ declare module '@tanstack/react-router' {
       path: '/unsubscribe'
       fullPath: '/unsubscribe'
       preLoaderRoute: typeof UnsubscribeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tour': {
+      id: '/tour'
+      path: '/tour'
+      fullPath: '/tour'
+      preLoaderRoute: typeof TourRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signin': {
@@ -1351,6 +1371,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthedRoute: AuthedRouteWithChildren,
   ClaimRoute: ClaimRoute,
   SigninRoute: SigninRoute,
+  TourRoute: TourRoute,
   UnsubscribeRoute: UnsubscribeRoute,
   DotwellKnownSplatRoute: DotwellKnownSplatRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,
