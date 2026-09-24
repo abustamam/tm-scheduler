@@ -26,7 +26,8 @@
  *
  * ## One transaction, or nothing
  *
- * Every slot the call names is locked `FOR UPDATE` in one transaction, every
+ * The meeting row is locked `FOR NO KEY UPDATE` first, then every slot the
+ * call names is locked `FOR UPDATE`, in one transaction; every
  * check runs against that locked state, and the three apply seams all take
  * that transaction. A half-applied agenda is worse than a refused one: the
  * half that landed is invisible next to the half that did not, and the caller
@@ -45,7 +46,6 @@ import { z } from "zod";
 import { db } from "#/db";
 import {
 	guests,
-	meetings,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -61,6 +61,7 @@ import {
 import { MAX_ROLE_ASSIGNMENTS } from "#/lib/mcp-limits";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import { applyAssignGuestToSlot } from "#/server/guests-logic";
+import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
 import { reassignSlotCore, releaseSlotCore } from "#/server/slots-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
@@ -150,25 +151,27 @@ export const assignRolesTool: McpToolDefinition = {
 				});
 			}
 
-			const [meeting] = await tx
-				.select({ status: meetings.status })
-				.from(meetings)
-				.where(eq(meetings.id, args.meetingId))
-				// LOCKED, and before the slots below — the same order
-				// `lockMeetingForSlotEdit` and `resolveAgendaDraft` take, so a batch
-				// cannot deadlock against an agenda edit.
-				//
-				// Without it the lock check here and the one `reassignSlotCore` and
-				// `releaseSlotCore` make under the row lock could disagree: READ
-				// COMMITTED lets a concurrent "complete meeting" commit between two
-				// statements of this transaction, and the second refusal would
-				// surface as an unexplained `INTERNAL` rather than as the blocking
-				// item this tool is built to return. Holding the row makes the
-				// answer below the answer for the whole batch.
-				.for("update")
-				.limit(1);
-			// Unreachable: authorization above resolved this meeting's club.
-			if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
+			// LOCKED, and before the slots below, through the SAME helper every
+			// lineup editor takes it through — so a batch cannot deadlock against
+			// an agenda edit, and the lock's strength is one declaration. #874
+			// existed because this was a private copy that stayed `FOR UPDATE`
+			// after #839 moved the helper to NO KEY UPDATE: a member's claim holds
+			// its slot row and then writes its planned attendance, whose FK needs
+			// KEY SHARE on this row, and FOR UPDATE refused it while this batch
+			// waited on that slot below — 40P01 for one of them.
+			//
+			// Without the lock, the check here and the one `reassignSlotCore` and
+			// `releaseSlotCore` make under the row lock could disagree: READ
+			// COMMITTED lets a concurrent "complete meeting" commit between two
+			// statements of this transaction, and the second refusal would
+			// surface as an unexplained `INTERNAL` rather than as the blocking
+			// item this tool is built to return. Holding the row makes the
+			// answer below the answer for the whole batch.
+			//
+			// Its not-found throw is a plain Error, which the tool layer reports
+			// as INTERNAL. Unreachable: authorization above resolved this
+			// meeting's club, and the row cannot vanish while we hold a lock on it.
+			const meeting = await lockMeetingForSlotEdit(tx, args.meetingId);
 			if (isMeetingLocked(meeting.status)) {
 				blocking.push({
 					code: "MEETING_LOCKED",
@@ -310,15 +313,37 @@ export const assignRolesTool: McpToolDefinition = {
  * so two concurrent batches take the same locks in the same order and cannot
  * deadlock against each other.
  *
- * `FOR UPDATE OF role_slots` locks only that row; the catalog rows joined
- * beside it do not change under us, and the name/speech joins are LEFT joins
- * that Postgres would refuse to lock anyway.
+ * **Two statements: lock, then read** (#874). The lock is a bare
+ * `SELECT id … FOR UPDATE` on `role_slots`; the joined read comes after it.
+ * One joined `SELECT … FOR UPDATE OF role_slots` is wrong under READ
+ * COMMITTED whenever it has to WAIT: once the holder commits, Postgres
+ * re-reads the locked row but keeps the joined rows from the statement's
+ * original snapshot. A slot claimed while this batch waited then came back
+ * `claimed`, assigned to the claimant, with a NULL holder name — so the plan
+ * said `open → Sam` for a slot it had just taken off someone, and the speech
+ * sentence was decided from a stale Person. The second statement takes a fresh
+ * snapshot after the wait, and the slot rows are ours by then, so their holder
+ * and speech ids cannot change before the writes. Only `role_slots` is locked:
+ * a joined name or title can still change underneath, which is harmless here
+ * because the plan only reports them.
  */
 async function lockSlots(
 	tx: Parameters<Parameters<(typeof db)["transaction"]>[0]>[0],
 	meetingId: string,
 	slotIds: string[],
 ): Promise<Map<string, LockedSlot>> {
+	// Ordered by id so concurrent batches take these in one order. Nothing
+	// here reads a column: see the doc comment for why the read is separate.
+	const lockedIds = await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(
+			and(eq(roleSlots.meetingId, meetingId), inArray(roleSlots.id, slotIds)),
+		)
+		.orderBy(asc(roleSlots.id))
+		.for("update");
+	if (lockedIds.length === 0) return new Map();
+
 	const holder = alias(members, "slot_holder");
 	const guestHolder = alias(guests, "slot_guest_holder");
 	const rows = await tx
@@ -344,11 +369,17 @@ async function lockSlots(
 		.leftJoin(holder, eq(holder.id, roleSlots.assignedMemberId))
 		.leftJoin(guestHolder, eq(guestHolder.id, roleSlots.assignedGuestId))
 		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+		// The meeting filter again, as defence in depth: the ids above were
+		// already scoped to it, so this changes nothing unless they were not.
 		.where(
-			and(eq(roleSlots.meetingId, meetingId), inArray(roleSlots.id, slotIds)),
-		)
-		.orderBy(asc(roleSlots.id))
-		.for("update", { of: roleSlots });
+			and(
+				eq(roleSlots.meetingId, meetingId),
+				inArray(
+					roleSlots.id,
+					lockedIds.map((r) => r.id),
+				),
+			),
+		);
 
 	return new Map(
 		rows.map((r) => [
