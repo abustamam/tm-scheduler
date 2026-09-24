@@ -26,7 +26,8 @@
  *
  * ## One transaction, or nothing
  *
- * Every slot the call names is locked `FOR UPDATE` in one transaction, every
+ * The meeting row is locked `FOR NO KEY UPDATE` first, then every slot the
+ * call names is locked `FOR UPDATE`, in one transaction; every
  * check runs against that locked state, and the three apply seams all take
  * that transaction. A half-applied agenda is worse than a refused one: the
  * half that landed is invisible next to the half that did not, and the caller
@@ -165,7 +166,17 @@ export const assignRolesTool: McpToolDefinition = {
 				// surface as an unexplained `INTERNAL` rather than as the blocking
 				// item this tool is built to return. Holding the row makes the
 				// answer below the answer for the whole batch.
-				.for("update")
+				//
+				// NO KEY UPDATE, not UPDATE (#874) — the strength
+				// `lockMeetingForSlotEdit` takes, for the reason it gives. It still
+				// excludes another batch, a lineup editor and a status change (each
+				// takes NO KEY UPDATE or stronger), but it admits the KEY SHARE a
+				// foreign-key insert takes. A member's claim holds its slot row and
+				// then writes its planned attendance, whose FK needs KEY SHARE on
+				// this row; under FOR UPDATE that claim waited on this batch while
+				// this batch waited on its slot below, and Postgres aborted one of
+				// them with 40P01.
+				.for("no key update")
 				.limit(1);
 			// Unreachable: authorization above resolved this meeting's club.
 			if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
@@ -310,15 +321,35 @@ export const assignRolesTool: McpToolDefinition = {
  * so two concurrent batches take the same locks in the same order and cannot
  * deadlock against each other.
  *
- * `FOR UPDATE OF role_slots` locks only that row; the catalog rows joined
- * beside it do not change under us, and the name/speech joins are LEFT joins
- * that Postgres would refuse to lock anyway.
+ * **Two statements: lock, then read** (#874). The lock is a bare
+ * `SELECT id … FOR UPDATE` on `role_slots`; the joined read comes after it.
+ * One joined `SELECT … FOR UPDATE OF role_slots` is wrong under READ
+ * COMMITTED whenever it has to WAIT: once the holder commits, Postgres
+ * re-reads the locked row but keeps the joined rows from the statement's
+ * original snapshot. A slot claimed while this batch waited then came back
+ * `claimed`, assigned to the claimant, with a NULL holder name — so the plan
+ * said `open → Sam` for a slot it had just taken off someone, and the speech
+ * sentence was decided from a stale Person. The second statement takes a fresh
+ * snapshot, and the rows it reads are ours by then, so nothing it joins
+ * through can change before the writes.
  */
 async function lockSlots(
 	tx: Parameters<Parameters<(typeof db)["transaction"]>[0]>[0],
 	meetingId: string,
 	slotIds: string[],
 ): Promise<Map<string, LockedSlot>> {
+	// Ordered by id so concurrent batches take these in one order. Nothing
+	// here reads a column: see the doc comment for why the read is separate.
+	const lockedIds = await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(
+			and(eq(roleSlots.meetingId, meetingId), inArray(roleSlots.id, slotIds)),
+		)
+		.orderBy(asc(roleSlots.id))
+		.for("update");
+	if (lockedIds.length === 0) return new Map();
+
 	const holder = alias(members, "slot_holder");
 	const guestHolder = alias(guests, "slot_guest_holder");
 	const rows = await tx
@@ -345,10 +376,11 @@ async function lockSlots(
 		.leftJoin(guestHolder, eq(guestHolder.id, roleSlots.assignedGuestId))
 		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
 		.where(
-			and(eq(roleSlots.meetingId, meetingId), inArray(roleSlots.id, slotIds)),
-		)
-		.orderBy(asc(roleSlots.id))
-		.for("update", { of: roleSlots });
+			inArray(
+				roleSlots.id,
+				lockedIds.map((r) => r.id),
+			),
+		);
 
 	return new Map(
 		rows.map((r) => [
