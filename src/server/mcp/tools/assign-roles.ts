@@ -46,7 +46,6 @@ import { z } from "zod";
 import { db } from "#/db";
 import {
 	guests,
-	meetings,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -62,6 +61,7 @@ import {
 import { MAX_ROLE_ASSIGNMENTS } from "#/lib/mcp-limits";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import { applyAssignGuestToSlot } from "#/server/guests-logic";
+import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
 import { reassignSlotCore, releaseSlotCore } from "#/server/slots-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
@@ -151,35 +151,27 @@ export const assignRolesTool: McpToolDefinition = {
 				});
 			}
 
-			const [meeting] = await tx
-				.select({ status: meetings.status })
-				.from(meetings)
-				.where(eq(meetings.id, args.meetingId))
-				// LOCKED, and before the slots below — the same order
-				// `lockMeetingForSlotEdit` and `resolveAgendaDraft` take, so a batch
-				// cannot deadlock against an agenda edit.
-				//
-				// Without it the lock check here and the one `reassignSlotCore` and
-				// `releaseSlotCore` make under the row lock could disagree: READ
-				// COMMITTED lets a concurrent "complete meeting" commit between two
-				// statements of this transaction, and the second refusal would
-				// surface as an unexplained `INTERNAL` rather than as the blocking
-				// item this tool is built to return. Holding the row makes the
-				// answer below the answer for the whole batch.
-				//
-				// NO KEY UPDATE, not UPDATE (#874) — the strength
-				// `lockMeetingForSlotEdit` takes, for the reason it gives. It still
-				// excludes another batch, a lineup editor and a status change (each
-				// takes NO KEY UPDATE or stronger), but it admits the KEY SHARE a
-				// foreign-key insert takes. A member's claim holds its slot row and
-				// then writes its planned attendance, whose FK needs KEY SHARE on
-				// this row; under FOR UPDATE that claim waited on this batch while
-				// this batch waited on its slot below, and Postgres aborted one of
-				// them with 40P01.
-				.for("no key update")
-				.limit(1);
-			// Unreachable: authorization above resolved this meeting's club.
-			if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
+			// LOCKED, and before the slots below, through the SAME helper every
+			// lineup editor takes it through — so a batch cannot deadlock against
+			// an agenda edit, and the lock's strength is one declaration. #874
+			// existed because this was a private copy that stayed `FOR UPDATE`
+			// after #839 moved the helper to NO KEY UPDATE: a member's claim holds
+			// its slot row and then writes its planned attendance, whose FK needs
+			// KEY SHARE on this row, and FOR UPDATE refused it while this batch
+			// waited on that slot below — 40P01 for one of them.
+			//
+			// Without the lock, the check here and the one `reassignSlotCore` and
+			// `releaseSlotCore` make under the row lock could disagree: READ
+			// COMMITTED lets a concurrent "complete meeting" commit between two
+			// statements of this transaction, and the second refusal would
+			// surface as an unexplained `INTERNAL` rather than as the blocking
+			// item this tool is built to return. Holding the row makes the
+			// answer below the answer for the whole batch.
+			//
+			// Its not-found throw is a plain Error, which the tool layer reports
+			// as INTERNAL. Unreachable: authorization above resolved this
+			// meeting's club, and the row cannot vanish while we hold a lock on it.
+			const meeting = await lockMeetingForSlotEdit(tx, args.meetingId);
 			if (isMeetingLocked(meeting.status)) {
 				blocking.push({
 					code: "MEETING_LOCKED",
@@ -330,8 +322,10 @@ export const assignRolesTool: McpToolDefinition = {
  * `claimed`, assigned to the claimant, with a NULL holder name — so the plan
  * said `open → Sam` for a slot it had just taken off someone, and the speech
  * sentence was decided from a stale Person. The second statement takes a fresh
- * snapshot, and the rows it reads are ours by then, so nothing it joins
- * through can change before the writes.
+ * snapshot after the wait, and the slot rows are ours by then, so their holder
+ * and speech ids cannot change before the writes. Only `role_slots` is locked:
+ * a joined name or title can still change underneath, which is harmless here
+ * because the plan only reports them.
  */
 async function lockSlots(
 	tx: Parameters<Parameters<(typeof db)["transaction"]>[0]>[0],
@@ -375,10 +369,15 @@ async function lockSlots(
 		.leftJoin(holder, eq(holder.id, roleSlots.assignedMemberId))
 		.leftJoin(guestHolder, eq(guestHolder.id, roleSlots.assignedGuestId))
 		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+		// The meeting filter again, as defence in depth: the ids above were
+		// already scoped to it, so this changes nothing unless they were not.
 		.where(
-			inArray(
-				roleSlots.id,
-				lockedIds.map((r) => r.id),
+			and(
+				eq(roleSlots.meetingId, meetingId),
+				inArray(
+					roleSlots.id,
+					lockedIds.map((r) => r.id),
+				),
 			),
 		);
 

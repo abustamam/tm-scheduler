@@ -64,6 +64,25 @@ const { claimSlotCore, markComingOnSelfClaim } = await import(
 	"#/server/slots-logic"
 );
 
+/**
+ * Await `signal`, unless `work` settles first — in which case `signal` can
+ * never fire, and waiting on it would hang to the test timeout and lose the
+ * real error. `work` rejecting rethrows its own error; `work` resolving
+ * without signalling names the step that was never reached.
+ */
+function settledFirst<T>(
+	signal: Promise<T>,
+	work: Promise<unknown>,
+	what: string,
+): Promise<T> {
+	return Promise.race([
+		signal,
+		work.then(() => {
+			throw new Error(`${what} finished without reaching its hold point`);
+		}),
+	]);
+}
+
 /** "ok", or the SQLSTATE and message of whatever a settled side threw. */
 function outcome(r: PromiseSettledResult<unknown>): string {
 	if (r.status === "fulfilled") return "ok";
@@ -137,18 +156,26 @@ describe.skipIf(!hasTestDb)("assign_roles meeting lock (#874)", () => {
 			});
 		});
 		claim.catch(() => {});
-		const claimPid = await held;
 
-		// The tool locks the meeting, then parks on the slot the claim holds.
-		const tool = call({
-			meetingId: seed.meetingId,
-			assignments: [{ slotId: seed.slotId, memberId: seed.adminMemberId }],
-		});
-		tool.catch(() => {});
-		await waitForLockWait("role_slots", claimPid);
+		let tool: Promise<unknown> | undefined;
+		try {
+			const claimPid = await settledFirst(held, claim, "the claim");
 
-		// Now the claim writes attendance, which needs KEY SHARE on the meeting.
-		resume();
+			// The tool locks the meeting, then parks on the slot the claim holds.
+			tool = call({
+				meetingId: seed.meetingId,
+				assignments: [{ slotId: seed.slotId, memberId: seed.adminMemberId }],
+			});
+			tool.catch(() => {});
+			await waitForLockWait("role_slots", claimPid);
+		} finally {
+			// Now the claim writes attendance, which needs KEY SHARE on the
+			// meeting. In `finally` so a failed wait still lets the claim commit
+			// and release its slot lock, rather than leaving afterEach's cascade
+			// delete blocked behind it.
+			resume();
+			await Promise.allSettled([claim, tool]);
+		}
 		const [claimResult, toolResult] = await Promise.allSettled([claim, tool]);
 
 		// A deadlock surfaces as a failed query whose `cause.code` is `40P01`,
@@ -213,16 +240,18 @@ describe.skipIf(!hasTestDb)("assign_roles meeting lock (#874)", () => {
 			assignments: [{ slotId: seed.slotId, memberId: seed.memberId }],
 		});
 		first.catch(() => {});
-		const firstPid = await entered;
 
-		const second = call({
-			meetingId: seed.meetingId,
-			assignments: [{ slotId: otherSlotId, memberId: seed.adminMemberId }],
-		});
-		second.catch(() => {});
-
+		let second: Promise<unknown> | undefined;
 		let blocked = false;
 		try {
+			const firstPid = await settledFirst(entered, first, "the first call");
+
+			second = call({
+				meetingId: seed.meetingId,
+				assignments: [{ slotId: otherSlotId, memberId: seed.adminMemberId }],
+			});
+			second.catch(() => {});
+
 			// Parked on the meeting row, behind the held first call.
 			await waitForLockWait('from "meetings"', firstPid, 5_000);
 			blocked = true;
