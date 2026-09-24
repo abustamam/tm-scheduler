@@ -9,8 +9,9 @@
 //     the maintainer is emailed about, all counted and written under ONE
 //     transaction-scoped advisory lock, so concurrent submissions cannot
 //     overshoot them. The lock is TRIED, never waited on: a submission that
-//     finds it held answers "busy" at once, so a flood cannot park the app's
-//     pooled connections behind it;
+//     finds it held retries a couple of times after a few tens of ms, then
+//     answers "contended" (try again in a moment), so a flood cannot park the
+//     app's pooled connections behind it;
 //   - one alert per UTC day PER REASON when a cap trips, not one per rejection;
 //   - on delivery, at most `MAX_SENDS_PER_TICK` request emails per poller tick.
 // There is no per-IP cap: see the PR for #866 — the client IP Railway hands
@@ -84,7 +85,18 @@ export const MAX_SENDS_PER_TICK = 5;
 
 export type SubmitAccessRequestResult =
 	| { ok: true; alreadyReceived?: true }
-	| { ok: false; reason: "busy" };
+	| { ok: false; reason: "busy" | "contended" };
+
+/**
+ * How a submission that finds the lock held retries before giving up: this
+ * many more tries, each after a jittered sleep of `LOCK_RETRY_BASE_MS` plus up
+ * to as much again. Worst case ~2 × 40ms = 80ms, well under a second, and
+ * never a blocking wait on the lock itself.
+ */
+export const LOCK_RETRIES = 2;
+const LOCK_RETRY_BASE_MS = 20;
+const defaultSleep = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * TEST-ONLY seams. Production passes nothing.
@@ -102,6 +114,8 @@ export type SubmitAccessRequestOptions = {
 	now?: Date;
 	limits?: AccessRequestLimits;
 	scope?: AccessRequestScope;
+	/** TEST-ONLY: the retry sleep, so a test can release the lock inside it. */
+	sleep?: (ms: number) => Promise<void>;
 };
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -143,25 +157,32 @@ async function recordCapTrip(
  * 1. honeypot filled → silent `{ ok: true }`, nothing written or sent;
  * 2. form open for less than `minFillMs` → the same silence;
  * 3. per-email cap reached → `{ ok: true, alreadyReceived: true }`, no write;
- * 4. global cap reached → `{ ok: false, reason: "busy" }`, no write;
+ * 4. global cap reached → `{ ok: false, reason: "busy" }`, no write — the only
+ *    outcome the form answers with "try again tomorrow";
  * 5. insert the row, CLAIMING a notification slot (`notified = true`) if the
  *    day's notification cap has room.
  *
  * Steps 3-5 run in one transaction under an advisory lock, so they are one
  * atomic check-then-write: each holder counts the rows the previous one
- * committed. The lock is taken with `pg_advisory_xact_lock`'s TRY form: a
- * submission that finds it held answers `busy` immediately and writes nothing.
- * Waiting instead would hold a pooled connection for the length of the queue on
- * an anonymous endpoint, and `src/db/index.ts` shares a pool of 10 with the
- * whole app (the reasoning `src/server/mcp/lock.ts` gives for bounding its own
- * wait). The locked section is three counts and an insert, so two real people
- * colliding inside it is rare, and a `busy` there costs them a retry. Nothing here sends email — the
+ * committed. The lock is taken with `pg_advisory_xact_lock`'s TRY form, retried
+ * `LOCK_RETRIES` times after a short jittered sleep; still held, the answer is
+ * `contended` and nothing is written. Waiting on the lock instead would hold a
+ * pooled connection for the length of the queue on an anonymous endpoint, and
+ * `src/db/index.ts` shares a pool of 10 with the whole app (the reasoning
+ * `src/server/mcp/lock.ts` gives for bounding its own wait). The locked section
+ * is three counts and an insert, so the retries absorb two real people
+ * colliding, and `contended` is a flood's answer, not theirs. Nothing here sends email — the
  * poller delivers claimed rows, so a Resend failure is retried rather than lost.
  * Any cap trip in 3-5 also records the window's alert, inside the same lock.
  */
 export async function submitAccessRequestLogic(
 	input: AccessRequestInput,
-	{ now = new Date(), limits = LIMITS, scope }: SubmitAccessRequestOptions = {},
+	{
+		now = new Date(),
+		limits = LIMITS,
+		scope,
+		sleep = defaultSleep,
+	}: SubmitAccessRequestOptions = {},
 ): Promise<SubmitAccessRequestResult> {
 	// 1–2. Bots get exactly what a person gets, so neither filter is a signal.
 	if (input.trap !== "") return { ok: true };
@@ -174,12 +195,18 @@ export async function submitAccessRequestLogic(
 		: undefined;
 
 	return db.transaction(async (tx) => {
-		const locked = await tx.execute<{ locked: boolean }>(
-			sql`select pg_try_advisory_xact_lock(hashtextextended(${LOCK_KEY}, 0)) as locked`,
-		);
-		if (locked.rows[0]?.locked !== true) {
-			return { ok: false, reason: "busy" } as const;
+		const tryLock = async () => {
+			const r = await tx.execute<{ locked: boolean }>(
+				sql`select pg_try_advisory_xact_lock(hashtextextended(${LOCK_KEY}, 0)) as locked`,
+			);
+			return r.rows[0]?.locked === true;
+		};
+		let locked = await tryLock();
+		for (let i = 0; !locked && i < LOCK_RETRIES; i++) {
+			await sleep(LOCK_RETRY_BASE_MS + Math.random() * LOCK_RETRY_BASE_MS);
+			locked = await tryLock();
 		}
+		if (!locked) return { ok: false, reason: "contended" } as const;
 
 		// 3. Per-email cap. Email is already lowercased + trimmed by the schema.
 		const [perEmail] = await tx
@@ -252,6 +279,17 @@ const errorText = (err: unknown) =>
  * the error and leaves the row for a retry after `RETRY_BACKOFF_MS`; the
  * request that uses its last attempt records an `undelivered` alert. Never
  * throws for a single row's failure.
+ *
+ * KNOWN LIMITS, accepted rather than fixed:
+ * - An `undelivered` alert can be lost. It is recorded after the final failed
+ *   send, outside any transaction with the claim, so a process that dies
+ *   between the final claim and that insert — or an insert that itself fails
+ *   (logged, not retried) — leaves a request that was never emailed and no
+ *   alert saying so. The row itself is still in the table.
+ * - Resend keeps an idempotency key for 24h. A send that went through but whose
+ *   `notify_sent_at` update failed is retried after the backoff; if the poller
+ *   is then down for longer than 24h, the retry is outside the key's window and
+ *   the maintainer gets that request's email twice.
  */
 export async function deliverAccessRequestMail(
 	deps: NotificationDeps = defaultNotificationDeps,
@@ -372,7 +410,13 @@ export async function deliverAccessRequestMail(
 		try {
 			await deps.sendEmail({
 				to: ACCESS_REQUEST_NOTIFY_EMAIL,
-				idempotencyKey: `access-request-alert/${alert.id}`,
+				// Per ATTEMPT, unlike a request's key: the alert body carries `trips`,
+				// which later trips increment, so a retry can legitimately differ
+				// from the first try and Resend rejects a reused key with a new
+				// payload. Keying by attempt keeps key and payload in agreement; the
+				// cost is that a send that went through but whose bookkeeping failed
+				// can be re-sent as a duplicate ALERT, which is harmless.
+				idempotencyKey: `access-request-alert/${alert.id}/${alert.attempts + 1}`,
 				...buildCapAlertEmail(alert),
 			});
 			await db

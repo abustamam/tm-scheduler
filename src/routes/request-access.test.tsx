@@ -191,6 +191,24 @@ describe("/request-access (#866)", () => {
 		expect(src).toMatch(/disabled=\{!ready \|\| pending\}/);
 	});
 
+	it("keeps the form and says 'in a moment', never 'tomorrow', when the server was contended", async () => {
+		vi.mocked(submitAccessRequest)
+			.mockResolvedValueOnce({ ok: false, reason: "contended" })
+			.mockResolvedValueOnce({ ok: true });
+		await mount();
+		fillClub();
+		fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toMatch(/try again in a moment/i);
+		expect(screen.queryByText(/tomorrow/i)).toBeNull();
+		// The form, and what they typed, are still there: one click retries.
+		expect((screen.getByLabelText("Your name") as HTMLInputElement).value).toBe(
+			"Ada Lovelace",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+		await screen.findByText("Thanks! We'll be in touch within a few days.");
+	});
+
 	it("names the notification inbox in the contact mailto (one inbox, two constants)", () => {
 		// Parsed, not rebuilt: `mailto.guard.test.ts` forbids gluing a value onto
 		// the scheme anywhere outside `src/lib/mailto.ts`, tests included.

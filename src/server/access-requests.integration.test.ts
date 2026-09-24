@@ -39,6 +39,7 @@ import {
 	alertWindowKey,
 	deliverAccessRequestMail,
 	LIMITS,
+	LOCK_RETRIES,
 	MAX_SENDS_PER_TICK,
 	submitAccessRequestLogic,
 	sweepExpiredAccessRequests,
@@ -195,6 +196,7 @@ describe("LIMITS", () => {
 		});
 		expect(ACCESS_REQUEST_RETENTION_DAYS).toBe(180);
 		expect(MAX_SENDS_PER_TICK).toBe(5);
+		expect(LOCK_RETRIES).toBe(2);
 	});
 });
 
@@ -361,25 +363,63 @@ describe.skipIf(!hasTestDb)("submitAccessRequestLogic (#866)", () => {
 		expect(alerts.every((a) => a.sentAt === null)).toBe(true);
 	});
 
-	it("answers busy at once, writing nothing, when another submission holds the lock", async () => {
-		// Hold the submission lock on a separate connection, as a stalled or
-		// flooding holder would, and prove a submit does not wait behind it.
+	/** Hold the submission lock on its own connection, as a flood's holder would. */
+	async function holdSubmitLock() {
 		const holder = await testDb.$client.connect();
+		await holder.query("begin");
+		await holder.query(
+			"select pg_advisory_xact_lock(hashtextextended('access-requests:submit', 0))",
+		);
+		let released = false;
+		return async () => {
+			if (released) return;
+			released = true;
+			await holder.query("rollback");
+			holder.release();
+		};
+	}
+
+	it("answers contended promptly, writing nothing, when the lock stays held through its retries", async () => {
+		const release = await holdSubmitLock();
 		try {
-			await holder.query("begin");
-			await holder.query(
-				"select pg_advisory_xact_lock(hashtextextended('access-requests:submit', 0))",
-			);
+			const sleeps: number[] = [];
 			const started = Date.now();
-			expect(await submit()).toEqual({ ok: false, reason: "busy" });
+			const res = await submitAccessRequestLogic(
+				accessRequestSchema.parse(form()),
+				{
+					limits: SMALL,
+					scope: SCOPE,
+					sleep: async (ms) => {
+						sleeps.push(ms);
+						await new Promise((r) => setTimeout(r, ms));
+					},
+				},
+			);
+			// Distinct from the daily cap's "busy": the form says "in a moment".
+			expect(res).toEqual({ ok: false, reason: "contended" });
+			expect(sleeps).toHaveLength(LOCK_RETRIES);
+			expect(sleeps.every((ms) => ms > 0 && ms < 100)).toBe(true);
 			expect(Date.now() - started).toBeLessThan(1000);
 			expect(await runRows()).toHaveLength(0);
 		} finally {
-			await holder.query("rollback");
-			holder.release();
+			await release();
 		}
-		// Released: the same submission now goes through.
-		expect(await submit()).toEqual({ ok: true });
+	});
+
+	it("gets through when the lock is released during its retry sleep", async () => {
+		const release = await holdSubmitLock();
+		try {
+			// Two real people colliding: the other one's transaction commits
+			// while this one sleeps before its retry.
+			const res = await submitAccessRequestLogic(
+				accessRequestSchema.parse(form()),
+				{ limits: SMALL, scope: SCOPE, sleep: () => release() },
+			);
+			expect(res).toEqual({ ok: true });
+			expect(await runRows()).toHaveLength(1);
+		} finally {
+			await release();
+		}
 	});
 
 	it("holds every cap under concurrency: parallel submits cannot overshoot", async () => {
@@ -395,6 +435,8 @@ describe.skipIf(!hasTestDb)("submitAccessRequestLogic (#866)", () => {
 			);
 			const written = (await runRows()).length;
 			expect(written).toBeLessThanOrEqual(SMALL.perEmail24h);
+			// And progress: a lock that turned everyone away would also "hold".
+			expect(written).toBeGreaterThanOrEqual(1);
 			// Every racer got an answer that matches what was written.
 			const admitted = results.filter((r) => r.ok && !r.alreadyReceived);
 			expect(admitted.length).toBe(written);
@@ -411,6 +453,7 @@ describe.skipIf(!hasTestDb)("submitAccessRequestLogic (#866)", () => {
 				),
 			);
 			const rows = await runRows();
+			expect(rows.length).toBeGreaterThanOrEqual(1);
 			expect(rows.filter((r) => r.notified).length).toBeLessThanOrEqual(
 				SMALL.notify24h,
 			);
@@ -488,17 +531,45 @@ describe.skipIf(!hasTestDb)("deliverAccessRequestMail (#866)", () => {
 		);
 	});
 
-	it("carries a stable idempotency key per row and per alert", async () => {
+	it("reuses a request's idempotency key on retry, and gives each alert attempt its own", async () => {
 		await submit();
 		const [row] = await runRows();
 		await seedRows(SMALL.global24h);
 		await submit();
 		const [alert] = await runAlerts();
-		const { deps, sent } = makeDeps();
+
+		let clock = Date.now();
+		const { deps, sent, sendEmail } = makeDeps(() => new Date(clock));
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		// First attempt: every send fails AFTER being recorded, as a send whose
+		// outcome the app never learned would.
+		sendEmail.mockImplementation(async (p: SendEmailParams) => {
+			sent.push(p);
+			throw new Error("timeout");
+		});
 		await deliver(deps);
-		const keys = sent.map((m) => m.idempotencyKey);
-		expect(keys).toContain(`access-request/${row?.id}`);
-		expect(keys).toContain(`access-request-alert/${alert?.id}`);
+		clock += RETRY_BACKOFF_MS + 1000;
+		sendEmail.mockImplementation(async (p: SendEmailParams) => {
+			sent.push(p);
+		});
+		await deliver(deps);
+		errSpy.mockRestore();
+
+		const keysFor = (prefix: string) =>
+			sent
+				.map((m) => m.idempotencyKey ?? "")
+				.filter((k) => k.startsWith(prefix));
+		// A request's payload never changes, so its key is the same on retry.
+		expect(keysFor("access-request/")).toEqual([
+			`access-request/${row?.id}`,
+			`access-request/${row?.id}`,
+		]);
+		// An alert's payload carries `trips`, which can change between tries,
+		// so each attempt has its own key and a key never sees two payloads.
+		expect(keysFor("access-request-alert/")).toEqual([
+			`access-request-alert/${alert?.id}/1`,
+			`access-request-alert/${alert?.id}/2`,
+		]);
 	});
 
 	it("stamps each claim with its own time, not the batch's start", async () => {
@@ -520,13 +591,26 @@ describe.skipIf(!hasTestDb)("deliverAccessRequestMail (#866)", () => {
 	});
 
 	it("sends at most MAX_SENDS_PER_TICK request emails per tick, oldest first", async () => {
-		const roomy = { ...SMALL, global24h: 1000, notify24h: 100 };
 		const total = MAX_SENDS_PER_TICK + 2;
-		for (let i = 0; i < total; i++) await submit({}, roomy);
+		const base = Date.now() - 60 * 60 * 1000;
+		// Insert newest-first, so insertion order cannot pass for age order.
+		const byAge: string[] = [];
+		for (let i = total - 1; i >= 0; i--) {
+			const email = freshEmail();
+			byAge[i] = email;
+			await seedRows(1, {
+				email,
+				notified: true,
+				createdAt: new Date(base + i * 1000),
+			});
+		}
 		const { deps, sent } = makeDeps();
 		expect((await deliver(deps)).sent).toBe(MAX_SENDS_PER_TICK);
+		expect(sent.map((m) => m.replyTo)).toEqual(
+			byAge.slice(0, MAX_SENDS_PER_TICK),
+		);
 		expect((await deliver(deps)).sent).toBe(2);
-		expect(sent).toHaveLength(total);
+		expect(sent.map((m) => m.replyTo)).toEqual(byAge);
 	});
 
 	it("never emails a row that did not claim a notification slot", async () => {

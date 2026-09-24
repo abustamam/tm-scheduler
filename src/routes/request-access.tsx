@@ -56,8 +56,17 @@ const kindOf = (raw: unknown): Kind =>
 
 type Outcome = "sent" | "alreadyReceived" | "busy";
 
-function outcomeOf(res: SubmitAccessRequestResult): Outcome {
-	if (!res.ok) return "busy";
+/** Shown in place, with the form kept, when the server was momentarily busy. */
+const CONTENDED_MESSAGE =
+	"Lots of requests are arriving at once. Please try again in a moment.";
+
+/**
+ * A final outcome, or null when the visitor should simply retry: `contended`
+ * means the submission lock was held for the few tens of ms the server waited,
+ * which is NOT the daily cap, so it keeps the form rather than saying "tomorrow".
+ */
+function outcomeOf(res: SubmitAccessRequestResult): Outcome | null {
+	if (!res.ok) return res.reason === "contended" ? null : "busy";
 	return res.alreadyReceived ? "alreadyReceived" : "sent";
 }
 
@@ -122,7 +131,9 @@ function RequestAccess() {
 					fillMs,
 				},
 			});
-			setOutcome(outcomeOf(res));
+			const outcome = outcomeOf(res);
+			if (outcome) setOutcome(outcome);
+			else setError(CONTENDED_MESSAGE);
 		} catch {
 			setError(
 				"Something went wrong. Check the fields above and try again, or email us.",

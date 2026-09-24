@@ -312,7 +312,8 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	//   - ADMISSION: a honeypot and a client-measured minimum fill time (both
 	//     answered with a silent success); per 24h of created_at, a per-email,
 	//     a global and a notification cap, counted and written under one
-	//     advisory lock that is TRIED, never waited on (held → "busy"), so
+	//     advisory lock that is TRIED, never waited on (held after two short
+	//     retries → "contended"), so
 	//     concurrent posts can neither overshoot a cap nor queue on the pool;
 	//   - DELIVERY: at most MAX_SENDS_PER_TICK request emails per poller tick;
 	//   - ALERTS: one per reason per UTC day.
@@ -320,7 +321,7 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	"access-requests.ts#submitAccessRequest": {
 		class: "public-intake",
 		reason:
-			"access-request intake: honeypot + fill time; per-email/global/notify admission caps per 24h under a try-lock (held = busy); ≤MAX_SENDS_PER_TICK emails per poller tick; no per-IP cap (#866)",
+			"access-request intake: honeypot + fill time; per-email/global/notify admission caps per 24h under a try-lock (held after 2 short retries = contended); ≤MAX_SENDS_PER_TICK emails per poller tick; no per-IP cap (#866)",
 	},
 };
 
