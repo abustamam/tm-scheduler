@@ -117,6 +117,9 @@ export type RowPatch = Partial<
 >;
 
 export interface NewAgendaRole {
+	/** The picked bank row's key (#836). Only the picker sets it; the typed
+	 *  box sends a name alone, and `addAgendaRole` resolves that by name. */
+	key?: string;
 	name: string;
 	category: AgendaDraftRole["category"];
 	defaultCount: number;
@@ -1653,26 +1656,25 @@ function RolesPanel({
 	/**
 	 * Attach a bank role this agenda does not yet declare.
 	 *
-	 * Goes through the SAME `onAddRole` the create form below uses, because
-	 * `addAgendaRole` is find-and-attach-or-create keyed on the NAME (#801): a
-	 * name the club's bank already holds attaches that row — same
-	 * `role_definitions.id`, so the assign picker's "last served" carries the
-	 * club's whole history for it — and only a name nothing matches mints
-	 * anything. Handing it the picked role's own name is therefore the attach
-	 * path by construction, and no second server fn exists to get wrong.
+	 * Goes through the SAME `onAddRole` the create form below uses, so no
+	 * second server fn exists to get wrong — but it sends the bank row's KEY,
+	 * and that is what makes it the attach path rather than a name lookup
+	 * (#836). The name it carries was read at PAGE LOAD: resolved by name, a
+	 * club renaming this role before the click forked it, and one that also
+	 * gave the old name to a different role attached THAT one, silently. A key
+	 * is stable across a rename, and a key that no longer resolves is refused
+	 * rather than guessed at. Same `role_definitions.id` either way, so the
+	 * assign picker's "last served" carries the club's whole history for it.
 	 *
 	 * `category` / `defaultCount` / `isSpeakerRole` are sent from the bank row
-	 * and then IGNORED by the attach path, which takes all three off the bank
-	 * row it resolved. They matter in exactly one case: the club renamed this
-	 * role between the page load and this click, so the name now matches
-	 * nothing and the create arm runs. Sending the bank's values rather than
-	 * form defaults is what keeps that rare miss from also inventing a
-	 * one-place non-speaking Functionary out of a four-place Contestant.
+	 * and IGNORED by the attach path, which takes all three off the bank row it
+	 * resolved; they are there because the input shape requires them.
 	 */
 	async function attachRole(role: AttachableRole) {
 		setAttachBusy(true);
 		try {
 			await onAddRole({
+				key: role.key,
 				name: role.name,
 				category: role.category,
 				defaultCount: role.defaultCount,

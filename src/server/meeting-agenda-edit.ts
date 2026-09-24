@@ -61,6 +61,7 @@ const LENGTH_FIELD_CAPS: Record<string, { label: string; max: number }> = {
 	// `roleAddInput`'s and `roleKeyInput`'s own strings, which were unbounded
 	// entirely until they were routed through `parse()` below.
 	name: { label: "role name", max: MAX_TEMPLATE_LABEL_CHARS * 2 },
+	key: { label: "role reference", max: MAX_TEMPLATE_LABEL_CHARS * 2 },
 };
 
 /**
@@ -317,6 +318,16 @@ export const moveAgendaRowFn = createServerFn({ method: "POST" })
  */
 const roleAddInput = z.object({
 	meetingId: z.string().uuid(),
+	// The picked bank row's key (#836), so a picker click attaches by identity
+	// rather than by a name captured at page load. OPTIONAL, and that is the
+	// deploy story as much as the typed box's: a tab loaded before this shipped
+	// sends no key and takes the unchanged name path, and a new tab against an
+	// old server has the unknown field stripped by `z.object`.
+	key: z
+		.string()
+		.min(1)
+		.max(MAX_TEMPLATE_LABEL_CHARS * 2)
+		.optional(),
 	name: z
 		.string()
 		.min(1)
