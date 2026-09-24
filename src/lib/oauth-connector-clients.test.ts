@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	CIMD_ALLOWED_CLIENT_IDS,
 	isCimdClientIdAllowed,
+	unlistedCimdClientId,
 } from "./oauth-connector-clients";
 
 const CLAUDE = "https://claude.ai/oauth/mcp-oauth-client-metadata";
@@ -44,5 +45,76 @@ describe("isCimdClientIdAllowed", () => {
 		const logged = info.mock.calls[0]?.[1] as string;
 		expect(logged).not.toContain("\n");
 		expect(logged.length).toBeLessThanOrEqual(512 + 2 + 2);
+	});
+});
+
+/** A JWT-shaped string with these claims; the signature is never read here. */
+const assertion = (claims: Record<string, string>) =>
+	`e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`;
+
+const basic = (id: string) =>
+	`Basic ${Buffer.from(`${encodeURIComponent(id)}:secret`).toString("base64")}`;
+
+describe("unlistedCimdClientId", () => {
+	const UNLISTED = "https://unlisted.example/client";
+
+	it.each([
+		["the query", { query: { client_id: UNLISTED } }],
+		["the body", { body: { client_id: UNLISTED } }],
+		["a path parameter", { params: { client_id: UNLISTED } }],
+		["an Authorization: Basic header", { authorization: basic(UNLISTED) }],
+		[
+			"a client_assertion's iss/sub",
+			{
+				body: { client_assertion: assertion({ iss: UNLISTED, sub: UNLISTED }) },
+			},
+		],
+		[
+			"a client_assertion in the query",
+			{ query: { client_assertion: assertion({ sub: UNLISTED }) } },
+		],
+	])("finds an unlisted URL client id in %s", (_label, sources) => {
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		expect(unlistedCimdClientId(sources)).toBe(UNLISTED);
+		expect(info).toHaveBeenCalledExactlyOnceWith(
+			"[oauth] refused CIMD client_id",
+			JSON.stringify(UNLISTED),
+		);
+	});
+
+	it("passes the allowlisted client, an opaque registered id, and a request with none", () => {
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		expect(unlistedCimdClientId({ query: { client_id: CLAUDE } })).toBeNull();
+		expect(
+			unlistedCimdClientId({
+				body: { client_id: "aB3dE5fG7hJ9" },
+				authorization: basic("aB3dE5fG7hJ9"),
+			}),
+		).toBeNull();
+		expect(unlistedCimdClientId({})).toBeNull();
+		// Not an `https:` URL, so not a metadata document: the provider decides.
+		expect(
+			unlistedCimdClientId({ query: { client_id: "http://plain.example/x" } }),
+		).toBeNull();
+		expect(info).not.toHaveBeenCalled();
+	});
+
+	it("does not let an allowlisted id in one place carry an unlisted one in another", () => {
+		vi.spyOn(console, "info").mockImplementation(() => {});
+		expect(
+			unlistedCimdClientId({
+				query: { client_id: CLAUDE },
+				body: { client_assertion: assertion({ iss: UNLISTED }) },
+			}),
+		).toBe(UNLISTED);
+	});
+
+	it("ignores a malformed assertion or Basic header rather than throwing", () => {
+		expect(
+			unlistedCimdClientId({
+				body: { client_assertion: "not.a-jwt!.x" },
+				authorization: "Basic %%%",
+			}),
+		).toBeNull();
 	});
 });

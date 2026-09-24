@@ -3,6 +3,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { readSource, serverFnBody } from "#/test/guard-source";
 
 // `#/lib/auth` seeds an `oauth_resource` row at import; with no database that
 // init fails, is logged, and is not what this file is about.
@@ -20,20 +21,30 @@ function sourceFiles(dir = SRC): string[] {
 	});
 }
 
-/** Source with comments removed, so a sentence naming a function is not a call. */
-function code(path: string): string {
-	return readFileSync(path, "utf8")
-		.replace(/\/\*[\s\S]*?\*\//g, "")
-		.replace(/(^|[^:])\/\/.*$/gm, "$1");
+/** The slice of `source` from `start` up to (not including) `end`; throws if either is absent. */
+function between(source: string, start: string, end: string): string {
+	const from = source.indexOf(start);
+	const to = source.indexOf(end, from + start.length);
+	if (from === -1 || to === -1) {
+		throw new Error(
+			`${start} … ${end} not found — the code moved. Re-point this guard rather than deleting the case.`,
+		);
+	}
+	return source.slice(from, to);
 }
 
+const CALL = /\bmayUseConnector\(session\.user\.id\)/;
+
 describe("the officer rule is written once (#852)", () => {
-	it("only connector-eligibility.ts turns adminClubsForUser into a yes/no", () => {
+	it("connector-eligibility.ts is the only caller of adminClubsForUser besides authz-logic.ts, where it lives", () => {
+		// An offender-list guard, so it reads RAW source (see guard-source.ts):
+		// stripping comments could only hide a caller, never invent one.
 		// `authz-logic.ts` defines it and `authenticateToken` resolves a token's
-		// clubs with it; any OTHER caller is a second copy of "who may connect",
-		// which is how `/me` and the consent screen would drift apart.
+		// clubs with it; any OTHER caller is a second copy of "who may connect".
 		const callers = sourceFiles()
-			.filter((path) => /\badminClubsForUser\s*\(/.test(code(path)))
+			.filter((path) =>
+				/\badminClubsForUser\s*\(/.test(readFileSync(path, "utf8")),
+			)
 			.map((path) => relative(SRC, path))
 			.sort();
 		expect(callers).toEqual([
@@ -43,23 +54,52 @@ describe("the officer rule is written once (#852)", () => {
 	});
 
 	it.each([
-		"server/oauth-consent-logic.ts",
-		"lib/auth.ts",
-	])("%s asks mayUseConnector", (file) => {
-		expect(code(join(SRC, file))).toMatch(/\bmayUseConnector\s*\(/);
-	});
-
-	it.each([
 		"getApiTokenState",
 		"generateApiToken",
 	])("api-tokens.ts's %s asks mayUseConnector", (fn) => {
-		// Per server fn, not per file: the file-level match would still pass
+		// Per server fn, not per file: a file-level match would still pass
 		// with one of the two quietly back on an inline copy, or on nothing.
-		const body = code(join(SRC, "server/api-tokens.ts"))
-			.split(/\bexport const /)
-			.find((chunk) => chunk.startsWith(`${fn} `));
-		expect(body, `${fn} not found`).toBeDefined();
-		expect(body).toMatch(/\bmayUseConnector\s*\(/);
+		const body = serverFnBody(
+			readSource(join(SRC, "server/api-tokens.ts")),
+			fn,
+		);
+		expect(body).toMatch(/\bmayUseConnector\(user\.id\)/);
+	});
+
+	it("the consent hook in auth.ts refuses an approval with it", () => {
+		const hook = between(
+			readSource(join(SRC, "lib/auth.ts")),
+			"hooks: {",
+			"advanced: {",
+		);
+		expect(hook).toMatch(CALL);
+		expect(hook).toMatch(/ctx\.body\?\.accept === true/);
+		expect(hook).toMatch(/error: NOT_AN_OFFICER\b/);
+	});
+
+	it("lookupConsentClient reads it and reports it on BOTH signed-in arms", () => {
+		const body = between(
+			readSource(join(SRC, "server/oauth-consent-logic.ts")),
+			"export async function lookupConsentClient",
+			"\n}\n",
+		);
+		expect(body).toMatch(
+			/const eligible = await mayUseConnector\(session\.user\.id\)/,
+		);
+		// The identified-client arm and the lookup-failed arm.
+		expect(body.match(/^\s*eligible,$/gm)).toHaveLength(2);
+	});
+});
+
+describe("unlisted metadata client ids are refused before resolution (#852)", () => {
+	it("the auth.ts hook runs unlistedCimdClientId before any path check", () => {
+		const hook = between(
+			readSource(join(SRC, "lib/auth.ts")),
+			"before: createAuthMiddleware(",
+			'if (ctx.path !== "/oauth2/consent") return;',
+		);
+		expect(hook).toMatch(/\bunlistedCimdClientId\(\{/);
+		expect(hook).toMatch(/error: "invalid_client"/);
 	});
 });
 

@@ -410,6 +410,28 @@ describe.skipIf(!hasTestDb)(
 				expect(lookup).toMatchObject({ signedIn: true, eligible: false });
 			});
 
+			it("says a plain member may not approve", async () => {
+				const email = freshEmail();
+				const cookie = await oauth.signInCookie(loaded, email);
+				await joinClub(cookie, club.clubId, "member");
+				const lookup = await lookupConsentClient(
+					new Headers({ cookie }),
+					client.clientId,
+				);
+				expect(lookup).toMatchObject({ signedIn: true, eligible: false });
+			});
+
+			it("says an admin whose only club is archived may not approve", async () => {
+				const email = freshEmail();
+				const cookie = await oauth.signInCookie(loaded, email);
+				await joinClub(cookie, archivedClub.clubId);
+				const lookup = await lookupConsentClient(
+					new Headers({ cookie }),
+					client.clientId,
+				);
+				expect(lookup).toMatchObject({ signedIn: true, eligible: false });
+			});
+
 			it("says signed-out rather than failing the lookup", async () => {
 				expect(
 					await lookupConsentClient(new Headers(), client.clientId),
@@ -513,7 +535,7 @@ describe.skipIf(!hasTestDb)(
 			/** `GET /oauth2/authorize` for a URL client id, as claude.ai starts it. */
 			async function authorizeByUrl(
 				clientId: string,
-				cookie: string,
+				cookie: string | null,
 				extra: Record<string, string> = {},
 			): Promise<{ response: Response; verifier: string }> {
 				const verifier = randomBytes(32).toString("base64url");
@@ -532,7 +554,11 @@ describe.skipIf(!hasTestDb)(
 				}).toString();
 				const response = await loaded.handler(
 					new Request(url, {
-						headers: { accept: "text/html", cookie, "x-real-ip": clientIp() },
+						headers: {
+							accept: "text/html",
+							"x-real-ip": clientIp(),
+							...(cookie ? { cookie } : {}),
+						},
 					}),
 				);
 				return { response, verifier };
@@ -736,6 +762,124 @@ describe.skipIf(!hasTestDb)(
 					sql`select count(*)::text as n from oauth_client where client_id = ${clientId}`,
 				);
 				expect(rows.rows[0]?.n).toBe("0");
+				expect(refusalLogs(info)).toEqual([
+					["[oauth] refused CIMD client_id", JSON.stringify(clientId)],
+				]);
+			});
+
+			it("a flood of unlisted ids on claude.ai's own origin leaves Claude able to authorize", async () => {
+				// Refused before resolution, the unlisted ids take none of the
+				// plugin's per-origin fetch allowance (30 a minute), so the real
+				// client's next metadata fetch still goes through.
+				const { cookie } = await officerCookie();
+				serveClaudeDocument();
+				const info = vi.spyOn(console, "info").mockImplementation(() => {});
+				// Past any cached copy of Claude's document (max-age=300), so the
+				// authorize below must FETCH it, and so needs that allowance.
+				vi.useFakeTimers({ toFake: ["Date"] });
+				vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+				try {
+					const junk = Array.from(
+						{ length: 40 },
+						(_, i) => `https://claude.ai/oauth/unlisted-${SUFFIX}-${i}`,
+					);
+					for (const clientId of junk) {
+						const { response } = await authorizeByUrl(clientId, null);
+						expect(response.status).toBe(400);
+						expect(await response.json()).toMatchObject({
+							error: "invalid_client",
+						});
+					}
+					expect(refusalLogs(info)).toHaveLength(junk.length);
+
+					const { response } = await authorizeByUrl(CLAUDE_CLIENT_ID, cookie);
+					const location = new URL(
+						response.headers.get("location") ?? "",
+						oauth.TEST_ORIGIN,
+					);
+					expect(location.pathname, await response.clone().text()).toBe(
+						"/oauth/consent",
+					);
+					expect(
+						vi
+							.mocked(fetchClientMetadataResource)
+							.mock.calls.map(([input]) => String(input)),
+					).toEqual([CLAUDE_CLIENT_ID]);
+				} finally {
+					vi.useRealTimers();
+				}
+			});
+
+			it.each([
+				[
+					"the token endpoint's body",
+					(id: string) =>
+						new Request(`${oauth.TEST_ISSUER}/oauth2/token`, {
+							method: "POST",
+							headers: {
+								"content-type": "application/x-www-form-urlencoded",
+								"x-real-ip": clientIp(),
+							},
+							body: new URLSearchParams({
+								grant_type: "authorization_code",
+								code: "x",
+								client_id: id,
+							}).toString(),
+						}),
+				],
+				[
+					"an Authorization: Basic header",
+					(id: string) =>
+						new Request(`${oauth.TEST_ISSUER}/oauth2/token`, {
+							method: "POST",
+							headers: {
+								"content-type": "application/x-www-form-urlencoded",
+								authorization: `Basic ${Buffer.from(`${encodeURIComponent(id)}:s`).toString("base64")}`,
+								"x-real-ip": clientIp(),
+							},
+							body: new URLSearchParams({
+								grant_type: "authorization_code",
+								code: "x",
+							}).toString(),
+						}),
+				],
+				[
+					"a client_assertion",
+					(id: string) =>
+						new Request(`${oauth.TEST_ISSUER}/oauth2/token`, {
+							method: "POST",
+							headers: {
+								"content-type": "application/x-www-form-urlencoded",
+								"x-real-ip": clientIp(),
+							},
+							body: new URLSearchParams({
+								grant_type: "authorization_code",
+								code: "x",
+								client_assertion_type:
+									"urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+								client_assertion: `e30.${Buffer.from(JSON.stringify({ iss: id, sub: id })).toString("base64url")}.sig`,
+							}).toString(),
+						}),
+				],
+				[
+					"the public-client lookup's query",
+					(id: string) =>
+						new Request(
+							`${oauth.TEST_ISSUER}/oauth2/public-client?${new URLSearchParams({ client_id: id })}`,
+							{ headers: { "x-real-ip": clientIp() } },
+						),
+				],
+			])("refuses an unlisted id arriving in %s, with the provider's unknown-client error", async (_label, build) => {
+				serveClaudeDocument();
+				const info = vi.spyOn(console, "info").mockImplementation(() => {});
+				const clientId = `https://unlisted.example/${SUFFIX}/${randomBytes(3).toString("hex")}`;
+				const res = await loaded.handler(build(clientId));
+				expect(res.status).toBe(400);
+				expect(await res.json()).toMatchObject({
+					error: "invalid_client",
+					error_description: "unknown client",
+				});
+				expect(fetchClientMetadataResource).not.toHaveBeenCalled();
 				expect(refusalLogs(info)).toEqual([
 					["[oauth] refused CIMD client_id", JSON.stringify(clientId)],
 				]);

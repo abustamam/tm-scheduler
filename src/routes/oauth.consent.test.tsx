@@ -8,6 +8,7 @@
 // can see.
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NOT_AN_OFFICER_MESSAGE } from "#/lib/oauth-connector-clients";
 import type { ConsentClientLookup } from "#/server/oauth-consent-logic";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
@@ -84,8 +85,7 @@ const signedIn = (
 	client: name === null ? null : { clientId: "client-1", name },
 });
 
-const NOT_AN_OFFICER_COPY =
-	"Only club officers can connect apps to GavelUp right now.";
+const NOT_AN_OFFICER_COPY = NOT_AN_OFFICER_MESSAGE;
 
 describe("/oauth/consent", () => {
 	it("names the client from the server lookup and the account approving", async () => {
@@ -253,7 +253,7 @@ describe("/oauth/consent", () => {
 			// The loader said eligible, then the office ended before Approve.
 			reply(403, {
 				error: "not_an_officer",
-				error_description: "Only club officers can connect apps right now.",
+				error_description: NOT_AN_OFFICER_MESSAGE,
 			});
 			await mount(signedIn("Claude"));
 			fireEvent.click(screen.getByRole("button", { name: "Approve" }));

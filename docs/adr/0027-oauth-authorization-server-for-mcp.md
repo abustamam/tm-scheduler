@@ -286,8 +286,10 @@ every member's connection with it.
 Each raised in review and deliberately not fixed here:
 
 - **No OAuth scopes are checked**; any access token for the `/api/mcp` audience carries full
-  authority (decision 4 above). Harmless while one hand-registered client exists; it stops
-  being harmless when a second is registered.
+  authority (decision 4 above). Since #852 there are two clients — the hand-registered
+  confidential one, until it is retired, and hosted Claude's CIMD client — and both are Claude,
+  so this is still harmless. It stops being harmless when a client that is NOT Claude is added
+  to `CIMD_ALLOWED_CLIENT_IDS` or registered by hand.
 - ~~No way to revoke a connection from the app.~~ Closed by #851: `/me` → **Connected apps**
   (`disconnectApp`, `src/server/oauth-grants-logic.ts`) removes a person's consent, refresh
   tokens and pending codes, and migration 0087 refuses a refresh token for anyone with no consent
@@ -325,7 +327,11 @@ row from it, and every consent screen would name whatever that document claimed.
 `isMetadataDocumentUrlAllowed` hook admits only `CIMD_ALLOWED_CLIENT_IDS`
 (`src/lib/oauth-connector-clients.ts`), by exact string — not a prefix, not an origin, because
 `claude.ai` hosts more than one document. Claude Code's (loopback redirects) is deliberately not
-on it; Claude Code keeps using `tmk_` tokens. The hook runs before any fetch, and the fetch itself
+on it; Claude Code keeps using `tmk_` tokens. A `hooks.before` in `src/lib/auth.ts` applies the
+same allowlist earlier still: any request naming an unlisted `https://` client id — in the query,
+the body, a path parameter, `Authorization: Basic`, or a `client_assertion` — is answered with
+the provider's own unknown-client error before the provider resolves the client, so unlisted ids
+never reach the CIMD resolver. The plugin hook runs before any fetch, and the fetch itself
 goes through the plugin's Node transport (resolve once, public addresses only, pinned, no
 redirects), re-exported from `src/lib/cimd-transport.ts` so tests serve a fixture of the live
 document instead of calling claude.ai.

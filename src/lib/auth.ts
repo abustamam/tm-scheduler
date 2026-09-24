@@ -24,6 +24,7 @@ import {
 	isCimdClientIdAllowed,
 	NOT_AN_OFFICER,
 	NOT_AN_OFFICER_MESSAGE,
+	unlistedCimdClientId,
 } from "#/lib/oauth-connector-clients";
 import {
 	CONSENT_ACCOUNT_CHANGED,
@@ -82,8 +83,31 @@ export const auth = betterAuth({
 	// gate runs here and nowhere else: a person who approved a client earlier
 	// gets later codes without the consent screen (provider behaviour), and
 	// that is safe because `/api/mcp` re-resolves their clubs on every call.
+	//
+	// #852 — and first, on EVERY auth request: refuse unlisted metadata
+	// client_ids before resolution. A URL-shaped client id that is not in
+	// `CIMD_ALLOWED_CLIENT_IDS` is answered here, with the provider's own
+	// unknown-client error, so it never reaches the CIMD resolver — neither
+	// its fetch nor the shared fetch limits that the allowlisted client's
+	// resolutions draw on. `unlistedCimdClientId` names every place a client
+	// id is read from.
 	hooks: {
 		before: createAuthMiddleware(async (ctx) => {
+			if (
+				unlistedCimdClientId({
+					query: ctx.query,
+					body: ctx.body,
+					params: ctx.params,
+					authorization:
+						ctx.headers?.get("authorization") ??
+						ctx.request?.headers.get("authorization"),
+				}) !== null
+			) {
+				throw new APIError("BAD_REQUEST", {
+					error: "invalid_client",
+					error_description: "unknown client",
+				});
+			}
 			if (ctx.path !== "/oauth2/consent") return;
 			const session = await getSessionFromCtx(ctx);
 			// No session is not an account CHANGE: the endpoint's own session
@@ -285,16 +309,16 @@ export const auth = betterAuth({
 		// `isMetadataDocumentUrlAllowed` runs BEFORE any fetch, and admits only
 		// `CIMD_ALLOWED_CLIENT_IDS` by exact match — otherwise this is an
 		// endpoint that fetches whatever URL a caller names and writes a client
-		// row from it. The transport goes through `#/lib/cimd-transport` so tests
+		// row from it. The `hooks.before` above applies the same allowlist
+		// earlier, before the client is resolved; this is the second line. The transport goes through `#/lib/cimd-transport` so tests
 		// can serve a fixture; it resolves once, public addresses only, pinned,
 		// no redirects. `onClientCreated` and `originBoundFields` are left at
 		// their defaults on purpose: nothing here assigns a CIMD client trust
 		// (no `skip_consent`, which would exempt it from Disconnect, #851).
 		cimd({
-			fetchClientMetadataResource: (input, init) =>
-				fetchClientMetadataResource(input, init),
+			fetchClientMetadataResource,
 			metadataProfile: "mcp-2026-07-28",
-			isMetadataDocumentUrlAllowed: (url) => isCimdClientIdAllowed(url),
+			isMetadataDocumentUrlAllowed: isCimdClientIdAllowed,
 		}),
 		// LAST, and Better Auth logs a warning at startup if it is not: a cookie
 		// integration plugin forwards `Set-Cookie` into the framework's cookie

@@ -107,9 +107,11 @@ fastest way to comply.
   `oauth-credential.ts` refuses an unknown `kid` BEFORE it (a flood of junk `kid`s otherwise
   drains the rate-limit bucket every refetch shares, and real calls 500). **claude.ai needs no
   registered client** (#852): `cimd()` from `@better-auth/cimd` lets it identify itself by a
-  Client ID Metadata Document URL, and `isMetadataDocumentUrlAllowed` admits only
-  `CIMD_ALLOWED_CLIENT_IDS` (`src/lib/oauth-connector-clients.ts`) by EXACT match, before any
-  fetch — widen that set, never the match, or `/oauth2/authorize` fetches whatever URL a caller
+  Client ID Metadata Document URL, and only `CIMD_ALLOWED_CLIENT_IDS`
+  (`src/lib/oauth-connector-clients.ts`) is admitted, by EXACT match, twice: a `hooks.before`
+  refuses any other URL-shaped client id before the provider resolves the client
+  (`unlistedCimdClientId` lists every place one is read from), and `isMetadataDocumentUrlAllowed`
+  checks again before any fetch — widen that set, never the match, or `/oauth2/authorize` fetches whatever URL a caller
   names and writes a client row from it. It sits after `mcp()`, before `tanstackStartCookies()`.
   Tests `vi.mock("#/lib/cimd-transport")` and serve `src/test/fixtures/claude-cimd-metadata.json`.
   Only officers may APPROVE a connection: `mayUseConnector` (`src/server/connector-eligibility.ts`)

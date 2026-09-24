@@ -52,7 +52,10 @@ import {
 	reloadLocation,
 	replaceLocation,
 } from "#/lib/browser-location";
-import { NOT_AN_OFFICER } from "#/lib/oauth-connector-clients";
+import {
+	NOT_AN_OFFICER,
+	NOT_AN_OFFICER_MESSAGE,
+} from "#/lib/oauth-connector-clients";
 import {
 	CONSENT_ACCOUNT_CHANGED,
 	CONSENT_ACCOUNT_FIELD,
@@ -98,10 +101,6 @@ export const Route = createFileRoute("/oauth/consent")({
 
 /** Better Auth's consent endpoint, which owns the grant and the redirect. */
 const CONSENT_ENDPOINT = `${AUTH_BASE_PATH}/oauth2/consent`;
-
-/** What the not-an-officer card says, whichever way the page learned it. */
-const NOT_AN_OFFICER_PAGE_MESSAGE =
-	"Only club officers can connect apps to GavelUp right now.";
 
 /** Where the page ends up after a decision it could not simply redirect on. */
 type Outcome =
@@ -239,7 +238,7 @@ function OAuthConsent() {
 				description={`Signed in as ${lookup.email}.`}
 			>
 				<CardContent className="space-y-3 text-sm">
-					<p role="alert">{NOT_AN_OFFICER_PAGE_MESSAGE}</p>
+					<p role="alert">{NOT_AN_OFFICER_MESSAGE}</p>
 					<p className="text-muted-foreground">
 						Decline to let {appName ?? "the app"} know it wasn't connected.
 					</p>
