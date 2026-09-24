@@ -212,7 +212,22 @@ function assertNotArchived(club: { archivedAt: Date | null }): void {
  *  impersonation session's `club_id` is an FK, and a session-less writer derives
  *  the id from the meeting row it just loaded — but the earlier `if (club && …)`
  *  form would have GRANTED on an unknown id, which is the wrong default for the
- *  function whose whole job is to deny. */
+ *  function whose whole job is to deny.
+ *
+ *  NOT race-free, and that is an accepted trade-off rather than an oversight
+ *  (#857, maintainer decision 2026-09-24). The read here is a plain, unlocked
+ *  `SELECT`, and `archiveClub` writes `archived_at` with a plain `UPDATE`, so
+ *  nothing orders the two: a write can read the club as live, pass this gate,
+ *  and still commit its rows in the milliseconds after an archive lands. Every
+ *  session-less writer shares that check-then-act window. It is accepted
+ *  because archiving is a rare admin action and the residue is one write's rows
+ *  in a club every read already reports as gone. Closing it would mean taking a
+ *  lock that conflicts with the archive (`FOR SHARE` on the club row inside the
+ *  write's transaction) in every caller at once, with lock ordering against the
+ *  slot `FOR UPDATE` locks — do not add it to one write alone. A write that
+ *  ALREADY holds a club lock should read `archived_at` inside that lock instead
+ *  of calling this first (`CODING_STANDARDS.md`, "Where a write already holds a
+ *  club lock"). */
 export async function assertClubNotArchived(
 	clubId: string,
 	/**
@@ -606,6 +621,18 @@ export async function requireWordOfTheDayEditor(input: {
  * capture from officers who hold their seat that way — a privilege loss nobody
  * asked for, and the mirror image of the unmentioned privilege GAIN #464 closed.
  * So the officer path is retried explicitly below.
+ *
+ * That retry exists for the MINUTES surface, and the Ballot Counter console
+ * deliberately does not reach it (#844, option 2, maintainer 2026-09-24). The
+ * console on the meeting page is gated on `isVoteCounter || effectiveCanManage`,
+ * and an elected officer who is not a `clubRole` admin is neither: `canManage`
+ * comes from `canManageClub`, which does not include the #202 effective-admin
+ * officer, and `isVoteCounter` means holding the slot. So such an officer holds
+ * this capability server-side and cannot open the console that uses it; they
+ * act through a club admin. That is the decision, not a bug. Do NOT close it by
+ * widening `canManage` or the meeting payload: `canManage` also gates roster
+ * contact details and guest records, so widening it would disclose PII to a
+ * principal who does not have it today.
  *
  * `setAttendance` / `addMinutesGuest` / `removeMinutesGuest` deliberately do NOT
  * come through here — they stay `gateAdmin`-only. A Ballot Counter has no
