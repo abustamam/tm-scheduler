@@ -2169,9 +2169,15 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  * The created Person is deliberately LEFT BEHIND when the membership goes. It is
  * global (ADR-0008), deleting it could cascade further than this undo's remit,
  * and an orphan Person is visible to the merge tool — which is the recoverable
- * direction this file keeps choosing. Its `member_remove` names that Person
- * (#875), so this club's roster CSV can re-attach it later rather than skipping
- * the row as another club's.
+ * direction this file keeps choosing.
+ *
+ * Whenever the membership is deleted, created Person or not, the
+ * `member_remove` names its Person in `detail.personId`, the release record
+ * `applyMemberRemove` also writes and the CSV importer reads (#855). Without it
+ * the Person is held by no club and named by no removal, so a roster CSV
+ * carrying the guest's email skips the row on every import, in this club too
+ * (#875). An undo that keeps a reused membership releases nothing and names
+ * nobody.
  */
 export async function applyUndoGuestConversion(
 	input: UndoConversionInput,
@@ -2386,18 +2392,7 @@ export async function applyUndoGuestConversion(
 				undoneGuestId: input.guestId,
 				slotIds: record.slotIds,
 				membershipDeleted: record.createdMembership,
-				// The release record the CSV importer reads (#855), in the shape
-				// `applyMemberRemove` writes. The Person this convert minted is left
-				// behind with no club holding it, and the importer re-attaches such a
-				// Person only for the club whose latest `member_remove` names it —
-				// without this, a roster CSV carrying the guest's email skips the row
-				// on every import, in this club too (#875). Only a Person the convert
-				// CREATED, and only when its membership actually went: a deduped
-				// Person is somebody's pre-existing record, and naming it here would
-				// hand this club a claim on it that no removal of ours earned.
-				...(record.createdPerson && record.createdMembership
-					? { personId: record.personId }
-					: {}),
+				...(record.createdMembership ? { personId: record.personId } : {}),
 				...(record.createdMembership
 					? {}
 					: {

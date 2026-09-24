@@ -910,6 +910,51 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			]);
 		});
 
+		it("names the Person when the undo deletes a membership on a Person the convert did NOT create (#875)", async () => {
+			// Convert dedups only onto this club's own Persons, whose membership
+			// it then reuses, so "existing Person, fresh membership" is not
+			// reachable through today's convert path. The record is crafted
+			// instead: what the undo keys the release on is the membership going,
+			// not who minted the Person.
+			const email = `deduped-${n}@x.io`;
+			const { guestId } = await captureGuestVisit({
+				clubId: victimClub.clubId,
+				name: `Deduped ${n}`,
+				email,
+			});
+			const converted = await applyConvertGuestToMember({
+				clubId: victimClub.clubId,
+				guestId,
+				actorMemberId: victimClub.adminMemberId,
+			});
+			personIds.push(converted.personId);
+			const patched = await testDb
+				.update(activityLog)
+				.set({
+					detail: sql`${activityLog.detail} || '{"createdPerson":false}'::jsonb`,
+				})
+				.where(
+					and(
+						eq(activityLog.clubId, victimClub.clubId),
+						eq(activityLog.action, "member_add"),
+						sql`${activityLog.detail} ->> 'fromGuestId' = ${guestId}`,
+					),
+				)
+				.returning({ id: activityLog.id });
+			expect(patched).toHaveLength(1);
+
+			const undone = await applyUndoGuestConversion({
+				clubId: victimClub.clubId,
+				guestId,
+				actorMemberId: victimClub.adminMemberId,
+			});
+			expect(undone.membershipDeleted).toBe(true);
+			expect(await clubsHolding(converted.personId)).toEqual([]);
+			expect(await removalsNaming(victimClub.clubId, converted.personId)).toBe(
+				1,
+			);
+		});
+
 		it("names no Person when the undone convert reused this club's own membership (#875)", async () => {
 			// The membership survives such an undo (restored to inactive), so
 			// nothing was released and no removal may claim the Person.
