@@ -430,8 +430,12 @@ two status predicates live, and an inline query bypasses both while still typech
 (`src/lib/attendance-panel.ts`, with `buildPanelRoleMap` beside it) resolves a display rung per
 member: an explicit `coming`/`not_coming` wins, else a **confirmed** `role_slots` row reads as
 `coming` with `assumed: true`, else the stored `reached_out` or null. Pure derivation, no write —
-the table gains no row, and `listComingForMeeting` still answers with stored rungs only, so the
-rail's coming count is a superset of the seam's BY DESIGN. Both halves live in `src/lib` rather
+the table gains no row. The rule is ONE function, `resolveEffectiveRung`, and every surface asking
+"who is coming?" calls it (#664): the rail, roll mode's suggestion, and the seam's
+`listEffectiveComingForMeeting`. `listComingForMeeting` still answers with stored rungs only, and
+is kept narrow rather than widened so no caller's answer changes silently; a consumer picks the
+reader that matches the question, and the effective one carries `assumed`, which must survive to
+whatever renders it. Both halves live in `src/lib` rather
 than in the route for the usual reason: a route cannot be mounted in vitest, so a derivation there
 is guarded only by source greps, and mutation review found two bugs in this one that pass every
 grep and a clean typecheck. See CONTEXT.md's **Planned attendance** entry.
@@ -536,9 +540,11 @@ seam and no store guard.** `buildRollPanel` (`src/lib/roll-panel.ts`) is a sibli
 that number: there is no `attendance-store.guard.test.ts` analogue to enforce it, which is the real
 point — "add it to the seam rather than inlining a query" is advice about the PLAN table only, and
 nothing fails if you inline one against the record.
-**The derived `assumed` Coming does not reach roll.** `buildRollPanel` reads the raw rungs, so the
-rail's inferred Coming produces no dashed `Present?`; deliberate for now, filed P1, and the one
-place the two modes disagree about the same word. **The completed-meeting lock does not apply**:
+**The derived `assumed` Coming reaches roll through the same rule** (#664). `buildRollPanel` resolves
+each member's rung with `resolveEffectiveRung`, so a confirmed role-holder who never replied gets a
+dashed `Present?` flagged `suggestionAssumed`, announced as "their confirmed role suggests" and
+rendered muted. It is still a suggestion: nothing is written until the officer taps it, and the
+counts never include it. **The completed-meeting lock does not apply**:
 `writesLocked = roll ? false : locked`, and `setAttendance`'s server gates are `gateAdmin` plus
 `assertAttendanceRecordable` (has the DAY arrived) — never `status`. **Roll writes do not reach the server directly** — they go through the
 offline write queue (`src/hooks/use-offline-minutes.ts`), which is the only channel while a queue

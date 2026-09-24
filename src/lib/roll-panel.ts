@@ -8,10 +8,11 @@
 // modes share no sort, no counts and no row shape, so one function with a flag
 // would be two functions wearing one name.
 
-import type {
-	PanelRole,
-	PanelRowRole,
-	PlanStatus,
+import {
+	type PanelRole,
+	type PanelRowRole,
+	type PlanStatus,
+	resolveEffectiveRung,
 } from "#/lib/attendance-panel";
 import type { AttendanceStatus } from "#/server/minutes-logic";
 
@@ -34,6 +35,13 @@ export interface RollRow {
 	 *  real row. A row can never carry both — that is what makes a plan
 	 *  physically unmistakable for a record (D3, the guard against #548). */
 	suggestion: RollSuggestion | null;
+	/** True when `suggestion` comes from an INFERENCE rather than an answer: the
+	 *  member holds a confirmed role on this meeting and never replied, so the rail
+	 *  reads them `Coming · assumed` and roll mode suggests `Present?` from the
+	 *  same rule (`resolveEffectiveRung`, #664). Always false when `suggestion` is
+	 *  null. The renderer must not announce this as "the plan suggests" — nobody
+	 *  planned anything — which is what this flag exists to let it say. */
+	suggestionAssumed: boolean;
 	/** Information, never a bucket: the Timer still needs marking present.
 	 *
 	 *  The ROW carries the short code as well as the name, because the rail's
@@ -42,8 +50,9 @@ export interface RollRow {
 	 *  `shrink-0 whitespace-nowrap` block ~136px wide for "Toastmaster of the Day"
 	 *  in a ~292px column, which is what pushed the rest of the row out. Same
 	 *  `PanelRowRole` plan mode's rows carry, so `confirmed` stays stripped: it is
-	 *  a second answer to a question `assumed` already answers, and roll mode has
-	 *  no use for either. */
+	 *  a second answer to a question `assumed` already answers — and roll mode's
+	 *  copy of that answer is `suggestionAssumed`, resolved once from the map's
+	 *  value before the row is built. */
 	role: PanelRowRole | null;
 	/** True for a row appended by `deriveRollRoster`: someone with a recorded
 	 *  attendance row who has since left the roster. Their row skips the contact
@@ -95,14 +104,24 @@ export function buildRollPanel(input: {
 	// attendance would resurrect the name.
 	const rows: RollRow[] = input.roster.map((m) => {
 		const status = recorded.get(m.id) ?? null;
+		const role = input.roleByMemberId[m.id];
+		// The EFFECTIVE rung, from the same rule the rail uses, so a confirmed
+		// role-holder who never replied reads `Coming · assumed` on Monday and gets
+		// a dashed `Present?` on Wednesday (#664). Before, this read the raw rung
+		// and roll mode disagreed with plan mode about the same word. It is still
+		// only a SUGGESTION — nothing is written until the officer taps it, and the
+		// counts below never include it.
+		const effective = resolveEffectiveRung(planned.get(m.id) ?? null, role);
+		// Mutually exclusive by construction, not by convention.
+		const suggestion = status === null ? suggest(effective.status) : null;
 		return {
 			...m,
 			preferredName: m.preferredName ?? null,
 			departed: m.departed ?? false,
 			status,
-			// Mutually exclusive by construction, not by convention.
-			suggestion: status === null ? suggest(planned.get(m.id) ?? null) : null,
-			role: roleRow(input.roleByMemberId[m.id]),
+			suggestion,
+			suggestionAssumed: suggestion !== null && effective.assumed,
+			role: roleRow(role),
 		};
 	});
 

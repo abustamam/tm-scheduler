@@ -111,6 +111,47 @@ export function buildPanelRoleMap(
 	return byMember;
 }
 
+/**
+ * THE answer to "is this member coming?" for one member and one meeting — the
+ * only place the assumed-Coming inference is written (#664). Every surface that
+ * asks the question calls this: the rail (`buildPlanPanel`, below), roll mode's
+ * suggestion (`buildRollPanel`), and the seam's `listEffectiveComingForMeeting`.
+ * Before it existed the rule lived inline in `buildPlanPanel`, so the rail was
+ * the only surface that could see it and roll mode answered the same question
+ * differently on the same screen.
+ *
+ * PRECEDENCE:
+ *
+ *   explicit coming / not_coming  →  that answer   (their own word wins)
+ *   role slot status = confirmed  →  "coming", assumed
+ *   stored reached_out            →  "reached_out"
+ *   nothing                       →  null
+ *
+ * `assumed` is the half that must survive every consumer: it is the honesty of
+ * "nobody actually replied", and a surface that drops it renders an inference
+ * as an answer.
+ *
+ * A confirmed role outranking `reached_out` is not a style choice. A member the
+ * VPE assigned and confirmed has no plan row, so tapping their WhatsApp draft
+ * INSERTS `reached_out` — `setPlanStatus`'s `demoteFrom: ["reached_out"]` guard
+ * is a `setWhere` on the conflict branch, and with no existing row there is no
+ * conflict, so the insert lands. Ranked the other way, an officer confirms a
+ * Toastmaster, messages them, and watches them fall from Coming back to Asked.
+ * Ordering it here fixes that with no write change, and keeps the `reached_out`
+ * row, which is a true record of having messaged them.
+ *
+ * Takes only `confirmed` from the role, so the server can call it without
+ * building the short-code map.
+ */
+export function resolveEffectiveRung(
+	stored: PlanStatus | null,
+	role: Pick<PanelRole, "confirmed"> | null | undefined,
+): { status: PlanStatus | null; assumed: boolean } {
+	const answered = stored === "coming" || stored === "not_coming";
+	const assumed = !answered && role?.confirmed === true;
+	return { status: assumed ? "coming" : stored, assumed };
+}
+
 /** What a ROW carries. `confirmed` is deliberately absent: on the way out it is
  *  a second answer to the question `assumed` already answers, and the two
  *  disagree for a `not_coming` member holding a confirmed slot. Reading
@@ -145,7 +186,7 @@ export interface PanelMember {
 	 *  a row round-tripped to an unchanged label and read as a failed save. */
 	storedStatus: PlanStatus | null;
 	/** True when `status` is "coming" because the member holds a CONFIRMED role
-	 *  and nobody actually answered. An inference, not their word — the row has
+	 *  and nobody actually answered (`resolveEffectiveRung`). An inference, not their word — the row has
 	 *  to render it differently or the rail is lying about who replied. */
 	assumed: boolean;
 	/** Non-null when they hold a slot on this meeting. */
@@ -207,27 +248,13 @@ export function buildPlanPanel(input: {
 	const rows: PanelMember[] = input.roster.map((m) => {
 		const stored = byMember.get(m.id) ?? null;
 		const role = input.roleByMemberId[m.id] ?? null;
-		// PRECEDENCE, in one expression:
-		//
-		//   explicit coming / not_coming  →  that answer   (their own word wins)
-		//   role slot status = confirmed  →  "coming", assumed
-		//   stored reached_out            →  "reached_out"
-		//   nothing                       →  null
-		//
-		// A confirmed role outranking `reached_out` is not a style choice. A
-		// member the VPE assigned and confirmed has no plan row, so tapping their
-		// WhatsApp draft INSERTS `reached_out` — `setPlanStatus`'s
-		// `demoteFrom: ["reached_out"]` guard is a `setWhere` on the conflict
-		// branch, and with no existing row there is no conflict, so the insert
-		// lands. Ranked the other way, an officer confirms a Toastmaster,
-		// messages them, and watches them fall from Coming back to Asked.
-		// Ordering it here fixes that with no write change, and keeps the
-		// `reached_out` row, which is a true record of having messaged them.
-		const answered = stored === "coming" || stored === "not_coming";
-		const assumed = !answered && role?.confirmed === true;
+		// PRECEDENCE lives in `resolveEffectiveRung`, the one copy every surface
+		// shares — see its docstring for the ladder and why a confirmed role
+		// outranks `reached_out`.
+		const { status, assumed } = resolveEffectiveRung(stored, role);
 		return {
 			...m,
-			status: assumed ? "coming" : stored,
+			status,
 			storedStatus: stored,
 			assumed,
 			role: role ? { code: role.code, roleName: role.roleName } : null,
