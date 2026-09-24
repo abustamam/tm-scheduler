@@ -17,9 +17,11 @@
  *     bunx vitest run src/server/cross-club-attach.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members, people, user } from "#/db/schema";
+import * as schema from "#/db/schema";
+import { activityLog, guests, members, people, user } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
 import {
 	ADDRESS_CONFLICT_NOTE,
@@ -45,13 +47,16 @@ vi.mock("@tanstack/react-start/server", () => ({
 	},
 }));
 
-const { importPeopleAndMembers } = await import("./import-members-logic");
+const { importPeopleAndMembers, loadPersonCandidates } = await import(
+	"./import-members-logic"
+);
 const { previewMemberImport, commitMemberImport } = await import(
 	"./upload-members-logic"
 );
 const { applyConvertGuestToMember, captureGuestVisit, lockClubConverts } =
 	await import("./guest-pipeline-logic");
 const { bindVerifiedPerson } = await import("./account-link-logic");
+const { applyMemberRemove } = await import("./members-logic");
 
 /** Minimal mapped-CSV row builder (all fields default to null). */
 function row(over: Partial<MappedMember>): MappedMember {
@@ -250,21 +255,21 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			expect(p?.customerId, "the local member was re-keyed").toBeNull();
 		});
 
-		it("still matches a Person no club holds, without colliding on the Customer ID", async () => {
-			// An orphan left by a member removal or an undone convert. Refusing it
-			// would make the writer INSERT a row carrying this Customer ID, which
-			// `people_customer_id_unique` rejects mid-file with no transaction.
+		it("skips a Person no club holds when no club released them, for every club (#855)", async () => {
+			// An orphan with no removal record: a deleted club, an undone convert,
+			// or a removal from before #855. Nobody may attach them by file, and
+			// the refusal writes nothing, so the Customer ID cannot collide.
 			const orphan = await person(null, { customerId: `PN-O-${n}` });
 
-			for (const _run of [1, 2]) {
-				const stats = await importPeopleAndMembers(attackerClub.clubId, [
+			for (const clubId of [attackerClub.clubId, victimClub.clubId]) {
+				const stats = await importPeopleAndMembers(clubId, [
 					row({ customerId: `PN-O-${n}`, name: "Orphan" }),
 				]);
-				expect(stats.foreignSkipped).toBe(0);
+				expect(stats.foreignSkipped).toBe(1);
 				expect(stats.peopleCreated).toBe(0);
-				expect(stats.peopleMatchedByCustomerId).toBe(1);
+				expect(stats.membersCreated).toBe(0);
 			}
-			expect(await clubsHolding(orphan)).toEqual([attackerClub.clubId]);
+			expect(await clubsHolding(orphan)).toEqual([]);
 		});
 
 		it("still matches this club's own INACTIVE member", async () => {
@@ -488,6 +493,370 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 
 			const userId = await account(address);
 			expect(await bindVerifiedPerson({ personId: victim, userId })).toBe(true);
+		});
+	});
+
+	/**
+	 * A Person no club holds (#855). Removing an unlinked member leaves one
+	 * behind, and the roster row an import would mint is then their ONLY
+	 * membership, so it alone vouches for a bind. Only the club whose removal
+	 * is the latest naming them may attach them by file.
+	 */
+	describe("CSV import of a removed member (#855)", () => {
+		/** Remove `personId`'s roster row in `clubId` the way the roster does. */
+		async function removeFrom(clubId: string, personId: string) {
+			const [m] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(and(eq(members.clubId, clubId), eq(members.personId, personId)));
+			if (!m) throw new Error("no roster row to remove");
+			await applyMemberRemove({ clubId, memberId: m.id, actorMemberId: null });
+		}
+
+		/** How many `member_remove` rows in `clubId` name `personId`. */
+		async function removalsNaming(clubId: string, personId: string) {
+			const rows = await testDb
+				.select({ id: activityLog.id })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, clubId),
+						eq(activityLog.action, "member_remove"),
+						eq(activityLog.targetType, "member"),
+						sql`${activityLog.detail} ->> 'personId' = ${personId}`,
+					),
+				);
+			return rows.length;
+		}
+
+		/** Pin the one removal `clubId` wrote for `personId` to an id and time. */
+		async function pinRemoval(
+			clubId: string,
+			personId: string,
+			id: string,
+			createdAt: Date,
+		) {
+			const pinned = await testDb
+				.update(activityLog)
+				.set({ id, createdAt })
+				.where(
+					and(
+						eq(activityLog.clubId, clubId),
+						eq(activityLog.action, "member_remove"),
+						sql`${activityLog.detail} ->> 'personId' = ${personId}`,
+					),
+				)
+				.returning({ id: activityLog.id });
+			expect(pinned).toHaveLength(1);
+		}
+
+		it("lets the removing club re-import by Customer ID: no new Person, one roster row", async () => {
+			const removed = await person(victimClub.clubId, {
+				customerId: `PN-R-${n}`,
+			});
+			await removeFrom(victimClub.clubId, removed);
+
+			for (const _run of [1, 2]) {
+				const stats = await importPeopleAndMembers(victimClub.clubId, [
+					row({ customerId: `PN-R-${n}`, name: "Returning" }),
+				]);
+				expect(stats.foreignSkipped).toBe(0);
+				expect(stats.peopleCreated).toBe(0);
+				expect(stats.peopleMatchedByCustomerId).toBe(1);
+			}
+			expect(await clubsHolding(removed)).toEqual([victimClub.clubId]);
+		});
+
+		it("lets the removing club re-import by person-level email", async () => {
+			const email = `returning-${n}@x.io`;
+			const removed = await person(victimClub.clubId, { personEmail: email });
+			await removeFrom(victimClub.clubId, removed);
+
+			const stats = await importPeopleAndMembers(victimClub.clubId, [
+				row({ name: "Returning", email: email.toUpperCase() }),
+			]);
+
+			expect(stats.foreignSkipped).toBe(0);
+			expect(stats.peopleCreated).toBe(0);
+			expect(stats.peopleMatchedByEmail).toBe(1);
+			expect(stats.membersCreated).toBe(1);
+			expect(await clubsHolding(removed)).toEqual([victimClub.clubId]);
+		});
+
+		it("gives any other club nothing to match, by Customer ID or by email", async () => {
+			const email = `released-${n}@x.io`;
+			const byCid = await person(victimClub.clubId, {
+				customerId: `PN-R-${n}`,
+			});
+			const byEmail = await person(victimClub.clubId, {
+				name: `Other ${n}`,
+				personEmail: email,
+			});
+			await removeFrom(victimClub.clubId, byCid);
+			await removeFrom(victimClub.clubId, byEmail);
+
+			const stats = await importPeopleAndMembers(attackerClub.clubId, [
+				row({
+					customerId: `PN-R-${n}`,
+					name: "Returning",
+					email: `attacker-${n}@x.io`,
+				}),
+				row({ name: `Other ${n}`, email }),
+			]);
+
+			expect(stats.foreignSkipped).toBe(2);
+			expect(stats.peopleCreated).toBe(0);
+			expect(stats.membersCreated).toBe(0);
+			expect(await clubsHolding(byCid)).toEqual([]);
+			expect(await clubsHolding(byEmail)).toEqual([]);
+		});
+
+		it("scopes a release to the Person it names, not to every orphan", async () => {
+			// A club holding ANY removal record must not thereby own every
+			// unrecorded orphan: the lookup is keyed on the removed Person.
+			const q = await person(victimClub.clubId, {
+				name: `Removed ${n}`,
+				customerId: `PN-Q-${n}`,
+			});
+			await removeFrom(victimClub.clubId, q);
+			const p = await person(null, { customerId: `PN-P-${n}` });
+
+			const stats = await importPeopleAndMembers(victimClub.clubId, [
+				row({ customerId: `PN-P-${n}`, name: "Never removed" }),
+			]);
+
+			expect(stats.foreignSkipped).toBe(1);
+			expect(stats.membersCreated).toBe(0);
+			expect(await clubsHolding(p)).toEqual([]);
+		});
+
+		it("follows the LATEST removal: removed by A, re-added and removed by B, is B's alone", async () => {
+			const moved = await person(victimClub.clubId, {
+				customerId: `PN-M-${n}`,
+			});
+			await removeFrom(victimClub.clubId, moved);
+			// Re-added by hand in B, not by file, then removed there too.
+			await testDb.insert(members).values({
+				clubId: attackerClub.clubId,
+				personId: moved,
+				name: "Moved",
+			});
+			await removeFrom(attackerClub.clubId, moved);
+			const rows = [row({ customerId: `PN-M-${n}`, name: "Moved" })];
+
+			const fromA = await importPeopleAndMembers(victimClub.clubId, rows);
+			expect(fromA.foreignSkipped).toBe(1);
+			expect(await clubsHolding(moved)).toEqual([]);
+
+			const fromB = await importPeopleAndMembers(attackerClub.clubId, rows);
+			expect(fromB.foreignSkipped).toBe(0);
+			expect(fromB.membersCreated).toBe(1);
+			expect(await clubsHolding(moved)).toEqual([attackerClub.clubId]);
+		});
+
+		it("writes no removal for a stale second removal that deletes nothing", async () => {
+			// P is held by A and B. A's first removal (the blocker) deletes A's row
+			// and holds it; A's second removal read that row before it went, so it
+			// parks on the same delete. B then removes its own row and commits.
+			// When the blocker commits, the second A removal deletes ZERO rows —
+			// and before the fix it still logged the NEWEST removal naming P,
+			// handing A the release B had just taken.
+			const p = await person(victimClub.clubId, { customerId: `PN-S-${n}` });
+			await testDb
+				.insert(members)
+				.values({ clubId: attackerClub.clubId, personId: p, name: "Shared" });
+			const [aRow] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(eq(members.clubId, victimClub.clubId), eq(members.personId, p)),
+				);
+			const aMemberId = aRow?.id ?? "";
+
+			const first = await openBlockingTx(async (tx) => {
+				await tx.delete(members).where(eq(members.id, aMemberId));
+			});
+			const second = applyMemberRemove({
+				clubId: victimClub.clubId,
+				memberId: aMemberId,
+				actorMemberId: null,
+			});
+			// Settled into a value up front, so the promise never dangles
+			// whichever way the steps below end.
+			const outcome = second.then(
+				() => null,
+				(e: unknown) => e,
+			);
+			try {
+				await waitForLockWait('delete from "members"', first.pid);
+				await removeFrom(attackerClub.clubId, p);
+			} finally {
+				// Released on every path: a blocker left open keeps its row lock and
+				// its connection, wedges afterEach, and leaks this test's fixtures.
+				await first.commit();
+				await outcome;
+			}
+
+			const err = await outcome;
+			expect(err).toBeInstanceOf(Error);
+			expect((err as Error).message).toBe("Member not found.");
+			expect(await removalsNaming(victimClub.clubId, p)).toBe(0);
+			const rows = [row({ customerId: `PN-S-${n}`, name: "Shared" })];
+			expect(
+				(await importPeopleAndMembers(victimClub.clubId, rows)).foreignSkipped,
+			).toBe(1);
+			expect(
+				(await importPeopleAndMembers(attackerClub.clubId, rows))
+					.membersCreated,
+			).toBe(1);
+		});
+
+		it("breaks a created_at tie between two removals by the later id", async () => {
+			// Two removals in one instant: the id tie-break decides, so the
+			// answer is stable across preview and commit rather than arbitrary.
+			const p = await person(victimClub.clubId, { customerId: `PN-T-${n}` });
+			await removeFrom(victimClub.clubId, p);
+			await testDb
+				.insert(members)
+				.values({ clubId: attackerClub.clubId, personId: p, name: "Tied" });
+			await removeFrom(attackerClub.clubId, p);
+			const at = new Date("2026-01-01T00:00:00Z");
+			const tail = randomUUID().slice(-12);
+			await pinRemoval(
+				victimClub.clubId,
+				p,
+				`00000000-0000-4000-8000-${tail}`,
+				at,
+			);
+			await pinRemoval(
+				attackerClub.clubId,
+				p,
+				`ffffffff-ffff-4fff-bfff-${tail}`,
+				at,
+			);
+			const rows = [row({ customerId: `PN-T-${n}`, name: "Tied" })];
+
+			expect(
+				(await importPeopleAndMembers(victimClub.clubId, rows)).foreignSkipped,
+			).toBe(1);
+			expect(
+				(await importPeopleAndMembers(attackerClub.clubId, rows))
+					.membersCreated,
+			).toBe(1);
+		});
+
+		it("ignores a newer activity row of another action naming the same Person", async () => {
+			// Only a removal releases. A later row of any other action whose detail
+			// happens to carry the same key must not move the release.
+			const p = await person(victimClub.clubId, { customerId: `PN-X-${n}` });
+			await removeFrom(victimClub.clubId, p);
+			await testDb.insert(activityLog).values({
+				clubId: attackerClub.clubId,
+				action: "member_edit",
+				targetType: "member",
+				detail: { personId: p },
+				createdAt: new Date(Date.now() + 60_000),
+			});
+			const rows = [row({ customerId: `PN-X-${n}`, name: "Edited" })];
+
+			expect(
+				(await importPeopleAndMembers(attackerClub.clubId, rows))
+					.foreignSkipped,
+			).toBe(1);
+			expect(
+				(await importPeopleAndMembers(victimClub.clubId, rows)).membersCreated,
+			).toBe(1);
+		});
+
+		it("looks the release up through activity_log_member_remove_person_idx", async () => {
+			// The index only helps if the lookup spells its expression and its
+			// partial predicate the way the index does; otherwise the planner
+			// cannot prove it applies and scans the log once per orphan. Seqscans
+			// are priced out so the plan shows whether the index is USABLE, which
+			// is the property, rather than whether this table is big enough.
+			let captured: { text: string; params: unknown[] } | null = null;
+			const capturing = drizzle(process.env.TEST_DATABASE_URL ?? "", {
+				schema,
+				logger: {
+					logQuery(text, params) {
+						if (text.includes('"latest_removal"')) captured = { text, params };
+					},
+				},
+			});
+			try {
+				await loadPersonCandidates(victimClub.clubId, capturing as never);
+			} finally {
+				await capturing.$client.end();
+			}
+			const query = captured as { text: string; params: unknown[] } | null;
+			if (!query) throw new Error("the release lookup was not captured");
+			const client = await testDb.$client.connect();
+			let plan: string;
+			try {
+				await client.query("begin");
+				await client.query("set local enable_seqscan = off");
+				const res = await client.query(`explain ${query.text}`, query.params);
+				plan = res.rows
+					.map((r: Record<string, string>) => r["QUERY PLAN"])
+					.join("\n");
+			} finally {
+				await client.query("rollback");
+				client.release();
+			}
+			expect(plan).toContain("activity_log_member_remove_person_idx");
+			// Named is not enough: with seqscans priced out the planner will walk
+			// the whole partial index with a filter when only the PREDICATE
+			// matches. An Index Cond on the expression is what proves the lookup
+			// is keyed on it.
+			expect(plan).toMatch(/Index Cond: \(\(detail ->> 'personId'::text\) = /);
+		});
+
+		it("previews exactly what the commit then does, for both clubs", async () => {
+			const removed = await person(victimClub.clubId, {
+				customerId: `PN-R-${n}`,
+			});
+			await removeFrom(victimClub.clubId, removed);
+			const text = csv([{ customerId: `PN-R-${n}`, name: "Returning" }]);
+
+			const foreign = await previewMemberImport(attackerClub.clubId, text);
+			expect(foreign.summary.foreignSkipped).toBe(1);
+			expect(foreign.rows[0]).toMatchObject({
+				action: "skip",
+				note: FOREIGN_SKIP_NOTE.customerId,
+			});
+			const foreignCommit = await commitMemberImport(attackerClub.clubId, text);
+			expect(foreignCommit.stats.foreignSkipped).toBe(1);
+			expect(foreignCommit.stats.membersCreated).toBe(0);
+
+			const home = await previewMemberImport(victimClub.clubId, text);
+			expect(home.summary.foreignSkipped).toBe(0);
+			expect(home.summary.peopleMatched).toBe(1);
+			expect(home.summary.toInsert).toBe(1);
+			const homeCommit = await commitMemberImport(victimClub.clubId, text);
+			expect(homeCommit.stats.foreignSkipped).toBe(0);
+			expect(homeCommit.stats.peopleCreated).toBe(0);
+			expect(homeCommit.stats.membersCreated).toBe(home.summary.toInsert);
+		});
+
+		it("leaves an account on the other club's typed address unable to bind the orphan", async () => {
+			// The whole point, on the outcome. Before #855 the attacker's import
+			// minted the orphan's only roster row, carrying this address, and
+			// that row alone vouched for the bind.
+			const typed = `attacker-${n}@x.io`;
+			const removed = await person(victimClub.clubId, {
+				customerId: `PN-R-${n}`,
+			});
+			await removeFrom(victimClub.clubId, removed);
+
+			await importPeopleAndMembers(attackerClub.clubId, [
+				row({ customerId: `PN-R-${n}`, name: "Returning", email: typed }),
+			]);
+
+			expect(await clubsHolding(removed)).toEqual([]);
+			const userId = await account(typed);
+			expect(await bindVerifiedPerson({ personId: removed, userId })).toBe(
+				false,
+			);
 		});
 	});
 

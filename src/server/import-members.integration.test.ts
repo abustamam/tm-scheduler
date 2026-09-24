@@ -81,6 +81,36 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		return id;
 	}
 
+	/**
+	 * A Person no club holds, released by `clubId` through the real
+	 * `applyMemberRemove` (#855): a roster row, then its removal. The state
+	 * after is the same one the race tests need (no membership anywhere), and
+	 * only the releasing club may match it, so the removal record is written
+	 * by the writer the importer reads rather than restated here.
+	 */
+	async function releasedPerson(
+		clubId: string,
+		customerId: string,
+		name: string,
+	): Promise<string> {
+		const { applyMemberRemove } = await import("#/server/members-logic");
+		const [person] = await testDb
+			.insert(people)
+			.values({ customerId, name })
+			.returning({ id: people.id });
+		const personId = person?.id ?? "";
+		const [m] = await testDb
+			.insert(members)
+			.values({ clubId, personId, name })
+			.returning({ id: members.id });
+		await applyMemberRemove({
+			clubId,
+			memberId: m?.id ?? "",
+			actorMemberId: null,
+		});
+		return personId;
+	}
+
 	it("creates one person + one membership per fresh row", async () => {
 		const clubId = await club();
 		const stats = await importPeopleAndMembers(clubId, [
@@ -421,11 +451,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// writer inserts the membership and holds it uncommitted, so the import
 		// reads "no membership", then parks on the unique index.
 		const clubId = await club();
-		const [person] = await testDb
-			.insert(people)
-			.values({ customerId: "PN-RACE", name: "Racing Member" })
-			.returning({ id: people.id });
-		const personId = person?.id ?? "";
+		const personId = await releasedPerson(clubId, "PN-RACE", "Racing Member");
 
 		let winnerId = "";
 		const winner = await openBlockingTx(async (tx) => {
@@ -479,11 +505,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// The recovery reconciles, but must not CLOBBER: fill-only means the row
 		// already present wins on any field it has.
 		const clubId = await club();
-		const [person] = await testDb
-			.insert(people)
-			.values({ customerId: "PN-FILL", name: "Fill Only" })
-			.returning({ id: people.id });
-		const personId = person?.id ?? "";
+		const personId = await releasedPerson(clubId, "PN-FILL", "Fill Only");
 
 		const winner = await openBlockingTx(async (tx) => {
 			await tx.insert(members).values({

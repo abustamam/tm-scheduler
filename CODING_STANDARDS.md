@@ -398,7 +398,16 @@ the incident list), `roster-obstacle.guard.test.ts` (the complement),
   the refused state above. Now the importer refuses a Customer-ID or
   person-level-email match onto a Person only another club holds
   (`ExistingPersonRow.heldBy`, a post-check in `resolvePersonDecision`), and the
-  convert dedups only onto a Person the converting club already holds. What
+  convert dedups only onto a Person the converting club already holds. A Person
+  NO club holds is refused too, unless the importing club is the one whose
+  `member_remove` is the latest naming them (#855): the roster row an import
+  mints would be their only membership, so it alone would vouch for their bind.
+  `applyMemberRemove` records `personId` for this, and the post-check is an
+  ALLOWLIST (`this_club`, `released_by_this_club`) so a new `heldBy` value fails
+  closed. Orphans with no such record (a deleted club, a convert undo, a merge,
+  a removal before #855) are skipped by every club; re-adding one is a
+  deliberate act, not a file. The skip note says only "not on this club's
+  roster", for both refusals, so it never says whether anyone else holds them. What
   remains is arm 3: a roster row carrying an address another Person's row
   already carries makes BOTH unbindable, and a CSV row or a converted guest can
   still write one. That stays a report — `ImportStats.addressConflicts`,

@@ -555,7 +555,7 @@ describe("CSV import preview — cross-club counts (#759)", () => {
 		await preview({ toSkip: 1, foreignSkipped: 2, addressConflicts: 3 });
 
 		expect(
-			screen.getByText(/^2 row\(s\) skipped: .*another club's roster/),
+			screen.getByText(/^2 row\(s\) skipped: .*not on this club's roster/),
 		).toBeTruthy();
 		expect(
 			screen.getByText(/^3 row\(s\) will be imported with an email/),
@@ -569,7 +569,7 @@ describe("CSV import preview — cross-club counts (#759)", () => {
 	it("says nothing about either when both are zero", async () => {
 		await preview({ toSkip: 0, foreignSkipped: 0, addressConflicts: 0 });
 
-		expect(screen.queryByText(/another club's roster/)).toBeNull();
+		expect(screen.queryByText(/not on this club's roster/)).toBeNull();
 		expect(screen.queryByText(/will be imported with an email/)).toBeNull();
 	});
 });

@@ -31,6 +31,7 @@ import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
+import { foreignSkipSummary } from "#/lib/members-import-plan";
 import { OFFICER_POSITION_LABELS, officerPositionLabel } from "#/lib/officers";
 import { INVITE_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
@@ -793,7 +794,7 @@ function CsvUploadDialog({
 						? ` · ${result.unpaidSkipped} unpaid skipped`
 						: "") +
 					(result.stats.foreignSkipped > 0
-						? ` · ${result.stats.foreignSkipped} on another club's roster skipped`
+						? ` · ${result.stats.foreignSkipped} not on this club's roster skipped`
 						: "") +
 					(result.stats.addressConflicts > 0
 						? ` · ${result.stats.addressConflicts} with a shared email`
@@ -893,11 +894,12 @@ function CsvUploadDialog({
 							{/* Their own lines, never folded into "skipped" above: that
 							    count means a blank name, and a foreign row is a
 							    different reason the admin should be able to see
-							    (#759). Names no club and no person — the importing
+							    (#759, #855). Names no club and no person, and does not
+							    say whether anyone else holds them — the importing
 							    admin has no business learning either. */}
 							{preview.summary.foreignSkipped > 0 ? (
 								<p className="text-xs text-[var(--warning-strong)]">
-									{`${preview.summary.foreignSkipped} row(s) skipped: their member number or email belongs to someone on another club's roster, so they can't be added from this file.`}
+									{foreignSkipSummary(preview.summary.foreignSkipped)}
 								</p>
 							) : null}
 							{preview.summary.addressConflicts > 0 ? (

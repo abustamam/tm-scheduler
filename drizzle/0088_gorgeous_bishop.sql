@@ -1,0 +1,1 @@
+CREATE INDEX "activity_log_member_remove_person_idx" ON "activity_log" USING btree (("detail" ->> 'personId')) WHERE "activity_log"."action" = 'member_remove';
