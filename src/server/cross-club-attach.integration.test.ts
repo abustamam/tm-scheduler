@@ -52,6 +52,7 @@ const { previewMemberImport, commitMemberImport } = await import(
 const { applyConvertGuestToMember, captureGuestVisit, lockClubConverts } =
 	await import("./guest-pipeline-logic");
 const { bindVerifiedPerson } = await import("./account-link-logic");
+const { applyMemberRemove } = await import("./members-logic");
 
 /** Minimal mapped-CSV row builder (all fields default to null). */
 function row(over: Partial<MappedMember>): MappedMember {
@@ -250,21 +251,21 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			expect(p?.customerId, "the local member was re-keyed").toBeNull();
 		});
 
-		it("still matches a Person no club holds, without colliding on the Customer ID", async () => {
-			// An orphan left by a member removal or an undone convert. Refusing it
-			// would make the writer INSERT a row carrying this Customer ID, which
-			// `people_customer_id_unique` rejects mid-file with no transaction.
+		it("skips a Person no club holds when no club released them, for every club (#855)", async () => {
+			// An orphan with no removal record: a deleted club, an undone convert,
+			// or a removal from before #855. Nobody may attach them by file, and
+			// the refusal writes nothing, so the Customer ID cannot collide.
 			const orphan = await person(null, { customerId: `PN-O-${n}` });
 
-			for (const _run of [1, 2]) {
-				const stats = await importPeopleAndMembers(attackerClub.clubId, [
+			for (const clubId of [attackerClub.clubId, victimClub.clubId]) {
+				const stats = await importPeopleAndMembers(clubId, [
 					row({ customerId: `PN-O-${n}`, name: "Orphan" }),
 				]);
-				expect(stats.foreignSkipped).toBe(0);
+				expect(stats.foreignSkipped).toBe(1);
 				expect(stats.peopleCreated).toBe(0);
-				expect(stats.peopleMatchedByCustomerId).toBe(1);
+				expect(stats.membersCreated).toBe(0);
 			}
-			expect(await clubsHolding(orphan)).toEqual([attackerClub.clubId]);
+			expect(await clubsHolding(orphan)).toEqual([]);
 		});
 
 		it("still matches this club's own INACTIVE member", async () => {
@@ -488,6 +489,157 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 
 			const userId = await account(address);
 			expect(await bindVerifiedPerson({ personId: victim, userId })).toBe(true);
+		});
+	});
+
+	/**
+	 * A Person no club holds (#855). Removing an unlinked member leaves one
+	 * behind, and the roster row an import would mint is then their ONLY
+	 * membership, so it alone vouches for a bind. Only the club whose removal
+	 * is the latest naming them may attach them by file.
+	 */
+	describe("CSV import of a removed member (#855)", () => {
+		/** Remove `personId`'s roster row in `clubId` the way the roster does. */
+		async function removeFrom(clubId: string, personId: string) {
+			const [m] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(and(eq(members.clubId, clubId), eq(members.personId, personId)));
+			if (!m) throw new Error("no roster row to remove");
+			await applyMemberRemove({ clubId, memberId: m.id, actorMemberId: null });
+		}
+
+		it("lets the removing club re-import by Customer ID: no new Person, one roster row", async () => {
+			const removed = await person(victimClub.clubId, {
+				customerId: `PN-R-${n}`,
+			});
+			await removeFrom(victimClub.clubId, removed);
+
+			for (const _run of [1, 2]) {
+				const stats = await importPeopleAndMembers(victimClub.clubId, [
+					row({ customerId: `PN-R-${n}`, name: "Returning" }),
+				]);
+				expect(stats.foreignSkipped).toBe(0);
+				expect(stats.peopleCreated).toBe(0);
+				expect(stats.peopleMatchedByCustomerId).toBe(1);
+			}
+			expect(await clubsHolding(removed)).toEqual([victimClub.clubId]);
+		});
+
+		it("lets the removing club re-import by person-level email", async () => {
+			const email = `returning-${n}@x.io`;
+			const removed = await person(victimClub.clubId, { personEmail: email });
+			await removeFrom(victimClub.clubId, removed);
+
+			const stats = await importPeopleAndMembers(victimClub.clubId, [
+				row({ name: "Returning", email: email.toUpperCase() }),
+			]);
+
+			expect(stats.foreignSkipped).toBe(0);
+			expect(stats.peopleCreated).toBe(0);
+			expect(stats.peopleMatchedByEmail).toBe(1);
+			expect(stats.membersCreated).toBe(1);
+			expect(await clubsHolding(removed)).toEqual([victimClub.clubId]);
+		});
+
+		it("gives any other club nothing to match, by Customer ID or by email", async () => {
+			const email = `released-${n}@x.io`;
+			const byCid = await person(victimClub.clubId, {
+				customerId: `PN-R-${n}`,
+			});
+			const byEmail = await person(victimClub.clubId, {
+				name: `Other ${n}`,
+				personEmail: email,
+			});
+			await removeFrom(victimClub.clubId, byCid);
+			await removeFrom(victimClub.clubId, byEmail);
+
+			const stats = await importPeopleAndMembers(attackerClub.clubId, [
+				row({
+					customerId: `PN-R-${n}`,
+					name: "Returning",
+					email: `attacker-${n}@x.io`,
+				}),
+				row({ name: `Other ${n}`, email }),
+			]);
+
+			expect(stats.foreignSkipped).toBe(2);
+			expect(stats.peopleCreated).toBe(0);
+			expect(stats.membersCreated).toBe(0);
+			expect(await clubsHolding(byCid)).toEqual([]);
+			expect(await clubsHolding(byEmail)).toEqual([]);
+		});
+
+		it("follows the LATEST removal: removed by A, re-added and removed by B, is B's alone", async () => {
+			const moved = await person(victimClub.clubId, {
+				customerId: `PN-M-${n}`,
+			});
+			await removeFrom(victimClub.clubId, moved);
+			// Re-added by hand in B, not by file, then removed there too.
+			await testDb.insert(members).values({
+				clubId: attackerClub.clubId,
+				personId: moved,
+				name: "Moved",
+			});
+			await removeFrom(attackerClub.clubId, moved);
+			const rows = [row({ customerId: `PN-M-${n}`, name: "Moved" })];
+
+			const fromA = await importPeopleAndMembers(victimClub.clubId, rows);
+			expect(fromA.foreignSkipped).toBe(1);
+			expect(await clubsHolding(moved)).toEqual([]);
+
+			const fromB = await importPeopleAndMembers(attackerClub.clubId, rows);
+			expect(fromB.foreignSkipped).toBe(0);
+			expect(fromB.membersCreated).toBe(1);
+			expect(await clubsHolding(moved)).toEqual([attackerClub.clubId]);
+		});
+
+		it("previews exactly what the commit then does, for both clubs", async () => {
+			const removed = await person(victimClub.clubId, {
+				customerId: `PN-R-${n}`,
+			});
+			await removeFrom(victimClub.clubId, removed);
+			const text = csv([{ customerId: `PN-R-${n}`, name: "Returning" }]);
+
+			const foreign = await previewMemberImport(attackerClub.clubId, text);
+			expect(foreign.summary.foreignSkipped).toBe(1);
+			expect(foreign.rows[0]).toMatchObject({
+				action: "skip",
+				note: FOREIGN_SKIP_NOTE.customerId,
+			});
+			const foreignCommit = await commitMemberImport(attackerClub.clubId, text);
+			expect(foreignCommit.stats.foreignSkipped).toBe(1);
+			expect(foreignCommit.stats.membersCreated).toBe(0);
+
+			const home = await previewMemberImport(victimClub.clubId, text);
+			expect(home.summary.foreignSkipped).toBe(0);
+			expect(home.summary.peopleMatched).toBe(1);
+			expect(home.summary.toInsert).toBe(1);
+			const homeCommit = await commitMemberImport(victimClub.clubId, text);
+			expect(homeCommit.stats.foreignSkipped).toBe(0);
+			expect(homeCommit.stats.peopleCreated).toBe(0);
+			expect(homeCommit.stats.membersCreated).toBe(home.summary.toInsert);
+		});
+
+		it("leaves an account on the other club's typed address unable to bind the orphan", async () => {
+			// The whole point, on the outcome. Before #855 the attacker's import
+			// minted the orphan's only roster row, carrying this address, and
+			// that row alone vouched for the bind.
+			const typed = `attacker-${n}@x.io`;
+			const removed = await person(victimClub.clubId, {
+				customerId: `PN-R-${n}`,
+			});
+			await removeFrom(victimClub.clubId, removed);
+
+			await importPeopleAndMembers(attackerClub.clubId, [
+				row({ customerId: `PN-R-${n}`, name: "Returning", email: typed }),
+			]);
+
+			expect(await clubsHolding(removed)).toEqual([]);
+			const userId = await account(typed);
+			expect(await bindVerifiedPerson({ personId: removed, userId })).toBe(
+				false,
+			);
 		});
 	});
 

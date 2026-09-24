@@ -268,15 +268,53 @@ describe("resolvePersonDecision — heldBy gate (#759)", () => {
 		expect(d).toEqual({ kind: "foreign", reason: "customerId" });
 	});
 
-	it("still matches a Person nobody holds — an orphan left by a remove or an undo", () => {
-		// Refusing would make the writer insert a row carrying the orphan's
-		// Customer ID, which `people_customer_id_unique` rejects mid-file.
+	it("refuses a Customer-ID match onto a Person no club holds and this club did not release (#855)", () => {
+		// The roster row a match would mint is the orphan's only membership, so
+		// it alone vouches for their bind, carrying the address this file typed.
 		const d = resolvePersonDecision(
-			row({ customerId: "PN-O", name: "Orphan" }),
+			row({ customerId: "PN-O", name: "Orphan", email: "typed@x.io" }),
 			[person({ id: "o", customerId: "PN-O", heldBy: "nobody" })],
 			new Set(),
 		);
-		expect(d.kind).toBe("customerId");
+		expect(d).toEqual({ kind: "foreign", reason: "customerId" });
+	});
+
+	it("refuses an email match onto a Person no club holds and this club did not release (#855)", () => {
+		const d = resolvePersonDecision(
+			row({ name: "Orphan", email: "Orphan@x.io" }),
+			[person({ id: "o", email: "orphan@x.io", heldBy: "nobody" })],
+			new Set(),
+		);
+		expect(d).toEqual({ kind: "foreign", reason: "email" });
+	});
+
+	it("re-attaches an orphan this club last removed, by Customer ID and by email (#855)", () => {
+		// Remove-then-reimport, for the club that did the removing. A refusal
+		// here would leave a member number nobody can ever import again: a
+		// fresh Person cannot carry it past `people_customer_id_unique`.
+		const released = [
+			person({
+				id: "r",
+				customerId: "PN-R",
+				heldBy: "released_by_this_club",
+			}),
+			// No Customer ID, or an email match would be a distinct human.
+			person({ id: "e", email: "eli@x.io", heldBy: "released_by_this_club" }),
+		];
+		expect(
+			resolvePersonDecision(
+				row({ customerId: "PN-R", name: "Rae" }),
+				released,
+				new Set(),
+			),
+		).toMatchObject({ kind: "customerId", id: "r" });
+		expect(
+			resolvePersonDecision(
+				row({ name: "Eli", email: "ELI@x.io" }),
+				released,
+				new Set(),
+			),
+		).toMatchObject({ kind: "email", id: "e" });
 	});
 
 	it("still matches a Person this club holds, whatever the membership's status", () => {
@@ -422,6 +460,57 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 			held("taken@x.io", "someone-else"),
 		);
 		expect(plan.summary.addressConflicts).toBe(0);
+	});
+});
+
+describe("planImport — orphans (#855)", () => {
+	const orphan = (heldBy: ExistingPersonRow["heldBy"]): ExistingPersonRow => ({
+		id: "o",
+		customerId: "PN-O",
+		email: null,
+		name: "Orphan",
+		phone: null,
+		heldBy,
+		linked: false,
+	});
+
+	it("skips a row naming an unreleased orphan, on the foreign counter, with a note that names no club", () => {
+		const plan = planImport(
+			[orphan("nobody")],
+			[],
+			[row({ customerId: "PN-O", name: "Orphan", email: "typed@x.io" })],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.foreignSkipped).toBe(1);
+		expect(plan.summary.toInsert).toBe(0);
+		expect(plan.summary.peopleCreated).toBe(0);
+		expect(plan.summary.peopleMatched).toBe(0);
+		expect(plan.rows[0]).toMatchObject({
+			action: "skip",
+			note: FOREIGN_SKIP_NOTE.customerId,
+		});
+	});
+
+	it("inserts one roster row for an orphan this club released, and creates no Person", () => {
+		const plan = planImport(
+			[orphan("released_by_this_club")],
+			[],
+			[row({ customerId: "PN-O", name: "Orphan", email: "back@x.io" })],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.foreignSkipped).toBe(0);
+		expect(plan.summary.peopleMatched).toBe(1);
+		expect(plan.summary.peopleCreated).toBe(0);
+		expect(plan.summary.toInsert).toBe(1);
+	});
+
+	it("never claims an orphan is on another club's roster", () => {
+		// The note serves both refusals, and "another club's roster" is false of
+		// an orphan. Naming a club would also tell the importer which one.
+		for (const note of Object.values(FOREIGN_SKIP_NOTE)) {
+			expect(note).not.toMatch(/another club/i);
+			expect(note).toMatch(/not on this club's roster/);
+		}
 	});
 });
 

@@ -8,10 +8,10 @@
  * non-blank email → new person), then upsert the Membership for (club, person).
  * People are global (club-less); memberships are the per-club roster row.
  */
-import { and, eq, exists, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
-import { members, people } from "#/db/schema";
+import { activityLog, members, people } from "#/db/schema";
 import { batchSharedEmails, type MappedMember } from "#/lib/members-csv";
 import {
 	type AddressHolder,
@@ -46,7 +46,8 @@ export interface ImportStats {
 	/** Rows skipped because the CSV name was blank. */
 	skippedBlankName: number;
 	/** Rows refused because they matched a Person only another club holds
-	 *  (#759) — no Person, membership or officer term written. Its own count,
+	 *  (#759), or one no club holds that this club did not last remove (#855) —
+	 *  no Person, membership or officer term written. Its own count,
 	 *  never folded into `skippedBlankName`. */
 	foreignSkipped: number;
 	/** Rows imported whose written address another Person's roster row already
@@ -83,6 +84,11 @@ export interface ImportStats {
  * planner AFTER matching (`heldBy`, #759), not by leaving them out of this list —
  * see `resolvePersonDecision` for why a pre-filter would mint the very Person
  * the refusal exists to prevent.
+ *
+ * A Person NO club holds is `released_by_this_club` only when the latest
+ * `member_remove` naming them was written in THIS club (#855), and `nobody`
+ * (refused) otherwise. Derived here, in the same statement as the other two
+ * arms, so preview and commit read one snapshot of it.
  */
 export async function loadPersonCandidates(
 	clubId: string,
@@ -93,6 +99,32 @@ export async function loadPersonCandidates(
 	// members.email)` — the thing #756 scoped — and fan the row out, which is
 	// exactly the property the plain `select` below relies on NOT happening.
 	const elsewhere = alias(members, "held_elsewhere");
+	const heldElsewhere = exists(
+		conn
+			.select({ one: sql`1` })
+			.from(elsewhere)
+			.where(
+				and(eq(elsewhere.personId, people.id), ne(elsewhere.clubId, clubId)),
+			),
+	);
+	// The club of the LATEST `member_remove` naming this Person (#855) — the
+	// one club that may re-attach an orphan by file. The latest, not any: a
+	// Person removed by A, re-added by B and removed by B is B's alone. Also a
+	// QueryBuilder over an ALIASED table rather than a hand-written `sql`
+	// subquery, which can drop its qualifiers and compare a column to itself.
+	// `personId` is app-written by `applyMemberRemove`, never client text.
+	const removal = alias(activityLog, "latest_removal");
+	const latestRemovalClub = conn
+		.select({ clubId: removal.clubId })
+		.from(removal)
+		.where(
+			and(
+				eq(removal.action, "member_remove"),
+				sql`${removal.detail} ->> 'personId' = ${people.id}::text`,
+			),
+		)
+		.orderBy(desc(removal.createdAt), desc(removal.id))
+		.limit(1);
 	// Plain `select`, not `selectDistinct`: the join cannot fan out, so the DISTINCT
 	// would be a HashAggregate over the whole `people` table for nothing.
 	// `members_club_person_unique` guarantees at most one membership per
@@ -108,32 +140,34 @@ export async function loadPersonCandidates(
 			// `members.id` rather than a status column: ANY membership in this club,
 			// active or not, is "held here" (see `ExistingPersonRow.heldBy`).
 			heldHere: members.id,
-			heldElsewhere: exists(
-				conn
-					.select({ one: sql`1` })
-					.from(elsewhere)
-					.where(
-						and(
-							eq(elsewhere.personId, people.id),
-							ne(elsewhere.clubId, clubId),
-						),
-					),
-			).mapWith(Boolean),
+			heldElsewhere: heldElsewhere.mapWith(Boolean),
+			// Inside a CASE so the activity-log lookup runs only for an orphan: the
+			// candidate set is every Person in the app, and `activity_log` has no
+			// index on `action` or `detail`, so an unguarded subquery would scan it
+			// once per Person on every preview and every commit.
+			releasedHere:
+				sql<boolean>`case when ${members.id} is null and not ${heldElsewhere} then coalesce((${latestRemovalClub}) = ${clubId}, false) else false end`.mapWith(
+					Boolean,
+				),
 		})
 		.from(people)
 		.leftJoin(
 			members,
 			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
 		);
-	return rows.map(({ userId, heldHere, heldElsewhere, ...p }) => ({
-		...p,
-		heldBy: heldHere
-			? "this_club"
-			: heldElsewhere
-				? "other_club_only"
-				: "nobody",
-		linked: userId !== null,
-	}));
+	return rows.map(
+		({ userId, heldHere, heldElsewhere, releasedHere, ...p }) => ({
+			...p,
+			heldBy: heldHere
+				? "this_club"
+				: heldElsewhere
+					? "other_club_only"
+					: releasedHere
+						? "released_by_this_club"
+						: "nobody",
+			linked: userId !== null,
+		}),
+	);
 }
 
 /**
@@ -294,8 +328,9 @@ export async function importPeopleAndMembers(
 			// computing the field and mirroring it into its own candidate list, so
 			// the preview and this writer disagreed inside one batch. Matching on
 			// Customer ID or on a person-level address is GLOBAL, so this row can
-			// resolve to a Person no club holds (one only ANOTHER club holds is
-			// `foreign` and never gets here, #759) — and a CSV is a file an officer
+			// resolve to a Person no club holds that THIS club last removed (one
+			// another club holds, or any other orphan, is `foreign` and never gets
+			// here, #759 / #855) — and a CSV is a file an officer
 			// uploaded, not an address anyone proved they own. The address fills the
 			// MEMBERSHIP's contact record below instead, which is the column the
 			// invite and the claim both read. A Person CREATED by this import still

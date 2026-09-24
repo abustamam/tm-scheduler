@@ -57,15 +57,29 @@ export interface ExistingPersonRow {
 	 *   attaching it would give them a second club, `rosterPermitsBind` refuses
 	 *   a Person two clubs hold, and so the import would stop a stranger signing
 	 *   in from a club neither they nor their officers can see.
-	 * - `nobody` — no memberships anywhere. Stays matchable: removing a member
-	 *   and undoing a guest conversion both leave such Persons behind, and
-	 *   refusing them would break remove-then-reimport AND attempt an insert
-	 *   whose Customer ID collides with `people_customer_id_unique`.
+	 * - `released_by_this_club` — no memberships anywhere, and the LATEST
+	 *   `member_remove` naming this Person (`detail.personId`) is in the
+	 *   importing club (#855). Matchable, which keeps remove-then-reimport
+	 *   working for the club that did the removing. The latest, not any: a
+	 *   Person removed by A, re-added by B and removed by B is B's alone.
+	 * - `nobody` — no memberships anywhere and no such removal record. REFUSED
+	 *   like `other_club_only` (#855). An orphan keeps its person-scoped history
+	 *   (speeches, Pathways), and the roster row an import would mint is then the
+	 *   only membership that can vouch for a bind — carrying whatever address
+	 *   the importing club typed. Refusing writes nothing, so it cannot collide
+	 *   with `people_customer_id_unique` either.
+	 *
+	 *   Orphans with no removal record, and so refused by every club: Persons
+	 *   whose club was deleted (the cascade writes no `member_remove`, and takes
+	 *   the club's activity log with it), Persons left by a guest-convert undo
+	 *   (its `member_remove` carries no `personId`), Persons absorbed by a
+	 *   member merge, and anyone removed before #855 recorded `personId`. All
+	 *   conservative: re-adding them is a deliberate act, not a file.
 	 *
 	 * A Person created earlier in the SAME batch is `this_club`, truthfully: its
 	 * membership in the importing club is inserted immediately after it.
 	 */
-	heldBy: "this_club" | "other_club_only" | "nobody";
+	heldBy: "this_club" | "released_by_this_club" | "other_club_only" | "nobody";
 	/** `people.user_id` is set — bound to an account, so nothing a CSV writes
 	 *  to a roster row can change their sign-in. */
 	linked: boolean;
@@ -110,6 +124,12 @@ export interface PersonValues {
  */
 export type MatchedPersonValues = Omit<PersonValues, "email">;
 
+/** The `heldBy` values a CSV row may match onto; every other one is `foreign`. */
+const ATTACHABLE: ReadonlySet<ExistingPersonRow["heldBy"]> = new Set([
+	"this_club",
+	"released_by_this_club",
+]);
+
 /**
  * How one CSV row resolves against the existing people. `customerId`/`email`
  * are matches (carry the target person `id` and the fill-only `set` to write);
@@ -122,7 +142,8 @@ export type PersonDecision =
 	| { kind: "insert"; values: PersonValues }
 	| { kind: "ambiguous"; values: PersonValues }
 	/**
-	 * The row matched a Person only ANOTHER club holds (#759). Skipped outright
+	 * The row matched a Person only ANOTHER club holds (#759), or one NO club
+	 * holds that the importing club did not last remove (#855). Skipped outright
 	 * — no Person insert, no membership, no officer term — and counted.
 	 *
 	 * Not "mint a fresh Person instead": `people.customer_id` is UNIQUE, so a
@@ -142,7 +163,9 @@ export type PersonDecision =
  * still carries it; see {@link MatchedPersonValues}.
  *
  * A match onto a Person only ANOTHER club holds is `foreign` instead (#759):
- * the row writes nothing. See {@link ExistingPersonRow.heldBy}.
+ * the row writes nothing. So is one onto a Person NO club holds, unless the
+ * importing club is the one that last removed them (#855). See
+ * {@link ExistingPersonRow.heldBy}.
  */
 export function resolvePersonDecision(
 	row: MappedMember,
@@ -180,7 +203,11 @@ export function resolvePersonDecision(
 		// local email match, silently attaching the row to a DIFFERENT member of
 		// this club. The Customer ID is the stronger identifier and a row claiming
 		// a foreign one is the attack shape, so it is refused outright.
-		if (current.heldBy === "other_club_only") {
+		//
+		// An ALLOWLIST, not `=== "other_club_only"`: an orphan with no release
+		// record in this club is refused too (#855), and a `heldBy` value added
+		// later then fails closed instead of silently matching.
+		if (!ATTACHABLE.has(current.heldBy)) {
 			return { kind: "foreign", reason: match.kind };
 		}
 		// No `email` — a match does not re-key an existing Person's identity
@@ -399,7 +426,8 @@ export interface PlanSummary {
 	/** Rows skipped (blank name). Does NOT include `foreignSkipped`. */
 	toSkip: number;
 	/** Rows refused because they matched a Person only another club holds
-	 *  (#759). Its own count, never folded into `toSkip`. */
+	 *  (#759), or one no club holds that this club did not last remove (#855).
+	 *  Its own count, never folded into `toSkip`. */
 	foreignSkipped: number;
 	/** Rows imported whose written address another Person's roster row already
 	 *  carries, in any club — neither can then sign in (#759). */
@@ -423,12 +451,21 @@ function isoOrNull(d: Date | null): string | null {
 	return d ? d.toISOString() : null;
 }
 
-/** Why a `foreign` row was skipped, as its preview note (#759). Names no
- *  club and no person: the importing admin has no business learning either. */
+/**
+ * Why a `foreign` row was skipped, as its preview note (#759). Names no club
+ * and no person: the importing admin has no business learning either.
+ *
+ * One wording for both refusals, deliberately (#855). "On another club's
+ * roster" is false of an orphan no club holds, and a separate note for the
+ * orphan would tell the importing admin whether a member number they typed
+ * belongs to someone another club still holds. "Not on this club's roster" is
+ * true of both and says nothing more.
+ */
 export const FOREIGN_SKIP_NOTE: Record<"customerId" | "email", string> = {
 	customerId:
-		"Skipped — this member number belongs to someone on another club's roster",
-	email: "Skipped — this email belongs to someone on another club's roster",
+		"Skipped — this member number belongs to someone who is not on this club's roster, so they can't be added from a file",
+	email:
+		"Skipped — this email belongs to someone who is not on this club's roster, so they can't be added from a file",
 };
 
 /** Added to a row's note when the address it writes is shared (#759). */

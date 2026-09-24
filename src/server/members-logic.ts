@@ -618,7 +618,12 @@ export async function applyMemberRemove(input: RemoveInput) {
 			action: "member_remove",
 			targetType: "member",
 			targetId: input.memberId,
-			detail: { name: member.name },
+			// `personId` is the release record the CSV importer reads (#855): a
+			// Person no club holds is re-attachable by file only for the club whose
+			// removal is the LATEST naming them (`loadPersonCandidates`). Only an
+			// unlinked Person gets here (`personHasAccount` above), which is exactly
+			// the kind that rule is about. App-written, never client text.
+			detail: { name: member.name, personId: member.personId },
 		});
 	});
 	return { ok: true as const };
