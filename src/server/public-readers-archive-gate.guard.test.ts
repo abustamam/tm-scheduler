@@ -408,8 +408,8 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * handler itself, and the weakness is stated rather than papered over: this
  * asserts the gate exists in the module that owns the write, not that this
  * particular write reaches it. The integration suites are what prove the
- * seam-gated ones actually refuse, and the delegation case below pins that the
- * three slot handlers still reach their cores; for the four handler-gated rows
+ * seam-gated ones actually refuse, and `slots.transport.test.ts` executes the three
+ * slot handlers to prove they still reach their cores; for the four handler-gated rows
  * this guard is the only gate there is.
  */
 const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
@@ -850,29 +850,13 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		});
 	}
 
-	/**
-	 * Handler-to-core wiring (#825). The `claimSlot` / `reassignSlot` rows above
-	 * are file-level: they say `slots-logic.ts` names the gate, and the
-	 * integration suite proves each CORE refuses. Neither says the public handler
-	 * still calls its core, so a handler that inlined the write again would pass
-	 * both. This pins the delegation.
-	 */
-	it.each([
-		["claimSlot", "claimSlotCore("],
-		["reassignSlot", "reassignSlotCore("],
-		["releaseSlot", "releaseSlotCore("],
-	])("%s delegates to its archive-gated core", (fn, core) => {
-		const body = stripComments(
-			serverFnBody(
-				readFileSync(resolve(ROOT, "src/server/slots.ts"), "utf8"),
-				fn,
-			),
-		);
-		expect(
-			body,
-			`${fn} no longer calls ${core}, which is where its archive gate lives. Route the write back through the core rather than gating the handler.`,
-		).toContain(core);
-	});
+	// Handler-to-core wiring for `claimSlot` / `reassignSlot` / `releaseSlot`
+	// is NOT checked here. The rows above are file-level and say `slots-logic.ts`
+	// names the gate; a text check that each handler names its core was tried
+	// in #825's review and passed with the call inside `if (false)` or a string.
+	// `slots.transport.test.ts` executes the handlers instead and asserts the
+	// core is called, in the handler's transaction, and that its archive
+	// refusal reaches the caller.
 
 	// Vacuity checks: an empty table would pass every case above.
 	it("covers every write that was waived as a #544 follow-up", () => {
