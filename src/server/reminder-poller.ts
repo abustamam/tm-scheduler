@@ -7,6 +7,10 @@
 // referenced solely from the Nitro plugin — never from a client route — so it
 // stays out of the client bundle.
 import { describePendingSweep } from "#/lib/pending-plan";
+import {
+	deliverAccessRequestMail,
+	sweepExpiredAccessRequests,
+} from "./access-requests-logic";
 import { sweepExpiredPendingPlans } from "./mcp-pending-logic";
 import { processDueNotifications } from "./notifications-logic";
 import { produceRoleReminders } from "./role-reminders-logic";
@@ -69,6 +73,20 @@ async function tick(): Promise<void> {
 			);
 		}
 
+		// The request-access form's emails (#866): request notifications and the
+		// once-a-day cap alert. Its own try so a failure here neither hides nor
+		// is hidden by the reminder pass above.
+		try {
+			const mail = await deliverAccessRequestMail();
+			if (mail.sent + mail.failed + mail.alertsSent + mail.alertsFailed > 0) {
+				console.log(
+					`[access-requests] tick: sent=${mail.sent} failed=${mail.failed} alertsSent=${mail.alertsSent} alertsFailed=${mail.alertsFailed}`,
+				);
+			}
+		} catch (err) {
+			console.error("[access-requests] delivery pass failed:", err);
+		}
+
 		await sweepTick();
 	} catch (err) {
 		console.error("[reminders] poll tick failed:", err);
@@ -114,6 +132,19 @@ async function sweepTick(): Promise<void> {
 		if (line) console.log(line);
 	} catch (err) {
 		console.error("[mcp-pending] pending-plan sweep failed:", err);
+	}
+	// Access requests past their retention window (#866). Same reasoning as the
+	// pending-plan sweep: these rows hold a prospect's name and email, so the
+	// flag that stops SENDING must not stop this, and there is no flag for it.
+	try {
+		const swept = await sweepExpiredAccessRequests();
+		if (swept.requests + swept.alerts > 0) {
+			console.log(
+				`[access-requests] retention sweep: requests=${swept.requests} alerts=${swept.alerts}`,
+			);
+		}
+	} catch (err) {
+		console.error("[access-requests] retention sweep failed:", err);
 	}
 }
 

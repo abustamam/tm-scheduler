@@ -306,13 +306,17 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 		class: "public-intake",
 		reason: "bounded guest intake",
 	},
-	// The request-access form (#866). A prospect asks for a club or district,
-	// before any account exists, so there is no session to prove. Bounded by a
-	// honeypot, a minimum fill time, a per-email cap, a global cap, and a
-	// separate cap on notification emails (`access-requests-logic.ts`).
+	// The request-access form (#866). A prospect asks for a club or district
+	// before any account exists, so there is no session to prove. What bounds
+	// it, all in `access-requests-logic.ts`: a honeypot and a client-measured
+	// minimum fill time (both answered with a silent success); a per-email, a
+	// global and a notification cap per 24h, counted and written under ONE
+	// advisory lock so concurrent posts cannot overshoot them; and one alert to
+	// the maintainer per day when any cap trips. NOT bounded per client IP.
 	"access-requests.ts#submitAccessRequest": {
 		class: "public-intake",
-		reason: "bounded access-request intake (#866)",
+		reason:
+			"access-request intake: honeypot + fill time, per-email/global/notify caps under an advisory lock, no per-IP cap (#866)",
 	},
 };
 

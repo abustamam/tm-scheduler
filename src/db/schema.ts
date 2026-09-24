@@ -2851,9 +2851,21 @@ export const accessRequests = pgTable(
 		message: text("message"),
 		// First-touch marketing attribution (`src/lib/marketing-ref.ts`), or null.
 		ref: text("ref"),
-		// True once the maintainer's notification email went out. A failed send
-		// leaves it false and the row stays: the request is never lost.
+		// True when this row CLAIMED one of the day's notification slots, inside
+		// the submission's advisory lock (`access-requests-logic.ts`). That claim
+		// is what the notification cap counts, so it is set at insert, before any
+		// email exists; delivery is the poller's (ADR-0023) and is recorded in
+		// the `notify_*` columns below. False = over the cap: saved, never mailed.
 		notified: boolean("notified").notNull().default(false),
+		// Delivery bookkeeping, same shape as `notifications` (#271): `attempts`
+		// is the optimistic-lock token the poller bumps to claim a send, and
+		// `last_attempted_at` paces the bounded retry.
+		notifySentAt: timestamp("notify_sent_at", { withTimezone: true }),
+		notifyAttempts: integer("notify_attempts").notNull().default(0),
+		notifyLastAttemptedAt: timestamp("notify_last_attempted_at", {
+			withTimezone: true,
+		}),
+		notifyLastError: text("notify_last_error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -2865,6 +2877,28 @@ export const accessRequests = pgTable(
 		index("access_requests_created_idx").on(t.createdAt),
 	],
 );
+
+/**
+ * One row per alert WINDOW (#866): the maintainer is told once that a cap on
+ * the request-access form tripped, not once per rejected request. `window_key`
+ * is the UTC day, and a trip that finds the day's row only bumps `trips`, so a
+ * flood produces one email that says how big it was. Delivered by the poller
+ * with the same bookkeeping as `notifications`.
+ */
+export const accessRequestAlerts = pgTable("access_request_alerts", {
+	id: uuid("id").primaryKey().defaultRandom(),
+	windowKey: text("window_key").notNull().unique(),
+	// The first cap that tripped in the window: per_email | global | notify.
+	firstReason: text("first_reason").notNull(),
+	trips: integer("trips").notNull().default(1),
+	createdAt: timestamp("created_at", { withTimezone: true })
+		.notNull()
+		.defaultNow(),
+	sentAt: timestamp("sent_at", { withTimezone: true }),
+	attempts: integer("attempts").notNull().default(0),
+	lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }),
+	lastError: text("last_error"),
+});
 
 // ---------------------------------------------------------------------------
 // Relations

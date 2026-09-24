@@ -409,8 +409,11 @@ and the club role sheets, HTML and PDF), digital voting (`meeting_vote_sessions`
 **Digital vote** and **Disqualification** entries), Club Officer Training (`officer_training_periods` /
 `officer_training_records`, #531 — the record behind DCP goal 9; the periods
 table is a SPARSE override of TI's own window dates, so **row absent = the
-default**, see `CONTEXT.md`'s **Club Officer Training (COT)** entry), and
-notifications (drained by an in-process poller, ADR-0023). Better-Auth's tables
+default**, see `CONTEXT.md`'s **Club Officer Training (COT)** entry),
+notifications (drained by an in-process poller, ADR-0023), and access requests
+(`access_requests` / `access_request_alerts`, #866 — the public request-access form's rows and
+its once-a-day cap alert; club-less, delivered by the same poller, and deleted after 180 days by
+its sweep). Better-Auth's tables
 live in `src/db/auth-schema.ts` — hand-maintained, and since #842 that file also carries the
 eight OAuth tables (`jwks` + seven from `@better-auth/mcp`). **Adding a Better Auth plugin
 means adding its tables there AND re-exporting them from `schema.ts`**: the Drizzle adapter
@@ -612,9 +615,12 @@ run gstack `/review` in the PR's worktree as well, at any size:
 - a migration (`drizzle/`, `schema.ts`);
 - the service worker (`public/sw.js`);
 - a cascading delete;
-- `captureGuestVisit` — the session-less write that mints a row carrying a visitor's name, email
-  and phone, behind its own club lock. This slot said `applySelfAdd` until #630 deleted that fn;
-  the slot is for whichever public path is currently the one minting PII, not for the name.
+- the session-less writes that mint PII. There are two: `captureGuestVisit` (a visitor's name,
+  email and phone, behind its own club lock) and `submitAccessRequestLogic`
+  (`src/server/access-requests-logic.ts`, #866: a prospect's name and email from the public
+  `/request-access` form, behind one global advisory lock and its caps). This slot said
+  `applySelfAdd` until #630 deleted that fn; it is for every public path currently minting PII,
+  not for a name, so add the next one here.
 
 `/review-pr` prints a hint when a changed path is on that list. Paths cannot see an authorization
 change in an unrelated file, so a silent hint is not a clean bill. gstack's Codex passes fall back

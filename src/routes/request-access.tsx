@@ -12,8 +12,17 @@ import {
 	type SubmitAccessRequestResult,
 	submitAccessRequest,
 } from "#/server/access-requests";
+import {
+	ACCESS_REQUEST_KINDS,
+	ACCESS_REQUEST_BOUNDS as B,
+	ACCESS_REQUEST_HONEYPOT_FIELD as HONEYPOT_FIELD,
+	type AccessRequestKind as Kind,
+} from "#/server/access-requests-schemas";
 
-type Kind = "club" | "district";
+const KIND_LABELS: Record<Kind, string> = {
+	club: "A club",
+	district: "A district",
+};
 
 const TITLE = "Request access — GavelUp";
 const DESCRIPTION =
@@ -65,17 +74,23 @@ function RequestAccess() {
 	const [clubNumber, setClubNumber] = useState("");
 	const [districtNumber, setDistrictNumber] = useState("");
 	const [message, setMessage] = useState("");
-	const [website, setWebsite] = useState("");
+	const [trap, setTrap] = useState("");
 
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [outcome, setOutcome] = useState<Outcome | null>(null);
 
-	// When the form mounted, for the server's too-fast bot filter. Set in an
-	// effect so it is the CLIENT's mount, not the server render's.
-	const renderedAt = useRef(0);
+	// When the form opened, on the CLIENT's monotonic clock, for the server's
+	// too-fast bot filter. The server gets only the elapsed `fillMs`, so no
+	// client clock is ever compared with the server's. Null until hydration:
+	// the submit button is disabled until then (which also blocks implicit
+	// Enter-key submission), and a submit that somehow lands first sends
+	// `fillMs: 0`, which the server treats as too fast rather than waving it on.
+	const openedAt = useRef<number | null>(null);
+	const [ready, setReady] = useState(false);
 	useEffect(() => {
-		renderedAt.current = Date.now();
+		openedAt.current = performance.now();
+		setReady(true);
 	}, []);
 
 	function chooseKind(next: Kind) {
@@ -90,6 +105,8 @@ function RequestAccess() {
 	async function handleSubmit(e: React.FormEvent) {
 		e.preventDefault();
 		if (pending) return;
+		const fillMs =
+			openedAt.current === null ? 0 : performance.now() - openedAt.current;
 		setPending(true);
 		setError(null);
 		try {
@@ -101,8 +118,8 @@ function RequestAccess() {
 					...(kind === "club" ? { clubName, clubNumber } : { districtNumber }),
 					message,
 					ref: readRef(),
-					website,
-					renderedAt: renderedAt.current,
+					trap,
+					fillMs,
 				},
 			});
 			setOutcome(outcomeOf(res));
@@ -131,18 +148,19 @@ function RequestAccess() {
 				{outcome ? (
 					<OutcomePanel outcome={outcome} />
 				) : (
-					<form onSubmit={handleSubmit} className="mt-8 space-y-6">
+					// `method="post"`: if the browser ever submits this natively (no JS
+					// yet), the fields must not land in a GET query string.
+					<form
+						method="post"
+						onSubmit={handleSubmit}
+						className="mt-8 space-y-6"
+					>
 						<div
 							role="tablist"
 							aria-label="Who is asking"
 							className="inline-flex rounded-full border border-[var(--line)] bg-[var(--surface)] p-1"
 						>
-							{(
-								[
-									["club", "A club"],
-									["district", "A district"],
-								] as const
-							).map(([value, label]) => (
+							{ACCESS_REQUEST_KINDS.map((value) => (
 								<button
 									key={value}
 									type="button"
@@ -155,7 +173,7 @@ function RequestAccess() {
 											: "rounded-full px-4 py-1.5 font-semibold text-sm text-[var(--sea-ink-soft)]"
 									}
 								>
-									{label}
+									{KIND_LABELS[value]}
 								</button>
 							))}
 						</div>
@@ -167,7 +185,7 @@ function RequestAccess() {
 									value={name}
 									onChange={(e) => setName(e.target.value)}
 									autoComplete="name"
-									maxLength={120}
+									maxLength={B.nameMax}
 									required
 								/>
 							</Field>
@@ -178,7 +196,7 @@ function RequestAccess() {
 									value={email}
 									onChange={(e) => setEmail(e.target.value)}
 									autoComplete="email"
-									maxLength={254}
+									maxLength={B.emailMax}
 									required
 								/>
 							</Field>
@@ -191,7 +209,7 @@ function RequestAccess() {
 											value={clubName}
 											onChange={(e) => setClubName(e.target.value)}
 											autoComplete="organization"
-											maxLength={160}
+											maxLength={B.clubNameMax}
 											required
 										/>
 									</Field>
@@ -206,8 +224,8 @@ function RequestAccess() {
 											value={clubNumber}
 											onChange={(e) => setClubNumber(e.target.value)}
 											inputMode="numeric"
-											pattern="\d{1,8}"
-											maxLength={8}
+											pattern={B.clubNumberPattern}
+											maxLength={B.clubNumberMax}
 										/>
 									</Field>
 									<Field id="ra-message" label="Anything else" optional>
@@ -215,7 +233,7 @@ function RequestAccess() {
 											id="ra-message"
 											value={message}
 											onChange={(e) => setMessage(e.target.value)}
-											maxLength={2000}
+											maxLength={B.messageMax}
 										/>
 									</Field>
 								</>
@@ -226,8 +244,8 @@ function RequestAccess() {
 											id="ra-district"
 											value={districtNumber}
 											onChange={(e) => setDistrictNumber(e.target.value)}
-											pattern="[0-9A-Za-z]{1,4}"
-											maxLength={4}
+											pattern={B.districtNumberPattern}
+											maxLength={B.districtNumberMax}
 											required
 										/>
 									</Field>
@@ -240,7 +258,7 @@ function RequestAccess() {
 											id="ra-message"
 											value={message}
 											onChange={(e) => setMessage(e.target.value)}
-											maxLength={2000}
+											maxLength={B.messageMax}
 										/>
 									</Field>
 								</>
@@ -251,15 +269,17 @@ function RequestAccess() {
 							    filling every field fills this one too, and the server
 							    answers it with a silent success. */}
 							<div className="sr-only" aria-hidden="true">
-								<label htmlFor="ra-website">Website</label>
+								<label htmlFor={HONEYPOT_FIELD}>Leave this empty</label>
 								<input
-									id="ra-website"
-									name="website"
+									id={HONEYPOT_FIELD}
+									name={HONEYPOT_FIELD}
 									type="text"
 									tabIndex={-1}
 									autoComplete="off"
-									value={website}
-									onChange={(e) => setWebsite(e.target.value)}
+									data-1p-ignore
+									data-lpignore="true"
+									value={trap}
+									onChange={(e) => setTrap(e.target.value)}
 								/>
 							</div>
 						</div>
@@ -270,7 +290,7 @@ function RequestAccess() {
 							</p>
 						) : null}
 
-						<Button type="submit" size="lg" disabled={pending}>
+						<Button type="submit" size="lg" disabled={!ready || pending}>
 							{pending ? (
 								<Loader2 className="size-4 animate-spin" aria-hidden />
 							) : null}

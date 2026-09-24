@@ -1,3 +1,5 @@
+import { escapeHtml } from "#/lib/html-escape";
+
 // Single source of truth for the magic-link TTL: src/lib/auth.ts imports this
 // for the magicLink `expiresIn`, and the email copy below derives its wording
 // from it, so the displayed duration can never drift from the actual TTL.
@@ -105,15 +107,4 @@ export function buildInviteEmail(
 </html>`;
 
 	return { subject, html, text };
-}
-
-/** Minimal HTML-entity escape for interpolating untrusted text into the email
- *  body (the club name is admin-controlled but still worth escaping). */
-function escapeHtml(s: string): string {
-	return s
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#39;");
 }
