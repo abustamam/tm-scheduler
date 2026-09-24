@@ -23,11 +23,13 @@
 //     `notFound()`, not a thrown Error;
 //   • any other failure still propagates, so an outage is not disguised as a
 //     dead link.
+import { readdirSync } from "node:fs";
 import {
 	createMemoryHistory,
 	createRootRoute,
 	createRouter,
 	isNotFound,
+	isRedirect,
 	RouterProvider,
 } from "@tanstack/react-router";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -67,11 +69,27 @@ vi.mock("#/server/members", () => ({ listMembers: vi.fn() }));
 vi.mock("#/server/attendance-plan", () => ({}));
 vi.mock("#/server/availability", () => ({}));
 vi.mock("#/server/timings", () => ({}));
+// The agenda route's editor, stubbed to a prop recorder: what is under test is
+// the meeting id the ROUTE hands each write, not the editor's own UI (covered
+// by `agenda-editor.test.tsx`).
+const editorProps = vi.hoisted(() => ({
+	current: null as null | Record<string, (...args: never[]) => unknown>,
+}));
+vi.mock("#/components/agenda/agenda-editor", () => ({
+	AgendaEditor: (props: Record<string, (...args: never[]) => unknown>) => {
+		editorProps.current = props;
+		return null;
+	},
+}));
 
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { getClubLogoMeta } from "#/server/club-logo";
-import { getAgendaDraft } from "#/server/meeting-agenda-edit";
+import {
+	addAgendaRowFn,
+	getAgendaDraft,
+	updateAgendaRowFn,
+} from "#/server/meeting-agenda-edit";
 import { resolveMeetingKeyForUser } from "#/server/meeting-key";
 import { getMeetingByKey, getPublicMeetingByKey } from "#/server/meetings";
 import { Route as AgendaRoute } from "./club.$clubId.meeting.$meetingId_.agenda";
@@ -126,6 +144,8 @@ function detail(clubId: string = CLUB_ID) {
 // biome-ignore lint/suspicious/noExplicitAny: loaders take the full router ctx
 type AnyRoute = { options: any; useParams: () => unknown };
 
+const FOREIGN_CLUB = "99999999-9999-4999-8999-999999999999";
+
 function runLoader(route: AnyRoute, meetingId: string, shell = false) {
 	return route.options.loader({
 		params: { clubId: "downtown", meetingId },
@@ -152,76 +172,180 @@ function mockClub() {
 
 const NOT_FOUND = () => new Error("Meeting not found.");
 
+const AGENDA_FILE = "club.$clubId.meeting.$meetingId_.agenda.tsx";
+
 /**
  * Every sub-route that reads the meeting through `getPublicMeetingByKey` /
  * `getMeetingByKey`. `shell` picks which of the two the PII fork reaches; the
- * resolver half is identical, which is what is under test.
+ * resolver half is identical, which is what is under test. `crossClubCheck` is
+ * false for `me`, whose loader leaves that to the club-scoped resolver rather
+ * than comparing `meeting.clubId` afterwards.
  */
 const KEY_READER_ROUTES: {
 	name: string;
+	file: string;
 	route: AnyRoute;
 	shell: boolean;
 	reader: typeof getPublicMeetingByKey;
+	crossClubCheck: boolean;
 }[] = [
-	{ name: "me", route: MeRoute, shell: false, reader: getPublicMeetingByKey },
+	{
+		name: "me",
+		file: "club.$clubId.meeting.$meetingId_.me.tsx",
+		route: MeRoute,
+		shell: false,
+		reader: getPublicMeetingByKey,
+		crossClubCheck: false,
+	},
 	{
 		name: "me (signed-in member)",
+		file: "club.$clubId.meeting.$meetingId_.me.tsx",
 		route: MeRoute,
 		shell: true,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: false,
 	},
 	{
 		name: "me/theme",
+		file: "club.$clubId.meeting.$meetingId_.me_.theme.tsx",
 		route: ThemeRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
 	},
 	{
 		name: "me/theme (signed-in member)",
+		file: "club.$clubId.meeting.$meetingId_.me_.theme.tsx",
 		route: ThemeRoute,
 		shell: true,
 		reader: getMeetingByKey,
+		crossClubCheck: true,
 	},
 	{
 		name: "me/timer",
+		file: "club.$clubId.meeting.$meetingId_.me_.timer.tsx",
 		route: TimerRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
 	},
 	{
 		name: "me/word",
+		file: "club.$clubId.meeting.$meetingId_.me_.word.tsx",
 		route: MeWordRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
 	},
 	{
 		name: "present",
+		file: "club.$clubId_.meeting.$meetingId.present.tsx",
 		route: PresentRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
 	},
 	{
 		name: "print",
+		file: "club.$clubId_.meeting.$meetingId.print.tsx",
 		route: PrintRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
 	},
 	{
 		name: "vote",
+		file: "club.$clubId_.meeting.$meetingId.vote.tsx",
 		route: VoteRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
 	},
 	{
 		name: "word",
+		file: "club.$clubId_.meeting.$meetingId.word.tsx",
 		route: WordRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
 	},
 ];
 
+/** Every sub-route renders the MEETING not-found page, not the root's. */
+const NOT_FOUND_ROUTES: { name: string; file: string; route: AnyRoute }[] = [
+	{ name: "agenda", file: AGENDA_FILE, route: AgendaRoute },
+	...KEY_READER_ROUTES.filter((r) => !r.name.includes("(")).map(
+		({ name, file, route }) => ({ name, file, route }),
+	),
+];
+
+/**
+ * The sub-route set, DERIVED from the route directory rather than listed, so a
+ * new `club.$clubId.meeting.$meetingId_.minutes.tsx` fails here until it is
+ * added to both tables above — which means until someone has checked that it
+ * resolves a key and renders the meeting not-found page. The two filename
+ * shapes are the two ways a sub-route escapes the outlet-less meeting page:
+ * `$meetingId_` under the club shell, `$clubId_` out of it.
+ */
+const SUBROUTE_FILE =
+	/^club\.\$clubId(\.meeting\.\$meetingId_|_\.meeting\.\$meetingId)\..+\.tsx$/;
+
+function meetingSubrouteFiles(files: string[]): string[] {
+	return files.filter((f) => SUBROUTE_FILE.test(f) && !f.includes(".test."));
+}
+
+describe("every meeting sub-route is covered here (#877)", () => {
+	const derived = meetingSubrouteFiles(readdirSync(__dirname));
+	const resolved = new Set([
+		AGENDA_FILE,
+		...KEY_READER_ROUTES.map((r) => r.file),
+	]);
+	const notFound = new Set(NOT_FOUND_ROUTES.map((r) => r.file));
+
+	// A walk that finds nothing would pass every case below.
+	it("finds the sub-routes at all", () => {
+		expect(derived.length).toBeGreaterThanOrEqual(9);
+	});
+
+	it("matches both escape shapes, and neither the meeting page nor a test", () => {
+		expect(
+			meetingSubrouteFiles([
+				"club.$clubId.meeting.$meetingId_.minutes.tsx",
+				"club.$clubId_.meeting.$meetingId.slides.tsx",
+				"club.$clubId.meeting.$meetingId.tsx",
+				"club.$clubId_.meeting.$meetingId.vote.test.tsx",
+			]),
+		).toEqual([
+			"club.$clubId.meeting.$meetingId_.minutes.tsx",
+			"club.$clubId_.meeting.$meetingId.slides.tsx",
+		]);
+	});
+
+	for (const file of derived) {
+		it(`${file} is tested for key resolution`, () => {
+			expect(
+				resolved.has(file),
+				`${file} is a meeting sub-route with no key-resolution case. Add it to KEY_READER_ROUTES (or give it its own block like the agenda editor) after checking its loader sends the raw $meetingId to a key resolver and turns "Meeting not found." into notFound().`,
+			).toBe(true);
+		});
+
+		it(`${file} is tested for the meeting not-found page`, () => {
+			expect(
+				notFound.has(file),
+				`${file} is a meeting sub-route with no not-found case. Give it notFoundComponent (MeetingNotFound) and add it to NOT_FOUND_ROUTES.`,
+			).toBe(true);
+		});
+	}
+});
+
 describe("meeting sub-routes resolve a date key (#877)", () => {
-	for (const { name, route, shell, reader } of KEY_READER_ROUTES) {
+	for (const {
+		name,
+		route,
+		shell,
+		reader,
+		crossClubCheck,
+	} of KEY_READER_ROUTES) {
 		it(`${name}: sends the date key to the resolver verbatim`, async () => {
 			mockClub();
 			vi.mocked(reader).mockResolvedValue(
@@ -246,17 +370,19 @@ describe("meeting sub-routes resolve a date key (#877)", () => {
 			}
 		});
 
-		it(`${name}: a meeting from another club is notFound()`, async () => {
-			mockClub();
-			vi.mocked(reader).mockResolvedValue(
-				// biome-ignore lint/suspicious/noExplicitAny: partial detail
-				detail("99999999-9999-4999-8999-999999999999") as any,
-			);
+		if (crossClubCheck) {
+			it(`${name}: a meeting from another club is notFound()`, async () => {
+				mockClub();
+				vi.mocked(reader).mockResolvedValue(
+					// biome-ignore lint/suspicious/noExplicitAny: partial detail
+					detail(FOREIGN_CLUB) as any,
+				);
 
-			await expect(runLoader(route, DATE_KEY, shell)).rejects.toSatisfy(
-				isNotFound,
-			);
-		});
+				await expect(runLoader(route, DATE_KEY, shell)).rejects.toSatisfy(
+					isNotFound,
+				);
+			});
+		}
 
 		it(`${name}: any other failure still reaches the error boundary`, async () => {
 			mockClub();
@@ -287,7 +413,6 @@ describe("agenda editor resolves the key before fetching the draft (#877)", () =
 		expect(getAgendaDraft).toHaveBeenCalledWith({
 			data: { meetingId: MEETING_ID },
 		});
-		// And the component's writes read the uuid off the loader, not the URL.
 		expect(data).toMatchObject({
 			meetingId: MEETING_ID,
 			templateName: "Standard meeting",
@@ -301,6 +426,43 @@ describe("agenda editor resolves the key before fetching the draft (#877)", () =
 			await expect(runLoader(AgendaRoute, key)).rejects.toSatisfy(isNotFound);
 		}
 		expect(getAgendaDraft).not.toHaveBeenCalled();
+	});
+
+	// The resolver is club-scoped (`resolveMeetingKey`'s own cross-club case is
+	// DB-backed in `meeting-resolve.integration.test.ts`), so another club's
+	// uuid arrives here as "Meeting not found." — and must stop before the draft,
+	// or the editor would open someone else's agenda by uuid.
+	it("is notFound() for another club's meeting uuid, without fetching a draft", async () => {
+		vi.mocked(resolveMeetingKeyForUser).mockRejectedValue(NOT_FOUND());
+		const foreignMeeting = "33333333-3333-4333-8333-333333333333";
+
+		await expect(runLoader(AgendaRoute, foreignMeeting)).rejects.toSatisfy(
+			isNotFound,
+		);
+		expect(resolveMeetingKeyForUser).toHaveBeenCalledWith({
+			data: { clubId: CLUB_ID, key: foreignMeeting },
+		});
+		expect(getAgendaDraft).not.toHaveBeenCalled();
+	});
+
+	it("still redirects to the meeting page when the key resolves but the draft is null", async () => {
+		vi.mocked(resolveMeetingKeyForUser).mockResolvedValue({
+			meetingId: MEETING_ID,
+		});
+		vi.mocked(getAgendaDraft).mockResolvedValue(null);
+
+		const thrown = await runLoader(AgendaRoute, DATE_KEY).catch(
+			(e: unknown) => e,
+		);
+		expect(isRedirect(thrown), "the null-draft branch must redirect").toBe(
+			true,
+		);
+		expect(thrown).toMatchObject({
+			options: {
+				to: "/club/$clubId/meeting/$meetingId",
+				params: { clubId: "downtown", meetingId: DATE_KEY },
+			},
+		});
 	});
 
 	it("lets any other resolver failure reach the error boundary", async () => {
@@ -323,22 +485,72 @@ async function renderInRouter(Component: () => React.ReactElement) {
 	await waitFor(() => expect(router.state.status).toBe("idle"));
 }
 
-/**
- * The routes this change owns render the MEETING not-found page, not the root's
- * generic one. `present`, `print` and `word` throw the same `notFound()` (above)
- * but carry no `notFoundComponent` of their own, so theirs is the root page.
- */
-const OWNED_NOT_FOUND_ROUTES: { name: string; route: AnyRoute }[] = [
-	{ name: "agenda", route: AgendaRoute },
-	{ name: "me", route: MeRoute },
-	{ name: "me/theme", route: ThemeRoute },
-	{ name: "me/timer", route: TimerRoute },
-	{ name: "me/word", route: MeWordRoute },
-	{ name: "vote", route: VoteRoute },
-];
+describe("the agenda editor's writes use the resolved uuid from a date URL (#877)", () => {
+	async function renderEditorAtDateUrl() {
+		editorProps.current = null;
+		// The page as a date URL leaves it: the URL segment is the DATE, the
+		// loader's draft carries the uuid it resolved to.
+		vi.spyOn(AgendaRoute, "useParams").mockReturnValue({
+			clubId: "downtown",
+			meetingId: DATE_KEY,
+		});
+		vi.spyOn(AgendaRoute, "useLoaderData").mockReturnValue({
+			meetingId: MEETING_ID,
+			templateName: "Club agenda",
+			// biome-ignore lint/suspicious/noExplicitAny: partial draft
+		} as any);
+		vi.spyOn(AgendaRoute, "useRouteContext").mockReturnValue({
+			clubUuid: CLUB_ID,
+			// biome-ignore lint/suspicious/noExplicitAny: partial context
+		} as any);
+		await renderInRouter(
+			AgendaRoute.options.component as () => React.ReactElement,
+		);
+		// Re-read through a cast: TypeScript narrowed `current` to `null` at the
+		// reset above and cannot see the render assign it.
+		const props = editorProps.current as Record<
+			string,
+			(...args: never[]) => unknown
+		> | null;
+		if (!props) throw new Error("the route did not render AgendaEditor");
+		return props;
+	}
+
+	it("a pure edit submits the uuid, not the date", async () => {
+		const props = await renderEditorAtDateUrl();
+		vi.mocked(updateAgendaRowFn).mockResolvedValue(undefined);
+
+		await (props.onUpdateRow as (r: string, p: object) => Promise<void>)(
+			"row-1",
+			{ title: "Opening" },
+		);
+
+		expect(updateAgendaRowFn).toHaveBeenCalledWith({
+			data: {
+				meetingId: MEETING_ID,
+				rowId: "row-1",
+				patch: { title: "Opening" },
+			},
+		});
+	});
+
+	it("a structural write submits the uuid, not the date", async () => {
+		const props = await renderEditorAtDateUrl();
+		// biome-ignore lint/suspicious/noExplicitAny: partial row
+		vi.mocked(addAgendaRowFn).mockResolvedValue({ id: "row-2" } as any);
+
+		await (
+			props.onAddRow as (after: string | null, kind: string) => Promise<unknown>
+		)(null, "event");
+
+		expect(addAgendaRowFn).toHaveBeenCalledWith({
+			data: { meetingId: MEETING_ID, afterRowId: null, kind: "event" },
+		});
+	});
+});
 
 describe("a missing meeting shows the meeting-not-found page (#877)", () => {
-	for (const { name, route } of OWNED_NOT_FOUND_ROUTES) {
+	for (const { name, route } of NOT_FOUND_ROUTES) {
 		it(`${name}: renders "Meeting not found" with a way back`, async () => {
 			// Each route's not-found page reads the club off its own params; there
 			// is no matching route in this bare router, so hand them over.

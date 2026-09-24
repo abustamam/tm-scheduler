@@ -19,15 +19,14 @@
  * Throws "Meeting not found." when nothing matches — the message
  * `isMeetingNotFoundError` recognises, so the route turns it into `notFound()`.
  *
- * The two imports are DYNAMIC, inside the handler. Both reach `#/db`, which
- * throws at import when `DATABASE_URL` is unset, and the agenda route's own unit
- * test (`agenda-editor-signin-gate.test.ts`) imports the route with only its
- * other server module mocked. A static import here would take that test down
- * for a module it never calls; inside the handler the import only ever runs on
- * the server.
+ * The archive half is pinned by `meeting-key.guard.test.ts`: the route test
+ * mocks this module wholesale, and the archive sweep skips a fn that calls
+ * `requireUser`, so nothing else would notice `resolveMeetingKey` swapped in.
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { requireUser } from "./guards";
+import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
 
 const meetingKeyInput = z.object({
 	clubId: z.string().uuid(),
@@ -37,9 +36,7 @@ const meetingKeyInput = z.object({
 export const resolveMeetingKeyForUser = createServerFn({ method: "GET" })
 	.validator((input: unknown) => meetingKeyInput.parse(input))
 	.handler(async ({ data }): Promise<{ meetingId: string }> => {
-		const { requireUser } = await import("./guards");
 		await requireUser();
-		const { resolvePublicMeetingKey } = await import("./meeting-resolve-logic");
 		const meetingId = await resolvePublicMeetingKey(data.clubId, data.key);
 		if (!meetingId) throw new Error("Meeting not found.");
 		return { meetingId };

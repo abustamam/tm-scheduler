@@ -2,6 +2,7 @@ import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
+import { MeetingNotFound } from "#/components/meeting-not-found";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
@@ -45,6 +46,7 @@ export const Route = createFileRoute(
 		};
 	},
 	component: PresentPage,
+	notFoundComponent: PresentNotFound,
 	head: () => ({
 		meta: [{ name: "robots", content: "noindex, nofollow" }],
 	}),
@@ -127,4 +129,10 @@ function PresentPage() {
 			}
 		/>
 	);
+}
+
+/** A key naming no meeting (#877): the same page every meeting sub-route shows. */
+function PresentNotFound() {
+	const { clubId } = Route.useParams();
+	return <MeetingNotFound clubId={clubId} />;
 }

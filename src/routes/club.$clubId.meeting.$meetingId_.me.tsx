@@ -93,14 +93,15 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId_/me")({
 	loader: async ({ params, context }) => {
 		// The PUBLIC reader, never the session fork: nothing it returns is kept,
 		// so there is no management view to regain and no reason to fetch PII.
-		const data = await getPublicMeetingByKey({
+		// No `meeting.clubId` comparison afterwards, unlike the duty pages: the
+		// resolver is already scoped to `clubUuid`, so a uuid from another club
+		// comes back "Meeting not found." and is caught here.
+		await getPublicMeetingByKey({
 			data: { clubId: context.clubUuid, key: params.meetingId },
 		}).catch((err) => {
 			if (isMeetingNotFoundError(err)) throw notFound();
 			throw err;
 		});
-		// A meeting id belonging to a DIFFERENT club than the URL segment names.
-		if (data.meeting.clubId !== context.clubUuid) throw notFound();
 	},
 	// An existence check, so once per meeting is enough. Without this the
 	// `?as=` strip below — a REPLACE navigation to the same match — would pay

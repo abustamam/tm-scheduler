@@ -15,6 +15,7 @@ import {
 	PrintButton,
 	PrintToolbar,
 } from "#/components/agenda/print-theme";
+import { MeetingNotFound } from "#/components/meeting-not-found";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
 import {
@@ -91,6 +92,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			};
 		},
 		component: PrintAgenda,
+		notFoundComponent: PrintNotFound,
 		// The <title> becomes the browser's default "Save as PDF" filename, so we
 		// name it after the club + meeting date (e.g. Downtown-Toastmasters-meeting-
 		// 2026-07-22.pdf). loaderData is absent during the pending state → fallback.
@@ -329,3 +331,9 @@ const tabActiveStyle: React.CSSProperties = {
 	background: INK,
 	color: "#fff",
 };
+
+/** A key naming no meeting (#877): the same page every meeting sub-route shows. */
+function PrintNotFound() {
+	const { clubId } = Route.useParams();
+	return <MeetingNotFound clubId={clubId} />;
+}
