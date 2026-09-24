@@ -7,6 +7,10 @@
 // referenced solely from the Nitro plugin — never from a client route — so it
 // stays out of the client bundle.
 import { describePendingSweep } from "#/lib/pending-plan";
+import {
+	deliverAccessRequestMail,
+	sweepExpiredAccessRequests,
+} from "./access-requests-logic";
 import { sweepExpiredPendingPlans } from "./mcp-pending-logic";
 import { processDueNotifications } from "./notifications-logic";
 import { produceRoleReminders } from "./role-reminders-logic";
@@ -41,12 +45,16 @@ let ticking = false;
  * one, so letting the send flag disable it turned a 48-hour retention window
  * into an indefinite one.
  *
+ * Every pass has its own try, so any one failing still lets the rest run.
+ * Exported for `reminder-poller.test.ts`, which proves exactly that; nothing
+ * else calls it.
+ *
  * Overlap guard: if the previous tick is still in flight when the interval fires
  * (a slow send batch), skip this one so ticks never stack up in the single
  * process. A thrown error is logged and swallowed — the poller must survive a
  * bad tick and keep running.
  */
-async function tick(): Promise<void> {
+export async function runReminderTick(): Promise<void> {
 	if (ticking) return;
 	ticking = true;
 	try {
@@ -62,11 +70,31 @@ async function tick(): Promise<void> {
 			console.error("[reminders] producer failed:", err);
 		}
 
-		const result = await processDueNotifications();
-		if (result.due > 0) {
-			console.log(
-				`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed} stale=${result.stale}`,
-			);
+		// Its own try (#866): a reminder-pass throw must not skip the
+		// access-request delivery or the retention sweep below.
+		try {
+			const result = await processDueNotifications();
+			if (result.due > 0) {
+				console.log(
+					`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed} stale=${result.stale}`,
+				);
+			}
+		} catch (err) {
+			console.error("[reminders] send pass failed:", err);
+		}
+
+		// The request-access form's emails (#866): request notifications and the
+		// per-reason cap alerts. Its own try, like the pass above, so neither can
+		// hide the other or stop the sweep.
+		try {
+			const mail = await deliverAccessRequestMail();
+			if (mail.sent + mail.failed + mail.alertsSent + mail.alertsFailed > 0) {
+				console.log(
+					`[access-requests] tick: sent=${mail.sent} failed=${mail.failed} alertsSent=${mail.alertsSent} alertsFailed=${mail.alertsFailed}`,
+				);
+			}
+		} catch (err) {
+			console.error("[access-requests] delivery pass failed:", err);
 		}
 
 		await sweepTick();
@@ -115,6 +143,19 @@ async function sweepTick(): Promise<void> {
 	} catch (err) {
 		console.error("[mcp-pending] pending-plan sweep failed:", err);
 	}
+	// Access requests past their retention window (#866). Same reasoning as the
+	// pending-plan sweep: these rows hold a prospect's name and email, so the
+	// flag that stops SENDING must not stop this, and there is no flag for it.
+	try {
+		const swept = await sweepExpiredAccessRequests();
+		if (swept.requests + swept.alerts > 0) {
+			console.log(
+				`[access-requests] retention sweep: requests=${swept.requests} alerts=${swept.alerts}`,
+			);
+		}
+	} catch (err) {
+		console.error("[access-requests] retention sweep failed:", err);
+	}
 }
 
 /**
@@ -156,7 +197,7 @@ export function startReminderPoller(): boolean {
 	}
 	const intervalMs = resolveIntervalMs();
 	timer = setInterval(() => {
-		void tick();
+		void runReminderTick();
 	}, intervalMs);
 	// Don't let the interval alone hold the process open — clean shutdown wins.
 	timer.unref?.();

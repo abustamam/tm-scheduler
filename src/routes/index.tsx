@@ -8,7 +8,7 @@ import {
 import { FounderNote } from "#/components/marketing/founder-note";
 import { MarketingShell } from "#/components/marketing/marketing-shell";
 import { Button } from "#/components/ui/button";
-import { ACCESS_REQUEST_MAILTO, PILOT_PRICING_LINE } from "#/lib/brand";
+import { PILOT_PRICING_LINE } from "#/lib/brand";
 import { homeRedirectTarget } from "#/lib/home-route";
 import { getAuthContext } from "#/server/auth-context";
 
@@ -235,12 +235,12 @@ function Landing() {
 								</Link>
 							</Button>
 							<Button asChild size="lg" variant="outline" className="px-6">
-								<a href={ACCESS_REQUEST_MAILTO}>Request access</a>
+								<Link to="/request-access">Request access</Link>
 							</Button>
 						</div>
 						<p className="mt-4 text-sm text-[var(--sea-ink-soft)]">
-							New club? GavelUp is invite-only while it's young — send a note
-							and we'll set your club up ourselves.
+							New club? GavelUp is invite-only while it's young — ask, and we'll
+							set your club up ourselves.
 						</p>
 						<p className="mt-2 text-sm font-semibold text-[var(--sea-ink)]">
 							{PILOT_PRICING_LINE}

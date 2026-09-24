@@ -1,8 +1,9 @@
 import { Link, type LinkProps } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import { Button } from "#/components/ui/button";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { captureRef } from "#/lib/marketing-ref";
 
 /** One nav entry. `to`/`search` are the router's own types, so any real route fits. */
 export type MarketingLink = {
@@ -40,6 +41,9 @@ export const FOOTER_LINKS: MarketingLink[] = [
  * unchanged.
  */
 export function MarketingShell({ children }: { children: ReactNode }) {
+	// First-touch `?ref=` attribution (#866). Raw `window.location.search`, not
+	// router search: see `captureRef`.
+	useEffect(() => captureRef(window.location.search), []);
 	return (
 		// No background colour here, deliberately (#612). styles.css gives `body`
 		// a layered treatment — three radial washes on --hero-a/--hero-b over a

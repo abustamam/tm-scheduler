@@ -1,5 +1,5 @@
 import { Link, useRouter } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { toast } from "sonner";
 import {
 	AppShell,
@@ -9,6 +9,7 @@ import {
 import { BrandMark } from "#/components/brand-mark";
 import { authClient } from "#/lib/auth-client";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { captureRef } from "#/lib/marketing-ref";
 import { endImpersonation } from "#/server/impersonation";
 
 /**
@@ -28,6 +29,12 @@ export function ResourcesShell({
 	authCtx?: ShellContext | null;
 }) {
 	const router = useRouter();
+	const signedIn = Boolean(shell && authCtx);
+	// First-touch `?ref=` attribution (#866), for anonymous visitors only: a
+	// signed-in member is not a lead. Above the early return (hooks rule).
+	useEffect(() => {
+		if (!signedIn) captureRef(window.location.search);
+	}, [signedIn]);
 
 	if (shell && authCtx) {
 		async function onSignOut() {

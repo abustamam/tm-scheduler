@@ -318,6 +318,11 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	// is nothing for an archive to take down.
 	getOAuthConsentClient:
 		"auth plumbing for /oauth/consent; returns the signed-in person's own email and an OAuth client's public name, no club-owned data (#843)",
+	// The request-access form (#866). Writes an `access_requests` row, which has
+	// no club_id: a request precedes any club, so no club is named, read or
+	// returned, and there is nothing for an archive to take down.
+	submitAccessRequest:
+		"not club-scoped; an access request precedes any club (#866)",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
 	// Each of these resolves the meeting's club and then runs requireUser +

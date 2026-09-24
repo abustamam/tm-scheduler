@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
 import { Route as TourRouteImport } from './routes/tour'
 import { Route as SigninRouteImport } from './routes/signin'
+import { Route as RequestAccessRouteImport } from './routes/request-access'
 import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
@@ -86,6 +87,11 @@ const TourRoute = TourRouteImport.update({
 const SigninRoute = SigninRouteImport.update({
   id: '/signin',
   path: '/signin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RequestAccessRoute = RequestAccessRouteImport.update({
+  id: '/request-access',
+  path: '/request-access',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClaimRoute = ClaimRouteImport.update({
@@ -405,6 +411,7 @@ const ApiMeetingsIdRoleSheetsSheetPdfRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/claim': typeof ClaimRoute
+  '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
@@ -469,6 +476,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/claim': typeof ClaimRoute
+  '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
@@ -533,6 +541,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authed': typeof AuthedRouteWithChildren
   '/claim': typeof ClaimRoute
+  '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
@@ -599,6 +608,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/claim'
+    | '/request-access'
     | '/signin'
     | '/tour'
     | '/unsubscribe'
@@ -663,6 +673,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/claim'
+    | '/request-access'
     | '/signin'
     | '/tour'
     | '/unsubscribe'
@@ -726,6 +737,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_authed'
     | '/claim'
+    | '/request-access'
     | '/signin'
     | '/tour'
     | '/unsubscribe'
@@ -792,6 +804,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthedRoute: typeof AuthedRouteWithChildren
   ClaimRoute: typeof ClaimRoute
+  RequestAccessRoute: typeof RequestAccessRoute
   SigninRoute: typeof SigninRoute
   TourRoute: typeof TourRoute
   UnsubscribeRoute: typeof UnsubscribeRoute
@@ -839,6 +852,13 @@ declare module '@tanstack/react-router' {
       path: '/signin'
       fullPath: '/signin'
       preLoaderRoute: typeof SigninRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/request-access': {
+      id: '/request-access'
+      path: '/request-access'
+      fullPath: '/request-access'
+      preLoaderRoute: typeof RequestAccessRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/claim': {
@@ -1370,6 +1390,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthedRoute: AuthedRouteWithChildren,
   ClaimRoute: ClaimRoute,
+  RequestAccessRoute: RequestAccessRoute,
   SigninRoute: SigninRoute,
   TourRoute: TourRoute,
   UnsubscribeRoute: UnsubscribeRoute,

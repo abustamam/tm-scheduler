@@ -165,8 +165,8 @@ type WriteProofClass =
  * The POST fns that are NOT `session`, each with the reason it is not.
  *
  * The 29 the #761 inventory found, less the five #762 retired and the two #752
- * retired: 24 today (6 `pending-proof`, 14 `console-asserted`, 2
- * `public-intake`, 2 `fill-blank`). Adding a row is a decision about a write's
+ * retired, plus #866's request-access form: 25 today (6 `pending-proof`, 14
+ * `console-asserted`, 3 `public-intake`, 2 `fill-blank`). Adding a row is a decision about a write's
  * trust model, not a way to get green — a genuinely session-less write that
  * turns up unclassified is a finding to report, not an entry to make.
  *
@@ -305,6 +305,23 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	"voting.ts#joinBallot": {
 		class: "public-intake",
 		reason: "bounded guest intake",
+	},
+	// The request-access form (#866). A prospect asks for a club or district
+	// before any account exists, so there is no session to prove. What bounds
+	// it, all in `access-requests-logic.ts`:
+	//   - ADMISSION: a honeypot and a client-measured minimum fill time (both
+	//     answered with a silent success); per 24h of created_at, a per-email,
+	//     a global and a notification cap, counted and written under one
+	//     advisory lock that is TRIED, never waited on (held after two short
+	//     retries → "contended"), so
+	//     concurrent posts can neither overshoot a cap nor queue on the pool;
+	//   - DELIVERY: at most MAX_SENDS_PER_TICK request emails per poller tick;
+	//   - ALERTS: one per reason per UTC day.
+	// NOT bounded per client IP.
+	"access-requests.ts#submitAccessRequest": {
+		class: "public-intake",
+		reason:
+			"access-request intake: honeypot + fill time; per-email/global/notify admission caps per 24h under a try-lock (held after 2 short retries = contended); ≤MAX_SENDS_PER_TICK emails per poller tick; no per-IP cap (#866)",
 	},
 };
 
@@ -716,7 +733,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).not.toContain(key);
 	});
 
-	it("holds exactly the 24 exceptions left after #762 and #752", () => {
+	it("holds exactly the 25 exceptions: 24 left after #762 and #752, plus #866", () => {
 		// The count is pinned, not just the shape. A twenty-fifth arriving
 		// silently is the thing to notice — either a new session-less write, or a
 		// child issue's row landing without its sibling being retired.
@@ -732,6 +749,9 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		// the first time this class has shrunk, and the pair is the whole of it:
 		// the other five Ballot Counter capabilities are still here, so a drop to
 		// 9 would mean the console went with them.
+		//
+		// #866 added one `public-intake` row, the request-access form, so that
+		// class reads 3 and the total 25.
 		const byClass = (c: WriteProofClass) =>
 			Object.values(WRITE_PROOF_EXCEPTIONS).filter((v) => v.class === c).length;
 		expect({
@@ -741,10 +761,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			publicIntake: byClass("public-intake"),
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 24,
+			total: 25,
 			pendingProof: 6,
 			consoleAsserted: 14,
-			publicIntake: 2,
+			publicIntake: 3,
 			fillBlank: 2,
 		});
 	});

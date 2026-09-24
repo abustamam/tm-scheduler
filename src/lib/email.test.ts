@@ -91,6 +91,81 @@ describe("sendEmail", () => {
 		expect(body).not.toHaveProperty("attachments");
 	});
 
+	it("sends reply_to only when replyTo is given (#866)", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({
+			to: "a@b.com",
+			subject: "S",
+			html: "<p></p>",
+			text: "t",
+			replyTo: "requester@club.org",
+		});
+
+		const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+		expect(body.reply_to).toBe("requester@club.org");
+	});
+
+	it("sends an Idempotency-Key header only when one is given (#866)", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({
+			to: "a@b.com",
+			subject: "S",
+			html: "<p></p>",
+			text: "t",
+			idempotencyKey: "access-request/abc",
+		});
+		await sendEmail({
+			to: "a@b.com",
+			subject: "S",
+			html: "<p></p>",
+			text: "t",
+		});
+
+		const withKey = fetchSpy.mock.calls[0]?.[1]?.headers as Record<
+			string,
+			string
+		>;
+		const without = fetchSpy.mock.calls[1]?.[1]?.headers as Record<
+			string,
+			string
+		>;
+		expect(withKey["Idempotency-Key"]).toBe("access-request/abc");
+		expect(Object.keys(without).sort()).toEqual([
+			"Authorization",
+			"Content-Type",
+		]);
+		// Never in the body: it is a header.
+		const body = JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string);
+		expect(body).not.toHaveProperty("idempotencyKey");
+	});
+
+	it("does NOT include a reply_to field when replyTo is omitted", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({
+			to: "a@b.com",
+			subject: "S",
+			html: "<p></p>",
+			text: "t",
+		});
+
+		const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+		expect(Object.keys(body).sort()).toEqual(
+			["from", "html", "subject", "text", "to"].sort(),
+		);
+	});
+
 	it("passes attachments through to Resend and supports a recipient array", async () => {
 		vi.stubEnv("RESEND_API_KEY", "re_test");
 		const fetchSpy = vi
