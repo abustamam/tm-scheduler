@@ -495,7 +495,9 @@ export interface CaptureGuestResult {
  * - `share` on the RETURNING-guest path, which fills in contact details on an
  *   existing row and records a visit — still PII landing in a taken-down club,
  *   so it is gated too. It takes SHARE rather than UPDATE because it needs only
- *   to hold the takedown off, not to serialise against other sign-ups, and SHARE
+ *   to hold the takedown off. It still WAITS behind an in-flight new-guest
+ *   `FOR UPDATE` and behind any club-settings `UPDATE` (harmless at guest-book
+ *   volume), but returning guests do not queue behind each other, and SHARE
  *   coexists with the `FOR KEY SHARE` every foreign-key insert takes on the club
  *   row. `FOR UPDATE` here would conflict with those: a convert that holds this
  *   guest's row lock and then inserts a `members` row would wait on us while we
