@@ -387,25 +387,30 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
  * because for reads the two are interchangeable and swapping them typechecks.
  * Writes have no such sibling pair: the gate is one call, and what varies is
- * WHERE it lives. TEN of these gate in a `-logic` seam — which is strictly
- * better, because a seam is reachable from vitest — and ONE gates in the
- * handler because its logic is inline there and lifting it out is a refactor
- * #555 was not. It was two until #809 extracted `releaseSlotCore`.
+ * WHERE it lives. FOURTEEN of these gate in a `-logic` seam — which is
+ * strictly better, because a seam is reachable from vitest — and FOUR gate in
+ * the handler's own server-fn module: `updateSpeakerDetails` (`slots.ts`),
+ * whose logic is inline there, and the three `requireMemberInClub` writes #825
+ * re-enrolled (`setPlannedAttendance`, `setAvailability`,
+ * `markUnavailableReleasing`), which assert directly in their handlers.
  *
- * Of the ten, eight are executed by `public-writers-archive-gate.integration.test.ts`.
- * The other two are executed beside the rest of their own feature's cases,
- * because each needs a fixture that suite does not build: `confirmSlotCore` in
- * `slots-confirm.integration.test.ts` (a CLAIMED slot and a holder), and
+ * Of the fourteen, ten are executed by
+ * `public-writers-archive-gate.integration.test.ts`. The other four are executed
+ * beside the rest of their own feature's cases, because each needs a fixture
+ * that suite does not build: `confirmSlotCore` in
+ * `slots-confirm.integration.test.ts` (a CLAIMED slot and a holder),
  * `recordTiming` in `timings.integration.test.ts` (a meeting whose Timer slot is
- * assigned, plus a timeable slot to record against). That suite also asserts the
- * ORDER — archive before the meeting window — which a presence check cannot see.
+ * assigned, plus a timeable slot to record against — that suite also asserts
+ * the ORDER, archive before the meeting window), and the two clears, whose gate
+ * is `requireSessionActor`'s, in `write-actor.integration.test.ts`.
  *
  * So each row names the file the gate is IN. That is weaker than checking the
  * handler itself, and the weakness is stated rather than papered over: this
  * asserts the gate exists in the module that owns the write, not that this
- * particular write reaches it. The integration suite is what proves the
- * seam-gated ones actually refuse; for the one remaining handler-gated row
- * (`updateSpeakerDetails`) this guard is the only gate there is.
+ * particular write reaches it. The integration suites are what prove the
+ * seam-gated ones actually refuse, and the delegation case below pins that the
+ * three slot handlers still reach their cores; for the four handler-gated rows
+ * this guard is the only gate there is.
  */
 const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 	// `addMember` used to head this list. It came off at #616, which admin-gated
@@ -536,6 +541,22 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 		fn: "markUnavailableReleasing",
 		file: "src/server/availability.ts",
 		gate: "assertClubNotArchived",
+	},
+	// Also surfaced by #825's review, and by a different false classification:
+	// both bodies mention `requireUser()` in a COMMENT, and the sweep used to
+	// test raw text, so prose exempted them. Their real gate is
+	// `requireSessionActor`, whose member arm refuses an archived club off the
+	// membership row it already read; `write-actor.integration.test.ts` executes
+	// that refusal.
+	{
+		fn: "clearPlannedAttendance",
+		file: "src/server/write-actor-logic.ts",
+		gate: "isClubArchived(membership)",
+	},
+	{
+		fn: "clearAvailability",
+		file: "src/server/write-actor-logic.ts",
+		gate: "isClubArchived(membership)",
 	},
 	// #730 — the Timer's measured times. Session-less by design (the Timer taps
 	// a link out of a chat thread), and it MINTS rows: without this gate an
@@ -672,12 +693,17 @@ describe("every session-less server fn is enrolled in the gate (#544)", () => {
 	for (const file of files) {
 		const src = readRaw(resolve(dir, file));
 		for (const { name: fn, body } of serverFnDeclarations(src)) {
-			if (SESSION_GUARDS.test(body)) continue;
+			// Discovery reads RAW (above); CLASSIFICATION reads code. A comment
+			// naming `requireUser()` is not a call, and until #825's review it was
+			// enough to exempt an endpoint: `clearAvailability` and
+			// `clearPlannedAttendance` both sat out of this sweep on prose alone.
+			const code = stripComments(body);
+			if (SESSION_GUARDS.test(code)) continue;
 			// Reachable WITHOUT a session, but covered: the guard's own resolver
 			// asserts the archive, which `SELF_ASSERT_RESOLVERS` proves above. Held
 			// separately from the session exemption so the two reasons never merge
 			// back into one regex — that merge is what hid 11 endpoints.
-			if (SELF_ASSERT_GUARDS.test(body)) {
+			if (SELF_ASSERT_GUARDS.test(code)) {
 				selfAsserted.push({ file, fn });
 				continue;
 			}
@@ -824,6 +850,30 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		});
 	}
 
+	/**
+	 * Handler-to-core wiring (#825). The `claimSlot` / `reassignSlot` rows above
+	 * are file-level: they say `slots-logic.ts` names the gate, and the
+	 * integration suite proves each CORE refuses. Neither says the public handler
+	 * still calls its core, so a handler that inlined the write again would pass
+	 * both. This pins the delegation.
+	 */
+	it.each([
+		["claimSlot", "claimSlotCore("],
+		["reassignSlot", "reassignSlotCore("],
+		["releaseSlot", "releaseSlotCore("],
+	])("%s delegates to its archive-gated core", (fn, core) => {
+		const body = stripComments(
+			serverFnBody(
+				readFileSync(resolve(ROOT, "src/server/slots.ts"), "utf8"),
+				fn,
+			),
+		);
+		expect(
+			body,
+			`${fn} no longer calls ${core}, which is where its archive gate lives. Route the write back through the core rather than gating the handler.`,
+		).toContain(core);
+	});
+
 	// Vacuity checks: an empty table would pass every case above.
 	it("covers every write that was waived as a #544 follow-up", () => {
 		// Was 8, then 7. `addMember` came out when #616 made it admin-gated: it is
@@ -835,11 +885,12 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		// `disqualifyCandidateFn` / `undoDisqualificationFn` (#723) are the tenth
 		// and eleventh, also genuinely new — the Vote Counter operates that console
 		// through a self-asserted member id, exactly as they do open/close.
-		// #825 added five more — not new writes, but ones `requireMemberInClub`
-		// had classified out of the sweep by name.
+		// #825 added seven more, none of them new writes: five that
+		// `requireMemberInClub` had classified out of the sweep by name, and two
+		// that a comment naming `requireUser()` had classified out by prose.
 		// The count is the vacuity guard, so it moves deliberately with the table
 		// rather than being loosened to `toBeGreaterThan`.
-		expect(WRITE_GATES).toHaveLength(16);
+		expect(WRITE_GATES).toHaveLength(18);
 	});
 
 	it("does not also waive a write it claims to gate", () => {
