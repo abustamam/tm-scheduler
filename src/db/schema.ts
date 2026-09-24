@@ -2820,6 +2820,89 @@ export const mcpPendingPlans = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Access requests (#866)
+//
+// What the public `/request-access` form writes: a prospect asking for a club
+// (or a district) to be set up. Session-less and anonymous, so it mints PII
+// (a name and an email) from a form anyone can POST — the caps that bound it
+// live in `src/server/access-requests-logic.ts`. No foreign keys and no
+// `club_id`: a request precedes any club, so it is not club-scoped and the
+// archive gate does not apply. Nothing in the app reads these rows; the
+// maintainer gets an email per request and reads the table by psql.
+// ---------------------------------------------------------------------------
+
+export const accessRequestKindEnum = pgEnum("access_request_kind", [
+	"club",
+	"district",
+]);
+
+export const accessRequests = pgTable(
+	"access_requests",
+	{
+		id: uuid("id").primaryKey().defaultRandom(),
+		kind: accessRequestKindEnum("kind").notNull(),
+		name: text("name").notNull(),
+		// Stored lowercased + trimmed, so the per-email cap counts one address
+		// once however it was typed.
+		email: text("email").notNull(),
+		clubName: text("club_name"),
+		clubNumber: text("club_number"),
+		districtNumber: text("district_number"),
+		message: text("message"),
+		// First-touch marketing attribution (`src/lib/marketing-ref.ts`), or null.
+		ref: text("ref"),
+		// True when this row CLAIMED one of the day's notification slots, inside
+		// the submission's advisory lock (`access-requests-logic.ts`). That claim
+		// is what the notification cap counts, so it is set at insert, before any
+		// email exists; delivery is the poller's (ADR-0023) and is recorded in
+		// the `notify_*` columns below. False = over the cap: saved, never mailed.
+		notified: boolean("notified").notNull().default(false),
+		// Delivery bookkeeping, same shape as `notifications` (#271): `attempts`
+		// is the optimistic-lock token the poller bumps to claim a send, and
+		// `last_attempted_at` paces the bounded retry.
+		notifySentAt: timestamp("notify_sent_at", { withTimezone: true }),
+		notifyAttempts: integer("notify_attempts").notNull().default(0),
+		notifyLastAttemptedAt: timestamp("notify_last_attempted_at", {
+			withTimezone: true,
+		}),
+		notifyLastError: text("notify_last_error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		// The per-email cap: rows for this email in the last 24h.
+		index("access_requests_email_created_idx").on(t.email, t.createdAt),
+		// The global and notification caps: rows in the last 24h.
+		index("access_requests_created_idx").on(t.createdAt),
+	],
+);
+
+/**
+ * One row per alert WINDOW and REASON (#866): the maintainer is told once per
+ * UTC day per kind of trip that the request-access form hit a limit, not once
+ * per rejected request. Keyed by reason as well as day so a benign trip (one
+ * address resubmitting just after midnight) cannot use up the day's only alert
+ * and silence a later flood. `window_key` is `<day>:<reason>`; a trip that
+ * finds its row only bumps `trips`. Delivered by the poller with the same
+ * bookkeeping as `notifications`.
+ */
+export const accessRequestAlerts = pgTable("access_request_alerts", {
+	id: uuid("id").primaryKey().defaultRandom(),
+	windowKey: text("window_key").notNull().unique(),
+	// per_email | global | notify | undelivered — see `CapReason`.
+	reason: text("reason").notNull(),
+	trips: integer("trips").notNull().default(1),
+	createdAt: timestamp("created_at", { withTimezone: true })
+		.notNull()
+		.defaultNow(),
+	sentAt: timestamp("sent_at", { withTimezone: true }),
+	attempts: integer("attempts").notNull().default(0),
+	lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }),
+	lastError: text("last_error"),
+});
+
+// ---------------------------------------------------------------------------
 // Relations
 // ---------------------------------------------------------------------------
 

@@ -10,7 +10,9 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
+import { Route as TourRouteImport } from './routes/tour'
 import { Route as SigninRouteImport } from './routes/signin'
+import { Route as RequestAccessRouteImport } from './routes/request-access'
 import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as AuthedRouteImport } from './routes/_authed'
@@ -78,9 +80,19 @@ const UnsubscribeRoute = UnsubscribeRouteImport.update({
   path: '/unsubscribe',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TourRoute = TourRouteImport.update({
+  id: '/tour',
+  path: '/tour',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SigninRoute = SigninRouteImport.update({
   id: '/signin',
   path: '/signin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RequestAccessRoute = RequestAccessRouteImport.update({
+  id: '/request-access',
+  path: '/request-access',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClaimRoute = ClaimRouteImport.update({
@@ -406,7 +418,9 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
+  '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
+  '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/activity': typeof AuthedActivityRoute
@@ -470,7 +484,9 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
+  '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
+  '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/activity': typeof AuthedActivityRoute
@@ -534,7 +550,9 @@ export interface FileRoutesById {
   '/_authed': typeof AuthedRouteWithChildren
   '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
+  '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
+  '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/_authed/activity': typeof AuthedActivityRoute
@@ -600,7 +618,9 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/claim'
+    | '/request-access'
     | '/signin'
+    | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
     | '/activity'
@@ -664,7 +684,9 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/claim'
+    | '/request-access'
     | '/signin'
+    | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
     | '/activity'
@@ -727,7 +749,9 @@ export interface FileRouteTypes {
     | '/_authed'
     | '/about'
     | '/claim'
+    | '/request-access'
     | '/signin'
+    | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
     | '/_authed/activity'
@@ -793,7 +817,9 @@ export interface RootRouteChildren {
   AuthedRoute: typeof AuthedRouteWithChildren
   AboutRoute: typeof AboutRoute
   ClaimRoute: typeof ClaimRoute
+  RequestAccessRoute: typeof RequestAccessRoute
   SigninRoute: typeof SigninRoute
+  TourRoute: typeof TourRoute
   UnsubscribeRoute: typeof UnsubscribeRoute
   DotwellKnownSplatRoute: typeof DotwellKnownSplatRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
@@ -827,11 +853,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UnsubscribeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/tour': {
+      id: '/tour'
+      path: '/tour'
+      fullPath: '/tour'
+      preLoaderRoute: typeof TourRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/signin': {
       id: '/signin'
       path: '/signin'
       fullPath: '/signin'
       preLoaderRoute: typeof SigninRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/request-access': {
+      id: '/request-access'
+      path: '/request-access'
+      fullPath: '/request-access'
+      preLoaderRoute: typeof RequestAccessRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/claim': {
@@ -1371,7 +1411,9 @@ const rootRouteChildren: RootRouteChildren = {
   AuthedRoute: AuthedRouteWithChildren,
   AboutRoute: AboutRoute,
   ClaimRoute: ClaimRoute,
+  RequestAccessRoute: RequestAccessRoute,
   SigninRoute: SigninRoute,
+  TourRoute: TourRoute,
   UnsubscribeRoute: UnsubscribeRoute,
   DotwellKnownSplatRoute: DotwellKnownSplatRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,

@@ -18,6 +18,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
 	clubs,
+	guests,
 	meetings,
 	members,
 	pathwaysProjects,
@@ -27,6 +28,16 @@ import {
 } from "#/db/schema";
 import { userMemberIds } from "./person-identity-logic";
 
+/**
+ * One HELD evaluator of a speech (#681). Member or guest: an evaluator slot is
+ * held by one or the other (`role_slots_single_assignee`), and a guest
+ * evaluator used to vanish from the log because only `members` was joined.
+ */
+export interface SpeechLogEvaluator {
+	name: string;
+	isGuest: boolean;
+}
+
 export interface SpeechLogRow {
 	slotId: string;
 	scheduledAt: Date;
@@ -35,80 +46,190 @@ export interface SpeechLogRow {
 	projectName: string | null;
 	pathwayPath: string | null;
 	projectLevel: string | null;
-	evaluatorName: string | null;
+	/** Held evaluators of this speech, member or guest, ordered by name. */
+	evaluators: SpeechLogEvaluator[];
+	/** True when at least one evaluator slot points at this speech, held or not. */
+	hasEvaluatorSlot: boolean;
 	status: "open" | "claimed" | "confirmed";
 }
 
+export interface SpeechLog {
+	rows: SpeechLogRow[];
+	/** More speeches exist beyond `limit`. Always false when `limit` is null. */
+	truncated: boolean;
+}
+
+/**
+ * The slot statuses that mean someone actually HOLDS the evaluator slot. An
+ * `open` slot with a stale assignee is not an evaluator; it only proves the
+ * speech HAS an evaluator slot (`hasEvaluatorSlot`), which is what lets an
+ * upcoming speech say "Evaluator not yet assigned".
+ */
+const HELD_EVALUATOR_STATUSES: ReadonlySet<SpeechLogRow["status"]> = new Set([
+	"claimed",
+	"confirmed",
+]);
+
 /**
  * Speaker-slot history for a set of roster members (most recent first), with
- * the evaluator resolved.
+ * every held evaluator resolved, member or guest.
  *
  * Takes member IDs rather than one ID because the same human can hold a
  * membership in several clubs; `clubId` narrows to one club's meetings when the
  * caller is a club-scoped surface, and is null for the cross-club personal log.
  * Empty input short-circuits — an `inArray` over an empty list is not valid SQL
  * in every dialect and there is nothing to ask for anyway.
+ *
+ * `limit: null` means every speech. With a number, `limit + 1` rows are read so
+ * `truncated` can tell the page whether a "Show all" link has anything to show.
+ *
+ * WHO MAY READ WHAT (#681). This payload names another member's evaluators —
+ * members AND guests — so both callers authorize before calling:
+ * `getMemberProfile` gates on `requireClubViewAccess` (the club's own members,
+ * archive-gated in `grantView`), and `listMySpeeches` passes only the signed-in
+ * user's own memberships. Neither is new exposure: a held evaluator is already
+ * on the club's meeting page. What IS gated here is the archive state:
+ * the cross-club log reaches no guard, so the `archived_at` predicate is inlined
+ * below exactly as `loadMyCommitments` does (#560) — a taken-down club's
+ * evaluator names, guest names included, must not keep surfacing on the
+ * dashboard of a member who also belongs to a live club.
+ *
+ * Cancelled meetings are excluded: a cancelled speech was never given and is
+ * not going to be.
  */
 export async function loadSpeechLog(
 	memberIds: string[],
 	clubId: string | null,
-	limit: number,
-): Promise<SpeechLogRow[]> {
-	if (memberIds.length === 0) return [];
+	limit: number | null,
+): Promise<SpeechLog> {
+	if (memberIds.length === 0) return { rows: [], truncated: false };
 
-	const evaluatorSlot = alias(roleSlots, "evaluator_slot");
-	const evaluatorMember = alias(members, "evaluator_member");
+	// Step 1: the SPEECHES, one row each. No evaluator join here: it is
+	// one-to-many (a speech may have two evaluators), and joining it made the
+	// `limit` count speech-evaluator PAIRS, so a doubly-evaluated speech appeared
+	// twice and pushed a real speech out of the window.
+	const query = db
+		.select({
+			slotId: roleSlots.id,
+			scheduledAt: meetings.scheduledAt,
+			roleName: roleDefinitions.name,
+			speechTitle: speeches.title,
+			projectName: speeches.projectName,
+			pathwayPath: speeches.pathwayPath,
+			projectLevel: speeches.projectLevel,
+			status: roleSlots.status,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+		.where(
+			and(
+				inArray(roleSlots.assignedMemberId, memberIds),
+				eq(roleDefinitions.isSpeakerRole, true),
+				ne(meetings.status, "cancelled"),
+				isNull(clubs.archivedAt),
+				clubId ? eq(meetings.clubId, clubId) : undefined,
+			),
+		)
+		// `roleSlots.id` breaks ties: two meetings sharing a `scheduled_at` (two
+		// clubs on one night, or a duplicated/rescheduled meeting) otherwise made
+		// the `limit` window's MEMBERSHIP arbitrary — a row could enter or leave
+		// the dashboard between loader runs. That is the same nondeterminism
+		// class #437 exists to remove.
+		.orderBy(desc(meetings.scheduledAt), desc(roleSlots.id));
 
-	return (
-		db
-			.select({
-				slotId: roleSlots.id,
-				scheduledAt: meetings.scheduledAt,
-				roleName: roleDefinitions.name,
-				speechTitle: speeches.title,
-				projectName: speeches.projectName,
-				pathwayPath: speeches.pathwayPath,
-				projectLevel: speeches.projectLevel,
-				evaluatorName: evaluatorMember.name,
-				status: roleSlots.status,
-			})
-			.from(roleSlots)
-			.innerJoin(
-				roleDefinitions,
-				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-			)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-			.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
-			.leftJoin(evaluatorSlot, eq(evaluatorSlot.evaluatesSlotId, roleSlots.id))
-			.leftJoin(
-				evaluatorMember,
-				eq(evaluatorMember.id, evaluatorSlot.assignedMemberId),
-			)
-			.where(
-				and(
-					inArray(roleSlots.assignedMemberId, memberIds),
-					eq(roleDefinitions.isSpeakerRole, true),
-					clubId ? eq(meetings.clubId, clubId) : undefined,
-				),
-			)
-			// `roleSlots.id` breaks ties: two meetings sharing a `scheduled_at` (two
-			// clubs on one night, or a duplicated/rescheduled meeting) otherwise made
-			// the `limit` window's MEMBERSHIP arbitrary — a row could enter or leave
-			// the dashboard between loader runs. That is the same nondeterminism
-			// class #437 exists to remove.
-			.orderBy(desc(meetings.scheduledAt), desc(roleSlots.id))
-			.limit(limit)
-	);
+	const fetched = limit === null ? await query : await query.limit(limit + 1);
+	const truncated = limit !== null && fetched.length > limit;
+	const speechRows = truncated ? fetched.slice(0, limit) : fetched;
+	if (speechRows.length === 0) return { rows: [], truncated: false };
+
+	// Step 2: every evaluator slot pointing at those speeches. Two plain
+	// `inArray` reads rather than a correlated `json_agg` subquery on purpose: a
+	// hand-written correlated `sql` subquery in Drizzle has emitted an
+	// unqualified, always-true WHERE here before. LEFT on both assignee tables,
+	// since a slot holds a member OR a guest (or, open, neither).
+	const evaluatorRows = await db
+		.select({
+			evaluatesSlotId: roleSlots.evaluatesSlotId,
+			status: roleSlots.status,
+			memberId: roleSlots.assignedMemberId,
+			guestId: roleSlots.assignedGuestId,
+			memberName: members.name,
+			guestName: guests.name,
+		})
+		.from(roleSlots)
+		.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
+		.leftJoin(guests, eq(guests.id, roleSlots.assignedGuestId))
+		.where(
+			inArray(
+				roleSlots.evaluatesSlotId,
+				speechRows.map((r) => r.slotId),
+			),
+		);
+
+	// Step 3: group in JS.
+	// A key's PRESENCE is `hasEvaluatorSlot`; its map is the held evaluators.
+	const bySpeech = new Map<string, Map<string, SpeechLogEvaluator>>();
+	for (const e of evaluatorRows) {
+		if (!e.evaluatesSlotId) continue;
+		let held = bySpeech.get(e.evaluatesSlotId);
+		if (!held) {
+			held = new Map();
+			bySpeech.set(e.evaluatesSlotId, held);
+		}
+		if (!HELD_EVALUATOR_STATUSES.has(e.status)) continue;
+		const name = e.memberName ?? e.guestName;
+		// Keyed by assignee id, prefixed by kind so a member id and a guest id can
+		// never collide: one person holding two evaluator slots for one speech
+		// appears once.
+		const key = e.memberId
+			? `m:${e.memberId}`
+			: e.guestId
+				? `g:${e.guestId}`
+				: null;
+		if (name === null || key === null) continue;
+		held.set(key, {
+			name,
+			isGuest: e.memberName === null,
+		});
+	}
+
+	return {
+		rows: speechRows.map((r) => {
+			const held = bySpeech.get(r.slotId);
+			return {
+				...r,
+				evaluators: held
+					? [...held.values()].sort((a, b) => a.name.localeCompare(b.name))
+					: [],
+				hasEvaluatorSlot: held !== undefined,
+			};
+		}),
+		truncated,
+	};
 }
 
 /**
- * The signed-in user's recent speech history across EVERY club they belong to.
+ * The signed-in user's speech history across EVERY club they belong to.
  * Backs the dashboard speech log. No linked membership ⇒ empty log.
+ *
+ * LAPSED MEMBERSHIPS COUNT, deliberately — this is not a missing gate.
+ * `userMemberIds` skips the `members.status = 'active'` filter the club
+ * switcher applies (#437): a membership going inactive does not un-give the
+ * speeches, so a former member still sees their own history, and the
+ * evaluators of it, from that club. What IS excluded is an ARCHIVED club (the
+ * `archived_at` predicate in `loadSpeechLog`), because archiving is a platform
+ * takedown rather than a change in the user's own standing.
  */
 export async function loadMySpeechLog(
 	userId: string,
-	limit: number,
-): Promise<SpeechLogRow[]> {
+	limit: number | null,
+): Promise<SpeechLog> {
 	return loadSpeechLog(await userMemberIds(userId), null, limit);
 }
 
@@ -121,8 +242,8 @@ export async function loadMySpeechLog(
  * PUBLIC sibling `listMemberCommitments` was gated for in #544 — this authed twin
  * kept serving it on `/dashboard` and `/me`, so a member of one live and one
  * archived club saw the taken-down club's name and agenda details with no tooling.
- * `loadMySpeechLog` beside it joins no `clubs` row and carries no club identity, so
- * it is deliberately left alone.
+ * `loadMySpeechLog` beside it carries no club identity, but since #681 it carries
+ * evaluator names (guests included), so it gates on the same predicate.
  */
 export async function loadMyCommitments(userId: string) {
 	const memberIds = await userMemberIds(userId);

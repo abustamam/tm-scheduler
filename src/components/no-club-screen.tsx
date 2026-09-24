@@ -1,14 +1,15 @@
 import { LogOut, ShieldCheck, Users } from "lucide-react";
 import { BrandMark } from "#/components/brand-mark";
 import { Button } from "#/components/ui/button";
-import { ACCESS_REQUEST_MAILTO, TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 
 /**
  * The signed-in "you're not in a club yet" screen (#267). Shown by the authed
  * shell when `getAuthContext` resolves no memberships (`clubs` empty / no active
  * club) — instead of the workspace nav + an empty Outlet, which dead-ends the
  * user. Gives a purposeful explanation and at least one actionable next step:
- * "Request access" (the invite-only mailto precedent from `index.tsx`) plus the
+ * "Request access" (the `/request-access` form, #866 — a signed-in user with no
+ * club is a prospect) plus the
  * hint to sign in with the email their club has on its roster.
  *
  * A club-less platform superadmin still gets an escape hatch to `/superadmin`
@@ -75,7 +76,9 @@ export function NoClubScreen({
 
 					<div className="mt-6 flex flex-col gap-2.5">
 						<Button asChild size="lg">
-							<a href={ACCESS_REQUEST_MAILTO}>Request access</a>
+							{/* A plain anchor, not <Link>: this screen stays
+							    router-context-free (see above). */}
+							<a href="/request-access">Request access</a>
 						</Button>
 						{isSuperadmin ? (
 							<Button asChild variant="outline" size="lg">

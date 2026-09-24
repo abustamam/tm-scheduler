@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ACCESS_REQUEST_MAILTO } from "#/lib/brand";
 import { NoClubScreen } from "./no-club-screen";
 
 describe("NoClubScreen", () => {
@@ -64,10 +63,10 @@ describe("NoClubScreen", () => {
 		expect(screen.queryByText("Your club isn't available")).toBeNull();
 	});
 
-	it("offers the Request access mailto as an actionable next step", () => {
+	it("offers the Request access form as an actionable next step (#866)", () => {
 		render(<NoClubScreen email="jane@club.org" onSignOut={() => {}} />);
 		const cta = screen.getByRole("link", { name: "Request access" });
-		expect(cta.getAttribute("href")).toBe(ACCESS_REQUEST_MAILTO);
+		expect(cta.getAttribute("href")).toBe("/request-access");
 	});
 
 	it("wires the header sign out to the handler", () => {
