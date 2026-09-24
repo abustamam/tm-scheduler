@@ -1667,9 +1667,23 @@ export async function moveAgendaRow(input: {
  *
  * `sortOrder` is the existing append convention (current max + 10) on both
  * paths; it is a property of this agenda's ordering, not of the role.
+ *
+ * `key` is the bank row's own `role_definitions.key`, and the Roles panel's
+ * PICKER sends it (#836). Resolving by name alone meant a click resolved
+ * against a name captured at PAGE LOAD: a rename in between either forked the
+ * role (the create arm) or, where the old name had since gone to a different
+ * bank row, attached THAT row, silently. A key is unique per club
+ * (`role_definitions_club_key_unique`) and no rename writes it, so with a key
+ * the attach is identity-stable. A key that matches nothing is REFUSED rather
+ * than falling back to the name — the fallback is precisely the resolution
+ * that goes wrong — and it never takes the create arm, because the picker
+ * only offers roles that exist. Without a key (the typed box, and any tab
+ * loaded before this shipped) the name path below is unchanged.
  */
 export async function addAgendaRole(input: {
 	meetingId: string;
+	/** The picked bank row's key. Absent for a typed name. */
+	key?: string;
 	name: string;
 	category: "leadership" | "speaker" | "evaluator" | "functionary";
 	defaultCount: number;
@@ -1704,8 +1718,14 @@ export async function addAgendaRole(input: {
 				`This agenda has too many roles (max ${MAX_TEMPLATE_ROLES}).`,
 			);
 		}
+		// The typed path's early refusal. A picked role is checked against its
+		// CURRENT bank name below instead: the name it carries is the page-load
+		// one, and a declared role that has since taken it is not this role.
 		const wanted = foldRoleName(input.name);
-		if (declared.some((r) => foldRoleName(r.name) === wanted)) {
+		if (
+			input.key == null &&
+			declared.some((r) => foldRoleName(r.name) === wanted)
+		) {
 			throw new Error(`"${input.name}" is already on this agenda.`);
 		}
 		const sortOrder =
@@ -1726,19 +1746,35 @@ export async function addAgendaRole(input: {
 			})
 			.from(roleDefinitions)
 			.where(eq(roleDefinitions.clubId, meeting.clubId));
-		// An AMBIGUOUS name matches nothing, the same rule `matchRoleDefs`
-		// applies: `role_definitions` has no unique index on (club_id, name), so
-		// two rows can share one, and landing on whichever an unordered
-		// `select()` returned last would attach a member's history to a coin
-		// flip. Falling through to CREATE is wrong too — it would mint a third —
-		// so this is refused outright and the officer renames one.
-		const named = bank.filter((r) => foldRoleName(r.name) === wanted);
-		if (named.length > 1) {
-			throw new Error(
-				`This club has more than one role called "${input.name}". Rename one in club settings first.`,
-			);
+		let attach: (typeof bank)[number] | undefined;
+		if (input.key != null) {
+			// PICKED (#836): by key, never by name. See the docblock.
+			attach = bank.find((r) => r.key === input.key);
+			if (!attach) {
+				throw new Error(
+					`"${input.name}" is no longer one of this club's roles. Reload the page and pick again.`,
+				);
+			}
+			const current = foldRoleName(attach.name);
+			if (declared.some((r) => foldRoleName(r.name) === current)) {
+				throw new Error(`"${attach.name}" is already on this agenda.`);
+			}
+		} else {
+			// An AMBIGUOUS name matches nothing, the same rule `matchRoleDefs`
+			// applies: `role_definitions` has no unique index on (club_id, name),
+			// so two rows can share one, and landing on whichever an unordered
+			// `select()` returned last would attach a member's history to a coin
+			// flip. Falling through to CREATE is wrong too — it would mint a
+			// third — so this is refused outright and the officer renames one. A
+			// picked KEY cannot be ambiguous: `role_definitions_club_key_unique`.
+			const named = bank.filter((r) => foldRoleName(r.name) === wanted);
+			if (named.length > 1) {
+				throw new Error(
+					`This club has more than one role called "${input.name}". Rename one in club settings first.`,
+				);
+			}
+			attach = named[0];
 		}
-		let attach = named[0];
 
 		// A role the club has TURNED OFF (#368) is refused rather than attached,
 		// and this is the one bank flag a declaration does not outrank. `standing`

@@ -13,9 +13,9 @@
 //
 // The assertions are about which of the two paths a click takes, so they read
 // the payload `onAddRole` was called with rather than anything the panel
-// renders afterwards: `addAgendaRole` is find-and-attach-or-create keyed on the
-// NAME (#801), so sending the bank role's own name IS the attach, and sending
-// anything else is the fork.
+// renders afterwards: a picker click sends the bank row's KEY, which
+// `addAgendaRole` resolves by (#836), while the typed box sends a name and
+// takes #801's find-by-name-or-create path — the one that can fork.
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -115,7 +115,7 @@ describe("Roles panel club-bank picker", () => {
 		).toBeTruthy();
 	});
 
-	it("fires onAddRole with the PICKED role's own name, which is the attach path", async () => {
+	it("fires onAddRole with the PICKED role's own key, which is the attach path", async () => {
 		const { onAddRole } = renderPanel([TIMER, CONTESTANT]);
 
 		await userEvent.selectOptions(picker(), "contestant_prepared");
@@ -123,14 +123,14 @@ describe("Roles panel club-bank picker", () => {
 			screen.getByRole("button", { name: /add to agenda/i }),
 		);
 
-		// The bank row's four fields, not the create form's. Three of them the
-		// attach arm will ignore (it reads them off the row it resolved); they
-		// matter only if the club renamed the role since this page loaded, when
-		// the name matches nothing and the create arm runs instead — and then a
-		// four-place speaking Contestant is a far better guess than the form's
-		// one-place Functionary default.
+		// The bank row's KEY, which is what the attach resolves by (#836): the
+		// name was read at page load, and a rename since would otherwise fork the
+		// role or attach whichever role now holds that name. The other fields
+		// come off the bank row too; the attach arm ignores them and reads its
+		// own off the row the key resolved.
 		expect(onAddRole).toHaveBeenCalledTimes(1);
 		expect(onAddRole).toHaveBeenCalledWith({
+			key: "contestant_prepared",
 			name: "Contestant",
 			category: "speaker",
 			defaultCount: 4,
