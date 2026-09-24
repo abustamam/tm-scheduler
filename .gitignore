@@ -11,6 +11,8 @@ dist-ssr
 .vinxi
 __unconfig*
 todos.json
+# scripts/mutate.test.ts's fixture; removed in afterAll, ignored in case a crash leaves it
+scripts/mutate-tmp-*/
 .gstack/
 # /retro writes its weekly snapshots here. Same class as .gstack/ above: local
 # telemetry about how the work went, not about the product. Every other gstack

@@ -27,6 +27,7 @@ Ten coverage traps this repo has actually hit, all worth checking when a number 
 - **A `*.guard.test.ts` is code, and its own bugs are invisible to a green run — MUTATE IT.** These
   guards do string surgery on source (slice a `cn()` argument, find a fn body, walk an import
   block), and that arithmetic goes wrong in both directions while the suite stays green either way.
+  Use `bun run mutate` (`scripts/mutate.sh`) to do it, not an ad-hoc `sed` and `git checkout`.
   Four guards over two days, 2026-08-25/26. The first three were caught by deliberately
   reintroducing the defect and watching which assertions moved; the fourth is the one mutation
   cannot reach, and a later reader found it:
