@@ -793,7 +793,7 @@ function CsvUploadDialog({
 						? ` · ${result.unpaidSkipped} unpaid skipped`
 						: "") +
 					(result.stats.foreignSkipped > 0
-						? ` · ${result.stats.foreignSkipped} on another club's roster skipped`
+						? ` · ${result.stats.foreignSkipped} not on this club's roster skipped`
 						: "") +
 					(result.stats.addressConflicts > 0
 						? ` · ${result.stats.addressConflicts} with a shared email`
@@ -893,11 +893,12 @@ function CsvUploadDialog({
 							{/* Their own lines, never folded into "skipped" above: that
 							    count means a blank name, and a foreign row is a
 							    different reason the admin should be able to see
-							    (#759). Names no club and no person — the importing
+							    (#759, #855). Names no club and no person, and does not
+							    say whether anyone else holds them — the importing
 							    admin has no business learning either. */}
 							{preview.summary.foreignSkipped > 0 ? (
 								<p className="text-xs text-[var(--warning-strong)]">
-									{`${preview.summary.foreignSkipped} row(s) skipped: their member number or email belongs to someone on another club's roster, so they can't be added from this file.`}
+									{`${preview.summary.foreignSkipped} row(s) skipped: their member number or email belongs to someone who is not on this club's roster, so they can't be added from a file.`}
 								</p>
 							) : null}
 							{preview.summary.addressConflicts > 0 ? (

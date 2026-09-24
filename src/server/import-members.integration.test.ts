@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, members, officerTerms, people } from "#/db/schema";
+import { activityLog, clubs, members, officerTerms, people } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
 import {
 	cleanup,
@@ -426,6 +426,15 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.values({ customerId: "PN-RACE", name: "Racing Member" })
 			.returning({ id: people.id });
 		const personId = person?.id ?? "";
+		// Removed from this club earlier, as `applyMemberRemove` records it: a
+		// Person no club holds is matchable only by the club that released them
+		// (#855), and the race below needs the row to match.
+		await testDb.insert(activityLog).values({
+			clubId,
+			action: "member_remove",
+			targetType: "member",
+			detail: { name: "Removed", personId },
+		});
 
 		let winnerId = "";
 		const winner = await openBlockingTx(async (tx) => {
@@ -484,6 +493,15 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.values({ customerId: "PN-FILL", name: "Fill Only" })
 			.returning({ id: people.id });
 		const personId = person?.id ?? "";
+		// Removed from this club earlier, as `applyMemberRemove` records it: a
+		// Person no club holds is matchable only by the club that released them
+		// (#855), and the race below needs the row to match.
+		await testDb.insert(activityLog).values({
+			clubId,
+			action: "member_remove",
+			targetType: "member",
+			detail: { name: "Removed", personId },
+		});
 
 		const winner = await openBlockingTx(async (tx) => {
 			await tx.insert(members).values({
