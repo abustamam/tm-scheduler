@@ -846,6 +846,8 @@ describe.skipIf(!hasTestDb)(
 			const email = `oauth-gone-${SUFFIX}@example.com`;
 			emails.add(email);
 			const cookie = await oauth.signInCookie(loaded, email);
+			// An officer, so the approval that mints the token is allowed (#852).
+			await oauth.joinClub(loaded, cookie, seed.clubId);
 			const accessToken = await oauth.mintAccessToken(loaded, client, cookie);
 			expect((await whoami(accessToken)).status).toBe(200);
 
@@ -974,8 +976,29 @@ describe.skipIf(!hasTestDb)(
 			);
 		});
 
-		it("FORBIDs an OAuth user who is a plain member, exactly as a tmk_ token would", async () => {
+		it("FORBIDs an OAuth token whose owner is no longer an officer, exactly as a tmk_ token would", async () => {
+			// A plain member cannot approve a connection at all (#852; asserted in
+			// `oauth-consent.integration.test.ts`). What remains reachable is a
+			// grant approved while an officer whose term has since ended: the
+			// token outlives the office, and every call must re-check it.
+			const [term] = await testDb
+				.insert(officerTerms)
+				.values({ membershipId: seed.memberId, position: "secretary" })
+				.returning({ id: officerTerms.id });
 			const accessToken = await accessTokenFor("member", seed.memberUserId);
+			const whileOfficer = await readToolResult(
+				await handleMcpRequest(
+					mcpRequest(toolsCall("list_meetings", { clubId: seed.clubId }), {
+						token: accessToken,
+					}),
+				),
+			);
+			expect(whileOfficer.isError, whileOfficer.raw).toBe(false);
+
+			await testDb
+				.update(officerTerms)
+				.set({ termEnd: new Date() })
+				.where(eq(officerTerms.id, term?.id as string));
 			const r = await readToolResult(
 				await handleMcpRequest(
 					mcpRequest(toolsCall("list_meetings", { clubId: seed.clubId }), {

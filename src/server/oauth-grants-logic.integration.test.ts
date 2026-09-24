@@ -18,7 +18,13 @@ import { resolve } from "node:path";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { oauthConsent } from "#/db/schema";
-import { hasTestDb, testDb } from "#/test/db";
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	testDb,
+} from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -95,12 +101,16 @@ describe.skipIf(!hasTestDb)(
 		let loaded: Loaded;
 		let superCookie: string;
 
-		/** A never-seen user, signed in for real. */
+		/** The open club every user here is an admin of — approving needs one (#852). */
+		let club: SeededClub;
+
+		/** A never-seen user, signed in for real, and an officer so they may approve. */
 		async function freshUser(): Promise<{ id: string; cookie: string }> {
 			const email = `grants-user-${SUFFIX}-${emailCount++}@example.com`;
 			emails.add(email);
 			const cookie = await oauth.signInCookie(loaded, email);
-			return { id: await oauth.sessionUserId(loaded, cookie), cookie };
+			const { userId } = await oauth.joinClub(loaded, cookie, club.clubId);
+			return { id: userId, cookie };
 		}
 
 		async function freshClient(label: string): Promise<Client> {
@@ -220,6 +230,7 @@ describe.skipIf(!hasTestDb)(
 			}
 			loaded = await oauth.loadAuthForTest(SUPERADMIN);
 			superCookie = await oauth.signInCookie(loaded, SUPERADMIN);
+			club = await seedClub();
 		});
 
 		afterAll(async () => {
@@ -234,6 +245,8 @@ describe.skipIf(!hasTestDb)(
 				clients.map((c) => c.clientId),
 				[...emails],
 			);
+			if (club)
+				await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 			loaded.restoreEnv();
 		});
 

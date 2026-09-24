@@ -8,6 +8,7 @@
 // can see.
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NOT_AN_OFFICER_MESSAGE } from "#/lib/oauth-connector-clients";
 import type { ConsentClientLookup } from "#/server/oauth-consent-logic";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
@@ -73,12 +74,18 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-const signedIn = (name: string | null): ConsentClientLookup => ({
+const signedIn = (
+	name: string | null,
+	eligible = true,
+): ConsentClientLookup => ({
 	signedIn: true,
 	userId: "user-a",
 	email: "officer@example.com",
+	eligible,
 	client: name === null ? null : { clientId: "client-1", name },
 });
+
+const NOT_AN_OFFICER_COPY = NOT_AN_OFFICER_MESSAGE;
 
 describe("/oauth/consent", () => {
 	it("names the client from the server lookup and the account approving", async () => {
@@ -222,6 +229,44 @@ describe("/oauth/consent", () => {
 			(screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement)
 				.disabled,
 		).toBe(false);
+	});
+
+	describe("officers only (#852)", () => {
+		it("offers a non-officer Decline only, and says why", async () => {
+			reply(200, {
+				redirect: true,
+				url: "https://client.example/cb?error=access_denied",
+			});
+			await mount(signedIn("Claude", false));
+			expect(
+				screen.getByRole("heading", { name: "Connect Claude?" }),
+			).toBeTruthy();
+			expect(screen.getByRole("alert").textContent).toBe(NOT_AN_OFFICER_COPY);
+			expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+			// Decline still reaches the provider, so the app can stop waiting.
+			fireEvent.click(screen.getByRole("button", { name: "Decline" }));
+			await screen.findByRole("heading", { name: "Request declined" });
+			expect(postedBody()).toMatchObject({ accept: false });
+		});
+
+		it("turns a not_an_officer refusal into the same Decline-only card", async () => {
+			// The loader said eligible, then the office ended before Approve.
+			reply(403, {
+				error: "not_an_officer",
+				error_description: NOT_AN_OFFICER_MESSAGE,
+			});
+			await mount(signedIn("Claude"));
+			fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+			expect((await screen.findByRole("alert")).textContent).toBe(
+				NOT_AN_OFFICER_COPY,
+			);
+			expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+			expect(
+				(screen.getByRole("button", { name: "Decline" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false);
+			expect(assignLocation).not.toHaveBeenCalled();
+		});
 	});
 
 	it("renders an error state, not a throw, for a malformed query", async () => {

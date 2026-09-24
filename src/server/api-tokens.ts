@@ -7,8 +7,8 @@ import {
 	listApiTokens,
 	revokeApiToken,
 } from "./api-tokens-logic";
+import { mayUseConnector } from "./connector-eligibility";
 import { requireUser } from "./guards";
-import { adminClubsForUser } from "./mcp/authz-logic";
 
 /**
  * Personal access tokens for `/api/mcp` (#773), managed on `/me`.
@@ -28,8 +28,8 @@ import { adminClubsForUser } from "./mcp/authz-logic";
 export interface ApiTokenState {
 	/**
 	 * The user is an active admin, or holds an open officer term, in at least one
-	 * club. Resolved SERVER-side through the same helper `/api/mcp` authorizes
-	 * with, rather than re-derived on the client: the route context carries
+	 * club (`mayUseConnector`, the rule the consent screen applies too).
+	 * Resolved SERVER-side, rather than re-derived on the client: the route context carries
 	 * `officerPositions` for the ACTIVE club only, so a client-side check would
 	 * hide the section from an officer whose office is in another club.
 	 */
@@ -41,14 +41,11 @@ export interface ApiTokenState {
 export const getApiTokenState = createServerFn({ method: "GET" }).handler(
 	async (): Promise<ApiTokenState> => {
 		const user = await requireUser();
-		const [clubs, tokens] = await Promise.all([
-			adminClubsForUser(user.id),
+		const [eligible, tokens] = await Promise.all([
+			mayUseConnector(user.id),
 			listApiTokens(user.id),
 		]);
-		return {
-			eligible: clubs.some((c) => !c.archived),
-			tokens,
-		};
+		return { eligible, tokens };
 	},
 );
 
@@ -65,8 +62,7 @@ export const generateApiToken = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }): Promise<CreatedApiToken> => {
 		const user = await requireUser();
-		const clubs = await adminClubsForUser(user.id);
-		if (!clubs.some((c) => !c.archived)) {
+		if (!(await mayUseConnector(user.id))) {
 			throw new Error(
 				"Only a club admin or officer can create an access token.",
 			);

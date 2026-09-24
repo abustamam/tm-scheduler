@@ -1,3 +1,4 @@
+import { cimd } from "@better-auth/cimd";
 import { mcp } from "@better-auth/mcp";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -11,6 +12,7 @@ import { jwt, magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
 import { recordAuthInitFailure } from "#/lib/auth-init-status";
+import { fetchClientMetadataResource } from "#/lib/cimd-transport";
 import { captureDevMagicLink, isDevLoginEnabled } from "#/lib/dev-login";
 import { sendEmail } from "#/lib/email";
 import {
@@ -18,6 +20,12 @@ import {
 	buildMagicLinkEmail,
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
+import {
+	isCimdClientIdAllowed,
+	NOT_AN_OFFICER,
+	NOT_AN_OFFICER_MESSAGE,
+	unlistedCimdClientId,
+} from "#/lib/oauth-connector-clients";
 import {
 	CONSENT_ACCOUNT_CHANGED,
 	consentAccountMismatch,
@@ -31,6 +39,7 @@ import {
 	mcpResourceUrl,
 } from "#/lib/well-known-forward";
 import { linkPersonToUser } from "#/server/account-link-logic";
+import { mayUseConnector } from "#/server/connector-eligibility";
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
@@ -67,8 +76,38 @@ export const auth = betterAuth({
 	// A and approved after signing in as B in another tab connected B while
 	// still reading "Signed in as A". `#/lib/oauth-consent-binding` has the
 	// rule; `/oauth/consent` sends the id it displayed.
+	//
+	// #852 — and only an officer may APPROVE. `mayUseConnector` is the rule;
+	// the consent screen reads the same function to hide Approve, and this is
+	// what holds when the page is bypassed. A decline is always allowed. The
+	// gate runs here and nowhere else: a person who approved a client earlier
+	// gets later codes without the consent screen (provider behaviour), and
+	// that is safe because `/api/mcp` re-resolves their clubs on every call.
+	//
+	// #852 — and first, on EVERY auth request: refuse unlisted metadata
+	// client_ids before resolution. A URL-shaped client id that is not in
+	// `CIMD_ALLOWED_CLIENT_IDS` is answered here, with the provider's own
+	// unknown-client error, so it never reaches the CIMD resolver — neither
+	// its fetch nor the shared fetch limits that the allowlisted client's
+	// resolutions draw on. `unlistedCimdClientId` names every place a client
+	// id is read from.
 	hooks: {
 		before: createAuthMiddleware(async (ctx) => {
+			if (
+				unlistedCimdClientId({
+					query: ctx.query,
+					body: ctx.body,
+					params: ctx.params,
+					authorization:
+						ctx.headers?.get("authorization") ??
+						ctx.request?.headers.get("authorization"),
+				}) !== null
+			) {
+				throw new APIError("BAD_REQUEST", {
+					error: "invalid_client",
+					error_description: "unknown client",
+				});
+			}
 			if (ctx.path !== "/oauth2/consent") return;
 			const session = await getSessionFromCtx(ctx);
 			// No session is not an account CHANGE: the endpoint's own session
@@ -80,6 +119,15 @@ export const auth = betterAuth({
 					error: CONSENT_ACCOUNT_CHANGED,
 					error_description:
 						"The signed-in account changed since this page was opened.",
+				});
+			}
+			if (
+				ctx.body?.accept === true &&
+				!(await mayUseConnector(session.user.id))
+			) {
+				throw new APIError("FORBIDDEN", {
+					error: NOT_AN_OFFICER,
+					error_description: NOT_AN_OFFICER_MESSAGE,
 				});
 			}
 		}),
@@ -205,8 +253,9 @@ export const auth = betterAuth({
 		// Dynamic Client Registration is deliberately OFF: neither
 		// `allowDynamicClientRegistration` nor
 		// `allowUnauthenticatedClientRegistration` is passed, so the registration
-		// endpoint is absent from discovery entirely. claude.ai is one
-		// hand-registered confidential client. ADR-0027 has the reasoning.
+		// endpoint is absent from discovery entirely. Hosted Claude identifies
+		// itself by URL instead (`cimd()` below, #852); a confidential client is
+		// still hand-registered by the maintainer. ADR-0027 has the reasoning.
 		//
 		// Both pages are this app's (#843). The provider sends each a SIGNED copy
 		// of the authorize query, not a `?redirect=`: `/signin` turns it back into
@@ -247,6 +296,29 @@ export const auth = betterAuth({
 			// `requireSuperadmin` has always done, and the positive case is now
 			// asserted beside the negative one.
 			clientPrivileges: async ({ user }) => isSuperadminUser(user?.id),
+		}),
+		// #852 — Client ID Metadata Documents: hosted Claude sends an `https://`
+		// URL as its `client_id`, and the provider fetches the document there
+		// instead of anyone registering a client or sharing a secret. Installing
+		// it is also what advertises `client_id_metadata_document_supported` and
+		// the `none` token auth method claude.ai looks for before choosing CIMD.
+		//
+		// After `mcp()`, because it extends the provider `mcp()` installs, and
+		// before `tanstackStartCookies()`, which must stay last.
+		//
+		// `isMetadataDocumentUrlAllowed` runs BEFORE any fetch, and admits only
+		// `CIMD_ALLOWED_CLIENT_IDS` by exact match — otherwise this is an
+		// endpoint that fetches whatever URL a caller names and writes a client
+		// row from it. The `hooks.before` above applies the same allowlist
+		// earlier, before the client is resolved; this is the second line. The transport goes through `#/lib/cimd-transport` so tests
+		// can serve a fixture; it resolves once, public addresses only, pinned,
+		// no redirects. `onClientCreated` and `originBoundFields` are left at
+		// their defaults on purpose: nothing here assigns a CIMD client trust
+		// (no `skip_consent`, which would exempt it from Disconnect, #851).
+		cimd({
+			fetchClientMetadataResource,
+			metadataProfile: "mcp-2026-07-28",
+			isMetadataDocumentUrlAllowed: isCimdClientIdAllowed,
 		}),
 		// LAST, and Better Auth logs a warning at startup if it is not: a cookie
 		// integration plugin forwards `Set-Cookie` into the framework's cookie

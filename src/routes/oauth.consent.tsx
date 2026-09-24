@@ -29,6 +29,11 @@
  *   the copy for both says so rather than "nothing was connected".
  * - **Be framed.** One-click Approve is a clickjacking target, so the document
  *   is served with `X-Frame-Options: DENY` and `frame-ancestors 'none'`.
+ * - **Offer Approve to someone who may not approve.** Connecting is for club
+ *   officers for now (#852, `mayUseConnector`). The loader says so up front
+ *   (`eligible`), and the consent hook in `src/lib/auth.ts` refuses the POST
+ *   with `not_an_officer` whatever this page shows; both land on the same
+ *   Decline-only card.
  */
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -47,6 +52,10 @@ import {
 	reloadLocation,
 	replaceLocation,
 } from "#/lib/browser-location";
+import {
+	NOT_AN_OFFICER,
+	NOT_AN_OFFICER_MESSAGE,
+} from "#/lib/oauth-connector-clients";
 import {
 	CONSENT_ACCOUNT_CHANGED,
 	CONSENT_ACCOUNT_FIELD,
@@ -104,6 +113,9 @@ function OAuthConsent() {
 	const [busy, setBusy] = useState<"accept" | "deny" | null>(null);
 	const [outcome, setOutcome] = useState<Outcome | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	// The server refused an approval as not-an-officer: the loader's answer was
+	// stale (an office ended since the page loaded), so show what it now says.
+	const [refusedAsNonOfficer, setRefusedAsNonOfficer] = useState(false);
 
 	const signedOut = lookup !== null && !lookup.signedIn;
 	useEffect(() => {
@@ -154,6 +166,13 @@ function OAuthConsent() {
 		} | null;
 		if (body?.error === CONSENT_ACCOUNT_CHANGED) {
 			setOutcome({ kind: "account-changed" });
+			return;
+		}
+		if (accept && body?.error === NOT_AN_OFFICER) {
+			// A 403 the hook raises before the provider writes anything, so
+			// Decline is still meaningful and still offered.
+			setRefusedAsNonOfficer(true);
+			setBusy(null);
 			return;
 		}
 		const next = body?.url ?? body?.redirect_uri ?? null;
@@ -212,6 +231,30 @@ function OAuthConsent() {
 	const identified = lookup.client !== null;
 	const appName = lookup.client?.name ?? null;
 	const userId = lookup.userId;
+	if (!lookup.eligible || refusedAsNonOfficer) {
+		return (
+			<ConsentShell
+				title={appName ? `Connect ${appName}?` : "Connect an app?"}
+				description={`Signed in as ${lookup.email}.`}
+			>
+				<CardContent className="space-y-3 text-sm">
+					<p role="alert">{NOT_AN_OFFICER_MESSAGE}</p>
+					<p className="text-muted-foreground">
+						Decline to let {appName ?? "the app"} know it wasn't connected.
+					</p>
+				</CardContent>
+				<CardFooter className="flex flex-col gap-2 sm:flex-row-reverse">
+					<Button
+						className="w-full sm:w-auto"
+						disabled={busy !== null}
+						onClick={() => void decide(false, userId)}
+					>
+						{busy === "deny" ? "Declining…" : "Decline"}
+					</Button>
+				</CardFooter>
+			</ConsentShell>
+		);
+	}
 	return (
 		<ConsentShell
 			title={appName ? `Connect ${appName}?` : "Connect an app?"}
