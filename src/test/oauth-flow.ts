@@ -12,7 +12,8 @@
  *   1. a real magic-link sign-in (session cookie),
  *   2. `/oauth2/create-client` as a superadmin (the registration script's path),
  *   3. `/oauth2/authorize` with PKCE — which answers with the consent redirect,
- *   4. `/oauth2/consent` with the signed query that redirect carried,
+ *   4. `/oauth2/consent` with the signed query that redirect carried — as an
+ *      officer, since only one may approve (#852; see `joinClub`),
  *   5. `/oauth2/token`, `client_secret_post`, exactly as claude.ai redeems it.
  *
  * It needs `#/lib/auth` loaded against the test database, which the caller
@@ -21,6 +22,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
+import { members, people } from "#/db/schema";
 import { AUTH_BASE_PATH, MCP_RESOURCE_PATH } from "#/lib/well-known-forward";
 import { testDb } from "#/test/db";
 
@@ -296,6 +298,44 @@ export async function sessionUserId(
 	});
 	if (!session) throw new Error("cookie carries no session");
 	return session.user.id;
+}
+
+/**
+ * Give a session's user an ACTIVE membership in `clubId`, as an admin by
+ * default. Approving a connection is for officers only (#852,
+ * `mayUseConnector`), so every suite that approves one signs its user in and
+ * then calls this. The Person and membership go with the club in `cleanup()`;
+ * deleting the user only nulls `people.user_id`.
+ */
+export async function joinClub(
+	loaded: LoadedAuth,
+	cookie: string,
+	clubId: string,
+	clubRole: "admin" | "member" = "admin",
+): Promise<{ userId: string; memberId: string }> {
+	const session = await loaded.auth.api.getSession({
+		headers: new Headers({ cookie }),
+	});
+	if (!session) throw new Error("cookie carries no session");
+	const { id: userId, email } = session.user;
+	const [person] = await testDb
+		.insert(people)
+		.values({ name: "OAuth Test User", email, userId })
+		.returning({ id: people.id });
+	if (!person) throw new Error("failed to insert person");
+	const [member] = await testDb
+		.insert(members)
+		.values({
+			clubId,
+			personId: person.id,
+			name: "OAuth Test User",
+			email,
+			clubRole,
+			status: "active",
+		})
+		.returning({ id: members.id });
+	if (!member) throw new Error("failed to insert membership");
+	return { userId, memberId: member.id };
 }
 
 /** What `/oauth2/token` answers; `refresh_token` only with `offline_access`. */

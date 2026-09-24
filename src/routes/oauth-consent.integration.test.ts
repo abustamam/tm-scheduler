@@ -31,7 +31,7 @@ import {
 	it,
 	vi,
 } from "vitest";
-import { clubs, members, officerTerms, people } from "#/db/schema";
+import { clubs, officerTerms } from "#/db/schema";
 import { fetchClientMetadataResource } from "#/lib/cimd-transport";
 import { magicLinkCallbackURL } from "#/lib/magic-link-callback";
 import { oauthAuthorizeContinuation } from "#/lib/oauth-continuation";
@@ -139,38 +139,11 @@ describe.skipIf(!hasTestDb)(
 			loaded.restoreEnv();
 		});
 
-		/**
-		 * Give the session's user an ACTIVE membership in `clubId` — as an admin
-		 * by default, which is what `mayUseConnector` admits. `cleanup` removes
-		 * the membership and the Person with the club.
-		 */
-		async function joinClub(
+		const joinClub = (
 			cookie: string,
 			clubId: string,
 			clubRole: "admin" | "member" = "admin",
-		): Promise<{ userId: string; memberId: string }> {
-			const session = await loaded.auth.api.getSession({
-				headers: new Headers({ cookie }),
-			});
-			if (!session) throw new Error("cookie carries no session");
-			const { id: userId, email } = session.user;
-			const [person] = await testDb
-				.insert(people)
-				.values({ name: "Consent User", email, userId })
-				.returning({ id: people.id });
-			const [member] = await testDb
-				.insert(members)
-				.values({
-					clubId,
-					personId: person?.id as string,
-					name: "Consent User",
-					email,
-					clubRole,
-					status: "active",
-				})
-				.returning({ id: members.id });
-			return { userId, memberId: member?.id as string };
-		}
+		) => oauth.joinClub(loaded, cookie, clubId, clubRole);
 
 		/** A fresh user, signed in, who is an admin of the open club. */
 		async function officerCookie(): Promise<{ email: string; cookie: string }> {
