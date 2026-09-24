@@ -681,12 +681,25 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				memberId: aMemberId,
 				actorMemberId: null,
 			});
-			second.catch(() => {});
-			await waitForLockWait('delete from "members"', first.pid);
-			await removeFrom(attackerClub.clubId, p);
-			await first.commit();
+			// Settled into a value up front, so the promise never dangles
+			// whichever way the steps below end.
+			const outcome = second.then(
+				() => null,
+				(e: unknown) => e,
+			);
+			try {
+				await waitForLockWait('delete from "members"', first.pid);
+				await removeFrom(attackerClub.clubId, p);
+			} finally {
+				// Released on every path: a blocker left open keeps its row lock and
+				// its connection, wedges afterEach, and leaks this test's fixtures.
+				await first.commit();
+				await outcome;
+			}
 
-			await expect(second).rejects.toThrow("Member not found.");
+			const err = await outcome;
+			expect(err).toBeInstanceOf(Error);
+			expect((err as Error).message).toBe("Member not found.");
 			expect(await removalsNaming(victimClub.clubId, p)).toBe(0);
 			const rows = [row({ customerId: `PN-S-${n}`, name: "Shared" })];
 			expect(
