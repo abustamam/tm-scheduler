@@ -235,6 +235,13 @@ describe("meeting template and agenda-editor server fns", () => {
 		expect(roleAdd, "name must carry a length bound").toMatch(
 			/name: z[\s\S]{0,120}?\.max\(MAX_TEMPLATE_LABEL_CHARS \* 2\)/,
 		);
+		// #836's picked bank key: optional, but bounded like every other string
+		// that reaches the handler. `[^,]`, not `[\s\S]`: the window must stop
+		// at the field's own end, or it reaches `name`'s bound just below and
+		// passes with this one deleted.
+		expect(roleAdd, "key must carry a length bound").toMatch(
+			/key: z[^,]{0,120}?\.max\(MAX_TEMPLATE_LABEL_CHARS \* 2\)/,
+		);
 		expect(roleAdd, "defaultCount must be an int in range").toMatch(
 			/defaultCount: z[\s\S]{0,160}?\.int\(\)[\s\S]{0,160}?\.max\(MAX_ROLE_REPEAT_SLOTS\)/,
 		);

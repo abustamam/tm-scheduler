@@ -26,6 +26,7 @@ import {
 	speeches,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	CONVERT_NAME_CLASH_MESSAGE,
 	LINK_ALREADY_JOINED_MESSAGE,
@@ -388,6 +389,159 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(res.meetingId).toBeNull();
 			expect(res.attendanceRecorded).toBe(false);
 			expect(await attendanceForGuest(res.guestId)).toHaveLength(0);
+		});
+	});
+
+	/**
+	 * #858: the archive gate is read UNDER the club lock, not only before the
+	 * transaction.
+	 *
+	 * The pre-transaction `assertClubNotArchived` is check-then-act, so a serial
+	 * "archive, then capture" test passes with or without the in-lock read — the
+	 * pre-check alone refuses it. Only an interleaving can tell them apart: the
+	 * takedown's `UPDATE clubs` holds the row, uncommitted, so the pre-check reads
+	 * `archived_at` as null and lets the visitor through; the capture then parks on
+	 * its own club lock; and only then does the takedown commit.
+	 */
+	describe("archive gate under the club lock (#858)", () => {
+		/**
+		 * Archive the club while `input`'s capture is in flight; resolve to the
+		 * capture's error message, or null if it succeeded.
+		 *
+		 * Returns the OUTCOME rather than the promise so each test checks the DATA
+		 * first: with the in-lock gate removed, the capture never blocks and commits
+		 * its write, and the assertion that fails should be the one about the row it
+		 * wrote, not a lock-wait timeout. Hence the race: the takedown commits once
+		 * the capture is parked on the club lock (the correct path) or once the
+		 * capture has settled without ever parking (the broken one). A capture that
+		 * reports "archived" can only have read `archived_at` under the lock, since
+		 * the pre-check ran while the takedown was still uncommitted.
+		 */
+		async function archiveMidCapture(
+			input: Parameters<typeof captureGuestVisit>[0],
+		): Promise<string | null> {
+			const writer = await openBlockingTx(async (tx) => {
+				await tx
+					.update(clubs)
+					.set({ archivedAt: new Date() })
+					.where(eq(clubs.id, seed.clubId));
+			});
+			const outcome = captureGuestVisit(input).then(
+				() => null,
+				(e: unknown) => (e instanceof Error ? e.message : String(e)),
+			);
+			try {
+				await Promise.race([
+					waitForLockWait('from "clubs"', writer.pid).catch(() => {}),
+					outcome,
+				]);
+			} finally {
+				await writer.commit();
+			}
+			return outcome;
+		}
+
+		it("a club archived after the pre-check collects no NEW guest", async () => {
+			const email = `late-${randomUUID()}@example.com`;
+			const outcome = await archiveMidCapture({
+				clubId: seed.clubId,
+				name: "Late Visitor",
+				email,
+				phone: uniquePhone(),
+			});
+			expect(
+				await testDb
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.clubId, seed.clubId)),
+			).toHaveLength(0);
+			expect(outcome).toBe(CLUB_ARCHIVED_MESSAGE);
+		});
+
+		it("a RETURNING guest's contact fill-in and visit are refused too", async () => {
+			const meetingId = await seedMeetingInProgress(seed.clubId);
+			const email = `back-${randomUUID()}@example.com`;
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Returning Visitor",
+				email,
+			});
+			// Nothing recorded yet against today's meeting beyond the first visit's
+			// own row; drop it so a second write would be observable.
+			await testDb
+				.delete(meetingAttendance)
+				.where(eq(meetingAttendance.guestId, first.guestId));
+
+			const outcome = await archiveMidCapture({
+				clubId: seed.clubId,
+				name: "Returning Visitor",
+				email,
+				phone: uniquePhone(),
+			});
+
+			const [row] = await testDb
+				.select({ phone: guests.phone })
+				.from(guests)
+				.where(eq(guests.id, first.guestId));
+			expect(row?.phone).toBeNull();
+			expect(
+				await testDb
+					.select({ id: meetingAttendance.id })
+					.from(meetingAttendance)
+					.where(
+						and(
+							eq(meetingAttendance.meetingId, meetingId),
+							eq(meetingAttendance.guestId, first.guestId),
+						),
+					),
+			).toHaveLength(0);
+			expect(outcome).toBe(CLUB_ARCHIVED_MESSAGE);
+		});
+
+		it("a guest on file by PHONE gets no new EMAIL filled in either", async () => {
+			const meetingId = await seedMeetingInProgress(seed.clubId);
+			const phone = uniquePhone();
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Phone Only Visitor",
+				phone,
+			});
+			await testDb
+				.delete(meetingAttendance)
+				.where(eq(meetingAttendance.guestId, first.guestId));
+
+			// Same name + same phone dedups onto the existing row (#488), so this is
+			// the returning path — it would fill the missing email in.
+			const outcome = await archiveMidCapture({
+				clubId: seed.clubId,
+				name: "Phone Only Visitor",
+				phone,
+				email: `new-${randomUUID()}@example.com`,
+			});
+
+			const [row] = await testDb
+				.select({ email: guests.email })
+				.from(guests)
+				.where(eq(guests.id, first.guestId));
+			expect(row?.email).toBeNull();
+			expect(
+				await testDb
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.clubId, seed.clubId)),
+			).toHaveLength(1);
+			expect(
+				await testDb
+					.select({ id: meetingAttendance.id })
+					.from(meetingAttendance)
+					.where(
+						and(
+							eq(meetingAttendance.meetingId, meetingId),
+							eq(meetingAttendance.guestId, first.guestId),
+						),
+					),
+			).toHaveLength(0);
+			expect(outcome).toBe(CLUB_ARCHIVED_MESSAGE);
 		});
 	});
 

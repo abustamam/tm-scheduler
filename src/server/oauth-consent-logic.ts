@@ -9,6 +9,7 @@
  * actually issue a code to.
  */
 import { auth } from "#/lib/auth";
+import { mayUseConnector } from "./connector-eligibility";
 
 export type ConsentClientLookup =
 	| { signedIn: false }
@@ -22,6 +23,12 @@ export type ConsentClientLookup =
 			userId: string;
 			/** Shown so a cross-device sign-in names the account. */
 			email: string;
+			/**
+			 * Whether this person may approve a connection at all (#852,
+			 * `mayUseConnector`). The page offers only Decline when false; the
+			 * consent hook in `src/lib/auth.ts` refuses the approval regardless.
+			 */
+			eligible: boolean;
 			/** Null when the provider could not identify the client. */
 			client: { clientId: string; name: string | null } | null;
 	  };
@@ -42,6 +49,7 @@ export async function lookupConsentClient(
 ): Promise<ConsentClientLookup> {
 	const session = await auth.api.getSession({ headers });
 	if (!session) return { signedIn: false };
+	const eligible = await mayUseConnector(session.user.id);
 	try {
 		const client = await auth.api.getOAuthClientPublic({
 			query: { client_id: clientId },
@@ -51,6 +59,7 @@ export async function lookupConsentClient(
 			signedIn: true,
 			userId: session.user.id,
 			email: session.user.email,
+			eligible,
 			client: {
 				clientId: client.client_id,
 				name: client.client_name ?? null,
@@ -62,6 +71,7 @@ export async function lookupConsentClient(
 			signedIn: true,
 			userId: session.user.id,
 			email: session.user.email,
+			eligible,
 			client: null,
 		};
 	}

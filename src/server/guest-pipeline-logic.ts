@@ -33,6 +33,7 @@ import {
 	speeches,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { isAtMeetingNow } from "#/lib/guest-book-window";
 import {
 	CONVERT_NAME_CLASH_MESSAGE,
@@ -479,6 +480,44 @@ export interface CaptureGuestResult {
 }
 
 /**
+ * Lock the club row and refuse an archived club, in ONE statement (#858).
+ *
+ * `CODING_STANDARDS.md`: "Where a write already holds a club lock, gate INSIDE
+ * it". `archiveClub` sets `clubs.archived_at` with an `UPDATE`, and an `UPDATE`
+ * waits on both lock strengths used here, so once this returns the club cannot
+ * be archived until the transaction ends — and under READ COMMITTED a row lock
+ * that WAITED re-reads the row version it was granted, so a takedown that
+ * committed while we queued is seen here rather than missed.
+ *
+ * Two strengths, on purpose:
+ * - `update` on the CREATE path, which already took `FOR UPDATE` to serialise
+ *   the sign-up throttle's COUNT. Same statement, now also answering "archived?".
+ * - `share` on the RETURNING-guest path, which fills in contact details on an
+ *   existing row and records a visit — still PII landing in a taken-down club,
+ *   so it is gated too. It takes SHARE rather than UPDATE because it needs only
+ *   to hold the takedown off. It still WAITS behind an in-flight new-guest
+ *   `FOR UPDATE` and behind any club-settings `UPDATE` (harmless at guest-book
+ *   volume), but returning guests do not queue behind each other, and SHARE
+ *   coexists with the `FOR KEY SHARE` every foreign-key insert takes on the club
+ *   row. `FOR UPDATE` here would conflict with those: a convert that holds this
+ *   guest's row lock and then inserts a `members` row would wait on us while we
+ *   wait on its guest row — a deadlock this path does not have today.
+ */
+async function lockOpenClub(
+	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+	clubId: string,
+	strength: "update" | "share",
+): Promise<void> {
+	const [club] = await tx
+		.select({ archivedAt: clubs.archivedAt })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.for(strength);
+	if (!club) throw new Error("Club not found.");
+	if (isClubArchived(club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
+}
+
+/**
  * Guest-book capture (the public #239 front door). Create-or-find a club guest,
  * then record a visit against the club's current/nearest meeting.
  *
@@ -501,6 +540,11 @@ export async function captureGuestVisit(
 	// it returns empty. A taken-down club must not collect contact details, and
 	// "your name is required" is the wrong first answer to give someone signing
 	// the guest book of a club that no longer exists.
+	//
+	// This is the FAST answer, not the gate: it is check-then-act, so a club
+	// archived between here and the insert would still collect the row. The
+	// authoritative read is `lockOpenClub`, inside the transaction, on both write
+	// paths (#858).
 	await assertClubNotArchived(input.clubId);
 	const name = input.name.trim();
 	if (!name) throw new Error("Please enter your name.");
@@ -542,6 +586,8 @@ export async function captureGuestVisit(
 		if (existing) {
 			guestId = existing.id;
 			created = false;
+			// Gate before the contact fill-in and the attendance row (#858).
+			await lockOpenClub(tx, input.clubId, "share");
 			// Fill in contact the returning guest supplied but we didn't have; keep
 			// their name and stage untouched.
 			await tx
@@ -561,9 +607,8 @@ export async function captureGuestVisit(
 			// cleared a limit of 60. `FOR UPDATE` serialises signups per club, and
 			// under READ COMMITTED the COUNT below takes a fresh snapshot once the
 			// lock is granted, so it sees the rows the requests ahead committed.
-			await tx.execute(
-				sql`SELECT id FROM clubs WHERE id = ${input.clubId} FOR UPDATE`,
-			);
+			// The same locked read is the archive gate (#858).
+			await lockOpenClub(tx, input.clubId, "update");
 			const since = new Date(Date.now() - GUEST_BOOK_WINDOW_MS);
 			const [recent] = await tx
 				.select({ n: count() })

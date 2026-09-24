@@ -46,6 +46,13 @@ const ISSUER = `${ORIGIN}${AUTH_BASE_PATH}`;
 const SUFFIX = randomBytes(4).toString("hex");
 const PROBE_CLIENT_NAME = `unauthorized probe ${SUFFIX}`;
 const ALLOWED_CLIENT_NAME = `superadmin probe ${SUFFIX}`;
+const REGISTER_PROBE_NAME = `dcr probe ${SUFFIX}`;
+/** Every client name this file POSTs, which is what its row counts are scoped to. */
+const PROBE_NAMES = [
+	PROBE_CLIENT_NAME,
+	ALLOWED_CLIENT_NAME,
+	REGISTER_PROBE_NAME,
+];
 const SUPERADMIN_PROBE_EMAIL = `oauth-admin-${SUFFIX}@example.com`;
 /** Every user this file signs in, so `afterAll` deletes its own rows and no others. */
 const seededEmails = new Set<string>();
@@ -96,7 +103,7 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		// them — and vitest runs test FILES in parallel against one `tm_test`, so
 		// an unscoped delete would take a neighbouring suite's in-flight rows.
 		await testDb.execute(
-			sql`delete from oauth_client where name in (${PROBE_CLIENT_NAME}, ${ALLOWED_CLIENT_NAME})`,
+			sql`delete from oauth_client where name in (${PROBE_CLIENT_NAME}, ${ALLOWED_CLIENT_NAME}, ${REGISTER_PROBE_NAME})`,
 		);
 		// Signing in mints a `user`, a `session` and a `verification`. The first
 		// draft cleaned up only the client row — which the test two lines above
@@ -174,6 +181,19 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		expect(body.token_endpoint).toBe(`${ISSUER}/oauth2/token`);
 	});
 
+	it("advertises Client ID Metadata Documents and public clients — what makes claude.ai choose CIMD (#852)", async () => {
+		// claude.ai picks CIMD only when BOTH are present; with either missing it
+		// falls back to Dynamic Client Registration, which is off here, and the
+		// connection fails. The confidential methods stay, for the hand-registered
+		// client. That `registration_endpoint` is still absent is the case below.
+		const body = await (await get(AUTH_SERVER)).json();
+		expect(body.client_id_metadata_document_supported).toBe(true);
+		expect(body.token_endpoint_auth_methods_supported).toContain("none");
+		expect(body.token_endpoint_auth_methods_supported).toContain(
+			"client_secret_post",
+		);
+	});
+
 	it("answers the issuer-path-inserted alias with a byte-identical document", async () => {
 		// Not "also 200": a client that discovers through the alias and a client
 		// that discovers through the bare path must be configuring themselves
@@ -205,7 +225,7 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
-					client_name: "unauthorized probe",
+					client_name: REGISTER_PROBE_NAME,
 				}),
 			}),
 		);
@@ -456,9 +476,14 @@ describe("the /.well-known/$ route is wired to the forwarder", () => {
 	});
 });
 
+/**
+ * `oauth_client` rows carrying one of THIS run's probe names. Scoped because
+ * vitest runs files in parallel against one database and other suites register
+ * clients of their own: an unscoped count moves under this file's feet.
+ */
 async function countOauthClients(): Promise<number> {
 	const rows = await testDb.execute<{ count: string }>(
-		sql`select count(*)::text as count from oauth_client`,
+		sql`select count(*)::text as count from oauth_client where name in (${PROBE_NAMES[0]}, ${PROBE_NAMES[1]}, ${PROBE_NAMES[2]})`,
 	);
 	return Number(rows.rows[0]?.count ?? "-1");
 }
