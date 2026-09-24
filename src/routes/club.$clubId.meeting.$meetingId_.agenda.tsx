@@ -13,14 +13,24 @@
 // directly on the club shell (`club.$clubId.tsx`) instead — the same shape
 // `club.$clubId.roles-guide.tsx` uses for an in-chrome standalone page.
 //
-// `$meetingId` here is always the meeting's raw uuid, not a club-local-date
-// KEY: `getAgendaDraft` (and every other Task 6-8 server fn) takes a bare
-// uuid, and the "Edit agenda" button below wires `meetingId: meeting.id`, not
-// a key. `resolveMeetingKey` also accepts a raw uuid, so a redirect back to
-// the canonical meeting route with the same value still resolves correctly.
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+// `$meetingId` is a URL KEY like every other meeting sub-route: a club-local
+// date, a date-HHmm, or a uuid (#877). The "Edit agenda" button happens to wire
+// `meetingId: meeting.id`, but a person can type, bookmark or share the date
+// form, and that used to reach `getAgendaDraft` — which takes a bare uuid — and
+// fail its validator with a 500. So the loader resolves the key FIRST, through
+// the same resolver the meeting page uses, and every server call below takes the
+// RESOLVED uuid off the loader (`draft.meetingId`), never the URL segment. A key
+// that names no meeting is `notFound()`, rendered as the meeting-not-found page.
+import {
+	createFileRoute,
+	notFound,
+	redirect,
+	useRouter,
+} from "@tanstack/react-router";
 import { AgendaEditor } from "#/components/agenda/agenda-editor";
 import { BackLink } from "#/components/back-link";
+import { MeetingNotFound } from "#/components/meeting-not-found";
+import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	addAgendaRoleFn,
 	addAgendaRowFn,
@@ -31,6 +41,7 @@ import {
 	removeAgendaRowFn,
 	updateAgendaRowFn,
 } from "#/server/meeting-agenda-edit";
+import { resolveMeetingKeyForUser } from "#/server/meeting-key";
 
 export const Route = createFileRoute(
 	"/club/$clubId/meeting/$meetingId_/agenda",
@@ -63,10 +74,16 @@ export const Route = createFileRoute(
 			});
 		}
 	},
-	loader: async ({ params }) => {
-		const draft = await getAgendaDraft({
-			data: { meetingId: params.meetingId },
+	loader: async ({ params, context }) => {
+		// Club-scoped by the shell's resolved uuid, so a uuid from another club
+		// is not-found here rather than an editor for someone else's meeting.
+		const { meetingId } = await resolveMeetingKeyForUser({
+			data: { clubId: context.clubUuid, key: params.meetingId },
+		}).catch((err) => {
+			if (isMeetingNotFoundError(err)) throw notFound();
+			throw err;
 		});
+		const draft = await getAgendaDraft({ data: { meetingId } });
 		// Null now means the meeting does not exist. It used to mean STANDARD —
 		// no template, nothing for this editor to edit — but since #622 a
 		// standard meeting is materialized into its own copy on first load, so
@@ -78,9 +95,12 @@ export const Route = createFileRoute(
 				params: { clubId: params.clubId, meetingId: params.meetingId },
 			});
 		}
-		return draft;
+		// The resolved uuid rides on the draft, so the component's writes use it
+		// and `router.invalidate()` refreshes it with everything else.
+		return { ...draft, meetingId };
 	},
 	component: AgendaEditorRoute,
+	notFoundComponent: AgendaNotFound,
 	head: ({ loaderData }) => ({
 		meta: [
 			{
@@ -92,12 +112,20 @@ export const Route = createFileRoute(
 	}),
 });
 
+function AgendaNotFound() {
+	const { clubId } = Route.useParams();
+	return <MeetingNotFound clubId={clubId} />;
+}
+
 function AgendaEditorRoute() {
 	// The loader's own return value, not a re-derived one — the wiring guard
 	// pins this so a future edit can't quietly swap in a second fetch that
 	// disagrees with what `router.invalidate()` just refreshed.
 	const draft = Route.useLoaderData();
-	const { clubId, meetingId } = Route.useParams();
+	// `meetingKey` is the URL segment and only builds the link back; the writes
+	// take `meetingId`, the uuid the loader resolved it to.
+	const { clubId, meetingId: meetingKey } = Route.useParams();
+	const { meetingId } = draft;
 	// The club's UUID, NOT `clubId`. `resolveClubOrRedirect` (the `/club/$clubId`
 	// shell's beforeLoad) canonicalises that segment to the club's SLUG, so
 	// `clubId` here is a slug and is only good for building links back. Anything
@@ -115,7 +143,7 @@ function AgendaEditorRoute() {
 			<div className="pt-2">
 				<BackLink
 					to="/club/$clubId/meeting/$meetingId"
-					params={{ clubId, meetingId }}
+					params={{ clubId, meetingId: meetingKey }}
 				>
 					Back to meeting
 				</BackLink>

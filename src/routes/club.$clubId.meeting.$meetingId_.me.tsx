@@ -33,14 +33,24 @@
 // this content unreachable. The URL is unchanged; the parent becomes the club
 // shell, which is what supplies `IdentityGateProvider`.
 //
-// The agenda editor's header says its `$meetingId` is always a raw uuid,
-// because its only entry point wires `meeting.id`. This route is the opposite:
-// its entry point will be a chat link built from `meetingUrlKey` (a club-local
+// Its entry point is a chat link built from `meetingUrlKey` (a club-local
 // `YYYY-MM-DD`), so the segment is passed to the seam as an unresolved KEY and
 // `resolvePublicMeetingKey` accepts date, date-HHmm or uuid. Every WRITE uses
 // `view.meeting.id`, the RESOLVED uuid, because the write fns validate
 // `z.string().uuid()` — passing the segment would reject a date-keyed link at
 // the write instead of the read, after the page rendered fine.
+//
+// ## A key that names no meeting is the meeting-not-found page (#877)
+//
+// The seam collapses an unknown meeting and a rejected `?as=` into one `null`,
+// deliberately, so on its own it cannot say which one happened — and a visitor
+// with no identity yet never reaches it at all: they got the name picker for a
+// meeting that does not exist, picked a name, and only THEN learned the link was
+// dead. So the loader checks the meeting first, through the same public,
+// archive-gated reader the duty pages beside this one use, and a miss renders
+// the same page they do. It returns nothing: the page's data still comes from
+// the query below, and the loader's payload is dehydrated into the document, so
+// shipping the agenda here would be a second copy nobody reads.
 //
 // ## No new authorization
 //
@@ -57,7 +67,7 @@
 // #676 moved the states that surround it for the same one. What stays here is
 // the WIRING, which `personal-meeting-wiring.guard.test.ts` reads as source.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useCallback, useEffect } from "react";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import {
@@ -66,8 +76,11 @@ import {
 	PersonalMeetingNotice,
 	PersonalMeetingShell,
 } from "#/components/club/personal-meeting-body";
+import { MeetingNotFound } from "#/components/meeting-not-found";
 import { Button } from "#/components/ui/button";
+import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { resolveAsSeed, useCurrentMember } from "#/lib/member-identity";
+import { getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId_/me")({
@@ -77,9 +90,31 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId_/me")({
 	validateSearch: (search: Record<string, unknown>) => ({
 		as: typeof search.as === "string" && search.as ? search.as : undefined,
 	}),
+	loader: async ({ params, context }) => {
+		// The PUBLIC reader, never the session fork: nothing it returns is kept,
+		// so there is no management view to regain and no reason to fetch PII.
+		const data = await getPublicMeetingByKey({
+			data: { clubId: context.clubUuid, key: params.meetingId },
+		}).catch((err) => {
+			if (isMeetingNotFoundError(err)) throw notFound();
+			throw err;
+		});
+		// A meeting id belonging to a DIFFERENT club than the URL segment names.
+		if (data.meeting.clubId !== context.clubUuid) throw notFound();
+	},
+	// An existence check, so once per meeting is enough. Without this the
+	// `?as=` strip below — a REPLACE navigation to the same match — would pay
+	// for a second full meeting read to learn nothing new.
+	shouldReload: false,
 	component: PersonalMeetingRoute,
+	notFoundComponent: PersonalMeetingNotFound,
 	head: () => ({ meta: [{ title: "Your meeting" }] }),
 });
+
+function PersonalMeetingNotFound() {
+	const { clubId } = Route.useParams();
+	return <MeetingNotFound clubId={clubId} />;
+}
 
 function PersonalMeetingRoute() {
 	const { clubId, meetingId } = Route.useParams();

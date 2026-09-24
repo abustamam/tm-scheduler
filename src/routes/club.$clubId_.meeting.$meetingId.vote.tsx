@@ -9,6 +9,7 @@ import {
 } from "#/components/club/ballot";
 import { PickNameForm } from "#/components/club/pick-name-form";
 import { ThemeToggle } from "#/components/club/theme-toggle";
+import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -48,10 +49,24 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 		};
 	},
 	component: VotePage,
+	// The loader's `notFound()` lands HERE rather than on the root's generic
+	// page (#877). A stale QR is the expected case on this URL, so the person
+	// holding the phone should be told it is the MEETING that is missing, in the
+	// same words every other meeting sub-route uses.
+	notFoundComponent: VoteNotFound,
 	head: () => ({
 		meta: [{ name: "robots", content: "noindex, nofollow" }],
 	}),
 });
+
+function VoteNotFound() {
+	const { clubId } = Route.useParams();
+	return (
+		<div className="flex min-h-svh w-full flex-col bg-background">
+			<MeetingNotFound clubId={clubId} />
+		</div>
+	);
+}
 
 const voterKey = (meetingId: string) => `gavelup:voter:${meetingId}`;
 
