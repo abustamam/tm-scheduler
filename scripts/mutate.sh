@@ -3,12 +3,17 @@
 # Mutation-testing harness: prove a test can actually FAIL.
 #
 # Usage:
-#   scripts/mutate.sh <file> <perl-expr> <label> [vitest-path...]
+#   bun run mutate <file> --literal <old> <new> <label> [vitest-path...]
+#   bun run mutate <file> <perl-expr> <label> [vitest-path...]
 #
-#   scripts/mutate.sh src/lib/agenda-runsheet.ts \
-#     's/desc\(meetings\.scheduledAt\)/asc(meetings.scheduledAt)/' \
+#   bun run mutate src/lib/agenda-runsheet.ts \
+#     --literal 'desc(meetings.scheduledAt)' 'asc(meetings.scheduledAt)' \
 #     'M1 flip speech-log order' \
 #     src/lib/agenda-parity.test.ts
+#
+# Prefer --literal: <old> must occur EXACTLY once in <file> or this aborts, and
+# neither string is ever parsed as a regex or as perl. The perl form is for a
+# mutation one literal cannot express.
 #
 # Runs the suite once clean, applies the mutation, re-runs, reports KILLED or
 # SURVIVED, and always restores the file.
@@ -35,28 +40,46 @@
 #      vitest reports "No test files found" — which greps as zero failures, i.e.
 #      a clean pass. Hence bash, an array, and an explicit baseline assertion.
 #
-#   4. A dirty tree makes every result ambiguous: you cannot tell your mutation
-#      from work in progress. Commit first — then a restore is always safe.
+#   4. A file with uncommitted edits is ALLOWED. This used to refuse one, on
+#      the theory that a restore could not tell the mutation from the work in
+#      progress — but guard 1 restores from a copy taken AFTER that work, so it
+#      can. The refusal bit exactly when mutation-checking matters most, a
+#      review fix round with edits still unstaged, and the improvised
+#      `git checkout` people fell back to wiped a fix on #831. The baseline run
+#      below already proves the tree, edits and all, is green before mutating.
+#
+#   5. Paths are made absolute before the script moves to the repo root, so it
+#      can be run from a subdirectory without mutating or testing the wrong file.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 die() { printf '\033[31mmutate: %s\033[0m\n' "$*" >&2; exit 1; }
 
-[ $# -ge 3 ] || die "usage: mutate.sh <file> <perl-expr> <label> [vitest-path...]"
+USAGE="usage: mutate.sh <file> --literal <old> <new> <label> [vitest-path...]
+       mutate.sh <file> <perl-expr> <label> [vitest-path...]"
+[ $# -ge 3 ] || die "$USAGE"
 
-FILE="$1"; EXPR="$2"; LABEL="$3"; shift 3
-TARGETS=("$@")
+FILE="$1"; shift
+if [ "$1" = "--literal" ]; then
+	[ $# -ge 4 ] || die "$USAGE"
+	MODE=literal; OLD="$2"; NEW="$3"; LABEL="$4"; shift 4
+else
+	MODE=perl; EXPR="$1"; LABEL="$2"; shift 2
+fi
 
 [ -f "$FILE" ] || die "no such file: $FILE"
 command -v perl >/dev/null || die "perl not found"
 
-cd "$(git rev-parse --show-toplevel)" || die "not in a git repo"
+# Guard 5 — absolute paths, so the cd below cannot retarget them.
+abspath() { printf '%s/%s' "$(cd "$(dirname "$1")" && pwd)" "$(basename "$1")"; }
+FILE="$(abspath "$FILE")"
+TARGETS=()
+for t in "$@"; do
+	[ -e "$t" ] || die "no such test path: $t"
+	TARGETS+=("$(abspath "$t")")
+done
 
-# Guard 4 — a dirty tree makes the result unattributable.
-if [ -n "$(git status --porcelain -- "$FILE")" ]; then
-	die "$FILE has uncommitted changes. Commit first, then mutate — otherwise a
-     restore cannot tell your mutation from your work in progress."
-fi
+cd "$(git rev-parse --show-toplevel)" || die "not in a git repo"
 
 : "${TEST_DATABASE_URL:=postgresql://dev:dev@localhost:5432/tm_test}"
 export TEST_DATABASE_URL   # or ~630 integration tests silently skip and read green
@@ -99,7 +122,19 @@ restore() { cp "$BACKUP" "$FILE"; rm -f "$BACKUP"; }
 trap restore EXIT INT TERM
 
 BEFORE="$(md5sum < "$FILE")"
-perl -0pi -e "$EXPR" "$FILE"
+if [ "$MODE" = literal ]; then
+	# Both strings travel through the environment, so neither is parsed as perl;
+	# \Q…\E quotes <old>, and <new> is interpolated once, as plain text.
+	OLD="$OLD" NEW="$NEW" perl -0pi -e '
+		my ($o, $n) = ($ENV{OLD}, $ENV{NEW});
+		my $c = () = /\Q$o\E/g;
+		die "mutate: --literal <old> occurs $c times; it must occur exactly once\n"
+			unless $c == 1;
+		s/\Q$o\E/$n/;
+	' "$FILE" || die "mutation not applied"
+else
+	perl -0pi -e "$EXPR" "$FILE"
+fi
 # Guard 2 — an unapplied mutation is indistinguishable from a surviving one.
 [ "$(md5sum < "$FILE")" != "$BEFORE" ] \
 	|| die "mutation did not change $FILE — the expression matched nothing.

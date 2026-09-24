@@ -186,6 +186,12 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   rather than the declared change set. Nothing errors and the plan still looks plausible, so after
   filing check the issue appears under `bun run batch:issues` with the files you meant.
 - Run a single test with `bunx vitest run <path>` (or `bunx vitest <path>` to watch).
+- `bun run mutate <file> --literal <old> <new> <label> <test-path…>` — **the** way to
+  mutation-check a test (reintroduce the bug, confirm it goes red). Do not improvise it with
+  `sed` + `git checkout`: that wiped uncommitted fixes at least four times (the last was #831), and
+  BSD `sed` no-ops silently, so an unapplied mutation read as a kill. The script restores from a
+  copy, works on a file with uncommitted edits, requires `<old>` to match exactly once, and refuses a
+  baseline that collected no tests. Its header lists what each guard exists for.
 
 **A suite that seeds a CLUB-LESS row must clean it up itself, and must not use a fixed key.**
 `cleanup(clubId, userIds)` cascades from the club, so anything with a null `club_id` — a global
