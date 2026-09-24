@@ -17,6 +17,9 @@ import {
 
 const uuid = z.string().uuid();
 
+/** How many speeches a speech log shows before "Show all" (#681). */
+const SPEECH_LOG_DEFAULT_LIMIT = 6;
+
 /**
  * A club's roster members (from the `members` table — the no-auth roster) with
  * a "speeches given" count keyed directly to the member row.
@@ -110,7 +113,15 @@ async function loadRolesServed(memberId: string, clubId: string) {
 /** A roster member's profile: real identity + speech log + roles served. Pathways/awards stay mocked. */
 export const getMemberProfile = createServerFn({ method: "GET" })
 	.validator((input: unknown) =>
-		z.object({ clubId: uuid, memberId: uuid }).parse(input),
+		z
+			.object({
+				clubId: uuid,
+				memberId: uuid,
+				// #681: the profile's speech log shows the newest 6 unless the page
+				// asks for all of them (`?speeches=all`).
+				allSpeeches: z.boolean().optional(),
+			})
+			.parse(input),
 	)
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
@@ -125,6 +136,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 			return {
 				member: null,
 				speechLog: [],
+				speechLogTruncated: false,
 				rolesServed: [],
 				speeches: 0,
 				unscheduledSpeeches: [],
@@ -136,7 +148,12 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 		const officerPositions = await currentOfficersFor(member.id);
 
 		// History keys directly to the member row — no user bridge needed.
-		const speechLog = await loadSpeechLog([member.id], data.clubId, 6);
+		const { rows: speechLog, truncated: speechLogTruncated } =
+			await loadSpeechLog(
+				[member.id],
+				data.clubId,
+				data.allSpeeches ? null : SPEECH_LOG_DEFAULT_LIMIT,
+			);
 		const rolesServed = await loadRolesServed(member.id, data.clubId);
 		// The Person's unscheduled speeches (derived from slot linkage, ADR-0009 /
 		// #102) + the club's open speaker slots to reschedule them into. Archived
@@ -169,6 +186,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				originalJoinDate: member.originalJoinDate,
 			},
 			speechLog,
+			speechLogTruncated,
 			rolesServed,
 			speeches: speechLog.length,
 			unscheduledSpeeches,
@@ -176,10 +194,31 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 		};
 	});
 
-/** The current user's recent speech history (across their clubs). Backs the dashboard speech log. */
-export const listMySpeeches = createServerFn({ method: "GET" }).handler(
-	async () => {
+/**
+ * The current user's speech history (across their clubs). Backs the dashboard
+ * speech log: the newest 6 by default, every speech with `allSpeeches` (#681).
+ *
+ * TWO RESPONSE SHAPES, keyed on whether an input was sent, and that is the
+ * stale-tab contract rather than an accident. Before #681 this fn took no input
+ * and returned a bare `SpeechLogRow[]`, which the dashboard loader `.map`s. A
+ * tab loaded before the deploy keeps calling it with no input, so it still gets
+ * that bare array of the newest 6 — an object there would throw in the old
+ * render (`speeches.map is not a function`) and blank the dashboard instead of
+ * merely losing the evaluator text. The current dashboard always sends an
+ * input, and gets the rows plus `speechLogTruncated` for its "Show all" link.
+ * The method stays GET for the same reason (CLAUDE.md: a server fn's method is
+ * part of its wire contract).
+ */
+export const listMySpeeches = createServerFn({ method: "GET" })
+	.validator((input: unknown) =>
+		z.object({ allSpeeches: z.boolean().optional() }).optional().parse(input),
+	)
+	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		return loadMySpeechLog(currentUser.id, 6);
-	},
-);
+		const { rows, truncated } = await loadMySpeechLog(
+			currentUser.id,
+			data?.allSpeeches ? null : SPEECH_LOG_DEFAULT_LIMIT,
+		);
+		if (data === undefined) return rows;
+		return { speeches: rows, speechLogTruncated: truncated };
+	});

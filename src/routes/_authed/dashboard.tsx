@@ -10,6 +10,10 @@ import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { SpeechLogDate } from "#/components/speech-log-date";
 import { formatMeetingDate } from "#/lib/format";
 import {
+	speechLogEvaluatorLabel,
+	validateSpeechLogSearch,
+} from "#/lib/speech-log-evaluator";
+import {
 	SPEECH_SCHEDULE_STATE_LABELS,
 	type SpeechScheduleState,
 	speechLogHeadline,
@@ -27,18 +31,29 @@ import { getMyPathways } from "#/server/pathways-read";
 import { markMyProject, unmarkMyProject } from "#/server/progress-marks";
 
 export const Route = createFileRoute("/_authed/dashboard")({
-	loader: async () => {
-		const [commitments, speeches, pathways, enrollments, pathOptions] =
+	// `?speeches=all` lifts the speech log's 6-row default (#681).
+	validateSearch: validateSpeechLogSearch,
+	loaderDeps: ({ search }) => ({ allSpeeches: search.speeches === "all" }),
+	loader: async ({ deps }) => {
+		const [commitments, speechLog, pathways, enrollments, pathOptions] =
 			await Promise.all([
 				listMyCommitments(),
-				listMySpeeches(),
+				// Always WITH an input: no input is the pre-#681 stale-tab call, which
+				// gets the legacy bare array (see `listMySpeeches`).
+				listMySpeeches({ data: { allSpeeches: deps.allSpeeches } }),
 				getMyPathways(),
 				getMyPathEnrollments(),
 				listPathwayOptions(),
 			]);
+		// Unreachable with an input sent; narrowed so the type is one shape.
+		const { speeches, speechLogTruncated } = Array.isArray(speechLog)
+			? { speeches: speechLog, speechLogTruncated: false }
+			: speechLog;
 		return {
 			commitments,
 			speeches,
+			speechLogTruncated,
+			allSpeeches: deps.allSpeeches,
 			pathways,
 			enrollments,
 			pathOptions,
@@ -64,8 +79,16 @@ export const Route = createFileRoute("/_authed/dashboard")({
 
 function Dashboard() {
 	const { authUser, activeClubId } = Route.useRouteContext();
-	const { commitments, speeches, pathways, enrollments, pathOptions, now } =
-		Route.useLoaderData();
+	const {
+		commitments,
+		speeches,
+		speechLogTruncated,
+		allSpeeches,
+		pathways,
+		enrollments,
+		pathOptions,
+		now,
+	} = Route.useLoaderData();
 	const router = useRouter();
 	const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
 
@@ -133,7 +156,9 @@ function Dashboard() {
 						<div className="flex items-center justify-between px-5 pt-4 pb-2.5">
 							<h2 className="text-sm font-bold">My speech log</h2>
 							<span className="text-xs text-[var(--sea-ink-soft)]">
-								{speeches.length} recent
+								{allSpeeches
+									? `all ${speeches.length}`
+									: `${speeches.length} recent`}
 							</span>
 						</div>
 						{speeches.length === 0 ? (
@@ -150,6 +175,11 @@ function Dashboard() {
 									scheduledAt: l.scheduledAt,
 									now,
 								});
+								const evaluatorLabel = speechLogEvaluatorLabel({
+									evaluators: l.evaluators,
+									hasEvaluatorSlot: l.hasEvaluatorSlot,
+									isUpcoming: state === "scheduled",
+								});
 								return (
 									<div
 										key={l.slotId}
@@ -162,7 +192,7 @@ function Dashboard() {
 										    container and the viewer's browser disagreed on the day
 										    number and on the month's spelling (#608). The row
 										    carries no club timezone to pin it to — `loadMySpeechLog`
-										    joins no `clubs` row — so the honest fix is to let the
+										    selects no `clubs.timezone` — so the honest fix is to let the
 										    viewer's own runtime answer, after mount. */}
 										<SpeechLogDate value={l.scheduledAt} />
 										<div className="min-w-0">
@@ -176,9 +206,7 @@ function Dashboard() {
 												{[l.projectName, l.pathwayPath]
 													.filter(Boolean)
 													.join(" · ") || l.roleName}
-												{l.evaluatorName
-													? ` · evaluated by ${l.evaluatorName}`
-													: ""}
+												{evaluatorLabel ? ` · ${evaluatorLabel}` : ""}
 											</div>
 										</div>
 										<SpeechStatePill state={state} />
@@ -186,6 +214,10 @@ function Dashboard() {
 								);
 							})
 						)}
+						<SpeechLogToggle
+							truncated={speechLogTruncated}
+							allSpeeches={allSpeeches}
+						/>
 					</div>
 				</div>
 
@@ -309,6 +341,33 @@ function Dashboard() {
 				</div>
 			</div>
 		</PageContainer>
+	);
+}
+
+/**
+ * The speech log's footer link (#681): "Show all" when the default window cut
+ * speeches off, "Show recent" once `?speeches=all` is set, nothing otherwise.
+ */
+function SpeechLogToggle({
+	truncated,
+	allSpeeches,
+}: {
+	truncated: boolean;
+	allSpeeches: boolean;
+}) {
+	if (!truncated && !allSpeeches) return null;
+	return (
+		<div className="border-t border-[var(--line)] px-5 py-2.5 text-right text-xs">
+			{allSpeeches ? (
+				<Link to="/dashboard" search={{}}>
+					Show recent
+				</Link>
+			) : (
+				<Link to="/dashboard" search={{ speeches: "all" }}>
+					Show all
+				</Link>
+			)}
+		</div>
 	);
 }
 

@@ -45,6 +45,10 @@ import {
 import { firstNameOf } from "#/lib/person-name";
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
+	speechLogEvaluatorLabel,
+	validateSpeechLogSearch,
+} from "#/lib/speech-log-evaluator";
+import {
 	SPEECH_SCHEDULE_STATE_LABELS,
 	type SpeechScheduleState,
 	speechLogHeadline,
@@ -74,12 +78,17 @@ import {
 import { archiveSpeech, rescheduleSpeech } from "#/server/speeches";
 
 export const Route = createFileRoute("/_authed/members/$id")({
-	loader: async ({ params, context }) => {
+	// `?speeches=all` lifts the speech log's 6-row default (#681).
+	validateSearch: validateSpeechLogSearch,
+	loaderDeps: ({ search }) => ({ allSpeeches: search.speeches === "all" }),
+	loader: async ({ params, context, deps }) => {
 		const clubId = context.activeClubId;
 		if (!clubId) {
 			return {
 				member: null,
 				speechLog: [],
+				speechLogTruncated: false,
+				allSpeeches: deps.allSpeeches,
 				rolesServed: [],
 				speeches: 0,
 				pathways: [],
@@ -91,7 +100,13 @@ export const Route = createFileRoute("/_authed/members/$id")({
 			};
 		}
 		const [profile, pathways, pathOptions, enrollments] = await Promise.all([
-			getMemberProfile({ data: { clubId, memberId: params.id } }),
+			getMemberProfile({
+				data: {
+					clubId,
+					memberId: params.id,
+					allSpeeches: deps.allSpeeches,
+				},
+			}),
 			getMemberPathways({ data: { clubId, memberId: params.id } }),
 			// Both are gated on "self or club admin", so a plain member viewing
 			// someone else's page gets a throw. That's the correct authz, not an
@@ -104,6 +119,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 		]);
 		return {
 			...profile,
+			allSpeeches: deps.allSpeeches,
 			pathways,
 			pathOptions,
 			enrollments,
@@ -158,6 +174,8 @@ function MemberDetail() {
 	const {
 		member,
 		speechLog,
+		speechLogTruncated,
+		allSpeeches,
 		rolesServed,
 		pathways,
 		unscheduledSpeeches,
@@ -288,7 +306,7 @@ function MemberDetail() {
 					<div className="flex items-center justify-between px-5 pt-4 pb-3">
 						<h2 className="text-sm font-bold">Speech log</h2>
 						<span className="text-xs text-[var(--sea-ink-soft)]">
-							most recent {speechLog.length}
+							{allSpeeches ? "all" : "most recent"} {speechLog.length}
 						</span>
 					</div>
 					{speechLog.length === 0 ? (
@@ -305,6 +323,14 @@ function MemberDetail() {
 							const sub = [l.projectName, l.pathwayPath, l.projectLevel]
 								.filter(Boolean)
 								.join(" · ");
+							// Shown on EVERY row now (#681) — it used to appear only when the
+							// speech had no project, path or level, i.e. never on a Pathways
+							// speech, which is most of them.
+							const evaluatorLabel = speechLogEvaluatorLabel({
+								evaluators: l.evaluators,
+								hasEvaluatorSlot: l.hasEvaluatorSlot,
+								isUpcoming: state === "scheduled",
+							});
 							return (
 								<div
 									key={l.slotId}
@@ -326,10 +352,9 @@ function MemberDetail() {
 											})}
 										</div>
 										<div className="truncate text-xs text-[var(--sea-ink-soft)]">
-											{sub ||
-												(l.evaluatorName
-													? `Evaluated by ${l.evaluatorName}`
-													: l.roleName)}
+											{[sub || l.roleName, evaluatorLabel]
+												.filter(Boolean)
+												.join(" · ")}
 										</div>
 									</div>
 									<SpeechStatePill state={state} />
@@ -337,6 +362,23 @@ function MemberDetail() {
 							);
 						})
 					)}
+					{speechLogTruncated || allSpeeches ? (
+						<div className="border-t border-[var(--line)] px-5 py-2.5 text-right text-xs">
+							{allSpeeches ? (
+								<Link to="/members/$id" params={{ id: member.id }} search={{}}>
+									Show recent
+								</Link>
+							) : (
+								<Link
+									to="/members/$id"
+									params={{ id: member.id }}
+									search={{ speeches: "all" }}
+								>
+									Show all
+								</Link>
+							)}
+						</div>
+					) : null}
 				</div>
 
 				{/* Side cards */}
