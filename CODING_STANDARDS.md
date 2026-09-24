@@ -430,14 +430,14 @@ two status predicates live, and an inline query bypasses both while still typech
 (`src/lib/attendance-panel.ts`, with `buildPanelRoleMap` beside it) resolves a display rung per
 member: an explicit `coming`/`not_coming` wins, else a **confirmed** `role_slots` row reads as
 `coming` with `assumed: true`, else the stored `reached_out` or null. Pure derivation, no write —
-the table gains no row. The rule is ONE function, `resolveEffectiveRung`, and every surface asking
-"who is coming?" calls it (#664): the rail, roll mode's suggestion, and the seam's
-`listEffectiveComingForMeeting`. `listComingForMeeting` still answers with stored rungs only, and
-is kept narrow rather than widened so no caller's answer changes silently; a consumer picks the
-reader that matches the question, and the effective one carries `assumed`, which must survive to
-whatever renders it. Both halves live in `src/lib` rather
-than in the route for the usual reason: a route cannot be mounted in vitest, so a derivation there
-is guarded only by source greps, and mutation review found two bugs in this one that pass every
+the table gains no row. The rail and roll mode share it (#664): `buildPanelRoleMap` decides what
+counts as a confirmed role (the OR across a member's slots) and `resolveEffectiveRung` applies the
+precedence, and both builders call the latter with the one map the route builds. The inference is
+deliberately CLIENT-SIDE: `listComingForMeeting` still answers with stored rungs only, so the
+rail's coming count is a superset of the seam's, and a server consumer asking "who is coming?"
+gets the narrower answer. `assumed` must survive to whatever renders the inference. Both halves
+live in `src/lib` rather than in the route for the usual reason: a route cannot be mounted in
+vitest, so a derivation there is guarded only by source greps, and mutation review found two bugs in this one that pass every
 grep and a clean typecheck. See CONTEXT.md's **Planned attendance** entry.
 
 **The seam does NOT carry the archive gate or the officer-only `reached_out` rung**, and

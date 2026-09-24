@@ -4,9 +4,7 @@ import {
 	type attendancePlanStatusEnum,
 	meetingAttendancePlan,
 	members,
-	roleSlots,
 } from "#/db/schema";
-import { resolveEffectiveRung } from "#/lib/attendance-panel";
 import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 
@@ -522,82 +520,15 @@ export async function listReachedOutForMeeting(
 	return listMemberIdsWithStatus(database, meetingId, "reached_out");
 }
 
-/** `coming` member ids for one meeting — STORED rungs only, so a member whose
- *  only signal is a confirmed role slot is NOT here. That is the narrower of the
- *  two answers to "who is coming?" and it is kept narrow on purpose rather than
- *  widened in place: widening it would silently change what every caller gets.
- *  A consumer that wants the answer the officer's rail shows wants
- *  {@link listEffectiveComingForMeeting} instead (#664).
- *
- *  No pre-consolidation equivalent — the old pair could not express a positive
- *  answer at all — so every consumer of this is new, starting with the outreach
- *  panel, which would otherwise put a member who said yes into the "still to
- *  ask" list. */
+/** `coming` member ids for one meeting. No pre-consolidation equivalent — the
+ *  old pair could not express a positive answer at all — so every consumer of
+ *  this is new, starting with the outreach panel, which would otherwise put a
+ *  member who said yes into the "still to ask" list. */
 export async function listComingForMeeting(
 	database: DbOrTx,
 	meetingId: string,
 ): Promise<string[]> {
 	return listMemberIdsWithStatus(database, meetingId, "coming");
-}
-
-/**
- * Who is coming to one meeting, by the SAME rule the officer's rail and roll
- * mode apply (`resolveEffectiveRung`, `src/lib/attendance-panel.ts`): an
- * explicit `coming`, or a CONFIRMED role slot with no explicit answer, which
- * comes back `assumed: true` (#664). The server half of the one answer to "who
- * is coming?" — before it, the inference lived only in the rail's component and
- * any server consumer got the smaller, stored-only set from
- * {@link listComingForMeeting}.
- *
- * `assumed` is not optional decoration: it is the difference between "they said
- * yes" and "an officer put them on the programme and nobody asked", and a
- * consumer that flattens it renders an inference as an answer.
- *
- * Reads `role_slots` as well as the plan table, which is why it is a separate
- * reader rather than a widened `listComingForMeeting`. Like that reader it does
- * NOT filter to the active roster — the rail does that from its own roster
- * payload — and it carries no archive gate, which belongs to the caller (see
- * CODING_STANDARDS.md, "The seam does NOT carry the archive gate"). A member
- * holding two slots appears once. Sorted by member id so the result is
- * deterministic.
- */
-export async function listEffectiveComingForMeeting(
-	database: DbOrTx,
-	meetingId: string,
-): Promise<{ memberId: string; assumed: boolean }[]> {
-	const [plan, confirmed] = await Promise.all([
-		database
-			.select({
-				memberId: meetingAttendancePlan.memberId,
-				status: meetingAttendancePlan.status,
-			})
-			.from(meetingAttendancePlan)
-			.where(eq(meetingAttendancePlan.meetingId, meetingId)),
-		database
-			.selectDistinct({ memberId: roleSlots.assignedMemberId })
-			.from(roleSlots)
-			.where(
-				and(
-					eq(roleSlots.meetingId, meetingId),
-					eq(roleSlots.status, "confirmed"),
-				),
-			),
-	]);
-
-	const stored = new Map(plan.map((p) => [p.memberId, p.status]));
-	const confirmedIds = new Set(
-		confirmed.flatMap((c) => (c.memberId ? [c.memberId] : [])),
-	);
-
-	const result: { memberId: string; assumed: boolean }[] = [];
-	for (const memberId of new Set([...stored.keys(), ...confirmedIds])) {
-		const { status, assumed } = resolveEffectiveRung(
-			stored.get(memberId) ?? null,
-			{ confirmed: confirmedIds.has(memberId) },
-		);
-		if (status === "coming") result.push({ memberId, assumed });
-	}
-	return result.sort((a, b) => a.memberId.localeCompare(b.memberId));
 }
 
 async function listMemberIdsWithStatus(

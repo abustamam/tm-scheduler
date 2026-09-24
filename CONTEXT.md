@@ -372,11 +372,12 @@ the nouns in `src/db/schema.ts`.
   `buildPlanPanel` (`src/lib/attendance-panel.ts`) resolves a DISPLAY status per member: an
   explicit `coming` / `not_coming` wins, because their own word outranks anything inferred; else a
   **confirmed role slot** on this meeting reads as `coming` with the row flagged `assumed`; else
-  the stored `reached_out`, else nothing. It writes NOTHING — the table still has no row. The rule
-  is one function, `resolveEffectiveRung`, shared by the rail, roll mode and the seam's
-  `listEffectiveComingForMeeting` (#664), so there is one answer to "who is coming". The seam's
-  stored-rung readers (`listComingForMeeting`, `listPlanForMeetings`) are unchanged and still
-  narrower; a consumer picks the reader that matches its question. Two properties hold it together. A derived
+  the stored `reached_out`, else nothing. It writes NOTHING — the table still has no row. The rail
+  and roll mode share the rule (`resolveEffectiveRung`, fed by `buildPanelRoleMap`, #664), so the
+  panel's two modes give one answer to "who is coming". The inference is deliberately
+  CLIENT-SIDE: the seam's readers (`listComingForMeeting`, `listPlanForMeetings`) report stored
+  rungs only, so the rail's coming COUNT is a superset of theirs and a server consumer asking "who
+  is coming" gets the narrower answer. Two properties hold it together. A derived
   Coming must never render identically to an answered one, which is what `assumed` carries to the
   row; and ranking a confirmed slot ABOVE `reached_out` is load-bearing rather than cosmetic — a
   confirmed member has no plan row, so messaging them inserts `reached_out`, and ranked the other

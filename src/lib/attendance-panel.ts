@@ -112,13 +112,20 @@ export function buildPanelRoleMap(
 }
 
 /**
- * THE answer to "is this member coming?" for one member and one meeting — the
- * only place the assumed-Coming inference is written (#664). Every surface that
- * asks the question calls this: the rail (`buildPlanPanel`, below), roll mode's
- * suggestion (`buildRollPanel`), and the seam's `listEffectiveComingForMeeting`.
- * Before it existed the rule lived inline in `buildPlanPanel`, so the rail was
- * the only surface that could see it and roll mode answered the same question
- * differently on the same screen.
+ * The PRECEDENCE half of the assumed-Coming inference, shared by the rail
+ * (`buildPlanPanel`, below) and roll mode's suggestion (`buildRollPanel`) so the
+ * panel's two modes cannot disagree about who is coming (#664). Before it
+ * existed the rule lived inline in `buildPlanPanel`, and roll mode answered the
+ * same question differently on the same screen.
+ *
+ * The inference has TWO halves and both live in this module: what counts as a
+ * confirmed role is `buildPanelRoleMap`'s (the OR across a member's slots,
+ * above), and what that role outranks is this function's. The route builds that
+ * map once and hands the same one to both modes.
+ *
+ * It is deliberately CLIENT-SIDE. The seam (`attendance-plan-logic.ts`) returns
+ * stored answers only — `listComingForMeeting` does not include an assumed
+ * Coming, and a server consumer asking "who is coming?" gets the narrower set.
  *
  * PRECEDENCE:
  *
@@ -248,9 +255,9 @@ export function buildPlanPanel(input: {
 	const rows: PanelMember[] = input.roster.map((m) => {
 		const stored = byMember.get(m.id) ?? null;
 		const role = input.roleByMemberId[m.id] ?? null;
-		// PRECEDENCE lives in `resolveEffectiveRung`, the one copy every surface
-		// shares — see its docstring for the ladder and why a confirmed role
-		// outranks `reached_out`.
+		// PRECEDENCE lives in `resolveEffectiveRung`, shared with roll mode — see
+		// its docstring for the ladder and why a confirmed role outranks
+		// `reached_out`.
 		const { status, assumed } = resolveEffectiveRung(stored, role);
 		return {
 			...m,
