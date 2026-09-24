@@ -788,6 +788,62 @@ export async function applyRemoveSpeakerSlot(input: {
 				? topUnclaimed(slots, evaluatorRoleId, roleOf)
 				: null;
 		}
+
+		// RE-CHECK THE PAIR UNDER ITS OWN ROW LOCKS (#840). The meeting lock above
+		// excludes other lineup editors, but NOT claim writers: `claimSlotCore`
+		// and its siblings flip a slot with a conditional UPDATE and never touch
+		// the meeting row except through the attendance FK's KEY SHARE, which NO
+		// KEY UPDATE admits by design. So the lineup read above can be stale by the
+		// time the deletes run, and an id-only DELETE that waits on a claim's row
+		// lock re-matches its `id =` predicate after that claim commits and removes
+		// the newly claimed slot.
+		//
+		// Only the two CHOSEN rows are locked, not the whole lineup, and in id
+		// order. Locking every paired slot would let this wait on a speaker slot a
+		// speech relink holds (`speeches-logic.ts` moves a speech between two slots
+		// in one transaction, in no fixed order, without the meeting lock) while
+		// already holding the one it moves to, which is a cycle; the chosen rows
+		// were open in the committed read, so no such relink holds them.
+		//
+		// A claim that landed in the window is refused with the same release-first
+		// messages as one that landed before, and the throw rolls back the whole
+		// transaction, so neither slot is deleted, nothing is renumbered, and no
+		// `speaker_removed` row is written.
+		const pairIds = evaluatorId ? [speakerId, evaluatorId] : [speakerId];
+		const current = await tx
+			.select({
+				id: roleSlots.id,
+				status: roleSlots.status,
+				assignedMemberId: roleSlots.assignedMemberId,
+				assignedGuestId: roleSlots.assignedGuestId,
+			})
+			.from(roleSlots)
+			.where(
+				and(
+					eq(roleSlots.meetingId, input.meetingId),
+					inArray(roleSlots.id, pairIds),
+				),
+			)
+			.orderBy(roleSlots.id)
+			.for("update");
+		const lockedSpeaker = current.find((s) => s.id === speakerId);
+		if (!lockedSpeaker || claimed(lockedSpeaker))
+			throw new Error("Release a speaker before removing a slot.");
+		const lockedEvaluator = evaluatorId
+			? current.find((s) => s.id === evaluatorId)
+			: undefined;
+		if (evaluatorId && (!lockedEvaluator || claimed(lockedEvaluator))) {
+			// The recorded pair gets the message a pre-read claim would have got.
+			// The legacy fallback chose "any open evaluator", so what the member
+			// needs to hear is that it was taken, and that a retry chooses again.
+			const speaker = slots.find((s) => s.id === speakerId);
+			throw new Error(
+				pairedEvaluator
+					? `Release the evaluator for Speaker ${(speaker?.slotIndex ?? 0) + 1} before removing that speaker.`
+					: "That evaluator slot was just claimed. Try removing the speaker again.",
+			);
+		}
+
 		await tx.delete(roleSlots).where(eq(roleSlots.id, speakerId));
 		if (evaluatorId) {
 			await tx.delete(roleSlots).where(eq(roleSlots.id, evaluatorId));
