@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { BrandMark } from "#/components/brand-mark";
+import { StatusScreen } from "#/components/status-screen";
 import { Button } from "#/components/ui/button";
 
 /**
@@ -12,17 +12,15 @@ import { Button } from "#/components/ui/button";
  */
 export function NotFound() {
 	return (
-		<div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-background p-6 text-center">
-			<BrandMark />
-			<div className="flex flex-col gap-2">
-				<p className="font-semibold text-lg">Page not found</p>
-				<p className="text-muted-foreground text-sm">
-					That page doesn't exist, or the link is out of date.
-				</p>
-			</div>
-			<Button asChild variant="outline">
-				<Link to="/">Go home</Link>
-			</Button>
-		</div>
+		<StatusScreen
+			title="Page not found"
+			actions={
+				<Button asChild variant="outline">
+					<Link to="/">Go home</Link>
+				</Button>
+			}
+		>
+			That page doesn't exist, or the link is out of date.
+		</StatusScreen>
 	);
 }
