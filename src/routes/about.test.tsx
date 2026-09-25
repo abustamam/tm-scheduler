@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 //
-// `/about` rendered (#869): the sections it promises, that the founder section
-// says exactly the confirmed blurb and nothing more, and that the data section
-// describes rather than promises. The disclaimer is the marketing guard's
-// (`marketing-disclaimer.guard.test.ts`), which enrols this route by content.
+// `/about` rendered (#869, #871): the sections it promises, that the founder
+// section says exactly the approved copy and nothing more, that the data section
+// carries the facts then the maintainer's commitments and none of the banned
+// words, and that no sentence claims deletion or export (#914, #915). The
+// disclaimer is the marketing guard's (`marketing-disclaimer.guard.test.ts`),
+// which enrols this route by content.
 import { cleanup, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -15,6 +17,26 @@ import { renderUnderMemoryRouter } from "#/test/router-harness";
 import { Route } from "./about";
 
 afterEach(cleanup);
+
+/**
+ * The bio approved on #871 (2026-09-25), verbatim. Literals, not the route's
+ * constant: the copy was approved word for word, so a test that read the
+ * constant back would agree with any edit to it.
+ */
+const APPROVED_BIO = [
+	"By day, I'm a software engineer at Salty, where I build tools that help drivers find better car insurance without the paperwork. I've been shipping software since 2016.",
+	"In Toastmasters, I chartered Simply the Best at Kaiser South Sacramento, served as an Area Director in 2014, and I'm chartering THR Speaking Club in Roseville, in District 206, right now.",
+	"As a VP Education, I ran sign-ups on a shared spreadsheet. Two people could claim the same role, nothing checked the entries, and I had no easy way to see who'd done which role or how the club was growing. The club software I tried wasn't much better: hard to use, and it signed me out constantly. Filling a role as Toastmaster meant clicking a name, finding a phone number in a pop-up, copying it into my messaging app and pasting in a message, once for every person.",
+	"So I built GavelUp to do that busywork: one sign-up sheet that can't double-book, role history at a glance, contact details one tap from a ready-to-send message, and the agenda and slide deck built for you. (I really don't like PowerPoint.) When I was VP Membership, I wanted every guest in one place, so inviting them back to the next meeting is easy.",
+	"What GavelUp won't do is talk to your members for you. Members still reach out to each other about roles; GavelUp just makes that quicker.",
+];
+
+/** The data commitments approved on #871 (2026-09-25), verbatim. */
+const APPROVED_PROMISES = [
+	"GavelUp doesn't share your club's data with advertisers or data brokers.",
+	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic, if a member connects Claude.",
+	"Your club's data is used only to run GavelUp for your club.",
+];
 
 async function mount() {
 	const Component = Route.options.component as React.ComponentType;
@@ -42,24 +64,83 @@ describe("/about", () => {
 		expect(screen.getByText(TOASTMASTERS_DISCLAIMER)).toBeTruthy();
 	});
 
-	// AC2: while FOUNDER_PARAGRAPHS is empty the founder section is the blurb and
-	// only the blurb. Anything more is an unconfirmed claim about a real person.
-	it("says exactly FOUNDER_BLURB about the founder, in one paragraph", async () => {
+	// #871 AC1: the founder section is the blurb, then the approved bio, in
+	// order, and nothing else. Anything more is an unapproved claim about a
+	// real person.
+	it("says exactly FOUNDER_BLURB and the five approved paragraphs, in order", async () => {
 		await mount();
-		const paragraphs = sectionFor("Who's behind GavelUp").querySelectorAll("p");
-		expect(paragraphs).toHaveLength(1);
-		expect(paragraphs[0]?.textContent).toBe(FOUNDER_BLURB);
+		const paragraphs = [
+			...sectionFor("Who's behind GavelUp").querySelectorAll("p"),
+		].map((p) => p.textContent);
+		expect(paragraphs).toEqual([FOUNDER_BLURB, ...APPROVED_BIO]);
 	});
 
-	// AC3: the data section describes what the code does. A promise is the
-	// maintainer's to make (#871), and these words are how one reads.
-	it("makes no promises in the data section", async () => {
+	// #871 AC1/AC3: the banner (eager, captioned, first under the heading) and
+	// the headshot (lazy, beside the blurb), both from public/about/ and both
+	// with explicit dimensions so they reserve their space before loading.
+	it("shows the stage banner and the headshot from public/about/", async () => {
+		await mount();
+		const section = sectionFor("Who's behind GavelUp");
+
+		const banner = within(section).getByRole("img", {
+			name: "Rasheed Bustamam speaking on stage to a large audience",
+		});
+		expect(banner.getAttribute("src")).toBe("/about/rasheed-speaking.webp");
+		expect(banner.getAttribute("width")).toBe("1400");
+		expect(banner.getAttribute("height")).toBe("350");
+		expect(banner.getAttribute("loading")).toBeNull();
+		expect(banner.className).toContain("w-full");
+		expect(banner.className).toContain("object-cover");
+		const figure = banner.closest("figure");
+		expect(figure?.querySelector("figcaption")?.textContent).toBe(
+			"Speaking to an audience of 700.",
+		);
+		expect(section.querySelector("h2")?.nextElementSibling).toBe(figure);
+
+		const headshot = within(section).getByRole("img", {
+			name: "Rasheed Bustamam",
+		});
+		expect(headshot.getAttribute("src")).toBe("/about/rasheed-headshot.png");
+		expect(headshot.getAttribute("width")).toBe("400");
+		expect(headshot.getAttribute("height")).toBe("400");
+		expect(headshot.getAttribute("loading")).toBe("lazy");
+		expect(headshot.className).toContain("rounded-full");
+		// Beside the blurb from `sm` up, stacked above it below.
+		const row = headshot.parentElement;
+		expect(row?.querySelector("p")?.textContent).toBe(FOUNDER_BLURB);
+		expect(row?.className).toContain("flex-col");
+		expect(row?.className).toContain("sm:flex-row");
+	});
+
+	// #871 AC2: the five facts, then the three commitments verbatim, in order.
+	it("lists the data facts, then the maintainer's three commitments", async () => {
+		await mount();
+		const items = [
+			...sectionFor("What happens to your club's data").querySelectorAll("li"),
+		].map((li) => li.textContent);
+		expect(items).toHaveLength(5 + APPROVED_PROMISES.length);
+		expect(items.slice(5)).toEqual(APPROVED_PROMISES);
+	});
+
+	// The whole data section, commitments included, stays clear of the words
+	// that overclaim.
+	it("uses none of the banned words in the data section", async () => {
 		await mount();
 		const section = sectionFor("What happens to your club's data");
 		const text = section.textContent ?? "";
 		expect(section.querySelectorAll("li").length).toBeGreaterThan(0);
 		for (const banned of [/\bnever\b/i, /\bsell/i, /\bguarantee/i]) {
 			expect(text).not.toMatch(banned);
+		}
+	});
+
+	// #871 AC4: deletion on request and self-serve export are false today, so
+	// the page says neither until the change that makes each true (#914, #915).
+	it("says nothing about deleting or exporting club data", async () => {
+		await mount();
+		const text = screen.getByRole("main").textContent ?? "";
+		for (const claim of [/\bdelet/i, /\berase/i, /\bexport/i, /\bdownload/i]) {
+			expect(text).not.toMatch(claim);
 		}
 	});
 
