@@ -3,7 +3,8 @@
 // `/about` rendered (#869, #871): the sections it promises, that the founder
 // section says exactly the approved copy and nothing more, that the data section
 // carries the facts then the maintainer's commitments and none of the banned
-// words, and that no sentence claims deletion or export (#914, #915). The
+// words, that no sentence claims deletion (#914), and that export is claimed
+// once, by the sentence #915 approved alongside the export itself. The
 // disclaimer is the marketing guard's (`marketing-disclaimer.guard.test.ts`),
 // which enrols this route by content.
 import { cleanup, screen, within } from "@testing-library/react";
@@ -31,11 +32,17 @@ const APPROVED_BIO = [
 	"What GavelUp won't do is talk to your members for you. Members still reach out to each other about roles; GavelUp just makes that quicker.",
 ];
 
-/** The data commitments approved on #871 (2026-09-25), verbatim. */
+/**
+ * The data commitments approved on #871 (2026-09-25), verbatim, then the export
+ * commitment approved on #915 (same day), added by the change that made it true.
+ */
+const EXPORT_PROMISE =
+	"Club admins can download the club's roster, meetings, roles, attendance, speeches, guests, awards, dues and action items as spreadsheets at any time.";
 const APPROVED_PROMISES = [
 	"GavelUp doesn't share your club's data with advertisers or data brokers.",
 	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic, if a member connects Claude.",
 	"Your club's data is used only to run GavelUp for your club.",
+	EXPORT_PROMISE,
 ];
 
 async function mount() {
@@ -112,8 +119,9 @@ describe("/about", () => {
 		expect(row?.className).toContain("sm:flex-row");
 	});
 
-	// #871 AC2: the five facts, then the three commitments verbatim, in order.
-	it("lists the data facts, then the maintainer's three commitments", async () => {
+	// #871 AC2 / #915 AC5: the five facts, then the four commitments verbatim,
+	// in order.
+	it("lists the data facts, then the maintainer's four commitments", async () => {
 		await mount();
 		const items = [
 			...sectionFor("What happens to your club's data").querySelectorAll("li"),
@@ -133,14 +141,28 @@ describe("/about", () => {
 		}
 	});
 
-	// #871 AC4: deletion on request and self-serve export are false today, so
-	// the page says neither until the change that makes each true (#914, #915).
-	it("says nothing about deleting or exporting club data", async () => {
+	// #871 AC4: deletion on request is false today, so the page does not claim
+	// it until the change that makes it true (#914).
+	it("says nothing about deleting club data", async () => {
 		await mount();
 		// The whole body, shell included: a nav or footer line counts too.
 		const text = document.body.textContent ?? "";
-		for (const claim of [/\bdelet/i, /\berase/i, /\bexport/i, /\bdownload/i]) {
+		for (const claim of [/\bdelet/i, /\berase/i]) {
 			expect(text).not.toMatch(claim);
+		}
+	});
+
+	// #915 AC5: export is true now, and the page says so in exactly the one
+	// approved sentence. Any other mention of exporting or downloading (a nav
+	// line, a looser rewording that says "all your data") is an unapproved
+	// claim, so the sentence is removed before scanning what is left.
+	it("claims export only in the approved sentence", async () => {
+		await mount();
+		const text = document.body.textContent ?? "";
+		expect(text.split(EXPORT_PROMISE)).toHaveLength(2);
+		const rest = text.replace(EXPORT_PROMISE, "");
+		for (const claim of [/\bexport/i, /\bdownload/i]) {
+			expect(rest).not.toMatch(claim);
 		}
 	});
 

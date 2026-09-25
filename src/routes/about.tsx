@@ -77,14 +77,22 @@ export const DATA_FACTS = [
  * 3. Used only to run GavelUp: using club data for anything other than
  *    running that club's GavelUp.
  *
- * Deletion on request and self-serve export are deliberately absent: both are
- * false today, and each is added here by the change that makes it true
- * (#914, #915).
+ * 4. Self-serve export (#915): backed by `loadClubExport`
+ *    (`src/server/club-export-logic.ts`) and the export route
+ *    (`src/routes/api/clubs.$clubId.export.zip.ts`), linked from Club settings
+ *    and the roster. What makes it false: removing the route or the links, or
+ *    dropping one of the files this sentence names from the export. It names
+ *    what is included rather than saying "all", because agenda templates, the
+ *    logo and vote tallies are not exported.
+ *
+ * Deletion on request is deliberately absent: it is false today, and is added
+ * here by the change that makes it true (#914).
  */
 const DATA_PROMISES = [
 	"GavelUp doesn't share your club's data with advertisers or data brokers.",
 	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic, if a member connects Claude.",
 	"Your club's data is used only to run GavelUp for your club.",
+	"Club admins can download the club's roster, meetings, roles, attendance, speeches, guests, awards, dues and action items as spreadsheets at any time.",
 ];
 
 function AboutPage() {
