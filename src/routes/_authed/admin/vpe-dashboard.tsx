@@ -87,17 +87,8 @@ function pathwaySummary(row: SpeakerRotationRow): string | null {
 }
 
 function VpeDashboard() {
-	// `proximity` defaults to empty only for the sibling component suites
-	// (`vpe-upcoming-claim`, `vpe-evaluator-pairings`) that stub this loader
-	// with the four keys that existed before #898. The loader always sets it.
-	const {
-		rotation,
-		overdue,
-		lapse,
-		pairings,
-		proximity = [],
-		timezone,
-	} = Route.useLoaderData();
+	const { rotation, overdue, lapse, pairings, proximity, timezone } =
+		Route.useLoaderData();
 
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
