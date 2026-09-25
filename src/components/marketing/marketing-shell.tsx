@@ -19,13 +19,17 @@ export type MarketingLink = {
  * hand-rolling a header of its own.
  */
 export const HEADER_LINKS: MarketingLink[] = [
+	{ label: "How it works", to: "/tour" },
 	{ label: "Resources", to: "/resources" },
 	{ label: "Sign in", to: "/signin", search: { redirect: "/officers" } },
 ];
 
 /** The marketing footer's links. See {@link HEADER_LINKS}. */
 export const FOOTER_LINKS: MarketingLink[] = [
+	{ label: "How it works", to: "/tour" },
 	{ label: "Resources", to: "/resources" },
+	{ label: "For districts", to: "/districts" },
+	{ label: "About", to: "/about" },
 	{ label: "Sign in", to: "/signin", search: { redirect: "/officers" } },
 ];
 
@@ -52,9 +56,14 @@ export function MarketingShell({ children }: { children: ReactNode }) {
 		// page used to set `bg-[var(--foam)]`, flat-filling straight over all of
 		// it. Marketing pages are the surfaces that most need that atmosphere.
 		<div className="flex min-h-svh flex-col text-[var(--sea-ink)]">
-			<header className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-5 sm:px-8">
+			{/* `flex-wrap` (#870): the brand plus three nav buttons need ~430px and
+			    `Button` never shrinks, so on a phone the nav drops to its own row
+			    instead of running "Sign in" off-screen, where body's
+			    `overflow-x: hidden` clips it. `-ml-4` lines the first button's text
+			    up with the brand on that row. `marketing-header-geometry.test.ts`. */}
+			<header className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-y-2 px-5 py-5 sm:px-8">
 				<BrandMark />
-				<nav className="flex items-center gap-1">
+				<nav className="-ml-4 flex items-center gap-1 sm:ml-0">
 					{HEADER_LINKS.map((l) => (
 						<Button
 							key={l.label}
@@ -76,7 +85,9 @@ export function MarketingShell({ children }: { children: ReactNode }) {
 				<div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-[var(--sea-ink-soft)] sm:px-8">
 					<div className="flex flex-wrap items-center justify-between gap-3">
 						<BrandMark size="sm" />
-						<div className="flex items-center gap-4">
+						{/* Wraps for the same reason as the header nav (#870): five links
+						    do not fit one 375px row. */}
+						<div className="flex flex-wrap items-center gap-x-4 gap-y-2">
 							{FOOTER_LINKS.map((l) => (
 								<Link
 									key={l.label}

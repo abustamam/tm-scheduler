@@ -35,7 +35,13 @@ async function renderShell() {
 			path,
 			component: () => null,
 		});
-	rootRoute.addChildren([stub("/resources"), stub("/signin")]);
+	rootRoute.addChildren([
+		stub("/tour"),
+		stub("/resources"),
+		stub("/districts"),
+		stub("/about"),
+		stub("/signin"),
+	]);
 	const router = createRouter({
 		routeTree: rootRoute,
 		history: createMemoryHistory({ initialEntries: ["/"] }),
@@ -70,6 +76,13 @@ describe("MarketingShell", () => {
 		await renderShell();
 		const hrefs = hrefsIn(screen.getByRole("navigation"));
 		expect(Object.keys(hrefs)).toEqual(HEADER_LINKS.map((l) => l.label));
+		// #870: the literal set too, so dropping an entry from the array fails.
+		expect(Object.keys(hrefs)).toEqual([
+			"How it works",
+			"Resources",
+			"Sign in",
+		]);
+		expect(hrefs["How it works"]).toBe("/tour");
 		expect(hrefs.Resources).toBe("/resources");
 		expect(hrefs["Sign in"]).toBe("/signin?redirect=%2Fofficers");
 	});
@@ -78,7 +91,17 @@ describe("MarketingShell", () => {
 		await renderShell();
 		const hrefs = hrefsIn(screen.getByRole("contentinfo"));
 		expect(Object.keys(hrefs)).toEqual(FOOTER_LINKS.map((l) => l.label));
+		expect(Object.keys(hrefs)).toEqual([
+			"How it works",
+			"Resources",
+			"For districts",
+			"About",
+			"Sign in",
+		]);
+		expect(hrefs["How it works"]).toBe("/tour");
 		expect(hrefs.Resources).toBe("/resources");
+		expect(hrefs["For districts"]).toBe("/districts");
+		expect(hrefs.About).toBe("/about");
 		expect(hrefs["Sign in"]).toBe("/signin?redirect=%2Fofficers");
 	});
 
