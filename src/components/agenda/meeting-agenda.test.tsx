@@ -1066,3 +1066,146 @@ describe("MeetingAgenda confirm nudge records outreach (#662)", () => {
 		expect(planState()).toBe("[]");
 	});
 });
+
+describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
+	afterEach(() => cleanup());
+
+	const FLAG = "Held Holder can't make it. Needs a new holder.";
+	const held = (over: Partial<AgendaSlot> = {}) =>
+		slot({
+			status: "claimed",
+			assigneeId: "m-held",
+			assigneeName: "Held Holder",
+			assigneeIsGuest: false,
+			...over,
+		});
+
+	/** Name-pick identity: the unverified path, which never gets take-over. */
+	const unverified = () =>
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: false,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
+	const anonymous = () =>
+		meetingViewer({
+			currentMemberId: null,
+			canManage: false,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
+	const signedInMember = () =>
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: false,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+			isSignedIn: true,
+		});
+	const officer = () =>
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: true,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+			isSignedIn: true,
+		});
+
+	it("flags the held role, as a status, under the holder's name", () => {
+		renderAgenda(unverified(), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+		});
+		const flag = screen.getByRole("status");
+		// Exact text, not a substring: the sentence names the holder.
+		expect(flag.textContent).toBe(FLAG);
+		// The holder's own line still renders beside it.
+		expect(screen.getByText("Held Holder")).toBeTruthy();
+	});
+
+	it("does not flag a holder who is not in the unavailable list", () => {
+		renderAgenda(unverified(), [held()], undefined, undefined, {
+			unavailableMemberIds: ["someone-else"],
+		});
+		// Anchor: the card rendered, so the absence below is not vacuous.
+		expect(screen.getByText("Held Holder")).toBeTruthy();
+		expect(screen.queryByText(/can't make it/)).toBeNull();
+	});
+
+	it("does not flag a GUEST holder, even if the id is in the list", () => {
+		renderAgenda(
+			unverified(),
+			[held({ assigneeIsGuest: true, assigneeName: "Guest Gail" })],
+			undefined,
+			undefined,
+			{ unavailableMemberIds: ["m-held"] },
+		);
+		expect(screen.getByText("Guest Gail")).toBeTruthy();
+		expect(screen.queryByText(/can't make it/)).toBeNull();
+	});
+
+	it("does not flag an open slot", () => {
+		renderAgenda(
+			unverified(),
+			[slot({ status: "open", assigneeId: null })],
+			undefined,
+			undefined,
+			{ unavailableMemberIds: ["m-held"] },
+		);
+		expect(screen.getByRole("button", { name: /^Claim / })).toBeTruthy();
+		expect(screen.queryByText(/can't make it/)).toBeNull();
+	});
+
+	it("does not flag under a locked viewer", () => {
+		renderAgenda(lockedViewer(officer()), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+		});
+		expect(screen.getByText("Held Holder")).toBeTruthy();
+		expect(screen.queryByText(/can't make it/)).toBeNull();
+	});
+
+	it("does not flag a completed meeting, even for a viewer that is not locked", () => {
+		// The officer's viewer on a past-but-open meeting keeps `canClaim`; the flag
+		// reads the meeting's own lifecycle so it cannot differ between audiences.
+		renderAgenda(officer(), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+			meeting: meetingFixture({ status: "completed" }),
+		});
+		expect(screen.getByText("Held Holder")).toBeTruthy();
+		expect(screen.queryByText(/can't make it/)).toBeNull();
+	});
+
+	it("does not flag a meeting whose day has passed", () => {
+		renderAgenda(officer(), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+			meeting: meetingFixture({ scheduledAt: daysFromNow(-30) }),
+		});
+		expect(screen.getByText("Held Holder")).toBeTruthy();
+		expect(screen.queryByText(/can't make it/)).toBeNull();
+	});
+
+	it.each([
+		["an anonymous viewer", anonymous],
+		["a signed-in member", signedInMember],
+		["an officer", officer],
+	])("renders the same flag for %s", (_label, makeViewer) => {
+		renderAgenda(makeViewer(), [held()], undefined, async () => null, {
+			unavailableMemberIds: ["m-held"],
+		});
+		expect(screen.getByRole("status").textContent).toBe(FLAG);
+	});
+
+	it("leaves the flagged slot without a Claim button for an unverified viewer", () => {
+		renderAgenda(unverified(), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+		});
+		expect(screen.getByRole("status").textContent).toBe(FLAG);
+		// Not `open`, so the flag does not make it claimable.
+		expect(screen.queryByRole("button", { name: /^Claim / })).toBeNull();
+		expect(screen.getByText("Filled")).toBeTruthy();
+	});
+});

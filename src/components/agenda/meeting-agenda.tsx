@@ -44,6 +44,7 @@ import {
 	slotLabel,
 	summarizeAgenda,
 } from "#/lib/agenda";
+import { isMeetingOver } from "#/lib/meeting-lifecycle";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
 import {
@@ -312,6 +313,23 @@ export function MeetingAgenda({
 		roleByMemberId,
 		new Set(contactedMemberIds),
 	);
+
+	// "Can't make it" flag (#764). Since ADR-0026 an unverified "not coming" no
+	// longer frees the member's roles, so a role can stay assigned to someone who
+	// said they won't be there — the card has to say so to EVERY viewer, which is
+	// why this reads the shared payload's ids and the meeting's own lifecycle
+	// rather than a per-audience capability: an admin keeps `canClaim` on a
+	// past-but-open meeting that a member sees frozen, and the flag must not
+	// differ between them. `viewer.canClaim` still gates it too, so a
+	// `lockedViewer` — the lock that hides Claim and Release — hides this as well.
+	const unavailableSet = new Set(unavailableMemberIds);
+	const flagsUnavailableHolders =
+		viewer.canClaim &&
+		!isMeetingOver({
+			status: meeting.status,
+			scheduledAt: meeting.scheduledAt,
+			timezone,
+		});
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -595,69 +613,93 @@ export function MeetingAgenda({
 								// a narrowing of `slot.assigneeId` the moment it crosses a
 								// closure boundary.
 								const holderMemberId = slot.assigneeId;
+								// Not `isOpen` alone: an open slot carries no holder, and a
+								// guest's id is not a member id, whatever the list holds.
+								const holderCantMakeIt =
+									flagsUnavailableHolders &&
+									holderMemberId != null &&
+									!slot.assigneeIsGuest &&
+									unavailableSet.has(holderMemberId);
 								return (
 									<li
 										key={slot.id}
 										className="rounded-xl border bg-card p-4 shadow-sm"
 									>
 										<div className="flex items-start justify-between gap-3">
-											<button
-												type="button"
-												onClick={() => handleClaimClick(slot)}
-												disabled={!isOpen || !canClaim}
-												className="min-w-0 flex-1 text-left disabled:cursor-default"
-											>
-												<p className="font-medium">
-													{slotLabel(slot, roleCounts)}
-												</p>
+											{/* The flag sits OUTSIDE the claim button, in a wrapper
+											    that takes over its flex-1: a button's children are
+											    presentational, so a status region inside it is not
+											    announced as one. */}
+											<div className="min-w-0 flex-1">
+												<button
+													type="button"
+													onClick={() => handleClaimClick(slot)}
+													disabled={!isOpen || !canClaim}
+													className="w-full min-w-0 text-left disabled:cursor-default"
+												>
+													<p className="font-medium">
+														{slotLabel(slot, roleCounts)}
+													</p>
 
-												{slot.assigneeName ? (
-													<p className="text-sm text-muted-foreground">
-														{slot.assigneeName}
-														{slot.assigneeIsGuest ? (
-															<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-																Guest
+													{slot.assigneeName ? (
+														<p className="text-sm text-muted-foreground">
+															{slot.assigneeName}
+															{slot.assigneeIsGuest ? (
+																<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+																	Guest
+																</span>
+															) : null}
+															{isMine ? (
+																<span className="text-primary"> (you)</span>
+															) : null}
+														</p>
+													) : (
+														<p className="text-sm text-muted-foreground">
+															Open
+														</p>
+													)}
+
+													{slot.isSpeakerRole && slot.speechTitle ? (
+														<div className="mt-1 text-sm">
+															<p className="font-medium">
+																&ldquo;{slot.speechTitle}&rdquo;
+															</p>
+															<p className="text-xs text-muted-foreground">
+																{[
+																	slot.pathwayPath,
+																	slot.projectName,
+																	slot.projectLevel,
+																]
+																	.filter(Boolean)
+																	.join(" · ")}
+																{timeWindow
+																	? ` · ${timeWindow.min}–${timeWindow.max} min`
+																	: ""}
+															</p>
+														</div>
+													) : null}
+
+													{slot.evaluates ? (
+														<p className="mt-1 text-xs text-muted-foreground">
+															Evaluates{" "}
+															<span className="font-medium text-foreground">
+																{slot.evaluates.speechTitle
+																	? `“${slot.evaluates.speechTitle}”`
+																	: (slot.evaluates.speakerName ?? "a speaker")}
 															</span>
-														) : null}
-														{isMine ? (
-															<span className="text-primary"> (you)</span>
-														) : null}
-													</p>
-												) : (
-													<p className="text-sm text-muted-foreground">Open</p>
-												)}
-
-												{slot.isSpeakerRole && slot.speechTitle ? (
-													<div className="mt-1 text-sm">
-														<p className="font-medium">
-															&ldquo;{slot.speechTitle}&rdquo;
 														</p>
-														<p className="text-xs text-muted-foreground">
-															{[
-																slot.pathwayPath,
-																slot.projectName,
-																slot.projectLevel,
-															]
-																.filter(Boolean)
-																.join(" · ")}
-															{timeWindow
-																? ` · ${timeWindow.min}–${timeWindow.max} min`
-																: ""}
-														</p>
-													</div>
+													) : null}
+												</button>
+												{holderCantMakeIt ? (
+													// `<output>`: its implicit role IS `status`, the
+													// repo's convention (see `sync-status.tsx`); `block`
+													// puts it on its own line under the holder.
+													<output className="mt-1 block text-xs text-[var(--warning-strong)]">
+														{slot.assigneeName} can't make it. Needs a new
+														holder.
+													</output>
 												) : null}
-
-												{slot.evaluates ? (
-													<p className="mt-1 text-xs text-muted-foreground">
-														Evaluates{" "}
-														<span className="font-medium text-foreground">
-															{slot.evaluates.speechTitle
-																? `“${slot.evaluates.speechTitle}”`
-																: (slot.evaluates.speakerName ?? "a speaker")}
-														</span>
-													</p>
-												) : null}
-											</button>
+											</div>
 
 											<div className="flex shrink-0 flex-col items-end gap-2">
 												{/* Accessible names carry the ROW ("Move Speaker 2 up"),
