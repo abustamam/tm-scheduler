@@ -25,6 +25,7 @@ import {
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
+	clubs,
 	guests,
 	meetingAttendance,
 	meetings,
@@ -43,6 +44,13 @@ import {
 	type EvaluatorPairingRow,
 	groupEvaluatorPairings,
 } from "#/lib/evaluator-pairing";
+import {
+	type LevelProximityRow,
+	selectLevelProximity,
+} from "#/lib/level-proximity";
+import { pathwaysByMember } from "./pathways-read-logic";
+
+export type { LevelProximityRow } from "#/lib/level-proximity";
 
 /** A slot only counts as "held" once it's claimed or confirmed. */
 const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
@@ -149,6 +157,104 @@ export async function loadUpcomingRoleClaims(
 		map.set(r.memberId, r.soonestAt);
 	}
 	return map;
+}
+
+/**
+ * Per member, the soonest future meeting at which they hold a claimed or
+ * confirmed SPEAKER slot (#898). A speaker-only sibling of
+ * `loadUpcomingRoleClaims`, and deliberately a second function rather than a
+ * parameter on it: that one is role-neutral on purpose (its comment says why,
+ * and the "Booked" marker's wording depends on it), while "Close to a level"
+ * needs exactly the narrower answer. A member one project from a level who is
+ * booked as Timer still needs a speaker slot.
+ *
+ * Same `HELD_SLOT_STATUSES`, `gte(now)` and cancelled-meeting exclusion as its
+ * sibling, so "booked" means one thing on both sides of the dashboard.
+ */
+export async function loadUpcomingSpeakerSlots(
+	clubId: string,
+	now: Date = new Date(),
+): Promise<Map<string, Date>> {
+	const rows = await db
+		.select({
+			memberId: roleSlots.assignedMemberId,
+			soonestAt: min(meetings.scheduledAt),
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			and(
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+				eq(roleDefinitions.isSpeakerRole, true),
+			),
+		)
+		.innerJoin(
+			meetings,
+			and(
+				eq(meetings.id, roleSlots.meetingId),
+				eq(meetings.clubId, clubId),
+				gte(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.where(
+			and(
+				inArray(roleSlots.status, [...HELD_SLOT_STATUSES]),
+				isNotNull(roleSlots.assignedMemberId),
+			),
+		)
+		.groupBy(roleSlots.assignedMemberId);
+
+	const map = new Map<string, Date>();
+	for (const r of rows) {
+		if (!r.memberId || !r.soonestAt) continue;
+		map.set(r.memberId, r.soonestAt);
+	}
+	return map;
+}
+
+export interface LevelProximityResult {
+	rows: LevelProximityRow[];
+	/** `clubs.timezone`, so the dashboard formats every date in the club's day. */
+	timezone: string;
+}
+
+/**
+ * "Close to a level" (#898): active members one or two projects from finishing
+ * a Pathways level, and levels finished but not yet approved in Base Camp.
+ *
+ * Reads through `pathwaysByMember` rather than re-deriving progress, so this
+ * section and the member's own Pathways panel count "left" the same way. That
+ * batch returns every MEMBERSHIP with a path, inactive ones included, so the
+ * active roster here is what filters (the same `status = 'active'` the rotation
+ * uses). The selection itself is `selectLevelProximity`, pure and unit-tested.
+ */
+export async function loadLevelProximity(
+	clubId: string,
+	now: Date = new Date(),
+): Promise<LevelProximityResult> {
+	const [roster, paths, speakerSlots, [club]] = await Promise.all([
+		db
+			.select({ memberId: members.id, name: members.name })
+			.from(members)
+			.where(and(eq(members.clubId, clubId), eq(members.status, "active"))),
+		pathwaysByMember(clubId),
+		loadUpcomingSpeakerSlots(clubId, now),
+		db
+			.select({ timezone: clubs.timezone })
+			.from(clubs)
+			.where(eq(clubs.id, clubId)),
+	]);
+	return {
+		rows: selectLevelProximity({
+			members: roster,
+			pathsByMember: paths,
+			upcomingSpeakerAt: speakerSlots,
+		}),
+		// NOT NULL with a default in the schema; the fallback is that default,
+		// for a club id that matched nothing (the gate runs first, so never).
+		timezone: club?.timezone ?? "America/Chicago",
+	};
 }
 
 /**

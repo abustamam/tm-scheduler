@@ -9,12 +9,20 @@
  *   TEST_DATABASE_URL=postgresql://test:test@localhost:5433/tm_test \
  *     bunx vitest run src/server/reporting.integration.test.ts
  */
-import { eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	clubs,
 	meetingAttendance,
 	meetings,
 	members,
+	pathEnrollments,
+	pathLevelProgress,
+	pathwaysPathLevels,
+	pathwaysPaths,
+	pathwaysProjects,
+	projectCompletionMarks,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -458,5 +466,216 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 			// The row shape is the lapse row's own — no upcoming marker leaked in.
 			expect(row && "upcomingRoleAt" in row).toBe(false);
 		});
+	});
+});
+
+describe.skipIf(!hasTestDb)("Close to a level (#898)", () => {
+	let seeded: SeededClub;
+	let speakerRoleId: string;
+	// `pathways_paths` is CLUB-LESS, so `cleanup` cannot reach it: this suite
+	// deletes the ones it made (projects, levels, enrollments and marks cascade).
+	const createdPathIds: string[] = [];
+
+	beforeEach(async () => {
+		seeded = await seedClub();
+		const [speaker] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seeded.clubId,
+				name: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+			})
+			.returning({ id: roleDefinitions.id });
+		if (!speaker) throw new Error("speaker role insert failed");
+		speakerRoleId = speaker.id;
+	});
+
+	afterEach(async () => {
+		await cleanup(seeded.clubId, [seeded.adminUserId, seeded.memberUserId]);
+		if (createdPathIds.length > 0) {
+			await testDb
+				.delete(pathwaysPaths)
+				.where(inArray(pathwaysPaths.id, createdPathIds));
+			createdPathIds.length = 0;
+		}
+	});
+
+	it("loadUpcomingSpeakerSlots returns the soonest future SPEAKER slot only", async () => {
+		const { loadUpcomingSpeakerSlots } = await import(
+			"#/server/reporting-logic"
+		);
+		const ana = await addMember(seeded.clubId, "Ana Speaker");
+		const tim = await addMember(seeded.clubId, "Tim Timer");
+		const cal = await addMember(seeded.clubId, "Cal Cancelled");
+		const ope = await addMember(seeded.clubId, "Opal Open");
+		const pat = await addMember(seeded.clubId, "Pat Past");
+
+		const in1 = await addUpcomingMeeting(seeded.clubId, 1);
+		const in2 = await addUpcomingMeeting(seeded.clubId, 2, "cancelled");
+		const in5 = await addUpcomingMeeting(seeded.clubId, 5);
+		const in10 = await addUpcomingMeeting(seeded.clubId, 10);
+		const past = await addMeeting(seeded.clubId, 3);
+
+		// Ana: a Timer slot sooner than either speaker slot must not win.
+		await addSlot({
+			meetingId: in1.meetingId,
+			roleDefinitionId: seeded.roleDefinitionId,
+			memberId: ana.memberId,
+		});
+		await addSlot({
+			meetingId: in10.meetingId,
+			roleDefinitionId: speakerRoleId,
+			memberId: ana.memberId,
+		});
+		await addSlot({
+			meetingId: in5.meetingId,
+			roleDefinitionId: speakerRoleId,
+			memberId: ana.memberId,
+			status: "claimed",
+		});
+		// Each of these is the only thing its member holds.
+		await addSlot({
+			meetingId: in5.meetingId,
+			roleDefinitionId: seeded.roleDefinitionId,
+			memberId: tim.memberId,
+		});
+		await addSlot({
+			meetingId: in2.meetingId,
+			roleDefinitionId: speakerRoleId,
+			memberId: cal.memberId,
+		});
+		await addSlot({
+			meetingId: in10.meetingId,
+			roleDefinitionId: speakerRoleId,
+			memberId: ope.memberId,
+			status: "open",
+		});
+		await addSlot({
+			meetingId: past,
+			roleDefinitionId: speakerRoleId,
+			memberId: pat.memberId,
+		});
+
+		const slots = await loadUpcomingSpeakerSlots(seeded.clubId);
+		expect(slots.get(ana.memberId)).toEqual(in5.scheduledAt);
+		expect(slots.has(tim.memberId)).toBe(false);
+		expect(slots.has(cal.memberId)).toBe(false);
+		expect(slots.has(ope.memberId)).toBe(false);
+		expect(slots.has(pat.memberId)).toBe(false);
+	});
+
+	it("loadLevelProximity selects close and awaiting rows for active members, with the club's timezone", async () => {
+		const { loadLevelProximity } = await import("#/server/reporting-logic");
+		await testDb
+			.update(clubs)
+			.set({ timezone: "America/Los_Angeles" })
+			.where(eq(clubs.id, seeded.clubId));
+
+		const tag = randomUUID().slice(0, 8);
+		const [path] = await testDb
+			.insert(pathwaysPaths)
+			.values({ courseCode: `898-${tag}`, name: `Proximity Path ${tag}` })
+			.returning({ id: pathwaysPaths.id });
+		if (!path) throw new Error("path insert failed");
+		createdPathIds.push(path.id);
+
+		const projects = await testDb
+			.insert(pathwaysProjects)
+			.values([
+				{ pathId: path.id, level: 1, name: "L1 A", isRequired: true },
+				{ pathId: path.id, level: 1, name: "L1 B", isRequired: true },
+				{ pathId: path.id, level: 1, name: "L1 C", isRequired: true },
+				{ pathId: path.id, level: 2, name: "L2 Required", isRequired: true },
+				{ pathId: path.id, level: 2, name: "L2 Elective X", isRequired: false },
+				{ pathId: path.id, level: 2, name: "L2 Elective Y", isRequired: false },
+			])
+			.returning({
+				id: pathwaysProjects.id,
+				level: pathwaysProjects.level,
+			});
+		await testDb.insert(pathwaysPathLevels).values([
+			{ pathId: path.id, level: 1, minReqElectives: 0 },
+			{ pathId: path.id, level: 2, minReqElectives: 1 },
+		]);
+		const level1Ids = projects.filter((p) => p.level === 1).map((p) => p.id);
+
+		async function enroll(personId: string) {
+			const [enr] = await testDb
+				.insert(pathEnrollments)
+				.values({ personId, pathId: path?.id as string })
+				.returning({ id: pathEnrollments.id });
+			if (!enr) throw new Error("enrollment insert failed");
+			return enr.id;
+		}
+		async function markLevel1(enrollmentId: string) {
+			await testDb
+				.insert(projectCompletionMarks)
+				.values(level1Ids.map((projectId) => ({ enrollmentId, projectId })));
+		}
+
+		// Maya: catalog branch, Level 1 fully marked → Level 2, 2 left.
+		const maya = await addMember(seeded.clubId, "Maya Close");
+		await markLevel1(await enroll(maya.personId));
+		const speaking = await addUpcomingMeeting(seeded.clubId, 4);
+		await addSlot({
+			meetingId: speaking.meetingId,
+			roleDefinitionId: speakerRoleId,
+			memberId: maya.memberId,
+		});
+
+		// Ina: the same progress, but not an active member.
+		const ina = await addMember(seeded.clubId, "Ina Inactive");
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, ina.memberId));
+		await markLevel1(await enroll(ina.personId));
+
+		// Fay: declared, nothing marked → Level 1 with 3 left. Not close.
+		const fay = await addMember(seeded.clubId, "Fay Far");
+		await enroll(fay.personId);
+
+		// Bo: Base Camp says Level 1 done but unapproved, Level 2 one short.
+		const bo = await addMember(seeded.clubId, "Bo Basecamp");
+		const boEnrollment = await enroll(bo.personId);
+		await testDb.insert(pathLevelProgress).values([
+			{
+				enrollmentId: boEnrollment,
+				level: 1,
+				completed: 3,
+				total: 3,
+				approved: false,
+			},
+			{
+				enrollmentId: boEnrollment,
+				level: 2,
+				completed: 1,
+				total: 2,
+				approved: false,
+			},
+		]);
+
+		const result = await loadLevelProximity(seeded.clubId);
+		expect(result.timezone).toBe("America/Los_Angeles");
+		expect(
+			result.rows.map((r) => [r.name, r.kind, r.level, r.projectsLeft]),
+		).toEqual([
+			["Bo Basecamp", "awaiting_approval", 1, 0],
+			["Bo Basecamp", "close", 2, 1],
+			["Maya Close", "close", 2, 2],
+		]);
+		const mayaRow = result.rows.find((r) => r.name === "Maya Close");
+		expect(mayaRow).toMatchObject({
+			pathName: `Proximity Path ${tag}`,
+			projectNames: ["L2 Required"],
+			electivesToChoose: 1,
+			upcomingSpeakerAt: speaking.scheduledAt,
+		});
+		// Base Camp's summary alone names nothing (#456); the count still shows.
+		expect(
+			result.rows.find((r) => r.name === "Bo Basecamp" && r.kind === "close")
+				?.projectNames,
+		).toEqual([]);
 	});
 });

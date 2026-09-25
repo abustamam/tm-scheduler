@@ -13,6 +13,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { PATH_COMPLETION_LEVEL } from "#/lib/pathways-catalog";
 import { isReadableClub } from "./club-readable-logic";
 import { resolveUserPersonId } from "./person-identity-logic";
 
@@ -89,6 +90,23 @@ export interface PathViewModel {
 	ringPercent: number; // 0–100 integer
 	currentLevel: number | null; // lowest not-approved; null when complete
 	complete: boolean;
+	/**
+	 * The level the member is actually working on (#898): the lowest level that
+	 * still has projects LEFT, which is not the same question as `currentLevel`'s
+	 * "lowest not approved". On the catalog branch nothing is ever approved, so
+	 * `currentLevel` is Level 1 forever; keying "Up next" off it left a member
+	 * who had marked all of Level 1 staring at "Level 1 · 4 of 4" with nothing
+	 * next. `currentLevel` and `complete` are unchanged, because the ring and
+	 * "Path complete" are about approval, and only Base Camp approves.
+	 *
+	 * Path Completion (`PATH_COMPLETION_LEVEL`) can be the working level only on
+	 * the catalog branch, and only once levels 1–5 have nothing left. Base
+	 * Camp's summary never carries it, so there is no count to read there.
+	 * Null when nothing is left. Render with `levelLabel()`, never "Level N".
+	 */
+	workingLevel: number | null;
+	/** Projects left at `workingLevel` (see `projectsLeftAt`). 0 when it is null. */
+	projectsLeftAtWorkingLevel: number;
 	levels: SyncedLevel[];
 	/**
 	 * Where `levels` (and therefore the ring and the level bar) come from.
@@ -108,7 +126,8 @@ export interface PathViewModel {
 	/** This person's delivered speeches whose project is in this path. */
 	wins: Win[];
 	/**
-	 * What the member still has to do at the current level. Empty when complete.
+	 * What the member still has to do at the WORKING level. Empty when there is
+	 * no working level.
 	 *
 	 * Required-only on the Base Camp branch (electives live in
 	 * `upNextElectives`), and ALWAYS EMPTY on the inference fallback — delivered
@@ -116,8 +135,8 @@ export interface PathViewModel {
 	 * evidence a leadership project at all (#456).
 	 */
 	upNext: UpNextProject[];
-	/** Current-level elective choice, when the mirror is present and the level's
-	 * elective requirement isn't met yet. Null on the inference fallback path. */
+	/** Working-level elective choice, when the level's elective requirement
+	 * isn't met yet. Null on the inference fallback path. */
 	upNextElectives: UpNextElectives | null;
 }
 
@@ -164,18 +183,83 @@ function levelsFromCatalog(
 		(a, b) => a - b,
 	);
 	return levels.map((level) => {
-		const atLevel = catalogProjects.filter((p) => p.level === level);
-		const required = atLevel.filter((p) => p.isRequired);
-		const minReqElectives =
-			pathLevels?.find((l) => l.level === level)?.minReqElectives ?? 0;
-		return {
+		const { total, left } = catalogLevelRequirement(
+			catalogProjects,
+			pathLevels,
+			completeProjectIds,
 			level,
-			completed: atLevel.filter((p) => completeProjectIds.has(p.projectId))
-				.length,
-			total: required.length + minReqElectives,
-			approved: false,
-		};
+		);
+		// `total - left`, not "marked projects at this level" (#898). The naive
+		// count credits every marked elective, so three electives marked against
+		// a requirement of two would fill the ring while a required project sat
+		// unmarked. This way the ring and `projectsLeftAt` cannot disagree.
+		return { level, completed: total - left, total, approved: false };
 	});
+}
+
+/**
+ * TI's requirement for one catalog level, and how much of it is still open:
+ * the required projects not yet complete, plus however many electives are
+ * still to choose. Electives beyond the minimum count for nothing.
+ */
+function catalogLevelRequirement(
+	catalogProjects: CatalogProject[],
+	pathLevels: { level: number; minReqElectives: number }[] | undefined,
+	completeProjectIds: Set<string>,
+	level: number,
+): {
+	total: number;
+	left: number;
+	requiredLeft: number;
+	electivesToChoose: number;
+} {
+	const atLevel = catalogProjects.filter((p) => p.level === level);
+	const required = atLevel.filter((p) => p.isRequired);
+	const minReqElectives =
+		pathLevels?.find((l) => l.level === level)?.minReqElectives ?? 0;
+	const requiredLeft = required.filter(
+		(p) => !completeProjectIds.has(p.projectId),
+	).length;
+	const completedElectives = atLevel.filter(
+		(p) => !p.isRequired && completeProjectIds.has(p.projectId),
+	).length;
+	const electivesToChoose = Math.max(0, minReqElectives - completedElectives);
+	return {
+		total: required.length + minReqElectives,
+		left: requiredLeft + electivesToChoose,
+		requiredLeft,
+		electivesToChoose,
+	};
+}
+
+/**
+ * Projects left at one level, counted the way that level's SOURCE counts:
+ *
+ * - `basecamp`: `total - min(completed, total)` from `path_level_progress`.
+ *   Base Camp's counts are authoritative and are not recomputed from marks. A
+ *   level Base Camp has APPROVED has nothing left whatever its counts say.
+ * - `catalog`: `levelsFromCatalog` already stored `completed = total - left`,
+ *   so the same subtraction gives the required-plus-electives answer.
+ */
+function projectsLeftAt(level: SyncedLevel): number {
+	if (level.approved) return 0;
+	return level.total - Math.min(level.completed, level.total);
+}
+
+/** Lowest level with projects left; see `PathViewModel.workingLevel`. */
+function findWorkingLevel(
+	levels: SyncedLevel[],
+	levelsSource: "basecamp" | "catalog",
+): SyncedLevel | null {
+	const real = levels.filter((l) => l.level !== PATH_COMPLETION_LEVEL);
+	const open = real.find((l) => projectsLeftAt(l) > 0);
+	if (open) return open;
+	// Path Completion only once 1–5 are done, and only where there is a count
+	// for it. `levels` is sorted, so it would come last anyway; the explicit
+	// split keeps the Base Camp half true even if a summary ever carried it.
+	if (levelsSource !== "catalog") return null;
+	const completion = levels.find((l) => l.level === PATH_COMPLETION_LEVEL);
+	return completion && projectsLeftAt(completion) > 0 ? completion : null;
 }
 
 /** Pure: shape one synced path into its display model. */
@@ -215,6 +299,9 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	// On the catalog branch `approved` is always false, so a path is never
 	// reported complete off marks alone — only Base Camp closes a path.
 	const complete = !firstUnapproved;
+	const working = findWorkingLevel(levels, levelsSource);
+	const workingLevel = working ? working.level : null;
+	const projectsLeftAtWorkingLevel = working ? projectsLeftAt(working) : 0;
 
 	const base = {
 		courseCode: path.courseCode,
@@ -222,13 +309,19 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		ringPercent,
 		currentLevel,
 		complete,
+		workingLevel,
+		projectsLeftAtWorkingLevel,
 		levels,
 		levelsSource,
 		hasBasecamp: hasBasecampDetail,
 	};
 
-	// Project-level branch: taken as soon as EITHER source has per-project truth.
-	if (hasBasecampDetail || marks.length > 0) {
+	// Project-level branch: taken as soon as EITHER source has per-project truth,
+	// or when the levels themselves come from the catalog. That last arm is
+	// #898's: a newly declared catalog path with zero marks is not a summary-sync
+	// club, and falling through to the fallback below (built for Base Camp) left
+	// it with no "Up next" at all. With no marks, "complete" is honestly empty.
+	if (hasBasecampDetail || marks.length > 0 || levelsSource === "catalog") {
 		// A delivered speech linked to this project (via `speeches.project_id`)
 		// gives a mark its title and date; /detail carries its own.
 		const speechByProjectId = new Map(
@@ -263,11 +356,14 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 
 		let upNext: UpNextProject[] = [];
 		let upNextElectives: UpNextElectives | null = null;
-		if (!complete && currentLevel !== null) {
-			const currentCatalog = path.catalogProjects.filter(
-				(c) => c.level === currentLevel,
+		// Keyed off the WORKING level, not `currentLevel` (#898), and gated on it
+		// alone: `complete` is about approval, so a catalog path in Path
+		// Completion still has something next.
+		if (workingLevel !== null) {
+			const workingCatalog = path.catalogProjects.filter(
+				(c) => c.level === workingLevel,
 			);
-			upNext = currentCatalog
+			upNext = workingCatalog
 				.filter((c) => c.isRequired && !completeIds.has(c.projectId))
 				.map((c) => ({
 					projectId: c.projectId,
@@ -276,19 +372,17 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 					isRequired: c.isRequired,
 				}));
 
-			const currentElectives = currentCatalog.filter((c) => !c.isRequired);
-			const completedElectives = currentElectives.filter((c) =>
-				completeIds.has(c.projectId),
-			).length;
-			const minReq =
-				path.pathLevels?.find((l) => l.level === currentLevel)
-					?.minReqElectives ?? 0;
-			const chooseCount = Math.max(0, minReq - completedElectives);
+			const { electivesToChoose: chooseCount } = catalogLevelRequirement(
+				path.catalogProjects,
+				path.pathLevels,
+				completeIds,
+				workingLevel,
+			);
 			if (chooseCount > 0) {
 				upNextElectives = {
 					chooseCount,
-					options: currentElectives
-						.filter((c) => !completeIds.has(c.projectId))
+					options: workingCatalog
+						.filter((c) => !c.isRequired && !completeIds.has(c.projectId))
 						.map((c) => ({ projectId: c.projectId, name: c.name })),
 				};
 			}

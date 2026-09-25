@@ -18,15 +18,18 @@ import {
 	formatMeetingDate,
 	formatShortDate,
 } from "#/lib/format";
+import { LEVEL_PROXIMITY, proximityDetail } from "#/lib/level-proximity";
 import { formatTenure } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import {
 	getAttendanceLapse,
 	getEvaluatorPairings,
+	getLevelProximity,
 	getOverdueMembers,
 	getSpeakerRotation,
 } from "#/server/reporting";
 import type {
+	LevelProximityRow,
 	OverdueMemberRow,
 	SpeakerRotationRow,
 } from "#/server/reporting-logic";
@@ -45,16 +48,30 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 				overdue: [],
 				lapse: [],
 				pairings: [],
+				proximity: [] as LevelProximityRow[],
+				timezone: undefined as string | undefined,
 				clubName: "",
 			};
 		}
-		const [rotation, overdue, lapse, pairings] = await Promise.all([
+		const [rotation, overdue, lapse, pairings, proximity] = await Promise.all([
 			getSpeakerRotation({ data: { clubId: club.clubId } }),
 			getOverdueMembers({ data: { clubId: club.clubId } }),
 			getAttendanceLapse({ data: { clubId: club.clubId } }),
 			getEvaluatorPairings({ data: { clubId: club.clubId } }),
+			getLevelProximity({ data: { clubId: club.clubId } }),
 		]);
-		return { rotation, overdue, lapse, pairings, clubName: club.name };
+		return {
+			rotation,
+			overdue,
+			lapse,
+			pairings,
+			proximity: proximity.rows,
+			// The club's zone, for EVERY date on this page that names a day. The
+			// Booked marker passed none and printed the server's day, so a
+			// booking at 23:30 club time read as the next day (#898).
+			timezone: proximity.timezone as string | undefined,
+			clubName: club.name,
+		};
 	},
 	component: VpeDashboard,
 });
@@ -70,7 +87,17 @@ function pathwaySummary(row: SpeakerRotationRow): string | null {
 }
 
 function VpeDashboard() {
-	const { rotation, overdue, lapse, pairings } = Route.useLoaderData();
+	// `proximity` defaults to empty only for the sibling component suites
+	// (`vpe-upcoming-claim`, `vpe-evaluator-pairings`) that stub this loader
+	// with the four keys that existed before #898. The loader always sets it.
+	const {
+		rotation,
+		overdue,
+		lapse,
+		pairings,
+		proximity = [],
+		timezone,
+	} = Route.useLoaderData();
 
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
@@ -178,7 +205,32 @@ function VpeDashboard() {
 				{overdueMembers.length === 0 ? (
 					<EmptyRow>Everyone has had a role recently. 🎉</EmptyRow>
 				) : (
-					overdueMembers.map((m) => <OverdueRow key={m.memberId} member={m} />)
+					overdueMembers.map((m) => (
+						<OverdueRow key={m.memberId} member={m} timezone={timezone} />
+					))
+				)}
+			</Section>
+
+			{/* Close to a level (#898). Between "Overdue" and the speaker queue
+			    because it answers the queue's question with a reason: a member
+			    this close needs one speaker slot, and every finished level feeds
+			    a DCP education goal. PROJECTS, never speeches — Level 1's
+			    Evaluation and Feedback is three assignments, and later levels
+			    hold projects that are not speeches at all. */}
+			<Section
+				title="Close to a level"
+				subtitle={`Members with 1–${LEVEL_PROXIMITY.maxProjectsLeft} projects left in a level. Levels waiting on Base Camp approval come first.`}
+			>
+				{proximity.length === 0 ? (
+					<EmptyRow>Nobody is within two projects of a level yet.</EmptyRow>
+				) : (
+					proximity.map((r) => (
+						<ProximityRow
+							key={`${r.memberId}:${r.pathName}:${r.kind}`}
+							row={r}
+							timezone={timezone}
+						/>
+					))
 				)}
 			</Section>
 
@@ -191,7 +243,12 @@ function VpeDashboard() {
 					<EmptyRow>No active members yet.</EmptyRow>
 				) : (
 					rotation.map((r, i) => (
-						<RotationRow key={r.memberId} row={r} rank={i + 1} />
+						<RotationRow
+							key={r.memberId}
+							row={r}
+							rank={i + 1}
+							timezone={timezone}
+						/>
 					))
 				)}
 			</Section>
@@ -253,12 +310,15 @@ function MemberIdentity({
 	name,
 	joinedAt,
 	upcomingRoleAt,
+	timezone,
 }: {
 	memberId: string;
 	name: string;
 	joinedAt: Date | string | null;
 	/** #543 — omitted by callers that have no upcoming-claim data (LapseRow). */
 	upcomingRoleAt?: Date | string;
+	/** The club's zone, for the Booked marker's day (#898). */
+	timezone?: string;
 }) {
 	return (
 		<div className="flex min-w-0 items-center gap-3">
@@ -271,12 +331,16 @@ function MemberIdentity({
 				<div className="flex min-w-0 items-center gap-2">
 					<span className="truncate text-sm font-bold">{name}</span>
 					{/* The pill is `sm`-and-up ONLY — see BookedMarker's note. */}
-					{upcomingRoleAt ? <BookedPill at={upcomingRoleAt} /> : null}
+					{upcomingRoleAt ? (
+						<BookedPill at={upcomingRoleAt} timezone={timezone} />
+					) : null}
 				</div>
 				<div className="text-xs text-[var(--sea-ink-soft)]">
 					{joinedAt ? formatTenure(joinedAt) : "Tenure unknown"}
 				</div>
-				{upcomingRoleAt ? <BookedLine at={upcomingRoleAt} /> : null}
+				{upcomingRoleAt ? (
+					<BookedLine at={upcomingRoleAt} timezone={timezone} />
+				) : null}
 			</div>
 		</div>
 	);
@@ -316,22 +380,34 @@ function MemberIdentity({
  * and can see none of this, which is why the component suite pins the two class
  * strings instead.
  */
-function BookedPill({ at }: { at: Date | string }) {
+function BookedPill({
+	at,
+	timezone,
+}: {
+	at: Date | string;
+	timezone?: string;
+}) {
 	return (
 		// Teal (the token the member dashboard's "Signed up" pill uses) rather
 		// than the amber the wait column carries: these two mean opposite things
 		// and must not look alike.
 		<span className="hidden shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-[var(--lagoon-deep)] sm:inline-block">
-			Booked · {formatMeetingDate(at)}
+			Booked · {formatMeetingDate(at, timezone)}
 		</span>
 	);
 }
 
 /** The below-`sm` form of {@link BookedPill} — wrapping text, no weekday. */
-function BookedLine({ at }: { at: Date | string }) {
+function BookedLine({
+	at,
+	timezone,
+}: {
+	at: Date | string;
+	timezone?: string;
+}) {
 	return (
 		<div className="text-xs font-bold text-[var(--lagoon-deep)] sm:hidden">
-			Booked {formatShortDate(at)}
+			Booked {formatShortDate(at, timezone)}
 		</div>
 	);
 }
@@ -339,7 +415,13 @@ function BookedLine({ at }: { at: Date | string }) {
 const ROW_CLASS =
 	"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 transition-colors last:border-b-0 hover:bg-[var(--foam)]";
 
-function OverdueRow({ member }: { member: OverdueMemberRow }) {
+function OverdueRow({
+	member,
+	timezone,
+}: {
+	member: OverdueMemberRow;
+	timezone?: string;
+}) {
 	const wait =
 		member.daysSinceLastRole === null
 			? "Never held a role"
@@ -359,6 +441,7 @@ function OverdueRow({ member }: { member: OverdueMemberRow }) {
 				name={member.name}
 				joinedAt={member.joinedAt}
 				upcomingRoleAt={member.upcomingRoleAt}
+				timezone={timezone}
 			/>
 			<div className="text-sm">
 				<span className="font-bold text-[var(--warning-strong)]">{wait}</span>
@@ -412,7 +495,15 @@ function LapseRow({ member }: { member: AttendanceLapseRow }) {
 	);
 }
 
-function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
+function RotationRow({
+	row,
+	rank,
+	timezone,
+}: {
+	row: SpeakerRotationRow;
+	rank: number;
+	timezone?: string;
+}) {
 	const pathway = pathwaySummary(row);
 	return (
 		<Link
@@ -433,6 +524,7 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 				name={row.name}
 				joinedAt={row.joinedAt}
 				upcomingRoleAt={row.upcomingRoleAt}
+				timezone={timezone}
 			/>
 			<div className="hidden text-sm sm:block">
 				{row.lastSpokenAt ? (
@@ -455,6 +547,69 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 			</div>
 			<Chevron />
 		</Link>
+	);
+}
+
+/**
+ * One member close to a level, or with a level awaiting approval (#898).
+ *
+ * `RotationRow`'s shape, with one difference that matters later: the `<Link>`
+ * to the member page wraps only the avatar and the name, NOT the row. The nudge
+ * follow-up adds buttons to the right-hand cell, and a button inside an anchor
+ * is invalid markup that swallows the click.
+ *
+ * The Speaking marker mirrors `BookedPill` / `BookedLine` exactly, for the same
+ * width reasons: a pill from `sm` up, a wrapping line below it.
+ */
+function ProximityRow({
+	row,
+	timezone,
+}: {
+	row: LevelProximityRow;
+	timezone?: string;
+}) {
+	return (
+		<div
+			className={cn(
+				"grid items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 last:border-b-0",
+				"grid-cols-[1fr_auto]",
+			)}
+		>
+			<div className="min-w-0">
+				<Link
+					to="/members/$id"
+					params={{ id: row.memberId }}
+					className="flex min-w-0 items-center gap-3"
+				>
+					<MemberAvatar
+						tone={toneFromSeed(row.memberId)}
+						initials={initialsOf(row.name)}
+						size={38}
+					/>
+					<span className="truncate text-sm font-bold">{row.name}</span>
+				</Link>
+				{/* Indented to clear the avatar, like PairingRow's chips. */}
+				<div className="mt-1 pl-[50px] text-xs text-[var(--sea-ink-soft)]">
+					{proximityDetail(row)}
+				</div>
+				{row.upcomingSpeakerAt ? (
+					<div className="pl-[50px] text-xs font-bold text-[var(--lagoon-deep)] sm:hidden">
+						Speaking {formatShortDate(row.upcomingSpeakerAt, timezone)}
+					</div>
+				) : null}
+			</div>
+			<div className="justify-self-end">
+				{row.upcomingSpeakerAt ? (
+					<span className="hidden shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-[var(--lagoon-deep)] sm:inline-block">
+						Speaking · {formatMeetingDate(row.upcomingSpeakerAt, timezone)}
+					</span>
+				) : (
+					<span className="text-xs text-[var(--sea-ink-soft)]">
+						Not scheduled
+					</span>
+				)}
+			</div>
+		</div>
 	);
 }
 
