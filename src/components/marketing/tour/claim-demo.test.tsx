@@ -55,6 +55,42 @@ describe("ClaimDemo", () => {
 		expect(cls.split(/\s+/)).not.toContain("animate-in");
 	});
 
+	it("moves focus to the next open role and announces the claim", () => {
+		render(<ClaimDemo />);
+		const status = screen.getByRole("status");
+		expect(status.textContent).toBe("");
+
+		const first = screen.getByRole("button", { name: "Claim Toastmaster" });
+		first.focus();
+		fireEvent.click(first);
+		expect(document.activeElement).toBe(
+			screen.getByRole("button", { name: "Claim Speaker 2" }),
+		);
+		expect(status.textContent).toBe("You claimed Toastmaster.");
+
+		// Claiming a later row moves on to whichever role is still open.
+		fireEvent.click(screen.getByRole("button", { name: "Claim Evaluator 1" }));
+		expect(document.activeElement).toBe(
+			screen.getByRole("button", { name: "Claim Speaker 2" }),
+		);
+		expect(status.textContent).toBe("You claimed Evaluator 1.");
+	});
+
+	it("moves focus to Reset once every role is taken, and back to the first role after Reset", () => {
+		render(<ClaimDemo />);
+		for (const r of CLAIM_DEMO_ROLES) {
+			fireEvent.click(screen.getByRole("button", { name: `Claim ${r.role}` }));
+		}
+		const reset = screen.getByRole("button", { name: "Reset" });
+		expect(document.activeElement).toBe(reset);
+
+		fireEvent.click(reset);
+		expect(document.activeElement).toBe(
+			screen.getByRole("button", { name: `Claim ${CLAIM_DEMO_ROLES[0].role}` }),
+		);
+		expect(screen.getByRole("status").textContent).toMatch(/reset/i);
+	});
+
 	it("labels its container", () => {
 		render(<ClaimDemo />);
 		expect(

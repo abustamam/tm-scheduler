@@ -1,10 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { FounderNote } from "#/components/marketing/founder-note";
 import { MarketingShell } from "#/components/marketing/marketing-shell";
 import { AssistantDemo } from "#/components/marketing/tour/assistant-demo";
 import { ClaimDemo } from "#/components/marketing/tour/claim-demo";
 import { TimerDemo } from "#/components/marketing/tour/timer-demo";
+import { BETA_PILL_CLASS } from "#/components/marketing/tour/tour-styles";
 import { VoteDemo } from "#/components/marketing/tour/vote-demo";
 import { Button } from "#/components/ui/button";
 import { PILOT_PRICING_LINE } from "#/lib/brand";
@@ -98,11 +99,7 @@ function Scene({
 					style={{ fontVariationSettings: "'opsz' 80" }}
 				>
 					{title}
-					{badge ? (
-						<span className="rounded-full bg-warning-strong px-2.5 py-0.5 font-extrabold font-sans text-[11px] text-on-accent-fill uppercase tracking-[0.06em]">
-							{badge}
-						</span>
-					) : null}
+					{badge ? <span className={BETA_PILL_CLASS}>{badge}</span> : null}
 				</h2>
 				<div className="mt-4 space-y-3 text-[17px] leading-relaxed text-[var(--sea-ink-soft)]">
 					{children}
@@ -220,10 +217,7 @@ function Tour() {
 						<FounderNote className="mt-3" />
 						<div className="mt-5">
 							<Button asChild size="lg" className="px-6">
-								{/* A plain anchor rather than a typed <Link>: /request-access
-								    is #866's route, built in parallel, and a <Link to> it
-								    would not type-check until that lands. */}
-								<a href="/request-access">Request access</a>
+								<Link to="/request-access">Request access</Link>
 							</Button>
 						</div>
 					</div>

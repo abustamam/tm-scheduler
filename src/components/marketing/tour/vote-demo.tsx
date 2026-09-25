@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TEXT_BUTTON_CLASS } from "./tour-styles";
 
 /**
  * Scene 4 of `/tour` (#867), right half: a best-speaker ballot. One tap casts
@@ -65,7 +66,7 @@ export function VoteDemo() {
 							setTallies(initialTallies());
 							setVotedFor(null);
 						}}
-						className="cursor-pointer font-semibold text-[var(--lagoon-deep)] underline-offset-2 hover:underline"
+						className={TEXT_BUTTON_CLASS}
 					>
 						Vote again
 					</button>
