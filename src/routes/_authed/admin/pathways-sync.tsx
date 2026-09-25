@@ -2,10 +2,12 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { NavTabs, PATHWAYS_SYNC_TABS } from "#/components/nav-tabs";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import { navDestination } from "#/lib/nav-destinations";
 import { ingestPathwaysProgress } from "#/server/pathways-sync";
 import type { SyncResult } from "#/server/pathways-sync-logic";
 
@@ -49,6 +51,10 @@ function PathwaysSync() {
 
 	return (
 		<PageContainer className="space-y-6">
+			<NavTabs
+				tabs={PATHWAYS_SYNC_TABS}
+				label={navDestination("pathways-sync").label}
+			/>
 			<div>
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Sync Pathways progress

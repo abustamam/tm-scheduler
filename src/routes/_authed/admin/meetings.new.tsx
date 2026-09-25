@@ -2,11 +2,13 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { NavTabs, NEW_MEETINGS_TABS } from "#/components/nav-tabs";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import { navDestination } from "#/lib/nav-destinations";
 import { createMeeting } from "#/server/meetings";
 
 export const Route = createFileRoute("/_authed/admin/meetings/new")({
@@ -56,6 +58,10 @@ function NewMeeting() {
 
 	return (
 		<PageContainer className="space-y-4">
+			<NavTabs
+				tabs={NEW_MEETINGS_TABS}
+				label={navDestination("new-meetings").label}
+			/>
 			<div>
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					New meeting
