@@ -43,9 +43,10 @@
 // The route still performs no write itself — `meeting-timer.tsx` calls
 // `recordTiming`, for the same reason the markup lives there: a route module is
 // untestable by construction.
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingTimer } from "#/components/club/meeting-timer";
+import { MeetingNotFound } from "#/components/meeting-not-found";
 import { Button } from "#/components/ui/button";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { formatMeetingDate } from "#/lib/format";
@@ -175,21 +176,5 @@ function NeedsIdentity({ onPick }: { onPick: () => void }) {
 
 function DutyNotFound() {
 	const { clubId } = Route.useParams();
-	return (
-		<div className="mx-auto w-full max-w-reading space-y-4 p-4 pb-10 text-center">
-			<p className="font-semibold text-lg">Meeting not found</p>
-			<p className="text-muted-foreground text-sm">
-				This meeting doesn't exist for this club, or the link is out of date.
-			</p>
-			<Button asChild variant="outline">
-				<Link
-					to="/club/$clubId"
-					params={{ clubId }}
-					search={{ view: "roles", count: 8 }}
-				>
-					Back to meetings
-				</Link>
-			</Button>
-		</div>
-	);
+	return <MeetingNotFound clubId={clubId} />;
 }
