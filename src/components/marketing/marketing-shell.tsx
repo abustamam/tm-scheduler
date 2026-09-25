@@ -19,13 +19,17 @@ export type MarketingLink = {
  * hand-rolling a header of its own.
  */
 export const HEADER_LINKS: MarketingLink[] = [
+	{ label: "How it works", to: "/tour" },
 	{ label: "Resources", to: "/resources" },
 	{ label: "Sign in", to: "/signin", search: { redirect: "/officers" } },
 ];
 
 /** The marketing footer's links. See {@link HEADER_LINKS}. */
 export const FOOTER_LINKS: MarketingLink[] = [
+	{ label: "How it works", to: "/tour" },
 	{ label: "Resources", to: "/resources" },
+	{ label: "For districts", to: "/districts" },
+	{ label: "About", to: "/about" },
 	{ label: "Sign in", to: "/signin", search: { redirect: "/officers" } },
 ];
 

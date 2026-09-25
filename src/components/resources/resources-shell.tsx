@@ -7,6 +7,7 @@ import {
 	shellPropsFromContext,
 } from "#/components/app-shell";
 import { BrandMark } from "#/components/brand-mark";
+import { MarketingCta } from "#/components/marketing/marketing-cta";
 import { authClient } from "#/lib/auth-client";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { captureRef } from "#/lib/marketing-ref";
@@ -18,6 +19,10 @@ import { endImpersonation } from "#/server/impersonation";
  * keeps them oriented; the routes' `beforeLoad` resolves `shell`/`authCtx` and
  * passes them here. An anonymous visitor gets the lightweight header (brand mark
  * → home) as the way back — unchanged.
+ *
+ * The lightweight branch is also where a signed-in user with NO club lands, so
+ * it is exactly "not a customer": it ends in <MarketingCta> (#870). The
+ * <AppShell> branch never does — a member is not a lead.
  */
 export function ResourcesShell({
 	children,
@@ -80,6 +85,7 @@ export function ResourcesShell({
 			</header>
 			<main className="mx-auto w-full max-w-4xl flex-1 px-5 pb-16 sm:px-8">
 				{children}
+				<MarketingCta className="mt-12" />
 			</main>
 			<footer className="border-t border-[var(--line)]">
 				<div className="mx-auto w-full max-w-4xl px-5 py-8 sm:px-8">
