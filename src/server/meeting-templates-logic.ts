@@ -602,12 +602,18 @@ export async function copyTemplateForMeeting(
 	input: { sourceTemplateId: string; clubId: string; meetingId: string },
 ): Promise<string> {
 	const { sourceTemplateId, clubId, meetingId } = input;
+	// FOR SHARE on THIS read, not only in `copyTemplateContent` below: the row's
+	// metadata (`default_length_minutes`, which conversion writes onto the
+	// meeting) is read here, and read unlocked it could come from BEFORE a
+	// concurrent replace while the content came from after it. Locked here, the
+	// metadata and the content are one snapshot; the lock below is re-entrant.
 	const [source] = await conn
 		.select()
 		.from(meetingTemplates)
 		.where(
 			and(eq(meetingTemplates.id, sourceTemplateId), templateVisibleTo(clubId)),
 		)
+		.for("share")
 		.limit(1);
 	if (!source) throw new Error("That meeting template no longer exists.");
 

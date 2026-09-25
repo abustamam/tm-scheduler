@@ -672,7 +672,7 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 	});
 
 	describe("copy vs replace", () => {
-		it("a copy waits for an in-flight replace and sees its content whole", async () => {
+		it("a copy waits for an in-flight replace and sees its content and metadata whole", async () => {
 			const { templateId } = await saveNew(club.meetingId, "Contest night");
 			const second = await addMeeting(club.clubId);
 			// Stand-in for a replace mid-swap: the target locked FOR UPDATE, its
@@ -681,6 +681,11 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 				await tx.execute(
 					sql`select id from meeting_templates where id = ${templateId} for update`,
 				);
+				// The metadata a replace takes from its source, alongside the content.
+				await tx
+					.update(meetingTemplates)
+					.set({ defaultLengthMinutes: 123 })
+					.where(eq(meetingTemplates.id, templateId));
 				await tx
 					.delete(meetingTemplateBeats)
 					.where(eq(meetingTemplateBeats.templateId, templateId));
@@ -721,6 +726,14 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 			expect(await rolesOf(copy)).toEqual(await rolesOf(templateId));
 			expect(await beatsOf(copy)).toEqual(await beatsOf(templateId));
 			expect((await beatsOf(copy)).map((b) => b.label)).toEqual(["New beat"]);
+			// And the metadata from the SAME snapshot: the copy's length, and the
+			// length conversion wrote onto the meeting from it.
+			expect((await templateRow(copy))?.defaultLengthMinutes).toBe(123);
+			const [m] = await testDb
+				.select({ lengthMinutes: meetings.lengthMinutes })
+				.from(meetings)
+				.where(eq(meetings.id, second));
+			expect(m?.lengthMinutes).toBe(123);
 		});
 
 		it("a replace waits for an in-flight copy before swapping content", async () => {
