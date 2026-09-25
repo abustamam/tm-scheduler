@@ -573,6 +573,89 @@ export function buildPickerRows(
 		});
 }
 
+export type FillSuggestion = {
+	slotId: string;
+	/** null = nobody eligible; the row renders as "No one available" and is
+	 *  skipped on confirm. */
+	memberId: string | null;
+	/** When `memberId` last held this slot's role; null = never (or no member). */
+	lastServedAt: Date | null;
+};
+
+/**
+ * Propose a member for every OPEN slot of a meeting, preferring whoever has gone
+ * longest without that role (#58). A suggestion only — nothing is written until
+ * a manager confirms it in `SuggestFillsDialog`.
+ *
+ * Rules, per open slot in the order given:
+ * 1. Eligible = on `roster`, not in `unavailableIds`, and not already TAKEN.
+ *    `taken` starts as every assignee of a filled slot and gains each member
+ *    proposed earlier in this pass: one role per member per meeting. (The
+ *    manual picker allows deliberate double-booking; a suggestion never does.)
+ * 2. Rank: never held the role first, then the OLDEST last-served date, then
+ *    `name.localeCompare`, then `id` — so the same input always gives the same
+ *    output.
+ * 3. No eligible member → `memberId: null`. The slot is never forced.
+ * 4. Claimed/confirmed slots (members and guests alike) produce no row.
+ */
+export function suggestFills(input: {
+	slots: {
+		id: string;
+		roleDefinitionId: string;
+		status: "open" | "claimed" | "confirmed";
+		assigneeId: string | null;
+	}[];
+	roster: { id: string; name: string }[];
+	unavailableIds: string[];
+	/** roleDefinitionId → memberId → ISO date last held (the getMeeting shape). */
+	roleRecency: Record<string, Record<string, string>>;
+}): FillSuggestion[] {
+	const unavailable = new Set(input.unavailableIds);
+	const taken = new Set<string>();
+	for (const s of input.slots) {
+		if (s.status !== "open" && s.assigneeId) taken.add(s.assigneeId);
+	}
+	const suggestions: FillSuggestion[] = [];
+	for (const slot of input.slots) {
+		if (slot.status !== "open") continue;
+		const recency = input.roleRecency[slot.roleDefinitionId] ?? {};
+		let best: { id: string; name: string; at: number | null } | null = null;
+		for (const m of input.roster) {
+			if (unavailable.has(m.id) || taken.has(m.id)) continue;
+			const iso = recency[m.id];
+			const candidate = {
+				id: m.id,
+				name: m.name,
+				at: iso ? Date.parse(iso) : null,
+			};
+			if (best === null || ranksBefore(candidate, best)) best = candidate;
+		}
+		if (best === null) {
+			suggestions.push({ slotId: slot.id, memberId: null, lastServedAt: null });
+			continue;
+		}
+		taken.add(best.id);
+		suggestions.push({
+			slotId: slot.id,
+			memberId: best.id,
+			lastServedAt: best.at === null ? null : new Date(best.at),
+		});
+	}
+	return suggestions;
+}
+
+/** `suggestFills`'s ordering: never-held first, then oldest, then name, then id. */
+function ranksBefore(
+	a: { id: string; name: string; at: number | null },
+	b: { id: string; name: string; at: number | null },
+): boolean {
+	if ((a.at === null) !== (b.at === null)) return a.at === null;
+	if (a.at !== null && b.at !== null && a.at !== b.at) return a.at < b.at;
+	const byName = a.name.localeCompare(b.name);
+	if (byName !== 0) return byName < 0;
+	return a.id < b.id;
+}
+
 /** Muted "last time they did this role" label for the assign picker (#146),
  *  measured from `now`. `null` → "Never". */
 export function formatLastServed(

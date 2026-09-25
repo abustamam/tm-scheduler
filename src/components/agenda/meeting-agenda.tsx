@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
 import { MeetingTemplateDialog } from "#/components/agenda/meeting-template-dialog";
 import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
+import { SuggestFillsDialog } from "#/components/agenda/suggest-fills-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
@@ -246,6 +247,7 @@ export function MeetingAgenda({
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [claimSlotState, setClaimSlotState] = useState<AgendaSlot | null>(null);
 	const [assignSlot, setAssignSlot] = useState<AgendaSlot | null>(null);
+	const [suggestOpen, setSuggestOpen] = useState(false);
 	const [editSpeechSlot, setEditSpeechSlot] = useState<AgendaSlot | null>(null);
 	const [takeoverSlot, setTakeoverSlot] = useState<AgendaSlot | null>(null);
 	const [contactPendingId, setContactPendingId] = useState<string | null>(null);
@@ -281,6 +283,13 @@ export function MeetingAgenda({
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
 	const summary = summarizeAgenda(slots);
+	// "Suggest fills" (#58): managers only — `roleRecency` and the full roster are
+	// manager-only payloads, so a TMOD's `canAssign` alone is not enough — and
+	// `canAssign` keeps it off a locked/past meeting (`lockedViewer` zeroes both).
+	const canSuggestFills =
+		viewer.canManage &&
+		viewer.canAssign &&
+		slots.some((s) => s.status === "open");
 	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
 	// The paired evaluator lineup, for the same ↑↓ reorder speakers get. Pairing
 	// is positional (Evaluator N evaluates Speaker N), so reordering evaluators
@@ -524,6 +533,16 @@ export function MeetingAgenda({
 						{/* No "Remind unfilled" control until reminder sending is actually
 						    built (#7) — even a disabled "(soon)" placeholder was dead
 						    weight two audits flagged (#542, F-010). */}
+						{canSuggestFills ? (
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => setSuggestOpen(true)}
+							>
+								Suggest fills
+							</Button>
+						) : null}
 					</div>
 					<div className="mt-3">
 						<div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
@@ -988,6 +1007,24 @@ export function MeetingAgenda({
 					await actions.onMutated();
 				}}
 			/>
+
+			{/* Gate the BUTTON on open slots, not the dialog: a confirm that fills
+			    the last open slots refreshes to zero of them, and unmounting here
+			    would drop the failed rows the dialog stays open to show (#58). */}
+			{canSuggestFills || suggestOpen ? (
+				<SuggestFillsDialog
+					open={suggestOpen}
+					onOpenChange={setSuggestOpen}
+					slots={slots}
+					roster={roster}
+					roleByMemberId={roleByMemberId}
+					unavailableIds={unavailableMemberIds}
+					roleRecency={roleRecency}
+					roleCounts={roleCounts}
+					actorMemberId={currentMemberId}
+					onMutated={actions.onMutated}
+				/>
+			) : null}
 
 			<EditSpeechSheet
 				slot={

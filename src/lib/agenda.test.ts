@@ -14,6 +14,7 @@ import {
 	rosterGridPositions,
 	slotAccessibleLabel,
 	slotLabel,
+	suggestFills,
 	summarizeAgenda,
 } from "./agenda";
 
@@ -951,5 +952,180 @@ describe("rosterGridPositions — a multi-holder entry takes a whole row (#624)"
 				(p) => p.lastInColumn,
 			),
 		).toEqual([false, false, true]);
+	});
+});
+
+describe("suggestFills — propose members for open slots by role recency (#58)", () => {
+	type FillSlot = Parameters<typeof suggestFills>[0]["slots"][number];
+	const open = (id: string, roleDefinitionId = "timer"): FillSlot => ({
+		id,
+		roleDefinitionId,
+		status: "open",
+		assigneeId: null,
+	});
+	const roster = [
+		{ id: "a", name: "Ada" },
+		{ id: "b", name: "Bea" },
+		{ id: "c", name: "Cal" },
+	];
+	const recency = {
+		timer: { b: "2025-01-01T00:00:00.000Z", c: "2026-01-01T00:00:00.000Z" },
+	};
+
+	it("puts a member who never held the role ahead of everyone", () => {
+		const [s] = suggestFills({
+			slots: [open("s1")],
+			roster,
+			unavailableIds: [],
+			roleRecency: recency,
+		});
+		expect(s).toEqual({ slotId: "s1", memberId: "a", lastServedAt: null });
+	});
+
+	it("otherwise prefers the OLDEST last-served date", () => {
+		const [s] = suggestFills({
+			slots: [open("s1")],
+			roster: roster.filter((m) => m.id !== "a"),
+			unavailableIds: [],
+			roleRecency: recency,
+		});
+		expect(s?.memberId).toBe("b");
+		expect(s?.lastServedAt?.toISOString()).toBe("2025-01-01T00:00:00.000Z");
+	});
+
+	it("ranks by date, not name: the oldest wins even when it sorts alphabetically last", () => {
+		const [s] = suggestFills({
+			slots: [open("s1")],
+			roster: [
+				{ id: "a", name: "Ada" },
+				{ id: "z", name: "Zed" },
+			],
+			unavailableIds: [],
+			roleRecency: {
+				timer: { a: "2026-01-01T00:00:00.000Z", z: "2024-01-01T00:00:00.000Z" },
+			},
+		});
+		expect(s?.memberId).toBe("z");
+	});
+
+	it("breaks a recency tie by name, then by id, and is deterministic", () => {
+		const tied = {
+			timer: {
+				z: "2025-06-01T00:00:00.000Z",
+				y: "2025-06-01T00:00:00.000Z",
+				x: "2025-06-01T00:00:00.000Z",
+			},
+		};
+		const input = {
+			slots: [open("s1"), open("s2"), open("s3")],
+			// Roster order deliberately disagrees with the expected output.
+			roster: [
+				{ id: "z", name: "Bo" },
+				{ id: "y", name: "Al" },
+				{ id: "x", name: "Bo" },
+			],
+			unavailableIds: [],
+			roleRecency: tied,
+		};
+		const first = suggestFills(input);
+		expect(first.map((s) => s.memberId)).toEqual(["y", "x", "z"]);
+		expect(suggestFills(input)).toEqual(first);
+	});
+
+	it("never proposes an unavailable member", () => {
+		const [s] = suggestFills({
+			slots: [open("s1")],
+			roster,
+			unavailableIds: ["a"],
+			roleRecency: recency,
+		});
+		expect(s?.memberId).toBe("b");
+	});
+
+	it("never proposes someone who is not on the roster", () => {
+		// Recency for a former member whose row is gone from the active roster.
+		const [s] = suggestFills({
+			slots: [open("s1")],
+			roster: [{ id: "c", name: "Cal" }],
+			unavailableIds: [],
+			roleRecency: {
+				timer: { ghost: "2020-01-01T00:00:00.000Z", ...recency.timer },
+			},
+		});
+		expect(s?.memberId).toBe("c");
+	});
+
+	it("never proposes a member already holding a slot at this meeting", () => {
+		const [s] = suggestFills({
+			slots: [
+				{
+					id: "tm",
+					roleDefinitionId: "tmod",
+					status: "confirmed",
+					assigneeId: "a",
+				},
+				open("s1"),
+			],
+			roster,
+			unavailableIds: [],
+			roleRecency: recency,
+		});
+		expect(s?.memberId).toBe("b");
+	});
+
+	it("never proposes the same member twice, across three slots of one role", () => {
+		const out = suggestFills({
+			slots: [
+				open("s1", "speaker"),
+				open("s2", "speaker"),
+				open("s3", "speaker"),
+				open("t1"),
+			],
+			roster,
+			unavailableIds: [],
+			roleRecency: {
+				speaker: {
+					a: "2024-01-01T00:00:00.000Z",
+					b: "2025-01-01T00:00:00.000Z",
+				},
+				timer: {},
+			},
+		});
+		// c never spoke, then the oldest; the Timer slot then has nobody left.
+		expect(out.map((s) => s.memberId)).toEqual(["c", "a", "b", null]);
+	});
+
+	it("produces no row for a claimed or confirmed slot", () => {
+		const out = suggestFills({
+			slots: [
+				{
+					id: "g",
+					roleDefinitionId: "timer",
+					status: "claimed",
+					assigneeId: null,
+				},
+				{
+					id: "m",
+					roleDefinitionId: "timer",
+					status: "confirmed",
+					assigneeId: "c",
+				},
+				open("s1"),
+			],
+			roster,
+			unavailableIds: [],
+			roleRecency: recency,
+		});
+		expect(out.map((s) => s.slotId)).toEqual(["s1"]);
+	});
+
+	it("returns memberId null when nobody is eligible", () => {
+		const out = suggestFills({
+			slots: [open("s1")],
+			roster,
+			unavailableIds: ["a", "b", "c"],
+			roleRecency: recency,
+		});
+		expect(out).toEqual([{ slotId: "s1", memberId: null, lastServedAt: null }]);
 	});
 });
