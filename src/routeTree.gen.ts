@@ -13,6 +13,7 @@ import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
 import { Route as TourRouteImport } from './routes/tour'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as RequestAccessRouteImport } from './routes/request-access'
+import { Route as DistrictsRouteImport } from './routes/districts'
 import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as AuthedRouteImport } from './routes/_authed'
@@ -93,6 +94,11 @@ const SigninRoute = SigninRouteImport.update({
 const RequestAccessRoute = RequestAccessRouteImport.update({
   id: '/request-access',
   path: '/request-access',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DistrictsRoute = DistrictsRouteImport.update({
+  id: '/districts',
+  path: '/districts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClaimRoute = ClaimRouteImport.update({
@@ -418,6 +424,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
+  '/districts': typeof DistrictsRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
@@ -484,6 +491,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
+  '/districts': typeof DistrictsRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
@@ -550,6 +558,7 @@ export interface FileRoutesById {
   '/_authed': typeof AuthedRouteWithChildren
   '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
+  '/districts': typeof DistrictsRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
@@ -618,6 +627,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/claim'
+    | '/districts'
     | '/request-access'
     | '/signin'
     | '/tour'
@@ -684,6 +694,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/claim'
+    | '/districts'
     | '/request-access'
     | '/signin'
     | '/tour'
@@ -749,6 +760,7 @@ export interface FileRouteTypes {
     | '/_authed'
     | '/about'
     | '/claim'
+    | '/districts'
     | '/request-access'
     | '/signin'
     | '/tour'
@@ -817,6 +829,7 @@ export interface RootRouteChildren {
   AuthedRoute: typeof AuthedRouteWithChildren
   AboutRoute: typeof AboutRoute
   ClaimRoute: typeof ClaimRoute
+  DistrictsRoute: typeof DistrictsRoute
   RequestAccessRoute: typeof RequestAccessRoute
   SigninRoute: typeof SigninRoute
   TourRoute: typeof TourRoute
@@ -872,6 +885,13 @@ declare module '@tanstack/react-router' {
       path: '/request-access'
       fullPath: '/request-access'
       preLoaderRoute: typeof RequestAccessRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/districts': {
+      id: '/districts'
+      path: '/districts'
+      fullPath: '/districts'
+      preLoaderRoute: typeof DistrictsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/claim': {
@@ -1411,6 +1431,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthedRoute: AuthedRouteWithChildren,
   AboutRoute: AboutRoute,
   ClaimRoute: ClaimRoute,
+  DistrictsRoute: DistrictsRoute,
   RequestAccessRoute: RequestAccessRoute,
   SigninRoute: SigninRoute,
   TourRoute: TourRoute,
