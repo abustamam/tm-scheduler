@@ -6,6 +6,8 @@
 // the first marketing page the president lands on and the request-access form
 // sends along, so a lead from that district's push is recognisable.
 
+import { PILOT_PRICING_LINE } from "#/lib/brand";
+
 /**
  * A district identifier: 1–4 letters or digits. Toastmasters districts are
  * numbered (`57`), and the handful of provisional/lettered ones (`F`, `U`) fit
@@ -28,7 +30,16 @@ export function buildDistrictShareLink(origin: string, d: string): string {
 	return `${origin}/?ref=district-${d.toLowerCase()}`;
 }
 
+/**
+ * The first sentence of {@link PILOT_PRICING_LINE} ("Free for clubs during the
+ * pilot."). Derived, not restated, so the blurb cannot drift from the pricing
+ * line; only the first sentence, because the line's second ("Running a
+ * district? Ask us about it.") is addressed to the director, and this note is
+ * for club presidents.
+ */
+export const PILOT_CLUB_SENTENCE = PILOT_PRICING_LINE.split(/(?<=\.)\s+/)[0];
+
 /** The message a director forwards, ending in the share link. */
-export function DISTRICT_SHARE_BLURB(link: string): string {
-	return `Worth a look for your club: GavelUp is a meeting tool built by a fellow Toastmaster. Members claim roles from one shared sheet with no account to create, and officers print or project the agenda in a click. It's free for clubs during the pilot. ${link}`;
+export function districtShareBlurb(link: string): string {
+	return `Worth a look for your club: GavelUp is a meeting tool built by a fellow Toastmaster. Members claim roles from one shared sheet with no account to create, and officers print or project the agenda in a click. ${PILOT_CLUB_SENTENCE} ${link}`;
 }

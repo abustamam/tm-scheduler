@@ -61,6 +61,34 @@ describe("/districts (#868)", () => {
 		expect(screen.getByText(TOASTMASTERS_DISCLAIMER)).toBeTruthy();
 	});
 
+	// No district is named as a customer. The share block's own output is the
+	// one place a district number may appear, so it is cut out before looking.
+	it("names no district anywhere outside the share block's own output", async () => {
+		await mount("57");
+		await waitFor(() => expect(screen.getByTestId("share-blurb")).toBeTruthy());
+		const page = document.body.cloneNode(true) as HTMLElement;
+		for (const el of page.querySelectorAll(
+			'[data-testid="district-share-output"], input',
+		)) {
+			el.remove();
+		}
+		const text = page.textContent ?? "";
+		expect(text).toContain("Help more of your clubs");
+		expect(text).not.toMatch(/\bdistrict\s*#?\s*\d+/i);
+		expect(text).not.toMatch(/\bD\d{1,3}\b/);
+	});
+
+	// MarketingShell owns the page's one toast container; the share block's copy
+	// toasts render there, and a second container would show each toast twice.
+	it("has exactly one toast container, the shell's", async () => {
+		await mount("57");
+		await waitFor(() =>
+			expect(
+				document.querySelectorAll('section[aria-label^="Notifications"]'),
+			).toHaveLength(1),
+		);
+	});
+
 	it("points 'Talk to us' at the district request form", async () => {
 		await mount();
 		expect(
@@ -91,9 +119,10 @@ describe("/districts (#868)", () => {
 		const validate = Route.options.validateSearch as (
 			s: Record<string, unknown>,
 		) => unknown;
-		expect(validate({ d: 57 })).toEqual({ d: 57 });
-		expect(validate({ d: "F" })).toEqual({ d: "F" });
-		expect(validate({})).toEqual({});
+		expect(validate({ d: 57 })).toStrictEqual({ d: 57 });
+		expect(validate({ d: "F" })).toStrictEqual({ d: "F" });
+		// Strict: a `{ d: undefined }` here is a search that differs from `{}`.
+		expect(validate({})).toStrictEqual({});
 
 		await mount(57);
 		await waitFor(() =>

@@ -17,10 +17,10 @@ const { toastSuccess, toastError } = vi.hoisted(() => ({
 }));
 vi.mock("sonner", () => ({
 	toast: { success: toastSuccess, error: toastError },
-	Toaster: () => null,
 }));
 
-import { DISTRICT_SHARE_BLURB } from "#/lib/district-share";
+import { renderToString } from "react-dom/server";
+import { districtShareBlurb } from "#/lib/district-share";
 import { DistrictShare } from "./district-share";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
@@ -50,7 +50,7 @@ describe("DistrictShare (#868)", () => {
 			expect(screen.getByTestId("share-link").textContent).toBe(link),
 		);
 		expect(screen.getByTestId("share-blurb").textContent).toBe(
-			DISTRICT_SHARE_BLURB(link),
+			districtShareBlurb(link),
 		);
 		expect(screen.queryByText(ERROR)).toBeNull();
 	});
@@ -82,13 +82,60 @@ describe("DistrictShare (#868)", () => {
 		expect(screen.queryByTestId("share-link")).toBeNull();
 	});
 
+	// Validated RAW (#868): an invalid d is treated as absent, and padding is
+	// not quietly trimmed into a valid one.
+	it("treats a padded d and whitespace-only input as invalid, with the error and no link", () => {
+		render(<DistrictShare d=" 57 " />);
+		expect((input() as HTMLInputElement).value).toBe(" 57 ");
+		expect(screen.getByText(ERROR)).toBeTruthy();
+		expect(screen.queryByTestId("share-link")).toBeNull();
+
+		fireEvent.change(input(), { target: { value: "   " } });
+		expect(screen.getByText(ERROR)).toBeTruthy();
+		expect(screen.queryByTestId("share-link")).toBeNull();
+	});
+
+	// Client navigation ?d=57 -> ?d=58 re-renders with a new prop, no remount.
+	it("follows a changed d prop instead of keeping the first district", async () => {
+		const { rerender } = render(<DistrictShare d="57" />);
+		await waitFor(() =>
+			expect(screen.getByTestId("share-link").textContent).toBe(
+				`${origin()}/?ref=district-57`,
+			),
+		);
+		rerender(<DistrictShare d="58" />);
+		await waitFor(() =>
+			expect(screen.getByTestId("share-link").textContent).toBe(
+				`${origin()}/?ref=district-58`,
+			),
+		);
+		expect((input() as HTMLInputElement).value).toBe("58");
+	});
+
+	// The server render (and the first client render) has no origin: the link
+	// is relative and neither copy button can put it on the clipboard.
+	it("renders the SSR output with the relative link and both copy buttons disabled", () => {
+		const host = document.createElement("div");
+		host.innerHTML = renderToString(<DistrictShare d="57" />);
+		const buttons = [...host.querySelectorAll("button")];
+		expect(buttons.map((b) => b.textContent)).toEqual([
+			"Copy message",
+			"Copy link",
+		]);
+		for (const b of buttons) expect(b.disabled, b.textContent ?? "").toBe(true);
+		expect(host.querySelector('[data-testid="share-link"]')?.textContent).toBe(
+			"/?ref=district-57",
+		);
+		expect(host.textContent).not.toMatch(/https?:\/\//);
+	});
+
 	it("copies the exact blurb, toasting on success and on a rejected write", async () => {
 		render(<DistrictShare d="57" />);
 		const copyMessage = screen.getByRole("button", { name: "Copy message" });
 		await waitFor(() =>
 			expect(copyMessage.hasAttribute("disabled")).toBe(false),
 		);
-		const blurb = DISTRICT_SHARE_BLURB(`${origin()}/?ref=district-57`);
+		const blurb = districtShareBlurb(`${origin()}/?ref=district-57`);
 
 		writeText.mockResolvedValueOnce();
 		fireEvent.click(copyMessage);

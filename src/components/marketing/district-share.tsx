@@ -4,10 +4,9 @@ import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { Toaster } from "#/components/ui/sonner";
 import {
 	buildDistrictShareLink,
-	DISTRICT_SHARE_BLURB,
+	districtShareBlurb,
 	isValidDistrict,
 } from "#/lib/district-share";
 
@@ -25,24 +24,26 @@ import {
  * server render and the first client render agree, so there is no hydration
  * mismatch.
  *
- * It mounts its own `<Toaster />`: `MarketingShell` has none (only `AppShell`
- * and the club layout do), so without this the copy toasts would render
- * nowhere.
+ * The value is validated RAW, untrimmed: `?d=%2057%20` or a whitespace-only
+ * entry is invalid, shows the error, and mints no link. The copy toasts render
+ * in `MarketingShell`'s `<Toaster />`; this component mounts none of its own.
  */
 export function DistrictShare({ d }: { d?: string }) {
 	const [value, setValue] = useState(d ?? "");
+	// Client-side navigation from ?d=57 to ?d=58 re-renders with a new prop
+	// rather than remounting; without this the block keeps minting 57.
+	useEffect(() => setValue(d ?? ""), [d]);
 	const [origin, setOrigin] = useState<string | null>(null);
 	useEffect(() => setOrigin(window.location.origin), []);
 
 	const inputId = useId();
 	const errorId = useId();
-	const district = value.trim();
-	const valid = isValidDistrict(district);
+	const valid = isValidDistrict(value);
 	// Only complain once there is something to complain about.
-	const showError = district !== "" && !valid;
+	const showError = value !== "" && !valid;
 
-	const link = valid ? buildDistrictShareLink(origin ?? "", district) : null;
-	const blurb = link ? DISTRICT_SHARE_BLURB(link) : null;
+	const link = valid ? buildDistrictShareLink(origin ?? "", value) : null;
+	const blurb = link ? districtShareBlurb(link) : null;
 
 	return (
 		<div className="space-y-5">
@@ -95,7 +96,6 @@ export function DistrictShare({ d }: { d?: string }) {
 					</div>
 				</div>
 			) : null}
-			<Toaster position="top-center" />
 		</div>
 	);
 }

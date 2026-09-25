@@ -2,6 +2,7 @@ import { Link, type LinkProps } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import { Button } from "#/components/ui/button";
+import { Toaster } from "#/components/ui/sonner";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { captureRef } from "#/lib/marketing-ref";
 
@@ -93,6 +94,10 @@ export function MarketingShell({ children }: { children: ReactNode }) {
 					</p>
 				</div>
 			</footer>
+			{/* The one toast container on a marketing page (#868): a leaf that
+			    calls toast() (the /districts copy buttons) relies on it, and a
+			    second <Toaster /> in a leaf would render every toast twice. */}
+			<Toaster position="top-center" />
 		</div>
 	);
 }

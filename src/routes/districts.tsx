@@ -22,12 +22,10 @@ const DESCRIPTION =
 export const Route = createFileRoute("/districts")({
 	// Returned UNCHANGED, no coercion: a validated search that differs from the
 	// parsed one makes SSR 307 (CLAUDE.md), and the router parses `?d=57` as the
-	// NUMBER 57. The component does `String(d)`.
-	validateSearch: (
-		search: Record<string, unknown>,
-	): { d?: string | number } => ({
-		d: search.d as string | number | undefined,
-	}),
+	// NUMBER 57. The component does `String(d)`. An absent `d` stays absent (no
+	// `d: undefined` key), so `{}` round-trips as `{}`.
+	validateSearch: (search: Record<string, unknown>): { d?: string | number } =>
+		search.d === undefined ? {} : { d: search.d as string | number },
 	head: () => ({
 		meta: [
 			{ title: TITLE },

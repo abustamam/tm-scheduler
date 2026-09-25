@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { PILOT_PRICING_LINE } from "#/lib/brand";
 import {
 	buildDistrictShareLink,
-	DISTRICT_SHARE_BLURB,
+	districtShareBlurb,
 	isValidDistrict,
+	PILOT_CLUB_SENTENCE,
 } from "#/lib/district-share";
 import { isValidRef } from "#/lib/marketing-ref";
 
@@ -41,11 +43,15 @@ describe("district-share (#868)", () => {
 		}
 	});
 
-	it("ends the blurb with the link and keeps its promises modest", () => {
+	it("is the issue's wording, with the pricing sentence taken from PILOT_PRICING_LINE, ending in the link", () => {
 		const link = "https://gavelup.app/?ref=district-57";
-		const blurb = DISTRICT_SHARE_BLURB(link);
-		expect(blurb.startsWith("Worth a look for your club:")).toBe(true);
-		expect(blurb.endsWith(` ${link}`)).toBe(true);
-		expect(blurb).toContain("free for clubs during the pilot");
+		expect(PILOT_CLUB_SENTENCE).toBe("Free for clubs during the pilot.");
+		expect(PILOT_PRICING_LINE.startsWith(PILOT_CLUB_SENTENCE)).toBe(true);
+		expect(districtShareBlurb(link)).toBe(
+			"Worth a look for your club: GavelUp is a meeting tool built by a fellow Toastmaster. Members claim roles from one shared sheet with no account to create, and officers print or project the agenda in a click. " +
+				`${PILOT_CLUB_SENTENCE} ${link}`,
+		);
+		// The line's director-facing half does not ride along to club presidents.
+		expect(districtShareBlurb(link)).not.toMatch(/district\?/i);
 	});
 });
