@@ -11,7 +11,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@127.0.0.1:5433/tm_test \
  *     bunx vitest run src/server/save-club-template.integration.test.ts
  */
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -23,10 +23,12 @@ import {
 } from "#/db/schema";
 import { materialiseRunOfShow } from "#/lib/agenda-materialise";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { MAX_TEMPLATE_BEATS } from "#/lib/meeting-template-limits";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
@@ -572,6 +574,60 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 				actorMemberId: null,
 			}),
 		).resolves.toBeDefined();
+	});
+
+	describe("the club lock", () => {
+		it("refuses an archived club inside the save, and writes nothing", async () => {
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, club.clubId));
+			await expect(saveNew(club.meetingId, "Contest night")).rejects.toThrow(
+				CLUB_ARCHIVED_MESSAGE,
+			);
+			const owned = await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.clubId, club.clubId));
+			// Not even the never-opened meeting's materialised copy: the gate runs
+			// before it.
+			expect(owned).toEqual([]);
+			expect(await savedRows()).toEqual([]);
+		});
+
+		it("does not wait behind another writer's foreign-key lock on the club", async () => {
+			// Any insert referencing the club (a slot, an activity row, another
+			// meeting's materialised copy) holds KEY SHARE on the club row until
+			// it commits. A save taking FOR UPDATE on that row queued behind every
+			// such writer, and two saves each holding KEY SHARE from their own
+			// materialise deadlocked. NO KEY UPDATE does not conflict with it.
+			const blocker = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from clubs where id = ${club.clubId} for key share`,
+				);
+			});
+			try {
+				const outcome = await Promise.race([
+					saveNew(club.meetingId, "Contest night").then(() => "saved"),
+					new Promise((r) => setTimeout(() => r("blocked"), 4000)),
+				]);
+				expect(outcome).toBe("saved");
+			} finally {
+				await blocker.commit();
+			}
+		});
+
+		it("two concurrent saves from never-opened meetings both land", async () => {
+			const second = await addMeeting(club.clubId);
+			const results = await Promise.all([
+				saveNew(club.meetingId, "Contest night"),
+				saveNew(second, "Contest night"),
+			]);
+			const keys = await Promise.all(
+				results.map(async (r) => (await templateRow(r.templateId))?.key),
+			);
+			expect(keys.sort()).toEqual(["contest-night", "contest-night-2"]);
+		});
 	});
 
 	describe("the server fn's gate", () => {

@@ -26,6 +26,7 @@ import type {
 	TemplateBeatRow,
 	TemplateRoleRow,
 } from "#/lib/agenda-template-rows";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	CLUB_TEMPLATE_DESCRIPTION_MAX,
 	CLUB_TEMPLATE_NAME_MAX,
@@ -1205,10 +1206,13 @@ export const CLUB_TEMPLATE_KEY_RACE_MESSAGE =
  * The key a NEW club template named `name` is saved under: the name's slug,
  * or the first free `slug-N` beside the club's existing club-owned keys.
  *
- * Reads under `FOR UPDATE` on the CLUB row, so two officers saving "Contest
- * night" at the same moment serialise here and the second one sees the first
- * one's key. Must run inside the caller's transaction or the lock is released
- * before the insert it exists to protect. Scoped to `meeting_id IS NULL` —
+ * Reads under `FOR NO KEY UPDATE` on the CLUB row, so two officers saving
+ * "Contest night" at the same moment serialise here and the second one sees
+ * the first one's key. Must run inside the caller's transaction or the lock is
+ * released before the insert it exists to protect. A caller that has written
+ * anything referencing the club earlier in its transaction must take this lock
+ * FIRST itself (see `saveMeetingAgendaAsClubTemplate`): the lock here is then a
+ * no-op re-acquire, and taking it late is a deadlock against a second saver. Scoped to `meeting_id IS NULL` —
  * exactly the rows `meeting_templates_club_key_unique` covers; a private copy
  * keeping its source's key is not a collision.
  *
@@ -1223,7 +1227,7 @@ export async function nextClubTemplateKey(
 		.select({ id: clubs.id })
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
-		.for("update")
+		.for("no key update")
 		.limit(1);
 	const slug = clubTemplateKeySlug(name);
 	const taken = await tx
@@ -1347,7 +1351,31 @@ export async function saveMeetingAgendaAsClubTemplate(
 	}
 
 	return database.transaction(async (tx) => {
-		// The meeting first, locked: the same row `ensureAgendaDraft` and
+		// The CLUB row first, before anything else is read or written — and
+		// the archive gate inside that same locked read (CODING_STANDARDS.md,
+		// "gate INSIDE" a lock the write already holds).
+		//
+		// First because it has to be. Materialising a never-opened meeting
+		// inserts a `meeting_templates` row, and that insert's foreign key
+		// takes KEY SHARE on this club row. Taking the lock only afterwards (in
+		// `nextClubTemplateKey`) meant two concurrent saves each held KEY SHARE
+		// and each then waited for the other's to go: 40P01. Taken first, every
+		// save in a club queues here instead.
+		//
+		// NO KEY UPDATE rather than UPDATE: it conflicts with itself, which is
+		// the serialisation the key read needs, but NOT with the KEY SHARE any
+		// other writer's foreign-key insert takes on this row — so an unrelated
+		// edit elsewhere in the club never waits behind a save.
+		const [club] = await tx
+			.select({ archivedAt: clubs.archivedAt })
+			.from(clubs)
+			.where(eq(clubs.id, clubId))
+			.for("no key update")
+			.limit(1);
+		if (!club) throw new Error("Club not found.");
+		if (club.archivedAt !== null) throw new Error(CLUB_ARCHIVED_MESSAGE);
+
+		// Then the meeting, locked: the same row `ensureAgendaDraft` and
 		// conversion lock before touching its template, so a concurrent edit or
 		// re-conversion lands wholly before or wholly after this save.
 		const [meeting] = await tx
