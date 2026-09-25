@@ -210,7 +210,6 @@ function catalogLevelRequirement(
 ): {
 	total: number;
 	left: number;
-	requiredLeft: number;
 	electivesToChoose: number;
 } {
 	const atLevel = catalogProjects.filter((p) => p.level === level);
@@ -227,7 +226,6 @@ function catalogLevelRequirement(
 	return {
 		total: required.length + minReqElectives,
 		left: requiredLeft + electivesToChoose,
-		requiredLeft,
 		electivesToChoose,
 	};
 }
@@ -321,7 +319,8 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	// #898's: a newly declared catalog path with zero marks is not a summary-sync
 	// club, and falling through to the fallback below (built for Base Camp) left
 	// it with no "Up next" at all. With no marks, "complete" is honestly empty.
-	if (hasBasecampDetail || marks.length > 0 || levelsSource === "catalog") {
+	const hasProjectTruth = hasBasecampDetail || marks.length > 0;
+	if (hasProjectTruth || levelsSource === "catalog") {
 		// A delivered speech linked to this project (via `speeches.project_id`)
 		// gives a mark its title and date; /detail carries its own.
 		const speechByProjectId = new Map(
@@ -336,23 +335,31 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		for (const p of detail) byId.set(p.projectId, p);
 		for (const m of marks) byId.set(m.projectId, m);
 
-		const wins: Win[] = [...completeIds]
-			.map((projectId) => {
-				const meta = byId.get(projectId);
-				const fromDetail = detail.find((p) => p.projectId === projectId);
-				const speech = speechByProjectId.get(projectId);
-				return {
-					projectId,
-					level: meta?.level ?? 0,
-					name: meta?.name ?? "",
-					speechTitle: fromDetail?.speechTitle ?? speech?.speechTitle ?? "",
-					deliveredAt: fromDetail?.speechDate ?? speech?.deliveredAt ?? null,
-					markedHere: markedIds.has(projectId),
-					awaitingProcessing:
-						hasBasecampDetail && !bcmCompleteIds.has(projectId),
-				};
-			})
-			.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
+		// With no per-project truth (a catalog path nobody has marked yet) there
+		// are no completions to list, but the member's DELIVERED speeches are
+		// still true, and the fallback below has always shown them. Building wins
+		// from `completeIds` alone emptied "Your wins" for exactly the path this
+		// arm was added for. With detail or marks, unchanged: completions only.
+		const wins: Win[] = !hasProjectTruth
+			? path.wins
+			: [...completeIds]
+					.map((projectId) => {
+						const meta = byId.get(projectId);
+						const fromDetail = detail.find((p) => p.projectId === projectId);
+						const speech = speechByProjectId.get(projectId);
+						return {
+							projectId,
+							level: meta?.level ?? 0,
+							name: meta?.name ?? "",
+							speechTitle: fromDetail?.speechTitle ?? speech?.speechTitle ?? "",
+							deliveredAt:
+								fromDetail?.speechDate ?? speech?.deliveredAt ?? null,
+							markedHere: markedIds.has(projectId),
+							awaitingProcessing:
+								hasBasecampDetail && !bcmCompleteIds.has(projectId),
+						};
+					})
+					.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
 
 		let upNext: UpNextProject[] = [];
 		let upNextElectives: UpNextElectives | null = null;

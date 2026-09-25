@@ -213,7 +213,10 @@ function VpeDashboard() {
 				subtitle={`Members with 1–${LEVEL_PROXIMITY.maxProjectsLeft} projects left in a level. Levels waiting on Base Camp approval come first.`}
 			>
 				{proximity.length === 0 ? (
-					<EmptyRow>Nobody is within two projects of a level yet.</EmptyRow>
+					<EmptyRow>
+						Nobody is within {NUMBER_WORDS[LEVEL_PROXIMITY.maxProjectsLeft]}{" "}
+						projects of a level yet.
+					</EmptyRow>
 				) : (
 					proximity.map((r) => (
 						<ProximityRow
@@ -264,6 +267,15 @@ function VpeDashboard() {
 		</PageContainer>
 	);
 }
+
+/** Small counts in words, for copy that reads "within two projects". */
+const NUMBER_WORDS: Record<number, string> = {
+	1: "one",
+	2: "two",
+	3: "three",
+	4: "four",
+	5: "five",
+};
 
 function Section({
 	title,

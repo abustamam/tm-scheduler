@@ -39,6 +39,7 @@ import {
 	type AttendanceLapseRow,
 	scoreAttendanceLapse,
 } from "#/lib/attendance-lapse";
+import { DEFAULT_CLUB_TIMEZONE } from "#/lib/club-timezone";
 import {
 	EVALUATOR_PAIRING,
 	type EvaluatorPairingRow,
@@ -253,7 +254,7 @@ export async function loadLevelProximity(
 		}),
 		// NOT NULL with a default in the schema; the fallback is that default,
 		// for a club id that matched nothing (the gate runs first, so never).
-		timezone: club?.timezone ?? "America/Chicago",
+		timezone: club?.timezone ?? DEFAULT_CLUB_TIMEZONE,
 	};
 }
 

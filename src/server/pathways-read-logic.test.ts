@@ -563,6 +563,39 @@ describe("workingLevel (#898)", () => {
 		expect(vm.upNextElectives?.chooseCount).toBe(1);
 	});
 
+	// Review of #898: the catalog arm sends a zero-mark path down the
+	// project-level branch, which built wins from completions only. A member
+	// with a delivered, linked Ice Breaker and nothing marked lost "Your wins".
+	it("keeps delivered speeches as wins on a catalog path with zero marks", () => {
+		const delivered = win(1, "Ice Breaker", "My First Speech");
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [],
+			wins: [delivered],
+			catalogProjects: [...L1, ...L2],
+			pathLevels: catalogPathLevels,
+			marks: [],
+		});
+		expect(vm.wins).toEqual([delivered]);
+		// A delivered speech is not a completion (#420), so Up next still lists it.
+		expect(vm.workingLevel).toBe(1);
+		expect(vm.upNext.map((p) => p.name)).toContain("Ice Breaker");
+	});
+
+	it("still lists only completions once the path has marks", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [],
+			wins: [win(1, "Ice Breaker", "My First Speech")],
+			catalogProjects: [...L1, ...L2],
+			pathLevels: catalogPathLevels,
+			marks: [mark(1, "Evaluation and Feedback")],
+		});
+		expect(vm.wins.map((w) => w.name)).toEqual(["Evaluation and Feedback"]);
+	});
+
 	it("gives a catalog path with zero marks Level 1 and a non-empty Up next", () => {
 		// Before, zero marks fell through to the summary-sync fallback, whose
 		// up-next is empty by design (#456) — so a newly declared path had none.
