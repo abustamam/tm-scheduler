@@ -57,7 +57,12 @@
  * otherwise be silently dropped from a contest.
  */
 import type { AgendaRow } from "./agenda-runsheet";
-import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
+import {
+	type ClubForDeck,
+	type MeetingForDeck,
+	type Slide,
+	tableTopicsNoteLines,
+} from "./agenda-slides";
 import {
 	formatTableTopicsWindow,
 	hasTableTopicsLimits,
@@ -185,6 +190,19 @@ export function buildTemplateSlideDeck({
 		},
 	];
 
+	// The ONE row the Table Topics notes ride on (#880): the first Table Topics
+	// Master row. The run of show gives the role three beats in this order — the
+	// segment, the vote, the hand-off to the GE — so the first is the segment
+	// unless an officer drags another above it. NOT `clubGoverned`: that flag is
+	// timer-window ownership, which "Use a different window for this meeting"
+	// clears and re-governing can move onto the vote or the hand-off row, taking
+	// the notes with it.
+	// The role is matched through `segmentFor`, the one place a role key decides
+	// "is this the Table Topics segment", as `beatTimingText` below does.
+	const notesRow = rows.find(
+		(r) => !r.section && segmentFor(r.roleKey) === "tableTopics",
+	);
+
 	for (const row of rows) {
 		if (row.section) {
 			// A round divider. `who` carries the band title on a section row — see
@@ -210,6 +228,9 @@ export function buildTemplateSlideDeck({
 				minSeconds: club.tableTopicsMinSeconds,
 				maxSeconds: club.tableTopicsMaxSeconds,
 			}),
+			// Once, on the segment — see `notesRow` above.
+			notes:
+				row === notesRow ? tableTopicsNoteLines(meeting.tableTopicsNotes) : [],
 		});
 	}
 

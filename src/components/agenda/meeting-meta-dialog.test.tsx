@@ -344,3 +344,29 @@ describe("the meeting number a non-rescheduling viewer sends", () => {
 		expect(sentData().data.meetingNumber).toBe(56);
 	});
 });
+
+describe("the Table Topics notes (#880)", () => {
+	it("prefills and sends the notes with their line breaks", async () => {
+		const user = userEvent.setup();
+		render(dialog(true, { tableTopicsNotes: "1. 🏆 THE COMEBACK" }));
+		const input = screen.getByLabelText(
+			"Table Topics notes",
+		) as HTMLTextAreaElement;
+		expect(input.value).toBe("1. 🏆 THE COMEBACK");
+		await user.type(input, "{Enter}Tell us your story.");
+		await user.click(saveButton());
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect(sentData().data.tableTopicsNotes).toBe(
+			"1. 🏆 THE COMEBACK\nTell us your story.",
+		);
+	});
+
+	it("sends a blanked field as a clear", async () => {
+		const user = userEvent.setup();
+		render(dialog(true, { tableTopicsNotes: "Old topics" }));
+		await user.clear(screen.getByLabelText("Table Topics notes"));
+		await user.click(saveButton());
+		await waitFor(() => expect(updateMeeting).toHaveBeenCalled());
+		expect(sentData().data.tableTopicsNotes).toBeNull();
+	});
+});

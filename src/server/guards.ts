@@ -10,8 +10,10 @@ import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	type MeetingAgendaAuthz,
 	resolveMeetingAgendaAuthz,
+	resolveTableTopicsNotesAuthz,
 	resolveVoteCounterAuthz,
 	resolveWordOfTheDayAuthz,
+	type TableTopicsNotesAuthz,
 	type VoteCounterAuthz,
 	type WordOfTheDayAuthz,
 } from "./meeting-authz-logic";
@@ -568,6 +570,29 @@ export async function requireWordOfTheDayEditor(input: {
 	});
 	if (!authz.allowed) {
 		throw new Error("You don't have permission to edit the Word of the Day.");
+	}
+	return authz;
+}
+
+/**
+ * Gate a per-meeting Table Topics notes write (#880). Allowed when the current
+ * session is a club `admin`, OR the self-asserted `selfMemberId` holds the
+ * meeting's TMOD or Table Topics Master slot. Throws when none apply.
+ */
+export async function requireTableTopicsNotesEditor(input: {
+	meetingId: string;
+	selfMemberId?: string | null;
+}): Promise<TableTopicsNotesAuthz> {
+	const user = await getSessionUser();
+	const authz = await resolveTableTopicsNotesAuthz({
+		meetingId: input.meetingId,
+		sessionUserId: user?.id ?? null,
+		selfMemberId: input.selfMemberId ?? null,
+	});
+	if (!authz.allowed) {
+		throw new Error(
+			"You don't have permission to edit the Table Topics notes.",
+		);
 	}
 	return authz;
 }

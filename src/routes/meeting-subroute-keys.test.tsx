@@ -96,6 +96,7 @@ import { Route as AgendaRoute } from "./club.$clubId.meeting.$meetingId_.agenda"
 import { Route as MeRoute } from "./club.$clubId.meeting.$meetingId_.me";
 import { Route as ThemeRoute } from "./club.$clubId.meeting.$meetingId_.me_.theme";
 import { Route as TimerRoute } from "./club.$clubId.meeting.$meetingId_.me_.timer";
+import { Route as MeTopicsRoute } from "./club.$clubId.meeting.$meetingId_.me_.topics";
 import { Route as MeWordRoute } from "./club.$clubId.meeting.$meetingId_.me_.word";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
 import { Route as PrintRoute } from "./club.$clubId_.meeting.$meetingId.print";
@@ -235,6 +236,22 @@ const KEY_READER_ROUTES: {
 		route: MeWordRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
+	},
+	{
+		name: "me/topics",
+		file: "club.$clubId.meeting.$meetingId_.me_.topics.tsx",
+		route: MeTopicsRoute,
+		shell: false,
+		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
+	},
+	{
+		name: "me/topics (signed-in member)",
+		file: "club.$clubId.meeting.$meetingId_.me_.topics.tsx",
+		route: MeTopicsRoute,
+		shell: true,
+		reader: getMeetingByKey,
 		crossClubCheck: true,
 	},
 	{
