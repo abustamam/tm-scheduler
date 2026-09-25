@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("#/db", () => ({ db: {} }));
 
+import { PATH_COMPLETION_LEVEL } from "#/lib/pathways-catalog";
+
 import type { DetailProjectRow, MarkRow } from "./pathways-read-logic";
 import {
 	buildPathViewModel,
@@ -513,5 +515,223 @@ describe("manual progress marks (#419)", () => {
 		});
 		expect(vm.wins[0].speechTitle).toBe("My First Speech");
 		expect(vm.wins[0].deliveredAt).toEqual(new Date("2026-01-01T00:00:00Z"));
+	});
+});
+
+// #898: `currentLevel` is "lowest NOT APPROVED", and on the catalog branch
+// nothing is ever approved, so it was Level 1 forever and "Up next" with it.
+// `workingLevel` is "lowest with projects LEFT", counted per source.
+describe("workingLevel (#898)", () => {
+	const L1 = [
+		project(1, "Ice Breaker"),
+		project(1, "Evaluation and Feedback"),
+		project(1, "Researching and Presenting"),
+		project(1, "Writing a Speech with Purpose"),
+	];
+	const L2 = [
+		project(2, "Understanding Your Communication Style"),
+		project(2, "Introduction to Toastmasters Mentoring"),
+		project(2, "Effective Body Language", false),
+		project(2, "Active Listening", false),
+	];
+	const catalogPathLevels = [
+		{ level: 1, minReqElectives: 0 },
+		{ level: 2, minReqElectives: 1 },
+	];
+	const catalogPath = (marks: MarkRow[], catalogProjects = [...L1, ...L2]) =>
+		buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [],
+			wins: [],
+			catalogProjects,
+			pathLevels: catalogPathLevels,
+			marks,
+		});
+
+	it("moves to Level 2 once Level 1 is fully marked, while currentLevel stays 1", () => {
+		const vm = catalogPath(L1.map((p) => mark(1, p.name)));
+		expect(vm.levelsSource).toBe("catalog");
+		expect(vm.currentLevel).toBe(1);
+		expect(vm.workingLevel).toBe(2);
+		// 2 required + 1 elective to choose.
+		expect(vm.projectsLeftAtWorkingLevel).toBe(3);
+		expect(vm.upNext.map((p) => p.name)).toEqual([
+			"Understanding Your Communication Style",
+			"Introduction to Toastmasters Mentoring",
+		]);
+		expect(vm.upNextElectives?.chooseCount).toBe(1);
+	});
+
+	// Review of #898: the catalog arm sends a zero-mark path down the
+	// project-level branch, which built wins from completions only. A member
+	// with a delivered, linked Ice Breaker and nothing marked lost "Your wins".
+	it("keeps delivered speeches as wins on a catalog path with zero marks", () => {
+		const delivered = win(1, "Ice Breaker", "My First Speech");
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [],
+			wins: [delivered],
+			catalogProjects: [...L1, ...L2],
+			pathLevels: catalogPathLevels,
+			marks: [],
+		});
+		expect(vm.wins).toEqual([delivered]);
+		// A delivered speech is not a completion (#420), so Up next still lists it.
+		expect(vm.workingLevel).toBe(1);
+		expect(vm.upNext.map((p) => p.name)).toContain("Ice Breaker");
+	});
+
+	it("still lists only completions once the path has marks", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [],
+			wins: [win(1, "Ice Breaker", "My First Speech")],
+			catalogProjects: [...L1, ...L2],
+			pathLevels: catalogPathLevels,
+			marks: [mark(1, "Evaluation and Feedback")],
+		});
+		expect(vm.wins.map((w) => w.name)).toEqual(["Evaluation and Feedback"]);
+	});
+
+	it("gives a catalog path with zero marks Level 1 and a non-empty Up next", () => {
+		// Before, zero marks fell through to the summary-sync fallback, whose
+		// up-next is empty by design (#456) — so a newly declared path had none.
+		const vm = catalogPath([]);
+		expect(vm.workingLevel).toBe(1);
+		expect(vm.projectsLeftAtWorkingLevel).toBe(4);
+		expect(vm.upNext.map((p) => p.name)).toEqual(L1.map((p) => p.name));
+	});
+
+	it("does not let extra electives hide an unfinished required project", () => {
+		const catalog = [
+			project(1, "Ice Breaker"),
+			project(3, "Persuasive Speaking"),
+			project(3, "Elective A", false),
+			project(3, "Elective B", false),
+			project(3, "Elective C", false),
+		];
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [],
+			wins: [],
+			catalogProjects: catalog,
+			pathLevels: [
+				{ level: 1, minReqElectives: 0 },
+				{ level: 3, minReqElectives: 2 },
+			],
+			marks: [
+				mark(1, "Ice Breaker"),
+				mark(3, "Elective A", false),
+				mark(3, "Elective B", false),
+				mark(3, "Elective C", false),
+			],
+		});
+		expect(vm.workingLevel).toBe(3);
+		// The naive count said 3 of 3 marked, i.e. 0 left.
+		expect(vm.projectsLeftAtWorkingLevel).toBe(1);
+		// And the ring's level agrees: 1 required + 2 electives, 2 of them done.
+		expect(vm.levels.find((l) => l.level === 3)).toEqual({
+			level: 3,
+			completed: 2,
+			total: 3,
+			approved: false,
+		});
+		expect(vm.upNext.map((p) => p.name)).toEqual(["Persuasive Speaking"]);
+		expect(vm.upNextElectives).toBeNull();
+	});
+
+	it("reaches Path Completion on the catalog branch only after levels 1–5", () => {
+		const catalog = [
+			...[1, 2, 3, 4, 5].map((n) => project(n, `Level ${n} project`)),
+			project(PATH_COMPLETION_LEVEL, "Reflect on Your Path"),
+		];
+		const allFive = [1, 2, 3, 4, 5].map((n) => mark(n, `Level ${n} project`));
+		const at = (marks: MarkRow[]) =>
+			buildPathViewModel({
+				courseCode: "8701",
+				pathName: "Presentation Mastery",
+				levels: [],
+				wins: [],
+				catalogProjects: catalog,
+				pathLevels: [],
+				marks,
+			});
+
+		// Level 4 open: Path Completion is not considered, though it is open too.
+		expect(at(allFive.filter((m) => m.level !== 4)).workingLevel).toBe(4);
+
+		const inCompletion = at(allFive);
+		expect(inCompletion.workingLevel).toBe(PATH_COMPLETION_LEVEL);
+		expect(inCompletion.projectsLeftAtWorkingLevel).toBe(1);
+		expect(inCompletion.upNext.map((p) => p.name)).toEqual([
+			"Reflect on Your Path",
+		]);
+
+		const done = at([
+			...allFive,
+			mark(PATH_COMPLETION_LEVEL, "Reflect on Your Path"),
+		]);
+		expect(done.workingLevel).toBeNull();
+		expect(done.projectsLeftAtWorkingLevel).toBe(0);
+		expect(done.upNext).toEqual([]);
+	});
+
+	it("is null on a Base Camp path with levels 1–5 done, even unapproved", () => {
+		// Base Camp's summary does not carry Path Completion, so there is no
+		// count to make it the working level.
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [1, 2, 3, 4, 5].map((n) => lv(n, 3, 3, n < 5)),
+			wins: [],
+			catalogProjects: [project(PATH_COMPLETION_LEVEL, "Reflect on Your Path")],
+			pathLevels: [],
+			marks: [],
+		});
+		expect(vm.currentLevel).toBe(5);
+		expect(vm.workingLevel).toBeNull();
+		expect(vm.projectsLeftAtWorkingLevel).toBe(0);
+		expect(vm.upNext).toEqual([]);
+	});
+
+	it("takes Base Camp's counts as authoritative and does not recount from marks", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [lv(1, 2, 4, false)],
+			wins: [],
+			catalogProjects: L1,
+			pathLevels: catalogPathLevels,
+			// Every Level 1 project marked here, but Base Camp says 2 of 4.
+			marks: L1.map((p) => mark(1, p.name)),
+		});
+		expect(vm.workingLevel).toBe(1);
+		expect(vm.projectsLeftAtWorkingLevel).toBe(2);
+		// Names come from the marks, so none are left to name.
+		expect(vm.upNext).toEqual([]);
+	});
+
+	it("skips a Base Camp level that is done but unapproved, and one that is approved", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			// Level 1 approved on short counts; Level 2 done, awaiting approval.
+			levels: [lv(1, 3, 4, true), lv(2, 4, 4, false), lv(3, 1, 3, false)],
+			wins: [],
+			catalogProjects: [
+				project(3, "Persuasive Speaking"),
+				project(3, "Connect with Storytelling"),
+			],
+			detailProjects: [dp(3, "Persuasive Speaking", true)],
+			pathLevels: [],
+		});
+		expect(vm.currentLevel).toBe(2);
+		expect(vm.workingLevel).toBe(3);
+		expect(vm.projectsLeftAtWorkingLevel).toBe(2);
+		expect(vm.upNext.map((p) => p.name)).toEqual(["Connect with Storytelling"]);
 	});
 });

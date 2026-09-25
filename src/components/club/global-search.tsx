@@ -10,6 +10,11 @@ import {
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { Input } from "#/components/ui/input";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
+import {
+	type NavGrants,
+	type RegisteredDestination,
+	visibleDestinations,
+} from "#/lib/nav-destinations";
 import { officerPositionLabel } from "#/lib/officers";
 import { listMembers } from "#/server/members";
 
@@ -17,31 +22,11 @@ import { listMembers } from "#/server/members";
 type MemberRow = Awaited<ReturnType<typeof listMembers>>[number];
 
 /** Grants deciding which workspace pages are searchable for this user. */
-export interface SearchGrants {
-	hasOffice: boolean;
-	isOfficer: boolean;
-	isSuperadmin: boolean;
-}
+export type SearchGrants = NavGrants;
 
-/** Searchable workspace destinations — mirrors the sidebar nav (plus /me). */
-const WORKSPACE_PAGES = [
-	{ label: "Officer home", to: "/officers", grant: "office" },
-	{ label: "Sign-up sheet", to: "/schedule" },
-	{ label: "Roster", to: "/roster" },
-	{ label: "Next meeting", to: "/next" },
-	{ label: "Activity", to: "/activity" },
-	{ label: "VP Education", to: "/admin/vpe-dashboard", grant: "officer" },
-	{ label: "New meeting", to: "/admin/meetings/new", grant: "officer" },
-	{ label: "Meeting roles", to: "/admin/roles", grant: "officer" },
-	{ label: "Club settings", to: "/admin/club-settings", grant: "officer" },
-	{ label: "Base Camp sync", to: "/admin/sync-tokens", grant: "officer" },
-	{ label: "My dashboard", to: "/dashboard" },
-	{ label: "My roles", to: "/me" },
-	{ label: "Resources", to: "/resources" },
-	{ label: "Superadmin", to: "/superadmin", grant: "superadmin" },
-] as const;
-
-type WorkspacePage = (typeof WORKSPACE_PAGES)[number];
+/** A searchable workspace page: every nav destination this user can see,
+ *  under the label the sidebar shows it with (#911). */
+type WorkspacePage = RegisteredDestination;
 
 const MAX_MEMBER_RESULTS = 8;
 
@@ -63,13 +48,9 @@ export function searchWorkspace(
 				),
 		)
 		.slice(0, MAX_MEMBER_RESULTS);
-	const pageHits = WORKSPACE_PAGES.filter((p) => {
-		const grant = "grant" in p ? p.grant : undefined;
-		if (grant === "office" && !grants.hasOffice) return false;
-		if (grant === "officer" && !grants.isOfficer) return false;
-		if (grant === "superadmin" && !grants.isSuperadmin) return false;
-		return p.label.toLowerCase().includes(q);
-	});
+	const pageHits = visibleDestinations(grants).filter((p) =>
+		p.label.toLowerCase().includes(q),
+	);
 	return { members: memberHits, pages: pageHits };
 }
 

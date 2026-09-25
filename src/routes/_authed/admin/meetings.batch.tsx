@@ -2,6 +2,7 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Loader2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { NavTabs, NEW_MEETINGS_TABS } from "#/components/nav-tabs";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -17,6 +18,7 @@ import {
 	WEEKDAY_LABELS,
 	type Weekday,
 } from "#/lib/meeting-recurrence";
+import { navDestination } from "#/lib/nav-destinations";
 import {
 	batchCreateMeetings,
 	getClubMeetingDates,
@@ -157,6 +159,10 @@ function BatchMeetings() {
 
 	return (
 		<PageContainer className="space-y-6">
+			<NavTabs
+				tabs={NEW_MEETINGS_TABS}
+				label={navDestination("new-meetings").label}
+			/>
 			<div>
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Batch-create meetings

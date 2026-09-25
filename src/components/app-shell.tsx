@@ -1,31 +1,13 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { ChevronRight, LogOut, Menu } from "lucide-react";
 import {
-	BookOpen,
-	CalendarDays,
-	CalendarPlus,
-	CalendarRange,
-	ClipboardCheck,
-	ClipboardPaste,
-	Compass,
-	GraduationCap,
-	Grid3x3,
-	History,
-	LayoutGrid,
-	List,
-	ListChecks,
-	LogOut,
-	Menu,
-	Mic,
-	RefreshCw,
-	ScrollText,
-	Settings,
-	ShieldCheck,
-	Trophy,
-	UserPlus,
-	Users,
-	Wallet,
-} from "lucide-react";
-import { type ComponentType, type ReactNode, useRef, useState } from "react";
+	type ComponentType,
+	type ReactNode,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { BrandMark } from "#/components/brand-mark";
 import { ClubSwitcher } from "#/components/club/club-switcher";
 import {
@@ -39,6 +21,17 @@ import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
 import { initialsOf } from "#/lib/avatar";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import {
+	crumbOf,
+	destinationFor,
+	NAV_GROUPS,
+	type NavGrants,
+	type NavGroup as NavGroupDef,
+	navDestination,
+	navGroup,
+	type RegisteredDestination,
+	visibleDestinations,
+} from "#/lib/nav-destinations";
 import {
 	type OfficerPosition,
 	officerPositionLabel,
@@ -159,41 +152,28 @@ export function shellPropsFromContext(ctx: ShellContext): AppShellDisplayProps {
 	};
 }
 
-function crumbFor(pathname: string): string {
-	if (pathname === "/roster") return "Manage · Roster";
-	if (pathname.startsWith("/officers")) return "Your office · Officer home";
-	if (pathname.startsWith("/schedule")) return "Manage · Sign-up sheet";
-	if (pathname.startsWith("/next")) return "Manage · Next meeting";
-	if (pathname.startsWith("/activity")) return "Manage · Activity";
-	if (pathname.startsWith("/dashboard")) return "Me · My dashboard";
-	if (pathname.startsWith("/resources")) return "Me · Resources";
-	if (pathname.startsWith("/members")) return "Roster · Member profile";
-	if (pathname.startsWith("/admin/meetings/new")) return "Manage · New meeting";
-	if (pathname.startsWith("/admin/meetings/batch"))
-		return "Manage · Batch meetings";
-	if (/^\/club\/[^/]+\/meeting(\/|$)/.test(pathname)) return "Manage · Meeting";
-	// The archive index (#375); deeper `/meetings/:id` is the redirect to a meeting.
-	if (pathname === "/meetings" || pathname === "/meetings/")
-		return "Manage · Past meetings";
-	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
-	if (pathname === "/me") return "Me · My roles";
-	if (pathname.startsWith("/admin/dcp")) return "Manage · DCP scoreboard";
-	if (pathname.startsWith("/admin/roles")) return "Manage · Meeting roles";
-	if (pathname.startsWith("/admin/club-settings"))
-		return "Manage · Club settings";
-	if (pathname.startsWith("/admin/sync-tokens"))
-		return "Manage · Base Camp sync";
-	if (pathname.startsWith("/admin/pathways-sync"))
-		return "Manage · Manual Pathways sync";
-	if (pathname.startsWith("/admin/vpe-dashboard"))
-		return "Manage · VP Education";
-	if (pathname.startsWith("/admin/vp-membership"))
-		return "Manage · VP Membership";
-	if (pathname.startsWith("/admin/dues")) return "Manage · Dues";
-	if (pathname.startsWith("/admin/action-items"))
-		return "Manage · Action items";
-	if (pathname.startsWith("/admin")) return "Manage · Admin";
-	if (pathname.startsWith("/superadmin")) return "Platform · Superadmin";
+/**
+ * The page title in the top bar. A nav destination is titled from the registry
+ * (`${group} · ${label}`), so it cannot disagree with the sidebar; the arms
+ * here are only for pages that are not nav destinations.
+ */
+export function crumbFor(pathname: string): string {
+	const meetings = navGroup("meetings").label;
+	if (pathname.startsWith("/members/"))
+		return `${navDestination("roster").label} · Member profile`;
+	if (/^\/club\/[^/]+\/meeting(\/|$)/.test(pathname))
+		return `${meetings} · Meeting`;
+	// The archive index (#375) is Past meetings; deeper `/meetings/:id` is the
+	// redirect to a meeting.
+	if (/^\/meetings\/[^/]/.test(pathname)) return `${meetings} · Meeting`;
+	const destination = destinationFor(pathname);
+	if (destination) return crumbOf(destination);
+	// `/superadmin/:clubId` — Superadmin is `exact` in the nav, so a club's
+	// page under it does not highlight it, but it is still that console.
+	if (pathname.startsWith("/superadmin/"))
+		return crumbOf(navDestination("superadmin"));
+	if (pathname.startsWith("/admin"))
+		return `${navGroup("setup").label} · Admin`;
 	return "Workspace";
 }
 
@@ -203,6 +183,7 @@ export function AppShell({
 	clubName,
 	clubNumber,
 	isOfficer,
+	hasOffice,
 	isSuperadmin,
 	roleLabel,
 	displayName,
@@ -227,8 +208,8 @@ export function AppShell({
 		<SidebarInner
 			clubName={clubName}
 			clubNumber={clubNumber}
-			isOfficer={isOfficer}
-			isSuperadmin={isSuperadmin}
+			grants={{ hasOffice, isOfficer, isSuperadmin }}
+			pathname={pathname}
 			displayName={displayName}
 			roleLabel={roleLabel}
 			initials={initials}
@@ -356,8 +337,8 @@ export function AppShell({
 function SidebarInner({
 	clubName,
 	clubNumber,
-	isOfficer,
-	isSuperadmin,
+	grants,
+	pathname,
 	displayName,
 	roleLabel,
 	initials,
@@ -368,8 +349,8 @@ function SidebarInner({
 }: {
 	clubName: string;
 	clubNumber: string | null;
-	isOfficer: boolean;
-	isSuperadmin: boolean;
+	grants: NavGrants;
+	pathname: string;
 	displayName: string;
 	roleLabel: string;
 	initials: string;
@@ -407,164 +388,11 @@ function SidebarInner({
 			) : null}
 
 			<div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-contain">
-				{isOfficer ? (
-					<NavGroup label="Your office">
-						<NavItem
-							to="/officers"
-							icon={Compass}
-							label="Officer home"
-							onNavigate={onNavigate}
-						/>
-					</NavGroup>
-				) : null}
-
-				<NavGroup label="Manage">
-					<NavItem
-						to="/schedule"
-						icon={Grid3x3}
-						label="Sign-up sheet"
-						onNavigate={onNavigate}
-					/>
-					<NavItem
-						to="/roster"
-						icon={List}
-						label="Roster"
-						onNavigate={onNavigate}
-					/>
-					<NavItem
-						to="/next"
-						icon={CalendarDays}
-						label="Next meeting"
-						onNavigate={onNavigate}
-					/>
-					<NavItem
-						to="/meetings"
-						icon={History}
-						label="Past meetings"
-						onNavigate={onNavigate}
-					/>
-					<NavItem
-						to="/activity"
-						icon={ScrollText}
-						label="Activity"
-						onNavigate={onNavigate}
-					/>
-					{isOfficer ? (
-						<>
-							<NavItem
-								to="/admin/vpe-dashboard"
-								icon={GraduationCap}
-								label="VP Education"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/vp-membership"
-								icon={UserPlus}
-								label="VP Membership"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/dcp"
-								icon={Trophy}
-								label="DCP scoreboard"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/dues"
-								icon={Wallet}
-								label="Dues"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/action-items"
-								icon={ClipboardCheck}
-								label="Action items"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/meetings/new"
-								icon={CalendarPlus}
-								label="New meeting"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/meetings/batch"
-								icon={CalendarRange}
-								label="Batch meetings"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/schedule"
-								icon={CalendarDays}
-								label="Recurring schedule"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/roles"
-								icon={ListChecks}
-								label="Meeting roles"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/club-settings"
-								icon={Settings}
-								label="Club settings"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/sync-tokens"
-								icon={RefreshCw}
-								label="Base Camp sync"
-								onNavigate={onNavigate}
-							/>
-							<NavItem
-								to="/admin/pathways-sync"
-								icon={ClipboardPaste}
-								label="Manual Pathways sync"
-								onNavigate={onNavigate}
-							/>
-						</>
-					) : null}
-				</NavGroup>
-
-				<NavGroup label="Me">
-					<NavItem
-						to="/dashboard"
-						icon={LayoutGrid}
-						label="My dashboard"
-						onNavigate={onNavigate}
-					/>
-					<NavItem
-						to="/me"
-						icon={Mic}
-						label="My roles"
-						onNavigate={onNavigate}
-					/>
-					<NavItem
-						to="/resources"
-						icon={BookOpen}
-						label="Resources"
-						onNavigate={onNavigate}
-					/>
-				</NavGroup>
-
-				{isSuperadmin ? (
-					<NavGroup label="Platform">
-						<NavItem
-							to="/superadmin"
-							icon={ShieldCheck}
-							label="Superadmin"
-							onNavigate={onNavigate}
-							exact
-						/>
-						<NavItem
-							to="/superadmin/duplicate-people"
-							icon={Users}
-							label="Duplicate people"
-							onNavigate={onNavigate}
-						/>
-					</NavGroup>
-				) : null}
+				<SidebarNav
+					grants={grants}
+					pathname={pathname}
+					onNavigate={onNavigate}
+				/>
 			</div>
 
 			{/* Footer mini-profile. `shrink-0`, not `mt-auto`: the scrolling band
@@ -594,58 +422,177 @@ function SidebarInner({
 	);
 }
 
-function NavGroup({
-	label,
-	children,
+/**
+ * The nav groups and their items, read from the registry
+ * (`#/lib/nav-destinations`). A group this user can see nothing in renders
+ * nothing — no orphan header. Exported for its tests; `SidebarInner` is the only
+ * caller.
+ */
+export function SidebarNav({
+	grants,
+	pathname,
+	onNavigate,
 }: {
-	label: string;
-	children: React.ReactNode;
+	grants: NavGrants;
+	pathname: string;
+	onNavigate?: () => void;
 }) {
+	const visible = visibleDestinations(grants);
+	const current = destinationFor(pathname);
 	return (
 		<>
-			{/* No `first:pt-1` here. It never matched while these labels were direct
-			    children of the sidebar column (the brand div was always the first
-			    child), and giving the nav its own scrolling band would have made the
-			    first label `:first-child` for the first time — silently tightening
-			    the gap under the brand by 10px as a side effect of a scroll fix. */}
-			<div className="px-2.5 pt-3.5 pb-0.5 text-xs font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70">
-				{label}
+			{NAV_GROUPS.map((group) => {
+				const items = visible.filter((d) => d.group === group.key);
+				if (items.length === 0) return null;
+				return (
+					<NavGroup
+						key={group.key}
+						group={group}
+						// A group holding the page you are on is shown open whatever
+						// its stored state, so the highlighted entry is never hidden.
+						forcedOpen={items.some((d) => d.key === current?.key)}
+					>
+						{items.map((d) => (
+							<NavItem
+								key={d.key}
+								destination={d}
+								active={d.key === current?.key}
+								onNavigate={onNavigate}
+							/>
+						))}
+					</NavGroup>
+				);
+			})}
+		</>
+	);
+}
+
+/** Per-browser memory of a collapsible group's open state, `nav.<key>.open`. */
+export function navGroupStorageKey(key: string): string {
+	return `nav.${key}.open`;
+}
+
+function readStoredOpen(storageKey: string): boolean {
+	try {
+		return window.localStorage.getItem(storageKey) === "1";
+	} catch {
+		return false;
+	}
+}
+
+function writeStoredOpen(storageKey: string, open: boolean): void {
+	try {
+		window.localStorage.setItem(storageKey, open ? "1" : "0");
+	} catch {
+		// Storage blocked (private window, sandbox): the toggle still works for
+		// this page view, it just is not remembered.
+	}
+}
+
+const GROUP_LABEL_CLASS =
+	"text-xs font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70";
+
+function NavGroup({
+	group,
+	forcedOpen,
+	children,
+}: {
+	group: NavGroupDef;
+	forcedOpen: boolean;
+	children: React.ReactNode;
+}) {
+	const panelId = useId();
+	const storageKey = navGroupStorageKey(group.key);
+	// Collapsed on the server and on the first client render, so hydration
+	// agrees; the remembered choice is applied after mount.
+	const [storedOpen, setStoredOpen] = useState(false);
+	useEffect(() => {
+		if (group.collapsible) setStoredOpen(readStoredOpen(storageKey));
+	}, [group.collapsible, storageKey]);
+
+	if (!group.collapsible) {
+		return (
+			<>
+				{/* No `first:pt-1` here. It never matched while these labels were direct
+				    children of the sidebar column (the brand div was always the first
+				    child), and giving the nav its own scrolling band would have made the
+				    first label `:first-child` for the first time — silently tightening
+				    the gap under the brand by 10px as a side effect of a scroll fix. */}
+				<div className={`px-2.5 pt-3.5 pb-0.5 ${GROUP_LABEL_CLASS}`}>
+					{group.label}
+				</div>
+				{children}
+			</>
+		);
+	}
+
+	const open = forcedOpen || storedOpen;
+	return (
+		<>
+			<button
+				type="button"
+				aria-expanded={open}
+				aria-controls={panelId}
+				// Forced open because the current page is inside it: collapsing would
+				// hide the highlighted entry, and the forced state is never stored.
+				// `aria-disabled` rather than `disabled`, so the click still reaches
+				// the handler and the no-write rule is the handler's, where a test
+				// can see it.
+				aria-disabled={forcedOpen || undefined}
+				onClick={() => {
+					if (forcedOpen) return;
+					const next = !storedOpen;
+					setStoredOpen(next);
+					writeStoredOpen(storageKey, next);
+				}}
+				className={`flex w-full items-center gap-1.5 rounded-md px-2.5 pt-3.5 pb-0.5 text-left transition-opacity hover:opacity-100 aria-disabled:hover:opacity-70 ${GROUP_LABEL_CLASS}`}
+			>
+				<span>{group.label}</span>
+				<ChevronRight
+					className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`}
+					aria-hidden
+				/>
+			</button>
+			<div
+				id={panelId}
+				hidden={!open}
+				className={open ? "flex flex-col gap-1.5" : "hidden"}
+			>
+				{children}
 			</div>
-			{children}
 		</>
 	);
 }
 
 function NavItem({
-	to,
-	label,
-	icon: Icon,
-	exact = false,
+	destination,
+	active,
 	onNavigate,
 }: {
-	to: string;
-	label: string;
-	icon: ComponentType<{ className?: string }>;
-	exact?: boolean;
+	destination: RegisteredDestination;
+	/** From `destinationFor`, not the router's own match, so an
+	 *  `alsoActiveOn` sibling page highlights its entry too. */
+	active: boolean;
 	onNavigate?: () => void;
 }) {
+	const Icon: ComponentType<{ className?: string }> = destination.icon;
 	return (
 		<Link
-			to={to}
+			to={destination.to}
 			onClick={onNavigate}
-			activeOptions={{ exact }}
-			className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors"
-			activeProps={{
-				className:
-					"bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100",
-			}}
-			inactiveProps={{
-				className:
-					"font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70",
-			}}
+			// The router's own match still stamps `aria-current` on an active link,
+			// so its idea of "active" must agree with `destinationFor`'s: `exact`
+			// keeps Superadmin from matching under Duplicate people.
+			activeOptions={{ exact: "exact" in destination && destination.exact }}
+			aria-current={active ? "page" : undefined}
+			className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors ${
+				active
+					? "bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100"
+					: "font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70"
+			}`}
 		>
 			<Icon className="size-4" />
-			{label}
+			{destination.label}
 		</Link>
 	);
 }
