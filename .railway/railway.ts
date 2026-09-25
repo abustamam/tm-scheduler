@@ -17,7 +17,6 @@ export default defineRailway(() => {
     source: github("abustamam/tm-scheduler", { checkSuites: false }),
     build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
     healthcheck: "/api/health",
-    deploy: { restartPolicyType: "ON_FAILURE" },
     replicas: { "sfo": 1 },
     domains: ["gavelup.app"],
     networking: { privateNetworkEndpoint: "tm-scheduler" },
