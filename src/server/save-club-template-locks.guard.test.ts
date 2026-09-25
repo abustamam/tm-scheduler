@@ -1,9 +1,11 @@
 /**
- * Pins the lock ORDER in `saveMeetingAgendaAsClubTemplate` (#909 review). The
- * behavioural tests in `save-club-template.integration.test.ts` show the save
- * does not wait on a foreign-key lock and refuses an archived club; neither can
- * see WHERE the club lock is taken, and taking it after the materialise step
- * is the deadlock (the materialise insert's KEY SHARE, then a stronger lock).
+ * Pins the lock ORDER in `saveMeetingAgendaAsClubTemplate` (#909 reviews):
+ * meeting FOR UPDATE, then club FOR NO KEY UPDATE with the archive gate under
+ * it, then the materialise step. Meeting-before-club is the order
+ * `ensureAgendaDraft`, conversion and `joinBallotAsGuest` take the two rows in;
+ * the inverse deadlocked against a guest joining the ballot. The behavioural
+ * half is in `save-club-template.integration.test.ts`; this half sees WHERE
+ * each lock is taken, which a passing interleaving cannot.
  * Read comment-blind: every assertion is "this must BE in the code".
  */
 import { describe, expect, it } from "vitest";
@@ -18,17 +20,20 @@ function body(name: string): string {
 }
 
 describe("saveMeetingAgendaAsClubTemplate's locks", () => {
-	it("takes the club row NO KEY UPDATE, with the archive gate, before materialising", () => {
+	it("locks the meeting, then the club NO KEY UPDATE with the archive gate, then materialises", () => {
 		const save = body("saveMeetingAgendaAsClubTemplate");
-		const lock = save.indexOf('.for("no key update")');
-		const archived = save.indexOf("CLUB_ARCHIVED_MESSAGE");
 		const meetingLock = save.indexOf('.for("update")');
+		const clubLock = save.indexOf('.for("no key update")');
+		const archived = save.indexOf("isClubArchived(club)");
 		const materialise = save.indexOf("materialiseAgendaForMeeting(");
-		expect(lock).toBeGreaterThan(-1);
-		expect(save.slice(0, lock)).toContain(".from(clubs)");
-		expect(save.slice(0, lock)).toContain("archivedAt: clubs.archivedAt");
-		expect(archived).toBeGreaterThan(lock);
-		expect(meetingLock).toBeGreaterThan(archived);
+		expect(meetingLock).toBeGreaterThan(-1);
+		expect(save.slice(0, meetingLock)).toContain(".from(meetings)");
+		expect(clubLock).toBeGreaterThan(meetingLock);
+		expect(save.slice(meetingLock, clubLock)).toContain(".from(clubs)");
+		expect(save.slice(meetingLock, clubLock)).toContain(
+			"archivedAt: clubs.archivedAt",
+		);
+		expect(archived).toBeGreaterThan(clubLock);
 		expect(materialise).toBeGreaterThan(archived);
 	});
 

@@ -621,6 +621,43 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 			}
 		});
 
+		it("does not deadlock against a guest joining the ballot (meeting, then club)", async () => {
+			// `joinBallotAsGuest`'s order: the meeting FOR UPDATE, then the club
+			// FOR SHARE through `assertDigitalVotingOnTx`'s join. Driven in two
+			// steps so the save is provably parked on the meeting before the
+			// second lock is asked for — the window the inverse order deadlocked in.
+			let heldMeeting!: (pid: number) => void;
+			const meetingHeld = new Promise<number>((r) => {
+				heldMeeting = r;
+			});
+			let proceed!: () => void;
+			const second = new Promise<void>((r) => {
+				proceed = r;
+			});
+			const ballot = testDb.transaction(async (tx) => {
+				const res = await tx.execute(sql`select pg_backend_pid() as pid`);
+				await tx.execute(
+					sql`select id from meetings where id = ${club.meetingId} for update`,
+				);
+				heldMeeting(Number((res.rows[0] as { pid: number }).pid));
+				await second;
+				await tx.execute(
+					sql`select meetings.id from meetings inner join clubs on clubs.id = meetings.club_id where meetings.id = ${club.meetingId} for share`,
+				);
+			});
+			ballot.catch(() => {});
+			const pid = await meetingHeld;
+			const saving = saveNew(club.meetingId, "Contest night");
+			saving.catch(() => {});
+			try {
+				await waitForLockWait("for update", pid);
+			} finally {
+				proceed();
+			}
+			await expect(ballot).resolves.toBeUndefined();
+			await expect(saving).resolves.toHaveProperty("templateId");
+		});
+
 		it("two concurrent saves from never-opened meetings both land", async () => {
 			const second = await addMeeting(club.clubId);
 			const results = await Promise.all([

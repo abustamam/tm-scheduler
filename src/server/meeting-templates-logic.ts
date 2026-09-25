@@ -26,7 +26,7 @@ import type {
 	TemplateBeatRow,
 	TemplateRoleRow,
 } from "#/lib/agenda-template-rows";
-import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import {
 	type ClubTemplateFields,
 	clubTemplateKeySlug,
@@ -1354,33 +1354,16 @@ export async function saveMeetingAgendaAsClubTemplate(
 	}
 
 	return database.transaction(async (tx) => {
-		// The CLUB row first, before anything else is read or written — and
-		// the archive gate inside that same locked read (CODING_STANDARDS.md,
-		// "gate INSIDE" a lock the write already holds).
+		// LOCK ORDER: meeting, then club, then everything else. This is the
+		// order the rest of the app already takes these two rows in —
+		// `ensureAgendaDraft` and conversion lock the meeting first, and
+		// `joinBallotAsGuest` locks the meeting and then takes the club FOR
+		// SHARE (through `assertDigitalVotingOnTx`). Taking the club first, as
+		// the first review round did, inverted that and a guest joining the
+		// ballot while an officer saved was a 40P01.
 		//
-		// First because it has to be. Materialising a never-opened meeting
-		// inserts a `meeting_templates` row, and that insert's foreign key
-		// takes KEY SHARE on this club row. Taking the lock only afterwards (in
-		// `nextClubTemplateKey`) meant two concurrent saves each held KEY SHARE
-		// and each then waited for the other's to go: 40P01. Taken first, every
-		// save in a club queues here instead.
-		//
-		// NO KEY UPDATE rather than UPDATE: it conflicts with itself, which is
-		// the serialisation the key read needs, but NOT with the KEY SHARE any
-		// other writer's foreign-key insert takes on this row — so an unrelated
-		// edit elsewhere in the club never waits behind a save.
-		const [club] = await tx
-			.select({ archivedAt: clubs.archivedAt })
-			.from(clubs)
-			.where(eq(clubs.id, clubId))
-			.for("no key update")
-			.limit(1);
-		if (!club) throw new Error("Club not found.");
-		if (club.archivedAt !== null) throw new Error(CLUB_ARCHIVED_MESSAGE);
-
-		// Then the meeting, locked: the same row `ensureAgendaDraft` and
-		// conversion lock before touching its template, so a concurrent edit or
-		// re-conversion lands wholly before or wholly after this save.
+		// The meeting, locked: a concurrent edit or re-conversion lands wholly
+		// before or wholly after this save.
 		const [meeting] = await tx
 			.select({ clubId: meetings.clubId, status: meetings.status })
 			.from(meetings)
@@ -1395,6 +1378,28 @@ export async function saveMeetingAgendaAsClubTemplate(
 				"A cancelled meeting's agenda cannot be saved as a template.",
 			);
 		}
+
+		// Then the club row, with the archive gate INSIDE that locked read
+		// (CODING_STANDARDS.md, "gate INSIDE" a lock the write already holds):
+		// an archive committing while this waits is seen, not raced.
+		//
+		// NO KEY UPDATE, not UPDATE, and that strength is what keeps two saves
+		// from deadlocking. Materialising a never-opened meeting inserts a row
+		// whose foreign key takes KEY SHARE on this club row; NO KEY UPDATE does
+		// not conflict with KEY SHARE, so a saver holding one never waits on
+		// another saver's. It does conflict with itself, which is the
+		// serialisation `nextClubTemplateKey` needs — its own lock is then a
+		// re-entrant no-op. Taken HERE rather than there only so the archive
+		// gate runs before any write.
+		const [club] = await tx
+			.select({ archivedAt: clubs.archivedAt })
+			.from(clubs)
+			.where(eq(clubs.id, clubId))
+			.for("no key update")
+			.limit(1);
+		if (!club) throw new Error("Club not found.");
+		if (isClubArchived(club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
+
 		const sourceTemplateId = await materialiseAgendaForMeeting(tx, meetingId);
 		const [source] = await tx
 			.select({ defaultLengthMinutes: meetingTemplates.defaultLengthMinutes })
