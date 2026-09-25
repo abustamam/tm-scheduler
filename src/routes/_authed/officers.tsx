@@ -3,7 +3,12 @@ import { ChevronRight } from "lucide-react";
 import { OnboardingChecklist } from "#/components/club/onboarding-checklist";
 import { PageContainer } from "#/components/page-container";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { buildOfficerHome, type OfficerTask } from "#/lib/officer-tasks";
+import { navDestination } from "#/lib/nav-destinations";
+import {
+	buildOfficerHome,
+	type OfficerTask,
+	officerTaskTitle,
+} from "#/lib/officer-tasks";
 import { firstNameOf } from "#/lib/person-name";
 import { getOnboardingChecklist } from "#/server/onboarding-checklist";
 
@@ -43,7 +48,7 @@ function OfficerHome() {
 		<PageContainer className="space-y-8">
 			<div>
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
-					Officer home
+					{navDestination("officer-home").label}
 				</h1>
 				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
 					Hi {firstName} — here's where to go to run the club.
@@ -76,13 +81,13 @@ function TaskSection({
 			<div className="grid gap-3 sm:grid-cols-2">
 				{tasks.map((task) => (
 					<Link
-						key={`${title}:${task.label}`}
+						key={`${title}:${task.to}`}
 						to={task.to}
 						className="group flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] px-4 py-3.5 shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-all hover:-translate-y-0.5 hover:border-[var(--lagoon-deep)]"
 					>
 						<div className="min-w-0 flex-1">
 							<div className="text-sm font-bold text-[var(--sea-ink)]">
-								{task.label}
+								{officerTaskTitle(task)}
 							</div>
 							<div className="truncate text-xs text-[var(--sea-ink-soft)]">
 								{task.description}
