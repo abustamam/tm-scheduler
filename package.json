@@ -37,6 +37,7 @@
     "build:role-sheets": "bun run scripts/build-role-sheets.ts",
     "check:eval-links": "bun run scripts/check-evaluation-resource-links.ts",
     "batch:issues": "bun run scripts/batch-issues.ts",
+    "marketing:screenshots": "bun run scripts/capture-marketing-screenshots.ts",
     "mutate": "bash scripts/mutate.sh",
     "db:pull": "drizzle-kit pull",
     "db:studio": "drizzle-kit studio",
