@@ -15,7 +15,12 @@ const config = defineConfig({
 			rollupConfig: { external: [/^@sentry\//] },
 			// Boot the in-process reminder poller (#271 / ADR-0023) once per server
 			// start — a Nitro runtime plugin, not an edge/cron job (ADR-0007).
-			plugins: ["./src/server/reminder-poller.nitro.ts"],
+			// The malformed-URI guard (#895) wraps `nitroApp.fetch` so a path h3
+			// cannot decode gets the branded 404 instead of a dropped socket.
+			plugins: [
+				"./src/server/reminder-poller.nitro.ts",
+				"./src/server/malformed-uri.nitro.ts",
+			],
 		}),
 		tailwindcss(),
 		tanstackStart(),
