@@ -14,9 +14,9 @@ import {
 	speeches,
 } from "#/db/schema";
 import {
+	type CatalogPath,
 	PATH_COMPLETION_LEVEL,
 	type PathwaysSeries,
-	seriesRequiredAt,
 } from "#/lib/pathways-catalog";
 import { isReadableClub } from "./club-readable-logic";
 import { resolveUserPersonId } from "./person-identity-logic";
@@ -91,6 +91,15 @@ export interface MarkRow {
 export interface PathViewModel {
 	courseCode: string;
 	pathName: string;
+	/**
+	 * `pathways_paths.status`. Carried for the Education Series requirement,
+	 * which applies to current paths only (`seriesRequiredAt`) and which #922
+	 * wires into the level counts; nothing here reads it yet.
+	 *
+	 * Always SET by `buildPathViewModel`. Optional in the type only because the
+	 * hand-built fixture in `pathways-progress.test.tsx` predates it.
+	 */
+	status?: CatalogPath["status"];
 	ringPercent: number; // 0–100 integer
 	currentLevel: number | null; // lowest not-approved; null when complete
 	complete: boolean;
@@ -160,9 +169,8 @@ export interface CatalogProject {
 interface SyncedPath {
 	courseCode: string;
 	pathName: string;
-	/** `pathways_paths.status` — decides whether Levels 4/5 carry a series
-	 *  requirement (`seriesRequiredAt`). */
-	status: "current" | "legacy";
+	/** `pathways_paths.status`; see `PathViewModel.status`. */
+	status: CatalogPath["status"];
 	levels: SyncedLevel[];
 	wins: Win[];
 	catalogProjects: CatalogProject[];
@@ -186,15 +194,11 @@ interface SyncedPath {
  * required projects at that level plus `min_req_electives`. `approved` is always
  * false — only Base Camp approves a level, and inferring it from marks would be
  * exactly the over-crediting this feature exists to avoid.
- *
- * On a current path, Levels 4 and 5 also count one presentation from each
- * Education Series the level requires (#921, `seriesRequiredAt`).
  */
 function levelsFromCatalog(
 	catalogProjects: CatalogProject[],
 	pathLevels: { level: number; minReqElectives: number }[] | undefined,
 	completeProjectIds: Set<string>,
-	status: "current" | "legacy",
 ): SyncedLevel[] {
 	const levels = [...new Set(catalogProjects.map((p) => p.level))].sort(
 		(a, b) => a - b,
@@ -205,7 +209,6 @@ function levelsFromCatalog(
 			pathLevels,
 			completeProjectIds,
 			level,
-			status,
 		);
 		// `total - left`, not "marked projects at this level" (#898). The naive
 		// count credits every marked elective, so three electives marked against
@@ -218,16 +221,18 @@ function levelsFromCatalog(
 /**
  * TI's requirement for one catalog level, and how much of it is still open:
  * the required projects not yet complete, plus however many electives are
- * still to choose, plus each required Education Series (#921) with no complete
- * presentation yet. Electives beyond the minimum count for nothing, and so does
- * a second presentation from a series already met.
+ * still to choose. Electives beyond the minimum count for nothing.
+ *
+ * Education Series presentations (#921) are neither: they are excluded from the
+ * elective count and count toward nothing yet. #922 adds them to `total` and
+ * `left` via `seriesRequiredAt`, together with the UI that lets a member mark
+ * them, so a level never waits on something the screen cannot show.
  */
 function catalogLevelRequirement(
 	catalogProjects: CatalogProject[],
 	pathLevels: { level: number; minReqElectives: number }[] | undefined,
 	completeProjectIds: Set<string>,
 	level: number,
-	status: "current" | "legacy",
 ): {
 	total: number;
 	left: number;
@@ -244,16 +249,9 @@ function catalogLevelRequirement(
 		(p) => isElective(p) && completeProjectIds.has(p.projectId),
 	).length;
 	const electivesToChoose = Math.max(0, minReqElectives - completedElectives);
-	const seriesRequired = seriesRequiredAt(level, status);
-	const seriesLeft = seriesRequired.filter(
-		(series) =>
-			!atLevel.some(
-				(p) => p.series === series && completeProjectIds.has(p.projectId),
-			),
-	).length;
 	return {
-		total: required.length + minReqElectives + seriesRequired.length,
-		left: requiredLeft + electivesToChoose + seriesLeft,
+		total: required.length + minReqElectives,
+		left: requiredLeft + electivesToChoose,
 		electivesToChoose,
 	};
 }
@@ -319,12 +317,7 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	const levels =
 		levelsSource === "basecamp"
 			? [...path.levels].sort((a, b) => a.level - b.level)
-			: levelsFromCatalog(
-					path.catalogProjects,
-					path.pathLevels,
-					completeIds,
-					path.status,
-				);
+			: levelsFromCatalog(path.catalogProjects, path.pathLevels, completeIds);
 
 	const done = levels.reduce((s, l) => s + Math.min(l.completed, l.total), 0);
 	const total = levels.reduce((s, l) => s + l.total, 0);
@@ -342,6 +335,7 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	const base = {
 		courseCode: path.courseCode,
 		pathName: path.pathName,
+		status: path.status,
 		ringPercent,
 		currentLevel,
 		complete,
@@ -422,7 +416,6 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 				path.pathLevels,
 				completeIds,
 				workingLevel,
-				path.status,
 			);
 			if (chooseCount > 0) {
 				upNextElectives = {

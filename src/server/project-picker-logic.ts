@@ -45,8 +45,12 @@ export interface PickerProject {
 	 * ordinary project. A series row is `isRequired: false` but is NOT an
 	 * elective — group it by this, never by `!isRequired` alone.
 	 *
-	 * Always set by `listProjectOptions`. Optional in the type only so fixtures
-	 * built by hand before #921 still type-check; read absent as null.
+	 * Always null today: series rows are kept out of the picker until #922 adds
+	 * them back with their own grouping.
+	 *
+	 * Always SET by `listProjectOptions`. Optional in the type only because the
+	 * two hand-built `PATH` fixtures in `project-picker.test.tsx` (lines 38 and
+	 * 75) predate it; read absent as null.
 	 */
 	series?: PathwaysSeries | null;
 	/**
@@ -125,7 +129,14 @@ export async function listProjectOptions(
 				series: pathwaysProjects.series,
 			})
 			.from(pathwaysProjects)
-			.where(inArray(pathwaysProjects.pathId, pathIds))
+			// Education Series rows (#921) stay out of the picker until #922
+			// offers them, grouped and labelled, beside the ordinary projects.
+			.where(
+				and(
+					inArray(pathwaysProjects.pathId, pathIds),
+					isNull(pathwaysProjects.series),
+				),
+			)
 			.orderBy(
 				asc(pathwaysProjects.level),
 				asc(pathwaysProjects.sortOrder),
@@ -342,7 +353,11 @@ export async function resolveProjectDisplay(
 		})
 		.from(pathwaysProjects)
 		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathwaysProjects.pathId))
-		.where(eq(pathwaysProjects.id, projectId));
+		// Same exclusion as `listProjectOptions`: the picker never offers a series
+		// row (#921, until #922), so an id for one over the wire is refused too.
+		.where(
+			and(eq(pathwaysProjects.id, projectId), isNull(pathwaysProjects.series)),
+		);
 
 	if (!row || !PATHWAYS_COURSE_CODES.has(row.courseCode)) {
 		throw new Error("That Pathways project no longer exists.");

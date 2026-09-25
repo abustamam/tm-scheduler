@@ -109,6 +109,47 @@ describe.skipIf(!hasTestDb)("seedPathwaysCatalog: Education Series (#921)", () =
 		expect(await seriesRows(tagged("8711"))).toEqual(seriesBefore);
 	});
 
+	// The conflict branch, not the insert: rows that already exist with the
+	// wrong classification (a series row seeded before #921 as a plain row, and
+	// the reverse) must be corrected by a re-seed, or `series` in the upsert's
+	// `set` is decoration.
+	it("re-classifies existing rows on re-seed, in both directions", async () => {
+		const code = tagged("8711");
+		const [path] = await testDb
+			.select({ id: pathwaysPaths.id })
+			.from(pathwaysPaths)
+			.where(eq(pathwaysPaths.courseCode, code));
+		const rowAt = (level: number, name: string) =>
+			and(
+				eq(pathwaysProjects.pathId, path.id),
+				eq(pathwaysProjects.level, level),
+				eq(pathwaysProjects.name, name),
+			);
+		const seriesOf = async (level: number, name: string) => {
+			const [row] = await testDb
+				.select({ series: pathwaysProjects.series })
+				.from(pathwaysProjects)
+				.where(rowAt(level, name));
+			return row?.series;
+		};
+
+		await testDb
+			.update(pathwaysProjects)
+			.set({ series: null })
+			.where(rowAt(4, "Finding New Members"));
+		await testDb
+			.update(pathwaysProjects)
+			.set({ series: "better_speaker" })
+			.where(rowAt(4, "Create a Podcast"));
+		expect(await seriesOf(4, "Finding New Members")).toBeNull();
+		expect(await seriesOf(4, "Create a Podcast")).toBe("better_speaker");
+
+		await seedPathwaysCatalog(CATALOG);
+
+		expect(await seriesOf(4, "Finding New Members")).toBe("successful_club");
+		expect(await seriesOf(4, "Create a Podcast")).toBeNull();
+	});
+
 	it("leaves every series row untouched through a /detail reconcile", async () => {
 		const code = tagged("8711");
 		const humor = CATALOG.find((p) => p.courseCode === code);

@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("#/db", () => ({ db: {} }));
 
-import { PATH_COMPLETION_LEVEL } from "#/lib/pathways-catalog";
+import {
+	type CatalogPath,
+	PATH_COMPLETION_LEVEL,
+} from "#/lib/pathways-catalog";
 
 import type { DetailProjectRow, MarkRow } from "./pathways-read-logic";
 import {
@@ -681,13 +684,11 @@ describe("workingLevel (#898)", () => {
 			project(PATH_COMPLETION_LEVEL, "Reflect on Your Path"),
 		];
 		const allFive = [1, 2, 3, 4, 5].map((n) => mark(n, `Level ${n} project`));
-		// Legacy, so Levels 4/5 carry no Education Series requirement (#921) and
-		// this stays a test of Path Completion alone; the series half is below.
 		const at = (marks: MarkRow[]) =>
 			buildPathViewModel({
-				courseCode: "8705",
-				pathName: "Strategic Relationships",
-				status: "legacy",
+				courseCode: "8701",
+				pathName: "Presentation Mastery",
+				status: "current",
 				levels: [],
 				wins: [],
 				catalogProjects: catalog,
@@ -775,10 +776,10 @@ describe("workingLevel (#898)", () => {
 
 /**
  * Education Series presentations (#921). Rows with `isRequired: false` and a
- * `series` — not electives. On a current path, Levels 4 and 5 each require one
- * presentation from two series (`seriesRequiredAt`).
+ * `series` — not electives, and INERT until #922: they count toward no level
+ * total, are never offered as an elective, and never appear in Up next.
  */
-describe("Education Series (#921)", () => {
+describe("Education Series (#921, inert until #922)", () => {
 	const seriesProject = (
 		level: number,
 		name: string,
@@ -815,7 +816,7 @@ describe("Education Series (#921)", () => {
 	];
 	const build = (
 		marks: MarkRow[],
-		status: "current" | "legacy" = "current",
+		status: CatalogPath["status"] = "current",
 		levels: SyncedLevel[] = [],
 	) =>
 		buildPathViewModel({
@@ -829,6 +830,8 @@ describe("Education Series (#921)", () => {
 			marks,
 		});
 	const throughL3 = [1, 2, 3].map((n) => mark(n, `Level ${n} project`));
+	const level = (vm: ReturnType<typeof build>, n: number) =>
+		vm.levels.find((l) => l.level === n);
 
 	it("keeps series titles out of upNextElectives and leaves chooseCount alone", () => {
 		const vm = build(throughL3);
@@ -844,25 +847,20 @@ describe("Education Series (#921)", () => {
 		expect(vm.upNext.map((p) => p.name)).toEqual(["Manage Change"]);
 	});
 
-	it("does not let a completed series presentation stand in for the elective", () => {
+	it("does not let a marked series presentation stand in for the elective", () => {
 		const vm = build([...throughL3, seriesMark(4, "Finding New Members")]);
 		expect(vm.upNextElectives?.chooseCount).toBe(1);
+		expect(level(vm, 4)).toEqual({
+			level: 4,
+			completed: 0,
+			total: 2,
+			approved: false,
+		});
 	});
 
-	it("counts L4 and L5 as required + 1 elective + 2 series = 4 on a never-synced current path", () => {
+	it("counts L4 and L5 as required + 1 elective = 2 on a current path, series excluded", () => {
 		const vm = build([]);
 		expect(vm.levelsSource).toBe("catalog");
-		expect(vm.levels.map((l) => [l.level, l.total])).toEqual([
-			[1, 1],
-			[2, 1],
-			[3, 1],
-			[4, 4],
-			[5, 4],
-		]);
-	});
-
-	it("leaves every level unchanged on a legacy path", () => {
-		const vm = build([], "legacy");
 		expect(vm.levels.map((l) => [l.level, l.total])).toEqual([
 			[1, 1],
 			[2, 1],
@@ -872,39 +870,45 @@ describe("Education Series (#921)", () => {
 		]);
 	});
 
-	it("counts two presentations from one series once", () => {
-		const vm = build([
-			...throughL3,
-			seriesMark(4, "Beginning Your Speech"),
-			seriesMark(4, "Concluding Your Speech"),
-		]);
-		expect(vm.levels.find((l) => l.level === 4)).toEqual({
-			level: 4,
-			completed: 1,
-			total: 4,
-			approved: false,
-		});
-		// Required, elective and Successful Club still open.
-		expect(vm.projectsLeftAtWorkingLevel).toBe(3);
+	it("counts current and legacy paths alike while inert", () => {
+		const totals = (status: CatalogPath["status"]) =>
+			build([], status).levels.map((l) => [l.level, l.total]);
+		expect(totals("legacy")).toEqual(totals("current"));
 	});
 
-	it("closes Level 4 only once both series have a presentation", () => {
-		const l4Done = [
+	it("closes Level 4 with the required project and an elective marked, no series", () => {
+		const vm = build([
+			...throughL3,
 			mark(4, "Manage Change"),
 			mark(4, "Write a Compelling Blog", false),
-			seriesMark(4, "Beginning Your Speech"),
-		];
-		const missingClub = build([...throughL3, ...l4Done]);
-		expect(missingClub.workingLevel).toBe(4);
-		expect(missingClub.projectsLeftAtWorkingLevel).toBe(1);
+		]);
+		expect(level(vm, 4)).toEqual({
+			level: 4,
+			completed: 2,
+			total: 2,
+			approved: false,
+		});
+		expect(vm.workingLevel).toBe(5);
+	});
 
-		const allMet = build([
+	it("lets series marks change neither the total nor the completed count", () => {
+		const base = [
 			...throughL3,
-			...l4Done,
+			mark(4, "Manage Change"),
+			mark(4, "Write a Compelling Blog", false),
+		];
+		const withSeries = build([
+			...base,
+			seriesMark(4, "Beginning Your Speech"),
+			seriesMark(4, "Concluding Your Speech"),
 			seriesMark(4, "Closing the Sale"),
 		]);
-		expect(allMet.levels.find((l) => l.level === 4)?.completed).toBe(4);
-		expect(allMet.workingLevel).toBe(5);
+		expect(withSeries.levels).toEqual(build(base).levels);
+	});
+
+	it("carries the path's status onto the view model", () => {
+		expect(build([], "legacy").status).toBe("legacy");
+		expect(build([], "current").status).toBe("current");
 	});
 
 	it("leaves Base-Camp-sourced levels exactly as Base Camp reported them", () => {

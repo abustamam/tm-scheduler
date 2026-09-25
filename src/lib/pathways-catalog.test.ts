@@ -21,6 +21,7 @@ import {
 	PATH_COMPLETION_LEVEL,
 	PATHWAYS_CATALOG,
 	PATHWAYS_SERIES,
+	type PathwaysSeries,
 	SERIES_LABEL,
 	seriesRequiredAt,
 } from "./pathways-catalog";
@@ -272,10 +273,9 @@ describe("Education Series (#921)", () => {
 			?.projects.filter((p) => p.level === level && p.series !== undefined) ??
 		[];
 	const countBySeries = (code: string, level: number) => {
-		const counts: Record<string, number> = {};
-		for (const p of seriesAt(code, level)) {
-			const key = p.series as string;
-			counts[key] = (counts[key] ?? 0) + 1;
+		const counts: Partial<Record<PathwaysSeries, number>> = {};
+		for (const { series } of seriesAt(code, level)) {
+			if (series) counts[series] = (counts[series] ?? 0) + 1;
 		}
 		return counts;
 	};
@@ -311,19 +311,20 @@ describe("Education Series (#921)", () => {
 		});
 
 		// The seed upserts on (path, level, name) and `reconcileCatalog` stamps a
-		// block id onto a row it matches by (path, level, name). A series title
-		// that equalled a same-level project would therefore merge with it: the
-		// seed would flip one row's classification, and a sync could stamp a
-		// Base Camp block onto a series row.
+		// block id onto a row it matches by (path, level, lower(name)). A series
+		// title equal to a same-level project, even only case-insensitively,
+		// would therefore merge with it: the seed would flip one row's
+		// classification, and a sync could stamp a Base Camp block onto a series
+		// row. Compared lowercased because the reconcile match is.
 		it(`${path.courseCode}: no series title collides with a same-level project`, () => {
 			for (const level of [4, 5]) {
 				const others = new Set(
 					path.projects
 						.filter((p) => p.level === level && p.series === undefined)
-						.map((p) => p.name),
+						.map((p) => p.name.toLowerCase()),
 				);
 				const clashes = seriesAt(path.courseCode, level).filter((p) =>
-					others.has(p.name),
+					others.has(p.name.toLowerCase()),
 				);
 				expect(clashes).toEqual([]);
 			}
