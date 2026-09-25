@@ -23,8 +23,10 @@ import { definePlugin } from "nitro";
 export const MALFORMED_URI_NOT_FOUND_PATH = "/__malformed-uri";
 
 /**
- * Whether h3 can decode this pathname. Mirrors h3's `decodePathname` exactly,
- * including its `%25` escape, so the guard refuses precisely what would throw.
+ * Whether h3 can decode this pathname. Mirrors `decodePathname` in h3
+ * 2.0.1-rc.22 (the version Nitro bundles here), including its `%25` escape. The
+ * h3-parity test in `malformed-uri.test.ts` constructs a real `H3Event` for each
+ * sample, so an h3 upgrade that changes the decoder fails there rather than here.
  */
 export function isDecodablePathname(pathname: string): boolean {
 	if (!pathname.includes("%")) return true;
@@ -43,8 +45,10 @@ export function isDecodablePathname(pathname: string): boolean {
  * app should serve instead (GET/HEAD) or the response to send outright.
  */
 export function guardMalformedUri(request: Request): Request | Response {
-	const url = new URL(request.url);
-	if (isDecodablePathname(url.pathname)) return request;
+	// Fast path: no `%` anywhere in the URL means nothing for h3 to decode, so
+	// the common request pays for one substring scan and no URL parse.
+	if (!request.url.includes("%")) return request;
+	if (isDecodablePathname(h3Pathname(request))) return request;
 
 	if (request.method !== "GET" && request.method !== "HEAD") {
 		return new Response("Bad Request: malformed URL encoding", {
@@ -53,12 +57,27 @@ export function guardMalformedUri(request: Request): Request | Response {
 		});
 	}
 
+	const url = new URL(request.url);
 	url.pathname = MALFORMED_URI_NOT_FOUND_PATH;
 	url.search = "";
 	return new Request(url, {
 		method: request.method,
 		headers: request.headers,
+		signal: request.signal,
 	});
+}
+
+/**
+ * The pathname h3's `H3Event` will decode: srvx's parsed `_url` when the request
+ * carries one (every request on the Node server does), else the WHATWG parse of
+ * `request.url`. Reading the same object h3 reads keeps the two from disagreeing
+ * about dot segments or characters one parser normalises and the other does not.
+ */
+function h3Pathname(request: Request): string {
+	const parsed = (request as Request & { _url?: unknown })._url;
+	return parsed instanceof URL
+		? parsed.pathname
+		: new URL(request.url).pathname;
 }
 
 type Fetch = (request: Request) => Response | Promise<Response>;
