@@ -28,10 +28,10 @@ import type {
 } from "#/lib/agenda-template-rows";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
-	CLUB_TEMPLATE_DESCRIPTION_MAX,
-	CLUB_TEMPLATE_NAME_MAX,
+	type ClubTemplateFields,
 	clubTemplateKeySlug,
 	firstFreeClubTemplateKey,
+	parseClubTemplateFields,
 	retiredTemplateKey,
 } from "#/lib/club-template-key";
 import {
@@ -1312,14 +1312,6 @@ export type SaveClubTemplateInput = {
 	| { mode: "replace"; templateId: string }
 );
 
-function boundedText(value: string, max: number, what: string): string {
-	const trimmed = value.trim();
-	if ([...trimmed].length > max) {
-		throw new Error(`That ${what} is too long (max ${max} characters).`);
-	}
-	return trimmed;
-}
-
 /**
  * Copy a meeting's CURRENT agenda into a club-owned template, new or replacing
  * one of the club's own. ONE transaction.
@@ -1347,22 +1339,11 @@ export async function saveMeetingAgendaAsClubTemplate(
 	input: SaveClubTemplateInput,
 ): Promise<{ templateId: string }> {
 	const { meetingId, clubId } = input;
-	const newFields =
-		input.mode === "new"
-			? {
-					name: boundedText(input.name, CLUB_TEMPLATE_NAME_MAX, "name"),
-					description:
-						input.description == null
-							? null
-							: boundedText(
-									input.description,
-									CLUB_TEMPLATE_DESCRIPTION_MAX,
-									"description",
-								) || null,
-				}
-			: null;
-	if (newFields && newFields.name === "") {
-		throw new Error("Give the template a name.");
+	let newFields: ClubTemplateFields | null = null;
+	if (input.mode === "new") {
+		const parsed = parseClubTemplateFields(input.name, input.description);
+		if ("error" in parsed) throw new Error(parsed.error);
+		newFields = parsed;
 	}
 
 	return database.transaction(async (tx) => {

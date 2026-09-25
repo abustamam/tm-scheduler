@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+	CLUB_TEMPLATE_DESCRIPTION_MAX,
 	CLUB_TEMPLATE_KEY_FALLBACK,
 	CLUB_TEMPLATE_KEY_MAX,
+	CLUB_TEMPLATE_NAME_MAX,
 	clubTemplateKeySlug,
 	firstFreeClubTemplateKey,
+	parseClubTemplateFields,
 	RETIRED_TEMPLATE_KEY_PREFIX,
 	retiredTemplateKey,
 } from "./club-template-key";
@@ -65,5 +68,49 @@ describe("retiredTemplateKey", () => {
 			// Nor any suffixed variant the key read could pick.
 			expect(firstFreeClubTemplateKey(slug, new Set([slug]))).not.toBe(key);
 		}
+	});
+});
+
+describe("parseClubTemplateFields", () => {
+	it("trims, and turns a blank description into none", () => {
+		expect(parseClubTemplateFields("  Contest night ", "   ")).toEqual({
+			name: "Contest night",
+			description: null,
+		});
+		expect(parseClubTemplateFields("A", " Area 4 ")).toEqual({
+			name: "A",
+			description: "Area 4",
+		});
+		expect(parseClubTemplateFields("A", null)).toEqual({
+			name: "A",
+			description: null,
+		});
+	});
+
+	it("refuses a blank name and over-long fields, counted in code points", () => {
+		expect(parseClubTemplateFields("   ", null)).toEqual({
+			error: "Give the template a name.",
+		});
+		// Exactly the cap is allowed; one more is not.
+		expect(
+			parseClubTemplateFields("x".repeat(CLUB_TEMPLATE_NAME_MAX), null),
+		).not.toHaveProperty("error");
+		expect(
+			parseClubTemplateFields("x".repeat(CLUB_TEMPLATE_NAME_MAX + 1), null),
+		).toEqual({
+			error: `That name is too long (max ${CLUB_TEMPLATE_NAME_MAX} characters).`,
+		});
+		// 80 emoji are 160 UTF-16 units and still within the cap.
+		expect(
+			parseClubTemplateFields("🎤".repeat(CLUB_TEMPLATE_NAME_MAX), null),
+		).not.toHaveProperty("error");
+		expect(
+			parseClubTemplateFields(
+				"A",
+				"d".repeat(CLUB_TEMPLATE_DESCRIPTION_MAX + 1),
+			),
+		).toEqual({
+			error: `That description is too long (max ${CLUB_TEMPLATE_DESCRIPTION_MAX} characters).`,
+		});
 	});
 });

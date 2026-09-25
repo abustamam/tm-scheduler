@@ -15,6 +15,7 @@ import { Textarea } from "#/components/ui/textarea";
 import {
 	CLUB_TEMPLATE_DESCRIPTION_MAX,
 	CLUB_TEMPLATE_NAME_MAX,
+	parseClubTemplateFields,
 } from "#/lib/club-template-key";
 
 /** A club-owned template the officer may replace. */
@@ -32,10 +33,6 @@ export const REPLACE_SAVED_MESSAGE =
 
 function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : "Something went wrong.";
-}
-
-function codePoints(value: string): number {
-	return [...value].length;
 }
 
 /**
@@ -87,26 +84,16 @@ export function SaveClubTemplateDialog({
 		onOpenChange(next);
 	}
 
-	/** The refusal the server would give, said before the round-trip. */
+	/** The refusal the server would give — the same function, said before the
+	 *  round-trip. */
 	function validate(): SaveClubTemplateChoice | string {
 		if (mode === "replace") {
 			if (templateId === "") return "Choose the template to replace.";
 			return { mode: "replace", templateId };
 		}
-		const trimmed = name.trim();
-		if (trimmed === "") return "Give the template a name.";
-		if (codePoints(trimmed) > CLUB_TEMPLATE_NAME_MAX) {
-			return `That name is too long (max ${CLUB_TEMPLATE_NAME_MAX} characters).`;
-		}
-		const desc = description.trim();
-		if (codePoints(desc) > CLUB_TEMPLATE_DESCRIPTION_MAX) {
-			return `That description is too long (max ${CLUB_TEMPLATE_DESCRIPTION_MAX} characters).`;
-		}
-		return {
-			mode: "new",
-			name: trimmed,
-			description: desc === "" ? null : desc,
-		};
+		const parsed = parseClubTemplateFields(name, description);
+		if ("error" in parsed) return parsed.error;
+		return { mode: "new", ...parsed };
 	}
 
 	async function save() {

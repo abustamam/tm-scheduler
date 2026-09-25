@@ -22,6 +22,38 @@ export const CLUB_TEMPLATE_NAME_MAX = 80;
 /** Description bound — the same ceiling a beat's detail carries. */
 export const CLUB_TEMPLATE_DESCRIPTION_MAX = MAX_TEMPLATE_DETAIL_CHARS;
 
+/** A new club template's name and description, trimmed and within bounds. */
+export type ClubTemplateFields = { name: string; description: string | null };
+
+/**
+ * Trim and bound a new club template's name and description, or say why not.
+ *
+ * The ONE statement of the rule and its messages: the dialog calls it before
+ * the round-trip and `saveMeetingAgendaAsClubTemplate` calls it again as the
+ * enforcement, so the two cannot drift into refusing different names with
+ * different words. Bounds are in CODE POINTS after trimming — the length an
+ * officer sees — and a blank description is no description.
+ */
+export function parseClubTemplateFields(
+	name: string,
+	description: string | null,
+): ClubTemplateFields | { error: string } {
+	const trimmed = name.trim();
+	if (trimmed === "") return { error: "Give the template a name." };
+	if ([...trimmed].length > CLUB_TEMPLATE_NAME_MAX) {
+		return {
+			error: `That name is too long (max ${CLUB_TEMPLATE_NAME_MAX} characters).`,
+		};
+	}
+	const desc = description?.trim() ?? "";
+	if ([...desc].length > CLUB_TEMPLATE_DESCRIPTION_MAX) {
+		return {
+			error: `That description is too long (max ${CLUB_TEMPLATE_DESCRIPTION_MAX} characters).`,
+		};
+	}
+	return { name: trimmed, description: desc === "" ? null : desc };
+}
+
 /**
  * The key a superseded private copy is parked under for the instant between
  * being detached and deleted (`applyTemplateConversion`). Built from
