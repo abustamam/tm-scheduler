@@ -10,6 +10,8 @@ const base: PathViewModel = {
 	ringPercent: 40,
 	currentLevel: 3,
 	complete: false,
+	workingLevel: 3,
+	projectsLeftAtWorkingLevel: 3,
 	levels: [
 		{ level: 1, completed: 5, total: 5, approved: true },
 		{ level: 3, completed: 1, total: 4, approved: false },
@@ -119,5 +121,97 @@ describe("PathwaysProgress", () => {
 			/>,
 		);
 		expect(screen.queryByText(/Choose .* elective/i)).toBeNull();
+	});
+
+	// #898: on a club without Base Camp nothing is ever approved, so the
+	// lowest-unapproved `currentLevel` is Level 1 forever. The panel follows the
+	// level being WORKED ON instead.
+	it("shows Level 2 and its Up next after a fully marked Level 1", () => {
+		render(
+			<PathwaysProgress
+				paths={[
+					{
+						...base,
+						levelsSource: "catalog",
+						hasBasecamp: false,
+						currentLevel: 1,
+						workingLevel: 2,
+						projectsLeftAtWorkingLevel: 3,
+						levels: [
+							{ level: 1, completed: 4, total: 4, approved: false },
+							{ level: 2, completed: 0, total: 3, approved: false },
+						],
+						upNext: [
+							{
+								projectId: "l2a",
+								level: 2,
+								name: "Understanding Your Communication Style",
+								isRequired: true,
+							},
+						],
+					},
+				]}
+			/>,
+		);
+		expect(screen.getByText("Level 2 · 0 of 3")).toBeTruthy();
+		expect(screen.queryByText(/Level 1 · 4 of 4/)).toBeNull();
+		expect(screen.getByText("Up next")).toBeTruthy();
+		expect(
+			screen.getByText("Understanding Your Communication Style"),
+		).toBeTruthy();
+	});
+
+	it("labels Path Completion by name and renders its Up next even when complete", () => {
+		const { container } = render(
+			<PathwaysProgress
+				paths={[
+					{
+						...base,
+						levelsSource: "catalog",
+						hasBasecamp: false,
+						complete: true,
+						currentLevel: null,
+						workingLevel: 6,
+						projectsLeftAtWorkingLevel: 1,
+						levels: [
+							{ level: 5, completed: 3, total: 3, approved: true },
+							{ level: 6, completed: 0, total: 1, approved: false },
+						],
+						upNext: [
+							{
+								projectId: "pc",
+								level: 6,
+								name: "Reflect on Your Path",
+								isRequired: true,
+							},
+						],
+					},
+				]}
+			/>,
+		);
+		expect(screen.getByText("Up next")).toBeTruthy();
+		expect(screen.getByText("Reflect on Your Path")).toBeTruthy();
+		expect(screen.getByText("Path Completion")).toBeTruthy();
+		expect(container.textContent).not.toMatch(/Level 6|L6/);
+	});
+
+	it("keeps the current level's bar when nothing is left and nothing is approved", () => {
+		render(
+			<PathwaysProgress
+				paths={[
+					{
+						...base,
+						levelsSource: "catalog",
+						hasBasecamp: false,
+						currentLevel: 1,
+						workingLevel: null,
+						projectsLeftAtWorkingLevel: 0,
+						levels: [{ level: 1, completed: 4, total: 4, approved: false }],
+					},
+				]}
+			/>,
+		);
+		expect(screen.getByText("Level 1 · 4 of 4")).toBeTruthy();
+		expect(screen.queryByText("Up next")).toBeNull();
 	});
 });

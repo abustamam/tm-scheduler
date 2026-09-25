@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Badge } from "#/components/ui/badge";
 import { Card, CardContent } from "#/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
-import { levelLabel } from "#/lib/pathways-catalog";
+import { levelLabel, PATH_COMPLETION_LEVEL } from "#/lib/pathways-catalog";
 import { cn } from "#/lib/utils";
 import type { PathViewModel } from "#/server/pathways-read-logic";
 
@@ -98,7 +98,10 @@ function LevelChips({
 								"border-transparent bg-muted text-muted-foreground",
 						)}
 					>
-						L{l.level}
+						{/* Path Completion is not "L6" (#424, #898). */}
+						{l.level === PATH_COMPLETION_LEVEL
+							? levelLabel(l.level)
+							: `L${l.level}`}
 						{l.approved ? " ✓" : ""}
 					</Badge>
 				);
@@ -107,7 +110,7 @@ function LevelChips({
 	);
 }
 
-/** "Level N · X of Y" bar for the in-progress level. */
+/** "Level N · X of Y" bar for the level being worked on. */
 function CurrentLevelBar({
 	currentLevel,
 	levels,
@@ -122,7 +125,7 @@ function CurrentLevelBar({
 	return (
 		<div className="flex flex-col gap-1.5">
 			<div className="text-muted-foreground text-sm">
-				Level {currentLevel} · {completed} of {entry.total}
+				{levelLabel(currentLevel)} · {completed} of {entry.total}
 			</div>
 			<div className="h-2 w-full overflow-hidden rounded-full bg-muted">
 				<div
@@ -329,21 +332,23 @@ function PathBlock({
 	onUnmark?: (projectId: string) => void;
 	busyId?: string | null;
 }) {
+	// The level the member is WORKING on (#898), not the lowest unapproved one:
+	// on a club without Base Camp nothing is ever approved, so `currentLevel`
+	// alone read "Level 1 · 4 of 4" forever. With nothing left anywhere and
+	// nothing approved yet, `currentLevel` is still the honest thing to show.
+	const shownLevel = path.workingLevel ?? path.currentLevel;
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-col gap-4 sm:flex-row sm:items-center">
 				<ProgressRing percent={path.ringPercent} />
 				<div className="flex min-w-0 flex-1 flex-col gap-3">
-					<LevelChips levels={path.levels} currentLevel={path.currentLevel} />
+					<LevelChips levels={path.levels} currentLevel={shownLevel} />
 					{path.complete ? (
 						<div className="font-medium text-foreground text-sm">
 							Path complete 🎉
 						</div>
-					) : path.currentLevel !== null ? (
-						<CurrentLevelBar
-							currentLevel={path.currentLevel}
-							levels={path.levels}
-						/>
+					) : shownLevel !== null ? (
+						<CurrentLevelBar currentLevel={shownLevel} levels={path.levels} />
 					) : null}
 				</div>
 			</div>
@@ -357,7 +362,10 @@ function PathBlock({
 				</div>
 			) : null}
 			<YourWins wins={path.wins} onUnmark={onUnmark} busyId={busyId} />
-			{!path.complete && (
+			{/* Gated on the working level, not on `complete` (#898): `complete` is
+			    about approval, and a catalog path in Path Completion still has
+			    something next. */}
+			{path.workingLevel !== null && (
 				<UpNext
 					upNext={path.upNext}
 					electives={path.upNextElectives}

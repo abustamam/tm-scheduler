@@ -87,6 +87,8 @@ async function renderRoute(pairings: EvaluatorPairingRow[]) {
 		overdue: [],
 		lapse: [],
 		pairings,
+		// #898's section; this file asserts nothing about it.
+		proximity: [],
 		clubName: "Harbor City Speakers",
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
