@@ -7,10 +7,11 @@
  * client bundle, and a query living only inside a `createServerFn` handler is
  * unreachable from vitest.
  */
-import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, like, or } from "drizzle-orm";
 import type { db } from "#/db";
 import { db as database } from "#/db";
 import {
+	clubs,
 	guests,
 	meetings,
 	meetingTemplateBeats,
@@ -25,6 +26,14 @@ import type {
 	TemplateBeatRow,
 	TemplateRoleRow,
 } from "#/lib/agenda-template-rows";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import {
+	type ClubTemplateFields,
+	clubTemplateKeySlug,
+	firstFreeClubTemplateKey,
+	parseClubTemplateFields,
+	retiredTemplateKey,
+} from "#/lib/club-template-key";
 import {
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_ROLES,
@@ -36,12 +45,17 @@ import {
 } from "#/lib/role-def-match";
 import { logActivity } from "./activity";
 import { assertClubNotArchived, requireClubRole, requireUser } from "./guards";
+import {
+	AGENDA_DEADLOCK_MESSAGE,
+	materialiseAgendaForMeeting,
+} from "./meeting-agenda-edit-logic";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	linkEvaluatorsToSpeakers,
 	type MeetingSlotDefs,
 } from "./meeting-create-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
+import { isDeadlock } from "./pg-errors";
 
 export type DbOrTx =
 	| typeof db
@@ -54,6 +68,17 @@ export type MeetingTemplateSummary = {
 	name: string;
 	description: string | null;
 	defaultLengthMinutes: number | null;
+};
+
+/**
+ * A picker choice plus its OWNER (#909): `null` for a GLOBAL template, the
+ * club's id for one the club saved itself. The save dialog's replace list is
+ * this read filtered to `clubId !== null`; the picker ignores the field.
+ * A separate type rather than a field on `MeetingTemplateSummary` so the
+ * picker's existing callers and fixtures need not change.
+ */
+export type AvailableTemplate = MeetingTemplateSummary & {
+	clubId: string | null;
 };
 
 /**
@@ -95,10 +120,11 @@ export async function requireMeetingTemplateEditor(meetingId: string) {
  */
 export async function listAvailableTemplates(
 	clubId: string,
-): Promise<MeetingTemplateSummary[]> {
+): Promise<AvailableTemplate[]> {
 	return database
 		.select({
 			id: meetingTemplates.id,
+			clubId: meetingTemplates.clubId,
 			key: meetingTemplates.key,
 			name: meetingTemplates.name,
 			description: meetingTemplates.description,
@@ -452,6 +478,112 @@ function templateVisibleTo(clubId: string) {
 }
 
 /**
+ * Copy one template's roles and beats onto another template row, and nothing
+ * else — the row itself (name, key, owner) is the caller's.
+ *
+ * Extracted from `copyTemplateForMeeting` (#909) so saving a meeting's agenda
+ * as a club template copies through the SAME column list rather than a second
+ * one that drifts: an explicit list is only safe while it is complete, and two
+ * of them are two chances to forget the next column.
+ *
+ * `id` and `template_id` are the only columns not carried: the first is
+ * regenerated, the second is `toTemplateId`. Beats reference roles by KEY
+ * (`role_key`, `repeats_role_key`), never by id, which is why the two tables
+ * copy with no remapping between them.
+ *
+ * NO visibility check — `fromTemplateId` is trusted. Every caller resolves it
+ * first: `copyTemplateForMeeting` through `templateVisibleTo`, the club-template
+ * save from the meeting's own `template_id` pointer. Multi-statement and not
+ * self-transactional, like `copyTemplateForMeeting`: run it inside the caller's
+ * transaction.
+ */
+export async function copyTemplateContent(
+	conn: DbOrTx,
+	input: { fromTemplateId: string; toTemplateId: string },
+): Promise<void> {
+	const { fromTemplateId, toTemplateId } = input;
+	// FOR SHARE on the SOURCE row before reading either table (#909 review).
+	// Roles and beats are two reads; without this a replace committing between
+	// them left a copy with the OLD roles and the NEW beats, and `toRow` then
+	// silently drops every beat naming a role the old set does not declare. A
+	// replace takes this row FOR UPDATE before it swaps the content, so the two
+	// serialise: a copy sees the content wholly before the swap or wholly
+	// after. Every copier goes through here: through `copyTemplateForMeeting`,
+	// conversion, the first-edit fork in `ensureAgendaDraft` and
+	// `forkLegacyPointers`; and directly, the club-template save's two copies
+	// into the club-owned row (a new template's content, and a replace's
+	// swap).
+	await conn
+		.select({ id: meetingTemplates.id })
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, fromTemplateId))
+		.for("share");
+	const roles = await conn
+		.select()
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, fromTemplateId));
+	if (roles.length > 0) {
+		await conn.insert(meetingTemplateRoles).values(
+			roles.map((r) => ({
+				templateId: toTemplateId,
+				key: r.key,
+				name: r.name,
+				category: r.category,
+				defaultCount: r.defaultCount,
+				sortOrder: r.sortOrder,
+				isSpeakerRole: r.isSpeakerRole,
+				slotsUnordered: r.slotsUnordered,
+				description: r.description,
+			})),
+		);
+	}
+
+	// Bounded, and REFUSES rather than truncating. Safe until now only because
+	// every source was a seeded template whose size the seed fixes; #622 lets an
+	// officer-authored template be a source, which makes this an officer-sized
+	// read. Fetching one MORE than the cap is what makes the check possible
+	// without an unbounded select. A silently shortened agenda is a meeting that
+	// runs off the end of its booking with nothing on the sheet to say so.
+	const beats = await conn
+		.select()
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, fromTemplateId))
+		.orderBy(asc(meetingTemplateBeats.sortOrder))
+		.limit(MAX_TEMPLATE_BEATS + 1);
+	if (beats.length > MAX_TEMPLATE_BEATS) {
+		throw new Error(
+			`That agenda is too large to copy (${MAX_TEMPLATE_BEATS} rows maximum).`,
+		);
+	}
+	if (beats.length > 0) {
+		// EVERY content column, which `findRow`'s docblock already assumed ("a fork
+		// copies every column verbatim") and this list did not deliver: `handoff`
+		// was missing, so a fork silently flattened the indented "X introduces Y"
+		// elbows into ordinary rows. Not reachable today — no shared template
+		// declares a hand-off — but it is the same omission `club_governed` would
+		// have been, and an explicit list is only safe while it is complete.
+		await conn.insert(meetingTemplateBeats).values(
+			beats.map((b) => ({
+				templateId: toTemplateId,
+				sortOrder: b.sortOrder,
+				kind: b.kind,
+				label: b.label,
+				detail: b.detail,
+				minutes: b.minutes,
+				roleKey: b.roleKey,
+				repeatsRoleKey: b.repeatsRoleKey,
+				flex: b.flex,
+				handoff: b.handoff,
+				markGreen: b.markGreen,
+				markYellow: b.markYellow,
+				markRed: b.markRed,
+				clubGoverned: b.clubGoverned,
+			})),
+		);
+	}
+}
+
+/**
  * Deep-copy a template into a PRIVATE row owned by one meeting, and return the
  * copy's id.
  *
@@ -477,12 +609,18 @@ export async function copyTemplateForMeeting(
 	input: { sourceTemplateId: string; clubId: string; meetingId: string },
 ): Promise<string> {
 	const { sourceTemplateId, clubId, meetingId } = input;
+	// FOR SHARE on THIS read, not only in `copyTemplateContent` below: the row's
+	// metadata (`default_length_minutes`, which conversion writes onto the
+	// meeting) is read here, and read unlocked it could come from BEFORE a
+	// concurrent replace while the content came from after it. Locked here, the
+	// metadata and the content are one snapshot; the lock below is re-entrant.
 	const [source] = await conn
 		.select()
 		.from(meetingTemplates)
 		.where(
 			and(eq(meetingTemplates.id, sourceTemplateId), templateVisibleTo(clubId)),
 		)
+		.for("share")
 		.limit(1);
 	if (!source) throw new Error("That meeting template no longer exists.");
 
@@ -501,69 +639,10 @@ export async function copyTemplateForMeeting(
 		.returning({ id: meetingTemplates.id });
 	if (!copy) throw new Error("Failed to copy the meeting template.");
 
-	const roles = await conn
-		.select()
-		.from(meetingTemplateRoles)
-		.where(eq(meetingTemplateRoles.templateId, sourceTemplateId));
-	if (roles.length > 0) {
-		await conn.insert(meetingTemplateRoles).values(
-			roles.map((r) => ({
-				templateId: copy.id,
-				key: r.key,
-				name: r.name,
-				category: r.category,
-				defaultCount: r.defaultCount,
-				sortOrder: r.sortOrder,
-				isSpeakerRole: r.isSpeakerRole,
-				slotsUnordered: r.slotsUnordered,
-				description: r.description,
-			})),
-		);
-	}
-
-	// Bounded, and REFUSES rather than truncating. Safe until now only because
-	// every source was a seeded template whose size the seed fixes; #622 lets an
-	// officer-authored template be a source, which makes this an officer-sized
-	// read. Fetching one MORE than the cap is what makes the check possible
-	// without an unbounded select. A silently shortened agenda is a meeting that
-	// runs off the end of its booking with nothing on the sheet to say so.
-	const beats = await conn
-		.select()
-		.from(meetingTemplateBeats)
-		.where(eq(meetingTemplateBeats.templateId, sourceTemplateId))
-		.orderBy(asc(meetingTemplateBeats.sortOrder))
-		.limit(MAX_TEMPLATE_BEATS + 1);
-	if (beats.length > MAX_TEMPLATE_BEATS) {
-		throw new Error(
-			`That agenda is too large to copy (${MAX_TEMPLATE_BEATS} rows maximum).`,
-		);
-	}
-	if (beats.length > 0) {
-		// EVERY content column, which `findRow`'s docblock already assumed ("a fork
-		// copies every column verbatim") and this list did not deliver: `handoff`
-		// was missing, so a fork silently flattened the indented "X introduces Y"
-		// elbows into ordinary rows. Not reachable today — no shared template
-		// declares a hand-off — but it is the same omission `club_governed` would
-		// have been, and an explicit list is only safe while it is complete.
-		await conn.insert(meetingTemplateBeats).values(
-			beats.map((b) => ({
-				templateId: copy.id,
-				sortOrder: b.sortOrder,
-				kind: b.kind,
-				label: b.label,
-				detail: b.detail,
-				minutes: b.minutes,
-				roleKey: b.roleKey,
-				repeatsRoleKey: b.repeatsRoleKey,
-				flex: b.flex,
-				handoff: b.handoff,
-				markGreen: b.markGreen,
-				markYellow: b.markYellow,
-				markRed: b.markRed,
-				clubGoverned: b.clubGoverned,
-			})),
-		);
-	}
+	await copyTemplateContent(conn, {
+		fromTemplateId: sourceTemplateId,
+		toTemplateId: copy.id,
+	});
 
 	return copy.id;
 }
@@ -970,10 +1049,20 @@ export async function applyTemplateConversion(input: {
 		// at it until the update near the end of this transaction. Since #801 no
 		// `role_definitions` row points at a template at all, so the second,
 		// independent RESTRICT this used to have to unwind is gone.
+		//
+		// The KEY moves too (#909). Clearing `meeting_id` makes the row look
+		// club-owned for the rest of this transaction, so it falls under
+		// `meeting_templates_club_key_unique` — and a private copy keeps its
+		// SOURCE's key. Once a club can save its own templates, a meeting running
+		// a copy of "contest-night" detaches a row keyed `contest-night` beside the
+		// club template of that key, and re-applying ANY template to that meeting
+		// failed on the unique index. A per-row key cannot collide, and the row is
+		// deleted below before anything outside this transaction can see it.
+		// The prefix is one no slug can produce (`retiredTemplateKey`).
 		if (previousPrivateId !== null) {
 			await tx
 				.update(meetingTemplates)
-				.set({ meetingId: null })
+				.set({ meetingId: null, key: retiredTemplateKey(previousPrivateId) })
 				.where(eq(meetingTemplates.id, previousPrivateId));
 		}
 
@@ -1125,5 +1214,341 @@ export async function applyTemplateConversion(input: {
 		});
 
 		return plan;
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Save a meeting's agenda as a club template (#909)
+// ---------------------------------------------------------------------------
+
+/** The one sentence every path that cannot find a club template uses. */
+export const CLUB_TEMPLATE_GONE_MESSAGE =
+	"That club template no longer exists.";
+
+/** What a lost key race reads as. The index is the backstop the read under the
+ *  club lock should make unreachable; this is what it says if it is not. */
+export const CLUB_TEMPLATE_KEY_RACE_MESSAGE =
+	"Someone else just saved a template with that name. Try again.";
+
+/**
+ * The key a NEW club template named `name` is saved under: the name's slug,
+ * or the first free `slug-N` beside the club's existing club-owned keys.
+ *
+ * Reads under `FOR NO KEY UPDATE` on the CLUB row, so two officers saving
+ * "Contest night" at the same moment serialise here and the second one sees
+ * the first one's key. Must run inside the caller's transaction or the lock is
+ * released before the insert it exists to protect. The STRENGTH is what keeps
+ * two savers from deadlocking, not where it is taken: a caller that already
+ * wrote a row referencing the club holds KEY SHARE on it, and NO KEY UPDATE
+ * does not conflict with KEY SHARE, so it never waits on another saver's. (The
+ * save takes this same lock earlier, for its archive gate; here it is then a
+ * re-entrant no-op.) Scoped to `meeting_id IS NULL` —
+ * exactly the rows `meeting_templates_club_key_unique` covers; a private copy
+ * keeping its source's key is not a collision.
+ *
+ * Exported for #910, which mints club templates by adoption.
+ */
+export async function nextClubTemplateKey(
+	tx: DbOrTx,
+	clubId: string,
+	name: string,
+): Promise<string> {
+	await tx
+		.select({ id: clubs.id })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.for("no key update")
+		.limit(1);
+	const slug = clubTemplateKeySlug(name);
+	const taken = await tx
+		.select({ key: meetingTemplates.key })
+		.from(meetingTemplates)
+		.where(
+			and(
+				eq(meetingTemplates.clubId, clubId),
+				isNull(meetingTemplates.meetingId),
+				or(
+					eq(meetingTemplates.key, slug),
+					like(meetingTemplates.key, `${slug}-%`),
+				),
+			),
+		);
+	return firstFreeClubTemplateKey(slug, new Set(taken.map((r) => r.key)));
+}
+
+/**
+ * Give every meeting that reads `templateId` DIRECTLY its own private copy of
+ * it, and re-point the meeting there. After this, no meeting reads the row, so
+ * its content can change without changing anybody's agenda.
+ *
+ * Only data from before private copies existed points a meeting at a shared
+ * row (`meeting-agenda-edit-logic.ts`, `loadAgendaDraft`'s docblock), so this
+ * is usually a no-op. The meetings are taken `FOR UPDATE`, the same lock
+ * `ensureAgendaDraft` takes before it forks, so a concurrent first edit either
+ * forked first (and the re-checked predicate no longer matches it) or waits
+ * and then finds the copy made here.
+ *
+ * Copies through `copyTemplateForMeeting` under the MEETING's own club, so its
+ * visibility gate still applies, then resolves the declared roles onto the
+ * club's bank exactly as `ensureAgendaDraft`'s fork does. Returns the meeting
+ * ids it re-pointed. Exported for #910.
+ */
+export async function forkLegacyPointers(
+	tx: DbOrTx,
+	templateId: string,
+): Promise<string[]> {
+	const pointing = await tx
+		.select({ id: meetings.id, clubId: meetings.clubId })
+		.from(meetings)
+		.where(eq(meetings.templateId, templateId))
+		.orderBy(asc(meetings.id))
+		.for("update");
+	for (const meeting of pointing) {
+		const copyId = await copyTemplateForMeeting(tx, {
+			sourceTemplateId: templateId,
+			clubId: meeting.clubId,
+			meetingId: meeting.id,
+		});
+		await materializeTemplateRoles(tx, meeting.clubId, copyId);
+		await tx
+			.update(meetings)
+			.set({ templateId: copyId })
+			.where(eq(meetings.id, meeting.id));
+	}
+	return pointing.map((m) => m.id);
+}
+
+export type SaveClubTemplateInput = {
+	meetingId: string;
+	clubId: string;
+	actorMemberId: string | null;
+} & (
+	| { mode: "new"; name: string; description: string | null }
+	| { mode: "replace"; templateId: string }
+);
+
+/**
+ * Copy a meeting's CURRENT agenda into a club-owned template, new or replacing
+ * one of the club's own. ONE transaction.
+ *
+ * The source is the meeting's own `template_id` — materialised first when the
+ * meeting has never been opened in the editor, through the same path the
+ * editor's load takes, so what is saved is exactly what the officer saw. A
+ * cancelled meeting is refused; a completed one is a legitimate source.
+ *
+ * No meeting's agenda changes. A replace keeps the target's `id`, `key`,
+ * `name`, `description`, `sort_order` and `enabled`, takes
+ * `default_length_minutes` from the source, and swaps the content. Meetings
+ * that applied the target earlier hold their own copies; the rare meeting
+ * still pointing at the row itself is forked onto one first
+ * (`forkLegacyPointers`).
+ *
+ * The replace target is resolved IN THE QUERY — `id`, `club_id` and
+ * `meeting_id IS NULL` together — which is the tenant boundary: another club's
+ * template, a global one and a private copy all read as absent.
+ *
+ * `clubId` and `actorMemberId` come from the server fn's gate, never from the
+ * client. The meeting's own club is checked against `clubId` regardless.
+ */
+export async function saveMeetingAgendaAsClubTemplate(
+	input: SaveClubTemplateInput,
+): Promise<{ templateId: string }> {
+	// Validated BEFORE the transaction opens, and folded into one
+	// discriminated plan so the two arms below narrow on it with no
+	// unreachable third branch.
+	let plan: SavePlan;
+	if (input.mode === "new") {
+		const parsed = parseClubTemplateFields(input.name, input.description);
+		if ("error" in parsed) throw new Error(parsed.error);
+		plan = { mode: "new", fields: parsed };
+	} else {
+		plan = { mode: "replace", templateId: input.templateId };
+	}
+
+	try {
+		return await saveInTransaction(input, plan);
+	} catch (err) {
+		// Known deadlocks, translated rather than restructured around (the
+		// maintainer accepted the remaining lock-order risk):
+		//   (a) guest check-in, `captureGuestVisit`, locks club then meeting;
+		//       this save locks meeting then club;
+		//   (b) a replace forks legacy meetings AFTER taking the club lock, so
+		//       it can meet another save, or a ballot join, that already holds
+		//       one of those legacy meetings and is waiting on the club;
+		//   (c) the legacy fork's FOR SHARE on the target upgraded to FOR
+		//       UPDATE, while a conversion is waiting on a role key it minted.
+		// No single row-lock order satisfies both the ballot join (meeting,
+		// then club) and guest check-in (club, then meeting); that is tracked
+		// repo-wide in #925. All are rare and
+		// retryable, so the officer reads the sentence a first-edit fork that
+		// loses a deadlock shows, never the driver's `Failed query: …`. The
+		// original error rides on `cause`, so a SQLSTATE check still sees it.
+		if (isDeadlock(err)) {
+			throw new Error(AGENDA_DEADLOCK_MESSAGE, { cause: err });
+		}
+		throw err;
+	}
+}
+
+type SavePlan =
+	| { mode: "new"; fields: ClubTemplateFields }
+	| { mode: "replace"; templateId: string };
+
+async function saveInTransaction(
+	input: SaveClubTemplateInput,
+	plan: SavePlan,
+): Promise<{ templateId: string }> {
+	const { meetingId, clubId } = input;
+	return database.transaction(async (tx) => {
+		// LOCK ORDER: meeting, then club, then everything else. This is the
+		// order the rest of the app already takes these two rows in —
+		// `ensureAgendaDraft` and conversion lock the meeting first, and
+		// `joinBallotAsGuest` locks the meeting and then takes the club FOR
+		// SHARE (through `assertDigitalVotingOnTx`). Taking the club first, as
+		// the first review round did, inverted that and a guest joining the
+		// ballot while an officer saved was a 40P01.
+		//
+		// The meeting, locked: a concurrent edit or re-conversion lands wholly
+		// before or wholly after this save.
+		const [meeting] = await tx
+			.select({ clubId: meetings.clubId, status: meetings.status })
+			.from(meetings)
+			.where(eq(meetings.id, meetingId))
+			.for("update")
+			.limit(1);
+		if (!meeting || meeting.clubId !== clubId) {
+			throw new Error("Meeting not found.");
+		}
+		if (meeting.status === "cancelled") {
+			throw new Error(
+				"A cancelled meeting's agenda cannot be saved as a template.",
+			);
+		}
+
+		// Then the club row, with the archive gate INSIDE that locked read
+		// (CODING_STANDARDS.md, "gate INSIDE" a lock the write already holds):
+		// an archive committing while this waits is seen, not raced.
+		//
+		// NO KEY UPDATE, not UPDATE, and that strength is what keeps two saves
+		// from deadlocking. Materialising a never-opened meeting inserts a row
+		// whose foreign key takes KEY SHARE on this club row; NO KEY UPDATE does
+		// not conflict with KEY SHARE, so a saver holding one never waits on
+		// another saver's. It does conflict with itself, which is the
+		// serialisation `nextClubTemplateKey` needs — its own lock is then a
+		// re-entrant no-op. Taken HERE rather than there only so the archive
+		// gate runs before any write.
+		const [club] = await tx
+			.select({ archivedAt: clubs.archivedAt })
+			.from(clubs)
+			.where(eq(clubs.id, clubId))
+			.for("no key update")
+			.limit(1);
+		if (!club) throw new Error("Club not found.");
+		if (isClubArchived(club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
+
+		const sourceTemplateId = await materialiseAgendaForMeeting(tx, meetingId);
+		const [source] = await tx
+			.select({ defaultLengthMinutes: meetingTemplates.defaultLengthMinutes })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.id, sourceTemplateId))
+			.limit(1);
+		// `meetings.template_id` is ON DELETE RESTRICT, so a live pointer's row
+		// exists; this is the corrupt-pointer case only.
+		if (!source) throw new Error("This meeting's agenda could not be read.");
+
+		let templateId: string;
+		if (plan.mode === "new") {
+			const newFields = plan.fields;
+			const key = await nextClubTemplateKey(tx, clubId, newFields.name);
+			const [created] = await tx
+				.insert(meetingTemplates)
+				.values({
+					clubId,
+					meetingId: null,
+					key,
+					name: newFields.name,
+					description: newFields.description,
+					defaultLengthMinutes: source.defaultLengthMinutes,
+					sortOrder: 0,
+					enabled: true,
+				})
+				.onConflictDoNothing()
+				.returning({ id: meetingTemplates.id });
+			if (!created) throw new Error(CLUB_TEMPLATE_KEY_RACE_MESSAGE);
+			templateId = created.id;
+			await copyTemplateContent(tx, {
+				fromTemplateId: sourceTemplateId,
+				toTemplateId: templateId,
+			});
+		} else {
+			const ownedTarget = and(
+				eq(meetingTemplates.id, plan.templateId),
+				eq(meetingTemplates.clubId, clubId),
+				isNull(meetingTemplates.meetingId),
+			);
+			const [target] = await tx
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(ownedTarget)
+				.limit(1);
+			if (!target) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+			templateId = target.id;
+
+			// Old pointers FIRST, while the target still holds the content those
+			// meetings are running. This includes the source meeting itself when
+			// IT is one of them — `sourceTemplateId` was read above, so the swap
+			// below still knows where the content came from.
+			//
+			// And BEFORE the target's FOR UPDATE below, which is lock ordering,
+			// not style: `ensureAgendaDraft` locks a meeting and then (through
+			// `copyTemplateContent`) takes FOR SHARE on the template it forks
+			// from. Locking the target first and those meetings second is the
+			// opposite order, and a first edit on a legacy meeting landing
+			// mid-replace deadlocked against it.
+			await forkLegacyPointers(tx, templateId);
+
+			// Now the target, exclusively, before its content is swapped — the
+			// lock every copier's FOR SHARE waits on (`copyTemplateContent`).
+			// Club templates are never deleted and this club's saves serialise on
+			// the club lock above, so the row read unlocked a moment ago is
+			// still this club's; the predicate is repeated anyway.
+			await tx
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(ownedTarget)
+				.for("update");
+
+			// A source that IS the target (old data: the meeting pointed straight
+			// at the club template) has nothing to swap in — deleting the target's
+			// content first would delete the source's too.
+			if (sourceTemplateId !== templateId) {
+				await tx
+					.delete(meetingTemplateBeats)
+					.where(eq(meetingTemplateBeats.templateId, templateId));
+				await tx
+					.delete(meetingTemplateRoles)
+					.where(eq(meetingTemplateRoles.templateId, templateId));
+				await copyTemplateContent(tx, {
+					fromTemplateId: sourceTemplateId,
+					toTemplateId: templateId,
+				});
+				await tx
+					.update(meetingTemplates)
+					.set({ defaultLengthMinutes: source.defaultLengthMinutes })
+					.where(eq(meetingTemplates.id, templateId));
+			}
+		}
+
+		// Inside the transaction, so the row commits with the save or not at all.
+		await logActivity(tx, {
+			clubId,
+			actorMemberId: input.actorMemberId,
+			action: "club_template_saved",
+			targetType: "meeting",
+			targetId: meetingId,
+			detail: { templateId, mode: plan.mode, sourceMeetingId: meetingId },
+		});
+
+		return { templateId };
 	});
 }

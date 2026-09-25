@@ -1,0 +1,1 @@
+ALTER TYPE "public"."activity_action" ADD VALUE 'club_template_saved';

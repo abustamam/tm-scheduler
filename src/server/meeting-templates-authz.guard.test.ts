@@ -70,7 +70,7 @@ describe("meeting template and agenda-editor server fns", () => {
 		// the shape CLAUDE.md records as "a silently absent gate reads exactly
 		// like a passing one".
 		const found = allFns();
-		expect(found.length).toBeGreaterThanOrEqual(11);
+		expect(found.length).toBeGreaterThanOrEqual(12);
 		for (const file of GATED_MODULES) {
 			expect(
 				found.filter((f) => f.file === file).length,
@@ -112,10 +112,10 @@ describe("meeting template and agenda-editor server fns", () => {
 				/^\t(\w+):[ \t]*\n?[ \t]*"officer-gated \+ archive-gated inside requireMeetingTemplateEditor/gm,
 			),
 		].map((m) => m[1]);
-		// Ten today (two conversion fns + eight agenda-editor fns). Asserted as a
-		// floor so the count cannot silently collapse to zero and make the loop
-		// below vacuous.
-		expect(claimed.length).toBeGreaterThanOrEqual(10);
+		// Eleven today (two conversion fns, eight agenda-editor fns, and #909's
+		// save-as-club-template). Asserted as a floor so the count cannot
+		// silently collapse to zero and make the loop below vacuous.
+		expect(claimed.length).toBeGreaterThanOrEqual(11);
 		const swept = new Set(allFns().map((f) => f.name));
 		for (const name of claimed) {
 			expect(
