@@ -446,6 +446,7 @@ const meeting: MeetingForDeck = {
 	wodDefinition: "impetus gained by a moving object",
 	wodExample: "The momentum of the river keeps moving forward.",
 	reminders: "Choose a learning path.",
+	tableTopicsNotes: null,
 };
 
 const club: ClubForDeck = {

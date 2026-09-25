@@ -162,6 +162,7 @@ export function lockedViewer(v: MeetingViewer): MeetingViewer {
 		canReleaseOwn: false,
 		canEditMeetingMeta: false,
 		canEditWod: false,
+		canEditTableTopicsNotes: false,
 	};
 }
 
@@ -182,6 +183,8 @@ export function resolveMeetingViewer(input: {
 	isTmod: boolean;
 	isGrammarian: boolean;
 	isSignedIn: boolean;
+	/** Optional, fail closed — see `meetingViewer`. */
+	isTableTopicsMaster?: boolean;
 	now?: Date;
 }): MeetingViewer {
 	const locked = isMeetingLocked(input.status);
@@ -195,6 +198,7 @@ export function resolveMeetingViewer(input: {
 		isGrammarian: input.isGrammarian,
 		isEditableWindow: editable,
 		isSignedIn: input.isSignedIn,
+		isTableTopicsMaster: input.isTableTopicsMaster,
 	});
 	return editable ? base : lockedViewer(base);
 }

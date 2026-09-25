@@ -40,6 +40,7 @@ const meeting: MeetingForDeck = {
 	wodDefinition: null,
 	wodExample: null,
 	reminders: null,
+	tableTopicsNotes: null,
 };
 
 const club: ClubForDeck = {
@@ -365,6 +366,37 @@ describe("buildSlideDeck table topics", () => {
 			"guestComments",
 			"thankYou",
 		]);
+	});
+
+	it("carries the meeting's Table Topics notes, line by line (#880)", () => {
+		const slide = build({
+			slots: [tt],
+			meeting: {
+				...meeting,
+				tableTopicsNotes:
+					"\n1. 🏆 THE COMEBACK  \r\nTell us your story.\n\n\n2. 🤪 WHAT COULD GO WRONG?\n\n",
+			},
+		}).find((s) => s.kind === "tableTopics");
+		expect(slide).toMatchObject({
+			notes: [
+				"1. 🏆 THE COMEBACK",
+				"Tell us your story.",
+				"",
+				"2. 🤪 WHAT COULD GO WRONG?",
+			],
+		});
+	});
+
+	it("blank or whitespace-only notes leave the slide exactly as before (#880)", () => {
+		const plain = build({ slots: [tt] }).find((s) => s.kind === "tableTopics");
+		for (const tableTopicsNotes of ["", "   ", " \n\t\n "]) {
+			const slide = build({
+				slots: [tt],
+				meeting: { ...meeting, tableTopicsNotes },
+			}).find((s) => s.kind === "tableTopics");
+			expect(slide).toEqual(plain);
+			expect(slide).toMatchObject({ notes: [] });
+		}
 	});
 
 	it("table topics slide has master + the standard timing by default", () => {

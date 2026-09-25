@@ -383,6 +383,25 @@ function renderBody(s: PptxSlide, body: Body) {
 				options: { bullet: false, bold: false, fontSize: 26, color: MUTED },
 			});
 		}
+		if (body.detail.length > 0) {
+			// The Table Topics notes (#880), one paragraph per line, unbulleted and
+			// smaller than the bullets as on screen. A gap line carries one space so
+			// it is still a paragraph of its own rather than an empty run.
+			const last = runs[runs.length - 1];
+			if (last) last.options = { ...last.options, breakLine: true };
+			body.detail.forEach((t, i) => {
+				runs.push({
+					text: t || " ",
+					options: {
+						bullet: false,
+						bold: false,
+						fontSize: 24,
+						color: INK,
+						breakLine: i < body.detail.length - 1,
+					},
+				});
+			});
+		}
 		s.addText(runs, {
 			...BODY,
 			align: "left",

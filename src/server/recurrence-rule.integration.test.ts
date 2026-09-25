@@ -241,6 +241,20 @@ describe.skipIf(!hasTestDb)(
 				]);
 				expect(pristine.sort()).toEqual([comingId, reachedOutId].sort());
 			});
+
+			// #880. Table Topics notes are content an officer typed; a pattern edit
+			// that deleted the meeting would take them with it.
+			it("Table Topics notes make the meeting non-pristine (#880)", async () => {
+				const meetingId = await emptyMeeting(33);
+				expect(await findPristineEmptyMeetingIds([meetingId])).toEqual([
+					meetingId,
+				]);
+				await testDb
+					.update(meetings)
+					.set({ tableTopicsNotes: "1. THE COMEBACK" })
+					.where(eq(meetings.id, meetingId));
+				expect(await findPristineEmptyMeetingIds([meetingId])).toEqual([]);
+			});
 		});
 
 		// Task 3b, part A. Task 3 made converting a meeting deep-copy its template

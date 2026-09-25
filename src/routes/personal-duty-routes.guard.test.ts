@@ -50,6 +50,8 @@ import { readSource } from "#/test/guard-source";
 const ROOT = resolve(fileURLToPath(import.meta.url), "../../..");
 const THEME_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.me_.theme.tsx";
 const WORD_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.me_.word.tsx";
+const TOPICS_ROUTE =
+	"src/routes/club.$clubId.meeting.$meetingId_.me_.topics.tsx";
 const TIMER_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.me_.timer.tsx";
 const EDITORS = "src/components/club/personal-meeting-editors.tsx";
 const PERSONAL_BODY = "src/components/club/personal-meeting-body.tsx";
@@ -57,6 +59,7 @@ const PERSONAL_BODY = "src/components/club/personal-meeting-body.tsx";
 /** Comment-blind — for "this pattern must BE present". */
 const theme = readSource(resolve(ROOT, THEME_ROUTE));
 const word = readSource(resolve(ROOT, WORD_ROUTE));
+const topics = readSource(resolve(ROOT, TOPICS_ROUTE));
 const timer = readSource(resolve(ROOT, TIMER_ROUTE));
 const editors = readSource(resolve(ROOT, EDITORS));
 /** Verbatim — for "this offender must be ABSENT". Never `readSource`. */
@@ -133,13 +136,13 @@ describe("every duty href is a route that exists", () => {
 	// visitor is shown the personal page again with no error anywhere. Every
 	// assertion above stays green. The `me_` segment is what prevents it.
 	it("the editors hang off the club shell, not off the outlet-less personal page", () => {
-		for (const leaf of ["theme", "word", "timer"]) {
+		for (const leaf of ["theme", "word", "timer", "topics"]) {
 			expect(
 				tree,
 				`${leaf} editor must be a child of the /club/$clubId shell`,
 			).toMatch(
 				new RegExp(
-					`'/club/\\$clubId/meeting/\\$meetingId_/me_/${leaf}': \\{[\\s\\S]{0,240}parentRoute: typeof ClubClubIdRoute\\b`,
+					`'/club/\\$clubId/meeting/\\$meetingId_/me_/${leaf}': \\{[\\s\\S]{0,260}parentRoute: typeof ClubClubIdRoute\\b`,
 				),
 			);
 		}
@@ -171,6 +174,7 @@ describe("the routes hand the editors RAW loader fields", () => {
 	for (const [name, src] of [
 		["theme", theme],
 		["word", word],
+		["topics", topics],
 	] as const) {
 		it(`${name}: passes meeting/slots/canManage straight through`, () => {
 			expect(src).toContain("meeting={meeting}");
@@ -181,7 +185,10 @@ describe("the routes hand the editors RAW loader fields", () => {
 
 		it(`${name}: passes no precomputed capability`, () => {
 			const raw = readFileSync(
-				resolve(ROOT, name === "theme" ? THEME_ROUTE : WORD_ROUTE),
+				resolve(
+					ROOT,
+					{ theme: THEME_ROUTE, word: WORD_ROUTE, topics: TOPICS_ROUTE }[name],
+				),
 				"utf8",
 			);
 			expect(raw).not.toMatch(/canEdit=\{/);
@@ -334,6 +341,7 @@ describe("saving hands back to the personal page", () => {
 	for (const [name, src] of [
 		["theme", theme],
 		["word", word],
+		["topics", topics],
 	] as const) {
 		it(`${name}: invalidates the personal-meeting query`, () => {
 			expect(src).toContain(
@@ -484,8 +492,11 @@ describe("the writes go through the tested payload builders", () => {
 		expect(editors).toMatch(
 			/updateWordOfTheDay\(\{[\s\S]{0,200}meetingId: props\.meeting\.id/,
 		);
+		expect(editors).toMatch(
+			/updateTableTopicsNotes\(\{[\s\S]{0,120}meetingId: props\.meeting\.id/,
+		);
 		expect([...editors.matchAll(/meetingId: props\.meeting\.id/g)].length).toBe(
-			2,
+			3,
 		);
 	});
 
