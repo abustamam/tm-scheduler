@@ -32,6 +32,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -627,6 +628,77 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 				results.map(async (r) => (await templateRow(r.templateId))?.key),
 			);
 			expect(keys.sort()).toEqual(["contest-night", "contest-night-2"]);
+		});
+	});
+
+	describe("copy vs replace", () => {
+		it("a copy waits for an in-flight replace and sees its content whole", async () => {
+			const { templateId } = await saveNew(club.meetingId, "Contest night");
+			const second = await addMeeting(club.clubId);
+			// Stand-in for a replace mid-swap: the target locked FOR UPDATE, its
+			// roles and beats already swapped, not yet committed.
+			const blocker = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from meeting_templates where id = ${templateId} for update`,
+				);
+				await tx
+					.delete(meetingTemplateBeats)
+					.where(eq(meetingTemplateBeats.templateId, templateId));
+				await tx
+					.delete(meetingTemplateRoles)
+					.where(eq(meetingTemplateRoles.templateId, templateId));
+				await tx.insert(meetingTemplateRoles).values({
+					templateId,
+					key: "new_role",
+					name: "New role",
+					category: "functionary",
+					defaultCount: 1,
+					sortOrder: 0,
+				});
+				await tx.insert(meetingTemplateBeats).values({
+					templateId,
+					sortOrder: 0,
+					kind: "role",
+					label: "New beat",
+					minutes: 3,
+					roleKey: "new_role",
+				});
+			});
+			const applying = applyTemplateConversion({
+				meetingId: second,
+				clubId: club.clubId,
+				templateId,
+				actorMemberId: null,
+			});
+			applying.catch(() => {});
+			try {
+				await waitForLockWait("for share", blocker.pid);
+			} finally {
+				await blocker.commit();
+			}
+			await applying;
+			const copy = await templateOf(second);
+			expect(await rolesOf(copy)).toEqual(await rolesOf(templateId));
+			expect(await beatsOf(copy)).toEqual(await beatsOf(templateId));
+			expect((await beatsOf(copy)).map((b) => b.label)).toEqual(["New beat"]);
+		});
+
+		it("a replace waits for an in-flight copy before swapping content", async () => {
+			const { templateId } = await saveNew(club.meetingId, "Contest night");
+			// Stand-in for a copier between its roles read and its beats read.
+			const blocker = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from meeting_templates where id = ${templateId} for share`,
+				);
+			});
+			const replacing = replace(club.meetingId, templateId);
+			replacing.catch(() => {});
+			try {
+				await waitForLockWait("for update", blocker.pid);
+			} finally {
+				await blocker.commit();
+			}
+			await expect(replacing).resolves.toEqual({ templateId });
 		});
 	});
 

@@ -497,6 +497,19 @@ export async function copyTemplateContent(
 	input: { fromTemplateId: string; toTemplateId: string },
 ): Promise<void> {
 	const { fromTemplateId, toTemplateId } = input;
+	// FOR SHARE on the SOURCE row before reading either table (#909 review).
+	// Roles and beats are two reads; without this a replace committing between
+	// them left a copy with the OLD roles and the NEW beats, and `toRow` then
+	// silently drops every beat naming a role the old set does not declare. A
+	// replace takes this row FOR UPDATE before it swaps the content, so the two
+	// serialise: a copy sees the content wholly before the swap or wholly
+	// after. Every copier goes through here — conversion, the first-edit fork
+	// in `ensureAgendaDraft`, and `forkLegacyPointers`.
+	await conn
+		.select({ id: meetingTemplates.id })
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, fromTemplateId))
+		.for("share");
 	const roles = await conn
 		.select()
 		.from(meetingTemplateRoles)
@@ -1426,17 +1439,15 @@ export async function saveMeetingAgendaAsClubTemplate(
 				toTemplateId: templateId,
 			});
 		} else if (input.mode === "replace") {
+			const ownedTarget = and(
+				eq(meetingTemplates.id, input.templateId),
+				eq(meetingTemplates.clubId, clubId),
+				isNull(meetingTemplates.meetingId),
+			);
 			const [target] = await tx
 				.select({ id: meetingTemplates.id })
 				.from(meetingTemplates)
-				.where(
-					and(
-						eq(meetingTemplates.id, input.templateId),
-						eq(meetingTemplates.clubId, clubId),
-						isNull(meetingTemplates.meetingId),
-					),
-				)
-				.for("update")
+				.where(ownedTarget)
 				.limit(1);
 			if (!target) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
 			templateId = target.id;
@@ -1445,7 +1456,25 @@ export async function saveMeetingAgendaAsClubTemplate(
 			// meetings are running. This includes the source meeting itself when
 			// IT is one of them — `sourceTemplateId` was read above, so the swap
 			// below still knows where the content came from.
+			//
+			// And BEFORE the target's FOR UPDATE below, which is lock ordering,
+			// not style: `ensureAgendaDraft` locks a meeting and then (through
+			// `copyTemplateContent`) takes FOR SHARE on the template it forks
+			// from. Locking the target first and those meetings second is the
+			// opposite order, and a first edit on a legacy meeting landing
+			// mid-replace deadlocked against it.
 			await forkLegacyPointers(tx, templateId);
+
+			// Now the target, exclusively, before its content is swapped — the
+			// lock every copier's FOR SHARE waits on (`copyTemplateContent`).
+			// Club templates are never deleted and this club's saves serialise on
+			// the club lock above, so the row read unlocked a moment ago is
+			// still this club's; the predicate is repeated anyway.
+			await tx
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(ownedTarget)
+				.for("update");
 
 			// A source that IS the target (old data: the meeting pointed straight
 			// at the club template) has nothing to swap in — deleting the target's

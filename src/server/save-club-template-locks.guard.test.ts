@@ -37,4 +37,25 @@ describe("saveMeetingAgendaAsClubTemplate's locks", () => {
 		expect(key).toContain('.for("no key update")');
 		expect(key).not.toContain('.for("update")');
 	});
+
+	it("forks legacy pointers BEFORE locking the replace target, then locks it", () => {
+		const save = body("saveMeetingAgendaAsClubTemplate");
+		const replaceArm = save.slice(save.indexOf('input.mode === "replace"'));
+		const fork = replaceArm.indexOf("forkLegacyPointers(tx, templateId)");
+		const lock = replaceArm.indexOf('.for("update")');
+		const swap = replaceArm.indexOf(".delete(meetingTemplateBeats)");
+		expect(fork).toBeGreaterThan(-1);
+		expect(lock).toBeGreaterThan(fork);
+		expect(swap).toBeGreaterThan(lock);
+	});
+});
+
+describe("copyTemplateContent's source lock", () => {
+	it("takes FOR SHARE on the source row before reading roles or beats", () => {
+		const copy = body("copyTemplateContent");
+		const share = copy.indexOf('.for("share")');
+		expect(share).toBeGreaterThan(-1);
+		expect(copy.indexOf(".from(meetingTemplateRoles)")).toBeGreaterThan(share);
+		expect(copy.indexOf(".from(meetingTemplateBeats)")).toBeGreaterThan(share);
+	});
 });
