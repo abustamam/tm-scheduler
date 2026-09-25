@@ -45,13 +45,17 @@ import {
 } from "#/lib/role-def-match";
 import { logActivity } from "./activity";
 import { assertClubNotArchived, requireClubRole, requireUser } from "./guards";
-import { materialiseAgendaForMeeting } from "./meeting-agenda-edit-logic";
+import {
+	AGENDA_DEADLOCK_MESSAGE,
+	materialiseAgendaForMeeting,
+} from "./meeting-agenda-edit-logic";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	linkEvaluatorsToSpeakers,
 	type MeetingSlotDefs,
 } from "./meeting-create-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
+import { isDeadlock } from "./pg-errors";
 
 export type DbOrTx =
 	| typeof db
@@ -1346,13 +1350,10 @@ export type SaveClubTemplateInput = {
 export async function saveMeetingAgendaAsClubTemplate(
 	input: SaveClubTemplateInput,
 ): Promise<{ templateId: string }> {
-	const { meetingId, clubId } = input;
 	// Validated BEFORE the transaction opens, and folded into one
 	// discriminated plan so the two arms below narrow on it with no
 	// unreachable third branch.
-	let plan:
-		| { mode: "new"; fields: ClubTemplateFields }
-		| { mode: "replace"; templateId: string };
+	let plan: SavePlan;
 	if (input.mode === "new") {
 		const parsed = parseClubTemplateFields(input.name, input.description);
 		if ("error" in parsed) throw new Error(parsed.error);
@@ -1361,6 +1362,29 @@ export async function saveMeetingAgendaAsClubTemplate(
 		plan = { mode: "replace", templateId: input.templateId };
 	}
 
+	try {
+		return await saveInTransaction(input, plan);
+	} catch (err) {
+		// The residual deadlock (#909 review 2), translated rather than
+		// restructured around: a replace that forks legacy pointers upgrades
+		// its FOR SHARE on the target to FOR UPDATE, and a conversion minting
+		// the same role key at that moment can close a cycle. Rare, and
+		// retryable — so the officer reads the same sentence a first-edit fork
+		// that loses a deadlock shows, never the driver's `Failed query: …`.
+		if (isDeadlock(err)) throw new Error(AGENDA_DEADLOCK_MESSAGE);
+		throw err;
+	}
+}
+
+type SavePlan =
+	| { mode: "new"; fields: ClubTemplateFields }
+	| { mode: "replace"; templateId: string };
+
+async function saveInTransaction(
+	input: SaveClubTemplateInput,
+	plan: SavePlan,
+): Promise<{ templateId: string }> {
+	const { meetingId, clubId } = input;
 	return database.transaction(async (tx) => {
 		// LOCK ORDER: meeting, then club, then everything else. This is the
 		// order the rest of the app already takes these two rows in —

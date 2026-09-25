@@ -14,14 +14,15 @@ import { readSource } from "#/test/guard-source";
 const SOURCE = readSource("src/server/meeting-templates-logic.ts");
 
 function body(name: string): string {
-	const start = SOURCE.indexOf(`export async function ${name}(`);
+	// Exported or not: the save's transaction body is a private function.
+	const start = SOURCE.indexOf(`async function ${name}(`);
 	expect(start, `${name} not found`).toBeGreaterThan(-1);
 	return SOURCE.slice(start).split("\n}\n")[0] ?? "";
 }
 
 describe("saveMeetingAgendaAsClubTemplate's locks", () => {
 	it("locks the meeting, then the club NO KEY UPDATE with the archive gate, then materialises", () => {
-		const save = body("saveMeetingAgendaAsClubTemplate");
+		const save = body("saveInTransaction");
 		const meetingLock = save.indexOf('.for("update")');
 		const clubLock = save.indexOf('.for("no key update")');
 		const archived = save.indexOf("isClubArchived(club)");
@@ -44,7 +45,7 @@ describe("saveMeetingAgendaAsClubTemplate's locks", () => {
 	});
 
 	it("forks legacy pointers BEFORE locking the replace target, then locks it", () => {
-		const save = body("saveMeetingAgendaAsClubTemplate");
+		const save = body("saveInTransaction");
 		const replaceArm = save.slice(save.indexOf("const ownedTarget"));
 		const fork = replaceArm.indexOf("forkLegacyPointers(tx, templateId)");
 		const lock = replaceArm.indexOf('.for("update")');

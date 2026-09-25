@@ -616,7 +616,7 @@ const AGENDA_CONCURRENT_EDIT_MESSAGE =
  * Conversion now locks the meeting first too (#835); the integration test uses
  * an intentionally reversed synthetic writer to exercise this error fallback.
  */
-const AGENDA_DEADLOCK_MESSAGE =
+export const AGENDA_DEADLOCK_MESSAGE =
 	"Someone else was changing this meeting. Please try again.";
 
 /** What `ensureAgendaDraft` resolved: the meeting's own private template id,
