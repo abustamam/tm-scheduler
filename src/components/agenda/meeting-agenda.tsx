@@ -1008,7 +1008,10 @@ export function MeetingAgenda({
 				}}
 			/>
 
-			{canSuggestFills ? (
+			{/* Gate the BUTTON on open slots, not the dialog: a confirm that fills
+			    the last open slots refreshes to zero of them, and unmounting here
+			    would drop the failed rows the dialog stays open to show (#58). */}
+			{canSuggestFills || suggestOpen ? (
 				<SuggestFillsDialog
 					open={suggestOpen}
 					onOpenChange={setSuggestOpen}

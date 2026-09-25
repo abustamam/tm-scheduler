@@ -993,6 +993,21 @@ describe("suggestFills — propose members for open slots by role recency (#58)"
 		expect(s?.lastServedAt?.toISOString()).toBe("2025-01-01T00:00:00.000Z");
 	});
 
+	it("ranks by date, not name: the oldest wins even when it sorts alphabetically last", () => {
+		const [s] = suggestFills({
+			slots: [open("s1")],
+			roster: [
+				{ id: "a", name: "Ada" },
+				{ id: "z", name: "Zed" },
+			],
+			unavailableIds: [],
+			roleRecency: {
+				timer: { a: "2026-01-01T00:00:00.000Z", z: "2024-01-01T00:00:00.000Z" },
+			},
+		});
+		expect(s?.memberId).toBe("z");
+	});
+
 	it("breaks a recency tie by name, then by id, and is deterministic", () => {
 		const tied = {
 			timer: {

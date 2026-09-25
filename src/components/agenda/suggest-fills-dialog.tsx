@@ -9,12 +9,15 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
+import { showWriteError } from "#/components/write-error-toast";
 import {
+	buildPickerRows,
 	formatLastServed,
 	resolveAssignAction,
 	slotLabel,
 	suggestFills,
 } from "#/lib/agenda";
+import { isNotOnRosterError, isSignInRequiredError } from "#/lib/write-proof";
 import { claimSlot } from "#/server/slots";
 
 export type SuggestFillsSlot = {
@@ -35,6 +38,9 @@ type Row = {
 	slot: SuggestFillsSlot;
 	/** "" = Leave open. */
 	memberId: string;
+	/** When `memberId` last held this slot's role; null = never. Seeded from
+	 *  `FillSuggestion.lastServedAt`, re-read from the picker rows on a change. */
+	lastServedAt: Date | null;
 	/** The pass proposed nobody for this slot. */
 	noneEligible: boolean;
 	error: string | null;
@@ -64,12 +70,26 @@ export interface SuggestFillsDialogProps {
  *
  * The body mounts only while open, so the suggestions are computed once when
  * the dialog opens and are not recomputed under the manager's edits.
+ *
+ * Dismissal (Escape, outside click, the X) is REFUSED while a batch is
+ * running: a dismissed-then-reopened dialog would start a fresh body while the
+ * old batch kept writing, lose its failures, and let its completion close the
+ * new one. `busy` lives here, above the body, so the gate sees it.
  */
 export function SuggestFillsDialog(props: SuggestFillsDialogProps) {
+	const [busy, setBusy] = useState(false);
 	return (
-		<Dialog open={props.open} onOpenChange={props.onOpenChange}>
+		<Dialog
+			open={props.open}
+			onOpenChange={(next) => {
+				if (!next && busy) return;
+				props.onOpenChange(next);
+			}}
+		>
 			<DialogContent className="sm:max-w-xl">
-				{props.open ? <SuggestFillsBody {...props} /> : null}
+				{props.open ? (
+					<SuggestFillsBody {...props} busy={busy} setBusy={setBusy} />
+				) : null}
 			</DialogContent>
 		</Dialog>
 	);
@@ -89,7 +109,12 @@ function SuggestFillsBody({
 	roleCounts,
 	actorMemberId,
 	onMutated,
-}: SuggestFillsDialogProps) {
+	busy,
+	setBusy,
+}: SuggestFillsDialogProps & {
+	busy: boolean;
+	setBusy: (busy: boolean) => void;
+}) {
 	const [rows, setRows] = useState<Row[]>(() => {
 		const byId = new Map(slots.map((s) => [s.id, s]));
 		return suggestFills({ slots, roster, unavailableIds, roleRecency }).flatMap(
@@ -100,6 +125,7 @@ function SuggestFillsBody({
 					{
 						slot,
 						memberId: s.memberId ?? "",
+						lastServedAt: s.lastServedAt,
 						noneEligible: s.memberId === null,
 						error: null,
 					},
@@ -107,8 +133,21 @@ function SuggestFillsBody({
 			},
 		);
 	});
-	const [busy, setBusy] = useState(false);
-	const unavailable = new Set(unavailableIds);
+	/** The single-slot sheet's ordering and annotations (#146, #377), per role. */
+	const pickerRowsFor = (roleDefinitionId: string) => {
+		const lastServedAt: Record<string, Date> = {};
+		for (const [memberId, iso] of Object.entries(
+			roleRecency[roleDefinitionId] ?? {},
+		)) {
+			lastServedAt[memberId] = new Date(iso);
+		}
+		return buildPickerRows(
+			roster,
+			roleByMemberId,
+			unavailableIds,
+			lastServedAt,
+		);
+	};
 	const toAssign = rows.filter((r) => r.memberId !== "");
 	const count = toAssign.length;
 
@@ -122,6 +161,7 @@ function SuggestFillsBody({
 		if (!actorMemberId || count === 0) return;
 		setBusy(true);
 		const failed: Row[] = [];
+		let toasted = false;
 		for (const row of toAssign) {
 			const action = resolveAssignAction(row.slot);
 			try {
@@ -137,13 +177,26 @@ function SuggestFillsBody({
 				});
 			} catch (err) {
 				failed.push({ ...row, error: errMessage(err) });
+				// A write-proof refusal carries a fix ("Sign in") that inline text
+				// cannot offer, so it also goes through the app's one write-error
+				// path — once, since every later row fails the same way.
+				if (
+					!toasted &&
+					(isSignInRequiredError(err) || isNotOnRosterError(err))
+				) {
+					toasted = true;
+					showWriteError(err, "Something went wrong.");
+				}
 			}
 		}
+		// A refresh failure must not swallow the outcome: the writes above have
+		// already landed or failed, and the rows below are what says which.
 		try {
 			await onMutated();
-		} finally {
-			setBusy(false);
+		} catch (err) {
+			showWriteError(err, "Couldn't refresh the agenda.");
 		}
+		setBusy(false);
 		if (failed.length === 0) {
 			onOpenChange(false);
 		} else {
@@ -173,9 +226,7 @@ function SuggestFillsBody({
 				<ul className="space-y-3">
 					{rows.map((row) => {
 						const label = slotLabel(row.slot, roleCounts);
-						const iso = row.memberId
-							? roleRecency[row.slot.roleDefinitionId]?.[row.memberId]
-							: undefined;
+						const pickerRows = pickerRowsFor(row.slot.roleDefinitionId);
 						const heldRole = row.memberId
 							? roleByMemberId[row.memberId]
 							: undefined;
@@ -208,15 +259,19 @@ function SuggestFillsBody({
 										onChange={(e) =>
 											update(row.slot.id, {
 												memberId: e.target.value,
+												lastServedAt:
+													pickerRows.find((p) => p.id === e.target.value)
+														?.lastServedAt ?? null,
 												error: null,
 											})
 										}
 									>
 										<option value="">Leave open</option>
-										{roster.map((m) => (
+										{pickerRows.map((m) => (
 											<option key={m.id} value={m.id}>
 												{m.name}
-												{unavailable.has(m.id) ? " (not available)" : ""}
+												{m.currentRole ? ` · ${m.currentRole}` : ""}
+												{m.unavailable ? " · not available" : ""}
 											</option>
 										))}
 									</select>
@@ -225,8 +280,8 @@ function SuggestFillsBody({
 											? row.noneEligible
 												? "No one available"
 												: "Stays open"
-											: iso
-												? `Last: ${formatLastServed(new Date(iso))}`
+											: row.lastServedAt
+												? `Last: ${formatLastServed(row.lastServedAt)}`
 												: "Never done this role"}
 										{heldRole ? ` · Already ${heldRole}` : ""}
 										{alsoPickedFor.length > 0
