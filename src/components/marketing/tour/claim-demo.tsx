@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { TEXT_BUTTON_CLASS } from "./tour-styles";
 
 /**
  * Scene 1 of `/tour` (#867): the member's role list, drawn the way `/`'s
@@ -7,8 +8,14 @@ import { useState } from "react";
  * Local state only. Nothing is sent anywhere and nothing survives a reload: it
  * is a drawing you can poke, not a client for the real sheet. Colours are the
  * semantic token pairs `MemberRoleList` documents (`bg-primary` /
- * `bg-success` with their foregrounds), so both themes stay legible. The one
- * raw colour is the device bezel, dark in both themes because phones are.
+ * `bg-success` with their foregrounds), so both themes stay legible. The raw
+ * colours are the device's, copied from `MemberRoleList`: the bezel hex, dark
+ * in both themes because phones are, and the rgba drop shadow under it.
+ *
+ * Keyboard and screen-reader users: a claim replaces the focused button with a
+ * plain label, so focus would otherwise fall to <body> and nothing would be
+ * said. Focus moves on to the next open role (or to Reset once every role is
+ * taken), and a polite live region announces what happened.
  */
 export const CLAIM_DEMO_ROLES = [
 	{ role: "Toastmaster", detail: "Runs the meeting" },
@@ -24,8 +31,43 @@ const ROW =
 const CHIP =
 	"shrink-0 rounded-full px-3 py-1.5 font-extrabold text-[12.5px] motion-safe:transition-colors motion-safe:duration-200 motion-safe:ease-out";
 
+/** Where focus goes after the next render: a role's Claim button, or Reset. */
+type FocusTarget = { kind: "claim"; role: string } | { kind: "reset" } | null;
+
 export function ClaimDemo() {
 	const [claimed, setClaimed] = useState<ReadonlySet<string>>(new Set());
+	const [announcement, setAnnouncement] = useState("");
+	const [focusTarget, setFocusTarget] = useState<FocusTarget>(null);
+	const claimRefs = useRef(new Map<string, HTMLButtonElement>());
+	const resetRef = useRef<HTMLButtonElement>(null);
+
+	// The element to focus only exists after the render that follows the state
+	// change, so focus moves here rather than in the click handler.
+	useEffect(() => {
+		if (!focusTarget) return;
+		const el =
+			focusTarget.kind === "reset"
+				? resetRef.current
+				: claimRefs.current.get(focusTarget.role);
+		el?.focus();
+		setFocusTarget(null);
+	}, [focusTarget]);
+
+	function claim(role: string) {
+		const next = new Set(claimed).add(role);
+		setClaimed(next);
+		setAnnouncement(`You claimed ${role}.`);
+		const open = CLAIM_DEMO_ROLES.find((r) => !next.has(r.role));
+		setFocusTarget(
+			open ? { kind: "claim", role: open.role } : { kind: "reset" },
+		);
+	}
+
+	function reset() {
+		setClaimed(new Set());
+		setAnnouncement("Sheet reset. Every role is open again.");
+		setFocusTarget({ kind: "claim", role: CLAIM_DEMO_ROLES[0].role });
+	}
 
 	return (
 		<section
@@ -38,8 +80,9 @@ export function ClaimDemo() {
 						<div className="font-extrabold text-[11.5px] text-[var(--sea-ink-soft)] uppercase tracking-[0.06em]">
 							Harbor City Speakers
 						</div>
+						{/* Thursday, to match the assistant scene's chat. */}
 						<div className="mt-0.5 font-display font-semibold text-[17px]">
-							Tuesday's meeting
+							Thursday's meeting
 						</div>
 					</div>
 					<ul className="flex flex-col gap-[7px] p-[9px]">
@@ -67,10 +110,12 @@ export function ClaimDemo() {
 									) : (
 										<button
 											type="button"
+											ref={(el) => {
+												if (el) claimRefs.current.set(r.role, el);
+												else claimRefs.current.delete(r.role);
+											}}
 											aria-label={`Claim ${r.role}`}
-											onClick={() =>
-												setClaimed((prev) => new Set(prev).add(r.role))
-											}
+											onClick={() => claim(r.role)}
 											className={`${CHIP} cursor-pointer bg-primary text-primary-foreground hover:opacity-90`}
 										>
 											Claim
@@ -95,13 +140,18 @@ export function ClaimDemo() {
 					</ul>
 				</div>
 			</div>
+			{/* <output> is a polite status region by default. */}
+			<output aria-live="polite" className="sr-only">
+				{announcement}
+			</output>
 			{/* Fixed height so the Reset link appearing does not shift the page. */}
 			<div className="h-6">
 				{claimed.size > 0 ? (
 					<button
 						type="button"
-						onClick={() => setClaimed(new Set())}
-						className="cursor-pointer font-semibold text-sm text-[var(--lagoon-deep)] underline-offset-2 hover:underline"
+						ref={resetRef}
+						onClick={reset}
+						className={`${TEXT_BUTTON_CLASS} text-sm`}
 					>
 						Reset
 					</button>

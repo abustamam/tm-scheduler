@@ -14,6 +14,7 @@ import { Route as TourRouteImport } from './routes/tour'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as RequestAccessRouteImport } from './routes/request-access'
 import { Route as ClaimRouteImport } from './routes/claim'
+import { Route as AboutRouteImport } from './routes/about'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ResourcesIndexRouteImport } from './routes/resources.index'
@@ -97,6 +98,11 @@ const RequestAccessRoute = RequestAccessRouteImport.update({
 const ClaimRoute = ClaimRouteImport.update({
   id: '/claim',
   path: '/claim',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AboutRoute = AboutRouteImport.update({
+  id: '/about',
+  path: '/about',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthedRoute = AuthedRouteImport.update({
@@ -410,6 +416,7 @@ const ApiMeetingsIdRoleSheetsSheetPdfRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
@@ -475,6 +482,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
@@ -540,6 +548,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_authed': typeof AuthedRouteWithChildren
+  '/about': typeof AboutRoute
   '/claim': typeof ClaimRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
@@ -607,6 +616,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/about'
     | '/claim'
     | '/request-access'
     | '/signin'
@@ -672,6 +682,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/about'
     | '/claim'
     | '/request-access'
     | '/signin'
@@ -736,6 +747,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_authed'
+    | '/about'
     | '/claim'
     | '/request-access'
     | '/signin'
@@ -803,6 +815,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthedRoute: typeof AuthedRouteWithChildren
+  AboutRoute: typeof AboutRoute
   ClaimRoute: typeof ClaimRoute
   RequestAccessRoute: typeof RequestAccessRoute
   SigninRoute: typeof SigninRoute
@@ -866,6 +879,13 @@ declare module '@tanstack/react-router' {
       path: '/claim'
       fullPath: '/claim'
       preLoaderRoute: typeof ClaimRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/about': {
+      id: '/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof AboutRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authed': {
@@ -1389,6 +1409,7 @@ const ClubClubIdRouteWithChildren = ClubClubIdRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthedRoute: AuthedRouteWithChildren,
+  AboutRoute: AboutRoute,
   ClaimRoute: ClaimRoute,
   RequestAccessRoute: RequestAccessRoute,
   SigninRoute: SigninRoute,

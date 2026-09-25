@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import { BETA_PILL_CLASS } from "./tour-styles";
 
 /**
- * Who may connect an assistant, and how, in one sentence (#867). One constant
- * so #852's change to the claude.ai setup lands in one place.
+ * Who may connect an assistant, and how, in one sentence (#867). Any admin or
+ * officer of an open club may (`mayUseConnector`,
+ * `src/server/connector-eligibility.ts`); there is no per-club switch. They
+ * add GavelUp as a custom connector in claude.ai and approve it on GavelUp's
+ * consent screen (`docs/claude-connector.md`). One constant, so the next
+ * change to that setup lands in one place.
  */
 export const AI_CONNECTOR_SETUP_LINE =
-	"For club officers. Tested with Claude; ask us to switch it on for your club.";
+	"For club officers. Tested with Claude: add GavelUp as a connector in claude.ai, then sign in to approve it.";
 
 export const ASSISTANT_DEMO_MESSAGES = [
 	{ from: "user", text: "Put Dana in Speaker 2 on Thursday." },
@@ -68,9 +73,7 @@ export function AssistantDemo() {
 				<span className="font-extrabold text-[11.5px] text-[var(--sea-ink-soft)] uppercase tracking-[0.08em]">
 					Your assistant
 				</span>
-				<span className="rounded-full bg-warning-strong px-2.5 py-0.5 font-extrabold text-[11px] text-on-accent-fill uppercase tracking-[0.06em]">
-					Beta
-				</span>
+				<span className={BETA_PILL_CLASS}>Beta</span>
 			</div>
 			{/* min-h reserves both bubbles' room, so revealing them moves nothing. */}
 			<ol className="flex min-h-[8.5rem] flex-col gap-2.5">
