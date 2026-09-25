@@ -44,7 +44,6 @@ import {
 	slotLabel,
 	summarizeAgenda,
 } from "#/lib/agenda";
-import { isMeetingOver } from "#/lib/meeting-lifecycle";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
 import {
@@ -169,6 +168,14 @@ export interface MeetingAgendaProps {
 	effectiveMeetingNumber?: number | null;
 	/** Club timezone — the meta dialog renders/parses the date field in it. */
 	timezone: string;
+	/** The route's one "is it over?" answer (`isMeetingOver`, #393), computed
+	 *  from its frozen `now` and handed in rather than recomputed here, so the
+	 *  agenda cannot read a different instant from the rest of the page (and
+	 *  the server and client render agree at club-local midnight). Optional and
+	 *  FAIL-CLOSED: absent reads as over, so a caller that forgets it shows no
+	 *  "can't make it" flag rather than one on a meeting that has happened. The
+	 *  route's wiring is pinned in `meeting-agenda.test.tsx`. */
+	meetingOver?: boolean;
 	/** Self-asserted identity the lifted edit dialogs pass to their server fns
 	 *  (ADR-0010 TMOD/Grammarian path). The activity-log actor is NOT sent — the
 	 *  server derives it from the session or the verified self-assertion (#396). */
@@ -218,6 +225,7 @@ export function MeetingAgenda({
 	templateKey,
 	effectiveMeetingNumber = null,
 	timezone,
+	meetingOver = true,
 	selfMemberId,
 	onMetaSaved,
 	requireIdentity,
@@ -307,9 +315,11 @@ export function MeetingAgenda({
 
 	// Recruiting pool for open-slot nudges (#37) — every active member, annotated
 	// (not filtered) with availability + the role they already hold this meeting.
+	// One set, read by both the recruit picker and the "can't make it" flag.
+	const unavailableSet = new Set(unavailableMemberIds);
 	const recruitTargets = buildRecruitTargets(
 		roster,
-		new Set(unavailableMemberIds),
+		unavailableSet,
 		roleByMemberId,
 		new Set(contactedMemberIds),
 	);
@@ -317,19 +327,20 @@ export function MeetingAgenda({
 	// "Can't make it" flag (#764). Since ADR-0026 an unverified "not coming" no
 	// longer frees the member's roles, so a role can stay assigned to someone who
 	// said they won't be there — the card has to say so to EVERY viewer, which is
-	// why this reads the shared payload's ids and the meeting's own lifecycle
+	// why this reads the shared payload's ids and the route's `meetingOver`
 	// rather than a per-audience capability: an admin keeps `canClaim` on a
 	// past-but-open meeting that a member sees frozen, and the flag must not
-	// differ between them. `viewer.canClaim` still gates it too, so a
-	// `lockedViewer` — the lock that hides Claim and Release — hides this as well.
-	const unavailableSet = new Set(unavailableMemberIds);
+	// differ between them. So a manager on a past-but-not-completed meeting does
+	// NOT see it: the meeting has happened, and nobody needs a new holder.
+	//
+	// `viewer.canClaim` is redundant on the one route that renders this today —
+	// `resolveMeetingViewer` only returns a `lockedViewer` when the meeting is
+	// completed or (for a non-manager) over, both of which make `meetingOver`
+	// true. It is kept because this component cannot see that coupling: it takes
+	// the viewer and `meetingOver` as two independent props, and a locked viewer
+	// is the one thing that hides Claim and Release, so it must hide this too.
 	const flagsUnavailableHolders =
-		viewer.canClaim &&
-		!isMeetingOver({
-			status: meeting.status,
-			scheduledAt: meeting.scheduledAt,
-			timezone,
-		});
+		viewer.canClaim && !meetingOver && meeting.status !== "cancelled";
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -626,7 +637,7 @@ export function MeetingAgenda({
 										className="rounded-xl border bg-card p-4 shadow-sm"
 									>
 										<div className="flex items-start justify-between gap-3">
-											{/* The flag sits OUTSIDE the claim button, in a wrapper
+											{/* The flag sits OUTSIDE (below) the claim button, in a wrapper
 											    that takes over its flex-1: a button's children are
 											    presentational, so a status region inside it is not
 											    announced as one. */}
@@ -693,10 +704,16 @@ export function MeetingAgenda({
 												{holderCantMakeIt ? (
 													// `<output>`: its implicit role IS `status`, the
 													// repo's convention (see `sync-status.tsx`); `block`
-													// puts it on its own line under the holder.
-													<output className="mt-1 block text-xs text-[var(--warning-strong)]">
-														{slot.assigneeName} can't make it. Needs a new
-														holder.
+													// puts it on its own line below the whole claim
+													// button, speech details included. It names the
+													// ROLE so two cards held by one person differ, and
+													// on the viewer's own card it drops the third
+													// person the "(you)" row already replaced.
+													<output className="mt-1 block text-xs text-[var(--warning-foreground)]">
+														{isMine
+															? "You said you can't make it."
+															: `${slot.assigneeName} can't make it.`}{" "}
+														{slotLabel(slot, roleCounts)} needs a new holder.
 													</output>
 												) : null}
 											</div>

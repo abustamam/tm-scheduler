@@ -1746,6 +1746,7 @@ function MeetingView() {
 						meeting={meeting}
 						templateKey={templateKey}
 						timezone={timezone}
+						meetingOver={over}
 						selfMemberId={agendaMemberId}
 						onMetaSaved={async () => {
 							await router.invalidate();
