@@ -6,7 +6,7 @@ import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { ACCESS_REQUEST_MAILTO } from "#/lib/brand";
+import { CONTACT_MAILTO } from "#/lib/brand";
 import {
 	ALLOWED_LOGO_MIME_TYPES,
 	isAllowedLogoMime,
@@ -894,7 +894,7 @@ function ClubSettings() {
 
 				<p className="text-xs text-muted-foreground">
 					{CLUB_LOGO_COPY.responsibilityNote}{" "}
-					<a href={ACCESS_REQUEST_MAILTO} className="underline">
+					<a href={CONTACT_MAILTO} className="underline">
 						{CLUB_LOGO_COPY.contactLinkText}
 					</a>
 				</p>
