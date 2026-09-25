@@ -97,9 +97,38 @@ export function pinIntlTo(locale: string, timeZone: string) {
 		PinnedDateTimeFormat as unknown as typeof Intl.DateTimeFormat;
 }
 
-/** Undo `pinIntlTo`. Safe to call when nothing was pinned. */
+const RealNumberFormat = Intl.NumberFormat;
+let forcedNumberLocale = "en-US";
+
+/**
+ * `pinIntlTo`'s sibling for currency and number formatting (#708): make the
+ * runtime resolve an omitted `Intl.NumberFormat` locale to `locale`. Numbers
+ * have no timezone, so only the locale is pinned. A class for the same reason
+ * `pinIntlTo`'s double is one.
+ *
+ * Call `restoreIntl()` in `afterEach`; it undoes both.
+ */
+export function pinNumberFormatTo(locale: string) {
+	forcedNumberLocale = locale;
+	if (Intl.NumberFormat !== RealNumberFormat) return;
+	class PinnedNumberFormat extends RealNumberFormat {
+		constructor(
+			locales?: Intl.LocalesArgument,
+			options?: Intl.NumberFormatOptions,
+		) {
+			super(locales ?? forcedNumberLocale, options);
+		}
+	}
+	Intl.NumberFormat = PinnedNumberFormat as unknown as typeof Intl.NumberFormat;
+}
+
+/**
+ * Undo `pinIntlTo` and `pinNumberFormatTo`. Safe to call when nothing was
+ * pinned.
+ */
 export function restoreIntl() {
 	Intl.DateTimeFormat = RealDateTimeFormat;
+	Intl.NumberFormat = RealNumberFormat;
 }
 
 /**

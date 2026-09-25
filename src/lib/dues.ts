@@ -3,6 +3,8 @@
 // (`src/routes/_authed/admin/dues.tsx`) can use these without dragging `pg` into
 // the browser bundle. Money is integer cents everywhere; format only at the edge.
 
+import { APP_LOCALE } from "#/lib/format";
+
 /** A period, reduced to what the "which period is active?" pick needs. */
 export interface PeriodLike {
 	id: string;
@@ -63,7 +65,7 @@ export function centsToInput(cents: number | null | undefined): string {
 /** Integer cents → a localized currency string (USD), e.g. "$45.00". */
 export function formatCents(cents: number | null | undefined): string {
 	if (cents == null) return "—";
-	return new Intl.NumberFormat(undefined, {
+	return new Intl.NumberFormat(APP_LOCALE, {
 		style: "currency",
 		currency: "USD",
 	}).format(cents / 100);

@@ -2,6 +2,7 @@
 // renderers — meeting-present.tsx (screen) and deck-to-pptx.ts (.pptx) — consume
 // this descriptor, so copy/layout never drifts between them. Pure + unit-tested.
 
+import { APP_LOCALE } from "#/lib/format";
 import type { LegendEntry } from "./agenda-runsheet";
 import { introducedSuffix, OPEN_LABEL } from "./agenda-runsheet";
 import type { HandoffTarget, Slide } from "./agenda-slides";
@@ -122,7 +123,7 @@ const strong = (text: string): Line => ({ role: "strong", text });
 const SPACER: Line = { role: "spacer" };
 
 function fmtDate(d: Date, tz: string, withWeekday: boolean): string {
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		weekday: withWeekday ? "long" : undefined,
 		year: "numeric",
 		month: "long",
@@ -131,7 +132,7 @@ function fmtDate(d: Date, tz: string, withWeekday: boolean): string {
 	}).format(d);
 }
 function fmtTime(d: Date, tz: string): string {
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		hour: "numeric",
 		minute: "2-digit",
 		timeZone: tz,

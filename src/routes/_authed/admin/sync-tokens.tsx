@@ -8,6 +8,7 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import { APP_LOCALE } from "#/lib/format";
 import {
 	generateSyncToken,
 	getSyncTokens,
@@ -138,7 +139,7 @@ function SyncTokens() {
 										{t.revokedAt
 											? "· revoked"
 											: t.lastUsedAt
-												? `· last used ${new Date(t.lastUsedAt).toLocaleDateString()}`
+												? `· last used ${new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)}`
 												: "· never used"}
 									</span>
 								</div>
