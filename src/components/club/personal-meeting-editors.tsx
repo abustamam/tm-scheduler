@@ -1,7 +1,8 @@
 // src/components/club/personal-meeting-editors.tsx
 //
-// The two focused, phone-sized duty editors behind the personal meeting page's
-// checklist (#666): set the meeting THEME, and set the WORD OF THE DAY.
+// The focused, phone-sized duty editors behind the personal meeting page's
+// checklist (#666): set the meeting THEME, set the WORD OF THE DAY, and (#880)
+// set the TABLE TOPICS notes.
 //
 // ## Why the bodies live here and not in the route files
 //
@@ -46,7 +47,11 @@ import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { canEditWordOfTheDay } from "#/lib/meeting-viewer";
 import { personalMeetingHref } from "#/lib/role-duties";
 import { WOD_LIMITS } from "#/lib/wod-limits";
-import { updateMeeting, updateWordOfTheDay } from "#/server/meetings";
+import {
+	updateMeeting,
+	updateTableTopicsNotes,
+	updateWordOfTheDay,
+} from "#/server/meetings";
 
 /** The meeting fields both editors read. A structural subset of the meeting row
  *  the shared loaders return, so a route hands its `meeting` straight over.
@@ -80,6 +85,8 @@ export interface EditorMeeting {
 	wordOfTheDay: string | null;
 	wodDefinition: string | null;
 	wodExample: string | null;
+	/** Prefills the Table Topics notes editor (#880). */
+	tableTopicsNotes: string | null;
 }
 
 /** One slot, reduced to what `deriveMeetingRoleFlags` matches on. */
@@ -220,7 +227,7 @@ function useDutySave(onSaved: () => void | Promise<void>) {
  * the two cannot answer "is this editable?" differently.
  */
 function useEditorContext(props: EditorProps) {
-	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(
+	const { isTmod, isGrammarian, isTableTopicsMaster } = deriveMeetingRoleFlags(
 		props.slots,
 		props.memberId,
 	);
@@ -232,6 +239,7 @@ function useEditorContext(props: EditorProps) {
 		canManage: props.canManage,
 		isTmod,
 		isGrammarian,
+		isTableTopicsMaster,
 		isSignedIn: props.isSignedIn,
 	});
 	return {
@@ -541,6 +549,98 @@ export function PersonalWordEditor(props: EditorProps) {
 						<Loader2 className="size-4 animate-spin" />
 					) : (
 						"Save word of the day"
+					)}
+				</Button>
+			</form>
+		</EditorCard>
+	);
+}
+
+const TABLE_TOPICS_TITLE = "Set your Table Topics";
+const TABLE_TOPICS_BLURB =
+	"Your topic categories or prompts, one per line. They appear on the Table Topics slide for the room.";
+
+/**
+ * The Table Topics Master's focused notes editor (#880).
+ *
+ * Writes through `updateTableTopicsNotes`, whose writer touches this one column
+ * and nothing else, so the payload is the notes plus the two identity fields.
+ * The notes are sent only when they differ from what the form was seeded with,
+ * for the reason `wordOfTheDayPatch` gives: an untouched field echoed back off a
+ * page-load snapshot writes over whatever an officer stored since.
+ */
+export function PersonalTableTopicsEditor(props: EditorProps) {
+	const { viewer, when, backHref } = useEditorContext(props);
+	const { saving, run } = useDutySave(props.onSaved);
+	// Frozen at mount, as `PersonalWordEditor`'s seed.
+	const [seed] = useState(() => props.meeting.tableTopicsNotes ?? "");
+	const [notes, setNotes] = useState(seed);
+
+	const blocked = editorBlockedReason({
+		status: props.meeting.status,
+		canEdit: viewer.canEditTableTopicsNotes,
+		roleMessage:
+			"Only this meeting's Table Topics Master or Toastmaster — or a club officer — can set the Table Topics.",
+	});
+	if (blocked) {
+		return (
+			<BlockedCard
+				title={TABLE_TOPICS_TITLE}
+				when={when}
+				backHref={backHref}
+				reason={blocked}
+			/>
+		);
+	}
+
+	return (
+		<EditorCard
+			title={TABLE_TOPICS_TITLE}
+			blurb={TABLE_TOPICS_BLURB}
+			when={when}
+			backHref={backHref}
+		>
+			<form
+				className="space-y-4"
+				onSubmit={(e) => {
+					e.preventDefault();
+					// Compared as typed, not trimmed: the writer trims the ends, but a
+					// changed line break inside the notes is a real edit.
+					const edited = notes !== seed;
+					void run(
+						() =>
+							updateTableTopicsNotes({
+								data: {
+									meetingId: props.meeting.id,
+									// Always sent, for the reason `PersonalThemeEditor` gives.
+									selfMemberId: props.memberId,
+									// Blank clears; untouched is an ABSENT key.
+									...(edited ? { tableTopicsNotes: notes } : {}),
+								},
+							}),
+						"Table Topics saved.",
+					);
+				}}
+			>
+				<div className="space-y-2">
+					<Label htmlFor="tableTopicsNotes">Table Topics notes</Label>
+					<Textarea
+						id="tableTopicsNotes"
+						name="tableTopicsNotes"
+						rows={8}
+						value={notes}
+						maxLength={MEETING_LIMITS.tableTopicsNotes}
+						placeholder={
+							"1. The comeback\nTell us your “I almost gave up” story."
+						}
+						onChange={(e) => setNotes(e.target.value)}
+					/>
+				</div>
+				<Button type="submit" size="lg" className="w-full" disabled={saving}>
+					{saving ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						"Save Table Topics"
 					)}
 				</Button>
 			</form>

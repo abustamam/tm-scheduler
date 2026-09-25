@@ -21,6 +21,10 @@ export type Body =
 			 *  the Word of the Day's definition on the Table Topics slide (#355).
 			 *  Set it on the item it belongs to by putting that item last. */
 			note: string | null;
+			/** Free-text lines below everything else, unbulleted, one per entry
+			 *  with `""` for a gap — the Table Topics notes (#880). Empty for every
+			 *  other slide, and when empty the body renders exactly as before. */
+			detail: string[];
 	  }
 	| { form: "numbered"; items: string[] }
 	| {
@@ -342,6 +346,7 @@ export function slideLayout(
 				items,
 				link: slide.link,
 				note: null,
+				detail: [],
 			});
 		}
 		case "voteSpeaker": {
@@ -377,6 +382,9 @@ export function slideLayout(
 				// Muted, not a fourth bullet: the definition is context for working
 				// the word in, not another instruction to the Table Topics Master.
 				note: slide.word ? slide.definition : null,
+				// The master's own topic categories (#880), under everything the
+				// deck derives, so the rules of the segment read before its topics.
+				detail: slide.notes,
 			});
 		}
 		case "voteTableTopics": {
@@ -521,6 +529,9 @@ export function slideLayout(
 				items,
 				link: null,
 				note: null,
+				// The Table Topics notes (#880) on the governed segment of a materialised
+				// meeting — the same `detail` the standard slide carries them in.
+				detail: slide.notes,
 			});
 		}
 		case "thankYou":

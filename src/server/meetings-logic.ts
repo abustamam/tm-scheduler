@@ -225,6 +225,8 @@ export interface MeetingMetaPatchInput {
 	wodExample?: string | null;
 	notes?: string | null;
 	reminders?: string | null;
+	/** Table Topics notes (#880), projected on the Table Topics slide. */
+	tableTopicsNotes?: string | null;
 	/** The club's meeting number (#358). Omit to leave the current one alone;
 	 *  pass null to clear it back to provisional/derived. ADMIN-ONLY — gated by
 	 *  `canReschedule` below, which is why it is the one patch field a self-serve
@@ -262,6 +264,7 @@ const META_TEXT_FIELDS = [
 	"wodExample",
 	"notes",
 	"reminders",
+	"tableTopicsNotes",
 ] as const;
 
 /**
@@ -278,6 +281,15 @@ const WOD_TEXT_FIELDS = [
 	"wordOfTheDay",
 	"wodDefinition",
 	"wodExample",
+] as const satisfies readonly (typeof META_TEXT_FIELDS)[number][];
+
+/**
+ * The one column the NARROW Table Topics writer owns (#880). Separate for the
+ * reason `WOD_TEXT_FIELDS` is: the Table Topics Master's grant reaches exactly
+ * this column and must not inherit anything added to the general patch.
+ */
+const TABLE_TOPICS_TEXT_FIELDS = [
+	"tableTopicsNotes",
 ] as const satisfies readonly (typeof META_TEXT_FIELDS)[number][];
 
 /** Update a meeting's meta (incl. reschedule) and log a `meeting_edit`.
@@ -449,6 +461,39 @@ export interface WordOfTheDayUpdateInput {
  * the save reporting success.
  */
 export async function applyWordOfTheDayUpdate(input: WordOfTheDayUpdateInput) {
+	return applyNarrowTextPatch(input, WOD_TEXT_FIELDS);
+}
+
+export interface TableTopicsNotesUpdateInput {
+	meetingId: string;
+	actorMemberId: string | null;
+	/** Tri-state, as `WordOfTheDayUpdateInput`: omit to leave it, null or blank
+	 *  to clear it, a value to store it trimmed. */
+	tableTopicsNotes?: string | null;
+}
+
+/**
+ * Update ONLY a meeting's Table Topics notes and log a `meeting_edit` (#880).
+ * The Table Topics Master's grant funnels through here, and this function
+ * physically cannot touch any other column — the same least-privilege shape as
+ * `applyWordOfTheDayUpdate`, whose writer it shares.
+ */
+export async function applyTableTopicsNotesUpdate(
+	input: TableTopicsNotesUpdateInput,
+) {
+	return applyNarrowTextPatch(input, TABLE_TOPICS_TEXT_FIELDS);
+}
+
+/** The sparse, diffed, audited writer both narrow capabilities share. `fields`
+ *  is the whole of what it may write; nothing outside it is read off `input`. */
+async function applyNarrowTextPatch<
+	F extends (typeof META_TEXT_FIELDS)[number],
+>(
+	input: { meetingId: string; actorMemberId: string | null } & {
+		[K in F]?: string | null;
+	},
+	fields: readonly F[],
+) {
 	const meeting = await db.query.meetings.findFirst({
 		where: eq(meetings.id, input.meetingId),
 	});
@@ -459,8 +504,8 @@ export async function applyWordOfTheDayUpdate(input: WordOfTheDayUpdateInput) {
 	// would pass every "an omitted field is unchanged" assertion while writing
 	// columns the caller never sent — which is the lost update coming back.
 	const next: Partial<typeof meetings.$inferInsert> = {};
-	for (const field of WOD_TEXT_FIELDS) {
-		const value = input[field];
+	for (const field of fields) {
+		const value = input[field] as string | null | undefined;
 		// Blank and whitespace-only collapse to null alongside an explicit null:
 		// the Grammarian clearing an input and a caller passing null are the same
 		// edit, and every reader of these columns already treats "" as absent.

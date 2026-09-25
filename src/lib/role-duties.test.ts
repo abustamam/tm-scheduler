@@ -53,6 +53,7 @@ const FIELD_BY_DUTY: Record<DutyId, keyof DutyContext> = {
 	word_of_the_day: "wordOfTheDay",
 	speech_details: "speechTitle",
 	timing: "hasTiming",
+	table_topics: "tableTopicsNotes",
 };
 
 /**
@@ -69,6 +70,7 @@ const FIELD_BY_DUTY: Record<DutyId, keyof DutyContext> = {
 const DONE_VALUE_BY_FIELD: Record<keyof DutyContext, string | boolean> = {
 	theme: "somebody else's answer",
 	wordOfTheDay: "somebody else's answer",
+	tableTopicsNotes: "somebody else's answer",
 	speechTitle: "somebody else's answer",
 	hasTiming: true,
 };
@@ -115,7 +117,23 @@ describe("which role owns which duty", () => {
 		]);
 	});
 
-	it("exactly four standard roles own a duty, and it is these four", () => {
+	it("the Table Topics Master owns setting the topics (#880)", () => {
+		expect(
+			dutyIds({
+				roleName: "Table Topics Master",
+				roleKey: "table_topics_master",
+			}),
+		).toEqual(["table_topics"]);
+		// The canonical name, for a NULL key — and nothing looser.
+		expect(dutyIds({ roleName: "Table Topics Master", roleKey: null })).toEqual(
+			["table_topics"],
+		);
+		expect(
+			dutyIds({ roleName: "Table Topics Master Assistant", roleKey: null }),
+		).toEqual([]);
+	});
+
+	it("exactly five standard roles own a duty, and it is these five", () => {
 		const owners = ROLE_TEMPLATE.filter(
 			(r) => dutiesForRole({ roleName: r.name, roleKey: r.key }).length > 0,
 		)
@@ -124,6 +142,7 @@ describe("which role owns which duty", () => {
 		expect(owners).toEqual([
 			"grammarian",
 			"speaker",
+			"table_topics_master",
 			"timer",
 			"toastmaster_of_the_day",
 		]);
@@ -133,6 +152,7 @@ describe("which role owns which duty", () => {
 		const owners = new Set([
 			"grammarian",
 			"speaker",
+			"table_topics_master",
 			"timer",
 			"toastmaster_of_the_day",
 		]);
@@ -237,12 +257,17 @@ describe("resolution is by key, with an exact-name fallback (#368/#464)", () => 
 	it("a KEYED role never falls through to the name fallback", () => {
 		// #464 in the exact shape that caused it: a role NAMED like the
 		// Toastmaster but keyed as something else must not inherit the duty. The
-		// key is the identity; the name only looks like one.
+		// key is the identity; the name only looks like one. Since #880 that key
+		// owns a duty of its own, which makes the resolution visible: the row gets
+		// the Table Topics duty, and not the theme.
 		expect(
 			dutyIds({
 				roleName: "Toastmaster of the Day",
 				roleKey: "table_topics_master",
 			}),
+		).toEqual(["table_topics"]);
+		expect(
+			dutyIds({ roleName: "Toastmaster of the Day", roleKey: "ah_counter" }),
 		).toEqual([]);
 	});
 
