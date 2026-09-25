@@ -40,7 +40,7 @@ describe("saveMeetingAgendaAsClubTemplate's locks", () => {
 
 	it("forks legacy pointers BEFORE locking the replace target, then locks it", () => {
 		const save = body("saveMeetingAgendaAsClubTemplate");
-		const replaceArm = save.slice(save.indexOf('input.mode === "replace"'));
+		const replaceArm = save.slice(save.indexOf("const ownedTarget"));
 		const fork = replaceArm.indexOf("forkLegacyPointers(tx, templateId)");
 		const lock = replaceArm.indexOf('.for("update")');
 		const swap = replaceArm.indexOf(".delete(meetingTemplateBeats)");

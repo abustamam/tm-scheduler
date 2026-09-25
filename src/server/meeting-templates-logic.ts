@@ -1339,11 +1339,18 @@ export async function saveMeetingAgendaAsClubTemplate(
 	input: SaveClubTemplateInput,
 ): Promise<{ templateId: string }> {
 	const { meetingId, clubId } = input;
-	let newFields: ClubTemplateFields | null = null;
+	// Validated BEFORE the transaction opens, and folded into one
+	// discriminated plan so the two arms below narrow on it with no
+	// unreachable third branch.
+	let plan:
+		| { mode: "new"; fields: ClubTemplateFields }
+		| { mode: "replace"; templateId: string };
 	if (input.mode === "new") {
 		const parsed = parseClubTemplateFields(input.name, input.description);
 		if ("error" in parsed) throw new Error(parsed.error);
-		newFields = parsed;
+		plan = { mode: "new", fields: parsed };
+	} else {
+		plan = { mode: "replace", templateId: input.templateId };
 	}
 
 	return database.transaction(async (tx) => {
@@ -1399,7 +1406,8 @@ export async function saveMeetingAgendaAsClubTemplate(
 		if (!source) throw new Error("This meeting's agenda could not be read.");
 
 		let templateId: string;
-		if (input.mode === "new" && newFields) {
+		if (plan.mode === "new") {
+			const newFields = plan.fields;
 			const key = await nextClubTemplateKey(tx, clubId, newFields.name);
 			const [created] = await tx
 				.insert(meetingTemplates)
@@ -1421,9 +1429,9 @@ export async function saveMeetingAgendaAsClubTemplate(
 				fromTemplateId: sourceTemplateId,
 				toTemplateId: templateId,
 			});
-		} else if (input.mode === "replace") {
+		} else {
 			const ownedTarget = and(
-				eq(meetingTemplates.id, input.templateId),
+				eq(meetingTemplates.id, plan.templateId),
 				eq(meetingTemplates.clubId, clubId),
 				isNull(meetingTemplates.meetingId),
 			);
@@ -1478,8 +1486,6 @@ export async function saveMeetingAgendaAsClubTemplate(
 					.set({ defaultLengthMinutes: source.defaultLengthMinutes })
 					.where(eq(meetingTemplates.id, templateId));
 			}
-		} else {
-			throw new Error("Choose whether to save a new template or replace one.");
 		}
 
 		// Inside the transaction, so the row commits with the save or not at all.
@@ -1489,7 +1495,7 @@ export async function saveMeetingAgendaAsClubTemplate(
 			action: "club_template_saved",
 			targetType: "meeting",
 			targetId: meetingId,
-			detail: { templateId, mode: input.mode, sourceMeetingId: meetingId },
+			detail: { templateId, mode: plan.mode, sourceMeetingId: meetingId },
 		});
 
 		return { templateId };
