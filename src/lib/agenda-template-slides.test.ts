@@ -545,49 +545,92 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 // meeting (#622), and from then on the deck is THIS builder — so notes the TTM
 // saved vanished from the wall and the .pptx with the editor still offering them.
 describe("Table Topics notes on a materialised meeting's deck (#880)", () => {
+	type Seeds = ReturnType<typeof materialiseRunOfShow>;
+	const NOTES = "1. 🏆 THE COMEBACK\nTell us your story.";
+
 	function materialisedDeck(
 		tableTopicsNotes: string | null,
 		limits: { minSeconds: number; maxSeconds: number } | null,
+		/** An officer's edit to the stored beats before render. */
+		edit: (seeds: Seeds) => Seeds = (s) => s,
 	) {
-		const seeds = materialiseRunOfShow(false, limits);
-		const roles: TemplateRoleRow[] = [
-			...new Set(seeds.map((s) => s.roleKey).filter((k): k is string => !!k)),
-		].map((key) => ({ key, name: key, isSpeakerRole: key === "speaker" }));
-		const rows = resolveAgendaRows({
-			geIntroducesFunctionaries: false,
-			tableTopicsLimits: limits,
-			template: { beats: withBeatIds(seeds), roles },
-			slots: [],
-		});
-		const deck = buildTemplateSlideDeck({
+		const fresh = materialiseRunOfShow(false, limits);
+		const toRows = (seeds: Seeds) =>
+			resolveAgendaRows({
+				geIntroducesFunctionaries: false,
+				tableTopicsLimits: limits,
+				template: {
+					beats: withBeatIds(seeds),
+					roles: [
+						...new Set(
+							seeds.map((s) => s.roleKey).filter((k): k is string => !!k),
+						),
+					].map(
+						(key): TemplateRoleRow => ({
+							key,
+							name: key,
+							isSpeakerRole: key === "speaker",
+						}),
+					),
+				},
+				slots: [],
+			});
+		const rows = toRows(edit(fresh));
+		const beats = buildTemplateSlideDeck({
 			meeting: { ...meeting, tableTopicsNotes },
 			club,
 			rows,
-		});
-		const beats = deck.filter(
+		}).filter(
 			(s): s is Extract<Slide, { kind: "templateBeat" }> =>
 				s.kind === "templateBeat",
 		);
-		const segment = rows.find((r) => r.clubGoverned)?.who;
-		return { beats, segment };
+		// Position of the segment the FRESH materialisation governs — its identity
+		// before any officer edit, independent of the builder under test. The
+		// edits below change flags, never the row order, so it stays comparable.
+		const segmentIdx = toRows(fresh)
+			.filter((r) => !r.section)
+			.findIndex((r) => r.clubGoverned === true);
+		return { beats, segmentIdx };
 	}
+
+	/** Indexes of the beats that carry notes. */
+	const carrying = (beats: Extract<Slide, { kind: "templateBeat" }>[]) =>
+		beats.flatMap((b, i) => (b.notes.length > 0 ? [i] : []));
 
 	for (const limits of [null, { minSeconds: 60, maxSeconds: 150 }]) {
 		it(`projects them on the Table Topics segment only (limits ${limits ? "set" : "unset"})`, () => {
-			const { beats, segment } = materialisedDeck(
-				"1. 🏆 THE COMEBACK\nTell us your story.",
-				limits,
-			);
-			expect(segment, "the governed Table Topics row").toBeTruthy();
-			const carrying = beats.filter((b) => b.notes.length > 0);
+			const { beats, segmentIdx } = materialisedDeck(NOTES, limits);
+			expect(segmentIdx, "the governed Table Topics row").toBeGreaterThan(-1);
 			// Exactly one: the run of show gives three beats to the TTM.
-			expect(carrying.map((b) => b.label)).toEqual([segment]);
-			expect(carrying[0]?.notes).toEqual([
+			expect(carrying(beats)).toEqual([segmentIdx]);
+			expect(beats[segmentIdx]?.notes).toEqual([
 				"1. 🏆 THE COMEBACK",
 				"Tell us your story.",
 			]);
 		});
 	}
+
+	// Found by the Codex review of the first fix, which keyed on `clubGoverned`:
+	// timer-window ownership is not the segment's identity, and the agenda editor
+	// supports both of these edits.
+	it("keeps them on the segment when its window is taken off the club's", () => {
+		const { beats, segmentIdx } = materialisedDeck(NOTES, null, (seeds) =>
+			seeds.map((s) => ({ ...s, clubGoverned: false })),
+		);
+		expect(carrying(beats)).toEqual([segmentIdx]);
+	});
+
+	it("keeps them on the segment when the club's window governs another row", () => {
+		const { beats, segmentIdx } = materialisedDeck(NOTES, null, (seeds) => {
+			const vote = seeds.find(
+				(s) =>
+					s.roleKey === "table_topics_master" && !s.clubGoverned && !s.handoff,
+			);
+			expect(vote, "the Best Table Topics vote beat").toBeDefined();
+			return seeds.map((s) => ({ ...s, clubGoverned: s === vote }));
+		});
+		expect(carrying(beats)).toEqual([segmentIdx]);
+	});
 
 	it("blank notes leave every beat as it was", () => {
 		const plain = materialisedDeck(null, null).beats;
