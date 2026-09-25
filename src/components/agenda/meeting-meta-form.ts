@@ -84,5 +84,6 @@ export function meetingUpdateFromForm(
 		wodExample: patchField(form, "wodExample"),
 		notes: patchField(form, "notes"),
 		reminders: patchField(form, "reminders"),
+		tableTopicsNotes: patchField(form, "tableTopicsNotes"),
 	};
 }

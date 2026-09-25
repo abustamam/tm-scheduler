@@ -51,6 +51,11 @@ export const MEETING_LIMITS = {
 	 * is read aloud and printed, so it is genuinely multi-line.
 	 */
 	reminders: 2_000,
+	/**
+	 * The Table Topics notes (#880): the master's categories, one per line,
+	 * projected on the Table Topics slide. Multi-line like `reminders`.
+	 */
+	tableTopicsNotes: 2_000,
 	/** A Table Topics question. Renders into the minutes PDF. */
 	topic: 200,
 	/**
@@ -92,6 +97,10 @@ export const MEETING_FIELDS = {
 	location: rejecting(MEETING_LIMITS.location, "location"),
 	notes: rejecting(MEETING_LIMITS.notes, "notes"),
 	reminders: rejecting(MEETING_LIMITS.reminders, "announcements"),
+	tableTopicsNotes: rejecting(
+		MEETING_LIMITS.tableTopicsNotes,
+		"Table Topics notes",
+	),
 	topic: rejecting(MEETING_LIMITS.topic, "topic"),
 } as const;
 
@@ -132,6 +141,7 @@ export const MEETING_UPDATE_FIELDS = {
 	location: truncating(MEETING_LIMITS.location),
 	notes: truncating(MEETING_LIMITS.notes),
 	reminders: truncating(MEETING_LIMITS.reminders),
+	tableTopicsNotes: truncating(MEETING_LIMITS.tableTopicsNotes),
 	topic: truncating(MEETING_LIMITS.topic),
 } as const;
 

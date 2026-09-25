@@ -192,13 +192,14 @@ export function outstandingDutiesForSlot(
 		roleKey?: string | null;
 		speechTitle?: string | null;
 	},
-	meeting: Pick<DutyContext, "theme" | "wordOfTheDay">,
+	meeting: Pick<DutyContext, "theme" | "wordOfTheDay" | "tableTopicsNotes">,
 ): readonly RoleDuty[] {
 	return outstandingDuties(
 		{ roleName: slot.roleName, roleKey: slot.roleKey },
 		{
 			theme: meeting.theme,
 			wordOfTheDay: meeting.wordOfTheDay,
+			tableTopicsNotes: meeting.tableTopicsNotes,
 			speechTitle: slot.speechTitle,
 		},
 	);
@@ -234,7 +235,7 @@ export function outstandingDutiesByMember(
 		roleKey?: string | null;
 		speechTitle?: string | null;
 	}[],
-	meeting: Pick<DutyContext, "theme" | "wordOfTheDay">,
+	meeting: Pick<DutyContext, "theme" | "wordOfTheDay" | "tableTopicsNotes">,
 ): ReadonlyMap<string, readonly RoleDuty[]> {
 	const byMember = new Map<string, readonly RoleDuty[]>();
 	for (const slot of slots) {

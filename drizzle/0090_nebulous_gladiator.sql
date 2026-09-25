@@ -1,0 +1,1 @@
+ALTER TABLE "meetings" ADD COLUMN "table_topics_notes" text;

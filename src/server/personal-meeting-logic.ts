@@ -109,6 +109,8 @@ export interface PersonalMeetingView {
 		scheduledAt: Date | string;
 		theme: string | null;
 		wordOfTheDay: string | null;
+		/** Read by the Table Topics duty's tick (#880). */
+		tableTopicsNotes: string | null;
 		/**
 		 * Off the pgEnum, never a bare `string`. The route branches on this three
 		 * ways, and `attendance-plan.ts`'s own schema comment says the status union
@@ -222,6 +224,7 @@ export async function loadPublicPersonalMeetingView(args: {
 			scheduledAt: meetings.scheduledAt,
 			theme: meetings.theme,
 			wordOfTheDay: meetings.wordOfTheDay,
+			tableTopicsNotes: meetings.tableTopicsNotes,
 			status: meetings.status,
 			clubId: clubs.id,
 			clubName: clubs.name,
@@ -314,6 +317,7 @@ export async function loadPublicPersonalMeetingView(args: {
 			scheduledAt: meeting.scheduledAt,
 			theme: meeting.theme,
 			wordOfTheDay: meeting.wordOfTheDay,
+			tableTopicsNotes: meeting.tableTopicsNotes,
 			status: meeting.status,
 			hasTiming: anyTiming !== undefined,
 		},

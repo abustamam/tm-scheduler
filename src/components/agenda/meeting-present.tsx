@@ -769,6 +769,23 @@ function BodyView({
 						{body.note}
 					</div>
 				) : null}
+				{body.detail.length > 0 ? (
+					// The Table Topics notes (#880): one div per line so a line break
+					// typed in the editor survives, and an empty div of one line's
+					// height for a gap. Smaller than the bullets because it can run to
+					// a dozen lines; `useFitTransform` shrinks the rest.
+					<div className="flex flex-col text-[3cqw] font-semibold leading-snug">
+						{body.detail.map((t, idx) =>
+							t ? (
+								// biome-ignore lint/suspicious/noArrayIndexKey: lines have no stable id and can repeat
+								<div key={idx}>{t}</div>
+							) : (
+								// biome-ignore lint/suspicious/noArrayIndexKey: lines have no stable id and can repeat
+								<div key={idx} className="h-[1.6cqw]" />
+							),
+						)}
+					</div>
+				) : null}
 			</div>
 		);
 	}

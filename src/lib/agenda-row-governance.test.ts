@@ -48,6 +48,7 @@ const meeting: MeetingForDeck = {
 	wodDefinition: null,
 	wodExample: null,
 	reminders: null,
+	tableTopicsNotes: null,
 };
 
 const club: ClubForDeck = {

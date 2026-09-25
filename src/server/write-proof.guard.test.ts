@@ -165,8 +165,8 @@ type WriteProofClass =
  * The POST fns that are NOT `session`, each with the reason it is not.
  *
  * The 29 the #761 inventory found, less the five #762 retired and the two #752
- * retired, plus #866's request-access form: 25 today (6 `pending-proof`, 14
- * `console-asserted`, 3 `public-intake`, 2 `fill-blank`). Adding a row is a decision about a write's
+ * retired, plus #866's request-access form and #880's Table Topics notes
+ * editor: 26 today (6 `pending-proof`, 15 `console-asserted`, 3 `public-intake`, 2 `fill-blank`). Adding a row is a decision about a write's
  * trust model, not a way to get green — a genuinely session-less write that
  * turns up unclassified is a finding to report, not an entry to make.
  *
@@ -233,6 +233,12 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 		reason: "Phase 2 (#747 / #752)",
 	},
 	"meetings.ts#updateWordOfTheDay": {
+		class: "console-asserted",
+		reason: "Phase 2 (#747 / #752)",
+	},
+	// #880: the Table Topics Master's editor, built on `updateWordOfTheDay`'s
+	// exact model — same self-assert resolver shape, one column instead of three.
+	"meetings.ts#updateTableTopicsNotes": {
 		class: "console-asserted",
 		reason: "Phase 2 (#747 / #752)",
 	},
@@ -733,7 +739,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).not.toContain(key);
 	});
 
-	it("holds exactly the 25 exceptions: 24 left after #762 and #752, plus #866", () => {
+	it("holds exactly the 26 exceptions: 24 left after #762 and #752, plus #866 and #880", () => {
 		// The count is pinned, not just the shape. A twenty-fifth arriving
 		// silently is the thing to notice — either a new session-less write, or a
 		// child issue's row landing without its sibling being retired.
@@ -752,6 +758,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		//
 		// #866 added one `public-intake` row, the request-access form, so that
 		// class reads 3 and the total 25.
+		//
+		// #880 added one `console-asserted` row, the Table Topics Master's notes
+		// editor, modelled on `updateWordOfTheDay`: that class reads 15 and the
+		// total 26.
 		const byClass = (c: WriteProofClass) =>
 			Object.values(WRITE_PROOF_EXCEPTIONS).filter((v) => v.class === c).length;
 		expect({
@@ -761,9 +771,9 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			publicIntake: byClass("public-intake"),
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 25,
+			total: 26,
 			pendingProof: 6,
-			consoleAsserted: 14,
+			consoleAsserted: 15,
 			publicIntake: 3,
 			fillBlank: 2,
 		});

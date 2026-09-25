@@ -74,6 +74,9 @@ export const IN_ROOM_MEETING_FIELDS = [
 	/** Club announcements: printed on the agenda, projected on their own slide.
 	 *  The column keeps the name `reminders` for history. */
 	"reminders",
+	/** The Table Topics Master's notes (#880), projected on the Table Topics
+	 *  slide and exported to the .pptx. Shown to the room, so it belongs here. */
+	"tableTopicsNotes",
 ] as const;
 
 export type InRoomMeetingField = (typeof IN_ROOM_MEETING_FIELDS)[number];

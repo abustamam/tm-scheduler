@@ -1244,6 +1244,12 @@ export const meetings = pgTable(
 		// Edited via the "Edit meeting" dialog. Distinct from `notes` (private
 		// organizer scratch). Column stays named `reminders` for history.
 		reminders: text("reminders"),
+		// Free-text Table Topics notes (#880): the Table Topics Master's topic
+		// categories or prompts, one per line, shown on the projected Table Topics
+		// slide and in the .pptx export. Edited in the "Edit meeting" dialog and by
+		// the meeting's own Table Topics Master through their personal editor.
+		// NULL / blank = the slide renders exactly as it did before this column.
+		tableTopicsNotes: text("table_topics_notes"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
 	(t) => [

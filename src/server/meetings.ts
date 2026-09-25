@@ -40,6 +40,7 @@ import {
 	requireClubRole,
 	requireClubViewAccess,
 	requireMeetingAgendaEditor,
+	requireTableTopicsNotesEditor,
 	requireUser,
 	requireWordOfTheDayEditor,
 } from "./guards";
@@ -64,6 +65,7 @@ import {
 	applyMeetingDigitalVoting,
 	applyMeetingMetaPatch,
 	applyReopenMeeting,
+	applyTableTopicsNotesUpdate,
 	applyWordOfTheDayUpdate,
 	loadPublicUpcomingMeetings,
 	loadTmodPanelData,
@@ -743,6 +745,9 @@ const updateMeetingSchema = z.object({
 	wodExample: WOD_UPDATE_FIELDS.example.nullable().optional(),
 	notes: MEETING_UPDATE_FIELDS.notes.nullable().optional(),
 	reminders: MEETING_UPDATE_FIELDS.reminders.nullable().optional(),
+	tableTopicsNotes: MEETING_UPDATE_FIELDS.tableTopicsNotes
+		.nullable()
+		.optional(),
 	// The club's meeting number (#358). Nullable = cleared back to derived.
 	meetingNumber: z.number().int().positive().nullable().optional(),
 });
@@ -790,6 +795,31 @@ export const updateWordOfTheDay = createServerFn({ method: "POST" })
 			wordOfTheDay: data.wordOfTheDay,
 			wodDefinition: data.wodDefinition,
 			wodExample: data.wodExample,
+		});
+	});
+
+const updateTableTopicsNotesSchema = z.object({
+	meetingId: uuid,
+	/** Self-asserted TMOD/Table Topics Master member id (public page). */
+	selfMemberId: uuid.nullable().optional(),
+	tableTopicsNotes: MEETING_FIELDS.tableTopicsNotes.optional(),
+});
+
+/** Edit only a meeting's Table Topics notes (#880). Admin OR the meeting's
+ *  self-asserted TMOD OR its self-asserted Table Topics Master. Narrower than
+ *  `updateMeeting`: its writer can touch no other column. AUTHED or
+ *  self-assert. */
+export const updateTableTopicsNotes = createServerFn({ method: "POST" })
+	.validator((input: unknown) => updateTableTopicsNotesSchema.parse(input))
+	.handler(async ({ data }) => {
+		const authz = await requireTableTopicsNotesEditor({
+			meetingId: data.meetingId,
+			selfMemberId: data.selfMemberId ?? null,
+		});
+		return applyTableTopicsNotesUpdate({
+			meetingId: data.meetingId,
+			actorMemberId: authz.actorMemberId,
+			tableTopicsNotes: data.tableTopicsNotes,
 		});
 	});
 
