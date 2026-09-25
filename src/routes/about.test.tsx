@@ -14,7 +14,7 @@ import {
 	TOASTMASTERS_DISCLAIMER,
 } from "#/lib/brand";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
-import { Route } from "./about";
+import { DATA_FACTS, Route } from "./about";
 
 afterEach(cleanup);
 
@@ -118,8 +118,7 @@ describe("/about", () => {
 		const items = [
 			...sectionFor("What happens to your club's data").querySelectorAll("li"),
 		].map((li) => li.textContent);
-		expect(items).toHaveLength(5 + APPROVED_PROMISES.length);
-		expect(items.slice(5)).toEqual(APPROVED_PROMISES);
+		expect(items).toEqual([...DATA_FACTS, ...APPROVED_PROMISES]);
 	});
 
 	// The whole data section, commitments included, stays clear of the words
@@ -138,7 +137,8 @@ describe("/about", () => {
 	// the page says neither until the change that makes each true (#914, #915).
 	it("says nothing about deleting or exporting club data", async () => {
 		await mount();
-		const text = screen.getByRole("main").textContent ?? "";
+		// The whole body, shell included: a nav or footer line counts too.
+		const text = document.body.textContent ?? "";
 		for (const claim of [/\bdelet/i, /\berase/i, /\bexport/i, /\bdownload/i]) {
 			expect(text).not.toMatch(claim);
 		}

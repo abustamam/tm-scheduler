@@ -56,7 +56,7 @@ const FOUNDER_PARAGRAPHS = [
  * - scripts: no analytics dependency in `package.json`; the one inline script
  *   in `src/routes/__root.tsx` applies the saved theme
  */
-const DATA_FACTS = [
+export const DATA_FACTS = [
 	"GavelUp runs on Railway, and your club's data lives in a managed PostgreSQL database there.",
 	"You sign in with a link emailed to you, so GavelUp stores no passwords.",
 	"Members can claim roles from your club's shared sheet without creating an account.",
