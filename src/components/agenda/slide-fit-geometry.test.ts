@@ -159,13 +159,15 @@ describe.skipIf(!hasChrome)(
 			expect(fixed.topGap).toBeGreaterThanOrEqual(-0.5);
 		});
 
-		// #880. The Table Topics notes are the one body a member types into at any
-		// length: up to `MEETING_LIMITS.tableTopicsNotes` characters, which at a
-		// short line apiece is ~60 lines of `text-[3cqw] leading-snug` (≈53px at
-		// this width) under the four bullets — several times the frame. It must
-		// still land inside the box, not behind the footer, and the control shows
-		// the old padding-box scale would not have held it.
-		it("keeps a maximal Table Topics notes body inside the box (#880)", () => {
+		// #880. The Table Topics notes are the one body a member types into, so
+		// they can run far past the frame. This is a LONG body, not the longest:
+		// 60 lines at an ESTIMATED ≈53px apiece (`text-[3cqw] leading-snug` at this
+		// width) under the four bullets, several frames tall. Nothing caps the line
+		// count, so the claim this makes is only the one `fitScale` owns: however
+		// tall, the body lands inside the box and not behind the footer, where
+		// the old padding-box scale (the control) did not. How LEGIBLE the result
+		// is at that scale is not asserted here.
+		it("keeps a long Table Topics notes body inside the box (#880)", () => {
 			const height = 60 * 53 + BODY.height;
 			const scale = fitScale(BOX, { width: BODY.width, height });
 			const control = Math.min(

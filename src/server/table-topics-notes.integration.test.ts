@@ -165,6 +165,29 @@ describe.skipIf(!hasTestDb)("resolveTableTopicsNotesAuthz (#880)", () => {
 		expect(authz.allowed).toBe(false);
 	});
 
+	it("refuses the TTM of ANOTHER meeting in the same club", async () => {
+		await addRoleSlot(
+			club,
+			"Table Topics Master",
+			club.memberId,
+			"table_topics_master",
+		);
+		const [other] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date(Date.now() + 40 * 24 * 60 * 60 * 1000),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+		if (!other) throw new Error("no second meeting");
+		const authz = await resolveTableTopicsNotesAuthz({
+			meetingId: other.id,
+			selfMemberId: club.memberId,
+		});
+		expect(authz.allowed).toBe(false);
+	});
+
 	it("refuses anyone when the TTM slot is unassigned", async () => {
 		await addRoleSlot(club, "Table Topics Master", null, "table_topics_master");
 		const someone = await addRosterMember(club.clubId, "Wannabe");

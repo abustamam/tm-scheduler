@@ -57,7 +57,12 @@
  * otherwise be silently dropped from a contest.
  */
 import type { AgendaRow } from "./agenda-runsheet";
-import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
+import {
+	type ClubForDeck,
+	type MeetingForDeck,
+	type Slide,
+	tableTopicsNoteLines,
+} from "./agenda-slides";
 import {
 	formatTableTopicsWindow,
 	hasTableTopicsLimits,
@@ -210,6 +215,13 @@ export function buildTemplateSlideDeck({
 				minSeconds: club.tableTopicsMinSeconds,
 				maxSeconds: club.tableTopicsMaxSeconds,
 			}),
+			// The Table Topics notes (#880) ride on the governed row only: the run
+			// of show gives THREE beats `table_topics_master` (see `clubGoverned`
+			// on `AgendaRow`), and `materialiseRunOfShow` marks exactly one, the
+			// segment itself. Keying on the role would project them three times.
+			notes: row.clubGoverned
+				? tableTopicsNoteLines(meeting.tableTopicsNotes)
+				: [],
 		});
 	}
 

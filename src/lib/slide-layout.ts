@@ -529,7 +529,9 @@ export function slideLayout(
 				items,
 				link: null,
 				note: null,
-				detail: [],
+				// The Table Topics notes (#880) on the governed segment of a materialised
+				// meeting — the same `detail` the standard slide carries them in.
+				detail: slide.notes,
 			});
 		}
 		case "thankYou":

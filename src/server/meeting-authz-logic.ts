@@ -260,8 +260,9 @@ function sessionOf(
  * **A self-assert never overrides a session** (#747, ADR-0026).
  *
  * THE one place in this module that compares a self-asserted member id against a
- * role slot. Four arms route through it — agenda meta (TMOD), Word of the Day
- * (TMOD), Word of the Day (Grammarian), and the Ballot Counter gate — and
+ * role slot. Every arm routes through it — agenda meta (TMOD), Word of the Day
+ * (TMOD, Grammarian), Table Topics notes (TMOD, Table Topics Master, #880), and
+ * the Ballot Counter gate — and
  * `self-assert-binding.guard.test.ts` fails if a fifth is written inline instead.
  * That guard is the durable half: the bug was never one arm, it was one SHAPE
  * copied four times, and four in-place fixes would leave the shape intact.

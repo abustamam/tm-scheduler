@@ -540,3 +540,58 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		expect(timed[0]?.timing?.qualifies).toBe("4:30–7:30");
 	});
 });
+
+// #880, found by the Codex review. The first agenda edit materialises a standard
+// meeting (#622), and from then on the deck is THIS builder — so notes the TTM
+// saved vanished from the wall and the .pptx with the editor still offering them.
+describe("Table Topics notes on a materialised meeting's deck (#880)", () => {
+	function materialisedDeck(
+		tableTopicsNotes: string | null,
+		limits: { minSeconds: number; maxSeconds: number } | null,
+	) {
+		const seeds = materialiseRunOfShow(false, limits);
+		const roles: TemplateRoleRow[] = [
+			...new Set(seeds.map((s) => s.roleKey).filter((k): k is string => !!k)),
+		].map((key) => ({ key, name: key, isSpeakerRole: key === "speaker" }));
+		const rows = resolveAgendaRows({
+			geIntroducesFunctionaries: false,
+			tableTopicsLimits: limits,
+			template: { beats: withBeatIds(seeds), roles },
+			slots: [],
+		});
+		const deck = buildTemplateSlideDeck({
+			meeting: { ...meeting, tableTopicsNotes },
+			club,
+			rows,
+		});
+		const beats = deck.filter(
+			(s): s is Extract<Slide, { kind: "templateBeat" }> =>
+				s.kind === "templateBeat",
+		);
+		const segment = rows.find((r) => r.clubGoverned)?.who;
+		return { beats, segment };
+	}
+
+	for (const limits of [null, { minSeconds: 60, maxSeconds: 150 }]) {
+		it(`projects them on the Table Topics segment only (limits ${limits ? "set" : "unset"})`, () => {
+			const { beats, segment } = materialisedDeck(
+				"1. 🏆 THE COMEBACK\nTell us your story.",
+				limits,
+			);
+			expect(segment, "the governed Table Topics row").toBeTruthy();
+			const carrying = beats.filter((b) => b.notes.length > 0);
+			// Exactly one: the run of show gives three beats to the TTM.
+			expect(carrying.map((b) => b.label)).toEqual([segment]);
+			expect(carrying[0]?.notes).toEqual([
+				"1. 🏆 THE COMEBACK",
+				"Tell us your story.",
+			]);
+		});
+	}
+
+	it("blank notes leave every beat as it was", () => {
+		const plain = materialisedDeck(null, null).beats;
+		expect(materialisedDeck(" \n ", null).beats).toEqual(plain);
+		for (const b of plain) expect(b.notes).toEqual([]);
+	});
+});

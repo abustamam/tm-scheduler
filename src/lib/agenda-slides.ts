@@ -330,6 +330,11 @@ export type Slide =
 			 *  like `speech`'s `time`, so both renderers read one string and the
 			 *  ±30s grace rule is applied in exactly one place. */
 			timing: BeatTiming | null;
+			/** The meeting's Table Topics notes on the ONE governed Table Topics
+			 *  segment row, `[]` everywhere else (#880) — see `tableTopicsNoteLines`.
+			 *  A materialised standard meeting renders through this deck, so
+			 *  without it the notes vanish from the wall on the first agenda edit. */
+			notes: string[];
 	  }
 	| {
 			kind: "thankYou";

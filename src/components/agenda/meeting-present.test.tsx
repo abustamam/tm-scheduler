@@ -725,6 +725,7 @@ describe("a templated meeting's deck (#agenda-templates)", () => {
 		{ kind: "templateSection", title: "PREPARED SPEECH CONTEST" },
 		{
 			kind: "templateBeat",
+			notes: [],
 			label: "Prepared speech 1 · Ada Lovelace",
 			detail: "Judged. Chair calls the contestant.",
 			minutes: 7,
