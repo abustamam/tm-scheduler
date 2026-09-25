@@ -1442,6 +1442,16 @@ export async function saveMeetingAgendaAsClubTemplate(
 			throw new Error("Choose whether to save a new template or replace one.");
 		}
 
+		// Inside the transaction, so the row commits with the save or not at all.
+		await logActivity(tx, {
+			clubId,
+			actorMemberId: input.actorMemberId,
+			action: "club_template_saved",
+			targetType: "meeting",
+			targetId: meetingId,
+			detail: { templateId, mode: input.mode, sourceMeetingId: meetingId },
+		});
+
 		return { templateId };
 	});
 }

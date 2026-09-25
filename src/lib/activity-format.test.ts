@@ -70,6 +70,19 @@ describe("formatActivity", () => {
 		expect(summary).not.toBe("meeting_agenda_role_removed");
 	});
 
+	// #909: saving a meeting's agenda as a club template, either mode.
+	it("club_template_saved renders human-readable text, not the raw enum", () => {
+		const e = {
+			...base,
+			targetType: "meeting",
+			action: "club_template_saved",
+			actorName: "Faisal",
+		} as unknown as ActivityEntry;
+		const { summary } = formatActivity(e);
+		expect(summary).toMatch(/saved the agenda as a club template/i);
+		expect(summary).not.toBe("club_template_saved");
+	});
+
 	it("claim names the role", () => {
 		const e = {
 			...base,

@@ -179,6 +179,13 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "meeting_agenda_role_removed":
 			summary = "removed a role from the agenda";
 			break;
+		// #909 — a meeting's agenda saved as a club template, new or replacing
+		// one. One line for both modes, and it does not name the template, for
+		// the reason `meeting_template_set` gives: `ActivityEntry` carries no
+		// template name, and `detail` holds the id and the mode.
+		case "club_template_saved":
+			summary = "saved the agenda as a club template";
+			break;
 		// A platform superadmin opened an impersonation session on this club
 		// (ADR-0020 / #185, #246) — read-only for `superadmin_viewed`, read-write
 		// for `superadmin_acted`. `entry.actorName` is null for both (the actor

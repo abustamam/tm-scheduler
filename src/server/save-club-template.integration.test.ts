@@ -14,6 +14,7 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	activityLog,
 	clubs,
 	meetings,
 	meetingTemplateBeats,
@@ -252,6 +253,78 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 		const printed = await printedRows(second);
 		expect(printed.length).toBeGreaterThan(0);
 		expect(printed).toEqual(await printedRows(club.meetingId));
+	});
+
+	async function savedRows() {
+		return testDb
+			.select({
+				actorMemberId: activityLog.actorMemberId,
+				targetType: activityLog.targetType,
+				targetId: activityLog.targetId,
+				detail: activityLog.detail,
+			})
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, club.clubId),
+					eq(activityLog.action, "club_template_saved"),
+				),
+			)
+			.orderBy(asc(activityLog.createdAt));
+	}
+
+	it("writes one club_template_saved row per save, in both modes", async () => {
+		const created = await saveMeetingAgendaAsClubTemplate({
+			mode: "new",
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+			name: "Contest night",
+			description: null,
+		});
+		expect(await savedRows()).toEqual([
+			{
+				actorMemberId: club.adminMemberId,
+				targetType: "meeting",
+				targetId: club.meetingId,
+				detail: {
+					templateId: created.templateId,
+					mode: "new",
+					sourceMeetingId: club.meetingId,
+				},
+			},
+		]);
+
+		const second = await addMeeting(club.clubId);
+		await saveMeetingAgendaAsClubTemplate({
+			mode: "replace",
+			meetingId: second,
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+			templateId: created.templateId,
+		});
+		const rows = await savedRows();
+		expect(rows).toHaveLength(2);
+		expect(rows[1]).toEqual({
+			actorMemberId: club.adminMemberId,
+			targetType: "meeting",
+			targetId: second,
+			detail: {
+				templateId: created.templateId,
+				mode: "replace",
+				sourceMeetingId: second,
+			},
+		});
+	});
+
+	it("a refused save writes no activity row", async () => {
+		const other = await seedClub();
+		otherClubs.push(other);
+		const theirs = await saveNew(other.meetingId, "Theirs", other.clubId);
+		await expect(replace(club.meetingId, theirs.templateId)).rejects.toThrow(
+			CLUB_TEMPLATE_GONE_MESSAGE,
+		);
+		expect(await savedRows()).toEqual([]);
 	});
 
 	it("dedupes the key: two saves named the same get -2", async () => {

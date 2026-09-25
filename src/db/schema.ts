@@ -238,6 +238,12 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// every member of the club can read the activity feed, and a guest's email
 	// is not theirs to read.
 	"guest_visits_record",
+	// A meeting's agenda was saved as a club-owned template (#909), new or
+	// replacing one of the club's own. ONE value for both modes: the mode is in
+	// `detail`, and to a reader of the feed both are "the club's template now
+	// looks like this meeting". `targetType: "meeting"` names the SOURCE meeting.
+	// `detail = { templateId, mode: "new" | "replace", sourceMeetingId }`
+	"club_template_saved",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
