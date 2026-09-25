@@ -140,9 +140,12 @@ Merging is the serial half.
    it was dispatched; the commits answering them are gated by nothing, and CI only proves the
    tests still pass. Every other step here can be delegated, and this is why the merge button
    is not on the agent path at all.
-4. `gh pr merge --squash --auto`, then `gh pr update-branch` on each PR still open —
-   CLAUDE.md's "Land" row has why branch protection forces that order. Back to 3 with the
-   next PR, until the wave has landed.
+4. `gh pr merge --squash --auto`. Branch protection no longer requires an up-to-date branch
+   (`strict: false` since 2026-09-25; CLAUDE.md's "Pull requests" section has why), so the
+   other open PRs need no `gh pr update-branch` after each landing — only one GitHub reports
+   as conflicting does. Back to 3 with the next PR, until the wave has landed.
+5. Watch CI on `main` after the wave lands. That run, not the PR's, is what catches two
+   file-disjoint PRs breaking each other through an import.
 
 ## Common mistakes
 
