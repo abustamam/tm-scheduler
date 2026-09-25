@@ -14,11 +14,15 @@
  * from Base Camp), so this is the only automated guard they get.
  */
 import { describe, expect, it } from "vitest";
+import { pathwaysSeriesEnum } from "#/db/schema";
 import {
 	defaultOpenLevel,
 	levelLabel,
 	PATH_COMPLETION_LEVEL,
 	PATHWAYS_CATALOG,
+	PATHWAYS_SERIES,
+	SERIES_LABEL,
+	seriesRequiredAt,
 } from "./pathways-catalog";
 
 /** courseCode → [name, status, L3 electives, L4 electives, L5 electives] */
@@ -41,9 +45,14 @@ const PUBLISHED: Record<
 
 const byCode = new Map(PATHWAYS_CATALOG.map((p) => [p.courseCode, p]));
 
+// An Education Series presentation (#921) is `isRequired: false` but is not an
+// elective, so it is excluded here exactly as the read model excludes it.
 const electivesAt = (code: string, level: number) =>
-	byCode.get(code)?.projects.filter((p) => p.level === level && !p.isRequired)
-		.length;
+	byCode
+		.get(code)
+		?.projects.filter(
+			(p) => p.level === level && !p.isRequired && p.series === undefined,
+		).length;
 
 const requiredAt = (code: string, level: number) =>
 	byCode.get(code)?.projects.filter((p) => p.level === level && p.isRequired) ??
@@ -248,5 +257,115 @@ describe("defaultOpenLevel (#418)", () => {
 				null,
 			),
 		).toBe(1);
+	});
+});
+
+/**
+ * Education Series presentations (#921). Read 2026-09-25 from Base Camp's own
+ * "Level 4/5 Requirements" units on 8711; the legacy editions (8705 checked)
+ * carry no series requirement at all.
+ */
+describe("Education Series (#921)", () => {
+	const seriesAt = (code: string, level: number) =>
+		byCode
+			.get(code)
+			?.projects.filter((p) => p.level === level && p.series !== undefined) ??
+		[];
+	const countBySeries = (code: string, level: number) => {
+		const counts: Record<string, number> = {};
+		for (const p of seriesAt(code, level)) {
+			const key = p.series as string;
+			counts[key] = (counts[key] ?? 0) + 1;
+		}
+		return counts;
+	};
+
+	const current = PATHWAYS_CATALOG.filter((p) => p.status === "current");
+	const legacy = PATHWAYS_CATALOG.filter((p) => p.status === "legacy");
+
+	it("has six current paths and five legacy paths to check", () => {
+		expect(current).toHaveLength(6);
+		expect(legacy).toHaveLength(5);
+	});
+
+	for (const path of current) {
+		it(`${path.courseCode}: 28 series rows, 14 per level, split per series`, () => {
+			expect(path.projects.filter((p) => p.series !== undefined)).toHaveLength(
+				28,
+			);
+			expect(countBySeries(path.courseCode, 4)).toEqual({
+				successful_club: 4,
+				better_speaker: 10,
+			});
+			expect(countBySeries(path.courseCode, 5)).toEqual({
+				successful_club: 3,
+				leadership_excellence: 11,
+			});
+		});
+
+		it(`${path.courseCode}: every series row is non-required and unsuffixed, at L4/L5 only`, () => {
+			const rows = path.projects.filter((p) => p.series !== undefined);
+			expect(rows.every((p) => p.isRequired === false)).toBe(true);
+			expect(rows.every((p) => p.level === 4 || p.level === 5)).toBe(true);
+			expect(rows.some((p) => p.name.endsWith(" (Legacy)"))).toBe(false);
+		});
+
+		// The seed upserts on (path, level, name) and `reconcileCatalog` stamps a
+		// block id onto a row it matches by (path, level, name). A series title
+		// that equalled a same-level project would therefore merge with it: the
+		// seed would flip one row's classification, and a sync could stamp a
+		// Base Camp block onto a series row.
+		it(`${path.courseCode}: no series title collides with a same-level project`, () => {
+			for (const level of [4, 5]) {
+				const others = new Set(
+					path.projects
+						.filter((p) => p.level === level && p.series === undefined)
+						.map((p) => p.name),
+				);
+				const clashes = seriesAt(path.courseCode, level).filter((p) =>
+					others.has(p.name),
+				);
+				expect(clashes).toEqual([]);
+			}
+		});
+	}
+
+	for (const path of legacy) {
+		it(`${path.courseCode} (legacy): carries no series rows`, () => {
+			expect(path.projects.filter((p) => p.series !== undefined)).toEqual([]);
+		});
+	}
+
+	it("seriesRequiredAt: two series at L4 and L5 on a current path, none elsewhere", () => {
+		const got = [1, 2, 3, 4, 5, PATH_COMPLETION_LEVEL].map((level) => ({
+			level,
+			current: seriesRequiredAt(level, "current"),
+			legacy: seriesRequiredAt(level, "legacy"),
+		}));
+		expect(got).toEqual([
+			{ level: 1, current: [], legacy: [] },
+			{ level: 2, current: [], legacy: [] },
+			{ level: 3, current: [], legacy: [] },
+			{
+				level: 4,
+				current: ["successful_club", "better_speaker"],
+				legacy: [],
+			},
+			{
+				level: 5,
+				current: ["successful_club", "leadership_excellence"],
+				legacy: [],
+			},
+			{ level: PATH_COMPLETION_LEVEL, current: [], legacy: [] },
+		]);
+	});
+
+	// The catalog restates the enum's values so this client-safe module does not
+	// import the schema. This holds the two equal.
+	it("PATHWAYS_SERIES matches the pathways_series pgEnum, and each has a label", () => {
+		expect([...PATHWAYS_SERIES]).toEqual(pathwaysSeriesEnum.enumValues);
+		expect(Object.keys(SERIES_LABEL).sort()).toEqual(
+			[...PATHWAYS_SERIES].sort(),
+		);
 	});
 });

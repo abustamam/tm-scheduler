@@ -23,7 +23,11 @@ import {
 } from "#/db/schema";
 import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
 import { cap } from "#/lib/cap";
-import { defaultOpenLevel, levelLabel } from "#/lib/pathways-catalog";
+import {
+	defaultOpenLevel,
+	levelLabel,
+	type PathwaysSeries,
+} from "#/lib/pathways-catalog";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {
 	membershipPickOpenTermJoin,
@@ -36,6 +40,15 @@ export interface PickerProject {
 	level: number;
 	name: string;
 	isRequired: boolean;
+	/**
+	 * The Education Series this presentation belongs to (#921), or null for an
+	 * ordinary project. A series row is `isRequired: false` but is NOT an
+	 * elective — group it by this, never by `!isRequired` alone.
+	 *
+	 * Always set by `listProjectOptions`. Optional in the type only so fixtures
+	 * built by hand before #921 still type-check; read absent as null.
+	 */
+	series?: PathwaysSeries | null;
 	/**
 	 * Base Camp says this one is done. Display only — a completed project stays
 	 * SELECTABLE. Repeats are real: `path_level_progress.completed` may exceed
@@ -109,6 +122,7 @@ export async function listProjectOptions(
 				level: pathwaysProjects.level,
 				name: pathwaysProjects.name,
 				isRequired: pathwaysProjects.isRequired,
+				series: pathwaysProjects.series,
 			})
 			.from(pathwaysProjects)
 			.where(inArray(pathwaysProjects.pathId, pathIds))
@@ -172,6 +186,7 @@ export async function listProjectOptions(
 				// unthrottled JSON payload — the read half of #526.
 				name: cap(p.name, SPEAKER_LIMITS.projectName),
 				isRequired: p.isRequired,
+				series: p.series,
 				complete: completeIds.has(p.id),
 			}));
 		return {

@@ -23,6 +23,9 @@
  *               corroborated once some member actually picks it. These names can
  *               only be checked by a human against a real source — see #398.
  *
+ * Education Series rows (`series IS NOT NULL`, #921) are in neither list: Base
+ * Camp never returns them, so their missing block id is expected by design.
+ *
  * Plus SEED GAPS: rows reconciliation had to derive because the seed missed
  * them. Harmless (the system healed itself) but they show where the guess was
  * short, and they're the other half of judging how good the seed was.
@@ -115,6 +118,9 @@ async function main() {
 	);
 	const courseCodeByPathId = new Map(synced.map((p) => [p.id, p.courseCode]));
 
+	// Education Series rows (#921) are excluded from both lists below: Base Camp
+	// never returns them as blocks (they are static text on each level's
+	// Requirements unit), so a missing block id is expected, not a finding.
 	const uncorroborated = await db
 		.select({
 			pathId: pathwaysProjects.pathId,
@@ -124,7 +130,7 @@ async function main() {
 		})
 		.from(pathwaysProjects)
 		.where(
-			sql`${inArray(pathwaysProjects.pathId, pathIds)} and ${isNull(pathwaysProjects.bcmBlockId)}`,
+			sql`${inArray(pathwaysProjects.pathId, pathIds)} and ${isNull(pathwaysProjects.bcmBlockId)} and ${isNull(pathwaysProjects.series)}`,
 		)
 		.orderBy(
 			asc(pathwaysProjects.pathId),

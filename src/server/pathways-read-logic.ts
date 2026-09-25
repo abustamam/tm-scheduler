@@ -13,7 +13,11 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import { PATH_COMPLETION_LEVEL } from "#/lib/pathways-catalog";
+import {
+	PATH_COMPLETION_LEVEL,
+	type PathwaysSeries,
+	seriesRequiredAt,
+} from "#/lib/pathways-catalog";
 import { isReadableClub } from "./club-readable-logic";
 import { resolveUserPersonId } from "./person-identity-logic";
 
@@ -145,11 +149,20 @@ export interface CatalogProject {
 	level: number;
 	name: string;
 	isRequired: boolean;
+	/**
+	 * Education Series presentation (#921), else null. `isRequired` is false on
+	 * these, and they are NOT electives: every "elective" filter here is
+	 * `!isRequired && series === null`.
+	 */
+	series: PathwaysSeries | null;
 }
 
 interface SyncedPath {
 	courseCode: string;
 	pathName: string;
+	/** `pathways_paths.status` — decides whether Levels 4/5 carry a series
+	 *  requirement (`seriesRequiredAt`). */
+	status: "current" | "legacy";
 	levels: SyncedLevel[];
 	wins: Win[];
 	catalogProjects: CatalogProject[];
@@ -173,11 +186,15 @@ interface SyncedPath {
  * required projects at that level plus `min_req_electives`. `approved` is always
  * false — only Base Camp approves a level, and inferring it from marks would be
  * exactly the over-crediting this feature exists to avoid.
+ *
+ * On a current path, Levels 4 and 5 also count one presentation from each
+ * Education Series the level requires (#921, `seriesRequiredAt`).
  */
 function levelsFromCatalog(
 	catalogProjects: CatalogProject[],
 	pathLevels: { level: number; minReqElectives: number }[] | undefined,
 	completeProjectIds: Set<string>,
+	status: "current" | "legacy",
 ): SyncedLevel[] {
 	const levels = [...new Set(catalogProjects.map((p) => p.level))].sort(
 		(a, b) => a - b,
@@ -188,6 +205,7 @@ function levelsFromCatalog(
 			pathLevels,
 			completeProjectIds,
 			level,
+			status,
 		);
 		// `total - left`, not "marked projects at this level" (#898). The naive
 		// count credits every marked elective, so three electives marked against
@@ -200,13 +218,16 @@ function levelsFromCatalog(
 /**
  * TI's requirement for one catalog level, and how much of it is still open:
  * the required projects not yet complete, plus however many electives are
- * still to choose. Electives beyond the minimum count for nothing.
+ * still to choose, plus each required Education Series (#921) with no complete
+ * presentation yet. Electives beyond the minimum count for nothing, and so does
+ * a second presentation from a series already met.
  */
 function catalogLevelRequirement(
 	catalogProjects: CatalogProject[],
 	pathLevels: { level: number; minReqElectives: number }[] | undefined,
 	completeProjectIds: Set<string>,
 	level: number,
+	status: "current" | "legacy",
 ): {
 	total: number;
 	left: number;
@@ -220,14 +241,26 @@ function catalogLevelRequirement(
 		(p) => !completeProjectIds.has(p.projectId),
 	).length;
 	const completedElectives = atLevel.filter(
-		(p) => !p.isRequired && completeProjectIds.has(p.projectId),
+		(p) => isElective(p) && completeProjectIds.has(p.projectId),
 	).length;
 	const electivesToChoose = Math.max(0, minReqElectives - completedElectives);
+	const seriesRequired = seriesRequiredAt(level, status);
+	const seriesLeft = seriesRequired.filter(
+		(series) =>
+			!atLevel.some(
+				(p) => p.series === series && completeProjectIds.has(p.projectId),
+			),
+	).length;
 	return {
-		total: required.length + minReqElectives,
-		left: requiredLeft + electivesToChoose,
+		total: required.length + minReqElectives + seriesRequired.length,
+		left: requiredLeft + electivesToChoose + seriesLeft,
 		electivesToChoose,
 	};
+}
+
+/** An elective: not required, and not an Education Series presentation (#921). */
+function isElective(p: CatalogProject): boolean {
+	return !p.isRequired && p.series === null;
 }
 
 /**
@@ -286,7 +319,12 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	const levels =
 		levelsSource === "basecamp"
 			? [...path.levels].sort((a, b) => a.level - b.level)
-			: levelsFromCatalog(path.catalogProjects, path.pathLevels, completeIds);
+			: levelsFromCatalog(
+					path.catalogProjects,
+					path.pathLevels,
+					completeIds,
+					path.status,
+				);
 
 	const done = levels.reduce((s, l) => s + Math.min(l.completed, l.total), 0);
 	const total = levels.reduce((s, l) => s + l.total, 0);
@@ -384,12 +422,13 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 				path.pathLevels,
 				completeIds,
 				workingLevel,
+				path.status,
 			);
 			if (chooseCount > 0) {
 				upNextElectives = {
 					chooseCount,
 					options: workingCatalog
-						.filter((c) => !c.isRequired && !completeIds.has(c.projectId))
+						.filter((c) => isElective(c) && !completeIds.has(c.projectId))
 						.map((c) => ({ projectId: c.projectId, name: c.name })),
 				};
 			}
@@ -488,6 +527,7 @@ interface CatalogRow {
 	level: number;
 	name: string;
 	isRequired: boolean;
+	series: PathwaysSeries | null;
 }
 
 /** The catalog projects (`pathwaysProjects`) for a set of path ids. */
@@ -500,6 +540,7 @@ async function fetchCatalogProjects(pathIds: string[]): Promise<CatalogRow[]> {
 			level: pathwaysProjects.level,
 			name: pathwaysProjects.name,
 			isRequired: pathwaysProjects.isRequired,
+			series: pathwaysProjects.series,
 		})
 		.from(pathwaysProjects)
 		.where(inArray(pathwaysProjects.pathId, pathIds))
@@ -633,6 +674,7 @@ export async function pathwaysForPerson(
 			pathId: pathwaysPaths.id,
 			courseCode: pathwaysPaths.courseCode,
 			pathName: pathwaysPaths.name,
+			pathStatus: pathwaysPaths.status,
 			level: pathLevelProgress.level,
 			completed: pathLevelProgress.completed,
 			total: pathLevelProgress.total,
@@ -662,6 +704,7 @@ export async function pathwaysForPerson(
 			p = {
 				courseCode: r.courseCode,
 				pathName: r.pathName,
+				status: r.pathStatus,
 				levels: [],
 				wins: [],
 				catalogProjects: [],
@@ -714,6 +757,7 @@ export async function pathwaysForPerson(
 			level: c.level,
 			name: c.name,
 			isRequired: c.isRequired,
+			series: c.series,
 		});
 	}
 	for (const d of detailRows) {
@@ -792,6 +836,7 @@ export async function pathwaysByMember(
 			pathId: pathwaysPaths.id,
 			courseCode: pathwaysPaths.courseCode,
 			pathName: pathwaysPaths.name,
+			pathStatus: pathwaysPaths.status,
 			level: pathLevelProgress.level,
 			completed: pathLevelProgress.completed,
 			total: pathLevelProgress.total,
@@ -833,6 +878,7 @@ export async function pathwaysByMember(
 			p = {
 				courseCode: r.courseCode,
 				pathName: r.pathName,
+				status: r.pathStatus,
 				levels: [],
 				wins: [],
 				catalogProjects: [],
@@ -893,6 +939,7 @@ export async function pathwaysByMember(
 			level: c.level,
 			name: c.name,
 			isRequired: c.isRequired,
+			series: c.series,
 		});
 	}
 
