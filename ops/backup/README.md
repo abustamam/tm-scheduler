@@ -14,15 +14,16 @@ portability is what made the 2026-08-17 Neon → Railway migration possible at a
 | --- | --- |
 | `backup.sh` | dump → verify → keep → prune |
 | `Dockerfile` | `postgres:18-alpine` for the PG 18 client, entrypoint cleared |
-| `railway.json` | `DOCKERFILE` builder, `restartPolicyType: NEVER`, `cronSchedule` |
 
 ## Wiring on Railway
 
 One service in the `tm-scheduler` project, alongside `gavelup` and `Postgres`:
 
-- **Root directory**: `ops/backup` — this is what makes Railway read *this* `railway.json` instead
-  of the repo-root one, which sets `healthcheckPath: /api/health`. A cron job serves no HTTP and
-  exits immediately, so inheriting that healthcheck would fail every run.
+- **Config**: the `db-backup` service in `.railway/railway.ts` at the repo root — `DOCKERFILE`
+  builder, `restartPolicyType: NEVER`, the cron below. It deliberately has no healthcheck: that is
+  `gavelup`'s `/api/health`, and a cron job serves no HTTP and exits immediately, so a healthcheck
+  would fail every run.
+- **Root directory**: `ops/backup`, so the build context and `Dockerfile` are this directory.
 - **Volume**: mounted at `/backups`.
 - **Variable**: `DATABASE_URL` = `${{ Postgres.DATABASE_URL }}` — a reference, so it resolves to
   the private network host and survives a Postgres credential rotation.
