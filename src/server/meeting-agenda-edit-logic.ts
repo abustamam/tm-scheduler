@@ -202,6 +202,14 @@ export type AgendaDraft = {
 	 * editor renders the save control only when it is present.
 	 */
 	meetingId?: string;
+	/**
+	 * True for a cancelled meeting (#909 review). `editable` is false for a
+	 * completed meeting AND a cancelled one, and the two differ for "Save as
+	 * club template": last week's agenda is a legitimate source, a cancelled
+	 * meeting's is not (the save refuses it). Optional for the same fixture
+	 * reason as `meetingId`; `loadAgendaDraft` always sets it.
+	 */
+	cancelled?: boolean;
 	templateId: string;
 	templateName: string;
 	/** False once the meeting is locked. The rows still load — an agenda is
@@ -520,6 +528,7 @@ export async function loadAgendaDraft(
 
 	return {
 		meetingId,
+		cancelled: meeting.status === "cancelled",
 		templateId: tpl.id,
 		templateName: tpl.name,
 		editable: agendaEditable(meeting.status),

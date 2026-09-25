@@ -269,6 +269,7 @@ export function AgendaEditor({
 	onRemoveRole,
 }: AgendaEditorProps) {
 	const { editable, roles, attachableRoles } = draft;
+	const saveOffered = draft.meetingId !== undefined && draft.cancelled !== true;
 
 	// The draft is the server's truth; this is what the officer is typing. Keyed
 	// on `draft.rows` identity so a structural mutation (add/remove/move, which
@@ -464,7 +465,7 @@ export function AgendaEditor({
 				</table>
 			</div>
 
-			{editable || draft.meetingId ? (
+			{editable || saveOffered ? (
 				<div className="flex flex-wrap gap-2">
 					{editable ? (
 						<>
@@ -496,8 +497,10 @@ export function AgendaEditor({
 					) : null}
 					{/* Outside the `editable` gate on purpose (#909): last week's
 					    agenda is a legitimate thing to save, and a completed meeting
-					    is read-only. A cancelled one is refused by the server. */}
-					{draft.meetingId ? (
+					    is read-only. A cancelled one is not offered — the server
+					    refuses it, and a button that can only fail is worse than
+					    none. */}
+					{saveOffered && draft.meetingId ? (
 						<SaveClubTemplateButton
 							meetingId={draft.meetingId}
 							clubUuid={clubUuid}

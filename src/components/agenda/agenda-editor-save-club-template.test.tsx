@@ -29,6 +29,7 @@ const MEETING_UUID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 const DRAFT: AgendaDraft = {
 	meetingId: MEETING_UUID,
+	cancelled: false,
 	templateId: "tpl",
 	templateName: "Standard",
 	editable: true,
@@ -64,12 +65,17 @@ async function renderEditor(draft: AgendaDraft) {
 const SAVE = { name: "Save as club template" };
 
 describe("AgendaEditor's save-as-club-template control", () => {
-	it("appears on a read-only (completed) meeting too, and not without a meeting id", async () => {
+	it("appears on a completed meeting too, and not on a cancelled one or without a meeting id", async () => {
 		await renderEditor({ ...DRAFT, editable: false });
 		expect(screen.getByRole("button", SAVE)).toBeTruthy();
 		expect(
 			screen.queryByRole("button", { name: "Add row: Section" }),
 		).toBeNull();
+		cleanup();
+
+		// A cancelled meeting is read-only too, but the save would only refuse.
+		await renderEditor({ ...DRAFT, editable: false, cancelled: true });
+		expect(screen.queryByRole("button", SAVE)).toBeNull();
 		cleanup();
 
 		const { meetingId: _omit, ...withoutId } = DRAFT;

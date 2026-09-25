@@ -513,7 +513,10 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 	it("refuses a cancelled source and allows a completed one", async () => {
 		const cancelled = await addMeeting(club.clubId, "cancelled");
 		await expect(saveNew(cancelled, "Nope")).rejects.toThrow(/cancelled/);
+		// What the editor reads to hide the control, from the same load.
+		expect((await loadAgendaDraft(cancelled))?.cancelled).toBe(true);
 		const completed = await addMeeting(club.clubId, "completed");
+		expect((await loadAgendaDraft(completed))?.cancelled).toBe(false);
 		const { templateId } = await saveNew(completed, "Last week");
 		expect((await beatsOf(templateId)).length).toBeGreaterThan(0);
 	});
