@@ -11,6 +11,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
+import { APP_LOCALE } from "#/lib/format";
 import { relativeTime } from "#/lib/offline-status";
 import {
 	type ConnectedApp,
@@ -136,7 +137,7 @@ export function ConnectedAppsSection({
 								</div>
 								<div className="text-muted-foreground">
 									{app.approvedAt
-										? `Approved ${new Date(app.approvedAt).toLocaleDateString()}`
+										? `Approved ${new Date(app.approvedAt).toLocaleDateString(APP_LOCALE)}`
 										: "Still has access, approval removed"}
 									{" · "}
 									{app.lastActiveAt

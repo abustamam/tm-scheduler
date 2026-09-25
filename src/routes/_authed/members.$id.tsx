@@ -35,7 +35,7 @@ import { Label } from "#/components/ui/label";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { formatMeetingDate } from "#/lib/format";
+import { APP_LOCALE, formatMeetingDate } from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
 import { formatTenure } from "#/lib/members";
 import {
@@ -134,7 +134,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 });
 
 function joinedLabel(value: Date | string) {
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		month: "short",
 		year: "numeric",
 	}).format(new Date(value));
@@ -143,8 +143,8 @@ function joinedLabel(value: Date | string) {
 function dayMon(value: Date | string) {
 	const d = new Date(value);
 	return {
-		day: new Intl.DateTimeFormat(undefined, { day: "numeric" }).format(d),
-		mon: new Intl.DateTimeFormat(undefined, { month: "short" })
+		day: new Intl.DateTimeFormat(APP_LOCALE, { day: "numeric" }).format(d),
+		mon: new Intl.DateTimeFormat(APP_LOCALE, { month: "short" })
 			.format(d)
 			.toUpperCase(),
 	};

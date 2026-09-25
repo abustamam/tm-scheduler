@@ -1,6 +1,23 @@
+/**
+ * The one locale every date and currency formatter in the app renders in
+ * (#708). Pass it wherever an `Intl.*` constructor or a `toLocale*String` call
+ * takes a locale — never `undefined`, and never a bare `toLocaleDateString()`.
+ *
+ * An omitted locale resolves against whichever RUNTIME is formatting: the SSR
+ * container answers `en-US`, a Spanish-locale browser `es-ES`. The two passes
+ * then print `Wed, Aug 20` and `mié, 20 ago` for the same instant and React
+ * throws the server markup away. The timezone half of that is handled per call
+ * site (a club's stored zone); this is the locale half.
+ *
+ * `en-US` is a product decision, not a default: both clubs are English-speaking,
+ * revisit when a non-US club arrives (#670). `format-locale.guard.test.ts`
+ * fails on a new runtime-resolved locale anywhere under `src/`.
+ */
+export const APP_LOCALE = "en-US";
+
 export function formatMeetingDate(value: Date | string, timeZone?: string) {
 	const d = typeof value === "string" ? new Date(value) : value;
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		weekday: "short",
 		month: "short",
 		day: "numeric",
@@ -10,7 +27,7 @@ export function formatMeetingDate(value: Date | string, timeZone?: string) {
 
 export function formatMeetingTime(value: Date | string, timeZone?: string) {
 	const d = typeof value === "string" ? new Date(value) : value;
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		hour: "numeric",
 		minute: "2-digit",
 		timeZone,
@@ -43,7 +60,7 @@ export function formatMeetingTimeRange(
  */
 export function formatArchiveDate(value: Date | string, timeZone?: string) {
 	const d = typeof value === "string" ? new Date(value) : value;
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		weekday: "short",
 		year: "numeric",
 		month: "short",
@@ -54,7 +71,7 @@ export function formatArchiveDate(value: Date | string, timeZone?: string) {
 
 export function formatShortDate(value: Date | string, timeZone?: string) {
 	const d = typeof value === "string" ? new Date(value) : value;
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		month: "short",
 		day: "numeric",
 		timeZone,
@@ -86,7 +103,7 @@ export function formatHistoryDate(
 		year: "numeric",
 		timeZone,
 	});
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		month: "short",
 		day: "numeric",
 		...(yearOf.format(d) === yearOf.format(now)
@@ -125,7 +142,7 @@ export function formatCalendarDay(
 	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
 	if (!m) return ymd;
 	const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-	return new Intl.DateTimeFormat(undefined, {
+	return new Intl.DateTimeFormat(APP_LOCALE, {
 		month: "short",
 		day: "numeric",
 		...(options?.withYear ? { year: "numeric" as const } : {}),

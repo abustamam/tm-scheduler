@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { APP_LOCALE } from "#/lib/format";
 
 /**
  * The date stamp on a dashboard speech-log row (#608).
@@ -16,12 +17,16 @@ import { useEffect, useState } from "react";
  * server markup away.
  */
 
-/** Day-of-month and short month, in the RUNTIME's zone and locale. */
+/**
+ * Day-of-month and short month, in the RUNTIME's zone and `APP_LOCALE`. The
+ * zone is still the viewer's (post-mount only, below); the locale is pinned
+ * app-wide since #708.
+ */
 function dayMon(value: Date | string) {
 	const d = new Date(value);
 	return {
-		day: new Intl.DateTimeFormat(undefined, { day: "numeric" }).format(d),
-		mon: new Intl.DateTimeFormat(undefined, { month: "short" })
+		day: new Intl.DateTimeFormat(APP_LOCALE, { day: "numeric" }).format(d),
+		mon: new Intl.DateTimeFormat(APP_LOCALE, { month: "short" })
 			.format(d)
 			.toUpperCase(),
 	};
@@ -38,12 +43,12 @@ export function SpeechLogDate({ value }: { value: Date | string }) {
 	// Same pre-mount guard as `DashboardGreeting`. The server pass and every
 	// first client render see `mounted === false`, so both emit the empty box and
 	// hydration has nothing to reconcile; the effect then fills it in from the
-	// viewer's own runtime.
+	// viewer's own runtime zone.
 	//
-	// The POST-mount output is byte-identical to what this route shipped before:
-	// the viewer's zone and locale are what the browser was already resolving to.
-	// Only the server pass changes, and it changes from "a guess that is wrong
-	// for most of the planet" to "nothing".
+	// The POST-mount zone is the one the browser was already resolving to; the
+	// locale is `APP_LOCALE` (#708), so a Spanish browser reads AUG, not AGO.
+	// The server pass changes from "a guess that is wrong for most of the
+	// planet" to "nothing".
 	//
 	// Blank rather than a placeholder date, which is the other way to make the
 	// two passes agree. UTC is not neutral for an INSTANT the way it is for the
