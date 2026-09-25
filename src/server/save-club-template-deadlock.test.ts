@@ -44,8 +44,14 @@ describe("saveMeetingAgendaAsClubTemplate's deadlock translation", () => {
 		const { AGENDA_DEADLOCK_MESSAGE } = await import(
 			"./meeting-agenda-edit-logic"
 		);
-		const caught = await saveFailingWith(driverError("40P01"));
+		const { isDeadlock } = await import("./pg-errors");
+		const original = driverError("40P01");
+		const caught = await saveFailingWith(original);
 		expect((caught as Error).message).toBe(AGENDA_DEADLOCK_MESSAGE);
+		// The driver's error survives on `cause`, and the SQLSTATE walk still
+		// finds it through the translation.
+		expect((caught as Error).cause).toBe(original);
+		expect(isDeadlock(caught)).toBe(true);
 	});
 
 	it("leaves every other failure alone", async () => {

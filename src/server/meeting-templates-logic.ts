@@ -1368,13 +1368,24 @@ export async function saveMeetingAgendaAsClubTemplate(
 	try {
 		return await saveInTransaction(input, plan);
 	} catch (err) {
-		// The residual deadlock (#909 review 2), translated rather than
-		// restructured around: a replace that forks legacy pointers upgrades
-		// its FOR SHARE on the target to FOR UPDATE, and a conversion minting
-		// the same role key at that moment can close a cycle. Rare, and
-		// retryable — so the officer reads the same sentence a first-edit fork
-		// that loses a deadlock shows, never the driver's `Failed query: …`.
-		if (isDeadlock(err)) throw new Error(AGENDA_DEADLOCK_MESSAGE);
+		// Known deadlocks, translated rather than restructured around (the
+		// maintainer accepted the remaining lock-order risk):
+		//   (a) guest check-in, `captureGuestVisit`, locks club then meeting;
+		//       this save locks meeting then club;
+		//   (b) a replace forks legacy meetings AFTER taking the club lock, so
+		//       it can meet another save, or a ballot join, that already holds
+		//       one of those legacy meetings and is waiting on the club;
+		//   (c) the legacy fork's FOR SHARE on the target upgraded to FOR
+		//       UPDATE, while a conversion is waiting on a role key it minted.
+		// No single row-lock order satisfies both the ballot join (meeting,
+		// then club) and guest check-in (club, then meeting); that is tracked
+		// repo-wide in #925. All are rare and
+		// retryable, so the officer reads the sentence a first-edit fork that
+		// loses a deadlock shows, never the driver's `Failed query: …`. The
+		// original error rides on `cause`, so a SQLSTATE check still sees it.
+		if (isDeadlock(err)) {
+			throw new Error(AGENDA_DEADLOCK_MESSAGE, { cause: err });
+		}
 		throw err;
 	}
 }
