@@ -22,10 +22,32 @@ const SCENES = [
 const BANNED = ["streamline", "empower", "solution", "seamless", "leverage"];
 
 let fetchSpy: ReturnType<typeof vi.fn>;
+let xhrOpen: ReturnType<typeof vi.fn>;
+let beaconSpy: ReturnType<typeof vi.fn>;
+let socketSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
 	fetchSpy = vi.fn(() => Promise.reject(new Error("no network in a demo")));
 	vi.stubGlobal("fetch", fetchSpy);
+	xhrOpen = vi.fn();
+	vi.stubGlobal(
+		"XMLHttpRequest",
+		class {
+			open = xhrOpen;
+			send() {}
+			setRequestHeader() {}
+			addEventListener() {}
+		},
+	);
+	beaconSpy = vi.fn(() => true);
+	Object.defineProperty(navigator, "sendBeacon", {
+		value: beaconSpy,
+		configurable: true,
+		writable: true,
+	});
+	socketSpy = vi.fn();
+	vi.stubGlobal("WebSocket", socketSpy);
+	vi.stubGlobal("EventSource", socketSpy);
 	// Reduced motion, so the assistant demo shows both bubbles without an
 	// IntersectionObserver (jsdom has none).
 	vi.stubGlobal(
@@ -42,6 +64,8 @@ beforeEach(() => {
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
+	// Not a global stub, so unstubAllGlobals leaves it; jsdom has no native one.
+	Reflect.deleteProperty(navigator, "sendBeacon");
 });
 
 /** The route's `head` meta. It is synchronous here; the router's type allows a promise. */
@@ -93,6 +117,18 @@ describe("/tour", () => {
 		}
 	});
 
+	it("crops the agenda shot to its printed sheet, and leaves the present shot whole", async () => {
+		await renderTour();
+		const [agenda, present] = screen.getAllByRole("img");
+		const agendaClasses = agenda.className.split(/\s+/);
+		const presentClasses = present.className.split(/\s+/);
+		for (const c of ["aspect-[816/1000]", "object-cover", "object-left-top"]) {
+			expect(agendaClasses).toContain(c);
+			expect(presentClasses).not.toContain(c);
+		}
+		expect(presentClasses).toContain("h-auto");
+	});
+
 	it("closes with the pilot pricing line, the founder note and a /request-access link", async () => {
 		await renderTour();
 		expect(screen.getByText(PILOT_PRICING_LINE)).toBeTruthy();
@@ -130,6 +166,9 @@ describe("/tour", () => {
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Vote again" }));
 		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(xhrOpen).not.toHaveBeenCalled();
+		expect(beaconSpy).not.toHaveBeenCalled();
+		expect(socketSpy).not.toHaveBeenCalled();
 	});
 
 	it("contains none of the banned words", async () => {
