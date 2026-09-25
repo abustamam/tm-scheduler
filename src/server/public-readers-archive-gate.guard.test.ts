@@ -344,6 +344,8 @@ const REVIEWED_UNGATED: Record<string, string> = {
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	applyTemplateToMeeting:
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	saveAgendaAsClubTemplate:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#909)",
 	getAgendaDraft:
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	addAgendaRowFn:
