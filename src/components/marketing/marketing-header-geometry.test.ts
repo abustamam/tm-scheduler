@@ -69,6 +69,8 @@ function measureLinks(
 	const chrome = findChrome();
 	if (!chrome) throw new Error("No Chrome — set CHROME_PATH.");
 	const probe = `<script>
+		var frame = document.getElementById("frame");
+		var edge = frame.getBoundingClientRect().left;
 		var as = document.querySelectorAll("#${rootId} a");
 		// A flex item is blockified, so the element's own getClientRects() reports
 		// ONE box even when its label wraps inside it. A Range over its text
@@ -76,8 +78,8 @@ function measureLinks(
 		var max = 0, min = Infinity, wrapped = 0, rowTops = {};
 		as.forEach(function (a) {
 			var box = a.getBoundingClientRect();
-			max = Math.max(max, box.right);
-			min = Math.min(min, box.left);
+			max = Math.max(max, box.right - edge);
+			min = Math.min(min, box.left - edge);
 			rowTops[Math.round(box.top)] = 1;
 			var range = document.createRange();
 			range.selectNodeContents(a);
@@ -87,15 +89,21 @@ function measureLinks(
 			});
 			if (Object.keys(tops).length > 1) wrapped++;
 		});
-		document.title = "maxRight=" + Math.ceil(max) + ";minLeft=" + Math.floor(min) + ";rows=" + Object.keys(rowTops).length + ";viewport=" + window.innerWidth + ";links=" + as.length + ";wrapped=" + wrapped;
+		document.title = "maxRight=" + Math.ceil(max) + ";minLeft=" + Math.floor(min) + ";rows=" + Object.keys(rowTops).length + ";viewport=" + frame.clientWidth + ";links=" + as.length + ";wrapped=" + wrapped;
 	</script>`;
 	const dir = mkdtempSync(join(tmpdir(), "marketing-header-"));
 	try {
 		writeFileSync(join(dir, "app.css"), css, "utf8");
 		writeFileSync(
 			join(dir, "page.html"),
-			`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">` +
-				`<link rel="stylesheet" href="./app.css"></head><body>${bodyHtml}${probe}</body></html>`,
+			`<!doctype html><html><head><meta charset="utf-8">` +
+				`<link rel="stylesheet" href="./app.css"></head><body style="margin:0">` +
+				// The PHONE is this frame, not the window: Chrome clamps a headless
+				// window to a minimum width (500px on CI's google-chrome, where
+				// `--window-size=360,…` measured a 500px viewport), and a
+				// headless-shell build does not. Its `overflow-x: hidden` stands in
+				// for body's, which is what clips an overflowing link in the app.
+				`<div id="frame" style="width:${width}px;overflow-x:hidden">${bodyHtml}</div>${probe}</body></html>`,
 			"utf8",
 		);
 		const dom = execFileSync(
@@ -105,7 +113,9 @@ function measureLinks(
 				"--disable-gpu",
 				"--no-sandbox",
 				`--user-data-dir=${dir}`,
-				`--window-size=${width},700`,
+				// Above the clamp, below Tailwind's `sm` (640px): the `sm:` padding
+				// and margin must NOT apply, or this measures a tablet header.
+				"--window-size=600,700",
 				"--virtual-time-budget=3000",
 				"--host-resolver-rules=MAP * ~NOTFOUND",
 				"--dump-dom",
