@@ -508,8 +508,11 @@ export async function copyTemplateContent(
 	// silently drops every beat naming a role the old set does not declare. A
 	// replace takes this row FOR UPDATE before it swaps the content, so the two
 	// serialise: a copy sees the content wholly before the swap or wholly
-	// after. Every copier goes through here — conversion, the first-edit fork
-	// in `ensureAgendaDraft`, and `forkLegacyPointers`.
+	// after. Every copier goes through here: through `copyTemplateForMeeting`,
+	// conversion, the first-edit fork in `ensureAgendaDraft` and
+	// `forkLegacyPointers`; and directly, the club-template save's two copies
+	// into the club-owned row (a new template's content, and a replace's
+	// swap).
 	await conn
 		.select({ id: meetingTemplates.id })
 		.from(meetingTemplates)

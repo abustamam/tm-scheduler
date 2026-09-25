@@ -198,8 +198,13 @@ export type AgendaDraft = {
 	/**
 	 * The meeting's UUID (#909) — what "Save as club template" names as its
 	 * source. `loadAgendaDraft` always sets it; OPTIONAL only so the editor's
-	 * existing presentational fixtures, which predate it, still type-check. The
-	 * editor renders the save control only when it is present.
+	 * existing presentational fixtures, which predate it, still type-check.
+	 *
+	 * The editor OFFERS the save when this is present and `cancelled` below is
+	 * not true — so a completed (read-only) meeting offers it and a cancelled
+	 * one does not. That is a visibility rule, not the gate: the server fn
+	 * re-checks the officer role and the archive, and the save refuses a
+	 * cancelled meeting itself.
 	 */
 	meetingId?: string;
 	/**
