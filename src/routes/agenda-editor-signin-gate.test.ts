@@ -36,6 +36,11 @@ vi.mock("#/server/meeting-agenda-edit", () => ({
 	removeAgendaRowFn: vi.fn(),
 	updateAgendaRowFn: vi.fn(),
 }));
+// Same reason: the loader resolves the URL key through this module first
+// (#877), and it reaches `#/db` too.
+vi.mock("#/server/meeting-key", () => ({
+	resolveMeetingKeyForUser: vi.fn(),
+}));
 
 import { Route } from "./club.$clubId.meeting.$meetingId_.agenda";
 

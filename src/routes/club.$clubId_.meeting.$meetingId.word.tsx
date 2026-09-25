@@ -33,6 +33,7 @@ import {
 	SANS,
 } from "#/components/agenda/print-theme";
 import { WordOfTheDayPoster } from "#/components/agenda/word-of-the-day-poster";
+import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
@@ -71,6 +72,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/word")({
 		};
 	},
 	component: WordPoster,
+	notFoundComponent: WordNotFound,
 	// The <title> becomes the browser's default "Save as PDF" filename. The
 	// "word-of-the-day" artifact keeps the saved file from being mistaken for an
 	// agenda. loaderData is absent during the pending state → fallback.
@@ -205,3 +207,9 @@ const emptyWrapStyle: React.CSSProperties = {
 	textAlign: "center",
 	padding: 24,
 };
+
+/** A key naming no meeting (#877): the same page every meeting sub-route shows. */
+function WordNotFound() {
+	const { clubId } = Route.useParams();
+	return <MeetingNotFound clubId={clubId} />;
+}
