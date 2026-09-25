@@ -3,16 +3,14 @@
 // #708's acceptance: a server render and a client render under an `es-ES`
 // runtime produce identical text for a formatted date and a dues amount.
 //
-// The date half rides `pinIntlTo` from the shared harness. The currency half
-// needs `Intl.NumberFormat` pinned the same way, which the harness does not do,
-// so `pinNumberFormatTo` below is its sibling — a subclass for the same reason
-// `pinIntlTo` is one (Biome rewrites a function expression into an arrow, which
-// is not a constructor).
+// The date half rides `pinIntlTo` from the shared harness, the currency half
+// its sibling `pinNumberFormatTo`.
 import { afterEach, describe, expect, it } from "vitest";
 import { formatCents } from "#/lib/dues";
 import {
 	APP_LOCALE,
 	formatArchiveDate,
+	formatDayMonth,
 	formatMeetingDate,
 	formatMeetingTime,
 } from "#/lib/format";
@@ -20,23 +18,10 @@ import {
 	assortedIntlRuntimes,
 	hydrateAcrossRuntimes,
 	pinIntlTo,
+	pinNumberFormatTo,
 	restoreIntl,
 	serverMarkupAcross,
 } from "#/test/hydration-across-runtimes";
-
-const RealNumberFormat = Intl.NumberFormat;
-
-function pinNumberFormatTo(locale: string) {
-	class PinnedNumberFormat extends RealNumberFormat {
-		constructor(
-			locales?: Intl.LocalesArgument,
-			options?: Intl.NumberFormatOptions,
-		) {
-			super(locales ?? locale, options);
-		}
-	}
-	Intl.NumberFormat = PinnedNumberFormat as unknown as typeof Intl.NumberFormat;
-}
 
 function runtime(locale: string, timeZone: string) {
 	return () => {
@@ -47,10 +32,9 @@ function runtime(locale: string, timeZone: string) {
 
 afterEach(() => {
 	restoreIntl();
-	Intl.NumberFormat = RealNumberFormat;
 });
 
-/** Wed Aug 20 2026, 19:00 in Los Angeles — the day #708 was reported against. */
+/** Thu Aug 20 2026, 19:00 in Los Angeles (02:00 UTC on the 21st). */
 const AT = new Date(Date.UTC(2026, 7, 21, 2, 0, 0));
 const ZONE = "America/Los_Angeles";
 
@@ -62,6 +46,7 @@ function Row() {
 			<span>{formatMeetingTime(AT, ZONE)}</span>
 			<span>{formatArchiveDate(AT, ZONE)}</span>
 			<span>{formatCents(4500)}</span>
+			<span>{formatDayMonth(AT, ZONE).mon}</span>
 		</p>
 	);
 }
@@ -128,5 +113,19 @@ describe("date and currency formatters under a non-English runtime (#708)", () =
 		expect(APP_LOCALE).toBe("en-US");
 		expect(formatMeetingDate(AT, ZONE)).toBe("Thu, Aug 20");
 		expect(formatCents(4500)).toBe("$45.00");
+		// The badge lines the dashboard and member profile share: AUG, not AGO.
+		expect(formatDayMonth(AT, ZONE)).toEqual({ day: "20", mon: "AUG" });
+	});
+
+	it("restoreIntl undoes the NumberFormat pin as well as the DateTimeFormat one", () => {
+		// Otherwise a pinned es-ES would leak into whichever suite runs next in
+		// this worker, and a test there would pass or fail on file order.
+		const realNumber = Intl.NumberFormat;
+		const realDate = Intl.DateTimeFormat;
+		runtime("es-ES", "UTC")();
+		expect(Intl.NumberFormat).not.toBe(realNumber);
+		restoreIntl();
+		expect(Intl.NumberFormat).toBe(realNumber);
+		expect(Intl.DateTimeFormat).toBe(realDate);
 	});
 });

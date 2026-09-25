@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { APP_LOCALE } from "#/lib/format";
+import { formatDayMonth } from "#/lib/format";
 
 /**
  * The date stamp on a dashboard speech-log row (#608).
  *
  * Same defect as the greeting beside it, ~90 lines down the same route and
- * missed on the first pass. `dayMon` called `new Intl.DateTimeFormat(undefined,
- * …)` during render, and BOTH of those arguments resolve against the runtime:
+ * missed on the first pass. `dayMon` (now `formatDayMonth` in `#/lib/format`)
+ * called `new Intl.DateTimeFormat(undefined, …)` during render, and BOTH of
+ * those arguments resolve against the runtime:
  *
  *   - the timezone, so a Los Angeles member's 19:00 Aug 20 speech printed
  *     `21 AUG` in the UTC container and `20 AUG` in their browser;
@@ -16,21 +17,6 @@ import { APP_LOCALE } from "#/lib/format";
  * Both were measured, and either one alone is enough to make React throw the
  * server markup away.
  */
-
-/**
- * Day-of-month and short month, in the RUNTIME's zone and `APP_LOCALE`. The
- * zone is still the viewer's (post-mount only, below); the locale is pinned
- * app-wide since #708.
- */
-function dayMon(value: Date | string) {
-	const d = new Date(value);
-	return {
-		day: new Intl.DateTimeFormat(APP_LOCALE, { day: "numeric" }).format(d),
-		mon: new Intl.DateTimeFormat(APP_LOCALE, { month: "short" })
-			.format(d)
-			.toUpperCase(),
-	};
-}
 
 /**
  * The box the date sits in, empty. Non-breaking spaces rather than empty
@@ -66,7 +52,7 @@ export function SpeechLogDate({ value }: { value: Date | string }) {
 	// logged" by making the data silently wrong, which is worse than the bug.
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
-	const parts = mounted ? dayMon(value) : null;
+	const parts = mounted ? formatDayMonth(value) : null;
 
 	return (
 		<div className="text-center leading-[1.1]">
