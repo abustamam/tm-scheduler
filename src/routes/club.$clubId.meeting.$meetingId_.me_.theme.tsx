@@ -43,10 +43,11 @@
 // rename-proof `role_definitions.key`. Nothing here grants anything; the form's
 // visibility is an affordance, re-decided server-side on every request.
 import { useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { PersonalThemeEditor } from "#/components/club/personal-meeting-editors";
+import { MeetingNotFound } from "#/components/meeting-not-found";
 import { Button } from "#/components/ui/button";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { useEffectiveMember } from "#/lib/member-identity";
@@ -146,21 +147,5 @@ function NeedsIdentity({ onPick }: { onPick: () => void }) {
 
 function DutyNotFound() {
 	const { clubId } = Route.useParams();
-	return (
-		<div className="mx-auto w-full max-w-reading space-y-4 p-4 pb-10 text-center">
-			<p className="font-semibold text-lg">Meeting not found</p>
-			<p className="text-muted-foreground text-sm">
-				This meeting doesn't exist for this club, or the link is out of date.
-			</p>
-			<Button asChild variant="outline">
-				<Link
-					to="/club/$clubId"
-					params={{ clubId }}
-					search={{ view: "roles", count: 8 }}
-				>
-					Back to meetings
-				</Link>
-			</Button>
-		</div>
-	);
+	return <MeetingNotFound clubId={clubId} />;
 }

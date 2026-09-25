@@ -1,10 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-	createFileRoute,
-	Link,
-	notFound,
-	useRouter,
-} from "@tanstack/react-router";
+import { createFileRoute, notFound, useRouter } from "@tanstack/react-router";
 import {
 	CalendarDays,
 	ClipboardList,
@@ -39,6 +34,7 @@ import { MeetingToolbar } from "#/components/club/meeting-toolbar";
 import { OpenActionItems } from "#/components/club/open-action-items";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
 import { VoteCounterPanel } from "#/components/club/vote-counter-panel";
+import { MeetingNotFound } from "#/components/meeting-not-found";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -244,28 +240,12 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		};
 	},
 	component: MeetingView,
-	notFoundComponent: MeetingNotFound,
+	notFoundComponent: MeetingRouteNotFound,
 });
 
-function MeetingNotFound() {
+function MeetingRouteNotFound() {
 	const { clubId } = Route.useParams();
-	return (
-		<div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
-			<p className="font-semibold text-lg">Meeting not found</p>
-			<p className="text-muted-foreground text-sm">
-				This meeting doesn't exist for this club, or the link is out of date.
-			</p>
-			<Button asChild variant="outline">
-				<Link
-					to="/club/$clubId"
-					params={{ clubId }}
-					search={{ view: "roles", count: 8 }}
-				>
-					Back to meetings
-				</Link>
-			</Button>
-		</div>
-	);
+	return <MeetingNotFound clubId={clubId} />;
 }
 
 /**
