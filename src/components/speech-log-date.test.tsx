@@ -153,10 +153,12 @@ describe("SpeechLogDate hydration (#608)", () => {
 		expect(container.textContent).toBe("20AUG");
 	});
 
-	it("follows the viewer's locale once mounted", () => {
+	// #708 pinned the locale app-wide: the zone is still the viewer's, the
+	// month's spelling is `APP_LOCALE`'s, so a Spanish browser reads AUG.
+	it("renders in APP_LOCALE once mounted, whatever the browser's locale", () => {
 		pinIntlTo("es-ES", "America/Los_Angeles");
 		const { container } = render(<SpeechLogDate value={SPEECH_AT} />);
-		expect(container.textContent).toBe("20AGO");
+		expect(container.textContent).toBe("20AUG");
 	});
 
 	it("accepts the ISO string the loader actually serializes", () => {
