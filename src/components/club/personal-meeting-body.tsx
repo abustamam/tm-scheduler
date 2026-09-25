@@ -380,6 +380,7 @@ export function PersonalMeetingBody({
 											const done = duty.done({
 												theme: view.meeting.theme,
 												wordOfTheDay: view.meeting.wordOfTheDay,
+												tableTopicsNotes: view.meeting.tableTopicsNotes,
 												// Per-SLOT, never per-member: a member can hold two
 												// speaker slots and one title must not tick both.
 												speechTitle: role.speechTitle,

@@ -184,12 +184,35 @@ describe("MeetingPresent", () => {
 					timing: "1–2 minutes per speaker",
 					word: "Momentum",
 					definition: "impetus gained by a moving object",
+					notes: [],
 				},
 			],
 		});
 
 		expect(screen.getByText("Word of the Day: “Momentum”")).toBeTruthy();
 		expect(screen.getByText("impetus gained by a moving object")).toBeTruthy();
+	});
+
+	it("projects the Table Topics notes one line per element (#880)", () => {
+		renderPresent({
+			deck: [
+				{
+					kind: "tableTopics",
+					master: "Rasheed",
+					timing: "1–2 minutes per speaker",
+					word: null,
+					definition: null,
+					notes: ["1. 🏆 THE COMEBACK", "", "Tell us your story."],
+				},
+			],
+		});
+		const first = screen.getByText("1. 🏆 THE COMEBACK");
+		const second = screen.getByText("Tell us your story.");
+		// Separate elements, so the typed line break survives rendering, with the
+		// gap line between them as an empty spacer.
+		expect(first).not.toBe(second);
+		expect(first.nextElementSibling?.textContent).toBe("");
+		expect(first.nextElementSibling?.nextElementSibling).toBe(second);
 	});
 
 	it("shows the Toastmasters non-affiliation disclaimer in the content-slide footer", () => {

@@ -37,7 +37,26 @@ export type MeetingForDeck = {
 	wodDefinition: string | null;
 	wodExample: string | null;
 	reminders: string | null;
+	/** The Table Topics Master's free-text notes (#880). */
+	tableTopicsNotes: string | null;
 };
+
+/**
+ * The Table Topics notes as the lines the slide shows (#880): line breaks kept,
+ * each line's trailing space trimmed, blank lines at either end dropped, and a
+ * run of blank lines inside collapsed to one (`""`, rendered as a gap). Blank or
+ * whitespace-only notes give `[]`, which is what leaves the slide as it was.
+ */
+export function tableTopicsNoteLines(text: string | null): string[] {
+	const lines: string[] = [];
+	for (const raw of (text ?? "").split(/\r?\n/)) {
+		const line = raw.trim();
+		if (line) lines.push(line);
+		else if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+	}
+	if (lines[lines.length - 1] === "") lines.pop();
+	return lines;
+}
 
 /** The club fields the deck needs. */
 export type ClubForDeck = {
@@ -236,6 +255,9 @@ export type Slide =
 			 *  opening `toastmasterIntro` — which is the segment that asks the room
 			 *  to use it. */
 			definition: string | null;
+			/** The meeting's Table Topics notes, one entry per line, `""` for a gap
+			 *  (#880) — see `tableTopicsNoteLines`. Empty when none are set. */
+			notes: string[];
 	  }
 	| ({ kind: "voteTableTopics" } & VoteTiming)
 	| {
@@ -720,6 +742,7 @@ export function buildSlideDeck({
 			// use, so a whitespace-only field is blank everywhere.
 			word: wodWord,
 			definition: wodWord ? wodDefinition : null,
+			notes: tableTopicsNoteLines(meeting.tableTopicsNotes),
 		});
 		deck.push({
 			kind: "voteTableTopics",

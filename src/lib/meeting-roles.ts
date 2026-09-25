@@ -1,3 +1,9 @@
+import { TABLE_TOPICS_ROLE_KEY } from "./table-topics-limits";
+
+// Re-exported so the duty registry, which may import only this module and
+// `speech-title` (`role-duties.test.ts` holds that), can name the key (#880).
+export { TABLE_TOPICS_ROLE_KEY };
+
 /**
  * `role_definitions.key` for the three roles that carry a CAPABILITY: the
  * Toastmaster of the Day runs the meeting (self-serve agenda editing, ADR-0010),
@@ -96,6 +102,10 @@ const VOTE_COUNTER_CANONICAL_NAMES = ["vote counter"];
  *  the name this app ships, so a role called that was invented by a club and
  *  has a NULL key for that reason, which is population 1 above. */
 const TIMER_CANONICAL_NAMES = ["timer"];
+/** The seed's name (`role-template.ts`), exactly. It is NOT a TMOD name: the TMOD
+ *  fallback is an exact match too, so "Table Topics Master" can never read as
+ *  "Toastmaster". */
+const TABLE_TOPICS_MASTER_CANONICAL_NAMES = ["table topics master"];
 
 const matchesCanonical = (names: string[], name: string): boolean =>
 	names.includes(name.trim().toLowerCase());
@@ -139,6 +149,10 @@ export function isGrammarianRoleName(name: string): boolean {
  */
 export function isTimerRoleName(name: string): boolean {
 	return matchesCanonical(TIMER_CANONICAL_NAMES, name);
+}
+
+export function isTableTopicsMasterRoleName(name: string): boolean {
+	return matchesCanonical(TABLE_TOPICS_MASTER_CANONICAL_NAMES, name);
 }
 
 /**
@@ -239,24 +253,51 @@ export function findTimerSlot<T extends RoleIdentity>(
 }
 
 /**
+ * The meeting's Table Topics Master slot, or undefined (#880). A capability
+ * role: its holder may edit the meeting's Table Topics notes, and nothing else.
+ * Key first, then the exact canonical name, as the other three.
+ */
+export function findTableTopicsMasterSlot<T extends RoleIdentity>(
+	slots: T[],
+): T | undefined {
+	return findCapabilityRole(
+		slots,
+		TABLE_TOPICS_ROLE_KEY,
+		TABLE_TOPICS_MASTER_CANONICAL_NAMES,
+	);
+}
+
+/**
  * The current member's role flags for a meeting, from its slots. All `false`
  * when `memberId` is null (no identity holds a role). Shared by both meeting
- * surfaces so the TMOD/Grammarian/Vote Counter derivation can't drift between
- * them.
+ * surfaces so the TMOD/Grammarian/Vote Counter/Table Topics Master derivation
+ * can't drift between them.
  */
 export function deriveMeetingRoleFlags(
 	slots: (RoleIdentity & { assigneeId: string | null })[],
 	memberId: string | null,
-): { isTmod: boolean; isGrammarian: boolean; isVoteCounter: boolean } {
+): {
+	isTmod: boolean;
+	isGrammarian: boolean;
+	isVoteCounter: boolean;
+	isTableTopicsMaster: boolean;
+} {
 	if (memberId === null)
-		return { isTmod: false, isGrammarian: false, isVoteCounter: false };
+		return {
+			isTmod: false,
+			isGrammarian: false,
+			isVoteCounter: false,
+			isTableTopicsMaster: false,
+		};
 	const tmod = findTmodSlot(slots)?.assigneeId ?? null;
 	const gram = findGrammarianSlot(slots)?.assigneeId ?? null;
 	const vote = findVoteCounterSlot(slots)?.assigneeId ?? null;
+	const ttm = findTableTopicsMasterSlot(slots)?.assigneeId ?? null;
 	return {
 		isTmod: memberId === tmod,
 		isGrammarian: memberId === gram,
 		isVoteCounter: memberId === vote,
+		isTableTopicsMaster: memberId === ttm,
 	};
 }
 

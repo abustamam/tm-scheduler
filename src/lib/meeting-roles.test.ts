@@ -252,6 +252,7 @@ describe("deriveMeetingRoleFlags", () => {
 			isTmod: true,
 			isGrammarian: false,
 			isVoteCounter: false,
+			isTableTopicsMaster: false,
 		});
 	});
 
@@ -260,6 +261,7 @@ describe("deriveMeetingRoleFlags", () => {
 			isTmod: false,
 			isGrammarian: true,
 			isVoteCounter: false,
+			isTableTopicsMaster: false,
 		});
 	});
 
@@ -268,6 +270,7 @@ describe("deriveMeetingRoleFlags", () => {
 			isTmod: false,
 			isGrammarian: false,
 			isVoteCounter: false,
+			isTableTopicsMaster: false,
 		});
 	});
 
@@ -276,7 +279,47 @@ describe("deriveMeetingRoleFlags", () => {
 			isTmod: false,
 			isGrammarian: false,
 			isVoteCounter: false,
+			isTableTopicsMaster: false,
 		});
+	});
+});
+
+describe("deriveMeetingRoleFlags — Table Topics Master (#880)", () => {
+	it("flags the holder by key, whatever the club calls the role", () => {
+		const slots = [
+			{
+				roleName: "Topicsmaster",
+				roleKey: "table_topics_master",
+				assigneeId: "t",
+			},
+			{ roleName: "Toastmaster of the Day", assigneeId: "m" },
+		];
+		expect(deriveMeetingRoleFlags(slots, "t")).toMatchObject({
+			isTableTopicsMaster: true,
+			isTmod: false,
+		});
+		expect(deriveMeetingRoleFlags(slots, "m").isTableTopicsMaster).toBe(false);
+	});
+
+	it("falls back to the exact canonical name only for a NULL key", () => {
+		const flag = (roleName: string, roleKey: string | null = null) =>
+			deriveMeetingRoleFlags([{ roleName, roleKey, assigneeId: "c" }], "c")
+				.isTableTopicsMaster;
+		expect(flag("Table Topics Master")).toBe(true);
+		expect(flag("  table topics master ")).toBe(true);
+		expect(flag("Table Topics Master Assistant")).toBe(false);
+		expect(flag("Table Topics")).toBe(false);
+		// A keyed row is its key, never its name.
+		expect(flag("Table Topics Master", "club_invented")).toBe(false);
+	});
+
+	it("never reads a Table Topics Master as the Toastmaster", () => {
+		expect(
+			deriveMeetingRoleFlags(
+				[{ roleName: "Table Topics Master", assigneeId: "c" }],
+				"c",
+			).isTmod,
+		).toBe(false);
 	});
 });
 
@@ -295,11 +338,13 @@ describe("capability roles are identified by key, not by name (#464)", () => {
 			isTmod: true,
 			isGrammarian: false,
 			isVoteCounter: false,
+			isTableTopicsMaster: false,
 		});
 		expect(deriveMeetingRoleFlags(renamed, "b")).toEqual({
 			isTmod: false,
 			isGrammarian: true,
 			isVoteCounter: false,
+			isTableTopicsMaster: false,
 		});
 	});
 
@@ -322,12 +367,22 @@ describe("capability roles are identified by key, not by name (#464)", () => {
 		]) {
 			expect(
 				deriveMeetingRoleFlags([{ roleName, roleKey, assigneeId: "c" }], "c"),
-			).toEqual({ isTmod: false, isGrammarian: false, isVoteCounter: false });
+			).toEqual({
+				isTmod: false,
+				isGrammarian: false,
+				isVoteCounter: false,
+				isTableTopicsMaster: false,
+			});
 		}
 		for (const roleName of ["Grammarian Assistant", "Grammarian Trainee"]) {
 			expect(
 				deriveMeetingRoleFlags([{ roleName, roleKey, assigneeId: "c" }], "c"),
-			).toEqual({ isTmod: false, isGrammarian: false, isVoteCounter: false });
+			).toEqual({
+				isTmod: false,
+				isGrammarian: false,
+				isVoteCounter: false,
+				isTableTopicsMaster: false,
+			});
 		}
 	});
 

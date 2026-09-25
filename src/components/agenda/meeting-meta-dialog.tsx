@@ -287,6 +287,19 @@ export function MeetingMetaDialog({
 						/>
 					</div>
 					<div className="space-y-2">
+						<Label htmlFor="tableTopicsNotes">Table Topics notes</Label>
+						<Textarea
+							id="tableTopicsNotes"
+							name="tableTopicsNotes"
+							rows={4}
+							defaultValue={meeting.tableTopicsNotes ?? ""}
+						/>
+						<p className="text-xs text-muted-foreground">
+							Topic categories or prompts, shown on the Table Topics slide. Line
+							breaks and emoji are kept.
+						</p>
+					</div>
+					<div className="space-y-2">
 						<Label htmlFor="reminders">Announcements</Label>
 						<Textarea
 							id="reminders"

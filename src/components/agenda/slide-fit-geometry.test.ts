@@ -43,9 +43,9 @@ const PRE_FIX_SCALE = Math.min(
 	BOX.clientHeight / BODY.height,
 );
 
-function box(id: string, scale: number): string {
+function box(id: string, scale: number, bodyHeight = BODY.height): string {
 	return `<div id="${id}" style="box-sizing:border-box;width:${BOX.clientWidth}px;height:${BOX.clientHeight}px;padding:${BOX.paddingTop}px ${BOX.paddingRight}px ${BOX.paddingBottom}px ${BOX.paddingLeft}px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;margin-bottom:40px">
-	<div class="inner" style="width:100%;transform:scale(${scale})"><div style="height:${BODY.height}px"></div></div>
+	<div class="inner" style="width:100%;transform:scale(${scale})"><div style="height:${bodyHeight}px"></div></div>
 </div>`;
 }
 
@@ -155,6 +155,32 @@ describe.skipIf(!hasChrome)(
 			expect(control.bottomGap).toBeLessThan(-10);
 
 			// Half a pixel of tolerance for sub-pixel rounding of the transform.
+			expect(fixed.bottomGap).toBeGreaterThanOrEqual(-0.5);
+			expect(fixed.topGap).toBeGreaterThanOrEqual(-0.5);
+		});
+
+		// #880. The Table Topics notes are the one body a member types into at any
+		// length: up to `MEETING_LIMITS.tableTopicsNotes` characters, which at a
+		// short line apiece is ~60 lines of `text-[3cqw] leading-snug` (≈53px at
+		// this width) under the four bullets — several times the frame. It must
+		// still land inside the box, not behind the footer, and the control shows
+		// the old padding-box scale would not have held it.
+		it("keeps a maximal Table Topics notes body inside the box (#880)", () => {
+			const height = 60 * 53 + BODY.height;
+			const scale = fitScale(BOX, { width: BODY.width, height });
+			const control = Math.min(
+				1,
+				BOX.clientWidth / BODY.width,
+				BOX.clientHeight / height,
+			);
+			const [fixed, pre] = measure(
+				["notes", "notes-control"],
+				box("notes", scale, height) + box("notes-control", control, height),
+			);
+			if (!fixed || !pre) throw new Error("missing measurement");
+			expect(fixed.naturalHeight).toBe(height);
+			expect(scale).toBeLessThan(0.3);
+			expect(pre.bottomGap).toBeLessThan(-10);
 			expect(fixed.bottomGap).toBeGreaterThanOrEqual(-0.5);
 			expect(fixed.topGap).toBeGreaterThanOrEqual(-0.5);
 		});

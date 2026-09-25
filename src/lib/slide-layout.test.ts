@@ -421,6 +421,7 @@ describe("slideLayout bodies", () => {
 					timing: "1–2 minutes per speaker",
 					word: null,
 					definition: null,
+					notes: [],
 				},
 				voteTableTopics: {
 					kind: "voteTableTopics",
@@ -1192,6 +1193,7 @@ describe("slideLayout bodies", () => {
 				timing: "1–2 minutes per speaker",
 				word: "Momentum",
 				definition: "impetus gained by a moving object",
+				notes: [],
 			},
 			null,
 		);
@@ -1216,6 +1218,7 @@ describe("slideLayout bodies", () => {
 				timing: "1–2 minutes per speaker",
 				word: "Momentum",
 				definition: null,
+				notes: [],
 			},
 			null,
 		);
@@ -1231,6 +1234,7 @@ describe("slideLayout bodies", () => {
 				timing: "1–2 minutes per speaker",
 				word: null,
 				definition: null,
+				notes: [],
 			},
 			null,
 		);
@@ -1241,6 +1245,30 @@ describe("slideLayout bodies", () => {
 				"Speaker time: 1–2 minutes per speaker",
 			]);
 			expect(none.body.note).toBeNull();
+			expect(none.body.detail).toEqual([]);
+		} else throw new Error("expected bullets");
+	});
+
+	it("table topics carries the master's notes under the bullets (#880)", () => {
+		const base = {
+			kind: "tableTopics",
+			master: "Rasheed",
+			timing: "1–2 minutes per speaker",
+			word: "Momentum",
+			definition: "impetus gained by a moving object",
+		} as const;
+		const notes = ["1. 🏆 THE COMEBACK", "Tell us your story.", "", "2. NEXT"];
+		const withNotes = slideLayout({ ...base, notes }, null);
+		const without = slideLayout({ ...base, notes: [] }, null);
+		if (
+			withNotes.chrome === "content" &&
+			withNotes.body.form === "bullets" &&
+			without.chrome === "content" &&
+			without.body.form === "bullets"
+		) {
+			expect(withNotes.body.detail).toEqual(notes);
+			// The notes are ADDED; nothing the slide said before moves.
+			expect({ ...withNotes.body, detail: [] }).toEqual(without.body);
 		} else throw new Error("expected bullets");
 	});
 

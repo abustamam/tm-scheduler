@@ -20,6 +20,7 @@ import {
 } from "#/lib/meeting-lifecycle";
 import {
 	findGrammarianSlot,
+	findTableTopicsMasterSlot,
 	findTmodSlot,
 	findVoteCounterSlot,
 } from "#/lib/meeting-roles";
@@ -363,6 +364,7 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 	tmodMemberId: string | null;
 	grammarianMemberId: string | null;
 	voteCounterMemberId: string | null;
+	tableTopicsMasterMemberId: string | null;
 }> {
 	const slotRows = await db
 		.select({
@@ -389,6 +391,8 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 		grammarianMemberId: findGrammarianSlot(slotRows)?.assignedMemberId ?? null,
 		voteCounterMemberId:
 			findVoteCounterSlot(slotRows)?.assignedMemberId ?? null,
+		tableTopicsMasterMemberId:
+			findTableTopicsMasterSlot(slotRows)?.assignedMemberId ?? null,
 	};
 }
 
@@ -584,6 +588,82 @@ export async function resolveWordOfTheDayAuthz(
 		grammarianMemberId,
 		actorMemberId: null,
 	};
+}
+
+export interface TableTopicsNotesAuthz {
+	clubId: string;
+	allowed: boolean;
+	/** Which path granted access (null when denied). */
+	via: "admin" | "tmod-self-assert" | "table-topics-master-self-assert" | null;
+	/** The member to credit in `activity_log` (#396) — see `MeetingAgendaAuthz`. */
+	actorMemberId: string | null;
+}
+
+/**
+ * Decide whether a caller may edit a meeting's Table Topics notes (#880) — the
+ * same narrow shape as `resolveWordOfTheDayAuthz`, with the Table Topics Master
+ * in the Grammarian's place. Allowed for a club `admin` (session), OR the
+ * self-asserted holder of the meeting's TMOD slot (who may already edit every
+ * meeting-meta field), OR the self-asserted holder of its Table Topics Master
+ * slot, who gains this one column and nothing else. An unassigned slot grants
+ * nothing. Throws when the meeting does not exist, its club is archived, or it
+ * is locked.
+ */
+export async function resolveTableTopicsNotesAuthz(
+	input: MeetingAgendaAuthzInput,
+): Promise<TableTopicsNotesAuthz> {
+	const meeting = await db.query.meetings.findFirst({
+		where: eq(meetings.id, input.meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+	const clubId = meeting.clubId;
+	// Same order as the WOD resolver: archive gate, then the lock, before the
+	// admin arm can return.
+	await assertMeetingClubNotArchived(clubId);
+	assertMeetingNotLocked(meeting.status);
+	const { tmodMemberId, tableTopicsMasterMemberId } =
+		await loadRoleSlotAssignees(input.meetingId);
+
+	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
+	if (admin.granted) {
+		return {
+			clubId,
+			allowed: true,
+			via: "admin",
+			actorMemberId: admin.memberId,
+		};
+	}
+	const session = sessionOf(input.sessionUserId, admin.membershipIds);
+
+	const tmod = resolveSelfAssertGrant({
+		selfMemberId: input.selfMemberId,
+		slotMemberId: tmodMemberId,
+		session,
+	});
+	if (tmod.granted) {
+		return {
+			clubId,
+			allowed: true,
+			via: "tmod-self-assert",
+			actorMemberId: tmod.actorMemberId,
+		};
+	}
+
+	const ttm = resolveSelfAssertGrant({
+		selfMemberId: input.selfMemberId,
+		slotMemberId: tableTopicsMasterMemberId,
+		session,
+	});
+	if (ttm.granted) {
+		return {
+			clubId,
+			allowed: true,
+			via: "table-topics-master-self-assert",
+			actorMemberId: ttm.actorMemberId,
+		};
+	}
+
+	return { clubId, allowed: false, via: null, actorMemberId: null };
 }
 
 export interface VoteCounterAuthz {
