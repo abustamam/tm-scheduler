@@ -11,6 +11,7 @@ import { requireClubAdminView, requireUser } from "./guards";
 import {
 	loadAttendanceLapse,
 	loadEvaluatorPairings,
+	loadLevelProximity,
 	loadOverdueMembers,
 	loadSpeakerRotation,
 } from "./reporting-logic";
@@ -73,4 +74,17 @@ export const getEvaluatorPairings = createServerFn({ method: "GET" })
 		const user = await requireUser();
 		await requireClubAdminView(user.id, data.clubId);
 		return loadEvaluatorPairings(data.clubId);
+	});
+
+/**
+ * "Close to a level" (#898) — members one or two projects from a Pathways
+ * level, and levels waiting on Base Camp approval. Admin-gated like its
+ * neighbours: it is roster-wide progress, officer information.
+ */
+export const getLevelProximity = createServerFn({ method: "GET" })
+	.validator((input: unknown) => clubScoped.parse(input))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubAdminView(user.id, data.clubId);
+		return loadLevelProximity(data.clubId);
 	});

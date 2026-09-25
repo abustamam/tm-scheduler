@@ -34,6 +34,7 @@ describe("VPE reporting fn authz gating (#530)", () => {
 		"getOverdueMembers",
 		"getAttendanceLapse",
 		"getEvaluatorPairings",
+		"getLevelProximity",
 	]) {
 		it(`${fn} requires a signed-in user`, () => {
 			expect(handlerBody(fn)).toMatch(/await\s+requireUser\(/);
@@ -61,7 +62,7 @@ describe("VPE reporting fn authz gating (#530)", () => {
 		const exports = [
 			...src.matchAll(/export const (\w+) = createServerFn/g),
 		].map((m) => m[1]);
-		expect(exports.length).toBeGreaterThanOrEqual(4);
+		expect(exports.length).toBeGreaterThanOrEqual(5);
 		for (const name of exports) {
 			expect(handlerBody(name)).toContain("requireClubAdminView(");
 		}
