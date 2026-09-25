@@ -556,7 +556,7 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 | Debug | `/investigate`. It is the debugging skill here and satisfies superpowers' systematic-debugging gate. |
 | Open a PR | `gh pr create`. The agent stops there. |
 | Review a PR | `/review-pr N` from the main session. gstack `/review` in the PR's worktree **as well** for a risk category (below). |
-| Land | `gh pr merge --squash --auto`. Needs the repo's **Allow auto-merge** setting ON — see below. Branch protection requires the branch to be up to date with `main`, so after each PR lands run `gh pr update-branch N` on the rest; CI re-runs and auto-merge fires when green. |
+| Land | `gh pr merge --squash --auto`. Needs the repo's **Allow auto-merge** setting ON — see below. Branch protection requires the branch to be up to date with `main`; `.github/workflows/update-armed-prs.yml` updates every armed PR that falls behind after each landing, CI re-runs and auto-merge fires when green. It needs the `UPDATE_BRANCH_TOKEN` secret — see below. A PR it reports as conflicting still needs a hand merge. |
 | Verify a wave | `/qa-only` against the deployed app, once per wave after it has all landed, before the next meeting. A finding becomes an issue only if it passes "What earns an issue", and it is `needs-triage` until the maintainer says otherwise. |
 | See what shipped | `/retro` (gstack), and the two health greps in `docs/agents/issue-tracker.md` alongside it. `/session-retro` is the other one: what in the agent's environment made a session harder than it needed to be. |
 | Park debt | Don't. Inside the diff, fix it; outside it, the three-way rule under "What earns an issue". `TODOS/` takes no new files. |
@@ -573,7 +573,8 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 - **A wave agent never merges its own PR.** Merging happens from the main session, after
   `/review-pr`. A wave PR is green against the `main` that existed when its CI ran, so branch
   protection requires the branch to be up to date before it merges (`strict: true`, set
-  2026-09-05): after each PR lands, `gh pr update-branch N` on the others and let CI re-run.
+  2026-09-05): after each PR lands, the others have to be updated and CI re-run on them. That
+  was a manual `gh pr update-branch N` per PR until the workflow below took it over.
   Before this, `/ship` merged `main` into the branch before testing and nothing else checked.
   A merge queue would do the updating unattended, and it was the first choice, but GitHub offers
   it only on organization-owned repositories and this one is user-owned (the rulesets API
@@ -591,7 +592,23 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
   discipline, and `enforce_admins` is `false` here, so a manual `gh pr merge --squash` from an
   admin account can land a PR whose required checks are still pending or failing.
   It does NOT update a stale branch — that is the merge queue's job, which is why
-  `gh pr update-branch` stays a manual step per landing.
+  `gh pr update-branch` was a manual step per landing until `update-armed-prs.yml`.
+- **`update-armed-prs.yml` updates armed PRs, and it needs a PAT or it does nothing.** On every
+  push to `main`, on `auto_merge_enabled`, and on `workflow_dispatch`, it lists open PRs into
+  `main` with auto-merge armed (forks excluded), and calls the `update-branch` endpoint (a merge,
+  never a rebase) on each one `compare` says is behind. A conflict is logged as a warning and the
+  loop moves on; any other failure fails the run. It runs with the **`UPDATE_BRANCH_TOKEN`**
+  repository secret and `permissions: {}`, never `GITHUB_TOKEN`, because a push made with
+  `GITHUB_TOKEN` triggers no workflow: the branch would move, the old CI result would stop
+  counting, no new `ci.yml` run would start, and auto-merge would wait forever with every
+  indicator saying "pending". With the secret missing or rejected the job fails with an error
+  that names it, before touching a branch — a red run on `main` is the only symptom, so do not
+  "fix" it by falling back to `GITHUB_TOKEN`. The secret is a fine-grained PAT, resource owner
+  `abustamam`, repository access limited to `tm-scheduler`, with **Contents**, **Pull requests**
+  and **Workflows** set to Read and write (Workflows because merging a `main` that changed a file
+  under `.github/workflows/` into a branch is refused without it). A PAT expires; when it does,
+  the run goes red with "UPDATE_BRANCH_TOKEN was rejected" and the fix is a new token in the same
+  secret. The updates are attributed to the token's owner.
 - **Do not pass `--delete-branch`.** `delete_branch_on_merge` is already true on the repo, so
   the remote branch goes on merge; the flag's remaining job is deleting the LOCAL branch, which
   fails while it is checked out in a worktree. Remove the worktree, then the branch.

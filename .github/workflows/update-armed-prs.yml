@@ -1,0 +1,128 @@
+# Keeps every PR with auto-merge ARMED up to date with main.
+#
+# Why this exists: branch protection on main is `strict: true`, so a PR must contain main's
+# tip before it may merge. Auto-merge does not update a branch, and the merge queue that would
+# is offered only on organization-owned repos (this one is user-owned). Without this, every
+# landing leaves the other armed PRs BEHIND and someone has to `gh pr update-branch N` each one
+# by hand. See CLAUDE.md, "Pull requests".
+#
+# Why it needs its own token: a push made with the default GITHUB_TOKEN does NOT trigger other
+# workflows. Updating a branch with it would move the head, invalidate the old CI result, and
+# never start a new one, so auto-merge would wait forever on a check that is never coming. The
+# update therefore runs with UPDATE_BRANCH_TOKEN (a fine-grained PAT, see the setup step in
+# CLAUDE.md), whose push fires `pull_request: synchronize` and so `ci.yml`. With no secret the
+# job FAILS before touching any branch rather than silently falling back to GITHUB_TOKEN.
+#
+# Safe under pull_request_target: nothing is checked out and no PR-controlled text reaches a
+# shell. The only inputs are numbers and SHAs from the API, passed through env.
+
+name: Update armed PRs
+
+on:
+  push:
+    branches: [main]
+  # Arming auto-merge on a PR that is already behind would otherwise wait for the next push
+  # to main before anything updated it.
+  pull_request_target:
+    types: [auto_merge_enabled]
+    branches: [main]
+  workflow_dispatch:
+
+# One run at a time. A run started by a newer push waits and then sees the newer main, so
+# nothing is lost by not cancelling the in-flight one half-way through its loop.
+concurrency:
+  group: update-armed-prs
+  cancel-in-progress: false
+
+# GITHUB_TOKEN is not used for anything: every call goes through UPDATE_BRANCH_TOKEN, because
+# a write made with GITHUB_TOKEN is the one that would not trigger CI.
+permissions: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.UPDATE_BRANCH_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Require UPDATE_BRANCH_TOKEN
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error title=UPDATE_BRANCH_TOKEN is not set::Armed PRs were NOT updated. A branch updated with the default GITHUB_TOKEN never triggers ci.yml, so auto-merge would stall on it forever. Create a fine-grained PAT for ${REPO} with Contents, Pull requests and Workflows set to Read and write, and save it as the repository secret UPDATE_BRANCH_TOKEN. See CLAUDE.md, 'Pull requests'."
+            exit 1
+          fi
+          if ! gh api "repos/${REPO}" --jq .full_name > /dev/null; then
+            echo "::error title=UPDATE_BRANCH_TOKEN was rejected::The token could not read ${REPO}. It has probably expired or lost access to this repository; regenerate it and update the secret."
+            exit 1
+          fi
+
+      - name: Update armed PRs that are behind main
+        run: |
+          set -uo pipefail
+
+          # Open PRs into main with auto-merge armed, from this repository (not a fork).
+          # Updating a fork's branch writes to someone else's repository; leave those alone.
+          prs=$(gh pr list --repo "$REPO" --base main --state open --limit 100 \
+            --json number,headRefOid,autoMergeRequest,isCrossRepository \
+            --jq '.[] | select(.autoMergeRequest != null and .isCrossRepository == false) | "\(.number) \(.headRefOid)"') || {
+            echo "::error::Could not list pull requests."
+            exit 1
+          }
+
+          if [ -z "$prs" ]; then
+            echo "No armed PRs."
+            exit 0
+          fi
+
+          updated=0
+          current=0
+          conflicted=0
+          failed=0
+
+          while read -r number head; do
+            # behind_by: commits on main that the PR's head does not contain.
+            if ! behind=$(gh api "repos/${REPO}/compare/main...${head}" --jq .behind_by); then
+              echo "::warning::#${number}: could not compare against main; skipped."
+              failed=$((failed + 1))
+              continue
+            fi
+            if [ "$behind" = "0" ]; then
+              echo "#${number}: up to date."
+              current=$((current + 1))
+              continue
+            fi
+
+            # Merge (the endpoint's only method; never rebase). expected_head_sha makes the
+            # call refuse if someone pushed to the branch since it was listed.
+            if out=$(gh api -X PUT "repos/${REPO}/pulls/${number}/update-branch" \
+              -f expected_head_sha="$head" 2>&1); then
+              echo "#${number}: was ${behind} behind; update requested."
+              updated=$((updated + 1))
+            elif printf '%s' "$out" | grep -qi 'conflict'; then
+              # A conflict needs a human; it must not stop the rest of the loop or fail the run.
+              echo "::warning::#${number}: merge conflict with main, needs a manual merge. ${out}"
+              conflicted=$((conflicted + 1))
+            elif printf '%s' "$out" | grep -qi 'expected head sha'; then
+              # Someone pushed to it mid-run; that push already started CI on the new head.
+              echo "#${number}: head moved since it was listed; skipped."
+              current=$((current + 1))
+            else
+              echo "::warning::#${number}: update-branch failed. ${out}"
+              failed=$((failed + 1))
+            fi
+          done <<< "$prs"
+
+          {
+            echo "### Armed PRs"
+            echo "- updated: ${updated}"
+            echo "- already up to date: ${current}"
+            echo "- merge conflict (needs a human): ${conflicted}"
+            echo "- other failures: ${failed}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # A conflict is an expected state of a PR, not a broken workflow. Anything else
+          # (a token without the right permission, an API error) fails the run so it is seen.
+          if [ "$failed" -gt 0 ]; then
+            exit 1
+          fi
