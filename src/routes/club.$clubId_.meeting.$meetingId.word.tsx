@@ -25,6 +25,7 @@
 //
 // Offline works for free: `isOfflineRoute` in public/sw.js matches
 // /^\/club\/[^/]+\/meeting\//, which this path already satisfies.
+
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import {
 	PrintButton,
@@ -37,6 +38,7 @@ import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { APP_LOCALE } from "#/lib/format";
 import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
@@ -150,7 +152,7 @@ function WordPoster() {
 		);
 	}
 
-	const dateLong = new Intl.DateTimeFormat(undefined, {
+	const dateLong = new Intl.DateTimeFormat(APP_LOCALE, {
 		weekday: "long",
 		month: "long",
 		day: "numeric",

@@ -1,4 +1,5 @@
 // src/routes/club.$clubId_.meeting.$meetingId.print.tsx
+
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
@@ -28,6 +29,7 @@ import { buildTimeline } from "#/lib/agenda-timing";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { ballotUrlFor } from "#/lib/digital-voting";
+import { APP_LOCALE } from "#/lib/format";
 import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
@@ -116,7 +118,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 /** "6:45 – 7:45 PM": drop the meridiem from the start when it matches the end's. */
 function timeRange(startsAt: Date, endsAt: Date, timeZone: string): string {
 	const fmt = (d: Date) =>
-		new Intl.DateTimeFormat(undefined, {
+		new Intl.DateTimeFormat(APP_LOCALE, {
 			hour: "numeric",
 			minute: "2-digit",
 			timeZone,
@@ -198,14 +200,14 @@ function PrintAgenda() {
 	const startsAt = new Date(meeting.scheduledAt);
 	const endsAt = new Date(startsAt.getTime() + flex.projectedMinutes * 60_000);
 
-	const dateLong = new Intl.DateTimeFormat(undefined, {
+	const dateLong = new Intl.DateTimeFormat(APP_LOCALE, {
 		weekday: "long",
 		month: "long",
 		day: "numeric",
 		year: "numeric",
 		timeZone: timezone,
 	}).format(startsAt);
-	const dateShort = new Intl.DateTimeFormat(undefined, {
+	const dateShort = new Intl.DateTimeFormat(APP_LOCALE, {
 		weekday: "short",
 		month: "short",
 		day: "numeric",

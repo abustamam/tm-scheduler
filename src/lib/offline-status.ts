@@ -1,5 +1,7 @@
 /** Pure helpers for the offline "available offline / last saved" indicator. */
 
+import { APP_LOCALE } from "#/lib/format";
+
 const OFFLINE_VISIT_PREFIX = "gavelup-offline-visit:";
 
 /** localStorage key holding the last time `id` was loaded while online. */
@@ -21,7 +23,7 @@ export function relativeTime(ts: number, now: number): string {
 	const hours = Math.floor(minutes / 60);
 	if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
 
-	return new Date(ts).toLocaleDateString(undefined, {
+	return new Date(ts).toLocaleDateString(APP_LOCALE, {
 		month: "short",
 		day: "numeric",
 	});

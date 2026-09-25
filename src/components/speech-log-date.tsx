@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
+import { formatDayMonth } from "#/lib/format";
 
 /**
  * The date stamp on a dashboard speech-log row (#608).
  *
  * Same defect as the greeting beside it, ~90 lines down the same route and
- * missed on the first pass. `dayMon` called `new Intl.DateTimeFormat(undefined,
- * …)` during render, and BOTH of those arguments resolve against the runtime:
+ * missed on the first pass. `dayMon` (now `formatDayMonth` in `#/lib/format`)
+ * called `new Intl.DateTimeFormat(undefined, …)` during render, and BOTH of
+ * those arguments resolve against the runtime:
  *
  *   - the timezone, so a Los Angeles member's 19:00 Aug 20 speech printed
  *     `21 AUG` in the UTC container and `20 AUG` in their browser;
@@ -15,17 +17,6 @@ import { useEffect, useState } from "react";
  * Both were measured, and either one alone is enough to make React throw the
  * server markup away.
  */
-
-/** Day-of-month and short month, in the RUNTIME's zone and locale. */
-function dayMon(value: Date | string) {
-	const d = new Date(value);
-	return {
-		day: new Intl.DateTimeFormat(undefined, { day: "numeric" }).format(d),
-		mon: new Intl.DateTimeFormat(undefined, { month: "short" })
-			.format(d)
-			.toUpperCase(),
-	};
-}
 
 /**
  * The box the date sits in, empty. Non-breaking spaces rather than empty
@@ -38,12 +29,12 @@ export function SpeechLogDate({ value }: { value: Date | string }) {
 	// Same pre-mount guard as `DashboardGreeting`. The server pass and every
 	// first client render see `mounted === false`, so both emit the empty box and
 	// hydration has nothing to reconcile; the effect then fills it in from the
-	// viewer's own runtime.
+	// viewer's own runtime zone.
 	//
-	// The POST-mount output is byte-identical to what this route shipped before:
-	// the viewer's zone and locale are what the browser was already resolving to.
-	// Only the server pass changes, and it changes from "a guess that is wrong
-	// for most of the planet" to "nothing".
+	// The POST-mount zone is the one the browser was already resolving to; the
+	// locale is `APP_LOCALE` (#708), so a Spanish browser reads AUG, not AGO.
+	// The server pass changes from "a guess that is wrong for most of the
+	// planet" to "nothing".
 	//
 	// Blank rather than a placeholder date, which is the other way to make the
 	// two passes agree. UTC is not neutral for an INSTANT the way it is for the
@@ -61,7 +52,7 @@ export function SpeechLogDate({ value }: { value: Date | string }) {
 	// logged" by making the data silently wrong, which is worse than the bug.
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
-	const parts = mounted ? dayMon(value) : null;
+	const parts = mounted ? formatDayMonth(value) : null;
 
 	return (
 		<div className="text-center leading-[1.1]">
