@@ -581,7 +581,9 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 	});
 
 	describe("the club lock", () => {
-		it("refuses an archived club inside the save, and writes nothing", async () => {
+		it("refuses a club that was already archived, and writes nothing", async () => {
+			// Says only THAT an archived club is refused and nothing is written.
+			// WHERE the gate runs — under the club lock — is the next test's job.
 			await testDb
 				.update(clubs)
 				.set({ archivedAt: new Date() })
@@ -593,30 +595,68 @@ describe.skipIf(!hasTestDb)("saveMeetingAgendaAsClubTemplate", () => {
 				.select({ id: meetingTemplates.id })
 				.from(meetingTemplates)
 				.where(eq(meetingTemplates.clubId, club.clubId));
-			// Not even the never-opened meeting's materialised copy: the gate runs
-			// before it.
+			// Not even the never-opened meeting's materialised copy.
 			expect(owned).toEqual([]);
 			expect(await savedRows()).toEqual([]);
 		});
 
-		it("does not wait behind another writer's foreign-key lock on the club", async () => {
-			// Any insert referencing the club (a slot, an activity row, another
-			// meeting's materialised copy) holds KEY SHARE on the club row until
-			// it commits. A save taking FOR UPDATE on that row queued behind every
+		it("sees an archive that commits while it waits on the club lock", async () => {
+			// The gate is UNDER the lock, so it reads the row as it is once the
+			// lock is granted. An archiving UPDATE holds the club row until it
+			// commits; the save parks on its NO KEY UPDATE, then re-reads the row
+			// and refuses. A gate read without the lock would see the club live
+			// (the archive is uncommitted) and save.
+			const archiver = await openBlockingTx(async (tx) => {
+				await tx
+					.update(clubs)
+					.set({ archivedAt: new Date() })
+					.where(eq(clubs.id, club.clubId));
+			});
+			const saving = saveNew(club.meetingId, "Contest night");
+			saving.catch(() => {});
+			try {
+				await waitForLockWait("for no key update", archiver.pid);
+			} finally {
+				await archiver.commit();
+			}
+			await expect(saving).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+			const owned = await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(
+					and(
+						eq(meetingTemplates.clubId, club.clubId),
+						isNull(meetingTemplates.meetingId),
+					),
+				);
+			expect(owned).toEqual([]);
+			expect(await savedRows()).toEqual([]);
+		});
+
+		it("takes its club locks at a strength a foreign-key lock does not block", async () => {
+			// A test of lock STRENGTH, not of whether a lock is taken. Any insert
+			// referencing the club (a slot, an activity row, another save's
+			// materialised copy) holds KEY SHARE on the club row until it
+			// commits. A save taking FOR UPDATE on that row queued behind every
 			// such writer, and two saves each holding KEY SHARE from their own
-			// materialise deadlocked. NO KEY UPDATE does not conflict with it.
+			// materialise deadlocked. NO KEY UPDATE does not conflict with it, so
+			// the save completes with the KEY SHARE still held.
 			const blocker = await openBlockingTx(async (tx) => {
 				await tx.execute(
 					sql`select id from clubs where id = ${club.clubId} for key share`,
 				);
 			});
+			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				const outcome = await Promise.race([
 					saveNew(club.meetingId, "Contest night").then(() => "saved"),
-					new Promise((r) => setTimeout(() => r("blocked"), 4000)),
+					new Promise((r) => {
+						timer = setTimeout(() => r("blocked"), 4000);
+					}),
 				]);
 				expect(outcome).toBe("saved");
 			} finally {
+				clearTimeout(timer);
 				await blocker.commit();
 			}
 		});

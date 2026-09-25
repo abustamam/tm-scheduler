@@ -1230,10 +1230,12 @@ export const CLUB_TEMPLATE_KEY_RACE_MESSAGE =
  * Reads under `FOR NO KEY UPDATE` on the CLUB row, so two officers saving
  * "Contest night" at the same moment serialise here and the second one sees
  * the first one's key. Must run inside the caller's transaction or the lock is
- * released before the insert it exists to protect. A caller that has written
- * anything referencing the club earlier in its transaction must take this lock
- * FIRST itself (see `saveMeetingAgendaAsClubTemplate`): the lock here is then a
- * no-op re-acquire, and taking it late is a deadlock against a second saver. Scoped to `meeting_id IS NULL` —
+ * released before the insert it exists to protect. The STRENGTH is what keeps
+ * two savers from deadlocking, not where it is taken: a caller that already
+ * wrote a row referencing the club holds KEY SHARE on it, and NO KEY UPDATE
+ * does not conflict with KEY SHARE, so it never waits on another saver's. (The
+ * save takes this same lock earlier, for its archive gate; here it is then a
+ * re-entrant no-op.) Scoped to `meeting_id IS NULL` —
  * exactly the rows `meeting_templates_club_key_unique` covers; a private copy
  * keeping its source's key is not a collision.
  *
