@@ -76,6 +76,34 @@ describe("csvCell injection guard", () => {
 		expect(csvCell('=HYPERLINK("x","y")')).toBe(`"'=HYPERLINK(""x"",""y"")"`);
 	});
 
+	// Excel with an East Asian input locale reads the full-width operators as
+	// the ASCII ones. Written as escapes so the source shows which code point
+	// each case is.
+	it.each([
+		["\uFF1DSUM(A1)", "full-width ="],
+		["\uFF0B1", "full-width +"],
+		["\uFF0D1", "full-width -"],
+		["\uFF20SUM(A1)", "full-width @"],
+		[" \uFF1D1", "full-width = after a space"],
+	])("prefixes %s (%s)", (v) => {
+		expect(csvCell(v)).toBe(`'${v}`);
+	});
+
+	it("prefixes a cell that starts with a bare tab or CR, whatever follows", () => {
+		expect(csvCell("\tplain")).toBe("'\tplain");
+		expect(csvCell("\rplain")).toBe(`"'\rplain"`);
+	});
+
+	it("leaves a plain decimal number bare, negative ones included", () => {
+		expect(csvCell("-5.00")).toBe("-5.00");
+		expect(csvCell("60.50")).toBe("60.50");
+		expect(csvCell("-5")).toBe("-5");
+		// Not a plain number, so still guarded.
+		expect(csvCell("-5+1")).toBe("'-5+1");
+		expect(csvCell("+14155550100")).toBe("'+14155550100");
+		expect(csvCell("-5.00 ")).toBe("'-5.00 ");
+	});
+
 	it("leaves a cell with a trigger character later on alone", () => {
 		expect(csvCell("a=b")).toBe("a=b");
 		expect(csvCell("jane@example.com")).toBe("jane@example.com");

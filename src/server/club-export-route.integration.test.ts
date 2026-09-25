@@ -43,9 +43,18 @@ vi.mock("#/lib/auth", () => ({
 	},
 }));
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+// `requireClubRole` stays REAL (it delegates to the original); wrapping it only
+// lets one test make it fail the way a dropped connection would.
+vi.mock("#/server/guards", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("#/server/guards")>();
+	return { ...actual, requireClubRole: vi.fn(actual.requireClubRole) };
+});
 
 const { Route } = await import("#/routes/api/clubs.$clubId.export.zip");
-const { CLUB_EXPORT_FILENAMES } = await import("./club-export-logic");
+const { beginClubExport, CLUB_EXPORT_FILENAMES } = await import(
+	"./club-export-logic"
+);
+const { requireClubRole } = await import("#/server/guards");
 
 type Get = (input: { params: { clubId: string } }) => Promise<Response>;
 const GET = (
@@ -138,6 +147,48 @@ describe.skipIf(!hasTestDb)("GET /api/clubs/$clubId/export/zip (#915)", () => {
 	it("404s an unknown or malformed club id", async () => {
 		expect((await download(randomUUID(), club.adminUserId)).status).toBe(404);
 		expect((await download("not-a-uuid", club.adminUserId)).status).toBe(404);
+	});
+
+	it("429s a second export of the same club while one is running, then serves again", async () => {
+		const release = beginClubExport(club.clubId);
+		expect(release).not.toBeNull();
+		try {
+			const res = await download(club.clubId, club.adminUserId);
+			expect(res.status).toBe(429);
+			expect(await res.text()).toMatch(/already being prepared/);
+			// Another club is unaffected.
+			const other_ = await download(other.clubId, other.adminUserId);
+			expect(other_.status).toBe(200);
+		} finally {
+			release?.();
+		}
+		expect((await download(club.clubId, club.adminUserId)).status).toBe(200);
+		// And the slot was released after that success, too.
+		const again = beginClubExport(club.clubId);
+		expect(again).not.toBeNull();
+		again?.();
+	});
+
+	it("releases the slot when the request is refused, so a 403 does not lock the club", async () => {
+		expect((await download(club.clubId, club.memberUserId)).status).toBe(403);
+		const slot = beginClubExport(club.clubId);
+		expect(slot).not.toBeNull();
+		slot?.();
+	});
+
+	it("lets a non-authorization failure propagate instead of answering 403", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.mocked(requireClubRole).mockRejectedValueOnce(
+			new Error("Connection terminated unexpectedly"),
+		);
+		try {
+			await expect(download(club.clubId, club.adminUserId)).rejects.toThrow(
+				"Connection terminated unexpectedly",
+			);
+			expect(error).toHaveBeenCalled();
+		} finally {
+			error.mockRestore();
+		}
 	});
 
 	it("serves the zip to an elected officer whose stored role is member", async () => {

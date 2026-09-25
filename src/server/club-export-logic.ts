@@ -77,13 +77,17 @@ import {
 import { cap } from "#/lib/cap";
 import { type CsvColumn, toCsv } from "#/lib/csv";
 import { utcToZonedWallTime } from "#/lib/datetime";
+import { centsToInput } from "#/lib/dues";
 
 /** A cell value before serialisation. */
 export type ExportCell = string | number | null;
 
+/** One of {@link CLUB_EXPORT_FILENAMES}; a misspelt name is a type error. */
+export type ClubExportFilename = (typeof CLUB_EXPORT_FILENAMES)[number];
+
 /** One CSV file in the export: its name, its header order, and its rows. */
 export interface ExportFile {
-	filename: string;
+	filename: ClubExportFilename;
 	columns: readonly string[];
 	rows: Record<string, ExportCell>[];
 }
@@ -166,12 +170,30 @@ export function isoWithOffset(d: Date | null, timeZone: string): string | null {
 	return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}${sign}${hh}:${mm}`;
 }
 
-/** Integer cents → `12.50`. GavelUp stores no currency, so no symbol either. */
+/**
+ * Integer cents → `12.50`, via the dues page's own `centsToInput`. GavelUp
+ * stores no currency, so no symbol either. Null stays null (an empty cell).
+ */
 export function centsToDecimal(cents: number | null): string | null {
-	if (cents === null) return null;
-	const sign = cents < 0 ? "-" : "";
-	const abs = Math.abs(cents);
-	return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
+	return cents === null ? null : centsToInput(cents);
+}
+
+/**
+ * `YYYY-MM-DD` of a CALENDAR-DATE column. `members.joined_at` and
+ * `dues_periods.due_date` hold a date, stored as UTC midnight; reading one
+ * through the club's zone would move every date a day EARLIER for a club west
+ * of UTC (midnight UTC on the 15th is the evening of the 14th in Chicago).
+ */
+export function utcDate(d: Date | null): string | null {
+	return d ? d.toISOString().slice(0, 10) : null;
+}
+
+/** Names, locale-aware, with a missing name (an open slot) last. */
+function compareNames(a: string | null, b: string | null): number {
+	if (a === b) return 0;
+	if (a === null) return 1;
+	if (b === null) return -1;
+	return a.localeCompare(b);
 }
 
 /** Sort by a date-ish key (nulls last), then by a name, locale-aware. */
@@ -187,16 +209,44 @@ function byDateThenName<T>(
 			if (db_ === null) return -1;
 			return da < db_ ? -1 : 1;
 		}
-		return (name(a) ?? "").localeCompare(name(b) ?? "");
+		return compareNames(name(a), name(b));
 	};
 }
 
 function file(
-	filename: string,
+	filename: ClubExportFilename,
 	columns: readonly string[],
 	rows: Record<string, ExportCell>[],
 ): ExportFile {
 	return { filename, columns, rows };
+}
+
+// ---------------------------------------------------------------------------
+// One export per club at a time
+// ---------------------------------------------------------------------------
+
+/** Clubs with an export being built right now, in THIS process. */
+const exportsInFlight = new Set<string>();
+
+/**
+ * Claim the club's export slot. Returns the release function, or null when an
+ * export of this club is already running — the route answers that with 429.
+ *
+ * An export reads every table the club has and holds a connection for the
+ * whole time; a double-click, or a script hammering the URL, would otherwise
+ * stack those up until the pool is gone. In-process on purpose: this app is one
+ * Node server (ADR-0007), so a module-level set is the whole deployment. Always
+ * release in a `finally`.
+ */
+export function beginClubExport(clubId: string): (() => void) | null {
+	if (exportsInFlight.has(clubId)) return null;
+	exportsInFlight.add(clubId);
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		exportsInFlight.delete(clubId);
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -210,26 +260,315 @@ function file(
 export async function loadClubExport(
 	clubId: string,
 ): Promise<ClubExport | null> {
-	const [club] = await db
-		.select({
-			id: clubs.id,
-			name: clubs.name,
-			slug: clubs.slug,
-			timezone: clubs.timezone,
-		})
-		.from(clubs)
-		.where(eq(clubs.id, clubId))
-		.limit(1);
-	if (!club) return null;
-	const tz = club.timezone;
-
 	/** A member of THIS club (see the tenant boundary above). */
 	const memberOfClub = (col: AnyColumn) =>
 		and(eq(members.id, col), eq(members.clubId, clubId));
 	const guestOfClub = (col: AnyColumn) =>
 		and(eq(guests.id, col), eq(guests.clubId, clubId));
 
-	const [
+	// ONE connection, ONE snapshot. Thirteen reads in a `Promise.all` would
+	// check out up to thirteen connections from a pool of ten for a single
+	// request, starving every other request while an export ran; sequential
+	// awaits inside one transaction hold exactly one. REPEATABLE READ makes the
+	// files agree with each other (a slot never names a member the members file
+	// lacks because a write landed between two reads), and READ ONLY states
+	// that nothing here writes.
+	const loaded = await db.transaction(
+		async (tx) => {
+			const [club] = await tx
+				.select({
+					id: clubs.id,
+					name: clubs.name,
+					slug: clubs.slug,
+					timezone: clubs.timezone,
+				})
+				.from(clubs)
+				.where(eq(clubs.id, clubId))
+				.limit(1);
+			if (!club) return null;
+			const memberRows = await tx
+				.select({
+					id: members.id,
+					name: members.name,
+					preferredName: members.preferredName,
+					email: members.email,
+					phone: members.phone,
+					status: members.status,
+					clubRole: members.clubRole,
+					joinedAt: members.joinedAt,
+					customerId: people.customerId,
+				})
+				.from(members)
+				.innerJoin(people, eq(people.id, members.personId))
+				.where(eq(members.clubId, clubId));
+			const termRows = await tx
+				.select({
+					memberId: members.id,
+					name: members.name,
+					position: officerTerms.position,
+					termStart: officerTerms.termStart,
+					termEnd: officerTerms.termEnd,
+				})
+				.from(officerTerms)
+				.innerJoin(members, eq(members.id, officerTerms.membershipId))
+				.where(eq(members.clubId, clubId));
+			const meetingRows = await tx
+				.select({
+					id: meetings.id,
+					scheduledAt: meetings.scheduledAt,
+					status: meetings.status,
+					theme: meetings.theme,
+					wordOfTheDay: meetings.wordOfTheDay,
+					location: meetings.location,
+				})
+				.from(meetings)
+				.where(eq(meetings.clubId, clubId));
+			const slotRows = await tx
+				.select({
+					meetingId: meetings.id,
+					scheduledAt: meetings.scheduledAt,
+					role: roleDefinitions.name,
+					slotIndex: roleSlots.slotIndex,
+					status: roleSlots.status,
+					memberId: members.id,
+					memberName: members.name,
+					guestId: guests.id,
+					guestName: guests.name,
+				})
+				.from(roleSlots)
+				.innerJoin(
+					meetings,
+					and(
+						eq(meetings.id, roleSlots.meetingId),
+						eq(meetings.clubId, clubId),
+					),
+				)
+				// The role definition must be THIS club's too: the FK does not carry
+				// the club, so a slot pointing at another club's definition would
+				// otherwise export that club's role name.
+				.innerJoin(
+					roleDefinitions,
+					and(
+						eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+						eq(roleDefinitions.clubId, clubId),
+					),
+				)
+				.leftJoin(members, memberOfClub(roleSlots.assignedMemberId))
+				.leftJoin(guests, guestOfClub(roleSlots.assignedGuestId));
+			const attendanceRows = await tx
+				.select({
+					meetingId: meetings.id,
+					scheduledAt: meetings.scheduledAt,
+					status: meetingAttendance.status,
+					memberId: members.id,
+					memberName: members.name,
+					guestId: guests.id,
+					guestName: guests.name,
+				})
+				.from(meetingAttendance)
+				.innerJoin(
+					meetings,
+					and(
+						eq(meetings.id, meetingAttendance.meetingId),
+						eq(meetings.clubId, clubId),
+					),
+				)
+				.leftJoin(members, memberOfClub(meetingAttendance.memberId))
+				.leftJoin(guests, guestOfClub(meetingAttendance.guestId));
+			const speechRows = await tx
+				.select({
+					meetingId: meetings.id,
+					scheduledAt: meetings.scheduledAt,
+					speaker: members.name,
+					title: speeches.title,
+					pathwayPath: speeches.pathwayPath,
+					projectName: speeches.projectName,
+					projectLevel: speeches.projectLevel,
+				})
+				.from(roleSlots)
+				.innerJoin(
+					meetings,
+					and(
+						eq(meetings.id, roleSlots.meetingId),
+						eq(meetings.clubId, clubId),
+					),
+				)
+				.innerJoin(speeches, eq(speeches.id, roleSlots.speechId))
+				// A speech is PERSON-owned (ADR-0009), so a slot in this club's
+				// meeting can point at a speech whose owner has no membership here.
+				// The owner must be this club's member, and the speaker is named
+				// from that membership, like every other file, never from `people`.
+				.innerJoin(
+					members,
+					and(
+						eq(members.personId, speeches.personId),
+						eq(members.clubId, clubId),
+					),
+				);
+			const enrollmentRows = await tx
+				.select({
+					memberId: members.id,
+					name: members.name,
+					path: pathwaysPaths.name,
+					archivedAt: pathEnrollments.archivedAt,
+					// The highest level TI has approved as complete. A per-enrollment
+					// aggregate, grouped below; not a correlated subquery.
+					currentLevel: max(
+						sql<number>`case when ${pathLevelProgress.approved} then ${pathLevelProgress.level} end`,
+					),
+				})
+				.from(pathEnrollments)
+				.innerJoin(
+					members,
+					and(
+						eq(members.personId, pathEnrollments.personId),
+						eq(members.clubId, clubId),
+					),
+				)
+				.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathEnrollments.pathId))
+				.leftJoin(
+					pathLevelProgress,
+					eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
+				)
+				.groupBy(
+					pathEnrollments.id,
+					members.id,
+					members.name,
+					pathwaysPaths.name,
+					pathEnrollments.archivedAt,
+				);
+			const guestRows = await tx
+				.select({
+					id: guests.id,
+					name: guests.name,
+					email: guests.email,
+					phone: guests.phone,
+					stage: guests.stage,
+				})
+				.from(guests)
+				.where(eq(guests.clubId, clubId));
+			// Visits: a guest's `meeting_attendance` rows at this club's meetings.
+			// There is no visits table (#915's Current State).
+			const visitRows = await tx
+				.select({
+					guestId: meetingAttendance.guestId,
+					visits: count(),
+					firstVisit: min(meetings.scheduledAt),
+				})
+				.from(meetingAttendance)
+				.innerJoin(
+					meetings,
+					and(
+						eq(meetings.id, meetingAttendance.meetingId),
+						eq(meetings.clubId, clubId),
+					),
+				)
+				// A visit is a PRESENT record. An absent or excused row is a guest
+				// who was expected and did not come.
+				.where(
+					and(
+						isNotNull(meetingAttendance.guestId),
+						eq(meetingAttendance.status, "present"),
+					),
+				)
+				.groupBy(meetingAttendance.guestId);
+			const awardRows = await tx
+				.select({
+					meetingId: meetings.id,
+					scheduledAt: meetings.scheduledAt,
+					category: meetingAwards.category,
+					memberName: members.name,
+					guestName: guests.name,
+					writeInName: meetingAwards.writeInName,
+				})
+				.from(meetingAwards)
+				.innerJoin(
+					meetings,
+					and(
+						eq(meetings.id, meetingAwards.meetingId),
+						eq(meetings.clubId, clubId),
+					),
+				)
+				.leftJoin(members, memberOfClub(meetingAwards.memberId))
+				.leftJoin(guests, guestOfClub(meetingAwards.guestId));
+			// Member × period, the grid the Treasurer's dues page shows: every ACTIVE
+			// member for every period (no row = unpaid, `dues-logic.ts`), plus any
+			// inactive member who does have a recorded payment or waiver.
+			const duesRows = await tx
+				.select({
+					period: duesPeriods.label,
+					dueDate: duesPeriods.dueDate,
+					memberId: members.id,
+					name: members.name,
+					status: memberDues.status,
+					amountCents: memberDues.amountCents,
+				})
+				.from(duesPeriods)
+				.innerJoin(members, eq(members.clubId, duesPeriods.clubId))
+				.leftJoin(
+					memberDues,
+					and(
+						eq(memberDues.membershipId, members.id),
+						eq(memberDues.duesPeriodId, duesPeriods.id),
+					),
+				)
+				.where(
+					and(
+						eq(duesPeriods.clubId, clubId),
+						or(eq(members.status, "active"), isNotNull(memberDues.id)),
+					),
+				);
+			const actionRows = await tx
+				.select({
+					createdAt: clubActionItems.createdAt,
+					text: clubActionItems.text,
+					owner: members.name,
+					resolution: clubActionItems.resolution,
+					dueDate: clubActionItems.dueDate,
+				})
+				.from(clubActionItems)
+				.leftJoin(members, memberOfClub(clubActionItems.ownerMemberId))
+				.where(eq(clubActionItems.clubId, clubId));
+			const topicRows = await tx
+				.select({
+					meetingId: meetings.id,
+					scheduledAt: meetings.scheduledAt,
+					memberName: members.name,
+					guestName: guests.name,
+					topic: tableTopicsSpeakers.topic,
+				})
+				.from(tableTopicsSpeakers)
+				.innerJoin(
+					meetings,
+					and(
+						eq(meetings.id, tableTopicsSpeakers.meetingId),
+						eq(meetings.clubId, clubId),
+					),
+				)
+				.leftJoin(members, memberOfClub(tableTopicsSpeakers.memberId))
+				.leftJoin(guests, guestOfClub(tableTopicsSpeakers.guestId));
+			return {
+				club,
+				memberRows,
+				termRows,
+				meetingRows,
+				slotRows,
+				attendanceRows,
+				speechRows,
+				enrollmentRows,
+				guestRows,
+				visitRows,
+				awardRows,
+				duesRows,
+				actionRows,
+				topicRows,
+			};
+		},
+		{ isolationLevel: "repeatable read", accessMode: "read only" },
+	);
+	if (!loaded) return null;
+	const {
+		club,
 		memberRows,
 		termRows,
 		meetingRows,
@@ -243,240 +582,8 @@ export async function loadClubExport(
 		duesRows,
 		actionRows,
 		topicRows,
-	] = await Promise.all([
-		db
-			.select({
-				id: members.id,
-				name: members.name,
-				preferredName: members.preferredName,
-				email: members.email,
-				phone: members.phone,
-				status: members.status,
-				clubRole: members.clubRole,
-				joinedAt: members.joinedAt,
-				customerId: people.customerId,
-			})
-			.from(members)
-			.innerJoin(people, eq(people.id, members.personId))
-			.where(eq(members.clubId, clubId)),
-		db
-			.select({
-				memberId: members.id,
-				name: members.name,
-				position: officerTerms.position,
-				termStart: officerTerms.termStart,
-				termEnd: officerTerms.termEnd,
-			})
-			.from(officerTerms)
-			.innerJoin(members, eq(members.id, officerTerms.membershipId))
-			.where(eq(members.clubId, clubId)),
-		db
-			.select({
-				id: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				status: meetings.status,
-				theme: meetings.theme,
-				wordOfTheDay: meetings.wordOfTheDay,
-				location: meetings.location,
-			})
-			.from(meetings)
-			.where(eq(meetings.clubId, clubId)),
-		db
-			.select({
-				meetingId: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				role: roleDefinitions.name,
-				slotIndex: roleSlots.slotIndex,
-				status: roleSlots.status,
-				memberId: members.id,
-				memberName: members.name,
-				guestId: guests.id,
-				guestName: guests.name,
-			})
-			.from(roleSlots)
-			.innerJoin(
-				meetings,
-				and(eq(meetings.id, roleSlots.meetingId), eq(meetings.clubId, clubId)),
-			)
-			.innerJoin(
-				roleDefinitions,
-				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-			)
-			.leftJoin(members, memberOfClub(roleSlots.assignedMemberId))
-			.leftJoin(guests, guestOfClub(roleSlots.assignedGuestId)),
-		db
-			.select({
-				meetingId: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				status: meetingAttendance.status,
-				memberId: members.id,
-				memberName: members.name,
-				guestId: guests.id,
-				guestName: guests.name,
-			})
-			.from(meetingAttendance)
-			.innerJoin(
-				meetings,
-				and(
-					eq(meetings.id, meetingAttendance.meetingId),
-					eq(meetings.clubId, clubId),
-				),
-			)
-			.leftJoin(members, memberOfClub(meetingAttendance.memberId))
-			.leftJoin(guests, guestOfClub(meetingAttendance.guestId)),
-		db
-			.select({
-				meetingId: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				speaker: people.name,
-				title: speeches.title,
-				pathwayPath: speeches.pathwayPath,
-				projectName: speeches.projectName,
-				projectLevel: speeches.projectLevel,
-			})
-			.from(roleSlots)
-			.innerJoin(
-				meetings,
-				and(eq(meetings.id, roleSlots.meetingId), eq(meetings.clubId, clubId)),
-			)
-			.innerJoin(speeches, eq(speeches.id, roleSlots.speechId))
-			.innerJoin(people, eq(people.id, speeches.personId)),
-		db
-			.select({
-				memberId: members.id,
-				name: members.name,
-				path: pathwaysPaths.name,
-				archivedAt: pathEnrollments.archivedAt,
-				// The highest level TI has approved as complete. A per-enrollment
-				// aggregate, grouped below; not a correlated subquery.
-				currentLevel: max(
-					sql<number>`case when ${pathLevelProgress.approved} then ${pathLevelProgress.level} end`,
-				),
-			})
-			.from(pathEnrollments)
-			.innerJoin(
-				members,
-				and(
-					eq(members.personId, pathEnrollments.personId),
-					eq(members.clubId, clubId),
-				),
-			)
-			.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathEnrollments.pathId))
-			.leftJoin(
-				pathLevelProgress,
-				eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
-			)
-			.groupBy(
-				pathEnrollments.id,
-				members.id,
-				members.name,
-				pathwaysPaths.name,
-				pathEnrollments.archivedAt,
-			),
-		db
-			.select({
-				id: guests.id,
-				name: guests.name,
-				email: guests.email,
-				phone: guests.phone,
-				stage: guests.stage,
-			})
-			.from(guests)
-			.where(eq(guests.clubId, clubId)),
-		// Visits: a guest's `meeting_attendance` rows at this club's meetings.
-		// There is no visits table (#915's Current State).
-		db
-			.select({
-				guestId: meetingAttendance.guestId,
-				visits: count(),
-				firstVisit: min(meetings.scheduledAt),
-			})
-			.from(meetingAttendance)
-			.innerJoin(
-				meetings,
-				and(
-					eq(meetings.id, meetingAttendance.meetingId),
-					eq(meetings.clubId, clubId),
-				),
-			)
-			.where(isNotNull(meetingAttendance.guestId))
-			.groupBy(meetingAttendance.guestId),
-		db
-			.select({
-				meetingId: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				category: meetingAwards.category,
-				memberName: members.name,
-				guestName: guests.name,
-				writeInName: meetingAwards.writeInName,
-			})
-			.from(meetingAwards)
-			.innerJoin(
-				meetings,
-				and(
-					eq(meetings.id, meetingAwards.meetingId),
-					eq(meetings.clubId, clubId),
-				),
-			)
-			.leftJoin(members, memberOfClub(meetingAwards.memberId))
-			.leftJoin(guests, guestOfClub(meetingAwards.guestId)),
-		// Member × period, the grid the Treasurer's dues page shows: every ACTIVE
-		// member for every period (no row = unpaid, `dues-logic.ts`), plus any
-		// inactive member who does have a recorded payment or waiver.
-		db
-			.select({
-				period: duesPeriods.label,
-				dueDate: duesPeriods.dueDate,
-				memberId: members.id,
-				name: members.name,
-				status: memberDues.status,
-				amountCents: memberDues.amountCents,
-			})
-			.from(duesPeriods)
-			.innerJoin(members, eq(members.clubId, duesPeriods.clubId))
-			.leftJoin(
-				memberDues,
-				and(
-					eq(memberDues.membershipId, members.id),
-					eq(memberDues.duesPeriodId, duesPeriods.id),
-				),
-			)
-			.where(
-				and(
-					eq(duesPeriods.clubId, clubId),
-					or(eq(members.status, "active"), isNotNull(memberDues.id)),
-				),
-			),
-		db
-			.select({
-				createdAt: clubActionItems.createdAt,
-				text: clubActionItems.text,
-				owner: members.name,
-				resolution: clubActionItems.resolution,
-				dueDate: clubActionItems.dueDate,
-			})
-			.from(clubActionItems)
-			.leftJoin(members, memberOfClub(clubActionItems.ownerMemberId))
-			.where(eq(clubActionItems.clubId, clubId)),
-		db
-			.select({
-				meetingId: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				memberName: members.name,
-				guestName: guests.name,
-				topic: tableTopicsSpeakers.topic,
-			})
-			.from(tableTopicsSpeakers)
-			.innerJoin(
-				meetings,
-				and(
-					eq(meetings.id, tableTopicsSpeakers.meetingId),
-					eq(meetings.clubId, clubId),
-				),
-			)
-			.leftJoin(members, memberOfClub(tableTopicsSpeakers.memberId))
-			.leftJoin(guests, guestOfClub(tableTopicsSpeakers.guestId)),
-	]);
+	} = loaded;
+	const tz = club.timezone;
 
 	const visitsByGuest = new Map(visitRows.map((v) => [v.guestId, v] as const));
 
@@ -503,7 +610,7 @@ export async function loadClubExport(
 					phone: m.phone,
 					status: m.status,
 					club_role: m.clubRole,
-					joined_at: localDate(m.joinedAt, tz),
+					joined_at: utcDate(m.joinedAt),
 					customer_id: m.customerId,
 				}))
 				.sort(
@@ -566,10 +673,16 @@ export async function loadClubExport(
 				"member_or_guest_id",
 				"status",
 			],
+			// Date, then the holder's name (the spec's order); role and slot only
+			// break ties, e.g. between two open slots.
 			[...slotRows]
 				.sort(
 					(a, b) =>
 						a.scheduledAt.getTime() - b.scheduledAt.getTime() ||
+						compareNames(
+							a.memberName ?? a.guestName,
+							b.memberName ?? b.guestName,
+						) ||
 						a.role.localeCompare(b.role) ||
 						a.slotIndex - b.slotIndex,
 				)
@@ -694,7 +807,7 @@ export async function loadClubExport(
 				)
 				.map((d) => ({
 					period: d.period,
-					due_date: localDate(d.dueDate, tz),
+					due_date: utcDate(d.dueDate),
 					member_id: d.memberId,
 					name: d.name,
 					status: d.status ?? "unpaid",
@@ -743,7 +856,7 @@ function sortedByMeeting<T extends { scheduledAt: Date }>(
 	return [...rows].sort(
 		(a, b) =>
 			a.scheduledAt.getTime() - b.scheduledAt.getTime() ||
-			(name(a) ?? "").localeCompare(name(b) ?? ""),
+			compareNames(name(a), name(b)),
 	);
 }
 
@@ -766,7 +879,7 @@ const FILE_DESCRIPTIONS: Record<
 	"pathways.csv":
 		"One row per Pathways enrollment of this club's current and past members. current_level is the highest level Toastmasters has approved as complete (empty if none).",
 	"guests.csv":
-		"One row per guest, with contact details. visits counts the guest's attendance records at this club's meetings; first_visit is the earliest of them.",
+		"One row per guest, with contact details. visits counts the meetings of this club the guest was recorded present at; first_visit is the earliest of them.",
 	"awards.csv": "One row per meeting award.",
 	"dues.csv":
 		"One row per member per dues period: every active member, plus any past member with a recorded payment or waiver. status is paid, waived or unpaid.",

@@ -9,12 +9,14 @@
  * - A leading UTF-8 byte-order mark, because Excel otherwise reads a BOM-less
  *   file as the system code page and "José" opens as "JosÃ©".
  * - A CSV-injection guard: a cell whose first meaningful character is `=`, `+`,
- *   `-` or `@` gets a leading `'`, so a spreadsheet shows it as text instead of
- *   evaluating it as a formula. "First meaningful" skips leading whitespace, tab
- *   and CR, which Excel also skips before deciding a cell is a formula — a guard
- *   that looked only at character 0 would let ` =HYPERLINK(…)` through. Member
- *   and guest names are typed by the public (a guest book, a claim link), so
- *   this is not theoretical.
+ *   `-` or `@` (or their full-width forms), or which starts with a bare tab or
+ *   CR, gets a leading `'`, so a spreadsheet shows it as text instead of
+ *   evaluating it as a formula. "First meaningful" skips leading whitespace,
+ *   which Excel also skips before deciding a cell is a formula — a guard that
+ *   looked only at character 0 would let ` =HYPERLINK(…)` through. Member and
+ *   guest names are typed by the public (a guest book, a claim link), so this
+ *   is not theoretical. A plain decimal number (`-5.00`) is data and is left
+ *   bare.
  *
  * `null` and `undefined` become an empty cell. A file with no rows still has
  * its header row, so an empty table is visibly empty rather than malformed.
@@ -29,8 +31,26 @@ export interface CsvColumn<Row> {
 export const CSV_BOM = "\uFEFF";
 const CRLF = "\r\n";
 
-/** Characters that make a spreadsheet treat a cell as a formula. */
-const FORMULA_TRIGGER = /^[\s]*[=+\-@]/;
+/**
+ * What makes a spreadsheet treat a cell as a formula, or lets one through:
+ *
+ * - a LEADING tab or CR on its own. Excel strips them before deciding whether
+ *   the rest is a formula, so they are the classic way past a guard that only
+ *   looks at the first character; a cell that starts with one is prefixed
+ *   whatever follows it;
+ * - `=`, `+`, `-` or `@` after any leading whitespace;
+ * - their FULL-WIDTH forms (U+FF1D, U+FF0B, U+FF0D, U+FF20). Excel with an East
+ *   Asian input locale normalises them to the ASCII operators, so `＝SUM(A1)`
+ *   typed into a guest book is a formula there.
+ */
+const FORMULA_TRIGGER = /^(?:[\t\r]|\s*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20])/;
+
+/**
+ * A plain decimal number: `-5`, `60.50`. Data, not a formula, and it cannot
+ * call anything, so it is emitted bare. Without this a refund of `-5.00`
+ * exported as `'-5.00`, which a spreadsheet shows as text and will not sum.
+ */
+const PLAIN_NUMBER = /^-?\d+(?:\.\d+)?$/;
 
 /**
  * One cell, escaped. Exported for the tests; callers want {@link toCsv}.
@@ -44,8 +64,13 @@ export function csvCell(
 	if (value === null || value === undefined) return "";
 	let text = String(value);
 	// Numbers are data, not formulas: `-5` is a negative amount and must stay
-	// numeric. Only strings can carry an injected formula.
-	if (typeof value === "string" && FORMULA_TRIGGER.test(text)) {
+	// numeric, whether it arrives as a number or as a formatted decimal string.
+	// Only other strings can carry an injected formula.
+	if (
+		typeof value === "string" &&
+		!PLAIN_NUMBER.test(text) &&
+		FORMULA_TRIGGER.test(text)
+	) {
 		text = `'${text}`;
 	}
 	if (/[",\r\n]/.test(text)) {

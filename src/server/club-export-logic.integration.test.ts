@@ -62,6 +62,8 @@ interface Seeded {
 	guestId: string;
 	meetingEarlyId: string;
 	meetingLateId: string;
+	meetingPriorId: string;
+	speakerDefId: string;
 	speakerSlotId: string;
 	speechId: string;
 	pathId: string;
@@ -84,7 +86,7 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 		.where(inArray(clubs.id, [club.clubId]));
 	await testDb
 		.update(members)
-		.set({ phone: "+14155550100", joinedAt: new Date("2024-01-15T12:00:00Z") })
+		.set({ phone: "+14155550100", joinedAt: new Date("2024-01-15T00:00:00Z") })
 		.where(inArray(members.id, [club.memberId]));
 	await testDb
 		.update(people)
@@ -102,8 +104,10 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 		.returning({ id: guests.id });
 
 	// Two meetings on the SAME club-local date (2026-03-09, Chicago is UTC-5 by
-	// then), which is why every meeting file carries meeting_id.
-	const [early, late] = await testDb
+	// then), which is why every meeting file carries meeting_id. `prior` is
+	// earlier still, and the guest was ABSENT from it: it must not count as a
+	// visit, nor become the first one.
+	const [early, late, prior] = await testDb
 		.insert(meetings)
 		.values([
 			{
@@ -119,6 +123,11 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 				scheduledAt: new Date("2026-03-10T00:30:00Z"), // 19:30 local, 3/9
 				status: "completed",
 				theme: `${tag} Evening`,
+			},
+			{
+				clubId: club.clubId,
+				scheduledAt: new Date("2026-02-01T01:00:00Z"), // 19:00 local, 1/31
+				status: "completed",
 			},
 		])
 		.returning({ id: meetings.id });
@@ -168,7 +177,17 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 		{ meetingId: early.id, guestId: guest.id, status: "present" },
 		{ meetingId: late.id, guestId: guest.id, status: "present" },
 		{ meetingId: late.id, memberId: club.adminMemberId, status: "excused" },
+		{ meetingId: prior.id, guestId: guest.id, status: "absent" },
+		{ meetingId: club.meetingId, guestId: guest.id, status: "excused" },
 	]);
+	// Admin holds a Timer slot at the early meeting: by NAME ("Admin User")
+	// it sorts before the Speaker ("Member User"); by role it would not.
+	await testDb.insert(roleSlots).values({
+		meetingId: early.id,
+		roleDefinitionId: club.roleDefinitionId,
+		assignedMemberId: club.adminMemberId,
+		status: "claimed",
+	});
 
 	const [path] = await testDb
 		.insert(pathwaysPaths)
@@ -213,7 +232,7 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 		.values({
 			clubId: club.clubId,
 			label: `${tag} Spring`,
-			dueDate: new Date("2026-04-01T12:00:00Z"),
+			dueDate: new Date("2026-04-01T00:00:00Z"),
 			defaultAmountCents: 6000,
 		})
 		.returning({ id: duesPeriods.id });
@@ -249,6 +268,8 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 		guestId: guest.id,
 		meetingEarlyId: early.id,
 		meetingLateId: late.id,
+		meetingPriorId: prior.id,
+		speakerDefId: speakerDef.id,
 		speakerSlotId: speakerSlot.id,
 		speechId: speech.id,
 		pathId: path.id,
@@ -261,6 +282,7 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 			guest.id,
 			early.id,
 			late.id,
+			prior.id,
 		],
 	};
 }
@@ -282,6 +304,45 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			slotIndex: 1,
 			assignedMemberId: b.club.memberId,
 			status: "claimed",
+		});
+
+		// speeches.csv: a speech is PERSON-owned, so a slot in A's meeting can
+		// point at a speech whose owner is B's member and not A's. Neither the
+		// owner's name nor the title may appear in A's export.
+		const [foreignPerson] = await testDb
+			.insert(people)
+			.values({ name: `${OTHER} Speaker` })
+			.returning({ id: people.id });
+		await testDb.insert(members).values({
+			clubId: b.club.clubId,
+			personId: foreignPerson.id,
+			name: `${OTHER} Speaker`,
+		});
+		const [foreignSpeech] = await testDb
+			.insert(speeches)
+			.values({ personId: foreignPerson.id, title: `${OTHER} foreign speech` })
+			.returning({ id: speeches.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: a.meetingLateId,
+			roleDefinitionId: a.speakerDefId,
+			speechId: foreignSpeech.id,
+			status: "confirmed",
+		});
+
+		// roles.csv: a slot in A's meeting pointing at B's role DEFINITION.
+		const [foreignDef] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: b.club.clubId,
+				name: `${OTHER} Role`,
+				category: "functionary",
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: a.meetingLateId,
+			roleDefinitionId: foreignDef.id,
+			slotIndex: 5,
+			status: "open",
 		});
 	});
 
@@ -373,12 +434,50 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			meeting_date: "2026-03-09",
 			start_time: "19:30",
 		});
-		// Ordered by date: the two March meetings, then seedClub's future one.
+		// Ordered by date: January's, the two March meetings, then seedClub's
+		// future one.
 		expect(f.rows.map((r) => r.meeting_id)).toEqual([
+			a.meetingPriorId,
 			a.meetingEarlyId,
 			a.meetingLateId,
 			a.club.meetingId,
 		]);
+	});
+
+	// #915 spec: rows by date, then name. At the early meeting the admin's
+	// Timer slot comes before the member's Speaker slot, which is the reverse
+	// of role order; at the late meeting the named guest comes before the
+	// holderless slots. The other club's role definition and speech owner
+	// contribute no row at all.
+	it("roles.csv: ordered by date, then holder name, open slots last", async () => {
+		const f = (await files())["roles.csv"];
+		const early = f.rows.filter((r) => r.meeting_id === a.meetingEarlyId);
+		expect(early.map((r) => r.holder_name)).toEqual([
+			"Admin User",
+			"Member User",
+		]);
+		const late = f.rows.filter((r) => r.meeting_id === a.meetingLateId);
+		expect(late.map((r) => r.holder_name)).toEqual([
+			`MINE${RUN} Guest`,
+			null,
+			null,
+		]);
+		expect(late.map((r) => r.role)).not.toContain(`${OTHER} Role`);
+	});
+
+	it("reads everything on ONE connection, inside one transaction", async () => {
+		const select = vi.spyOn(testDb, "select");
+		const transaction = vi.spyOn(testDb, "transaction");
+		try {
+			await loadClubExport(a.club.clubId);
+			expect(transaction).toHaveBeenCalledTimes(1);
+			// Every read goes through the transaction's `tx`; a read on the pool
+			// client would check out a second connection.
+			expect(select).not.toHaveBeenCalled();
+		} finally {
+			select.mockRestore();
+			transaction.mockRestore();
+		}
 	});
 
 	it("roles.csv: member and guest holders, an open slot, and meeting ids", async () => {
@@ -414,7 +513,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 
 	it("attendance.csv", async () => {
 		const f = (await files())["attendance.csv"];
-		expect(f.rows).toHaveLength(4);
+		expect(f.rows).toHaveLength(6);
 		expect(f.rows).toContainEqual({
 			meeting_id: a.meetingEarlyId,
 			meeting_date: "2026-03-09",
@@ -449,9 +548,31 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 		]);
 	});
 
-	it("pathways.csv: current_level is the highest APPROVED level", async () => {
+	// Ordered by member name, then path (the file has no date column). The
+	// admin's path sorts AFTER the member's by path name, so a path-first order
+	// would swap these two rows.
+	it("pathways.csv: current_level is the highest APPROVED level, rows by name", async () => {
+		const [admin] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(inArray(members.id, [a.club.adminMemberId]));
+		const [zeta] = await testDb
+			.insert(pathwaysPaths)
+			.values({ courseCode: `Z${RUN}`, name: `Zeta ${RUN}` })
+			.returning({ id: pathwaysPaths.id });
+		pathIds.push(zeta.id);
+		await testDb
+			.insert(pathEnrollments)
+			.values({ personId: admin.personId, pathId: zeta.id });
 		const f = (await files())["pathways.csv"];
 		expect(f.rows).toEqual([
+			{
+				member_id: a.club.adminMemberId,
+				name: "Admin User",
+				path: `Zeta ${RUN}`,
+				current_level: null,
+				status: "active",
+			},
 			{
 				member_id: a.club.memberId,
 				name: "Member User",
