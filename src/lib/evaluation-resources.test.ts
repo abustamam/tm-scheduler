@@ -8,12 +8,18 @@ import {
 } from "#/lib/evaluation-resources";
 import { PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
 
-/** Distinct project names across all 11 paths, "(Legacy)" stripped. */
+/**
+ * Distinct project names across all 11 paths, "(Legacy)" stripped. Education
+ * Series presentations (#921) are excluded: they are not Pathways projects and
+ * TI publishes no evaluation resource for them.
+ */
 const catalogProjects = (): string[] => {
 	const s = new Set<string>();
 	for (const path of PATHWAYS_CATALOG)
-		for (const p of path.projects)
+		for (const p of path.projects) {
+			if (p.series) continue;
 			s.add(p.name.replace(/\s*\(Legacy\)\s*$/, ""));
+		}
 	return [...s];
 };
 
