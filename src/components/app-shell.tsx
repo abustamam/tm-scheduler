@@ -535,13 +535,17 @@ function NavGroup({
 				aria-controls={panelId}
 				// Forced open because the current page is inside it: collapsing would
 				// hide the highlighted entry, and the forced state is never stored.
-				disabled={forcedOpen}
+				// `aria-disabled` rather than `disabled`, so the click still reaches
+				// the handler and the no-write rule is the handler's, where a test
+				// can see it.
+				aria-disabled={forcedOpen || undefined}
 				onClick={() => {
+					if (forcedOpen) return;
 					const next = !storedOpen;
 					setStoredOpen(next);
 					writeStoredOpen(storageKey, next);
 				}}
-				className={`flex w-full items-center gap-1.5 rounded-md px-2.5 pt-3.5 pb-0.5 text-left transition-opacity enabled:hover:opacity-100 ${GROUP_LABEL_CLASS}`}
+				className={`flex w-full items-center gap-1.5 rounded-md px-2.5 pt-3.5 pb-0.5 text-left transition-opacity hover:opacity-100 aria-disabled:hover:opacity-70 ${GROUP_LABEL_CLASS}`}
 			>
 				<span>{group.label}</span>
 				<ChevronRight

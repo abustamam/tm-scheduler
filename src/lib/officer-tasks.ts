@@ -45,8 +45,7 @@ export const COMMON_TASKS: OfficerTask[] = [
 export const OFFICER_TASKS: Record<OfficerPosition, OfficerTask[]> = {
 	president: [
 		{
-			description:
-				"Track the 10 Distinguished Club Program goals for the year.",
+			description: "Track the 10 DCP goals for the year.",
 			to: "/admin/dcp",
 		},
 		{
@@ -54,11 +53,11 @@ export const OFFICER_TASKS: Record<OfficerPosition, OfficerTask[]> = {
 			to: "/admin/club-settings",
 		},
 		{
-			description: "Members and officer roles: promote, demote, edit.",
+			description: "Promote, demote, edit the roster.",
 			to: "/roster",
 		},
 		{
-			description: "The season at a glance: is every meeting filling up?",
+			description: "Is every meeting filling up?",
 			to: "/schedule",
 		},
 	],
@@ -74,7 +73,7 @@ export const OFFICER_TASKS: Record<OfficerPosition, OfficerTask[]> = {
 		},
 		{ description: "The roles on the agenda.", to: "/admin/roles" },
 		{
-			description: "Keep Pathways progress current from Base Camp.",
+			description: "Keep Pathways progress current.",
 			to: "/admin/sync-tokens",
 		},
 	],
@@ -84,7 +83,7 @@ export const OFFICER_TASKS: Record<OfficerPosition, OfficerTask[]> = {
 			to: "/schedule",
 		},
 		{
-			description: "Members to celebrate: feature wins and milestones.",
+			description: "Feature wins and milestones from the roster.",
 			to: "/roster",
 		},
 		{
@@ -94,19 +93,19 @@ export const OFFICER_TASKS: Record<OfficerPosition, OfficerTask[]> = {
 	],
 	secretary: [
 		{
-			description: "Record attendance and minutes on the agenda.",
+			description: "On the next meeting's agenda.",
 			to: "/next",
 		},
 		{ description: "The record of what changed.", to: "/activity" },
 	],
 	vp_membership: [
 		{ description: "Add and assign guests on a meeting.", to: "/next" },
-		{ description: "Add members and grow the roster.", to: "/roster" },
+		{ description: "Grow the roster.", to: "/roster" },
 	],
 	treasurer: [
 		{ description: "Who has paid, who owes, by period.", to: "/admin/dues" },
 		{
-			description: "Members and contacts to follow up with.",
+			description: "The roster to follow up with.",
 			to: "/roster",
 		},
 	],

@@ -159,7 +159,15 @@ describe("collapsible Setup", () => {
 			const toggle = setupToggle();
 			expect(toggle.getAttribute("aria-expanded")).toBe("true");
 			expect(visibleLinkLabels()).toContain("Meeting roles");
+			// The button is NOT `disabled`, so this click reaches the handler.
+			// Without that, "writes nothing" would be proven by the browser
+			// dropping the click, not by the handler refusing to store.
+			expect(toggle.hasAttribute("disabled")).toBe(false);
+			expect(toggle.getAttribute("aria-disabled")).toBe("true");
+			const clicks = vi.fn();
+			toggle.addEventListener("click", clicks);
 			await userEvent.click(toggle);
+			expect(clicks).toHaveBeenCalledTimes(1);
 			expect(toggle.getAttribute("aria-expanded")).toBe("true");
 			expect(setItem).not.toHaveBeenCalled();
 			expect(window.localStorage.getItem(SETUP_KEY)).toBe("0");
