@@ -46,6 +46,7 @@ const meeting: MeetingForDeck = {
 	wodDefinition: "impetus gained by a moving object",
 	wodExample: "The momentum of the river keeps moving forward.",
 	reminders: "Choose a learning path.\nBring a guest.",
+	tableTopicsNotes: null,
 };
 
 const club: ClubForDeck = {
@@ -256,6 +257,59 @@ describe("pptx via slideLayout", () => {
 		const text = slideText(pptx, idx);
 		expect(text).toContain("Word of the Day: “Momentum”");
 		expect(text).toContain("impetus gained by a moving object");
+	});
+
+	it("exports the Table Topics notes as one paragraph per line (#880)", () => {
+		const build = (tableTopicsNotes: string | null) =>
+			buildSlideDeck({
+				meeting: { ...meeting, tableTopicsNotes },
+				club,
+				slots: fullSlots,
+				ballotUrl: BALLOT_URL,
+				geIntroducesFunctionaries: false,
+			});
+		const deck = build("1. 🏆 THE COMEBACK\nTell us your story.\n\n2. 🤪 NEXT");
+		const idx = deck.findIndex((s) => s.kind === "tableTopics");
+		const pptx = deckToPptx(PptxGenJS, deck);
+		// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
+		const objects = (pptx as any).slides[idx]._slideObjects as any[];
+		// The body block: the one text object carrying the bullets, not the footer.
+		const runs = objects
+			.filter(
+				(o) =>
+					o._type === "text" &&
+					Array.isArray(o.text) &&
+					o.text.some((t: { text: string }) =>
+						t.text.startsWith("Table Topic Master:"),
+					),
+			)
+			.flatMap(
+				(o) => o.text as { text: string; options: Record<string, unknown> }[],
+			);
+		const detail = runs.slice(-4);
+		expect(detail.map((r) => r.text)).toEqual([
+			"1. 🏆 THE COMEBACK",
+			"Tell us your story.",
+			" ",
+			"2. 🤪 NEXT",
+		]);
+		// A break after every line but the last, and after the run before them,
+		// so each note line is a paragraph of its own.
+		expect(detail.map((r) => r.options.breakLine)).toEqual([
+			true,
+			true,
+			true,
+			false,
+		]);
+		expect(runs[runs.length - 5]?.options.breakLine).toBe(true);
+		for (const r of detail) expect(r.options.bullet).toBe(false);
+
+		// Blank notes: the slide exports exactly as it did without them.
+		const plainDeck = build(null);
+		const blankDeck = build("  \n ");
+		expect(slideText(deckToPptx(PptxGenJS, blankDeck), idx)).toBe(
+			slideText(deckToPptx(PptxGenJS, plainDeck), idx),
+		);
 	});
 });
 

@@ -82,6 +82,7 @@ function makeView(
 			scheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
 			theme: null,
 			wordOfTheDay: null,
+			tableTopicsNotes: null,
 			status: "scheduled",
 		},
 		member: { id: "33333333-3333-4333-8333-333333333333", name: "Marcus Lee" },
@@ -416,8 +417,8 @@ describe("PersonalMeetingBody — what it renders", () => {
 				roles: [
 					{
 						slotId: "s2",
-						roleName: "Table Topics Master",
-						roleKey: "table_topics_master",
+						roleName: "Ah-Counter",
+						roleKey: "ah_counter",
 						speechTitle: null,
 					},
 				],
@@ -625,8 +626,8 @@ describe("PersonalMeetingBody — tap targets (#676)", () => {
 				roles: [
 					{
 						slotId: "s2",
-						roleName: "Table Topics Master",
-						roleKey: "table_topics_master",
+						roleName: "Ah-Counter",
+						roleKey: "ah_counter",
 						speechTitle: null,
 					},
 				],

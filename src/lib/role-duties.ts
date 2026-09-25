@@ -24,16 +24,20 @@
  * gets `ROLE_CONFIRM_PROMPT` instead. Their prep is real, but it has nowhere to
  * be recorded, so a checkbox for it could only be a self-report nobody can
  * verify — and an unverifiable tick must never be allowed to SUPPRESS a nudge.
- * Table Topics' "prepare 8-10 questions" is the one that most looks like it
- * belongs here; it is out because giving it a duty means giving it a column and
- * a write path, which is its own issue if we ever want it.
+ * Table Topics' "prepare 8-10 questions" was the one that most looked like it
+ * belonged here, and was out because giving it a duty meant giving it a column
+ * and a write path. #880 gave it both — `meetings.table_topics_notes` and the
+ * master's own `/me/topics` editor — so the Table Topics Master now owns
+ * `TABLE_TOPICS_DUTY`, ticked by the column rather than by a self-report.
  */
 import {
 	GRAMMARIAN_ROLE_KEY,
 	isGrammarianRoleName,
+	isTableTopicsMasterRoleName,
 	isTimerRoleName,
 	isTmodRoleName,
 	type RoleIdentity,
+	TABLE_TOPICS_ROLE_KEY,
 	TIMER_ROLE_KEY,
 	TMOD_ROLE_KEY,
 } from "#/lib/meeting-roles";
@@ -92,7 +96,8 @@ export type DutyId =
 	| "meeting_theme"
 	| "word_of_the_day"
 	| "speech_details"
-	| "timing";
+	| "timing"
+	| "table_topics";
 
 /**
  * What `done` reads: a plain object the caller ALREADY holds, never a db
@@ -109,6 +114,8 @@ export interface DutyContext {
 	theme?: string | null;
 	/** `meetings.word_of_the_day`. */
 	wordOfTheDay?: string | null;
+	/** `meetings.table_topics_notes` (#880). */
+	tableTopicsNotes?: string | null;
 	/** The slot's `speeches.title`. */
 	speechTitle?: string | null;
 	/**
@@ -226,6 +233,15 @@ const WORD_OF_THE_DAY_DUTY: RoleDuty = {
 	href: (target) => personalDutyHref(target, "word"),
 };
 
+/** The Table Topics Master's topics (#880), shown on the Table Topics slide. */
+const TABLE_TOPICS_DUTY: RoleDuty = {
+	id: "table_topics",
+	label: "Set your Table Topics",
+	clause: "set your Table Topics",
+	done: (ctx) => isFilled(ctx.tableTopicsNotes),
+	href: (target) => personalDutyHref(target, "topics"),
+};
+
 const SPEECH_DETAILS_DUTY: RoleDuty = {
 	id: "speech_details",
 	label: "Add your speech details",
@@ -318,6 +334,7 @@ const DUTIES_BY_ROLE_KEY = new Map<string, readonly RoleDuty[]>([
 	[SPEAKER_ROLE_KEY, freezeDuties([SPEECH_DETAILS_DUTY])],
 	[CONTESTANT_ROLE_KEY, freezeDuties([SPEECH_DETAILS_DUTY])],
 	[TIMER_ROLE_KEY, freezeDuties([TIMING_DUTY])],
+	[TABLE_TOPICS_ROLE_KEY, freezeDuties([TABLE_TOPICS_DUTY])],
 ]);
 
 /**
@@ -343,6 +360,7 @@ function resolveRoleKey(role: RoleIdentity): string | null {
 	// many clubs say and is deliberately not canonical, so a role called that was
 	// invented by the club and correctly owns nothing (#732).
 	if (isTimerRoleName(role.roleName)) return TIMER_ROLE_KEY;
+	if (isTableTopicsMasterRoleName(role.roleName)) return TABLE_TOPICS_ROLE_KEY;
 	return (
 		SPEECH_ROLE_KEY_BY_CANONICAL_NAME.get(role.roleName.trim().toLowerCase()) ??
 		null

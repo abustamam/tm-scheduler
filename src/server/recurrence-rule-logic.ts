@@ -84,6 +84,7 @@ export async function findPristineEmptyMeetingIds(
 			wodExample: meetings.wodExample,
 			notes: meetings.notes,
 			reminders: meetings.reminders,
+			tableTopicsNotes: meetings.tableTopicsNotes,
 			templateId: meetings.templateId,
 		})
 		.from(meetings)
@@ -121,6 +122,7 @@ export async function findPristineEmptyMeetingIds(
 				!m.wodExample &&
 				!m.notes &&
 				!m.reminders &&
+				!m.tableTopicsNotes &&
 				!claimedSet.has(m.id) &&
 				!declinedSet.has(m.id) &&
 				// A templated meeting is not an empty shell, whatever its content

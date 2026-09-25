@@ -28,13 +28,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("#/server/meetings", () => ({
 	updateMeeting: vi.fn(async () => ({ clubId: "c1" })),
 	updateWordOfTheDay: vi.fn(async () => ({ clubId: "c1" })),
+	updateTableTopicsNotes: vi.fn(async () => ({ clubId: "c1" })),
 }));
 
-const { updateMeeting, updateWordOfTheDay } = await import("#/server/meetings");
+const { updateMeeting, updateTableTopicsNotes, updateWordOfTheDay } =
+	await import("#/server/meetings");
 const { renderUnderMemoryRouter } = await import("#/test/router-harness");
-const { PersonalThemeEditor, PersonalWordEditor } = await import(
-	"./personal-meeting-editors"
-);
+const { PersonalTableTopicsEditor, PersonalThemeEditor, PersonalWordEditor } =
+	await import("./personal-meeting-editors");
 
 afterEach(cleanup);
 beforeEach(() => vi.clearAllMocks());
@@ -60,6 +61,7 @@ const STORED = {
 	wodExample: "an ineffable joy",
 	notes: "Bring the spare timing lights",
 	reminders: "Contest entries close Friday",
+	tableTopicsNotes: "1. THE COMEBACK\nTell us your story.",
 };
 
 const slot = (
@@ -428,5 +430,122 @@ describe("PersonalWordEditor — the save", () => {
 		);
 		await waitFor(() => expect(updateWordOfTheDay).toHaveBeenCalled());
 		expect(p.onSaved).not.toHaveBeenCalled();
+	});
+});
+
+const TTM_SLOT = slot("Table Topics Master", "table_topics_master", MEMBER);
+const renderTopics = (over: Partial<Props> = {}) => {
+	const p = props({ slots: [TTM_SLOT], ...over });
+	return renderUnderMemoryRouter(<PersonalTableTopicsEditor {...p} />).then(
+		() => p,
+	);
+};
+const topicsPayload = () =>
+	payloadOf(vi.mocked(updateTableTopicsNotes), "updateTableTopicsNotes");
+const NOTES_LABEL = "Table Topics notes";
+
+describe("PersonalTableTopicsEditor — who is offered the form (#880)", () => {
+	it("offers it to the meeting's self-asserted Table Topics Master", async () => {
+		await renderTopics();
+		expect(screen.getByLabelText(NOTES_LABEL)).toBeTruthy();
+	});
+
+	it("offers it to a renamed Table Topics Master, by key", async () => {
+		await renderTopics({
+			slots: [slot("Topicsmaster", "table_topics_master", MEMBER)],
+		});
+		expect(screen.getByLabelText(NOTES_LABEL)).toBeTruthy();
+	});
+
+	it("offers it to the meeting's Toastmaster", async () => {
+		await renderTopics({ slots: [TMOD_SLOT] });
+		expect(screen.getByLabelText(NOTES_LABEL)).toBeTruthy();
+	});
+
+	it("offers it to a club officer holding neither slot", async () => {
+		await renderTopics({
+			slots: [slot("Table Topics Master", "table_topics_master", OTHER)],
+			canManage: true,
+			isSignedIn: true,
+		});
+		expect(screen.getByLabelText(NOTES_LABEL)).toBeTruthy();
+	});
+
+	it("refuses a member holding no relevant role", async () => {
+		await renderTopics({
+			slots: [
+				GRAMMARIAN_SLOT,
+				slot("Table Topics Master", "table_topics_master", OTHER),
+			],
+		});
+		expect(screen.queryByLabelText(NOTES_LABEL)).toBeNull();
+		expect(
+			screen.getByText(/only this meeting's table topics master/i),
+		).toBeTruthy();
+	});
+
+	it("refuses a club-invented look-alike with a NULL key", async () => {
+		await renderTopics({
+			slots: [slot("Table Topics Master Assistant", null, MEMBER)],
+		});
+		expect(screen.queryByLabelText(NOTES_LABEL)).toBeNull();
+	});
+
+	it("closes on a completed meeting", async () => {
+		await renderTopics({ meeting: { ...STORED, status: "completed" } });
+		expect(screen.queryByLabelText(NOTES_LABEL)).toBeNull();
+		expect(screen.getByText(/this meeting is finished/i)).toBeTruthy();
+	});
+});
+
+describe("PersonalTableTopicsEditor — the save (#880)", () => {
+	const save = async () => {
+		await userEvent.click(
+			screen.getByRole("button", { name: /save table topics/i }),
+		);
+		await waitFor(() =>
+			expect(updateTableTopicsNotes).toHaveBeenCalledTimes(1),
+		);
+		return topicsPayload();
+	};
+
+	it("prefills the stored notes", async () => {
+		await renderTopics();
+		expect(
+			(screen.getByLabelText(NOTES_LABEL) as HTMLTextAreaElement).value,
+		).toBe(STORED.tableTopicsNotes);
+	});
+
+	it("sends the notes and the identity fields, and nothing else", async () => {
+		const p = await renderTopics();
+		const input = screen.getByLabelText(NOTES_LABEL);
+		await userEvent.clear(input);
+		await userEvent.type(input, "1. 🏆 THE COMEBACK{Enter}Tell us.");
+		const data = await save();
+		expect(Object.keys(data).sort()).toEqual([
+			"meetingId",
+			"selfMemberId",
+			"tableTopicsNotes",
+		]);
+		expect(data.tableTopicsNotes).toBe("1. 🏆 THE COMEBACK\nTell us.");
+		expect(data.meetingId).toBe(STORED.id);
+		expect(data.selfMemberId).toBe(MEMBER);
+		expect(updateMeeting).not.toHaveBeenCalled();
+		expect(updateWordOfTheDay).not.toHaveBeenCalled();
+		expect(p.onSaved).toHaveBeenCalledTimes(1);
+	});
+
+	it("sends a blanked field as an explicit clear", async () => {
+		await renderTopics();
+		await userEvent.clear(screen.getByLabelText(NOTES_LABEL));
+		const data = await save();
+		expect("tableTopicsNotes" in data).toBe(true);
+		expect(data.tableTopicsNotes).toBe("");
+	});
+
+	it("omits the notes when nothing was edited", async () => {
+		await renderTopics();
+		const data = await save();
+		expect(Object.keys(data).sort()).toEqual(["meetingId", "selfMemberId"]);
 	});
 });

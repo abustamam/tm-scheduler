@@ -75,6 +75,14 @@ const schemaBody = (() => {
 
 const keys = [...schemaBody.matchAll(/^\t(\w+):/gm)].map((m) => m[1]);
 
+/** One key's whole declaration, continuation lines included. Biome wraps a
+ *  long chain (#880's `tableTopicsNotes` was the first), so matching the key's
+ *  FIRST line only would call a wrapped `.nullable()` missing. */
+const declOf = (k: string): string =>
+	schemaBody.match(
+		new RegExp(`^\\t${k}:[^\\n]*(?:\\n\\t\\t[^\\n]*)*`, "m"),
+	)?.[0] ?? "";
+
 /**
  * Not a patchable meta field, each for a reason that does NOT generalise:
  *
@@ -130,10 +138,7 @@ describe("updateMeetingSchema is a patch, field by field", () => {
 		// would be rejected at the validator with the officer's edit lost.
 		const notNullable = keys
 			.filter((k) => !NON_TEXT.has(k))
-			.filter(
-				(k) =>
-					!new RegExp(`^\\t${k}:.*\\.nullable\\(\\)`, "m").test(schemaBody),
-			);
+			.filter((k) => !declOf(k).includes(".nullable()"));
 		expect(
 			notNullable,
 			`text fields on updateMeetingSchema that cannot be sent as null: ${notNullable.join(", ")}. The dialog cannot CLEAR them.`,
@@ -143,10 +148,7 @@ describe("updateMeetingSchema is a patch, field by field", () => {
 	it("lets every field be omitted, which is how it is left ALONE", () => {
 		const notOptional = keys
 			.filter((k) => k !== "meetingId")
-			.filter(
-				(k) =>
-					!new RegExp(`^\\t${k}:.*\\.optional\\(\\)`, "m").test(schemaBody),
-			);
+			.filter((k) => !declOf(k).includes(".optional()"));
 		expect(
 			notOptional,
 			`fields a partial editor cannot omit: ${notOptional.join(", ")}`,

@@ -629,12 +629,12 @@ const SESSIONLESS_GUARDS = ["requireMemberInClub"];
  * membership here buys an exemption only for as long as the proof holds.
  */
 const SELF_ASSERT_GUARDS =
-	/require(MeetingAgendaEditor|WordOfTheDayEditor|VoteCounterCapability)\w*\(/;
+	/require(MeetingAgendaEditor|WordOfTheDayEditor|TableTopicsNotesEditor|VoteCounterCapability)\w*\(/;
 
 /**
  * Each self-assert guard's resolver, and the archive assertion it must reach.
  *
- * All three live in `meeting-authz-logic.ts` and call that module's private
+ * All four live in `meeting-authz-logic.ts` and call that module's private
  * `assertMeetingClubNotArchived` rather than `guards.ts`'s exported
  * `assertClubNotArchived`, because `guards.ts` imports this module and calling it
  * back would close an import cycle. Both read `clubs.archived_at` and raise the
@@ -646,6 +646,10 @@ const SELF_ASSERT_RESOLVERS: { guard: string; resolver: string }[] = [
 		resolver: "resolveMeetingAgendaAuthz",
 	},
 	{ guard: "requireWordOfTheDayEditor", resolver: "resolveWordOfTheDayAuthz" },
+	{
+		guard: "requireTableTopicsNotesEditor",
+		resolver: "resolveTableTopicsNotesAuthz",
+	},
 	{
 		guard: "requireVoteCounterCapability",
 		resolver: "resolveVoteCounterAuthz",
