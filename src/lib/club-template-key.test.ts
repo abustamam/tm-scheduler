@@ -4,6 +4,8 @@ import {
 	CLUB_TEMPLATE_KEY_MAX,
 	clubTemplateKeySlug,
 	firstFreeClubTemplateKey,
+	RETIRED_TEMPLATE_KEY_PREFIX,
+	retiredTemplateKey,
 } from "./club-template-key";
 
 describe("clubTemplateKeySlug", () => {
@@ -41,5 +43,27 @@ describe("firstFreeClubTemplateKey", () => {
 				new Set(["contest-night", "contest-night-2", "contest-night-4"]),
 			),
 		).toBe("contest-night-3");
+	});
+});
+
+describe("retiredTemplateKey", () => {
+	it("can never be produced by the slugger, whatever the template is named", () => {
+		const id = "0df19e73-b58b-40b4-8611-dffeb31d91f3";
+		const key = retiredTemplateKey(id);
+		expect(key.startsWith(RETIRED_TEMPLATE_KEY_PREFIX)).toBe(true);
+		for (const name of [
+			key,
+			`retired-${id}`,
+			`Retired ${id}`,
+			`_retired:${id}`,
+			"retired",
+		]) {
+			const slug = clubTemplateKeySlug(name);
+			expect(slug).toMatch(/^[a-z0-9-]+$/);
+			expect(slug).not.toBe(key);
+			expect(slug.startsWith(RETIRED_TEMPLATE_KEY_PREFIX)).toBe(false);
+			// Nor any suffixed variant the key read could pick.
+			expect(firstFreeClubTemplateKey(slug, new Set([slug]))).not.toBe(key);
+		}
 	});
 });

@@ -22,6 +22,20 @@ export const CLUB_TEMPLATE_NAME_MAX = 80;
 /** Description bound — the same ceiling a beat's detail carries. */
 export const CLUB_TEMPLATE_DESCRIPTION_MAX = MAX_TEMPLATE_DETAIL_CHARS;
 
+/**
+ * The key a superseded private copy is parked under for the instant between
+ * being detached and deleted (`applyTemplateConversion`). Built from
+ * characters a slug CANNOT contain — `_` and `:` are outside `[a-z0-9-]` — so
+ * no club template named anything can already hold it. (`retired-<id>` could
+ * be minted by a club naming a template exactly that, and then block that
+ * meeting's every later conversion on the club-key index.)
+ */
+export const RETIRED_TEMPLATE_KEY_PREFIX = "_retired:";
+
+export function retiredTemplateKey(templateId: string): string {
+	return `${RETIRED_TEMPLATE_KEY_PREFIX}${templateId}`;
+}
+
 /** Longest slug before a `-N` suffix is appended. */
 export const CLUB_TEMPLATE_KEY_MAX = 60;
 

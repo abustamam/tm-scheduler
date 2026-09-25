@@ -32,6 +32,7 @@ import {
 	CLUB_TEMPLATE_NAME_MAX,
 	clubTemplateKeySlug,
 	firstFreeClubTemplateKey,
+	retiredTemplateKey,
 } from "#/lib/club-template-key";
 import {
 	MAX_TEMPLATE_BEATS,
@@ -1044,10 +1045,11 @@ export async function applyTemplateConversion(input: {
 		// club template of that key, and re-applying ANY template to that meeting
 		// failed on the unique index. A per-row key cannot collide, and the row is
 		// deleted below before anything outside this transaction can see it.
+		// The prefix is one no slug can produce (`retiredTemplateKey`).
 		if (previousPrivateId !== null) {
 			await tx
 				.update(meetingTemplates)
-				.set({ meetingId: null, key: `retired-${previousPrivateId}` })
+				.set({ meetingId: null, key: retiredTemplateKey(previousPrivateId) })
 				.where(eq(meetingTemplates.id, previousPrivateId));
 		}
 
