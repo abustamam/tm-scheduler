@@ -62,10 +62,7 @@
  * The CONTROLS at the bottom are what make the rest able to fail: the same
  * fixture with `relative` removed reproduces the shipped bug, measured.
  */
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { scrollAnchorClearOfPinnedColumn } from "#/lib/season-grid-anchor-scroll";
@@ -74,12 +71,9 @@ import {
 	buildAppCss,
 	candidatesIn,
 	probeColumn,
+	renderAndReadTitle,
 } from "#/test/pinned-column-scroll";
-import {
-	CHROME_ENV,
-	CHROME_TEST_TIMEOUT_MS,
-	findChrome,
-} from "#/test/print-page-count";
+import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GRID = resolve(HERE, "season-grid.tsx");
@@ -142,6 +136,22 @@ describe("season-grid geometry harness availability", () => {
 
 /** A phone. The width eleven columns genuinely do not fit. */
 const VIEWPORT = { width: 375, height: 700 };
+
+/**
+ * Headless Chrome lays no window out narrower than 500px — MEASURED:
+ * `--window-size=375,812` reports `innerWidth` 500 — so `VIEWPORT.width` alone
+ * measured every assertion here at 500px. A phone is modelled by pinning the
+ * PAGE to its width instead; both sit below the `md` breakpoint, so no media
+ * query differs. Each suite asserts the scroller came out at production's
+ * measured 341px (`PHONE_SCROLLER_MAX`) rather than trusting the pin.
+ *
+ * What the pin cannot see: the document is still 500px wide, so a descendant
+ * escaping by less than 125px past the pinned page would not register as
+ * document overflow. The #820 escape was ~500px, far outside that.
+ */
+const phonePin = (html: string) =>
+	`<div style="width:${VIEWPORT.width}px">${html}</div>`;
+const PHONE_SCROLLER_MAX = 345;
 
 /** Eight meeting columns, as `Meetings shown 8` renders them. */
 const MEETINGS = 8;
@@ -282,13 +292,15 @@ describe.skipIf(!hasChrome)(
 
 		it("scrolls the box, and not the page", () => {
 			const probe = probeColumn({
-				bodyHtml: fixture(scroller),
+				bodyHtml: phonePin(fixture(scroller)),
 				css,
 				scrollerSelector: "#scroller",
 				tailSelector: "#tail",
 				chromeSelector: "#chrome",
 				viewport: VIEWPORT,
 			});
+			// The pin took effect: a phone's scroller, not a 500px window's.
+			expect(probe.scrollerClientWidth).toBeLessThanOrEqual(PHONE_SCROLLER_MAX);
 
 			// The grid really is too wide here — without this the rest passes
 			// vacuously on a fixture that happened to fit.
@@ -321,13 +333,15 @@ describe.skipIf(!hasChrome)(
 			).not.toBe(scroller);
 
 			const probe = probeColumn({
-				bodyHtml: fixture(mutated),
+				bodyHtml: phonePin(fixture(mutated)),
 				css,
 				scrollerSelector: "#scroller",
 				tailSelector: "#tail",
 				chromeSelector: "#chrome",
 				viewport: VIEWPORT,
 			});
+			// The pin took effect: a phone's scroller, not a 500px window's.
+			expect(probe.scrollerClientWidth).toBeLessThanOrEqual(PHONE_SCROLLER_MAX);
 			// The box is still doing its job: `overflow-auto` is untouched here, and
 			// it is still clipping the table correctly.
 			expect(probe.overflowX).toBe("auto");
@@ -347,13 +361,15 @@ describe.skipIf(!hasChrome)(
 			);
 
 			const probe = probeColumn({
-				bodyHtml: fixture(mutated),
+				bodyHtml: phonePin(fixture(mutated)),
 				css,
 				scrollerSelector: "#scroller",
 				tailSelector: "#tail",
 				chromeSelector: "#chrome",
 				viewport: VIEWPORT,
 			});
+			// The pin took effect: a phone's scroller, not a 500px window's.
+			expect(probe.scrollerClientWidth).toBeLessThanOrEqual(PHONE_SCROLLER_MAX);
 			expect(probe.overflowX).not.toBe("auto");
 			expect(probe.scrolledRightBy).toBe(0);
 			expect(probe.documentOverflowsX).toBe(true);
@@ -402,8 +418,6 @@ function probeAnchor(opts: {
 	scroll: string;
 	viewport: { width: number; height: number };
 }): AnchorProbe {
-	const chrome = findChrome();
-	if (!chrome) throw new Error("No Chrome — set CHROME_PATH.");
 	const probe = `<script>
 	(function () {
 		var s = document.getElementById("scroller");
@@ -411,6 +425,10 @@ function probeAnchor(opts: {
 		var a = document.getElementById("anchor");
 		if (!s || !label || !a) { document.title = "ERROR:fixture"; return; }
 		try { ${opts.scroll} } catch (e) { document.title = "ERROR:" + e; return; }
+		// Measured once document.fonts has settled and its callbacks have run,
+		// so the helper's post-font re-alignment is part of what is measured.
+		document.fonts.ready.then(function () { setTimeout(measure, 0); });
+		function measure() {
 		var sr = s.getBoundingClientRect();
 		var lr = label.getBoundingClientRect();
 		var ar = a.getBoundingClientRect();
@@ -426,66 +444,38 @@ function probeAnchor(opts: {
 		document.title = Object.keys(out).map(function (k) {
 			return k + "=" + out[k];
 		}).join(";");
+		}
 	})();
 	</script>`;
-	const dir = mkdtempSync(join(tmpdir(), "season-grid-anchor-"));
-	try {
-		writeFileSync(join(dir, "app.css"), opts.css, "utf8");
-		writeFileSync(
-			join(dir, "page.html"),
-			`<!doctype html><html><head><meta charset="utf-8">` +
-				`<link rel="stylesheet" href="./app.css"></head><body>` +
-				`${opts.bodyHtml}${probe}</body></html>`,
-			"utf8",
-		);
-		// Same spawn as `probeColumn` (profile isolation, pinned fonts, a hang
-		// detector a sync call needs) — see `pinned-column-scroll.ts` for why
-		// each flag is there.
-		const dom = execFileSync(
-			chrome,
-			[
-				"--headless",
-				"--disable-gpu",
-				"--no-sandbox",
-				`--user-data-dir=${dir}`,
-				`--window-size=${opts.viewport.width},${opts.viewport.height}`,
-				"--virtual-time-budget=3000",
-				"--host-resolver-rules=MAP * ~NOTFOUND",
-				"--dump-dom",
-				`file://${join(dir, "page.html")}`,
-			],
-			{
-				encoding: "utf8",
-				stdio: ["ignore", "pipe", "ignore"],
-				timeout: 30_000,
-				env: CHROME_ENV,
-			},
-		);
-		const title = /<title>([^<]*)<\/title>/.exec(dom)?.[1] ?? "";
-		if (title.startsWith("ERROR:")) throw new Error(`probe: ${title.slice(6)}`);
-		if (!title.includes("anchorLeft=")) {
-			throw new Error(`probe produced no measurement (title: ${title || "∅"})`);
-		}
-		const kv = new Map(
-			title.split(";").map((p) => p.split("=") as [string, string]),
-		);
-		const num = (k: string) => Number(kv.get(k));
-		return {
-			labelRight: num("labelRight"),
-			anchorLeft: num("anchorLeft"),
-			anchorRight: num("anchorRight"),
-			scrollerLeft: num("scrollerLeft"),
-			scrollerRight: num("scrollerRight"),
-			scrollLeft: num("scrollLeft"),
-			overflowsX: kv.get("overflowsX") === "1",
-		};
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
+	const title = renderAndReadTitle({
+		bodyHtml: opts.bodyHtml,
+		css: opts.css,
+		script: probe,
+		viewport: opts.viewport,
+		tmpPrefix: "season-grid-anchor-",
+	});
+	if (!title.includes("anchorLeft=")) {
+		throw new Error(`probe produced no measurement (title: ${title || "∅"})`);
 	}
+	const kv = new Map(
+		title.split(";").map((p) => p.split("=") as [string, string]),
+	);
+	const num = (k: string) => Number(kv.get(k));
+	return {
+		labelRight: num("labelRight"),
+		anchorLeft: num("anchorLeft"),
+		anchorRight: num("anchorRight"),
+		scrollerLeft: num("scrollerLeft"),
+		scrollerRight: num("scrollerRight"),
+		scrollLeft: num("scrollLeft"),
+		overflowsX: kv.get("overflowsX") === "1",
+	};
 }
 
 /** The fixed call: the shipped function's own source, run in the page. */
 const FIXED_SCROLL = `(${scrollAnchorClearOfPinnedColumn.toString()})(s, label, a);`;
+/** Widen the pinned label column by 40px, as a late face swap might. */
+const WIDEN_LABEL_COLUMN = `document.querySelectorAll("#scroller tr > th:first-child").forEach(function (t) { t.style.paddingRight = "52px"; });`;
 /** What `SeasonGrid` did before #930, verbatim. */
 const PRE_FIX_SCROLL = `a.scrollIntoView({ inline: "center", block: "nearest" });`;
 
@@ -509,15 +499,6 @@ describe.skipIf(!hasChrome)(
 	() => {
 		const PHONE = { width: 375, height: 812 };
 		const DESKTOP = { width: 1280, height: 800 };
-		/**
-		 * Headless Chrome will not lay a window out narrower than 500px —
-		 * MEASURED here: `--window-size=375,812` reports `innerWidth` 500 — so a
-		 * phone is modelled by pinning the page's width, not the window's. Both
-		 * sit below the `md` breakpoint, so no media query differs between them,
-		 * and the first assertion below checks the scroller came out at the
-		 * width production measured (341px) rather than trusting the wrapper.
-		 */
-		const PHONE_WIDTH = 375;
 		let css = "";
 		let scroller = "";
 		let frame = "";
@@ -531,12 +512,11 @@ describe.skipIf(!hasChrome)(
 
 		/**
 		 * `anchor` is the next meeting's index — past meetings sit to its left, as
-		 * live. `width` pins the page to a phone's (see `PHONE_WIDTH`).
+		 * live.
 		 */
 		function fixture(
 			meetings: number,
 			anchor: number,
-			width?: number,
 			anchorName?: string,
 		): string {
 			const heads = Array.from({ length: meetings }, (_, i) => {
@@ -555,7 +535,7 @@ describe.skipIf(!hasChrome)(
 				</tr>`,
 			).join("");
 			return `
-				<div${width ? ` style="width:${width}px"` : ""}><div class="${page}">
+				<div class="${page}">
 					<div class="${frame}">
 						<div class="${scroller}" id="scroller">
 							<table class="${table}">
@@ -564,13 +544,14 @@ describe.skipIf(!hasChrome)(
 							</table>
 						</div>
 					</div>
-				</div></div>`;
+				</div>`;
 		}
-		const phone = () => fixture(8, 3, PHONE_WIDTH);
+		/** Pinned to a phone's width — see `phonePin`. */
+		const phone = () => phonePin(fixture(8, 3));
 		const desktop = () => fixture(16, 8);
 		/** A column wider than the room the label leaves: one long name, held on one line. */
 		const wideAnchor = () =>
-			fixture(8, 3, PHONE_WIDTH, "Abdurrahman&nbsp;Oyelaran&nbsp;Castillo");
+			phonePin(fixture(8, 3, "Abdurrahman&nbsp;Oyelaran&nbsp;Castillo"));
 
 		beforeAll(async () => {
 			scroller = classContaining(GRID, "scroll-fade-r");
@@ -598,11 +579,12 @@ describe.skipIf(!hasChrome)(
 			expect(src).toMatch(
 				/scrollAnchorClearOfPinnedColumn\(\s*scroller,\s*labelHeadRef\.current,\s*anchor,?\s*\)/,
 			);
+			// Each ref and its class in the SAME opening tag, in either prop order.
 			expect(src).toMatch(
-				/<th\s+ref=\{labelHeadRef\}\s+className="sticky top-0 left-0/,
+				/<th\b(?=[^>]*\bref=\{labelHeadRef\})(?=[^>]*className="sticky top-0 left-0)[^>]*>/,
 			);
 			expect(src).toMatch(
-				/ref=\{scrollerRef\}\s+className="relative scroll-fade-r/,
+				/<div\b(?=[^>]*\bref=\{scrollerRef\})(?=[^>]*className="relative scroll-fade-r)[^>]*>/,
 			);
 			expect(src).not.toMatch(/anchorRef\.current\?\.scrollIntoView/);
 		});
@@ -615,14 +597,16 @@ describe.skipIf(!hasChrome)(
 				viewport: PHONE,
 			});
 			// The phone is really a phone: production measured a 341px scroller.
-			expect(p.scrollerRight - p.scrollerLeft).toBeLessThanOrEqual(345);
+			expect(p.scrollerRight - p.scrollerLeft).toBeLessThanOrEqual(
+				PHONE_SCROLLER_MAX,
+			);
 			// Not vacuous: the grid genuinely has to scroll to reach the anchor.
 			expect(p.overflowsX).toBe(true);
 			expect(p.scrollLeft).toBeGreaterThan(0);
 			expect(
 				p.anchorLeft,
 				"the anchor meeting's left edge is under the pinned Role column",
-			).toBeGreaterThanOrEqual(p.labelRight - 0.5);
+			).toBeGreaterThanOrEqual(p.labelRight);
 			expect(p.anchorRight).toBeLessThanOrEqual(p.scrollerRight + 0.5);
 		});
 
@@ -630,6 +614,10 @@ describe.skipIf(!hasChrome)(
 			// Centring a column wider than the room left beside the label spills
 			// its left edge back under the label — #930 again — so it aligns to the
 			// label's edge instead, and its left edge (the name's start) is legible.
+			//
+			// Only the LEFT-edge half of #930's AC1 can hold here: a column wider
+			// than the room beside the label cannot also end inside the scroller,
+			// so its right edge is asserted nowhere, deliberately.
 			const p = probeAnchor({
 				bodyHtml: wideAnchor(),
 				css,
@@ -640,8 +628,10 @@ describe.skipIf(!hasChrome)(
 			expect(p.anchorRight - p.anchorLeft).toBeGreaterThan(
 				p.scrollerRight - p.labelRight,
 			);
-			expect(p.anchorLeft).toBeGreaterThanOrEqual(p.labelRight - 0.5);
-			expect(p.anchorLeft).toBeLessThanOrEqual(p.labelRight + 0.5);
+			// Against the label, with the helper's few pixels of margin — not 0px,
+			// which left it sub-pixel under the label's edge.
+			expect(p.anchorLeft).toBeGreaterThanOrEqual(p.labelRight + 2);
+			expect(p.anchorLeft).toBeLessThanOrEqual(p.labelRight + 6);
 		});
 
 		it("at 1280px the anchor column is still in view and clear of the label", () => {
@@ -655,13 +645,33 @@ describe.skipIf(!hasChrome)(
 			});
 			expect(p.overflowsX).toBe(true);
 			expect(p.scrollLeft).toBeGreaterThan(0);
-			expect(p.anchorLeft).toBeGreaterThanOrEqual(p.labelRight - 0.5);
+			expect(p.anchorLeft).toBeGreaterThanOrEqual(p.labelRight);
 			expect(p.anchorRight).toBeLessThanOrEqual(p.scrollerRight + 0.5);
 			// Still CENTRED on a wide screen (in the unobscured part of the box),
 			// so past and upcoming meetings both show either side of it, as before.
-			const regionMid = (p.labelRight + p.scrollerRight) / 2;
+			// (The region starts after the helper's 4px margin.)
+			const regionMid = (p.labelRight + 4 + p.scrollerRight) / 2;
 			const anchorMid = (p.anchorLeft + p.anchorRight) / 2;
 			expect(Math.abs(anchorMid - regionMid)).toBeLessThan(2);
+		});
+
+		it("re-aligns once fonts settle, when a late face swap widens the label", () => {
+			// A webfont arriving after mount re-measures every column. Modelled by
+			// widening the label COLUMN 40px (every row's label cell, since the
+			// column is as wide as its widest) straight after the first alignment — before
+			// `document.fonts.ready` resolves — which pushes the anchor's right
+			// edge out of the box until the helper runs again.
+			const p = probeAnchor({
+				bodyHtml: phone(),
+				css,
+				scroll: `${FIXED_SCROLL} ${WIDEN_LABEL_COLUMN}`,
+				viewport: PHONE,
+			});
+			expect(p.anchorLeft).toBeGreaterThanOrEqual(p.labelRight);
+			expect(
+				p.anchorRight,
+				"the anchor was not re-aligned after fonts settled",
+			).toBeLessThanOrEqual(p.scrollerRight + 0.5);
 		});
 
 		it("control: the pre-fix centred scroll hides the anchor under the label at 375px", () => {

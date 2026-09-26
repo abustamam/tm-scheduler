@@ -19,6 +19,11 @@
  * it does not, because a centred column wider than the room left spills its
  * left edge back under the label, which is the bug again.
  *
+ * A few pixels of margin keep a start-aligned column off the label's shadow
+ * edge. And the whole thing runs again once `document.fonts` settles, if the
+ * reader has not scrolled meanwhile: a late webfont swap re-measures every
+ * column, so the alignment computed against the fallback face goes stale.
+ *
  * Self-contained on purpose — no imports, no module state — because
  * `season-grid-geometry.test.ts` runs THIS function's source inside headless
  * Chrome, so the gate measures the shipped logic rather than a restatement of
@@ -29,11 +34,19 @@ export function scrollAnchorClearOfPinnedColumn(
 	pinned: HTMLElement | null,
 	anchor: HTMLElement,
 ): void {
-	const pinnedWidth = pinned ? pinned.getBoundingClientRect().width : 0;
-	scroller.style.scrollPaddingLeft = `${pinnedWidth}px`;
-	const room = scroller.clientWidth - pinnedWidth;
-	anchor.scrollIntoView({
-		inline: anchor.getBoundingClientRect().width > room ? "start" : "center",
-		block: "nearest",
+	const margin = 4;
+	const align = () => {
+		const pad = (pinned ? pinned.getBoundingClientRect().width : 0) + margin;
+		scroller.style.scrollPaddingLeft = `${pad}px`;
+		const room = scroller.clientWidth - pad;
+		anchor.scrollIntoView({
+			inline: anchor.getBoundingClientRect().width > room ? "start" : "center",
+			block: "nearest",
+		});
+		return scroller.scrollLeft;
+	};
+	const left = align();
+	document.fonts?.ready.then(() => {
+		if (scroller.scrollLeft === left) align();
 	});
 }
