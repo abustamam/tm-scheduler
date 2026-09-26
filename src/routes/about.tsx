@@ -85,8 +85,12 @@ export const DATA_FACTS = [
  *    what is included rather than saying "all", because agenda templates, the
  *    logo and vote tallies are not exported.
  *
- * Deletion on request is deliberately absent: it is false today, and is added
- * here by the change that makes it true (#914).
+ * Deletion on request is deliberately absent. The deletion itself now exists
+ * (`deleteClubPermanently` in `src/server/onboarding-logic.ts`, #914), but the
+ * sentence also says how long a deleted club lingers in backups, and that number
+ * depends on which Railway Postgres backup schedules this project has enabled.
+ * That is not recorded anywhere yet, so the sentence waits for the maintainer to
+ * confirm it rather than publishing a guessed number.
  */
 const DATA_PROMISES = [
 	"GavelUp doesn't share your club's data with advertisers or data brokers.",

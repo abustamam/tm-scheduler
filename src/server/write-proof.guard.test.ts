@@ -79,6 +79,7 @@ import { describe, expect, it } from "vitest";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
 	readSource,
+	serverFnBody,
 	serverFnDeclarations,
 	TOP_LEVEL_BOUNDARY,
 } from "#/test/guard-source";
@@ -880,5 +881,41 @@ describe("the session gates themselves (#761)", () => {
 				"requireUser",
 			),
 		).toContain(`throw new Error("${SIGN_IN_REQUIRED_MESSAGE}")`);
+	});
+});
+
+/**
+ * The one server fn that PERMANENTLY deletes other people's records (#914).
+ *
+ * The default sweep above already proves it reads a session. That is not the
+ * whole claim: any signed-in member passes `requireUser()`, and this fn deletes
+ * a whole club and every Person only it held. So it must ALSO be superadmin-gated,
+ * on the session's own id, BEFORE the delete runs — the order matters, because a
+ * gate that runs after the destructive call is decoration.
+ */
+describe("deleteConsoleClub is superadmin-only (#914)", () => {
+	const body = serverFnBody(
+		readSource(resolve(SERVER, "onboarding.ts")),
+		"deleteConsoleClub",
+	);
+
+	it("is a POST", () => {
+		expect(body).toContain('createServerFn({ method: "POST" })');
+	});
+
+	it("runs requireUser, then requireSuperadmin on that user, before the delete", () => {
+		const session = body.indexOf("const currentUser = await requireUser();");
+		const superadmin = body.indexOf("await requireSuperadmin(currentUser.id);");
+		const del = body.indexOf("deleteClubPermanently(");
+		expect(session, "requireUser() is gone").toBeGreaterThan(-1);
+		expect(
+			superadmin,
+			"requireSuperadmin(currentUser.id) is gone",
+		).toBeGreaterThan(-1);
+		expect(del, "the fn no longer calls deleteClubPermanently").toBeGreaterThan(
+			-1,
+		);
+		expect(session).toBeLessThan(superadmin);
+		expect(superadmin).toBeLessThan(del);
 	});
 });

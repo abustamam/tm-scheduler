@@ -5,6 +5,8 @@ import {
 	archiveClub,
 	createClubSchema,
 	createClubWithAdmin,
+	deleteClubPermanently,
+	deleteClubSchema,
 	getClubConsoleDetail,
 	listClubsForConsole,
 	unarchiveClub,
@@ -71,4 +73,15 @@ export const unarchiveConsoleClub = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
 		return unarchiveClub(data);
+	});
+
+/** PERMANENTLY delete an archived club and the people only it held (#914).
+ *  Irreversible. Refused unless the club is archived and `confirmName` matches
+ *  its name exactly. SUPERADMIN-only. */
+export const deleteConsoleClub = createServerFn({ method: "POST" })
+	.validator((input: unknown) => deleteClubSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireSuperadmin(currentUser.id);
+		return deleteClubPermanently(data.clubId, data.confirmName);
 	});

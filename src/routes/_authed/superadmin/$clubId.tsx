@@ -6,6 +6,7 @@ import {
 	Eye,
 	Loader2,
 	Pencil,
+	Trash2,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -17,6 +18,7 @@ import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import { startImpersonation } from "#/server/impersonation";
 import {
 	archiveConsoleClub,
+	deleteConsoleClub,
 	getConsoleClubDetail,
 	unarchiveConsoleClub,
 	updateConsoleAdminEmail,
@@ -329,7 +331,137 @@ function ArchivePanel({
 					)}
 				</Button>
 			)}
+			{isArchived ? (
+				<DeletePermanentlyPanel clubId={clubId} clubName={clubName} />
+			) : null}
 		</section>
+	);
+}
+
+type DeleteResult = Awaited<ReturnType<typeof deleteConsoleClub>>;
+
+function plural(n: number, one: string, many: string) {
+	return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * Permanently delete an ARCHIVED club (#914). Irreversible, so the button stays
+ * disabled until the club's exact name is typed — the server checks the same
+ * thing and is the one that decides. An error stays inline with the form; a
+ * success replaces the form with the counts and a Done button. There is no
+ * auto-redirect, and no `router.invalidate()`: this page's loader would now
+ * answer "Club not found."
+ */
+function DeletePermanentlyPanel({
+	clubId,
+	clubName,
+}: {
+	clubId: string;
+	clubName: string;
+}) {
+	const router = useRouter();
+	const [confirmName, setConfirmName] = useState("");
+	const [submitting, setSubmitting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [result, setResult] = useState<DeleteResult | null>(null);
+	const matches = confirmName.trim() === clubName;
+
+	async function onDelete(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		if (!matches) return;
+		setSubmitting(true);
+		setError(null);
+		try {
+			setResult(await deleteConsoleClub({ data: { clubId, confirmName } }));
+		} catch (err) {
+			setError(
+				err instanceof Error ? err.message : "Couldn't delete the club.",
+			);
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	if (result) {
+		return (
+			<div
+				aria-live="polite"
+				className="space-y-3 rounded-lg border border-[var(--line)] p-3"
+			>
+				<p className="text-sm font-semibold">
+					{result.clubName} was permanently deleted.
+				</p>
+				<ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+					<li>
+						{plural(result.peopleDeleted, "person", "people")} deleted,{" "}
+						{plural(result.peopleKept, "person", "people")} kept (in another
+						club).
+					</li>
+					<li>
+						{plural(result.usersDeleted, "account", "accounts")} deleted,{" "}
+						{plural(result.usersKept, "account", "accounts")} kept.
+					</li>
+				</ul>
+				<Button
+					type="button"
+					size="sm"
+					onClick={() => router.navigate({ to: "/superadmin" })}
+				>
+					Done
+				</Button>
+			</div>
+		);
+	}
+
+	return (
+		<form
+			onSubmit={onDelete}
+			className="space-y-3 rounded-lg border border-[var(--danger,#dc2626)]/40 bg-[var(--danger,#dc2626)]/5 p-3"
+		>
+			<h3 className="text-sm font-bold text-[var(--danger-strong,#b91c1c)]">
+				Delete permanently
+			</h3>
+			<p className="text-sm text-muted-foreground">
+				Deletes <span className="font-medium">{clubName}</span>, its meetings
+				and guests, and every member who isn't in another GavelUp club,
+				including their sign-in account. Members of another club keep their
+				account and Pathways history.{" "}
+				<span className="font-medium text-[var(--danger-strong,#b91c1c)]">
+					This can't be undone.
+				</span>
+			</p>
+			<div className="space-y-1.5">
+				<Label htmlFor="delete-confirm-name">
+					Type the club's name to confirm
+				</Label>
+				<Input
+					id="delete-confirm-name"
+					value={confirmName}
+					onChange={(e) => setConfirmName(e.target.value)}
+					autoComplete="off"
+					placeholder={clubName}
+				/>
+			</div>
+			{error ? (
+				<p role="alert" className="text-sm text-[var(--danger-strong,#b91c1c)]">
+					{error}
+				</p>
+			) : null}
+			<Button
+				type="submit"
+				size="sm"
+				variant="destructive"
+				disabled={submitting || !matches}
+			>
+				{submitting ? (
+					<Loader2 className="size-4 animate-spin" />
+				) : (
+					<>
+						<Trash2 className="size-4" /> Delete permanently
+					</>
+				)}
+			</Button>
+		</form>
 	);
 }
 

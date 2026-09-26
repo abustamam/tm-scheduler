@@ -8,10 +8,17 @@
 // module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). See `members-logic.ts` and
 // `server-modules.guard.test.ts`.
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs, members, people, roleDefinitions } from "#/db/schema";
+import {
+	clubs,
+	members,
+	people,
+	peopleEmailBackup,
+	roleDefinitions,
+	user,
+} from "#/db/schema";
 import {
 	CLUB_TIMEZONES,
 	DEFAULT_CLUB_TIMEZONE,
@@ -508,4 +515,198 @@ export async function unarchiveClub(clubId: string): Promise<{ ok: true }> {
 		.returning({ id: clubs.id });
 	if (!updated) throw new Error("Club not found.");
 	return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Permanently delete an archived club (#914).
+// ---------------------------------------------------------------------------
+
+/** Validates the `deleteConsoleClub` payload. The name is compared exactly in
+ *  `deleteClubPermanently`; the cap only bounds what the wire may carry. */
+export const deleteClubSchema = z.object({
+	clubId: z.string().uuid(),
+	confirmName: z.string().max(500),
+});
+
+export interface DeleteClubResult {
+	clubName: string;
+	/** Persons of this club who held no other membership, now deleted. */
+	peopleDeleted: number;
+	/** Persons of this club who hold another membership, kept. */
+	peopleKept: number;
+	/** Sign-in accounts of deleted Persons, now deleted. */
+	usersDeleted: number;
+	/** Sign-in accounts of deleted Persons that were kept: another Person still
+	 *  links to it, another club's logo or sync token names it, or it is a
+	 *  superadmin. */
+	usersKept: number;
+}
+
+/** Postgres's foreign-key violation. */
+const FOREIGN_KEY_VIOLATION = "23503";
+
+/**
+ * Delete one sign-in account, or keep it when another club's row still names it.
+ *
+ * Two foreign keys to `user` are `NO ACTION` rather than CASCADE:
+ * `club_logos.attested_by` and `sync_tokens.created_by`. By this point this
+ * club's own rows are gone, so a reference that remains belongs to ANOTHER club,
+ * and the account must stay. The delete runs in a SAVEPOINT and a foreign-key
+ * violation rolls back just that savepoint: Postgres's own check is the source of
+ * truth, so a NO ACTION reference added later is honoured without a list here to
+ * keep in step. Any OTHER error is rethrown and rolls back the whole delete.
+ */
+async function deleteUserUnlessReferenced(
+	tx: Tx,
+	userId: string,
+): Promise<boolean> {
+	try {
+		await tx.transaction(async (sp) => {
+			await sp.delete(user).where(eq(user.id, userId));
+		});
+		return true;
+	} catch (err) {
+		if (isForeignKeyViolation(err)) return false;
+		throw err;
+	}
+}
+
+/** Drizzle wraps the driver's error in `cause`, so look a few levels down. */
+function isForeignKeyViolation(err: unknown): boolean {
+	for (let e: unknown = err, i = 0; e && i < 3; i++) {
+		if ((e as { code?: unknown }).code === FOREIGN_KEY_VIOLATION) return true;
+		e = (e as { cause?: unknown }).cause;
+	}
+	return false;
+}
+
+/**
+ * Permanently delete an ARCHIVED club and everything that is only that club's
+ * (#914). Irreversible; only a database backup restore brings it back. The
+ * caller enforces the superadmin gate.
+ *
+ * One transaction, so any failure leaves nothing half-deleted:
+ *
+ * 1. Lock the club row, then refuse unless it is archived and `confirmName`
+ *    (trimmed) equals `clubs.name` EXACTLY — a different case is a mismatch.
+ * 2. Collect this club's Persons, then `DELETE FROM clubs`. Every club-scoped
+ *    table cascades from it (meetings and everything under them, members and
+ *    everything under THEM, guests, templates, the logo, sync tokens,
+ *    impersonation sessions, the activity log). `path_level_progress
+ *    .credited_club_id` is SET NULL: that row is the Person's progress.
+ * 3. People are club-less (ADR-0008), so the cascade leaves them. Each collected
+ *    Person is locked `FOR UPDATE` and re-checked for a remaining `members` row
+ *    AFTER the cascade, inside this transaction: a membership another club adds
+ *    concurrently either committed first (and is seen, so the Person is kept) or
+ *    blocks on the lock and then fails its FK. A Person with no membership left
+ *    is deleted, and their speeches, path enrollments and everything under those
+ *    cascade from it. Their snapshot in `people_email_backup` (migration 0076's
+ *    rollback table, keyed by person id with no FK) goes too, so their address
+ *    does not outlive them there.
+ * 4. Each deleted Person's sign-in account is locked `FOR UPDATE` and deleted —
+ *    sessions, OAuth grants and API tokens cascade from it — UNLESS another
+ *    Person still links to it, it is a superadmin, or another club's logo
+ *    attestation or sync token names it (see `deleteUserUnlessReferenced`).
+ *    Those accounts are kept and counted.
+ *
+ * A Person who is also in another club keeps their Person, account, Pathways and
+ * speech history; only this club's membership goes.
+ *
+ * Logged to the server log with counts only: `activity_log` goes with the club.
+ */
+export async function deleteClubPermanently(
+	clubId: string,
+	confirmName: string,
+): Promise<DeleteClubResult> {
+	const result = await db.transaction(async (tx) => {
+		const [club] = await tx
+			.select({ name: clubs.name, archivedAt: clubs.archivedAt })
+			.from(clubs)
+			.where(eq(clubs.id, clubId))
+			.for("update");
+		if (!club) throw new Error("Club not found.");
+		if (!club.archivedAt) throw new Error("Archive the club first.");
+		if (confirmName.trim() !== club.name) {
+			throw new Error("The name doesn't match.");
+		}
+
+		const memberRows = await tx
+			.selectDistinct({ personId: members.personId })
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		const personIds = memberRows.map((r) => r.personId);
+
+		await tx.delete(clubs).where(eq(clubs.id, clubId));
+
+		let peopleDeleted = 0;
+		let peopleKept = 0;
+		const candidateUserIds = new Set<string>();
+		if (personIds.length > 0) {
+			// Sorted so two concurrent deletes sharing Persons lock in one order.
+			const locked = await tx
+				.select({ id: people.id, userId: people.userId })
+				.from(people)
+				.where(inArray(people.id, personIds))
+				.orderBy(asc(people.id))
+				.for("update");
+			const stillMembers = await tx
+				.selectDistinct({ personId: members.personId })
+				.from(members)
+				.where(inArray(members.personId, personIds));
+			const keep = new Set(stillMembers.map((r) => r.personId));
+			const doomed = locked.filter((p) => !keep.has(p.id));
+			peopleKept = locked.length - doomed.length;
+			peopleDeleted = doomed.length;
+			for (const p of doomed) if (p.userId) candidateUserIds.add(p.userId);
+			if (doomed.length > 0) {
+				const doomedIds = doomed.map((p) => p.id);
+				await tx
+					.delete(peopleEmailBackup)
+					.where(inArray(peopleEmailBackup.personId, doomedIds));
+				await tx.delete(people).where(inArray(people.id, doomedIds));
+			}
+		}
+
+		let usersDeleted = 0;
+		let usersKept = 0;
+		const userIds = [...candidateUserIds].sort();
+		if (userIds.length > 0) {
+			const lockedUsers = await tx
+				.select({ id: user.id, isSuperadmin: user.isSuperadmin })
+				.from(user)
+				.where(inArray(user.id, userIds))
+				.orderBy(asc(user.id))
+				.for("update");
+			// A surviving Person still bound to the account keeps it. That link is
+			// `people.user_id ON DELETE SET NULL`, so Postgres would not stop the
+			// delete; this check is the only thing that does.
+			const linked = await tx
+				.selectDistinct({ id: people.userId })
+				.from(people)
+				.where(inArray(people.userId, userIds));
+			const stillLinked = new Set(linked.map((r) => r.id));
+			for (const u of lockedUsers) {
+				if (u.isSuperadmin || stillLinked.has(u.id)) {
+					usersKept++;
+					continue;
+				}
+				if (await deleteUserUnlessReferenced(tx, u.id)) usersDeleted++;
+				else usersKept++;
+			}
+		}
+
+		return {
+			clubName: club.name,
+			peopleDeleted,
+			peopleKept,
+			usersDeleted,
+			usersKept,
+		};
+	});
+
+	// Counts only, no names: the club's own activity log went with it.
+	console.info(
+		`[superadmin] club ${clubId} permanently deleted: people deleted=${result.peopleDeleted} kept=${result.peopleKept}; users deleted=${result.usersDeleted} kept=${result.usersKept}`,
+	);
+	return result;
 }
