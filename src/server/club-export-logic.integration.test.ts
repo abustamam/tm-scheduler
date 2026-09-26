@@ -88,6 +88,12 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 		.update(members)
 		.set({ phone: "+14155550100", joinedAt: new Date("2024-01-15T00:00:00Z") })
 		.where(inArray(members.id, [club.memberId]));
+	// A guest converted to a member: `joined_at` is the INSTANT of conversion,
+	// 19:30 on 1 Feb in Chicago, which is already 2 Feb in UTC.
+	await testDb
+		.update(members)
+		.set({ joinedAt: new Date("2024-02-02T01:30:00Z") })
+		.where(inArray(members.id, [club.adminMemberId]));
 	await testDb
 		.update(people)
 		.set({ customerId: `C-${tag}-${RUN}`.slice(0, 40) })
@@ -399,6 +405,11 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			joined_at: "2024-01-15",
 			customer_id: expect.stringContaining(`C-MINE${RUN}`),
 		});
+		// Imported (stored UTC midnight) → the UTC date; converted (an instant)
+		// → the club-local date.
+		expect(
+			f.rows.find((r) => r.member_id === a.club.adminMemberId)?.joined_at,
+		).toBe("2024-02-01");
 		expect(f.rows.map((r) => r.member_id).sort()).toEqual(
 			[a.club.memberId, a.club.adminMemberId].sort(),
 		);

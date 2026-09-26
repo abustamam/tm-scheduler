@@ -51,7 +51,13 @@ vi.mock("#/server/guards", async (importOriginal) => {
 });
 
 const { Route } = await import("#/routes/api/clubs.$clubId.export.zip");
-const { beginClubExport, CLUB_EXPORT_FILENAMES } = await import(
+// `loadClubExport` stays REAL too; wrapped so one test can make it throw
+// AFTER the route has claimed the club's export slot.
+vi.mock("./club-export-logic", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./club-export-logic")>();
+	return { ...actual, loadClubExport: vi.fn(actual.loadClubExport) };
+});
+const { beginClubExport, CLUB_EXPORT_FILENAMES, loadClubExport } = await import(
 	"./club-export-logic"
 );
 const { requireClubRole } = await import("#/server/guards");
@@ -169,11 +175,32 @@ describe.skipIf(!hasTestDb)("GET /api/clubs/$clubId/export/zip (#915)", () => {
 		again?.();
 	});
 
-	it("releases the slot when the request is refused, so a 403 does not lock the club", async () => {
-		expect((await download(club.clubId, club.memberUserId)).status).toBe(403);
-		const slot = beginClubExport(club.clubId);
-		expect(slot).not.toBeNull();
-		slot?.();
+	it("shares one slot between differently-cased spellings of the same club id", async () => {
+		const release = beginClubExport(club.clubId.toUpperCase());
+		expect(release).not.toBeNull();
+		try {
+			// The lowercase URL is the same club, so it waits its turn.
+			const res = await download(club.clubId, club.adminUserId);
+			expect(res.status).toBe(429);
+		} finally {
+			release?.();
+		}
+	});
+
+	it("releases the slot when the export fails after claiming it", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.mocked(loadClubExport).mockRejectedValueOnce(
+			new Error("export blew up"),
+		);
+		try {
+			await expect(download(club.clubId, club.adminUserId)).rejects.toThrow(
+				"export blew up",
+			);
+		} finally {
+			error.mockRestore();
+		}
+		// Had the failure kept the slot, this would be a 429 forever.
+		expect((await download(club.clubId, club.adminUserId)).status).toBe(200);
 	});
 
 	it("lets a non-authorization failure propagate instead of answering 403", async () => {

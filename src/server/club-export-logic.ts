@@ -188,6 +188,27 @@ export function utcDate(d: Date | null): string | null {
 	return d ? d.toISOString().slice(0, 10) : null;
 }
 
+/**
+ * `YYYY-MM-DD` of `members.joined_at`, which has two writers that disagree
+ * about what it holds. The roster import stores a calendar date as UTC
+ * midnight (read it with {@link utcDate}); converting a guest to a member
+ * stores the INSTANT of conversion (`new Date()`), which is a real moment and
+ * belongs to the club's calendar — a 7:30pm Chicago conversion is the next day
+ * in UTC. So: exactly UTC midnight is a stored date, anything else an instant.
+ * A conversion at precisely 00:00:00.000 UTC reads as a date, which is the
+ * same day in UTC and at most one day off for the club; that is the cost of
+ * one column meaning two things.
+ */
+export function joinedDate(d: Date | null, timeZone: string): string | null {
+	if (!d) return null;
+	const isUtcMidnight =
+		d.getUTCHours() === 0 &&
+		d.getUTCMinutes() === 0 &&
+		d.getUTCSeconds() === 0 &&
+		d.getUTCMilliseconds() === 0;
+	return isUtcMidnight ? utcDate(d) : localDate(d, timeZone);
+}
+
 /** Names, locale-aware, with a missing name (an open slot) last. */
 function compareNames(a: string | null, b: string | null): number {
 	if (a === b) return 0;
@@ -239,13 +260,17 @@ const exportsInFlight = new Set<string>();
  * release in a `finally`.
  */
 export function beginClubExport(clubId: string): (() => void) | null {
-	if (exportsInFlight.has(clubId)) return null;
-	exportsInFlight.add(clubId);
+	// Keyed on the CANONICAL id: `isReadableClub` accepts either case and
+	// Postgres reads a uuid case-insensitively, so `/ABCD…` and `/abcd…` are
+	// the same club and must share one slot.
+	const key = clubId.toLowerCase();
+	if (exportsInFlight.has(key)) return null;
+	exportsInFlight.add(key);
 	let released = false;
 	return () => {
 		if (released) return;
 		released = true;
-		exportsInFlight.delete(clubId);
+		exportsInFlight.delete(key);
 	};
 }
 
@@ -610,7 +635,7 @@ export async function loadClubExport(
 					phone: m.phone,
 					status: m.status,
 					club_role: m.clubRole,
-					joined_at: utcDate(m.joinedAt),
+					joined_at: joinedDate(m.joinedAt, tz),
 					customer_id: m.customerId,
 				}))
 				.sort(
