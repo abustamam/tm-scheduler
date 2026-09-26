@@ -144,7 +144,8 @@ describe.skipIf(!hasTestDb)("loadNextMeetingSummary (#932)", () => {
 		const next = await summaryAfter(presented);
 		expect(next).toEqual({
 			scheduledAt: new Date(BASE + 7 * DAY),
-			location: "Library Room B",
+			// Untrimmed: the deck builder owns the display trim.
+			location: "  Library Room B ",
 			theme: "Momentum",
 			meetingNumber: 57,
 			urlKey: "2031-03-17",

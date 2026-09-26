@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useRef } from "react";
 import type { NextMeetingSummary } from "#/lib/next-meeting-summary";
 
 /** How often the deck re-reads the next meeting's line-up while it is up. A
@@ -23,8 +24,10 @@ export const NEXT_MEETING_REFRESH_MS = 60_000;
  *   - No snapshot, no polling. A deck loaded with no next meeting has no slide
  *     for a refresh to fill, and adding one mid-presentation would shift every
  *     slide number after it under the presenter's feet.
- *   - A refresh that answers "no next meeting" keeps the snapshot, for the same
- *     reason in reverse: the slide does not vanish from under the presenter.
+ *   - A refresh that answers "no next meeting" keeps the LAST GOOD copy — the
+ *     newest non-null answer, else the snapshot — for the same reason in
+ *     reverse: the slide does not vanish from under the presenter, and it does
+ *     not step back to a line-up older than one it has already shown.
  *
  * `fetcher` is injected so the route passes the server fn and a test passes a
  * function that rejects.
@@ -46,5 +49,9 @@ export function useNextMeetingRefresh(
 		retry: false,
 		enabled: snapshot != null,
 	});
-	return query.data ?? snapshot;
+	// The newest non-null answer seen, refreshes included. A ref, not state:
+	// it changes only alongside `query.data`, which already re-renders.
+	const lastGood = useRef(snapshot);
+	if (query.data) lastGood.current = query.data;
+	return query.data ?? lastGood.current;
 }

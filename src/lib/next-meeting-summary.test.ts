@@ -6,10 +6,20 @@ import {
 } from "./next-meeting-summary";
 
 const s = (over: Partial<SummarySlot>): SummarySlot => ({
+	id: "s",
 	roleDefinitionId: "rd-timer",
 	roleName: "Timer",
 	roleKey: "timer",
+	category: "functionary",
+	isSpeakerRole: false,
+	slotIndex: 0,
 	assigneeName: null,
+	speechTitle: null,
+	projectLevel: null,
+	minMinutes: null,
+	maxMinutes: null,
+	evaluatesSlotId: null,
+	evaluates: null,
 	...over,
 });
 

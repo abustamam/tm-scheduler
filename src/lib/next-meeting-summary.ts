@@ -15,6 +15,7 @@
  * `src/routes/` asserts over what ships.
  */
 import { assigneeDisplayName } from "./agenda";
+import { type AgendaSlot, matchesRole } from "./agenda-runsheet";
 
 /** One role on the next meeting, all its places together. */
 export type NextMeetingRole = {
@@ -42,24 +43,16 @@ export type NextMeetingSummary = {
 	roles: NextMeetingRole[];
 };
 
-/** The slot fields the grouping reads — satisfied by `loadMeetingSlots`' rows. */
-export type SummarySlot = {
-	roleDefinitionId: string;
-	roleName: string;
-	roleKey: string | null;
-	assigneeName: string | null;
-	assigneeIsGuest?: boolean;
-};
+/** The slot the grouping reads: an agenda slot — so the Toastmaster is found by
+ *  the run sheet's own `matchesRole` — plus the role DEFINITION it belongs to.
+ *  `loadMeetingSlots`' rows satisfy it structurally. */
+export type SummarySlot = AgendaSlot & { roleDefinitionId: string };
 
-const TOASTMASTER_KEY = "toastmaster_of_the_day";
-const TOASTMASTER_NAME = "toastmaster of the day";
-
-/** The Toastmaster by stable key, falling back to the name for a role with no
- *  key — the same binding rule `matchesRole` gives the run sheet. */
+/** The Toastmaster, bound by stable key with the name as fallback — the run
+ *  sheet's `matchesRole`, not a copy of it, so a club that renamed the role is
+ *  found here exactly when its agenda finds it. */
 const isToastmaster = (s: SummarySlot) =>
-	s.roleKey != null
-		? s.roleKey === TOASTMASTER_KEY
-		: s.roleName.toLowerCase() === TOASTMASTER_NAME;
+	matchesRole(s, "toastmaster_of_the_day", "Toastmaster of the Day");
 
 /**
  * Group slots into roles, keeping the order they arrive in.

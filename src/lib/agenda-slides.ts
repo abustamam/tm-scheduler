@@ -935,6 +935,9 @@ export function nextMeetingSlide(
 		kind: "nextMeeting",
 		scheduledAt: new Date(next.scheduledAt),
 		timezone,
+		// Trimmed HERE and nowhere upstream: the builder is the one owner of
+		// display cleanup, as it is for the current meeting's theme above, and it
+		// sees the refreshed summary too, not only the server's first answer.
 		location: next.location?.trim() || null,
 		theme: next.theme?.trim() || null,
 		meetingNumber: next.meetingNumber,

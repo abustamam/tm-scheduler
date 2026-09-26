@@ -1,7 +1,7 @@
 import { QRCodeSVG } from "qrcode.react";
 import type { Body } from "#/lib/slide-layout";
 
-// The deck's palette (see `meeting-present.tsx`), restated for the three this
+// The deck's palette (see `meeting-present.tsx`), restated for the two this
 // body uses: importing them from there would make the presenter and this module
 // import each other.
 const MAROON = "#770D29";

@@ -74,20 +74,24 @@ export type RosterRow = {
 
 /**
  * How many role rows the next-meeting slide lists before it collapses the
- * filled ones (#932). MEASURED, not chosen: at 1280x720 the body room holds the
- * lead block and the QR beside it, then four rows a column in two columns, and
- * an ordinary standard line-up (seven roles past the Toastmaster) needs no
- * shrinking at all. `next-meeting-slide-geometry.test.tsx` re-measures it in a
- * real browser, because jsdom does no layout.
+ * filled ones (#932). MEASURED, not chosen, as the largest count that stays
+ * legible: rows fill two columns, so they cost height in PAIRS, and against
+ * `next-meeting-slide-geometry.test.tsx`'s long-name fixture ten rows need a
+ * scale of 0.85 where eleven or twelve need 0.79, under that suite's 0.80
+ * floor. It re-measures in a real browser (jsdom does no layout) and fails if
+ * this is raised past what fits; `slide-layout-next-meeting.test.ts` fails if
+ * it is lowered below ten.
  */
-export const MAX_ROSTER_ROWS = 8;
+export const MAX_ROSTER_ROWS = 10;
 /**
- * How many OPEN rows still get a row each once the filled roles have been
- * collapsed into a line. Fewer than `MAX_ROSTER_ROWS` because that line takes
- * room of its own. Past it, the open roles collapse into a line too — every
- * one still named, never dropped or grouped into a count.
+ * How many OPEN roles still get a row each once the filled roles have been
+ * collapsed into a line. MEASURED the same way: eight open rows plus that line
+ * need 0.85, nine or ten need 0.78. Eight covers the ordinary meeting a week out — most
+ * roles still open — which is exactly when a per-role list is worth most. Past
+ * it the open roles collapse into a line too, as the overflow fallback only:
+ * every one still named, never dropped or grouped into a count.
  */
-export const MAX_OPEN_ROWS = 4;
+export const MAX_OPEN_ROWS = 8;
 
 export type SlideLayout =
 	| {
@@ -640,8 +644,8 @@ function openText(role: NextMeetingRole): string | null {
 	if (role.openCount === 0) return null;
 	if (role.names.length > 0) return `+${role.openCount} open`;
 	return role.openCount === 1
-		? "Open: grab it tonight!"
-		: `${role.openCount} open: grab one tonight!`;
+		? "Open: grab it!"
+		: `${role.openCount} open: grab one!`;
 }
 
 function rosterRow(role: NextMeetingRole): RosterRow {
@@ -707,23 +711,9 @@ function rosterBody(slide: NextMeetingSlide): Body {
 	return {
 		form: "roster",
 		when,
-		toastmaster: slide.toastmaster
-			? {
-					label: slide.toastmaster.label,
-					names:
-						slide.toastmaster.names.length > 0
-							? slide.toastmaster.names.join(", ")
-							: null,
-					// The lead line says "Open" and nothing more: it is the biggest
-					// text on the slide, and the rows below carry the call to action.
-					open:
-						slide.toastmaster.names.length === 0
-							? "Open"
-							: slide.toastmaster.openCount > 0
-								? `+${slide.toastmaster.openCount} open`
-								: null,
-				}
-			: null,
+		// The same row as every other role, so the lead line and the list below
+		// can never describe a filled or open role in different words.
+		toastmaster: slide.toastmaster ? rosterRow(slide.toastmaster) : null,
 		meta: meta || null,
 		rows,
 		filled,

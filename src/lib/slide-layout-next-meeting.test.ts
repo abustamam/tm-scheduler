@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Slide } from "./agenda-slides";
 import type { NextMeetingRole } from "./next-meeting-summary";
-import {
-	MAX_OPEN_ROWS,
-	MAX_ROSTER_ROWS,
-	type RosterRow,
-	slideLayout,
-	slideName,
-} from "./slide-layout";
+import { type RosterRow, slideLayout, slideName } from "./slide-layout";
 
 type NextSlide = Extract<Slide, { kind: "nextMeeting" }>;
 
@@ -71,7 +65,11 @@ describe("the next-meeting slide's layout (#932)", () => {
 		expect(
 			roster(slide({ toastmaster: role("Toastmaster of the Day", [], 1) })).body
 				.toastmaster,
-		).toEqual({ label: "Toastmaster of the Day", names: null, open: "Open" });
+		).toEqual({
+			label: "Toastmaster of the Day",
+			names: null,
+			open: "Open: grab it!",
+		});
 		expect(roster(slide({ toastmaster: null })).body.toastmaster).toBeNull();
 	});
 
@@ -95,10 +93,10 @@ describe("the next-meeting slide's layout (#932)", () => {
 			}),
 		).body.rows;
 		expect(rows).toEqual([
-			{ label: "Timer", names: null, open: "Open: grab it tonight!" },
+			{ label: "Timer", names: null, open: "Open: grab it!" },
 			{ label: "Grammarian", names: "Mona", open: null },
 			{ label: "Speaker", names: "Rehanna", open: "+2 open" },
-			{ label: "Evaluator", names: null, open: "3 open: grab one tonight!" },
+			{ label: "Evaluator", names: null, open: "3 open: grab one!" },
 		]);
 	});
 
@@ -118,11 +116,32 @@ describe("the next-meeting slide's layout (#932)", () => {
 					: role(`Role ${i + 1}`, [`Person ${i + 1}`]),
 			);
 
-		it(`lists every role a row each up to ${MAX_ROSTER_ROWS}`, () => {
-			const { body } = roster(slide({ roles: many(MAX_ROSTER_ROWS, 3) }));
-			expect(body.rows).toHaveLength(MAX_ROSTER_ROWS);
+		// ABSOLUTE floors, never stated against the caps they constrain — a bound
+		// written as `MAX_ROSTER_ROWS` moves with the constant and cannot see it
+		// change. How high each cap may go is the geometry suite's question;
+		// these say how LOW it may not, from what that suite measured to fit.
+		it("lists ten roles a row each, filled or open", () => {
+			const { body } = roster(slide({ roles: many(10, 3) }));
+			expect(body.rows).toHaveLength(10);
 			expect(body.filled).toBeNull();
 			expect(body.openList).toBeNull();
+		});
+
+		it("the week-out meeting: 12 roles, 8 open — every open role keeps its row", () => {
+			const roles = [
+				...Array.from({ length: 8 }, (_, i) => role(`Open ${i + 1}`, [], 1)),
+				...Array.from({ length: 4 }, (_, i) =>
+					role(`Filled ${i + 1}`, [`Person ${i + 1}`]),
+				),
+			];
+			const { body } = roster(slide({ roles }));
+			expect(body.rows.map((r) => r.label)).toEqual(
+				roles.slice(0, 8).map((r) => r.label),
+			);
+			expect(body.openList).toBeNull();
+			expect(body.filled).toBe(
+				"Also on the agenda: Filled 1: Person 1 · Filled 2: Person 2 · Filled 3: Person 3 · Filled 4: Person 4",
+			);
 		});
 
 		it("at ~20 roles: open ones keep a row, filled ones collapse to a line", () => {
@@ -135,7 +154,6 @@ describe("the next-meeting slide's layout (#932)", () => {
 				"Role 16",
 			]);
 			expect(body.rows.every((r) => r.open)).toBe(true);
-			expect(body.rows.length).toBeLessThanOrEqual(MAX_OPEN_ROWS);
 			// Every filled role is still on the slide, with its holder.
 			for (const r of roles.filter((x) => x.openCount === 0)) {
 				expect(body.filled).toContain(`${r.label}: ${r.names[0]}`);

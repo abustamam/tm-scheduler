@@ -108,7 +108,7 @@ describe("the next-meeting slide in the .pptx (#932)", () => {
 			"Toastmaster of the Day:",
 			"Meeting #57 · Theme: “Momentum”",
 			"Timer:",
-			"Open: grab it tonight!",
+			"Open: grab it!",
 			"Grammarian:",
 			" Mona",
 			"Scan to grab a role",
@@ -119,7 +119,7 @@ describe("the next-meeting slide in the .pptx (#932)", () => {
 
 	it("colours the open roles in the accent, not the names", () => {
 		const runs = runsOf(objectsOf(SIGNUP).objects);
-		const open = runs.find((r) => r.text.includes("grab it tonight"));
+		const open = runs.find((r) => r.text.includes("grab it!"));
 		const name = runs.find((r) => r.text === " Mona");
 		expect(open?.options.color).toBe("770D29");
 		expect(name).toBeDefined();
@@ -159,7 +159,7 @@ describe("the next-meeting slide in the .pptx (#932)", () => {
 			.join("");
 		expect(text).not.toContain("Scan to grab a role");
 		// …and the roles are all still there.
-		expect(text).toContain("Open: grab it tonight!");
+		expect(text).toContain("Open: grab it!");
 	});
 
 	it("writes a real file", async () => {

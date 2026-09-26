@@ -7,7 +7,11 @@ import { describe, expect, it } from "vitest";
 import type { Slide } from "#/lib/agenda-slides";
 import type { NextMeetingRole } from "#/lib/next-meeting-summary";
 import { fitScale } from "#/lib/slide-fit";
-import { slideLayout } from "#/lib/slide-layout";
+import {
+	MAX_OPEN_ROWS,
+	MAX_ROSTER_ROWS,
+	slideLayout,
+} from "#/lib/slide-layout";
 import {
 	CHROME_ENV,
 	CHROME_TEST_TIMEOUT_MS,
@@ -28,7 +32,7 @@ import { NextMeetingBodyView, type RosterBody } from "./next-meeting-body";
  * than by stylesheet classes — inside the deck's measured 1280x720 body box,
  * reads its natural height, and asks `fitScale` what the projector would do.
  *
- * The CONTROL is the same twenty roles listed a row each, which is what the
+ * The CONTROL is the same fourteen roles listed a row each, which is what the
  * slide would show without `rosterBody`'s collapsing: it must need a markedly
  * smaller scale, or this suite could not tell the overflow rule from its
  * absence.
@@ -39,14 +43,17 @@ import { NextMeetingBodyView, type RosterBody } from "./next-meeting-body";
 const hasChrome = findChrome() !== null;
 
 /**
- * The smallest scale the projected slide may need at a realistic worst case.
+ * The smallest scale the projected slide may need, at a realistic worst case
+ * and at each cap.
  *
- * MEASURED against this harness's fallback face, which is wider than Manrope:
- * the worst case below needs 0.82 and the all-rows control 0.70, so the floor
- * sits between them with room either side for font noise. At 0.75 the 1.8cqw
- * role rows still project at about 1.35cqw — 26px on a 1920px-wide projector.
+ * MEASURED against this harness's fallback face, which is wider than Manrope
+ * (#932, fonts pinned by `CHROME_ENV`): the worst case needs 0.82, a full row
+ * cap (10) 0.85, a full open-row cap (8) plus the filled line 0.85 — and one
+ * step past either cap 0.79 / 0.78, the all-rows control 0.70. At 0.80 the
+ * 1.8cqw role rows still project at 1.44cqw, about 28px on a 1920px-wide
+ * projector.
  */
-const MIN_SCALE = 0.75;
+const MIN_SCALE = 0.8;
 
 const role = (
 	label: string,
@@ -58,9 +65,9 @@ const role = (
 	openCount,
 });
 
-/** A full standard meeting plus the extras clubs add: twenty places across
- *  fifteen roles, the Toastmaster led, four roles still open. Names are long on
- *  purpose — "Rehanna Khan", not "Ann". */
+/** A full standard meeting plus the extras clubs add: fourteen roles past the
+ *  Toastmaster, nineteen places counting it, four roles still open. Names are
+ *  long on purpose — "Rehanna Khan", not "Ann". */
 const WORST: NextMeetingRole[] = [
 	role("General Evaluator", ["Saiful Islam"]),
 	role("Table Topics Master", [], 1),
@@ -77,6 +84,33 @@ const WORST: NextMeetingRole[] = [
 	role("Photographer", ["Guadalupe Hernandez"]),
 	role("Greeter", ["Oluwaseun Adeyemi"]),
 ];
+
+/** Open roles for the open-row tier, long labels first-come — more of them
+ *  than any sane `MAX_OPEN_ROWS`, so raising the cap is measured, not clipped. */
+const OPEN_POOL = [
+	"Table Topics Master",
+	"Sergeant at Arms",
+	"General Evaluator",
+	"Vote Counter",
+	"Speaker",
+	"Evaluator",
+	"Grammarian",
+	"Ah-Counter",
+	"Joke Master",
+	"Quiz Master",
+	"Photographer",
+	"Listener",
+	"Greeter",
+	"Timer",
+	"Word Master",
+	"Hospitality",
+];
+
+/** Eight filled roles with long names, for the collapsed "Also on the agenda"
+ *  line beside the open rows. */
+const FILLED_EIGHT = WORST.filter(
+	(r) => r.openCount === 0 && r.names.length === 1,
+).slice(0, 8);
 
 const slide = (
 	roles: NextMeetingRole[],
@@ -184,7 +218,7 @@ describe.skipIf(!hasChrome)(
 				rows: WORST.map((r) => ({
 					label: r.label,
 					names: r.names.join(", ") || null,
-					open: r.openCount > 0 ? "Open: grab it tonight!" : null,
+					open: r.openCount > 0 ? "Open: grab it!" : null,
 				})),
 				filled: null,
 			};
@@ -204,15 +238,40 @@ describe.skipIf(!hasChrome)(
 			// A next meeting nobody has signed up for yet — the common case a week
 			// out — collapses the open roles too, and stays as legible.
 			expect(scale(o)).toBeGreaterThanOrEqual(MIN_SCALE);
-			// The control: twenty rows would have shrunk the slide well past it.
+			// The control: fourteen rows would have shrunk the slide well past it.
 			expect(scale(c)).toBeLessThan(MIN_SCALE);
 		});
 
+		/**
+		 * The two caps, measured AT the cap and against the absolute floor — never
+		 * stated in terms of the constant itself, which would loosen as the
+		 * constant grows. Raising either cap past what fits turns these red; the
+		 * absolute floors in `slide-layout-next-meeting.test.ts` turn lowering
+		 * them red.
+		 */
 		it("a full row cap of long names stays above the floor", () => {
-			const cap = bodyOf(WORST.slice(0, 8));
+			const cap = bodyOf(WORST.slice(0, MAX_ROSTER_ROWS));
+			// Tier 1 really is what is measured: every role its own row.
 			expect(cap.filled).toBeNull();
-			expect(cap.rows).toHaveLength(8);
+			expect(cap.rows).toHaveLength(Math.min(MAX_ROSTER_ROWS, WORST.length));
 			const [t] = measure(["cap"], frame("cap", cap));
+			if (!t) throw new Error("missing measurement");
+			expect(fitScale(BOX, t)).toBeGreaterThanOrEqual(MIN_SCALE);
+		});
+
+		it("a full open-row cap plus the filled line stays above the floor", () => {
+			const roles = [
+				...OPEN_POOL.slice(0, MAX_OPEN_ROWS).map((l) => role(l, [], 1)),
+				...FILLED_EIGHT,
+			];
+			const body = bodyOf(roles);
+			// Tier 2 really is what is measured: a row per open role, the filled
+			// ones on one line.
+			expect(body.rows).toHaveLength(Math.min(MAX_OPEN_ROWS, OPEN_POOL.length));
+			expect(body.rows.every((r) => r.open)).toBe(true);
+			expect(body.filled).not.toBeNull();
+			expect(body.openList).toBeNull();
+			const [t] = measure(["open-cap"], frame("open-cap", body));
 			if (!t) throw new Error("missing measurement");
 			expect(fitScale(BOX, t)).toBeGreaterThanOrEqual(MIN_SCALE);
 		});

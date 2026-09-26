@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, eq, gte, lt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -18,12 +18,7 @@ import {
 	MEETING_UPDATE_FIELDS,
 } from "#/lib/meeting-limits";
 import { pairedRoleIds } from "#/lib/meeting-roles";
-import {
-	localDateKey,
-	localDayRange,
-	meetingUrlKey,
-	urlKeysForMeetings,
-} from "#/lib/meeting-url";
+import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
@@ -59,6 +54,7 @@ import {
 	loadTemplateContent,
 	loadTemplateKey,
 } from "./meeting-templates-logic";
+import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
@@ -221,22 +217,11 @@ async function loadMeetingDetail(
 	// Canonical date URL key for THIS meeting: club-local date, suffixed with
 	// -HHmm only when the club has 2+ meetings that local day (date-urls feature).
 	const tz = club?.timezone ?? "UTC";
-	const { start: dayStart, end: dayEnd } = localDayRange(
-		localDateKey(meeting.scheduledAt, tz),
+	const urlKey = await resolveMeetingUrlKey(
+		meeting.clubId,
+		meeting.scheduledAt,
 		tz,
 	);
-	const [{ count: sameDayCount } = { count: 0 }] = await db
-		.select({ count: sql<number>`count(*)::int` })
-		.from(meetings)
-		.where(
-			and(
-				eq(meetings.clubId, meeting.clubId),
-				gte(meetings.scheduledAt, dayStart),
-				lt(meetings.scheduledAt, dayEnd),
-				ne(meetings.status, "cancelled"),
-			),
-		);
-	const urlKey = meetingUrlKey(meeting.scheduledAt, tz, sameDayCount >= 2);
 
 	// Officers for the printable agenda's officer grid (#100). The full agenda
 	// line-up (President → Sergeant at Arms; Immediate Past President is left off

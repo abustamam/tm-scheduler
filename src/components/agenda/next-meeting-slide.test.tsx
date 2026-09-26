@@ -86,15 +86,12 @@ describe("the next-meeting slide on the projector (#932)", () => {
 			screen.getByText("Thursday, July 9, 2026 · 6:45 PM · Library Room B"),
 		).toBeTruthy();
 		expect(screen.getByTestId("next-meeting-toastmaster").textContent).toBe(
-			"Toastmaster of the Day: Open",
+			"Toastmaster of the Day: Open: grab it!",
 		);
 		const roles = screen
 			.getAllByTestId("next-meeting-role")
 			.map((r) => r.textContent);
-		expect(roles).toEqual([
-			"Timer: Open: grab it tonight!",
-			"Grammarian: Mona",
-		]);
+		expect(roles).toEqual(["Timer: Open: grab it!", "Grammarian: Mona"]);
 		expect(screen.getByText("Meeting #57 · Theme: “Momentum”")).toBeTruthy();
 	});
 
@@ -169,6 +166,24 @@ describe("the silent refresh behind the slide (#932)", () => {
 		await waitFor(() => expect(view.result.current).toEqual(FRESH));
 		await act(() => qc.refetchQueries());
 		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(view.result.current).toEqual(FRESH);
+	});
+
+	it("a refresh answering 'no next meeting' keeps the LAST GOOD copy, not the load-time one", async () => {
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(FRESH)
+			.mockResolvedValueOnce(null);
+		const { qc, view } = hook(SNAPSHOT, fetcher);
+		await act(() => qc.refetchQueries());
+		await waitFor(() => expect(view.result.current).toEqual(FRESH));
+		await act(() => qc.refetchQueries());
+		await waitFor(() =>
+			expect(
+				qc.getQueryData(["next-meeting-summary", "club", "m1"]),
+			).toBeNull(),
+		);
+		view.rerender();
 		expect(view.result.current).toEqual(FRESH);
 	});
 

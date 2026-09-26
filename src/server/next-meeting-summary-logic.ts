@@ -18,15 +18,15 @@
 // was already there (three more columns), plus a same-day count and the next
 // meeting's slots, the last two in parallel. The meeting number is DERIVED from
 // the current one rather than resolved again — see below.
-import { and, asc, eq, gte, lt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, ne } from "drizzle-orm";
 import { db } from "#/db";
 import { meetings } from "#/db/schema";
-import { localDateKey, localDayRange, meetingUrlKey } from "#/lib/meeting-url";
 import {
 	type NextMeetingSummary,
 	summarizeRoles,
 } from "#/lib/next-meeting-summary";
 import { loadMeetingSlots } from "./meeting-slots-logic";
+import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 
 /** The summary as the server builds it: `scheduledAt` is still a `Date`. */
 export type LoadedNextMeeting = NextMeetingSummary & { scheduledAt: Date };
@@ -74,36 +74,22 @@ export async function loadNextMeetingSummary(
 		.limit(1);
 	if (!next) return null;
 
-	// The next meeting's canonical URL key, with the same-day disambiguation
-	// `loadMeetingDetail` gives the current one: a bare date resolves to the
-	// EARLIEST meeting that day, so on a double-header the QR must carry -HHmm
-	// or it opens the wrong meeting.
-	const { start, end } = localDayRange(
-		localDateKey(next.scheduledAt, timezone),
-		timezone,
-	);
-	const [[{ count: sameDay } = { count: 0 }], slots] = await Promise.all([
-		db
-			.select({ count: sql<number>`count(*)::int` })
-			.from(meetings)
-			.where(
-				and(
-					eq(meetings.clubId, current.clubId),
-					gte(meetings.scheduledAt, start),
-					lt(meetings.scheduledAt, end),
-					ne(meetings.status, "cancelled"),
-				),
-			),
+	// The next meeting's canonical URL key — through the same resolver
+	// `loadMeetingDetail` uses for the current one, so the QR carries -HHmm on a
+	// double-header exactly when that meeting's own page link does.
+	const [urlKey, slots] = await Promise.all([
+		resolveMeetingUrlKey(current.clubId, next.scheduledAt, timezone),
 		loadMeetingSlots(next.id),
 	]);
 
 	return {
 		scheduledAt: next.scheduledAt,
-		location: next.location?.trim() || null,
-		theme: next.theme?.trim() || null,
+		// Raw: `nextMeetingSlide` owns the display trim.
+		location: next.location,
+		theme: next.theme,
 		meetingNumber:
 			next.meetingNumber ?? (currentNumber != null ? currentNumber + 1 : null),
-		urlKey: meetingUrlKey(next.scheduledAt, timezone, sameDay >= 2),
+		urlKey,
 		...summarizeRoles(slots),
 	};
 }
