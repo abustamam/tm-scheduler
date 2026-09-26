@@ -19,6 +19,10 @@ import {
 	orderEvaluators,
 } from "./agenda-runsheet";
 import type { BeatTiming } from "./agenda-template-slides";
+import type {
+	NextMeetingRole,
+	NextMeetingSummary,
+} from "./next-meeting-summary";
 import {
 	type SpeechWindowInput,
 	speechBookedMinutes,
@@ -337,6 +341,29 @@ export type Slide =
 			notes: string[];
 	  }
 	| {
+			/** "What's on tap for next meeting" (#932): the last content slide,
+			 *  just before the Thank-You splash, while the room is still seated
+			 *  and the open roles can be filled in person. Built by
+			 *  `nextMeetingSlide` for BOTH decks, and only when a next
+			 *  non-cancelled meeting exists — without one the deck is exactly what
+			 *  it was. A snapshot: everything here was loaded with the deck, so it
+			 *  renders on a laptop with no wifi. */
+			kind: "nextMeeting";
+			scheduledAt: Date;
+			timezone: string;
+			location: string | null;
+			theme: string | null;
+			meetingNumber: number | null;
+			/** Null when that meeting runs no Toastmaster of the Day (a contest). */
+			toastmaster: NextMeetingRole | null;
+			/** Every other role, in agenda order, filled or open. */
+			roles: NextMeetingRole[];
+			/** Absolute URL of the next meeting's public page, for the "Scan to
+			 *  grab a role" QR. Null until the browser's origin is known, and the
+			 *  slide then shows no QR rather than one encoding a relative path. */
+			signupUrl: string | null;
+	  }
+	| {
 			kind: "thankYou";
 			meetingSchedule: string | null;
 			nextMeetingAt: Date | null;
@@ -463,6 +490,11 @@ export type SlideDeckInput = Omit<RunOfShowConfig, "tableTopicsLimits"> & {
 	nextMeetingAt?: Date | null;
 	/** The club's effective meeting number (#358) — stored or derived upstream. */
 	meetingNumber?: number | null;
+	/** Backs the "What's on tap for next meeting" slide (#932); null or absent
+	 *  when there is no next meeting, which leaves the deck unchanged. */
+	nextMeeting?: NextMeetingSummary | null;
+	/** The sign-up QR's absolute URL — see `Slide.nextMeeting.signupUrl`. */
+	nextMeetingSignupUrl?: string | null;
 	/** Absolute URL of this meeting's public ballot (#510), carried onto every
 	 *  vote slide. Required rather than defaulted: building it needs the
 	 *  request's origin, which this pure deck builder has no business knowing —
@@ -480,6 +512,8 @@ export function buildSlideDeck({
 	meetingNumber = null,
 	geIntroducesFunctionaries,
 	ballotUrl,
+	nextMeeting = null,
+	nextMeetingSignupUrl = null,
 }: SlideDeckInput): Slide[] {
 	const deck: Slide[] = [];
 	// The same run-of-show the printed agenda expands, built from the same club
@@ -865,6 +899,15 @@ export function buildSlideDeck({
 	// guests will be in the room.
 	deck.push({ kind: "guestComments" });
 
+	// What's on tap next (#932): the last thing the room reads before the
+	// closing splash, and the moment to fill next week's open roles in person.
+	const onTap = nextMeetingSlide(
+		nextMeeting,
+		club.timezone,
+		nextMeetingSignupUrl,
+	);
+	if (onTap) deck.push(onTap);
+
 	deck.push({
 		kind: "thankYou",
 		meetingSchedule: club.meetingSchedule,
@@ -873,4 +916,30 @@ export function buildSlideDeck({
 	});
 
 	return deck;
+}
+
+/**
+ * The "What's on tap for next meeting" slide (#932), or null when there is no
+ * next meeting. Shared by `buildSlideDeck` and `buildTemplateSlideDeck`, which
+ * each push it immediately before `thankYou`, so the two decks cannot disagree
+ * about what it says — a contest's deck ends on the same slide a standard
+ * meeting's does.
+ */
+export function nextMeetingSlide(
+	next: NextMeetingSummary | null,
+	timezone: string,
+	signupUrl: string | null,
+): Slide | null {
+	if (!next) return null;
+	return {
+		kind: "nextMeeting",
+		scheduledAt: new Date(next.scheduledAt),
+		timezone,
+		location: next.location?.trim() || null,
+		theme: next.theme?.trim() || null,
+		meetingNumber: next.meetingNumber,
+		toastmaster: next.toastmaster,
+		roles: next.roles,
+		signupUrl,
+	};
 }

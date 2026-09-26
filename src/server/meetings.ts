@@ -71,6 +71,7 @@ import {
 	loadTmodPanelData,
 } from "./meetings-logic";
 import { loadMyCommitments } from "./my-activity-logic";
+import { loadNextMeetingSummary } from "./next-meeting-summary-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
 import { loadPastMeetings } from "./past-meetings-logic";
 import { listRoleDefinitions } from "./role-definitions-logic";
@@ -236,22 +237,6 @@ async function loadMeetingDetail(
 			),
 		);
 	const urlKey = meetingUrlKey(meeting.scheduledAt, tz, sameDayCount >= 2);
-
-	// The club's next non-cancelled meeting strictly after this one (spec: relative
-	// to the presented meeting, not wall-clock now). Backs the Thank-You slide.
-	const [nextMeeting] = await db
-		.select({ scheduledAt: meetings.scheduledAt })
-		.from(meetings)
-		.where(
-			and(
-				eq(meetings.clubId, meeting.clubId),
-				gte(meetings.scheduledAt, meeting.scheduledAt),
-				ne(meetings.id, meeting.id),
-				ne(meetings.status, "cancelled"),
-			),
-		)
-		.orderBy(asc(meetings.scheduledAt))
-		.limit(1);
 
 	// Officers for the printable agenda's officer grid (#100). The full agenda
 	// line-up (President → Sergeant at Arms; Immediate Past President is left off
@@ -452,6 +437,14 @@ async function loadMeetingDetail(
 	// `meeting.meetingNumber` (which is the raw stored column, often null).
 	const meetingNumber = await resolveMeetingNumber(meetingId);
 
+	// The club's next non-cancelled meeting strictly after this one (spec: relative
+	// to the presented meeting, not wall-clock now), summarised for the deck's
+	// "What's on tap for next meeting" slide (#932) — date, place, theme, and every
+	// role with its holders' names. It also backs the Thank-You slide's date, so
+	// the two slides are one read. Names only; an in-room artifact still narrows
+	// it through `inRoomMeetingPayload` like everything else on this payload.
+	const nextMeeting = await loadNextMeetingSummary(meeting, tz, meetingNumber);
+
 	return {
 		meeting,
 		meetingNumber,
@@ -459,6 +452,7 @@ async function loadMeetingDetail(
 		canManage,
 		roleRecency,
 		nextMeetingAt: nextMeeting?.scheduledAt ?? null,
+		nextMeeting,
 		timezone: club?.timezone ?? "UTC",
 		clubName: club?.name ?? "",
 		clubNumber: club?.clubNumber ?? null,

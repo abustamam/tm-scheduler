@@ -1,3 +1,8 @@
+import type {
+	NextMeetingRole,
+	NextMeetingSummary,
+} from "./next-meeting-summary";
+
 /**
  * The meeting row an IN-ROOM ARTIFACT is allowed to carry (#754).
  *
@@ -90,7 +95,8 @@ export type InRoomPayload<T extends { meeting: object }> = Omit<
 };
 
 /**
- * The detail payload with its `meeting` narrowed to `IN_ROOM_MEETING_FIELDS`.
+ * The detail payload with its `meeting` narrowed to `IN_ROOM_MEETING_FIELDS`,
+ * and its `nextMeeting` (#932) narrowed to `IN_ROOM_NEXT_MEETING_FIELDS`.
  *
  * Everything else on the payload passes through: the artifacts read `slots`,
  * `officers`, `template` and the club fields, and a public payload already
@@ -98,7 +104,8 @@ export type InRoomPayload<T extends { meeting: object }> = Omit<
  * `canManage = false`).
  *
  * A field the caller's `meeting` does not have stays ABSENT rather than
- * becoming `undefined`, so a partial fixture round-trips unchanged.
+ * becoming `undefined`, so a partial fixture round-trips unchanged — and the
+ * same holds for `nextMeeting` on a payload that has none.
  */
 export function inRoomMeetingPayload<T extends { meeting: object }>(
 	data: T,
@@ -110,5 +117,77 @@ export function inRoomMeetingPayload<T extends { meeting: object }>(
 			kept[field] = (meeting as Record<string, unknown>)[field];
 		}
 	}
-	return { ...rest, meeting: kept } as InRoomPayload<T>;
+	const out: Record<string, unknown> = { ...rest, meeting: kept };
+	// The next meeting rides the same payload onto all three in-room routes
+	// (`/present` draws it; `/print` and `/word` carry it because they spread the
+	// same object), so it is narrowed HERE, once, for all of them.
+	if (Object.hasOwn(rest, "nextMeeting")) {
+		out.nextMeeting = inRoomNextMeeting(
+			(rest as { nextMeeting?: NextMeetingSummary | null }).nextMeeting ?? null,
+		);
+	}
+	return out as InRoomPayload<T>;
+}
+
+/**
+ * Every field of the NEXT meeting an in-room artifact may carry (#932) — the
+ * "What's on tap for next meeting" slide on `/present` and in its `.pptx`.
+ *
+ * The same allowlist argument as `IN_ROOM_MEETING_FIELDS`, one meeting over.
+ * `NextMeetingSummary` is built by a projection of its own and carries nothing
+ * else today, but it rides the same dehydrated loader payload, and a field
+ * added to it later reaches the wall only if someone adds it HERE on purpose.
+ * Deliberately absent: the next meeting's id, its video-call link, its notes,
+ * and any contact for the people named.
+ */
+export const IN_ROOM_NEXT_MEETING_FIELDS = [
+	/** The slide's date and time line, and the Thank-You splash's. */
+	"scheduledAt",
+	/** On the slide's date line. */
+	"location",
+	/** Under the Toastmaster, when set. */
+	"theme",
+	/** "Meeting #57" beside the theme. */
+	"meetingNumber",
+	/** The sign-up QR's path — a public URL key, not an id. */
+	"urlKey",
+	/** The role the slide leads with, and every other role. Names only. */
+	"toastmaster",
+	"roles",
+] as const;
+
+/** The fields of one ROLE on the next meeting that may ship: a label and
+ *  display names. No member id, no contact. */
+export const IN_ROOM_NEXT_MEETING_ROLE_FIELDS = [
+	"label",
+	"names",
+	"openCount",
+] as const;
+
+const pickRole = (r: NextMeetingRole): NextMeetingRole => ({
+	label: r.label,
+	names: [...r.names],
+	openCount: r.openCount,
+});
+
+/**
+ * The next-meeting summary narrowed to `IN_ROOM_NEXT_MEETING_FIELDS`, with each
+ * role narrowed to `IN_ROOM_NEXT_MEETING_ROLE_FIELDS`. Null passes through: a
+ * club with nothing scheduled after this meeting gets no slide.
+ */
+export function inRoomNextMeeting<N extends NextMeetingSummary>(
+	next: N | null,
+): N | null {
+	if (!next) return null;
+	return {
+		scheduledAt: next.scheduledAt,
+		location: next.location,
+		theme: next.theme,
+		meetingNumber: next.meetingNumber,
+		urlKey: next.urlKey,
+		toastmaster: next.toastmaster ? pickRole(next.toastmaster) : null,
+		roles: next.roles.map(pickRole),
+		// Typed as the input: every key above is one `NextMeetingSummary`
+		// declares, so the narrowed object is a (possibly smaller) value of it.
+	} as N;
 }

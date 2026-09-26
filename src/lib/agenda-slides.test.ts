@@ -13,6 +13,7 @@ import {
 	type Slide,
 	type SlideDeckInput,
 } from "./agenda-slides";
+import type { NextMeetingSummary } from "./next-meeting-summary";
 import { slideLayout } from "./slide-layout";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
@@ -1847,5 +1848,89 @@ describe("the speech preamble adds no slide (#719)", () => {
 		expect(
 			JSON.stringify(speechStretch).includes("objectives and timing"),
 		).toBe(false);
+	});
+});
+
+describe("What's on tap for next meeting (#932)", () => {
+	const NEXT: NextMeetingSummary = {
+		scheduledAt: new Date("2026-07-09T23:45:00Z"),
+		location: "Library Room B",
+		theme: "Momentum",
+		meetingNumber: 57,
+		urlKey: "2026-07-09",
+		toastmaster: {
+			label: "Toastmaster of the Day",
+			names: ["Schinthia"],
+			openCount: 0,
+		},
+		roles: [
+			{ label: "Timer", names: [], openCount: 1 },
+			{ label: "Speaker", names: ["Rehanna"], openCount: 2 },
+		],
+	};
+	const SIGNUP = "https://gavelup.test/club/mcf/meeting/2026-07-09";
+	const full = [
+		slot({ roleName: "Toastmaster of the Day", assigneeName: "A" }),
+		slot({ id: "t", roleName: "Timer", assigneeName: "B" }),
+	];
+
+	it("sits immediately before the Thank-You splash", () => {
+		const deck = build({
+			slots: full,
+			nextMeeting: NEXT,
+			nextMeetingSignupUrl: SIGNUP,
+		});
+		const at = deck.findIndex((s) => s.kind === "nextMeeting");
+		expect(at).toBe(deck.length - 2);
+		expect(deck[deck.length - 1]?.kind).toBe("thankYou");
+		// After guest comments: the room's last content slide.
+		expect(deck[at - 1]?.kind).toBe("guestComments");
+	});
+
+	it("carries the summary, the club timezone and the sign-up URL", () => {
+		const s = build({ nextMeeting: NEXT, nextMeetingSignupUrl: SIGNUP }).find(
+			(x) => x.kind === "nextMeeting",
+		);
+		expect(s).toEqual({
+			kind: "nextMeeting",
+			scheduledAt: new Date("2026-07-09T23:45:00Z"),
+			timezone: "America/Chicago",
+			location: "Library Room B",
+			theme: "Momentum",
+			meetingNumber: 57,
+			toastmaster: NEXT.toastmaster,
+			roles: NEXT.roles,
+			signupUrl: SIGNUP,
+		});
+	});
+
+	it("revives a serialised date and blanks whitespace-only text", () => {
+		const s = build({
+			nextMeeting: {
+				...NEXT,
+				scheduledAt: "2026-07-09T23:45:00.000Z",
+				location: "  ",
+				theme: "",
+			},
+		}).find((x) => x.kind === "nextMeeting");
+		if (s?.kind !== "nextMeeting") throw new Error("no slide");
+		expect(s.scheduledAt).toBeInstanceOf(Date);
+		expect(s.location).toBeNull();
+		expect(s.theme).toBeNull();
+		// No origin yet: no URL, rather than a relative one.
+		expect(s.signupUrl).toBeNull();
+	});
+
+	it("leaves the deck byte-for-byte unchanged with no next meeting", () => {
+		const before = build({ slots: full });
+		expect(JSON.stringify(build({ slots: full, nextMeeting: null }))).toBe(
+			JSON.stringify(before),
+		);
+		expect(
+			JSON.stringify(
+				build({ slots: full, nextMeeting: null, nextMeetingSignupUrl: SIGNUP }),
+			),
+		).toBe(JSON.stringify(before));
+		expect(before.some((s) => s.kind === "nextMeeting")).toBe(false);
 	});
 });

@@ -28,6 +28,31 @@ export type Body =
 	  }
 	| { form: "numbered"; items: string[] }
 	| {
+			/** The next meeting's line-up (#932): who is doing what, and which
+			 *  roles are still open. Its own form because it is the one body that
+			 *  is a TABLE — two columns of role/holder pairs, with the open ones in
+			 *  an accent colour so they read from across the room — and the one
+			 *  content body that carries a QR in the descriptor. */
+			form: "roster";
+			/** Date, time and location, in the club's timezone. */
+			when: string;
+			/** The role the slide leads with, or null when the meeting runs no
+			 *  Toastmaster of the Day. */
+			toastmaster: RosterRow | null;
+			/** "Meeting #57 · Theme: “Beginnings”", or null when neither is set. */
+			meta: string | null;
+			/** Roles listed one per row. Every role when they fit; the OPEN ones
+			 *  only when they do not — see `rosterBody`. */
+			rows: RosterRow[];
+			/** Filled roles collapsed into one line when listing them all would
+			 *  not fit one slide, else null. */
+			filled: string | null;
+			/** Open roles collapsed into one line — the last resort, when even
+			 *  the open rows alone would not fit. Every open role is still named. */
+			openList: string | null;
+			qr: { url: string; caption: string } | null;
+	  }
+	| {
 			form: "word";
 			word: string;
 			definition: string | null;
@@ -36,6 +61,33 @@ export type Body =
 			 *  Mona"), or `null` when the club runs no Grammarian (#354). */
 			presenter: string | null;
 	  };
+
+/**
+ * One role on the next-meeting slide (#932). `names` and `open` are separate so
+ * a renderer can colour only the open half; either may be null, never both.
+ */
+export type RosterRow = {
+	label: string;
+	names: string | null;
+	open: string | null;
+};
+
+/**
+ * How many role rows the next-meeting slide lists before it collapses the
+ * filled ones (#932). MEASURED, not chosen: at 1280x720 the body room holds the
+ * lead block and the QR beside it, then four rows a column in two columns, and
+ * an ordinary standard line-up (seven roles past the Toastmaster) needs no
+ * shrinking at all. `next-meeting-slide-geometry.test.tsx` re-measures it in a
+ * real browser, because jsdom does no layout.
+ */
+export const MAX_ROSTER_ROWS = 8;
+/**
+ * How many OPEN rows still get a row each once the filled roles have been
+ * collapsed into a line. Fewer than `MAX_ROSTER_ROWS` because that line takes
+ * room of its own. Past it, the open roles collapse into a line too — every
+ * one still named, never dropped or grouped into a count.
+ */
+export const MAX_OPEN_ROWS = 4;
 
 export type SlideLayout =
 	| {
@@ -534,6 +586,8 @@ export function slideLayout(
 				detail: slide.notes,
 			});
 		}
+		case "nextMeeting":
+			return content("What’s on tap for next meeting", rosterBody(slide));
 		case "thankYou":
 			return {
 				chrome: "splash",
@@ -576,4 +630,106 @@ function thankYouSub(slide: Extract<Slide, { kind: "thankYou" }>): Line[] {
 		sub.push(muted(`We meet ${slide.meetingSchedule}`));
 	}
 	return sub;
+}
+
+type NextMeetingSlide = Extract<Slide, { kind: "nextMeeting" }>;
+type NextMeetingRole = NextMeetingSlide["roles"][number];
+
+/** The call to action an open role carries, in the accent colour. */
+function openText(role: NextMeetingRole): string | null {
+	if (role.openCount === 0) return null;
+	if (role.names.length > 0) return `+${role.openCount} open`;
+	return role.openCount === 1
+		? "Open: grab it tonight!"
+		: `${role.openCount} open: grab one tonight!`;
+}
+
+function rosterRow(role: NextMeetingRole): RosterRow {
+	return {
+		label: role.label,
+		names: role.names.length > 0 ? role.names.join(", ") : null,
+		open: openText(role),
+	};
+}
+
+/**
+ * The next-meeting slide's body (#932).
+ *
+ * Every role, filled or open, when they fit. When they do not, three tiers, and
+ * the order is the point — the slide exists to get open roles filled, so an
+ * open role is the last thing to lose its row and is never dropped:
+ *
+ *   1. up to `MAX_ROSTER_ROWS` roles: one row each;
+ *   2. otherwise, up to `MAX_OPEN_ROWS` open roles: a row each, and the fully
+ *      filled roles collapse into one "Also on the agenda" line;
+ *   3. otherwise: the open roles collapse into one "Still open" line that names
+ *      every one of them, and the filled roles into the other.
+ */
+function rosterBody(slide: NextMeetingSlide): Body {
+	const at = slide.scheduledAt;
+	const when = [
+		fmtDate(at, slide.timezone, true),
+		fmtTime(at, slide.timezone),
+		slide.location,
+	]
+		.filter(Boolean)
+		.join(" · ");
+	const meta = [
+		slide.meetingNumber != null ? `Meeting #${slide.meetingNumber}` : null,
+		slide.theme ? `Theme: “${slide.theme}”` : null,
+	]
+		.filter(Boolean)
+		.join(" · ");
+
+	const all = slide.roles;
+	const open = all.filter((r) => r.openCount > 0);
+	const filledLine = (roles: NextMeetingRole[]) =>
+		roles.length > 0
+			? `Also on the agenda: ${roles.map((r) => `${r.label}: ${r.names.join(", ")}`).join(" · ")}`
+			: null;
+
+	let rows: RosterRow[];
+	let filled: string | null = null;
+	let openList: string | null = null;
+	if (all.length <= MAX_ROSTER_ROWS) {
+		rows = all.map(rosterRow);
+	} else if (open.length <= MAX_OPEN_ROWS) {
+		rows = open.map(rosterRow);
+		filled = filledLine(all.filter((r) => r.openCount === 0));
+	} else {
+		rows = [];
+		openList = `Still open: ${open
+			.map((r) => (r.openCount > 1 ? `${r.label} (${r.openCount})` : r.label))
+			.join(", ")}`;
+		filled = filledLine(all.filter((r) => r.names.length > 0));
+	}
+
+	return {
+		form: "roster",
+		when,
+		toastmaster: slide.toastmaster
+			? {
+					label: slide.toastmaster.label,
+					names:
+						slide.toastmaster.names.length > 0
+							? slide.toastmaster.names.join(", ")
+							: null,
+					// The lead line says "Open" and nothing more: it is the biggest
+					// text on the slide, and the rows below carry the call to action.
+					open:
+						slide.toastmaster.names.length === 0
+							? "Open"
+							: slide.toastmaster.openCount > 0
+								? `+${slide.toastmaster.openCount} open`
+								: null,
+				}
+			: null,
+		meta: meta || null,
+		rows,
+		filled,
+		openList,
+		qr: slide.signupUrl
+			? { url: slide.signupUrl, caption: "Scan to grab a role" }
+			: null,
+	};
 }
