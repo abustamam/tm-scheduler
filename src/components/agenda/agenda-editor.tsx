@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { SaveClubTemplateButton } from "#/components/agenda/save-club-template-dialog";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -268,6 +269,7 @@ export function AgendaEditor({
 	onRemoveRole,
 }: AgendaEditorProps) {
 	const { editable, roles, attachableRoles } = draft;
+	const saveOffered = draft.meetingId !== undefined && draft.cancelled !== true;
 
 	// The draft is the server's truth; this is what the officer is typing. Keyed
 	// on `draft.rows` identity so a structural mutation (add/remove/move, which
@@ -463,32 +465,47 @@ export function AgendaEditor({
 				</table>
 			</div>
 
-			{editable ? (
+			{editable || saveOffered ? (
 				<div className="flex flex-wrap gap-2">
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => runAction(() => onAddRow(null, "section"))}
-					>
-						Add row: Section
-					</Button>
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => runAction(() => onAddRow(null, "role"))}
-					>
-						Add row: Role
-					</Button>
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => runAction(() => onAddRow(null, "event"))}
-					>
-						Add row: Event
-					</Button>
+					{editable ? (
+						<>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => runAction(() => onAddRow(null, "section"))}
+							>
+								Add row: Section
+							</Button>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => runAction(() => onAddRow(null, "role"))}
+							>
+								Add row: Role
+							</Button>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => runAction(() => onAddRow(null, "event"))}
+							>
+								Add row: Event
+							</Button>
+						</>
+					) : null}
+					{/* Outside the `editable` gate on purpose (#909): last week's
+					    agenda is a legitimate thing to save, and a completed meeting
+					    is read-only. A cancelled one is not offered — the server
+					    refuses it, and a button that can only fail is worse than
+					    none. */}
+					{saveOffered && draft.meetingId ? (
+						<SaveClubTemplateButton
+							meetingId={draft.meetingId}
+							clubUuid={clubUuid}
+						/>
+					) : null}
 				</div>
 			) : null}
 

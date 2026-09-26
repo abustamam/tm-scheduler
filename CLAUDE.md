@@ -556,7 +556,7 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 | Debug | `/investigate`. It is the debugging skill here and satisfies superpowers' systematic-debugging gate. |
 | Open a PR | `gh pr create`. The agent stops there. |
 | Review a PR | `/review-pr N` from the main session. gstack `/review` in the PR's worktree **as well** for a risk category (below). |
-| Land | `gh pr merge --squash --auto`. Needs the repo's **Allow auto-merge** setting ON — see below. Branch protection requires the branch to be up to date with `main`, so after each PR lands run `gh pr update-branch N` on the rest; CI re-runs and auto-merge fires when green. |
+| Land | `gh pr merge --squash --auto`. Needs the repo's **Allow auto-merge** setting ON — see below. Branch protection no longer requires the branch to be up to date with `main` (`strict: false` since 2026-09-25, below), so an armed PR merges as soon as its own CI is green. `gh pr update-branch N` only for a real conflict; CI on `main` after the merge is what catches a cross-PR clash. |
 | Verify a wave | `/qa-only` against the deployed app, once per wave after it has all landed, before the next meeting. A finding becomes an issue only if it passes "What earns an issue", and it is `needs-triage` until the maintainer says otherwise. |
 | See what shipped | `/retro` (gstack), and the two health greps in `docs/agents/issue-tracker.md` alongside it. `/session-retro` is the other one: what in the agent's environment made a session harder than it needed to be. |
 | Park debt | Don't. Inside the diff, fix it; outside it, the three-way rule under "What earns an issue". `TODOS/` takes no new files. |
@@ -571,27 +571,36 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
   no issue; then the body says so in one line (`Asked for directly; no issue`) and the PR is the
   record. Everything else in the body is optional.
 - **A wave agent never merges its own PR.** Merging happens from the main session, after
-  `/review-pr`. A wave PR is green against the `main` that existed when its CI ran, so branch
-  protection requires the branch to be up to date before it merges (`strict: true`, set
-  2026-09-05): after each PR lands, `gh pr update-branch N` on the others and let CI re-run.
-  Before this, `/ship` merged `main` into the branch before testing and nothing else checked.
-  A merge queue would do the updating unattended, and it was the first choice, but GitHub offers
-  it only on organization-owned repositories and this one is user-owned (the rulesets API
-  returns an empty-reason 422 on a `merge_queue` rule). `ci.yml` keeps its `merge_group:`
-  trigger, inert today, so the queue is one setting away if the repo ever moves to an org.
+  `/review-pr`. A wave PR is green against the `main` that existed when its CI ran, and branch
+  protection does NOT require it to be up to date before it merges (`strict: false` on `main`,
+  required checks `check` and `extension`). So a PR merges on its own green CI, and
+  `gh pr update-branch N` is needed only when GitHub reports a real conflict — a migration
+  number collision is the usual one, and it surfaces as an ordinary git conflict. What catches a
+  cross-PR clash now is **CI on `main` after the merge**: `batch:issues` waves are file-disjoint
+  by construction, so the risk left is one PR's change breaking another's through an import, and
+  a red `main` run is where that shows. Watch it after a wave lands.
+  History, so nobody re-enables it blind: `strict` was `true` from 2026-09-05 to 2026-09-25, and
+  was turned off because every landing left the other armed PRs BEHIND, each needing an
+  `update-branch` and a full CI rerun, with merges roughly every half hour. A workflow holding a
+  PAT to do the updating automatically (#924) was judged overkill and closed. A merge queue would
+  do it unattended too, but GitHub offers one only on organization-owned repositories and this
+  one is user-owned (the rulesets API returns an empty-reason 422 on a `merge_queue` rule).
+  `ci.yml` keeps its `merge_group:` trigger, inert today, so the queue is one setting away if the
+  repo ever moves to an org.
 - **`--auto` needs the repo's "Allow auto-merge" setting, and its being OFF has no symptom
   until you try to land.** It was off here until 2026-09-07, so the Land step above did not
   work as written: `gh pr merge --squash --auto` fails with `GraphQL: Auto merge is not allowed
   for this repository (enablePullRequestAutoMerge)`, which reads like a permissions problem and
-  is not one — it is `allow_auto_merge: false` on the repo, unrelated to `strict: true` and to
+  is not one — it is `allow_auto_merge: false` on the repo, unrelated to `strict` and to
   the org-only merge queue above. Check with
   `gh api repos/abustamam/tm-scheduler --jq '.allow_auto_merge'`; turn it back on with
   `gh api -X PATCH repos/abustamam/tm-scheduler -F allow_auto_merge=true`. Keep it on: arming
   auto-merge is what makes "merges only when green" a mechanism rather than the merger's
   discipline, and `enforce_admins` is `false` here, so a manual `gh pr merge --squash` from an
   admin account can land a PR whose required checks are still pending or failing.
-  It does NOT update a stale branch — that is the merge queue's job, which is why
-  `gh pr update-branch` stays a manual step per landing.
+  With `strict` off it does not need to update a stale branch: an armed PR that is merely
+  behind `main` merges on green. It still cannot resolve a conflict, which is the one case
+  `gh pr update-branch` (or a local merge) is for.
 - **Do not pass `--delete-branch`.** `delete_branch_on_merge` is already true on the repo, so
   the remote branch goes on merge; the flag's remaining job is deleting the LOCAL branch, which
   fails while it is checked out in a worktree. Remove the worktree, then the branch.

@@ -168,6 +168,14 @@ export interface MeetingAgendaProps {
 	effectiveMeetingNumber?: number | null;
 	/** Club timezone — the meta dialog renders/parses the date field in it. */
 	timezone: string;
+	/** The route's one "is it over?" answer (`isMeetingOver`, #393), computed
+	 *  from its frozen `now` and handed in rather than recomputed here, so the
+	 *  agenda cannot read a different instant from the rest of the page (and
+	 *  the server and client render agree at club-local midnight). Optional and
+	 *  FAIL-CLOSED: absent reads as over, so a caller that forgets it shows no
+	 *  "can't make it" flag rather than one on a meeting that has happened. The
+	 *  route's wiring is pinned in `meeting-agenda.test.tsx`. */
+	meetingOver?: boolean;
 	/** Self-asserted identity the lifted edit dialogs pass to their server fns
 	 *  (ADR-0010 TMOD/Grammarian path). The activity-log actor is NOT sent — the
 	 *  server derives it from the session or the verified self-assertion (#396). */
@@ -217,6 +225,7 @@ export function MeetingAgenda({
 	templateKey,
 	effectiveMeetingNumber = null,
 	timezone,
+	meetingOver = true,
 	selfMemberId,
 	onMetaSaved,
 	requireIdentity,
@@ -306,12 +315,32 @@ export function MeetingAgenda({
 
 	// Recruiting pool for open-slot nudges (#37) — every active member, annotated
 	// (not filtered) with availability + the role they already hold this meeting.
+	// One set, read by both the recruit picker and the "can't make it" flag.
+	const unavailableSet = new Set(unavailableMemberIds);
 	const recruitTargets = buildRecruitTargets(
 		roster,
-		new Set(unavailableMemberIds),
+		unavailableSet,
 		roleByMemberId,
 		new Set(contactedMemberIds),
 	);
+
+	// "Can't make it" flag (#764). Since ADR-0026 an unverified "not coming" no
+	// longer frees the member's roles, so a role can stay assigned to someone who
+	// said they won't be there — the card has to say so to EVERY viewer, which is
+	// why this reads the shared payload's ids and the route's `meetingOver`
+	// rather than a per-audience capability: an admin keeps `canClaim` on a
+	// past-but-open meeting that a member sees frozen, and the flag must not
+	// differ between them. So a manager on a past-but-not-completed meeting does
+	// NOT see it: the meeting has happened, and nobody needs a new holder.
+	//
+	// `viewer.canClaim` is redundant on the one route that renders this today —
+	// `resolveMeetingViewer` only returns a `lockedViewer` when the meeting is
+	// completed or (for a non-manager) over, both of which make `meetingOver`
+	// true. It is kept because this component cannot see that coupling: it takes
+	// the viewer and `meetingOver` as two independent props, and a locked viewer
+	// is the one thing that hides Claim and Release, so it must hide this too.
+	const flagsUnavailableHolders =
+		viewer.canClaim && !meetingOver && meeting.status !== "cancelled";
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -595,69 +624,99 @@ export function MeetingAgenda({
 								// a narrowing of `slot.assigneeId` the moment it crosses a
 								// closure boundary.
 								const holderMemberId = slot.assigneeId;
+								// Not `isOpen` alone: an open slot carries no holder, and a
+								// guest's id is not a member id, whatever the list holds.
+								const holderCantMakeIt =
+									flagsUnavailableHolders &&
+									holderMemberId != null &&
+									!slot.assigneeIsGuest &&
+									unavailableSet.has(holderMemberId);
 								return (
 									<li
 										key={slot.id}
 										className="rounded-xl border bg-card p-4 shadow-sm"
 									>
 										<div className="flex items-start justify-between gap-3">
-											<button
-												type="button"
-												onClick={() => handleClaimClick(slot)}
-												disabled={!isOpen || !canClaim}
-												className="min-w-0 flex-1 text-left disabled:cursor-default"
-											>
-												<p className="font-medium">
-													{slotLabel(slot, roleCounts)}
-												</p>
+											{/* The flag sits OUTSIDE (below) the claim button, in a wrapper
+											    that takes over its flex-1: a button's children are
+											    presentational, so a status region inside it is not
+											    announced as one. */}
+											<div className="min-w-0 flex-1">
+												<button
+													type="button"
+													onClick={() => handleClaimClick(slot)}
+													disabled={!isOpen || !canClaim}
+													className="w-full min-w-0 text-left disabled:cursor-default"
+												>
+													<p className="font-medium">
+														{slotLabel(slot, roleCounts)}
+													</p>
 
-												{slot.assigneeName ? (
-													<p className="text-sm text-muted-foreground">
-														{slot.assigneeName}
-														{slot.assigneeIsGuest ? (
-															<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-																Guest
+													{slot.assigneeName ? (
+														<p className="text-sm text-muted-foreground">
+															{slot.assigneeName}
+															{slot.assigneeIsGuest ? (
+																<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+																	Guest
+																</span>
+															) : null}
+															{isMine ? (
+																<span className="text-primary"> (you)</span>
+															) : null}
+														</p>
+													) : (
+														<p className="text-sm text-muted-foreground">
+															Open
+														</p>
+													)}
+
+													{slot.isSpeakerRole && slot.speechTitle ? (
+														<div className="mt-1 text-sm">
+															<p className="font-medium">
+																&ldquo;{slot.speechTitle}&rdquo;
+															</p>
+															<p className="text-xs text-muted-foreground">
+																{[
+																	slot.pathwayPath,
+																	slot.projectName,
+																	slot.projectLevel,
+																]
+																	.filter(Boolean)
+																	.join(" · ")}
+																{timeWindow
+																	? ` · ${timeWindow.min}–${timeWindow.max} min`
+																	: ""}
+															</p>
+														</div>
+													) : null}
+
+													{slot.evaluates ? (
+														<p className="mt-1 text-xs text-muted-foreground">
+															Evaluates{" "}
+															<span className="font-medium text-foreground">
+																{slot.evaluates.speechTitle
+																	? `“${slot.evaluates.speechTitle}”`
+																	: (slot.evaluates.speakerName ?? "a speaker")}
 															</span>
-														) : null}
-														{isMine ? (
-															<span className="text-primary"> (you)</span>
-														) : null}
-													</p>
-												) : (
-													<p className="text-sm text-muted-foreground">Open</p>
-												)}
-
-												{slot.isSpeakerRole && slot.speechTitle ? (
-													<div className="mt-1 text-sm">
-														<p className="font-medium">
-															&ldquo;{slot.speechTitle}&rdquo;
 														</p>
-														<p className="text-xs text-muted-foreground">
-															{[
-																slot.pathwayPath,
-																slot.projectName,
-																slot.projectLevel,
-															]
-																.filter(Boolean)
-																.join(" · ")}
-															{timeWindow
-																? ` · ${timeWindow.min}–${timeWindow.max} min`
-																: ""}
-														</p>
-													</div>
+													) : null}
+												</button>
+												{holderCantMakeIt ? (
+													// `<output>`: its implicit role IS `status`, the
+													// repo's convention (see `sync-status.tsx`); `block`
+													// puts it on its own line below the whole claim
+													// button, speech details included. It names the
+													// ROLE so two cards held by one person differ, and
+													// on the viewer's own card it drops the third
+													// person the "(you)" row already replaced.
+													<output className="mt-1 block text-xs text-[var(--warning-foreground)]">
+														{isMine
+															? "You said you can't make it."
+															: `${slot.assigneeName} can't make it.`}{" "}
+														{slotLabel(slot, roleCounts)} needs a new holder.
+													</output>
 												) : null}
-
-												{slot.evaluates ? (
-													<p className="mt-1 text-xs text-muted-foreground">
-														Evaluates{" "}
-														<span className="font-medium text-foreground">
-															{slot.evaluates.speechTitle
-																? `“${slot.evaluates.speechTitle}”`
-																: (slot.evaluates.speakerName ?? "a speaker")}
-														</span>
-													</p>
-												) : null}
-											</button>
+											</div>
 
 											<div className="flex shrink-0 flex-col items-end gap-2">
 												{/* Accessible names carry the ROW ("Move Speaker 2 up"),

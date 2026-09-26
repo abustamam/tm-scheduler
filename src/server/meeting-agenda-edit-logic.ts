@@ -195,6 +195,26 @@ export function attachableBankRoles(
 }
 
 export type AgendaDraft = {
+	/**
+	 * The meeting's UUID (#909) — what "Save as club template" names as its
+	 * source. `loadAgendaDraft` always sets it; OPTIONAL only so the editor's
+	 * existing presentational fixtures, which predate it, still type-check.
+	 *
+	 * The editor OFFERS the save when this is present and `cancelled` below is
+	 * not true — so a completed (read-only) meeting offers it and a cancelled
+	 * one does not. That is a visibility rule, not the gate: the server fn
+	 * re-checks the officer role and the archive, and the save refuses a
+	 * cancelled meeting itself.
+	 */
+	meetingId?: string;
+	/**
+	 * True for a cancelled meeting (#909 review). `editable` is false for a
+	 * completed meeting AND a cancelled one, and the two differ for "Save as
+	 * club template": last week's agenda is a legitimate source, a cancelled
+	 * meeting's is not (the save refuses it). Optional for the same fixture
+	 * reason as `meetingId`; `loadAgendaDraft` always sets it.
+	 */
+	cancelled?: boolean;
 	templateId: string;
 	templateName: string;
 	/** False once the meeting is locked. The rows still load — an agenda is
@@ -264,12 +284,17 @@ function agendaEditable(status: string): boolean {
  * of what an ordinary meeting wants.
  */
 async function materialiseForMeeting(
+	conn: DbOrTx,
 	meetingId: string,
 	clubId: string,
 	geIntroducesFunctionaries: boolean,
 	tableTopicsLimits: TableTopicsLimits | null,
 ): Promise<string> {
-	return await database.transaction(async (tx) => {
+	// `conn.transaction`, not `database.transaction`: from the bare client this
+	// is a transaction as before, and from inside a caller's transaction (#909's
+	// save-as-club-template) it is a SAVEPOINT in that one, so the copy commits
+	// or rolls back with the caller's own writes.
+	return await conn.transaction(async (tx) => {
 		const [locked] = await tx
 			.select({ templateId: meetings.templateId })
 			.from(meetings)
@@ -422,6 +447,7 @@ export async function loadAgendaDraft(
 	const templateId =
 		meeting.templateId ??
 		(await materialiseForMeeting(
+			database,
 			meetingId,
 			meeting.clubId,
 			meeting.geIntroducesFunctionaries,
@@ -506,6 +532,8 @@ export async function loadAgendaDraft(
 	]);
 
 	return {
+		meetingId,
+		cancelled: meeting.status === "cancelled",
 		templateId: tpl.id,
 		templateName: tpl.name,
 		editable: agendaEditable(meeting.status),
@@ -535,6 +563,49 @@ export async function loadAgendaDraft(
 	};
 }
 
+/**
+ * The meeting's agenda template id, materialising the standard agenda first
+ * when it has none — the SAME path `loadAgendaDraft` takes, so a caller reads
+ * exactly the agenda the editor would show (#909).
+ *
+ * Takes `conn` so it can run inside the caller's transaction; the copy is a
+ * savepoint there. Returns whatever `meetings.template_id` names, which is
+ * USUALLY the meeting's private copy and, for a meeting converted before
+ * private copies existed, a shared row (see `loadAgendaDraft`'s docblock).
+ * Throws "Meeting not found." for an id that matches no meeting.
+ */
+export async function materialiseAgendaForMeeting(
+	conn: DbOrTx,
+	meetingId: string,
+): Promise<string> {
+	const [meeting] = await conn
+		.select({
+			templateId: meetings.templateId,
+			clubId: meetings.clubId,
+			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
+		})
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!meeting) throw new Error("Meeting not found.");
+	return (
+		meeting.templateId ??
+		(await materialiseForMeeting(
+			conn,
+			meetingId,
+			meeting.clubId,
+			meeting.geIntroducesFunctionaries,
+			{
+				minSeconds: meeting.tableTopicsMinSeconds,
+				maxSeconds: meeting.tableTopicsMaxSeconds,
+			},
+		))
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Writes — every mutator below is scoped to the CALLING meeting's own private
 // template. The row id is caller-supplied, so without that scoping an officer
@@ -550,7 +621,7 @@ const AGENDA_CONCURRENT_EDIT_MESSAGE =
  * Conversion now locks the meeting first too (#835); the integration test uses
  * an intentionally reversed synthetic writer to exercise this error fallback.
  */
-const AGENDA_DEADLOCK_MESSAGE =
+export const AGENDA_DEADLOCK_MESSAGE =
 	"Someone else was changing this meeting. Please try again.";
 
 /** What `ensureAgendaDraft` resolved: the meeting's own private template id,
