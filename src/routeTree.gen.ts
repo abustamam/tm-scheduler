@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WhatsNewRouteImport } from './routes/whats-new'
 import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
 import { Route as TourRouteImport } from './routes/tour'
 import { Route as SigninRouteImport } from './routes/signin'
@@ -80,6 +81,11 @@ import { Route as ClubClubIdMeetingMeetingIdMeTimerRouteImport } from './routes/
 import { Route as ClubClubIdMeetingMeetingIdMeThemeRouteImport } from './routes/club.$clubId.meeting.$meetingId_.me_.theme'
 import { Route as ApiMeetingsIdRoleSheetsSheetPdfRouteImport } from './routes/api/meetings.$id.role-sheets.$sheet.pdf'
 
+const WhatsNewRoute = WhatsNewRouteImport.update({
+  id: '/whats-new',
+  path: '/whats-new',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UnsubscribeRoute = UnsubscribeRouteImport.update({
   id: '/unsubscribe',
   path: '/unsubscribe',
@@ -455,6 +461,7 @@ export interface FileRoutesByFullPath {
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
+  '/whats-new': typeof WhatsNewRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/account': typeof AuthedAccountRoute
   '/activity': typeof AuthedActivityRoute
@@ -526,6 +533,7 @@ export interface FileRoutesByTo {
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
+  '/whats-new': typeof WhatsNewRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/account': typeof AuthedAccountRoute
   '/activity': typeof AuthedActivityRoute
@@ -597,6 +605,7 @@ export interface FileRoutesById {
   '/signin': typeof SigninRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
+  '/whats-new': typeof WhatsNewRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
   '/_authed/account': typeof AuthedAccountRoute
   '/_authed/activity': typeof AuthedActivityRoute
@@ -670,6 +679,7 @@ export interface FileRouteTypes {
     | '/signin'
     | '/tour'
     | '/unsubscribe'
+    | '/whats-new'
     | '/.well-known/$'
     | '/account'
     | '/activity'
@@ -741,6 +751,7 @@ export interface FileRouteTypes {
     | '/signin'
     | '/tour'
     | '/unsubscribe'
+    | '/whats-new'
     | '/.well-known/$'
     | '/account'
     | '/activity'
@@ -811,6 +822,7 @@ export interface FileRouteTypes {
     | '/signin'
     | '/tour'
     | '/unsubscribe'
+    | '/whats-new'
     | '/.well-known/$'
     | '/_authed/account'
     | '/_authed/activity'
@@ -884,6 +896,7 @@ export interface RootRouteChildren {
   SigninRoute: typeof SigninRoute
   TourRoute: typeof TourRoute
   UnsubscribeRoute: typeof UnsubscribeRoute
+  WhatsNewRoute: typeof WhatsNewRoute
   DotwellKnownSplatRoute: typeof DotwellKnownSplatRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
   ApiHealthRoute: typeof ApiHealthRoute
@@ -911,6 +924,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/whats-new': {
+      id: '/whats-new'
+      path: '/whats-new'
+      fullPath: '/whats-new'
+      preLoaderRoute: typeof WhatsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/unsubscribe': {
       id: '/unsubscribe'
       path: '/unsubscribe'
@@ -1521,6 +1541,7 @@ const rootRouteChildren: RootRouteChildren = {
   SigninRoute: SigninRoute,
   TourRoute: TourRoute,
   UnsubscribeRoute: UnsubscribeRoute,
+  WhatsNewRoute: WhatsNewRoute,
   DotwellKnownSplatRoute: DotwellKnownSplatRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,
   ApiHealthRoute: ApiHealthRoute,

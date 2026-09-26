@@ -38,6 +38,7 @@ export {
 	session,
 	sessionRelations,
 	user,
+	userFeatureSeen,
 	userRelations,
 	verification,
 } from "./auth-schema";

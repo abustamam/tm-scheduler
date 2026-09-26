@@ -13,6 +13,7 @@ import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { WhatsNewBanner } from "#/components/whats-new-banner";
 import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
@@ -110,6 +111,12 @@ function ClubHome() {
 			{source === "anon" ? (
 				<ViewingAs member={member} promptIdentity={promptIdentity} />
 			) : null}
+			{/* #947: one "What's new" line for a member who picked their name and
+			    has no account. Signed-in members get the header panel instead. */}
+			<WhatsNewBanner
+				clubId={clubUuid}
+				show={source === "anon" && member !== null}
+			/>
 
 			{/* Guest onboarding — the club's basics, the "New to Toastmasters?"
 			    strip and the visit funnel (#318 / #319). Hidden from anyone who
