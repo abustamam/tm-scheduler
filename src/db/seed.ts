@@ -6,6 +6,7 @@ import {
 	type OfficerPosition,
 } from "#/lib/officers";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { seedPathwaysCatalog } from "../../scripts/pathways-catalog-seed.ts";
 import { seedGlobalTemplates } from "../../scripts/seed-global-templates.ts";
 import { db } from "./index.ts";
 import {
@@ -13,6 +14,7 @@ import {
 	dcpGoalProgress,
 	dcpScoreboards,
 	duesPeriods,
+	guestInvites,
 	guests,
 	meetings,
 	memberDues,
@@ -21,7 +23,9 @@ import {
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
+	pathwaysProjects,
 	people,
+	projectCompletionMarks,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -492,8 +496,61 @@ async function enrollPath(
 	);
 }
 
+/**
+ * Declare a path by hand (#417) and mark some of its catalog projects complete
+ * (#419): an enrollment with NO `path_level_progress` rows, which is what puts
+ * it on the catalog branch — levels counted from `pathways_projects` against
+ * the marks, so "what is left" can be named. Needs the catalog seeded first.
+ * The enrollment insert has no onConflict: it relies on `seedClub` having just
+ * inserted the person fresh, so no enrollment for this path can exist yet.
+ */
+async function declarePathWithMarks(
+	personId: string,
+	markedByMemberId: string,
+	courseCode: string,
+	level: number,
+	markedProjectNames: string[],
+) {
+	const [path] = await db
+		.select({ id: pathwaysPaths.id })
+		.from(pathwaysPaths)
+		.where(eq(pathwaysPaths.courseCode, courseCode))
+		.limit(1);
+	if (!path) throw new Error(`Pathways catalog has no path ${courseCode}`);
+	const [enr] = await db
+		.insert(pathEnrollments)
+		.values({ personId, pathId: path.id })
+		.returning({ id: pathEnrollments.id });
+	const projects = await db
+		.select({ id: pathwaysProjects.id, name: pathwaysProjects.name })
+		.from(pathwaysProjects)
+		.where(
+			and(
+				eq(pathwaysProjects.pathId, path.id),
+				eq(pathwaysProjects.level, level),
+			),
+		);
+	const idByName = new Map(projects.map((p) => [p.name, p.id]));
+	await db.insert(projectCompletionMarks).values(
+		markedProjectNames.map((name) => {
+			const projectId = idByName.get(name);
+			if (!projectId) {
+				throw new Error(
+					`Pathways catalog ${courseCode} has no Level ${level} project "${name}"`,
+				);
+			}
+			return { enrollmentId: enr!.id, projectId, markedByMemberId };
+		}),
+	);
+}
+
 async function main() {
 	console.log("Seeding…");
+
+	// The Pathways catalog first: Harbor City's hand-declared paths below count
+	// against it, and `enrollPath` upserts into the same `pathways_paths` rows.
+	// Idempotent — the production container runs it on every boot.
+	await seedPathwaysCatalog();
 
 	// A platform superadmin who belongs to no club (for console + impersonation).
 	await upsertUser("Platform Superadmin", SUPERADMIN_EMAIL);
@@ -995,6 +1052,14 @@ async function main() {
 				email: "omar@example.com",
 				joinedAt: joinedThisYear(10),
 			},
+			{
+				// Harbor's VP Membership (#901): `/tour`'s officers stop signs in as
+				// this person for the guest-pipeline shot.
+				name: "Sofia Reyes",
+				email: "sofia@example.com",
+				officerPosition: "vp_membership",
+				joinedAt: joinedAgo(1, 6),
+			},
 		],
 		meetings: [
 			{
@@ -1062,6 +1127,75 @@ async function main() {
 		{ count: 5, when: dayAt(-1, 12), speechCursor: { i: 3 } },
 	);
 
+	// `/tour`'s officers stop (#901) is captured from Harbor's VPE and VPM
+	// dashboards by `bun run marketing:screenshots`, which checks each of the
+	// shapes below is on the page before it shoots. The guest invite below is
+	// for Harbor's +10-day meeting, so its "Invited to …" line (and the script's
+	// upcoming-meeting check) stays good for a week or more after a seed.
+	const harborPerson = (n: string) => harbor.personByName.get(n)!;
+	const harborMember = (n: string) => harbor.memberByName.get(n)!;
+	// "Close to a level", catalog branch: a hand-declared path, 3 of Level 1's 4
+	// projects marked, so the row NAMES what is left ("1 left: …").
+	await declarePathWithMarks(
+		harborPerson("Marcus Lee"),
+		harborMember("Marcus Lee"),
+		"8706",
+		1,
+		[
+			"Ice Breaker",
+			"Writing a Speech with Purpose",
+			"Introduction to Vocal Variety and Body Language",
+		],
+	);
+	// A second "close" row, two projects short.
+	await declarePathWithMarks(
+		harborPerson("Omar Haddad"),
+		harborMember("Omar Haddad"),
+		"8700",
+		1,
+		["Ice Breaker", "Writing a Speech with Purpose"],
+	);
+	// Base Camp branch: Level 2 finished and not yet approved → an awaiting row.
+	await enrollPath(
+		harbor.clubId,
+		harborPerson("Nina Petrov"),
+		"8705",
+		"Strategic Relationships",
+		[L(1, 4, 4, true), L(2, 3, 3, false)],
+		joinedAgo(0, 3),
+	);
+
+	// Guests for the VPM pipeline: one prospect already invited by Harbor's VPM
+	// to the +10-day meeting (NOT the +3-day one: once an invite's meeting has
+	// started the line reads "Last invited to …" and the capture's DOM check
+	// fails), and one following-up guest who can still be invited.
+	const [harborProspect] = await db
+		.insert(guests)
+		.values([
+			{
+				clubId: harbor.clubId,
+				name: "Lucia Moreno",
+				email: "lucia.moreno@example.com",
+				phone: seedPhone(50),
+				stage: "prospect" as const,
+			},
+			{
+				clubId: harbor.clubId,
+				name: "Ethan Brooks",
+				email: "ethan.brooks@example.com",
+				phone: null,
+				stage: "following_up" as const,
+			},
+		])
+		.returning({ id: guests.id });
+	await db.insert(guestInvites).values({
+		clubId: harbor.clubId,
+		guestId: harborProspect!.id,
+		meetingId: harbor.meetings[1].meetingId,
+		invitedByMemberId: harborMember("Sofia Reyes"),
+		invitedAt: dayAt(-1, 10),
+	});
+
 	// Global agenda templates (#agenda-templates). Club-less, so they are seeded
 	// once for the whole install rather than per club, and the script is
 	// idempotent — it replaces the template's roles and beats in place.
@@ -1072,7 +1206,7 @@ async function main() {
 		"  • MCF (mcf-toastmasters) — 16 active members, full officer team, 7 meetings, Pathways/DCP/guests/dues",
 	);
 	console.log(
-		"  • Harbor City Speakers (harbor-city-speakers) — Dana (President), Priya (VP Education)",
+		"  • Harbor City Speakers (harbor-city-speakers) — Dana (President), Priya (VP Education), Sofia (VP Membership), 5 meetings, Pathways/guests",
 	);
 	console.log(`Admin sign-in email (MCF): ${ADMIN_EMAIL}`);
 	console.log(

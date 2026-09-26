@@ -209,6 +209,7 @@ function VpeDashboard() {
 			    Evaluation and Feedback is three assignments, and later levels
 			    hold projects that are not speeches at all. */}
 			<Section
+				id="close-to-a-level"
 				title="Close to a level"
 				subtitle={`Members with 1–${LEVEL_PROXIMITY.maxProjectsLeft} projects left in a level. Levels waiting on Base Camp approval come first.`}
 			>
@@ -278,16 +279,20 @@ const NUMBER_WORDS: Record<number, string> = {
 };
 
 function Section({
+	id,
 	title,
 	subtitle,
 	children,
 }: {
+	/** A fragment target. `/tour`'s screenshot capture (#901) links to one;
+	 *  `scroll-mt-24` lands it below the sticky top bar, not under it. */
+	id?: string;
 	title: string;
 	subtitle: string;
 	children: React.ReactNode;
 }) {
 	return (
-		<div>
+		<div id={id} className={id ? "scroll-mt-24" : undefined}>
 			<div className="mb-2.5">
 				<h2 className="text-sm font-bold tracking-[-0.01em]">{title}</h2>
 				<p className="text-xs text-[var(--sea-ink-soft)]">{subtitle}</p>
