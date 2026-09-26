@@ -20,7 +20,7 @@
  * Pathways wins as a series presentation they never gave. A series presentation is linked only by being PICKED,
  * which sets `project_id` directly (#922).
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { pathwaysPaths, pathwaysProjects, speeches } from "#/db/schema";
 
@@ -29,8 +29,18 @@ export interface ResolveResult {
 	unresolved: number;
 }
 
-export async function resolveSpeechProjects(): Promise<ResolveResult> {
+export async function resolveSpeechProjects(
+	opts: {
+		/**
+		 * Only these speeches. Omitted (the backfill script) means every unlinked
+		 * speech. Exists so a test can run the matcher without touching other
+		 * suites' rows in the shared test database, which vitest runs in parallel.
+		 */
+		speechIds?: string[];
+	} = {},
+): Promise<ResolveResult> {
 	const result: ResolveResult = { resolved: 0, unresolved: 0 };
+	if (opts.speechIds?.length === 0) return result;
 
 	const candidates = await db
 		.select({
@@ -39,7 +49,12 @@ export async function resolveSpeechProjects(): Promise<ResolveResult> {
 			projectName: speeches.projectName,
 		})
 		.from(speeches)
-		.where(isNull(speeches.projectId));
+		.where(
+			and(
+				isNull(speeches.projectId),
+				opts.speechIds ? inArray(speeches.id, opts.speechIds) : undefined,
+			),
+		);
 
 	for (const speech of candidates) {
 		const projectName = speech.projectName?.trim();

@@ -301,7 +301,14 @@ describe.skipIf(!hasTestDb)("#921/#922 series wiring", () => {
 			const ordinary = await speech(n("Ordinary"));
 			const seriesOnly = await speech(n("mentoring").toUpperCase());
 			const colliding = await speech(n("Impromptu Speaking"));
-			await resolveSpeechProjects();
+			// Scoped to this suite's speeches: an unscoped run links other
+			// suites' fixtures too, racing `pathways-project-match`'s count.
+			// The reverse race (that suite's unscoped run linking these first) is
+			// why only the resulting LINKS are asserted, never the counts: the
+			// matcher is deterministic, so either run leaves the same links.
+			await resolveSpeechProjects({
+				speechIds: [ordinary, seriesOnly, colliding],
+			});
 			expect(await linked(ordinary)).toBe(matchOrdinaryId);
 			expect(await linked(seriesOnly)).toBeNull();
 			// Without the series filter this is two matches and stays unlinked.
