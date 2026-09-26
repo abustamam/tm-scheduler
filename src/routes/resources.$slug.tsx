@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { ArrowLeft, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { anchoredHeadingComponents } from "#/components/resources/anchored-headings";
 import { ResourcesShell } from "#/components/resources/resources-shell";
 import { Button } from "#/components/ui/button";
 import { getResourceMarkdown } from "#/data/resource-content";
@@ -50,7 +51,14 @@ function ResourceArticle() {
 				All resources
 			</Link>
 			<article className="prose-gavelup mt-4">
-				<ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+				{/* #941: headings carry ids (a trailing `{#id}` pins one), so a
+				    link can land on a section such as `#base-camp`. */}
+				<ReactMarkdown
+					remarkPlugins={[remarkGfm]}
+					components={anchoredHeadingComponents}
+				>
+					{markdown}
+				</ReactMarkdown>
 			</article>
 			{resource.downloads?.length ? (
 				<section className="mt-8 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-5">
