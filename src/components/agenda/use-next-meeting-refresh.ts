@@ -56,8 +56,13 @@ export function useNextMeetingRefresh(
 		enabled: snapshot != null,
 	});
 	// The newest non-null answer seen, refreshes included. A ref, not state:
-	// it changes only alongside `query.data`, which already re-renders.
-	const lastGood = useRef(snapshot);
-	if (query.data) lastGood.current = query.data;
-	return query.data ?? lastGood.current;
+	// it changes only alongside `query.data`, which already re-renders. It is
+	// tied to the key it was seen under: a route that stays mounted while the
+	// meeting changes (back/forward between two decks) starts over from the new
+	// deck's snapshot rather than carrying the last deck's next meeting across.
+	const key = JSON.stringify(queryKey);
+	const lastGood = useRef({ key, value: snapshot });
+	if (lastGood.current.key !== key) lastGood.current = { key, value: snapshot };
+	if (query.data) lastGood.current.value = query.data;
+	return query.data ?? lastGood.current.value;
 }

@@ -220,7 +220,8 @@ describe("the silent refresh behind the slide (#932)", () => {
 		await act(() => qc.refetchQueries());
 		await waitFor(() => expect(first.view.result.current).toEqual(FRESH));
 		first.view.unmount();
-		// The next meeting was cancelled in between; navigating back takes a moment.
+		// The next meeting was cancelled in between. The wait lets React Query's
+		// eviction timer fire, as leaving and reopening the deck does.
 		await act(() => new Promise((r) => setTimeout(r, 10)));
 		const { view } = hook(null, vi.fn(), qc);
 		expect(view.result.current).toBeNull();
@@ -234,6 +235,32 @@ describe("the silent refresh behind the slide (#932)", () => {
 		await act(() => new Promise((r) => setTimeout(r, 10)));
 		const { view } = hook(SNAPSHOT, vi.fn(), qc);
 		expect(view.result.current).toEqual(SNAPSHOT);
+	});
+
+	it("switching to another meeting's deck without unmounting drops the last deck's next meeting", async () => {
+		const qc = new QueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={qc}>{children}</QueryClientProvider>
+		);
+		const view = renderHook(
+			({ snapshot, meetingId }) =>
+				useNextMeetingRefresh(
+					snapshot,
+					["club", meetingId],
+					vi.fn().mockResolvedValue(FRESH),
+				),
+			{
+				wrapper,
+				initialProps: {
+					snapshot: SNAPSHOT as NextMeetingSummary | null,
+					meetingId: "m1",
+				},
+			},
+		);
+		await act(() => qc.refetchQueries());
+		await waitFor(() => expect(view.result.current).toEqual(FRESH));
+		view.rerender({ snapshot: null, meetingId: "m2" });
+		expect(view.result.current).toBeNull();
 	});
 
 	it("refreshes on its own cadence", async () => {
