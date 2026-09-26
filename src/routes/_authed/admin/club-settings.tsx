@@ -7,7 +7,7 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { CONTACT_MAILTO } from "#/lib/brand";
-import { clubExportUrl } from "#/lib/club-export-url";
+import { clubExportUrl, exportLinkAllowed } from "#/lib/club-export-url";
 import {
 	ALLOWED_LOGO_MIME_TYPES,
 	isAllowedLogoMime,
@@ -275,7 +275,7 @@ export function zoneLabel(zone: string): string {
 }
 
 function ClubSettings() {
-	const { adminClub } = Route.useRouteContext();
+	const { adminClub, impersonating } = Route.useRouteContext();
 	const { profile, reminders, agenda, logoMeta, timezone } =
 		Route.useLoaderData();
 	const router = useRouter();
@@ -931,7 +931,8 @@ function ClubSettings() {
 
 			{/* #915. A plain link, not a server fn: the route streams a file and
 			    authorizes on its own (`requireClubRole(…, ["admin"])`, the same
-			    rule this page's `beforeLoad` states on the client). */}
+			    rule this page's `beforeLoad` states on the client, except that it
+			    refuses "View as this club" — hence `exportLinkAllowed`). */}
 			<section aria-labelledby="club-data-heading" className="space-y-3 pt-2">
 				<h2
 					id="club-data-heading"
@@ -943,12 +944,19 @@ function ClubSettings() {
 					Download your club's roster, meetings, roles, attendance and guests as
 					spreadsheets (CSV).
 				</p>
-				<Button asChild variant="outline">
-					<a href={clubExportUrl(adminClub.clubId)} download>
-						<Download aria-hidden />
-						Download export
-					</a>
-				</Button>
+				{exportLinkAllowed(impersonating, adminClub.clubId) ? (
+					<Button asChild variant="outline">
+						<a href={clubExportUrl(adminClub.clubId)} download>
+							<Download aria-hidden />
+							Download export
+						</a>
+					</Button>
+				) : (
+					<p className="text-sm text-muted-foreground">
+						Not available while viewing as this club. Exporting needs "Act as
+						admin".
+					</p>
+				)}
 			</section>
 		</PageContainer>
 	);

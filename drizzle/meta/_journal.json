@@ -659,6 +659,13 @@
       "when": 1790433894950,
       "tag": "0093_gigantic_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1790446014452,
+      "tag": "0094_far_miracleman",
+      "breakpoints": true
     }
   ]
 }

@@ -54,7 +54,7 @@ vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import { clubExportUrl } from "#/lib/club-export-url";
+import { clubExportUrl, exportLinkAllowed } from "#/lib/club-export-url";
 import { Route as ClubSettingsRoute } from "./admin/club-settings";
 import { Route as RosterRoute } from "./roster";
 
@@ -67,9 +67,25 @@ afterEach(() => {
 const CLUB_ID = "11111111-1111-4111-8111-111111111111";
 const EXPORT_PATH = `/api/clubs/${CLUB_ID}/export/zip`;
 
+type Impersonating = {
+	clubId: string;
+	expiresAt: Date;
+	mode: "read_only" | "read_write";
+} | null;
+
+const OTHER_CLUB_ID = "22222222-2222-4222-8222-222222222222";
+
+function impersonation(
+	mode: "read_only" | "read_write",
+	clubId = CLUB_ID,
+): Impersonating {
+	return { clubId, expiresAt: new Date(Date.now() + 3_600_000), mode };
+}
+
 async function renderRoster(opts: {
 	clubRole: "admin" | "member";
 	officerPositions?: string[];
+	impersonating?: Impersonating;
 }) {
 	vi.spyOn(RosterRoute, "useRouteContext").mockReturnValue({
 		clubs: [
@@ -82,6 +98,7 @@ async function renderRoster(opts: {
 		],
 		activeClubId: CLUB_ID,
 		officerPositions: opts.officerPositions ?? [],
+		impersonating: opts.impersonating ?? null,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 	vi.spyOn(RosterRoute, "useLoaderData").mockReturnValue({
@@ -94,7 +111,7 @@ async function renderRoster(opts: {
 	await renderUnderMemoryRouter(<Component />);
 }
 
-async function renderClubSettings() {
+async function renderClubSettings(impersonating: Impersonating = null) {
 	vi.spyOn(ClubSettingsRoute, "useRouteContext").mockReturnValue({
 		adminClub: {
 			clubId: CLUB_ID,
@@ -102,6 +119,7 @@ async function renderClubSettings() {
 			clubNumber: "123456",
 			clubRole: "admin",
 		},
+		impersonating,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 	vi.spyOn(ClubSettingsRoute, "useLoaderData").mockReturnValue({
@@ -134,6 +152,18 @@ describe("clubExportUrl", () => {
 	});
 });
 
+describe("exportLinkAllowed", () => {
+	it("refuses only a read-only impersonation of that same club", () => {
+		expect(exportLinkAllowed(null, CLUB_ID)).toBe(true);
+		expect(exportLinkAllowed(undefined, CLUB_ID)).toBe(true);
+		expect(exportLinkAllowed(impersonation("read_write"), CLUB_ID)).toBe(true);
+		expect(
+			exportLinkAllowed(impersonation("read_only", OTHER_CLUB_ID), CLUB_ID),
+		).toBe(true);
+		expect(exportLinkAllowed(impersonation("read_only"), CLUB_ID)).toBe(false);
+	});
+});
+
 describe("roster: Export club data", () => {
 	it("is a download link to the export route for an admin", async () => {
 		await renderRoster({ clubRole: "admin" });
@@ -154,6 +184,37 @@ describe("roster: Export club data", () => {
 	it("is not shown to a plain member, whom the route would refuse", async () => {
 		await renderRoster({ clubRole: "member" });
 		expect(screen.queryByRole("link", { name: "Export club data" })).toBeNull();
+	});
+
+	// "View as this club": `getAuthContext` hands the impersonated club over as
+	// an admin club, so `canManage` is true, but the route refuses a read-only
+	// session. A link there could only ever 403.
+	it("is not shown under a read-only impersonation of this club", async () => {
+		await renderRoster({
+			clubRole: "admin",
+			impersonating: impersonation("read_only"),
+		});
+		expect(screen.queryByRole("link", { name: "Export club data" })).toBeNull();
+	});
+
+	it("is shown under a read-write impersonation, which the route serves", async () => {
+		await renderRoster({
+			clubRole: "admin",
+			impersonating: impersonation("read_write"),
+		});
+		expect(
+			screen
+				.getByRole("link", { name: "Export club data" })
+				.getAttribute("href"),
+		).toBe(EXPORT_PATH);
+	});
+
+	it("is shown when the read-only impersonation is of a DIFFERENT club", async () => {
+		await renderRoster({
+			clubRole: "admin",
+			impersonating: impersonation("read_only", OTHER_CLUB_ID),
+		});
+		expect(screen.getByRole("link", { name: "Export club data" })).toBeTruthy();
 	});
 
 	// #915 AC4: the dead button is gone, for every viewer.
@@ -182,5 +243,22 @@ describe("club settings: Your club's data", () => {
 		expect(section?.contains(link)).toBe(true);
 		expect(link.getAttribute("href")).toBe(EXPORT_PATH);
 		expect(link.hasAttribute("download")).toBe(true);
+	});
+
+	it("has no download link under a read-only impersonation, and says why", async () => {
+		await renderClubSettings(impersonation("read_only"));
+		expect(screen.queryByRole("link", { name: "Download export" })).toBeNull();
+		expect(
+			screen.getByText(/not available while viewing as this club/i),
+		).toBeTruthy();
+	});
+
+	it("keeps the download link under a read-write impersonation", async () => {
+		await renderClubSettings(impersonation("read_write"));
+		expect(
+			screen
+				.getByRole("link", { name: "Download export" })
+				.getAttribute("href"),
+		).toBe(EXPORT_PATH);
 	});
 });

@@ -251,6 +251,13 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// looks like this meeting". `targetType: "meeting"` names the SOURCE meeting.
 	// `detail = { templateId, mode: "new" | "replace", sourceMeetingId }`
 	"club_template_saved",
+	// A club admin downloaded the club's data export (the `.zip` of CSVs,
+	// #915). Logged because the file is every member's and guest's contact
+	// details, so "who took a copy, and when" is a question the club has to be
+	// able to answer. `targetType: "club"`; under a read-write impersonation the
+	// row carries `impersonated_by` like any other admin write. `detail = {
+	// filename }`, never the data.
+	"club_data_exported",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this

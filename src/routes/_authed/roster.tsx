@@ -29,7 +29,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
-import { clubExportUrl } from "#/lib/club-export-url";
+import { clubExportUrl, exportLinkAllowed } from "#/lib/club-export-url";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
@@ -172,7 +172,8 @@ function pathwayLabelFor(paths: PathViewModel[]): string | null {
 
 function Roster() {
 	const { members, openRoles, pathways } = Route.useLoaderData();
-	const { clubs, activeClubId, officerPositions } = Route.useRouteContext();
+	const { clubs, activeClubId, officerPositions, impersonating } =
+		Route.useRouteContext();
 	const clubId = activeClubId;
 	// Effective admin (#202): stored admin OR any elected officer can manage.
 	const canManage = !!effectiveAdminClub({
@@ -267,9 +268,10 @@ function Roster() {
 				<div className="flex gap-2">
 					{/* A plain link to the export route (#915), shown only to whoever
 					    the route will serve: `canManage` is `effectiveAdminClub`, the
-					    client half of the route's `requireClubRole(…, ["admin"])`.
-					    It replaced an "Export CSV" button with no action at all. */}
-					{clubId && canManage ? (
+					    client half of the route's `requireClubRole(…, ["admin"])`, and
+					    `exportLinkAllowed` drops "View as this club", which that guard
+					    refuses. It replaced an "Export CSV" button with no action. */}
+					{clubId && canManage && exportLinkAllowed(impersonating, clubId) ? (
 						<Button asChild variant="outline" size="sm">
 							<a href={clubExportUrl(clubId)} download>
 								<Download aria-hidden />

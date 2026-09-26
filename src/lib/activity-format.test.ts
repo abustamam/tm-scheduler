@@ -83,6 +83,18 @@ describe("formatActivity", () => {
 		expect(summary).not.toBe("club_template_saved");
 	});
 
+	it("club_data_exported renders human-readable text, not the raw enum", () => {
+		const e = {
+			...base,
+			targetType: "club",
+			action: "club_data_exported",
+			actorName: "Faisal",
+		} as unknown as ActivityEntry;
+		const { summary } = formatActivity(e);
+		expect(summary).toMatch(/downloaded the club's data export/i);
+		expect(summary).not.toBe("club_data_exported");
+	});
+
 	it("claim names the role", () => {
 		const e = {
 			...base,

@@ -731,8 +731,8 @@ export interface PipelineGuestRow {
  * The (guest, meeting) pairs that count as a VISIT for one club (#374).
  *
  * A guest visited a meeting when the meeting is NOT cancelled, its DATE has
- * arrived in the CLUB's timezone, and any of these is true: an attendance row
- * exists (the guest book, or an officer adding them in the minutes), they HELD
+ * arrived in the CLUB's timezone, and any of these is true: a PRESENT attendance
+ * row exists (the guest book, or an officer adding them in the minutes), they HELD
  * A ROLE SLOT, or they SPOKE AT TABLE TOPICS. Taking part in the meeting IS
  * attending it.
  *
@@ -763,13 +763,13 @@ export interface PipelineGuestRow {
  * row, so the "holding a slot never sets attendance" rule (#218,
  * `minutes-logic.ts`) is untouched.
  */
-function guestVisits(clubId: string, timeZone: string) {
+function guestVisits(conn: DbOrTx, clubId: string, timeZone: string) {
 	const happened = and(
 		eq(meetings.clubId, clubId),
 		ne(meetings.status, "cancelled"),
 		sql`(${meetings.scheduledAt} at time zone ${timeZone}::text)::date <= (now() at time zone ${timeZone}::text)::date`,
 	);
-	const attended = db
+	const attended = conn
 		.select({
 			guestId: meetingAttendance.guestId,
 			meetingId: meetings.id,
@@ -777,8 +777,16 @@ function guestVisits(clubId: string, timeZone: string) {
 		})
 		.from(meetingAttendance)
 		.innerJoin(meetings, eq(meetings.id, meetingAttendance.meetingId))
-		.where(and(happened, isNotNull(meetingAttendance.guestId)));
-	const heldRole = db
+		// A PRESENT record only. The column defaults to 'absent', and an absent
+		// or excused row is a guest who was expected and did not come.
+		.where(
+			and(
+				happened,
+				isNotNull(meetingAttendance.guestId),
+				eq(meetingAttendance.status, "present"),
+			),
+		);
+	const heldRole = conn
 		.select({
 			guestId: roleSlots.assignedGuestId,
 			meetingId: meetings.id,
@@ -787,7 +795,7 @@ function guestVisits(clubId: string, timeZone: string) {
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.where(and(happened, isNotNull(roleSlots.assignedGuestId)));
-	const spoke = db
+	const spoke = conn
 		.select({
 			guestId: tableTopicsSpeakers.guestId,
 			meetingId: meetings.id,
@@ -797,6 +805,36 @@ function guestVisits(clubId: string, timeZone: string) {
 		.innerJoin(meetings, eq(meetings.id, tableTopicsSpeakers.meetingId))
 		.where(and(happened, isNotNull(tableTopicsSpeakers.guestId)));
 	return union(attended, heldRole, spoke);
+}
+
+/** One guest's derived visit summary: see {@link guestVisits}. */
+export interface GuestVisitSummary {
+	guestId: string | null;
+	visitCount: number;
+	firstVisitAt: Date | null;
+}
+
+/**
+ * Every guest of a club's visit count and first visit, from {@link guestVisits}.
+ * THE statement of "how many times has this guest visited": the pipeline board
+ * reads it, and so does the club data export's `guests.csv`, so the two can
+ * never disagree about a guest. Takes a connection because the export reads
+ * inside its own read-only snapshot transaction.
+ */
+export async function loadGuestVisitSummaries(
+	conn: DbOrTx,
+	clubId: string,
+	timeZone: string,
+): Promise<GuestVisitSummary[]> {
+	const visits = guestVisits(conn, clubId, timeZone).as("guest_visits");
+	return conn
+		.select({
+			guestId: visits.guestId,
+			visitCount: count(),
+			firstVisitAt: min(visits.scheduledAt),
+		})
+		.from(visits)
+		.groupBy(visits.guestId);
 }
 
 /**
@@ -814,7 +852,6 @@ export async function loadGuestPipeline(
 	// not need to exist at all.
 	const { timeZone: tz, countryCode: cc } =
 		await loadClubPipelineSettings(clubId);
-	const visits = guestVisits(clubId, tz).as("guest_visits");
 	const [rows, visitRows, slotRows, linkRows, conversionRows, inviteRows] =
 		await Promise.all([
 			db
@@ -831,14 +868,7 @@ export async function loadGuestPipeline(
 				.from(guests)
 				.where(eq(guests.clubId, clubId))
 				.orderBy(asc(guests.name)),
-			db
-				.select({
-					guestId: visits.guestId,
-					visitCount: count(),
-					firstVisitAt: min(visits.scheduledAt),
-				})
-				.from(visits)
-				.groupBy(visits.guestId),
+			loadGuestVisitSummaries(db, clubId, tz),
 			db
 				.select({
 					guestId: roleSlots.assignedGuestId,

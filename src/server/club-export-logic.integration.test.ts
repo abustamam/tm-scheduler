@@ -51,7 +51,9 @@ const {
 	clubExportFilename,
 	isoWithOffset,
 	loadClubExport,
+	localDate,
 } = await import("./club-export-logic");
+const { loadGuestPipeline } = await import("./guest-pipeline-logic");
 
 const RUN = randomUUID().slice(0, 8);
 /** In every free-text column of the SECOND club's rows. */
@@ -112,7 +114,8 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 	// Two meetings on the SAME club-local date (2026-03-09, Chicago is UTC-5 by
 	// then), which is why every meeting file carries meeting_id. `prior` is
 	// earlier still, and the guest was ABSENT from it: it must not count as a
-	// visit, nor become the first one.
+	// visit, nor become the first one. (`meeting_attendance.status` defaults to
+	// 'absent', so a non-present guest row is reachable.)
 	const [early, late, prior] = await testDb
 		.insert(meetings)
 		.values([
@@ -594,7 +597,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 		]);
 	});
 
-	it("guests.csv: visits and first_visit derived from attendance", async () => {
+	it("guests.csv: visits and first_visit derived from participation", async () => {
 		const f = (await files())["guests.csv"];
 		expect(f.rows).toEqual([
 			{
@@ -607,6 +610,182 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 				visits: 2,
 			},
 		]);
+		// The board reads the same rows the same way: the absent and excused
+		// rows count on neither.
+		const board = (await loadGuestPipeline(a.club.clubId)).find(
+			(g) => g.id === a.guestId,
+		);
+		expect(board?.visitCount).toBe(2);
+		expect(localDate(board?.firstVisitAt ?? null, "America/Chicago")).toBe(
+			"2026-03-09",
+		);
+	});
+
+	// A club's export must not show people the club no longer has. An
+	// enrollment carries no club, so a LAPSED membership was the only thing
+	// joining a former member's Pathways record (including progress made at
+	// whatever club they joined next) to this club's admins.
+	it("pathways.csv: a lapsed member's enrollments are absent; an active member's archived one stays", async () => {
+		const own = await seedClub();
+		extraClubs.push(own.clubId);
+		const [admin] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(inArray(members.id, [own.adminMemberId]));
+		const [kept, archived, lapsed] = await testDb
+			.insert(pathwaysPaths)
+			.values([
+				{ courseCode: `K${RUN}`, name: `Kept ${RUN}` },
+				{ courseCode: `A${RUN}`, name: `Archived ${RUN}` },
+				{ courseCode: `L${RUN}`, name: `Lapsed ${RUN}` },
+			])
+			.returning({ id: pathwaysPaths.id });
+		pathIds.push(kept.id, archived.id, lapsed.id);
+		await testDb.insert(pathEnrollments).values([
+			{ personId: own.personId, pathId: kept.id },
+			{ personId: own.personId, pathId: archived.id, archivedAt: new Date() },
+			// The admin's: active in Pathways, but their membership here lapses.
+			{ personId: admin.personId, pathId: lapsed.id },
+		]);
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(inArray(members.id, [own.adminMemberId]));
+
+		const out = await loadClubExport(own.clubId);
+		const byName = Object.fromEntries(
+			(out?.files ?? []).map((f) => [f.filename, f]),
+		);
+		expect(byName["pathways.csv"].rows).toEqual([
+			{
+				member_id: own.memberId,
+				name: "Member User",
+				path: `Archived ${RUN}`,
+				current_level: null,
+				status: "archived",
+			},
+			{
+				member_id: own.memberId,
+				name: "Member User",
+				path: `Kept ${RUN}`,
+				current_level: null,
+				status: "active",
+			},
+		]);
+		// Still on the roster file, as a past member: only Pathways is scoped.
+		expect(byName["members.csv"].rows).toContainEqual(
+			expect.objectContaining({
+				member_id: own.adminMemberId,
+				status: "inactive",
+			}),
+		);
+
+		await cleanup(own.clubId, [own.adminUserId, own.memberUserId]);
+		extraClubs.pop();
+	});
+
+	// guests.csv and the guest pipeline board state one count. The export used
+	// to count only attendance rows, cancelled and future meetings included, so
+	// the same guest read "3 visits" on the board and "1" in the export.
+	it("guests.csv: visits and first_visit agree with the guest pipeline", async () => {
+		const own = await seedClub();
+		extraClubs.push(own.clubId);
+		await testDb
+			.update(clubs)
+			.set({ timezone: "America/Chicago" })
+			.where(inArray(clubs.id, [own.clubId]));
+		const [guest] = await testDb
+			.insert(guests)
+			.values({ clubId: own.clubId, name: `Pipeline Guest ${RUN}` })
+			.returning({ id: guests.id });
+		const day = 86_400_000;
+		const [attended, heldRole, spoke, cancelled, future, missed, excused] =
+			await testDb
+				.insert(meetings)
+				.values([
+					// 19:00 Chicago on 31 Jan; already 1 Feb in UTC.
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-02-01T01:00:00Z"),
+						status: "completed",
+					},
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-02-08T01:00:00Z"),
+						status: "completed",
+					},
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-02-15T01:00:00Z"),
+						status: "completed",
+					},
+					// Earlier than all of them, but cancelled: neither a visit nor
+					// the first one.
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-01-10T01:00:00Z"),
+						status: "cancelled",
+					},
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date(Date.now() + 30 * day),
+						status: "scheduled",
+					},
+					// Held, and earlier, but the guest's row there is absent / excused:
+					// expected and did not come, so not a visit.
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-01-17T01:00:00Z"),
+						status: "completed",
+					},
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-01-24T01:00:00Z"),
+						status: "completed",
+					},
+				])
+				.returning({ id: meetings.id });
+		await testDb.insert(meetingAttendance).values([
+			{ meetingId: attended.id, guestId: guest.id, status: "present" },
+			{ meetingId: cancelled.id, guestId: guest.id, status: "present" },
+			{ meetingId: missed.id, guestId: guest.id, status: "absent" },
+			{ meetingId: excused.id, guestId: guest.id, status: "excused" },
+		]);
+		await testDb.insert(roleSlots).values([
+			{
+				meetingId: heldRole.id,
+				roleDefinitionId: own.roleDefinitionId,
+				assignedGuestId: guest.id,
+				status: "claimed",
+			},
+			// A claim on a meeting still to come is a plan, not a visit.
+			{
+				meetingId: future.id,
+				roleDefinitionId: own.roleDefinitionId,
+				assignedGuestId: guest.id,
+				status: "claimed",
+			},
+		]);
+		await testDb
+			.insert(tableTopicsSpeakers)
+			.values({ meetingId: spoke.id, guestId: guest.id, topic: "t" });
+
+		const out = await loadClubExport(own.clubId);
+		const row = out?.files
+			.find((f) => f.filename === "guests.csv")
+			?.rows.find((r) => r.guest_id === guest.id);
+		const board = (await loadGuestPipeline(own.clubId)).find(
+			(g) => g.id === guest.id,
+		);
+		expect(row).toMatchObject({ visits: 3, first_visit: "2026-01-31" });
+		expect(board?.visitCount).toBe(3);
+		expect(row?.visits).toBe(board?.visitCount);
+		expect(row?.first_visit).toBe(
+			localDate(board?.firstVisitAt ?? null, "America/Chicago"),
+		);
+
+		await cleanup(own.clubId, [own.adminUserId, own.memberUserId]);
+		extraClubs.pop();
 	});
 
 	it("awards.csv", async () => {
