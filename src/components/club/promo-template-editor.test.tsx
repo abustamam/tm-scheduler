@@ -103,6 +103,27 @@ describe("PromoTemplateEditor", () => {
 	});
 });
 
+describe("a stored template that no longer parses", () => {
+	it("is flagged, not silently replaced by the default", () => {
+		render(
+			<PromoTemplateEditor
+				clubId={CLUB}
+				template={DEFAULT_PROMO_TEMPLATE}
+				storedInvalid
+				onSaved={vi.fn()}
+			/>,
+		);
+		expect(screen.getByTestId("promo-template-invalid").textContent).toMatch(
+			/couldn't be read/,
+		);
+	});
+
+	it("shows nothing when the template is fine (control)", () => {
+		renderEditor();
+		expect(screen.queryByTestId("promo-template-invalid")).toBeNull();
+	});
+});
+
 describe("bulletsFromText", () => {
 	it("trims and drops blank lines", () => {
 		expect(bulletsFromText(" a \n\n b\r\n")).toEqual(["a", "b"]);

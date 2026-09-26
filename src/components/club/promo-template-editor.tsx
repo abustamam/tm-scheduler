@@ -52,10 +52,14 @@ export function bulletsFromText(text: string): string[] {
 export function PromoTemplateEditor({
 	clubId,
 	template,
+	storedInvalid = false,
 	onSaved,
 }: {
 	clubId: string;
 	template: PromoTemplate;
+	/** The club's stored template no longer parses; `template` is the default
+	 *  standing in for it. Said out loud, because saving will replace it. */
+	storedInvalid?: boolean;
 	onSaved: () => void | Promise<void>;
 }) {
 	const [headline, setHeadline] = useState(template.headline);
@@ -146,6 +150,18 @@ export function PromoTemplateEditor({
 				))}
 				— a line whose placeholder is empty is left out.
 			</p>
+
+			{storedInvalid ? (
+				<p
+					role="alert"
+					data-testid="promo-template-invalid"
+					className="rounded-md border border-destructive/50 bg-destructive/10 p-2 text-sm"
+				>
+					Your club's saved template couldn't be read, so the default is shown
+					below and is what drafts use for now. Saving replaces the stored one
+					with what you see here.
+				</p>
+			) : null}
 
 			<form onSubmit={onSave} className="space-y-4">
 				<div className="space-y-2">

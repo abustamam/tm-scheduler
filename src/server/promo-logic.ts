@@ -16,12 +16,13 @@ import {
 	type FlyerMeeting,
 	type PromoClub,
 	type PromoTemplate,
+	type PromoTemplateState,
 	resolvePromoTemplate,
+	resolvePromoTemplateState,
 } from "#/lib/promo-template";
 import { loadClubLogoMeta } from "./club-logo-logic";
-import { isReadableClub } from "./club-readable-logic";
 import { resolveMeetingNumber } from "./meeting-number-logic";
-import { resolveMeetingKey } from "./meeting-resolve-logic";
+import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
 import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 import { loadNextMeetingSummary } from "./meetings-logic";
 
@@ -33,13 +34,21 @@ export const PROMO_UPCOMING_LIMIT = 6;
 export async function loadPromoTemplate(
 	clubId: string,
 ): Promise<PromoTemplate> {
+	return (await loadPromoTemplateState(clubId)).template;
+}
+
+/** The template plus whether a stored one failed to parse — what the editor
+ *  needs to warn instead of silently showing the default. */
+export async function loadPromoTemplateState(
+	clubId: string,
+): Promise<PromoTemplateState> {
 	const [row] = await db
 		.select({ promoTemplate: clubs.promoTemplate })
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
 		.limit(1);
 	if (!row) throw new Error("Club not found.");
-	return resolvePromoTemplate(row.promoTemplate);
+	return resolvePromoTemplateState(row.promoTemplate);
 }
 
 /** Replace the club's blast template. The caller validates the shape
@@ -222,7 +231,8 @@ export interface PublicFlyer {
 
 /**
  * The PUBLIC `/flyer` route's payload: null for an unknown or ARCHIVED club
- * (`isReadableClub`, the `Public` convention every gated seam here follows)
+ * (`resolvePublicMeetingKey` → `isReadableClub`; the `Public` in this name is
+ * the convention every gated seam here follows)
  * and for a key naming no meeting of this club. A cancelled meeting is still
  * served, like every other meeting surface — the officer is the one who
  * decides not to hand it out.
@@ -231,8 +241,9 @@ export async function loadPublicFlyer(
 	clubId: string,
 	key: string,
 ): Promise<PublicFlyer | null> {
-	if (!(await isReadableClub(clubId))) return null;
-	const meetingId = await resolveMeetingKey(clubId, key);
+	// The public seam, as every public caller must use (`meeting-resolve-logic`):
+	// it answers null for an unknown or ARCHIVED club before resolving the key.
+	const meetingId = await resolvePublicMeetingKey(clubId, key);
 	if (!meetingId) return null;
 	const club = await loadClub(clubId);
 	if (!club) return null;

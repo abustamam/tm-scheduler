@@ -18,6 +18,7 @@ import {
 	promoValues,
 	renderPromoText,
 	resolvePromoTemplate,
+	resolvePromoTemplateState,
 	templateWarnings,
 	unknownPlaceholders,
 } from "./promo-template";
@@ -283,6 +284,14 @@ describe("the stored template", () => {
 		expect(resolvePromoTemplate(null)).toEqual(DEFAULT_PROMO_TEMPLATE);
 	});
 
+	it("says when a STORED value could not be parsed, and not when there is none", () => {
+		expect(resolvePromoTemplateState({ headline: 3 }).storedInvalid).toBe(true);
+		expect(resolvePromoTemplateState(null).storedInvalid).toBe(false);
+		expect(
+			resolvePromoTemplateState(DEFAULT_PROMO_TEMPLATE).storedInvalid,
+		).toBe(false);
+	});
+
 	it("a malformed value falls back to the default rather than crashing", () => {
 		expect(resolvePromoTemplate({ headline: 3 })).toEqual(
 			DEFAULT_PROMO_TEMPLATE,
@@ -313,5 +322,42 @@ describe("the stored template", () => {
 				whyJoin: Array(PROMO_LIMITS.bullets + 1).fill("x"),
 			}).success,
 		).toBe(false);
+	});
+});
+
+describe("a template that places {meetingLink} itself", () => {
+	const t: PromoTemplate = {
+		...DEFAULT_PROMO_TEMPLATE,
+		callToAction: "RSVP and see the agenda: {meetingLink}",
+	};
+	const count = (s: string) => s.split(LINK).length - 1;
+
+	it("WhatsApp carries the link once, not appended again", () => {
+		expect(count(buildWhatsAppBlast(t, values()))).toBe(1);
+	});
+
+	it("the email body carries it once, in text and in HTML", () => {
+		const e = buildEmailBlast(t, values());
+		expect(count(e.text)).toBe(1);
+		expect(e.html).not.toContain("Details and agenda");
+	});
+
+	it("a toggled-OFF part does not count as placing it", () => {
+		const off: PromoTemplate = {
+			...t,
+			channels: {
+				...t.channels,
+				whatsapp: { ...t.channels.whatsapp, callToAction: false },
+			},
+		};
+		expect(count(buildWhatsAppBlast(off, values()))).toBe(1);
+		expect(buildWhatsAppBlast(off, values()).endsWith(LINK)).toBe(true);
+	});
+
+	it("the default template does not place it, so it is appended (control)", () => {
+		expect(count(buildWhatsAppBlast(DEFAULT_PROMO_TEMPLATE, values()))).toBe(1);
+		expect(buildEmailBlast(DEFAULT_PROMO_TEMPLATE, values()).text).toContain(
+			`Details and agenda: ${LINK}`,
+		);
 	});
 });

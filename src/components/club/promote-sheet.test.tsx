@@ -105,6 +105,34 @@ describe("the WhatsApp draft", () => {
 	});
 });
 
+describe("a share that fails", () => {
+	const withShare = (impl: () => Promise<void>) =>
+		Object.defineProperty(navigator, "share", {
+			value: vi.fn(impl),
+			configurable: true,
+		});
+
+	it("a dismissed share sheet (AbortError) is silent — nothing copied", async () => {
+		withShare(async () => {
+			throw new DOMException("dismissed", "AbortError");
+		});
+		const user = await renderDrafts();
+		await user.click(screen.getByRole("button", { name: /share/i }));
+		await waitFor(() => expect(navigator.share).toHaveBeenCalled());
+		expect(writeText).not.toHaveBeenCalled();
+	});
+
+	it("any other failure falls back to copying the message", async () => {
+		withShare(async () => {
+			throw new DOMException("no target", "NotAllowedError");
+		});
+		const user = await renderDrafts();
+		await user.click(screen.getByRole("button", { name: /share/i }));
+		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+		expect(writeText.mock.calls[0]?.[0]).toContain(LINK);
+	});
+});
+
 describe("the email draft", () => {
 	it("Copy subject copies the subject line", async () => {
 		const user = await renderDrafts();
@@ -147,7 +175,7 @@ describe("the email draft", () => {
 		}
 	});
 
-	it("a body too long for a mail link is copied instead", async () => {
+	it("a body too long for a mail link is copied instead — subject AND body", async () => {
 		const user = await renderDrafts();
 		await user.click(screen.getByRole("tab", { name: "Email" }));
 		const body = screen.getByLabelText("Body");
@@ -156,7 +184,9 @@ describe("the email draft", () => {
 		await user.paste("x".repeat(3000));
 		await user.click(screen.getByRole("button", { name: /open in mail app/i }));
 		await waitFor(() =>
-			expect(writeText).toHaveBeenCalledWith("x".repeat(3000)),
+			expect(writeText).toHaveBeenCalledWith(
+				`You're invited: Downtown Speakers, Thursday, October 1\n\n${"x".repeat(3000)}`,
+			),
 		);
 	});
 });
@@ -178,8 +208,8 @@ describe("template warnings", () => {
 
 describe("plainTextToHtml", () => {
 	it("keeps paragraphs and line breaks, and escapes markup", () => {
-		expect(plainTextToHtml("a <b>\nc\n\nd")).toBe(
-			"<p>a &lt;b&gt;<br>c</p>\n<p>d</p>",
+		expect(plainTextToHtml(`a <b title="x">'\nc\n\nd`)).toBe(
+			"<p>a &lt;b title=&quot;x&quot;&gt;&#39;<br>c</p>\n<p>d</p>",
 		);
 	});
 });

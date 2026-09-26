@@ -148,8 +148,46 @@ window.__flyerExport = window
 	);
 	const toChrome = proc.stdio[3] as Writable;
 	const fromChrome = proc.stdio[4] as Readable;
+
+	// ONE way out for every failure — the 30s ceiling, Chrome dying early, a
+	// broken pipe — and it stops everything at once: pending protocol calls
+	// reject, the polling loops below see `stopped` and bail, and the race
+	// settles immediately rather than waiting out the timer.
+	let stopped: Error | null = null;
+	let abort: (err: Error) => void = () => {};
+	const aborted = new Promise<never>((_, reject) => {
+		abort = reject;
+	});
+	// Observed through the race below; this only keeps a rejection that
+	// arrives AFTER a successful run (Chrome exiting on kill) from being
+	// reported as unhandled.
+	aborted.catch(() => {});
+	const pending = new Map<
+		number,
+		{ ok: (msg: CdpMessage) => void; fail: (err: Error) => void }
+	>();
+	const stop = (err: Error) => {
+		if (stopped) return;
+		stopped = err;
+		for (const p of pending.values()) p.fail(err);
+		pending.clear();
+		abort(err);
+	};
+	proc.on("error", (e) =>
+		stop(new Error(`Chrome did not start: ${e.message}`)),
+	);
+	proc.on("exit", (code, signal) =>
+		stop(new Error(`Chrome exited early (code ${code}, signal ${signal})`)),
+	);
+	// EPIPE: writing to a Chrome that has already gone.
+	toChrome.on("error", (e) => stop(new Error(`Chrome's pipe: ${e.message}`)));
+	fromChrome.on("error", (e) => stop(new Error(`Chrome's pipe: ${e.message}`)));
+	const timer = setTimeout(
+		() => stop(new Error("the export did not finish in 30s")),
+		30_000,
+	);
+
 	let nextId = 0;
-	const pending = new Map<number, (msg: CdpMessage) => void>();
 	let buffered = "";
 	fromChrome.on("data", (chunk: Buffer) => {
 		buffered += chunk.toString("utf8");
@@ -157,7 +195,10 @@ window.__flyerExport = window
 		while (nul !== -1) {
 			const msg = JSON.parse(buffered.slice(0, nul)) as CdpMessage;
 			buffered = buffered.slice(nul + 1);
-			if (msg.id !== undefined) pending.get(msg.id)?.(msg);
+			if (msg.id !== undefined) {
+				pending.get(msg.id)?.ok(msg);
+				pending.delete(msg.id);
+			}
 			nul = buffered.indexOf("\0");
 		}
 	});
@@ -166,12 +207,17 @@ window.__flyerExport = window
 		params: Record<string, unknown> = {},
 		sessionId?: string,
 	) =>
-		new Promise<CdpMessage>((resolveMsg) => {
+		new Promise<CdpMessage>((ok, fail) => {
+			if (stopped) return fail(stopped);
 			const id = ++nextId;
-			pending.set(id, resolveMsg);
+			pending.set(id, { ok, fail });
 			toChrome.write(`${JSON.stringify({ id, method, params, sessionId })}\0`);
 		});
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	const pause = async (ms: number) => {
+		await new Promise((r) => setTimeout(r, ms));
+		if (stopped) throw stopped;
+	};
+
 	try {
 		const run = (async () => {
 			// The start page is the only target; poll until it exists.
@@ -189,7 +235,7 @@ window.__flyerExport = window
 				)?.find(
 					(t) => t.type === "page" && t.url.startsWith("file://"),
 				)?.targetId;
-				if (!targetId) await new Promise((r) => setTimeout(r, 50));
+				if (!targetId) await pause(50);
 			}
 			if (!targetId) throw new Error("Chrome opened no page");
 			const attached = await send("Target.attachToTarget", {
@@ -215,7 +261,7 @@ window.__flyerExport = window
 					sessionId,
 				);
 				if (!evaluated.error) break;
-				await new Promise((r) => setTimeout(r, 50));
+				await pause(50);
 			}
 			const value = (evaluated.result?.result as { value?: unknown })?.value;
 			if (typeof value !== "string") {
@@ -223,15 +269,15 @@ window.__flyerExport = window
 			}
 			return value;
 		})();
-		const timeout = new Promise<never>((_, reject) => {
-			timer = setTimeout(
-				() => reject(new Error("the export did not finish in 30s")),
-				30_000,
-			);
-		});
-		return await Promise.race([run, timeout]);
+		// The loser of the race is swallowed here, so an abort that lands after
+		// `run` already failed (or the reverse) is never an unhandled rejection.
+		run.catch(() => {});
+		return await Promise.race([run, aborted]);
 	} finally {
 		clearTimeout(timer);
+		// Our own kill is not an early death: detach the exit handler first.
+		proc.removeAllListeners("exit");
+		stopped ??= new Error("done");
 		proc.kill("SIGKILL");
 		rmSync(dir, { recursive: true, force: true });
 	}

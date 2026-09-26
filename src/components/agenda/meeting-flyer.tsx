@@ -58,6 +58,23 @@ function FlyerQr({ value, size }: { value: string; size: number }) {
 	return <QRCodeSVG value={value} size={size} marginSize={0} />;
 }
 
+/**
+ * Clamp a block to `lines` lines with an ellipsis. Every free-text field on
+ * both layouts is clamped, so its height is bounded whatever an officer types
+ * up to the field's cap: the Letter poster then stays inside `FitPage`'s
+ * scale-to-fit range (never flowing onto a second sheet), and the square keeps
+ * its QR and disclaimer on the canvas.
+ */
+function clamp(lines: number): React.CSSProperties {
+	return {
+		display: "-webkit-box",
+		WebkitBoxOrient: "vertical",
+		WebkitLineClamp: lines,
+		overflow: "hidden",
+		overflowWrap: "anywhere",
+	};
+}
+
 export function MeetingFlyerLetter({
 	content,
 	clubName,
@@ -77,12 +94,12 @@ export function MeetingFlyerLetter({
 					display: "flex",
 					flexDirection: "column",
 					padding: "56px 64px 40px",
-					gap: 28,
+					gap: 24,
 				}}
 			>
 				<div style={{ display: "flex", alignItems: "center", gap: 16 }}>
 					<ClubLogo logoUrl={logoUrl} height={64} maxWidth={220} />
-					<Kick style={{ fontSize: 14, letterSpacing: ".18em" }}>
+					<Kick style={{ fontSize: 14, letterSpacing: ".18em", ...clamp(2) }}>
 						{clubName}
 					</Kick>
 				</div>
@@ -95,6 +112,7 @@ export function MeetingFlyerLetter({
 						fontWeight: 700,
 						margin: 0,
 						color: INK,
+						...clamp(3),
 					}}
 				>
 					{content.headline}
@@ -110,6 +128,7 @@ export function MeetingFlyerLetter({
 							fontSize: 22,
 							fontWeight: 700,
 							color: FOREST,
+							...clamp(2),
 						}}
 					>
 						{content.note}
@@ -124,7 +143,9 @@ export function MeetingFlyerLetter({
 							</div>
 						) : null}
 						{content.location ? (
-							<div style={{ fontSize: 22, marginTop: 8, color: INK }}>
+							<div
+								style={{ fontSize: 22, marginTop: 8, color: INK, ...clamp(2) }}
+							>
 								{content.location}
 							</div>
 						) : null}
@@ -134,7 +155,14 @@ export function MeetingFlyerLetter({
 							</div>
 						) : null}
 						{content.theme ? (
-							<div style={{ fontSize: 20, marginTop: 14, color: FOREST }}>
+							<div
+								style={{
+									fontSize: 20,
+									marginTop: 14,
+									color: FOREST,
+									...clamp(2),
+								}}
+							>
 								Theme: <strong>{content.theme}</strong>
 							</div>
 						) : null}
@@ -145,6 +173,7 @@ export function MeetingFlyerLetter({
 									lineHeight: 1.45,
 									whiteSpace: "pre-line",
 									margin: "16px 0 0",
+									...clamp(4),
 								}}
 							>
 								{content.intro}
@@ -179,7 +208,9 @@ export function MeetingFlyerLetter({
 							}}
 						>
 							{content.whyJoin.map((b) => (
-								<li key={b}>{b}</li>
+								<li key={b}>
+									<div style={clamp(2)}>{b}</div>
+								</li>
 							))}
 						</ul>
 					</div>
@@ -193,6 +224,7 @@ export function MeetingFlyerLetter({
 							fontStyle: "italic",
 							margin: 0,
 							color: INK,
+							...clamp(2),
 						}}
 					>
 						{content.callToAction}
@@ -205,11 +237,40 @@ export function MeetingFlyerLetter({
 }
 
 /**
+ * The square's text block takes only the space the QR and the disclaimer leave
+ * it, and clips the rest. `minHeight: 0` is what lets a flex item shrink below
+ * its content (its default minimum IS its content); `overflow: hidden` clips
+ * what no longer fits. Named so the geometry gate can revert it in one edit.
+ */
+const TEXT_BLOCK_GIVES_WAY: React.CSSProperties = {
+	flex: "1 1 0",
+	minHeight: 0,
+	overflow: "hidden",
+};
+
+/**
  * The square image layout. A fixed 1080x1080 box, never scaled: the PNG export
  * captures it at 1x, so this is the image pixel for pixel. `logoSrc` must be a
  * `data:` URL by the time it is exported (`exportSquarePng` refuses anything
  * else), so a logo that could not be inlined fails loudly instead of leaving a
  * hole in the image.
+ *
+ * ## The QR and the disclaimer can never be clipped
+ *
+ * The box is fixed and `overflow: hidden`, so anything that does not fit is
+ * cut off — and with every field at its cap (a 160-character headline, a
+ * 300-character note, a 200-character venue and theme) the text alone is
+ * taller than the canvas. So the layout is two parts:
+ *
+ *   - the TEXT block gives way (`TEXT_BLOCK_GIVES_WAY`): it takes the space
+ *     that is left and clips the rest;
+ *   - the QR group and the disclaimer are `flex: none` at the bottom, so they
+ *     keep their full size whatever the text does.
+ *
+ * Each field is also line-clamped, so long copy usually ends in an ellipsis
+ * rather than a clipped half-line — but that is cosmetic; the clamps alone do
+ * NOT keep the QR on the canvas at the caps. `flyer-square-geometry.test.tsx`
+ * measures both boxes in Chrome with every field at its cap.
  */
 export function MeetingFlyerSquare({
 	content,
@@ -235,86 +296,109 @@ export function MeetingFlyerSquare({
 				flexDirection: "column",
 				alignItems: "center",
 				textAlign: "center",
-				padding: "56px 72px 32px",
+				padding: "48px 72px 28px",
 				overflow: "hidden",
 			}}
 		>
 			<div
+				data-flyer-text=""
 				style={{
-					display: "flex",
-					alignItems: "center",
-					gap: 20,
-					height: 120,
-				}}
-			>
-				{logoSrc ? (
-					<img
-						data-flyer-logo=""
-						src={logoSrc}
-						alt=""
-						style={{
-							height: 120,
-							width: "auto",
-							maxWidth: 320,
-							objectFit: "contain",
-						}}
-					/>
-				) : null}
-				<div
-					style={{
-						fontSize: 26,
-						fontWeight: 800,
-						letterSpacing: ".12em",
-						textTransform: "uppercase",
-						color: FOREST,
-					}}
-				>
-					{clubName}
-				</div>
-			</div>
-			<div
-				style={{
-					fontFamily: SERIF,
-					fontSize: 60,
-					lineHeight: 1.08,
-					fontWeight: 700,
-					marginTop: 28,
-				}}
-			>
-				{content.headline}
-			</div>
-			{when ? (
-				<div style={{ fontSize: 36, fontWeight: 800, marginTop: 22 }}>
-					{when}
-				</div>
-			) : null}
-			{content.location ? (
-				<div style={{ fontSize: 28, marginTop: 8 }}>{content.location}</div>
-			) : null}
-			{content.theme ? (
-				<div style={{ fontSize: 26, marginTop: 8, color: FOREST }}>
-					Theme: {content.theme}
-				</div>
-			) : null}
-			{content.note ? (
-				<div
-					style={{
-						fontSize: 26,
-						fontWeight: 700,
-						marginTop: 14,
-						color: LAGOON,
-					}}
-				>
-					{content.note}
-				</div>
-			) : null}
-			<div
-				style={{
-					marginTop: "auto",
+					...TEXT_BLOCK_GIVES_WAY,
+					width: "100%",
 					display: "flex",
 					flexDirection: "column",
 					alignItems: "center",
-					gap: 10,
+				}}
+			>
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "center",
+						gap: 20,
+						height: 110,
+						flex: "none",
+						maxWidth: "100%",
+					}}
+				>
+					{logoSrc ? (
+						<img
+							data-flyer-logo=""
+							src={logoSrc}
+							alt=""
+							style={{
+								height: 110,
+								width: "auto",
+								maxWidth: 300,
+								objectFit: "contain",
+							}}
+						/>
+					) : null}
+					<div
+						style={{
+							fontSize: 26,
+							fontWeight: 800,
+							letterSpacing: ".12em",
+							textTransform: "uppercase",
+							color: FOREST,
+							...clamp(3),
+						}}
+					>
+						{clubName}
+					</div>
+				</div>
+				<div
+					style={{
+						fontFamily: SERIF,
+						fontSize: 56,
+						lineHeight: 1.08,
+						fontWeight: 700,
+						marginTop: 24,
+						...clamp(3),
+					}}
+				>
+					{content.headline}
+				</div>
+				{when ? (
+					<div style={{ fontSize: 34, fontWeight: 800, marginTop: 18 }}>
+						{when}
+					</div>
+				) : null}
+				{content.location ? (
+					<div style={{ fontSize: 26, marginTop: 6, ...clamp(1) }}>
+						{content.location}
+					</div>
+				) : null}
+				{content.theme ? (
+					<div
+						style={{ fontSize: 24, marginTop: 6, color: FOREST, ...clamp(1) }}
+					>
+						Theme: {content.theme}
+					</div>
+				) : null}
+				{content.note ? (
+					<div
+						style={{
+							fontSize: 24,
+							fontWeight: 700,
+							marginTop: 10,
+							color: LAGOON,
+							...clamp(2),
+						}}
+					>
+						{content.note}
+					</div>
+				) : null}
+			</div>
+			<div
+				data-flyer-qr=""
+				style={{
+					flex: "none",
+					marginTop: 12,
+					display: "flex",
+					flexDirection: "column",
+					alignItems: "center",
+					gap: 8,
 				}}
 			>
 				<div style={{ background: "#fff", padding: 20 }}>
@@ -325,11 +409,13 @@ export function MeetingFlyerSquare({
 				</div>
 			</div>
 			<div
+				data-flyer-disclaimer=""
 				style={{
+					flex: "none",
 					fontSize: 13,
 					lineHeight: 1.35,
 					color: MUTED,
-					marginTop: 18,
+					marginTop: 14,
 				}}
 			>
 				{TOASTMASTERS_DISCLAIMER}

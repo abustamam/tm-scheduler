@@ -26,6 +26,7 @@ const {
 	clubIdForMeeting,
 	loadPromoContext,
 	loadPromoTemplate,
+	loadPromoTemplateState,
 	loadPublicFlyer,
 } = await import("#/server/promo-logic");
 const { applyMeetingMetaPatch, loadNextMeetingSummary } = await import(
@@ -71,6 +72,17 @@ describe.skipIf(!hasTestDb)("marketing blasts (#931)", () => {
 				.where(eq(clubs.id, seed.clubId));
 			expect(await loadPromoTemplate(seed.clubId)).toEqual(
 				DEFAULT_PROMO_TEMPLATE,
+			);
+			// …and the editor's read says so, rather than passing the default off
+			// as the club's own template.
+			expect((await loadPromoTemplateState(seed.clubId)).storedInvalid).toBe(
+				true,
+			);
+		});
+
+		it("a new club's template is not flagged invalid", async () => {
+			expect((await loadPromoTemplateState(seed.clubId)).storedInvalid).toBe(
+				false,
 			);
 		});
 	});

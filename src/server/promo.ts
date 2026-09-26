@@ -7,7 +7,7 @@ import {
 	applyUpdatePromoTemplate,
 	clubIdForMeeting,
 	loadPromoContext,
-	loadPromoTemplate,
+	loadPromoTemplateState,
 	loadPublicFlyer,
 } from "./promo-logic";
 
@@ -20,14 +20,15 @@ export type { PromoContext, PublicFlyer } from "./promo-logic";
 
 const uuid = z.uuid();
 
-/** The club's blast template for the settings editor. AUTHED — admin view
- *  (an officer, or a superadmin's read-only impersonation). */
+/** The club's blast template for the settings editor, and whether a stored one
+ *  failed to parse. AUTHED — admin view (an officer, or a superadmin's
+ *  read-only impersonation). */
 export const getPromoTemplate = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubAdminView(currentUser.id, clubId);
-		return loadPromoTemplate(clubId);
+		return loadPromoTemplateState(clubId);
 	});
 
 const updatePromoTemplateSchema = z.object({
@@ -35,8 +36,11 @@ const updatePromoTemplateSchema = z.object({
 	template: promoTemplateSchema,
 });
 
-/** Replace the club's blast template. AUTHED — admin only (#931 decision 1:
- *  an officer POSITION like VP Public Relations grants nothing beyond it). */
+/** Replace the club's blast template. AUTHED — admin (#931 decision 1). "Admin"
+ *  is `requireClubRole`'s EFFECTIVE admin: a stored club admin, or any member
+ *  with an open officer term (#202), so a VP Public Relations passes as an
+ *  officer. Decision 1 means no role-specific grant beyond that — the rule is
+ *  the one every other admin write here uses, not a new PR-only one. */
 export const updatePromoTemplate = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updatePromoTemplateSchema.parse(input))
 	.handler(async ({ data }) => {

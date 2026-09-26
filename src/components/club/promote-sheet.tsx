@@ -29,6 +29,7 @@ import {
 } from "#/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { Textarea } from "#/components/ui/textarea";
+import { escapeHtml } from "#/lib/html-escape";
 import {
 	buildEmailBlast,
 	buildFlyerContent,
@@ -75,12 +76,20 @@ async function copyRich(html: string, text: string, what: string) {
 
 /** Plain text as the simplest HTML that keeps its line breaks. */
 export function plainTextToHtml(text: string): string {
-	const esc = (s: string) =>
-		s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 	return text
 		.split(/\n{2,}/)
-		.map((p) => `<p>${p.split("\n").map(esc).join("<br>")}</p>`)
+		.map((p) => `<p>${p.split("\n").map(escapeHtml).join("<br>")}</p>`)
 		.join("\n");
+}
+
+/** A dismissed share sheet. `DOMException` is not an `Error` in every engine,
+ *  so this reads the name rather than checking the class. */
+function isAbortError(err: unknown): boolean {
+	return (
+		typeof err === "object" &&
+		err !== null &&
+		(err as { name?: unknown }).name === "AbortError"
+	);
 }
 
 function canShare(): boolean {
@@ -245,15 +254,27 @@ export function PromoDrafts({
 	async function share() {
 		try {
 			await navigator.share({ text: whatsapp });
-		} catch {
-			// Dismissing the share sheet rejects too; nothing to report.
+		} catch (err) {
+			// Dismissing the share sheet rejects with an AbortError: the officer
+			// changed their mind, so there is nothing to report.
+			if (isAbortError(err)) return;
+			// Anything else (no share target, a permissions refusal, a payload
+			// the platform rejects) must not look like success: say so, and hand
+			// the officer the message another way.
+			toast.error("Couldn't open the share sheet.");
+			await copyText(whatsapp, "Message");
 		}
 	}
 
 	function openMail() {
 		const href = promoMailtoHref(subject, body);
 		if (!href) {
-			void copyText(body, "Too long for a mail link — the body was");
+			// Too long for a mailto: link. Copy BOTH, subject first, so nothing
+			// the officer wrote is silently dropped.
+			void copyText(
+				`${subject}\n\n${body}`,
+				"Too long for a mail link — the subject and body were",
+			);
 			return;
 		}
 		window.location.href = href;

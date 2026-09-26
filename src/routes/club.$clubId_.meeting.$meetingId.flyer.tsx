@@ -7,7 +7,8 @@
 // PUBLIC, like `/word` — a flyer shows only what the public meeting page
 // already shows, and its QR opens that page. Archived and unknown clubs 404:
 // `resolveClubOrRedirect` refuses an archived club, and `loadPublicFlyer`
-// gates on `isReadableClub` beneath the server fn. The `$clubId_` escape
+// resolves the key through `resolvePublicMeetingKey` (archive-gated) beneath
+// the server fn. The `$clubId_` escape
 // renders it standalone, outside the club shell.
 //
 // The loader's payload is narrowed to `FLYER_MEETING_FIELDS` before it is

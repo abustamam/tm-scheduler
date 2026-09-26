@@ -63,7 +63,7 @@ describe("marketing-blast authz wiring (#931)", () => {
 		assertOrder(
 			handlerBody("getPromoTemplate"),
 			ADMIN_READ,
-			"loadPromoTemplate(",
+			"loadPromoTemplateState(",
 		);
 	});
 

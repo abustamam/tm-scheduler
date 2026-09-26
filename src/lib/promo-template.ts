@@ -23,6 +23,7 @@
 
 import { z } from "zod";
 import { APP_LOCALE } from "#/lib/format";
+import { escapeHtml } from "#/lib/html-escape";
 
 /** Every placeholder a template may use, and nothing else. */
 export const PROMO_PLACEHOLDERS = [
@@ -131,9 +132,25 @@ export const DEFAULT_PROMO_TEMPLATE: PromoTemplate = {
  * row written before a field existed must not crash the sheet.
  */
 export function resolvePromoTemplate(stored: unknown): PromoTemplate {
-	if (stored == null) return DEFAULT_PROMO_TEMPLATE;
+	return resolvePromoTemplateState(stored).template;
+}
+
+export interface PromoTemplateState {
+	template: PromoTemplate;
+	/** A template IS stored but no longer parses, so the default is standing
+	 *  in for it. The editor says so rather than silently replacing the
+	 *  admin's edits with the default on their next save. */
+	storedInvalid: boolean;
+}
+
+export function resolvePromoTemplateState(stored: unknown): PromoTemplateState {
+	if (stored == null) {
+		return { template: DEFAULT_PROMO_TEMPLATE, storedInvalid: false };
+	}
 	const parsed = promoTemplateSchema.safeParse(stored);
-	return parsed.success ? parsed.data : DEFAULT_PROMO_TEMPLATE;
+	return parsed.success
+		? { template: parsed.data, storedInvalid: false }
+		: { template: DEFAULT_PROMO_TEMPLATE, storedInvalid: true };
 }
 
 const TOKEN = /\{(\w+)\}/g;
@@ -301,8 +318,38 @@ export function buildWhatsAppBlast(
 	if (parts.callToAction) {
 		blocks.push(renderPromoText(template.callToAction, values));
 	}
-	if (values.meetingLink) blocks.push(values.meetingLink);
+	// Appended only when the officer's template has not already placed it —
+	// twice in one message reads as a mistake.
+	const placed = placesMeetingLink(
+		[template.headline, ...channelTexts(template, parts)],
+		values,
+	);
+	if (values.meetingLink && !placed) blocks.push(values.meetingLink);
 	return blocks.filter(Boolean).join("\n\n");
+}
+
+/** The template texts a channel includes, per its toggles. */
+function channelTexts(
+	template: PromoTemplate,
+	parts: PromoChannelParts,
+): string[] {
+	return [
+		...(parts.intro ? [template.intro] : []),
+		...(parts.whyJoin ? template.whyJoin : []),
+		...(parts.callToAction ? [template.callToAction] : []),
+	];
+}
+
+/**
+ * Whether one of `texts` puts `{meetingLink}` into the output. A line holding
+ * it is dropped only when the link is empty, so with a link present the
+ * placeholder always renders.
+ */
+function placesMeetingLink(texts: string[], values: PromoValues): boolean {
+	return (
+		Boolean(values.meetingLink) &&
+		texts.some((t) => t.includes("{meetingLink}"))
+	);
 }
 
 export interface EmailBlast {
@@ -327,7 +374,11 @@ export function buildEmailBlast(
 	const cta = parts.callToAction
 		? renderPromoText(template.callToAction, values)
 		: "";
-	const link = values.meetingLink;
+	// Not appended when the body already carries it (the subject does not
+	// count: a link in a subject line is not one a reader can open).
+	const link = placesMeetingLink(channelTexts(template, parts), values)
+		? ""
+		: values.meetingLink;
 
 	const text = [
 		intro,
@@ -451,13 +502,4 @@ export function projectFlyerMeeting(meeting: FlyerMeeting): FlyerMeeting {
 
 function renderBullets(bullets: string[], values: PromoValues): string[] {
 	return bullets.map((b) => renderPromoText(b, values)).filter(Boolean);
-}
-
-function escapeHtml(s: string): string {
-	return s
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#39;");
 }

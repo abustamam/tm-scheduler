@@ -221,11 +221,14 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		]);
 		// The blast template (#931). Imported here rather than at the top so the
 		// promo module stays out of this page's first chunk; the editor that
-		// reads it is lazy for the same reason.
-		const { getPromoTemplate } = await import("#/server/promo");
-		const promoTemplate = await getPromoTemplate({
-			data: context.adminClub.clubId,
-		});
+		// reads it is lazy for the same reason. Non-fatal, like the logo above:
+		// a failed read hides the Promote section rather than blanking the whole
+		// settings page (including across a rolling deploy).
+		const promoTemplate = await import("#/server/promo")
+			.then(({ getPromoTemplate }) =>
+				getPromoTemplate({ data: context.adminClub.clubId }),
+			)
+			.catch(() => null);
 		return { profile, reminders, agenda, logoMeta, timezone, promoTemplate };
 	},
 	component: ClubSettings,
@@ -953,7 +956,8 @@ function ClubSettings() {
 				<Suspense fallback={null}>
 					<PromoTemplateEditor
 						clubId={adminClub.clubId}
-						template={promoTemplate}
+						template={promoTemplate.template}
+						storedInvalid={promoTemplate.storedInvalid}
 						onSaved={() => router.invalidate()}
 					/>
 				</Suspense>
