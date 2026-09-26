@@ -46,8 +46,18 @@ echo
 
 # 1. Dependencies. Bun is fast and install is idempotent, so run unconditionally
 #    rather than guessing from node_modules/ being present but half-populated.
-echo "→ bun install"
-bun install
+#
+#    --frozen-lockfile, like CI and the Dockerfile: a plain `bun install` lets
+#    the local Bun rewrite bun.lock to its own format. Bun >= 1.3 adds a
+#    `"configVersion": 0` line that an older Bun strips again (#846 did), so
+#    every worktree started with a dirty tracked file. Only a lockfile that
+#    really is behind package.json falls through to a writing install, and that
+#    diff is then real.
+echo "→ bun install --frozen-lockfile"
+if ! bun install --frozen-lockfile; then
+	echo "  ! bun.lock is out of date with package.json; running a plain install (it WILL modify bun.lock)"
+	bun install
+fi
 
 # 2. Env. Never clobber an existing file — a worktree may be deliberately
 #    pointed at a different database than the main checkout.
