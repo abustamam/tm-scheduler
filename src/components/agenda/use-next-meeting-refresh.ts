@@ -47,11 +47,22 @@ export function useNextMeetingRefresh(
 		refetchInterval: NEXT_MEETING_REFRESH_MS,
 		refetchOnWindowFocus: false,
 		retry: false,
+		// Drop the cache the moment the deck closes. React Query ignores
+		// `initialData` for a key it still holds, so a deck reopened within the
+		// default five minutes started from the LAST session's copy — and, with
+		// no snapshot, never polled to correct it: a meeting cancelled in between
+		// stayed on the slide and in the exported .pptx.
+		gcTime: 0,
 		enabled: snapshot != null,
 	});
 	// The newest non-null answer seen, refreshes included. A ref, not state:
-	// it changes only alongside `query.data`, which already re-renders.
-	const lastGood = useRef(snapshot);
-	if (query.data) lastGood.current = query.data;
-	return query.data ?? lastGood.current;
+	// it changes only alongside `query.data`, which already re-renders. It is
+	// tied to the key it was seen under: a route that stays mounted while the
+	// meeting changes (back/forward between two decks) starts over from the new
+	// deck's snapshot rather than carrying the last deck's next meeting across.
+	const key = JSON.stringify(queryKey);
+	const lastGood = useRef({ key, value: snapshot });
+	if (lastGood.current.key !== key) lastGood.current = { key, value: snapshot };
+	if (query.data) lastGood.current.value = query.data;
+	return query.data ?? lastGood.current.value;
 }
