@@ -127,8 +127,8 @@ const FRESH: NextMeetingSummary = {
 function hook(
 	snapshot: NextMeetingSummary | null,
 	fetcher: () => Promise<NextMeetingSummary | null>,
+	qc = new QueryClient(),
 ) {
-	const qc = new QueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={qc}>{children}</QueryClientProvider>
 	);
@@ -209,6 +209,31 @@ describe("the silent refresh behind the slide (#932)", () => {
 		await act(() => qc.refetchQueries());
 		expect(fetcher).not.toHaveBeenCalled();
 		expect(view.result.current).toBeNull();
+	});
+
+	// A reopened deck is a new presentation: the loader's snapshot is the
+	// truth, not whatever the previous session left in the query cache —
+	// React Query ignores `initialData` whenever the key is already cached.
+	it("a reopened deck with no next meeting shows none, not the last session's", async () => {
+		const qc = new QueryClient();
+		const first = hook(SNAPSHOT, vi.fn().mockResolvedValue(FRESH), qc);
+		await act(() => qc.refetchQueries());
+		await waitFor(() => expect(first.view.result.current).toEqual(FRESH));
+		first.view.unmount();
+		// The next meeting was cancelled in between; navigating back takes a moment.
+		await act(() => new Promise((r) => setTimeout(r, 10)));
+		const { view } = hook(null, vi.fn(), qc);
+		expect(view.result.current).toBeNull();
+	});
+
+	it("a reopened deck starts from its own snapshot, not the last session's", async () => {
+		const qc = new QueryClient();
+		const first = hook(FRESH, vi.fn(), qc);
+		expect(first.view.result.current).toEqual(FRESH);
+		first.view.unmount();
+		await act(() => new Promise((r) => setTimeout(r, 10)));
+		const { view } = hook(SNAPSHOT, vi.fn(), qc);
+		expect(view.result.current).toEqual(SNAPSHOT);
 	});
 
 	it("refreshes on its own cadence", async () => {

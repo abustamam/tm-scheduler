@@ -47,6 +47,12 @@ export function useNextMeetingRefresh(
 		refetchInterval: NEXT_MEETING_REFRESH_MS,
 		refetchOnWindowFocus: false,
 		retry: false,
+		// Drop the cache the moment the deck closes. React Query ignores
+		// `initialData` for a key it still holds, so a deck reopened within the
+		// default five minutes started from the LAST session's copy — and, with
+		// no snapshot, never polled to correct it: a meeting cancelled in between
+		// stayed on the slide and in the exported .pptx.
+		gcTime: 0,
 		enabled: snapshot != null,
 	});
 	// The newest non-null answer seen, refreshes included. A ref, not state:
