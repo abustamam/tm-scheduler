@@ -5,6 +5,7 @@ import {
 	applyConvertGuestToMember,
 	applyDeleteGuest,
 	applyLinkGuestToMember,
+	applyRecordGuestInvite,
 	applySetGuestStage,
 	applyUndoGuestConversion,
 	applyUnlinkGuestFromMember,
@@ -13,7 +14,11 @@ import {
 	loadGuestPipeline,
 	loadLinkCandidates,
 } from "./guest-pipeline-logic";
-import { guestBookSchema } from "./guest-pipeline-schemas";
+import {
+	guestBookSchema,
+	recordGuestInviteSchema,
+} from "./guest-pipeline-schemas";
+import { loadNextMeetingSummary } from "./meetings-logic";
 
 // The db-touching logic lives in `guest-pipeline-logic.ts` (never imported by
 // client routes) so it can't drag `#/db` → `pg` into the browser bundle. This
@@ -26,6 +31,7 @@ export type {
 	ManualGuestStage,
 	PipelineGuestRow,
 } from "./guest-pipeline-logic";
+export type { NextMeetingSummary } from "./meetings-logic";
 
 const uuid = z.string().uuid();
 
@@ -57,6 +63,39 @@ export const getGuestPipeline = createServerFn({ method: "GET" })
 		const currentUser = await requireUser();
 		await requireClubAdminView(currentUser.id, clubId);
 		return loadGuestPipeline(clubId);
+	});
+
+/**
+ * What the VPM page needs to draft an invite (#899): the club's timezone and its
+ * next non-cancelled meeting, slim — never `join_url` (see
+ * `loadNextMeetingSummary`). AUTHED — the same gate as `getGuestPipeline`.
+ */
+export const getGuestInviteContext = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => {
+		const currentUser = await requireUser();
+		await requireClubAdminView(currentUser.id, clubId);
+		return loadNextMeetingSummary(clubId, new Date());
+	});
+
+/**
+ * Record that this officer opened an invite draft for a guest to the next
+ * meeting (#899). Nothing is sent — the human sends. AUTHED — admin, like every
+ * other guest write; the actor is the resolved membership, never input.
+ */
+export const recordGuestInvite = createServerFn({ method: "POST" })
+	.validator((input: unknown) => recordGuestInviteSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const membership = await requireClubRole(currentUser.id, data.clubId, [
+			"admin",
+		]);
+		return applyRecordGuestInvite({
+			clubId: data.clubId,
+			guestId: data.guestId,
+			meetingId: data.meetingId,
+			actorMemberId: membership.id,
+		});
 	});
 
 const setStageSchema = z.object({

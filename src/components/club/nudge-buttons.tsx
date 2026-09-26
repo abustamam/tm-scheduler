@@ -29,6 +29,14 @@ export type NudgeButtonsProps = NudgeButtonsBase &
 	(
 		| { mode: "attendance" | "arriving" }
 		| {
+				/** A guest invite to the next meeting (#899). Role-less, and never
+				 *  carries a personal link or a `join_url`. */
+				mode: "invite";
+				clubName: string;
+				meetingTime: string;
+				location?: string | null;
+		  }
+		| {
 				mode: "confirm" | "recruit";
 				roleName: string;
 				/** What the role still owes (#667), ALREADY filtered by the
@@ -115,7 +123,15 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 					duties: props.duties,
 					personalUrl: props.personalUrl,
 				}
-			: { ...common, mode: props.mode },
+			: props.mode === "invite"
+				? {
+						...common,
+						mode: props.mode,
+						clubName: props.clubName,
+						meetingTime: props.meetingTime,
+						location: props.location,
+					}
+				: { ...common, mode: props.mode },
 	);
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { guestBookSchema } from "./guest-pipeline-schemas";
+import {
+	guestBookSchema,
+	recordGuestInviteSchema,
+} from "./guest-pipeline-schemas";
 
 /**
  * Bounds on the PUBLIC, session-less guest book. These are a security layer, not
@@ -63,6 +66,28 @@ describe("guestBookSchema", () => {
 	it("rejects a malformed club id", () => {
 		expect(() =>
 			guestBookSchema.parse({ clubId: "nope", name: "A" }),
+		).toThrow();
+	});
+});
+
+describe("recordGuestInviteSchema (#899)", () => {
+	const input = {
+		clubId: randomUUID(),
+		guestId: randomUUID(),
+		meetingId: randomUUID(),
+	};
+
+	it("accepts the three ids", () => {
+		expect(recordGuestInviteSchema.parse(input)).toEqual(input);
+	});
+
+	it("rejects a client-supplied actor rather than dropping it", () => {
+		// The inviter is the membership the gate resolves from the session. A
+		// schema that silently stripped the field would still be safe today, but
+		// `.strict()` makes the attempt fail loudly and keeps a later spread of
+		// `data` from ever carrying it into the logic call.
+		expect(() =>
+			recordGuestInviteSchema.parse({ ...input, actorMemberId: randomUUID() }),
 		).toThrow();
 	});
 });
