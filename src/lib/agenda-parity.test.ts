@@ -267,6 +267,9 @@ const SECTION_BY_SLIDE = {
 	reminders: null,
 	// Deck chrome: the closing splash. No beat.
 	thankYou: null,
+	// The next meeting's line-up (#932), just before the closing splash. About
+	// the NEXT meeting, not a beat of this one's run of show.
+	nextMeeting: null,
 	// The two TEMPLATED-meeting kinds (#agenda-templates). Excluded because this
 	// whole file compares the STANDARD run of show against the STANDARD deck, and
 	// neither of these can appear in either: `buildSlideDeck` never emits them and
