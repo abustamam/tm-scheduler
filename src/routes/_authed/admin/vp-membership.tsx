@@ -31,6 +31,7 @@ import {
 	convertNoticeDescription,
 	isStrandedConvertedGuest,
 } from "#/lib/guest-convert";
+import { isInvitableStage } from "#/lib/guest-invite";
 import { mailtoHref } from "#/lib/mailto";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
@@ -67,6 +68,7 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 				clubName: "",
 				clubSlug: null,
 				inviteContext: NO_INVITE_CONTEXT,
+				readOnly: false,
 			};
 		}
 		const [guests, resolved, inviteContext] = await Promise.all([
@@ -80,6 +82,12 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 			clubName: club.name,
 			clubSlug: resolved?.slug ?? null,
 			inviteContext,
+			// A READ-ONLY impersonation passes the admin-view read that loads this
+			// page but not the admin write `recordGuestInvite` runs, so its invite
+			// links would open a draft and then fail to record (#899).
+			readOnly:
+				context.impersonating?.mode === "read_only" &&
+				context.impersonating.clubId === club.clubId,
 		};
 	},
 	component: VpMembership,
@@ -89,13 +97,6 @@ const NO_INVITE_CONTEXT: NextMeetingSummary = {
 	timezone: "UTC",
 	nextMeeting: null,
 };
-
-/** Stages a guest can be invited back from (#899). A stranded `joined` row is
- *  excluded by construction: it renders in Joined, and the server refuses it. */
-const INVITABLE_STAGES: ReadonlySet<GuestStage> = new Set([
-	"prospect",
-	"following_up",
-]);
 
 const STAGES: { id: GuestStage; label: string; blurb: string; tone: string }[] =
 	[
@@ -132,7 +133,7 @@ const MANUAL_STAGES: { id: ManualGuestStage; label: string }[] = [
 ];
 
 function VpMembership() {
-	const { guests, clubId, clubName, clubSlug, inviteContext } =
+	const { guests, clubId, clubName, clubSlug, inviteContext, readOnly } =
 		Route.useLoaderData();
 	const router = useRouter();
 	const [busyId, setBusyId] = useState<string | null>(null);
@@ -295,9 +296,10 @@ function VpMembership() {
 									busy={busyId === g.id}
 									onMove={move}
 									onConvert={convert}
+									timezone={inviteContext.timezone}
 									invite={{
 										clubName,
-										timezone: inviteContext.timezone,
+										readOnly,
 										nextMeeting: next,
 										shareUrl: inviteShareUrl,
 										onRecord: recordInvite,
@@ -369,7 +371,8 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 
 interface InviteProps {
 	clubName: string;
-	timezone: string;
+	/** Read-only impersonation: the write would be refused, so offer nothing. */
+	readOnly: boolean;
 	nextMeeting: NextMeetingSummary["nextMeeting"];
 	shareUrl: string;
 	onRecord: (guestId: string, meetingId: string) => void;
@@ -412,21 +415,24 @@ function GuestInvite({
 	phone,
 	email,
 	invite,
+	timezone,
 }: {
 	guest: PipelineGuestRow;
 	phone: string | null;
 	email: string | null;
 	invite: InviteProps;
+	timezone: string;
 }) {
 	const next = invite.nextMeeting;
-	const reason = !next
-		? "Schedule the next meeting first"
-		: !phone && !email
-			? "Add an email or phone to invite"
-			: null;
-	const label = next
-		? `Invite to ${formatMeetingDate(next.scheduledAt, invite.timezone)}`
-		: "Invite";
+	const meetingDate = next ? formatMeetingDate(next.scheduledAt, timezone) : "";
+	const reason = invite.readOnly
+		? "Read-only view: invites can't be recorded"
+		: !next
+			? "Schedule the next meeting first"
+			: !phone && !email
+				? "Add an email or phone to invite"
+				: null;
+	const label = next ? `Invite to ${meetingDate}` : "Invite";
 	if (reason || !next) {
 		return (
 			<fieldset
@@ -462,8 +468,8 @@ function GuestInvite({
 				preferredName={guest.preferredName}
 				phone={phone}
 				email={email}
-				meetingDate={formatMeetingDate(next.scheduledAt, invite.timezone)}
-				meetingTime={formatMeetingTime(next.scheduledAt, invite.timezone)}
+				meetingDate={meetingDate}
+				meetingTime={formatMeetingTime(next.scheduledAt, timezone)}
 				location={next.location}
 				clubName={invite.clubName}
 				shareUrl={invite.shareUrl}
@@ -479,6 +485,7 @@ function GuestRow({
 	busy,
 	onMove,
 	onConvert,
+	timezone,
 	invite,
 }: {
 	guest: PipelineGuestRow;
@@ -486,6 +493,7 @@ function GuestRow({
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => void;
+	timezone: string;
 	invite: InviteProps;
 }) {
 	// STRANDED, not joined: converted once, then the membership was removed from
@@ -503,10 +511,10 @@ function GuestRow({
 			? "No recorded visits"
 			: `${guest.visitCount} visit${guest.visitCount === 1 ? "" : "s"}`;
 	const firstVisit = guest.firstVisitAt
-		? `first ${formatShortDate(guest.firstVisitAt, invite.timezone)}`
+		? `first ${formatShortDate(guest.firstVisitAt, timezone)}`
 		: null;
-	const invitable = INVITABLE_STAGES.has(guest.stage);
-	const invited = inviteHistoryLine(guest, invite.timezone, new Date());
+	const invitable = isInvitableStage(guest.stage);
+	const invited = inviteHistoryLine(guest, timezone, new Date());
 	// Phone and email used to be joined into one string, which can't carry a
 	// link. They are elements now, so the "·" between them is an element too —
 	// and it must agree with what `WhatsAppPhoneLink` actually RENDERS (it trims
@@ -595,6 +603,7 @@ function GuestRow({
 						phone={hasPhone ? guest.phone : null}
 						email={email || null}
 						invite={invite}
+						timezone={timezone}
 					/>
 				) : null}
 				{stranded ? (

@@ -47,6 +47,7 @@ import {
 	UNDO_NOT_CONVERTED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
+import { isInvitableStage, NOT_INVITABLE_MESSAGE } from "#/lib/guest-invite";
 import type { OfficerPosition } from "#/lib/officers";
 import { namesAgree } from "#/lib/person-name";
 import {
@@ -1242,11 +1243,7 @@ export async function applyRecordGuestInvite(
 		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 		.limit(1);
 	if (!guest) throw new Error("Guest not found in this club.");
-	if (guest.stage !== "prospect" && guest.stage !== "following_up") {
-		throw new Error(
-			"Only a guest in Prospects or Following up can be invited. Move them back to Prospect first.",
-		);
-	}
+	if (!isInvitableStage(guest.stage)) throw new Error(NOT_INVITABLE_MESSAGE);
 	const [meeting] = await db
 		.select({
 			id: meetings.id,

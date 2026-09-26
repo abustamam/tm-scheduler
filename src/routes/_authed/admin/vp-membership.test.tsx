@@ -111,6 +111,7 @@ const NO_NEXT_MEETING: NextMeetingSummary = {
 async function renderRoute(
 	guests: PipelineGuestRow[],
 	inviteContext: NextMeetingSummary = NO_NEXT_MEETING,
+	readOnly = false,
 ) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		guests,
@@ -118,6 +119,7 @@ async function renderRoute(
 		clubName: "Downtown Club",
 		clubSlug: "downtown",
 		inviteContext,
+		readOnly,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 
@@ -560,6 +562,19 @@ describe("VP Membership guest card — invite to the next meeting (#899)", () =>
 		expect(
 			within(group).getByText("Add an email or phone to invite"),
 		).toBeTruthy();
+		expect(within(group).queryAllByRole("link")).toHaveLength(0);
+	});
+
+	it("is disabled under a read-only impersonation, whose write would be refused", async () => {
+		// The page loads under the admin-VIEW gate, which read-only impersonation
+		// passes; `recordGuestInvite` needs the admin WRITE gate, which it does
+		// not. Live links would open a draft and then fail to record it.
+		await renderRoute([guestRow()], withNext, true);
+		const group = inviteGroup();
+		expect(group.getAttribute("aria-disabled")).toBe("true");
+		expect(group.getAttribute("title")).toBe(
+			"Read-only view: invites can't be recorded",
+		);
 		expect(within(group).queryAllByRole("link")).toHaveLength(0);
 	});
 
