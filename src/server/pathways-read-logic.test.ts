@@ -1015,6 +1015,66 @@ describe("Education Series (#921/#922)", () => {
 		expect(byName.get("Manage Change")?.awaitingProcessing).toBe(true);
 	});
 
+	describe("on a synced club, where Base Camp's counts never include series", () => {
+		const synced = (l4: SyncedLevel, l5: SyncedLevel, marks: MarkRow[] = []) =>
+			build(
+				marks,
+				"current",
+				[lv(1, 1, 1, true), lv(2, 1, 1, true), lv(3, 1, 1, true), l4, l5],
+				[dp(4, "Manage Change", true)],
+			);
+		const owed = (vm: ReturnType<typeof build>) =>
+			vm.upNextSeries.map((g) => [g.level, g.series]);
+
+		it("keeps Level 4's series owed after its count fills and the working level moves on", () => {
+			const vm = synced(lv(4, 2, 2, false), lv(5, 0, 2, false));
+			expect(vm.workingLevel).toBe(5);
+			expect(owed(vm)).toEqual([
+				[4, "successful_club"],
+				[4, "better_speaker"],
+			]);
+		});
+
+		it("keeps them owed with no working level left at all", () => {
+			const vm = synced(lv(4, 2, 2, false), lv(5, 2, 2, false));
+			expect(vm.workingLevel).toBeNull();
+			expect(owed(vm)).toEqual([
+				[4, "successful_club"],
+				[4, "better_speaker"],
+			]);
+		});
+
+		it("moves on to Level 5's series once Level 4 is approved", () => {
+			const vm = synced(lv(4, 2, 2, true), lv(5, 0, 2, false));
+			expect(owed(vm)).toEqual([
+				[5, "successful_club"],
+				[5, "leadership_excellence"],
+			]);
+		});
+
+		it("moves on to Level 5's series once both Level 4 series are marked", () => {
+			const vm = synced(lv(4, 2, 2, false), lv(5, 0, 2, false), [
+				seriesMark(4, "Closing the Sale"),
+				seriesMark(4, "Beginning Your Speech"),
+			]);
+			expect(owed(vm)).toEqual([
+				[5, "successful_club"],
+				[5, "leadership_excellence"],
+			]);
+		});
+
+		it("offers nothing ahead of the working level", () => {
+			const vm = build([], "current", [
+				lv(1, 1, 1, true),
+				lv(2, 1, 1, true),
+				lv(3, 0, 1, false),
+				lv(4, 0, 2, false),
+			]);
+			expect(vm.workingLevel).toBe(3);
+			expect(vm.upNextSeries).toEqual([]);
+		});
+	});
+
 	it("carries the path's status onto the view model", () => {
 		expect(build([], "legacy").status).toBe("legacy");
 		expect(build([], "current").status).toBe("current");

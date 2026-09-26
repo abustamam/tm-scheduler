@@ -215,6 +215,7 @@ function UpNext({
 	upNext,
 	electives,
 	series,
+	shownLevel,
 	hasBasecamp,
 	onMark,
 	busyId,
@@ -222,6 +223,8 @@ function UpNext({
 	upNext: PathViewModel["upNext"];
 	electives: PathViewModel["upNextElectives"];
 	series: PathViewModel["upNextSeries"];
+	/** The level the bar above shows; a series owed elsewhere names its own. */
+	shownLevel: number | null;
 	hasBasecamp: boolean;
 	onMark?: (projectId: string) => void;
 	busyId?: string | null;
@@ -284,7 +287,11 @@ function UpNext({
 			{series.map((group) => (
 				<div key={group.series} className="flex flex-col gap-1.5">
 					<div className="text-muted-foreground text-xs">
-						Choose 1 {group.label} presentation:
+						Choose 1 {group.label} presentation
+						{group.level === shownLevel
+							? ""
+							: ` for ${levelLabel(group.level)}`}
+						:
 					</div>
 					<div className="flex flex-wrap gap-1.5">
 						{group.options.map((o) => (
@@ -399,12 +406,15 @@ function PathBlock({
 			<YourWins wins={path.wins} onUnmark={onUnmark} busyId={busyId} />
 			{/* Gated on the working level, not on `complete` (#898): `complete` is
 			    about approval, and a catalog path in Path Completion still has
-			    something next. */}
-			{path.workingLevel !== null && (
+			    something next. Series still owed show regardless: Base Camp never
+			    counts them, so on a synced club its counts can leave no working
+			    level while this is the only place one can be ticked (#922). */}
+			{(path.workingLevel !== null || path.upNextSeries.length > 0) && (
 				<UpNext
 					upNext={path.upNext}
 					electives={path.upNextElectives}
 					series={path.upNextSeries}
+					shownLevel={shownLevel}
 					hasBasecamp={path.hasBasecamp}
 					onMark={onMark}
 					busyId={busyId}

@@ -68,10 +68,12 @@ export interface UpNextElectives {
 	options: { projectId: string | null; name: string }[]; // remaining (not-complete) electives in the pool
 }
 
-/** One Education Series still owed at the working level (#921/#922). */
+/** One Education Series still owed (#921/#922). */
 export interface UpNextSeries {
 	series: PathwaysSeries;
 	label: string; // SERIES_LABEL[series]
+	/** The level that owes it. Usually the working level, not always. */
+	level: number;
 	/** Every title of that series at the level; any ONE of them meets it. */
 	options: { projectId: string; name: string }[];
 }
@@ -158,10 +160,12 @@ export interface PathViewModel {
 	 * isn't met yet. Null on the inference fallback path. */
 	upNextElectives: UpNextElectives | null;
 	/**
-	 * Education Series still owed at the working level (#922): one group per
-	 * series in `seriesRequiredAt(workingLevel, status)` with NO complete project
-	 * yet at that level. Empty on legacy paths, levels 1–3 and with no working
-	 * level.
+	 * Education Series still owed (#922): one group per series in
+	 * `seriesRequiredAt(level, status)` with NO complete project yet at that
+	 * level, for the lowest unapproved level that owes any and that the member
+	 * has reached (see `seriesStillOwedForPath` — on a synced club this can be
+	 * below the working level, or present with no working level at all). Empty
+	 * on legacy paths and below Level 4.
 	 *
 	 * Populated EVEN on the inference fallback, unlike `upNext` (#456): which
 	 * series a level needs is a catalog fact, and Base Camp never reports a
@@ -306,18 +310,62 @@ function seriesGroups(
 /** `PathViewModel.upNextSeries` for one level: the series with nothing complete. */
 function seriesStillOwed(
 	catalogProjects: CatalogProject[],
-	level: number | null,
+	level: number,
 	status: CatalogPath["status"],
 	completeProjectIds: Set<string>,
 ): UpNextSeries[] {
-	if (level === null) return [];
 	return seriesGroups(catalogProjects, level, status)
 		.filter((g) => !g.rows.some((p) => completeProjectIds.has(p.projectId)))
 		.map((g) => ({
 			series: g.series,
 			label: SERIES_LABEL[g.series],
+			level,
 			options: g.rows.map((p) => ({ projectId: p.projectId, name: p.name })),
 		}));
+}
+
+/**
+ * `PathViewModel.upNextSeries`: the series still owed at the LOWEST unapproved
+ * level that owes any, as long as the member has reached it (no later than the
+ * working level, or any level once nothing else is left).
+ *
+ * Not simply "the working level". On a Base-Camp-sourced path the working level
+ * comes from Base Camp's counts, and Base Camp never counts a series
+ * presentation, so a member whose Level 4 count is full moves on to Level 5
+ * (and then to no working level at all) with both Level 4 series unmarked. Up
+ * next is the only place a series can be ticked, so keying it off the working
+ * level alone would take the controls away for good. Base Camp's counts are
+ * not touched; only an APPROVED level stops owing its series.
+ *
+ * On a catalog path this is the working level whenever that level owes series,
+ * because series count toward `left` there: the lowest level with series owed
+ * can never be below the lowest level with anything left.
+ */
+function seriesStillOwedForPath(
+	catalogProjects: CatalogProject[],
+	levels: SyncedLevel[],
+	workingLevel: number | null,
+	status: CatalogPath["status"],
+	completeProjectIds: Set<string>,
+): UpNextSeries[] {
+	const approved = new Set(
+		levels.filter((l) => l.approved).map((l) => l.level),
+	);
+	const catalogLevels = [...new Set(catalogProjects.map((p) => p.level))].sort(
+		(a, b) => a - b,
+	);
+	for (const level of catalogLevels) {
+		if (approved.has(level)) continue;
+		if (workingLevel !== null && level > workingLevel) return [];
+		const owed = seriesStillOwed(
+			catalogProjects,
+			level,
+			status,
+			completeProjectIds,
+		);
+		if (owed.length > 0) return owed;
+	}
+	return [];
 }
 
 /** An elective: not required, and not an Education Series presentation (#921). */
@@ -413,8 +461,9 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		levels,
 		levelsSource,
 		hasBasecamp: hasBasecampDetail,
-		upNextSeries: seriesStillOwed(
+		upNextSeries: seriesStillOwedForPath(
 			path.catalogProjects,
+			levels,
 			workingLevel,
 			path.status,
 			completeIds,

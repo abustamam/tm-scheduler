@@ -222,6 +222,7 @@ describe("PathwaysProgress", () => {
 			{
 				series: "successful_club",
 				label: "Successful Club Series",
+				level: 4,
 				options: [
 					{ projectId: "sc1", name: "Finding New Members" },
 					{ projectId: "sc2", name: "Closing the Sale" },
@@ -230,6 +231,7 @@ describe("PathwaysProgress", () => {
 			{
 				series: "better_speaker",
 				label: "Better Speaker Series",
+				level: 4,
 				options: [{ projectId: "bs1", name: "Controlling Your Fear" }],
 			},
 		];
@@ -306,6 +308,39 @@ describe("PathwaysProgress", () => {
 			).toBeTruthy();
 			expect(screen.getByText(SERIES_LINE)).toBeTruthy();
 			expect(screen.queryByText(BASECAMP_LINE)).toBeNull();
+		});
+
+		it("keeps series owed below the working level tickable, naming their level", () => {
+			// Base Camp's counts moved the working level to 5, then off the end;
+			// the Level 4 series are still owed and only tickable here.
+			// With no working level the bar falls back to `currentLevel` (4), the
+			// series' own level, so no suffix is needed there.
+			for (const [workingLevel, heading] of [
+				[5, "Choose 1 Better Speaker Series presentation for Level 4:"],
+				[null, "Choose 1 Better Speaker Series presentation:"],
+			] as const) {
+				render(
+					<PathwaysProgress
+						paths={[
+							{
+								...atL4,
+								workingLevel,
+								upNext: [],
+								upNextElectives: null,
+							},
+						]}
+						onMark={() => {}}
+					/>,
+				);
+				expect(screen.getByText("Up next")).toBeTruthy();
+				expect(screen.getByText(heading)).toBeTruthy();
+				expect(
+					screen.getByRole("button", {
+						name: "Mark Controlling Your Fear complete",
+					}),
+				).toBeTruthy();
+				cleanup();
+			}
 		});
 	});
 });
