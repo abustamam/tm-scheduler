@@ -23,7 +23,11 @@ import {
 } from "#/db/schema";
 import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
 import { cap } from "#/lib/cap";
-import { defaultOpenLevel, levelLabel } from "#/lib/pathways-catalog";
+import {
+	defaultOpenLevel,
+	levelLabel,
+	type PathwaysSeries,
+} from "#/lib/pathways-catalog";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {
 	membershipPickOpenTermJoin,
@@ -36,6 +40,19 @@ export interface PickerProject {
 	level: number;
 	name: string;
 	isRequired: boolean;
+	/**
+	 * The Education Series this presentation belongs to (#921), or null for an
+	 * ordinary project. A series row is `isRequired: false` but is NOT an
+	 * elective — group it by this, never by `!isRequired` alone.
+	 *
+	 * Always null today: series rows are kept out of the picker until #922 adds
+	 * them back with their own grouping.
+	 *
+	 * Always SET by `listProjectOptions`. Optional in the type only because the
+	 * two hand-built `PATH` fixtures in `project-picker.test.tsx` (lines 38 and
+	 * 75) predate it; read absent as null.
+	 */
+	series?: PathwaysSeries | null;
 	/**
 	 * Base Camp says this one is done. Display only — a completed project stays
 	 * SELECTABLE. Repeats are real: `path_level_progress.completed` may exceed
@@ -109,9 +126,17 @@ export async function listProjectOptions(
 				level: pathwaysProjects.level,
 				name: pathwaysProjects.name,
 				isRequired: pathwaysProjects.isRequired,
+				series: pathwaysProjects.series,
 			})
 			.from(pathwaysProjects)
-			.where(inArray(pathwaysProjects.pathId, pathIds))
+			// Education Series rows (#921) stay out of the picker until #922
+			// offers them, grouped and labelled, beside the ordinary projects.
+			.where(
+				and(
+					inArray(pathwaysProjects.pathId, pathIds),
+					isNull(pathwaysProjects.series),
+				),
+			)
 			.orderBy(
 				asc(pathwaysProjects.level),
 				asc(pathwaysProjects.sortOrder),
@@ -172,6 +197,7 @@ export async function listProjectOptions(
 				// unthrottled JSON payload — the read half of #526.
 				name: cap(p.name, SPEAKER_LIMITS.projectName),
 				isRequired: p.isRequired,
+				series: p.series,
 				complete: completeIds.has(p.id),
 			}));
 		return {
@@ -327,7 +353,11 @@ export async function resolveProjectDisplay(
 		})
 		.from(pathwaysProjects)
 		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathwaysProjects.pathId))
-		.where(eq(pathwaysProjects.id, projectId));
+		// Same exclusion as `listProjectOptions`: the picker never offers a series
+		// row (#921, until #922), so an id for one over the wire is refused too.
+		.where(
+			and(eq(pathwaysProjects.id, projectId), isNull(pathwaysProjects.series)),
+		);
 
 	if (!row || !PATHWAYS_COURSE_CODES.has(row.courseCode)) {
 		throw new Error("That Pathways project no longer exists.");

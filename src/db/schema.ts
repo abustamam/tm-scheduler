@@ -128,6 +128,13 @@ export const pathwayStatusEnum = pgEnum("pathway_status", [
 	"current",
 	"legacy",
 ]);
+// The three Education Series a current path's Level 4/5 draws a presentation
+// from (#921). See `pathways_projects.series`.
+export const pathwaysSeriesEnum = pgEnum("pathways_series", [
+	"successful_club",
+	"better_speaker",
+	"leadership_excellence",
+]);
 
 export const activityActionEnum = pgEnum("activity_action", [
 	"claim",
@@ -2318,6 +2325,13 @@ export const pathwaysProjects = pgTable(
 		// The durable join key for bcm_project_progress. Unique-when-present.
 		bcmBlockId: text("bcm_block_id"),
 		sortOrder: integer("sort_order").notNull().default(0),
+		// An Education Series presentation (Level 4/5, current paths only, #921).
+		// Null for every ordinary project. Series rows are ALWAYS is_required =
+		// false, and they are NOT electives: every reader that treats !isRequired
+		// as "elective" must also require series IS NULL. Base Camp never returns
+		// these (they are page text, not blocks), so a series row never gets a
+		// bcm_block_id, and completion is marked, never derived.
+		series: pathwaysSeriesEnum("series"),
 	},
 	(t) => [
 		uniqueIndex("pathways_projects_path_level_name_idx").on(
