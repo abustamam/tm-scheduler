@@ -56,7 +56,7 @@ function MyCommitments() {
 
 			{/* Temporary (#912): remove after 2026-12-31. */}
 			<p className="text-sm text-muted-foreground">
-				API tokens and connected apps have moved to{" "}
+				Reminder emails, API tokens and connected apps have moved to{" "}
 				<Link to="/account" className="font-medium text-primary underline">
 					{navLabel("/account")}
 				</Link>

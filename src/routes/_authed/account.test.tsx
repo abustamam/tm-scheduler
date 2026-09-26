@@ -124,7 +124,7 @@ describe("/me after #912", () => {
 		const pointer = screen.getByRole("link", { name: "Account settings" });
 		expect(pointer.getAttribute("href")).toBe("/account");
 		expect(pointer.closest("p")?.textContent).toBe(
-			"API tokens and connected apps have moved to Account settings.",
+			"Reminder emails, API tokens and connected apps have moved to Account settings.",
 		);
 
 		expect(screen.queryByText("Reminder emails")).toBeNull();
