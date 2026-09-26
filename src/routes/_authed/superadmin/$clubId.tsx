@@ -6,6 +6,7 @@ import {
 	Eye,
 	Loader2,
 	Pencil,
+	Trash2,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -17,6 +18,7 @@ import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import { startImpersonation } from "#/server/impersonation";
 import {
 	archiveConsoleClub,
+	deleteConsoleClub,
 	getConsoleClubDetail,
 	unarchiveConsoleClub,
 	updateConsoleAdminEmail,
@@ -37,6 +39,17 @@ function ClubDetail() {
 	const club = Route.useLoaderData();
 	const { clubId } = Route.useParams();
 	const router = useRouter();
+	// Set once the club is permanently deleted. From then on the page shows only
+	// the summary: every other panel acts on a club that no longer exists.
+	const [deleted, setDeleted] = useState<DeleteResult | null>(null);
+
+	if (deleted) {
+		return (
+			<PageContainer className="space-y-6">
+				<DeletedSummary result={deleted} />
+			</PageContainer>
+		);
+	}
 
 	return (
 		<PageContainer className="space-y-6">
@@ -91,6 +104,7 @@ function ClubDetail() {
 				clubName={club.name}
 				archivedAt={club.archivedAt ? new Date(club.archivedAt) : null}
 				onChanged={() => router.invalidate()}
+				onDeleted={setDeleted}
 			/>
 		</PageContainer>
 	);
@@ -229,11 +243,13 @@ function ArchivePanel({
 	clubName,
 	archivedAt,
 	onChanged,
+	onDeleted,
 }: {
 	clubId: string;
 	clubName: string;
 	archivedAt: Date | null;
 	onChanged: () => void;
+	onDeleted: (result: DeleteResult) => void;
 }) {
 	const [submitting, setSubmitting] = useState(false);
 	const isArchived = archivedAt != null;
@@ -329,6 +345,141 @@ function ArchivePanel({
 					)}
 				</Button>
 			)}
+			{isArchived ? (
+				<DeletePermanentlyPanel
+					clubId={clubId}
+					clubName={clubName}
+					onDeleted={onDeleted}
+				/>
+			) : null}
+		</section>
+	);
+}
+
+type DeleteResult = Awaited<ReturnType<typeof deleteConsoleClub>>;
+
+function plural(n: number, one: string, many: string) {
+	return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * Permanently delete an ARCHIVED club (#914). Irreversible, so the button stays
+ * disabled until the club's exact name is typed — the server checks the same
+ * thing and is the one that decides. No placeholder repeats the name: the point
+ * of typing it is to read it. An error stays inline with the form; a success
+ * hands the result up so the page can replace EVERY panel with the summary.
+ */
+function DeletePermanentlyPanel({
+	clubId,
+	clubName,
+	onDeleted,
+}: {
+	clubId: string;
+	clubName: string;
+	onDeleted: (result: DeleteResult) => void;
+}) {
+	const [confirmName, setConfirmName] = useState("");
+	const [submitting, setSubmitting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const matches = confirmName.trim() === clubName;
+
+	async function onDelete(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		if (!matches) return;
+		setSubmitting(true);
+		setError(null);
+		try {
+			onDeleted(await deleteConsoleClub({ data: { clubId, confirmName } }));
+		} catch (err) {
+			setError(
+				err instanceof Error ? err.message : "Couldn't delete the club.",
+			);
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<form
+			onSubmit={onDelete}
+			className="space-y-3 rounded-lg border border-[var(--danger,#dc2626)]/40 bg-[var(--danger,#dc2626)]/5 p-3"
+		>
+			<h3 className="text-sm font-bold text-[var(--danger-strong,#b91c1c)]">
+				Delete permanently
+			</h3>
+			<p className="text-sm text-muted-foreground">
+				Deletes <span className="font-medium">{clubName}</span>, its meetings
+				and guests, and every current or former member who isn't in another
+				GavelUp club, with their sign-in account. An account is kept if it
+				belongs to a superadmin or is still linked elsewhere. Members of another
+				club keep their account and Pathways history.{" "}
+				<span className="font-medium text-[var(--danger-strong,#b91c1c)]">
+					This can't be undone.
+				</span>
+			</p>
+			<div className="space-y-1.5">
+				<Label htmlFor="delete-confirm-name">
+					Type the club's name to confirm
+				</Label>
+				<Input
+					id="delete-confirm-name"
+					value={confirmName}
+					onChange={(e) => setConfirmName(e.target.value)}
+					autoComplete="off"
+				/>
+			</div>
+			{error ? (
+				<p role="alert" className="text-sm text-[var(--danger-strong,#b91c1c)]">
+					{error}
+				</p>
+			) : null}
+			<Button
+				type="submit"
+				size="sm"
+				variant="destructive"
+				disabled={submitting || !matches}
+			>
+				{submitting ? (
+					<Loader2 className="size-4 animate-spin" />
+				) : (
+					<>
+						<Trash2 className="size-4" /> Delete permanently
+					</>
+				)}
+			</Button>
+		</form>
+	);
+}
+
+/** What a permanent delete removed and kept. There is no auto-redirect, and no
+ *  `router.invalidate()`: this page's loader would now answer "Club not found." */
+function DeletedSummary({ result }: { result: DeleteResult }) {
+	const router = useRouter();
+	return (
+		<section
+			aria-live="polite"
+			className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] p-4"
+		>
+			<h1 className="font-display text-2xl font-semibold">
+				{result.clubName} was permanently deleted.
+			</h1>
+			<ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+				<li>
+					{plural(result.peopleDeleted, "person", "people")} deleted,{" "}
+					{plural(result.peopleKept, "person", "people")} kept (in another
+					club).
+				</li>
+				<li>
+					{plural(result.usersDeleted, "account", "accounts")} deleted,{" "}
+					{plural(result.usersKept, "account", "accounts")} kept.
+				</li>
+			</ul>
+			<Button
+				type="button"
+				size="sm"
+				onClick={() => router.navigate({ to: "/superadmin" })}
+			>
+				Done
+			</Button>
 		</section>
 	);
 }
