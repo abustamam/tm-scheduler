@@ -40,6 +40,7 @@ const PATH: PickerPath = {
 			level: 3,
 			name: "Active Listening",
 			isRequired: false,
+			series: null,
 			complete: false,
 		},
 	],
@@ -77,6 +78,7 @@ describe("ProjectPicker", () => {
 								level: 3,
 								name: "Cross-Cultural Understanding",
 								isRequired: false,
+								series: null,
 								complete: false,
 							},
 						],
@@ -112,5 +114,72 @@ describe("ProjectPicker", () => {
 
 		const link = await screen.findByRole("link");
 		expect(link.getAttribute("href")).toBe(ACTIVE_LISTENING_URL);
+	});
+
+	it("lists a level's projects, then each Education Series under its own heading (#922)", async () => {
+		const user = userEvent.setup();
+		const row = (
+			id: string,
+			name: string,
+			isRequired: boolean,
+			series: PickerPath["projects"][number]["series"] = null,
+			complete = false,
+		) => ({ id, level: 4, name, isRequired, series, complete });
+		const picked: string[] = [];
+		render(
+			<ProjectPicker
+				paths={[
+					{
+						...PATH,
+						defaultLevel: 4,
+						projects: [
+							row("r", "Manage Change", true),
+							row("sc", "Closing the Sale", false, "successful_club", true),
+							row("e", "Write a Compelling Blog", false),
+							row("bs", "Controlling Your Fear", false, "better_speaker"),
+						],
+					},
+				]}
+				value={null}
+				onChange={(id) => {
+					if (id) picked.push(id);
+				}}
+				fallback={{ pathwayPath: null, projectName: null, projectLevel: null }}
+			/>,
+		);
+		await user.click(
+			document.getElementById("project-picker-trigger") as Element,
+		);
+
+		const dialog = await screen.findByRole("dialog");
+		const text = dialog.textContent ?? "";
+		const at = (s: string) => {
+			const i = text.indexOf(s);
+			expect(i, s).toBeGreaterThanOrEqual(0);
+			return i;
+		};
+		// Path projects first (catalog order), then one sub-group per series.
+		expect(at("Manage Change")).toBeLessThan(at("Write a Compelling Blog"));
+		expect(at("Write a Compelling Blog")).toBeLessThan(
+			at("Successful Club Series"),
+		);
+		expect(at("Closing the Sale")).toBeLessThan(at("Better Speaker Series"));
+		expect(at("Better Speaker Series")).toBeLessThan(
+			at("Controlling Your Fear"),
+		);
+
+		const seriesRow = screen.getByRole("button", {
+			name: /Controlling Your Fear/,
+		});
+		// Badged with its series, never "Required".
+		expect(seriesRow.textContent).toContain("Better Speaker Series");
+		expect(seriesRow.textContent).not.toContain("Required");
+		// A marked series title shows as completed.
+		expect(
+			screen.getByRole("button", { name: /Closing the Sale/ }).textContent,
+		).toContain("(completed)");
+
+		await user.click(seriesRow);
+		expect(picked).toEqual(["bs"]);
 	});
 });

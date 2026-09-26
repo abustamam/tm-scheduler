@@ -17,6 +17,8 @@ import {
 	type CatalogPath,
 	PATH_COMPLETION_LEVEL,
 	type PathwaysSeries,
+	SERIES_LABEL,
+	seriesRequiredAt,
 } from "#/lib/pathways-catalog";
 import { isReadableClub } from "./club-readable-logic";
 import { resolveUserPersonId } from "./person-identity-logic";
@@ -66,6 +68,14 @@ export interface UpNextElectives {
 	options: { projectId: string | null; name: string }[]; // remaining (not-complete) electives in the pool
 }
 
+/** One Education Series still owed at the working level (#921/#922). */
+export interface UpNextSeries {
+	series: PathwaysSeries;
+	label: string; // SERIES_LABEL[series]
+	/** Every title of that series at the level; any ONE of them meets it. */
+	options: { projectId: string; name: string }[];
+}
+
 /** One /detail mirror row joined to its catalog project. */
 export interface DetailProjectRow {
 	projectId: string;
@@ -92,14 +102,10 @@ export interface PathViewModel {
 	courseCode: string;
 	pathName: string;
 	/**
-	 * `pathways_paths.status`. Carried for the Education Series requirement,
-	 * which applies to current paths only (`seriesRequiredAt`) and which #922
-	 * wires into the level counts; nothing here reads it yet.
-	 *
-	 * Always SET by `buildPathViewModel`. Optional in the type only because the
-	 * hand-built fixture in `pathways-progress.test.tsx` predates it.
+	 * `pathways_paths.status`. Decides the Education Series requirement, which
+	 * applies to current paths only (`seriesRequiredAt`).
 	 */
-	status?: CatalogPath["status"];
+	status: CatalogPath["status"];
 	ringPercent: number; // 0–100 integer
 	currentLevel: number | null; // lowest not-approved; null when complete
 	complete: boolean;
@@ -151,6 +157,17 @@ export interface PathViewModel {
 	/** Working-level elective choice, when the level's elective requirement
 	 * isn't met yet. Null on the inference fallback path. */
 	upNextElectives: UpNextElectives | null;
+	/**
+	 * Education Series still owed at the working level (#922): one group per
+	 * series in `seriesRequiredAt(workingLevel, status)` with NO complete project
+	 * yet at that level. Empty on legacy paths, levels 1–3 and with no working
+	 * level.
+	 *
+	 * Populated EVEN on the inference fallback, unlike `upNext` (#456): which
+	 * series a level needs is a catalog fact, and Base Camp never reports a
+	 * series presentation at all, so there is nothing to infer.
+	 */
+	upNextSeries: UpNextSeries[];
 }
 
 export interface CatalogProject {
@@ -199,6 +216,7 @@ function levelsFromCatalog(
 	catalogProjects: CatalogProject[],
 	pathLevels: { level: number; minReqElectives: number }[] | undefined,
 	completeProjectIds: Set<string>,
+	status: CatalogPath["status"],
 ): SyncedLevel[] {
 	const levels = [...new Set(catalogProjects.map((p) => p.level))].sort(
 		(a, b) => a - b,
@@ -209,6 +227,7 @@ function levelsFromCatalog(
 			pathLevels,
 			completeProjectIds,
 			level,
+			status,
 		);
 		// `total - left`, not "marked projects at this level" (#898). The naive
 		// count credits every marked elective, so three electives marked against
@@ -224,15 +243,16 @@ function levelsFromCatalog(
  * still to choose. Electives beyond the minimum count for nothing.
  *
  * Education Series presentations (#921) are neither: they are excluded from the
- * elective count and count toward nothing yet. #922 adds them to `total` and
- * `left` via `seriesRequiredAt`, together with the UI that lets a member mark
- * them, so a level never waits on something the screen cannot show.
+ * elective count and add one each to `total` per series the level requires
+ * (`seriesGroups`), met by ANY one complete title of that series. A second
+ * title of the same series adds nothing.
  */
 function catalogLevelRequirement(
 	catalogProjects: CatalogProject[],
 	pathLevels: { level: number; minReqElectives: number }[] | undefined,
 	completeProjectIds: Set<string>,
 	level: number,
+	status: CatalogPath["status"],
 ): {
 	total: number;
 	left: number;
@@ -249,11 +269,55 @@ function catalogLevelRequirement(
 		(p) => isElective(p) && completeProjectIds.has(p.projectId),
 	).length;
 	const electivesToChoose = Math.max(0, minReqElectives - completedElectives);
+	const seriesAtLevel = seriesGroups(catalogProjects, level, status);
+	const seriesLeft = seriesAtLevel.filter(
+		(g) => !g.rows.some((p) => completeProjectIds.has(p.projectId)),
+	).length;
 	return {
-		total: required.length + minReqElectives,
-		left: requiredLeft + electivesToChoose,
+		total: required.length + minReqElectives + seriesAtLevel.length,
+		left: requiredLeft + electivesToChoose + seriesLeft,
 		electivesToChoose,
 	};
+}
+
+/**
+ * The series a level requires, each with its catalog titles at that level.
+ *
+ * `seriesRequiredAt` is the rule; a required series with no catalog row at the
+ * level is dropped rather than counted, so a level can never wait on a
+ * requirement the member has nothing to mark against. On a seeded catalog the
+ * two are the same list.
+ */
+function seriesGroups(
+	catalogProjects: CatalogProject[],
+	level: number,
+	status: CatalogPath["status"],
+): { series: PathwaysSeries; rows: CatalogProject[] }[] {
+	return seriesRequiredAt(level, status)
+		.map((series) => ({
+			series,
+			rows: catalogProjects.filter(
+				(p) => p.level === level && p.series === series,
+			),
+		}))
+		.filter((g) => g.rows.length > 0);
+}
+
+/** `PathViewModel.upNextSeries` for one level: the series with nothing complete. */
+function seriesStillOwed(
+	catalogProjects: CatalogProject[],
+	level: number | null,
+	status: CatalogPath["status"],
+	completeProjectIds: Set<string>,
+): UpNextSeries[] {
+	if (level === null) return [];
+	return seriesGroups(catalogProjects, level, status)
+		.filter((g) => !g.rows.some((p) => completeProjectIds.has(p.projectId)))
+		.map((g) => ({
+			series: g.series,
+			label: SERIES_LABEL[g.series],
+			options: g.rows.map((p) => ({ projectId: p.projectId, name: p.name })),
+		}));
 }
 
 /** An elective: not required, and not an Education Series presentation (#921). */
@@ -317,7 +381,12 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	const levels =
 		levelsSource === "basecamp"
 			? [...path.levels].sort((a, b) => a.level - b.level)
-			: levelsFromCatalog(path.catalogProjects, path.pathLevels, completeIds);
+			: levelsFromCatalog(
+					path.catalogProjects,
+					path.pathLevels,
+					completeIds,
+					path.status,
+				);
 
 	const done = levels.reduce((s, l) => s + Math.min(l.completed, l.total), 0);
 	const total = levels.reduce((s, l) => s + l.total, 0);
@@ -344,6 +413,12 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		levels,
 		levelsSource,
 		hasBasecamp: hasBasecampDetail,
+		upNextSeries: seriesStillOwed(
+			path.catalogProjects,
+			workingLevel,
+			path.status,
+			completeIds,
+		),
 	};
 
 	// Project-level branch: taken as soon as EITHER source has per-project truth,
@@ -362,6 +437,13 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 					w.projectId as string,
 					{ speechTitle: w.speechTitle, deliveredAt: w.deliveredAt },
 				]),
+		);
+		// Base Camp never reports a series presentation (#921), so on a synced
+		// club a marked one would read "awaiting processing" forever.
+		const seriesIds = new Set(
+			path.catalogProjects
+				.filter((c) => c.series !== null)
+				.map((c) => c.projectId),
 		);
 		const byId = new Map<string, { level: number; name: string }>();
 		for (const p of detail) byId.set(p.projectId, p);
@@ -388,7 +470,9 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 								fromDetail?.speechDate ?? speech?.deliveredAt ?? null,
 							markedHere: markedIds.has(projectId),
 							awaitingProcessing:
-								hasBasecampDetail && !bcmCompleteIds.has(projectId),
+								hasBasecampDetail &&
+								!bcmCompleteIds.has(projectId) &&
+								!seriesIds.has(projectId),
 						};
 					})
 					.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
@@ -416,6 +500,7 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 				path.pathLevels,
 				completeIds,
 				workingLevel,
+				path.status,
 			);
 			if (chooseCount > 0) {
 				upNextElectives = {
@@ -459,7 +544,11 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	//
 	// So this branch now shows only what it knows: the speeches you have
 	// delivered. `PathwaysProgress` renders nothing for an empty `upNext` with no
-	// electives, so the section disappears rather than making a claim. The
+	// electives, so the section disappears rather than making a claim. The one
+	// exception is `upNextSeries`, already on `base`: which Education Series a
+	// level needs is a catalog fact, not an inference from speeches, and Base
+	// Camp never reports one, so this branch knows as much about it as any
+	// other. The
 	// `bcm_project_progress` branch above is unaffected — Base Camp applies the
 	// real completion rule there, which is what makes its `completeIds`
 	// authoritative and its `upNext` honest.

@@ -60,8 +60,9 @@
  * Better Speaker Series (L4) or Leadership Excellence Series (L5) presentation.
  * They are rows with `isRequired: false` and a `series`, and they are NOT
  * electives — `seriesRequiredAt` is the one statement of which series a level
- * needs. Legacy paths have none. Seeded but inert until #922, which counts them
- * toward Levels 4/5 and offers them in the picker.
+ * needs. Legacy paths have none. Each required series counts one toward its
+ * level's total (#922), met by any one title, and is offered in "Up next" and
+ * the picker under its own heading.
  *
  * NOT MODELLED — what each project takes to complete, which is not one speech
  * and not even one assignment. Level 1's "Evaluation and Feedback" takes THREE:
@@ -494,9 +495,8 @@ const SERIES: Record<4 | 5, Partial<Record<PathwaysSeries, string[]>>> = {
 /**
  * Which Education Series a level requires one presentation from (#921): the
  * Successful Club Series plus Better Speaker (L4) or Leadership Excellence
- * (L5), on current paths only. The ONE statement of that rule. Nothing reads it
- * yet: #922 wires it into the read model's level counts along with the UI, and
- * must ask this rather than restate it.
+ * (L5), on current paths only. The ONE statement of that rule: the read
+ * model's level counts and "Up next" (#922) ask this rather than restate it.
  */
 export function seriesRequiredAt(
 	level: number,

@@ -209,22 +209,26 @@ function YourWins({
 
 /** Named current-level catalog projects not yet won — the specific layer
  * beneath the count bar. Never phrased as a deficiency. Electives (from the
- * /detail mirror) collapse into a "choose N more" group. */
+ * /detail mirror) collapse into a "choose N more" group, and each Education
+ * Series still owed (#922) into a "choose 1" group of its own. */
 function UpNext({
 	upNext,
 	electives,
+	series,
 	hasBasecamp,
 	onMark,
 	busyId,
 }: {
 	upNext: PathViewModel["upNext"];
 	electives: PathViewModel["upNextElectives"];
+	series: PathViewModel["upNextSeries"];
 	hasBasecamp: boolean;
 	onMark?: (projectId: string) => void;
 	busyId?: string | null;
 }) {
 	const hasElectives = electives != null && electives.options.length > 0;
-	if (upNext.length === 0 && !hasElectives) return null;
+	const hasBasecampTracked = upNext.length > 0 || hasElectives;
+	if (!hasBasecampTracked && series.length === 0) return null;
 	return (
 		<div className="flex flex-col gap-2">
 			<div className="font-medium text-foreground text-sm">Up next</div>
@@ -266,14 +270,45 @@ function UpNext({
 			    officer runs it. Promising automatic updates would be false for every
 			    club on the commercial product. So only say it to clubs that DO sync;
 			    for everyone else this list is the record, and the tick is how it
-			    moves. */}
-			<div className="text-muted-foreground text-xs">
-				{hasBasecamp
-					? "Do it in Base Camp, then sync to see it here."
-					: onMark
-						? "Tick one off when you've delivered it."
-						: null}
-			</div>
+			    moves. It describes the items ABOVE it, so with only series left it
+			    has nothing to describe. */}
+			{hasBasecampTracked && (
+				<div className="text-muted-foreground text-xs">
+					{hasBasecamp
+						? "Do it in Base Camp, then sync to see it here."
+						: onMark
+							? "Tick one off when you've delivered it."
+							: null}
+				</div>
+			)}
+			{series.map((group) => (
+				<div key={group.series} className="flex flex-col gap-1.5">
+					<div className="text-muted-foreground text-xs">
+						Choose 1 {group.label} presentation:
+					</div>
+					<div className="flex flex-wrap gap-1.5">
+						{group.options.map((o) => (
+							<MarkableProject
+								key={o.projectId}
+								projectId={o.projectId}
+								name={o.name}
+								isRequired={false}
+								onMark={onMark}
+								busyId={busyId}
+							/>
+						))}
+					</div>
+				</div>
+			))}
+			{/* Base Camp never reports a series presentation (#921): on a synced
+			    club too, the tick here is the only way one completes. */}
+			{series.length > 0 && (hasBasecamp || onMark) ? (
+				<div className="text-muted-foreground text-xs">
+					{hasBasecamp
+						? "Base Camp doesn't track series presentations. Tick one off here when you've delivered it."
+						: "Tick one off when you've delivered it."}
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -369,6 +404,7 @@ function PathBlock({
 				<UpNext
 					upNext={path.upNext}
 					electives={path.upNextElectives}
+					series={path.upNextSeries}
 					hasBasecamp={path.hasBasecamp}
 					onMark={onMark}
 					busyId={busyId}

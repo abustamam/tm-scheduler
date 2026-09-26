@@ -11,6 +11,14 @@
  * within that path; anything else (no path, no project, or an ambiguous
  * match) is left null and counted unresolved. Kept in a `-logic.ts` so `#/db`
  * never leaks into the client bundle (server-modules guard).
+ *
+ * Education Series presentations (#921) are never a free-text match. Their bare
+ * titles are ordinary speech-title words ("Mentoring", "Impromptu Speaking",
+ * "Building a Team", "Goal Setting and Planning"), so a typed project name that
+ * happens to equal one is far likelier to be an ordinary speech than a series
+ * presentation, and linking it would list that speech among the member's
+ * Pathways wins as a series presentation they never gave. A series presentation is linked only by being PICKED,
+ * which sets `project_id` directly (#922).
  */
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
@@ -59,6 +67,7 @@ export async function resolveSpeechProjects(): Promise<ResolveResult> {
 			.where(
 				and(
 					eq(pathwaysProjects.pathId, pathId),
+					isNull(pathwaysProjects.series),
 					sql`lower(${pathwaysProjects.name}) = lower(${projectName})`,
 				),
 			);
