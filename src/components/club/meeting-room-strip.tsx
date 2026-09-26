@@ -50,14 +50,19 @@ const BIG = "h-auto min-h-12 w-full justify-start text-base";
  * status check rather than a data check: TanStack Query keeps the last good
  * `data` through a failed refetch, so reading `data` alone would keep offering
  * Vote on a stale "open". Any error hides the button until the next success.
- * `digitalVoting` off means no poll and no button — no category can open then.
+ *
+ * Deliberately NOT gated on the page's `digitalVoting`. That value is frozen at
+ * page load, and an officer can switch voting off and back on mid-meeting: a
+ * gated poll would leave every phone that scanned in between without Vote until
+ * it reloaded. The gate would only save requests — `loadBallot` already answers
+ * every category closed while voting is off — so the server's answer is the one
+ * this reads.
  */
 export function MeetingRoomStrip({
 	visible,
 	clubId,
 	meetingKey,
 	dbMeetingId,
-	digitalVoting,
 	member,
 	holdsRole,
 	wordOfTheDay,
@@ -70,7 +75,6 @@ export function MeetingRoomStrip({
 	meetingKey: string;
 	/** The meeting's real DB id, which `getBallot` is keyed on. */
 	dbMeetingId: string;
-	digitalVoting: boolean;
 	member: StoredMember | null;
 	/** Whether `member` holds any slot in this meeting. Ignored without one. */
 	holdsRole: boolean;
@@ -80,7 +84,7 @@ export function MeetingRoomStrip({
 	const ballot = useQuery({
 		queryKey: ["meeting-room-ballot", dbMeetingId],
 		queryFn: () => getBallot({ data: { meetingId: dbMeetingId } }),
-		enabled: visible && digitalVoting,
+		enabled: visible,
 		refetchInterval: ROOM_VOTE_POLL_MS,
 		retry: false,
 	});
@@ -88,7 +92,6 @@ export function MeetingRoomStrip({
 	if (!visible) return null;
 
 	const voteOpen =
-		digitalVoting &&
 		ballot.status === "success" &&
 		Object.values(ballot.data.categories).some((c) => c.isOpen);
 	const identified = member !== null;

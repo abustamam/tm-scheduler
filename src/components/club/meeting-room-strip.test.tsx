@@ -45,13 +45,11 @@ function ballot(open: boolean): Ballot {
 
 interface HarnessProps {
 	visible: boolean;
-	digitalVoting: boolean;
 	assigneeIds: string[];
 	wordOfTheDay: string | null;
 }
 const DEFAULTS: HarnessProps = {
 	visible: true,
-	digitalVoting: true,
 	assigneeIds: [],
 	wordOfTheDay: null,
 };
@@ -75,7 +73,6 @@ function Wired({ initial }: { initial: HarnessProps }) {
 			clubId={CLUB}
 			meetingKey={KEY}
 			dbMeetingId={MEETING_UUID}
-			digitalVoting={props.digitalVoting}
 			member={member}
 			holdsRole={member !== null && props.assigneeIds.includes(member.id)}
 			wordOfTheDay={props.wordOfTheDay}
@@ -132,12 +129,26 @@ describe("MeetingRoomStrip — visibility (#913 AC1)", () => {
 		expect(getBallot).not.toHaveBeenCalled();
 	});
 
-	it("does not poll with digital voting off, and never offers Vote", async () => {
-		vi.mocked(getBallot).mockResolvedValue(ballot(true));
-		await renderStrip({ digitalVoting: false });
-		expect(screen.getByTestId("meeting-room-strip")).toBeTruthy();
-		expect(getBallot).not.toHaveBeenCalled();
+	/**
+	 * Voting OFF when the page loaded, then an officer switches it back on and
+	 * opens a category. The strip takes no voting prop at all — the page's value
+	 * is frozen at load — so it keeps polling, reads the server's closed answer
+	 * while voting is off (`loadBallot` returns every category closed then), and
+	 * shows Vote as soon as the ballot reports one open, with no reload.
+	 */
+	it("shows Vote after voting is switched back on mid-visit, without a reload", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		vi.mocked(getBallot).mockResolvedValue({
+			...ballot(false),
+			digitalVotingOff: true,
+		});
+		await renderStrip();
+		await waitFor(() => expect(getBallot).toHaveBeenCalledTimes(1));
 		expect(labels()).not.toContain("Vote");
+
+		vi.mocked(getBallot).mockResolvedValue(ballot(true));
+		await act(() => vi.advanceTimersByTimeAsync(ROOM_VOTE_POLL_MS));
+		await waitFor(() => expect(labels()[0]).toBe("Vote"));
 	});
 });
 

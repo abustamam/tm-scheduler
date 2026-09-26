@@ -1653,7 +1653,6 @@ function MeetingView() {
 					clubId={clubId}
 					meetingKey={urlKey}
 					dbMeetingId={meeting.id}
-					digitalVoting={digitalVoting}
 					member={member}
 					holdsRole={holdsRole}
 					wordOfTheDay={meeting.wordOfTheDay}
