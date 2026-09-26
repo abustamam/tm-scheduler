@@ -17,7 +17,8 @@
  *   looked only at character 0 would let ` =HYPERLINK(…)` through. Member and
  *   guest names are typed by the public (a guest book, a claim link), so this
  *   is not theoretical. A plain decimal number (`-5.00`) is data and is left
- *   bare.
+ *   bare. The same guard applies to each piece of a cell that follows one of
+ *   the characters in `SEPARATORS`.
  *
  * `null` and `undefined` become an empty cell. A file with no rows still has
  * its header row, so an empty table is visibly empty rather than malformed.
@@ -44,7 +45,29 @@ const CRLF = "\r\n";
  *   Asian input locale normalises them to the ASCII operators, so `＝SUM(A1)`
  *   typed into a guest book is a formula there.
  */
-const FORMULA_TRIGGER = /^(?:[\t\r]|\s*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20])/;
+const TRIGGER_CHARS = "=+\\-@\\uFF1D\\uFF0B\\uFF0D\\uFF20";
+const FORMULA_TRIGGER = new RegExp(`^(?:[\\t\\r]|\\s*[${TRIGGER_CHARS}])`);
+
+/**
+ * The characters a spreadsheet may break a line of a `.csv` at, depending on
+ * its locale and how the file was opened: the semicolon, the tab, CR and LF.
+ * A reader that breaks at one of them does not know about this file's quoting
+ * (the quote that opened the cell was not at the start of ITS field), so each
+ * piece after one starts a new cell of its own.
+ */
+const SEPARATORS = ";\\t\\r\\n";
+
+/**
+ * A separator whose following piece would be read as a formula: the next
+ * character is not itself a separator (that one is handled on its own), and
+ * after any whitespace comes one of {@link FORMULA_TRIGGER}'s operators. A
+ * separator that starts a piece with a bare tab or CR is covered because tab
+ * and CR are separators too.
+ */
+const SEGMENT_TRIGGER = new RegExp(
+	`([${SEPARATORS}])(?![${SEPARATORS}])(?=\\s*[${TRIGGER_CHARS}])`,
+	"g",
+);
 
 /**
  * A plain decimal number: `-5`, `60.50`. Data, not a formula, and it cannot
@@ -55,11 +78,9 @@ const PLAIN_NUMBER = /^-?\d+(?:\.\d+)?$/;
 
 /**
  * What makes a cell need quotes. RFC 4180's set (comma, quote, CR, LF), plus
- * the two other characters a spreadsheet may treat as a field separator when
- * it opens a `.csv`: the semicolon (the list separator in many locales) and the
- * tab. Unquoted, either one splits the cell in two, and the half after it is a
- * NEW cell whose first character the injection guard never looked at. Quoted,
- * the cell stays whole, whatever separator the reader picks.
+ * the semicolon and the tab ({@link SEPARATORS}). Quoting keeps the cell whole
+ * for a reader that honours it, which is not every reader; the per-piece guard
+ * in {@link csvCell} is what covers the rest.
  */
 const NEEDS_QUOTES = /[",;\t\r\n]/;
 
@@ -84,6 +105,9 @@ export function csvCell(
 	) {
 		text = `'${text}`;
 	}
+	// And every piece after a separator gets the same guard, since a reader
+	// that breaks the line there reads that piece as a cell of its own.
+	text = text.replace(SEGMENT_TRIGGER, "$1'");
 	if (NEEDS_QUOTES.test(text)) {
 		return `"${text.replace(/"/g, '""')}"`;
 	}

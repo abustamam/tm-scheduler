@@ -61,10 +61,13 @@ describe("csvCell quoting (RFC 4180)", () => {
 		expect(csvCell("Ann\tLee")).toBe('"Ann\tLee"');
 	});
 
-	it("keeps a separator-then-trigger cell as ONE quoted cell", () => {
-		for (const sep of [";", "\t", ","]) {
-			expect(csvCell(`Ann${sep}=1+1`)).toBe(`"Ann${sep}=1+1"`);
-		}
+	it("quotes a separator-then-trigger cell and guards the piece after it", () => {
+		expect(csvCell("Ann;=1+1")).toBe(`"Ann;'=1+1"`);
+		expect(csvCell("Ann\t=1+1")).toBe(`"Ann\t'=1+1"`);
+		expect(csvCell("Ann\n=1+1")).toBe(`"Ann\n'=1+1"`);
+		// A comma is the file's own delimiter, and every reader that uses it
+		// honours the quotes, so it needs no second guard.
+		expect(csvCell("Ann,=1+1")).toBe(`"Ann,=1+1"`);
 	});
 
 	it("writes numbers bare, negative ones included", () => {
@@ -85,8 +88,9 @@ describe("csvCell injection guard", () => {
 	it("looks past leading whitespace, tab and CR", () => {
 		expect(csvCell(" =1")).toBe("' =1");
 		// Tab and CR also force quoting; the guard lands INSIDE the quotes.
-		expect(csvCell("\t=1")).toBe(`"'\t=1"`);
-		expect(csvCell("\r=1")).toBe(`"'\r=1"`);
+		// ...and the piece after the tab or CR is guarded on its own, too.
+		expect(csvCell("\t=1")).toBe(`"'\t'=1"`);
+		expect(csvCell("\r=1")).toBe(`"'\r'=1"`);
 	});
 
 	it("guards before quoting, so the ' is inside the quotes", () => {
@@ -124,5 +128,46 @@ describe("csvCell injection guard", () => {
 	it("leaves a cell with a trigger character later on alone", () => {
 		expect(csvCell("a=b")).toBe("a=b");
 		expect(csvCell("jane@example.com")).toBe("jane@example.com");
+	});
+});
+
+// The test that matters: what a reader sees when it breaks a whole LINE at one
+// of these characters, whatever this file's quoting says. The cell under test
+// is never first in its row, so the quote that opened it is not at the start
+// of the reader's field and protects nothing.
+describe("toCsv: no piece of a line reads as a formula", () => {
+	const TRIGGER = /^\s*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20]/;
+	const hostile = [
+		"Ann;=1+1",
+		"Ann; =1+1",
+		"Ann;;@SUM(A1)",
+		"Ann\t+1",
+		"Ann;\t=1",
+		"Ann\n-1+1",
+		"Ann\r\n=1",
+		"Ann;\uFF1D1",
+		'Ann;=CONCAT("a";"b")',
+	];
+	type R = { id: string; name: string; email: string };
+	const cols: CsvColumn<R>[] = [
+		{ header: "id", value: (r) => r.id },
+		{ header: "name", value: (r) => r.name },
+		{ header: "email", value: (r) => r.email },
+	];
+
+	it.each([
+		[";", /;/],
+		["tab", /\t/],
+		["line break", /\r\n|\r|\n/],
+	])("splitting on %s leaves no unguarded piece", (_label, sep) => {
+		const csv = toCsv(
+			hostile.map((name, i) => ({ id: `g-${i}`, name, email: "a@b.c" })),
+			cols,
+		).slice(CSV_BOM.length);
+		const pieces = csv.split(sep);
+		const unguarded = pieces.filter((p) => TRIGGER.test(p.replace(/^"/, "")));
+		expect(unguarded).toEqual([]);
+		// At least two hostile values carry each separator, so the split happened.
+		expect(pieces.length).toBeGreaterThanOrEqual(3);
 	});
 });

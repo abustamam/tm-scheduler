@@ -113,10 +113,9 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 
 	// Two meetings on the SAME club-local date (2026-03-09, Chicago is UTC-5 by
 	// then), which is why every meeting file carries meeting_id. `prior` is
-	// earlier still, and the guest took no part in it: it must not count as a
-	// visit, nor become the first one. (No absent/excused GUEST attendance row
-	// is seeded: the app only ever records a guest as present, and removing
-	// them deletes the row.)
+	// earlier still, and the guest was ABSENT from it: it must not count as a
+	// visit, nor become the first one. (`meeting_attendance.status` defaults to
+	// 'absent', so a non-present guest row is reachable.)
 	const [early, late, prior] = await testDb
 		.insert(meetings)
 		.values([
@@ -187,6 +186,8 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 		{ meetingId: early.id, guestId: guest.id, status: "present" },
 		{ meetingId: late.id, guestId: guest.id, status: "present" },
 		{ meetingId: late.id, memberId: club.adminMemberId, status: "excused" },
+		{ meetingId: prior.id, guestId: guest.id, status: "absent" },
+		{ meetingId: club.meetingId, guestId: guest.id, status: "excused" },
 	]);
 	// Admin holds a Timer slot at the early meeting: by NAME ("Admin User")
 	// it sorts before the Speaker ("Member User"); by role it would not.
@@ -526,7 +527,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 
 	it("attendance.csv", async () => {
 		const f = (await files())["attendance.csv"];
-		expect(f.rows).toHaveLength(4);
+		expect(f.rows).toHaveLength(6);
 		expect(f.rows).toContainEqual({
 			meeting_id: a.meetingEarlyId,
 			meeting_date: "2026-03-09",
@@ -609,6 +610,15 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 				visits: 2,
 			},
 		]);
+		// The board reads the same rows the same way: the absent and excused
+		// rows count on neither.
+		const board = (await loadGuestPipeline(a.club.clubId)).find(
+			(g) => g.id === a.guestId,
+		);
+		expect(board?.visitCount).toBe(2);
+		expect(localDate(board?.firstVisitAt ?? null, "America/Chicago")).toBe(
+			"2026-03-09",
+		);
 	});
 
 	// A club's export must not show people the club no longer has. An
@@ -689,42 +699,57 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			.values({ clubId: own.clubId, name: `Pipeline Guest ${RUN}` })
 			.returning({ id: guests.id });
 		const day = 86_400_000;
-		const [attended, heldRole, spoke, cancelled, future] = await testDb
-			.insert(meetings)
-			.values([
-				// 19:00 Chicago on 31 Jan; already 1 Feb in UTC.
-				{
-					clubId: own.clubId,
-					scheduledAt: new Date("2026-02-01T01:00:00Z"),
-					status: "completed",
-				},
-				{
-					clubId: own.clubId,
-					scheduledAt: new Date("2026-02-08T01:00:00Z"),
-					status: "completed",
-				},
-				{
-					clubId: own.clubId,
-					scheduledAt: new Date("2026-02-15T01:00:00Z"),
-					status: "completed",
-				},
-				// Earlier than all of them, but cancelled: neither a visit nor
-				// the first one.
-				{
-					clubId: own.clubId,
-					scheduledAt: new Date("2026-01-10T01:00:00Z"),
-					status: "cancelled",
-				},
-				{
-					clubId: own.clubId,
-					scheduledAt: new Date(Date.now() + 30 * day),
-					status: "scheduled",
-				},
-			])
-			.returning({ id: meetings.id });
+		const [attended, heldRole, spoke, cancelled, future, missed, excused] =
+			await testDb
+				.insert(meetings)
+				.values([
+					// 19:00 Chicago on 31 Jan; already 1 Feb in UTC.
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-02-01T01:00:00Z"),
+						status: "completed",
+					},
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-02-08T01:00:00Z"),
+						status: "completed",
+					},
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-02-15T01:00:00Z"),
+						status: "completed",
+					},
+					// Earlier than all of them, but cancelled: neither a visit nor
+					// the first one.
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-01-10T01:00:00Z"),
+						status: "cancelled",
+					},
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date(Date.now() + 30 * day),
+						status: "scheduled",
+					},
+					// Held, and earlier, but the guest's row there is absent / excused:
+					// expected and did not come, so not a visit.
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-01-17T01:00:00Z"),
+						status: "completed",
+					},
+					{
+						clubId: own.clubId,
+						scheduledAt: new Date("2026-01-24T01:00:00Z"),
+						status: "completed",
+					},
+				])
+				.returning({ id: meetings.id });
 		await testDb.insert(meetingAttendance).values([
 			{ meetingId: attended.id, guestId: guest.id, status: "present" },
 			{ meetingId: cancelled.id, guestId: guest.id, status: "present" },
+			{ meetingId: missed.id, guestId: guest.id, status: "absent" },
+			{ meetingId: excused.id, guestId: guest.id, status: "excused" },
 		]);
 		await testDb.insert(roleSlots).values([
 			{

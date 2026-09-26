@@ -61,6 +61,12 @@ vi.mock("#/server/guards", async (importOriginal) => {
 	return { ...actual, requireClubRole: vi.fn(actual.requireClubRole) };
 });
 
+// `logActivity` stays REAL; wrapped so one test can make the audit write fail.
+vi.mock("#/server/activity", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("#/server/activity")>();
+	return { ...actual, logActivity: vi.fn(actual.logActivity) };
+});
+
 const { Route } = await import("#/routes/api/clubs.$clubId.export.zip");
 // `loadClubExport` stays REAL too; wrapped so one test can make it throw
 // AFTER the route has claimed the club's export slot.
@@ -73,6 +79,7 @@ const { beginClubExport, CLUB_EXPORT_FILENAMES, loadClubExport } = await import(
 );
 const { requireClubRole } = await import("#/server/guards");
 const { startImpersonation } = await import("#/server/impersonation-logic");
+const { logActivity } = await import("#/server/activity");
 
 type Get = (input: { params: { clubId: string } }) => Promise<Response>;
 const GET = (
@@ -105,6 +112,8 @@ async function exportRows(clubId: string) {
 		.orderBy(asc(activityLog.createdAt));
 }
 
+const superadmins: string[] = [];
+
 async function seedSuperadmin(): Promise<string> {
 	const id = randomUUID();
 	await testDb.insert(user).values({
@@ -117,7 +126,6 @@ async function seedSuperadmin(): Promise<string> {
 	superadmins.push(id);
 	return id;
 }
-const superadmins: string[] = [];
 
 describe.skipIf(!hasTestDb)("GET /api/clubs/$clubId/export/zip (#915)", () => {
 	let club: SeededClub;
@@ -322,6 +330,7 @@ describe.skipIf(!hasTestDb)("GET /api/clubs/$clubId/export/zip (#915)", () => {
 			[club.memberId, club.adminMemberId].sort(),
 		);
 	});
+
 	it("records each download in the activity log, naming the admin", async () => {
 		const before = (await exportRows(club.clubId)).length;
 		const res = await download(club.clubId, club.adminUserId);
@@ -339,6 +348,32 @@ describe.skipIf(!hasTestDb)("GET /api/clubs/$clubId/export/zip (#915)", () => {
 					?.match(/filename="([^"]+)"/)?.[1],
 			},
 		});
+	});
+
+	// The audit row is written before the response exists, so a failed write
+	// means no file: the handler throws (the server answers 500) and no zip
+	// Response is ever built. A download nobody can see was taken is exactly
+	// what the row rules out.
+	it("fails the download when the export cannot be recorded", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.mocked(logActivity).mockRejectedValueOnce(
+			new Error("activity insert failed"),
+		);
+		const before = (await exportRows(club.clubId)).length;
+		try {
+			await expect(download(club.clubId, club.adminUserId)).rejects.toThrow(
+				"activity insert failed",
+			);
+			expect(error).toHaveBeenCalledWith(
+				"[club-export] export failed",
+				expect.any(Error),
+			);
+		} finally {
+			error.mockRestore();
+		}
+		expect(await exportRows(club.clubId)).toHaveLength(before);
+		// And the club's export slot was released for the next try.
+		expect((await download(club.clubId, club.adminUserId)).status).toBe(200);
 	});
 
 	it("records nothing for a refused download", async () => {

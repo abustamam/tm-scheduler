@@ -715,8 +715,8 @@ export interface PipelineGuestRow {
  * The (guest, meeting) pairs that count as a VISIT for one club (#374).
  *
  * A guest visited a meeting when the meeting is NOT cancelled, its DATE has
- * arrived in the CLUB's timezone, and any of these is true: an attendance row
- * exists (the guest book, or an officer adding them in the minutes), they HELD
+ * arrived in the CLUB's timezone, and any of these is true: a PRESENT attendance
+ * row exists (the guest book, or an officer adding them in the minutes), they HELD
  * A ROLE SLOT, or they SPOKE AT TABLE TOPICS. Taking part in the meeting IS
  * attending it.
  *
@@ -761,7 +761,15 @@ function guestVisits(conn: DbOrTx, clubId: string, timeZone: string) {
 		})
 		.from(meetingAttendance)
 		.innerJoin(meetings, eq(meetings.id, meetingAttendance.meetingId))
-		.where(and(happened, isNotNull(meetingAttendance.guestId)));
+		// A PRESENT record only. The column defaults to 'absent', and an absent
+		// or excused row is a guest who was expected and did not come.
+		.where(
+			and(
+				happened,
+				isNotNull(meetingAttendance.guestId),
+				eq(meetingAttendance.status, "present"),
+			),
+		);
 	const heldRole = conn
 		.select({
 			guestId: roleSlots.assignedGuestId,
