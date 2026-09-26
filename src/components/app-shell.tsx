@@ -19,6 +19,12 @@ import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
+import {
+	NewBadge,
+	useIsNew,
+	WhatsNewButton,
+	WhatsNewProvider,
+} from "#/components/whats-new-panel";
 import { initialsOf } from "#/lib/avatar";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import {
@@ -221,116 +227,122 @@ export function AppShell({
 	);
 
 	return (
-		<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
-			{/* Desktop sidebar (lg+). A fixed-height flex column and NOT itself a
+		// "What's new" (#947): the seen state is the signed-in user's, and the
+		// audience is the ACTIVE club's — an officer there sees admin entries.
+		<WhatsNewProvider isAdmin={isOfficer}>
+			<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
+				{/* Desktop sidebar (lg+). A fixed-height flex column and NOT itself a
 			    scroller — `SidebarInner` puts the scroller on its middle band so the
 			    brand and the sign-out footer stay put. The height is load-bearing
 			    either way: pinned at `h-svh` this box can never grow, and `sticky`
 			    means the document scroll cannot reveal what spills out of it, so an
 			    officer+superadmin nav (~28 items) had ~700px of items reachable by
 			    nothing at all. */}
-			<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 backdrop-blur-[6px] lg:flex">
-				{sidebar()}
-			</aside>
+				<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 backdrop-blur-[6px] lg:flex">
+					{sidebar()}
+				</aside>
 
-			{/* Mobile nav drawer (below lg) */}
-			<Sheet open={navOpen} onOpenChange={setNavOpen}>
-				<SheetContent
-					side="left"
-					// `overflow-hidden`, not `overflow-y-auto`: the drawer used to be
-					// the scroller, which scrolled the search box and sign-out away
-					// with the nav. `SidebarInner`'s middle band scrolls instead, and
-					// the drawer has to stop scrolling for that band to be the thing
-					// that overflows.
-					className="w-[284px] max-w-[86vw] gap-1.5 overflow-hidden border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 sm:max-w-[86vw] lg:hidden"
-					onEscapeKeyDown={(e) => {
-						// Escape clears open search results first; only a second
-						// Escape (nothing left to clear) closes the drawer.
-						if (drawerSearchRef.current?.clearResults()) e.preventDefault();
-					}}
-					onOpenAutoFocus={(e) => {
-						// The search input is now the drawer's first tabbable —
-						// don't autofocus it (that pops the phone keyboard over
-						// the nav). Focus the drawer itself; Tab reaches search.
-						e.preventDefault();
-						(e.currentTarget as HTMLElement | null)?.focus();
-					}}
-				>
-					<SheetTitle className="sr-only">Navigation</SheetTitle>
-					{sidebar(
-						() => setNavOpen(false),
-						true,
-						<GlobalSearch
-							ref={drawerSearchRef}
-							variant="inline"
-							clubId={activeClubId}
-							grants={searchGrants}
-							onNavigate={() => setNavOpen(false)}
-						/>,
-					)}
-				</SheetContent>
-			</Sheet>
-
-			<main className="flex min-w-0 flex-1 flex-col">
-				{impersonating ? (
-					<ImpersonationBanner
-						clubName={clubName}
-						expiresAt={impersonating.expiresAt}
-						mode={impersonating.mode}
-						onExit={onExitImpersonation}
-					/>
-				) : null}
-				{/* Desktop header (lg+) */}
-				<header
-					className={`sticky z-10 ${impersonating ? "top-9" : "top-0"} hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex`}
-				>
-					<div className="text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
-						{crumbFor(pathname)}
-					</div>
-					<div className="flex-1" />
-					<div className="w-[248px] max-w-[34vw]">
-						<GlobalSearch clubId={activeClubId} grants={searchGrants} />
-					</div>
-					<ClubSwitcher
-						clubs={clubs}
-						activeClubId={activeClubId}
-						impersonating={impersonating != null}
-					/>
-					<ThemeToggle />
-					<MemberAvatar tone="palm" initials={initials} size={36} />
-				</header>
-
-				{/* Mobile top app-bar (below lg) */}
-				<header
-					className={`sticky z-10 ${impersonating ? "top-9" : "top-0"} flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 backdrop-blur-[6px] lg:hidden`}
-				>
-					<button
-						type="button"
-						onClick={() => setNavOpen(true)}
-						aria-label="Open navigation"
-						className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] hover:text-[var(--sea-ink)]"
+				{/* Mobile nav drawer (below lg) */}
+				<Sheet open={navOpen} onOpenChange={setNavOpen}>
+					<SheetContent
+						side="left"
+						// `overflow-hidden`, not `overflow-y-auto`: the drawer used to be
+						// the scroller, which scrolled the search box and sign-out away
+						// with the nav. `SidebarInner`'s middle band scrolls instead, and
+						// the drawer has to stop scrolling for that band to be the thing
+						// that overflows.
+						className="w-[284px] max-w-[86vw] gap-1.5 overflow-hidden border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 sm:max-w-[86vw] lg:hidden"
+						onEscapeKeyDown={(e) => {
+							// Escape clears open search results first; only a second
+							// Escape (nothing left to clear) closes the drawer.
+							if (drawerSearchRef.current?.clearResults()) e.preventDefault();
+						}}
+						onOpenAutoFocus={(e) => {
+							// The search input is now the drawer's first tabbable —
+							// don't autofocus it (that pops the phone keyboard over
+							// the nav). Focus the drawer itself; Tab reaches search.
+							e.preventDefault();
+							(e.currentTarget as HTMLElement | null)?.focus();
+						}}
 					>
-						<Menu className="size-4" aria-hidden />
-					</button>
-					<div className="min-w-0 flex-1 truncate text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
-						{crumbFor(pathname)}
-					</div>
-					<ClubSwitcher
-						clubs={clubs}
-						activeClubId={activeClubId}
-						impersonating={impersonating != null}
-					/>
-				</header>
+						<SheetTitle className="sr-only">Navigation</SheetTitle>
+						{sidebar(
+							() => setNavOpen(false),
+							true,
+							<GlobalSearch
+								ref={drawerSearchRef}
+								variant="inline"
+								clubId={activeClubId}
+								grants={searchGrants}
+								onNavigate={() => setNavOpen(false)}
+							/>,
+						)}
+					</SheetContent>
+				</Sheet>
 
-				<section className="min-w-0 flex-1 overflow-x-hidden">
-					{children}
-				</section>
-				<footer className="border-t border-[var(--line)] px-7 py-3 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)]">
-					{TOASTMASTERS_DISCLAIMER}
-				</footer>
-			</main>
-			<Toaster position="top-center" />
-		</div>
+				<main className="flex min-w-0 flex-1 flex-col">
+					{impersonating ? (
+						<ImpersonationBanner
+							clubName={clubName}
+							expiresAt={impersonating.expiresAt}
+							mode={impersonating.mode}
+							onExit={onExitImpersonation}
+						/>
+					) : null}
+					{/* Desktop header (lg+) */}
+					<header
+						className={`sticky z-10 ${impersonating ? "top-9" : "top-0"} hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex`}
+					>
+						<div className="text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
+							{crumbFor(pathname)}
+						</div>
+						<div className="flex-1" />
+						<div className="w-[248px] max-w-[34vw]">
+							<GlobalSearch clubId={activeClubId} grants={searchGrants} />
+						</div>
+						<ClubSwitcher
+							clubs={clubs}
+							activeClubId={activeClubId}
+							impersonating={impersonating != null}
+						/>
+						<WhatsNewButton />
+						<ThemeToggle />
+						<MemberAvatar tone="palm" initials={initials} size={36} />
+					</header>
+
+					{/* Mobile top app-bar (below lg) */}
+					<header
+						className={`sticky z-10 ${impersonating ? "top-9" : "top-0"} flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 backdrop-blur-[6px] lg:hidden`}
+					>
+						<button
+							type="button"
+							onClick={() => setNavOpen(true)}
+							aria-label="Open navigation"
+							className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] hover:text-[var(--sea-ink)]"
+						>
+							<Menu className="size-4" aria-hidden />
+						</button>
+						<div className="min-w-0 flex-1 truncate text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
+							{crumbFor(pathname)}
+						</div>
+						<WhatsNewButton />
+						<ClubSwitcher
+							clubs={clubs}
+							activeClubId={activeClubId}
+							impersonating={impersonating != null}
+						/>
+					</header>
+
+					<section className="min-w-0 flex-1 overflow-x-hidden">
+						{children}
+					</section>
+					<footer className="border-t border-[var(--line)] px-7 py-3 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)]">
+						{TOASTMASTERS_DISCLAIMER}
+					</footer>
+				</main>
+				<Toaster position="top-center" />
+			</div>
+		</WhatsNewProvider>
 	);
 }
 
@@ -576,10 +588,21 @@ function NavItem({
 	onNavigate?: () => void;
 }) {
 	const Icon: ComponentType<{ className?: string }> = destination.icon;
+	// A destination whose key is a `FEATURE_KEYS` value wears "New" while its
+	// What's-new entry is fresh (#947); following the link is using it.
+	const { isNew, markSeen } = useIsNew(destination.key);
+	// Landing on the page by ANY route (a bookmark, the panel's "Try it", a
+	// link elsewhere) is using it too, not only a click on this entry.
+	useEffect(() => {
+		if (active && isNew) markSeen();
+	}, [active, isNew, markSeen]);
 	return (
 		<Link
 			to={destination.to}
-			onClick={onNavigate}
+			onClick={() => {
+				if (isNew) markSeen();
+				onNavigate?.();
+			}}
 			// The router's own match still stamps `aria-current` on an active link,
 			// so its idea of "active" must agree with `destinationFor`'s: `exact`
 			// keeps Superadmin from matching under Duplicate people.
@@ -593,6 +616,7 @@ function NavItem({
 		>
 			<Icon className="size-4" />
 			{destination.label}
+			<NewBadge isNew={isNew} className="ml-auto" />
 		</Link>
 	);
 }

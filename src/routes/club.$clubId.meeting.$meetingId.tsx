@@ -46,6 +46,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { Label } from "#/components/ui/label";
+import { WhatsNewBanner } from "#/components/whats-new-banner";
 import { showWriteError } from "#/components/write-error-toast";
 import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
@@ -1551,6 +1552,12 @@ function MeetingView() {
 
 	return (
 		<div className={containerClass}>
+			{/* #947: one "What's new" line for a member who picked their name here
+			    and has no account. Signed-in members get the header panel. */}
+			<WhatsNewBanner
+				clubId={clubUuid}
+				show={source === "anon" && member !== null}
+			/>
 			{previewAsMember ? (
 				<div className="flex items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 text-sm font-medium text-primary">
 					<span className="flex items-center gap-2">

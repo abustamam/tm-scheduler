@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
 	boolean,
 	index,
@@ -22,12 +22,49 @@ export const user = pgTable("user", {
 	// per-club `club_role`. Provisioned from the SUPERADMIN_EMAILS allowlist and
 	// reconciled two-way on every sign-in; defaults false so absence fails closed.
 	isSuperadmin: boolean("is_superadmin").default(false).notNull(),
+	// The "What's new" entries (#947) this user has seen, by entry id (the
+	// `content/whats-new/` filename). The header dot shows while an eligible
+	// entry is missing from it. Ids, not a timestamp: an entry's date is the
+	// day it was written, not the day it merged, so a "seen at" instant misses
+	// an entry dated earlier the same day or merged days after its date.
+	whatsNewSeenIds: text("whats_new_seen_ids")
+		.array()
+		.notNull()
+		.default(sql`'{}'::text[]`),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 	updatedAt: timestamp("updated_at")
 		.defaultNow()
 		.$onUpdate(() => /* @__PURE__ */ new Date())
 		.notNull(),
 });
+
+/**
+ * Which "New" badges a user has cleared (#947), by `FEATURE_KEYS` value
+ * (`#/lib/whats-new`). A row means used or dismissed; absence means the badge
+ * may show, until its entry ages past the 30-day window. App-owned, not a
+ * Better Auth model — it lives here beside `user` because it is per-account
+ * state and cascades with the account. Re-exported from `schema.ts` so
+ * drizzle-kit (which reads only that file) generates it.
+ */
+export const userFeatureSeen = pgTable(
+	"user_feature_seen",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		featureKey: text("feature_key").notNull(),
+		seenAt: timestamp("seen_at").defaultNow().notNull(),
+	},
+	(table) => [
+		uniqueIndex("user_feature_seen_user_feature_unique").on(
+			table.userId,
+			table.featureKey,
+		),
+	],
+);
 
 export const session = pgTable(
 	"session",
