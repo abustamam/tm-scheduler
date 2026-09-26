@@ -20,6 +20,7 @@ import {
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
+import { PROMO_LIMITS } from "#/lib/promo-template";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
 	listNotComingWithNames,
@@ -727,6 +728,10 @@ const updateMeetingSchema = z.object({
 	tableTopicsNotes: MEETING_UPDATE_FIELDS.tableTopicsNotes
 		.nullable()
 		.optional(),
+	// The promo note (#931) — admin-only in the writer. Rejected past the cap
+	// rather than truncated: the dialog's input carries the same `maxLength`,
+	// so only a hand-built request can exceed it.
+	promoNote: z.string().max(PROMO_LIMITS.note).nullable().optional(),
 	// The club's meeting number (#358). Nullable = cleared back to derived.
 	meetingNumber: z.number().int().positive().nullable().optional(),
 });

@@ -666,6 +666,13 @@
       "when": 1790446014452,
       "tag": "0094_far_miracleman",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1790448554183,
+      "tag": "0095_shallow_slipstream",
+      "breakpoints": true
     }
   ]
 }

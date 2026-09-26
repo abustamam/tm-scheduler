@@ -223,7 +223,7 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The eight browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The eleven browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -299,7 +299,28 @@ constraint hands the overflow to the document instead. Both satisfy every grep, 
 tells them apart. Same construction as its neighbours — the real `className` strings read out of
 source, synthetic markup between them, and a pre-fix control that reproduces the bug.
 
-No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
+The ninth, tenth and eleventh are the marketing flyer's (#931), and between them they cover the
+two ways a fixed-size surface fails silently. `src/components/agenda/meeting-flyer.test.tsx` is the
+Letter poster: one printed page beside an empty-document control, plus the natural height with
+EVERY free-text field at its cap measured against `MIN_FIT_SCALE` — the page count alone reports 1
+for a poster `FitPage` would flow onto a second sheet, because static markup never runs its effect.
+`src/components/agenda/flyer-square-geometry.test.tsx` is the square image: a fixed 1080px box with
+`overflow: hidden`, so capped copy clips whatever falls below it, and what must never be clipped is
+the QR and the ADR-0024 disclaimer. It measures both boxes at the caps, and because the layout has
+TWO guards (the text block gives way, and every field is line-clamped) it strips each from the
+shipped markup in turn and asserts the other holds alone — so reverting either one in source goes
+red instead of being masked — with a both-stripped control that must overflow.
+`src/components/agenda/flyer-square-png.test.tsx` runs the SHIPPED `exportSquarePng`
+(`html-to-image`, bundled from source with esbuild) in Chrome and decodes the PNG it produces: the
+QR decodes to the meeting URL and the logo region is not blank, beside a no-logo control and a
+not-inlined logo that must be refused. It is the one harness here that drives Chrome over the
+DevTools protocol (`--remote-debugging-pipe`) and awaits a promise, rather than `--dump-dom`: the
+dump flaked ~1 run in 3, because virtual time fast-forwards while an image decodes off the main
+thread and Chrome dumped the page before the export finished, at any budget. Reach for the pipe
+whenever the thing under test is asynchronous work the page does not look busy doing.
+
+It also added test-only dependencies (`jsqr`, `pngjs`); everything below about Chrome itself still
+holds. No new dependency for Chrome: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
 `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
 With none present those tests **skip locally**, so `bun run test` still works for someone without a
 browser; **in CI they fail** instead (`CI has no Chrome on PATH`), because a silently absent
@@ -310,7 +331,7 @@ diagnosable. Beside that job's ONLY — the `extension` job is `working-director
 runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
 same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
-**On macOS all eight skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+**On macOS all eleven skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
 puts nothing on `PATH` under any of those four binary names — that is the `CHROME_BINARIES`
 lookup list, which is still four, and not the suite count above. This is a macOS-only gap: on Linux, where this
 repo is usually developed, `google-chrome` resolves and these gates run locally as normal. Do NOT
