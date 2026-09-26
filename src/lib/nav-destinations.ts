@@ -17,6 +17,7 @@ import {
 	Settings,
 	ShieldCheck,
 	Trophy,
+	UserCog,
 	UserPlus,
 	Users,
 	Wallet,
@@ -228,6 +229,14 @@ export const NAV_DESTINATIONS = [
 		group: "me",
 		grant: "everyone",
 		icon: Mic,
+	},
+	{
+		key: "account",
+		to: "/account",
+		label: "Account settings",
+		group: "me",
+		grant: "everyone",
+		icon: UserCog,
 	},
 	{
 		key: "resources",

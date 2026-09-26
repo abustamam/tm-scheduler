@@ -53,6 +53,7 @@ describe("visibleDestinations", () => {
 		expect(keysIn(MEMBER, "me")).toEqual([
 			"My dashboard",
 			"My roles",
+			"Account settings",
 			"Resources",
 		]);
 	});

@@ -90,6 +90,7 @@ describe("sidebar per role", () => {
 			"Action items",
 			"My dashboard",
 			"My roles",
+			"Account settings",
 			"Resources",
 		]);
 		expect(setupToggle().getAttribute("aria-expanded")).toBe("false");
@@ -101,7 +102,7 @@ describe("sidebar per role", () => {
 		const labels = visibleLinkLabels();
 		expect(labels).not.toContain("Officer home");
 		expect(labels.slice(0, 10)).toContain("Action items");
-		expect(labels).toHaveLength(13);
+		expect(labels).toHaveLength(14);
 	});
 
 	it("shows a plain member Meetings and Me, with no empty group headers", () => {
@@ -111,7 +112,7 @@ describe("sidebar per role", () => {
 		expect(screen.queryByText("Officers")).toBeNull();
 		expect(screen.queryByRole("button", { name: /setup/i })).toBeNull();
 		expect(screen.queryByText("Platform")).toBeNull();
-		expect(visibleLinkLabels()).toHaveLength(8);
+		expect(visibleLinkLabels()).toHaveLength(9);
 	});
 
 	it("adds Platform for a superadmin", () => {

@@ -1,55 +1,29 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { Bell, CalendarDays, Loader2, Mic } from "lucide-react";
+import { CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { ApiTokensSection } from "#/components/api-tokens-section";
-import { ConnectedAppsSection } from "#/components/connected-apps-section";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
+import { navLabel } from "#/lib/nav-destinations";
 import { listMyCommitments } from "#/server/meetings";
-import {
-	getMyReminderOptOut,
-	setMyReminderOptOut,
-} from "#/server/notification-prefs";
 import { releaseSlot } from "#/server/slots";
 
 export const Route = createFileRoute("/_authed/me")({
 	loader: async () => {
-		const [commitments, reminderPref] = await Promise.all([
-			listMyCommitments(),
-			getMyReminderOptOut(),
-		]);
-		return { commitments, reminderOptOut: reminderPref.optedOut };
+		const commitments = await listMyCommitments();
+		return { commitments };
 	},
 	component: MyCommitments,
 });
 
 function MyCommitments() {
-	const { commitments, reminderOptOut } = Route.useLoaderData();
+	const { commitments } = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
-	const [savingPref, setSavingPref] = useState(false);
-
-	async function toggleReminders(nextEnabled: boolean) {
-		setSavingPref(true);
-		try {
-			await setMyReminderOptOut({ data: { optedOut: !nextEnabled } });
-			toast.success(
-				nextEnabled
-					? "Reminder emails turned on."
-					: "Reminder emails turned off.",
-			);
-			await router.invalidate();
-		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
-		} finally {
-			setSavingPref(false);
-		}
-	}
 
 	// Speaking roles assigned without a speech title/project yet — usually because
 	// an officer slotted you in from the sign-up sheet (#officer-assign).
@@ -77,43 +51,17 @@ function MyCommitments() {
 	return (
 		<PageContainer className="space-y-4">
 			<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
-				My roles
+				{navLabel("/me")}
 			</h1>
 
-			<div className="flex items-start justify-between gap-4 rounded-xl border bg-card p-4">
-				<div className="min-w-0">
-					<div className="flex items-center gap-2 font-medium">
-						<Bell className="size-4 text-primary" aria-hidden />
-						Reminder emails
-					</div>
-					<p className="mt-1 text-sm text-muted-foreground">
-						Get an email before a meeting when you're signed up for a role.
-					</p>
-				</div>
-				<Button
-					size="sm"
-					variant={reminderOptOut ? "default" : "outline"}
-					onClick={() => toggleReminders(reminderOptOut)}
-					disabled={savingPref}
-					aria-pressed={!reminderOptOut}
-				>
-					{savingPref ? (
-						<Loader2 className="size-4 animate-spin" />
-					) : reminderOptOut ? (
-						"Turn on"
-					) : (
-						"Turn off"
-					)}
-				</Button>
-			</div>
-
-			{/* Renders nothing unless the user is an admin or officer somewhere
-			    (#773). That check is server-side — see `ApiTokensSection`. */}
-			<ApiTokensSection />
-
-			{/* Shown to everyone signed in (#851): removing an app is not a
-			    privilege, it is the only way to cut one off. */}
-			<ConnectedAppsSection />
+			{/* Temporary (#912): remove after 2026-12-31. */}
+			<p className="text-sm text-muted-foreground">
+				API tokens and connected apps have moved to{" "}
+				<Link to="/account" className="font-medium text-primary underline">
+					{navLabel("/account")}
+				</Link>
+				.
+			</p>
 
 			{needsSpeechDetails.length > 0 ? (
 				<div className="rounded-xl border border-[var(--warning)]/40 bg-[var(--warning-soft)] p-4">
