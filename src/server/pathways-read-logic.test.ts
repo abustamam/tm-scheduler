@@ -775,11 +775,12 @@ describe("workingLevel (#898)", () => {
 });
 
 /**
- * Education Series presentations (#921). Rows with `isRequired: false` and a
- * `series` — not electives, and INERT until #922: they count toward no level
- * total, are never offered as an elective, and never appear in Up next.
+ * Education Series presentations (#921, counted since #922). Rows with
+ * `isRequired: false` and a `series` — not electives. On a current path each
+ * series `seriesRequiredAt` names adds one to its level's total, met by ANY one
+ * complete title of that series, and is offered in `upNextSeries`.
  */
-describe("Education Series (#921, inert until #922)", () => {
+describe("Education Series (#921/#922)", () => {
 	const seriesProject = (
 		level: number,
 		name: string,
@@ -818,6 +819,7 @@ describe("Education Series (#921, inert until #922)", () => {
 		marks: MarkRow[],
 		status: CatalogPath["status"] = "current",
 		levels: SyncedLevel[] = [],
+		detailProjects?: DetailProjectRow[],
 	) =>
 		buildPathViewModel({
 			courseCode: "8711",
@@ -828,10 +830,18 @@ describe("Education Series (#921, inert until #922)", () => {
 			catalogProjects: [...levelsThrough3, ...L4, ...L5],
 			pathLevels,
 			marks,
+			detailProjects,
 		});
 	const throughL3 = [1, 2, 3].map((n) => mark(n, `Level ${n} project`));
+	const l4Done = [
+		...throughL3,
+		mark(4, "Manage Change"),
+		mark(4, "Write a Compelling Blog", false),
+	];
 	const level = (vm: ReturnType<typeof build>, n: number) =>
 		vm.levels.find((l) => l.level === n);
+	const groups = (vm: ReturnType<typeof build>) =>
+		vm.upNextSeries.map((g) => [g.label, g.options.map((o) => o.name)]);
 
 	it("keeps series titles out of upNextElectives and leaves chooseCount alone", () => {
 		const vm = build(throughL3);
@@ -847,20 +857,20 @@ describe("Education Series (#921, inert until #922)", () => {
 		expect(vm.upNext.map((p) => p.name)).toEqual(["Manage Change"]);
 	});
 
-	it("does not let a marked series presentation stand in for the elective", () => {
-		const vm = build([...throughL3, seriesMark(4, "Finding New Members")]);
-		expect(vm.upNextElectives?.chooseCount).toBe(1);
-		expect(level(vm, 4)).toEqual({
-			level: 4,
-			completed: 0,
-			total: 2,
-			approved: false,
-		});
-	});
-
-	it("counts L4 and L5 as required + 1 elective = 2 on a current path, series excluded", () => {
+	it("counts L4 and L5 as required + 1 elective + 2 series = 4 on a current path", () => {
 		const vm = build([]);
 		expect(vm.levelsSource).toBe("catalog");
+		expect(vm.levels.map((l) => [l.level, l.total])).toEqual([
+			[1, 1],
+			[2, 1],
+			[3, 1],
+			[4, 4],
+			[5, 4],
+		]);
+	});
+
+	it("leaves legacy paths at required + elective, series rows counting nothing", () => {
+		const vm = build([], "legacy");
 		expect(vm.levels.map((l) => [l.level, l.total])).toEqual([
 			[1, 1],
 			[2, 1],
@@ -870,40 +880,296 @@ describe("Education Series (#921, inert until #922)", () => {
 		]);
 	});
 
-	it("counts current and legacy paths alike while inert", () => {
-		const totals = (status: CatalogPath["status"]) =>
-			build([], status).levels.map((l) => [l.level, l.total]);
-		expect(totals("legacy")).toEqual(totals("current"));
-	});
-
-	it("closes Level 4 with the required project and an elective marked, no series", () => {
-		const vm = build([
-			...throughL3,
-			mark(4, "Manage Change"),
-			mark(4, "Write a Compelling Blog", false),
-		]);
+	it("holds Level 4 at 2 of 4 with the required project and an elective, until both series are marked", () => {
+		const vm = build(l4Done);
 		expect(level(vm, 4)).toEqual({
 			level: 4,
 			completed: 2,
-			total: 2,
+			total: 4,
 			approved: false,
 		});
-		expect(vm.workingLevel).toBe(5);
+		expect(vm.workingLevel).toBe(4);
+		expect(vm.projectsLeftAtWorkingLevel).toBe(2);
+
+		const one = build([...l4Done, seriesMark(4, "Closing the Sale")]);
+		expect(level(one, 4)?.completed).toBe(3);
+		expect(one.workingLevel).toBe(4);
+
+		const both = build([
+			...l4Done,
+			seriesMark(4, "Closing the Sale"),
+			seriesMark(4, "Concluding Your Speech"),
+		]);
+		expect(level(both, 4)).toEqual({
+			level: 4,
+			completed: 4,
+			total: 4,
+			approved: false,
+		});
+		expect(both.workingLevel).toBe(5);
 	});
 
-	it("lets series marks change neither the total nor the completed count", () => {
-		const base = [
+	it("does not let a marked series presentation stand in for the elective", () => {
+		const vm = build([...throughL3, seriesMark(4, "Finding New Members")]);
+		expect(vm.upNextElectives?.chooseCount).toBe(1);
+		expect(level(vm, 4)).toEqual({
+			level: 4,
+			completed: 1,
+			total: 4,
+			approved: false,
+		});
+	});
+
+	it("gives a second title of the same series no extra credit", () => {
+		const once = build([...throughL3, seriesMark(4, "Beginning Your Speech")]);
+		const twice = build([
 			...throughL3,
-			mark(4, "Manage Change"),
-			mark(4, "Write a Compelling Blog", false),
-		];
-		const withSeries = build([
-			...base,
 			seriesMark(4, "Beginning Your Speech"),
 			seriesMark(4, "Concluding Your Speech"),
-			seriesMark(4, "Closing the Sale"),
 		]);
-		expect(withSeries.levels).toEqual(build(base).levels);
+		expect(level(twice, 4)).toEqual(level(once, 4));
+		expect(level(twice, 4)?.completed).toBe(1);
+	});
+
+	it("offers both Level 4 series in upNextSeries with every title", () => {
+		const vm = build(throughL3);
+		expect(groups(vm)).toEqual([
+			["Successful Club Series", ["Finding New Members", "Closing the Sale"]],
+			[
+				"Better Speaker Series",
+				["Beginning Your Speech", "Concluding Your Speech"],
+			],
+		]);
+		expect(vm.upNextSeries.map((g) => g.series)).toEqual([
+			"successful_club",
+			"better_speaker",
+		]);
+	});
+
+	it("offers Successful Club and Leadership Excellence at Level 5", () => {
+		const vm = build([
+			...l4Done,
+			seriesMark(4, "Closing the Sale"),
+			seriesMark(4, "Beginning Your Speech"),
+		]);
+		expect(vm.workingLevel).toBe(5);
+		expect(groups(vm)).toEqual([
+			["Successful Club Series", ["Moments of Truth"]],
+			["Leadership Excellence Series", ["Building a Team"]],
+		]);
+	});
+
+	it("drops a series group once any title is complete, and two marks do not bring it back", () => {
+		const vm = build([
+			...throughL3,
+			seriesMark(4, "Beginning Your Speech"),
+			seriesMark(4, "Concluding Your Speech"),
+		]);
+		expect(vm.upNextSeries.map((g) => g.series)).toEqual(["successful_club"]);
+	});
+
+	it("offers no series on a legacy path or below Level 4", () => {
+		expect(build(throughL3, "legacy").upNextSeries).toEqual([]);
+		const atL1 = build([]);
+		expect(atL1.workingLevel).toBe(1);
+		expect(atL1.upNextSeries).toEqual([]);
+	});
+
+	it("offers series on the inference fallback while upNext and electives stay empty (#456)", () => {
+		// Summary-synced: Levels 1–3 approved, no /detail rows, no marks.
+		const vm = build([], "current", [
+			lv(1, 1, 1, true),
+			lv(2, 1, 1, true),
+			lv(3, 1, 1, true),
+			lv(4, 0, 2, false),
+			lv(5, 0, 2, false),
+		]);
+		expect(vm.levelsSource).toBe("basecamp");
+		expect(vm.currentLevel).toBe(4);
+		expect(vm.workingLevel).toBe(4);
+		expect(vm.upNext).toEqual([]);
+		expect(vm.upNextElectives).toBeNull();
+		expect(vm.upNextSeries.map((g) => g.series)).toEqual([
+			"successful_club",
+			"better_speaker",
+		]);
+	});
+
+	it("never marks a series win as awaiting Base Camp, which cannot report one", () => {
+		const reported = [
+			lv(1, 1, 1, true),
+			lv(2, 1, 1, true),
+			lv(3, 1, 1, true),
+			lv(4, 0, 2, false),
+		];
+		const vm = build(
+			[seriesMark(4, "Closing the Sale"), mark(4, "Manage Change")],
+			"current",
+			reported,
+			[dp(4, "Write a Compelling Blog", false, false)],
+		);
+		expect(vm.hasBasecamp).toBe(true);
+		const byName = new Map(vm.wins.map((w) => [w.name, w]));
+		expect(byName.get("Closing the Sale")?.awaitingProcessing).toBe(false);
+		// The ordinary mark Base Camp has not confirmed still reads as awaiting.
+		expect(byName.get("Manage Change")?.awaitingProcessing).toBe(true);
+	});
+
+	describe("on a synced club, where Base Camp's counts never include series", () => {
+		const synced = (l4: SyncedLevel, l5: SyncedLevel, marks: MarkRow[] = []) =>
+			build(
+				marks,
+				"current",
+				[lv(1, 1, 1, true), lv(2, 1, 1, true), lv(3, 1, 1, true), l4, l5],
+				[dp(4, "Manage Change", true)],
+			);
+		const owed = (vm: ReturnType<typeof build>) =>
+			vm.upNextSeries.map((g) => [g.level, g.series]);
+
+		it("keeps Level 4's series owed after its count fills and the working level moves on", () => {
+			const vm = synced(lv(4, 2, 2, false), lv(5, 0, 2, false));
+			expect(vm.workingLevel).toBe(5);
+			expect(owed(vm)).toEqual([
+				[4, "successful_club"],
+				[4, "better_speaker"],
+			]);
+		});
+
+		it("keeps them owed with no working level left at all", () => {
+			const vm = synced(lv(4, 2, 2, false), lv(5, 2, 2, false));
+			expect(vm.workingLevel).toBeNull();
+			expect(owed(vm)).toEqual([
+				[4, "successful_club"],
+				[4, "better_speaker"],
+			]);
+		});
+
+		it("moves on to Level 5's series once Level 4 is approved", () => {
+			const vm = synced(lv(4, 2, 2, true), lv(5, 0, 2, false));
+			expect(owed(vm)).toEqual([
+				[5, "successful_club"],
+				[5, "leadership_excellence"],
+			]);
+		});
+
+		it("moves on to Level 5's series once both Level 4 series are marked", () => {
+			const vm = synced(lv(4, 2, 2, false), lv(5, 0, 2, false), [
+				seriesMark(4, "Closing the Sale"),
+				seriesMark(4, "Beginning Your Speech"),
+			]);
+			expect(owed(vm)).toEqual([
+				[5, "successful_club"],
+				[5, "leadership_excellence"],
+			]);
+		});
+
+		it("offers nothing ahead of the working level", () => {
+			const vm = build([], "current", [
+				lv(1, 1, 1, true),
+				lv(2, 1, 1, true),
+				lv(3, 0, 1, false),
+				lv(4, 0, 2, false),
+			]);
+			expect(vm.workingLevel).toBe(3);
+			expect(vm.upNextSeries).toEqual([]);
+		});
+	});
+
+	describe("a series tick is not project truth", () => {
+		// Summary-synced: counts only, no /detail, one delivered speech.
+		const summary = [
+			lv(1, 1, 1, true),
+			lv(2, 1, 1, true),
+			lv(3, 1, 1, true),
+			lv(4, 1, 2, false),
+		];
+		const delivered = win(4, "Manage Change", "My change speech");
+		const read = (marks: MarkRow[]) =>
+			buildPathViewModel({
+				courseCode: "8711",
+				pathName: "Engaging Humor",
+				status: "current",
+				levels: summary.map((l) => ({ ...l })),
+				wins: [delivered],
+				catalogProjects: [...levelsThrough3, ...L4, ...L5],
+				pathLevels,
+				marks,
+			});
+
+		it("keeps the summary-sync fallback across read, tick a series, read", () => {
+			const before = read([]);
+			expect(before.upNext).toEqual([]);
+			expect(before.upNextElectives).toBeNull();
+			expect(before.wins.map((w) => w.name)).toEqual(["Manage Change"]);
+			expect(before.upNextSeries.map((g) => g.series)).toEqual([
+				"successful_club",
+				"better_speaker",
+			]);
+
+			const after = read([seriesMark(4, "Concluding Your Speech")]);
+			// Still the fallback: nothing learned about ordinary projects.
+			expect(after.upNext).toEqual([]);
+			expect(after.upNextElectives).toBeNull();
+			expect(after.levels).toEqual(before.levels);
+			// The delivered speech stays, and the tick shows as an undoable win.
+			expect(after.wins).toEqual([
+				delivered,
+				{
+					projectId: pid(4, "Concluding Your Speech"),
+					level: 4,
+					name: "Concluding Your Speech",
+					speechTitle: "",
+					deliveredAt: null,
+					markedHere: true,
+					awaitingProcessing: false,
+				},
+			]);
+			expect(after.upNextSeries.map((g) => g.series)).toEqual([
+				"successful_club",
+			]);
+		});
+
+		it("makes an already-listed speech the undoable win instead of listing it twice", () => {
+			const linked = win(4, "Controlling Your Fear", "Fear speech");
+			const vm = buildPathViewModel({
+				courseCode: "8711",
+				pathName: "Engaging Humor",
+				status: "current",
+				levels: summary.map((l) => ({ ...l })),
+				wins: [linked],
+				catalogProjects: [
+					...levelsThrough3,
+					...L4,
+					seriesProject(4, "Controlling Your Fear", "better_speaker"),
+				],
+				pathLevels,
+				marks: [seriesMark(4, "Controlling Your Fear")],
+			});
+			expect(vm.wins).toEqual([{ ...linked, markedHere: true }]);
+		});
+
+		it("lists a lone series mark on a catalog path beside its delivered speeches", () => {
+			const vm = buildPathViewModel({
+				courseCode: "8711",
+				pathName: "Engaging Humor",
+				status: "current",
+				levels: [],
+				wins: [delivered],
+				catalogProjects: [...levelsThrough3, ...L4, ...L5],
+				pathLevels,
+				marks: [seriesMark(4, "Closing the Sale")],
+			});
+			expect(vm.levelsSource).toBe("catalog");
+			expect(vm.wins.map((w) => [w.name, w.markedHere])).toEqual([
+				["Manage Change", false],
+				["Closing the Sale", true],
+			]);
+		});
+
+		it("still switches branches on an ordinary mark", () => {
+			const vm = read([mark(4, "Manage Change")]);
+			expect(vm.upNextElectives?.chooseCount).toBe(1);
+		});
 	});
 
 	it("carries the path's status onto the view model", () => {

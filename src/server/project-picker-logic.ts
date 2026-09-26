@@ -20,6 +20,7 @@ import {
 	pathwaysPaths,
 	pathwaysProjects,
 	people,
+	projectCompletionMarks,
 } from "#/db/schema";
 import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
 import { cap } from "#/lib/cap";
@@ -27,6 +28,7 @@ import {
 	defaultOpenLevel,
 	levelLabel,
 	type PathwaysSeries,
+	SERIES_LABEL,
 } from "#/lib/pathways-catalog";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {
@@ -44,17 +46,12 @@ export interface PickerProject {
 	 * The Education Series this presentation belongs to (#921), or null for an
 	 * ordinary project. A series row is `isRequired: false` but is NOT an
 	 * elective — group it by this, never by `!isRequired` alone.
-	 *
-	 * Always null today: series rows are kept out of the picker until #922 adds
-	 * them back with their own grouping.
-	 *
-	 * Always SET by `listProjectOptions`. Optional in the type only because the
-	 * two hand-built `PATH` fixtures in `project-picker.test.tsx` (lines 38 and
-	 * 75) predate it; read absent as null.
 	 */
-	series?: PathwaysSeries | null;
+	series: PathwaysSeries | null;
 	/**
-	 * Base Camp says this one is done. Display only — a completed project stays
+	 * Done: Base Camp says so, OR it carries a completion mark here (#419). An
+	 * Education Series presentation only ever completes by a mark, since Base
+	 * Camp never reports one (#922). Display only — a completed project stays
 	 * SELECTABLE. Repeats are real: `path_level_progress.completed` may exceed
 	 * `total` precisely because members redo electives.
 	 *
@@ -118,7 +115,7 @@ export async function listProjectOptions(
 	const pathIds = enrolled.map((e) => e.pathId);
 	const enrollmentIds = enrolled.map((e) => e.enrollmentId);
 
-	const [projectRows, completeRows, levelRows] = await Promise.all([
+	const [projectRows, completeRows, markRows, levelRows] = await Promise.all([
 		db
 			.select({
 				id: pathwaysProjects.id,
@@ -129,14 +126,9 @@ export async function listProjectOptions(
 				series: pathwaysProjects.series,
 			})
 			.from(pathwaysProjects)
-			// Education Series rows (#921) stay out of the picker until #922
-			// offers them, grouped and labelled, beside the ordinary projects.
-			.where(
-				and(
-					inArray(pathwaysProjects.pathId, pathIds),
-					isNull(pathwaysProjects.series),
-				),
-			)
+			// Education Series rows (#921) included: the picker groups them under
+			// their own heading inside each level (#922).
+			.where(inArray(pathwaysProjects.pathId, pathIds))
 			.orderBy(
 				asc(pathwaysProjects.level),
 				asc(pathwaysProjects.sortOrder),
@@ -153,6 +145,14 @@ export async function listProjectOptions(
 						),
 					)
 			: Promise.resolve([] as { projectId: string }[]),
+		// Marks are completion too, under the same privacy seam: an anonymous
+		// caller never learns one exists.
+		opts.includeProgress
+			? db
+					.select({ projectId: projectCompletionMarks.projectId })
+					.from(projectCompletionMarks)
+					.where(inArray(projectCompletionMarks.enrollmentId, enrollmentIds))
+			: Promise.resolve([] as { projectId: string }[]),
 		opts.includeProgress
 			? db
 					.select({
@@ -167,7 +167,12 @@ export async function listProjectOptions(
 				),
 	]);
 
-	const completeIds = new Set(completeRows.map((r) => r.projectId));
+	// Keyed by project alone, exactly as the Base Camp half is: both queries
+	// are already scoped to this person's live enrollments.
+	const completeIds = new Set([
+		...completeRows.map((r) => r.projectId),
+		...markRows.map((r) => r.projectId),
+	]);
 
 	// Highest CONTIGUOUS approved level, so an out-of-order approval doesn't skip
 	// the levels still in progress beneath it.
@@ -348,16 +353,13 @@ export async function resolveProjectDisplay(
 		.select({
 			level: pathwaysProjects.level,
 			projectName: pathwaysProjects.name,
+			series: pathwaysProjects.series,
 			pathName: pathwaysPaths.name,
 			courseCode: pathwaysPaths.courseCode,
 		})
 		.from(pathwaysProjects)
 		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathwaysProjects.pathId))
-		// Same exclusion as `listProjectOptions`: the picker never offers a series
-		// row (#921, until #922), so an id for one over the wire is refused too.
-		.where(
-			and(eq(pathwaysProjects.id, projectId), isNull(pathwaysProjects.series)),
-		);
+		.where(eq(pathwaysProjects.id, projectId));
 
 	if (!row || !PATHWAYS_COURSE_CODES.has(row.courseCode)) {
 		throw new Error("That Pathways project no longer exists.");
@@ -380,9 +382,17 @@ export async function resolveProjectDisplay(
 	//
 	// `cap` truncates by code point, so a clamped name can never emit the lone
 	// surrogate that a `.slice()` would.
+	//
+	// An Education Series presentation is written with its series in front
+	// (#922): a bare "Mentoring" or "Building a Team" on the agenda reads as an
+	// ordinary speech project. The catalog `name` itself stays the bare title.
+	// Capped AFTER prefixing, so the label cannot push the whole past the cap.
+	const projectName = row.series
+		? `${SERIES_LABEL[row.series]}: ${row.projectName}`
+		: row.projectName;
 	return {
 		pathwayPath: cap(row.pathName, SPEAKER_LIMITS.pathwayPath),
-		projectName: cap(row.projectName, SPEAKER_LIMITS.projectName),
+		projectName: cap(projectName, SPEAKER_LIMITS.projectName),
 		// NOT capped: `levelLabel` is derived from an integer column, so it is at
 		// most "Path Completion" (15) or "Level -2147483648" (17) — never user
 		// text. Capping it would be a call that can never fire, and worse: the

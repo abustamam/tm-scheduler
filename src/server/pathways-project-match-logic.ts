@@ -11,8 +11,16 @@
  * within that path; anything else (no path, no project, or an ambiguous
  * match) is left null and counted unresolved. Kept in a `-logic.ts` so `#/db`
  * never leaks into the client bundle (server-modules guard).
+ *
+ * Education Series presentations (#921) are never a free-text match. Their bare
+ * titles are ordinary speech-title words ("Mentoring", "Impromptu Speaking",
+ * "Building a Team", "Goal Setting and Planning"), so a typed project name that
+ * happens to equal one is far likelier to be an ordinary speech than a series
+ * presentation, and linking it would list that speech among the member's
+ * Pathways wins as a series presentation they never gave. A series presentation is linked only by being PICKED,
+ * which sets `project_id` directly (#922).
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { pathwaysPaths, pathwaysProjects, speeches } from "#/db/schema";
 
@@ -21,8 +29,18 @@ export interface ResolveResult {
 	unresolved: number;
 }
 
-export async function resolveSpeechProjects(): Promise<ResolveResult> {
+export async function resolveSpeechProjects(
+	opts: {
+		/**
+		 * Only these speeches. Omitted (the backfill script) means every unlinked
+		 * speech. Exists so a test can run the matcher without touching other
+		 * suites' rows in the shared test database, which vitest runs in parallel.
+		 */
+		speechIds?: string[];
+	} = {},
+): Promise<ResolveResult> {
 	const result: ResolveResult = { resolved: 0, unresolved: 0 };
+	if (opts.speechIds?.length === 0) return result;
 
 	const candidates = await db
 		.select({
@@ -31,7 +49,12 @@ export async function resolveSpeechProjects(): Promise<ResolveResult> {
 			projectName: speeches.projectName,
 		})
 		.from(speeches)
-		.where(isNull(speeches.projectId));
+		.where(
+			and(
+				isNull(speeches.projectId),
+				opts.speechIds ? inArray(speeches.id, opts.speechIds) : undefined,
+			),
+		);
 
 	for (const speech of candidates) {
 		const projectName = speech.projectName?.trim();
@@ -59,6 +82,7 @@ export async function resolveSpeechProjects(): Promise<ResolveResult> {
 			.where(
 				and(
 					eq(pathwaysProjects.pathId, pathId),
+					isNull(pathwaysProjects.series),
 					sql`lower(${pathwaysProjects.name}) = lower(${projectName})`,
 				),
 			);

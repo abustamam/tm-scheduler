@@ -11,7 +11,11 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { levelLabel } from "#/lib/pathways-catalog";
+import {
+	levelLabel,
+	type PathwaysSeries,
+	SERIES_LABEL,
+} from "#/lib/pathways-catalog";
 import type { PickerPath, PickerProject } from "#/server/project-picker";
 
 /**
@@ -220,52 +224,120 @@ function PathSection({
 							/>
 						</button>
 						{isOpen ? (
-							<ul className="border-[var(--line)] border-t">
-								{projects.map((project) => (
-									<li key={project.id}>
-										<button
-											type="button"
-											className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted ${
-												project.id === selectedId ? "bg-muted" : ""
-											}`}
-											onClick={() => onPick(project.id)}
-										>
-											{/* Completed projects stay SELECTABLE — repeats are
-											    real, which is why path_level_progress.completed
-											    may exceed total. The tick informs, it doesn't
-											    disable. */}
-											<Check
-												className={`size-4 shrink-0 ${
-													project.complete ? "text-primary" : "invisible"
-												}`}
-												aria-hidden
-											/>
-											<span className="min-w-0 flex-1 truncate">
-												{project.name}
-											</span>
-											{project.isRequired ? (
-												<Badge
-													variant="secondary"
-													className="shrink-0 text-[10px]"
-												>
-													Required
-												</Badge>
-											) : null}
-											{project.complete ? (
-												<span className="sr-only">(completed)</span>
-											) : null}
-										</button>
-										<div className="px-3 pb-2 pl-9">
-											<EvaluationResourceLinks projectName={project.name} />
-										</div>
-									</li>
-								))}
-							</ul>
+							<LevelProjects
+								projects={projects}
+								selectedId={selectedId}
+								onPick={onPick}
+							/>
 						) : null}
 					</div>
 				);
 			})}
 		</div>
+	);
+}
+
+/**
+ * One open level: the path's own projects, then each Education Series (#922)
+ * under its own sub-heading. A series row is `isRequired: false` but is not an
+ * elective, so it is grouped by `series`, never by `!isRequired`. Series rows
+ * are as selectable as any project; marking one done stays in "Up next".
+ */
+function LevelProjects({
+	projects,
+	selectedId,
+	onPick,
+}: {
+	projects: PickerProject[];
+	selectedId: string | null;
+	onPick: (projectId: string) => void;
+}) {
+	const ordinary = projects.filter((p) => p.series === null);
+	const bySeries = new Map<PathwaysSeries, PickerProject[]>();
+	for (const p of projects) {
+		if (p.series === null) continue;
+		const list = bySeries.get(p.series);
+		if (list) list.push(p);
+		else bySeries.set(p.series, [p]);
+	}
+	return (
+		<div className="border-[var(--line)] border-t">
+			<ul>
+				{ordinary.map((project) => (
+					<ProjectRow
+						key={project.id}
+						project={project}
+						selected={project.id === selectedId}
+						onPick={onPick}
+					/>
+				))}
+			</ul>
+			{[...bySeries.entries()].map(([series, rows]) => (
+				<div key={series} className="border-[var(--line)] border-t">
+					<div className="px-3 pt-2 pb-1 font-medium text-muted-foreground text-xs">
+						{SERIES_LABEL[series]}
+					</div>
+					<ul>
+						{rows.map((project) => (
+							<ProjectRow
+								key={project.id}
+								project={project}
+								selected={project.id === selectedId}
+								onPick={onPick}
+							/>
+						))}
+					</ul>
+				</div>
+			))}
+		</div>
+	);
+}
+
+function ProjectRow({
+	project,
+	selected,
+	onPick,
+}: {
+	project: PickerProject;
+	selected: boolean;
+	onPick: (projectId: string) => void;
+}) {
+	// A series row's badge names its series; "Required" would be false of it.
+	const badge = project.series
+		? SERIES_LABEL[project.series]
+		: project.isRequired
+			? "Required"
+			: null;
+	return (
+		<li>
+			<button
+				type="button"
+				className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted ${
+					selected ? "bg-muted" : ""
+				}`}
+				onClick={() => onPick(project.id)}
+			>
+				{/* Completed projects stay SELECTABLE — repeats are real, which is
+				    why path_level_progress.completed may exceed total. The tick
+				    informs, it doesn't disable. */}
+				<Check
+					className={`size-4 shrink-0 ${
+						project.complete ? "text-primary" : "invisible"
+					}`}
+					aria-hidden
+				/>
+				<span className="min-w-0 flex-1 truncate">{project.name}</span>
+				{badge ? (
+					<Badge variant="secondary" className="shrink-0 text-[10px]">
+						{badge}
+					</Badge>
+				) : null}
+				{project.complete ? <span className="sr-only">(completed)</span> : null}
+			</button>
+			<div className="px-3 pb-2 pl-9">
+				<EvaluationResourceLinks projectName={project.name} />
+			</div>
+		</li>
 	);
 }
 
