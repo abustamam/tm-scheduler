@@ -39,6 +39,17 @@ function ClubDetail() {
 	const club = Route.useLoaderData();
 	const { clubId } = Route.useParams();
 	const router = useRouter();
+	// Set once the club is permanently deleted. From then on the page shows only
+	// the summary: every other panel acts on a club that no longer exists.
+	const [deleted, setDeleted] = useState<DeleteResult | null>(null);
+
+	if (deleted) {
+		return (
+			<PageContainer className="space-y-6">
+				<DeletedSummary result={deleted} />
+			</PageContainer>
+		);
+	}
 
 	return (
 		<PageContainer className="space-y-6">
@@ -93,6 +104,7 @@ function ClubDetail() {
 				clubName={club.name}
 				archivedAt={club.archivedAt ? new Date(club.archivedAt) : null}
 				onChanged={() => router.invalidate()}
+				onDeleted={setDeleted}
 			/>
 		</PageContainer>
 	);
@@ -231,11 +243,13 @@ function ArchivePanel({
 	clubName,
 	archivedAt,
 	onChanged,
+	onDeleted,
 }: {
 	clubId: string;
 	clubName: string;
 	archivedAt: Date | null;
 	onChanged: () => void;
+	onDeleted: (result: DeleteResult) => void;
 }) {
 	const [submitting, setSubmitting] = useState(false);
 	const isArchived = archivedAt != null;
@@ -332,7 +346,11 @@ function ArchivePanel({
 				</Button>
 			)}
 			{isArchived ? (
-				<DeletePermanentlyPanel clubId={clubId} clubName={clubName} />
+				<DeletePermanentlyPanel
+					clubId={clubId}
+					clubName={clubName}
+					onDeleted={onDeleted}
+				/>
 			) : null}
 		</section>
 	);
@@ -347,23 +365,22 @@ function plural(n: number, one: string, many: string) {
 /**
  * Permanently delete an ARCHIVED club (#914). Irreversible, so the button stays
  * disabled until the club's exact name is typed — the server checks the same
- * thing and is the one that decides. An error stays inline with the form; a
- * success replaces the form with the counts and a Done button. There is no
- * auto-redirect, and no `router.invalidate()`: this page's loader would now
- * answer "Club not found."
+ * thing and is the one that decides. No placeholder repeats the name: the point
+ * of typing it is to read it. An error stays inline with the form; a success
+ * hands the result up so the page can replace EVERY panel with the summary.
  */
 function DeletePermanentlyPanel({
 	clubId,
 	clubName,
+	onDeleted,
 }: {
 	clubId: string;
 	clubName: string;
+	onDeleted: (result: DeleteResult) => void;
 }) {
-	const router = useRouter();
 	const [confirmName, setConfirmName] = useState("");
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [result, setResult] = useState<DeleteResult | null>(null);
 	const matches = confirmName.trim() === clubName;
 
 	async function onDelete(e: React.FormEvent<HTMLFormElement>) {
@@ -372,45 +389,13 @@ function DeletePermanentlyPanel({
 		setSubmitting(true);
 		setError(null);
 		try {
-			setResult(await deleteConsoleClub({ data: { clubId, confirmName } }));
+			onDeleted(await deleteConsoleClub({ data: { clubId, confirmName } }));
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : "Couldn't delete the club.",
 			);
-		} finally {
 			setSubmitting(false);
 		}
-	}
-
-	if (result) {
-		return (
-			<div
-				aria-live="polite"
-				className="space-y-3 rounded-lg border border-[var(--line)] p-3"
-			>
-				<p className="text-sm font-semibold">
-					{result.clubName} was permanently deleted.
-				</p>
-				<ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-					<li>
-						{plural(result.peopleDeleted, "person", "people")} deleted,{" "}
-						{plural(result.peopleKept, "person", "people")} kept (in another
-						club).
-					</li>
-					<li>
-						{plural(result.usersDeleted, "account", "accounts")} deleted,{" "}
-						{plural(result.usersKept, "account", "accounts")} kept.
-					</li>
-				</ul>
-				<Button
-					type="button"
-					size="sm"
-					onClick={() => router.navigate({ to: "/superadmin" })}
-				>
-					Done
-				</Button>
-			</div>
-		);
 	}
 
 	return (
@@ -423,9 +408,10 @@ function DeletePermanentlyPanel({
 			</h3>
 			<p className="text-sm text-muted-foreground">
 				Deletes <span className="font-medium">{clubName}</span>, its meetings
-				and guests, and every member who isn't in another GavelUp club,
-				including their sign-in account. Members of another club keep their
-				account and Pathways history.{" "}
+				and guests, and every current or former member who isn't in another
+				GavelUp club, with their sign-in account. An account is kept if it
+				belongs to a superadmin or is still linked elsewhere. Members of another
+				club keep their account and Pathways history.{" "}
 				<span className="font-medium text-[var(--danger-strong,#b91c1c)]">
 					This can't be undone.
 				</span>
@@ -439,7 +425,6 @@ function DeletePermanentlyPanel({
 					value={confirmName}
 					onChange={(e) => setConfirmName(e.target.value)}
 					autoComplete="off"
-					placeholder={clubName}
 				/>
 			</div>
 			{error ? (
@@ -462,6 +447,40 @@ function DeletePermanentlyPanel({
 				)}
 			</Button>
 		</form>
+	);
+}
+
+/** What a permanent delete removed and kept. There is no auto-redirect, and no
+ *  `router.invalidate()`: this page's loader would now answer "Club not found." */
+function DeletedSummary({ result }: { result: DeleteResult }) {
+	const router = useRouter();
+	return (
+		<section
+			aria-live="polite"
+			className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] p-4"
+		>
+			<h1 className="font-display text-2xl font-semibold">
+				{result.clubName} was permanently deleted.
+			</h1>
+			<ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+				<li>
+					{plural(result.peopleDeleted, "person", "people")} deleted,{" "}
+					{plural(result.peopleKept, "person", "people")} kept (in another
+					club).
+				</li>
+				<li>
+					{plural(result.usersDeleted, "account", "accounts")} deleted,{" "}
+					{plural(result.usersKept, "account", "accounts")} kept.
+				</li>
+			</ul>
+			<Button
+				type="button"
+				size="sm"
+				onClick={() => router.navigate({ to: "/superadmin" })}
+			>
+				Done
+			</Button>
+		</section>
 	);
 }
 

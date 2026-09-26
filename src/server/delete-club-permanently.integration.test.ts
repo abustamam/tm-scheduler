@@ -29,7 +29,9 @@ import {
 	meetingVoteSessions,
 	meetingVotes,
 	members,
+	oauthClient,
 	pathEnrollments,
+	pathLevelProgress,
 	pathwaysPaths,
 	people,
 	peopleEmailBackup,
@@ -39,10 +41,16 @@ import {
 	speeches,
 	syncTokens,
 	user,
+	verification,
 } from "#/db/schema";
-import { hasTestDb, testDb } from "#/test/db";
+import { hasTestDb, openBlockingTx, testDb, waitForLockWait } from "#/test/db";
 
-const flags = vi.hoisted(() => ({ failUserDelete: false }));
+const flags = vi.hoisted(() => ({
+	failUserDelete: false,
+	/** Runs right after `DELETE FROM clubs` resolves, inside the delete's
+	 *  transaction — the window between the cascade and the Person lock. */
+	afterClubDelete: null as null | (() => Promise<void>),
+}));
 
 vi.mock("#/db", async () => {
 	const { testDb } = await import("#/test/db");
@@ -69,7 +77,31 @@ vi.mock("#/db", async () => {
 					if (flags.failUserDelete && table === schema.user) {
 						throw new Error("forced user delete failure");
 					}
-					return tx.delete(table);
+					const builder = tx.delete(table);
+					const hook = flags.afterClubDelete;
+					if (!hook || (table as unknown) !== schema.clubs) return builder;
+					// `.where(…)` is awaited directly; hand back a thenable that runs
+					// the real statement, then the hook, then resolves.
+					return bindAll(builder, (kk) =>
+						kk === "where"
+							? (...args: Parameters<typeof builder.where>) => {
+									const q = builder.where(...args);
+									return {
+										// biome-ignore lint/suspicious/noThenProperty: a thenable is the point
+										then: (
+											res: (v: unknown) => unknown,
+											rej: (e: unknown) => unknown,
+										) =>
+											q
+												.then(async (v) => {
+													await hook();
+													return v;
+												})
+												.then(res, rej),
+									};
+								}
+							: undefined,
+					);
 				};
 			if (k === "transaction")
 				return (fn: (sp: Tx) => Promise<unknown>) =>
@@ -88,16 +120,28 @@ vi.mock("#/db", async () => {
 
 const { requireSuperadmin } = await import("#/server/guards");
 const { deleteClubPermanently } = await import("./onboarding-logic");
+const { applyMemberRemove } = await import("./members-logic");
 
 const created = {
 	clubs: [] as string[],
 	people: [] as string[],
 	users: [] as string[],
 	paths: [] as string[],
+	verifications: [] as string[],
+	oauthClients: [] as string[],
 };
 
 async function teardown() {
 	flags.failUserDelete = false;
+	flags.afterClubDelete = null;
+	if (created.verifications.length)
+		await testDb
+			.delete(verification)
+			.where(inArray(verification.id, created.verifications));
+	if (created.oauthClients.length)
+		await testDb
+			.delete(oauthClient)
+			.where(inArray(oauthClient.id, created.oauthClients));
 	if (created.clubs.length)
 		await testDb.delete(clubs).where(inArray(clubs.id, created.clubs));
 	if (created.people.length) {
@@ -417,13 +461,19 @@ describe.skipIf(!hasTestDb)("deleteClubPermanently (#914)", () => {
 				deleteClubPermanently(randomUUID(), "Anything"),
 			).rejects.toThrow("Club not found.");
 		});
+	});
 
-		it("for a caller who is not a superadmin (the server fn's gate)", async () => {
-			const normal = await makeUser();
-			await expect(requireSuperadmin(normal)).rejects.toThrow(/permission/i);
-			const admin = await makeUser({ superadmin: true });
-			await expect(requireSuperadmin(admin)).resolves.toBeUndefined();
-		});
+	// `deleteClubPermanently` trusts its caller; the refusal of a non-superadmin
+	// lives in the server fn, which vitest cannot invoke. What pins it there is
+	// the static guard in `write-proof.guard.test.ts` ("deleteConsoleClub is
+	// superadmin-only"): `requireUser()` then `requireSuperadmin(currentUser.id)`,
+	// in that order, before the delete. This case only proves the gate itself
+	// refuses a non-superadmin — it does not exercise the delete path.
+	it("requireSuperadmin, the gate deleteConsoleClub runs first, refuses a non-superadmin", async () => {
+		const normal = await makeUser();
+		await expect(requireSuperadmin(normal)).rejects.toThrow(/permission/i);
+		const admin = await makeUser({ superadmin: true });
+		await expect(requireSuperadmin(admin)).resolves.toBeUndefined();
 	});
 
 	it("keeps an account another club's sync token or logo names, or another Person links to, and counts it", async () => {
@@ -520,11 +570,18 @@ describe.skipIf(!hasTestDb)("deleteClubPermanently (#914)", () => {
 		).toHaveLength(1);
 	});
 
-	it("keeps a Person whose other membership committed while the delete was waiting", async () => {
-		// A membership another club adds takes a key-share lock on the Person.
-		// Whichever commits first, the Person must end up either kept (with the
-		// new membership) or gone with the insert refused — never deleted out
-		// from under a membership that committed.
+	it("keeps a Person whose other membership is being added while the delete runs", async () => {
+		// A real race, not a sequence. Right after the cascade, a second club adds
+		// this Person and holds its transaction OPEN. The insert takes a key-share
+		// lock on the Person, so the delete must block on its `FOR UPDATE` and,
+		// once the membership commits, see it and keep the Person.
+		//
+		// Without the lock (or with the membership check moved ahead of it) the
+		// delete reads "no membership", then its `DELETE FROM people` waits for
+		// the insert, and — members.person_id being ON DELETE CASCADE — deletes
+		// the Person AND the membership that just committed. `waitForLockWait`
+		// proves the delete really was parked behind this writer, so the test
+		// cannot pass on an uncontended path.
 		const suffix = randomUUID().slice(0, 8);
 		const nameA = `Club A ${suffix}`;
 		const a = await makeClub(nameA, true);
@@ -533,39 +590,205 @@ describe.skipIf(!hasTestDb)("deleteClubPermanently (#914)", () => {
 		const p = await makePerson(u);
 		await join(a, p);
 
-		// Hold club A's row so the delete blocks at its first statement, then add
-		// the membership and let it commit before the delete proceeds.
-		let release!: () => void;
-		const gate = new Promise<void>((r) => {
-			release = r;
+		let writer!: { commit: () => Promise<void>; pid: number };
+		let writerOpen!: () => void;
+		const opened = new Promise<void>((r) => {
+			writerOpen = r;
 		});
-		let locked!: () => void;
-		const isLocked = new Promise<void>((r) => {
-			locked = r;
-		});
-		const holder = testDb.transaction(async (tx) => {
-			await tx.execute(sql`select id from clubs where id = ${a} for update`);
-			locked();
-			await gate;
-			await tx.insert(members).values({
-				clubId: b,
-				personId: p,
-				name: "M",
-				clubRole: "member",
-				status: "active",
+		flags.afterClubDelete = async () => {
+			flags.afterClubDelete = null;
+			writer = await openBlockingTx(async (tx) => {
+				await tx.insert(members).values({
+					clubId: b,
+					personId: p,
+					name: "M",
+					clubRole: "member",
+					status: "active",
+				});
 			});
-		});
-		await isLocked;
+			writerOpen();
+		};
+
 		const deleting = deleteClubPermanently(a, nameA);
-		await new Promise((r) => setTimeout(r, 100));
-		release();
-		await holder;
+		deleting.catch(() => {});
+		await opened;
+		await waitForLockWait("people", writer.pid);
+		await writer.commit();
 		const out = await deleting;
 
 		expect(out.peopleDeleted).toBe(0);
 		expect(out.peopleKept).toBe(1);
 		expect(await exists("people", p)).toBe(true);
 		expect(await exists("user", u)).toBe(true);
+		expect(
+			await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.personId, p)),
+		).toHaveLength(1);
 		expect(await exists("clubs", a)).toBe(false);
+	});
+
+	describe("former members (removed before the club was deleted)", () => {
+		async function removedMember() {
+			const suffix = randomUUID().slice(0, 8);
+			const nameA = `Club A ${suffix}`;
+			const a = await makeClub(nameA, false);
+			const p = await makePerson(null, `gone-${suffix}@test.example`);
+			const m = await join(a, p);
+			await testDb.insert(speeches).values({ personId: p, title: "Old talk" });
+			await testDb
+				.insert(peopleEmailBackup)
+				.values({ personId: p, email: `gone-${suffix}@test.example` });
+			// The real removal, so the log row has the shape production writes.
+			await applyMemberRemove({ clubId: a, memberId: m, actorMemberId: null });
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, a));
+			return { a, nameA, p, suffix };
+		}
+
+		it("deletes a removed member who holds no membership anywhere", async () => {
+			const { a, nameA, p } = await removedMember();
+			const res = await deleteClubPermanently(a, nameA);
+			expect(res.peopleDeleted).toBe(1);
+			expect(await exists("people", p)).toBe(false);
+			expect(
+				await testDb.select().from(speeches).where(eq(speeches.personId, p)),
+			).toHaveLength(0);
+			expect(
+				await testDb
+					.select()
+					.from(peopleEmailBackup)
+					.where(eq(peopleEmailBackup.personId, p)),
+			).toHaveLength(0);
+		});
+
+		it("keeps a removed member who has since joined another club", async () => {
+			const { a, nameA, p, suffix } = await removedMember();
+			const b = await makeClub(`Club B ${suffix}`, false);
+			await join(b, p);
+			const res = await deleteClubPermanently(a, nameA);
+			expect(res.peopleDeleted).toBe(0);
+			expect(res.peopleKept).toBe(1);
+			expect(await exists("people", p)).toBe(true);
+		});
+
+		it("skips a malformed personId in the log instead of aborting", async () => {
+			const { a, nameA, p } = await removedMember();
+			await testDb.execute(
+				sql`insert into activity_log (club_id, action, target_type, detail) values
+				  (${a}, 'member_remove', 'member', ${JSON.stringify({ personId: "not-a-uuid" })}::jsonb),
+				  (${a}, 'member_remove', 'member', ${JSON.stringify({ personId: 42 })}::jsonb),
+				  (${a}, 'member_remove', 'member', null)`,
+			);
+			const res = await deleteClubPermanently(a, nameA);
+			expect(res.peopleDeleted).toBe(1);
+			expect(await exists("people", p)).toBe(false);
+		});
+
+		it("deletes a Person whose only link left is Pathways progress credited here", async () => {
+			const suffix = randomUUID().slice(0, 8);
+			const nameA = `Club A ${suffix}`;
+			const a = await makeClub(nameA, true);
+			const p = await makePerson(null);
+			const [path] = await testDb
+				.insert(pathwaysPaths)
+				.values({ courseCode: `914c-${suffix}`, name: "Path" })
+				.returning({ id: pathwaysPaths.id });
+			if (!path) throw new Error("path");
+			created.paths.push(path.id);
+			const [enr] = await testDb
+				.insert(pathEnrollments)
+				.values({ personId: p, pathId: path.id })
+				.returning({ id: pathEnrollments.id });
+			if (!enr) throw new Error("enrollment");
+			await testDb.insert(pathLevelProgress).values({
+				enrollmentId: enr.id,
+				level: 1,
+				completed: 1,
+				total: 3,
+				approved: true,
+				creditedClubId: a,
+			});
+			const res = await deleteClubPermanently(a, nameA);
+			expect(res.peopleDeleted).toBe(1);
+			expect(await exists("people", p)).toBe(false);
+		});
+	});
+
+	it("deletes a deleted account's pending magic links, and leaves a kept account's alone", async () => {
+		const suffix = randomUUID().slice(0, 8);
+		const nameA = `Club A ${suffix}`;
+		const a = await makeClub(nameA, true);
+		const uGone = await makeUser();
+		const uKept = await makeUser({ superadmin: true });
+		await join(a, await makePerson(uGone));
+		await join(a, await makePerson(uKept));
+		const [gone] = await testDb
+			.select({ email: user.email })
+			.from(user)
+			.where(eq(user.id, uGone));
+		const [kept] = await testDb
+			.select({ email: user.email })
+			.from(user)
+			.where(eq(user.id, uKept));
+		if (!gone || !kept) throw new Error("users");
+
+		// The shape better-auth's magic-link plugin writes: a token identifier and
+		// `JSON.stringify({ email, name })` as the value — the case the person
+		// typed, not necessarily the account's.
+		const link = (email: string) => ({
+			id: randomUUID(),
+			identifier: randomUUID(),
+			value: JSON.stringify({ email, name: "Typed name" }),
+			expiresAt: new Date(Date.now() + 300_000),
+		});
+		const goneLink = link(gone.email.toUpperCase());
+		const keptLink = link(kept.email);
+		// A value that merely CONTAINS the address, and one Postgres could not
+		// read as JSON at all, must not break or widen the match.
+		const lookalike = {
+			...link(`x${gone.email}`),
+		};
+		const nul = {
+			...link(gone.email),
+			value: `{"email":"${gone.email}","name":"\\u0000"}`,
+		};
+		const rows = [goneLink, keptLink, lookalike, nul];
+		await testDb.insert(verification).values(rows);
+		created.verifications.push(...rows.map((r) => r.id));
+
+		const res = await deleteClubPermanently(a, nameA);
+		expect(res.usersDeleted).toBe(1);
+		const left = await testDb
+			.select({ id: verification.id })
+			.from(verification)
+			.where(inArray(verification.id, created.verifications));
+		expect(left.map((r) => r.id).sort()).toEqual(
+			[keptLink.id, lookalike.id].sort(),
+		);
+	});
+
+	it("keeps an account that owns an OAuth client, and counts it", async () => {
+		const nameA = `Club A ${randomUUID().slice(0, 8)}`;
+		const a = await makeClub(nameA, true);
+		const u = await makeUser();
+		await join(a, await makePerson(u));
+		const clientRowId = randomUUID();
+		await testDb.insert(oauthClient).values({
+			id: clientRowId,
+			clientId: `client-${clientRowId}`,
+			redirectUris: ["https://example.test/cb"],
+			userId: u,
+		});
+		created.oauthClients.push(clientRowId);
+
+		const res = await deleteClubPermanently(a, nameA);
+		expect(res.peopleDeleted).toBe(1);
+		expect(res.usersDeleted).toBe(0);
+		expect(res.usersKept).toBe(1);
+		expect(await exists("user", u)).toBe(true);
 	});
 });

@@ -85,18 +85,28 @@ export const DATA_FACTS = [
  *    what is included rather than saying "all", because agenda templates, the
  *    logo and vote tallies are not exported.
  *
- * Deletion on request is deliberately absent. The deletion itself now exists
- * (`deleteClubPermanently` in `src/server/onboarding-logic.ts`, #914), but the
- * sentence also says how long a deleted club lingers in backups, and that number
- * depends on which Railway Postgres backup schedules this project has enabled.
- * That is not recorded anywhere yet, so the sentence waits for the maintainer to
- * confirm it rather than publishing a guessed number.
+ * 5. Deletion on request (#914): backed by `deleteClubPermanently`
+ *    (`src/server/onboarding-logic.ts`), run by a superadmin from the club's
+ *    console page once the club is archived. It deletes the club and its
+ *    cascade, and every current or former member held by no other club, with
+ *    their sign-in account. A member of another club keeps their own Person,
+ *    account and Pathways history; only this club's membership goes. What makes
+ *    it false: removing that function or its console form, or narrowing what it
+ *    deletes below what the sentence names.
+ *
+ *    The backup clause: Railway Postgres scheduled backups keep daily copies
+ *    for 6 days, weekly for 1 month and monthly for 3 months
+ *    (docs.railway.com/guides/postgres-backups-restores), so 90 days covers
+ *    ANY combination of those schedules. It assumes no MANUAL Railway backups
+ *    and no point-in-time recovery retained beyond 90 days; enabling either
+ *    makes the clause false until it is re-checked.
  */
 const DATA_PROMISES = [
 	"GavelUp doesn't share your club's data with advertisers or data brokers.",
 	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic, if a member connects Claude.",
 	"Your club's data is used only to run GavelUp for your club.",
 	"Club admins can download the club's roster, meetings, roles, attendance, speeches, guests, awards, dues and action items as spreadsheets at any time.",
+	"If your club leaves GavelUp, we delete its data on request: the club, its meetings and guests, and every member who isn't in another GavelUp club. It is gone from our backups within 90 days.",
 ];
 
 function AboutPage() {

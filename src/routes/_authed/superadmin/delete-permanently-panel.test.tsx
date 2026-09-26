@@ -7,8 +7,10 @@
 //   - the button stays disabled until the club's exact name is typed (surrounding
 //     spaces are forgiven, a different case is not, the same as the server);
 //   - a refusal is shown inline and the form stays;
-//   - a success replaces the form with the counts and a Done button, with no
-//     auto-redirect.
+//   - a success replaces the WHOLE page with the counts and a Done button, with
+//     no auto-redirect: Unarchive and the admin-email form act on a club that no
+//     longer exists, so they must not stay usable;
+//   - no placeholder repeats the name to be typed.
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
@@ -48,7 +50,11 @@ async function renderClub(archived: boolean) {
 		memberCount: 2,
 		createdAt: new Date("2026-01-01"),
 		archivedAt: archived ? new Date("2026-09-01") : null,
-		firstAdmin: null,
+		firstAdmin: {
+			name: "Jamie Rivera",
+			email: "jamie@example.com",
+			linked: false,
+		},
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 	vi.spyOn(Route, "useParams").mockReturnValue({
@@ -76,8 +82,9 @@ describe("Delete permanently (#914)", () => {
 		).toBeNull();
 	});
 
-	it("stays disabled until the exact name is typed", async () => {
+	it("stays disabled until the exact name is typed, with no placeholder giving it away", async () => {
 		await renderClub(true);
+		expect((input() as HTMLInputElement).placeholder).toBe("");
 		expect(button().disabled).toBe(true);
 		fireEvent.change(input(), { target: { value: NAME.toUpperCase() } });
 		expect(button().disabled).toBe(true);
@@ -112,6 +119,11 @@ describe("Delete permanently (#914)", () => {
 			usersKept: 1,
 		});
 		await renderClub(true);
+		// The live panels exist before the delete...
+		expect(
+			screen.getByRole("button", { name: /unarchive club/i }),
+		).toBeTruthy();
+		expect(screen.getByLabelText("Admin email")).toBeTruthy();
 		fireEvent.change(input(), { target: { value: NAME } });
 		fireEvent.click(button());
 		expect(
@@ -124,8 +136,14 @@ describe("Delete permanently (#914)", () => {
 		await waitFor(() =>
 			expect(screen.getByText(`${NAME} was permanently deleted.`)).toBeTruthy(),
 		);
+		// ...and none of them survive it.
 		expect(
 			screen.queryByLabelText("Type the club's name to confirm"),
 		).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /unarchive club/i }),
+		).toBeNull();
+		expect(screen.queryByLabelText("Admin email")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Save email" })).toBeNull();
 	});
 });

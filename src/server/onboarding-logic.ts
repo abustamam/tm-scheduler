@@ -12,12 +12,17 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
+	activityLog,
 	clubs,
 	members,
+	oauthClient,
+	pathEnrollments,
+	pathLevelProgress,
 	people,
 	peopleEmailBackup,
 	roleDefinitions,
 	user,
+	verification,
 } from "#/db/schema";
 import {
 	CLUB_TIMEZONES,
@@ -530,15 +535,16 @@ export const deleteClubSchema = z.object({
 
 export interface DeleteClubResult {
 	clubName: string;
-	/** Persons of this club who held no other membership, now deleted. */
+	/** Persons of this club (current or former members) who held no other
+	 *  membership, now deleted. */
 	peopleDeleted: number;
-	/** Persons of this club who hold another membership, kept. */
+	/** Persons of this club who hold a membership elsewhere, kept. */
 	peopleKept: number;
 	/** Sign-in accounts of deleted Persons, now deleted. */
 	usersDeleted: number;
 	/** Sign-in accounts of deleted Persons that were kept: another Person still
-	 *  links to it, another club's logo or sync token names it, or it is a
-	 *  superadmin. */
+	 *  links to it, another club's logo or sync token names it, it owns an OAuth
+	 *  client, or it is a superadmin. */
 	usersKept: number;
 }
 
@@ -555,20 +561,124 @@ const FOREIGN_KEY_VIOLATION = "23503";
  * violation rolls back just that savepoint: Postgres's own check is the source of
  * truth, so a NO ACTION reference added later is honoured without a list here to
  * keep in step. Any OTHER error is rethrown and rolls back the whole delete.
+ *
+ * Inside the same savepoint, once the account is gone, its pending sign-in
+ * links go too (see `deleteVerificationsFor`) — only for an account actually
+ * deleted, so a kept account's links are untouched.
  */
 async function deleteUserUnlessReferenced(
 	tx: Tx,
-	userId: string,
+	u: { id: string; email: string },
 ): Promise<boolean> {
 	try {
 		await tx.transaction(async (sp) => {
-			await sp.delete(user).where(eq(user.id, userId));
+			await sp.delete(user).where(eq(user.id, u.id));
+			await deleteVerificationsFor(sp, u.email);
 		});
 		return true;
 	} catch (err) {
 		if (isForeignKeyViolation(err)) return false;
 		throw err;
 	}
+}
+
+/**
+ * Better Auth's `verification` rows carry an email with no FK to `user`. The
+ * magic-link plugin (better-auth 1.x, `plugins/magic-link`) stores
+ * `identifier` = the (possibly hashed) token and `value` =
+ * `JSON.stringify({ email, name })` — so the address and the name the person
+ * typed sit there until the row expires.
+ *
+ * Matched on TEXT, never with a `::json` cast: `value` holds whatever the
+ * requester sent, and a `\u0000` escape makes Postgres refuse to read any field
+ * of it, which would abort this whole transaction. So: narrow by substring,
+ * `JSON.parse` in the app (skipping anything that does not parse), and delete
+ * by id. `identifier` is compared too, for any flow that keys a row by address.
+ */
+async function deleteVerificationsFor(tx: Tx, email: string): Promise<void> {
+	const needle = email.toLowerCase();
+	const rows = await tx
+		.select({
+			id: verification.id,
+			identifier: verification.identifier,
+			value: verification.value,
+		})
+		.from(verification)
+		.where(
+			sql`lower(${verification.identifier}) = ${needle} or strpos(lower(${verification.value}), ${needle}) > 0`,
+		);
+	const ids = rows
+		.filter(
+			(r) =>
+				r.identifier.toLowerCase() === needle ||
+				verificationEmail(r.value) === needle,
+		)
+		.map((r) => r.id);
+	if (ids.length > 0) {
+		await tx.delete(verification).where(inArray(verification.id, ids));
+	}
+}
+
+function verificationEmail(value: string): string | null {
+	try {
+		const parsed: unknown = JSON.parse(value);
+		const email = (parsed as { email?: unknown } | null)?.email;
+		return typeof email === "string" ? email.toLowerCase() : null;
+	} catch {
+		return null;
+	}
+}
+
+const UUID_RE =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Every Person this club ever held, as far as the database can still tell,
+ * read BEFORE the cascade erases the evidence:
+ *
+ * - current memberships;
+ * - former members: `member_remove` entries in this club's activity log name
+ *   the removed Person in `detail.personId` (`applyMemberRemove`, the guest
+ *   pipeline). The log is the ONLY link left once the membership is gone, and
+ *   it cascades with the club. Read as `->>` text (the column is app-written
+ *   jsonb, so no cast of untrusted text), and filtered to well-formed uuids in
+ *   the app so a malformed row is skipped rather than aborting the delete;
+ * - Persons with Pathways progress credited to this club.
+ *
+ * Whether each one is then deleted is decided after the cascade, under lock,
+ * by whether they hold a membership anywhere.
+ */
+async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
+	const current = await tx
+		.selectDistinct({ personId: members.personId })
+		.from(members)
+		.where(eq(members.clubId, clubId));
+	const removed = await tx
+		.selectDistinct({
+			personId: sql<string | null>`${activityLog.detail} ->> 'personId'`,
+		})
+		.from(activityLog)
+		.where(
+			and(
+				eq(activityLog.clubId, clubId),
+				sql`${activityLog.action} = 'member_remove'`,
+			),
+		);
+	const credited = await tx
+		.selectDistinct({ personId: pathEnrollments.personId })
+		.from(pathLevelProgress)
+		.innerJoin(
+			pathEnrollments,
+			eq(pathEnrollments.id, pathLevelProgress.enrollmentId),
+		)
+		.where(eq(pathLevelProgress.creditedClubId, clubId));
+	const ids = new Set<string>();
+	for (const r of [...current, ...removed, ...credited]) {
+		if (typeof r.personId === "string" && UUID_RE.test(r.personId)) {
+			ids.add(r.personId.toLowerCase());
+		}
+	}
+	return [...ids];
 }
 
 /** Drizzle wraps the driver's error in `cause`, so look a few levels down. */
@@ -589,7 +699,9 @@ function isForeignKeyViolation(err: unknown): boolean {
  *
  * 1. Lock the club row, then refuse unless it is archived and `confirmName`
  *    (trimmed) equals `clubs.name` EXACTLY — a different case is a mismatch.
- * 2. Collect this club's Persons, then `DELETE FROM clubs`. Every club-scoped
+ * 2. Collect this club's Persons — current AND former members, and anyone
+ *    with Pathways progress credited here (`personsOfClub`) — then
+ *    `DELETE FROM clubs`. Every club-scoped
  *    table cascades from it (meetings and everything under them, members and
  *    everything under THEM, guests, templates, the logo, sync tokens,
  *    impersonation sessions, the activity log). `path_level_progress
@@ -605,9 +717,10 @@ function isForeignKeyViolation(err: unknown): boolean {
  *    does not outlive them there.
  * 4. Each deleted Person's sign-in account is locked `FOR UPDATE` and deleted —
  *    sessions, OAuth grants and API tokens cascade from it — UNLESS another
- *    Person still links to it, it is a superadmin, or another club's logo
- *    attestation or sync token names it (see `deleteUserUnlessReferenced`).
- *    Those accounts are kept and counted.
+ *    Person still links to it, it is a superadmin, it owns an OAuth client, or
+ *    another club's logo attestation or sync token names it (see
+ *    `deleteUserUnlessReferenced`). Those accounts are kept and counted. A
+ *    deleted account's pending magic links go with it.
  *
  * A Person who is also in another club keeps their Person, account, Pathways and
  * speech history; only this club's membership goes.
@@ -630,11 +743,7 @@ export async function deleteClubPermanently(
 			throw new Error("The name doesn't match.");
 		}
 
-		const memberRows = await tx
-			.selectDistinct({ personId: members.personId })
-			.from(members)
-			.where(eq(members.clubId, clubId));
-		const personIds = memberRows.map((r) => r.personId);
+		const personIds = await personsOfClub(tx, clubId);
 
 		await tx.delete(clubs).where(eq(clubs.id, clubId));
 
@@ -672,7 +781,11 @@ export async function deleteClubPermanently(
 		const userIds = [...candidateUserIds].sort();
 		if (userIds.length > 0) {
 			const lockedUsers = await tx
-				.select({ id: user.id, isSuperadmin: user.isSuperadmin })
+				.select({
+					id: user.id,
+					email: user.email,
+					isSuperadmin: user.isSuperadmin,
+				})
 				.from(user)
 				.where(inArray(user.id, userIds))
 				.orderBy(asc(user.id))
@@ -684,13 +797,24 @@ export async function deleteClubPermanently(
 				.selectDistinct({ id: people.userId })
 				.from(people)
 				.where(inArray(people.userId, userIds));
-			const stillLinked = new Set(linked.map((r) => r.id));
+			// An account that registered an OAuth client keeps it: the client row
+			// CASCADES from `user`, so deleting the account would silently take a
+			// connector down with it. (`is_superadmin` is only reconciled at sign-in,
+			// so it is not a reliable stand-in for "operator".)
+			const owners = await tx
+				.selectDistinct({ id: oauthClient.userId })
+				.from(oauthClient)
+				.where(inArray(oauthClient.userId, userIds));
+			const keepUsers = new Set<string | null>([
+				...linked.map((r) => r.id),
+				...owners.map((r) => r.id),
+			]);
 			for (const u of lockedUsers) {
-				if (u.isSuperadmin || stillLinked.has(u.id)) {
+				if (u.isSuperadmin || keepUsers.has(u.id)) {
 					usersKept++;
 					continue;
 				}
-				if (await deleteUserUnlessReferenced(tx, u.id)) usersDeleted++;
+				if (await deleteUserUnlessReferenced(tx, u)) usersDeleted++;
 				else usersKept++;
 			}
 		}

@@ -892,6 +892,12 @@ describe("the session gates themselves (#761)", () => {
  * a whole club and every Person only it held. So it must ALSO be superadmin-gated,
  * on the session's own id, BEFORE the delete runs — the order matters, because a
  * gate that runs after the destructive call is decoration.
+ *
+ * This is THE pin on who may run the delete. `deleteClubPermanently` trusts its
+ * caller, and a `createServerFn` cannot be invoked from vitest, so no
+ * integration test exercises the refusal: `delete-club-permanently
+ * .integration.test.ts` only proves `requireSuperadmin` itself refuses a
+ * non-superadmin. Losing this case loses the only check that the fn calls it.
  */
 describe("deleteConsoleClub is superadmin-only (#914)", () => {
 	const body = serverFnBody(

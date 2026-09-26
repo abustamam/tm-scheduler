@@ -3,8 +3,8 @@
 // `/about` rendered (#869, #871): the sections it promises, that the founder
 // section says exactly the approved copy and nothing more, that the data section
 // carries the facts then the maintainer's commitments and none of the banned
-// words, that no sentence claims deletion (#914), and that export is claimed
-// once, by the sentence #915 approved alongside the export itself. The
+// words, and that export and deletion are each claimed once, by the sentence
+// approved alongside the feature itself (#915, #914). The
 // disclaimer is the marketing guard's (`marketing-disclaimer.guard.test.ts`),
 // which enrols this route by content.
 import { cleanup, screen, within } from "@testing-library/react";
@@ -34,8 +34,11 @@ const APPROVED_BIO = [
 
 /**
  * The data commitments approved on #871 (2026-09-25), verbatim, then the export
- * commitment approved on #915 (same day), added by the change that made it true.
+ * commitment approved on #915 (same day) and the deletion commitment of #914,
+ * each added by the change that made it true.
  */
+const DELETE_PROMISE =
+	"If your club leaves GavelUp, we delete its data on request: the club, its meetings and guests, and every member who isn't in another GavelUp club. It is gone from our backups within 90 days.";
 const EXPORT_PROMISE =
 	"Club admins can download the club's roster, meetings, roles, attendance, speeches, guests, awards, dues and action items as spreadsheets at any time.";
 const APPROVED_PROMISES = [
@@ -43,6 +46,7 @@ const APPROVED_PROMISES = [
 	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic, if a member connects Claude.",
 	"Your club's data is used only to run GavelUp for your club.",
 	EXPORT_PROMISE,
+	DELETE_PROMISE,
 ];
 
 async function mount() {
@@ -119,9 +123,9 @@ describe("/about", () => {
 		expect(row?.className).toContain("sm:flex-row");
 	});
 
-	// #871 AC2 / #915 AC5: the five facts, then the four commitments verbatim,
-	// in order.
-	it("lists the data facts, then the maintainer's four commitments", async () => {
+	// #871 AC2 / #915 AC5 / #914 AC5: the five facts, then the five commitments
+	// verbatim, in order.
+	it("lists the data facts, then the maintainer's five commitments", async () => {
 		await mount();
 		const items = [
 			...sectionFor("What happens to your club's data").querySelectorAll("li"),
@@ -141,14 +145,18 @@ describe("/about", () => {
 		}
 	});
 
-	// #871 AC4: deletion on request is false today, so the page does not claim
-	// it until the change that makes it true (#914).
-	it("says nothing about deleting club data", async () => {
+	// #914 AC5: deletion on request is true now, and the page says so in exactly
+	// the one approved sentence, with the confirmed backup window. Any other
+	// mention of deleting or erasing is an unapproved claim, so the sentence is
+	// removed before scanning what is left.
+	it("claims deletion only in the approved sentence", async () => {
 		await mount();
 		// The whole body, shell included: a nav or footer line counts too.
 		const text = document.body.textContent ?? "";
-		for (const claim of [/\bdelet/i, /\berase/i]) {
-			expect(text).not.toMatch(claim);
+		expect(text.split(DELETE_PROMISE)).toHaveLength(2);
+		const rest = text.replace(DELETE_PROMISE, "");
+		for (const claim of [/\bdelet/i, /\berase/i, /\bbackup/i]) {
+			expect(rest).not.toMatch(claim);
 		}
 	});
 
