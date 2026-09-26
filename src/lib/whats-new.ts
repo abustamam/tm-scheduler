@@ -8,8 +8,13 @@
  * time the same way `content/resources/*.md` is (`src/data/resource-content.ts`),
  * so there is no runtime filesystem access and this module is client-safe: it
  * imports nothing from `#/db` and holds no server state. Only the per-user SEEN
- * state lives in the database (`user.whats_new_seen_at`, `user_feature_seen`);
+ * state lives in the database (`user.whats_new_seen_ids`, `user_feature_seen`);
  * a visitor without an account keeps theirs in `localStorage`, per club.
+ *
+ * NOTHING HERE IS SECRET. The eager glob below puts EVERY entry, admin-only ones
+ * included, into the client bundle. Audience and `public` decide what is
+ * RENDERED, not what is shipped, so nothing confidential belongs in
+ * `content/whats-new/`.
  *
  * Nothing here sends anything to anyone. In-app and `/whats-new` only — product
  * email from GavelUp would be an exception to the human-sends rule (#899) and is
@@ -31,9 +36,12 @@ export type WhatsNewAudience = (typeof WHATS_NEW_AUDIENCES)[number];
  * same PR that marks its entry point with `useIsNew(key)` / `<NewBadge>`.
  *
  * A nav destination whose key is listed here is badged in the sidebar
- * automatically (`app-shell.tsx`), so `account` needs no other wiring.
+ * automatically (`app-shell.tsx`), so `account` needs no other wiring. The
+ * guard test fails for a key that is neither a nav destination nor passed to
+ * `useIsNew` anywhere in `src/` — a key nothing renders is a badge that can
+ * never show.
  */
-export const FEATURE_KEYS = ["promote", "account"] as const;
+export const FEATURE_KEYS = ["account"] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
 export function isFeatureKey(value: unknown): value is FeatureKey {
@@ -42,17 +50,6 @@ export function isFeatureKey(value: unknown): value is FeatureKey {
 		(FEATURE_KEYS as readonly string[]).includes(value)
 	);
 }
-
-/**
- * Conditions an entry can be limited to with `when:`. Each is a flag on
- * `WhenContext`, and an entry whose condition the context does not affirm is
- * hidden: an unknown or unresolved condition fails CLOSED, so the charter
- * dashboard's entry cannot reach a club that has long since chartered.
- */
-export const WHEN_CONDITIONS = ["chartering"] as const;
-export type WhenCondition = (typeof WHEN_CONDITIONS)[number];
-
-export type WhenContext = Partial<Record<WhenCondition, boolean>>;
 
 /** How long a feature's badge (and the public-page banner) counts as new. */
 export const NEW_WINDOW_DAYS = 30;
@@ -71,7 +68,6 @@ export interface WhatsNewEntry {
 	featureKey?: FeatureKey;
 	/** An in-app path (`/…`) the entry's "Try it" goes to. */
 	link?: string;
-	when?: WhenCondition;
 	/** 1–2 user-facing sentences, markdown. */
 	body: string;
 }
@@ -93,7 +89,6 @@ const KNOWN_KEYS = new Set([
 	"public",
 	"featureKey",
 	"link",
-	"when",
 ]);
 
 function unquote(raw: string): string {
@@ -198,16 +193,6 @@ export function parseWhatsNewEntry(id: string, source: string): ParseResult {
 		errors.push(`${id}: "link" must be an in-app path starting with /`);
 	}
 
-	const when = fields.when;
-	if (
-		when !== undefined &&
-		!(WHEN_CONDITIONS as readonly string[]).includes(when)
-	) {
-		errors.push(
-			`${id}: unknown "when" condition "${when}" (known: ${WHEN_CONDITIONS.join(", ")})`,
-		);
-	}
-
 	const body = rawBody.trim();
 	if (!body) errors.push(`${id}: the body is empty`);
 
@@ -222,7 +207,6 @@ export function parseWhatsNewEntry(id: string, source: string): ParseResult {
 			public: pub === "true",
 			...(featureKey ? { featureKey: featureKey as FeatureKey } : {}),
 			...(link ? { link } : {}),
-			...(when ? { when: when as WhenCondition } : {}),
 			body,
 		},
 	};
@@ -278,16 +262,22 @@ export function entryTime(entry: Pick<WhatsNewEntry, "date">): number {
 	return Date.parse(`${entry.date}T00:00:00Z`);
 }
 
+/** Not dated in the future: an entry merged ahead of its date waits for it. */
+export function isPublished(entry: WhatsNewEntry, now: Date): boolean {
+	return entryTime(entry) <= now.getTime();
+}
+
 /**
- * The entries a signed-in viewer is eligible for. An admin (officer) of the
- * current club sees `admins` and `everyone`; anyone else sees `members` and
- * `everyone`. A `when:` entry needs its condition affirmed by `when`.
+ * The entries a signed-in viewer is eligible for, as of `now`. An admin or
+ * officer of the current club sees `admins` and `everyone`; anyone else sees
+ * `members` and `everyone`. An entry dated after `now` is nobody's yet.
  */
 export function eligibleEntries(
 	entries: readonly WhatsNewEntry[],
-	viewer: { isAdmin: boolean; when?: WhenContext },
+	viewer: { isAdmin: boolean; now: Date },
 ): WhatsNewEntry[] {
 	return entries
+		.filter((e) => isPublished(e, viewer.now))
 		.filter((e) =>
 			e.audience === "everyone"
 				? true
@@ -295,28 +285,36 @@ export function eligibleEntries(
 					? viewer.isAdmin
 					: !viewer.isAdmin,
 		)
-		.filter((e) => (e.when ? viewer.when?.[e.when] === true : true))
 		.sort(byNewest);
 }
 
 /** The `/whats-new` page: `public: true` only, newest first. */
 export function publicEntries(
 	entries: readonly WhatsNewEntry[],
+	now: Date,
 ): WhatsNewEntry[] {
-	return entries.filter((e) => e.public).sort(byNewest);
+	return entries.filter((e) => e.public && isPublished(e, now)).sort(byNewest);
 }
 
-/** Whether the header dot shows: an eligible entry newer than the last time the
- *  panel was opened. Never opened (`null`) means everything is unseen. */
+/**
+ * Whether the header dot shows: some eligible entry is not among the ids the
+ * user has seen. By id, never by comparing an entry's date to when the panel
+ * was opened — the date is the day the entry was WRITTEN, so an entry dated
+ * today that merges after this morning's open, or one dated Monday that merges
+ * Wednesday, would sort before the open and never light the dot. `seenIds`
+ * null means the state could not be read: no dot (fail silent).
+ */
 export function hasUnseenEntries(
 	eligible: readonly WhatsNewEntry[],
-	seenAt: Date | string | null,
+	seenIds: ReadonlySet<string> | null,
 ): boolean {
-	if (eligible.length === 0) return false;
-	if (seenAt === null) return true;
-	const seen = new Date(seenAt).getTime();
-	if (Number.isNaN(seen)) return true;
-	return eligible.some((e) => entryTime(e) > seen);
+	if (seenIds === null) return false;
+	return eligible.some((e) => !seenIds.has(e.id));
+}
+
+/** Every shipped entry id; the server keeps only these when marking seen. */
+export function isWhatsNewEntryId(id: string): boolean {
+	return WHATS_NEW_ENTRIES.some((e) => e.id === id);
 }
 
 /** Within `NEW_WINDOW_DAYS` of its date (and not dated in the future). */
@@ -358,11 +356,9 @@ export function bannerEntry(args: {
 	if (args.dismissed === null) return null;
 	const dismissed = args.dismissed;
 	return (
-		publicEntries(args.entries).find(
+		publicEntries(args.entries, args.now).find(
 			(e) =>
 				e.audience !== "admins" &&
-				// No club context on this path, so a conditional entry fails closed.
-				!e.when &&
 				isWithinNewWindow(e, args.now) &&
 				!dismissed.has(e.id),
 		) ?? null

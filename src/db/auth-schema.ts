@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
 	boolean,
 	index,
@@ -22,10 +22,15 @@ export const user = pgTable("user", {
 	// per-club `club_role`. Provisioned from the SUPERADMIN_EMAILS allowlist and
 	// reconciled two-way on every sign-in; defaults false so absence fails closed.
 	isSuperadmin: boolean("is_superadmin").default(false).notNull(),
-	// When this user last opened the "What's new" panel (#947). The header dot
-	// shows while an entry they are eligible for is dated after it; null means
-	// never opened, so every eligible entry is unseen.
-	whatsNewSeenAt: timestamp("whats_new_seen_at"),
+	// The "What's new" entries (#947) this user has seen, by entry id (the
+	// `content/whats-new/` filename). The header dot shows while an eligible
+	// entry is missing from it. Ids, not a timestamp: an entry's date is the
+	// day it was written, not the day it merged, so a "seen at" instant misses
+	// an entry dated earlier the same day or merged days after its date.
+	whatsNewSeenIds: text("whats_new_seen_ids")
+		.array()
+		.notNull()
+		.default(sql`'{}'::text[]`),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 	updatedAt: timestamp("updated_at")
 		.defaultNow()

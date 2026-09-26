@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Sparkles, X } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 import {
 	createContext,
 	type ReactNode,
@@ -29,7 +29,6 @@ import {
 	readStoredSet,
 	WHATS_NEW_ENTRIES,
 	type WhatsNewEntry,
-	type WhenContext,
 } from "#/lib/whats-new";
 import {
 	getWhatsNewState,
@@ -59,8 +58,10 @@ export const WHATS_NEW_QUERY_KEY = ["whats-new-state"] as const;
 interface SessionWhatsNew {
 	eligible: WhatsNewEntry[];
 	state: WhatsNewState | undefined;
-	markPanelSeen: () => void;
-	markFeatureSeen: (featureKey: string) => void;
+	/** Record the entries the panel just showed as seen. */
+	markPanelSeen: (entryIds: readonly string[]) => void;
+	/** Clear a feature's badge (named apart from the `markFeatureSeen` fn). */
+	clearFeature: (featureKey: string) => void;
 }
 
 const SessionWhatsNewContext = createContext<SessionWhatsNew | null>(null);
@@ -72,12 +73,12 @@ const SessionWhatsNewContext = createContext<SessionWhatsNew | null>(null);
  */
 export function WhatsNewProvider({
 	isAdmin,
-	when,
 	children,
 }: {
-	/** Admin or officer of the current club: sees `admins` + `everyone`. */
+	/** Admin OR officer of the current club (the shell's `isOfficer`): sees
+	 *  `admins` + `everyone`. Officers count, deliberately — they run the
+	 *  features the admin entries describe. */
 	isAdmin: boolean;
-	when?: WhenContext;
 	children: ReactNode;
 }) {
 	const queryClient = useQueryClient();
@@ -88,22 +89,31 @@ export function WhatsNewProvider({
 		retry: false,
 		staleTime: 5 * 60 * 1000,
 	});
+	// `now` is fixed per mount: an entry dated in the future waits for the next
+	// page load after its date, which is soon enough.
 	const eligible = useMemo(
-		() => eligibleEntries(WHATS_NEW_ENTRIES, { isAdmin, when }),
-		[isAdmin, when],
+		() => eligibleEntries(WHATS_NEW_ENTRIES, { isAdmin, now: new Date() }),
+		[isAdmin],
 	);
 
-	const markPanelSeen = useCallback(() => {
-		const optimistic = new Date().toISOString();
-		queryClient.setQueryData<WhatsNewState>(WHATS_NEW_QUERY_KEY, (prev) =>
-			prev ? { ...prev, seenAt: optimistic } : prev,
-		);
-		markWhatsNewSeen().catch(() => {
-			// Not remembered this time; the dot comes back on the next load.
-		});
-	}, [queryClient]);
+	const markPanelSeen = useCallback(
+		(entryIds: readonly string[]) => {
+			queryClient.setQueryData<WhatsNewState>(WHATS_NEW_QUERY_KEY, (prev) =>
+				prev
+					? {
+							...prev,
+							seenIds: [...new Set([...prev.seenIds, ...entryIds])],
+						}
+					: prev,
+			);
+			markWhatsNewSeen({ data: { entryIds: [...entryIds] } }).catch(() => {
+				// Not remembered this time; the dot comes back on the next load.
+			});
+		},
+		[queryClient],
+	);
 
-	const markFeature = useCallback(
+	const clearFeature = useCallback(
 		(featureKey: string) => {
 			if (!isFeatureKey(featureKey)) return;
 			queryClient.setQueryData<WhatsNewState>(WHATS_NEW_QUERY_KEY, (prev) =>
@@ -117,13 +127,8 @@ export function WhatsNewProvider({
 	);
 
 	const value = useMemo(
-		() => ({
-			eligible,
-			state,
-			markPanelSeen,
-			markFeatureSeen: markFeature,
-		}),
-		[eligible, state, markPanelSeen, markFeature],
+		() => ({ eligible, state, markPanelSeen, clearFeature }),
+		[eligible, state, markPanelSeen, clearFeature],
 	);
 	return (
 		<SessionWhatsNewContext.Provider value={value}>
@@ -138,7 +143,7 @@ export function WhatsNewProvider({
 
 /**
  * Whether a feature's entry point should show "New", and how to clear it.
- * Call `markSeen` when the feature is used, or from the badge's dismiss.
+ * Call `markSeen` when the feature is used.
  *
  * Signed in (under `<WhatsNewProvider>`): read from and written to the user's
  * account. Otherwise, pass the club's id and it is kept in this browser's
@@ -171,9 +176,9 @@ export function useIsNew(
 				now,
 			});
 		} else if (clubId) {
-			// A visitor is not an officer, and has no club context for `when`.
+			// A visitor is not an officer.
 			isNew = isFeatureNew({
-				eligible: eligibleEntries(WHATS_NEW_ENTRIES, { isAdmin: false }),
+				eligible: eligibleEntries(WHATS_NEW_ENTRIES, { isAdmin: false, now }),
 				featureKey,
 				seen: localSeen,
 				now,
@@ -184,7 +189,7 @@ export function useIsNew(
 	const markSeen = useCallback(() => {
 		if (!isFeatureKey(featureKey)) return;
 		if (session) {
-			session.markFeatureSeen(featureKey);
+			session.clearFeature(featureKey);
 			return;
 		}
 		if (!clubId) return;
@@ -196,40 +201,23 @@ export function useIsNew(
 }
 
 /**
- * The small "New" pill. Renders nothing unless `isNew`. With `onDismiss` it
- * carries its own close button — do not pass one when the badge sits inside a
- * link or button (a button inside a link is invalid markup); clear it on use
- * instead.
+ * The small "New" pill. Renders nothing unless `isNew`. It has no close button
+ * of its own — the badges sit inside links, where a nested button is invalid —
+ * so it clears when the feature is used (`useIsNew().markSeen`).
  */
 export function NewBadge({
 	isNew,
-	onDismiss,
 	className = "",
 }: {
 	isNew: boolean;
-	onDismiss?: () => void;
 	className?: string;
 }) {
 	if (!isNew) return null;
 	return (
 		<span
-			className={`inline-flex items-center gap-0.5 rounded-full bg-primary px-1.5 py-px text-[10px] font-bold tracking-[0.04em] text-primary-foreground uppercase ${className}`}
+			className={`inline-flex items-center rounded-full bg-primary px-1.5 py-px text-[10px] font-bold tracking-[0.04em] text-primary-foreground uppercase ${className}`}
 		>
 			New
-			{onDismiss ? (
-				<button
-					type="button"
-					onClick={(e) => {
-						e.preventDefault();
-						e.stopPropagation();
-						onDismiss();
-					}}
-					className="-mr-0.5 rounded-full p-px hover:bg-primary-foreground/20"
-				>
-					<X className="size-2.5" aria-hidden />
-					<span className="sr-only">Dismiss</span>
-				</button>
-			) : null}
 		</span>
 	);
 }
@@ -250,7 +238,8 @@ export function WhatsNewEntryList({
 	emptyText = "Nothing new yet.",
 }: {
 	entries: readonly WhatsNewEntry[];
-	onNavigate?: () => void;
+	/** Called with the entry whose "Try it" was followed. */
+	onNavigate?: (entry: WhatsNewEntry) => void;
 	emptyText?: string;
 }) {
 	if (entries.length === 0) {
@@ -275,7 +264,7 @@ export function WhatsNewEntryList({
 						// A plain anchor: `link` is a content string, not a typed route.
 						<a
 							href={entry.link}
-							onClick={onNavigate}
+							onClick={() => onNavigate?.(entry)}
 							className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-primary no-underline hover:underline"
 						>
 							Try it
@@ -298,7 +287,7 @@ export function WhatsNewPublicList({
 }: {
 	entries?: readonly WhatsNewEntry[];
 }) {
-	return <WhatsNewEntryList entries={publicEntries(entries)} />;
+	return <WhatsNewEntryList entries={publicEntries(entries, new Date())} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,20 +296,23 @@ export function WhatsNewPublicList({
 
 /**
  * The header's "What's new" button. The dot shows while an entry the user is
- * eligible for is dated after the last time they opened the panel; opening it
- * clears the dot. Outside `<WhatsNewProvider>` it renders nothing.
+ * eligible for is not among the ids they have seen; opening the panel records
+ * what it shows. Outside `<WhatsNewProvider>` it renders nothing.
  */
 export function WhatsNewButton() {
 	const session = useContext(SessionWhatsNewContext);
 	const [open, setOpen] = useState(false);
 	if (!session) return null;
-	const { eligible, state, markPanelSeen } = session;
+	const { eligible, state, markPanelSeen, clearFeature } = session;
 	// Undefined state (loading or failed) shows no dot: fail silent.
-	const unseen = state ? hasUnseenEntries(eligible, state.seenAt) : false;
+	const unseen = hasUnseenEntries(
+		eligible,
+		state ? new Set(state.seenIds) : null,
+	);
 
 	function onOpenChange(next: boolean) {
 		setOpen(next);
-		if (next && unseen) markPanelSeen();
+		if (next && unseen) markPanelSeen(eligible.map((e) => e.id));
 	}
 
 	return (
@@ -340,15 +332,25 @@ export function WhatsNewButton() {
 					/>
 				) : null}
 			</button>
-			<SheetContent side="right" className="gap-0 overflow-y-auto">
-				<SheetHeader>
+			{/* The sheet is a fixed-height flex column and NOT the scroller: the
+			    body below is, so the header stays pinned. `min-h-0` is what lets a
+			    flex child shrink below its content and scroll instead of growing. */}
+			<SheetContent side="right" className="gap-0 overflow-hidden">
+				<SheetHeader className="shrink-0">
 					<SheetTitle>What's new</SheetTitle>
 					<SheetDescription>Recent additions to GavelUp.</SheetDescription>
 				</SheetHeader>
-				<div className="px-4 pb-6">
+				<div
+					data-testid="whats-new-body"
+					className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6"
+				>
 					<WhatsNewEntryList
 						entries={eligible}
-						onNavigate={() => setOpen(false)}
+						onNavigate={(entry) => {
+							// Following "Try it" is using the feature.
+							if (entry.featureKey) clearFeature(entry.featureKey);
+							setOpen(false);
+						}}
 					/>
 				</div>
 			</SheetContent>

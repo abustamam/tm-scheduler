@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NAV_DESTINATIONS } from "./nav-destinations";
 import {
 	addToStoredSet,
 	bannerEntry,
@@ -33,8 +34,8 @@ title: Promote your next meeting
 date: 2026-09-26
 audience: admins
 public: false
-featureKey: promote
-link: /meetings
+featureKey: account
+link: /account
 ---
 Draft a promo. You send it.
 `;
@@ -53,6 +54,14 @@ function errorsOf(id: string, source: string): string[] {
 }
 
 const ID = "2026-09-26-promote";
+
+function listSources(dir: string): string[] {
+	return readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
+		const full = resolve(dir, d.name);
+		if (d.isDirectory()) return listSources(full);
+		return /\.tsx?$/.test(d.name) ? [full] : [];
+	});
+}
 
 describe("shipped entries (content/whats-new)", () => {
 	const files = readdirSync(CONTENT_DIR).filter((f) => f.endsWith(".md"));
@@ -78,6 +87,24 @@ describe("shipped entries (content/whats-new)", () => {
 		}
 	});
 
+	it("every FEATURE_KEYS key has something that renders its badge", () => {
+		// A nav destination is badged by the sidebar; anything else needs a
+		// `useIsNew("<key>"` call in source. A key with neither is a badge
+		// that can never show (the promote entry shipped that way once).
+		const navKeys = new Set(NAV_DESTINATIONS.map((d) => d.key as string));
+		const sources = listSources(resolve(ROOT, "src"))
+			.filter((f) => !/\.test\.tsx?$/.test(f))
+			.map((f) => readFileSync(f, "utf8"))
+			.join("\n");
+		for (const key of FEATURE_KEYS) {
+			const called = sources.includes(`useIsNew("${key}"`);
+			expect(
+				navKeys.has(key) || called,
+				`FEATURE_KEYS has "${key}" but nothing renders its badge`,
+			).toBe(true);
+		}
+	});
+
 	it("no admin-only entry is public", () => {
 		for (const e of WHATS_NEW_ENTRIES) {
 			if (e.audience === "admins") expect(e.public).toBe(false);
@@ -96,8 +123,8 @@ describe("parseWhatsNewEntry rejects a bad shape", () => {
 				date: "2026-09-26",
 				audience: "admins",
 				public: false,
-				featureKey: "promote",
-				link: "/meetings",
+				featureKey: "account",
+				link: "/account",
 				body: "Draft a promo. You send it.",
 			});
 		}
@@ -121,7 +148,7 @@ describe("parseWhatsNewEntry rejects a bad shape", () => {
 		["an admins entry marked public", withLine(GOOD, "public", "public: true")],
 		["an off-site link", withLine(GOOD, "link", "link: https://example.com")],
 		["a protocol-relative link", withLine(GOOD, "link", "link: //evil.test")],
-		["an unknown when", withLine(GOOD, "link", "when: someday")],
+		["a `when` (not supported)", withLine(GOOD, "link", "when: chartering")],
 		["an unknown key", withLine(GOOD, "link", "feature: promote")],
 		["an empty body", GOOD.replace("Draft a promo. You send it.\n", "")],
 		["no front-matter", "Just a body.\n"],
@@ -168,112 +195,155 @@ function entry(over: Partial<WhatsNewEntry> & { id: string }): WhatsNewEntry {
 	};
 }
 
+const NOW = new Date("2026-09-25T12:00:00Z");
 const ADMIN = entry({ id: "admin", audience: "admins", public: false });
 const MEMBERS = entry({ id: "members", audience: "members" });
 const EVERYONE = entry({ id: "everyone", audience: "everyone" });
-const CHARTER = entry({
-	id: "charter",
-	audience: "admins",
-	public: false,
-	when: "chartering",
-});
-const ALL = [ADMIN, MEMBERS, EVERYONE, CHARTER];
+const FUTURE = entry({ id: "future", date: "2026-09-26" });
+const ALL = [ADMIN, MEMBERS, EVERYONE, FUTURE];
 
 describe("eligibleEntries (panel audience)", () => {
 	it("an admin sees admins + everyone, never members-only", () => {
-		const ids = eligibleEntries(ALL, { isAdmin: true }).map((e) => e.id);
+		const ids = eligibleEntries(ALL, { isAdmin: true, now: NOW }).map(
+			(e) => e.id,
+		);
 		expect(ids.sort()).toEqual(["admin", "everyone"]);
 	});
 
 	it("a member sees members + everyone, never admins-only", () => {
-		const ids = eligibleEntries(ALL, { isAdmin: false }).map((e) => e.id);
+		const ids = eligibleEntries(ALL, { isAdmin: false, now: NOW }).map(
+			(e) => e.id,
+		);
 		expect(ids.sort()).toEqual(["everyone", "members"]);
 	});
 
-	it("a `when` entry shows only when its condition is affirmed", () => {
-		expect(
-			eligibleEntries(ALL, { isAdmin: true, when: { chartering: true } }).map(
-				(e) => e.id,
-			),
-		).toContain("charter");
-		expect(
-			eligibleEntries(ALL, { isAdmin: true, when: { chartering: false } }).map(
-				(e) => e.id,
-			),
-		).not.toContain("charter");
+	it("an entry dated after now is nobody's yet, then appears on its date", () => {
+		for (const isAdmin of [true, false]) {
+			expect(
+				eligibleEntries(ALL, { isAdmin, now: NOW }).map((e) => e.id),
+			).not.toContain("future");
+			expect(
+				eligibleEntries(ALL, {
+					isAdmin,
+					now: new Date("2026-09-26T00:00:00Z"),
+				}).map((e) => e.id),
+			).toContain("future");
+		}
 	});
 
 	it("is newest first", () => {
 		const older = entry({ id: "older", date: "2026-01-01" });
 		const newer = entry({ id: "newer", date: "2026-09-01" });
 		expect(
-			eligibleEntries([older, newer], { isAdmin: false }).map((e) => e.id),
+			eligibleEntries([older, newer], { isAdmin: false, now: NOW }).map(
+				(e) => e.id,
+			),
 		).toEqual(["newer", "older"]);
 	});
 });
 
 describe("publicEntries (/whats-new)", () => {
-	it("never includes a non-public entry", () => {
-		const ids = publicEntries(ALL).map((e) => e.id);
+	it("never includes a non-public or future-dated entry", () => {
+		const ids = publicEntries(ALL, NOW).map((e) => e.id);
 		expect(ids).not.toContain("admin");
-		expect(ids).not.toContain("charter");
+		expect(ids).not.toContain("future");
 		expect(ids.sort()).toEqual(["everyone", "members"]);
 	});
 
 	it("the shipped admin-only entry (promote) is not on the public page", () => {
-		const promote = WHATS_NEW_ENTRIES.find((e) => e.featureKey === "promote");
-		expect(promote).toBeDefined();
-		expect(publicEntries(WHATS_NEW_ENTRIES)).not.toContain(promote);
+		const promote = WHATS_NEW_ENTRIES.find(
+			(e) => e.id === "2026-09-26-promote",
+		);
+		expect(promote?.audience).toBe("admins");
+		expect(publicEntries(WHATS_NEW_ENTRIES, new Date())).not.toContain(promote);
 	});
 });
 
 describe("hasUnseenEntries (header dot)", () => {
 	it("never opened: any eligible entry is unseen", () => {
-		expect(hasUnseenEntries([EVERYONE], null)).toBe(true);
+		expect(hasUnseenEntries([EVERYONE], new Set())).toBe(true);
 	});
 
 	it("nothing eligible: no dot", () => {
-		expect(hasUnseenEntries([], null)).toBe(false);
+		expect(hasUnseenEntries([], new Set())).toBe(false);
 	});
 
-	it("opened after the newest entry: no dot", () => {
-		expect(hasUnseenEntries([EVERYONE], "2026-09-21T00:00:00Z")).toBe(false);
+	it("every eligible entry seen: no dot", () => {
+		expect(
+			hasUnseenEntries([EVERYONE, MEMBERS], new Set(["everyone", "members"])),
+		).toBe(false);
 	});
 
-	it("an entry dated after the last open: dot", () => {
-		expect(hasUnseenEntries([EVERYONE], "2026-09-19T12:00:00Z")).toBe(true);
+	it("unreadable state (null): no dot", () => {
+		expect(hasUnseenEntries([EVERYONE], null)).toBe(false);
+	});
+
+	// The two cases a "seen at" timestamp got wrong. Both replay the real
+	// sequence: open the panel (record what it showed), then a new entry
+	// merges, then the viewer comes back.
+	it("same day: an entry dated today that merges after this morning's open lights the dot", () => {
+		const morning = [entry({ id: "2026-10-01-a", date: "2026-10-01" })];
+		const seen = new Set(morning.map((e) => e.id)); // opened at 10:00Z
+		const afternoon = [
+			...morning,
+			entry({ id: "2026-10-01-b", date: "2026-10-01" }), // merged 18:00Z
+		];
+		expect(hasUnseenEntries(morning, seen)).toBe(false);
+		expect(hasUnseenEntries(afternoon, seen)).toBe(true);
+	});
+
+	it("late merge: an entry dated Monday that merges Wednesday, after a Tuesday open, lights the dot", () => {
+		const tuesday = [entry({ id: "2026-09-29-newest", date: "2026-09-29" })];
+		const seen = new Set(tuesday.map((e) => e.id));
+		const wednesday = [
+			...tuesday,
+			entry({ id: "2026-09-28-late", date: "2026-09-28" }),
+		];
+		expect(hasUnseenEntries(wednesday, seen)).toBe(true);
 	});
 
 	it("audience decides the dot: an admin entry alone never dots a member", () => {
-		const eligible = eligibleEntries([ADMIN], { isAdmin: false });
-		expect(hasUnseenEntries(eligible, null)).toBe(false);
+		const eligible = eligibleEntries([ADMIN], { isAdmin: false, now: NOW });
+		expect(hasUnseenEntries(eligible, new Set())).toBe(false);
 		expect(
-			hasUnseenEntries(eligibleEntries([ADMIN], { isAdmin: true }), null),
+			hasUnseenEntries(
+				eligibleEntries([ADMIN], { isAdmin: true, now: NOW }),
+				new Set(),
+			),
 		).toBe(true);
+	});
+
+	it("a future-dated entry does not dot anyone", () => {
+		expect(
+			hasUnseenEntries(
+				eligibleEntries([FUTURE], { isAdmin: false, now: NOW }),
+				new Set(),
+			),
+		).toBe(false);
 	});
 });
 
 describe("isFeatureNew (badges)", () => {
-	const feature = entry({ id: "f", featureKey: "promote", date: "2026-09-01" });
+	const feature = entry({ id: "f", featureKey: "account", date: "2026-09-01" });
 	const at = (iso: string) => new Date(iso);
 
 	it("new inside the window, not yet seen", () => {
 		expect(
 			isFeatureNew({
 				eligible: [feature],
-				featureKey: "promote",
+				featureKey: "account",
 				seen: new Set(),
 				now: at("2026-09-10T00:00:00Z"),
 			}),
 		).toBe(true);
 	});
 
-	it("clears once used or dismissed", () => {
+	it("clears once used", () => {
 		expect(
 			isFeatureNew({
 				eligible: [feature],
-				featureKey: "promote",
-				seen: new Set(["promote"]),
+				featureKey: "account",
+				seen: new Set(["account"]),
 				now: at("2026-09-10T00:00:00Z"),
 			}),
 		).toBe(false);
@@ -282,7 +352,7 @@ describe("isFeatureNew (badges)", () => {
 	it(`clears ${NEW_WINDOW_DAYS} days after the entry's date`, () => {
 		const args = {
 			eligible: [feature],
-			featureKey: "promote",
+			featureKey: "account",
 			seen: new Set<string>(),
 		};
 		expect(isFeatureNew({ ...args, now: at("2026-09-30T23:59:59Z") })).toBe(
@@ -297,7 +367,7 @@ describe("isFeatureNew (badges)", () => {
 		expect(
 			isFeatureNew({
 				eligible: [feature],
-				featureKey: "promote",
+				featureKey: "account",
 				seen: null,
 				now: at("2026-09-10T00:00:00Z"),
 			}),
@@ -306,12 +376,13 @@ describe("isFeatureNew (badges)", () => {
 
 	it("an entry the viewer is not eligible for does not badge", () => {
 		const adminFeature = { ...feature, audience: "admins" as const };
+		const now = at("2026-09-10T00:00:00Z");
 		expect(
 			isFeatureNew({
-				eligible: eligibleEntries([adminFeature], { isAdmin: false }),
-				featureKey: "promote",
+				eligible: eligibleEntries([adminFeature], { isAdmin: false, now }),
+				featureKey: "account",
 				seen: new Set(),
-				now: at("2026-09-10T00:00:00Z"),
+				now,
 			}),
 		).toBe(false);
 	});
@@ -345,13 +416,13 @@ describe("bannerEntry (public pages)", () => {
 		).toBeNull();
 	});
 
-	it("never an admin, non-public or conditional entry", () => {
+	it("never an admin, non-public or future entry", () => {
 		const adminPublicish = entry({ id: "a", audience: "admins" });
 		const privateOne = entry({ id: "p", public: false });
-		const conditional = entry({ id: "c", when: "chartering" });
+		const future = entry({ id: "f", date: "2026-09-26" });
 		expect(
 			bannerEntry({
-				entries: [adminPublicish, privateOne, conditional],
+				entries: [adminPublicish, privateOne, future],
 				dismissed: new Set(),
 				now,
 			}),

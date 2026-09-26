@@ -1,5 +1,5 @@
 {
-  "id": "080fd70b-f627-4524-bfc9-3ebb27b5f6ef",
+  "id": "7e611b67-d364-49cd-8ae9-2e99b3a8b2f0",
   "prevId": "09eefa49-99f6-43c3-8f17-52cbb439dddb",
   "version": "7",
   "dialect": "postgresql",
@@ -7471,11 +7471,12 @@
           "notNull": true,
           "default": false
         },
-        "whats_new_seen_at": {
-          "name": "whats_new_seen_at",
-          "type": "timestamp",
+        "whats_new_seen_ids": {
+          "name": "whats_new_seen_ids",
+          "type": "text[]",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'{}'::text[]"
         },
         "created_at": {
           "name": "created_at",

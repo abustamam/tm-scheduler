@@ -28,17 +28,21 @@ export const getWhatsNewState = createServerFn({ method: "GET" }).handler(
 	},
 );
 
-/** Opening the panel clears the header dot. */
-export const markWhatsNewSeen = createServerFn({ method: "POST" }).handler(
-	async (): Promise<{ seenAt: string }> => {
+const panelSeenSchema = z.object({
+	entryIds: z.array(z.string().max(200)).max(500),
+});
+
+/** Opening the panel marks the entries it showed as seen (clears the dot). */
+export const markWhatsNewSeen = createServerFn({ method: "POST" })
+	.validator((input: unknown) => panelSeenSchema.parse(input))
+	.handler(async ({ data }): Promise<{ seenIds: string[] }> => {
 		const u = await requireUser();
-		return { seenAt: await markWhatsNewSeenLogic(u.id) };
-	},
-);
+		return { seenIds: await markWhatsNewSeenLogic(u.id, data.entryIds) };
+	});
 
 const featureSeenSchema = z.object({ featureKey: z.enum(FEATURE_KEYS) });
 
-/** A "New" badge is cleared, by use or by dismissal. */
+/** A "New" badge is cleared by use. */
 export const markFeatureSeen = createServerFn({ method: "POST" })
 	.validator((input: unknown) => featureSeenSchema.parse(input))
 	.handler(async ({ data }): Promise<{ ok: true }> => {

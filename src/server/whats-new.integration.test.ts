@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { user, userFeatureSeen } from "#/db/schema";
+import { WHATS_NEW_ENTRIES } from "#/lib/whats-new";
 import { hasTestDb, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -42,45 +43,75 @@ describe.skipIf(!hasTestDb)("whats-new seen state", () => {
 		userIds.length = 0;
 	});
 
-	it("a new user has never opened the panel and has seen no feature", async () => {
+	it("a new user has seen no entry and no feature", async () => {
 		const id = await makeUser();
 		expect(await loadWhatsNewState(id)).toEqual({
-			seenAt: null,
+			seenIds: [],
 			featuresSeen: [],
 		});
 	});
 
-	it("opening the panel stamps whats_new_seen_at for that user only", async () => {
+	it("opening the panel unions the shown ids, for that user only", async () => {
+		const [known1, known2] = WHATS_NEW_ENTRIES.map((e) => e.id);
+		expect(known2).toBeDefined();
 		const a = await makeUser();
 		const b = await makeUser();
-		const at = new Date("2026-09-26T12:00:00.000Z");
-		expect(await markWhatsNewSeenLogic(a, at)).toBe(at.toISOString());
-		expect((await loadWhatsNewState(a)).seenAt).toBe(at.toISOString());
-		expect((await loadWhatsNewState(b)).seenAt).toBeNull();
+		expect(await markWhatsNewSeenLogic(a, [known1])).toEqual([known1]);
+		// A second open adds, never replaces, and repeats collapse.
+		const after = await markWhatsNewSeenLogic(a, [known2, known1]);
+		expect([...after].sort()).toEqual([known1, known2].sort());
+		expect((await loadWhatsNewState(a)).seenIds.sort()).toEqual(
+			[known1, known2].sort(),
+		);
+		expect((await loadWhatsNewState(b)).seenIds).toEqual([]);
 	});
 
-	it("a feature seen is recorded once, per user, and kept", async () => {
+	it("ids that are not shipped entries are dropped", async () => {
+		const a = await makeUser();
+		expect(await markWhatsNewSeenLogic(a, ["not-an-entry"])).toEqual([]);
+	});
+
+	it("reading the panel does not bump the account's updated_at", async () => {
+		const a = await makeUser();
+		const [before] = await testDb
+			.select({ updatedAt: user.updatedAt })
+			.from(user)
+			.where(eq(user.id, a));
+		await new Promise((r) => setTimeout(r, 20));
+		await markWhatsNewSeenLogic(a, [WHATS_NEW_ENTRIES[0].id]);
+		const [after] = await testDb
+			.select({ updatedAt: user.updatedAt })
+			.from(user)
+			.where(eq(user.id, a));
+		expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+	});
+
+	it("a feature seen is recorded once, per user", async () => {
 		const a = await makeUser();
 		const b = await makeUser();
-		await markFeatureSeenLogic(a, "promote");
-		// Idempotent: the unique index turns a second use into a no-op.
-		await markFeatureSeenLogic(a, "promote");
 		await markFeatureSeenLogic(a, "account");
-		expect((await loadWhatsNewState(a)).featuresSeen.sort()).toEqual([
-			"account",
-			"promote",
-		]);
+		// Idempotent: the unique index turns a second use into a no-op.
+		await markFeatureSeenLogic(a, "account");
+		expect((await loadWhatsNewState(a)).featuresSeen).toEqual(["account"]);
 		expect((await loadWhatsNewState(b)).featuresSeen).toEqual([]);
 		const rows = await testDb
 			.select()
 			.from(userFeatureSeen)
 			.where(eq(userFeatureSeen.userId, a));
-		expect(rows.length).toBe(2);
+		expect(rows.length).toBe(1);
 	});
 
-	it("deleting the account deletes its badge state", async () => {
+	it("a feature key no longer in FEATURE_KEYS is dropped on read", async () => {
 		const a = await makeUser();
-		await markFeatureSeenLogic(a, "promote");
+		await testDb
+			.insert(userFeatureSeen)
+			.values({ userId: a, featureKey: "retired-key" });
+		expect((await loadWhatsNewState(a)).featuresSeen).toEqual([]);
+	});
+
+	it("user_feature_seen rows cascade with their user row (FK ON DELETE CASCADE)", async () => {
+		const a = await makeUser();
+		await markFeatureSeenLogic(a, "account");
 		await testDb.delete(user).where(eq(user.id, a));
 		const rows = await testDb
 			.select()

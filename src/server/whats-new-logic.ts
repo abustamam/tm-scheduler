@@ -1,7 +1,11 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { user, userFeatureSeen } from "#/db/schema";
-import type { FeatureKey } from "#/lib/whats-new";
+import {
+	type FeatureKey,
+	isFeatureKey,
+	isWhatsNewEntryId,
+} from "#/lib/whats-new";
 
 /**
  * The per-user "What's new" seen state (#947). Db-touching, so it lives here
@@ -12,10 +16,11 @@ import type { FeatureKey } from "#/lib/whats-new";
  */
 
 export interface WhatsNewState {
-	/** ISO timestamp of the last time the panel was opened, or null. */
-	seenAt: string | null;
-	/** Feature keys whose "New" badge this user has used or dismissed. */
-	featuresSeen: string[];
+	/** Ids of the entries this user has seen in the panel. */
+	seenIds: string[];
+	/** Feature keys whose "New" badge this user has used. Unknown keys (a key
+	 *  since removed from `FEATURE_KEYS`) are dropped on the way out. */
+	featuresSeen: FeatureKey[];
 }
 
 export async function loadWhatsNewState(
@@ -23,7 +28,7 @@ export async function loadWhatsNewState(
 ): Promise<WhatsNewState> {
 	const [[row], seen] = await Promise.all([
 		db
-			.select({ seenAt: user.whatsNewSeenAt })
+			.select({ seenIds: user.whatsNewSeenIds })
 			.from(user)
 			.where(eq(user.id, userId))
 			.limit(1),
@@ -33,22 +38,37 @@ export async function loadWhatsNewState(
 			.where(eq(userFeatureSeen.userId, userId)),
 	]);
 	return {
-		seenAt: row?.seenAt ? row.seenAt.toISOString() : null,
-		featuresSeen: seen.map((s) => s.featureKey),
+		seenIds: row?.seenIds ?? [],
+		featuresSeen: seen.map((s) => s.featureKey).filter(isFeatureKey),
 	};
 }
 
-/** Opening the panel: everything dated up to now is seen. Returns the stamp. */
+/**
+ * Opening the panel: the entries it showed are seen. A union, in one
+ * statement, so two tabs opening at once cannot drop each other's ids; ids
+ * that are not shipped entries are dropped first, so the column only ever
+ * holds real ids. Leaves `updated_at` alone — reading a panel is not an edit
+ * to the account (the column's `$onUpdate` would otherwise bump it).
+ * Returns the stored set.
+ */
 export async function markWhatsNewSeenLogic(
 	userId: string,
-	now: Date = new Date(),
-): Promise<string> {
-	await db.update(user).set({ whatsNewSeenAt: now }).where(eq(user.id, userId));
-	return now.toISOString();
+	entryIds: readonly string[],
+): Promise<string[]> {
+	const ids = entryIds.filter(isWhatsNewEntryId);
+	const [row] = await db
+		.update(user)
+		.set({
+			whatsNewSeenIds: sql`array(select distinct x from unnest(${user.whatsNewSeenIds} || array(select jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))) as x order by x)`,
+			updatedAt: sql`${user.updatedAt}`,
+		})
+		.where(eq(user.id, userId))
+		.returning({ seenIds: user.whatsNewSeenIds });
+	return row?.seenIds ?? [];
 }
 
 /**
- * A feature's badge is cleared: the user used it or dismissed the badge.
+ * A feature's badge is cleared: the user used the feature.
  * Idempotent — the unique index on (user, feature) makes a second call a no-op,
  * and the first `seen_at` is the one kept.
  */

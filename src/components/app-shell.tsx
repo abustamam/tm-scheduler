@@ -591,6 +591,11 @@ function NavItem({
 	// A destination whose key is a `FEATURE_KEYS` value wears "New" while its
 	// What's-new entry is fresh (#947); following the link is using it.
 	const { isNew, markSeen } = useIsNew(destination.key);
+	// Landing on the page by ANY route (a bookmark, the panel's "Try it", a
+	// link elsewhere) is using it too, not only a click on this entry.
+	useEffect(() => {
+		if (active && isNew) markSeen();
+	}, [active, isNew, markSeen]);
 	return (
 		<Link
 			to={destination.to}

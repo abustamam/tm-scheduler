@@ -13,7 +13,7 @@ import type { WhatsNewEntry } from "#/lib/whats-new";
  * the components actually read them.
  */
 
-const { entry, FIXTURES } = vi.hoisted(() => {
+const { FIXTURES } = vi.hoisted(() => {
 	const today = new Date().toISOString().slice(0, 10);
 	const entry = (
 		over: Partial<WhatsNewEntry> & { id: string },
@@ -26,16 +26,17 @@ const { entry, FIXTURES } = vi.hoisted(() => {
 		...over,
 	});
 	const FIXTURES: WhatsNewEntry[] = [
-		entry({
-			id: "admin-promote",
-			audience: "admins",
-			public: false,
-			featureKey: "promote",
-		}),
+		entry({ id: "admin-only", audience: "admins", public: false }),
 		entry({ id: "members-only", audience: "members" }),
-		entry({ id: "for-everyone", audience: "everyone", link: "/account" }),
+		entry({
+			id: "for-everyone",
+			audience: "everyone",
+			link: "/account",
+			featureKey: "account",
+		}),
+		entry({ id: "tomorrow", date: "2999-01-01" }),
 	];
-	return { entry, FIXTURES };
+	return { FIXTURES };
 });
 
 vi.mock("#/lib/whats-new", async (importOriginal) => {
@@ -68,9 +69,16 @@ function withQuery(ui: ReactNode) {
 	);
 }
 
+function state(seenIds: string[] = [], featuresSeen: string[] = []) {
+	return { seenIds, featuresSeen };
+}
+
+const openPanel = () =>
+	userEvent.click(screen.getByRole("button", { name: /what's new/i }));
+
 beforeEach(() => {
 	server.getWhatsNewState.mockReset();
-	server.markWhatsNewSeen.mockReset().mockResolvedValue({ seenAt: "x" });
+	server.markWhatsNewSeen.mockReset().mockResolvedValue({ seenIds: [] });
 	server.markFeatureSeen.mockReset().mockResolvedValue({ ok: true });
 	localStorage.clear();
 });
@@ -81,11 +89,8 @@ afterEach(() => {
 });
 
 describe("WhatsNewButton (header dot + panel)", () => {
-	it("shows the dot for unseen entries and clears it on open", async () => {
-		server.getWhatsNewState.mockResolvedValue({
-			seenAt: null,
-			featuresSeen: [],
-		});
+	it("shows the dot for unseen entries; opening records exactly what it showed", async () => {
+		server.getWhatsNewState.mockResolvedValue(state());
 		withQuery(
 			<WhatsNewProvider isAdmin={false}>
 				<WhatsNewButton />
@@ -93,18 +98,21 @@ describe("WhatsNewButton (header dot + panel)", () => {
 		);
 		await screen.findByTestId("whats-new-dot");
 
-		await userEvent.click(screen.getByRole("button", { name: /what's new/i }));
+		await openPanel();
 		expect(server.markWhatsNewSeen).toHaveBeenCalledTimes(1);
+		const sent = server.markWhatsNewSeen.mock.calls[0][0].data.entryIds;
+		// A member's eligible, published entries — never the admin one, never
+		// the future-dated one.
+		expect([...sent].sort()).toEqual(["for-everyone", "members-only"]);
 		await waitFor(() =>
 			expect(screen.queryByTestId("whats-new-dot")).toBeNull(),
 		);
 	});
 
-	it("no dot once everything eligible was seen", async () => {
-		server.getWhatsNewState.mockResolvedValue({
-			seenAt: new Date(Date.now() + 60_000).toISOString(),
-			featuresSeen: [],
-		});
+	it("no dot once every eligible id was seen, and opening writes nothing", async () => {
+		server.getWhatsNewState.mockResolvedValue(
+			state(["for-everyone", "members-only"]),
+		);
 		withQuery(
 			<WhatsNewProvider isAdmin={false}>
 				<WhatsNewButton />
@@ -113,9 +121,20 @@ describe("WhatsNewButton (header dot + panel)", () => {
 		await waitFor(() => expect(server.getWhatsNewState).toHaveBeenCalled());
 		await act(async () => {});
 		expect(screen.queryByTestId("whats-new-dot")).toBeNull();
-		// Opening with nothing unseen writes nothing.
-		await userEvent.click(screen.getByRole("button", { name: /what's new/i }));
+		await openPanel();
 		expect(server.markWhatsNewSeen).not.toHaveBeenCalled();
+	});
+
+	it("an entry not among the seen ids lights the dot, whatever its date", async () => {
+		// Seen everything but one entry dated TODAY — the same-day case a
+		// timestamp comparison missed.
+		server.getWhatsNewState.mockResolvedValue(state(["members-only"]));
+		withQuery(
+			<WhatsNewProvider isAdmin={false}>
+				<WhatsNewButton />
+			</WhatsNewProvider>,
+		);
+		await screen.findByTestId("whats-new-dot");
 	});
 
 	it("a failed state read shows no dot and no error", async () => {
@@ -131,40 +150,68 @@ describe("WhatsNewButton (header dot + panel)", () => {
 		expect(screen.getByRole("button", { name: /what's new/i })).toBeTruthy();
 	});
 
-	it("a member's panel lists members + everyone, never admin entries", async () => {
-		server.getWhatsNewState.mockResolvedValue({
-			seenAt: null,
-			featuresSeen: [],
-		});
+	it("a member's panel lists members + everyone; no admin or future entry", async () => {
+		server.getWhatsNewState.mockResolvedValue(state());
 		withQuery(
 			<WhatsNewProvider isAdmin={false}>
 				<WhatsNewButton />
 			</WhatsNewProvider>,
 		);
-		await userEvent.click(screen.getByRole("button", { name: /what's new/i }));
+		await openPanel();
 		await screen.findByText("Title for-everyone");
 		expect(screen.getByText("Title members-only")).toBeTruthy();
-		expect(screen.queryByText("Title admin-promote")).toBeNull();
+		expect(screen.queryByText("Title admin-only")).toBeNull();
+		expect(screen.queryByText("Title tomorrow")).toBeNull();
 	});
 
 	it("an admin's panel lists admins + everyone, never members-only", async () => {
-		server.getWhatsNewState.mockResolvedValue({
-			seenAt: null,
-			featuresSeen: [],
-		});
+		server.getWhatsNewState.mockResolvedValue(state());
 		withQuery(
 			<WhatsNewProvider isAdmin={true}>
 				<WhatsNewButton />
 			</WhatsNewProvider>,
 		);
-		await userEvent.click(screen.getByRole("button", { name: /what's new/i }));
-		await screen.findByText("Title admin-promote");
+		await openPanel();
+		await screen.findByText("Title admin-only");
 		expect(screen.getByText("Title for-everyone")).toBeTruthy();
 		expect(screen.queryByText("Title members-only")).toBeNull();
-		// The "Try it" goes to the entry's in-app link.
-		expect(
-			screen.getByRole("link", { name: /try it/i }).getAttribute("href"),
-		).toBe("/account");
+	});
+
+	it("following Try it clears that feature's badge and closes the panel", async () => {
+		server.getWhatsNewState.mockResolvedValue(state());
+		withQuery(
+			<WhatsNewProvider isAdmin={false}>
+				<WhatsNewButton />
+			</WhatsNewProvider>,
+		);
+		await openPanel();
+		const tryIt = await screen.findByRole("link", { name: /try it/i });
+		expect(tryIt.getAttribute("href")).toBe("/account");
+		// jsdom does not navigate; stop it trying.
+		tryIt.addEventListener("click", (e) => e.preventDefault());
+		await userEvent.click(tryIt);
+		expect(server.markFeatureSeen).toHaveBeenCalledWith({
+			data: { featureKey: "account" },
+		});
+		await waitFor(() =>
+			expect(screen.queryByText("Title for-everyone")).toBeNull(),
+		);
+	});
+
+	it("the panel body scrolls, not the sheet, so the header stays pinned", async () => {
+		server.getWhatsNewState.mockResolvedValue(state());
+		withQuery(
+			<WhatsNewProvider isAdmin={false}>
+				<WhatsNewButton />
+			</WhatsNewProvider>,
+		);
+		await openPanel();
+		const body = await screen.findByTestId("whats-new-body");
+		expect(body.className).toMatch(/\bmin-h-0\b/);
+		expect(body.className).toMatch(/\boverflow-y-auto\b/);
+		expect(body.className).toMatch(/\bflex-1\b/);
+		const sheet = screen.getByRole("dialog");
+		expect(sheet.className).not.toMatch(/overflow-y-auto/);
 	});
 
 	it("renders nothing outside a provider (signed-out chrome)", () => {
@@ -174,11 +221,12 @@ describe("WhatsNewButton (header dot + panel)", () => {
 });
 
 describe("WhatsNewPublicList (/whats-new)", () => {
-	it("renders only public entries; the admin-only entry never appears", () => {
+	it("renders only public, published entries; the admin-only entry never appears", () => {
 		render(<WhatsNewPublicList entries={FIXTURES} />);
 		expect(screen.getByText("Title for-everyone")).toBeTruthy();
 		expect(screen.getByText("Title members-only")).toBeTruthy();
-		expect(screen.queryByText("Title admin-promote")).toBeNull();
+		expect(screen.queryByText("Title admin-only")).toBeNull();
+		expect(screen.queryByText("Title tomorrow")).toBeNull();
 	});
 
 	it("the real shipped entries: the promote entry is not on the page", async () => {
@@ -187,7 +235,7 @@ describe("WhatsNewPublicList (/whats-new)", () => {
 				"#/lib/whats-new",
 			);
 		const promote = actual.WHATS_NEW_ENTRIES.find(
-			(e) => e.featureKey === "promote",
+			(e) => e.id === "2026-09-26-promote",
 		);
 		expect(promote).toBeDefined();
 		render(<WhatsNewPublicList entries={actual.WHATS_NEW_ENTRIES} />);
@@ -207,7 +255,7 @@ describe("WhatsNewBanner (public club and meeting pages)", () => {
 			banner.textContent?.includes(t),
 		);
 		expect(shown.length).toBe(1);
-		expect(banner.textContent).not.toContain("admin-promote");
+		expect(banner.textContent).not.toContain("admin-only");
 		expect(
 			screen
 				.getByRole("link", { name: /see what's new/i })
@@ -249,60 +297,39 @@ describe("WhatsNewBanner (public club and meeting pages)", () => {
 	});
 });
 
-function PromoteButton({ clubId }: { clubId?: string }) {
-	const { isNew, markSeen } = useIsNew("promote", { clubId });
+function AccountLink({ clubId }: { clubId?: string }) {
+	const { isNew, markSeen } = useIsNew("account", { clubId });
 	return (
 		<div>
 			<button type="button" onClick={markSeen}>
-				Promote
+				Account
 			</button>
-			<NewBadge isNew={isNew} onDismiss={markSeen} />
+			<NewBadge isNew={isNew} />
 		</div>
 	);
 }
 
-describe("useIsNew + NewBadge", () => {
-	it("signed in: badged until used, and the use is written to the account", async () => {
-		server.getWhatsNewState.mockResolvedValue({
-			seenAt: null,
-			featuresSeen: [],
-		});
+describe("useIsNew + NewBadge (signed in)", () => {
+	it("badged until used, and the use is written to the account", async () => {
+		server.getWhatsNewState.mockResolvedValue(state());
 		withQuery(
-			<WhatsNewProvider isAdmin={true}>
-				<PromoteButton />
+			<WhatsNewProvider isAdmin={false}>
+				<AccountLink />
 			</WhatsNewProvider>,
 		);
 		await screen.findByText("New");
-		await userEvent.click(screen.getByRole("button", { name: "Promote" }));
+		await userEvent.click(screen.getByRole("button", { name: "Account" }));
 		expect(server.markFeatureSeen).toHaveBeenCalledWith({
-			data: { featureKey: "promote" },
+			data: { featureKey: "account" },
 		});
 		await waitFor(() => expect(screen.queryByText("New")).toBeNull());
 	});
 
-	it("signed in: already seen on the account means no badge", async () => {
-		server.getWhatsNewState.mockResolvedValue({
-			seenAt: null,
-			featuresSeen: ["promote"],
-		});
-		withQuery(
-			<WhatsNewProvider isAdmin={true}>
-				<PromoteButton />
-			</WhatsNewProvider>,
-		);
-		await waitFor(() => expect(server.getWhatsNewState).toHaveBeenCalled());
-		await act(async () => {});
-		expect(screen.queryByText("New")).toBeNull();
-	});
-
-	it("signed in as a member: an admin-only feature never badges", async () => {
-		server.getWhatsNewState.mockResolvedValue({
-			seenAt: null,
-			featuresSeen: [],
-		});
+	it("already used on the account means no badge", async () => {
+		server.getWhatsNewState.mockResolvedValue(state([], ["account"]));
 		withQuery(
 			<WhatsNewProvider isAdmin={false}>
-				<PromoteButton />
+				<AccountLink />
 			</WhatsNewProvider>,
 		);
 		await waitFor(() => expect(server.getWhatsNewState).toHaveBeenCalled());
@@ -311,10 +338,7 @@ describe("useIsNew + NewBadge", () => {
 	});
 
 	it("an unknown key is never new", async () => {
-		server.getWhatsNewState.mockResolvedValue({
-			seenAt: null,
-			featuresSeen: [],
-		});
+		server.getWhatsNewState.mockResolvedValue(state());
 		function Other() {
 			const { isNew } = useIsNew("roster");
 			return <NewBadge isNew={isNew} />;
@@ -331,39 +355,22 @@ describe("useIsNew + NewBadge", () => {
 });
 
 describe("useIsNew on a public page (localStorage, per club)", () => {
-	it("an everyone-audience feature badges, and dismissal persists per club", async () => {
-		// Swap the fixture's promote entry to an everyone-audience one for this
-		// case by using the account entry's shape under the promote key.
-		FIXTURES.push(
-			entry({
-				id: "public-feature",
-				audience: "everyone",
-				featureKey: "account",
-			}),
-		);
-		try {
-			function AccountLink({ clubId }: { clubId: string }) {
-				const { isNew, markSeen } = useIsNew("account", { clubId });
-				return <NewBadge isNew={isNew} onDismiss={markSeen} />;
-			}
-			const { unmount } = render(<AccountLink clubId="club-1" />);
-			await screen.findByText("New");
-			await userEvent.click(screen.getByRole("button", { name: /dismiss/i }));
-			await waitFor(() => expect(screen.queryByText("New")).toBeNull());
-			unmount();
-			render(<AccountLink clubId="club-1" />);
-			await act(async () => {});
-			expect(screen.queryByText("New")).toBeNull();
-			cleanup();
-			render(<AccountLink clubId="club-2" />);
-			await screen.findByText("New");
-		} finally {
-			FIXTURES.pop();
-		}
+	it("badges, and clearing persists per club", async () => {
+		const { unmount } = render(<AccountLink clubId="club-1" />);
+		await screen.findByText("New");
+		await userEvent.click(screen.getByRole("button", { name: "Account" }));
+		await waitFor(() => expect(screen.queryByText("New")).toBeNull());
+		unmount();
+		render(<AccountLink clubId="club-1" />);
+		await act(async () => {});
+		expect(screen.queryByText("New")).toBeNull();
+		cleanup();
+		render(<AccountLink clubId="club-2" />);
+		await screen.findByText("New");
 	});
 
 	it("no club id and no session: never new", async () => {
-		render(<PromoteButton />);
+		render(<AccountLink />);
 		await act(async () => {});
 		expect(screen.queryByText("New")).toBeNull();
 	});
