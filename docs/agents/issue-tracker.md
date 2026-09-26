@@ -36,7 +36,7 @@ Run `gh issue view <number> --comments`.
 ## Who files, and what an agent-filed issue looks like
 
 The maintainer is the intake. An agent files an issue only for a user-visible bug, data loss or
-corruption, or a security hole that lies outside the files its PR touches; the full rule is "What
+corruption, a security hole, or a dev-ex bug (a defect in the repo's own tooling) that lies outside the files its PR touches; the full rule is "What
 earns an issue" in `CLAUDE.md`. That issue:
 
 - opens with the line `Found by an agent while working on #N` (or `… while <what the maintainer
