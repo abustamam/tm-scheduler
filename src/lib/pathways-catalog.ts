@@ -55,6 +55,14 @@
  * structures them), derived below — so the required lists are the only hand-typed
  * data, which minimizes transcription error.
  *
+ * Current paths add, at Levels 4 and 5, the Education Series presentations
+ * (`SERIES`, #921): one Successful Club Series presentation per level, plus one
+ * Better Speaker Series (L4) or Leadership Excellence Series (L5) presentation.
+ * They are rows with `isRequired: false` and a `series`, and they are NOT
+ * electives — `seriesRequiredAt` is the one statement of which series a level
+ * needs. Legacy paths have none. Seeded but inert until #922, which counts them
+ * toward Levels 4/5 and offers them in the picker.
+ *
  * NOT MODELLED — what each project takes to complete, which is not one speech
  * and not even one assignment. Level 1's "Evaluation and Feedback" takes THREE:
  * give a speech, evaluate another member's speech, then give the same speech
@@ -71,10 +79,31 @@
  * speech-derived view. Tracked separately.
  */
 
+/**
+ * The three Education Series (#921). Mirrors the `pathways_series` pgEnum in
+ * `src/db/schema.ts`; `pathways-catalog.test.ts` holds the two equal. Kept here
+ * rather than imported so this client-safe module does not reach for the schema.
+ */
+export const PATHWAYS_SERIES = [
+	"successful_club",
+	"better_speaker",
+	"leadership_excellence",
+] as const;
+export type PathwaysSeries = (typeof PATHWAYS_SERIES)[number];
+
+export const SERIES_LABEL: Record<PathwaysSeries, string> = {
+	successful_club: "Successful Club Series",
+	better_speaker: "Better Speaker Series",
+	leadership_excellence: "Leadership Excellence Series",
+};
+
 export interface CatalogProject {
 	name: string;
 	level: number; // 1–5
 	isRequired: boolean;
+	/** An Education Series presentation (current paths, L4/L5 only). Never an
+	 *  elective, and always `isRequired: false`. Absent on every other project. */
+	series?: PathwaysSeries;
 }
 
 export interface CatalogLevel {
@@ -415,6 +444,82 @@ const withLegacySuffix = (p: CatalogProject): CatalogProject => ({
  */
 export const PATH_COMPLETION_LEVEL = 6;
 
+// Education Series presentations, read 2026-09-25 from Base Camp's own
+// "Level 4 Requirements" / "Level 5 Requirements" units (8711). Current paths
+// only; the legacy editions (8705 checked) have no series requirement.
+// One of each series is required per level, per path enrollment.
+//
+// Base Camp does not return these as blocks (they are static text in each
+// level's intro unit), so no sync will ever corroborate or correct them: a
+// series row never gets a `bcm_block_id`, and completion is always a mark.
+const SERIES: Record<4 | 5, Partial<Record<PathwaysSeries, string[]>>> = {
+	4: {
+		successful_club: [
+			"Finding New Members",
+			"Closing the Sale",
+			"How to Be a Distinguished Club",
+			"Toastmasters Educational Program",
+		],
+		better_speaker: [
+			"Beginning Your Speech",
+			"Concluding Your Speech",
+			"Controlling Your Fear",
+			"Impromptu Speaking",
+			"Selecting Your Topic",
+			"Know Your Audience",
+			"Organizing Your Speech",
+			"Creating an Introduction",
+			"Preparation and Practice",
+			"Using Body Language",
+		],
+	},
+	5: {
+		successful_club: ["Moments of Truth", "Evaluate to Motivate", "Mentoring"],
+		leadership_excellence: [
+			"Service and Leadership",
+			"The Leader as a Coach",
+			"Developing a Mission",
+			"Motivating People",
+			"Building a Team",
+			"Delegate to Empower",
+			"Resolving Conflict",
+			"Visionary Leader",
+			"Values and Leadership",
+			"Goal Setting and Planning",
+			"Giving Effective Feedback",
+		],
+	},
+};
+
+/**
+ * Which Education Series a level requires one presentation from (#921): the
+ * Successful Club Series plus Better Speaker (L4) or Leadership Excellence
+ * (L5), on current paths only. The ONE statement of that rule. Nothing reads it
+ * yet: #922 wires it into the read model's level counts along with the UI, and
+ * must ask this rather than restate it.
+ */
+export function seriesRequiredAt(
+	level: number,
+	status: CatalogPath["status"],
+): PathwaysSeries[] {
+	if (status !== "current") return [];
+	if (level === 4) return ["successful_club", "better_speaker"];
+	if (level === 5) return ["successful_club", "leadership_excellence"];
+	return [];
+}
+
+/** Series rows for one level, in `SERIES` order. */
+function seriesProjects(level: 4 | 5): CatalogProject[] {
+	return seriesRequiredAt(level, "current").flatMap((series) =>
+		(SERIES[level][series] ?? []).map((name) => ({
+			name,
+			level,
+			isRequired: false,
+			series,
+		})),
+	);
+}
+
 /** Identical on every path. Legacy paths get " (Legacy)" like everything else. */
 const PATH_COMPLETION_PROJECT = "Reflect on Your Path";
 
@@ -463,6 +568,11 @@ export function defaultOpenLevel(
 }
 
 function buildPath(p: PathReq): CatalogPath {
+	const status = p.status ?? "current";
+	// Series rows (#921) exist on current paths only, so the legacy suffix below
+	// never meets one. Each level's series follow that level's electives.
+	const series = (level: 4 | 5): CatalogProject[] =>
+		status === "current" ? seriesProjects(level) : [];
 	const required = new Set<string>([
 		...L1,
 		...p.l2,
@@ -483,8 +593,10 @@ function buildPath(p: PathReq): CatalogPath {
 		...electives(L3_POOL, 3),
 		...p.l4.map((name) => ({ name, level: 4, isRequired: true })),
 		...electives(L4_POOL, 4),
+		...series(4),
 		...p.l5.map((name) => ({ name, level: 5, isRequired: true })),
 		...electives(L5_POOL, 5),
+		...series(5),
 		{
 			name: PATH_COMPLETION_PROJECT,
 			level: PATH_COMPLETION_LEVEL,
@@ -494,13 +606,13 @@ function buildPath(p: PathReq): CatalogPath {
 	return {
 		courseCode: p.courseCode,
 		name: p.name,
-		status: p.status ?? "current",
+		status,
 		// Legacy paths carry TI's superseded EDITION of each project, and Base Camp
 		// names them accordingly (#423). Applied as a final transform rather than
 		// to the inputs so every pool subtraction above is unaffected — suffixing
 		// both sides of `pool minus required` would cancel out anyway, but doing it
 		// here keeps the elective arithmetic provably identical to a current path's.
-		projects: p.status === "legacy" ? projects.map(withLegacySuffix) : projects,
+		projects: status === "legacy" ? projects.map(withLegacySuffix) : projects,
 		levels: [1, 2, 3, 4, 5].map((level) => ({
 			level,
 			minReqElectives: MIN_REQ_ELECTIVES[level] ?? 0,

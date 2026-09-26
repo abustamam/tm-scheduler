@@ -19,7 +19,7 @@ import {
 	pathwaysPaths,
 	pathwaysProjects,
 } from "#/db/schema";
-import { PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
+import { type CatalogPath, PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
 
 export interface SeedResult {
 	pathsUpserted: number;
@@ -27,12 +27,19 @@ export interface SeedResult {
 	levelsInserted: number;
 }
 
-export async function seedPathwaysCatalog(): Promise<SeedResult> {
+/**
+ * `catalog` defaults to the real one and exists for the integration test, which
+ * seeds the real catalog under per-run course codes: vitest runs files in
+ * parallel against one shared `tm_test`, and several suites use the real codes.
+ */
+export async function seedPathwaysCatalog(
+	catalog: CatalogPath[] = PATHWAYS_CATALOG,
+): Promise<SeedResult> {
 	let pathsUpserted = 0;
 	let projectsUpserted = 0;
 	let levelsInserted = 0;
 
-	for (const [pathIndex, path] of PATHWAYS_CATALOG.entries()) {
+	for (const [pathIndex, path] of catalog.entries()) {
 		const [inserted] = await db
 			.insert(pathwaysPaths)
 			.values({
@@ -58,6 +65,7 @@ export async function seedPathwaysCatalog(): Promise<SeedResult> {
 					level: project.level,
 					name: project.name,
 					isRequired: project.isRequired,
+					series: project.series ?? null,
 					sortOrder: projectIndex,
 				})
 				.onConflictDoUpdate({
@@ -66,7 +74,14 @@ export async function seedPathwaysCatalog(): Promise<SeedResult> {
 						pathwaysProjects.level,
 						pathwaysProjects.name,
 					],
-					set: { isRequired: project.isRequired, sortOrder: projectIndex },
+					// `series` rides with `isRequired` (#921): together they are the
+					// row's classification, and a row that flips between elective and
+					// series presentation must flip both.
+					set: {
+						isRequired: project.isRequired,
+						series: project.series ?? null,
+						sortOrder: projectIndex,
+					},
 				});
 			projectsUpserted++;
 		}
