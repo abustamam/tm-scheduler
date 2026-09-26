@@ -50,6 +50,23 @@ describe("csvCell quoting (RFC 4180)", () => {
 		expect(csvCell("line1\r\nline2")).toBe('"line1\r\nline2"');
 	});
 
+	// A reader may split an opened .csv on a semicolon or a tab as well as a
+	// comma. Quoting keeps the cell whole whichever it picks, so what follows
+	// the separator never becomes a cell of its own, unguarded.
+	it("quotes a cell with a semicolon", () => {
+		expect(csvCell("Ann;Lee")).toBe('"Ann;Lee"');
+	});
+
+	it("quotes a cell with a tab", () => {
+		expect(csvCell("Ann\tLee")).toBe('"Ann\tLee"');
+	});
+
+	it("keeps a separator-then-trigger cell as ONE quoted cell", () => {
+		for (const sep of [";", "\t", ","]) {
+			expect(csvCell(`Ann${sep}=1+1`)).toBe(`"Ann${sep}=1+1"`);
+		}
+	});
+
 	it("writes numbers bare, negative ones included", () => {
 		expect(csvCell(42)).toBe("42");
 		expect(csvCell(-5)).toBe("-5");
@@ -67,8 +84,8 @@ describe("csvCell injection guard", () => {
 
 	it("looks past leading whitespace, tab and CR", () => {
 		expect(csvCell(" =1")).toBe("' =1");
-		expect(csvCell("\t=1")).toBe("'\t=1");
-		// CR also forces quoting; the guard lands INSIDE the quotes.
+		// Tab and CR also force quoting; the guard lands INSIDE the quotes.
+		expect(csvCell("\t=1")).toBe(`"'\t=1"`);
 		expect(csvCell("\r=1")).toBe(`"'\r=1"`);
 	});
 
@@ -90,7 +107,7 @@ describe("csvCell injection guard", () => {
 	});
 
 	it("prefixes a cell that starts with a bare tab or CR, whatever follows", () => {
-		expect(csvCell("\tplain")).toBe("'\tplain");
+		expect(csvCell("\tplain")).toBe(`"'\tplain"`);
 		expect(csvCell("\rplain")).toBe(`"'\rplain"`);
 	});
 

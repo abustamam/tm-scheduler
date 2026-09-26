@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { db } from "#/db";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { logActivity } from "#/server/activity";
 import {
 	beginClubExport,
 	buildClubExportZip,
@@ -45,7 +47,8 @@ const GONE_MESSAGES = new Set([CLUB_ARCHIVED_MESSAGE, "Club not found."]);
  *   (`beginClubExport`).
  *
  * The response is every member's and guest's contact details, so it is never
- * cached (`no-store`).
+ * cached (`no-store`), and every download writes a `club_data_exported`
+ * activity row naming who took it.
  */
 export const Route = createFileRoute("/api/clubs/$clubId/export/zip")({
 	server: {
@@ -59,8 +62,12 @@ export const Route = createFileRoute("/api/clubs/$clubId/export/zip")({
 				if (!(await isReadableClub(clubId))) {
 					return new Response("Club not found.", { status: 404 });
 				}
+				let actorMemberId: string | null;
 				try {
-					await requireClubRole(sessionUser.id, clubId, ["admin"]);
+					const membership = await requireClubRole(sessionUser.id, clubId, [
+						"admin",
+					]);
+					actorMemberId = membership.id;
 				} catch (err) {
 					// Only an AUTHORIZATION answer becomes a 403. Anything else — a
 					// dropped connection, a bug — propagates as a 500 and is logged,
@@ -99,6 +106,19 @@ export const Route = createFileRoute("/api/clubs/$clubId/export/zip")({
 						data.club.timezone,
 						now,
 					);
+					// Recorded before the bytes leave, and a failure to record fails
+					// the download: an export nobody can see was taken is the thing
+					// this row exists to rule out. `logActivity` stamps
+					// `impersonated_by` itself when a read-write impersonation granted
+					// the request (the guard marked it).
+					await logActivity(db, {
+						clubId: data.club.id,
+						actorMemberId,
+						action: "club_data_exported",
+						targetType: "club",
+						targetId: data.club.id,
+						detail: { filename },
+					});
 					return new Response(new Uint8Array(zip), {
 						status: 200,
 						headers: {

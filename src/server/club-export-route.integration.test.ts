@@ -14,10 +14,17 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { strFromU8, unzipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { clubs, members, officerTerms } from "#/db/schema";
+import {
+	activityLog,
+	clubs,
+	impersonationSessions,
+	members,
+	officerTerms,
+	user,
+} from "#/db/schema";
 import { clubExportUrl } from "#/lib/club-export-url";
 import { parseCsv } from "#/lib/members-csv";
 import {
@@ -29,7 +36,11 @@ import {
 } from "#/test/db";
 
 let sessionUserId: string | null = null;
-const request = { headers: new Headers() };
+// A FRESH request object per download: the read-write impersonation marker
+// (`impersonation-actor.ts`) is keyed on the request object, so one shared
+// object would carry a superadmin's mark into every later download's
+// activity row.
+let request = { headers: new Headers() };
 vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
 	getRequest: () => request,
@@ -61,6 +72,7 @@ const { beginClubExport, CLUB_EXPORT_FILENAMES, loadClubExport } = await import(
 	"./club-export-logic"
 );
 const { requireClubRole } = await import("#/server/guards");
+const { startImpersonation } = await import("#/server/impersonation-logic");
 
 type Get = (input: { params: { clubId: string } }) => Promise<Response>;
 const GET = (
@@ -69,8 +81,43 @@ const GET = (
 
 async function download(clubId: string, as: string | null): Promise<Response> {
 	sessionUserId = as;
+	request = { headers: new Headers() };
 	return GET({ params: { clubId } });
 }
+
+/** This club's `club_data_exported` rows, oldest first. */
+async function exportRows(clubId: string) {
+	return testDb
+		.select({
+			actorMemberId: activityLog.actorMemberId,
+			impersonatedBy: activityLog.impersonatedBy,
+			targetType: activityLog.targetType,
+			targetId: activityLog.targetId,
+			detail: activityLog.detail,
+		})
+		.from(activityLog)
+		.where(
+			and(
+				eq(activityLog.clubId, clubId),
+				eq(activityLog.action, "club_data_exported"),
+			),
+		)
+		.orderBy(asc(activityLog.createdAt));
+}
+
+async function seedSuperadmin(): Promise<string> {
+	const id = randomUUID();
+	await testDb.insert(user).values({
+		id,
+		name: "Super Admin",
+		email: `super-${id}@test.example`,
+		emailVerified: true,
+		isSuperadmin: true,
+	});
+	superadmins.push(id);
+	return id;
+}
+const superadmins: string[] = [];
 
 describe.skipIf(!hasTestDb)("GET /api/clubs/$clubId/export/zip (#915)", () => {
 	let club: SeededClub;
@@ -96,6 +143,12 @@ describe.skipIf(!hasTestDb)("GET /api/clubs/$clubId/export/zip (#915)", () => {
 	afterAll(async () => {
 		for (const c of [club, other, archived]) {
 			if (c) await cleanup(c.clubId, [c.adminUserId, c.memberUserId]);
+		}
+		if (superadmins.length > 0) {
+			await testDb
+				.delete(impersonationSessions)
+				.where(inArray(impersonationSessions.superadminUserId, superadmins));
+			await testDb.delete(user).where(inArray(user.id, superadmins));
 		}
 		sessionUserId = null;
 	});
@@ -268,5 +321,62 @@ describe.skipIf(!hasTestDb)("GET /api/clubs/$clubId/export/zip (#915)", () => {
 		expect(members_.map((m) => m.member_id).sort()).toEqual(
 			[club.memberId, club.adminMemberId].sort(),
 		);
+	});
+	it("records each download in the activity log, naming the admin", async () => {
+		const before = (await exportRows(club.clubId)).length;
+		const res = await download(club.clubId, club.adminUserId);
+		expect(res.status).toBe(200);
+		const rows = await exportRows(club.clubId);
+		expect(rows).toHaveLength(before + 1);
+		expect(rows.at(-1)).toEqual({
+			actorMemberId: club.adminMemberId,
+			impersonatedBy: null,
+			targetType: "club",
+			targetId: club.clubId,
+			detail: {
+				filename: res.headers
+					.get("content-disposition")
+					?.match(/filename="([^"]+)"/)?.[1],
+			},
+		});
+	});
+
+	it("records nothing for a refused download", async () => {
+		const before = (await exportRows(club.clubId)).length;
+		expect((await download(club.clubId, club.memberUserId)).status).toBe(403);
+		expect((await download(club.clubId, null)).status).toBe(401);
+		expect(await exportRows(club.clubId)).toHaveLength(before);
+	});
+
+	// "Act as admin" has full admin parity (#246), so it may export, and the
+	// row is attributed to the real superadmin rather than to a member.
+	it("serves a read-write impersonating superadmin, attributed to them", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su, {
+			clubId: club.clubId,
+			mode: "read_write",
+			reason: "exporting for the club",
+		});
+		const before = (await exportRows(club.clubId)).length;
+		const res = await download(club.clubId, su);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toBe("application/zip");
+		const rows = await exportRows(club.clubId);
+		expect(rows).toHaveLength(before + 1);
+		expect(rows.at(-1)).toMatchObject({
+			actorMemberId: null,
+			impersonatedBy: su,
+		});
+	});
+
+	// "View as this club" writes nothing and hands out no one's contact details.
+	it("403s a read-only impersonating superadmin, and records nothing", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su, { clubId: club.clubId });
+		const before = (await exportRows(club.clubId)).length;
+		const res = await download(club.clubId, su);
+		expect(res.status).toBe(403);
+		expect(res.headers.get("content-type")).not.toBe("application/zip");
+		expect(await exportRows(club.clubId)).toHaveLength(before);
 	});
 });

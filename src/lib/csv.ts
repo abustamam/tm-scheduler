@@ -4,7 +4,8 @@
  * one statement of the format:
  *
  * - RFC 4180 quoting: a cell containing a comma, a double quote, CR or LF is
- *   wrapped in double quotes, and each quote inside it is doubled.
+ *   wrapped in double quotes, and each quote inside it is doubled. A cell
+ *   containing a semicolon or a tab is quoted too ({@link NEEDS_QUOTES}).
  * - CRLF between records (RFC 4180's line ending, and what Excel writes).
  * - A leading UTF-8 byte-order mark, because Excel otherwise reads a BOM-less
  *   file as the system code page and "José" opens as "JosÃ©".
@@ -53,6 +54,16 @@ const FORMULA_TRIGGER = /^(?:[\t\r]|\s*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20])/;
 const PLAIN_NUMBER = /^-?\d+(?:\.\d+)?$/;
 
 /**
+ * What makes a cell need quotes. RFC 4180's set (comma, quote, CR, LF), plus
+ * the two other characters a spreadsheet may treat as a field separator when
+ * it opens a `.csv`: the semicolon (the list separator in many locales) and the
+ * tab. Unquoted, either one splits the cell in two, and the half after it is a
+ * NEW cell whose first character the injection guard never looked at. Quoted,
+ * the cell stays whole, whatever separator the reader picks.
+ */
+const NEEDS_QUOTES = /[",;\t\r\n]/;
+
+/**
  * One cell, escaped. Exported for the tests; callers want {@link toCsv}.
  *
  * The injection guard runs BEFORE quoting, so the `'` lands inside the quotes
@@ -73,7 +84,7 @@ export function csvCell(
 	) {
 		text = `'${text}`;
 	}
-	if (/[",\r\n]/.test(text)) {
+	if (NEEDS_QUOTES.test(text)) {
 		return `"${text.replace(/"/g, '""')}"`;
 	}
 	return text;

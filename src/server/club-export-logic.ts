@@ -24,10 +24,14 @@
  *
  * Person-scoped data (`speeches`, `path_enrollments`) is reached only through
  * this club: speeches by the slots of this club's meetings, enrollments by this
- * club's memberships. A member who is also in another club has their whole
- * Pathways enrollment exported — it is their record, and this club's admins
- * already see it on the member profile — but no other club's meetings, roles or
- * attendance appear anywhere.
+ * club's ACTIVE memberships. A current member who is also in another club has
+ * their whole Pathways enrollment exported — it is their record, and this
+ * club's admins already see it on the member profile — but no other club's
+ * meetings, roles or attendance appear anywhere. A lapsed member's enrollments
+ * are not exported at all: they carry no club, so once the membership lapses
+ * nothing ties them to this club any more, and what the person does in
+ * Pathways after leaving is not this club's record. Their past speeches here
+ * still are, and stay in speeches.csv.
  *
  * ## Serialisation (the issue's rules, in one place)
  *
@@ -41,17 +45,7 @@
  * contact record and the copy the roster shows (#906 / #907 move them to
  * `people`; when that lands, this file moves with them).
  */
-import {
-	type AnyColumn,
-	and,
-	count,
-	eq,
-	isNotNull,
-	max,
-	min,
-	or,
-	sql,
-} from "drizzle-orm";
+import { type AnyColumn, and, eq, isNotNull, max, or, sql } from "drizzle-orm";
 import { strToU8, zipSync } from "fflate";
 import { db } from "#/db";
 import {
@@ -78,6 +72,7 @@ import { cap } from "#/lib/cap";
 import { type CsvColumn, toCsv } from "#/lib/csv";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { centsToInput } from "#/lib/dues";
+import { loadGuestVisitSummaries } from "./guest-pipeline-logic";
 
 /** A cell value before serialisation. */
 export type ExportCell = string | number | null;
@@ -443,11 +438,16 @@ export async function loadClubExport(
 					),
 				})
 				.from(pathEnrollments)
+				// ACTIVE memberships only. An enrollment is PERSON-owned and carries
+				// no club, so the membership is the only thing tying it to this club;
+				// a lapsed one would keep sending a former member's progress, at
+				// whatever club they belong to now, to the admins of one they left.
 				.innerJoin(
 					members,
 					and(
 						eq(members.personId, pathEnrollments.personId),
 						eq(members.clubId, clubId),
+						eq(members.status, "active"),
 					),
 				)
 				.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathEnrollments.pathId))
@@ -472,31 +472,14 @@ export async function loadClubExport(
 				})
 				.from(guests)
 				.where(eq(guests.clubId, clubId));
-			// Visits: a guest's `meeting_attendance` rows at this club's meetings.
-			// There is no visits table (#915's Current State).
-			const visitRows = await tx
-				.select({
-					guestId: meetingAttendance.guestId,
-					visits: count(),
-					firstVisit: min(meetings.scheduledAt),
-				})
-				.from(meetingAttendance)
-				.innerJoin(
-					meetings,
-					and(
-						eq(meetings.id, meetingAttendance.meetingId),
-						eq(meetings.clubId, clubId),
-					),
-				)
-				// A visit is a PRESENT record. An absent or excused row is a guest
-				// who was expected and did not come.
-				.where(
-					and(
-						isNotNull(meetingAttendance.guestId),
-						eq(meetingAttendance.status, "present"),
-					),
-				)
-				.groupBy(meetingAttendance.guestId);
+			// Visits: the SAME derivation the guest pipeline board shows
+			// (`loadGuestVisitSummaries`), so a guest's count here never disagrees
+			// with the board's. There is no visits table (#915's Current State).
+			const visitRows = await loadGuestVisitSummaries(
+				tx,
+				clubId,
+				club.timezone,
+			);
 			const awardRows = await tx
 				.select({
 					meetingId: meetings.id,
@@ -796,8 +779,8 @@ export async function loadClubExport(
 						email: g.email,
 						phone: g.phone,
 						stage: g.stage,
-						first_visit: localDate(v?.firstVisit ?? null, tz),
-						visits: v?.visits ?? 0,
+						first_visit: localDate(v?.firstVisitAt ?? null, tz),
+						visits: v?.visitCount ?? 0,
 					};
 				})
 				.sort(
@@ -902,9 +885,9 @@ const FILE_DESCRIPTIONS: Record<
 	"attendance.csv": "One row per recorded attendance, members and guests.",
 	"speeches.csv": "One row per speech given at this club's meetings.",
 	"pathways.csv":
-		"One row per Pathways enrollment of this club's current and past members. current_level is the highest level Toastmasters has approved as complete (empty if none).",
+		"One row per Pathways enrollment of this club's current (active) members. current_level is the highest level Toastmasters has approved as complete (empty if none); status is archived for a path the member is no longer working on.",
 	"guests.csv":
-		"One row per guest, with contact details. visits counts the meetings of this club the guest was recorded present at; first_visit is the earliest of them.",
+		"One row per guest, with contact details. visits counts the meetings of this club the guest attended, held a role at or spoke at Table Topics, not counting cancelled meetings or ones still to come, the same count the guest pipeline shows; first_visit is the earliest of them.",
 	"awards.csv": "One row per meeting award.",
 	"dues.csv":
 		"One row per member per dues period: every active member, plus any past member with a recorded payment or waiver. status is paid, waived or unpaid.",

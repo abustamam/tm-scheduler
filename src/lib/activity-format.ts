@@ -186,6 +186,11 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "club_template_saved":
 			summary = "saved the agenda as a club template";
 			break;
+		// The club data export (#915): someone took a copy of every member's and
+		// guest's contact details. Without this case the feed shows the raw enum.
+		case "club_data_exported":
+			summary = "downloaded the club's data export";
+			break;
 		// A platform superadmin opened an impersonation session on this club
 		// (ADR-0020 / #185, #246) — read-only for `superadmin_viewed`, read-write
 		// for `superadmin_acted`. `entry.actorName` is null for both (the actor

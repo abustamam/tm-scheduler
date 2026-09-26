@@ -11,3 +11,27 @@
 export function clubExportUrl(clubId: string): string {
 	return `/api/clubs/${encodeURIComponent(clubId)}/export/zip`;
 }
+
+/** The `impersonating` field of `getAuthContext`, as route context carries it. */
+export interface ExportImpersonation {
+	clubId: string;
+	mode: "read_only" | "read_write";
+}
+
+/**
+ * Whether the export link may be shown for `clubId`, given the viewer is
+ * otherwise an admin there. False under "View as this club" (a `read_only`
+ * impersonation of that club): `getAuthContext` surfaces the impersonated club
+ * with `clubRole: "admin"`, so every admin check on the client passes, while
+ * the route's `requireClubRole` refuses a read-only session by construction. A
+ * link there is a guaranteed 403. `read_write` ("Act as admin") is served, so
+ * it keeps the link.
+ */
+export function exportLinkAllowed(
+	impersonating: ExportImpersonation | null | undefined,
+	clubId: string,
+): boolean {
+	return !(
+		impersonating?.mode === "read_only" && impersonating.clubId === clubId
+	);
+}
