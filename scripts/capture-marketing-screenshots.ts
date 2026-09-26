@@ -155,45 +155,32 @@ async function assertServes(url: string): Promise<void> {
 	}
 }
 
-/**
- * The Harbor officers the two dashboard shots sign in as: the memberships with
- * an OPEN `vp_education` / `vp_membership` term, and the sign-in email of the
- * account behind each. Read from the database rather than hard-coded, so a seed
- * that renames them cannot leave the script signing in as nobody.
- */
-async function findOfficersAndUpcoming(): Promise<{
-	vpeEmail: string;
-	vpmEmail: string;
-}> {
+async function findClubId(): Promise<string> {
 	const { db } = await import("#/db");
-	const { clubs, meetings, members, officerTerms, people, user } = await import(
-		"#/db/schema"
-	);
-	const { and, eq, gt, isNull, ne } = await import("drizzle-orm");
-
+	const { clubs } = await import("#/db/schema");
+	const { eq } = await import("drizzle-orm");
 	const [club] = await db
 		.select({ id: clubs.id })
 		.from(clubs)
 		.where(eq(clubs.name, CLUB_NAME))
 		.limit(1);
 	if (!club) fail(`club "${CLUB_NAME}" not found. Seed the database first.`);
+	return club.id;
+}
 
-	const [upcoming] = await db
-		.select({ id: meetings.id })
-		.from(meetings)
-		.where(
-			and(
-				eq(meetings.clubId, club.id),
-				gt(meetings.scheduledAt, new Date()),
-				ne(meetings.status, "cancelled"),
-			),
-		)
-		.limit(1);
-	if (!upcoming) {
-		fail(
-			`re-seed: no upcoming meeting for "${CLUB_NAME}" (bun run db:seed). The VPM shot's invite control needs one.`,
-		);
-	}
+/**
+ * The Harbor officers the two dashboard shots sign in as: the memberships with
+ * an OPEN `vp_education` / `vp_membership` term, and the sign-in email of the
+ * account behind each. Read from the database rather than hard-coded, so a seed
+ * that renames them cannot leave the script signing in as nobody.
+ */
+async function findOfficerEmails(clubId: string): Promise<{
+	vpeEmail: string;
+	vpmEmail: string;
+}> {
+	const { db } = await import("#/db");
+	const { members, officerTerms, people, user } = await import("#/db/schema");
+	const { and, eq, isNull } = await import("drizzle-orm");
 
 	async function officerEmail(
 		position: "vp_education" | "vp_membership",
@@ -206,7 +193,7 @@ async function findOfficersAndUpcoming(): Promise<{
 			.innerJoin(user, eq(user.id, people.userId))
 			.where(
 				and(
-					eq(members.clubId, club!.id),
+					eq(members.clubId, clubId),
 					eq(officerTerms.position, position),
 					isNull(officerTerms.termEnd),
 				),
@@ -224,6 +211,55 @@ async function findOfficersAndUpcoming(): Promise<{
 		vpeEmail: await officerEmail("vp_education"),
 		vpmEmail: await officerEmail("vp_membership"),
 	};
+}
+
+/**
+ * The VPM shot needs two meetings still ahead: one for the "Invite to …"
+ * control (the club's next meeting), and the one the seed's guest invite
+ * points at, or its line reads "Last invited to …" and the DOM check fails.
+ * The seed puts that invite on a meeting at least 7 days out, so a seed stays
+ * good for a week; this names the failure when it has gone stale.
+ */
+async function assertUpcomingMeetings(clubId: string): Promise<void> {
+	const { db } = await import("#/db");
+	const { guestInvites, meetings } = await import("#/db/schema");
+	const { and, desc, eq, gt, ne } = await import("drizzle-orm");
+	const now = new Date();
+
+	const [upcoming] = await db
+		.select({ id: meetings.id })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				gt(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.limit(1);
+	if (!upcoming) {
+		fail(
+			`re-seed: no upcoming meeting for "${CLUB_NAME}" (bun run db:seed). The VPM shot's invite control needs one.`,
+		);
+	}
+
+	const [invited] = await db
+		.select({ at: meetings.scheduledAt })
+		.from(guestInvites)
+		.innerJoin(meetings, eq(meetings.id, guestInvites.meetingId))
+		.where(eq(guestInvites.clubId, clubId))
+		.orderBy(desc(meetings.scheduledAt))
+		.limit(1);
+	if (!invited) {
+		fail(
+			`re-seed: "${CLUB_NAME}" has no guest invite (bun run db:seed). The VPM shot's "Invited to" line needs one.`,
+		);
+	}
+	if (invited.at <= now) {
+		fail(
+			`re-seed: "${CLUB_NAME}"'s latest guest invite is for ${invited.at.toISOString()}, which has passed, so the VPM shot would read "Last invited to" (bun run db:seed).`,
+		);
+	}
 }
 
 /**
@@ -246,9 +282,27 @@ async function assertDevLogin(email: string): Promise<void> {
 }
 
 /**
+ * The flags every Chrome run here shares, with a fresh `--user-data-dir`, so
+ * the DOM check, the `--screenshot` shots and the DevTools shots all load the
+ * page the same way.
+ */
+function chromeArgs(profile: string, windowSize: string): string[] {
+	return [
+		"--headless",
+		"--disable-gpu",
+		"--no-sandbox",
+		"--disable-extensions",
+		`--user-data-dir=${profile}`,
+		"--hide-scrollbars",
+		`--window-size=${windowSize}`,
+	];
+}
+
+/**
  * One headless Chrome run with a fresh profile. `output` is `--screenshot=…`
- * or `--dump-dom`; every other flag is shared, so the DOM check sees the page
- * the screenshot run shoots. Returns stdout (the DOM, for a dump).
+ * or `--dump-dom`. Returns stdout (the DOM, for a dump). `fail` runs only
+ * after the profile is removed: it exits the process, so a `finally` it was
+ * called inside would never run.
  */
 function runChrome(
 	chrome: string,
@@ -257,17 +311,13 @@ function runChrome(
 	output: string,
 ): string {
 	const profile = mkdtempSync(join(tmpdir(), "marketing-shot-"));
+	let stdout: string | undefined;
+	let error: string | undefined;
 	try {
-		return execFileSync(
+		stdout = execFileSync(
 			chrome,
 			[
-				"--headless",
-				"--disable-gpu",
-				"--no-sandbox",
-				"--disable-extensions",
-				`--user-data-dir=${profile}`,
-				"--hide-scrollbars",
-				`--window-size=${windowSize}`,
+				...chromeArgs(profile, windowSize),
 				// NOT `--virtual-time-budget=8000`, which #867 specified: against
 				// `bun run dev` it never returns. Vite's HMR websocket stays open, so
 				// virtual time never runs out, and Chrome sat there until the 40s
@@ -286,10 +336,12 @@ function runChrome(
 			},
 		).toString("utf8");
 	} catch (err) {
-		fail(`Chrome failed on ${url}: ${(err as Error).message}`);
+		error = (err as Error).message;
 	} finally {
 		rmSync(profile, { recursive: true, force: true });
 	}
+	if (stdout === undefined) fail(`Chrome failed on ${url}: ${error}`);
+	return stdout;
 }
 
 function capture(chrome: string, url: string, out: string): void {
@@ -316,6 +368,7 @@ const OFFICER_WINDOW = "1600,900";
 const OFFICER_VIEWPORT = { width: 1600, height: 900 };
 /** After `load`: hydration, the post-mount draft links, fonts. */
 const SETTLE_MS = 1500;
+const CAPTURE_TIMEOUT_MS = 60_000;
 
 /**
  * A signed-in section shot, taken over the DevTools protocol rather than with
@@ -333,6 +386,11 @@ const SETTLE_MS = 1500;
  * Bun has a WebSocket client. Also measured here, not assumed: the section's
  * position (`framingProblem`) and the same DOM check the dump passed, on the
  * very page being shot.
+ *
+ * Every failure inside THROWS, and `fail` runs only after the `finally` has
+ * killed Chrome and removed its profile. `fail` exits the process, so calling
+ * it inside the `try` would skip the cleanup and leave a Chrome listening on a
+ * debugging port.
  */
 async function captureSection(
 	chrome: string,
@@ -346,128 +404,167 @@ async function captureSection(
 	const proc = spawn(
 		chrome,
 		[
-			"--headless",
-			"--disable-gpu",
-			"--no-sandbox",
-			"--disable-extensions",
-			`--user-data-dir=${profile}`,
-			"--hide-scrollbars",
-			`--window-size=${OFFICER_WINDOW}`,
+			...chromeArgs(profile, OFFICER_WINDOW),
 			"--remote-debugging-port=0",
 			"about:blank",
 		],
-		{ env: CHROME_ENV, stdio: ["ignore", "ignore", "pipe"] },
+		// Its own process group, so cleanup can kill the renderer and GPU
+		// children too, not just the browser process.
+		{ env: CHROME_ENV, stdio: ["ignore", "ignore", "pipe"], detached: true },
 	);
-	const deadline = setTimeout(() => {
-		proc.kill("SIGKILL");
-		fail(`Chrome did not finish ${url} within 60s.`);
-	}, 60_000);
+	const exited = new Promise<void>((res) => {
+		if (proc.exitCode !== null || proc.signalCode !== null) res();
+		else proc.once("exit", () => res());
+	});
+	let deadline: ReturnType<typeof setTimeout> | undefined;
 	let socket: WebSocket | undefined;
+	let error: string | undefined;
 	try {
-		const browserWs = await new Promise<string>((res, rej) => {
-			let stderr = "";
-			proc.stderr?.on("data", (chunk) => {
-				stderr += String(chunk);
-				const m = /DevTools listening on (ws:\/\/\S+)/.exec(stderr);
-				if (m) res(m[1]);
-			});
-			proc.on("exit", (code) =>
-				rej(new Error(`Chrome exited (${code}) before DevTools came up`)),
-			);
-		});
-		const port = new URL(browserWs).port;
-		const targets = (await (
-			await fetch(`http://127.0.0.1:${port}/json/list`)
-		).json()) as { type: string; webSocketDebuggerUrl: string }[];
-		const page = targets.find((t) => t.type === "page");
-		if (!page) throw new Error("Chrome opened no page target");
-
-		const ws = new WebSocket(page.webSocketDebuggerUrl);
-		socket = ws;
-		await new Promise((res, rej) => {
-			ws.addEventListener("open", res, { once: true });
-			ws.addEventListener("error", rej, { once: true });
-		});
-		let nextId = 0;
-		const replies = new Map<number, (msg: CdpMessage) => void>();
-		const listeners: ((msg: CdpMessage) => void)[] = [];
-		ws.addEventListener("message", (e) => {
-			const msg = JSON.parse(String(e.data)) as CdpMessage;
-			const reply = msg.id === undefined ? undefined : replies.get(msg.id);
-			if (reply && msg.id !== undefined) {
-				replies.delete(msg.id);
-				reply(msg);
-			} else for (const l of listeners) l(msg);
-		});
-		const send = (method: string, params: object = {}) =>
-			new Promise<Record<string, unknown>>((res, rej) => {
-				const id = ++nextId;
-				replies.set(id, (msg) =>
-					msg.error
-						? rej(new Error(`${method}: ${msg.error.message}`))
-						: res(msg.result ?? {}),
-				);
-				ws.send(JSON.stringify({ id, method, params }));
-			});
-		const evaluate = async <T>(expression: string): Promise<T> => {
-			const r = (await send("Runtime.evaluate", {
-				expression,
-				returnByValue: true,
-			})) as { result?: { value?: T } };
-			return r.result?.value as T;
-		};
-
-		await send("Page.enable");
-		// New headless spends part of `--window-size` on window chrome; pin the
-		// viewport itself so the image is exactly 1600x900.
-		await send("Emulation.setDeviceMetricsOverride", {
-			...OFFICER_VIEWPORT,
-			deviceScaleFactor: 1,
-			mobile: false,
-		});
-		const loaded = new Promise<void>((res) =>
-			listeners.push((m) => {
-				if (m.method === "Page.loadEventFired") res();
+		const top = await Promise.race([
+			shootSection(proc, url, out, sectionId, check, (ws) => {
+				socket = ws;
 			}),
-		);
-		await send("Page.navigate", { url });
-		await loaded;
-		await new Promise((r) => setTimeout(r, SETTLE_MS));
-
-		const problem = check(
-			await evaluate<string>("document.documentElement.outerHTML"),
-		);
-		if (problem) fail(`${url}: ${problem}`);
-		// The dev server's TanStack devtools badge is not part of the product.
-		await evaluate(
-			`document.head.insertAdjacentHTML("beforeend", "<style>[data-testid=tanstack_devtools]{display:none!important}</style>")`,
-		);
-		const frame = await evaluate<SectionFrame | null>(`(() => {
-			const el = document.getElementById(${JSON.stringify(sectionId)});
-			if (!el) return null;
-			const r = el.getBoundingClientRect();
-			const hit = document.elementFromPoint(r.left + 4, r.top + 4);
-			return { top: r.top, viewportHeight: innerHeight, headingVisible: !!hit && el.contains(hit) };
-		})()`);
-		const framing = framingProblem(sectionId, frame);
-		if (framing) fail(`${url}: ${framing}`);
-
-		const shot = (await send("Page.captureScreenshot", { format: "png" })) as {
-			data: string;
-		};
-		writeFileSync(out, Buffer.from(shot.data, "base64"));
+			new Promise<never>((_, rej) => {
+				deadline = setTimeout(
+					() => rej(new Error(`did not finish within ${CAPTURE_TIMEOUT_MS / 1000}s`)),
+					CAPTURE_TIMEOUT_MS,
+				);
+			}),
+		]);
 		console.log(
-			`#${sectionId} framed ${Math.round(frame!.top)}px from the top of ${frame!.viewportHeight}px`,
+			`#${sectionId} framed ${Math.round(top)}px from the top of ${OFFICER_VIEWPORT.height}px`,
 		);
 	} catch (err) {
-		fail(`Chrome failed on ${url}: ${(err as Error).message}`);
+		error = (err as Error).message;
 	} finally {
 		clearTimeout(deadline);
 		socket?.close();
-		proc.kill("SIGKILL");
+		await killChrome(proc, exited);
+		// Only once every Chrome process is gone: removing the profile while a
+		// child is still writing into it left the directory behind (measured:
+		// two per run, before this waited).
 		rmSync(profile, { recursive: true, force: true });
 	}
+	if (error !== undefined) fail(`Chrome failed on ${url}: ${error}`);
 	assertPng(out, url);
+}
+
+/** SIGKILL Chrome's whole process group and wait for the browser to exit. */
+async function killChrome(
+	proc: ReturnType<typeof spawn>,
+	exited: Promise<void>,
+): Promise<void> {
+	try {
+		if (proc.pid !== undefined) process.kill(-proc.pid, "SIGKILL");
+	} catch {
+		// Already gone.
+	}
+	await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
+}
+
+/** The DevTools half of `captureSection`. Throws; never calls `fail`. Returns
+ *  the section's measured top. */
+async function shootSection(
+	proc: ReturnType<typeof spawn>,
+	url: string,
+	out: string,
+	sectionId: string,
+	check: (html: string) => string | null,
+	onSocket: (ws: WebSocket) => void,
+): Promise<number> {
+	const browserWs = await new Promise<string>((res, rej) => {
+		let stderr = "";
+		proc.stderr?.on("data", (chunk) => {
+			stderr += String(chunk);
+			const m = /DevTools listening on (ws:\/\/\S+)/.exec(stderr);
+			if (m) res(m[1]);
+		});
+		proc.on("exit", (code) =>
+			rej(new Error(`Chrome exited (${code}) before DevTools came up`)),
+		);
+	});
+	const port = new URL(browserWs).port;
+	const targets = (await (
+		await fetch(`http://127.0.0.1:${port}/json/list`)
+	).json()) as { type: string; webSocketDebuggerUrl: string }[];
+	const page = targets.find((t) => t.type === "page");
+	if (!page) throw new Error("Chrome opened no page target");
+
+	const ws = new WebSocket(page.webSocketDebuggerUrl);
+	onSocket(ws);
+	await new Promise((res, rej) => {
+		ws.addEventListener("open", res, { once: true });
+		ws.addEventListener("error", rej, { once: true });
+	});
+	let nextId = 0;
+	const replies = new Map<number, (msg: CdpMessage) => void>();
+	const listeners: ((msg: CdpMessage) => void)[] = [];
+	ws.addEventListener("message", (e) => {
+		const msg = JSON.parse(String(e.data)) as CdpMessage;
+		const reply = msg.id === undefined ? undefined : replies.get(msg.id);
+		if (reply && msg.id !== undefined) {
+			replies.delete(msg.id);
+			reply(msg);
+		} else for (const l of listeners) l(msg);
+	});
+	const send = (method: string, params: object = {}) =>
+		new Promise<Record<string, unknown>>((res, rej) => {
+			const id = ++nextId;
+			replies.set(id, (msg) =>
+				msg.error
+					? rej(new Error(`${method}: ${msg.error.message}`))
+					: res(msg.result ?? {}),
+			);
+			ws.send(JSON.stringify({ id, method, params }));
+		});
+	const evaluate = async <T>(expression: string): Promise<T> => {
+		const r = (await send("Runtime.evaluate", {
+			expression,
+			returnByValue: true,
+		})) as { result?: { value?: T } };
+		return r.result?.value as T;
+	};
+
+	await send("Page.enable");
+	// New headless spends part of `--window-size` on window chrome; pin the
+	// viewport itself so the image is exactly 1600x900.
+	await send("Emulation.setDeviceMetricsOverride", {
+		...OFFICER_VIEWPORT,
+		deviceScaleFactor: 1,
+		mobile: false,
+	});
+	const loaded = new Promise<void>((res) =>
+		listeners.push((m) => {
+			if (m.method === "Page.loadEventFired") res();
+		}),
+	);
+	await send("Page.navigate", { url });
+	await loaded;
+	await new Promise((r) => setTimeout(r, SETTLE_MS));
+
+	const problem = check(
+		await evaluate<string>("document.documentElement.outerHTML"),
+	);
+	if (problem) throw new Error(problem);
+	// The dev server's TanStack devtools badge is not part of the product.
+	await evaluate(
+		`document.head.insertAdjacentHTML("beforeend", "<style>[data-testid=tanstack_devtools]{display:none!important}</style>")`,
+	);
+	const frame = await evaluate<SectionFrame | null>(`(() => {
+		const el = document.getElementById(${JSON.stringify(sectionId)});
+		if (!el) return null;
+		const r = el.getBoundingClientRect();
+		const hit = document.elementFromPoint(r.left + 4, r.top + 4);
+		return { top: r.top, viewportHeight: innerHeight, headingVisible: !!hit && el.contains(hit) };
+	})()`);
+	const framing = framingProblem(sectionId, frame);
+	if (framing || !frame) throw new Error(framing ?? "no frame");
+
+	const shot = (await send("Page.captureScreenshot", { format: "png" })) as {
+		data: string;
+	};
+	writeFileSync(out, Buffer.from(shot.data, "base64"));
+	return frame.top;
 }
 
 interface CdpMessage {
@@ -497,7 +594,9 @@ async function main() {
 		{ url: `${base}/present`, out: join(OUT_DIR, "tour-present.png") },
 	];
 
-	const { vpeEmail, vpmEmail } = await findOfficersAndUpcoming();
+	const clubId = await findClubId();
+	await assertUpcomingMeetings(clubId);
+	const { vpeEmail, vpmEmail } = await findOfficerEmails(clubId);
 	const officerShots = [
 		{
 			email: vpeEmail,

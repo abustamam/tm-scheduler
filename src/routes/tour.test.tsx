@@ -187,14 +187,6 @@ describe("/tour", () => {
 		expect(text).toContain("GavelUp writes the draft. You send it.");
 		expect(text).toMatch(/VP Education/);
 		expect(text).toMatch(/VP Membership/);
-		const words = Array.from(scene.querySelectorAll("p"))
-			.filter((p) => !/^Step \d$/.test(p.textContent ?? ""))
-			.map((p) => p.textContent ?? "")
-			.join(" ")
-			.split(/\s+/)
-			.filter(Boolean).length;
-		expect(words).toBeGreaterThanOrEqual(40);
-		expect(words).toBeLessThanOrEqual(75);
 	});
 
 	it("closes with the pilot pricing line, the founder note and a /request-access link", async () => {

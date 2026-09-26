@@ -501,6 +501,8 @@ async function enrollPath(
  * (#419): an enrollment with NO `path_level_progress` rows, which is what puts
  * it on the catalog branch — levels counted from `pathways_projects` against
  * the marks, so "what is left" can be named. Needs the catalog seeded first.
+ * The enrollment insert has no onConflict: it relies on `seedClub` having just
+ * inserted the person fresh, so no enrollment for this path can exist yet.
  */
 async function declarePathWithMarks(
 	personId: string,
@@ -1127,8 +1129,9 @@ async function main() {
 
 	// `/tour`'s officers stop (#901) is captured from Harbor's VPE and VPM
 	// dashboards by `bun run marketing:screenshots`, which checks each of the
-	// shapes below is on the page before it shoots. Harbor's meetings at +3 and
-	// +10 days keep an upcoming meeting in place for a week after a seed.
+	// shapes below is on the page before it shoots. The guest invite below is
+	// for Harbor's +10-day meeting, so its "Invited to …" line (and the script's
+	// upcoming-meeting check) stays good for a week or more after a seed.
 	const harborPerson = (n: string) => harbor.personByName.get(n)!;
 	const harborMember = (n: string) => harbor.memberByName.get(n)!;
 	// "Close to a level", catalog branch: a hand-declared path, 3 of Level 1's 4
@@ -1162,8 +1165,10 @@ async function main() {
 		joinedAgo(0, 3),
 	);
 
-	// Guests for the VPM pipeline: one prospect already invited to the next
-	// meeting by Harbor's VPM, one following-up guest who can still be invited.
+	// Guests for the VPM pipeline: one prospect already invited by Harbor's VPM
+	// to the +10-day meeting (NOT the +3-day one: once an invite's meeting has
+	// started the line reads "Last invited to …" and the capture's DOM check
+	// fails), and one following-up guest who can still be invited.
 	const [harborProspect] = await db
 		.insert(guests)
 		.values([
@@ -1186,7 +1191,7 @@ async function main() {
 	await db.insert(guestInvites).values({
 		clubId: harbor.clubId,
 		guestId: harborProspect!.id,
-		meetingId: harbor.meetings[0].meetingId,
+		meetingId: harbor.meetings[1].meetingId,
 		invitedByMemberId: harborMember("Sofia Reyes"),
 		invitedAt: dayAt(-1, 10),
 	});

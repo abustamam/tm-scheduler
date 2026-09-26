@@ -292,7 +292,7 @@ function Section({
 	children: React.ReactNode;
 }) {
 	return (
-		<div id={id} className="scroll-mt-24">
+		<div id={id} className={id ? "scroll-mt-24" : undefined}>
 			<div className="mb-2.5">
 				<h2 className="text-sm font-bold tracking-[-0.01em]">{title}</h2>
 				<p className="text-xs text-[var(--sea-ink-soft)]">{subtitle}</p>
