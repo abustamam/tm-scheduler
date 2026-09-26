@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import {
 	CheckCircle2,
 	ChevronRight,
+	Download,
 	Loader2,
 	Mail,
 	MailCheck,
@@ -28,6 +29,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
+import { clubExportUrl } from "#/lib/club-export-url";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
@@ -263,9 +265,18 @@ function Roster() {
 					</p>
 				</div>
 				<div className="flex gap-2">
-					<Button variant="outline" size="sm">
-						Export CSV
-					</Button>
+					{/* A plain link to the export route (#915), shown only to whoever
+					    the route will serve: `canManage` is `effectiveAdminClub`, the
+					    client half of the route's `requireClubRole(…, ["admin"])`.
+					    It replaced an "Export CSV" button with no action at all. */}
+					{clubId && canManage ? (
+						<Button asChild variant="outline" size="sm">
+							<a href={clubExportUrl(clubId)} download>
+								<Download aria-hidden />
+								Export club data
+							</a>
+						</Button>
+					) : null}
 					{clubId && members.length > 1 ? (
 						<Button
 							variant="outline"
