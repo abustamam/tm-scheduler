@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, eq, gte, lt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -18,12 +18,7 @@ import {
 	MEETING_UPDATE_FIELDS,
 } from "#/lib/meeting-limits";
 import { pairedRoleIds } from "#/lib/meeting-roles";
-import {
-	localDateKey,
-	localDayRange,
-	meetingUrlKey,
-	urlKeysForMeetings,
-} from "#/lib/meeting-url";
+import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
@@ -59,6 +54,7 @@ import {
 	loadTemplateContent,
 	loadTemplateKey,
 } from "./meeting-templates-logic";
+import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
@@ -71,6 +67,7 @@ import {
 	loadTmodPanelData,
 } from "./meetings-logic";
 import { loadMyCommitments } from "./my-activity-logic";
+import { loadNextMeetingSummary } from "./next-meeting-summary-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
 import { loadPastMeetings } from "./past-meetings-logic";
 import { listRoleDefinitions } from "./role-definitions-logic";
@@ -220,38 +217,11 @@ async function loadMeetingDetail(
 	// Canonical date URL key for THIS meeting: club-local date, suffixed with
 	// -HHmm only when the club has 2+ meetings that local day (date-urls feature).
 	const tz = club?.timezone ?? "UTC";
-	const { start: dayStart, end: dayEnd } = localDayRange(
-		localDateKey(meeting.scheduledAt, tz),
+	const urlKey = await resolveMeetingUrlKey(
+		meeting.clubId,
+		meeting.scheduledAt,
 		tz,
 	);
-	const [{ count: sameDayCount } = { count: 0 }] = await db
-		.select({ count: sql<number>`count(*)::int` })
-		.from(meetings)
-		.where(
-			and(
-				eq(meetings.clubId, meeting.clubId),
-				gte(meetings.scheduledAt, dayStart),
-				lt(meetings.scheduledAt, dayEnd),
-				ne(meetings.status, "cancelled"),
-			),
-		);
-	const urlKey = meetingUrlKey(meeting.scheduledAt, tz, sameDayCount >= 2);
-
-	// The club's next non-cancelled meeting strictly after this one (spec: relative
-	// to the presented meeting, not wall-clock now). Backs the Thank-You slide.
-	const [nextMeeting] = await db
-		.select({ scheduledAt: meetings.scheduledAt })
-		.from(meetings)
-		.where(
-			and(
-				eq(meetings.clubId, meeting.clubId),
-				gte(meetings.scheduledAt, meeting.scheduledAt),
-				ne(meetings.id, meeting.id),
-				ne(meetings.status, "cancelled"),
-			),
-		)
-		.orderBy(asc(meetings.scheduledAt))
-		.limit(1);
 
 	// Officers for the printable agenda's officer grid (#100). The full agenda
 	// line-up (President → Sergeant at Arms; Immediate Past President is left off
@@ -452,6 +422,14 @@ async function loadMeetingDetail(
 	// `meeting.meetingNumber` (which is the raw stored column, often null).
 	const meetingNumber = await resolveMeetingNumber(meetingId);
 
+	// The club's next non-cancelled meeting strictly after this one (spec: relative
+	// to the presented meeting, not wall-clock now), summarised for the deck's
+	// "What's on tap for next meeting" slide (#932) — date, place, theme, and every
+	// role with its holders' names. It also backs the Thank-You slide's date, so
+	// the two slides are one read. Names only; an in-room artifact still narrows
+	// it through `inRoomMeetingPayload` like everything else on this payload.
+	const nextMeeting = await loadNextMeetingSummary(meeting, tz, meetingNumber);
+
 	return {
 		meeting,
 		meetingNumber,
@@ -459,6 +437,7 @@ async function loadMeetingDetail(
 		canManage,
 		roleRecency,
 		nextMeetingAt: nextMeeting?.scheduledAt ?? null,
+		nextMeeting,
 		timezone: club?.timezone ?? "UTC",
 		clubName: club?.name ?? "",
 		clubNumber: club?.clubNumber ?? null,

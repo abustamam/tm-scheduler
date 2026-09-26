@@ -85,7 +85,11 @@ vi.mock("#/server/voting", () => ({
 vi.mock("#/server/members", () => ({ listMembers: vi.fn() }));
 
 import { resolveClubOrRedirect } from "#/lib/club-route";
-import { IN_ROOM_MEETING_FIELDS } from "#/lib/in-room-meeting-payload";
+import {
+	IN_ROOM_MEETING_FIELDS,
+	IN_ROOM_NEXT_MEETING_FIELDS,
+	IN_ROOM_NEXT_MEETING_ROLE_FIELDS,
+} from "#/lib/in-room-meeting-payload";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
@@ -120,6 +124,9 @@ const WITHHELD = [
 	"src/lib/agenda-slides.ts",
 	"src/lib/agenda-template-slides.ts",
 	"src/lib/deck-to-pptx.ts",
+	// The next-meeting slide (#932): its data module and its on-screen body.
+	"src/lib/next-meeting-summary.ts",
+	"src/components/agenda/next-meeting-body.tsx",
 ] as const;
 
 /** The surface the link IS for. Also the vacuity floor for the sweep above. */
@@ -200,12 +207,13 @@ describe("the join link is on NO in-room artifact (#731)", () => {
 		});
 	}
 
-	it("still sweeps all nine modules", () => {
+	it("still sweeps all eleven modules", () => {
 		// The cheapest way to "fix" a failure above is to delete the offending
 		// entry from WITHHELD, which silences the guard without changing what
 		// ships. A count floor makes that a visible edit rather than a quiet one:
-		// three routes, three renderers, three deck builders.
-		expect(WITHHELD).toHaveLength(9);
+		// three routes, three renderers, three deck builders, and the
+		// next-meeting slide's data module and body (#932).
+		expect(WITHHELD).toHaveLength(11);
 	});
 });
 
@@ -282,6 +290,8 @@ function detail() {
 		canManage: false,
 		roleRecency: {},
 		nextMeetingAt: null,
+		// The next meeting's line-up (#932), WIDENED — see `nextSummary`.
+		nextMeeting: nextSummary(),
 		timezone: "UTC",
 		clubName: "Downtown Toastmasters",
 		clubNumber: "1234567",
@@ -303,6 +313,48 @@ function detail() {
 		clubGuests: [],
 		clubRoles: [],
 		pairedRoleDefinitionIds: [],
+	};
+}
+
+/** Stand-ins for contact that must never reach the wall (#932). */
+const NEXT_EMAIL = "dana.next-932@example.com";
+const NEXT_PHONE = "+1 555 0932";
+const NEXT_SECRET = "https://zoom.example/j/guard-932-next-meeting";
+
+/**
+ * The next meeting's summary (#932) WIDENED past what `NextMeetingSummary`
+ * declares — an id, a join link, notes, and contact on a role — which is what a
+ * careless change to its builder would ship. The projection must drop all of it.
+ */
+const NEXT_MEETING_ID = "33333333-3333-4333-8333-333333333333";
+const NEXT_MEMBER_ID = "44444444-4444-4444-8444-444444444444";
+
+function nextSummary() {
+	return {
+		id: NEXT_MEETING_ID,
+		scheduledAt: "2026-08-07T18:45:00Z",
+		location: "Room 9",
+		theme: "Next Steps",
+		meetingNumber: 57,
+		urlKey: "2026-08-07",
+		joinUrl: NEXT_SECRET,
+		notes: "Ask about the next projector",
+		toastmaster: {
+			label: "Toastmaster of the Day",
+			names: ["Dana Next"],
+			openCount: 0,
+			email: NEXT_EMAIL,
+			phone: NEXT_PHONE,
+		},
+		roles: [
+			{
+				label: "Timer",
+				names: [],
+				openCount: 1,
+				memberId: NEXT_MEMBER_ID,
+				email: NEXT_EMAIL,
+			},
+		],
 	};
 }
 
@@ -487,4 +539,89 @@ describe("no in-room artifact SHIPS the join link (#754)", () => {
 			}
 		});
 	}
+});
+
+/**
+ * The next meeting's line-up (#932), on every in-room route that carries the
+ * detail payload. Same two questions as the meeting row above, asked of the
+ * summary: does it ship any key outside its declared allowlist, and does any
+ * contact or join link reach the page. `/present` draws it; `/print` and
+ * `/word` carry it only because they spread the same payload, which is exactly
+ * how #754's leak travelled — so all three are asserted.
+ */
+describe("the next meeting's line-up ships names and nothing else (#932)", () => {
+	type NextShape = Record<string, unknown> & {
+		toastmaster: Record<string, unknown> | null;
+		roles: Record<string, unknown>[];
+	};
+
+	it("the widened fixture DOES carry what must be withheld (control)", () => {
+		const raw = JSON.stringify(nextSummary());
+		for (const leak of [NEXT_EMAIL, NEXT_PHONE, NEXT_SECRET]) {
+			expect(raw).toContain(leak);
+		}
+		expect(raw).toMatch(JOIN_URL);
+		// …and the pre-fix return shape would have shipped all of it.
+		expect(JSON.stringify({ ...detail(), logoUrl: null })).toContain(
+			NEXT_EMAIL,
+		);
+	});
+
+	it("the allowlists name nothing join- or contact-shaped", () => {
+		const all = [
+			...IN_ROOM_NEXT_MEETING_FIELDS,
+			...IN_ROOM_NEXT_MEETING_ROLE_FIELDS,
+		].join(" ");
+		expect(all).not.toMatch(JOIN_URL);
+		expect(all).not.toMatch(/email|phone|notes|\bid\b/i);
+	});
+
+	for (const entry of ARTIFACT_ROUTES.filter((r) => r.carriesMeeting)) {
+		const label = `/${entry.segment}`;
+		const load = async () =>
+			(await runLoader(entry)) as { nextMeeting?: NextShape | null };
+
+		it(`${label} ships no contact, id or join link for the next meeting`, async () => {
+			const payload = shipped(await load());
+			for (const leak of [NEXT_EMAIL, NEXT_PHONE, NEXT_SECRET]) {
+				expect(payload).not.toContain(leak);
+			}
+			expect(payload).not.toContain(NEXT_MEETING_ID);
+			expect(payload).not.toContain(NEXT_MEMBER_ID);
+			expect(payload).not.toContain("Ask about the next projector");
+		});
+
+		it(`${label} ships no next-meeting key outside the allowlists`, async () => {
+			const next = (await load()).nextMeeting;
+			if (!next) throw new Error(`${label} dropped the next meeting`);
+			const allowed = new Set<string>(IN_ROOM_NEXT_MEETING_FIELDS);
+			const roleAllowed = new Set<string>(IN_ROOM_NEXT_MEETING_ROLE_FIELDS);
+			expect(Object.keys(next).filter((k) => !allowed.has(k))).toEqual([]);
+			const roles = [
+				...(next.toastmaster ? [next.toastmaster] : []),
+				...next.roles,
+			];
+			expect(roles.length).toBeGreaterThan(0);
+			for (const role of roles) {
+				expect(Object.keys(role).filter((k) => !roleAllowed.has(k))).toEqual(
+					[],
+				);
+			}
+		});
+	}
+
+	it("/present still ships what the slide is drawn from (vacuity floor)", async () => {
+		const present = ARTIFACT_ROUTES.find((r) => r.segment === "present");
+		if (!present) throw new Error("present route not enrolled");
+		const payload = shipped(await runLoader(present));
+		for (const kept of [
+			"Dana Next",
+			"Timer",
+			"Room 9",
+			"Next Steps",
+			"2026-08-07",
+		]) {
+			expect(payload).toContain(kept);
+		}
+	});
 });

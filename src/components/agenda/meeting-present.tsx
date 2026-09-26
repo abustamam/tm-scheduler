@@ -11,6 +11,7 @@ import {
 	useState,
 } from "react";
 import { ClubLogo } from "#/components/agenda/club-logo";
+import { NextMeetingBodyView } from "#/components/agenda/next-meeting-body";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
@@ -695,6 +696,9 @@ function BodyView({
 }: {
 	body: Extract<SlideLayout, { chrome: "content" }>["body"];
 }) {
+	// The next meeting's line-up (#932). Its own module so a real browser can lay
+	// out the exact markup — see `NextMeetingBodyView`.
+	if (body.form === "roster") return <NextMeetingBodyView body={body} />;
 	if (body.form === "word") {
 		return (
 			<div className="text-center">

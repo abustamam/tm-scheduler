@@ -2,6 +2,7 @@ import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
+import { useNextMeetingRefresh } from "#/components/agenda/use-next-meeting-refresh";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
@@ -9,8 +10,12 @@ import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { ballotUrlFor } from "#/lib/digital-voting";
-import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
+import {
+	inRoomMeetingPayload,
+	inRoomNextMeeting,
+} from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
+import { signupUrlFor } from "#/lib/next-meeting-summary";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
 
@@ -40,6 +45,9 @@ export const Route = createFileRoute(
 		// Dehydrated into the served document, and this page is public and
 		// unauthenticated — so the projection is the withholding, not what the
 		// deck below happens to render (#754). See `inRoomMeetingPayload`.
+		//
+		// That projection covers `nextMeeting` too (#932): the next meeting's
+		// line-up rides this payload, narrowed to names and schedule.
 		return {
 			...inRoomMeetingPayload(data),
 			logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
@@ -71,6 +79,29 @@ function PresentPage() {
 		{ clubKey: clubId, meetingKey: meetingId },
 		origin,
 	);
+	// What's on tap next (#932): the loader's snapshot, silently refreshed while
+	// the deck is up — see `useNextMeetingRefresh` for why a failure never shows.
+	// The refresh re-reads the same public payload the loader did (and narrows
+	// it the same way), rather than a server fn of its own: that read is already
+	// archive-gated, and a second public endpoint would be a second thing to gate.
+	const nextMeeting = useNextMeetingRefresh(
+		data.nextMeeting ?? null,
+		[data.meeting.clubId, meetingId],
+		async () =>
+			inRoomNextMeeting(
+				(
+					await getPublicMeetingByKey({
+						data: { clubId: data.meeting.clubId, key: meetingId },
+					})
+				).nextMeeting ?? null,
+			),
+	);
+	// Same origin rule as the ballot: no QR until the browser says where we are.
+	const nextMeetingSignupUrl = signupUrlFor(clubId, nextMeeting, origin);
+	// The Thank-You splash names the same meeting the slide before it does.
+	const nextMeetingAt = nextMeeting
+		? new Date(nextMeeting.scheduledAt)
+		: data.nextMeetingAt;
 	const club = {
 		name: data.clubName,
 		clubNumber: data.clubNumber,
@@ -99,15 +130,19 @@ function PresentPage() {
 					template: data.template,
 					slots: data.slots,
 				}),
-				nextMeetingAt: data.nextMeetingAt,
+				nextMeetingAt,
 				meetingNumber: data.meetingNumber,
+				nextMeeting,
+				nextMeetingSignupUrl,
 			})
 		: buildSlideDeck({
 				meeting: data.meeting,
 				club,
 				slots: data.slots,
-				nextMeetingAt: data.nextMeetingAt,
+				nextMeetingAt,
 				meetingNumber: data.meetingNumber,
+				nextMeeting,
+				nextMeetingSignupUrl,
 				geIntroducesFunctionaries: data.geIntroducesFunctionaries,
 				ballotUrl,
 			});

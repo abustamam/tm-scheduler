@@ -485,6 +485,17 @@ describe("slideLayout bodies", () => {
 						qualifies: "4:30–7:30",
 					},
 				},
+				nextMeeting: {
+					kind: "nextMeeting",
+					scheduledAt: new Date("2026-07-09T23:45:00Z"),
+					timezone: "America/Chicago",
+					location: null,
+					theme: null,
+					meetingNumber: null,
+					toastmaster: null,
+					roles: [],
+					signupUrl: null,
+				},
 				thankYou: {
 					kind: "thankYou",
 					meetingSchedule: "2nd & 4th Thursday",

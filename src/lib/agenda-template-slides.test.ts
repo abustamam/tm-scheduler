@@ -638,3 +638,40 @@ describe("Table Topics notes on a materialised meeting's deck (#880)", () => {
 		for (const b of plain) expect(b.notes).toEqual([]);
 	});
 });
+
+describe("What's on tap for next meeting on the templated deck (#932)", () => {
+	const NEXT = {
+		scheduledAt: new Date("2026-09-24T01:00:00Z"),
+		location: "Hall A",
+		theme: null,
+		meetingNumber: null,
+		urlKey: "2026-09-23",
+		toastmaster: null,
+		roles: [{ label: "Timer", names: [], openCount: 1 }],
+	};
+	const build = (over: Record<string, unknown> = {}) =>
+		buildTemplateSlideDeck({
+			meeting,
+			club,
+			rows: contestRows([contestant(0, "Ada")]),
+			...over,
+		});
+
+	it("ends a contest on the same slide the standard deck does", () => {
+		const deck = build({
+			nextMeeting: NEXT,
+			nextMeetingSignupUrl: "https://gavelup.test/club/mcf/meeting/2026-09-23",
+		});
+		expect(kinds(deck).slice(-2)).toEqual(["nextMeeting", "thankYou"]);
+		expect(slideName(deck[deck.length - 2] as Slide)).toBe(
+			"What’s on tap for next meeting",
+		);
+	});
+
+	it("leaves the templated deck byte-for-byte unchanged with none", () => {
+		expect(JSON.stringify(build({ nextMeeting: null }))).toBe(
+			JSON.stringify(build()),
+		);
+		expect(kinds(build())).not.toContain("nextMeeting");
+	});
+});

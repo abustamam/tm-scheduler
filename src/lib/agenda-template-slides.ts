@@ -60,9 +60,11 @@ import type { AgendaRow } from "./agenda-runsheet";
 import {
 	type ClubForDeck,
 	type MeetingForDeck,
+	nextMeetingSlide,
 	type Slide,
 	tableTopicsNoteLines,
 } from "./agenda-slides";
+import type { NextMeetingSummary } from "./next-meeting-summary";
 import {
 	formatTableTopicsWindow,
 	hasTableTopicsLimits,
@@ -84,6 +86,11 @@ export type TemplateDeckInput = {
 	nextMeetingAt?: Date | null;
 	/** The club's effective meeting number (#358). */
 	meetingNumber?: number | null;
+	/** Backs the "What's on tap for next meeting" slide (#932), as on the
+	 *  standard deck; null or absent leaves the deck unchanged. */
+	nextMeeting?: NextMeetingSummary | null;
+	/** The sign-up QR's absolute URL, null until the origin is known. */
+	nextMeetingSignupUrl?: string | null;
 };
 
 /**
@@ -176,6 +183,8 @@ export function buildTemplateSlideDeck({
 	rows,
 	nextMeetingAt = null,
 	meetingNumber = null,
+	nextMeeting = null,
+	nextMeetingSignupUrl = null,
 }: TemplateDeckInput): Slide[] {
 	const deck: Slide[] = [
 		{
@@ -240,6 +249,16 @@ export function buildTemplateSlideDeck({
 	if (meeting.reminders?.trim()) {
 		deck.push({ kind: "reminders", text: meeting.reminders.trim() });
 	}
+
+	// What's on tap next (#932) — the same slide, from the same builder, that the
+	// standard deck ends on. Meeting-level like the announcements above, so it has
+	// no template row to arrive through either.
+	const onTap = nextMeetingSlide(
+		nextMeeting,
+		club.timezone,
+		nextMeetingSignupUrl,
+	);
+	if (onTap) deck.push(onTap);
 
 	deck.push({
 		kind: "thankYou",

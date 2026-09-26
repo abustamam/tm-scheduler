@@ -6,10 +6,12 @@
 import type PptxGenJS from "pptxgenjs";
 import type { Slide } from "./agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "./brand";
+import { qrRuns } from "./qr-runs";
 import {
 	type Body,
 	footerDate,
 	type Line,
+	type RosterRow,
 	type SlideLayout,
 	SPLASH_LOGO_HEIGHT_PCT,
 	SPLASH_LOGO_MAX_WIDTH_PCT,
@@ -242,7 +244,8 @@ function renderContent(
 		h: 0.09,
 		fill: { color: MAROON },
 	});
-	renderBody(s, layout.body);
+	if (layout.body.form === "roster") renderRoster(pptx, s, layout.body);
+	else renderBody(s, layout.body);
 	s.addShape(pptx.ShapeType.rect, {
 		x: 0,
 		y: H - FOOT_H,
@@ -318,7 +321,7 @@ const BODY = {
 	h: H - FOOT_H - BODY_Y - inchesOfWidth(SLIDE_BODY_BOTTOM_PCT, W),
 };
 
-function renderBody(s: PptxSlide, body: Body) {
+function renderBody(s: PptxSlide, body: Exclude<Body, { form: "roster" }>) {
 	if (body.form === "word") {
 		const runs: { text: string; options: Record<string, unknown> }[] = [
 			{
@@ -447,6 +450,180 @@ function renderBody(s: PptxSlide, body: Body) {
 		fit: "shrink",
 		lineSpacingMultiple: 1.2,
 	});
+}
+
+/** One role row as text runs: the label bold, the names plain, the open part
+ *  in the accent colour — the same split the projected slide draws. */
+function rosterRuns(row: RosterRow, br: boolean): PptxGenJS.TextProps[] {
+	const runs: PptxGenJS.TextProps[] = [
+		{ text: `${row.label}:`, options: { bold: true } },
+	];
+	if (row.names) runs.push({ text: ` ${row.names}`, options: {} });
+	if (row.open)
+		runs.push({ text: ` ${row.open}`, options: { bold: true, color: MAROON } });
+	const last = runs[runs.length - 1];
+	if (last && br) last.options = { ...last.options, breakLine: true };
+	return runs;
+}
+
+/** The QR column's width, and the code's side within it — the projected
+ *  slide's 9cqw code, in inches. */
+const QR_COL_W = 1.8;
+const QR_SIDE = inchesOfWidth(9, W);
+
+/**
+ * The "What's on tap for next meeting" body (#932), laid out as on screen: the
+ * lead block with the sign-up QR beside it, then the role columns across the
+ * full width, then any collapsed lines — all inside the same `BODY` box every
+ * other content slide fills.
+ *
+ * The QR is drawn from native rectangles (see `qr-runs.ts` for why not an
+ * image) and the caption under it is a hyperlink to the SAME absolute URL, so
+ * the downloaded deck opens the page from a click as well as a camera. A QR
+ * that cannot be read back is skipped, never allowed to fail the export: the
+ * deck is the deliverable, and the caption still carries the link.
+ */
+function renderRoster(
+	pptx: Presentation,
+	s: PptxSlide,
+	body: Extract<Body, { form: "roster" }>,
+) {
+	const LEAD_H = 1.5;
+	const leadW = body.qr ? BODY.w - QR_COL_W - 0.3 : BODY.w;
+	const lead: PptxGenJS.TextProps[] = [
+		{
+			text: body.when,
+			options: { bold: true, fontSize: 18, breakLine: true },
+		},
+	];
+	if (body.toastmaster) {
+		const tm = rosterRuns(body.toastmaster, body.meta != null);
+		for (const r of tm) r.options = { ...r.options, fontSize: 26, bold: true };
+		lead.push(...tm);
+	}
+	if (body.meta)
+		lead.push({ text: body.meta, options: { fontSize: 15, color: MUTED } });
+	s.addText(lead, {
+		x: BODY.x,
+		y: BODY.y,
+		w: leadW,
+		h: LEAD_H,
+		align: "left",
+		valign: "middle",
+		color: INK,
+		fit: "shrink",
+		lineSpacingMultiple: 1.1,
+	});
+
+	const tail: PptxGenJS.TextProps[] = [];
+	if (body.openList)
+		tail.push({
+			text: body.openList,
+			options: {
+				bold: true,
+				fontSize: 17,
+				color: MAROON,
+				breakLine: body.filled != null,
+			},
+		});
+	if (body.filled)
+		tail.push({ text: body.filled, options: { fontSize: 13, color: MUTED } });
+	const below = BODY.h - LEAD_H - 0.1;
+	const TAIL_H =
+		tail.length > 0 ? (body.rows.length > 0 ? below / 2 : below) : 0;
+	const rowsY = BODY.y + LEAD_H + 0.1;
+	const rowsH = below - TAIL_H;
+
+	if (body.rows.length > 0) {
+		// Down the columns, like the projected slide, so agenda order reads the
+		// way a printed two-column roster does.
+		const half = Math.ceil(body.rows.length / 2);
+		const gap = 0.3;
+		const colW = (BODY.w - gap) / 2;
+		[body.rows.slice(0, half), body.rows.slice(half)].forEach((col, c) => {
+			if (col.length === 0) return;
+			s.addText(
+				col.flatMap((row, i) => rosterRuns(row, i < col.length - 1)),
+				{
+					x: BODY.x + c * (colW + gap),
+					y: rowsY,
+					w: colW,
+					h: rowsH,
+					align: "left",
+					valign: "top",
+					fontSize: 16,
+					color: INK,
+					fit: "shrink",
+					lineSpacingMultiple: 1.1,
+					paraSpaceAfter: 3,
+				},
+			);
+		});
+	}
+	if (tail.length > 0) {
+		s.addText(tail, {
+			x: BODY.x,
+			y: BODY.y + BODY.h - TAIL_H,
+			w: BODY.w,
+			h: TAIL_H,
+			align: "left",
+			valign: "top",
+			color: INK,
+			fit: "shrink",
+			lineSpacingMultiple: 1.1,
+		});
+	}
+
+	if (!body.qr) return;
+	const colX = BODY.x + BODY.w - QR_COL_W;
+	const qrX = colX + (QR_COL_W - QR_SIDE) / 2;
+	const CAPTION_H = 0.3;
+	const pad = 0.09;
+	const qrY = BODY.y + (LEAD_H - QR_SIDE - CAPTION_H) / 2;
+	// The white plate, as on screen: pure white is what scans in a dim room.
+	s.addShape(pptx.ShapeType.rect, {
+		x: qrX - pad,
+		y: qrY - pad,
+		w: QR_SIDE + pad * 2,
+		h: QR_SIDE + pad * 2,
+		fill: { color: "FFFFFF" },
+		line: { type: "none" },
+	});
+	try {
+		const { size, runs } = qrRuns(body.qr.url);
+		const m = QR_SIDE / size;
+		for (const r of runs) {
+			s.addShape(pptx.ShapeType.rect, {
+				x: qrX + r.x * m,
+				y: qrY + r.y * m,
+				w: r.w * m,
+				h: m,
+				fill: { color: "000000" },
+				line: { type: "none" },
+			});
+		}
+	} catch {
+		// See the docblock: the caption below still links the page.
+	}
+	s.addText(
+		[
+			{
+				text: body.qr.caption,
+				options: { hyperlink: { url: body.qr.url } },
+			},
+		],
+		{
+			x: colX - 0.2,
+			y: qrY + QR_SIDE + pad,
+			w: QR_COL_W + 0.4,
+			h: CAPTION_H,
+			align: "center",
+			valign: "middle",
+			bold: true,
+			fontSize: 13,
+			color: INK,
+		},
+	);
 }
 
 function lineRun(l: Line, br: boolean) {
