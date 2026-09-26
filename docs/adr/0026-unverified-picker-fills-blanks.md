@@ -192,6 +192,16 @@ class of debt it is.
   answer — but it is a real widening, it is new relative to the rest of this decision, and it is
   recorded here rather than left as a property nobody wrote down. It closes with the role consoles
   in Phase 2, when `reached_out` stops being writable without a session at all.
+- **A forged first answer is now shown to everyone, and that is accepted.** An unverified name-pick
+  can record a member's FIRST attendance answer as `not_coming`, because a blank is fillable. Since
+  #764 that answer appears on the role card to every viewer, anonymous included, as "<name> can't
+  make it. <Role> needs a new holder.", and a signed-in member may then reassign the role. So one
+  forged fill-a-blank write now travels further than the attendance rail: it is visible club-wide
+  and invites a reassignment. The amplification is accepted deliberately. A role held by someone
+  who said they won't be there is exactly what #764 exists to make visible, and hiding the flag
+  until the answer is verified would hide the true case with the forged one. The member clears a
+  false answer by signing in and answering. The flag itself grants nothing: the slot is not OPEN,
+  so it shows no Claim button to anyone.
 - **A control that a session gates must not be SHOWN to a viewer without one.** The refusal being
   well-worded is not enough: a season grid that offers "Undo" on a toast that just said the write
   worked, or a personal page that asks "give up your role?" and then says "sign in", teaches that

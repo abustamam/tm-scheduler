@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -112,6 +115,9 @@ function renderAgenda(
 			meeting={meeting}
 			templateKey={extra?.templateKey ?? null}
 			timezone={timezone}
+			// The route hands its own frozen answer in; the fixtures are 30 days
+			// out, so "not over" unless a test says otherwise via `extra`.
+			meetingOver={false}
 			selfMemberId="me"
 			onMetaSaved={() => {}}
 			requireIdentity={requireIdentity}
@@ -1064,5 +1070,230 @@ describe("MeetingAgenda confirm nudge records outreach (#662)", () => {
 		// spy: the failure this prevents is a throw at the seam, and the seam is
 		// only reached if something was written.
 		expect(planState()).toBe("[]");
+	});
+});
+
+describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
+	afterEach(() => cleanup());
+
+	// "Timer" is the fixture's role; one Timer card, so the label is unnumbered.
+	const FLAG = "Held Holder can't make it. Timer needs a new holder.";
+	const held = (over: Partial<AgendaSlot> = {}) =>
+		slot({
+			status: "claimed",
+			assigneeId: "m-held",
+			assigneeName: "Held Holder",
+			assigneeIsGuest: false,
+			...over,
+		});
+
+	/** Name-pick identity: the unverified path, which never gets take-over. */
+	const unverified = (currentMemberId = "me") =>
+		meetingViewer({
+			currentMemberId,
+			canManage: false,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
+	const anonymous = () =>
+		meetingViewer({
+			currentMemberId: null,
+			canManage: false,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
+	const signedInMember = () =>
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: false,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+			isSignedIn: true,
+		});
+	const officer = () =>
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: true,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+			isSignedIn: true,
+		});
+
+	it("flags the held role as a status below the card's claim button", () => {
+		renderAgenda(unverified(), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+		});
+		// Exact text: names the holder AND the role.
+		expect(screen.getByRole("status").textContent).toBe(FLAG);
+		// Outside the claim button — a button's children are presentational.
+		expect(screen.getByRole("status").closest("button")).toBeNull();
+		// The TEXT warning step (≥4.5:1 on white), not the 3.15:1 fill token.
+		const cls = screen.getByRole("status").className;
+		expect(cls).toContain("text-[var(--warning-foreground)]");
+		expect(cls).not.toContain("--warning-strong");
+	});
+
+	it("names the role, so two cards held by one person say different things", () => {
+		renderAgenda(
+			unverified(),
+			[
+				held({ id: "s1", roleName: "Timer", roleDefinitionId: "rd1" }),
+				held({ id: "s2", roleName: "Grammarian", roleDefinitionId: "rd2" }),
+			],
+			undefined,
+			undefined,
+			{ unavailableMemberIds: ["m-held"] },
+		);
+		expect(screen.getAllByRole("status").map((s) => s.textContent)).toEqual([
+			"Held Holder can't make it. Timer needs a new holder.",
+			"Held Holder can't make it. Grammarian needs a new holder.",
+		]);
+	});
+
+	it("speaks in the second person on the viewer's own card", () => {
+		renderAgenda(unverified("m-held"), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+		});
+		// Anchor: this IS the viewer's card.
+		expect(screen.getByText("(you)")).toBeTruthy();
+		expect(screen.getByRole("status").textContent).toBe(
+			"You said you can't make it. Timer needs a new holder.",
+		);
+	});
+
+	it("does not flag a holder who is not in the unavailable list", () => {
+		renderAgenda(unverified(), [held()], undefined, undefined, {
+			unavailableMemberIds: ["someone-else"],
+		});
+		// Anchor: the card rendered, so the absence below is not vacuous.
+		expect(screen.getByText("Held Holder")).toBeTruthy();
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("does not flag a GUEST holder, even if the id is in the list", () => {
+		renderAgenda(
+			unverified(),
+			[held({ assigneeIsGuest: true, assigneeName: "Guest Gail" })],
+			undefined,
+			undefined,
+			{ unavailableMemberIds: ["m-held"] },
+		);
+		expect(screen.getByText("Guest Gail")).toBeTruthy();
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("does not flag an open slot", () => {
+		renderAgenda(
+			unverified(),
+			[slot({ status: "open", assigneeId: null })],
+			undefined,
+			undefined,
+			{ unavailableMemberIds: ["m-held"] },
+		);
+		expect(screen.getByRole("button", { name: /^Claim / })).toBeTruthy();
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("does not flag under a locked viewer, even when the route says not over", () => {
+		// Pins the `viewer.canClaim` term: `meetingOver` is false here, so only
+		// the lock can be what hides the flag.
+		renderAgenda(lockedViewer(officer()), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+			meetingOver: false,
+		});
+		expect(screen.getByText("Held Holder")).toBeTruthy();
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it.each([
+		["completed", meetingFixture({ status: "completed" })],
+		["past its day", meetingFixture({ scheduledAt: daysFromNow(-30) })],
+	])("does not flag a meeting that is over (%s), even for an unlocked viewer", (_label, meeting) => {
+		// The viewer's OWN card, so Release is present: proof the viewer is not
+		// locked and only `meetingOver` can be what hides the flag.
+		renderAgenda(unverified("m-held"), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+			meeting,
+			meetingOver: true,
+		});
+		expect(screen.getByRole("button", { name: /Release/ })).toBeTruthy();
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("does not flag a cancelled meeting", () => {
+		renderAgenda(unverified("m-held"), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+			meeting: meetingFixture({ status: "cancelled" }),
+			meetingOver: false,
+		});
+		expect(screen.getByRole("button", { name: /Release/ })).toBeTruthy();
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("fails closed when a caller omits meetingOver", () => {
+		const { rerender } = renderAgenda(
+			unverified(),
+			[held()],
+			undefined,
+			undefined,
+			{ unavailableMemberIds: ["m-held"] },
+		);
+		expect(screen.getByRole("status")).toBeTruthy();
+		// Same props minus `meetingOver`: the component's default takes over.
+		const props: MeetingAgendaProps = {
+			slots: [held()],
+			viewer: unverified(),
+			actions,
+			roster: [],
+			roleRecency: {},
+			roleByMemberId: {},
+			unavailableMemberIds: ["m-held"],
+			shareUrl: "https://gavelup.app/club/test/meeting/m1",
+			meetingDate: "Jan 1, 2026",
+			meeting: meetingFixture(),
+			templateKey: null,
+			timezone: "UTC",
+			selfMemberId: "me",
+			onMetaSaved: () => {},
+			contactedMemberIds: [],
+		};
+		rerender(<MeetingAgenda {...props} />);
+		expect(screen.getByText("Held Holder")).toBeTruthy();
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("the meeting route hands its frozen `over` in as meetingOver", () => {
+		// The component cannot see which clock its caller used; this pins that
+		// the one route rendering it passes the value it computed from its `now`.
+		const src = readFileSync(
+			resolve(process.cwd(), "src/routes/club.$clubId.meeting.$meetingId.tsx"),
+			"utf8",
+		);
+		expect(src).toMatch(/meetingOver=\{over\}/);
+	});
+
+	it.each([
+		["an anonymous viewer", anonymous],
+		["a signed-in member", signedInMember],
+		["an officer", officer],
+	])("renders the same flag for %s", (_label, makeViewer) => {
+		renderAgenda(makeViewer(), [held()], undefined, async () => null, {
+			unavailableMemberIds: ["m-held"],
+		});
+		expect(screen.getByRole("status").textContent).toBe(FLAG);
+	});
+
+	it("leaves the flagged slot without a Claim button for an unverified viewer", () => {
+		renderAgenda(unverified(), [held()], undefined, undefined, {
+			unavailableMemberIds: ["m-held"],
+		});
+		expect(screen.getByRole("status").textContent).toBe(FLAG);
+		// Not `open`, so the flag does not make it claimable.
+		expect(screen.queryByRole("button", { name: /^Claim / })).toBeNull();
+		expect(screen.getByText("Filled")).toBeTruthy();
 	});
 });
