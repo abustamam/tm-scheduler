@@ -34,6 +34,7 @@ import { Route as AuthedNextRouteImport } from './routes/_authed/next'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
+import { Route as AuthedAccountRouteImport } from './routes/_authed/account'
 import { Route as DotwellKnownSplatRouteImport } from './routes/[.]well-known.$'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
 import { Route as AuthedSuperadminIndexRouteImport } from './routes/_authed/superadmin/index'
@@ -201,6 +202,11 @@ const AuthedDashboardRoute = AuthedDashboardRouteImport.update({
 const AuthedActivityRoute = AuthedActivityRouteImport.update({
   id: '/activity',
   path: '/activity',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedAccountRoute = AuthedAccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => AuthedRoute,
 } as any)
 const DotwellKnownSplatRoute = DotwellKnownSplatRouteImport.update({
@@ -443,6 +449,7 @@ export interface FileRoutesByFullPath {
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
+  '/account': typeof AuthedAccountRoute
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
@@ -512,6 +519,7 @@ export interface FileRoutesByTo {
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
+  '/account': typeof AuthedAccountRoute
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
@@ -581,6 +589,7 @@ export interface FileRoutesById {
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/.well-known/$': typeof DotwellKnownSplatRoute
+  '/_authed/account': typeof AuthedAccountRoute
   '/_authed/activity': typeof AuthedActivityRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/me': typeof AuthedMeRoute
@@ -652,6 +661,7 @@ export interface FileRouteTypes {
     | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
+    | '/account'
     | '/activity'
     | '/dashboard'
     | '/me'
@@ -721,6 +731,7 @@ export interface FileRouteTypes {
     | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
+    | '/account'
     | '/activity'
     | '/dashboard'
     | '/me'
@@ -789,6 +800,7 @@ export interface FileRouteTypes {
     | '/tour'
     | '/unsubscribe'
     | '/.well-known/$'
+    | '/_authed/account'
     | '/_authed/activity'
     | '/_authed/dashboard'
     | '/_authed/me'
@@ -1058,6 +1070,13 @@ declare module '@tanstack/react-router' {
       path: '/activity'
       fullPath: '/activity'
       preLoaderRoute: typeof AuthedActivityRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/account': {
+      id: '/_authed/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AuthedAccountRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/.well-known/$': {
@@ -1380,6 +1399,7 @@ const AuthedSuperadminRouteWithChildren =
   AuthedSuperadminRoute._addFileChildren(AuthedSuperadminRouteChildren)
 
 interface AuthedRouteChildren {
+  AuthedAccountRoute: typeof AuthedAccountRoute
   AuthedActivityRoute: typeof AuthedActivityRoute
   AuthedDashboardRoute: typeof AuthedDashboardRoute
   AuthedMeRoute: typeof AuthedMeRoute
@@ -1408,6 +1428,7 @@ interface AuthedRouteChildren {
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
+  AuthedAccountRoute: AuthedAccountRoute,
   AuthedActivityRoute: AuthedActivityRoute,
   AuthedDashboardRoute: AuthedDashboardRoute,
   AuthedMeRoute: AuthedMeRoute,

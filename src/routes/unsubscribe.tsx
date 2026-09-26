@@ -57,8 +57,11 @@ function Unsubscribe() {
 					{ok ? (
 						<p>
 							Changed your mind? You can turn reminders back on any time from{" "}
-							<Link to="/me" className="font-medium text-primary underline">
-								your roles page
+							<Link
+								to="/account"
+								className="font-medium text-primary underline"
+							>
+								your account settings
 							</Link>{" "}
 							after signing in.
 						</p>
@@ -66,8 +69,11 @@ function Unsubscribe() {
 						<p>
 							If you meant to unsubscribe, open the link straight from your
 							reminder email, or manage reminders from{" "}
-							<Link to="/me" className="font-medium text-primary underline">
-								your roles page
+							<Link
+								to="/account"
+								className="font-medium text-primary underline"
+							>
+								your account settings
 							</Link>{" "}
 							after signing in.
 						</p>

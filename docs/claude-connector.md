@@ -10,16 +10,16 @@ There are two ways in, and they reach the same seven tools with the same authori
 | From | How it signs in | Set up by |
 |---|---|---|
 | **claude.ai** (web, desktop, iOS, Android) | OAuth: you sign in to GavelUp and approve the connection | The connector, once per Claude account |
-| **Claude Code** (your terminal) | A personal `tmk_` token pasted into a header | You, from `/me` |
+| **Claude Code** (your terminal) | A personal `tmk_` token pasted into a header | You, from Account settings (`/account`) |
 
 What either one can do is exactly what **you** can do: it acts in every club where you are an
 admin or hold an open officer term, and nowhere else. Every write is credited to you, the same as
 if you had made it in the app.
 
 **Connecting is for club officers, for now.** You need to be an admin, or hold an open officer
-term, in at least one club that is not archived — the same rule `/me` applies before it offers
-you a token. A plain member who tries sees "Only club officers can connect apps to GavelUp right
-now." with only a Decline button.
+term, in at least one club that is not archived — the same rule Account settings (`/account`)
+applies before it offers you a token. A plain member who tries sees "Only club officers can
+connect apps to GavelUp right now." with only a Decline button.
 
 ---
 
@@ -84,21 +84,23 @@ club you are not an officer of.
 
 ## Disconnecting
 
-Open **`/me`** in GavelUp. Under **Connected apps** is every app you've approved, with when you
-approved it and when it last renewed its access. Click **Disconnect** next to one and confirm.
+Open **Account settings** (`/account`) in GavelUp. Under **Connected apps** is every app you've
+approved, with when you approved it and when it last renewed its access. Click **Disconnect**
+next to one and confirm.
 
 That ends GavelUp's side: the app can no longer renew its access, and the next time it asks to
 connect you see the approval screen again. Access it already holds keeps working for up to an
 hour, because access tokens are checked without a database lookup.
 
 Removing the connector in claude.ai only stops Claude from using it; GavelUp's side stays live
-for up to 30 days until you disconnect it on `/me` as well.
+for up to 30 days until you disconnect it on `/account` as well.
 
-If you lose your phone: sign in to GavelUp from another device and disconnect on `/me`.
+If you lose your phone: sign in to GavelUp from another device and disconnect on `/account`.
 
 ## Connecting Claude Code
 
-1. In GavelUp, open **`/me`**, give the token a label if you like, and click **Create token**.
+1. In GavelUp, open **Account settings** (`/account`), give the token a label if you like, and
+   click **Create token**.
    Copy it; it is shown once.
 2. In a terminal:
 
@@ -107,7 +109,7 @@ If you lose your phone: sign in to GavelUp from another device and disconnect on
      --header "Authorization: Bearer tmk_..."
    ```
 
-Revoke the token on `/me` to disconnect; that takes effect on the next call.
+Revoke the token on `/account` to disconnect; that takes effect on the next call.
 
 ## When it doesn't work
 
@@ -192,7 +194,7 @@ hour).
 
 ### Revoking one person
 
-A person disconnects their own apps on `/me` ([Disconnecting](#disconnecting)). This is the
+A person disconnects their own apps on `/account` ([Disconnecting](#disconnecting)). This is the
 fallback for revoking SOMEONE ELSE — a lost account, or a person who can't sign in. In the
 Postgres service:
 
