@@ -134,6 +134,12 @@ export type ColumnProbe = {
 	overflowX: string;
 	/** Does the scroller's content exceed its box HORIZONTALLY at this viewport? */
 	overflowsX: boolean;
+	/**
+	 * The scroller's `clientWidth`. Lets a caller prove the width it modelled
+	 * took effect — headless Chrome lays no window out narrower than 500px, so
+	 * a phone-width caller pins the page instead and checks this.
+	 */
+	scrollerClientWidth: number;
 	/** How far the scroller actually moved when driven to the right. */
 	scrolledRightBy: number;
 	/**
@@ -179,9 +185,6 @@ export function probeColumn(opts: {
 	chromeSelector: string;
 	viewport: { width: number; height: number };
 }): ColumnProbe {
-	const chrome = findChrome();
-	if (!chrome) throw new Error("No Chrome — set CHROME_PATH.");
-
 	const probe = `<script>
 	(function () {
 		function fail(why) { document.title = "ERROR:" + why; }
@@ -203,6 +206,7 @@ export function probeColumn(opts: {
 			overflowX: cs.overflowX,
 			overflows: s.scrollHeight > s.clientHeight ? 1 : 0,
 			overflowsX: s.scrollWidth > s.clientWidth ? 1 : 0,
+			scrollerClientWidth: s.clientWidth,
 			documentOverflowsX: doc.scrollWidth > doc.clientWidth ? 1 : 0
 		};
 		s.scrollLeft = s.scrollWidth;
@@ -226,14 +230,62 @@ export function probeColumn(opts: {
 	})();
 	</script>`;
 
-	const dir = mkdtempSync(join(tmpdir(), "pinned-column-"));
+	const title = renderAndReadTitle({
+		bodyHtml: opts.bodyHtml,
+		css: opts.css,
+		script: probe,
+		viewport: opts.viewport,
+		tmpPrefix: "pinned-column-",
+	});
+	// A missing title means the script never ran — an empty page, a CSS 404,
+	// a Chrome that exited early. Every field below would then default to
+	// "not reachable", which reads exactly like the bug this measures.
+	if (!title.includes("overflowY=")) {
+		throw new Error(`probe produced no measurement (title: ${title || "∅"})`);
+	}
+	const kv = new Map(
+		title.split(";").map((p) => p.split("=") as [string, string]),
+	);
+	const flag = (k: string) => kv.get(k) === "1";
+	return {
+		overflowY: kv.get("overflowY") ?? "",
+		overflowX: kv.get("overflowX") ?? "",
+		overflows: flag("overflows"),
+		overflowsX: flag("overflowsX"),
+		scrollerClientWidth: Number(kv.get("scrollerClientWidth") ?? "0"),
+		scrolledBy: Number(kv.get("scrolledBy") ?? "0"),
+		scrolledRightBy: Number(kv.get("scrolledRightBy") ?? "0"),
+		documentOverflowsX: flag("documentOverflowsX"),
+		tailVisibleAfterScroll: flag("tailVisibleAfterScroll"),
+		chromeVisibleAfterScroll: flag("chromeVisibleAfterScroll"),
+		tailReachableByPageScroll: flag("tailReachableByPageScroll"),
+	};
+}
+
+/**
+ * Render `bodyHtml` + `script` (a `<script>` element) against `css` in
+ * headless Chrome at `viewport`, and return the `document.title` the script
+ * left — the only return path `--dump-dom` has. A title starting `ERROR:`
+ * throws. The spawn every probe in this file shares; callers validate that the
+ * title carries their own measurement.
+ */
+export function renderAndReadTitle(opts: {
+	bodyHtml: string;
+	css: string;
+	script: string;
+	viewport: { width: number; height: number };
+	tmpPrefix?: string;
+}): string {
+	const chrome = findChrome();
+	if (!chrome) throw new Error("No Chrome — set CHROME_PATH.");
+	const dir = mkdtempSync(join(tmpdir(), opts.tmpPrefix ?? "pinned-column-"));
 	try {
 		writeFileSync(join(dir, "app.css"), opts.css, "utf8");
 		writeFileSync(
 			join(dir, "page.html"),
 			`<!doctype html><html><head><meta charset="utf-8">` +
 				`<link rel="stylesheet" href="./app.css"></head><body>` +
-				`${opts.bodyHtml}${probe}</body></html>`,
+				`${opts.bodyHtml}${opts.script}</body></html>`,
 			"utf8",
 		);
 		const dom = execFileSync(
@@ -275,28 +327,7 @@ export function probeColumn(opts: {
 		);
 		const title = /<title>([^<]*)<\/title>/.exec(dom)?.[1] ?? "";
 		if (title.startsWith("ERROR:")) throw new Error(`probe: ${title.slice(6)}`);
-		// A missing title means the script never ran — an empty page, a CSS 404,
-		// a Chrome that exited early. Every field below would then default to
-		// "not reachable", which reads exactly like the bug this measures.
-		if (!title.includes("overflowY=")) {
-			throw new Error(`probe produced no measurement (title: ${title || "∅"})`);
-		}
-		const kv = new Map(
-			title.split(";").map((p) => p.split("=") as [string, string]),
-		);
-		const flag = (k: string) => kv.get(k) === "1";
-		return {
-			overflowY: kv.get("overflowY") ?? "",
-			overflowX: kv.get("overflowX") ?? "",
-			overflows: flag("overflows"),
-			overflowsX: flag("overflowsX"),
-			scrolledBy: Number(kv.get("scrolledBy") ?? "0"),
-			scrolledRightBy: Number(kv.get("scrolledRightBy") ?? "0"),
-			documentOverflowsX: flag("documentOverflowsX"),
-			tailVisibleAfterScroll: flag("tailVisibleAfterScroll"),
-			chromeVisibleAfterScroll: flag("chromeVisibleAfterScroll"),
-			tailReachableByPageScroll: flag("tailReachableByPageScroll"),
-		};
+		return title;
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

@@ -17,6 +17,7 @@ import { formatMeetingDate } from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
+import { scrollAnchorClearOfPinnedColumn } from "#/lib/season-grid-anchor-scroll";
 import {
 	FREE_CELL,
 	type MemberMeetingStatus,
@@ -113,6 +114,8 @@ export function SeasonGrid({
 	const provenIdentity = currentMemberSource === "session";
 	const labelHead = orientation === "roles" ? "Role" : "Member";
 	const anchorRef = useRef<HTMLTableCellElement>(null);
+	const scrollerRef = useRef<HTMLDivElement>(null);
+	const labelHeadRef = useRef<HTMLTableCellElement>(null);
 	const selfRowRef = useRef<HTMLTableRowElement>(null);
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [busyMeetingId, setBusyMeetingId] = useState<string | null>(null);
@@ -133,8 +136,13 @@ export function SeasonGrid({
 	const prospectiveClaim =
 		orientation === "roles" && !currentMemberId && !!requireIdentity;
 
+	// Bring the anchor meeting into view to the RIGHT of the pinned label
+	// column, not centred under it on a phone (#930).
 	useEffect(() => {
-		anchorRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+		const scroller = scrollerRef.current;
+		const anchor = anchorRef.current;
+		if (!scroller || !anchor) return;
+		scrollAnchorClearOfPinnedColumn(scroller, labelHeadRef.current, anchor);
 	}, []);
 
 	// Members × Meetings: bring the viewer's own row into view on load (and when
@@ -438,14 +446,20 @@ export function SeasonGrid({
 				    read as the scroller's bug when it was not. Same one-line remedy as
 				    the guest-book confirm table (#806); `season-grid-geometry.test.ts`
 				    is the gate, with a control that removes this class. */}
-				<div className="relative scroll-fade-r overflow-auto rounded-xl">
+				<div
+					ref={scrollerRef}
+					className="relative scroll-fade-r overflow-auto rounded-xl"
+				>
 					<table className="border-separate border-spacing-1">
 						<thead>
 							<tr>
 								{/* shadow on the sticky label column: without an edge, columns
 						    sliding beneath it read as clipped/broken instead of
 						    scrolled (the grid auto-scrolls to the upcoming meeting). */}
-								<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
+								<th
+									ref={labelHeadRef}
+									className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]"
+								>
 									{labelHead}
 								</th>
 								{data.meetings.map((m) => {
