@@ -26,6 +26,7 @@ import {
 } from "./meeting-contacts-logic";
 import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { freezeMeetingNumber } from "./meeting-number-logic";
+import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 import { loadPublicClubRoster } from "./members-logic";
 import { closeAllVotesTx } from "./voting-logic";
 
@@ -94,6 +95,68 @@ export async function loadPublicUpcomingMeetings(
 		)
 		.groupBy(meetings.id, clubs.timezone)
 		.orderBy(asc(meetings.scheduledAt));
+}
+
+export interface NextMeetingSummary {
+	/** `clubs.timezone` — every date shown beside this summary is formatted in it. */
+	timezone: string;
+	nextMeeting: {
+		id: string;
+		/** The canonical public URL key (`resolveMeetingUrlKey`), so a same-day
+		 *  pair gets the disambiguated key rather than the bare date. */
+		urlKey: string;
+		scheduledAt: Date;
+		location: string | null;
+	} | null;
+}
+
+/**
+ * The club's soonest non-cancelled meeting at or after `now` — the same
+ * predicate as `getNextMeeting` — in a deliberately SLIM shape (#899).
+ *
+ * Slim on purpose: the result reaches invite drafts a guest receives, so it
+ * must never carry `meetings.join_url` (withheld from every shareable artifact,
+ * #731/#754). Do NOT widen this to `loadMeetingDetail`, which does carry it.
+ *
+ * Not archive-gated: the caller's server fn gates (`requireClubAdminView`).
+ */
+export async function loadNextMeetingSummary(
+	clubId: string,
+	now: Date,
+): Promise<NextMeetingSummary> {
+	const [club] = await db
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	const timezone = club?.timezone ?? "UTC";
+	const [next] = await db
+		.select({
+			id: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+			location: meetings.location,
+		})
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				gte(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.orderBy(asc(meetings.scheduledAt))
+		.limit(1);
+	if (!next) return { timezone, nextMeeting: null };
+	const urlKey = await resolveMeetingUrlKey(clubId, next.scheduledAt, timezone);
+	return {
+		timezone,
+		nextMeeting: {
+			id: next.id,
+			urlKey,
+			scheduledAt: next.scheduledAt,
+			location: next.location,
+		},
+	};
 }
 
 export interface MeetingCreateInput {

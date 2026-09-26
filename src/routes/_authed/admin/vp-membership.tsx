@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { GuestEditDialog } from "#/components/club/guest-edit-dialog";
 import { MemberAvatar } from "#/components/club/member-avatar";
+import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import {
@@ -18,13 +19,19 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
+import { showWriteError } from "#/components/write-error-toast";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { formatShortDate } from "#/lib/format";
+import {
+	formatMeetingDate,
+	formatMeetingTime,
+	formatShortDate,
+} from "#/lib/format";
 import {
 	convertNoticeDescription,
 	isStrandedConvertedGuest,
 } from "#/lib/guest-convert";
+import { isInvitableStage } from "#/lib/guest-invite";
 import { mailtoHref } from "#/lib/mailto";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
@@ -32,12 +39,15 @@ import {
 	convertGuestToMember,
 	deleteGuest,
 	type GuestStage,
+	getGuestInviteContext,
 	getGuestPipeline,
 	getLinkCandidates,
 	type LinkCandidate,
 	linkGuestToMember,
 	type ManualGuestStage,
+	type NextMeetingSummary,
 	type PipelineGuestRow,
+	recordGuestInvite,
 	setGuestStage,
 	undoGuestConversion,
 	unlinkGuestFromMember,
@@ -52,21 +62,41 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 	loader: async ({ context }) => {
 		const club = effectiveAdminClub(context);
 		if (!club) {
-			return { guests: [], clubId: "", clubName: "", clubSlug: null };
+			return {
+				guests: [],
+				clubId: "",
+				clubName: "",
+				clubSlug: null,
+				inviteContext: NO_INVITE_CONTEXT,
+				readOnly: false,
+			};
 		}
-		const [guests, resolved] = await Promise.all([
+		const [guests, resolved, inviteContext] = await Promise.all([
 			getGuestPipeline({ data: club.clubId }),
 			getClubByIdentifier({ data: club.clubId }),
+			getGuestInviteContext({ data: club.clubId }),
 		]);
 		return {
 			guests,
 			clubId: club.clubId,
 			clubName: club.name,
 			clubSlug: resolved?.slug ?? null,
+			inviteContext,
+			// A READ-ONLY impersonation passes the admin-view read that loads this
+			// page but not the admin write `recordGuestInvite` runs, so its invite
+			// links would open a draft and then fail to record (#899).
+			readOnly:
+				context.impersonating?.mode === "read_only" &&
+				context.impersonating.clubId === club.clubId,
 		};
 	},
 	component: VpMembership,
 });
+
+const NO_INVITE_CONTEXT: NextMeetingSummary = {
+	timezone: "UTC",
+	nextMeeting: null,
+};
 
 const STAGES: { id: GuestStage; label: string; blurb: string; tone: string }[] =
 	[
@@ -103,7 +133,8 @@ const MANUAL_STAGES: { id: ManualGuestStage; label: string }[] = [
 ];
 
 function VpMembership() {
-	const { guests, clubId, clubName, clubSlug } = Route.useLoaderData();
+	const { guests, clubId, clubName, clubSlug, inviteContext, readOnly } =
+		Route.useLoaderData();
 	const router = useRouter();
 	const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -113,6 +144,25 @@ function VpMembership() {
 	const [origin, setOrigin] = useState("");
 	useEffect(() => setOrigin(window.location.origin), []);
 	const guestBookUrl = clubSlug ? `${origin}/club/${clubSlug}/guest-book` : "";
+	// The next meeting's PUBLIC agenda, for the invite draft (#899). Built from
+	// the slim summary only — never `join_url`, never a personal `?as=` link.
+	const next = inviteContext.nextMeeting;
+	const inviteShareUrl = next
+		? `${origin}/club/${encodeURIComponent(clubSlug ?? clubId)}/meeting/${encodeURIComponent(next.urlKey)}`
+		: "";
+
+	/**
+	 * Record that this officer opened an invite draft (#899). Fire-and-forget
+	 * from the link's `onClick`: the draft has already opened in their own app,
+	 * so a failed record must not block it — it only surfaces a toast.
+	 */
+	function recordInvite(guestId: string, meetingId: string) {
+		recordGuestInvite({ data: { clubId, guestId, meetingId } })
+			.then(() => router.invalidate())
+			.catch((err: unknown) =>
+				showWriteError(err, "Couldn't record that invite."),
+			);
+	}
 
 	async function move(guestId: string, stage: ManualGuestStage) {
 		setBusyId(guestId);
@@ -246,6 +296,14 @@ function VpMembership() {
 									busy={busyId === g.id}
 									onMove={move}
 									onConvert={convert}
+									timezone={inviteContext.timezone}
+									invite={{
+										clubName,
+										readOnly,
+										nextMeeting: next,
+										shareUrl: inviteShareUrl,
+										onRecord: recordInvite,
+									}}
 								/>
 							))
 						)}
@@ -311,18 +369,132 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 	);
 }
 
+interface InviteProps {
+	clubName: string;
+	/** Read-only impersonation: the write would be refused, so offer nothing. */
+	readOnly: boolean;
+	nextMeeting: NextMeetingSummary["nextMeeting"];
+	shareUrl: string;
+	onRecord: (guestId: string, meetingId: string) => void;
+}
+
+/**
+ * "Invited to Thu, Oct 9 · by Sam · invited to 3 meetings" (#899). A row means
+ * an officer OPENED a draft; the app cannot see whether it was sent, and says
+ * "Invited" on that understanding. A meeting that has since started reads
+ * "Last invited to …".
+ */
+function inviteHistoryLine(
+	guest: Pick<PipelineGuestRow, "lastInvite" | "inviteCount">,
+	timezone: string,
+	now: Date,
+): string | null {
+	const last = guest.lastInvite;
+	if (!last) return null;
+	const at = new Date(last.meetingAt);
+	const date = formatMeetingDate(at, timezone);
+	const lead =
+		at.getTime() < now.getTime()
+			? `Last invited to ${date}`
+			: `Invited to ${date}`;
+	const by = last.invitedByName ? ` · by ${last.invitedByName}` : "";
+	const count =
+		guest.inviteCount > 1 ? ` · invited to ${guest.inviteCount} meetings` : "";
+	return `${lead}${by}${count}`;
+}
+
+/**
+ * The invite control on a Prospects / Following up row (#899): "Invite to
+ * {date}" followed by `NudgeButtons`' own WhatsApp / Email drafts. Tapping one
+ * opens the officer's own app (the human sends) and records the invite through
+ * `onContacted`. Disabled, with the reason visible and as a `title`, when
+ * there is no next meeting or no contact — the no-meeting reason wins.
+ */
+function GuestInvite({
+	guest,
+	phone,
+	email,
+	invite,
+	timezone,
+}: {
+	guest: PipelineGuestRow;
+	phone: string | null;
+	email: string | null;
+	invite: InviteProps;
+	timezone: string;
+}) {
+	const next = invite.nextMeeting;
+	const meetingDate = next ? formatMeetingDate(next.scheduledAt, timezone) : "";
+	const reason = invite.readOnly
+		? "Read-only view: invites can't be recorded"
+		: !next
+			? "Schedule the next meeting first"
+			: !phone && !email
+				? "Add an email or phone to invite"
+				: null;
+	const label = next ? `Invite to ${meetingDate}` : "Invite";
+	if (reason || !next) {
+		return (
+			<fieldset
+				aria-label={label}
+				aria-disabled="true"
+				data-slot="guest-invite"
+				title={reason ?? undefined}
+				className="m-0 flex min-w-0 items-center gap-1.5 border-0 p-0"
+			>
+				<span className="text-xs font-semibold text-[var(--sea-ink-soft)] opacity-60">
+					{label}
+				</span>
+				<span
+					data-slot="guest-invite-reason"
+					className="text-[11px] text-[var(--sea-ink-soft)]"
+				>
+					{reason}
+				</span>
+			</fieldset>
+		);
+	}
+	const meetingId = next.id;
+	return (
+		<fieldset
+			aria-label={label}
+			data-slot="guest-invite"
+			className="m-0 flex min-w-0 items-center gap-1.5 border-0 p-0"
+		>
+			<span className="text-xs font-semibold">{label}</span>
+			<NudgeButtons
+				mode="invite"
+				name={guest.name}
+				preferredName={guest.preferredName}
+				phone={phone}
+				email={email}
+				meetingDate={meetingDate}
+				meetingTime={formatMeetingTime(next.scheduledAt, timezone)}
+				location={next.location}
+				clubName={invite.clubName}
+				shareUrl={invite.shareUrl}
+				onContacted={() => invite.onRecord(guest.id, meetingId)}
+			/>
+		</fieldset>
+	);
+}
+
 function GuestRow({
 	guest,
 	clubId,
 	busy,
 	onMove,
 	onConvert,
+	timezone,
+	invite,
 }: {
 	guest: PipelineGuestRow;
 	clubId: string;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => void;
+	timezone: string;
+	invite: InviteProps;
 }) {
 	// STRANDED, not joined: converted once, then the membership was removed from
 	// the roster, which nulls `converted_membership_id` and leaves `stage` saying
@@ -339,8 +511,10 @@ function GuestRow({
 			? "No recorded visits"
 			: `${guest.visitCount} visit${guest.visitCount === 1 ? "" : "s"}`;
 	const firstVisit = guest.firstVisitAt
-		? `first ${formatShortDate(guest.firstVisitAt)}`
+		? `first ${formatShortDate(guest.firstVisitAt, timezone)}`
 		: null;
+	const invitable = isInvitableStage(guest.stage);
+	const invited = inviteHistoryLine(guest, timezone, new Date());
 	// Phone and email used to be joined into one string, which can't carry a
 	// link. They are elements now, so the "·" between them is an element too —
 	// and it must agree with what `WhatsAppPhoneLink` actually RENDERS (it trims
@@ -365,6 +539,14 @@ function GuestRow({
 				/>
 				<div className="min-w-0 leading-[1.3]">
 					<div className="truncate text-sm font-bold">{guest.name}</div>
+					{invited ? (
+						<div
+							data-slot="guest-invite-history"
+							className="text-xs text-[var(--sea-ink-soft)]"
+						>
+							{invited}
+						</div>
+					) : null}
 					{hasPhone || email ? (
 						// `gap-y-0.5`: this line could not wrap while it was one truncated
 						// string, and now it can — two elements with no leading between
@@ -415,6 +597,15 @@ function GuestRow({
 			</div>
 
 			<div className="flex shrink-0 flex-wrap items-center gap-1.5">
+				{invitable ? (
+					<GuestInvite
+						guest={guest}
+						phone={hasPhone ? guest.phone : null}
+						email={email || null}
+						invite={invite}
+						timezone={timezone}
+					/>
+				) : null}
 				{stranded ? (
 					<span
 						data-slot="stranded-badge"

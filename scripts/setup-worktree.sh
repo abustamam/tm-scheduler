@@ -44,10 +44,22 @@ echo "  worktree: $HERE"
 echo "  main:     $MAIN"
 echo
 
-# 1. Dependencies. Bun is fast and install is idempotent, so run unconditionally
-#    rather than guessing from node_modules/ being present but half-populated.
-echo "→ bun install"
-bun install
+# 1. Dependencies. Bun is fast and a frozen install is idempotent, so run it
+#    unconditionally rather than guessing from node_modules/ being present but
+#    half-populated.
+#
+#    --frozen-lockfile, like CI and the Dockerfile: a plain `bun install` lets
+#    the local Bun rewrite bun.lock to its own format. Bun >= 1.3 adds a
+#    `"configVersion": 0` line that an older Bun strips again (#846 did), so
+#    every worktree started with a dirty tracked file. No silent fallback to a
+#    writing install: a network blip would fail the frozen one too, and the
+#    retry would bring the dirty lockfile back under a wrong explanation.
+echo "→ bun install --frozen-lockfile"
+if ! bun install --frozen-lockfile; then
+	echo "  ! frozen install failed: bun.lock is behind package.json, or the registry is unreachable." >&2
+	echo "    If this branch changed dependencies on purpose, run 'bun install' and commit bun.lock." >&2
+	exit 1
+fi
 
 # 2. Env. Never clobber an existing file — a worktree may be deliberately
 #    pointed at a different database than the main checkout.

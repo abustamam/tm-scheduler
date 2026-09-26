@@ -1,6 +1,6 @@
 {
-  "id": "e6a1a958-11c1-4deb-9bd0-25c19f47eae1",
-  "prevId": "25a8ba18-4490-4e93-9421-e685e7b3b5d2",
+  "id": "0b255ef3-103a-457d-bf7e-eff9c93ca7db",
+  "prevId": "e6a1a958-11c1-4deb-9bd0-25c19f47eae1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7607,7 +7607,8 @@
         "dcp_suggestion_applied",
         "timing_record",
         "guest_visits_record",
-        "club_template_saved"
+        "club_template_saved",
+        "club_data_exported"
       ]
     },
     "public.attendance_plan_status": {

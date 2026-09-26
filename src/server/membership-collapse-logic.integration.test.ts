@@ -28,6 +28,8 @@ import {
 	activityLog,
 	clubActionItems,
 	duesPeriods,
+	guestInvites,
+	guests,
 	meetingAttendance,
 	meetingAttendancePlan,
 	meetingAwards,
@@ -489,6 +491,38 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(row?.ownerMemberId).toBe(keeperId);
 	});
 
+	it("keeps a guest invite's attribution on the keeper (#899)", async () => {
+		// The drift-guard only proves the FK is DECLARED handled. Without the
+		// re-point, deleting the absorbed membership SETs NULL the inviter, and
+		// the VPM board silently drops "· by …" from the invite line.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		const [guest] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Invited Guest" })
+			.returning({ id: guests.id });
+		if (!guest) throw new Error("Failed to insert guest");
+		const [inv] = await testDb
+			.insert(guestInvites)
+			.values({
+				clubId: seed.clubId,
+				guestId: guest.id,
+				meetingId: seed.meetingId,
+				invitedByMemberId: absorbedId,
+			})
+			.returning({ id: guestInvites.id });
+		if (!inv) throw new Error("Failed to insert invite");
+
+		await collapse(keeperId, absorbedId);
+
+		const [row] = await testDb
+			.select({ invitedByMemberId: guestInvites.invitedByMemberId })
+			.from(guestInvites)
+			.where(eq(guestInvites.id, inv.id));
+		expect(row).toBeDefined();
+		expect(row?.invitedByMemberId).toBe(keeperId);
+	});
+
 	it("re-points set-null FKs + activity_log (actor + jsonb detail) to the keeper", async () => {
 		const keeperId = await addMembership({ name: "Keeper" });
 		const absorbedId = await addMembership({ name: "Absorbed" });
@@ -656,6 +690,10 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			// caller's own, so losing this on a merge would leave the merged member
 			// unable to correct their own measurement.
 			"meeting_timings.recorded_by_member_id",
+			// #899 — who opened a guest's invite draft. Nullable attribution; the
+			// table's unique is (guest, meeting), which carries no member, so it
+			// re-points plainly.
+			"guest_invites.invited_by_member_id",
 			// #723 — candidate disqualification. `candidate_member_id` sits inside a
 			// unique (meeting, category, candidate), so it re-points via the
 			// delete-then-update pattern; `disqualified_by_member_id` is nullable

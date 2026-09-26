@@ -16,6 +16,7 @@ import type { db } from "#/db";
 import {
 	activityLog,
 	clubActionItems,
+	guestInvites,
 	guests,
 	meetingAttendance,
 	meetingAttendancePlan,
@@ -236,6 +237,16 @@ export async function collapseMemberships(
 		.update(meetingTimings)
 		.set({ recordedByMemberId: keeperId })
 		.where(eq(meetingTimings.recordedByMemberId, absorbedId));
+
+	// 8d. guest_invites.invited_by_member_id (#899) — nullable attribution of
+	//    who opened an invite draft. The table's unique index is (guest,
+	//    meeting), which carries no member, so a plain re-point cannot collide.
+	//    Without it the absorbed membership's delete would SET NULL every
+	//    invite it opened, and the VPM board would lose "· by …" on each.
+	await tx
+		.update(guestInvites)
+		.set({ invitedByMemberId: keeperId })
+		.where(eq(guestInvites.invitedByMemberId, absorbedId));
 
 	// 9. project_completion_marks.marked_by_member_id — attribution only, and
 	//    nullable. No member-unique constraint (the mark's uniqueness is on

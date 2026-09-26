@@ -36,3 +36,20 @@ export const guestBookSchema = z.object({
 });
 
 export type GuestBookInput = z.infer<typeof guestBookSchema>;
+
+/**
+ * Record an invite draft (#899). `.strict()` with NO actor field: the inviter is
+ * the membership the gate resolves from the session, so a client-supplied
+ * `actorMemberId` must fail parsing rather than be silently dropped.
+ */
+export const recordGuestInviteSchema = z
+	.object({
+		clubId: uuid,
+		guestId: uuid,
+		meetingId: uuid,
+	})
+	.strict();
+
+export type RecordGuestInviteSchemaInput = z.infer<
+	typeof recordGuestInviteSchema
+>;

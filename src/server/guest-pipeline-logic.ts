@@ -21,6 +21,7 @@ import { db } from "#/db";
 import {
 	activityLog,
 	clubs,
+	guestInvites,
 	guests,
 	meetingAttendance,
 	meetings,
@@ -46,6 +47,7 @@ import {
 	UNDO_NOT_CONVERTED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
+import { isInvitableStage, NOT_INVITABLE_MESSAGE } from "#/lib/guest-invite";
 import type { OfficerPosition } from "#/lib/officers";
 import { namesAgree } from "#/lib/person-name";
 import {
@@ -708,6 +710,20 @@ export interface PipelineGuestRow {
 	 * back to Open (#364).
 	 */
 	heldSlotCount: number;
+	/**
+	 * The most recent invite draft an officer opened for this guest (#899), by
+	 * `invitedAt`, counting only meetings that are NOT cancelled. Null when there
+	 * is none. `invitedByName` is null when the inviter was deleted or was an
+	 * impersonating superadmin (no membership). A row means a draft was OPENED —
+	 * the app cannot see whether it was sent.
+	 */
+	lastInvite: {
+		meetingId: string;
+		meetingAt: Date;
+		invitedByName: string | null;
+	} | null;
+	/** DISTINCT non-cancelled meetings this guest has been invited to (#899). */
+	inviteCount: number;
 	createdAt: Date;
 }
 
@@ -836,7 +852,7 @@ export async function loadGuestPipeline(
 	// not need to exist at all.
 	const { timeZone: tz, countryCode: cc } =
 		await loadClubPipelineSettings(clubId);
-	const [rows, visitRows, slotRows, linkRows, conversionRows] =
+	const [rows, visitRows, slotRows, linkRows, conversionRows, inviteRows] =
 		await Promise.all([
 			db
 				.select({
@@ -914,6 +930,29 @@ export async function loadGuestPipeline(
 						eq(activityLog.action, "member_add"),
 					),
 				),
+			// Invite drafts (#899). An invite to a meeting cancelled afterwards stays
+			// in the table but is not shown, so the filter is here rather than a
+			// delete on cancel. Latest first, so the first row per guest is
+			// `lastInvite`; one row per (guest, meeting) by the unique index, so the
+			// row count per guest IS the distinct-meeting count.
+			db
+				.select({
+					guestId: guestInvites.guestId,
+					meetingId: guestInvites.meetingId,
+					meetingAt: meetings.scheduledAt,
+					invitedByName: members.name,
+				})
+				.from(guestInvites)
+				.innerJoin(meetings, eq(meetings.id, guestInvites.meetingId))
+				.leftJoin(members, eq(members.id, guestInvites.invitedByMemberId))
+				.where(
+					and(
+						eq(guestInvites.clubId, clubId),
+						eq(meetings.clubId, clubId),
+						ne(meetings.status, "cancelled"),
+					),
+				)
+				.orderBy(desc(guestInvites.invitedAt), desc(guestInvites.id)),
 		]);
 
 	const visitsByGuest = new Map(visitRows.map((v) => [v.guestId, v]));
@@ -924,6 +963,28 @@ export async function loadGuestPipeline(
 			.filter((c) => readConversionRecord(c.detail) !== null)
 			.map((c) => c.guestId),
 	);
+	const invitesByGuest = new Map<
+		string,
+		{
+			last: PipelineGuestRow["lastInvite"];
+			meetings: Set<string>;
+		}
+	>();
+	for (const inv of inviteRows) {
+		const entry = invitesByGuest.get(inv.guestId);
+		if (entry) {
+			entry.meetings.add(inv.meetingId);
+			continue;
+		}
+		invitesByGuest.set(inv.guestId, {
+			last: {
+				meetingId: inv.meetingId,
+				meetingAt: new Date(inv.meetingAt),
+				invitedByName: inv.invitedByName ?? null,
+			},
+			meetings: new Set([inv.meetingId]),
+		});
+	}
 
 	return rows.map((r) => {
 		const v = visitsByGuest.get(r.id);
@@ -945,6 +1006,8 @@ export async function loadGuestPipeline(
 			visitCount: Number(v?.visitCount ?? 0),
 			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
 			heldSlotCount: Number(slotsByGuest.get(r.id)?.heldSlotCount ?? 0),
+			lastInvite: invitesByGuest.get(r.id)?.last ?? null,
+			inviteCount: invitesByGuest.get(r.id)?.meetings.size ?? 0,
 			createdAt: r.createdAt,
 		};
 	});
@@ -1177,6 +1240,73 @@ export async function applySetGuestStage(
 		.set({ stage: input.stage, updatedAt: new Date() })
 		.where(eq(guests.id, input.guestId));
 	return { ok: true as const, stage: input.stage };
+}
+
+export interface RecordGuestInviteInput {
+	clubId: string;
+	guestId: string;
+	meetingId: string;
+	/** The resolved membership's id — never client input. Null for an
+	 *  impersonating superadmin, who has no membership. */
+	actorMemberId: string | null;
+}
+
+/**
+ * Record that an officer opened an invite draft for `guestId` to `meetingId`
+ * (#899). The app never sends: this is a coordination record so two officers do
+ * not double up, not a delivery receipt.
+ *
+ * One row per (guest, meeting): a repeat upserts `invitedAt` and the actor.
+ * Only a guest still in the funnel (`prospect` / `following_up`) may be
+ * invited — every other stage is refused, a stranded `joined` row included (it
+ * can be moved back to Prospect first, which `applySetGuestStage` allows). The
+ * meeting must be this club's, not cancelled, and not yet started. Stage is
+ * never changed. Club-scoped; the caller gates on admin, which also asserts the
+ * archive gate.
+ */
+export async function applyRecordGuestInvite(
+	input: RecordGuestInviteInput,
+): Promise<{ ok: true }> {
+	const [guest] = await db
+		.select({ id: guests.id, stage: guests.stage })
+		.from(guests)
+		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+		.limit(1);
+	if (!guest) throw new Error("Guest not found in this club.");
+	if (!isInvitableStage(guest.stage)) throw new Error(NOT_INVITABLE_MESSAGE);
+	const [meeting] = await db
+		.select({
+			id: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+			status: meetings.status,
+		})
+		.from(meetings)
+		.where(
+			and(eq(meetings.id, input.meetingId), eq(meetings.clubId, input.clubId)),
+		)
+		.limit(1);
+	if (!meeting) throw new Error("Meeting not found in this club.");
+	if (meeting.status === "cancelled") {
+		throw new Error("That meeting is cancelled.");
+	}
+	if (meeting.scheduledAt.getTime() < Date.now()) {
+		throw new Error("That meeting has already started.");
+	}
+	const invitedAt = new Date();
+	await db
+		.insert(guestInvites)
+		.values({
+			clubId: input.clubId,
+			guestId: input.guestId,
+			meetingId: input.meetingId,
+			invitedByMemberId: input.actorMemberId,
+			invitedAt,
+		})
+		.onConflictDoUpdate({
+			target: [guestInvites.guestId, guestInvites.meetingId],
+			set: { invitedAt, invitedByMemberId: input.actorMemberId },
+		});
+	return { ok: true as const };
 }
 
 export interface ConvertGuestInput {

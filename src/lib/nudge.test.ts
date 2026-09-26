@@ -798,3 +798,56 @@ describe("outstandingDutiesByMember", () => {
 		expect(outstandingDutiesByMember(slots, {}).get("m1")).toEqual(expected);
 	});
 });
+
+describe("buildNudge invite mode (#899)", () => {
+	const invite = {
+		mode: "invite" as const,
+		name: "Ada Lovelace",
+		email: "ada@example.com",
+		phone: "+14155552671",
+		clubName: "Downtown Club",
+		meetingDate: "Thu, Oct 9",
+		meetingTime: "7:00 PM",
+		location: "Room 4",
+		shareUrl: "https://gavelup.app/club/downtown/meeting/2026-10-09",
+	};
+
+	it("invites by first name to the meeting, with its agenda link", () => {
+		const r = buildNudge(invite);
+		expect(r.message).toBe(
+			"Hi Ada, it was great having you at Downtown Club. We meet again on Thu, Oct 9 at 7:00 PM, at Room 4. We'd love to see you there. Agenda: https://gavelup.app/club/downtown/meeting/2026-10-09",
+		);
+		expect(r.whatsappUrl).toContain(encodeURIComponent(invite.shareUrl));
+	});
+
+	it("omits the location clause entirely when it is null or blank", () => {
+		for (const location of [null, "  "]) {
+			const r = buildNudge({ ...invite, location });
+			expect(r.message).toContain("on Thu, Oct 9 at 7:00 PM. We'd love");
+			expect(r.message).not.toContain(", at");
+		}
+	});
+
+	it("never carries a join URL, whatever the input holds", () => {
+		// The mode has no field for one; an extra property smuggled onto the input
+		// object (as a caller spreading a meeting row would) must not reach the
+		// draft either (#731/#754).
+		const joinUrl = "https://zoom.us/j/99999999999?pwd=secret";
+		const r = buildNudge({
+			...invite,
+			...({ joinUrl, join_url: joinUrl } as object),
+		} as typeof invite);
+		for (const s of [r.message, r.mailtoUrl ?? "", r.whatsappUrl ?? ""]) {
+			expect(s).not.toContain(joinUrl);
+			expect(s).not.toContain(encodeURIComponent(joinUrl));
+			expect(s).not.toContain("?as=");
+		}
+	});
+
+	it("uses the invite subject", () => {
+		const r = buildNudge(invite);
+		expect(r.mailtoUrl).toContain(
+			`subject=${encodeURIComponent("See you at Downtown Club on Thu, Oct 9?")}`,
+		);
+	});
+});
