@@ -154,12 +154,12 @@ const roleSheetRoles: RoleSheetEntry[] = Array.from({ length: 12 }, (_, i) => ({
 	description: "What this role does, in a sentence that wraps a little.",
 }));
 
-// Exercised on every layout, not just the ones that render it (#510): passing
-// it unconditionally proves `GridLayout` really does ignore it (no DarkFooter
-// to put it in) rather than that omission being untested by accident, and
-// proves the QR itself — present on editorial/spacious/timing's `DarkFooter` —
-// does not move any of the counts below.
-const BALLOT_URL = "https://gavelup.app/club/downtown/meeting/2026-07-22/vote";
+// Exercised on every layout (#510, #717): the QR sits in every layout's
+// footer — `DarkFooter` on three, `GridLayout`'s hand-rolled band on the
+// fourth — and this proves it does not move any of the counts below. Since
+// #913 it is the meeting page "in the room" and prints whether or not the club
+// votes on phones, so a sheet WITH it is the only one the app prints.
+const QR_URL = "https://gavelup.app/club/downtown/meeting/2026-07-22?room=1";
 
 function agendaHtml(layout: AgendaLayout): string {
 	return renderToStaticMarkup(
@@ -170,7 +170,7 @@ function agendaHtml(layout: AgendaLayout): string {
 			officers={[]}
 			explainers={[]}
 			rows={rows}
-			ballotUrl={BALLOT_URL}
+			qrUrl={QR_URL}
 		/>,
 	);
 }
@@ -499,7 +499,7 @@ describe.skipIf(!hasChrome)(
 					officers={[]}
 					explainers={[]}
 					rows={long}
-					ballotUrl={BALLOT_URL}
+					qrUrl={QR_URL}
 				/>,
 			);
 			expect(pages(PRINT_PAGE_CSS, html)).toBe(1);

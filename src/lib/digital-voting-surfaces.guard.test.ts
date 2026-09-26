@@ -52,10 +52,10 @@ describe("ballot URLs come only from ballotUrlFor (#770)", () => {
 	});
 
 	/** Comment-blind: these are must-be-PRESENT checks, where a comment naming
-	 *  the call would be a bypass. */
+	 *  the call would be a bypass. The print route is not on this list since
+	 *  #913 — see the describe below. */
 	it("each route that shows a ballot QR asks the seam, with the RESOLVED answer", () => {
 		for (const route of [
-			"src/routes/club.$clubId_.meeting.$meetingId.print.tsx",
 			"src/routes/club.$clubId_.meeting.$meetingId.present.tsx",
 			"src/routes/club.$clubId.meeting.$meetingId.tsx",
 		]) {
@@ -68,6 +68,35 @@ describe("ballot URLs come only from ballotUrlFor (#770)", () => {
 				/ballotUrlFor\(\s*(data\.)?digitalVoting,/,
 			);
 		}
+	});
+});
+
+/**
+ * The printed agenda's QR is the meeting page, not the ballot (#913).
+ *
+ * The print route used to be the third entry in the list above. Its code now
+ * opens the meeting page "in the room" (`meetingHubUrlFor`), printed whether or
+ * not the club votes on phones — the page's strip shows Vote only while a
+ * category is open, and no category opens with digital voting off, so the
+ * voting switch still reaches the one tap that matters. That makes the print
+ * route the one surface where a ballot URL would now be WRONG rather than
+ * merely ungated, so this pins both halves: it asks the hub seam, and it does
+ * not ask the ballot one. The "no other file spells a ballot URL" sweep above
+ * still covers it, so an inline `/vote` literal fails there.
+ */
+describe("the printed agenda encodes the meeting page, not the ballot (#913)", () => {
+	const PRINT_ROUTE = "src/routes/club.$clubId_.meeting.$meetingId.print.tsx";
+
+	it("builds its QR with meetingHubUrlFor and hands it to the layouts as qrUrl", () => {
+		const source = readSource(PRINT_ROUTE);
+		expect(source).toMatch(/meetingHubUrlFor\(/);
+		expect(source).toMatch(/qrUrl=\{qrUrl/);
+	});
+
+	// RAW, like the offender sweep above: a must-be-ABSENT check, where
+	// stripping comments could only loosen it.
+	it("no longer builds a ballot URL at all", () => {
+		expect(raw(PRINT_ROUTE)).not.toMatch(/ballotUrlFor\(/);
 	});
 });
 

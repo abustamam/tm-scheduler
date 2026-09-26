@@ -90,14 +90,16 @@ type Props = {
 	officers: AgendaOfficer[];
 	explainers: AgendaExplainer[];
 	rows: TimelineRow[];
-	// The absolute scan-to-vote ballot URL (#510), or undefined before the print
-	// route's client-side origin effect fires. Threaded to every layout,
-	// including `GridLayout` — the default layout, so the club that prints
-	// instead of projecting is exactly the club this QR is for. Three layouts
+	// The absolute meeting-page URL the printed QR encodes (#913,
+	// `meetingHubUrlFor` — `?room=1`, the in-room strip), or undefined before the
+	// print route's client-side origin effect fires. It replaced #510's ballot
+	// URL and, unlike it, is present whether or not the club votes on phones.
+	// Threaded to every layout, including `GridLayout` — the default layout, so
+	// the club that prints instead of projecting gets it too. Three layouts
 	// put it in their shared `DarkFooter`; `GridLayout` has no `DarkFooter`
 	// (see its own file-header note) and renders a smaller copy inline in its
 	// hand-rolled officer footer instead.
-	ballotUrl?: string;
+	qrUrl?: string;
 };
 
 /** minutes (e.g. 6.5) → "6:30" for the timing marks. Shared with the grace
@@ -975,7 +977,7 @@ function EditorialLayout({
 	roles,
 	officers,
 	rows,
-	ballotUrl,
+	qrUrl,
 }: Omit<Props, "layout" | "explainers">) {
 	return (
 		<FitPage>
@@ -1134,7 +1136,7 @@ function EditorialLayout({
 			<DarkFooter
 				left="Guests are always welcome — speak to any officer about getting involved."
 				right="toastmasters.org"
-				ballotUrl={ballotUrl}
+				qrUrl={qrUrl}
 			/>
 		</FitPage>
 	);
@@ -1227,7 +1229,7 @@ function GridLayout({
 	roles,
 	officers,
 	rows,
-	ballotUrl,
+	qrUrl,
 }: Omit<Props, "layout" | "explainers">) {
 	return (
 		<FitPage>
@@ -1428,7 +1430,7 @@ function GridLayout({
 				{officers.length > 0 ||
 				header.meetingSchedule ||
 				header.mission ||
-				ballotUrl ? (
+				qrUrl ? (
 					<div
 						data-print-footer=""
 						style={{
@@ -1446,7 +1448,7 @@ function GridLayout({
 							color: "#fff",
 						}}
 					>
-						{officers.length > 0 || header.meetingSchedule || ballotUrl ? (
+						{officers.length > 0 || header.meetingSchedule || qrUrl ? (
 							<div
 								style={{
 									display: "flex",
@@ -1494,7 +1496,7 @@ function GridLayout({
 											Meets {header.meetingSchedule}
 										</span>
 									) : null}
-									{ballotUrl ? (
+									{qrUrl ? (
 										// Grid has no headroom (see the file-header note above),
 										// so this is the tightest copy of the QR rather than
 										// `DarkFooter`'s: one caption line, not three, and 5px
@@ -1521,7 +1523,7 @@ function GridLayout({
 											}}
 										>
 											<QRCodeSVG
-												value={ballotUrl}
+												value={qrUrl}
 												size={FOOTER_QR_PX}
 												marginSize={0}
 											/>
@@ -1533,9 +1535,9 @@ function GridLayout({
 													fontWeight: 700,
 												}}
 											>
-												Scan to
+												Scan for
 												<br />
-												vote
+												today's meeting
 											</span>
 										</span>
 									) : null}
@@ -1637,7 +1639,7 @@ function SpaciousLayout({
 	roles,
 	officers,
 	rows,
-	ballotUrl,
+	qrUrl,
 }: Omit<Props, "layout" | "explainers">) {
 	return (
 		<TwoPage>
@@ -1759,11 +1761,11 @@ function SpaciousLayout({
 					) : null}
 				</div>
 
-				{/* `|| ballotUrl`, like `GridLayout`'s footer (#717): a club with
+				{/* `|| qrUrl`, like `GridLayout`'s footer (#717): a club with
 				    neither officers nor a meeting schedule on file would otherwise
 				    render no band at all on this sheet, and the QR would have
 				    nowhere to go on the very page this fixes. */}
-				{officers.length > 0 || header.meetingSchedule || ballotUrl ? (
+				{officers.length > 0 || header.meetingSchedule || qrUrl ? (
 					<div
 						data-print-footer=""
 						style={{
@@ -1823,7 +1825,7 @@ function SpaciousLayout({
 									</div>
 								) : null}
 							</div>
-							{ballotUrl ? (
+							{qrUrl ? (
 								<span
 									className="footer-qr"
 									style={{
@@ -1842,17 +1844,11 @@ function SpaciousLayout({
 											textAlign: "right",
 										}}
 									>
-										Scan to vote
+										Scan for
 										<br />
-										Best Speaker
-										<br />
-										Evaluator · Table Topics
+										today's meeting
 									</span>
-									<QRCodeSVG
-										value={ballotUrl}
-										size={FOOTER_QR_PX}
-										marginSize={0}
-									/>
+									<QRCodeSVG value={qrUrl} size={FOOTER_QR_PX} marginSize={0} />
 								</span>
 							) : null}
 						</div>
@@ -1909,7 +1905,7 @@ function SpaciousLayout({
 				<DarkFooter
 					left="Guests are always welcome — speak to any officer about getting involved."
 					right="toastmasters.org"
-					ballotUrl={ballotUrl}
+					qrUrl={qrUrl}
 				/>
 			</FitPage>
 		</TwoPage>
@@ -1952,7 +1948,7 @@ function TimingLayout({
 	officers,
 	explainers,
 	rows,
-	ballotUrl,
+	qrUrl,
 }: Omit<Props, "layout">) {
 	return (
 		<TwoPage>
@@ -2165,7 +2161,7 @@ function TimingLayout({
 					) : null}
 				</div>
 
-				{/* #717: `ballotUrl` here, not only on page 2. A club printing this
+				{/* #717: `qrUrl` here, not only on page 2. A club printing this
 				    agenda DOUBLE-SIDED got a front side with no way to reach the
 				    ballot. Invisible on screen, where both sheets scroll past in one
 				    view. `SpaciousLayout` had the same gap and is fixed the same
@@ -2180,7 +2176,7 @@ function TimingLayout({
 				<DarkFooter
 					left="Page 1 of 2 · Officers & roles"
 					right="toastmasters.org"
-					ballotUrl={ballotUrl}
+					qrUrl={qrUrl}
 				/>
 			</FitPage>
 
@@ -2402,7 +2398,7 @@ function TimingLayout({
 				<DarkFooter
 					left="Page 2 of 2 · Detailed run of show"
 					right={`${header.clubName}`}
-					ballotUrl={ballotUrl}
+					qrUrl={qrUrl}
 				/>
 			</FitPage>
 		</TwoPage>
@@ -2559,7 +2555,7 @@ export function MeetingAgendaPrint({
 	officers,
 	explainers,
 	rows,
-	ballotUrl,
+	qrUrl,
 }: Props) {
 	switch (layout) {
 		case "editorial":
@@ -2569,7 +2565,7 @@ export function MeetingAgendaPrint({
 					roles={roles}
 					officers={officers}
 					rows={rows}
-					ballotUrl={ballotUrl}
+					qrUrl={qrUrl}
 				/>
 			);
 		case "grid":
@@ -2579,7 +2575,7 @@ export function MeetingAgendaPrint({
 					roles={roles}
 					officers={officers}
 					rows={rows}
-					ballotUrl={ballotUrl}
+					qrUrl={qrUrl}
 				/>
 			);
 		case "spacious":
@@ -2589,7 +2585,7 @@ export function MeetingAgendaPrint({
 					roles={roles}
 					officers={officers}
 					rows={rows}
-					ballotUrl={ballotUrl}
+					qrUrl={qrUrl}
 				/>
 			);
 		default:
@@ -2600,7 +2596,7 @@ export function MeetingAgendaPrint({
 					officers={officers}
 					explainers={explainers}
 					rows={rows}
-					ballotUrl={ballotUrl}
+					qrUrl={qrUrl}
 				/>
 			);
 	}

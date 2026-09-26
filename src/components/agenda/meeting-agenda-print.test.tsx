@@ -1211,12 +1211,12 @@ describe("MeetingAgendaPrint — the meeting-script cues reach the page (#508)",
 
 // #510 review finding 1. The printed footer QR is the ballot's entry point for
 // a club that prints instead of projecting, and a reviewer proved it had NO
-// regression net: disabling `DarkFooter`'s `ballotUrl` branch left the whole
+// regression net: disabling `DarkFooter`'s `qrUrl` branch left the whole
 // suite green. These assertions close that gap on the DOM side — the real-PDF
 // page-count gate in `print-page-count.test.tsx` covers the printed-page shape
 // separately and does not itself look for the `<svg>`.
-describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
-	const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+describe("MeetingAgendaPrint — the footer QR (#510, #913)", () => {
+	const QR_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25?room=1";
 
 	// All four, not just the three that route through `DarkFooter`: `GridLayout`
 	// carries its own smaller copy in its hand-rolled officer footer (see that
@@ -1233,16 +1233,19 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 					officers={[{ office: "President", name: "Pat Lee" }]}
 					explainers={[]}
 					rows={rows}
-					ballotUrl={BALLOT_URL}
+					qrUrl={QR_URL}
 				/>,
 			);
 			const qr = container.querySelector(".footer-qr");
 			expect(qr).not.toBeNull();
 			expect(qr?.querySelector("svg")).not.toBeNull();
-			expect(qr?.textContent?.toLowerCase()).toContain("scan to");
+			// #913: every layout's caption names the meeting page, not the vote.
+			expect(qr?.textContent).toContain("Scan for");
+			expect(qr?.textContent).toContain("today's meeting");
+			expect(qr?.textContent).not.toMatch(/vote/i);
 		});
 
-		it(`renders no QR at all on the ${layout} layout when ballotUrl is undefined`, () => {
+		it(`renders no QR at all on the ${layout} layout when qrUrl is undefined`, () => {
 			// The pre-origin-effect gap (#510): the print route's client-side
 			// effect hasn't computed an absolute URL yet on the very first render.
 			const { container } = render(
@@ -1277,7 +1280,7 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 					officers={[{ office: "President", name: "Pat Lee" }]}
 					explainers={[]}
 					rows={rows}
-					ballotUrl={BALLOT_URL}
+					qrUrl={QR_URL}
 				/>,
 			);
 			for (const svg of container.querySelectorAll(".footer-qr svg")) {
@@ -1294,7 +1297,7 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 
 	// #717's other half, and the one a reader cannot see on screen: both sheets
 	// of a two-sheet layout scroll past in one view, and page 1 was never passed
-	// a `ballotUrl` at all. A club printing that agenda double-sided handed out a
+	// a `qrUrl` at all. A club printing that agenda double-sided handed out a
 	// front side with no way to reach the ballot.
 	//
 	// BOTH two-sheet layouts, not just `timing`. The issue's premise was that
@@ -1315,7 +1318,7 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 			container.querySelector(".agenda-page:nth-of-type(2)"),
 		];
 
-		it("puts a real QR on page 1 and page 2 when ballotUrl is set", () => {
+		it("puts a real QR on page 1 and page 2 when qrUrl is set", () => {
 			const { container } = render(
 				<MeetingAgendaPrint
 					layout={layout}
@@ -1324,7 +1327,7 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 					officers={[{ office: "President", name: "Pat Lee" }]}
 					explainers={[{ role: "Timer", description: "Times the meeting." }]}
 					rows={rows}
-					ballotUrl={BALLOT_URL}
+					qrUrl={QR_URL}
 				/>,
 			);
 			const [page1, page2] = sheets(container);
@@ -1336,11 +1339,11 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 				const qr = page?.querySelector(".footer-qr");
 				expect(qr).not.toBeNull();
 				expect(qr?.querySelector("svg")).not.toBeNull();
-				expect(qr?.textContent?.toLowerCase()).toContain("scan to vote");
+				expect(qr?.textContent).toContain("today's meeting");
 			}
 		});
 
-		it("puts one on NEITHER sheet when ballotUrl is undefined", () => {
+		it("puts one on NEITHER sheet when qrUrl is undefined", () => {
 			// AC 7: with no ballot URL the footers are exactly what they were, on
 			// both sheets — page 1 must not start rendering an empty QR frame now
 			// that it is wired up.
@@ -1362,7 +1365,7 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 
 		it("renders page 1's QR even for a club with no officers and no schedule", () => {
 			// `SpaciousLayout`'s page-1 band and `GridLayout`'s footer are both
-			// CONDITIONAL on having something to show. Without `|| ballotUrl` in
+			// CONDITIONAL on having something to show. Without `|| qrUrl` in
 			// that condition the band never renders for such a club, and the code
 			// has nowhere to go on the very sheet this fixes — a silent hole that
 			// the fixtures above, which all pass officers, cannot see.
@@ -1374,7 +1377,7 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 					officers={[]}
 					explainers={[{ role: "Timer", description: "Times the meeting." }]}
 					rows={rows}
-					ballotUrl={BALLOT_URL}
+					qrUrl={QR_URL}
 				/>,
 			);
 			const [page1] = sheets(container);
@@ -1804,15 +1807,15 @@ describe("timing layout splits nothing (#463)", () => {
 // today — which is a fact about the tree as it stands, not a guarantee, and
 // the thing to re-check if these ever look redundant.
 describe("the printed agenda carries no paper votes box (#721)", () => {
-	const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+	const QR_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25?room=1";
 
 	for (const layout of ["spacious", "timing"] as const) {
 		it(`renders no "Tonight's Votes" box on the ${layout} layout`, () => {
 			renderLayout(layout);
 			expect(screen.queryByText(/Tonight.s Votes/)).toBeNull();
-			// The two award names the box was the LAST place in this file to
-			// render. "Best Speaker" is deliberately not among them: it survives
-			// in the footer QR's caption, which is the point of the case below.
+			// Award names the box was the last place in this file to render.
+			// Since #913 the footer QR's caption names the meeting page, not the
+			// awards, so none of them may print.
 			expect(screen.queryByText("Best Table Topics")).toBeNull();
 			expect(screen.queryByText("Best Evaluator")).toBeNull();
 			// The write-a-name-here rules themselves, so a box that kept its shape
@@ -1821,21 +1824,13 @@ describe("the printed agenda carries no paper votes box (#721)", () => {
 		});
 
 		// AC 9. The QR is the REPLACEMENT for the box, so the deletion above is
-		// only safe while it renders. `MeetingAgendaPrint — the scan-to-vote QR
-		// (#510)` covers the QR on its own terms across all four layouts; this
-		// pins the pairing — no box, and a way to vote — in one assertion, which
-		// is the thing a future reader of the block above needs to see.
-		//
-		// It also carries the CAPTION's award names, which nothing else does.
-		// `award-wording.guard.test.ts` has two halves and they guard different
-		// things: the offender sweep guards SPELLING across every source file,
-		// and the `SURFACES` list guards DELETION per site. That list deliberately
-		// omits the caption — its docblock says pinning an abbreviated three-item
-		// list would freeze the abbreviation as if it were the award's name — and
-		// #721 removed this file's own entry with the votes box. So between them
-		// nothing would notice the caption quietly losing an award, on either
-		// layout that used to print the names twice.
-		it(`keeps the scan-to-vote QR on the ${layout} layout`, () => {
+		// only safe while it renders. `MeetingAgendaPrint — the footer QR`
+		// covers the QR on its own terms across all four layouts; this pins the
+		// pairing — no box, and a way to vote — in one assertion, which is the
+		// thing a future reader of the block above needs to see. Since #913 the
+		// way to vote is one tap further: the code opens the meeting page, whose
+		// in-room strip leads with Vote while a category is open.
+		it(`keeps the footer QR on the ${layout} layout`, () => {
 			const { container } = render(
 				<MeetingAgendaPrint
 					layout={layout}
@@ -1844,14 +1839,15 @@ describe("the printed agenda carries no paper votes box (#721)", () => {
 					officers={[{ office: "President", name: "Pat Lee" }]}
 					explainers={[]}
 					rows={rows}
-					ballotUrl={BALLOT_URL}
+					qrUrl={QR_URL}
 				/>,
 			);
 			expect(screen.queryByText(/Tonight.s Votes/)).toBeNull();
 			// EVERY QR on the sheet, not `querySelector`'s first. Both layouts
 			// print two since #746, and on `spacious` they come from different
-			// modules: page 1 carries its own caption in this file (:1817),
-			// page 2 gets `DarkFooter`'s from `print-theme.tsx`. `timing` takes
+			// modules: page 1 carries its own caption in
+			// `meeting-agenda-print.tsx`, page 2 gets `DarkFooter`'s from
+			// `print-theme.tsx`. `timing` takes
 			// both from `DarkFooter`. So the first match is a DIFFERENT caption
 			// per layout, and asserting it alone left the other copy unguarded —
 			// verified by mutation: editing `print-theme.tsx`'s caption failed
@@ -1862,13 +1858,10 @@ describe("the printed agenda carries no paper votes box (#721)", () => {
 			expect(qrs.length).toBeGreaterThan(0);
 			for (const qr of qrs) {
 				expect(qr.querySelector("svg")).not.toBeNull();
-				// All three awards the caption abbreviates, not just the first.
-				// The halves are separate text nodes either side of a `<br/>`, so
-				// `textContent` runs them together; the second is asserted as the
-				// whole `Evaluator · Table Topics` pair, which fails if either
-				// name goes and also fixes their order.
-				expect(qr.textContent).toContain("Best Speaker");
-				expect(qr.textContent).toContain("Evaluator · Table Topics");
+				// The halves are separate text nodes either side of a `<br/>`,
+				// so `textContent` runs them together — two assertions.
+				expect(qr.textContent).toContain("Scan for");
+				expect(qr.textContent).toContain("today's meeting");
 			}
 		});
 	}

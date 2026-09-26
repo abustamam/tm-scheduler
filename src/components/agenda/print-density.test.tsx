@@ -57,6 +57,7 @@ import type {
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { CONTEST_TEMPLATE } from "#/lib/contest-template";
+import { meetingHubUrlFor } from "#/lib/meeting-hub";
 import {
 	MAX_ROLE_REPEAT_SLOTS,
 	MAX_TEMPLATE_BEATS,
@@ -84,6 +85,20 @@ import {
 	MeetingAgendaPrint,
 } from "./meeting-agenda-print";
 import { MIN_FIT_SCALE, PAGE_H, PRINT_PAGE_CSS } from "./print-theme";
+
+/**
+ * The QR every printed agenda carries since #913 — the meeting page "in the
+ * room", printed whether or not the club votes on phones. Before that, every
+ * fixture here rendered with NO code, which `ballot-qr-print-fit.test.tsx`
+ * called out as the margin of a sheet the app does not print; with the code
+ * always present, measuring without it would be measuring a sheet nobody gets.
+ * Built by the same function the print route calls, so its length (and so the
+ * QR's version) is the real one.
+ */
+const PRINTED_QR_URL = meetingHubUrlFor(
+	{ clubKey: "mcf-toastmasters", meetingKey: "2026-08-13" },
+	"https://gavelup.app",
+);
 
 const header: AgendaHeader = {
 	clubName: "MCF Toastmasters",
@@ -377,6 +392,7 @@ function agendaHeight(
 			roles={rosterRoles}
 			officers={officers}
 			explainers={[]}
+			qrUrl={PRINTED_QR_URL}
 			rows={rows}
 		/>,
 	);
@@ -558,6 +574,7 @@ describe.skipIf(!hasChrome)(
 					roles={roles}
 					officers={officers}
 					explainers={[]}
+					qrUrl={PRINTED_QR_URL}
 					rows={mcfRows}
 				/>,
 			);
@@ -1006,6 +1023,7 @@ describe.skipIf(!hasChrome)(
 								roles={p.roles}
 								officers={officers}
 								explainers={[]}
+								qrUrl={PRINTED_QR_URL}
 								rows={mcfRows}
 							/>,
 						)}</div>`,
@@ -1347,6 +1365,7 @@ describe.skipIf(!hasChrome)(
 					roles={roles}
 					officers={officers}
 					explainers={[]}
+					qrUrl={PRINTED_QR_URL}
 					rows={rows}
 				/>,
 			);
