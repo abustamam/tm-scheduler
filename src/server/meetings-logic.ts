@@ -25,7 +25,10 @@ import {
 	type RosterContact,
 } from "./meeting-contacts-logic";
 import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
-import { freezeMeetingNumber } from "./meeting-number-logic";
+import {
+	freezeMeetingNumber,
+	resolveMeetingNumber,
+} from "./meeting-number-logic";
 import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 import { loadPublicClubRoster } from "./members-logic";
 import { closeAllVotesTx } from "./voting-logic";
@@ -107,6 +110,13 @@ export interface NextMeetingSummary {
 		urlKey: string;
 		scheduledAt: Date;
 		location: string | null;
+		/** Added for marketing blasts (#931). Always set by
+		 *  `loadNextMeetingSummary`; optional only so the VPM page's existing
+		 *  fixtures, which predate it, still describe a valid summary. */
+		theme?: string | null;
+		/** Stored or derived (#358) — `resolveMeetingNumber`. Null when the club
+		 *  has never numbered a meeting. Added for #931; optional as above. */
+		meetingNumber?: number | null;
 	} | null;
 }
 
@@ -135,6 +145,7 @@ export async function loadNextMeetingSummary(
 			id: meetings.id,
 			scheduledAt: meetings.scheduledAt,
 			location: meetings.location,
+			theme: meetings.theme,
 		})
 		.from(meetings)
 		.where(
@@ -147,7 +158,10 @@ export async function loadNextMeetingSummary(
 		.orderBy(asc(meetings.scheduledAt))
 		.limit(1);
 	if (!next) return { timezone, nextMeeting: null };
-	const urlKey = await resolveMeetingUrlKey(clubId, next.scheduledAt, timezone);
+	const [urlKey, meetingNumber] = await Promise.all([
+		resolveMeetingUrlKey(clubId, next.scheduledAt, timezone),
+		resolveMeetingNumber(next.id),
+	]);
 	return {
 		timezone,
 		nextMeeting: {
@@ -155,6 +169,8 @@ export async function loadNextMeetingSummary(
 			urlKey,
 			scheduledAt: next.scheduledAt,
 			location: next.location,
+			theme: next.theme,
+			meetingNumber,
 		},
 	};
 }
@@ -290,6 +306,10 @@ export interface MeetingMetaPatchInput {
 	reminders?: string | null;
 	/** Table Topics notes (#880), projected on the Table Topics slide. */
 	tableTopicsNotes?: string | null;
+	/** The meeting's promo note (#931), filling `{note}` in the club's blast
+	 *  template. ADMIN-ONLY, refused on presence like `meetingNumber`: a blast
+	 *  is the club's voice, and the self-serve TMOD arm needs no session. */
+	promoNote?: string | null;
 	/** The club's meeting number (#358). Omit to leave the current one alone;
 	 *  pass null to clear it back to provisional/derived. ADMIN-ONLY — gated by
 	 *  `canReschedule` below, which is why it is the one patch field a self-serve
@@ -328,6 +348,7 @@ const META_TEXT_FIELDS = [
 	"notes",
 	"reminders",
 	"tableTopicsNotes",
+	"promoNote",
 ] as const;
 
 /**
@@ -428,6 +449,11 @@ export async function applyMeetingMetaPatch(
 			throw new Error(
 				"Only an admin or VP Education can set this meeting's number.",
 			);
+		}
+		// Same presence rule (#931): no non-admin surface renders the promo note,
+		// so a request carrying one did not come from this app's UI.
+		if (input.promoNote !== undefined) {
+			throw new Error("Only an admin can set this meeting's promo note.");
 		}
 		// datetime-local input is minute-precision, so compare to the minute:
 		// re-submitting the current time (rounded) is a no-op, not a reschedule.

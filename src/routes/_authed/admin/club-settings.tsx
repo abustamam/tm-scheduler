@@ -1,6 +1,13 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Download, Loader2 } from "lucide-react";
-import { type ChangeEvent, useMemo, useRef, useState } from "react";
+import {
+	type ChangeEvent,
+	lazy,
+	Suspense,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
@@ -212,7 +219,14 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 			),
 			loadClubTimezoneSettings({ data: context.adminClub.clubId }),
 		]);
-		return { profile, reminders, agenda, logoMeta, timezone };
+		// The blast template (#931). Imported here rather than at the top so the
+		// promo module stays out of this page's first chunk; the editor that
+		// reads it is lazy for the same reason.
+		const { getPromoTemplate } = await import("#/server/promo");
+		const promoTemplate = await getPromoTemplate({
+			data: context.adminClub.clubId,
+		});
+		return { profile, reminders, agenda, logoMeta, timezone, promoTemplate };
 	},
 	component: ClubSettings,
 });
@@ -274,9 +288,15 @@ export function zoneLabel(zone: string): string {
 	}
 }
 
+const PromoTemplateEditor = lazy(() =>
+	import("#/components/club/promo-template-editor").then((m) => ({
+		default: m.PromoTemplateEditor,
+	})),
+);
+
 function ClubSettings() {
 	const { adminClub, impersonating } = Route.useRouteContext();
-	const { profile, reminders, agenda, logoMeta, timezone } =
+	const { profile, reminders, agenda, logoMeta, timezone, promoTemplate } =
 		Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
@@ -928,6 +948,16 @@ function ClubSettings() {
 					) : null}
 				</div>
 			</form>
+
+			{promoTemplate ? (
+				<Suspense fallback={null}>
+					<PromoTemplateEditor
+						clubId={adminClub.clubId}
+						template={promoTemplate}
+						onSaved={() => router.invalidate()}
+					/>
+				</Suspense>
+			) : null}
 
 			{/* #915. A plain link, not a server fn: the route streams a file and
 			    authorizes on its own (`requireClubRole(…, ["admin"])`, the same

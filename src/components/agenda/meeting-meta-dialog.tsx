@@ -15,6 +15,7 @@ import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
+import { PROMO_LIMITS } from "#/lib/promo-template";
 import { type getMeeting, updateMeeting } from "#/server/meetings";
 import { meetingUpdateFromForm } from "./meeting-meta-form";
 
@@ -138,6 +139,14 @@ export function MeetingMetaDialog({
 					// had and does not know about this one; the key is spread last, so
 					// it stays correct if that ever changes.
 					joinUrl,
+					// The promo note (#931) is admin-only, and the field below renders
+					// only for an admin — so it is sent only then. A self-serve TMOD's
+					// save must not carry the key at all: the writer refuses it on
+					// PRESENCE. Always sent when rendered, blank included, because a
+					// blank is how the note is cleared.
+					...(canReschedule
+						? { promoNote: String(form.get("promoNote") ?? "") }
+						: {}),
 				},
 			});
 			toast.success("Meeting updated.");
@@ -312,6 +321,22 @@ export function MeetingMetaDialog({
 							guests. One per line.
 						</p>
 					</div>
+					{canReschedule ? (
+						<div className="space-y-2">
+							<Label htmlFor="promoNote">Promo note</Label>
+							<Input
+								id="promoNote"
+								name="promoNote"
+								maxLength={PROMO_LIMITS.note}
+								placeholder="It's our open house, bring a friend!"
+								defaultValue={meeting.promoNote ?? ""}
+							/>
+							<p className="text-xs text-muted-foreground">
+								One line for this meeting's promo message and flyer. Leave blank
+								to leave it out.
+							</p>
+						</div>
+					) : null}
 					<div className="space-y-2">
 						<Label htmlFor="notes">Notes</Label>
 						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />

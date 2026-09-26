@@ -64,6 +64,8 @@ vi.mock("#/server/voting", () => ({
 	submitVote: vi.fn(),
 }));
 vi.mock("#/server/members", () => ({ listMembers: vi.fn() }));
+// The flyer route's one reader (#931).
+vi.mock("#/server/promo", () => ({ getPublicFlyer: vi.fn() }));
 // Reached only through the components the routes render, none of which this
 // file mounts past its not-found page. Empty, so a call would fail loudly.
 vi.mock("#/server/attendance-plan", () => ({}));
@@ -92,12 +94,14 @@ import {
 } from "#/server/meeting-agenda-edit";
 import { resolveMeetingKeyForUser } from "#/server/meeting-key";
 import { getMeetingByKey, getPublicMeetingByKey } from "#/server/meetings";
+import { getPublicFlyer } from "#/server/promo";
 import { Route as AgendaRoute } from "./club.$clubId.meeting.$meetingId_.agenda";
 import { Route as MeRoute } from "./club.$clubId.meeting.$meetingId_.me";
 import { Route as ThemeRoute } from "./club.$clubId.meeting.$meetingId_.me_.theme";
 import { Route as TimerRoute } from "./club.$clubId.meeting.$meetingId_.me_.timer";
 import { Route as MeTopicsRoute } from "./club.$clubId.meeting.$meetingId_.me_.topics";
 import { Route as MeWordRoute } from "./club.$clubId.meeting.$meetingId_.me_.word";
+import { Route as FlyerRoute } from "./club.$clubId_.meeting.$meetingId.flyer";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
 import { Route as PrintRoute } from "./club.$clubId_.meeting.$meetingId.print";
 import { Route as VoteRoute } from "./club.$clubId_.meeting.$meetingId.vote";
@@ -174,6 +178,7 @@ function mockClub() {
 const NOT_FOUND = () => new Error("Meeting not found.");
 
 const AGENDA_FILE = "club.$clubId.meeting.$meetingId_.agenda.tsx";
+const FLYER_FILE = "club.$clubId_.meeting.$meetingId.flyer.tsx";
 
 /**
  * Every sub-route that reads the meeting through `getPublicMeetingByKey` /
@@ -291,6 +296,7 @@ const KEY_READER_ROUTES: {
 /** Every sub-route renders the MEETING not-found page, not the root's. */
 const NOT_FOUND_ROUTES: { name: string; file: string; route: AnyRoute }[] = [
 	{ name: "agenda", file: AGENDA_FILE, route: AgendaRoute },
+	{ name: "flyer", file: FLYER_FILE, route: FlyerRoute },
 	...KEY_READER_ROUTES.filter((r) => !r.name.includes("(")).map(
 		({ name, file, route }) => ({ name, file, route }),
 	),
@@ -315,6 +321,7 @@ describe("every meeting sub-route is covered here (#877)", () => {
 	const derived = meetingSubrouteFiles(readdirSync(__dirname));
 	const resolved = new Set([
 		AGENDA_FILE,
+		FLYER_FILE,
 		...KEY_READER_ROUTES.map((r) => r.file),
 	]);
 	const notFound = new Set(NOT_FOUND_ROUTES.map((r) => r.file));
@@ -409,6 +416,48 @@ describe("meeting sub-routes resolve a date key (#877)", () => {
 			await expect(runLoader(route, DATE_KEY, shell)).rejects.toBe(boom);
 		});
 	}
+});
+
+/**
+ * The marketing flyer (#931) reads through its own public reader, whose shape
+ * is not the meeting detail, so it has its own block rather than a table row.
+ * No cross-club case: `loadPublicFlyer` scopes the key to the club, and another
+ * club's meeting comes back null (`promo-logic.integration.test.ts`).
+ */
+describe("flyer resolves a date key (#931)", () => {
+	const flyer = () => ({
+		club: { name: "Downtown Toastmasters", slug: "downtown", timezone: "UTC" },
+		template: null,
+		logoUrl: null,
+		meeting: { id: MEETING_ID, urlKey: DATE_KEY, scheduledAt: DATE_KEY },
+	});
+
+	it("flyer: sends the date key to the reader verbatim", async () => {
+		mockClub();
+		// biome-ignore lint/suspicious/noExplicitAny: partial payload
+		vi.mocked(getPublicFlyer).mockResolvedValue(flyer() as any);
+		await runLoader(FlyerRoute, DATE_KEY);
+		expect(getPublicFlyer).toHaveBeenCalledWith({
+			data: { clubId: CLUB_ID, key: DATE_KEY },
+		});
+	});
+
+	it('flyer: no meeting (null or "Meeting not found.") or a garbage key is notFound()', async () => {
+		mockClub();
+		for (const key of [DATE_KEY, "not-a-meeting"]) {
+			vi.mocked(getPublicFlyer).mockResolvedValue(null);
+			await expect(runLoader(FlyerRoute, key)).rejects.toSatisfy(isNotFound);
+			vi.mocked(getPublicFlyer).mockRejectedValue(NOT_FOUND());
+			await expect(runLoader(FlyerRoute, key)).rejects.toSatisfy(isNotFound);
+		}
+	});
+
+	it("flyer: any other failure still propagates", async () => {
+		mockClub();
+		const boom = new Error("connection terminated");
+		vi.mocked(getPublicFlyer).mockRejectedValue(boom);
+		await expect(runLoader(FlyerRoute, DATE_KEY)).rejects.toBe(boom);
+	});
 });
 
 describe("agenda editor resolves the key before fetching the draft (#877)", () => {

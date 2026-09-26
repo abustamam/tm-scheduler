@@ -4,8 +4,10 @@ import {
 	ClipboardList,
 	Loader2,
 	LockOpen,
+	Megaphone,
 	Presentation,
 } from "lucide-react";
+import { lazy, Suspense, useState } from "react";
 import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
 import { MeetingExportMenu } from "#/components/club/meeting-export-menu";
 import { ShareLinkButton } from "#/components/share-link-button";
@@ -13,6 +15,13 @@ import { Button } from "#/components/ui/button";
 import type { Slide } from "#/lib/agenda-slides";
 import { MINUTES_ANCHOR_ID, showsMinutesPrimary } from "#/lib/meeting-anchors";
 import type { MeetingPhase } from "#/lib/meeting-lifecycle";
+
+// Lazy on purpose (#931): the sheet pulls in the promo server fns and the PNG
+// exporter, which only an officer who opens it needs — and it keeps the
+// toolbar importable in jsdom without reaching `#/db`.
+const PromoteSheet = lazy(() =>
+	import("./promote-sheet").then((m) => ({ default: m.PromoteSheet })),
+);
 
 export type MeetingToolbarProps = {
 	phase: MeetingPhase;
@@ -76,6 +85,7 @@ export function MeetingToolbar({
 	// on meeting day; only officers get the completed-phase Minutes primary.
 	const presentIsPrimary = phase === "today" && (hasIdentity || canManage);
 	const minutesIsPrimary = showsMinutesPrimary(phase, canManage);
+	const [promoteOpen, setPromoteOpen] = useState(false);
 	return (
 		<div className="flex flex-wrap items-center gap-2 pt-1">
 			{presentIsPrimary ? (
@@ -120,6 +130,28 @@ export function MeetingToolbar({
 				wordOfTheDay={wordOfTheDay}
 				presentIsPrimary={presentIsPrimary}
 			/>
+			{/* Promote (#931): admin only — `canManage` is the effective-admin
+			    answer, the same rule `requireClubRole(…, ["admin"])` states on the
+			    server. Drafts only; nothing is sent from here. */}
+			{canManage ? (
+				<Button
+					size="sm"
+					variant="outline"
+					onClick={() => setPromoteOpen(true)}
+				>
+					<Megaphone className="size-4" aria-hidden />
+					Promote
+				</Button>
+			) : null}
+			{canManage && promoteOpen ? (
+				<Suspense fallback={null}>
+					<PromoteSheet
+						open={promoteOpen}
+						onOpenChange={setPromoteOpen}
+						meetingId={dbMeetingId}
+					/>
+				</Suspense>
+			) : null}
 			{canManage && !locked && hasAddableRoles ? (
 				<Button size="sm" variant="outline" onClick={onAddRole}>
 					+ Add role

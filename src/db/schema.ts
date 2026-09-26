@@ -415,6 +415,15 @@ export const clubs = pgTable(
 		digitalVotingEnabled: boolean("digital_voting_enabled")
 			.notNull()
 			.default(true),
+		// The club's ONE marketing-blast template (#931): headline, intro,
+		// why-join bullets, call to action and per-channel toggles, which the
+		// Promote sheet fills in from a meeting to draft a WhatsApp message, an
+		// email and a flyer. NULL = the seeded default (`DEFAULT_PROMO_TEMPLATE`,
+		// `#/lib/promo-template`), so a new club has a good template without a
+		// row being written for it, and a stored value is parsed on every read
+		// (`resolvePromoTemplate`) rather than trusted. The app only DRAFTS: no
+		// blast is ever sent from GavelUp's servers.
+		promoTemplate: jsonb("promo_template"),
 		// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 		// Reversible: unarchive clears it. Archiving retains all club data untouched
 		// and blocks every access path except the superadmin console. This comment used
@@ -1264,6 +1273,11 @@ export const meetings = pgTable(
 		// the meeting's own Table Topics Master through their personal editor.
 		// NULL / blank = the slide renders exactly as it did before this column.
 		tableTopicsNotes: text("table_topics_notes"),
+		// A one-line promo note for this meeting (#931), e.g. "It's our open
+		// house, bring a friend!" — fills the `{note}` placeholder in the club's
+		// blast template, and the line holding it is dropped when this is NULL.
+		// Admin-only on the patch writer, like the meeting number.
+		promoNote: text("promo_note"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
 	(t) => [

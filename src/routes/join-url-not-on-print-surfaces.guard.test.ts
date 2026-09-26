@@ -83,6 +83,8 @@ vi.mock("#/server/voting", () => ({
 }));
 // Reached transitively through `PickNameForm`, which the vote route renders.
 vi.mock("#/server/members", () => ({ listMembers: vi.fn() }));
+// The flyer route's one reader (#931).
+vi.mock("#/server/promo", () => ({ getPublicFlyer: vi.fn() }));
 
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import {
@@ -90,8 +92,11 @@ import {
 	IN_ROOM_NEXT_MEETING_FIELDS,
 	IN_ROOM_NEXT_MEETING_ROLE_FIELDS,
 } from "#/lib/in-room-meeting-payload";
+import { FLYER_MEETING_FIELDS } from "#/lib/promo-template";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
+import { getPublicFlyer } from "#/server/promo";
+import { Route as FlyerRoute } from "./club.$clubId_.meeting.$meetingId.flyer";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
 import { Route as PrintRoute } from "./club.$clubId_.meeting.$meetingId.print";
 import { Route as VoteRoute } from "./club.$clubId_.meeting.$meetingId.vote";
@@ -127,6 +132,14 @@ const WITHHELD = [
 	// The next-meeting slide (#932): its data module and its on-screen body.
 	"src/lib/next-meeting-summary.ts",
 	"src/components/agenda/next-meeting-body.tsx",
+	// Marketing blasts (#931): the public flyer route, its two layouts and the
+	// PNG exporter's wrapper, the renderer every blast channel is built by, and
+	// the Promote sheet that shows the drafts.
+	"src/routes/club.$clubId_.meeting.$meetingId.flyer.tsx",
+	"src/components/agenda/meeting-flyer.tsx",
+	"src/components/agenda/flyer-square-export.tsx",
+	"src/lib/promo-template.ts",
+	"src/components/club/promote-sheet.tsx",
 ] as const;
 
 /** The surface the link IS for. Also the vacuity floor for the sweep above. */
@@ -207,13 +220,14 @@ describe("the join link is on NO in-room artifact (#731)", () => {
 		});
 	}
 
-	it("still sweeps all eleven modules", () => {
+	it("still sweeps all sixteen modules", () => {
 		// The cheapest way to "fix" a failure above is to delete the offending
 		// entry from WITHHELD, which silences the guard without changing what
 		// ships. A count floor makes that a visible edit rather than a quiet one:
-		// three routes, three renderers, three deck builders, and the
-		// next-meeting slide's data module and body (#932).
-		expect(WITHHELD).toHaveLength(11);
+		// three routes, three renderers, three deck builders, the
+		// next-meeting slide's data module and body (#932), and the five
+		// marketing-blast modules (#931).
+		expect(WITHHELD).toHaveLength(16);
 	});
 });
 
@@ -623,5 +637,93 @@ describe("the next meeting's line-up ships names and nothing else (#932)", () =>
 		]) {
 			expect(payload).toContain(kept);
 		}
+	});
+});
+
+/**
+ * The marketing flyer (#931): the same two questions, asked of the one public
+ * blast surface. Its server fn builds a slim shape with `online: boolean` and
+ * no link at all, but the route loader narrows it again through
+ * `FLYER_MEETING_FIELDS` — so the fixture below is WIDENED past what the server
+ * returns, the way a careless change to that builder would ship it, and the
+ * loader must still drop it.
+ */
+describe("the flyer ships no join link and nothing unlisted (#931)", () => {
+	const flyerFixture = () => ({
+		club: {
+			name: "Downtown Toastmasters",
+			slug: "downtown",
+			timezone: "UTC",
+			// Club columns the flyer has no business shipping.
+			mission: "club-only mission text",
+		},
+		template: null,
+		logoUrl: null,
+		meeting: {
+			id: MEETING_ID,
+			urlKey: "2026-07-31",
+			scheduledAt: "2026-07-31T18:45:00Z",
+			location: "Room 4",
+			online: true,
+			theme: "Beginnings",
+			wordOfTheDay: "Ephemeral",
+			meetingNumber: 56,
+			promoNote: "Open house!",
+			joinUrl: SECRET,
+			notes: "Ask Dana whether the projector bulb was replaced",
+			someFutureColumn: FUTURE_COLUMN_VALUE,
+		},
+	});
+
+	const loadFlyer = async () =>
+		(await (FlyerRoute as unknown as ArtifactRoute["route"]).options.loader(
+			ctx("flyer"),
+		)) as {
+			meeting: Record<string, unknown>;
+			club: Record<string, unknown>;
+		};
+
+	beforeEach(() => {
+		// biome-ignore lint/suspicious/noExplicitAny: a widened payload on purpose
+		vi.mocked(getPublicFlyer).mockResolvedValue(flyerFixture() as any);
+	});
+
+	it("the widened fixture DOES carry the link (control)", () => {
+		expect(JSON.stringify(flyerFixture())).toContain(SECRET);
+	});
+
+	it("/flyer ships no join link", async () => {
+		const payload = JSON.stringify(await loadFlyer());
+		expect(payload).not.toContain(SECRET);
+		expect(payload).not.toMatch(JOIN_URL);
+		expect(payload).not.toContain("projector bulb");
+		expect(payload).not.toContain(FUTURE_COLUMN_VALUE);
+		expect(payload).not.toContain("club-only mission text");
+	});
+
+	it("/flyer ships no meeting key outside the allowlist, and the list names nothing join-shaped", async () => {
+		const keys = Object.keys((await loadFlyer()).meeting);
+		const allowed = new Set<string>(FLYER_MEETING_FIELDS);
+		expect(keys.length).toBeGreaterThan(0);
+		expect(keys.filter((k) => !allowed.has(k))).toEqual([]);
+		expect(FLYER_MEETING_FIELDS.join(" ")).not.toMatch(JOIN_URL);
+	});
+
+	it("/flyer still ships what the poster is drawn from (vacuity floor)", async () => {
+		const payload = JSON.stringify(await loadFlyer());
+		for (const kept of [
+			"Downtown Toastmasters",
+			"Beginnings",
+			"Room 4",
+			"Open house!",
+			"2026-07-31T18:45:00Z",
+		]) {
+			expect(payload).toContain(kept);
+		}
+	});
+
+	it("/flyer is a 404 when the reader finds nothing (archived or unknown)", async () => {
+		vi.mocked(getPublicFlyer).mockResolvedValue(null);
+		await expect(loadFlyer()).rejects.toMatchObject({ isNotFound: true });
 	});
 });

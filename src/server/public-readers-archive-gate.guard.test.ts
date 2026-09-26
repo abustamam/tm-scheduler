@@ -273,6 +273,13 @@ const WIRINGS: Wiring[] = [
 		leaks:
 			"the full minutes — the roster by attendance status, guest names, awards and action items",
 	},
+	{
+		file: "server/promo.ts",
+		fn: "getPublicFlyer",
+		mustCall: "loadPublicFlyer",
+		leaks:
+			"an archived club's meeting details, blast template and logo on a public flyer (#931)",
+	},
 ];
 
 describe("public server fns are wired to their archive-gated seam (#544)", () => {
