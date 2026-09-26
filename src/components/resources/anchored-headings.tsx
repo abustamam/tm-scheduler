@@ -47,35 +47,33 @@ function anchorClass(className: string | undefined): string {
 	return className ? `${className} ${ANCHOR_OFFSET}` : ANCHOR_OFFSET;
 }
 
-type HeadingProps<T extends "h2" | "h3"> = ComponentPropsWithoutRef<T> & {
-	node?: unknown;
-};
+type HeadingProps = ComponentPropsWithoutRef<"h2"> & { node?: unknown };
 
-function H2({ node: _node, children, className, ...rest }: HeadingProps<"h2">) {
-	const anchored = withAnchor(children);
-	return (
-		<h2
-			{...rest}
-			id={anchored.id || undefined}
-			className={anchorClass(className)}
-		>
-			{anchored.children}
-		</h2>
-	);
-}
-
-function H3({ node: _node, children, className, ...rest }: HeadingProps<"h3">) {
-	const anchored = withAnchor(children);
-	return (
-		<h3
-			{...rest}
-			id={anchored.id || undefined}
-			className={anchorClass(className)}
-		>
-			{anchored.children}
-		</h3>
-	);
+/** One component per heading level; they differ only in the tag. */
+function anchoredHeading(Tag: "h2" | "h3") {
+	function AnchoredHeading({
+		node: _node,
+		children,
+		className,
+		...rest
+	}: HeadingProps) {
+		const anchored = withAnchor(children);
+		return (
+			<Tag
+				{...rest}
+				id={anchored.id || undefined}
+				className={anchorClass(className)}
+			>
+				{anchored.children}
+			</Tag>
+		);
+	}
+	AnchoredHeading.displayName = `Anchored(${Tag})`;
+	return AnchoredHeading;
 }
 
 /** Pass to `<ReactMarkdown components={…}>` on a resource article. */
-export const anchoredHeadingComponents: Components = { h2: H2, h3: H3 };
+export const anchoredHeadingComponents: Components = {
+	h2: anchoredHeading("h2"),
+	h3: anchoredHeading("h3"),
+};

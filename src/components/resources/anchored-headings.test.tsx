@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
@@ -31,6 +31,10 @@ describe("splitHeadingId", () => {
 			text: "How it works",
 			id: null,
 		});
+	});
+
+	it("accepts upper case and underscores", () => {
+		expect(splitHeadingId("Setting up {#Base_Camp-2}").id).toBe("Base_Camp-2");
 	});
 
 	it("ignores a marker that is not at the end", () => {
@@ -71,6 +75,24 @@ describe("anchoredHeadingComponents", () => {
 
 // The orientation checklist (#934) links to these sections, so their ids are a
 // contract with other pages rather than a rendering detail.
+// A marker the parser rejects (a typo, a character it does not accept) is not
+// an error: it renders as visible text. So sweep every article, not only the
+// one that introduced the syntax.
+describe("no resource article renders a raw {#id} marker", () => {
+	const dir = resolve(__dirname, "../../../content/resources");
+	const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+
+	it("found the articles", () => {
+		expect(files.length).toBeGreaterThan(5);
+	});
+
+	it.each(files)("%s", (file) => {
+		expect(render(readFileSync(resolve(dir, file), "utf8"))).not.toContain(
+			"{#",
+		);
+	});
+});
+
 describe("what-is-pathways article (#941)", () => {
 	const html = render(
 		readFileSync(
@@ -96,18 +118,5 @@ describe("what-is-pathways article (#941)", () => {
 		const targets = [...html.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]);
 		expect(targets.length).toBeGreaterThan(0);
 		for (const id of targets) expect(html).toContain(`id="${id}"`);
-	});
-});
-
-// A route cannot be mounted here without its server context, so pin the wiring
-// by source: without the prop the article renders `{#base-camp}` as visible
-// text and every section link lands at the top of the page.
-describe("the resource article route", () => {
-	it("renders markdown through the anchored heading components", () => {
-		const src = readFileSync(
-			resolve(__dirname, "../../routes/resources.$slug.tsx"),
-			"utf8",
-		);
-		expect(src).toMatch(/components=\{anchoredHeadingComponents\}/);
 	});
 });

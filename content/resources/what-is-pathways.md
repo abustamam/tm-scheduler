@@ -47,9 +47,13 @@ Getting in usually takes a few minutes:
    your club's officers.
 2. **Sign in with your member account.** Go to
    [basecamp.toastmasters.org](https://basecamp.toastmasters.org) and sign in with
-   the same email you joined with.
-3. **Pick or confirm your path.** If you chose a path when you joined, it will
-   already be waiting for you. If not, you can choose one there.
+   your toastmasters.org account, using the email you joined with. If you've
+   never signed in before, you may need to create or reset a password for that
+   account first.
+3. **Check your path.** If you chose a path when you joined, it should already
+   be there. If you haven't chosen one yet, choose it from your Toastmasters
+   account on toastmasters.org. Your club's Vice President Education can help if
+   you get stuck.
 4. **Open Level 1 and find your first project.** Read through what the Ice
    Breaker asks of you before you write your speech — each project has its own
    objectives, and your evaluator will be listening for them.
@@ -72,9 +76,10 @@ Toastmasters International counts.
 which path you're on, how far through each level you are, and the speeches you
 have coming up on future agendas. It's a companion to Base Camp, not a copy of
 it: it doesn't hold any of the project material, and nothing you do in GavelUp
-updates Base Camp, so you still record your projects there. Your club's officers
-keep GavelUp current, and if the two ever disagree, Base Camp is the one to
-trust — it's worth letting an officer know.
+updates Base Camp, so you still record your projects there. You can tick off
+projects in GavelUp yourself, and your club's officers help keep it current. If
+the two ever disagree, Base Camp is the one to trust, and it's worth letting an
+officer know.
 
 ## Why members like it {#why-members-like-it}
 

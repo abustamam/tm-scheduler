@@ -13,7 +13,7 @@
  * heading something else links to.
  */
 
-const EXPLICIT_ID = /\s*\{#([a-z0-9][a-z0-9-]*)\}\s*$/;
+const EXPLICIT_ID = /\s*\{#([A-Za-z0-9][A-Za-z0-9_-]*)\}\s*$/;
 
 export function splitHeadingId(text: string): {
 	text: string;
@@ -28,7 +28,7 @@ export function slugifyHeading(text: string): string {
 	return text
 		.toLowerCase()
 		.normalize("NFKD")
-		.replace(/[̀-ͯ]/g, "")
+		.replace(/[\u0300-\u036f]/g, "")
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "");
 }
