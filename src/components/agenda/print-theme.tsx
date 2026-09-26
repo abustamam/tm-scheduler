@@ -436,11 +436,14 @@ export const FOOTER_QR_PX = 56;
 /**
  * The dark page footer: a left/right line plus the non-affiliation disclaimer.
  *
- * `ballotUrl`, when set, adds a scan-to-vote QR (#510) at the band's right edge
- * — for clubs that print the agenda instead of projecting present mode. It is
- * optional, and since #717 it is threaded to EVERY sheet of a layout rather
- * than the last: BOTH two-sheet layouts print two sides, and a club printing
- * either double-sided was handing out a front side with no way to vote.
+ * `qrUrl`, when set, adds the meeting-page QR at the band's right edge. It
+ * began as a scan-to-vote code (#510) and since #913 opens the meeting page "in
+ * the room" (`meetingHubUrlFor`), whose strip leads with Vote while a category
+ * is open — so it prints whether or not the club votes on phones. It is
+ * optional only because the print route learns its origin in an effect, and
+ * since #717 it is threaded to EVERY sheet of a layout rather than the last:
+ * BOTH two-sheet layouts print two sides, and a club printing either
+ * double-sided was handing out a front side with no code on it.
  * `GridLayout` and `SpaciousLayout`'s page 1 hand-roll their own officer bands
  * instead of this component (see `GridLayout`'s "NO HEADROOM LEFT" note) and
  * carry their own copies of the same QR, at the same `FOOTER_QR_PX`, rather
@@ -458,11 +461,11 @@ export const FOOTER_QR_PX = 56;
 export function DarkFooter({
 	left,
 	right,
-	ballotUrl,
+	qrUrl,
 }: {
 	left: React.ReactNode;
 	right: React.ReactNode;
-	ballotUrl?: string;
+	qrUrl?: string;
 }) {
 	return (
 		<div
@@ -513,7 +516,7 @@ export function DarkFooter({
 						{TOASTMASTERS_DISCLAIMER}
 					</p>
 				</div>
-				{ballotUrl ? (
+				{qrUrl ? (
 					<span
 						className="footer-qr"
 						style={{
@@ -523,15 +526,16 @@ export function DarkFooter({
 							gap: 7,
 						}}
 					>
-						{/* Three lines now, from #510's two, and the same words. The
+						{/* Two lines (#913), down from the ballot code's three. The
 						    band is the thing that is genuinely scarce HORIZONTALLY:
 						    every pixel this caption takes comes off the disclaimer's
 						    column beside it, and a disclaimer pushed from two printed
 						    lines to three is 10px the sheet has to find. Broken by
 						    hand rather than by a width cap so the wrap points are the
 						    readable ones and not wherever the platform's fallback font
-						    lands. Three short lines still fit inside `FOOTER_QR_PX`,
-						    so they cost the band no height at all. */}
+						    lands. "today's meeting" is narrower than the old
+						    "Evaluator · Table Topics" line, and two short lines fit
+						    inside `FOOTER_QR_PX`, so the band costs no height. */}
 						<span
 							style={{
 								fontSize: 6.5,
@@ -541,13 +545,11 @@ export function DarkFooter({
 								textAlign: "right",
 							}}
 						>
-							Scan to vote
+							Scan for
 							<br />
-							Best Speaker
-							<br />
-							Evaluator · Table Topics
+							today's meeting
 						</span>
-						<QRCodeSVG value={ballotUrl} size={FOOTER_QR_PX} marginSize={0} />
+						<QRCodeSVG value={qrUrl} size={FOOTER_QR_PX} marginSize={0} />
 					</span>
 				) : null}
 			</div>

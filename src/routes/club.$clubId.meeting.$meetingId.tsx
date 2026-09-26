@@ -30,6 +30,7 @@ import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-pan
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
+import { MeetingRoomStrip } from "#/components/club/meeting-room-strip";
 import { MeetingToolbar } from "#/components/club/meeting-toolbar";
 import { OpenActionItems } from "#/components/club/open-action-items";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
@@ -63,6 +64,11 @@ import {
 import { buildHeldRoleLabels } from "#/lib/held-role-labels";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
+import {
+	isInRoom,
+	MEETING_AGENDA_ANCHOR_ID,
+	validateMeetingRoomSearch,
+} from "#/lib/meeting-hub";
 import {
 	isMeetingLocked,
 	isMeetingOver,
@@ -141,6 +147,10 @@ const EMPTY_MINUTES = {
 } as Awaited<ReturnType<typeof getMinutes>>;
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
+	// `?room=1` — the printed agenda's QR (#913). Returns the parsed search
+	// UNCHANGED, or SSR 307s every scan to a re-serialised URL; see
+	// `validateMeetingRoomSearch`.
+	validateSearch: validateMeetingRoomSearch,
 	loader: async ({ params, context }) => {
 		// PII boundary (#37): a signed-in member of this club (shell) loads the
 		// session-aware getMeetingByKey — an admin regains management + contact; a
@@ -300,6 +310,7 @@ function MeetingView() {
 		clubDigitalVotingEnabled,
 	} = Route.useLoaderData();
 	const router = useRouter();
+	const search = Route.useSearch();
 	const online = useOnlineStatus();
 	// #176 / DP3: ONE offline-write-queue instance per meeting, shared by
 	// <MeetingMinutes> below and (PR 3) the attendance panel's roll-mode
@@ -482,6 +493,11 @@ function MeetingView() {
 		now,
 	});
 	const locked = isMeetingLocked(meeting.status);
+	// The in-room strip (#913): the QR's flag AND meeting day, off the same
+	// frozen `phase` as everything else — so it cannot disappear mid-visit at
+	// club-local midnight. Any other day, `?room=1` renders the normal page.
+	const inRoom = isInRoom(search) && phase === "today";
+	const holdsRole = myId !== null && slots.some((s) => s.assigneeId === myId);
 	// #731. Null unless the club set a join link AND it still normalizes to an
 	// http(s) URL — see the render site in the header for why it is re-checked
 	// here rather than read straight off the row.
@@ -1632,6 +1648,16 @@ function MeetingView() {
 						</a>
 					) : null}
 				</div>
+				<MeetingRoomStrip
+					visible={inRoom}
+					clubId={clubId}
+					meetingKey={urlKey}
+					dbMeetingId={meeting.id}
+					member={member}
+					holdsRole={holdsRole}
+					wordOfTheDay={meeting.wordOfTheDay}
+					promptIdentity={promptIdentity}
+				/>
 				<MeetingNavStrip clubId={clubId} items={navItems} />
 				{/* Same predicate the "Word poster" button below uses, so the chip
 				    and the button agree about whether there is a word. Consistency,
@@ -1726,63 +1752,67 @@ function MeetingView() {
 				<div className="order-2 min-w-0 flex-1 space-y-5 lg:order-1">
 					{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
-					<MeetingAgenda
-						slots={slots}
-						effectiveMeetingNumber={meetingNumber}
-						viewer={viewer}
-						actions={actions}
-						roster={roster}
-						roleRecency={roleRecency}
-						roleByMemberId={roleByMemberId}
-						unavailableMemberIds={unavailableMemberIds}
-						pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
-						clubGuests={effectiveCanManage ? clubGuests : undefined}
-						shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
-						meetingDate={effectiveCanManage ? nudgeDate : ""}
-						// Gated like `shareUrl` beside it: <MeetingAgenda> renders for
-						// plain members too, and the draft affordances this feeds are
-						// manager-only.
-						personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
-						meeting={meeting}
-						templateKey={templateKey}
-						timezone={timezone}
-						meetingOver={over}
-						selfMemberId={agendaMemberId}
-						onMetaSaved={async () => {
-							await router.invalidate();
-						}}
-						requireIdentity={requireIdentity}
-						contactedMemberIds={contactedMemberIds}
-						onContacted={async (memberId, via) => {
-							try {
-								await setContacted({
-									data: {
-										memberId,
-										meetingId: meeting.id,
-										clubId: meeting.clubId,
-										via,
-									},
-								});
+					{/* The strip's "Today's agenda" target (#913). Always rendered, so
+					    a shared `#agenda` link works on any day. */}
+					<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
+						<MeetingAgenda
+							slots={slots}
+							effectiveMeetingNumber={meetingNumber}
+							viewer={viewer}
+							actions={actions}
+							roster={roster}
+							roleRecency={roleRecency}
+							roleByMemberId={roleByMemberId}
+							unavailableMemberIds={unavailableMemberIds}
+							pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
+							clubGuests={effectiveCanManage ? clubGuests : undefined}
+							shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
+							meetingDate={effectiveCanManage ? nudgeDate : ""}
+							// Gated like `shareUrl` beside it: <MeetingAgenda> renders for
+							// plain members too, and the draft affordances this feeds are
+							// manager-only.
+							personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
+							meeting={meeting}
+							templateKey={templateKey}
+							timezone={timezone}
+							meetingOver={over}
+							selfMemberId={agendaMemberId}
+							onMetaSaved={async () => {
 								await router.invalidate();
-							} catch (err) {
-								showWriteError(err, "Something went wrong.");
-							}
-						}}
-						onUncontacted={async (memberId) => {
-							try {
-								await clearContacted({
-									data: {
-										memberId,
-										meetingId: meeting.id,
-										clubId: meeting.clubId,
-									},
-								});
-								await router.invalidate();
-							} catch (err) {
-								showWriteError(err, "Something went wrong.");
-							}
-						}}
-					/>
+							}}
+							requireIdentity={requireIdentity}
+							contactedMemberIds={contactedMemberIds}
+							onContacted={async (memberId, via) => {
+								try {
+									await setContacted({
+										data: {
+											memberId,
+											meetingId: meeting.id,
+											clubId: meeting.clubId,
+											via,
+										},
+									});
+									await router.invalidate();
+								} catch (err) {
+									showWriteError(err, "Something went wrong.");
+								}
+							}}
+							onUncontacted={async (memberId) => {
+								try {
+									await clearContacted({
+										data: {
+											memberId,
+											meetingId: meeting.id,
+											clubId: meeting.clubId,
+										},
+									});
+									await router.invalidate();
+								} catch (err) {
+									showWriteError(err, "Something went wrong.");
+								}
+							}}
+						/>
+					</section>
 
 					<OpenActionItems
 						items={openActionItems.items}

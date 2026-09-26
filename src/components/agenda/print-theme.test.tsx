@@ -81,20 +81,25 @@ describe("PrintButton", () => {
 // is the unit-level half of the fix; `meeting-agenda-print.test.tsx` covers the
 // same thing threaded through all four print layouts, and `print-page-count.
 // test.tsx`'s real-Chrome gate covers the printed-page shape.
-describe("DarkFooter's scan-to-vote QR", () => {
-	const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+describe("DarkFooter's meeting-page QR (#913)", () => {
+	const QR_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25?room=1";
 
-	it("renders a real QR svg in .footer-qr when given a ballotUrl", () => {
+	it("renders a real QR svg in .footer-qr when given a qrUrl", () => {
 		const { container } = render(
-			<DarkFooter left="left" right="right" ballotUrl={BALLOT_URL} />,
+			<DarkFooter left="left" right="right" qrUrl={QR_URL} />,
 		);
 		const qr = container.querySelector(".footer-qr");
 		expect(qr).not.toBeNull();
 		expect(qr?.querySelector("svg")).not.toBeNull();
-		expect(qr?.textContent).toContain("Scan to vote");
+		// The caption is the in-room page's, not the ballot's (#913): the code
+		// opens the meeting page, whose strip leads with Vote only while a
+		// category is open. `<br />` adds no text node, hence two assertions.
+		expect(qr?.textContent).toContain("Scan for");
+		expect(qr?.textContent).toContain("today's meeting");
+		expect(qr?.textContent).not.toMatch(/vote/i);
 	});
 
-	it("renders no .footer-qr at all when ballotUrl is undefined", () => {
+	it("renders no .footer-qr at all when qrUrl is undefined", () => {
 		const { container } = render(<DarkFooter left="left" right="right" />);
 		expect(container.querySelector(".footer-qr")).toBeNull();
 	});
@@ -104,7 +109,7 @@ describe("DarkFooter's scan-to-vote QR", () => {
 		// className it depends on can drift independently, and only pinning both
 		// together catches a rename on one side leaving the other stale.
 		const { container } = render(
-			<DarkFooter left="left" right="right" ballotUrl={BALLOT_URL} />,
+			<DarkFooter left="left" right="right" qrUrl={QR_URL} />,
 		);
 		const cls = container.querySelector(".footer-qr")?.className;
 		expect(cls).toBeTruthy();

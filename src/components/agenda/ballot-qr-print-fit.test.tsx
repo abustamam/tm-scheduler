@@ -1,5 +1,12 @@
 /**
- * How large the ballot QR actually PRINTS, and what it costs the sheet (#717).
+ * How large the footer QR actually PRINTS, and what it costs the sheet (#717).
+ *
+ * The code was the ballot's (#510) when this file was written; since #913 it
+ * opens the meeting page "in the room" (`meetingHubUrlFor`) and prints on every
+ * agenda, voting or not. The geometry is the same square at the same
+ * `FOOTER_QR_PX`, so every bound below still holds it. The `-none` sheets are
+ * now the pre-origin render (the print route's first paint, before its effect
+ * learns `window.location.origin`), not a paper-ballot club.
  *
  * Two directions, and the first review of #717 caught this file holding only
  * one of them. The bug the issue was filed about is a code too SMALL to scan;
@@ -12,15 +19,17 @@
  *   · `meeting-agenda-print.test.tsx` asserts the DECLARED edge off the rendered
  *     `<svg>`. jsdom performs no layout, so it cannot say what the square then
  *     does to the page around it — or what the page then does to the square.
- *   · `print-page-count.test.tsx` renders these layouts WITH a `ballotUrl` and
+ *   · `print-page-count.test.tsx` renders these layouts WITH a `qrUrl` and
  *     counts sheets — but its own header explains why that count cannot move:
  *     `FitPage`'s scale-and-flow decision is a `useEffect`, static SSR markup
  *     never mounts React, so every `.agenda-page` there stays `height: PAGE_H;
  *     overflow: hidden` and content volume provably cannot add a page.
  *   · `print-density.test.tsx` measures exactly the right thing — the natural
- *     height `FitPage` reads — but every fixture in it renders with NO
- *     `ballotUrl` at all. So the QR is invisible to it, and the margin it
- *     reports for editorial is the margin of a sheet the app does not print.
+ *     height `FitPage` reads. Until #913 every fixture in it rendered with NO
+ *     QR, so the margin it reported was that of a sheet the app does not
+ *     print; since the code became unconditional (the meeting page "in the
+ *     room", printed whether or not the club votes on phones) its fixtures
+ *     carry it too. It still asserts type size, not the code's own edge.
  *
  * MUTATED IN BOTH DIRECTIONS, because arguing it is not the same as showing it.
  * Run `print-page-count` and `print-density` together on any of the three
@@ -59,8 +68,8 @@ import {
 	pxToPt,
 	RUN_NARRATIVE_TYPE,
 } from "#/lib/agenda-print-type";
+import { meetingHubUrlFor } from "#/lib/meeting-hub";
 import {
-	MCF_BALLOT_URL,
 	MCF_EXPLAINERS,
 	MCF_HEADER,
 	MCF_OFFICERS,
@@ -151,7 +160,15 @@ function printScale(sheetHeight: number): number {
 	return raw < MIN_FIT_SCALE ? 1 : raw;
 }
 
-function sheetHtml(layout: AgendaLayout, ballotUrl?: string): string {
+/** What the print route encodes for this fixture's meeting — built by the same
+ *  function, so the value's length (and with it the QR version, which is what
+ *  makes the printed edge matter) is the real one. */
+const MCF_QR_URL = meetingHubUrlFor(
+	{ clubKey: "mcf-toastmasters", meetingKey: "2026-08-13" },
+	"https://gavelup.app",
+);
+
+function sheetHtml(layout: AgendaLayout, qrUrl?: string): string {
 	return renderToStaticMarkup(
 		<MeetingAgendaPrint
 			layout={layout}
@@ -160,7 +177,7 @@ function sheetHtml(layout: AgendaLayout, ballotUrl?: string): string {
 			officers={MCF_OFFICERS}
 			explainers={MCF_EXPLAINERS}
 			rows={MCF_ROWS}
-			ballotUrl={ballotUrl}
+			qrUrl={qrUrl}
 		/>,
 	);
 }
@@ -231,7 +248,7 @@ function measure(): Measured {
 		(p) =>
 			`<div id="${p.id}">${sheetHtml(
 				p.layout,
-				p.qr ? MCF_BALLOT_URL : undefined,
+				p.qr ? MCF_QR_URL : undefined,
 			)}</div>`,
 	).join("");
 	const names = Object.keys(SELECTORS) as (keyof typeof SELECTORS)[];
@@ -260,7 +277,7 @@ function measure(): Measured {
 
 const hasChrome = findChrome() !== null;
 
-describe("ballot QR print-fit harness availability", () => {
+describe("footer QR print-fit harness availability", () => {
 	it("has a browser to measure with when running in CI", () => {
 		if (!process.env.CI) return;
 		expect(
@@ -273,7 +290,7 @@ describe("ballot QR print-fit harness availability", () => {
 });
 
 describe.skipIf(!hasChrome)(
-	"the printed ballot QR and the sheets it sits on",
+	"the printed footer QR and the sheets it sits on",
 	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
 		// ------------------------------------------------------------------
@@ -355,11 +372,10 @@ describe.skipIf(!hasChrome)(
 		it("still prints the editorial body text large enough to read", () => {
 			const m = measure();
 			// `print-density.test.tsx` holds this exact floor, on this exact
-			// agenda, and cannot see this: its fixtures pass no `ballotUrl`, so it
-			// measures a sheet with no QR on it. Measured 6.300pt here against
-			// 6.366pt for the QR-less sheet that suite reports — and against
-			// 6.291pt for what `main` prints today, so the bigger code is also a
-			// slightly MORE legible agenda, not a trade.
+			// agenda. Its fixtures carry the code too since #913, so the two now
+			// measure the same sheet; this copy stays because it sits beside the
+			// QR's own geometry, where a change to the code's size is made.
+			// Measured 6.300pt when #717 landed.
 			expect(
 				pxToPt(RUN_NARRATIVE_TYPE.sm.detail * printScale(m.edSheetQr)),
 			).toBeGreaterThanOrEqual(EDITORIAL_MIN_PRINTED_PT);
@@ -394,9 +410,11 @@ describe.skipIf(!hasChrome)(
 			);
 		});
 
-		it("leaves the footer band alone when there is no ballot URL (AC 7)", () => {
+		it("leaves the footer band alone before the QR's URL is known (AC 7)", () => {
 			const m = measure();
-			// #717 AC 7: with no ballot URL the footers render exactly as they did.
+			// #717 AC 7: with no QR URL the footers render exactly as they did.
+			// Since #913 that is only the print route's first paint, before its
+			// effect learns the origin — every agenda prints a code after it.
 			// The jsdom suite pins the DOM half (`.footer-qr` is absent); this pins
 			// the half that matters to a printed page — the band does not GROW.
 			//

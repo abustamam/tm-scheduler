@@ -28,10 +28,10 @@ import { buildAgendaSharePath } from "#/lib/agenda-share-url";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
-import { ballotUrlFor } from "#/lib/digital-voting";
 import { APP_LOCALE } from "#/lib/format";
 import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
+import { meetingHubUrlFor } from "#/lib/meeting-hub";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
@@ -138,12 +138,12 @@ function PrintAgenda() {
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
 	// Clean shareable view: hide the editing chrome, keep only the Print button.
 	const bare = chrome === "none";
-	// The absolute ballot URL is derived in the browser (#510), same as the
+	// The QR's absolute URL is derived in the browser (#510), same as the
 	// present route's own QR and the guest-book QR on the VP Membership page:
 	// this route renders on the server first, where `window` doesn't exist, and
 	// a QR baked from a relative path is not a URL a phone's camera can resolve.
-	// Unknown until the effect fires, which `ballotUrlFor` answers with an empty
-	// `ballotUrl` — `DarkFooter` treats that as "no QR yet" rather than
+	// Unknown until the effect fires, which `meetingHubUrlFor` answers with an
+	// empty `qrUrl` — every layout treats that as "no QR yet" rather than
 	// rendering one that can't scan.
 	const [origin, setOrigin] = useState<string | null>(null);
 	useEffect(() => setOrigin(window.location.origin), []);
@@ -163,12 +163,12 @@ function PrintAgenda() {
 		tableTopicsMaxSeconds,
 		template,
 		logoUrl,
-		digitalVoting,
 	} = Route.useLoaderData();
-	// Null when the club or this meeting runs no digital vote (#770): every
-	// layout then prints no QR and no "Scan to vote".
-	const ballotUrl = ballotUrlFor(
-		digitalVoting,
+	// The meeting page "in the room" (#913), not the ballot: its strip leads with
+	// Vote while a category is open, so voting still costs one tap — and a club
+	// that votes on paper gets a code too, since the strip is more than Vote.
+	// No voting gate here, deliberately; the only wait is for the origin.
+	const qrUrl = meetingHubUrlFor(
 		{ clubKey: clubIdParam, meetingKey: meetingId },
 		origin,
 	);
@@ -314,7 +314,7 @@ function PrintAgenda() {
 				officers={officers}
 				explainers={explainers}
 				rows={rows}
-				ballotUrl={ballotUrl ?? undefined}
+				qrUrl={qrUrl || undefined}
 			/>
 		</div>
 	);
