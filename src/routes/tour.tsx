@@ -32,17 +32,20 @@ export const Route = createFileRoute("/tour")({
 });
 
 /**
- * A screenshot, framed. Only scenes 2 and 3 use one: there the real output is
- * the proof, so a drawing would be the weaker claim. Both images come from
+ * A screenshot, framed. Scenes 2, 3 and 5 use one: there the real output is
+ * the proof, so a drawing would be the weaker claim. Every image comes from
  * `bun run marketing:screenshots` against the seed club.
  */
 function Shot({
 	src,
 	alt,
+	height = 1000,
 	sheet,
 }: {
 	src: string;
 	alt: string;
+	/** The capture's pixel height; every capture is 1600 wide. */
+	height?: number;
 	/**
 	 * The print page draws one letter-width sheet (816px) at the left of a
 	 * 1600px window and leaves the rest empty, so show only the sheet: crop to
@@ -55,7 +58,7 @@ function Shot({
 			src={src}
 			alt={alt}
 			width={1600}
-			height={1000}
+			height={height}
 			loading="lazy"
 			className={`w-full rounded-2xl border border-[var(--line)] shadow-[0_20px_50px_rgba(23,58,64,.18)] ${
 				sheet
@@ -125,7 +128,7 @@ function Tour() {
 						One meeting, from sign-up sheet to Best Speaker.
 					</h1>
 					<p className="mt-5 max-w-2xl text-lg leading-relaxed text-[var(--sea-ink-soft)]">
-						Five stops. The drawings are tappable, so go ahead and press things.
+						Six stops. The drawings are tappable, so go ahead and press things.
 						The Ah-Counter isn't listening.
 					</p>
 				</div>
@@ -199,6 +202,36 @@ function Tour() {
 
 				<Scene
 					n={5}
+					title="Between meetings, the officers' view."
+					visual={
+						<div className="grid gap-4">
+							<Shot
+								src="/landing/tour-vpe.png"
+								height={900}
+								alt="GavelUp's VP Education dashboard for Harbor City Speakers, a sample club: members close to finishing a Pathways level, with the projects they have left."
+							/>
+							<Shot
+								src="/landing/tour-vpm.png"
+								height={900}
+								alt="GavelUp's VP Membership guest pipeline for Harbor City Speakers, a sample club: guests with a one-tap invite to the next meeting and who already invited them."
+							/>
+						</div>
+					}
+				>
+					<p>
+						Your VP Education sees who is one or two projects from finishing a
+						level, and whether they already have a speaking slot to do it in.
+					</p>
+					<p>
+						Your VP Membership sees every guest who has visited, and drafts an
+						invite to the next meeting in one tap. GavelUp writes the draft. You
+						send it.
+					</p>
+				</Scene>
+
+				<Scene
+					n={6}
+					flip
 					title="Works with your AI assistant."
 					badge="Beta"
 					visual={<AssistantDemo />}

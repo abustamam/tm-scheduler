@@ -274,42 +274,46 @@ function VpMembership() {
 				</div>
 			</div>
 
-			{/* Pipeline, bucketed by stage. */}
-			{STAGES.map((stage) => {
-				const inStage = guests.filter((g) => g.stage === stage.id);
-				return (
-					<Section
-						key={stage.id}
-						title={stage.label}
-						titleTone={stage.tone}
-						count={inStage.length}
-						subtitle={stage.blurb}
-					>
-						{inStage.length === 0 ? (
-							<EmptyRow>No guests here yet.</EmptyRow>
-						) : (
-							inStage.map((g) => (
-								<GuestRow
-									key={g.id}
-									guest={g}
-									clubId={clubId}
-									busy={busyId === g.id}
-									onMove={move}
-									onConvert={convert}
-									timezone={inviteContext.timezone}
-									invite={{
-										clubName,
-										readOnly,
-										nextMeeting: next,
-										shareUrl: inviteShareUrl,
-										onRecord: recordInvite,
-									}}
-								/>
-							))
-						)}
-					</Section>
-				);
-			})}
+			{/* Pipeline, bucketed by stage. The id is a fragment target: `/tour`'s
+			    screenshot capture (#901) links straight to it, and
+			    `scroll-mt-24` lands it below the sticky top bar, not under it. */}
+			<div id="guest-pipeline" className="scroll-mt-24 space-y-6">
+				{STAGES.map((stage) => {
+					const inStage = guests.filter((g) => g.stage === stage.id);
+					return (
+						<Section
+							key={stage.id}
+							title={stage.label}
+							titleTone={stage.tone}
+							count={inStage.length}
+							subtitle={stage.blurb}
+						>
+							{inStage.length === 0 ? (
+								<EmptyRow>No guests here yet.</EmptyRow>
+							) : (
+								inStage.map((g) => (
+									<GuestRow
+										key={g.id}
+										guest={g}
+										clubId={clubId}
+										busy={busyId === g.id}
+										onMove={move}
+										onConvert={convert}
+										timezone={inviteContext.timezone}
+										invite={{
+											clubName,
+											readOnly,
+											nextMeeting: next,
+											shareUrl: inviteShareUrl,
+											onRecord: recordInvite,
+										}}
+									/>
+								))
+							)}
+						</Section>
+					);
+				})}
+			</div>
 
 			{/* Print: show only the QR tent, hide the app chrome + pipeline. */}
 			<style>{`

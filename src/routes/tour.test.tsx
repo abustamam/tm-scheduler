@@ -15,6 +15,7 @@ const SCENES = [
 	"The agenda writes itself.",
 	"Put it on the screen.",
 	"Run the room.",
+	"Between meetings, the officers' view.",
 	"Works with your AI assistant.",
 ];
 
@@ -82,7 +83,7 @@ async function renderTour() {
 }
 
 describe("/tour", () => {
-	it("renders the five scenes as h2s, in order", async () => {
+	it("renders the six scenes as h2s, in order", async () => {
 		await renderTour();
 		const h2s = screen
 			.getAllByRole("heading", { level: 2 })
@@ -103,7 +104,7 @@ describe("/tour", () => {
 		expect(screen.getByText(AI_CONNECTOR_SETUP_LINE)).toBeTruthy();
 	});
 
-	it("shows the two real screenshots in scenes 2 and 3", async () => {
+	it("shows the real screenshots in scenes 2, 3 and 5", async () => {
 		await renderTour();
 		const srcs = screen
 			.getAllByRole("img")
@@ -111,6 +112,8 @@ describe("/tour", () => {
 		expect(srcs).toEqual([
 			"/landing/tour-agenda.png",
 			"/landing/tour-present.png",
+			"/landing/tour-vpe.png",
+			"/landing/tour-vpm.png",
 		]);
 		for (const img of screen.getAllByRole("img")) {
 			expect(img.getAttribute("alt")).toMatch(/Harbor City Speakers/);
@@ -127,6 +130,71 @@ describe("/tour", () => {
 			expect(presentClasses).not.toContain(c);
 		}
 		expect(presentClasses).toContain("h-auto");
+	});
+
+	it("numbers the steps 1 to 6, with the officers' stop at 5 and the assistant at 6", async () => {
+		await renderTour();
+		const steps = Array.from(document.querySelectorAll("section[data-scene]"));
+		expect(steps.map((s) => s.getAttribute("data-scene"))).toEqual([
+			"1",
+			"2",
+			"3",
+			"4",
+			"5",
+			"6",
+		]);
+		steps.forEach((section, i) => {
+			expect(
+				within(section as HTMLElement).getByText(`Step ${i + 1}`),
+			).toBeTruthy();
+		});
+		const h2 = (n: number) =>
+			(steps[n - 1] as HTMLElement).querySelector("h2")?.textContent ?? "";
+		expect(h2(5)).toBe("Between meetings, the officers' view.");
+		expect(h2(6).startsWith("Works with your AI assistant.")).toBe(true);
+		expect(screen.getByText(/^Six stops\./)).toBeTruthy();
+	});
+
+	it("shows the VPE and VPM dashboards, stacked and uncropped, in the officers' stop", async () => {
+		await renderTour();
+		const scene = document.querySelector(
+			'section[data-scene="5"]',
+		) as HTMLElement;
+		const imgs = within(scene).getAllByRole("img");
+		expect(imgs.map((img) => img.getAttribute("src"))).toEqual([
+			"/landing/tour-vpe.png",
+			"/landing/tour-vpm.png",
+		]);
+		for (const img of imgs) {
+			expect(img.getAttribute("alt")).toMatch(/Harbor City Speakers/);
+			// The captures are 1600x900, not the 1600x1000 of the other shots.
+			expect(img.getAttribute("width")).toBe("1600");
+			expect(img.getAttribute("height")).toBe("900");
+			const classes = img.className.split(/\s+/);
+			expect(classes).toContain("h-auto");
+			expect(classes).not.toContain("object-cover");
+		}
+		expect(imgs[0].getAttribute("alt")).toMatch(/VP Education/);
+		expect(imgs[1].getAttribute("alt")).toMatch(/VP Membership/);
+	});
+
+	it("says, in the officers' stop, that GavelUp drafts and the officer sends", async () => {
+		await renderTour();
+		const scene = document.querySelector(
+			'section[data-scene="5"]',
+		) as HTMLElement;
+		const text = scene.textContent ?? "";
+		expect(text).toContain("GavelUp writes the draft. You send it.");
+		expect(text).toMatch(/VP Education/);
+		expect(text).toMatch(/VP Membership/);
+		const words = Array.from(scene.querySelectorAll("p"))
+			.filter((p) => !/^Step \d$/.test(p.textContent ?? ""))
+			.map((p) => p.textContent ?? "")
+			.join(" ")
+			.split(/\s+/)
+			.filter(Boolean).length;
+		expect(words).toBeGreaterThanOrEqual(40);
+		expect(words).toBeLessThanOrEqual(75);
 	});
 
 	it("closes with the pilot pricing line, the founder note and a /request-access link", async () => {
