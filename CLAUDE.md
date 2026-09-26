@@ -503,11 +503,19 @@ agent does not go looking for work. What it notices while doing the work it was 
 of three places, and the test for the first is `git diff --name-only`, not effort:
 
 - **Inside the files the PR already touches:** fix it in the PR and name it in the body.
-- **Outside the diff, and a user-visible bug, data loss or corruption, or a security hole:** file
+- **Outside the diff, and a user-visible bug, data loss or corruption, a security hole, or a
+  dev-ex bug:** file
   one issue whose first line is `Found by an agent while working on #N` (or `while <what the
   maintainer asked>` when there is no issue), labelled `needs-triage` plus a category. Never
   `ready-for-agent`: an agent applies that label only at the maintainer's direction (`/spec`
   output, `/triage`, "move #N to ready-for-agent"), never to a finding of its own.
+  A **dev-ex bug** is a DEFECT in the repo's own tooling — `batch:issues`, `worktree:setup`, a
+  gate, a hook, a project skill — that wasted an agent's work or would mislead the next one: a
+  plan that hides a blocker, a script that exits 0 having done nothing, a gate that reads green
+  while skipping. Label it `bug`. A tooling *improvement* nobody tripped over is still "anything
+  else". The maintainer asked for these on 2026-09-26 after #967: `batch:issues` printed #942 in a
+  wave with its open blockers invisible, it was dispatched early, and the rule as it then stood
+  would have left that as one sentence in a final message.
 - **Anything else:** one sentence in the PR body or the final message. No issue, no `TODOS/`
   entry, no code comment pointing at a number. If the maintainer wants it, they ask, and the
   asking is the record.
