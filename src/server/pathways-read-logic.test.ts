@@ -1075,6 +1075,103 @@ describe("Education Series (#921/#922)", () => {
 		});
 	});
 
+	describe("a series tick is not project truth", () => {
+		// Summary-synced: counts only, no /detail, one delivered speech.
+		const summary = [
+			lv(1, 1, 1, true),
+			lv(2, 1, 1, true),
+			lv(3, 1, 1, true),
+			lv(4, 1, 2, false),
+		];
+		const delivered = win(4, "Manage Change", "My change speech");
+		const read = (marks: MarkRow[]) =>
+			buildPathViewModel({
+				courseCode: "8711",
+				pathName: "Engaging Humor",
+				status: "current",
+				levels: summary.map((l) => ({ ...l })),
+				wins: [delivered],
+				catalogProjects: [...levelsThrough3, ...L4, ...L5],
+				pathLevels,
+				marks,
+			});
+
+		it("keeps the summary-sync fallback across read, tick a series, read", () => {
+			const before = read([]);
+			expect(before.upNext).toEqual([]);
+			expect(before.upNextElectives).toBeNull();
+			expect(before.wins.map((w) => w.name)).toEqual(["Manage Change"]);
+			expect(before.upNextSeries.map((g) => g.series)).toEqual([
+				"successful_club",
+				"better_speaker",
+			]);
+
+			const after = read([seriesMark(4, "Concluding Your Speech")]);
+			// Still the fallback: nothing learned about ordinary projects.
+			expect(after.upNext).toEqual([]);
+			expect(after.upNextElectives).toBeNull();
+			expect(after.levels).toEqual(before.levels);
+			// The delivered speech stays, and the tick shows as an undoable win.
+			expect(after.wins).toEqual([
+				delivered,
+				{
+					projectId: pid(4, "Concluding Your Speech"),
+					level: 4,
+					name: "Concluding Your Speech",
+					speechTitle: "",
+					deliveredAt: null,
+					markedHere: true,
+					awaitingProcessing: false,
+				},
+			]);
+			expect(after.upNextSeries.map((g) => g.series)).toEqual([
+				"successful_club",
+			]);
+		});
+
+		it("makes an already-listed speech the undoable win instead of listing it twice", () => {
+			const linked = win(4, "Controlling Your Fear", "Fear speech");
+			const vm = buildPathViewModel({
+				courseCode: "8711",
+				pathName: "Engaging Humor",
+				status: "current",
+				levels: summary.map((l) => ({ ...l })),
+				wins: [linked],
+				catalogProjects: [
+					...levelsThrough3,
+					...L4,
+					seriesProject(4, "Controlling Your Fear", "better_speaker"),
+				],
+				pathLevels,
+				marks: [seriesMark(4, "Controlling Your Fear")],
+			});
+			expect(vm.wins).toEqual([{ ...linked, markedHere: true }]);
+		});
+
+		it("lists a lone series mark on a catalog path beside its delivered speeches", () => {
+			const vm = buildPathViewModel({
+				courseCode: "8711",
+				pathName: "Engaging Humor",
+				status: "current",
+				levels: [],
+				wins: [delivered],
+				catalogProjects: [...levelsThrough3, ...L4, ...L5],
+				pathLevels,
+				marks: [seriesMark(4, "Closing the Sale")],
+			});
+			expect(vm.levelsSource).toBe("catalog");
+			expect(vm.wins.map((w) => [w.name, w.markedHere])).toEqual([
+				["Manage Change", false],
+				["Closing the Sale", true],
+			]);
+		});
+
+		it("still switches branches on an ordinary mark", () => {
+			const vm = read([mark(4, "Manage Change")]);
+			expect(vm.upNextElectives?.chooseCount).toBe(1);
+		});
+	});
+
 	it("carries the path's status onto the view model", () => {
 		expect(build([], "legacy").status).toBe("legacy");
 		expect(build([], "current").status).toBe("current");

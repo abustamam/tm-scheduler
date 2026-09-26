@@ -403,6 +403,36 @@ function findWorkingLevel(
 	return completion && projectsLeftAt(completion) > 0 ? completion : null;
 }
 
+/**
+ * Delivered-speech wins plus series-presentation marks (#922), for the branches
+ * where series marks are the only marks. A speech already linked to the marked
+ * project becomes the one win, now undoable; otherwise the mark is its own
+ * win. Never "awaiting": Base Camp cannot report a series presentation.
+ */
+function withSeriesMarkWins(wins: Win[], seriesMarks: MarkRow[]): Win[] {
+	if (seriesMarks.length === 0) return wins;
+	const markedIds = new Set(seriesMarks.map((m) => m.projectId));
+	const merged = wins.map((w) =>
+		w.projectId !== null && markedIds.has(w.projectId)
+			? { ...w, markedHere: true }
+			: w,
+	);
+	const present = new Set(merged.map((w) => w.projectId));
+	for (const m of seriesMarks) {
+		if (present.has(m.projectId)) continue;
+		merged.push({
+			projectId: m.projectId,
+			level: m.level,
+			name: m.name,
+			speechTitle: "",
+			deliveredAt: null,
+			markedHere: true,
+			awaitingProcessing: false,
+		});
+	}
+	return merged;
+}
+
 /** Pure: shape one synced path into its display model. */
 export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	const detail = path.detailProjects ?? [];
@@ -475,7 +505,20 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	// #898's: a newly declared catalog path with zero marks is not a summary-sync
 	// club, and falling through to the fallback below (built for Base Camp) left
 	// it with no "Up next" at all. With no marks, "complete" is honestly empty.
-	const hasProjectTruth = hasBasecampDetail || marks.length > 0;
+	//
+	// A SERIES mark is not project truth (#922). It says one series presentation
+	// was given and nothing about any ordinary project, and Up next offers series
+	// on the summary-sync fallback below, so the first tick there would
+	// otherwise flip the path into this branch on reload: delivered-speech wins
+	// gone and every ordinary project listed as outstanding, learned from nothing.
+	const seriesIds = new Set(
+		path.catalogProjects
+			.filter((c) => c.series !== null)
+			.map((c) => c.projectId),
+	);
+	const seriesMarks = marks.filter((m) => seriesIds.has(m.projectId));
+	const hasProjectTruth =
+		hasBasecampDetail || marks.length > seriesMarks.length;
 	if (hasProjectTruth || levelsSource === "catalog") {
 		// A delivered speech linked to this project (via `speeches.project_id`)
 		// gives a mark its title and date; /detail carries its own.
@@ -487,13 +530,6 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 					{ speechTitle: w.speechTitle, deliveredAt: w.deliveredAt },
 				]),
 		);
-		// Base Camp never reports a series presentation (#921), so on a synced
-		// club a marked one would read "awaiting processing" forever.
-		const seriesIds = new Set(
-			path.catalogProjects
-				.filter((c) => c.series !== null)
-				.map((c) => c.projectId),
-		);
 		const byId = new Map<string, { level: number; name: string }>();
 		for (const p of detail) byId.set(p.projectId, p);
 		for (const m of marks) byId.set(m.projectId, m);
@@ -503,8 +539,10 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		// still true, and the fallback below has always shown them. Building wins
 		// from `completeIds` alone emptied "Your wins" for exactly the path this
 		// arm was added for. With detail or marks, unchanged: completions only.
+		// Series marks alone are not project truth (above), so they join the
+		// delivered speeches here rather than replacing them.
 		const wins: Win[] = !hasProjectTruth
-			? path.wins
+			? withSeriesMarkWins(path.wins, seriesMarks)
 			: [...completeIds]
 					.map((projectId) => {
 						const meta = byId.get(projectId);
@@ -521,6 +559,8 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 							awaitingProcessing:
 								hasBasecampDetail &&
 								!bcmCompleteIds.has(projectId) &&
+								// Base Camp never reports a series presentation (#921),
+								// so a marked one would read "awaiting" forever.
 								!seriesIds.has(projectId),
 						};
 					})
@@ -601,7 +641,12 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	// `bcm_project_progress` branch above is unaffected — Base Camp applies the
 	// real completion rule there, which is what makes its `completeIds`
 	// authoritative and its `upNext` honest.
-	return { ...base, wins: path.wins, upNext: [], upNextElectives: null };
+	return {
+		...base,
+		wins: withSeriesMarkWins(path.wins, seriesMarks),
+		upNext: [],
+		upNextElectives: null,
+	};
 }
 
 interface WinRow {
