@@ -15,7 +15,12 @@ import {
 } from "#/lib/role-duties";
 import { whatsappHref } from "#/lib/whatsapp";
 
-export type NudgeMode = "confirm" | "recruit" | "attendance" | "arriving";
+export type NudgeMode =
+	| "confirm"
+	| "recruit"
+	| "attendance"
+	| "arriving"
+	| "invite";
 
 interface NudgeInputBase {
 	name: string;
@@ -57,6 +62,19 @@ export type NudgeInput =
 	// one constituent survived both early returns below and `i.roleName` stopped
 	// type-checking on the arm that has it.
 	| (NudgeInputBase & { mode: "arriving" })
+	// Inviting a GUEST back to the next meeting (#899). Role-less, and its own
+	// constituent for the reason the comment above gives. Carries only what the
+	// sentence reads — never a role, a personal `?as=` link (a guest has no
+	// member identity), or the meeting's `join_url` (withheld from every
+	// shareable artifact, #731/#754).
+	| (NudgeInputBase & {
+			mode: "invite";
+			clubName: string;
+			/** Already formatted in the club's timezone. */
+			meetingTime: string;
+			/** Null or blank omits the ", at …" clause entirely. */
+			location?: string | null;
+	  })
 	| (NudgeInputBase & {
 			mode: "confirm" | "recruit";
 			/** The role being asked about. Role-specific asks stay on the slot
@@ -105,6 +123,10 @@ function messageFor(i: NudgeInput): string {
 	const who = greetingName(i);
 	if (i.mode === "attendance") {
 		return `Hi ${who}, are you able to make our ${i.meetingDate} meeting? Agenda here: ${i.shareUrl}`;
+	}
+	if (i.mode === "invite") {
+		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
+		return `Hi ${who}, it was great having you at ${i.clubName}. We meet again on ${i.meetingDate} at ${i.meetingTime}${where}. We'd love to see you there. Agenda: ${i.shareUrl}`;
 	}
 	// A SEPARATE mode rather than a reuse of `attendance`, because the two are sent
 	// at different moments and only one of them is still a question about the
@@ -294,6 +316,9 @@ export function personalNudgeUrl(
 function subjectFor(i: NudgeInput): string {
 	if (i.mode === "attendance") return `Are you coming? — ${i.meetingDate}`;
 	if (i.mode === "arriving") return `Are you on your way? — ${i.meetingDate}`;
+	if (i.mode === "invite") {
+		return `See you at ${i.clubName} on ${i.meetingDate}?`;
+	}
 	return i.mode === "confirm"
 		? `Confirming your ${i.roleName} role — ${i.meetingDate}`
 		: `Open ${i.roleName} role — ${i.meetingDate} meeting?`;

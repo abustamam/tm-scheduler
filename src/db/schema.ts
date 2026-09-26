@@ -1275,6 +1275,50 @@ export const meetings = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Guest invites (#899) — who opened an invite draft for which meeting.
+//
+// A row means an officer opened an invite DRAFT to that meeting for that guest.
+// The app never sends a message (every message to a person is sent by a human),
+// so it cannot see whether the draft was sent: this is a coordination aid so two
+// officers don't double up, not a delivery receipt.
+//
+// One row per (guest, meeting): a second tap upserts `invited_at` and the actor.
+// Deleting the guest or the meeting deletes its rows; deleting the inviting
+// member only clears the attribution (losing attribution must not delete the
+// record). An invite to a meeting cancelled later is KEPT here and filtered out
+// on read (`loadGuestPipeline`).
+// ---------------------------------------------------------------------------
+
+export const guestInvites = pgTable(
+	"guest_invites",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		guestId: uuid("guest_id")
+			.notNull()
+			.references(() => guests.id, { onDelete: "cascade" }),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		// Who opened the draft. NULL for an impersonating superadmin (no
+		// membership) or after the member is deleted.
+		invitedByMemberId: uuid("invited_by_member_id").references(
+			() => members.id,
+			{ onDelete: "set null" },
+		),
+		invitedAt: timestamp("invited_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		uniqueIndex("guest_invites_guest_meeting_idx").on(t.guestId, t.meetingId),
+		index("guest_invites_club_idx").on(t.clubId),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Role definitions (the club's role template)
 // ---------------------------------------------------------------------------
 
@@ -3022,6 +3066,23 @@ export const clubLogosRelations = relations(clubLogos, ({ one }) => ({
 export const guestsRelations = relations(guests, ({ one, many }) => ({
 	club: one(clubs, { fields: [guests.clubId], references: [clubs.id] }),
 	slots: many(roleSlots),
+	invites: many(guestInvites),
+}));
+
+export const guestInvitesRelations = relations(guestInvites, ({ one }) => ({
+	club: one(clubs, { fields: [guestInvites.clubId], references: [clubs.id] }),
+	guest: one(guests, {
+		fields: [guestInvites.guestId],
+		references: [guests.id],
+	}),
+	meeting: one(meetings, {
+		fields: [guestInvites.meetingId],
+		references: [meetings.id],
+	}),
+	invitedBy: one(members, {
+		fields: [guestInvites.invitedByMemberId],
+		references: [members.id],
+	}),
 }));
 
 export const meetingsRelations = relations(meetings, ({ one, many }) => ({

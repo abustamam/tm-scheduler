@@ -15,6 +15,7 @@ import {
 	activityLog,
 	clubs,
 	duesPeriods,
+	guestInvites,
 	guests,
 	meetingAttendance,
 	meetings,
@@ -37,6 +38,7 @@ import {
 	UNDO_NOT_CONVERTED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
+import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { toStoredPhone } from "#/lib/phone";
 import {
 	cleanup,
@@ -44,6 +46,7 @@ import {
 	openBlockingTx,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 	waitForLockWait,
 } from "#/test/db";
@@ -69,6 +72,7 @@ const {
 	applyConvertGuestToMember,
 	applyDeleteGuest,
 	applyLinkGuestToMember,
+	applyRecordGuestInvite,
 	applySetGuestStage,
 	applyUndoGuestConversion,
 	applyUnlinkGuestFromMember,
@@ -86,6 +90,7 @@ const { applyAssignGuestToSlot, listClubGuests } = await import(
 // it verbatim). Imported here so #501's "the member is invisible" can be stated
 // in the READER's terms rather than as a column value.
 const { loadPublicClubRoster } = await import("#/server/members-logic");
+const { loadNextMeetingSummary } = await import("#/server/meetings-logic");
 
 /**
  * A guest signing the book AT a meeting, then that meeting receding into the
@@ -4130,5 +4135,273 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				expect(await flagFor(guestId)).toBe(false);
 			});
 		});
+	});
+});
+
+/**
+ * Invite a guest to the next meeting (#899). A row means an officer OPENED a
+ * draft — the app never sends — so this is a coordination record: one row per
+ * (guest, meeting), upserted, and read back as `lastInvite` / `inviteCount`
+ * counting only meetings that are not cancelled.
+ */
+describe.skipIf(!hasTestDb)("guest invites (#899)", () => {
+	let seed: SeededClub;
+	let other: SeededClub | null = null;
+	let strayPeople: string[] = [];
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		other = null;
+		strayPeople = [];
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		if (other) {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+		if (strayPeople.length > 0) {
+			await testDb.delete(people).where(inArray(people.id, strayPeople));
+		}
+	});
+
+	function invite(guestId: string, meetingId: string, actor?: string | null) {
+		return applyRecordGuestInvite({
+			clubId: seed.clubId,
+			guestId,
+			meetingId,
+			actorMemberId: actor === undefined ? seed.adminMemberId : actor,
+		});
+	}
+
+	async function inviteRows(guestId: string) {
+		return testDb
+			.select()
+			.from(guestInvites)
+			.where(eq(guestInvites.guestId, guestId));
+	}
+
+	it("upserts one row per guest and meeting, keeping the later time and actor", async () => {
+		const guestId = await seedGuest(seed.clubId, "Pat Prospect");
+		await invite(guestId, seed.meetingId, seed.adminMemberId);
+		const [first] = await inviteRows(guestId);
+		await new Promise((r) => setTimeout(r, 5));
+		await invite(guestId, seed.meetingId, seed.memberId);
+		const rows = await inviteRows(guestId);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.invitedByMemberId).toBe(seed.memberId);
+		expect(rows[0]!.invitedAt.getTime()).toBeGreaterThan(
+			first!.invitedAt.getTime(),
+		);
+	});
+
+	it("never changes the guest's stage", async () => {
+		const guestId = await seedGuest(seed.clubId, "Pat Prospect");
+		await invite(guestId, seed.meetingId);
+		expect((await pipelineRow(seed.clubId, guestId)).stage).toBe("prospect");
+	});
+
+	it("accepts a following-up guest", async () => {
+		const guestId = await seedGuest(seed.clubId, "Fran Follow");
+		await testDb
+			.update(guests)
+			.set({ stage: "following_up" })
+			.where(eq(guests.id, guestId));
+		await expect(invite(guestId, seed.meetingId)).resolves.toEqual({
+			ok: true,
+		});
+	});
+
+	describe("refuses", () => {
+		it("a guest from another club", async () => {
+			other = await seedClub();
+			const foreign = await seedGuest(other.clubId, "Elsewhere");
+			await expect(invite(foreign, seed.meetingId)).rejects.toThrow(
+				/Guest not found in this club/,
+			);
+		});
+
+		it("a meeting from another club", async () => {
+			other = await seedClub();
+			const guestId = await seedGuest(seed.clubId, "Pat Prospect");
+			await expect(invite(guestId, other.meetingId)).rejects.toThrow(
+				/Meeting not found in this club/,
+			);
+		});
+
+		it("a past meeting", async () => {
+			const guestId = await seedGuest(seed.clubId, "Pat Prospect");
+			const past = await seedPastMeeting(seed.clubId, 3);
+			await expect(invite(guestId, past)).rejects.toThrow(/already started/);
+		});
+
+		it("a cancelled meeting", async () => {
+			const guestId = await seedGuest(seed.clubId, "Pat Prospect");
+			await testDb
+				.update(meetings)
+				.set({ status: "cancelled" })
+				.where(eq(meetings.id, seed.meetingId));
+			await expect(invite(guestId, seed.meetingId)).rejects.toThrow(
+				/cancelled/,
+			);
+		});
+
+		it("a joined, a stranded joined, and a lost guest", async () => {
+			const joined = await seedGuest(seed.clubId, "Jo Joined");
+			await testDb
+				.update(guests)
+				.set({ stage: "joined", convertedMembershipId: seed.memberId })
+				.where(eq(guests.id, joined));
+			// Stranded: joined with the membership pointer since nulled (#618).
+			const stranded = await seedGuest(seed.clubId, "Stan Stranded");
+			await testDb
+				.update(guests)
+				.set({ stage: "joined", convertedMembershipId: null })
+				.where(eq(guests.id, stranded));
+			const lost = await seedGuest(seed.clubId, "Lou Lost");
+			await testDb
+				.update(guests)
+				.set({ stage: "lost" })
+				.where(eq(guests.id, lost));
+			for (const g of [joined, stranded, lost]) {
+				await expect(invite(g, seed.meetingId)).rejects.toThrow(
+					/Prospects or Following up/,
+				);
+				expect(await inviteRows(g)).toHaveLength(0);
+			}
+		});
+	});
+
+	it("reads lastInvite and a distinct, non-cancelled inviteCount", async () => {
+		const guestId = await seedGuest(seed.clubId, "Pat Prospect");
+		const sooner = await seedSoonerMeeting(seed.clubId, 2);
+		const later = await seedSoonerMeeting(seed.clubId, 14);
+
+		await invite(guestId, seed.meetingId);
+		await invite(guestId, seed.meetingId); // re-invite: still one meeting
+		let row = await pipelineRow(seed.clubId, guestId);
+		expect(row.inviteCount).toBe(1);
+		expect(row.lastInvite).toEqual({
+			meetingId: seed.meetingId,
+			meetingAt: expect.any(Date),
+			invitedByName: "Admin User",
+		});
+
+		await new Promise((r) => setTimeout(r, 5));
+		await invite(guestId, sooner, null);
+		await new Promise((r) => setTimeout(r, 5));
+		await invite(guestId, later, null);
+		row = await pipelineRow(seed.clubId, guestId);
+		expect(row.inviteCount).toBe(3);
+		// Latest by invitedAt, not by meeting date; null actor reads null.
+		expect(row.lastInvite?.meetingId).toBe(later);
+		expect(row.lastInvite?.invitedByName).toBeNull();
+
+		// Cancelling that meeting afterwards drops it from BOTH, and the row stays.
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, later));
+		row = await pipelineRow(seed.clubId, guestId);
+		expect(row.inviteCount).toBe(2);
+		expect(row.lastInvite?.meetingId).toBe(sooner);
+		expect(await inviteRows(guestId)).toHaveLength(3);
+	});
+
+	it("cascades with the guest and the meeting, and keeps the row when the inviter is deleted", async () => {
+		const g1 = await seedGuest(seed.clubId, "Gone Guest");
+		const g2 = await seedGuest(seed.clubId, "Stays Guest");
+		const soon = await seedSoonerMeeting(seed.clubId, 2);
+		const personId = await seedPerson({ name: "Ex Officer" });
+		strayPeople.push(personId);
+		const [exOfficer] = await testDb
+			.insert(members)
+			.values({ clubId: seed.clubId, personId, name: "Ex Officer" })
+			.returning({ id: members.id });
+
+		await invite(g1, seed.meetingId);
+		await invite(g2, soon);
+		await invite(g2, seed.meetingId, exOfficer!.id);
+
+		await testDb.delete(guests).where(eq(guests.id, g1));
+		expect(await inviteRows(g1)).toHaveLength(0);
+
+		await testDb.delete(meetings).where(eq(meetings.id, soon));
+		expect(await inviteRows(g2)).toHaveLength(1);
+
+		await testDb.delete(members).where(eq(members.id, exOfficer!.id));
+		const [kept] = await inviteRows(g2);
+		expect(kept?.invitedByMemberId).toBeNull();
+		expect((await pipelineRow(seed.clubId, g2)).lastInvite?.invitedByName).toBe(
+			null,
+		);
+	});
+
+	describe("loadNextMeetingSummary", () => {
+		it("returns the soonest non-cancelled upcoming meeting in the club's timezone", async () => {
+			const cancelled = await seedSoonerMeeting(seed.clubId, 1);
+			await testDb
+				.update(meetings)
+				.set({ status: "cancelled" })
+				.where(eq(meetings.id, cancelled));
+			await seedPastMeeting(seed.clubId, 1);
+			const summary = await loadNextMeetingSummary(seed.clubId, new Date());
+			expect(summary.timezone).toBe("America/Chicago");
+			expect(summary.nextMeeting?.id).toBe(seed.meetingId);
+		});
+
+		it("is null when nothing is scheduled ahead", async () => {
+			await testDb
+				.update(meetings)
+				.set({ status: "cancelled" })
+				.where(eq(meetings.id, seed.meetingId));
+			expect(
+				(await loadNextMeetingSummary(seed.clubId, new Date())).nextMeeting,
+			).toBeNull();
+		});
+
+		it("gives a same-day pair's earlier meeting its disambiguated key", async () => {
+			const [seeded] = await testDb
+				.select({ scheduledAt: meetings.scheduledAt })
+				.from(meetings)
+				.where(eq(meetings.id, seed.meetingId));
+			const [second] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					// Ten minutes after the seeded one: same club-local date.
+					scheduledAt: new Date(seeded!.scheduledAt.getTime() + 10 * 60_000),
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id, scheduledAt: meetings.scheduledAt });
+			const summary = await loadNextMeetingSummary(seed.clubId, new Date());
+			const expected = urlKeysForMeetings(
+				[
+					{ id: seed.meetingId, scheduledAt: seeded!.scheduledAt },
+					{ id: second!.id, scheduledAt: second!.scheduledAt },
+				],
+				summary.timezone,
+			).get(seed.meetingId);
+			expect(summary.nextMeeting?.urlKey).toBe(expected);
+			expect(summary.nextMeeting?.urlKey).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}$/);
+		});
+	});
+
+	it("never carries the meeting's join_url in either read", async () => {
+		const joinUrl = `https://zoom.example/j/${randomUUID()}`;
+		await testDb
+			.update(meetings)
+			.set({ joinUrl })
+			.where(eq(meetings.id, seed.meetingId));
+		const guestId = await seedGuest(seed.clubId, "Pat Prospect");
+		await invite(guestId, seed.meetingId);
+		for (const result of [
+			await loadNextMeetingSummary(seed.clubId, new Date()),
+			await loadGuestPipeline(seed.clubId),
+		]) {
+			const json = JSON.stringify(result);
+			expect(json).not.toContain(joinUrl);
+			expect(json).not.toContain("joinUrl");
+		}
 	});
 });

@@ -39,16 +39,20 @@ import {
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	convertGuestToMember,
+	type NextMeetingSummary,
 	type PipelineGuestRow,
+	recordGuestInvite,
 } from "#/server/guest-pipeline";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/guest-pipeline", () => ({
 	convertGuestToMember: vi.fn(),
 	deleteGuest: vi.fn(),
+	getGuestInviteContext: vi.fn(),
 	getGuestPipeline: vi.fn(),
 	getLinkCandidates: vi.fn(),
 	linkGuestToMember: vi.fn(),
+	recordGuestInvite: vi.fn(),
 	setGuestStage: vi.fn(),
 	undoGuestConversion: vi.fn(),
 	unlinkGuestFromMember: vi.fn(),
@@ -90,17 +94,30 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		firstVisitAt: null,
 		visitCount: 0,
 		heldSlotCount: 0,
+		lastInvite: null,
+		inviteCount: 0,
 		createdAt: new Date("2026-08-01T00:00:00Z"),
 		...over,
 	};
 }
 
-async function renderRoute(guests: PipelineGuestRow[]) {
+/** No next meeting by default, so the invite control is in its disabled state
+ *  and renders no extra links into the suites that predate it. */
+const NO_NEXT_MEETING: NextMeetingSummary = {
+	timezone: "America/Los_Angeles",
+	nextMeeting: null,
+};
+
+async function renderRoute(
+	guests: PipelineGuestRow[],
+	inviteContext: NextMeetingSummary = NO_NEXT_MEETING,
+) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		guests,
 		clubId: "22222222-2222-4222-8222-222222222222",
 		clubName: "Downtown Club",
 		clubSlug: "downtown",
+		inviteContext,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 
@@ -452,5 +469,171 @@ describe("VP Membership guest card — reactivation notice (#501)", () => {
 		expect(call?.[1]).toEqual({
 			description: ROSTER_CONFLICT_COPY.shared_address,
 		});
+	});
+});
+
+/**
+ * The invite-to-next-meeting control (#899). A draft plus a record of who
+ * reached out — the app never sends. What is pinned here is the half no server
+ * test can see: which rows get the control, the two disabled reasons and their
+ * precedence, the history line, and that tapping a draft records exactly once
+ * without stopping the draft from opening.
+ */
+describe("VP Membership guest card — invite to the next meeting (#899)", () => {
+	// 2099 so the meeting is always in the future relative to the test clock.
+	const NEXT_AT = new Date("2099-10-09T02:00:00Z"); // Thu Oct 8, 7pm in LA
+	const withNext: NextMeetingSummary = {
+		timezone: "America/Los_Angeles",
+		nextMeeting: {
+			id: "33333333-3333-4333-8333-333333333333",
+			urlKey: "2099-10-08",
+			scheduledAt: NEXT_AT,
+			location: "Room 4",
+		},
+	};
+
+	function inviteGroup(): HTMLElement {
+		return screen.getByRole("group", { name: /^Invite/ });
+	}
+
+	it("renders for Prospects and Following up, not for Joined, Lost or a stranded guest", async () => {
+		await renderRoute(
+			[
+				guestRow({ id: "a1111111-1111-4111-8111-111111111111", name: "P One" }),
+				guestRow({
+					id: "a2222222-2222-4222-8222-222222222222",
+					name: "F Two",
+					stage: "following_up",
+				}),
+				guestRow({
+					id: "a3333333-3333-4333-8333-333333333333",
+					name: "L Three",
+					stage: "lost",
+				}),
+				// Stranded: joined with a null pointer (#618). It renders in Joined
+				// and the server refuses it, so it gets no control.
+				guestRow({
+					id: "a4444444-4444-4444-8444-444444444444",
+					name: "S Four",
+					stage: "joined",
+					convertedMembershipId: null,
+				}),
+			],
+			withNext,
+		);
+		const groups = screen.getAllByRole("group", {
+			name: "Invite to Thu, Oct 8",
+		});
+		expect(groups).toHaveLength(2);
+		// Each belongs to an invitable row.
+		for (const name of ["P One", "F Two"]) {
+			const row = screen.getByText(name).closest("div.border-b");
+			expect(
+				within(row as HTMLElement).getByRole("group", { name: /^Invite/ }),
+			).toBeTruthy();
+		}
+		for (const name of ["L Three", "S Four"]) {
+			const row = screen.getByText(name).closest("div.border-b");
+			expect(
+				within(row as HTMLElement).queryByRole("group", { name: /^Invite/ }),
+			).toBeNull();
+		}
+	});
+
+	it("is disabled with 'Schedule the next meeting first' when there is none — even with no contact", async () => {
+		// Both disabled reasons apply; the no-meeting reason wins.
+		await renderRoute([guestRow({ phone: null, email: null })]);
+		const group = inviteGroup();
+		expect(group.getAttribute("aria-disabled")).toBe("true");
+		expect(group.getAttribute("title")).toBe("Schedule the next meeting first");
+		expect(
+			within(group).getByText("Schedule the next meeting first"),
+		).toBeTruthy();
+		expect(within(group).queryAllByRole("link")).toHaveLength(0);
+	});
+
+	it("is disabled with 'Add an email or phone to invite' when the guest has no contact", async () => {
+		await renderRoute([guestRow({ phone: "  ", email: null })], withNext);
+		const group = inviteGroup();
+		expect(group.getAttribute("aria-disabled")).toBe("true");
+		expect(group.getAttribute("title")).toBe("Add an email or phone to invite");
+		expect(
+			within(group).getByText("Add an email or phone to invite"),
+		).toBeTruthy();
+		expect(within(group).queryAllByRole("link")).toHaveLength(0);
+	});
+
+	it("drafts to the public agenda and records the invite exactly once per tap", async () => {
+		vi.mocked(recordGuestInvite).mockResolvedValue({ ok: true });
+		await renderRoute([guestRow()], withNext);
+		const group = inviteGroup();
+		const email = await within(group).findByRole("link", { name: /email/i });
+		const href = email.getAttribute("href") ?? "";
+		expect(decodeURIComponent(href)).toContain(
+			"/club/downtown/meeting/2099-10-08",
+		);
+		expect(decodeURIComponent(href)).toContain("at Room 4");
+
+		const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+		email.dispatchEvent(click);
+		// The draft must still open: the handler does not prevent navigation.
+		expect(click.defaultPrevented).toBe(false);
+		expect(recordGuestInvite).toHaveBeenCalledTimes(1);
+		expect(recordGuestInvite).toHaveBeenCalledWith({
+			data: {
+				clubId: "22222222-2222-4222-8222-222222222222",
+				guestId: "11111111-1111-4111-8111-111111111111",
+				meetingId: "33333333-3333-4333-8333-333333333333",
+			},
+		});
+
+		vi.mocked(recordGuestInvite).mockClear();
+		fireEvent.click(within(group).getByRole("link", { name: /whatsapp/i }));
+		expect(recordGuestInvite).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows the write-error toast when recording fails", async () => {
+		vi.mocked(recordGuestInvite).mockRejectedValue(
+			new Error("That meeting is cancelled."),
+		);
+		await renderRoute([guestRow()], withNext);
+		fireEvent.click(
+			await within(inviteGroup()).findByRole("link", { name: /email/i }),
+		);
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("That meeting is cancelled."),
+		);
+	});
+
+	it("shows who invited them, and how many meetings", async () => {
+		await renderRoute([
+			guestRow({
+				lastInvite: {
+					meetingId: "33333333-3333-4333-8333-333333333333",
+					meetingAt: NEXT_AT,
+					invitedByName: "Sam Officer",
+				},
+				inviteCount: 3,
+			}),
+		]);
+		expect(
+			screen.getByText(
+				"Invited to Thu, Oct 8 · by Sam Officer · invited to 3 meetings",
+			),
+		).toBeTruthy();
+	});
+
+	it("omits 'by' for a null inviter, the count for one meeting, and says 'Last' once it has passed", async () => {
+		await renderRoute([
+			guestRow({
+				lastInvite: {
+					meetingId: "33333333-3333-4333-8333-333333333333",
+					meetingAt: new Date("2026-01-09T03:00:00Z"), // Thu Jan 8 in LA
+					invitedByName: null,
+				},
+				inviteCount: 1,
+			}),
+		]);
+		expect(screen.getByText("Last invited to Thu, Jan 8")).toBeTruthy();
 	});
 });
