@@ -667,7 +667,8 @@ export async function castVote(input: {
 	// (2b) Who may CHANGE an existing vote (#765, ADR-0026). The first vote
 	// fills a blank, whoever sends it — that is the honour-system ballot. A
 	// change is admitted only from the device that cast it, or from a session
-	// bound to THIS voting member. See `changeGuard` below.
+	// bound to THIS voting member. The check itself is the `setWhere`
+	// spread on the `onConflictDoUpdate` below.
 	const ownSession =
 		voterMemberId !== null &&
 		(await sessionIsVoter(clubId, input.sessionUserId ?? null, voterMemberId));

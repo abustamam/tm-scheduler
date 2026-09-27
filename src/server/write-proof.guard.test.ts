@@ -132,7 +132,15 @@ const DEVICE_BOUND_FILL_BLANK: Record<
 	string,
 	{
 		handlerMustContain: string[];
-		logic: { file: string; fn: string; mustContain: string[] }[];
+		logic: {
+			file: string;
+			fn: string;
+			mustContain: string[];
+			/** Identifiers that must NOT appear in the `set: { … }` object of the
+			 *  fn's `onConflictDoUpdate`. A column there is rewritten on every
+			 *  change, which is how an owner stops being the owner. */
+			setMustNotContain?: string[];
+		}[];
 	}
 > = {
 	"voting.ts#submitVote": {
@@ -145,12 +153,18 @@ const DEVICE_BOUND_FILL_BLANK: Record<
 			{
 				file: "voting-logic.ts",
 				fn: "castVote",
+				// Compared whitespace-collapsed, so these are SHAPES, not just
+				// names: each one is the exact construction whose flip would
+				// defeat the check while leaving every identifier in place.
 				mustContain: [
-					"setWhere:",
-					"eq(meetingVotes.deviceToken, deviceToken)",
-					"sessionIsVoter(",
+					// The session exemption is exactly "this voter's own session",
+					// and nothing is OR-ed into it (`|| true` breaks this needle).
+					"const ownSession = voterMemberId !== null && (await sessionIsVoter(clubId, input.sessionUserId ?? null, voterMemberId));",
+					// …and the exemption is the ONLY arm that drops the check.
+					"...(ownSession ? {} : { setWhere: deviceToken !== null ? eq(meetingVotes.deviceToken, deviceToken) : sql`false`, })",
 					"VOTE_CAST_ELSEWHERE_MESSAGE",
 				],
+				setMustNotContain: ["deviceToken"],
 			},
 			{
 				file: "voting-logic.ts",
@@ -163,6 +177,31 @@ const DEVICE_BOUND_FILL_BLANK: Record<
 		],
 	},
 };
+
+/** Collapse every whitespace run to one space, so a needle states a SHAPE and
+ *  a reformat (Biome re-wrapping a ternary) does not read as a deletion. */
+function collapse(text: string): string {
+	return text.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")");
+}
+
+/**
+ * The `set: { … }` object inside a fn body's `onConflictDoUpdate({ … })`, or
+ * null when there is none. Brace-matched rather than cut at the first `}`, so
+ * a nested object cannot end the slice early and hide a column after it.
+ */
+function conflictSetObject(body: string): string | null {
+	const upsert = body.indexOf("onConflictDoUpdate(");
+	if (upsert === -1) return null;
+	const at = body.indexOf("set:", upsert);
+	const open = at === -1 ? -1 : body.indexOf("{", at);
+	if (open === -1) return null;
+	let depth = 0;
+	for (let i = open; i < body.length; i++) {
+		if (body[i] === "{") depth++;
+		else if (body[i] === "}" && --depth === 0) return body.slice(open, i + 1);
+	}
+	return null;
+}
 
 /**
  * Why a POST fn is allowed to succeed without a session.
@@ -780,6 +819,13 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		// session to `castVote`, `castVote` must put the device check on its
 		// ON CONFLICT UPDATE, and the session arm must admit only a PROVEN
 		// session bound to the voter, never the asserted arm.
+		//
+		// MEASURED (#765 review), each KILLED by this file alone with
+		// `scripts/mutate.sh`: the no-token arm flipped to `sql\`true\``;
+		// `ownSession` forced true at the spread (`|| true`) and at the
+		// declaration (`|| true`, `true ||`); and `deviceToken` added to the
+		// `set` object, shorthand and keyed. A presence-only check caught none of
+		// them, because each keeps every identifier it looked for.
 		const fillBlank = Object.entries(WRITE_PROOF_EXCEPTIONS)
 			.filter(([, v]) => v.class === "fill-blank")
 			.map(([k]) => k);
@@ -799,9 +845,26 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 					readSource(resolve(SERVER, check.file)),
 					check.fn,
 				);
+				const flat = collapse(body);
 				for (const needle of check.mustContain) {
-					if (!body.includes(needle)) {
+					if (!flat.includes(collapse(needle))) {
 						offenders.push(`${check.file}#${check.fn} (${needle})`);
+					}
+				}
+				if (check.setMustNotContain) {
+					const set = conflictSetObject(body);
+					if (set === null) {
+						offenders.push(
+							`${check.file}#${check.fn} (no onConflictDoUpdate set: { … } found to check)`,
+						);
+					} else {
+						for (const forbidden of check.setMustNotContain) {
+							if (new RegExp(`\\b${forbidden}\\b`).test(set)) {
+								offenders.push(
+									`${check.file}#${check.fn} (onConflictDoUpdate set rewrites ${forbidden})`,
+								);
+							}
+						}
 					}
 				}
 			}
