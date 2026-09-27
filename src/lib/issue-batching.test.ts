@@ -16,6 +16,7 @@ import {
 	isMigrationBearing,
 	isPriority,
 	issueStateQuery,
+	isUncitableDir,
 	locateInPlan,
 	MIGRATION_LABEL,
 	PRIORITY_LABEL,
@@ -24,6 +25,8 @@ import {
 	planBatches,
 	splitCitations,
 	splitQuotedText,
+	UNCITABLE_DIRS,
+	unrecognisedFilesEntries,
 	waveBlockers,
 } from "#/lib/issue-batching";
 
@@ -178,7 +181,7 @@ describe("extractPaths", () => {
 
 	/**
 	 * `\b` is satisfied by a `/`, so a root file matched inside a longer path
-	 * would read as a citation of the root one — `.github/CLAUDE.md` is a
+	 * would read as a citation of the root one — `.vscode/CLAUDE.md` is a
 	 * different file and `docs/README.md` is a different file again.
 	 *
 	 * A path this tree does not have is dropped by `splitCitations`, so an
@@ -187,9 +190,13 @@ describe("extractPaths", () => {
 	 * is never planned.
 	 */
 	test("does not read a root file out of a nested path", () => {
-		expect(extractPaths(".github/CLAUDE.md and docs/README.md")).toEqual([
+		// `.vscode` is not a root, so its file is nobody's citation — least of
+		// all the root `CLAUDE.md`'s.
+		expect(extractPaths(".vscode/CLAUDE.md and docs/README.md")).toEqual([
 			"docs/README.md",
 		]);
+		// `.github` IS a root since #973, and its file is cited as itself.
+		expect(extractPaths(".github/CLAUDE.md")).toEqual([".github/CLAUDE.md"]);
 	});
 
 	test("does not invent a path from a branch name", () => {
@@ -406,15 +413,15 @@ describe("isCitablePath", () => {
 	});
 
 	test("rejects a file the extractor would never produce", () => {
-		expect(isCitablePath("src/lib/dcp.js")).toBe(false);
+		expect(isCitablePath("src/lib/dcp.py")).toBe(false);
 		expect(isCitablePath("docs/agents/domain.txt")).toBe(false);
 		// A root file NOT on the allowlist stays uncitable — that is what keeps
 		// the walk's filter from sweeping up every root-level file.
 		expect(isCitablePath("CHANGELOG.md")).toBe(false);
 		expect(isCitablePath("tsconfig.json")).toBe(false);
-		// The walk skips any entry starting with `.`, so this one would be
-		// citable and then dropped as absent. Left out deliberately.
-		expect(isCitablePath(".github/workflows/ci.yml")).toBe(false);
+		// A dotted directory that is not a root stays uncitable: the walk never
+		// descends into it, so citing it would only ever read as absent.
+		expect(isCitablePath(".vscode/settings.json")).toBe(false);
 	});
 
 	test("accepts every allowlisted root file", () => {
@@ -434,6 +441,203 @@ describe("isCitablePath", () => {
 		expect(isCitablePath("CLAUDE.md and more")).toBe(false);
 		expect(isCitablePath("docs/CLAUDE.md")).toBe(true);
 		expect(isCitablePath("my-README.md")).toBe(false);
+	});
+});
+
+/**
+ * #973: a `## Files` path under a root the pattern did not know was not
+ * rejected but DROPPED, with nothing in the report to say so. #967 cited four
+ * paths and the plan printed three; the fourth was the dispatching skill under
+ * `.claude/`.
+ */
+describe("roots added for #973", () => {
+	const kept = [
+		".claude/skills/dispatching-issue-waves/SKILL.md",
+		".github/workflows/ci.yml",
+		".githooks/pre-commit",
+		".githooks/post-merge",
+		"public/sw.js",
+		"public/role-sheets/grammarian.pdf",
+		"content/resources/what-is-pathways.md",
+		"CODING_STANDARDS.md",
+	];
+
+	test("a `## Files` path under each added root is kept", () => {
+		for (const path of kept) {
+			const body = `Prose.\n\n## Files\n\n- \`${path}\`\n- src/lib/dcp.ts\n`;
+			expect(extractPaths(body), path).toEqual([path, "src/lib/dcp.ts"].sort());
+		}
+	});
+
+	test("#967's four-path section yields all four", () => {
+		const body = [
+			"## Files",
+			"",
+			"- `src/lib/issue-batching.ts`",
+			"- `src/lib/issue-batching.test.ts`",
+			"- `scripts/batch-issues.ts`",
+			"- `.claude/skills/dispatching-issue-waves/SKILL.md`",
+		].join("\n");
+		expect(extractPaths(body)).toHaveLength(4);
+		expect(unrecognisedFilesEntries(body)).toEqual([]);
+	});
+
+	// The walk filters every file through `isCitablePath`, so a root the
+	// extractor reads and the predicate refuses is present in the body and
+	// absent from the tree: reported as missing and never planned.
+	test("the walk's predicate accepts every one of them", () => {
+		for (const path of kept) expect(isCitablePath(path), path).toBe(true);
+	});
+
+	// `\b` ahead of a `.` needs a word character before it, so the obvious
+	// port of the existing boundary reads nothing out of ordinary prose.
+	test("a dotted root is read after a space, a backtick or a slash", () => {
+		expect(extractPaths("edit .claude/skills/x/SKILL.md now")).toEqual([
+			".claude/skills/x/SKILL.md",
+		]);
+		expect(extractPaths("see `.github/workflows/ci.yml`")).toEqual([
+			".github/workflows/ci.yml",
+		]);
+		expect(extractPaths("in tm-scheduler/.github/workflows/ci.yml")).toEqual([
+			".github/workflows/ci.yml",
+		]);
+	});
+
+	test("a dotted root glued to a word is not a citation", () => {
+		expect(extractPaths("foo.claude/x.md and my.github/a.yml")).toEqual([]);
+	});
+
+	test("a hook survives the full stop that ends its sentence", () => {
+		expect(extractPaths("Change `.githooks/pre-commit`.")).toEqual([
+			".githooks/pre-commit",
+		]);
+		expect(extractPaths("Change .githooks/pre-commit, then test.")).toEqual([
+			".githooks/pre-commit",
+		]);
+	});
+
+	test("`yaml` is read as well as `yml`", () => {
+		expect(extractPaths("edit .github/workflows/ci.yaml")).toEqual([
+			".github/workflows/ci.yaml",
+		]);
+	});
+
+	// `js` is citable now, and a bare `\b` after the extension stopped at the
+	// next dot — reading a sourcemap as the script beside it.
+	test("an extension followed by another extension cites nothing", () => {
+		expect(extractPaths("see src/foo.js.map and public/sw.js.map")).toEqual([]);
+		expect(extractPaths("see public/sw.js.")).toEqual(["public/sw.js"]);
+	});
+
+	/**
+	 * The point of making a root citable at all. Extraction tests alone would
+	 * stay green if `public/sw.js` reached the extractor's output and was then
+	 * lost before the conflict set.
+	 */
+	test("two issues sharing only `public/sw.js` never share a wave", () => {
+		const body = (other: string) => `## Files\n\n- public/sw.js\n- ${other}\n`;
+		const plan = planBatches(
+			[
+				issue(1, extractPaths(body("src/a.ts"))),
+				issue(2, extractPaths(body("src/b.ts"))),
+			],
+			new Map(),
+		);
+		expect(plan.batches).toEqual([[1], [2]]);
+	});
+
+	test("a hook with an extension is read whole, not truncated", () => {
+		expect(extractPaths("add .githooks/pre-push.sh")).toEqual([
+			".githooks/pre-push.sh",
+		]);
+		expect(isCitablePath(".githooks/pre-commit.bak")).toBe(false);
+	});
+});
+
+/**
+ * Widening `.claude` put every parallel agent's checkout under a root. Each
+ * copy's `src/**` passes the extension filter, so without the exclusion they
+ * join the fan-in graph and every importer count multiplies by the number of
+ * live worktrees.
+ */
+describe("UNCITABLE_DIRS", () => {
+	test("covers the worktrees directory", () => {
+		expect(UNCITABLE_DIRS).toContain(".claude/worktrees");
+	});
+
+	test("nothing under it is citable, and the directory itself is pruned", () => {
+		expect(isCitablePath(".claude/worktrees/fix-619/src/lib/dcp.ts")).toBe(
+			false,
+		);
+		expect(isUncitableDir(".claude/worktrees")).toBe(true);
+		expect(isUncitableDir(".claude/worktrees/fix-619/src")).toBe(true);
+		// A sibling that merely shares the prefix is not inside it.
+		expect(isUncitableDir(".claude/worktrees-notes")).toBe(false);
+		expect(isUncitableDir(".claude/skills")).toBe(false);
+	});
+
+	test("the extractor does not emit one either", () => {
+		expect(
+			extractPaths(
+				"from .claude/worktrees/fix-619/src/lib/dcp.ts and src/a.ts",
+			),
+		).toEqual(["src/a.ts"]);
+	});
+});
+
+/**
+ * The half of #973 that outlives any root list: a `## Files` entry the pattern
+ * cannot read is reported rather than dropped without a word.
+ */
+describe("unrecognisedFilesEntries", () => {
+	const files = (...lines: string[]) =>
+		["Intro.", "", "## Files", "", ...lines, "", "## Notes", "x/y.zz"].join(
+			"\n",
+		);
+
+	test("reports a path-shaped entry the pattern cannot read", () => {
+		expect(
+			unrecognisedFilesEntries(
+				files(
+					"- `tsconfig.json`",
+					"- ops/runbook.md",
+					"- Dockerfile.dev",
+					"- src/lib/dcp.ts",
+				),
+			),
+		).toEqual(["Dockerfile.dev", "ops/runbook.md", "tsconfig.json"]);
+	});
+
+	test("reads only the `## Files` section", () => {
+		expect(unrecognisedFilesEntries("See ops/runbook.md for more.")).toEqual(
+			[],
+		);
+		// `x/y.zz` sits under `## Notes` in the fixture.
+		expect(unrecognisedFilesEntries(files("- src/lib/dcp.ts"))).toEqual([]);
+	});
+
+	test("does not report what a cited path already covers", () => {
+		expect(
+			unrecognisedFilesEntries(
+				files(
+					"- ./src/lib/dcp.ts:12",
+					"- src/lib/agenda.ts",
+					"(`agenda.ts` is read, not edited.)",
+				),
+			),
+		).toEqual([]);
+	});
+
+	test("does not report prose, URLs, directories or a bare slash", () => {
+		expect(
+			unrecognisedFilesEntries(
+				files(
+					"- `drizzle/` (new migration: a.before / b.during, e.g. i.e. etc.)",
+					"- https://example.com/docs/page.md",
+					"- src/lib/dcp.ts",
+				),
+			),
+		).toEqual([]);
 	});
 });
 
