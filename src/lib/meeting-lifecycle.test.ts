@@ -137,6 +137,9 @@ describe("lockedViewer", () => {
 				isTmod: true,
 				isGrammarian: false,
 				isEditableWindow: true,
+				// Signed in, so every own-slot and reassign flag is TRUE before the
+				// lock and the assertions below test the lock, not the session (#1003).
+				isSignedIn: true,
 			}),
 		);
 		expect(locked.currentMemberId).toBe("m1");
@@ -148,6 +151,7 @@ describe("lockedViewer", () => {
 		expect(locked.canEditOwnSpeech).toBe(false);
 		expect(locked.canClaim).toBe(false);
 		expect(locked.canReleaseOwn).toBe(false);
+		expect(locked.canReassignHeld).toBe(false);
 	});
 });
 

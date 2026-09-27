@@ -154,6 +154,7 @@ export function lockedViewer(v: MeetingViewer): MeetingViewer {
 		currentMemberId: v.currentMemberId,
 		canManage: false,
 		canAssign: false,
+		canReassignHeld: false,
 		canManageSpeakers: false,
 		canToggleAvailability: false,
 		canTakeOver: false,

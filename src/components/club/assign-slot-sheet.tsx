@@ -67,7 +67,7 @@ export function AssignSlotSheet({
 	 * caller with no session since #763, so a non-manager TMOD identified by a
 	 * name-pick is offered the picker on an OPEN slot only, and a held one shows
 	 * who holds it and how to get the control. Defaults FALSE (fail closed); the
-	 * agenda passes `canManage || canTakeOver`.
+	 * agenda passes `viewer.canReassignHeld`.
 	 */
 	canReassign?: boolean;
 	/** Admin-only: offer the "assign a guest" path (#151). Never on the public

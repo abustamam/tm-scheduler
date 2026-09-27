@@ -24,6 +24,14 @@ export interface MeetingViewer {
 	canManage: boolean;
 	/** Open the assign/reassign picker (signed-in admin OR public TMOD). */
 	canAssign: boolean;
+	/**
+	 * Reassign a HELD slot through the assign picker (#1003). `canAssign` covers
+	 * an OPEN slot, where a name-pick TMOD's asserted claim still works (#747);
+	 * a held one goes through `reassignSlot`, which needs a session since #763.
+	 * `canManage` stands alone for admin parity: an impersonating superadmin has
+	 * no member id and so is not `isSignedIn` here.
+	 */
+	canReassignHeld: boolean;
 	/** Add/remove speaker slots (signed-in admin OR public TMOD). */
 	canManageSpeakers: boolean;
 	/** Toggle own availability ("I can't make this one") — public self-serve. */
@@ -93,6 +101,7 @@ export function meetingViewer(input: {
 		currentMemberId: input.currentMemberId,
 		canManage: manages,
 		canAssign: runsMeeting,
+		canReassignHeld: runsMeeting && (manages || isSignedIn),
 		canManageSpeakers: runsMeeting,
 		canEditMeetingMeta: runsMeeting && input.isEditableWindow,
 		// lockedViewer denies these for a locked/past meeting.

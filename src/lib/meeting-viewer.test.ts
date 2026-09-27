@@ -51,6 +51,20 @@ describe("meetingViewer", () => {
 		expect(v.canEditOwnSpeech).toBe(false);
 	});
 
+	it("canReassignHeld: a name-pick TMOD may not, a signed-in TMOD may, a plain member never", () => {
+		expect(meetingViewer({ ...base, isTmod: true }).canReassignHeld).toBe(
+			false,
+		);
+		expect(
+			meetingViewer({ ...base, isTmod: true, isSignedIn: true })
+				.canReassignHeld,
+		).toBe(true);
+		// Signed in but not running the meeting: no picker at all.
+		expect(meetingViewer({ ...base, isSignedIn: true }).canReassignHeld).toBe(
+			false,
+		);
+	});
+
 	it("an impersonating superadmin (canManage, NO member id) still manages — admin parity", () => {
 		// The own-slot flags are false for them (no id), which is why the agenda
 		// grants Release / Edit speech on `canManage || (isMine && …)` and the
@@ -64,6 +78,7 @@ describe("meetingViewer", () => {
 		expect(v.canManage).toBe(true);
 		expect(v.canAssign).toBe(true);
 		expect(v.canReleaseOwn).toBe(false);
+		expect(v.canReassignHeld).toBe(true);
 	});
 
 	it("a prospective visitor (no identity) is offered claim + availability, nothing that needs a held slot", () => {
