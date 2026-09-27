@@ -329,6 +329,30 @@ describe("MeetingAgenda capability gating", () => {
 			expect(screen.getByRole("button", { name: "Reassign…" })).toBeTruthy();
 		});
 
+		// The call-site half of the rule: the sheet's own tests pass `canReassign`
+		// in directly, so they cannot see the agenda handing it the WRONG value.
+		// Opening the sheet from the agenda and finding the picker is what fails
+		// if the prop is dropped or hard-coded (CODING_STANDARDS "Test coverage").
+		it("Reassign… opens a sheet whose picker a signed-in TMOD can use", async () => {
+			// cmdk uses layout APIs that jsdom does not implement.
+			globalThis.ResizeObserver ??= class {
+				observe() {}
+				unobserve() {}
+				disconnect() {}
+			} as unknown as typeof ResizeObserver;
+			Element.prototype.scrollIntoView ??= () => {};
+			renderAgenda(
+				viewerFor({ isTmod: true, isSignedIn: true }),
+				[held],
+				undefined,
+				undefined,
+				{ roster: [{ id: "m-ann", name: "Ann Able" }] },
+			);
+			await userEvent.click(screen.getByRole("button", { name: "Reassign…" }));
+			expect(await screen.findByText("Ann Able")).toBeTruthy();
+			expect(screen.queryByText(/Sign in to reassign it/)).toBeNull();
+		});
+
 		it("a manager with no session flag (impersonation) is still offered Reassign", () => {
 			renderAgenda(
 				viewerFor({
