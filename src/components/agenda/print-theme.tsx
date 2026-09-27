@@ -70,9 +70,11 @@ export function pageBox(orientation: PageOrientation = "portrait"): {
  * The stylesheet every print route serves. One copy, because three diverged.
  *
  * `orientation` is the ONLY thing a caller may vary, it defaults to portrait,
- * and the default output is byte-identical to what this constant held before
- * #718 — so the agenda, the roles sheet and the packet routes print exactly the
- * page they printed yesterday and only the poster route passes anything. See
+ * and it changes the `@page` rule and nothing else — so the agenda, the roles
+ * sheet and the packet routes print exactly the page they printed before #718
+ * and only the poster route passes anything. (#964 added `SCREEN_FIT_CSS`,
+ * which is `@media screen` and orientation-independent, so neither half of
+ * that changed; the rasterised print output was diffed identical.) See
  * `PageOrientation` above for why the poster is the one surface that differs
  * and why this is a parameter rather than a second stylesheet.
  *
@@ -119,11 +121,85 @@ export function pageBox(orientation: PageOrientation = "portrait"): {
  * an inline style on its own wrapper, where a 1056px sheet inside an 816px
  * screen viewport is a different problem from the printed page box.)
  */
+/**
+ * The sheet's box as CSS custom properties, which `FitPage` sets inline on every
+ * `.agenda-page` and `SCREEN_FIT_CSS` reads. A variable rather than a second
+ * rule per orientation, so the stylesheet stays orientation-independent outside
+ * its `@page` rule (`print-page-reset.guard.test.ts` holds that).
+ */
+export const SHEET_W_VAR = "--sheet-w";
+export const SHEET_H_VAR = "--sheet-h";
+
+/**
+ * The gap `SCREEN_FIT_CSS` leaves each side of a sheet it has shrunk. 16px and
+ * not less, because it doubles as the allowance for a classic scrollbar: `100vw`
+ * INCLUDES the scrollbar, so on a narrow desktop window a smaller gutter puts the
+ * sheet's right edge under it (measured: an 8px gutter left 7px of a 375px-wide
+ * sheet behind a 15px scrollbar). Phones draw overlay scrollbars and lose nothing.
+ */
+export const SCREEN_FIT_GUTTER_PX = 16;
+
+/**
+ * SCREEN ONLY: shrink a sheet wider than the window so all of it is visible
+ * (#964).
+ *
+ * A sheet is a fixed 816px box (`PAGE_OUTER`), laid out at page width because
+ * that is what prints. On a 375px phone it was wider than the screen, and
+ * nothing was scrollable to reach the rest: the two-page layouts centre their
+ * sheets in a flex column, so both edges spilled past the viewport and the left
+ * one landed at a NEGATIVE x no scroll can reach (measured: -228px at 375 wide),
+ * while `styles.css` gives `body` `overflow-x: hidden`, which takes the right
+ * edge of the one-page layouts too.
+ *
+ * So on screen the sheet is scaled by `min(1, available / sheet width)`, whole
+ * and in proportion, and never below a window wide enough for it — a desktop
+ * gets `scale(1)` and zero margins, which is the geometry it had before.
+ *
+ * Why each piece is the way it is:
+ *
+ *  · `transform`, NOT `zoom`. `zoom` was tried first and it REFLOWS the text:
+ *    at a phone's scale the editorial sheet's natural height measured 1282px
+ *    against 1256px unzoomed (grid 1432 vs 1387). `FitPage` measures that height
+ *    ON SCREEN and prints at the scale it derives, so `zoom` would have made a
+ *    phone print a different, smaller page from a laptop. A transform changes no
+ *    layout metric, so `FitPage`'s measurement — and the print density gates,
+ *    whose harness measures at a 780px window — see exactly what they saw.
+ *  · A transform leaves the layout box full size, so the negative right and
+ *    bottom margins give back what the scale took: without them the page keeps
+ *    an 816px-wide invisible box to the right and a band of empty space below
+ *    every sheet. The margin box comes out exactly the window's width, which is
+ *    also what lets the two-page layouts' flex centring land it at x = 0.
+ *  · `tan(atan2(a, b))` is how CSS divides one length by another to get a plain
+ *    number, and `scale()` needs a number. An engine without the trig functions
+ *    drops the whole declaration and renders the sheet as it did before this
+ *    rule existed, so the fallback is today's behaviour, never something worse.
+ *  · The gutter appears only when the sheet is shrunk (the `100000px` multiplier
+ *    turns any fit below 1 into the full gutter and exactly 1 into none), so a
+ *    desktop's left-aligned sheet does not move.
+ *
+ * `@media screen`, so print never sees it: the page size, `FitPage`'s scale and
+ * the page count are what they were.
+ */
+export const SCREEN_FIT_CSS = `
+	@media screen {
+		.agenda-page {
+			--screen-fit: min(1, tan(atan2(100vw - ${2 * SCREEN_FIT_GUTTER_PX}px, var(${SHEET_W_VAR}, ${PAGE_W}px))));
+			--screen-gutter: min(${SCREEN_FIT_GUTTER_PX}px, calc((1 - var(--screen-fit)) * 100000px));
+			transform: scale(var(--screen-fit));
+			transform-origin: top left;
+			margin-left: var(--screen-gutter);
+			margin-right: calc(var(${SHEET_W_VAR}, ${PAGE_W}px) * (var(--screen-fit) - 1) + var(--screen-gutter));
+			margin-bottom: calc(var(${SHEET_H_VAR}, ${PAGE_H}px) * (var(--screen-fit) - 1));
+		}
+	}
+`;
+
 export function printPageCss(
 	orientation: PageOrientation = "portrait",
 ): string {
 	return `
 	@media screen { body { background: #d8e6dd; } }
+	${SCREEN_FIT_CSS}
 	.pgwrap { padding: 28px 0; }
 	@media print {
 		.no-print { display: none !important; }
@@ -311,10 +387,17 @@ export function FitPage({
 	// PAGE_OUTER is the PORTRAIT sheet — every other property on it (the fills,
 	// the clip, the print-colour-adjust) is orientation-independent, so the box
 	// is overridden here rather than duplicated into a second style object.
-	const outer: React.CSSProperties =
-		orientation === "landscape"
-			? { ...PAGE_OUTER, width: sheetW, height: sheetH }
-			: PAGE_OUTER;
+	//
+	// The two custom properties are what `SCREEN_FIT_CSS` shrinks a sheet
+	// against on a narrow screen (#964). Set from the same `pageBox` as the box
+	// itself, so a landscape sheet is fitted as 1056px wide, not as 816.
+	const outer = {
+		...PAGE_OUTER,
+		width: sheetW,
+		height: sheetH,
+		[SHEET_W_VAR]: `${sheetW}px`,
+		[SHEET_H_VAR]: `${sheetH}px`,
+	} as React.CSSProperties;
 
 	return (
 		<div
