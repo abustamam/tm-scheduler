@@ -47,11 +47,15 @@ vi.mock("#/server/availability", () => ({
 	markUnavailableReleasing: vi.fn(async () => ({ ok: true, released: 1 })),
 }));
 vi.mock("#/server/attendance-plan", () => ({
-	setPlannedAttendance: vi.fn(async () => ({ ok: true })),
+	setPlannedAttendance: vi.fn(async () => ({ ok: true, confirmedRoles: [] })),
+}));
+vi.mock("sonner", () => ({
+	toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));
 
 const { markUnavailableReleasing } = await import("#/server/availability");
 const { setPlannedAttendance } = await import("#/server/attendance-plan");
+const { toast } = await import("sonner");
 const {
 	formatMeetingKeyLabel,
 	FullMeetingLink,
@@ -261,6 +265,92 @@ describe("PersonalMeetingBody — confirming attendance", () => {
 			data: expect.objectContaining({ status: "coming" }),
 		});
 		expect(screen.queryByText("Give up your role?")).toBeNull();
+	});
+
+	it("asks the server to confirm the member's roles, not bare setPlannedAttendance (#908)", async () => {
+		// The confirm nudge sends the member here to say yes. Before #908 this tap
+		// wrote the `coming` row and nothing else, so the slot stayed `claimed`
+		// and the officer read the reply as silence.
+		await renderBody(makeView());
+		await userEvent.click(
+			screen.getByRole("button", { name: "I'll be there" }),
+		);
+		expect(setPlannedAttendance).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				status: "coming",
+				confirmHeldRoles: true,
+			}),
+		});
+	});
+
+	it("asks for the confirm even when the cached view shows NO role (#908)", async () => {
+		// Rule 2 pointed at the yes: a role assigned after the page loaded must
+		// still be confirmed, so the request never depends on `view.roles` — the
+		// server resolves the claimed slots at write time.
+		await renderBody(makeView({ roles: [] }));
+		await userEvent.click(
+			screen.getByRole("button", { name: "Yes, I'm coming" }),
+		);
+		expect(setPlannedAttendance).toHaveBeenCalledWith({
+			data: expect.objectContaining({ confirmHeldRoles: true }),
+		});
+	});
+
+	it("says the role is confirmed only when the server flipped one (#908)", async () => {
+		vi.mocked(setPlannedAttendance).mockResolvedValueOnce({
+			ok: true,
+			changed: true,
+			released: 0,
+			confirmedRoles: ["Toastmaster"],
+		} as never);
+		await renderBody(makeView());
+		await userEvent.click(
+			screen.getByRole("button", { name: "I'll be there" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Great — you're confirmed as Toastmaster. See you there.",
+			),
+		);
+	});
+
+	it("keeps the plain thanks when nothing was confirmed (#908)", async () => {
+		// The control for the case above: the default mock confirms nothing, as
+		// for a member with no role or with only `confirmed` slots.
+		await renderBody(makeView());
+		await userEvent.click(
+			screen.getByRole("button", { name: "I'll be there" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith("Great — see you there."),
+		);
+	});
+
+	it("still lets an anon member who already said coming confirm their role (#908)", async () => {
+		// Every self-claim writes `coming`, and so did every "I'll be there"
+		// before #908 — so the member the confirm nudge is FOR usually arrives
+		// already answered. Re-sending the same answer is not a change under
+		// ADR-0026, so the yes stays; the no, which would be one, does not.
+		await renderBody(makeView({ planStatus: "coming" }));
+		await userEvent.click(
+			screen.getByRole("button", { name: "I'll be there" }),
+		);
+		expect(setPlannedAttendance).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				status: "coming",
+				confirmHeldRoles: true,
+			}),
+		});
+		expect(screen.queryByRole("button", { name: /Can't make it/ })).toBeNull();
+		expect(screen.getByText(/sign in to change your answer/i)).toBeTruthy();
+	});
+
+	it("offers no lone confirm to an anon member who said coming and holds nothing", async () => {
+		// The control: with no role there is nothing to confirm, so the
+		// already-answered page stays exactly as #762 left it.
+		await renderBody(makeView({ planStatus: "coming", roles: [] }));
+		expect(screen.queryByRole("button", { name: /coming/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /I'll be there/ })).toBeNull();
 	});
 
 	it("writes against the meeting UUID, not the URL segment", async () => {
@@ -488,7 +578,7 @@ describe("PersonalMeetingBody — in-flight answers (#676)", () => {
 		const d = deferred();
 		vi.mocked(setPlannedAttendance).mockImplementationOnce((async () => {
 			await d.promise;
-			return { ok: true };
+			return { ok: true, confirmedRoles: [] };
 		}) as never);
 		await renderBody(makeView());
 		await userEvent.click(

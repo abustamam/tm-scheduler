@@ -13,6 +13,7 @@ import {
 } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import { confirmHeldClaimedSlots } from "./slots-logic";
 import { requireSessionActor } from "./write-actor-logic";
 
 /**
@@ -81,6 +82,17 @@ const planSchema = z.object({
 	 * original.
 	 */
 	releaseHeldRoles: z.boolean().default(false),
+	/**
+	 * On `coming`: also confirm every role the member holds on this meeting that
+	 * is still `claimed` (#908) — the personal page's "I'll be there", which is
+	 * where the confirm nudge sends a member to say yes.
+	 *
+	 * `.default(false)` for `releaseHeldRoles`' reason, pointed the other way: a
+	 * tab open across the deploy sends the payload it always sent, and absent
+	 * means "record the answer", which is exactly what that client promised its
+	 * member. WHICH slots is never on the wire — see `confirmHeldClaimedSlots`.
+	 */
+	confirmHeldRoles: z.boolean().default(false),
 });
 
 /** Set a member's planned attendance for a meeting.
@@ -115,7 +127,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		// `attendance-decline.integration.test.ts`; the ladder resumed below still
 		// guards every other rung.
 		if (data.status === "not_coming") {
-			return declinePlannedAttendance(db, {
+			const declined = await declinePlannedAttendance(db, {
 				memberId: data.memberId,
 				meetingId: data.meetingId,
 				clubId: meeting.clubId,
@@ -127,6 +139,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 				releaseHeldRoles: data.releaseHeldRoles,
 				via: data.via,
 			});
+			return { ...declined, confirmedRoles: NONE_CONFIRMED };
 		}
 		const { actorMemberId, viaManager, via, proof } = await resolveActor({
 			clubId: meeting.clubId,
@@ -143,6 +156,27 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		if (!viaManager && data.status === "reached_out") {
 			throw new Error(OFFICER_ONLY_REACHED_OUT_MESSAGE);
 		}
+		// #908. Called only AFTER the answer below is recorded, and outside its
+		// write, so a slot that moved concurrently can never cost the member their
+		// `coming` — and a refused answer (an asserted caller changing a real one,
+		// ADR-0026) has already thrown, so it confirms nothing either.
+		//
+		// `actorMemberId === data.memberId`: only the member THEMSELVES confirms
+		// their roles. The holder arm credits the holder as `grantedVia: "self"`,
+		// so an officer or Toastmaster answering FOR someone must not reach it —
+		// that would file "Alice says Bob confirmed" under Bob's own name. A null
+		// actor (an impersonating superadmin) is not the member either.
+		const confirmIfAsked = async (): Promise<string[]> =>
+			data.status === "coming" &&
+			data.confirmHeldRoles &&
+			actorMemberId === data.memberId
+				? (
+						await confirmHeldClaimedSlots({
+							memberId: data.memberId,
+							meetingId: data.meetingId,
+						})
+					).confirmedRoles
+				: NONE_CONFIRMED;
 		// ONE return shape across both branches (#663). `released` is always
 		// present and 0 here, rather than absent, so a caller reading it does not
 		// have to narrow a union to find out whether anything was freed — the
@@ -174,7 +208,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 				proof: "asserted",
 				onlyIfAbsent: true,
 			});
-			return { ...filled, released: 0 };
+			return { ...filled, released: 0, confirmedRoles: await confirmIfAsked() };
 		}
 		const written = await setPlanStatus(db, {
 			...answer,
@@ -210,8 +244,12 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 					? ["reached_out"]
 					: undefined,
 		});
-		return { ...written, released: 0 };
+		return { ...written, released: 0, confirmedRoles: await confirmIfAsked() };
 	});
+
+/** The `confirmedRoles` of every branch that confirms nothing — present rather
+ *  than absent, for the reason `released` is. */
+const NONE_CONFIRMED: string[] = [];
 
 /** Clear a member's planned attendance back to "no answer" (row absent). */
 export const clearPlannedAttendance = createServerFn({ method: "POST" })
@@ -221,7 +259,12 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 		// here would put a flag on an endpoint that ignores it — which is how the
 		// next reader concludes the clear releases something.
 		planSchema
-			.omit({ status: true, via: true, releaseHeldRoles: true })
+			.omit({
+				status: true,
+				via: true,
+				releaseHeldRoles: true,
+				confirmHeldRoles: true,
+			})
 			.parse(i),
 	)
 	.handler(async ({ data }) => {

@@ -62,10 +62,12 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const {
+	confirmHeldClaimedSlots,
 	confirmSlotCore,
 	CONFIRM_NEEDS_SIGN_IN_MESSAGE,
 	NOT_THE_SLOT_HOLDER_MESSAGE,
 } = await import("./slots-logic");
+const { setPlanStatus } = await import("./attendance-plan-logic");
 const { NO_PERMISSION_MESSAGE } = await import("./guards");
 
 /** Exact-string matchers, so a case cannot pass on an unrelated throw. */
@@ -617,5 +619,148 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 				selfMemberId: seed.memberId,
 			}),
 		).rejects.toThrow(exact("Role not found."));
+	});
+
+	// -------------------------------------------------------------------------
+	// "I'll be there" on the personal page (#908)
+	//
+	// `setPlannedAttendance` records the answer and THEN calls
+	// `confirmHeldClaimedSlots`. The handler cannot be invoked from vitest, so
+	// `answerComing` replays its two writes in its order: the asserted
+	// fill-blank `coming` (the session-less nudge-link caller), then the
+	// confirm. The wiring itself — the order, the opt-in flag and the
+	// actor-is-the-member condition — is pinned by
+	// `attendance-plan-confirm-wiring.guard.test.ts`.
+	// -------------------------------------------------------------------------
+
+	async function answerComing(memberId: string) {
+		await setPlanStatus(testDb, {
+			memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			status: "coming",
+			actorMemberId: memberId,
+			grantedVia: "self",
+			proof: "asserted",
+			onlyIfAbsent: true,
+		});
+		return confirmHeldClaimedSlots({ memberId, meetingId: seed.meetingId });
+	}
+
+	it("I'll be there: the claimed slot is confirmed, one coming row, all self", async () => {
+		await claim(seed.memberId);
+
+		const { confirmedRoles } = await answerComing(seed.memberId);
+
+		expect(confirmedRoles).toHaveLength(1);
+		expect(await slotStatus()).toBe("confirmed");
+		expect(await planStatus(seed.memberId)).toBe("coming");
+		// ONE plan_set: the confirm's own plan write is floored past `coming`,
+		// so answering and confirming does not log the answer twice.
+		const plans = await logRows("plan_set");
+		expect(plans).toHaveLength(1);
+		expect(plans[0]?.detail).toMatchObject({ grantedVia: "self" });
+		const claims = await logRows("claim");
+		expect(claims).toHaveLength(1);
+		expect(claims[0]?.detail).toMatchObject({
+			confirmed: true,
+			grantedVia: "self",
+		});
+		// And the rail reads it as the member's own answer.
+		expect((await railRow(seed.memberId)).assumed).toBe(false);
+	});
+
+	it("confirms a slot assigned AFTER the page loaded", async () => {
+		// The page rendered showing one role; an officer then assigned a second.
+		// Nothing about the rendered view reaches the server, so both are found.
+		await claim(seed.memberId);
+		const later = await extraSlot();
+		await claim(seed.memberId, later);
+
+		const { confirmedRoles } = await answerComing(seed.memberId);
+
+		expect(confirmedRoles).toHaveLength(2);
+		expect(await slotStatus()).toBe("confirmed");
+		expect(await slotStatus(later)).toBe("confirmed");
+	});
+
+	it("confirms only the member's OWN claimed slots", async () => {
+		await claim(seed.memberId);
+		const theirs = await extraSlot();
+		await claim(otherMemberId, theirs);
+
+		await answerComing(seed.memberId);
+
+		expect(await slotStatus()).toBe("confirmed");
+		expect(await slotStatus(theirs)).toBe("claimed");
+		expect(await planStatus(otherMemberId)).toBeNull();
+	});
+
+	it("works standalone on a blank plan — the confirm writes the coming itself", async () => {
+		await claim(seed.memberId);
+
+		const { confirmedRoles } = await confirmHeldClaimedSlots({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+		});
+
+		expect(confirmedRoles).toHaveLength(1);
+		expect(await slotStatus()).toBe("confirmed");
+		expect(await planStatus(seed.memberId)).toBe("coming");
+		expect(await logRows("plan_set")).toHaveLength(1);
+	});
+
+	it("a member with no role gets only the plan row, and no error", async () => {
+		const { confirmedRoles } = await answerComing(otherMemberId);
+
+		expect(confirmedRoles).toEqual([]);
+		expect(await planStatus(otherMemberId)).toBe("coming");
+		expect(await logRows("claim")).toHaveLength(0);
+		expect(await logRows("plan_set")).toHaveLength(1);
+	});
+
+	it("an already-confirmed slot is left alone, with no error and no log", async () => {
+		await claim(seed.memberId);
+		await testDb
+			.update(roleSlots)
+			.set({ status: "confirmed" })
+			.where(eq(roleSlots.id, seed.slotId));
+
+		const { confirmedRoles } = await answerComing(seed.memberId);
+
+		expect(confirmedRoles).toEqual([]);
+		expect(await slotStatus()).toBe("confirmed");
+		expect(await logRows("claim")).toHaveLength(0);
+	});
+
+	it("an archived club refuses, even for a member holding nothing", async () => {
+		await claim(seed.memberId);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seed.clubId));
+
+		for (const memberId of [seed.memberId, otherMemberId]) {
+			await expect(
+				confirmHeldClaimedSlots({ memberId, meetingId: seed.meetingId }),
+			).rejects.toThrow(exact(CLUB_ARCHIVED_MESSAGE));
+		}
+		expect(await slotStatus()).toBe("claimed");
+	});
+
+	it("a completed meeting refuses, even for a member holding nothing", async () => {
+		await claim(seed.memberId);
+		await testDb
+			.update(meetings)
+			.set({ status: "completed" })
+			.where(eq(meetings.id, seed.meetingId));
+
+		for (const memberId of [seed.memberId, otherMemberId]) {
+			await expect(
+				confirmHeldClaimedSlots({ memberId, meetingId: seed.meetingId }),
+			).rejects.toThrow(exact(MEETING_LOCKED_MESSAGE));
+		}
+		expect(await slotStatus()).toBe("claimed");
+		expect(await planStatus(seed.memberId)).toBeNull();
 	});
 });

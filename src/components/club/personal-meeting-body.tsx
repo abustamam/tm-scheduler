@@ -201,14 +201,26 @@ export function PersonalMeetingBody({
 			setPending(coming ? "coming" : "release");
 			try {
 				if (coming) {
-					await setPlannedAttendance({
+					// `confirmHeldRoles` is unconditional — rule 2 again. The server
+					// resolves which slots are still `claimed` at write time (#908), so
+					// a role assigned after this page loaded is confirmed too, and a
+					// member with none gets exactly the plain answer.
+					const { confirmedRoles } = await setPlannedAttendance({
 						data: {
 							memberId: view.member.id,
 							meetingId: meetingUuid,
 							status: "coming",
+							confirmHeldRoles: true,
 						},
 					});
-					toast.success("Great — see you there.");
+					// From the RESPONSE, never from `view.roles`: it names what the
+					// server actually flipped, which is the only thing this toast may
+					// claim.
+					toast.success(
+						confirmedRoles.length > 0
+							? `Great — you're confirmed as ${listRoles(confirmedRoles)}. See you there.`
+							: "Great — see you there.",
+					);
 				} else if (canRelease) {
 					// Unconditional WITHIN this arm — see rule 1 in the header. The arm
 					// itself is chosen by the viewer's session, not by the view.
@@ -320,6 +332,31 @@ export function PersonalMeetingBody({
 							? "This meeting is finished, so answers are closed."
 							: "This meeting has passed, so answers are closed."}
 				</p>
+			) : !canAnswer && view.planStatus === "coming" && holdsRole ? (
+				// Answered `coming` with no session, and holding a role (#908). The
+				// answer cannot change from here, but re-sending the SAME answer is
+				// not a change (ADR-0026's fill-blank rule lets it through as a
+				// no-op) and it is what confirms the role. Without this, a member
+				// whose `coming` was recorded before their role was confirmed — every
+				// self-claim writes one, and so did every "I'll be there" before #908
+				// — lands from the confirm nudge on a page with nothing to tap.
+				// `holdsRole` only decides whether the button is OFFERED; stale in the
+				// "assigned since load" direction, it hides a button, never misfires.
+				<div className="space-y-2">
+					<Button
+						size="lg"
+						className="min-h-11 w-full sm:w-auto"
+						disabled={busy}
+						aria-busy={pending === "coming"}
+						onClick={() => void sendAnswer(true)}
+					>
+						I'll be there
+						{pending === "coming" ? <SavingIndicator /> : null}
+					</Button>
+					<p className="text-muted-foreground text-sm">
+						Sign in to change your answer.
+					</p>
+				</div>
 			) : !canAnswer ? (
 				// Answered already, with no session to change it. The ANSWER itself is
 				// above (`AnswerState`); this says what would let them change it, and
