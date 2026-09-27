@@ -1,21 +1,29 @@
 import { describe, expect, test } from "vitest";
 
 import {
+	blockedTag,
 	CITED_EXTENSIONS,
 	CITED_ROOT_FILES,
 	CITED_ROOTS,
 	extractDependencies,
 	extractIssueNumbersFromRef,
 	extractPaths,
+	type IssueState,
 	importCandidates,
 	isCitablePath,
 	isMigrationBearing,
 	isPriority,
+	issueStateQuery,
+	locateInPlan,
 	MIGRATION_LABEL,
+	openBlockers,
 	PRIORITY_LABEL,
+	parseIssueStates,
 	partitionClaimedIssues,
 	planBatches,
 	splitCitations,
+	stripQuotedText,
+	undispatchableWaves,
 } from "#/lib/issue-batching";
 
 /**
@@ -1263,5 +1271,280 @@ describe("extractDependencies", () => {
 			blockedBy: [],
 			blocks: [],
 		});
+	});
+});
+
+/**
+ * A body that QUOTES another issue's dependency line is not blocked by it.
+ * #967's own body had to be reworded because quoting #942's blocker line made
+ * #967 read as blocked too. Each shape is paired with the real line it must
+ * not swallow.
+ */
+describe("extractDependencies — quoted text is someone else's", () => {
+	test("a real dependency line still parses beside quoted ones", () => {
+		const body = [
+			"Blocked by #940",
+			"",
+			"> #942 says: Blocked by #939",
+			"The line reads `Blocked by #938` there.",
+		].join("\n");
+		expect(extractDependencies(body).blockedBy).toEqual([940]);
+	});
+
+	test("a blockquote line is skipped", () => {
+		expect(extractDependencies("> Blocked by #939").blockedBy).toEqual([]);
+		expect(extractDependencies("  > depends on #939").blockedBy).toEqual([]);
+	});
+
+	test("an inline code span is skipped, single or double backtick", () => {
+		expect(
+			extractDependencies("its body says `Blocked by #939`").blockedBy,
+		).toEqual([]);
+		expect(
+			extractDependencies("its body says ``Blocked by #939 `x` ``").blockedBy,
+		).toEqual([]);
+	});
+
+	test("a fenced block is skipped, backtick or tilde, and ends at its close", () => {
+		const body = [
+			"```",
+			"Blocked by #939",
+			"```",
+			"~~~md",
+			"Blocks #800",
+			"~~~",
+			"Depends on #940",
+		].join("\n");
+		expect(extractDependencies(body)).toEqual({
+			blockedBy: [940],
+			blocks: [],
+		});
+	});
+
+	test("an unclosed fence runs to the end of the body", () => {
+		expect(
+			extractDependencies("Requires #940\n```\nBlocked by #939").blockedBy,
+		).toEqual([940]);
+	});
+
+	test("a double-quoted span in prose is skipped, straight or curly", () => {
+		expect(
+			extractDependencies('#942\'s body says "Blocked by #939".').blockedBy,
+		).toEqual([]);
+		expect(
+			extractDependencies("it says \u201cblocked by #939\u201d").blockedBy,
+		).toEqual([]);
+	});
+
+	test("quoted text elsewhere on the line leaves a real phrase intact", () => {
+		expect(
+			extractDependencies('Blocked by #940 (the "schema" half)').blockedBy,
+		).toEqual([940]);
+	});
+
+	test("apostrophes are not quotes — text between two is kept", () => {
+		// Pairing single quotes would blank `s body… #942` and lose the phrase.
+		expect(
+			extractDependencies("#941's work lands, then this depends on #942's")
+				.blockedBy,
+		).toEqual([942]);
+	});
+
+	test("a quoted `blocks` line is not inverted onto its target either", () => {
+		expect(extractDependencies("> Blocks #533").blocks).toEqual([]);
+	});
+
+	test("unquoted prose reporting another issue still parses — the documented limit", () => {
+		// Nothing in the text separates a report from a statement. The SKILL.md
+		// and `stripQuotedText` both say to quote it instead.
+		expect(extractDependencies("#942 is blocked by #940").blockedBy).toEqual([
+			940,
+		]);
+	});
+
+	test("stripQuotedText keeps ordinary lines as they were", () => {
+		expect(stripQuotedText("one\ntwo #3")).toBe("one\ntwo #3");
+	});
+});
+
+/**
+ * #967: #942 printed alone in a wave with nothing on its line while both of
+ * its blockers sat in SERIAL, was paired with the first SERIAL issue because
+ * they shared no files, and was only stopped by its agent reading the body.
+ */
+describe("open blockers", () => {
+	const states = (open: number[], closed: number[] = []) => {
+		const o = new Set(open);
+		const c = new Set(closed);
+		return (n: number): IssueState =>
+			o.has(n) ? "open" : c.has(n) ? "closed" : "unknown";
+	};
+
+	test("openBlockers drops closed and unknown blockers, keeps order", () => {
+		expect(openBlockers([939, 940, 941, 5], states([940, 939], [941]))).toEqual(
+			[939, 940],
+		);
+	});
+
+	test("the tag names every open blocker, and is empty when there are none", () => {
+		expect(blockedTag([939, 940])).toBe("[BLOCKED BY #939, #940 — open]");
+		expect(blockedTag([])).toBe("");
+	});
+
+	test("a closed blocker is never tagged", () => {
+		expect(blockedTag(openBlockers([939], states([], [939])))).toBe("");
+	});
+
+	/** The shape that shipped: a wave issue whose blockers are both serial. */
+	const shipped = () => {
+		const serialFanIn = new Map([["src/db/schema.ts", 200]]);
+		const issues = [
+			{ number: 947, paths: ["src/db/schema.ts"] },
+			{ number: 940, paths: ["src/db/schema.ts"], migration: true },
+			{ number: 939, paths: ["src/db/schema.ts"], migration: true },
+			{ number: 942, paths: ["src/lib/nudge.ts"], blockedBy: [939, 940] },
+			{ number: 923, paths: ["src/server/pathways-read-logic.ts"] },
+		];
+		const plan = planBatches(issues, serialFanIn);
+		const blockedBy = new Map(issues.map((i) => [i.number, i.blockedBy ?? []]));
+		return { plan, blockedBy };
+	};
+
+	test("a WAVE issue blocked by SERIAL issues makes its wave undispatchable", () => {
+		const { plan, blockedBy } = shipped();
+		// The plan's ORDER was already right — that is not what broke.
+		expect(plan.serial).toEqual([947, 940, 939]);
+		expect(plan.batches).toEqual([[942, 923]]);
+		expect(plan.warnings).toEqual([]);
+
+		expect(
+			undispatchableWaves(plan, blockedBy, states([947, 940, 939, 942, 923])),
+		).toEqual([
+			{
+				wave: 1,
+				waiting: [
+					{
+						issue: 942,
+						blockers: [
+							{ issue: 939, where: "SERIAL" },
+							{ issue: 940, where: "SERIAL" },
+						],
+					},
+				],
+			},
+		]);
+	});
+
+	test("once the blockers close, the wave is dispatchable again", () => {
+		const { plan, blockedBy } = shipped();
+		expect(
+			undispatchableWaves(plan, blockedBy, states([947, 942, 923], [939, 940])),
+		).toEqual([]);
+	});
+
+	test("an unknown-state blocker holds no wave (it is warned about separately)", () => {
+		const { plan, blockedBy } = shipped();
+		expect(undispatchableWaves(plan, blockedBy, states([947]))).toEqual([]);
+	});
+
+	test("a blocker outside the plan, or held back, is still open and still blocks", () => {
+		const plan = planBatches(
+			[
+				{ number: 1, paths: ["src/a.ts"], blockedBy: [500] },
+				{ number: 2, paths: ["src/b.ts"], blockedBy: [600] },
+			],
+			new Map(),
+		);
+		const blockedBy = new Map([
+			[1, [500]],
+			[2, [600]],
+		]);
+		expect(
+			undispatchableWaves(
+				plan,
+				blockedBy,
+				states([1, 2, 500, 600]),
+				new Set([600]),
+			),
+		).toEqual([
+			{
+				wave: 1,
+				waiting: [
+					{ issue: 1, blockers: [{ issue: 500, where: "not in this plan" }] },
+					{
+						issue: 2,
+						blockers: [{ issue: 600, where: "already being worked" }],
+					},
+				],
+			},
+		]);
+	});
+
+	test("only the wave holding the blocked issue is flagged, numbered as printed", () => {
+		const plan = planBatches(
+			[
+				{ number: 1, paths: ["src/a.ts"] },
+				{ number: 2, paths: ["src/a.ts"], blockedBy: [1] },
+			],
+			new Map(),
+		);
+		expect(plan.batches).toEqual([[1], [2]]);
+		const result = undispatchableWaves(
+			plan,
+			new Map([[2, [1]]]),
+			states([1, 2]),
+		);
+		expect(result).toEqual([
+			{
+				wave: 2,
+				waiting: [{ issue: 2, blockers: [{ issue: 1, where: "WAVE 1" }] }],
+			},
+		]);
+	});
+
+	test("locateInPlan names every section", () => {
+		const plan = { serial: [1], batches: [[2], [3]], unknown: [4] };
+		const held = new Set([5]);
+		expect(locateInPlan(1, plan, held)).toBe("SERIAL");
+		expect(locateInPlan(3, plan, held)).toBe("WAVE 2");
+		expect(locateInPlan(4, plan, held)).toBe("not batched");
+		expect(locateInPlan(5, plan, held)).toBe("already being worked");
+		expect(locateInPlan(6, plan, held)).toBe("not in this plan");
+	});
+});
+
+/** Reading blocker state from GitHub, for blockers the label fetch missed. */
+describe("issue state lookup", () => {
+	test("the query aliases every number and asks for issues AND pull requests", () => {
+		const q = issueStateQuery([939, 969]);
+		expect(q).toContain("n939: issueOrPullRequest(number: 939)");
+		expect(q).toContain("n969: issueOrPullRequest(number: 969)");
+		expect(q).toContain("... on PullRequest { state }");
+	});
+
+	test("OPEN is open; CLOSED and MERGED are closed; unresolved is absent", () => {
+		// The shape `gh api graphql` printed for this repo on 2026-09-26, with
+		// a nonexistent number answered by null (and a non-zero exit).
+		const response = {
+			data: {
+				repository: {
+					n940: { state: "OPEN" },
+					n969: { state: "MERGED" },
+					n900: { state: "CLOSED" },
+					n99999: null,
+				},
+			},
+			errors: [{ type: "NOT_FOUND" }],
+		};
+		expect([...parseIssueStates(response, [940, 969, 900, 99999, 7])]).toEqual([
+			[940, "open"],
+			[969, "closed"],
+			[900, "closed"],
+		]);
+	});
+
+	test("a response with no repository yields nothing rather than throwing", () => {
+		expect(parseIssueStates({}, [1]).size).toBe(0);
+		expect(parseIssueStates(null, [1]).size).toBe(0);
 	});
 });

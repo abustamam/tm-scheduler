@@ -400,6 +400,53 @@ const matchAllNumbers = (body: string, patterns: RegExp[]): number[] =>
 		[...body.matchAll(re)].map(([, n]) => Number(n)).filter(Number.isFinite),
 	);
 
+/** A blockquote line: its text is someone else's, being reported. */
+const BLOCKQUOTE = /^[ \t]*>/;
+/**
+ * An inline code span: a run of backticks, then the same run again on the same
+ * line. The backreference is what lets ``a `nested` span`` close correctly.
+ */
+const CODE_SPAN = /(`+)[^\n]*?\1/g;
+/**
+ * A double-quoted span on one line, straight or curly. Single quotes are left
+ * alone: this repo's prose is full of apostrophes (`#942's body`), and pairing
+ * them would blank out real text between two possessives.
+ */
+const QUOTED_SPAN = /"[^"\n]*"|\u201c[^\u201d\n]*\u201d/g;
+
+/**
+ * The body with every span that QUOTES text removed: fenced blocks, blockquote
+ * lines, inline code spans and double-quoted spans.
+ *
+ * The dependency phrases are read from anywhere in a body, so an issue that
+ * reports ANOTHER issue's blocker line — "#942's body says `Blocked by #940`" —
+ * used to be read as blocked by #940 itself. #967's own body had to be
+ * reworded to avoid exactly that. A body states its own dependencies in plain
+ * prose; a span it quotes is somebody else's.
+ *
+ * What this cannot see: a dependency REPORTED in plain, unquoted prose ("#942
+ * is blocked by #940") still parses as this issue's own, because nothing in the
+ * text distinguishes it from a statement. Quote it, or write the number
+ * without its `#`.
+ *
+ * Fences are tracked with the same `FENCE` pattern `filesSection` uses, so the
+ * two readers agree on where a block starts and ends. An unclosed fence runs to
+ * the end of the body, as it renders on GitHub.
+ */
+export function stripQuotedText(body: string): string {
+	let fenced = false;
+	const kept: string[] = [];
+	for (const line of body.split("\n")) {
+		if (FENCE.test(line)) {
+			fenced = !fenced;
+			continue;
+		}
+		if (fenced || BLOCKQUOTE.test(line)) continue;
+		kept.push(line.replace(CODE_SPAN, " ").replace(QUOTED_SPAN, " "));
+	}
+	return kept.join("\n");
+}
+
 /**
  * The ordering constraints an issue body states in prose.
  *
@@ -410,20 +457,179 @@ const matchAllNumbers = (body: string, patterns: RegExp[]): number[] =>
  * Deliberately narrow. A bare `#630` anywhere in a body is a cross-reference,
  * not a dependency, and treating it as one would make almost every issue in
  * this repo look blocked by almost every other — the bodies here cite issue
- * numbers constantly.
+ * numbers constantly. For the same reason quoted text is skipped: see
+ * `stripQuotedText`.
  */
 export function extractDependencies(body: string): {
 	blockedBy: number[];
 	blocks: number[];
 } {
+	const own = stripQuotedText(body);
 	return {
-		blockedBy: [...new Set(matchAllNumbers(body, BLOCKED_BY_PATTERNS))].sort(
+		blockedBy: [...new Set(matchAllNumbers(own, BLOCKED_BY_PATTERNS))].sort(
 			(a, b) => a - b,
 		),
-		blocks: [...new Set(matchAllNumbers(body, BLOCKS_PATTERNS))].sort(
+		blocks: [...new Set(matchAllNumbers(own, BLOCKS_PATTERNS))].sort(
 			(a, b) => a - b,
 		),
 	};
+}
+
+// ---- open blockers -----------------------------------------------------------
+
+/**
+ * Whether an issue has landed, as far as the planner can tell.
+ *
+ * `unknown` is its own state rather than folding into either side: printing an
+ * unknown blocker as open could report a closed one, and dropping it silently
+ * is the failure this whole section exists to remove. The CLI prints unknowns
+ * in a warning of their own.
+ */
+export type IssueState = "open" | "closed" | "unknown";
+
+/**
+ * This issue's blockers that have NOT landed, in the order given.
+ *
+ * "Open" means OPEN ON GITHUB, not "in this plan": a blocker can be open while
+ * sitting outside the planned set entirely — still `needs-triage`, carrying a
+ * different label, or held back because someone is working it — and that is
+ * precisely the blocker the plan's ordering cannot protect you from. A closed
+ * blocker has landed (or been dropped) and is never reported. Neither is an
+ * unknown one; see `IssueState`.
+ */
+export function openBlockers(
+	blockers: readonly number[],
+	stateOf: (issue: number) => IssueState,
+): number[] {
+	return blockers.filter((b) => stateOf(b) === "open");
+}
+
+/**
+ * The inline tag for an issue's open blockers, or `""` when it has none.
+ *
+ * Printed on the issue's own line beside `[PRIORITY]` / `[MIGRATION — run
+ * alone]`, because the line is what a dispatcher copies into a brief. #942
+ * printed alone in wave 1 with nothing on its line, was paired with the first
+ * SERIAL issue because they shared no files, and its two blockers were both
+ * still in SERIAL (#967).
+ */
+export function blockedTag(open: readonly number[]): string {
+	if (open.length === 0) return "";
+	return `[BLOCKED BY ${open.map((n) => `#${n}`).join(", ")} — open]`;
+}
+
+/** Where a blocker sits relative to the printed plan, in the report's words. */
+export function locateInPlan(
+	issue: number,
+	plan: Pick<BatchPlan, "serial" | "batches" | "unknown">,
+	heldBack: ReadonlySet<number>,
+): string {
+	if (plan.serial.includes(issue)) return "SERIAL";
+	const wave = plan.batches.findIndex((b) => b.includes(issue));
+	if (wave !== -1) return `WAVE ${wave + 1}`;
+	if (heldBack.has(issue)) return "already being worked";
+	if (plan.unknown.includes(issue)) return "not batched";
+	return "not in this plan";
+}
+
+/** One wave issue that cannot start yet, and what it is waiting on. */
+export type WaitingIssue = {
+	issue: number;
+	blockers: { issue: number; where: string }[];
+};
+
+/** A wave that must not be dispatched yet, and why. */
+export type UndispatchableWave = {
+	/** 1-based, matching the printed `=== WAVE n` header. */
+	wave: number;
+	waiting: WaitingIssue[];
+};
+
+/**
+ * Waves that are not dispatchable NOW because an issue in them has an open
+ * blocker.
+ *
+ * The rule is deliberately the plain one — any open blocker, wherever it sits.
+ * A blocker in SERIAL is the case that shipped (#967): the plan's ORDER was
+ * right, SERIAL runs before wave 1, but nothing on the wave said so, and a wave
+ * issue sharing no files with the first SERIAL issue looked safe to pair with
+ * it. A blocker in an earlier wave, held back by someone else's worktree, or
+ * outside the plan altogether is equally unlanded, and the last is worse: no
+ * amount of following the plan's order will land it.
+ *
+ * A blocker in the SAME or a LATER wave is already a `DependencyWarning`; it is
+ * listed here too, because the wave is no more dispatchable for it.
+ */
+export function undispatchableWaves(
+	plan: Pick<BatchPlan, "serial" | "batches" | "unknown">,
+	blockedBy: ReadonlyMap<number, readonly number[]>,
+	stateOf: (issue: number) => IssueState,
+	heldBack: ReadonlySet<number> = new Set(),
+): UndispatchableWave[] {
+	const out: UndispatchableWave[] = [];
+	plan.batches.forEach((batch, i) => {
+		const waiting: WaitingIssue[] = [];
+		for (const issue of batch) {
+			const open = openBlockers(blockedBy.get(issue) ?? [], stateOf);
+			if (open.length === 0) continue;
+			waiting.push({
+				issue,
+				blockers: open.map((b) => ({
+					issue: b,
+					where: locateInPlan(b, plan, heldBack),
+				})),
+			});
+		}
+		if (waiting.length > 0) out.push({ wave: i + 1, waiting });
+	});
+	return out;
+}
+
+/**
+ * One GraphQL query reading the state of every listed issue or PR.
+ *
+ * `issueOrPullRequest` rather than `issue`: "blocked by #N" is written about
+ * PRs too, and `gh issue list` omits them — a blocker that is an open PR would
+ * read as closed and vanish from the report. Aliased `n<number>` so the answer
+ * can be keyed back without relying on field order. `{owner}` / `{repo}` are
+ * `gh api`'s own placeholders, passed as the two variables.
+ */
+export function issueStateQuery(numbers: readonly number[]): string {
+	const fields = numbers
+		.map(
+			(n) =>
+				`n${n}: issueOrPullRequest(number: ${n}) { ... on Issue { state } ... on PullRequest { state } }`,
+		)
+		.join(" ");
+	return `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${fields} } }`;
+}
+
+/**
+ * The states `issueStateQuery`'s response carries, keyed by number.
+ *
+ * A number the response does not resolve — nonexistent, a transfer, a partial
+ * error — is ABSENT from the map, which the caller reads as `unknown`. GraphQL
+ * answers a missing number with `null` plus an `errors` entry, and `gh` exits
+ * non-zero while still printing the rest of the data, so this is fed that
+ * output too rather than discarding a mostly-good answer.
+ *
+ * `MERGED` is closed: a merged PR has landed.
+ */
+export function parseIssueStates(
+	response: unknown,
+	numbers: readonly number[],
+): Map<number, "open" | "closed"> {
+	const repo = (response as { data?: { repository?: Record<string, unknown> } })
+		?.data?.repository;
+	const states = new Map<number, "open" | "closed">();
+	if (!repo || typeof repo !== "object") return states;
+	for (const n of numbers) {
+		const state = (repo[`n${n}`] as { state?: unknown } | null | undefined)
+			?.state;
+		if (state === "OPEN") states.set(n, "open");
+		else if (state === "CLOSED" || state === "MERGED") states.set(n, "closed");
+	}
+	return states;
 }
 
 /** An issue someone is already working, and the thing that says so. */

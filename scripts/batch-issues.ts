@@ -17,6 +17,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import {
+	blockedTag,
 	CITED_ROOT_FILES,
 	CITED_ROOTS,
 	DEFAULT_FAN_IN_THRESHOLD,
@@ -28,12 +29,17 @@ import {
 	type IssueClaim,
 	isCitablePath,
 	isMigrationBearing,
+	type IssueState,
+	issueStateQuery,
 	isPriority,
 	MIGRATION_LABEL,
+	openBlockers,
+	parseIssueStates,
 	partitionClaimedIssues,
 	planBatches,
 	PRIORITY_LABEL,
 	splitCitations,
+	undispatchableWaves,
 } from "../src/lib/issue-batching";
 
 const args = process.argv.slice(2);
@@ -316,6 +322,59 @@ function gatherClaims(): { claims: IssueClaim[]; skipped: string[] } {
 	return { claims, skipped };
 }
 
+// ---- blocker state ------------------------------------------------------------
+
+/** Aliases per GraphQL request. Well under GitHub's node limit, and rarely hit. */
+const STATE_QUERY_CHUNK = 50;
+
+/**
+ * GitHub's state for each number, for blockers the issue fetch did not return.
+ *
+ * The fetch above covers only the planned label, so a blocker still in
+ * `needs-triage` — open, and exactly the one the plan's order cannot land for
+ * you — would otherwise be indistinguishable from a closed one. A number that
+ * cannot be read stays out of the map and prints as unknown; see
+ * `IssueState`.
+ */
+function fetchIssueStates(numbers: number[]): Map<number, "open" | "closed"> {
+	const states = new Map<number, "open" | "closed">();
+	for (let i = 0; i < numbers.length; i += STATE_QUERY_CHUNK) {
+		const chunk = numbers.slice(i, i + STATE_QUERY_CHUNK);
+		let out: string;
+		try {
+			out = execFileSync(
+				"gh",
+				[
+					"api",
+					"graphql",
+					"-F",
+					"owner={owner}",
+					"-F",
+					"name={repo}",
+					"-f",
+					`query=${issueStateQuery(chunk)}`,
+				],
+				{
+					encoding: "utf8",
+					maxBuffer: 32 * 1024 * 1024,
+					stdio: ["ignore", "pipe", "ignore"],
+				},
+			);
+		} catch (e) {
+			// `gh` exits non-zero on a PARTIAL error (one nonexistent number) while
+			// still printing the rest of the answer; keep that answer.
+			out = String((e as { stdout?: unknown }).stdout ?? "");
+		}
+		try {
+			for (const [n, st] of parseIssueStates(JSON.parse(out), chunk))
+				states.set(n, st);
+		} catch {
+			// Unparseable: every number in the chunk stays unknown, and says so.
+		}
+	}
+	return states;
+}
+
 // ---- plan --------------------------------------------------------------------
 
 const citable = [
@@ -400,6 +459,20 @@ const stripControl = (s: string) =>
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
 	s.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 const titles = new Map(raw.map((i) => [i.number, stripControl(i.title ?? "")]));
+
+// Which blockers are still OPEN on GitHub. Every fetched issue is open by
+// construction (`--state open`); anything else is asked about once, in bulk.
+const blockedByIssue = new Map(issues.map((i) => [i.number, i.blockedBy]));
+const fetchedOpen = new Set(raw.map((i) => i.number));
+const outsideBlockers = [
+	...new Set(issues.flatMap((i) => i.blockedBy)),
+].filter((n) => !fetchedOpen.has(n));
+const outsideStates = fetchIssueStates(outsideBlockers);
+const stateOf = (n: number): IssueState =>
+	fetchedOpen.has(n) ? "open" : (outsideStates.get(n) ?? "unknown");
+const unknownBlockers = outsideBlockers.filter(
+	(n) => stateOf(n) === "unknown",
+);
 const pathsByIssue = new Map(issues.map((i) => [i.number, i.paths]));
 
 // Held back BEFORE planning rather than filtered out of the plan afterwards.
@@ -458,9 +531,14 @@ const line = (n: number) => {
 	// The two tags compose, and both can be true at once: `priority` says why
 	// this one is EARLY, `migration` says why it is ALONE. Reading either as the
 	// other is exactly the mistake the inline tag exists to prevent.
+	//
+	// The blocked tag is the third, and the one the order above it cannot stand
+	// in for: a wave issue whose blocker is still in SERIAL is correctly placed
+	// and still unsafe to pair with that SERIAL stage (#967).
 	const tags = [
 		priorityIssues.has(n) ? "[PRIORITY]" : "",
 		migrationIssues.has(n) ? "[MIGRATION — run alone]" : "",
+		blockedTag(openBlockers(blockedByIssue.get(n) ?? [], stateOf)),
 	].filter(Boolean);
 	const tag = tags.length > 0 ? `  ${tags.join("  ")}` : "";
 	return `  #${n}${tag}  ${titles.get(n) ?? ""}\n      ${filesOf(n)}`;
@@ -498,8 +576,33 @@ if (plan.serial.length > 0) {
 	console.log();
 }
 
+// Stated on the wave itself, not in a footer: the header is what a dispatcher
+// reads when deciding what to hand out, and the reason a wave is unsafe is
+// that its issues LOOK independent of everything above them.
+const heldBackNumbers = new Set(claimed.map((c) => c.issue.number));
+const notYet = new Map(
+	undispatchableWaves(plan, blockedByIssue, stateOf, heldBackNumbers).map(
+		(w) => [w.wave, w.waiting],
+	),
+);
+
 plan.batches.forEach((batch, i) => {
-	console.log(`=== WAVE ${i + 1} — ${batch.length} agents in parallel ===\n`);
+	const waiting = notYet.get(i + 1);
+	console.log(
+		`=== WAVE ${i + 1} — ${batch.length} agents in parallel` +
+			`${waiting ? " — ⚠️  NOT DISPATCHABLE YET" : ""} ===`,
+	);
+	if (waiting) {
+		console.log(
+			"    (an issue here waits on one still open — land it first, and do\n" +
+				"     not pair this wave with the stage that holds it)",
+		);
+		for (const w of waiting) {
+			const on = w.blockers.map((b) => `#${b.issue} (${b.where})`).join(", ");
+			console.log(`      #${w.issue} waits on ${on}`);
+		}
+	}
+	console.log();
 	for (const n of batch) console.log(line(n));
 	console.log();
 });
@@ -562,6 +665,17 @@ if (plan.warnings.length > 0) {
 		console.log(`  #${w.issue} ${how}.`);
 	}
 	console.log();
+}
+
+// A blocker whose state could not be read is shown NEITHER as open nor as
+// closed on the lines above — printing it as open could report one that has
+// landed — so it is named here instead of vanishing.
+if (unknownBlockers.length > 0) {
+	console.log(
+		`⚠️  Could not read the state of blocker(s) ${unknownBlockers.map((n) => `#${n}`).join(", ")}.\n` +
+			`    They are NOT tagged as open above, and no wave is held for them.\n` +
+			`    Check them by hand before dispatching anything they block.\n`,
+	);
 }
 
 // The migration signal is half-armed until the label exists. Said out loud,
