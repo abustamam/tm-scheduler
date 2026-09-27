@@ -128,6 +128,18 @@ export const DEFAULT_MAX_BATCH_SIZE = 4;
  * `extension` is the WXT sub-package: it has its own vitest and its own
  * `working-directory` in CI, but it is still one checkout and two agents
  * editing it collide normally.
+ *
+ * `.claude`, `.github`, `.githooks` and `public` were missing until #973, and a
+ * cited path under a missing root is not rejected but DROPPED: #967's
+ * `## Files` named `.claude/skills/dispatching-issue-waves/SKILL.md` and the
+ * plan printed its other three paths with no sign the fourth existed. Each is a
+ * place parallel agents really do collide — the project skills, `ci.yml`, the
+ * git hooks, and `public/sw.js`, which CLAUDE.md lists as a review risk
+ * category. `content` (the in-app resource articles) and the `pdf` extension
+ * came with them because the live backlog on 2026-09-26 cited
+ * `content/resources/what-is-pathways.md` and `public/role-sheets/grammarian.pdf`
+ * in `## Files` sections and lost both the same way. A dotted root cannot use the `\b` the others lead with (a `.` is
+ * not a word character), so `CITED_UNDER_ROOT` bounds those separately.
  */
 export const CITED_ROOTS = [
 	"src",
@@ -135,7 +147,25 @@ export const CITED_ROOTS = [
 	"docs",
 	"drizzle",
 	"extension",
+	"public",
+	"content",
+	".claude",
+	".github",
+	".githooks",
 ] as const;
+
+/**
+ * Directories under a root the walk must NOT descend into, and whose files are
+ * never citable.
+ *
+ * `.claude/worktrees/` holds every parallel agent's full checkout. Walking it
+ * would not merely be slow: each copy's `src/**` passes the extension filter
+ * and joins the FAN-IN graph, so every file's importer count is multiplied by
+ * the number of live worktrees and ordinary files cross the shared-helper
+ * threshold into SERIAL. Rejected in `isCitablePath` as well as pruned from the
+ * walk, so the two halves still cannot disagree.
+ */
+export const UNCITABLE_DIRS = [".claude/worktrees"] as const;
 
 /**
  * Extensions a cited path may end in.
@@ -145,7 +175,13 @@ export const CITED_ROOTS = [
  * fail its trailing word boundary. `sql` and `sh` share a first character but
  * neither prefixes the other, so their order is free. The constraint is pinned
  * by a test rather than by memory, because the symptom of breaking it is a
- * silently unbatchable issue and not an error.
+ * silently unbatchable issue and not an error. `json` ahead of `js` is the live
+ * case of it.
+ *
+ * `json`, `js` and `yml` arrived with the roots that need them (#973):
+ * `.github/workflows/ci.yml`, `public/sw.js`, `.claude/skills/…` alongside
+ * `extension/package.json`. A root whose files no extension matches is a root
+ * in name only.
  */
 export const CITED_EXTENSIONS = [
 	"tsx",
@@ -154,6 +190,10 @@ export const CITED_EXTENSIONS = [
 	"sh",
 	"css",
 	"md",
+	"json",
+	"js",
+	"yml",
+	"pdf",
 ] as const;
 
 /**
@@ -179,15 +219,14 @@ export const CITED_EXTENSIONS = [
  * had the opposite problem — it was in every diff — which is why it became one
  * `TODOS/<branch>.md` per branch, a shape no issue cites as a change set.
  *
- * `.github/workflows/ci.yml` has the same shape as these and is also NOT here:
- * the walk in `scripts/batch-issues.ts` skips every entry starting with `.`,
- * so it would be citable and then dropped as non-existent — worse than
- * invisible, because the issue would be reported as citing a path this
- * checkout lacks and told to `git pull`.
+ * `.github/workflows/ci.yml` is not here because it needs no allowlisting:
+ * `.github` is a root in `CITED_ROOTS` (#973), and the walk descends into each
+ * root by name, so its leading-`.` skip only applies to entries INSIDE a root.
  */
 export const CITED_ROOT_FILES = [
 	"CLAUDE.md",
 	"CONTEXT.md",
+	"CODING_STANDARDS.md",
 	"README.md",
 	"package.json",
 	"biome.json",
@@ -195,6 +234,14 @@ export const CITED_ROOT_FILES = [
 ] as const;
 
 const escapeLiteral = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * What `\b` means ahead of a word character, for a pattern that starts with a
+ * `.`: the previous character is not a word character. `\b` itself cannot say
+ * it there, because between a space and a `.` there is no word boundary at
+ * all, so `\b.claude/…` matches nothing in ordinary prose.
+ */
+const NOT_AFTER_WORD = "(?<![A-Za-z0-9_])";
 
 /**
  * A root directory, then anything under it: `src/lib/dcp.ts`.
@@ -218,9 +265,26 @@ const escapeLiteral = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * Literal inside a character class, so it needs no escape; the trailing `-`
  * stays last so it stays literal too.
  */
+const WORD_ROOTS = CITED_ROOTS.filter((r) => !r.startsWith("."));
+const DOT_ROOTS = CITED_ROOTS.filter((r) => r.startsWith("."));
 const CITED_UNDER_ROOT =
-	`(?:${CITED_ROOTS.join("|")})/[A-Za-z0-9_./$-]+` +
-	`\\.(?:${CITED_EXTENSIONS.join("|")})`;
+	`(?:\\b(?:${WORD_ROOTS.join("|")})` +
+	`|${NOT_AFTER_WORD}(?:${DOT_ROOTS.map(escapeLiteral).join("|")}))` +
+	`/[A-Za-z0-9_./$-]+` +
+	`\\.(?:${CITED_EXTENSIONS.join("|")})\\b`;
+
+/**
+ * A git hook: `.githooks/pre-commit`. Hooks have no extension, so the
+ * root-and-extension shape above cannot name one, and `.githooks` would be a
+ * root whose every real file is invisible.
+ *
+ * The trailing lookahead refuses a dot only when an extension-ish character
+ * follows it — `.githooks/pre-commit.sh` belongs to the branch above, while
+ * the full stop ending "edit `.githooks/pre-commit`." must not cost the cite.
+ */
+const CITED_HOOK =
+	`${NOT_AFTER_WORD}\\.githooks/[a-z]+(?:-[a-z]+)*` +
+	`(?![A-Za-z0-9_/$-]|\\.[A-Za-z0-9])`;
 
 /**
  * One of the allowlisted root files and nothing else: `CLAUDE.md`.
@@ -250,7 +314,7 @@ const CITED_ROOT_FILE =
  * start accepting `some junk CLAUDE.md`, which the walk feeds straight into
  * the existence check.
  */
-const CITED_PATH = `(?:\\b${CITED_UNDER_ROOT}\\b|${CITED_ROOT_FILE})`;
+const CITED_PATH = `(?:${CITED_UNDER_ROOT}|${CITED_HOOK}|${CITED_ROOT_FILE})`;
 
 /** Anywhere in prose, bounded on both sides. */
 const CITED_IN_PROSE = new RegExp(CITED_PATH, "g");
@@ -356,12 +420,61 @@ function filesSection(body: string): string | null {
  */
 export function extractPaths(body: string): string[] {
 	const section = filesSection(body);
+	// `isUncitableDir` filtered here as well as in `isCitablePath`, so the
+	// extractor cannot emit a path the walk refuses to produce.
 	const cited = (text: string) => [
-		...new Set(text.match(CITED_IN_PROSE) ?? []),
+		...new Set(
+			(text.match(CITED_IN_PROSE) ?? []).filter((p) => !isUncitableDir(p)),
+		),
 	];
 
 	const fromSection = section === null ? [] : cited(section);
 	return (fromSection.length > 0 ? fromSection : cited(body)).sort();
+}
+
+/** Characters that wrap a path in Markdown or prose rather than belong to it. */
+const PATH_WRAPPING = /^[`*_"'([<-]+|[`*_"')\]>,;:.!?]+$/g;
+/** `dir/file`, `dir/`, or a file with a letters-only extension of 2-5. */
+const PATH_SHAPED =
+	/^(?:[A-Za-z0-9_.$-]*\/[A-Za-z0-9_./$-]*|[A-Za-z0-9_$-]{2,}(?:\.[A-Za-z0-9_$-]+)*\.[A-Za-z]{2,5})$/;
+
+/**
+ * Path-shaped entries in an issue's `## Files` section that `extractPaths`
+ * did not read, so the batcher is not batching on them.
+ *
+ * `## Files` is the issue's own statement of its change set, so a path there
+ * that the citation pattern cannot name is a conflict surface lost without a
+ * word — #973 found `.claude/skills/…/SKILL.md` dropped exactly that way, from
+ * a plan that printed the other three paths as if they were all of them.
+ * Widening `CITED_ROOTS` fixed that root; this is what makes the NEXT one
+ * visible (`Dockerfile.dev`, `tsconfig.json`, a directory named instead of a
+ * file) rather than another silent drop.
+ *
+ * Only the `## Files` section is read. Across the whole body a path-shaped
+ * token is as likely to be prose as a change target, and flagging prose is the
+ * noise that teaches a reader to skip the line. An entry that CONTAINS a path
+ * `extractPaths` did read (`./src/x.ts`, `src/x.ts:12`) is covered by it and
+ * not reported, and neither is a URL. Two more shapes are skipped because
+ * MEASURED against the open backlog (2026-09-26) they were all noise: a bare
+ * filename that names a cited path's last segment ("`agenda.ts` is read, not
+ * edited"), and a directory (`drizzle/` for "a new migration"), which cannot
+ * be batched on whatever the pattern accepts and which the `migration` label
+ * already covers.
+ */
+export function unrecognisedFilesEntries(body: string): string[] {
+	const section = filesSection(body);
+	if (section === null) return [];
+	const cited = extractPaths(body);
+	const out = new Set<string>();
+	for (const raw of section.split(/\s+/)) {
+		const token = raw.replace(PATH_WRAPPING, "");
+		if (token === "" || token.includes("://")) continue;
+		if (!PATH_SHAPED.test(token) || token.endsWith("/")) continue;
+		if (cited.some((c) => token.includes(c) || c.endsWith(`/${token}`)))
+			continue;
+		out.add(token);
+	}
+	return [...out].sort();
 }
 
 /**
@@ -378,7 +491,12 @@ export function extractPaths(body: string): string[] {
  * there.
  */
 export function isCitablePath(path: string): boolean {
-	return CITED_WHOLE.test(path);
+	return CITED_WHOLE.test(path) && !isUncitableDir(path);
+}
+
+/** Whether `path` is, or sits under, one of `UNCITABLE_DIRS`. */
+export function isUncitableDir(path: string): boolean {
+	return UNCITABLE_DIRS.some((d) => path === d || path.startsWith(`${d}/`));
 }
 
 /** An issue's cited paths, split by whether this working tree has them. */

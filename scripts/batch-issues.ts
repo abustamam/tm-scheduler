@@ -29,6 +29,7 @@ import {
 	importCandidates,
 	type IssueClaim,
 	isCitablePath,
+	isUncitableDir,
 	isMigrationBearing,
 	type IgnoredDependency,
 	type IssueState,
@@ -42,6 +43,7 @@ import {
 	planBatches,
 	PRIORITY_LABEL,
 	splitCitations,
+	unrecognisedFilesEntries,
 	waveBlockers,
 } from "../src/lib/issue-batching";
 
@@ -81,8 +83,11 @@ function walk(dir: string, out: string[] = []): string[] {
 	for (const entry of readdirSync(dir)) {
 		if (entry === "node_modules" || entry.startsWith(".")) continue;
 		const full = join(dir, entry);
-		if (statSync(full).isDirectory()) walk(full, out);
-		else if (isCitablePath(full)) out.push(full);
+		if (statSync(full).isDirectory()) {
+			// Every parallel agent's checkout lives under `.claude/worktrees/`;
+			// descending would copy their `src/**` into the fan-in graph.
+			if (!isUncitableDir(full)) walk(full, out);
+		} else if (isCitablePath(full)) out.push(full);
 	}
 	return out;
 }
@@ -447,6 +452,10 @@ for (const i of raw) {
 // nothing, and telling it to "cite the files in the body" when the body
 // already does is the wrong instruction.
 const missingByIssue = new Map<number, string[]>();
+// `## Files` entries that are path-shaped but not citable (#973). Never part of
+// the conflict surface — they cannot be — so printing them is the only way the
+// reader learns the plan was built without them.
+const unrecognisedByIssue = new Map<number, string[]>();
 
 const issues = raw.map((i) => {
 	const { present: paths, missing } = splitCitations(
@@ -454,6 +463,8 @@ const issues = raw.map((i) => {
 		(p) => known.has(p),
 	);
 	if (missing.length > 0) missingByIssue.set(i.number, missing);
+	const unread = unrecognisedFilesEntries(i.body ?? "");
+	if (unread.length > 0) unrecognisedByIssue.set(i.number, unread);
 	const labels = (i.labels ?? []).map((l) => l.name);
 	return {
 		number: i.number,
@@ -538,15 +549,24 @@ const priorityIssues = new Set(
 const filesOf = (n: number): string => {
 	const paths = pathsByIssue.get(n) ?? [];
 	const missing = missingByIssue.get(n) ?? [];
+	const unread = unrecognisedByIssue.get(n) ?? [];
+	// Same reason as the absent half, one step earlier: a `## Files` entry the
+	// citation pattern cannot name never reached the existence check at all.
+	const unreadNote =
+		unread.length > 0
+			? `\n      (in ## Files, not a path the batcher reads: ${unread.join(", ")})`
+			: "";
 
 	if (missing.length === 0) {
-		return paths.length > 0 ? paths.join(", ") : "(no files cited)";
+		return (
+			(paths.length > 0 ? paths.join(", ") : "(no files cited)") + unreadNote
+		);
 	}
 
 	const absent = missing.join(", ");
 	if (paths.length === 0)
-		return `(cited, but absent from this checkout: ${absent})`;
-	return `${paths.join(", ")}\n      (also cited, absent from this checkout: ${absent})`;
+		return `(cited, but absent from this checkout: ${absent})${unreadNote}`;
+	return `${paths.join(", ")}\n      (also cited, absent from this checkout: ${absent})${unreadNote}`;
 };
 
 const line = (n: number) => {
