@@ -377,7 +377,9 @@ function PathBlock({
 	// The level the member is WORKING on (#898), not the lowest unapproved one:
 	// on a club without Base Camp nothing is ever approved, so `currentLevel`
 	// alone read "Level 1 · 4 of 4" forever. With nothing left anywhere and
-	// nothing approved yet, `currentLevel` is still the honest thing to show.
+	// nothing approved yet, `currentLevel` is still the honest thing to show on
+	// a Base Camp path. A fully marked catalog path is `complete` with both null
+	// (#923), so it reads "Path complete" with no chip marked as in progress.
 	const shownLevel = path.workingLevel ?? path.currentLevel;
 	return (
 		<div className="flex flex-col gap-4">
@@ -404,11 +406,12 @@ function PathBlock({
 				</div>
 			) : null}
 			<YourWins wins={path.wins} onUnmark={onUnmark} busyId={busyId} />
-			{/* Gated on the working level, not on `complete` (#898): `complete` is
-			    about approval, and a catalog path in Path Completion still has
-			    something next. Series still owed show regardless: Base Camp never
-			    counts them, so on a synced club its counts can leave no working
-			    level while this is the only place one can be ticked (#922). */}
+			{/* Gated on the working level, not on `complete` (#898): on a Base
+			    Camp path `complete` is about approval, which is a different
+			    question from whether anything is left. Series still owed show
+			    regardless: Base Camp never counts them, so on a synced club its
+			    counts can leave no working level while this is the only place
+			    one can be ticked (#922). */}
 			{(path.workingLevel !== null || path.upNextSeries.length > 0) && (
 				<UpNext
 					upNext={path.upNext}
