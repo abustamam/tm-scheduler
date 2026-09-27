@@ -34,9 +34,8 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { listClubMemberPathwaysFor, pathwaysByMember } = await import(
-	"./pathways-read-logic"
-);
+const { listClubMemberPathwaysFor, pathwaysByMember, pathwaysForMember } =
+	await import("./pathways-read-logic");
 const { startImpersonation, endImpersonation } = await import(
 	"./impersonation-logic"
 );
@@ -167,13 +166,15 @@ describe.skipIf(!hasTestDb)("roster Pathway column, former members", () => {
 		}
 	});
 
-	it("ignores it from an admin whose own membership has lapsed", async () => {
+	it("refuses a lapsed admin outright, before any flag is read", async () => {
 		await testDb
 			.update(members)
 			.set({ status: "inactive" })
 			.where(eq(members.id, club.adminMemberId));
 		try {
-			await expect(list(club.adminUserId, true)).rejects.toThrow();
+			await expect(list(club.adminUserId, true)).rejects.toThrow(
+				"You're not a member of this club.",
+			);
 		} finally {
 			await testDb
 				.update(members)
@@ -199,5 +200,67 @@ describe.skipIf(!hasTestDb)("roster Pathway column, former members", () => {
 		const readWrite = await list(su, true);
 		expect(readWrite[formerMemberId]?.[0]?.pathName).toBe("FORMER");
 		await endImpersonation(su);
+	});
+
+	describe("member page (pathwaysForMember)", () => {
+		const former = (viewer: string | null) =>
+			pathwaysForMember(club.clubId, formerMemberId, viewer);
+		const names = (paths: { pathName: string }[]) =>
+			paths.map((p) => p.pathName);
+
+		it("serves an ACTIVE member's paths to anyone, signed in or not", async () => {
+			for (const viewer of [null, club.memberUserId, club.adminUserId]) {
+				expect(
+					names(await pathwaysForMember(club.clubId, club.memberId, viewer)),
+				).toEqual(["ACTIVE"]);
+			}
+		});
+
+		it("withholds a former member's paths without a session", async () => {
+			expect(await former(null)).toEqual([]);
+		});
+
+		it("withholds them from a signed-in user with no access to the club", async () => {
+			expect(await former(await seedSuperadmin())).toEqual([]);
+		});
+
+		it("withholds them from a plain member", async () => {
+			expect(await former(club.memberUserId)).toEqual([]);
+		});
+
+		it("serves them to an admin", async () => {
+			expect(names(await former(club.adminUserId))).toEqual(["FORMER"]);
+		});
+
+		it("serves them to an elected officer whose stored role is member", async () => {
+			const [term] = await testDb
+				.insert(officerTerms)
+				.values({
+					membershipId: club.memberId,
+					position: "secretary",
+					termStart: new Date(Date.now() - 86_400_000),
+				})
+				.returning({ id: officerTerms.id });
+			try {
+				expect(names(await former(club.memberUserId))).toEqual(["FORMER"]);
+			} finally {
+				await testDb.delete(officerTerms).where(eq(officerTerms.id, term.id));
+			}
+		});
+
+		it("withholds them under View as this club, serves them under Act as admin", async () => {
+			const su = await seedSuperadmin();
+			await startImpersonation(su, { clubId: club.clubId });
+			expect(await former(su)).toEqual([]);
+			await endImpersonation(su);
+
+			await startImpersonation(su, {
+				clubId: club.clubId,
+				mode: "read_write",
+				reason: "checking a former member's record",
+			});
+			expect(names(await former(su))).toEqual(["FORMER"]);
+			await endImpersonation(su);
+		});
 	});
 });

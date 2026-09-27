@@ -21,9 +21,7 @@ import {
 	seriesRequiredAt,
 } from "#/lib/pathways-catalog";
 import { isReadableClub } from "./club-readable-logic";
-import { type ClubViewAccess, requireClubViewAccess } from "./guards";
-import { getActiveImpersonation } from "./impersonation-logic";
-import { getOpenOfficerPositions } from "./officers-logic";
+import { mayRevealFormerMembers, requireClubViewAccess } from "./guards";
 import { resolveUserPersonId } from "./person-identity-logic";
 
 export interface SyncedLevel {
@@ -970,18 +968,33 @@ export async function pathwaysForPerson(
 	return [...byPath.values()].map(buildPathViewModel);
 }
 
-/** Resolve the person for a roster member, then their paths. */
+/**
+ * Resolve the person for a roster member, then their paths.
+ *
+ * An ACTIVE member's paths are a PUBLIC read (#544): `getMemberPathways`
+ * requires no session. A FORMER (inactive) member's are not: they are returned
+ * only when `viewerUserId` passes `mayRevealFormerMembers`, the rule the
+ * roster's Pathway column follows, and are otherwise `[]`. An enrollment
+ * carries no club, so this person's whole record, including progress made at
+ * clubs they joined later, is otherwise one membership id away (#958).
+ */
 export async function pathwaysForMember(
 	clubId: string,
 	memberId: string,
+	viewerUserId: string | null = null,
 ): Promise<PathViewModel[]> {
-	// PUBLIC read (#544): `getMemberPathways` takes no session.
 	if (!(await isReadableClub(clubId))) return [];
 	const [m] = await db
-		.select({ personId: members.personId })
+		.select({ personId: members.personId, status: members.status })
 		.from(members)
 		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)));
 	if (!m) return [];
+	if (
+		m.status !== "active" &&
+		!(await viewerMayRevealFormerMembers(viewerUserId, clubId))
+	) {
+		return [];
+	}
 	return pathwaysForPerson(m.personId);
 }
 
@@ -1011,7 +1024,7 @@ export async function pathwaysForUser(
  * from a former member's Pathways record, including progress made at clubs
  * they joined afterwards, to the club they left. Only
  * `listClubMemberPathwaysFor` passes `includeInactive`, and only after
- * `mayRevealFormerMembersPathways` says yes.
+ * `mayRevealFormerMembers` (guards.ts) says yes.
  */
 export async function pathwaysByMember(
 	clubId: string,
@@ -1203,39 +1216,12 @@ export async function pathwaysByMember(
 }
 
 /**
- * May this viewer see FORMER (inactive) members' Pathways on the roster?
- *
- * An officer or admin of the club, the same people `requireClubRole(…,
- * ["admin"])` admits: a real ACTIVE membership whose stored role is `admin` or
- * that holds any open officer term (#202), or a superadmin under a
- * `read_write` ("Act as admin") impersonation of this club. A `read_only`
- * session ("View as this club") is refused, as the club export refuses it
- * (#958), because it shows the club as a member sees it.
- *
- * Takes the `ClubViewAccess` the read gate already resolved rather than
- * calling `requireClubRole`, which is a WRITE guard: its impersonation arm
- * marks the request as an impersonated write for activity attribution.
- */
-export async function mayRevealFormerMembersPathways(
-	userId: string,
-	clubId: string,
-	access: ClubViewAccess,
-): Promise<boolean> {
-	if (access.membership) {
-		if (access.membership.clubRole === "admin") return true;
-		return (await getOpenOfficerPositions(db, access.membership.id)).length > 0;
-	}
-	const session = await getActiveImpersonation(userId, clubId);
-	return session?.mode === "read_write";
-}
-
-/**
  * The roster's Pathway column: every member's paths, keyed by membership id.
  *
  * Any viewer of the club (`requireClubViewAccess`) gets ACTIVE members only.
  * `includeFormer` is a REQUEST, not a grant: it takes effect only when
- * `mayRevealFormerMembersPathways` agrees, and is otherwise ignored, so a plain
- * member who sets it gets exactly what they would have got without it.
+ * `mayRevealFormerMembers` (guards.ts) agrees, and is otherwise ignored, so a
+ * plain member who sets it gets exactly what they would have got without it.
  */
 export async function listClubMemberPathwaysFor(
 	userId: string,
@@ -1243,9 +1229,28 @@ export async function listClubMemberPathwaysFor(
 ): Promise<Record<string, PathViewModel[]>> {
 	const access = await requireClubViewAccess(userId, input.clubId);
 	const includeInactive =
-		input.includeFormer === true &&
-		(await mayRevealFormerMembersPathways(userId, input.clubId, access));
+		input.includeFormer === true && (await mayRevealFormerMembers(access));
 	return Object.fromEntries(
 		await pathwaysByMember(input.clubId, { includeInactive }),
 	);
+}
+
+/**
+ * Whether `viewerUserId` may see a former member's record at this club: a
+ * signed-in viewer with club view access who passes `mayRevealFormerMembers`.
+ * No session, no view access, or any failure resolving it answers false, so
+ * the record is withheld rather than served.
+ */
+async function viewerMayRevealFormerMembers(
+	viewerUserId: string | null,
+	clubId: string,
+): Promise<boolean> {
+	if (!viewerUserId) return false;
+	try {
+		return await mayRevealFormerMembers(
+			await requireClubViewAccess(viewerUserId, clubId),
+		);
+	} catch {
+		return false;
+	}
 }

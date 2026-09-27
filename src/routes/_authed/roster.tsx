@@ -157,6 +157,8 @@ interface RosterRow {
 	inviteState: InviteState;
 	/** Roster membership status (renewal): active vs unrenewed/inactive. */
 	membershipStatus: "active" | "inactive";
+	/** A former member whose Pathways this view does not show (#958). */
+	pathwayWithheld: boolean;
 	/** Compact label for the member's first synced Pathway, or null if none synced. */
 	pathwayLabel: string | null;
 	/**
@@ -203,15 +205,15 @@ function Roster() {
 		activeClubId,
 		officerPositions,
 	});
-	// Who gets the "Show former members' Pathways" control: the client half of
-	// `mayRevealFormerMembersPathways`, which the server fn enforces on its own.
-	// `exportLinkAllowed` is the same read-only-impersonation test the export
-	// link uses: "View as this club" passes every client admin check, and the
-	// server refuses it here exactly as the export route does.
-	const mayShowFormerPathways =
+	// An admin the admin-only server paths will actually serve: `canManage`,
+	// minus "View as this club". That read-only session passes every client
+	// admin check (`getAuthContext` surfaces it as `clubRole: "admin"`) while
+	// the export route and `mayRevealFormerMembers` both refuse it. Gates the
+	// export link and the "Show former members' Pathways" control alike; the
+	// server enforces each on its own.
+	const servedAsAdmin =
 		!!clubId && canManage && exportLinkAllowed(impersonating, clubId);
-	const showFormerPathways =
-		mayShowFormerPathways && formerPathwaysRequested === true;
+	const showFormerPathways = servedAsAdmin && formerPathwaysRequested === true;
 	const [seg, setSeg] = useState<SegKey>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
 	const [importOpen, setImportOpen] = useState(false);
@@ -227,6 +229,7 @@ function Roster() {
 	// Identity, tenure, speeches, membership status and Pathways progress are all real.
 	const rows: RosterRow[] = members.map((m) => {
 		const joined = m.joinedAt ?? m.createdAt;
+		const pathwayWithheld = m.status === "inactive" && !showFormerPathways;
 		return {
 			id: m.id,
 			name: m.name,
@@ -242,12 +245,12 @@ function Roster() {
 			phone: m.phone,
 			inviteState: inviteStateOf({ userId: m.userId, invitedAt: m.invitedAt }),
 			membershipStatus: m.status,
+			pathwayWithheld,
 			// The server already leaves a former member's paths out unless an
 			// officer opted in; this keeps the cell honest if it ever sends them.
-			pathwayLabel:
-				m.status === "inactive" && !showFormerPathways
-					? null
-					: pathwayLabelFor(pathways[m.id] ?? []),
+			pathwayLabel: pathwayWithheld
+				? null
+				: pathwayLabelFor(pathways[m.id] ?? []),
 			holdsOffice: m.officerPositions.length > 0,
 		};
 	});
@@ -303,11 +306,10 @@ function Roster() {
 				</div>
 				<div className="flex gap-2">
 					{/* A plain link to the export route (#915), shown only to whoever
-					    the route will serve: `canManage` is `effectiveAdminClub`, the
-					    client half of the route's `requireClubRole(…, ["admin"])`, and
-					    `exportLinkAllowed` drops "View as this club", which that guard
-					    refuses. It replaced an "Export CSV" button with no action. */}
-					{clubId && canManage && exportLinkAllowed(impersonating, clubId) ? (
+					    the route will serve (`servedAsAdmin`, above): the client half of
+					    the route's `requireClubRole(…, ["admin"])`, minus "View as this
+					    club", which that guard refuses. It replaced an "Export CSV" button with no action. */}
+					{clubId && servedAsAdmin ? (
 						<Button asChild variant="outline" size="sm">
 							<a href={clubExportUrl(clubId)} download>
 								<Download aria-hidden />
@@ -379,7 +381,7 @@ function Roster() {
 						onSelect={() => setSeg(s.key)}
 					/>
 				))}
-				{mayShowFormerPathways ? (
+				{servedAsAdmin ? (
 					<label className="ml-auto inline-flex cursor-pointer items-center gap-2 text-sm text-[var(--sea-ink-soft)]">
 						<input
 							type="checkbox"
@@ -507,11 +509,7 @@ function Roster() {
 								{m.pathwayLabel ??
 									// An officer is told the column is hidden, not empty; anyone
 									// else sees the ordinary "no paths" dash.
-									(m.membershipStatus === "inactive" &&
-									mayShowFormerPathways &&
-									!showFormerPathways
-										? "Hidden"
-										: "—")}
+									(m.pathwayWithheld && servedAsAdmin ? "Hidden" : "—")}
 							</div>
 
 							{/* Phone. LIVE only when there is a link to click — the

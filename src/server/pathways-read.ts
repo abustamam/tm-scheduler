@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireUser } from "./guards";
+import { getSessionUser, requireUser } from "./guards";
 import {
 	listClubMemberPathwaysFor,
 	type PathViewModel,
@@ -21,11 +21,17 @@ const memberSchema = z.object({
 	memberId: z.string().uuid(),
 });
 
-/** A roster member's paths (member-detail tab). Public read — roster is auth-decoupled. */
+/**
+ * A roster member's paths (member-detail tab). Public read for an ACTIVE
+ * member — the roster is auth-decoupled. A former member's paths follow the
+ * roster's rule, which needs the viewer, so the session is read (never
+ * required) and handed down; `pathwaysForMember` answers `[]` without one.
+ */
 export const getMemberPathways = createServerFn({ method: "GET" })
 	.validator((i: unknown) => memberSchema.parse(i))
 	.handler(async ({ data }): Promise<PathViewModel[]> => {
-		return pathwaysForMember(data.clubId, data.memberId);
+		const viewer = await getSessionUser();
+		return pathwaysForMember(data.clubId, data.memberId, viewer?.id ?? null);
 	});
 
 const clubSchema = z.object({

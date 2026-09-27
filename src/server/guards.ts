@@ -6,7 +6,10 @@ import { auth } from "#/lib/auth";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
 import { markImpersonatedWrite } from "./impersonation-actor";
-import { getActiveImpersonation } from "./impersonation-logic";
+import {
+	type ActiveImpersonation,
+	getActiveImpersonation,
+} from "./impersonation-logic";
 import {
 	type MeetingAgendaAuthz,
 	resolveMeetingAgendaAuthz,
@@ -413,6 +416,44 @@ export interface ClubViewAccess {
 	impersonating: boolean;
 	/** The real membership when `via === "member"`; null when impersonating. */
 	membership: Awaited<ReturnType<typeof getMembership>> | null;
+	/** The session's mode when `via === "impersonation"`; null for a member.
+	 *  Carried from the lookup the gate already made, so a caller asking
+	 *  "read-only or act-as-admin?" does not query the session a second time. */
+	impersonationMode: ActiveImpersonation["mode"] | null;
+}
+
+/** Stored `admin`, or any open officer term (#202): every officer is a full
+ *  admin. The one statement of that rule for a resolved active membership on
+ *  the read side. */
+async function holdsAdminAuthority(
+	membership: RealMembership,
+): Promise<boolean> {
+	if (membership.clubRole === "admin") return true;
+	return (await getOpenOfficerPositions(db, membership.id)).length > 0;
+}
+
+/**
+ * May this viewer see a FORMER (inactive) member's Pathways record? An enrollment
+ * belongs to a person and carries no club, so a lapsed membership is the only
+ * thing tying that record, including progress made at clubs joined later, to
+ * this one (#958). Read by the roster's opt-in and by the member page.
+ *
+ * Takes the grant `requireClubViewAccess` already resolved, and follows the
+ * same precedence as `requireClubRole` and the club export: a real active
+ * membership decides first, and passes when it holds admin authority. Only a
+ * viewer with NO active membership reaches the impersonation arm, where
+ * `read_write` ("Act as admin") passes and `read_only` ("View as this club")
+ * does not. So a superadmin who is also an officer here passes on their
+ * membership, whatever session they hold.
+ *
+ * Not `requireClubRole`: that is a write guard, and its impersonation arm marks
+ * the request as an impersonated write for activity attribution.
+ */
+export async function mayRevealFormerMembers(
+	access: ClubViewAccess,
+): Promise<boolean> {
+	if (access.membership) return holdsAdminAuthority(access.membership);
+	return access.impersonationMode === "read_write";
 }
 
 /**
@@ -450,6 +491,7 @@ async function grantView(
 	clubId: string,
 	via: ClubViewAccess["via"],
 	membership: RealMembership | null,
+	impersonationMode: ClubViewAccess["impersonationMode"] = null,
 ): Promise<ClubViewAccess> {
 	// The member arm reads the row it already resolved; only the memberless
 	// impersonation arm has to ask the database (#566). Both reject — which arm you
@@ -459,7 +501,12 @@ async function grantView(
 	} else {
 		await assertClubNotArchived(clubId);
 	}
-	return { via, impersonating: via === "impersonation", membership };
+	return {
+		via,
+		impersonating: via === "impersonation",
+		membership,
+		impersonationMode: membership ? null : impersonationMode,
+	};
 }
 
 /**
@@ -478,8 +525,9 @@ export async function requireClubViewAccess(
 	if (membership && membership.status === "active") {
 		return grantView(clubId, "member", membership);
 	}
-	if (await getActiveImpersonation(userId, clubId)) {
-		return grantView(clubId, "impersonation", null);
+	const session = await getActiveImpersonation(userId, clubId);
+	if (session) {
+		return grantView(clubId, "impersonation", null, session.mode);
 	}
 	throw new Error("You're not a member of this club.");
 }
@@ -497,16 +545,16 @@ export async function requireClubAdminView(
 	clubId: string,
 ): Promise<ClubViewAccess> {
 	const membership = await getMembership(userId, clubId);
-	if (membership && membership.status === "active") {
-		if (membership.clubRole === "admin") {
-			return grantView(clubId, "member", membership);
-		}
-		if ((await getOpenOfficerPositions(db, membership.id)).length > 0) {
-			return grantView(clubId, "member", membership);
-		}
+	if (
+		membership &&
+		membership.status === "active" &&
+		(await holdsAdminAuthority(membership))
+	) {
+		return grantView(clubId, "member", membership);
 	}
-	if (await getActiveImpersonation(userId, clubId)) {
-		return grantView(clubId, "impersonation", null);
+	const session = await getActiveImpersonation(userId, clubId);
+	if (session) {
+		return grantView(clubId, "impersonation", null, session.mode);
 	}
 	throw new Error("You don't have permission to view this club.");
 }
