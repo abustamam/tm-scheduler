@@ -223,7 +223,7 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The eleven browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The twelve browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -319,7 +319,15 @@ dump flaked ~1 run in 3, because virtual time fast-forwards while an image decod
 thread and Chrome dumped the page before the export finished, at any budget. Reach for the pipe
 whenever the thing under test is asynchronous work the page does not look busy doing.
 
-It also added test-only dependencies (`jsqr`, `pngjs`); everything below about Chrome itself still
+`src/components/agenda/print-screen-fit-geometry.test.tsx` (#964) is the twelfth: at 375px every
+agenda layout and the landscape poster must sit on screen with no sideways scroll or blank band,
+`FitPage` must measure the same height as on a desktop, and 820, 848 and 1280px must match the
+pre-fix control exactly. Pages load in a 375px IFRAME because headless Chrome will not size a window
+below 500px. `SCREEN_FIT_CSS` is a `transform`, not `zoom`, because `zoom` reflows the text `FitPage`
+measures and a phone would print a smaller page. `print-screen-fit.test.tsx` (jsdom) is its
+companion, checking the component writes the `--sheet-w` / `--sheet-h` the geometry cases assume.
+
+The flyer suites also added test-only dependencies (`jsqr`, `pngjs`); everything below about Chrome itself still
 holds. No new dependency for Chrome: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
 `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
 With none present those tests **skip locally**, so `bun run test` still works for someone without a
@@ -331,7 +339,7 @@ diagnosable. Beside that job's ONLY — the `extension` job is `working-director
 runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
 same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
-**On macOS all eleven skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+**On macOS all twelve skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
 puts nothing on `PATH` under any of those four binary names — that is the `CHROME_BINARIES`
 lookup list, which is still four, and not the suite count above. This is a macOS-only gap: on Linux, where this
 repo is usually developed, `google-chrome` resolves and these gates run locally as normal. Do NOT

@@ -67,12 +67,116 @@ export function pageBox(orientation: PageOrientation = "portrait"): {
 }
 
 /**
+ * The sheet's box as CSS custom properties, which `FitPage` sets inline on every
+ * `.agenda-page` and `SCREEN_FIT_CSS` reads. A variable rather than a second
+ * rule per orientation, so the stylesheet stays orientation-independent outside
+ * its `@page` rule (`print-page-reset.guard.test.ts` holds that).
+ *
+ * `--sheet-h` is the height the sheet actually RENDERS at, not the page box: a
+ * sheet `FitPage` has let flow is taller than `PAGE_H`, and the screen fit's
+ * negative bottom margin has to give back the scaled share of all of it, or a
+ * phone scrolls through a blank band below a long contest agenda.
+ */
+export const SHEET_W_VAR = "--sheet-w";
+export const SHEET_H_VAR = "--sheet-h";
+
+/**
+ * The gap `SCREEN_FIT_CSS` leaves each side of a sheet it has shrunk. 16px and
+ * not less, because it doubles as the allowance for a classic scrollbar: `100vw`
+ * INCLUDES the scrollbar, so on a narrow desktop window a smaller gutter puts the
+ * sheet's right edge under it (measured: an 8px gutter left 7px of a 375px-wide
+ * sheet behind a 15px scrollbar). Phones draw overlay scrollbars and lose nothing.
+ */
+export const SCREEN_FIT_GUTTER_PX = 16;
+
+/**
+ * SCREEN ONLY: shrink a sheet wider than the window so all of it is visible
+ * (#964).
+ *
+ * A sheet is a fixed 816px box (`PAGE_OUTER`), laid out at page width because
+ * that is what prints. On a 375px phone it was wider than the screen, and
+ * nothing was scrollable to reach the rest: the two-page layouts centre their
+ * sheets in a flex column, so both edges spilled past the viewport and the left
+ * one landed at a NEGATIVE x no scroll can reach (measured: -228px at 375 wide),
+ * while `styles.css` gives `body` `overflow-x: hidden`, which takes the right
+ * edge of the one-page layouts too.
+ *
+ * So on screen a sheet is scaled, whole and in proportion, by
+ *
+ *     1                                   when 100vw >= the sheet's width
+ *     (100vw - 2 * gutter) / sheet width  when it is narrower
+ *
+ * A window the sheet already fitted renders exactly as it did before this
+ * rule — `scale(1)`, zero margins — including the 816-847px band (portrait
+ * iPads are 820 and 834) where a plain `min(1, (100vw - gutter) / width)` would
+ * have shrunk it by a few percent for no reason. The step between the two
+ * branches is `--screen-fits`, 1 or 0: `(100vw - width + 1px) * 1000 / width`
+ * clamped to [0, 1], which is 0 a pixel short of the width and past 1 at it.
+ *
+ * Why each piece is the way it is:
+ *
+ *  · `transform`, NOT `zoom`. `zoom` was tried first and it REFLOWS the text:
+ *    at a phone's scale the editorial sheet's natural height measured 1282px
+ *    against 1256px unzoomed (grid 1432 vs 1387). `FitPage` measures that height
+ *    ON SCREEN and prints at the scale it derives, so `zoom` would have made a
+ *    phone print a different, smaller page from a laptop. A transform changes no
+ *    layout metric, so `FitPage`'s measurement — and the print density gates,
+ *    whose harness measures at a 780px window — see exactly what they saw.
+ *  · A transform leaves the layout box full size, so the negative right and
+ *    bottom margins give back what the scale took: without them the page keeps
+ *    an 816px-wide invisible box to the right and a band of empty space below
+ *    every sheet. The margin box comes out exactly the window's width, which is
+ *    also what lets the two-page layouts' flex centring land it at x = 0.
+ *  · `tan(atan2(a, b))` is how CSS divides one length by another to get a plain
+ *    number, and `scale()` needs a number.
+ *  · `inline-block`, because a BLOCK sheet's negative bottom margin collapses
+ *    through every ancestor without padding or a border — the editorial and grid
+ *    sheets sit in exactly such a chain — and a collapsed margin leaves the
+ *    ancestors full height: measured, a 375px document stayed 1056px tall below
+ *    a 444px sheet. An inline-level box's margins never collapse. `top` keeps
+ *    the line box from adding a descender gap under it. (The two-page layouts
+ *    and the poster are flex items, which are blockified and never collapsed.)
+ *  · The gutter appears only when the sheet is shrunk (the `100000px` multiplier
+ *    turns any fit below 1 into the full gutter and exactly 1 into none), so a
+ *    desktop's left-aligned sheet does not move.
+ *
+ * On an engine without the trig functions these declarations do NOT fail at
+ * parse time — anything containing `var()` is accepted there — but at
+ * computed-value time, where each becomes `unset`: `transform: none` and all
+ * three margins 0. That renders the sheet exactly as before this rule, but it
+ * also means a margin anyone later gives `.agenda-page` from a stylesheet is
+ * WIPED on those engines, since this rule is what sets them. Put a sheet's
+ * spacing on its wrapper, not on the sheet.
+ *
+ * `@media screen`, so print never sees it: the page size, `FitPage`'s scale and
+ * the page count are what they were (rasterised print output diffed identical).
+ */
+export const SCREEN_FIT_CSS = `
+	@media screen {
+		.agenda-page {
+			--screen-fits: clamp(0, tan(atan2((100vw - var(${SHEET_W_VAR}, ${PAGE_W}px) + 1px) * 1000, var(${SHEET_W_VAR}, ${PAGE_W}px))), 1);
+			--screen-fit: min(1, tan(atan2(100vw - ${2 * SCREEN_FIT_GUTTER_PX}px, var(${SHEET_W_VAR}, ${PAGE_W}px))) + var(--screen-fits));
+			--screen-gutter: min(${SCREEN_FIT_GUTTER_PX}px, calc((1 - var(--screen-fit)) * 100000px));
+			display: inline-block;
+			vertical-align: top;
+			transform: scale(var(--screen-fit));
+			transform-origin: top left;
+			margin-left: var(--screen-gutter);
+			margin-right: calc(var(${SHEET_W_VAR}, ${PAGE_W}px) * (var(--screen-fit) - 1) + var(--screen-gutter));
+			margin-bottom: calc(var(${SHEET_H_VAR}, ${PAGE_H}px) * (var(--screen-fit) - 1));
+		}
+	}
+`;
+
+/**
  * The stylesheet every print route serves. One copy, because three diverged.
  *
  * `orientation` is the ONLY thing a caller may vary, it defaults to portrait,
- * and the default output is byte-identical to what this constant held before
- * #718 — so the agenda, the roles sheet and the packet routes print exactly the
- * page they printed yesterday and only the poster route passes anything. See
+ * and it changes the `@page` rule and nothing else — so the agenda, the roles
+ * sheet and the packet routes print exactly the page they printed before #718
+ * and only the poster route passes anything. (#964 added `SCREEN_FIT_CSS`,
+ * which is `@media screen` and orientation-independent, so neither half of
+ * that changed; the rasterised print output was diffed identical.) See
  * `PageOrientation` above for why the poster is the one surface that differs
  * and why this is a parameter rather than a second stylesheet.
  *
@@ -124,6 +228,7 @@ export function printPageCss(
 ): string {
 	return `
 	@media screen { body { background: #d8e6dd; } }
+	${SCREEN_FIT_CSS}
 	.pgwrap { padding: 28px 0; }
 	@media print {
 		.no-print { display: none !important; }
@@ -266,6 +371,9 @@ export const PAGE_OUTER: React.CSSProperties = {
  */
 export const MIN_FIT_SCALE = 0.72;
 
+/** Inline style plus the custom properties `FitPage` hands `SCREEN_FIT_CSS`. */
+type SheetStyle = React.CSSProperties & Record<`--${string}`, string>;
+
 export function FitPage({
 	children,
 	orientation = "portrait",
@@ -280,7 +388,8 @@ export function FitPage({
 	const [fit, setFit] = useState<number | null>(null);
 	/** Set when the content is too long to scale legibly — see MIN_FIT_SCALE.
 	 *  The sheet then drops its fixed height and paginates instead. */
-	const [flow, setFlow] = useState(false);
+	const [flowHeight, setFlowHeight] = useState<number | null>(null);
+	const flow = flowHeight !== null;
 	const { width: sheetW, height: sheetH } = pageBox(orientation);
 
 	useEffect(() => {
@@ -295,7 +404,9 @@ export function FitPage({
 			const scale = (sheetH - 2) / h;
 			// Too long to shrink and stay readable: print it across several sheets
 			// rather than one unreadable one.
-			if (scale < MIN_FIT_SCALE) setFlow(true);
+			// The measured height is kept: it is what the flowing sheet renders at,
+			// and the screen fit needs it (see SHEET_H_VAR).
+			if (scale < MIN_FIT_SCALE) setFlowHeight(h);
 			else setFit(scale);
 		};
 		const fonts = (
@@ -311,10 +422,19 @@ export function FitPage({
 	// PAGE_OUTER is the PORTRAIT sheet — every other property on it (the fills,
 	// the clip, the print-colour-adjust) is orientation-independent, so the box
 	// is overridden here rather than duplicated into a second style object.
-	const outer: React.CSSProperties =
-		orientation === "landscape"
-			? { ...PAGE_OUTER, width: sheetW, height: sheetH }
-			: PAGE_OUTER;
+	//
+	// The two custom properties are what `SCREEN_FIT_CSS` shrinks a sheet
+	// against on a narrow screen (#964). Set from the same `pageBox` as the box
+	// itself, so a landscape sheet is fitted as 1056px wide, not as 816 — and the
+	// height is the one the sheet RENDERS at, which for a flowing sheet is its
+	// measured content height rather than the page box.
+	const outer: SheetStyle = {
+		...PAGE_OUTER,
+		width: sheetW,
+		height: sheetH,
+		[SHEET_W_VAR]: `${sheetW}px`,
+		[SHEET_H_VAR]: `${flowHeight ?? sheetH}px`,
+	};
 
 	return (
 		<div
