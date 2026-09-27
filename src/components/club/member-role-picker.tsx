@@ -7,6 +7,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+import { showWriteError } from "#/components/write-error-toast";
 import {
 	meetingRoleOptions,
 	type RoleOption,
@@ -80,11 +81,12 @@ export function MemberRolePicker({
 		setBusy(o.slotId);
 		try {
 			if (action === "release") {
-				await releaseSlot({ data: { slotId: o.slotId, actorMemberId } });
+				// No actor on the wire (#763): the server reads the session.
+				await releaseSlot({ data: { slotId: o.slotId } });
 				toast.success(`Released ${o.label}.`);
 			} else if (action === "reassign") {
 				await reassignSlot({
-					data: { slotId: o.slotId, memberId: targetMemberId, actorMemberId },
+					data: { slotId: o.slotId, memberId: targetMemberId },
 				});
 				toast.success(`${who} now has ${o.label}.`);
 			} else {
@@ -110,7 +112,7 @@ export function MemberRolePicker({
 			}
 			await onChanged();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Couldn't update.");
+			showWriteError(err, "Couldn't update.");
 		} finally {
 			setBusy(null);
 		}

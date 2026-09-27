@@ -783,7 +783,8 @@ export function MeetingAgenda({
 													</div>
 												) : null}
 
-												{viewer.canAssign ? (
+												{viewer.canAssign &&
+												(isOpen || viewer.canReassignHeld) ? (
 													<Button
 														size="sm"
 														variant="outline"
@@ -1056,6 +1057,7 @@ export function MeetingAgenda({
 				unavailableIds={unavailableMemberIds}
 				roleRecency={roleRecency}
 				actorMemberId={currentMemberId}
+				canReassign={viewer.canReassignHeld}
 				allowGuests={viewer.canManage}
 				clubGuests={clubGuests}
 				onOpenChange={(open) => {
@@ -1103,7 +1105,6 @@ export function MeetingAgenda({
 							}
 						: null
 				}
-				actorMemberId={currentMemberId}
 				onOpenChange={(open) => {
 					if (!open) setEditSpeechSlot(null);
 				}}
