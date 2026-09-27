@@ -62,17 +62,25 @@ import {
 } from "#/test/print-page-count";
 import { type AgendaLayout, MeetingAgendaPrint } from "./meeting-agenda-print";
 import {
+	FitPage,
+	PAGE_W,
 	PRINT_PAGE_CSS,
 	pageBox,
 	printPageCss,
 	SCREEN_FIT_CSS,
+	SCREEN_FIT_GUTTER_PX,
+	SHEET_H_VAR,
 } from "./print-theme";
 import { WordOfTheDayPoster } from "./word-of-the-day-poster";
 
 const hasChrome = findChrome() !== null;
 
 const PHONE_W = 375;
+/** Portrait iPad widths either side of `100vw - 2 * gutter = PAGE_W`: the sheet
+ *  already fitted both before #964, so both must render exactly as before. */
+const TABLET_WS = [820, 848] as const;
 const DESKTOP_W = 1280;
+const WIDTHS = [PHONE_W, ...TABLET_WS, DESKTOP_W];
 const FRAME_H = 812;
 
 const LAYOUTS: readonly AgendaLayout[] = [
@@ -83,6 +91,14 @@ const LAYOUTS: readonly AgendaLayout[] = [
 ];
 
 type Surface = AgendaLayout | "poster";
+
+/** `.pgwrap`'s screen padding, the only chrome below the last sheet. */
+const PGWRAP_PAD_PX = 28;
+/** What sits below the last sheet on each surface: TwoPage and the poster
+ *  route wrap theirs in `.pgwrap`; editorial and grid have no wrapper. */
+function trailingChrome(surface: Surface): number {
+	return surface === "editorial" || surface === "grid" ? 0 : PGWRAP_PAD_PX;
+}
 
 /** Width over height of the sheet a surface prints: the poster is landscape. */
 function sheetAspect(surface: Surface): number {
@@ -137,6 +153,7 @@ function surfaceDocument(surface: Surface, fixed: boolean): string {
 }
 
 type Sheet = {
+	top: number;
 	left: number;
 	right: number;
 	width: number;
@@ -148,21 +165,57 @@ type Sheet = {
 type Frame = {
 	clientWidth: number;
 	scrollWidth: number;
+	scrollHeight: number;
+	clientHeight: number;
 	sheets: Sheet[];
 };
 
-type Case = { id: string; surface: Surface; fixed: boolean; width: number };
+type Case = { id: string; html: string; width: number };
 
-const CASES: Case[] = (["poster", ...LAYOUTS] as Surface[]).flatMap((surface) =>
-	[PHONE_W, DESKTOP_W].flatMap((width) =>
-		[true, false].map((fixed) => ({
-			id: `${surface}-${width}-${fixed ? "fixed" : "control"}`,
-			surface,
-			fixed,
-			width,
-		})),
+const caseId = (surface: Surface, width: number, fixed: boolean) =>
+	`${surface}-${width}-${fixed ? "fixed" : "control"}`;
+
+/** Natural height of the long sheet in the flow fixture — past the flow cliff. */
+const FLOW_CONTENT_PX = 2400;
+
+/**
+ * A sheet in `FitPage`'s FLOW state (a 40-58-row speech contest), which static
+ * markup cannot reach: the decision is a `useEffect`. So the page is put in the
+ * state the effect leaves it in — height and clip dropped, the inner floor
+ * cleared — and `--sheet-h` is set either to the measured height (what
+ * `FitPage` now does; `print-screen-fit.test.tsx` pins that in jsdom) or left
+ * at the page box (what it did first, which left a blank band on a phone).
+ */
+function flowDocument(sheetHTracksContent: boolean): string {
+	const body = renderToStaticMarkup(
+		<FitPage>
+			<div style={{ height: FLOW_CONTENT_PX, background: "#eee" }} />
+		</FitPage>,
+	);
+	const prep = `<script>
+	(function () {
+		var p = document.querySelector(".agenda-page");
+		var inner = p.querySelector("[data-fit-inner]");
+		p.style.height = ""; p.style.overflow = ""; inner.style.minHeight = "";
+		${sheetHTracksContent ? `p.style.setProperty(${JSON.stringify(SHEET_H_VAR)}, inner.scrollHeight + "px");` : ""}
+	})();
+	</script>`;
+	return printableDocument(PRINT_PAGE_CSS, body + prep);
+}
+
+const CASES: Case[] = [
+	...(["poster", ...LAYOUTS] as Surface[]).flatMap((surface) =>
+		WIDTHS.flatMap((width) =>
+			[true, false].map((fixed) => ({
+				id: caseId(surface, width, fixed),
+				html: surfaceDocument(surface, fixed),
+				width,
+			})),
+		),
 	),
-);
+	{ id: "flow-tracked", html: flowDocument(true), width: PHONE_W },
+	{ id: "flow-stale", html: flowDocument(false), width: PHONE_W },
+];
 
 /** Inside each frame: report the viewport and every sheet to the parent. */
 const FRAME_PROBE = `<script>
@@ -174,14 +227,18 @@ addEventListener("load", function () {
 			var r = p.getBoundingClientRect();
 			var inner = p.querySelector("[data-fit-inner]");
 			return {
-				left: r.left, right: r.right, width: r.width, height: r.height,
+				top: r.top, left: r.left, right: r.right, width: r.width, height: r.height,
 				natural: inner ? inner.scrollHeight : -1
 			};
 		}
 	);
 	parent.postMessage({
 		id: location.hash.slice(1),
-		frame: { clientWidth: d.clientWidth, scrollWidth: d.scrollWidth, sheets: sheets }
+		frame: {
+			clientWidth: d.clientWidth, scrollWidth: d.scrollWidth,
+			scrollHeight: d.scrollHeight,
+			clientHeight: d.clientHeight, sheets: sheets
+		}
 	}, "*");
 });
 </script>`;
@@ -197,17 +254,17 @@ function measureAll(cases: readonly Case[]): Map<string, Frame> {
 				const file = `${c.id}.html`;
 				writeFileSync(
 					join(dir, file),
-					surfaceDocument(c.surface, c.fixed).replace(
-						"</body>",
-						`${FRAME_PROBE}</body>`,
-					),
+					c.html.replace("</body>", `${FRAME_PROBE}</body>`),
 					"utf8",
 				);
 				return `<iframe src="${file}#${c.id}" style="display:block;border:0;width:${c.width}px;height:${FRAME_H}px"></iframe>`;
 			})
 			.join("");
-		const outer = `<!doctype html><html><head><title>pending</title></head><body style="margin:0">
-<pre id="out"></pre>${frames}
+		// The listener is registered in <head>, BEFORE any frame exists. At the
+		// end of <body> it raced the frames: under a parallel run a frame could
+		// load and post before the parser reached the script, the message was
+		// lost, and the page never left "pending" (seen 1 run in 3).
+		const outer = `<!doctype html><html><head><title>pending</title>
 <script>
 var got = {}, want = ${cases.length};
 addEventListener("message", function (e) {
@@ -217,7 +274,9 @@ addEventListener("message", function (e) {
 		document.title = "done";
 	}
 });
-</script></body></html>`;
+</script></head><body style="margin:0">
+<pre id="out"></pre>${frames}
+</body></html>`;
 		const outerPath = join(dir, "outer.html");
 		writeFileSync(outerPath, outer, "utf8");
 		const dom = execFileSync(
@@ -230,7 +289,9 @@ addEventListener("message", function (e) {
 				"--disable-extensions",
 				"--host-resolver-rules=MAP * ~NOTFOUND",
 				"--window-size=1400,900",
-				"--virtual-time-budget=5000",
+				// Generous: an idle page fast-forwards virtual time, so a big budget
+				// costs nothing real and only matters if ~40 frames load slowly.
+				"--virtual-time-budget=30000",
 				"--dump-dom",
 				`file://${outerPath}`,
 			],
@@ -269,14 +330,25 @@ describe.skipIf(!hasChrome)(
 	() => {
 		// Lazily, once: a describe body runs at collection time even when skipped.
 		let cache: Map<string, Frame> | undefined;
-		const frame = (surface: Surface, width: number, fixed: boolean): Frame => {
+		const byId = (id: string): Frame => {
 			cache ??= measureAll(CASES);
-			const id = `${surface}-${width}-${fixed ? "fixed" : "control"}`;
 			const f = cache.get(id);
 			if (!f) throw new Error(`no measurement for ${id}`);
 			if (f.sheets.length === 0) throw new Error(`${id} rendered no sheet`);
 			return f;
 		};
+		const frame = (surface: Surface, width: number, fixed: boolean) =>
+			byId(caseId(surface, width, fixed));
+		/** Where the last sheet's VISIBLE (scaled) box ends, in document px. */
+		const sheetBottom = (f: Frame) =>
+			Math.max(...f.sheets.map((s) => s.top + s.height));
+		/**
+		 * Scrollable document past what the page legitimately needs: the scaled
+		 * sheet plus the chrome below it, or one screenful, whichever is taller
+		 * (a document is never shorter than its viewport).
+		 */
+		const blankBand = (f: Frame, chrome: number) =>
+			f.scrollHeight - Math.max(f.clientHeight, sheetBottom(f) + chrome);
 
 		const SURFACES: readonly Surface[] = [...LAYOUTS, "poster"];
 
@@ -328,10 +400,54 @@ describe.skipIf(!hasChrome)(
 
 		it.each(
 			SURFACES,
-		)("%s: desktop geometry is identical to the pre-fix control", (surface) => {
-			expect(frame(surface, DESKTOP_W, true)).toEqual(
-				frame(surface, DESKTOP_W, false),
+		)("%s: at 375px the document ends at the scaled sheet, with no blank band", (surface) => {
+			// A transform leaves the layout box full height; without the negative
+			// bottom margin the page scrolls through ~(1 - fit) x 1056px of nothing
+			// below every sheet.
+			// Measured before the inline-block fix: the negative margin collapsed
+			// out of the editorial sheet's ancestors and left a 612px band.
+			const f = frame(surface, PHONE_W, true);
+			expect(f.scrollHeight).toBeGreaterThanOrEqual(sheetBottom(f));
+			expect(
+				blankBand(f, trailingChrome(surface)),
+				JSON.stringify(f),
+			).toBeLessThanOrEqual(1);
+		});
+
+		it("a FLOWING sheet ends where its scaled content does, at 375px", () => {
+			const f = byId("flow-tracked");
+			const [sheet] = f.sheets;
+			// It really is a flowing sheet, shrunk, and taller than the screen — so
+			// the band check below is not satisfied by the viewport floor.
+			const scaledW = PHONE_W - 2 * SCREEN_FIT_GUTTER_PX;
+			expect(sheet?.width).toBeCloseTo(scaledW, 0);
+			expect(sheet?.height).toBeCloseTo(
+				(scaledW * FLOW_CONTENT_PX) / PAGE_W,
+				0,
 			);
+			expect(sheetBottom(f)).toBeGreaterThan(f.clientHeight);
+			expect(f.scrollHeight).toBeGreaterThanOrEqual(sheetBottom(f));
+			expect(blankBand(f, 0), JSON.stringify(f)).toBeLessThanOrEqual(1);
+		});
+
+		it("CONTROL: a flowing sheet fitted against the page box leaves a blank band", () => {
+			// --sheet-h left at 1056 gives back only (1 - fit) x 1056 of the
+			// (1 - fit) x 2400 the scale took.
+			const f = byId("flow-stale");
+			expect(blankBand(f, 0), JSON.stringify(f)).toBeGreaterThan(500);
+		});
+
+		// Every width the sheet already fitted: 820 and 848 (portrait iPads, and
+		// either side of where `100vw - 2 * gutter` reaches the page width) and a
+		// desktop for the portrait layouts; only the desktop for the 1056px
+		// poster, which does NOT fit 820 or 848 and is shrunk there by design.
+		it.each([
+			...LAYOUTS.flatMap((layout) =>
+				[...TABLET_WS, DESKTOP_W].map((width) => [layout, width] as const),
+			),
+			["poster", DESKTOP_W] as const,
+		])("%s at %ipx: geometry is identical to the pre-fix control", (surface, width) => {
+			expect(frame(surface, width, true)).toEqual(frame(surface, width, false));
 		});
 	},
 );
