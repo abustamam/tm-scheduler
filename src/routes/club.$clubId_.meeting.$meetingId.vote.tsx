@@ -1,5 +1,6 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
+import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import {
@@ -13,9 +14,11 @@ import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
+import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { readStoredMember } from "#/lib/member-identity";
+import { publicShellDecision, sessionMemberFor } from "#/lib/public-shell";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { joinBallot } from "#/server/voting";
 
@@ -86,9 +89,67 @@ function readVoter(meetingId: string): VoterIdentity | null {
 	}
 }
 
+/**
+ * The signed-in member of this club, resolved on the CLIENT (#962).
+ *
+ * This route escapes the club shell, so it never receives the shell's
+ * `effectiveMemberId` — and the member resolution deliberately stays out of the
+ * loader: about twenty phones load it at once, most of them signed out, and
+ * `getAuthContext` is not free (it can top up the club's schedule). So a phone
+ * with no session costs nothing beyond `useSession`, and only a signed-in one
+ * asks the server who it is, through the same `publicShellDecision` the shell
+ * uses (`sessionMemberFor`).
+ *
+ * A member whose ACTIVE club is another one is switched first, exactly as the
+ * shell does on any `/club/$clubId` page, because `currentMemberId` is only
+ * resolved for the active club. Once, not in a loop: if the switch does not
+ * take, they fall back to the signed-out path rather than spinning.
+ *
+ * `pending` stays true until the answer is known, so a signed-in member is
+ * never flashed the "Who are you?" picker while their session loads. A failure
+ * to resolve is NOT pending: it degrades to the signed-out behaviour, because a
+ * spinner that never ends is worse than a picker during a meeting.
+ */
+function useSessionVoter(clubId: string): {
+	pending: boolean;
+	voter: VoterIdentity | null;
+} {
+	const { data: session, isPending } = authClient.useSession();
+	const userId = session?.user?.id ?? null;
+	const resolved = useQuery({
+		queryKey: ["ballot-session-member", clubId, userId],
+		enabled: userId !== null,
+		retry: false,
+		staleTime: Number.POSITIVE_INFINITY,
+		queryFn: async () => {
+			// Lazy, like `use-offline-minutes.ts`: only a signed-in phone ever needs
+			// it, and a static import would pull `#/db` into every suite that
+			// imports this route to test something else.
+			const { getAuthContext, setActiveClub } = await import(
+				"#/server/auth-context"
+			);
+			const ctx = await getAuthContext();
+			if (!publicShellDecision(ctx, clubId).switchActiveTo) {
+				return sessionMemberFor(ctx, clubId);
+			}
+			await setActiveClub({ data: { clubId } });
+			return sessionMemberFor(await getAuthContext(), clubId);
+		},
+	});
+	if (isPending) return { pending: true, voter: null };
+	if (userId === null) return { pending: false, voter: null };
+	if (resolved.isPending) return { pending: true, voter: null };
+	const m = resolved.data ?? null;
+	return {
+		pending: false,
+		voter: m ? { kind: "member", id: m.id, name: m.name } : null,
+	};
+}
+
 function VotePage() {
 	const { clubId, clubName, clubNumber, meetingId, digitalVoting } =
 		Route.useLoaderData();
+	const session = useSessionVoter(clubId);
 	const [voter, setVoter] = useState<VoterIdentity | null>(() => {
 		const stored = readVoter(meetingId);
 		if (stored) return stored;
@@ -116,6 +177,23 @@ function VotePage() {
 			<main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-6 px-5 py-10">
 				{!digitalVoting ? (
 					<BallotOff clubName={clubName} />
+				) : session.pending ? (
+					<output className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+						<Loader2 className="size-4 animate-spin" aria-hidden />
+						Loading your ballot…
+					</output>
+				) : session.voter ? (
+					// Signed in as a member of this club: the session wins over any
+					// stored or picked name, and there is no "not you?" — re-picking
+					// would let a signed-in phone vote as someone else. Nothing is
+					// written to the per-meeting store, so the pick underneath
+					// resurfaces on sign-out.
+					<>
+						<Ballot meetingId={meetingId} voter={session.voter} />
+						<p className="self-center text-xs text-muted-foreground">
+							Voting as {session.voter.name}
+						</p>
+					</>
 				) : voter ? (
 					<>
 						<Ballot meetingId={meetingId} voter={voter} />
