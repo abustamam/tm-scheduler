@@ -49,6 +49,7 @@ import {
 	loadDisqualifications,
 } from "./award-candidates-logic";
 import { isReadableClubForMeeting } from "./club-readable-logic";
+import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { assertClubNotArchived } from "./guards";
 import {
 	AWARD_CATEGORIES,
@@ -56,6 +57,7 @@ import {
 	getMeetingClubId,
 	requireMemberInMeetingClub,
 } from "./minutes-logic";
+import { isDeadlock } from "./pg-errors";
 import { resolveWriteActorWithProof } from "./write-actor-logic";
 
 export interface VoteSessionState {
@@ -153,6 +155,10 @@ export async function openVote(input: WindowInput): Promise<void> {
 	// test, which would have left this covered by a source grep alone.
 	await assertClubNotArchived(input.clubId);
 	await db.transaction(async (tx) => {
+		// #925: the club write lock FIRST. The gate below row-locks the meeting
+		// and the club together, which a template save holding the meeting and
+		// waiting on the club could otherwise meet head-on.
+		await lockClubForWrite(tx, input.clubId);
 		// #770. Opening is the one window write gated on the switch. CLOSING is
 		// deliberately NOT gated: switching off closes every open vote itself, and
 		// a Close arriving afterwards — from a console tab loaded before the
@@ -1401,7 +1407,6 @@ export async function joinBallotAsGuest(input: {
 }): Promise<{ id: string; name: string }> {
 	const name = cap(input.name.trim(), MAX_GUEST_NAME);
 	if (!name) throw new Error("A name is required to vote.");
-	const normalizedName = name.toLowerCase();
 	const clubId = await getMeetingClubId(input.meetingId);
 	// #555. `joinBallot` MINTS a row carrying a visitor's name, which is the
 	// half of this that matters most: without the gate an archived club keeps
@@ -1409,7 +1414,35 @@ export async function joinBallotAsGuest(input: {
 	// not even an admin, who `requireMembership` throws for — can see it happen.
 	await assertClubNotArchived(clubId);
 
+	try {
+		return await joinInTransaction(input, clubId, name);
+	} catch (err) {
+		// #925. Every writer that locks this meeting AND its club takes the club
+		// write lock first, so none of them can deadlock this join; a 40P01 here
+		// is a cycle through some writer that does not. Nothing was written (the
+		// transaction rolled back), so this public path says "try again" rather
+		// than showing a visitor the driver's `Failed query: …`. The original
+		// rides on `cause`, so a SQLSTATE check still sees it.
+		if (isDeadlock(err)) throw new Error(CLUB_BUSY_MESSAGE, { cause: err });
+		throw err;
+	}
+}
+
+/** `joinBallotAsGuest`'s transaction — split out only so the deadlock
+ *  translation wraps every statement in it at once. */
+function joinInTransaction(
+	input: { meetingId: string },
+	clubId: string,
+	name: string,
+): Promise<{ id: string; name: string }> {
+	const normalizedName = name.toLowerCase();
 	return db.transaction(async (tx) => {
+		// #925: the club write lock BEFORE the meeting lock below. This join
+		// locks the meeting and then the club; guest check-in locks the club and
+		// then the meeting, so without a lock both take first, a guest joining
+		// the ballot while a new guest signs the book was a 40P01. It orders the
+		// row locks; the meeting lock is still what bounds the cap.
+		await lockClubForWrite(tx, clubId);
 		// The lock. Every later statement in this transaction — the name lookup,
 		// the link check, the cap count, the inserts — runs only after this
 		// resolves, so two concurrent joins for the same meeting can never both

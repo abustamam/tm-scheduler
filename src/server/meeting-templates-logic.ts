@@ -44,6 +44,7 @@ import {
 	type RoleIdentity,
 } from "#/lib/role-def-match";
 import { logActivity } from "./activity";
+import { lockClubForWrite } from "./club-write-lock";
 import { assertClubNotArchived, requireClubRole, requireUser } from "./guards";
 import {
 	AGENDA_DEADLOCK_MESSAGE,
@@ -1368,21 +1369,16 @@ export async function saveMeetingAgendaAsClubTemplate(
 	try {
 		return await saveInTransaction(input, plan);
 	} catch (err) {
-		// Known deadlocks, translated rather than restructured around (the
-		// maintainer accepted the remaining lock-order risk):
-		//   (a) guest check-in, `captureGuestVisit`, locks club then meeting;
-		//       this save locks meeting then club;
-		//   (b) a replace forks legacy meetings AFTER taking the club lock, so
-		//       it can meet another save, or a ballot join, that already holds
-		//       one of those legacy meetings and is waiting on the club;
-		//   (c) the legacy fork's FOR SHARE on the target upgraded to FOR
-		//       UPDATE, while a conversion is waiting on a role key it minted.
-		// No single row-lock order satisfies both the ballot join (meeting,
-		// then club) and guest check-in (club, then meeting); that is tracked
-		// repo-wide in #925. All are rare and
-		// retryable, so the officer reads the sentence a first-edit fork that
-		// loses a deadlock shows, never the driver's `Failed query: …`. The
-		// original error rides on `cause`, so a SQLSTATE check still sees it.
+		// The deadlocks this save used to meet with guest check-in (club, then
+		// meeting) and with a ballot join or another save holding a legacy
+		// meeting it forks are gone: all of them take the club write lock
+		// first (#925), so they serialise per club. What is left is a cycle
+		// through a writer that does not take it — e.g. the legacy fork's FOR
+		// SHARE on the target upgraded to FOR UPDATE while a conversion waits
+		// on a role key it minted. Rare and retryable, so the officer reads the
+		// sentence a first-edit fork that loses a deadlock shows, never the
+		// driver's `Failed query: …`. The original error rides on `cause`, so a
+		// SQLSTATE check still sees it.
 		if (isDeadlock(err)) {
 			throw new Error(AGENDA_DEADLOCK_MESSAGE, { cause: err });
 		}
@@ -1400,13 +1396,16 @@ async function saveInTransaction(
 ): Promise<{ templateId: string }> {
 	const { meetingId, clubId } = input;
 	return database.transaction(async (tx) => {
-		// LOCK ORDER: meeting, then club, then everything else. This is the
-		// order the rest of the app already takes these two rows in —
-		// `ensureAgendaDraft` and conversion lock the meeting first, and
-		// `joinBallotAsGuest` locks the meeting and then takes the club FOR
-		// SHARE (through `assertDigitalVotingOnTx`). Taking the club first, as
-		// the first review round did, inverted that and a guest joining the
-		// ballot while an officer saved was a 40P01.
+		// The club write lock FIRST, before any row (#925). Guest check-in
+		// locks the club and then the meeting; this save locks the meeting and
+		// then the club, and a replace then locks legacy meetings after the
+		// club. No row order suits every writer, so each of them takes this
+		// lock before its first row lock and they serialise per club.
+		await lockClubForWrite(tx, clubId);
+
+		// ROW LOCK ORDER: meeting, then club, then everything else — the order
+		// the writers that do NOT take the club write lock use:
+		// `ensureAgendaDraft` and conversion lock the meeting first.
 		//
 		// The meeting, locked: a concurrent edit or re-conversion lands wholly
 		// before or wholly after this save.
@@ -1510,7 +1509,7 @@ async function saveInTransaction(
 			// Now the target, exclusively, before its content is swapped — the
 			// lock every copier's FOR SHARE waits on (`copyTemplateContent`).
 			// Club templates are never deleted and this club's saves serialise on
-			// the club lock above, so the row read unlocked a moment ago is
+			// the club locks above, so the row read unlocked a moment ago is
 			// still this club's; the predicate is repeated anyway.
 			await tx
 				.select({ id: meetingTemplates.id })
