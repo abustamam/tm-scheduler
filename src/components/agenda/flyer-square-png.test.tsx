@@ -20,7 +20,7 @@
  * other browser-backed suites (`src/test/print-page-count.ts`).
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -35,6 +35,7 @@ import {
 	DEFAULT_PROMO_TEMPLATE,
 	promoValues,
 } from "#/lib/promo-template";
+import { stopChromeAndRemoveDir } from "#/test/chrome-teardown";
 import {
 	CHROME_ENV,
 	CHROME_TEST_TIMEOUT_MS,
@@ -144,7 +145,13 @@ window.__flyerExport = window
 			"--remote-debugging-pipe",
 			`file://${htmlPath}`,
 		],
-		{ stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"], env: CHROME_ENV },
+		{
+			stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
+			env: CHROME_ENV,
+			// Its own process group, so teardown can kill Chrome's children too —
+			// they are what was still writing `Default/` in #972.
+			detached: true,
+		},
 	);
 	const toChrome = proc.stdio[3] as Writable;
 	const fromChrome = proc.stdio[4] as Readable;
@@ -278,8 +285,9 @@ window.__flyerExport = window
 		// Our own kill is not an early death: detach the exit handler first.
 		proc.removeAllListeners("exit");
 		stopped ??= new Error("done");
-		proc.kill("SIGKILL");
-		rmSync(dir, { recursive: true, force: true });
+		// Waits for Chrome to exit before removing its profile, and never
+		// throws: removing right after `kill` raced Chrome's writers (#972).
+		await stopChromeAndRemoveDir(proc, dir);
 	}
 }
 
