@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
+	getSessionUser,
 	requireSignedInVoteCounter,
 	requireVoteCounterCapability,
 } from "./guards";
@@ -109,11 +110,18 @@ export const submitVote = createServerFn({ method: "POST" })
 				category,
 				voter: voterRef,
 				candidate: candidateRef,
+				// Optional so a tab loaded before #765 can still cast a FIRST vote.
+				deviceToken: uuid.optional(),
 			})
 			.parse(input),
 	)
 	.handler(async ({ data }) => {
-		await castVote(data);
+		// ADR-0026, device-bound change (#765): a first vote fills a blank; a
+		// change needs this device's token or the voting member's own session.
+		// `castVote` resolves the session against the meeting's club, which is
+		// where the club is loaded.
+		const user = await getSessionUser();
+		await castVote({ ...data, sessionUserId: user?.id ?? null });
 		return { ok: true as const };
 	});
 

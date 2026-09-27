@@ -119,6 +119,91 @@ function namedFunctionBody(source: string, name: string): string {
 }
 
 /**
+ * The `fill-blank` rows whose blank is NOT a plan rung (#765).
+ *
+ * The plan rows fill a blank through `setPlanStatus(…, { onlyIfAbsent: true })`
+ * on the asserted path, and the generic fill-blank case checks that. A ballot
+ * fills a blank differently: its first vote is an INSERT, and the rule for a
+ * change rides the ON CONFLICT UPDATE as a `setWhere` on the casting device's
+ * token, lifted only for a session bound to the voting member. Each entry names
+ * what the handler must pass and what the logic must still contain.
+ */
+const DEVICE_BOUND_FILL_BLANK: Record<
+	string,
+	{
+		handlerMustContain: string[];
+		logic: {
+			file: string;
+			fn: string;
+			mustContain: string[];
+			/** Identifiers that must NOT appear in the `set: { … }` object of the
+			 *  fn's `onConflictDoUpdate`. A column there is rewritten on every
+			 *  change, which is how an owner stops being the owner. */
+			setMustNotContain?: string[];
+		}[];
+	}
+> = {
+	"voting.ts#submitVote": {
+		handlerMustContain: [
+			"await getSessionUser()",
+			"sessionUserId: user?.id",
+			"castVote(",
+		],
+		logic: [
+			{
+				file: "voting-logic.ts",
+				fn: "castVote",
+				// Compared whitespace-collapsed, so these are SHAPES, not just
+				// names: each one is the exact construction whose flip would
+				// defeat the check while leaving every identifier in place.
+				mustContain: [
+					// The session exemption is exactly "this voter's own session",
+					// and nothing is OR-ed into it (`|| true` breaks this needle).
+					"const ownSession = voterMemberId !== null && (await sessionIsVoter(clubId, input.sessionUserId ?? null, voterMemberId));",
+					// …and the exemption is the ONLY arm that drops the check.
+					"...(ownSession ? {} : { setWhere: deviceToken !== null ? eq(meetingVotes.deviceToken, deviceToken) : sql`false`, })",
+					"VOTE_CAST_ELSEWHERE_MESSAGE",
+				],
+				setMustNotContain: ["deviceToken"],
+			},
+			{
+				file: "voting-logic.ts",
+				fn: "sessionIsVoter",
+				mustContain: [
+					"claimedActorMemberId: null",
+					'actor?.proof === "session" && actor.memberId === voterMemberId',
+				],
+			},
+		],
+	},
+};
+
+/** Collapse every whitespace run to one space, so a needle states a SHAPE and
+ *  a reformat (Biome re-wrapping a ternary) does not read as a deletion. */
+function collapse(text: string): string {
+	return text.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")");
+}
+
+/**
+ * The `set: { … }` object inside a fn body's `onConflictDoUpdate({ … })`, or
+ * null when there is none. Brace-matched rather than cut at the first `}`, so
+ * a nested object cannot end the slice early and hide a column after it.
+ */
+function conflictSetObject(body: string): string | null {
+	const upsert = body.indexOf("onConflictDoUpdate(");
+	if (upsert === -1) return null;
+	const at = body.indexOf("set:", upsert);
+	const open = at === -1 ? -1 : body.indexOf("{", at);
+	if (open === -1) return null;
+	let depth = 0;
+	for (let i = open; i < body.length; i++) {
+		if (body[i] === "{") depth++;
+		else if (body[i] === "}" && --depth === 0) return body.slice(open, i + 1);
+	}
+	return null;
+}
+
+/**
  * Why a POST fn is allowed to succeed without a session.
  *
  * - `fill-blank` — accepts an asserted identity only to fill an EMPTY value.
@@ -167,7 +252,7 @@ type WriteProofClass =
  *
  * The 29 the #761 inventory found, less the five #762 retired and the two #752
  * retired, plus #866's request-access form and #880's Table Topics notes
- * editor: 26 today (6 `pending-proof`, 15 `console-asserted`, 3 `public-intake`, 2 `fill-blank`). Adding a row is a decision about a write's
+ * editor: 26 today (5 `pending-proof`, 15 `console-asserted`, 3 `public-intake`, 3 `fill-blank` — #765 moved the ballot row from the first to the last). Adding a row is a decision about a write's
  * trust model, not a way to get green — a genuinely session-less write that
  * turns up unclassified is a finding to report, not an entry to make.
  *
@@ -221,9 +306,15 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 		reason: "ADR-0026",
 	},
 
-	// --- Phase 1: the ballots child -----------------------------------------
-	// A first vote fills a blank; changing one is bound to the casting device.
-	"voting.ts#submitVote": { class: "pending-proof", reason: "ballots child" },
+	// --- Phase 1: the ballots child, RETIRED by #765 -----------------------
+	// A first vote fills a blank; changing one is bound to the casting device,
+	// or to the voting member's own session. Not the `setPlanStatus` shape the
+	// other two rows take, so its fill-blank mode is checked through
+	// `DEVICE_BOUND_FILL_BLANK` below rather than the plan-rung markers.
+	"voting.ts#submitVote": {
+		class: "fill-blank",
+		reason: "ADR-0026, device-bound change",
+	},
 
 	// --- Phase 2: the role consoles (#747 / #752) ---------------------------
 	// Each grants on a SELF-ASSERTED role holder — the meeting's TMOD,
@@ -700,6 +791,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			WRITE_PROOF_EXCEPTIONS,
 		)) {
 			if (cls !== "fill-blank") continue;
+			// The ballot's fill-blank mode is a different construction, checked
+			// by its own case below. Skipping it HERE is safe only because that
+			// case fails when the row is not in `DEVICE_BOUND_FILL_BLANK`.
+			if (key in DEVICE_BOUND_FILL_BLANK) continue;
 			const body = POST_FNS.get(key) ?? "";
 			if (!body.includes('proof === "asserted"')) {
 				offenders.push(`${key} (never branches on the proof)`);
@@ -713,6 +808,70 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			`A \`fill-blank\` row claims the fn admits an asserted caller ONLY to fill an empty value (ADR-0026): ${offenders.join(", ")}.\n` +
 				`It must branch on the resolved proof AND pass \`onlyIfAbsent: true\` to setPlanStatus on the asserted path. ` +
 				`Re-classify the row rather than deleting this assertion — an unproven write that overwrites is what #699 was.`,
+		).toEqual([]);
+	});
+
+	it("every device-bound `fill-blank` row still binds a change to the device or the member's session (#765)", () => {
+		// `castVote` is a public endpoint and its handler cannot be invoked in
+		// vitest; the integration suite exercises the rule but skips with no
+		// test database. So the construction is pinned in source too, in the
+		// three places deleting it would re-open #765: the handler must hand the
+		// session to `castVote`, `castVote` must put the device check on its
+		// ON CONFLICT UPDATE, and the session arm must admit only a PROVEN
+		// session bound to the voter, never the asserted arm.
+		//
+		// MEASURED (#765 review), each KILLED by this file alone with
+		// `scripts/mutate.sh`: the no-token arm flipped to `sql\`true\``;
+		// `ownSession` forced true at the spread (`|| true`) and at the
+		// declaration (`|| true`, `true ||`); and `deviceToken` added to the
+		// `set` object, shorthand and keyed. A presence-only check caught none of
+		// them, because each keeps every identifier it looked for.
+		const fillBlank = Object.entries(WRITE_PROOF_EXCEPTIONS)
+			.filter(([, v]) => v.class === "fill-blank")
+			.map(([k]) => k);
+		expect(fillBlank).toContain("voting.ts#submitVote");
+		const offenders: string[] = [];
+		for (const [key, spec] of Object.entries(DEVICE_BOUND_FILL_BLANK)) {
+			expect(
+				fillBlank,
+				`${key} is in DEVICE_BOUND_FILL_BLANK but not classified fill-blank`,
+			).toContain(key);
+			const handler = POST_FNS.get(key) ?? "";
+			for (const needle of spec.handlerMustContain) {
+				if (!handler.includes(needle)) offenders.push(`${key} (${needle})`);
+			}
+			for (const check of spec.logic) {
+				const body = namedFunctionBody(
+					readSource(resolve(SERVER, check.file)),
+					check.fn,
+				);
+				const flat = collapse(body);
+				for (const needle of check.mustContain) {
+					if (!flat.includes(collapse(needle))) {
+						offenders.push(`${check.file}#${check.fn} (${needle})`);
+					}
+				}
+				if (check.setMustNotContain) {
+					const set = conflictSetObject(body);
+					if (set === null) {
+						offenders.push(
+							`${check.file}#${check.fn} (no onConflictDoUpdate set: { … } found to check)`,
+						);
+					} else {
+						for (const forbidden of check.setMustNotContain) {
+							if (new RegExp(`\\b${forbidden}\\b`).test(set)) {
+								offenders.push(
+									`${check.file}#${check.fn} (onConflictDoUpdate set rewrites ${forbidden})`,
+								);
+							}
+						}
+					}
+				}
+			}
+		}
+		expect(
+			offenders,
+			`A device-bound fill-blank write must refuse a change from any other device unless the voting member's own session sent it (ADR-0026, #765). Missing: ${offenders.join(", ")}.`,
 		).toEqual([]);
 	});
 
@@ -748,7 +907,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).not.toContain(key);
 	});
 
-	it("holds exactly the 26 exceptions: 24 left after #762 and #752, plus #866 and #880", () => {
+	it("holds exactly the 26 exceptions: 24 left after #762 and #752, plus #866 and #880; #765 reclassified one", () => {
 		// The count is pinned, not just the shape. A twenty-fifth arriving
 		// silently is the thing to notice — either a new session-less write, or a
 		// child issue's row landing without its sibling being retired.
@@ -771,6 +930,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		// #880 added one `console-asserted` row, the Table Topics Master's notes
 		// editor, modelled on `updateWordOfTheDay`: that class reads 15 and the
 		// total 26.
+		//
+		// #765 moved the ballot row from `pending-proof` to `fill-blank`: a first
+		// vote fills a blank, a change is bound to the casting device. Total
+		// unchanged.
 		const byClass = (c: WriteProofClass) =>
 			Object.values(WRITE_PROOF_EXCEPTIONS).filter((v) => v.class === c).length;
 		expect({
@@ -781,10 +944,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
 			total: 26,
-			pendingProof: 6,
+			pendingProof: 5,
 			consoleAsserted: 15,
 			publicIntake: 3,
-			fillBlank: 2,
+			fillBlank: 3,
 		});
 	});
 });

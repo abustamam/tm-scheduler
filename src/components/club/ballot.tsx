@@ -3,7 +3,13 @@ import { CheckCircle2, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
+import {
+	GUEST_VOTE_CAST_ELSEWHERE_MESSAGE,
+	getBallotDeviceToken,
+	VOTE_CAST_ELSEWHERE_MESSAGE,
+} from "#/lib/ballot-device";
 import { WRITE_IN_LIMITS, writeInKey } from "#/lib/write-in-limits";
+import { signInHref } from "#/lib/write-proof";
 import type { BallotData } from "#/server/voting";
 import { getBallot, submitVote } from "#/server/voting";
 
@@ -80,6 +86,23 @@ interface Choice {
  *  not landed yet, or has failed, must never render as counted (#722). */
 type CastState = "sending" | "recorded" | "failed";
 
+/**
+ * The server refused a CHANGE because this vote was cast from another device
+ * (#765, ADR-0026), or null for any other failure. Matched by the exact message
+ * — the text is the wire format, imported from the same module `castVote`
+ * throws from.
+ *
+ * Kept apart from an ordinary failure because "tap your choice again" is the
+ * wrong advice: re-tapping from this phone is refused every time. A member can
+ * sign in to change it; a guest cannot, so they get no action.
+ */
+function refusalOf(err: unknown): "member" | "guest" | null {
+	if (!(err instanceof Error)) return null;
+	if (err.message === VOTE_CAST_ELSEWHERE_MESSAGE) return "member";
+	if (err.message === GUEST_VOTE_CAST_ELSEWHERE_MESSAGE) return "guest";
+	return null;
+}
+
 export function Ballot({
 	meetingId,
 	voter,
@@ -98,6 +121,9 @@ export function Ballot({
 
 	const [picked, setPicked] = useState<Record<string, Choice>>({});
 	const [cast, setCast] = useState<Record<string, CastState>>({});
+	const [refused, setRefused] = useState<
+		Record<string, "member" | "guest" | null>
+	>({});
 
 	const send = useMutation({
 		mutationFn: (v: {
@@ -112,13 +138,23 @@ export function Ballot({
 					category: v.category,
 					voter: { kind: voter.kind, id: voter.id },
 					candidate: v.candidate,
+					// Every cast carries this phone's token (#765): the first vote
+					// fills a blank, and only this token (or the member's own
+					// session) may change it afterwards.
+					deviceToken: getBallotDeviceToken(),
 				},
 			}),
 		// Keyed by CATEGORY, not by "the last mutation", because two categories can
 		// be open at once and a phone can have both in flight. Each mutation carries
 		// its own variables into these callbacks, so the states never cross.
-		onSuccess: (_r, v) => setCast((s) => ({ ...s, [v.category]: "recorded" })),
-		onError: (_e, v) => setCast((s) => ({ ...s, [v.category]: "failed" })),
+		onSuccess: (_r, v) => {
+			setCast((s) => ({ ...s, [v.category]: "recorded" }));
+			setRefused((r) => ({ ...r, [v.category]: null }));
+		},
+		onError: (e, v) => {
+			setCast((s) => ({ ...s, [v.category]: "failed" }));
+			setRefused((r) => ({ ...r, [v.category]: refusalOf(e) }));
+		},
 	});
 
 	/** Tap-to-cast: the vote goes the moment a name is tapped, and the card says
@@ -214,6 +250,7 @@ export function Ballot({
 			{visible.map(([category, c]) => {
 				const chosen = picked[category];
 				const state = cast[category];
+				const refusal = refused[category] ?? null;
 				const nominees: Nominee[] = c.candidates.map((cand) =>
 					cand.kind === "writeIn"
 						? {
@@ -348,6 +385,26 @@ export function Ballot({
 								<p className="mt-3 text-sm font-medium text-warning-foreground">
 									{confirmedName} can't win this award — {chosenIsOut.reason}.
 									Tap another name.
+								</p>
+							) : state === "failed" && refusal === "member" ? (
+								// Re-tapping from this phone is refused every time, so the
+								// retry copy below would be wrong advice. Signing in as the
+								// member is the one thing that changes the answer.
+								<p className="mt-3 text-sm font-medium text-destructive">
+									{VOTE_CAST_ELSEWHERE_MESSAGE}{" "}
+									<a
+										href={signInHref(
+											window.location.pathname + window.location.search,
+										)}
+										className="underline"
+									>
+										Sign in
+									</a>
+								</p>
+							) : state === "failed" && refusal === "guest" ? (
+								// A guest cannot sign in, so there is no action to offer.
+								<p className="mt-3 text-sm font-medium text-destructive">
+									{GUEST_VOTE_CAST_ELSEWHERE_MESSAGE}
 								</p>
 							) : state === "failed" ? (
 								// The selection is KEPT on failure, and a failure NEVER reads as
