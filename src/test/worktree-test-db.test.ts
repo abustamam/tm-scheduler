@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import {
 	formatTestDbFile,
 	isWorktreeTestDbName,
 	parseTestDbFile,
+	REPO_ROOT,
 	TEST_DB_FILE,
 	TEST_DB_MARKER,
 	testDbNameFor,
@@ -16,13 +18,22 @@ import {
 const BASE = "postgresql://dev:dev@localhost:5432/tm_scheduler";
 
 describe("testDbNameFor", () => {
-	it("folds a branch into a prefixed identifier", () => {
-		expect(testDbNameFor("worktree-test-db-980")).toBe(
-			"tm_test_wt_worktree_test_db_980",
+	it("is a readable slug of the branch plus a hash of the raw label", () => {
+		expect(testDbNameFor("worktree-test-db-980")).toMatch(
+			/^tm_test_wt_worktree_test_db_980_[0-9a-f]{8}$/,
 		);
-		expect(testDbNameFor("Fix/Dialog.Scroll--619")).toBe(
-			"tm_test_wt_fix_dialog_scroll_619",
+		expect(testDbNameFor("Fix/Dialog.Scroll--619")).toMatch(
+			/^tm_test_wt_fix_dialog_scroll_619_[0-9a-f]{8}$/,
 		);
+	});
+
+	it("gives labels that fold to the same slug different databases", () => {
+		const names = ["fix/x-12", "fix-x-12", "fix_x_12"].map(testDbNameFor);
+		expect(new Set(names).size).toBe(3);
+	});
+
+	it("is stable for one label, so re-running setup finds the same database", () => {
+		expect(testDbNameFor("a-branch-1")).toBe(testDbNameFor("a-branch-1"));
 	});
 
 	it("stays within Postgres's 63-byte limit, and two long branches sharing a prefix still differ", () => {
@@ -129,5 +140,27 @@ describe("applyWorktreeTestDb", () => {
 		const env: Record<string, string | undefined> = {};
 		applyWorktreeTestDb(env, rootWith(`TEST_DATABASE_URL=${worktreeUrl}\n`));
 		expect(env.TEST_DATABASE_URL).toBeUndefined();
+	});
+});
+
+describe("REPO_ROOT", () => {
+	// The vitest setup reads `.env.test.local` from here. A wrong root finds no
+	// file, and the database-backed suites SKIP instead of failing.
+	it("is the checkout's top level", () => {
+		const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+			cwd: __dirname,
+			encoding: "utf8",
+		}).trim();
+		expect(REPO_ROOT).toBe(top);
+		expect(existsSync(join(REPO_ROOT, "package.json"))).toBe(true);
+	});
+
+	it("is the root the setup file applies, when nothing is exported", () => {
+		const env: Record<string, string | undefined> = {};
+		const applied = applyWorktreeTestDb(env);
+		const recorded = existsSync(join(REPO_ROOT, TEST_DB_FILE));
+		// In a bootstrapped worktree this finds the record; in CI and the main
+		// checkout there is none. Either way it must agree with the file on disk.
+		expect(applied !== undefined).toBe(recorded);
 	});
 });

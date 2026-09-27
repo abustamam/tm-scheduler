@@ -8,7 +8,8 @@
 # Refuses a dirty worktree BEFORE touching anything, on the same terms as
 # `git worktree remove` (modified tracked files or untracked files; ignored
 # files such as node_modules and .env.local do not count), so uncommitted work
-# is never lost and a refused teardown leaves the database in place.
+# is never lost and a refused teardown leaves the database in place. A locked
+# worktree is refused up front for the same reason.
 #
 # It drops only the database named in .env.test.local, only when setup wrote
 # that file, and only a `tm_test_wt_` name (scripts/worktree-test-db.ts), so
@@ -33,6 +34,16 @@ DIRTY=$(git status --porcelain)
 if [ -n "$DIRTY" ]; then
 	echo "Refusing: $HERE has uncommitted changes. Nothing was dropped or removed." >&2
 	echo "$DIRTY" >&2
+	exit 1
+fi
+
+# A locked worktree makes `git worktree remove` refuse. Check before dropping,
+# or a lock would leave the checkout in place without its database.
+LOCKED=$(git -C "$MAIN" worktree list --porcelain | awk -v here="$HERE" '
+	/^worktree / { cur = substr($0, 10) }
+	/^locked/ && cur == here { print "yes" }')
+if [ -n "$LOCKED" ]; then
+	echo "Refusing: $HERE is locked (git worktree unlock it first). Nothing was dropped or removed." >&2
 	exit 1
 fi
 

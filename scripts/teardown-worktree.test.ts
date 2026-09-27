@@ -6,7 +6,7 @@
  * case creates a real `tm_test_wt_…` database on TEST_DATABASE_URL's server,
  * tears down, and asserts that one database is gone and `tm_test` is not.
  *
- * The fixture repo carries copies of the two TypeScript files the script runs
+ * The fixture repo carries copies of the TypeScript files the script runs
  * and a symlink to this checkout's node_modules, so `bun` resolves `pg`.
  */
 import { execFileSync, spawnSync } from "node:child_process";
@@ -21,20 +21,21 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { hasTestDb } from "../src/test/db";
+import { hasTestDb } from "#/test/db";
 import {
 	formatTestDbFile,
 	TEST_DB_FILE,
 	withDatabase,
-} from "../src/test/worktree-test-db";
+} from "#/test/worktree-test-db";
+import { withAdmin } from "./worktree-test-db-logic";
 
 const ROOT = resolve(__dirname, "..");
 const SCRIPT = join(ROOT, "scripts/teardown-worktree.sh");
 const COPIED = [
 	"scripts/teardown-worktree.sh",
 	"scripts/worktree-test-db.ts",
+	"scripts/worktree-test-db-logic.ts",
 	"src/test/worktree-test-db.ts",
 ];
 
@@ -123,6 +124,22 @@ describe("scripts/teardown-worktree.sh", () => {
 		expect(existsSync(wt)).toBe(true);
 	});
 
+	it("refuses a locked worktree before dropping anything", () => {
+		const wt = addWorktree();
+		writeFileSync(
+			join(wt, TEST_DB_FILE),
+			formatTestDbFile(
+				"postgresql://dev:dev@localhost:5432/tm_test_wt_never_touched",
+			),
+		);
+		git(main, "worktree", "lock", wt);
+		const r = teardown(wt);
+		expect(r.code).toBe(1);
+		expect(r.out).toContain("is locked");
+		expect(existsSync(join(wt, TEST_DB_FILE))).toBe(true);
+		git(main, "worktree", "unlock", wt);
+	});
+
 	it("removes a clean worktree that has no test database", () => {
 		const wt = addWorktree();
 		const r = teardown(wt);
@@ -134,38 +151,21 @@ describe("scripts/teardown-worktree.sh", () => {
 	describe.skipIf(!hasTestDb)("with a real database", () => {
 		const server = process.env.TEST_DATABASE_URL ?? "postgresql://invalid";
 		const name = `tm_test_wt_teardown_probe_${process.pid}`;
-		const exists = async (db: string) => {
-			const c = new pg.Client({
-				connectionString: withDatabase(server, "postgres"),
-			});
-			await c.connect();
-			try {
+		const exists = (db: string) =>
+			withAdmin(server, async (c) => {
 				const { rowCount } = await c.query(
 					"select 1 from pg_database where datname = $1",
 					[db],
 				);
 				return rowCount === 1;
-			} finally {
-				await c.end();
-			}
-		};
-
-		afterAll(async () => {
-			const c = new pg.Client({
-				connectionString: withDatabase(server, "postgres"),
 			});
-			await c.connect();
-			await c.query(`drop database if exists "${name}"`);
-			await c.end();
-		});
+
+		afterAll(() =>
+			withAdmin(server, (c) => c.query(`drop database if exists "${name}"`)),
+		);
 
 		it("drops exactly the recorded database and removes the worktree", async () => {
-			const c = new pg.Client({
-				connectionString: withDatabase(server, "postgres"),
-			});
-			await c.connect();
-			await c.query(`create database "${name}"`);
-			await c.end();
+			await withAdmin(server, (c) => c.query(`create database "${name}"`));
 
 			const wt = addWorktree();
 			writeFileSync(
