@@ -14,6 +14,7 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { WhatsNewBanner } from "#/components/whats-new-banner";
+import { showWriteError } from "#/components/write-error-toast";
 import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
@@ -94,11 +95,12 @@ function ClubHome() {
 		if (!member) return;
 		setBusySlotId(slotId);
 		try {
-			await releaseSlot({ data: { slotId, actorMemberId: member.id } });
+			// No actor on the wire (#763): the server reads the session.
+			await releaseSlot({ data: { slotId } });
 			toast.success("Role released.");
 			await refetchAll();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setBusySlotId(null);
 		}
@@ -243,18 +245,24 @@ function ClubHome() {
 										>
 											{c.status}
 										</Badge>
-										<Button
-											size="sm"
-											variant="outline"
-											onClick={() => doRelease(c.slotId)}
-											disabled={busySlotId === c.slotId}
-										>
-											{busySlotId === c.slotId ? (
-												<Loader2 className="size-4 animate-spin" />
-											) : (
-												"Release"
-											)}
-										</Button>
+										{/* #1003 / ADR-0026: `releaseSlot` needs a session since
+										    #763, so a name-pick (`source === "anon"`) sees the
+										    role and its status but is not offered a Release the
+										    server would refuse. Same rule as the season grid. */}
+										{source === "session" ? (
+											<Button
+												size="sm"
+												variant="outline"
+												onClick={() => doRelease(c.slotId)}
+												disabled={busySlotId === c.slotId}
+											>
+												{busySlotId === c.slotId ? (
+													<Loader2 className="size-4 animate-spin" />
+												) : (
+													"Release"
+												)}
+											</Button>
+										) : null}
 									</div>
 								</div>
 							</li>

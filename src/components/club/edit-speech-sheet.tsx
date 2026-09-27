@@ -15,6 +15,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { showWriteError } from "#/components/write-error-toast";
 import { speechWindowInputError } from "#/lib/speech-window";
 import { updateSpeakerDetails } from "#/server/slots";
 
@@ -37,12 +38,10 @@ type SpeechSlot = {
 
 export function EditSpeechSheet({
 	slot,
-	actorMemberId,
 	onOpenChange,
 	onSaved,
 }: {
 	slot: SpeechSlot | null;
-	actorMemberId: string | null;
 	onOpenChange: (open: boolean) => void;
 	onSaved: () => void | Promise<void>;
 }) {
@@ -67,10 +66,9 @@ export function EditSpeechSheet({
 
 	async function submit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
-		if (!slot || !actorMemberId) {
-			toast.error("Your account isn't linked to a club member yet.");
-			return;
-		}
+		// No actor on the wire (#763): `updateSpeakerDetails` resolves it from the
+		// session, so an impersonating superadmin with no member id can save too.
+		if (!slot) return;
 		const form = new FormData(e.currentTarget);
 		const minRaw = form.get("minMinutes");
 		const maxRaw = form.get("maxMinutes");
@@ -90,7 +88,6 @@ export function EditSpeechSheet({
 			await updateSpeakerDetails({
 				data: {
 					slotId: slot.id,
-					actorMemberId,
 					speakerDetails: {
 						speechTitle:
 							String(form.get("speechTitle") ?? "").trim() || undefined,
@@ -113,7 +110,7 @@ export function EditSpeechSheet({
 			toast.success("Speech updated.");
 			await onSaved();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setBusy(false);
 		}

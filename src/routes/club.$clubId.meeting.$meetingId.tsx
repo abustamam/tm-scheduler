@@ -1295,21 +1295,17 @@ function MeetingView() {
 				},
 			});
 		},
+		// No actor on the wire for release / reassign (#763): both read the
+		// session, which is what lets an impersonating superadmin release.
 		release: async (slot) => {
-			await releaseSlot({
-				data: { slotId: slot.id, actorMemberId: managerActorId },
-			});
+			await releaseSlot({ data: { slotId: slot.id } });
 		},
 		takeover: async (slot) => {
 			if (!managerActorId) {
 				throw new Error("Your account isn't linked to a club member yet.");
 			}
 			await reassignSlot({
-				data: {
-					slotId: slot.id,
-					memberId: managerActorId,
-					actorMemberId: managerActorId,
-				},
+				data: { slotId: slot.id, memberId: managerActorId },
 			});
 		},
 		confirm: async (slot) => {
@@ -1356,17 +1352,16 @@ function MeetingView() {
 				},
 			});
 		},
+		// Rendered only for a signed-in holder (`canReleaseOwn`, #1003), so there
+		// is no identity to resolve: the server reads the session (#763), and a
+		// refusal reaches the agenda's `showWriteError` with its sign-in link.
 		release: async (slot) => {
-			const me = await requireIdentity();
-			if (!me) return;
-			await releaseSlot({ data: { slotId: slot.id, actorMemberId: me.id } });
+			await releaseSlot({ data: { slotId: slot.id } });
 		},
 		takeover: async (slot) => {
 			const me = await requireIdentity();
 			if (!me) return;
-			await reassignSlot({
-				data: { slotId: slot.id, memberId: me.id, actorMemberId: me.id },
-			});
+			await reassignSlot({ data: { slotId: slot.id, memberId: me.id } });
 		},
 		addSpeaker: async () => {
 			const me = await requireIdentity();

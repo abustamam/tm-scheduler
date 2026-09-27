@@ -19,6 +19,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { showWriteError } from "#/components/write-error-toast";
 import {
 	buildPickerRows,
 	formatLastServed,
@@ -46,6 +47,7 @@ export function AssignSlotSheet({
 	unavailableIds,
 	roleRecency,
 	actorMemberId,
+	canReassign = false,
 	allowGuests = false,
 	clubGuests = [],
 	onOpenChange,
@@ -56,7 +58,18 @@ export function AssignSlotSheet({
 	roleByMemberId: Record<string, string>;
 	unavailableIds: string[];
 	roleRecency: RoleRecency;
+	/** Who is asserting the CLAIM of an open slot — `claimSlot` still carries an
+	 *  actor on the wire (the TMOD's asserted claim, #747). `reassignSlot` does
+	 *  not: it reads the session (#763). */
 	actorMemberId: string | null;
+	/**
+	 * May this viewer reassign a HELD slot (#1003)? `reassignSlot` refuses a
+	 * caller with no session since #763, so a non-manager TMOD identified by a
+	 * name-pick is offered the picker on an OPEN slot only, and a held one shows
+	 * who holds it and how to get the control. Defaults FALSE (fail closed); the
+	 * agenda passes `canManage || canTakeOver`.
+	 */
+	canReassign?: boolean;
 	/** Admin-only: offer the "assign a guest" path (#151). Never on the public
 	 *  self-serve/TMOD view. */
 	allowGuests?: boolean;
@@ -89,15 +102,19 @@ export function AssignSlotSheet({
 	);
 	const isReassign =
 		slot !== null && resolveAssignAction(slot).kind === "reassign";
+	// The visibility rule sits beside the claim-vs-reassign decision it guards:
+	// a held slot's picker renders only where `reassignSlot` would accept it.
+	const reassignBlocked = isReassign && !canReassign;
 
 	async function pick(memberId: string) {
-		if (!slot || !actorMemberId) {
+		if (!slot || reassignBlocked) return;
+		const action = resolveAssignAction(slot);
+		if (action.kind === "claim" && !actorMemberId) {
 			toast.error("Your account isn't linked to a club member yet.");
 			return;
 		}
 		setBusy(true);
 		try {
-			const action = resolveAssignAction(slot);
 			if (action.kind === "claim") {
 				await claimSlot({
 					data: {
@@ -110,14 +127,12 @@ export function AssignSlotSheet({
 					},
 				});
 			} else {
-				await reassignSlot({
-					data: { slotId: slot.id, memberId, actorMemberId },
-				});
+				await reassignSlot({ data: { slotId: slot.id, memberId } });
 			}
 			toast.success(isReassign ? "Role reassigned." : "Role assigned.");
 			await onAssigned();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setBusy(false);
 		}
@@ -136,7 +151,7 @@ export function AssignSlotSheet({
 			toast.success("Guest assigned.");
 			await onAssigned();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			showWriteError(err, "Something went wrong.");
 		} finally {
 			setBusy(false);
 		}
@@ -172,21 +187,26 @@ export function AssignSlotSheet({
 					</SheetDescription>
 				</SheetHeader>
 				<div className="px-4 pb-4">
-					<Command key={slot?.id ?? "closed"}>
-						<CommandInput placeholder="Search members…" />
-						<CommandList>
-							<CommandEmpty>No members found.</CommandEmpty>
-							<CommandGroup>
-								{rows.map((row) => (
-									<CommandItem
-										key={row.id}
-										value={`${row.name} ${row.id}`}
-										disabled={busy}
-										onSelect={() => pick(row.id)}
-										className="flex items-center justify-between gap-2"
-									>
-										<span className="flex flex-col">
-											{/* Tier 3 (#377): sorted last AND visually receded, so the
+					{reassignBlocked ? (
+						<p className="text-sm text-muted-foreground">
+							Someone already holds this role. Sign in to reassign it.
+						</p>
+					) : (
+						<Command key={slot?.id ?? "closed"}>
+							<CommandInput placeholder="Search members…" />
+							<CommandList>
+								<CommandEmpty>No members found.</CommandEmpty>
+								<CommandGroup>
+									{rows.map((row) => (
+										<CommandItem
+											key={row.id}
+											value={`${row.name} ${row.id}`}
+											disabled={busy}
+											onSelect={() => pick(row.id)}
+											className="flex items-center justify-between gap-2"
+										>
+											<span className="flex flex-col">
+												{/* Tier 3 (#377): sorted last AND visually receded, so the
 											    bottom of the list reads as "not candidates" without
 											    hiding anyone who might still need assigning. The
 											    recession is on the NAME only — dimming the whole row
@@ -197,38 +217,39 @@ export function AssignSlotSheet({
 											    keyboard-selection highlight on exactly the rows a user
 											    reaches by typing an unavailable member's name. The
 											    "Not available" badge carries the semantic signal. */}
-											<span
-												className={cn(
-													row.unavailable && "text-muted-foreground",
+												<span
+													className={cn(
+														row.unavailable && "text-muted-foreground",
+													)}
+												>
+													{row.name}
+												</span>
+												{row.lastServedAt ? (
+													<span className="text-muted-foreground text-xs">
+														Last: {formatLastServed(row.lastServedAt)}
+													</span>
+												) : (
+													<span className="font-medium text-warning-foreground text-xs">
+														Never done this role
+													</span>
 												)}
-											>
-												{row.name}
 											</span>
-											{row.lastServedAt ? (
-												<span className="text-muted-foreground text-xs">
-													Last: {formatLastServed(row.lastServedAt)}
-												</span>
-											) : (
-												<span className="font-medium text-warning-foreground text-xs">
-													Never done this role
-												</span>
-											)}
-										</span>
-										<span className="flex items-center gap-1">
-											{row.currentRole ? (
-												<Badge variant="secondary">{row.currentRole}</Badge>
-											) : null}
-											{row.unavailable ? (
-												<Badge variant="outline">Not available</Badge>
-											) : null}
-										</span>
-									</CommandItem>
-								))}
-							</CommandGroup>
-						</CommandList>
-					</Command>
+											<span className="flex items-center gap-1">
+												{row.currentRole ? (
+													<Badge variant="secondary">{row.currentRole}</Badge>
+												) : null}
+												{row.unavailable ? (
+													<Badge variant="outline">Not available</Badge>
+												) : null}
+											</span>
+										</CommandItem>
+									))}
+								</CommandGroup>
+							</CommandList>
+						</Command>
+					)}
 
-					{allowGuests ? (
+					{allowGuests && !reassignBlocked ? (
 						<div className="mt-4 space-y-3 border-t pt-4">
 							<p className="font-medium text-sm">Or assign a guest</p>
 							<p className="text-muted-foreground text-xs">

@@ -30,13 +30,22 @@ export interface MeetingViewer {
 	canToggleAvailability: boolean;
 	/** Take over someone else's filled slot — SIGNED-IN only (no honor-system booting). */
 	canTakeOver: boolean;
-	/** Edit the speech on your own filled speaker slot — public self-serve. */
+	/**
+	 * Edit the speech on your own filled speaker slot. Needs a SESSION as well as
+	 * an identity (#1003): `updateSpeakerDetails` refuses a name-pick since #763,
+	 * and ADR-0026 says a control the server refuses must not be shown. The
+	 * agenda ORs this with `canManage`, which is how an impersonating superadmin
+	 * (no member id) keeps the control.
+	 */
 	canEditOwnSpeech: boolean;
 	/** Claim an open slot. Offered to any visitor incl. a no-identity one (who identifies at click); a lockedViewer denies it. */
 	canClaim: boolean;
 	/**
-	 * Release your own filled slot. Any identity holding the slot may; a
-	 * `lockedViewer` denies it so a locked meeting stays read-only client-side.
+	 * Release your own filled slot. A SIGNED-IN identity holding the slot may
+	 * (#1003): `releaseSlot` refuses a name-pick since #763. A `lockedViewer`
+	 * denies it so a locked meeting stays read-only client-side. Like
+	 * `canEditOwnSpeech`, the session term lives HERE and never in front of
+	 * `canManage` at the call site.
 	 */
 	canReleaseOwn: boolean;
 	/** Open the "Edit meeting" dialog (theme/location/WOD/notes; reschedule is
@@ -67,15 +76,17 @@ export function meetingViewer(input: {
 	isGrammarian: boolean;
 	isEditableWindow: boolean;
 	/** The real-auth (Better-Auth) shell path (#317). Take-over ("boot" a held
-	 *  role) is granted ONLY here — the honor-system name-pick path may claim
-	 *  open slots but not reassign someone else's. Optional, defaults to false
-	 *  (fail closed: no take-over unless a caller opts in). */
+	 *  role), releasing your own slot and editing your own speech are granted
+	 *  ONLY here (#1003) — the honor-system name-pick path may claim open slots
+	 *  and nothing the server gates on a session. Optional, defaults to false
+	 *  (fail closed: none of the three unless a caller opts in). */
 	isSignedIn?: boolean;
 	/** Holds the meeting's Table Topics Master slot (#880). Optional, defaults
 	 *  to false (fail closed), as `isSignedIn`. */
 	isTableTopicsMaster?: boolean;
 }): MeetingViewer {
 	const hasIdentity = input.currentMemberId !== null;
+	const isSignedIn = input.isSignedIn ?? false;
 	const manages = input.canManage;
 	const runsMeeting = manages || input.isTmod;
 	return {
@@ -97,10 +108,11 @@ export function meetingViewer(input: {
 		canToggleAvailability: true,
 		canClaim: true,
 		// Boot a held role: real sign-in only (spec decision #6).
-		canTakeOver: input.isSignedIn ?? false,
-		// Need an established identity that actually holds the slot.
-		canEditOwnSpeech: hasIdentity,
-		canReleaseOwn: hasIdentity,
+		canTakeOver: isSignedIn,
+		// Need a session-backed identity that actually holds the slot (#1003):
+		// the server writes behind both require `requireSessionActor` (#763).
+		canEditOwnSpeech: hasIdentity && isSignedIn,
+		canReleaseOwn: hasIdentity && isSignedIn,
 		canEditWod:
 			input.isGrammarian && !input.isTmod && !manages && input.isEditableWindow,
 		canEditTableTopicsNotes:

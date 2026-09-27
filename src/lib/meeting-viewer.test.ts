@@ -23,22 +23,47 @@ describe("meetingViewer", () => {
 		expect(v.canToggleAvailability).toBe(true);
 	});
 
-	it("an anonymous name-pick member can claim/release/toggle but CANNOT take over", () => {
+	it("an anonymous name-pick member can claim/toggle but CANNOT take over, release or edit a speech", () => {
 		const v = meetingViewer(base);
 		expect(v.canClaim).toBe(true);
-		expect(v.canReleaseOwn).toBe(true);
 		expect(v.canToggleAvailability).toBe(true);
-		expect(v.canEditOwnSpeech).toBe(true);
+		// #1003 / ADR-0026: `releaseSlot` and `updateSpeakerDetails` refuse a
+		// name-pick since #763, so the controls must not be offered to one.
+		expect(v.canReleaseOwn).toBe(false);
+		expect(v.canEditOwnSpeech).toBe(false);
 		expect(v.canTakeOver).toBe(false); // honor-system path may not boot a held role
 		expect(v.canManage).toBe(false);
 		expect(v.canAssign).toBe(false);
 	});
 
-	it("a signed-in member additionally gets take-over", () => {
+	it("a signed-in member additionally gets take-over, release and edit-speech", () => {
 		const v = meetingViewer({ ...base, isSignedIn: true });
 		expect(v.canTakeOver).toBe(true);
 		expect(v.canClaim).toBe(true);
 		expect(v.canReleaseOwn).toBe(true);
+		expect(v.canEditOwnSpeech).toBe(true);
+	});
+
+	it("isSignedIn defaults to false: omitting it grants neither own-slot write (fail closed)", () => {
+		const { isSignedIn: _omit, ...noFlag } = base;
+		const v = meetingViewer(noFlag);
+		expect(v.canReleaseOwn).toBe(false);
+		expect(v.canEditOwnSpeech).toBe(false);
+	});
+
+	it("an impersonating superadmin (canManage, NO member id) still manages — admin parity", () => {
+		// The own-slot flags are false for them (no id), which is why the agenda
+		// grants Release / Edit speech on `canManage || (isMine && …)` and the
+		// session term must never be folded in front of `canManage`.
+		const v = meetingViewer({
+			...base,
+			currentMemberId: null,
+			canManage: true,
+			isSignedIn: false,
+		});
+		expect(v.canManage).toBe(true);
+		expect(v.canAssign).toBe(true);
+		expect(v.canReleaseOwn).toBe(false);
 	});
 
 	it("a prospective visitor (no identity) is offered claim + availability, nothing that needs a held slot", () => {
@@ -90,6 +115,7 @@ describe("meetingViewer", () => {
 		const gram = meetingViewer({
 			...base,
 			isGrammarian: true,
+			isSignedIn: true,
 			isEditableWindow: false,
 		});
 		expect(gram.canEditWod).toBe(false);

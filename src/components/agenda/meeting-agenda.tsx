@@ -299,6 +299,13 @@ export function MeetingAgenda({
 		viewer.canManage &&
 		viewer.canAssign &&
 		slots.some((s) => s.status === "open");
+	// Reassigning a HELD slot (#1003): `reassignSlot` needs a session since #763,
+	// so a TMOD identified by a name-pick is offered Assign on an OPEN slot (the
+	// asserted claim, kept until #747) and nothing on a held one. `canManage`
+	// stands on its own for admin parity: an impersonating superadmin has no
+	// member id and so no `canTakeOver`-style session flag of their own to lean
+	// on. `canTakeOver` IS the signed-in answer, and `lockedViewer` zeroes both.
+	const canReassignHeld = viewer.canManage || viewer.canTakeOver;
 	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
 	// The paired evaluator lineup, for the same ↑↓ reorder speakers get. Pairing
 	// is positional (Evaluator N evaluates Speaker N), so reordering evaluators
@@ -783,7 +790,7 @@ export function MeetingAgenda({
 													</div>
 												) : null}
 
-												{viewer.canAssign ? (
+												{viewer.canAssign && (isOpen || canReassignHeld) ? (
 													<Button
 														size="sm"
 														variant="outline"
@@ -1056,6 +1063,7 @@ export function MeetingAgenda({
 				unavailableIds={unavailableMemberIds}
 				roleRecency={roleRecency}
 				actorMemberId={currentMemberId}
+				canReassign={canReassignHeld}
 				allowGuests={viewer.canManage}
 				clubGuests={clubGuests}
 				onOpenChange={(open) => {
@@ -1103,7 +1111,6 @@ export function MeetingAgenda({
 							}
 						: null
 				}
-				actorMemberId={currentMemberId}
 				onOpenChange={(open) => {
 					if (!open) setEditSpeechSlot(null);
 				}}

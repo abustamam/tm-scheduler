@@ -255,6 +255,93 @@ describe("MeetingAgenda capability gating", () => {
 		expect(screen.queryByRole("button", { name: /Reassign/ })).toBeNull();
 	});
 
+	// #1003 / ADR-0026: `releaseSlot` and `updateSpeakerDetails` need a session
+	// since #763, so a name-pick sees their own slot and not the controls the
+	// server would refuse. The STATE stays: the holder's name still renders.
+	describe("own-slot controls follow the session (#1003)", () => {
+		const mySpeech = slot({
+			id: "sp-mine",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			status: "claimed",
+			assigneeId: "me",
+			assigneeName: "Mia Pick",
+		});
+		const viewerFor = (over: Partial<Parameters<typeof meetingViewer>[0]>) =>
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+				...over,
+			});
+
+		it("a name-pick gets no Release and no Edit speech on their own slot, and still sees their name", () => {
+			renderAgenda(viewerFor({ isSignedIn: false }), [mySpeech]);
+			expect(screen.queryByRole("button", { name: "Release" })).toBeNull();
+			expect(screen.queryByRole("button", { name: "Edit speech" })).toBeNull();
+			expect(screen.getAllByText(/Mia Pick/).length).toBeGreaterThan(0);
+		});
+
+		it("a signed-in holder gets Release and Edit speech on their own slot", () => {
+			renderAgenda(viewerFor({ isSignedIn: true }), [mySpeech]);
+			expect(screen.getByRole("button", { name: "Release" })).toBeTruthy();
+			expect(screen.getByRole("button", { name: "Edit speech" })).toBeTruthy();
+		});
+
+		it("canManage alone (an impersonating superadmin: no member id, no session flag) keeps Release and Edit speech", () => {
+			const theirs = { ...mySpeech, assigneeId: "other" } as AgendaSlot;
+			renderAgenda(
+				viewerFor({
+					currentMemberId: null,
+					canManage: true,
+					isSignedIn: false,
+				}),
+				[theirs],
+			);
+			expect(screen.getByRole("button", { name: "Release" })).toBeTruthy();
+			expect(screen.getByRole("button", { name: "Edit speech" })).toBeTruthy();
+		});
+
+		const held = slot({
+			id: "held",
+			status: "claimed",
+			assigneeId: "other",
+			assigneeName: "Other Person",
+		});
+		const open = slot({ id: "open", roleName: "Grammarian", status: "open" });
+
+		it("a name-pick TMOD is offered Assign on an OPEN slot and no Reassign on a HELD one", () => {
+			renderAgenda(viewerFor({ isTmod: true, isSignedIn: false }), [
+				held,
+				open,
+			]);
+			expect(screen.getByRole("button", { name: "Assign…" })).toBeTruthy();
+			expect(screen.queryByRole("button", { name: "Reassign…" })).toBeNull();
+			expect(screen.getAllByText(/Other Person/).length).toBeGreaterThan(0);
+		});
+
+		it("a signed-in TMOD is offered both Assign and Reassign", () => {
+			renderAgenda(viewerFor({ isTmod: true, isSignedIn: true }), [held, open]);
+			expect(screen.getByRole("button", { name: "Assign…" })).toBeTruthy();
+			expect(screen.getByRole("button", { name: "Reassign…" })).toBeTruthy();
+		});
+
+		it("a manager with no session flag (impersonation) is still offered Reassign", () => {
+			renderAgenda(
+				viewerFor({
+					currentMemberId: null,
+					canManage: true,
+					isSignedIn: false,
+				}),
+				[held],
+			);
+			expect(screen.getByRole("button", { name: "Reassign…" })).toBeTruthy();
+		});
+	});
+
 	it("gives a visitor with no name an enabled Claim that resolves identity on click", async () => {
 		const requireIdentity = vi.fn(async () => null); // dismissed → aborts
 		renderAgenda(
@@ -306,6 +393,9 @@ describe("MeetingAgenda capability gating", () => {
 					isTmod: false,
 					isGrammarian: false,
 					isEditableWindow: true,
+					// Signed in, so the missing Release is the LOCK's doing and not
+					// the session gate's (#1003).
+					isSignedIn: true,
 				}),
 			),
 			[mine],
@@ -1104,9 +1194,9 @@ describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
 			isGrammarian: false,
 			isEditableWindow: true,
 		});
-	const signedInMember = () =>
+	const signedInMember = (currentMemberId = "me") =>
 		meetingViewer({
-			currentMemberId: "me",
+			currentMemberId,
 			canManage: false,
 			isTmod: false,
 			isGrammarian: false,
@@ -1214,8 +1304,9 @@ describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
 		["past its day", meetingFixture({ scheduledAt: daysFromNow(-30) })],
 	])("does not flag a meeting that is over (%s), even for an unlocked viewer", (_label, meeting) => {
 		// The viewer's OWN card, so Release is present: proof the viewer is not
-		// locked and only `meetingOver` can be what hides the flag.
-		renderAgenda(unverified("m-held"), [held()], undefined, undefined, {
+		// locked and only `meetingOver` can be what hides the flag. Signed in,
+		// because a name-pick is not offered Release at all (#1003).
+		renderAgenda(signedInMember("m-held"), [held()], undefined, undefined, {
 			unavailableMemberIds: ["m-held"],
 			meeting,
 			meetingOver: true,
@@ -1225,7 +1316,7 @@ describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
 	});
 
 	it("does not flag a cancelled meeting", () => {
-		renderAgenda(unverified("m-held"), [held()], undefined, undefined, {
+		renderAgenda(signedInMember("m-held"), [held()], undefined, undefined, {
 			unavailableMemberIds: ["m-held"],
 			meeting: meetingFixture({ status: "cancelled" }),
 			meetingOver: false,
