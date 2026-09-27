@@ -550,23 +550,22 @@ const filesOf = (n: number): string => {
 	const paths = pathsByIssue.get(n) ?? [];
 	const missing = missingByIssue.get(n) ?? [];
 	const unread = unrecognisedByIssue.get(n) ?? [];
+
+	let base: string;
+	if (missing.length === 0) {
+		base = paths.length > 0 ? paths.join(", ") : "(no files cited)";
+	} else {
+		const absent = missing.join(", ");
+		base =
+			paths.length === 0
+				? `(cited, but absent from this checkout: ${absent})`
+				: `${paths.join(", ")}\n      (also cited, absent from this checkout: ${absent})`;
+	}
 	// Same reason as the absent half, one step earlier: a `## Files` entry the
 	// citation pattern cannot name never reached the existence check at all.
-	const unreadNote =
-		unread.length > 0
-			? `\n      (in ## Files, not a path the batcher reads: ${unread.join(", ")})`
-			: "";
-
-	if (missing.length === 0) {
-		return (
-			(paths.length > 0 ? paths.join(", ") : "(no files cited)") + unreadNote
-		);
-	}
-
-	const absent = missing.join(", ");
-	if (paths.length === 0)
-		return `(cited, but absent from this checkout: ${absent})${unreadNote}`;
-	return `${paths.join(", ")}\n      (also cited, absent from this checkout: ${absent})${unreadNote}`;
+	return unread.length > 0
+		? `${base}\n      (in ## Files, not a path the batcher reads: ${unread.join(", ")})`
+		: base;
 };
 
 const line = (n: number) => {

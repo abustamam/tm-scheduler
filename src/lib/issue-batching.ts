@@ -178,7 +178,7 @@ export const UNCITABLE_DIRS = [".claude/worktrees"] as const;
  * silently unbatchable issue and not an error. `json` ahead of `js` is the live
  * case of it.
  *
- * `json`, `js` and `yml` arrived with the roots that need them (#973):
+ * `json`, `js`, `yaml` and `yml` arrived with the roots that need them (#973):
  * `.github/workflows/ci.yml`, `public/sw.js`, `.claude/skills/…` alongside
  * `extension/package.json`. A root whose files no extension matches is a root
  * in name only.
@@ -192,6 +192,7 @@ export const CITED_EXTENSIONS = [
 	"md",
 	"json",
 	"js",
+	"yaml",
 	"yml",
 	"pdf",
 ] as const;
@@ -244,6 +245,15 @@ const escapeLiteral = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const NOT_AFTER_WORD = "(?<![A-Za-z0-9_])";
 
 /**
+ * The end of a cited path: no further path character, and no dot that starts
+ * another extension. A plain `\b` stopped at the dot, so `src/foo.js.map`
+ * was read as `src/foo.js` once `js` was citable — a citation of a DIFFERENT
+ * file. A dot followed by a space or the end is a full stop and is allowed, so
+ * "edit `.githooks/pre-commit`." keeps its cite.
+ */
+const ENDS_PATH = "(?![A-Za-z0-9_/$-]|\\.[A-Za-z0-9])";
+
+/**
  * A root directory, then anything under it: `src/lib/dcp.ts`.
  *
  * `$` is in the character class and is NOT optional here, though it is absent
@@ -271,20 +281,21 @@ const CITED_UNDER_ROOT =
 	`(?:\\b(?:${WORD_ROOTS.join("|")})` +
 	`|${NOT_AFTER_WORD}(?:${DOT_ROOTS.map(escapeLiteral).join("|")}))` +
 	`/[A-Za-z0-9_./$-]+` +
-	`\\.(?:${CITED_EXTENSIONS.join("|")})\\b`;
+	`\\.(?:${CITED_EXTENSIONS.join("|")})${ENDS_PATH}`;
 
 /**
  * A git hook: `.githooks/pre-commit`. Hooks have no extension, so the
  * root-and-extension shape above cannot name one, and `.githooks` would be a
  * root whose every real file is invisible.
  *
- * The trailing lookahead refuses a dot only when an extension-ish character
- * follows it — `.githooks/pre-commit.sh` belongs to the branch above, while
- * the full stop ending "edit `.githooks/pre-commit`." must not cost the cite.
+ * `ENDS_PATH` refuses a dot only when an extension-ish character follows it —
+ * `.githooks/pre-commit.sh` belongs to the branch above, while the full stop
+ * ending "edit `.githooks/pre-commit`." must not cost the cite.
  */
+const HOOKS_ROOT: (typeof CITED_ROOTS)[number] = ".githooks";
 const CITED_HOOK =
-	`${NOT_AFTER_WORD}\\.githooks/[a-z]+(?:-[a-z]+)*` +
-	`(?![A-Za-z0-9_/$-]|\\.[A-Za-z0-9])`;
+	`${NOT_AFTER_WORD}${escapeLiteral(HOOKS_ROOT)}/[a-z]+(?:-[a-z]+)*` +
+	ENDS_PATH;
 
 /**
  * One of the allowlisted root files and nothing else: `CLAUDE.md`.

@@ -516,6 +516,36 @@ describe("roots added for #973", () => {
 		]);
 	});
 
+	test("`yaml` is read as well as `yml`", () => {
+		expect(extractPaths("edit .github/workflows/ci.yaml")).toEqual([
+			".github/workflows/ci.yaml",
+		]);
+	});
+
+	// `js` is citable now, and a bare `\b` after the extension stopped at the
+	// next dot — reading a sourcemap as the script beside it.
+	test("an extension followed by another extension cites nothing", () => {
+		expect(extractPaths("see src/foo.js.map and public/sw.js.map")).toEqual([]);
+		expect(extractPaths("see public/sw.js.")).toEqual(["public/sw.js"]);
+	});
+
+	/**
+	 * The point of making a root citable at all. Extraction tests alone would
+	 * stay green if `public/sw.js` reached the extractor's output and was then
+	 * lost before the conflict set.
+	 */
+	test("two issues sharing only `public/sw.js` never share a wave", () => {
+		const body = (other: string) => `## Files\n\n- public/sw.js\n- ${other}\n`;
+		const plan = planBatches(
+			[
+				issue(1, extractPaths(body("src/a.ts"))),
+				issue(2, extractPaths(body("src/b.ts"))),
+			],
+			new Map(),
+		);
+		expect(plan.batches).toEqual([[1], [2]]);
+	});
+
 	test("a hook with an extension is read whole, not truncated", () => {
 		expect(extractPaths("add .githooks/pre-push.sh")).toEqual([
 			".githooks/pre-push.sh",
