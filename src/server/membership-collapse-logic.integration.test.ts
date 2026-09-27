@@ -155,11 +155,18 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			.where(eq(members.id, absorbedId));
 		expect(absorbedRows).toHaveLength(0);
 
-		// The office survived and now references the keeper.
+		// The office survived and now references the keeper. Scoped to this
+		// test's own two memberships: other suites seed treasurer terms in the
+		// same shared database concurrently (#961).
 		const terms = await testDb
 			.select()
 			.from(officerTerms)
-			.where(eq(officerTerms.position, "treasurer"));
+			.where(
+				and(
+					eq(officerTerms.position, "treasurer"),
+					inArray(officerTerms.membershipId, [keeperId, absorbedId]),
+				),
+			);
 		expect(terms).toHaveLength(1);
 		expect(terms[0]?.membershipId).toBe(keeperId);
 		expect(terms[0]?.termEnd).toBeNull();
@@ -971,6 +978,8 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			.from(officerTrainingRecords)
 			.where(
 				and(
+					// Scoped to this test's own two memberships (#961).
+					inArray(officerTrainingRecords.membershipId, [keeperId, absorbedId]),
 					eq(officerTrainingRecords.position, "secretary"),
 					eq(officerTrainingRecords.programYear, 2026),
 					eq(officerTrainingRecords.period, 1),
