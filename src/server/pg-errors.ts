@@ -37,3 +37,8 @@ export function isUniqueViolation(err: unknown): boolean {
 export function isDeadlock(err: unknown): boolean {
 	return isSqlState(err, "40P01");
 }
+
+/** SQLSTATE 55P03 — `lock_not_available`: a lock wait hit `lock_timeout`. */
+export function isLockTimeout(err: unknown): boolean {
+	return isSqlState(err, "55P03");
+}

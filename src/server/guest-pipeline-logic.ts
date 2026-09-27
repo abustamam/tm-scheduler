@@ -57,9 +57,11 @@ import {
 } from "#/lib/phone";
 import { normalizedEmail, rosterConflictFor } from "./account-link-logic";
 import { logActivity } from "./activity";
+import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
 import { closeOpenOfficerTerms } from "./officers-logic";
+import { isDeadlock } from "./pg-errors";
 
 /** The pipeline stages a guest may occupy (#208 / ADR-0018). */
 export type GuestStage = "prospect" | "following_up" | "joined" | "lost";
@@ -492,23 +494,33 @@ export interface CaptureGuestResult {
  * committed while we queued is seen here rather than missed.
  *
  * Two strengths, on purpose:
- * - `update` on the CREATE path, which already took `FOR UPDATE` to serialise
- *   the sign-up throttle's COUNT. Same statement, now also answering "archived?".
+ * - `no key update` on the CREATE path, which serialises the sign-up
+ *   throttle's COUNT. Same statement, now also answering "archived?". It was
+ *   `FOR UPDATE` until #925, and `FOR UPDATE` is the one strength that
+ *   conflicts with the `FOR KEY SHARE` every foreign-key insert takes on the
+ *   club row — so an officer's first agenda edit (meeting `FOR UPDATE`, then a
+ *   template insert referencing the club) waited on this capture while this
+ *   capture's attendance insert waited on that meeting: a 40P01. NO KEY UPDATE
+ *   still conflicts with itself, with SHARE, and with the archiving `UPDATE`,
+ *   which is everything this lock is FOR; it simply lets foreign-key inserts
+ *   past, the same trade the template save makes (`nextClubTemplateKey`).
  * - `share` on the RETURNING-guest path, which fills in contact details on an
  *   existing row and records a visit — still PII landing in a taken-down club,
- *   so it is gated too. It takes SHARE rather than UPDATE because it needs only
- *   to hold the takedown off. It still WAITS behind an in-flight new-guest
- *   `FOR UPDATE` and behind any club-settings `UPDATE` (harmless at guest-book
- *   volume), but returning guests do not queue behind each other, and SHARE
- *   coexists with the `FOR KEY SHARE` every foreign-key insert takes on the club
- *   row. `FOR UPDATE` here would conflict with those: a convert that holds this
- *   guest's row lock and then inserts a `members` row would wait on us while we
- *   wait on its guest row — a deadlock this path does not have today.
+ *   so it is gated too. It takes SHARE because it needs only to hold the
+ *   takedown off, and SHARE also coexists with the `FOR KEY SHARE` a
+ *   foreign-key insert takes: a convert that holds this guest's row lock and
+ *   then inserts a `members` row must never wait on us while we wait on its
+ *   guest row.
+ *
+ * Both run under the club write lock (`lockClubForWrite`, #925), which
+ * `captureGuestVisit` takes before anything else, so captures in one club no
+ * longer contend for this row with each other at all; the strengths are about
+ * the writers that do NOT take that lock.
  */
 async function lockOpenClub(
 	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
 	clubId: string,
-	strength: "update" | "share",
+	strength: "no key update" | "share",
 ): Promise<void> {
 	const [club] = await tx
 		.select({ archivedAt: clubs.archivedAt })
@@ -572,7 +584,42 @@ export async function captureGuestVisit(
 	const current = await resolveCurrentMeeting(input.clubId);
 	const meetingId = current?.atMeeting ? current.meetingId : null;
 
+	try {
+		return await captureInTransaction(input, meetingId, {
+			name,
+			email,
+			phone,
+		});
+	} catch (err) {
+		// #925. The writers that lock this club AND one of its meetings take the
+		// club write lock first, so none of them can deadlock a check-in; a 40P01
+		// here is a cycle through some writer that does not. Nothing was written
+		// (the transaction rolled back), so a visitor reads "try again" rather
+		// than the driver's `Failed query: …`. The original rides on `cause`, so a
+		// SQLSTATE check still sees it.
+		if (isDeadlock(err)) throw new Error(CLUB_BUSY_MESSAGE, { cause: err });
+		throw err;
+	}
+}
+
+/** `captureGuestVisit`'s transaction — split out only so the deadlock
+ *  translation wraps every statement in it at once. */
+function captureInTransaction(
+	input: { clubId: string },
+	meetingId: string | null,
+	contact: { name: string; email: string | null; phone: string | null },
+): Promise<CaptureGuestResult> {
+	const { name, email, phone } = contact;
 	return db.transaction(async (tx) => {
+		// 0. The club write lock, before any row is locked (#925). A new guest
+		//    locks the club and then (through the attendance insert's foreign
+		//    key) the meeting; a ballot join and a template save lock the meeting
+		//    and then the club. No single row order suits both, so every one of
+		//    them takes this first and they serialise per club. It replaces none
+		//    of the row locks below: the club lock is still the throttle's
+		//    serialisation and the archive gate.
+		await lockClubForWrite(tx, input.clubId);
+
 		// 1. Dedup, club-scoped: email → phone-with-name-agreement → none.
 		//    An `ambiguous` outcome (shared number, disagreeing name) resolves to
 		//    undefined here and creates a second prospect — which is #488's rule
@@ -606,11 +653,11 @@ export async function captureGuestVisit(
 			// the transaction is not a cap at all: every concurrent request reads
 			// the same pre-insert total and they all pass. That exact bypass was
 			// proved on the voting guest cap (#510), where 200 concurrent calls
-			// cleared a limit of 60. `FOR UPDATE` serialises signups per club, and
+			// cleared a limit of 60. The club lock serialises signups per club, and
 			// under READ COMMITTED the COUNT below takes a fresh snapshot once the
 			// lock is granted, so it sees the rows the requests ahead committed.
 			// The same locked read is the archive gate (#858).
-			await lockOpenClub(tx, input.clubId, "update");
+			await lockOpenClub(tx, input.clubId, "no key update");
 			const since = new Date(Date.now() - GUEST_BOOK_WINDOW_MS);
 			const [recent] = await tx
 				.select({ n: count() })
