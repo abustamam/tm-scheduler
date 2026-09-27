@@ -1,14 +1,16 @@
 import { describe, expect, test } from "vitest";
 
 import {
-	blockedTag,
+	blockerTags,
 	CITED_EXTENSIONS,
 	CITED_ROOT_FILES,
 	CITED_ROOTS,
+	classifyBlockers,
 	extractDependencies,
 	extractIssueNumbersFromRef,
 	extractPaths,
 	type IssueState,
+	ignoredTag,
 	importCandidates,
 	isCitablePath,
 	isMigrationBearing,
@@ -16,14 +18,13 @@ import {
 	issueStateQuery,
 	locateInPlan,
 	MIGRATION_LABEL,
-	openBlockers,
 	PRIORITY_LABEL,
 	parseIssueStates,
 	partitionClaimedIssues,
 	planBatches,
 	splitCitations,
-	stripQuotedText,
-	undispatchableWaves,
+	splitQuotedText,
+	waveBlockers,
 } from "#/lib/issue-batching";
 
 /**
@@ -1270,100 +1271,190 @@ describe("extractDependencies", () => {
 		expect(extractDependencies("See #619 for context")).toEqual({
 			blockedBy: [],
 			blocks: [],
+			ignored: [],
 		});
 	});
 });
 
 /**
- * A body that QUOTES another issue's dependency line is not blocked by it.
- * #967's own body had to be reworded because quoting #942's blocker line made
- * #967 read as blocked too. Each shape is paired with the real line it must
- * not swallow.
+ * Quoted text and dependencies. The dangerous direction is a REAL blocker
+ * dropped — that is how #942 got dispatched early (#967) — so every probe
+ * below must either still parse or come back in `ignored`, where the CLI
+ * prints it. Never silently vanish.
  */
-describe("extractDependencies — quoted text is someone else's", () => {
-	test("a real dependency line still parses beside quoted ones", () => {
+describe("extractDependencies — quoted text", () => {
+	const deps = (body: string) => extractDependencies(body);
+	/** Parsed, or reported as ignored — the two acceptable outcomes. */
+	const visible = (body: string, n: number) => {
+		const d = deps(body);
+		return d.blockedBy.includes(n) || d.ignored.some((i) => i.issue === n);
+	};
+
+	describe("probes that must still PARSE", () => {
+		test.each([
+			[
+				"an odd straight quote",
+				'Needs a 12" print. Blocked by #940, see "Files".',
+			],
+			["an unbalanced curly quote", "the “new flow. Blocked by #940"],
+			["a curly-quoted sentence", "He said “no. Depends on #940.” fine"],
+			["a line quoted for emphasis", '"Blocked by #940"'],
+			["a GitHub alert", "> [!IMPORTANT]\n> Blocked by #940"],
+			[
+				"a lower-case alert, continuation two lines on",
+				"> [!warning]\n> Heads up.\n> Requires #940",
+			],
+			["an unbalanced backtick", "Run `bun x. Blocked by #940"],
+			["a lone backtick beside a double run", "`` a ` b. Blocked by #940"],
+			["a ~~~ line inside a ``` fence", "```\n~~~\n```\nBlocked by #940"],
+			[
+				"a ``` line inside a longer ```` fence",
+				"````\n```\n````\nBlocked by #940",
+			],
+			["a 4-space-indented ``` line", "    ```\nBlocked by #940"],
+			[
+				"a backtick fence opener with a backtick in its info",
+				"``` a`b\nBlocked by #940",
+			],
+		])("%s", (_name, body) => {
+			expect(deps(body).blockedBy).toEqual([940]);
+			expect(deps(body).ignored).toEqual([]);
+		});
+	});
+
+	describe("probes that are skipped — and REPORTED", () => {
+		test("an author's own blockquote", () => {
+			expect(deps("> Depends on #940")).toEqual({
+				blockedBy: [],
+				blocks: [],
+				ignored: [
+					{
+						phrase: "Depends on #940",
+						issue: 940,
+						direction: "blockedBy",
+						quotedIn: "a blockquote",
+					},
+				],
+			});
+		});
+
+		test("an unclosed fence earlier in the body swallows the rest, visibly", () => {
+			const d = deps("```\nsome code\nBlocked by #940");
+			expect(d.blockedBy).toEqual([]);
+			expect(d.ignored).toEqual([
+				{
+					phrase: "Blocked by #940",
+					issue: 940,
+					direction: "blockedBy",
+					quotedIn: "a fenced block",
+				},
+			]);
+		});
+
+		test("a code span", () => {
+			expect(deps("its body says `Blocked by #939`").ignored).toEqual([
+				{
+					phrase: "Blocked by #939",
+					issue: 939,
+					direction: "blockedBy",
+					quotedIn: "a code span",
+				},
+			]);
+		});
+
+		test("a quoted `blocks` is reported in its own direction, not inverted", () => {
+			const d = deps("> Blocks #533");
+			expect(d.blocks).toEqual([]);
+			expect(d.ignored).toEqual([
+				{
+					phrase: "Blocks #533",
+					issue: 533,
+					direction: "blocks",
+					quotedIn: "a blockquote",
+				},
+			]);
+		});
+
+		test.each([
+			'Needs a 12" print. Blocked by #940, see "Files".',
+			"> Depends on #940",
+			"```\nBlocked by #940",
+			"x `Blocked by #940` y",
+			"> [!NOTE]\n> Blocked by #940",
+		])("every shape is visible one way or the other: %j", (body) => {
+			expect(visible(body, 940)).toBe(true);
+		});
+	});
+
+	test("#967's case: a quoted blocker line is not this issue's own", () => {
 		const body = [
 			"Blocked by #940",
 			"",
 			"> #942 says: Blocked by #939",
-			"The line reads `Blocked by #938` there.",
-		].join("\n");
-		expect(extractDependencies(body).blockedBy).toEqual([940]);
-	});
-
-	test("a blockquote line is skipped", () => {
-		expect(extractDependencies("> Blocked by #939").blockedBy).toEqual([]);
-		expect(extractDependencies("  > depends on #939").blockedBy).toEqual([]);
-	});
-
-	test("an inline code span is skipped, single or double backtick", () => {
-		expect(
-			extractDependencies("its body says `Blocked by #939`").blockedBy,
-		).toEqual([]);
-		expect(
-			extractDependencies("its body says ``Blocked by #939 `x` ``").blockedBy,
-		).toEqual([]);
-	});
-
-	test("a fenced block is skipped, backtick or tilde, and ends at its close", () => {
-		const body = [
+			"The line reads `Requires #938` there.",
 			"```",
-			"Blocked by #939",
+			"land #937 first",
 			"```",
-			"~~~md",
-			"Blocks #800",
-			"~~~",
-			"Depends on #940",
 		].join("\n");
-		expect(extractDependencies(body)).toEqual({
+		const d = deps(body);
+		expect(d.blockedBy).toEqual([940]);
+		expect(d.ignored.map((i) => i.issue)).toEqual([939, 938, 937]);
+	});
+
+	test("a phrase quoted AND stated is parsed, and not reported as ignored", () => {
+		const d = deps("Blocked by #940\n> Blocked by #940");
+		expect(d.blockedBy).toEqual([940]);
+		expect(d.ignored).toEqual([]);
+	});
+
+	test("a fence ends at a matching closer, so the dependency after it parses", () => {
+		expect(deps("~~~md\nBlocks #800\n~~~\nDepends on #940")).toEqual({
 			blockedBy: [940],
 			blocks: [],
+			ignored: [
+				{
+					phrase: "Blocks #800",
+					issue: 800,
+					direction: "blocks",
+					quotedIn: "a fenced block",
+				},
+			],
 		});
 	});
 
-	test("an unclosed fence runs to the end of the body", () => {
-		expect(
-			extractDependencies("Requires #940\n```\nBlocked by #939").blockedBy,
-		).toEqual([940]);
-	});
-
-	test("a double-quoted span in prose is skipped, straight or curly", () => {
-		expect(
-			extractDependencies('#942\'s body says "Blocked by #939".').blockedBy,
-		).toEqual([]);
-		expect(
-			extractDependencies("it says \u201cblocked by #939\u201d").blockedBy,
-		).toEqual([]);
-	});
-
-	test("quoted text elsewhere on the line leaves a real phrase intact", () => {
-		expect(
-			extractDependencies('Blocked by #940 (the "schema" half)').blockedBy,
-		).toEqual([940]);
-	});
-
-	test("apostrophes are not quotes — text between two is kept", () => {
-		// Pairing single quotes would blank `s body… #942` and lose the phrase.
-		expect(
-			extractDependencies("#941's work lands, then this depends on #942's")
-				.blockedBy,
-		).toEqual([942]);
-	});
-
-	test("a quoted `blocks` line is not inverted onto its target either", () => {
-		expect(extractDependencies("> Blocks #533").blocks).toEqual([]);
-	});
-
 	test("unquoted prose reporting another issue still parses — the documented limit", () => {
-		// Nothing in the text separates a report from a statement. The SKILL.md
-		// and `stripQuotedText` both say to quote it instead.
-		expect(extractDependencies("#942 is blocked by #940").blockedBy).toEqual([
-			940,
-		]);
+		expect(deps("#942 is blocked by #940").blockedBy).toEqual([940]);
 	});
 
-	test("stripQuotedText keeps ordinary lines as they were", () => {
-		expect(stripQuotedText("one\ntwo #3")).toBe("one\ntwo #3");
+	test("the ignored tag names each number once, and is empty with nothing ignored", () => {
+		const { ignored } = deps(
+			"> Blocked by #939\n`Blocked by #939` and `requires #1`",
+		);
+		expect(ignoredTag(ignored)).toBe("[QUOTED DEPENDENCY IGNORED: #939, #1]");
+		expect(ignoredTag([])).toBe("");
+	});
+
+	test("splitQuotedText keeps an alert's lines as stated text", () => {
+		expect(splitQuotedText("> [!TIP]\n> hello").quoted).toEqual([]);
+		expect(splitQuotedText("> quoted\nplain").stated).toBe("plain");
+	});
+});
+
+/**
+ * The fence tracker is shared with `filesSection`, so the `## Files` reader
+ * gets the same CommonMark rules.
+ */
+describe("extractPaths — fence rules match the dependency reader", () => {
+	test("a ~~~ line inside a ``` fence does not end it early", () => {
+		const body = [
+			"## Files",
+			"```",
+			"~~~",
+			"# not a heading",
+			"```",
+			"src/lib/a.ts",
+		].join("\n");
+		expect(extractPaths(body)).toEqual(["src/lib/a.ts"]);
 	});
 });
 
@@ -1377,22 +1468,36 @@ describe("open blockers", () => {
 		const o = new Set(open);
 		const c = new Set(closed);
 		return (n: number): IssueState =>
-			o.has(n) ? "open" : c.has(n) ? "closed" : "unknown";
+			o.has(n) ? "open" : c.has(n) ? "closed" : "unreadable";
 	};
+	const none = new Set<number>();
 
-	test("openBlockers drops closed and unknown blockers, keeps order", () => {
-		expect(openBlockers([939, 940, 941, 5], states([940, 939], [941]))).toEqual(
-			[939, 940],
+	test("classifyBlockers splits open from unreadable, drops closed, omits the clean", () => {
+		const status = classifyBlockers(
+			new Map([
+				[1, [939, 940, 941, 5]],
+				[2, [941]],
+				[3, []],
+			]),
+			states([940, 939], [941]),
 		);
+		expect([...status]).toEqual([[1, { open: [939, 940], unreadable: [5] }]]);
 	});
 
-	test("the tag names every open blocker, and is empty when there are none", () => {
-		expect(blockedTag([939, 940])).toBe("[BLOCKED BY #939, #940 — open]");
-		expect(blockedTag([])).toBe("");
+	test("the tags name open and unreadable blockers separately", () => {
+		expect(blockerTags({ open: [939, 940], unreadable: [] })).toEqual([
+			"[BLOCKED BY #939, #940 — open]",
+		]);
+		expect(blockerTags({ open: [], unreadable: [5] })).toEqual([
+			"[BLOCKER STATE UNKNOWN #5]",
+		]);
+		expect(blockerTags({ open: [1], unreadable: [5] })).toHaveLength(2);
+		expect(blockerTags(undefined)).toEqual([]);
 	});
 
 	test("a closed blocker is never tagged", () => {
-		expect(blockedTag(openBlockers([939], states([], [939])))).toBe("");
+		const status = classifyBlockers(new Map([[1, [939]]]), states([], [939]));
+		expect(blockerTags(status.get(1))).toEqual([]);
 	});
 
 	/** The shape that shipped: a wave issue whose blockers are both serial. */
@@ -1417,9 +1522,11 @@ describe("open blockers", () => {
 		expect(plan.batches).toEqual([[942, 923]]);
 		expect(plan.warnings).toEqual([]);
 
-		expect(
-			undispatchableWaves(plan, blockedBy, states([947, 940, 939, 942, 923])),
-		).toEqual([
+		const status = classifyBlockers(
+			blockedBy,
+			states([947, 940, 939, 942, 923]),
+		);
+		expect(waveBlockers(plan, status, none)).toEqual([
 			{
 				wave: 1,
 				waiting: [
@@ -1431,42 +1538,39 @@ describe("open blockers", () => {
 						],
 					},
 				],
+				unreadable: [],
 			},
 		]);
 	});
 
-	test("once the blockers close, the wave is dispatchable again", () => {
+	test("once the blockers close, the wave has nothing to report", () => {
 		const { plan, blockedBy } = shipped();
-		expect(
-			undispatchableWaves(plan, blockedBy, states([947, 942, 923], [939, 940])),
-		).toEqual([]);
-	});
-
-	test("an unknown-state blocker holds no wave (it is warned about separately)", () => {
-		const { plan, blockedBy } = shipped();
-		expect(undispatchableWaves(plan, blockedBy, states([947]))).toEqual([]);
-	});
-
-	test("a blocker outside the plan, or held back, is still open and still blocks", () => {
-		const plan = planBatches(
-			[
-				{ number: 1, paths: ["src/a.ts"], blockedBy: [500] },
-				{ number: 2, paths: ["src/b.ts"], blockedBy: [600] },
-			],
-			new Map(),
+		const status = classifyBlockers(
+			blockedBy,
+			states([947, 942, 923], [939, 940]),
 		);
-		const blockedBy = new Map([
-			[1, [500]],
-			[2, [600]],
+		expect(waveBlockers(plan, status, none)).toEqual([]);
+	});
+
+	test("an unreadable blocker marks the wave for a hand check, not as waiting", () => {
+		const { plan, blockedBy } = shipped();
+		const status = classifyBlockers(blockedBy, states([947, 942, 923], [940]));
+		expect(waveBlockers(plan, status, none)).toEqual([
+			{ wave: 1, waiting: [], unreadable: [{ issue: 942, blockers: [939] }] },
 		]);
-		expect(
-			undispatchableWaves(
-				plan,
-				blockedBy,
-				states([1, 2, 500, 600]),
-				new Set([600]),
-			),
-		).toEqual([
+	});
+
+	test("a blocker outside the plan, held back, or not batched still blocks", () => {
+		const plan = { serial: [], batches: [[1, 2, 3]], unknown: [700] };
+		const status = classifyBlockers(
+			new Map([
+				[1, [500]],
+				[2, [600]],
+				[3, [700]],
+			]),
+			states([1, 2, 3, 500, 600, 700]),
+		);
+		expect(waveBlockers(plan, status, new Set([600]))).toEqual([
 			{
 				wave: 1,
 				waiting: [
@@ -1475,7 +1579,9 @@ describe("open blockers", () => {
 						issue: 2,
 						blockers: [{ issue: 600, where: "already being worked" }],
 					},
+					{ issue: 3, blockers: [{ issue: 700, where: "not batched" }] },
 				],
+				unreadable: [],
 			},
 		]);
 	});
@@ -1489,15 +1595,12 @@ describe("open blockers", () => {
 			new Map(),
 		);
 		expect(plan.batches).toEqual([[1], [2]]);
-		const result = undispatchableWaves(
-			plan,
-			new Map([[2, [1]]]),
-			states([1, 2]),
-		);
-		expect(result).toEqual([
+		const status = classifyBlockers(new Map([[2, [1]]]), states([1, 2]));
+		expect(waveBlockers(plan, status, none)).toEqual([
 			{
 				wave: 2,
 				waiting: [{ issue: 2, blockers: [{ issue: 1, where: "WAVE 1" }] }],
+				unreadable: [],
 			},
 		]);
 	});

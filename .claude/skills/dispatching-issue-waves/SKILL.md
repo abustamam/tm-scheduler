@@ -39,13 +39,15 @@ exists.
 |---|---|---|
 | SERIAL | Touches a widely-imported file, or writes a migration | One at a time, merge between. The **order is meaningful** — it is dependency-sorted. |
 | WAVE n | Mutually file-disjoint | Dispatch together |
-| WAVE n — ⚠️ NOT DISPATCHABLE YET | An issue in it waits on a blocker still open on GitHub; the lines under the header say which and where (SERIAL, an earlier wave, already being worked, not in this plan) | Do not dispatch it, and **do not pair it with the stage holding the blocker** — sharing no files with that stage is not independence. Land the blocker, re-run. |
+| WAVE n — ⚠️ NOT DISPATCHABLE YET | An issue in it waits on a blocker still open on GitHub; the lines under the header say which and where: `SERIAL`, `WAVE n` (an earlier wave — or the same or a later one, which is also a DEPENDENCY VIOLATION), `already being worked`, `not batched` (in NEEDS A FILE PATH / CITED PATHS ARE MISSING), or `not in this plan` (open, but a different label or not requested) | Do not dispatch it, and **do not pair it with the stage holding the blocker** — sharing no files with that stage is not independence. Land the blocker, re-run. |
 | ALREADY BEING WORKED | A PR or live worktree names it | Do not dispatch. Re-run after it lands. |
 | NEEDS A FILE PATH | Body cites no file | Edit the issue body to name its files, then re-run. Do not guess and dispatch. |
 | CITED PATHS ARE MISSING HERE | Cites files this checkout lacks | `git pull --ff-only`, re-run. Still missing ⇒ the issue proposes a new file and needs one *existing* path too. |
 | ⚠️ DEPENDENCY VIOLATIONS | Could not be reordered | Sequence those by hand before dispatching |
 | ⚠️ Could not read PRs/worktrees | A claim source was unreachable | The plan may contain work someone else is on. Verify by hand. |
-| ⚠️ Could not read the state of blocker(s) | GitHub did not answer for those numbers | They are tagged nowhere and hold no wave. Check each by hand before dispatching what it blocks. |
+| WAVE n — ⚠️ CHECK BLOCKERS BY HAND | An issue in it names a blocker whose GitHub state could not be read | Open each named blocker yourself. Open ⇒ treat the wave as NOT DISPATCHABLE; closed ⇒ dispatch. |
+| ⚠️ Could not read the state of blocker(s) | Printed before the plan, with the first line `gh` wrote to stderr (auth, network, a nonexistent number) | Those blockers carry `[BLOCKER STATE UNKNOWN #N]` on their dependents' lines. Fix what `gh` said, or check each by hand. |
+| ⚠️ QUOTED DEPENDENCY PHRASES — ignored | A dependency phrase sat in a fence, blockquote or code span, so it was read as quoting someone else | If it is really the issue's own blocker, move it into plain prose and re-run. The issue's line carries `[QUOTED DEPENDENCY IGNORED: #N]` until then. |
 
 **The inline tags, and why they are not the same tag.** `[MIGRATION — run alone]` explains
 why an issue is in SERIAL. `[PRIORITY]` explains why it is EARLY — the maintainer has put it on
@@ -54,26 +56,37 @@ merely arrived first. Priority is a tie-break on order only, so a `[PRIORITY]` l
 still one-at-a-time, a line carrying both tags still runs alone, and a priority issue whose blocker
 is not priority still prints after that blocker. Both tags appear on the same line when both apply.
 
-`[BLOCKED BY #N, #M — open]` is the third, and it is about neither order nor isolation: those
-blockers are still OPEN ON GITHUB — not merely in this plan, so one sitting in `needs-triage` or
-held back by someone's worktree counts — and this issue must not start until they land. A closed
-blocker is never printed. On a SERIAL line the order already handles it; on a WAVE line the order
-is also right (SERIAL runs first) but is the only thing keeping it safe, which is why the wave's
-header says NOT DISPATCHABLE YET as well. #942 shipped in wave 1 with a bare line, was paired with
-the first SERIAL issue because they shared no files, and both its blockers were still in SERIAL.
 The header's `N priority` count says the ordering was applied at all — a plan with no priorities and
 a plan whose priorities all sorted to where they already were look identical otherwise.
+
+`[BLOCKED BY #N, #M — open]` is about neither order nor isolation: those blockers are still OPEN
+ON GITHUB — not merely in this plan, so one sitting in `needs-triage` or held back by someone's
+worktree counts — and this issue must not start until they land. A closed blocker is never
+printed. On a SERIAL line the order already handles it; on a WAVE line the order is also right
+(SERIAL runs first) but is the only thing keeping it safe, which is why the wave's header says NOT
+DISPATCHABLE YET as well. #942 shipped in wave 1 with a bare line, was paired with the first SERIAL
+issue because they shared no files, and both its blockers were still in SERIAL.
+`[BLOCKER STATE UNKNOWN #N]` is its unanswered twin: GitHub could not say, so the tool claims
+neither open nor closed. `[QUOTED DEPENDENCY IGNORED: #N]` means a phrase naming #N was skipped as
+quoted text — see below.
 
 **Writing an issue so the tool can read it:** see `docs/agents/issue-tracker.md`'s "Body
 conventions `batch:issues` reads" for the exact `## Files` heading and dependency phrasing
 (`blocked by #N`, `depends on #N`, `requires #N`, `land #N first`, `blocks #N`) it recognizes.
 
-A dependency phrase counts only where the body STATES it. Anything the body quotes is skipped: a
-fenced block, a `>` blockquote line, an inline code span, and a double-quoted span (straight or
-curly). So an issue reporting another's line — "#942's body says `blocked by #940`" — is not
-itself blocked by #940. What the tool cannot tell apart is the same report in plain, unquoted
-prose (`#942 is blocked by #940` written bare): that still reads as this issue's own dependency.
-Quote it, or drop the `#`.
+A dependency phrase counts only where the body STATES it. Three shapes are read as quoting someone
+else and skipped: a fenced block (CommonMark rules — closed only by the same character at least as
+long, and a 4-space-indented ``` is not a fence), a `>` blockquote line, and an inline code span.
+GitHub alert blocks (`> [!IMPORTANT]` and friends) are the author's own emphasis and are read.
+Double quotes are NOT a quoting shape: unpaired `"` is common and a line quoted for emphasis is
+still a statement. So an issue reporting another's line — #942's body says `blocked by #940` — is
+not itself blocked by #940.
+
+Skipping can be wrong (an author's own `> Depends on #N`, a fence left unclosed above the line), so
+**no skip is silent**: every skipped phrase whose number did not also parse from plain prose is
+printed under QUOTED DEPENDENCY PHRASES and tagged on the issue's line. What the tool still cannot
+tell apart is a report in plain prose (#942 is blocked by #940, written bare): that reads as this
+issue's own dependency. Put the report in a code span or blockquote, or drop the `#`.
 
 ## The line that reads as decoration and is not
 

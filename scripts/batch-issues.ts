@@ -17,8 +17,9 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import {
-	blockedTag,
+	blockerTags,
 	CITED_ROOT_FILES,
+	classifyBlockers,
 	CITED_ROOTS,
 	DEFAULT_FAN_IN_THRESHOLD,
 	DEFAULT_MAX_BATCH_SIZE,
@@ -29,17 +30,19 @@ import {
 	type IssueClaim,
 	isCitablePath,
 	isMigrationBearing,
+	type IgnoredDependency,
 	type IssueState,
+	type IssueStateMap,
+	ignoredTag,
 	issueStateQuery,
 	isPriority,
 	MIGRATION_LABEL,
-	openBlockers,
 	parseIssueStates,
 	partitionClaimedIssues,
 	planBatches,
 	PRIORITY_LABEL,
 	splitCitations,
-	undispatchableWaves,
+	waveBlockers,
 } from "../src/lib/issue-batching";
 
 const args = process.argv.slice(2);
@@ -333,11 +336,19 @@ const STATE_QUERY_CHUNK = 50;
  * The fetch above covers only the planned label, so a blocker still in
  * `needs-triage` — open, and exactly the one the plan's order cannot land for
  * you — would otherwise be indistinguishable from a closed one. A number that
- * cannot be read stays out of the map and prints as unknown; see
+ * cannot be read stays out of the map and is tagged unreadable; see
  * `IssueState`.
+ *
+ * `error` is the first line `gh` wrote to stderr, kept so the report can say
+ * WHY states are unreadable — an expired token and a network outage want
+ * different fixes, and both otherwise print as the same bare list of numbers.
  */
-function fetchIssueStates(numbers: number[]): Map<number, "open" | "closed"> {
-	const states = new Map<number, "open" | "closed">();
+function fetchIssueStates(numbers: number[]): {
+	states: IssueStateMap;
+	error: string | null;
+} {
+	const states: IssueStateMap = new Map();
+	let error: string | null = null;
 	for (let i = 0; i < numbers.length; i += STATE_QUERY_CHUNK) {
 		const chunk = numbers.slice(i, i + STATE_QUERY_CHUNK);
 		let out: string;
@@ -357,22 +368,30 @@ function fetchIssueStates(numbers: number[]): Map<number, "open" | "closed"> {
 				{
 					encoding: "utf8",
 					maxBuffer: 32 * 1024 * 1024,
-					stdio: ["ignore", "pipe", "ignore"],
+					stdio: ["ignore", "pipe", "pipe"],
 				},
 			);
 		} catch (e) {
 			// `gh` exits non-zero on a PARTIAL error (one nonexistent number) while
 			// still printing the rest of the answer; keep that answer.
-			out = String((e as { stdout?: unknown }).stdout ?? "");
+			const failure = e as { stdout?: unknown; stderr?: unknown; message?: string };
+			out = String(failure.stdout ?? "");
+			error ??=
+				String(failure.stderr ?? "")
+					.split("\n")
+					.map((l) => l.trim())
+					.find(Boolean) ??
+				failure.message ??
+				"gh failed with no message";
 		}
 		try {
 			for (const [n, st] of parseIssueStates(JSON.parse(out), chunk))
 				states.set(n, st);
 		} catch {
-			// Unparseable: every number in the chunk stays unknown, and says so.
+			// Unparseable: every number in the chunk stays unreadable, and says so.
 		}
 	}
-	return states;
+	return { states, error };
 }
 
 // ---- plan --------------------------------------------------------------------
@@ -412,8 +431,12 @@ const addBlocker = (issue: number, blocker: number) => {
 	set.add(blocker);
 	declaredBlockers.set(issue, set);
 };
+// Dependency phrases the body QUOTED and so were not read as its own. Kept to
+// be printed: skipping a quote can drop a real blocker, and that must be seen.
+const ignoredByIssue = new Map<number, IgnoredDependency[]>();
 for (const i of raw) {
-	const { blockedBy, blocks } = extractDependencies(i.body ?? "");
+	const { blockedBy, blocks, ignored } = extractDependencies(i.body ?? "");
+	if (ignored.length > 0) ignoredByIssue.set(i.number, ignored);
 	for (const b of blockedBy) addBlocker(i.number, b);
 	for (const b of blocks) addBlocker(b, i.number);
 }
@@ -467,12 +490,15 @@ const fetchedOpen = new Set(raw.map((i) => i.number));
 const outsideBlockers = [
 	...new Set(issues.flatMap((i) => i.blockedBy)),
 ].filter((n) => !fetchedOpen.has(n));
-const outsideStates = fetchIssueStates(outsideBlockers);
+const { states: outsideStates, error: stateError } =
+	fetchIssueStates(outsideBlockers);
 const stateOf = (n: number): IssueState =>
-	fetchedOpen.has(n) ? "open" : (outsideStates.get(n) ?? "unknown");
-const unknownBlockers = outsideBlockers.filter(
-	(n) => stateOf(n) === "unknown",
+	fetchedOpen.has(n) ? "open" : (outsideStates.get(n) ?? "unreadable");
+const unreadableBlockers = outsideBlockers.filter(
+	(n) => stateOf(n) === "unreadable",
 );
+// Classified ONCE: the line tags and the wave headers both read this map.
+const blockerStatus = classifyBlockers(blockedByIssue, stateOf);
 const pathsByIssue = new Map(issues.map((i) => [i.number, i.paths]));
 
 // Held back BEFORE planning rather than filtered out of the plan afterwards.
@@ -538,7 +564,8 @@ const line = (n: number) => {
 	const tags = [
 		priorityIssues.has(n) ? "[PRIORITY]" : "",
 		migrationIssues.has(n) ? "[MIGRATION — run alone]" : "",
-		blockedTag(openBlockers(blockedByIssue.get(n) ?? [], stateOf)),
+		...blockerTags(blockerStatus.get(n)),
+		ignoredTag(ignoredByIssue.get(n) ?? []),
 	].filter(Boolean);
 	const tag = tags.length > 0 ? `  ${tags.join("  ")}` : "";
 	return `  #${n}${tag}  ${titles.get(n) ?? ""}\n      ${filesOf(n)}`;
@@ -569,6 +596,19 @@ if (skippedClaimSources.length > 0) {
 	);
 }
 
+// Before the plan, beside the claim-source warning, for the same reason: the
+// lines below carry `[BLOCKER STATE UNKNOWN …]` and the reader needs to know
+// why before reading them. A state that could not be read is shown neither as
+// open nor as closed — printing it as open could report one that has landed.
+if (unreadableBlockers.length > 0) {
+	console.log(
+		`⚠️  Could not read the state of blocker(s) ${unreadableBlockers.map((n) => `#${n}`).join(", ")}` +
+			`${stateError ? `\n    gh said: ${stripControl(stateError)}` : ""}\n` +
+			`    Tagged [BLOCKER STATE UNKNOWN] below. Check each by hand before\n` +
+			`    dispatching anything it blocks.\n`,
+	);
+}
+
 if (plan.serial.length > 0) {
 	console.log("=== SERIAL — run these first, one at a time, merge between ===");
 	console.log("    (each touches a file much of the repo imports)\n");
@@ -580,18 +620,31 @@ if (plan.serial.length > 0) {
 // reads when deciding what to hand out, and the reason a wave is unsafe is
 // that its issues LOOK independent of everything above them.
 const heldBackNumbers = new Set(claimed.map((c) => c.issue.number));
-const notYet = new Map(
-	undispatchableWaves(plan, blockedByIssue, stateOf, heldBackNumbers).map(
-		(w) => [w.wave, w.waiting],
-	),
+const blockersByWave = new Map(
+	waveBlockers(plan, blockerStatus, heldBackNumbers).map((w) => [w.wave, w]),
 );
 
 plan.batches.forEach((batch, i) => {
-	const waiting = notYet.get(i + 1);
+	const report = blockersByWave.get(i + 1);
+	const waiting = report && report.waiting.length > 0 ? report.waiting : null;
+	const unreadable =
+		report && report.unreadable.length > 0 ? report.unreadable : null;
+	// NOT DISPATCHABLE outranks CHECK BLOCKERS: an open blocker is a fact, an
+	// unreadable one is an unanswered question. Both detail lines still print.
+	const marker = waiting
+		? " — ⚠️  NOT DISPATCHABLE YET"
+		: unreadable
+			? " — ⚠️  CHECK BLOCKERS BY HAND"
+			: "";
 	console.log(
-		`=== WAVE ${i + 1} — ${batch.length} agents in parallel` +
-			`${waiting ? " — ⚠️  NOT DISPATCHABLE YET" : ""} ===`,
+		`=== WAVE ${i + 1} — ${batch.length} agents in parallel${marker} ===`,
 	);
+	if (unreadable) {
+		for (const u of unreadable) {
+			const on = u.blockers.map((b) => `#${b}`).join(", ");
+			console.log(`      #${u.issue} waits on ${on} — state unreadable`);
+		}
+	}
 	if (waiting) {
 		console.log(
 			"    (an issue here waits on one still open — land it first, and do\n" +
@@ -667,15 +720,20 @@ if (plan.warnings.length > 0) {
 	console.log();
 }
 
-// A blocker whose state could not be read is shown NEITHER as open nor as
-// closed on the lines above — printing it as open could report one that has
-// landed — so it is named here instead of vanishing.
-if (unknownBlockers.length > 0) {
+// Printed for EVERY fetched issue, not only the planned ones: a quoted phrase
+// skipped on a held-back issue is just as capable of hiding a real blocker.
+if (ignoredByIssue.size > 0) {
+	console.log("=== ⚠️  QUOTED DEPENDENCY PHRASES — ignored ===");
 	console.log(
-		`⚠️  Could not read the state of blocker(s) ${unknownBlockers.map((n) => `#${n}`).join(", ")}.\n` +
-			`    They are NOT tagged as open above, and no wave is held for them.\n` +
-			`    Check them by hand before dispatching anything they block.\n`,
+		"    (inside a fence, blockquote or code span, so read as quoting someone\n" +
+			"     else. If one is really this issue's own blocker, move it into plain\n" +
+			"     prose and re-run.)\n",
 	);
+	for (const [n, ignored] of ignoredByIssue) {
+		for (const d of ignored)
+			console.log(`  #${n}: ignored "${d.phrase}" (in ${d.quotedIn})`);
+	}
+	console.log();
 }
 
 // The migration signal is half-armed until the label exists. Said out loud,
