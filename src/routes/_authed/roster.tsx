@@ -54,21 +54,41 @@ import {
 	previewMemberUpload,
 } from "#/server/upload-members";
 
+/** `?formerPathways=true`: an officer asked to see former members' Pathways. */
+type RosterSearch = { formerPathways?: true };
+
 export const Route = createFileRoute("/_authed/roster")({
-	loader: async ({ context }) => {
+	validateSearch: (search: Record<string, unknown>): RosterSearch =>
+		search.formerPathways === true || search.formerPathways === "true"
+			? { formerPathways: true }
+			: {},
+	loaderDeps: ({ search }) => ({
+		includeFormer: search.formerPathways === true,
+	}),
+	loader: async ({ context, deps }) => {
 		const clubId = context.activeClubId;
 		if (!clubId) {
-			return { members: [], openRoles: 0, pathways: {} };
+			return {
+				members: [],
+				openRoles: 0,
+				pathways: {},
+				formerPathwaysRequested: false,
+			};
 		}
 		const [members, upcoming, pathways] = await Promise.all([
 			listClubMembers({ data: clubId }),
 			listUpcomingMeetings({ data: clubId }),
-			listClubMemberPathways({ data: { clubId } }),
+			// A request only: the server returns inactive members' paths just to an
+			// officer or admin, whatever the URL says.
+			listClubMemberPathways({
+				data: { clubId, includeFormer: deps.includeFormer },
+			}),
 		]);
 		return {
 			members,
 			openRoles: upcoming[0]?.openSlots ?? 0,
 			pathways,
+			formerPathwaysRequested: deps.includeFormer,
 		};
 	},
 	component: Roster,
@@ -171,16 +191,27 @@ function pathwayLabelFor(paths: PathViewModel[]): string | null {
 }
 
 function Roster() {
-	const { members, openRoles, pathways } = Route.useLoaderData();
+	const { members, openRoles, pathways, formerPathwaysRequested } =
+		Route.useLoaderData();
 	const { clubs, activeClubId, officerPositions, impersonating } =
 		Route.useRouteContext();
 	const clubId = activeClubId;
+	const navigate = Route.useNavigate();
 	// Effective admin (#202): stored admin OR any elected officer can manage.
 	const canManage = !!effectiveAdminClub({
 		clubs,
 		activeClubId,
 		officerPositions,
 	});
+	// Who gets the "Show former members' Pathways" control: the client half of
+	// `mayRevealFormerMembersPathways`, which the server fn enforces on its own.
+	// `exportLinkAllowed` is the same read-only-impersonation test the export
+	// link uses: "View as this club" passes every client admin check, and the
+	// server refuses it here exactly as the export route does.
+	const mayShowFormerPathways =
+		!!clubId && canManage && exportLinkAllowed(impersonating, clubId);
+	const showFormerPathways =
+		mayShowFormerPathways && formerPathwaysRequested === true;
 	const [seg, setSeg] = useState<SegKey>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
 	const [importOpen, setImportOpen] = useState(false);
@@ -211,7 +242,12 @@ function Roster() {
 			phone: m.phone,
 			inviteState: inviteStateOf({ userId: m.userId, invitedAt: m.invitedAt }),
 			membershipStatus: m.status,
-			pathwayLabel: pathwayLabelFor(pathways[m.id] ?? []),
+			// The server already leaves a former member's paths out unless an
+			// officer opted in; this keeps the cell honest if it ever sends them.
+			pathwayLabel:
+				m.status === "inactive" && !showFormerPathways
+					? null
+					: pathwayLabelFor(pathways[m.id] ?? []),
 			holdsOffice: m.officerPositions.length > 0,
 		};
 	});
@@ -333,7 +369,7 @@ function Roster() {
 			</div>
 
 			{/* Segment filters (membership status) */}
-			<div className="mb-4 flex flex-wrap gap-2">
+			<div className="mb-4 flex flex-wrap items-center gap-2">
 				{ROSTER_SEGMENTS.map((s) => (
 					<SegmentChip
 						key={s.key}
@@ -343,6 +379,22 @@ function Roster() {
 						onSelect={() => setSeg(s.key)}
 					/>
 				))}
+				{mayShowFormerPathways ? (
+					<label className="ml-auto inline-flex cursor-pointer items-center gap-2 text-sm text-[var(--sea-ink-soft)]">
+						<input
+							type="checkbox"
+							className="size-4 accent-[var(--sea-ink)]"
+							checked={showFormerPathways}
+							onChange={(e) =>
+								navigate({
+									search: e.target.checked ? { formerPathways: true } : {},
+									replace: true,
+								})
+							}
+						/>
+						Show former members' Pathways
+					</label>
+				) : null}
 			</div>
 
 			{/* Table */}
@@ -452,7 +504,14 @@ function Roster() {
 
 							{/* Pathway */}
 							<div className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
-								{m.pathwayLabel ?? "—"}
+								{m.pathwayLabel ??
+									// An officer is told the column is hidden, not empty; anyone
+									// else sees the ordinary "no paths" dash.
+									(m.membershipStatus === "inactive" &&
+									mayShowFormerPathways &&
+									!showFormerPathways
+										? "Hidden"
+										: "—")}
 							</div>
 
 							{/* Phone. LIVE only when there is a link to click — the

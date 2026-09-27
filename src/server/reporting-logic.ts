@@ -226,9 +226,10 @@ export interface LevelProximityResult {
  *
  * Reads through `pathwaysByMember` rather than re-deriving progress, so this
  * section and the member's own Pathways panel count "left" the same way. That
- * batch returns every MEMBERSHIP with a path, inactive ones included, so the
- * active roster here is what filters (the same `status = 'active'` the rotation
- * uses). The selection itself is `selectLevelProximity`, pure and unit-tested.
+ * batch is active-only by default, and the active roster here filters again
+ * (the same `status = 'active'` the rotation uses), so a former member cannot
+ * produce a row by either route. The selection itself is
+ * `selectLevelProximity`, pure and unit-tested.
  */
 export async function loadLevelProximity(
 	clubId: string,

@@ -87,7 +87,13 @@ function memberRow(over: Record<string, unknown> = {}) {
 
 async function renderRoute(
 	members: ReturnType<typeof memberRow>[],
-	opts: { canManage?: boolean } = {},
+	opts: {
+		canManage?: boolean;
+		officerPositions?: string[];
+		impersonating?: { clubId: string; mode: "read_only" | "read_write" };
+		pathways?: Record<string, unknown[]>;
+		formerPathwaysRequested?: boolean;
+	} = {},
 ) {
 	vi.spyOn(Route, "useRouteContext").mockReturnValue({
 		clubs: [
@@ -99,13 +105,15 @@ async function renderRoute(
 			},
 		],
 		activeClubId: CLUB_ID,
-		officerPositions: [],
+		officerPositions: opts.officerPositions ?? [],
+		impersonating: opts.impersonating ?? null,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		members,
 		openRoles: 0,
-		pathways: {},
+		pathways: opts.pathways ?? {},
+		formerPathwaysRequested: opts.formerPathwaysRequested ?? false,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 
@@ -571,5 +579,123 @@ describe("CSV import preview — cross-club counts (#759)", () => {
 
 		expect(screen.queryByText(/not on this club's roster/)).toBeNull();
 		expect(screen.queryByText(/will be imported with an email/)).toBeNull();
+	});
+});
+
+describe("roster Pathway column — former members", () => {
+	const FORMER_ID = "33333333-3333-4333-8333-333333333333";
+	const path = (pathName: string) => ({
+		pathName,
+		complete: false,
+		currentLevel: 1,
+		levels: [],
+	});
+	const roster = () => [
+		memberRow(),
+		memberRow({ id: FORMER_ID, name: "Fay Former", status: "inactive" }),
+	];
+	const toggle = () =>
+		screen.queryByRole("checkbox", { name: "Show former members' Pathways" });
+
+	it("offers the control to an admin", async () => {
+		await renderRoute(roster(), { canManage: true });
+		expect(toggle()).toBeTruthy();
+	});
+
+	it("offers it to an elected officer whose stored role is member", async () => {
+		await renderRoute(roster(), { officerPositions: ["secretary"] });
+		expect(toggle()).toBeTruthy();
+	});
+
+	it("does not offer it to a plain member", async () => {
+		await renderRoute(roster());
+		expect(toggle()).toBeNull();
+	});
+
+	it("does not offer it under View as this club, which the server refuses", async () => {
+		await renderRoute(roster(), {
+			canManage: true,
+			impersonating: { clubId: CLUB_ID, mode: "read_only" },
+		});
+		expect(toggle()).toBeNull();
+	});
+
+	it("tells an officer a former member's Pathway is hidden until they opt in", async () => {
+		await renderRoute(roster(), { canManage: true });
+		expect(within(rowFor("Fay Former")).getByText("Hidden")).toBeTruthy();
+		expect(within(rowFor("Ada Member")).queryByText("Hidden")).toBeNull();
+	});
+
+	it("shows a plain member the ordinary dash, never the path", async () => {
+		await renderRoute(roster(), {
+			pathways: { [FORMER_ID]: [path("Leaked Path")] },
+			formerPathwaysRequested: true,
+		});
+		const row = rowFor("Fay Former");
+		expect(within(row).queryByText("Hidden")).toBeNull();
+		expect(within(row).queryByText("Leaked Path")).toBeNull();
+		expect(within(row).getByText("—")).toBeTruthy();
+	});
+
+	it("shows an officer who opted in the former member's path", async () => {
+		await renderRoute(roster(), {
+			canManage: true,
+			pathways: { [FORMER_ID]: [path("Dynamic Leadership")] },
+			formerPathwaysRequested: true,
+		});
+		expect(
+			within(rowFor("Fay Former")).getByText("Dynamic Leadership"),
+		).toBeTruthy();
+		expect((toggle() as HTMLInputElement).checked).toBe(true);
+	});
+
+	it("turning it on puts the request in the URL", async () => {
+		const navigate = vi.fn();
+		vi.spyOn(Route, "useNavigate").mockReturnValue(
+			navigate as unknown as ReturnType<typeof Route.useNavigate>,
+		);
+		const { fireEvent } = await import("@testing-library/react");
+		await renderRoute(roster(), { canManage: true });
+		fireEvent.click(toggle() as HTMLElement);
+		expect(navigate).toHaveBeenCalledWith(
+			expect.objectContaining({ search: { formerPathways: true } }),
+		);
+	});
+
+	it("the loader passes the URL's request to the server fn", async () => {
+		const { listClubMemberPathways } = await import("#/server/pathways-read");
+		const { listClubMembers } = await import("#/server/club");
+		const { listUpcomingMeetings } = await import("#/server/meetings");
+		vi.mocked(listClubMembers).mockResolvedValue([]);
+		vi.mocked(listUpcomingMeetings).mockResolvedValue([]);
+		vi.mocked(listClubMemberPathways).mockResolvedValue({});
+		type Loader = (a: {
+			context: { activeClubId: string };
+			deps: { includeFormer: boolean };
+		}) => Promise<unknown>;
+		const loader = Route.options.loader as unknown as Loader;
+		for (const includeFormer of [false, true]) {
+			await loader({
+				context: { activeClubId: CLUB_ID },
+				deps: { includeFormer },
+			});
+			expect(listClubMemberPathways).toHaveBeenLastCalledWith({
+				data: { clubId: CLUB_ID, includeFormer },
+			});
+		}
+	});
+
+	it("reads only an explicit true out of the URL", () => {
+		const validate = Route.options.validateSearch as unknown as (
+			s: Record<string, unknown>,
+		) => unknown;
+		expect(validate({ formerPathways: true })).toEqual({
+			formerPathways: true,
+		});
+		expect(validate({ formerPathways: "true" })).toEqual({
+			formerPathways: true,
+		});
+		expect(validate({})).toEqual({});
+		expect(validate({ formerPathways: "1" })).toEqual({});
 	});
 });
