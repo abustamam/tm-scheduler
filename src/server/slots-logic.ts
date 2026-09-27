@@ -17,9 +17,12 @@ import {
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
-import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
+import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
-import { setPlanStatus } from "./attendance-plan-logic";
+import {
+	type AttendancePlanStatus,
+	setPlanStatus,
+} from "./attendance-plan-logic";
 import { assertClubNotArchived, requireClubRole } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
@@ -1366,6 +1369,28 @@ export const NOT_THE_SLOT_HOLDER_MESSAGE =
  *  `slots-confirm.integration.test.ts` and its callers read it. */
 export const CONFIRM_NEEDS_SIGN_IN_MESSAGE = SIGN_IN_REQUIRED_MESSAGE;
 
+/** `confirmSlotCore`'s three "the slot moved under you" refusals, exported so
+ *  `confirmHeldClaimedSlots` can tell a lost race — which it skips — from a
+ *  gate, which it must not swallow (#908). Matched by exact string, so a
+ *  reworded message cannot silently turn a race into a thrown error or, worse,
+ *  a gate into a skip. */
+export const SLOT_NOT_FOUND_MESSAGE = "Role not found.";
+
+/** The holder arm's default plan floor: every rung except `coming`. */
+export const HOLDER_CONFIRM_PLAN_FLOOR: readonly AttendancePlanStatus[] = [
+	"reached_out",
+	"not_coming",
+];
+/** The floor for a caller that already recorded the answer itself (#908): only
+ *  the officer's ASK may still be written over, never a decline. */
+export const ASK_ONLY_PLAN_FLOOR: readonly AttendancePlanStatus[] = [
+	"reached_out",
+];
+export const ONLY_CLAIMED_CONFIRMABLE_MESSAGE =
+	"Only a claimed role can be confirmed.";
+export const SLOT_NO_LONGER_CLAIMED_MESSAGE =
+	"Slot was no longer claimed — it may have been released or reassigned concurrently.";
+
 /**
  * Confirm a claimed slot, from either of two arms (#661).
  *
@@ -1411,6 +1436,17 @@ export async function confirmSlotCore(args: {
 	sessionUserId: string | null;
 	/** Self-asserted holder id (the public arm), or null for the officer arm. */
 	selfMemberId: string | null;
+	/** HOW the caller's identity was established, when the caller resolved it
+	 *  (#908) — recorded as `detail.proof` on both activity rows the holder arm
+	 *  writes. Absent on the direct `confirmSlot` path, which resolves none;
+	 *  gating on it is #763's. */
+	proof?: WriteProof;
+	/** The holder arm's plan-write floor. Defaults to
+	 *  {@link HOLDER_CONFIRM_PLAN_FLOOR}, which is the direct `confirmSlot`
+	 *  path's behaviour and stays so until #763. A caller that has ALREADY
+	 *  recorded the member's answer passes {@link ASK_ONLY_PLAN_FLOOR}, so a
+	 *  decline that landed since cannot be overwritten by the confirm. */
+	planFloor?: readonly AttendancePlanStatus[];
 }): Promise<{ ok: true; grantedVia: ConfirmSlotVia; planWritten: boolean }> {
 	const [slot] = await db
 		.select({
@@ -1427,7 +1463,7 @@ export async function confirmSlotCore(args: {
 		.limit(1);
 
 	if (!slot) {
-		throw new Error("Role not found.");
+		throw new Error(SLOT_NOT_FOUND_MESSAGE);
 	}
 
 	// #555/#661. The holder arm takes NO session, so it reaches none of the
@@ -1444,7 +1480,7 @@ export async function confirmSlotCore(args: {
 	const grant = await resolveConfirmGrant(args, slot);
 
 	if (slot.status !== "claimed") {
-		throw new Error("Only a claimed role can be confirmed.");
+		throw new Error(ONLY_CLAIMED_CONFIRMABLE_MESSAGE);
 	}
 
 	return db.transaction(async (tx) => {
@@ -1478,9 +1514,7 @@ export async function confirmSlotCore(args: {
 			.returning({ id: roleSlots.id });
 
 		if (updated.length === 0) {
-			throw new Error(
-				"Slot was no longer claimed — it may have been released or reassigned concurrently.",
-			);
+			throw new Error(SLOT_NO_LONGER_CLAIMED_MESSAGE);
 		}
 
 		let planWritten = false;
@@ -1494,14 +1528,15 @@ export async function confirmSlotCore(args: {
 				status: "coming",
 				actorMemberId: grant.actorMemberId,
 				grantedVia: "self",
-				// `markComingOnSelfClaim`'s list, and for its reason: every rung
-				// EXCEPT `coming`, so a re-confirm logs nothing while a decline or an
-				// officer's ask is superseded. Confirming the role after previously
-				// declining is a real change of mind and should win — and it is the
-				// member's OWN answer either way, so this floor never lets one person
-				// overwrite another's: `reached_out` is the officer's ask, not a
-				// reply, and `not_coming` here can only be this member's.
-				demoteFrom: ["reached_out", "not_coming"],
+				// Default: `markComingOnSelfClaim`'s list, and for its reason: every
+				// rung EXCEPT `coming`, so a re-confirm logs nothing while a decline
+				// or an officer's ask is superseded. Confirming the role after
+				// previously declining is a real change of mind and should win — and
+				// it is the member's OWN answer either way, so this floor never lets
+				// one person overwrite another's: `reached_out` is the officer's ask,
+				// not a reply, and `not_coming` here can only be this member's.
+				demoteFrom: args.planFloor ?? HOLDER_CONFIRM_PLAN_FLOOR,
+				...(args.proof ? { proof: args.proof } : {}),
 			});
 			planWritten = changed;
 		}
@@ -1512,11 +1547,115 @@ export async function confirmSlotCore(args: {
 			action: "claim",
 			targetType: "slot",
 			targetId: args.slotId,
-			detail: { confirmed: true, grantedVia: grant.via },
+			detail: {
+				confirmed: true,
+				grantedVia: grant.via,
+				...(args.proof ? { proof: args.proof } : {}),
+			},
 		});
 
 		return { ok: true as const, grantedVia: grant.via, planWritten };
 	});
+}
+
+/** The refusals `confirmHeldClaimedSlots` treats as "this slot moved since we
+ *  listed it" rather than as a failure. Every one of them is a race with an
+ *  officer's release, reassignment or removal, and none is a gate: the archive
+ *  and lock refusals are deliberately absent, so they still throw. */
+const LOST_CONFIRM_RACE: ReadonlySet<string> = new Set([
+	SLOT_NOT_FOUND_MESSAGE,
+	ONLY_CLAIMED_CONFIRMABLE_MESSAGE,
+	SLOT_NO_LONGER_CLAIMED_MESSAGE,
+	NOT_THE_SLOT_HOLDER_MESSAGE,
+]);
+
+/**
+ * Confirm every role `memberId` holds on `meetingId` that is still `claimed`,
+ * through the HOLDER arm of `confirmSlotCore` (#908).
+ *
+ * This is what "I'll be there" on the personal meeting page means once the
+ * member holds a role. The confirm nudge (`buildNudge` mode `confirm`) links to
+ * that page and asks the member to confirm; until #908 the page's only "yes"
+ * wrote a `coming` plan row and nothing else, so the slot stayed `claimed` and
+ * the officer read the member's reply as silence.
+ *
+ * The slots are resolved HERE, at write time, never passed in by the client.
+ * The page is a chat link that stays open for days (rule 2 in
+ * `personal-meeting-body.tsx`'s header), so a role assigned after it loaded must
+ * still be confirmed — a list taken off the rendered view would miss exactly
+ * that one.
+ *
+ * Each slot goes through `confirmSlotCore` UNCHANGED, one call per slot, so the
+ * archive gate, the meeting lock and the holder-matching conditional UPDATE (the
+ * reassignment race) all stay in the path for every flip. The caller has
+ * ALREADY recorded the answer, so the confirm's own plan write is floored at
+ * {@link ASK_ONLY_PLAN_FLOOR}: over the `coming` just written it writes and
+ * logs nothing (one `plan_set`, not one per role), and a `not_coming` that
+ * landed between the answer and the confirm survives rather than being
+ * overwritten and logged as the member's own `coming`. The slot still flips in
+ * that window — the confirm is about the role, and the decline is what the
+ * officer sees on the rail.
+ *
+ * A slot that moved between the list and its flip — released, reassigned,
+ * removed, or already confirmed by an officer — is skipped rather than thrown:
+ * the member said yes, and the roles that are still theirs should say so. The
+ * archive and lock gates are asserted up front as well as per slot, so a member
+ * with NO claimed slot on a taken-down club or a completed meeting is refused
+ * too, rather than succeeding vacuously.
+ *
+ * Returns the role names actually flipped, in slot order, for the page's toast.
+ */
+export async function confirmHeldClaimedSlots(args: {
+	memberId: string;
+	meetingId: string;
+	/** How the caller's identity was established (`resolveActor`'s `proof`),
+	 *  recorded on every confirm this writes so #763 can gate this path and
+	 *  `confirmSlot` in one place. */
+	proof: WriteProof;
+}): Promise<{ confirmedRoles: string[] }> {
+	const [meeting] = await db
+		.select({ clubId: meetings.clubId, status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, args.meetingId))
+		.limit(1);
+	if (!meeting) throw new Error("Meeting not found.");
+	// Takedown first, then the lock — `confirmSlotCore`'s own order and reason.
+	await assertClubNotArchived(meeting.clubId);
+	assertMeetingNotLocked(meeting.status);
+
+	const held = await db
+		.select({ slotId: roleSlots.id, roleName: roleDefinitions.name })
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.where(
+			and(
+				eq(roleSlots.meetingId, args.meetingId),
+				eq(roleSlots.assignedMemberId, args.memberId),
+				eq(roleSlots.status, "claimed"),
+			),
+		)
+		.orderBy(roleSlots.slotIndex);
+
+	const confirmedRoles: string[] = [];
+	for (const slot of held) {
+		try {
+			await confirmSlotCore({
+				slotId: slot.slotId,
+				sessionUserId: null,
+				selfMemberId: args.memberId,
+				proof: args.proof,
+				planFloor: ASK_ONLY_PLAN_FLOOR,
+			});
+			confirmedRoles.push(slot.roleName);
+		} catch (error) {
+			if (!LOST_CONFIRM_RACE.has(error instanceof Error ? error.message : ""))
+				throw error;
+		}
+	}
+	return { confirmedRoles };
 }
 
 /** The resolved arm. A union rather than two loose fields so the plan write can

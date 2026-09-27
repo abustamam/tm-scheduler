@@ -88,6 +88,10 @@ export interface PersonalMeetingRole {
 	 *  talk. `isRealSpeechTitle` inside the duty registry is the one predicate
 	 *  that knows about the sentinel — do not re-derive it. */
 	speechTitle: string | null;
+	/** The slot's status (#908): `claimed` means the member has not confirmed
+	 *  it yet, which is what decides whether the page still offers a lone
+	 *  "I'll be there" to a member who has already answered. */
+	status: (typeof roleSlots.$inferSelect)["status"];
 }
 
 export interface PersonalMeetingView {
@@ -259,6 +263,7 @@ export async function loadPublicPersonalMeetingView(args: {
 			roleName: roleDefinitions.name,
 			roleKey: roleDefinitions.key,
 			speechTitle: speeches.title,
+			status: roleSlots.status,
 		})
 		.from(roleSlots)
 		.innerJoin(
@@ -327,6 +332,7 @@ export async function loadPublicPersonalMeetingView(args: {
 			roleName: r.roleName,
 			roleKey: r.roleKey,
 			speechTitle: r.speechTitle,
+			status: r.status,
 		})),
 		planStatus,
 	};

@@ -204,9 +204,17 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	// `clearAvailability` and `markUnavailableReleasing` each call
 	// `requireSessionActor` in their own handler now, so the default-`session`
 	// sweep covers them and a row here would only hide a gate being deleted.
+	// `setPlannedAttendance` ALSO confirms the member's claimed roles when a
+	// `coming` carries `confirmHeldRoles` (#908) — the holder-arm capability
+	// `slots.ts#confirmSlot` has above, reached through `confirmSlotCore`. The
+	// plan half is fill-blank; the confirm half is still pending proof, so when
+	// #763 hardens `confirmSlot` ("an unverified claim or confirm only fills a
+	// blank") it must harden this path too. Both pass through
+	// `confirmSlotCore`, which records the caller's `proof` from this path.
 	"attendance-plan.ts#setPlannedAttendance": {
 		class: "fill-blank",
-		reason: "ADR-0026",
+		reason:
+			"ADR-0026 for the plan rung; its confirmHeldRoles slot confirm (#908) is confirmSlot's pending-proof holder arm, hardened with it by #763",
 	},
 	"availability.ts#setAvailability": {
 		class: "fill-blank",
