@@ -13,7 +13,10 @@
  * and asserts behaviour rather than text:
  *
  *   · the handler CALLS the core, inside the transaction it opened;
- *   · it passes the RESOLVED actor, never the one the client asserted (#396);
+ *   · it passes the RESOLVED actor, never the one the client asserted (#396),
+ *     with the proof it was resolved on (#763) — `claimSlot` through
+ *     `requestWriteActorWithProof`, `releaseSlot` / `reassignSlot` through the
+ *     session gate `requireSessionActor`, which reads nothing off the wire;
  *   · a refusal the core raises — the archive refusal above all — reaches the
  *     caller unchanged rather than being swallowed into a success;
  *   · a trust guard that refuses stops the request BEFORE any transaction.
@@ -73,7 +76,11 @@ vi.mock("./guards", () => ({
 }));
 vi.mock("./meeting-authz-logic", () => ({ assertMeetingNotLocked: vi.fn() }));
 vi.mock("./write-actor-logic", () => ({
-	requestWriteActor: vi.fn(async () => RESOLVED_ACTOR),
+	requestWriteActorWithProof: vi.fn(async () => ({
+		memberId: RESOLVED_ACTOR,
+		proof: "asserted",
+	})),
+	requireSessionActor: vi.fn(async () => ({ memberId: RESOLVED_ACTOR })),
 }));
 vi.mock("./slots-logic", () => ({
 	applyAddRoleSlot: vi.fn(),
@@ -93,14 +100,18 @@ import { db } from "#/db";
 import { requireMemberInClub } from "./guards";
 import { claimSlot, reassignSlot, releaseSlot } from "./slots";
 import * as logic from "./slots-logic";
-import { requestWriteActor } from "./write-actor-logic";
+import {
+	requestWriteActorWithProof,
+	requireSessionActor,
+} from "./write-actor-logic";
 
 beforeEach(() => {
 	vi.clearAllMocks();
 	preRead.rows = [{ clubId: CLUB_ID }];
 });
 
-/** Each handler, the core it must reach, and what it must hand that core. */
+/** Each handler, the core it must reach, what it must hand that core, and the
+ *  actor seam it must resolve through. */
 const CASES = [
 	{
 		name: "claimSlot",
@@ -119,13 +130,18 @@ const CASES = [
 			memberId: MEMBER_ID,
 			actorMemberId: RESOLVED_ACTOR,
 			speakerDetails: { speechTitle: "Ice Breaker" },
+			proof: "asserted",
 		},
+		resolver: () => vi.mocked(requestWriteActorWithProof),
+		resolverArgs: { clubId: CLUB_ID, claimedActorMemberId: ASSERTED_ACTOR },
+		result: { ok: true, proof: "asserted" },
 		guardsTarget: true,
 	},
 	{
 		name: "reassignSlot",
 		call: () =>
 			reassignSlot({
+				// An old client still sends an actor; it must be ignored (#763).
 				data: {
 					slotId: SLOT_ID,
 					memberId: MEMBER_ID,
@@ -137,7 +153,11 @@ const CASES = [
 			slotId: SLOT_ID,
 			memberId: MEMBER_ID,
 			actorMemberId: RESOLVED_ACTOR,
+			proof: "session",
 		},
+		resolver: () => vi.mocked(requireSessionActor),
+		resolverArgs: { clubId: CLUB_ID },
+		result: { ok: true },
 		guardsTarget: true,
 	},
 	{
@@ -147,21 +167,26 @@ const CASES = [
 				data: { slotId: SLOT_ID, actorMemberId: ASSERTED_ACTOR },
 			}),
 		core: () => vi.mocked(logic.releaseSlotCore),
-		expectedArgs: { slotId: SLOT_ID, actorMemberId: RESOLVED_ACTOR },
+		expectedArgs: {
+			slotId: SLOT_ID,
+			actorMemberId: RESOLVED_ACTOR,
+			proof: "session",
+		},
+		resolver: () => vi.mocked(requireSessionActor),
+		resolverArgs: { clubId: CLUB_ID },
+		result: { ok: true },
 		guardsTarget: false,
 	},
 ] as const;
 
 describe.each(CASES)("$name transport (#825)", (c) => {
 	it("delegates to its core inside the handler's transaction, with the resolved actor", async () => {
-		await expect(c.call()).resolves.toEqual({ ok: true });
+		await expect(c.call()).resolves.toEqual(c.result);
 
 		expect(c.core()).toHaveBeenCalledTimes(1);
 		expect(c.core()).toHaveBeenCalledWith(TX, c.expectedArgs);
-		expect(requestWriteActor).toHaveBeenCalledWith({
-			clubId: CLUB_ID,
-			claimedActorMemberId: ASSERTED_ACTOR,
-		});
+		expect(c.resolver()).toHaveBeenCalledTimes(1);
+		expect(c.resolver()).toHaveBeenCalledWith(c.resolverArgs);
 	});
 
 	it("surfaces the core's archive refusal to the caller", async () => {
@@ -170,9 +195,7 @@ describe.each(CASES)("$name transport (#825)", (c) => {
 	});
 
 	it("refuses before any transaction when the actor cannot be resolved", async () => {
-		vi.mocked(requestWriteActor).mockRejectedValueOnce(
-			new Error("not on this roster"),
-		);
+		c.resolver().mockRejectedValueOnce(new Error("not on this roster"));
 		await expect(c.call()).rejects.toThrow("not on this roster");
 		expect(db.transaction).not.toHaveBeenCalled();
 		expect(c.core()).not.toHaveBeenCalled();
@@ -183,6 +206,17 @@ describe.each(CASES)("$name transport (#825)", (c) => {
 		await expect(c.call()).rejects.toThrow("Role not found.");
 		expect(db.transaction).not.toHaveBeenCalled();
 		expect(c.core()).not.toHaveBeenCalled();
+	});
+
+	it("never falls back to the other actor seam", async () => {
+		// The session-gated pair must not ALSO consult the asserted resolver,
+		// and the claim must not require a session (#763).
+		await c.call();
+		const other =
+			c.resolver() === vi.mocked(requireSessionActor)
+				? requestWriteActorWithProof
+				: requireSessionActor;
+		expect(other).not.toHaveBeenCalled();
 	});
 
 	if (c.guardsTarget) {

@@ -380,6 +380,9 @@ describe("formatActivity", () => {
 			formatActivity({ ...meetingBase, change: "evaluator_reordered" }).summary,
 		).toBe("reordered evaluators");
 		expect(
+			formatActivity({ ...meetingBase, change: "speaker_details" }).summary,
+		).toBe("updated speech details");
+		expect(
 			formatActivity({ ...meetingBase, change: "role_added" }).summary,
 		).toBe("added a role");
 		expect(

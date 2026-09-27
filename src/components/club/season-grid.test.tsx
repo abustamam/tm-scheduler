@@ -33,7 +33,14 @@ const {
 	toastSuccess,
 	toastError,
 } = vi.hoisted(() => ({
-	claimSlot: vi.fn(async () => ({ ok: true })),
+	// #763: like `setAvailability`, the claim REPORTS its proof and the grid
+	// offers Undo (a session-gated release) only on `"session"`.
+	claimSlot: vi.fn(
+		async (): Promise<{ ok: true; proof: "session" | "asserted" | null }> => ({
+			ok: true,
+			proof: "session",
+		}),
+	),
 	clearAvailability: vi.fn(async () => ({ ok: true })),
 	markUnavailableReleasing: vi.fn(async () => ({ ok: true, released: 1 })),
 	releaseSlot: vi.fn(async () => ({ ok: true })),
@@ -191,14 +198,22 @@ async function renderContactGrid() {
 
 // SeasonGrid renders <Link>s (meeting header, member row), so mount it under
 // a minimal router — mirrors the pattern in guest-resources.test.tsx.
-async function renderGrid(requireIdentity: () => Promise<StoredMember | null>) {
+async function renderGrid(
+	requireIdentity?: () => Promise<StoredMember | null>,
+	over: {
+		data?: SeasonGridData;
+		currentMemberId?: string | null;
+		currentMemberSource?: "anon" | "session";
+	} = {},
+) {
 	const rootRoute = createRootRoute({
 		component: () => (
 			<SeasonGrid
-				data={data}
+				data={over.data ?? data}
 				orientation="roles"
 				count="all"
-				currentMemberId={null}
+				currentMemberId={over.currentMemberId ?? null}
+				currentMemberSource={over.currentMemberSource}
 				requireIdentity={requireIdentity}
 			/>
 		),
@@ -219,7 +234,7 @@ describe("SeasonGrid prospective claim + undo", () => {
 		toastError.mockClear();
 	});
 
-	it("claims with the freshly-resolved identity, and Undo releases with that SAME id (not the stale null prop)", async () => {
+	it("claims with the freshly-resolved identity, and a SESSION claim's Undo releases that slot", async () => {
 		const requireIdentity = vi.fn(async () => PICKED);
 		await renderGrid(requireIdentity);
 
@@ -244,11 +259,37 @@ describe("SeasonGrid prospective claim + undo", () => {
 		options.action.onClick();
 
 		await waitFor(() => expect(releaseSlot).toHaveBeenCalledTimes(1));
-		// The Critical bug: release() closed over the render's (null)
-		// currentMemberId instead of the resolved memberId, so Undo no-op'd.
-		expect(releaseSlot).toHaveBeenCalledWith({
-			data: { slotId: "slot-1", actorMemberId: PICKED.id },
-		});
+		// The Critical bug this once caught — release() closing over the render's
+		// null identity and no-op'ing — cannot recur: since #763 the release
+		// carries no actor at all, the server credits the session.
+		expect(releaseSlot).toHaveBeenCalledWith({ data: { slotId: "slot-1" } });
+	});
+
+	it("withholds Undo from an ASSERTED claim (#763)", async () => {
+		// Undo is `releaseSlot`, session-gated since #763. Offered to a name-pick
+		// its every tap would come back "you need to be signed in" on the toast
+		// that just said the claim worked.
+		claimSlot.mockResolvedValueOnce({ ok: true, proof: "asserted" });
+		await renderGrid(vi.fn(async () => PICKED));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /claim/i }),
+		);
+
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(toastSuccess.mock.calls[0]?.[0]).toBe("Role claimed.");
+		expect(toastSuccess.mock.calls[0]?.[1]?.action).toBeUndefined();
+		expect(releaseSlot).not.toHaveBeenCalled();
+	});
+
+	it("withholds Undo when the claim reports no proof (impersonated or stale)", async () => {
+		claimSlot.mockResolvedValueOnce({ ok: true, proof: null });
+		await renderGrid(vi.fn(async () => PICKED));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /claim/i }),
+		);
+
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(toastSuccess.mock.calls[0]?.[1]?.action).toBeUndefined();
 	});
 
 	it("aborts cleanly (no claim call) when the identity picker is dismissed", async () => {
@@ -262,6 +303,55 @@ describe("SeasonGrid prospective claim + undo", () => {
 		expect(claimSlot).not.toHaveBeenCalled();
 		expect(toastSuccess).not.toHaveBeenCalled();
 		expect(toastError).not.toHaveBeenCalled();
+	});
+});
+
+describe("SeasonGrid: your own role is a release control only with a session (#763)", () => {
+	const mine: SeasonGridData = {
+		...data,
+		memberNames: [{ id: PICKED.id, name: PICKED.name }],
+		cells: [
+			{
+				slotId: "slot-1",
+				meetingId: "m1",
+				roleDefinitionId: "ti",
+				slotIndex: 0,
+				memberId: PICKED.id,
+				guestId: null,
+				status: "claimed",
+			},
+		],
+	};
+
+	afterEach(() => {
+		releaseSlot.mockClear();
+		toastSuccess.mockClear();
+		toastError.mockClear();
+	});
+
+	it("an anon name-pick sees their role but cannot tap it into a refusal", async () => {
+		await renderGrid(undefined, {
+			data: mine,
+			currentMemberId: PICKED.id,
+			currentMemberSource: "anon",
+		});
+		// The state stays: the cell still names the holder.
+		expect(await screen.findByText(/Picked/)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /^Release / })).toBeNull();
+	});
+
+	it("a signed-in member can release it — the control", async () => {
+		await renderGrid(undefined, {
+			data: mine,
+			currentMemberId: PICKED.id,
+			currentMemberSource: "session",
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Release / }),
+		);
+		await waitFor(() =>
+			expect(releaseSlot).toHaveBeenCalledWith({ data: { slotId: "slot-1" } }),
+		);
 	});
 });
 

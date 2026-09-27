@@ -14,16 +14,16 @@
  * assertions here are about the half that could NOT move, and each pins a
  * different failure.
  *
- * **`requestWriteActor` stays in the handler.** It is a REQUEST-scoped read —
- * it resolves the caller's session, if any, and credits them rather than the
- * member id they asserted (#396) — and `assign_roles` reaches the same core
- * with an actor resolved from a bearer token. Pulling the resolution into the
- * core would make the seam unreachable from the MCP path, and the failure would
- * be silent in the direction that matters: `actorMemberId` would fall back to
- * something, and the activity log would credit the wrong person for an
- * anonymous release. A source guard because a `createServerFn` handler cannot
- * be invoked from vitest at all — the same reason the gate was only ever
- * grepped for before this change.
+ * **`requireSessionActor` stays in the handler.** It is a REQUEST-scoped read —
+ * since #763 the release needs a session bound to a member of this club
+ * (ADR-0026: releasing takes a role away from someone), and the member it
+ * resolves is who gets credited — and `assign_roles` reaches the same core with
+ * an actor resolved from a bearer token. Pulling the resolution into the core
+ * would make the seam unreachable from the MCP path. It was `requestWriteActor`
+ * until #763, which admitted an anonymous name-pick; that call coming back is
+ * the regression the second case below names. `slots.transport.test.ts`
+ * executes the handler and asserts the gate is called; this pins the NAME,
+ * which a mock that happens to resolve cannot.
  *
  * **The handler must not keep writing the slot itself.** The danger in an
  * extraction is the copy that stays behind: a handler still running its own
@@ -46,7 +46,7 @@ const CORE_SRC = "src/server/slots-logic.ts";
  * The `releaseSlot` handler body, sliced to its own declaration.
  *
  * Stops at the next top-level `const`, so a sibling server fn's
- * `requestWriteActor` — `claimSlot` and `reassignSlot` both call it — can never
+ * actor resolution — `claimSlot` and `reassignSlot` both resolve one — can never
  * be miscredited to this one. That is the body-slicing lesson #565 recorded,
  * and it is not hypothetical here: every neighbour in this file satisfies the
  * positive assertion below.
@@ -88,16 +88,21 @@ describe("releaseSlot keeps only what cannot move into the seam (#809)", () => {
 		expect(body).not.toContain("claimSchema");
 	});
 
-	it("resolves the actor through requestWriteActor", () => {
+	it("resolves the actor through the session gate, never an asserted one (#763)", () => {
 		// "Must BE present", so comment-blind: prose naming the call is not it.
+		const body = releaseSlotBody(readSource(SRC));
 		expect(
-			releaseSlotBody(readSource(SRC)),
-			"releaseSlot is a session-less write and `requestWriteActor` is what " +
-				"credits a signed-in caller as themselves rather than the member id " +
-				"they asserted (#396). It cannot move into `releaseSlotCore` — that " +
-				"read is request-scoped and `assign_roles` calls the same core from a " +
-				"bearer token. Restore the call here.",
-		).toContain("requestWriteActor(");
+			body,
+			"releaseSlot takes a role away from someone, so it needs a session " +
+				"bound to a member of this club (ADR-0026) — `requireSessionActor`. " +
+				"It cannot move into `releaseSlotCore`: that read is request-scoped " +
+				"and `assign_roles` calls the same core from a bearer token. Restore " +
+				"the call here.",
+		).toMatch(/await\s+requireSessionActor\(/);
+		// And no asserted-actor seam beside it: an anonymous name-pick is exactly
+		// what #763 took this write away from.
+		expect(body).not.toMatch(/requestWriteActor(?:WithProof)?\(/);
+		expect(body).not.toContain("actorMemberId: data.");
 	});
 
 	/**

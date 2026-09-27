@@ -108,8 +108,8 @@ export function SeasonGrid({
 	const showContactCols = orientation === "members" && showContact;
 	const contactByMember = new Map(data.members.map((m) => [m.id, m]));
 	const meetingStatus = memberMeetingStatus(data, currentMemberId ?? null);
-	// The two session-gated capabilities this grid offers: releasing a role while
-	// declining, and taking a decline back. Both refuse an asserted caller
+	// The session-gated capabilities this grid offers: releasing a role (tapping
+	// your own cell, #763, or while declining), and taking a decline back. Both refuse an asserted caller
 	// server-side (ADR-0026), so both have to disappear rather than refuse.
 	const provenIdentity = currentMemberSource === "session";
 	const labelHead = orientation === "roles" ? "Role" : "Member";
@@ -165,14 +165,20 @@ export function SeasonGrid({
 				memberId = me.id;
 			}
 			if (!memberId) return;
-			await claimSlot({
+			const { proof } = await claimSlot({
 				data: { slotId, memberId, actorMemberId: memberId },
 			});
 			await onChanged?.();
-			// Pass the freshly-resolved memberId, not the (possibly stale/null)
-			// `currentMemberId` prop, so Undo works for a prospective claimer too.
+			// UNDO ONLY FOR A PROVEN WRITER (#763, ADR-0026). Undo is
+			// `releaseSlot`, which needs a session; a claim is open to an anonymous
+			// roster pick and reports which of the two just happened. Read from the
+			// RESPONSE, as `markUnavailable` below does and for its reason: a signed-
+			// in account with no membership here is refused the release too, and
+			// only the server knows that. Anything but `"session"` fails closed.
 			toast.success("Role claimed.", {
-				action: { label: "Undo", onClick: () => release(slotId, memberId) },
+				...(proof === "session"
+					? { action: { label: "Undo", onClick: () => release(slotId) } }
+					: {}),
 			});
 		} catch (err) {
 			showWriteError(err, "Couldn't claim role.");
@@ -181,11 +187,11 @@ export function SeasonGrid({
 		}
 	}
 
-	async function release(slotId: string, actorMemberId = currentMemberId) {
-		if (!actorMemberId) return;
+	// No actor on the wire (#763): the server credits the session.
+	async function release(slotId: string) {
 		setBusySlotId(slotId);
 		try {
-			await releaseSlot({ data: { slotId, actorMemberId } });
+			await releaseSlot({ data: { slotId } });
 			await onChanged?.();
 			toast.success("Role released.", {
 				action: { label: "Undo", onClick: () => claim(slotId) },
@@ -762,7 +768,9 @@ export function SeasonGrid({
 															busyMeetingId === cell.meetingId
 														}
 														onClaim={claim}
-														onRelease={release}
+														// Releasing is session-gated (#763), so an
+														// anonymous pick's own cell is not a control.
+														onRelease={provenIdentity ? release : undefined}
 														clubSlug={clubSlug}
 														meetingKey={m?.urlKey}
 														meetingLabel={

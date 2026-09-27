@@ -178,6 +178,106 @@ const DEVICE_BOUND_FILL_BLANK: Record<
 	},
 };
 
+/**
+ * The `fill-blank` rows whose blank is a SLOT (#763): claiming an OPEN role for
+ * yourself, and confirming a role you hold. Neither goes through
+ * `setPlanStatus(…, { onlyIfAbsent: true })` — the blank is the slot, and what
+ * an asserted caller may not do is contradict the member's own `not_coming` or
+ * act for somebody else — so, like the ballot, each is pinned by the SHAPE of
+ * its gate: the handler hands the proof over, and the core refuses on it
+ * before it writes (`mustPrecede`, checked on the collapsed body).
+ *
+ * `confirmSlot`'s gate is also `setPlannedAttendance`'s, because
+ * `confirmHeldClaimedSlots` reaches the same holder arm; that is why the
+ * forwarding of `proof` there is pinned under this row too.
+ */
+const SLOT_FILL_BLANK: Record<
+	string,
+	{
+		handlerMustContain: string[];
+		logic: {
+			file: string;
+			fn: string;
+			mustContain: string[];
+			/** Each `[a, b]`: `a` must occur, and before `b`. */
+			mustPrecede?: [string, string][];
+		}[];
+	}
+> = {
+	"slots.ts#claimSlot": {
+		handlerMustContain: [
+			"await requestWriteActorWithProof({",
+			"...(actor ? { proof: actor.proof } : {}),",
+			"claimSlotCore(",
+		],
+		logic: [
+			{
+				file: "slots-logic.ts",
+				fn: "claimSlotCore",
+				mustContain: [
+					// Someone else, and not the TMOD: refused. `&&`, both `!==`.
+					'if (args.proof === "asserted") { if (args.actorMemberId !== args.memberId && args.actorMemberId !== (await loadTmodMemberId(slot.meetingId))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					// Over the member's own decline: refused.
+					'if ((await getPlanStatus(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) === "not_coming") { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					"proof: args.proof,",
+				],
+				mustPrecede: [['if (args.proof === "asserted")', ".update(roleSlots)"]],
+			},
+			{
+				file: "slots-logic.ts",
+				fn: "markComingOnSelfClaim",
+				// The race half: a decline landing after the gate's read survives.
+				mustContain: [
+					'demoteFrom: args.proof === "asserted" ? ASK_ONLY_PLAN_FLOOR : HOLDER_CONFIRM_PLAN_FLOOR,',
+				],
+			},
+		],
+	},
+	"slots.ts#confirmSlot": {
+		handlerMustContain: [
+			"await getSessionUser()",
+			"sessionUserId: currentUser?.id ?? null",
+			"confirmSlotCore(",
+		],
+		logic: [
+			{
+				file: "slots-logic.ts",
+				fn: "confirmSlotCore",
+				mustContain: [
+					// The officer arm is session by construction; the holder arm is
+					// the caller's proof or, with none, the session bound to the
+					// HOLDER — never "session" for any other signed-in member.
+					'const proof: WriteProof = grant.via === "officer" ? "session" : (args.proof ?? ((await sessionIsHolder(slot.clubId, args.sessionUserId, grant.holderMemberId,)) ? "session" : "asserted"));',
+					'if (grant.via === "self" && proof === "asserted" && (await getPlanStatus(tx, { memberId: grant.holderMemberId, meetingId: slot.meetingId, })) === "not_coming") { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					'demoteFrom: proof === "asserted" ? ASK_ONLY_PLAN_FLOOR : (args.planFloor ?? HOLDER_CONFIRM_PLAN_FLOOR),',
+				],
+				mustPrecede: [
+					[
+						'proof === "asserted" && (await getPlanStatus(',
+						".update(roleSlots)",
+					],
+				],
+			},
+			{
+				file: "slots-logic.ts",
+				fn: "sessionIsHolder",
+				mustContain: [
+					"claimedActorMemberId: null",
+					'actor?.proof === "session" && actor.memberId === holderMemberId',
+				],
+			},
+			{
+				file: "slots-logic.ts",
+				fn: "confirmHeldClaimedSlots",
+				// `setPlannedAttendance`'s route into the same gate (#908).
+				mustContain: [
+					"sessionUserId: null, selfMemberId: args.memberId, proof: args.proof,",
+				],
+			},
+		],
+	},
+};
+
 /** Collapse every whitespace run to one space, so a needle states a SHAPE and
  *  a reformat (Biome re-wrapping a ternary) does not read as a deletion. */
 function collapse(text: string): string {
@@ -252,7 +352,9 @@ type WriteProofClass =
  *
  * The 29 the #761 inventory found, less the five #762 retired and the two #752
  * retired, plus #866's request-access form and #880's Table Topics notes
- * editor: 26 today (5 `pending-proof`, 15 `console-asserted`, 3 `public-intake`, 3 `fill-blank` — #765 moved the ballot row from the first to the last). Adding a row is a decision about a write's
+ * editor: 26, and #763 retired the last five `pending-proof` rows — two to
+ * `fill-blank`, three to the default `session` sweep — so 23 today (15
+ * `console-asserted`, 3 `public-intake`, 5 `fill-blank`). Adding a row is a decision about a write's
  * trust model, not a way to get green — a genuinely session-less write that
  * turns up unclassified is a finding to report, not an entry to make.
  *
@@ -265,18 +367,20 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	string,
 	{ class: WriteProofClass; reason: string }
 > = {
-	// --- Phase 1: the slots child ------------------------------------------
-	// The honour-system sign-up sheet (ADR-0010). Claiming an open role is a
-	// blank being filled; releasing, reassigning and editing someone's speech
-	// details are not, and that split is the child's job.
-	"slots.ts#claimSlot": { class: "pending-proof", reason: "slots child" },
-	"slots.ts#releaseSlot": { class: "pending-proof", reason: "slots child" },
-	"slots.ts#reassignSlot": { class: "pending-proof", reason: "slots child" },
-	"slots.ts#updateSpeakerDetails": {
-		class: "pending-proof",
-		reason: "slots child",
+	// --- Phase 1: the slots child, RETIRED by #763 -------------------------
+	// The honour-system sign-up sheet (ADR-0010). Claiming an open role for
+	// yourself, and confirming one you hold, fill a blank — unless your answer
+	// is `not_coming`. Their shapes are pinned in `SLOT_FILL_BLANK`.
+	//
+	// `releaseSlot`, `reassignSlot` and `updateSpeakerDetails` are gone from this
+	// map: each calls `requireSessionActor` in its own handler, so the
+	// default-`session` sweep covers them and a row here would only hide a gate
+	// being deleted.
+	"slots.ts#claimSlot": { class: "fill-blank", reason: "ADR-0026" },
+	"slots.ts#confirmSlot": {
+		class: "fill-blank",
+		reason: "ADR-0026, holder arm; the officer arm needs an admin session",
 	},
-	"slots.ts#confirmSlot": { class: "pending-proof", reason: "slots child" },
 
 	// --- Phase 1: the attendance child, RETIRED by #762 ---------------------
 	// A first answer fills a blank and frees nothing; changing or clearing one,
@@ -291,15 +395,13 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	// sweep covers them and a row here would only hide a gate being deleted.
 	// `setPlannedAttendance` ALSO confirms the member's claimed roles when a
 	// `coming` carries `confirmHeldRoles` (#908) — the holder-arm capability
-	// `slots.ts#confirmSlot` has above, reached through `confirmSlotCore`. The
-	// plan half is fill-blank; the confirm half is still pending proof, so when
-	// #763 hardens `confirmSlot` ("an unverified claim or confirm only fills a
-	// blank") it must harden this path too. Both pass through
-	// `confirmSlotCore`, which records the caller's `proof` from this path.
+	// `slots.ts#confirmSlot` has above, reached through `confirmSlotCore`. #763
+	// gated both there, in one place, keyed on the `proof` this path passes;
+	// `SLOT_FILL_BLANK` pins the forwarding.
 	"attendance-plan.ts#setPlannedAttendance": {
 		class: "fill-blank",
 		reason:
-			"ADR-0026 for the plan rung; its confirmHeldRoles slot confirm (#908) is confirmSlot's pending-proof holder arm, hardened with it by #763",
+			"ADR-0026 for the plan rung; its confirmHeldRoles slot confirm (#908) is confirmSlot's fill-blank holder arm, gated with it in confirmSlotCore (#763)",
 	},
 	"availability.ts#setAvailability": {
 		class: "fill-blank",
@@ -791,10 +893,11 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			WRITE_PROOF_EXCEPTIONS,
 		)) {
 			if (cls !== "fill-blank") continue;
-			// The ballot's fill-blank mode is a different construction, checked
-			// by its own case below. Skipping it HERE is safe only because that
-			// case fails when the row is not in `DEVICE_BOUND_FILL_BLANK`.
-			if (key in DEVICE_BOUND_FILL_BLANK) continue;
+			// The ballot's and the slots' fill-blank modes are different
+			// constructions, checked by their own cases below. Skipping them HERE
+			// is safe only because those cases fail when a row is missing from
+			// `DEVICE_BOUND_FILL_BLANK` / `SLOT_FILL_BLANK`.
+			if (key in DEVICE_BOUND_FILL_BLANK || key in SLOT_FILL_BLANK) continue;
 			const body = POST_FNS.get(key) ?? "";
 			if (!body.includes('proof === "asserted"')) {
 				offenders.push(`${key} (never branches on the proof)`);
@@ -875,6 +978,66 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).toEqual([]);
 	});
 
+	it("every slot `fill-blank` row still refuses an asserted caller who is not filling a blank (#763)", () => {
+		// `claimSlot` and `confirmSlot` are public endpoints whose handlers
+		// cannot be invoked in vitest against a real session, so the gate is
+		// pinned in source as well as executed by the integration suites (which
+		// skip with no test database). Shapes, not names, whitespace-collapsed:
+		// `|| true`, a flipped `===`, an `&&` turned `||`, or the gate moved after
+		// the write each keep every identifier and break a needle.
+		const fillBlank = Object.entries(WRITE_PROOF_EXCEPTIONS)
+			.filter(([, v]) => v.class === "fill-blank")
+			.map(([k]) => k);
+		const offenders: string[] = [];
+		for (const [key, spec] of Object.entries(SLOT_FILL_BLANK)) {
+			expect(
+				fillBlank,
+				`${key} is in SLOT_FILL_BLANK but not classified fill-blank`,
+			).toContain(key);
+			const handler = collapse(POST_FNS.get(key) ?? "");
+			for (const needle of spec.handlerMustContain) {
+				if (!handler.includes(collapse(needle)))
+					offenders.push(`${key} (${needle})`);
+			}
+			for (const check of spec.logic) {
+				const flat = collapse(
+					namedFunctionBody(readSource(resolve(SERVER, check.file)), check.fn),
+				);
+				for (const needle of check.mustContain) {
+					if (!flat.includes(collapse(needle))) {
+						offenders.push(`${check.file}#${check.fn} (${needle})`);
+					}
+				}
+				for (const [first, then] of check.mustPrecede ?? []) {
+					const a = flat.indexOf(collapse(first));
+					const b = flat.indexOf(collapse(then));
+					if (a === -1 || b === -1 || a > b) {
+						offenders.push(
+							`${check.file}#${check.fn} (${first} must run before ${then})`,
+						);
+					}
+				}
+			}
+		}
+		expect(
+			offenders,
+			`An unverified name-pick may fill a slot blank and nothing else (ADR-0026, #763): no claim for another member (bar the TMOD), and no claim or confirm over the member's own not_coming. Missing: ${offenders.join(", ")}.`,
+		).toEqual([]);
+	});
+
+	it("the slot writes that take a role away need a session, not a row here (#763)", () => {
+		// The retirement, pinned: a row coming back would drop each from the
+		// default sweep, and its `requireSessionActor` could then be deleted
+		// with every suite green.
+		for (const fn of ["releaseSlot", "reassignSlot", "updateSpeakerDetails"]) {
+			const key = `slots.ts#${fn}`;
+			expect(POST_FNS.has(key), `${key} is no longer a POST fn`).toBe(true);
+			expect(Object.keys(WRITE_PROOF_EXCEPTIONS)).not.toContain(key);
+			expect(Object.keys(NON_WRITE_POSTS)).not.toContain(key);
+			expect(POST_FNS.get(key)).toMatch(GATE_CALL);
+		}
+	});
+
 	it("setActiveClub is swept by default, not waived (#824)", () => {
 		// The regression this change can ship is not the gate being deleted — the
 		// default sweep above already catches that, and it was measured doing so.
@@ -907,7 +1070,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).not.toContain(key);
 	});
 
-	it("holds exactly the 26 exceptions: 24 left after #762 and #752, plus #866 and #880; #765 reclassified one", () => {
+	it("holds exactly the 23 exceptions: 24 left after #762 and #752, plus #866 and #880, less #763's three", () => {
 		// The count is pinned, not just the shape. A twenty-fifth arriving
 		// silently is the thing to notice — either a new session-less write, or a
 		// child issue's row landing without its sibling being retired.
@@ -934,6 +1097,11 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		// #765 moved the ballot row from `pending-proof` to `fill-blank`: a first
 		// vote fills a blank, a change is bound to the casting device. Total
 		// unchanged.
+		//
+		// #763 retired the class: `claimSlot` and `confirmSlot` to `fill-blank`,
+		// and `releaseSlot`, `reassignSlot`, `updateSpeakerDetails` out of the map
+		// to the default `session` sweep. `pending-proof` stays counted at ZERO,
+		// so a row parked there again moves a number somebody reads.
 		const byClass = (c: WriteProofClass) =>
 			Object.values(WRITE_PROOF_EXCEPTIONS).filter((v) => v.class === c).length;
 		expect({
@@ -943,11 +1111,11 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			publicIntake: byClass("public-intake"),
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 26,
-			pendingProof: 5,
+			total: 23,
+			pendingProof: 0,
 			consoleAsserted: 15,
 			publicIntake: 3,
-			fillBlank: 3,
+			fillBlank: 5,
 		});
 	});
 });

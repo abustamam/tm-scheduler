@@ -15,8 +15,18 @@
  *     bunx vitest run src/server/claim.integration.test.ts
  */
 import { and, eq } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { activityLog, members, people, roleSlots } from "#/db/schema";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	activityLog,
+	clubs,
+	meetingAttendancePlan,
+	members,
+	people,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import {
 	cleanup,
 	hasTestDb,
@@ -25,6 +35,14 @@ import {
 	seedPerson,
 	testDb,
 } from "#/test/db";
+import { claimSlotCore } from "./slots-logic";
+
+// `claimSlotCore` is the REAL claim path below; its module reads `#/db`.
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+/** Exact-string matcher, so a case cannot pass on an unrelated throw. */
+const exact = (message: string) =>
+	new RegExp(`^${message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
 // ---------------------------------------------------------------------------
 // Helpers — replicate the core Drizzle operations from slots.ts / guards.ts
@@ -318,98 +336,11 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			});
 		}
 
-		/** Mirror of releaseSlot without requireUser; only requireMemberInClub
-		 *  (sheet-parity — any club member may release/clear any slot). */
-		async function releaseSlotPublic(slotId: string, actorMemberId: string) {
-			const [slot] = await testDb
-				.select({ id: roleSlots.id })
-				.from(roleSlots)
-				.where(eq(roleSlots.id, slotId))
-				.limit(1);
-
-			if (!slot) throw new Error("Role not found.");
-
-			const [member] = await testDb
-				.select({ clubId: members.clubId })
-				.from(members)
-				.where(eq(members.id, actorMemberId))
-				.limit(1);
-			if (!member) throw new Error("Member not found in this club.");
-
-			return testDb.transaction(async (tx) => {
-				// Release unlinks any speech (speech_id → NULL); the speech persists
-				// Person-owned (ADR-0009 — no longer destroyed on release).
-				await tx
-					.update(roleSlots)
-					.set({
-						assignedMemberId: null,
-						status: "open",
-						claimedAt: null,
-						speechId: null,
-					})
-					.where(eq(roleSlots.id, slot.id));
-
-				await tx.insert(activityLog).values({
-					clubId: member.clubId,
-					actorMemberId,
-					action: "release",
-					targetType: "slot",
-					targetId: slotId,
-				});
-
-				return { ok: true as const };
-			});
-		}
-
-		/** Mirror of reassignSlot without requireUser/requireClubRole; only
-		 *  requireMemberInClub. The speech pointer lifecycle on reassign is covered
-		 *  by speech-lifecycle.integration.test.ts (which exercises the real
-		 *  slots-logic helpers); this mirror only asserts the status/assignee reset. */
-		async function reassignSlotPublic(
-			slotId: string,
-			newMemberId: string,
-			actorMemberId: string,
-		) {
-			const [slot] = await testDb
-				.select({ id: roleSlots.id })
-				.from(roleSlots)
-				.where(eq(roleSlots.id, slotId))
-				.limit(1);
-
-			if (!slot) throw new Error("Role not found.");
-
-			const [actor] = await testDb
-				.select({ clubId: members.clubId })
-				.from(members)
-				.where(eq(members.id, actorMemberId))
-				.limit(1);
-			if (!actor) throw new Error("Actor member not found in this club.");
-
-			const [target] = await testDb
-				.select({ clubId: members.clubId })
-				.from(members)
-				.where(eq(members.id, newMemberId))
-				.limit(1);
-			if (!target) throw new Error("Target member not found in this club.");
-
-			return testDb.transaction(async (tx) => {
-				await tx
-					.update(roleSlots)
-					.set({ assignedMemberId: newMemberId, status: "claimed" })
-					.where(eq(roleSlots.id, slotId));
-
-				await tx.insert(activityLog).values({
-					clubId: actor.clubId,
-					actorMemberId,
-					action: "reassign",
-					targetType: "slot",
-					targetId: slotId,
-					detail: { memberId: newMemberId },
-				});
-
-				return { ok: true as const };
-			});
-		}
+		// The release and reassign mirrors that sat here asserted both "work
+		// without a session". Since #763 they do not (ADR-0026: taking a role away
+		// from someone is not filling a blank), and a mirror cannot see the real
+		// handler's gate anyway. `release-and-speaker-details.integration.test.ts`
+		// executes the real handlers instead.
 
 		it("claimSlot works without a session (member-keyed, trust-based)", async () => {
 			const result = await claimSlotPublic(
@@ -454,114 +385,6 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			).rejects.toThrow("Member not found in this club.");
 		});
 
-		it("releaseSlot works without a session (member releases the slot they hold)", async () => {
-			// First claim it
-			await claimSlotTx(seed.slotId, seed.memberId);
-
-			const result = await releaseSlotPublic(seed.slotId, seed.memberId);
-			expect(result).toEqual({ ok: true });
-
-			const [row] = await testDb
-				.select({
-					status: roleSlots.status,
-					assignedMemberId: roleSlots.assignedMemberId,
-				})
-				.from(roleSlots)
-				.where(eq(roleSlots.id, seed.slotId))
-				.limit(1);
-
-			expect(row?.status).toBe("open");
-			expect(row?.assignedMemberId).toBeNull();
-		});
-
-		it("releaseSlot is sheet-parity: a non-assignee club member can release a claimed slot, and the actor is logged", async () => {
-			// seed.memberId claims the slot
-			await claimSlotTx(seed.slotId, seed.memberId);
-
-			// A DIFFERENT club member releases it (trust-based, no assignee check)
-			const [otherMember] = await testDb
-				.insert(members)
-				.values({
-					clubId: seed.clubId,
-					personId: await seedPerson({ name: "Other Member" }),
-					name: "Other Member",
-				})
-				.returning({ id: members.id });
-
-			if (!otherMember) throw new Error("Failed to insert other member");
-
-			const result = await releaseSlotPublic(seed.slotId, otherMember.id);
-			expect(result).toEqual({ ok: true });
-
-			// Slot reset to open
-			const [row] = await testDb
-				.select({
-					status: roleSlots.status,
-					assignedMemberId: roleSlots.assignedMemberId,
-				})
-				.from(roleSlots)
-				.where(eq(roleSlots.id, seed.slotId))
-				.limit(1);
-
-			expect(row?.status).toBe("open");
-			expect(row?.assignedMemberId).toBeNull();
-
-			// Activity log records who actually did the release (the non-assignee)
-			const log = await testDb
-				.select()
-				.from(activityLog)
-				.where(
-					and(
-						eq(activityLog.targetId, seed.slotId),
-						eq(activityLog.action, "release"),
-					),
-				);
-			expect(log.some((r) => r.actorMemberId === otherMember.id)).toBe(true);
-		});
-
-		it("reassignSlot works without a session (trust-based)", async () => {
-			// Claim the slot first
-			await claimSlotTx(seed.slotId, seed.memberId);
-
-			// Bump to "confirmed" so the assertion below proves a real status reset.
-			await testDb
-				.update(roleSlots)
-				.set({ status: "confirmed" })
-				.where(eq(roleSlots.id, seed.slotId));
-
-			// Insert a second roster member
-			const [other] = await testDb
-				.insert(members)
-				.values({
-					clubId: seed.clubId,
-					personId: await seedPerson({ name: "Other Member" }),
-					name: "Other Member",
-				})
-				.returning({ id: members.id });
-
-			if (!other) throw new Error("Failed to insert other member");
-
-			const result = await reassignSlotPublic(
-				seed.slotId,
-				other.id,
-				seed.memberId,
-			);
-			expect(result).toEqual({ ok: true });
-
-			const [row] = await testDb
-				.select({
-					assignedMemberId: roleSlots.assignedMemberId,
-					status: roleSlots.status,
-				})
-				.from(roleSlots)
-				.where(eq(roleSlots.id, seed.slotId))
-				.limit(1);
-
-			expect(row?.assignedMemberId).toBe(other.id);
-			// Status must be reset from "confirmed" back to "claimed" — new holder is unconfirmed.
-			expect(row?.status).toBe("claimed");
-		});
-
 		it("roster query returns only active members, ordered by name", async () => {
 			// Mark the seeded member inactive; it should be excluded from the roster.
 			await testDb
@@ -578,6 +401,185 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 
 			expect(roster.every((m) => m.status === "active")).toBe(true);
 			expect(roster.some((m) => m.id === seed.memberId)).toBe(false);
+		});
+	});
+
+	// -------------------------------------------------------------------------
+	// #763 (ADR-0026): an unverified claim only fills a blank. Executed through
+	// the REAL `claimSlotCore`, where the gate lives; the handler hands it the
+	// proof (`slots.transport.test.ts` pins that).
+	// -------------------------------------------------------------------------
+
+	describe("an asserted claim only fills a blank (#763)", () => {
+		/** A second active member, so "for someone else" has a someone. */
+		let otherMemberId: string;
+
+		beforeEach(async () => {
+			const [row] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: await seedPerson({ name: "Other Member" }),
+					name: "Other Member",
+				})
+				.returning({ id: members.id });
+			if (!row) throw new Error("Failed to insert the other member");
+			otherMemberId = row.id;
+		});
+
+		function claim(memberId: string, actorMemberId: string, proof: WriteProof) {
+			return testDb.transaction((tx) =>
+				claimSlotCore(tx, {
+					slotId: seed.slotId,
+					memberId,
+					actorMemberId,
+					proof,
+				}),
+			);
+		}
+
+		async function answer(memberId: string, status: "coming" | "not_coming") {
+			await testDb
+				.insert(meetingAttendancePlan)
+				.values({ memberId, meetingId: seed.meetingId, status });
+		}
+
+		async function planStatus(memberId: string) {
+			const [row] = await testDb
+				.select({ status: meetingAttendancePlan.status })
+				.from(meetingAttendancePlan)
+				.where(
+					and(
+						eq(meetingAttendancePlan.memberId, memberId),
+						eq(meetingAttendancePlan.meetingId, seed.meetingId),
+					),
+				);
+			return row?.status ?? null;
+		}
+
+		async function slot() {
+			const [row] = await testDb
+				.select({
+					status: roleSlots.status,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId));
+			return row;
+		}
+
+		async function claimRows() {
+			return testDb
+				.select({ detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "claim"),
+					),
+				);
+		}
+
+		/** Put `memberId` on a Toastmaster slot of this meeting. */
+		async function makeTmod(memberId: string) {
+			const [def] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: "Toastmaster of the Day",
+					key: "toastmaster_of_the_day",
+					category: "functionary",
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!def) throw new Error("Failed to insert the TMOD role");
+			await testDb.insert(roleSlots).values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: def.id,
+				status: "claimed",
+				assignedMemberId: memberId,
+			});
+		}
+
+		it("claims an open role for yourself with no answer, and records the proof", async () => {
+			await claim(seed.memberId, seed.memberId, "asserted");
+
+			expect(await slot()).toEqual({
+				status: "claimed",
+				assignedMemberId: seed.memberId,
+			});
+			const [row] = await claimRows();
+			expect(row?.detail).toMatchObject({
+				memberId: seed.memberId,
+				proof: "asserted",
+			});
+		});
+
+		it("claims for yourself when your answer is coming", async () => {
+			await answer(seed.memberId, "coming");
+			await claim(seed.memberId, seed.memberId, "asserted");
+			expect((await slot())?.assignedMemberId).toBe(seed.memberId);
+		});
+
+		it("refuses to claim over your own not_coming, writing nothing", async () => {
+			await answer(seed.memberId, "not_coming");
+
+			await expect(
+				claim(seed.memberId, seed.memberId, "asserted"),
+			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
+
+			expect(await slot()).toEqual({ status: "open", assignedMemberId: null });
+			expect(await planStatus(seed.memberId)).toBe("not_coming");
+			expect(await claimRows()).toHaveLength(0);
+		});
+
+		it("a SESSION claim over your own not_coming is a change of mind, and wins", async () => {
+			// The control for the case above: the gate is the proof, not the rung.
+			await answer(seed.memberId, "not_coming");
+			await claim(seed.memberId, seed.memberId, "session");
+			expect((await slot())?.assignedMemberId).toBe(seed.memberId);
+			expect(await planStatus(seed.memberId)).toBe("coming");
+		});
+
+		it("refuses an asserted claim for someone else", async () => {
+			await expect(
+				claim(otherMemberId, seed.memberId, "asserted"),
+			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
+			expect(await slot()).toEqual({ status: "open", assignedMemberId: null });
+		});
+
+		it("admits an asserted claim for someone else by this meeting's TMOD (Phase 2)", async () => {
+			await makeTmod(seed.memberId);
+			await claim(otherMemberId, seed.memberId, "asserted");
+			expect((await slot())?.assignedMemberId).toBe(otherMemberId);
+		});
+
+		it("even the TMOD may not claim for someone whose answer is not_coming", async () => {
+			await makeTmod(seed.memberId);
+			await answer(otherMemberId, "not_coming");
+			await expect(
+				claim(otherMemberId, seed.memberId, "asserted"),
+			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
+			expect(await planStatus(otherMemberId)).toBe("not_coming");
+		});
+
+		it("a SESSION claim for someone else is the sheet rule, unchanged", async () => {
+			await claim(otherMemberId, seed.memberId, "session");
+			expect((await slot())?.assignedMemberId).toBe(otherMemberId);
+			const [row] = await claimRows();
+			expect(row?.detail).toMatchObject({ proof: "session" });
+		});
+
+		it("an archived club refuses the claim on either proof", async () => {
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, seed.clubId));
+			for (const proof of ["asserted", "session"] as const) {
+				await expect(
+					claim(seed.memberId, seed.memberId, proof),
+				).rejects.toThrow(exact(CLUB_ARCHIVED_MESSAGE));
+			}
+			expect(await slot()).toEqual({ status: "open", assignedMemberId: null });
 		});
 	});
 });

@@ -2,7 +2,13 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
+import {
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+} from "#/db/schema";
 import { logActivity } from "./activity";
 import {
 	assertClubNotArchived,
@@ -30,7 +36,10 @@ import {
 	speakerDetailsSchema,
 	speakerDetailsUpdateSchema,
 } from "./speaker-details-schema";
-import { requestWriteActor } from "./write-actor-logic";
+import {
+	requestWriteActorWithProof,
+	requireSessionActor,
+} from "./write-actor-logic";
 
 const claimSchema = z.object({
 	slotId: z.string().uuid(),
@@ -41,10 +50,15 @@ const claimSchema = z.object({
 
 /** Claim an open slot for the given member. Speaker details are optional; a
  *  blank/missing speech title defaults to "TBA".
- *  PUBLIC — no session required; trust guard via requireMemberInClub.
+ *  FILL-BLANK (#763, ADR-0026) — no session required to claim an OPEN role for
+ *  yourself. Without one the claim may not be for someone else (bar the
+ *  meeting's TMOD, Phase 2) or over the member's own `not_coming`; with one it
+ *  is the sheet rule, any member for any member.
  *
- *  The write, the archive gate and the lock check live in `claimSlotCore`
- *  (#825), for the reason `releaseSlot` below gives for its own core. */
+ *  The write, the archive gate, the lock check and that fill-blank gate all
+ *  live in `claimSlotCore` (#825), where vitest can execute them. Returns the
+ *  proof so the season grid offers "Undo" (a session-gated release) only to a
+ *  caller who can use it. */
 export const claimSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => claimSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -63,8 +77,10 @@ export const claimSlot = createServerFn({ method: "POST" })
 		// Trust guard: memberId must be a roster member of this club.
 		await requireMemberInClub(data.memberId, slot.clubId);
 		// Actor provenance (#396): a signed-in caller is credited as themselves; an
-		// anonymous one keeps the name-pick, club-scoped to THIS slot's club.
-		const actorMemberId = await requestWriteActor({
+		// anonymous one keeps the name-pick, club-scoped to THIS slot's club. The
+		// proof says which (#763) and is what `claimSlotCore` gates on. Null only
+		// for an impersonated write, which carries no proof.
+		const actor = await requestWriteActorWithProof({
 			clubId: slot.clubId,
 			claimedActorMemberId: data.actorMemberId,
 		});
@@ -73,38 +89,36 @@ export const claimSlot = createServerFn({ method: "POST" })
 			claimSlotCore(tx, {
 				slotId: data.slotId,
 				memberId: data.memberId,
-				actorMemberId,
+				actorMemberId: actor?.memberId ?? null,
 				speakerDetails: data.speakerDetails,
+				...(actor ? { proof: actor.proof } : {}),
 			}),
 		);
 
-		return { ok: true as const };
+		return { ok: true as const, proof: actor?.proof ?? null };
 	});
 
+// No `actorMemberId` on the wire (#763): the actor is the caller's session.
+// An older client still sends one; zod drops it.
 const releaseSchema = z.object({
 	slotId: z.string().uuid(),
-	actorMemberId: z.string().uuid(),
 });
 
-/** Release a slot back to open. Only the assignee may do this (trust-based).
- *  PUBLIC — no session required; trust guard via requireMemberInClub.
+/** Release a slot back to open. Any SIGNED-IN member of the club may release any
+ *  slot (the sheet rule); the activity log records who did.
+ *  AUTHED (#763, ADR-0026) — releasing takes a role away from someone, so an
+ *  unverified name-pick may not do it.
  *
  *  The write, the archive gate and the lock check all live in
  *  `releaseSlotCore` since #809, so vitest can execute them; what stays here is
- *  the one thing that cannot move, `requestWriteActor`. It is a REQUEST-scoped
- *  read — it resolves the caller's session, if any, and credits them rather
- *  than the member id they asserted (#396) — and `assign_roles` calls the same
- *  core with an actor it resolved from a bearer token instead.
+ *  the one thing that cannot move, `requireSessionActor`. It is a REQUEST-scoped
+ *  read, and `assign_roles` calls the same core with an actor it resolved from a
+ *  bearer token instead.
  *
- *  That does move the archive gate to AFTER the actor is resolved, where it used
- *  to run first. The ordering that matters is preserved inside the core —
- *  archive before the meeting lock, which is the one CODING_STANDARDS names,
- *  because a takedown must not answer differently for a completed meeting than
- *  for a scheduled one. What changes is narrower: an anonymous caller naming a
- *  member id that is not on this club's roster now hears about the member
- *  rather than about the takedown, which discloses less, not more. `claimSlot`
- *  and `reassignSlot` beside it have the same shape since #825, gated in
- *  `claimSlotCore` and `reassignSlotCore`. */
+ *  The gate refuses, in order of what the caller can fix: no session
+ *  (`SIGN_IN_REQUIRED_MESSAGE`), a session with no active membership here, and
+ *  an archived club — before any transaction. The core re-asserts the archive
+ *  under its row lock. */
 export const releaseSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => releaseSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -122,17 +136,20 @@ export const releaseSlot = createServerFn({ method: "POST" })
 			throw new Error("Role not found.");
 		}
 
-		// Trust guard + actor provenance (#396): the actor must be a roster member
-		// of THIS slot's club, and a signed-in caller is credited as themselves.
-		// Sheet-parity model — any club member may release/clear any slot; the
-		// activity log records who did it (mirrors reassignSlot).
-		const actorMemberId = await requestWriteActor({
+		// The session gate (#763), against THIS slot's club. Sheet-parity model —
+		// any signed-in club member may release/clear any slot; the activity log
+		// records who did it (mirrors reassignSlot). Null only for a `read_write`
+		// impersonating superadmin, whom `logActivity` records as themselves.
+		const { memberId: actorMemberId } = await requireSessionActor({
 			clubId: slot.clubId,
-			claimedActorMemberId: data.actorMemberId,
 		});
 
 		await db.transaction((tx) =>
-			releaseSlotCore(tx, { slotId: data.slotId, actorMemberId }),
+			releaseSlotCore(tx, {
+				slotId: data.slotId,
+				actorMemberId,
+				proof: "session",
+			}),
 		);
 
 		return { ok: true as const };
@@ -149,14 +166,19 @@ const confirmSchema = z.object({
 
 /** Confirm a claimed slot — either the slot's own holder saying yes, or a club
  *  admin/VPE vouching for them (#661).
- *  MIXED: the officer arm requires a VPE/admin session; the holder arm is PUBLIC
- *  and session-less, which is why the whole gate — the archive check included —
- *  lives in `confirmSlotCore` where a test can reach it. */
+ *  MIXED: the officer arm requires a VPE/admin session; the holder arm is
+ *  FILL-BLANK (#763, ADR-0026) — session-less, unless the holder's answer is
+ *  `not_coming`, which only the holder's own session may contradict. The whole
+ *  gate — that one and the archive check included — lives in `confirmSlotCore`
+ *  where a test can reach it, and where `setPlannedAttendance`'s confirm meets
+ *  it too. */
 export const confirmSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => confirmSchema.parse(input))
 	.handler(async ({ data }) => {
 		// `getSessionUser`, not `requireUser`: an anonymous holder is a first-class
-		// caller here. The officer arm still refuses a null session itself.
+		// caller here, for a blank (#763: not over their own `not_coming`). The
+		// officer arm still refuses a null session itself, and the holder arm
+		// derives its proof from this same session inside `confirmSlotCore`.
 		const currentUser = await getSessionUser();
 		return confirmSlotCore({
 			slotId: data.slotId,
@@ -226,14 +248,17 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 		});
 	});
 
+// No `actorMemberId` on the wire (#763): the actor is the caller's session.
 const reassignSchema = z.object({
 	slotId: z.string().uuid(),
 	memberId: z.string().uuid(),
-	actorMemberId: z.string().uuid(),
 });
 
-/** Reassign a claimed slot to a different member (trust-based).
- *  PUBLIC — no session required; trust guard via requireMemberInClub for both members. */
+/** Reassign a claimed slot to a different member. Any SIGNED-IN member of the
+ *  club may (the sheet rule); the target must be on this club's roster.
+ *  AUTHED (#763, ADR-0026) — reassigning takes a role away from its holder.
+ *  The archive gate lives in `reassignSlotCore` (#825); `requireSessionActor`
+ *  also refuses an archived club before any transaction. */
 export const reassignSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => reassignSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -251,12 +276,10 @@ export const reassignSlot = createServerFn({ method: "POST" })
 			throw new Error("Role not found.");
 		}
 
-		// Trust guards: both the actor and the target must be club roster members;
-		// a signed-in caller is credited as themselves rather than the name they
-		// asserted (#396).
-		const actorMemberId = await requestWriteActor({
+		// The session gate (#763), then the target: a member id off the wire, so
+		// it is checked against THIS club's roster.
+		const { memberId: actorMemberId } = await requireSessionActor({
 			clubId: slot.clubId,
-			claimedActorMemberId: data.actorMemberId,
 		});
 		await requireMemberInClub(data.memberId, slot.clubId);
 
@@ -265,23 +288,27 @@ export const reassignSlot = createServerFn({ method: "POST" })
 				slotId: data.slotId,
 				memberId: data.memberId,
 				actorMemberId,
+				proof: "session",
 			}),
 		);
 
 		return { ok: true as const };
 	});
 
+// No `actorMemberId` on the wire (#763): the actor is the caller's session.
 const updateSpeakerDetailsSchema = z.object({
 	slotId: z.string().uuid(),
-	actorMemberId: z.string().uuid(),
 	// The TRUNCATING variant, not the rejecting one `claimSlot` uses. The edit
 	// sheet prefills and resubmits every field, so a value stored before #522's
 	// caps must not block edits to the others — see `#/lib/speaker-limits`.
 	speakerDetails: speakerDetailsUpdateSchema,
 });
 
-/** Edit a speaker slot's speech details (trust-based). Blank title → "TBA".
- *  PUBLIC — no session required; trust guard via requireMemberInClub. */
+/** Edit a speaker slot's speech details. Blank title → "TBA". Any SIGNED-IN
+ *  member of the club may (the sheet rule), and it is logged as a
+ *  `meeting_edit` with the before and after title and project.
+ *  AUTHED (#763, ADR-0026) — it rewrites somebody's speech, and until #763 did
+ *  so with no session and no trace. */
 export const updateSpeakerDetails = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updateSpeakerDetailsSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -290,6 +317,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 				id: roleSlots.id,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				clubId: meetings.clubId,
+				meetingId: roleSlots.meetingId,
 				meetingStatus: meetings.status,
 				speechId: roleSlots.speechId,
 				assignedMemberId: roleSlots.assignedMemberId,
@@ -308,6 +336,11 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
+		// The session gate first (#763), so an anonymous caller learns nothing
+		// about the slot beyond "sign in". It also refuses an archived club.
+		const { memberId: actorMemberId } = await requireSessionActor({
+			clubId: slot.clubId,
+		});
 		// #555 — see releaseSlot above.
 		await assertClubNotArchived(slot.clubId);
 		assertMeetingNotLocked(slot.meetingStatus);
@@ -318,24 +351,57 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		if (!slot.assignedMemberId || !slot.personId) {
 			throw new Error("Assign a member before adding speech details.");
 		}
-		// No activity row here, but the same trust guard applies: the caller must
-		// resolve to a member of THIS club (session first, name-pick second, #396).
-		await requestWriteActor({
-			clubId: slot.clubId,
-			claimedActorMemberId: data.actorMemberId,
-		});
-
 		await db.transaction(async (tx) => {
+			const before = await speechDetails(tx, slot.speechId);
 			await editSlotSpeech(tx, {
 				slotId: data.slotId,
 				personId: slot.personId as string,
 				currentSpeechId: slot.speechId,
 				input: data.speakerDetails,
 			});
+			// Re-read through the SLOT: an edit can create a speech (none before)
+			// or unlink one (blank input), so the after-speech is not necessarily
+			// the one we started with.
+			const [after] = await tx
+				.select({ speechId: roleSlots.speechId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, data.slotId))
+				.limit(1);
+			const afterSpeechId = after?.speechId ?? null;
+			await logActivity(tx, {
+				clubId: slot.clubId,
+				actorMemberId,
+				action: "meeting_edit",
+				targetType: "meeting",
+				targetId: slot.meetingId,
+				detail: {
+					change: "speaker_details",
+					slotId: data.slotId,
+					speechId: afterSpeechId ?? slot.speechId,
+					before,
+					after: await speechDetails(tx, afterSpeechId),
+					proof: "session",
+				},
+			});
 		});
 
 		return { ok: true as const };
 	});
+
+/** The two speech fields `updateSpeakerDetails` logs before and after (#763).
+ *  A slot with no speech reads as both null. */
+async function speechDetails(
+	conn: Pick<typeof db, "select">,
+	speechId: string | null,
+): Promise<{ title: string | null; projectId: string | null }> {
+	if (!speechId) return { title: null, projectId: null };
+	const [row] = await conn
+		.select({ title: speeches.title, projectId: speeches.projectId })
+		.from(speeches)
+		.where(eq(speeches.id, speechId))
+		.limit(1);
+	return { title: row?.title ?? null, projectId: row?.projectId ?? null };
+}
 
 // No `actorMemberId` on the wire (#396): the agenda-editor guard already knows
 // who the caller is — the session's admin membership, or the self-asserted TMOD

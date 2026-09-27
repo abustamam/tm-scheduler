@@ -68,6 +68,7 @@ const {
 	NOT_THE_SLOT_HOLDER_MESSAGE,
 } = await import("./slots-logic");
 const { setPlanStatus } = await import("./attendance-plan-logic");
+const { SIGN_IN_REQUIRED_MESSAGE } = await import("#/lib/write-proof");
 const { NO_PERMISSION_MESSAGE } = await import("./guards");
 
 /** Exact-string matchers, so a case cannot pass on an unrelated throw. */
@@ -371,13 +372,14 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 	// The floor on what a confirm may overwrite.
 	// -------------------------------------------------------------------------
 
-	it("holder who previously said not_coming is demoted to coming", async () => {
+	it("a SIGNED-IN holder who previously said not_coming is demoted to coming", async () => {
 		await seedRung(seed.memberId, "not_coming");
 		await claim(seed.memberId);
 
+		// `memberUserId` is the session bound to `memberId` — the holder's own.
 		const result = await confirmSlotCore({
 			slotId: seed.slotId,
-			sessionUserId: null,
+			sessionUserId: seed.memberUserId,
 			selfMemberId: seed.memberId,
 		});
 
@@ -386,6 +388,96 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 		expect(result.planWritten).toBe(true);
 		expect(await planStatus(seed.memberId)).toBe("coming");
 		expect((await railRow(seed.memberId)).assumed).toBe(false);
+		const [confirmRow] = await logRows("claim");
+		expect(confirmRow?.detail).toMatchObject({ proof: "session" });
+	});
+
+	// #763 (ADR-0026): confirming a role you hold fills a blank "unless your
+	// answer is `not_coming`". Before #763 an anonymous confirm overwrote a
+	// member's decline with `coming` and logged it as theirs.
+	describe("an unverified holder confirm only fills a blank (#763)", () => {
+		it("refuses an asserted holder over their own not_coming, writing nothing", async () => {
+			await seedRung(seed.memberId, "not_coming");
+			await claim(seed.memberId);
+
+			await expect(
+				confirmSlotCore({
+					slotId: seed.slotId,
+					sessionUserId: null,
+					selfMemberId: seed.memberId,
+				}),
+			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
+
+			expect(await slotStatus()).toBe("claimed");
+			expect(await planStatus(seed.memberId)).toBe("not_coming");
+			expect(await logRows("claim")).toHaveLength(0);
+			expect(await logRows("plan_set")).toHaveLength(0);
+		});
+
+		it("a DIFFERENT member's session asserting the holder is still asserted", async () => {
+			// The admin is signed in and on this roster, but is not the holder: the
+			// proof is about THIS member, as `sessionIsVoter`'s is (#765).
+			await seedRung(seed.memberId, "not_coming");
+			await claim(seed.memberId);
+
+			await expect(
+				confirmSlotCore({
+					slotId: seed.slotId,
+					sessionUserId: seed.adminUserId,
+					selfMemberId: seed.memberId,
+				}),
+			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
+			expect(await planStatus(seed.memberId)).toBe("not_coming");
+		});
+
+		it("confirms an asserted holder who answered coming, and records the proof", async () => {
+			await seedRung(seed.memberId, "coming");
+			await claim(seed.memberId);
+
+			await confirmSlotCore({
+				slotId: seed.slotId,
+				sessionUserId: null,
+				selfMemberId: seed.memberId,
+			});
+
+			expect(await slotStatus()).toBe("confirmed");
+			expect(await planStatus(seed.memberId)).toBe("coming");
+			const [confirmRow] = await logRows("claim");
+			expect(confirmRow?.detail).toMatchObject({
+				confirmed: true,
+				grantedVia: "self",
+				proof: "asserted",
+			});
+		});
+
+		it("confirms an asserted holder with no answer at all", async () => {
+			await claim(seed.memberId);
+
+			await confirmSlotCore({
+				slotId: seed.slotId,
+				sessionUserId: null,
+				selfMemberId: seed.memberId,
+			});
+
+			expect(await slotStatus()).toBe("confirmed");
+			expect(await planStatus(seed.memberId)).toBe("coming");
+		});
+
+		it("the caller's own proof wins over the derived one", async () => {
+			// `setPlannedAttendance` passes `proof` with no session id; an asserted
+			// proof must not be upgraded by a session id it did not come with.
+			await seedRung(seed.memberId, "not_coming");
+			await claim(seed.memberId);
+
+			await expect(
+				confirmSlotCore({
+					slotId: seed.slotId,
+					sessionUserId: seed.memberUserId,
+					selfMemberId: seed.memberId,
+					proof: "asserted",
+				}),
+			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
+		});
 	});
 
 	it("holder already marked coming is not rewritten and logs no second plan_set", async () => {
@@ -685,20 +777,41 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 		expect(planRow?.detail).toMatchObject({ proof: "asserted" });
 	});
 
-	it("a decline that lands between the answer and the confirm survives", async () => {
+	it("a decline that lands between an ASSERTED answer and the confirm refuses the confirm", async () => {
 		// The answer and the confirm are two transactions. A `not_coming` written
-		// in between must NOT be overwritten by the confirm's own plan write and
-		// logged as the member's `coming` — the floor this caller passes admits
-		// only the officer's ask.
+		// in between must NOT be overwritten and logged as the member's `coming`,
+		// and since #763 an asserted confirm over it is refused outright — the
+		// same gate as `confirmSlot`, because both paths meet in `confirmSlotCore`.
+		// The refusal is a GATE, not a lost race, so it is not swallowed.
+		await claim(seed.memberId);
+		await seedRung(seed.memberId, "not_coming");
+
+		await expect(
+			confirmHeldClaimedSlots({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				proof: "asserted",
+			}),
+		).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
+
+		expect(await slotStatus()).toBe("claimed");
+		expect(await planStatus(seed.memberId)).toBe("not_coming");
+		expect(await logRows("plan_set")).toHaveLength(0);
+	});
+
+	it("a decline that lands between a SESSION answer and the confirm survives the confirm", async () => {
+		// The session half keeps #908's behaviour: the slot flips, and the
+		// caller's ask-only floor keeps the decline the officer sees on the rail.
 		await claim(seed.memberId);
 		await seedRung(seed.memberId, "not_coming");
 
 		await confirmHeldClaimedSlots({
 			memberId: seed.memberId,
 			meetingId: seed.meetingId,
-			proof: "asserted",
+			proof: "session",
 		});
 
+		expect(await slotStatus()).toBe("confirmed");
 		expect(await planStatus(seed.memberId)).toBe("not_coming");
 		expect(await logRows("plan_set")).toHaveLength(0);
 	});
