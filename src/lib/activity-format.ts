@@ -127,6 +127,11 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 				case "speaker_reordered":
 					summary = "reordered speakers";
 					break;
+				// #763 — `updateSpeakerDetails`, which rewrote a speech with no
+				// trace before it needed a session.
+				case "speaker_details":
+					summary = "updated speech details";
+					break;
 				case "evaluator_reordered":
 					summary = "reordered evaluators";
 					break;

@@ -9,9 +9,17 @@
  *
  * When TEST_DATABASE_URL is unset the whole suite is skipped.
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { members, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import {
+	activityLog,
+	clubs,
+	members,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+} from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	cleanup,
 	hasTestDb,
@@ -187,5 +195,60 @@ describe.skipIf(!hasTestDb)("reassignSlotCore atomicity (ADR-0005)", () => {
 		// Both targets are a different Person from the original, so the lock-
 		// serialized decisions both unlink: the speech ends detached.
 		expect(row?.speechId).toBeNull();
+	});
+
+	// #763: the browser path is session-gated in its handler (executed by
+	// `release-and-speaker-details.integration.test.ts`); the core records the
+	// proof it was handed and keeps its own archive gate for `assign_roles`.
+	it("records the proof it is handed on the reassign row (#763)", async () => {
+		const { reassignSlotCore } = await import("./slots-logic");
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: seed.memberId, status: "confirmed" })
+			.where(eq(roleSlots.id, seed.slotId));
+
+		await testDb.transaction((tx) =>
+			reassignSlotCore(tx, {
+				slotId: seed.slotId,
+				memberId: memberB,
+				actorMemberId: seed.adminMemberId,
+				proof: "session",
+			}),
+		);
+
+		const [row] = await testDb
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "reassign"),
+				),
+			);
+		expect(row?.detail).toEqual({
+			fromMemberId: seed.memberId,
+			memberId: memberB,
+			proof: "session",
+		});
+	});
+
+	it("an archived club refuses the reassign at the core (#825, #763)", async () => {
+		const { reassignSlotCore } = await import("./slots-logic");
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seed.clubId));
+
+		await expect(
+			testDb.transaction((tx) =>
+				reassignSlotCore(tx, {
+					slotId: seed.slotId,
+					memberId: memberB,
+					actorMemberId: seed.adminMemberId,
+					proof: "session",
+				}),
+			),
+		).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+		expect((await slotState(seed.slotId))?.assignedMemberId).toBeNull();
 	});
 });

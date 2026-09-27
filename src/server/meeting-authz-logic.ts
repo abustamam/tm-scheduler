@@ -31,6 +31,11 @@ import {
 	membershipPickOrder,
 } from "./membership-pick-order";
 
+// Either the main db client or a drizzle transaction, as in `guards.ts`.
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 /**
  * The archive choke point for every per-meeting WRITE resolver in this module
  * (#555). Archiving is the platform takedown lever (ADR-0016), and a write to a
@@ -361,13 +366,16 @@ export function resolveSelfAssertGrant(args: {
  * renamed its Toastmaster of the Day had the mutation itself refused, and a club
  * that invented any role starting with "Toastmaster" had it granted.
  */
-async function loadRoleSlotAssignees(meetingId: string): Promise<{
+async function loadRoleSlotAssignees(
+	meetingId: string,
+	conn: DbOrTx = db,
+): Promise<{
 	tmodMemberId: string | null;
 	grammarianMemberId: string | null;
 	voteCounterMemberId: string | null;
 	tableTopicsMasterMemberId: string | null;
 }> {
-	const slotRows = await db
+	const slotRows = await conn
 		.select({
 			roleName: roleDefinitions.name,
 			roleKey: roleDefinitions.key,
@@ -411,11 +419,17 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
  * renamed its Toastmaster of the Day still resolves and a club that invented a
  * role starting with "Toastmaster" still does not. A second hand-rolled query
  * would be exactly where that distinction gets lost.
+ *
+ * `conn` for a caller already inside a transaction (#763, `claimSlotCore`):
+ * reading through the pool there holds one connection while waiting for a
+ * second, and the pool is 10 with no acquire timeout, so enough concurrent
+ * callers would wait on each other forever.
  */
 export async function loadTmodMemberId(
 	meetingId: string,
+	conn: DbOrTx = db,
 ): Promise<string | null> {
-	return (await loadRoleSlotAssignees(meetingId)).tmodMemberId;
+	return (await loadRoleSlotAssignees(meetingId, conn)).tmodMemberId;
 }
 
 /**

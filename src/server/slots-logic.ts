@@ -21,13 +21,18 @@ import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import {
 	type AttendancePlanStatus,
+	getPlanStatus,
 	setPlanStatus,
 } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireClubRole } from "./guards";
-import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import {
+	assertMeetingNotLocked,
+	loadTmodMemberId,
+} from "./meeting-authz-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { loadMeetingShapeDefs, roleDefScope } from "./meeting-templates-logic";
 import { resolveProjectDisplay } from "./project-picker-logic";
+import { resolveWriteActorWithProof } from "./write-actor-logic";
 
 // Either the main db client or a drizzle transaction — so speech helpers can run
 // inside a caller's transaction and commit atomically with the slot change.
@@ -1328,6 +1333,11 @@ export async function markComingOnSelfClaim(
 		actorMemberId: string | null;
 		meetingId: string;
 		clubId: string;
+		/** How the actor was established (#763). An ASSERTED claimer may not
+		 *  supersede a decline: `claimSlotCore` refuses that case up front, and
+		 *  this floor keeps the PLAN row if a decline lands between that read
+		 *  and this write (the slot itself is not protected by it). */
+		proof?: WriteProof;
 	},
 ): Promise<void> {
 	if (args.actorMemberId === null || args.memberId !== args.actorMemberId)
@@ -1340,8 +1350,13 @@ export async function markComingOnSelfClaim(
 		actorMemberId: args.memberId,
 		// Every rung EXCEPT `coming` — so an existing `coming` row is left alone
 		// and logs nothing, while a decline or an officer's ask is correctly
-		// superseded by the strongest statement the member can make.
-		demoteFrom: ["reached_out", "not_coming"],
+		// superseded by the strongest statement the member can make. Only the ask
+		// for an asserted caller (ADR-0026: a decline is not a blank).
+		demoteFrom:
+			args.proof === "asserted"
+				? ASK_ONLY_PLAN_FLOOR
+				: HOLDER_CONFIRM_PLAN_FLOOR,
+		...(args.proof ? { proof: args.proof } : {}),
 	});
 }
 
@@ -1406,19 +1421,16 @@ export const SLOT_NO_LONGER_CLAIMED_MESSAGE =
  * failed assertion, and silently re-admitting that caller as an officer would
  * both mask a mistyped member id and record the wrong `grantedVia` for it.
  *
- *  - **self** — `selfMemberId` must equal `role_slots.assigned_member_id`. Same
- *    honour-system trust level as `claimSlot` and `setAvailability`, which
- *    already take a raw member id with no session; it grants strictly less,
- *    since the id has to match a slot the server read itself. The actor credited
- *    is the assignee VERIFIED against that row, which is the
- *    `resolveMeetingAgendaAuthz` TMOD precedent ("verified against the slot
- *    above, so it is safe to credit") rather than `requestWriteActor`'s
- *    membership precedence — crediting the resolved caller instead would file
- *    "Alice says Bob is coming" under a `grantedVia: "self"` row and contradict
- *    it. A signed-in member of this club can therefore still assert the holder's
- *    id; so can anyone at all, from a logged-out browser, which is what the
- *    honour system means here and why closing it for the signed-in half only
- *    would buy nothing.
+ *  - **self** — `selfMemberId` must equal `role_slots.assigned_member_id`. Since
+ *    #763 it is FILL-BLANK (ADR-0026): anyone naming the holder may confirm
+ *    over no answer, `coming` or an officer's ask, but only the holder's OWN
+ *    session ({@link sessionIsHolder}, or a caller-resolved `proof`) may confirm
+ *    over their `not_coming`. The actor credited is the assignee VERIFIED
+ *    against that row, which is the `resolveMeetingAgendaAuthz` TMOD precedent
+ *    ("verified against the slot above, so it is safe to credit") — crediting
+ *    the resolved caller instead would file "Alice says Bob is coming" under a
+ *    `grantedVia: "self"` row and contradict it. `detail.proof` records which
+ *    kind of caller it was.
  *  - **officer** — unchanged from before #661, including its messages: a session
  *    plus `requireClubRole(admin)`. Writes NO plan row, deliberately: nobody
  *    answered, so `buildPlanPanel` should keep inferring `Coming · assumed` from
@@ -1437,15 +1449,17 @@ export async function confirmSlotCore(args: {
 	/** Self-asserted holder id (the public arm), or null for the officer arm. */
 	selfMemberId: string | null;
 	/** HOW the caller's identity was established, when the caller resolved it
-	 *  (#908) — recorded as `detail.proof` on both activity rows the holder arm
-	 *  writes. Absent on the direct `confirmSlot` path, which resolves none;
-	 *  gating on it is #763's. */
+	 *  (#908) — `setPlannedAttendance`'s `resolveActor`. Absent on the direct
+	 *  `confirmSlot` path, where the holder arm derives it here from
+	 *  `sessionUserId` (see {@link sessionIsHolder}). Either way it is the ONE
+	 *  value the holder arm's fill-blank gate keys on (#763), and it is recorded
+	 *  as `detail.proof` on both activity rows. */
 	proof?: WriteProof;
-	/** The holder arm's plan-write floor. Defaults to
-	 *  {@link HOLDER_CONFIRM_PLAN_FLOOR}, which is the direct `confirmSlot`
-	 *  path's behaviour and stays so until #763. A caller that has ALREADY
-	 *  recorded the member's answer passes {@link ASK_ONLY_PLAN_FLOOR}, so a
-	 *  decline that landed since cannot be overwritten by the confirm. */
+	/** The holder arm's plan-write floor for a SESSION-proven holder. Defaults
+	 *  to {@link HOLDER_CONFIRM_PLAN_FLOOR}. A caller that has ALREADY recorded
+	 *  the member's answer passes {@link ASK_ONLY_PLAN_FLOOR}, so a decline that
+	 *  landed since cannot be overwritten by the confirm. An asserted holder is
+	 *  floored at {@link ASK_ONLY_PLAN_FLOOR} whatever this says (#763). */
 	planFloor?: readonly AttendancePlanStatus[];
 }): Promise<{ ok: true; grantedVia: ConfirmSlotVia; planWritten: boolean }> {
 	const [slot] = await db
@@ -1483,7 +1497,41 @@ export async function confirmSlotCore(args: {
 		throw new Error(ONLY_CLAIMED_CONFIRMABLE_MESSAGE);
 	}
 
+	// ADR-0026 (#763): confirming a role you hold fills a blank, "unless your
+	// answer is `not_coming`". The ONE place both holder paths are decided —
+	// `confirmSlot` and `setPlannedAttendance`'s `confirmHeldRoles` (#908) both
+	// arrive here — so the proof is resolved once: the caller's, or, on the
+	// direct path that resolved none, whether the SESSION is the holder's own.
+	// The officer arm is session-gated by `requireClubRole` and needs neither.
+	const proof: WriteProof =
+		grant.via === "officer"
+			? "session"
+			: (args.proof ??
+				((await sessionIsHolder(
+					slot.clubId,
+					args.sessionUserId,
+					grant.holderMemberId,
+				))
+					? "session"
+					: "asserted"));
+
 	return db.transaction(async (tx) => {
+		// The asserted holder's gate, read in the SAME transaction and BEFORE the
+		// flip so a refusal writes nothing. A decline is a record, not a blank:
+		// over it an unverified confirm is contradicting the member, and an
+		// outsider holding the link could otherwise undo any decline by
+		// confirming the role it left behind.
+		if (
+			grant.via === "self" &&
+			proof === "asserted" &&
+			(await getPlanStatus(tx, {
+				memberId: grant.holderMemberId,
+				meetingId: slot.meetingId,
+			})) === "not_coming"
+		) {
+			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+
 		// Conditional UPDATE: only flips 'claimed' → 'confirmed'; a concurrent
 		// release that races us back to 'open' will produce zero rows.
 		//
@@ -1528,15 +1576,18 @@ export async function confirmSlotCore(args: {
 				status: "coming",
 				actorMemberId: grant.actorMemberId,
 				grantedVia: "self",
-				// Default: `markComingOnSelfClaim`'s list, and for its reason: every
-				// rung EXCEPT `coming`, so a re-confirm logs nothing while a decline
-				// or an officer's ask is superseded. Confirming the role after
-				// previously declining is a real change of mind and should win — and
-				// it is the member's OWN answer either way, so this floor never lets
-				// one person overwrite another's: `reached_out` is the officer's ask,
-				// not a reply, and `not_coming` here can only be this member's.
-				demoteFrom: args.planFloor ?? HOLDER_CONFIRM_PLAN_FLOOR,
-				...(args.proof ? { proof: args.proof } : {}),
+				// Session default: `markComingOnSelfClaim`'s list, and for its
+				// reason: every rung EXCEPT `coming`, so a re-confirm logs nothing
+				// while a decline or an officer's ask is superseded. Confirming the
+				// role after previously declining is a real change of mind and should
+				// win — for the member's own session. An ASSERTED holder only ever
+				// overwrites the officer's ask: the gate above refuses a decline, and
+				// this floor is what holds if one lands after that read.
+				demoteFrom:
+					proof === "asserted"
+						? ASK_ONLY_PLAN_FLOOR
+						: (args.planFloor ?? HOLDER_CONFIRM_PLAN_FLOOR),
+				proof,
 			});
 			planWritten = changed;
 		}
@@ -1550,7 +1601,7 @@ export async function confirmSlotCore(args: {
 			detail: {
 				confirmed: true,
 				grantedVia: grant.via,
-				...(args.proof ? { proof: args.proof } : {}),
+				proof,
 			},
 		});
 
@@ -1692,6 +1743,27 @@ async function resolveConfirmGrant(
 }
 
 /**
+ * Whether the signed-in caller IS the slot's holder (#763): a session bound to
+ * THIS member through the write-actor seam, with nothing read off the wire.
+ * `voting-logic.ts`'s `sessionIsVoter` is the same construction. A session with
+ * no membership here, a different member's session, or none at all is an
+ * asserted pick of the holder's id — which may still fill a blank.
+ */
+async function sessionIsHolder(
+	clubId: string,
+	sessionUserId: string | null,
+	holderMemberId: string,
+): Promise<boolean> {
+	if (!sessionUserId) return false;
+	const actor = await resolveWriteActorWithProof({
+		clubId,
+		sessionUserId,
+		claimedActorMemberId: null,
+	});
+	return actor?.proof === "session" && actor.memberId === holderMemberId;
+}
+
+/**
  * Claim an OPEN slot for a member (#825).
  *
  * Extracted from `claimSlot`'s handler body for the reason #809 extracted
@@ -1702,9 +1774,23 @@ async function resolveConfirmGrant(
  * its sign-up link and minting `activity_log` rows for them.
  *
  * Takes the caller's transaction and the resolved actor, like its siblings: the
- * trust guard and `requestWriteActor` are request-scoped and stay in the
- * handler. The conditional UPDATE is still the race guard — only one claim can
- * flip `open` — so the read here takes no row lock; it exists to gate.
+ * trust guard and `requestWriteActorWithProof` are request-scoped and stay in
+ * the handler. The conditional UPDATE is still the race guard — only one claim
+ * can flip `open` — so the read here takes no row lock; it exists to gate.
+ *
+ * **An asserted claimer may only fill a blank** (#763, ADR-0026). With
+ * `proof: "asserted"` — a roster pick with no session behind it — the claim is
+ * refused with `SIGN_IN_REQUIRED_MESSAGE`, writing nothing, when:
+ *  - the actor is claiming for SOMEONE ELSE and is not this meeting's TMOD
+ *    (the TMOD's assign-from-the-public-page is Phase 2, #747); or
+ *  - the member being given the role has answered `not_coming`. Claiming in
+ *    their name would contradict a record, and "mark them not coming, then
+ *    claim in their name" is the two-blank attack the ADR names.
+ * A session-proven actor (`"session"`) is the sheet rule, unchanged: any member
+ * of the club may give an open role to any member. `proof` is optional only for
+ * a caller with no request to read it off; `claimSlot` always passes one, and
+ * an impersonated write arrives as `"session"` with a null actor (a read-only
+ * impersonation is refused before it gets here). An ABSENT proof is not gated.
  */
 export async function claimSlotCore(
 	tx: DbOrTx,
@@ -1713,6 +1799,8 @@ export async function claimSlotCore(
 		memberId: string;
 		actorMemberId: string | null;
 		speakerDetails?: SpeechInput;
+		/** How `actorMemberId` was established. Recorded as `detail.proof`. */
+		proof?: WriteProof;
 	},
 ): Promise<{ clubId: string }> {
 	const [slot] = await tx
@@ -1736,6 +1824,26 @@ export async function claimSlotCore(
 	// not for the meeting's status.
 	await assertClubNotArchived(slot.clubId, tx);
 	assertMeetingNotLocked(slot.meetingStatus);
+
+	const forSomeoneElse = args.actorMemberId !== args.memberId;
+	if (args.proof === "asserted") {
+		// Through `tx`: this runs inside the caller's transaction, and a pooled
+		// read here holds one connection while waiting on a second.
+		if (
+			forSomeoneElse &&
+			args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))
+		) {
+			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+		if (
+			(await getPlanStatus(tx, {
+				memberId: args.memberId,
+				meetingId: slot.meetingId,
+			})) === "not_coming"
+		) {
+			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+	}
 
 	// Conditional UPDATE is the race guard: only one claim can flip 'open'.
 	const updated = await tx
@@ -1775,6 +1883,7 @@ export async function claimSlotCore(
 		actorMemberId: args.actorMemberId,
 		meetingId: slot.meetingId,
 		clubId: slot.clubId,
+		proof: args.proof,
 	});
 
 	await logActivity(tx, {
@@ -1783,7 +1892,16 @@ export async function claimSlotCore(
 		action: "claim",
 		targetType: "slot",
 		targetId: args.slotId,
-		detail: { memberId: args.memberId },
+		detail: {
+			memberId: args.memberId,
+			...(args.proof ? { proof: args.proof } : {}),
+			// The only arm that lets an asserted caller claim for someone else, and
+			// the TMOD's id is as public as anyone's: say so on the row, so a claim
+			// credited to the TMOD by a forged id can be told apart in the feed.
+			...(args.proof === "asserted" && forSomeoneElse
+				? { grantedVia: "tmod" }
+				: {}),
+		},
 	});
 
 	return { clubId: slot.clubId };
@@ -1828,7 +1946,15 @@ export async function claimSlotCore(
  */
 export async function reassignSlotCore(
 	tx: DbOrTx,
-	args: { slotId: string; memberId: string; actorMemberId: string | null },
+	args: {
+		slotId: string;
+		memberId: string;
+		actorMemberId: string | null;
+		/** Recorded as `detail.proof` (#763). The browser path is session-gated
+		 *  and passes `"session"`; `assign_roles` resolves a bearer token and
+		 *  passes none. */
+		proof?: WriteProof;
+	},
 ): Promise<{ clubId: string }> {
 	// Lock only the role_slots row; FOR UPDATE on the joined role_definitions /
 	// meetings catalog rows is unnecessary (they don't change under us).
@@ -1852,9 +1978,10 @@ export async function reassignSlotCore(
 		.limit(1)
 		.for("update", { of: roleSlots });
 	if (!slot) throw new Error("Role not found.");
-	// #825. `reassignSlot` is PUBLIC and session-less, so `requireMembership`
-	// never runs and the archive check never arrives for free; it had none at
-	// all until this. Here rather than in the handler so vitest can execute it,
+	// #825. Neither caller reaches this through `requireMembership` — the
+	// browser path resolves a session ACTOR (`requireSessionActor`, #763) and
+	// `assign_roles` a bearer token — so the archive check does not arrive for
+	// free; it had none at all until #825. Here rather than in the handler so vitest can execute it,
 	// and before the lock check for the reason `releaseSlotCore` gives. Through
 	// `tx`, because `assign_roles` calls this inside a batch holding locks.
 	await assertClubNotArchived(slot.clubId, tx);
@@ -1895,6 +2022,7 @@ export async function reassignSlotCore(
 		actorMemberId: args.actorMemberId,
 		meetingId: slot.meetingId,
 		clubId: slot.clubId,
+		proof: args.proof,
 	});
 
 	// Unlink the speech only when the Person actually changed.
@@ -1915,12 +2043,15 @@ export async function reassignSlotCore(
 		targetId: args.slotId,
 		// `claim` carries no `fromMemberId` — `claimSlot`'s own log does not
 		// either, and on an open slot there is nothing for it to name.
-		detail: wasOpen
-			? { memberId: args.memberId }
-			: {
-					fromMemberId: slot.assignedMemberId,
-					memberId: args.memberId,
-				},
+		detail: {
+			...(wasOpen
+				? { memberId: args.memberId }
+				: {
+						fromMemberId: slot.assignedMemberId,
+						memberId: args.memberId,
+					}),
+			...(args.proof ? { proof: args.proof } : {}),
+		},
 	});
 
 	return { clubId: slot.clubId };
@@ -1943,9 +2074,9 @@ export async function reassignSlotCore(
  * holding locks.
  *
  * **`actorMemberId` is an ARGUMENT, not something this resolves.** Release is
- * the honour-system clear any club member may perform from a shared link with
- * no session at all, and the handler resolves the actor through
- * `requestWriteActor` — a REQUEST-scoped read that the MCP path has no way to
+ * the sheet-rule clear any signed-in club member may perform (#763 took it off
+ * the anonymous link), and the handler resolves the actor through
+ * `requireSessionActor` — a REQUEST-scoped read that the MCP path has no way to
  * supply. Pulling that resolution in here would make the seam unreachable from
  * the tool; `reassignSlotCore` takes its actor the same way and for the same
  * reason.
@@ -1967,7 +2098,12 @@ export async function reassignSlotCore(
  */
 export async function releaseSlotCore(
 	conn: DbOrTx,
-	args: { slotId: string; actorMemberId: string | null },
+	args: {
+		slotId: string;
+		actorMemberId: string | null;
+		/** Recorded as `detail.proof` (#763), as `reassignSlotCore`'s is. */
+		proof?: WriteProof;
+	},
 ): Promise<{ clubId: string }> {
 	// Lock only the role_slots row; the joined meetings row does not change
 	// under us. Same shape as `reassignSlotCore`, so a clear and a reassign of
@@ -1988,8 +2124,10 @@ export async function releaseSlotCore(
 		.for("update", { of: roleSlots });
 	if (!slot) throw new Error("Role not found.");
 
-	// #555. PUBLIC — no session, so `requireMembership` never runs and the
-	// archive check never arrives for free. Before the lock check, because a
+	// #555. Neither caller reaches this through `requireMembership` — the
+	// browser path resolves a session ACTOR (`requireSessionActor`, #763) and
+	// `assign_roles` a bearer token — so the archive check does not arrive for
+	// free, and inside a batch it must read through `conn`. Before the lock check, because a
 	// taken-down club should refuse for the reason it was taken down rather than
 	// for the meeting's status.
 	await assertClubNotArchived(slot.clubId, conn);
@@ -2012,7 +2150,10 @@ export async function releaseSlotCore(
 		action: "release",
 		targetType: "slot",
 		targetId: args.slotId,
-		detail: { fromMemberId: slot.assignedMemberId },
+		detail: {
+			fromMemberId: slot.assignedMemberId,
+			...(args.proof ? { proof: args.proof } : {}),
+		},
 	});
 
 	// `clubId` alone, matching `reassignSlotCore`. The prior holder and the
