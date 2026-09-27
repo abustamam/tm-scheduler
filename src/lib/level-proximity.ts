@@ -47,8 +47,8 @@ export type ProximityPath = Pick<
 >;
 
 export interface LevelProximityInput {
-	/** ACTIVE members only. `pathwaysByMember` returns every membership, so the
-	 *  caller's roster is what filters; a member absent here produces no row. */
+	/** ACTIVE members only. The caller's roster is what filters: a member absent
+	 *  here produces no row, whatever `pathsByMember` carries for them. */
 	members: { memberId: string; name: string }[];
 	pathsByMember: Map<string, ProximityPath[]>;
 	upcomingSpeakerAt: Map<string, Date>;

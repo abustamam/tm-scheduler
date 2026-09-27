@@ -114,6 +114,10 @@ function profileMember(over: Record<string, unknown> = {}) {
 async function renderRoute(
 	over: Record<string, unknown> = {},
 	loaderOver: Record<string, unknown> = {},
+	ctxOver: {
+		clubRole?: "admin" | "member";
+		impersonating?: { clubId: string; mode: "read_only" | "read_write" };
+	} = {},
 ) {
 	vi.spyOn(Route, "useRouteContext").mockReturnValue({
 		clubs: [
@@ -121,11 +125,12 @@ async function renderRoute(
 				clubId: CLUB_ID,
 				name: "Downtown Club",
 				clubNumber: "123456",
-				clubRole: "member",
+				clubRole: ctxOver.clubRole ?? "member",
 			},
 		],
 		activeClubId: CLUB_ID,
 		officerPositions: [],
+		impersonating: ctxOver.impersonating ?? null,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
@@ -490,5 +495,39 @@ describe("member profile — speech log evaluators (#681)", () => {
 		const link = screen.getByRole("link", { name: "Show recent" });
 		expect(link.getAttribute("href")).not.toContain("speeches=");
 		expect(screen.getByText("all 1")).toBeTruthy();
+	});
+});
+
+describe("member profile — a former member's Pathways", () => {
+	const WITHHELD = "Pathways progress isn't shown for former members.";
+	const EMPTY = "No Pathways path set yet.";
+
+	it("tells a plain member they are not shown, not that none is set", async () => {
+		await renderRoute({ status: "inactive" });
+		expect(screen.getByText(WITHHELD)).toBeTruthy();
+		expect(screen.queryByText(EMPTY)).toBeNull();
+	});
+
+	it("keeps the ordinary empty state for an active member", async () => {
+		await renderRoute();
+		expect(screen.getByText(EMPTY)).toBeTruthy();
+		expect(screen.queryByText(WITHHELD)).toBeNull();
+	});
+
+	it("shows an admin the panel itself", async () => {
+		await renderRoute({ status: "inactive" }, {}, { clubRole: "admin" });
+		expect(screen.queryByText(WITHHELD)).toBeNull();
+	});
+
+	it("says they are not shown under View as this club", async () => {
+		await renderRoute(
+			{ status: "inactive" },
+			{},
+			{
+				clubRole: "admin",
+				impersonating: { clubId: CLUB_ID, mode: "read_only" },
+			},
+		);
+		expect(screen.getByText(WITHHELD)).toBeTruthy();
 	});
 });

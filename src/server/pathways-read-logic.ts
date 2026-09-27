@@ -21,6 +21,7 @@ import {
 	seriesRequiredAt,
 } from "#/lib/pathways-catalog";
 import { isReadableClub } from "./club-readable-logic";
+import { mayRevealFormerMembers, requireClubViewAccess } from "./guards";
 import { resolveUserPersonId } from "./person-identity-logic";
 
 export interface SyncedLevel {
@@ -967,18 +968,33 @@ export async function pathwaysForPerson(
 	return [...byPath.values()].map(buildPathViewModel);
 }
 
-/** Resolve the person for a roster member, then their paths. */
+/**
+ * Resolve the person for a roster member, then their paths.
+ *
+ * An ACTIVE member's paths are a PUBLIC read (#544): `getMemberPathways`
+ * requires no session. A FORMER (inactive) member's are not: they are returned
+ * only when `viewerUserId` passes `mayRevealFormerMembers`, the rule the
+ * roster's Pathway column follows, and are otherwise `[]`. An enrollment
+ * carries no club, so this person's whole record, including progress made at
+ * clubs they joined later, is otherwise one membership id away (#958).
+ */
 export async function pathwaysForMember(
 	clubId: string,
 	memberId: string,
+	viewerUserId: string | null = null,
 ): Promise<PathViewModel[]> {
-	// PUBLIC read (#544): `getMemberPathways` takes no session.
 	if (!(await isReadableClub(clubId))) return [];
 	const [m] = await db
-		.select({ personId: members.personId })
+		.select({ personId: members.personId, status: members.status })
 		.from(members)
 		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)));
 	if (!m) return [];
+	if (
+		m.status !== "active" &&
+		!(await viewerMayRevealFormerMembers(viewerUserId, clubId))
+	) {
+		return [];
+	}
 	return pathwaysForPerson(m.personId);
 }
 
@@ -995,15 +1011,24 @@ export async function pathwaysForUser(
 }
 
 /**
- * Every enrolled path for every member of a club, in ONE query per concern
- * (levels, wins, catalog, /detail mirror, path-levels), grouped by membership
- * id — avoids an N+1 when
+ * Every enrolled path for every ACTIVE member of a club, in ONE query per
+ * concern (levels, wins, catalog, /detail mirror, path-levels), grouped by
+ * membership id — avoids an N+1 when
  * rendering the roster (mirrors the batching shape of `currentOfficersByMember`
  * in officer-terms-logic.ts). Memberships with no synced paths are simply
  * absent from the map (callers default to an empty array).
+ *
+ * Inactive memberships are left out unless `includeInactive` is set, for the
+ * reason the club export's pathways.csv gives (#958): an enrollment is
+ * PERSON-owned and carries no club, so a lapsed membership is the only link
+ * from a former member's Pathways record, including progress made at clubs
+ * they joined afterwards, to the club they left. Only
+ * `listClubMemberPathwaysFor` passes `includeInactive`, and only after
+ * `mayRevealFormerMembers` (guards.ts) says yes.
  */
 export async function pathwaysByMember(
 	clubId: string,
+	opts: { includeInactive?: boolean } = {},
 ): Promise<Map<string, PathViewModel[]>> {
 	const rows = await db
 		.select({
@@ -1027,7 +1052,13 @@ export async function pathwaysByMember(
 			pathLevelProgress,
 			eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
 		)
-		.where(and(eq(members.clubId, clubId), isNull(pathEnrollments.archivedAt)))
+		.where(
+			and(
+				eq(members.clubId, clubId),
+				isNull(pathEnrollments.archivedAt),
+				opts.includeInactive ? undefined : eq(members.status, "active"),
+			),
+		)
 		.orderBy(asc(pathwaysPaths.sortOrder), asc(pathLevelProgress.level));
 
 	if (rows.length === 0) return new Map();
@@ -1182,4 +1213,44 @@ export async function pathwaysByMember(
 		result.set(memberId, vms);
 	}
 	return result;
+}
+
+/**
+ * The roster's Pathway column: every member's paths, keyed by membership id.
+ *
+ * Any viewer of the club (`requireClubViewAccess`) gets ACTIVE members only.
+ * `includeFormer` is a REQUEST, not a grant: it takes effect only when
+ * `mayRevealFormerMembers` (guards.ts) agrees, and is otherwise ignored, so a
+ * plain member who sets it gets exactly what they would have got without it.
+ */
+export async function listClubMemberPathwaysFor(
+	userId: string,
+	input: { clubId: string; includeFormer?: boolean },
+): Promise<Record<string, PathViewModel[]>> {
+	const access = await requireClubViewAccess(userId, input.clubId);
+	const includeInactive =
+		input.includeFormer === true && (await mayRevealFormerMembers(access));
+	return Object.fromEntries(
+		await pathwaysByMember(input.clubId, { includeInactive }),
+	);
+}
+
+/**
+ * Whether `viewerUserId` may see a former member's record at this club: a
+ * signed-in viewer with club view access who passes `mayRevealFormerMembers`.
+ * No session, no view access, or any failure resolving it answers false, so
+ * the record is withheld rather than served.
+ */
+async function viewerMayRevealFormerMembers(
+	viewerUserId: string | null,
+	clubId: string,
+): Promise<boolean> {
+	if (!viewerUserId) return false;
+	try {
+		return await mayRevealFormerMembers(
+			await requireClubViewAccess(viewerUserId, clubId),
+		);
+	} catch {
+		return false;
+	}
 }

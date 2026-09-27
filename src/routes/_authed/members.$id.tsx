@@ -34,6 +34,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
+import { exportLinkAllowed } from "#/lib/club-export-url";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { APP_LOCALE, formatDayMonth, formatMeetingDate } from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
@@ -175,7 +176,8 @@ function MemberDetail() {
 		enrollments,
 		now,
 	} = Route.useLoaderData();
-	const { activeClubId, clubs, officerPositions } = Route.useRouteContext();
+	const { activeClubId, clubs, officerPositions, impersonating } =
+		Route.useRouteContext();
 	const clubId = activeClubId;
 	// Club-role management is admin-only: the viewer must be an effective admin
 	// (stored admin OR an elected officer, #202) in the active club (#187).
@@ -195,6 +197,14 @@ function MemberDetail() {
 			</PageContainer>
 		);
 	}
+
+	// A former member's Pathways are served only to an admin or officer, never
+	// under "View as this club" (`mayRevealFormerMembers`); anyone else gets
+	// none from the server. Say so quietly rather than showing the "no path set
+	// yet" empty state, which would be a claim about their record.
+	const pathwaysWithheld =
+		member.status === "inactive" &&
+		!(clubId && viewerIsAdmin && exportLinkAllowed(impersonating, clubId));
 
 	// Identity, speech log, roles served and Pathways progress are all real.
 	const joined = member.joinedAt ?? member.createdAt;
@@ -405,7 +415,11 @@ function MemberDetail() {
 				    club can then be kept current without every member signing in.
 				    A plain member viewing this page gets the read-only panel and
 				    marks their own from the dashboard. */}
-				{clubId && viewerIsAdmin ? (
+				{pathwaysWithheld ? (
+					<p className="text-sm text-muted-foreground">
+						Pathways progress isn't shown for former members.
+					</p>
+				) : clubId && viewerIsAdmin ? (
 					<MemberProgressPanel
 						clubId={clubId}
 						memberId={member.id}

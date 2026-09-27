@@ -1,9 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireClubViewAccess, requireUser } from "./guards";
+import { getSessionUser, requireUser } from "./guards";
 import {
+	listClubMemberPathwaysFor,
 	type PathViewModel,
-	pathwaysByMember,
 	pathwaysForMember,
 	pathwaysForUser,
 } from "./pathways-read-logic";
@@ -21,15 +21,24 @@ const memberSchema = z.object({
 	memberId: z.string().uuid(),
 });
 
-/** A roster member's paths (member-detail tab). Public read — roster is auth-decoupled. */
+/**
+ * A roster member's paths (member-detail tab). Public read for an ACTIVE
+ * member — the roster is auth-decoupled. A former member's paths follow the
+ * roster's rule, which needs the viewer, so the session is read (never
+ * required) and handed down; `pathwaysForMember` answers `[]` without one.
+ */
 export const getMemberPathways = createServerFn({ method: "GET" })
 	.validator((i: unknown) => memberSchema.parse(i))
 	.handler(async ({ data }): Promise<PathViewModel[]> => {
-		return pathwaysForMember(data.clubId, data.memberId);
+		const viewer = await getSessionUser();
+		return pathwaysForMember(data.clubId, data.memberId, viewer?.id ?? null);
 	});
 
 const clubSchema = z.object({
 	clubId: z.string().uuid(),
+	// Optional so a tab loaded before this field existed, which sends only
+	// `{ clubId }`, keeps working and gets the safe answer: active members only.
+	includeFormer: z.boolean().optional(),
 });
 
 /**
@@ -37,15 +46,15 @@ const clubSchema = z.object({
  * an N+1 of per-member reads. A `Map` isn't serializable across the server-fn
  * boundary, so this returns a plain `Record<memberId, PathViewModel[]>`.
  * Members with no synced paths are simply absent from the record.
+ *
+ * Active members only, unless `includeFormer` is set AND the caller is an
+ * officer or admin of the club. The gate is `listClubMemberPathwaysFor`, which
+ * also requires club view access: only a member of the club may read every
+ * member's progress, mirroring `listClubMembers`.
  */
 export const listClubMemberPathways = createServerFn({ method: "GET" })
 	.validator((i: unknown) => clubSchema.parse(i))
 	.handler(async ({ data }): Promise<Record<string, PathViewModel[]>> => {
-		// A whole-club dump needs a real gate (unlike the single-member read, which
-		// is scoped to a matched (clubId, memberId) pair): only a member of the
-		// club may read every member's progress — mirrors `listClubMembers`.
 		const user = await requireUser();
-		await requireClubViewAccess(user.id, data.clubId);
-		const map = await pathwaysByMember(data.clubId);
-		return Object.fromEntries(map);
+		return listClubMemberPathwaysFor(user.id, data);
 	});
