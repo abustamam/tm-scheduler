@@ -29,6 +29,13 @@ task description to also get a task-scoped bundle; omit it for deps and env
 only. Afterwards `git status` should be empty — if it is not, something in the
 bootstrap wrote a tracked file and that is a bug worth chasing.
 
+Setup also gives the worktree **its own test database** (#980), `tm_test_wt_<branch>` in
+`dev-postgres`, schema synced with `db:push --force` and its URL recorded in the gitignored
+`.env.test.local`, so parallel worktrees' full suites no longer fail in each other's files.
+When you are done, **`bun run worktree:teardown`** from inside the worktree drops that database
+and removes the worktree. It refuses a dirty worktree before touching anything, drops only a
+`tm_test_wt_` database setup recorded, and keeps the branch.
+
 ### Branch naming — the issue number goes LAST (required)
 
 **`<slug>-<issue>`.** `fix-dialog-scroll-619`, not `fix-619-dialog-scroll` and
@@ -217,11 +224,15 @@ the other file's in-flight rows; and any assertion over an unscoped `select()` o
 table is order-dependent by construction. Give seeded keys and names a per-run suffix, track
 the ids you created, delete only those, and scope every assertion to your own club.
 
-**Integration suites need a database or they silently SKIP.** Export
+**Integration suites need a database or they silently SKIP.** In a worktree bootstrapped by
+`worktree:setup`, `src/test/setup-env.ts` reads the worktree's own database from `.env.test.local`,
+so a plain `bun run test` runs them; an exported `TEST_DATABASE_URL` still wins (CI's does). In the
+main checkout, or a worktree whose setup could not reach Postgres (it warns), export
 `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test"` before `bun run test`, or ~630
-tests vanish from the run and the pass count still reads green. A plain `bun run test` masks stale
+tests vanish from the run and the pass count still reads green. There, a plain `bun run test` masks stale
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
-`DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
+`DATABASE_URL=…tm_test bun run db:push --force` — test databases are the one thing `db:push` is
+for. A worktree's own database is re-synced by re-running `bun run worktree:setup`.
 
 **The twelve browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet

@@ -25,6 +25,7 @@
     "check": "biome check",
     "fix": "biome check --write",
     "worktree:setup": "bash scripts/setup-worktree.sh",
+    "worktree:teardown": "bash scripts/teardown-worktree.sh",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",

@@ -1,3 +1,6 @@
+import { resolve } from "node:path";
+import { applyWorktreeTestDb } from "./worktree-test-db";
+
 // Vitest setup: provide deterministic defaults for server secrets that some code
 // paths require, so tests don't depend on a developer's `.env.local` being loaded
 // (vitest does not load it) or on CI exporting them. Real env values always win
@@ -7,6 +10,15 @@
 // with BETTER_AUTH_SECRET, exercised transitively by the reminder-delivery tests.
 process.env.BETTER_AUTH_SECRET ??= "test-better-auth-secret";
 process.env.BETTER_AUTH_URL ??= "http://localhost:3000";
+
+// A worktree's own test database (#980). `bun run worktree:setup` records it in
+// `.env.test.local` at the worktree root; an exported TEST_DATABASE_URL still
+// wins. Resolved from this file, not the cwd, so it finds the right root
+// whichever directory vitest was started from. `__dirname`, not
+// `fileURLToPath(new URL("../..", import.meta.url))`: under the jsdom
+// environment the global `URL` is jsdom's, which Node's `fileURLToPath` refuses
+// ("The URL must be of scheme file"), and that failed every jsdom suite.
+applyWorktreeTestDb(process.env, resolve(__dirname, "../.."));
 
 // jsdom implements pointer EVENTS but not the pointer CAPTURE methods, so any
 // library that claims the pointer on `pointerdown` throws

@@ -24,6 +24,9 @@
 #   bun run worktree:setup
 #   bun run worktree:setup "what you are building"   # also activates a bundle
 #
+# It also gives the worktree its own test database (step 5); undo all of this
+# with `bun run worktree:teardown` (scripts/teardown-worktree.sh).
+#
 set -euo pipefail
 
 TASK="${1:-}"
@@ -124,6 +127,24 @@ else
 		echo "  No task given. For a task-scoped bundle, re-run with one:"
 		echo "    bun run worktree:setup \"what you are building\""
 	fi
+fi
+
+# 5. Test database (#980). Every worktree used to run its database-backed
+#    suites against the one shared tm_test, so a wave of agents running full
+#    suites at once failed in each other's files. Give this worktree its own:
+#    created in the same server as DATABASE_URL, schema synced with
+#    `db:push --force`, URL recorded in .env.test.local (gitignored by *.local),
+#    which src/test/setup-env.ts reads when TEST_DATABASE_URL is not exported.
+#    Re-running keeps the database and re-syncs the schema.
+#    `bun run worktree:teardown` drops it and removes the worktree.
+#
+#    Guarded: a missing or stopped Postgres must not block the rest of the
+#    bootstrap. Nothing is recorded then, so the DB-backed suites skip exactly
+#    as they did before, and the warning says so.
+echo "→ worktree test database"
+if ! bun "$HERE/scripts/worktree-test-db.ts" ensure; then
+	echo "  ! WARNING: no worktree test database. Database-backed suites will SKIP"
+	echo "    unless TEST_DATABASE_URL is exported. Is the dev-postgres container up?"
 fi
 
 echo
