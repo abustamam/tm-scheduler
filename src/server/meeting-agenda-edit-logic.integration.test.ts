@@ -7,6 +7,7 @@
  *     bunx vitest run src/server/meeting-agenda-edit-logic.integration.test.ts
  */
 import { and, eq, sql } from "drizzle-orm";
+import pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -80,6 +81,41 @@ afterEach(async () => {
 		await testDb.delete(meetingTemplates).where(eq(meetingTemplates.id, id));
 	}
 });
+
+/**
+ * Count the SQL statements `fn` sends, by spying on `pg.Client.prototype
+ * .query` — every statement drizzle's node-postgres driver issues, pooled or
+ * inside a transaction (BEGIN/COMMIT included), goes through it. Test files
+ * run their tests sequentially, so nothing else in this process is querying
+ * during the window. `beatUpdates` isolates the renumber's own writes.
+ */
+async function countStatements(
+	fn: () => Promise<unknown>,
+): Promise<{ total: number; beatUpdates: number }> {
+	const texts: string[] = [];
+	const original = pg.Client.prototype.query;
+	const spy = vi
+		.spyOn(pg.Client.prototype, "query")
+		.mockImplementation(function (this: pg.Client, ...args: unknown[]) {
+			const [q] = args;
+			texts.push(
+				typeof q === "string" ? q : String((q as { text?: string })?.text),
+			);
+			// biome-ignore lint/suspicious/noExplicitAny: forwarding pg's overloaded signature verbatim
+			return (original as any).apply(this, args);
+		});
+	try {
+		await fn();
+	} finally {
+		spy.mockRestore();
+	}
+	return {
+		total: texts.length,
+		beatUpdates: texts.filter((t) =>
+			/^update "meeting_template_beats"/i.test(t.trim()),
+		).length,
+	};
+}
 
 async function givePrivateTemplate() {
 	const [t] = await testDb
@@ -928,20 +964,32 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 
 	// #task-10. `renumberRows` used to issue 2N sequential single-row UPDATEs —
 	// up to 400 round trips at MAX_TEMPLATE_BEATS, each holding a row lock on
-	// its beat for the whole transaction. Measured against a real local
-	// Postgres before the fix: ~170-187ms per `moveAgendaRow` call at 200
-	// rows, three runs. The fix (two bulk `CASE id WHEN … THEN …` statements,
-	// still the same two-pass negative-floor shape) measured ~11-16ms the
-	// same way. ABSOLUTE, not relative to the old number — a regression back
-	// to one-statement-per-row would still clear a bound stated as "faster
-	// than before". 100ms leaves a wide margin over the measured ~16ms for a
-	// slower CI runner while still catching a reversion to the N-statement
-	// shape, which cost 10x that at this same size.
-	it("renumbers MAX_TEMPLATE_BEATS rows in well under 100ms (bulk CASE, not 2N round trips)", async () => {
+	// its beat for the whole transaction (~170-187ms per `moveAgendaRow` at 200
+	// rows, against ~11-16ms for the two bulk `CASE id WHEN … THEN …`
+	// statements that replaced them — see `renumberRows`' docblock).
+	//
+	// What this guards is the query SHAPE, so it counts statements rather than
+	// timing them (#971). It used to assert `< 100`ms of wall clock, and under a
+	// full parallel suite sharing one `tm_test` that read 107-161ms in about 4
+	// of 7 runs while the code was unchanged: a timing bound on a loaded
+	// machine measures the machine. A statement count is deterministic, and it
+	// is stated as INDEPENDENT OF ROW COUNT — the same call on a 2-row and a
+	// MAX_TEMPLATE_BEATS-row agenda issues the same statements — which is the
+	// property the per-row shape breaks (2N beat UPDATEs: 4 vs 400).
+	it("renumbers with a row-count-independent number of statements (bulk CASE, not 2N round trips)", async () => {
 		const id = await givePrivateTemplate();
-		// givePrivateTemplate already seeds 2 rows (sortOrder 0, 1); fill the
-		// rest with plain filler, same shape as the "refuses to add past the
-		// beat ceiling" fixture above.
+		const small = (await loadAgendaDraft(club.meetingId))?.rows ?? [];
+		expect(small).toHaveLength(2);
+		const smallCount = await countStatements(() =>
+			moveAgendaRow({
+				meetingId: club.meetingId,
+				rowId: small[1]?.id ?? "",
+				direction: "up",
+			}),
+		);
+
+		// Fill the same template up to the ceiling, same filler shape as the
+		// "refuses to add past the beat ceiling" fixture above.
 		await testDb.insert(meetingTemplateBeats).values(
 			Array.from({ length: MAX_TEMPLATE_BEATS - 2 }, (_, i) => ({
 				templateId: id,
@@ -951,22 +999,26 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 				minutes: 0,
 			})),
 		);
-		const draft = await loadAgendaDraft(club.meetingId);
-		const rows = draft?.rows ?? [];
+		const rows = (await loadAgendaDraft(club.meetingId))?.rows ?? [];
 		expect(rows).toHaveLength(MAX_TEMPLATE_BEATS);
 		const mid = rows[Math.floor(rows.length / 2)];
 		if (!mid) throw new Error("no rows");
+		const bigCount = await countStatements(() =>
+			moveAgendaRow({
+				meetingId: club.meetingId,
+				rowId: mid.id,
+				direction: "up",
+			}),
+		);
 
-		const t0 = performance.now();
-		await moveAgendaRow({
-			meetingId: club.meetingId,
-			rowId: mid.id,
-			direction: "up",
-		});
-		const ms = performance.now() - t0;
-		expect(ms).toBeLessThan(100);
+		// The spy saw the move at all: without this a spy on the wrong prototype
+		// counts 0 == 0 and every assertion below passes vacuously.
+		expect(smallCount.beatUpdates).toBeGreaterThan(0);
+		// Two passes (negative floor, then 0..N-1), one statement each.
+		expect(bigCount.beatUpdates).toBe(2);
+		expect(bigCount).toEqual(smallCount);
 
-		// And the reorder is still correct, not just fast: the moved row is now
+		// And the reorder is still correct, not just cheap: the moved row is now
 		// one position earlier, everyone else keeps their relative order.
 		const after = await loadAgendaDraft(club.meetingId);
 		const afterIds = after?.rows.map((r) => r.id) ?? [];
