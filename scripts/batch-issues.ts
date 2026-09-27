@@ -17,7 +17,9 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import {
+	blockerTags,
 	CITED_ROOT_FILES,
+	classifyBlockers,
 	CITED_ROOTS,
 	DEFAULT_FAN_IN_THRESHOLD,
 	DEFAULT_MAX_BATCH_SIZE,
@@ -28,12 +30,19 @@ import {
 	type IssueClaim,
 	isCitablePath,
 	isMigrationBearing,
+	type IgnoredDependency,
+	type IssueState,
+	type IssueStateMap,
+	ignoredTag,
+	issueStateQuery,
 	isPriority,
 	MIGRATION_LABEL,
+	parseIssueStates,
 	partitionClaimedIssues,
 	planBatches,
 	PRIORITY_LABEL,
 	splitCitations,
+	waveBlockers,
 } from "../src/lib/issue-batching";
 
 const args = process.argv.slice(2);
@@ -316,6 +325,75 @@ function gatherClaims(): { claims: IssueClaim[]; skipped: string[] } {
 	return { claims, skipped };
 }
 
+// ---- blocker state ------------------------------------------------------------
+
+/** Aliases per GraphQL request. Well under GitHub's node limit, and rarely hit. */
+const STATE_QUERY_CHUNK = 50;
+
+/**
+ * GitHub's state for each number, for blockers the issue fetch did not return.
+ *
+ * The fetch above covers only the planned label, so a blocker still in
+ * `needs-triage` — open, and exactly the one the plan's order cannot land for
+ * you — would otherwise be indistinguishable from a closed one. A number that
+ * cannot be read stays out of the map and is tagged unreadable; see
+ * `IssueState`.
+ *
+ * `error` is the first line `gh` wrote to stderr, kept so the report can say
+ * WHY states are unreadable — an expired token and a network outage want
+ * different fixes, and both otherwise print as the same bare list of numbers.
+ */
+function fetchIssueStates(numbers: number[]): {
+	states: IssueStateMap;
+	error: string | null;
+} {
+	const states: IssueStateMap = new Map();
+	let error: string | null = null;
+	for (let i = 0; i < numbers.length; i += STATE_QUERY_CHUNK) {
+		const chunk = numbers.slice(i, i + STATE_QUERY_CHUNK);
+		let out: string;
+		try {
+			out = execFileSync(
+				"gh",
+				[
+					"api",
+					"graphql",
+					"-F",
+					"owner={owner}",
+					"-F",
+					"name={repo}",
+					"-f",
+					`query=${issueStateQuery(chunk)}`,
+				],
+				{
+					encoding: "utf8",
+					maxBuffer: 32 * 1024 * 1024,
+					stdio: ["ignore", "pipe", "pipe"],
+				},
+			);
+		} catch (e) {
+			// `gh` exits non-zero on a PARTIAL error (one nonexistent number) while
+			// still printing the rest of the answer; keep that answer.
+			const failure = e as { stdout?: unknown; stderr?: unknown; message?: string };
+			out = String(failure.stdout ?? "");
+			error ??=
+				String(failure.stderr ?? "")
+					.split("\n")
+					.map((l) => l.trim())
+					.find(Boolean) ??
+				failure.message ??
+				"gh failed with no message";
+		}
+		try {
+			for (const [n, st] of parseIssueStates(JSON.parse(out), chunk))
+				states.set(n, st);
+		} catch {
+			// Unparseable: every number in the chunk stays unreadable, and says so.
+		}
+	}
+	return { states, error };
+}
+
 // ---- plan --------------------------------------------------------------------
 
 const citable = [
@@ -353,8 +431,12 @@ const addBlocker = (issue: number, blocker: number) => {
 	set.add(blocker);
 	declaredBlockers.set(issue, set);
 };
+// Dependency phrases the body QUOTED and so were not read as its own. Kept to
+// be printed: skipping a quote can drop a real blocker, and that must be seen.
+const ignoredByIssue = new Map<number, IgnoredDependency[]>();
 for (const i of raw) {
-	const { blockedBy, blocks } = extractDependencies(i.body ?? "");
+	const { blockedBy, blocks, ignored } = extractDependencies(i.body ?? "");
+	if (ignored.length > 0) ignoredByIssue.set(i.number, ignored);
 	for (const b of blockedBy) addBlocker(i.number, b);
 	for (const b of blocks) addBlocker(b, i.number);
 }
@@ -400,6 +482,23 @@ const stripControl = (s: string) =>
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
 	s.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 const titles = new Map(raw.map((i) => [i.number, stripControl(i.title ?? "")]));
+
+// Which blockers are still OPEN on GitHub. Every fetched issue is open by
+// construction (`--state open`); anything else is asked about once, in bulk.
+const blockedByIssue = new Map(issues.map((i) => [i.number, i.blockedBy]));
+const fetchedOpen = new Set(raw.map((i) => i.number));
+const outsideBlockers = [
+	...new Set(issues.flatMap((i) => i.blockedBy)),
+].filter((n) => !fetchedOpen.has(n));
+const { states: outsideStates, error: stateError } =
+	fetchIssueStates(outsideBlockers);
+const stateOf = (n: number): IssueState =>
+	fetchedOpen.has(n) ? "open" : (outsideStates.get(n) ?? "unreadable");
+const unreadableBlockers = outsideBlockers.filter(
+	(n) => stateOf(n) === "unreadable",
+);
+// Classified ONCE: the line tags and the wave headers both read this map.
+const blockerStatus = classifyBlockers(blockedByIssue, stateOf);
 const pathsByIssue = new Map(issues.map((i) => [i.number, i.paths]));
 
 // Held back BEFORE planning rather than filtered out of the plan afterwards.
@@ -458,9 +557,15 @@ const line = (n: number) => {
 	// The two tags compose, and both can be true at once: `priority` says why
 	// this one is EARLY, `migration` says why it is ALONE. Reading either as the
 	// other is exactly the mistake the inline tag exists to prevent.
+	//
+	// The blocked tag is the third, and the one the order above it cannot stand
+	// in for: a wave issue whose blocker is still in SERIAL is correctly placed
+	// and still unsafe to pair with that SERIAL stage (#967).
 	const tags = [
 		priorityIssues.has(n) ? "[PRIORITY]" : "",
 		migrationIssues.has(n) ? "[MIGRATION — run alone]" : "",
+		...blockerTags(blockerStatus.get(n)),
+		ignoredTag(ignoredByIssue.get(n) ?? []),
 	].filter(Boolean);
 	const tag = tags.length > 0 ? `  ${tags.join("  ")}` : "";
 	return `  #${n}${tag}  ${titles.get(n) ?? ""}\n      ${filesOf(n)}`;
@@ -491,6 +596,19 @@ if (skippedClaimSources.length > 0) {
 	);
 }
 
+// Before the plan, beside the claim-source warning, for the same reason: the
+// lines below carry `[BLOCKER STATE UNKNOWN …]` and the reader needs to know
+// why before reading them. A state that could not be read is shown neither as
+// open nor as closed — printing it as open could report one that has landed.
+if (unreadableBlockers.length > 0) {
+	console.log(
+		`⚠️  Could not read the state of blocker(s) ${unreadableBlockers.map((n) => `#${n}`).join(", ")}` +
+			`${stateError ? `\n    gh said: ${stripControl(stateError)}` : ""}\n` +
+			`    Tagged [BLOCKER STATE UNKNOWN] below. Check each by hand before\n` +
+			`    dispatching anything it blocks.\n`,
+	);
+}
+
 if (plan.serial.length > 0) {
 	console.log("=== SERIAL — run these first, one at a time, merge between ===");
 	console.log("    (each touches a file much of the repo imports)\n");
@@ -498,8 +616,46 @@ if (plan.serial.length > 0) {
 	console.log();
 }
 
+// Stated on the wave itself, not in a footer: the header is what a dispatcher
+// reads when deciding what to hand out, and the reason a wave is unsafe is
+// that its issues LOOK independent of everything above them.
+const heldBackNumbers = new Set(claimed.map((c) => c.issue.number));
+const blockersByWave = new Map(
+	waveBlockers(plan, blockerStatus, heldBackNumbers).map((w) => [w.wave, w]),
+);
+
 plan.batches.forEach((batch, i) => {
-	console.log(`=== WAVE ${i + 1} — ${batch.length} agents in parallel ===\n`);
+	const report = blockersByWave.get(i + 1);
+	const waiting = report && report.waiting.length > 0 ? report.waiting : null;
+	const unreadable =
+		report && report.unreadable.length > 0 ? report.unreadable : null;
+	// NOT DISPATCHABLE outranks CHECK BLOCKERS: an open blocker is a fact, an
+	// unreadable one is an unanswered question. Both detail lines still print.
+	const marker = waiting
+		? " — ⚠️  NOT DISPATCHABLE YET"
+		: unreadable
+			? " — ⚠️  CHECK BLOCKERS BY HAND"
+			: "";
+	console.log(
+		`=== WAVE ${i + 1} — ${batch.length} agents in parallel${marker} ===`,
+	);
+	if (unreadable) {
+		for (const u of unreadable) {
+			const on = u.blockers.map((b) => `#${b}`).join(", ");
+			console.log(`      #${u.issue} waits on ${on} — state unreadable`);
+		}
+	}
+	if (waiting) {
+		console.log(
+			"    (an issue here waits on one still open — land it first, and do\n" +
+				"     not pair this wave with the stage that holds it)",
+		);
+		for (const w of waiting) {
+			const on = w.blockers.map((b) => `#${b.issue} (${b.where})`).join(", ");
+			console.log(`      #${w.issue} waits on ${on}`);
+		}
+	}
+	console.log();
 	for (const n of batch) console.log(line(n));
 	console.log();
 });
@@ -560,6 +716,22 @@ if (plan.warnings.length > 0) {
 					? `and #${w.blocker} each claim to block the other — neither was reordered`
 					: `is scheduled BEFORE #${w.blocker}`;
 		console.log(`  #${w.issue} ${how}.`);
+	}
+	console.log();
+}
+
+// Printed for EVERY fetched issue, not only the planned ones: a quoted phrase
+// skipped on a held-back issue is just as capable of hiding a real blocker.
+if (ignoredByIssue.size > 0) {
+	console.log("=== ⚠️  QUOTED DEPENDENCY PHRASES — ignored ===");
+	console.log(
+		"    (inside a fence, blockquote or code span, so read as quoting someone\n" +
+			"     else. If one is really this issue's own blocker, move it into plain\n" +
+			"     prose and re-run.)\n",
+	);
+	for (const [n, ignored] of ignoredByIssue) {
+		for (const d of ignored)
+			console.log(`  #${n}: ignored "${d.phrase}" (in ${d.quotedIn})`);
 	}
 	console.log();
 }
