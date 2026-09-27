@@ -362,17 +362,13 @@ function MemberIdentity({
  * booked, no outreach needed today" beside a number that is still honest about
  * history.
  *
- * **"Booked", not "Up next".** This renders in the SPEAKER QUEUE as well as the
- * overdue list, and the claim behind it is for a role of ANY kind — which is
- * what the overdue list wants, since overdue means no claimed role at all. In a
- * list whose subtitle says "ranked by how long since they last held a speaker
- * role", "Up next" beside a member booked as Timer reads as "speaking Monday":
- * the VPE skips her and she goes another cycle without speaking. That is #543's
- * own contradiction pointing the other way. Role-neutral copy is true on both
- * surfaces; narrowing the marker to speaker roles was the alternative and
- * throws away the engagement signal the overdue list is asking for.
- * `reporting.integration.test.ts` pins the any-role half and the component
- * suite pins the wording, so neither can be changed alone.
+ * **What feeds it differs by list.** In the overdue list the date is the
+ * soonest claimed role of ANY kind, since overdue means no claimed role at
+ * all. In the SPEAKER QUEUE it is the soonest SPEAKER slot only: a member
+ * booked as Grammarian marked "Booked" in a list ranked by speaker history
+ * reads as "has a speech coming", and the VPE skips them. The copy stays
+ * role-neutral so the one component is true in both places;
+ * `reporting.integration.test.ts` pins both queries.
  *
  * **Two forms, because below `sm` there is no room for a pill.** At 375px the
  * page's `px-4`, the row's `px-5`, the 112px wait column and the gaps leave the
@@ -531,7 +527,7 @@ function RotationRow({
 				memberId={row.memberId}
 				name={row.name}
 				joinedAt={row.joinedAt}
-				upcomingRoleAt={row.upcomingRoleAt}
+				upcomingRoleAt={row.upcomingSpeakerAt}
 				timezone={timezone}
 			/>
 			<div className="hidden text-sm sm:block">
