@@ -9,12 +9,13 @@
  * the three properties that close the race: the removal waits for the exit,
  * the wait is capped, and a failed removal never fails the caller.
  */
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -25,7 +26,18 @@ import { stopChromeAndRemoveDir } from "./chrome-teardown";
 import { readSource } from "./guard-source";
 
 const made: string[] = [];
+const groups: ChildProcess[] = [];
 afterEach(() => {
+	// Kill every stand-in group FIRST, whatever the test did: a detached child is
+	// setsid'd, so nothing else (not even Ctrl-C) reaches it, and a surviving
+	// writer would recreate a directory removed below.
+	for (const child of groups.splice(0)) {
+		try {
+			if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+		} catch {
+			// ESRCH: the teardown under test already killed it.
+		}
+	}
 	for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 const tempDir = () => {
@@ -34,44 +46,66 @@ const tempDir = () => {
 	return d;
 };
 
+/** Every stand-in exits on its own after this, even if nothing kills it. */
+const SELF_EXIT = "setTimeout(() => process.exit(0), 30000);";
+
+/** A detached node process (its own group) running `script`, killed in afterEach. */
+function spawnGroup(script: string): ChildProcess {
+	const child = spawn(process.execPath, ["-e", `${script}\n${SELF_EXIT}`], {
+		detached: true,
+		stdio: "ignore",
+	});
+	groups.push(child);
+	return child;
+}
+
+const alive = (pid: number) => {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
 /**
  * A process that, like Chrome after SIGKILL, goes on writing into its profile
  * for `lingerMs` and only then emits `exit`.
  */
 function lingeringProcess(dir: string | null, lingerMs: number) {
-	const proc = new EventEmitter() as EventEmitter & {
-		pid: undefined;
-		exitCode: number | null;
-		signalCode: NodeJS.Signals | null;
-		kill: (signal?: string) => boolean;
-		exited: boolean;
-	};
-	proc.pid = undefined;
-	proc.exitCode = null;
-	proc.signalCode = null;
-	proc.exited = false;
-	proc.kill = () => {
-		setTimeout(() => {
-			if (dir) {
-				mkdirSync(join(dir, "Default"), { recursive: true });
-				writeFileSync(join(dir, "Default", "Preferences"), "{}");
-			}
-			proc.signalCode = "SIGKILL";
-			proc.exited = true;
-			proc.emit("exit", null, "SIGKILL");
-		}, lingerMs);
-		return true;
-	};
-	return proc;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const proc = Object.assign(new EventEmitter(), {
+		pid: undefined,
+		exitCode: null as number | null,
+		signalCode: null as NodeJS.Signals | null,
+		exited: false,
+		kill: () => {
+			timer = setTimeout(() => {
+				if (dir) {
+					mkdirSync(join(dir, "Default"), { recursive: true });
+					writeFileSync(join(dir, "Default", "Preferences"), "{}");
+				}
+				proc.signalCode = "SIGKILL";
+				proc.exited = true;
+				proc.emit("exit", null, "SIGKILL");
+			}, lingerMs);
+			return true;
+		},
+		/** Cancel a still-pending exit, so no timer outlives the test. */
+		dispose: () => {
+			clearTimeout(timer);
+			proc.removeAllListeners();
+		},
+	});
+	/** Typed as the ChildProcess the helper takes; it reads only the above. */
+	return Object.assign(proc, { asChild: proc as unknown as ChildProcess });
 }
-
-type Proc = Parameters<typeof stopChromeAndRemoveDir>[0];
 
 describe("stopChromeAndRemoveDir (#972)", () => {
 	it("removes the directory only after the process has exited", async () => {
 		const proc = lingeringProcess(null, 30);
 		let exitedAtRemoval: boolean | null = null;
-		await stopChromeAndRemoveDir(proc as unknown as Proc, "/unused", {
+		await stopChromeAndRemoveDir(proc.asChild, "/unused", {
 			rm: () => {
 				exitedAtRemoval = proc.exited;
 			},
@@ -82,32 +116,37 @@ describe("stopChromeAndRemoveDir (#972)", () => {
 	it("leaves no profile behind when the browser writes after the kill", async () => {
 		const dir = tempDir();
 		const proc = lingeringProcess(dir, 30);
-		await stopChromeAndRemoveDir(proc as unknown as Proc, dir);
+		await stopChromeAndRemoveDir(proc.asChild, dir);
 		// Let any write still scheduled after an early removal land first.
 		await new Promise((r) => setTimeout(r, 60));
 		expect(proc.exited).toBe(true);
 		expect(existsSync(dir)).toBe(false);
 	});
 
+	// An uncapped wait never returns here (the stand-in's exit is 60s away), so
+	// it fails at vitest's timeout; the elapsed bound is only a loose backstop.
 	it("does not wait forever for a process that never reports its exit", async () => {
 		const proc = lingeringProcess(null, 60_000);
 		let removed = false;
 		const started = Date.now();
-		await stopChromeAndRemoveDir(proc as unknown as Proc, "/unused", {
-			rm: () => {
-				removed = true;
-			},
-			exitWaitMs: 50,
-		});
+		try {
+			await stopChromeAndRemoveDir(proc.asChild, "/unused", {
+				rm: () => {
+					removed = true;
+				},
+				exitWaitMs: 50,
+			});
+		} finally {
+			proc.dispose();
+		}
 		expect(removed).toBe(true);
-		expect(Date.now() - started).toBeLessThan(2_000);
-		proc.removeAllListeners();
+		expect(Date.now() - started).toBeLessThan(10_000);
 	});
 
 	it("never fails the caller when the removal throws", async () => {
 		const proc = lingeringProcess(null, 0);
 		await expect(
-			stopChromeAndRemoveDir(proc as unknown as Proc, "/unused", {
+			stopChromeAndRemoveDir(proc.asChild, "/unused", {
 				rm: () => {
 					throw Object.assign(new Error("ENOTEMPTY: directory not empty"), {
 						code: "ENOTEMPTY",
@@ -121,64 +160,57 @@ describe("stopChromeAndRemoveDir (#972)", () => {
 		const proc = lingeringProcess(null, 60_000);
 		proc.exitCode = 0;
 		let removed = false;
-		await stopChromeAndRemoveDir(proc as unknown as Proc, "/unused", {
-			rm: () => {
-				removed = true;
-			},
-			exitWaitMs: 60_000,
-		});
+		try {
+			await stopChromeAndRemoveDir(proc.asChild, "/unused", {
+				rm: () => {
+					removed = true;
+				},
+				exitWaitMs: 60_000,
+			});
+		} finally {
+			proc.dispose();
+		}
 		expect(removed).toBe(true);
-		proc.removeAllListeners();
 	});
 
 	it("kills the whole group of a detached child, grandchildren included", async () => {
 		const dir = tempDir();
+		const pidFile = join(dir, "grandchild.pid");
 		const marker = join(dir, "grandchild-alive");
-		// A detached parent whose own child keeps writing — Chrome's shape.
-		const child = spawn(
-			process.execPath,
-			[
-				"-e",
-				`const { spawn } = require("node:child_process");
-				spawn(process.execPath, ["-e", ${JSON.stringify(
-					`const fs = require("node:fs");
-					setInterval(() => {
-						fs.mkdirSync(${JSON.stringify(dir)}, { recursive: true });
-						fs.writeFileSync(${JSON.stringify(marker)}, String(Date.now()));
-					}, 10);
-						// Never outlive the test, even when a mutation leaves it running.
-						setTimeout(() => process.exit(0), 3000);`,
-				)}], { stdio: "ignore" });
-				setInterval(() => {}, 1000);`,
-			],
-			{ detached: true, stdio: "ignore" },
+		// A detached parent whose own child keeps writing — Chrome's shape. The
+		// grandchild announces its pid, then rewrites the directory every 10ms.
+		const child = spawnGroup(
+			`require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(
+				`const fs = require("node:fs");
+				fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+				setInterval(() => {
+					fs.mkdirSync(${JSON.stringify(dir)}, { recursive: true });
+					fs.writeFileSync(${JSON.stringify(marker)}, "x");
+				}, 10);
+				${SELF_EXIT}`,
+			)}], { stdio: "ignore" });
+			setInterval(() => {}, 1000);`,
 		);
-		// Wait until the grandchild is demonstrably writing.
-		for (let i = 0; i < 200 && !existsSync(marker); i++) {
-			await new Promise((r) => setTimeout(r, 10));
+		// Readiness handshake with a generous cap: two node startups under a
+		// loaded full-suite run are slow, and this is not what is being timed.
+		for (let i = 0; i < 300 && !existsSync(marker); i++) {
+			await new Promise((r) => setTimeout(r, 50));
 		}
-		expect(existsSync(marker)).toBe(true);
+		const grandchild = Number(readFileSync(pidFile, "utf8"));
+		expect(alive(grandchild)).toBe(true);
 
-		const started = Date.now();
 		await stopChromeAndRemoveDir(child, dir);
-		await new Promise((r) => setTimeout(r, 100));
 		expect(child.signalCode).toBe("SIGKILL");
-		// A surviving grandchild would have recreated the marker (and the dir).
+		// Not a timing bound: the grandchild's own exit is 30s away, so it is
+		// dead now only because the group kill reached it...
+		expect(alive(grandchild)).toBe(false);
+		// ...and so nothing is left to recreate the directory.
+		await new Promise((r) => setTimeout(r, 100));
 		expect(existsSync(dir)).toBe(false);
-		// ...or, since teardown waits for the group to empty, held it until the
-		// grandchild's own 3s exit. Killed with the group, it is gone at once.
-		expect(Date.now() - started).toBeLessThan(2_000);
 	});
 
 	it("after the leader exits, waits for the rest of its group before removing", async () => {
-		const child = spawn(
-			process.execPath,
-			["-e", "setInterval(() => {}, 1000)"],
-			{
-				detached: true,
-				stdio: "ignore",
-			},
-		);
+		const child = spawnGroup("setInterval(() => {}, 1000);");
 		await new Promise((r) => child.once("spawn", r));
 		// A member still being torn down after the leader's exit: alive for
 		// three polls. Only the probe is faked; the kill and the exit are real.
@@ -194,15 +226,10 @@ describe("stopChromeAndRemoveDir (#972)", () => {
 		expect(pollsAtRemoval).toBe(4);
 	});
 
+	// As above: uncapped, the probe below never goes false and the test hits
+	// vitest's timeout; the elapsed bound is a loose backstop.
 	it("gives up on a group that never empties, at the cap", async () => {
-		const child = spawn(
-			process.execPath,
-			["-e", "setInterval(() => {}, 1000)"],
-			{
-				detached: true,
-				stdio: "ignore",
-			},
-		);
+		const child = spawnGroup("setInterval(() => {}, 1000);");
 		await new Promise((r) => child.once("spawn", r));
 		let removed = false;
 		const started = Date.now();
@@ -214,7 +241,7 @@ describe("stopChromeAndRemoveDir (#972)", () => {
 			exitWaitMs: 200,
 		});
 		expect(removed).toBe(true);
-		expect(Date.now() - started).toBeLessThan(2_000);
+		expect(Date.now() - started).toBeLessThan(10_000);
 	});
 
 	// The pipe harness is the one Chrome this repo kills mid-run rather than
@@ -222,13 +249,18 @@ describe("stopChromeAndRemoveDir (#972)", () => {
 	// Behaviour of the teardown is pinned above; this pins that the harness
 	// USES it — the kill-then-rmSync it replaced is otherwise one edit away.
 	it("is what the square-flyer PNG harness tears Chrome down with", () => {
-		const harness = readSource(
-			resolve(__dirname, "../components/agenda/flyer-square-png.test.tsx"),
+		const path = resolve(
+			__dirname,
+			"../components/agenda/flyer-square-png.test.tsx",
 		);
-		expect(harness).toContain("await stopChromeAndRemoveDir(proc, dir)");
+		// Presence checks read comment-blind, so a comment cannot satisfy them.
+		const code = readSource(path);
+		expect(code).toContain("await stopChromeAndRemoveDir(proc, dir)");
 		// Without its own process group there is no group to kill.
-		expect(harness).toMatch(/detached:\s*true/);
-		expect(harness).not.toMatch(/\brmSync\s*\(/);
-		expect(harness).not.toMatch(/\.kill\s*\(/);
+		expect(code).toMatch(/detached:\s*true/);
+		// Absence checks read RAW (guard-source.ts: stripping would loosen them).
+		const raw = readFileSync(path, "utf8");
+		expect(raw).not.toMatch(/\brmSync\s*\(/);
+		expect(raw).not.toMatch(/\.kill\s*\(/);
 	});
 });

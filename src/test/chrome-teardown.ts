@@ -14,11 +14,9 @@
  *      parent — falling back to the parent alone;
  *   2. WAIT for the parent to exit, and then for every member of the group to
  *      be gone: the parent's `exit` arrives while its children are still being
- *      torn down. Waiting on the parent alone still left the directory behind
- *      on full-suite runs here (6 of 6 exports), holding only a network
- *      service temp file and a cache index, i.e. written after the removal. Both
- *      waits are capped — a process that never reports is not a reason to
- *      hang the suite;
+ *      torn down, and a member that has not died yet can still land a write
+ *      in the directory after it is removed. Both waits share ONE deadline — a
+ *      process that never reports is not a reason to hang the suite;
  *   3. remove the directory with retries, for anything that still slips in;
  *   4. and swallow whatever is left: a temp dir the OS will reap anyway must
  *      never fail a test whose result was fine.
@@ -61,6 +59,11 @@ export async function stopChromeAndRemoveDir(
 ): Promise<void> {
 	const deadline = Date.now() + exitWaitMs;
 	const exited = waitForExit(proc, exitWaitMs);
+	// Sent even when the leader has already exited: its group can outlive it
+	// (orphaned renderers still writing), and this is what reaps them. The pid
+	// could in theory have been reused since, but a reused pid leads a group
+	// only if the new process called setsid, and this runs the moment the test
+	// is done with it.
 	const pgid = killGroup(proc);
 	await exited;
 	if (pgid !== null) {
