@@ -20,7 +20,10 @@ import {
 	pathLevelProgress,
 	people,
 	peopleEmailBackup,
+	projectCompletionMarks,
 	roleDefinitions,
+	roleSlots,
+	speeches,
 	user,
 	verification,
 } from "#/db/schema";
@@ -538,7 +541,8 @@ export interface DeleteClubResult {
 	/** Persons of this club (current or former members) who held no other
 	 *  membership, now deleted. */
 	peopleDeleted: number;
-	/** Persons of this club who hold a membership elsewhere, kept. */
+	/** Persons of this club kept: they hold a membership elsewhere, or their
+	 *  speeches or Pathways history belong to another club's record. */
 	peopleKept: number;
 	/** Sign-in accounts of deleted Persons, now deleted. */
 	usersDeleted: number;
@@ -681,6 +685,61 @@ async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
 	return [...ids];
 }
 
+/**
+ * Persons among `personIds` whose own history still points at ANOTHER club.
+ * Called after the cascade, under the Person lock, so every club reference that
+ * survives is by construction some other club's: this club's slots are gone,
+ * its Pathways credits were SET NULL, and its members' marks were SET NULL.
+ *
+ * Deleting such a Person would cascade their speeches and Pathways rows away
+ * and take that other club's record with them, so they are KEPT even with no
+ * membership anywhere. The Person-owned tables, and which of them can name a
+ * club:
+ * - `speeches`: via a surviving `role_slots.speech_id` (a speech given at
+ *   another club's meeting);
+ * - `path_level_progress.credited_club_id`: a level credited to another club;
+ * - `project_completion_marks.marked_by_member_id`: a project another club's
+ *   officer signed off;
+ * - `path_enrollments` and `bcm_project_progress` name no club.
+ */
+async function personsWithOtherClubHistory(
+	tx: Tx,
+	personIds: string[],
+): Promise<string[]> {
+	const spoke = await tx
+		.selectDistinct({ personId: speeches.personId })
+		.from(speeches)
+		.innerJoin(roleSlots, eq(roleSlots.speechId, speeches.id))
+		.where(inArray(speeches.personId, personIds));
+	const credited = await tx
+		.selectDistinct({ personId: pathEnrollments.personId })
+		.from(pathLevelProgress)
+		.innerJoin(
+			pathEnrollments,
+			eq(pathEnrollments.id, pathLevelProgress.enrollmentId),
+		)
+		.where(
+			and(
+				inArray(pathEnrollments.personId, personIds),
+				sql`${pathLevelProgress.creditedClubId} is not null`,
+			),
+		);
+	const marked = await tx
+		.selectDistinct({ personId: pathEnrollments.personId })
+		.from(projectCompletionMarks)
+		.innerJoin(
+			pathEnrollments,
+			eq(pathEnrollments.id, projectCompletionMarks.enrollmentId),
+		)
+		.where(
+			and(
+				inArray(pathEnrollments.personId, personIds),
+				sql`${projectCompletionMarks.markedByMemberId} is not null`,
+			),
+		);
+	return [...spoke, ...credited, ...marked].map((r) => r.personId);
+}
+
 /** Drizzle wraps the driver's error in `cause`, so look a few levels down. */
 function isForeignKeyViolation(err: unknown): boolean {
 	for (let e: unknown = err, i = 0; e && i < 3; i++) {
@@ -708,7 +767,9 @@ function isForeignKeyViolation(err: unknown): boolean {
  *    .credited_club_id` is SET NULL: that row is the Person's progress.
  * 3. People are club-less (ADR-0008), so the cascade leaves them. Each collected
  *    Person is locked `FOR UPDATE` and re-checked for a remaining `members` row
- *    AFTER the cascade, inside this transaction: a membership another club adds
+ *    AFTER the cascade, inside this transaction, along with whether their own
+ *    history still points at another club (`personsWithOtherClubHistory`; such
+ *    a Person is kept so that club's record survives). A membership another club adds
  *    concurrently either committed first (and is seen, so the Person is kept) or
  *    blocks on the lock and then fails its FK. A Person with no membership left
  *    is deleted, and their speeches, path enrollments and everything under those
@@ -762,7 +823,10 @@ export async function deleteClubPermanently(
 				.selectDistinct({ personId: members.personId })
 				.from(members)
 				.where(inArray(members.personId, personIds));
-			const keep = new Set(stillMembers.map((r) => r.personId));
+			const keep = new Set([
+				...stillMembers.map((r) => r.personId),
+				...(await personsWithOtherClubHistory(tx, personIds)),
+			]);
 			const doomed = locked.filter((p) => !keep.has(p.id));
 			peopleKept = locked.length - doomed.length;
 			peopleDeleted = doomed.length;

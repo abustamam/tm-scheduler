@@ -33,8 +33,10 @@ import {
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
+	pathwaysProjects,
 	people,
 	peopleEmailBackup,
+	projectCompletionMarks,
 	roleDefinitions,
 	roleSlots,
 	session,
@@ -611,9 +613,22 @@ describe.skipIf(!hasTestDb)("deleteClubPermanently (#914)", () => {
 
 		const deleting = deleteClubPermanently(a, nameA);
 		deleting.catch(() => {});
-		await opened;
-		await waitForLockWait("people", writer.pid);
-		await writer.commit();
+		try {
+			await Promise.race([
+				opened,
+				new Promise((_, rej) =>
+					setTimeout(() => rej(new Error("hook never ran")), 10_000),
+				),
+			]);
+			await waitForLockWait("people", writer.pid);
+		} finally {
+			// Always release the writer and let the delete settle, so a timeout
+			// above can't leak an open transaction (and its locks) into the next
+			// test or the teardown.
+			flags.afterClubDelete = null;
+			await writer?.commit().catch(() => {});
+			await deleting.catch(() => {});
+		}
 		const out = await deleting;
 
 		expect(out.peopleDeleted).toBe(0);
@@ -627,6 +642,119 @@ describe.skipIf(!hasTestDb)("deleteClubPermanently (#914)", () => {
 				.where(eq(members.personId, p)),
 		).toHaveLength(1);
 		expect(await exists("clubs", a)).toBe(false);
+	});
+
+	describe("a Person with no membership whose history belongs to another club", () => {
+		// Deleting them would cascade their speeches and Pathways rows away, and
+		// with them part of club B's own record. So they are kept, and counted.
+		async function base() {
+			const suffix = randomUUID().slice(0, 8);
+			const nameA = `Club A ${suffix}`;
+			const a = await makeClub(nameA, true);
+			const b = await makeClub(`Club B ${suffix}`, false);
+			const p = await makePerson(null);
+			await join(a, p);
+			return { suffix, nameA, a, b, p };
+		}
+
+		async function enrollment(p: string, suffix: string) {
+			const [path] = await testDb
+				.insert(pathwaysPaths)
+				.values({ courseCode: `914h-${suffix}`, name: "Path" })
+				.returning({ id: pathwaysPaths.id });
+			if (!path) throw new Error("path");
+			created.paths.push(path.id);
+			const [enr] = await testDb
+				.insert(pathEnrollments)
+				.values({ personId: p, pathId: path.id })
+				.returning({ id: pathEnrollments.id });
+			if (!enr) throw new Error("enrollment");
+			const [project] = await testDb
+				.insert(pathwaysProjects)
+				.values({ pathId: path.id, level: 1, name: "Ice Breaker" })
+				.returning({ id: pathwaysProjects.id });
+			if (!project) throw new Error("project");
+			return { enrollmentId: enr.id, projectId: project.id };
+		}
+
+		it("keeps them when they gave a speech at another club's meeting", async () => {
+			const { nameA, a, b, p } = await base();
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({ personId: p, title: "Given at B" })
+				.returning({ id: speeches.id });
+			const [meeting] = await testDb
+				.insert(meetings)
+				.values({ clubId: b, scheduledAt: new Date(), status: "completed" })
+				.returning({ id: meetings.id });
+			const [role] = await testDb
+				.insert(roleDefinitions)
+				.values({ clubId: b, name: "Speaker", category: "speaker" })
+				.returning({ id: roleDefinitions.id });
+			if (!speech || !meeting || !role) throw new Error("fixture");
+			const [slot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: meeting.id,
+					roleDefinitionId: role.id,
+					speechId: speech.id,
+					status: "open",
+				})
+				.returning({ id: roleSlots.id });
+			if (!slot) throw new Error("slot");
+
+			const res = await deleteClubPermanently(a, nameA);
+			expect(res.peopleDeleted).toBe(0);
+			expect(res.peopleKept).toBe(1);
+			expect(await exists("people", p)).toBe(true);
+			const [kept] = await testDb
+				.select({ speechId: roleSlots.speechId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slot.id));
+			expect(kept?.speechId).toBe(speech.id);
+		});
+
+		it("keeps them when Pathways progress is credited to another club", async () => {
+			const { suffix, nameA, a, b, p } = await base();
+			const { enrollmentId } = await enrollment(p, suffix);
+			const [row] = await testDb
+				.insert(pathLevelProgress)
+				.values({
+					enrollmentId,
+					level: 1,
+					completed: 3,
+					total: 3,
+					approved: true,
+					creditedClubId: b,
+				})
+				.returning({ id: pathLevelProgress.id });
+			if (!row) throw new Error("progress");
+
+			const res = await deleteClubPermanently(a, nameA);
+			expect(res.peopleDeleted).toBe(0);
+			expect(res.peopleKept).toBe(1);
+			expect(await exists("people", p)).toBe(true);
+			const [kept] = await testDb
+				.select({ club: pathLevelProgress.creditedClubId })
+				.from(pathLevelProgress)
+				.where(eq(pathLevelProgress.id, row.id));
+			expect(kept?.club).toBe(b);
+		});
+
+		it("keeps them when another club's officer signed off a project", async () => {
+			const { suffix, nameA, a, b, p } = await base();
+			const officer = await join(b, await makePerson(null));
+			const { enrollmentId, projectId } = await enrollment(p, suffix);
+			await testDb.insert(projectCompletionMarks).values({
+				enrollmentId,
+				projectId,
+				markedByMemberId: officer,
+			});
+
+			const res = await deleteClubPermanently(a, nameA);
+			expect(res.peopleKept).toBe(1);
+			expect(await exists("people", p)).toBe(true);
+		});
 	});
 
 	describe("former members (removed before the club was deleted)", () => {

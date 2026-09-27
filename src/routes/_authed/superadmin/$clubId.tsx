@@ -408,8 +408,9 @@ function DeletePermanentlyPanel({
 			</h3>
 			<p className="text-sm text-muted-foreground">
 				Deletes <span className="font-medium">{clubName}</span>, its meetings
-				and guests, and every current or former member who isn't in another
-				GavelUp club, with their sign-in account. An account is kept if it
+				and guests, and every current or former member held by no other GavelUp
+				club, with their sign-in account. Someone whose speeches or Pathways
+				history belong to another club is kept, and so is an account that
 				belongs to a superadmin or is still linked elsewhere. Members of another
 				club keep their account and Pathways history.{" "}
 				<span className="font-medium text-[var(--danger-strong,#b91c1c)]">

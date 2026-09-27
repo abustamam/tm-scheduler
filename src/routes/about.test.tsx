@@ -38,7 +38,7 @@ const APPROVED_BIO = [
  * each added by the change that made it true.
  */
 const DELETE_PROMISE =
-	"If your club leaves GavelUp, we delete its data on request: the club, its meetings and guests, and every member who isn't in another GavelUp club. It is gone from our backups within 90 days.";
+	"If your club leaves GavelUp, we delete its data on request: the club, its meetings and guests, and the member records we hold only for that club. It is gone from our backups within 90 days.";
 const EXPORT_PROMISE =
 	"Club admins can download the club's roster, meetings, roles, attendance, speeches, guests, awards, dues and action items as spreadsheets at any time.";
 const APPROVED_PROMISES = [
