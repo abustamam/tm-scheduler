@@ -207,7 +207,10 @@ const SLOT_FILL_BLANK: Record<
 	"slots.ts#claimSlot": {
 		handlerMustContain: [
 			"await requestWriteActorWithProof({",
-			"...(actor ? { proof: actor.proof } : {}),",
+			// No proof-less path into the core: an impersonated (null) actor is
+			// sent through the session gate, which refuses read-only.
+			'})) ?? { memberId: (await requireSessionActor({ clubId: slot.clubId })).memberId, proof: "session" as const, };',
+			"proof: actor.proof,",
 			"claimSlotCore(",
 		],
 		logic: [
@@ -215,8 +218,10 @@ const SLOT_FILL_BLANK: Record<
 				file: "slots-logic.ts",
 				fn: "claimSlotCore",
 				mustContain: [
-					// Someone else, and not the TMOD: refused. `&&`, both `!==`.
-					'if (args.proof === "asserted") { if (args.actorMemberId !== args.memberId && args.actorMemberId !== (await loadTmodMemberId(slot.meetingId))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					// Someone else, and not the TMOD: refused. `&&`, both `!==`, and the
+					// TMOD read through the caller's transaction, never the pool.
+					"const forSomeoneElse = args.actorMemberId !== args.memberId;",
+					'if (args.proof === "asserted") { if (forSomeoneElse && args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
 					// Over the member's own decline: refused.
 					'if ((await getPlanStatus(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) === "not_coming") { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
 					"proof: args.proof,",
@@ -979,10 +984,9 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 	});
 
 	it("every slot `fill-blank` row still refuses an asserted caller who is not filling a blank (#763)", () => {
-		// `claimSlot` and `confirmSlot` are public endpoints whose handlers
-		// cannot be invoked in vitest against a real session, so the gate is
-		// pinned in source as well as executed by the integration suites (which
-		// skip with no test database). Shapes, not names, whitespace-collapsed:
+		// The gates are executed by the integration suites, but those SKIP with
+		// no test database. So the shape is pinned in source too, where it holds
+		// with or without one. Shapes, not names, whitespace-collapsed:
 		// `|| true`, a flipped `===`, an `&&` turned `||`, or the gate moved after
 		// the write each keep every identifier and break a needle.
 		const fillBlank = Object.entries(WRITE_PROOF_EXCEPTIONS)

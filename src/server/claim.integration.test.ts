@@ -35,7 +35,7 @@ import {
 	seedPerson,
 	testDb,
 } from "#/test/db";
-import { claimSlotCore } from "./slots-logic";
+import { claimSlotCore, markComingOnSelfClaim } from "./slots-logic";
 
 // `claimSlotCore` is the REAL claim path below; its module reads `#/db`.
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -512,6 +512,7 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 				memberId: seed.memberId,
 				proof: "asserted",
 			});
+			expect(row?.detail).not.toHaveProperty("grantedVia");
 		});
 
 		it("claims for yourself when your answer is coming", async () => {
@@ -551,6 +552,13 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			await makeTmod(seed.memberId);
 			await claim(otherMemberId, seed.memberId, "asserted");
 			expect((await slot())?.assignedMemberId).toBe(otherMemberId);
+			// Labelled, because the TMOD's id is as public as anyone's: a forged
+			// TMOD claim must be distinguishable in the feed.
+			const [row] = await claimRows();
+			expect(row?.detail).toMatchObject({
+				proof: "asserted",
+				grantedVia: "tmod",
+			});
 		});
 
 		it("even the TMOD may not claim for someone whose answer is not_coming", async () => {
@@ -567,6 +575,48 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			expect((await slot())?.assignedMemberId).toBe(otherMemberId);
 			const [row] = await claimRows();
 			expect(row?.detail).toMatchObject({ proof: "session" });
+		});
+
+		it("an asserted self-claim over the officer's ask answers coming", async () => {
+			// `reached_out` is a blank (ADR-0026): the officer asked, nobody answered.
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "reached_out",
+			});
+			await claim(seed.memberId, seed.memberId, "asserted");
+			expect(await planStatus(seed.memberId)).toBe("coming");
+		});
+
+		// The race half: a decline that lands AFTER the gate's read. Unreachable
+		// serially through `claimSlotCore` (the gate refuses first), so the plan
+		// write's floor is driven directly.
+		it("the asserted self-claim's plan write never overwrites a decline", async () => {
+			await answer(seed.memberId, "not_coming");
+			await testDb.transaction((tx) =>
+				markComingOnSelfClaim(tx, {
+					memberId: seed.memberId,
+					actorMemberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					proof: "asserted",
+				}),
+			);
+			expect(await planStatus(seed.memberId)).toBe("not_coming");
+		});
+
+		it("a session self-claim's plan write does overwrite it — the control", async () => {
+			await answer(seed.memberId, "not_coming");
+			await testDb.transaction((tx) =>
+				markComingOnSelfClaim(tx, {
+					memberId: seed.memberId,
+					actorMemberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					proof: "session",
+				}),
+			);
+			expect(await planStatus(seed.memberId)).toBe("coming");
 		});
 
 		it("an archived club refuses the claim on either proof", async () => {

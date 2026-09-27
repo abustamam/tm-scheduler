@@ -1335,9 +1335,9 @@ export async function markComingOnSelfClaim(
 		clubId: string;
 		/** How the actor was established (#763). An ASSERTED claimer may not
 		 *  supersede a decline: `claimSlotCore` refuses that case up front, and
-		 *  this floor is what still holds if a decline lands between that read
-		 *  and this write. */
-		proof?: WriteProof | null;
+		 *  this floor keeps the PLAN row if a decline lands between that read
+		 *  and this write (the slot itself is not protected by it). */
+		proof?: WriteProof;
 	},
 ): Promise<void> {
 	if (args.actorMemberId === null || args.memberId !== args.actorMemberId)
@@ -1421,19 +1421,16 @@ export const SLOT_NO_LONGER_CLAIMED_MESSAGE =
  * failed assertion, and silently re-admitting that caller as an officer would
  * both mask a mistyped member id and record the wrong `grantedVia` for it.
  *
- *  - **self** — `selfMemberId` must equal `role_slots.assigned_member_id`. Same
- *    honour-system trust level as `claimSlot` and `setAvailability`, which
- *    already take a raw member id with no session; it grants strictly less,
- *    since the id has to match a slot the server read itself. The actor credited
- *    is the assignee VERIFIED against that row, which is the
- *    `resolveMeetingAgendaAuthz` TMOD precedent ("verified against the slot
- *    above, so it is safe to credit") rather than `requestWriteActor`'s
- *    membership precedence — crediting the resolved caller instead would file
- *    "Alice says Bob is coming" under a `grantedVia: "self"` row and contradict
- *    it. A signed-in member of this club can therefore still assert the holder's
- *    id; so can anyone at all, from a logged-out browser, which is what the
- *    honour system means here and why closing it for the signed-in half only
- *    would buy nothing.
+ *  - **self** — `selfMemberId` must equal `role_slots.assigned_member_id`. Since
+ *    #763 it is FILL-BLANK (ADR-0026): anyone naming the holder may confirm
+ *    over no answer, `coming` or an officer's ask, but only the holder's OWN
+ *    session ({@link sessionIsHolder}, or a caller-resolved `proof`) may confirm
+ *    over their `not_coming`. The actor credited is the assignee VERIFIED
+ *    against that row, which is the `resolveMeetingAgendaAuthz` TMOD precedent
+ *    ("verified against the slot above, so it is safe to credit") — crediting
+ *    the resolved caller instead would file "Alice says Bob is coming" under a
+ *    `grantedVia: "self"` row and contradict it. `detail.proof` records which
+ *    kind of caller it was.
  *  - **officer** — unchanged from before #661, including its messages: a session
  *    plus `requireClubRole(admin)`. Writes NO plan row, deliberately: nobody
  *    answered, so `buildPlanPanel` should keep inferring `Coming · assumed` from
@@ -1790,9 +1787,10 @@ async function sessionIsHolder(
  *    their name would contradict a record, and "mark them not coming, then
  *    claim in their name" is the two-blank attack the ADR names.
  * A session-proven actor (`"session"`) is the sheet rule, unchanged: any member
- * of the club may give an open role to any member. `proof` is absent for the
- * callers that have no request to read it off (guest pipeline, speeches) and
- * for an impersonated write (null actor); neither is gated here.
+ * of the club may give an open role to any member. `proof` is optional only for
+ * a caller with no request to read it off; `claimSlot` always passes one, and
+ * an impersonated write arrives as `"session"` with a null actor (a read-only
+ * impersonation is refused before it gets here). An ABSENT proof is not gated.
  */
 export async function claimSlotCore(
 	tx: DbOrTx,
@@ -1827,10 +1825,13 @@ export async function claimSlotCore(
 	await assertClubNotArchived(slot.clubId, tx);
 	assertMeetingNotLocked(slot.meetingStatus);
 
+	const forSomeoneElse = args.actorMemberId !== args.memberId;
 	if (args.proof === "asserted") {
+		// Through `tx`: this runs inside the caller's transaction, and a pooled
+		// read here holds one connection while waiting on a second.
 		if (
-			args.actorMemberId !== args.memberId &&
-			args.actorMemberId !== (await loadTmodMemberId(slot.meetingId))
+			forSomeoneElse &&
+			args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))
 		) {
 			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 		}
@@ -1894,6 +1895,12 @@ export async function claimSlotCore(
 		detail: {
 			memberId: args.memberId,
 			...(args.proof ? { proof: args.proof } : {}),
+			// The only arm that lets an asserted caller claim for someone else, and
+			// the TMOD's id is as public as anyone's: say so on the row, so a claim
+			// credited to the TMOD by a forged id can be told apart in the feed.
+			...(args.proof === "asserted" && forSomeoneElse
+				? { grantedVia: "tmod" }
+				: {}),
 		},
 	});
 
@@ -1971,9 +1978,10 @@ export async function reassignSlotCore(
 		.limit(1)
 		.for("update", { of: roleSlots });
 	if (!slot) throw new Error("Role not found.");
-	// #825. `reassignSlot` is PUBLIC and session-less, so `requireMembership`
-	// never runs and the archive check never arrives for free; it had none at
-	// all until this. Here rather than in the handler so vitest can execute it,
+	// #825. Neither caller reaches this through `requireMembership` — the
+	// browser path resolves a session ACTOR (`requireSessionActor`, #763) and
+	// `assign_roles` a bearer token — so the archive check does not arrive for
+	// free; it had none at all until #825. Here rather than in the handler so vitest can execute it,
 	// and before the lock check for the reason `releaseSlotCore` gives. Through
 	// `tx`, because `assign_roles` calls this inside a batch holding locks.
 	await assertClubNotArchived(slot.clubId, tx);
@@ -2116,8 +2124,10 @@ export async function releaseSlotCore(
 		.for("update", { of: roleSlots });
 	if (!slot) throw new Error("Role not found.");
 
-	// #555. PUBLIC — no session, so `requireMembership` never runs and the
-	// archive check never arrives for free. Before the lock check, because a
+	// #555. Neither caller reaches this through `requireMembership` — the
+	// browser path resolves a session ACTOR (`requireSessionActor`, #763) and
+	// `assign_roles` a bearer token — so the archive check does not arrive for
+	// free, and inside a batch it must read through `conn`. Before the lock check, because a
 	// taken-down club should refuse for the reason it was taken down rather than
 	// for the meeting's status.
 	await assertClubNotArchived(slot.clubId, conn);

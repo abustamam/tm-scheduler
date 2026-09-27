@@ -78,24 +78,32 @@ export const claimSlot = createServerFn({ method: "POST" })
 		await requireMemberInClub(data.memberId, slot.clubId);
 		// Actor provenance (#396): a signed-in caller is credited as themselves; an
 		// anonymous one keeps the name-pick, club-scoped to THIS slot's club. The
-		// proof says which (#763) and is what `claimSlotCore` gates on. Null only
-		// for an impersonated write, which carries no proof.
-		const actor = await requestWriteActorWithProof({
+		// proof says which (#763) and is what `claimSlotCore` gates on.
+		//
+		// Null only for an impersonating superadmin (the asserted id is required
+		// and club-scoped, so "nobody to credit" cannot arise here), and a null
+		// carries no proof — which the core would read as ungated. So that caller
+		// goes through the session gate instead: `read_write` is admitted and
+		// credited as themselves, `read_only` is refused (ADR-0020: write-blind).
+		const actor = (await requestWriteActorWithProof({
 			clubId: slot.clubId,
 			claimedActorMemberId: data.actorMemberId,
-		});
+		})) ?? {
+			memberId: (await requireSessionActor({ clubId: slot.clubId })).memberId,
+			proof: "session" as const,
+		};
 
 		await db.transaction((tx) =>
 			claimSlotCore(tx, {
 				slotId: data.slotId,
 				memberId: data.memberId,
-				actorMemberId: actor?.memberId ?? null,
+				actorMemberId: actor.memberId,
 				speakerDetails: data.speakerDetails,
-				...(actor ? { proof: actor.proof } : {}),
+				proof: actor.proof,
 			}),
 		);
 
-		return { ok: true as const, proof: actor?.proof ?? null };
+		return { ok: true as const, proof: actor.proof };
 	});
 
 // No `actorMemberId` on the wire (#763): the actor is the caller's session.
@@ -336,12 +344,15 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
-		// The session gate first (#763), so an anonymous caller learns nothing
-		// about the slot beyond "sign in". It also refuses an archived club.
+		// The session gate first (#763), before the slot's own checks (speaker
+		// role, lock, assignee), so an anonymous caller hears "sign in" rather
+		// than what is wrong with the slot. It also refuses an archived club.
 		const { memberId: actorMemberId } = await requireSessionActor({
 			clubId: slot.clubId,
 		});
-		// #555 — see releaseSlot above.
+		// #555. Redundant with the gate above for every arm it admits, and kept
+		// deliberately: it is the call `public-readers-archive-gate`'s WRITE_GATES
+		// row pins in this file, and it outlives a change to that gate.
 		await assertClubNotArchived(slot.clubId);
 		assertMeetingNotLocked(slot.meetingStatus);
 		if (!slot.isSpeakerRole) {
