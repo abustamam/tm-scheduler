@@ -97,3 +97,7 @@ plans by hand after "NEEDS A FILE PATH" or a dependency violation comes back.
   *this issue must land after #N*; `blocks #N` means the reverse. A bare `#N` elsewhere in the
   body is an ordinary cross-reference and creates no dependency — issues here cite each other
   constantly, and treating every mention as one would serialise most of the backlog.
+  A phrase inside a fenced block, a non-alert `>` blockquote or an inline code span is read as
+  quoting someone else: it is skipped, and reported as ignored in the plan. Double quotes are not
+  stripped. A report of ANOTHER issue's dependency written in plain prose still counts as this
+  issue's own, so put it in a code span or drop the `#`.
