@@ -49,14 +49,13 @@ vi.mock("#/server/members", () => ({
 vi.mock("#/lib/auth-client", () => ({
 	authClient: { useSession: vi.fn() },
 }));
-vi.mock("#/server/auth-context", () => ({
-	getAuthContext: vi.fn(),
-	setActiveClub: vi.fn(),
+vi.mock("#/server/ballot-session-voter", () => ({
+	getBallotSessionVoter: vi.fn(),
 }));
 
 import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
-import { getAuthContext, setActiveClub } from "#/server/auth-context";
+import { getBallotSessionVoter } from "#/server/ballot-session-voter";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { getBallot, submitVote } from "#/server/voting";
 import { Route } from "./club.$clubId_.meeting.$meetingId.vote";
@@ -267,26 +266,7 @@ describe("ballot page — who the phone votes as (#962)", () => {
 	const USER_ID = "user-1";
 	const SESSION_MEMBER = "33333333-3333-4333-8333-333333333333";
 	const PICKED_MEMBER = "44444444-4444-4444-8444-444444444444";
-	const OTHER_CLUB = "55555555-5555-4555-8555-555555555555";
-
-	/** `getAuthContext`'s answer for a member of the viewed club (or not). */
-	function authCtx(over: {
-		clubs?: string[];
-		activeClubId?: string | null;
-		currentMemberId?: string | null;
-	}) {
-		const clubs = over.clubs ?? [CLUB_ID];
-		return {
-			user: { id: USER_ID, name: "Sally Session", email: "sally@example.com" },
-			clubs: clubs.map((clubId) => ({ clubId })),
-			activeClubId: over.activeClubId ?? clubs[0] ?? null,
-			currentMemberId:
-				over.currentMemberId === undefined
-					? SESSION_MEMBER
-					: over.currentMemberId,
-			// biome-ignore lint/suspicious/noExplicitAny: partial server payload
-		} as any;
-	}
+	const SALLY = { id: SESSION_MEMBER, name: "Sally Session" };
 
 	/** One open category with one candidate, so a cast is observable. */
 	function openBallot() {
@@ -335,8 +315,7 @@ describe("ballot page — who the phone votes as (#962)", () => {
 	}
 
 	beforeEach(() => {
-		vi.mocked(getAuthContext).mockReset();
-		vi.mocked(setActiveClub).mockReset();
+		vi.mocked(getBallotSessionVoter).mockReset();
 		vi.mocked(getBallot).mockReset();
 		vi.mocked(submitVote).mockReset();
 	});
@@ -348,7 +327,7 @@ describe("ballot page — who the phone votes as (#962)", () => {
 
 	it("a signed-in member of the club sees the ballot, not the picker, and votes as their session member", async () => {
 		mockSession({ userId: USER_ID });
-		vi.mocked(getAuthContext).mockResolvedValue(authCtx({}));
+		vi.mocked(getBallotSessionVoter).mockResolvedValue(SALLY);
 		openBallot();
 		// A DIFFERENT name picked on this device earlier: the session must win.
 		storePickedName();
@@ -358,8 +337,12 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		expect(await screen.findByText("Best Speaker")).toBeTruthy();
 		expect(screen.queryByText(/Who are you/i)).toBeNull();
 		expect(screen.getByText("Voting as Sally Session")).toBeTruthy();
-		// No re-pick: a signed-in phone cannot switch to voting as someone else.
 		expect(screen.queryByText(/not you/i)).toBeNull();
+		// Asked about THIS meeting: the server derives the club from it, so a
+		// member whose active club is another one resolves directly, no switch.
+		expect(getBallotSessionVoter).toHaveBeenCalledWith({
+			data: { meetingId: MEETING_ID },
+		});
 		expect(await castAndReadVoter()).toEqual({
 			kind: "member",
 			id: SESSION_MEMBER,
@@ -369,46 +352,19 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		expect(localStorage.getItem(`gavelup:voter:${MEETING_ID}`)).toBeNull();
 	});
 
-	it("a member whose active club is another one is switched to this club first, then votes as themselves", async () => {
-		mockSession({ userId: USER_ID });
-		vi.mocked(getAuthContext)
-			.mockResolvedValueOnce(
-				authCtx({ clubs: [OTHER_CLUB, CLUB_ID], activeClubId: OTHER_CLUB }),
-			)
-			.mockResolvedValue(
-				authCtx({ clubs: [OTHER_CLUB, CLUB_ID], activeClubId: CLUB_ID }),
-			);
-		// biome-ignore lint/suspicious/noExplicitAny: server fn mock shape
-		vi.mocked(setActiveClub).mockResolvedValue({ ok: true } as any);
-		openBallot();
-
-		await renderVotePage(true);
-
-		expect(await screen.findByText("Best Speaker")).toBeTruthy();
-		expect(setActiveClub).toHaveBeenCalledWith({ data: { clubId: CLUB_ID } });
-		expect(screen.queryByText(/Who are you/i)).toBeNull();
-		expect((await castAndReadVoter()).id).toBe(SESSION_MEMBER);
-	});
-
 	it("a signed-in user who is NOT a member of this club gets today's signed-out picker", async () => {
 		mockSession({ userId: USER_ID });
-		vi.mocked(getAuthContext).mockResolvedValue(
-			authCtx({ clubs: [OTHER_CLUB], currentMemberId: "not-this-club" }),
-		);
+		vi.mocked(getBallotSessionVoter).mockResolvedValue(null);
 
 		await renderVotePage(true);
 
 		expect(await screen.findByText("Who are you?")).toBeTruthy();
-		expect(getAuthContext).toHaveBeenCalled();
-		// Their other club must not be switched to, or to this one they are not in.
-		expect(setActiveClub).not.toHaveBeenCalled();
+		expect(getBallotSessionVoter).toHaveBeenCalled();
 	});
 
 	it("a signed-in non-member with a picked name votes as the pick, exactly as signed out", async () => {
 		mockSession({ userId: USER_ID });
-		vi.mocked(getAuthContext).mockResolvedValue(
-			authCtx({ clubs: [OTHER_CLUB] }),
-		);
+		vi.mocked(getBallotSessionVoter).mockResolvedValue(null);
 		openBallot();
 		storePickedName();
 
@@ -426,7 +382,7 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		await renderVotePage(true);
 
 		expect(screen.getByText("Who are you?")).toBeTruthy();
-		expect(getAuthContext).not.toHaveBeenCalled();
+		expect(getBallotSessionVoter).not.toHaveBeenCalled();
 	});
 
 	it("signed out: a guest with a stored voter for this meeting votes as that guest", async () => {
@@ -443,7 +399,7 @@ describe("ballot page — who the phone votes as (#962)", () => {
 			await screen.findByText("Voting as Visitor Vic — not you?"),
 		).toBeTruthy();
 		expect(await castAndReadVoter()).toEqual({ kind: "guest", id: "g-9" });
-		expect(getAuthContext).not.toHaveBeenCalled();
+		expect(getBallotSessionVoter).not.toHaveBeenCalled();
 	});
 
 	it("does not flash the picker while the session is still loading", async () => {
@@ -460,7 +416,7 @@ describe("ballot page — who the phone votes as (#962)", () => {
 
 	it("does not flash the picker while a signed-in member is being resolved", async () => {
 		mockSession({ userId: USER_ID });
-		vi.mocked(getAuthContext).mockReturnValue(new Promise(() => {}));
+		vi.mocked(getBallotSessionVoter).mockReturnValue(new Promise(() => {}));
 
 		await renderVotePage(true);
 
@@ -468,9 +424,76 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		expect(screen.queryByText(/Who are you/i)).toBeNull();
 	});
 
-	it("falls back to the signed-out picker when the session cannot be resolved", async () => {
+	it("gives up on a session that never resolves after ~3s and behaves as signed out", async () => {
+		mockSession("pending");
+		storePickedName();
+		openBallot();
+
+		await renderVotePage(true);
+		expect(screen.getByText("Loading your ballot…")).toBeTruthy();
+
+		// Real timers, waited out: fake ones would also freeze the router and
+		// react-query this page renders inside.
+		expect(
+			await screen.findByText(
+				"Voting as Pat Picked — not you?",
+				{},
+				{ timeout: 4500 },
+			),
+		).toBeTruthy();
+		expect(screen.queryByText("Loading your ballot…")).toBeNull();
+	}, 8000);
+
+	it("gives up on a member lookup that never answers and shows the picker", async () => {
 		mockSession({ userId: USER_ID });
-		vi.mocked(getAuthContext).mockRejectedValue(new Error("offline"));
+		vi.mocked(getBallotSessionVoter).mockReturnValue(new Promise(() => {}));
+
+		await renderVotePage(true);
+
+		expect(
+			await screen.findByText("Who are you?", {}, { timeout: 4500 }),
+		).toBeTruthy();
+	}, 8000);
+
+	it("keeps waiting while under the timeout", async () => {
+		mockSession("pending");
+
+		await renderVotePage(true);
+		await new Promise((r) => setTimeout(r, 2000));
+
+		expect(screen.getByText("Loading your ballot…")).toBeTruthy();
+	}, 8000);
+
+	it("a late answer does not replace the identity once the page has fallen back", async () => {
+		mockSession({ userId: USER_ID });
+		let answer: (v: typeof SALLY) => void = () => {};
+		vi.mocked(getBallotSessionVoter).mockReturnValue(
+			new Promise((r) => {
+				answer = r;
+			}),
+		);
+		openBallot();
+		storePickedName();
+
+		await renderVotePage(true);
+		expect(
+			await screen.findByText(
+				"Voting as Pat Picked — not you?",
+				{},
+				{ timeout: 4500 },
+			),
+		).toBeTruthy();
+
+		answer(SALLY);
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(screen.getByText("Voting as Pat Picked — not you?")).toBeTruthy();
+		expect(screen.queryByText("Voting as Sally Session")).toBeNull();
+	}, 8000);
+
+	it("falls back to the signed-out picker when the lookup fails", async () => {
+		mockSession({ userId: USER_ID });
+		vi.mocked(getBallotSessionVoter).mockRejectedValue(new Error("offline"));
 
 		await renderVotePage(true);
 

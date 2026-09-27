@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import {
 	Ballot,
@@ -18,7 +18,6 @@ import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { readStoredMember } from "#/lib/member-identity";
-import { publicShellDecision, sessionMemberFor } from "#/lib/public-shell";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { joinBallot } from "#/server/voting";
 
@@ -89,67 +88,89 @@ function readVoter(meetingId: string): VoterIdentity | null {
 	}
 }
 
+/** How long the page waits for the session before giving up on it (#962). */
+const SESSION_VOTER_TIMEOUT_MS = 3000;
+
 /**
- * The signed-in member of this club, resolved on the CLIENT (#962).
+ * The signed-in member this phone votes as, resolved on the CLIENT (#962).
  *
- * This route escapes the club shell, so it never receives the shell's
- * `effectiveMemberId` — and the member resolution deliberately stays out of the
- * loader: about twenty phones load it at once, most of them signed out, and
- * `getAuthContext` is not free (it can top up the club's schedule). So a phone
- * with no session costs nothing beyond `useSession`, and only a signed-in one
- * asks the server who it is, through the same `publicShellDecision` the shell
- * uses (`sessionMemberFor`).
+ * The lookup stays out of the loader: about twenty phones load it at once, most
+ * of them signed out. So a phone with no session costs nothing beyond
+ * `useSession`, and only a signed-in one asks `getBallotSessionVoter`, which is
+ * read-only (no cookie, no top-up, no club switch) and resolves the member the
+ * same way `castVote` decides whose session may change a vote.
  *
- * A member whose ACTIVE club is another one is switched first, exactly as the
- * shell does on any `/club/$clubId` page, because `currentMemberId` is only
- * resolved for the active club. Once, not in a loop: if the switch does not
- * take, they fall back to the signed-out path rather than spinning.
- *
- * `pending` stays true until the answer is known, so a signed-in member is
- * never flashed the "Who are you?" picker while their session loads. A failure
- * to resolve is NOT pending: it degrades to the signed-out behaviour, because a
- * spinner that never ends is worse than a picker during a meeting.
+ * The FIRST answer is final for this page view. Until there is one, `pending`
+ * is true, so a signed-in member is never flashed the "Who are you?" picker.
+ * But waiting is bounded: after `SESSION_VOTER_TIMEOUT_MS`, or on a failed
+ * lookup, the answer is "no session member" and the page behaves as signed out.
+ * Latching matters because `useSession` can drop and come back on a mounted
+ * page, and a late or retried success must not swap the identity under someone
+ * who has since picked their name or started voting.
  */
-function useSessionVoter(clubId: string): {
+function useSessionVoter(meetingId: string): {
 	pending: boolean;
 	voter: VoterIdentity | null;
 } {
 	const { data: session, isPending } = authClient.useSession();
 	const userId = session?.user?.id ?? null;
 	const resolved = useQuery({
-		queryKey: ["ballot-session-member", clubId, userId],
+		queryKey: ["ballot-session-voter", meetingId, userId],
 		enabled: userId !== null,
 		retry: false,
 		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnWindowFocus: false,
+		refetchOnReconnect: false,
 		queryFn: async () => {
 			// Lazy, like `use-offline-minutes.ts`: only a signed-in phone ever needs
 			// it, and a static import would pull `#/db` into every suite that
 			// imports this route to test something else.
-			const { getAuthContext, setActiveClub } = await import(
-				"#/server/auth-context"
+			const { getBallotSessionVoter } = await import(
+				"#/server/ballot-session-voter"
 			);
-			const ctx = await getAuthContext();
-			if (!publicShellDecision(ctx, clubId).switchActiveTo) {
-				return sessionMemberFor(ctx, clubId);
-			}
-			await setActiveClub({ data: { clubId } });
-			return sessionMemberFor(await getAuthContext(), clubId);
+			return getBallotSessionVoter({ data: { meetingId } });
 		},
 	});
-	if (isPending) return { pending: true, voter: null };
-	if (userId === null) return { pending: false, voter: null };
-	if (resolved.isPending) return { pending: true, voter: null };
-	const m = resolved.data ?? null;
-	return {
-		pending: false,
-		voter: m ? { kind: "member", id: m.id, name: m.name } : null,
-	};
+
+	const [decided, setDecided] = useState<{ voter: VoterIdentity | null }>();
+	const live: { voter: VoterIdentity | null } | undefined = isPending
+		? undefined
+		: userId === null
+			? { voter: null }
+			: resolved.isPending
+				? undefined
+				: {
+						voter: resolved.data
+							? {
+									kind: "member",
+									id: resolved.data.id,
+									name: resolved.data.name,
+								}
+							: null,
+					};
+	// Set during render: React re-renders at once with the latched value and
+	// never commits the intermediate output.
+	if (decided === undefined && live !== undefined) setDecided(live);
+
+	const undecided = decided === undefined;
+	useEffect(() => {
+		if (!undecided) return;
+		const timer = setTimeout(
+			() => setDecided((d) => d ?? { voter: null }),
+			SESSION_VOTER_TIMEOUT_MS,
+		);
+		return () => clearTimeout(timer);
+	}, [undecided]);
+
+	return decided === undefined
+		? { pending: true, voter: null }
+		: { pending: false, voter: decided.voter };
 }
 
 function VotePage() {
 	const { clubId, clubName, clubNumber, meetingId, digitalVoting } =
 		Route.useLoaderData();
-	const session = useSessionVoter(clubId);
+	const session = useSessionVoter(meetingId);
 	const [voter, setVoter] = useState<VoterIdentity | null>(() => {
 		const stored = readVoter(meetingId);
 		if (stored) return stored;
@@ -184,10 +205,12 @@ function VotePage() {
 					</output>
 				) : session.voter ? (
 					// Signed in as a member of this club: the session wins over any
-					// stored or picked name, and there is no "not you?" — re-picking
-					// would let a signed-in phone vote as someone else. Nothing is
-					// written to the per-meeting store, so the pick underneath
-					// resurfaces on sign-out.
+					// stored or picked name. There is no "not you?" here, as on `/me`
+					// when signed in — a UI choice that says whose phone this is. It
+					// is NOT a server rule: the ballot is honour-system and the server
+					// would take a first vote from this phone under another name.
+					// Nothing is written to the per-meeting store, so the pick
+					// underneath resurfaces on sign-out.
 					<>
 						<Ballot meetingId={meetingId} voter={session.voter} />
 						<p className="self-center text-xs text-muted-foreground">

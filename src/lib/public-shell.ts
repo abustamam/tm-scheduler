@@ -1,8 +1,7 @@
 /** The shell-wrap decision for a public route, from the auth-context result and
  *  the club whose URL is being viewed. Pure — the route acts on the result. */
 export interface AuthContextLite {
-	/** `name` / `email` are read only by `sessionMemberFor`, for the label. */
-	user: { id: string; name?: string | null; email?: string | null } | null;
+	user: { id: string } | null;
 	clubs: readonly { clubId: string }[];
 	currentMemberId: string | null;
 	activeClubId: string | null;
@@ -43,32 +42,5 @@ export function publicShellDecision(
 		shell: true,
 		effectiveMemberId: ctx.currentMemberId,
 		switchActiveTo: null,
-	};
-}
-
-/**
- * The signed-in member of the viewed club, as the identity a page acts as — or
- * null when there is none (signed out, a non-member, or a member whose active
- * club is another one and has not been switched yet).
- *
- * The club shell's `sessionMember` (`club.$clubId.tsx`) is this same
- * expression over `publicShellDecision`; it is stated here for the routes that
- * ESCAPE the shell and so never receive its route context — the digital ballot
- * first (#962), which resolves the session on the client rather than in its
- * loader. Built on `publicShellDecision` rather than beside it, so "who counts
- * as a signed-in member of this club" has one definition.
- */
-export function sessionMemberFor(
-	ctx: AuthContextLite,
-	viewedClubId: string,
-): { id: string; name: string } | null {
-	const decision = publicShellDecision(ctx, viewedClubId);
-	// `effectiveMemberId` is non-null only when `shell` is, so it is the whole
-	// test; `ctx.user` is implied by it and checked for the type.
-	if (!decision.effectiveMemberId || !ctx.user) return null;
-	return {
-		id: decision.effectiveMemberId,
-		// `||`, not `??`: `user.name` is `""` in production for a magic-link user.
-		name: ctx.user.name || ctx.user.email || "you",
 	};
 }
