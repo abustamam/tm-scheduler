@@ -3,8 +3,8 @@
 # Mutation-testing harness: prove a test can actually FAIL.
 #
 # Usage:
-#   bun run mutate <file> --literal <old> <new> <label> [vitest-path...]
-#   bun run mutate <file> <perl-expr> <label> [vitest-path...]
+#   bun run mutate <file> --literal <old> <new> <label> <vitest-path...>
+#   bun run mutate <file> <perl-expr> <label> <vitest-path...>
 #
 #   bun run mutate src/lib/agenda-runsheet.ts \
 #     --literal 'desc(meetings.scheduledAt)' 'asc(meetings.scheduledAt)' \
@@ -14,6 +14,14 @@
 # Prefer --literal: <old> must occur EXACTLY once in <file> or this aborts, and
 # neither string is ever parsed as a regex or as perl. The perl form is for a
 # mutation one literal cannot express.
+#
+# To DELETE <old> (an empty <new>), call the script directly:
+#
+#   bash scripts/mutate.sh <file> --literal '<old>' '' '<label>' <vitest-path...>
+#
+# `bun run` silently drops an empty-string argument (Bun 1.3.14), so through
+# Bun the '' vanishes and every later argument shifts left. Guard 6 refuses
+# that shape; a non-empty replacement (a comment, `undefined`) also avoids it.
 #
 # Runs the suite once clean, applies the mutation, re-runs, reports KILLED or
 # SURVIVED, and always restores the file.
@@ -54,13 +62,22 @@
 #      the package root and passes no INIT_CWD, so the caller's directory is
 #      gone before this line runs. Through Bun, paths are repo-root-relative,
 #      and a miss says so rather than just "no such file".
+#
+#   6. At least one vitest path is REQUIRED. `bun run` drops an empty <new>, so
+#      a deletion arrived shifted: the label was spliced into the source as the
+#      replacement, the test path became the label, no paths remained, and the
+#      fallback ran the WHOLE suite against the mutated file — ten minutes of
+#      hang on #972 with a label string sitting in the source the whole time.
+#      A whole-suite baseline is never what a mutation check means, so there is
+#      no fallback: no paths is an error, and so is a label naming an existing
+#      file, which is the same shift with two or more test paths given.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 die() { printf '\033[31mmutate: %s\033[0m\n' "$*" >&2; exit 1; }
 
-USAGE="usage: mutate.sh <file> --literal <old> <new> <label> [vitest-path...]
-       mutate.sh <file> <perl-expr> <label> [vitest-path...]"
+USAGE="usage: mutate.sh <file> --literal <old> <new> <label> <vitest-path...>
+       mutate.sh <file> <perl-expr> <label> <vitest-path...>"
 [ $# -ge 3 ] || die "$USAGE"
 
 FILE="$1"; shift
@@ -70,6 +87,17 @@ if [ "$1" = "--literal" ]; then
 else
 	MODE=perl; EXPR="$1"; LABEL="$2"; shift 2
 fi
+
+# Guard 6 — refuse the shape an empty <new> leaves behind under `bun run`,
+# before anything touches the file.
+SHIFTED="
+     If <new> was meant to be empty, \`bun run\` dropped the '' and shifted
+     every later argument left. Call the script directly instead:
+       bash scripts/mutate.sh <file> --literal '<old>' '' '<label>' <vitest-path...>
+     or give <new> a non-empty replacement."
+[ $# -ge 1 ] || die "no vitest path given; a mutation check runs named tests, never the whole suite.$SHIFTED
+$USAGE"
+[ ! -e "$LABEL" ] || die "the label '$LABEL' is an existing path, so the arguments are shifted.$SHIFTED"
 
 VIA_BUN=""
 [ -n "${npm_lifecycle_event:-}" ] && VIA_BUN="
@@ -98,11 +126,7 @@ export NO_COLOR=1
 unset FORCE_COLOR
 
 run_suite() {
-	if [ ${#TARGETS[@]} -eq 0 ]; then
-		bun run test 2>&1
-	else
-		bunx vitest run "${TARGETS[@]}" 2>&1
-	fi
+	bunx vitest run "${TARGETS[@]}" 2>&1
 }
 
 # "Tests  N failed | M passed (T)" → the failed count, empty when all passed.
