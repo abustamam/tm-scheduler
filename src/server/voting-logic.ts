@@ -28,6 +28,7 @@ import {
 	VOTE_CAST_ELSEWHERE_MESSAGE,
 } from "#/lib/ballot-device";
 import { cap } from "#/lib/cap";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import {
 	DIGITAL_VOTING_OFF_MESSAGE,
 	isDigitalVotingOn,
@@ -122,15 +123,24 @@ async function isDigitalVotingOnFor(meetingId: string): Promise<boolean> {
  * switch UPDATEs its row, so a writer here waits for that commit and then reads
  * the new value rather than the one from before it. Without it an `openVote`
  * racing a switch-off could reopen a session the switch-off had just closed.
+ *
+ * It is also the ARCHIVE gate for its callers (#925 review), for the same
+ * reason: `archiveClub` UPDATEs the club row, so under this lock a takedown
+ * that committed while we waited is read here rather than missed
+ * (CODING_STANDARDS "gate INSIDE the lock"). The callers' own
+ * `assertClubNotArchived` runs before the transaction and is only the fast
+ * answer — check-then-act, so without this read a club archived in between
+ * still had a visitor's name minted onto its ballot (#555 / #858).
  */
 async function assertDigitalVotingOnTx(tx: Tx, meetingId: string) {
 	const [row] = await tx
-		.select(DIGITAL_VOTING_SWITCHES)
+		.select({ ...DIGITAL_VOTING_SWITCHES, archivedAt: clubs.archivedAt })
 		.from(meetings)
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1)
 		.for("share");
+	if (row && isClubArchived(row)) throw new Error(CLUB_ARCHIVED_MESSAGE);
 	if (row && !isDigitalVotingOn(row, row)) {
 		throw new Error(DIGITAL_VOTING_OFF_MESSAGE);
 	}

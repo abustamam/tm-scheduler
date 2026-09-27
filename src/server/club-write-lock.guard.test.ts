@@ -13,11 +13,22 @@
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
-/** The body of `name` (exported or not), up to the next top-level `}`. */
+/**
+ * The body of `name` (exported or not), up to the next top-level `}`. Refuses
+ * a slice too short to be a real function body: if the closing-brace split
+ * ever lands early (a reformat, a nested top-level brace), every assertion
+ * below would otherwise run against a fragment — and the negative-free ones
+ * could pass on it.
+ */
 function body(source: string, name: string): string {
 	const start = source.search(new RegExp(`\\bfunction ${name}\\(`));
 	expect(start, `${name} not found`).toBeGreaterThan(-1);
-	return source.slice(start).split("\n}\n")[0] ?? "";
+	const sliced = source.slice(start).split("\n}\n")[0] ?? "";
+	expect(
+		sliced.length,
+		`${name}'s body sliced to ${sliced.length} chars — the slicer is broken`,
+	).toBeGreaterThan(200);
+	return sliced;
 }
 
 const WRITERS: { file: string; fn: string; clubArg: string }[] = [
@@ -43,6 +54,11 @@ describe("the club write lock is each writer's first statement", () => {
 			expect(txOpen, `${fn} opens no transaction`).toBeGreaterThan(-1);
 			const inside = src.slice(txOpen);
 			const firstAwait = inside.indexOf("await ");
+			// -1 would slice from the END's last char and match nothing useful;
+			// say so rather than let a missing `await` read as a regex miss.
+			expect(firstAwait, `${fn}'s transaction awaits nothing`).toBeGreaterThan(
+				-1,
+			);
 			expect(inside.slice(firstAwait)).toMatch(
 				new RegExp(
 					`^await lockClubForWrite\\(tx, ${clubArg.replace(".", "\\.")}\\);`,

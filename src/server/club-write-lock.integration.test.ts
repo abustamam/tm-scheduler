@@ -27,6 +27,7 @@ import {
 	meetingBallotGuests,
 	meetings,
 	meetingTemplates,
+	meetingVoteSessions,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { holdClubLock } from "#/test/club-lock";
@@ -45,11 +46,11 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { CLUB_BUSY_MESSAGE, CLUB_WRITE_LOCK_NAMESPACE, lockClubForWrite } =
 	await import("./club-write-lock");
 const { captureGuestVisit } = await import("./guest-pipeline-logic");
-const { joinBallotAsGuest } = await import("./voting-logic");
+const { joinBallotAsGuest, openVote } = await import("./voting-logic");
 const { saveMeetingAgendaAsClubTemplate } = await import(
 	"./meeting-templates-logic"
 );
-const { isDeadlock } = await import("./pg-errors");
+const { isDeadlock, isLockTimeout } = await import("./pg-errors");
 
 /** Resolve to the call's error message, or null when it succeeded — so a test
  *  can assert on every writer's outcome rather than stopping at the first. */
@@ -260,6 +261,134 @@ describe.skipIf(!hasTestDb)("the club write lock (#925)", () => {
 			await archiver.commit();
 		}
 		expect(await checkIn).toBe(CLUB_ARCHIVED_MESSAGE);
+	});
+
+	describe("the archive gate under the ballot's club lock (#925 review)", () => {
+		/**
+		 * Archive the club while `write` is in flight: the takedown's UPDATE holds
+		 * the club row uncommitted, so the writer's pre-transaction
+		 * `assertClubNotArchived` reads it live and lets it through; the writer
+		 * then parks on its FOR SHARE of the club, and only then does the
+		 * takedown commit. Only a gate read UNDER that lock can refuse it.
+		 * Races the park against the writer settling, so a writer that never
+		 * parks fails on the data assertions rather than on a timeout.
+		 */
+		async function archiveMid(write: () => Promise<unknown>) {
+			const archiver = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`update clubs set archived_at = now() where id = ${club.clubId}`,
+				);
+			});
+			const result = outcome(write());
+			try {
+				await Promise.race([
+					waitForLockWait('from "meetings"', archiver.pid).catch(() => {}),
+					result,
+				]);
+			} finally {
+				await archiver.commit();
+			}
+			return result;
+		}
+
+		it("a guest joining the ballot of a club archived after the pre-check is refused and no name is minted", async () => {
+			const name = `Late Voter ${randomUUID().slice(0, 8)}`;
+			const result = await archiveMid(() =>
+				joinBallotAsGuest({ meetingId: club.meetingId, name }),
+			);
+			const minted = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.clubId, club.clubId));
+			expect(minted).toEqual([]);
+			expect(result).toBe(CLUB_ARCHIVED_MESSAGE);
+		});
+
+		it("openVote on a club archived after the pre-check opens nothing", async () => {
+			const result = await archiveMid(() =>
+				openVote({
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					category: "best_speaker",
+					actorMemberId: club.adminMemberId,
+				}),
+			);
+			const sessions = await testDb
+				.select({ id: meetingVoteSessions.id })
+				.from(meetingVoteSessions)
+				.where(eq(meetingVoteSessions.meetingId, club.meetingId));
+			expect(sessions).toEqual([]);
+			expect(result).toBe(CLUB_ARCHIVED_MESSAGE);
+		});
+	});
+
+	describe("the bounded wait", () => {
+		/** Hold this club's write lock on a connection of its own. */
+		function holdWriteLock() {
+			return openBlockingTx((tx) => lockClubForWrite(tx, club.clubId));
+		}
+
+		it("a visitor checking in behind a stuck holder reads the busy sentence, and nothing is written", async () => {
+			const holder = await holdWriteLock();
+			let caught: unknown;
+			try {
+				caught = await newGuest("Visitor").catch((e: unknown) => e);
+			} finally {
+				await holder.commit();
+			}
+			expect((caught as Error).message).toBe(CLUB_BUSY_MESSAGE);
+			expect(isLockTimeout(caught)).toBe(true);
+			const minted = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.clubId, club.clubId));
+			expect(minted).toEqual([]);
+		});
+
+		it("a guest joining the ballot behind a stuck holder reads the busy sentence, and nothing is written", async () => {
+			const holder = await holdWriteLock();
+			let caught: unknown;
+			try {
+				caught = await joinBallotAsGuest({
+					meetingId: club.meetingId,
+					name: "Voter",
+				}).catch((e: unknown) => e);
+			} finally {
+				await holder.commit();
+			}
+			expect((caught as Error).message).toBe(CLUB_BUSY_MESSAGE);
+			expect(isLockTimeout(caught)).toBe(true);
+			const minted = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.clubId, club.clubId));
+			expect(minted).toEqual([]);
+		});
+
+		it("bounds only its own wait: a row-lock wait after it keeps the transaction's patience", async () => {
+			// The timeout is put back once the lock is granted. Without that, the
+			// meeting lock below would inherit a 200ms limit and fail on a row
+			// held for longer.
+			const rowHolder = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from meetings where id = ${club.meetingId} for update`,
+				);
+			});
+			const locking = testDb.transaction(async (tx) => {
+				await lockClubForWrite(tx, club.clubId, "200ms");
+				await tx.execute(
+					sql`select id from meetings where id = ${club.meetingId} for update`,
+				);
+			});
+			locking.catch(() => {});
+			try {
+				await waitForLockWait("from meetings where id", rowHolder.pid);
+				await new Promise((r) => setTimeout(r, 600));
+			} finally {
+				await rowHolder.commit();
+			}
+			await expect(locking).resolves.toBeUndefined();
+		});
 	});
 
 	describe("the key", () => {

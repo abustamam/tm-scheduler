@@ -50,6 +50,7 @@
  */
 import { sql } from "drizzle-orm";
 import type { db } from "#/db";
+import { isLockTimeout } from "./pg-errors";
 
 /** A drizzle transaction handle (mirrors `mcp/lock.ts`). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
@@ -62,25 +63,62 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 export const CLUB_WRITE_LOCK_NAMESPACE = 0x436c7562;
 
 /**
- * What a PUBLIC writer shows a person whose request still lost a deadlock (a
- * cycle through a writer that does not take this lock). Nothing was written —
- * the transaction rolled back — so trying again is safe and is the whole
- * remedy.
+ * What a PUBLIC writer shows a person whose request lost a deadlock (a cycle
+ * through a writer that does not take this lock) or waited out
+ * `CLUB_WRITE_LOCK_TIMEOUT` for this lock. Nothing was written — the
+ * transaction rolled back — so trying again is safe and is the whole remedy.
  */
 export const CLUB_BUSY_MESSAGE =
 	"This club is busy right now. Please try again in a moment.";
 
 /**
+ * How long a writer waits for this lock before giving up, as a Postgres
+ * interval. Mirrors `mcp/lock.ts`: `pg_advisory_xact_lock` otherwise blocks
+ * INDEFINITELY while holding its pooled connection, and `src/db/index.ts` uses
+ * node-postgres' default pool of 10 shared by the whole app — so a queue of
+ * public check-ins behind one slow holder could starve every other request in
+ * the process. The locked sections are a handful of statements, so 5s is well
+ * beyond a real wait and well inside any request timeout.
+ */
+export const CLUB_WRITE_LOCK_TIMEOUT = "5s";
+
+/**
  * Take the club write lock for the rest of this transaction. Blocks until it is
- * granted.
+ * granted, for at most `timeout`; past that it throws `CLUB_BUSY_MESSAGE` with
+ * the driver's 55P03 on `cause` (so a SQLSTATE check still sees it), for every
+ * caller alike — officer paths included, which would otherwise show the
+ * driver's `Failed query: …`.
+ *
+ * The timeout covers THIS wait only. It is set with `set_config(…, true)` (the
+ * same scope as `SET LOCAL`) and the previous value is put back once the lock
+ * is granted, so the row-lock waits after it keep exactly the patience they
+ * had before #925 rather than inheriting a 5s limit nobody chose for them.
  *
  * MUST be called on a `tx`, not on `db`, and BEFORE the transaction's first row
  * lock: on the pooled client it would be taken and released on whatever
  * connection the pool handed out, and taken after a row lock it is too late to
  * order that row lock against anybody.
+ *
+ * `timeout` is a parameter only so a test can wait less than the production
+ * value; every caller in `src/server` passes nothing.
  */
-export async function lockClubForWrite(tx: Tx, clubId: string): Promise<void> {
-	await tx.execute(
-		sql`select pg_advisory_xact_lock(${CLUB_WRITE_LOCK_NAMESPACE}::int4, hashtext(${clubId}))`,
+export async function lockClubForWrite(
+	tx: Tx,
+	clubId: string,
+	timeout: string = CLUB_WRITE_LOCK_TIMEOUT,
+): Promise<void> {
+	const saved = await tx.execute<{ prev: string }>(
+		sql`select current_setting('lock_timeout') as prev`,
 	);
+	const prev = saved.rows[0]?.prev ?? "0";
+	await tx.execute(sql`select set_config('lock_timeout', ${timeout}, true)`);
+	try {
+		await tx.execute(
+			sql`select pg_advisory_xact_lock(${CLUB_WRITE_LOCK_NAMESPACE}::int4, hashtext(${clubId}))`,
+		);
+	} catch (err) {
+		if (isLockTimeout(err)) throw new Error(CLUB_BUSY_MESSAGE, { cause: err });
+		throw err;
+	}
+	await tx.execute(sql`select set_config('lock_timeout', ${prev}, true)`);
 }
