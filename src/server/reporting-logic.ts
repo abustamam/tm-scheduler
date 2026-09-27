@@ -123,9 +123,8 @@ export interface OverdueMemberRow {
  * **Deliberately NOT filtered to speaker roles.** Overdue means "no claimed
  * role of ANY kind", so narrowing this would blind the surface that needs it
  * most — a member booked as Timer is exactly the person a VPE should not chase.
- * The speaker queue used to consume this same any-role answer too, and marked
- * a member booked as Grammarian "Booked" in a list ranked by speaker history;
- * it now reads `loadUpcomingSpeakerSlots` instead.
+ * The speaker queue reads `loadUpcomingSpeakerSlots` instead
+ * (`SpeakerRotationRow.upcomingSpeakerAt` says why).
  */
 export async function loadUpcomingRoleClaims(
 	clubId: string,

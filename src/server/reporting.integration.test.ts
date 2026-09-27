@@ -315,7 +315,7 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 			expect(counted).toContain(booked.memberId);
 		});
 
-		it("marks a never-spoken member in the speaker queue too", async () => {
+		it("marks a never-spoken member in the speaker queue at their speaker slot", async () => {
 			const { loadSpeakerRotation } = await import("#/server/reporting-logic");
 
 			const booked = await addMember(seeded.clubId, "Booked Speaker");
@@ -338,12 +338,8 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 		});
 
 		it("does NOT mark a speaker-queue row for a NON-speaker future claim", async () => {
-			// The speaker queue's marker is speaker-only; the overdue list's is
-			// any-role (the test above). A member booked as Grammarian or Timer is
-			// not speaking, and a "Booked" beside them in a queue ranked by speaker
-			// history reads as "has a speech coming" — the VPE skips them and they
-			// go another cycle without one. The maintainer hit exactly that, booked
-			// as Grammarian and marked "Booked" in the speaker queue.
+			// Speaker-only marker in the queue, any-role in the overdue list;
+			// `SpeakerRotationRow.upcomingSpeakerAt` says why.
 			const { loadSpeakerRotation, loadOverdueMembers } = await import(
 				"#/server/reporting-logic"
 			);
@@ -361,6 +357,9 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 			const row = rotation.find((r) => r.memberId === timer.memberId);
 			expect(row).toBeDefined();
 			expect(row?.upcomingSpeakerAt).toBeUndefined();
+			// A Timer booking is not a speech, so the rank is untouched too.
+			expect(row?.timesSpoken).toBe(0);
+			expect(row?.lastSpokenAt).toBeNull();
 
 			// The same claim still marks the overdue list, which wants any role:
 			// a member booked as Timer is exactly the person a VPE should not chase.
@@ -393,6 +392,35 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 			expect(row?.upcomingSpeakerAt?.getTime()).toBe(
 				later.scheduledAt.getTime(),
 			);
+		});
+
+		it("does NOT mark the speaker queue for a speaker slot at a cancelled meeting or still open", async () => {
+			// The speaker path runs its own query, so the overdue list's cancelled
+			// and open-slot cases below do not cover it.
+			const { loadSpeakerRotation } = await import("#/server/reporting-logic");
+
+			const ghost = await addMember(seeded.clubId, "Cancelled Speaker");
+			const off = await addUpcomingMeeting(seeded.clubId, 4, "cancelled");
+			await addSlot({
+				meetingId: off.meetingId,
+				roleDefinitionId: speakerRoleId,
+				memberId: ghost.memberId,
+			});
+			const pencilled = await addMember(seeded.clubId, "Pencilled Speaker");
+			const next = await addUpcomingMeeting(seeded.clubId, 2);
+			await addSlot({
+				meetingId: next.meetingId,
+				roleDefinitionId: speakerRoleId,
+				memberId: pencilled.memberId,
+				status: "open",
+			});
+
+			const rotation = await loadSpeakerRotation(seeded.clubId);
+			for (const id of [ghost.memberId, pencilled.memberId]) {
+				const row = rotation.find((r) => r.memberId === id);
+				expect(row).toBeDefined();
+				expect(row?.upcomingSpeakerAt).toBeUndefined();
+			}
 		});
 
 		it("does NOT mark a claim at a cancelled future meeting", async () => {

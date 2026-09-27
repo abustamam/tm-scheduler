@@ -2,8 +2,9 @@
 //
 // Component tests for the "Booked" upcoming-claim marker on the VPE dashboard (#543).
 //
-// The server suite proves `upcomingRoleAt` is DERIVED correctly. It cannot see
-// whether the dashboard renders it, and the bug being fixed is a rendering
+// The server suite proves the upcoming-claim dates (`upcomingRoleAt` on overdue
+// rows, `upcomingSpeakerAt` on speaker-queue rows) are DERIVED correctly. It
+// cannot see whether the dashboard renders them, and the bug being fixed is a rendering
 // contradiction: Monday's Toastmaster reading "Never held a role" on the
 // officer's own page while the club's sign-up sheet has her name on it. So the
 // half that matters here is that the marker appears BESIDE the backward-looking

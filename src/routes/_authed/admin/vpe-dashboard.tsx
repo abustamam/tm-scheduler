@@ -317,14 +317,15 @@ function MemberIdentity({
 	memberId,
 	name,
 	joinedAt,
-	upcomingRoleAt,
+	bookedAt,
 	timezone,
 }: {
 	memberId: string;
 	name: string;
 	joinedAt: Date | string | null;
 	/** #543 — omitted by callers that have no upcoming-claim data (LapseRow). */
-	upcomingRoleAt?: Date | string;
+	/** The date the Booked marker shows; which slots count is the caller's call. */
+	bookedAt?: Date | string;
 	/** The club's zone, for the Booked marker's day (#898). */
 	timezone?: string;
 }) {
@@ -339,16 +340,12 @@ function MemberIdentity({
 				<div className="flex min-w-0 items-center gap-2">
 					<span className="truncate text-sm font-bold">{name}</span>
 					{/* The pill is `sm`-and-up ONLY — see BookedMarker's note. */}
-					{upcomingRoleAt ? (
-						<BookedPill at={upcomingRoleAt} timezone={timezone} />
-					) : null}
+					{bookedAt ? <BookedPill at={bookedAt} timezone={timezone} /> : null}
 				</div>
 				<div className="text-xs text-[var(--sea-ink-soft)]">
 					{joinedAt ? formatTenure(joinedAt) : "Tenure unknown"}
 				</div>
-				{upcomingRoleAt ? (
-					<BookedLine at={upcomingRoleAt} timezone={timezone} />
-				) : null}
+				{bookedAt ? <BookedLine at={bookedAt} timezone={timezone} /> : null}
 			</div>
 		</div>
 	);
@@ -362,13 +359,9 @@ function MemberIdentity({
  * booked, no outreach needed today" beside a number that is still honest about
  * history.
  *
- * **What feeds it differs by list.** In the overdue list the date is the
- * soonest claimed role of ANY kind, since overdue means no claimed role at
- * all. In the SPEAKER QUEUE it is the soonest SPEAKER slot only: a member
- * booked as Grammarian marked "Booked" in a list ranked by speaker history
- * reads as "has a speech coming", and the VPE skips them. The copy stays
- * role-neutral so the one component is true in both places;
- * `reporting.integration.test.ts` pins both queries.
+ * **What feeds it differs by list**: any claimed role in the overdue list, a
+ * speaker slot only in the speaker queue (`SpeakerRotationRow.upcomingSpeakerAt`
+ * says why). The copy stays role-neutral so the one component is true in both.
  *
  * **Two forms, because below `sm` there is no room for a pill.** At 375px the
  * page's `px-4`, the row's `px-5`, the 112px wait column and the gaps leave the
@@ -444,7 +437,7 @@ function OverdueRow({
 				memberId={member.memberId}
 				name={member.name}
 				joinedAt={member.joinedAt}
-				upcomingRoleAt={member.upcomingRoleAt}
+				bookedAt={member.upcomingRoleAt}
 				timezone={timezone}
 			/>
 			<div className="text-sm">
@@ -527,7 +520,7 @@ function RotationRow({
 				memberId={row.memberId}
 				name={row.name}
 				joinedAt={row.joinedAt}
-				upcomingRoleAt={row.upcomingSpeakerAt}
+				bookedAt={row.upcomingSpeakerAt}
 				timezone={timezone}
 			/>
 			<div className="hidden text-sm sm:block">
