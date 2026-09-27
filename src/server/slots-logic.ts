@@ -17,9 +17,12 @@ import {
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
-import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
+import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
-import { setPlanStatus } from "./attendance-plan-logic";
+import {
+	type AttendancePlanStatus,
+	setPlanStatus,
+} from "./attendance-plan-logic";
 import { assertClubNotArchived, requireClubRole } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
@@ -1372,6 +1375,17 @@ export const CONFIRM_NEEDS_SIGN_IN_MESSAGE = SIGN_IN_REQUIRED_MESSAGE;
  *  reworded message cannot silently turn a race into a thrown error or, worse,
  *  a gate into a skip. */
 export const SLOT_NOT_FOUND_MESSAGE = "Role not found.";
+
+/** The holder arm's default plan floor: every rung except `coming`. */
+export const HOLDER_CONFIRM_PLAN_FLOOR: readonly AttendancePlanStatus[] = [
+	"reached_out",
+	"not_coming",
+];
+/** The floor for a caller that already recorded the answer itself (#908): only
+ *  the officer's ASK may still be written over, never a decline. */
+export const ASK_ONLY_PLAN_FLOOR: readonly AttendancePlanStatus[] = [
+	"reached_out",
+];
 export const ONLY_CLAIMED_CONFIRMABLE_MESSAGE =
 	"Only a claimed role can be confirmed.";
 export const SLOT_NO_LONGER_CLAIMED_MESSAGE =
@@ -1422,6 +1436,17 @@ export async function confirmSlotCore(args: {
 	sessionUserId: string | null;
 	/** Self-asserted holder id (the public arm), or null for the officer arm. */
 	selfMemberId: string | null;
+	/** HOW the caller's identity was established, when the caller resolved it
+	 *  (#908) — recorded as `detail.proof` on both activity rows the holder arm
+	 *  writes. Absent on the direct `confirmSlot` path, which resolves none;
+	 *  gating on it is #763's. */
+	proof?: WriteProof;
+	/** The holder arm's plan-write floor. Defaults to
+	 *  {@link HOLDER_CONFIRM_PLAN_FLOOR}, which is the direct `confirmSlot`
+	 *  path's behaviour and stays so until #763. A caller that has ALREADY
+	 *  recorded the member's answer passes {@link ASK_ONLY_PLAN_FLOOR}, so a
+	 *  decline that landed since cannot be overwritten by the confirm. */
+	planFloor?: readonly AttendancePlanStatus[];
 }): Promise<{ ok: true; grantedVia: ConfirmSlotVia; planWritten: boolean }> {
 	const [slot] = await db
 		.select({
@@ -1503,14 +1528,15 @@ export async function confirmSlotCore(args: {
 				status: "coming",
 				actorMemberId: grant.actorMemberId,
 				grantedVia: "self",
-				// `markComingOnSelfClaim`'s list, and for its reason: every rung
-				// EXCEPT `coming`, so a re-confirm logs nothing while a decline or an
-				// officer's ask is superseded. Confirming the role after previously
-				// declining is a real change of mind and should win — and it is the
-				// member's OWN answer either way, so this floor never lets one person
-				// overwrite another's: `reached_out` is the officer's ask, not a
-				// reply, and `not_coming` here can only be this member's.
-				demoteFrom: ["reached_out", "not_coming"],
+				// Default: `markComingOnSelfClaim`'s list, and for its reason: every
+				// rung EXCEPT `coming`, so a re-confirm logs nothing while a decline
+				// or an officer's ask is superseded. Confirming the role after
+				// previously declining is a real change of mind and should win — and
+				// it is the member's OWN answer either way, so this floor never lets
+				// one person overwrite another's: `reached_out` is the officer's ask,
+				// not a reply, and `not_coming` here can only be this member's.
+				demoteFrom: args.planFloor ?? HOLDER_CONFIRM_PLAN_FLOOR,
+				...(args.proof ? { proof: args.proof } : {}),
 			});
 			planWritten = changed;
 		}
@@ -1521,7 +1547,11 @@ export async function confirmSlotCore(args: {
 			action: "claim",
 			targetType: "slot",
 			targetId: args.slotId,
-			detail: { confirmed: true, grantedVia: grant.via },
+			detail: {
+				confirmed: true,
+				grantedVia: grant.via,
+				...(args.proof ? { proof: args.proof } : {}),
+			},
 		});
 
 		return { ok: true as const, grantedVia: grant.via, planWritten };
@@ -1557,10 +1587,14 @@ const LOST_CONFIRM_RACE: ReadonlySet<string> = new Set([
  *
  * Each slot goes through `confirmSlotCore` UNCHANGED, one call per slot, so the
  * archive gate, the meeting lock and the holder-matching conditional UPDATE (the
- * reassignment race) all stay in the path for every flip. Its own `coming` plan
- * write is floored at `["reached_out", "not_coming"]`, so after the caller has
- * already recorded the answer it writes nothing and logs nothing — one
- * `plan_set`, not one per role.
+ * reassignment race) all stay in the path for every flip. The caller has
+ * ALREADY recorded the answer, so the confirm's own plan write is floored at
+ * {@link ASK_ONLY_PLAN_FLOOR}: over the `coming` just written it writes and
+ * logs nothing (one `plan_set`, not one per role), and a `not_coming` that
+ * landed between the answer and the confirm survives rather than being
+ * overwritten and logged as the member's own `coming`. The slot still flips in
+ * that window — the confirm is about the role, and the decline is what the
+ * officer sees on the rail.
  *
  * A slot that moved between the list and its flip — released, reassigned,
  * removed, or already confirmed by an officer — is skipped rather than thrown:
@@ -1574,6 +1608,10 @@ const LOST_CONFIRM_RACE: ReadonlySet<string> = new Set([
 export async function confirmHeldClaimedSlots(args: {
 	memberId: string;
 	meetingId: string;
+	/** How the caller's identity was established (`resolveActor`'s `proof`),
+	 *  recorded on every confirm this writes so #763 can gate this path and
+	 *  `confirmSlot` in one place. */
+	proof: WriteProof;
 }): Promise<{ confirmedRoles: string[] }> {
 	const [meeting] = await db
 		.select({ clubId: meetings.clubId, status: meetings.status })
@@ -1608,6 +1646,8 @@ export async function confirmHeldClaimedSlots(args: {
 				slotId: slot.slotId,
 				sessionUserId: null,
 				selfMemberId: args.memberId,
+				proof: args.proof,
+				planFloor: ASK_ONLY_PLAN_FLOOR,
 			});
 			confirmedRoles.push(slot.roleName);
 		} catch (error) {

@@ -73,9 +73,11 @@ describe("setPlannedAttendance confirms held roles (#908)", () => {
 		expect(decline).not.toContain("confirmIfAsked");
 	});
 
-	it("clearPlannedAttendance does not accept the flag", () => {
-		expect(handlerBody("clearPlannedAttendance")).toContain(
-			"confirmHeldRoles: true",
+	it("clearPlannedAttendance omits confirmHeldRoles from its schema", () => {
+		// Anchored to the `.omit({ … })` call itself, so the key has to be one of
+		// the omitted fields — not merely present somewhere in the handler.
+		expect(handlerBody("clearPlannedAttendance")).toMatch(
+			/planSchema\s*\.omit\(\{[^}]*\bconfirmHeldRoles:\s*true,?[^}]*\}\)/,
 		);
 	});
 });

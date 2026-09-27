@@ -644,7 +644,11 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 			proof: "asserted",
 			onlyIfAbsent: true,
 		});
-		return confirmHeldClaimedSlots({ memberId, meetingId: seed.meetingId });
+		return confirmHeldClaimedSlots({
+			memberId,
+			meetingId: seed.meetingId,
+			proof: "asserted",
+		});
 	}
 
 	it("I'll be there: the claimed slot is confirmed, one coming row, all self", async () => {
@@ -668,6 +672,54 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 		});
 		// And the rail reads it as the member's own answer.
 		expect((await railRow(seed.memberId)).assumed).toBe(false);
+	});
+
+	it("records the caller's proof on the confirm and the answer", async () => {
+		await claim(seed.memberId);
+
+		await answerComing(seed.memberId);
+
+		const [claimRow] = await logRows("claim");
+		expect(claimRow?.detail).toMatchObject({ proof: "asserted" });
+		const [planRow] = await logRows("plan_set");
+		expect(planRow?.detail).toMatchObject({ proof: "asserted" });
+	});
+
+	it("a decline that lands between the answer and the confirm survives", async () => {
+		// The answer and the confirm are two transactions. A `not_coming` written
+		// in between must NOT be overwritten by the confirm's own plan write and
+		// logged as the member's `coming` — the floor this caller passes admits
+		// only the officer's ask.
+		await claim(seed.memberId);
+		await seedRung(seed.memberId, "not_coming");
+
+		await confirmHeldClaimedSlots({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			proof: "asserted",
+		});
+
+		expect(await planStatus(seed.memberId)).toBe("not_coming");
+		expect(await logRows("plan_set")).toHaveLength(0);
+	});
+
+	it("still writes coming over the officer's ask when confirming standalone", async () => {
+		// The control for the case above: the floor is narrowed to the ASK, not
+		// removed, so `reached_out` is still superseded by the member's yes.
+		await claim(seed.memberId);
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			status: "reached_out",
+		});
+
+		await confirmHeldClaimedSlots({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			proof: "asserted",
+		});
+
+		expect(await planStatus(seed.memberId)).toBe("coming");
 	});
 
 	it("confirms a slot assigned AFTER the page loaded", async () => {
@@ -702,6 +754,7 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 		const { confirmedRoles } = await confirmHeldClaimedSlots({
 			memberId: seed.memberId,
 			meetingId: seed.meetingId,
+			proof: "asserted",
 		});
 
 		expect(confirmedRoles).toHaveLength(1);
@@ -742,7 +795,11 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 
 		for (const memberId of [seed.memberId, otherMemberId]) {
 			await expect(
-				confirmHeldClaimedSlots({ memberId, meetingId: seed.meetingId }),
+				confirmHeldClaimedSlots({
+					memberId,
+					meetingId: seed.meetingId,
+					proof: "asserted",
+				}),
 			).rejects.toThrow(exact(CLUB_ARCHIVED_MESSAGE));
 		}
 		expect(await slotStatus()).toBe("claimed");
@@ -757,7 +814,11 @@ describe.skipIf(!hasTestDb)("confirmSlotCore — holder and officer arms", () =>
 
 		for (const memberId of [seed.memberId, otherMemberId]) {
 			await expect(
-				confirmHeldClaimedSlots({ memberId, meetingId: seed.meetingId }),
+				confirmHeldClaimedSlots({
+					memberId,
+					meetingId: seed.meetingId,
+					proof: "asserted",
+				}),
 			).rejects.toThrow(exact(MEETING_LOCKED_MESSAGE));
 		}
 		expect(await slotStatus()).toBe("claimed");

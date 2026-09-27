@@ -148,6 +148,7 @@ export function PersonalMeetingBody({
 		view.club.timezone,
 	);
 	const holdsRole = view.roles.length > 0;
+	const holdsUnconfirmed = view.roles.some((r) => r.status === "claimed");
 	// `canRepick` is true for a name-picked viewer and false for a signed-in
 	// member, so this is the session question asked in the vocabulary the page
 	// already has — see the header's third rule for why it is the one piece of
@@ -332,7 +333,7 @@ export function PersonalMeetingBody({
 							? "This meeting is finished, so answers are closed."
 							: "This meeting has passed, so answers are closed."}
 				</p>
-			) : !canAnswer && view.planStatus === "coming" && holdsRole ? (
+			) : !canAnswer && view.planStatus === "coming" && holdsUnconfirmed ? (
 				// Answered `coming` with no session, and holding a role (#908). The
 				// answer cannot change from here, but re-sending the SAME answer is
 				// not a change (ADR-0026's fill-blank rule lets it through as a
@@ -340,8 +341,10 @@ export function PersonalMeetingBody({
 				// whose `coming` was recorded before their role was confirmed — every
 				// self-claim writes one, and so did every "I'll be there" before #908
 				// — lands from the confirm nudge on a page with nothing to tap.
-				// `holdsRole` only decides whether the button is OFFERED; stale in the
-				// "assigned since load" direction, it hides a button, never misfires.
+				// Offered only while at least one role is still `claimed`, so a member
+				// whose roles are all confirmed is not shown a button that does
+				// nothing. The view only decides whether the button is OFFERED; stale
+				// in the "assigned since load" direction, it hides one, never misfires.
 				<div className="space-y-2">
 					<Button
 						size="lg"

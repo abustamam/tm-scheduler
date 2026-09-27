@@ -161,11 +161,15 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		// `coming` — and a refused answer (an asserted caller changing a real one,
 		// ADR-0026) has already thrown, so it confirms nothing either.
 		//
-		// `actorMemberId === data.memberId`: only the member THEMSELVES confirms
-		// their roles. The holder arm credits the holder as `grantedVia: "self"`,
-		// so an officer or Toastmaster answering FOR someone must not reach it —
-		// that would file "Alice says Bob confirmed" under Bob's own name. A null
-		// actor (an impersonating superadmin) is not the member either.
+		// `actorMemberId === data.memberId` stops an officer or the Toastmaster
+		// answering FOR someone else from confirming that member's roles: the
+		// holder arm credits the holder as `grantedVia: "self"`, which would file
+		// "Alice says Bob confirmed" under Bob's own name. It does NOT prove the
+		// caller is the member — an anonymous request resolves its actor TO the
+		// subject, so it always passes; that is the honour system `confirmSlot`
+		// already runs on, and `proof` is passed through so the log records which
+		// kind of caller it was (#763 is where either path gets gated on it). A
+		// null actor (an impersonating superadmin) never passes.
 		const confirmIfAsked = async (): Promise<string[]> =>
 			data.status === "coming" &&
 			data.confirmHeldRoles &&
@@ -174,6 +178,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 						await confirmHeldClaimedSlots({
 							memberId: data.memberId,
 							meetingId: data.meetingId,
+							proof,
 						})
 					).confirmedRoles
 				: NONE_CONFIRMED;

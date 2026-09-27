@@ -96,6 +96,7 @@ function makeView(
 				roleName: "Toastmaster of the Day",
 				roleKey: "toastmaster_of_the_day",
 				speechTitle: null,
+				status: "claimed",
 			},
 		],
 		planStatus: null,
@@ -345,6 +346,18 @@ describe("PersonalMeetingBody — confirming attendance", () => {
 		expect(screen.getByText(/sign in to change your answer/i)).toBeTruthy();
 	});
 
+	it("offers no lone confirm once every role is already confirmed (#908)", async () => {
+		// The button would do nothing and say "see you there" forever.
+		await renderBody(
+			makeView({
+				planStatus: "coming",
+				roles: makeView().roles.map((r) => ({ ...r, status: "confirmed" })),
+			}),
+		);
+		expect(screen.queryByRole("button", { name: /I'll be there/ })).toBeNull();
+		expect(screen.getByText(/sign in to change your answer/i)).toBeTruthy();
+	});
+
 	it("offers no lone confirm to an anon member who said coming and holds nothing", async () => {
 		// The control: with no role there is nothing to confirm, so the
 		// already-answered page stays exactly as #762 left it.
@@ -510,6 +523,7 @@ describe("PersonalMeetingBody — what it renders", () => {
 						roleName: "Ah-Counter",
 						roleKey: "ah_counter",
 						speechTitle: null,
+						status: "claimed",
 					},
 				],
 			}),
@@ -660,6 +674,7 @@ describe("PersonalMeetingBody — heading structure (#676)", () => {
 						roleName: "Grammarian",
 						roleKey: "grammarian",
 						speechTitle: null,
+						status: "claimed",
 					},
 				],
 			}),
@@ -719,6 +734,7 @@ describe("PersonalMeetingBody — tap targets (#676)", () => {
 						roleName: "Ah-Counter",
 						roleKey: "ah_counter",
 						speechTitle: null,
+						status: "claimed",
 					},
 				],
 			}),
