@@ -76,8 +76,13 @@ export interface SpeakerRotationRow {
 	latestPathwayPath: string | null;
 	latestProjectName: string | null;
 	latestProjectLevel: string | null;
-	/** #543 — see `loadUpcomingRoleClaims`. Absent when there is none. */
-	upcomingRoleAt?: Date;
+	/**
+	 * Soonest future SPEAKER slot — see `loadUpcomingSpeakerSlots`. Absent when
+	 * there is none. Speaker-only, unlike the overdue row's `upcomingRoleAt`: in
+	 * a queue ranked by speaker history, "Booked" beside a Grammarian reads as
+	 * "has a speech coming", and the VPE skips them.
+	 */
+	upcomingSpeakerAt?: Date;
 }
 
 export interface OverdueMemberRow {
@@ -115,13 +120,11 @@ export interface OverdueMemberRow {
  * an open slot nobody has taken is not a commitment, and a cancelled meeting
  * is not one either.
  *
- * **Deliberately NOT filtered to speaker roles**, unlike the `is_speaker_role`
- * subquery in `loadSpeakerRotation` that this feeds. Overdue means "no claimed
+ * **Deliberately NOT filtered to speaker roles.** Overdue means "no claimed
  * role of ANY kind", so narrowing this would blind the surface that needs it
  * most — a member booked as Timer is exactly the person a VPE should not chase.
- * The speaker queue consumes the same any-role answer, which is why the
- * dashboard's marker is worded role-neutrally ("Booked", not "Up next"): the
- * two decisions are one decision, and the component suite pins the other half.
+ * The speaker queue reads `loadUpcomingSpeakerSlots` instead
+ * (`SpeakerRotationRow.upcomingSpeakerAt` says why).
  */
 export async function loadUpcomingRoleClaims(
 	clubId: string,
@@ -165,9 +168,9 @@ export async function loadUpcomingRoleClaims(
  * confirmed SPEAKER slot (#898). A speaker-only sibling of
  * `loadUpcomingRoleClaims`, and deliberately a second function rather than a
  * parameter on it: that one is role-neutral on purpose (its comment says why,
- * and the "Booked" marker's wording depends on it), while "Close to a level"
- * needs exactly the narrower answer. A member one project from a level who is
- * booked as Timer still needs a speaker slot.
+ * for the overdue list), while the speaker queue's "Booked" marker and "Close
+ * to a level" need exactly the narrower answer. A member one project from a
+ * level who is booked as Timer still needs a speaker slot.
  *
  * Same `HELD_SLOT_STATUSES`, `gte(now)` and cancelled-meeting exclusion as its
  * sibling, so "booked" means one thing on both sides of the dashboard.
@@ -321,7 +324,7 @@ export async function loadSpeakerRotation(
 	// one instant rather than two.
 	const [latest, upcoming] = await Promise.all([
 		loadLatestSpeechByMember(clubId),
-		loadUpcomingRoleClaims(clubId, now),
+		loadUpcomingSpeakerSlots(clubId, now),
 	]);
 
 	return rows.map((r) => {
@@ -336,7 +339,7 @@ export async function loadSpeakerRotation(
 			latestPathwayPath: speech?.pathwayPath ?? null,
 			latestProjectName: speech?.projectName ?? null,
 			latestProjectLevel: speech?.projectLevel ?? null,
-			upcomingRoleAt: upcoming.get(r.memberId),
+			upcomingSpeakerAt: upcoming.get(r.memberId),
 		};
 	});
 }

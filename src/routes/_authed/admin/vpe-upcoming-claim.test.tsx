@@ -2,8 +2,9 @@
 //
 // Component tests for the "Booked" upcoming-claim marker on the VPE dashboard (#543).
 //
-// The server suite proves `upcomingRoleAt` is DERIVED correctly. It cannot see
-// whether the dashboard renders it, and the bug being fixed is a rendering
+// The server suite proves the upcoming-claim dates (`upcomingRoleAt` on overdue
+// rows, `upcomingSpeakerAt` on speaker-queue rows) are DERIVED correctly. It
+// cannot see whether the dashboard renders them, and the bug being fixed is a rendering
 // contradiction: Monday's Toastmaster reading "Never held a role" on the
 // officer's own page while the club's sign-up sheet has her name on it. So the
 // half that matters here is that the marker appears BESIDE the backward-looking
@@ -240,7 +241,7 @@ describe("VPE dashboard — upcoming-claim marker (#543)", () => {
 
 	it("marks a never-spoken member in the speaker queue, keeping the rank text", async () => {
 		await renderRoute({
-			rotation: [rotationRow({ upcomingRoleAt: MONDAY })],
+			rotation: [rotationRow({ upcomingSpeakerAt: MONDAY })],
 		});
 
 		const row = rowFor("Priya Raman");
@@ -252,13 +253,13 @@ describe("VPE dashboard — upcoming-claim marker (#543)", () => {
 	});
 
 	it("words the speaker-queue marker role-neutrally", async () => {
-		// The marker is fed by an ANY-ROLE query (pinned in
-		// reporting.integration.test.ts), so the member below may well be booked
-		// as Timer. In a list whose subtitle says "ranked by how long since they
-		// last held a speaker role", "Up next" would read as "speaking Monday":
-		// the VPE skips her and she goes another cycle without speaking — #543's
-		// own contradiction pointing the other way. "Booked" is true either way.
-		await renderRoute({ rotation: [rotationRow({ upcomingRoleAt: MONDAY })] });
+		// The speaker queue's marker is fed by a speaker-only query and the
+		// overdue list's by an any-role one (both pinned in
+		// reporting.integration.test.ts). One component renders both, so its copy
+		// has to be true for a Timer booking in the overdue list too.
+		await renderRoute({
+			rotation: [rotationRow({ upcomingSpeakerAt: MONDAY })],
+		});
 
 		const marker = screen.getByText(`Booked · ${formatMeetingDate(MONDAY)}`);
 		expect(marker.textContent).not.toMatch(/up next|speak/i);

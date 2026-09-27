@@ -315,7 +315,7 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 			expect(counted).toContain(booked.memberId);
 		});
 
-		it("marks a never-spoken member in the speaker queue too", async () => {
+		it("marks a never-spoken member in the speaker queue at their speaker slot", async () => {
 			const { loadSpeakerRotation } = await import("#/server/reporting-logic");
 
 			const booked = await addMember(seeded.clubId, "Booked Speaker");
@@ -329,21 +329,20 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 			const rotation = await loadSpeakerRotation(seeded.clubId);
 			const row = rotation.find((r) => r.memberId === booked.memberId);
 
-			expect(row?.upcomingRoleAt?.getTime()).toBe(next.scheduledAt.getTime());
+			expect(row?.upcomingSpeakerAt?.getTime()).toBe(
+				next.scheduledAt.getTime(),
+			);
 			// Still "Never spoken" — the speech has not happened yet.
 			expect(row?.timesSpoken).toBe(0);
 			expect(row?.lastSpokenAt).toBeNull();
 		});
 
-		it("marks a speaker-queue row for a NON-speaker future claim", async () => {
-			// The marker is any-role BY DESIGN — overdue means "no claimed role of
-			// any kind", and a member booked as Timer is exactly the person a VPE
-			// should not chase. It is also why the dashboard's marker is worded
-			// role-neutrally: adding an `is_speaker_role` filter here to make "Up
-			// next" honest in the speaker queue would fail this test, and changing
-			// the copy back to "Up next" fails the component suite. The two halves
-			// cannot drift apart quietly.
-			const { loadSpeakerRotation } = await import("#/server/reporting-logic");
+		it("does NOT mark a speaker-queue row for a NON-speaker future claim", async () => {
+			// Speaker-only marker in the queue, any-role in the overdue list;
+			// `SpeakerRotationRow.upcomingSpeakerAt` says why.
+			const { loadSpeakerRotation, loadOverdueMembers } = await import(
+				"#/server/reporting-logic"
+			);
 
 			const timer = await addMember(seeded.clubId, "Timer Only");
 			const next = await addUpcomingMeeting(seeded.clubId, 5);
@@ -356,12 +355,72 @@ describe.skipIf(!hasTestDb)("VPE reporting queries", () => {
 
 			const rotation = await loadSpeakerRotation(seeded.clubId);
 			const row = rotation.find((r) => r.memberId === timer.memberId);
-
-			expect(row?.upcomingRoleAt?.getTime()).toBe(next.scheduledAt.getTime());
-			// …and the queue's own ranking still says they have never spoken, which
-			// is true: a Timer booking is not a speech.
+			expect(row).toBeDefined();
+			expect(row?.upcomingSpeakerAt).toBeUndefined();
+			// A Timer booking is not a speech, so the rank is untouched too.
 			expect(row?.timesSpoken).toBe(0);
 			expect(row?.lastSpokenAt).toBeNull();
+
+			// The same claim still marks the overdue list, which wants any role:
+			// a member booked as Timer is exactly the person a VPE should not chase.
+			const overdue = await loadOverdueMembers(seeded.clubId, 60);
+			const overdueRow = overdue.find((m) => m.memberId === timer.memberId);
+			expect(overdueRow?.upcomingRoleAt?.getTime()).toBe(
+				next.scheduledAt.getTime(),
+			);
+		});
+
+		it("marks the speaker queue at the soonest SPEAKER slot, not a sooner non-speaker one", async () => {
+			const { loadSpeakerRotation } = await import("#/server/reporting-logic");
+
+			const both = await addMember(seeded.clubId, "Timer Then Speaker");
+			const soon = await addUpcomingMeeting(seeded.clubId, 3);
+			const later = await addUpcomingMeeting(seeded.clubId, 10);
+			await addSlot({
+				meetingId: soon.meetingId,
+				roleDefinitionId: seeded.roleDefinitionId,
+				memberId: both.memberId,
+			});
+			await addSlot({
+				meetingId: later.meetingId,
+				roleDefinitionId: speakerRoleId,
+				memberId: both.memberId,
+			});
+
+			const rotation = await loadSpeakerRotation(seeded.clubId);
+			const row = rotation.find((r) => r.memberId === both.memberId);
+			expect(row?.upcomingSpeakerAt?.getTime()).toBe(
+				later.scheduledAt.getTime(),
+			);
+		});
+
+		it("does NOT mark the speaker queue for a speaker slot at a cancelled meeting or still open", async () => {
+			// The speaker path runs its own query, so the overdue list's cancelled
+			// and open-slot cases below do not cover it.
+			const { loadSpeakerRotation } = await import("#/server/reporting-logic");
+
+			const ghost = await addMember(seeded.clubId, "Cancelled Speaker");
+			const off = await addUpcomingMeeting(seeded.clubId, 4, "cancelled");
+			await addSlot({
+				meetingId: off.meetingId,
+				roleDefinitionId: speakerRoleId,
+				memberId: ghost.memberId,
+			});
+			const pencilled = await addMember(seeded.clubId, "Pencilled Speaker");
+			const next = await addUpcomingMeeting(seeded.clubId, 2);
+			await addSlot({
+				meetingId: next.meetingId,
+				roleDefinitionId: speakerRoleId,
+				memberId: pencilled.memberId,
+				status: "open",
+			});
+
+			const rotation = await loadSpeakerRotation(seeded.clubId);
+			for (const id of [ghost.memberId, pencilled.memberId]) {
+				const row = rotation.find((r) => r.memberId === id);
+				expect(row).toBeDefined();
+				expect(row?.upcomingSpeakerAt).toBeUndefined();
+			}
 		});
 
 		it("does NOT mark a claim at a cancelled future meeting", async () => {

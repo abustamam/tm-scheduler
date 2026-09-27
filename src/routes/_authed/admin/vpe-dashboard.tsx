@@ -317,14 +317,15 @@ function MemberIdentity({
 	memberId,
 	name,
 	joinedAt,
-	upcomingRoleAt,
+	bookedAt,
 	timezone,
 }: {
 	memberId: string;
 	name: string;
 	joinedAt: Date | string | null;
 	/** #543 — omitted by callers that have no upcoming-claim data (LapseRow). */
-	upcomingRoleAt?: Date | string;
+	/** The date the Booked marker shows; which slots count is the caller's call. */
+	bookedAt?: Date | string;
 	/** The club's zone, for the Booked marker's day (#898). */
 	timezone?: string;
 }) {
@@ -339,16 +340,12 @@ function MemberIdentity({
 				<div className="flex min-w-0 items-center gap-2">
 					<span className="truncate text-sm font-bold">{name}</span>
 					{/* The pill is `sm`-and-up ONLY — see BookedMarker's note. */}
-					{upcomingRoleAt ? (
-						<BookedPill at={upcomingRoleAt} timezone={timezone} />
-					) : null}
+					{bookedAt ? <BookedPill at={bookedAt} timezone={timezone} /> : null}
 				</div>
 				<div className="text-xs text-[var(--sea-ink-soft)]">
 					{joinedAt ? formatTenure(joinedAt) : "Tenure unknown"}
 				</div>
-				{upcomingRoleAt ? (
-					<BookedLine at={upcomingRoleAt} timezone={timezone} />
-				) : null}
+				{bookedAt ? <BookedLine at={bookedAt} timezone={timezone} /> : null}
 			</div>
 		</div>
 	);
@@ -362,17 +359,9 @@ function MemberIdentity({
  * booked, no outreach needed today" beside a number that is still honest about
  * history.
  *
- * **"Booked", not "Up next".** This renders in the SPEAKER QUEUE as well as the
- * overdue list, and the claim behind it is for a role of ANY kind — which is
- * what the overdue list wants, since overdue means no claimed role at all. In a
- * list whose subtitle says "ranked by how long since they last held a speaker
- * role", "Up next" beside a member booked as Timer reads as "speaking Monday":
- * the VPE skips her and she goes another cycle without speaking. That is #543's
- * own contradiction pointing the other way. Role-neutral copy is true on both
- * surfaces; narrowing the marker to speaker roles was the alternative and
- * throws away the engagement signal the overdue list is asking for.
- * `reporting.integration.test.ts` pins the any-role half and the component
- * suite pins the wording, so neither can be changed alone.
+ * **What feeds it differs by list**: any claimed role in the overdue list, a
+ * speaker slot only in the speaker queue (`SpeakerRotationRow.upcomingSpeakerAt`
+ * says why). The copy stays role-neutral so the one component is true in both.
  *
  * **Two forms, because below `sm` there is no room for a pill.** At 375px the
  * page's `px-4`, the row's `px-5`, the 112px wait column and the gaps leave the
@@ -448,7 +437,7 @@ function OverdueRow({
 				memberId={member.memberId}
 				name={member.name}
 				joinedAt={member.joinedAt}
-				upcomingRoleAt={member.upcomingRoleAt}
+				bookedAt={member.upcomingRoleAt}
 				timezone={timezone}
 			/>
 			<div className="text-sm">
@@ -531,7 +520,7 @@ function RotationRow({
 				memberId={row.memberId}
 				name={row.name}
 				joinedAt={row.joinedAt}
-				upcomingRoleAt={row.upcomingRoleAt}
+				bookedAt={row.upcomingSpeakerAt}
 				timezone={timezone}
 			/>
 			<div className="hidden text-sm sm:block">
