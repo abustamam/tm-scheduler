@@ -172,14 +172,16 @@ Ten coverage traps this repo has actually hit, all worth checking when a number 
 
 - **Print routes share one stylesheet — do not hand-roll page CSS.** `PRINT_PAGE_CSS` in
   `src/components/agenda/print-theme.tsx` is the single copy of the `@page` / `.pgwrap` / `.no-print`
-  rules that keep a print surface to its sheet count, and `PrintToolbar` / `PrintButton` are the shared
-  toolbar. The agenda print route, the Word of the Day poster and the club role sheets all inject it; it
+  rules that keep a print surface to its sheet count, plus the screen-only `SCREEN_FIT_CSS` that shrinks
+  a sheet to a narrow window (#964), and `PrintToolbar` / `PrintButton` are the shared toolbar. The agenda print route, the Word of the Day poster and the club role sheets all inject it; it
   was three divergent copies until v1.8.4.0, so a print fix meant finding all three and guessing which
   differences were deliberate. A new print route imports the constant. `print-page-reset.guard.test.ts`
   walks `src/routes/` recursively and fails on a route that defines its own `.pgwrap` padding, so the
   next print route is enrolled automatically rather than remembered.
   Since #718 it is a **builder with a portrait default**: `printPageCss(orientation)` produces the
-  stylesheet and `PRINT_PAGE_CSS` is `printPageCss()`, byte-identical to what it always was. A route
+  stylesheet and `PRINT_PAGE_CSS` is `printPageCss()`; its print rules are byte-identical to what they
+  always were, and its only screen addition, `SCREEN_FIT_CSS` (#964), reads the sheet size from
+  `--sheet-w` / `--sheet-h` so it stays orientation-independent. A route
   that needs the other orientation calls the function — only the Word of the Day poster does, because
   it is one short word sized against the measure and wants the sheet's long edge. Everything else
   keeps importing the constant, and **the shared `@page` rule is never flipped** to suit one surface.
