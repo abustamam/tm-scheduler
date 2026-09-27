@@ -680,6 +680,13 @@
       "when": 1790462306606,
       "tag": "0096_first_sugar_man",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1790518510819,
+      "tag": "0097_freezing_warhawk",
+      "breakpoints": true
     }
   ]
 }

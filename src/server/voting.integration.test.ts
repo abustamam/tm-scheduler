@@ -36,6 +36,13 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+/** One phone's ballot device token, for suites whose re-votes are that same
+ *  phone changing its mind (#765). */
+const PHONE = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a";
+
+const { GUEST_VOTE_CAST_ELSEWHERE_MESSAGE, VOTE_CAST_ELSEWHERE_MESSAGE } =
+	await import("#/lib/ballot-device");
+
 const {
 	castVote,
 	closeVote,
@@ -284,6 +291,9 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 		category: "best_speaker" as const,
 		voter: { kind: "member" as const, id: seed.memberId },
 		candidate: { kind: "member" as const, id: seed.adminMemberId },
+		// The ballot sends this phone's token with every cast (#765); a re-vote
+		// below is the SAME phone changing its mind.
+		deviceToken: PHONE,
 		...over,
 	});
 
@@ -579,6 +589,247 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 		expect(vote.updatedAt.getTime()).toBeLessThanOrEqual(
 			session.closedAt?.getTime() ?? Number.POSITIVE_INFINITY,
 		);
+	});
+});
+
+/**
+ * Who may CHANGE a vote (#765, ADR-0026). Member ids are public and the ballot
+ * link is shared, so the voter id alone cannot decide it: the first vote fills
+ * a blank, and a change is admitted only from the device that cast it or from a
+ * session bound to that voting member. Guests cannot sign in, so only the
+ * casting device can change a guest's vote.
+ */
+describe.skipIf(!hasTestDb)("castVote: device-bound change (#765)", () => {
+	let seed: SeededClub;
+	let sessionId: string;
+	const T = "0b7c9f6e-3a1d-4c2b-8e5f-6a7b8c9d0e1f";
+	const U = "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b";
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				sortOrder: 99,
+			})
+			.returning({ id: roleDefinitions.id });
+		// Two eligible candidates, so a change is observable as a different pick.
+		await testDb.insert(roleSlots).values([
+			{
+				meetingId: seed.meetingId,
+				roleDefinitionId: def.id,
+				slotIndex: 0,
+				assignedMemberId: seed.adminMemberId,
+			},
+			{
+				meetingId: seed.meetingId,
+				roleDefinitionId: def.id,
+				slotIndex: 1,
+				assignedMemberId: seed.memberId,
+			},
+		]);
+		await openVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		const [session] = await testDb
+			.select({ id: meetingVoteSessions.id })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, seed.meetingId),
+					eq(meetingVoteSessions.category, "best_speaker"),
+				),
+			);
+		sessionId = session.id;
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	/** M (seed.memberId) votes; the first pick is the admin, a change picks M. */
+	const first = (over: Record<string, unknown> = {}) => ({
+		meetingId: seed.meetingId,
+		category: "best_speaker" as const,
+		voter: { kind: "member" as const, id: seed.memberId },
+		candidate: { kind: "member" as const, id: seed.adminMemberId },
+		...over,
+	});
+	const change = (over: Record<string, unknown> = {}) =>
+		first({
+			candidate: { kind: "member" as const, id: seed.memberId },
+			...over,
+		});
+
+	async function rows() {
+		return testDb
+			.select({
+				candidateMemberId: meetingVotes.candidateMemberId,
+				deviceToken: meetingVotes.deviceToken,
+			})
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
+	}
+
+	async function joinedGuest(name: string) {
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name })
+			.returning({ id: guests.id });
+		await testDb
+			.insert(meetingBallotGuests)
+			.values({ meetingId: seed.meetingId, guestId: g.id });
+		return g.id;
+	}
+
+	it("a first vote from token T records T as the casting device", async () => {
+		await castVote(first({ deviceToken: T }));
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.adminMemberId, deviceToken: T },
+		]);
+	});
+
+	it("the same device changes the vote with no session, and stays the owner", async () => {
+		await castVote(first({ deviceToken: T }));
+		await castVote(change({ deviceToken: T }));
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.memberId, deviceToken: T },
+		]);
+	});
+
+	it("ANOTHER device with no session is refused, and the row is unchanged", async () => {
+		await castVote(first({ deviceToken: T }));
+		await expect(castVote(change({ deviceToken: U }))).rejects.toThrow(
+			VOTE_CAST_ELSEWHERE_MESSAGE,
+		);
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.adminMemberId, deviceToken: T },
+		]);
+	});
+
+	it("the member's OWN session changes it from another device, and T stays the owner", async () => {
+		await castVote(first({ deviceToken: T }));
+		await castVote(
+			change({ deviceToken: U, sessionUserId: seed.memberUserId }),
+		);
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.memberId, deviceToken: T },
+		]);
+	});
+
+	it("a session bound to a DIFFERENT member is held to the device check", async () => {
+		// seed.adminUserId resolves to seed.adminMemberId — a real, active member
+		// of this club, signed in, but not the voter.
+		await castVote(first({ deviceToken: T }));
+		await expect(
+			castVote(change({ deviceToken: U, sessionUserId: seed.adminUserId })),
+		).rejects.toThrow(VOTE_CAST_ELSEWHERE_MESSAGE);
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.adminMemberId, deviceToken: T },
+		]);
+	});
+
+	it("a guest's vote changes only from the device that cast it", async () => {
+		const g = await joinedGuest("Okafor, Chidi");
+		const guestVote = (candidate: string, deviceToken: string) =>
+			castVote(
+				first({
+					voter: { kind: "guest", id: g },
+					candidate: { kind: "member", id: candidate },
+					deviceToken,
+				}),
+			);
+		await guestVote(seed.adminMemberId, T);
+
+		await expect(guestVote(seed.memberId, U)).rejects.toThrow(
+			GUEST_VOTE_CAST_ELSEWHERE_MESSAGE,
+		);
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.adminMemberId, deviceToken: T },
+		]);
+
+		await guestVote(seed.memberId, T);
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.memberId, deviceToken: T },
+		]);
+	});
+
+	it("a stale tab with no token casts a first vote, but cannot change it without the member's session", async () => {
+		await castVote(first());
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.adminMemberId, deviceToken: null },
+		]);
+		// Neither no token nor any token matches a NULL owner.
+		await expect(castVote(change())).rejects.toThrow(
+			VOTE_CAST_ELSEWHERE_MESSAGE,
+		);
+		await expect(castVote(change({ deviceToken: T }))).rejects.toThrow(
+			VOTE_CAST_ELSEWHERE_MESSAGE,
+		);
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.adminMemberId, deviceToken: null },
+		]);
+		// The member's own session still can.
+		await castVote(change({ sessionUserId: seed.memberUserId }));
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.memberId, deviceToken: null },
+		]);
+	});
+
+	it("a closed category still says 'not open', for a first vote and for a change", async () => {
+		await castVote(first({ deviceToken: T }));
+		await closeVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		// A change from the owning device AND from another: the window answers
+		// first, so neither reads as a device refusal.
+		await expect(castVote(change({ deviceToken: T }))).rejects.toThrow(
+			"Voting for this award is not open.",
+		);
+		await expect(castVote(change({ deviceToken: U }))).rejects.toThrow(
+			"Voting for this award is not open.",
+		);
+		// A first vote from a voter with no row yet.
+		const g = await joinedGuest("Lindqvist, Maja");
+		await expect(
+			castVote(first({ voter: { kind: "guest", id: g }, deviceToken: U })),
+		).rejects.toThrow("Voting for this award is not open.");
+		expect(await rows()).toEqual([
+			{ candidateMemberId: seed.adminMemberId, deviceToken: T },
+		]);
+	});
+
+	it("one device's token does not own ANOTHER voter's blank", async () => {
+		// Fill-a-blank is per voter: T having cast M's vote does not stop T (or
+		// anyone) filling the admin's empty ballot, and the admin's row then
+		// belongs to whichever device cast it.
+		await castVote(first({ deviceToken: T }));
+		await castVote(
+			first({
+				voter: { kind: "member", id: seed.adminMemberId },
+				deviceToken: U,
+			}),
+		);
+		const all = await testDb
+			.select({
+				voterMemberId: meetingVotes.voterMemberId,
+				deviceToken: meetingVotes.deviceToken,
+			})
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
+		expect(all).toHaveLength(2);
+		expect(
+			all.find((r) => r.voterMemberId === seed.adminMemberId)?.deviceToken,
+		).toBe(U);
 	});
 });
 
@@ -1154,6 +1405,8 @@ describe.skipIf(!hasTestDb)("write-in candidates (#582)", () => {
 			category: "best_table_topics",
 			voter: { kind: "member", id: voterId ?? seed.memberId },
 			candidate: { kind: "writeIn", name },
+			// One phone throughout, so a change is the owning device's (#765).
+			deviceToken: PHONE,
 		});
 
 	it("records a vote for someone who has no member or guest row", () => {
@@ -1268,6 +1521,7 @@ describe.skipIf(!hasTestDb)("write-in candidates (#582)", () => {
 			category: "best_table_topics",
 			voter: { kind: "member", id: seed.memberId },
 			candidate: { kind: "writeIn", name: "Someone Else" },
+			deviceToken: PHONE,
 		});
 		expect(await myVotes()).toEqual([{ m: null, g: null, w: "Someone Else" }]);
 	});

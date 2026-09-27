@@ -2040,6 +2040,25 @@ export const meetingVotes = pgTable(
 		 * Deduped by VISIBILITY, not by matching — see `writeInKey`.
 		 */
 		candidateWriteIn: text("candidate_write_in"),
+		/**
+		 * The ballot device that CAST this vote (#765, ADR-0026) — a random UUID
+		 * the phone keeps in localStorage (`getBallotDeviceToken`,
+		 * `#/lib/ballot-device`).
+		 *
+		 * Member ids are public and the ballot link is shared in club chat, so
+		 * without this anyone could overwrite a member's vote while it is open.
+		 * The first vote fills a blank; a CHANGE is admitted only from this same
+		 * token, or from a session bound to the voting member. Written on insert
+		 * and never updated, so the casting device stays the owner.
+		 *
+		 * Nullable with no backfill: a row cast before this column existed (or
+		 * from a tab loaded before the deploy) holds NULL, which matches no
+		 * device — only the member's own session can change it.
+		 *
+		 * Not a credential in any stronger sense than a cookie: it is a
+		 * possession proof for one ballot row, and it never leaves this table.
+		 */
+		deviceToken: text("device_token"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},

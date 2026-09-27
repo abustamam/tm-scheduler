@@ -23,6 +23,10 @@ import {
 	members,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import {
+	GUEST_VOTE_CAST_ELSEWHERE_MESSAGE,
+	VOTE_CAST_ELSEWHERE_MESSAGE,
+} from "#/lib/ballot-device";
 import { cap } from "#/lib/cap";
 import {
 	DIGITAL_VOTING_OFF_MESSAGE,
@@ -52,6 +56,7 @@ import {
 	getMeetingClubId,
 	requireMemberInMeetingClub,
 } from "./minutes-logic";
+import { resolveWriteActorWithProof } from "./write-actor-logic";
 
 export interface VoteSessionState {
 	isOpen: boolean;
@@ -567,12 +572,27 @@ export type CandidateRef = VoterRef | { kind: "writeIn"; name: string };
  *     land after Close is observably closed. Do NOT remove `.for("share")` as
  *     apparent boilerplate — it is the entire fix for #510's cast-after-close
  *     race (see the race test in `voting.integration.test.ts`).
+ *  4. The right to CHANGE a vote (#765, ADR-0026). The first vote fills a
+ *     blank, from anyone. A change applies only when it comes from the device
+ *     that cast it (`device_token`, set on insert and never updated) or from a
+ *     session bound to the voting member. The check rides the ON CONFLICT
+ *     UPDATE as a `setWhere`, so it is the same single statement as (3) and
+ *     inherits its locking. A refused change returns no row, like a closed
+ *     window does; the follow-up read tells the two apart.
  */
 export async function castVote(input: {
 	meetingId: string;
 	category: AwardCategory;
 	voter: VoterRef;
 	candidate: CandidateRef;
+	/** The casting phone's `getBallotDeviceToken()` (#765). Optional so a tab
+	 *  loaded before the deploy can still cast a FIRST vote; without one, a
+	 *  change needs the voting member's own session. */
+	deviceToken?: string | null;
+	/** The request's session user, if any (#765). Resolved against the
+	 *  meeting's club HERE rather than in the handler, because this is where the
+	 *  club is loaded. Only a session bound to the voting member counts. */
+	sessionUserId?: string | null;
 }): Promise<void> {
 	const clubId = await getMeetingClubId(input.meetingId);
 	// The takedown lever, on the write half (#555). Placed before every check
@@ -642,6 +662,15 @@ export async function castVote(input: {
 
 	const voterMemberId = input.voter.kind === "member" ? input.voter.id : null;
 	const voterGuestId = input.voter.kind === "guest" ? input.voter.id : null;
+	const deviceToken = input.deviceToken ?? null;
+
+	// (2b) Who may CHANGE an existing vote (#765, ADR-0026). The first vote
+	// fills a blank, whoever sends it — that is the honour-system ballot. A
+	// change is admitted only from the device that cast it, or from a session
+	// bound to THIS voting member. See `changeGuard` below.
+	const ownSession =
+		voterMemberId !== null &&
+		(await sessionIsVoter(clubId, input.sessionUserId ?? null, voterMemberId));
 	const candidateMemberId =
 		input.candidate.kind === "member" ? input.candidate.id : null;
 	const candidateGuestId =
@@ -686,6 +715,9 @@ export async function castVote(input: {
 					candidateWriteIn: sql<string | null>`${writeIn}::text`.as(
 						"candidate_write_in",
 					),
+					deviceToken: sql<string | null>`${deviceToken}::text`.as(
+						"device_token",
+					),
 					createdAt: sql<Date>`now()`.as("created_at"),
 					updatedAt: sql<Date>`now()`.as("updated_at"),
 				})
@@ -711,13 +743,68 @@ export async function castVote(input: {
 				// columns set and trip the at-most-one check.
 				candidateWriteIn: writeIn,
 				updatedAt: new Date(),
+				// `deviceToken` is deliberately NOT here: the device that cast the
+				// vote stays its owner, even when a session changes it.
 			},
+			// The device check. Omitted only for the voting member's own session;
+			// otherwise the conflicting row updates only when it was cast from
+			// this same token. A NULL token (a pre-deploy row, or a stale tab)
+			// matches nothing, so an explicit `false` rather than `= NULL`.
+			...(ownSession
+				? {}
+				: {
+						setWhere:
+							deviceToken !== null
+								? eq(meetingVotes.deviceToken, deviceToken)
+								: sql`false`,
+					}),
 		})
 		.returning({ id: meetingVotes.id });
 
 	if (inserted.length === 0) {
-		throw new Error("Voting for this award is not open.");
+		// Two causes return no row: no open session (the INSERT's SELECT found
+		// nothing), or the device check above refused the UPDATE. Tell them
+		// apart, because the voter's next step differs.
+		const [open] = await db
+			.select({ id: meetingVoteSessions.id })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, input.meetingId),
+					eq(meetingVoteSessions.category, input.category),
+					isNull(meetingVoteSessions.closedAt),
+				),
+			)
+			.limit(1);
+		if (!open) throw new Error("Voting for this award is not open.");
+		throw new Error(
+			voterMemberId !== null
+				? VOTE_CAST_ELSEWHERE_MESSAGE
+				: GUEST_VOTE_CAST_ELSEWHERE_MESSAGE,
+		);
 	}
+}
+
+/**
+ * True when the request's session is bound to `voterMemberId` in this club
+ * (#765) — i.e. the member themselves, signed in. Uses the #761 seam and
+ * admits ONLY `proof: "session"`: no claim is passed, so the asserted arm is
+ * never reached, and an impersonating superadmin (null) does not count as the
+ * member. A session bound to a DIFFERENT member is false, so it is held to the
+ * device check like anyone else.
+ */
+async function sessionIsVoter(
+	clubId: string,
+	sessionUserId: string | null,
+	voterMemberId: string,
+): Promise<boolean> {
+	if (!sessionUserId) return false;
+	const actor = await resolveWriteActorWithProof({
+		clubId,
+		sessionUserId,
+		claimedActorMemberId: null,
+	});
+	return actor?.proof === "session" && actor.memberId === voterMemberId;
 }
 
 /** Throws unless `guestId` belongs to `clubId`. The guest-side twin of

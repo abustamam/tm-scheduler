@@ -10,6 +10,11 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	GUEST_VOTE_CAST_ELSEWHERE_MESSAGE,
+	getBallotDeviceToken,
+	VOTE_CAST_ELSEWHERE_MESSAGE,
+} from "#/lib/ballot-device";
 import type { BallotData } from "#/server/voting";
 
 // `vi.mock` factories are hoisted above imports, so the mock fns themselves
@@ -337,6 +342,7 @@ describe("Ballot", () => {
 					category: "best_speaker",
 					voter: { kind: "member", id: "m-1" },
 					candidate: { kind: "member", id: "c-1" },
+					deviceToken: getBallotDeviceToken(),
 				},
 			});
 		});
@@ -388,6 +394,7 @@ describe("Ballot", () => {
 					category: "best_table_topics",
 					voter: { kind: "member", id: "m-1" },
 					candidate: { kind: "writeIn", name: "Bob Smith" },
+					deviceToken: getBallotDeviceToken(),
 				},
 			});
 		});
@@ -414,6 +421,7 @@ describe("Ballot", () => {
 					category: "best_table_topics",
 					voter: { kind: "member", id: "m-1" },
 					candidate: { kind: "writeIn", name: "Bob Smith" },
+					deviceToken: getBallotDeviceToken(),
 				},
 			});
 		});
@@ -493,6 +501,51 @@ describe("Ballot", () => {
 			// The selection is KEPT — the tick stays on the name that failed, so the
 			// voter knows which one to tap again.
 			expect(isTicked(button)).toBe(true);
+		});
+
+		// #765: a change from another device is refused, and "tap your choice
+		// again" is the wrong advice for it — re-tapping from this phone is
+		// refused every time. A member is offered sign-in, back to this page.
+		it("shows the member refusal with a Sign in link back to this page", async () => {
+			window.history.replaceState(null, "", "/club/c/meeting/m/vote?x=1");
+			getBallot.mockResolvedValue(
+				fixture({ best_speaker: open(["c-1", "Alex Speaker"]) }),
+			);
+			submitVote.mockRejectedValue(new Error(VOTE_CAST_ELSEWHERE_MESSAGE));
+			renderBallot();
+
+			await userEvent.click(
+				await screen.findByRole("button", { name: "Alex Speaker" }),
+			);
+
+			expect(await screen.findByText(VOTE_CAST_ELSEWHERE_MESSAGE)).toBeTruthy();
+			const link = screen.getByRole("link", { name: "Sign in" });
+			expect(link.getAttribute("href")).toBe(
+				`/signin?redirect=${encodeURIComponent("/club/c/meeting/m/vote?x=1")}`,
+			);
+			expect(screen.queryByText(/tap your choice again/i)).toBeNull();
+			expect(screen.queryByText(/Vote counted for/i)).toBeNull();
+		});
+
+		// A guest cannot sign in, so the refusal carries no action at all.
+		it("shows the guest refusal with no Sign in link", async () => {
+			getBallot.mockResolvedValue(
+				fixture({ best_speaker: open(["c-1", "Alex Speaker"]) }),
+			);
+			submitVote.mockRejectedValue(
+				new Error(GUEST_VOTE_CAST_ELSEWHERE_MESSAGE),
+			);
+			renderBallot(GUEST);
+
+			await userEvent.click(
+				await screen.findByRole("button", { name: "Alex Speaker" }),
+			);
+
+			expect(
+				await screen.findByText(GUEST_VOTE_CAST_ELSEWHERE_MESSAGE),
+			).toBeTruthy();
+			expect(screen.queryByRole("link", { name: "Sign in" })).toBeNull();
+			expect(screen.queryByText(/tap your choice again/i)).toBeNull();
 		});
 
 		it("moves the confirmation and the tick to the new name when the pick changes", async () => {
