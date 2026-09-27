@@ -217,6 +217,37 @@ describe("PathwaysProgress", () => {
 		expect(screen.queryByText("Up next")).toBeNull();
 	});
 
+	// #923: a catalog path with every level marked, Path Completion included,
+	// as `buildPathViewModel` now shapes it. It used to fall back to Level 1.
+	it("shows 'Path complete', not a Level 1 bar, for a fully marked catalog path", () => {
+		render(
+			<PathwaysProgress
+				paths={[
+					{
+						...base,
+						ringPercent: 100,
+						currentLevel: null,
+						complete: true,
+						workingLevel: null,
+						projectsLeftAtWorkingLevel: 0,
+						levels: [
+							{ level: 1, completed: 4, total: 4, approved: false },
+							{ level: 2, completed: 3, total: 3, approved: false },
+							{ level: 6, completed: 1, total: 1, approved: false },
+						],
+						levelsSource: "catalog",
+						hasBasecamp: false,
+					},
+				]}
+			/>,
+		);
+		expect(screen.getByText(/Path complete/)).toBeTruthy();
+		expect(screen.queryByText(/Level 1 ·/)).toBeNull();
+		// No chip is outlined as the level in progress.
+		const l1 = screen.getByText("L1");
+		expect(l1.className).not.toContain("border-primary");
+	});
+
 	describe("Education Series (#922)", () => {
 		const series: PathViewModel["upNextSeries"] = [
 			{

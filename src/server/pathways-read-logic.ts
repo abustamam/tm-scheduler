@@ -111,6 +111,10 @@ export interface PathViewModel {
 	status: CatalogPath["status"];
 	ringPercent: number; // 0–100 integer
 	currentLevel: number | null; // lowest not-approved; null when complete
+	/**
+	 * Base Camp: every level approved. Catalog: every level marked, Path
+	 * Completion included (#923), since nothing ever approves a catalog level.
+	 */
 	complete: boolean;
 	/**
 	 * The level the member is actually working on (#898): the lowest level that
@@ -118,8 +122,9 @@ export interface PathViewModel {
 	 * "lowest not approved". On the catalog branch nothing is ever approved, so
 	 * `currentLevel` is Level 1 forever; keying "Up next" off it left a member
 	 * who had marked all of Level 1 staring at "Level 1 · 4 of 4" with nothing
-	 * next. `currentLevel` and `complete` are unchanged, because the ring and
-	 * "Path complete" are about approval, and only Base Camp approves.
+	 * next. On a Base Camp path `currentLevel` and `complete` are about
+	 * approval; on a catalog path both follow the marks once nothing is left
+	 * (#923), so a finished path reads "Path complete", not Level 1.
 	 *
 	 * Path Completion (`PATH_COMPLETION_LEVEL`) can be the working level only on
 	 * the catalog branch, and only once levels 1–5 have nothing left. Base
@@ -471,13 +476,18 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	const total = levels.reduce((s, l) => s + l.total, 0);
 	const ringPercent =
 		total === 0 ? 0 : Math.min(100, Math.round((done / total) * 100));
-	const firstUnapproved = levels.find((l) => !l.approved);
-	const currentLevel = firstUnapproved ? firstUnapproved.level : null;
-	// On the catalog branch `approved` is always false, so a path is never
-	// reported complete off marks alone — only Base Camp closes a path.
-	const complete = !firstUnapproved;
 	const working = findWorkingLevel(levels, levelsSource);
 	const workingLevel = working ? working.level : null;
+	// Two meanings of "complete", one per source (#923). Base Camp closes a path
+	// by approving every level. Nothing approves a catalog level, so there it
+	// means every level is marked: nothing left anywhere, Path Completion
+	// included. Without this a fully marked catalog path fell back to Level 1,
+	// the first unapproved level, and read "Level 1 · 4 of 4".
+	const catalogComplete = levelsSource === "catalog" && working === null;
+	const firstUnapproved = levels.find((l) => !l.approved);
+	const currentLevel =
+		firstUnapproved && !catalogComplete ? firstUnapproved.level : null;
+	const complete = !firstUnapproved || catalogComplete;
 	const projectsLeftAtWorkingLevel = working ? projectsLeftAt(working) : 0;
 
 	const base = {
@@ -570,8 +580,8 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		let upNext: UpNextProject[] = [];
 		let upNextElectives: UpNextElectives | null = null;
 		// Keyed off the WORKING level, not `currentLevel` (#898), and gated on it
-		// alone: `complete` is about approval, so a catalog path in Path
-		// Completion still has something next.
+		// alone: on a Base Camp path `complete` is about approval, so the two
+		// can disagree.
 		if (workingLevel !== null) {
 			const workingCatalog = path.catalogProjects.filter(
 				(c) => c.level === workingLevel,

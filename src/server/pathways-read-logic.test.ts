@@ -414,7 +414,10 @@ describe("manual progress marks (#419)", () => {
 
 	// Only Base Camp approves a level. Inferring approval from marks would be
 	// exactly the over-crediting explicit marks exist to prevent.
-	it("never reports a path complete off marks alone", () => {
+	// Was "never reports a path complete off marks alone". #923 reversed it at
+	// the maintainer's decision: on a catalog path nothing ever approves a
+	// level, so "complete" means every level marked. Approval is still untouched.
+	it("reports a catalog path complete once every level is marked, approving nothing", () => {
 		const vm = buildPathViewModel({
 			courseCode: "8701",
 			pathName: "Presentation Mastery",
@@ -426,7 +429,7 @@ describe("manual progress marks (#419)", () => {
 			marks: [mark(1, "Ice Breaker")],
 		});
 		expect(vm.levels.every((l) => !l.approved)).toBe(true);
-		expect(vm.complete).toBe(false);
+		expect(vm.complete).toBe(true);
 		expect(vm.ringPercent).toBe(100); // 1 of 1 marked — the count is honest
 	});
 
@@ -713,6 +716,71 @@ describe("workingLevel (#898)", () => {
 		expect(done.workingLevel).toBeNull();
 		expect(done.projectsLeftAtWorkingLevel).toBe(0);
 		expect(done.upNext).toEqual([]);
+	});
+
+	// #923: nothing approves a catalog level, so `complete` never became true
+	// and a fully marked path fell back to `currentLevel`, Level 1.
+	describe("a fully marked catalog path (#923)", () => {
+		const catalog = [
+			...L1,
+			...L2,
+			project(PATH_COMPLETION_LEVEL, "Reflect on Your Path"),
+		];
+		const allMarked = [
+			...L1.map((p) => mark(1, p.name)),
+			mark(2, "Understanding Your Communication Style"),
+			mark(2, "Introduction to Toastmasters Mentoring"),
+			mark(2, "Active Listening", false),
+			mark(PATH_COMPLETION_LEVEL, "Reflect on Your Path"),
+		];
+
+		it("is complete, with no current or working level", () => {
+			const vm = catalogPath(allMarked, catalog);
+			expect(vm.levelsSource).toBe("catalog");
+			expect(vm.complete).toBe(true);
+			expect(vm.currentLevel).toBeNull();
+			expect(vm.workingLevel).toBeNull();
+			expect(vm.ringPercent).toBe(100);
+			// Still nothing approved: complete here means marked, not approved.
+			expect(vm.levels.every((l) => !l.approved)).toBe(true);
+		});
+
+		it("is not complete while Path Completion is still unmarked", () => {
+			const vm = catalogPath(
+				allMarked.filter((m) => m.level !== PATH_COMPLETION_LEVEL),
+				catalog,
+			);
+			expect(vm.complete).toBe(false);
+			expect(vm.currentLevel).toBe(1);
+			expect(vm.workingLevel).toBe(PATH_COMPLETION_LEVEL);
+		});
+
+		it("is not complete with only Level 1 marked; Level 2 is the working level", () => {
+			const vm = catalogPath(
+				L1.map((p) => mark(1, p.name)),
+				catalog,
+			);
+			expect(vm.complete).toBe(false);
+			expect(vm.currentLevel).toBe(1);
+			expect(vm.workingLevel).toBe(2);
+		});
+
+		it("leaves a Base Camp path with every level done but unapproved incomplete", () => {
+			const vm = buildPathViewModel({
+				courseCode: "8701",
+				pathName: "Presentation Mastery",
+				status: "current",
+				levels: [1, 2].map((n) => lv(n, 4, 4, false)),
+				wins: [],
+				catalogProjects: catalog,
+				pathLevels: catalogPathLevels,
+				marks: allMarked,
+			});
+			expect(vm.levelsSource).toBe("basecamp");
+			expect(vm.workingLevel).toBeNull();
+			expect(vm.complete).toBe(false);
+			expect(vm.currentLevel).toBe(1);
+		});
 	});
 
 	it("is null on a Base Camp path with levels 1–5 done, even unapproved", () => {
