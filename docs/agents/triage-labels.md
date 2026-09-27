@@ -38,8 +38,9 @@ plan prints both tags on its line.
 
 ### `migration` — run alone
 
-A labelled issue is placed serially rather than in a wave: a migration writes to the one `tm_test`
-database every parallel vitest run shares, so a concurrent agent fails in files it never touched.
+A labelled issue is placed serially rather than in a wave: two migrations generated in parallel
+collide on drizzle's sequence number and `meta/_journal.json`. (The older reason, one `tm_test`
+every parallel run shared, went away with #980: each worktree now has its own test database.)
 `isMigrationBearing` (`src/lib/issue-batching.ts`) also treats a cited `drizzle/` path as a signal,
 but that only fires once the migration is written — an issue *proposing* one has no path to cite,
 which is why the label carries the weight. Apply it at spec time, not after the fact.

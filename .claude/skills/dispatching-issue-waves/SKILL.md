@@ -132,8 +132,10 @@ Files this issue cites:
    you changed, most often — is yours and needs no citation. An EXISTING file that is not
    listed above is not yours: STOP and report the path instead of editing it.
 5. Green gates before you open the PR: everything CI's `check` job runs
-   (`.github/workflows/ci.yml`). `bun run test` needs `TEST_DATABASE_URL` or the
-   database-backed tests skip and the run still reads green — CLAUDE.md has the value.
+   (`.github/workflows/ci.yml`). Step 2 gave this worktree its own test database, so run
+   `bun run test` with NOTHING exported: an exported `TEST_DATABASE_URL` wins and puts you
+   back on the shared `tm_test`. If setup warned that it could not create one, stop and say
+   so rather than exporting one — CLAUDE.md has why.
 6. `gh pr create` with `Closes #<N>` in the body.
 7. STOP THERE. Do not merge, do not review your own PR, do not pick up another issue.
    Anything you noticed on the way follows CLAUDE.md's "What earns an issue": in the diff,
