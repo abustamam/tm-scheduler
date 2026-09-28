@@ -52,6 +52,10 @@ import {
 	user,
 	verification,
 } from "#/db/schema";
+import {
+	FEEDBACK_CLOSED_MESSAGE,
+	FEEDBACK_NOT_OPEN_MESSAGE,
+} from "#/lib/feedback-window";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { hasTestDb, testDb } from "#/test/db";
 import { findChrome } from "#/test/print-page-count";
@@ -103,6 +107,8 @@ interface Fixture {
 	personIds: string[];
 	pastMeetingId: string;
 	upcomingMeetingId: string;
+	/** Started the evening before the shifted instant: its feedback is open. */
+	feedbackMeetingId: string;
 }
 
 type Who = "signed-out" | "admin";
@@ -207,6 +213,14 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 	"/club/$clubId/meeting/$meetingId/word": {
 		who: "admin",
 		url: (f) => `/club/${f.slug}/meeting/${f.pastMeetingId}/word`,
+	},
+	// Public and session-less (#984), so swept signed out. Swept in its OPEN
+	// state, the one with the role cards: the fixture's meeting started the
+	// evening before the gate's instant, inside the window (start to scheduled
+	// end + 3 days, `src/lib/feedback-window.ts`).
+	"/club/$clubId/meeting/$meetingId/feedback": {
+		who: "signed-out",
+		url: (f) => `/club/${f.slug}/meeting/${f.feedbackMeetingId}/feedback`,
 	},
 	"/club/$clubId/meeting/$meetingId/me/theme": {
 		who: "admin",
@@ -472,6 +486,16 @@ async function seedFixture(nowMs: number): Promise<Fixture> {
 		paidAt: at(-31),
 	});
 
+	// Last night's meeting, feedback window open at the gate's instant, with
+	// one served role so the page has a card to render.
+	const lastNight = await meetingAt(-1, "scheduled");
+	await testDb.insert(roleSlots).values({
+		meetingId: lastNight,
+		roleDefinitionId: defId("Timer"),
+		assignedMemberId: member.evaluator,
+		status: "claimed",
+	});
+
 	const upcoming = await meetingAt(6, "scheduled");
 	await testDb.insert(roleSlots).values({
 		meetingId: upcoming,
@@ -490,6 +514,7 @@ async function seedFixture(nowMs: number): Promise<Fixture> {
 		personIds: personRows.map((p) => p.id),
 		pastMeetingId: past,
 		upcomingMeetingId: upcoming,
+		feedbackMeetingId: lastNight,
 	};
 }
 
@@ -670,6 +695,15 @@ describe("route hydration gate (#1000)", () => {
 					.filter((r) => r.ms > 120_000)
 					.map((r) => `${r.path}: ${r.ms}ms`),
 			).toEqual([]);
+		});
+
+		it("swept /feedback in its OPEN state, the one with role cards", () => {
+			const r = results.get("/club/$clubId/meeting/$meetingId/feedback");
+			if (ONLY.length && !r) return;
+			expect(r?.text).not.toContain(FEEDBACK_NOT_OPEN_MESSAGE);
+			expect(r?.text).not.toContain(FEEDBACK_CLOSED_MESSAGE);
+			// The one served role's holder, on a card.
+			expect(r?.text).toContain("Eve Evaluator");
 		});
 
 		it("hydrates every route without a mismatch", () => {

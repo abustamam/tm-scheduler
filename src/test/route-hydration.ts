@@ -39,6 +39,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { stopChromeAndRemoveDir } from "#/test/chrome-teardown";
 import { findChrome } from "#/test/print-page-count";
 
 export const REPO_ROOT = resolve(import.meta.dirname, "../..");
@@ -209,7 +210,11 @@ export async function startDevServer(opts: {
 			await exited;
 			clearTimeout(timer);
 		}
-		rmSync(dir, { recursive: true, force: true });
+		try {
+			rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+		} catch {
+			// A temp dir the OS reaps anyway must never fail the gate.
+		}
 	};
 
 	const deadline = Date.now() + 180_000;
@@ -251,6 +256,8 @@ export interface RouteResult {
 	mismatches: Mismatch[];
 	/** Wall time both loads took, for spotting a route that waits on a timeout. */
 	ms: number;
+	/** The page's visible text, for asserting WHICH state of a route rendered. */
+	text: string;
 }
 
 /**
@@ -342,6 +349,8 @@ export class HydrationBrowser {
 					LANG: `${this.client.locale.replace("-", "_")}.UTF-8`,
 				},
 				stdio: "ignore",
+				// Its own process group, so teardown can kill the renderers too.
+				detached: true,
 			},
 		);
 
@@ -507,7 +516,15 @@ export class HydrationBrowser {
 		const mismatches = [...new Set(this.errors)]
 			.filter((e) => HYDRATION_ERROR.test(e))
 			.map(parseHydrationError);
-		return { path, landed, hydrated, mismatches, ms: Date.now() - started };
+		const text = await this.evaluate<string>("document.body?.innerText ?? ''");
+		return {
+			path,
+			landed,
+			hydrated,
+			mismatches,
+			ms: Date.now() - started,
+			text,
+		};
 	}
 
 	/** What the page itself reports as its zone, locale and clock. */
@@ -517,20 +534,32 @@ export class HydrationBrowser {
 		);
 	}
 
-	async close(): Promise<void> {
+	/**
+	 * Stop Chrome and remove its profile, never throwing. `stopChromeAndRemoveDir`
+	 * (#972) kills the whole process group and waits for every member to exit
+	 * before removing the directory, with retries: removing it while a renderer
+	 * was still writing `Default/` failed this gate in CI with ENOTEMPTY and every
+	 * assertion green. `rm` is replaceable so a test can make the removal fail.
+	 */
+	async close(teardown: { rm?: (dir: string) => void } = {}): Promise<void> {
 		try {
 			this.ws?.close();
 		} catch {
 			// already closed
 		}
-		if (this.chrome && this.chrome.exitCode === null) {
-			const exited = new Promise<void>((done) =>
-				this.chrome.once("exit", done),
-			);
-			this.chrome.kill("SIGKILL");
-			await exited;
+		try {
+			if (this.chrome) {
+				await stopChromeAndRemoveDir(this.chrome, this.dir, teardown);
+			} else if (this.dir) {
+				(
+					teardown.rm ??
+					((d: string) =>
+						rmSync(d, { recursive: true, force: true, maxRetries: 5 }))
+				)(this.dir);
+			}
+		} catch {
+			// Cleanup is best-effort: a straggler must never fail the gate.
 		}
-		if (this.dir) rmSync(this.dir, { recursive: true, force: true });
 	}
 }
 
