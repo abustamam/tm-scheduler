@@ -59,19 +59,17 @@ export const Route = createFileRoute("/club/$clubId_/roles")({
 
 /**
  * Screen-only wayfinding pill (#542, F-009): this print-styled page has no
- * header/nav, and guests arriving via shared links dead-ended on it. Mirrors
- * the `PrintToolbar` chrome, pinned top-LEFT; hidden when printing by the
- * shared `.no-print` rule in `PRINT_PAGE_CSS` (the print page-count suite
- * reproduces it in the roles fixture). Truncates so a long club name cannot
- * collide with the toolbar on a phone. Shown in `chrome=none` mode too — the
- * shared link IS that mode, and its recipients are exactly who dead-ends.
+ * header/nav, and guests arriving via shared links dead-ended on it. It is the
+ * `PrintToolbar`'s `leading` item, so it shares the toolbar's in-flow row
+ * above the sheet (#998) instead of floating over it, and is hidden when
+ * printing with the rest of that row. Truncates so a long club name keeps the
+ * row to one line beside the toolbar card on a phone. Shown in `chrome=none`
+ * mode too: the shared link IS that mode, and its recipients are exactly who
+ * dead-ends.
  */
 const BACK_LINK_STYLE: React.CSSProperties = {
-	position: "fixed",
-	top: 12,
-	left: 12,
-	zIndex: 10,
 	display: "block",
+	minWidth: 0,
 	maxWidth: "min(48vw, 320px)",
 	overflow: "hidden",
 	textOverflow: "ellipsis",
@@ -101,16 +99,21 @@ function RoleSheet() {
 
 	return (
 		<div>
-			<Link
-				to="/club/$clubId"
-				params={{ clubId: clubIdParam }}
-				search={{ view: "roles", count: 8 }}
-				className="no-print roles-back"
-				style={BACK_LINK_STYLE}
+			<PrintToolbar
+				leading={
+					<Link
+						to="/club/$clubId"
+						params={{ clubId: clubIdParam }}
+						search={{ view: "roles", count: 8 }}
+						// `no-print` twice over (the toolbar row carries it too): kept
+						// so the pill stays off paper wherever it is mounted.
+						className="no-print roles-back"
+						style={BACK_LINK_STYLE}
+					>
+						← {club.name}
+					</Link>
+				}
 			>
-				← {club.name}
-			</Link>
-			<PrintToolbar>
 				{bare ? null : (
 					<ShareLinkButton
 						path={`/club/${clubIdParam}/roles?chrome=none`}
@@ -129,13 +132,6 @@ function RoleSheet() {
 					/* Inline styles can't express :hover — the pill is the page's
 					   primary wayfinding control and needs pointer feedback. */
 					.roles-back:hover { text-decoration: underline; }
-					/* Below ~600px the pill (maxWidth 48vw, top-left) and the fixed
-					   PrintToolbar (top-right) share a row and a long club name slides
-					   under the toolbar card — drop the pill onto its own row there.
-					   !important: top is set inline by BACK_LINK_STYLE. */
-					@media (max-width: 600px) {
-						.roles-back { top: 64px !important; }
-					}
 				}
 			`}</style>
 			<ClubRoleSheet

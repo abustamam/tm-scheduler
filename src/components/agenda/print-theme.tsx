@@ -12,6 +12,8 @@ import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 // Brand palette transcribed from templates/meeting-agenda/MeetingAgenda.dc.html.
 export const INK = "#173a40";
 export const LAGOON = "#328f97";
+/** The deepest lagoon step: white text on it is 5.8:1 (`--lagoon-ink`). */
+export const LAGOON_INK = "#246f76";
 export const TEAL = "#4fb8b2";
 export const MUTED = "#416166";
 export const GREEN = "#2f9e5b";
@@ -256,47 +258,103 @@ export function printPageCss(
 export const PRINT_PAGE_CSS = printPageCss();
 
 /**
- * The floating screen-only toolbar each print route pins top-right.
+ * The screen-only toolbar each print route shows above its sheet.
  *
- * `flexWrap` and `justifyContent` are load-bearing for the agenda and inert
- * elsewhere, which is why they are safe to share. The agenda's toolbar carries
- * four layout tabs plus Share and Print; anchored right with no width, an
- * unwrapped row grows leftward off the viewport on a phone, and a
- * `position: fixed` toolbar cannot be scrolled back to. On the two-control
- * toolbars there is nothing to wrap and no free space to justify, so both are
- * no-ops there.
+ * It sits IN THE DOCUMENT FLOW, top-right, and scrolls away with the page
+ * (#998). It used to be `position: fixed` over the sheet, and on a 375px phone
+ * the agenda's six controls wrap into a card ~112px tall that covered the club
+ * name, the date, the time and most of the roles block. Since #964's screen fit
+ * made the editorial and grid sheets exactly one screen tall there, no scroll
+ * position revealed them, and on the two-page layouts the header sat at the
+ * document top, permanently under the card. Taking part in the flow reserves
+ * the card's own height above the sheet, so no part of a sheet is ever under it
+ * at any scroll position and at any width. `print-toolbar-geometry.test.tsx`
+ * measures that in Chrome against a fixed-position control.
+ *
+ * `flexWrap` and `justifyContent` let the agenda's four layout tabs plus Share
+ * and Print wrap on a phone instead of running off the right edge, and keep the
+ * card right-aligned. On the two-control toolbars both are no-ops.
+ *
+ * `leading` is a left-hand item in the same row: the roles sheet's back link.
+ * Passing it here, rather than floating it separately, is what keeps it off the
+ * sheet too.
  */
 // Module-private: `PrintToolbar` is the surface, so a route cannot go back to
 // hand-assembling a toolbar from the raw style object.
-const PRINT_TOOLBAR_STYLE: React.CSSProperties = {
-	position: "fixed",
-	top: 12,
-	right: 12,
+const PRINT_TOOLBAR_ROW_STYLE: React.CSSProperties = {
+	// A stacking context above the sheet, so the offline banner mounted inside
+	// the toolbar (`OfflineBadge`, which pins itself) still paints on top.
+	position: "relative",
 	zIndex: 10,
 	display: "flex",
 	flexWrap: "wrap",
-	justifyContent: "flex-end",
+	alignItems: "flex-start",
 	gap: 8,
-	alignItems: "center",
-	background: "#fff",
-	borderRadius: 10,
-	padding: 6,
-	boxShadow: "0 6px 20px rgba(23,58,64,.18)",
+	padding: "12px 12px 0",
 };
 
-/** The screen-only toolbar wrapper. `no-print` is what `PRINT_PAGE_CSS` hides. */
-export function PrintToolbar({ children }: { children: React.ReactNode }) {
+/**
+ * The toolbar card pins its OWN light palette (#998). The card is always
+ * white, whatever the app theme, but the shadcn controls inside it (the
+ * Share button) take their ink and fills from the theme tokens. Under
+ * `html.dark` the Share button's text inherited `#d7ece8` and read 1.23:1 on
+ * this white. The tokens are custom properties, so re-declaring the light
+ * values here re-themes every descendant without touching `ShareLinkButton`,
+ * which is correct on the themed surfaces it also renders on. Literals, not
+ * `var(--sea-ink)`: under `.dark` those names already hold the dark values.
+ */
+const PRINT_TOOLBAR_STYLE: React.CSSProperties & Record<`--${string}`, string> =
+	{
+		display: "flex",
+		flexWrap: "wrap",
+		justifyContent: "flex-end",
+		gap: 8,
+		alignItems: "center",
+		marginLeft: "auto",
+		minWidth: 0,
+		background: "#fff",
+		borderRadius: 10,
+		padding: 6,
+		boxShadow: "0 6px 20px rgba(23,58,64,.18)",
+		colorScheme: "light",
+		color: INK,
+		"--background": MINT,
+		"--foreground": INK,
+		"--accent": "#e7f0e8",
+		"--accent-foreground": INK,
+		"--border": "rgba(23, 58, 64, 0.14)",
+		"--input": "rgba(23, 58, 64, 0.14)",
+		"--ring": LAGOON,
+	};
+
+/** The screen-only toolbar. `no-print` is what `PRINT_PAGE_CSS` hides. */
+export function PrintToolbar({
+	children,
+	leading,
+}: {
+	children: React.ReactNode;
+	leading?: React.ReactNode;
+}) {
 	return (
-		<div className="no-print" style={PRINT_TOOLBAR_STYLE}>
-			{children}
+		<div
+			className="no-print"
+			data-print-toolbar=""
+			style={PRINT_TOOLBAR_ROW_STYLE}
+		>
+			{leading}
+			<div style={PRINT_TOOLBAR_STYLE}>{children}</div>
 		</div>
 	);
 }
 
-/** Brand button style, tokenised — two routes hardcoded LAGOON's hex. */
+/**
+ * Brand button style. The fill is the deep lagoon step (`--lagoon-ink` in
+ * `styles.css`), not `LAGOON`: white 13px text on `LAGOON` measures 3.8:1,
+ * under AA, and #998 holds every text control in the toolbar to 4.5:1.
+ */
 const PRINT_BUTTON_STYLE: React.CSSProperties = {
 	padding: "6px 14px",
-	background: LAGOON,
+	background: LAGOON_INK,
 	color: "#fff",
 	border: 0,
 	borderRadius: 7,
