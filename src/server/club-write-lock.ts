@@ -14,7 +14,11 @@
  * | `saveMeetingAgendaAsClubTemplate`  | meeting FOR UPDATE, then club NO KEY UPDATE   |
  *
  * so a guest checking in while another joins the ballot, or while an officer
- * saves that meeting's agenda as a template, was a Postgres 40P01. Taking this
+ * saves that meeting's agenda as a template, was a Postgres 40P01. Two writers
+ * take it for a different reason: `leaveFeedbackLogic` (its per-club caps)
+ * and `collapseMemberships`, so a feedback note cannot land on a membership
+ * mid-merge and be cascaded away by its DELETE. `mergePeople` takes every club
+ * it will collapse in up front, in id order, before its first write. Taking this
  * lock before the first row lock serialises those writers per club, so the row
  * locks behind it are only ever contended by one of them at a time and the
  * order they take them in stops mattering between them. It ORDERS the rows; it
@@ -27,8 +31,9 @@
  * the values. Every other advisory lock in this app is a bigint — the MCP apply
  * lock (`mcp/lock.ts`, `hashtext(clubId)`), the guest-convert lock
  * (`lockClubConverts`), `submitAccessRequestLogic`'s global
- * `access-requests:submit` key, and the anonymous ballot's per-device
- * `ballot-anon:<session>:<device>` key (`castVote`, #982) — so this one uses
+ * `access-requests:submit` key, the anonymous ballot's per-device
+ * `ballot-anon:<session>:<device>` key (`castVote`, #982), and the per-member
+ * `attendance:<meeting>:<member>` key (`lockMemberAttendance`) — so this one uses
  * the two-int form, with a
  * fixed namespace as the first int. That is the property that matters, and it
  * is structural rather than probabilistic:
@@ -50,7 +55,7 @@
  * transaction, so a helper that takes it again under a caller that already
  * holds it is a no-op.
  */
-import { sql } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 import type { db } from "#/db";
 import { isLockTimeout } from "./pg-errors";
 
@@ -109,15 +114,31 @@ export async function lockClubForWrite(
 	clubId: string,
 	timeout: string = CLUB_WRITE_LOCK_TIMEOUT,
 ): Promise<void> {
+	await takeAdvisoryLockWithin(
+		tx,
+		sql`select pg_advisory_xact_lock(${CLUB_WRITE_LOCK_NAMESPACE}::int4, hashtext(${clubId}))`,
+		timeout,
+	);
+}
+
+/**
+ * Run one `pg_advisory_xact_lock` statement bounded by `timeout`, then put the
+ * transaction's own `lock_timeout` back — the mechanics `lockClubForWrite`
+ * documents above, shared so a second app lock does not re-derive them. Past
+ * the timeout it throws `CLUB_BUSY_MESSAGE` with the 55P03 on `cause`.
+ */
+export async function takeAdvisoryLockWithin(
+	tx: Tx,
+	lockStatement: SQL,
+	timeout: string = CLUB_WRITE_LOCK_TIMEOUT,
+): Promise<void> {
 	const saved = await tx.execute<{ prev: string }>(
 		sql`select current_setting('lock_timeout') as prev`,
 	);
 	const prev = saved.rows[0]?.prev ?? "0";
 	await tx.execute(sql`select set_config('lock_timeout', ${timeout}, true)`);
 	try {
-		await tx.execute(
-			sql`select pg_advisory_xact_lock(${CLUB_WRITE_LOCK_NAMESPACE}::int4, hashtext(${clubId}))`,
-		);
+		await tx.execute(lockStatement);
 	} catch (err) {
 		if (isLockTimeout(err)) throw new Error(CLUB_BUSY_MESSAGE, { cause: err });
 		throw err;

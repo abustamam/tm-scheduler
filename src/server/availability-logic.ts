@@ -4,7 +4,7 @@ import { roleSlots } from "#/db/schema";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { resolveActor } from "./attendance-actor-logic";
-import { setPlanStatus } from "./attendance-plan-logic";
+import { lockMemberAttendance, setPlanStatus } from "./attendance-plan-logic";
 import { assertClubNotArchived } from "./guards";
 
 type Database = typeof db;
@@ -109,6 +109,10 @@ export async function releaseSlotsAndMarkUnavailable(
 	// header. Before the transaction, so a refusal leaves nothing behind.
 	if (proof !== "session") throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 	return database.transaction(async (tx) => {
+		// Before the release, not before the `not_coming` write: an unverified
+		// claim that checked this member's answer must finish before we look for
+		// the roles to free, or its slot flips after we have looked.
+		await lockMemberAttendance(tx, args.meetingId, args.memberId);
 		const released = await tx
 			.update(roleSlots)
 			.set({

@@ -6,8 +6,18 @@
  * and the member-XOR-guest shape by check constraints. Exercised against a live
  * Postgres identified by TEST_DATABASE_URL; the whole suite skips when unset.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import {
 	activityLog,
 	clubs,
@@ -841,6 +851,95 @@ describe.skipIf(!hasTestDb)("castVote: device-bound change (#765)", () => {
  * private window) is another ballot — but the same device changing its mind
  * changes its one ballot, as every identified voter's re-tap does.
  */
+describe.skipIf(!hasTestDb)(
+	"meeting_votes.anonymous trigger (migration 0099)",
+	() => {
+		let seed: SeededClub;
+		let sessionId: string;
+
+		beforeAll(async () => {
+			// Push-synced test databases cannot see a trigger (CI migrates, so there it
+			// is already present). Installing the shipped file's own trigger
+			// statements proves that file rather than a copy of it, as the 0087 suite
+			// does. ONLY those: the backfill is safe once, not on replay — against a
+			// database other suites share it would mark any vote they have orphaned
+			// by then as anonymous.
+			const migration = readFileSync(
+				resolve(__dirname, "../../drizzle/0099_vengeful_malcolm_colcord.sql"),
+				"utf8",
+			);
+			const triggerStatements = migration
+				.split("--> statement-breakpoint")
+				.filter(
+					(s) => /\b(FUNCTION|TRIGGER)\b/.test(s) && !/^\s*UPDATE/m.test(s),
+				);
+			expect(triggerStatements).toHaveLength(3);
+			for (const statement of triggerStatements) {
+				await testDb.execute(sql.raw(statement));
+			}
+		});
+
+		beforeEach(async () => {
+			seed = await seedClub();
+			const [s] = await testDb
+				.insert(meetingVoteSessions)
+				.values({ meetingId: seed.meetingId, category: "best_speaker" })
+				.returning({ id: meetingVoteSessions.id });
+			sessionId = s.id;
+		});
+
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		});
+
+		const anonymousOf = async (id: string) =>
+			(
+				await testDb
+					.select({ anonymous: meetingVotes.anonymous })
+					.from(meetingVotes)
+					.where(eq(meetingVotes.id, id))
+			)[0]?.anonymous;
+
+		it("marks a voterless ballot anonymous when the INSERT does not name the column", async () => {
+			// What the previous container writes while the migration has run and it
+			// is still serving: the pre-0099 insert, which knows no such column. A
+			// DEFAULT false alone would call it identified and the new server would
+			// then count the phone's next change as a second vote.
+			const res = await testDb.execute(sql`
+			insert into meeting_votes (session_id, candidate_member_id, device_token)
+			values (${sessionId}, ${seed.adminMemberId}, ${PHONE})
+			returning id`);
+			expect(await anonymousOf((res.rows[0] as { id: string }).id)).toBe(true);
+		});
+
+		it("never marks a vote that names its voter anonymous, whatever the statement sends", async () => {
+			const [row] = await testDb
+				.insert(meetingVotes)
+				.values({
+					sessionId,
+					voterMemberId: seed.memberId,
+					candidateMemberId: seed.adminMemberId,
+					anonymous: true,
+				})
+				.returning({ id: meetingVotes.id });
+			expect(await anonymousOf(row.id)).toBe(false);
+		});
+
+		it("leaves the flag alone when a removal later nulls the voter", async () => {
+			const [row] = await testDb
+				.insert(meetingVotes)
+				.values({
+					sessionId,
+					voterMemberId: seed.memberId,
+					candidateMemberId: seed.adminMemberId,
+				})
+				.returning({ id: meetingVotes.id });
+			await testDb.delete(members).where(eq(members.id, seed.memberId));
+			expect(await anonymousOf(row.id)).toBe(false);
+		});
+	},
+);
+
 describe.skipIf(!hasTestDb)("castVote: an anonymous voter (#982)", () => {
 	let seed: SeededClub;
 	let sessionId: string;
@@ -1040,6 +1139,56 @@ describe.skipIf(!hasTestDb)("castVote: an anonymous voter (#982)", () => {
 		});
 		expect(all.find((r) => r.voterMemberId === null)).toMatchObject({
 			candidateMemberId: seed.adminMemberId,
+		});
+	});
+
+	it("never touches that identified vote once its voter is removed and its voter ids go NULL", async () => {
+		// Same phone, two ballots: the member's own for the member, and an
+		// anonymous one for the admin.
+		await castVote({
+			...anon({ candidate: { kind: "member", id: seed.memberId } }),
+			voter: { kind: "member", id: seed.memberId },
+		});
+		await castVote(anon());
+		// Removing the voter mid-vote SET NULLs `voter_member_id`, leaving a row
+		// with both voter ids NULL and device T — the anonymous ballot's shape.
+		// The slot the removed member held goes too (its candidate is SET NULL),
+		// so the vote is re-pointed at the admin's rival by hand afterwards.
+		await testDb.delete(members).where(eq(members.id, seed.memberId));
+		const [orphan] = await testDb
+			.update(meetingVotes)
+			.set({ candidateMemberId: seed.adminMemberId })
+			.where(
+				and(
+					eq(meetingVotes.sessionId, sessionId),
+					eq(meetingVotes.anonymous, false),
+				),
+			)
+			.returning({ id: meetingVotes.id });
+		expect(orphan).toBeDefined();
+
+		// The anonymous ballot changes its mind. Only IT may move: matching on
+		// "both voter ids NULL" moved the orphaned identified vote as well, so
+		// one tap from this phone took two votes off the admin.
+		const writeIn = "Table Topics Tam";
+		await castVote(anon({ candidate: { kind: "writeIn", name: writeIn } }));
+
+		const all = await testDb
+			.select({
+				id: meetingVotes.id,
+				candidateMemberId: meetingVotes.candidateMemberId,
+				candidateWriteIn: meetingVotes.candidateWriteIn,
+			})
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
+		expect(all).toHaveLength(2);
+		expect(all.find((r) => r.id === orphan.id)).toMatchObject({
+			candidateMemberId: seed.adminMemberId,
+			candidateWriteIn: null,
+		});
+		expect(all.find((r) => r.id !== orphan.id)).toMatchObject({
+			candidateMemberId: null,
+			candidateWriteIn: writeIn,
 		});
 	});
 

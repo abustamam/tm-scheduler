@@ -7,10 +7,12 @@ import {
 } from "#/db/schema";
 import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
+import { takeAdvisoryLockWithin } from "./club-write-lock";
 
 // Either the main db client or a drizzle transaction — so callers writing
 // inside their own transaction (e.g. `releaseSlotsAndMarkUnavailable`) can
 // pass `tx` and commit atomically with the rest of their change.
+type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
@@ -418,6 +420,48 @@ export async function clearPlanStatus(
 		detail: { memberId: args.memberId, status: null },
 	});
 	return { ok: true as const, cleared: true };
+}
+
+/** The advisory-lock key `lockMemberAttendance` takes. Exported so the race
+ *  test can hold the SAME key. */
+export function memberAttendanceLockKey(
+	meetingId: string,
+	memberId: string,
+): string {
+	return `attendance:${meetingId}:${memberId}`;
+}
+
+/**
+ * Serialise a decision on one member's answer for one meeting against the
+ * releasing decline that changes it.
+ *
+ * `releaseSlotsAndMarkUnavailable` frees every role a member holds and then
+ * records `not_coming`. An unverified claim in their name reads that answer and
+ * refuses over `not_coming` (ADR-0026) — but a read with no lock let a claim
+ * check, lose the race to a decline that released everything it could SEE and
+ * committed, then flip its still-open slot to the member: a role held by
+ * someone who had just said they cannot come, which neither order allows. Both
+ * take this key before anything else in their transaction, so one finishes
+ * before the other looks. A transaction-scoped bigint advisory lock, like the
+ * anonymous ballot's; nothing else takes a key with this prefix.
+ *
+ * Bounded like the club write lock (`takeAdvisoryLockWithin`): the claim that
+ * waits on it needs no session, member ids are public, and every waiter holds
+ * one of the pool's ten connections — so a decline stuck behind a slow slot
+ * lock could otherwise let a page of public claims starve the process.
+ * `timeout` is a parameter only so a test can wait less than the default.
+ */
+export async function lockMemberAttendance(
+	tx: Tx,
+	meetingId: string,
+	memberId: string,
+	timeout?: string,
+): Promise<void> {
+	await takeAdvisoryLockWithin(
+		tx,
+		sql`select pg_advisory_xact_lock(hashtextextended(${memberAttendanceLockKey(meetingId, memberId)}, 0))`,
+		timeout,
+	);
 }
 
 /**

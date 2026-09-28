@@ -36,6 +36,7 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { earliestDate } from "#/lib/person-identity";
+import { lockClubForWrite } from "./club-write-lock";
 
 /** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
@@ -62,6 +63,21 @@ export async function collapseMemberships(
 ): Promise<void> {
 	if (keeperId === absorbedId) return;
 
+	// The club write lock, before the first re-point. The anonymous feedback
+	// form (`role-feedback-logic.ts`) inserts under it, and nothing else stopped
+	// a note for the absorbed membership landing mid-merge: this re-pointed the
+	// notes it could see, the final DELETE waited for the insert, and the
+	// cascade took the new note. Now that writer finishes first or waits for the
+	// merge and then fails its FK.
+	//
+	// Not `FOR UPDATE` on the two memberships, which closes the same window for
+	// every writer and was the first attempt: a slot reassignment locks the slot
+	// then FK-locks its new holder, while this locks the holder then updates the
+	// slot, and a ballot cast holds its session `FOR SHARE` then FK-locks the
+	// voter, while this updates the session's opener — two deadlocks this
+	// function did not have. This advisory lock is taken first by every writer
+	// that takes it, so it orders nothing new.
+	await lockClubForWrite(tx, clubId);
 	const rows = await tx
 		.select()
 		.from(members)
