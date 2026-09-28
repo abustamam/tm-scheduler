@@ -1,5 +1,5 @@
 {
-  "id": "694eaf77-9a68-49fa-b652-08cf75871690",
+  "id": "a70f1601-d062-4ce7-98b5-c930c4785412",
   "prevId": "93ca0d42-91b5-4381-9d76-c95e0be2257e",
   "version": "7",
   "dialect": "postgresql",
@@ -6794,7 +6794,7 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
-          "default": "now()"
+          "default": "(date_trunc('day', now() at time zone 'UTC') at time zone 'UTC')"
         }
       },
       "indexes": {

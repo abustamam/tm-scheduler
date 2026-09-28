@@ -61,6 +61,7 @@ function payload(
 			closesAt: new Date(now + 3 * 86_400_000).toISOString(),
 			canWrite: true,
 			recipientsCanRead: false,
+			state: "open",
 			...window,
 		},
 		targets: [
@@ -77,6 +78,7 @@ function payload(
 
 beforeEach(() => {
 	localStorage.clear();
+	sessionStorage.clear();
 	vi.mocked(resolveClubOrRedirect).mockResolvedValue({
 		id: CLUB_ID,
 		slug: "downtown",
@@ -100,25 +102,27 @@ describe("feedback route loader (#984)", () => {
 		});
 	});
 
-	it("is open while the server says canWrite", async () => {
-		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(payload());
-		expect((await runLoader()).state).toBe("open");
+	it("passes the server's window state straight through", async () => {
+		for (const state of ["open", "notYet", "closed"] as const) {
+			vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(
+				payload({ state, canWrite: state === "open" }),
+			);
+			expect((await runLoader()).state).toBe(state);
+		}
 	});
 
-	it("is notYet before the meeting starts, closed after the window", async () => {
-		const later = new Date(Date.now() + 86_400_000).toISOString();
-		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(
-			payload({ canWrite: false, opensAt: later }),
-		);
-		expect((await runLoader()).state).toBe("notYet");
-
-		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(
-			payload({
-				canWrite: false,
-				opensAt: new Date(Date.now() - 5 * 86_400_000).toISOString(),
-			}),
-		);
-		expect((await runLoader()).state).toBe("closed");
+	it("never picks not-yet vs closed from the browser's clock", async () => {
+		// The server says "notYet"; the instants, read on a (wrong) local clock,
+		// would say closed. The server's answer wins.
+		vi.useFakeTimers({ now: Date.now() + 30 * 86_400_000 });
+		try {
+			vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(
+				payload({ state: "notYet", canWrite: false }),
+			);
+			expect((await runLoader()).state).toBe("notYet");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("is not indexed", () => {
@@ -222,9 +226,12 @@ describe("feedback page (#984)", () => {
 		).toBeNull();
 		expect(
 			JSON.parse(
-				localStorage.getItem(`gavelup:feedback-sent:${MEETING_ID}`) ?? "[]",
+				sessionStorage.getItem(`gavelup:feedback-sent:${MEETING_ID}`) ?? "[]",
 			),
 		).toEqual([`slot:${SLOT_ID}`]);
+
+		// Tab-scoped: nothing durable on a shared device says who wrote to whom.
+		expect(localStorage.length).toBe(0);
 
 		// Only a reminder: the card opens the form again.
 		await user.click(card);
@@ -233,8 +240,26 @@ describe("feedback page (#984)", () => {
 		).toBeTruthy();
 	});
 
-	it("keeps the Sent ✓ mark across a reload of the page", async () => {
-		localStorage.setItem(
+	it("still sends, and marks the card, when storage is refused", async () => {
+		vi.mocked(leaveFeedback).mockResolvedValue({ ok: true });
+		vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+			throw new DOMException("denied", "SecurityError");
+		});
+		vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+			throw new DOMException("denied", "SecurityError");
+		});
+		const user = userEvent.setup();
+		await renderPage("open");
+		await user.click(await screen.findByRole("button", { name: /Pat Lee/ }));
+		await user.type(screen.getByLabelText("What went well"), "Nice");
+		await user.click(screen.getByRole("button", { name: "Send anonymously" }));
+		expect(
+			await screen.findByRole("button", { name: /Pat Lee.*Sent/ }),
+		).toBeTruthy();
+	});
+
+	it("keeps the Sent ✓ mark across a reload in the same tab", async () => {
+		sessionStorage.setItem(
 			`gavelup:feedback-sent:${MEETING_ID}`,
 			JSON.stringify([`tableTopics:${TT_ID}`]),
 		);
@@ -258,7 +283,7 @@ describe("feedback page (#984)", () => {
 			"Feedback for this meeting has closed.",
 		);
 		expect(
-			localStorage.getItem(`gavelup:feedback-sent:${MEETING_ID}`),
+			sessionStorage.getItem(`gavelup:feedback-sent:${MEETING_ID}`),
 		).toBeNull();
 	});
 

@@ -24,6 +24,7 @@ import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	seedPerson,
@@ -44,7 +45,13 @@ const {
 	FEEDBACK_RECIPIENT_CAP_MESSAGE,
 	FEEDBACK_TARGET_MESSAGE,
 	FEEDBACK_TOO_LONG_MESSAGE,
+	FEEDBACK_BAD_TEXT_MESSAGE,
+	FEEDBACK_GENERIC_ERROR_MESSAGE,
+	FEEDBACK_RATE_LIMIT_MESSAGE,
+	publicFeedbackError,
 } = await import("#/server/role-feedback-logic");
+const { lockClubForWrite } = await import("#/server/club-write-lock");
+const { FEEDBACK_IP_LIMIT } = await import("#/server/feedback-rate-limit");
 const { loadMeetingSlots } = await import("#/server/meeting-slots-logic");
 
 const MIN = 60_000;
@@ -577,3 +584,133 @@ describe.skipIf(!hasTestDb)("loadFeedbackForUser (#984)", () => {
 		expect(seen[0]?.n).toBe(1);
 	});
 });
+
+const UUID_ANYWHERE =
+	/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+describe("publicFeedbackError (#984 review)", () => {
+	it("passes the app's own refusals through unchanged", () => {
+		const err = new Error(FEEDBACK_RECIPIENT_CAP_MESSAGE);
+		expect(publicFeedbackError(err)).toBe(err);
+	});
+
+	it("turns anything else, e.g. a driver error naming the insert, into the generic message", () => {
+		const raw = new Error(
+			'Failed query: insert into "role_feedback_notes" … params: 11111111-2222-4333-8444-555555555555,…',
+		);
+		const out = publicFeedbackError(raw);
+		expect(out.message).toBe(FEEDBACK_GENERIC_ERROR_MESSAGE);
+		expect(out.message).not.toMatch(UUID_ANYWHERE);
+		expect(publicFeedbackError("a string").message).toBe(
+			FEEDBACK_GENERIC_ERROR_MESSAGE,
+		);
+	});
+});
+
+describe.skipIf(!hasTestDb)(
+	"leaveFeedbackLogic — review hardening (#984)",
+	() => {
+		it("refuses a NUL with its own message, and the error names no id", async () => {
+			const s = await liveMeeting();
+			const err = await leaveFeedbackLogic({
+				...timerNote(s),
+				wentWell: "good\u0000job",
+			}).catch((e: unknown) => e);
+			expect(err).toBeInstanceOf(Error);
+			expect((err as Error).message).toBe(FEEDBACK_BAD_TEXT_MESSAGE);
+			expect(String(err)).not.toMatch(UUID_ANYWHERE);
+			expect(await notesFor(s.meetingId)).toHaveLength(0);
+		});
+
+		/**
+		 * Hold the club write lock in another transaction, then send. A refusal the
+		 * pre-check can make must come back at once with its OWN message; without
+		 * the pre-check it would queue behind the lock for its 5s timeout and come
+		 * back as "busy".
+		 */
+		async function whileLockHeld(clubId: string, send: () => Promise<unknown>) {
+			const holder = await openBlockingTx(async (tx) => {
+				await lockClubForWrite(tx, clubId);
+			});
+			try {
+				const started = Date.now();
+				const err = await send().catch((e: unknown) => e);
+				return { err, ms: Date.now() - started };
+			} finally {
+				await holder.commit();
+			}
+		}
+
+		it("refuses a closed window without waiting on the club lock", async () => {
+			const s = await liveMeeting();
+			const { err, ms } = await whileLockHeld(s.clubId, () =>
+				leaveFeedbackLogic(timerNote(s), () => new Date(Date.now() + 10 * DAY)),
+			);
+			expect((err as Error).message).toBe(FEEDBACK_CLOSED_MESSAGE);
+			expect(ms).toBeLessThan(2000);
+		});
+
+		it("refuses a full recipient cap without waiting on the club lock", async () => {
+			const s = await liveMeeting();
+			await testDb.insert(roleFeedbackNotes).values(
+				Array.from({ length: 20 }, () => ({
+					clubId: s.clubId,
+					meetingId: s.meetingId,
+					recipientMemberId: s.memberId,
+					roleLabel: "Timer",
+					wentWell: "seed",
+				})),
+			);
+			const { err, ms } = await whileLockHeld(s.clubId, () =>
+				leaveFeedbackLogic(timerNote(s)),
+			);
+			expect((err as Error).message).toBe(FEEDBACK_RECIPIENT_CAP_MESSAGE);
+			expect(ms).toBeLessThan(2000);
+		});
+
+		it("limits one address to a handful of notes a minute; another address is unaffected", async () => {
+			const s = await liveMeeting();
+			const ip = `198.51.100.${Math.floor(Math.random() * 250)}-${randomUUID()}`;
+			for (let i = 0; i < FEEDBACK_IP_LIMIT; i++) {
+				await leaveFeedbackLogic(timerNote(s, `n${i}`), undefined, ip);
+			}
+			await expect(
+				leaveFeedbackLogic(timerNote(s, "one more"), undefined, ip),
+			).rejects.toThrow(FEEDBACK_RATE_LIMIT_MESSAGE);
+			await leaveFeedbackLogic(
+				timerNote(s, "other phone"),
+				undefined,
+				`other-${randomUUID()}`,
+			);
+			expect(await notesFor(s.meetingId)).toHaveLength(FEEDBACK_IP_LIMIT + 1);
+		});
+
+		it("does not count an attempt the pre-check refused against the address", async () => {
+			const s = await liveMeeting();
+			const ip = `refused-${randomUUID()}`;
+			for (let i = 0; i < FEEDBACK_IP_LIMIT + 3; i++) {
+				await leaveFeedbackLogic(
+					timerNote(s),
+					() => new Date(Date.now() + 10 * DAY),
+					ip,
+				).catch(() => {});
+			}
+			await leaveFeedbackLogic(timerNote(s), undefined, ip);
+			expect(await notesFor(s.meetingId)).toHaveLength(1);
+		});
+
+		it("stores created_at at DAY granularity, so a note's time cannot place its writer", async () => {
+			const s = await liveMeeting();
+			await leaveFeedbackLogic(timerNote(s));
+			const [note] = await notesFor(s.meetingId);
+			const at = note?.createdAt as Date;
+			expect(at.getUTCHours()).toBe(0);
+			expect(at.getUTCMinutes()).toBe(0);
+			expect(at.getUTCSeconds()).toBe(0);
+			expect(at.getUTCMilliseconds()).toBe(0);
+			expect(at.toISOString().slice(0, 10)).toBe(
+				new Date().toISOString().slice(0, 10),
+			);
+		});
+	},
+);

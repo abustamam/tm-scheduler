@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { FEEDBACK_TEXT_MAX } from "#/lib/feedback-window";
 import {
@@ -37,9 +38,12 @@ export const getFeedbackTargetsPublic = createServerFn({ method: "GET" })
 
 // A little slack over the trimmed cap, so a note with surrounding whitespace is
 // judged by the logic's own trimmed rule rather than refused here.
+// A NUL is refused here AND in the logic (`cleanText`): Postgres rejects it in
+// `text` (22021), and the driver's error would otherwise name the insert.
 const textField = z
 	.string()
 	.max(FEEDBACK_TEXT_MAX * 2)
+	.refine((v) => !v.includes("\u0000"), "Invalid character.")
 	.nullish();
 
 const leaveInput = z.object({
@@ -60,4 +64,15 @@ const leaveInput = z.object({
  */
 export const leaveFeedback = createServerFn({ method: "POST" })
 	.validator((input: unknown) => leaveInput.parse(input))
-	.handler(async ({ data }): Promise<{ ok: true }> => leaveFeedbackLogic(data));
+	.handler(
+		async ({ data }): Promise<{ ok: true }> =>
+			// `x-real-ip` is what Railway's edge sets; `x-forwarded-for` is
+			// client-settable, so it would let a caller pick its own bucket (the
+			// same reasoning, and the same header, as Better Auth's limiter in
+			// `src/lib/auth.ts`, #847). Used for the in-memory limiter only.
+			leaveFeedbackLogic(
+				data,
+				undefined,
+				getRequest().headers.get("x-real-ip"),
+			),
+	);

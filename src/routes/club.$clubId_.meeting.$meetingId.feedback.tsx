@@ -10,7 +10,11 @@ import { Button } from "#/components/ui/button";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
 import { resolveClubOrRedirect } from "#/lib/club-route";
-import { FEEDBACK_TEXT_MAX } from "#/lib/feedback-window";
+import {
+	FEEDBACK_CLOSED_MESSAGE,
+	FEEDBACK_NOT_OPEN_MESSAGE,
+	FEEDBACK_TEXT_MAX,
+} from "#/lib/feedback-window";
 import { formatMeetingDate } from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
@@ -18,9 +22,6 @@ import {
 	getFeedbackTargetsPublic,
 	leaveFeedback,
 } from "#/server/role-feedback";
-
-/** Which copy the page shows, decided in the loader off the SERVER's window. */
-export type FeedbackPageState = "open" | "notYet" | "closed";
 
 // Escapes the `/club/$clubId` shell (trailing `_`), like the ballot: this is the
 // PUBLIC, no-auth page where anyone in the room leaves an anonymous note about a
@@ -42,11 +43,9 @@ export const Route = createFileRoute(
 			throw err;
 		});
 		if (!data) throw notFound();
-		const state: FeedbackPageState = data.window.canWrite
-			? "open"
-			: Date.now() < Date.parse(data.window.opensAt)
-				? "notYet"
-				: "closed";
+		// The server decided the state on ITS clock; the visitor's clock may be
+		// wrong, and must not choose between "not yet" and "closed".
+		const state = data.window.state;
 		return {
 			clubName: club.name,
 			clubNumber: club.clubNumber,
@@ -71,15 +70,22 @@ function FeedbackNotFound() {
 	);
 }
 
-/** Per-meeting, per-device reminder of which cards this phone has sent to.
- *  Only a reminder: the card stays tappable, and nothing server-side reads it. */
+/**
+ * Per-meeting reminder of which cards this TAB has sent to. Only a reminder:
+ * the card stays tappable, and nothing server-side reads it.
+ *
+ * `sessionStorage`, never `localStorage`: a phone passed round the room, or a
+ * shared family tablet, would otherwise keep a durable record of who wrote to
+ * whom — the one thing an anonymous note must not leave behind. It ends with
+ * the tab. Every access is wrapped: a private window can refuse storage.
+ */
 const sentKey = (meetingId: string) => `gavelup:feedback-sent:${meetingId}`;
 const targetKey = (t: Pick<FeedbackTarget, "kind" | "id">) =>
 	`${t.kind}:${t.id}`;
 
 function readSent(meetingId: string): string[] {
 	try {
-		const raw = localStorage.getItem(sentKey(meetingId));
+		const raw = sessionStorage.getItem(sentKey(meetingId));
 		const v = raw ? JSON.parse(raw) : [];
 		return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 	} catch {
@@ -89,9 +95,9 @@ function readSent(meetingId: string): string[] {
 
 function writeSent(meetingId: string, keys: string[]): void {
 	try {
-		localStorage.setItem(sentKey(meetingId), JSON.stringify(keys));
+		sessionStorage.setItem(sentKey(meetingId), JSON.stringify(keys));
 	} catch {
-		// A private window can refuse storage; the mark is only a reminder.
+		// Storage refused; the mark is only a reminder.
 	}
 }
 
@@ -137,14 +143,14 @@ function FeedbackPage() {
 						data-testid="feedback-state"
 						className="rounded-xl border border-border bg-muted/60 px-4 py-3 text-center text-sm font-medium text-muted-foreground"
 					>
-						Feedback opens when the meeting starts.
+						{FEEDBACK_NOT_OPEN_MESSAGE}
 					</p>
 				) : state === "closed" ? (
 					<p
 						data-testid="feedback-state"
 						className="rounded-xl border border-border bg-muted/60 px-4 py-3 text-center text-sm font-medium text-muted-foreground"
 					>
-						Feedback for this meeting has closed.
+						{FEEDBACK_CLOSED_MESSAGE}
 					</p>
 				) : selected ? (
 					<FeedbackForm

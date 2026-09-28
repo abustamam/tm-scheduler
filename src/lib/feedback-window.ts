@@ -60,6 +60,30 @@ export function feedbackWindow(
 	};
 }
 
+/** Where `now` falls against a window, ignoring cancellation (callers refuse a
+ *  cancelled meeting before asking). */
+export type FeedbackWindowState = "notYet" | "open" | "closed";
+
+/**
+ * The ONE place open / not-yet / closed is decided. Both the public page (via
+ * the state the server computes into its payload) and the write's refusal
+ * read this, so the copy a visitor sees and the reason a write is refused can
+ * never disagree.
+ */
+export function feedbackWindowState(
+	window: Pick<FeedbackWindow, "opensAt" | "closesAt">,
+	now: Date,
+): FeedbackWindowState {
+	const t = now.getTime();
+	if (t < window.opensAt.getTime()) return "notYet";
+	if (t >= window.closesAt.getTime()) return "closed";
+	return "open";
+}
+
+export const FEEDBACK_NOT_OPEN_MESSAGE =
+	"Feedback opens when the meeting starts.";
+export const FEEDBACK_CLOSED_MESSAGE = "Feedback for this meeting has closed.";
+
 /** Each prompt's cap, counted after trimming. */
 export const FEEDBACK_TEXT_MAX = 500;
 /** Notes one recipient may receive at one meeting. */

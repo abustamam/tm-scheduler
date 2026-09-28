@@ -492,6 +492,7 @@ describe("feedback resolves a date key (#984)", () => {
 			closesAt: "2026-09-29T19:45:00Z",
 			canWrite: false,
 			recipientsCanRead: true,
+			state: "closed" as const,
 		},
 		targets: [],
 	});

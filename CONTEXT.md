@@ -490,14 +490,22 @@ the nouns in `src/db/schema.ts`.
   `/club/…/meeting/…/feedback`, linked from the meeting page and the in-room strip while it is open.
   **Anonymity is structural**: the table has no column for the writer — no user, member, device, IP
   or guest id — and the write (`leaveFeedbackLogic`) takes none and returns only `{ ok }`, not even
-  the row id. The recipient and the `role_label` snapshot are derived server-side from the meeting's
+  the row id. `created_at` is stored at DAY granularity (midnight UTC) and notes are ordered by it
+  and then a random id, so a note's time cannot be matched to who held a phone when. The page's
+  "Sent ✓" reminder lives in `sessionStorage`, so it ends with the tab rather than leaving a
+  durable who-wrote-to-whom record on a shared device. A failure the caller is not meant to read
+  (a driver error names columns and ids) reaches them only as a generic message
+  (`publicFeedbackError`). The recipient and the `role_label` snapshot are derived server-side from the meeting's
   rows at write time, so a note attaches to whoever held the role when it was written. **Window**
   (`feedbackWindow`, `src/lib/feedback-window.ts`): writable from the meeting's start
   (`scheduled_at`) until three days after its scheduled end (`scheduled_at + length_minutes`), on
   the SERVER's clock; readable by the recipient from that scheduled end. A cancelled meeting has no
   feedback page, and an archived club takes no new notes (checked under the club lock) while its
   members can still read the ones they were given. **Caps**: 20 notes per recipient per meeting and
-  300 per meeting, counted under the club write lock so concurrent writers cannot overshoot. Officers
+  300 per meeting, counted under the club write lock so concurrent writers cannot overshoot, and
+  checked first on an unlocked read so a refusal never queues on that lock. In front of the lock, a
+  process-local speed bump of 5 notes a minute per client address (`x-real-ip`), held in memory as a
+  salted hash, never stored or logged. Officers
   never see notes; the recipient reads (and, from part 2, deletes) their own. **Removal runbook**:
   v1 has no superadmin UI. On request, a superadmin verifies the note WITH THE RECIPIENT, then runs
   `DELETE FROM role_feedback_notes WHERE id = '…'` by hand. There is no report queue.

@@ -1,10 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-	createFileRoute,
-	Link,
-	notFound,
-	useRouter,
-} from "@tanstack/react-router";
+import { createFileRoute, notFound, useRouter } from "@tanstack/react-router";
 import {
 	CalendarDays,
 	ClipboardList,
@@ -13,7 +8,6 @@ import {
 	Loader2,
 	Lock,
 	MapPin,
-	MessageSquareHeart,
 	Sparkles,
 	Video,
 	WifiOff,
@@ -33,6 +27,7 @@ import { DigitalVotingSwitch } from "#/components/club/digital-voting-switch";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
+import { MeetingFeedbackLink } from "#/components/club/meeting-feedback-link";
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
@@ -1672,19 +1667,12 @@ function MeetingView() {
 					feedbackOpen={feedbackOpen}
 					promptIdentity={promptIdentity}
 				/>
-				{/* The in-room strip carries its own "Leave feedback" button, so the
-				    page's link steps aside while the strip is showing (#984). */}
-				{feedbackOpen && !inRoom ? (
-					<Link
-						to="/club/$clubId/meeting/$meetingId/feedback"
-						params={{ clubId, meetingId: urlKey }}
-						data-testid="meeting-leave-feedback"
-						className="flex w-fit items-center gap-1.5 text-sm font-medium text-primary underline-offset-4 hover:underline"
-					>
-						<MessageSquareHeart className="size-4" aria-hidden />
-						Leave feedback
-					</Link>
-				) : null}
+				<MeetingFeedbackLink
+					open={feedbackOpen}
+					inRoom={inRoom}
+					clubId={clubId}
+					meetingKey={urlKey}
+				/>
 				<MeetingNavStrip clubId={clubId} items={navItems} />
 				{/* Same predicate the "Word poster" button below uses, so the chip
 				    and the button agree about whether there is a word. Consistency,

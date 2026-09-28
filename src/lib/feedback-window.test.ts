@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { feedbackWindow } from "./feedback-window";
+import { feedbackWindow, feedbackWindowState } from "./feedback-window";
 
 const START = new Date("2026-10-03T16:00:00.000Z");
 const at = (ms: number) => new Date(START.getTime() + ms);
@@ -69,5 +69,33 @@ describe("feedbackWindow", () => {
 			at(MIN),
 		);
 		expect(w.canWrite).toBe(true);
+	});
+});
+
+describe("feedbackWindowState", () => {
+	const w = feedbackWindow(
+		{ scheduledAt: START, lengthMinutes: 60, status: "scheduled" },
+		START,
+	);
+	const close = 60 * MIN + 3 * DAY;
+
+	it("is notYet before the start and open AT it", () => {
+		expect(feedbackWindowState(w, at(-1))).toBe("notYet");
+		expect(feedbackWindowState(w, START)).toBe("open");
+	});
+
+	it("is open just before the close and closed AT it", () => {
+		expect(feedbackWindowState(w, at(close - 1))).toBe("open");
+		expect(feedbackWindowState(w, at(close))).toBe("closed");
+	});
+
+	it("agrees with canWrite for a meeting that is not cancelled", () => {
+		const m = { scheduledAt: START, lengthMinutes: 60, status: "scheduled" };
+		for (const t of [-1, 0, 30 * MIN, close - 1, close, close + DAY]) {
+			const now = at(t);
+			expect(feedbackWindowState(feedbackWindow(m, now), now) === "open").toBe(
+				feedbackWindow(m, now).canWrite,
+			);
+		}
 	});
 });

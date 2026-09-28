@@ -1881,8 +1881,16 @@ export const roleFeedbackNotes = pgTable(
 		tryNext: text("try_next"),
 		// Set by part 2 (#986) when the recipient's dashboard shows the note.
 		seenAt: timestamp("seen_at", { withTimezone: true }),
+		// DAY granularity, on purpose (#984 review): a note's exact second could
+		// be matched against who was holding a phone at that moment, which is
+		// exactly the writer identity this table refuses to keep. Midnight UTC of
+		// the day it was written, set by the default — never write this column.
+		// Order notes by it and then by `id` (random), so insertion order within
+		// a day is not recoverable either.
 		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
+			.default(
+				sql`(date_trunc('day', now() at time zone 'UTC') at time zone 'UTC')`,
+			)
 			.notNull(),
 	},
 	(t) => [

@@ -9,7 +9,7 @@ CREATE TABLE "role_feedback_notes" (
 	"went_well" text,
 	"try_next" text,
 	"seen_at" timestamp with time zone,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"created_at" timestamp with time zone DEFAULT (date_trunc('day', now() at time zone 'UTC') at time zone 'UTC') NOT NULL,
 	CONSTRAINT "role_feedback_notes_has_text" CHECK (coalesce(length("role_feedback_notes"."went_well"),0) + coalesce(length("role_feedback_notes"."try_next"),0) > 0),
 	CONSTRAINT "role_feedback_notes_single_target" CHECK ("role_feedback_notes"."role_slot_id" is null or "role_feedback_notes"."table_topics_speaker_id" is null)
 );

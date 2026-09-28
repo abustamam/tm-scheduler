@@ -549,7 +549,7 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	"role-feedback.ts#leaveFeedback": {
 		class: "public-intake",
 		reason:
-			"anonymous role feedback: no writer identity stored; server-clock window start → end + 3 days; ≤500 chars per box; ≤20 per recipient and ≤300 per meeting counted under the club lock; archive-gated under that lock (#984)",
+			"anonymous role feedback: no writer identity stored; server-clock window start → end + 3 days; ≤500 chars per box; ≤20 per recipient and ≤300 per meeting counted under the club lock (pre-checked unlocked first); ≤5 per minute per client address in memory (salted hash, never stored); archive-gated under that lock (#984)",
 	},
 };
 
