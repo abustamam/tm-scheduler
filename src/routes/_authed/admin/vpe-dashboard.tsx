@@ -184,7 +184,9 @@ function VpeDashboard() {
 				{lapsed.length === 0 ? (
 					<EmptyRow>Nobody has dropped off the radar. 🎉</EmptyRow>
 				) : (
-					lapsed.map((m) => <LapseRow key={m.memberId} member={m} />)
+					lapsed.map((m) => (
+						<LapseRow key={m.memberId} member={m} timezone={timezone} />
+					))
 				)}
 			</Section>
 
@@ -262,7 +264,9 @@ function VpeDashboard() {
 				{pairings.length === 0 ? (
 					<EmptyRow>No evaluations recorded yet.</EmptyRow>
 				) : (
-					pairings.map((p) => <PairingRow key={p.memberId} row={p} />)
+					pairings.map((p) => (
+						<PairingRow key={p.memberId} row={p} timezone={timezone} />
+					))
 				)}
 			</Section>
 		</PageContainer>
@@ -444,7 +448,7 @@ function OverdueRow({
 				<span className="font-bold text-[var(--warning-strong)]">{wait}</span>
 				<div className="text-xs text-[var(--sea-ink-soft)]">
 					{member.lastAnyRoleAt
-						? `last: ${formatShortDate(member.lastAnyRoleAt)}`
+						? `last: ${formatShortDate(member.lastAnyRoleAt, timezone)}`
 						: "no role history"}
 				</div>
 			</div>
@@ -453,7 +457,13 @@ function OverdueRow({
 	);
 }
 
-function LapseRow({ member }: { member: AttendanceLapseRow }) {
+function LapseRow({
+	member,
+	timezone,
+}: {
+	member: AttendanceLapseRow;
+	timezone?: string;
+}) {
 	// The rate is CONTEXT beside the streak, not a substitute for it — an
 	// officer wants to know whether this is someone who was always patchy or
 	// someone reliable who just stopped. Rendering it only when lastSeenAt is
@@ -463,7 +473,7 @@ function LapseRow({ member }: { member: AttendanceLapseRow }) {
 	const rate =
 		member.rate === null ? null : `${Math.round(member.rate * 100)}% attended`;
 	const seen = member.lastSeenAt
-		? `last seen ${formatShortDate(member.lastSeenAt)}`
+		? `last seen ${formatShortDate(member.lastSeenAt, timezone)}`
 		: "never recorded present";
 	return (
 		<Link
@@ -527,7 +537,7 @@ function RotationRow({
 				{row.lastSpokenAt ? (
 					<>
 						<span className="font-bold text-[var(--sea-ink)]">
-							{formatShortDate(row.lastSpokenAt)}
+							{formatShortDate(row.lastSpokenAt, timezone)}
 						</span>
 						<div className="text-xs text-[var(--sea-ink-soft)]">
 							{row.timesSpoken} time{row.timesSpoken === 1 ? "" : "s"}
@@ -620,7 +630,13 @@ function ProximityRow({
  * on the phone a VPE actually assigns roles from. Wrapping chips cost nothing
  * at desktop width and stay readable at 375px.
  */
-function PairingRow({ row }: { row: EvaluatorPairingRow }) {
+function PairingRow({
+	row,
+	timezone,
+}: {
+	row: EvaluatorPairingRow;
+	timezone?: string;
+}) {
 	return (
 		<Link
 			to="/members/$id"
@@ -638,7 +654,11 @@ function PairingRow({ row }: { row: EvaluatorPairingRow }) {
 				<div className="mt-2 pl-[50px]">
 					<div className="flex flex-wrap items-center gap-1.5">
 						{row.recent.map((p) => (
-							<PairingChip key={`${p.meetingId}:${p.evaluatorKey}`} pair={p} />
+							<PairingChip
+								key={`${p.meetingId}:${p.evaluatorKey}`}
+								pair={p}
+								timezone={timezone}
+							/>
 						))}
 					</div>
 					{/* The repeat statement is TEXT, not just the amber chips. Colour
@@ -674,7 +694,13 @@ function PairingRow({ row }: { row: EvaluatorPairingRow }) {
  * the roster is exactly the pairing an assigner would otherwise not think to
  * count, and a chip that looks like every other one hides that.
  */
-function PairingChip({ pair }: { pair: EvaluationPair }) {
+function PairingChip({
+	pair,
+	timezone,
+}: {
+	pair: EvaluationPair;
+	timezone?: string;
+}) {
 	return (
 		<span
 			className={cn(
@@ -696,7 +722,7 @@ function PairingChip({ pair }: { pair: EvaluationPair }) {
 			    be years old — and a year-less date reads exactly like this
 			    year's, letting a stale repeat drive "vary the next one". */}
 			<span className="whitespace-nowrap text-[var(--sea-ink-soft)]">
-				{formatHistoryDate(pair.scheduledAt)}
+				{formatHistoryDate(pair.scheduledAt, { timeZone: timezone })}
 			</span>
 		</span>
 	);
