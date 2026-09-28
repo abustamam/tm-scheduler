@@ -35,6 +35,13 @@ const CLUB_ID = "11111111-1111-4111-8111-111111111111";
 const MEETING_ID = "22222222-2222-4222-8222-222222222222";
 const SLOT_ID = "33333333-3333-4333-8333-333333333333";
 const TT_ID = "44444444-4444-4444-8444-444444444444";
+const PAT = "55555555-5555-4555-8555-555555555555";
+const SAM = "66666666-6666-4666-8666-666666666666";
+const ROBIN = "77777777-7777-4777-8777-777777777777";
+const CASEY = "88888888-8888-4888-8888-888888888888";
+const TIMER_DEF = "99999999-9999-4999-8999-999999999999";
+const SPEAKER_DEF = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const GRAM_DEF = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const location = { href: "/club/downtown/meeting/2026-10-03/feedback" };
 const params = { clubId: "downtown", meetingId: "2026-10-03" };
 
@@ -65,13 +72,33 @@ function payload(
 			...window,
 		},
 		targets: [
-			{ kind: "slot", id: SLOT_ID, memberName: "Pat Lee", roleLabel: "Timer" },
+			{
+				kind: "slot",
+				id: SLOT_ID,
+				memberName: "Pat Lee",
+				roleLabel: "Timer",
+				recipientMemberId: PAT,
+				roleDefinitionId: TIMER_DEF,
+				recipientActive: true,
+			},
 			{
 				kind: "tableTopics",
 				id: TT_ID,
 				memberName: "Sam Ortiz",
 				roleLabel: "Table Topics speaker",
+				recipientMemberId: SAM,
+				roleDefinitionId: null,
+				recipientActive: true,
 			},
+		],
+		others: [
+			{ memberId: CASEY, name: "Casey Ng", preferredName: null },
+			{ memberId: ROBIN, name: "Roberta Diaz", preferredName: "Robin" },
+		],
+		roleOptions: [
+			{ roleDefinitionId: TIMER_DEF, name: "Timer" },
+			{ roleDefinitionId: GRAM_DEF, name: "Grammarian" },
+			{ roleDefinitionId: SPEAKER_DEF, name: "Speaker" },
 		],
 	};
 }
@@ -135,13 +162,18 @@ describe("feedback route loader (#984)", () => {
 	});
 });
 
-async function renderPage(state: "open" | "notYet" | "closed") {
-	const data = payload();
+async function renderPage(
+	state: "open" | "notYet" | "closed",
+	edit: (p: FeedbackTargetsPublic) => FeedbackTargetsPublic = (p) => p,
+) {
+	const data = edit(payload());
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		clubName: "Downtown Toastmasters",
 		clubNumber: "123456",
 		meeting: data.meeting,
 		targets: data.targets,
+		others: data.others,
+		roleOptions: data.roleOptions,
 		state,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
@@ -208,11 +240,14 @@ describe("feedback page (#984)", () => {
 		expect(screen.getByText("13/500")).toBeTruthy();
 		await user.click(send);
 
+		// The current page always sends the person shape (#1021); only a tab
+		// opened before that deploy sends `target`.
 		await waitFor(() =>
 			expect(leaveFeedback).toHaveBeenCalledWith({
 				data: {
 					meetingId: MEETING_ID,
-					target: { kind: "slot", id: SLOT_ID },
+					recipientMemberId: PAT,
+					role: { kind: "slot", slotId: SLOT_ID },
 					wentWell: "Crisp signals",
 					tryNext: "",
 				},
@@ -228,7 +263,7 @@ describe("feedback page (#984)", () => {
 			JSON.parse(
 				sessionStorage.getItem(`gavelup:feedback-sent:${MEETING_ID}`) ?? "[]",
 			),
-		).toEqual([`slot:${SLOT_ID}`]);
+		).toEqual([PAT]);
 
 		// Tab-scoped: nothing durable on a shared device says who wrote to whom.
 		expect(localStorage.length).toBe(0);
@@ -261,7 +296,7 @@ describe("feedback page (#984)", () => {
 	it("keeps the Sent ✓ mark across a reload in the same tab", async () => {
 		sessionStorage.setItem(
 			`gavelup:feedback-sent:${MEETING_ID}`,
-			JSON.stringify([`tableTopics:${TT_ID}`]),
+			JSON.stringify([SAM]),
 		);
 		await renderPage("open");
 		expect(
@@ -302,5 +337,210 @@ describe("feedback page (#984)", () => {
 				}) as HTMLButtonElement
 			).disabled,
 		).toBe(true);
+	});
+});
+
+const roleSelect = () => screen.getByLabelText("Role") as HTMLSelectElement;
+const optionLabels = () =>
+	Array.from(roleSelect().options).map((o) => o.textContent);
+
+describe("feedback page — to a person (#1021)", () => {
+	it("lists everyone else under Someone else, and the search filters by name or goes-by, any case (AC 9)", async () => {
+		const user = userEvent.setup();
+		await renderPage("open");
+		const others = await screen.findByRole("list", { name: "Other members" });
+		expect(others.textContent).toContain("Casey Ng");
+		expect(others.textContent).toContain("Roberta Diaz");
+		// Rows show the name, not a role.
+		expect(others.textContent).not.toContain("Timer");
+
+		const search = screen.getByRole("searchbox", { name: "Search members" });
+		await user.type(search, "ROB");
+		expect(others.textContent).toContain("Roberta Diaz");
+		expect(others.textContent).not.toContain("Casey Ng");
+		await user.clear(search);
+		await user.type(search, "bin"); // inside "Robin", not in "Roberta Diaz"
+		expect(others.textContent).toContain("Roberta Diaz");
+		expect(others.textContent).not.toContain("Casey Ng");
+		await user.clear(search);
+		await user.type(search, "zzz");
+		expect(screen.getByText("No one matches that name.")).toBeTruthy();
+		// The agenda list is never filtered.
+		expect(screen.getByRole("button", { name: /Pat Lee.*Timer/ })).toBeTruthy();
+	});
+
+	it("hides Someone else when there is no one else", async () => {
+		await renderPage("open", (p) => ({ ...p, others: [] }));
+		await screen.findByRole("button", { name: /Pat Lee/ });
+		expect(screen.queryByText("Someone else")).toBeNull();
+		expect(screen.queryByRole("searchbox")).toBeNull();
+	});
+
+	it("shows Someone else even when nobody holds a role yet", async () => {
+		await renderPage("open", (p) => ({ ...p, targets: [] }));
+		expect(
+			await screen.findByRole("button", { name: /Casey Ng/ }),
+		).toBeTruthy();
+	});
+
+	it("pre-selects the tapped role, and offers held roles, then the rest minus held definitions, TT speaker, General (AC 10)", async () => {
+		const user = userEvent.setup();
+		await renderPage("open", (p) => ({
+			...p,
+			targets: [
+				...p.targets,
+				{
+					kind: "slot",
+					id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+					memberName: "Pat Lee",
+					roleLabel: "Speaker 2",
+					recipientMemberId: PAT,
+					roleDefinitionId: SPEAKER_DEF,
+					recipientActive: true,
+				},
+			],
+		}));
+		await user.click(
+			await screen.findByRole("button", { name: /Pat Lee.*Speaker 2/ }),
+		);
+		expect(optionLabels()).toEqual([
+			"Timer",
+			"Speaker 2",
+			"Grammarian",
+			"Table Topics speaker",
+			"General",
+		]);
+		// Pre-set to the row that was tapped.
+		expect(roleSelect().selectedOptions[0]?.textContent).toBe("Speaker 2");
+	});
+
+	it("a Table Topics speaker is not offered the bare TT speaker option twice", async () => {
+		const user = userEvent.setup();
+		await renderPage("open");
+		await user.click(await screen.findByRole("button", { name: /Sam Ortiz/ }));
+		expect(optionLabels()).toEqual([
+			"Table Topics speaker",
+			"Timer",
+			"Grammarian",
+			"Speaker",
+			"General",
+		]);
+		expect(roleSelect().selectedOptions[0]?.textContent).toBe(
+			"Table Topics speaker",
+		);
+	});
+
+	it("an inactive recipient on the agenda is offered only the roles they hold (AC 10)", async () => {
+		const user = userEvent.setup();
+		await renderPage("open", (p) => ({
+			...p,
+			targets: p.targets.map((t) =>
+				t.recipientMemberId === PAT ? { ...t, recipientActive: false } : t,
+			),
+		}));
+		await user.click(await screen.findByRole("button", { name: /Pat Lee/ }));
+		expect(optionLabels()).toEqual(["Timer"]);
+	});
+
+	it("from Someone else: no held roles, General pre-selected, and a changed role is what is sent", async () => {
+		vi.mocked(leaveFeedback).mockResolvedValue({ ok: true });
+		const user = userEvent.setup();
+		await renderPage("open");
+		await user.click(await screen.findByRole("button", { name: /Casey Ng/ }));
+		expect(optionLabels()).toEqual([
+			"Timer",
+			"Grammarian",
+			"Speaker",
+			"Table Topics speaker",
+			"General",
+		]);
+		expect(roleSelect().value).toBe("general");
+		await user.selectOptions(roleSelect(), "Grammarian");
+		await user.type(screen.getByLabelText("What went well"), "Sharp");
+		await user.click(screen.getByRole("button", { name: "Send anonymously" }));
+		await waitFor(() =>
+			expect(leaveFeedback).toHaveBeenCalledWith({
+				data: {
+					meetingId: MEETING_ID,
+					recipientMemberId: CASEY,
+					role: { kind: "definition", roleDefinitionId: GRAM_DEF },
+					wentWell: "Sharp",
+					tryNext: "",
+				},
+			}),
+		);
+	});
+
+	it("marks every row for that person Sent, in both sections, whatever role was chosen (AC 11)", async () => {
+		vi.mocked(leaveFeedback).mockResolvedValue({ ok: true });
+		const user = userEvent.setup();
+		// Pat is on the agenda AND, for this test, also listed below.
+		await renderPage("open", (p) => ({
+			...p,
+			others: [
+				...p.others,
+				{ memberId: PAT, name: "Pat Lee", preferredName: null },
+			],
+		}));
+		const below = await screen.findByRole("list", { name: "Other members" });
+		const patBelow = Array.from(below.querySelectorAll("button")).find((b) =>
+			b.textContent?.includes("Pat Lee"),
+		) as HTMLButtonElement;
+		await user.click(patBelow);
+		expect(roleSelect().value).toBe("general");
+		await user.type(screen.getByLabelText("What went well"), "Thanks");
+		await user.click(screen.getByRole("button", { name: "Send anonymously" }));
+		await waitFor(() =>
+			expect(leaveFeedback).toHaveBeenCalledWith({
+				data: expect.objectContaining({
+					recipientMemberId: PAT,
+					role: { kind: "general" },
+				}),
+			}),
+		);
+		const sent = await screen.findAllByRole("button", {
+			name: /Pat Lee.*Sent/,
+		});
+		expect(sent).toHaveLength(2);
+		expect(
+			screen.queryByRole("button", { name: /Sam Ortiz.*Sent/ }),
+		).toBeNull();
+		expect(screen.queryByRole("button", { name: /Casey Ng.*Sent/ })).toBeNull();
+	});
+
+	it("sends exactly the option selected, after changing away from the tapped role and back", async () => {
+		vi.mocked(leaveFeedback).mockResolvedValue({ ok: true });
+		const user = userEvent.setup();
+		await renderPage("open");
+		await user.click(await screen.findByRole("button", { name: /Pat Lee/ }));
+		await user.selectOptions(roleSelect(), "General");
+		expect(roleSelect().value).toBe("general");
+		await user.selectOptions(roleSelect(), "Speaker");
+		await user.selectOptions(roleSelect(), "Timer");
+		expect(roleSelect().selectedOptions[0]?.textContent).toBe("Timer");
+		await user.selectOptions(roleSelect(), "General");
+		await user.type(screen.getByLabelText("What went well"), "Kind");
+		await user.click(screen.getByRole("button", { name: "Send anonymously" }));
+		await waitFor(() =>
+			expect(leaveFeedback).toHaveBeenCalledWith({
+				data: {
+					meetingId: MEETING_ID,
+					recipientMemberId: PAT,
+					role: { kind: "general" },
+					wentWell: "Kind",
+					tryNext: "",
+				},
+			}),
+		);
+	});
+
+	it("ignores Sent keys the old page wrote", async () => {
+		sessionStorage.setItem(
+			`gavelup:feedback-sent:${MEETING_ID}`,
+			JSON.stringify([`slot:${SLOT_ID}`, `tableTopics:${TT_ID}`]),
+		);
+		await renderPage("open");
+		await screen.findByRole("button", { name: /Pat Lee/ });
+		expect(screen.queryByRole("button", { name: /Sent/ })).toBeNull();
 	});
 });

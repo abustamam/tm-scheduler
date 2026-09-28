@@ -9,8 +9,11 @@
  * accepted or returned. `leaveFeedbackLogic` takes no user, member, device or
  * guest id, the table has no column for one, and the write returns `{ ok }` and
  * nothing else — not even the new row's id, which a writer could otherwise hold
- * and later point at. The recipient and the role label are derived here, from
- * the meeting's own rows, and never taken from the caller.
+ * and later point at. The role label is derived here, from the meeting's and
+ * the club's own rows, and never taken from the caller as text. Since #1021 the
+ * caller may NAME the recipient (a member id), but only a member this module
+ * admits: one of the meeting's club, active unless the agenda itself vouches
+ * for them (see `resolvePersonNote`).
  */
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "#/db";
@@ -36,6 +39,13 @@ import {
 	feedbackWindow,
 	feedbackWindowState,
 } from "#/lib/feedback-window";
+import {
+	type FeedbackRoleChoice,
+	GENERAL_FEEDBACK_LABEL,
+	type LegacyLeaveFeedbackInput,
+	type PersonLeaveFeedbackInput,
+	TABLE_TOPICS_SPEAKER_LABEL,
+} from "#/lib/role-feedback-input";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { feedbackIpLimiter } from "./feedback-rate-limit";
 import { assertClubNotArchived } from "./guards";
@@ -44,8 +54,12 @@ import type { DbOrTx } from "./meeting-templates-logic";
 import { userMemberIds } from "./person-identity-logic";
 import { isDeadlock } from "./pg-errors";
 
-/** The role label every Table Topics speaker's note carries. */
-export const TABLE_TOPICS_SPEAKER_LABEL = "Table Topics speaker";
+export { GENERAL_FEEDBACK_LABEL, TABLE_TOPICS_SPEAKER_LABEL };
+export type {
+	FeedbackRoleChoice,
+	LegacyLeaveFeedbackInput,
+	PersonLeaveFeedbackInput,
+};
 
 export type FeedbackTargetKind = "slot" | "tableTopics";
 
@@ -57,9 +71,15 @@ export interface FeedbackTarget {
 	roleLabel: string;
 }
 
-/** A target with the recipient resolved — server-side only, never returned. */
+/** A target with the recipient resolved. `loadFeedbackTargetsPublic` returns
+ *  these fields renamed (`PublicFeedbackTarget`); the write reads them to
+ *  check a named recipient against the agenda. */
 interface ResolvedTarget extends FeedbackTarget {
 	memberId: string;
+	/** The slot's role definition; null for a Table Topics speaker row. */
+	roleDefinitionId: string | null;
+	/** `members.status = 'active'`. */
+	memberActive: boolean;
 }
 
 /**
@@ -90,8 +110,10 @@ async function loadResolvedTargets(
 				roleName: roleDefinitions.name,
 				roleKey: roleDefinitions.key,
 				slotsUnordered: roleDefinitions.slotsUnordered,
+				roleDefinitionId: roleSlots.roleDefinitionId,
 				memberId: members.id,
 				memberName: members.name,
+				memberStatus: members.status,
 			})
 			.from(roleSlots)
 			.innerJoin(
@@ -106,6 +128,7 @@ async function loadResolvedTargets(
 				id: tableTopicsSpeakers.id,
 				memberId: members.id,
 				memberName: members.name,
+				memberStatus: members.status,
 			})
 			.from(tableTopicsSpeakers)
 			.innerJoin(members, eq(members.id, tableTopicsSpeakers.memberId))
@@ -127,6 +150,8 @@ async function loadResolvedTargets(
 			memberId: s.memberId,
 			memberName: s.memberName,
 			roleLabel: slotLabel(s, roleCounts),
+			roleDefinitionId: s.roleDefinitionId,
+			memberActive: s.memberStatus === "active",
 			roleKey: s.roleKey,
 		});
 	}
@@ -136,6 +161,8 @@ async function loadResolvedTargets(
 		memberId: s.memberId,
 		memberName: s.memberName,
 		roleLabel: TABLE_TOPICS_SPEAKER_LABEL,
+		roleDefinitionId: null,
+		memberActive: s.memberStatus === "active",
 	}));
 
 	let ttmAt = -1;
@@ -176,7 +203,24 @@ export interface FeedbackTargetsPublic {
 		 *  "not yet" vs "closed" from the visitor's (possibly wrong) clock. */
 		state: FeedbackWindowState;
 	};
-	targets: FeedbackTarget[];
+	/** "At this meeting": the agenda's member-held roles, in agenda order. */
+	targets: PublicFeedbackTarget[];
+	/** "Someone else": every ACTIVE member of the club not in `targets`, by
+	 *  name (#1021). */
+	others: { memberId: string; name: string; preferredName: string | null }[];
+	/** The club's enabled role definitions, by `sort_order`: what the role
+	 *  picker offers as an unnumbered role (#1021). */
+	roleOptions: { roleDefinitionId: string; name: string }[];
+}
+
+/** One "At this meeting" row, with what the role picker needs (#1021). */
+export interface PublicFeedbackTarget extends FeedbackTarget {
+	recipientMemberId: string;
+	/** The slot's role definition; null for a Table Topics speaker row. */
+	roleDefinitionId: string | null;
+	/** `members.status = 'active'`. An inactive member on the agenda can be
+	 *  sent a note only under a role they hold, so the picker offers no other. */
+	recipientActive: boolean;
 }
 
 const serializeWindow = (
@@ -197,9 +241,20 @@ const serializeWindow = (
  * archived club answers exactly like a key that never existed: `null`. A
  * cancelled meeting is `null` too — it has no feedback page.
  *
- * Exposes each target's display name and role label and NOTHING else: no member
- * id, no contact, no attendance. The target id is the slot's or the speaker's,
- * which the public agenda already carries.
+ * Exposes display names, role labels, member ids, an active flag and the
+ * club's enabled role names, and NOTHING else: no contact, no attendance.
+ * Member ids are exposed since #1021 so a note can name its recipient.
+ *
+ * What that exposure is, exactly, measured against `loadPublicClubRoster`
+ * (`members-logic.ts`, session-less, every NON-inactive member's id, name and
+ * preferred name):
+ *  - `others` is a subset of that roster (active members only);
+ *  - `targets` is NOT: it also carries the member id and `recipientActive:
+ *    false` of an INACTIVE member who holds a slot or Table Topics row at this
+ *    meeting, which the roster omits. The public agenda already shows that
+ *    person's name beside the role; the id and the inactive status are new.
+ * The target id is the slot's or the speaker's, which the public agenda
+ * already carries.
  */
 export async function loadFeedbackTargetsPublic(
 	clubId: string,
@@ -216,13 +271,39 @@ export async function loadFeedbackTargetsPublic(
 			status: meetings.status,
 			theme: meetings.theme,
 			timezone: clubs.timezone,
+			clubId: meetings.clubId,
 		})
 		.from(meetings)
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
 	if (!row || row.status === "cancelled") return null;
-	const targets = await loadResolvedTargets(db, meetingId);
+	const [targets, active, roleOptions] = await Promise.all([
+		loadResolvedTargets(db, meetingId),
+		db
+			.select({
+				memberId: members.id,
+				name: members.name,
+				preferredName: members.preferredName,
+			})
+			.from(members)
+			.where(and(eq(members.clubId, row.clubId), eq(members.status, "active")))
+			.orderBy(asc(members.name), asc(members.id)),
+		db
+			.select({
+				roleDefinitionId: roleDefinitions.id,
+				name: roleDefinitions.name,
+			})
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, row.clubId),
+					eq(roleDefinitions.enabled, true),
+				),
+			)
+			.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name)),
+	]);
+	const onAgenda = new Set(targets.map((t) => t.memberId));
 	return {
 		meeting: {
 			id: row.id,
@@ -231,7 +312,15 @@ export async function loadFeedbackTargetsPublic(
 			timezone: row.timezone,
 		},
 		window: serializeWindow(feedbackWindow(row, now), now),
-		targets: targets.map(({ memberId: _m, ...t }) => t),
+		targets: targets.map(
+			({ memberId, memberActive, ...t }): PublicFeedbackTarget => ({
+				...t,
+				recipientMemberId: memberId,
+				recipientActive: memberActive,
+			}),
+		),
+		others: active.filter((m) => !onAgenda.has(m.memberId)),
+		roleOptions,
 	};
 }
 
@@ -239,12 +328,12 @@ export async function loadFeedbackTargetsPublic(
 // The anonymous write
 // ---------------------------------------------------------------------------
 
-export interface LeaveFeedbackInput {
-	meetingId: string;
-	target: { kind: FeedbackTargetKind; id: string };
-	wentWell?: string | null;
-	tryNext?: string | null;
-}
+export type LeaveFeedbackInput =
+	| LegacyLeaveFeedbackInput
+	| PersonLeaveFeedbackInput;
+
+const isLegacy = (i: LeaveFeedbackInput): i is LegacyLeaveFeedbackInput =>
+	"target" in i && i.target !== undefined;
 
 export const FEEDBACK_EMPTY_MESSAGE =
 	"Write something in at least one of the two boxes.";
@@ -313,21 +402,108 @@ function cleanText(v: string | null | undefined): string | null {
 	return t.length > 0 ? t : null;
 }
 
+/** What the insert takes: who receives the note, under which label, linked
+ *  to which agenda row (at most one). */
+interface AdmittedNote {
+	memberId: string;
+	roleLabel: string;
+	roleSlotId: string | null;
+	tableTopicsSpeakerId: string | null;
+}
+
+/**
+ * Resolve a note for a NAMED recipient (#1021), per the table in the issue:
+ *
+ *  - the recipient must be a `members` row of the MEETING's club — a wrong
+ *    club and an unknown id are the same refusal;
+ *  - `slot` / `tableTopics`: the row must be on this meeting's agenda AND held
+ *    by this recipient. The agenda vouches for them, so an inactive member who
+ *    holds a slot can still receive a note, exactly as through the legacy path;
+ *  - `definition` / `tableTopicsSpeaker` / `general`: nothing on the agenda
+ *    vouches, so the recipient must be `active`; a definition must be the
+ *    club's own and enabled.
+ *
+ * Every refusal is `FEEDBACK_TARGET_MESSAGE`, one indistinguishable answer, so
+ * a caller probing ids learns nothing about which check failed.
+ */
+async function resolvePersonNote(
+	conn: DbOrTx,
+	input: PersonLeaveFeedbackInput,
+	clubId: string,
+): Promise<AdmittedNote> {
+	const refuse = () => new Error(FEEDBACK_TARGET_MESSAGE);
+	const [recipient] = await conn
+		.select({ id: members.id, status: members.status })
+		.from(members)
+		.where(
+			and(eq(members.id, input.recipientMemberId), eq(members.clubId, clubId)),
+		)
+		.limit(1);
+	if (!recipient) throw refuse();
+	const role = input.role;
+
+	if (role.kind === "slot" || role.kind === "tableTopics") {
+		const id = role.kind === "slot" ? role.slotId : role.speakerId;
+		const held = (await loadResolvedTargets(conn, input.meetingId)).find(
+			(t) => t.kind === role.kind && t.id === id && t.memberId === recipient.id,
+		);
+		if (!held) throw refuse();
+		return {
+			memberId: recipient.id,
+			roleLabel: held.roleLabel,
+			roleSlotId: held.kind === "slot" ? held.id : null,
+			tableTopicsSpeakerId: held.kind === "tableTopics" ? held.id : null,
+		};
+	}
+
+	if (recipient.status !== "active") throw refuse();
+	const unlinked = {
+		memberId: recipient.id,
+		roleSlotId: null,
+		tableTopicsSpeakerId: null,
+	};
+	if (role.kind === "general") {
+		return { ...unlinked, roleLabel: GENERAL_FEEDBACK_LABEL };
+	}
+	if (role.kind === "tableTopicsSpeaker") {
+		return { ...unlinked, roleLabel: TABLE_TOPICS_SPEAKER_LABEL };
+	}
+	if (role.kind === "definition") {
+		const [def] = await conn
+			.select({ name: roleDefinitions.name })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.id, role.roleDefinitionId),
+					eq(roleDefinitions.clubId, clubId),
+					eq(roleDefinitions.enabled, true),
+				),
+			)
+			.limit(1);
+		if (!def) throw refuse();
+		return { ...unlinked, roleLabel: def.name };
+	}
+	// An unknown kind from a caller that skipped the wire schema.
+	throw refuse();
+}
+
 /**
  * Every refusal that depends on the meeting's own rows: cancelled, the window
- * (server clock), the target, and the two caps. Run TWICE per write: once on a
- * pooled read before any lock, so a closed window or a full cap is refused
- * without queueing on the club write lock or holding a connection there; and
- * again, authoritatively, on the transaction under that lock, which is what
- * makes the caps hold under concurrency. Returns the resolved target.
+ * (server clock), the recipient and role, and the two caps. Run TWICE per
+ * write: once on a pooled read before any lock, so a closed window or a full
+ * cap is refused without queueing on the club write lock or holding a
+ * connection there; and again, authoritatively, on the transaction under that
+ * lock, which is what makes the caps hold under concurrency. Returns what the
+ * insert takes.
  */
 async function admitNote(
 	conn: DbOrTx,
 	input: LeaveFeedbackInput,
 	at: Date,
-): Promise<ResolvedTarget> {
+): Promise<AdmittedNote> {
 	const [meeting] = await conn
 		.select({
+			clubId: meetings.clubId,
 			scheduledAt: meetings.scheduledAt,
 			lengthMinutes: meetings.lengthMinutes,
 			status: meetings.status,
@@ -343,16 +519,27 @@ async function admitNote(
 	if (state === "notYet") throw new Error(FEEDBACK_NOT_OPEN_MESSAGE);
 	if (state === "closed") throw new Error(FEEDBACK_CLOSED_MESSAGE);
 
-	const targets = await loadResolvedTargets(conn, input.meetingId);
-	const target = targets.find(
-		(t) => t.kind === input.target.kind && t.id === input.target.id,
-	);
-	if (!target) throw new Error(FEEDBACK_TARGET_MESSAGE);
+	let note: AdmittedNote;
+	if (isLegacy(input)) {
+		const targets = await loadResolvedTargets(conn, input.meetingId);
+		const target = targets.find(
+			(t) => t.kind === input.target.kind && t.id === input.target.id,
+		);
+		if (!target) throw new Error(FEEDBACK_TARGET_MESSAGE);
+		note = {
+			memberId: target.memberId,
+			roleLabel: target.roleLabel,
+			roleSlotId: target.kind === "slot" ? target.id : null,
+			tableTopicsSpeakerId: target.kind === "tableTopics" ? target.id : null,
+		};
+	} else {
+		note = await resolvePersonNote(conn, input, meeting.clubId);
+	}
 
 	const [counts] = await conn
 		.select({
 			meeting: sql<number>`count(*)::int`,
-			recipient: sql<number>`count(*) filter (where ${roleFeedbackNotes.recipientMemberId} = ${target.memberId})::int`,
+			recipient: sql<number>`count(*) filter (where ${roleFeedbackNotes.recipientMemberId} = ${note.memberId})::int`,
 		})
 		.from(roleFeedbackNotes)
 		.where(eq(roleFeedbackNotes.meetingId, input.meetingId));
@@ -362,7 +549,7 @@ async function admitNote(
 	if ((counts?.meeting ?? 0) >= FEEDBACK_PER_MEETING_CAP) {
 		throw new Error(FEEDBACK_MEETING_CAP_MESSAGE);
 	}
-	return target;
+	return note;
 }
 
 /**
@@ -412,8 +599,26 @@ async function leaveFeedbackUnmapped(
 	const wentWell = cleanText(input.wentWell);
 	const tryNext = cleanText(input.tryNext);
 	if (!wentWell && !tryNext) throw new Error(FEEDBACK_EMPTY_MESSAGE);
-	if (!UUID_RE.test(input.meetingId) || !UUID_RE.test(input.target.id)) {
-		throw new Error(FEEDBACK_MEETING_NOT_FOUND_MESSAGE);
+	if (isLegacy(input)) {
+		if (!UUID_RE.test(input.meetingId) || !UUID_RE.test(input.target.id)) {
+			throw new Error(FEEDBACK_MEETING_NOT_FOUND_MESSAGE);
+		}
+	} else {
+		if (!UUID_RE.test(input.meetingId)) {
+			throw new Error(FEEDBACK_MEETING_NOT_FOUND_MESSAGE);
+		}
+		// Every id the person shape carries is checked before it reaches a
+		// query: a malformed one is the target refusal, never a driver error.
+		const r = input.role as Partial<Record<string, unknown>>;
+		const roleIds = [r.slotId, r.speakerId, r.roleDefinitionId].filter(
+			(v) => v !== undefined,
+		);
+		if (
+			!UUID_RE.test(input.recipientMemberId) ||
+			roleIds.some((v) => typeof v !== "string" || !UUID_RE.test(v))
+		) {
+			throw new Error(FEEDBACK_TARGET_MESSAGE);
+		}
 	}
 
 	const [owner] = await db
@@ -442,15 +647,15 @@ async function leaveFeedbackUnmapped(
 			// The gate, read under the row lock just taken.
 			await assertClubNotArchived(clubId, tx);
 
-			const target = await admitNote(tx, input, now());
+			const note = await admitNote(tx, input, now());
 
 			await tx.insert(roleFeedbackNotes).values({
 				clubId,
 				meetingId: input.meetingId,
-				recipientMemberId: target.memberId,
-				roleSlotId: target.kind === "slot" ? target.id : null,
-				tableTopicsSpeakerId: target.kind === "tableTopics" ? target.id : null,
-				roleLabel: target.roleLabel,
+				recipientMemberId: note.memberId,
+				roleSlotId: note.roleSlotId,
+				tableTopicsSpeakerId: note.tableTopicsSpeakerId,
+				roleLabel: note.roleLabel,
 				wentWell,
 				tryNext,
 			});

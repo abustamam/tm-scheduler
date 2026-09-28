@@ -541,12 +541,17 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	// in `role-feedback-logic.ts`: a window from the meeting's start to three
 	// days after its scheduled end on the SERVER's clock; ≤500 chars per box;
 	// 20 notes per recipient and 300 per meeting, counted under the club write
-	// lock; the recipient and label are derived server-side; archive-gated
-	// under that lock.
+	// lock; archive-gated under that lock. Since #1021 the caller may NAME the
+	// recipient (a member id) instead of pointing at an agenda row. The server
+	// admits that member only if they belong to the MEETING's club, and only if
+	// they are active unless the slot or Table Topics row they are named under
+	// is theirs at this meeting (the agenda vouches). The role label is still
+	// derived server-side from the chosen kind, never taken as text; the caps
+	// count per recipient across every label, so naming changes none of them.
 	"role-feedback.ts#leaveFeedback": {
 		class: "public-intake",
 		reason:
-			"anonymous role feedback: no writer identity stored; server-clock window start → end + 3 days; ≤500 chars per box; ≤20 per recipient and ≤300 per meeting counted under the club lock (pre-checked unlocked first); ≤60 per minute per client address in memory (salted hash, never stored); archive-gated under that lock (#984)",
+			"anonymous role feedback: no writer identity stored; the caller may name the recipient (#1021), admitted only as a member of the meeting's club and active unless the agenda row they are named under is theirs; label derived server-side from the role kind; server-clock window start → end + 3 days; ≤500 chars per box; ≤20 per recipient (across labels) and ≤300 per meeting counted under the club lock (pre-checked unlocked first); ≤60 per minute per client address in memory (salted hash, never stored); archive-gated under that lock (#984)",
 	},
 };
 
