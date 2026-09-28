@@ -354,6 +354,18 @@ diagnosable. Beside that job's ONLY — the `extension` job is `working-director
 runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
 same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
+**The route hydration gate (#1000, `src/routes/route-hydration.test.ts`) is browser-backed too, but
+it runs in its OWN CI job, `hydration`, in parallel with `check` (#1022).** It starts a vite dev
+server and sweeps every route in Chrome, ~5 minutes, which made `check` go from ~8 to ~13 minutes
+while it ran there. `check`'s `Test` step sets `EXCLUDE_ROUTE_HYDRATION_GATE=1`, which
+`vitest.config.ts` reads to drop the gate and its teardown test (`HYDRATION_GATE_FILES`); the
+`hydration` job runs `bun run test:hydration` (exactly those two files) and then fails if the JSON
+report shows zero tests, any skipped, or the sweep test not passed. A plain local `bun run test`
+sets nothing, so it still runs the gate. `hydration-gate-ci.guard.test.ts` holds the file list, the
+script and the workflow to each other: one drifting would run the gate nowhere with every job green.
+Both jobs need Postgres and Chrome, and the gate itself still fails rather than skips in CI without
+either.
+
 **On macOS all twelve skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
 puts nothing on `PATH` under any of those four binary names — that is the `CHROME_BINARIES`
 lookup list, which is still four, and not the suite count above. This is a macOS-only gap: on Linux, where this
