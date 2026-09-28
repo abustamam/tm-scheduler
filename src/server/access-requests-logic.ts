@@ -23,6 +23,7 @@ import { and, count, eq, gt, isNull, like, lt, or, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { accessRequestAlerts, accessRequests } from "#/db/schema";
 import { ACCESS_REQUEST_NOTIFY_EMAIL } from "#/lib/brand";
+import { CHARTER_STATUS_LABEL } from "#/lib/club-charter";
 import { escapeHtml, toSubjectText } from "#/lib/html-escape";
 import type { AccessRequestInput } from "./access-requests-schemas";
 import {
@@ -244,6 +245,7 @@ export async function submitAccessRequestLogic(
 			email: input.email,
 			clubName: isClub ? (input.clubName ?? null) : null,
 			clubNumber: isClub ? (input.clubNumber ?? null) : null,
+			charterStatus: isClub ? (input.charterStatus ?? null) : null,
 			districtNumber: isClub ? null : (input.districtNumber ?? null),
 			message: input.message ?? null,
 			ref: input.ref,
@@ -504,6 +506,10 @@ export function buildAccessRequestEmail(row: AccessRequestRow): {
 			? ([
 					["Club name", row.clubName],
 					["Club number", row.clubNumber],
+					[
+						"Charter status",
+						row.charterStatus ? CHARTER_STATUS_LABEL[row.charterStatus] : null,
+					],
 				] as Array<[string, string | null]>)
 			: ([["District", row.districtNumber]] as Array<[string, string | null]>)),
 		["Message", row.message],

@@ -96,6 +96,15 @@ export const officerPositionEnum = pgEnum("officer_position", [
 	"sergeant_at_arms",
 	"immediate_past_president",
 ]);
+// Where a club is in the Toastmasters charter process (#944). `chartering` is a
+// club that is forming and uses GavelUp before charter; it may or may not hold
+// a club number yet. `chartered` is every other club, and the column default:
+// the migration that added this backfilled every existing club as chartered.
+// Keep in lockstep with CHARTER_STATUSES in src/lib/club-charter.ts.
+export const clubCharterStatusEnum = pgEnum("club_charter_status", [
+	"chartering",
+	"chartered",
+]);
 export const membershipStatusEnum = pgEnum("membership_status", [
 	"active",
 	"inactive",
@@ -430,6 +439,18 @@ export const clubs = pgTable(
 		// and blocks every access path except the superadmin console. This comment used
 		// to enumerate the enforcement points and was wrong twice (#544, #560) — see
 		// `isClubArchived` (`src/lib/club-archive.ts`) for the one canonical list.
+		// Charter status and date (#944). The invariant between them and
+		// `club_number` is enforced in the WRITE PATH, not here: a `chartered`
+		// club must have a club number and a `chartering` one may have none
+		// (`charterInvariantError`, `src/lib/club-charter.ts`), and a club moved
+		// to chartered through the app must supply `chartered_at`. It is not a
+		// CHECK because the backfill cannot satisfy it: existing clubs came out
+		// chartered with no recorded date. `chartered_at` is therefore never used
+		// to DERIVE the status; null means "not recorded", not "not chartered".
+		charterStatus: clubCharterStatusEnum("charter_status")
+			.notNull()
+			.default("chartered"),
+		charteredAt: date("chartered_at", { mode: "string" }),
 		archivedAt: timestamp("archived_at"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
@@ -3049,6 +3070,9 @@ export const accessRequests = pgTable(
 		email: text("email").notNull(),
 		clubName: text("club_name"),
 		clubNumber: text("club_number"),
+		// Whether the requesting club says it is still forming (#944). Null on a
+		// district request, and on a club request that did not say.
+		charterStatus: clubCharterStatusEnum("charter_status"),
 		districtNumber: text("district_number"),
 		message: text("message"),
 		// First-touch marketing attribution (`src/lib/marketing-ref.ts`), or null.

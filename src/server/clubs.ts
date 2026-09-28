@@ -1,6 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
+	getClubCharter,
+	markClubChartered,
+	markClubCharteredSchema,
+	updateCharterDateSchema,
+	updateClubCharterDate,
+} from "./club-charter-logic";
+import {
 	applyClubAgendaSettingsUpdate,
 	applyClubProfileUpdate,
 	applyClubTimezoneUpdate,
@@ -89,4 +96,35 @@ export const updateClubTimezone = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyClubTimezoneUpdate(data);
+	});
+
+/** The club's charter status, charter date and number (#944), for the settings
+ *  page's Charter section. AUTHED — any active member of the club. */
+export const loadClubCharter = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => {
+		const currentUser = await requireUser();
+		await requireClubViewAccess(currentUser.id, clubId);
+		return getClubCharter(clubId);
+	});
+
+/** Mark a chartering club as chartered, with its charter date and club number
+ *  (#944). AUTHED — requires admin club role. Moving back to chartering is NOT
+ *  here: it is superadmin-only (`revertConsoleClubToChartering`). */
+export const markChartered = createServerFn({ method: "POST" })
+	.validator((input: unknown) => markClubCharteredSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return markClubChartered(data);
+	});
+
+/** Correct a chartered club's charter date (#944). AUTHED — requires admin
+ *  club role. */
+export const updateCharterDate = createServerFn({ method: "POST" })
+	.validator((input: unknown) => updateCharterDateSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return updateClubCharterDate(data);
 	});

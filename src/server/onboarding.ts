@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { revertClubToChartering } from "./club-charter-logic";
 import { requireSuperadmin, requireUser } from "./guards";
 import {
 	archiveClub,
@@ -84,4 +85,16 @@ export const deleteConsoleClub = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
 		return deleteClubPermanently(data.clubId, data.confirmName);
+	});
+
+/** Move a chartered club BACK to chartering (#944) — the correction for a club
+ *  marked chartered by mistake. Clears the charter date, keeps the number.
+ *  SUPERADMIN-only: a club admin can mark their club chartered and edit the
+ *  date, but not undo the charter. */
+export const revertConsoleClubToChartering = createServerFn({ method: "POST" })
+	.validator((clubId: unknown) => z.string().uuid().parse(clubId))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireSuperadmin(currentUser.id);
+		return revertClubToChartering(data);
 	});

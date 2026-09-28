@@ -28,6 +28,13 @@ import {
 	verification,
 } from "#/db/schema";
 import {
+	CHARTER_STATUSES,
+	type CharterStatus,
+	charterDateSchema,
+	charterInvariantError,
+	optionalClubNumberSchema,
+} from "#/lib/club-charter";
+import {
 	CLUB_TIMEZONES,
 	DEFAULT_CLUB_TIMEZONE,
 	INVALID_TIMEZONE_MESSAGE,
@@ -57,6 +64,8 @@ export interface ConsoleClubRow {
 	clubId: string;
 	name: string;
 	clubNumber: string | null;
+	/** Chartering or chartered (#944). A chartering club may have no number. */
+	charterStatus: CharterStatus;
 	/** The club's IANA zone. Listed beside the number so a wrong pick at
 	 *  provisioning is visible before the club has its first meeting (#716) —
 	 *  after that, correcting it re-labels meetings that already exist. */
@@ -109,6 +118,7 @@ export async function listClubsForConsole(): Promise<ConsoleClubList> {
 			id: clubs.id,
 			name: clubs.name,
 			clubNumber: clubs.clubNumber,
+			charterStatus: clubs.charterStatus,
 			timezone: clubs.timezone,
 			createdAt: clubs.createdAt,
 			archivedAt: clubs.archivedAt,
@@ -159,6 +169,7 @@ export async function listClubsForConsole(): Promise<ConsoleClubList> {
 			clubId: c.id,
 			name: c.name,
 			clubNumber: c.clubNumber,
+			charterStatus: c.charterStatus,
 			timezone: c.timezone,
 			memberCount: countByClub.get(c.id) ?? 0,
 			createdAt: c.createdAt,
@@ -179,6 +190,10 @@ export interface ConsoleClubDetail {
 	clubId: string;
 	name: string;
 	clubNumber: string | null;
+	/** Chartering or chartered (#944). Drives the console's charter panel. */
+	charterStatus: CharterStatus;
+	/** `YYYY-MM-DD`, or null when not recorded (every backfilled club). */
+	charteredAt: string | null;
 	slug: string;
 	createdAt: Date;
 	/** Soft-archive timestamp (ADR-0016 / #186); null = active. Drives the
@@ -204,6 +219,8 @@ export async function getClubConsoleDetail(
 			id: clubs.id,
 			name: clubs.name,
 			clubNumber: clubs.clubNumber,
+			charterStatus: clubs.charterStatus,
+			charteredAt: clubs.charteredAt,
 			slug: clubs.slug,
 			createdAt: clubs.createdAt,
 			archivedAt: clubs.archivedAt,
@@ -224,6 +241,8 @@ export async function getClubConsoleDetail(
 		clubId: club.id,
 		name: club.name,
 		clubNumber: club.clubNumber,
+		charterStatus: club.charterStatus,
+		charteredAt: club.charteredAt,
 		slug: club.slug,
 		createdAt: club.createdAt,
 		archivedAt: club.archivedAt,
@@ -264,30 +283,63 @@ async function firstAdminOf(clubId: string) {
 // Create a club (atomic): club + standard role template + first admin.
 // ---------------------------------------------------------------------------
 
-export const createClubSchema = z.object({
-	clubName: z.string().trim().min(1, "Club name is required."),
-	clubNumber: z.string().trim().min(1, "Club number is required."),
-	adminName: z.string().trim().min(1, "Admin name is required."),
-	adminEmail: z
-		.string()
-		.trim()
-		.toLowerCase()
-		.email("A valid email is required."),
-	/**
-	 * REQUIRED at provisioning (#716/#670) rather than left to the column default.
-	 * `clubs.timezone` is the axis every meeting instant, URL date key and
-	 * deadline is measured against, and correcting it later re-labels meetings
-	 * that already exist and can break links that were already shared (see
-	 * `updateClubTimezone`) — so the cheapest moment to be right is before the
-	 * club has any. A missing value is rejected with the same message an
-	 * unsupported one gets: both mean "the console must pick a zone", and the
-	 * server fn is addressable with no form, so the `<select>` constrains nobody.
-	 */
-	timezone: z
-		.string({ error: INVALID_TIMEZONE_MESSAGE })
-		.refine(isSupportedClubTimezone, { message: INVALID_TIMEZONE_MESSAGE }),
-});
-export type CreateClubInput = z.infer<typeof createClubSchema>;
+export const createClubSchema = z
+	.object({
+		clubName: z.string().trim().min(1, "Club name is required."),
+		/**
+		 * Chartering or chartered (#944). Defaults to chartered, which is what every
+		 * club provisioned before this field existed was — so a console tab loaded
+		 * before the deploy keeps provisioning exactly what it did.
+		 */
+		charterStatus: z.enum(CHARTER_STATUSES).default("chartered"),
+		/** Required for a chartered club only — see `charterInvariantError`. */
+		clubNumber: optionalClubNumberSchema,
+		/**
+		 * Optional even for a chartered club: onboarding records a club that
+		 * chartered BEFORE it joined GavelUp, and its operator may not know the date
+		 * (the same position as every backfilled club). "Mark as chartered" is the
+		 * transition that must supply one. Refused for a chartering club, which has
+		 * not chartered yet.
+		 */
+		charteredAt: charterDateSchema.nullish().transform((v) => v ?? null),
+		adminName: z.string().trim().min(1, "Admin name is required."),
+		adminEmail: z
+			.string()
+			.trim()
+			.toLowerCase()
+			.email("A valid email is required."),
+		/**
+		 * REQUIRED at provisioning (#716/#670) rather than left to the column default.
+		 * `clubs.timezone` is the axis every meeting instant, URL date key and
+		 * deadline is measured against, and correcting it later re-labels meetings
+		 * that already exist and can break links that were already shared (see
+		 * `updateClubTimezone`) — so the cheapest moment to be right is before the
+		 * club has any. A missing value is rejected with the same message an
+		 * unsupported one gets: both mean "the console must pick a zone", and the
+		 * server fn is addressable with no form, so the `<select>` constrains nobody.
+		 */
+		timezone: z
+			.string({ error: INVALID_TIMEZONE_MESSAGE })
+			.refine(isSupportedClubTimezone, { message: INVALID_TIMEZONE_MESSAGE }),
+	})
+	.superRefine((v, ctx) => {
+		const invariant = charterInvariantError(v);
+		if (invariant) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["clubNumber"],
+				message: invariant,
+			});
+		}
+		if (v.charterStatus === "chartering" && v.charteredAt) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["charteredAt"],
+				message: "A chartering club has no charter date yet.",
+			});
+		}
+	});
+export type CreateClubInput = z.input<typeof createClubSchema>;
 
 export interface CreateClubResult {
 	clubId: string;
@@ -306,23 +358,36 @@ export interface CreateClubResult {
  *      fresh `people` row (user_id LEFT NULL — #188 links it on first
  *      sign-in) + a `members` row with club_role=admin, status=active.
  *
- * Club number is REQUIRED and UNIQUE: a duplicate is rejected with a clear
- * error and NO partial writes (the whole transaction rolls back). The caller
- * enforces the superadmin gate.
+ * Club number is UNIQUE, and REQUIRED for a chartered club only (#944): a
+ * chartering club may be provisioned without one. A duplicate is rejected with
+ * a clear error and NO partial writes (the whole transaction rolls back). The
+ * input's shape is parsed by the server fn's validator, not here; the charter
+ * invariant is re-checked here anyway, because it is the rule this write must
+ * never break and it costs nothing. The caller enforces the superadmin gate.
  */
 export async function createClubWithAdmin(
 	input: CreateClubInput,
 ): Promise<CreateClubResult> {
+	const charterStatus: CharterStatus = input.charterStatus ?? "chartered";
+	const clubNumber = input.clubNumber?.trim() || null;
+	const charteredAt =
+		charterStatus === "chartered" ? (input.charteredAt ?? null) : null;
+	const invariant = charterInvariantError({ charterStatus, clubNumber });
+	if (invariant) throw new Error(invariant);
+
 	return db.transaction(async (tx) => {
 		// Fail fast + clean on a duplicate number (the DB unique constraint is the
-		// backstop for a concurrent race; this gives the friendly message).
-		const [dupe] = await tx
-			.select({ id: clubs.id })
-			.from(clubs)
-			.where(eq(clubs.clubNumber, input.clubNumber))
-			.limit(1);
-		if (dupe) {
-			throw new Error(`A club with number ${input.clubNumber} already exists.`);
+		// backstop for a concurrent race; this gives the friendly message). A
+		// chartering club provisioned without a number has nothing to collide.
+		if (clubNumber) {
+			const [dupe] = await tx
+				.select({ id: clubs.id })
+				.from(clubs)
+				.where(eq(clubs.clubNumber, clubNumber))
+				.limit(1);
+			if (dupe) {
+				throw new Error(`A club with number ${clubNumber} already exists.`);
+			}
 		}
 
 		const slug = await uniqueSlug(tx, input.clubName);
@@ -332,7 +397,9 @@ export async function createClubWithAdmin(
 			.values({
 				name: input.clubName,
 				slug,
-				clubNumber: input.clubNumber,
+				clubNumber,
+				charterStatus,
+				charteredAt,
 				timezone: input.timezone,
 			})
 			.returning({ id: clubs.id, slug: clubs.slug });
