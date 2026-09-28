@@ -12,7 +12,7 @@
  * and later point at. The recipient and the role label are derived here, from
  * the meeting's own rows, and never taken from the caller.
  */
-import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
@@ -465,8 +465,25 @@ async function leaveFeedbackUnmapped(
 }
 
 // ---------------------------------------------------------------------------
-// The recipient's read (parts 2 and 3 call this; no server fn here)
+// The recipient's read, delete and mark-seen (#986)
 // ---------------------------------------------------------------------------
+
+/**
+ * THE statement of which notes a recipient may touch, shared by the read, the
+ * delete and the mark-seen so the three cannot drift: left for one of the
+ * caller's own memberships (`memberIds`, from the SESSION user), on a meeting
+ * whose scheduled end has passed on the server's clock. A note the recipient
+ * cannot read, they can neither delete nor mark seen — so no id a caller holds
+ * reaches a note before its meeting has ended.
+ *
+ * An `EXISTS` rather than a join so it reads the same inside a `DELETE` and an
+ * `UPDATE`, which have no join of their own.
+ */
+const recipientMayTouch = (memberIds: string[], now: Date) =>
+	and(
+		inArray(roleFeedbackNotes.recipientMemberId, memberIds),
+		sql`exists (select 1 from ${meetings} where ${meetings.id} = ${roleFeedbackNotes.meetingId} and ${meetings.scheduledAt} + (${meetings.lengthMinutes} * interval '1 minute') <= ${now.toISOString()}::timestamptz)`,
+	);
 
 export interface FeedbackNote {
 	id: string;
@@ -481,6 +498,9 @@ export interface FeedbackMeetingGroup {
 	clubName: string;
 	/** `scheduledAt`, ISO. */
 	meetingDate: string;
+	/** The club's timezone, so the date is formatted the same on the server's
+	 *  render and the browser's hydration (#608's hazard, not repeated). */
+	timezone: string;
 	roles: { roleLabel: string; notes: FeedbackNote[] }[];
 }
 
@@ -507,11 +527,7 @@ export async function loadFeedbackForUser(
 	const memberIds = await userMemberIds(userId);
 	if (memberIds.length === 0) return { meetings: [], unseenCount: 0 };
 
-	const conds = [
-		inArray(roleFeedbackNotes.recipientMemberId, memberIds),
-		// The scheduled end has passed, on the server's clock.
-		sql`${meetings.scheduledAt} + (${meetings.lengthMinutes} * interval '1 minute') <= ${now.toISOString()}::timestamptz`,
-	];
+	const conds = [recipientMayTouch(memberIds, now)];
 	if (opts.meetingId) {
 		if (!UUID_RE.test(opts.meetingId)) return { meetings: [], unseenCount: 0 };
 		conds.push(eq(roleFeedbackNotes.meetingId, opts.meetingId));
@@ -530,6 +546,7 @@ export async function loadFeedbackForUser(
 			createdAt: roleFeedbackNotes.createdAt,
 			scheduledAt: meetings.scheduledAt,
 			clubName: clubs.name,
+			timezone: clubs.timezone,
 		})
 		.from(roleFeedbackNotes)
 		.innerJoin(meetings, eq(meetings.id, roleFeedbackNotes.meetingId))
@@ -554,6 +571,7 @@ export async function loadFeedbackForUser(
 				meetingId: r.meetingId,
 				clubName: r.clubName,
 				meetingDate: r.scheduledAt.toISOString(),
+				timezone: r.timezone,
 				roles: [],
 			};
 			byMeeting.set(r.meetingId, g);
@@ -575,4 +593,69 @@ export async function loadFeedbackForUser(
 		});
 	}
 	return { meetings: groups, unseenCount };
+}
+
+/** What `deleteMyFeedbackNote` answers. `deleted: false` is ONE result for a
+ *  note that does not exist, one already deleted, one that belongs to someone
+ *  else, and one whose meeting has not ended: the caller cannot tell them apart, so a guessed id says
+ *  nothing about whether a note exists. */
+export interface DeleteFeedbackResult {
+	deleted: boolean;
+}
+
+/**
+ * Hard-delete one note, only when `recipientMayTouch` admits it: one of
+ * `userId`'s own memberships, on a meeting that has ended (any club, archived included: a takedown stops new notes, not a
+ * person throwing away one they were given). Anything else deletes nothing and
+ * answers exactly like a note that never existed.
+ *
+ * The ownership check and the delete are ONE statement, so there is no
+ * check-then-act window, and the recipient set comes from the SESSION user,
+ * never from the caller.
+ */
+export async function deleteMyFeedbackNote(
+	userId: string,
+	noteId: string,
+	now: Date = new Date(),
+): Promise<DeleteFeedbackResult> {
+	if (!UUID_RE.test(noteId)) return { deleted: false };
+	const memberIds = await userMemberIds(userId);
+	if (memberIds.length === 0) return { deleted: false };
+	const gone = await db
+		.delete(roleFeedbackNotes)
+		.where(
+			and(eq(roleFeedbackNotes.id, noteId), recipientMayTouch(memberIds, now)),
+		)
+		.returning({ id: roleFeedbackNotes.id });
+	return { deleted: gone.length > 0 };
+}
+
+/**
+ * Mark the caller's readable, unseen notes seen. Narrowed to `noteIds`, the
+ * notes the dashboard actually rendered, so a note that arrives between the
+ * page's read and this call keeps its "new" badge for the next visit instead of
+ * being marked seen unshown. Ids that are not the caller's are ignored: the
+ * recipient filter comes from the session, and the result is only a count.
+ */
+export async function markMyFeedbackSeen(
+	userId: string,
+	noteIds: readonly string[],
+	now: Date = new Date(),
+): Promise<{ marked: number }> {
+	const ids = noteIds.filter((id) => UUID_RE.test(id));
+	if (ids.length === 0) return { marked: 0 };
+	const memberIds = await userMemberIds(userId);
+	if (memberIds.length === 0) return { marked: 0 };
+	const marked = await db
+		.update(roleFeedbackNotes)
+		.set({ seenAt: now })
+		.where(
+			and(
+				inArray(roleFeedbackNotes.id, ids),
+				isNull(roleFeedbackNotes.seenAt),
+				recipientMayTouch(memberIds, now),
+			),
+		)
+		.returning({ id: roleFeedbackNotes.id });
+	return { marked: marked.length };
 }

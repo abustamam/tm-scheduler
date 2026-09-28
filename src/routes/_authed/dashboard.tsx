@@ -3,6 +3,10 @@ import { BookOpen, CalendarDays } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { DashboardGreeting } from "#/components/dashboard-greeting";
+import {
+	FeedbackForYou,
+	feedbackOrEmpty,
+} from "#/components/feedback/feedback-for-you";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
@@ -30,22 +34,36 @@ import {
 } from "#/server/path-enrollment";
 import { getMyPathways } from "#/server/pathways-read";
 import { markMyProject, unmarkMyProject } from "#/server/progress-marks";
+import {
+	deleteMyFeedback,
+	listMyFeedback,
+	markMyFeedbackSeen,
+} from "#/server/role-feedback";
 
 export const Route = createFileRoute("/_authed/dashboard")({
 	// `?speeches=all` lifts the speech log's 6-row default (#681).
 	validateSearch: validateSpeechLogSearch,
 	loaderDeps: ({ search }) => ({ allSpeeches: search.speeches === "all" }),
 	loader: async ({ deps }) => {
-		const [commitments, speechLog, pathways, enrollments, pathOptions] =
-			await Promise.all([
-				listMyCommitments(),
-				// Always WITH an input: no input is the pre-#681 stale-tab call, which
-				// gets the legacy bare array (see `listMySpeeches`).
-				listMySpeeches({ data: { allSpeeches: deps.allSpeeches } }),
-				getMyPathways(),
-				getMyPathEnrollments(),
-				listPathwayOptions(),
-			]);
+		const [
+			commitments,
+			speechLog,
+			pathways,
+			enrollments,
+			pathOptions,
+			feedback,
+		] = await Promise.all([
+			listMyCommitments(),
+			// Always WITH an input: no input is the pre-#681 stale-tab call, which
+			// gets the legacy bare array (see `listMySpeeches`).
+			listMySpeeches({ data: { allSpeeches: deps.allSpeeches } }),
+			getMyPathways(),
+			getMyPathEnrollments(),
+			listPathwayOptions(),
+			// Caught to an empty card: a love-note read failing must never
+			// blank the dashboard (#986).
+			feedbackOrEmpty(() => listMyFeedback()),
+		]);
 		// Unreachable with an input sent; narrowed so the type is one shape.
 		const { speeches, speechLogTruncated } = Array.isArray(speechLog)
 			? { speeches: speechLog, speechLogTruncated: false }
@@ -58,6 +76,7 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			pathways,
 			enrollments,
 			pathOptions,
+			feedback,
 			// The instant the speech log is read against, pinned HERE rather than
 			// sampled while rendering. One value is dehydrated with the loader data,
 			// so the SSR pass and the hydration pass classify every row identically
@@ -88,6 +107,7 @@ function Dashboard() {
 		pathways,
 		enrollments,
 		pathOptions,
+		feedback,
 		now,
 	} = Route.useLoaderData();
 	const router = useRouter();
@@ -220,6 +240,27 @@ function Dashboard() {
 							allSpeeches={allSpeeches}
 						/>
 					</div>
+
+					{/* Anonymous role feedback (#986). Deletes are held locally by the
+					    card rather than re-running the loader; a delete that found
+					    nothing says so (`onNotice`). Marking seen is
+					    fire-and-forget: a failure only means the badge shows again
+					    next visit. */}
+					<FeedbackForYou
+						feedback={feedback}
+						onDelete={(noteId) => deleteMyFeedback({ data: { noteId } })}
+						onSeen={(noteIds) => {
+							markMyFeedbackSeen({ data: { noteIds } }).catch(() => {});
+						}}
+						onNotice={(message) => toast(message)}
+						onError={(err) =>
+							toast.error(
+								err instanceof Error
+									? err.message
+									: "Couldn't delete that note.",
+							)
+						}
+					/>
 				</div>
 
 				{/* Right column */}
