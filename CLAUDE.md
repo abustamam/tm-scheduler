@@ -160,6 +160,9 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   matching neither side. And do not reach for `--unsafe`: on this repo it rewrites ~90 lines across
   12 files, turning `!` into `?.` and converting fail-fast into `undefined` flowing into DB writes.
 - `bun run test` — Vitest (uses Vitest, NOT `bun test`).
+- `bun run test:hydration` — only the route hydration gate (#1000) and its teardown test, what CI's
+  `hydration` job runs (#1022). A plain `bun run test` includes them too; `check` leaves them out
+  with `EXCLUDE_ROUTE_HYDRATION_GATE=1`, the one value `vitest.config.ts` honours.
 - `bun run db:generate` — generate Drizzle migrations from `src/db/schema.ts`.
 - `bun run db:migrate` — apply migrations. Use this (NOT `db:push`) to keep the local dev DB
   (`tm_scheduler`) current: it is applied automatically as a `predev` step on `bun run dev` and by
@@ -238,7 +241,10 @@ plain `bun run test` masks stale assertions that CI catches. `tm_test` is push-s
 `DATABASE_URL=…tm_test bun run db:push --force` — test databases are the one thing `db:push` is
 for. A worktree's own database is re-synced by re-running `bun run worktree:setup`.
 
-**The twelve browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.** There are 21 of
+them as of #1022, every test file carrying the `CI has no Chrome` refusal
+(`grep -rl 'CI has no Chrome' src`): 19 run in CI's `check` job and the route hydration gate's two
+run in `hydration`. The twelve described below are the ones with a lesson attached, not the full set.
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -354,7 +360,23 @@ diagnosable. Beside that job's ONLY — the `extension` job is `working-director
 runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
 same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
-**On macOS all twelve skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+**The route hydration gate (#1000, `src/routes/route-hydration.test.ts`) is browser-backed too, but
+it runs in its OWN CI job, `hydration`, in parallel with `check` (#1022).** It starts a vite dev
+server and sweeps every route in Chrome, ~4.5 minutes of one file, which is work `check` no longer
+carries. (How much WALL time that saves `check` sits inside its run-to-run noise: its duration
+ranged 493-777s over six runs on 2026-09-28, with and without the gate.) `check`'s `Test` step sets
+`EXCLUDE_ROUTE_HYDRATION_GATE: "1"`, and `vitest.config.ts` (`excludesHydrationGate`) drops the
+gate and its teardown test (`HYDRATION_GATE_FILES`) on exactly that value and no other; the
+`hydration` job runs `bun run test:hydration` (exactly those two files) and then fails if the JSON
+report shows zero tests, any skipped, or the sweep test not passed. A plain local `bun run test`
+sets nothing, so it still runs the gate. `hydration-gate-ci.guard.test.ts` PARSES the workflow (so a
+commented-out line cannot satisfy it) and holds the file list, the script, the variable's name and
+value, and the `hydration` job's shape (no `if:`, no `continue-on-error`) to each other: one
+drifting would run the gate nowhere with every job green.
+Both jobs need Postgres and Chrome, and the gate itself still fails rather than skips in CI without
+either.
+
+**On macOS every one of them skips unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
 puts nothing on `PATH` under any of those four binary names — that is the `CHROME_BINARIES`
 lookup list, which is still four, and not the suite count above. This is a macOS-only gap: on Linux, where this
 repo is usually developed, `google-chrome` resolves and these gates run locally as normal. Do NOT
@@ -625,7 +647,7 @@ measurements are in git history (#672, #673) if a release cadence ever comes bac
 - **A wave agent never merges its own PR.** Merging happens from the main session, after
   `/review-pr`. A wave PR is green against the `main` that existed when its CI ran, and branch
   protection does NOT require it to be up to date before it merges (`strict: false` on `main`,
-  required checks `check` and `extension`). So a PR merges on its own green CI, and
+  required checks `check`, `extension` and `hydration`). So a PR merges on its own green CI, and
   `gh pr update-branch N` is needed only when GitHub reports a real conflict — a migration
   number collision is the usual one, and it surfaces as an ordinary git conflict. What catches a
   cross-PR clash now is **CI on `main` after the merge**: `batch:issues` waves are file-disjoint

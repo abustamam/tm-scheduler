@@ -53,8 +53,11 @@ jobs:
       # fails to apply, and keeps the test schema honest to the migration history.
       - name: Apply migrations
         run: DATABASE_URL=$TEST_DATABASE_URL bun run db:migrate
-      # Eight suites drive headless Chrome and FAIL rather than skip when no
-      # browser is present in CI: print-page-count.test.tsx counts printed
+      # 19 suites run here that drive headless Chrome and FAIL rather than skip
+      # when no browser is present in CI: every test file carrying the
+      # "CI has no Chrome" refusal except the route hydration gate's two, which
+      # run in the `hydration` job (21 files as of #1022). Among them:
+      # print-page-count.test.tsx counts printed
       # sheets, print-density.test.tsx measures how large the type actually
       # prints once FitPage has scaled the sheet,
       # pinned-column-reachability.test.ts checks that the bottom of each
@@ -75,8 +78,16 @@ jobs:
       # image detail outside this repo, so the dependency is named here. If this
       # job starts failing with "CI has no Chrome on PATH", add a browser setup
       # step; the gate is not optional.
+      # The route hydration gate (#1000) is a browser-backed suite too, but it
+      # does NOT run here: it starts a vite dev server and sweeps every route
+      # (~5 min), so it runs in the `hydration` job below, in parallel (#1022).
+      # EXCLUDE_ROUTE_HYDRATION_GATE is read by vitest.config.ts (only the exact
+      # value "1" excludes) and set on
+      # THIS step only; the `hydration` job fails if it ran zero gate tests.
       - name: Test
         run: bun run test
+        env:
+          EXCLUDE_ROUTE_HYDRATION_GATE: "1"
       - name: Build (client bundle + migrate runner)
         run: bun run build
       # Exercise the EXACT runner production boots (Dockerfile CMD runs
@@ -90,6 +101,53 @@ jobs:
           PGPASSWORD=test psql -h localhost -U test -d tm_test -c 'CREATE DATABASE tm_migrate_runner;'
           DATABASE_URL=postgresql://test:test@localhost:5432/tm_migrate_runner node .output/migrate.mjs
           DATABASE_URL=postgresql://test:test@localhost:5432/tm_migrate_runner node .output/migrate.mjs
+
+  # The route hydration gate (#1000, src/routes/route-hydration.test.ts) and its
+  # harness's teardown test, and nothing else (#1022). It needs what `check`'s
+  # Test step needs: Postgres with the migrations applied, and Chrome, which
+  # ubuntu-latest ships (the gate FAILS rather than skips in CI without either).
+  # `check` excludes these two files, so this job is the only place CI runs
+  # them, and the last step fails it if the gate ran zero tests or skipped any.
+  hydration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: tm_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgresql://test:test@localhost:5432/tm_test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Apply migrations
+        run: DATABASE_URL=$TEST_DATABASE_URL bun run db:migrate
+      - name: Route hydration gate
+        run: bun run test:hydration --reporter=default --reporter=json --outputFile=hydration-report.json
+      # A run that collected nothing, or skipped the sweep, must not read as a
+      # pass: the gate's own "runs in CI" test only guards the files it is in.
+      - name: Gate ran (test count)
+        run: |
+          jq -r '"gate tests: \(.numTotalTests) total, \(.numPassedTests) passed, \(.numPendingTests) skipped, \(.numTodoTests) todo"' hydration-report.json
+          jq -e '
+            .numTotalTests > 0
+            and .numPassedTests == .numTotalTests
+            and ([.testResults[].assertionResults[]
+                  | select(.title == "hydrates every route without a mismatch" and .status == "passed")]
+                 | length) == 1
+          ' hydration-report.json > /dev/null || {
+            echo "::error::The route hydration gate ran zero tests, skipped some, or never ran its sweep."
+            exit 1
+          }
 
   extension:
     runs-on: ubuntu-latest

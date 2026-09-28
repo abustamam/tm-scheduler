@@ -19,6 +19,7 @@
     "start": "node .output/migrate.mjs && node .output/seed-catalog.mjs && node .output/seed-templates.mjs && node .output/server/index.mjs",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:hydration": "vitest run src/routes/route-hydration.test.ts src/test/route-hydration.test.ts",
     "typecheck": "tsc --noEmit",
     "format": "biome format",
     "lint": "biome lint",
