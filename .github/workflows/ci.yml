@@ -53,8 +53,11 @@ jobs:
       # fails to apply, and keeps the test schema honest to the migration history.
       - name: Apply migrations
         run: DATABASE_URL=$TEST_DATABASE_URL bun run db:migrate
-      # Eight suites drive headless Chrome and FAIL rather than skip when no
-      # browser is present in CI: print-page-count.test.tsx counts printed
+      # 19 suites run here that drive headless Chrome and FAIL rather than skip
+      # when no browser is present in CI: every test file carrying the
+      # "CI has no Chrome" refusal except the route hydration gate's two, which
+      # run in the `hydration` job (21 files as of #1022). Among them:
+      # print-page-count.test.tsx counts printed
       # sheets, print-density.test.tsx measures how large the type actually
       # prints once FitPage has scaled the sheet,
       # pinned-column-reachability.test.ts checks that the bottom of each
@@ -78,7 +81,8 @@ jobs:
       # The route hydration gate (#1000) is a browser-backed suite too, but it
       # does NOT run here: it starts a vite dev server and sweeps every route
       # (~5 min), so it runs in the `hydration` job below, in parallel (#1022).
-      # EXCLUDE_ROUTE_HYDRATION_GATE is read by vitest.config.ts and set on
+      # EXCLUDE_ROUTE_HYDRATION_GATE is read by vitest.config.ts (only the exact
+      # value "1" excludes) and set on
       # THIS step only; the `hydration` job fails if it ran zero gate tests.
       - name: Test
         run: bun run test

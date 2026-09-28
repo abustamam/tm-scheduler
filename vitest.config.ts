@@ -15,6 +15,19 @@ export const HYDRATION_GATE_FILES = [
 	"src/test/route-hydration.test.ts",
 ];
 
+/** The variable `check`'s Test step sets. Only the exact value "1" excludes. */
+export const EXCLUDE_GATE_ENV = "EXCLUDE_ROUTE_HYDRATION_GATE";
+
+/**
+ * Strict on purpose: "0", "false" or a stray empty-but-set value must not
+ * quietly drop the gate from a run that meant to keep it.
+ */
+export function excludesHydrationGate(
+	env: Record<string, string | undefined>,
+): boolean {
+	return env[EXCLUDE_GATE_ENV] === "1";
+}
+
 export default defineConfig({
 	resolve: {
 		alias: { "#": resolve(__dirname, "src") },
@@ -25,7 +38,7 @@ export default defineConfig({
 		include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
 		exclude: [
 			...configDefaults.exclude,
-			...(process.env.EXCLUDE_ROUTE_HYDRATION_GATE ? HYDRATION_GATE_FILES : []),
+			...(excludesHydrationGate(process.env) ? HYDRATION_GATE_FILES : []),
 		],
 		// Vitest's 5s/10s defaults are sized for pure unit tests. ~50 of our suites
 		// are DB-backed and run in parallel against ONE Postgres, so a test that
