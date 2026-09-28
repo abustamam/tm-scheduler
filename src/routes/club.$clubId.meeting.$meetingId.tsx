@@ -27,6 +27,7 @@ import { DigitalVotingSwitch } from "#/components/club/digital-voting-switch";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
+import { MeetingFeedbackLink } from "#/components/club/meeting-feedback-link";
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
@@ -57,6 +58,7 @@ import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { ballotUrlFor } from "#/lib/digital-voting";
+import { feedbackWindow } from "#/lib/feedback-window";
 import {
 	formatMeetingDate,
 	formatMeetingTime,
@@ -498,6 +500,10 @@ function MeetingView() {
 	// frozen `phase` as everything else — so it cannot disappear mid-visit at
 	// club-local midnight. Any other day, `?room=1` renders the normal page.
 	const inRoom = isInRoom(search) && phase === "today";
+	// Anonymous role feedback (#984): offered from the meeting's start until
+	// three days after its scheduled end, off the same frozen `now`. The server
+	// re-checks the window on every write, so this only decides the link.
+	const feedbackOpen = feedbackWindow(meeting, now).canWrite;
 	const holdsRole = myId !== null && slots.some((s) => s.assigneeId === myId);
 	// #731. Null unless the club set a join link AND it still normalizes to an
 	// http(s) URL — see the render site in the header for why it is re-checked
@@ -1658,7 +1664,14 @@ function MeetingView() {
 					member={member}
 					holdsRole={holdsRole}
 					wordOfTheDay={meeting.wordOfTheDay}
+					feedbackOpen={feedbackOpen}
 					promptIdentity={promptIdentity}
+				/>
+				<MeetingFeedbackLink
+					open={feedbackOpen}
+					inRoom={inRoom}
+					clubId={clubId}
+					meetingKey={urlKey}
 				/>
 				<MeetingNavStrip clubId={clubId} items={navItems} />
 				{/* Same predicate the "Word poster" button below uses, so the chip

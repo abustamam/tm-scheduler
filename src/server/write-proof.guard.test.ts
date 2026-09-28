@@ -358,8 +358,9 @@ type WriteProofClass =
  * The 29 the #761 inventory found, less the five #762 retired and the two #752
  * retired, plus #866's request-access form and #880's Table Topics notes
  * editor: 26, and #763 retired the last five `pending-proof` rows — two to
- * `fill-blank`, three to the default `session` sweep — so 23 today (15
- * `console-asserted`, 3 `public-intake`, 5 `fill-blank`). Adding a row is a decision about a write's
+ * `fill-blank`, three to the default `session` sweep — so 23, and #984's
+ * anonymous role feedback makes 24 today (15 `console-asserted`, 4
+ * `public-intake`, 5 `fill-blank`). Adding a row is a decision about a write's
  * trust model, not a way to get green — a genuinely session-less write that
  * turns up unclassified is a finding to report, not an entry to make.
  *
@@ -535,6 +536,20 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 		class: "public-intake",
 		reason:
 			"access-request intake: honeypot + fill time; per-email/global/notify admission caps per 24h under a try-lock (held after 2 short retries = contended); ≤MAX_SENDS_PER_TICK emails per poller tick; no per-IP cap (#866)",
+	},
+	// Anonymous role feedback, "love notes" (#984). Anyone with the meeting link
+	// may leave a note, by the maintainer's decision (#981: honour system, as
+	// #982 is for voting). There is nothing to prove because nothing is
+	// CREDITED: the row stores no writer identity at all. What bounds it, all
+	// in `role-feedback-logic.ts`: a window from the meeting's start to three
+	// days after its scheduled end on the SERVER's clock; ≤500 chars per box;
+	// 20 notes per recipient and 300 per meeting, counted under the club write
+	// lock; the recipient and label are derived server-side; archive-gated
+	// under that lock.
+	"role-feedback.ts#leaveFeedback": {
+		class: "public-intake",
+		reason:
+			"anonymous role feedback: no writer identity stored; server-clock window start → end + 3 days; ≤500 chars per box; ≤20 per recipient and ≤300 per meeting counted under the club lock (pre-checked unlocked first); ≤60 per minute per client address in memory (salted hash, never stored); archive-gated under that lock (#984)",
 	},
 };
 
@@ -1102,6 +1117,9 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		// vote fills a blank, a change is bound to the casting device. Total
 		// unchanged.
 		//
+		// #984 added one `public-intake` row, anonymous role feedback, so that
+		// class reads 4 and the total 24.
+		//
 		// #763 retired the class: `claimSlot` and `confirmSlot` to `fill-blank`,
 		// and `releaseSlot`, `reassignSlot`, `updateSpeakerDetails` out of the map
 		// to the default `session` sweep. `pending-proof` stays counted at ZERO,
@@ -1115,10 +1133,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			publicIntake: byClass("public-intake"),
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 23,
+			total: 24,
 			pendingProof: 0,
 			consoleAsserted: 15,
-			publicIntake: 3,
+			publicIntake: 4,
 			fillBlank: 5,
 		});
 	});

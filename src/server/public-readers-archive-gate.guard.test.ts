@@ -280,6 +280,16 @@ const WIRINGS: Wiring[] = [
 		leaks:
 			"an archived club's meeting details, blast template and logo on a public flyer (#931)",
 	},
+	{
+		// #984. The seam resolves the key through `resolvePublicMeetingKey`, so an
+		// archived club, an unknown key and a cancelled meeting all answer null.
+		// `role-feedback.integration.test.ts` executes the archived case.
+		file: "server/role-feedback.ts",
+		fn: "getFeedbackTargetsPublic",
+		mustCall: "loadFeedbackTargetsPublic",
+		leaks:
+			"the names of every member who held a role at the meeting, beside the role they held",
+	},
 ];
 
 describe("public server fns are wired to their archive-gated seam (#544)", () => {
@@ -401,14 +411,14 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
  * because for reads the two are interchangeable and swapping them typechecks.
  * Writes have no such sibling pair: the gate is one call, and what varies is
- * WHERE it lives. FOURTEEN of these gate in a `-logic` seam — which is
+ * WHERE it lives. FIFTEEN of these gate in a `-logic` seam — which is
  * strictly better, because a seam is reachable from vitest — and FOUR gate in
  * the handler's own server-fn module: `updateSpeakerDetails` (`slots.ts`),
  * whose logic is inline there, and the three `requireMemberInClub` writes #825
  * re-enrolled (`setPlannedAttendance`, `setAvailability`,
  * `markUnavailableReleasing`), which assert directly in their handlers.
  *
- * Of the fourteen, ten are executed by
+ * Of the fifteen, eleven are executed by
  * `public-writers-archive-gate.integration.test.ts`. The other four are executed
  * beside the rest of their own feature's cases, because each needs a fixture
  * that suite does not build: `confirmSlotCore` in
@@ -586,6 +596,16 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 	{
 		fn: "recordTiming",
 		file: "src/server/timings-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	// #984 — anonymous role feedback. Session-less by design (anyone with the
+	// meeting link), and it MINTS rows carrying free text about a named member,
+	// so a taken-down club must not keep collecting them. Gated in the seam,
+	// UNDER the club lock it already takes, and executed by
+	// `public-writers-archive-gate.integration.test.ts`.
+	{
+		fn: "leaveFeedback",
+		file: "src/server/role-feedback-logic.ts",
 		gate: "assertClubNotArchived",
 	},
 ];
@@ -892,7 +912,8 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		// that a comment naming `requireUser()` had classified out by prose.
 		// The count is the vacuity guard, so it moves deliberately with the table
 		// rather than being loosened to `toBeGreaterThan`.
-		expect(WRITE_GATES).toHaveLength(18);
+		// #984's `leaveFeedback` is the nineteenth, a genuinely new write.
+		expect(WRITE_GATES).toHaveLength(19);
 	});
 
 	it("does not also waive a write it claims to gate", () => {
