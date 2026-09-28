@@ -31,6 +31,8 @@ import {
 	type SheetRoleNames,
 	sheetScripts,
 	standardTimingRows,
+	WOD_TALLY_PARTS,
+	WOD_TALLY_ROWS,
 } from "./role-sheet-layout";
 
 const fill: RoleSheetFill = {
@@ -731,6 +733,54 @@ describe("the Ah-Counter is not handed the booked speakers (#509)", () => {
 	it("leaves the Timer's log pre-filled", () => {
 		const words = named("timer");
 		for (const speaker of fill.speakers) expect(words).toContain(speaker);
+	});
+});
+
+describe("the Grammarian tallies Word of the Day usage, Table Topics included (#965)", () => {
+	function textOf(node: unknown): string[] {
+		if (node == null || node === false) return [];
+		if (typeof node === "string") return [node];
+		if (Array.isArray(node)) return node.flatMap(textOf);
+		const el = node as { props?: { children?: unknown } };
+		return el.props ? textOf(el.props.children) : [];
+	}
+	const words = (key: RoleSheetKey, f?: RoleSheetFill) =>
+		textOf(buildRoleSheetDoc(key, f));
+
+	it("prints both halves of the tally, prepared speakers and Table Topics", () => {
+		for (const f of [undefined, fill]) {
+			const text = words("grammarian", f);
+			expect(text).toContain("Word of the Day tally");
+			// Exactly the two parts, in print order.
+			expect(
+				text.filter((t) => (WOD_TALLY_PARTS as readonly string[]).includes(t)),
+			).toEqual([...WOD_TALLY_PARTS]);
+			expect(WOD_TALLY_PARTS).toEqual([
+				"Prepared speakers",
+				"Table Topics speakers",
+			]);
+		}
+	});
+
+	it("gives each half a name column and a tally column, with rows to write in", () => {
+		const text = words("grammarian");
+		// One header row per half: each column label appears exactly twice.
+		for (const label of ["Who spoke", "Tally", "Total"]) {
+			expect(text.filter((t) => t === label)).toHaveLength(2);
+		}
+		expect(WOD_TALLY_ROWS).toBeGreaterThanOrEqual(4);
+	});
+
+	it("does not pre-fill the tally with the booked speakers", () => {
+		const text = words("grammarian", fill).join(" | ");
+		for (const speaker of fill.speakers) expect(text).not.toContain(speaker);
+	});
+
+	it("puts the tally on no other sheet", () => {
+		for (const { key } of ROLE_SHEETS) {
+			if (key === "grammarian") continue;
+			expect(words(key, fill)).not.toContain("Word of the Day tally");
+		}
 	});
 });
 
