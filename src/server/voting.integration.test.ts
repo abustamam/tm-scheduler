@@ -6,8 +6,18 @@
  * and the member-XOR-guest shape by check constraints. Exercised against a live
  * Postgres identified by TEST_DATABASE_URL; the whole suite skips when unset.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import {
 	activityLog,
 	clubs,
@@ -841,6 +851,86 @@ describe.skipIf(!hasTestDb)("castVote: device-bound change (#765)", () => {
  * private window) is another ballot — but the same device changing its mind
  * changes its one ballot, as every identified voter's re-tap does.
  */
+describe.skipIf(!hasTestDb)(
+	"meeting_votes.anonymous trigger (migration 0099)",
+	() => {
+		let seed: SeededClub;
+		let sessionId: string;
+
+		beforeAll(async () => {
+			// Push-synced test databases cannot see a trigger (CI migrates, so there it
+			// is already present). Applying the shipped file, which is idempotent,
+			// proves that file rather than a copy of it — as the 0087 suite does.
+			const migration = readFileSync(
+				resolve(__dirname, "../../drizzle/0099_vengeful_malcolm_colcord.sql"),
+				"utf8",
+			);
+			for (const statement of migration.split("--> statement-breakpoint")) {
+				await testDb.execute(sql.raw(statement));
+			}
+		});
+
+		beforeEach(async () => {
+			seed = await seedClub();
+			const [s] = await testDb
+				.insert(meetingVoteSessions)
+				.values({ meetingId: seed.meetingId, category: "best_speaker" })
+				.returning({ id: meetingVoteSessions.id });
+			sessionId = s.id;
+		});
+
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		});
+
+		const anonymousOf = async (id: string) =>
+			(
+				await testDb
+					.select({ anonymous: meetingVotes.anonymous })
+					.from(meetingVotes)
+					.where(eq(meetingVotes.id, id))
+			)[0]?.anonymous;
+
+		it("marks a voterless ballot anonymous when the INSERT does not name the column", async () => {
+			// What the previous container writes while the migration has run and it
+			// is still serving: the pre-0099 insert, which knows no such column. A
+			// DEFAULT false alone would call it identified and the new server would
+			// then count the phone's next change as a second vote.
+			const res = await testDb.execute(sql`
+			insert into meeting_votes (session_id, candidate_member_id, device_token)
+			values (${sessionId}, ${seed.adminMemberId}, ${PHONE})
+			returning id`);
+			expect(await anonymousOf((res.rows[0] as { id: string }).id)).toBe(true);
+		});
+
+		it("never marks a vote that names its voter anonymous, whatever the statement sends", async () => {
+			const [row] = await testDb
+				.insert(meetingVotes)
+				.values({
+					sessionId,
+					voterMemberId: seed.memberId,
+					candidateMemberId: seed.adminMemberId,
+					anonymous: true,
+				})
+				.returning({ id: meetingVotes.id });
+			expect(await anonymousOf(row.id)).toBe(false);
+		});
+
+		it("leaves the flag alone when a removal later nulls the voter", async () => {
+			const [row] = await testDb
+				.insert(meetingVotes)
+				.values({
+					sessionId,
+					voterMemberId: seed.memberId,
+					candidateMemberId: seed.adminMemberId,
+				})
+				.returning({ id: meetingVotes.id });
+			await testDb.delete(members).where(eq(members.id, seed.memberId));
+			expect(await anonymousOf(row.id)).toBe(false);
+		});
+	},
+);
+
 describe.skipIf(!hasTestDb)("castVote: an anonymous voter (#982)", () => {
 	let seed: SeededClub;
 	let sessionId: string;

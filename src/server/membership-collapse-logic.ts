@@ -36,6 +36,7 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { earliestDate } from "#/lib/person-identity";
+import { lockClubForWrite } from "./club-write-lock";
 
 /** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
@@ -62,15 +63,21 @@ export async function collapseMemberships(
 ): Promise<void> {
 	if (keeperId === absorbedId) return;
 
-	// FOR UPDATE, taken BEFORE the first re-point, is what makes the re-points
-	// below complete. Every row a concurrent writer inserts naming the absorbed
-	// membership takes FOR KEY SHARE on it for the FK check, which FOR UPDATE
-	// excludes. Without it the only lock on this row was the DELETE at the end:
-	// an anonymous feedback note committed between its re-point and that DELETE
-	// was cascaded away, silently, and a row with a SET NULL FK lost its member.
-	// Now such a writer either committed first (and is re-pointed) or waits and
-	// then fails its FK against a deleted row. Ordered by id so two merges over
-	// the same pair lock it in one order.
+	// The club write lock, before the first re-point. The anonymous feedback
+	// form (`role-feedback-logic.ts`) inserts under it, and nothing else stopped
+	// a note for the absorbed membership landing mid-merge: this re-pointed the
+	// notes it could see, the final DELETE waited for the insert, and the
+	// cascade took the new note. Now that writer finishes first or waits for the
+	// merge and then fails its FK.
+	//
+	// Not `FOR UPDATE` on the two memberships, which closes the same window for
+	// every writer and was the first attempt: a slot reassignment locks the slot
+	// then FK-locks its new holder, while this locks the holder then updates the
+	// slot, and a ballot cast holds its session `FOR SHARE` then FK-locks the
+	// voter, while this updates the session's opener — two deadlocks this
+	// function did not have. This advisory lock is taken first by every writer
+	// that takes it, so it orders nothing new.
+	await lockClubForWrite(tx, clubId);
 	const rows = await tx
 		.select()
 		.from(members)
@@ -79,9 +86,7 @@ export async function collapseMemberships(
 				eq(members.clubId, clubId),
 				inArray(members.id, [keeperId, absorbedId]),
 			),
-		)
-		.orderBy(members.id)
-		.for("update");
+		);
 	const keeper = rows.find((m) => m.id === keeperId);
 	const absorbed = rows.find((m) => m.id === absorbedId);
 	if (!keeper || !absorbed) {

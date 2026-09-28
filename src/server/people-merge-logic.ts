@@ -100,10 +100,13 @@ export async function mergePeople(
 
 		// 1. Memberships: collapse in shared clubs, else plain re-point. Every
 		//    club the absorbed Person belonged to is "affected" (gets an audit row).
+		// Ordered by club: each collapse below takes that club's write lock, so
+		// two merges over overlapping clubs take them in one order.
 		const absorbedMemberships = await tx
 			.select({ id: members.id, clubId: members.clubId })
 			.from(members)
-			.where(eq(members.personId, absorbed.id));
+			.where(eq(members.personId, absorbed.id))
+			.orderBy(members.clubId);
 		const keeperMemberships = await tx
 			.select({ id: members.id, clubId: members.clubId })
 			.from(members)
