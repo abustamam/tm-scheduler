@@ -53,7 +53,7 @@
  * renders.
  *
  * Deliberately NO clipping ancestor in the fixture, though the real
- * `/schedule` has one (the app shell's `overflow-x-hidden` section). An
+ * `/schedule` has one (the app shell's `overflow-x-clip` section). An
  * ancestor that clips can only make the document LESS likely to overflow, so
  * modelling it would loosen the assertion into "the shell saves us". The grid
  * has to contain its own overflow: it also renders on the public club page,

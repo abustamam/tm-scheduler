@@ -803,7 +803,14 @@ describe("attendance panel route wiring (PR 2)", () => {
 			asideTagEnd,
 			"expected the <aside> opening tag to close",
 		).toBeGreaterThan(asideTagAt);
-		expect(asideTag).toContain("lg:max-h-[calc(100vh-7rem)]");
+		// The cap and the pin read ONE offset, the shell's `--shell-pinned-top`
+		// (#999): a cap sized for a pin the rail no longer has leaves its bottom
+		// below the viewport. `roster-action-row-geometry.test.ts` measures both
+		// with the impersonation banner up and down.
+		expect(asideTag).toContain(
+			"lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)]",
+		);
+		expect(asideTag).toContain("lg:top-[var(--shell-pinned-top,6rem)]");
 		expect(asideTag).toContain("lg:flex-col");
 	});
 

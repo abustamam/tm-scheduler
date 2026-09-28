@@ -43,6 +43,7 @@ import {
 	officerPositionLabel,
 	officerRank,
 } from "#/lib/officers";
+import { shellStickyVars } from "#/lib/shell-sticky-offset";
 
 export interface AppShellProps {
 	clubs: readonly {
@@ -230,7 +231,13 @@ export function AppShell({
 		// "What's new" (#947): the seen state is the signed-in user's, and the
 		// audience is the ACTIVE club's — an officer there sees admin entries.
 		<WhatsNewProvider isAdmin={isOfficer}>
-			<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
+			<div
+				className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]"
+				// Where the sticky chrome ends, stated once (`shell-sticky-offset.ts`):
+				// the headers pin under the banner, and a pinned column (the meeting
+				// page's attendance rail) pins under both, impersonating or not.
+				style={shellStickyVars(impersonating != null)}
+			>
 				{/* Desktop sidebar (lg+). A fixed-height flex column and NOT itself a
 			    scroller — `SidebarInner` puts the scroller on its middle band so the
 			    brand and the sign-out footer stay put. The height is load-bearing
@@ -290,9 +297,7 @@ export function AppShell({
 						/>
 					) : null}
 					{/* Desktop header (lg+) */}
-					<header
-						className={`sticky z-10 ${impersonating ? "top-9" : "top-0"} hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex`}
-					>
+					<header className="sticky top-(--shell-banner-offset) z-10 hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex">
 						<div className="text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
 							{crumbFor(pathname)}
 						</div>
@@ -311,9 +316,7 @@ export function AppShell({
 					</header>
 
 					{/* Mobile top app-bar (below lg) */}
-					<header
-						className={`sticky z-10 ${impersonating ? "top-9" : "top-0"} flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 backdrop-blur-[6px] lg:hidden`}
-					>
+					<header className="sticky top-(--shell-banner-offset) z-10 flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 backdrop-blur-[6px] lg:hidden">
 						<button
 							type="button"
 							onClick={() => setNavOpen(true)}
@@ -333,7 +336,15 @@ export function AppShell({
 						/>
 					</header>
 
-					<section className="min-w-0 flex-1 overflow-x-hidden">
+					{/* `overflow-x-clip`, not `-hidden` (#999). Both clip a too-wide
+					    page at the column edge, but `hidden` also makes this box a
+					    scroll container with a `scrollLeft` of its own: focusing a
+					    control past the edge scrolled the whole page sideways with no
+					    scrollbar to undo it. `clip` has no scroll offset, and it does
+					    not force `overflow-y` to `auto`, so a `sticky` descendant (the
+					    meeting page's attendance rail) pins against the document scroll
+					    instead of against this box, which never scrolls. */}
+					<section className="min-w-0 flex-1 overflow-x-clip">
 						{children}
 					</section>
 					<footer className="border-t border-[var(--line)] px-7 py-3 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)]">
