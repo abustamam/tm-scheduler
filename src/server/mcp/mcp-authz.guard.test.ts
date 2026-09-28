@@ -11,11 +11,13 @@
  * `src/server/mcp/tools/`, treats every exported tool definition it finds as a
  * candidate, and fails any that calls neither entry point.
  *
- * `whoami` sits in an explicit waiver map with its reason: it is the tool that
- * TELLS a caller which clubs exist, so it has no `clubId` to be checked against
- * and calls `authenticateToken` instead. Splitting the two entry points is what
- * makes "no unauthenticated tool" machine-checkable with exactly one waiver
- * rather than a list of exceptions.
+ * `whoami` and `get_my_feedback` sit in an explicit waiver map with their
+ * reasons: `whoami` TELLS a caller which clubs exist, and `get_my_feedback`
+ * reads only the caller's own notes across every club they belong to, so
+ * neither has a `clubId` to be checked against and both call
+ * `authenticateToken` instead. Splitting the two entry points is what makes
+ * "no unauthenticated tool" machine-checkable with a short, pinned waiver list
+ * rather than an open set of exceptions.
  *
  * It ALSO cross-checks the registry both ways — a tool file that is not
  * registered is unreachable, and a registered name with no file is a rename
@@ -91,6 +93,15 @@ const AUTHENTICATE_ONLY: Record<string, string> = {
 		"whoami is what tells a caller which clubs exist, so it has no clubId to " +
 		"be authorized against. It returns only the token owner's own identity " +
 		"and the clubs their own memberships already grant.",
+	"get-my-feedback.ts":
+		"get_my_feedback is USER-scoped, not club-scoped: it returns the token " +
+		"owner's own role feedback across every club they belong to (archived " +
+		"included), so there is no one clubId to authorize against. It takes no " +
+		"member or user id as input; whose notes comes from the credential alone, " +
+		"and which of them are readable is recipientMayTouch in " +
+		"loadFeedbackForUser, the same rule the dashboard reads through. It " +
+		"still re-checks mayUseConnector on every call, so a caller who is no " +
+		"longer an officer of an open club loses it with every other tool.",
 };
 
 /** The two sanctioned club-scoped entry points. */
@@ -243,8 +254,15 @@ describe("every MCP tool authorizes (#773)", () => {
 	it("the authenticate-only waiver list has not grown", () => {
 		// Widening this exempts a tool from the club check entirely, so it must
 		// break a test and be argued for rather than land as a one-line edit.
-		expect(Object.keys(AUTHENTICATE_ONLY)).toEqual(["whoami.ts"]);
-		expect(AUTHENTICATE_ONLY["whoami.ts"]?.length ?? 0).toBeGreaterThan(20);
+		// `get-my-feedback.ts` joined in #987: a user-scoped READ of the caller's
+		// own notes, which names no club. A write tool never belongs here.
+		expect(Object.keys(AUTHENTICATE_ONLY)).toEqual([
+			"whoami.ts",
+			"get-my-feedback.ts",
+		]);
+		for (const reason of Object.values(AUTHENTICATE_ONLY)) {
+			expect(reason.length).toBeGreaterThan(20);
+		}
 	});
 
 	// Mutation verification, per the design: prove the predicate can FAIL for a

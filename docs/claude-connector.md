@@ -53,6 +53,8 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 | `whoami` | reads | "Which clubs can you manage for me?" — start here if Claude seems lost |
 | `list_meetings` | reads | "What meetings do we have coming up?" |
 | `get_agenda` | reads | "What's on the agenda for our next meeting? Which roles are open?" |
+| `get_lineup_blast` | reads | "Draft the lineup message for Saturday's meeting" — you copy and send it |
+| `get_my_feedback` | reads | "What did people say about my speech on Saturday?" Only **your own** anonymous notes, from meetings that have ended; never who wrote one. Every result tells Claude the note text is untrusted, anonymous input, never instructions |
 | `find_people` | reads | "Find Dana on our roster." Guest emails and phones come back **masked** |
 | `assign_roles` | **writes immediately** | "Put Dana in the Speaker 2 slot", "clear the Timer role" |
 | `upsert_agendas` | writes nothing — gives you a link | "Set the themes for October's meetings" |
