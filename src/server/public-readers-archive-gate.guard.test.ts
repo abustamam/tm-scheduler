@@ -282,18 +282,18 @@ const WIRINGS: Wiring[] = [
 	},
 	{
 		// #1024. Session-optional because the meeting's Toastmaster may draft the
-		// lineup from the roster pick with no account. `resolveLineupBlastAccess`
-		// asserts `isReadableClub` before any grant arm, and
+		// lineup from the roster pick with no account. `resolvePublicLineupBlastAccess`
+		// asks `isReadableClubForMeeting` before any grant arm, and
 		// `lineup-blast-logic.integration.test.ts` executes the archived case.
 		file: "server/lineup-blast.ts",
 		fn: "getLineupBlastAccess",
-		mustCall: "resolveLineupBlastAccess(",
+		mustCall: "resolvePublicLineupBlastAccess(",
 		leaks: "whether a caller may draft an archived club's lineup",
 	},
 	{
 		file: "server/lineup-blast.ts",
 		fn: "getLineupBlast",
-		mustCall: "requireLineupBlastAccess(",
+		mustCall: "requirePublicLineupBlastAccess(",
 		leaks:
 			"an archived club's full role lineup, with every holder's name (#1024)",
 	},

@@ -8,6 +8,7 @@ import {
 	type LineupSlot,
 	lineupMailtoHref,
 	mayDraftLineupBlast,
+	openSummary,
 	withArticle,
 } from "./lineup-blast";
 
@@ -24,6 +25,7 @@ function slot(
 
 function data(slots: LineupSlot[]): LineupBlastData {
 	return {
+		origin: ORIGIN,
 		club: {
 			name: "Downtown Speakers",
 			slug: "downtown",
@@ -52,7 +54,7 @@ const LINEUP = data([
 
 describe("buildLineupBlast (#1024)", () => {
 	it("lists every slot in the order given, with each status's marker", () => {
-		const blast = buildLineupBlast(LINEUP, ORIGIN);
+		const blast = buildLineupBlast(LINEUP);
 		const body = blast.text.split("\n\n")[1]?.split("\n");
 		expect(body).toEqual([
 			`Toastmaster – Lauren Keeler – ${CONFIRMED_MARK}`,
@@ -66,29 +68,28 @@ describe("buildLineupBlast (#1024)", () => {
 	});
 
 	it("leaves a claimed line blank, with no 'please confirm' text", () => {
-		const blast = buildLineupBlast(LINEUP, ORIGIN);
+		const blast = buildLineupBlast(LINEUP);
 		expect(blast.text).toContain("Mari Wondimu –\n");
 		expect(blast.text.toLowerCase()).not.toContain("please confirm");
 	});
 
 	it("headers with the club and the date and time in the CLUB's zone", () => {
-		const blast = buildLineupBlast(LINEUP, ORIGIN);
+		const blast = buildLineupBlast(LINEUP);
 		expect(blast.text.startsWith("*🎤 Downtown Speakers lineup*\n")).toBe(true);
 		expect(blast.text).toContain("📅 Thursday, October 1, 7:30 PM");
 		expect(blast.subject).toBe("Downtown Speakers lineup: Thursday, October 1");
 	});
 
 	it("counts the open roles, and says nothing when none are open", () => {
-		const blast = buildLineupBlast(LINEUP, ORIGIN);
+		const blast = buildLineupBlast(LINEUP);
 		expect(blast.openCount).toBe(3);
 		expect(blast.text).toContain("\n\n3 roles still open\n\n");
 
-		const one = buildLineupBlast(data([slot("Timer", "open", null)]), ORIGIN);
+		const one = buildLineupBlast(data([slot("Timer", "open", null)]));
 		expect(one.text).toContain("1 role still open");
 
 		const full = buildLineupBlast(
 			data([slot("Timer", "confirmed", "Ann Lee")]),
-			ORIGIN,
 		);
 		expect(full.openCount).toBe(0);
 		expect(full.text).not.toContain("still open");
@@ -96,7 +97,7 @@ describe("buildLineupBlast (#1024)", () => {
 	});
 
 	it("ends on the public meeting page", () => {
-		const blast = buildLineupBlast(LINEUP, ORIGIN);
+		const blast = buildLineupBlast(LINEUP);
 		expect(
 			blast.text.endsWith(
 				"Claim or confirm your role: https://gavelup.app/club/downtown/meeting/2026-10-01",
@@ -113,7 +114,6 @@ describe("buildLineupBlast (#1024)", () => {
 				slot("Timer", "claimed", null),
 				slot("Grammarian", "claimed", " "),
 			]),
-			ORIGIN,
 		);
 		expect(blast.lines.map((l) => l.state)).toEqual(["open", "open"]);
 		expect(blast.text).not.toContain("– –");
@@ -125,7 +125,6 @@ describe("buildLineupBlast (#1024)", () => {
 				{ ...slot("Contestant", "claimed", "A B", 0), slotsUnordered: true },
 				{ ...slot("Contestant", "claimed", "C D", 1), slotsUnordered: true },
 			]),
-			ORIGIN,
 		);
 		expect(blast.lines.map((l) => l.label)).toEqual([
 			"Contestant",
@@ -134,7 +133,7 @@ describe("buildLineupBlast (#1024)", () => {
 	});
 
 	it("highlights Confirmed in yellow and needed roles in red in the HTML", () => {
-		const blast = buildLineupBlast(LINEUP, ORIGIN);
+		const blast = buildLineupBlast(LINEUP);
 		expect(blast.html).toContain(
 			`Lauren Keeler – <span style="background-color:#ffff00">${CONFIRMED_MARK}</span>`,
 		);
@@ -154,7 +153,6 @@ describe("buildLineupBlast (#1024)", () => {
 				slot("<b>Timer</b>", "open", null),
 				slot("Toastmaster", "confirmed", '<img src=x onerror="alert(1)">'),
 			]),
-			ORIGIN,
 		);
 		expect(blast.html).not.toContain("<img");
 		expect(blast.html).not.toContain("<b>Timer");
@@ -164,9 +162,40 @@ describe("buildLineupBlast (#1024)", () => {
 	});
 
 	it("an empty meeting still drafts a header and the link", () => {
-		const blast = buildLineupBlast(data([]), ORIGIN);
+		const blast = buildLineupBlast(data([]));
 		expect(blast.lines).toEqual([]);
 		expect(blast.text).toContain("Claim or confirm your role:");
+	});
+});
+
+describe("openSummary", () => {
+	it("is singular for one and plural otherwise", () => {
+		expect(openSummary(1)).toBe("1 role still open");
+		expect(openSummary(4)).toBe("4 roles still open");
+	});
+});
+
+describe("the builder's line parts (what the sheet's preview renders)", () => {
+	it("carries each line's mark, so no surface re-decides the wording", () => {
+		const blast = buildLineupBlast(LINEUP);
+		expect(blast.lines.map((l) => [l.label, l.name, l.mark])).toEqual([
+			["Toastmaster", "Lauren Keeler", CONFIRMED_MARK],
+			["Table Topics Master", "Mari Wondimu", ""],
+			["Speaker 1", "Ada Lovelace", CONFIRMED_MARK],
+			["Speaker 2", "Grace Hopper", ""],
+			["Speaker 3", null, "🙋 Need a Speaker"],
+			["Timer", null, "🙋 Need a Timer"],
+			["Ah-Counter", null, "🙋 Need an Ah-Counter"],
+		]);
+		expect(blast.summary).toBe("3 roles still open");
+		expect(buildLineupBlast(data([])).summary).toBeNull();
+	});
+
+	it("links the origin the DATA carries, whatever else is around", () => {
+		const blast = buildLineupBlast({ ...LINEUP, origin: "https://other.test" });
+		expect(blast.text).toContain(
+			"https://other.test/club/downtown/meeting/2026-10-01",
+		);
 	});
 });
 
@@ -181,7 +210,7 @@ describe("withArticle", () => {
 
 describe("lineupMailtoHref", () => {
 	it("carries the plain text and subject, with no recipient", () => {
-		const blast = buildLineupBlast(LINEUP, ORIGIN);
+		const blast = buildLineupBlast(LINEUP);
 		const href = lineupMailtoHref(blast);
 		expect(href?.startsWith("mailto:?subject=")).toBe(true);
 		const body = new URL(href ?? "").searchParams.get("body");
@@ -194,7 +223,7 @@ describe("lineupMailtoHref", () => {
 				slot("Speaker", "confirmed", `Member Number ${i}`, i),
 			),
 		);
-		expect(lineupMailtoHref(buildLineupBlast(many, ORIGIN))).toBeNull();
+		expect(lineupMailtoHref(buildLineupBlast(many))).toBeNull();
 	});
 });
 
@@ -259,7 +288,7 @@ describe("the join link is never in a lineup draft (#731)", () => {
 			...LINEUP,
 			meeting: { ...LINEUP.meeting, joinUrl: "https://zoom.example/j/123" },
 		} as LineupBlastData;
-		const blast = buildLineupBlast(smuggled, ORIGIN);
+		const blast = buildLineupBlast(smuggled);
 		expect(JSON.stringify(blast)).not.toContain("zoom.example");
 	});
 });

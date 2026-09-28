@@ -9,18 +9,26 @@
 // No contact details and no video-call link are read. A slot carries a role, a
 // status and a holder's NAME, which is exactly what the public meeting page
 // already shows anyone holding its link.
+//
+// ## Why every seam here is `Public`
+//
+// The server fns are reachable with NO session (an anonymous Toastmaster
+// drafts from the roster pick, ADR-0010), so these are public readers in the
+// `CODING_STANDARDS.md` sense: an archived club and an unknown meeting get the
+// SAME answer (refused / null), so a caller cannot tell a taken-down club from
+// one that never existed. `public-readers-archive-gate.guard.test.ts` pins the
+// server fns to these names.
 
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings, members, people } from "#/db/schema";
-import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	LINEUP_BLAST_REFUSED_MESSAGE,
 	type LineupBlastData,
-	type LineupSlotStatus,
 	mayDraftLineupBlast,
 } from "#/lib/lineup-blast";
-import { isReadableClub } from "./club-readable-logic";
+import { appBaseUrl } from "#/lib/unsubscribe-token";
+import { isReadableClubForMeeting } from "./club-readable-logic";
 import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	loadTmodMemberId,
@@ -30,37 +38,12 @@ import { loadMeetingSlots } from "./meeting-slots-logic";
 import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
 
-/** The club a meeting belongs to. Throws for an unknown meeting. */
-async function meetingClubId(meetingId: string): Promise<string> {
-	const [row] = await db
-		.select({ clubId: meetings.clubId })
-		.from(meetings)
-		.where(eq(meetings.id, meetingId))
-		.limit(1);
-	if (!row) throw new Error("Meeting not found.");
-	return row.clubId;
-}
-
-/**
- * The archive gate (ADR-0016): an archived club drafts nothing, for every arm.
- * `isReadableClub` answers false for an unknown club too.
- */
-export async function assertLineupClubReadable(clubId: string): Promise<void> {
-	if (!(await isReadableClub(clubId))) throw new Error(CLUB_ARCHIVED_MESSAGE);
-}
-
 export interface LineupBlastAccessInput {
 	meetingId: string;
 	/** Signed-in user id, or null for a caller with no session. */
 	sessionUserId: string | null;
 	/** Self-asserted roster member id (the Toastmaster arm), or null. */
 	selfMemberId: string | null;
-}
-
-export interface LineupBlastAccess {
-	clubId: string;
-	allowed: boolean;
-	via: "admin" | "officer" | "toastmaster" | null;
 }
 
 /**
@@ -94,21 +77,31 @@ async function membershipsInClub(userId: string, clubId: string) {
  *
  *  - admin: an ACTIVE membership whose stored role is `admin`, or a
  *    superadmin with an active impersonation session of this club and no
- *    membership of their own (the same read grant `requireClubAdminView` gives);
+ *    active membership of their own (the read grant `requireClubAdminView`
+ *    gives);
  *  - officer: an ACTIVE membership holding an open officer term;
  *  - Toastmaster: the caller holds this meeting's Toastmaster slot, through the
  *    shared `resolveSelfAssertGrant` (#747) — so an anonymous Toastmaster on
  *    their phone passes the way they do for the agenda, and a signed-in member
  *    asserting somebody ELSE's id does not.
  *
- * Throws for an unknown meeting and for an archived club, BEFORE any grant
- * arm, so a takedown answers the same for everyone.
+ * An unknown meeting and an archived club both answer `{ allowed: false }`
+ * BEFORE any grant arm, the same answer as a refusal, so no caller learns
+ * which of the three it was.
  */
-export async function resolveLineupBlastAccess(
+export async function resolvePublicLineupBlastAccess(
 	input: LineupBlastAccessInput,
-): Promise<LineupBlastAccess> {
-	const clubId = await meetingClubId(input.meetingId);
-	await assertLineupClubReadable(clubId);
+): Promise<{ allowed: boolean }> {
+	const refused = { allowed: false };
+	// False for an unknown meeting AND an archived club: one answer for both.
+	if (!(await isReadableClubForMeeting(input.meetingId))) return refused;
+	const [meeting] = await db
+		.select({ clubId: meetings.clubId })
+		.from(meetings)
+		.where(eq(meetings.id, input.meetingId))
+		.limit(1);
+	if (!meeting) return refused;
+	const clubId = meeting.clubId;
 
 	let isAdmin = false;
 	let isOfficer = false;
@@ -122,8 +115,6 @@ export async function resolveLineupBlastAccess(
 			if (isOfficer) break;
 			isOfficer = (await getOpenOfficerPositions(db, m.id)).length > 0;
 		}
-		// A superadmin with no active membership here, viewing through an
-		// impersonation session: the read grant `requireClubAdminView` gives.
 		if (
 			active.length === 0 &&
 			(await getActiveImpersonation(input.sessionUserId, clubId))
@@ -140,46 +131,42 @@ export async function resolveLineupBlastAccess(
 			: { present: false },
 	}).granted;
 
-	const allowed = mayDraftLineupBlast({
-		isAdmin,
-		isOfficer,
-		holdsToastmasterSlot,
-	});
 	return {
-		clubId,
-		allowed,
-		via: !allowed
-			? null
-			: isAdmin
-				? "admin"
-				: isOfficer
-					? "officer"
-					: "toastmaster",
+		allowed: mayDraftLineupBlast({ isAdmin, isOfficer, holdsToastmasterSlot }),
 	};
 }
 
-/** `resolveLineupBlastAccess`, throwing when the caller may not draft. */
-export async function requireLineupBlastAccess(
+/**
+ * `resolvePublicLineupBlastAccess`, throwing the one generic refusal when the
+ * caller may not draft — whether they are unentitled, the meeting is unknown,
+ * or the club is archived.
+ */
+export async function requirePublicLineupBlastAccess(
 	input: LineupBlastAccessInput,
-): Promise<LineupBlastAccess> {
-	const access = await resolveLineupBlastAccess(input);
-	if (!access.allowed) throw new Error(LINEUP_BLAST_REFUSED_MESSAGE);
-	return access;
+): Promise<void> {
+	const { allowed } = await resolvePublicLineupBlastAccess(input);
+	if (!allowed) throw new Error(LINEUP_BLAST_REFUSED_MESSAGE);
 }
 
 /**
- * What the draft is built from, for one meeting. Reads slots through
- * `loadMeetingSlots`, the ONE slot loader the meeting page, the print route
- * and `get_agenda` already share, so the draft lists exactly the slots, in
- * exactly the order, the agenda shows.
+ * What the draft is built from, for one meeting, or null for an unknown
+ * meeting or an archived club (one not-found shape for both).
  *
- * Ungated: every caller gates first (`requireLineupBlastAccess`, or the MCP
- * tool's `authorizeTokenForMeeting`). It re-checks the archive anyway, because
- * that is the one refusal that must hold whichever gate ran.
+ * Reads slots through `loadMeetingSlots`, the ONE slot loader the meeting page,
+ * the print route and `get_agenda` already share, so the draft lists exactly
+ * the slots, in exactly the order, the agenda shows. The footer's origin is
+ * `appBaseUrl()`, chosen here so the button and `get_lineup_blast` link the same
+ * page.
+ *
+ * Not an authorization check: every caller gates first
+ * (`requirePublicLineupBlastAccess`, or the MCP tool's
+ * `authorizeTokenForMeeting`). It re-checks the archive because that refusal
+ * must hold whichever gate ran.
  */
-export async function loadLineupBlastData(
+export async function loadPublicLineupBlastData(
 	meetingId: string,
-): Promise<LineupBlastData> {
+): Promise<LineupBlastData | null> {
+	if (!(await isReadableClubForMeeting(meetingId))) return null;
 	const [row] = await db
 		.select({
 			meetingId: meetings.id,
@@ -193,8 +180,7 @@ export async function loadLineupBlastData(
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	if (!row) throw new Error("Meeting not found.");
-	await assertLineupClubReadable(row.clubId);
+	if (!row) return null;
 
 	const [urlKey, slots] = await Promise.all([
 		resolveMeetingUrlKey(row.clubId, row.scheduledAt, row.timezone),
@@ -202,13 +188,14 @@ export async function loadLineupBlastData(
 	]);
 
 	return {
+		origin: appBaseUrl(),
 		club: { name: row.clubName, slug: row.slug, timezone: row.timezone },
 		meeting: { id: row.meetingId, urlKey, scheduledAt: row.scheduledAt },
 		slots: slots.map((s) => ({
 			roleName: s.roleName,
 			slotIndex: s.slotIndex,
 			slotsUnordered: s.slotsUnordered,
-			status: s.status as LineupSlotStatus,
+			status: s.status,
 			assigneeName: s.assigneeName,
 		})),
 	};

@@ -3,7 +3,7 @@
 //
 // Pure and client-safe: no `#/db`. The meeting page's Lineup blast sheet and
 // the `get_lineup_blast` MCP tool both build their text HERE, from the same
-// `LineupBlastData` the server loads, so the button and the connector cannot
+// `LineupBlastData` the server loads (footer origin included), so the button and the connector cannot
 // draft different messages.
 //
 // ## The app drafts; a human sends
@@ -19,6 +19,7 @@
 // (#731/#754). `lineup-blast.test.ts` sweeps this file and the sheet raw, so
 // neither may even NAME the field, comments included.
 
+import type { slotStatusEnum } from "#/db/schema";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { escapeHtml } from "#/lib/html-escape";
 import {
@@ -33,9 +34,11 @@ import {
  * officer (an open officer term), or the holder of THIS meeting's Toastmaster
  * slot. Nobody else, and no guest.
  *
- * The ONE statement of that rule. The server fn (`lineup-blast-logic.ts`) and
- * the MCP tool both decide through it, and the meeting page shows the button
- * only on the server's answer, so the three cannot disagree.
+ * The ONE statement of that rule. The server fns decide through it
+ * (`lineup-blast-logic.ts`), and the meeting page shows the button only on
+ * their answer. `get_lineup_blast` is NARROWER: `authorizeTokenForMeeting`
+ * admits admins and officers only, so a Toastmaster who is neither has no
+ * connector access. It cites this rule, but its gate is the token check.
  */
 export function mayDraftLineupBlast(viewer: {
 	isAdmin: boolean;
@@ -48,8 +51,9 @@ export function mayDraftLineupBlast(viewer: {
 export const LINEUP_BLAST_REFUSED_MESSAGE =
 	"Only club admins, officers and this meeting's Toastmaster can draft the lineup.";
 
-/** A slot's state, as `slot_status` stores it. */
-export type LineupSlotStatus = "open" | "claimed" | "confirmed";
+/** A slot's state, as `slot_status` stores it. A type-only import, erased at
+ *  build, so this module stays client-safe. */
+export type LineupSlotStatus = (typeof slotStatusEnum.enumValues)[number];
 
 /** One role slot, as the draft needs it — and nothing else (no contact). */
 export interface LineupSlot {
@@ -60,8 +64,15 @@ export interface LineupSlot {
 	assigneeName: string | null;
 }
 
-/** Everything a lineup draft is built from. Loaded by `loadLineupBlastData`. */
+/** Everything a lineup draft is built from. Loaded by
+ *  `loadPublicLineupBlastData`. */
 export interface LineupBlastData {
+	/**
+	 * The app's own base URL (`appBaseUrl()`), chosen by the SERVER so the
+	 * button and `get_lineup_blast` link the same page whatever host the
+	 * browser happened to load from.
+	 */
+	origin: string;
 	club: { name: string; slug: string; timezone: string };
 	meeting: {
 		id: string;
@@ -81,6 +92,13 @@ export interface LineupLine {
 	state: LineupLineState;
 	/** Null for an open slot. */
 	name: string | null;
+	/**
+	 * What follows the name: `CONFIRMED_MARK`, "" for a claimed line (left
+	 * blank, the prompt to confirm), or "🙋 Need a Timer" for an open one. The
+	 * text, the HTML and the sheet's preview all print THIS, so no surface
+	 * decides a line's wording for itself.
+	 */
+	mark: string;
 }
 
 export interface LineupBlast {
@@ -92,6 +110,8 @@ export interface LineupBlast {
 	html: string;
 	lines: LineupLine[];
 	openCount: number;
+	/** "3 roles still open", or null when nothing is. */
+	summary: string | null;
 }
 
 export const CONFIRMED_MARK = "✅ Confirmed";
@@ -119,6 +139,14 @@ function lineState(slot: LineupSlot): LineupLineState {
 	return slot.status === "confirmed" ? "confirmed" : "claimed";
 }
 
+/** The mark after a line's name. An open line asks for the role unnumbered:
+ *  "Need a Speaker", not "Need a Speaker 3". */
+function lineMark(state: LineupLineState, slot: LineupSlot): string {
+	if (state === "confirmed") return CONFIRMED_MARK;
+	if (state === "claimed") return "";
+	return `${OPEN_MARK} Need ${withArticle(slot.roleName)}`;
+}
+
 export function lineupLines(slots: readonly LineupSlot[]): LineupLine[] {
 	const counts = buildRoleCounts([...slots]);
 	return slots.map((slot) => {
@@ -127,91 +155,79 @@ export function lineupLines(slots: readonly LineupSlot[]): LineupLine[] {
 			label: slotLabel(slot, counts),
 			state,
 			name: state === "open" ? null : (slot.assigneeName?.trim() ?? null),
+			mark: lineMark(state, slot),
 		};
 	});
 }
 
-/** The role an open line asks for, unnumbered: "Need a Speaker", not
- *  "Need a Speaker 3". */
-function neededText(slot: LineupSlot): string {
-	return `Need ${withArticle(slot.roleName)}`;
-}
-
-function openSummary(openCount: number): string {
+export function openSummary(openCount: number): string {
 	return openCount === 1
 		? "1 role still open"
 		: `${openCount} roles still open`;
 }
 
-/** The public meeting page, absolute when `origin` is known. Guests can open
- *  it signed out, and it is where a role is claimed or confirmed. */
-export function lineupMeetingUrl(data: LineupBlastData, origin: string) {
-	return `${origin}${promoMeetingPath(data.club.slug, data.meeting.urlKey)}`;
+/** The public meeting page. Guests can open it signed out, and it is where a
+ *  role is claimed or confirmed. */
+export function lineupMeetingUrl(data: LineupBlastData): string {
+	return `${data.origin}${promoMeetingPath(data.club.slug, data.meeting.urlKey)}`;
 }
 
-/**
- * Build the draft. `origin` makes the footer link absolute
- * (`window.location.origin` in the browser, `appBaseUrl()` on the server).
- */
-export function buildLineupBlast(
-	data: LineupBlastData,
-	origin: string,
-): LineupBlast {
+/** One line as plain text. A claimed line ends on the bare dash, the way the
+ *  source email leaves it: no "please confirm" (decision, 2026-09-28). */
+function lineText(line: LineupLine): string {
+	if (line.state === "open") return `${line.label} – ${line.mark}`;
+	return line.mark
+		? `${line.label} – ${line.name} – ${line.mark}`
+		: `${line.label} – ${line.name} –`;
+}
+
+function lineHtml(line: LineupLine): string {
+	const label = escapeHtml(line.label);
+	if (line.state === "open") {
+		return `${label} – <span style="${NEEDED_STYLE}">${escapeHtml(line.mark)}</span>`;
+	}
+	const head = `${label} – ${escapeHtml(line.name ?? "")} –`;
+	return line.mark
+		? `${head} <span style="${HIGHLIGHT_STYLE}">${escapeHtml(line.mark)}</span>`
+		: head;
+}
+
+/** Build the draft. Everything it prints, the footer link included, comes
+ *  from `data`, so two callers handed the same data draft the same bytes. */
+export function buildLineupBlast(data: LineupBlastData): LineupBlast {
 	const tz = data.club.timezone;
 	const date = promoDate(data.meeting.scheduledAt, tz);
 	const time = promoTime(data.meeting.scheduledAt, tz);
 	const lines = lineupLines(data.slots);
 	const openCount = lines.filter((l) => l.state === "open").length;
-	const url = lineupMeetingUrl(data, origin);
+	const summary = openCount > 0 ? openSummary(openCount) : null;
+	const url = lineupMeetingUrl(data);
 
 	const heading = `🎤 ${data.club.name} lineup`;
 	const when = `📅 ${date}, ${time}`;
 	const subject = `${data.club.name} lineup: ${date}`;
 
-	const textLines = lines.map((line, i) => {
-		const slot = data.slots[i];
-		if (line.state === "confirmed") {
-			return `${line.label} – ${line.name} – ${CONFIRMED_MARK}`;
-		}
-		// Left blank the way the source email does it: the trailing dash is the
-		// prompt to confirm. No "please confirm" text (decision, 2026-09-28).
-		if (line.state === "claimed") return `${line.label} – ${line.name} –`;
-		return `${line.label} – ${OPEN_MARK} ${neededText(slot)}`;
-	});
-
-	const footer = `Claim or confirm your role: ${url}`;
 	const text = [
 		`*${heading}*\n${when}`,
-		textLines.join("\n"),
-		openCount > 0 ? openSummary(openCount) : "",
-		footer,
+		lines.map(lineText).join("\n"),
+		summary ?? "",
+		`Claim or confirm your role: ${url}`,
 	]
 		.filter(Boolean)
 		.join("\n\n");
 
-	const htmlLines = lines.map((line, i) => {
-		const slot = data.slots[i];
-		const label = escapeHtml(line.label);
-		if (line.state === "confirmed") {
-			return `${label} – ${escapeHtml(line.name ?? "")} – <span style="${HIGHLIGHT_STYLE}">${escapeHtml(CONFIRMED_MARK)}</span>`;
-		}
-		if (line.state === "claimed") {
-			return `${label} – ${escapeHtml(line.name ?? "")} –`;
-		}
-		return `${label} – <span style="${NEEDED_STYLE}">${escapeHtml(`${OPEN_MARK} ${neededText(slot)}`)}</span>`;
-	});
 	const html = [
 		`<p><strong>${escapeHtml(heading)}</strong><br>${escapeHtml(when)}</p>`,
-		lines.length > 0 ? `<p>${htmlLines.join("<br>")}</p>` : "",
-		openCount > 0
-			? `<p><span style="${NEEDED_STYLE}">${escapeHtml(openSummary(openCount))}</span></p>`
+		lines.length > 0 ? `<p>${lines.map(lineHtml).join("<br>")}</p>` : "",
+		summary
+			? `<p><span style="${NEEDED_STYLE}">${escapeHtml(summary)}</span></p>`
 			: "",
 		`<p>Claim or confirm your role: <a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p>`,
 	]
 		.filter(Boolean)
 		.join("\n");
 
-	return { subject, text, html, lines, openCount };
+	return { subject, text, html, lines, openCount, summary };
 }
 
 /**

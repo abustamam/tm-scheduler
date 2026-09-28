@@ -14,11 +14,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	apiTokens,
 	clubs,
+	impersonationSessions,
 	meetings,
 	members,
 	officerTerms,
 	roleDefinitions,
 	roleSlots,
+	user,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -32,9 +34,9 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const {
-	loadLineupBlastData,
-	requireLineupBlastAccess,
-	resolveLineupBlastAccess,
+	loadPublicLineupBlastData,
+	requirePublicLineupBlastAccess,
+	resolvePublicLineupBlastAccess,
 } = await import("./lineup-blast-logic");
 const { getLineupBlastTool } = await import(
 	"#/server/mcp/tools/get-lineup-blast"
@@ -44,7 +46,6 @@ const { buildLineupBlast, LINEUP_BLAST_REFUSED_MESSAGE } = await import(
 	"#/lib/lineup-blast"
 );
 const { appBaseUrl } = await import("#/lib/unsubscribe-token");
-const { CLUB_ARCHIVED_MESSAGE } = await import("#/lib/club-archive");
 
 interface ToolResult {
 	text: string;
@@ -68,7 +69,7 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 	}
 
 	function access(sessionUserId: string | null, selfMemberId: string | null) {
-		return resolveLineupBlastAccess({
+		return resolvePublicLineupBlastAccess({
 			meetingId: seed.meetingId,
 			sessionUserId,
 			selfMemberId,
@@ -155,9 +156,8 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 
 	describe("who may draft", () => {
 		it("a club admin", async () => {
-			expect(await access(seed.adminUserId, seed.adminMemberId)).toMatchObject({
+			expect(await access(seed.adminUserId, seed.adminMemberId)).toEqual({
 				allowed: true,
-				via: "admin",
 			});
 		});
 
@@ -165,17 +165,13 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 			await testDb
 				.insert(officerTerms)
 				.values({ membershipId: seed.memberId, position: "secretary" });
-			expect(await access(seed.memberUserId, seed.memberId)).toMatchObject({
+			expect(await access(seed.memberUserId, seed.memberId)).toEqual({
 				allowed: true,
-				via: "officer",
 			});
 		});
 
 		it("the meeting's Toastmaster, with no account (the roster pick)", async () => {
-			expect(await access(null, tmodMemberId)).toMatchObject({
-				allowed: true,
-				via: "toastmaster",
-			});
+			expect(await access(null, tmodMemberId)).toEqual({ allowed: true });
 		});
 
 		it("a signed-in Toastmaster, on their own membership", async () => {
@@ -183,19 +179,17 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 				.update(roleSlots)
 				.set({ assignedMemberId: seed.memberId })
 				.where(eq(roleSlots.id, tmodSlotId));
-			expect(await access(seed.memberUserId, seed.memberId)).toMatchObject({
+			expect(await access(seed.memberUserId, seed.memberId)).toEqual({
 				allowed: true,
-				via: "toastmaster",
 			});
 		});
 
 		it("REFUSES a plain member", async () => {
-			expect(await access(seed.memberUserId, seed.memberId)).toMatchObject({
+			expect(await access(seed.memberUserId, seed.memberId)).toEqual({
 				allowed: false,
-				via: null,
 			});
 			await expect(
-				requireLineupBlastAccess({
+				requirePublicLineupBlastAccess({
 					meetingId: seed.meetingId,
 					sessionUserId: seed.memberUserId,
 					selfMemberId: seed.memberId,
@@ -205,7 +199,7 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 
 		it("REFUSES a signed-in member asserting the Toastmaster's id", async () => {
 			// #747: a self-assert never overrides a session.
-			expect(await access(seed.memberUserId, tmodMemberId)).toMatchObject({
+			expect(await access(seed.memberUserId, tmodMemberId)).toEqual({
 				allowed: false,
 			});
 		});
@@ -239,31 +233,104 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 				.update(clubs)
 				.set({ archivedAt: new Date() })
 				.where(eq(clubs.id, seed.clubId));
-			await expect(access(seed.adminUserId, null)).rejects.toThrow(
-				CLUB_ARCHIVED_MESSAGE,
-			);
-			await expect(access(null, tmodMemberId)).rejects.toThrow(
-				CLUB_ARCHIVED_MESSAGE,
-			);
-			await expect(loadLineupBlastData(seed.meetingId)).rejects.toThrow(
-				CLUB_ARCHIVED_MESSAGE,
-			);
-		});
-
-		it("throws for an unknown meeting", async () => {
+			expect(await access(seed.adminUserId, null)).toEqual({ allowed: false });
+			expect(await access(null, tmodMemberId)).toEqual({ allowed: false });
 			await expect(
-				resolveLineupBlastAccess({
-					meetingId: randomUUID(),
+				requirePublicLineupBlastAccess({
+					meetingId: seed.meetingId,
 					sessionUserId: seed.adminUserId,
 					selfMemberId: null,
 				}),
-			).rejects.toThrow("Meeting not found.");
+			).rejects.toThrow(LINEUP_BLAST_REFUSED_MESSAGE);
+			expect(await loadPublicLineupBlastData(seed.meetingId)).toBeNull();
+		});
+
+		it("answers an archived club EXACTLY as it answers an unknown meeting", async () => {
+			// CODING_STANDARDS: a public reader must not tell a taken-down club
+			// from one that never existed. Same result, same thrown message, same
+			// loader shape, for the same caller.
+			const unknown = randomUUID();
+			const unknownAccess = await resolvePublicLineupBlastAccess({
+				meetingId: unknown,
+				sessionUserId: seed.adminUserId,
+				selfMemberId: null,
+			});
+			const unknownThrow = await requirePublicLineupBlastAccess({
+				meetingId: unknown,
+				sessionUserId: seed.adminUserId,
+				selfMemberId: null,
+			}).catch((e: Error) => e.message);
+			const unknownData = await loadPublicLineupBlastData(unknown);
+
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, seed.clubId));
+			const archivedAccess = await access(seed.adminUserId, null);
+			const archivedThrow = await requirePublicLineupBlastAccess({
+				meetingId: seed.meetingId,
+				sessionUserId: seed.adminUserId,
+				selfMemberId: null,
+			}).catch((e: Error) => e.message);
+			const archivedData = await loadPublicLineupBlastData(seed.meetingId);
+
+			expect(archivedAccess).toEqual(unknownAccess);
+			expect(archivedAccess).toEqual({ allowed: false });
+			expect(archivedThrow).toBe(unknownThrow);
+			expect(archivedThrow).toBe(LINEUP_BLAST_REFUSED_MESSAGE);
+			expect(archivedData).toBe(unknownData);
+			expect(archivedData).toBeNull();
+		});
+
+		describe("a superadmin viewing through impersonation", () => {
+			let superadminId: string;
+
+			beforeEach(async () => {
+				superadminId = randomUUID();
+				await testDb.insert(user).values({
+					id: superadminId,
+					name: "Super Admin",
+					email: `super-${superadminId}@test.example`,
+					emailVerified: true,
+					isSuperadmin: true,
+				});
+			});
+
+			afterEach(async () => {
+				await testDb.delete(user).where(eq(user.id, superadminId));
+			});
+
+			it("is allowed with an active session", async () => {
+				await testDb.insert(impersonationSessions).values({
+					superadminUserId: superadminId,
+					clubId: seed.clubId,
+					mode: "read_only",
+					expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+				});
+				expect(await access(superadminId, null)).toEqual({ allowed: true });
+			});
+
+			it("is REFUSED once the session has expired", async () => {
+				await testDb.insert(impersonationSessions).values({
+					superadminUserId: superadminId,
+					clubId: seed.clubId,
+					mode: "read_only",
+					startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+					expiresAt: new Date(Date.now() - 60 * 1000),
+				});
+				expect(await access(superadminId, null)).toEqual({ allowed: false });
+			});
+
+			it("is REFUSED with no session at all", async () => {
+				expect(await access(superadminId, null)).toEqual({ allowed: false });
+			});
 		});
 	});
 
 	describe("the draft", () => {
 		it("lists every slot in agenda order with its status and holder", async () => {
-			const data = await loadLineupBlastData(seed.meetingId);
+			const data = await loadPublicLineupBlastData(seed.meetingId);
+			if (!data) throw new Error("expected lineup data");
 			expect(
 				data.slots.map((s) => [s.roleName, s.status, s.assigneeName]),
 			).toEqual([
@@ -272,7 +339,7 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 				["Speaker", "open", null],
 				["Timer", "open", null],
 			]);
-			const blast = buildLineupBlast(data, "https://gavelup.app");
+			const blast = buildLineupBlast(data);
 			expect(blast.text).toContain(
 				"Toastmaster – Lauren Keeler – ✅ Confirmed",
 			);
@@ -285,9 +352,10 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 		});
 
 		it("never carries the meeting's video-call link", async () => {
-			const data = await loadLineupBlastData(seed.meetingId);
+			const data = await loadPublicLineupBlastData(seed.meetingId);
+			if (!data) throw new Error("expected lineup data");
 			expect(JSON.stringify(data)).not.toContain("zoom.example");
-			const blast = buildLineupBlast(data, "https://gavelup.app");
+			const blast = buildLineupBlast(data);
 			expect(blast.text).not.toContain("zoom.example");
 			expect(blast.html).not.toContain("zoom.example");
 		});
@@ -300,10 +368,11 @@ describe.skipIf(!hasTestDb)("lineup blast (#1024)", () => {
 				{ meetingId: seed.meetingId },
 				{ rawToken: token },
 			)) as ToolResult;
-			const expected = buildLineupBlast(
-				await loadLineupBlastData(seed.meetingId),
-				appBaseUrl(),
-			);
+			const data = await loadPublicLineupBlastData(seed.meetingId);
+			if (!data) throw new Error("expected lineup data");
+			// The footer origin is the server's, on BOTH surfaces.
+			expect(data.origin).toBe(appBaseUrl());
+			const expected = buildLineupBlast(data);
 			expect(res.text).toBe(expected.text);
 			expect(res.html).toBe(expected.html);
 			expect(res.subject).toBe(expected.subject);

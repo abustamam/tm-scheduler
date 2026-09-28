@@ -6,8 +6,10 @@
 // person's own mail app — nothing is sent from GavelUp's servers.
 //
 // The server returns the data the draft is built from, and the draft is built
-// HERE with `buildLineupBlast`, the same builder `get_lineup_blast` uses, so the
-// button and the connector cannot draft different messages. The #731 rule
+// HERE with `buildLineupBlast`, the same builder `get_lineup_blast` uses, from
+// data whose footer origin the server chose, so the button and the connector
+// cannot draft different messages. The preview renders the builder's own line
+// parts rather than re-deciding any wording. The #731 rule
 // holds in this file too: it never names the meeting's video-call field, and
 // `lineup-blast.test.ts` sweeps it raw to hold that.
 
@@ -26,7 +28,6 @@ import {
 import { Textarea } from "#/components/ui/textarea";
 import {
 	buildLineupBlast,
-	CONFIRMED_MARK,
 	type LineupBlastData,
 	lineupMailtoHref,
 } from "#/lib/lineup-blast";
@@ -76,11 +77,9 @@ export function LineupBlastSheet({
 }) {
 	const [data, setData] = useState<LineupBlastData | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [origin, setOrigin] = useState("");
 
 	useEffect(() => {
 		if (!open) return;
-		setOrigin(window.location.origin);
 		let cancelled = false;
 		setError(null);
 		getLineupBlast({ data: { meetingId, selfMemberId } })
@@ -99,10 +98,7 @@ export function LineupBlastSheet({
 		};
 	}, [open, meetingId, selfMemberId]);
 
-	const blast = useMemo(
-		() => (data ? buildLineupBlast(data, origin) : null),
-		[data, origin],
-	);
+	const blast = useMemo(() => (data ? buildLineupBlast(data) : null), [data]);
 
 	function openMail() {
 		if (!blast) return;
@@ -144,31 +140,30 @@ export function LineupBlastSheet({
 										// biome-ignore lint/suspicious/noArrayIndexKey: see above
 										key={i}
 									>
+										{/* The builder's own parts, styled by state: the words
+										    are the draft's, never re-decided here. */}
 										<span className="font-medium">{line.label}</span>
-										{" – "}
-										{line.state === "open" ? (
-											<span className="text-red-700 dark:text-red-400">
-												Needed
-											</span>
-										) : (
+										{line.name ? ` – ${line.name} –` : " –"}
+										{line.mark ? (
 											<>
-												{line.name}
-												{" – "}
-												{line.state === "confirmed" ? (
-													<span className="rounded-sm bg-yellow-200 px-1 text-yellow-950">
-														{CONFIRMED_MARK}
-													</span>
-												) : null}
+												{" "}
+												<span
+													className={
+														line.state === "open"
+															? "text-red-700 dark:text-red-400"
+															: "rounded-sm bg-yellow-200 px-1 text-yellow-950"
+													}
+												>
+													{line.mark}
+												</span>
 											</>
-										)}
+										) : null}
 									</li>
 								))}
 							</ul>
-							{blast.openCount > 0 ? (
+							{blast.summary ? (
 								<p className="text-red-700 text-sm dark:text-red-400">
-									{blast.openCount === 1
-										? "1 role still open"
-										: `${blast.openCount} roles still open`}
+									{blast.summary}
 								</p>
 							) : null}
 							<div className="space-y-1">
