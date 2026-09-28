@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	LEVEL_PROXIMITY,
 	type ProximityPath,
+	projectsLeftBreakdown,
 	projectsLeftCopy,
 	proximityDetail,
 	selectLevelProximity,
@@ -194,6 +195,38 @@ describe("selectLevelProximity (#898)", () => {
 			electivesToChoose: 1,
 			upcomingSpeakerAt: at,
 		});
+	});
+});
+
+describe("projectsLeftBreakdown", () => {
+	// The one place the N/R/E case is decided, read by both the dashboard row
+	// (`projectsLeftCopy`) and the level nudge draft (`buildNudge`, #900).
+	const kind = (projectsLeft: number, projectNames: string[], e = 0) =>
+		projectsLeftBreakdown({ projectsLeft, projectNames, electivesToChoose: e });
+
+	it("is names when the names account for the whole count", () => {
+		expect(kind(1, ["A"])).toBe("names");
+		expect(kind(2, ["A", "B"])).toBe("names");
+		// Electives beyond an already-complete list do not change it.
+		expect(kind(2, ["A", "B"], 1)).toBe("names");
+	});
+
+	it("is namesAndElectives when names plus electives account for it", () => {
+		expect(kind(2, ["A"], 1)).toBe("namesAndElectives");
+	});
+
+	it("is electives when no name is known and electives account for it", () => {
+		expect(kind(1, [], 1)).toBe("electives");
+		expect(kind(2, [], 2)).toBe("electives");
+	});
+
+	it("is count whenever the parts do not add up to the count", () => {
+		expect(kind(2, [])).toBe("count");
+		expect(kind(2, ["A"])).toBe("count");
+		expect(kind(2, ["A"], 2)).toBe("count");
+		expect(kind(2, [], 1)).toBe("count");
+		expect(kind(0, [])).toBe("count");
+		expect(kind(0, [], 0)).toBe("count");
 	});
 });
 

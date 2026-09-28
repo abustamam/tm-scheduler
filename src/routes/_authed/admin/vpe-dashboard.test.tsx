@@ -359,6 +359,10 @@ describe("VPE dashboard — level nudge on Close to a level rows (#900)", () => 
 		expect(wa.getAttribute("href")).toContain("15551234567");
 	});
 
+	// The two no-contact rows are qualifying close rows otherwise (a next
+	// meeting, no speaker slot). They pin that `showsLevelNudge` requires
+	// `hasNudgeContact`, which the route's origin gating relies on: without it
+	// `NudgeButtons` would render "No contact on file" here.
 	it.each([
 		["no phone or email", { phone: null, email: null }, next],
 		["a blank email and no phone", { phone: null, email: "   " }, next],

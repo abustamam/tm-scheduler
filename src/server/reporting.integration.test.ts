@@ -17,6 +17,7 @@ import {
 	meetingAttendance,
 	meetings,
 	members,
+	officerTerms,
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPathLevels,
@@ -847,6 +848,46 @@ describe.skipIf(!hasTestDb)("Close to a level (#898)", () => {
 			urlKey: expect.any(String),
 			scheduledAt: soonest.scheduledAt,
 			location: "Room 4",
+		});
+	});
+
+	it("a VPE who is not a stored admin passes the section's gate and reads each row's contact (#900)", async () => {
+		// `getLevelProximity` is `requireClubAdminView` then `loadLevelProximity`.
+		// A `createServerFn` cannot be invoked from vitest, so this drives the two
+		// halves in order. The viewer is `seedClub`'s plain member, made a VPE by
+		// an open officer term: the effective-admin arm (#202), which is how a VPE
+		// who is not a stored admin reaches this dashboard.
+		const { loadLevelProximity } = await import("#/server/reporting-logic");
+		const { requireClubAdminView } = await import("#/server/guards");
+
+		// Control: without the term the same viewer is refused, so the pass
+		// below is the term's doing.
+		await expect(
+			requireClubAdminView(seeded.memberUserId, seeded.clubId),
+		).rejects.toThrow();
+		await testDb.insert(officerTerms).values({
+			membershipId: seeded.memberId,
+			position: "vp_education",
+			termStart: new Date(),
+			termEnd: null, // open term = currently held
+		});
+		await expect(
+			requireClubAdminView(seeded.memberUserId, seeded.clubId),
+		).resolves.toMatchObject({ via: "member" });
+
+		const { enrollClose } = await closePath();
+		const ada = await addMember(seeded.clubId, "Ada Lovelace");
+		await testDb
+			.update(members)
+			.set({ email: "ada@example.com", phone: "+14155552671" })
+			.where(eq(members.id, ada.memberId));
+		await enrollClose(ada.personId);
+
+		const result = await loadLevelProximity(seeded.clubId);
+		expect(result.rows.find((r) => r.memberId === ada.memberId)).toMatchObject({
+			kind: "close",
+			email: "ada@example.com",
+			phone: "+14155552671",
 		});
 	});
 

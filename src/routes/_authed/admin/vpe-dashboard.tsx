@@ -27,6 +27,7 @@ import {
 	showsLevelNudge,
 } from "#/lib/level-proximity";
 import { formatTenure } from "#/lib/members";
+import { signupUrlFor } from "#/lib/next-meeting-summary";
 import { cn } from "#/lib/utils";
 import {
 	getAttendanceLapse,
@@ -111,22 +112,28 @@ function VpeDashboard() {
 		timezone,
 		clubId,
 		clubSlug,
-		nextMeeting: loadedNextMeeting,
+		nextMeeting,
 	} = Route.useLoaderData();
-	const nextMeeting = loadedNextMeeting ?? null;
 
 	// The next meeting's PUBLIC agenda, for the level nudge draft (#900). The
-	// origin exists only in the browser; `NudgeButtons` renders its links only
-	// after mount, so the server pass never carries the relative fallback.
+	// origin exists only in the browser, and `signupUrlFor` is null until it
+	// does, so no nudge renders on the server pass. That costs no markup only
+	// because `showsLevelNudge` requires `hasNudgeContact`: a row that shows a
+	// nudge always has a channel, so `NudgeButtons` would render nothing before
+	// mount anyway, and its server-rendered "No contact on file" branch is
+	// unreachable here. Drop that requirement and this gating hides that text
+	// on the server pass. The no-contact cases in `vpe-dashboard.test.tsx` pin it.
 	const [origin, setOrigin] = useState("");
 	useEffect(() => setOrigin(window.location.origin), []);
-	const nudge: LevelNudgeContext | null = nextMeeting
-		? {
-				meeting: nextMeeting,
-				meetingDate: formatMeetingDate(nextMeeting.scheduledAt, timezone),
-				shareUrl: `${origin}/club/${encodeURIComponent(clubSlug ?? clubId ?? "")}/meeting/${encodeURIComponent(nextMeeting.urlKey)}`,
-			}
-		: null;
+	const shareUrl = signupUrlFor(clubSlug ?? clubId, nextMeeting, origin);
+	const nudge: LevelNudgeContext | null =
+		nextMeeting && shareUrl
+			? {
+					meeting: nextMeeting,
+					meetingDate: formatMeetingDate(nextMeeting.scheduledAt, timezone),
+					shareUrl,
+				}
+			: null;
 
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
@@ -596,6 +603,15 @@ function RotationRow({
 	);
 }
 
+/** What every row's level nudge shares: the one meeting it asks about. */
+interface LevelNudgeContext {
+	meeting: LevelNudgeMeeting;
+	/** Already formatted in the club's timezone. */
+	meetingDate: string;
+	/** The meeting's absolute public URL. */
+	shareUrl: string;
+}
+
 /**
  * One member close to a level, or with a level awaiting approval (#898).
  *
@@ -607,15 +623,6 @@ function RotationRow({
  * The Speaking marker mirrors `BookedPill` / `BookedLine` exactly, for the same
  * width reasons: a pill from `sm` up, a wrapping line below it.
  */
-/** What every row's level nudge shares: the one meeting it asks about. */
-interface LevelNudgeContext {
-	meeting: LevelNudgeMeeting;
-	/** Already formatted in the club's timezone. */
-	meetingDate: string;
-	/** The meeting's absolute public URL. */
-	shareUrl: string;
-}
-
 function ProximityRow({
 	row,
 	timezone,
@@ -672,7 +679,7 @@ function ProximityRow({
 				    navigates to the profile (#900). Icon-only: the row's right
 				    cell is narrow at 375px, and the accessible names carry the
 				    words. GavelUp drafts; the VPE sends from their own app. */}
-				{showNudge && nudge ? (
+				{showNudge ? (
 					<NudgeButtons
 						mode="level"
 						iconOnly

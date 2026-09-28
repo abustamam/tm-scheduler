@@ -28,12 +28,22 @@ export interface LevelProximitySelection {
 	projectsLeft: number;
 	/** Required projects left at that level. [] when unknown. Informational:
 	 *  `projectsLeft` is the count, and the copy never trusts names over it. */
-	projectNames: string[];
+	projectNames: readonly string[];
 	/** `upNextElectives?.chooseCount ?? 0`. */
 	electivesToChoose: number;
 	/** Soonest future speaker slot. Absent if none. */
 	upcomingSpeakerAt?: Date;
 }
+
+/**
+ * How far a member is from finishing a level: what a level nudge draft (#900)
+ * describes. Stated once here and read by `NudgeInput` and `NudgeButtonsProps`,
+ * so the row and the draft cannot grow different ideas of the same fields.
+ */
+export type LevelProgress = Pick<
+	LevelProximitySelection,
+	"pathName" | "level" | "projectsLeft" | "projectNames" | "electivesToChoose"
+>;
 
 /**
  * How to reach the member, for the nudge draft (#900). Attached by
@@ -201,37 +211,65 @@ export function selectLevelProximity(
 	return [...awaiting, ...close];
 }
 
-function plural(n: number, word: string): string {
+/** "1 project", "2 projects". */
+export function plural(n: number, word: string): string {
 	return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
+/** What `projectsLeftBreakdown` reads. */
+type ProjectsLeftCounts = Pick<
+	LevelProximitySelection,
+	"projectsLeft" | "projectNames" | "electivesToChoose"
+>;
+
 /**
- * What is left, in words. N = `projectsLeft`, R = names known, E = electives
- * to choose:
+ * Which of the four ways to describe what is left applies. N = `projectsLeft`,
+ * R = names known, E = electives to choose:
  *
- * - R = N: "2 left: Inspire Your Audience, Active Listening"
- * - R + E = N, E > 0: "2 left: Inspire Your Audience and 1 elective", or
- *   "2 left: choose 2 electives" when R = 0
- * - otherwise: "2 left". The count is Base Camp's or the catalog's, and names
- *   that do not add up to it (a project Base Camp counts that we cannot name,
- *   the summary-sync fallback) must not be presented as the whole list.
+ * - `names`: R = N, R > 0
+ * - `namesAndElectives`: R + E = N, R > 0, E > 0
+ * - `electives`: R = 0, E = N, E > 0
+ * - `count`: anything else. The count is Base Camp's or the catalog's, and
+ *   names that do not add up to it (a project Base Camp counts that we cannot
+ *   name, the summary-sync fallback) must not be presented as the whole list.
+ *
+ * Decided ONCE, here, so the dashboard row (`projectsLeftCopy`) and the nudge
+ * draft (`buildNudge`'s `level` mode, #900) cannot disagree about when the
+ * names are the whole list.
  */
-export function projectsLeftCopy(
-	row: Pick<
-		LevelProximitySelection,
-		"projectsLeft" | "projectNames" | "electivesToChoose"
-	>,
-): string {
+export function projectsLeftBreakdown(
+	row: ProjectsLeftCounts,
+): "names" | "namesAndElectives" | "electives" | "count" {
 	const n = row.projectsLeft;
 	const r = row.projectNames.length;
 	const e = row.electivesToChoose;
-	if (r > 0 && r === n) return `${n} left: ${row.projectNames.join(", ")}`;
-	if (e > 0 && r + e === n) {
-		return r === 0
-			? `${n} left: choose ${plural(e, "elective")}`
-			: `${n} left: ${row.projectNames.join(", ")} and ${plural(e, "elective")}`;
+	if (r > 0 && r === n) return "names";
+	if (e > 0 && r + e === n) return r === 0 ? "electives" : "namesAndElectives";
+	return "count";
+}
+
+/**
+ * What is left, in words, per `projectsLeftBreakdown`:
+ *
+ * - names: "2 left: Inspire Your Audience, Active Listening"
+ * - names and electives: "2 left: Inspire Your Audience and 1 elective"
+ * - electives: "2 left: choose 2 electives"
+ * - count: "2 left"
+ */
+export function projectsLeftCopy(row: ProjectsLeftCounts): string {
+	const n = row.projectsLeft;
+	const names = row.projectNames.join(", ");
+	const electives = plural(row.electivesToChoose, "elective");
+	switch (projectsLeftBreakdown(row)) {
+		case "names":
+			return `${n} left: ${names}`;
+		case "namesAndElectives":
+			return `${n} left: ${names} and ${electives}`;
+		case "electives":
+			return `${n} left: choose ${electives}`;
+		case "count":
+			return `${n} left`;
 	}
-	return `${n} left`;
 }
 
 /** The whole detail line under a member's name. */
