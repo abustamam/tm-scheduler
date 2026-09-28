@@ -2028,8 +2028,15 @@ function MeetingView() {
 						// unreachable — the page scrolls, the pinned rail does not —
 						// unless the agenda column happens to be taller. Capping the
 						// height and giving the rail its OWN scroller is what makes the
-						// bottom rows reachable. `7rem` = the 6rem `top-24` offset plus
-						// 1rem of breathing room at the bottom edge.
+						// bottom rows reachable. The cap is the viewport less the pin
+						// offset and 1rem of breathing room at the bottom edge.
+						//
+						// Both read `--shell-pinned-top`, which the app shell sets
+						// (`shell-sticky-offset.ts`): 6rem under the header, plus the 2.25rem
+						// impersonation banner when one is showing. A fixed `top-24` pinned
+						// the rail under the header alone, so while impersonating the
+						// header covered its top ~9px. The 6rem fallback is that old value,
+						// for any host that sets nothing.
 						//
 						// The cap lives here and the SCROLLER does not. This `<aside>` is
 						// the positioner — sticky, width, order, and the height ceiling
@@ -2038,8 +2045,7 @@ function MeetingView() {
 						// its own body, which is what keeps the title, the counts line and
 						// the sync status visible while the rows move; the scroller used to
 						// be this element, and a reader 25 rows into a 40-member roster had
-						// lost the summary they were reading the rail for. `7rem` = the
-						// 6rem `top-24` offset plus 1rem of breathing room at the bottom.
+						// lost the summary they were reading the rail for.
 						//
 						// Both halves or neither: `lg:max-h-…` with nothing scrolling
 						// inside it CLIPS the bottom rows outright, which is strictly worse
@@ -2055,7 +2061,7 @@ function MeetingView() {
 						// would be cut off. Moving the scroller inward tightened that box
 						// from the column to the card's body, so it is a smaller trap than
 						// it was, not a new one.
-						className="order-1 lg:order-2 lg:sticky lg:top-24 lg:flex lg:max-h-[calc(100vh-7rem)] lg:w-[340px] lg:shrink-0 lg:flex-col"
+						className="order-1 lg:order-2 lg:sticky lg:top-[var(--shell-pinned-top,6rem)] lg:flex lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)] lg:w-[340px] lg:shrink-0 lg:flex-col"
 					>
 						<MeetingAttendancePanel
 							// `upcoming` → the outreach ladder; meeting day and after → the

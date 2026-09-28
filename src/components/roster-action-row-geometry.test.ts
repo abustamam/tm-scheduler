@@ -37,6 +37,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buttonVariants } from "#/components/ui/button";
+import {
+	SHELL_BANNER_OFFSET_VAR,
+	SHELL_PINNED_TOP_VAR,
+	shellStickyVars,
+} from "#/lib/shell-sticky-offset";
 import { readSource } from "#/test/guard-source";
 import {
 	buildAppCss,
@@ -49,6 +54,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SHELL = resolve(HERE, "app-shell.tsx");
 const CONTAINER = resolve(HERE, "page-container.tsx");
 const ROSTER = resolve(HERE, "../routes/_authed/roster.tsx");
+const BANNER = resolve(HERE, "club/impersonation-banner.tsx");
+const PANEL = resolve(HERE, "club/meeting-attendance-panel.tsx");
+const MEETING_ROUTE = resolve(
+	HERE,
+	"../routes/club.$clubId.meeting.$meetingId.tsx",
+);
 
 /** First `className="…"` after `marker` in the comment-stripped source. */
 function classAfter(file: string, marker: string): string {
@@ -354,6 +365,263 @@ describe.skipIf(!hasChrome)(
 
 		it("CONTROL: a sticky child of an overflow-x-hidden column does not pin", () => {
 			expect(preFix.stickyTopAfterScroll).toBeLessThan(0);
+		});
+	},
+);
+
+/**
+ * The meeting page's attendance rail pins below the shell's sticky chrome,
+ * impersonating or not (#999 follow-up).
+ *
+ * `overflow-x-clip` is what made the rail pin at all: under `hidden` the
+ * column was its scroll container and never scrolled. Pinned, it met the
+ * impersonation banner. The banner (36px) and the header under it stack to
+ * ~105px, and the rail's fixed `top-24` pinned it at 96px, so the header
+ * covered its top ~9px. Now the shell states where its chrome ends
+ * (`shell-sticky-offset.ts`) and the rail's pin AND its height cap read that,
+ * so pushing it down does not push its bottom off the screen.
+ *
+ * Real class strings throughout: the banner's static classes, the desktop
+ * header's, the rail's and the panel card's, out of source. The custom
+ * property VALUES come from `shellStickyVars`, the function the shell calls.
+ */
+function staticTemplateClass(file: string, marker: string): string {
+	const src = readSource(file);
+	const at = src.indexOf(marker);
+	expect(at, `\`${marker}\` not found in ${file}`).toBeGreaterThan(-1);
+	const m = /className=\{`([^`$]*)\$\{/.exec(src.slice(at));
+	expect(m, `no template className after \`${marker}\``).not.toBeNull();
+	return (m?.[1] ?? "").trim();
+}
+
+type RailProbe = {
+	headerTop: number;
+	headerBottom: number;
+	railTop: number;
+	railBottom: number;
+	innerHeight: number;
+	/** The last row's bottom once the rail's own scroller is at its end. */
+	tailBottomAfterScroll: number;
+};
+
+function probeRail(bodyHtml: string, css: string): RailProbe {
+	const script = `<script>
+	(function () {
+		function fail(why) { document.title = "ERROR:" + why; }
+		var header = document.querySelector("#header");
+		var rail = document.querySelector("#rail");
+		var body = document.querySelector("[data-scroller]");
+		var tail = document.querySelector("[data-tail]");
+		if (!header || !rail || !body || !tail) return fail("fixture incomplete");
+		window.scrollTo(0, 1500);
+		var h = header.getBoundingClientRect();
+		var r = rail.getBoundingClientRect();
+		body.scrollTop = body.scrollHeight;
+		var out = {
+			headerTop: Math.round(h.top),
+			headerBottom: Math.round(h.bottom),
+			railTop: Math.round(r.top),
+			railBottom: Math.round(r.bottom),
+			innerHeight: window.innerHeight,
+			tailBottomAfterScroll: Math.round(tail.getBoundingClientRect().bottom)
+		};
+		document.title = Object.keys(out).map(function (k) {
+			return k + "=" + out[k];
+		}).join(";");
+	})();
+	</script>`;
+	const title = renderAndReadTitle({
+		bodyHtml,
+		css,
+		script,
+		viewport: VIEWPORT,
+		tmpPrefix: "shell-rail-",
+	});
+	if (!title.includes("railTop=")) {
+		throw new Error(`probe produced no measurement (title: ${title || "∅"})`);
+	}
+	const kv = new Map(
+		title.split(";").map((p) => p.split("=") as [string, string]),
+	);
+	const num = (k: string) => Number(kv.get(k) ?? "NaN");
+	return {
+		headerTop: num("headerTop"),
+		headerBottom: num("headerBottom"),
+		railTop: num("railTop"),
+		railBottom: num("railBottom"),
+		innerHeight: num("innerHeight"),
+		tailBottomAfterScroll: num("tailBottomAfterScroll"),
+	};
+}
+
+/** The shipped classes before this follow-up, for the controls. */
+const PRE_FIX_RAIL_TOP = "lg:top-24";
+const PRE_FIX_RAIL_CAP = "lg:max-h-[calc(100vh-7rem)]";
+
+describe.skipIf(!hasChrome)(
+	"the meeting rail pins below the shell's sticky chrome at 1024px",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		let css = "";
+		let cls = {
+			frame: "",
+			main: "",
+			section: "",
+			banner: "",
+			header: "",
+			rail: "",
+			card: "",
+			cardBody: "",
+		};
+		const railTopClass = () =>
+			cls.rail.split(/\s+/).find((c) => c.startsWith("lg:top-")) ?? "";
+		const railCapClass = () =>
+			cls.rail.split(/\s+/).find((c) => c.startsWith("lg:max-h-")) ?? "";
+
+		const styleAttr = (impersonating: boolean) =>
+			Object.entries(shellStickyVars(impersonating))
+				.map(([k, v]) => `${k}:${v}`)
+				.join(";");
+
+		function page(opts: {
+			impersonating: boolean;
+			vars: boolean;
+			header: string;
+			rail: string;
+		}): string {
+			return `
+			<div class="${cls.frame}" style="${opts.vars ? styleAttr(opts.impersonating) : ""}">
+				<main class="${cls.main}">
+					${opts.impersonating ? `<div class="${cls.banner}">Viewing as Example Club · Exit</div>` : ""}
+					<header class="${opts.header}" id="header">
+						<div class="text-xs font-semibold">Meetings</div>
+						<div class="flex-1"></div>
+						<div style="width:36px;height:36px;border-radius:9999px"></div>
+					</header>
+					<section class="${cls.section}">
+						<div class="flex gap-6">
+							<div class="min-w-0 flex-1" style="height:4000px">agenda</div>
+							<aside class="${opts.rail}" id="rail">
+								<div class="${cls.card} flex flex-col gap-6 rounded-xl border py-6">
+									<div class="px-6">Planned attendance</div>
+									<div class="${cls.cardBody} px-6" data-scroller>
+										${Array.from(
+											{ length: 40 },
+											(_, i) =>
+												`<div class="py-4 text-sm"${i === 39 ? " data-tail" : ""}>Member ${i + 1}</div>`,
+										).join("")}
+									</div>
+								</div>
+							</aside>
+						</div>
+					</section>
+				</main>
+			</div>`;
+		}
+
+		const results = new Map<string, RailProbe>();
+		const get = (key: string): RailProbe => {
+			const r = results.get(key);
+			if (!r) throw new Error(`no probe for ${key}`);
+			return r;
+		};
+
+		beforeAll(async () => {
+			cls = {
+				frame: classContaining(SHELL, "flex min-h-svh w-full"),
+				main: classAfter(SHELL, "<main"),
+				section: classAfter(SHELL, "<section"),
+				banner: staticTemplateClass(BANNER, "<div"),
+				header: classContaining(SHELL, "px-7 py-4"),
+				rail: classAfter(MEETING_ROUTE, "<aside"),
+				card: classAfter(PANEL, "<Card "),
+				cardBody: classAfter(PANEL, "<CardContent"),
+			};
+			// The pre-fix header pinned at `top-9` under the banner.
+			const preFixHeader = (impersonating: boolean) =>
+				cls.header.replace(
+					/\btop-\(--shell-banner-offset\)/,
+					impersonating ? "top-9" : "top-0",
+				);
+			const preFixRail = cls.rail
+				.replace(railTopClass(), PRE_FIX_RAIL_TOP)
+				.replace(railCapClass(), PRE_FIX_RAIL_CAP);
+			// The half-fix: the pin moved down, the cap still sized for 6rem.
+			const pinOnlyRail = cls.rail.replace(railCapClass(), PRE_FIX_RAIL_CAP);
+
+			const pages: Record<string, string> = {};
+			for (const imp of [true, false]) {
+				pages[`fixed-${imp}`] = page({
+					impersonating: imp,
+					vars: true,
+					header: cls.header,
+					rail: cls.rail,
+				});
+				pages[`pre-${imp}`] = page({
+					impersonating: imp,
+					vars: false,
+					header: preFixHeader(imp),
+					rail: preFixRail,
+				});
+			}
+			pages["pin-only-true"] = page({
+				impersonating: true,
+				vars: true,
+				header: cls.header,
+				rail: pinOnlyRail,
+			});
+			css = await buildAppCss(candidatesIn(Object.values(pages).join("")));
+			for (const [k, html] of Object.entries(pages)) {
+				results.set(k, probeRail(html, css));
+			}
+		});
+
+		it("spells the shell's property names in the classes that read them", () => {
+			// The fixture sets the properties by calling `shellStickyVars`
+			// itself, so this is the half it cannot see: that the shell does too.
+			expect(readSource(SHELL)).toContain(
+				"style={shellStickyVars(impersonating != null)}",
+			);
+			expect(cls.header).toContain(`top-(${SHELL_BANNER_OFFSET_VAR})`);
+			expect(railTopClass()).toContain(`var(${SHELL_PINNED_TOP_VAR},6rem)`);
+			expect(railCapClass()).toContain(`var(${SHELL_PINNED_TOP_VAR},6rem)`);
+		});
+
+		it.each([
+			true,
+			false,
+		])("pins the rail at or below the header's bottom (impersonating: %s)", (imp) => {
+			const p = get(`fixed-${imp}`);
+			// The header really is pinned under the banner, not scrolled away.
+			expect(p.headerTop).toBe(imp ? 36 : 0);
+			expect(p.railTop).toBeGreaterThanOrEqual(p.headerBottom);
+		});
+
+		it.each([
+			true,
+			false,
+		])("keeps the pinned rail and its last row inside the viewport (impersonating: %s)", (imp) => {
+			const p = get(`fixed-${imp}`);
+			expect(p.railBottom).toBeLessThanOrEqual(p.innerHeight);
+			expect(p.tailBottomAfterScroll).toBeLessThanOrEqual(p.innerHeight);
+		});
+
+		it("pins exactly where it always did when nobody is impersonating", () => {
+			expect(get("fixed-false").railTop).toBe(96);
+			expect(get("fixed-false").railBottom).toBe(get("pre-false").railBottom);
+		});
+
+		it("CONTROL: the fixed top-24 rail sits under the impersonating header", () => {
+			const p = get("pre-true");
+			expect(p.headerTop).toBe(36);
+			expect(p.railTop).toBe(96);
+			expect(p.headerBottom - p.railTop).toBeGreaterThan(0);
+		});
+
+		it("CONTROL: moving the pin without the cap pushes the rail off the screen", () => {
+			const p = get("pin-only-true");
+			expect(p.railTop).toBeGreaterThanOrEqual(p.headerBottom);
+			expect(p.railBottom).toBeGreaterThan(p.innerHeight);
 		});
 	},
 );
