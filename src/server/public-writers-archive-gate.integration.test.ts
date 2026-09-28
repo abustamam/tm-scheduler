@@ -64,6 +64,7 @@ import {
 	guests,
 	meetingCandidateDisqualifications,
 	meetings,
+	roleFeedbackNotes,
 	roleSlots,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
@@ -79,6 +80,7 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { captureGuestVisit } = await import("#/server/guest-pipeline-logic");
+const { leaveFeedbackLogic } = await import("#/server/role-feedback-logic");
 const { claimSlotCore, reassignSlotCore, releaseSlotCore } = await import(
 	"#/server/slots-logic"
 );
@@ -170,6 +172,41 @@ describe.skipIf(!hasTestDb)(
 			await expect(
 				joinBallotAsGuest({ meetingId: s.meetingId, name: "Archived Voter" }),
 			).rejects.toThrow(ARCHIVED);
+		});
+
+		/**
+		 * #984 — anonymous role feedback MINTS a row of free text about a named
+		 * member. The meeting is moved into its feedback window and the slot
+		 * given a member holder first, so the "before" half can succeed.
+		 */
+		it("leaveFeedbackLogic — no note about a member collected", async () => {
+			const s = await seedLiveClub();
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 10 * 60_000) })
+				.where(eq(meetings.id, s.meetingId));
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: s.memberId, status: "claimed" })
+				.where(eq(roleSlots.id, s.slotId));
+			const note = {
+				meetingId: s.meetingId,
+				target: { kind: "slot" as const, id: s.slotId },
+				wentWell: "Clear signals",
+			};
+			const countNotes = async () =>
+				(
+					await testDb
+						.select({ id: roleFeedbackNotes.id })
+						.from(roleFeedbackNotes)
+						.where(eq(roleFeedbackNotes.meetingId, s.meetingId))
+				).length;
+			expect(await leaveFeedbackLogic(note)).toEqual({ ok: true });
+			expect(await countNotes()).toBe(1);
+
+			await archive(s.clubId);
+			await expect(leaveFeedbackLogic(note)).rejects.toThrow(ARCHIVED);
+			expect(await countNotes()).toBe(1);
 		});
 
 		/** The remaining five write nothing new but still mutate a taken-down club. */

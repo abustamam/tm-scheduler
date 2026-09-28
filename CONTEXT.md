@@ -481,6 +481,34 @@ the nouns in `src/db/schema.ts`.
   Speaker" lines, Table Topics speaker capture, and recording winners in the minutes. Switching
   either one off closes every open vote session in the same transaction, like completing a meeting;
   votes already cast are kept, and closing a vote or reading its tally still works while off.
+- **Love note (role feedback)** — an anonymous note left for a MEMBER about the role they served
+  at one meeting (`role_feedback_notes`, #981 / #984): "Speaker 2", "Timer", "Table Topics speaker".
+  Two optional prompts, "What went well" and "One thing to try", at least one filled, each ≤ 500
+  characters after trimming, under the norm line "Don't write anything you wouldn't say to them in
+  person." Recipients are the member-held role slots on the agenda plus the member Table Topics
+  speakers in the minutes; **guests are never recipients**. Left from the public page
+  `/club/…/meeting/…/feedback`, linked from the meeting page and the in-room strip while it is open.
+  **Anonymity is structural**: the table has no column for the writer — no user, member, device, IP
+  or guest id — and the write (`leaveFeedbackLogic`) takes none and returns only `{ ok }`, not even
+  the row id. `created_at` is stored at DAY granularity (midnight UTC) and notes are ordered by it
+  and then a random id, so a note's time cannot be matched to who held a phone when. The page's
+  "Sent ✓" reminder lives in `sessionStorage`, so it ends with the tab rather than leaving a
+  durable who-wrote-to-whom record on a shared device. A failure the caller is not meant to read
+  (a driver error names columns and ids) reaches them only as a generic message
+  (`publicFeedbackError`). The recipient and the `role_label` snapshot are derived server-side from the meeting's
+  rows at write time, so a note attaches to whoever held the role when it was written. **Window**
+  (`feedbackWindow`, `src/lib/feedback-window.ts`): writable from the meeting's start
+  (`scheduled_at`) until three days after its scheduled end (`scheduled_at + length_minutes`), on
+  the SERVER's clock; readable by the recipient from that scheduled end. A cancelled meeting has no
+  feedback page, and an archived club takes no new notes (checked under the club lock) while its
+  members can still read the ones they were given. **Caps**: 20 notes per recipient per meeting and
+  300 per meeting, counted under the club write lock so concurrent writers cannot overshoot, and
+  checked first on an unlocked read so a refusal never queues on that lock. In front of the lock, a
+  process-local speed bump of 60 notes a minute per client address (a room on venue Wi-Fi shares one) (`x-real-ip`), held in memory as a
+  salted hash, never stored or logged. Officers
+  never see notes; the recipient reads (and, from part 2, deletes) their own. **Removal runbook**:
+  v1 has no superadmin UI. On request, a superadmin verifies the note WITH THE RECIPIENT, then runs
+  `DELETE FROM role_feedback_notes WHERE id = '…'` by hand. There is no report queue.
 - **Disqualification** — the Vote Counter's record that a candidate cannot win one award on one
   meeting, with the reason the room is told (`meeting_candidate_disqualifications`, #723). Eligibility
   is not derivable: a speaker can have spoken and still be out, because they ran outside the
