@@ -281,6 +281,23 @@ const WIRINGS: Wiring[] = [
 			"an archived club's meeting details, blast template and logo on a public flyer (#931)",
 	},
 	{
+		// #1024. Session-optional because the meeting's Toastmaster may draft the
+		// lineup from the roster pick with no account. `resolveLineupBlastAccess`
+		// asserts `isReadableClub` before any grant arm, and
+		// `lineup-blast-logic.integration.test.ts` executes the archived case.
+		file: "server/lineup-blast.ts",
+		fn: "getLineupBlastAccess",
+		mustCall: "resolveLineupBlastAccess(",
+		leaks: "whether a caller may draft an archived club's lineup",
+	},
+	{
+		file: "server/lineup-blast.ts",
+		fn: "getLineupBlast",
+		mustCall: "requireLineupBlastAccess(",
+		leaks:
+			"an archived club's full role lineup, with every holder's name (#1024)",
+	},
+	{
 		// #984. The seam resolves the key through `resolvePublicMeetingKey`, so an
 		// archived club, an unknown key and a cancelled meeting all answer null.
 		// `role-feedback.integration.test.ts` executes the archived case.
