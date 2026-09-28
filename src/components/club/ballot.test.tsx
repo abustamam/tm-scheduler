@@ -27,11 +27,11 @@ const { getBallot, submitVote } = vi.hoisted(() => ({
 }));
 vi.mock("#/server/voting", () => ({ getBallot, submitVote }));
 
-import { Ballot, type VoterIdentity } from "./ballot";
+import { ANONYMOUS_VOTER, Ballot, type BallotVoter } from "./ballot";
 
 const MEETING_ID = "11111111-1111-4111-8111-111111111111";
-const VOTER: VoterIdentity = { kind: "member", id: "m-1", name: "Jane Doe" };
-const GUEST: VoterIdentity = { kind: "guest", id: "g-9", name: "Visitor Vic" };
+const VOTER: BallotVoter = { kind: "member", id: "m-1", name: "Jane Doe" };
+const GUEST: BallotVoter = { kind: "guest", id: "g-9", name: "Visitor Vic" };
 
 type Category = BallotData["categories"][keyof BallotData["categories"]];
 
@@ -102,7 +102,7 @@ function fixture(overrides: Partial<BallotData["categories"]>): BallotData {
  *  panel covers both cases, which is the point (#722 AC 2). */
 const WAITING_PANEL = "No vote is open right now";
 
-function renderBallot(voter: VoterIdentity = VOTER) {
+function renderBallot(voter: BallotVoter = VOTER) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const utils = render(
 		<QueryClientProvider client={qc}>
@@ -368,6 +368,34 @@ describe("Ballot", () => {
 					}),
 				}),
 			);
+		});
+
+		// #982. A phone that never identified votes as nobody in particular: no id
+		// travels, so there is nothing to claim, and the device token is the only
+		// owner the row gets — so it MUST ride the cast.
+		it("posts an anonymous voter with no id, carrying this device's token", async () => {
+			getBallot.mockResolvedValue(
+				fixture({ best_speaker: open(["c-1", "Alex Speaker"]) }),
+			);
+			submitVote.mockResolvedValue({ ok: true });
+			renderBallot(ANONYMOUS_VOTER);
+
+			await userEvent.click(
+				await screen.findByRole("button", { name: "Alex Speaker" }),
+			);
+
+			expect(submitVote).toHaveBeenCalledWith({
+				data: {
+					meetingId: MEETING_ID,
+					category: "best_speaker",
+					voter: { kind: "anonymous" },
+					candidate: { kind: "member", id: "c-1" },
+					deviceToken: getBallotDeviceToken(),
+				},
+			});
+			expect(
+				await screen.findByText("Vote counted for Alex Speaker."),
+			).toBeTruthy();
 		});
 
 		// The invariant the component argues hardest for: a write-in posts the

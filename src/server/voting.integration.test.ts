@@ -833,6 +833,299 @@ describe.skipIf(!hasTestDb)("castVote: device-bound change (#765)", () => {
 	});
 });
 
+/**
+ * Voting without identifying (#982). A phone that never said who it is votes
+ * straight away: the row carries NEITHER voter id, only the casting device's
+ * token. Honour system — no uniqueness on the token, so another device (or a
+ * private window) is another ballot — but the same device changing its mind
+ * changes its one ballot, as every identified voter's re-tap does.
+ */
+describe.skipIf(!hasTestDb)("castVote: an anonymous voter (#982)", () => {
+	let seed: SeededClub;
+	let sessionId: string;
+	const T = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+	const U = "6f5e4d3c-2b1a-4f0e-9d8c-7b6a5f4e3d2c";
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				sortOrder: 99,
+			})
+			.returning({ id: roleDefinitions.id });
+		// Two eligible candidates, so a change is observable as a different pick.
+		await testDb.insert(roleSlots).values([
+			{
+				meetingId: seed.meetingId,
+				roleDefinitionId: def.id,
+				slotIndex: 0,
+				assignedMemberId: seed.adminMemberId,
+			},
+			{
+				meetingId: seed.meetingId,
+				roleDefinitionId: def.id,
+				slotIndex: 1,
+				assignedMemberId: seed.memberId,
+			},
+		]);
+		await openVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		const [session] = await testDb
+			.select({ id: meetingVoteSessions.id })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, seed.meetingId),
+					eq(meetingVoteSessions.category, "best_speaker"),
+				),
+			);
+		sessionId = session.id;
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	/** An anonymous ballot for the admin, from device T unless overridden. */
+	const anon = (over: Record<string, unknown> = {}) => ({
+		meetingId: seed.meetingId,
+		category: "best_speaker" as const,
+		voter: { kind: "anonymous" as const },
+		candidate: { kind: "member" as const, id: seed.adminMemberId },
+		deviceToken: T,
+		...over,
+	});
+
+	async function rows() {
+		return testDb
+			.select({
+				voterMemberId: meetingVotes.voterMemberId,
+				voterGuestId: meetingVotes.voterGuestId,
+				candidateMemberId: meetingVotes.candidateMemberId,
+				deviceToken: meetingVotes.deviceToken,
+			})
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
+	}
+
+	const countFor = async (memberId: string) =>
+		(await loadTally(seed.meetingId)).best_speaker.results.find(
+			(r) => r.kind === "member" && r.id === memberId,
+		)?.count ?? 0;
+
+	it("stores the vote with BOTH voter ids NULL, owned by the device, and counts it", async () => {
+		await castVote(anon());
+
+		expect(await rows()).toEqual([
+			{
+				voterMemberId: null,
+				voterGuestId: null,
+				candidateMemberId: seed.adminMemberId,
+				deviceToken: T,
+			},
+		]);
+		expect(await countFor(seed.adminMemberId)).toBe(1);
+		const p = await loadParticipation(seed.meetingId);
+		expect(p.categories.best_speaker.ballotsIn).toBe(1);
+	});
+
+	it("is counted, but never listed as a named voter on the console", async () => {
+		await castVote(anon());
+		await castVote({
+			...anon({ deviceToken: U }),
+			voter: { kind: "member", id: seed.memberId },
+		});
+
+		const t = (await loadTally(seed.meetingId)).best_speaker;
+		expect(t.results.find((r) => r.id === seed.adminMemberId)?.count).toBe(2);
+		// The member is named; the anonymous ballot is not a phantom "" or a
+		// placeholder person.
+		expect(t.voterNames).toEqual([
+			(
+				await testDb
+					.select({ name: members.name })
+					.from(members)
+					.where(eq(members.id, seed.memberId))
+			)[0].name,
+		]);
+	});
+
+	it("two anonymous devices are two ballots — the honour system", async () => {
+		await castVote(anon({ deviceToken: T }));
+		await castVote(anon({ deviceToken: U }));
+
+		expect(await rows()).toHaveLength(2);
+		expect(await countFor(seed.adminMemberId)).toBe(2);
+	});
+
+	it("the same device changing its mind changes its ONE ballot, it does not add one", async () => {
+		await castVote(anon());
+		await castVote(anon({ candidate: { kind: "member", id: seed.memberId } }));
+
+		expect(await rows()).toEqual([
+			{
+				voterMemberId: null,
+				voterGuestId: null,
+				candidateMemberId: seed.memberId,
+				deviceToken: T,
+			},
+		]);
+		expect(await countFor(seed.adminMemberId)).toBe(0);
+		expect(await countFor(seed.memberId)).toBe(1);
+	});
+
+	it("two simultaneous casts from one device still leave one ballot", async () => {
+		// A double-tap, or a request retried on bad wifi. The update-else-insert
+		// is serialised per (session, device), so neither can see "no row yet"
+		// while the other is inserting one.
+		await Promise.all([
+			castVote(anon()),
+			castVote(anon({ candidate: { kind: "member", id: seed.memberId } })),
+			castVote(anon()),
+		]);
+
+		expect(await rows()).toHaveLength(1);
+	});
+
+	it("never touches an IDENTIFIED vote cast earlier from the same device", async () => {
+		await castVote({
+			...anon({ candidate: { kind: "member", id: seed.memberId } }),
+			voter: { kind: "member", id: seed.memberId },
+		});
+		await castVote(anon());
+
+		const all = await rows();
+		expect(all).toHaveLength(2);
+		expect(all.find((r) => r.voterMemberId === seed.memberId)).toMatchObject({
+			candidateMemberId: seed.memberId,
+		});
+		expect(all.find((r) => r.voterMemberId === null)).toMatchObject({
+			candidateMemberId: seed.adminMemberId,
+		});
+	});
+
+	it("creates no guest and no ballot-guest link, so guest counts are unchanged", async () => {
+		const guestsIn = async () =>
+			(
+				await testDb
+					.select({ n: sql<number>`count(*)::int` })
+					.from(guests)
+					.where(eq(guests.clubId, seed.clubId))
+			)[0].n;
+		const linksIn = async () =>
+			(
+				await testDb
+					.select({ n: sql<number>`count(*)::int` })
+					.from(meetingBallotGuests)
+					.where(eq(meetingBallotGuests.meetingId, seed.meetingId))
+			)[0].n;
+		const [g0, l0] = [await guestsIn(), await linksIn()];
+
+		await castVote(anon({ deviceToken: T }));
+		await castVote(anon({ deviceToken: U }));
+
+		expect(await guestsIn()).toBe(g0);
+		expect(await linksIn()).toBe(l0);
+	});
+
+	it("REJECTS an anonymous vote with no device token, and writes nothing", async () => {
+		await expect(castVote(anon({ deviceToken: null }))).rejects.toThrow(
+			/refresh the page/,
+		);
+		expect(await rows()).toEqual([]);
+	});
+
+	it("REJECTS an anonymous vote once the window is closed", async () => {
+		await closeVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		await expect(castVote(anon())).rejects.toThrow(
+			"Voting for this award is not open.",
+		);
+		expect(await rows()).toEqual([]);
+	});
+
+	it("REJECTS an anonymous vote for someone who is not an eligible candidate", async () => {
+		// No speaker slot anywhere: a hand-crafted POST naming an arbitrary id.
+		await expect(
+			castVote(
+				anon({
+					candidate: {
+						kind: "member",
+						id: "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+					},
+				}),
+			),
+		).rejects.toThrow("That person is not eligible for this award.");
+		expect(await rows()).toEqual([]);
+	});
+
+	it("does not let an anonymous change land after Close commits (race, #510)", async () => {
+		// Same shape as the identified arm's race test: an existing anonymous
+		// ballot, a writer holding its row lock, and a change from the same device
+		// parked behind it while the Ballot Counter taps Close.
+		await castVote(anon());
+		const [{ id: voteRowId }] = await testDb
+			.select({ id: meetingVotes.id })
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
+		const writer = await openBlockingTx(async (tx) => {
+			await tx
+				.update(meetingVotes)
+				.set({ updatedAt: sql`now()` })
+				.where(eq(meetingVotes.id, voteRowId));
+		});
+
+		const pending = castVote(
+			anon({ candidate: { kind: "member", id: seed.memberId } }),
+		);
+		pending.catch(() => {});
+		const castPid = await waitForLockWait('"meeting_votes"', writer.pid);
+
+		const closePending = closeVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		closePending.catch(() => {});
+		// Close must wait on the cast's share lock on the session row, held for
+		// the cast's whole transaction.
+		await waitForLockWait('"meeting_vote_sessions"', castPid);
+
+		await writer.commit();
+		await Promise.all([pending, closePending]);
+
+		const [session] = await testDb
+			.select({ closedAt: meetingVoteSessions.closedAt })
+			.from(meetingVoteSessions)
+			.where(eq(meetingVoteSessions.id, sessionId));
+		const [vote] = await testDb
+			.select({
+				updatedAt: meetingVotes.updatedAt,
+				candidateMemberId: meetingVotes.candidateMemberId,
+			})
+			.from(meetingVotes)
+			.where(eq(meetingVotes.id, voteRowId));
+		expect(session.closedAt).not.toBeNull();
+		expect(vote.candidateMemberId).toBe(seed.memberId);
+		expect(vote.updatedAt.getTime()).toBeLessThanOrEqual(
+			session.closedAt?.getTime() ?? Number.POSITIVE_INFINITY,
+		);
+	});
+});
+
 describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
 	let seed: SeededClub;
 

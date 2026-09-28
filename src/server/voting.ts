@@ -35,6 +35,13 @@ const category = z.enum([
 	"best_table_topics",
 ]);
 const voterRef = z.object({ kind: z.enum(["member", "guest"]), id: uuid });
+/** Who is casting (#982): an identified member or guest, or a phone that never
+ *  said who it is. The anonymous arm carries no id, so there is nothing a
+ *  caller can claim with it — see `BallotVoter` in `voting-logic.ts`. */
+const ballotVoter = z.union([
+	voterRef,
+	z.object({ kind: z.literal("anonymous") }),
+]);
 
 /**
  * A candidate is either a roster row or a typed name (#582).
@@ -101,17 +108,25 @@ export const getVoteParticipation = createServerFn({ method: "GET" })
 	.handler(async ({ data }) => loadParticipation(data.meetingId));
 
 /** Cast or change one ballot. PUBLIC. Every trust boundary is inside
- *  `castVote`: candidate eligibility, voter club-scoping, and the open window. */
+ *  `castVote`: candidate eligibility, voter club-scoping, and the open window.
+ *  The voter may be anonymous (#982): a phone that never identified votes
+ *  straight away, as its device. */
 export const submitVote = createServerFn({ method: "POST" })
 	.validator((input: unknown) =>
 		z
 			.object({
 				meetingId: uuid,
 				category,
-				voter: voterRef,
+				voter: ballotVoter,
 				candidate: candidateRef,
 				// Optional so a tab loaded before #765 can still cast a FIRST vote.
 				deviceToken: uuid.optional(),
+			})
+			// An anonymous ballot is owned by nothing BUT its device (#982), so it
+			// needs one. `castVote` refuses it too; this answers before any read.
+			.refine((d) => d.voter.kind !== "anonymous" || d.deviceToken, {
+				message: "An anonymous vote needs this device's ballot token.",
+				path: ["deviceToken"],
 			})
 			.parse(input),
 	)

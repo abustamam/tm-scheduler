@@ -22,6 +22,13 @@ export interface VoterIdentity {
 	name: string;
 }
 
+/** A phone that has not said who it is (#982). It votes straight away, and the
+ *  vote belongs to this device's ballot token rather than to a name. */
+export const ANONYMOUS_VOTER = { kind: "anonymous" } as const;
+
+/** What the ballot casts as: an identity, or nobody in particular (#982). */
+export type BallotVoter = VoterIdentity | typeof ANONYMOUS_VOTER;
+
 const CATEGORY_LABELS = {
 	best_speaker: "Best Speaker",
 	best_evaluator: "Best Evaluator",
@@ -108,7 +115,7 @@ export function Ballot({
 	voter,
 }: {
 	meetingId: string;
-	voter: VoterIdentity;
+	voter: BallotVoter;
 }) {
 	// Polling, not push. The payload is a few hundred bytes; twenty phones on a
 	// 5s interval is nothing, and it means no realtime infrastructure exists to
@@ -136,11 +143,15 @@ export function Ballot({
 				data: {
 					meetingId,
 					category: v.category,
-					voter: { kind: voter.kind, id: voter.id },
+					voter:
+						voter.kind === "anonymous"
+							? { kind: "anonymous" }
+							: { kind: voter.kind, id: voter.id },
 					candidate: v.candidate,
 					// Every cast carries this phone's token (#765): the first vote
 					// fills a blank, and only this token (or the member's own
-					// session) may change it afterwards.
+					// session) may change it afterwards. For an anonymous vote
+					// (#982) the token is the ONLY owner the row has.
 					deviceToken: getBallotDeviceToken(),
 				},
 			}),
