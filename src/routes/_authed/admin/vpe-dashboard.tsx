@@ -117,8 +117,12 @@ function VpeDashboard() {
 
 	// The next meeting's PUBLIC agenda, for the level nudge draft (#900). The
 	// origin exists only in the browser, and `signupUrlFor` is null until it
-	// does, so no nudge renders on the server pass. `NudgeButtons` renders no
-	// links before mount either, so the markup is the same either way.
+	// does, so no nudge renders on the server pass. That costs no markup only
+	// because `showsLevelNudge` requires `hasNudgeContact`: a row that shows a
+	// nudge always has a channel, so `NudgeButtons` would render nothing before
+	// mount anyway, and its server-rendered "No contact on file" branch is
+	// unreachable here. Drop that requirement and this gating hides that text
+	// on the server pass. The no-contact cases in `vpe-dashboard.test.tsx` pin it.
 	const [origin, setOrigin] = useState("");
 	useEffect(() => setOrigin(window.location.origin), []);
 	const shareUrl = signupUrlFor(clubSlug ?? clubId, nextMeeting, origin);
