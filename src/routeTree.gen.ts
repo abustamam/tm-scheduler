@@ -70,6 +70,7 @@ import { Route as ClubClubIdMeetingMeetingIdVoteRouteImport } from './routes/clu
 import { Route as ClubClubIdMeetingMeetingIdPrintRouteImport } from './routes/club.$clubId_.meeting.$meetingId.print'
 import { Route as ClubClubIdMeetingMeetingIdPresentRouteImport } from './routes/club.$clubId_.meeting.$meetingId.present'
 import { Route as ClubClubIdMeetingMeetingIdFlyerRouteImport } from './routes/club.$clubId_.meeting.$meetingId.flyer'
+import { Route as ClubClubIdMeetingMeetingIdFeedbackRouteImport } from './routes/club.$clubId_.meeting.$meetingId.feedback'
 import { Route as ClubClubIdMeetingMeetingIdMeRouteImport } from './routes/club.$clubId.meeting.$meetingId_.me'
 import { Route as ClubClubIdMeetingMeetingIdAgendaRouteImport } from './routes/club.$clubId.meeting.$meetingId_.agenda'
 import { Route as ApiMeetingsIdPacketPdfRouteImport } from './routes/api/meetings.$id.packet.pdf'
@@ -394,6 +395,12 @@ const ClubClubIdMeetingMeetingIdFlyerRoute =
     path: '/club/$clubId/meeting/$meetingId/flyer',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ClubClubIdMeetingMeetingIdFeedbackRoute =
+  ClubClubIdMeetingMeetingIdFeedbackRouteImport.update({
+    id: '/club/$clubId_/meeting/$meetingId/feedback',
+    path: '/club/$clubId/meeting/$meetingId/feedback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ClubClubIdMeetingMeetingIdMeRoute =
   ClubClubIdMeetingMeetingIdMeRouteImport.update({
     id: '/meeting/$meetingId_/me',
@@ -513,6 +520,7 @@ export interface FileRoutesByFullPath {
   '/api/meetings/$id/packet/pdf': typeof ApiMeetingsIdPacketPdfRoute
   '/club/$clubId/meeting/$meetingId/agenda': typeof ClubClubIdMeetingMeetingIdAgendaRoute
   '/club/$clubId/meeting/$meetingId/me': typeof ClubClubIdMeetingMeetingIdMeRoute
+  '/club/$clubId/meeting/$meetingId/feedback': typeof ClubClubIdMeetingMeetingIdFeedbackRoute
   '/club/$clubId/meeting/$meetingId/flyer': typeof ClubClubIdMeetingMeetingIdFlyerRoute
   '/club/$clubId/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
@@ -583,6 +591,7 @@ export interface FileRoutesByTo {
   '/api/meetings/$id/packet/pdf': typeof ApiMeetingsIdPacketPdfRoute
   '/club/$clubId/meeting/$meetingId/agenda': typeof ClubClubIdMeetingMeetingIdAgendaRoute
   '/club/$clubId/meeting/$meetingId/me': typeof ClubClubIdMeetingMeetingIdMeRoute
+  '/club/$clubId/meeting/$meetingId/feedback': typeof ClubClubIdMeetingMeetingIdFeedbackRoute
   '/club/$clubId/meeting/$meetingId/flyer': typeof ClubClubIdMeetingMeetingIdFlyerRoute
   '/club/$clubId/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
@@ -657,6 +666,7 @@ export interface FileRoutesById {
   '/api/meetings/$id/packet/pdf': typeof ApiMeetingsIdPacketPdfRoute
   '/club/$clubId/meeting/$meetingId_/agenda': typeof ClubClubIdMeetingMeetingIdAgendaRoute
   '/club/$clubId/meeting/$meetingId_/me': typeof ClubClubIdMeetingMeetingIdMeRoute
+  '/club/$clubId_/meeting/$meetingId/feedback': typeof ClubClubIdMeetingMeetingIdFeedbackRoute
   '/club/$clubId_/meeting/$meetingId/flyer': typeof ClubClubIdMeetingMeetingIdFlyerRoute
   '/club/$clubId_/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId_/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
@@ -731,6 +741,7 @@ export interface FileRouteTypes {
     | '/api/meetings/$id/packet/pdf'
     | '/club/$clubId/meeting/$meetingId/agenda'
     | '/club/$clubId/meeting/$meetingId/me'
+    | '/club/$clubId/meeting/$meetingId/feedback'
     | '/club/$clubId/meeting/$meetingId/flyer'
     | '/club/$clubId/meeting/$meetingId/present'
     | '/club/$clubId/meeting/$meetingId/print'
@@ -801,6 +812,7 @@ export interface FileRouteTypes {
     | '/api/meetings/$id/packet/pdf'
     | '/club/$clubId/meeting/$meetingId/agenda'
     | '/club/$clubId/meeting/$meetingId/me'
+    | '/club/$clubId/meeting/$meetingId/feedback'
     | '/club/$clubId/meeting/$meetingId/flyer'
     | '/club/$clubId/meeting/$meetingId/present'
     | '/club/$clubId/meeting/$meetingId/print'
@@ -874,6 +886,7 @@ export interface FileRouteTypes {
     | '/api/meetings/$id/packet/pdf'
     | '/club/$clubId/meeting/$meetingId_/agenda'
     | '/club/$clubId/meeting/$meetingId_/me'
+    | '/club/$clubId_/meeting/$meetingId/feedback'
     | '/club/$clubId_/meeting/$meetingId/flyer'
     | '/club/$clubId_/meeting/$meetingId/present'
     | '/club/$clubId_/meeting/$meetingId/print'
@@ -914,6 +927,7 @@ export interface RootRouteChildren {
   ApiClubsClubIdExportZipRoute: typeof ApiClubsClubIdExportZipRoute
   ApiMeetingsIdMinutesPdfRoute: typeof ApiMeetingsIdMinutesPdfRoute
   ApiMeetingsIdPacketPdfRoute: typeof ApiMeetingsIdPacketPdfRoute
+  ClubClubIdMeetingMeetingIdFeedbackRoute: typeof ClubClubIdMeetingMeetingIdFeedbackRoute
   ClubClubIdMeetingMeetingIdFlyerRoute: typeof ClubClubIdMeetingMeetingIdFlyerRoute
   ClubClubIdMeetingMeetingIdPresentRoute: typeof ClubClubIdMeetingMeetingIdPresentRoute
   ClubClubIdMeetingMeetingIdPrintRoute: typeof ClubClubIdMeetingMeetingIdPrintRoute
@@ -1351,6 +1365,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ClubClubIdMeetingMeetingIdFlyerRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/club/$clubId_/meeting/$meetingId/feedback': {
+      id: '/club/$clubId_/meeting/$meetingId/feedback'
+      path: '/club/$clubId/meeting/$meetingId/feedback'
+      fullPath: '/club/$clubId/meeting/$meetingId/feedback'
+      preLoaderRoute: typeof ClubClubIdMeetingMeetingIdFeedbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/club/$clubId/meeting/$meetingId_/me': {
       id: '/club/$clubId/meeting/$meetingId_/me'
       path: '/meeting/$meetingId/me'
@@ -1559,6 +1580,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiClubsClubIdExportZipRoute: ApiClubsClubIdExportZipRoute,
   ApiMeetingsIdMinutesPdfRoute: ApiMeetingsIdMinutesPdfRoute,
   ApiMeetingsIdPacketPdfRoute: ApiMeetingsIdPacketPdfRoute,
+  ClubClubIdMeetingMeetingIdFeedbackRoute:
+    ClubClubIdMeetingMeetingIdFeedbackRoute,
   ClubClubIdMeetingMeetingIdFlyerRoute: ClubClubIdMeetingMeetingIdFlyerRoute,
   ClubClubIdMeetingMeetingIdPresentRoute:
     ClubClubIdMeetingMeetingIdPresentRoute,

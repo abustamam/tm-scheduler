@@ -1841,6 +1841,72 @@ export const tableTopicsSpeakers = pgTable(
 	],
 );
 
+/**
+ * Anonymous role feedback, "love notes" (#981 / #984). Anyone with the meeting
+ * link may leave a note for a MEMBER about the role they served at that meeting;
+ * only that member ever reads it (part 2), and only once the meeting has ended.
+ *
+ * Anonymity is STRUCTURAL: there is no column for the writer — no user, device,
+ * IP or guest id — so no query, bug or subpoena can recover who wrote a note.
+ * Do not add one; the product decision (#981 grilling, 2026-09-26) rests on it.
+ *
+ * `recipient_member_id` and `role_label` are resolved SERVER-side at write time
+ * (`leaveFeedbackLogic`), never taken from the client. `role_label` is a
+ * snapshot ("Speaker 2", "Timer", "Table Topics speaker") so a later agenda edit
+ * cannot relabel a note; the slot / speaker FKs are `set null` for the same
+ * reason — the note outlives the row it was about. The window, the caps and the
+ * superadmin removal runbook are in CONTEXT.md's **Love note** entry.
+ */
+export const roleFeedbackNotes = pgTable(
+	"role_feedback_notes",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		recipientMemberId: uuid("recipient_member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		roleSlotId: uuid("role_slot_id").references(() => roleSlots.id, {
+			onDelete: "set null",
+		}),
+		// FK declared below with an explicit name: drizzle's default here is 71
+		// bytes, past Postgres's 63 (`drizzle-identifier-length.guard.test.ts`).
+		tableTopicsSpeakerId: uuid("table_topics_speaker_id"),
+		roleLabel: text("role_label").notNull(),
+		wentWell: text("went_well"),
+		tryNext: text("try_next"),
+		// Set by part 2 (#986) when the recipient's dashboard shows the note.
+		seenAt: timestamp("seen_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		index("role_feedback_notes_recipient_idx").on(
+			t.recipientMemberId,
+			t.createdAt,
+		),
+		index("role_feedback_notes_meeting_idx").on(t.meetingId),
+		foreignKey({
+			name: "role_feedback_notes_tt_speaker_fk",
+			columns: [t.tableTopicsSpeakerId],
+			foreignColumns: [tableTopicsSpeakers.id],
+		}).onDelete("set null"),
+		check(
+			"role_feedback_notes_has_text",
+			sql`coalesce(length(${t.wentWell}),0) + coalesce(length(${t.tryNext}),0) > 0`,
+		),
+		check(
+			"role_feedback_notes_single_target",
+			sql`${t.roleSlotId} is null or ${t.tableTopicsSpeakerId} is null`,
+		),
+	],
+);
+
 export const meetingAwards = pgTable(
 	"meeting_awards",
 	{

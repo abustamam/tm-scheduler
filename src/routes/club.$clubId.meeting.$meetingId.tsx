@@ -1,5 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, notFound, useRouter } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	notFound,
+	useRouter,
+} from "@tanstack/react-router";
 import {
 	CalendarDays,
 	ClipboardList,
@@ -8,6 +13,7 @@ import {
 	Loader2,
 	Lock,
 	MapPin,
+	MessageSquareHeart,
 	Sparkles,
 	Video,
 	WifiOff,
@@ -57,6 +63,7 @@ import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { ballotUrlFor } from "#/lib/digital-voting";
+import { feedbackWindow } from "#/lib/feedback-window";
 import {
 	formatMeetingDate,
 	formatMeetingTime,
@@ -498,6 +505,10 @@ function MeetingView() {
 	// frozen `phase` as everything else — so it cannot disappear mid-visit at
 	// club-local midnight. Any other day, `?room=1` renders the normal page.
 	const inRoom = isInRoom(search) && phase === "today";
+	// Anonymous role feedback (#984): offered from the meeting's start until
+	// three days after its scheduled end, off the same frozen `now`. The server
+	// re-checks the window on every write, so this only decides the link.
+	const feedbackOpen = feedbackWindow(meeting, now).canWrite;
 	const holdsRole = myId !== null && slots.some((s) => s.assigneeId === myId);
 	// #731. Null unless the club set a join link AND it still normalizes to an
 	// http(s) URL — see the render site in the header for why it is re-checked
@@ -1658,8 +1669,22 @@ function MeetingView() {
 					member={member}
 					holdsRole={holdsRole}
 					wordOfTheDay={meeting.wordOfTheDay}
+					feedbackOpen={feedbackOpen}
 					promptIdentity={promptIdentity}
 				/>
+				{/* The in-room strip carries its own "Leave feedback" button, so the
+				    page's link steps aside while the strip is showing (#984). */}
+				{feedbackOpen && !inRoom ? (
+					<Link
+						to="/club/$clubId/meeting/$meetingId/feedback"
+						params={{ clubId, meetingId: urlKey }}
+						data-testid="meeting-leave-feedback"
+						className="flex w-fit items-center gap-1.5 text-sm font-medium text-primary underline-offset-4 hover:underline"
+					>
+						<MessageSquareHeart className="size-4" aria-hidden />
+						Leave feedback
+					</Link>
+				) : null}
 				<MeetingNavStrip clubId={clubId} items={navItems} />
 				{/* Same predicate the "Word poster" button below uses, so the chip
 				    and the button agree about whether there is a word. Consistency,
