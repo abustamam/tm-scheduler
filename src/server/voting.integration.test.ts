@@ -44,6 +44,7 @@ const { GUEST_VOTE_CAST_ELSEWHERE_MESSAGE, VOTE_CAST_ELSEWHERE_MESSAGE } =
 	await import("#/lib/ballot-device");
 
 const {
+	anonymousBallotLockKey,
 	castVote,
 	closeVote,
 	disqualifyCandidate,
@@ -947,7 +948,8 @@ describe.skipIf(!hasTestDb)("castVote: an anonymous voter (#982)", () => {
 		const t = (await loadTally(seed.meetingId)).best_speaker;
 		expect(t.results.find((r) => r.id === seed.adminMemberId)?.count).toBe(2);
 		// The member is named; the anonymous ballot is not a phantom "" or a
-		// placeholder person.
+		// placeholder person, but it IS counted as anonymous.
+		expect(t.anonymousCount).toBe(1);
 		expect(t.voterNames).toEqual([
 			(
 				await testDb
@@ -983,14 +985,43 @@ describe.skipIf(!hasTestDb)("castVote: an anonymous voter (#982)", () => {
 	});
 
 	it("two simultaneous casts from one device still leave one ballot", async () => {
-		// A double-tap, or a request retried on bad wifi. The update-else-insert
-		// is serialised per (session, device), so neither can see "no row yet"
-		// while the other is inserting one.
-		await Promise.all([
-			castVote(anon()),
-			castVote(anon({ candidate: { kind: "member", id: seed.memberId } })),
-			castVote(anon()),
-		]);
+		// A double-tap, or a request retried on bad wifi, with NO row yet — the
+		// case no row lock can cover. Made deterministic the way the #510 race
+		// tests are: a writer holds this device's lock, BOTH casts are proven
+		// parked on it (so both have already read the session as open and
+		// neither has looked for its row), and only then is it released. The
+		// casts must then run one after the other: the second finds the first's
+		// row and updates it. Without the lock neither parks, and this fails at
+		// the wait below.
+		const writer = await openBlockingTx(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(hashtextextended(${anonymousBallotLockKey(sessionId, T)}, 0))`,
+			);
+		});
+		const a = castVote(anon());
+		a.catch(() => {});
+		const aPid = await waitForLockWait("pg_advisory_xact_lock", writer.pid);
+		const b = castVote(
+			anon({ candidate: { kind: "member", id: seed.memberId } }),
+		);
+		b.catch(() => {});
+		// B is queued behind the writer too (and behind A once it holds the key).
+		const deadline = Date.now() + 10_000;
+		for (;;) {
+			const res = await testDb.execute(sql`
+				select count(*)::int as n from pg_stat_activity
+				where datname = current_database()
+				  and wait_event_type = 'Lock'
+				  and query ilike '%pg_advisory_xact_lock%'
+				  and pid <> ${aPid}
+				  and ${writer.pid} = any(pg_blocking_pids(pid))`);
+			if ((res.rows[0] as { n: number }).n > 0) break;
+			if (Date.now() > deadline) throw new Error("second cast never parked");
+			await new Promise((r) => setTimeout(r, 25));
+		}
+
+		await writer.commit();
+		await Promise.all([a, b]);
 
 		expect(await rows()).toHaveLength(1);
 	});
@@ -1218,6 +1249,8 @@ describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
 			count: 1,
 		});
 		expect(t.best_speaker.voterNames).toHaveLength(1);
+		// A named voter is not also counted as anonymous (#982).
+		expect(t.best_speaker.anonymousCount).toBe(0);
 	});
 
 	it("the tally reports WHO voted but never WHAT they voted for", async () => {

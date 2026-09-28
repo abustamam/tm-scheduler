@@ -567,15 +567,17 @@ export function VoteCounterPanel({
 							</div>
 						) : null}
 
-						{t?.voterNames.length ? (
+						{t && t.voterNames.length + t.anonymousCount > 0 ? (
 							/* WHO voted, never WHAT they voted for. Lets the Ballot Counter
-							   spot a ballot from someone who already went home. */
+							   spot a ballot from someone who already went home. The total
+							   counts every ballot: a phone that never identified (#982) is
+							   counted as anonymous, never listed as a person. */
 							<details className="mt-3">
 								<summary className="cursor-pointer text-xs text-muted-foreground">
-									Who has voted ({t.voterNames.length})
+									Who has voted ({t.voterNames.length + t.anonymousCount})
 								</summary>
 								<p className="mt-1 text-xs text-muted-foreground">
-									{t.voterNames.join(" · ")}
+									{whoHasVoted(t.voterNames, t.anonymousCount)}
 								</p>
 							</details>
 						) : null}
@@ -695,4 +697,13 @@ function ReasonForm({
 			) : null}
 		</div>
 	);
+}
+
+/** The "who has voted" line: the named voters, then "and K anonymous" (#982).
+ *  With no named voters at all it is just "K anonymous". */
+function whoHasVoted(names: string[], anonymous: number): string {
+	const named = names.join(" · ");
+	if (anonymous === 0) return named;
+	if (names.length === 0) return `${anonymous} anonymous`;
+	return `${named} and ${anonymous} anonymous`;
 }

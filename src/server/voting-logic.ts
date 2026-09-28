@@ -615,6 +615,13 @@ export const ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE =
  *     UPDATE as a `setWhere`, so it is the same single statement as (3) and
  *     inherits its locking. A refused change returns no row, like a closed
  *     window does; the follow-up read tells the two apart.
+ *
+ * An ANONYMOUS voter (#982) — a phone that never said who it is — takes (1)
+ * as above and skips (2), since there is no id to scope. Its (3) and (4) are
+ * `castAnonymousVote`: the same window guarantee (the session row held FOR
+ * SHARE for the whole write), and the right to change belongs to the casting
+ * device alone, as one update-else-insert serialised per (session, device).
+ * No uniqueness on the token: another device is another ballot.
  */
 export async function castVote(input: {
 	meetingId: string;
@@ -865,6 +872,15 @@ export async function castVote(input: {
  *    vote cast earlier from the same phone is a different ballot, and this
  *    never touches it.
  */
+/** The advisory-lock key that serialises one device's anonymous casts in one
+ *  session (#982). Exported so the race test can hold the SAME key. */
+export function anonymousBallotLockKey(
+	sessionId: string,
+	deviceToken: string,
+): string {
+	return `ballot-anon:${sessionId}:${deviceToken}`;
+}
+
 async function castAnonymousVote(input: {
 	meetingId: string;
 	category: AwardCategory;
@@ -893,7 +909,7 @@ async function castAnonymousVote(input: {
 			.for("share");
 		if (!session) throw new Error("Voting for this award is not open.");
 		await tx.execute(
-			sql`select pg_advisory_xact_lock(hashtextextended(${`ballot-anon:${session.id}:${deviceToken}`}, 0))`,
+			sql`select pg_advisory_xact_lock(hashtextextended(${anonymousBallotLockKey(session.id, deviceToken)}, 0))`,
 		);
 		const candidate = {
 			candidateMemberId: input.candidate.memberId,
@@ -1215,6 +1231,11 @@ export interface CategoryTally {
 	 *  Ballot Counter spot a ballot from someone who went home, and it cannot
 	 *  reveal a choice because no id or candidate travels with it. */
 	voterNames: string[];
+	/** How many ballots in this category have no named voter (#982): cast by a
+	 *  phone that never said who it is. Counted beside `voterNames` rather than
+	 *  folded into it, so "who has voted" totals every ballot without inventing a
+	 *  placeholder person. */
+	anonymousCount: number;
 }
 
 /** The Ballot Counter's view. GATED — never reachable from the public route. */
@@ -1241,6 +1262,8 @@ export async function loadTally(
 			candidateWriteIn: meetingVotes.candidateWriteIn,
 			voterMemberName: members.name,
 			voterGuestName: guests.name,
+			voterMemberId: meetingVotes.voterMemberId,
+			voterGuestId: meetingVotes.voterGuestId,
 		})
 		.from(meetingVotes)
 		.innerJoin(
@@ -1300,6 +1323,12 @@ export async function loadTally(
 				.map((r) => r.voterMemberName ?? r.voterGuestName ?? "")
 				.filter(Boolean)
 				.sort((a, b) => a.localeCompare(b)),
+			// Both ids NULL: an anonymous ballot (#982). A departed member's vote
+			// (voter FK set null) lands here too, which is honest — it is a
+			// ballot with nobody left to name.
+			anonymousCount: mine.filter(
+				(r) => r.voterMemberId === null && r.voterGuestId === null,
+			).length,
 		};
 	}
 	return out;

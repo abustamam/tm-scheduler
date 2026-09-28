@@ -26,8 +26,11 @@ export interface VoterIdentity {
  *  vote belongs to this device's ballot token rather than to a name. */
 export const ANONYMOUS_VOTER = { kind: "anonymous" } as const;
 
-/** What the ballot casts as: an identity, or nobody in particular (#982). */
-export type BallotVoter = VoterIdentity | typeof ANONYMOUS_VOTER;
+/** Who the ballot casts as, for DISPLAY: a named identity, or nobody in
+ *  particular (#982). The wire shape it reduces to is the server's
+ *  `BallotVoter` (`voting-logic.ts`), which `submitVote`'s validator is typed
+ *  against — this type only adds the name the page shows. */
+export type BallotIdentity = VoterIdentity | typeof ANONYMOUS_VOTER;
 
 const CATEGORY_LABELS = {
 	best_speaker: "Best Speaker",
@@ -115,7 +118,7 @@ export function Ballot({
 	voter,
 }: {
 	meetingId: string;
-	voter: BallotVoter;
+	voter: BallotIdentity;
 }) {
 	// Polling, not push. The payload is a few hundred bytes; twenty phones on a
 	// 5s interval is nothing, and it means no realtime infrastructure exists to

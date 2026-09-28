@@ -59,7 +59,6 @@ vi.mock("#/server/personal-meeting", () => ({
 vi.mock("#/lib/club-route", () => ({ resolveClubOrRedirect: vi.fn() }));
 vi.mock("#/server/club-logo", () => ({ getClubLogoMeta: vi.fn() }));
 vi.mock("#/server/voting", () => ({
-	joinBallot: vi.fn(),
 	getBallot: vi.fn(),
 	submitVote: vi.fn(),
 }));

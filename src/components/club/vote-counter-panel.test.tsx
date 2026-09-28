@@ -43,12 +43,14 @@ function category(over: {
 	results?: (Entry & { count: number })[];
 	disqualified?: (Entry & { count: number; reason: string })[];
 	voterNames?: string[];
+	anonymousCount?: number;
 }) {
 	return {
 		isOpen: over.isOpen ?? false,
 		results: over.results ?? [],
 		disqualified: over.disqualified ?? [],
 		voterNames: over.voterNames ?? [],
+		anonymousCount: over.anonymousCount ?? 0,
 	};
 }
 
@@ -834,5 +836,65 @@ describe("VoteCounterPanel ruling controls need a session (#752)", () => {
 		expect(speaker.getByRole("button", { name: /Open voting/ })).toBeTruthy();
 		expect(speaker.getByRole("button", { name: "Set winner" })).toBeTruthy();
 		expect(speaker.getByRole("button", { name: "Clear winner" })).toBeTruthy();
+	});
+});
+
+// #982. A phone that never identified casts an anonymous ballot. "Who has
+// voted" must total EVERY ballot, and must not list the anonymous ones as
+// people.
+describe("VoteCounterPanel who has voted (#982)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
+
+	it("totals named and anonymous voters, and names only the named", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					results: [member("m-1", "Ana", 5)],
+					voterNames: ["Bo", "Cy"],
+					anonymousCount: 3,
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		expect(await speaker.findByText("Who has voted (5)")).toBeTruthy();
+		expect(speaker.getByText("Bo · Cy and 3 anonymous")).toBeTruthy();
+	});
+
+	it("shows the section when every ballot is anonymous", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					results: [member("m-1", "Ana", 2)],
+					anonymousCount: 2,
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		expect(await speaker.findByText("Who has voted (2)")).toBeTruthy();
+		expect(speaker.getByText("2 anonymous")).toBeTruthy();
+	});
+
+	it("reads as before with no anonymous ballots, and hides with no ballots", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					results: [member("m-1", "Ana", 1)],
+					voterNames: ["Bo"],
+				}),
+			}),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		expect(await speaker.findByText("Who has voted (1)")).toBeTruthy();
+		expect(speaker.getByText("Bo")).toBeTruthy();
+		expect(card("Best Evaluator").queryByText(/Who has voted/)).toBeNull();
 	});
 });

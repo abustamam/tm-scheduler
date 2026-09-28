@@ -7,10 +7,10 @@ import {
 } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
+	type BallotVoter,
 	castVote,
 	closeVote,
 	disqualifyCandidate,
-	joinBallotAsGuest,
 	loadBallot,
 	loadParticipation,
 	loadTableTopicsForConsole,
@@ -38,7 +38,7 @@ const voterRef = z.object({ kind: z.enum(["member", "guest"]), id: uuid });
 /** Who is casting (#982): an identified member or guest, or a phone that never
  *  said who it is. The anonymous arm carries no id, so there is nothing a
  *  caller can claim with it — see `BallotVoter` in `voting-logic.ts`. */
-const ballotVoter = z.union([
+const ballotVoter: z.ZodType<BallotVoter> = z.union([
 	voterRef,
 	z.object({ kind: z.literal("anonymous") }),
 ]);
@@ -139,16 +139,6 @@ export const submitVote = createServerFn({ method: "POST" })
 		await castVote({ ...data, sessionUserId: user?.id ?? null });
 		return { ok: true as const };
 	});
-
-/** Register a visitor so they can vote. PUBLIC — bounded inside
- *  `joinBallotAsGuest` on both name length and rows-per-meeting. */
-export const joinBallot = createServerFn({ method: "POST" })
-	.validator((input: unknown) =>
-		z
-			.object({ meetingId: uuid, name: z.string().min(1).max(400) })
-			.parse(input),
-	)
-	.handler(async ({ data }) => joinBallotAsGuest(data));
 
 const operateSchema = z.object({
 	meetingId: uuid,

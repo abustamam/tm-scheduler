@@ -29,6 +29,10 @@ import { getPublicMeetingByKey } from "#/server/meetings";
 // identified as (the per-meeting store, or the name picked on the public club
 // page); otherwise ANONYMOUSLY, as this device. There is no "Who are you?"
 // step, and no optional one either.
+//
+// `gavelup:voter:<meetingId>` is LEGACY and read-only: only the removed picker
+// ever wrote it. It is still read so a phone that joined before #982 keeps its
+// identity for that meeting, and "not you?" clears it; nothing writes it now.
 export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 	loader: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
