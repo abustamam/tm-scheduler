@@ -99,7 +99,9 @@ const AUTHENTICATE_ONLY: Record<string, string> = {
 		"included), so there is no one clubId to authorize against. It takes no " +
 		"member or user id as input; whose notes comes from the credential alone, " +
 		"and which of them are readable is recipientMayTouch in " +
-		"loadFeedbackForUser, the same rule the dashboard reads through.",
+		"loadFeedbackForUser, the same rule the dashboard reads through. It " +
+		"still re-checks mayUseConnector on every call, so a caller who is no " +
+		"longer an officer of an open club loses it with every other tool.",
 };
 
 /** The two sanctioned club-scoped entry points. */
