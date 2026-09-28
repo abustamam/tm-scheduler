@@ -193,6 +193,8 @@ const s = StyleSheet.create({
 		marginBottom: 4,
 	},
 	note: { fontSize: 9, color: C.soft, marginBottom: 4 },
+	/** A heading over one half of a side-by-side pair of tables (#965). */
+	tallyPart: { fontSize: 9.5, fontFamily: "Helvetica-Bold", marginBottom: 3 },
 	thRow: {
 		flexDirection: "row",
 		borderTopWidth: 1,
@@ -799,6 +801,97 @@ function ahCounter(fill?: RoleSheetFill): ReactNode {
 	);
 }
 
+/**
+ * The two halves of the Word of the Day tally (#965), in print order. Exported
+ * so the test names the same headings the sheet prints rather than restating
+ * them.
+ */
+export const WOD_TALLY_PARTS = [
+	"Prepared speakers",
+	"Table Topics speakers",
+] as const;
+
+/** Blank rows in EACH half of the tally. See `wodTally` for the budget. */
+export const WOD_TALLY_ROWS = 5;
+
+/** Ruled lines under each of the Grammarian's two free-text headings. */
+const GRAMMARIAN_NOTE_LINES = 3;
+
+/**
+ * Printed lines the Word of the Day note may take on this sheet (#965 review).
+ *
+ * The note is user data capped at 500 characters, and unclamped it grows the
+ * box it sits in: with the tally below it, a 200-character note put the sheet
+ * on two pages with a logo, and 300 without one. Something on the page had to
+ * give way to a long note, and it is the note, not the tally or the ruled
+ * lines: those are where the Grammarian WRITES during the meeting, while the
+ * note is a reminder of a definition that prints in full on the Word of the
+ * Day poster. Two lines is roughly the first 180
+ * characters, which is a whole definition for any ordinary word, and past it
+ * the line ends in an ellipsis rather than silently dropping text. A third
+ * line spills the logo case — see `wodTally` for the rest of the budget.
+ */
+export const WOD_NOTE_MAX_LINES = 2;
+
+/**
+ * The Word of the Day tally (#965): who used the word, split into prepared
+ * speakers and Table Topics speakers.
+ *
+ * The Grammarian's report cue already says "Here is who used the Word of the
+ * Day", and until this the sheet had nowhere to write it down — Table Topics
+ * least of all, where the respondents are not on the agenda and a count kept in
+ * the head is gone by the report.
+ *
+ * Blank rows with a "Who spoke" column, the Ah-Counter's pattern rather than
+ * the Timer's pre-fill: the Table Topics half cannot be pre-filled (nobody knows
+ * the respondents in advance), and pre-filling only the prepared half would make
+ * two tables side by side different heights whenever a meeting books a speaker.
+ *
+ * Side by side rather than stacked, because a stacked pair costs a second header
+ * row and a second heading's worth of height on a sheet that has to stay one
+ * page. Five rows each; the two free-text sections below gave up two ruled
+ * lines apiece (five to three) to pay for it, and the Word of the Day note
+ * above is clamped to `WOD_NOTE_MAX_LINES`.
+ *
+ * Measured on the worst fill: an 80-character club name, a long date, a club
+ * logo, a word at `RENDER_CAPS.word` and a note at `RENDER_CAPS.note` (500).
+ * That holds one page. Six tally rows spills it, four note lines spills it,
+ * and a third line of Word of the Day note spills it from a 200-character
+ * note — so the slack is less than one printed line. The first measurement
+ * here used a 63-character note and missed that; the gate now carries notes at
+ * 200 and at the cap, with and without a logo. Pinned by "every role sheet
+ * fits on one page"; re-measure before adding anything, do not assume.
+ */
+function wodTally(): ReactNode[] {
+	const half = (part: string, i: number) =>
+		h(
+			View,
+			{ key: i, style: { flexGrow: 1, flexBasis: 0 } },
+			h(Text, { style: s.tallyPart }, part),
+			table(
+				[
+					{ label: "Who spoke", flex: 2.2 },
+					{ label: "Tally", flex: 1.6 },
+					{ label: "Total", flex: 1 },
+				],
+				blank(WOD_TALLY_ROWS),
+			),
+		);
+	return [
+		h(Text, { key: "t", style: s.sectionTitle }, "Word of the Day tally"),
+		h(
+			Text,
+			{ key: "t-note", style: s.note },
+			"Mark a tick each time someone uses the word, in a prepared speech or a Table Topics answer.",
+		),
+		h(
+			View,
+			{ key: "t-grid", style: { flexDirection: "row", gap: 12 } },
+			...WOD_TALLY_PARTS.map(half),
+		),
+	];
+}
+
 function grammarian(fill?: RoleSheetFill): ReactNode {
 	return sheet(
 		"Grammarian's log",
@@ -817,7 +910,17 @@ function grammarian(fill?: RoleSheetFill): ReactNode {
 				),
 				h(
 					Text,
-					{ style: { marginTop: 12, fontSize: 9, color: C.soft } },
+					{
+						style: {
+							marginTop: 12,
+							fontSize: 9,
+							color: C.soft,
+							// STYLE properties, not props: react-pdf ignores them as props
+							// (see `metaField`). Pinned by the note-at-the-cap page fills.
+							maxLines: WOD_NOTE_MAX_LINES,
+							textOverflow: "ellipsis" as const,
+						},
+					},
 					fill?.wod?.note
 						? h(
 								Text,
@@ -829,10 +932,11 @@ function grammarian(fill?: RoleSheetFill): ReactNode {
 				),
 				h(View, { style: s.blankLine }),
 			),
+			...wodTally(),
 			h(Text, { key: "c", style: s.sectionTitle }, "Good use of language"),
-			h(View, { key: "c-lines" }, ...lines(5)),
+			h(View, { key: "c-lines" }, ...lines(GRAMMARIAN_NOTE_LINES)),
 			h(Text, { key: "d", style: s.sectionTitle }, "Language to improve"),
-			h(View, { key: "d-lines" }, ...lines(5)),
+			h(View, { key: "d-lines" }, ...lines(GRAMMARIAN_NOTE_LINES)),
 		],
 		fill,
 	);
