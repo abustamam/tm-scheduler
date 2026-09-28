@@ -30,6 +30,7 @@ import {
 	seedPerson,
 	testDb,
 } from "#/test/db";
+import type { FeedbackRoleChoice } from "./role-feedback-logic";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -48,6 +49,7 @@ const {
 	FEEDBACK_BAD_TEXT_MESSAGE,
 	FEEDBACK_GENERIC_ERROR_MESSAGE,
 	FEEDBACK_RATE_LIMIT_MESSAGE,
+	GENERAL_FEEDBACK_LABEL,
 	publicFeedbackError,
 } = await import("#/server/role-feedback-logic");
 const { lockClubForWrite } = await import("#/server/club-write-lock");
@@ -101,6 +103,7 @@ async function addMember(
 	clubId: string,
 	name: string,
 	personId?: string,
+	opts: { status?: "active" | "inactive"; preferredName?: string } = {},
 ): Promise<string> {
 	const pid = personId ?? (await seedPerson({ name }));
 	const [row] = await testDb
@@ -110,7 +113,8 @@ async function addMember(
 			personId: pid,
 			name,
 			clubRole: "member",
-			status: "active",
+			status: opts.status ?? "active",
+			preferredName: opts.preferredName ?? null,
 		})
 		.returning({ id: members.id });
 	if (!row) throw new Error("member insert failed");
@@ -412,12 +416,16 @@ describe.skipIf(!hasTestDb)("loadFeedbackTargetsPublic (#984)", () => {
 			["slot", "Sam Speaker", "Speaker 2"],
 			["tableTopics", "Admin User", "Table Topics speaker"],
 		]);
-		// Nothing but display name and role label (and the target's own id).
+		// Display name, role label, the target's own id, and since #1021 what
+		// the role picker needs. No contact, no attendance.
 		for (const t of res?.targets ?? []) {
 			expect(Object.keys(t).sort()).toEqual([
 				"id",
 				"kind",
 				"memberName",
+				"recipientActive",
+				"recipientMemberId",
+				"roleDefinitionId",
 				"roleLabel",
 			]);
 		}
@@ -737,6 +745,477 @@ describe.skipIf(!hasTestDb)(
 			expect(at.toISOString().slice(0, 10)).toBe(
 				new Date().toISOString().slice(0, 10),
 			);
+		});
+	},
+);
+
+// ---------------------------------------------------------------------------
+// #1021: a note for a named person, with the role the writer picked
+// ---------------------------------------------------------------------------
+
+async function addDefinition(
+	clubId: string,
+	name: string,
+	opts: { sortOrder?: number; enabled?: boolean } = {},
+): Promise<string> {
+	const [row] = await testDb
+		.insert(roleDefinitions)
+		.values({
+			clubId,
+			name,
+			category: name === "Speaker" ? "speaker" : "functionary",
+			isSpeakerRole: name === "Speaker",
+			sortOrder: opts.sortOrder ?? 0,
+			enabled: opts.enabled ?? true,
+		})
+		.returning({ id: roleDefinitions.id });
+	if (!row) throw new Error("definition insert failed");
+	return row.id;
+}
+
+const personNote = (
+	s: SeededClub,
+	recipientMemberId: string,
+	role: FeedbackRoleChoice,
+	text = "Well done",
+) => ({ meetingId: s.meetingId, recipientMemberId, role, wentWell: text });
+
+describe.skipIf(!hasTestDb)("leaveFeedbackLogic — to a person (#1021)", () => {
+	it("General, for an active member who holds no role: the member receives it, no links (AC 1)", async () => {
+		const s = await liveMeeting();
+		const off = await addMember(s.clubId, "Off Agenda");
+		expect(
+			await leaveFeedbackLogic(personNote(s, off, { kind: "general" })),
+		).toEqual({ ok: true });
+		const [note] = await notesFor(s.meetingId);
+		expect(note).toMatchObject({
+			recipientMemberId: off,
+			roleLabel: GENERAL_FEEDBACK_LABEL,
+			roleSlotId: null,
+			tableTopicsSpeakerId: null,
+		});
+		expect(GENERAL_FEEDBACK_LABEL).toBe("General");
+	});
+
+	it("the listed Timer under a definition they don't hold, and under the slot they do (AC 2)", async () => {
+		const s = await liveMeeting();
+		const speaker = await addDefinition(s.clubId, "Speaker", { sortOrder: 5 });
+		await leaveFeedbackLogic(
+			personNote(s, s.memberId, {
+				kind: "definition",
+				roleDefinitionId: speaker,
+			}),
+		);
+		await leaveFeedbackLogic(
+			personNote(s, s.memberId, { kind: "slot", slotId: s.slotId }),
+		);
+		const notes = await notesFor(s.meetingId);
+		expect(
+			notes.map((n) => [n.recipientMemberId, n.roleLabel, n.roleSlotId]).sort(),
+		).toEqual(
+			[
+				[s.memberId, "Speaker", null],
+				[s.memberId, "Timer", s.slotId],
+			].sort(),
+		);
+	});
+
+	it("labels a numbered slot as the agenda does, and a Table Topics row / non-listed TT speaker", async () => {
+		const s = await liveMeeting();
+		const speaker = await addDefinition(s.clubId, "Speaker", { sortOrder: 5 });
+		const sam = await addMember(s.clubId, "Sam Speaker");
+		const [, second] = await testDb
+			.insert(roleSlots)
+			.values([
+				{ meetingId: s.meetingId, roleDefinitionId: speaker, slotIndex: 0 },
+				{
+					meetingId: s.meetingId,
+					roleDefinitionId: speaker,
+					slotIndex: 1,
+					assignedMemberId: sam,
+					status: "claimed",
+				},
+			])
+			.returning({ id: roleSlots.id });
+		const [tt] = await testDb
+			.insert(tableTopicsSpeakers)
+			.values({ meetingId: s.meetingId, memberId: sam })
+			.returning({ id: tableTopicsSpeakers.id });
+		await leaveFeedbackLogic(
+			personNote(s, sam, { kind: "slot", slotId: second?.id as string }),
+		);
+		await leaveFeedbackLogic(
+			personNote(s, sam, { kind: "tableTopics", speakerId: tt?.id as string }),
+		);
+		await leaveFeedbackLogic(
+			personNote(s, s.adminMemberId, { kind: "tableTopicsSpeaker" }),
+		);
+		const rows = await notesFor(s.meetingId);
+		const by = (label: string, who: string) =>
+			rows.find((r) => r.roleLabel === label && r.recipientMemberId === who);
+		expect(by("Speaker 2", sam)).toMatchObject({
+			roleSlotId: second?.id,
+			tableTopicsSpeakerId: null,
+		});
+		expect(by("Table Topics speaker", sam)).toMatchObject({
+			roleSlotId: null,
+			tableTopicsSpeakerId: tt?.id,
+		});
+		expect(by("Table Topics speaker", s.adminMemberId)).toMatchObject({
+			roleSlotId: null,
+			tableTopicsSpeakerId: null,
+		});
+	});
+
+	it("refuses a member of another club and an unknown member id, for every kind (AC 3)", async () => {
+		const s = await liveMeeting();
+		const other = await liveMeeting();
+		// Control: the same note for this club's member is admitted.
+		await leaveFeedbackLogic(
+			personNote(s, s.adminMemberId, { kind: "general" }),
+		);
+		for (const who of [other.adminMemberId, randomUUID()]) {
+			for (const role of [
+				{ kind: "general" as const },
+				{ kind: "tableTopicsSpeaker" as const },
+				{ kind: "slot" as const, slotId: s.slotId },
+			]) {
+				await expect(
+					leaveFeedbackLogic(personNote(s, who, role)),
+				).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+			}
+		}
+		// Even when the other club's member holds THIS meeting's slot: the club
+		// check does not lean on the agenda.
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: other.adminMemberId })
+			.where(eq(roleSlots.id, s.slotId));
+		await expect(
+			leaveFeedbackLogic(
+				personNote(s, other.adminMemberId, { kind: "slot", slotId: s.slotId }),
+			),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		expect(await notesFor(s.meetingId)).toHaveLength(1);
+	});
+
+	it("refuses an inactive member off the agenda for general, definition and tableTopicsSpeaker (AC 3)", async () => {
+		const s = await liveMeeting();
+		const def = await addDefinition(s.clubId, "Grammarian");
+		const lapsed = await addMember(s.clubId, "Lapsed Lee", undefined, {
+			status: "inactive",
+		});
+		const kinds = [
+			{ kind: "general" as const },
+			{ kind: "definition" as const, roleDefinitionId: def },
+			{ kind: "tableTopicsSpeaker" as const },
+		];
+		for (const role of kinds) {
+			await expect(
+				leaveFeedbackLogic(personNote(s, lapsed, role)),
+			).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		}
+		expect(await notesFor(s.meetingId)).toHaveLength(0);
+		// Control: the same member, active, is admitted for each.
+		await testDb
+			.update(members)
+			.set({ status: "active" })
+			.where(eq(members.id, lapsed));
+		for (const role of kinds) {
+			await leaveFeedbackLogic(personNote(s, lapsed, role));
+		}
+		expect(await notesFor(s.meetingId)).toHaveLength(3);
+	});
+
+	it("refuses a slot or Table Topics row that is not this recipient's at this meeting (AC 3)", async () => {
+		const s = await liveMeeting();
+		const [tt] = await testDb
+			.insert(tableTopicsSpeakers)
+			.values({ meetingId: s.meetingId, memberId: s.memberId })
+			.returning({ id: tableTopicsSpeakers.id });
+		// The Timer slot and the TT row are the MEMBER's, not the admin's.
+		await expect(
+			leaveFeedbackLogic(
+				personNote(s, s.adminMemberId, { kind: "slot", slotId: s.slotId }),
+			),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		await expect(
+			leaveFeedbackLogic(
+				personNote(s, s.adminMemberId, {
+					kind: "tableTopics",
+					speakerId: tt?.id as string,
+				}),
+			),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		// The kind must match the row: a slot id is not a speaker row.
+		await expect(
+			leaveFeedbackLogic(
+				personNote(s, s.memberId, { kind: "tableTopics", speakerId: s.slotId }),
+			),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		// A slot of ANOTHER meeting of the same club, held by the recipient.
+		const [otherMeeting] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: s.clubId,
+				scheduledAt: new Date(Date.now() - 20 * MIN),
+			})
+			.returning({ id: meetings.id });
+		const [otherSlot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: otherMeeting?.id as string,
+				roleDefinitionId: s.roleDefinitionId,
+				slotIndex: 0,
+				assignedMemberId: s.memberId,
+				status: "claimed",
+			})
+			.returning({ id: roleSlots.id });
+		await expect(
+			leaveFeedbackLogic(
+				personNote(s, s.memberId, {
+					kind: "slot",
+					slotId: otherSlot?.id as string,
+				}),
+			),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		expect(await notesFor(s.meetingId)).toHaveLength(0);
+		// Control: the holder, with their own rows, is admitted.
+		await leaveFeedbackLogic(
+			personNote(s, s.memberId, { kind: "slot", slotId: s.slotId }),
+		);
+		await leaveFeedbackLogic(
+			personNote(s, s.memberId, {
+				kind: "tableTopics",
+				speakerId: tt?.id as string,
+			}),
+		);
+		expect(await notesFor(s.meetingId)).toHaveLength(2);
+	});
+
+	it("refuses another club's role definition and a disabled one (AC 3)", async () => {
+		const s = await liveMeeting();
+		const other = await liveMeeting();
+		const theirs = await addDefinition(other.clubId, "Grammarian");
+		const disabled = await addDefinition(s.clubId, "Ah-Counter", {
+			enabled: false,
+		});
+		for (const roleDefinitionId of [theirs, disabled, randomUUID()]) {
+			await expect(
+				leaveFeedbackLogic(
+					personNote(s, s.adminMemberId, {
+						kind: "definition",
+						roleDefinitionId,
+					}),
+				),
+			).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		}
+		expect(await notesFor(s.meetingId)).toHaveLength(0);
+		// Control: enabling it admits the same note.
+		await testDb
+			.update(roleDefinitions)
+			.set({ enabled: true })
+			.where(eq(roleDefinitions.id, disabled));
+		await leaveFeedbackLogic(
+			personNote(s, s.adminMemberId, {
+				kind: "definition",
+				roleDefinitionId: disabled,
+			}),
+		);
+		const [note] = await notesFor(s.meetingId);
+		expect(note?.roleLabel).toBe("Ah-Counter");
+	});
+
+	it("refuses a malformed id or unknown kind with the target refusal, not a driver error", async () => {
+		const s = await liveMeeting();
+		await expect(
+			leaveFeedbackLogic(personNote(s, "not-a-uuid", { kind: "general" })),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		await expect(
+			leaveFeedbackLogic(
+				personNote(s, s.memberId, { kind: "slot", slotId: "nope" }),
+			),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+		await expect(
+			leaveFeedbackLogic(
+				// biome-ignore lint/suspicious/noExplicitAny: a caller past the schema
+				personNote(s, s.memberId, { kind: "Speaker" } as any),
+			),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+	});
+
+	it("lets an inactive member who holds a slot still receive a note through it (AC 4)", async () => {
+		const s = await liveMeeting();
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, s.memberId));
+		await leaveFeedbackLogic(
+			personNote(s, s.memberId, { kind: "slot", slotId: s.slotId }),
+		);
+		// And the legacy path agrees.
+		await leaveFeedbackLogic(timerNote(s));
+		expect(await notesFor(s.meetingId)).toHaveLength(2);
+		// But not under a role the agenda does not vouch for.
+		await expect(
+			leaveFeedbackLogic(personNote(s, s.memberId, { kind: "general" })),
+		).rejects.toThrow(FEEDBACK_TARGET_MESSAGE);
+	});
+
+	it("counts the per-recipient cap across labels: 20 as Timer, the 21st as General is refused (AC 6)", async () => {
+		const s = await liveMeeting();
+		await testDb.insert(roleFeedbackNotes).values(
+			Array.from({ length: FEEDBACK_PER_RECIPIENT_CAP }, () => ({
+				clubId: s.clubId,
+				meetingId: s.meetingId,
+				recipientMemberId: s.memberId,
+				roleSlotId: s.slotId,
+				roleLabel: "Timer",
+				wentWell: "seed",
+			})),
+		);
+		await expect(
+			leaveFeedbackLogic(personNote(s, s.memberId, { kind: "general" })),
+		).rejects.toThrow(FEEDBACK_RECIPIENT_CAP_MESSAGE);
+		// Control: another recipient is not capped.
+		await leaveFeedbackLogic(
+			personNote(s, s.adminMemberId, { kind: "general" }),
+		);
+	});
+
+	it("returns exactly { ok: true } and stores no writer (AC 12)", async () => {
+		const s = await liveMeeting();
+		const res = await leaveFeedbackLogic(
+			personNote(s, s.adminMemberId, { kind: "general" }),
+		);
+		expect(res).toEqual({ ok: true });
+		const [note] = await notesFor(s.meetingId);
+		expect(Object.keys(note ?? {}).sort()).toEqual([
+			"clubId",
+			"createdAt",
+			"id",
+			"meetingId",
+			"recipientMemberId",
+			"roleLabel",
+			"roleSlotId",
+			"seenAt",
+			"tableTopicsSpeakerId",
+			"tryNext",
+			"wentWell",
+		]);
+	});
+
+	it("a General note reaches the recipient's own read", async () => {
+		const s = await liveMeeting();
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: null, status: "open" })
+			.where(eq(roleSlots.id, s.slotId));
+		await leaveFeedbackLogic(
+			personNote(s, s.memberId, { kind: "general" }, "hi"),
+		);
+		const mine = await loadFeedbackForUser(
+			s.memberUserId,
+			{},
+			new Date(Date.now() + 2 * 60 * MIN),
+		);
+		expect(mine.meetings[0]?.roles).toEqual([
+			{
+				roleLabel: "General",
+				notes: [expect.objectContaining({ wentWell: "hi" })],
+			},
+		]);
+	});
+});
+
+describe.skipIf(!hasTestDb)(
+	"loadFeedbackTargetsPublic — people and roles (#1021)",
+	() => {
+		it("others: every active member not on the agenda, by name; never an inactive one, never one in targets (AC 7)", async () => {
+			const s = await liveMeeting();
+			const other = await liveMeeting();
+			const zoe = await addMember(s.clubId, "Zoe Zed", undefined, {
+				preferredName: "Z",
+			});
+			const abe = await addMember(s.clubId, "Abe Able");
+			await addMember(s.clubId, "Lapsed Lee", undefined, {
+				status: "inactive",
+			});
+			const res = await loadFeedbackTargetsPublic(s.clubId, s.meetingId);
+			// The member holds Timer, so they are in targets and not in others.
+			expect(res?.targets.map((t) => t.recipientMemberId)).toEqual([
+				s.memberId,
+			]);
+			expect(res?.others).toEqual([
+				{ memberId: abe, name: "Abe Able", preferredName: null },
+				{ memberId: s.adminMemberId, name: "Admin User", preferredName: null },
+				{ memberId: zoe, name: "Zoe Zed", preferredName: "Z" },
+			]);
+			const inTargets = new Set(res?.targets.map((t) => t.recipientMemberId));
+			for (const o of res?.others ?? [])
+				expect(inTargets.has(o.memberId)).toBe(false);
+			// Another club's members never appear.
+			expect(res?.others.map((o) => o.memberId)).not.toContain(
+				other.adminMemberId,
+			);
+		});
+
+		it("targets carry the recipient, the slot's definition and whether they are active", async () => {
+			const s = await liveMeeting();
+			await testDb
+				.update(members)
+				.set({ status: "inactive" })
+				.where(eq(members.id, s.memberId));
+			const [tt] = await testDb
+				.insert(tableTopicsSpeakers)
+				.values({ meetingId: s.meetingId, memberId: s.adminMemberId })
+				.returning({ id: tableTopicsSpeakers.id });
+			const res = await loadFeedbackTargetsPublic(s.clubId, s.meetingId);
+			expect(res?.targets).toEqual([
+				{
+					kind: "slot",
+					id: s.slotId,
+					memberName: "Member User",
+					roleLabel: "Timer",
+					recipientMemberId: s.memberId,
+					roleDefinitionId: s.roleDefinitionId,
+					recipientActive: false,
+				},
+				{
+					kind: "tableTopics",
+					id: tt?.id,
+					memberName: "Admin User",
+					roleLabel: "Table Topics speaker",
+					recipientMemberId: s.adminMemberId,
+					roleDefinitionId: null,
+					recipientActive: true,
+				},
+			]);
+			// An inactive member holding a slot is not listed under others either.
+			expect(res?.others).toEqual([]);
+		});
+
+		it("roleOptions: only this club's enabled definitions, in sort_order (AC 8)", async () => {
+			const s = await liveMeeting();
+			const other = await liveMeeting();
+			await addDefinition(other.clubId, "Their Role", { sortOrder: -5 });
+			const speaker = await addDefinition(s.clubId, "Speaker", {
+				sortOrder: 5,
+			});
+			const gram = await addDefinition(s.clubId, "Grammarian", {
+				sortOrder: 2,
+			});
+			await addDefinition(s.clubId, "Ah-Counter", {
+				sortOrder: 1,
+				enabled: false,
+			});
+			// seedClub's Timer sits at the default sort_order 0.
+			const res = await loadFeedbackTargetsPublic(s.clubId, s.meetingId);
+			expect(res?.roleOptions).toEqual([
+				{ roleDefinitionId: s.roleDefinitionId, name: "Timer" },
+				{ roleDefinitionId: gram, name: "Grammarian" },
+				{ roleDefinitionId: speaker, name: "Speaker" },
+			]);
 		});
 	},
 );
