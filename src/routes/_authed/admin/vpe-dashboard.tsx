@@ -462,7 +462,7 @@ function LapseRow({
 	timezone,
 }: {
 	member: AttendanceLapseRow;
-	timezone?: string;
+	timezone: string | undefined;
 }) {
 	// The rate is CONTEXT beside the streak, not a substitute for it — an
 	// officer wants to know whether this is someone who was always patchy or
@@ -635,7 +635,7 @@ function PairingRow({
 	timezone,
 }: {
 	row: EvaluatorPairingRow;
-	timezone?: string;
+	timezone: string | undefined;
 }) {
 	return (
 		<Link
@@ -699,7 +699,7 @@ function PairingChip({
 	timezone,
 }: {
 	pair: EvaluationPair;
-	timezone?: string;
+	timezone: string | undefined;
 }) {
 	return (
 		<span

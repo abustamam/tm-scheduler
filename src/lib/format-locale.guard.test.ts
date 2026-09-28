@@ -154,15 +154,61 @@ function isRuntimeLocale(
 	return false;
 }
 
-/** Every runtime-locale call in `text`, as `line: source` strings. */
-function runtimeLocaleOffenders(fileName: string, text: string): string[] {
-	const sf = ts.createSourceFile(
+/** Parse one file, TSX or not by its extension. Shared by both detectors. */
+function parse(fileName: string, text: string): ts.SourceFile {
+	return ts.createSourceFile(
 		fileName,
 		text,
 		ts.ScriptTarget.Latest,
 		true,
 		fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
 	);
+}
+
+/** `Intl`, or `Intl` read off `globalThis` / `window` / `self` (either form). */
+function isGlobalIntl(expr: ts.Expression): boolean {
+	const n = unwrap(expr);
+	if (ts.isIdentifier(n)) return n.text === "Intl";
+	if (memberName(n) !== "Intl") return false;
+	const obj = memberObject(n);
+	return (
+		obj !== null &&
+		ts.isIdentifier(unwrap(obj)) &&
+		GLOBAL_OBJECTS.has((unwrap(obj) as ts.Identifier).text)
+	);
+}
+
+/**
+ * `…().resolvedOptions().timeZone`, exactly: the one question about the
+ * runtime that formats nothing and is neither the locale nor a rendering in
+ * the zone. Both detectors exempt it, through this one definition.
+ */
+function asksOnlyTimeZone(node: ts.Node): boolean {
+	const access = node.parent;
+	if (
+		!access ||
+		!ts.isPropertyAccessExpression(access) ||
+		access.expression !== node ||
+		access.name.text !== "resolvedOptions"
+	) {
+		return false;
+	}
+	const call = access.parent;
+	if (!call || !ts.isCallExpression(call) || call.expression !== access) {
+		return false;
+	}
+	const prop = call.parent;
+	return (
+		!!prop &&
+		ts.isPropertyAccessExpression(prop) &&
+		prop.expression === call &&
+		prop.name.text === "timeZone"
+	);
+}
+
+/** Every runtime-locale call in `text`, as `line: source` strings. */
+function runtimeLocaleOffenders(fileName: string, text: string): string[] {
+	const sf = parse(fileName, text);
 
 	// File-local `const` aliases: of `Intl` itself, and of one of its
 	// constructors. Collected before the walk so use-before-declaration in a
@@ -172,18 +218,8 @@ function runtimeLocaleOffenders(fileName: string, text: string): string[] {
 
 	const isIntlRef = (expr: ts.Expression): boolean => {
 		const n = unwrap(expr);
-		if (ts.isIdentifier(n)) {
-			return n.text === "Intl" || intlAliases.has(n.text);
-		}
-		if (memberName(n) === "Intl") {
-			const obj = memberObject(n);
-			return (
-				obj !== null &&
-				ts.isIdentifier(unwrap(obj)) &&
-				GLOBAL_OBJECTS.has((unwrap(obj) as ts.Identifier).text)
-			);
-		}
-		return false;
+		if (ts.isIdentifier(n) && intlAliases.has(n.text)) return true;
+		return isGlobalIntl(n);
 	};
 
 	const isIntlCtor = (expr: ts.Expression): boolean => {
@@ -224,33 +260,6 @@ function runtimeLocaleOffenders(fileName: string, text: string): string[] {
 	const report = (node: ts.Node) => {
 		const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
 		found.push(`${line + 1}: ${node.getText(sf).split("\n")[0]}`);
-	};
-
-	/**
-	 * `…().resolvedOptions().timeZone`, exactly: the one question about the
-	 * runtime that formats nothing and is not the locale.
-	 */
-	const asksOnlyTimeZone = (node: ts.Node): boolean => {
-		const access = node.parent;
-		if (
-			!access ||
-			!ts.isPropertyAccessExpression(access) ||
-			access.expression !== node ||
-			access.name.text !== "resolvedOptions"
-		) {
-			return false;
-		}
-		const call = access.parent;
-		if (!call || !ts.isCallExpression(call) || call.expression !== access) {
-			return false;
-		}
-		const prop = call.parent;
-		return (
-			!!prop &&
-			ts.isPropertyAccessExpression(prop) &&
-			prop.expression === call &&
-			prop.name.text === "timeZone"
-		);
 	};
 
 	/**
@@ -488,7 +497,8 @@ describe("no runtime-resolved locale under src/ (#708)", () => {
 //     where `tz` is undefined at runtime, `new Intl.DateTimeFormat(L, opts)`),
 //     and an options literal with a spread, whose keys cannot be read;
 //   - a formatter reached through anything but a named import from
-//     `#/lib/format` (a namespace import, a re-export, a wrapper);
+//     `#/lib/format`, `@/lib/format` (the shadcn alias for the same file) or
+//     `./format` — a namespace import, a re-export, a wrapper;
 //   - `toLocaleString`, which is a Date's AND a number's, and this has no type
 //     information to tell them apart;
 //   - everything that is not a date in the wrong zone: `formatTenure`'s local
@@ -512,13 +522,7 @@ function zonedFormatters(): Map<
 	{ index: number; kind: "zone" | "options" }
 > {
 	const path = join(SRC, "lib/format.ts");
-	const sf = ts.createSourceFile(
-		path,
-		readFileSync(path, "utf8"),
-		ts.ScriptTarget.Latest,
-		true,
-		ts.ScriptKind.TS,
-	);
+	const sf = parse(path, readFileSync(path, "utf8"));
 	const out = new Map<string, { index: number; kind: "zone" | "options" }>();
 	for (const stmt of sf.statements) {
 		if (!ts.isFunctionDeclaration(stmt) || !stmt.name) continue;
@@ -583,18 +587,12 @@ function optionsLackZone(
 	return ts.isPropertyAssignment(zone) && isAbsent(zone.initializer);
 }
 
-const FORMAT_MODULES = new Set(["#/lib/format", "./format"]);
+const FORMAT_MODULES = new Set(["#/lib/format", "@/lib/format", "./format"]);
 const TO_LOCALE_DATE = new Set(["toLocaleDateString", "toLocaleTimeString"]);
 
 /** Every runtime-zone date format in `text`, as `line: source` strings. */
 function runtimeZoneOffenders(fileName: string, text: string): string[] {
-	const sf = ts.createSourceFile(
-		fileName,
-		text,
-		ts.ScriptTarget.Latest,
-		true,
-		fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-	);
+	const sf = parse(fileName, text);
 
 	// Local name → the formatter it imports.
 	const imported = new Map<string, string>();
@@ -615,35 +613,9 @@ function runtimeZoneOffenders(fileName: string, text: string): string[] {
 	}
 
 	const isDateTimeFormat = (expr: ts.Expression): boolean => {
-		if (memberName(expr) !== "DateTimeFormat") return false;
 		const obj = memberObject(expr);
-		if (!obj) return false;
-		const o = unwrap(obj);
-		if (ts.isIdentifier(o)) return o.text === "Intl";
-		if (memberName(o) !== "Intl") return false;
-		const root = memberObject(o);
 		return (
-			root !== null &&
-			ts.isIdentifier(unwrap(root)) &&
-			GLOBAL_OBJECTS.has((unwrap(root) as ts.Identifier).text)
-		);
-	};
-
-	/** `…().resolvedOptions().timeZone` — asks the zone, formats nothing. */
-	const asksOnlyTimeZone = (node: ts.Node): boolean => {
-		const access = node.parent;
-		if (
-			!access ||
-			!ts.isPropertyAccessExpression(access) ||
-			access.name.text !== "resolvedOptions"
-		) {
-			return false;
-		}
-		const prop = access.parent?.parent;
-		return (
-			!!prop &&
-			ts.isPropertyAccessExpression(prop) &&
-			prop.name.text === "timeZone"
+			memberName(expr) === "DateTimeFormat" && obj !== null && isGlobalIntl(obj)
 		);
 	};
 
@@ -698,10 +670,11 @@ const SANCTIONED: Record<string, string> = {
 };
 
 /**
- * Found when this guard landed, outside #1000's diff, and filed as #1017 rather
- * than fixed here. A list, not a set: a file with two identical calls carries
- * two entries, so fixing one of them is still a change this list has to make.
- * May only shrink.
+ * Found when this guard landed, outside #1000's diff, and listed in that
+ * PR's inventory rather than fixed here (#1000's brief: more than five sites,
+ * so list them and stop). A list, not a set: a file with two identical calls
+ * carries two entries, so fixing one of them is still a change this list has
+ * to make. May only shrink.
  */
 const KNOWN: readonly string[] = [
 	"src/components/api-tokens-section.tsx: new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)",
@@ -832,6 +805,15 @@ describe("no runtime-resolved time zone in a date formatter (#1000)", () => {
 			expect(
 				hits("const z = Intl.DateTimeFormat().resolvedOptions().timeZone;"),
 			).toBe(0);
+		});
+
+		it("follows the @/ alias for the same module", () => {
+			expect(
+				runtimeZoneOffenders(
+					"x.ts",
+					'import { formatShortDate } from "@/lib/format"; formatShortDate(d);',
+				),
+			).toHaveLength(1);
 		});
 
 		it("ignores a same-named function that is not the import", () => {
