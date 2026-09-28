@@ -5,6 +5,7 @@ import {
 	ClipboardList,
 	Clock,
 	Eye,
+	ListChecks,
 	Loader2,
 	Lock,
 	MapPin,
@@ -26,6 +27,7 @@ import {
 import { DigitalVotingSwitch } from "#/components/club/digital-voting-switch";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
+import { LineupBlastSheet } from "#/components/club/lineup-blast-sheet";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
 import { MeetingFeedbackLink } from "#/components/club/meeting-feedback-link";
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
@@ -100,6 +102,7 @@ import {
 } from "#/server/attendance-plan";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getGuestPipeline } from "#/server/guest-pipeline";
+import { getLineupBlastAccess } from "#/server/lineup-blast";
 import {
 	completeMeeting,
 	getMeetingByKey,
@@ -347,6 +350,7 @@ function MeetingView() {
 	const [lifecycleBusy, setLifecycleBusy] = useState(false);
 	// #320: an admin can preview the page as a non-admin member sees it.
 	const [previewAsMember, setPreviewAsMember] = useState(false);
+	const [lineupOpen, setLineupOpen] = useState(false);
 	// Ballot Counter console (#510 Task 10) — its own Table Topics edits, kept
 	// separate from `MeetingMinutes`'s offline queue: the console is reachable
 	// even when `minutes.visible` is false (a non-admin Vote Counter on a
@@ -538,6 +542,21 @@ function MeetingView() {
 	// (`resolveActor`), and the ladder they render comes from `getTmodPanelData`,
 	// which does its own check.
 	const runsThisMeeting = effectiveCanManage || (isTmod && !previewAsMember);
+	// Lineup blast (#1024): club admins, officers and this meeting's Toastmaster.
+	// A stored admin is known here; an officer is not (`canManage` is
+	// `clubRole === "admin"` only), so a signed-in member or a self-identified
+	// Toastmaster asks the server, which decides through the same
+	// `mayDraftLineupBlast` rule its draft fn enforces.
+	const { data: lineupAccess } = useQuery({
+		queryKey: ["lineup-blast-access", meeting.id, myId] as const,
+		queryFn: () =>
+			getLineupBlastAccess({
+				data: { meetingId: meeting.id, selfMemberId: myId },
+			}),
+		enabled: !effectiveCanManage && !previewAsMember && (isSignedIn || isTmod),
+	});
+	const canLineupBlast =
+		effectiveCanManage || (!previewAsMember && lineupAccess?.allowed === true);
 	const showPlanPanel = runsThisMeeting && phase === "upcoming";
 	// An officer already has `plan` on the payload; only the non-officer TMOD
 	// needs the extra round trip, and only while the panel is actually shown.
@@ -1726,6 +1745,26 @@ function MeetingView() {
 					onComplete={doComplete}
 					onReopen={doReopen}
 				/>
+				{canLineupBlast ? (
+					<div className="flex flex-wrap items-center gap-2 pt-1">
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => setLineupOpen(true)}
+						>
+							<ListChecks className="size-4" aria-hidden />
+							Lineup blast
+						</Button>
+					</div>
+				) : null}
+				{canLineupBlast && lineupOpen ? (
+					<LineupBlastSheet
+						open={lineupOpen}
+						onOpenChange={setLineupOpen}
+						meetingId={meeting.id}
+						selfMemberId={myId}
+					/>
+				) : null}
 				{/* Preview-as-member survives as a SIBLING of the toolbar (review
 				    decision): capability preserved, not folded into the toolbar's
 				    props — PR 2 reshapes the officer surface and will revisit.
