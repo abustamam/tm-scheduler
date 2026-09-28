@@ -1237,10 +1237,13 @@ export function normalizeSpeech(input?: SpeechInput): {
  * project. A speech with no picked project is left exactly as typed.
  */
 async function applyProjectDisplay(
+	conn: DbOrTx,
 	content: SpeechContent,
 ): Promise<SpeechContent> {
 	if (!content.projectId) return content;
-	const display = await resolveProjectDisplay(content.projectId);
+	// Through `conn`, never the pool (#1005): both callers run inside the
+	// claim / speech-edit transaction, which already holds a pool connection.
+	const display = await resolveProjectDisplay(content.projectId, conn);
 	return { ...content, ...display };
 }
 
@@ -1256,7 +1259,7 @@ export async function attachSpeechToSlot(
 ): Promise<string | null> {
 	const { content, hasContent } = normalizeSpeech(args.input);
 	if (!hasContent) return null;
-	const values = await applyProjectDisplay(content);
+	const values = await applyProjectDisplay(conn, content);
 	const [row] = await conn
 		.insert(speeches)
 		.values({ personId: args.personId, ...values })
@@ -2185,7 +2188,7 @@ export async function editSlotSpeech(
 		return;
 	}
 	if (args.currentSpeechId) {
-		const values = await applyProjectDisplay(content);
+		const values = await applyProjectDisplay(conn, content);
 		await conn
 			.update(speeches)
 			.set({ ...values, updatedAt: new Date() })
