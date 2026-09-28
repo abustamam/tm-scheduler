@@ -30,6 +30,7 @@ import {
 	meetingAttendance,
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -46,12 +47,20 @@ import {
 	groupEvaluatorPairings,
 } from "#/lib/evaluator-pairing";
 import {
+	type LevelNudgeMeeting,
+	type LevelProximityContact,
 	type LevelProximityRow,
 	selectLevelProximity,
 } from "#/lib/level-proximity";
+import { toE164 } from "#/lib/phone";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { loadNextMeetingSummary } from "./meetings-logic";
 import { pathwaysByMember } from "./pathways-read-logic";
 
-export type { LevelProximityRow } from "#/lib/level-proximity";
+export type {
+	LevelNudgeMeeting,
+	LevelProximityRow,
+} from "#/lib/level-proximity";
 
 /** A slot only counts as "held" once it's claimed or confirmed. */
 const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
@@ -221,7 +230,23 @@ export interface LevelProximityResult {
 	rows: LevelProximityRow[];
 	/** `clubs.timezone`, so the dashboard formats every date in the club's day. */
 	timezone: string;
+	/** `clubs.slug`, for the next meeting's public URL in a nudge draft (#900). */
+	clubSlug: string | null;
+	/**
+	 * The meeting a "get it on the agenda" draft asks about (#900), or null when
+	 * none is scheduled. Four fields and no more: never `join_url`.
+	 */
+	nextMeeting: LevelNudgeMeeting | null;
 }
+
+/**
+ * The goes-by name a nudge greets by (#486): this club's membership value,
+ * falling back to the Person's. The same expression as
+ * `meeting-contacts-logic.ts`'s `memberGoesBy`.
+ */
+const memberGoesBy = sql<
+	string | null
+>`coalesce(${members.preferredName}, ${people.preferredName})`;
 
 /**
  * "Close to a level" (#898): active members one or two projects from finishing
@@ -233,32 +258,76 @@ export interface LevelProximityResult {
  * (the same `status = 'active'` the rotation uses), so a former member cannot
  * produce a row by either route. The selection itself is
  * `selectLevelProximity`, pure and unit-tested.
+ *
+ * Each row also carries the member's contact (#900), and the result the next
+ * meeting, for the nudge draft a VPE sends from their own app. Contact is PII:
+ * the caller's server fn is admin-gated (`requireClubAdminView`), the same gate
+ * as the rest of this section.
  */
 export async function loadLevelProximity(
 	clubId: string,
 	now: Date = new Date(),
 ): Promise<LevelProximityResult> {
-	const [roster, paths, speakerSlots, [club]] = await Promise.all([
-		db
-			.select({ memberId: members.id, name: members.name })
-			.from(members)
-			.where(and(eq(members.clubId, clubId), eq(members.status, "active"))),
-		pathwaysByMember(clubId),
-		loadUpcomingSpeakerSlots(clubId, now),
-		db
-			.select({ timezone: clubs.timezone })
-			.from(clubs)
-			.where(eq(clubs.id, clubId)),
-	]);
+	const [roster, paths, speakerSlots, [club], countryCode, summary] =
+		await Promise.all([
+			db
+				.select({
+					memberId: members.id,
+					name: members.name,
+					email: members.email,
+					phone: members.phone,
+					preferredName: memberGoesBy,
+				})
+				.from(members)
+				.innerJoin(people, eq(people.id, members.personId))
+				.where(and(eq(members.clubId, clubId), eq(members.status, "active"))),
+			pathwaysByMember(clubId),
+			loadUpcomingSpeakerSlots(clubId, now),
+			db
+				.select({ timezone: clubs.timezone, slug: clubs.slug })
+				.from(clubs)
+				.where(eq(clubs.id, clubId)),
+			loadClubDefaultCountryCode(clubId),
+			loadNextMeetingSummary(clubId, now),
+		]);
+	const contact = new Map<string, LevelProximityContact>();
+	for (const m of roster) {
+		contact.set(m.memberId, {
+			// Blank is no address: `buildNudge` would otherwise draft to "".
+			email: m.email?.trim() ? m.email : null,
+			phone: toE164(m.phone, countryCode),
+			preferredName: m.preferredName,
+		});
+	}
+	const selected = selectLevelProximity({
+		members: roster.map(({ memberId, name }) => ({ memberId, name })),
+		pathsByMember: paths,
+		upcomingSpeakerAt: speakerSlots,
+	});
+	const next = summary.nextMeeting;
 	return {
-		rows: selectLevelProximity({
-			members: roster,
-			pathsByMember: paths,
-			upcomingSpeakerAt: speakerSlots,
-		}),
+		rows: selected.map((row) => ({
+			...row,
+			...(contact.get(row.memberId) ?? {
+				email: null,
+				phone: null,
+				preferredName: null,
+			}),
+		})),
 		// NOT NULL with a default in the schema; the fallback is that default,
 		// for a club id that matched nothing (the gate runs first, so never).
 		timezone: club?.timezone ?? DEFAULT_CLUB_TIMEZONE,
+		clubSlug: club?.slug ?? null,
+		// Picked field by field, so a field added to the summary later does not
+		// ride along into a draft a member receives.
+		nextMeeting: next
+			? {
+					id: next.id,
+					urlKey: next.urlKey,
+					scheduledAt: next.scheduledAt,
+					location: next.location,
+				}
+			: null,
 	};
 }
 

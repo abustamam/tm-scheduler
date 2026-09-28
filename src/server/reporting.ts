@@ -79,7 +79,10 @@ export const getEvaluatorPairings = createServerFn({ method: "GET" })
 /**
  * "Close to a level" (#898) — members one or two projects from a Pathways
  * level, and levels waiting on Base Camp approval. Admin-gated like its
- * neighbours: it is roster-wide progress, officer information.
+ * neighbours: it is roster-wide progress, officer information. Since #900 the
+ * rows also carry each member's email and phone, and the result the next
+ * meeting's slim summary (no `joinUrl`), for the VPE's nudge draft; the same
+ * admin gate is what keeps that contact off any non-officer.
  */
 export const getLevelProximity = createServerFn({ method: "GET" })
 	.validator((input: unknown) => clubScoped.parse(input))

@@ -16,7 +16,8 @@ export const LEVEL_PROXIMITY = {
 	maxProjectsLeft: 2,
 } as const;
 
-export interface LevelProximityRow {
+/** What `selectLevelProximity` derives: the progress half of a row. */
+export interface LevelProximitySelection {
 	memberId: string;
 	name: string;
 	pathName: string;
@@ -32,6 +33,63 @@ export interface LevelProximityRow {
 	electivesToChoose: number;
 	/** Soonest future speaker slot. Absent if none. */
 	upcomingSpeakerAt?: Date;
+}
+
+/**
+ * How to reach the member, for the nudge draft (#900). Attached by
+ * `loadLevelProximity` AFTER selection, so the selection stays about progress
+ * and never has to know what a phone number is.
+ */
+export interface LevelProximityContact {
+	/** The club's own `members.email`; a blank value is stored as null. */
+	email: string | null;
+	/** `members.phone` normalized by `toE164` with the club's country code. */
+	phone: string | null;
+	/** `coalesce(members.preferred_name, people.preferred_name)` (#486). */
+	preferredName: string | null;
+}
+
+export type LevelProximityRow = LevelProximitySelection & LevelProximityContact;
+
+/**
+ * The next meeting a level nudge asks about (#900): `loadNextMeetingSummary`'s
+ * slim shape, cut down further. Never a `join_url` (#731/#754): the draft goes
+ * to a member's inbox, where a forwarded link is a shareable artifact.
+ */
+export interface LevelNudgeMeeting {
+	id: string;
+	urlKey: string;
+	scheduledAt: Date;
+	location: string | null;
+}
+
+/**
+ * A channel `buildNudge` can actually produce: a normalized phone (null when it
+ * had no digits) or an email that is not blank.
+ */
+export function hasNudgeContact(
+	row: Pick<LevelProximityContact, "email" | "phone">,
+): boolean {
+	return row.phone !== null || Boolean(row.email?.trim());
+}
+
+/**
+ * Whether a row offers the "get it on the agenda" draft (#900). Only a `close`
+ * row (an awaiting row's action is in Base Camp), only with a way to reach the
+ * member, only when no speaker slot is already booked (the Speaking badge is
+ * the outcome), and only when there is a meeting to ask about. Anything else
+ * renders no control at all, not a disabled one.
+ */
+export function showsLevelNudge(
+	row: LevelProximityRow,
+	nextMeeting: LevelNudgeMeeting | null | undefined,
+): boolean {
+	return (
+		row.kind === "close" &&
+		hasNudgeContact(row) &&
+		!row.upcomingSpeakerAt &&
+		Boolean(nextMeeting)
+	);
 }
 
 /** The slice of a view model this selection reads. */
@@ -85,9 +143,9 @@ function byText(a: string, b: string): number {
  */
 export function selectLevelProximity(
 	input: LevelProximityInput,
-): LevelProximityRow[] {
-	const awaiting: LevelProximityRow[] = [];
-	const close: LevelProximityRow[] = [];
+): LevelProximitySelection[] {
+	const awaiting: LevelProximitySelection[] = [];
+	const close: LevelProximitySelection[] = [];
 
 	for (const member of input.members) {
 		const paths = input.pathsByMember.get(member.memberId) ?? [];
@@ -160,7 +218,7 @@ function plural(n: number, word: string): string {
  */
 export function projectsLeftCopy(
 	row: Pick<
-		LevelProximityRow,
+		LevelProximitySelection,
 		"projectsLeft" | "projectNames" | "electivesToChoose"
 	>,
 ): string {
@@ -177,7 +235,7 @@ export function projectsLeftCopy(
 }
 
 /** The whole detail line under a member's name. */
-export function proximityDetail(row: LevelProximityRow): string {
+export function proximityDetail(row: LevelProximitySelection): string {
 	const where = `${row.pathName} · ${levelLabel(row.level)}`;
 	return row.kind === "awaiting_approval"
 		? `${where} · All projects done, approve in Base Camp`

@@ -22,6 +22,7 @@ import {
 	pathwaysPathLevels,
 	pathwaysPaths,
 	pathwaysProjects,
+	people,
 	projectCompletionMarks,
 	roleDefinitions,
 	roleSlots,
@@ -736,5 +737,137 @@ describe.skipIf(!hasTestDb)("Close to a level (#898)", () => {
 			result.rows.find((r) => r.name === "Bo Basecamp" && r.kind === "close")
 				?.projectNames,
 		).toEqual([]);
+	});
+
+	/** A catalog path with a 3-project Level 1 and a 1-project Level 2. */
+	async function closePath(): Promise<{
+		enrollClose: (personId: string) => Promise<void>;
+	}> {
+		const tag = randomUUID().slice(0, 8);
+		const [path] = await testDb
+			.insert(pathwaysPaths)
+			.values({ courseCode: `900-${tag}`, name: `Nudge Path ${tag}` })
+			.returning({ id: pathwaysPaths.id });
+		if (!path) throw new Error("path insert failed");
+		createdPathIds.push(path.id);
+		const projects = await testDb
+			.insert(pathwaysProjects)
+			.values([
+				{ pathId: path.id, level: 1, name: "L1 A", isRequired: true },
+				{ pathId: path.id, level: 1, name: "L1 B", isRequired: true },
+				{ pathId: path.id, level: 2, name: "L2 Only", isRequired: true },
+			])
+			.returning({
+				id: pathwaysProjects.id,
+				level: pathwaysProjects.level,
+			});
+		await testDb.insert(pathwaysPathLevels).values([
+			{ pathId: path.id, level: 1, minReqElectives: 0 },
+			{ pathId: path.id, level: 2, minReqElectives: 0 },
+		]);
+		const level1 = projects.filter((p) => p.level === 1).map((p) => p.id);
+		return {
+			async enrollClose(personId: string) {
+				const [enr] = await testDb
+					.insert(pathEnrollments)
+					.values({ personId, pathId: path.id })
+					.returning({ id: pathEnrollments.id });
+				if (!enr) throw new Error("enrollment insert failed");
+				await testDb
+					.insert(projectCompletionMarks)
+					.values(
+						level1.map((projectId) => ({ enrollmentId: enr.id, projectId })),
+					);
+			},
+		};
+	}
+
+	it("loadLevelProximity carries each row's contact and the next meeting (#900)", async () => {
+		const { loadLevelProximity } = await import("#/server/reporting-logic");
+		await testDb
+			.update(clubs)
+			.set({ defaultCountryCode: "1" })
+			.where(eq(clubs.id, seeded.clubId));
+		const { enrollClose } = await closePath();
+
+		// Ada: membership phone in national form, the club's goes-by name.
+		const ada = await addMember(seeded.clubId, "Ada Lovelace");
+		await testDb
+			.update(members)
+			.set({
+				email: "ada@example.com",
+				phone: "(415) 555-2671",
+				preferredName: "Addy",
+			})
+			.where(eq(members.id, ada.memberId));
+		await enrollClose(ada.personId);
+
+		// Bea: no membership goes-by, so the Person's; a blank email; no phone.
+		const bea = await addMember(seeded.clubId, "Beatrice Blank");
+		await testDb
+			.update(members)
+			.set({ email: "   ", phone: null })
+			.where(eq(members.id, bea.memberId));
+		await testDb
+			.update(people)
+			.set({ preferredName: "Bea" })
+			.where(eq(people.id, bea.personId));
+		await enrollClose(bea.personId);
+
+		// A cancelled meeting sooner than the real one is skipped.
+		await addUpcomingMeeting(seeded.clubId, 1, "cancelled");
+		const soonest = await addUpcomingMeeting(seeded.clubId, 3);
+		await testDb
+			.update(meetings)
+			.set({ location: "Room 4" })
+			.where(eq(meetings.id, soonest.meetingId));
+		await addUpcomingMeeting(seeded.clubId, 10);
+
+		const result = await loadLevelProximity(seeded.clubId);
+		expect(result.rows.find((r) => r.memberId === ada.memberId)).toMatchObject({
+			kind: "close",
+			projectsLeft: 1,
+			email: "ada@example.com",
+			phone: "+14155552671",
+			preferredName: "Addy",
+		});
+		expect(result.rows.find((r) => r.memberId === bea.memberId)).toMatchObject({
+			kind: "close",
+			email: null,
+			phone: null,
+			preferredName: "Bea",
+		});
+		const [club] = await testDb
+			.select({ slug: clubs.slug })
+			.from(clubs)
+			.where(eq(clubs.id, seeded.clubId));
+		expect(result.clubSlug).toBe(club?.slug);
+		expect(result.nextMeeting).toEqual({
+			id: soonest.meetingId,
+			urlKey: expect.any(String),
+			scheduledAt: soonest.scheduledAt,
+			location: "Room 4",
+		});
+	});
+
+	it("loadLevelProximity never carries the next meeting's join URL (#900)", async () => {
+		const { loadLevelProximity } = await import("#/server/reporting-logic");
+		const next = await addUpcomingMeeting(seeded.clubId, 2);
+		const joinUrl = "https://zoom.us/j/99999999999?pwd=secret";
+		await testDb
+			.update(meetings)
+			.set({ joinUrl })
+			.where(eq(meetings.id, next.meetingId));
+
+		const result = await loadLevelProximity(seeded.clubId);
+		expect(result.nextMeeting?.id).toBe(next.meetingId);
+		expect(Object.keys(result.nextMeeting ?? {}).sort()).toEqual([
+			"id",
+			"location",
+			"scheduledAt",
+			"urlKey",
+		]);
+		expect(result).not.toHaveProperty("joinUrl");
+		expect(JSON.stringify(result)).not.toContain("zoom.us");
 	});
 });

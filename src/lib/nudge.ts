@@ -5,6 +5,7 @@
 
 import { mailtoHref } from "#/lib/mailto";
 import type { RoleIdentity } from "#/lib/meeting-roles";
+import { levelLabel } from "#/lib/pathways-catalog";
 import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
 import {
@@ -20,7 +21,8 @@ export type NudgeMode =
 	| "recruit"
 	| "attendance"
 	| "arriving"
-	| "invite";
+	| "invite"
+	| "level";
 
 interface NudgeInputBase {
 	name: string;
@@ -75,6 +77,22 @@ export type NudgeInput =
 			/** Null or blank omits the ", at …" clause entirely. */
 			location?: string | null;
 	  })
+	// A member close to finishing a Pathways level (#900): "want to get it on
+	// the agenda?" Role-less, its own constituent for the same reason. It asks
+	// about the AGENDA, not a speaker slot, because some projects are not
+	// speeches. `shareUrl` is the next meeting's public page.
+	| (NudgeInputBase & {
+			mode: "level";
+			pathName: string;
+			/** The working level. Labelled by `levelLabel`, never "Level 6". */
+			level: number;
+			/** N: projects left at that level. */
+			projectsLeft: number;
+			/** R: required projects left, by name. */
+			projectNames: readonly string[];
+			/** E: electives still to choose. */
+			electivesToChoose: number;
+	  })
 	| (NudgeInputBase & {
 			mode: "confirm" | "recruit";
 			/** The role being asked about. Role-specific asks stay on the slot
@@ -124,6 +142,10 @@ function messageFor(i: NudgeInput): string {
 	if (i.mode === "attendance") {
 		return `Hi ${who}, are you able to make our ${i.meetingDate} meeting? Agenda here: ${i.shareUrl}`;
 	}
+	if (i.mode === "level") {
+		const n = i.projectsLeft;
+		return `Hi ${who}, you're ${countOf(n, "project")} from finishing ${i.pathName} ${levelLabel(i.level)}${levelNamesSuffix(i)}. Want to get it on the agenda for ${i.meetingDate}? ${i.shareUrl}`;
+	}
 	if (i.mode === "invite") {
 		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
 		return `Hi ${who}, it was great having you at ${i.clubName}. We meet again on ${i.meetingDate} at ${i.meetingTime}${where}. We'd love to see you there. Agenda: ${i.shareUrl}`;
@@ -160,6 +182,44 @@ function messageFor(i: NudgeInput): string {
 	return owed.length === 0
 		? `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${link}`
 		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? You'd also need to ${dutyClauseList(owed)}. Info here: ${link}`;
+}
+
+function countOf(n: number, word: string): string {
+	return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/** "a", "a and b", "a, b and c". */
+function andList(items: readonly string[]): string {
+	if (items.length < 2) return items[0] ?? "";
+	return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/**
+ * What is left, after the level label (#900). N = `projectsLeft`, R = names,
+ * E = electives, exactly as the dashboard row counts them
+ * (`projectsLeftCopy`):
+ *
+ * - R = N: ": Inspire Your Audience and Active Listening"
+ * - R + E = N, R > 0, E > 0: ": Inspire Your Audience and 1 elective"
+ * - R = 0, E = N: ": 2 electives"
+ * - anything else: nothing. Names that do not add up to the count must not be
+ *   presented to the member as the whole list.
+ */
+function levelNamesSuffix(
+	i: Pick<
+		Extract<NudgeInput, { mode: "level" }>,
+		"projectsLeft" | "projectNames" | "electivesToChoose"
+	>,
+): string {
+	const n = i.projectsLeft;
+	const r = i.projectNames.length;
+	const e = i.electivesToChoose;
+	if (r > 0 && r === n) return `: ${andList(i.projectNames)}`;
+	if (r > 0 && e > 0 && r + e === n) {
+		return `: ${andList(i.projectNames)} and ${countOf(e, "elective")}`;
+	}
+	if (r === 0 && e > 0 && e === n) return `: ${countOf(e, "elective")}`;
+	return "";
 }
 
 /**
@@ -318,6 +378,9 @@ function subjectFor(i: NudgeInput): string {
 	if (i.mode === "arriving") return `Are you on your way? — ${i.meetingDate}`;
 	if (i.mode === "invite") {
 		return `See you at ${i.clubName} on ${i.meetingDate}?`;
+	}
+	if (i.mode === "level") {
+		return `${countOf(i.projectsLeft, "project")} to ${levelLabel(i.level)}`;
 	}
 	return i.mode === "confirm"
 		? `Confirming your ${i.roleName} role — ${i.meetingDate}`
