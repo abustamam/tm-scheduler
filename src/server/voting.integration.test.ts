@@ -1043,6 +1043,56 @@ describe.skipIf(!hasTestDb)("castVote: an anonymous voter (#982)", () => {
 		});
 	});
 
+	it("never touches that identified vote once its voter is removed and its voter ids go NULL", async () => {
+		// Same phone, two ballots: the member's own for the member, and an
+		// anonymous one for the admin.
+		await castVote({
+			...anon({ candidate: { kind: "member", id: seed.memberId } }),
+			voter: { kind: "member", id: seed.memberId },
+		});
+		await castVote(anon());
+		// Removing the voter mid-vote SET NULLs `voter_member_id`, leaving a row
+		// with both voter ids NULL and device T — the anonymous ballot's shape.
+		// The slot the removed member held goes too (its candidate is SET NULL),
+		// so the vote is re-pointed at the admin's rival by hand afterwards.
+		await testDb.delete(members).where(eq(members.id, seed.memberId));
+		const [orphan] = await testDb
+			.update(meetingVotes)
+			.set({ candidateMemberId: seed.adminMemberId })
+			.where(
+				and(
+					eq(meetingVotes.sessionId, sessionId),
+					eq(meetingVotes.anonymous, false),
+				),
+			)
+			.returning({ id: meetingVotes.id });
+		expect(orphan).toBeDefined();
+
+		// The anonymous ballot changes its mind. Only IT may move: matching on
+		// "both voter ids NULL" moved the orphaned identified vote as well, so
+		// one tap from this phone took two votes off the admin.
+		const writeIn = "Table Topics Tam";
+		await castVote(anon({ candidate: { kind: "writeIn", name: writeIn } }));
+
+		const all = await testDb
+			.select({
+				id: meetingVotes.id,
+				candidateMemberId: meetingVotes.candidateMemberId,
+				candidateWriteIn: meetingVotes.candidateWriteIn,
+			})
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
+		expect(all).toHaveLength(2);
+		expect(all.find((r) => r.id === orphan.id)).toMatchObject({
+			candidateMemberId: seed.adminMemberId,
+			candidateWriteIn: null,
+		});
+		expect(all.find((r) => r.id !== orphan.id)).toMatchObject({
+			candidateMemberId: null,
+			candidateWriteIn: writeIn,
+		});
+	});
+
 	it("creates no guest and no ballot-guest link, so guest counts are unchanged", async () => {
 		const guestsIn = async () =>
 			(

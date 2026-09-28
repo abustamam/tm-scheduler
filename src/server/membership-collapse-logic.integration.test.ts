@@ -49,10 +49,12 @@ import {
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	seedPerson,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -574,6 +576,44 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		// Both rows survive (a field check alone passes when the row is gone).
 		expect(rows).toHaveLength(2);
 		expect(rows.every((r) => r.recipientMemberId === keeperId)).toBe(true);
+	});
+
+	it("keeps a feedback note submitted WHILE the merge runs, on the keeper", async () => {
+		// The anonymous feedback form writes with no session, so nothing stops a
+		// note for the absorbed membership landing mid-merge. Without a lock on
+		// that row up front, the merge re-pointed the notes it could see, then its
+		// final DELETE waited for this insert, and the cascade took the new note.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		let noteId = "";
+		const writer = await openBlockingTx(async (tx) => {
+			const [n] = await tx
+				.insert(roleFeedbackNotes)
+				.values({
+					clubId: seed.clubId,
+					meetingId: seed.meetingId,
+					recipientMemberId: absorbedId,
+					roleLabel: "Timer",
+					wentWell: "Landed mid-merge",
+				})
+				.returning({ id: roleFeedbackNotes.id });
+			noteId = n.id;
+		});
+
+		const merge = collapse(keeperId, absorbedId);
+		merge.catch(() => {});
+		// Parked on the writer's FK lock — at the up-front FOR UPDATE with the
+		// fix, at the final DELETE without it. Matching `"members"` catches both,
+		// so the unfixed code fails the assertion below rather than timing out.
+		await waitForLockWait('"members"', writer.pid);
+		await writer.commit();
+		await merge;
+
+		const [row] = await testDb
+			.select({ recipientMemberId: roleFeedbackNotes.recipientMemberId })
+			.from(roleFeedbackNotes)
+			.where(eq(roleFeedbackNotes.id, noteId));
+		expect(row?.recipientMemberId).toBe(keeperId);
 	});
 
 	it("re-points set-null FKs + activity_log (actor + jsonb detail) to the keeper", async () => {

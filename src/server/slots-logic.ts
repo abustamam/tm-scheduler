@@ -22,6 +22,7 @@ import { logActivity } from "./activity";
 import {
 	type AttendancePlanStatus,
 	getPlanStatus,
+	lockMemberAttendance,
 	setPlanStatus,
 } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireClubRole } from "./guards";
@@ -1838,6 +1839,9 @@ export async function claimSlotCore(
 		) {
 			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 		}
+		// Held to commit, so a releasing decline cannot slip between this read
+		// and the flip below and leave the role on a member who said no.
+		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
 		if (
 			(await getPlanStatus(tx, {
 				memberId: args.memberId,

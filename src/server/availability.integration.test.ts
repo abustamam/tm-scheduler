@@ -56,10 +56,12 @@ import {
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	seedPerson,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -98,6 +100,7 @@ const { clearPlanStatus, SELF_SERVICE_RUNGS, setPlanStatus } = await import(
 	"./attendance-plan-logic"
 );
 const { releaseSlotsAndMarkUnavailable } = await import("./availability-logic");
+const { claimSlotCore } = await import("./slots-logic");
 const { SELF_ONLY_MESSAGE } = await import("./attendance-actor-logic");
 const { requireSessionActor } = await import("./write-actor-logic");
 
@@ -448,6 +451,45 @@ describe.skipIf(!hasTestDb)("releaseSlotsAndMarkUnavailable (#204)", () => {
 	afterEach(async () => {
 		sessionUserId = null;
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	it("releases a role an unverified claim is still taking, rather than leaving it on a member who said no", async () => {
+		// The claim has checked the member's answer (none yet) and flipped the
+		// open slot, uncommitted. Without the shared lock the release looked for
+		// roles, found none it could see, and recorded not_coming over the
+		// claim's plan row — then the claim committed, and the member held a role
+		// they had just declined. Now the release waits for the claim to finish,
+		// so it sees the role and frees it: the order "claim, then decline".
+		const claim = await openBlockingTx(async (tx) => {
+			await claimSlotCore(tx, {
+				slotId: seed.slotId,
+				memberId: seed.memberId,
+				actorMemberId: seed.memberId,
+				proof: "asserted",
+			});
+		});
+		const release = releaseSlotsAndMarkUnavailable(testDb, {
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+		});
+		release.catch(() => {});
+		// Any statement: with the lock it parks on the advisory key, without it
+		// on the claim's plan row, so the unfixed code fails below, not here.
+		await waitForLockWait("", claim.pid);
+		await claim.commit();
+		expect((await release).released).toBe(1);
+
+		const [slot] = await testDb
+			.select({
+				assignedMemberId: roleSlots.assignedMemberId,
+				status: roleSlots.status,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.id, seed.slotId));
+		expect(slot).toEqual({ assignedMemberId: null, status: "open" });
+		const rows = await planRows(seed.memberId, seed.meetingId);
+		expect(rows.map((r) => r.status)).toEqual(["not_coming"]);
 	});
 
 	it("releases the member's held slots AND records not_coming, atomically", async () => {

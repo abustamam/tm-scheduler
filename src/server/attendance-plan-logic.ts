@@ -420,6 +420,39 @@ export async function clearPlanStatus(
 	return { ok: true as const, cleared: true };
 }
 
+/** The advisory-lock key `lockMemberAttendance` takes. Exported so the race
+ *  test can hold the SAME key. */
+export function memberAttendanceLockKey(
+	meetingId: string,
+	memberId: string,
+): string {
+	return `attendance:${meetingId}:${memberId}`;
+}
+
+/**
+ * Serialise a decision on one member's answer for one meeting against the
+ * releasing decline that changes it.
+ *
+ * `releaseSlotsAndMarkUnavailable` frees every role a member holds and then
+ * records `not_coming`. An unverified claim in their name reads that answer and
+ * refuses over `not_coming` (ADR-0026) — but a read with no lock let a claim
+ * check, lose the race to a decline that released everything it could SEE and
+ * committed, then flip its still-open slot to the member: a role held by
+ * someone who had just said they cannot come, which neither order allows. Both
+ * take this key before anything else in their transaction, so one finishes
+ * before the other looks. A transaction-scoped bigint advisory lock, like the
+ * anonymous ballot's; nothing else takes a key with this prefix.
+ */
+export async function lockMemberAttendance(
+	tx: DbOrTx,
+	meetingId: string,
+	memberId: string,
+): Promise<void> {
+	await tx.execute(
+		sql`select pg_advisory_xact_lock(hashtextextended(${memberAttendanceLockKey(meetingId, memberId)}, 0))`,
+	);
+}
+
 /**
  * One member's rung for one meeting, or null for "no answer" (no row).
  *

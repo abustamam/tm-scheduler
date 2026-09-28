@@ -779,6 +779,8 @@ export async function castVote(input: {
 					deviceToken: sql<string | null>`${deviceToken}::text`.as(
 						"device_token",
 					),
+					// This arm always names a voter, so never an anonymous ballot.
+					anonymous: sql<boolean>`false`.as("anonymous"),
 					createdAt: sql<Date>`now()`.as("created_at"),
 					updatedAt: sql<Date>`now()`.as("updated_at"),
 				})
@@ -870,7 +872,8 @@ export async function castVote(input: {
  *    since nothing else holding such a key ever calls this.
  *  - The update matches only an ANONYMOUS row from this token. An identified
  *    vote cast earlier from the same phone is a different ballot, and this
- *    never touches it.
+ *    never touches it — including once its voter is removed and the row's
+ *    voter ids go NULL, which is why it matches `anonymous` rather than them.
  */
 /** The advisory-lock key that serialises one device's anonymous casts in one
  *  session (#982). Exported so the race test can hold the SAME key. */
@@ -923,8 +926,9 @@ async function castAnonymousVote(input: {
 				and(
 					eq(meetingVotes.sessionId, session.id),
 					eq(meetingVotes.deviceToken, deviceToken),
-					isNull(meetingVotes.voterMemberId),
-					isNull(meetingVotes.voterGuestId),
+					// Not "both voter ids NULL": a removed member's identified vote
+					// reads that way too, with this device's token (see the column).
+					eq(meetingVotes.anonymous, true),
 				),
 			)
 			.returning({ id: meetingVotes.id });
@@ -933,6 +937,7 @@ async function castAnonymousVote(input: {
 			sessionId: session.id,
 			voterMemberId: null,
 			voterGuestId: null,
+			anonymous: true,
 			deviceToken,
 			...candidate,
 		});

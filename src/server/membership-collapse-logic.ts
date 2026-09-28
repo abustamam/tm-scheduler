@@ -62,6 +62,15 @@ export async function collapseMemberships(
 ): Promise<void> {
 	if (keeperId === absorbedId) return;
 
+	// FOR UPDATE, taken BEFORE the first re-point, is what makes the re-points
+	// below complete. Every row a concurrent writer inserts naming the absorbed
+	// membership takes FOR KEY SHARE on it for the FK check, which FOR UPDATE
+	// excludes. Without it the only lock on this row was the DELETE at the end:
+	// an anonymous feedback note committed between its re-point and that DELETE
+	// was cascaded away, silently, and a row with a SET NULL FK lost its member.
+	// Now such a writer either committed first (and is re-pointed) or waits and
+	// then fails its FK against a deleted row. Ordered by id so two merges over
+	// the same pair lock it in one order.
 	const rows = await tx
 		.select()
 		.from(members)
@@ -70,7 +79,9 @@ export async function collapseMemberships(
 				eq(members.clubId, clubId),
 				inArray(members.id, [keeperId, absorbedId]),
 			),
-		);
+		)
+		.orderBy(members.id)
+		.for("update");
 	const keeper = rows.find((m) => m.id === keeperId);
 	const absorbed = rows.find((m) => m.id === absorbedId);
 	if (!keeper || !absorbed) {

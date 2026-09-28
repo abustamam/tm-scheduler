@@ -2133,6 +2133,17 @@ export const meetingVotes = pgTable(
 		 * possession proof for one ballot row, and it never leaves this table.
 		 */
 		deviceToken: text("device_token"),
+		/**
+		 * Cast by an unidentified phone (#982), stated rather than inferred.
+		 *
+		 * "Both voter ids NULL" is NOT that fact: `voter_member_id` is `on delete
+		 * set null`, so removing a member mid-vote leaves their IDENTIFIED row with
+		 * both ids NULL and the casting device's token — indistinguishable from an
+		 * anonymous ballot from the same phone. `castAnonymousVote` then updated
+		 * both rows on a change and moved two votes. It matches on this instead.
+		 * Written on insert and never updated.
+		 */
+		anonymous: boolean("anonymous").notNull().default(false),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
