@@ -26,8 +26,10 @@
  * and 2 for the second), so a two-int key can never equal a bigint key whatever
  * the values. Every other advisory lock in this app is a bigint — the MCP apply
  * lock (`mcp/lock.ts`, `hashtext(clubId)`), the guest-convert lock
- * (`lockClubConverts`), and `submitAccessRequestLogic`'s global
- * `access-requests:submit` key — so this one uses the two-int form, with a
+ * (`lockClubConverts`), `submitAccessRequestLogic`'s global
+ * `access-requests:submit` key, and the anonymous ballot's per-device
+ * `ballot-anon:<session>:<device>` key (`castVote`, #982) — so this one uses
+ * the two-int form, with a
  * fixed namespace as the first int. That is the property that matters, and it
  * is structural rather than probabilistic:
  *

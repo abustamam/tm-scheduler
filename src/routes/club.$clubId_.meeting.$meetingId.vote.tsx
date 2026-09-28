@@ -1,30 +1,38 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import {
+	ANONYMOUS_VOTER,
 	Ballot,
 	BallotOff,
 	type VoterIdentity,
 } from "#/components/club/ballot";
-import { PickNameForm } from "#/components/club/pick-name-form";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { Button } from "#/components/ui/button";
-import { Input } from "#/components/ui/input";
 import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { readStoredMember } from "#/lib/member-identity";
 import { getPublicMeetingByKey } from "#/server/meetings";
-import { joinBallot } from "#/server/voting";
 
 // Escapes the `/club/$clubId` shell (trailing `_`) so it never hits the
 // pick-your-name member gate and never loads the shell's payload — this is the
 // PUBLIC, no-auth ballot (#510), reached by scanning a QR in the room. Lean on
 // purpose: twenty phones load it simultaneously on conference wifi.
+//
+// Nobody has to say who they are to vote (#982). The phone votes as, in order:
+// the signed-in member of this club (#962); a voter this device already
+// identified as (the per-meeting store, or the name picked on the public club
+// page); otherwise ANONYMOUSLY, as this device. There is no "Who are you?"
+// step, and no optional one either.
+//
+// `gavelup:voter:<meetingId>` is LEGACY and read-only: only the removed picker
+// ever wrote it. It is still read so a phone that joined before #982 keeps its
+// identity for that meeting, and "not you?" clears it; nothing writes it now.
 export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 	loader: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
@@ -46,7 +54,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 			clubName: club.name,
 			clubNumber: club.clubNumber,
 			meetingId: detail.meeting.id,
-			// #770 — off means no name picker and no ballot, just the notice.
+			// #770 — off means no ballot, just the notice.
 			digitalVoting: detail.digitalVoting,
 		};
 	},
@@ -101,7 +109,8 @@ const SESSION_VOTER_TIMEOUT_MS = 3000;
  * same way `castVote` decides whose session may change a vote.
  *
  * The FIRST answer is final for this page view. Until there is one, `pending`
- * is true, so a signed-in member is never flashed the "Who are you?" picker.
+ * is true, so a signed-in member is never flashed the anonymous ballot (#982),
+ * where a tap would cast a vote that is not theirs by name.
  * But waiting is bounded: after `SESSION_VOTER_TIMEOUT_MS`, or on a failed
  * lookup, the answer is "no session member" and the page behaves as signed out.
  * Latching matters because `useSession` can drop and come back on a mounted
@@ -174,16 +183,11 @@ function VotePage() {
 	const [voter, setVoter] = useState<VoterIdentity | null>(() => {
 		const stored = readVoter(meetingId);
 		if (stored) return stored;
-		// Pre-fill from the club-scoped pick the public club page already made, so
-		// a regular member never picks their name twice.
+		// The club-scoped pick the public club page already made, so a regular
+		// member who has picked their name there still votes as themselves.
 		const m = readStoredMember(clubId);
 		return m ? { kind: "member", id: m.id, name: m.name } : null;
 	});
-
-	function chooseVoter(v: VoterIdentity) {
-		localStorage.setItem(voterKey(meetingId), JSON.stringify(v));
-		setVoter(v);
-	}
 
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-background">
@@ -219,7 +223,14 @@ function VotePage() {
 					</>
 				) : voter ? (
 					<>
-						<Ballot meetingId={meetingId} voter={voter} />
+						{/* Keyed by who is voting, so "not you?" below starts the
+						    anonymous ballot fresh rather than showing the named
+						    voter's ticks as if they were the device's. */}
+						<Ballot
+							key={`${voter.kind}:${voter.id}`}
+							meetingId={meetingId}
+							voter={voter}
+						/>
 						<Button
 							variant="ghost"
 							className="self-center text-xs text-muted-foreground"
@@ -232,74 +243,17 @@ function VotePage() {
 						</Button>
 					</>
 				) : (
-					<VoterPicker
-						clubId={clubId}
+					// Nobody identified on this phone (#982): the ballot straight away,
+					// and the vote belongs to this device's ballot token. No picker, and
+					// deliberately no "tell us who you are" link either.
+					<Ballot
+						key="anonymous"
 						meetingId={meetingId}
-						onPick={chooseVoter}
+						voter={ANONYMOUS_VOTER}
 					/>
 				)}
 			</main>
 			<PublicFooter />
-		</div>
-	);
-}
-
-function VoterPicker({
-	clubId,
-	meetingId,
-	onPick,
-}: {
-	clubId: string;
-	meetingId: string;
-	onPick: (v: VoterIdentity) => void;
-}) {
-	const [guestName, setGuestName] = useState("");
-	const join = useMutation({
-		mutationFn: () =>
-			joinBallot({ data: { meetingId, name: guestName.trim() } }),
-		onSuccess: (g) => onPick({ kind: "guest", id: g.id, name: g.name }),
-	});
-
-	return (
-		<div className="flex flex-col gap-6">
-			<div className="text-center">
-				<h1 className="font-display text-2xl font-semibold">Who are you?</h1>
-				<p className="mt-1 text-sm text-muted-foreground">
-					So we count one vote per person.
-				</p>
-			</div>
-
-			<PickNameForm
-				clubUuid={clubId}
-				onPicked={(m) => onPick({ kind: "member", id: m.id, name: m.name })}
-			/>
-
-			<div className="rounded-2xl border border-border bg-card p-5">
-				<h2 className="text-sm font-semibold">Visiting us today?</h2>
-				<form
-					className="mt-3 flex flex-col gap-3"
-					onSubmit={(e) => {
-						e.preventDefault();
-						if (!guestName.trim() || join.isPending) return;
-						join.mutate();
-					}}
-				>
-					<Input
-						value={guestName}
-						onChange={(e) => setGuestName(e.target.value)}
-						placeholder="Your name"
-						aria-label="Your name"
-					/>
-					<Button type="submit" disabled={!guestName.trim() || join.isPending}>
-						{join.isPending ? "Joining…" : "Join as a guest"}
-					</Button>
-					{join.isError ? (
-						<p className="text-sm text-destructive">
-							Couldn't join — try again, or ask the Vote Counter.
-						</p>
-					) : null}
-				</form>
-			</div>
 		</div>
 	);
 }

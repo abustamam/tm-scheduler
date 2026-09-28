@@ -340,8 +340,9 @@ function conflictSetObject(body: string): string | null {
  *   refactor.
  * - `public-intake` — no SESSION and no asserted member id; a bounded write
  *   from a public link. Not "no identity at all", which was this line's first
- *   wording and is false for `joinBallot`: it takes a typed name and looks it
- *   up club-scoped, returning the existing guest row when there is one (#765).
+ *   wording and was false for `joinBallot` (removed in #982): it took a typed
+ *   name and looked it up club-scoped, returning the existing guest row when
+ *   there was one (#765).
  *   The class is about where the identity comes from — a person typing their
  *   own name into an intake form — not about there being none.
  * - `pending-proof` — Phase 1 debt, flipped by its own child issue.
@@ -358,9 +359,9 @@ type WriteProofClass =
  * The 29 the #761 inventory found, less the five #762 retired and the two #752
  * retired, plus #866's request-access form and #880's Table Topics notes
  * editor: 26, and #763 retired the last five `pending-proof` rows — two to
- * `fill-blank`, three to the default `session` sweep — so 23, and #984's
- * anonymous role feedback makes 24 today (15 `console-asserted`, 4
- * `public-intake`, 5 `fill-blank`). Adding a row is a decision about a write's
+ * `fill-blank`, three to the default `session` sweep — so 23, #984's
+ * anonymous role feedback makes 24, and #982 deleting `joinBallot` makes 23
+ * today (15 `console-asserted`, 3 `public-intake`, 5 `fill-blank`). Adding a row is a decision about a write's
  * trust model, not a way to get green — a genuinely session-less write that
  * turns up unclassified is a finding to report, not an entry to make.
  *
@@ -508,15 +509,11 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	},
 
 	// --- Public intake ------------------------------------------------------
-	// Neither carries a session or an asserted member id. Both mint a row from a
-	// public link, from a name the person types themselves, and both are bounded
-	// — `joinBallot` on name length and rows per meeting, and it resolves an
-	// existing guest rather than duplicating one (#765).
+	// Carries no session and no asserted member id. Mints a row from a public
+	// link, from a name the person types themselves, and is bounded. (The
+	// ballot's `joinBallot` was the other one until #982 removed the ballot's
+	// name step and the fn with it.)
 	"guest-pipeline.ts#submitGuestBook": {
-		class: "public-intake",
-		reason: "bounded guest intake",
-	},
-	"voting.ts#joinBallot": {
 		class: "public-intake",
 		reason: "bounded guest intake",
 	},
@@ -1124,6 +1121,9 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		// and `releaseSlot`, `reassignSlot`, `updateSpeakerDetails` out of the map
 		// to the default `session` sweep. `pending-proof` stays counted at ZERO,
 		// so a row parked there again moves a number somebody reads.
+		//
+		// #982 deleted `joinBallot`, the ballot's name step, and its
+		// `public-intake` row with it: that class reads 3 and the total 23.
 		const byClass = (c: WriteProofClass) =>
 			Object.values(WRITE_PROOF_EXCEPTIONS).filter((v) => v.class === c).length;
 		expect({
@@ -1133,10 +1133,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			publicIntake: byClass("public-intake"),
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 24,
+			total: 23,
 			pendingProof: 0,
 			consoleAsserted: 15,
-			publicIntake: 4,
+			publicIntake: 3,
 			fillBlank: 5,
 		});
 	});

@@ -534,13 +534,33 @@ export interface VoterRef {
  * Who a ballot is cast FOR. Wider than `VoterRef` since #582: a candidate can
  * be someone with no row at all.
  *
- * The asymmetry is the point. A VOTER must be a member or a guest, because
- * that is what the one-vote-per-person unique indexes key on and what the
- * per-meeting guest cap counts. A CANDIDATE need not exist anywhere — the
+ * The asymmetry is the point. An IDENTIFIED voter must be a member or a guest,
+ * because that is what the one-vote-per-person unique indexes key on and what
+ * the per-meeting guest cap counts (a voter who never identified is
+ * `BallotVoter`'s anonymous arm, #982). A CANDIDATE need not exist anywhere — the
  * common case is a Table Topics respondent nobody keyed in, because nobody is
  * operating the app while the meeting runs.
  */
 export type CandidateRef = VoterRef | { kind: "writeIn"; name: string };
+
+/**
+ * Who a ballot is cast BY (#982). A member or guest who has identified, or
+ * nobody in particular: a phone that never said who it is votes ANONYMOUSLY,
+ * and its row carries neither voter id — only the casting device's token.
+ *
+ * Anonymous voting is the honour system taken at its word (#982, ADR-0026):
+ * there is no uniqueness on the device token, so a private window is another
+ * ballot, and that is accepted. What the token DOES do is let the same phone
+ * change its own anonymous vote while the window is open, so "tap a different
+ * name to change it" stays true instead of casting a second ballot.
+ */
+export type BallotVoter = VoterRef | { kind: "anonymous" };
+
+/** An anonymous cast arrived with no device token. Only a tab loaded before
+ *  #765 can send one, and that tab could not have reached the anonymous ballot
+ *  at all, so the remedy is the ordinary one. */
+export const ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE =
+	"Couldn't send that — refresh the page and tap your choice again.";
 
 /**
  * Cast (or change) one ballot.
@@ -595,11 +615,19 @@ export type CandidateRef = VoterRef | { kind: "writeIn"; name: string };
  *     UPDATE as a `setWhere`, so it is the same single statement as (3) and
  *     inherits its locking. A refused change returns no row, like a closed
  *     window does; the follow-up read tells the two apart.
+ *
+ * An ANONYMOUS voter (#982) — a phone that never said who it is — takes (1)
+ * as above and skips (2), since there is no id to scope. Its (3) and (4) are
+ * `castAnonymousVote`: the same window guarantee (the session row held FOR
+ * SHARE for the whole write), and the right to change belongs to the casting
+ * device alone, as one update-else-insert serialised per (session, device).
+ * No uniqueness on the token: another device is another ballot.
  */
 export async function castVote(input: {
 	meetingId: string;
 	category: AwardCategory;
-	voter: VoterRef;
+	/** Member, guest, or ANONYMOUS (#982) — see `BallotVoter`. */
+	voter: BallotVoter;
 	candidate: CandidateRef;
 	/** The casting phone's `getBallotDeviceToken()` (#765). Optional so a tab
 	 *  loaded before the deploy can still cast a FIRST vote; without one, a
@@ -667,7 +695,27 @@ export async function castVote(input: {
 		}
 	}
 
-	// (2) Voter scoping.
+	const candidateMemberId =
+		input.candidate.kind === "member" ? input.candidate.id : null;
+	const candidateGuestId =
+		input.candidate.kind === "guest" ? input.candidate.id : null;
+
+	// (2) Voter scoping. An ANONYMOUS voter (#982) has nothing to scope — no id
+	// to check against the club, no guest link to count — so it takes its own
+	// write path, which keeps (1) above and (3)'s window guarantee below.
+	if (input.voter.kind === "anonymous") {
+		await castAnonymousVote({
+			meetingId: input.meetingId,
+			category: input.category,
+			deviceToken: input.deviceToken ?? null,
+			candidate: {
+				memberId: candidateMemberId,
+				guestId: candidateGuestId,
+				writeIn,
+			},
+		});
+		return;
+	}
 	if (input.voter.kind === "member") {
 		await requireMemberInMeetingClub(input.voter.id, clubId);
 		await requireActiveMember(input.voter.id);
@@ -688,10 +736,6 @@ export async function castVote(input: {
 	const ownSession =
 		voterMemberId !== null &&
 		(await sessionIsVoter(clubId, input.sessionUserId ?? null, voterMemberId));
-	const candidateMemberId =
-		input.candidate.kind === "member" ? input.candidate.id : null;
-	const candidateGuestId =
-		input.candidate.kind === "guest" ? input.candidate.id : null;
 
 	// (3) Window check and write, atomically. `.for("share")` on the session
 	// sub-select is load-bearing, not decoration: without it, a cast that parks
@@ -800,6 +844,99 @@ export async function castVote(input: {
 				: GUEST_VOTE_CAST_ELSEWHERE_MESSAGE,
 		);
 	}
+}
+
+/**
+ * The ANONYMOUS arm of `castVote` (#982): a row with BOTH voter ids NULL,
+ * owned by the casting device's token. The caller has already validated the
+ * candidate and the club gates; this is only the window check and the write.
+ *
+ * One ballot per device per category, CHANGEABLE from that device while the
+ * window is open — the same contract the identified arms give — but held by
+ * the application rather than a unique index, because the honour system rules
+ * out one (#982: a private window is another ballot, and that is accepted), and
+ * adding a partial index would be a migration. So:
+ *
+ *  - The session row is read `FOR SHARE`, exactly as the identified arm's
+ *    INSERT ... SELECT reads it, and held for the whole transaction. That is
+ *    what keeps #510's cast-after-close guarantee: `closeVote`'s UPDATE cannot
+ *    commit while this is in flight, and nothing lands after a Close.
+ *  - A transaction-scoped advisory lock keyed on (session, device) serialises
+ *    two casts from ONE phone (a double-tap, a retried request on bad wifi),
+ *    so the update-else-insert below cannot mint two ballots for it. Different
+ *    phones never share a key, so the room does not queue behind itself. The
+ *    bigint form with a prefixed string, like `lockClubConverts`; a `hashtext`
+ *    collision with another bigint key costs a brief wait, never a deadlock,
+ *    since nothing else holding such a key ever calls this.
+ *  - The update matches only an ANONYMOUS row from this token. An identified
+ *    vote cast earlier from the same phone is a different ballot, and this
+ *    never touches it.
+ */
+/** The advisory-lock key that serialises one device's anonymous casts in one
+ *  session (#982). Exported so the race test can hold the SAME key. */
+export function anonymousBallotLockKey(
+	sessionId: string,
+	deviceToken: string,
+): string {
+	return `ballot-anon:${sessionId}:${deviceToken}`;
+}
+
+async function castAnonymousVote(input: {
+	meetingId: string;
+	category: AwardCategory;
+	deviceToken: string | null;
+	candidate: {
+		memberId: string | null;
+		guestId: string | null;
+		writeIn: string | null;
+	};
+}): Promise<void> {
+	const { deviceToken } = input;
+	// No token, no owner: the row could never be changed and a re-tap would be a
+	// second ballot. `submitVote` already refuses this; this is the boundary.
+	if (!deviceToken) throw new Error(ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE);
+	await db.transaction(async (tx) => {
+		const [session] = await tx
+			.select({ id: meetingVoteSessions.id })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, input.meetingId),
+					eq(meetingVoteSessions.category, input.category),
+					isNull(meetingVoteSessions.closedAt),
+				),
+			)
+			.for("share");
+		if (!session) throw new Error("Voting for this award is not open.");
+		await tx.execute(
+			sql`select pg_advisory_xact_lock(hashtextextended(${anonymousBallotLockKey(session.id, deviceToken)}, 0))`,
+		);
+		const candidate = {
+			candidateMemberId: input.candidate.memberId,
+			candidateGuestId: input.candidate.guestId,
+			candidateWriteIn: input.candidate.writeIn,
+		};
+		const updated = await tx
+			.update(meetingVotes)
+			.set({ ...candidate, updatedAt: new Date() })
+			.where(
+				and(
+					eq(meetingVotes.sessionId, session.id),
+					eq(meetingVotes.deviceToken, deviceToken),
+					isNull(meetingVotes.voterMemberId),
+					isNull(meetingVotes.voterGuestId),
+				),
+			)
+			.returning({ id: meetingVotes.id });
+		if (updated.length > 0) return;
+		await tx.insert(meetingVotes).values({
+			sessionId: session.id,
+			voterMemberId: null,
+			voterGuestId: null,
+			deviceToken,
+			...candidate,
+		});
+	});
 }
 
 /**
@@ -1094,6 +1231,11 @@ export interface CategoryTally {
 	 *  Ballot Counter spot a ballot from someone who went home, and it cannot
 	 *  reveal a choice because no id or candidate travels with it. */
 	voterNames: string[];
+	/** How many ballots in this category have no named voter (#982): cast by a
+	 *  phone that never said who it is. Counted beside `voterNames` rather than
+	 *  folded into it, so "who has voted" totals every ballot without inventing a
+	 *  placeholder person. */
+	anonymousCount: number;
 }
 
 /** The Ballot Counter's view. GATED — never reachable from the public route. */
@@ -1120,6 +1262,8 @@ export async function loadTally(
 			candidateWriteIn: meetingVotes.candidateWriteIn,
 			voterMemberName: members.name,
 			voterGuestName: guests.name,
+			voterMemberId: meetingVotes.voterMemberId,
+			voterGuestId: meetingVotes.voterGuestId,
 		})
 		.from(meetingVotes)
 		.innerJoin(
@@ -1179,6 +1323,12 @@ export async function loadTally(
 				.map((r) => r.voterMemberName ?? r.voterGuestName ?? "")
 				.filter(Boolean)
 				.sort((a, b) => a.localeCompare(b)),
+			// Both ids NULL: an anonymous ballot (#982). A departed member's vote
+			// (voter FK set null) lands here too, which is honest — it is a
+			// ballot with nobody left to name.
+			anonymousCount: mine.filter(
+				(r) => r.voterMemberId === null && r.voterGuestId === null,
+			).length,
 		};
 	}
 	return out;

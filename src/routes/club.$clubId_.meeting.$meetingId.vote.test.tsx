@@ -35,13 +35,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
 vi.mock("#/lib/club-route", () => ({ resolveClubOrRedirect: vi.fn() }));
 vi.mock("#/server/voting", () => ({
-	joinBallot: vi.fn(),
 	getBallot: vi.fn(),
 	submitVote: vi.fn(),
-}));
-// Reached transitively through `PickNameForm`, which the route renders.
-vi.mock("#/server/members", () => ({
-	listMembers: vi.fn(),
 }));
 // The session (#962). The page reads it on the client — never in the loader —
 // so both halves are mocked here: Better Auth's hook, and the server fns the
@@ -223,6 +218,18 @@ function mockSession(
 	);
 }
 
+/** A ballot payload with every category closed. */
+const NOTHING_OPEN = {
+	meetingId: MEETING_ID,
+	categories: {
+		best_speaker: { isOpen: false, hasOpened: false, candidates: [] },
+		best_evaluator: { isOpen: false, hasOpened: false, candidates: [] },
+		best_table_topics: { isOpen: false, hasOpened: false, candidates: [] },
+	},
+	digitalVotingOff: false,
+	// biome-ignore lint/suspicious/noExplicitAny: server fn mock shape
+} as any;
+
 beforeEach(() => {
 	// The signed-out default, so the loader and #770 suites below render the
 	// page they always have. Re-set per test: `vi.restoreAllMocks` in their
@@ -243,20 +250,21 @@ describe("ballot page — digital voting off (#770)", () => {
 		expect(
 			screen.getByText("Digital voting is off for this meeting"),
 		).toBeTruthy();
-		// The name picker and the guest-name field are the two ways in; neither
-		// may be reachable, or a voter starts a flow that cannot end in a vote.
+		// No ballot and no way to name yourself: nothing here can start a flow
+		// that cannot end in a vote.
 		expect(screen.queryByText(/Who are you/i)).toBeNull();
 		expect(screen.queryByRole("textbox")).toBeNull();
 		expect(screen.queryByRole("button", { name: /join|vote/i })).toBeNull();
 	});
 
-	it("shows the picker when digital voting is on — the control case", async () => {
+	it("shows the ballot when digital voting is on — the control case", async () => {
+		vi.mocked(getBallot).mockResolvedValue(NOTHING_OPEN);
 		await renderVotePage(true);
 
 		expect(
 			screen.queryByText("Digital voting is off for this meeting"),
 		).toBeNull();
-		expect(screen.getAllByRole("textbox").length).toBeGreaterThan(0);
+		expect(await screen.findByText("No vote is open right now")).toBeTruthy();
 	});
 });
 
@@ -352,13 +360,15 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		expect(localStorage.getItem(`gavelup:voter:${MEETING_ID}`)).toBeNull();
 	});
 
-	it("a signed-in user who is NOT a member of this club gets today's signed-out picker", async () => {
+	it("a signed-in user who is NOT a member of this club votes anonymously, as signed out", async () => {
 		mockSession({ userId: USER_ID });
 		vi.mocked(getBallotSessionVoter).mockResolvedValue(null);
+		openBallot();
 
 		await renderVotePage(true);
 
-		expect(await screen.findByText("Who are you?")).toBeTruthy();
+		expect(await castAndReadVoter()).toEqual({ kind: "anonymous" });
+		expect(screen.queryByText(/Who are you/i)).toBeNull();
 		expect(getBallotSessionVoter).toHaveBeenCalled();
 	});
 
@@ -376,13 +386,48 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		expect((await castAndReadVoter()).id).toBe(PICKED_MEMBER);
 	});
 
-	it("signed out: shows the picker and never asks the server who the phone is", async () => {
+	// #982. The "Who are you?" wall is gone: nobody identified means the ballot
+	// straight away, cast as this device.
+	it("signed out with nothing stored: shows the ballot, not a picker, and votes anonymously as this device", async () => {
 		mockSession("signedOut");
+		openBallot();
 
 		await renderVotePage(true);
 
-		expect(screen.getByText("Who are you?")).toBeTruthy();
+		expect(await screen.findByText("Best Speaker")).toBeTruthy();
+		expect(screen.queryByText(/Who are you/i)).toBeNull();
+		// No way to name yourself, optional or not: no guest-name field, no join.
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(screen.queryByRole("button", { name: /join/i })).toBeNull();
+		expect(screen.queryByText(/Voting as/)).toBeNull();
+		expect(await castAndReadVoter()).toEqual({ kind: "anonymous" });
+		// Owned by this device: the token rides the cast.
+		// biome-ignore lint/suspicious/noExplicitAny: server fn call shape
+		const sent = (vi.mocked(submitVote).mock.calls[0][0] as any).data;
+		expect(sent.deviceToken).toMatch(/^[0-9a-f-]{36}$/);
 		expect(getBallotSessionVoter).not.toHaveBeenCalled();
+		// Nothing is written as an identity for this meeting.
+		expect(localStorage.getItem(`gavelup:voter:${MEETING_ID}`)).toBeNull();
+	});
+
+	it("'not you?' drops a stored identity and the phone votes anonymously, with no picker", async () => {
+		mockSession("signedOut");
+		openBallot();
+		localStorage.setItem(
+			`gavelup:voter:${MEETING_ID}`,
+			JSON.stringify({ kind: "guest", id: "g-9", name: "Visitor Vic" }),
+		);
+
+		await renderVotePage(true);
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "Voting as Visitor Vic — not you?",
+			}),
+		);
+
+		expect(screen.queryByText(/Who are you/i)).toBeNull();
+		expect(localStorage.getItem(`gavelup:voter:${MEETING_ID}`)).toBeNull();
+		expect(await castAndReadVoter()).toEqual({ kind: "anonymous" });
 	});
 
 	it("signed out: a guest with a stored voter for this meeting votes as that guest", async () => {
@@ -402,26 +447,27 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		expect(getBallotSessionVoter).not.toHaveBeenCalled();
 	});
 
-	it("does not flash the picker while the session is still loading", async () => {
+	it("mounts no ballot while the session is still loading", async () => {
 		mockSession("pending");
 		storePickedName();
 
 		await renderVotePage(true);
 
 		expect(screen.getByText("Loading your ballot…")).toBeTruthy();
-		expect(screen.queryByText(/Who are you/i)).toBeNull();
-		// Nor the stored pick's ballot: the session might disagree with it.
+		// Neither the anonymous ballot (#982) nor the stored pick's: the session
+		// might disagree with both, so no ballot mounts at all.
 		expect(screen.queryByText(/Voting as/)).toBeNull();
+		expect(getBallot).not.toHaveBeenCalled();
 	});
 
-	it("does not flash the picker while a signed-in member is being resolved", async () => {
+	it("does not flash the anonymous ballot while a signed-in member is being resolved", async () => {
 		mockSession({ userId: USER_ID });
 		vi.mocked(getBallotSessionVoter).mockReturnValue(new Promise(() => {}));
 
 		await renderVotePage(true);
 
 		expect(screen.getByText("Loading your ballot…")).toBeTruthy();
-		expect(screen.queryByText(/Who are you/i)).toBeNull();
+		expect(getBallot).not.toHaveBeenCalled();
 	});
 
 	it("gives up on a session that never resolves after ~3s and behaves as signed out", async () => {
@@ -444,15 +490,17 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		expect(screen.queryByText("Loading your ballot…")).toBeNull();
 	}, 8000);
 
-	it("gives up on a member lookup that never answers and shows the picker", async () => {
+	it("gives up on a member lookup that never answers and votes anonymously", async () => {
 		mockSession({ userId: USER_ID });
 		vi.mocked(getBallotSessionVoter).mockReturnValue(new Promise(() => {}));
+		openBallot();
 
 		await renderVotePage(true);
 
 		expect(
-			await screen.findByText("Who are you?", {}, { timeout: 4500 }),
+			await screen.findByText("Best Speaker", {}, { timeout: 4500 }),
 		).toBeTruthy();
+		expect(await castAndReadVoter()).toEqual({ kind: "anonymous" });
 	}, 8000);
 
 	it("keeps waiting while under the timeout", async () => {
@@ -491,12 +539,13 @@ describe("ballot page — who the phone votes as (#962)", () => {
 		expect(screen.queryByText("Voting as Sally Session")).toBeNull();
 	}, 8000);
 
-	it("falls back to the signed-out picker when the lookup fails", async () => {
+	it("falls back to the signed-out anonymous ballot when the lookup fails", async () => {
 		mockSession({ userId: USER_ID });
 		vi.mocked(getBallotSessionVoter).mockRejectedValue(new Error("offline"));
+		openBallot();
 
 		await renderVotePage(true);
 
-		expect(await screen.findByText("Who are you?")).toBeTruthy();
+		expect(await castAndReadVoter()).toEqual({ kind: "anonymous" });
 	});
 });
