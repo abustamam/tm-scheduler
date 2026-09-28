@@ -154,15 +154,61 @@ function isRuntimeLocale(
 	return false;
 }
 
-/** Every runtime-locale call in `text`, as `line: source` strings. */
-function runtimeLocaleOffenders(fileName: string, text: string): string[] {
-	const sf = ts.createSourceFile(
+/** Parse one file, TSX or not by its extension. Shared by both detectors. */
+function parse(fileName: string, text: string): ts.SourceFile {
+	return ts.createSourceFile(
 		fileName,
 		text,
 		ts.ScriptTarget.Latest,
 		true,
 		fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
 	);
+}
+
+/** `Intl`, or `Intl` read off `globalThis` / `window` / `self` (either form). */
+function isGlobalIntl(expr: ts.Expression): boolean {
+	const n = unwrap(expr);
+	if (ts.isIdentifier(n)) return n.text === "Intl";
+	if (memberName(n) !== "Intl") return false;
+	const obj = memberObject(n);
+	return (
+		obj !== null &&
+		ts.isIdentifier(unwrap(obj)) &&
+		GLOBAL_OBJECTS.has((unwrap(obj) as ts.Identifier).text)
+	);
+}
+
+/**
+ * `…().resolvedOptions().timeZone`, exactly: the one question about the
+ * runtime that formats nothing and is neither the locale nor a rendering in
+ * the zone. Both detectors exempt it, through this one definition.
+ */
+function asksOnlyTimeZone(node: ts.Node): boolean {
+	const access = node.parent;
+	if (
+		!access ||
+		!ts.isPropertyAccessExpression(access) ||
+		access.expression !== node ||
+		access.name.text !== "resolvedOptions"
+	) {
+		return false;
+	}
+	const call = access.parent;
+	if (!call || !ts.isCallExpression(call) || call.expression !== access) {
+		return false;
+	}
+	const prop = call.parent;
+	return (
+		!!prop &&
+		ts.isPropertyAccessExpression(prop) &&
+		prop.expression === call &&
+		prop.name.text === "timeZone"
+	);
+}
+
+/** Every runtime-locale call in `text`, as `line: source` strings. */
+function runtimeLocaleOffenders(fileName: string, text: string): string[] {
+	const sf = parse(fileName, text);
 
 	// File-local `const` aliases: of `Intl` itself, and of one of its
 	// constructors. Collected before the walk so use-before-declaration in a
@@ -172,18 +218,8 @@ function runtimeLocaleOffenders(fileName: string, text: string): string[] {
 
 	const isIntlRef = (expr: ts.Expression): boolean => {
 		const n = unwrap(expr);
-		if (ts.isIdentifier(n)) {
-			return n.text === "Intl" || intlAliases.has(n.text);
-		}
-		if (memberName(n) === "Intl") {
-			const obj = memberObject(n);
-			return (
-				obj !== null &&
-				ts.isIdentifier(unwrap(obj)) &&
-				GLOBAL_OBJECTS.has((unwrap(obj) as ts.Identifier).text)
-			);
-		}
-		return false;
+		if (ts.isIdentifier(n) && intlAliases.has(n.text)) return true;
+		return isGlobalIntl(n);
 	};
 
 	const isIntlCtor = (expr: ts.Expression): boolean => {
@@ -224,33 +260,6 @@ function runtimeLocaleOffenders(fileName: string, text: string): string[] {
 	const report = (node: ts.Node) => {
 		const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
 		found.push(`${line + 1}: ${node.getText(sf).split("\n")[0]}`);
-	};
-
-	/**
-	 * `…().resolvedOptions().timeZone`, exactly: the one question about the
-	 * runtime that formats nothing and is not the locale.
-	 */
-	const asksOnlyTimeZone = (node: ts.Node): boolean => {
-		const access = node.parent;
-		if (
-			!access ||
-			!ts.isPropertyAccessExpression(access) ||
-			access.expression !== node ||
-			access.name.text !== "resolvedOptions"
-		) {
-			return false;
-		}
-		const call = access.parent;
-		if (!call || !ts.isCallExpression(call) || call.expression !== access) {
-			return false;
-		}
-		const prop = call.parent;
-		return (
-			!!prop &&
-			ts.isPropertyAccessExpression(prop) &&
-			prop.expression === call &&
-			prop.name.text === "timeZone"
-		);
 	};
 
 	/**
@@ -448,6 +457,385 @@ describe("no runtime-resolved locale under src/ (#708)", () => {
 			expect(hits("x[method]();")).toBe(0);
 			expect(hits("Reflect.construct(Intl.DateTimeFormat, []);")).toBe(0);
 			expect(hits("s.toLocaleUpperCase();")).toBe(0);
+		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The TIME ZONE half (#1000).
+//
+// The locale guard above could not see what #1000 found in production: React
+// #418 on `/admin/vpe-dashboard`, `/activity` and more, every one of them a
+// date formatted with a named locale and NO zone. `timeZone` omitted resolves
+// to the runtime's zone exactly as an omitted locale resolves to the runtime's
+// locale, so Railway's UTC container prints "Jul 18" and a browser in Los
+// Angeles "Jul 17" for a meeting held the evening of the 17th in the club's
+// zone. `format.ts` says the zone "is handled per call site"; this is what
+// checks that the call site handled it.
+//
+// ## What counts as an offender
+//
+// A RUNTIME ZONE is a zone argument that is absent, `undefined` or `void …`,
+// or an options object literal with no `timeZone` key (or `timeZone:
+// undefined`), passed to:
+//
+//   - a `#/lib/format` date formatter that TAKES a zone. The set is read off
+//     `format.ts` itself, not listed here: every exported function with a
+//     parameter named `timeZone` (positional), or with an options parameter
+//     whose type has a `timeZone` member (`formatHistoryDate`). So a new
+//     zone-taking formatter is covered the day it is written;
+//   - `Intl.DateTimeFormat` (reached as `Intl.DateTimeFormat` or through
+//     `globalThis` / `window` / `self`), and `toLocaleDateString` /
+//     `toLocaleTimeString`, whose second argument is the options object.
+//
+// The resolvedOptions().timeZone chain is exempt here too, for the reason it
+// is exempt above.
+//
+// ## What escapes it
+//
+//   - a zone or options object held in a variable (`formatShortDate(d, tz)`
+//     where `tz` is undefined at runtime, `new Intl.DateTimeFormat(L, opts)`),
+//     and an options literal with a spread, whose keys cannot be read;
+//   - a formatter reached through anything but a named import from
+//     `#/lib/format`, `@/lib/format` (the shadcn alias for the same file) or
+//     `./format` — a namespace import, a re-export, a wrapper;
+//   - `toLocaleString`, which is a Date's AND a number's, and this has no type
+//     information to tell them apart;
+//   - everything that is not a date in the wrong zone: `formatTenure`'s local
+//     calendar arithmetic, `new Date()` in a render, `Math.random`, an ICU
+//     difference between Node and Chrome (#1000's club-settings finding).
+//
+// ## Sanctioned and known
+//
+// SANCTIONED is a runtime zone that is correct, each with the reason. KNOWN is
+// the set that was already there when this guard landed, outside #1000's diff:
+// real, reported, and not fixed here. It may only SHRINK — a fixed entry left
+// on it fails, so the list cannot rot into a blanket exemption.
+
+/**
+ * The zone-taking formatters `format.ts` exports: name → the argument index of
+ * the zone, and whether that argument is the zone itself or an options object
+ * carrying one.
+ */
+function zonedFormatters(): Map<
+	string,
+	{ index: number; kind: "zone" | "options" }
+> {
+	const path = join(SRC, "lib/format.ts");
+	const sf = parse(path, readFileSync(path, "utf8"));
+	const out = new Map<string, { index: number; kind: "zone" | "options" }>();
+	for (const stmt of sf.statements) {
+		if (!ts.isFunctionDeclaration(stmt) || !stmt.name) continue;
+		const exported = stmt.modifiers?.some(
+			(m) => m.kind === ts.SyntaxKind.ExportKeyword,
+		);
+		if (!exported) continue;
+		stmt.parameters.forEach((param, index) => {
+			if (ts.isIdentifier(param.name) && param.name.text === "timeZone") {
+				out.set(stmt.name?.text ?? "", { index, kind: "zone" });
+				return;
+			}
+			const type = param.type;
+			if (
+				type &&
+				ts.isTypeLiteralNode(type) &&
+				type.members.some(
+					(m) =>
+						ts.isPropertySignature(m) &&
+						ts.isIdentifier(m.name) &&
+						m.name.text === "timeZone",
+				)
+			) {
+				out.set(stmt.name?.text ?? "", { index, kind: "options" });
+			}
+		});
+	}
+	return out;
+}
+
+const ZONED = zonedFormatters();
+
+/** `undefined`, `void …`, or nothing at all. */
+function isAbsent(arg: ts.Expression | ts.SpreadElement | undefined): boolean {
+	if (arg === undefined) return true;
+	if (ts.isSpreadElement(arg)) return false;
+	const n = unwrap(arg);
+	return (
+		(ts.isIdentifier(n) && n.text === "undefined") || ts.isVoidExpression(n)
+	);
+}
+
+/**
+ * Whether an options argument leaves the zone to the runtime: absent, or a
+ * literal whose `timeZone` is missing or `undefined`. A literal with a spread
+ * could be carrying one, and a non-literal cannot be read, so both pass.
+ */
+function optionsLackZone(
+	arg: ts.Expression | ts.SpreadElement | undefined,
+): boolean {
+	if (isAbsent(arg)) return true;
+	if (arg === undefined || ts.isSpreadElement(arg)) return false;
+	const n = unwrap(arg);
+	if (!ts.isObjectLiteralExpression(n)) return false;
+	if (n.properties.some(ts.isSpreadAssignment)) return false;
+	const zone = n.properties.find(
+		(p) =>
+			(ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+			p.name.getText() === "timeZone",
+	);
+	if (!zone) return true;
+	return ts.isPropertyAssignment(zone) && isAbsent(zone.initializer);
+}
+
+const FORMAT_MODULES = new Set(["#/lib/format", "@/lib/format", "./format"]);
+const TO_LOCALE_DATE = new Set(["toLocaleDateString", "toLocaleTimeString"]);
+
+/** Every runtime-zone date format in `text`, as `line: source` strings. */
+function runtimeZoneOffenders(fileName: string, text: string): string[] {
+	const sf = parse(fileName, text);
+
+	// Local name → the formatter it imports.
+	const imported = new Map<string, string>();
+	for (const stmt of sf.statements) {
+		if (
+			!ts.isImportDeclaration(stmt) ||
+			!ts.isStringLiteral(stmt.moduleSpecifier) ||
+			!FORMAT_MODULES.has(stmt.moduleSpecifier.text)
+		) {
+			continue;
+		}
+		const bindings = stmt.importClause?.namedBindings;
+		if (!bindings || !ts.isNamedImports(bindings)) continue;
+		for (const el of bindings.elements) {
+			const name = (el.propertyName ?? el.name).text;
+			if (ZONED.has(name)) imported.set(el.name.text, name);
+		}
+	}
+
+	const isDateTimeFormat = (expr: ts.Expression): boolean => {
+		const obj = memberObject(expr);
+		return (
+			memberName(expr) === "DateTimeFormat" && obj !== null && isGlobalIntl(obj)
+		);
+	};
+
+	const found: string[] = [];
+	const report = (node: ts.Node) => {
+		const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+		found.push(`${line + 1}: ${node.getText(sf).split("\n")[0]}`);
+	};
+
+	const visit = (node: ts.Node) => {
+		if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+			const args = node.arguments ?? [];
+			const callee = unwrap(node.expression);
+			const formatter = ts.isIdentifier(callee)
+				? ZONED.get(imported.get(callee.text) ?? "")
+				: undefined;
+			if (ts.isCallExpression(node) && formatter) {
+				const arg = args[formatter.index];
+				const runtime =
+					formatter.kind === "zone" ? isAbsent(arg) : optionsLackZone(arg);
+				if (runtime) report(node);
+			} else if (isDateTimeFormat(callee)) {
+				if (optionsLackZone(args[1]) && !asksOnlyTimeZone(node)) report(node);
+			} else if (
+				ts.isCallExpression(node) &&
+				TO_LOCALE_DATE.has(memberName(callee) ?? "") &&
+				optionsLackZone(args[1])
+			) {
+				report(node);
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sf);
+	return found;
+}
+
+/**
+ * A runtime zone that is RIGHT, keyed `path: call` (the call's first line, as
+ * the detector prints it, without the line number so an edit above it does
+ * not churn this list).
+ */
+const SANCTIONED: Record<string, string> = {
+	// Rendered only after mount, so the server never formats it and the
+	// browser's zone is the member's own (#608).
+	"src/components/speech-log-date.tsx: formatDayMonth(value)":
+		"deferred past hydration by `mounted`",
+	// `local` is BUILT in the runtime's zone from a URL's calendar date, so
+	// formatting it in that same zone is what round-trips the date.
+	"src/components/club/personal-meeting-body.tsx: formatMeetingDate(local)":
+		"a Date constructed in the runtime's own zone",
+};
+
+/**
+ * Found when this guard landed, outside #1000's diff, and listed in that
+ * PR's inventory rather than fixed here (#1000's brief: more than five sites,
+ * so list them and stop). A list, not a set: a file with two identical calls
+ * carries two entries, so fixing one of them is still a change this list has
+ * to make. May only shrink.
+ */
+const KNOWN: readonly string[] = [
+	"src/components/api-tokens-section.tsx: new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)",
+	"src/components/connected-apps-section.tsx: new Date(app.approvedAt).toLocaleDateString(APP_LOCALE)",
+	'src/components/pathways/pathways-progress.tsx: new Intl.DateTimeFormat("en-US", {',
+	"src/lib/offline-status.ts: new Date(ts).toLocaleDateString(APP_LOCALE, {",
+	"src/routes/_authed/activity.tsx: formatMeetingDate(value)",
+	"src/routes/_authed/activity.tsx: formatMeetingDate(entry.meetingScheduledAt)",
+	"src/routes/_authed/activity.tsx: formatMeetingTime(entry.createdAt)",
+	"src/routes/_authed/admin/dues.tsx: formatShortDate(p.dueDate)",
+	"src/routes/_authed/admin/dues.tsx: formatShortDate(row.paidAt)",
+	"src/routes/_authed/admin/sync-tokens.tsx: new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)",
+	"src/routes/_authed/agenda-plan.$planId.tsx: formatMeetingDate(view.expiresAt)",
+	"src/routes/_authed/agenda-plan.$planId.tsx: formatMeetingDate(view.appliedAt)",
+	"src/routes/_authed/guest-book.$planId.tsx: formatMeetingDate(view.expiresAt)",
+	"src/routes/_authed/guest-book.$planId.tsx: formatMeetingDate(view.appliedAt)",
+	"src/routes/_authed/members.$id.tsx: new Intl.DateTimeFormat(APP_LOCALE, {",
+	"src/routes/_authed/members.$id.tsx: formatDayMonth(l.scheduledAt)",
+	"src/routes/_authed/members.$id.tsx: formatMeetingDate(slot.scheduledAt)",
+	'src/routes/_authed/superadmin/$clubId.tsx: new Intl.DateTimeFormat("en-US", {',
+	'src/routes/_authed/superadmin/index.tsx: new Intl.DateTimeFormat("en-US", {',
+	"src/server/minutes-email-logic.ts: formatMeetingDate(meetingDate)",
+	"src/server/minutes-email-logic.ts: formatMeetingDate(meetingDate)",
+	"src/server/notifications-logic.ts: formatMeetingDate(row.meetingScheduledAt)",
+];
+
+function allZoneOffenders(): string[] {
+	const out: string[] = [];
+	for (const path of sourceFiles(SRC)) {
+		for (const hit of runtimeZoneOffenders(path, readFileSync(path, "utf8"))) {
+			out.push(`${relative(ROOT, path)}: ${hit.replace(/^\d+: /, "")}`);
+		}
+	}
+	return out;
+}
+
+/** How many times each entry of `list` appears. */
+function tally(list: readonly string[]): Map<string, number> {
+	const out = new Map<string, number>();
+	for (const k of list) out.set(k, (out.get(k) ?? 0) + 1);
+	return out;
+}
+
+describe("no runtime-resolved time zone in a date formatter (#1000)", () => {
+	it("every zone-taking date format names a zone", () => {
+		const allowance = tally(KNOWN);
+		const offenders = allZoneOffenders().filter((o) => {
+			if (o in SANCTIONED) return false;
+			const left = allowance.get(o) ?? 0;
+			if (left === 0) return true;
+			allowance.set(o, left - 1);
+			return false;
+		});
+		expect(
+			offenders,
+			"pass the club's zone (the loader's `timezone`) rather than leaving it to the runtime",
+		).toEqual([]);
+	});
+
+	it("KNOWN only shrinks: every entry still offends", () => {
+		const current = tally(allZoneOffenders());
+		const stale = [...tally(KNOWN)]
+			.filter(([k, n]) => (current.get(k) ?? 0) < n)
+			.map(([k]) => k);
+		expect(stale, "fixed: remove it from KNOWN").toEqual([]);
+		expect(
+			Object.keys(SANCTIONED).filter((k) => !current.has(k)),
+			"no longer a runtime zone: remove it from SANCTIONED",
+		).toEqual([]);
+	});
+
+	it("reads the zone-taking formatters off format.ts", () => {
+		// An empty map would make the first arm of the detector silent.
+		expect(ZONED.get("formatShortDate")).toEqual({ index: 1, kind: "zone" });
+		expect(ZONED.get("formatMeetingTimeRange")).toEqual({
+			index: 2,
+			kind: "zone",
+		});
+		expect(ZONED.get("formatHistoryDate")).toEqual({
+			index: 1,
+			kind: "options",
+		});
+		// A calendar-day formatter pins UTC itself and takes no zone.
+		expect(ZONED.has("formatCalendarDay")).toBe(false);
+	});
+
+	describe("the detector", () => {
+		const hits = (src: string) =>
+			runtimeZoneOffenders(
+				"x.tsx",
+				`import { formatShortDate, formatHistoryDate, formatMeetingTimeRange as range } from "#/lib/format";\n${src}`,
+			).length;
+
+		it("flags a #/lib/format formatter with no zone", () => {
+			expect(hits("formatShortDate(d);")).toBe(1);
+			expect(hits("formatShortDate(d, undefined);")).toBe(1);
+			expect(hits("formatShortDate(d, void 0);")).toBe(1);
+			expect(hits("range(d, 60);")).toBe(1);
+			expect(hits("formatHistoryDate(d);")).toBe(1);
+			expect(hits("formatHistoryDate(d, { now });")).toBe(1);
+			expect(hits("formatHistoryDate(d, { timeZone: undefined });")).toBe(1);
+		});
+
+		it("accepts a formatter given a zone", () => {
+			expect(hits("formatShortDate(d, tz);")).toBe(0);
+			expect(hits("range(d, 60, tz);")).toBe(0);
+			expect(hits("formatHistoryDate(d, { timeZone: tz });")).toBe(0);
+			expect(hits("formatHistoryDate(d, { timeZone });")).toBe(0);
+		});
+
+		it("flags Intl.DateTimeFormat and toLocaleDate/TimeString with no zone", () => {
+			expect(hits("new Intl.DateTimeFormat(L, { day: 'numeric' });")).toBe(1);
+			expect(hits("new Intl.DateTimeFormat(L);")).toBe(1);
+			expect(hits("new globalThis.Intl.DateTimeFormat(L, {});")).toBe(1);
+			expect(hits("d.toLocaleDateString(L);")).toBe(1);
+			expect(hits("d.toLocaleTimeString(L, { hour: 'numeric' });")).toBe(1);
+			expect(hits("new Intl.DateTimeFormat(L, { timeZone: undefined });")).toBe(
+				1,
+			);
+		});
+
+		it("accepts them given a zone, and asking for the runtime's zone", () => {
+			expect(hits("new Intl.DateTimeFormat(L, { timeZone: tz });")).toBe(0);
+			expect(
+				hits("new Intl.DateTimeFormat(L, { day: 'numeric', timeZone });"),
+			).toBe(0);
+			expect(hits("d.toLocaleDateString(L, { timeZone: 'UTC' });")).toBe(0);
+			expect(
+				hits("const z = Intl.DateTimeFormat().resolvedOptions().timeZone;"),
+			).toBe(0);
+		});
+
+		it("follows the @/ alias for the same module", () => {
+			expect(
+				runtimeZoneOffenders(
+					"x.ts",
+					'import { formatShortDate } from "@/lib/format"; formatShortDate(d);',
+				),
+			).toHaveLength(1);
+		});
+
+		it("ignores a same-named function that is not the import", () => {
+			expect(
+				runtimeZoneOffenders(
+					"x.ts",
+					"function formatShortDate(d) { return d; } formatShortDate(d);",
+				),
+			).toEqual([]);
+		});
+
+		it("still misses what the header says it misses", () => {
+			// Pinned so the "What escapes it" list cannot claim coverage it lacks.
+			expect(hits("new Intl.DateTimeFormat(L, opts);")).toBe(0);
+			expect(hits("new Intl.DateTimeFormat(L, { ...opts });")).toBe(0);
+			expect(hits("d.toLocaleString(L);")).toBe(0);
+			expect(
+				runtimeZoneOffenders(
+					"x.ts",
+					"import * as f from '#/lib/format'; f.formatShortDate(d);",
+				),
+			).toEqual([]);
 		});
 	});
 });
