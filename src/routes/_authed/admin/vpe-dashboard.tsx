@@ -1,6 +1,8 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
+import { useEffect, useState } from "react";
 import { MemberAvatar } from "#/components/club/member-avatar";
+import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { PageContainer } from "#/components/page-container";
 import {
 	ATTENDANCE_LAPSE,
@@ -18,7 +20,12 @@ import {
 	formatMeetingDate,
 	formatShortDate,
 } from "#/lib/format";
-import { LEVEL_PROXIMITY, proximityDetail } from "#/lib/level-proximity";
+import {
+	LEVEL_PROXIMITY,
+	type LevelNudgeMeeting,
+	proximityDetail,
+	showsLevelNudge,
+} from "#/lib/level-proximity";
 import { formatTenure } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import {
@@ -51,6 +58,9 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 				proximity: [] as LevelProximityRow[],
 				timezone: undefined as string | undefined,
 				clubName: "",
+				clubId: "",
+				clubSlug: null as string | null,
+				nextMeeting: null as LevelNudgeMeeting | null,
 			};
 		}
 		const [rotation, overdue, lapse, pairings, proximity] = await Promise.all([
@@ -71,6 +81,11 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 			// booking at 23:30 club time read as the next day (#898).
 			timezone: proximity.timezone as string | undefined,
 			clubName: club.name,
+			// For the "Close to a level" nudge draft (#900): the next meeting's
+			// public page. Slim summary only, never a `join_url`.
+			clubId: club.clubId,
+			clubSlug: proximity.clubSlug,
+			nextMeeting: proximity.nextMeeting,
 		};
 	},
 	component: VpeDashboard,
@@ -87,8 +102,31 @@ function pathwaySummary(row: SpeakerRotationRow): string | null {
 }
 
 function VpeDashboard() {
-	const { rotation, overdue, lapse, pairings, proximity, timezone } =
-		Route.useLoaderData();
+	const {
+		rotation,
+		overdue,
+		lapse,
+		pairings,
+		proximity,
+		timezone,
+		clubId,
+		clubSlug,
+		nextMeeting: loadedNextMeeting,
+	} = Route.useLoaderData();
+	const nextMeeting = loadedNextMeeting ?? null;
+
+	// The next meeting's PUBLIC agenda, for the level nudge draft (#900). The
+	// origin exists only in the browser; `NudgeButtons` renders its links only
+	// after mount, so the server pass never carries the relative fallback.
+	const [origin, setOrigin] = useState("");
+	useEffect(() => setOrigin(window.location.origin), []);
+	const nudge: LevelNudgeContext | null = nextMeeting
+		? {
+				meeting: nextMeeting,
+				meetingDate: formatMeetingDate(nextMeeting.scheduledAt, timezone),
+				shareUrl: `${origin}/club/${encodeURIComponent(clubSlug ?? clubId ?? "")}/meeting/${encodeURIComponent(nextMeeting.urlKey)}`,
+			}
+		: null;
 
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
@@ -226,6 +264,7 @@ function VpeDashboard() {
 							key={`${r.memberId}:${r.pathName}:${r.kind}`}
 							row={r}
 							timezone={timezone}
+							nudge={nudge}
 						/>
 					))
 				)}
@@ -560,21 +599,35 @@ function RotationRow({
 /**
  * One member close to a level, or with a level awaiting approval (#898).
  *
- * `RotationRow`'s shape, with one difference that matters later: the `<Link>`
- * to the member page wraps only the avatar and the name, NOT the row. The nudge
- * follow-up adds buttons to the right-hand cell, and a button inside an anchor
+ * `RotationRow`'s shape, with one difference: the `<Link>` to the member page
+ * wraps only the avatar and the name, NOT the row, because the right-hand cell
+ * holds the level nudge's draft links (#900), and an anchor inside an anchor
  * is invalid markup that swallows the click.
  *
  * The Speaking marker mirrors `BookedPill` / `BookedLine` exactly, for the same
  * width reasons: a pill from `sm` up, a wrapping line below it.
  */
+/** What every row's level nudge shares: the one meeting it asks about. */
+interface LevelNudgeContext {
+	meeting: LevelNudgeMeeting;
+	/** Already formatted in the club's timezone. */
+	meetingDate: string;
+	/** The meeting's absolute public URL. */
+	shareUrl: string;
+}
+
 function ProximityRow({
 	row,
 	timezone,
+	nudge,
 }: {
 	row: LevelProximityRow;
 	timezone?: string;
+	nudge: LevelNudgeContext | null;
 }) {
+	// No control at all when it cannot apply, never a disabled one: the
+	// "Not scheduled" / "Speaking" badge beside it already tells the story.
+	const showNudge = nudge !== null && showsLevelNudge(row, nudge.meeting);
 	return (
 		<div
 			className={cn(
@@ -605,7 +658,7 @@ function ProximityRow({
 					</div>
 				) : null}
 			</div>
-			<div className="justify-self-end">
+			<div className="flex items-center gap-2 justify-self-end">
 				{row.upcomingSpeakerAt ? (
 					<span className="hidden shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-[var(--lagoon-deep)] sm:inline-block">
 						Speaking · {formatMeetingDate(row.upcomingSpeakerAt, timezone)}
@@ -615,6 +668,27 @@ function ProximityRow({
 						Not scheduled
 					</span>
 				)}
+				{/* OUTSIDE the member-page link above, so opening a draft never
+				    navigates to the profile (#900). Icon-only: the row's right
+				    cell is narrow at 375px, and the accessible names carry the
+				    words. GavelUp drafts; the VPE sends from their own app. */}
+				{showNudge && nudge ? (
+					<NudgeButtons
+						mode="level"
+						iconOnly
+						name={row.name}
+						preferredName={row.preferredName}
+						phone={row.phone}
+						email={row.email}
+						meetingDate={nudge.meetingDate}
+						shareUrl={nudge.shareUrl}
+						pathName={row.pathName}
+						level={row.level}
+						projectsLeft={row.projectsLeft}
+						projectNames={row.projectNames}
+						electivesToChoose={row.electivesToChoose}
+					/>
+				) : null}
 			</div>
 		</div>
 	);

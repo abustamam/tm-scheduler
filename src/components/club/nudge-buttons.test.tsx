@@ -149,6 +149,33 @@ describe("NudgeButtons", () => {
 		expect(href).not.toContain("undefined");
 	});
 
+	it("renders a level draft (#900) with the level, the project and no role", () => {
+		const { getByRole } = render(
+			<NudgeButtons
+				name="Maya Chen"
+				phone="+15551234567"
+				email="maya@example.com"
+				meetingDate="Tue, Oct 13"
+				shareUrl="https://club.example/m"
+				mode="level"
+				pathName="Presentation Mastery"
+				level={2}
+				projectsLeft={1}
+				projectNames={["Inspire Your Audience"]}
+				electivesToChoose={0}
+			/>,
+		);
+		for (const name of [/whatsapp/i, /email/i]) {
+			const href = decodeURIComponent(
+				getByRole("link", { name }).getAttribute("href") ?? "",
+			);
+			expect(href).toContain(
+				"Hi Maya, you're 1 project from finishing Presentation Mastery Level 2: Inspire Your Audience. Want to get it on the agenda for Tue, Oct 13? https://club.example/m",
+			);
+			expect(href).not.toContain("undefined");
+		}
+	});
+
 	it("keeps its labels by default, so the agenda and recruit picker are untouched", () => {
 		render(<NudgeButtons {...base} phone="14155552671" email="j@x.io" />);
 		const wa = screen.getByRole("link", { name: "WhatsApp" });

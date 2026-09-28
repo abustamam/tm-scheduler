@@ -851,3 +851,101 @@ describe("buildNudge invite mode (#899)", () => {
 		);
 	});
 });
+
+describe("buildNudge level mode (#900)", () => {
+	const level = {
+		mode: "level" as const,
+		name: "Maya Chen",
+		email: "maya@example.com",
+		phone: "+14155552671",
+		meetingDate: "Tue, Oct 13",
+		shareUrl: "https://gavelup.app/club/downtown/meeting/2026-10-13",
+		pathName: "Presentation Mastery",
+		level: 3,
+		projectsLeft: 1,
+		projectNames: ["Inspire Your Audience"],
+		electivesToChoose: 0,
+	};
+	const ask = `Want to get it on the agenda for Tue, Oct 13? ${level.shareUrl}`;
+
+	it("names the one project left, singular, and links the next meeting", () => {
+		const r = buildNudge(level);
+		expect(r.message).toBe(
+			`Hi Maya, you're 1 project from finishing Presentation Mastery Level 3: Inspire Your Audience. ${ask}`,
+		);
+		expect(r.whatsappUrl).toContain(encodeURIComponent(level.shareUrl));
+		expect(r.mailtoUrl).toContain(encodeURIComponent(level.shareUrl));
+	});
+
+	it("names two required projects, plural, joined with and", () => {
+		const r = buildNudge({
+			...level,
+			projectsLeft: 2,
+			projectNames: ["Inspire Your Audience", "Active Listening"],
+		});
+		expect(r.message).toBe(
+			`Hi Maya, you're 2 projects from finishing Presentation Mastery Level 3: Inspire Your Audience and Active Listening. ${ask}`,
+		);
+	});
+
+	it("names a required project and counts the elective when they add up", () => {
+		const r = buildNudge({
+			...level,
+			projectsLeft: 2,
+			electivesToChoose: 1,
+		});
+		expect(r.message).toBe(
+			`Hi Maya, you're 2 projects from finishing Presentation Mastery Level 3: Inspire Your Audience and 1 elective. ${ask}`,
+		);
+	});
+
+	it("counts electives alone when no required project is left, singular and plural", () => {
+		for (const [n, words] of [
+			[1, "1 elective"],
+			[2, "2 electives"],
+		] as const) {
+			const r = buildNudge({
+				...level,
+				projectsLeft: n,
+				projectNames: [],
+				electivesToChoose: n,
+			});
+			expect(r.message).toContain(`Level 3: ${words}. Want to get it`);
+		}
+	});
+
+	it("omits the names when they do not add up to the count", () => {
+		for (const over of [
+			{ projectsLeft: 2, projectNames: [], electivesToChoose: 0 },
+			{ projectsLeft: 2, electivesToChoose: 0 },
+			{ projectsLeft: 2, projectNames: [], electivesToChoose: 1 },
+		]) {
+			const r = buildNudge({ ...level, ...over });
+			expect(r.message).toBe(
+				`Hi Maya, you're 2 projects from finishing Presentation Mastery Level 3. ${ask}`,
+			);
+		}
+	});
+
+	it("labels the last level Path Completion, never Level 6", () => {
+		const r = buildNudge({ ...level, level: 6 });
+		expect(r.message).toContain("Presentation Mastery Path Completion:");
+		expect(r.message).not.toContain("Level 6");
+		expect(r.mailtoUrl).toContain(
+			`subject=${encodeURIComponent("1 project to Path Completion")}`,
+		);
+	});
+
+	it("uses the level subject, singular and plural", () => {
+		expect(buildNudge(level).mailtoUrl).toContain(
+			`subject=${encodeURIComponent("1 project to Level 3")}`,
+		);
+		expect(
+			buildNudge({ ...level, projectsLeft: 2, projectNames: [] }).mailtoUrl,
+		).toContain(`subject=${encodeURIComponent("2 projects to Level 3")}`);
+	});
+
+	it("asks about the agenda, never a speech", () => {
+		expect(buildNudge(level).message).not.toMatch(/speech/i);
+	});
+});

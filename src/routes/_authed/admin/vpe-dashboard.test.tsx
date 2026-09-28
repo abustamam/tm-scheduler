@@ -20,10 +20,19 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AttendanceLapseRow } from "#/lib/attendance-lapse";
-import type { LevelProximityRow } from "#/lib/level-proximity";
+import type {
+	LevelNudgeMeeting,
+	LevelProximityRow,
+} from "#/lib/level-proximity";
 import type { OverdueMemberRow } from "#/server/reporting-logic";
 
 vi.mock("#/server/reporting", () => ({
@@ -62,6 +71,7 @@ async function renderRoute(
 		overdue?: OverdueMemberRow[];
 		proximity?: LevelProximityRow[];
 		timezone?: string;
+		nextMeeting?: LevelNudgeMeeting | null;
 	} = {},
 ) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
@@ -73,6 +83,9 @@ async function renderRoute(
 		proximity: extra.proximity ?? [],
 		timezone: extra.timezone,
 		clubName: "Downtown Club",
+		clubId: "11111111-1111-4111-8111-111111111111",
+		clubSlug: "downtown",
+		nextMeeting: extra.nextMeeting ?? null,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 
@@ -84,6 +97,7 @@ async function renderRoute(
 	});
 	render(<RouterProvider router={router} />);
 	await waitFor(() => expect(router.state.status).toBe("idle"));
+	return router;
 }
 
 /** The "Stopped attending" stat tile's number. */
@@ -178,6 +192,9 @@ function proximityRow(
 		projectsLeft: 1,
 		projectNames: ["Inspire Your Audience"],
 		electivesToChoose: 0,
+		email: "maya@example.com",
+		phone: "+15551234567",
+		preferredName: null,
 		...over,
 	};
 }
@@ -309,5 +326,107 @@ describe("VPE dashboard — Close to a level (#898)", () => {
 		expect(screen.getByText(`Speaking ${lineDay}`)).toBeTruthy();
 		expect(screen.getByText(`Booked · ${pillDay}`)).toBeTruthy();
 		expect(screen.getByText(`Booked ${lineDay}`)).toBeTruthy();
+	});
+});
+
+describe("VPE dashboard — level nudge on Close to a level rows (#900)", () => {
+	const next: LevelNudgeMeeting = {
+		id: "55555555-5555-4555-8555-555555555555",
+		urlKey: "2026-10-13",
+		scheduledAt: new Date("2026-10-14T00:30:00Z"),
+		location: "Room 4",
+	};
+
+	it("offers the draft on a close row with contact, no speaker slot and a next meeting", async () => {
+		await renderRoute([], {
+			timezone: "America/Chicago",
+			nextMeeting: next,
+			proximity: [proximityRow({ preferredName: "Mimi" })],
+		});
+		const wa = await screen.findByLabelText(
+			"Message Maya Chen on WhatsApp, opens in a new tab",
+		);
+		const mail = screen.getByLabelText("Email Maya Chen");
+		const body = decodeURIComponent(mail.getAttribute("href") ?? "");
+		// The club's day, the preferred name, and the next meeting's public page.
+		expect(body).toContain(
+			"Hi Mimi, you're 1 project from finishing Presentation Mastery Level 2: Inspire Your Audience. Want to get it on the agenda for Tue, Oct 13?",
+		);
+		expect(body).toContain(
+			`${window.location.origin}/club/downtown/meeting/2026-10-13`,
+		);
+		expect(body).toContain("subject=1 project to Level 2");
+		expect(wa.getAttribute("href")).toContain("15551234567");
+	});
+
+	it.each([
+		["no phone or email", { phone: null, email: null }, next],
+		["a blank email and no phone", { phone: null, email: "   " }, next],
+		[
+			"a speaker slot already booked",
+			{ upcomingSpeakerAt: new Date("2026-10-14T00:30:00Z") },
+			next,
+		],
+		["no next meeting", {}, null],
+	] as const)("renders no control with %s", async (_label, over, meeting) => {
+		await renderRoute([], {
+			nextMeeting: meeting,
+			proximity: [proximityRow(over)],
+		});
+		// Mounted and settled: the row itself is there.
+		expect(screen.getByText("Maya Chen")).toBeTruthy();
+		await waitFor(() => {
+			expect(screen.queryByLabelText(/on WhatsApp/)).toBeNull();
+			expect(screen.queryByLabelText(/^Email /)).toBeNull();
+			// No control, not a disabled one or a "no contact" placeholder.
+			expect(screen.queryByText("No contact on file")).toBeNull();
+		});
+	});
+
+	it("never renders on an awaiting-approval row, whose action is in Base Camp", async () => {
+		await renderRoute([], {
+			nextMeeting: next,
+			proximity: [
+				proximityRow({
+					kind: "awaiting_approval",
+					projectsLeft: 0,
+					projectNames: [],
+				}),
+			],
+		});
+		expect(
+			screen.getByText(
+				"Presentation Mastery · Level 2 · All projects done, approve in Base Camp",
+			),
+		).toBeTruthy();
+		await waitFor(() => {
+			expect(screen.queryByLabelText(/on WhatsApp/)).toBeNull();
+			expect(screen.queryByLabelText(/^Email /)).toBeNull();
+		});
+	});
+
+	it("opens the draft without navigating to the member's profile", async () => {
+		const router = await renderRoute([], {
+			nextMeeting: next,
+			proximity: [proximityRow({ memberId: "abc" })],
+		});
+		const mail = await screen.findByLabelText("Email Maya Chen");
+		// Not nested in the member-page link.
+		expect(mail.closest('a[href^="/members"]')).toBeNull();
+		expect(screen.getByText("Maya Chen").closest("a")?.contains(mail)).toBe(
+			false,
+		);
+		// jsdom cannot follow a `mailto:`; stop the default AFTER React's
+		// handlers (they run at the root, below `document`), so a router
+		// `<Link>` wrapping the button would still get to navigate.
+		const stop = (e: Event) => e.preventDefault();
+		document.addEventListener("click", stop);
+		try {
+			fireEvent.click(mail);
+		} finally {
+			document.removeEventListener("click", stop);
+		}
+		await waitFor(() => expect(router.state.status).toBe("idle"));
+		expect(router.state.location.pathname).toBe("/");
 	});
 });

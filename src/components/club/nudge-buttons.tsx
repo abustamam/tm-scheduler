@@ -37,6 +37,16 @@ export type NudgeButtonsProps = NudgeButtonsBase &
 				location?: string | null;
 		  }
 		| {
+				/** A member close to a Pathways level (#900): "want to get it on
+				 *  the agenda?" Role-less; `shareUrl` is the next meeting's page. */
+				mode: "level";
+				pathName: string;
+				level: number;
+				projectsLeft: number;
+				projectNames: readonly string[];
+				electivesToChoose: number;
+		  }
+		| {
 				mode: "confirm" | "recruit";
 				roleName: string;
 				/** What the role still owes (#667), ALREADY filtered by the
@@ -131,7 +141,17 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 						meetingTime: props.meetingTime,
 						location: props.location,
 					}
-				: { ...common, mode: props.mode },
+				: props.mode === "level"
+					? {
+							...common,
+							mode: props.mode,
+							pathName: props.pathName,
+							level: props.level,
+							projectsLeft: props.projectsLeft,
+							projectNames: props.projectNames,
+							electivesToChoose: props.electivesToChoose,
+						}
+					: { ...common, mode: props.mode },
 	);
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {
