@@ -818,6 +818,22 @@ export const WOD_TALLY_ROWS = 5;
 const GRAMMARIAN_NOTE_LINES = 3;
 
 /**
+ * Printed lines the Word of the Day note may take on this sheet (#965 review).
+ *
+ * The note is user data capped at 500 characters, and unclamped it grows the
+ * box it sits in: with the tally below it, a 200-character note put the sheet
+ * on two pages with a logo, and 300 without one. Something on the page had to
+ * give way to a long note, and it is the note, not the tally or the ruled
+ * lines: those are where the Grammarian WRITES during the meeting, while the
+ * note is a reminder of a definition that prints in full on the Word of the
+ * Day poster. Two lines is roughly the first 180
+ * characters, which is a whole definition for any ordinary word, and past it
+ * the line ends in an ellipsis rather than silently dropping text. A third
+ * line spills the logo case — see `wodTally` for the rest of the budget.
+ */
+export const WOD_NOTE_MAX_LINES = 2;
+
+/**
  * The Word of the Day tally (#965): who used the word, split into prepared
  * speakers and Table Topics speakers.
  *
@@ -834,12 +850,17 @@ const GRAMMARIAN_NOTE_LINES = 3;
  * Side by side rather than stacked, because a stacked pair costs a second header
  * row and a second heading's worth of height on a sheet that has to stay one
  * page. Five rows each; the two free-text sections below gave up two ruled
- * lines apiece (five to three) to pay for it. Measured on the worst fill (an
- * 80-character club name, a long date, a logo and a long Word of the Day note):
- * five rows with three lines holds one page, six rows spills, and five rows
- * with four lines spills — so there is less than one tally row of slack.
- * Pinned by "every role sheet fits on one page"; re-measure before adding
- * anything, do not assume.
+ * lines apiece (five to three) to pay for it, and the Word of the Day note
+ * above is clamped to `WOD_NOTE_MAX_LINES`.
+ *
+ * Measured on the worst fill: an 80-character club name, a long date, a club
+ * logo, a word at `RENDER_CAPS.word` and a note at `RENDER_CAPS.note` (500).
+ * That holds one page. Six tally rows spills it, four note lines spills it,
+ * and a third line of Word of the Day note spills it from a 200-character
+ * note — so the slack is less than one printed line. The first measurement
+ * here used a 63-character note and missed that; the gate now carries notes at
+ * 200 and at the cap, with and without a logo. Pinned by "every role sheet
+ * fits on one page"; re-measure before adding anything, do not assume.
  */
 function wodTally(): ReactNode[] {
 	const half = (part: string, i: number) =>
@@ -889,7 +910,17 @@ function grammarian(fill?: RoleSheetFill): ReactNode {
 				),
 				h(
 					Text,
-					{ style: { marginTop: 12, fontSize: 9, color: C.soft } },
+					{
+						style: {
+							marginTop: 12,
+							fontSize: 9,
+							color: C.soft,
+							// STYLE properties, not props: react-pdf ignores them as props
+							// (see `metaField`). Pinned by the note-at-the-cap page fills.
+							maxLines: WOD_NOTE_MAX_LINES,
+							textOverflow: "ellipsis" as const,
+						},
+					},
 					fill?.wod?.note
 						? h(
 								Text,

@@ -42,6 +42,15 @@ const fill: RoleSheetFill = {
 	wod: { word: "ebullient", note: "cheerful and full of energy" },
 };
 
+/** Every string in a react-pdf element tree, in document order. */
+function textOf(node: unknown): string[] {
+	if (node == null || node === false) return [];
+	if (typeof node === "string") return [node];
+	if (Array.isArray(node)) return node.flatMap(textOf);
+	const el = node as { props?: { children?: unknown } };
+	return el.props ? textOf(el.props.children) : [];
+}
+
 async function isPdf(doc: ReturnType<typeof buildRoleSheetDoc>) {
 	const buf = await renderToBuffer(doc as Parameters<typeof renderToBuffer>[0]);
 	return {
@@ -84,15 +93,6 @@ describe("role-sheet layout (#311)", () => {
 // live layout said "Yellow", because every test asserted `standardTimingRows()`
 // DATA and none asserted the printed words. Walk the doc tree for them.
 describe("Timer sheet prints yellow, never amber (#507)", () => {
-	/** Every string in a react-pdf element tree. */
-	function textOf(node: unknown): string[] {
-		if (node == null || node === false) return [];
-		if (typeof node === "string") return [node];
-		if (Array.isArray(node)) return node.flatMap(textOf);
-		const el = node as { props?: { children?: unknown } };
-		return el.props ? textOf(el.props.children) : [];
-	}
-
 	const words = textOf(buildRoleSheetDoc("timer")).join(" | ");
 
 	it("uses yellow in the column header and the instruction", () => {
@@ -289,13 +289,6 @@ describe("a club's own Table Topics window on the Timer sheet (#443)", () => {
 
 	/** Every string in a react-pdf element tree. Duplicated from the #509 suite
 	 *  below rather than hoisted, so neither block can be deleted by the other. */
-	function textOf(node: unknown): string[] {
-		if (node == null || node === false) return [];
-		if (typeof node === "string") return [node];
-		if (Array.isArray(node)) return node.flatMap(textOf);
-		const el = node as { props?: { children?: unknown } };
-		return el.props ? textOf(el.props.children) : [];
-	}
 	const wordsOf = (key: RoleSheetKey, f?: RoleSheetFill) =>
 		textOf(buildRoleSheetDoc(key, f)).join(" | ");
 
@@ -414,13 +407,6 @@ describe("a club's own Table Topics window on the Timer sheet (#443)", () => {
 // that feed it.
 // ---------------------------------------------------------------------------
 describe("Table Topics eligibility on the Timer sheet (#720)", () => {
-	function textOf(node: unknown): string[] {
-		if (node == null || node === false) return [];
-		if (typeof node === "string") return [node];
-		if (Array.isArray(node)) return node.flatMap(textOf);
-		const el = node as { props?: { children?: unknown } };
-		return el.props ? textOf(el.props.children) : [];
-	}
 	const timerWords = (f?: RoleSheetFill) =>
 		textOf(buildRoleSheetDoc("timer", f)).join(" | ");
 
@@ -472,14 +458,6 @@ describe("Table Topics eligibility on the Timer sheet (#720)", () => {
 // for when five PDFs shipped saying "Amber" past a green suite.
 // ---------------------------------------------------------------------------
 describe("role sheets carry a spoken script (#509)", () => {
-	/** Every string in a react-pdf element tree. */
-	function textOf(node: unknown): string[] {
-		if (node == null || node === false) return [];
-		if (typeof node === "string") return [node];
-		if (Array.isArray(node)) return node.flatMap(textOf);
-		const el = node as { props?: { children?: unknown } };
-		return el.props ? textOf(el.props.children) : [];
-	}
 	const wordsOf = (key: RoleSheetKey, f?: RoleSheetFill) =>
 		textOf(buildRoleSheetDoc(key, f)).join(" | ");
 
@@ -682,13 +660,6 @@ describe("role sheets carry a spoken script (#509)", () => {
 });
 
 describe("the Ah-Counter is not handed the booked speakers (#509)", () => {
-	function textOf(node: unknown): string[] {
-		if (node == null || node === false) return [];
-		if (typeof node === "string") return [node];
-		if (Array.isArray(node)) return node.flatMap(textOf);
-		const el = node as { props?: { children?: unknown } };
-		return el.props ? textOf(el.props.children) : [];
-	}
 	const named = (key: RoleSheetKey) =>
 		textOf(buildRoleSheetDoc(key, fill)).join(" | ");
 
@@ -737,38 +708,70 @@ describe("the Ah-Counter is not handed the booked speakers (#509)", () => {
 });
 
 describe("the Grammarian tallies Word of the Day usage, Table Topics included (#965)", () => {
-	function textOf(node: unknown): string[] {
-		if (node == null || node === false) return [];
-		if (typeof node === "string") return [node];
-		if (Array.isArray(node)) return node.flatMap(textOf);
-		const el = node as { props?: { children?: unknown } };
-		return el.props ? textOf(el.props.children) : [];
-	}
 	const words = (key: RoleSheetKey, f?: RoleSheetFill) =>
 		textOf(buildRoleSheetDoc(key, f));
 
-	it("prints both halves of the tally, prepared speakers and Table Topics", () => {
+	type El = { props?: { children?: unknown } };
+	const kids = (el: El): El[] =>
+		([] as unknown[])
+			.concat(el.props?.children ?? [])
+			.filter((c): c is El => c != null && typeof c === "object");
+	function elementsOf(node: unknown): El[] {
+		if (node == null || typeof node !== "object") return [];
+		if (Array.isArray(node)) return node.flatMap(elementsOf);
+		const el = node as El;
+		return el.props ? [el, ...kids(el).flatMap(elementsOf)] : [];
+	}
+
+	/**
+	 * The rendered body rows under one half's heading, each as its cells' text.
+	 * Read off the element tree rather than off `WOD_TALLY_ROWS`, so the count
+	 * is what the sheet PRINTS: the half is a View whose first child is the
+	 * heading Text and whose second is `table()` — a header row, then the body.
+	 */
+	function bodyRows(part: string, f?: RoleSheetFill): string[][] {
+		const half = elementsOf(buildRoleSheetDoc("grammarian", f)).find((el) => {
+			const [first] = kids(el);
+			return first?.props?.children === part;
+		});
+		if (half == null) throw new Error(`no tally half headed "${part}"`);
+		const [, tbl] = kids(half);
+		const [, ...rows] = kids(tbl);
+		return rows.map((row) => kids(row).map((cell) => textOf(cell).join("")));
+	}
+
+	it("prints exactly the two halves, prepared speakers then Table Topics", () => {
+		expect(WOD_TALLY_PARTS).toEqual([
+			"Prepared speakers",
+			"Table Topics speakers",
+		]);
 		for (const f of [undefined, fill]) {
 			const text = words("grammarian", f);
 			expect(text).toContain("Word of the Day tally");
-			// Exactly the two parts, in print order.
 			expect(
 				text.filter((t) => (WOD_TALLY_PARTS as readonly string[]).includes(t)),
-			).toEqual([...WOD_TALLY_PARTS]);
-			expect(WOD_TALLY_PARTS).toEqual([
-				"Prepared speakers",
-				"Table Topics speakers",
-			]);
+			).toEqual(["Prepared speakers", "Table Topics speakers"]);
 		}
 	});
 
-	it("gives each half a name column and a tally column, with rows to write in", () => {
+	it("gives each half a name column and a tally column", () => {
 		const text = words("grammarian");
 		// One header row per half: each column label appears exactly twice.
 		for (const label of ["Who spoke", "Tally", "Total"]) {
 			expect(text.filter((t) => t === label)).toHaveLength(2);
 		}
-		expect(WOD_TALLY_ROWS).toBeGreaterThanOrEqual(4);
+	});
+
+	it("draws the same number of blank rows to write in, in each half", () => {
+		for (const part of WOD_TALLY_PARTS) {
+			for (const f of [undefined, fill]) {
+				const rows = bodyRows(part, f);
+				expect(rows).toHaveLength(WOD_TALLY_ROWS);
+				expect(rows.length).toBeGreaterThanOrEqual(4);
+				// Blank, three cells each: nothing pre-filled, no booked speaker.
+				for (const row of rows) expect(row).toEqual(["", "", ""]);
+			}
+		}
 	});
 
 	it("does not pre-fill the tally with the booked speakers", () => {
@@ -876,6 +879,50 @@ describe("every role sheet fits on one page", () => {
 					word: "ebullient",
 					note: "cheerful and full of energy, used well by three speakers today",
 				},
+			},
+		},
+		{
+			// A Word of the Day note at the length the write schema ACCEPTS
+			// (#965 review). The "everything at once" fills carry a ~63-character
+			// note, and the Grammarian's tally was measured against that: it
+			// fit, and a 250-character note — well inside what an officer may
+			// save — put the sheet on two pages. The cap, not a typical value,
+			// is the honest bound for user data.
+			label: "Word of the Day note at the cap, with a club logo",
+			fill: {
+				club: "C".repeat(80),
+				date: "Wednesday, July 22, 2026",
+				logoDataUri:
+					"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+				speakers: [],
+				wod: {
+					word: "w".repeat(RENDER_CAPS.word),
+					note: "word ".repeat(RENDER_CAPS.note / 5),
+				},
+			},
+		},
+		{
+			// A mid length as well as the cap: 200 characters already spilled the
+			// sheet with a logo before the note was clamped, so a gate only at
+			// 500 would not show where the budget actually runs out.
+			label: "Word of the Day note at 200 characters, with a club logo",
+			fill: {
+				...fill,
+				club: "C".repeat(80),
+				logoDataUri:
+					"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+				wod: { word: "ebullient", note: "word ".repeat(40) },
+			},
+		},
+		{
+			label: "Word of the Day note at 200 characters, no logo",
+			fill: { ...fill, wod: { word: "ebullient", note: "word ".repeat(40) } },
+		},
+		{
+			label: "Word of the Day note at the cap, no logo",
+			fill: {
+				...fill,
+				wod: { word: "ebullient", note: "word ".repeat(RENDER_CAPS.note / 5) },
 			},
 		},
 		{
@@ -1003,13 +1050,6 @@ describe("role-sheet header meta fields (#509)", () => {
 // pass for the wrong reason on a fast machine.
 // ---------------------------------------------------------------------------
 describe("render caps bound what a public request can make us lay out (#519)", () => {
-	function textOf(node: unknown): string[] {
-		if (node == null || node === false) return [];
-		if (typeof node === "string") return [node];
-		if (Array.isArray(node)) return node.flatMap(textOf);
-		const el = node as { props?: { children?: unknown } };
-		return el.props ? textOf(el.props.children) : [];
-	}
 	const hostile = (over: Partial<RoleSheetFill> = {}): RoleSheetFill => ({
 		club: "Harborlight Toastmasters",
 		date: "Jul 22",
@@ -1266,14 +1306,6 @@ describe("sheet scripts adopt the club's role names (#520)", () => {
 		vote_counter: "Teller",
 		toastmaster_of_the_day: "Host",
 	};
-
-	function textOf(node: unknown): string[] {
-		if (node == null || node === false) return [];
-		if (typeof node === "string") return [node];
-		if (Array.isArray(node)) return node.flatMap(textOf);
-		const el = node as { props?: { children?: unknown } };
-		return el.props ? textOf(el.props.children) : [];
-	}
 
 	/**
 	 * Everything a RENDERED sheet says, as one string.
