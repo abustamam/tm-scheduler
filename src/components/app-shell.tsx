@@ -333,7 +333,15 @@ export function AppShell({
 						/>
 					</header>
 
-					<section className="min-w-0 flex-1 overflow-x-hidden">
+					{/* `overflow-x-clip`, not `-hidden` (#999). Both clip a too-wide
+					    page at the column edge, but `hidden` also makes this box a
+					    scroll container with a `scrollLeft` of its own: focusing a
+					    control past the edge scrolled the whole page sideways with no
+					    scrollbar to undo it. `clip` has no scroll offset, and it does
+					    not force `overflow-y` to `auto`, so a `sticky` descendant (the
+					    meeting page's attendance rail) pins against the document scroll
+					    instead of against this box, which never scrolls. */}
+					<section className="min-w-0 flex-1 overflow-x-clip">
 						{children}
 					</section>
 					<footer className="border-t border-[var(--line)] px-7 py-3 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)]">

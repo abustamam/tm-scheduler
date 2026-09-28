@@ -304,7 +304,10 @@ function Roster() {
 						Every member of your club at a glance · Spring 2026 term
 					</p>
 				</div>
-				<div className="flex gap-2">
+				{/* `flex-wrap` (#999): an officer sees up to six actions here, about
+				    790px of buttons, and the column beside a 248px sidebar at 1024px is
+				    narrower than that. Unwrapped, "+ Add member" ran past the edge. */}
+				<div className="flex flex-wrap gap-2">
 					{/* A plain link to the export route (#915), shown only to whoever
 					    the route will serve (`servedAsAdmin`, above): the client half of
 					    the route's `requireClubRole(…, ["admin"])`, minus "View as this
