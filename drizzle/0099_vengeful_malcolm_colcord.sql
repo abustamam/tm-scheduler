@@ -2,9 +2,7 @@
 -- instead of inferred from "both voter ids NULL", which a removed member's
 -- identified vote also reads as (`voter_member_id` is ON DELETE SET NULL).
 --
--- `drizzle-kit generate` emits only the ADD COLUMN (IF NOT EXISTS is added by
--- hand, so `voting.integration.test.ts` can apply this file to a push-synced
--- database). The rest is HAND-WRITTEN.
+-- `drizzle-kit generate` emits only the ADD COLUMN. The rest is HAND-WRITTEN.
 --
 -- The trigger is what makes the column true of EVERY insert, not only the new
 -- code's. Migrations run at container start while the previous container is
@@ -19,7 +17,7 @@
 -- The backfill marks every row that reads anonymous today, which includes any
 -- removed member's vote orphaned before this ran: no worse than the behaviour
 -- it replaces, and only rows orphaned AFTER it are told apart.
-ALTER TABLE "meeting_votes" ADD COLUMN IF NOT EXISTS "anonymous" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "meeting_votes" ADD COLUMN "anonymous" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 CREATE OR REPLACE FUNCTION meeting_votes_derive_anonymous() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN

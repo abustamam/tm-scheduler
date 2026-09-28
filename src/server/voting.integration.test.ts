@@ -859,13 +859,22 @@ describe.skipIf(!hasTestDb)(
 
 		beforeAll(async () => {
 			// Push-synced test databases cannot see a trigger (CI migrates, so there it
-			// is already present). Applying the shipped file, which is idempotent,
-			// proves that file rather than a copy of it — as the 0087 suite does.
+			// is already present). Installing the shipped file's own trigger
+			// statements proves that file rather than a copy of it, as the 0087 suite
+			// does. ONLY those: the backfill is safe once, not on replay — against a
+			// database other suites share it would mark any vote they have orphaned
+			// by then as anonymous.
 			const migration = readFileSync(
 				resolve(__dirname, "../../drizzle/0099_vengeful_malcolm_colcord.sql"),
 				"utf8",
 			);
-			for (const statement of migration.split("--> statement-breakpoint")) {
+			const triggerStatements = migration
+				.split("--> statement-breakpoint")
+				.filter(
+					(s) => /\b(FUNCTION|TRIGGER)\b/.test(s) && !/^\s*UPDATE/m.test(s),
+				);
+			expect(triggerStatements).toHaveLength(3);
+			for (const statement of triggerStatements) {
 				await testDb.execute(sql.raw(statement));
 			}
 		});
