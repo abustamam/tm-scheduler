@@ -4,14 +4,22 @@ import { resolve } from "node:path";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FeedbackForUser } from "#/server/role-feedback";
+import type {
+	DeleteFeedbackResult,
+	FeedbackForUser,
+} from "#/server/role-feedback";
 import {
+	FEEDBACK_ALREADY_GONE_TEXT,
 	FEEDBACK_DELETE_CONFIRM,
 	FEEDBACK_EMPTY_TEXT,
+	FEEDBACK_LOAD_FAILED,
+	FEEDBACK_LOAD_FAILED_TEXT,
+	type FeedbackCardData,
 	FeedbackForYou,
 	feedbackOrEmpty,
-	NO_FEEDBACK,
 } from "./feedback-for-you";
+
+const NO_FEEDBACK: FeedbackForUser = { meetings: [], unseenCount: 0 };
 
 const ID = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -90,22 +98,24 @@ afterEach(() => {
 });
 
 function renderCard(
-	feedback: FeedbackForUser = FEEDBACK,
-	onDelete: (id: string) => Promise<unknown> = vi.fn(async () => ({
+	feedback: FeedbackCardData = FEEDBACK,
+	onDelete: (id: string) => Promise<DeleteFeedbackResult> = vi.fn(async () => ({
 		deleted: true,
 	})),
 ) {
 	const onSeen = vi.fn();
 	const onError = vi.fn();
+	const onNotice = vi.fn();
 	const utils = render(
 		<FeedbackForYou
 			feedback={feedback}
 			onDelete={onDelete}
 			onSeen={onSeen}
 			onError={onError}
+			onNotice={onNotice}
 		/>,
 	);
-	return { ...utils, onSeen, onError, onDelete };
+	return { ...utils, onSeen, onError, onNotice, onDelete };
 }
 
 describe("FeedbackForYou (#986)", () => {
@@ -150,7 +160,11 @@ describe("FeedbackForYou (#986)", () => {
 			})),
 		};
 		rerender(
-			<FeedbackForYou feedback={allSeen} onDelete={vi.fn()} onSeen={onSeen} />,
+			<FeedbackForYou
+				feedback={allSeen}
+				onDelete={vi.fn(async () => ({ deleted: true }))}
+				onSeen={onSeen}
+			/>,
 		);
 		expect(screen.getByTestId("feedback-new-badge").textContent).toBe("2 new");
 		expect(onSeen).toHaveBeenCalledTimes(1);
@@ -169,7 +183,7 @@ describe("FeedbackForYou (#986)", () => {
 	it("deletes a note only after the confirm, and removes it from the card", async () => {
 		const user = userEvent.setup();
 		const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
-		const { onDelete } = renderCard();
+		const { onDelete, onNotice } = renderCard();
 		const buttons = screen.getAllByRole("button", { name: "Delete this note" });
 		expect(buttons).toHaveLength(4);
 
@@ -186,15 +200,36 @@ describe("FeedbackForYou (#986)", () => {
 		expect(screen.queryByText("Timer · 1 note")).toBeNull();
 		// It was new, so the badge counts one fewer.
 		expect(screen.getByTestId("feedback-new-badge").textContent).toBe("1 new");
+		// A real delete is not announced as "already gone".
+		expect(onNotice).not.toHaveBeenCalled();
+	});
+
+	it("says so when the server had nothing to delete, instead of passing it off as deleted", async () => {
+		const user = userEvent.setup();
+		vi.spyOn(window, "confirm").mockReturnValue(true);
+		const { onNotice, onError } = renderCard(
+			FEEDBACK,
+			vi.fn(async () => ({ deleted: false })),
+		);
+		await user.click(
+			screen.getAllByRole("button", {
+				name: "Delete this note",
+			})[0] as HTMLElement,
+		);
+		expect(onNotice).toHaveBeenCalledTimes(1);
+		expect(onNotice).toHaveBeenCalledWith(FEEDBACK_ALREADY_GONE_TEXT);
+		expect(onError).not.toHaveBeenCalled();
+		// The list matches what the server now holds: the note is not there.
+		expect(screen.queryByText("Great opener")).toBeNull();
 	});
 
 	it("keeps a note on screen and reports the error when the delete fails", async () => {
 		const user = userEvent.setup();
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		const boom = new Error("nope");
-		const { onError } = renderCard(
+		const { onError, onNotice } = renderCard(
 			FEEDBACK,
-			vi.fn(async () => {
+			vi.fn(async (): Promise<DeleteFeedbackResult> => {
 				throw boom;
 			}),
 		);
@@ -204,12 +239,22 @@ describe("FeedbackForYou (#986)", () => {
 			})[0] as HTMLElement,
 		);
 		expect(onError).toHaveBeenCalledWith(boom);
+		expect(onNotice).not.toHaveBeenCalled();
 		expect(screen.getByText("Great opener")).toBeTruthy();
+	});
+
+	it("says it couldn't load, never 'No feedback yet', when the read failed", () => {
+		renderCard(FEEDBACK_LOAD_FAILED);
+		expect(screen.getByTestId("feedback-load-failed").textContent).toBe(
+			FEEDBACK_LOAD_FAILED_TEXT,
+		);
+		expect(screen.queryByText(FEEDBACK_EMPTY_TEXT)).toBeNull();
 	});
 
 	it("shows the empty state, and once every note is deleted", async () => {
 		renderCard(NO_FEEDBACK);
 		expect(screen.getByText(FEEDBACK_EMPTY_TEXT)).toBeTruthy();
+		expect(screen.queryByText(FEEDBACK_LOAD_FAILED_TEXT)).toBeNull();
 		cleanup();
 
 		const user = userEvent.setup();
@@ -225,18 +270,18 @@ describe("FeedbackForYou (#986)", () => {
 });
 
 describe("the dashboard's feedback read never blanks the page (#986)", () => {
-	it("a rejected read becomes the empty card", async () => {
+	it("a rejected read becomes the load-failed card", async () => {
 		await expect(
 			feedbackOrEmpty(() => Promise.reject(new Error("db down"))),
-		).resolves.toEqual(NO_FEEDBACK);
+		).resolves.toEqual({ meetings: [], unseenCount: 0, loadFailed: true });
 	});
 
-	it("a read that throws synchronously becomes the empty card", async () => {
+	it("a read that throws synchronously becomes the load-failed card", async () => {
 		await expect(
 			feedbackOrEmpty(() => {
 				throw new Error("boom");
 			}),
-		).resolves.toEqual(NO_FEEDBACK);
+		).resolves.toEqual(FEEDBACK_LOAD_FAILED);
 	});
 
 	it("a successful read passes through untouched", async () => {

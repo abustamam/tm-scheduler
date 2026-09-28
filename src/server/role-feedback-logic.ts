@@ -468,11 +468,22 @@ async function leaveFeedbackUnmapped(
 // The recipient's read, delete and mark-seen (#986)
 // ---------------------------------------------------------------------------
 
-/** The recipient's read window: the meeting's scheduled end has passed, on the
- *  server's clock. ONE predicate for the read and the mark-seen, so "seen"
- *  can never be set on a note the recipient could not have been shown. */
-const meetingHasEnded = (now: Date) =>
-	sql`${meetings.scheduledAt} + (${meetings.lengthMinutes} * interval '1 minute') <= ${now.toISOString()}::timestamptz`;
+/**
+ * THE statement of which notes a recipient may touch, shared by the read, the
+ * delete and the mark-seen so the three cannot drift: left for one of the
+ * caller's own memberships (`memberIds`, from the SESSION user), on a meeting
+ * whose scheduled end has passed on the server's clock. A note the recipient
+ * cannot read, they can neither delete nor mark seen — so no id a caller holds
+ * reaches a note before its meeting has ended.
+ *
+ * An `EXISTS` rather than a join so it reads the same inside a `DELETE` and an
+ * `UPDATE`, which have no join of their own.
+ */
+const recipientMayTouch = (memberIds: string[], now: Date) =>
+	and(
+		inArray(roleFeedbackNotes.recipientMemberId, memberIds),
+		sql`exists (select 1 from ${meetings} where ${meetings.id} = ${roleFeedbackNotes.meetingId} and ${meetings.scheduledAt} + (${meetings.lengthMinutes} * interval '1 minute') <= ${now.toISOString()}::timestamptz)`,
+	);
 
 export interface FeedbackNote {
 	id: string;
@@ -516,10 +527,7 @@ export async function loadFeedbackForUser(
 	const memberIds = await userMemberIds(userId);
 	if (memberIds.length === 0) return { meetings: [], unseenCount: 0 };
 
-	const conds = [
-		inArray(roleFeedbackNotes.recipientMemberId, memberIds),
-		meetingHasEnded(now),
-	];
+	const conds = [recipientMayTouch(memberIds, now)];
 	if (opts.meetingId) {
 		if (!UUID_RE.test(opts.meetingId)) return { meetings: [], unseenCount: 0 };
 		conds.push(eq(roleFeedbackNotes.meetingId, opts.meetingId));
@@ -588,16 +596,16 @@ export async function loadFeedbackForUser(
 }
 
 /** What `deleteMyFeedbackNote` answers. `deleted: false` is ONE result for a
- *  note that does not exist, one already deleted, and one that belongs to
- *  someone else: the caller cannot tell them apart, so a guessed id says
+ *  note that does not exist, one already deleted, one that belongs to someone
+ *  else, and one whose meeting has not ended: the caller cannot tell them apart, so a guessed id says
  *  nothing about whether a note exists. */
 export interface DeleteFeedbackResult {
 	deleted: boolean;
 }
 
 /**
- * Hard-delete one note, only when it was left for one of `userId`'s own
- * memberships (any club, archived included: a takedown stops new notes, not a
+ * Hard-delete one note, only when `recipientMayTouch` admits it: one of
+ * `userId`'s own memberships, on a meeting that has ended (any club, archived included: a takedown stops new notes, not a
  * person throwing away one they were given). Anything else deletes nothing and
  * answers exactly like a note that never existed.
  *
@@ -608,6 +616,7 @@ export interface DeleteFeedbackResult {
 export async function deleteMyFeedbackNote(
 	userId: string,
 	noteId: string,
+	now: Date = new Date(),
 ): Promise<DeleteFeedbackResult> {
 	if (!UUID_RE.test(noteId)) return { deleted: false };
 	const memberIds = await userMemberIds(userId);
@@ -615,10 +624,7 @@ export async function deleteMyFeedbackNote(
 	const gone = await db
 		.delete(roleFeedbackNotes)
 		.where(
-			and(
-				eq(roleFeedbackNotes.id, noteId),
-				inArray(roleFeedbackNotes.recipientMemberId, memberIds),
-			),
+			and(eq(roleFeedbackNotes.id, noteId), recipientMayTouch(memberIds, now)),
 		)
 		.returning({ id: roleFeedbackNotes.id });
 	return { deleted: gone.length > 0 };
@@ -640,23 +646,16 @@ export async function markMyFeedbackSeen(
 	if (ids.length === 0) return { marked: 0 };
 	const memberIds = await userMemberIds(userId);
 	if (memberIds.length === 0) return { marked: 0 };
-	// Readable means the meeting has ended; the predicate needs the meeting row.
-	const readable = db
-		.select({ id: roleFeedbackNotes.id })
-		.from(roleFeedbackNotes)
-		.innerJoin(meetings, eq(meetings.id, roleFeedbackNotes.meetingId))
-		.where(
-			and(
-				inArray(roleFeedbackNotes.id, ids),
-				inArray(roleFeedbackNotes.recipientMemberId, memberIds),
-				isNull(roleFeedbackNotes.seenAt),
-				meetingHasEnded(now),
-			),
-		);
 	const marked = await db
 		.update(roleFeedbackNotes)
 		.set({ seenAt: now })
-		.where(inArray(roleFeedbackNotes.id, readable))
+		.where(
+			and(
+				inArray(roleFeedbackNotes.id, ids),
+				isNull(roleFeedbackNotes.seenAt),
+				recipientMayTouch(memberIds, now),
+			),
+		)
 		.returning({ id: roleFeedbackNotes.id });
 	return { marked: marked.length };
 }

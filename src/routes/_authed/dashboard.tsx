@@ -242,7 +242,8 @@ function Dashboard() {
 					</div>
 
 					{/* Anonymous role feedback (#986). Deletes are held locally by the
-					    card rather than re-running the loader, and marking seen is
+					    card rather than re-running the loader; a delete that found
+					    nothing says so (`onNotice`). Marking seen is
 					    fire-and-forget: a failure only means the badge shows again
 					    next visit. */}
 					<FeedbackForYou
@@ -251,6 +252,7 @@ function Dashboard() {
 						onSeen={(noteIds) => {
 							markMyFeedbackSeen({ data: { noteIds } }).catch(() => {});
 						}}
+						onNotice={(message) => toast(message)}
 						onError={(err) =>
 							toast.error(
 								err instanceof Error

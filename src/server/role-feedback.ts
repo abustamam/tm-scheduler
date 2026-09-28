@@ -95,11 +95,18 @@ export const leaveFeedback = createServerFn({ method: "POST" })
 // ---------------------------------------------------------------------------
 
 /** The signed-in person's notes across every membership, for the dashboard's
- *  "Feedback for you" card. */
+ *  "Feedback for you" card. A failure is LOGGED here, on the server, before it
+ *  leaves: the dashboard turns it into a "couldn't load" card so the page still
+ *  renders, and without this line the cause would reach nobody. */
 export const listMyFeedback = createServerFn({ method: "GET" }).handler(
 	async (): Promise<FeedbackForUser> => {
 		const user = await requireUser();
-		return loadFeedbackForUser(user.id);
+		try {
+			return await loadFeedbackForUser(user.id);
+		} catch (err) {
+			console.error("[listMyFeedback] read failed", err);
+			throw err;
+		}
 	},
 );
 

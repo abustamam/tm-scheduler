@@ -1,7 +1,10 @@
 import { Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { formatMeetingDate } from "#/lib/format";
-import type { FeedbackForUser } from "#/server/role-feedback";
+import type {
+	DeleteFeedbackResult,
+	FeedbackForUser,
+} from "#/server/role-feedback";
 
 /**
  * "Feedback for you" on the dashboard (#986): the anonymous notes left for the
@@ -16,37 +19,51 @@ import type { FeedbackForUser } from "#/server/role-feedback";
 export const FEEDBACK_EMPTY_TEXT =
 	"No feedback yet. After your next meeting, anyone in the room can leave you a note.";
 export const FEEDBACK_DELETE_CONFIRM = "Delete this note? It can't be undone.";
+export const FEEDBACK_LOAD_FAILED_TEXT =
+	"Couldn't load your feedback right now. Refresh the page to try again.";
+export const FEEDBACK_ALREADY_GONE_TEXT =
+	"That note was already deleted, so it has been removed from the list.";
 
-/** What the card shows when the read fails: nothing, rather than a blank
- *  dashboard. */
-export const NO_FEEDBACK: FeedbackForUser = { meetings: [], unseenCount: 0 };
+/** The card's data: the read's result, or the read's failure, told apart. */
+export type FeedbackCardData = FeedbackForUser & { loadFailed?: boolean };
+
+/** What the card shows when the read fails: a "couldn't load" line, never
+ *  "No feedback yet", which would be false, and never a blank dashboard. */
+export const FEEDBACK_LOAD_FAILED: FeedbackCardData = {
+	meetings: [],
+	unseenCount: 0,
+	loadFailed: true,
+};
 
 /**
- * The dashboard loader's read, with its failure turned into {@link NO_FEEDBACK}.
+ * The dashboard loader's read, with its failure turned into
+ * {@link FEEDBACK_LOAD_FAILED}. `listMyFeedback` logs the cause on the server.
  * A love-note read going wrong must never take the rest of the dashboard with
  * it, and a loader that rejects is a blank page. Here rather than inline so it
  * can be exercised: the route cannot be.
  */
 export function feedbackOrEmpty(
 	read: () => Promise<FeedbackForUser>,
-): Promise<FeedbackForUser> {
+): Promise<FeedbackCardData> {
 	try {
-		return read().catch(() => NO_FEEDBACK);
+		return read().catch(() => FEEDBACK_LOAD_FAILED);
 	} catch {
-		return Promise.resolve(NO_FEEDBACK);
+		return Promise.resolve(FEEDBACK_LOAD_FAILED);
 	}
 }
 
 export interface FeedbackForYouProps {
-	feedback: FeedbackForUser;
-	/** Delete one note. Resolves when the server has answered; a rejection
-	 *  leaves the note on screen. */
-	onDelete: (noteId: string) => Promise<unknown>;
+	feedback: FeedbackCardData;
+	/** Delete one note. Resolves with the server's answer; a rejection leaves
+	 *  the note on screen. */
+	onDelete: (noteId: string) => Promise<DeleteFeedbackResult>;
 	/** Called ONCE, after the first render, with the ids of the notes that
 	 *  rendered as new. */
 	onSeen: (noteIds: string[]) => void;
 	/** Reported when a delete fails. */
 	onError?: (err: unknown) => void;
+	/** Told when a delete found nothing to delete. */
+	onNotice?: (message: string) => void;
 }
 
 export function FeedbackForYou({
@@ -54,6 +71,7 @@ export function FeedbackForYou({
 	onDelete,
 	onSeen,
 	onError,
+	onNotice,
 }: FeedbackForYouProps) {
 	// Which notes were NEW when the card first rendered, frozen for the visit.
 	// The loader can re-run mid-visit (any Pathways mark invalidates it), and by
@@ -106,8 +124,16 @@ export function FeedbackForYou({
 		if (!window.confirm(FEEDBACK_DELETE_CONFIRM)) return;
 		setBusyId(noteId);
 		try {
-			await onDelete(noteId);
+			const { deleted: didDelete } = await onDelete(noteId);
+			// `deleted: false` from the server means there was no such note of
+			// the caller's to delete. The card only ever lists the caller's own
+			// readable notes, so in practice it was already deleted (another tab
+			// or device). The honest outcome is the same list the server now
+			// holds — the note goes — but SAID, not passed off as this click's
+			// doing: a note silently vanishing on a delete that did nothing would
+			// read as success whatever had happened.
 			setDeleted((prev) => new Set(prev).add(noteId));
+			if (!didDelete) onNotice?.(FEEDBACK_ALREADY_GONE_TEXT);
 		} catch (err) {
 			onError?.(err);
 		} finally {
@@ -133,7 +159,14 @@ export function FeedbackForYou({
 					</span>
 				) : null}
 			</div>
-			{meetings.length === 0 ? (
+			{feedback.loadFailed ? (
+				<p
+					data-testid="feedback-load-failed"
+					className="border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]"
+				>
+					{FEEDBACK_LOAD_FAILED_TEXT}
+				</p>
+			) : meetings.length === 0 ? (
 				<p className="border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]">
 					{FEEDBACK_EMPTY_TEXT}
 				</p>

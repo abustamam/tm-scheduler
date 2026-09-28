@@ -188,6 +188,43 @@ describe.skipIf(!hasTestDb)("the recipient's feedback (#986)", () => {
 			});
 		});
 
+		it("does not delete the caller's own note before its meeting has ended", async () => {
+			const s = await endedMeeting();
+			const [live] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: s.clubId,
+					scheduledAt: new Date(Date.now() - 10 * MIN),
+					lengthMinutes: 90,
+				})
+				.returning({ id: meetings.id });
+			const early = await note(
+				s,
+				s.memberId,
+				"mid-meeting",
+				live?.id as string,
+			);
+			const ended = await note(s, s.memberId, "after the end");
+
+			// The same person, the same call: the ended meeting's note goes, the
+			// live one does not — and answers like a note that never existed.
+			expect(await deleteMyFeedbackNote(s.memberUserId, early)).toEqual({
+				deleted: false,
+			});
+			expect(await exists(early)).toBe(true);
+			expect(await deleteMyFeedbackNote(s.memberUserId, ended)).toEqual({
+				deleted: true,
+			});
+			// And once that meeting HAS ended, on the server's clock, it can go.
+			expect(
+				await deleteMyFeedbackNote(
+					s.memberUserId,
+					early,
+					new Date(Date.now() + 2 * 60 * MIN),
+				),
+			).toEqual({ deleted: true });
+		});
+
 		it("answers not-found for a malformed id", async () => {
 			const s = await endedMeeting();
 			expect(await deleteMyFeedbackNote(s.memberUserId, "nope")).toEqual({
@@ -309,6 +346,13 @@ describe("the recipient server fns take the recipient from the session (#986)", 
 		expect(b).toContain(`method: "${method}"`);
 		expect(b).toMatch(/const user = await requireUser\(\);/);
 		expect(b).toContain(call);
+	});
+
+	it("listMyFeedback logs a failed read on the server before it leaves", () => {
+		const b = body("listMyFeedback");
+		expect(b).toMatch(
+			/try \{\s*return await loadFeedbackForUser\(user\.id\);\s*\} catch \(err\) \{\s*console\.error\([^)]*err\);\s*throw err;\s*\}/,
+		);
 	});
 
 	it("no recipient input field: the inputs carry only a note id, or note ids", () => {
