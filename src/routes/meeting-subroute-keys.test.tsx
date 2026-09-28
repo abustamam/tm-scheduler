@@ -494,6 +494,8 @@ describe("feedback resolves a date key (#984)", () => {
 			state: "closed" as const,
 		},
 		targets: [],
+		others: [],
+		roleOptions: [],
 	});
 
 	it("feedback: sends the date key to the reader verbatim", async () => {

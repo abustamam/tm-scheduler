@@ -304,8 +304,12 @@ const WIRINGS: Wiring[] = [
 		file: "server/role-feedback.ts",
 		fn: "getFeedbackTargetsPublic",
 		mustCall: "loadFeedbackTargetsPublic",
+		// #1021 widened it: besides the agenda's holders (now with their member
+		// ids), it lists every ACTIVE member of the club as id, name and
+		// preferredName, the same set `loadPublicClubRoster` already serves
+		// session-less (that one also includes nothing inactive).
 		leaks:
-			"the names of every member who held a role at the meeting, beside the role they held",
+			"the names and member ids of every member who held a role at the meeting, beside the role they held, and every active member of the club (id, name, preferredName), the set loadPublicClubRoster already serves",
 	},
 ];
 

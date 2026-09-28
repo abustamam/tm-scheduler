@@ -209,6 +209,39 @@ describe.skipIf(!hasTestDb)(
 			expect(await countNotes()).toBe(1);
 		});
 
+		/**
+		 * #1021 — the same gate on the second input shape, which NAMES its
+		 * recipient rather than pointing at an agenda row. It resolves through a
+		 * different path (`resolvePersonNote`), so the gate is proven on it too:
+		 * a "General" note for an active member who holds no role at all.
+		 */
+		it("leaveFeedbackLogic, to a named person — no note about a member collected", async () => {
+			const s = await seedLiveClub();
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 10 * 60_000) })
+				.where(eq(meetings.id, s.meetingId));
+			const note = {
+				meetingId: s.meetingId,
+				recipientMemberId: s.adminMemberId,
+				role: { kind: "general" as const },
+				wentWell: "Warm welcome",
+			};
+			const countNotes = async () =>
+				(
+					await testDb
+						.select({ id: roleFeedbackNotes.id })
+						.from(roleFeedbackNotes)
+						.where(eq(roleFeedbackNotes.meetingId, s.meetingId))
+				).length;
+			expect(await leaveFeedbackLogic(note)).toEqual({ ok: true });
+			expect(await countNotes()).toBe(1);
+
+			await archive(s.clubId);
+			await expect(leaveFeedbackLogic(note)).rejects.toThrow(ARCHIVED);
+			expect(await countNotes()).toBe(1);
+		});
+
 		/** The remaining five write nothing new but still mutate a taken-down club. */
 		it("castVote — refused", async () => {
 			const s = await seedLiveClub();
