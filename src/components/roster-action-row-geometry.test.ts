@@ -72,13 +72,16 @@ function classContaining(file: string, fragment: string): string {
 	return hits[0] as string;
 }
 
-/** The first string literal containing `fragment` (a `cn(…)` argument). */
+/** The unique string literal containing `fragment` (a `cn(…)` argument). */
 function literalContaining(file: string, fragment: string): string {
-	const hit = [...readSource(file).matchAll(/"([^"\n]*)"/g)]
+	const hits = [...readSource(file).matchAll(/"([^"\n]*)"/g)]
 		.map((m) => m[1] as string)
-		.find((c) => c.includes(fragment));
-	expect(hit, `\`${fragment}\` not found in ${file}`).toBeDefined();
-	return hit ?? "";
+		.filter((c) => c.includes(fragment));
+	expect(
+		hits,
+		`\`${fragment}\` should match exactly one string literal in ${file}`,
+	).toHaveLength(1);
+	return hits[0] as string;
 }
 
 const hasChrome = findChrome() !== null;
@@ -100,6 +103,13 @@ describe("roster action row geometry harness availability", () => {
  * with it open.
  */
 const VIEWPORT = { width: 1024, height: 768 };
+
+/**
+ * The rest of the range #999 names, 768 to 1440. 768 is below `lg`, so the
+ * sidebar is a drawer and the column is the whole window, but the page's own
+ * padding still leaves it narrower than the unwrapped row.
+ */
+const OTHER_WIDTHS = [768, 1440] as const;
 
 type Probe = {
 	sectionLeft: number;
@@ -126,7 +136,11 @@ type Probe = {
 	stickyTopAfterScroll: number;
 };
 
-function probe(bodyHtml: string, css: string): Probe {
+function probe(
+	bodyHtml: string,
+	css: string,
+	viewport: { width: number; height: number } = VIEWPORT,
+): Probe {
 	const script = `<script>
 	(function () {
 		function fail(why) { document.title = "ERROR:" + why; }
@@ -169,7 +183,7 @@ function probe(bodyHtml: string, css: string): Probe {
 		bodyHtml,
 		css,
 		script,
-		viewport: VIEWPORT,
+		viewport,
 		tmpPrefix: "roster-action-row-",
 	});
 	if (!title.includes("sectionRight=")) {
@@ -195,7 +209,7 @@ function probe(bodyHtml: string, css: string): Probe {
 }
 
 describe.skipIf(!hasChrome)(
-	"the roster at 1024px with the sidebar open",
+	"the roster header and the shell column, 768 to 1440px",
 	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
 		let frame = "";
@@ -250,6 +264,7 @@ describe.skipIf(!hasChrome)(
 		let css = "";
 		let fixed: Probe;
 		let preFix: Probe;
+		const atWidth = new Map<number, Probe>();
 
 		beforeAll(async () => {
 			frame = classContaining(SHELL, "flex min-h-svh w-full");
@@ -270,6 +285,12 @@ describe.skipIf(!hasChrome)(
 			css = await buildAppCss(candidatesIn(all));
 			fixed = probe(fixture(section, actions), css);
 			preFix = probe(fixture(preFixSection, preFixActions), css);
+			for (const width of OTHER_WIDTHS) {
+				atWidth.set(
+					width,
+					probe(fixture(section, actions), css, { width, height: 768 }),
+				);
+			}
 		});
 
 		it("lays the column out where the sidebar leaves it", () => {
@@ -284,6 +305,17 @@ describe.skipIf(!hasChrome)(
 		it("wraps the action row so every action ends inside the column", () => {
 			expect(fixed.clippedButtons).toBe(0);
 			expect(fixed.addMemberRight).toBeLessThanOrEqual(fixed.sectionRight);
+		});
+
+		it.each(
+			OTHER_WIDTHS,
+		)("keeps every action inside the column at %ipx too", (width) => {
+			const p = atWidth.get(width);
+			expect(p, `no probe at ${width}px`).toBeDefined();
+			if (!p) return;
+			expect(p.clippedButtons).toBe(0);
+			expect(p.addMemberRight).toBeLessThanOrEqual(p.sectionRight);
+			expect(p.documentOverflowsX).toBe(false);
 		});
 
 		it("gives the content column no horizontal scroll offset for focus to move", () => {
