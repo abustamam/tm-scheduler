@@ -6,13 +6,13 @@
  * the guard pins that RULE. Nothing pinned the other half: that the toolbar
  * actually carries the class. A ship audit deleted `className="no-print"` from
  * `PrintToolbar` and all eight page-count assertions still passed, because the
- * toolbar is `position: fixed` and contributes no flow height — so removing it
- * from the printed page changes no page count while very much changing what
+ * toolbar then was `position: fixed` and contributed no flow height — so removing
+ * it from the printed page changed no page count while very much changing what
  * comes out of the printer.
  *
  * That asymmetry got worse with this extraction, not better: one component now
- * owns that class for all three print routes, so a single deletion would put a
- * floating toolbar on every printed agenda, poster and role sheet at once.
+ * owns that class for all four print routes, so a single deletion would put the
+ * toolbar on every printed agenda, flyer, poster and role sheet at once.
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -53,17 +53,19 @@ describe("PrintToolbar", () => {
 		expect(PRINT_PAGE_CSS).toContain(`.${cls}`);
 	});
 
-	it("floats above the sheet without taking part in its layout", () => {
-		// Why the page count is blind to it, recorded so the next reader does not
-		// assume a passing count covers the toolbar.
+	it("sits in the document flow, so it can never cover the sheet (#998)", () => {
+		// It used to be `position: fixed` over the sheet, which hid the agenda's
+		// header on a phone. In the flow it reserves its own row instead. The
+		// page count is still blind to it: print hides it via `no-print`.
+		// `print-toolbar-geometry.test.tsx` measures the overlap in Chrome.
 		const { container } = render(
 			<PrintToolbar>
 				<PrintButton />
 			</PrintToolbar>,
 		);
-		expect((container.firstElementChild as HTMLElement).style.position).toBe(
-			"fixed",
-		);
+		const toolbar = container.firstElementChild as HTMLElement;
+		expect(toolbar.style.position).not.toBe("fixed");
+		expect(toolbar.className).toContain("no-print");
 	});
 });
 

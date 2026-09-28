@@ -41,12 +41,9 @@
  * Print is not measured here: the rule is `@media screen`, and the print gates
  * (`print-page-count`, `print-density`, `ballot-qr-print-fit`) run unchanged.
  */
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { type FrameCase, measureInFrames } from "#/test/iframe-batch";
 import {
 	MCF_EXPLAINERS,
 	MCF_HEADER,
@@ -55,7 +52,6 @@ import {
 	MCF_ROWS,
 } from "#/test/mcf-agenda-fixture";
 import {
-	CHROME_ENV,
 	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
 	printableDocument,
@@ -170,7 +166,7 @@ type Frame = {
 	sheets: Sheet[];
 };
 
-type Case = { id: string; html: string; width: number };
+type Case = FrameCase;
 
 const caseId = (surface: Surface, width: number, fixed: boolean) =>
 	`${surface}-${width}-${fixed ? "fixed" : "control"}`;
@@ -244,74 +240,8 @@ addEventListener("load", function () {
 </script>`;
 
 /** Every case from ONE Chrome launch — a launch is the harness's whole cost. */
-function measureAll(cases: readonly Case[]): Map<string, Frame> {
-	const chrome = findChrome();
-	if (!chrome) throw new Error("No Chrome");
-	const dir = mkdtempSync(join(tmpdir(), "print-screen-fit-"));
-	try {
-		const frames = cases
-			.map((c) => {
-				const file = `${c.id}.html`;
-				writeFileSync(
-					join(dir, file),
-					c.html.replace("</body>", `${FRAME_PROBE}</body>`),
-					"utf8",
-				);
-				return `<iframe src="${file}#${c.id}" style="display:block;border:0;width:${c.width}px;height:${FRAME_H}px"></iframe>`;
-			})
-			.join("");
-		// The listener is registered in <head>, BEFORE any frame exists. At the
-		// end of <body> it raced the frames: under a parallel run a frame could
-		// load and post before the parser reached the script, the message was
-		// lost, and the page never left "pending" (seen 1 run in 3).
-		const outer = `<!doctype html><html><head><title>pending</title>
-<script>
-var got = {}, want = ${cases.length};
-addEventListener("message", function (e) {
-	got[e.data.id] = e.data.frame;
-	if (Object.keys(got).length === want) {
-		document.getElementById("out").textContent = JSON.stringify(got);
-		document.title = "done";
-	}
-});
-</script></head><body style="margin:0">
-<pre id="out"></pre>${frames}
-</body></html>`;
-		const outerPath = join(dir, "outer.html");
-		writeFileSync(outerPath, outer, "utf8");
-		const dom = execFileSync(
-			chrome,
-			[
-				"--headless",
-				"--disable-gpu",
-				"--no-sandbox",
-				`--user-data-dir=${dir}`,
-				"--disable-extensions",
-				"--host-resolver-rules=MAP * ~NOTFOUND",
-				"--window-size=1400,900",
-				// Generous: an idle page fast-forwards virtual time, so a big budget
-				// costs nothing real and only matters if ~40 frames load slowly.
-				"--virtual-time-budget=30000",
-				"--dump-dom",
-				`file://${outerPath}`,
-			],
-			{ encoding: "utf8", stdio: "pipe", timeout: 20_000, env: CHROME_ENV },
-		);
-		const title = dom.match(/<title>([^<]*)<\/title>/)?.[1];
-		const json = dom.match(/<pre id="out">([^<]*)<\/pre>/)?.[1];
-		if (title !== "done" || !json) {
-			throw new Error(
-				`Not every frame reported back; Chrome's title was "${title}".`,
-			);
-		}
-		const parsed = JSON.parse(
-			json.replace(/&quot;/g, '"').replace(/&amp;/g, "&"),
-		) as Record<string, Frame>;
-		return new Map(Object.entries(parsed));
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-}
+const measureAll = (cases: readonly Case[]) =>
+	measureInFrames<Frame>(cases, { probe: FRAME_PROBE, frameHeight: FRAME_H });
 
 describe("print screen-fit harness availability", () => {
 	it("has a browser to measure with when running in CI", () => {
