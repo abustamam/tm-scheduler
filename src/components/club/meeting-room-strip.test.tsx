@@ -47,11 +47,13 @@ interface HarnessProps {
 	visible: boolean;
 	assigneeIds: string[];
 	wordOfTheDay: string | null;
+	feedbackOpen: boolean;
 }
 const DEFAULTS: HarnessProps = {
 	visible: true,
 	assigneeIds: [],
 	wordOfTheDay: null,
+	feedbackOpen: false,
 };
 
 /** Set from inside the harness so a test can change props mid-visit. */
@@ -76,6 +78,7 @@ function Wired({ initial }: { initial: HarnessProps }) {
 			member={member}
 			holdsRole={member !== null && props.assigneeIds.includes(member.id)}
 			wordOfTheDay={props.wordOfTheDay}
+			feedbackOpen={props.feedbackOpen}
 			promptIdentity={promptIdentity}
 		/>
 	);
@@ -268,5 +271,31 @@ describe("MeetingRoomStrip — the vote poll (#913 AC4)", () => {
 		expect(screen.queryByTestId("meeting-room-strip")).toBeNull();
 		await act(() => vi.advanceTimersByTimeAsync(ROOM_VOTE_POLL_MS * 3));
 		expect(getBallot).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("MeetingRoomStrip — Leave feedback (#984)", () => {
+	it("shows Leave feedback, before Today's agenda, only while the window is open", async () => {
+		await renderStrip({ feedbackOpen: true });
+		expect(labels()).toEqual([
+			"Sign the guest book",
+			"Leave feedback",
+			"Today's agenda",
+		]);
+		expect(href("Leave feedback")).toBe(
+			`/club/${CLUB}/meeting/${KEY}/feedback`,
+		);
+	});
+
+	it("shows it to an identified member too", async () => {
+		await renderStrip({ feedbackOpen: true }, PAT);
+		expect(labels()).toEqual(["Leave feedback", "Today's agenda"]);
+	});
+
+	it("hides it when the window is not open, and brings it back when it opens", async () => {
+		await renderStrip({ feedbackOpen: false });
+		expect(labels()).not.toContain("Leave feedback");
+		act(() => setHarness({ feedbackOpen: true }));
+		await waitFor(() => expect(labels()).toContain("Leave feedback"));
 	});
 });

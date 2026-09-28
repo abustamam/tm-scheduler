@@ -4,6 +4,7 @@ import {
 	BookOpenCheck,
 	ClipboardList,
 	ListChecks,
+	MessageSquareHeart,
 	Sparkles,
 	Vote,
 } from "lucide-react";
@@ -39,7 +40,8 @@ const BIG = "h-auto min-h-12 w-full justify-start text-base";
  * | 1 | Vote, while ≥1 category is open         | Vote, same rule     |
  * | 2 | What I'm doing today, if they hold a slot | Sign the guest book |
  * | 3 | Word of the Day, if set                 | Word of the Day     |
- * | 4 | Today's agenda (in-page anchor)         | Today's agenda      |
+ * | 4 | Leave feedback, while `feedbackOpen`    | Leave feedback      |
+ * | 5 | Today's agenda (in-page anchor)         | Today's agenda      |
  *
  * plus "Member? Pick your name" under the strip when there is no identity,
  * which opens the page's existing identity picker; the pick lands in the shared
@@ -66,6 +68,7 @@ export function MeetingRoomStrip({
 	member,
 	holdsRole,
 	wordOfTheDay,
+	feedbackOpen,
 	promptIdentity,
 }: {
 	visible: boolean;
@@ -79,6 +82,9 @@ export function MeetingRoomStrip({
 	/** Whether `member` holds any slot in this meeting. Ignored without one. */
 	holdsRole: boolean;
 	wordOfTheDay: string | null;
+	/** The anonymous-feedback window is open (#984): `feedbackWindow(...)
+	 *  .canWrite`, computed by the route off its frozen clock. */
+	feedbackOpen: boolean;
 	promptIdentity: () => void;
 }) {
 	const ballot = useQuery({
@@ -138,6 +144,17 @@ export function MeetingRoomStrip({
 						<Link to="/club/$clubId/meeting/$meetingId/word" params={params}>
 							<Sparkles className="size-5" aria-hidden />
 							Word of the Day
+						</Link>
+					</Button>
+				) : null}
+				{feedbackOpen ? (
+					<Button asChild size="lg" variant="outline" className={BIG}>
+						<Link
+							to="/club/$clubId/meeting/$meetingId/feedback"
+							params={params}
+						>
+							<MessageSquareHeart className="size-5" aria-hidden />
+							Leave feedback
 						</Link>
 					</Button>
 				) : null}
