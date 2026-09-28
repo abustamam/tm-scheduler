@@ -42,6 +42,7 @@ import {
 	notifications,
 	officerTerms,
 	officerTrainingRecords,
+	roleFeedbackNotes,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
@@ -530,6 +531,51 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(row?.invitedByMemberId).toBe(keeperId);
 	});
 
+	it("keeps the absorbed membership's feedback notes, on the keeper (#984)", async () => {
+		// The FK cascades, so without the re-point the merge DELETES these notes —
+		// a recipient loses what people wrote them. The drift-guard only proves
+		// the FK is declared handled; this proves the move runs.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		const notes = await testDb
+			.insert(roleFeedbackNotes)
+			.values([
+				{
+					clubId: seed.clubId,
+					meetingId: seed.meetingId,
+					recipientMemberId: absorbedId,
+					roleLabel: "Timer",
+					wentWell: "Clear signals",
+				},
+				{
+					clubId: seed.clubId,
+					meetingId: seed.meetingId,
+					recipientMemberId: keeperId,
+					roleLabel: "Grammarian",
+					tryNext: "Announce the word earlier",
+				},
+			])
+			.returning({ id: roleFeedbackNotes.id });
+
+		await collapse(keeperId, absorbedId);
+
+		const rows = await testDb
+			.select({
+				id: roleFeedbackNotes.id,
+				recipientMemberId: roleFeedbackNotes.recipientMemberId,
+			})
+			.from(roleFeedbackNotes)
+			.where(
+				inArray(
+					roleFeedbackNotes.id,
+					notes.map((n) => n.id),
+				),
+			);
+		// Both rows survive (a field check alone passes when the row is gone).
+		expect(rows).toHaveLength(2);
+		expect(rows.every((r) => r.recipientMemberId === keeperId)).toBe(true);
+	});
+
 	it("re-points set-null FKs + activity_log (actor + jsonb detail) to the keeper", async () => {
 		const keeperId = await addMembership({ name: "Keeper" });
 		const absorbedId = await addMembership({ name: "Absorbed" });
@@ -701,6 +747,10 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			// table's unique is (guest, meeting), which carries no member, so it
 			// re-points plainly.
 			"guest_invites.invited_by_member_id",
+			// #984 — anonymous role feedback. ON DELETE CASCADE with no
+			// member-unique index, so it re-points plainly; without it a merge
+			// would delete every note the absorbed membership received.
+			"role_feedback_notes.recipient_member_id",
 			// #723 — candidate disqualification. `candidate_member_id` sits inside a
 			// unique (meeting, category, candidate), so it re-points via the
 			// delete-then-update pattern; `disqualified_by_member_id` is nullable

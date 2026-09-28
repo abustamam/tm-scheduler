@@ -66,6 +66,11 @@ vi.mock("#/server/voting", () => ({
 vi.mock("#/server/members", () => ({ listMembers: vi.fn() }));
 // The flyer route's one reader (#931).
 vi.mock("#/server/promo", () => ({ getPublicFlyer: vi.fn() }));
+// The feedback page's reader and write (#984).
+vi.mock("#/server/role-feedback", () => ({
+	getFeedbackTargetsPublic: vi.fn(),
+	leaveFeedback: vi.fn(),
+}));
 // Reached only through the components the routes render, none of which this
 // file mounts past its not-found page. Empty, so a call would fail loudly.
 vi.mock("#/server/attendance-plan", () => ({}));
@@ -95,12 +100,14 @@ import {
 import { resolveMeetingKeyForUser } from "#/server/meeting-key";
 import { getMeetingByKey, getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicFlyer } from "#/server/promo";
+import { getFeedbackTargetsPublic } from "#/server/role-feedback";
 import { Route as AgendaRoute } from "./club.$clubId.meeting.$meetingId_.agenda";
 import { Route as MeRoute } from "./club.$clubId.meeting.$meetingId_.me";
 import { Route as ThemeRoute } from "./club.$clubId.meeting.$meetingId_.me_.theme";
 import { Route as TimerRoute } from "./club.$clubId.meeting.$meetingId_.me_.timer";
 import { Route as MeTopicsRoute } from "./club.$clubId.meeting.$meetingId_.me_.topics";
 import { Route as MeWordRoute } from "./club.$clubId.meeting.$meetingId_.me_.word";
+import { Route as FeedbackRoute } from "./club.$clubId_.meeting.$meetingId.feedback";
 import { Route as FlyerRoute } from "./club.$clubId_.meeting.$meetingId.flyer";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
 import { Route as PrintRoute } from "./club.$clubId_.meeting.$meetingId.print";
@@ -179,6 +186,7 @@ const NOT_FOUND = () => new Error("Meeting not found.");
 
 const AGENDA_FILE = "club.$clubId.meeting.$meetingId_.agenda.tsx";
 const FLYER_FILE = "club.$clubId_.meeting.$meetingId.flyer.tsx";
+const FEEDBACK_FILE = "club.$clubId_.meeting.$meetingId.feedback.tsx";
 
 /**
  * Every sub-route that reads the meeting through `getPublicMeetingByKey` /
@@ -297,6 +305,7 @@ const KEY_READER_ROUTES: {
 const NOT_FOUND_ROUTES: { name: string; file: string; route: AnyRoute }[] = [
 	{ name: "agenda", file: AGENDA_FILE, route: AgendaRoute },
 	{ name: "flyer", file: FLYER_FILE, route: FlyerRoute },
+	{ name: "feedback", file: FEEDBACK_FILE, route: FeedbackRoute },
 	...KEY_READER_ROUTES.filter((r) => !r.name.includes("(")).map(
 		({ name, file, route }) => ({ name, file, route }),
 	),
@@ -322,6 +331,7 @@ describe("every meeting sub-route is covered here (#877)", () => {
 	const resolved = new Set([
 		AGENDA_FILE,
 		FLYER_FILE,
+		FEEDBACK_FILE,
 		...KEY_READER_ROUTES.map((r) => r.file),
 	]);
 	const notFound = new Set(NOT_FOUND_ROUTES.map((r) => r.file));
@@ -457,6 +467,59 @@ describe("flyer resolves a date key (#931)", () => {
 		const boom = new Error("connection terminated");
 		vi.mocked(getPublicFlyer).mockRejectedValue(boom);
 		await expect(runLoader(FlyerRoute, DATE_KEY)).rejects.toBe(boom);
+	});
+});
+
+/**
+ * The anonymous feedback page (#984) reads through its own public reader,
+ * whose shape is not the meeting detail, so it has its own block like the
+ * flyer. No cross-club case here: `loadFeedbackTargetsPublic` resolves the key
+ * through `resolvePublicMeetingKey`, which scopes it to the club and answers
+ * null for another club's meeting (`role-feedback.integration.test.ts` covers
+ * the unknown-key null against a real database).
+ */
+describe("feedback resolves a date key (#984)", () => {
+	const targets = () => ({
+		meeting: {
+			id: MEETING_ID,
+			date: "2026-09-26T18:45:00Z",
+			title: null,
+			timezone: "UTC",
+		},
+		window: {
+			opensAt: "2026-09-26T18:45:00Z",
+			endsAt: "2026-09-26T19:45:00Z",
+			closesAt: "2026-09-29T19:45:00Z",
+			canWrite: false,
+			recipientsCanRead: true,
+		},
+		targets: [],
+	});
+
+	it("feedback: sends the date key to the reader verbatim", async () => {
+		mockClub();
+		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(targets());
+		await runLoader(FeedbackRoute, DATE_KEY);
+		expect(getFeedbackTargetsPublic).toHaveBeenCalledWith({
+			data: { clubId: CLUB_ID, meetingKey: DATE_KEY },
+		});
+	});
+
+	it('feedback: no meeting (null or "Meeting not found.") or a garbage key is notFound()', async () => {
+		mockClub();
+		for (const key of [DATE_KEY, "not-a-meeting"]) {
+			vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
+			await expect(runLoader(FeedbackRoute, key)).rejects.toSatisfy(isNotFound);
+			vi.mocked(getFeedbackTargetsPublic).mockRejectedValue(NOT_FOUND());
+			await expect(runLoader(FeedbackRoute, key)).rejects.toSatisfy(isNotFound);
+		}
+	});
+
+	it("feedback: any other failure still propagates", async () => {
+		mockClub();
+		const boom = new Error("connection terminated");
+		vi.mocked(getFeedbackTargetsPublic).mockRejectedValue(boom);
+		await expect(runLoader(FeedbackRoute, DATE_KEY)).rejects.toBe(boom);
 	});
 });
 

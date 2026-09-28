@@ -31,6 +31,7 @@ import {
 	officerTerms,
 	officerTrainingRecords,
 	projectCompletionMarks,
+	roleFeedbackNotes,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
@@ -247,6 +248,18 @@ export async function collapseMemberships(
 		.update(guestInvites)
 		.set({ invitedByMemberId: keeperId })
 		.where(eq(guestInvites.invitedByMemberId, absorbedId));
+
+	// 8e. role_feedback_notes.recipient_member_id (#984) — anonymous notes left
+	//    for this member about a role they served. ON DELETE CASCADE, so without
+	//    this the absorbed membership's delete would destroy every note it was
+	//    given. No unique index carries the member (the per-recipient cap is
+	//    enforced at write time, not by a constraint), so a plain re-point
+	//    cannot collide, and a merged member may exceed 20 on one meeting —
+	//    those notes were all genuinely left.
+	await tx
+		.update(roleFeedbackNotes)
+		.set({ recipientMemberId: keeperId })
+		.where(eq(roleFeedbackNotes.recipientMemberId, absorbedId));
 
 	// 9. project_completion_marks.marked_by_member_id — attribution only, and
 	//    nullable. No member-unique constraint (the mark's uniqueness is on

@@ -12,6 +12,7 @@ import { Textarea } from "#/components/ui/textarea";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { FEEDBACK_TEXT_MAX } from "#/lib/feedback-window";
 import { formatMeetingDate } from "#/lib/format";
+import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	type FeedbackTarget,
 	getFeedbackTargetsPublic,
@@ -32,8 +33,13 @@ export const Route = createFileRoute(
 		const club = await resolveClubOrRedirect(params.clubId, location);
 		// null for an archived club, an unknown key or a cancelled meeting — all
 		// the same not-found to a visitor.
+		// The reader answers null rather than throwing, but a "Meeting not
+		// found." is translated too, like every sibling sub-route (#877).
 		const data = await getFeedbackTargetsPublic({
 			data: { clubId: club.id, meetingKey: params.meetingId },
+		}).catch((err) => {
+			if (isMeetingNotFoundError(err)) throw notFound();
+			throw err;
 		});
 		if (!data) throw notFound();
 		const state: FeedbackPageState = data.window.canWrite

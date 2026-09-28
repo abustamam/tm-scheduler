@@ -17,7 +17,9 @@ export type {
 
 const targetsInput = z.object({
 	clubId: z.string().uuid(),
-	meetingKey: z.string().min(1).max(100),
+	// No max: the key comes off the URL, and an over-long or garbage key must
+	// answer null (not-found) from `parseMeetingKey`, not a validation 500.
+	meetingKey: z.string().min(1),
 });
 
 /**
