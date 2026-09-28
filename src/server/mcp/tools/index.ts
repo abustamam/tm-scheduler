@@ -18,6 +18,7 @@ import { assignRolesTool } from "./assign-roles";
 import { findPeopleTool } from "./find-people";
 import { getAgendaTool } from "./get-agenda";
 import { getLineupBlastTool } from "./get-lineup-blast";
+import { getMyFeedbackTool } from "./get-my-feedback";
 import { listMeetingsTool } from "./list-meetings";
 import { recordGuestBookTool } from "./record-guest-book";
 import { upsertAgendasTool } from "./upsert-agendas";
@@ -28,6 +29,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	listMeetingsTool,
 	getAgendaTool,
 	getLineupBlastTool,
+	getMyFeedbackTool,
 	findPeopleTool,
 	recordGuestBookTool,
 	assignRolesTool,

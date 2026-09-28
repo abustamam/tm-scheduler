@@ -194,6 +194,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"find_people",
 			"get_agenda",
 			"get_lineup_blast",
+			"get_my_feedback",
 			"list_meetings",
 			"record_guest_book",
 			"upsert_agendas",
@@ -496,6 +497,9 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			// a guest row, so it cannot leak one today; it is here because the sweep
 			// is derived, and the day the draft grows a holder's contact this fails.
 			toolsCall("get_lineup_blast", { meetingId: seed.meetingId }),
+			// #987. It returns only the caller's own role-feedback notes and reads
+			// no guest row; in the sweep because the sweep is derived.
+			toolsCall("get_my_feedback"),
 			// #808. It reads no guest and writes no guest, so on the face of it
 			// it cannot leak one — which is exactly the reasoning that would keep
 			// it out of a HAND-WRITTEN sweep and is why the sweep is derived. It
