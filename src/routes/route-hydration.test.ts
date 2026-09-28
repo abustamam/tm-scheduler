@@ -283,9 +283,6 @@ const EXCLUDED: Record<string, string> = {
  * read clean on a runner whose two ICUs agree without anything being fixed.
  */
 const EXPECTED_MISMATCH: Record<string, { why: string; stable?: false }> = {
-	"/activity": {
-		why: "activity.tsx dayKey / line 161: formatMeetingDate with no zone, so the day heading is the runtime's day",
-	},
 	"/members/$id": {
 		why: "members.$id.tsx:341 speech-log badge: formatDayMonth(l.scheduledAt) with no zone, the runtime's day number",
 	},
