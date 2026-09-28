@@ -60,9 +60,12 @@ export function createIpLimiter(opts: {
 	};
 }
 
-/** Notes one address may send per minute. A room of phones each sends a
- *  handful; a script sending hundreds is what this stops. */
-export const FEEDBACK_IP_LIMIT = 5;
+/** Notes one address may send per minute. Set by the maintainer at 60, not
+ *  lower: a whole room on the venue's Wi-Fi shares ONE public address and
+ *  sends its notes together when the meeting ends, so a small number would
+ *  throttle real members. What this still stops is a script sending hundreds;
+ *  the per-recipient and per-meeting caps are the real bound. */
+export const FEEDBACK_IP_LIMIT = 60;
 export const FEEDBACK_IP_WINDOW_MS = 60_000;
 
 /** The process's one limiter for `leaveFeedback`. */

@@ -504,7 +504,7 @@ the nouns in `src/db/schema.ts`.
   members can still read the ones they were given. **Caps**: 20 notes per recipient per meeting and
   300 per meeting, counted under the club write lock so concurrent writers cannot overshoot, and
   checked first on an unlocked read so a refusal never queues on that lock. In front of the lock, a
-  process-local speed bump of 5 notes a minute per client address (`x-real-ip`), held in memory as a
+  process-local speed bump of 60 notes a minute per client address (a room on venue Wi-Fi shares one) (`x-real-ip`), held in memory as a
   salted hash, never stored or logged. Officers
   never see notes; the recipient reads (and, from part 2, deletes) their own. **Removal runbook**:
   v1 has no superadmin UI. On request, a superadmin verifies the note WITH THE RECIPIENT, then runs

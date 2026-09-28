@@ -52,6 +52,9 @@ const {
 } = await import("#/server/role-feedback-logic");
 const { lockClubForWrite } = await import("#/server/club-write-lock");
 const { FEEDBACK_IP_LIMIT } = await import("#/server/feedback-rate-limit");
+const { FEEDBACK_PER_MEETING_CAP, FEEDBACK_PER_RECIPIENT_CAP } = await import(
+	"#/lib/feedback-window"
+);
 const { loadMeetingSlots } = await import("#/server/meeting-slots-logic");
 
 const MIN = 60_000;
@@ -668,17 +671,40 @@ describe.skipIf(!hasTestDb)(
 			expect(ms).toBeLessThan(2000);
 		});
 
-		it("limits one address to a handful of notes a minute; another address is unaffected", async () => {
+		it("limits one address to FEEDBACK_IP_LIMIT notes a minute; the next is refused, another address is not", async () => {
 			const s = await liveMeeting();
-			const ip = `198.51.100.${Math.floor(Math.random() * 250)}-${randomUUID()}`;
+			// Enough recipients that the per-recipient cap never fires first, and
+			// a limit the per-meeting cap cannot mask — both derived, no counts.
+			const sends = FEEDBACK_IP_LIMIT + 2;
+			expect(sends).toBeLessThanOrEqual(FEEDBACK_PER_MEETING_CAP);
+			const recipients = Math.ceil(sends / FEEDBACK_PER_RECIPIENT_CAP);
+			const speakers: string[] = [];
+			for (let r = 0; r < recipients; r++) {
+				const memberId = await addMember(s.clubId, `Speaker ${r}`);
+				const [tt] = await testDb
+					.insert(tableTopicsSpeakers)
+					.values({ meetingId: s.meetingId, memberId, sortOrder: r })
+					.returning({ id: tableTopicsSpeakers.id });
+				speakers.push(tt?.id as string);
+			}
+			const note = (i: number) => ({
+				meetingId: s.meetingId,
+				target: {
+					kind: "tableTopics" as const,
+					id: speakers[i % speakers.length] as string,
+				},
+				wentWell: `n${i}`,
+			});
+
+			const ip = `198.51.100.1-${randomUUID()}`;
 			for (let i = 0; i < FEEDBACK_IP_LIMIT; i++) {
-				await leaveFeedbackLogic(timerNote(s, `n${i}`), undefined, ip);
+				await leaveFeedbackLogic(note(i), undefined, ip);
 			}
 			await expect(
-				leaveFeedbackLogic(timerNote(s, "one more"), undefined, ip),
+				leaveFeedbackLogic(note(FEEDBACK_IP_LIMIT), undefined, ip),
 			).rejects.toThrow(FEEDBACK_RATE_LIMIT_MESSAGE);
 			await leaveFeedbackLogic(
-				timerNote(s, "other phone"),
+				note(FEEDBACK_IP_LIMIT + 1),
 				undefined,
 				`other-${randomUUID()}`,
 			);
