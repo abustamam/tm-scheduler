@@ -22,6 +22,10 @@ export const YELLOW = "#d99a2e";
 export const RED = "#c8482f";
 export const OPEN = "#a8761a";
 export const MINT = "#f3faf5";
+/** The app's light `--sand` (the shadcn `--accent` fill in light theme). */
+export const SAND = "#e7f0e8";
+/** The app's light `--line` (hairline borders and inputs in light theme). */
+export const LINE = "rgba(23, 58, 64, 0.14)";
 export const SEAFOAM = "#8fd6d0";
 export const SERIF = "'Fraunces', Georgia, serif";
 export const SANS = "'Manrope', ui-sans-serif, system-ui, sans-serif";
@@ -303,29 +307,30 @@ const PRINT_TOOLBAR_ROW_STYLE: React.CSSProperties = {
  * which is correct on the themed surfaces it also renders on. Literals, not
  * `var(--sea-ink)`: under `.dark` those names already hold the dark values.
  */
-const PRINT_TOOLBAR_STYLE: React.CSSProperties & Record<`--${string}`, string> =
-	{
-		display: "flex",
-		flexWrap: "wrap",
-		justifyContent: "flex-end",
-		gap: 8,
-		alignItems: "center",
-		marginLeft: "auto",
-		minWidth: 0,
-		background: "#fff",
-		borderRadius: 10,
-		padding: 6,
-		boxShadow: "0 6px 20px rgba(23,58,64,.18)",
-		colorScheme: "light",
-		color: INK,
-		"--background": MINT,
-		"--foreground": INK,
-		"--accent": "#e7f0e8",
-		"--accent-foreground": INK,
-		"--border": "rgba(23, 58, 64, 0.14)",
-		"--input": "rgba(23, 58, 64, 0.14)",
-		"--ring": LAGOON,
-	};
+type ThemedStyle = React.CSSProperties & Record<`--${string}`, string>;
+
+const PRINT_TOOLBAR_STYLE: ThemedStyle = {
+	display: "flex",
+	flexWrap: "wrap",
+	justifyContent: "flex-end",
+	gap: 8,
+	alignItems: "center",
+	marginLeft: "auto",
+	minWidth: 0,
+	background: "#fff",
+	borderRadius: 10,
+	padding: 6,
+	boxShadow: "0 6px 20px rgba(23,58,64,.18)",
+	colorScheme: "light",
+	color: INK,
+	"--background": MINT,
+	"--foreground": INK,
+	"--accent": SAND,
+	"--accent-foreground": INK,
+	"--border": LINE,
+	"--input": LINE,
+	"--ring": LAGOON,
+};
 
 /** The screen-only toolbar. `no-print` is what `PRINT_PAGE_CSS` hides. */
 export function PrintToolbar({

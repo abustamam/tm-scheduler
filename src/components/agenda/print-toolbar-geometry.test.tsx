@@ -16,9 +16,14 @@
  *
  * Every surface that renders `PrintToolbar` is covered: the four agenda
  * layouts, the flyer's Letter poster, the Word of the Day poster and the club
- * role sheet (whose back link now shares the toolbar's row). The markup between
- * the real components is synthetic: the routes cannot be mounted without a
- * router and a database, so the tab links copy the routes' inline styles.
+ * role sheet (whose back link now shares the toolbar's row). The routes cannot
+ * be mounted without a router and a database, so the markup between the real
+ * components is synthetic, but every control's style is the one the route
+ * ships, imported from `print-toolbar-styles.ts`.
+ *
+ * It also pins the #964 promise that a sheet renders as it did apart from the
+ * toolbar's offset: at every width the sheets' boxes match the control's
+ * (whose toolbar is out of the flow) moved down by exactly the toolbar row.
  *
  * The contrast half needs the app's REAL stylesheet, because the defect lived
  * there: the Share button is a shadcn outline `Button` whose ink comes from the
@@ -29,10 +34,8 @@
  * (which normalises the `color-mix()` values Tailwind emits). The pre-fix
  * control strips the card's pinned palette with `!important` rules.
  */
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compile } from "@tailwindcss/node";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -43,6 +46,7 @@ import {
 	DEFAULT_PROMO_TEMPLATE,
 	promoValues,
 } from "#/lib/promo-template";
+import { type FrameCase, measureInFrames } from "#/test/iframe-batch";
 import {
 	MCF_EXPLAINERS,
 	MCF_HEADER,
@@ -51,7 +55,6 @@ import {
 	MCF_ROWS,
 } from "#/test/mcf-agenda-fixture";
 import {
-	CHROME_ENV,
 	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
 	printableDocument,
@@ -60,13 +63,17 @@ import { ClubRoleSheet, type RoleSheetEntry } from "./club-role-sheet";
 import { type AgendaLayout, MeetingAgendaPrint } from "./meeting-agenda-print";
 import { MeetingFlyerLetter } from "./meeting-flyer";
 import {
-	INK,
-	MUTED,
 	PRINT_PAGE_CSS,
 	PrintButton,
 	PrintToolbar,
 	printPageCss,
 } from "./print-theme";
+import {
+	AGENDA_TAB_ACTIVE_STYLE,
+	AGENDA_TAB_STYLE,
+	flyerTabStyle,
+	ROLES_BACK_LINK_STYLE,
+} from "./print-toolbar-styles";
 import { WordOfTheDayPoster } from "./word-of-the-day-poster";
 
 const hasChrome = findChrome() !== null;
@@ -74,7 +81,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const STYLES = resolve(HERE, "../../styles.css");
 
 const PHONE_W = 375;
-const WIDTHS = [PHONE_W, 820, 1280] as const;
+/** A phone, both portrait-iPad widths #964 pinned, and a desktop. */
+const WIDTHS = [PHONE_W, 820, 848, 1280] as const;
 const FRAME_H = 812;
 const AA = 4.5;
 
@@ -89,28 +97,6 @@ const SURFACES: readonly Surface[] = [...LAYOUTS, "flyer", "word", "roles"];
 type Theme = "light" | "dark";
 
 // ---------------------------------------------------------------- fixtures
-
-/** The agenda route's tab styles (`club.$clubId_.meeting.$meetingId.print.tsx`). */
-const agendaTab = (active: boolean): React.CSSProperties => ({
-	padding: "6px 12px",
-	borderRadius: 7,
-	fontSize: 13,
-	fontWeight: 600,
-	color: active ? "#fff" : MUTED,
-	background: active ? INK : undefined,
-	textDecoration: "none",
-});
-
-/** The flyer route's tab styles (`club.$clubId_.meeting.$meetingId.flyer.tsx`). */
-const flyerTab = (active: boolean): React.CSSProperties => ({
-	padding: "6px 12px",
-	borderRadius: 7,
-	fontSize: 13,
-	fontWeight: 700,
-	textDecoration: "none",
-	color: active ? "#fff" : "#173a40",
-	background: active ? "#173a40" : "transparent",
-});
 
 const LONG_CLUB = "Downtown Evening Speakers and Storytellers of the Valley";
 
@@ -178,10 +164,10 @@ function surfaceBody(surface: Surface): { css: string; body: string } {
 			body: renderToStaticMarkup(
 				<div>
 					<PrintToolbar>
-						<a href="#letter" style={flyerTab(true)}>
+						<a href="#letter" style={flyerTabStyle(true)}>
 							Poster
 						</a>
-						<a href="#square" style={flyerTab(false)}>
+						<a href="#square" style={flyerTabStyle(false)}>
 							Square image
 						</a>
 						<PrintButton />
@@ -210,21 +196,7 @@ function surfaceBody(surface: Surface): { css: string; body: string } {
 							<a
 								href="#club"
 								className="roles-back"
-								style={{
-									display: "block",
-									minWidth: 0,
-									maxWidth: "min(48vw, 320px)",
-									overflow: "hidden",
-									textOverflow: "ellipsis",
-									whiteSpace: "nowrap",
-									background: "#fff",
-									borderRadius: 10,
-									padding: "9px 14px",
-									color: INK,
-									fontSize: 13,
-									fontWeight: 700,
-									textDecoration: "none",
-								}}
+								style={ROLES_BACK_LINK_STYLE}
 							>
 								← {LONG_CLUB}
 							</a>
@@ -250,7 +222,14 @@ function surfaceBody(surface: Surface): { css: string; body: string } {
 				<PrintToolbar>
 					<div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
 						{LAYOUTS.map((l) => (
-							<a key={l} href={`#${l}`} style={agendaTab(l === surface)}>
+							<a
+								key={l}
+								href={`#${l}`}
+								style={{
+									...AGENDA_TAB_STYLE,
+									...(l === surface ? AGENDA_TAB_ACTIVE_STYLE : null),
+								}}
+							>
 								{l[0].toUpperCase() + l.slice(1)}
 							</a>
 						))}
@@ -312,7 +291,13 @@ const SHARE_TOKENS = [
 	"--ring",
 ] as const;
 
+type Box = { left: number; top: number; width: number; height: number };
+
 type Frame = {
+	/** The toolbar row's height at scroll top: what it pushes the sheet down by. */
+	rowHeight: number;
+	/** Every sheet's box at scroll top, in document px. */
+	sheets: Box[];
 	clientWidth: number;
 	scrollWidth: number;
 	sheetTextNodes: number;
@@ -322,10 +307,11 @@ type Frame = {
 	shareTokens: Record<string, string>;
 };
 
-type Case = { id: string; html: string; width: number };
+type Case = FrameCase;
 
-const caseId = (s: Surface, w: number, theme: Theme, fixed: boolean) =>
-	`${s}-${w}-${theme}-${fixed ? "fixed" : "control"}`;
+/** `repaired` is the shipped toolbar; otherwise the pre-fix CONTROL. */
+const caseId = (s: Surface, w: number, theme: Theme, repaired: boolean) =>
+	`${s}-${w}-${theme}-${repaired ? "repaired" : "control"}`;
 
 /**
  * Inside each frame: at three scroll positions, which sheet text nodes touch
@@ -396,7 +382,12 @@ addEventListener("load", function () {
 			tokens[t] = px().join(",");
 		});
 	}
+	var sheets = Array.prototype.map.call(document.querySelectorAll(".agenda-page"), function (p) {
+		var r = p.getBoundingClientRect();
+		return { left: r.left, top: r.top, width: r.width, height: r.height };
+	});
 	parent.postMessage({ id: location.hash.slice(1), frame: {
+		rowHeight: row.getBoundingClientRect().height, sheets: sheets,
 		clientWidth: d.clientWidth, scrollWidth: d.scrollWidth,
 		sheetTextNodes: texts.length, overlaps: overlaps, controls: controls,
 		shareTokens: tokens
@@ -430,15 +421,19 @@ async function buildCases(): Promise<Case[]> {
 		if (!b) throw new Error(s);
 		for (const width of WIDTHS) {
 			for (const theme of ["light", "dark"] as const) {
-				for (const fixed of [true, false]) {
+				for (const repaired of [true, false]) {
 					const doc = printableDocument(
-						`${css}\n${b.css}${fixed ? "" : CONTROL_CSS}`,
+						`${css}\n${b.css}${repaired ? "" : CONTROL_CSS}`,
 						b.body,
 					).replace(
 						"<html>",
 						theme === "dark" ? '<html class="dark">' : "<html>",
 					);
-					cases.push({ id: caseId(s, width, theme, fixed), html: doc, width });
+					cases.push({
+						id: caseId(s, width, theme, repaired),
+						html: doc,
+						width,
+					});
 				}
 			}
 		}
@@ -446,74 +441,13 @@ async function buildCases(): Promise<Case[]> {
 	return cases;
 }
 
-/** Every case from ONE Chrome launch, as `print-screen-fit-geometry` does. */
-function measureAll(cases: readonly Case[]): Map<string, Frame> {
-	const chrome = findChrome();
-	if (!chrome) throw new Error("No Chrome");
-	const dir = mkdtempSync(join(tmpdir(), "print-toolbar-"));
-	try {
-		const frames = cases
-			.map((c) => {
-				const file = `${c.id}.html`;
-				writeFileSync(
-					join(dir, file),
-					c.html.replace("</body>", `${FRAME_PROBE}</body>`),
-					"utf8",
-				);
-				return `<iframe src="${file}#${c.id}" style="display:block;border:0;width:${c.width}px;height:${FRAME_H}px"></iframe>`;
-			})
-			.join("");
-		// Listener in <head>, before any frame exists (see print-screen-fit-geometry).
-		const outer = `<!doctype html><html><head><title>pending</title>
-<script>
-var got = {}, want = ${cases.length};
-addEventListener("message", function (e) {
-	got[e.data.id] = e.data.frame;
-	if (Object.keys(got).length === want) {
-		document.getElementById("out").textContent = JSON.stringify(got);
-		document.title = "done";
-	}
-});
-</script></head><body style="margin:0">
-<pre id="out"></pre>${frames}
-</body></html>`;
-		const outerPath = join(dir, "outer.html");
-		writeFileSync(outerPath, outer, "utf8");
-		const dom = execFileSync(
-			chrome,
-			[
-				"--headless",
-				"--disable-gpu",
-				"--no-sandbox",
-				`--user-data-dir=${dir}`,
-				"--disable-extensions",
-				"--host-resolver-rules=MAP * ~NOTFOUND",
-				"--window-size=1400,900",
-				"--virtual-time-budget=30000",
-				"--dump-dom",
-				`file://${outerPath}`,
-			],
-			{ encoding: "utf8", stdio: "pipe", timeout: 40_000, env: CHROME_ENV },
-		);
-		const title = dom.match(/<title>([^<]*)<\/title>/)?.[1];
-		const json = dom.match(/<pre id="out">([^<]*)<\/pre>/)?.[1];
-		if (title !== "done" || !json) {
-			throw new Error(
-				`Not every frame reported back; Chrome's title was "${title}".`,
-			);
-		}
-		const parsed = JSON.parse(
-			json
-				.replace(/&quot;/g, '"')
-				.replace(/&lt;/g, "<")
-				.replace(/&gt;/g, ">")
-				.replace(/&amp;/g, "&"),
-		) as Record<string, Frame>;
-		return new Map(Object.entries(parsed));
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-}
+/** Every case from ONE Chrome launch — a launch is the harness's whole cost. */
+const measureAll = (cases: readonly Case[]) =>
+	measureInFrames<Frame>(cases, {
+		probe: FRAME_PROBE,
+		frameHeight: FRAME_H,
+		timeoutMs: 40_000,
+	});
 
 /** WCAG 2 contrast of `fg` (alpha composited onto `bg`) against `bg`. */
 function contrast(c: Control): number {
@@ -549,10 +483,10 @@ describe.skipIf(!hasChrome)(
 		beforeAll(async () => {
 			cache = measureAll(await buildCases());
 		}, CHROME_TEST_TIMEOUT_MS * 2);
-		const frame = (s: Surface, w: number, theme: Theme, fixed: boolean) => {
-			const f = cache.get(caseId(s, w, theme, fixed));
-			if (!f)
-				throw new Error(`no measurement for ${caseId(s, w, theme, fixed)}`);
+		const frame = (s: Surface, w: number, theme: Theme, repaired: boolean) => {
+			const id = caseId(s, w, theme, repaired);
+			const f = cache.get(id);
+			if (!f) throw new Error(`no measurement for ${id}`);
 			if (f.sheetTextNodes === 0)
 				throw new Error(`${s} rendered no sheet text`);
 			return f;
@@ -584,10 +518,39 @@ describe.skipIf(!hasChrome)(
 		});
 
 		it.each(
-			SURFACES,
-		)("%s: the toolbar adds no sideways scroll at 375px", (surface) => {
-			const f = frame(surface, PHONE_W, "light", true);
-			expect(f.scrollWidth).toBeLessThanOrEqual(f.clientWidth);
+			SURFACES.flatMap((s) => WIDTHS.map((w) => [s, w] as const)),
+		)("%s at %ipx: the toolbar adds no sideways scroll", (surface, width) => {
+			// Against the control, not the frame: at 820px the 816px sheet already
+			// overflows the frame's 805px client box, because the harness frame
+			// draws a 15px scrollbar a phone or tablet does not. That width is the
+			// sheet's, not the toolbar's; the toolbar must add nothing to it.
+			const f = frame(surface, width, "light", true);
+			const before = frame(surface, width, "light", false);
+			expect(f.scrollWidth).toBeLessThanOrEqual(
+				Math.max(f.clientWidth, before.scrollWidth),
+			);
+			if (width === PHONE_W) {
+				expect(f.scrollWidth).toBeLessThanOrEqual(f.clientWidth);
+			}
+		});
+
+		it.each(
+			SURFACES.flatMap((s) => WIDTHS.map((w) => [s, w] as const)),
+		)("%s at %ipx: every sheet is where it was, moved down by the toolbar row alone", (surface, width) => {
+			// The control's toolbar is out of the flow, so its sheets sit exactly
+			// where they did before #998. The shipped toolbar may only push them
+			// down by its own row: same left edge, same size, no other shift.
+			const repaired = frame(surface, width, "light", true);
+			const before = frame(surface, width, "light", false);
+			expect(repaired.rowHeight).toBeGreaterThan(0);
+			expect(repaired.sheets.length).toBe(before.sheets.length);
+			repaired.sheets.forEach((s, i) => {
+				const b = before.sheets[i];
+				expect(s.left).toBeCloseTo(b.left, 1);
+				expect(s.width).toBeCloseTo(b.width, 1);
+				expect(s.height).toBeCloseTo(b.height, 1);
+				expect(s.top).toBeCloseTo(b.top + repaired.rowHeight, 1);
+			});
 		});
 
 		const WITH_SHARE: readonly Surface[] = ["editorial", "roles"];

@@ -10,12 +10,14 @@ import {
 } from "#/components/agenda/meeting-agenda-print";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
 import {
-	INK,
-	MUTED,
 	PRINT_PAGE_CSS,
 	PrintButton,
 	PrintToolbar,
 } from "#/components/agenda/print-theme";
+import {
+	AGENDA_TAB_ACTIVE_STYLE,
+	AGENDA_TAB_STYLE,
+} from "#/components/agenda/print-toolbar-styles";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
@@ -262,8 +264,8 @@ function PrintAgenda() {
 								params={{ clubId: clubIdParam, meetingId }}
 								search={{ layout: l.id }}
 								style={{
-									...tabStyle,
-									...(l.id === layout ? tabActiveStyle : null),
+									...AGENDA_TAB_STYLE,
+									...(l.id === layout ? AGENDA_TAB_ACTIVE_STYLE : null),
 								}}
 							>
 								{l.label}
@@ -319,20 +321,6 @@ function PrintAgenda() {
 		</div>
 	);
 }
-
-const tabStyle: React.CSSProperties = {
-	padding: "6px 12px",
-	borderRadius: 7,
-	fontSize: 13,
-	fontWeight: 600,
-	color: MUTED,
-	textDecoration: "none",
-};
-
-const tabActiveStyle: React.CSSProperties = {
-	background: INK,
-	color: "#fff",
-};
 
 /** A key naming no meeting (#877): the same page every meeting sub-route shows. */
 function PrintNotFound() {

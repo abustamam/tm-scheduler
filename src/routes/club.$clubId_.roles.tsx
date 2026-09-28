@@ -18,6 +18,7 @@ import {
 	PrintButton,
 	PrintToolbar,
 } from "#/components/agenda/print-theme";
+import { ROLES_BACK_LINK_STYLE } from "#/components/agenda/print-toolbar-styles";
 import { PublicFooter } from "#/components/public-footer";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { clubLogoUrl } from "#/lib/club-logo-url";
@@ -57,33 +58,6 @@ export const Route = createFileRoute("/club/$clubId_/roles")({
 	}),
 });
 
-/**
- * Screen-only wayfinding pill (#542, F-009): this print-styled page has no
- * header/nav, and guests arriving via shared links dead-ended on it. It is the
- * `PrintToolbar`'s `leading` item, so it shares the toolbar's in-flow row
- * above the sheet (#998) instead of floating over it, and is hidden when
- * printing with the rest of that row. Truncates so a long club name keeps the
- * row to one line beside the toolbar card on a phone. Shown in `chrome=none`
- * mode too: the shared link IS that mode, and its recipients are exactly who
- * dead-ends.
- */
-const BACK_LINK_STYLE: React.CSSProperties = {
-	display: "block",
-	minWidth: 0,
-	maxWidth: "min(48vw, 320px)",
-	overflow: "hidden",
-	textOverflow: "ellipsis",
-	whiteSpace: "nowrap",
-	background: "#fff",
-	borderRadius: 10,
-	padding: "9px 14px",
-	boxShadow: "0 6px 20px rgba(23,58,64,.18)",
-	color: INK,
-	fontSize: 13,
-	fontWeight: 700,
-	textDecoration: "none",
-};
-
 function RoleSheet() {
 	const { chrome } = Route.useSearch();
 	const { clubId: clubIdParam } = Route.useParams();
@@ -105,10 +79,12 @@ function RoleSheet() {
 						to="/club/$clubId"
 						params={{ clubId: clubIdParam }}
 						search={{ view: "roles", count: 8 }}
-						// `no-print` twice over (the toolbar row carries it too): kept
-						// so the pill stays off paper wherever it is mounted.
+						// Screen-only wayfinding (#542): see ROLES_BACK_LINK_STYLE.
+						// `no-print` twice over (the toolbar row carries it too), so
+						// the pill stays off paper wherever it is mounted. Shown in
+						// `chrome=none` mode too: the shared link IS that mode.
 						className="no-print roles-back"
-						style={BACK_LINK_STYLE}
+						style={ROLES_BACK_LINK_STYLE}
 					>
 						← {club.name}
 					</Link>

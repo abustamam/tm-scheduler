@@ -11,8 +11,8 @@
  * comes out of the printer.
  *
  * That asymmetry got worse with this extraction, not better: one component now
- * owns that class for all three print routes, so a single deletion would put a
- * floating toolbar on every printed agenda, poster and role sheet at once.
+ * owns that class for all four print routes, so a single deletion would put the
+ * toolbar on every printed agenda, flyer, poster and role sheet at once.
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -24,6 +24,7 @@ import {
 	PrintButton,
 	PrintToolbar,
 } from "#/components/agenda/print-theme";
+import { flyerTabStyle } from "#/components/agenda/print-toolbar-styles";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { resolveClubOrRedirect } from "#/lib/club-route";
@@ -81,16 +82,6 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 	},
 );
 
-const tabStyle = (active: boolean): React.CSSProperties => ({
-	padding: "6px 12px",
-	borderRadius: 7,
-	fontSize: 13,
-	fontWeight: 700,
-	textDecoration: "none",
-	color: active ? "#fff" : "#173a40",
-	background: active ? "#173a40" : "transparent",
-});
-
 function FlyerPage() {
 	const { clubId, meetingId } = Route.useParams();
 	const { layout } = Route.useSearch();
@@ -111,7 +102,7 @@ function FlyerPage() {
 					to="/club/$clubId/meeting/$meetingId/flyer"
 					params={{ clubId, meetingId }}
 					search={{ layout: "letter" }}
-					style={tabStyle(layout === "letter")}
+					style={flyerTabStyle(layout === "letter")}
 				>
 					Poster
 				</Link>
@@ -119,7 +110,7 @@ function FlyerPage() {
 					to="/club/$clubId/meeting/$meetingId/flyer"
 					params={{ clubId, meetingId }}
 					search={{ layout: "square" }}
-					style={tabStyle(layout === "square")}
+					style={flyerTabStyle(layout === "square")}
 				>
 					Square image
 				</Link>
