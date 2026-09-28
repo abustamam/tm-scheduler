@@ -28,6 +28,7 @@ import {
 	speeches,
 } from "#/db/schema";
 import { absorbedEnrollmentMoves, earliestDate } from "#/lib/person-identity";
+import { lockClubForWrite } from "./club-write-lock";
 import { collapseMemberships } from "./membership-collapse-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -114,6 +115,15 @@ export async function mergePeople(
 		const keeperByClub = new Map(
 			keeperMemberships.map((m) => [m.clubId, m.id]),
 		);
+		// Every club this merge will collapse in, locked HERE, in club order,
+		// before the first write. `collapseMemberships` takes its club's write
+		// lock itself, but inside this loop it would do so after the previous
+		// iteration's writes already hold row locks, which `club-write-lock.ts`
+		// rules out: taken after a row lock, it orders that row against nobody.
+		// Re-entrant, so the collapse's own call below is then a no-op.
+		for (const abs of absorbedMemberships) {
+			if (keeperByClub.has(abs.clubId)) await lockClubForWrite(tx, abs.clubId);
+		}
 		const affectedClubIds = new Set<string>();
 		let collapsed = 0;
 		let repointed = 0;

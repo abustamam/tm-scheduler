@@ -96,9 +96,13 @@ vi.mock("#/lib/auth", () => ({
 	},
 }));
 
-const { clearPlanStatus, SELF_SERVICE_RUNGS, setPlanStatus } = await import(
-	"./attendance-plan-logic"
-);
+const {
+	clearPlanStatus,
+	lockMemberAttendance,
+	SELF_SERVICE_RUNGS,
+	setPlanStatus,
+} = await import("./attendance-plan-logic");
+const { CLUB_BUSY_MESSAGE } = await import("./club-write-lock");
 const { releaseSlotsAndMarkUnavailable } = await import("./availability-logic");
 const { claimSlotCore } = await import("./slots-logic");
 const { SELF_ONLY_MESSAGE } = await import("./attendance-actor-logic");
@@ -490,6 +494,56 @@ describe.skipIf(!hasTestDb)("releaseSlotsAndMarkUnavailable (#204)", () => {
 		expect(slot).toEqual({ assignedMemberId: null, status: "open" });
 		const rows = await planRows(seed.memberId, seed.meetingId);
 		expect(rows.map((r) => r.status)).toEqual(["not_coming"]);
+	});
+
+	it("refuses an unverified claim that waited out a decline, rather than filling the role behind it", async () => {
+		// The other order: the decline holds the member's key (as the release
+		// does first), records not_coming and commits while the claim waits. The
+		// claim then reads that answer and is refused, writing nothing.
+		const decline = await openBlockingTx(async (tx) => {
+			await lockMemberAttendance(tx, seed.meetingId, seed.memberId);
+			await setPlanStatus(tx, {
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				status: "not_coming",
+				actorMemberId: seed.memberId,
+				proof: "session",
+			});
+		});
+		const claim = testDb.transaction((tx) =>
+			claimSlotCore(tx, {
+				slotId: seed.slotId,
+				memberId: seed.memberId,
+				actorMemberId: seed.memberId,
+				proof: "asserted",
+			}),
+		);
+		claim.catch(() => {});
+		await waitForLockWait("pg_advisory_xact_lock", decline.pid);
+		await decline.commit();
+		await expect(claim).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+
+		const [slot] = await testDb
+			.select({ status: roleSlots.status })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, seed.slotId));
+		expect(slot?.status).toBe("open");
+	});
+
+	it("gives up on the member's key after its timeout instead of holding a connection", async () => {
+		const holder = await openBlockingTx(async (tx) => {
+			await lockMemberAttendance(tx, seed.meetingId, seed.memberId);
+		});
+		try {
+			await expect(
+				testDb.transaction((tx) =>
+					lockMemberAttendance(tx, seed.meetingId, seed.memberId, "100ms"),
+				),
+			).rejects.toThrow(CLUB_BUSY_MESSAGE);
+		} finally {
+			await holder.commit();
+		}
 	});
 
 	it("releases the member's held slots AND records not_coming, atomically", async () => {

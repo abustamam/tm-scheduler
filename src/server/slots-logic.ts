@@ -40,6 +40,9 @@ import { resolveWriteActorWithProof } from "./write-actor-logic";
 type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+// A transaction only: for a helper that takes a transaction-scoped lock, which
+// on the pooled client would be released as soon as it was granted.
+type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 /** The club's resolved speaker/evaluator role ids, plus whether each is
  *  currently `enabled` (#368) — a disabled role must never be reintroduced by
@@ -1797,7 +1800,7 @@ async function sessionIsHolder(
  * impersonation is refused before it gets here). An ABSENT proof is not gated.
  */
 export async function claimSlotCore(
-	tx: DbOrTx,
+	tx: Tx,
 	args: {
 		slotId: string;
 		memberId: string;

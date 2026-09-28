@@ -21,7 +21,7 @@
  *     bunx vitest run src/server/people-merge.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -34,12 +34,13 @@ import {
 	speeches,
 	user,
 } from "#/db/schema";
-import { hasTestDb, testDb } from "#/test/db";
+import { hasTestDb, openBlockingTx, testDb, waitForLockWait } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 // Import after the mock so the logic module's `#/db` import resolves to testDb.
 const { mergePeople } = await import("#/server/people-merge-logic");
+const { lockClubForWrite } = await import("#/server/club-write-lock");
 
 describe.skipIf(!hasTestDb)("mergePeople", () => {
 	// Everything created here, tracked for FK-safe teardown.
@@ -229,6 +230,48 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 			.from(members)
 			.where(eq(members.id, absorbedMembership));
 		expect(memberAfter?.personId).toBe(keeper);
+	});
+
+	it("takes every collapsing club's write lock before its first write", async () => {
+		// Both Persons in two clubs, so the merge collapses in each. Another writer
+		// holds the LATER club's lock. Taking that lock inside the loop, the merge
+		// collapsed the earlier club first and waited holding its rows; now it
+		// waits before writing anything, so that club's rows stay free.
+		const [first, second] = [await makeClub(), await makeClub()].sort();
+		const keeper = await makePerson();
+		const absorbed = await makePerson();
+		await addMembership(first, keeper);
+		await addMembership(second, keeper);
+		const absorbedInFirst = await addMembership(first, absorbed);
+		await addMembership(second, absorbed);
+
+		const writer = await openBlockingTx(async (tx) => {
+			await lockClubForWrite(tx, second);
+		});
+		const merge = mergePeople({
+			keeperPersonId: keeper,
+			absorbedPersonId: absorbed,
+		});
+		merge.catch(() => {});
+		await waitForLockWait("pg_advisory_xact_lock", writer.pid);
+
+		// A write to the earlier club's absorbed membership does not queue
+		// behind the parked merge.
+		const touched = await testDb
+			.transaction(async (tx) => {
+				await tx.execute(sql`set local lock_timeout = '1s'`);
+				return tx
+					.update(members)
+					.set({ preferredName: "touched mid-merge" })
+					.where(eq(members.id, absorbedInFirst))
+					.returning({ id: members.id });
+			})
+			.catch((e: unknown) => e);
+		expect(touched).toEqual([{ id: absorbedInFirst }]);
+
+		await writer.commit();
+		const result = await merge;
+		expect(result.movedCounts.collapsed).toBe(2);
 	});
 
 	it("blocks on a differing customer_id", async () => {
