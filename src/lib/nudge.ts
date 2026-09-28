@@ -3,6 +3,11 @@
 // edits and sends. NO `#/db` here so the meeting-detail client route can call it.
 // The app only ever DRAFTS; the human sends.
 
+import {
+	type LevelProgress,
+	plural,
+	projectsLeftBreakdown,
+} from "#/lib/level-proximity";
 import { mailtoHref } from "#/lib/mailto";
 import type { RoleIdentity } from "#/lib/meeting-roles";
 import { levelLabel } from "#/lib/pathways-catalog";
@@ -81,18 +86,8 @@ export type NudgeInput =
 	// the agenda?" Role-less, its own constituent for the same reason. It asks
 	// about the AGENDA, not a speaker slot, because some projects are not
 	// speeches. `shareUrl` is the next meeting's public page.
-	| (NudgeInputBase & {
-			mode: "level";
-			pathName: string;
-			/** The working level. Labelled by `levelLabel`, never "Level 6". */
-			level: number;
-			/** N: projects left at that level. */
-			projectsLeft: number;
-			/** R: required projects left, by name. */
-			projectNames: readonly string[];
-			/** E: electives still to choose. */
-			electivesToChoose: number;
-	  })
+	// The level is labelled by `levelLabel`, never "Level 6".
+	| (NudgeInputBase & { mode: "level" } & LevelProgress)
 	| (NudgeInputBase & {
 			mode: "confirm" | "recruit";
 			/** The role being asked about. Role-specific asks stay on the slot
@@ -144,7 +139,7 @@ function messageFor(i: NudgeInput): string {
 	}
 	if (i.mode === "level") {
 		const n = i.projectsLeft;
-		return `Hi ${who}, you're ${countOf(n, "project")} from finishing ${i.pathName} ${levelLabel(i.level)}${levelNamesSuffix(i)}. Want to get it on the agenda for ${i.meetingDate}? ${i.shareUrl}`;
+		return `Hi ${who}, you're ${plural(n, "project")} from finishing ${i.pathName} ${levelLabel(i.level)}${levelNamesSuffix(i)}. Want to get it on the agenda for ${i.meetingDate}? ${i.shareUrl}`;
 	}
 	if (i.mode === "invite") {
 		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
@@ -184,10 +179,6 @@ function messageFor(i: NudgeInput): string {
 		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? You'd also need to ${dutyClauseList(owed)}. Info here: ${link}`;
 }
 
-function countOf(n: number, word: string): string {
-	return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
-
 /** "a", "a and b", "a, b and c". */
 function andList(items: readonly string[]): string {
 	if (items.length < 2) return items[0] ?? "";
@@ -195,31 +186,27 @@ function andList(items: readonly string[]): string {
 }
 
 /**
- * What is left, after the level label (#900). N = `projectsLeft`, R = names,
- * E = electives, exactly as the dashboard row counts them
- * (`projectsLeftCopy`):
+ * What is left, after the level label (#900), per `projectsLeftBreakdown` —
+ * the same case split the dashboard row's `projectsLeftCopy` reads:
  *
- * - R = N: ": Inspire Your Audience and Active Listening"
- * - R + E = N, R > 0, E > 0: ": Inspire Your Audience and 1 elective"
- * - R = 0, E = N: ": 2 electives"
- * - anything else: nothing. Names that do not add up to the count must not be
+ * - names: ": Inspire Your Audience and Active Listening"
+ * - names and electives: ": Inspire Your Audience and 1 elective"
+ * - electives: ": 2 electives"
+ * - count: nothing. Names that do not add up to the count must not be
  *   presented to the member as the whole list.
  */
-function levelNamesSuffix(
-	i: Pick<
-		Extract<NudgeInput, { mode: "level" }>,
-		"projectsLeft" | "projectNames" | "electivesToChoose"
-	>,
-): string {
-	const n = i.projectsLeft;
-	const r = i.projectNames.length;
-	const e = i.electivesToChoose;
-	if (r > 0 && r === n) return `: ${andList(i.projectNames)}`;
-	if (r > 0 && e > 0 && r + e === n) {
-		return `: ${andList(i.projectNames)} and ${countOf(e, "elective")}`;
+function levelNamesSuffix(i: LevelProgress): string {
+	const electives = plural(i.electivesToChoose, "elective");
+	switch (projectsLeftBreakdown(i)) {
+		case "names":
+			return `: ${andList(i.projectNames)}`;
+		case "namesAndElectives":
+			return `: ${andList(i.projectNames)} and ${electives}`;
+		case "electives":
+			return `: ${electives}`;
+		case "count":
+			return "";
 	}
-	if (r === 0 && e > 0 && e === n) return `: ${countOf(e, "elective")}`;
-	return "";
 }
 
 /**
@@ -231,9 +218,7 @@ function levelNamesSuffix(
  * the whole premise of these drafts is that a human wrote them.
  */
 function dutyClauseList(duties: readonly RoleDuty[]): string {
-	const clauses = duties.map((duty) => duty.clause);
-	if (clauses.length < 2) return clauses[0] ?? "";
-	return `${clauses.slice(0, -1).join(", ")} and ${clauses[clauses.length - 1]}`;
+	return andList(duties.map((duty) => duty.clause));
 }
 
 /**
@@ -380,7 +365,7 @@ function subjectFor(i: NudgeInput): string {
 		return `See you at ${i.clubName} on ${i.meetingDate}?`;
 	}
 	if (i.mode === "level") {
-		return `${countOf(i.projectsLeft, "project")} to ${levelLabel(i.level)}`;
+		return `${plural(i.projectsLeft, "project")} to ${levelLabel(i.level)}`;
 	}
 	return i.mode === "confirm"
 		? `Confirming your ${i.roleName} role — ${i.meetingDate}`

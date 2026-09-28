@@ -1,6 +1,7 @@
 import { Mail, MessageCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
+import type { LevelProgress } from "#/lib/level-proximity";
 import { buildNudge } from "#/lib/nudge";
 import { detectPlatform } from "#/lib/platform";
 import type { RoleDuty } from "#/lib/role-duties";
@@ -36,16 +37,11 @@ export type NudgeButtonsProps = NudgeButtonsBase &
 				meetingTime: string;
 				location?: string | null;
 		  }
-		| {
+		| ({
 				/** A member close to a Pathways level (#900): "want to get it on
 				 *  the agenda?" Role-less; `shareUrl` is the next meeting's page. */
 				mode: "level";
-				pathName: string;
-				level: number;
-				projectsLeft: number;
-				projectNames: readonly string[];
-				electivesToChoose: number;
-		  }
+		  } & LevelProgress)
 		| {
 				mode: "confirm" | "recruit";
 				roleName: string;
