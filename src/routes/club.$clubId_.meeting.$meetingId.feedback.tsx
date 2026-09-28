@@ -19,6 +19,10 @@ import {
 import { formatMeetingDate } from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
+	GENERAL_FEEDBACK_LABEL,
+	TABLE_TOPICS_SPEAKER_LABEL,
+} from "#/lib/role-feedback-input";
+import {
 	type FeedbackRoleChoice,
 	type FeedbackTargetsPublic,
 	getFeedbackTargetsPublic,
@@ -90,22 +94,12 @@ function FeedbackNotFound() {
  * simply ignored: they only ever lived for the tab.
  */
 const sentKey = (meetingId: string) => `gavelup:feedback-sent:${meetingId}`;
+/** One agenda row's key: the list's React key and its picker option value. */
 const targetKey = (t: Pick<PublicFeedbackTarget, "kind" | "id">) =>
 	`${t.kind}:${t.id}`;
 
 type Targets = FeedbackTargetsPublic["targets"];
 type RoleOptions = FeedbackTargetsPublic["roleOptions"];
-
-/** Who the form is for, and which role it opens on. */
-interface Recipient {
-	memberId: string;
-	name: string;
-	/** An option value from `pickerOptions`; `GENERAL` when none was tapped. */
-	preset: string;
-}
-
-const GENERAL = "general";
-const TT_SPEAKER = "tableTopicsSpeaker";
 
 interface PickerOption {
 	value: string;
@@ -113,8 +107,29 @@ interface PickerOption {
 	choice: FeedbackRoleChoice;
 }
 
-const heldValue = (t: Pick<PublicFeedbackTarget, "kind" | "id">) =>
-	`${t.kind}:${t.id}`;
+/** Who the form is for, and the role it opens on: the tapped agenda row, or
+ *  "General" from "Someone else". An OPTION, not a value to look up, so the
+ *  form never has to guess what to send. */
+interface Recipient {
+	memberId: string;
+	name: string;
+	preset: PickerOption;
+}
+
+const GENERAL_OPTION: PickerOption = {
+	value: "general",
+	label: GENERAL_FEEDBACK_LABEL,
+	choice: { kind: "general" },
+};
+
+const heldOption = (t: PublicFeedbackTarget): PickerOption => ({
+	value: targetKey(t),
+	label: t.roleLabel,
+	choice:
+		t.kind === "slot"
+			? { kind: "slot", slotId: t.id }
+			: { kind: "tableTopics", speakerId: t.id },
+});
 
 /**
  * The roles the picker offers for one recipient (#1021), in order:
@@ -123,8 +138,10 @@ const heldValue = (t: Pick<PublicFeedbackTarget, "kind" | "id">) =>
  *     (so "Speaker 2" is offered and bare "Speaker" is not);
  *  3. "Table Topics speaker", unless they are on the Table Topics list;
  *  4. "General".
- * An INACTIVE recipient (reachable only from the agenda) gets 1 alone: the
- * server refuses the rest for them, so they are not offered.
+ * An INACTIVE recipient (reachable only from the agenda) gets 1 alone. The
+ * SERVER is the authority on that rule (`resolvePersonNote` refuses kinds 2-4
+ * for an inactive member); this only mirrors it so the picker does not offer
+ * a choice that would be refused.
  */
 function pickerOptions(
 	memberId: string,
@@ -132,14 +149,8 @@ function pickerOptions(
 	roleOptions: RoleOptions,
 ): PickerOption[] {
 	const held = targets.filter((t) => t.recipientMemberId === memberId);
-	const out: PickerOption[] = held.map((t) => ({
-		value: heldValue(t),
-		label: t.roleLabel,
-		choice:
-			t.kind === "slot"
-				? { kind: "slot", slotId: t.id }
-				: { kind: "tableTopics", speakerId: t.id },
-	}));
+	const out: PickerOption[] = held.map(heldOption);
+	// Mirrors the server's rule, which is the one that holds (see above).
 	if (held.some((t) => !t.recipientActive)) return out;
 	const heldDefs = new Set(held.map((t) => t.roleDefinitionId));
 	for (const r of roleOptions) {
@@ -152,12 +163,12 @@ function pickerOptions(
 	}
 	if (!held.some((t) => t.kind === "tableTopics")) {
 		out.push({
-			value: TT_SPEAKER,
-			label: "Table Topics speaker",
+			value: "tableTopicsSpeaker",
+			label: TABLE_TOPICS_SPEAKER_LABEL,
 			choice: { kind: "tableTopicsSpeaker" },
 		});
 	}
-	out.push({ value: GENERAL, label: "General", choice: { kind: "general" } });
+	out.push(GENERAL_OPTION);
 	return out;
 }
 
@@ -289,7 +300,7 @@ function FeedbackPage() {
 													setSelected({
 														memberId: t.recipientMemberId,
 														name: t.memberName,
-														preset: heldValue(t),
+														preset: heldOption(t),
 													})
 												}
 											/>
@@ -321,7 +332,7 @@ function FeedbackPage() {
 													setSelected({
 														memberId: m.memberId,
 														name: m.name,
-														preset: GENERAL,
+														preset: GENERAL_OPTION,
 													})
 												}
 											/>
@@ -398,19 +409,17 @@ function FeedbackForm({
 }) {
 	const [wentWell, setWentWell] = useState("");
 	const [tryNext, setTryNext] = useState("");
-	const [role, setRole] = useState(() =>
-		options.some((o) => o.value === recipient.preset)
-			? recipient.preset
-			: (options[0]?.value ?? GENERAL),
-	);
-	const choice = options.find((o) => o.value === role)?.choice;
+	// The option itself, not a string to look up again at send time: what is
+	// selected is exactly what is sent. The preset is built by the same helpers
+	// as `options`, so its value is always among them.
+	const [picked, setPicked] = useState<PickerOption>(recipient.preset);
 	const send = useMutation({
 		mutationFn: () =>
 			leaveFeedback({
 				data: {
 					meetingId,
 					recipientMemberId: recipient.memberId,
-					role: choice ?? { kind: "general" },
+					role: picked.choice,
 					wentWell,
 					tryNext,
 				},
@@ -445,8 +454,11 @@ function FeedbackForm({
 				<Label htmlFor="feedback-role">Role</Label>
 				<select
 					id="feedback-role"
-					value={role}
-					onChange={(e) => setRole(e.target.value)}
+					value={picked.value}
+					onChange={(e) => {
+						const next = options[e.target.selectedIndex];
+						if (next) setPicked(next);
+					}}
 					className="h-10 w-full rounded-md border border-input bg-background px-3 text-base md:text-sm"
 				>
 					{options.map((o) => (

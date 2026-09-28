@@ -39,6 +39,13 @@ import {
 	feedbackWindow,
 	feedbackWindowState,
 } from "#/lib/feedback-window";
+import {
+	type FeedbackRoleChoice,
+	GENERAL_FEEDBACK_LABEL,
+	type LegacyLeaveFeedbackInput,
+	type PersonLeaveFeedbackInput,
+	TABLE_TOPICS_SPEAKER_LABEL,
+} from "#/lib/role-feedback-input";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { feedbackIpLimiter } from "./feedback-rate-limit";
 import { assertClubNotArchived } from "./guards";
@@ -47,10 +54,12 @@ import type { DbOrTx } from "./meeting-templates-logic";
 import { userMemberIds } from "./person-identity-logic";
 import { isDeadlock } from "./pg-errors";
 
-/** The role label every Table Topics speaker's note carries. */
-export const TABLE_TOPICS_SPEAKER_LABEL = "Table Topics speaker";
-/** The label of a note left for a person with no particular role (#1021). */
-export const GENERAL_FEEDBACK_LABEL = "General";
+export { GENERAL_FEEDBACK_LABEL, TABLE_TOPICS_SPEAKER_LABEL };
+export type {
+	FeedbackRoleChoice,
+	LegacyLeaveFeedbackInput,
+	PersonLeaveFeedbackInput,
+};
 
 export type FeedbackTargetKind = "slot" | "tableTopics";
 
@@ -232,13 +241,20 @@ const serializeWindow = (
  * archived club answers exactly like a key that never existed: `null`. A
  * cancelled meeting is `null` too — it has no feedback page.
  *
- * Exposes display names, role labels, member ids and the club's enabled role
- * names, and NOTHING else: no contact, no attendance. Member ids are exposed
- * since #1021 so a note can name its recipient; that is the same exposure as
- * `loadPublicClubRoster` (`members-logic.ts`), which serves every non-inactive
- * member's id and name session-less already. `others` is narrower than that
- * roster (active only). The target id is the slot's or the speaker's, which the
- * public agenda already carries.
+ * Exposes display names, role labels, member ids, an active flag and the
+ * club's enabled role names, and NOTHING else: no contact, no attendance.
+ * Member ids are exposed since #1021 so a note can name its recipient.
+ *
+ * What that exposure is, exactly, measured against `loadPublicClubRoster`
+ * (`members-logic.ts`, session-less, every NON-inactive member's id, name and
+ * preferred name):
+ *  - `others` is a subset of that roster (active members only);
+ *  - `targets` is NOT: it also carries the member id and `recipientActive:
+ *    false` of an INACTIVE member who holds a slot or Table Topics row at this
+ *    meeting, which the roster omits. The public agenda already shows that
+ *    person's name beside the role; the id and the inactive status are new.
+ * The target id is the slot's or the speaker's, which the public agenda
+ * already carries.
  */
 export async function loadFeedbackTargetsPublic(
 	clubId: string,
@@ -311,38 +327,6 @@ export async function loadFeedbackTargetsPublic(
 // ---------------------------------------------------------------------------
 // The anonymous write
 // ---------------------------------------------------------------------------
-
-/** The role a writer picked for a named recipient (#1021). The label stored
- *  is derived from the kind on the server, never sent as text. */
-export type FeedbackRoleChoice =
-	/** A slot this recipient holds at this meeting. */
-	| { kind: "slot"; slotId: string }
-	/** A Table Topics speaker row this recipient holds. */
-	| { kind: "tableTopics"; speakerId: string }
-	/** Any enabled role of the club, unnumbered. */
-	| { kind: "definition"; roleDefinitionId: string }
-	/** "Table Topics speaker", not on the minutes' list. */
-	| { kind: "tableTopicsSpeaker" }
-	/** "General". */
-	| { kind: "general" };
-
-/** The page before #1021: a slot or Table Topics row, whose holder receives
- *  the note. Still accepted, unchanged, for a tab opened before a deploy. */
-export interface LegacyLeaveFeedbackInput {
-	meetingId: string;
-	target: { kind: FeedbackTargetKind; id: string };
-	wentWell?: string | null;
-	tryNext?: string | null;
-}
-
-/** A note for a named member, under the role the writer picked (#1021). */
-export interface PersonLeaveFeedbackInput {
-	meetingId: string;
-	recipientMemberId: string;
-	role: FeedbackRoleChoice;
-	wentWell?: string | null;
-	tryNext?: string | null;
-}
 
 export type LeaveFeedbackInput =
 	| LegacyLeaveFeedbackInput

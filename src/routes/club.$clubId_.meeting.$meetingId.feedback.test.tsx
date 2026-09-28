@@ -508,6 +508,32 @@ describe("feedback page — to a person (#1021)", () => {
 		expect(screen.queryByRole("button", { name: /Casey Ng.*Sent/ })).toBeNull();
 	});
 
+	it("sends exactly the option selected, after changing away from the tapped role and back", async () => {
+		vi.mocked(leaveFeedback).mockResolvedValue({ ok: true });
+		const user = userEvent.setup();
+		await renderPage("open");
+		await user.click(await screen.findByRole("button", { name: /Pat Lee/ }));
+		await user.selectOptions(roleSelect(), "General");
+		expect(roleSelect().value).toBe("general");
+		await user.selectOptions(roleSelect(), "Speaker");
+		await user.selectOptions(roleSelect(), "Timer");
+		expect(roleSelect().selectedOptions[0]?.textContent).toBe("Timer");
+		await user.selectOptions(roleSelect(), "General");
+		await user.type(screen.getByLabelText("What went well"), "Kind");
+		await user.click(screen.getByRole("button", { name: "Send anonymously" }));
+		await waitFor(() =>
+			expect(leaveFeedback).toHaveBeenCalledWith({
+				data: {
+					meetingId: MEETING_ID,
+					recipientMemberId: PAT,
+					role: { kind: "general" },
+					wentWell: "Kind",
+					tryNext: "",
+				},
+			}),
+		);
+	});
+
 	it("ignores Sent keys the old page wrote", async () => {
 		sessionStorage.setItem(
 			`gavelup:feedback-sent:${MEETING_ID}`,
