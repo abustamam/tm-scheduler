@@ -323,6 +323,11 @@ export async function viewerMaySeeProgress(input: {
 	return membership?.status === "active" && membership.clubRole === "admin";
 }
 
+/** The pooled client or a transaction on it (#1005). */
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 /** The free-text triple a picked project stands for. */
 export interface ProjectDisplay {
 	pathwayPath: string;
@@ -345,11 +350,18 @@ export interface ProjectDisplay {
  * enrolled, allowlisted paths, but this is a plain uuid over the wire and the
  * claim path is anonymous, so the id is not trusted just because a picker
  * produced one.
+ *
+ * `conn` (#1005): a caller inside a transaction MUST pass its `tx`. The claim
+ * and speech-edit paths call this while their transaction already holds a pool
+ * connection; reading through `db` there takes a SECOND one, so ~10 concurrent
+ * claims (the pool's default size) each hold one and wait forever for another,
+ * and every request in the app hangs behind them — sign-in included.
  */
 export async function resolveProjectDisplay(
 	projectId: string,
+	conn: DbOrTx = db,
 ): Promise<ProjectDisplay> {
-	const [row] = await db
+	const [row] = await conn
 		.select({
 			level: pathwaysProjects.level,
 			projectName: pathwaysProjects.name,
