@@ -6,6 +6,13 @@ import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import {
+	CHARTER_STATUS_LABEL,
+	CHARTER_STATUSES,
+	type CharterStatus,
+	CLUB_NUMBER_MAX,
+	CLUB_NUMBER_PATTERN,
+} from "#/lib/club-charter";
 import { listConsoleClubs, provisionClub } from "#/server/onboarding";
 
 export const Route = createFileRoute("/_authed/superadmin/")({
@@ -86,6 +93,11 @@ function SuperadminConsole() {
 											>
 												{club.name}
 											</Link>
+											{club.charterStatus === "chartering" ? (
+												<span className="ml-2 inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)] uppercase tracking-[0.04em]">
+													{CHARTER_STATUS_LABEL.chartering}
+												</span>
+											) : null}
 											{club.archivedAt ? (
 												<span className="ml-2 inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
 													Archived
@@ -161,6 +173,11 @@ function CreateClubForm({
 	// so seeding state from it directly would hydrate a different selected
 	// `<option>` than it rendered.
 	const [timezone, setTimezone] = useState<string>(defaultZone);
+	// Chartering or chartered (#944). Controlled because it decides whether the
+	// club number is required: a chartering club may be provisioned without one.
+	const [charterStatus, setCharterStatus] =
+		useState<CharterStatus>("chartered");
+	const chartered = charterStatus === "chartered";
 
 	// Membership is tested against the LOADER's list, never against a predicate
 	// evaluated here: any such check closes over the zone table of whichever
@@ -187,7 +204,11 @@ function CreateClubForm({
 			const res = await provisionClub({
 				data: {
 					clubName: String(form.get("clubName") ?? "").trim(),
+					charterStatus,
 					clubNumber: String(form.get("clubNumber") ?? "").trim(),
+					charteredAt: chartered
+						? String(form.get("charteredAt") ?? "").trim()
+						: null,
 					adminName: String(form.get("adminName") ?? "").trim(),
 					adminEmail: String(form.get("adminEmail") ?? "").trim(),
 					timezone: String(form.get("timezone") ?? "").trim(),
@@ -195,6 +216,7 @@ function CreateClubForm({
 			});
 			toast.success(`Created club (slug: ${res.slug}).`);
 			el.reset();
+			setCharterStatus("chartered");
 			onCreated();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Couldn't create club.");
@@ -209,6 +231,30 @@ function CreateClubForm({
 			className="space-y-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--foam)] p-4"
 		>
 			<h2 className="text-sm font-bold">Create a club</h2>
+			<fieldset className="space-y-1.5">
+				<legend className="text-sm font-medium">Charter status</legend>
+				<div className="flex flex-wrap gap-4">
+					{CHARTER_STATUSES.map((status) => (
+						<label
+							key={status}
+							className="flex items-center gap-2 text-sm font-medium"
+						>
+							<input
+								type="radio"
+								name="charterStatus"
+								value={status}
+								checked={charterStatus === status}
+								onChange={() => setCharterStatus(status)}
+							/>
+							{CHARTER_STATUS_LABEL[status]}
+						</label>
+					))}
+				</div>
+				<p className="text-xs text-muted-foreground">
+					A chartering club is still forming. It can start without a club
+					number; its admin marks it chartered later.
+				</p>
+			</fieldset>
 			<div className="grid gap-3 sm:grid-cols-2">
 				<div className="space-y-1.5">
 					<Label htmlFor="clubName">Club name</Label>
@@ -220,14 +266,25 @@ function CreateClubForm({
 					/>
 				</div>
 				<div className="space-y-1.5">
-					<Label htmlFor="clubNumber">Club number</Label>
+					<Label htmlFor="clubNumber">
+						Club number{chartered ? "" : " (optional)"}
+					</Label>
 					<Input
 						id="clubNumber"
 						name="clubNumber"
-						required
+						required={chartered}
+						inputMode="numeric"
+						pattern={CLUB_NUMBER_PATTERN}
+						maxLength={CLUB_NUMBER_MAX}
 						placeholder="e.g. 1234567"
 					/>
 				</div>
+				{chartered ? (
+					<div className="space-y-1.5">
+						<Label htmlFor="charteredAt">Charter date</Label>
+						<Input id="charteredAt" name="charteredAt" type="date" required />
+					</div>
+				) : null}
 				<div className="space-y-1.5">
 					<Label htmlFor="adminName">First admin name</Label>
 					<Input

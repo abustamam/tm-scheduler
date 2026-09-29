@@ -9,6 +9,7 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { CharterSettings } from "#/components/club/charter-settings";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -49,6 +50,7 @@ import {
 import {
 	getClubProfileSettings,
 	loadClubAgendaSettings,
+	loadClubCharter,
 	loadClubTimezoneSettings,
 	updateClubAgendaSettings,
 	updateClubProfile,
@@ -205,20 +207,25 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const [profile, reminders, agenda, logoMeta, timezone] = await Promise.all([
-			getClubProfileSettings({ data: context.adminClub.clubId }),
-			loadClubReminderSettings({ data: context.adminClub.clubId }),
-			loadClubAgendaSettings({ data: context.adminClub.clubId }),
-			// Degrades to "no logo" rather than blanking the whole settings page,
-			// matching the five public logo loaders, which already catch. It
-			// matters across a rolling deploy: a server fn's URL is derived from
-			// file+name, not content, so a tab left open across #504's POST->GET
-			// flip keeps POSTing to a URL that now answers 405.
-			getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }).catch(
-				() => null,
-			),
-			loadClubTimezoneSettings({ data: context.adminClub.clubId }),
-		]);
+		const [profile, reminders, agenda, logoMeta, timezone, charter] =
+			await Promise.all([
+				getClubProfileSettings({ data: context.adminClub.clubId }),
+				loadClubReminderSettings({ data: context.adminClub.clubId }),
+				loadClubAgendaSettings({ data: context.adminClub.clubId }),
+				// Degrades to "no logo" rather than blanking the whole settings page,
+				// matching the five public logo loaders, which already catch. It
+				// matters across a rolling deploy: a server fn's URL is derived from
+				// file+name, not content, so a tab left open across #504's POST->GET
+				// flip keeps POSTing to a URL that now answers 405.
+				getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }).catch(
+					() => null,
+				),
+				loadClubTimezoneSettings({ data: context.adminClub.clubId }),
+				// Charter status (#944). Non-fatal like the logo: a failed read hides
+				// the Charter section rather than blanking the settings page, which
+				// is also what a tab loaded before this fn existed gets.
+				loadClubCharter({ data: context.adminClub.clubId }).catch(() => null),
+			]);
 		// The blast template (#931). Imported here rather than at the top so the
 		// promo module stays out of this page's first chunk; the editor that
 		// reads it is lazy for the same reason. Non-fatal, like the logo above:
@@ -229,7 +236,15 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 				getPromoTemplate({ data: context.adminClub.clubId }),
 			)
 			.catch(() => null);
-		return { profile, reminders, agenda, logoMeta, timezone, promoTemplate };
+		return {
+			profile,
+			reminders,
+			agenda,
+			logoMeta,
+			timezone,
+			promoTemplate,
+			charter,
+		};
 	},
 	component: ClubSettings,
 });
@@ -299,8 +314,15 @@ const PromoTemplateEditor = lazy(() =>
 
 function ClubSettings() {
 	const { adminClub, impersonating } = Route.useRouteContext();
-	const { profile, reminders, agenda, logoMeta, timezone, promoTemplate } =
-		Route.useLoaderData();
+	const {
+		profile,
+		reminders,
+		agenda,
+		logoMeta,
+		timezone,
+		promoTemplate,
+		charter,
+	} = Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
 	const [remindersEnabled, setRemindersEnabled] = useState(reminders.enabled);
@@ -621,6 +643,16 @@ function ClubSettings() {
 					)}
 				</Button>
 			</form>
+
+			{charter ? (
+				<CharterSettings
+					clubId={adminClub.clubId}
+					charterStatus={charter.charterStatus}
+					charteredAt={charter.charteredAt}
+					clubNumber={charter.clubNumber}
+					onSaved={() => router.invalidate()}
+				/>
+			) : null}
 
 			<div className="pt-2">
 				<h2 className="font-display text-xl font-semibold tracking-[-0.01em]">

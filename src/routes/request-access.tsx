@@ -7,6 +7,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
 import { CONTACT_MAILTO, PILOT_PRICING_LINE } from "#/lib/brand";
+import { CHARTER_OPTIONS, type CharterStatus } from "#/lib/club-charter";
 import { readRef } from "#/lib/marketing-ref";
 import {
 	type SubmitAccessRequestResult,
@@ -23,6 +24,10 @@ const KIND_LABELS: Record<Kind, string> = {
 	club: "A club",
 	district: "A district",
 };
+
+/** Matches the shadcn Input's box, applied to a native `<select>`. */
+const selectClass =
+	"flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 const TITLE = "Request access — GavelUp";
 const DESCRIPTION =
@@ -81,6 +86,7 @@ function RequestAccess() {
 	const [email, setEmail] = useState("");
 	const [clubName, setClubName] = useState("");
 	const [clubNumber, setClubNumber] = useState("");
+	const [charterStatus, setCharterStatus] = useState<CharterStatus | "">("");
 	const [districtNumber, setDistrictNumber] = useState("");
 	const [message, setMessage] = useState("");
 	const [trap, setTrap] = useState("");
@@ -124,7 +130,14 @@ function RequestAccess() {
 					kind,
 					name,
 					email,
-					...(kind === "club" ? { clubName, clubNumber } : { districtNumber }),
+					...(kind === "club"
+						? {
+								clubName,
+								clubNumber,
+								// Omitted, not sent empty, when the visitor did not say.
+								...(charterStatus ? { charterStatus } : {}),
+							}
+						: { districtNumber }),
 					message,
 					ref: readRef(),
 					trap,
@@ -225,10 +238,35 @@ function RequestAccess() {
 										/>
 									</Field>
 									<Field
+										id="ra-charter-status"
+										label="Has your club chartered?"
+										optional
+										hint="A club that is still forming can start before it has a club number."
+									>
+										<select
+											id="ra-charter-status"
+											value={charterStatus}
+											onChange={(e) =>
+												setCharterStatus(e.target.value as CharterStatus | "")
+											}
+											className={selectClass}
+										>
+											{CHARTER_OPTIONS.map((o) => (
+												<option key={o.value} value={o.value}>
+													{o.label}
+												</option>
+											))}
+										</select>
+									</Field>
+									<Field
 										id="ra-club-number"
 										label="Club number"
-										optional
-										hint="Found on your club's TI page."
+										optional={charterStatus !== "chartered"}
+										hint={
+											charterStatus === "chartering"
+												? "If your club has been given one already."
+												: "Found on your club's TI page."
+										}
 									>
 										<Input
 											id="ra-club-number"
@@ -237,6 +275,9 @@ function RequestAccess() {
 											inputMode="numeric"
 											pattern={B.clubNumberPattern}
 											maxLength={B.clubNumberMax}
+											// A client nudge only (#944): the server keeps a chartered
+											// request with no number, since a lead is never refused.
+											required={charterStatus === "chartered"}
 										/>
 									</Field>
 									<Field id="ra-message" label="Anything else" optional>

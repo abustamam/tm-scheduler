@@ -43,10 +43,6 @@ export {
 	verification,
 } from "./auth-schema";
 
-// The `tool` discriminator's vocabulary (#812). Type-only, so it contributes
-// nothing at runtime and drizzle-kit's schema read is unaffected — same
-// standing as the import above, and relative for the same reason.
-import type { McpPendingTool } from "../lib/pending-plan";
 // One number, one declaration. `clubs`'s Table Topics CHECK interpolates the
 // ceiling rather than writing 600 into the SQL, so the constraint and every
 // application layer cannot state different limits. `table-topics-limits.ts`
@@ -60,6 +56,10 @@ import type { McpPendingTool } from "../lib/pending-plan";
 // read by drizzle-kit outside the app's module resolution, where the
 // `package.json` `imports` alias is not guaranteed to resolve. Every other
 // import in this file is relative for the same reason.
+// The `tool` discriminator's vocabulary (#812). Type-only, so it contributes
+// nothing at runtime and drizzle-kit's schema read is unaffected — same
+// standing as the import above, and relative for the same reason.
+import type { McpPendingTool } from "../lib/pending-plan";
 import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";
 // user is re-exported above for Better-Auth; imported here for people.userId and
 // notifications foreign keys (the person-level auth link — ADR-0008 Phase B).
@@ -95,6 +95,19 @@ export const officerPositionEnum = pgEnum("officer_position", [
 	"treasurer",
 	"sergeant_at_arms",
 	"immediate_past_president",
+]);
+// Where a club is in the Toastmasters charter process (#944). `chartering` is a
+// club that is forming and uses GavelUp before charter; it may or may not hold
+// a club number yet. `chartered` is every other club, and the column default:
+// the migration that added this backfilled every existing club as chartered.
+// Keep in lockstep with CHARTER_STATUSES in src/lib/club-charter.ts. Restated
+// rather than imported: that module pulls in zod, and the schema's startup
+// bundles must stay free of application code
+// (table-topics-limits-wiring.guard.test.ts, #679). The lockstep is asserted in
+// src/lib/club-charter.test.ts.
+export const clubCharterStatusEnum = pgEnum("club_charter_status", [
+	"chartering",
+	"chartered",
 ]);
 export const membershipStatusEnum = pgEnum("membership_status", [
 	"active",
@@ -430,6 +443,18 @@ export const clubs = pgTable(
 		// and blocks every access path except the superadmin console. This comment used
 		// to enumerate the enforcement points and was wrong twice (#544, #560) — see
 		// `isClubArchived` (`src/lib/club-archive.ts`) for the one canonical list.
+		// Charter status and date (#944). The invariant between them and
+		// `club_number` is enforced in the WRITE PATH, not here: a `chartered`
+		// club must have a club number and a `chartering` one may have none
+		// (`charterInvariantError`, `src/lib/club-charter.ts`), and a club moved
+		// to chartered through the app must supply `chartered_at`. It is not a
+		// CHECK because the backfill cannot satisfy it: existing clubs came out
+		// chartered with no recorded date. `chartered_at` is therefore never used
+		// to DERIVE the status; null means "not recorded", not "not chartered".
+		charterStatus: clubCharterStatusEnum("charter_status")
+			.notNull()
+			.default("chartered"),
+		charteredAt: date("chartered_at", { mode: "string" }),
 		archivedAt: timestamp("archived_at"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
@@ -3049,6 +3074,9 @@ export const accessRequests = pgTable(
 		email: text("email").notNull(),
 		clubName: text("club_name"),
 		clubNumber: text("club_number"),
+		// Whether the requesting club says it is still forming (#944). Null on a
+		// district request, and on a club request that did not say.
+		charterStatus: clubCharterStatusEnum("charter_status"),
 		districtNumber: text("district_number"),
 		message: text("message"),
 		// First-touch marketing attribution (`src/lib/marketing-ref.ts`), or null.

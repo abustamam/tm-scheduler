@@ -7,6 +7,7 @@ import {
 	Loader2,
 	Pencil,
 	Trash2,
+	Undo2,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -14,12 +15,15 @@ import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { CHARTER_STATUS_LABEL, type CharterStatus } from "#/lib/club-charter";
+import { formatCalendarDay } from "#/lib/format";
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import { startImpersonation } from "#/server/impersonation";
 import {
 	archiveConsoleClub,
 	deleteConsoleClub,
 	getConsoleClubDetail,
+	revertConsoleClubToChartering,
 	unarchiveConsoleClub,
 	updateConsoleAdminEmail,
 } from "#/server/onboarding";
@@ -92,6 +96,17 @@ function ClubDetail() {
 				)}
 			</section>
 
+			{/* Absent only on a payload from before #944, never on a real row. */}
+			{club.charterStatus ? (
+				<CharterPanel
+					clubId={clubId}
+					clubName={club.name}
+					charterStatus={club.charterStatus}
+					charteredAt={club.charteredAt}
+					onChanged={() => router.invalidate()}
+				/>
+			) : null}
+
 			{club.archivedAt ? null : (
 				<>
 					<ViewAsPanel clubId={clubId} clubName={club.name} />
@@ -107,6 +122,84 @@ function ClubDetail() {
 				onDeleted={setDeleted}
 			/>
 		</PageContainer>
+	);
+}
+
+/**
+ * The club's charter status (#944), and the one correction only a superadmin
+ * may make: moving a chartered club back to chartering. A club admin marks the
+ * club chartered and edits the date from club settings; undoing the charter is
+ * here alone, so a club cannot un-charter itself.
+ */
+function CharterPanel({
+	clubId,
+	clubName,
+	charterStatus,
+	charteredAt,
+	onChanged,
+}: {
+	clubId: string;
+	clubName: string;
+	charterStatus: CharterStatus;
+	charteredAt: string | null;
+	onChanged: () => void;
+}) {
+	const [submitting, setSubmitting] = useState(false);
+
+	async function onRevert() {
+		if (
+			!window.confirm(
+				`Move "${clubName}" back to chartering? Its charter date is cleared; its club number is kept.`,
+			)
+		) {
+			return;
+		}
+		setSubmitting(true);
+		try {
+			await revertConsoleClubToChartering({ data: clubId });
+			toast.success("Club moved back to chartering.");
+			onChanged();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't change the status.",
+			);
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<section className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+			<h2 className="text-sm font-bold">Charter</h2>
+			<p
+				className="text-sm text-muted-foreground"
+				data-testid="charter-summary"
+			>
+				{CHARTER_STATUS_LABEL[charterStatus]}
+				{charterStatus === "chartered"
+					? charteredAt
+						? ` · chartered ${formatCalendarDay(charteredAt, { withYear: true })}`
+						: " · charter date not recorded"
+					: " · the club's admin marks it chartered from club settings"}
+			</p>
+			{charterStatus === "chartered" ? (
+				<Button
+					type="button"
+					size="sm"
+					variant="outline"
+					disabled={submitting}
+					onClick={onRevert}
+				>
+					{submitting ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						<>
+							<Undo2 className="size-4" /> Move back to chartering
+						</>
+					)}
+				</Button>
+			) : null}
+		</section>
 	);
 }
 

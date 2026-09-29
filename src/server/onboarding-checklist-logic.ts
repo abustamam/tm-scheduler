@@ -16,13 +16,16 @@ import {
 	officerTerms,
 	people,
 } from "#/db/schema";
-import { CHECKLIST_MEMBER_THRESHOLD } from "#/lib/onboarding-checklist";
+import {
+	CHECKLIST_MEMBER_THRESHOLD,
+	clubDetailsComplete,
+} from "#/lib/onboarding-checklist";
 
 export interface OnboardingChecklistStatus {
 	clubSlug: string;
-	/** Name + club number are required at provisioning (createClubWithAdmin);
-	 *  this additionally requires the free-text meeting-schedule field, so the
-	 *  item only checks off once the admin has actually visited club settings
+	/** `clubDetailsComplete` (`#/lib/onboarding-checklist`): name, meeting
+	 *  schedule, and — for a CHARTERED club only (#944) — a club number. The
+	 *  schedule is the field that proves the admin has visited club settings
 	 *  and confirmed the meeting day/time. */
 	clubDetailsComplete: boolean;
 	memberCount: number;
@@ -69,6 +72,7 @@ export async function getOnboardingChecklistStatus(
 				slug: clubs.slug,
 				name: clubs.name,
 				clubNumber: clubs.clubNumber,
+				charterStatus: clubs.charterStatus,
 				meetingSchedule: clubs.meetingSchedule,
 			})
 			.from(clubs)
@@ -127,11 +131,7 @@ export async function getOnboardingChecklistStatus(
 
 	return {
 		clubSlug: club.slug,
-		clubDetailsComplete: Boolean(
-			club.name?.trim() &&
-				club.clubNumber?.trim() &&
-				club.meetingSchedule?.trim(),
-		),
+		clubDetailsComplete: clubDetailsComplete(club),
 		memberCount,
 		hasEnoughMembers,
 		invitedMemberCount,

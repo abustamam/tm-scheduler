@@ -701,6 +701,13 @@
       "when": 1790623403674,
       "tag": "0099_vengeful_malcolm_colcord",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1790638461464,
+      "tag": "0100_real_black_queen",
+      "breakpoints": true
     }
   ]
 }
