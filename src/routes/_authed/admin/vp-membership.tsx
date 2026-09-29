@@ -386,25 +386,24 @@ interface InviteProps {
  * "Invited to Thu, Oct 9 · by Sam · invited to 3 meetings" (#899). A row means
  * an officer OPENED a draft; the app cannot see whether it was sent, and says
  * "Invited" on that understanding. A meeting that has since started reads
- * "Last invited to …".
+ * "Last invited to …". An upcoming invite is the state an officer acts on, so
+ * the lead renders as a badge; a past one stays muted text.
  */
-function inviteHistoryLine(
+function inviteHistory(
 	guest: Pick<PipelineGuestRow, "lastInvite" | "inviteCount">,
 	timezone: string,
 	now: Date,
-): string | null {
+): { upcoming: boolean; lead: string; detail: string } | null {
 	const last = guest.lastInvite;
 	if (!last) return null;
 	const at = new Date(last.meetingAt);
 	const date = formatMeetingDate(at, timezone);
-	const lead =
-		at.getTime() < now.getTime()
-			? `Last invited to ${date}`
-			: `Invited to ${date}`;
+	const upcoming = at.getTime() >= now.getTime();
+	const lead = upcoming ? `Invited to ${date}` : `Last invited to ${date}`;
 	const by = last.invitedByName ? ` · by ${last.invitedByName}` : "";
 	const count =
 		guest.inviteCount > 1 ? ` · invited to ${guest.inviteCount} meetings` : "";
-	return `${lead}${by}${count}`;
+	return { upcoming, lead, detail: `${by}${count}` };
 }
 
 /**
@@ -436,7 +435,17 @@ function GuestInvite({
 			: !phone && !email
 				? "Add an email or phone to invite"
 				: null;
-	const label = next ? `Invite to ${meetingDate}` : "Invite";
+	// Already invited to this very meeting: the control becomes a re-send
+	// rather than repeating the date as if new. Read from every invited meeting,
+	// not `lastInvite`, which is only the latest-opened draft. A disabled control
+	// keeps the date so its reason ("Add an email or phone…") reads against it.
+	const alreadyInvited =
+		!!next && !reason && guest.invitedMeetingIds.includes(next.id);
+	const label = !next
+		? "Invite"
+		: alreadyInvited
+			? "Resend invite"
+			: `Invite to ${meetingDate}`;
 	if (reason || !next) {
 		return (
 			<fieldset
@@ -518,7 +527,7 @@ function GuestRow({
 		? `first ${formatShortDate(guest.firstVisitAt, timezone)}`
 		: null;
 	const invitable = isInvitableStage(guest.stage);
-	const invited = inviteHistoryLine(guest, timezone, new Date());
+	const invited = inviteHistory(guest, timezone, new Date());
 	// Phone and email used to be joined into one string, which can't carry a
 	// link. They are elements now, so the "·" between them is an element too —
 	// and it must agree with what `WhatsAppPhoneLink` actually RENDERS (it trims
@@ -535,7 +544,10 @@ function GuestRow({
 
 	return (
 		<div className="flex flex-col gap-3 border-b border-[var(--line)] px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
-			<div className="flex min-w-0 items-center gap-3">
+			{/* The identity side keeps a floor and the controls wrap instead. With
+			    the controls `shrink-0`, a laptop-width pane squeezed the name,
+			    contact and invite badge into a ~40px column, one word a line. */}
+			<div className="flex min-w-0 items-center gap-3 sm:w-60 sm:shrink-0">
 				<MemberAvatar
 					tone={toneFromSeed(guest.id)}
 					initials={initialsOf(guest.name)}
@@ -548,7 +560,17 @@ function GuestRow({
 							data-slot="guest-invite-history"
 							className="text-xs text-[var(--sea-ink-soft)]"
 						>
-							{invited}
+							{invited.upcoming ? (
+								<span
+									data-slot="guest-invited-badge"
+									className="mr-0.5 inline-block rounded-full border border-[var(--line)] bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)]"
+								>
+									{invited.lead}
+								</span>
+							) : (
+								invited.lead
+							)}
+							{invited.detail}
 						</div>
 					) : null}
 					{hasPhone || email ? (
@@ -600,7 +622,7 @@ function GuestRow({
 				</div>
 			</div>
 
-			<div className="flex shrink-0 flex-wrap items-center gap-1.5">
+			<div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:justify-end">
 				{invitable ? (
 					<GuestInvite
 						guest={guest}

@@ -4296,6 +4296,11 @@ describe.skipIf(!hasTestDb)("guest invites (#899)", () => {
 		// Latest by invitedAt, not by meeting date; null actor reads null.
 		expect(row.lastInvite?.meetingId).toBe(later);
 		expect(row.lastInvite?.invitedByName).toBeNull();
+		// Every invited meeting, not only the latest, so the board can tell the
+		// guest is already invited to the sooner one too.
+		expect([...row.invitedMeetingIds].sort()).toEqual(
+			[seed.meetingId, sooner, later].sort(),
+		);
 
 		// Cancelling that meeting afterwards drops it from BOTH, and the row stays.
 		await testDb
@@ -4305,6 +4310,7 @@ describe.skipIf(!hasTestDb)("guest invites (#899)", () => {
 		row = await pipelineRow(seed.clubId, guestId);
 		expect(row.inviteCount).toBe(2);
 		expect(row.lastInvite?.meetingId).toBe(sooner);
+		expect(row.invitedMeetingIds).not.toContain(later);
 		expect(await inviteRows(guestId)).toHaveLength(3);
 	});
 

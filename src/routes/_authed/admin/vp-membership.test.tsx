@@ -96,6 +96,7 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		heldSlotCount: 0,
 		lastInvite: null,
 		inviteCount: 0,
+		invitedMeetingIds: [],
 		createdAt: new Date("2026-08-01T00:00:00Z"),
 		...over,
 	};
@@ -631,10 +632,93 @@ describe("VP Membership guest card — invite to the next meeting (#899)", () =>
 				inviteCount: 3,
 			}),
 		]);
+		const history = document.querySelector(
+			'[data-slot="guest-invite-history"]',
+		);
+		expect(history?.textContent).toBe(
+			"Invited to Thu, Oct 8 · by Sam Officer · invited to 3 meetings",
+		);
+		// An upcoming invite is a badge, so it stands out from the muted lines.
 		expect(
-			screen.getByText(
-				"Invited to Thu, Oct 8 · by Sam Officer · invited to 3 meetings",
-			),
+			document.querySelector('[data-slot="guest-invited-badge"]')?.textContent,
+		).toBe("Invited to Thu, Oct 8");
+	});
+
+	it("offers 'Resend invite' when already invited to the next meeting", async () => {
+		await renderRoute(
+			[
+				guestRow({
+					lastInvite: {
+						meetingId: "33333333-3333-4333-8333-333333333333",
+						meetingAt: NEXT_AT,
+						invitedByName: "Sam Officer",
+					},
+					inviteCount: 1,
+					invitedMeetingIds: ["33333333-3333-4333-8333-333333333333"],
+				}),
+			],
+			withNext,
+		);
+		expect(screen.getByRole("group", { name: "Resend invite" })).toBeTruthy();
+		expect(
+			screen.queryByRole("group", { name: "Invite to Thu, Oct 8" }),
+		).toBeNull();
+	});
+
+	it("offers 'Resend invite' when invited to the next meeting and later to another", async () => {
+		// `lastInvite` is the later meeting; the next one is still invited.
+		await renderRoute(
+			[
+				guestRow({
+					lastInvite: {
+						meetingId: "44444444-4444-4444-8444-444444444444",
+						meetingAt: new Date("2099-10-16T02:00:00Z"),
+						invitedByName: null,
+					},
+					inviteCount: 2,
+					invitedMeetingIds: [
+						"44444444-4444-4444-8444-444444444444",
+						"33333333-3333-4333-8333-333333333333",
+					],
+				}),
+			],
+			withNext,
+		);
+		expect(screen.getByRole("group", { name: "Resend invite" })).toBeTruthy();
+	});
+
+	it("keeps the date on a disabled control even when already invited", async () => {
+		await renderRoute(
+			[
+				guestRow({
+					phone: null,
+					email: null,
+					invitedMeetingIds: ["33333333-3333-4333-8333-333333333333"],
+				}),
+			],
+			withNext,
+		);
+		const group = screen.getByRole("group", { name: "Invite to Thu, Oct 8" });
+		expect(group.getAttribute("aria-disabled")).toBe("true");
+	});
+
+	it("keeps 'Invite to {date}' when the last invite was to a different meeting", async () => {
+		await renderRoute(
+			[
+				guestRow({
+					lastInvite: {
+						meetingId: "44444444-4444-4444-8444-444444444444",
+						meetingAt: new Date("2026-01-09T03:00:00Z"),
+						invitedByName: null,
+					},
+					inviteCount: 1,
+					invitedMeetingIds: ["44444444-4444-4444-8444-444444444444"],
+				}),
+			],
+			withNext,
+		);
+		expect(
+			screen.getByRole("group", { name: "Invite to Thu, Oct 8" }),
 		).toBeTruthy();
 	});
 
@@ -650,5 +734,9 @@ describe("VP Membership guest card — invite to the next meeting (#899)", () =>
 			}),
 		]);
 		expect(screen.getByText("Last invited to Thu, Jan 8")).toBeTruthy();
+		// A past invite stays muted text, not a badge.
+		expect(
+			document.querySelector('[data-slot="guest-invited-badge"]'),
+		).toBeNull();
 	});
 });
