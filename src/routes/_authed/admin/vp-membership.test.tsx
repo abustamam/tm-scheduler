@@ -39,9 +39,15 @@ import {
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	convertGuestToMember,
+	deleteGuest,
+	getLinkCandidates,
+	linkGuestToMember,
 	type NextMeetingSummary,
 	type PipelineGuestRow,
 	recordGuestInvite,
+	setGuestStage,
+	undoGuestConversion,
+	unlinkGuestFromMember,
 } from "#/server/guest-pipeline";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
@@ -69,6 +75,9 @@ import { Route } from "./vp-membership";
 
 afterEach(() => {
 	cleanup();
+	// `restoreAllMocks` does not touch the `vi.fn()`s the module mocks above
+	// hand out, so their call history would leak from one test into the next.
+	vi.clearAllMocks();
 	vi.restoreAllMocks();
 });
 
@@ -126,6 +135,27 @@ async function renderRoute(
 
 	const Component = Route.options.component as () => React.ReactElement;
 	await renderUnderMemoryRouter(<Component />);
+}
+
+/**
+ * Open a Radix dropdown the way a keyboard user does. jsdom has no pointer
+ * capture, and Radix opens on `pointerdown` rather than `click`, so a plain
+ * `fireEvent.click` on the trigger leaves the menu shut.
+ */
+function openMenu(trigger: HTMLElement) {
+	fireEvent.keyDown(trigger, { key: "Enter" });
+}
+
+/** The row's ⋯ menu — Edit, Unlink, Undo conversion, Delete. */
+function openMoreMenu(name: string) {
+	openMenu(screen.getByRole("button", { name: `More actions for ${name}` }));
+}
+
+/** The row's lane dropdown — Prospect / Following up / Lost, then Joined…. */
+function openLaneMenu(name: string) {
+	openMenu(
+		screen.getByRole("button", { name: new RegExp(`^Lane for ${name}`) }),
+	);
 }
 
 /**
@@ -266,7 +296,8 @@ describe("VP Membership guest card — contact line", () => {
  */
 describe("VP Membership guest card — edit dialog phone prefill", () => {
 	async function openEditDialog(): Promise<HTMLInputElement> {
-		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		openMoreMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
 		return (await screen.findByLabelText("Phone")) as HTMLInputElement;
 	}
 
@@ -325,18 +356,21 @@ describe("VP Membership guest card — undo a conversion (#618)", () => {
 
 	it("offers Undo conversion on a real convert that carries a record", async () => {
 		await renderRoute([convertedRow()]);
+		openMoreMenu("Converted Guest");
 		expect(
-			screen.getByRole("button", { name: /undo conversion/i }),
+			await screen.findByRole("menuitem", { name: /undo conversion/i }),
 		).toBeTruthy();
 	});
 
 	it("offers nothing when the conversion predates the record", async () => {
-		// The server would refuse this one, and a button that always fails is
+		// The server would refuse this one, and an action that always fails is
 		// worse than none — the same reasoning that keeps Unlink off a real
 		// convert. Asserted as an ABSENCE because that is the actual invariant.
 		await renderRoute([convertedRow({ conversionUndoable: false })]);
+		openMoreMenu("Converted Guest");
+		await screen.findByRole("menuitem", { name: "Edit" });
 		expect(
-			screen.queryByRole("button", { name: /undo conversion/i }),
+			screen.queryByRole("menuitem", { name: /undo conversion/i }),
 		).toBeNull();
 	});
 
@@ -344,21 +378,41 @@ describe("VP Membership guest card — undo a conversion (#618)", () => {
 		await renderRoute([
 			convertedRow({ linkReversible: true, conversionUndoable: false }),
 		]);
-		expect(screen.getByRole("button", { name: /unlink/i })).toBeTruthy();
+		openMoreMenu("Converted Guest");
 		expect(
-			screen.queryByRole("button", { name: /undo conversion/i }),
+			await screen.findByRole("menuitem", { name: /unlink/i }),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("menuitem", { name: /undo conversion/i }),
 		).toBeNull();
 	});
 
 	it("offers no Undo on a STRANDED guest, which has its own controls back", async () => {
 		// Stranded = joined with a null pointer (#632). There is no membership
-		// left to unwind, and the card already shows the stage buttons again.
+		// left to unwind, and the card offers the lane dropdown again.
 		await renderRoute([
 			convertedRow({ convertedMembershipId: null, conversionUndoable: false }),
 		]);
+		// Read before opening the menu: an open menu is modal and hides the page.
 		expect(
-			screen.queryByRole("button", { name: /undo conversion/i }),
+			screen.getByRole("button", { name: /^Lane for Converted Guest/ }),
+		).toBeTruthy();
+		openMoreMenu("Converted Guest");
+		await screen.findByRole("menuitem", { name: "Edit" });
+		expect(
+			screen.queryByRole("menuitem", { name: /undo conversion/i }),
 		).toBeNull();
+	});
+
+	it("offers no Delete and no lane dropdown once converted", async () => {
+		// Delete of a converted guest is refused by the server too.
+		await renderRoute([convertedRow()]);
+		expect(
+			screen.queryByRole("button", { name: /^Lane for Converted Guest/ }),
+		).toBeNull();
+		openMoreMenu("Converted Guest");
+		await screen.findByRole("menuitem", { name: "Edit" });
+		expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
 	});
 });
 
@@ -388,7 +442,6 @@ describe("VP Membership guest card — reactivation notice (#501)", () => {
 	async function clickConvert(
 		result: Partial<ConvertNotice> & { reactivated: boolean },
 	) {
-		vi.spyOn(window, "confirm").mockReturnValue(true);
 		vi.mocked(convertGuestToMember).mockResolvedValue({
 			ok: true,
 			membershipId: "44444444-4444-4444-8444-444444444444",
@@ -398,7 +451,9 @@ describe("VP Membership guest card — reactivation notice (#501)", () => {
 			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
 		} as any);
 		await renderRoute([prospect()]);
-		fireEvent.click(screen.getByRole("button", { name: /convert/i }));
+		openLaneMenu("Returning Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: /joined/i }));
+		fireEvent.click(await screen.findByRole("button", { name: /new member/i }));
 		await waitFor(() => expect(convertGuestToMember).toHaveBeenCalled());
 		await waitFor(() => expect(toast.success).toHaveBeenCalled());
 		return vi.mocked(toast.success).mock.calls.at(-1);
@@ -738,5 +793,249 @@ describe("VP Membership guest card — invite to the next meeting (#899)", () =>
 		expect(
 			document.querySelector('[data-slot="guest-invited-badge"]'),
 		).toBeNull();
+	});
+});
+
+/**
+ * The lane dropdown and "Joined…" (asked for directly, 2026-09-28). Convert
+ * and "Already a member?" were two buttons whose difference — whether a NEW
+ * roster member gets created — neither label said; they are now the two answers
+ * to one question behind the lane dropdown's Joined… entry.
+ */
+describe("VP Membership guest card — lane dropdown and Joined…", () => {
+	it("names the current lane on the trigger", async () => {
+		await renderRoute([guestRow({ stage: "following_up" })]);
+		expect(
+			screen.getByRole("button", { name: "Lane for Ada Guest: Following up" })
+				.textContent,
+		).toContain("Following up");
+	});
+
+	it("moves the guest to the lane picked", async () => {
+		vi.mocked(setGuestStage).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			{ ok: true } as any,
+		);
+		await renderRoute([guestRow()]);
+		openLaneMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Lost" }));
+		await waitFor(() =>
+			expect(setGuestStage).toHaveBeenCalledWith({
+				data: expect.objectContaining({ stage: "lost" }),
+			}),
+		);
+	});
+
+	it("does not write when the current lane is picked again", async () => {
+		await renderRoute([guestRow()]);
+		openLaneMenu("Ada Guest");
+		fireEvent.click(
+			await screen.findByRole("menuitemradio", { name: "Prospect" }),
+		);
+		expect(setGuestStage).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Joined dialog open when convert is refused, so the link is one tap away", async () => {
+		// #617 refuses Convert for a guest already on the roster. Closing on that
+		// refusal would send the admin back through the menu for the answer the
+		// same dialog offers.
+		vi.mocked(convertGuestToMember).mockRejectedValue(
+			new Error("Already on the roster"),
+		);
+		await renderRoute([guestRow()]);
+		openLaneMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: /joined/i }));
+		fireEvent.click(await screen.findByRole("button", { name: /new member/i }));
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("Already on the roster"),
+		);
+		expect(
+			screen.getByRole("button", { name: /already on the roster/i }),
+		).toBeTruthy();
+	});
+
+	it("links to an existing member from 'Already on the roster' without converting", async () => {
+		vi.mocked(getLinkCandidates).mockResolvedValue([
+			{
+				id: "66666666-6666-4666-8666-666666666666",
+				name: "Ada Member",
+				suggested: true,
+				sharesMeeting: false,
+			},
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+		] as any);
+		vi.mocked(linkGuestToMember).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			{ ok: true } as any,
+		);
+		await renderRoute([guestRow()]);
+		openLaneMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: /joined/i }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: /already on the roster/i }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: /Ada Member/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Link them" }));
+		await waitFor(() =>
+			expect(linkGuestToMember).toHaveBeenCalledWith({
+				data: expect.objectContaining({
+					memberId: "66666666-6666-4666-8666-666666666666",
+				}),
+			}),
+		);
+		expect(convertGuestToMember).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The ⋯ menu's three writes, run end to end: each calls its server fn with
+ * this guest and toasts what happened, and a failure toasts the server's own
+ * message.
+ */
+describe("VP Membership guest card — ⋯ menu writes", () => {
+	const MEMBERSHIP = "33333333-3333-4333-8333-333333333333";
+
+	it("unlinks a linked guest", async () => {
+		vi.mocked(unlinkGuestFromMember).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			{ ok: true } as any,
+		);
+		await renderRoute([
+			guestRow({
+				stage: "joined",
+				convertedMembershipId: MEMBERSHIP,
+				linkReversible: true,
+			}),
+		]);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Unlink" }));
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Ada Guest is no longer linked.",
+			),
+		);
+		expect(unlinkGuestFromMember).toHaveBeenCalledWith({
+			data: expect.objectContaining({ guestId: guestRow().id }),
+		});
+	});
+
+	it("undoes a conversion only after the admin confirms", async () => {
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+		vi.mocked(undoGuestConversion).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			{ ok: true } as any,
+		);
+		await renderRoute([
+			guestRow({
+				stage: "joined",
+				convertedMembershipId: MEMBERSHIP,
+				conversionUndoable: true,
+			}),
+		]);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(
+			await screen.findByRole("menuitem", { name: "Undo conversion" }),
+		);
+		expect(confirm).toHaveBeenCalled();
+		expect(undoGuestConversion).not.toHaveBeenCalled();
+
+		confirm.mockReturnValue(true);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(
+			await screen.findByRole("menuitem", { name: "Undo conversion" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith("Ada Guest is a guest again."),
+		);
+		expect(undoGuestConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("deletes from the confirm dialog and says how many roles went back to Open", async () => {
+		vi.mocked(deleteGuest).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			{ ok: true, slotsReopened: 2 } as any,
+		);
+		await renderRoute([guestRow({ heldSlotCount: 2 })]);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+		expect(
+			(await screen.findByRole("dialog")).textContent,
+			"the confirm must say the held roles are reset",
+		).toMatch(/2 roles, which will be reset to Open/);
+		fireEvent.click(screen.getByRole("button", { name: "Delete guest" }));
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Ada Guest deleted. 2 roles reset to Open.",
+			),
+		);
+	});
+
+	it("toasts the server's message when a write fails", async () => {
+		vi.mocked(deleteGuest).mockRejectedValue(new Error("Guest has converted"));
+		await renderRoute([guestRow()]);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Delete guest" }),
+		);
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("Guest has converted"),
+		);
+	});
+});
+
+describe("VP Membership guest card — Joined… dialog details", () => {
+	async function openJoined(name = "Ada Guest") {
+		openLaneMenu(name);
+		fireEvent.click(await screen.findByRole("menuitem", { name: /joined/i }));
+	}
+
+	it("names a stranded guest's trigger 'Move to…', visibly and to a screen reader", async () => {
+		await renderRoute([
+			guestRow({ stage: "joined", convertedMembershipId: null }),
+		]);
+		const trigger = screen.getByRole("button", {
+			name: "Lane for Ada Guest: Move to…",
+		});
+		expect(trigger.textContent).toContain("Move to…");
+	});
+
+	it("tells a stranded guest's admin the earlier membership was removed", async () => {
+		await renderRoute([
+			guestRow({ stage: "joined", convertedMembershipId: null }),
+		]);
+		await openJoined();
+		expect((await screen.findByRole("dialog")).textContent).toMatch(
+			/earlier membership was removed/,
+		);
+	});
+
+	it("goes Back from the roster search to the question, and reopens at the question", async () => {
+		vi.mocked(getLinkCandidates).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			[] as any,
+		);
+		await renderRoute([guestRow()]);
+		await openJoined();
+		fireEvent.click(
+			await screen.findByRole("button", { name: /already on the roster/i }),
+		);
+		await screen.findByPlaceholderText("Search the roster…");
+		fireEvent.click(screen.getByRole("button", { name: "Back" }));
+		expect(
+			await screen.findByRole("button", { name: /new member/i }),
+		).toBeTruthy();
+
+		// Leave it on the search step, close, reopen: it starts at the question.
+		fireEvent.click(
+			screen.getByRole("button", { name: /already on the roster/i }),
+		);
+		await screen.findByPlaceholderText("Search the roster…");
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		await openJoined();
+		expect(
+			await screen.findByRole("button", { name: /new member/i }),
+		).toBeTruthy();
 	});
 });
