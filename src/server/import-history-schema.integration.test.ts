@@ -62,6 +62,9 @@ const { pathwaysForPerson, pathwaysByMember } = await import(
 const { mergePeople } = await import("./people-merge-logic");
 const { loadClubExport } = await import("./club-export-logic");
 const { deleteClubPermanently } = await import("./onboarding-logic");
+const { applyDeleteGuest, GUEST_HAS_SPEECHES_MESSAGE } = await import(
+	"./guest-pipeline-logic"
+);
 
 const RUN = randomUUID().slice(0, 8);
 
@@ -599,6 +602,79 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 				.from(speeches)
 				.where(eq(speeches.id, g));
 			expect(kept).toEqual({ id: g, guestId: otherGuest });
+		});
+	});
+
+	describe("guest-pipeline-logic: applyDeleteGuest", () => {
+		it("refuses a guest who owns a speech, and deletes nothing", async () => {
+			const guestId = await makeGuest(a.clubId, { kind: "guest_speaker" });
+			const g = await guestSpeech(guestId);
+			const [slot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: a.meetingId,
+					roleDefinitionId: await speakerDef(a.clubId),
+					slotIndex: 9,
+					assignedGuestId: guestId,
+					speechId: g,
+					status: "confirmed",
+				})
+				.returning({ id: roleSlots.id });
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: a.meetingId, guestId, status: "present" });
+
+			await expect(
+				applyDeleteGuest({
+					clubId: a.clubId,
+					guestId,
+					actorMemberId: a.adminMemberId,
+				}),
+			).rejects.toThrow(GUEST_HAS_SPEECHES_MESSAGE);
+
+			const [guest] = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(guest).toEqual({ id: guestId });
+			const [speech] = await testDb
+				.select({ id: speeches.id, guestId: speeches.guestId })
+				.from(speeches)
+				.where(eq(speeches.id, g));
+			expect(speech).toEqual({ id: g, guestId });
+			const [heldSlot] = await testDb
+				.select({
+					assignedGuestId: roleSlots.assignedGuestId,
+					speechId: roleSlots.speechId,
+					status: roleSlots.status,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slot.id));
+			expect(heldSlot).toEqual({
+				assignedGuestId: guestId,
+				speechId: g,
+				status: "confirmed",
+			});
+			const att = await testDb
+				.select({ id: meetingAttendance.id })
+				.from(meetingAttendance)
+				.where(eq(meetingAttendance.guestId, guestId));
+			expect(att).toHaveLength(1);
+		});
+
+		it("still deletes a guest with no speeches", async () => {
+			const guestId = await makeGuest(a.clubId);
+			const res = await applyDeleteGuest({
+				clubId: a.clubId,
+				guestId,
+				actorMemberId: a.adminMemberId,
+			});
+			expect(res.ok).toBe(true);
+			const left = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(left).toEqual([]);
 		});
 	});
 

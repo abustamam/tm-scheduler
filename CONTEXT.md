@@ -96,8 +96,11 @@ the nouns in `src/db/schema.ts`.
   and `guest_speaker` are Toastmasters from ANOTHER club, attending or speaking: guests here, but
   never prospects. `home_club` is free text naming their own club, and `introduced_by_member_id`
   the member who brought them (SET NULL when that member is deleted). A guest may OWN a
-  **Speech** (see there); deleting the guest deletes it. Storage only for now: imported history
-  (below) is where the non-visitor kinds first appear.
+  **Speech** (see there). The FK cascades (so deleting the club takes it), but deleting a guest
+  who owns a speech is REFUSED (`applyDeleteGuest`, `GUEST_HAS_SPEECHES_MESSAGE`): it is club
+  history, not a mistake. A guest's speeches stay guest-owned through convert-to-member and
+  link-to-member until the importer defines the policy (#1051). Storage only for now: imported
+  history (below) is where the non-visitor kinds first appear.
 - **Guest pipeline** — the VP-Membership funnel over the `guests` entity (ADR-0018 / #208):
   **capture → stage-tracked prospect list → convert-to-member**. A guest's **stage**
   (`guest_stage` enum) is `prospect → following_up → joined → lost`: new guests default
