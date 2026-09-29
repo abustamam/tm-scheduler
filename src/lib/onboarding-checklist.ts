@@ -1,3 +1,4 @@
+import type { CharterStatus } from "#/lib/club-charter";
 import type { OnboardingChecklistStatus } from "#/server/onboarding-checklist-logic";
 
 // Client-safe (no `#/db`) piece of the setup checklist (#265): the threshold,
@@ -5,6 +6,25 @@ import type { OnboardingChecklistStatus } from "#/server/onboarding-checklist-lo
 // both the server logic (`onboarding-checklist-logic.ts`) and the client
 // component can import it as a plain VALUE without pulling `db`/`pg` into the
 // browser — see the server-bundle rule in members-logic.ts.
+
+/**
+ * Whether "Confirm your club details" is done: a name and a meeting schedule,
+ * and a club number for a CHARTERED club only. A chartering club may have no
+ * number yet (#944), so requiring one would leave the item unfinishable until
+ * the club charters. Same rule as `charterInvariantError`, read the other way.
+ */
+export function clubDetailsComplete(club: {
+	name: string | null;
+	clubNumber: string | null;
+	charterStatus: CharterStatus;
+	meetingSchedule: string | null;
+}): boolean {
+	const numberDone =
+		club.charterStatus === "chartering" || Boolean(club.clubNumber?.trim());
+	return Boolean(
+		club.name?.trim() && club.meetingSchedule?.trim() && numberDone,
+	);
+}
 
 /** Below this many active members, a club still counts as "new" — drives both
  *  the "Import your roster" checklist item and the show/dismiss gate. */
@@ -40,7 +60,8 @@ export function buildOnboardingChecklistItems(
 		{
 			key: "club-details",
 			label: "Confirm your club details",
-			description: "Name, club number, time zone, and meeting day/time.",
+			description:
+				"Name, club number (once chartered), time zone, and meeting day/time.",
 			to: "/admin/club-settings",
 			complete: status.clubDetailsComplete,
 		},
