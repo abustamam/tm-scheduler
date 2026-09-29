@@ -153,6 +153,11 @@ const MANUAL_STAGES: { id: ManualGuestStage; label: string }[] = [
 	{ id: "lost", label: "Lost" },
 ];
 
+/** The one error toast every write on this page shows. */
+function toastError(err: unknown) {
+	toast.error(err instanceof Error ? err.message : "Something went wrong.");
+}
+
 function VpMembership() {
 	const { guests, clubId, clubName, clubSlug, inviteContext, readOnly } =
 		Route.useLoaderData();
@@ -191,7 +196,7 @@ function VpMembership() {
 			await setGuestStage({ data: { clubId, guestId, stage } });
 			await router.invalidate();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			toastError(err);
 		} finally {
 			setBusyId(null);
 		}
@@ -236,7 +241,7 @@ function VpMembership() {
 			await router.invalidate();
 			return true;
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			toastError(err);
 			return false;
 		} finally {
 			setBusyId(null);
@@ -538,8 +543,8 @@ function GuestRow({
 	// Convert was hidden, and delete was hidden. Treating it as not-joined is what
 	// gives the row its controls back; the badge below says which case it is
 	// rather than silently pretending the stage column reads something it doesn't.
+	// `GuestRowActions` derives the same pair for the controls.
 	const stranded = isStrandedConvertedGuest(guest);
-	const joined = guest.stage === "joined" && !stranded;
 	const visits =
 		guest.visitCount === 0
 			? "No recorded visits"
@@ -669,8 +674,6 @@ function GuestRow({
 					guest={guest}
 					clubId={clubId}
 					busy={busy}
-					joined={joined}
-					stranded={stranded}
 					onMove={onMove}
 					onConvert={onConvert}
 				/>
@@ -714,16 +717,12 @@ function GuestRowActions({
 	guest,
 	clubId,
 	busy: rowBusy,
-	joined,
-	stranded,
 	onMove,
 	onConvert,
 }: {
 	guest: PipelineGuestRow;
 	clubId: string;
 	busy: boolean;
-	joined: boolean;
-	stranded: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => Promise<boolean>;
 }) {
@@ -733,6 +732,11 @@ function GuestRowActions({
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [ownBusy, setOwnBusy] = useState(false);
 	const busy = rowBusy || ownBusy;
+	// Derived here from `guest`, not passed beside it, so the two cannot
+	// disagree. STRANDED = converted once, then the membership was removed
+	// (#618): it gets the lane dropdown and Delete back.
+	const stranded = isStrandedConvertedGuest(guest);
+	const joined = guest.stage === "joined" && !stranded;
 
 	// THREE states, not two, and both single-boolean versions of this were wrong.
 	//
@@ -752,20 +756,25 @@ function GuestRowActions({
 		Boolean(guest.convertedMembershipId) && !guest.linkReversible;
 	const canUndoConversion = convertedForReal && guest.conversionUndoable;
 	const manualStage = MANUAL_STAGES.find((s) => s.id === guest.stage);
+	// A stranded guest's stage column still reads `joined`, which is no lane it
+	// can be moved "from"; the trigger says what to do instead of naming a lane
+	// it is not really in. The accessible name reads the same words.
+	const laneLabel = manualStage?.label ?? "Move to…";
 
-	async function run(work: () => Promise<void>) {
+	/** Disable the row's controls while `work` runs, and toast if it throws. */
+	async function withBusyToast(work: () => Promise<void>) {
 		setOwnBusy(true);
 		try {
 			await work();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			toastError(err);
 		} finally {
 			setOwnBusy(false);
 		}
 	}
 
 	function onUnlink() {
-		void run(async () => {
+		void withBusyToast(async () => {
 			await unlinkGuestFromMember({ data: { clubId, guestId: guest.id } });
 			toast.success(`${guest.name} is no longer linked.`);
 			await router.invalidate();
@@ -784,7 +793,7 @@ function GuestRowActions({
 		) {
 			return;
 		}
-		void run(async () => {
+		void withBusyToast(async () => {
 			await undoGuestConversion({ data: { clubId, guestId: guest.id } });
 			toast.success(`${guest.name} is a guest again.`);
 			await router.invalidate();
@@ -792,7 +801,7 @@ function GuestRowActions({
 	}
 
 	function onDelete() {
-		void run(async () => {
+		void withBusyToast(async () => {
 			const res = await deleteGuest({ data: { clubId, guestId: guest.id } });
 			toast.success(
 				res.slotsReopened > 0
@@ -820,17 +829,12 @@ function GuestRowActions({
 							variant="outline"
 							size="sm"
 							disabled={busy}
-							aria-label={`Lane for ${guest.name}: ${
-								manualStage?.label ?? "Member removed"
-							}`}
+							aria-label={`Lane for ${guest.name}: ${laneLabel}`}
 						>
 							{busy ? (
 								<Loader2 className="size-4 animate-spin" aria-hidden />
 							) : null}
-							{/* A stranded guest's stage column still reads `joined`, which
-							    is no lane it can be moved "from"; the trigger says what to
-							    do instead of naming a lane it is not really in. */}
-							{manualStage?.label ?? "Move to…"}
+							{laneLabel}
 							<ChevronDown className="size-4 opacity-60" aria-hidden />
 						</Button>
 					</DropdownMenuTrigger>
@@ -909,7 +913,6 @@ function GuestRowActions({
 				<GuestJoinedDialog
 					guest={guest}
 					clubId={clubId}
-					stranded={stranded}
 					open={joinedOpen}
 					onOpenChange={setJoinedOpen}
 					onConvert={onConvert}
@@ -978,19 +981,18 @@ function GuestRowActions({
 function GuestJoinedDialog({
 	guest,
 	clubId,
-	stranded,
 	open,
 	onOpenChange,
 	onConvert,
 }: {
 	guest: PipelineGuestRow;
 	clubId: string;
-	stranded: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onConvert: (guest: PipelineGuestRow) => Promise<boolean>;
 }) {
 	const router = useRouter();
+	const stranded = isStrandedConvertedGuest(guest);
 	const [step, setStep] = useState<"choose" | "link">("choose");
 	const [busy, setBusy] = useState(false);
 	const [query, setQuery] = useState("");
@@ -1054,7 +1056,7 @@ function GuestJoinedDialog({
 			setOpen(false);
 			await router.invalidate();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			toastError(err);
 		} finally {
 			setBusy(false);
 		}

@@ -39,12 +39,15 @@ import {
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	convertGuestToMember,
+	deleteGuest,
 	getLinkCandidates,
 	linkGuestToMember,
 	type NextMeetingSummary,
 	type PipelineGuestRow,
 	recordGuestInvite,
 	setGuestStage,
+	undoGuestConversion,
+	unlinkGuestFromMember,
 } from "#/server/guest-pipeline";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
@@ -72,6 +75,9 @@ import { Route } from "./vp-membership";
 
 afterEach(() => {
 	cleanup();
+	// `restoreAllMocks` does not touch the `vi.fn()`s the module mocks above
+	// hand out, so their call history would leak from one test into the next.
+	vi.clearAllMocks();
 	vi.restoreAllMocks();
 });
 
@@ -821,7 +827,6 @@ describe("VP Membership guest card — lane dropdown and Joined…", () => {
 	});
 
 	it("does not write when the current lane is picked again", async () => {
-		vi.mocked(setGuestStage).mockClear();
 		await renderRoute([guestRow()]);
 		openLaneMenu("Ada Guest");
 		fireEvent.click(
@@ -850,7 +855,6 @@ describe("VP Membership guest card — lane dropdown and Joined…", () => {
 	});
 
 	it("links to an existing member from 'Already on the roster' without converting", async () => {
-		vi.mocked(convertGuestToMember).mockClear();
 		vi.mocked(getLinkCandidates).mockResolvedValue([
 			{
 				id: "66666666-6666-4666-8666-666666666666",
@@ -880,5 +884,158 @@ describe("VP Membership guest card — lane dropdown and Joined…", () => {
 			}),
 		);
 		expect(convertGuestToMember).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The ⋯ menu's three writes, run end to end: each calls its server fn with
+ * this guest and toasts what happened, and a failure toasts the server's own
+ * message.
+ */
+describe("VP Membership guest card — ⋯ menu writes", () => {
+	const MEMBERSHIP = "33333333-3333-4333-8333-333333333333";
+
+	it("unlinks a linked guest", async () => {
+		vi.mocked(unlinkGuestFromMember).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			{ ok: true } as any,
+		);
+		await renderRoute([
+			guestRow({
+				stage: "joined",
+				convertedMembershipId: MEMBERSHIP,
+				linkReversible: true,
+			}),
+		]);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Unlink" }));
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Ada Guest is no longer linked.",
+			),
+		);
+		expect(unlinkGuestFromMember).toHaveBeenCalledWith({
+			data: expect.objectContaining({ guestId: guestRow().id }),
+		});
+	});
+
+	it("undoes a conversion only after the admin confirms", async () => {
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+		vi.mocked(undoGuestConversion).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			{ ok: true } as any,
+		);
+		await renderRoute([
+			guestRow({
+				stage: "joined",
+				convertedMembershipId: MEMBERSHIP,
+				conversionUndoable: true,
+			}),
+		]);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(
+			await screen.findByRole("menuitem", { name: "Undo conversion" }),
+		);
+		expect(confirm).toHaveBeenCalled();
+		expect(undoGuestConversion).not.toHaveBeenCalled();
+
+		confirm.mockReturnValue(true);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(
+			await screen.findByRole("menuitem", { name: "Undo conversion" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith("Ada Guest is a guest again."),
+		);
+		expect(undoGuestConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("deletes from the confirm dialog and says how many roles went back to Open", async () => {
+		vi.mocked(deleteGuest).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			{ ok: true, slotsReopened: 2 } as any,
+		);
+		await renderRoute([guestRow({ heldSlotCount: 2 })]);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+		expect(
+			(await screen.findByRole("dialog")).textContent,
+			"the confirm must say the held roles are reset",
+		).toMatch(/2 roles, which will be reset to Open/);
+		fireEvent.click(screen.getByRole("button", { name: "Delete guest" }));
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Ada Guest deleted. 2 roles reset to Open.",
+			),
+		);
+	});
+
+	it("toasts the server's message when a write fails", async () => {
+		vi.mocked(deleteGuest).mockRejectedValue(new Error("Guest has converted"));
+		await renderRoute([guestRow()]);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Delete guest" }),
+		);
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("Guest has converted"),
+		);
+	});
+});
+
+describe("VP Membership guest card — Joined… dialog details", () => {
+	async function openJoined(name = "Ada Guest") {
+		openLaneMenu(name);
+		fireEvent.click(await screen.findByRole("menuitem", { name: /joined/i }));
+	}
+
+	it("names a stranded guest's trigger 'Move to…', visibly and to a screen reader", async () => {
+		await renderRoute([
+			guestRow({ stage: "joined", convertedMembershipId: null }),
+		]);
+		const trigger = screen.getByRole("button", {
+			name: "Lane for Ada Guest: Move to…",
+		});
+		expect(trigger.textContent).toContain("Move to…");
+	});
+
+	it("tells a stranded guest's admin the earlier membership was removed", async () => {
+		await renderRoute([
+			guestRow({ stage: "joined", convertedMembershipId: null }),
+		]);
+		await openJoined();
+		expect((await screen.findByRole("dialog")).textContent).toMatch(
+			/earlier membership was removed/,
+		);
+	});
+
+	it("goes Back from the roster search to the question, and reopens at the question", async () => {
+		vi.mocked(getLinkCandidates).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+			[] as any,
+		);
+		await renderRoute([guestRow()]);
+		await openJoined();
+		fireEvent.click(
+			await screen.findByRole("button", { name: /already on the roster/i }),
+		);
+		await screen.findByPlaceholderText("Search the roster…");
+		fireEvent.click(screen.getByRole("button", { name: "Back" }));
+		expect(
+			await screen.findByRole("button", { name: /new member/i }),
+		).toBeTruthy();
+
+		// Leave it on the search step, close, reopen: it starts at the question.
+		fireEvent.click(
+			screen.getByRole("button", { name: /already on the roster/i }),
+		);
+		await screen.findByPlaceholderText("Search the roster…");
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		await openJoined();
+		expect(
+			await screen.findByRole("button", { name: /new member/i }),
+		).toBeTruthy();
 	});
 });
