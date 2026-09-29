@@ -266,9 +266,85 @@ export type AgendaDraft = {
  * They did, briefly: `editable` was `!isMeetingLocked` alone, so a cancelled
  * meeting rendered a fully interactive editor whose every save threw.
  */
-function agendaEditable(status: string): boolean {
+export function agendaEditable(status: string): boolean {
 	return !isMeetingLocked(status) && status !== "cancelled";
 }
+
+/**
+ * The `meeting_template_roles` declarations a materialised standard agenda
+ * carries: one per role key its seeds name, sourced from the CLUB's own
+ * definitions so a club that renamed a role keeps its word (#445).
+ *
+ * Split out of `materialiseForMeeting` (#966) so the connector's read path
+ * can clock a never-edited meeting IN MEMORY with exactly the roles the copy
+ * would be given, without writing the copy. A read only.
+ */
+async function declaredRolesForSeeds(
+	conn: DbOrTx,
+	clubId: string,
+	seeds: { roleKey: string | null; repeatsRoleKey: string | null }[],
+): Promise<
+	{
+		key: string;
+		name: string;
+		category: AgendaDraftRole["category"];
+		defaultCount: number;
+		isSpeakerRole: boolean;
+		slotsUnordered: boolean;
+		sortOrder: number;
+	}[]
+> {
+	const namedKeys = [
+		...new Set(
+			seeds
+				.map((seed) => seed.roleKey ?? seed.repeatsRoleKey)
+				.filter((key): key is string => key != null),
+		),
+	];
+	if (namedKeys.length === 0) return [];
+	const clubRoles = await conn
+		.select({
+			key: roleDefinitions.key,
+			name: roleDefinitions.name,
+			category: roleDefinitions.category,
+			defaultCount: roleDefinitions.defaultCount,
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			slotsUnordered: roleDefinitions.slotsUnordered,
+		})
+		.from(roleDefinitions)
+		// No `isNull(templateId)` beside these: 0083 pinned the column NULL
+		// with a CHECK, so it matched every row. `role_definitions_club_key_unique`
+		// is what keeps `byKey` below unambiguous.
+		.where(
+			and(
+				eq(roleDefinitions.clubId, clubId),
+				inArray(roleDefinitions.key, namedKeys),
+			),
+		);
+	const byKey = new Map(
+		clubRoles.flatMap((r) => (r.key == null ? [] : [[r.key, r] as const])),
+	);
+	return namedKeys.map((key, i) => {
+		const club = byKey.get(key);
+		return {
+			key,
+			// A key the club does not define falls back to the key itself
+			// rather than dropping the beat: the row still prints, owned by
+			// nobody, which is what an unstaffed role already does.
+			name: club?.name ?? key,
+			category: club?.category ?? ("functionary" as const),
+			defaultCount: club?.defaultCount ?? 1,
+			isSpeakerRole: club?.isSpeakerRole ?? false,
+			slotsUnordered: club?.slotsUnordered ?? false,
+			sortOrder: i,
+		};
+	});
+}
+
+/** What a write to a cancelled meeting's agenda is refused with. Exported so
+ *  a caller can compare against THIS rather than a copy (`mcp/errors.ts`). */
+export const AGENDA_CANCELLED_MESSAGE =
+	"A cancelled meeting's agenda cannot be edited.";
 
 /**
  * Build this meeting its own editable copy of the standard agenda, once.
@@ -334,54 +410,11 @@ async function materialiseForMeeting(
 		// NOT `role_definitions`, which own the meeting's slots and are
 		// deliberately left alone: copying those would detach this meeting's
 		// slots from the club roster.
-		const namedKeys = [
-			...new Set(
-				seeds
-					.map((seed) => seed.roleKey ?? seed.repeatsRoleKey)
-					.filter((key): key is string => key != null),
-			),
-		];
-		if (namedKeys.length > 0) {
-			const clubRoles = await tx
-				.select({
-					key: roleDefinitions.key,
-					name: roleDefinitions.name,
-					category: roleDefinitions.category,
-					defaultCount: roleDefinitions.defaultCount,
-					isSpeakerRole: roleDefinitions.isSpeakerRole,
-					slotsUnordered: roleDefinitions.slotsUnordered,
-				})
-				.from(roleDefinitions)
-				// No `isNull(templateId)` beside these: 0083 pinned the column NULL
-				// with a CHECK, so it matched every row. `role_definitions_club_key_unique`
-				// is what keeps `byKey` below unambiguous.
-				.where(
-					and(
-						eq(roleDefinitions.clubId, clubId),
-						inArray(roleDefinitions.key, namedKeys),
-					),
-				);
-			const byKey = new Map(
-				clubRoles.flatMap((r) => (r.key == null ? [] : [[r.key, r] as const])),
-			);
-			await tx.insert(meetingTemplateRoles).values(
-				namedKeys.map((key, i) => {
-					const club = byKey.get(key);
-					return {
-						templateId: tpl.id,
-						key,
-						// A key the club does not define falls back to the key itself
-						// rather than dropping the beat: the row still prints, owned by
-						// nobody, which is what an unstaffed role already does.
-						name: club?.name ?? key,
-						category: club?.category ?? ("functionary" as const),
-						defaultCount: club?.defaultCount ?? 1,
-						isSpeakerRole: club?.isSpeakerRole ?? false,
-						slotsUnordered: club?.slotsUnordered ?? false,
-						sortOrder: i,
-					};
-				}),
-			);
+		const declared = await declaredRolesForSeeds(tx, clubId, seeds);
+		if (declared.length > 0) {
+			await tx
+				.insert(meetingTemplateRoles)
+				.values(declared.map((role) => ({ ...role, templateId: tpl.id })));
 		}
 		await tx
 			.update(meetings)
@@ -389,6 +422,80 @@ async function materialiseForMeeting(
 			.where(eq(meetings.id, meetingId));
 		return tpl.id;
 	});
+}
+
+/**
+ * `Promise.all` on the pool, and one at a time on a transaction.
+ *
+ * A transaction is ONE client, and handing a pg client a second query while the
+ * first is in flight is deprecated (pg warns, and v9 removes it). Drizzle's
+ * builders are lazy — nothing is sent until this awaits it — so the reads can
+ * be written once and still run sequentially when `conn` is a transaction
+ * (#966's apply re-plans inside one).
+ *
+ * An eager promise in `reads` (an async function already called) runs when it
+ * is created, whatever this does; every such read must itself be handed `conn`
+ * — `loadMeetingSlots(meetingId, conn)` below — or it runs on a second pooled
+ * connection, outside the transaction's view, while the caller holds its lock.
+ */
+async function readAll<T extends readonly unknown[] | []>(
+	conn: DbOrTx,
+	reads: T,
+): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+	if (conn === database) {
+		return (await Promise.all(reads)) as {
+			-readonly [K in keyof T]: Awaited<T[K]>;
+		};
+	}
+	const out: unknown[] = [];
+	for (const read of reads) out.push(await read);
+	return out as { -readonly [K in keyof T]: Awaited<T[K]> };
+}
+
+/** A template's stored rows, in order — the one select `loadAgendaDraft` and
+ *  `readAgendaSnapshot` share. Lazy: nothing runs until it is awaited. */
+function templateBeatsQuery(conn: DbOrTx, templateId: string) {
+	return conn
+		.select({
+			id: meetingTemplateBeats.id,
+			sortOrder: meetingTemplateBeats.sortOrder,
+			kind: meetingTemplateBeats.kind,
+			label: meetingTemplateBeats.label,
+			detail: meetingTemplateBeats.detail,
+			minutes: meetingTemplateBeats.minutes,
+			roleKey: meetingTemplateBeats.roleKey,
+			repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
+			// See `AgendaDraftRow.flex` — load-bearing for the client's
+			// `applyFlex`, not just for the editor's pin control.
+			flex: meetingTemplateBeats.flex,
+			handoff: meetingTemplateBeats.handoff,
+			markGreen: meetingTemplateBeats.markGreen,
+			markYellow: meetingTemplateBeats.markYellow,
+			markRed: meetingTemplateBeats.markRed,
+			// See `AgendaDraftRow.clubGoverned` (#683). Omit it and every row
+			// reads as ungoverned: `refreshTableTopicsMarks` below then matches
+			// nothing, and the editor shows the frozen snapshot as an editable
+			// window while every print surface shows the club's.
+			clubGoverned: meetingTemplateBeats.clubGoverned,
+		})
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, templateId))
+		.orderBy(asc(meetingTemplateBeats.sortOrder));
+}
+
+/** A template's declared roles, in order. Lazy, like the rows. */
+function templateRolesQuery(conn: DbOrTx, templateId: string) {
+	return conn
+		.select({
+			key: meetingTemplateRoles.key,
+			name: meetingTemplateRoles.name,
+			category: meetingTemplateRoles.category,
+			defaultCount: meetingTemplateRoles.defaultCount,
+			isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
+		})
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, templateId))
+		.orderBy(asc(meetingTemplateRoles.sortOrder));
 }
 
 /**
@@ -416,8 +523,9 @@ async function materialiseForMeeting(
  */
 export async function loadAgendaDraft(
 	meetingId: string,
+	conn: DbOrTx = database,
 ): Promise<AgendaDraft | null> {
-	const [meeting] = await database
+	const [meeting] = await conn
 		.select({
 			templateId: meetings.templateId,
 			clubId: meetings.clubId,
@@ -447,7 +555,7 @@ export async function loadAgendaDraft(
 	const templateId =
 		meeting.templateId ??
 		(await materialiseForMeeting(
-			database,
+			conn,
 			meetingId,
 			meeting.clubId,
 			meeting.geIntroducesFunctionaries,
@@ -457,7 +565,7 @@ export async function loadAgendaDraft(
 			},
 		));
 
-	const [tpl] = await database
+	const [tpl] = await conn
 		.select({ id: meetingTemplates.id, name: meetingTemplates.name })
 		.from(meetingTemplates)
 		.where(eq(meetingTemplates.id, templateId))
@@ -467,47 +575,12 @@ export async function loadAgendaDraft(
 	// names cannot have been deleted.
 	if (!tpl) return null;
 
-	const [rows, roles, slots, bank] = await Promise.all([
-		database
-			.select({
-				id: meetingTemplateBeats.id,
-				sortOrder: meetingTemplateBeats.sortOrder,
-				kind: meetingTemplateBeats.kind,
-				label: meetingTemplateBeats.label,
-				detail: meetingTemplateBeats.detail,
-				minutes: meetingTemplateBeats.minutes,
-				roleKey: meetingTemplateBeats.roleKey,
-				repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
-				// See `AgendaDraftRow.flex` — load-bearing for the client's
-				// `applyFlex`, not just for the editor's pin control.
-				flex: meetingTemplateBeats.flex,
-				handoff: meetingTemplateBeats.handoff,
-				markGreen: meetingTemplateBeats.markGreen,
-				markYellow: meetingTemplateBeats.markYellow,
-				markRed: meetingTemplateBeats.markRed,
-				// See `AgendaDraftRow.clubGoverned` (#683). Omit it and every row
-				// reads as ungoverned: `refreshTableTopicsMarks` below then matches
-				// nothing, and the editor shows the frozen snapshot as an editable
-				// window while every print surface shows the club's.
-				clubGoverned: meetingTemplateBeats.clubGoverned,
-			})
-			.from(meetingTemplateBeats)
-			.where(eq(meetingTemplateBeats.templateId, tpl.id))
-			.orderBy(asc(meetingTemplateBeats.sortOrder)),
-		database
-			.select({
-				key: meetingTemplateRoles.key,
-				name: meetingTemplateRoles.name,
-				category: meetingTemplateRoles.category,
-				defaultCount: meetingTemplateRoles.defaultCount,
-				isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
-			})
-			.from(meetingTemplateRoles)
-			.where(eq(meetingTemplateRoles.templateId, tpl.id))
-			.orderBy(asc(meetingTemplateRoles.sortOrder)),
+	const [rows, roles, slots, bank] = await readAll(conn, [
+		templateBeatsQuery(conn, tpl.id),
+		templateRolesQuery(conn, tpl.id),
 		// The SAME loader the meeting page and the print route use, so the
 		// editor's clock cannot disagree with theirs about what a slot is.
-		loadMeetingSlots(meetingId),
+		loadMeetingSlots(meetingId, conn),
 		// The club's whole role BANK (#802), which the Roles panel's picker is
 		// built from. ONE scope since #801 — the club — so this is a plain
 		// indexed read on `role_definitions_club_idx` with no template axis and
@@ -516,7 +589,7 @@ export async function loadAgendaDraft(
 		// Ordered the way `/admin/roles` orders the same rows, so the picker
 		// lists a club's roles in the order that club arranged them rather than
 		// in whatever order Postgres returned.
-		database
+		conn
 			.select({
 				key: roleDefinitions.key,
 				name: roleDefinitions.name,
@@ -560,6 +633,129 @@ export async function loadAgendaDraft(
 		}),
 		roles,
 		attachableRoles: attachableBankRoles(bank, roles),
+	};
+}
+
+/**
+ * A meeting's agenda as the connector reads it (#966): the stored rows when it
+ * has a template, and otherwise the standard agenda computed IN MEMORY.
+ *
+ * WRITES NOTHING, which is the difference from `loadAgendaDraft`. The editor's
+ * page load materialises a never-edited meeting's copy on read; a token read
+ * or a preview must not (maintainer's decision on #966), because that copy
+ * freezes the club's `geIntroducesFunctionaries` and the standard run of show
+ * onto the meeting — the print path reads both live from the club until then.
+ * So for `template_id IS NULL` this builds exactly the rows and role
+ * declarations `materialiseForMeeting` WOULD write, from the same
+ * `materialiseRunOfShow` and `declaredRolesForSeeds`, and gives each row a
+ * position-derived id (`std:<index>`) — `idSource: "derived"`. An apply
+ * materialises inside its transaction and maps those ids by position.
+ *
+ * `forUpdate` locks the meeting row; pass it only on a transaction.
+ */
+export type AgendaSnapshot = {
+	meetingId: string;
+	clubId: string;
+	status: string;
+	/** Null for a never-edited meeting (rows derived, nothing stored). */
+	templateId: string | null;
+	/** True when `templateId` is the meeting's OWN copy; false for a shared
+	 *  template (the first write forks it) or none at all. */
+	privateCopy: boolean;
+	idSource: "stored" | "derived";
+	rows: AgendaDraftRow[];
+	roles: AgendaDraftRole[];
+	slots: AgendaSlot[];
+	scheduledAt: string;
+	timeZone: string;
+	lengthMinutes: number;
+	tableTopicsLimits: TableTopicsLimits;
+};
+
+/** The id a derived (not yet stored) standard-agenda row carries. */
+export function derivedRowId(index: number): string {
+	return `std:${index}`;
+}
+
+export async function readAgendaSnapshot(
+	meetingId: string,
+	conn: DbOrTx = database,
+	opts: { forUpdate?: boolean } = {},
+): Promise<AgendaSnapshot | null> {
+	const base = conn
+		.select({
+			templateId: meetings.templateId,
+			clubId: meetings.clubId,
+			status: meetings.status,
+			scheduledAt: meetings.scheduledAt,
+			lengthMinutes: meetings.lengthMinutes,
+			timeZone: clubs.timezone,
+			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
+		})
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	const [meeting] = opts.forUpdate
+		? await base.for("update", { of: meetings })
+		: await base;
+	if (!meeting) return null;
+	const tableTopicsLimits: TableTopicsLimits = {
+		minSeconds: meeting.tableTopicsMinSeconds,
+		maxSeconds: meeting.tableTopicsMaxSeconds,
+	};
+
+	let rows: AgendaDraftRow[];
+	let roles: AgendaDraftRole[];
+	let privateCopy = false;
+	if (meeting.templateId === null) {
+		const seeds = materialiseRunOfShow(
+			meeting.geIntroducesFunctionaries,
+			tableTopicsLimits,
+		);
+		rows = seeds.map((seed, i) => ({
+			...seed,
+			id: derivedRowId(i),
+			sortOrder: i,
+		}));
+		roles = (await declaredRolesForSeeds(conn, meeting.clubId, seeds)).map(
+			({ key, name, category, defaultCount, isSpeakerRole }) => ({
+				key,
+				name,
+				category,
+				defaultCount,
+				isSpeakerRole,
+			}),
+		);
+	} else {
+		const [own] = await conn
+			.select({ meetingId: meetingTemplates.meetingId })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.id, meeting.templateId))
+			.limit(1);
+		privateCopy = own?.meetingId === meetingId;
+		[rows, roles] = await readAll(conn, [
+			templateBeatsQuery(conn, meeting.templateId),
+			templateRolesQuery(conn, meeting.templateId),
+		]);
+	}
+
+	return {
+		meetingId,
+		clubId: meeting.clubId,
+		status: meeting.status,
+		templateId: meeting.templateId,
+		privateCopy,
+		idSource: meeting.templateId === null ? "derived" : "stored",
+		rows: refreshTableTopicsMarks(rows, tableTopicsLimits),
+		roles,
+		slots: await loadMeetingSlots(meetingId, conn),
+		scheduledAt: meeting.scheduledAt.toISOString(),
+		timeZone: meeting.timeZone,
+		lengthMinutes: meeting.lengthMinutes,
+		tableTopicsLimits,
 	};
 }
 
@@ -614,7 +810,7 @@ export async function materialiseAgendaForMeeting(
 
 /** What an officer reads when a fork lost a race the lock could not cover —
  *  a sentence, never the driver's `Failed query: insert into …`. */
-const AGENDA_CONCURRENT_EDIT_MESSAGE =
+export const AGENDA_CONCURRENT_EDIT_MESSAGE =
 	"Another change to this agenda was saved at the same moment. Reload and try again.";
 
 /** Translate a database deadlock into a retryable user-facing refusal.
@@ -740,7 +936,7 @@ async function resolveAgendaDraft(
 		throw new Error(
 			isMeetingLocked(meeting.status)
 				? MEETING_LOCKED_MESSAGE
-				: "A cancelled meeting's agenda cannot be edited.",
+				: AGENDA_CANCELLED_MESSAGE,
 		);
 	}
 
@@ -1330,7 +1526,7 @@ async function findRow(
 }
 
 /** The one sentence every mutator answers a row it will not touch with. */
-const ROW_NOT_IN_MEETING_MESSAGE =
+export const ROW_NOT_IN_MEETING_MESSAGE =
 	"That agenda row is not part of this meeting.";
 
 /**
@@ -1411,12 +1607,15 @@ async function translateRow(
  * but enforcing it there ALONE means an officer could build a template the
  * renderer then silently truncates. Enforced here too, at the writer.
  */
-export async function addAgendaRow(input: {
-	meetingId: string;
-	afterRowId: string | null;
-	kind: "section" | "role" | "event";
-}): Promise<AgendaDraftRow> {
-	return database.transaction(async (tx) => {
+export async function addAgendaRow(
+	input: {
+		meetingId: string;
+		afterRowId: string | null;
+		kind: "section" | "role" | "event";
+	},
+	conn: DbOrTx = database,
+): Promise<AgendaDraftRow> {
+	return conn.transaction(async (tx) => {
 		// Resolved against the PRE-fork pointer — see `findRow`.
 		const afterRow =
 			input.afterRowId === null
@@ -1505,32 +1704,35 @@ export async function addAgendaRow(input: {
 /** Edit a row's content. Cheap, DB-free validation up front; state-dependent
  *  validation (marks, declared role keys) and the write itself happen inside
  *  the transaction, scoped to the caller's own template. */
-export async function updateAgendaRow(input: {
-	meetingId: string;
-	rowId: string;
-	patch: Partial<
-		Pick<
-			AgendaDraftRow,
-			| "label"
-			| "detail"
-			| "minutes"
-			| "roleKey"
-			| "repeatsRoleKey"
-			| "flex"
-			| "handoff"
-			| "markGreen"
-			| "markYellow"
-			| "markRed"
-			// The un-govern control (#683). Patchable because the bug being fixed is
-			// that governance was ONE-WAY: an officer who reached it had no path
-			// back but deleting the row and re-adding it, which loses its label,
-			// note, minutes and position. Restricted at the write below to rows the
-			// club's Table Topics window could actually govern, so this cannot be
-			// used to make an arbitrary beat claim the club's window.
-			| "clubGoverned"
-		>
-	>;
-}): Promise<void> {
+export async function updateAgendaRow(
+	input: {
+		meetingId: string;
+		rowId: string;
+		patch: Partial<
+			Pick<
+				AgendaDraftRow,
+				| "label"
+				| "detail"
+				| "minutes"
+				| "roleKey"
+				| "repeatsRoleKey"
+				| "flex"
+				| "handoff"
+				| "markGreen"
+				| "markYellow"
+				| "markRed"
+				// The un-govern control (#683). Patchable because the bug being fixed is
+				// that governance was ONE-WAY: an officer who reached it had no path
+				// back but deleting the row and re-adding it, which loses its label,
+				// note, minutes and position. Restricted at the write below to rows the
+				// club's Table Topics window could actually govern, so this cannot be
+				// used to make an arbitrary beat claim the club's window.
+				| "clubGoverned"
+			>
+		>;
+	},
+	conn: DbOrTx = database,
+): Promise<void> {
 	const patch = definedOnly(input.patch);
 	if (Object.keys(patch).length === 0) {
 		throw new Error("Nothing to update.");
@@ -1558,7 +1760,7 @@ export async function updateAgendaRow(input: {
 		throw new Error(`Minutes must be between 0 and ${MAX_BEAT_MINUTES}.`);
 	}
 
-	await database.transaction(async (tx) => {
+	await conn.transaction(async (tx) => {
 		// Resolved against the PRE-fork pointer — see `findRow`.
 		const found = await findRow(tx, input.meetingId, input.rowId);
 		if (!found) {
@@ -1619,11 +1821,14 @@ export async function updateAgendaRow(input: {
 }
 
 /** Remove a row and close the gap in `sortOrder`. */
-export async function removeAgendaRow(input: {
-	meetingId: string;
-	rowId: string;
-}): Promise<void> {
-	await database.transaction(async (tx) => {
+export async function removeAgendaRow(
+	input: {
+		meetingId: string;
+		rowId: string;
+	},
+	conn: DbOrTx = database,
+): Promise<void> {
+	await conn.transaction(async (tx) => {
 		const found = await findRow(tx, input.meetingId, input.rowId);
 		if (!found) {
 			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
@@ -1658,12 +1863,51 @@ export async function removeAgendaRow(input: {
 }
 
 /** Swap a row with its immediate neighbour. A no-op past either end. */
-export async function moveAgendaRow(input: {
-	meetingId: string;
-	rowId: string;
-	direction: "up" | "down";
-}): Promise<void> {
-	await database.transaction(async (tx) => {
+export async function moveAgendaRow(
+	input: {
+		meetingId: string;
+		rowId: string;
+		direction: "up" | "down";
+	},
+	conn: DbOrTx = database,
+): Promise<void> {
+	await repositionRow(conn, input, (at) =>
+		input.direction === "up" ? at - 1 : at + 1,
+	);
+}
+
+/**
+ * Put a row at `index` (0-based, in stored order), shifting the rows between
+ * its old and new place by one. An index past the end means the end.
+ *
+ * `moveAgendaRow` is the editor's one-step button; this is the same write for
+ * a caller that already knows where the row belongs (#966, the connector's
+ * `edit_agenda`), so "open with Introductions" is one renumber rather than
+ * twenty swaps. Same resolution, same fork handling, same single renumber —
+ * the two share `repositionRow` and differ only in where the row lands.
+ */
+export async function placeAgendaRow(
+	input: {
+		meetingId: string;
+		rowId: string;
+		index: number;
+	},
+	conn: DbOrTx = database,
+): Promise<void> {
+	await repositionRow(conn, input, (_at, count) =>
+		Math.min(Math.max(0, input.index), count - 1),
+	);
+}
+
+/** `moveAgendaRow` and `placeAgendaRow`'s shared body. `target` maps the row's
+ *  current index (and the row count) to where it goes; a target outside the
+ *  agenda is a no-op, which is what the one-step move wants past either end. */
+async function repositionRow(
+	conn: DbOrTx,
+	input: { meetingId: string; rowId: string },
+	target: (at: number, count: number) => number,
+): Promise<void> {
+	await conn.transaction(async (tx) => {
 		const found = await findRow(tx, input.meetingId, input.rowId);
 		if (!found) {
 			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
@@ -1681,8 +1925,8 @@ export async function moveAgendaRow(input: {
 			// Same corruption guard as `addAgendaRow`'s post-resolution check.
 			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
 		}
-		const to = input.direction === "up" ? at - 1 : at + 1;
-		if (to < 0 || to >= rows.length) return;
+		const to = target(at, rows.length);
+		if (to < 0 || to >= rows.length || to === at) return;
 
 		const reorderedIds = rows.map((r) => r.id);
 		const [moved] = reorderedIds.splice(at, 1);

@@ -29,15 +29,30 @@ import {
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
 
+/** The pool or a transaction on it. Spelled out rather than imported from
+ *  `meeting-templates-logic`, which would pull that module into every reader
+ *  of this one. */
+type SlotsConn =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 /**
  * A meeting's slots, ordered by role then slot index, with the assignee
  * resolved from either a member or a guest and each evaluator linked to the
  * speaker it evaluates.
  */
-export async function loadMeetingSlots(meetingId: string) {
+export async function loadMeetingSlots(
+	meetingId: string,
+	/**
+	 * Where to read. Defaults to the pool; a caller holding a transaction
+	 * passes it (#966) so the read sees that transaction's view and does not
+	 * take a second pooled connection while the caller holds a row lock.
+	 */
+	conn: SlotsConn = db,
+) {
 	const assignee = alias(members, "assignee");
 	const guestAssignee = alias(guests, "assignee_guest");
-	const rows = await db
+	const rows = await conn
 		.select({
 			id: roleSlots.id,
 			roleDefinitionId: roleSlots.roleDefinitionId,

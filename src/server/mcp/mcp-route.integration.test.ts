@@ -191,6 +191,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		};
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
 			"assign_roles",
+			"edit_agenda",
 			"find_people",
 			"get_agenda",
 			"get_lineup_blast",
@@ -511,6 +512,17 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("upsert_agendas", {
 				clubId: seed.clubId,
 				meetings: [{ date: "2027-03-02", time: "19:00", theme: "Harvest" }],
+			}),
+			// #966. A PREVIEW only (no planHash), so it writes nothing at all — not
+			// even the meeting's own agenda copy. It reads the
+			// run sheet, whose role rows name slot holders, and echoes the
+			// caller's own labels — the day a holder's contact reaches either, this
+			// case is already watching.
+			toolsCall("edit_agenda", {
+				meetingId: seed.meetingId,
+				operations: [
+					{ op: "add", label: "Introductions", minutes: 15, at: "start" },
+				],
 			}),
 		];
 		for (const call of calls) {

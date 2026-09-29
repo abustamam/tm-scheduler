@@ -16,12 +16,26 @@
  * and nothing here reaches for `loadHolderContacts` (the gated holder-contact
  * reader the meeting page uses) — an agenda in a transcript has no use for a
  * member's phone number.
+ *
+ * ## The run sheet (#966)
+ *
+ * `runSheet` is the timed agenda: every stored row with its id, start time and
+ * minutes, and the projected end against the booked slot. It is read through
+ * `readAgendaSnapshot` and clocked by `agendaRunSheet`, the pipeline the
+ * printed agenda runs. Its row ids are what `edit_agenda` takes.
+ *
+ * This read WRITES NOTHING. Unlike the editor's page load, it does not give a
+ * never-edited meeting its own agenda copy: that meeting's standard agenda is
+ * computed in memory with position ids (`std:<n>`, `idSource: "derived"`), and
+ * only an `edit_agenda` apply stores it.
  */
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings } from "#/db/schema";
+import { agendaRunSheet } from "#/lib/agenda-run-sheet";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
+import { readAgendaSnapshot } from "#/server/meeting-agenda-edit-logic";
 import { resolveMeetingNumber } from "#/server/meeting-number-logic";
 import { loadMeetingSlots } from "#/server/meeting-slots-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
@@ -38,7 +52,10 @@ export const getAgendaTool: McpToolDefinition = {
 		description:
 			"One meeting's agenda: theme, Word of the Day, whether it is locked, " +
 			"and every role slot with its assignee or `open`. Slot ids from here " +
-			"are what role assignment takes.",
+			"are what role assignment takes. `runSheet` is the timed agenda: each " +
+			"row's id, kind, label, minutes, start time and flex range, and when " +
+			"it ends against the booked slot (`overByMinutes`, positive is over). " +
+			"Row ids from there are what edit_agenda takes.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {
@@ -63,7 +80,10 @@ export const getAgendaTool: McpToolDefinition = {
 		// closed rather than rendering an agenda for nothing.
 		if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
 
-		const slots = await loadMeetingSlots(meeting.id);
+		const [slots, draft] = await Promise.all([
+			loadMeetingSlots(meeting.id),
+			readAgendaSnapshot(meeting.id),
+		]);
 		const { date, time, weekday } = clubLocalParts(
 			meeting.scheduledAt,
 			club.timezone,
@@ -108,6 +128,7 @@ export const getAgendaTool: McpToolDefinition = {
 				// their own details; an empty speaker slot is the normal state.
 				speechTitle: s.speechTitle,
 			})),
+			runSheet: draft ? agendaRunSheet(draft) : null,
 		};
 	},
 };

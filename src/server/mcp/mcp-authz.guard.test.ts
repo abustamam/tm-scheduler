@@ -172,6 +172,8 @@ interface DiscoveredTool {
 	file: string;
 	basename: string;
 	name: string;
+	/** The top-level keys of the tool's input schema. */
+	inputKeys: string[];
 }
 
 /** Import each tool module and read the definitions it exports. */
@@ -187,10 +189,12 @@ async function discoverTools(): Promise<DiscoveredTool[]> {
 				typeof (value as { handler?: unknown }).handler === "function" &&
 				typeof (value as { config?: unknown }).config === "object"
 			) {
+				const config = (value as { config: { inputSchema?: object } }).config;
 				found.push({
 					file,
 					basename: file.slice(toolsDir.length + 1),
 					name: (value as { name: string }).name,
+					inputKeys: Object.keys(config.inputSchema ?? {}),
 				});
 			}
 		}
@@ -234,6 +238,39 @@ describe("every MCP tool authorizes (#773)", () => {
 			).toBe(true);
 		});
 	}
+
+	// A tool that names a MEETING must take its club FROM the meeting (#966
+	// made the fourth). `authorizeToken(ctx, input.clubId)` beside a
+	// `meetingId` would check the caller against one club and act on another
+	// club's meeting — both calls exist, so the sweep above is green for it.
+	for (const tool of discovered) {
+		if (!tool.inputKeys.includes("meetingId")) continue;
+		if (AUTHENTICATE_ONLY[tool.basename]) continue;
+		it(`${tool.basename} (${tool.name}) authorizes by the meeting, not a clubId`, () => {
+			expect(
+				tool.inputKeys,
+				`${tool.basename} takes a meetingId AND a clubId, so two ids can disagree about which club it acts on.`,
+			).not.toContain("clubId");
+			expect(
+				/\bauthorizeTokenForMeeting\s*\(/.test(readSource(tool.file)),
+				`${tool.basename} takes a meetingId but does not call authorizeTokenForMeeting.`,
+			).toBe(true);
+		});
+	}
+
+	it("the meeting-scoped sweep finds the meeting tools", () => {
+		// Vacuity floor: a sweep that matched no tool would pass on any tree.
+		const meetingScoped = discovered
+			.filter(
+				(t) =>
+					t.inputKeys.includes("meetingId") && !AUTHENTICATE_ONLY[t.basename],
+			)
+			.map((t) => t.name)
+			.sort();
+		expect(meetingScoped).toEqual(
+			expect.arrayContaining(["assign_roles", "edit_agenda", "get_agenda"]),
+		);
+	});
 
 	it("the registry lists every tool file, and no name without one", () => {
 		const registered = MCP_TOOLS.map((t) => t.name).sort();

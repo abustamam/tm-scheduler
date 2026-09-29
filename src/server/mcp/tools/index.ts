@@ -15,6 +15,7 @@
  */
 import type { McpToolDefinition } from "../tool";
 import { assignRolesTool } from "./assign-roles";
+import { editAgendaTool } from "./edit-agenda";
 import { findPeopleTool } from "./find-people";
 import { getAgendaTool } from "./get-agenda";
 import { getLineupBlastTool } from "./get-lineup-blast";
@@ -34,4 +35,5 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	recordGuestBookTool,
 	assignRolesTool,
 	upsertAgendasTool,
+	editAgendaTool,
 ];
