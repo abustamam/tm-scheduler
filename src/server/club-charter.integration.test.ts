@@ -12,9 +12,11 @@
 import { randomUUID } from "node:crypto";
 import { eq, like } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { accessRequests, clubs, user } from "#/db/schema";
+import { accessRequestAlerts, accessRequests, clubs, user } from "#/db/schema";
 import {
 	CHARTER_DATE_FUTURE_MESSAGE,
+	CHARTER_DATE_REQUIRED_MESSAGE,
+	CLUB_NUMBER_FORMAT_MESSAGE,
 	CLUB_NUMBER_REQUIRED_MESSAGE,
 } from "#/lib/club-charter";
 import { DEFAULT_CLUB_TIMEZONE } from "#/lib/club-timezone";
@@ -46,8 +48,9 @@ afterEach(async () => {
 	createdUsers.length = 0;
 });
 
+/** An 8-digit club number (the shape `CLUB_NUMBER_PATTERN` allows). */
 function uniqueNumber() {
-	return `${Math.floor(Math.random() * 1e8)}${randomUUID().slice(0, 4)}`;
+	return String(Math.floor(10_000_000 + Math.random() * 89_999_999));
 }
 
 /** The server fn's composition: validator, then logic. */
@@ -57,8 +60,13 @@ async function provision(input: unknown) {
 	return res;
 }
 
+/** A valid provisioning payload. A chartered club (the default status) gets a
+ *  charter date, which it must state; a chartering one gets none. */
 function base(over: Record<string, unknown> = {}) {
 	return {
+		...(over.charterStatus === "chartering"
+			? {}
+			: { charteredAt: "2020-01-01" }),
 		clubName: `Charter Club ${randomUUID()}`,
 		adminName: "Casey Admin",
 		adminEmail: `casey-${randomUUID()}@example.com`,
@@ -170,16 +178,46 @@ describe.skipIf(!hasTestDb)("onboarding a club with a charter status", () => {
 		expect(rows).toHaveLength(0);
 	});
 
-	it("defaults to chartered when the status is omitted (a console tab from before the deploy)", async () => {
+	it("defaults an omitted status to chartered, with the date it was given", async () => {
 		const number = uniqueNumber();
 		const res = await provision(base({ clubNumber: number }));
 		const row = await clubRow(res.clubId);
 		expect(row.charterStatus).toBe("chartered");
 		expect(row.clubNumber).toBe(number);
-		expect(row.charteredAt).toBeNull();
+		expect(row.charteredAt).toBe("2020-01-01");
 	});
 
-	it("records an optional charter date for a chartered club, and refuses one for a chartering club", async () => {
+	it("refuses a chartered club with no charter date, at the schema and at the write, telling a stale console to reload", async () => {
+		// What a console tab from before #944 sends: no status, no date.
+		const stale = {
+			clubName: `Stale Tab ${randomUUID()}`,
+			clubNumber: uniqueNumber(),
+			adminName: "Casey Admin",
+			adminEmail: `casey-${randomUUID()}@example.com`,
+			timezone: DEFAULT_CLUB_TIMEZONE,
+		};
+		const parsed = createClubSchema.safeParse(stale);
+		expect(parsed.success).toBe(false);
+		expect(parsed.error?.issues.map((i) => i.message)).toContain(
+			CHARTER_DATE_REQUIRED_MESSAGE,
+		);
+		expect(CHARTER_DATE_REQUIRED_MESSAGE).toMatch(/reload/i);
+
+		// A caller that skips the validator still cannot write one.
+		await expect(createClubWithAdmin(stale)).rejects.toThrow(
+			CHARTER_DATE_REQUIRED_MESSAGE,
+		);
+		await expect(
+			createClubWithAdmin({ ...stale, charterStatus: "chartered" }),
+		).rejects.toThrow(CHARTER_DATE_REQUIRED_MESSAGE);
+		const rows = await testDb
+			.select()
+			.from(clubs)
+			.where(eq(clubs.name, stale.clubName));
+		expect(rows).toHaveLength(0);
+	});
+
+	it("records a chartered club's charter date, and refuses one for a chartering club", async () => {
 		const res = await provision(
 			base({ clubNumber: uniqueNumber(), charteredAt: "2019-04-01" }),
 		);
@@ -189,6 +227,20 @@ describe.skipIf(!hasTestDb)("onboarding a club with a charter status", () => {
 			base({ charterStatus: "chartering", charteredAt: "2019-04-01" }),
 		);
 		expect(parsed.success).toBe(false);
+	});
+
+	it("refuses a club number that is not 1-8 digits, whatever the status", () => {
+		for (const charterStatus of ["chartered", "chartering"]) {
+			for (const clubNumber of [randomUUID(), "TM-1234", "123456789"]) {
+				const parsed = createClubSchema.safeParse(
+					base({ charterStatus, clubNumber }),
+				);
+				expect(parsed.success, `${charterStatus} ${clubNumber}`).toBe(false);
+				expect(parsed.error?.issues.map((i) => i.message)).toContain(
+					CLUB_NUMBER_FORMAT_MESSAGE,
+				);
+			}
+		}
 	});
 });
 
@@ -217,6 +269,17 @@ describe.skipIf(!hasTestDb)("Mark as chartered", () => {
 		expect(future.error?.issues.map((i) => i.message)).toContain(
 			CHARTER_DATE_FUTURE_MESSAGE,
 		);
+		for (const clubNumber of [randomUUID(), "12a4", "123456789"]) {
+			const bad = markClubCharteredSchema.safeParse({
+				clubId,
+				charteredAt: "2026-09-01",
+				clubNumber,
+			});
+			expect(bad.success, clubNumber).toBe(false);
+			expect(bad.error?.issues.map((i) => i.message)).toContain(
+				CLUB_NUMBER_FORMAT_MESSAGE,
+			);
+		}
 		const ok = markClubCharteredSchema.safeParse({
 			clubId,
 			charteredAt: "2026-09-01",
@@ -413,6 +476,9 @@ describe.skipIf(!hasTestDb)("an access request's charter status", () => {
 		await testDb
 			.delete(accessRequests)
 			.where(like(accessRequests.email, SCOPE.emailLike));
+		await testDb
+			.delete(accessRequestAlerts)
+			.where(like(accessRequestAlerts.windowKey, `${SCOPE.alertKey}:%`));
 	});
 
 	async function submit(fields: Record<string, unknown>) {

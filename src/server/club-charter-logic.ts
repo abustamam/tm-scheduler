@@ -12,9 +12,11 @@ import { db } from "#/db";
 import { clubs } from "#/db/schema";
 import {
 	type CharterStatus,
+	CLUB_NUMBER_REQUIRED_MESSAGE,
 	charterDateSchema,
-	charterInvariantError,
+	duplicateNumberMessage,
 	optionalClubNumberSchema,
+	refineCharterInvariant,
 } from "#/lib/club-charter";
 import { isUniqueViolation } from "./pg-errors";
 
@@ -47,28 +49,17 @@ export const markClubCharteredSchema = z
 		charteredAt: charterDateSchema,
 		clubNumber: optionalClubNumberSchema,
 	})
-	.superRefine((v, ctx) => {
-		const invariant = charterInvariantError({
-			charterStatus: "chartered",
-			clubNumber: v.clubNumber,
-		});
-		if (invariant) {
-			ctx.addIssue({
-				code: "custom",
-				path: ["clubNumber"],
-				message: invariant,
-			});
-		}
-	});
+	.superRefine((v, ctx) =>
+		refineCharterInvariant(
+			{ charterStatus: "chartered", clubNumber: v.clubNumber },
+			ctx,
+		),
+	);
 export type MarkClubCharteredInput = z.output<typeof markClubCharteredSchema>;
 
 export const ALREADY_CHARTERED_MESSAGE = "This club is already chartered.";
 export const NOT_CHARTERED_MESSAGE =
 	"This club hasn't chartered yet. Mark it as chartered first.";
-
-function duplicateNumberMessage(clubNumber: string): string {
-	return `A club with number ${clubNumber} already exists.`;
-}
 
 /**
  * Move a chartering club to chartered, recording its charter date and club
@@ -83,12 +74,10 @@ function duplicateNumberMessage(clubNumber: string): string {
 export async function markClubChartered(
 	input: MarkClubCharteredInput,
 ): Promise<{ ok: true }> {
-	const invariant = charterInvariantError({
-		charterStatus: "chartered",
-		clubNumber: input.clubNumber,
-	});
-	if (invariant) throw new Error(invariant);
-	const clubNumber = input.clubNumber as string;
+	// The invariant for a chartered club, written as a narrowing check so the
+	// compiler holds it: past this line `clubNumber` is a non-empty string.
+	const clubNumber = input.clubNumber?.trim();
+	if (!clubNumber) throw new Error(CLUB_NUMBER_REQUIRED_MESSAGE);
 
 	const current = await getClubCharter(input.clubId);
 	if (current.charterStatus === "chartered") {

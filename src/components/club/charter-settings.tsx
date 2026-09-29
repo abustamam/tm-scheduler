@@ -11,6 +11,8 @@ import { Label } from "#/components/ui/label";
 import {
 	CHARTER_STATUS_LABEL,
 	type CharterStatus,
+	CLUB_NUMBER_MAX,
+	CLUB_NUMBER_PATTERN,
 	CLUB_NUMBER_REQUIRED_MESSAGE,
 } from "#/lib/club-charter";
 import { markChartered, updateCharterDate } from "#/server/clubs";
@@ -123,6 +125,8 @@ function MarkCharteredForm({
 					id="charterClubNumber"
 					required
 					inputMode="numeric"
+					pattern={CLUB_NUMBER_PATTERN}
+					maxLength={CLUB_NUMBER_MAX}
 					value={number}
 					onChange={(e) => setNumber(e.target.value)}
 					placeholder="e.g. 1234567"

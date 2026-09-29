@@ -10,6 +10,8 @@ import {
 	CHARTER_STATUS_LABEL,
 	CHARTER_STATUSES,
 	type CharterStatus,
+	CLUB_NUMBER_MAX,
+	CLUB_NUMBER_PATTERN,
 } from "#/lib/club-charter";
 import { listConsoleClubs, provisionClub } from "#/server/onboarding";
 
@@ -205,7 +207,7 @@ function CreateClubForm({
 					charterStatus,
 					clubNumber: String(form.get("clubNumber") ?? "").trim(),
 					charteredAt: chartered
-						? String(form.get("charteredAt") ?? "").trim() || null
+						? String(form.get("charteredAt") ?? "").trim()
 						: null,
 					adminName: String(form.get("adminName") ?? "").trim(),
 					adminEmail: String(form.get("adminEmail") ?? "").trim(),
@@ -271,13 +273,16 @@ function CreateClubForm({
 						id="clubNumber"
 						name="clubNumber"
 						required={chartered}
+						inputMode="numeric"
+						pattern={CLUB_NUMBER_PATTERN}
+						maxLength={CLUB_NUMBER_MAX}
 						placeholder="e.g. 1234567"
 					/>
 				</div>
 				{chartered ? (
 					<div className="space-y-1.5">
-						<Label htmlFor="charteredAt">Charter date (optional)</Label>
-						<Input id="charteredAt" name="charteredAt" type="date" />
+						<Label htmlFor="charteredAt">Charter date</Label>
+						<Input id="charteredAt" name="charteredAt" type="date" required />
 					</div>
 				) : null}
 				<div className="space-y-1.5">

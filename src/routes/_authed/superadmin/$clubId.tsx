@@ -16,6 +16,7 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { CHARTER_STATUS_LABEL, type CharterStatus } from "#/lib/club-charter";
+import { formatCalendarDay } from "#/lib/format";
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import { startImpersonation } from "#/server/impersonation";
 import {
@@ -124,16 +125,6 @@ function ClubDetail() {
 	);
 }
 
-/** A `YYYY-MM-DD` charter date as "Sep 1, 2026". Formatted in UTC because it
- *  is a calendar date, not an instant: a local-zone format would show the day
- *  before for any viewer west of UTC. */
-const charterDateFmt = new Intl.DateTimeFormat("en-US", {
-	year: "numeric",
-	month: "short",
-	day: "numeric",
-	timeZone: "UTC",
-});
-
 /**
  * The club's charter status (#944), and the one correction only a superadmin
  * may make: moving a chartered club back to chartering. A club admin marks the
@@ -187,7 +178,7 @@ function CharterPanel({
 				{CHARTER_STATUS_LABEL[charterStatus]}
 				{charterStatus === "chartered"
 					? charteredAt
-						? ` · chartered ${charterDateFmt.format(new Date(`${charteredAt}T00:00:00Z`))}`
+						? ` · chartered ${formatCalendarDay(charteredAt, { withYear: true })}`
 						: " · charter date not recorded"
 					: " · the club's admin marks it chartered from club settings"}
 			</p>

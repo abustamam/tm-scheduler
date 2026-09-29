@@ -7,7 +7,8 @@
 // one before it charters). `chartered` is every other club.
 import { z } from "zod";
 
-/** Keep in lockstep with `clubCharterStatusEnum` in `src/db/schema.ts`. */
+/** Restated in `clubCharterStatusEnum` (`src/db/schema.ts`), which may not
+ *  import this module; `club-charter.test.ts` holds the two equal. */
 export const CHARTER_STATUSES = ["chartering", "chartered"] as const;
 export type CharterStatus = (typeof CHARTER_STATUSES)[number];
 
@@ -16,8 +17,38 @@ export const CHARTER_STATUS_LABEL: Record<CharterStatus, string> = {
 	chartered: "Chartered",
 };
 
+/**
+ * What a Toastmasters club number looks like: 1 to 8 digits. The ONE statement
+ * of it — the request-access form's bound (`ACCESS_REQUEST_BOUNDS`) reads this,
+ * and so does every write of `clubs.club_number`. Written UNANCHORED for an
+ * HTML `pattern` attribute (which anchors implicitly); `CLUB_NUMBER_RE` is the
+ * anchored form.
+ *
+ * It matters beyond tidiness because a club number is a URL identifier:
+ * `resolveClubByIdentifier` tries slug, then club NUMBER, then UUID. Marking a
+ * club chartered is the first writer of the column that is not a superadmin
+ * (any club admin or open officer), and free text there could claim another
+ * club's UUID ahead of the UUID match itself.
+ */
+export const CLUB_NUMBER_PATTERN = "\\d{1,8}";
+export const CLUB_NUMBER_MAX = 8;
+export const CLUB_NUMBER_RE = new RegExp(`^(?:${CLUB_NUMBER_PATTERN})$`);
+export const CLUB_NUMBER_FORMAT_MESSAGE = "A club number is digits only.";
+
 export const CLUB_NUMBER_REQUIRED_MESSAGE =
 	"A chartered club needs a club number.";
+/**
+ * A chartered club provisioned through the app must state its charter date
+ * (#944: null is allowed only for backfilled clubs). The reload hint is for a
+ * console tab loaded before the charter fields existed: it sends no status,
+ * which defaults to chartered, and no date — so it lands here.
+ */
+export const CHARTER_DATE_REQUIRED_MESSAGE =
+	"A chartered club needs its charter date. If the form has no charter date field, reload the page.";
+/** The earliest charter date accepted: the day Toastmasters was founded. */
+export const EARLIEST_CHARTER_DATE = "1924-10-22";
+export const CHARTER_DATE_TOO_EARLY_MESSAGE =
+	"The charter date can't be before October 22, 1924.";
 export const CHARTER_DATE_INVALID_MESSAGE =
 	"Enter the charter date as a real calendar date.";
 export const CHARTER_DATE_FUTURE_MESSAGE =
@@ -60,19 +91,59 @@ export function latestCharterDate(now: Date = new Date()): string {
 	return d.toISOString().slice(0, 10);
 }
 
-/** A charter date: a real `YYYY-MM-DD` calendar day, not in the future. */
+/** A charter date: a real `YYYY-MM-DD` calendar day, no earlier than the day
+ *  Toastmasters was founded and not in the future. */
 export const charterDateSchema = z
 	.string()
 	.trim()
 	.refine(isCalendarDate, { message: CHARTER_DATE_INVALID_MESSAGE })
+	.refine((v) => v >= EARLIEST_CHARTER_DATE, {
+		message: CHARTER_DATE_TOO_EARLY_MESSAGE,
+	})
 	.refine((v) => v <= latestCharterDate(), {
 		message: CHARTER_DATE_FUTURE_MESSAGE,
 	});
 
-/** A club number as a form sends it: trimmed, "" read as absent (null). */
+/** A club number as a form sends it: trimmed, "" read as absent (null), and
+ *  otherwise digits only (`CLUB_NUMBER_PATTERN`). */
 export const optionalClubNumberSchema = z
 	.string()
 	.trim()
-	.max(32, "That club number is too long.")
 	.nullish()
-	.transform((v) => (v ? v : null));
+	.transform((v) => (v ? v : null))
+	.pipe(
+		z.string().regex(CLUB_NUMBER_RE, CLUB_NUMBER_FORMAT_MESSAGE).nullable(),
+	);
+
+/** The refusal for a club number another club already holds. */
+export function duplicateNumberMessage(clubNumber: string): string {
+	return `A club with number ${clubNumber} already exists.`;
+}
+
+/**
+ * The `superRefine` body every schema that sets a charter status shares: run
+ * `charterInvariantError` and report it against `clubNumber`.
+ */
+export function refineCharterInvariant(
+	v: { charterStatus: CharterStatus; clubNumber: string | null | undefined },
+	ctx: z.RefinementCtx,
+): void {
+	const invariant = charterInvariantError(v);
+	if (invariant) {
+		ctx.addIssue({ code: "custom", path: ["clubNumber"], message: invariant });
+	}
+}
+
+/**
+ * The request-access form's answers to "Has your club chartered?", in the
+ * order offered. "" is "not said", the default: the question is optional like
+ * the club number, and the server stores nothing for it.
+ */
+export const CHARTER_OPTIONS: ReadonlyArray<{
+	value: CharterStatus | "";
+	label: string;
+}> = [
+	{ value: "", label: "Choose one" },
+	{ value: "chartered", label: "Yes, it's chartered" },
+	{ value: "chartering", label: "Not yet, it's still forming" },
+];

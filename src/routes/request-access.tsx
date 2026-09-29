@@ -7,7 +7,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
 import { CONTACT_MAILTO, PILOT_PRICING_LINE } from "#/lib/brand";
-import type { CharterStatus } from "#/lib/club-charter";
+import { CHARTER_OPTIONS, type CharterStatus } from "#/lib/club-charter";
 import { readRef } from "#/lib/marketing-ref";
 import {
 	type SubmitAccessRequestResult,
@@ -24,20 +24,6 @@ const KIND_LABELS: Record<Kind, string> = {
 	club: "A club",
 	district: "A district",
 };
-
-/**
- * The charter question's answers (#944), in the order offered. "" is "not
- * said", the default: the question is optional like the club number, and the
- * server stores nothing for it.
- */
-export const CHARTER_OPTIONS: ReadonlyArray<{
-	value: CharterStatus | "";
-	label: string;
-}> = [
-	{ value: "", label: "Choose one" },
-	{ value: "chartered", label: "Yes, it's chartered" },
-	{ value: "chartering", label: "Not yet, it's still forming" },
-];
 
 /** Matches the shadcn Input's box, applied to a native `<select>`. */
 const selectClass =
@@ -275,7 +261,7 @@ function RequestAccess() {
 									<Field
 										id="ra-club-number"
 										label="Club number"
-										optional
+										optional={charterStatus !== "chartered"}
 										hint={
 											charterStatus === "chartering"
 												? "If your club has been given one already."
@@ -289,6 +275,9 @@ function RequestAccess() {
 											inputMode="numeric"
 											pattern={B.clubNumberPattern}
 											maxLength={B.clubNumberMax}
+											// A client nudge only (#944): the server keeps a chartered
+											// request with no number, since a lead is never refused.
+											required={charterStatus === "chartered"}
 										/>
 									</Field>
 									<Field id="ra-message" label="Anything else" optional>

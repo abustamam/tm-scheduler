@@ -1,14 +1,27 @@
 import { describe, expect, it } from "vitest";
+import { clubCharterStatusEnum } from "#/db/schema";
 import {
 	CHARTER_DATE_FUTURE_MESSAGE,
 	CHARTER_DATE_INVALID_MESSAGE,
+	CHARTER_DATE_TOO_EARLY_MESSAGE,
+	CHARTER_STATUSES,
+	CLUB_NUMBER_FORMAT_MESSAGE,
 	CLUB_NUMBER_REQUIRED_MESSAGE,
 	charterDateSchema,
 	charterInvariantError,
+	EARLIEST_CHARTER_DATE,
 	isCalendarDate,
 	latestCharterDate,
 	optionalClubNumberSchema,
 } from "./club-charter";
+
+describe("the charter status vocabulary", () => {
+	it("matches the database enum exactly", () => {
+		expect([...clubCharterStatusEnum.enumValues]).toEqual([
+			...CHARTER_STATUSES,
+		]);
+	});
+});
 
 describe("charterInvariantError (#944)", () => {
 	it("requires a number of a chartered club", () => {
@@ -56,6 +69,17 @@ describe("charter dates", () => {
 		).toBe(CHARTER_DATE_FUTURE_MESSAGE);
 		expect(charterDateSchema.parse(" 2020-01-01 ")).toBe("2020-01-01");
 	});
+
+	it("refuses a date before Toastmasters was founded, and accepts the founding day", () => {
+		expect(EARLIEST_CHARTER_DATE).toBe("1924-10-22");
+		expect(
+			charterDateSchema.safeParse("1924-10-21").error?.issues[0]?.message,
+		).toBe(CHARTER_DATE_TOO_EARLY_MESSAGE);
+		expect(
+			charterDateSchema.safeParse("0001-01-01").error?.issues[0]?.message,
+		).toBe(CHARTER_DATE_TOO_EARLY_MESSAGE);
+		expect(charterDateSchema.parse("1924-10-22")).toBe("1924-10-22");
+	});
 });
 
 describe("optionalClubNumberSchema", () => {
@@ -64,5 +88,21 @@ describe("optionalClubNumberSchema", () => {
 		expect(optionalClubNumberSchema.parse("  ")).toBeNull();
 		expect(optionalClubNumberSchema.parse(undefined)).toBeNull();
 		expect(optionalClubNumberSchema.parse(null)).toBeNull();
+	});
+
+	it("accepts 1-8 digits and refuses anything else", () => {
+		expect(optionalClubNumberSchema.parse("1")).toBe("1");
+		expect(optionalClubNumberSchema.parse("12345678")).toBe("12345678");
+		for (const bad of [
+			"123456789",
+			"TM-123",
+			"12 34",
+			"3f0b5c1e-6a3d-4d1b-9f5e-2c7a8b9d0e1f",
+		]) {
+			expect(
+				optionalClubNumberSchema.safeParse(bad).error?.issues[0]?.message,
+				bad,
+			).toBe(CLUB_NUMBER_FORMAT_MESSAGE);
+		}
 	});
 });

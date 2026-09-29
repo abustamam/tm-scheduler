@@ -8,8 +8,9 @@ import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/access-requests", () => ({ submitAccessRequest: vi.fn() }));
 
+import { CHARTER_OPTIONS } from "#/lib/club-charter";
 import { submitAccessRequest } from "#/server/access-requests";
-import { CHARTER_OPTIONS, Route } from "./request-access";
+import { Route } from "./request-access";
 
 async function mount(kind?: string) {
 	vi.spyOn(Route, "useSearch").mockReturnValue({ kind } as never);
@@ -28,6 +29,8 @@ async function submitClub(charter?: string): Promise<Record<string, unknown>> {
 	type("Club name", "Analytical Speakers");
 	if (charter !== undefined)
 		type("Has your club chartered?(optional)", charter);
+	// A chartered club is asked for its number (a client-side requirement).
+	if (charter === "chartered") type("Club number", "1234567");
 	fireEvent.click(screen.getByRole("button", { name: "Send request" }));
 	await screen.findByText("Thanks! We'll be in touch within a few days.");
 	return (
@@ -74,6 +77,21 @@ describe("/request-access charter question (#944)", () => {
 	it("sends nothing when the visitor did not say", async () => {
 		const data = await submitClub();
 		expect(data).not.toHaveProperty("charterStatus");
+	});
+
+	it("marks the club number required once chartered is picked, and optional otherwise", async () => {
+		await mount();
+		const number = () =>
+			screen.getByLabelText(/^Club number/) as HTMLInputElement;
+		const label = () =>
+			document.querySelector("label[for='ra-club-number']")?.textContent;
+		expect(number().required).toBe(false);
+		expect(label()).toBe("Club number(optional)");
+		type("Has your club chartered?(optional)", "chartered");
+		expect(number().required).toBe(true);
+		expect(label()).toBe("Club number");
+		type("Has your club chartered?(optional)", "chartering");
+		expect(number().required).toBe(false);
 	});
 
 	it("is not asked on a district request", async () => {

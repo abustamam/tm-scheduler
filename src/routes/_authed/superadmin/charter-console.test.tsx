@@ -81,16 +81,49 @@ async function renderClub(
 }
 
 describe("create a club — charter status", () => {
-	it("requires a number for a chartered club and not for a chartering one", async () => {
+	it("requires a number and a charter date for a chartered club, and neither for a chartering one", async () => {
 		await renderConsole();
 		const number = screen.getByLabelText(/^Club number/) as HTMLInputElement;
 		expect(number.required).toBe(true);
-		expect(screen.getByLabelText("Charter date (optional)")).toBeTruthy();
+		expect(number.getAttribute("pattern")).toBe("\\d{1,8}");
+		const date = screen.getByLabelText("Charter date") as HTMLInputElement;
+		expect(date.required).toBe(true);
 
 		fireEvent.click(screen.getByLabelText("Chartering"));
 		expect(number.required).toBe(false);
 		expect(screen.getByText("Club number (optional)")).toBeTruthy();
-		expect(screen.queryByLabelText("Charter date (optional)")).toBeNull();
+		expect(screen.queryByLabelText("Charter date")).toBeNull();
+	});
+
+	it("sends a chartered club with its number and charter date", async () => {
+		provisionClub.mockResolvedValue({ slug: "old-club" });
+		await renderConsole();
+		fireEvent.change(screen.getByLabelText("Club name"), {
+			target: { value: "Old Club" },
+		});
+		fireEvent.change(screen.getByLabelText(/^Club number/), {
+			target: { value: "1234567" },
+		});
+		fireEvent.change(screen.getByLabelText("Charter date"), {
+			target: { value: "1999-05-01" },
+		});
+		fireEvent.change(screen.getByLabelText("First admin name"), {
+			target: { value: "Ana" },
+		});
+		fireEvent.change(screen.getByLabelText("First admin email"), {
+			target: { value: "ana@example.com" },
+		});
+		fireEvent.submit(
+			screen
+				.getByRole("button", { name: /Create club/ })
+				.closest("form") as HTMLFormElement,
+		);
+		await waitFor(() => expect(provisionClub).toHaveBeenCalledTimes(1));
+		expect(provisionClub.mock.calls[0][0].data).toMatchObject({
+			charterStatus: "chartered",
+			clubNumber: "1234567",
+			charteredAt: "1999-05-01",
+		});
 	});
 
 	it("sends a chartering club with no number and no date", async () => {

@@ -46,7 +46,8 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 	});
 
 	function uniqueNumber() {
-		return `TM-${randomUUID().slice(0, 8)}`;
+		// Digits only: a club number is 1-8 digits since #944.
+		return String(Math.floor(10_000_000 + Math.random() * 89_999_999));
 	}
 
 	it("creates the club, the standard roles, and an unlinked admin membership atomically", async () => {
@@ -54,6 +55,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await createClubWithAdmin({
 			clubName: "Downtown Speakers",
 			clubNumber: number,
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Jamie Rivera",
 			adminEmail: "jamie@example.com",
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -103,6 +105,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const a = await createClubWithAdmin({
 			clubName: "Sunrise Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "A Admin",
 			adminEmail: "a@example.com",
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -111,6 +114,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const b = await createClubWithAdmin({
 			clubName: "Sunrise Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "B Admin",
 			adminEmail: "b@example.com",
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -143,6 +147,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const first = await createClubWithAdmin({
 			clubName: `First Club ${run}`,
 			clubNumber: number,
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "First Admin",
 			adminEmail: `first-${run}@example.com`,
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -153,6 +158,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			createClubWithAdmin({
 				clubName: secondName,
 				clubNumber: number, // duplicate
+				charteredAt: "2020-01-01", // a chartered club states it (#944)
 				adminName: "Second Admin",
 				adminEmail: secondEmail,
 				timezone: DEFAULT_CLUB_TIMEZONE,
@@ -177,6 +183,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await createClubWithAdmin({
 			clubName: "Editable Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Edit Me",
 			adminEmail: `old-${runId}@test.example`,
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -209,6 +216,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await createClubWithAdmin({
 			clubName: "Bootstrap Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Typo Admin",
 			adminEmail: `typo-${randomUUID()}@test.example`,
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -243,6 +251,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await createClubWithAdmin({
 			clubName: "Console Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Unclaimed Admin",
 			adminEmail: addr,
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -272,6 +281,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await createClubWithAdmin({
 			clubName: "Racing Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Racing Admin",
 			adminEmail: `race-${randomUUID()}@test.example`,
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -302,6 +312,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await createClubWithAdmin({
 			clubName: "Claimed Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Claimed Admin",
 			adminEmail: "claimed@example.com",
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -341,6 +352,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await createClubWithAdmin({
 			clubName: "Listed Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Listed Admin",
 			adminEmail: "listed@example.com",
 			timezone: DEFAULT_CLUB_TIMEZONE,
@@ -369,6 +381,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await createClubWithAdmin({
 			clubName: "Pacific Club",
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Pacific Admin",
 			adminEmail: "pacific@example.com",
 			timezone: "America/Los_Angeles",
@@ -435,6 +448,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const base = {
 			clubName,
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Mars Admin",
 			adminEmail,
 		};
@@ -480,6 +494,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const res = await provision({
 			clubName: `Valid Club ${randomUUID()}`,
 			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Valid Admin",
 			adminEmail: `valid-${randomUUID()}@example.com`,
 			timezone: "Europe/London",
@@ -513,7 +528,8 @@ describe.skipIf(!hasTestDb)("createClubWithAdmin dedupe (Rule B)", () => {
 	) {
 		return {
 			clubName: `C ${randomUUID()}`,
-			clubNumber: randomUUID().slice(0, 8),
+			clubNumber: String(Math.floor(10_000_000 + Math.random() * 89_999_999)),
+			charteredAt: "2020-01-01", // a chartered club states it (#944)
 			adminName: "Rasheed",
 			adminEmail: `r-${randomUUID()}@x.io`,
 			timezone: DEFAULT_CLUB_TIMEZONE,

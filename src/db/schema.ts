@@ -43,10 +43,6 @@ export {
 	verification,
 } from "./auth-schema";
 
-// The `tool` discriminator's vocabulary (#812). Type-only, so it contributes
-// nothing at runtime and drizzle-kit's schema read is unaffected — same
-// standing as the import above, and relative for the same reason.
-import type { McpPendingTool } from "../lib/pending-plan";
 // One number, one declaration. `clubs`'s Table Topics CHECK interpolates the
 // ceiling rather than writing 600 into the SQL, so the constraint and every
 // application layer cannot state different limits. `table-topics-limits.ts`
@@ -60,6 +56,10 @@ import type { McpPendingTool } from "../lib/pending-plan";
 // read by drizzle-kit outside the app's module resolution, where the
 // `package.json` `imports` alias is not guaranteed to resolve. Every other
 // import in this file is relative for the same reason.
+// The `tool` discriminator's vocabulary (#812). Type-only, so it contributes
+// nothing at runtime and drizzle-kit's schema read is unaffected — same
+// standing as the import above, and relative for the same reason.
+import type { McpPendingTool } from "../lib/pending-plan";
 import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";
 // user is re-exported above for Better-Auth; imported here for people.userId and
 // notifications foreign keys (the person-level auth link — ADR-0008 Phase B).
@@ -100,7 +100,11 @@ export const officerPositionEnum = pgEnum("officer_position", [
 // club that is forming and uses GavelUp before charter; it may or may not hold
 // a club number yet. `chartered` is every other club, and the column default:
 // the migration that added this backfilled every existing club as chartered.
-// Keep in lockstep with CHARTER_STATUSES in src/lib/club-charter.ts.
+// Keep in lockstep with CHARTER_STATUSES in src/lib/club-charter.ts. Restated
+// rather than imported: that module pulls in zod, and the schema's startup
+// bundles must stay free of application code
+// (table-topics-limits-wiring.guard.test.ts, #679). The lockstep is asserted in
+// src/lib/club-charter.test.ts.
 export const clubCharterStatusEnum = pgEnum("club_charter_status", [
 	"chartering",
 	"chartered",

@@ -6,7 +6,11 @@
 // Pure: no `#/db`. Keep the server-fn factory's name out of this file, prose
 // included, or the guard's raw substring scan opts it back in.
 import { z } from "zod";
-import { CHARTER_STATUSES } from "#/lib/club-charter";
+import {
+	CHARTER_STATUSES,
+	CLUB_NUMBER_MAX,
+	CLUB_NUMBER_PATTERN,
+} from "#/lib/club-charter";
 import { isValidRef } from "#/lib/marketing-ref";
 
 /** Who is asking. The db enum `access_request_kind` holds the same pair. */
@@ -23,8 +27,9 @@ export const ACCESS_REQUEST_BOUNDS = {
 	nameMax: 120,
 	emailMax: 254,
 	clubNameMax: 160,
-	clubNumberPattern: "\\d{1,8}",
-	clubNumberMax: 8,
+	// The shared club-number shape (#944), so a request and a club agree.
+	clubNumberPattern: CLUB_NUMBER_PATTERN,
+	clubNumberMax: CLUB_NUMBER_MAX,
 	districtNumberPattern: "[0-9A-Za-z]{1,4}",
 	districtNumberMax: 4,
 	messageMax: 2000,
@@ -99,6 +104,12 @@ export const accessRequestSchema = z
 		 * form that does not send it is a request that did not say. Anything
 		 * outside `CHARTER_STATUSES` is read as not said, for the same reason
 		 * `ref` never rejects: a malformed value must not cost the lead.
+		 *
+		 * Deliberately NOT tied to the club number here. The form marks the
+		 * number required when "chartered" is picked, but that is a CLIENT nudge
+		 * only: a chartered request with no number is still a lead, so the
+		 * server stores it as sent rather than refusing it. The invariant that a
+		 * chartered CLUB has a number belongs to provisioning, not to a request.
 		 */
 		charterStatus: z
 			.unknown()

@@ -28,11 +28,14 @@ import {
 	verification,
 } from "#/db/schema";
 import {
+	CHARTER_DATE_REQUIRED_MESSAGE,
 	CHARTER_STATUSES,
 	type CharterStatus,
 	charterDateSchema,
 	charterInvariantError,
+	duplicateNumberMessage,
 	optionalClubNumberSchema,
+	refineCharterInvariant,
 } from "#/lib/club-charter";
 import {
 	CLUB_TIMEZONES,
@@ -295,11 +298,11 @@ export const createClubSchema = z
 		/** Required for a chartered club only — see `charterInvariantError`. */
 		clubNumber: optionalClubNumberSchema,
 		/**
-		 * Optional even for a chartered club: onboarding records a club that
-		 * chartered BEFORE it joined GavelUp, and its operator may not know the date
-		 * (the same position as every backfilled club). "Mark as chartered" is the
-		 * transition that must supply one. Refused for a chartering club, which has
-		 * not chartered yet.
+		 * REQUIRED for a chartered club, refused for a chartering one (#944):
+		 * a null charter date is allowed only for the clubs the migration
+		 * backfilled, never for one provisioned through the app. A console tab
+		 * loaded before this field existed sends neither status nor date, so it
+		 * defaults to chartered and is refused with a message saying to reload.
 		 */
 		charteredAt: charterDateSchema.nullish().transform((v) => v ?? null),
 		adminName: z.string().trim().min(1, "Admin name is required."),
@@ -323,12 +326,12 @@ export const createClubSchema = z
 			.refine(isSupportedClubTimezone, { message: INVALID_TIMEZONE_MESSAGE }),
 	})
 	.superRefine((v, ctx) => {
-		const invariant = charterInvariantError(v);
-		if (invariant) {
+		refineCharterInvariant(v, ctx);
+		if (v.charterStatus === "chartered" && !v.charteredAt) {
 			ctx.addIssue({
 				code: "custom",
-				path: ["clubNumber"],
-				message: invariant,
+				path: ["charteredAt"],
+				message: CHARTER_DATE_REQUIRED_MESSAGE,
 			});
 		}
 		if (v.charterStatus === "chartering" && v.charteredAt) {
@@ -359,11 +362,12 @@ export interface CreateClubResult {
  *      sign-in) + a `members` row with club_role=admin, status=active.
  *
  * Club number is UNIQUE, and REQUIRED for a chartered club only (#944): a
- * chartering club may be provisioned without one. A duplicate is rejected with
+ * chartering club may be provisioned without one. A chartered club must also
+ * state its charter date. A duplicate is rejected with
  * a clear error and NO partial writes (the whole transaction rolls back). The
  * input's shape is parsed by the server fn's validator, not here; the charter
- * invariant is re-checked here anyway, because it is the rule this write must
- * never break and it costs nothing. The caller enforces the superadmin gate.
+ * rules (number and date) are re-checked here anyway, because they are what
+ * this write must never break and they cost nothing. The caller enforces the superadmin gate.
  */
 export async function createClubWithAdmin(
 	input: CreateClubInput,
@@ -374,6 +378,9 @@ export async function createClubWithAdmin(
 		charterStatus === "chartered" ? (input.charteredAt ?? null) : null;
 	const invariant = charterInvariantError({ charterStatus, clubNumber });
 	if (invariant) throw new Error(invariant);
+	if (charterStatus === "chartered" && !charteredAt) {
+		throw new Error(CHARTER_DATE_REQUIRED_MESSAGE);
+	}
 
 	return db.transaction(async (tx) => {
 		// Fail fast + clean on a duplicate number (the DB unique constraint is the
@@ -385,9 +392,7 @@ export async function createClubWithAdmin(
 				.from(clubs)
 				.where(eq(clubs.clubNumber, clubNumber))
 				.limit(1);
-			if (dupe) {
-				throw new Error(`A club with number ${clubNumber} already exists.`);
-			}
+			if (dupe) throw new Error(duplicateNumberMessage(clubNumber));
 		}
 
 		const slug = await uniqueSlug(tx, input.clubName);
