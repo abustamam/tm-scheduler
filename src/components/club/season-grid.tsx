@@ -19,12 +19,15 @@ import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
 import { scrollAnchorClearOfPinnedColumn } from "#/lib/season-grid-anchor-scroll";
 import {
+	DEFAULT_PAST_COUNT,
 	FREE_CELL,
 	type MemberMeetingStatus,
 	memberMeetingStatus,
 	NA_CELL,
 	type Orientation,
+	PAST_COUNTS,
 	projectGrid,
+	type SeasonGridPast,
 } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
 import {
@@ -48,6 +51,7 @@ export function SeasonGrid({
 	data,
 	orientation,
 	count,
+	pastCount = DEFAULT_PAST_COUNT,
 	currentMemberId,
 	currentMemberSource = "anon",
 	canManageOthers = false,
@@ -56,12 +60,16 @@ export function SeasonGrid({
 	showContact = false,
 	onOrientationChange,
 	onCountChange,
+	onPastCountChange,
 	onChanged,
 	requireIdentity,
 }: {
 	data: SeasonGridData;
 	orientation: Orientation;
 	count: SeasonGridCount;
+	/** Past meetings shown (#1048) — only drives which "Show past" button reads
+	 *  as selected; the columns themselves come from `data`. */
+	pastCount?: SeasonGridPast;
 	/** When set, the grid becomes interactive as this member: claim/release
 	 *  roles (Roles × Meetings) and toggle availability (Members × Meetings). */
 	currentMemberId?: string | null;
@@ -96,6 +104,9 @@ export function SeasonGrid({
 	showContact?: boolean;
 	onOrientationChange?: (o: Orientation) => void;
 	onCountChange?: (c: SeasonGridCount) => void;
+	/** The "Show past" control renders only when this is set. The public sheet
+	 *  omits it: it always gets 2 past meetings (#1048). */
+	onPastCountChange?: (p: SeasonGridPast) => void;
 	/** Called after a successful mutation so the page can refetch. */
 	onChanged?: () => void | Promise<void>;
 	/** Public surface: resolve/collect identity before a claim when there's no
@@ -430,6 +441,32 @@ export function SeasonGrid({
 						))}
 					</div>
 				</div>
+				{onPastCountChange ? (
+					<div className="inline-flex items-center gap-2">
+						<span className="text-xs font-medium text-muted-foreground">
+							Show past
+						</span>
+						<div className="inline-flex overflow-hidden rounded-lg border">
+							{PAST_COUNTS.map((p) => (
+								<button
+									key={p}
+									type="button"
+									aria-label={`Show ${p} past meetings`}
+									aria-pressed={pastCount === p}
+									onClick={() => onPastCountChange(p)}
+									className={cn(
+										"px-3 py-1.5 text-xs font-semibold",
+										pastCount === p
+											? "bg-accent text-accent-foreground"
+											: "text-muted-foreground",
+									)}
+								>
+									{p}
+								</button>
+							))}
+						</div>
+					</div>
+				) : null}
 			</div>
 
 			{/* Border on the wrapper, scroll + fade on the inner div (#542, F-006):

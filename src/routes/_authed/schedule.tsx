@@ -3,10 +3,22 @@ import { SeasonGrid } from "#/components/club/season-grid";
 import { PageContainer } from "#/components/page-container";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import type { Orientation } from "#/lib/season-grid-view";
+import {
+	DEFAULT_PAST_COUNT,
+	type Orientation,
+	parsePastCount,
+	type SeasonGridPast,
+} from "#/lib/season-grid-view";
 import { getSeasonGrid, type SeasonGridCount } from "#/server/season-grid";
 
-type Search = { view: Orientation; count: SeasonGridCount };
+/** `past` is OPTIONAL and absent at the default (#1048): links elsewhere build
+ *  `/schedule` search without it, and a default lookback keeps the URL as it
+ *  was before the control existed. */
+type Search = {
+	view: Orientation;
+	count: SeasonGridCount;
+	past?: SeasonGridPast;
+};
 
 export const Route = createFileRoute("/_authed/schedule")({
 	validateSearch: (search: Record<string, unknown>): Search => ({
@@ -17,21 +29,32 @@ export const Route = createFileRoute("/_authed/schedule")({
 				: search.count === "all"
 					? "all"
 					: 8,
+		...pastSearch(parsePastCount(search.past)),
 	}),
-	loaderDeps: ({ search }) => ({ count: search.count }),
+	loaderDeps: ({ search }) => ({
+		count: search.count,
+		past: search.past ?? DEFAULT_PAST_COUNT,
+	}),
 	loader: async ({ context, deps }) => {
 		const clubId = context.activeClubId;
 		if (!clubId) return { data: null };
 		return {
-			data: await getSeasonGrid({ data: { clubId, count: deps.count } }),
+			data: await getSeasonGrid({
+				data: { clubId, count: deps.count, pastCount: deps.past },
+			}),
 		};
 	},
 	component: SeasonGridPage,
 });
 
+/** `past` as a search fragment: the key is dropped at the default. */
+function pastSearch(past: SeasonGridPast): { past?: SeasonGridPast } {
+	return past === DEFAULT_PAST_COUNT ? {} : { past };
+}
+
 function SeasonGridPage() {
 	const { data } = Route.useLoaderData();
-	const { view, count } = Route.useSearch();
+	const { view, count, past } = Route.useSearch();
 	const context = Route.useRouteContext();
 	const { currentMemberId, activeClubId } = context;
 	// Officers/admins may mark ANY member unavailable, not just their own row.
@@ -57,6 +80,7 @@ function SeasonGridPage() {
 					data={data}
 					orientation={view}
 					count={count}
+					pastCount={past ?? DEFAULT_PAST_COUNT}
 					showContact
 					currentMemberId={currentMemberId}
 					// Always a session here — this route is under `_authed`, and
@@ -72,6 +96,16 @@ function SeasonGridPage() {
 					}
 					onCountChange={(c) =>
 						navigate({ search: (prev) => ({ ...prev, count: c }) })
+					}
+					onPastCountChange={(p) =>
+						navigate({
+							// Spread `prev` so `view` and `count` ride along. `undefined`
+							// at the default drops the key from the URL.
+							search: (prev) => ({
+								...prev,
+								past: pastSearch(p).past,
+							}),
+						})
 					}
 					onChanged={() => router.invalidate()}
 				/>

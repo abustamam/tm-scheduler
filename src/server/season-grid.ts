@@ -1,11 +1,20 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { parsePastCount } from "#/lib/season-grid-view";
 import { canManageClub, requireClubViewAccess, requireUser } from "./guards";
 import { loadPublicSeasonGrid, loadSeasonGrid } from "./season-grid-logic";
 
 const seasonGridInput = z.object({
 	clubId: z.string().uuid(),
 	count: z.union([z.literal(4), z.literal(8), z.literal("all")]),
+});
+
+/** The authed grid also takes a past lookback (#1048). Out-of-set values are
+ *  NOT rejected — they fall back to 2, the same answer `?past=99` gets — and
+ *  `loadSeasonGrid` bounds it again. The public fn keeps `seasonGridInput`,
+ *  whose object schema strips an unknown `pastCount` before its handler. */
+const authedSeasonGridInput = seasonGridInput.extend({
+	pastCount: z.unknown().transform(parsePastCount),
 });
 
 // Re-export the payload types so client code keeps importing them from
@@ -29,7 +38,7 @@ export type {
  * server fns re-check membership. (Was admin-only before #198.)
  */
 export const getSeasonGrid = createServerFn({ method: "GET" })
-	.validator((input: unknown) => seasonGridInput.parse(input))
+	.validator((input: unknown) => authedSeasonGridInput.parse(input))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubViewAccess(user.id, data.clubId);
