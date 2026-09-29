@@ -39,7 +39,8 @@
  * window between the two calls — a human reads the plan in it — so the hash
  * detects something real; there is no stored plan and no
  * confirm page, because a run sheet is neither hard to see nor hard to undo.
- * Its plan carries every row's before-and-after start time, which is why an
+ * Its plan carries every row's before-and-after start time, stored minutes
+ * and note (what an apply writes, so what the hash must cover), which is why an
  * unrelated agenda edit (or a new speaker lengthening the speeches) makes it
  * stale: those change what the human was shown.
  *

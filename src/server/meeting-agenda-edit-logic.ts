@@ -26,18 +26,11 @@ import {
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
 import { materialiseRunOfShow } from "#/lib/agenda-materialise";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import {
-	type AgendaSlot,
-	applyFlex,
-	TABLE_TOPICS_MAX,
-	TABLE_TOPICS_MIN,
-} from "#/lib/agenda-runsheet";
-import {
-	buildTemplateRowsWithSource,
 	isClubGovernable,
 	refreshTableTopicsMarks,
 } from "#/lib/agenda-template-rows";
-import { buildTimeline, timelineEnd } from "#/lib/agenda-timing";
 import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
@@ -273,9 +266,85 @@ export type AgendaDraft = {
  * They did, briefly: `editable` was `!isMeetingLocked` alone, so a cancelled
  * meeting rendered a fully interactive editor whose every save threw.
  */
-function agendaEditable(status: string): boolean {
+export function agendaEditable(status: string): boolean {
 	return !isMeetingLocked(status) && status !== "cancelled";
 }
+
+/**
+ * The `meeting_template_roles` declarations a materialised standard agenda
+ * carries: one per role key its seeds name, sourced from the CLUB's own
+ * definitions so a club that renamed a role keeps its word (#445).
+ *
+ * Split out of `materialiseForMeeting` (#966) so the connector's read path
+ * can clock a never-edited meeting IN MEMORY with exactly the roles the copy
+ * would be given, without writing the copy. A read only.
+ */
+async function declaredRolesForSeeds(
+	conn: DbOrTx,
+	clubId: string,
+	seeds: { roleKey: string | null; repeatsRoleKey: string | null }[],
+): Promise<
+	{
+		key: string;
+		name: string;
+		category: AgendaDraftRole["category"];
+		defaultCount: number;
+		isSpeakerRole: boolean;
+		slotsUnordered: boolean;
+		sortOrder: number;
+	}[]
+> {
+	const namedKeys = [
+		...new Set(
+			seeds
+				.map((seed) => seed.roleKey ?? seed.repeatsRoleKey)
+				.filter((key): key is string => key != null),
+		),
+	];
+	if (namedKeys.length === 0) return [];
+	const clubRoles = await conn
+		.select({
+			key: roleDefinitions.key,
+			name: roleDefinitions.name,
+			category: roleDefinitions.category,
+			defaultCount: roleDefinitions.defaultCount,
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			slotsUnordered: roleDefinitions.slotsUnordered,
+		})
+		.from(roleDefinitions)
+		// No `isNull(templateId)` beside these: 0083 pinned the column NULL
+		// with a CHECK, so it matched every row. `role_definitions_club_key_unique`
+		// is what keeps `byKey` below unambiguous.
+		.where(
+			and(
+				eq(roleDefinitions.clubId, clubId),
+				inArray(roleDefinitions.key, namedKeys),
+			),
+		);
+	const byKey = new Map(
+		clubRoles.flatMap((r) => (r.key == null ? [] : [[r.key, r] as const])),
+	);
+	return namedKeys.map((key, i) => {
+		const club = byKey.get(key);
+		return {
+			key,
+			// A key the club does not define falls back to the key itself
+			// rather than dropping the beat: the row still prints, owned by
+			// nobody, which is what an unstaffed role already does.
+			name: club?.name ?? key,
+			category: club?.category ?? ("functionary" as const),
+			defaultCount: club?.defaultCount ?? 1,
+			isSpeakerRole: club?.isSpeakerRole ?? false,
+			slotsUnordered: club?.slotsUnordered ?? false,
+			sortOrder: i,
+		};
+	});
+}
+
+/** What a write to a cancelled meeting's agenda is refused with. Exported so
+ *  a caller can compare against THIS rather than a copy (`mcp/errors.ts`). */
+export const AGENDA_CANCELLED_MESSAGE =
+	"A cancelled meeting's agenda cannot be edited.";
 
 /**
  * Build this meeting its own editable copy of the standard agenda, once.
@@ -341,54 +410,11 @@ async function materialiseForMeeting(
 		// NOT `role_definitions`, which own the meeting's slots and are
 		// deliberately left alone: copying those would detach this meeting's
 		// slots from the club roster.
-		const namedKeys = [
-			...new Set(
-				seeds
-					.map((seed) => seed.roleKey ?? seed.repeatsRoleKey)
-					.filter((key): key is string => key != null),
-			),
-		];
-		if (namedKeys.length > 0) {
-			const clubRoles = await tx
-				.select({
-					key: roleDefinitions.key,
-					name: roleDefinitions.name,
-					category: roleDefinitions.category,
-					defaultCount: roleDefinitions.defaultCount,
-					isSpeakerRole: roleDefinitions.isSpeakerRole,
-					slotsUnordered: roleDefinitions.slotsUnordered,
-				})
-				.from(roleDefinitions)
-				// No `isNull(templateId)` beside these: 0083 pinned the column NULL
-				// with a CHECK, so it matched every row. `role_definitions_club_key_unique`
-				// is what keeps `byKey` below unambiguous.
-				.where(
-					and(
-						eq(roleDefinitions.clubId, clubId),
-						inArray(roleDefinitions.key, namedKeys),
-					),
-				);
-			const byKey = new Map(
-				clubRoles.flatMap((r) => (r.key == null ? [] : [[r.key, r] as const])),
-			);
-			await tx.insert(meetingTemplateRoles).values(
-				namedKeys.map((key, i) => {
-					const club = byKey.get(key);
-					return {
-						templateId: tpl.id,
-						key,
-						// A key the club does not define falls back to the key itself
-						// rather than dropping the beat: the row still prints, owned by
-						// nobody, which is what an unstaffed role already does.
-						name: club?.name ?? key,
-						category: club?.category ?? ("functionary" as const),
-						defaultCount: club?.defaultCount ?? 1,
-						isSpeakerRole: club?.isSpeakerRole ?? false,
-						slotsUnordered: club?.slotsUnordered ?? false,
-						sortOrder: i,
-					};
-				}),
-			);
+		const declared = await declaredRolesForSeeds(tx, clubId, seeds);
+		if (declared.length > 0) {
+			await tx
+				.insert(meetingTemplateRoles)
+				.values(declared.map((role) => ({ ...role, templateId: tpl.id })));
 		}
 		await tx
 			.update(meetings)
@@ -406,6 +432,11 @@ async function materialiseForMeeting(
  * builders are lazy — nothing is sent until this awaits it — so the reads can
  * be written once and still run sequentially when `conn` is a transaction
  * (#966's apply re-plans inside one).
+ *
+ * An eager promise in `reads` (an async function already called) runs when it
+ * is created, whatever this does; every such read must itself be handed `conn`
+ * — `loadMeetingSlots(meetingId, conn)` below — or it runs on a second pooled
+ * connection, outside the transaction's view, while the caller holds its lock.
  */
 async function readAll<T extends readonly unknown[] | []>(
 	conn: DbOrTx,
@@ -419,6 +450,52 @@ async function readAll<T extends readonly unknown[] | []>(
 	const out: unknown[] = [];
 	for (const read of reads) out.push(await read);
 	return out as { -readonly [K in keyof T]: Awaited<T[K]> };
+}
+
+/** A template's stored rows, in order — the one select `loadAgendaDraft` and
+ *  `readAgendaSnapshot` share. Lazy: nothing runs until it is awaited. */
+function templateBeatsQuery(conn: DbOrTx, templateId: string) {
+	return conn
+		.select({
+			id: meetingTemplateBeats.id,
+			sortOrder: meetingTemplateBeats.sortOrder,
+			kind: meetingTemplateBeats.kind,
+			label: meetingTemplateBeats.label,
+			detail: meetingTemplateBeats.detail,
+			minutes: meetingTemplateBeats.minutes,
+			roleKey: meetingTemplateBeats.roleKey,
+			repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
+			// See `AgendaDraftRow.flex` — load-bearing for the client's
+			// `applyFlex`, not just for the editor's pin control.
+			flex: meetingTemplateBeats.flex,
+			handoff: meetingTemplateBeats.handoff,
+			markGreen: meetingTemplateBeats.markGreen,
+			markYellow: meetingTemplateBeats.markYellow,
+			markRed: meetingTemplateBeats.markRed,
+			// See `AgendaDraftRow.clubGoverned` (#683). Omit it and every row
+			// reads as ungoverned: `refreshTableTopicsMarks` below then matches
+			// nothing, and the editor shows the frozen snapshot as an editable
+			// window while every print surface shows the club's.
+			clubGoverned: meetingTemplateBeats.clubGoverned,
+		})
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, templateId))
+		.orderBy(asc(meetingTemplateBeats.sortOrder));
+}
+
+/** A template's declared roles, in order. Lazy, like the rows. */
+function templateRolesQuery(conn: DbOrTx, templateId: string) {
+	return conn
+		.select({
+			key: meetingTemplateRoles.key,
+			name: meetingTemplateRoles.name,
+			category: meetingTemplateRoles.category,
+			defaultCount: meetingTemplateRoles.defaultCount,
+			isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
+		})
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, templateId))
+		.orderBy(asc(meetingTemplateRoles.sortOrder));
 }
 
 /**
@@ -499,46 +576,11 @@ export async function loadAgendaDraft(
 	if (!tpl) return null;
 
 	const [rows, roles, slots, bank] = await readAll(conn, [
-		conn
-			.select({
-				id: meetingTemplateBeats.id,
-				sortOrder: meetingTemplateBeats.sortOrder,
-				kind: meetingTemplateBeats.kind,
-				label: meetingTemplateBeats.label,
-				detail: meetingTemplateBeats.detail,
-				minutes: meetingTemplateBeats.minutes,
-				roleKey: meetingTemplateBeats.roleKey,
-				repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
-				// See `AgendaDraftRow.flex` — load-bearing for the client's
-				// `applyFlex`, not just for the editor's pin control.
-				flex: meetingTemplateBeats.flex,
-				handoff: meetingTemplateBeats.handoff,
-				markGreen: meetingTemplateBeats.markGreen,
-				markYellow: meetingTemplateBeats.markYellow,
-				markRed: meetingTemplateBeats.markRed,
-				// See `AgendaDraftRow.clubGoverned` (#683). Omit it and every row
-				// reads as ungoverned: `refreshTableTopicsMarks` below then matches
-				// nothing, and the editor shows the frozen snapshot as an editable
-				// window while every print surface shows the club's.
-				clubGoverned: meetingTemplateBeats.clubGoverned,
-			})
-			.from(meetingTemplateBeats)
-			.where(eq(meetingTemplateBeats.templateId, tpl.id))
-			.orderBy(asc(meetingTemplateBeats.sortOrder)),
-		conn
-			.select({
-				key: meetingTemplateRoles.key,
-				name: meetingTemplateRoles.name,
-				category: meetingTemplateRoles.category,
-				defaultCount: meetingTemplateRoles.defaultCount,
-				isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
-			})
-			.from(meetingTemplateRoles)
-			.where(eq(meetingTemplateRoles.templateId, tpl.id))
-			.orderBy(asc(meetingTemplateRoles.sortOrder)),
+		templateBeatsQuery(conn, tpl.id),
+		templateRolesQuery(conn, tpl.id),
 		// The SAME loader the meeting page and the print route use, so the
 		// editor's clock cannot disagree with theirs about what a slot is.
-		loadMeetingSlots(meetingId),
+		loadMeetingSlots(meetingId, conn),
 		// The club's whole role BANK (#802), which the Roles panel's picker is
 		// built from. ONE scope since #801 — the club — so this is a plain
 		// indexed read on `role_definitions_club_idx` with no template axis and
@@ -594,124 +636,126 @@ export async function loadAgendaDraft(
 	};
 }
 
-/** One STORED agenda row as the connector reads it (#966). */
-export type AgendaRunSheetRow = {
-	/** The row's id — what `edit_agenda` names it by. */
-	rowId: string;
-	kind: AgendaDraftRow["kind"];
-	label: string;
-	/** The minutes stored on the row. On a flex row the clock ignores this. */
-	minutes: number;
-	/**
-	 * When the row starts on the printed agenda ("12:15", 12-hour, the print
-	 * route's own format), or null when it prints nothing — a repeat row whose
-	 * role has no slots on this meeting.
-	 */
-	start: string | null;
-	/** What the clock actually gives it: after flex, and summed over every
-	 *  iteration of a repeat block. */
-	scheduledMinutes: number;
-	/** The range the flex segment stretches within, or null for a fixed row.
-	 *  The bound is on the SEGMENT, not on each flex row (see `applyFlex`). */
-	flex: { minMinutes: number; maxMinutes: number } | null;
-	/** Set on a row that repeats once per slot of a role (the speeches). */
-	repeats: { roleKey: string; times: number } | null;
-};
-
-/** A meeting's run sheet with its clock and the booked slot beside it (#966). */
-export type AgendaRunSheet = {
-	/** The meeting's start, club-local, in the same 12-hour format as `start`. */
-	startsAt: string;
-	/** When the last row ends. */
-	endsAt: string;
-	/** The booked meeting length, and when that booking ends. */
-	slotMinutes: number;
-	slotEndsAt: string;
-	totalMinutes: number;
-	/** Signed and never deadbanded: positive is over the slot, negative under. */
-	overByMinutes: number;
-	rows: AgendaRunSheetRow[];
-};
-
 /**
- * The run sheet the printed agenda shows, per STORED row (#966).
+ * A meeting's agenda as the connector reads it (#966): the stored rows when it
+ * has a template, and otherwise the standard agenda computed IN MEMORY.
  *
- * The same three functions the print route and the editor's clock run
- * (`buildTemplateRowsWithSource` → `applyFlex` → `buildTimeline`), in the same
- * order — a fifth caller, not a second derivation. `rows` defaults to the
- * draft's own and is a parameter so a PLAN can clock rows that are not stored
- * yet with the pipeline that will clock them once they are.
+ * WRITES NOTHING, which is the difference from `loadAgendaDraft`. The editor's
+ * page load materialises a never-edited meeting's copy on read; a token read
+ * or a preview must not (maintainer's decision on #966), because that copy
+ * freezes the club's `geIntroducesFunctionaries` and the standard run of show
+ * onto the meeting — the print path reads both live from the club until then.
+ * So for `template_id IS NULL` this builds exactly the rows and role
+ * declarations `materialiseForMeeting` WOULD write, from the same
+ * `materialiseRunOfShow` and `declaredRolesForSeeds`, and gives each row a
+ * position-derived id (`std:<index>`) — `idSource: "derived"`. An apply
+ * materialises inside its transaction and maps those ids by position.
  *
- * The rows are the draft's, which `loadAgendaDraft` has already passed
- * through `refreshTableTopicsMarks`; marks do not enter the clock either way.
+ * `forUpdate` locks the meeting row; pass it only on a transaction.
  */
-export function agendaRunSheet(
-	draft: Pick<
-		AgendaDraft,
-		"roles" | "slots" | "scheduledAt" | "timeZone" | "lengthMinutes" | "rows"
-	>,
-	rows: AgendaDraftRow[] = draft.rows,
-): AgendaRunSheet {
-	const sourced = buildTemplateRowsWithSource(rows, draft.roles, draft.slots);
-	const flexed = applyFlex(
-		sourced.map((e) => e.row),
-		draft.lengthMinutes,
-	);
-	const timed = buildTimeline(flexed.rows, draft.scheduledAt, draft.timeZone);
+export type AgendaSnapshot = {
+	meetingId: string;
+	clubId: string;
+	status: string;
+	/** Null for a never-edited meeting (rows derived, nothing stored). */
+	templateId: string | null;
+	/** True when `templateId` is the meeting's OWN copy; false for a shared
+	 *  template (the first write forks it) or none at all. */
+	privateCopy: boolean;
+	idSource: "stored" | "derived";
+	rows: AgendaDraftRow[];
+	roles: AgendaDraftRole[];
+	slots: AgendaSlot[];
+	scheduledAt: string;
+	timeZone: string;
+	lengthMinutes: number;
+	tableTopicsLimits: TableTopicsLimits;
+};
 
-	const byBeat = new Map<
-		string,
-		{ start: string; minutes: number; iterations: number }
-	>();
-	timed.forEach((row, i) => {
-		const beatId = sourced[i]?.beatId;
-		if (beatId === undefined) return;
-		const seen = byBeat.get(beatId);
-		if (seen) {
-			seen.minutes += row.minutes;
-		} else {
-			byBeat.set(beatId, {
-				start: row.time,
-				minutes: row.minutes,
-				iterations: sourced[i]?.iterationCount ?? 1,
-			});
-		}
-	});
+/** The id a derived (not yet stored) standard-agenda row carries. */
+export function derivedRowId(index: number): string {
+	return `std:${index}`;
+}
+
+export async function readAgendaSnapshot(
+	meetingId: string,
+	conn: DbOrTx = database,
+	opts: { forUpdate?: boolean } = {},
+): Promise<AgendaSnapshot | null> {
+	const base = conn
+		.select({
+			templateId: meetings.templateId,
+			clubId: meetings.clubId,
+			status: meetings.status,
+			scheduledAt: meetings.scheduledAt,
+			lengthMinutes: meetings.lengthMinutes,
+			timeZone: clubs.timezone,
+			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
+		})
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	const [meeting] = opts.forUpdate
+		? await base.for("update", { of: meetings })
+		: await base;
+	if (!meeting) return null;
+	const tableTopicsLimits: TableTopicsLimits = {
+		minSeconds: meeting.tableTopicsMinSeconds,
+		maxSeconds: meeting.tableTopicsMaxSeconds,
+	};
+
+	let rows: AgendaDraftRow[];
+	let roles: AgendaDraftRole[];
+	let privateCopy = false;
+	if (meeting.templateId === null) {
+		const seeds = materialiseRunOfShow(
+			meeting.geIntroducesFunctionaries,
+			tableTopicsLimits,
+		);
+		rows = seeds.map((seed, i) => ({
+			...seed,
+			id: derivedRowId(i),
+			sortOrder: i,
+		}));
+		roles = (await declaredRolesForSeeds(conn, meeting.clubId, seeds)).map(
+			({ key, name, category, defaultCount, isSpeakerRole }) => ({
+				key,
+				name,
+				category,
+				defaultCount,
+				isSpeakerRole,
+			}),
+		);
+	} else {
+		const [own] = await conn
+			.select({ meetingId: meetingTemplates.meetingId })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.id, meeting.templateId))
+			.limit(1);
+		privateCopy = own?.meetingId === meetingId;
+		[rows, roles] = await readAll(conn, [
+			templateBeatsQuery(conn, meeting.templateId),
+			templateRolesQuery(conn, meeting.templateId),
+		]);
+	}
 
 	return {
-		startsAt: timelineEnd([], draft.scheduledAt, draft.timeZone),
-		endsAt: timelineEnd(flexed.rows, draft.scheduledAt, draft.timeZone),
-		slotMinutes: draft.lengthMinutes,
-		slotEndsAt: timelineEnd(
-			[{ minutes: draft.lengthMinutes }],
-			draft.scheduledAt,
-			draft.timeZone,
-		),
-		totalMinutes: flexed.projectedMinutes,
-		overByMinutes: flexed.deltaMinutes,
-		rows: [...rows]
-			.sort((a, b) => a.sortOrder - b.sortOrder)
-			.map((row) => {
-				const clocked = byBeat.get(row.id);
-				return {
-					rowId: row.id,
-					kind: row.kind,
-					label: row.label,
-					minutes: row.minutes,
-					start: clocked?.start ?? null,
-					scheduledMinutes: clocked?.minutes ?? 0,
-					flex: row.flex
-						? { minMinutes: TABLE_TOPICS_MIN, maxMinutes: TABLE_TOPICS_MAX }
-						: null,
-					repeats:
-						row.repeatsRoleKey == null
-							? null
-							: {
-									roleKey: row.repeatsRoleKey,
-									times: clocked?.iterations ?? 0,
-								},
-				};
-			}),
+		meetingId,
+		clubId: meeting.clubId,
+		status: meeting.status,
+		templateId: meeting.templateId,
+		privateCopy,
+		idSource: meeting.templateId === null ? "derived" : "stored",
+		rows: refreshTableTopicsMarks(rows, tableTopicsLimits),
+		roles,
+		slots: await loadMeetingSlots(meetingId, conn),
+		scheduledAt: meeting.scheduledAt.toISOString(),
+		timeZone: meeting.timeZone,
+		lengthMinutes: meeting.lengthMinutes,
+		tableTopicsLimits,
 	};
 }
 
@@ -766,7 +810,7 @@ export async function materialiseAgendaForMeeting(
 
 /** What an officer reads when a fork lost a race the lock could not cover —
  *  a sentence, never the driver's `Failed query: insert into …`. */
-const AGENDA_CONCURRENT_EDIT_MESSAGE =
+export const AGENDA_CONCURRENT_EDIT_MESSAGE =
 	"Another change to this agenda was saved at the same moment. Reload and try again.";
 
 /** Translate a database deadlock into a retryable user-facing refusal.
@@ -892,7 +936,7 @@ async function resolveAgendaDraft(
 		throw new Error(
 			isMeetingLocked(meeting.status)
 				? MEETING_LOCKED_MESSAGE
-				: "A cancelled meeting's agenda cannot be edited.",
+				: AGENDA_CANCELLED_MESSAGE,
 		);
 	}
 
@@ -1482,7 +1526,7 @@ async function findRow(
 }
 
 /** The one sentence every mutator answers a row it will not touch with. */
-const ROW_NOT_IN_MEETING_MESSAGE =
+export const ROW_NOT_IN_MEETING_MESSAGE =
 	"That agenda row is not part of this meeting.";
 
 /**

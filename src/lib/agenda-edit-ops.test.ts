@@ -3,6 +3,8 @@ import {
 	type AgendaEditOp,
 	applyAgendaEdits,
 	type EditableRow,
+	type IdentityRow,
+	mapPreviewedRows,
 	newRowId,
 } from "./agenda-edit-ops";
 import {
@@ -195,5 +197,80 @@ describe("applyAgendaEdits (#966)", () => {
 			full,
 		);
 		expect(r).toMatchObject({ ok: false, opIndex: 1 });
+	});
+});
+
+describe("mapPreviewedRows (#966 review B)", () => {
+	const r = (
+		id: string,
+		label: string,
+		kind: IdentityRow["kind"] = "event",
+		roleKey: string | null = null,
+	): IdentityRow => ({ id, label, kind, roleKey });
+	const previewed = [
+		r("std:0", "OPENING", "section"),
+		r("std:1", "Welcome"),
+		r("std:2", "Table Topics", "role", "table_topics_master"),
+	];
+
+	it("maps position to position when every row is the same beat", () => {
+		const stored = [
+			r("u0", "OPENING", "section"),
+			r("u1", "Welcome"),
+			r("u2", "Table Topics", "role", "table_topics_master"),
+		];
+		expect(mapPreviewedRows(previewed, stored)).toEqual(
+			new Map([
+				["std:0", "u0"],
+				["std:1", "u1"],
+				["std:2", "u2"],
+			]),
+		);
+	});
+
+	it("accepts a renamed role row by its role key", () => {
+		const stored = [
+			r("u0", "OPENING", "section"),
+			r("u1", "Welcome"),
+			r("u2", "Impromptu", "role", "table_topics_master"),
+		];
+		expect(mapPreviewedRows(previewed, stored)?.get("std:2")).toBe("u2");
+	});
+
+	it("refuses a same-length change: two rows swapped", () => {
+		const stored = [
+			r("u0", "OPENING", "section"),
+			r("u2", "Table Topics", "role", "table_topics_master"),
+			r("u1", "Welcome"),
+		];
+		expect(mapPreviewedRows(previewed, stored)).toBeNull();
+	});
+
+	it("refuses a same-length change: one event renamed", () => {
+		const stored = [
+			r("u0", "OPENING", "section"),
+			r("u1", "Greetings"),
+			r("u2", "Table Topics", "role", "table_topics_master"),
+		];
+		expect(mapPreviewedRows(previewed, stored)).toBeNull();
+	});
+
+	it("refuses a changed kind even with the same label", () => {
+		const stored = [
+			r("u0", "OPENING"),
+			r("u1", "Welcome"),
+			r("u2", "Table Topics", "role", "table_topics_master"),
+		];
+		expect(mapPreviewedRows(previewed, stored)).toBeNull();
+	});
+
+	it("does not treat two null role keys as a match", () => {
+		expect(
+			mapPreviewedRows([r("a", "X", "role")], [r("b", "Y", "role")]),
+		).toBeNull();
+	});
+
+	it("refuses a different length", () => {
+		expect(mapPreviewedRows(previewed, previewed.slice(0, 2))).toBeNull();
 	});
 });

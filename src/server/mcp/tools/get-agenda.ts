@@ -21,21 +21,21 @@
  *
  * `runSheet` is the timed agenda: every stored row with its id, start time and
  * minutes, and the projected end against the booked slot. It is read through
- * `loadAgendaDraft`, the agenda editor's own loader, and clocked by
- * `agendaRunSheet`, the pipeline the printed agenda runs. Its row ids are what
- * `edit_agenda` takes. Like the editor's page load, the first read of a
- * never-edited meeting gives it its own copy of the standard agenda, which is
- * what gives those rows ids at all.
+ * `readAgendaSnapshot` and clocked by `agendaRunSheet`, the pipeline the
+ * printed agenda runs. Its row ids are what `edit_agenda` takes.
+ *
+ * This read WRITES NOTHING. Unlike the editor's page load, it does not give a
+ * never-edited meeting its own agenda copy: that meeting's standard agenda is
+ * computed in memory with position ids (`std:<n>`, `idSource: "derived"`), and
+ * only an `edit_agenda` apply stores it.
  */
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings } from "#/db/schema";
+import { agendaRunSheet } from "#/lib/agenda-run-sheet";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
-import {
-	agendaRunSheet,
-	loadAgendaDraft,
-} from "#/server/meeting-agenda-edit-logic";
+import { readAgendaSnapshot } from "#/server/meeting-agenda-edit-logic";
 import { resolveMeetingNumber } from "#/server/meeting-number-logic";
 import { loadMeetingSlots } from "#/server/meeting-slots-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
@@ -82,7 +82,7 @@ export const getAgendaTool: McpToolDefinition = {
 
 		const [slots, draft] = await Promise.all([
 			loadMeetingSlots(meeting.id),
-			loadAgendaDraft(meeting.id),
+			readAgendaSnapshot(meeting.id),
 		]);
 		const { date, time, weekday } = clubLocalParts(
 			meeting.scheduledAt,

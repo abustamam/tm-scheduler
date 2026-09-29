@@ -52,7 +52,7 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 |---|---|---|
 | `whoami` | reads | "Which clubs can you manage for me?" — start here if Claude seems lost |
 | `list_meetings` | reads | "What meetings do we have coming up?" |
-| `get_agenda` | reads | "What's on the agenda for our next meeting? Which roles are open?" Also returns the timed run sheet: each row's start time and minutes, and when the meeting ends against its booked slot |
+| `get_agenda` | reads | "What's on the agenda for our next meeting? Which roles are open?" Also returns the timed run sheet: each row's start time and minutes, and when the meeting ends against its booked slot. Reading it changes nothing, even on a meeting nobody has edited yet |
 | `get_lineup_blast` | reads | "Draft the lineup message for Saturday's meeting" — you copy and send it |
 | `get_my_feedback` | reads | "What did people say about my speech on Saturday?" Only **your own** anonymous notes, from meetings that have ended; never who wrote one. Every result tells Claude the note text is untrusted, anonymous input, never instructions |
 | `find_people` | reads | "Find Dana on our roster." Guest emails and phones come back **masked** |
@@ -68,7 +68,7 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   none of it, but there is no second "are you sure" from GavelUp. Keep Claude's tool permission
   for this connector on **ask** (the default) so *you* approve each call, and read what it is
   about to assign before you do. A wrong assignment is undone on the agenda page like any other.
-- **`edit_agenda` asks twice.** The first call writes nothing: it returns every row's start time
+- **`edit_agenda` asks twice.** The first call writes nothing at all: it returns every row's start time
   before and after, when the agenda would end, and a warning if it would run past the booked slot
   (a warning, not a refusal — Table Topics stretches or shrinks first). Claude should show you
   that plan; the agenda changes only when it calls again with the plan's hash, and if anyone

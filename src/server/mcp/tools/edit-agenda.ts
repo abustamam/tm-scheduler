@@ -7,23 +7,31 @@
  *
  * ## Preview, then apply, in the conversation
  *
- * A call WITHOUT `planHash` writes nothing. It returns the plan — every stored
- * row before and after, with its new start time, and the projected end against
- * the booked slot — and a `planHash`. The SAME call with that hash applies it.
- * No confirm page: `mcp-plan.ts` states the rule (a page when the write is hard
- * to see or hard to undo), and a run sheet is neither — the plan IS the whole
- * of what changes, and the editor undoes any of it in a click.
+ * A call WITHOUT `planHash` writes nothing at all — not even the meeting's own
+ * agenda copy the editor's page load creates. It reads through
+ * `readAgendaSnapshot`, which computes a never-edited meeting's standard
+ * agenda in memory (`std:<n>` row ids), and returns the plan: every stored
+ * row before and after, with its new start time, stored minutes and note, and
+ * the projected end against the booked slot, plus a `planHash`. The SAME call
+ * with that hash applies it. No confirm page: `mcp-plan.ts` states the rule (a
+ * page when the write is hard to see or hard to undo), and a run sheet is
+ * neither.
  *
- * The apply locks the meeting row, re-plans from what is stored now and refuses
- * with `PLAN_STALE` (carrying the fresh plan) when the hash no longer matches.
- * The meeting row, not the club advisory lock (`lock.ts`): every agenda write
- * — the browser editor's included — takes that row `FOR UPDATE` in
- * `ensureAgendaDraft` before touching a row, so it is the lock that actually
- * excludes them. The club lock excludes only other MCP applies, and it belongs
- * to the pending-plan skeleton (`mcp-pending-lifecycle.guard.test.ts`). Only then does it write, and only through the
- * editor's own mutators (`addAgendaRow`, `updateAgendaRow`, `removeAgendaRow`,
- * `placeAgendaRow`), each handed this transaction so the batch commits whole
- * or not at all.
+ * The apply locks the meeting row, re-plans from what is stored now and
+ * refuses with `PLAN_STALE` (carrying the fresh plan) when the hash no longer
+ * matches. The meeting row, not the club advisory lock (`lock.ts`): every
+ * agenda write — the browser editor's included — takes that row `FOR UPDATE`
+ * in `ensureAgendaDraft` before touching a row, so it is the lock that
+ * actually excludes them. The club lock excludes only other MCP applies, and
+ * it belongs to the pending-plan skeleton (`mcp-pending-lifecycle.guard.test.ts`).
+ *
+ * Only then does it write, and only through the editor's own functions: it
+ * stores a never-edited meeting's agenda (`materialiseAgendaForMeeting`) or
+ * forks a shared one (`ensureAgendaDraft`), maps the previewed ids onto the
+ * stored rows by position with an identity check (`mapPreviewedRows`), and
+ * runs `addAgendaRow` / `updateAgendaRow` / `removeAgendaRow` /
+ * `placeAgendaRow`, each handed this transaction so the batch commits whole or
+ * not at all.
  *
  * ## Running long is a warning, not a refusal
  *
@@ -33,22 +41,24 @@
  *
  * ## Refusals
  *
- * A completed or cancelled meeting is refused (`LOCKED`), as in the editor. A
- * batch with an illegal operation is refused as `VALIDATION` naming the
- * operation's index, before anything is written. Authorization is the
- * meeting's own club (`authorizeTokenForMeeting`), the same officer rule every
- * connector tool uses.
+ * A completed or cancelled meeting is refused (`LOCKED`), with the editor's
+ * own rule and sentences (`agendaEditable`). A batch with an illegal operation
+ * is refused as `VALIDATION` naming the operation's index, before anything is
+ * written — except on an apply, where the preview already accepted the batch,
+ * so an operation that no longer fits means the agenda moved: `PLAN_STALE`.
+ * Authorization is the meeting's own club (`authorizeTokenForMeeting`), the
+ * same officer rule every connector tool uses.
  */
-import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings } from "#/db/schema";
 import {
 	type AgendaEditOp,
 	type AgendaEditStep,
 	applyAgendaEdits,
+	mapPreviewedRows,
 	newRowId,
 } from "#/lib/agenda-edit-ops";
+import { type AgendaRunSheet, agendaRunSheet } from "#/lib/agenda-run-sheet";
 import { planHash } from "#/lib/mcp-plan";
 import {
 	isMeetingLocked,
@@ -56,21 +66,28 @@ import {
 } from "#/lib/meeting-lifecycle";
 import {
 	MAX_BEAT_MINUTES,
+	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_DETAIL_CHARS,
 	MAX_TEMPLATE_LABEL_CHARS,
 } from "#/lib/meeting-template-limits";
 import {
-	type AgendaDraft,
+	AGENDA_CANCELLED_MESSAGE,
+	AGENDA_CONCURRENT_EDIT_MESSAGE,
+	AGENDA_DEADLOCK_MESSAGE,
 	type AgendaDraftRow,
-	type AgendaRunSheet,
+	type AgendaSnapshot,
 	addAgendaRow,
-	agendaRunSheet,
+	agendaEditable,
 	ensureAgendaDraft,
-	loadAgendaDraft,
+	materialiseAgendaForMeeting,
 	placeAgendaRow,
+	ROW_NOT_IN_MEETING_MESSAGE,
+	readAgendaSnapshot,
 	removeAgendaRow,
 	updateAgendaRow,
 } from "#/server/meeting-agenda-edit-logic";
+import type { DbOrTx } from "#/server/meeting-templates-logic";
+import { isDeadlock } from "#/server/pg-errors";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
@@ -81,9 +98,9 @@ export const EDIT_AGENDA_TOOL = "edit_agenda";
  *  touches more than this is a rebuild, which is what templates are for. */
 export const MAX_AGENDA_EDIT_OPS = 50;
 
-/** Said for a cancelled meeting. The locked sentence is the shared export. */
-export const CANCELLED_AGENDA_MESSAGE =
-	"A cancelled meeting's agenda cannot be edited.";
+/** What an apply says when the agenda moved under a plan the caller holds. */
+export const AGENDA_MOVED_MESSAGE =
+	"This meeting's agenda changed since that preview. Re-read get_agenda and preview again.";
 
 // Strings are bounded at twice their real cap, which is counted in code points
 // by `applyAgendaEdits` — the same edge-bound rule `meeting-agenda-edit.ts`
@@ -97,17 +114,11 @@ const detail = z
 	.max(MAX_TEMPLATE_DETAIL_CHARS * 2)
 	.nullable();
 const minutes = z.number().int().min(0).max(MAX_BEAT_MINUTES);
+/** A stored row's UUID, or `std:<n>` for a never-edited meeting's derived row. */
+const rowId = z.union([z.string().uuid(), z.string().regex(/^std:\d{1,3}$/)]);
 const placement = {
-	before: z
-		.string()
-		.uuid()
-		.optional()
-		.describe("Place it immediately before this row id."),
-	after: z
-		.string()
-		.uuid()
-		.optional()
-		.describe("Place it immediately after this row id."),
+	before: rowId.optional().describe("Place it immediately before this row id."),
+	after: rowId.optional().describe("Place it immediately after this row id."),
 	at: z
 		.enum(["start", "end"])
 		.optional()
@@ -130,14 +141,12 @@ const opSchema = z.discriminatedUnion("op", [
 			...placement,
 		})
 		.strict(),
-	z.object({ op: z.literal("remove"), rowId: z.string().uuid() }).strict(),
-	z
-		.object({ op: z.literal("move"), rowId: z.string().uuid(), ...placement })
-		.strict(),
+	z.object({ op: z.literal("remove"), rowId }).strict(),
+	z.object({ op: z.literal("move"), rowId, ...placement }).strict(),
 	z
 		.object({
 			op: z.literal("set"),
-			rowId: z.string().uuid(),
+			rowId,
 			label: label.optional(),
 			minutes: minutes.optional(),
 			detail: detail.optional(),
@@ -168,6 +177,17 @@ const inputSchema = {
 		),
 };
 
+/** One row at one moment, as the plan shows it. `minutes` is what the clock
+ *  gives it; `storedMinutes` and `detail` are what the row holds — the values
+ *  an apply writes, so they are in the plan and in its hash (#966 review). */
+type PlanRowState = {
+	position: number;
+	start: string | null;
+	minutes: number;
+	storedMinutes: number;
+	detail: string | null;
+};
+
 /** One stored row's before and after, as the plan shows it. */
 type PlanRow = {
 	/** Null for a row this batch adds. */
@@ -181,10 +201,11 @@ type PlanRow = {
 		| "moved"
 		| "relabelled"
 		| "resized"
+		| "noted"
 		| "retimed"
 	)[];
-	before: { position: number; start: string | null; minutes: number } | null;
-	after: { position: number; start: string | null; minutes: number } | null;
+	before: PlanRowState | null;
+	after: PlanRowState | null;
 };
 
 type PlanTotals = Pick<
@@ -199,6 +220,8 @@ type PlanTotals = Pick<
 
 type EditPlan = {
 	meetingId: string;
+	/** Whether the plan's row ids are stored or derived (`std:<n>`). */
+	idSource: AgendaSnapshot["idSource"];
 	operations: AgendaEditOp[];
 	rows: PlanRow[];
 	before: PlanTotals;
@@ -217,26 +240,41 @@ function totals(sheet: AgendaRunSheet): PlanTotals {
 	};
 }
 
-function refuseUneditable(status: string): void {
-	if (isMeetingLocked(status)) {
-		throw new McpError("LOCKED", MEETING_LOCKED_MESSAGE);
+/**
+ * The meeting's agenda, refused unless it is editable — the ONE read the
+ * preview and the apply share. `lock` takes the meeting row `FOR UPDATE`, so
+ * pass it only on a transaction. The rule and both sentences are the editor's
+ * (`agendaEditable`), so the two surfaces cannot disagree about which meetings
+ * take an edit.
+ */
+async function loadEditable(
+	conn: DbOrTx,
+	meetingId: string,
+	lock: boolean,
+): Promise<AgendaSnapshot> {
+	const snap = await readAgendaSnapshot(meetingId, conn, { forUpdate: lock });
+	if (!snap) throw new McpError("NOT_FOUND", "Meeting not found.");
+	if (!agendaEditable(snap.status)) {
+		throw new McpError(
+			"LOCKED",
+			isMeetingLocked(snap.status)
+				? MEETING_LOCKED_MESSAGE
+				: AGENDA_CANCELLED_MESSAGE,
+		);
 	}
-	if (status === "cancelled") {
-		throw new McpError("LOCKED", CANCELLED_AGENDA_MESSAGE);
-	}
+	return snap;
 }
 
 /**
- * Plan `ops` against `draft`. Throws `VALIDATION` for an illegal batch. Pure
- * over the draft, so the preview and the apply's re-plan cannot differ except
- * through what is stored.
+ * Plan `ops` against `snap`. Throws `VALIDATION` for an illegal batch. Pure
+ * over the snapshot, so the preview and the apply's re-plan cannot differ
+ * except through what is stored.
  */
 function buildPlan(
-	meetingId: string,
-	draft: AgendaDraft,
+	snap: AgendaSnapshot,
 	ops: AgendaEditOp[],
 ): { plan: EditPlan; steps: AgendaEditStep[] } {
-	const result = applyAgendaEdits(draft.rows, ops, (fields) => ({
+	const result = applyAgendaEdits(snap.rows, ops, (fields) => ({
 		...fields,
 		sortOrder: 0,
 		roleKey: null,
@@ -258,54 +296,67 @@ function buildPlan(
 	// `agendaRunSheet` orders by `sortOrder`, so the simulated list's order has
 	// to be written into it — the renumber the mutators do on the real rows.
 	const afterRows = result.rows.map((r, i) => ({ ...r, sortOrder: i }));
-	const beforeSheet = agendaRunSheet(draft);
-	const afterSheet = agendaRunSheet(draft, afterRows);
+	const beforeSheet = agendaRunSheet(snap);
+	const afterSheet = agendaRunSheet(snap, afterRows);
 
 	const moved = new Set(
 		ops.flatMap((op) => (op.op === "move" ? [op.rowId] : [])),
 	);
+	const state = (
+		r: AgendaRunSheet["rows"][number],
+		position: number,
+	): PlanRowState => ({
+		position,
+		start: r.start,
+		minutes: r.scheduledMinutes,
+		storedMinutes: r.minutes,
+		detail: r.detail,
+	});
 	const beforeById = new Map(
-		beforeSheet.rows.map((r, position) => [r.rowId, { r, position }]),
+		beforeSheet.rows.map((r, position) => [r.rowId, state(r, position)]),
 	);
-	const afterById = new Map(
-		afterSheet.rows.map((r, position) => [r.rowId, { r, position }]),
-	);
+	const beforeLabel = new Map(beforeSheet.rows.map((r) => [r.rowId, r.label]));
+	const afterIds = new Set(afterSheet.rows.map((r) => r.rowId));
 
 	const rows: PlanRow[] = [];
 	for (const [position, a] of afterSheet.rows.entries()) {
 		const b = beforeById.get(a.rowId);
+		const after = state(a, position);
 		const isNew = result.added.has(a.rowId);
 		const changes: PlanRow["changes"] = [];
 		if (isNew) changes.push("added");
 		if (moved.has(a.rowId)) changes.push("moved");
-		if (b && b.r.label !== a.label) changes.push("relabelled");
-		if (b && b.r.scheduledMinutes !== a.scheduledMinutes) {
-			changes.push("resized");
+		if (b) {
+			if (beforeLabel.get(a.rowId) !== a.label) changes.push("relabelled");
+			// Either number: the clock's (a flex row, a repeat) OR the stored one
+			// a `set` writes — which on the flex row or a repeat with no slots is
+			// invisible to the clock, and still a write.
+			if (
+				b.minutes !== after.minutes ||
+				b.storedMinutes !== after.storedMinutes
+			) {
+				changes.push("resized");
+			}
+			if (b.detail !== after.detail) changes.push("noted");
+			if (b.start !== after.start) changes.push("retimed");
 		}
-		if (b && b.r.start !== a.start) changes.push("retimed");
 		rows.push({
 			rowId: isNew ? null : a.rowId,
 			label: a.label,
 			kind: a.kind,
 			changes,
-			before: b
-				? {
-						position: b.position,
-						start: b.r.start,
-						minutes: b.r.scheduledMinutes,
-					}
-				: null,
-			after: { position, start: a.start, minutes: a.scheduledMinutes },
+			before: b ?? null,
+			after,
 		});
 	}
 	for (const [position, b] of beforeSheet.rows.entries()) {
-		if (afterById.has(b.rowId)) continue;
+		if (afterIds.has(b.rowId)) continue;
 		rows.push({
 			rowId: b.rowId,
 			label: b.label,
 			kind: b.kind,
 			changes: ["removed"],
-			before: { position, start: b.start, minutes: b.scheduledMinutes },
+			before: state(b, position),
 			after: null,
 		});
 	}
@@ -321,7 +372,8 @@ function buildPlan(
 
 	return {
 		plan: {
-			meetingId,
+			meetingId: snap.meetingId,
+			idSource: snap.idSource,
 			operations: ops,
 			rows,
 			before: totals(beforeSheet),
@@ -334,13 +386,13 @@ function buildPlan(
 
 /** A one-line account of the plan, for a caller to read out. */
 function summarize(plan: EditPlan): string {
-	const count = (c: PlanRow["changes"][number]) =>
-		plan.rows.filter((r) => r.changes.includes(c)).length;
+	const count = (...cs: PlanRow["changes"][number][]) =>
+		plan.rows.filter((r) => cs.some((c) => r.changes.includes(c))).length;
 	const parts = [
 		["added", count("added")],
 		["removed", count("removed")],
 		["moved", count("moved")],
-		["edited", count("relabelled") + count("resized")],
+		["edited", count("relabelled", "resized", "noted")],
 	]
 		.filter(([, n]) => (n as number) > 0)
 		.map(([what, n]) => `${n} ${what}`);
@@ -351,6 +403,35 @@ function summarize(plan: EditPlan): string {
 	return `${parts.join(", ") || "No row changes"}; ${end}; slot ends ${plan.after.slotEndsAt}.`;
 }
 
+/**
+ * An error thrown inside the apply, as the caller should see it.
+ *
+ * Every refusal the editor's functions raise as a bare `Error` is compared by
+ * IDENTITY with its exported constant (`mcp/errors.ts`'s one sanctioned
+ * exception), never by text. What each means here: the agenda moved under a
+ * plan the caller holds, so preview again. A Postgres deadlock raised by any
+ * statement in the batch means the same. `copyTemplateForMeeting`'s two
+ * refusals are not in this list because neither is reachable from here: "too
+ * large to copy" is checked before any write (see the apply), and "no longer
+ * exists" cannot happen while the meeting row is locked, because
+ * `meetings.template_id` is `ON DELETE RESTRICT`.
+ */
+function applyError(err: unknown): unknown {
+	if (err instanceof McpError) return err;
+	const moved = [
+		AGENDA_DEADLOCK_MESSAGE,
+		AGENDA_CONCURRENT_EDIT_MESSAGE,
+		ROW_NOT_IN_MEETING_MESSAGE,
+	];
+	if (
+		isDeadlock(err) ||
+		(err instanceof Error && moved.includes(err.message))
+	) {
+		return new McpError("PLAN_STALE", AGENDA_MOVED_MESSAGE);
+	}
+	return err;
+}
+
 export const editAgendaTool: McpToolDefinition = {
 	name: EDIT_AGENDA_TOOL,
 	config: {
@@ -358,11 +439,11 @@ export const editAgendaTool: McpToolDefinition = {
 		description:
 			"Add, remove, move, rename and retime rows on one meeting's agenda " +
 			"(the run sheet get_agenda returns). Without planHash this writes " +
-			"NOTHING: it returns a plan with every row's start time before and " +
-			"after, the projected end against the booked slot, any warnings, and " +
-			"a planHash. Show the plan to the user; call again with the same input " +
-			"plus that planHash to apply it. All operations apply or none do. " +
-			"Running past the slot is a warning, not a refusal; the flex row " +
+			"nothing at all: it returns a plan with every row's start time before " +
+			"and after, the projected end against the booked slot, any warnings, " +
+			"and a planHash. Show the plan to the user; call again with the same " +
+			"input plus that planHash to apply it. All operations apply or none " +
+			"do. Running past the slot is a warning, not a refusal; the flex row " +
 			"(Table Topics) stretches or shrinks first. It cannot change the " +
 			"meeting's scheduled time, and a completed or cancelled meeting is " +
 			"refused.",
@@ -371,7 +452,8 @@ export const editAgendaTool: McpToolDefinition = {
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
 		const ops = args.operations as AgendaEditOp[];
-		const { club, user } = await authorizeTokenForMeeting(ctx, args.meetingId);
+		const meetingId = args.meetingId;
+		const { club, user } = await authorizeTokenForMeeting(ctx, meetingId);
 		const hashOf = (plan: EditPlan) =>
 			planHash({
 				tool: EDIT_AGENDA_TOOL,
@@ -381,23 +463,11 @@ export const editAgendaTool: McpToolDefinition = {
 			});
 
 		if (args.planHash === undefined) {
-			// The same read the editor's page load does — including building the
-			// meeting its own copy of the standard agenda on first read, which is
-			// what gives a never-edited meeting row ids at all.
-			// Status first, so a refused meeting is not given a copy on the way.
-			const [meeting] = await db
-				.select({ status: meetings.status })
-				.from(meetings)
-				.where(eq(meetings.id, args.meetingId))
-				.limit(1);
-			if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
-			refuseUneditable(meeting.status);
-			const draft = await loadAgendaDraft(args.meetingId);
-			if (!draft) throw new McpError("NOT_FOUND", "Meeting not found.");
-			const { plan } = buildPlan(args.meetingId, draft, ops);
+			const snap = await loadEditable(db, meetingId, false);
+			const { plan } = buildPlan(snap, ops);
 			return {
 				applied: false,
-				meetingId: args.meetingId,
+				meetingId,
 				clubId: club.clubId,
 				summary: summarize(plan),
 				plan,
@@ -406,115 +476,129 @@ export const editAgendaTool: McpToolDefinition = {
 		}
 
 		const expected = args.planHash;
-		const applied = await db.transaction(async (tx) => {
-			// The meeting row first: every editor write takes it `FOR UPDATE` in
-			// `ensureAgendaDraft` before touching a row, so holding it here is what
-			// keeps a browser edit from landing between this re-plan and the writes.
-			const [meeting] = await tx
-				.select({ status: meetings.status })
-				.from(meetings)
-				.where(eq(meetings.id, args.meetingId))
-				.for("update")
-				.limit(1);
-			if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
-			refuseUneditable(meeting.status);
-
-			const draft = await loadAgendaDraft(args.meetingId, tx);
-			if (!draft) throw new McpError("NOT_FOUND", "Meeting not found.");
-			const { plan, steps } = buildPlan(args.meetingId, draft, ops);
-			const freshHash = hashOf(plan);
-			if (freshHash !== expected) {
-				throw new McpError(
-					"PLAN_STALE",
-					"This meeting's agenda changed since that preview. Show the user the fresh plan and ask again.",
-					{ plan, planHash: freshHash, summary: summarize(plan) },
-				);
-			}
-
-			// A meeting still pointing at a SHARED template gets its private copy
-			// on the first write. The copy keeps every row's order verbatim, so the
-			// previewed ids map onto it by position — done once here rather than
-			// per write, because the mutators' own translation is by `sortOrder`
-			// and the first add in this batch renumbers every row after it.
-			const { templateId } = await ensureAgendaDraft(tx, args.meetingId);
-			const live = new Map(draft.rows.map((r) => [r.id, r.id]));
-			if (templateId !== draft.templateId) {
-				const forked = await loadAgendaDraft(args.meetingId, tx);
-				if (!forked || forked.rows.length !== draft.rows.length) {
+		let applied: { plan: EditPlan; runSheet: AgendaRunSheet };
+		try {
+			applied = await db.transaction(async (tx) => {
+				// The meeting row first — see the header for why this lock and not
+				// the club's.
+				const snap = await loadEditable(tx, meetingId, true);
+				let planned: ReturnType<typeof buildPlan>;
+				try {
+					planned = buildPlan(snap, ops);
+				} catch (err) {
+					// The preview accepted this batch, so an operation that no longer
+					// fits (a row it names is gone) means the agenda moved.
+					if (err instanceof McpError && err.code === "VALIDATION") {
+						throw new McpError("PLAN_STALE", AGENDA_MOVED_MESSAGE, {
+							reason: err.message,
+						});
+					}
+					throw err;
+				}
+				const { plan, steps } = planned;
+				const freshHash = hashOf(plan);
+				if (freshHash !== expected) {
 					throw new McpError(
 						"PLAN_STALE",
-						"This meeting's agenda changed while it was being copied. Preview again.",
+						"This meeting's agenda changed since that preview. Show the user the fresh plan and ask again.",
+						{ plan, planHash: freshHash, summary: summarize(plan) },
 					);
 				}
-				draft.rows.forEach((r, i) => {
-					const copy = forked.rows[i];
-					if (copy) live.set(r.id, copy.id);
-				});
-			}
-			const liveId = (id: string): string => {
-				const found = live.get(id);
-				// Unreachable: the plan above resolved every id against these rows.
-				if (!found) throw new Error(`Row ${id} did not resolve.`);
-				return found;
-			};
 
-			for (const step of steps) {
-				const op = ops[step.opIndex];
-				if (!op) continue;
-				const meetingId = args.meetingId;
-				if (op.op === "add") {
-					const created = await addAgendaRow(
-						{ meetingId, afterRowId: null, kind: op.kind ?? "event" },
-						tx,
-					);
-					live.set(newRowId(step.opIndex), created.id);
-					await updateAgendaRow(
-						{
-							meetingId,
-							rowId: created.id,
-							patch: {
-								label: op.label,
-								minutes: op.minutes,
-								...(op.detail === undefined ? {} : { detail: op.detail }),
-							},
-						},
-						tx,
-					);
-					await placeAgendaRow(
-						{ meetingId, rowId: created.id, index: step.index ?? 0 },
-						tx,
-					);
-				} else if (op.op === "remove") {
-					await removeAgendaRow({ meetingId, rowId: liveId(op.rowId) }, tx);
-				} else if (op.op === "move") {
-					await placeAgendaRow(
-						{ meetingId, rowId: liveId(op.rowId), index: step.index ?? 0 },
-						tx,
-					);
-				} else {
-					await updateAgendaRow(
-						{
-							meetingId,
-							rowId: liveId(op.rowId),
-							patch: {
-								...(op.label === undefined ? {} : { label: op.label }),
-								...(op.minutes === undefined ? {} : { minutes: op.minutes }),
-								...(op.detail === undefined ? {} : { detail: op.detail }),
-							},
-						},
-						tx,
+				// Store the agenda first when it is not the meeting's own yet: a
+				// never-edited meeting gets its copy of the standard agenda, and one
+				// on a shared template gets a fork. Checked BEFORE either write, so
+				// a fork `copyTemplateForMeeting` would refuse writes nothing.
+				const needsFork = snap.idSource === "stored" && !snap.privateCopy;
+				if (needsFork && snap.rows.length > MAX_TEMPLATE_BEATS) {
+					throw new McpError(
+						"VALIDATION",
+						`This meeting's agenda is too large to copy (${MAX_TEMPLATE_BEATS} rows maximum).`,
 					);
 				}
-			}
+				if (snap.idSource === "derived") {
+					await materialiseAgendaForMeeting(tx, meetingId);
+				}
+				await ensureAgendaDraft(tx, meetingId);
 
-			const after = await loadAgendaDraft(args.meetingId, tx);
-			if (!after) throw new McpError("NOT_FOUND", "Meeting not found.");
-			return { plan, runSheet: agendaRunSheet(after) };
-		});
+				// Map the previewed ids onto the rows now stored. Identity is
+				// checked per position — see `mapPreviewedRows`.
+				let live = new Map(snap.rows.map((r) => [r.id, r.id]));
+				if (snap.idSource === "derived" || needsFork) {
+					const stored = await readAgendaSnapshot(meetingId, tx);
+					const mapped = stored && mapPreviewedRows(snap.rows, stored.rows);
+					if (!mapped) {
+						throw new McpError("PLAN_STALE", AGENDA_MOVED_MESSAGE);
+					}
+					live = mapped;
+				}
+				const liveId = (id: string): string => {
+					const found = live.get(id);
+					// Unreachable: the plan above resolved every id against these rows.
+					if (!found) throw new Error(`Row ${id} did not resolve.`);
+					return found;
+				};
+
+				for (const step of steps) {
+					const op = ops[step.opIndex];
+					if (!op) continue;
+					if (op.op === "add") {
+						const created = await addAgendaRow(
+							{ meetingId, afterRowId: null, kind: op.kind ?? "event" },
+							tx,
+						);
+						live.set(newRowId(step.opIndex), created.id);
+						// `updateAgendaRow` drops undefined fields itself.
+						await updateAgendaRow(
+							{
+								meetingId,
+								rowId: created.id,
+								patch: {
+									label: op.label,
+									minutes: op.minutes,
+									detail: op.detail,
+								},
+							},
+							tx,
+						);
+						await placeAgendaRow(
+							{ meetingId, rowId: created.id, index: step.index ?? 0 },
+							tx,
+						);
+					} else if (op.op === "remove") {
+						await removeAgendaRow({ meetingId, rowId: liveId(op.rowId) }, tx);
+					} else if (op.op === "move") {
+						await placeAgendaRow(
+							{ meetingId, rowId: liveId(op.rowId), index: step.index ?? 0 },
+							tx,
+						);
+					} else {
+						await updateAgendaRow(
+							{
+								meetingId,
+								rowId: liveId(op.rowId),
+								patch: {
+									label: op.label,
+									minutes: op.minutes,
+									detail: op.detail,
+								},
+							},
+							tx,
+						);
+					}
+				}
+
+				const after = await readAgendaSnapshot(meetingId, tx);
+				if (!after) throw new McpError("NOT_FOUND", "Meeting not found.");
+				return { plan, runSheet: agendaRunSheet(after) };
+			});
+		} catch (err) {
+			throw applyError(err);
+		}
 
 		return {
 			applied: true,
-			meetingId: args.meetingId,
+			meetingId,
 			clubId: club.clubId,
 			summary: summarize(applied.plan),
 			plan: applied.plan,

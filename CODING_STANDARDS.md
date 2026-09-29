@@ -724,8 +724,13 @@ URL changes every deploy and can never go stale.
 
 
 **The MCP pending-plan lifecycle has ONE definition, and `mcp_pending_plans` is one table
-discriminated by `tool`** (#812). Every `/api/mcp` write tool is preview-only: it stores what was
-proposed, hands back a link, and a human confirms it signed in. Nothing about that row's
+discriminated by `tool`** (#812). The `/api/mcp` write tools that are preview-only
+(`record_guest_book`, `upsert_agendas`) store what was proposed, hand back a link, and a human
+confirms it signed in. Two write tools have no confirm page and no stored plan, and so none of
+this lifecycle: `assign_roles` plans and applies in one call under row locks, and `edit_agenda`
+(#966) is hash-only: a preview call returns `{plan, planHash}` and writes nothing, and the same
+call with the hash re-plans under the meeting row's lock and applies, or refuses as `PLAN_STALE`.
+Which shape a tool gets, and why, is the header of `src/lib/mcp-plan.ts`. Nothing about that row's
 lifecycle belongs to a tool — one club, one creator, an expiry, a grace window, a sweep, and an
 apply that happens exactly once under a lock — so it lives once:
 `resolvePending` / `sweepExpiredPendingPlans` in `src/server/mcp-pending-logic.ts`,

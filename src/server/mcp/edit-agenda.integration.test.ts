@@ -46,13 +46,18 @@ vi.mock("#/server/meeting-agenda-edit-logic", async (importOriginal) => {
 	};
 });
 
-const { editAgendaTool, CANCELLED_AGENDA_MESSAGE } = await import(
+const { editAgendaTool, AGENDA_MOVED_MESSAGE } = await import(
 	"#/server/mcp/tools/edit-agenda"
 );
 const { getAgendaTool } = await import("#/server/mcp/tools/get-agenda");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
-const { addAgendaRow, loadAgendaDraft, moveAgendaRow, updateAgendaRow } =
-	await import("#/server/meeting-agenda-edit-logic");
+const {
+	AGENDA_CANCELLED_MESSAGE,
+	addAgendaRow,
+	loadAgendaDraft,
+	moveAgendaRow,
+	updateAgendaRow,
+} = await import("#/server/meeting-agenda-edit-logic");
 
 type RunSheetRow = {
 	rowId: string;
@@ -64,6 +69,7 @@ type RunSheetRow = {
 	flex: { minMinutes: number; maxMinutes: number } | null;
 };
 type RunSheet = {
+	idSource: "stored" | "derived";
 	startsAt: string;
 	endsAt: string;
 	slotMinutes: number;
@@ -76,8 +82,15 @@ type PlanRow = {
 	rowId: string | null;
 	label: string;
 	changes: string[];
-	before: { position: number; start: string | null; minutes: number } | null;
-	after: { position: number; start: string | null; minutes: number } | null;
+	before: PlanRowState | null;
+	after: PlanRowState | null;
+};
+type PlanRowState = {
+	position: number;
+	start: string | null;
+	minutes: number;
+	storedMinutes: number;
+	detail: string | null;
 };
 type Plan = {
 	rows: PlanRow[];
@@ -148,6 +161,44 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 			.orderBy(asc(meetingTemplateBeats.sortOrder));
 	}
 
+	/** Every stored field an apply or the editor writes — for the editor
+	 *  equivalence case. Ids differ between meetings, so they are left out. */
+	async function storedFull(meetingId: string) {
+		const [m] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, meetingId));
+		if (!m?.templateId) return [];
+		const rows = await testDb
+			.select()
+			.from(meetingTemplateBeats)
+			.where(eq(meetingTemplateBeats.templateId, m.templateId))
+			.orderBy(asc(meetingTemplateBeats.sortOrder));
+		return rows.map(({ id: _id, templateId: _t, ...rest }) => rest);
+	}
+
+	/** What a read must not change: the meeting's pointer, and how many agenda
+	 *  templates the club has. */
+	async function footprint(meetingId = seed.meetingId) {
+		const [m] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, meetingId));
+		const templates = await testDb
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.clubId, seed.clubId));
+		return { templateId: m?.templateId ?? null, templates: templates.length };
+	}
+
+	/** Give the meeting its stored agenda the way the editor's page load does,
+	 *  for the cases that need a browser edit to race against. */
+	async function openInEditor() {
+		const draft = await loadAgendaDraft(seed.meetingId);
+		if (!draft) throw new Error("no draft");
+		return draft;
+	}
+
 	/** Book the slot so Table Topics sits at its 25-min cap — THR's shape. */
 	async function bookToCap(): Promise<RunSheet> {
 		const sheet = await runSheet();
@@ -181,8 +232,10 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 	});
 
-	it("get_agenda returns the run sheet with row ids and start times", async () => {
+	it("get_agenda returns the run sheet with stored row ids and start times", async () => {
+		await openInEditor();
 		const sheet = await runSheet();
+		expect(sheet.idSource).toBe("stored");
 		expect(sheet.rows.length).toBeGreaterThan(5);
 		const ids = (await stored()).map((r) => r.id);
 		expect(sheet.rows.map((r) => r.rowId)).toEqual(ids);
@@ -192,6 +245,49 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 		expect(since(sheet.startsAt, sheet.slotEndsAt)).toBe(90);
 		expect(sheet.rows.filter((r) => r.flex !== null)).toHaveLength(1);
 		expect(sheet.overByMinutes).toBe(sheet.totalMinutes - 90);
+	});
+
+	it("get_agenda on a never-edited meeting writes nothing and derives the standard agenda", async () => {
+		const before = await footprint();
+		expect(before.templateId).toBeNull();
+		const sheet = await runSheet();
+		expect(await footprint()).toEqual(before);
+		expect(sheet.idSource).toBe("derived");
+		expect(sheet.rows.map((r) => r.rowId)).toEqual(
+			sheet.rows.map((_, i) => `std:${i}`),
+		);
+		// The same agenda the editor would store, row for row.
+		const draft = await openInEditor();
+		const stored = await runSheet();
+		expect(stored.idSource).toBe("stored");
+		const strip = (s: RunSheet) => s.rows.map(({ rowId: _r, ...rest }) => rest);
+		expect(strip(sheet)).toEqual(strip(stored));
+		expect(draft.rows).toHaveLength(sheet.rows.length);
+	});
+
+	it("get_agenda writes nothing for a completed or a cancelled never-edited meeting", async () => {
+		for (const status of ["completed", "cancelled"] as const) {
+			await testDb
+				.update(meetings)
+				.set({ status })
+				.where(eq(meetings.id, seed.meetingId));
+			const before = await footprint();
+			const sheet = await runSheet();
+			expect(sheet.idSource).toBe("derived");
+			expect(await footprint()).toEqual(before);
+			expect(before.templateId).toBeNull();
+		}
+	});
+
+	it("an edit_agenda preview on a never-edited meeting writes nothing", async () => {
+		const before = await footprint();
+		const preview = (await edit({
+			meetingId: seed.meetingId,
+			operations: [opening, { op: "set", rowId: "std:1", minutes: 4 }],
+		})) as Preview;
+		expect(preview.plan.rows.length).toBeGreaterThan(5);
+		expect(await footprint()).toEqual(before);
+		expect(before.templateId).toBeNull();
 	});
 
 	it("THR: a preview writes nothing and shows Table Topics absorbing the block", async () => {
@@ -249,8 +345,12 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 			start: before.startsAt,
 		});
 		expect(after.endsAt).toBe(before.endsAt);
-		expect(after.rows.slice(1).map((r) => r.rowId)).toEqual(
-			before.rows.map((r) => r.rowId),
+		// Started from a never-edited meeting: the apply stored the standard
+		// agenda and put the block on top of it.
+		expect(before.idSource).toBe("derived");
+		expect(after.idSource).toBe("stored");
+		expect(after.rows.slice(1).map((r) => r.label)).toEqual(
+			before.rows.map((r) => r.label),
 		);
 		// Every row lands where the plan said, at the time it said.
 		for (const planned of preview.plan.rows) {
@@ -299,9 +399,11 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 		const preview = (await edit(args)) as Preview;
 		await edit({ ...args, planHash: preview.planHash });
 
-		const strip = (rows: { label: string; minutes: number; kind: string }[]) =>
-			rows.map(({ label, minutes, kind }) => ({ label, minutes, kind }));
-		expect(strip(await stored())).toEqual(strip(await stored(second.id)));
+		// Every stored field, not only the three a reader would check first:
+		// detail, flex, handoff, role bindings, marks, governance, order.
+		const mine = await storedFull(seed.meetingId);
+		expect(mine.length).toBeGreaterThan(5);
+		expect(mine).toEqual(await storedFull(second.id));
 	});
 
 	it("warns, and does not block, when the edit runs past the slot", async () => {
@@ -346,14 +448,23 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 		).toContain("relabelled");
 		await edit({ ...args, planHash: preview.planHash });
 
+		// Named by DERIVED ids (a never-edited meeting): the apply stored the
+		// agenda first and mapped them by position. Every row lands where the
+		// plan put it, with the stored minutes it showed.
+		expect(sheet.idSource).toBe("derived");
 		const after = await runSheet();
-		const ids = after.rows.map((r) => r.rowId);
-		expect(ids).not.toContain(b.rowId);
-		expect(ids.indexOf(c.rowId)).toBe(ids.indexOf(a.rowId) - 1);
-		expect(after.rows.find((r) => r.rowId === a.rowId)).toMatchObject({
-			label: "Welcome",
-			minutes: a.minutes + 1,
-		});
+		expect(after.rows).toHaveLength(sheet.rows.length - 1);
+		for (const planned of preview.plan.rows) {
+			if (!planned.after) continue;
+			expect(after.rows[planned.after.position]).toMatchObject({
+				label: planned.label,
+				minutes: planned.after.storedMinutes,
+			});
+		}
+		expect(after.rows.map((r) => r.label)).toContain("Welcome");
+		expect(after.rows.find((r) => r.label === "Welcome")?.minutes).toBe(
+			a.minutes + 1,
+		);
 	});
 
 	it("refuses an illegal operation mid-list, naming it, and writes nothing", async () => {
@@ -368,10 +479,14 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 		await expect(
 			edit({ meetingId: seed.meetingId, operations: ops }),
 		).rejects.toMatchObject({ code: "VALIDATION", detail: { opIndex: 2 } });
-		// Not even with a hash: the apply re-plans and refuses the same way.
+		// With a hash the preview must once have accepted the batch, so an
+		// operation that no longer fits means the agenda moved under it.
 		await expect(
 			edit({ meetingId: seed.meetingId, operations: ops, planHash: "x" }),
-		).rejects.toMatchObject({ code: "VALIDATION" });
+		).rejects.toMatchObject({
+			code: "PLAN_STALE",
+			message: AGENDA_MOVED_MESSAGE,
+		});
 		expect(await stored()).toEqual(rowsBefore);
 	});
 
@@ -397,6 +512,7 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 	});
 
 	it("refuses a stale plan with the fresh one, and writes nothing", async () => {
+		await openInEditor();
 		const sheet = await runSheet();
 		const args = { meetingId: seed.meetingId, operations: [opening] };
 		const preview = (await edit(args)) as Preview;
@@ -450,7 +566,7 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 			edit({ ...args, planHash: preview.planHash }),
 		).rejects.toMatchObject({
 			code: "LOCKED",
-			message: CANCELLED_AGENDA_MESSAGE,
+			message: AGENDA_CANCELLED_MESSAGE,
 		});
 		expect(await stored()).toEqual(rowsBefore);
 	});
@@ -546,5 +662,51 @@ describe.skipIf(!hasTestDb)("edit_agenda (#966)", () => {
 			{ label: "Close", minutes: 10 },
 		]);
 		// The meeting no longer points at it, so the club cascade can remove it.
+	});
+
+	it("a note edited in the browser after the preview makes the plan stale", async () => {
+		const draft = await openInEditor();
+		const target = draft.rows.find((r) => r.kind === "event");
+		if (!target) throw new Error("no event row");
+		const args = {
+			meetingId: seed.meetingId,
+			operations: [{ op: "set", rowId: target.id, label: "Welcome" }],
+		};
+		const preview = (await edit(args)) as Preview;
+		await updateAgendaRow({
+			meetingId: seed.meetingId,
+			rowId: target.id,
+			patch: { detail: "Changed in the browser" },
+		});
+		await expect(
+			edit({ ...args, planHash: preview.planHash }),
+		).rejects.toMatchObject({ code: "PLAN_STALE" });
+		expect((await stored()).find((r) => r.id === target.id)?.label).toBe(
+			target.label,
+		);
+	});
+
+	it("shows a write the clock cannot see: the flex row's stored minutes, and a note", async () => {
+		const sheet = await runSheet();
+		const tt = sheet.rows.find((r) => r.flex !== null);
+		if (!tt) throw new Error("no flex row");
+		const preview = (await edit({
+			meetingId: seed.meetingId,
+			operations: [
+				{ op: "set", rowId: tt.rowId, minutes: tt.minutes + 3 },
+				{ op: "set", rowId: "std:0", detail: "Doors at 11:45" },
+			],
+		})) as Preview;
+		const ttPlan = preview.plan.rows.find((r) => r.rowId === tt.rowId);
+		// The clock's number does not move — applyFlex overrides it — but the
+		// stored one does, and that is what the apply writes.
+		expect(ttPlan?.before?.minutes).toBe(ttPlan?.after?.minutes);
+		expect(ttPlan?.after).toMatchObject({ storedMinutes: tt.minutes + 3 });
+		expect(ttPlan?.changes).toContain("resized");
+		const noted = preview.plan.rows.find((r) => r.rowId === "std:0");
+		expect(noted?.changes).toContain("noted");
+		expect(noted?.after?.detail).toBe("Doors at 11:45");
+		expect(preview.summary).not.toMatch(/No row changes/);
+		expect(preview.summary).toMatch(/2 edited/);
 	});
 });

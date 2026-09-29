@@ -231,3 +231,45 @@ export function applyAgendaEdits<R extends EditableRow>(
 
 	return { ok: true, rows: out, steps, added };
 }
+
+/** The fields `mapPreviewedRows` checks a row's identity by. */
+export type IdentityRow = {
+	id: string;
+	kind: EditableRow["kind"];
+	label: string;
+	roleKey: string | null;
+};
+
+/**
+ * Map the rows a plan was built against onto the rows now stored, by
+ * POSITION, verifying each pair is the same beat — or null when any is not.
+ *
+ * Needed when the apply had to store the agenda first: a never-edited
+ * meeting's rows were derived in memory (`std:<n>`), and a meeting on a shared
+ * template gets its own copy with new ids. Both keep the order verbatim, so
+ * position is the mapping — but only while nothing moved in between. A
+ * same-length change (two rows swapped, one renamed) keeps every position
+ * occupied, so without the check the batch's operations would land on the
+ * wrong rows and report success.
+ *
+ * Identity is the rule `translateRow` (`meeting-agenda-edit-logic.ts`) uses
+ * for the same question: same `kind`, and the same label OR the same non-null
+ * role key. Either half alone is too weak — `kind` repeats down the whole
+ * agenda — and a null role key never counts as a match.
+ */
+export function mapPreviewedRows(
+	previewed: IdentityRow[],
+	stored: IdentityRow[],
+): Map<string, string> | null {
+	if (previewed.length !== stored.length) return null;
+	const out = new Map<string, string>();
+	for (const [i, before] of previewed.entries()) {
+		const now = stored[i];
+		if (!now) return null;
+		const sameLabel = now.label === before.label;
+		const sameRole = before.roleKey !== null && now.roleKey === before.roleKey;
+		if (now.kind !== before.kind || !(sameLabel || sameRole)) return null;
+		out.set(before.id, now.id);
+	}
+	return out;
+}

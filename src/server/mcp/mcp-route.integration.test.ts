@@ -513,7 +513,8 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				clubId: seed.clubId,
 				meetings: [{ date: "2027-03-02", time: "19:00", theme: "Harvest" }],
 			}),
-			// #966. A PREVIEW only (no planHash), so it writes no row. It reads the
+			// #966. A PREVIEW only (no planHash), so it writes nothing at all — not
+			// even the meeting's own agenda copy. It reads the
 			// run sheet, whose role rows name slot holders, and echoes the
 			// caller's own labels — the day a holder's contact reaches either, this
 			// case is already watching.
