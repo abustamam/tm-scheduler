@@ -791,10 +791,13 @@ describe("Show past (#1048)", () => {
 		for (const th of past) expect(th.className).toContain("opacity-45");
 		// The upcoming column is not muted.
 		expect(heads.at(-1)?.className).not.toContain("opacity-45");
-		// Every body row carries a cell per meeting column.
+		// Every body row carries exactly one cell per meeting column. The row's
+		// label is a <th> (a rowheader, not a cell); the members orientation
+		// adds the two contact cells (Email, Phone) after the meetings.
+		const contactCells = orientation === "members" ? 2 : 0;
 		const firstRow = screen.getAllByRole("row")[1];
-		expect(
-			within(firstRow as HTMLElement).getAllByRole("cell").length,
-		).toBeGreaterThanOrEqual(PAST + 1);
+		expect(within(firstRow as HTMLElement).getAllByRole("cell")).toHaveLength(
+			PAST + 1 + contactCells,
+		);
 	});
 });

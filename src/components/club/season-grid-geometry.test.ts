@@ -721,8 +721,16 @@ describe.skipIf(!hasChrome)(
 		const PAST = 13;
 		const UPCOMING = 8;
 		const COLUMNS = PAST + UPCOMING;
-		/** `min-w-[3.5rem]` on each meeting header. */
-		const MIN_COLUMN_PX = 56;
+		/**
+		 * Each meeting header's `min-w-[Nrem]` floor in px, parsed out of the
+		 * shipped class string (1rem = 16px) rather than restated, so the
+		 * scroll floor below follows the source.
+		 */
+		function minColumnPx(): number {
+			const m = meetingHead.match(/\bmin-w-\[(\d+(?:\.\d+)?)rem\]/);
+			expect(m, `no min-w-[…rem] in \`${meetingHead}\``).not.toBeNull();
+			return Number(m?.[1]) * 16;
+		}
 
 		let css = "";
 		let scroller = "";
@@ -731,6 +739,9 @@ describe.skipIf(!hasChrome)(
 		let root = "";
 		let controls = "";
 		let toggleButton = "";
+		let toggleGroup = "";
+		let labelledControl = "";
+		let controlLabel = "";
 		let labelHead = "";
 		let meetingHead = "";
 		let pastMuted = "";
@@ -783,7 +794,7 @@ describe.skipIf(!hasChrome)(
 
 		function fixture(scrollerClass: string, orientation: Orientation) {
 			const buttons = (labels: string[]) =>
-				`<div class="inline-flex overflow-hidden rounded-lg border">${labels
+				`<div class="${toggleGroup}">${labels
 					.map(
 						(l) =>
 							`<button type="button" class="${toggleButton}">${l}</button>`,
@@ -798,12 +809,12 @@ describe.skipIf(!hasChrome)(
 					<div class="${root}">
 						<div class="${controls}">
 							${buttons(["Roles × Meetings", "Members × Meetings"])}
-							<div class="inline-flex items-center gap-2">
-								<span class="text-xs font-medium">Meetings shown</span>
+							<div class="${labelledControl}">
+								<span class="${controlLabel}">Meetings shown</span>
 								${buttons(["4", "8", "All"])}
 							</div>
-							<div class="inline-flex items-center gap-2">
-								<span class="text-xs font-medium">Show past</span>
+							<div class="${labelledControl}">
+								<span class="${controlLabel}">Show past</span>
 								${buttons(["2", "4", "8", "13"])}
 							</div>
 						</div>
@@ -845,8 +856,23 @@ describe.skipIf(!hasChrome)(
 			root = classContaining(GRID, "space-y-4");
 			controls = classContaining(GRID, "flex flex-wrap items-center gap-4");
 			toggleButton = classLiteralContaining(GRID, "px-3 py-1.5 text-xs");
+			// Repeated in source (three button groups, two labelled controls), so
+			// the first literal is read rather than a unique className.
+			toggleGroup = classLiteralContaining(
+				GRID,
+				"inline-flex overflow-hidden rounded-lg border",
+			);
+			labelledControl = classLiteralContaining(
+				GRID,
+				"inline-flex items-center gap-2",
+			);
+			controlLabel = classLiteralContaining(
+				GRID,
+				"text-xs font-medium text-muted-foreground",
+			);
 			labelHead = classLiteralContaining(GRID, "sticky top-0 left-0");
-			meetingHead = classLiteralContaining(GRID, "sticky top-0 min-w-[3.5rem]");
+			// Any rem value, so `minColumnPx` reads whatever floor ships.
+			meetingHead = classLiteralContaining(GRID, "sticky top-0 min-w-[");
 			pastMuted = classLiteralContaining(GRID, "opacity-45");
 			contactHead = classLiteralContaining(GRID, "sticky top-0 bg-card");
 			rowHead = classLiteralContaining(GRID, "sticky left-0 z-10");
@@ -895,7 +921,7 @@ describe.skipIf(!hasChrome)(
 			expect(p.overflowsX).toBe(true);
 			// Far enough to reach the last of the 21 columns — not merely "moved".
 			expect(p.scrolledRightBy).toBeGreaterThan(
-				COLUMNS * MIN_COLUMN_PX - PHONE_SCROLLER_MAX,
+				COLUMNS * minColumnPx() - PHONE_SCROLLER_MAX,
 			);
 			expect(
 				p.documentOverflowsX,

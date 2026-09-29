@@ -6,8 +6,8 @@ import { Button } from "#/components/ui/button";
 import { formatArchiveDate, formatMeetingTime } from "#/lib/format";
 import { listPastMeetings } from "#/server/meetings";
 
-/** Rows per page. Deliberately NOT the season grid's `PAST_LOOKBACK` — that
- *  2-meeting window is a layout constraint on a role×meeting matrix and has
+/** Rows per page. Deliberately NOT tied to the season grid's past lookback
+ *  (`PAST_COUNTS`) — that is a layout choice on a role×meeting matrix and has
  *  nothing to do with how deep an archive pages. */
 const PAGE_SIZE = 25;
 
