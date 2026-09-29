@@ -272,6 +272,11 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// row carries `impersonated_by` like any other admin write. `detail = {
 	// filename }`, never the data.
 	"club_data_exported",
+	// A club's history was imported from another tool (#1046 lands the value;
+	// the importer, #1054's C, writes it). ONE row per applied bundle, not one
+	// per imported record. `targetType: "club"`; `detail = { importId, source,
+	// counts }`, never the bundle's contents.
+	"history_imported",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -1385,6 +1390,17 @@ export const guestStageEnum = pgEnum("guest_stage", [
 	"lost",
 ]);
 
+// What kind of non-member a guest row is (#1046, CONTEXT.md "Guest kind").
+// `visitor` is every guest the app has ever had: someone checking the club out,
+// the one the VP-Membership funnel exists for. The other two are Toastmasters
+// from ANOTHER club, who are guests here but never prospects: one who attends,
+// and one who speaks. Imported history (#1054) is where they first appear.
+export const guestKindEnum = pgEnum("guest_kind", [
+	"visitor",
+	"visiting_toastmaster",
+	"guest_speaker",
+]);
+
 export const guests = pgTable(
 	"guests",
 	{
@@ -1405,6 +1421,18 @@ export const guests = pgTable(
 		// guest row persists (stage=joined) so its past slot/attendance history is
 		// never lost; on member delete → set null (history stays, pointer clears).
 		convertedMembershipId: uuid("converted_membership_id").references(
+			() => members.id,
+			{ onDelete: "set null" },
+		),
+		// Guest kind (#1046). Defaults to `visitor`, which backfills every guest
+		// that existed before the column did.
+		kind: guestKindEnum("kind").notNull().default("visitor"),
+		// A visiting Toastmaster's own club, as free text ("Laguna Speakers
+		// #1234"). Not a FK: their club is almost never one this app knows.
+		homeClub: text("home_club"),
+		// The member who brought this guest. On member delete → set null: the
+		// guest outlives the introduction.
+		introducedByMemberId: uuid("introduced_by_member_id").references(
 			() => members.id,
 			{ onDelete: "set null" },
 		),
@@ -2002,6 +2030,12 @@ export const meetingAttendancePlan = pgTable(
 // meeting delete.
 // ---------------------------------------------------------------------------
 
+// How someone attended (#1046): in the room or on the video call.
+export const attendanceModeEnum = pgEnum("attendance_mode", [
+	"in_person",
+	"online",
+]);
+
 export const meetingAttendance = pgTable(
 	"meeting_attendance",
 	{
@@ -2021,6 +2055,10 @@ export const meetingAttendance = pgTable(
 			onDelete: "cascade",
 		}),
 		status: attendanceStatusEnum("status").notNull().default("absent"),
+		// In the room or on the call (#1046). NULL = not recorded, which is every
+		// row written before the column existed and every row roll mode writes
+		// today; nothing may read NULL as either value.
+		mode: attendanceModeEnum("mode"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
@@ -2610,9 +2648,17 @@ export const speeches = pgTable(
 	"speeches",
 	{
 		id: uuid("id").defaultRandom().primaryKey(),
-		personId: uuid("person_id")
-			.notNull()
-			.references(() => people.id, { onDelete: "cascade" }),
+		// Exactly one owner (#1046): a Person, or a guest (a visiting Toastmaster
+		// who gave a speech here, from imported history). NULL person_id means a
+		// GUEST's speech — every reader that means "a Person's speeches" must filter
+		// `person_id IS NOT NULL`, and a guest's speech never counts toward
+		// Pathways progress, a member's speech log, or DCP.
+		personId: uuid("person_id").references(() => people.id, {
+			onDelete: "cascade",
+		}),
+		guestId: uuid("guest_id").references(() => guests.id, {
+			onDelete: "cascade",
+		}),
 		title: text("title").notNull(),
 		introduction: text("introduction"),
 		pathwayPath: text("pathway_path"),
@@ -2638,7 +2684,14 @@ export const speeches = pgTable(
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
-	(t) => [index("speeches_person_idx").on(t.personId)],
+	(t) => [
+		index("speeches_person_idx").on(t.personId),
+		index("speeches_guest_idx").on(t.guestId),
+		check(
+			"speeches_single_owner",
+			sql`(${t.personId} is null) <> (${t.guestId} is null)`,
+		),
+	],
 );
 
 // ---------------------------------------------------------------------------
@@ -3429,6 +3482,7 @@ export const guestsRelations = relations(guests, ({ one, many }) => ({
 	club: one(clubs, { fields: [guests.clubId], references: [clubs.id] }),
 	slots: many(roleSlots),
 	invites: many(guestInvites),
+	speeches: many(speeches),
 }));
 
 export const guestInvitesRelations = relations(guestInvites, ({ one }) => ({
@@ -3608,6 +3662,10 @@ export const speechesRelations = relations(speeches, ({ one, many }) => ({
 		fields: [speeches.personId],
 		references: [people.id],
 	}),
+	guest: one(guests, {
+		fields: [speeches.guestId],
+		references: [guests.id],
+	}),
 	slots: many(roleSlots),
 	project: one(pathwaysProjects, {
 		fields: [speeches.projectId],
@@ -3703,4 +3761,57 @@ export const projectCompletionMarksRelations = relations(
 			references: [pathwaysProjects.id],
 		}),
 	}),
+);
+
+// ---------------------------------------------------------------------------
+// Imported history (#1046, epic #1054; CONTEXT.md "Imported history").
+// Storage only: the importer and the gap UIs build on these.
+// ---------------------------------------------------------------------------
+
+// The tool a club's history came from. One value today.
+export const importSourceEnum = pgEnum("import_source", ["easy_speak"]);
+
+// One row per uploaded bundle. The raw bundle is kept for good, so an import can
+// be re-read or re-applied without asking the club to export again. The same
+// bundle uploaded twice is the same row (UNIQUE on its hash).
+export const clubImports = pgTable(
+	"club_imports",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		source: importSourceEnum("source").notNull(),
+		bundle: jsonb("bundle").notNull(),
+		bundleSha256: text("bundle_sha256").notNull(),
+		uploadedByUserId: text("uploaded_by_user_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		// NULL until the bundle has been applied.
+		appliedAt: timestamp("applied_at", { withTimezone: true }),
+	},
+	(t) => [
+		uniqueIndex("club_imports_club_sha_unique").on(t.clubId, t.bundleSha256),
+	],
+);
+
+// Source id → the row it became, so a re-run UPDATES instead of duplicating.
+// `kind` is text, not a pgEnum, so the importer can add kinds without a
+// migration; the allowed list is `IMPORT_REF_KINDS` in `#/lib/import-refs`.
+// `target_id` is deliberately not a FK: it points into a different table per
+// kind.
+export const importRefs = pgTable(
+	"import_refs",
+	{
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		source: importSourceEnum("source").notNull(),
+		kind: text("kind").notNull(),
+		sourceId: text("source_id").notNull(),
+		targetId: uuid("target_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+	},
+	(t) => [primaryKey({ columns: [t.clubId, t.source, t.kind, t.sourceId] })],
 );

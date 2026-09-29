@@ -23,7 +23,8 @@
  *   With it, the worst such a row can do is export an empty cell.
  *
  * Person-scoped data (`speeches`, `path_enrollments`) is reached only through
- * this club: speeches by the slots of this club's meetings, enrollments by this
+ * this club: speeches by the slots of this club's meetings (a speech owned by a
+ * GUEST, #1046, only when that guest is this club's), enrollments by this
  * club's ACTIVE memberships. A current member who is also in another club has
  * their whole Pathways enrollment exported — it is their record, and this
  * club's admins already see it on the member profile — but no other club's
@@ -380,6 +381,7 @@ export async function loadClubExport(
 					meetingId: meetings.id,
 					scheduledAt: meetings.scheduledAt,
 					status: meetingAttendance.status,
+					mode: meetingAttendance.mode,
 					memberId: members.id,
 					memberName: members.name,
 					guestId: guests.id,
@@ -399,7 +401,10 @@ export async function loadClubExport(
 				.select({
 					meetingId: meetings.id,
 					scheduledAt: meetings.scheduledAt,
-					speaker: members.name,
+					memberId: members.id,
+					memberName: members.name,
+					guestId: guests.id,
+					guestName: guests.name,
 					title: speeches.title,
 					pathwayPath: speeches.pathwayPath,
 					projectName: speeches.projectName,
@@ -414,17 +419,20 @@ export async function loadClubExport(
 					),
 				)
 				.innerJoin(speeches, eq(speeches.id, roleSlots.speechId))
-				// A speech is PERSON-owned (ADR-0009), so a slot in this club's
-				// meeting can point at a speech whose owner has no membership here.
-				// The owner must be this club's member, and the speaker is named
-				// from that membership, like every other file, never from `people`.
-				.innerJoin(
+				// A speech has exactly one owner (#1046): a Person (ADR-0009) or a
+				// guest. A slot in this club's meeting can point at a speech whose
+				// owner is not this club's, so the owner must be this club's member
+				// or this club's guest, and the speaker is named from that row, like
+				// every other file, never from `people`.
+				.leftJoin(
 					members,
 					and(
 						eq(members.personId, speeches.personId),
 						eq(members.clubId, clubId),
 					),
-				);
+				)
+				.leftJoin(guests, guestOfClub(speeches.guestId))
+				.where(or(isNotNull(members.id), isNotNull(guests.id)));
 			const enrollmentRows = await tx
 				.select({
 					memberId: members.id,
@@ -469,8 +477,13 @@ export async function loadClubExport(
 					email: guests.email,
 					phone: guests.phone,
 					stage: guests.stage,
+					kind: guests.kind,
+					homeClub: guests.homeClub,
+					introducedByMemberId: members.id,
 				})
 				.from(guests)
+				// Only a member of THIS club is named as the introducer.
+				.leftJoin(members, memberOfClub(guests.introducedByMemberId))
 				.where(eq(guests.clubId, clubId));
 			// Visits: the SAME derivation the guest pipeline board shows
 			// (`loadGuestVisitSummaries`), so a guest's count here never disagrees
@@ -715,6 +728,7 @@ export async function loadClubExport(
 				"type",
 				"attended",
 				"status",
+				"mode",
 			],
 			sortedByMeeting(attendanceRows, (a) => a.memberName ?? a.guestName).map(
 				(a) => ({
@@ -725,6 +739,7 @@ export async function loadClubExport(
 					type: a.memberId ? "member" : a.guestId ? "guest" : null,
 					attended: a.status === "present" ? "yes" : "no",
 					status: a.status,
+					mode: a.mode,
 				}),
 			),
 		),
@@ -734,20 +749,26 @@ export async function loadClubExport(
 				"meeting_id",
 				"meeting_date",
 				"speaker",
+				"member_or_guest_id",
+				"speaker_type",
 				"title",
 				"pathways_path",
 				"project",
 				"project_level",
 			],
-			sortedByMeeting(speechRows, (s) => s.speaker).map((s) => ({
-				meeting_id: s.meetingId,
-				meeting_date: localDate(s.scheduledAt, tz),
-				speaker: s.speaker,
-				title: s.title,
-				pathways_path: s.pathwayPath,
-				project: s.projectName,
-				project_level: s.projectLevel,
-			})),
+			sortedByMeeting(speechRows, (s) => s.memberName ?? s.guestName).map(
+				(s) => ({
+					meeting_id: s.meetingId,
+					meeting_date: localDate(s.scheduledAt, tz),
+					speaker: s.memberName ?? s.guestName,
+					member_or_guest_id: s.memberId ?? s.guestId,
+					speaker_type: s.memberId ? "member" : "guest",
+					title: s.title,
+					pathways_path: s.pathwayPath,
+					project: s.projectName,
+					project_level: s.projectLevel,
+				}),
+			),
 		),
 		file(
 			"pathways.csv",
@@ -769,7 +790,18 @@ export async function loadClubExport(
 		),
 		file(
 			"guests.csv",
-			["guest_id", "name", "email", "phone", "stage", "first_visit", "visits"],
+			[
+				"guest_id",
+				"name",
+				"email",
+				"phone",
+				"stage",
+				"kind",
+				"home_club",
+				"introduced_by_member_id",
+				"first_visit",
+				"visits",
+			],
 			guestRows
 				.map((g) => {
 					const v = visitsByGuest.get(g.id);
@@ -779,6 +811,9 @@ export async function loadClubExport(
 						email: g.email,
 						phone: g.phone,
 						stage: g.stage,
+						kind: g.kind,
+						home_club: g.homeClub,
+						introduced_by_member_id: g.introducedByMemberId,
 						first_visit: localDate(v?.firstVisitAt ?? null, tz),
 						visits: v?.visitCount ?? 0,
 					};
@@ -882,12 +917,14 @@ const FILE_DESCRIPTIONS: Record<
 	"officer-terms.csv": "One row per officer term.",
 	"meetings.csv": "One row per meeting.",
 	"roles.csv": "One row per role slot on each meeting's agenda.",
-	"attendance.csv": "One row per recorded attendance, members and guests.",
-	"speeches.csv": "One row per speech given at this club's meetings.",
+	"attendance.csv":
+		"One row per recorded attendance, members and guests. mode is in_person or online, empty when not recorded.",
+	"speeches.csv":
+		"One row per speech given at this club's meetings, by a member or a guest (speaker_type).",
 	"pathways.csv":
 		"One row per Pathways enrollment of this club's current (active) members. current_level is the highest level Toastmasters has approved as complete (empty if none); status is archived for a path the member is no longer working on.",
 	"guests.csv":
-		"One row per guest, with contact details. visits counts the meetings of this club the guest attended, held a role at or spoke at Table Topics, not counting cancelled meetings or ones still to come, the same count the guest pipeline shows; first_visit is the earliest of them.",
+		"One row per guest, with contact details. kind is visitor, visiting_toastmaster (a Toastmaster from another club, attending) or guest_speaker (one who spoke); home_club is a visiting Toastmaster's own club. visits counts the meetings of this club the guest attended, held a role at or spoke at Table Topics, not counting cancelled meetings or ones still to come, the same count the guest pipeline shows; first_visit is the earliest of them.",
 	"awards.csv": "One row per meeting award.",
 	"dues.csv":
 		"One row per member per dues period: every active member, plus any past member with a recorded payment or waiver. status is paid, waived or unpaid.",

@@ -296,6 +296,13 @@ export async function collapseMemberships(
 		.update(guests)
 		.set({ convertedMembershipId: keeperId })
 		.where(eq(guests.convertedMembershipId, absorbedId));
+	// 10b. guests.introduced_by_member_id (#1046) — nullable attribution, no
+	//    member-unique; re-point all, or the absorbed row's delete SETs NULL and
+	//    "who brought this guest" is lost.
+	await tx
+		.update(guests)
+		.set({ introducedByMemberId: keeperId })
+		.where(eq(guests.introducedByMemberId, absorbedId));
 
 	// 11. activity_log — re-point the actor column AND the jsonb subject refs
 	//     (detail.memberId / detail.fromMemberId, scoped to this club), then

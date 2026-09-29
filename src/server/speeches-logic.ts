@@ -16,6 +16,7 @@ import {
 	eq,
 	exists,
 	gte,
+	isNotNull,
 	isNull,
 	ne,
 	notExists,
@@ -23,6 +24,7 @@ import {
 } from "drizzle-orm";
 import type { db } from "#/db";
 import {
+	guests,
 	meetings,
 	members,
 	people,
@@ -54,6 +56,11 @@ export type UnscheduledSpeech = {
 	updatedAt: Date;
 };
 
+/** A guest's speech (#1046) is owned by no Person, so it has no place in a
+ *  Person's reschedule pool and no membership to assign a slot to. */
+export const GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE =
+	"That speech belongs to a guest, not a member, so it can't be scheduled from here.";
+
 /**
  * List a Person's and/or a club's **unscheduled** speeches — those not
  * referenced by any active (non-cancelled) speaker slot. Derived by a NOT EXISTS
@@ -65,6 +72,8 @@ export type UnscheduledSpeech = {
  *    club (the club-wide reschedule pool). A speech has no club of its own, so
  *    "a club's unscheduled speeches" = its members' unscheduled speeches.
  *  - `includeArchived` (default false) — archived drafts are hidden by default.
+ *
+ * Only PERSON-owned speeches (#1046): a guest's speech is never in the pool.
  *
  * Most-recently-updated first.
  */
@@ -85,7 +94,7 @@ export async function listUnscheduledSpeeches(
 			),
 		);
 
-	const conditions = [notExists(scheduled)];
+	const conditions = [notExists(scheduled), isNotNull(speeches.personId)];
 	if (!filter.includeArchived) {
 		conditions.push(eq(speeches.archived, false));
 	}
@@ -106,7 +115,7 @@ export async function listUnscheduledSpeeches(
 		conditions.push(exists(inClub));
 	}
 
-	return conn
+	const rows = await conn
 		.select({
 			id: speeches.id,
 			personId: speeches.personId,
@@ -125,6 +134,10 @@ export async function listUnscheduledSpeeches(
 		.innerJoin(people, eq(people.id, speeches.personId))
 		.where(and(...conditions))
 		.orderBy(desc(speeches.updatedAt));
+	// The SQL already excludes NULL owners; this narrows the type to match.
+	return rows.flatMap(({ personId, ...r }) =>
+		personId === null ? [] : [{ ...r, personId }],
+	);
 }
 
 export type OpenSpeakerSlot = {
@@ -179,23 +192,41 @@ export async function setSpeechArchived(
 	args: { speechId: string; clubId: string; archived: boolean },
 ): Promise<void> {
 	const [speech] = await conn
-		.select({ personId: speeches.personId })
+		.select({ personId: speeches.personId, guestId: speeches.guestId })
 		.from(speeches)
 		.where(eq(speeches.id, args.speechId))
 		.limit(1);
 	if (!speech) throw new Error("Speech not found.");
 
-	const [membership] = await conn
-		.select({ id: members.id })
-		.from(members)
-		.where(
-			and(
-				eq(members.personId, speech.personId),
-				eq(members.clubId, args.clubId),
-			),
-		)
-		.limit(1);
-	if (!membership) {
+	// Exactly one owner (#1046). A guest's speech belongs to the club the guest
+	// row does; a Person's speech to any club the Person is a member of.
+	const [owner] =
+		speech.personId === null
+			? await conn
+					.select({ id: guests.id })
+					.from(guests)
+					.where(
+						and(
+							// `speeches_single_owner` makes this non-null whenever
+							// person_id is null; `isNull` keeps a violation a miss.
+							speech.guestId === null
+								? isNull(guests.id)
+								: eq(guests.id, speech.guestId),
+							eq(guests.clubId, args.clubId),
+						),
+					)
+					.limit(1)
+			: await conn
+					.select({ id: members.id })
+					.from(members)
+					.where(
+						and(
+							eq(members.personId, speech.personId),
+							eq(members.clubId, args.clubId),
+						),
+					)
+					.limit(1);
+	if (!owner) {
 		throw new Error("That speech isn't owned by a member of this club.");
 	}
 
@@ -228,6 +259,10 @@ export async function attachSpeechToOpenSlot(
 		.where(eq(speeches.id, args.speechId))
 		.limit(1);
 	if (!speech) throw new Error("Speech not found.");
+	if (speech.personId === null) {
+		throw new Error(GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE);
+	}
+	const personId = speech.personId;
 
 	const [slot] = await conn
 		.select({
@@ -268,7 +303,7 @@ export async function attachSpeechToOpenSlot(
 		.from(members)
 		.where(
 			and(
-				eq(members.personId, speech.personId),
+				eq(members.personId, personId),
 				eq(members.clubId, slot.clubId),
 				eq(members.status, "active"),
 			),

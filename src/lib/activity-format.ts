@@ -196,6 +196,11 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "club_data_exported":
 			summary = "downloaded the club's data export";
 			break;
+		// A club's history imported from another tool (#1046 / #1054): one row
+		// per applied bundle, and `detail` carries counts, never the records.
+		case "history_imported":
+			summary = "imported the club's history";
+			break;
 		// A platform superadmin opened an impersonation session on this club
 		// (ADR-0020 / #185, #246) — read-only for `superadmin_viewed`, read-write
 		// for `superadmin_acted`. `entry.actorName` is null for both (the actor

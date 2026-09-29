@@ -6,7 +6,7 @@
 // createServerFn wrapper so it stays directly integration-testable and its
 // `#/db` import never leaks into the client bundle (the server-modules.guard.test.ts
 // rule; see `members-logic.ts`).
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
@@ -91,7 +91,10 @@ export async function historyCounts(
 	const speechCounts = await conn
 		.select({ id: speeches.personId, n: sql<number>`count(*)::int` })
 		.from(speeches)
-		.where(inArray(speeches.personId, personIds))
+		// A guest's speech (#1046) is nobody's Person history.
+		.where(
+			and(isNotNull(speeches.personId), inArray(speeches.personId, personIds)),
+		)
 		.groupBy(speeches.personId);
 	const enrollmentCounts = await conn
 		.select({ id: pathEnrollments.personId, n: sql<number>`count(*)::int` })
@@ -100,6 +103,7 @@ export async function historyCounts(
 		.groupBy(pathEnrollments.personId);
 
 	for (const row of [...speechCounts, ...enrollmentCounts]) {
+		if (row.id === null) continue;
 		out.set(row.id, (out.get(row.id) ?? 0) + row.n);
 	}
 	return out;
