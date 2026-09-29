@@ -205,6 +205,10 @@ the nouns in `src/db/schema.ts`.
   a **Club mentor (charter)** (`club_charter_helpers.role = 'club_mentor'`, #1043) is an
   experienced Toastmaster, often from outside the club, assigned to a CHARTERING CLUB as a whole.
   The two share no table, row or label, and nothing converts one into the other.
+  A **member merge** (`collapseMemberships`, which `mergePeople` also uses) keeps pairings on the
+  keeper: a pairing between the two merged memberships is dropped (it would be self-mentoring),
+  an active one duplicating the keeper's (same other member, same focus) is dropped in favour of
+  the keeper's, and everything else, ended history included, is re-pointed.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

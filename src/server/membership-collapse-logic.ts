@@ -27,6 +27,7 @@ import {
 	meetingVotes,
 	memberDues,
 	members,
+	mentorships,
 	notifications,
 	officerTerms,
 	officerTrainingRecords,
@@ -445,6 +446,67 @@ export async function collapseMemberships(
 		.where(
 			eq(meetingCandidateDisqualifications.disqualifiedByMemberId, absorbedId),
 		);
+
+	// 18. mentorships (#939) — mentor_member_id and mentee_member_id are ON
+	//     DELETE CASCADE, so without this a merge silently destroys every
+	//     pairing the absorbed membership was part of. Two constraints make a
+	//     plain re-point unsafe, so the colliding rows go FIRST:
+	//
+	//     a. A pairing BETWEEN the keeper and the absorbed membership (either
+	//        direction, active or ended) would become the keeper mentoring
+	//        themselves and violate `mentorships_not_self_check`. It says
+	//        nothing once the two are one person, so it is deleted. This is
+	//        the only case in which an ENDED pairing is dropped; every other
+	//        ended pairing is history and is re-pointed below (the unique
+	//        indexes cover active rows only, so history cannot collide).
+	//     b. An ACTIVE absorbed pairing that duplicates an active keeper pairing
+	//        with the same other member and the same focus would trip
+	//        `mentorships_active_focus_unique` (focus set) or
+	//        `mentorships_active_nofocus_unique` (focus null) and roll back the
+	//        WHOLE collapse. `IS NOT DISTINCT FROM` matches both: null focus
+	//        against null focus is a duplicate here, as in the second index.
+	//        The keeper's row survives, with its own start date. Both directions
+	//        — the absorbed membership as mentor and as mentee.
+	await tx.execute(sql`
+		DELETE FROM mentorships
+		WHERE (mentor_member_id = ${absorbedId} AND mentee_member_id = ${keeperId})
+			OR (mentor_member_id = ${keeperId} AND mentee_member_id = ${absorbedId})`);
+	await tx.execute(sql`
+		DELETE FROM mentorships m
+		WHERE m.ended_at IS NULL
+			AND m.mentor_member_id = ${absorbedId}
+			AND EXISTS (
+				SELECT 1 FROM mentorships k
+				WHERE k.ended_at IS NULL
+					AND k.mentor_member_id = ${keeperId}
+					AND k.mentee_member_id = m.mentee_member_id
+					AND k.focus IS NOT DISTINCT FROM m.focus
+			)`);
+	await tx.execute(sql`
+		DELETE FROM mentorships m
+		WHERE m.ended_at IS NULL
+			AND m.mentee_member_id = ${absorbedId}
+			AND EXISTS (
+				SELECT 1 FROM mentorships k
+				WHERE k.ended_at IS NULL
+					AND k.mentee_member_id = ${keeperId}
+					AND k.mentor_member_id = m.mentor_member_id
+					AND k.focus IS NOT DISTINCT FROM m.focus
+			)`);
+	await tx
+		.update(mentorships)
+		.set({ mentorMemberId: keeperId })
+		.where(eq(mentorships.mentorMemberId, absorbedId));
+	await tx
+		.update(mentorships)
+		.set({ menteeMemberId: keeperId })
+		.where(eq(mentorships.menteeMemberId, absorbedId));
+	//     created_by_member_id is nullable attribution in no unique index, so it
+	//     re-points plainly, like `disqualified_by_member_id` at step 17.
+	await tx
+		.update(mentorships)
+		.set({ createdByMemberId: keeperId })
+		.where(eq(mentorships.createdByMemberId, absorbedId));
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));

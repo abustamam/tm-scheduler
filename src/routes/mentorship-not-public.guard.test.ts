@@ -87,12 +87,14 @@ describe("mentorship stays off every public surface (#939)", () => {
 
 	// The server side of the same boundary. A public route could still leak a
 	// pairing through a SESSION-LESS server fn in some other module that
-	// reads the table, so the table itself may be read only by the two logic
-	// modules whose every caller is gated.
-	it("only the gated logic modules read the mentorships table", () => {
+	// reads the table, so the table itself may be touched only by the logic
+	// modules whose every caller is gated (the merge only re-points rows).
+	it("only the gated logic modules touch the mentorships table", () => {
 		const TABLE_READERS = new Set([
 			"server/mentorship-logic.ts",
 			"server/orientation-logic.ts",
+			// Re-points pairings on a member merge; returns none of them.
+			"server/membership-collapse-logic.ts",
 		]);
 		const readers = walk(SRC)
 			.map((abs) => relative(SRC, abs))
