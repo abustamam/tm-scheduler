@@ -58,6 +58,10 @@ vi.mock("#/server/path-enrollment", () => ({
 	listPathwayOptions: vi.fn(),
 	removeMemberPath: vi.fn(),
 }));
+vi.mock("#/server/orientation", () => ({
+	getMemberOrientation: vi.fn(),
+	startOrientation: vi.fn(),
+}));
 vi.mock("#/server/pathways-read", () => ({
 	getMemberPathways: vi.fn(),
 }));
