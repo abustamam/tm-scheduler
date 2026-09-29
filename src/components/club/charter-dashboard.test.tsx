@@ -22,6 +22,7 @@ vi.mock("#/server/charter", () => ({
 	renameCharterStep: vi.fn(),
 	reorderCharterSteps: vi.fn(),
 	setCharterStepDone: vi.fn(),
+	startCharterChecklist: vi.fn(),
 	updateCharterTarget: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -35,6 +36,7 @@ import {
 	addCharterHelper,
 	reorderCharterSteps,
 	setCharterStepDone,
+	startCharterChecklist,
 	updateCharterTarget,
 } from "#/server/charter";
 import type { CharterDashboard as Data } from "#/server/charter-logic";
@@ -51,6 +53,7 @@ afterEach(() => {
 
 function data(over: Partial<Data> = {}): Data {
 	return {
+		started: true,
 		membersNeeded: 20,
 		duesPeriodId: PERIOD,
 		paidCount: 12,
@@ -138,6 +141,58 @@ describe("charter dashboard", () => {
 		expect(updateCharterTarget).toHaveBeenCalledWith({
 			data: { clubId: CLUB_ID, membersNeeded: 25, duesPeriodId: PERIOD },
 		});
+	});
+
+	it("sends only the target field that changed", async () => {
+		vi.mocked(updateCharterTarget).mockResolvedValue({ ok: true });
+		const { onChanged } = renderDashboard(data());
+		const needed = screen.getByLabelText(
+			CHARTER_DASHBOARD_COPY.membersNeededLabel,
+		);
+		await userEvent.clear(needed);
+		await userEvent.type(needed, "30");
+		await userEvent.click(screen.getByTestId("save-target"));
+		await waitFor(() => expect(onChanged).toHaveBeenCalled());
+		expect(updateCharterTarget).toHaveBeenCalledWith({
+			data: { clubId: CLUB_ID, membersNeeded: 30 },
+		});
+	});
+
+	it("sends nothing when nothing changed", async () => {
+		renderDashboard(data());
+		await userEvent.click(screen.getByTestId("save-target"));
+		expect(updateCharterTarget).not.toHaveBeenCalled();
+	});
+
+	it("shows a not-yet-started checklist read-only, with a Start button that seeds it", async () => {
+		vi.mocked(startCharterChecklist).mockResolvedValue({ ok: true });
+		const { onChanged } = renderDashboard(
+			data({
+				started: false,
+				steps: [{ id: "default-0", label: "First", position: 0, doneAt: null }],
+			}),
+		);
+		expect(screen.getByTestId("charter-not-started")).toBeTruthy();
+		expect(
+			(screen.getByLabelText("Remove First") as HTMLButtonElement).disabled,
+		).toBe(true);
+		expect(
+			(
+				screen.getByLabelText(
+					CHARTER_DASHBOARD_COPY.doneOnLabel("First"),
+				) as HTMLInputElement
+			).disabled,
+		).toBe(true);
+		await userEvent.click(screen.getByTestId("start-checklist"));
+		await waitFor(() => expect(onChanged).toHaveBeenCalled());
+		expect(startCharterChecklist).toHaveBeenCalledWith({
+			data: { clubId: CLUB_ID },
+		});
+	});
+
+	it("a started checklist has no Start button", () => {
+		renderDashboard(data());
+		expect(screen.queryByTestId("start-checklist")).toBeNull();
 	});
 
 	it("moves a step down by sending the whole new order", async () => {

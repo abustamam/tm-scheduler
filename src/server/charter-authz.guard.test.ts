@@ -38,6 +38,11 @@ const FNS: { fn: string; gate: RegExp; logic: string }[] = [
 		gate: ADMIN_WRITE,
 		logic: "updateCharterTargetDb",
 	},
+	{
+		fn: "startCharterChecklist",
+		gate: ADMIN_WRITE,
+		logic: "startCharterChecklistDb",
+	},
 	{ fn: "addCharterStep", gate: ADMIN_WRITE, logic: "addCharterStepDb" },
 	{ fn: "renameCharterStep", gate: ADMIN_WRITE, logic: "renameCharterStepDb" },
 	{

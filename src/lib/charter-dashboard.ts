@@ -21,6 +21,11 @@ export const DEFAULT_MEMBERS_NEEDED = 20;
 export const MEMBERS_NEEDED_MIN = 1;
 export const MEMBERS_NEEDED_MAX = 1000;
 
+/** Most steps a checklist may hold (add refuses past it; reorder accepts at
+ *  most this many ids), and most sponsors and club mentors a club may record. */
+export const CHARTER_STEPS_MAX = 50;
+export const CHARTER_HELPERS_MAX = 50;
+
 /** Longest checklist step label, and longest free-text helper field. */
 export const CHARTER_STEP_LABEL_MAX = 200;
 export const CHARTER_HELPER_FIELD_MAX = 200;

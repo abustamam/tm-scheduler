@@ -9,7 +9,13 @@
 // International's charter rules — the target and the checklist are the club's
 // own, and every write is refused once the club has chartered (the rows are
 // kept; the dashboard is hidden).
-import { and, asc, eq, max } from "drizzle-orm";
+//
+// READS NEVER WRITE. A read admits a read-only impersonation session and runs
+// on every officer-home load, so a club with no charter row is answered from
+// defaults in memory (`started: false`). The row and the seeded checklist are
+// created by the first WRITE (`beginWrite`), which only an admin-gated server
+// fn reaches.
+import { and, asc, count, eq, max } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -24,8 +30,11 @@ import {
 import {
 	CHARTER_HELPER_FIELD_MAX,
 	CHARTER_HELPER_ROLES,
+	CHARTER_HELPERS_MAX,
 	CHARTER_STEP_LABEL_MAX,
+	CHARTER_STEPS_MAX,
 	type CharterHelperRole,
+	DEFAULT_MEMBERS_NEEDED,
 	MEMBERS_NEEDED_MAX,
 	MEMBERS_NEEDED_MIN,
 	SEEDED_CHARTER_STEPS,
@@ -65,6 +74,13 @@ export interface CharterPersonOption {
 }
 
 export interface CharterDashboard {
+	/**
+	 * False until the club's first charter write: the target, period and steps
+	 * are then DEFAULTS, not rows, and the steps' ids are placeholders no write
+	 * accepts. The checklist is started by `startCharterChecklist` (or by any
+	 * other write), which seeds the same steps for real.
+	 */
+	started: boolean;
 	membersNeeded: number;
 	/** The dues period whose paid members count, or null when none is picked. */
 	duesPeriodId: string | null;
@@ -100,6 +116,11 @@ export const HELPER_IDENTITY_MESSAGE =
 export const DONE_DATE_INVALID_MESSAGE =
 	"Enter the done date as a real calendar date.";
 export const DONE_DATE_FUTURE_MESSAGE = "The done date can't be in the future.";
+export const STEPS_FULL_MESSAGE = `A checklist holds at most ${CHARTER_STEPS_MAX} steps. Remove one first.`;
+export const HELPERS_FULL_MESSAGE = `You can record at most ${CHARTER_HELPERS_MAX} sponsors and club mentors. Remove one first.`;
+export const LINKED_NAME_BLANK_MESSAGE =
+	"That roster entry has no name. Add one on the roster, or enter the helper as an outside contact.";
+export const TARGET_EMPTY_MESSAGE = "Nothing to save.";
 
 /** Whether the club is chartering. Throws when the club does not exist. */
 async function isChartering(clubId: string): Promise<boolean> {
@@ -112,13 +133,19 @@ async function isChartering(clubId: string): Promise<boolean> {
 	return row.charterStatus === "chartering";
 }
 
-async function assertChartering(clubId: string): Promise<void> {
+/**
+ * The first line of every write: refuse a chartered club, then make sure the
+ * charter row and the seeded checklist exist. Writes are the only place rows
+ * are created (see the header).
+ */
+async function beginWrite(clubId: string): Promise<void> {
 	if (!(await isChartering(clubId))) throw new Error(CLUB_CHARTERED_MESSAGE);
+	await ensureCharter(clubId);
 }
 
 /**
- * Create the club's charter row, and seed its checklist, the first time either
- * is needed. The seed runs only when THIS call inserted the row, so two first
+ * Create the club's charter row, and seed its checklist, the first time a
+ * write needs it. Never called on a read path. The seed runs only when THIS call inserted the row, so two first
  * visits at once seed one checklist, not two.
  */
 export async function ensureCharter(clubId: string): Promise<void> {
@@ -141,15 +168,15 @@ export async function ensureCharter(clubId: string): Promise<void> {
 
 /**
  * The club's charter dashboard, or null once the club has chartered (the rows
- * are kept, the dashboard is hidden). Creates and seeds it on first read.
+ * are kept, the dashboard is hidden). Side-effect free: a club with no charter
+ * row yet gets the defaults, unpersisted.
  */
 export async function getCharterDashboard(
 	clubId: string,
 ): Promise<CharterDashboard | null> {
 	if (!(await isChartering(clubId))) return null;
-	await ensureCharter(clubId);
 
-	const [charter] = await db
+	const [row] = await db
 		.select({
 			membersNeeded: clubCharter.membersNeeded,
 			duesPeriodId: clubCharter.duesPeriodId,
@@ -157,7 +184,11 @@ export async function getCharterDashboard(
 		.from(clubCharter)
 		.where(eq(clubCharter.clubId, clubId))
 		.limit(1);
-	if (!charter) throw new Error("Club not found.");
+	const started = row !== undefined;
+	const charter = row ?? {
+		membersNeeded: DEFAULT_MEMBERS_NEEDED,
+		duesPeriodId: null,
+	};
 
 	// "Paid" is the dues tracker's own count for the period, not a restatement.
 	const paidCount = charter.duesPeriodId
@@ -170,7 +201,7 @@ export async function getCharterDashboard(
 		.where(eq(duesPeriods.clubId, clubId))
 		.orderBy(asc(duesPeriods.dueDate));
 
-	const steps = await db
+	const persistedSteps = await db
 		.select({
 			id: clubCharterSteps.id,
 			label: clubCharterSteps.label,
@@ -184,6 +215,14 @@ export async function getCharterDashboard(
 			asc(clubCharterSteps.createdAt),
 			asc(clubCharterSteps.id),
 		);
+	const steps: CharterStep[] = started
+		? persistedSteps
+		: SEEDED_CHARTER_STEPS.map((label, position) => ({
+				id: `default-${position}`,
+				label,
+				position,
+				doneAt: null,
+			}));
 
 	const helperRows = await db
 		.select({
@@ -204,13 +243,16 @@ export async function getCharterDashboard(
 		id: h.id,
 		role: h.role,
 		personId: h.personId,
-		name: h.personName ?? h.name ?? "",
+		// The club's own snapshot first: a membership's name is authoritative for
+		// its club (#486), and `people.name` is only the fallback.
+		name: h.name ?? h.personName ?? "",
 		email: h.email,
 		phone: h.phone,
 		homeClub: h.homeClub,
 	}));
 
 	return {
+		started,
 		membersNeeded: charter.membersNeeded,
 		duesPeriodId: charter.duesPeriodId,
 		paidCount,
@@ -255,15 +297,26 @@ async function listRosterPeople(
 // Target
 // ---------------------------------------------------------------------------
 
-export const updateCharterTargetSchema = z.object({
-	clubId: z.string().uuid(),
-	membersNeeded: z
-		.number()
-		.int()
-		.min(MEMBERS_NEEDED_MIN)
-		.max(MEMBERS_NEEDED_MAX),
-	duesPeriodId: z.string().uuid().nullable(),
-});
+/** Each field is optional and only a field that is SENT is written, so a tab
+ *  saving one field cannot revert the other to what it loaded. */
+export const updateCharterTargetSchema = z
+	.object({
+		clubId: z.string().uuid(),
+		membersNeeded: z
+			.number()
+			.int()
+			.min(MEMBERS_NEEDED_MIN)
+			.max(MEMBERS_NEEDED_MAX)
+			.optional(),
+		/** A period id, null to clear the pick, or absent to leave it alone. */
+		duesPeriodId: z.string().uuid().nullable().optional(),
+	})
+	.refine(
+		(v) => v.membersNeeded !== undefined || v.duesPeriodId !== undefined,
+		{
+			message: TARGET_EMPTY_MESSAGE,
+		},
+	);
 export type UpdateCharterTargetInput = z.output<
 	typeof updateCharterTargetSchema
 >;
@@ -272,7 +325,7 @@ export type UpdateCharterTargetInput = z.output<
 export async function updateCharterTarget(
 	input: UpdateCharterTargetInput,
 ): Promise<{ ok: true }> {
-	await assertChartering(input.clubId);
+	await beginWrite(input.clubId);
 	if (input.duesPeriodId) {
 		const [period] = await db
 			.select({ id: duesPeriods.id })
@@ -286,12 +339,15 @@ export async function updateCharterTarget(
 			.limit(1);
 		if (!period) throw new Error(DUES_PERIOD_NOT_IN_CLUB_MESSAGE);
 	}
-	await ensureCharter(input.clubId);
 	await db
 		.update(clubCharter)
 		.set({
-			membersNeeded: input.membersNeeded,
-			duesPeriodId: input.duesPeriodId,
+			...(input.membersNeeded !== undefined
+				? { membersNeeded: input.membersNeeded }
+				: {}),
+			...(input.duesPeriodId !== undefined
+				? { duesPeriodId: input.duesPeriodId }
+				: {}),
 			updatedAt: new Date(),
 		})
 		.where(eq(clubCharter.clubId, input.clubId));
@@ -301,6 +357,19 @@ export async function updateCharterTarget(
 // ---------------------------------------------------------------------------
 // Checklist
 // ---------------------------------------------------------------------------
+
+export const startCharterChecklistSchema = z.object({
+	clubId: z.string().uuid(),
+});
+
+/** Persist the default target and the seeded checklist, so its steps can be
+ *  edited. Idempotent: a club already started is left as it is. */
+export async function startCharterChecklist(input: {
+	clubId: string;
+}): Promise<{ ok: true }> {
+	await beginWrite(input.clubId);
+	return { ok: true };
+}
 
 const stepLabel = z
 	.string()
@@ -318,8 +387,12 @@ export type AddCharterStepInput = z.output<typeof addCharterStepSchema>;
 export async function addCharterStep(
 	input: AddCharterStepInput,
 ): Promise<{ id: string }> {
-	await assertChartering(input.clubId);
-	await ensureCharter(input.clubId);
+	await beginWrite(input.clubId);
+	const [{ steps } = { steps: 0 }] = await db
+		.select({ steps: count() })
+		.from(clubCharterSteps)
+		.where(eq(clubCharterSteps.clubId, input.clubId));
+	if (steps >= CHARTER_STEPS_MAX) throw new Error(STEPS_FULL_MESSAGE);
 	const [last] = await db
 		.select({ position: max(clubCharterSteps.position) })
 		.from(clubCharterSteps)
@@ -346,7 +419,7 @@ export type RenameCharterStepInput = z.output<typeof renameCharterStepSchema>;
 export async function renameCharterStep(
 	input: RenameCharterStepInput,
 ): Promise<{ ok: true }> {
-	await assertChartering(input.clubId);
+	await beginWrite(input.clubId);
 	const updated = await db
 		.update(clubCharterSteps)
 		.set({ label: input.label })
@@ -379,7 +452,7 @@ export type SetCharterStepDoneInput = z.output<typeof setCharterStepDoneSchema>;
 export async function setCharterStepDone(
 	input: SetCharterStepDoneInput,
 ): Promise<{ ok: true }> {
-	await assertChartering(input.clubId);
+	await beginWrite(input.clubId);
 	const updated = await db
 		.update(clubCharterSteps)
 		.set({ doneAt: input.doneAt })
@@ -403,7 +476,7 @@ export type RemoveCharterStepInput = z.output<typeof removeCharterStepSchema>;
 export async function removeCharterStep(
 	input: RemoveCharterStepInput,
 ): Promise<{ ok: true }> {
-	await assertChartering(input.clubId);
+	await beginWrite(input.clubId);
 	const deleted = await db
 		.delete(clubCharterSteps)
 		.where(
@@ -420,7 +493,7 @@ export async function removeCharterStep(
 export const reorderCharterStepsSchema = z.object({
 	clubId: z.string().uuid(),
 	/** Every one of the club's step ids, in the new order. */
-	stepIds: z.array(z.string().uuid()).max(200),
+	stepIds: z.array(z.string().uuid()).max(CHARTER_STEPS_MAX),
 });
 export type ReorderCharterStepsInput = z.output<
 	typeof reorderCharterStepsSchema
@@ -434,7 +507,7 @@ export type ReorderCharterStepsInput = z.output<
 export async function reorderCharterSteps(
 	input: ReorderCharterStepsInput,
 ): Promise<{ ok: true }> {
-	await assertChartering(input.clubId);
+	await beginWrite(input.clubId);
 	await db.transaction(async (tx) => {
 		const current = await tx
 			.select({ id: clubCharterSteps.id })
@@ -509,7 +582,12 @@ export type AddCharterHelperInput = z.output<typeof addCharterHelperSchema>;
 export async function addCharterHelper(
 	input: AddCharterHelperInput,
 ): Promise<{ id: string }> {
-	await assertChartering(input.clubId);
+	await beginWrite(input.clubId);
+	const [{ helpers } = { helpers: 0 }] = await db
+		.select({ helpers: count() })
+		.from(clubCharterHelpers)
+		.where(eq(clubCharterHelpers.clubId, input.clubId));
+	if (helpers >= CHARTER_HELPERS_MAX) throw new Error(HELPERS_FULL_MESSAGE);
 	let name = input.name;
 	if (input.personId) {
 		const [membership] = await db
@@ -523,7 +601,11 @@ export async function addCharterHelper(
 			)
 			.limit(1);
 		if (!membership) throw new Error(PERSON_NOT_IN_CLUB_MESSAGE);
-		name = name ?? membership.name;
+		// Trimmed, and refused when blank: the snapshot is what survives the
+		// Person (ON DELETE SET NULL), and a blank one would fail the identity
+		// CHECK there — turning a Person delete or merge into an error.
+		name = name ?? membership.name.trim();
+		if (!name) throw new Error(LINKED_NAME_BLANK_MESSAGE);
 	}
 	const [row] = await db
 		.insert(clubCharterHelpers)
@@ -552,7 +634,7 @@ export type RemoveCharterHelperInput = z.output<
 export async function removeCharterHelper(
 	input: RemoveCharterHelperInput,
 ): Promise<{ ok: true }> {
-	await assertChartering(input.clubId);
+	await beginWrite(input.clubId);
 	const deleted = await db
 		.delete(clubCharterHelpers)
 		.where(

@@ -33,6 +33,7 @@ import {
 	renameCharterStep,
 	reorderCharterSteps,
 	setCharterStepDone,
+	startCharterChecklist,
 	updateCharterTarget,
 } from "#/server/charter";
 import type {
@@ -62,6 +63,10 @@ export const CHARTER_DASHBOARD_COPY = {
 		"Your own list of steps. Add, rename, reorder or remove any of them.",
 	addStepLabel: "New step",
 	addStep: "Add step",
+	notStarted:
+		"These are suggested steps. Start the checklist to edit them, or add your own.",
+	startChecklist: "Start checklist",
+	targetSaved: "Target saved.",
 	doneOnLabel: (label: string) => `Done on (${label})`,
 	helpers: "Sponsors and club mentors",
 	noHelpers: "No sponsors or club mentors recorded yet.",
@@ -84,6 +89,30 @@ const cardClass =
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : "Something went wrong.";
+}
+
+/**
+ * The one shape every control here shares: mark busy, run the write, refresh,
+ * and toast the error (or an optional success) either way.
+ */
+function useCharterAction(onChanged: () => void | Promise<void>) {
+	const [busy, setBusy] = useState(false);
+	async function run(
+		action: () => Promise<unknown>,
+		success?: string,
+	): Promise<void> {
+		setBusy(true);
+		try {
+			await action();
+			if (success) toast.success(success);
+			await onChanged();
+		} catch (err) {
+			toast.error(errorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+	return { busy, run };
 }
 
 /** The note every view of the dashboard carries, chartered or not. */
@@ -141,6 +170,7 @@ export function CharterDashboard({
 					/>
 					<ChecklistSection
 						clubId={clubId}
+						started={dashboard.started}
 						steps={dashboard.steps}
 						onChanged={onChanged}
 					/>
@@ -205,26 +235,25 @@ function TargetSection({
 }) {
 	const [needed, setNeeded] = useState(String(dashboard.membersNeeded));
 	const [periodId, setPeriodId] = useState(dashboard.duesPeriodId ?? "");
-	const [saving, setSaving] = useState(false);
+	const { busy, run } = useCharterAction(onChanged);
 
-	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+	function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
-		setSaving(true);
-		try {
-			await updateCharterTarget({
-				data: {
-					clubId,
-					membersNeeded: Number(needed),
-					duesPeriodId: periodId || null,
-				},
-			});
-			toast.success("Target saved.");
-			await onChanged();
-		} catch (err) {
-			toast.error(errorMessage(err));
-		} finally {
-			setSaving(false);
+		// Only the fields this form changed, so saving one cannot revert the
+		// other to what this tab loaded.
+		const changed: { membersNeeded?: number; duesPeriodId?: string | null } =
+			{};
+		if (Number(needed) !== dashboard.membersNeeded) {
+			changed.membersNeeded = Number(needed);
 		}
+		if ((periodId || null) !== dashboard.duesPeriodId) {
+			changed.duesPeriodId = periodId || null;
+		}
+		if (Object.keys(changed).length === 0) return;
+		void run(
+			() => updateCharterTarget({ data: { clubId, ...changed } }),
+			CHARTER_DASHBOARD_COPY.targetSaved,
+		);
 	}
 
 	return (
@@ -285,7 +314,7 @@ function TargetSection({
 						))}
 					</select>
 				</div>
-				<Button type="submit" disabled={saving} data-testid="save-target">
+				<Button type="submit" disabled={busy} data-testid="save-target">
 					{CHARTER_DASHBOARD_COPY.saveTarget}
 				</Button>
 			</form>
@@ -295,27 +324,18 @@ function TargetSection({
 
 function ChecklistSection({
 	clubId,
+	started,
 	steps,
 	onChanged,
 }: {
 	clubId: string;
+	/** False: `steps` are unpersisted defaults, shown read-only. */
+	started: boolean;
 	steps: CharterStep[];
 	onChanged: () => void | Promise<void>;
 }) {
 	const [newLabel, setNewLabel] = useState("");
-	const [busy, setBusy] = useState(false);
-
-	async function run(action: () => Promise<unknown>) {
-		setBusy(true);
-		try {
-			await action();
-			await onChanged();
-		} catch (err) {
-			toast.error(errorMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
+	const { busy, run } = useCharterAction(onChanged);
 
 	const ids = steps.map((s) => s.id);
 	const move = (id: string, direction: "up" | "down") =>
@@ -338,6 +358,26 @@ function ChecklistSection({
 					{CHARTER_DASHBOARD_COPY.checklistNote}
 				</p>
 			</div>
+			{started ? null : (
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<p
+						data-testid="charter-not-started"
+						className="flex-1 text-sm text-[var(--sea-ink-soft)]"
+					>
+						{CHARTER_DASHBOARD_COPY.notStarted}
+					</p>
+					<Button
+						type="button"
+						data-testid="start-checklist"
+						disabled={busy}
+						onClick={() =>
+							void run(() => startCharterChecklist({ data: { clubId } }))
+						}
+					>
+						{CHARTER_DASHBOARD_COPY.startChecklist}
+					</Button>
+				</div>
+			)}
 			<ol className="space-y-2" data-testid="charter-steps">
 				{steps.map((step, i) => (
 					<StepRow
@@ -346,7 +386,7 @@ function ChecklistSection({
 						step={step}
 						first={i === 0}
 						last={i === steps.length - 1}
-						busy={busy}
+						busy={busy || !started}
 						run={run}
 						onMove={(d) => move(step.id, d)}
 					/>
@@ -427,6 +467,7 @@ function StepRow({
 					id={labelId}
 					maxLength={CHARTER_STEP_LABEL_MAX}
 					value={label}
+					disabled={busy}
 					onChange={(e) => setLabel(e.target.value)}
 					onBlur={saveLabel}
 					onKeyDown={(e) => {
@@ -515,17 +556,16 @@ function HelpersSection({
 	const [email, setEmail] = useState("");
 	const [phone, setPhone] = useState("");
 	const [homeClub, setHomeClub] = useState("");
-	const [busy, setBusy] = useState(false);
+	const { busy, run } = useCharterAction(onChanged);
 	const outside = personId === OUTSIDE;
 
-	async function onAdd(e: React.FormEvent<HTMLFormElement>) {
+	function onAdd(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		if (outside && !name.trim()) {
 			toast.error(CHARTER_DASHBOARD_COPY.nameRequired);
 			return;
 		}
-		setBusy(true);
-		try {
+		void run(async () => {
 			await addCharterHelper({
 				data: outside
 					? { clubId, role, personId: null, name, email, phone, homeClub }
@@ -536,25 +576,11 @@ function HelpersSection({
 			setEmail("");
 			setPhone("");
 			setHomeClub("");
-			await onChanged();
-		} catch (err) {
-			toast.error(errorMessage(err));
-		} finally {
-			setBusy(false);
-		}
+		});
 	}
 
-	async function onRemove(helperId: string) {
-		setBusy(true);
-		try {
-			await removeCharterHelper({ data: { clubId, helperId } });
-			await onChanged();
-		} catch (err) {
-			toast.error(errorMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
+	const onRemove = (helperId: string) =>
+		run(() => removeCharterHelper({ data: { clubId, helperId } }));
 
 	return (
 		<section className={cardClass} aria-labelledby="charter-helpers-heading">

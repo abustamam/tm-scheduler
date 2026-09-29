@@ -6,7 +6,9 @@
 // (`requireClubAdminView`: an admin, an open officer, or an impersonating
 // superadmin), and every write needs the admin club role (`requireClubRole`
 // admin, which also admits open officers). The dashboard names outside
-// helpers' contact details, so a plain member reads none of it.
+// helpers' contact details, so a plain member reads none of it. The reads
+// write nothing (a read-only impersonation passes their gate); rows are
+// created only behind the write gate.
 // `charter-authz.guard.test.ts` pins each gate before its call.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
@@ -27,6 +29,8 @@ import {
 	reorderCharterStepsSchema,
 	setCharterStepDone as setCharterStepDoneDb,
 	setCharterStepDoneSchema,
+	startCharterChecklist as startCharterChecklistDb,
+	startCharterChecklistSchema,
 	updateCharterTarget as updateCharterTargetDb,
 	updateCharterTargetSchema,
 } from "./charter-logic";
@@ -58,6 +62,14 @@ export const updateCharterTarget = createServerFn({ method: "POST" })
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
 		return updateCharterTargetDb(data);
+	});
+
+export const startCharterChecklist = createServerFn({ method: "POST" })
+	.validator((i: unknown) => startCharterChecklistSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubRole(user.id, data.clubId, ["admin"]);
+		return startCharterChecklistDb(data);
 	});
 
 export const addCharterStep = createServerFn({ method: "POST" })

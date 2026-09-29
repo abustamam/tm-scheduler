@@ -10,7 +10,7 @@
  * fn by `charter-authz.guard.test.ts`.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	clubCharter,
@@ -18,11 +18,21 @@ import {
 	clubCharterSteps,
 	clubs,
 	duesPeriods,
+	impersonationSessions,
 	memberDues,
 	members,
 	officerTerms,
+	people,
+	user,
 } from "#/db/schema";
-import { SEEDED_CHARTER_STEPS } from "#/lib/charter-dashboard";
+import {
+	CHARTER_HELPERS_MAX,
+	CHARTER_STEPS_MAX,
+	DEFAULT_MEMBERS_NEEDED,
+	MEMBERS_NEEDED_MAX,
+	MEMBERS_NEEDED_MIN,
+	SEEDED_CHARTER_STEPS,
+} from "#/lib/charter-dashboard";
 import { cleanup, hasTestDb, seedClub, seedPerson, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -31,8 +41,11 @@ const logic = await import("./charter-logic");
 const {
 	CLUB_CHARTERED_MESSAGE,
 	DUES_PERIOD_NOT_IN_CLUB_MESSAGE,
+	HELPERS_FULL_MESSAGE,
 	HELPER_IDENTITY_MESSAGE,
+	LINKED_NAME_BLANK_MESSAGE,
 	PERSON_NOT_IN_CLUB_MESSAGE,
+	STEPS_FULL_MESSAGE,
 	REORDER_MISMATCH_MESSAGE,
 	STEP_NOT_FOUND_MESSAGE,
 	addCharterHelperSchema,
@@ -44,8 +57,18 @@ const { requireClubAdminView, requireClubRole, NO_PERMISSION_MESSAGE } =
 
 const createdClubs: string[] = [];
 const createdUsers: string[] = [];
+const createdSuperadmins: string[] = [];
 
 afterEach(async () => {
+	if (createdSuperadmins.length > 0) {
+		await testDb
+			.delete(impersonationSessions)
+			.where(
+				inArray(impersonationSessions.superadminUserId, createdSuperadmins),
+			);
+		await testDb.delete(user).where(inArray(user.id, createdSuperadmins));
+		createdSuperadmins.length = 0;
+	}
 	for (const clubId of createdClubs) await cleanup(clubId, createdUsers);
 	createdClubs.length = 0;
 	createdUsers.length = 0;
@@ -97,24 +120,131 @@ async function addMembers(clubId: string, n: number) {
 	return ids;
 }
 
+/** Rows in the three charter tables for a club. */
+async function charterRowCounts(clubId: string) {
+	const [charter, steps, helpers] = await Promise.all([
+		testDb.select().from(clubCharter).where(eq(clubCharter.clubId, clubId)),
+		testDb
+			.select()
+			.from(clubCharterSteps)
+			.where(eq(clubCharterSteps.clubId, clubId)),
+		testDb
+			.select()
+			.from(clubCharterHelpers)
+			.where(eq(clubCharterHelpers.clubId, clubId)),
+	]);
+	return {
+		charter: charter.length,
+		steps: steps.length,
+		helpers: helpers.length,
+	};
+}
+
+/** The club's persisted steps: starts the checklist first (idempotent). */
 async function stepsOf(clubId: string) {
+	await logic.startCharterChecklist({ clubId });
 	const d = await getCharterDashboard(clubId);
 	if (!d) throw new Error("dashboard hidden");
 	return d.steps;
 }
 
 describe.skipIf(!hasTestDb)("the charter dashboard (#943)", () => {
-	it("seeds the common steps for a chartering club, once, even on two first visits at once", async () => {
+	it("a read writes nothing: a fresh chartering club gets the defaults, unpersisted", async () => {
+		const seed = await seedChartering();
+		const d = await getCharterDashboard(seed.clubId);
+		const summary = await getCharterSummary(seed.clubId);
+		expect(await charterRowCounts(seed.clubId)).toEqual({
+			charter: 0,
+			steps: 0,
+			helpers: 0,
+		});
+		expect(d?.started).toBe(false);
+		expect(d?.membersNeeded).toBe(DEFAULT_MEMBERS_NEEDED);
+		expect(d?.duesPeriodId).toBeNull();
+		expect(d?.steps.map((s) => s.label)).toEqual([...SEEDED_CHARTER_STEPS]);
+		expect(summary).toMatchObject({
+			stepsDone: 0,
+			stepsTotal: SEEDED_CHARTER_STEPS.length,
+		});
+	});
+
+	it("a read-only impersonator sees the defaults and is refused every write", async () => {
+		const seed = await seedChartering();
+		const superadminId = randomUUID();
+		await testDb.insert(user).values({
+			id: superadminId,
+			name: "Super Admin",
+			email: `super-${superadminId}@test.example`,
+			emailVerified: true,
+			isSuperadmin: true,
+		});
+		createdSuperadmins.push(superadminId);
+		await testDb.insert(impersonationSessions).values({
+			superadminUserId: superadminId,
+			clubId: seed.clubId,
+			mode: "read_only",
+			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+		});
+		// The read gate admits them, and the read they then make writes nothing.
+		await expect(
+			requireClubAdminView(superadminId, seed.clubId),
+		).resolves.toBeTruthy();
+		expect((await getCharterDashboard(seed.clubId))?.started).toBe(false);
+		// The gate every write fn runs refuses them.
+		await expect(
+			requireClubRole(superadminId, seed.clubId, ["admin"]),
+		).rejects.toThrow();
+		expect(await charterRowCounts(seed.clubId)).toEqual({
+			charter: 0,
+			steps: 0,
+			helpers: 0,
+		});
+	});
+
+	it("the first write seeds the common steps once, even two at once", async () => {
 		const seed = await seedChartering();
 		await Promise.all([
-			getCharterDashboard(seed.clubId),
-			getCharterDashboard(seed.clubId),
+			logic.startCharterChecklist({ clubId: seed.clubId }),
+			logic.startCharterChecklist({ clubId: seed.clubId }),
 		]);
-		const steps = await stepsOf(seed.clubId);
-		expect(steps.map((s) => s.label)).toEqual([...SEEDED_CHARTER_STEPS]);
-		expect(steps.every((s) => s.doneAt === null)).toBe(true);
 		const d = await getCharterDashboard(seed.clubId);
-		expect(d?.membersNeeded).toBe(20);
+		expect(d?.started).toBe(true);
+		expect(d?.steps.map((s) => s.label)).toEqual([...SEEDED_CHARTER_STEPS]);
+		expect(d?.steps.every((s) => s.doneAt === null)).toBe(true);
+		expect(d?.membersNeeded).toBe(DEFAULT_MEMBERS_NEEDED);
+		expect(await charterRowCounts(seed.clubId)).toMatchObject({
+			charter: 1,
+			steps: SEEDED_CHARTER_STEPS.length,
+		});
+	});
+
+	it("any first write seeds, not only starting the checklist", async () => {
+		const seed = await seedChartering();
+		await logic.addCharterStep({ clubId: seed.clubId, label: "Demo meeting" });
+		const labels = (await getCharterDashboard(seed.clubId))?.steps.map(
+			(s) => s.label,
+		);
+		expect(labels).toEqual([...SEEDED_CHARTER_STEPS, "Demo meeting"]);
+	});
+
+	it("the column default and CHECK hold the same numbers as the constants", async () => {
+		const [def] = (
+			await testDb.execute(sql`
+				select pg_get_expr(d.adbin, d.adrelid) as expr
+				from pg_attrdef d
+				join pg_attribute a on a.attrelid = d.adrelid and a.attnum = d.adnum
+				where d.adrelid = 'club_charter'::regclass and a.attname = 'members_needed'`)
+		).rows as { expr: string }[];
+		expect(Number(def?.expr)).toBe(DEFAULT_MEMBERS_NEEDED);
+		const [check] = (
+			await testDb.execute(sql`
+				select pg_get_constraintdef(oid) as def from pg_constraint
+				where conname = 'club_charter_members_needed_check'`)
+		).rows as { def: string }[];
+		const bounds = [...(check?.def ?? "").matchAll(/\d+/g)].map((m) =>
+			Number(m[0]),
+		);
+		expect(bounds).toEqual([MEMBERS_NEEDED_MIN, MEMBERS_NEEDED_MAX]);
 	});
 
 	it("counts 0 and has no period until the club picks one", async () => {
@@ -171,6 +301,62 @@ describe.skipIf(!hasTestDb)("the charter dashboard (#943)", () => {
 		).rejects.toThrow(DUES_PERIOD_NOT_IN_CLUB_MESSAGE);
 	});
 
+	it("writes only the target fields sent, so a stale tab cannot revert the other", async () => {
+		const seed = await seedChartering();
+		const clubId = seed.clubId;
+		const period = await addPeriod(clubId);
+		await logic.updateCharterTarget({
+			clubId,
+			membersNeeded: 12,
+			duesPeriodId: period,
+		});
+		await logic.updateCharterTarget(
+			logic.updateCharterTargetSchema.parse({ clubId, membersNeeded: 15 }),
+		);
+		let d = await getCharterDashboard(clubId);
+		expect(d).toMatchObject({ membersNeeded: 15, duesPeriodId: period });
+		await logic.updateCharterTarget(
+			logic.updateCharterTargetSchema.parse({ clubId, duesPeriodId: null }),
+		);
+		d = await getCharterDashboard(clubId);
+		expect(d).toMatchObject({ membersNeeded: 15, duesPeriodId: null });
+		expect(logic.updateCharterTargetSchema.safeParse({ clubId }).success).toBe(
+			false,
+		);
+	});
+
+	it("caps the checklist: add refuses past the cap, reorder accepts at most it", async () => {
+		const seed = await seedChartering();
+		const clubId = seed.clubId;
+		await logic.startCharterChecklist({ clubId });
+		await testDb
+			.insert(clubCharterSteps)
+			.values(
+				Array.from(
+					{ length: CHARTER_STEPS_MAX - SEEDED_CHARTER_STEPS.length },
+					(_, i) => ({ clubId, label: `Step ${i}`, position: 100 + i }),
+				),
+			);
+		await expect(
+			logic.addCharterStep({ clubId, label: "One too many" }),
+		).rejects.toThrow(STEPS_FULL_MESSAGE);
+		// A full checklist still reorders.
+		const ids = (await stepsOf(clubId)).map((s) => s.id);
+		expect(ids).toHaveLength(CHARTER_STEPS_MAX);
+		await logic.reorderCharterSteps(
+			logic.reorderCharterStepsSchema.parse({
+				clubId,
+				stepIds: [...ids].reverse(),
+			}),
+		);
+		expect(
+			logic.reorderCharterStepsSchema.safeParse({
+				clubId,
+				stepIds: [...ids, randomUUID()],
+			}).success,
+		).toBe(false);
+	});
+
 	it("bounds the target in the schema and the database", async () => {
 		const seed = await seedChartering();
 		expect(
@@ -180,7 +366,7 @@ describe.skipIf(!hasTestDb)("the charter dashboard (#943)", () => {
 				duesPeriodId: null,
 			}).success,
 		).toBe(false);
-		await getCharterDashboard(seed.clubId);
+		await logic.startCharterChecklist({ clubId: seed.clubId });
 		await expect(
 			testDb
 				.update(clubCharter)
@@ -192,7 +378,6 @@ describe.skipIf(!hasTestDb)("the charter dashboard (#943)", () => {
 	it("edits the checklist: add, rename, mark done, un-mark, reorder, remove", async () => {
 		const seed = await seedChartering();
 		const clubId = seed.clubId;
-		await getCharterDashboard(clubId);
 		const { id: added } = await logic.addCharterStep({
 			clubId,
 			label: "Demo meeting held",
@@ -305,6 +490,77 @@ describe.skipIf(!hasTestDb)("the charter dashboard (#943)", () => {
 				.from(clubCharterHelpers)
 				.where(eq(clubCharterHelpers.clubId, seed.clubId));
 			expect(row?.name).toBe("Admin User");
+		});
+
+		it("shows the club's roster snapshot of a linked helper's name, not the Person's", async () => {
+			const seed = await seedChartering();
+			await logic.addCharterHelper(
+				addCharterHelperSchema.parse({
+					clubId: seed.clubId,
+					role: "club_mentor",
+					personId: seed.personId,
+				}),
+			);
+			await testDb
+				.update(people)
+				.set({ name: "Name Another Club Wrote" })
+				.where(eq(people.id, seed.personId));
+			const d = await getCharterDashboard(seed.clubId);
+			expect(d?.helpers[0]?.name).toBe("Member User");
+		});
+
+		it("refuses to link a roster entry whose name is blank", async () => {
+			const seed = await seedChartering();
+			await testDb
+				.update(members)
+				.set({ name: "   " })
+				.where(eq(members.id, seed.memberId));
+			await expect(
+				logic.addCharterHelper(
+					addCharterHelperSchema.parse({
+						clubId: seed.clubId,
+						role: "sponsor",
+						personId: seed.personId,
+					}),
+				),
+			).rejects.toThrow(LINKED_NAME_BLANK_MESSAGE);
+		});
+
+		it("survives its Person being deleted: the row keeps its name, unlinked", async () => {
+			const seed = await seedChartering();
+			const { id } = await logic.addCharterHelper(
+				addCharterHelperSchema.parse({
+					clubId: seed.clubId,
+					role: "sponsor",
+					personId: seed.personId,
+				}),
+			);
+			await testDb.delete(people).where(eq(people.id, seed.personId));
+			const [row] = await testDb
+				.select()
+				.from(clubCharterHelpers)
+				.where(eq(clubCharterHelpers.id, id));
+			expect(row).toMatchObject({ personId: null, name: "Member User" });
+		});
+
+		it("caps the helpers", async () => {
+			const seed = await seedChartering();
+			await testDb.insert(clubCharterHelpers).values(
+				Array.from({ length: CHARTER_HELPERS_MAX }, (_, i) => ({
+					clubId: seed.clubId,
+					role: "sponsor" as const,
+					name: `Helper ${i}`,
+				})),
+			);
+			await expect(
+				logic.addCharterHelper(
+					addCharterHelperSchema.parse({
+						clubId: seed.clubId,
+						role: "sponsor",
+						name: "One too many",
+					}),
+				),
+			).rejects.toThrow(HELPERS_FULL_MESSAGE);
 		});
 
 		it("records a free-text outside club mentor", async () => {
