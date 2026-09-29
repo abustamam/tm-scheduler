@@ -827,6 +827,25 @@ export const members = pgTable(
 		// (per-club). First-ever TM join lives on people.originalJoinDate.
 		joinedAt: timestamp("joined_at"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
+		// New-member orientation (#940, CONTEXT.md "Orientation"). Set ⇒ this
+		// membership is in orientation and the dashboard shows the checklist
+		// until every item is done or `orientationDismissedAt` is set.
+		//
+		// The DEFAULT is what puts a membership created after rollout into
+		// orientation, so no insert site has to remember to. Migration 0102 adds
+		// the column WITHOUT a default and only then sets one, in two statements:
+		// a one-statement `ADD COLUMN … DEFAULT now()` stamps EVERY EXISTING row,
+		// which would put every veteran in orientation. Roster imports opt out
+		// with an explicit null (`import-members-logic.ts`): a Toastmasters
+		// export brings in long-standing members. An admin can start it later
+		// from the member page (`startOrientation`).
+		orientationStartedAt: timestamp("orientation_started_at").defaultNow(),
+		// "I'm all set": hides the checklist for good. Written only by the member.
+		orientationDismissedAt: timestamp("orientation_dismissed_at"),
+		// The Base Camp item, the checklist's one SELF-TICK. Harmless as a
+		// self-report because nothing is suppressed by it (role-duties.ts:21-29);
+		// the other three items are derived from data and have no column.
+		basecampSetupAt: timestamp("basecamp_setup_at"),
 	},
 	(t) => [
 		index("members_club_idx").on(t.clubId),

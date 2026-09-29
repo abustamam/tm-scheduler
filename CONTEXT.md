@@ -165,6 +165,24 @@ the nouns in `src/db/schema.ts`.
   and with no activity row (#819).
   `guest-convert-privilege.integration.test.ts` pins all of it in the gate's own terms, including
   that coupling.
+- **Orientation** (#940) — a Membership's first-weeks checklist on the member's dashboard,
+  four items: **choose a path** (any live `path_enrollments` row for the Person), **schedule your
+  Ice Breaker** (any speaker slot assigned to the Membership), **take a supporting role** (any
+  non-speaker slot), and **set up Base Camp**. The first three are DERIVED from records the club
+  already keeps, past or future, and a slot in a **cancelled** meeting counts for nothing. Base
+  Camp is the one **self-tick** (`members.basecamp_setup_at`), allowed because nothing is
+  suppressed by it (the no-unverifiable-ticks rule, `src/lib/role-duties.ts`). The derivation is
+  pure, in `src/lib/orientation.ts`, for mentorship (#939) and the VPE stalled view (#942) to reuse.
+  A Membership is **in orientation** when `members.orientation_started_at` is set, and the
+  checklist shows until every item is done or the member dismisses it ("I'm all set",
+  `orientation_dismissed_at`, permanent). **Who starts in it:** every Membership INSERTED after
+  migration 0102, through the column's `DEFAULT now()` (convert-to-member, add member, onboarding);
+  memberships that existed before it stay null, and so does a **roster import**, which sets an
+  explicit null because a Toastmasters export brings in long-standing members (maintainer decision).
+  Reusing an existing Membership (a convert that reactivates a lapsed one) inserts nothing and
+  keeps what it had. An **admin can start it** for any member from the member page, which also
+  clears an earlier dismissal. The member's tick and dismiss write only their OWN row, resolved
+  from the session; nobody can tick or dismiss for someone else.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

@@ -9,6 +9,7 @@ import {
 	ArchiveRestore,
 	CalendarPlus,
 	ChevronLeft,
+	Compass,
 	Mail,
 	ShieldCheck,
 } from "lucide-react";
@@ -44,6 +45,7 @@ import {
 	type OfficerPosition,
 	officerPositionLabel,
 } from "#/lib/officers";
+import type { OrientationView } from "#/lib/orientation";
 import { firstNameOf } from "#/lib/person-name";
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
@@ -63,6 +65,7 @@ import {
 	setMemberRole,
 	setMemberStatus,
 } from "#/server/members";
+import { getMemberOrientation, startOrientation } from "#/server/orientation";
 import {
 	addMemberPath,
 	type EnrollablePath,
@@ -98,33 +101,41 @@ export const Route = createFileRoute("/_authed/members/$id")({
 				openSpeakerSlots: [],
 				pathOptions: [] as EnrollablePath[],
 				enrollments: [] as MemberEnrollment[],
+				orientation: null as OrientationView | null,
 				now: Date.now(),
 			};
 		}
-		const [profile, pathways, pathOptions, enrollments] = await Promise.all([
-			getMemberProfile({
-				data: {
-					clubId,
-					memberId: params.id,
-					allSpeeches: deps.allSpeeches,
-				},
-			}),
-			getMemberPathways({ data: { clubId, memberId: params.id } }),
-			// Both are gated on "self or club admin", so a plain member viewing
-			// someone else's page gets a throw. That's the correct authz, not an
-			// error worth failing the whole page over — swallow to empty and let
-			// the admin gate below decide whether to render the control at all.
-			listPathwayOptions().catch(() => []),
-			getMemberEnrollments({ data: { clubId, memberId: params.id } }).catch(
-				() => [],
-			),
-		]);
+		const [profile, pathways, pathOptions, enrollments, orientation] =
+			await Promise.all([
+				getMemberProfile({
+					data: {
+						clubId,
+						memberId: params.id,
+						allSpeeches: deps.allSpeeches,
+					},
+				}),
+				getMemberPathways({ data: { clubId, memberId: params.id } }),
+				// Both are gated on "self or club admin", so a plain member viewing
+				// someone else's page gets a throw. That's the correct authz, not an
+				// error worth failing the whole page over — swallow to empty and let
+				// the admin gate below decide whether to render the control at all.
+				listPathwayOptions().catch(() => []),
+				getMemberEnrollments({ data: { clubId, memberId: params.id } }).catch(
+					() => [],
+				),
+				// New-member orientation (#940): admin view only. A plain member gets a
+				// throw, swallowed to null, and the card below is not rendered for them.
+				getMemberOrientation({ data: { clubId, memberId: params.id } }).catch(
+					() => null,
+				),
+			]);
 		return {
 			...profile,
 			allSpeeches: deps.allSpeeches,
 			pathways,
 			pathOptions,
 			enrollments,
+			orientation,
 			// Pinned in the loader, not sampled while rendering: one value is
 			// dehydrated with the loader data, so the SSR pass and the hydration
 			// pass classify every speech-log row identically. See #656 / #608.
@@ -174,6 +185,7 @@ function MemberDetail() {
 		openSpeakerSlots,
 		pathOptions,
 		enrollments,
+		orientation,
 		now,
 	} = Route.useLoaderData();
 	const { activeClubId, clubs, officerPositions, impersonating } =
@@ -404,6 +416,14 @@ function MemberDetail() {
 
 					{clubId && viewerIsAdmin ? (
 						<ClubRoleControl member={member} clubId={clubId} />
+					) : null}
+
+					{clubId && viewerIsAdmin && orientation ? (
+						<OrientationControl
+							member={member}
+							clubId={clubId}
+							orientation={orientation}
+						/>
 					) : null}
 				</div>
 			</div>
@@ -1042,6 +1062,88 @@ function ClubRoleControl({
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+		</div>
+	);
+}
+
+/**
+ * New-member orientation for this member (#940): where they are, and "Start
+ * orientation" for someone who joined before it existed or came in with a
+ * roster import (which starts nobody). Admin-only; the server gates the write
+ * with `requireClubRole(…, ["admin"])`. The member ticks and dismisses their
+ * own checklist; nothing here can do either for them.
+ */
+function OrientationControl({
+	member,
+	clubId,
+	orientation,
+}: {
+	member: ProfileMember;
+	clubId: string;
+	orientation: OrientationView;
+}) {
+	const router = useRouter();
+	const [busy, setBusy] = useState(false);
+
+	async function start() {
+		setBusy(true);
+		try {
+			await startOrientation({ data: { clubId, memberId: member.id } });
+			toast.success(
+				`${firstNameOf(member.name)} will see the first-weeks checklist on their dashboard.`,
+			);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	const status = !orientation.inOrientation
+		? "Not started"
+		: orientation.complete
+			? "Complete"
+			: orientation.dismissed
+				? "Dismissed"
+				: `${orientation.doneCount} of ${orientation.total} done`;
+	// Offer the start when there is no checklist on their dashboard to show:
+	// never started, or dismissed before it was finished.
+	const canStart =
+		member.status === "active" &&
+		(!orientation.inOrientation ||
+			(orientation.dismissed && !orientation.complete));
+
+	return (
+		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+			<div className="mb-2 flex items-center justify-between gap-2">
+				<h2 className="flex items-center gap-1.5 text-sm font-bold">
+					<Compass className="size-4 text-[var(--sea-ink-soft)]" aria-hidden />
+					New-member orientation
+				</h2>
+				<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-0.5 text-xs font-bold tracking-[0.03em]">
+					{status}
+				</span>
+			</div>
+			{orientation.inOrientation ? (
+				<ul className="mb-3 flex flex-col gap-1 text-xs text-[var(--sea-ink-soft)]">
+					{orientation.items.map((item) => (
+						<li key={item.key}>
+							{item.done ? "✓" : "○"} {item.label}
+						</li>
+					))}
+				</ul>
+			) : (
+				<p className="mb-3 text-xs text-[var(--sea-ink-soft)]">
+					A first-weeks checklist on their dashboard: choose a path, schedule an
+					Ice Breaker, take a supporting role, set up Base Camp.
+				</p>
+			)}
+			{canStart ? (
+				<Button variant="outline" size="sm" disabled={busy} onClick={start}>
+					Start orientation
+				</Button>
+			) : null}
 		</div>
 	);
 }

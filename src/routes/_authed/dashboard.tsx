@@ -7,6 +7,10 @@ import {
 	FeedbackForYou,
 	feedbackOrEmpty,
 } from "#/components/feedback/feedback-for-you";
+import {
+	MY_PATHWAYS_ANCHOR,
+	OrientationChecklist,
+} from "#/components/members/orientation-checklist";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
@@ -27,6 +31,11 @@ import {
 import { listMySpeeches } from "#/server/club";
 import { listMyCommitments } from "#/server/meetings";
 import {
+	dismissMyOrientation,
+	getMyOrientation,
+	setMyBasecampSetup,
+} from "#/server/orientation";
+import {
 	addMyPath,
 	getMyPathEnrollments,
 	listPathwayOptions,
@@ -44,7 +53,8 @@ export const Route = createFileRoute("/_authed/dashboard")({
 	// `?speeches=all` lifts the speech log's 6-row default (#681).
 	validateSearch: validateSpeechLogSearch,
 	loaderDeps: ({ search }) => ({ allSpeeches: search.speeches === "all" }),
-	loader: async ({ deps }) => {
+	loader: async ({ deps, context }) => {
+		const clubId = context.activeClubId;
 		const [
 			commitments,
 			speechLog,
@@ -52,6 +62,7 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			enrollments,
 			pathOptions,
 			feedback,
+			orientation,
 		] = await Promise.all([
 			listMyCommitments(),
 			// Always WITH an input: no input is the pre-#681 stale-tab call, which
@@ -63,6 +74,12 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			// Caught to an empty card: a love-note read failing must never
 			// blank the dashboard (#986).
 			feedbackOrEmpty(() => listMyFeedback()),
+			// The new-member checklist (#940) is per membership, so it is read for
+			// the ACTIVE club. Caught to null for the same reason as feedback: a
+			// failed read hides the card, never the dashboard.
+			clubId
+				? getMyOrientation({ data: { clubId } }).catch(() => null)
+				: Promise.resolve(null),
 		]);
 		// Unreachable with an input sent; narrowed so the type is one shape.
 		const { speeches, speechLogTruncated } = Array.isArray(speechLog)
@@ -77,6 +94,7 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			enrollments,
 			pathOptions,
 			feedback,
+			orientation,
 			// The instant the speech log is read against, pinned HERE rather than
 			// sampled while rendering. One value is dehydrated with the loader data,
 			// so the SSR pass and the hydration pass classify every row identically
@@ -108,6 +126,7 @@ function Dashboard() {
 		enrollments,
 		pathOptions,
 		feedback,
+		orientation,
 		now,
 	} = Route.useLoaderData();
 	const router = useRouter();
@@ -150,6 +169,17 @@ function Dashboard() {
 		}
 	}
 
+	// The checklist's writes return the fresh view, but the Pathways panel and
+	// the rest are loader-driven, so re-run the loader like the other mutations.
+	async function mutateOrientation(fn: () => Promise<unknown>) {
+		try {
+			await fn();
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		}
+	}
+
 	return (
 		<PageContainer>
 			<div className="mb-5">
@@ -172,6 +202,25 @@ function Dashboard() {
 			<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.55fr_1fr]">
 				{/* Left column */}
 				<div className="flex min-w-0 flex-col gap-5">
+					{/* New-member orientation (#940). Renders nothing unless this
+					    membership is in orientation, not dismissed and not done. */}
+					{activeClubId ? (
+						<OrientationChecklist
+							view={orientation}
+							onToggleBaseCamp={(done) =>
+								mutateOrientation(() =>
+									setMyBasecampSetup({
+										data: { clubId: activeClubId, done },
+									}),
+								)
+							}
+							onDismiss={() =>
+								mutateOrientation(() =>
+									dismissMyOrientation({ data: { clubId: activeClubId } }),
+								)
+							}
+						/>
+					) : null}
 					{/* Speech log (real) */}
 					<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
 						<div className="flex items-center justify-between px-5 pt-4 pb-2.5">
@@ -352,8 +401,9 @@ function Dashboard() {
 						)}
 					</div>
 
-					{/* My Pathways progress (real, synced from Base Camp) */}
-					<div>
+					{/* My Pathways progress (real, synced from Base Camp). The anchor is
+					    where the orientation checklist's "Pick a path" lands. */}
+					<div id={MY_PATHWAYS_ANCHOR} className="scroll-mt-24">
 						<h2 className="mb-2.5 px-0.5 text-sm font-bold">My Pathways</h2>
 						<PathwaysProgress
 							paths={pathways}
