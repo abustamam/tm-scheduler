@@ -381,4 +381,93 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		expect(member).not.toHaveProperty("email");
 		expect(member).not.toHaveProperty("phone");
 	});
+
+	describe("past lookback (#1048)", () => {
+		/** Fourteen past meetings, one a week back from 2020-06-01 — one more
+		 *  than the widest allowed lookback, so a bound that let 14 through (or
+		 *  an unbounded one) is visible. Returned NEWEST first. */
+		async function seedPast(n = 14): Promise<string[]> {
+			const base = Date.parse("2020-06-01T19:00:00Z");
+			const rows = await testDb
+				.insert(meetings)
+				.values(
+					Array.from({ length: n }, (_, i) => ({
+						clubId: seed.clubId,
+						scheduledAt: new Date(base - i * 7 * 24 * 60 * 60 * 1000),
+						status: "scheduled" as const,
+					})),
+				)
+				.returning({ id: meetings.id, scheduledAt: meetings.scheduledAt });
+			return rows
+				.sort((a, b) => b.scheduledAt.getTime() - a.scheduledAt.getTime())
+				.map((r) => r.id);
+		}
+
+		it.each([
+			4, 8, 13,
+		])("pastCount %i shows that many past meetings, newest last, then the upcoming one", async (n) => {
+			const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+			const newestFirst = await seedPast();
+			const data = await loadSeasonGrid({
+				clubId: seed.clubId,
+				count: 8,
+				pastCount: n,
+			});
+			const past = data.meetings.filter((m) => m.isPast);
+			expect(past).toHaveLength(n);
+			// The n MOST RECENT, oldest first — the columns read left to right.
+			expect(past.map((m) => m.id)).toEqual(newestFirst.slice(0, n).reverse());
+			expect(data.meetings.at(-1)?.id).toBe(seed.meetingId);
+			expect(data.meetings).toHaveLength(n + 1);
+		});
+
+		it("omitting pastCount keeps today's 2", async () => {
+			const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+			await seedPast();
+			const data = await loadSeasonGrid({ clubId: seed.clubId, count: 8 });
+			expect(data.meetings.filter((m) => m.isPast)).toHaveLength(2);
+		});
+
+		it.each([
+			99,
+			500,
+			14,
+			3,
+			0,
+			-1,
+			Number.NaN,
+		])("bounds pastCount %s to 2 on the SERVER, whatever the route allowed", async (n) => {
+			// A client can call the server fn directly with any number; the
+			// route's validateSearch is not the only gate.
+			const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+			await seedPast();
+			const data = await loadSeasonGrid({
+				clubId: seed.clubId,
+				count: 8,
+				pastCount: n,
+			});
+			expect(data.meetings.filter((m) => m.isPast)).toHaveLength(2);
+		});
+
+		it("the PUBLIC grid shows 2 past meetings even when handed a larger pastCount", async () => {
+			const { loadPublicSeasonGrid } = await import(
+				"#/server/season-grid-logic"
+			);
+			await seedPast();
+			// Its type has no `pastCount`, so the cast models a caller (or a
+			// future spread) that forwards one anyway. It must not reach the loader.
+			const input = { clubId: seed.clubId, count: 8, pastCount: 13 } as {
+				clubId: string;
+				count: 8;
+			};
+			const data = await loadPublicSeasonGrid(input);
+			expect(data.meetings.filter((m) => m.isPast)).toHaveLength(2);
+			// And plainly, with nothing extra.
+			const plain = await loadPublicSeasonGrid({
+				clubId: seed.clubId,
+				count: "all",
+			});
+			expect(plain.meetings.filter((m) => m.isPast)).toHaveLength(2);
+		});
+	});
 });

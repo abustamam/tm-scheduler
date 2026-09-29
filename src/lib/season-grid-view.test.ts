@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SeasonGridData } from "#/server/season-grid";
-import { memberMeetingStatus, projectGrid } from "./season-grid-view";
+import {
+	DEFAULT_PAST_COUNT,
+	memberMeetingStatus,
+	PAST_COUNTS,
+	parsePastCount,
+	projectGrid,
+} from "./season-grid-view";
 
 const data: SeasonGridData = {
 	meetings: [
@@ -260,5 +266,41 @@ describe("memberMeetingStatus", () => {
 			declined: false,
 			heldRoleLabels: ["Toastmaster", "Timer"],
 		});
+	});
+});
+
+describe("parsePastCount (#1048)", () => {
+	it("admits exactly 2, 4, 8 and 13, as numbers or their decimal strings", () => {
+		expect(PAST_COUNTS).toEqual([2, 4, 8, 13]);
+		for (const n of PAST_COUNTS) {
+			expect(parsePastCount(n)).toBe(n);
+			expect(parsePastCount(String(n))).toBe(n);
+		}
+	});
+
+	it("defaults to 2", () => {
+		expect(DEFAULT_PAST_COUNT).toBe(2);
+		expect(parsePastCount(undefined)).toBe(2);
+	});
+
+	it.each([
+		["99", 99],
+		["500", 500],
+		["0", 0],
+		["-1", -1],
+		["3 (between members)", 3],
+		["12.9", 12.9],
+		["13.0 as a string", "13.0"],
+		["' 8' (padded)", " 8"],
+		["'abc'", "abc"],
+		["'' (an empty ?past=)", ""],
+		["a repeated param", ["8", "4"]],
+		["null", null],
+		["NaN", Number.NaN],
+		["Infinity", Number.POSITIVE_INFINITY],
+		["an object", { past: 8 }],
+		["a boolean", true],
+	])("falls back to 2 for %s", (_label, value) => {
+		expect(parsePastCount(value)).toBe(2);
 	});
 });

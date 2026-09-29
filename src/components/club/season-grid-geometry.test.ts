@@ -690,3 +690,272 @@ describe.skipIf(!hasChrome)(
 		});
 	},
 );
+
+/**
+ * Thirteen past meetings on a phone (#1048).
+ *
+ * "Show past" lets a VPE widen the lookback from 2 to 13, and 13 past plus 8
+ * upcoming is 21 meeting columns: at `min-w-[3.5rem]` each that is over 1100px
+ * of table on a 341px scroller, three times what the 8-column case above
+ * measures. The question is the same one #820 asked — does the BOX scroll, or
+ * the DOCUMENT — asked at the width this control makes reachable, and in BOTH
+ * orientations, because they end differently: Members × Meetings closes on the
+ * two contact columns and their `sr-only` WhatsApp label (the #820 escape),
+ * Roles × Meetings closes on a plain grid cell.
+ *
+ * The "Show past" control rides in the controls row the fixture reproduces,
+ * with its own buttons, so a control row that stopped wrapping would show up
+ * here as document overflow too.
+ *
+ * The grid relies on the scroller's `overflow-auto` for its width: nothing on
+ * the table sets a `min-w` floor, it is simply as wide as its columns, and the
+ * scroller is a block box as wide as the page. So the pre-fix control strips
+ * `overflow-auto` — the box stops clipping and the 21 columns go to the
+ * document — and a second one strips `relative` in the members orientation,
+ * where the `sr-only` label is.
+ */
+describe.skipIf(!hasChrome)(
+	"thirteen past meetings at 375px (#1048)",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		const PAST = 13;
+		const UPCOMING = 8;
+		const COLUMNS = PAST + UPCOMING;
+		/**
+		 * Each meeting header's `min-w-[Nrem]` floor in px, parsed out of the
+		 * shipped class string (1rem = 16px) rather than restated, so the
+		 * scroll floor below follows the source.
+		 */
+		function minColumnPx(): number {
+			const m = meetingHead.match(/\bmin-w-\[(\d+(?:\.\d+)?)rem\]/);
+			expect(m, `no min-w-[…rem] in \`${meetingHead}\``).not.toBeNull();
+			return Number(m?.[1]) * 16;
+		}
+
+		let css = "";
+		let scroller = "";
+		let frame = "";
+		let table = "";
+		let root = "";
+		let controls = "";
+		let toggleButton = "";
+		let toggleGroup = "";
+		let labelledControl = "";
+		let controlLabel = "";
+		let labelHead = "";
+		let meetingHead = "";
+		let pastMuted = "";
+		let contactHead = "";
+		let rowHead = "";
+		let contactCell = "";
+		let cell = "";
+		let srOnly = "";
+		let waLink = "";
+		let page = "";
+
+		type Orientation = "roles" | "members";
+
+		const heads = () =>
+			Array.from({ length: COLUMNS }, (_, i) => {
+				const past = i < PAST;
+				return `<th class="${meetingHead}${past ? ` ${pastMuted}` : ""}"><span class="block py-2 md:py-0">Thu, Mar ${i + 1}</span><div class="text-[10px] font-medium">${past ? "ended" : "2 open"}</div></th>`;
+			}).join("");
+
+		const cells = (r: number) =>
+			Array.from(
+				{ length: COLUMNS },
+				(_, i) =>
+					`<td class="p-0"><div class="${cell}">${NAMES[(r + i) % NAMES.length]}</div></td>`,
+			).join("");
+
+		function rows(orientation: Orientation): string {
+			if (orientation === "roles") {
+				return ROLES.map(
+					(role, r) => `
+					<tr class="group transition-colors">
+						<th class="${rowHead}">${role}</th>
+						${cells(r).replace(/<td class="p-0">(?![\s\S]*<td)/, `<td class="p-0"${r === ROLES.length - 1 ? ' id="tail"' : ""}>`)}
+					</tr>`,
+				).join("");
+			}
+			return Array.from(
+				{ length: 6 },
+				(_, i) => `
+				<tr class="group transition-colors">
+					<th class="${rowHead}"><a href="#">Member ${i} Lastname</a></th>
+					${cells(i)}
+					<td class="${contactCell}"><a href="#" class="${waLink}">member${i}@example.com</a></td>
+					<td class="${contactCell}"${i === 5 ? ' id="tail"' : ""}>
+						<a href="#" class="${waLink}">+1555000000${i}<span class="${srOnly}">— message Member ${i} Lastname on WhatsApp, opens in a new tab</span></a>
+					</td>
+				</tr>`,
+			).join("");
+		}
+
+		function fixture(scrollerClass: string, orientation: Orientation) {
+			const buttons = (labels: string[]) =>
+				`<div class="${toggleGroup}">${labels
+					.map(
+						(l) =>
+							`<button type="button" class="${toggleButton}">${l}</button>`,
+					)
+					.join("")}</div>`;
+			return `
+				<div class="${page} space-y-4">
+					<div class="flex flex-wrap items-center justify-between gap-3" id="chrome">
+						<h1 class="font-display text-3xl font-semibold tracking-[-0.02em]">Sign-up sheet</h1>
+						<button type="button">Copy sign-up sheet link</button>
+					</div>
+					<div class="${root}">
+						<div class="${controls}">
+							${buttons(["Roles × Meetings", "Members × Meetings"])}
+							<div class="${labelledControl}">
+								<span class="${controlLabel}">Meetings shown</span>
+								${buttons(["4", "8", "All"])}
+							</div>
+							<div class="${labelledControl}">
+								<span class="${controlLabel}">Show past</span>
+								${buttons(["2", "4", "8", "13"])}
+							</div>
+						</div>
+						<div class="${frame}">
+							<div class="${scrollerClass}" id="scroller">
+								<table class="${table}">
+									<thead>
+										<tr>
+											<th class="${labelHead}">${orientation === "roles" ? "Role" : "Member"}</th>
+											${heads()}
+											${orientation === "members" ? `<th class="${contactHead}">Email</th><th class="${contactHead}">Phone</th>` : ""}
+										</tr>
+									</thead>
+									<tbody>${rows(orientation)}</tbody>
+								</table>
+							</div>
+						</div>
+					</div>
+				</div>`;
+		}
+
+		const strip = (cls: string) =>
+			scroller.replace(new RegExp(`\\b${cls}\\b`), "").trim();
+
+		const probe = (scrollerClass: string, orientation: Orientation) =>
+			probeColumn({
+				bodyHtml: phonePin(fixture(scrollerClass, orientation)),
+				css,
+				scrollerSelector: "#scroller",
+				tailSelector: "#tail",
+				chromeSelector: "#chrome",
+				viewport: VIEWPORT,
+			});
+
+		beforeAll(async () => {
+			scroller = classContaining(GRID, "scroll-fade-r");
+			frame = classContaining(GRID, "rounded-xl border");
+			table = classContaining(GRID, "border-separate");
+			root = classContaining(GRID, "space-y-4");
+			controls = classContaining(GRID, "flex flex-wrap items-center gap-4");
+			toggleButton = classLiteralContaining(GRID, "px-3 py-1.5 text-xs");
+			// Repeated in source (three button groups, two labelled controls), so
+			// the first literal is read rather than a unique className.
+			toggleGroup = classLiteralContaining(
+				GRID,
+				"inline-flex overflow-hidden rounded-lg border",
+			);
+			labelledControl = classLiteralContaining(
+				GRID,
+				"inline-flex items-center gap-2",
+			);
+			controlLabel = classLiteralContaining(
+				GRID,
+				"text-xs font-medium text-muted-foreground",
+			);
+			labelHead = classLiteralContaining(GRID, "sticky top-0 left-0");
+			// Any rem value, so `minColumnPx` reads whatever floor ships.
+			meetingHead = classLiteralContaining(GRID, "sticky top-0 min-w-[");
+			pastMuted = classLiteralContaining(GRID, "opacity-45");
+			contactHead = classLiteralContaining(GRID, "sticky top-0 bg-card");
+			rowHead = classLiteralContaining(GRID, "sticky left-0 z-10");
+			contactCell = classLiteralContaining(
+				GRID,
+				"px-3 py-1 text-left text-xs whitespace-nowrap",
+			);
+			cell = classLiteralContaining(GRID_CELL, "flex h-11 min-w-[3rem]");
+			srOnly = classContaining(WHATSAPP, "sr-only");
+			waLink = classLiteralContaining(
+				WHATSAPP,
+				"inline-flex items-center gap-1.5",
+			);
+			page = classLiteralContaining(CONTAINER, "max-w-workspace");
+			const all: string[] = [];
+			for (const o of ["roles", "members"] as const) {
+				all.push(
+					...candidatesIn(fixture(scroller, o)),
+					...candidatesIn(fixture(strip("overflow-auto"), o)),
+					...candidatesIn(fixture(strip("relative"), o)),
+				);
+			}
+			css = await buildAppCss(all);
+		});
+
+		it("the fixture really is 21 columns wide, with the past ones muted", () => {
+			// Vacuity floor for everything below: a fixture that shrank back to
+			// the 8-column case would pass without testing #1048 at all.
+			for (const o of ["roles", "members"] as const) {
+				const html = fixture(scroller, o);
+				expect(html.match(/Thu, Mar /g)).toHaveLength(COLUMNS);
+				expect(html.match(/>ended</g)).toHaveLength(PAST);
+			}
+			expect(pastMuted).toBe("opacity-45");
+			expect(scroller).toContain("overflow-auto");
+		});
+
+		it.each([
+			"roles",
+			"members",
+		] as const)("%s: the grid scrolls in its own box, and the page does not scroll sideways", (orientation) => {
+			const p = probe(scroller, orientation);
+			// A phone's scroller, not a 500px window's.
+			expect(p.scrollerClientWidth).toBeLessThanOrEqual(PHONE_SCROLLER_MAX);
+			expect(p.overflowX).toBe("auto");
+			expect(p.overflowsX).toBe(true);
+			// Far enough to reach the last of the 21 columns — not merely "moved".
+			expect(p.scrolledRightBy).toBeGreaterThan(
+				COLUMNS * minColumnPx() - PHONE_SCROLLER_MAX,
+			);
+			expect(
+				p.documentOverflowsX,
+				`${orientation}: with 13 past meetings the document scrolls ` +
+					"sideways at 375px, taking the heading and the Show past control " +
+					"off the screen with the grid",
+			).toBe(false);
+		});
+
+		it.each([
+			"roles",
+			"members",
+		] as const)("control, %s: without the scroller's overflow-auto, the 21 columns scroll the DOCUMENT", (orientation) => {
+			const mutated = strip("overflow-auto");
+			expect(mutated, "`overflow-auto` is not on the scroller").not.toBe(
+				scroller,
+			);
+			const p = probe(mutated, orientation);
+			expect(p.overflowX).not.toBe("auto");
+			expect(p.scrolledRightBy).toBe(0);
+			expect(
+				p.documentOverflowsX,
+				"the pre-fix control no longer reproduces document scroll, so the " +
+					"assertion above cannot fail",
+			).toBe(true);
+		});
+
+		it("control, members: without `relative`, the sr-only label drags the page at 21 columns too", () => {
+			const mutated = strip("relative");
+			expect(mutated, "`relative` is not on the scroller").not.toBe(scroller);
+			const p = probe(mutated, "members");
+			expect(p.overflowX).toBe("auto");
+			expect(p.overflowsX).toBe(true);
+			expect(p.documentOverflowsX).toBe(true);
+		});
+	},
+);

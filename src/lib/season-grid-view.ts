@@ -38,6 +38,36 @@ export interface ViewRow {
 
 export type Orientation = "roles" | "members";
 
+/**
+ * How many PAST meetings the grid shows to the left of the upcoming ones
+ * (#1048). A closed set, not a range: `?past=` is user-typed, and the server
+ * reads it too, so anything outside it — 99, 0, -1, "abc", 3, an empty value, a
+ * repeated param — collapses to the default rather than being clamped to the
+ * nearest member. 13 is a quarter of weekly meetings.
+ */
+export const PAST_COUNTS = [2, 4, 8, 13] as const;
+export type SeasonGridPast = (typeof PAST_COUNTS)[number];
+/** Today's lookback, and the only one the PUBLIC sheet ever gets. */
+export const DEFAULT_PAST_COUNT: SeasonGridPast = 2;
+
+/**
+ * The one reading of a past-count, shared by the route's `validateSearch` and
+ * by `loadSeasonGrid`, so the URL and the server cannot disagree about what is
+ * allowed. Accepts the number or its decimal string (a search param may arrive
+ * as either); everything else is the default.
+ */
+export function parsePastCount(value: unknown): SeasonGridPast {
+	const n =
+		typeof value === "number"
+			? value
+			: typeof value === "string" && /^\d+$/.test(value)
+				? Number(value)
+				: Number.NaN;
+	return (PAST_COUNTS as readonly number[]).includes(n)
+		? (n as SeasonGridPast)
+		: DEFAULT_PAST_COUNT;
+}
+
 export function projectGrid(
 	data: SeasonGridData,
 	orientation: Orientation,

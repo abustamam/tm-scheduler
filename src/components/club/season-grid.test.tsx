@@ -686,3 +686,118 @@ describe("SeasonGrid contact column", () => {
 		).toBeTruthy();
 	});
 });
+
+describe("Show past (#1048)", () => {
+	/** Thirteen past meetings and the upcoming one — the widest lookback. */
+	const PAST = 13;
+	const wideData: SeasonGridData = {
+		...contactData,
+		meetings: [
+			...Array.from({ length: PAST }, (_, i) => ({
+				id: `p${i}`,
+				scheduledAt: new Date(
+					Date.parse("2026-03-05T19:00:00Z") + i * 7 * 24 * 60 * 60 * 1000,
+				).toISOString(),
+				timezone: "UTC",
+				urlKey: `p${i}`,
+				openCount: 0,
+				totalSlots: 1,
+				isPast: true,
+				isAnchor: false,
+				isCompleted: false,
+			})),
+			...data.meetings,
+		],
+	};
+
+	it("is absent when the caller gives no handler — the public sheet", async () => {
+		await renderUnderMemoryRouter(
+			<SeasonGrid data={data} orientation="roles" count={8} />,
+		);
+		expect(screen.queryByText("Show past")).toBeNull();
+		expect(screen.queryAllByRole("button", { name: /past meetings$/ })).toEqual(
+			[],
+		);
+	});
+
+	it("offers 2, 4, 8 and 13, marks the current one, and reports a pick", async () => {
+		const onPastCountChange = vi.fn();
+		await renderUnderMemoryRouter(
+			<SeasonGrid
+				data={data}
+				orientation="roles"
+				count={8}
+				pastCount={8}
+				onPastCountChange={onPastCountChange}
+			/>,
+		);
+		const buttons = screen.getAllByRole("button", {
+			name: /^Show \d+ past meetings$/,
+		});
+		expect(buttons.map((b) => b.textContent)).toEqual(["2", "4", "8", "13"]);
+		expect(buttons.map((b) => b.getAttribute("aria-pressed"))).toEqual([
+			"false",
+			"false",
+			"true",
+			"false",
+		]);
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "Show 13 past meetings" }),
+		);
+		expect(onPastCountChange).toHaveBeenCalledWith(13);
+	});
+
+	it("marks 2 as current when no pastCount is passed", async () => {
+		await renderUnderMemoryRouter(
+			<SeasonGrid
+				data={data}
+				orientation="roles"
+				count={8}
+				onPastCountChange={() => {}}
+			/>,
+		);
+		expect(
+			screen
+				.getByRole("button", { name: "Show 2 past meetings" })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it.each([
+		"roles",
+		"members",
+	] as const)("the %s orientation renders all 13 past columns, still muted", async (orientation) => {
+		await renderUnderMemoryRouter(
+			<SeasonGrid
+				data={wideData}
+				orientation={orientation}
+				count={8}
+				pastCount={13}
+				currentMemberId="admin-1"
+				currentMemberSource="session"
+				canManageOthers
+				showContact
+				clubId="club-1"
+				onPastCountChange={() => {}}
+			/>,
+		);
+		const heads = screen
+			.getAllByRole("columnheader")
+			.filter((th) => /ended|open|full/.test(th.textContent ?? ""));
+		expect(heads).toHaveLength(PAST + 1);
+		const past = heads.filter((th) => th.textContent?.includes("ended"));
+		expect(past).toHaveLength(PAST);
+		for (const th of past) expect(th.className).toContain("opacity-45");
+		// The upcoming column is not muted.
+		expect(heads.at(-1)?.className).not.toContain("opacity-45");
+		// Every body row carries exactly one cell per meeting column. The row's
+		// label is a <th> (a rowheader, not a cell); the members orientation
+		// adds the two contact cells (Email, Phone) after the meetings.
+		const contactCells = orientation === "members" ? 2 : 0;
+		const firstRow = screen.getAllByRole("row")[1];
+		expect(within(firstRow as HTMLElement).getAllByRole("cell")).toHaveLength(
+			PAST + 1 + contactCells,
+		);
+	});
+});

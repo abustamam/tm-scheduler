@@ -12,6 +12,7 @@ import {
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { coalesceToE164, DEFAULT_COUNTRY_CODE } from "#/lib/phone";
+import { parsePastCount } from "#/lib/season-grid-view";
 import { listPlanForMeetings } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
 
@@ -85,11 +86,14 @@ export interface SeasonGridData {
 	contacted: { memberId: string; meetingId: string }[];
 }
 
-const PAST_LOOKBACK = 2;
-
 export async function loadSeasonGrid(input: {
 	clubId: string;
 	count: SeasonGridCount;
+	/** How many past meetings to show (#1048). Bounded HERE, not only by the
+	 *  route: anything outside `PAST_COUNTS` — including a value a client sent
+	 *  straight to the server fn — is the default of 2, which is also what an
+	 *  omitted value means. `loadPublicSeasonGrid` never passes it. */
+	pastCount?: number;
 	/** Include member email/phone on the member axis. Off by default so the
 	 *  public sheet never carries contact PII. */
 	includeContact?: boolean;
@@ -99,7 +103,9 @@ export async function loadSeasonGrid(input: {
 }): Promise<SeasonGridData> {
 	const now = new Date();
 
-	// 1. Columns: up to PAST_LOOKBACK most-recent past meetings + upcoming.
+	const pastLookback = parsePastCount(input.pastCount);
+
+	// 1. Columns: up to `pastLookback` most-recent past meetings + upcoming.
 	// `defaultCountryCode` rides along on the row this query already fetches. It
 	// is only USED on the contact path (below), but reading it here costs nothing
 	// — one more column on a single-row lookup — whereas loading it separately
@@ -127,7 +133,7 @@ export async function loadSeasonGrid(input: {
 			),
 		)
 		.orderBy(desc(meetings.scheduledAt))
-		.limit(PAST_LOOKBACK);
+		.limit(pastLookback);
 
 	const upcomingQuery = db
 		.select({
@@ -392,5 +398,12 @@ export async function loadPublicSeasonGrid(input: {
 	count: SeasonGridCount;
 }): Promise<SeasonGridData> {
 	if (!(await isReadableClub(input.clubId))) return emptyGrid();
-	return loadSeasonGrid({ ...input, includeContact: false });
+	// Named fields, NOT `...input`: the public sheet stays at the default
+	// lookback of 2 past meetings (#1048), so no caller-supplied `pastCount` —
+	// nor any other key a spread would forward — may reach the loader.
+	return loadSeasonGrid({
+		clubId: input.clubId,
+		count: input.count,
+		includeContact: false,
+	});
 }
