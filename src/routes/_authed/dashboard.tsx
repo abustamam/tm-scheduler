@@ -8,6 +8,10 @@ import {
 	feedbackOrEmpty,
 } from "#/components/feedback/feedback-for-you";
 import {
+	ClubMentoringCard,
+	MentorshipCard,
+} from "#/components/members/mentorship-cards";
+import {
 	MY_PATHWAYS_ANCHOR,
 	OrientationChecklist,
 } from "#/components/members/orientation-checklist";
@@ -17,6 +21,7 @@ import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-man
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { SpeechLogDate } from "#/components/speech-log-date";
 import { SpeechLogToggle } from "#/components/speech-log-toggle";
+import { effectiveAdminClubFor } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
 import {
 	speechLogEvaluatorLabel,
@@ -30,6 +35,11 @@ import {
 } from "#/lib/speech-schedule-state";
 import { listMySpeeches } from "#/server/club";
 import { listMyCommitments } from "#/server/meetings";
+import {
+	getMyMentorships,
+	listClubMentorships,
+	setMyWillingToMentor,
+} from "#/server/mentorship";
 import {
 	dismissMyOrientation,
 	getMyOrientation,
@@ -63,6 +73,8 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			pathOptions,
 			feedback,
 			orientation,
+			mentorship,
+			clubMentoring,
 		] = await Promise.all([
 			listMyCommitments(),
 			// Always WITH an input: no input is the pre-#681 stale-tab call, which
@@ -80,6 +92,16 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			clubId
 				? getMyOrientation({ data: { clubId } }).catch(() => null)
 				: Promise.resolve(null),
+			// Mentorship (#939): the member's own mentors, mentees and "willing to
+			// mentor" flag for the active club. Caught to null like the checklist.
+			clubId
+				? getMyMentorships({ data: { clubId } }).catch(() => null)
+				: Promise.resolve(null),
+			// The club-wide list is for admins only; the server gates it
+			// (`requireClubAdminView`), and a member never asks.
+			clubId && effectiveAdminClubFor(context, clubId)
+				? listClubMentorships({ data: { clubId } }).catch(() => null)
+				: Promise.resolve(null),
 		]);
 		// Unreachable with an input sent; narrowed so the type is one shape.
 		const { speeches, speechLogTruncated } = Array.isArray(speechLog)
@@ -95,6 +117,8 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			pathOptions,
 			feedback,
 			orientation,
+			mentorship,
+			clubMentoring,
 			// The instant the speech log is read against, pinned HERE rather than
 			// sampled while rendering. One value is dehydrated with the loader data,
 			// so the SSR pass and the hydration pass classify every row identically
@@ -127,6 +151,8 @@ function Dashboard() {
 		pathOptions,
 		feedback,
 		orientation,
+		mentorship,
+		clubMentoring,
 		now,
 	} = Route.useLoaderData();
 	const router = useRouter();
@@ -169,9 +195,10 @@ function Dashboard() {
 		}
 	}
 
-	// The checklist's writes return the fresh view, but the Pathways panel and
-	// the rest are loader-driven, so re-run the loader like the other mutations.
-	async function mutateOrientation(fn: () => Promise<unknown>) {
+	// The checklist's and the mentoring card's writes return fresh data, but
+	// the Pathways panel and the rest are loader-driven, so re-run the loader
+	// like the other mutations.
+	async function mutateAndReload(fn: () => Promise<unknown>) {
 		try {
 			await fn();
 			await router.invalidate();
@@ -208,14 +235,14 @@ function Dashboard() {
 						<OrientationChecklist
 							view={orientation}
 							onToggleBaseCamp={(done) =>
-								mutateOrientation(() =>
+								mutateAndReload(() =>
 									setMyBasecampSetup({
 										data: { clubId: activeClubId, done },
 									}),
 								)
 							}
 							onDismiss={() =>
-								mutateOrientation(() =>
+								mutateAndReload(() =>
 									dismissMyOrientation({ data: { clubId: activeClubId } }),
 								)
 							}
@@ -420,6 +447,23 @@ function Dashboard() {
 							/>
 						</div>
 					</div>
+
+					{/* Mentorship (#939): the member's own mentors and mentees, and
+					    their "willing to mentor" flag. Then, for an admin, the
+					    club-wide list with who has no mentor yet. */}
+					{activeClubId ? (
+						<MentorshipCard
+							view={mentorship}
+							onToggleWilling={(willing) =>
+								mutateAndReload(() =>
+									setMyWillingToMentor({
+										data: { clubId: activeClubId, willing },
+									}),
+								)
+							}
+						/>
+					) : null}
+					<ClubMentoringCard view={clubMentoring} />
 
 					{/* Quick actions */}
 					<div className="flex flex-col gap-2">

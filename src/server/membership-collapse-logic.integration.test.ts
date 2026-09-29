@@ -39,6 +39,7 @@ import {
 	meetingVotes,
 	memberDues,
 	members,
+	mentorships,
 	notifications,
 	officerTerms,
 	officerTrainingRecords,
@@ -803,6 +804,14 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			// back, leaving the member unmergeable until someone found the row.
 			"meeting_candidate_disqualifications.candidate_member_id",
 			"meeting_candidate_disqualifications.disqualified_by_member_id",
+			// #939 — mentorships. Both member columns are ON DELETE CASCADE and
+			// sit inside the partial unique indexes on ACTIVE pairings, so they
+			// re-point via delete-then-update, and a keeper↔absorbed pairing is
+			// dropped rather than turned into a self-pairing. `created_by` is
+			// nullable attribution and re-points plainly.
+			"mentorships.mentor_member_id",
+			"mentorships.mentee_member_id",
+			"mentorships.created_by_member_id",
 		]);
 
 		const result = await testDb.execute(sql`
@@ -1157,6 +1166,143 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			.where(eq(meetingVotes.sessionId, session.id));
 		expect(votes).toHaveLength(1);
 		expect(votes[0].candidateMemberId).toBe(keeperId);
+	});
+
+	describe("mentorships (#939)", () => {
+		const pairs = async () =>
+			(
+				await testDb
+					.select()
+					.from(mentorships)
+					.where(eq(mentorships.clubId, seed.clubId))
+			).map((r) => ({
+				mentor: r.mentorMemberId,
+				mentee: r.menteeMemberId,
+				focus: r.focus,
+				ended: r.endedAt !== null,
+				createdBy: r.createdByMemberId,
+			}));
+
+		it("drops the keeper↔absorbed pairing and keeps the absorbed member's other pairing, on the keeper", async () => {
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			const thirdId = await addMembership({ name: "Third" });
+			await testDb.insert(mentorships).values([
+				// Would become a self-pairing: dropped, active or ended.
+				{
+					clubId: seed.clubId,
+					mentorMemberId: keeperId,
+					menteeMemberId: absorbedId,
+					focus: "new_member",
+				},
+				{
+					clubId: seed.clubId,
+					mentorMemberId: absorbedId,
+					menteeMemberId: keeperId,
+					focus: "contest",
+					endedAt: new Date(),
+				},
+				// The absorbed member's own mentee: must SURVIVE, on the keeper.
+				{
+					clubId: seed.clubId,
+					mentorMemberId: absorbedId,
+					menteeMemberId: thirdId,
+					focus: "contest",
+				},
+			]);
+			await collapse(keeperId, absorbedId);
+			expect(await pairs()).toEqual([
+				{
+					mentor: keeperId,
+					mentee: thirdId,
+					focus: "contest",
+					ended: false,
+					createdBy: null,
+				},
+			]);
+		});
+
+		it("survives duplicate active pairings in both directions and both indexes, without rolling back", async () => {
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			const otherId = await addMembership({ name: "Other" });
+			const row = (
+				mentor: string,
+				mentee: string,
+				focus: "new_member" | null,
+				ended = false,
+			) => ({
+				clubId: seed.clubId,
+				mentorMemberId: mentor,
+				menteeMemberId: mentee,
+				focus,
+				endedAt: ended ? new Date() : null,
+			});
+			await testDb.insert(mentorships).values([
+				// Keeper and absorbed both MENTOR `other`: focus set, and no focus.
+				row(keeperId, otherId, "new_member"),
+				row(absorbedId, otherId, "new_member"),
+				row(keeperId, otherId, null),
+				row(absorbedId, otherId, null),
+				// Keeper and absorbed both MENTORED BY `other`: focus set, no focus.
+				row(otherId, keeperId, "new_member"),
+				row(otherId, absorbedId, "new_member"),
+				row(otherId, keeperId, null),
+				row(otherId, absorbedId, null),
+				// Ended history duplicating an active keeper row: re-pointed, kept.
+				row(absorbedId, otherId, "new_member", true),
+			]);
+			await collapse(keeperId, absorbedId);
+			const after = await pairs();
+			expect(after.filter((p) => !p.ended)).toHaveLength(4);
+			expect(
+				after.every((p) => p.mentor !== absorbedId && p.mentee !== absorbedId),
+			).toBe(true);
+			expect(after.filter((p) => p.ended)).toEqual([
+				{
+					mentor: keeperId,
+					mentee: otherId,
+					focus: "new_member",
+					ended: true,
+					createdBy: null,
+				},
+			]);
+			const rows = await testDb
+				.select()
+				.from(members)
+				.where(eq(members.id, absorbedId));
+			expect(rows).toHaveLength(0);
+		});
+
+		it("keeps willing_to_mentor when only the ABSORBED row said so", async () => {
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			await testDb
+				.update(members)
+				.set({ willingToMentor: true })
+				.where(eq(members.id, absorbedId));
+			await collapse(keeperId, absorbedId);
+			const [k] = await testDb
+				.select({ w: members.willingToMentor })
+				.from(members)
+				.where(eq(members.id, keeperId));
+			expect(k?.w).toBe(true);
+		});
+
+		it("re-points created_by from the absorbed membership to the keeper", async () => {
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			const aId = await addMembership({ name: "A" });
+			const bId = await addMembership({ name: "B" });
+			await testDb.insert(mentorships).values({
+				clubId: seed.clubId,
+				mentorMemberId: aId,
+				menteeMemberId: bId,
+				createdByMemberId: absorbedId,
+			});
+			await collapse(keeperId, absorbedId);
+			expect((await pairs())[0]?.createdBy).toBe(keeperId);
+		});
 	});
 
 	it("is a no-op when keeper === absorbed", async () => {

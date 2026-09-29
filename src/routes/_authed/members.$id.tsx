@@ -16,6 +16,10 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
+import {
+	type MemberMentorshipsView,
+	MentorshipAdminPanel,
+} from "#/components/members/mentorship-cards";
 import { PageContainer } from "#/components/page-container";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
@@ -65,6 +69,12 @@ import {
 	setMemberRole,
 	setMemberStatus,
 } from "#/server/members";
+import {
+	createMentorship,
+	endMentorship,
+	getMemberMentorships,
+	setMentorshipFocus,
+} from "#/server/mentorship";
 import { getMemberOrientation, startOrientation } from "#/server/orientation";
 import {
 	addMemberPath,
@@ -102,33 +112,44 @@ export const Route = createFileRoute("/_authed/members/$id")({
 				pathOptions: [] as EnrollablePath[],
 				enrollments: [] as MemberEnrollment[],
 				orientation: null as OrientationView | null,
+				mentorship: null as MemberMentorshipsView | null,
 				now: Date.now(),
 			};
 		}
-		const [profile, pathways, pathOptions, enrollments, orientation] =
-			await Promise.all([
-				getMemberProfile({
-					data: {
-						clubId,
-						memberId: params.id,
-						allSpeeches: deps.allSpeeches,
-					},
-				}),
-				getMemberPathways({ data: { clubId, memberId: params.id } }),
-				// Both are gated on "self or club admin", so a plain member viewing
-				// someone else's page gets a throw. That's the correct authz, not an
-				// error worth failing the whole page over — swallow to empty and let
-				// the admin gate below decide whether to render the control at all.
-				listPathwayOptions().catch(() => []),
-				getMemberEnrollments({ data: { clubId, memberId: params.id } }).catch(
-					() => [],
-				),
-				// New-member orientation (#940): admin view only. A plain member gets a
-				// throw, swallowed to null, and the card below is not rendered for them.
-				getMemberOrientation({ data: { clubId, memberId: params.id } }).catch(
-					() => null,
-				),
-			]);
+		const [
+			profile,
+			pathways,
+			pathOptions,
+			enrollments,
+			orientation,
+			mentorship,
+		] = await Promise.all([
+			getMemberProfile({
+				data: {
+					clubId,
+					memberId: params.id,
+					allSpeeches: deps.allSpeeches,
+				},
+			}),
+			getMemberPathways({ data: { clubId, memberId: params.id } }),
+			// Both are gated on "self or club admin", so a plain member viewing
+			// someone else's page gets a throw. That's the correct authz, not an
+			// error worth failing the whole page over — swallow to empty and let
+			// the admin gate below decide whether to render the control at all.
+			listPathwayOptions().catch(() => []),
+			getMemberEnrollments({ data: { clubId, memberId: params.id } }).catch(
+				() => [],
+			),
+			// New-member orientation (#940): admin view only. A plain member gets a
+			// throw, swallowed to null, and the card below is not rendered for them.
+			getMemberOrientation({ data: { clubId, memberId: params.id } }).catch(
+				() => null,
+			),
+			// Mentorship (#939): admin view only, same shape as orientation.
+			getMemberMentorships({ data: { clubId, memberId: params.id } }).catch(
+				() => null,
+			),
+		]);
 		return {
 			...profile,
 			allSpeeches: deps.allSpeeches,
@@ -136,6 +157,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 			pathOptions,
 			enrollments,
 			orientation,
+			mentorship,
 			// Pinned in the loader, not sampled while rendering: one value is
 			// dehydrated with the loader data, so the SSR pass and the hydration
 			// pass classify every speech-log row identically. See #656 / #608.
@@ -186,6 +208,7 @@ function MemberDetail() {
 		pathOptions,
 		enrollments,
 		orientation,
+		mentorship,
 		now,
 	} = Route.useLoaderData();
 	const { activeClubId, clubs, officerPositions, impersonating } =
@@ -423,6 +446,14 @@ function MemberDetail() {
 							member={member}
 							clubId={clubId}
 							orientation={orientation}
+						/>
+					) : null}
+
+					{clubId && viewerIsAdmin && mentorship ? (
+						<MentorshipControl
+							member={member}
+							clubId={clubId}
+							mentorship={mentorship}
 						/>
 					) : null}
 				</div>
@@ -1136,7 +1167,7 @@ function OrientationControl({
 			) : (
 				<p className="mb-3 text-xs text-[var(--sea-ink-soft)]">
 					A first-weeks checklist on their dashboard: choose a path, schedule an
-					Ice Breaker, take a supporting role, set up Base Camp.
+					Ice Breaker, take a supporting role, set up Base Camp, get a mentor.
 				</p>
 			)}
 			{canStart ? (
@@ -1145,6 +1176,66 @@ function OrientationControl({
 				</Button>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * Mentorship for this member (#939): their active mentors and mentees, and
+ * "Pair with mentor". Admin-only; the server gates every write with
+ * `requireClubRole(…, ["admin"])` and refuses an inactive member, a member of
+ * another club, a self-pairing and a duplicate active pairing.
+ */
+function MentorshipControl({
+	member,
+	clubId,
+	mentorship,
+}: {
+	member: ProfileMember;
+	clubId: string;
+	mentorship: MemberMentorshipsView;
+}) {
+	const router = useRouter();
+
+	async function run(fn: () => Promise<unknown>, success: string) {
+		try {
+			await fn();
+			toast.success(success);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		}
+	}
+
+	return (
+		<MentorshipAdminPanel
+			memberName={firstNameOf(member.name)}
+			memberActive={member.status === "active"}
+			view={mentorship}
+			onAdd={(p) =>
+				run(
+					() =>
+						createMentorship({
+							data: { clubId, menteeMemberId: member.id, ...p },
+						}),
+					"Mentor paired.",
+				)
+			}
+			onEnd={(mentorshipId) =>
+				run(
+					() => endMentorship({ data: { clubId, mentorshipId } }),
+					"Mentorship ended.",
+				)
+			}
+			onFocus={(mentorshipId, focus, focusOther) =>
+				run(
+					() =>
+						setMentorshipFocus({
+							data: { clubId, mentorshipId, focus, focusOther },
+						}),
+					"Focus updated.",
+				)
+			}
+		/>
 	);
 }
 

@@ -19,6 +19,7 @@ import {
 	impersonationSessions,
 	meetings,
 	members,
+	mentorships,
 	pathEnrollments,
 	pathwaysPaths,
 	roleDefinitions,
@@ -254,9 +255,15 @@ describe.skipIf(!hasTestDb)("orientation facts and view (#940)", () => {
 		expect(view?.items.find((i) => i.key === "ice-breaker")?.done).toBe(false);
 	});
 
-	it("disappears on its own once all four items are done", async () => {
+	it("disappears on its own once all five items are done", async () => {
 		const s = await seed();
 		await enroll(s.personId);
+		await testDb.insert(mentorships).values({
+			clubId: s.clubId,
+			mentorMemberId: s.adminMemberId,
+			menteeMemberId: s.memberId,
+			focus: "new_member",
+		});
 		await assignSlot(s.clubId, s.memberId, {
 			speaker: true,
 			status: "scheduled",
@@ -273,6 +280,80 @@ describe.skipIf(!hasTestDb)("orientation facts and view (#940)", () => {
 		});
 		expect(view?.complete).toBe(true);
 		expect(view?.visible).toBe(false);
+	});
+
+	it("Get a mentor (#939): an ended new_member pairing and an active contest pairing do not tick it; an active new_member one does, with the mentor's contact", async () => {
+		const s = await seed();
+		await testDb
+			.update(members)
+			.set({ phone: "(555) 555-0100" })
+			.where(eq(members.id, s.adminMemberId));
+		await testDb.insert(mentorships).values([
+			{
+				clubId: s.clubId,
+				mentorMemberId: s.adminMemberId,
+				menteeMemberId: s.memberId,
+				focus: "new_member",
+				endedAt: new Date(),
+			},
+			{
+				clubId: s.clubId,
+				mentorMemberId: s.adminMemberId,
+				menteeMemberId: s.memberId,
+				focus: "contest",
+			},
+		]);
+		let view = await logic.getOrientation(s.memberId);
+		const mentorItem = () => view?.items.find((i) => i.key === "get-a-mentor");
+		expect(mentorItem()?.done).toBe(false);
+		expect(view?.mentors).toEqual([]);
+
+		await testDb.insert(mentorships).values({
+			clubId: s.clubId,
+			mentorMemberId: s.adminMemberId,
+			menteeMemberId: s.memberId,
+			focus: "new_member",
+		});
+		view = await logic.getOrientation(s.memberId);
+		expect(mentorItem()?.done).toBe(true);
+		expect(view?.mentors).toHaveLength(1);
+		expect(view?.mentors[0]?.name).toBe("Admin User");
+		expect(view?.mentors[0]?.email).toMatch(/^admin-.*@test\.example$/);
+		// Normalised for the WhatsApp link, like the roster (#295).
+		expect(view?.mentors[0]?.phone).toMatch(/^\+\d+/);
+	});
+
+	it("an active new_member pairing with a DEACTIVATED mentor does not tick Get a mentor (#939 review)", async () => {
+		const s = await seed();
+		await testDb.insert(mentorships).values({
+			clubId: s.clubId,
+			mentorMemberId: s.adminMemberId,
+			menteeMemberId: s.memberId,
+			focus: "new_member",
+		});
+		const done = async () =>
+			(await logic.getOrientation(s.memberId))?.items.find(
+				(i) => i.key === "get-a-mentor",
+			)?.done;
+		expect(await done()).toBe(true);
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, s.adminMemberId));
+		expect(await done()).toBe(false);
+		expect((await logic.getOrientation(s.memberId))?.mentors).toEqual([]);
+	});
+
+	it("a pairing where the member is the MENTOR does not tick their own Get a mentor", async () => {
+		const s = await seed();
+		await testDb.insert(mentorships).values({
+			clubId: s.clubId,
+			mentorMemberId: s.memberId,
+			menteeMemberId: s.adminMemberId,
+			focus: "new_member",
+		});
+		const view = await logic.getOrientation(s.memberId);
+		expect(view?.items.find((i) => i.key === "get-a-mentor")?.done).toBe(false);
 	});
 
 	it("reads write nothing", async () => {

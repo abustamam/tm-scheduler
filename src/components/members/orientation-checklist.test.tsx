@@ -35,6 +35,18 @@ const facts = (over: Partial<OrientationFacts> = {}): OrientationFacts => ({
 	basecampSetupAt: null,
 	activePathCount: 0,
 	slots: [],
+	menteePairings: [],
+	...over,
+});
+
+const mentorPairing = (
+	over: Partial<OrientationFacts["menteePairings"][number]> = {},
+): OrientationFacts["menteePairings"][number] => ({
+	focus: "new_member",
+	endedAt: null,
+	mentorName: "Maya Mentor",
+	mentorEmail: "maya@example.test",
+	mentorPhone: "+15555550100",
 	...over,
 });
 
@@ -96,6 +108,7 @@ describe("OrientationChecklist (#940)", () => {
 					{ isSpeakerRole: true, meetingStatus: "scheduled" },
 					{ isSpeakerRole: false, meetingStatus: "completed" },
 				],
+				menteePairings: [mentorPairing()],
 			}),
 		]) {
 			const { container } = await renderCard(f);
@@ -106,16 +119,17 @@ describe("OrientationChecklist (#940)", () => {
 		}
 	});
 
-	it("shows the four items, the count, and only Base Camp as a checkbox", async () => {
+	it("shows the five items, the count, and only Base Camp as a checkbox", async () => {
 		const { container } = await renderCard(facts({ activePathCount: 1 }));
 		expect(await screen.findByText(ORIENTATION_HEADING)).toBeTruthy();
-		expect(screen.getByText("1 of 4 done")).toBeTruthy();
+		expect(screen.getByText("1 of 5 done")).toBeTruthy();
 		const items = container.querySelectorAll("li[data-item]");
 		expect([...items].map((i) => i.getAttribute("data-item"))).toEqual([
 			"choose-path",
 			"ice-breaker",
 			"supporting-role",
 			"base-camp",
+			"get-a-mentor",
 		]);
 		const boxes = screen.getAllByRole("checkbox");
 		expect(boxes).toHaveLength(1);
@@ -141,6 +155,46 @@ describe("OrientationChecklist (#940)", () => {
 				.getByRole("link", { name: ORIENTATION_LEARN_LABEL })
 				.getAttribute("href"),
 		).toBe(PATHWAYS_EXPLAINER_HREF);
+	});
+
+	it("Get a mentor has no action while undone, and names nobody", async () => {
+		const { container } = await renderCard(facts());
+		await screen.findByText(ORIENTATION_HEADING);
+		const li = container.querySelector('li[data-item="get-a-mentor"]');
+		expect(li?.getAttribute("data-done")).toBe("false");
+		expect(li?.querySelector("a")).toBeNull();
+		expect(li?.querySelector('[data-slot="mentor-contacts"]')).toBeNull();
+	});
+
+	it("Get a mentor, once ticked, shows the mentor's name and contact (#939)", async () => {
+		const { container } = await renderCard(
+			facts({ menteePairings: [mentorPairing()] }),
+		);
+		await screen.findByText(ORIENTATION_HEADING);
+		const li = container.querySelector('li[data-item="get-a-mentor"]');
+		expect(li?.getAttribute("data-done")).toBe("true");
+		expect(li?.textContent).toContain("Your mentor: Maya Mentor");
+		const hrefs = [...(li?.querySelectorAll("a") ?? [])].map((a) =>
+			a.getAttribute("href"),
+		);
+		expect(hrefs).toContain("mailto:maya@example.test");
+		expect(hrefs.some((h) => h?.includes("15555550100"))).toBe(true);
+	});
+
+	it("an ended new-member pairing or an active contest pairing does not tick it", async () => {
+		const { container } = await renderCard(
+			facts({
+				menteePairings: [
+					mentorPairing({ endedAt: new Date("2026-09-10T00:00:00Z") }),
+					mentorPairing({ focus: "contest", mentorName: "Contest Coach" }),
+				],
+			}),
+		);
+		await screen.findByText(ORIENTATION_HEADING);
+		const li = container.querySelector('li[data-item="get-a-mentor"]');
+		expect(li?.getAttribute("data-done")).toBe("false");
+		expect(container.textContent).not.toContain("Maya Mentor");
+		expect(container.textContent).not.toContain("Contest Coach");
 	});
 
 	it("drops the action from a finished item", async () => {
