@@ -10,7 +10,7 @@
  * `orientationItems` / `orientationView` are exported for them to reuse over
  * facts they load in bulk.
  *
- * ## The no-unverifiable-ticks rule (role-duties.ts:21-29)
+ * ## The no-unverifiable-ticks rule (in the header of `role-duties.ts`)
  *
  * Three of the four items are DERIVED from rows the club already keeps: a path
  * enrollment, a speaker slot, a non-speaker slot. Only Base Camp is a

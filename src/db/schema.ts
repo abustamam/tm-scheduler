@@ -843,7 +843,8 @@ export const members = pgTable(
 		// "I'm all set": hides the checklist for good. Written only by the member.
 		orientationDismissedAt: timestamp("orientation_dismissed_at"),
 		// The Base Camp item, the checklist's one SELF-TICK. Harmless as a
-		// self-report because nothing is suppressed by it (role-duties.ts:21-29);
+		// self-report because nothing is suppressed by it (the no-unverifiable-ticks
+		// rule in the header of `role-duties.ts`);
 		// the other three items are derived from data and have no column.
 		basecampSetupAt: timestamp("basecamp_setup_at"),
 	},

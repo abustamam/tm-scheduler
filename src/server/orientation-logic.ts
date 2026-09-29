@@ -36,12 +36,15 @@ import {
 	type OrientationView,
 	orientationView,
 } from "#/lib/orientation";
+import { logActivity } from "./activity";
 import { requireMembership } from "./guards";
 
 export const ORIENTATION_NOT_YOURS_MESSAGE =
 	"Only the member can tick their own orientation checklist.";
 export const ORIENTATION_MEMBER_NOT_FOUND_MESSAGE =
 	"Member not found in this club.";
+export const ORIENTATION_MEMBER_INACTIVE_MESSAGE =
+	"That member is inactive — reactivate them first.";
 
 const clubId = z.string().uuid();
 
@@ -180,18 +183,57 @@ export async function dismissMyOrientation(input: {
  * Put a member into orientation (an admin's write; the caller gates it). Also
  * clears a previous dismissal, so starting it again actually shows it. Leaves
  * the Base Camp tick alone: that is the member's own report.
+ *
+ * Refuses an INACTIVE membership server-side: a lapsed member is hidden from
+ * every roster surface and has no dashboard to show a checklist on. Logs a
+ * `member_edit` like the other admin member writes (`members-logic.ts`);
+ * `logActivity` stamps `impersonated_by` under a read-write impersonation.
  */
 export async function startOrientation(input: {
 	clubId: string;
 	memberId: string;
+	actorMemberId: string | null;
 }): Promise<OrientationView | null> {
-	const [row] = await db
-		.update(members)
-		.set({ orientationStartedAt: new Date(), orientationDismissedAt: null })
-		.where(
-			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
-		)
-		.returning({ id: members.id });
-	if (!row) throw new Error(ORIENTATION_MEMBER_NOT_FOUND_MESSAGE);
-	return getOrientation(row.id);
+	await db.transaction(async (tx) => {
+		const [current] = await tx
+			.select({
+				status: members.status,
+				startedAt: members.orientationStartedAt,
+				dismissedAt: members.orientationDismissedAt,
+			})
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.for("update")
+			.limit(1);
+		if (!current) throw new Error(ORIENTATION_MEMBER_NOT_FOUND_MESSAGE);
+		if (current.status !== "active") {
+			throw new Error(ORIENTATION_MEMBER_INACTIVE_MESSAGE);
+		}
+		const startedAt = new Date();
+		await tx
+			.update(members)
+			.set({ orientationStartedAt: startedAt, orientationDismissedAt: null })
+			.where(eq(members.id, input.memberId));
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "member_edit",
+			targetType: "member",
+			targetId: input.memberId,
+			detail: {
+				orientation: "started",
+				before: {
+					orientationStartedAt: current.startedAt,
+					orientationDismissedAt: current.dismissedAt,
+				},
+				after: {
+					orientationStartedAt: startedAt,
+					orientationDismissedAt: null,
+				},
+			},
+		});
+	});
+	return getOrientation(input.memberId);
 }

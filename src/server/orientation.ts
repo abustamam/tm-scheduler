@@ -74,6 +74,6 @@ export const startOrientation = createServerFn({ method: "POST" })
 	.validator((i: unknown) => startOrientationSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return startOrientationDb(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return startOrientationDb({ ...data, actorMemberId: membership.id });
 	});

@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	activityLog,
 	guests,
 	impersonationSessions,
 	meetings,
@@ -30,10 +31,24 @@ import { cleanup, hasTestDb, seedClub, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+// The impersonation marker is keyed on the object `getRequest()` returns
+// (impersonation-actor.ts); outside a request that throws and the marker
+// silently no-ops. Same stand-in as `write-actor.integration.test.ts`, so the
+// impersonated-attribution test below can actually fail.
+let requestRef: object | null = null;
+vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
+	getRequest: () => {
+		if (!requestRef) throw new Error("No request context");
+		return requestRef;
+	},
+}));
+
 const logic = await import("./orientation-logic");
 const {
 	ORIENTATION_NOT_YOURS_MESSAGE,
 	ORIENTATION_MEMBER_NOT_FOUND_MESSAGE,
+	ORIENTATION_MEMBER_INACTIVE_MESSAGE,
 	dismissOrientationSchema,
 	setBasecampSetupSchema,
 	startOrientationSchema,
@@ -136,6 +151,19 @@ async function enroll(personId: string, archived = false) {
 		pathId: path.id,
 		archivedAt: archived ? new Date() : null,
 	});
+}
+
+/** The `member_edit` rows startOrientation wrote in a club. */
+async function startRows(clubId: string) {
+	const rows = await testDb
+		.select()
+		.from(activityLog)
+		.where(eq(activityLog.clubId, clubId));
+	return rows.filter(
+		(r) =>
+			r.action === "member_edit" &&
+			(r.detail as { orientation?: string } | null)?.orientation === "started",
+	);
 }
 
 async function orientationSnapshot(clubId: string) {
@@ -455,12 +483,13 @@ describe.skipIf(!hasTestDb)("Start orientation, the admin write (#940)", () => {
 		await expect(
 			requireClubRole(s.adminUserId, s.clubId, ["admin"]),
 		).resolves.toBeTruthy();
-		const view = await logic.startOrientation(
-			startOrientationSchema.parse({
+		const view = await logic.startOrientation({
+			...startOrientationSchema.parse({
 				clubId: s.clubId,
 				memberId: s.memberId,
 			}),
-		);
+			actorMemberId: s.adminMemberId,
+		});
 		expect(view?.inOrientation).toBe(true);
 		expect(view?.visible).toBe(true);
 	});
@@ -479,6 +508,7 @@ describe.skipIf(!hasTestDb)("Start orientation, the admin write (#940)", () => {
 		const view = await logic.startOrientation({
 			clubId: s.clubId,
 			memberId: s.memberId,
+			actorMemberId: s.adminMemberId,
 		});
 		expect(view?.dismissed).toBe(false);
 		expect(view?.visible).toBe(true);
@@ -502,9 +532,86 @@ describe.skipIf(!hasTestDb)("Start orientation, the admin write (#940)", () => {
 		const b = await seed();
 		const before = await orientationRow(b.memberId);
 		await expect(
-			logic.startOrientation({ clubId: a.clubId, memberId: b.memberId }),
+			logic.startOrientation({
+				clubId: a.clubId,
+				memberId: b.memberId,
+				actorMemberId: a.adminMemberId,
+			}),
 		).rejects.toThrow(ORIENTATION_MEMBER_NOT_FOUND_MESSAGE);
 		expect(await orientationRow(b.memberId)).toEqual(before);
+		expect(await startRows(a.clubId)).toHaveLength(0);
+	});
+
+	it("refuses an INACTIVE member server-side, writing nothing", async () => {
+		const s = await seed();
+		await testDb
+			.update(members)
+			.set({ status: "inactive", orientationStartedAt: null })
+			.where(eq(members.id, s.memberId));
+		const before = await orientationRow(s.memberId);
+		await expect(
+			logic.startOrientation({
+				clubId: s.clubId,
+				memberId: s.memberId,
+				actorMemberId: s.adminMemberId,
+			}),
+		).rejects.toThrow(ORIENTATION_MEMBER_INACTIVE_MESSAGE);
+		expect(await orientationRow(s.memberId)).toEqual(before);
+		expect(await startRows(s.clubId)).toHaveLength(0);
+	});
+
+	it("logs a member_edit attributed to the admin", async () => {
+		const s = await seed();
+		await logic.startOrientation({
+			clubId: s.clubId,
+			memberId: s.memberId,
+			actorMemberId: s.adminMemberId,
+		});
+		const rows = await startRows(s.clubId);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			actorMemberId: s.adminMemberId,
+			impersonatedBy: null,
+			targetType: "member",
+			targetId: s.memberId,
+		});
+		expect(rows[0]?.detail).toMatchObject({ orientation: "started" });
+	});
+
+	it("under a read-write impersonation, the log names the real superadmin", async () => {
+		const s = await seed();
+		const superadminId = randomUUID();
+		await testDb.insert(user).values({
+			id: superadminId,
+			name: "Super Admin",
+			email: `super-${superadminId}@test.example`,
+			emailVerified: true,
+			isSuperadmin: true,
+		});
+		createdSuperadmins.push(superadminId);
+		await testDb.insert(impersonationSessions).values({
+			superadminUserId: superadminId,
+			clubId: s.clubId,
+			mode: "read_write",
+			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+		});
+		requestRef = { id: "req" };
+		try {
+			// The server fn's composition: the gate, then the logic with its id.
+			const actor = await requireClubRole(superadminId, s.clubId, ["admin"]);
+			expect(actor.id).toBeNull();
+			await logic.startOrientation({
+				clubId: s.clubId,
+				memberId: s.memberId,
+				actorMemberId: actor.id,
+			});
+		} finally {
+			requestRef = null;
+		}
+		const rows = await startRows(s.clubId);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.actorMemberId).toBeNull();
+		expect(rows[0]?.impersonatedBy).toBe(superadminId);
 	});
 });
 

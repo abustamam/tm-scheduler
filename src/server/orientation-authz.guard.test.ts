@@ -27,6 +27,20 @@ import { readSource, serverFnBody } from "#/test/guard-source";
 const ORIENTATION = readSource("src/server/orientation.ts");
 const LOGIC = readSource("src/server/orientation-logic.ts");
 
+/**
+ * One top-level function's body in the logic module, from its declaration to
+ * the first column-0 closing brace after it. Both ends are asserted FOUND:
+ * an unfound end (-1) would slice to EOF and let another function's text
+ * satisfy the assertion.
+ */
+function logicFnBody(fn: string): string {
+	const at = LOGIC.indexOf(`export async function ${fn}(`);
+	expect(at, `${fn} missing`).toBeGreaterThanOrEqual(0);
+	const end = LOGIC.indexOf("\n}\n", at);
+	expect(end, `${fn}: end of body not found`).toBeGreaterThan(at);
+	return LOGIC.slice(at, end);
+}
+
 const ADMIN_WRITE =
 	/requireClubRole\(\s*user\.id,\s*data\.clubId,\s*\["admin"\]\s*\)/;
 const ADMIN_READ = /requireClubAdminView\(\s*user\.id,\s*data\.clubId\s*\)/;
@@ -99,17 +113,11 @@ describe("orientation server fns (#940)", () => {
 	});
 
 	it("the self-writes resolve their row through requireMembership and refuse a memberless actor", () => {
-		const start = LOGIC.indexOf("export async function ownMembershipId(");
-		expect(start).toBeGreaterThanOrEqual(0);
-		const body = LOGIC.slice(start, LOGIC.indexOf("\n}\n", start));
-		expect(body.length).toBeGreaterThan(0);
+		const body = logicFnBody("ownMembershipId");
 		expect(body).toMatch(/requireMembership\(\s*userId,\s*club\s*\)/);
 		expect(body).toMatch(/membership\.id === null/);
 		for (const fn of ["setMyBasecampSetup", "dismissMyOrientation"]) {
-			const at = LOGIC.indexOf(`export async function ${fn}(`);
-			expect(at, `${fn} missing`).toBeGreaterThanOrEqual(0);
-			const fnBody = LOGIC.slice(at, LOGIC.indexOf("\n}\n", at));
-			expect(fnBody).toMatch(
+			expect(logicFnBody(fn)).toMatch(
 				/ownMembershipId\(\s*input\.userId,\s*input\.clubId\s*\)/,
 			);
 		}
@@ -119,7 +127,9 @@ describe("orientation server fns (#940)", () => {
 		for (const name of ["setBasecampSetupSchema", "dismissOrientationSchema"]) {
 			const at = LOGIC.indexOf(`export const ${name}`);
 			expect(at, `${name} missing`).toBeGreaterThanOrEqual(0);
-			const decl = LOGIC.slice(at, LOGIC.indexOf(";", at));
+			const end = LOGIC.indexOf(";", at);
+			expect(end, `${name}: end of declaration not found`).toBeGreaterThan(at);
+			const decl = LOGIC.slice(at, end);
 			expect(decl).toMatch(/\.strict\(\)/);
 			expect(decl).not.toMatch(/memberId/);
 		}
