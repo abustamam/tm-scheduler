@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { MENTORSHIP_FOCUSES } from "./mentorship";
 import {
 	type OrientationFacts,
 	type OrientationItemKey,
+	type OrientationPairingFact,
 	type OrientationSlotFact,
 	orientationItems,
 	orientationView,
@@ -16,6 +18,7 @@ function facts(over: Partial<OrientationFacts> = {}): OrientationFacts {
 		basecampSetupAt: null,
 		activePathCount: 0,
 		slots: [],
+		menteePairings: [],
 		...over,
 	};
 }
@@ -33,14 +36,27 @@ const supporting = (
 	meetingStatus: OrientationSlotFact["meetingStatus"],
 ): OrientationSlotFact => ({ isSpeakerRole: false, meetingStatus });
 
+const ENDED = new Date("2026-09-10T00:00:00Z");
+const pairing = (
+	over: Partial<OrientationPairingFact> = {},
+): OrientationPairingFact => ({
+	focus: "new_member",
+	endedAt: null,
+	mentorName: "Maya Mentor",
+	mentorEmail: "maya@example.test",
+	mentorPhone: "+15555550100",
+	...over,
+});
+
 describe("orientation items (#940)", () => {
-	it("lists the four items in order, with Base Camp the only self-tick", () => {
+	it("lists the five items in order, with Base Camp the only self-tick", () => {
 		const items = orientationItems(facts());
 		expect(items.map((i) => i.key)).toEqual([
 			"choose-path",
 			"ice-breaker",
 			"supporting-role",
 			"base-camp",
+			"get-a-mentor",
 		]);
 		expect(items.filter((i) => i.selfTick).map((i) => i.key)).toEqual([
 			"base-camp",
@@ -144,11 +160,90 @@ describe("orientation items (#940)", () => {
 	});
 });
 
+describe("Get a mentor (#939)", () => {
+	it("is done with an ACTIVE new_member pairing", () => {
+		expect(doneOf(facts({ menteePairings: [pairing()] }), "get-a-mentor")).toBe(
+			true,
+		);
+	});
+	it("is NOT done by an ENDED new_member pairing", () => {
+		expect(
+			doneOf(
+				facts({ menteePairings: [pairing({ endedAt: ENDED })] }),
+				"get-a-mentor",
+			),
+		).toBe(false);
+	});
+	it("is NOT done by an ACTIVE contest pairing", () => {
+		expect(
+			doneOf(
+				facts({ menteePairings: [pairing({ focus: "contest" })] }),
+				"get-a-mentor",
+			),
+		).toBe(false);
+	});
+	it("is NOT done by an ended new_member plus an active contest pairing together", () => {
+		expect(
+			doneOf(
+				facts({
+					menteePairings: [
+						pairing({ endedAt: ENDED }),
+						pairing({ focus: "contest" }),
+					],
+				}),
+				"get-a-mentor",
+			),
+		).toBe(false);
+	});
+	it("only new_member counts, among every focus and none", () => {
+		for (const focus of [...MENTORSHIP_FOCUSES, null]) {
+			expect(
+				doneOf(facts({ menteePairings: [pairing({ focus })] }), "get-a-mentor"),
+				String(focus),
+			).toBe(focus === "new_member");
+		}
+	});
+	it("is not ticked by any other fact", () => {
+		expect(
+			doneOf(
+				facts({
+					activePathCount: 2,
+					basecampSetupAt: STARTED,
+					slots: [speaker("completed"), supporting("completed")],
+				}),
+				"get-a-mentor",
+			),
+		).toBe(false);
+	});
+	it("the view names the active new-member mentor(s) with contact, and no one else", () => {
+		const v = orientationView(
+			facts({
+				menteePairings: [
+					pairing({ mentorName: "Old", endedAt: ENDED }),
+					pairing({ mentorName: "Contest Coach", focus: "contest" }),
+					pairing(),
+				],
+			}),
+		);
+		expect(v.mentors).toEqual([
+			{
+				name: "Maya Mentor",
+				email: "maya@example.test",
+				phone: "+15555550100",
+			},
+		]);
+	});
+	it("the view has no mentors when the item is not done", () => {
+		expect(orientationView(facts()).mentors).toEqual([]);
+	});
+});
+
 describe("orientationView (#940)", () => {
 	const allDone = facts({
 		activePathCount: 1,
 		basecampSetupAt: STARTED,
 		slots: [speaker("completed"), supporting("scheduled")],
+		menteePairings: [pairing()],
 	});
 
 	it("is invisible when orientation never started (a veteran)", () => {
@@ -163,22 +258,29 @@ describe("orientationView (#940)", () => {
 			inOrientation: true,
 			dismissed: false,
 			doneCount: 1,
-			total: 4,
+			total: 5,
 			complete: false,
 			visible: true,
 		});
 	});
 
-	it("disappears on its own when all four items are done", () => {
+	it("disappears on its own when all five items are done", () => {
 		const v = orientationView(allDone);
-		expect(v.doneCount).toBe(4);
+		expect(v.doneCount).toBe(5);
 		expect(v.complete).toBe(true);
 		expect(v.visible).toBe(false);
 	});
 
-	it("three of four done is still visible", () => {
+	it("four of five done is still visible", () => {
 		const v = orientationView({ ...allDone, basecampSetupAt: null });
-		expect(v.doneCount).toBe(3);
+		expect(v.doneCount).toBe(4);
+		expect(v.visible).toBe(true);
+	});
+
+	it("#940's four items done without a mentor shows the checklist again (#939, intended)", () => {
+		const v = orientationView({ ...allDone, menteePairings: [] });
+		expect(v.doneCount).toBe(4);
+		expect(v.complete).toBe(false);
 		expect(v.visible).toBe(true);
 	});
 

@@ -166,13 +166,14 @@ the nouns in `src/db/schema.ts`.
   `guest-convert-privilege.integration.test.ts` pins all of it in the gate's own terms, including
   that coupling.
 - **Orientation** (#940) — a Membership's first-weeks checklist on the member's dashboard,
-  four items: **choose a path** (any live `path_enrollments` row for the Person), **schedule your
+  five items: **choose a path** (any live `path_enrollments` row for the Person), **schedule your
   Ice Breaker** (any speaker slot assigned to the Membership), **take a supporting role** (any
-  non-speaker slot), and **set up Base Camp**. The first three are DERIVED from records the club
-  already keeps, past or future, and a slot in a **cancelled** meeting counts for nothing. Base
-  Camp is the one **self-tick** (`members.basecamp_setup_at`), allowed because nothing is
-  suppressed by it (the no-unverifiable-ticks rule, `src/lib/role-duties.ts`). The derivation is
-  pure, in `src/lib/orientation.ts`, for mentorship (#939) and the VPE stalled view (#942) to reuse.
+  non-speaker slot), **set up Base Camp**, and **get a mentor** (#939: an ACTIVE **Mentorship**
+  with focus `new_member`; once ticked it names the mentor with their contact). All but Base
+  Camp are DERIVED from records the club already keeps, past or future, and a slot in a
+  **cancelled** meeting counts for nothing. Base Camp is the one **self-tick**
+  (`members.basecamp_setup_at`), allowed because nothing is suppressed by it (the
+  no-unverifiable-ticks rule, `src/lib/role-duties.ts`). The derivation is pure, in `src/lib/orientation.ts`, for mentorship (#939) and the VPE stalled view (#942) to reuse.
   A Membership is **in orientation** when `members.orientation_started_at` is set, and the
   checklist shows until every item is done or the member dismisses it ("I'm all set",
   `orientation_dismissed_at`, permanent). **Who starts in it** (maintainer decisions): a
@@ -186,7 +187,24 @@ the nouns in `src/db/schema.ts`.
   LIVE (non-archived) enrollments. An **admin can start it** for any ACTIVE member from the member
   page (logged as `member_edit`), and starting it again re-shows a checklist the member had
   dismissed. The member's tick and dismiss write only their OWN row, resolved from the session;
-  nobody can tick or dismiss for someone else.
+  nobody can tick or dismiss for someone else. Adding the fifth item re-showed the checklist to
+  members still in orientation who had finished the first four (intended; veterans, with
+  `orientation_started_at` null, never see it).
+- **Mentorship** (#939, `mentorships`) — a pairing of two Memberships of the SAME club: a
+  **mentor** helping a **mentee**. Optional **focus** (`new_member`, `contest`, `leadership`,
+  `other` with free text), `started_at`, and `ended_at` (null ⇒ **active**; an ended pairing is
+  kept as history and disappears from both dashboards). Nothing else is tracked: no check-ins,
+  no notes. A member may have several active mentors and a mentor several mentees; the same
+  mentor, mentee and focus may be active only once (a partial unique index), and a member cannot
+  mentor themselves (a CHECK). **Admins** create, end and re-focus pairings, only between two
+  ACTIVE members of the club (the write path checks both), each logged as `member_edit`. **Willing
+  to mentor** (`members.willing_to_mentor`) is the member's own flag, set from their dashboard,
+  so the VP Education can see who is available; it approves nothing. Visible in-app only, to the
+  mentee, the mentor and admins, and on no public page; each party sees the other's contact, the
+  same contact any club member already sees on a member page. **Not the charter club mentor:**
+  a **Club mentor (charter)** (`club_charter_helpers.role = 'club_mentor'`, #1043) is an
+  experienced Toastmaster, often from outside the club, assigned to a CHARTERING CLUB as a whole.
+  The two share no table, row or label, and nothing converts one into the other.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

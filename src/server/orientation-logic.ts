@@ -21,12 +21,14 @@
 // READS NEVER WRITE. The dashboard read admits a read-only impersonation
 // session (#1043's review found a GET seeding rows under one), so nothing
 // here inserts or updates on the read path.
-import { and, count, eq, isNull } from "drizzle-orm";
+import { and, asc, count, eq, isNull } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
 import {
 	meetings,
 	members,
+	mentorships,
 	pathEnrollments,
 	roleDefinitions,
 	roleSlots,
@@ -36,8 +38,13 @@ import {
 	type OrientationView,
 	orientationView,
 } from "#/lib/orientation";
+import { coalesceToE164 } from "#/lib/phone";
 import { logActivity } from "./activity";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { requireMembership } from "./guards";
+
+/** The mentor's membership row, joined onto a mentorship (#939). */
+const mentor = alias(members, "mentor");
 
 export const ORIENTATION_NOT_YOURS_MESSAGE =
 	"Only the member can tick their own orientation checklist.";
@@ -82,6 +89,7 @@ export async function loadOrientationFacts(
 	const [row] = await db
 		.select({
 			personId: members.personId,
+			clubId: members.clubId,
 			startedAt: members.orientationStartedAt,
 			dismissedAt: members.orientationDismissedAt,
 			basecampSetupAt: members.basecampSetupAt,
@@ -91,7 +99,7 @@ export async function loadOrientationFacts(
 		.limit(1);
 	if (!row) return null;
 
-	const [paths, slots] = await Promise.all([
+	const [paths, slots, pairings, cc] = await Promise.all([
 		db
 			.select({ n: count() })
 			.from(pathEnrollments)
@@ -115,6 +123,23 @@ export async function loadOrientationFacts(
 				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 			)
 			.where(eq(roleSlots.assignedMemberId, membershipId)),
+		// "Get a mentor" (#939): every pairing with this membership as MENTEE,
+		// active or ended; `#/lib/orientation` decides which one counts. The
+		// mentor's contact is the same the mentee could already read on the
+		// mentor's member page (`getMemberProfile`, club members only).
+		db
+			.select({
+				focus: mentorships.focus,
+				endedAt: mentorships.endedAt,
+				mentorName: mentor.name,
+				mentorEmail: mentor.email,
+				mentorPhone: mentor.phone,
+			})
+			.from(mentorships)
+			.innerJoin(mentor, eq(mentor.id, mentorships.mentorMemberId))
+			.where(eq(mentorships.menteeMemberId, membershipId))
+			.orderBy(asc(mentorships.startedAt)),
+		loadClubDefaultCountryCode(row.clubId),
 	]);
 
 	return {
@@ -123,6 +148,10 @@ export async function loadOrientationFacts(
 		basecampSetupAt: row.basecampSetupAt,
 		activePathCount: paths[0]?.n ?? 0,
 		slots,
+		menteePairings: pairings.map((p) => ({
+			...p,
+			mentorPhone: coalesceToE164(p.mentorPhone, cc),
+		})),
 	};
 }
 

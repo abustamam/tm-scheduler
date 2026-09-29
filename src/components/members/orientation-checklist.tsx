@@ -1,10 +1,13 @@
 import { Link } from "@tanstack/react-router";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Loader2, Mail } from "lucide-react";
 import { useState } from "react";
 import { Button } from "#/components/ui/button";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
+import { mailtoHref } from "#/lib/mailto";
 import {
 	BASE_CAMP_SECTION_HASH,
 	type OrientationItem,
+	type OrientationMentor,
 	type OrientationView,
 	PATHWAYS_EXPLAINER_SLUG,
 } from "#/lib/orientation";
@@ -26,10 +29,12 @@ export const ORIENTATION_LEARN_LABEL = "Learn how Pathways works";
  * is visible (in orientation, not dismissed, not complete), so the call site
  * cannot show a finished or dismissed checklist by forgetting a condition.
  *
- * Only the Base Camp item has a checkbox. The other three are derived from
- * the club's own records (a path, a speaker slot, another slot) and carry a
- * link to the place that does the thing instead: ticking them by hand would be
- * the unverifiable self-report the checklist is built to avoid.
+ * Only the Base Camp item has a checkbox. The others are derived from the
+ * club's own records (a path, a speaker slot, another slot, an active
+ * new-member mentorship) and carry a link to the place that does the thing
+ * instead: ticking them by hand would be the unverifiable self-report the
+ * checklist is built to avoid. "Get a mentor" (#939) has no link — an admin
+ * makes the pairing — and once done it names the mentor and how to reach them.
  */
 export function OrientationChecklist({
 	view,
@@ -103,6 +108,9 @@ export function OrientationChecklist({
 							<div className="text-xs text-[var(--sea-ink-soft)]">
 								{item.hint}
 							</div>
+							{item.key === "get-a-mentor" && item.done ? (
+								<MentorContacts mentors={view.mentors} />
+							) : null}
 						</div>
 						{item.done ? null : <ItemAction item={item} />}
 					</li>
@@ -136,6 +144,38 @@ function itemLabelClass(done: boolean): string {
 	return done
 		? "text-sm font-bold text-[var(--sea-ink-soft)] line-through"
 		: "text-sm font-bold text-[var(--sea-ink)]";
+}
+
+/** Who the member's new-member mentor is, and how to reach them (#939). */
+function MentorContacts({ mentors }: { mentors: OrientationMentor[] }) {
+	return (
+		<ul
+			className="m-0 mt-1.5 list-none space-y-1 p-0"
+			data-slot="mentor-contacts"
+		>
+			{mentors.map((m) => (
+				<li
+					key={`${m.name}|${m.email ?? ""}|${m.phone ?? ""}`}
+					className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs"
+				>
+					<span className="font-semibold text-[var(--sea-ink)]">
+						Your mentor: {m.name}
+					</span>
+					{m.email ? (
+						<a
+							href={mailtoHref(m.email)}
+							data-slot="wa-email"
+							className="inline-flex items-center gap-1 text-primary hover:underline"
+						>
+							<Mail className="size-3" aria-hidden />
+							{m.email}
+						</a>
+					) : null}
+					{m.phone ? <WhatsAppPhoneLink phone={m.phone} name={m.name} /> : null}
+				</li>
+			))}
+		</ul>
+	);
 }
 
 /** A read-only done mark for a derived item: not a control. */
@@ -185,5 +225,8 @@ function ItemAction({ item }: { item: OrientationItem }) {
 					How to
 				</Link>
 			);
+		case "get-a-mentor":
+			// An admin makes the pairing; there is nothing for the member to open.
+			return null;
 	}
 }

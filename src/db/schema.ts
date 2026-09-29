@@ -849,6 +849,13 @@ export const members = pgTable(
 		// rule in the header of `role-duties.ts`);
 		// the other three items are derived from data and have no column.
 		basecampSetupAt: timestamp("basecamp_setup_at"),
+		// "Willing to mentor" (#939, CONTEXT.md "Mentorship"): the member's OWN
+		// flag, so the VP Education can see who is available when pairing. A
+		// flag, not an approval flow — nothing is gated on it. Written only by
+		// the member (`setMyWillingToMentor`). The one-statement ADD COLUMN …
+		// DEFAULT false in migration 0103 backfills every existing row with
+		// false, which is exactly right here (unlike 0102's `now()` trap).
+		willingToMentor: boolean("willing_to_mentor").notNull().default(false),
 	},
 	(t) => [
 		index("members_club_idx").on(t.clubId),
@@ -1068,6 +1075,85 @@ export const clubCharterHelpers = pgTable(
 			"club_charter_helpers_identity_check",
 			sql`${t.personId} is not null or (${t.name} is not null and btrim(${t.name}) <> '')`,
 		),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Mentorship (#939, CONTEXT.md "Mentorship") — member-to-member pairings INSIDE
+// one club: an experienced member mentoring another member of the same club.
+//
+// NOT the charter "club mentor" above (`charter_helper_role = 'club_mentor'`),
+// who is assigned to a chartering CLUB and is often from outside it. The two
+// never share a row, a table or a label, and nothing migrates between them.
+//
+// Tracks the pairing only: who, an optional focus, when it started and ended
+// (`ended_at` null ⇒ active). No check-ins, no notes. Admins create, end and
+// re-focus pairings (`mentorship-logic.ts`); only the mentee, the mentor and
+// admins can read one, and no public surface returns it
+// (`mentorship-not-public.guard.test.ts`).
+// ---------------------------------------------------------------------------
+
+export const mentorshipFocusEnum = pgEnum("mentorship_focus", [
+	"new_member",
+	"contest",
+	"leadership",
+	"other",
+]);
+
+export const mentorships = pgTable(
+	"mentorships",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// Both memberships belong to `club_id` — checked in the WRITE PATH
+		// (`createMentorship`), as the issue specified. A composite
+		// (club_id, member) FK onto a new UNIQUE (club_id, id) on `members` was
+		// tried and dropped: drizzle-kit 0.31 emits the FK before the UNIQUE it
+		// needs, on `generate` AND on `push`, so every push-synced test database
+		// (tm_test, each worktree's) failed to sync, permanently, until fixed by
+		// hand. Revisit only with a drizzle-kit that orders them.
+		mentorMemberId: uuid("mentor_member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		menteeMemberId: uuid("mentee_member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		// Optional: null is a pairing with no stated focus.
+		focus: mentorshipFocusEnum("focus"),
+		// Free text, only alongside `focus = 'other'`.
+		focusOther: text("focus_other"),
+		startedAt: timestamp("started_at").defaultNow().notNull(),
+		endedAt: timestamp("ended_at"),
+		createdByMemberId: uuid("created_by_member_id").references(
+			() => members.id,
+			{ onDelete: "set null" },
+		),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("mentorships_club_idx").on(t.clubId),
+		index("mentorships_mentor_idx").on(t.mentorMemberId),
+		index("mentorships_mentee_idx").on(t.menteeMemberId),
+		check(
+			"mentorships_not_self_check",
+			sql`${t.mentorMemberId} <> ${t.menteeMemberId}`,
+		),
+		check(
+			"mentorships_focus_other_check",
+			sql`${t.focusOther} is null or ${t.focus} = 'other'`,
+		),
+		// One ACTIVE pairing per (mentor, mentee, focus). TWO partial indexes
+		// because `focus` is nullable and a unique index treats NULLs as
+		// distinct, so one index would let a no-focus pairing be duplicated
+		// freely. Ended pairings are history and may repeat.
+		uniqueIndex("mentorships_active_focus_unique")
+			.on(t.mentorMemberId, t.menteeMemberId, t.focus)
+			.where(sql`${t.endedAt} is null and ${t.focus} is not null`),
+		uniqueIndex("mentorships_active_nofocus_unique")
+			.on(t.mentorMemberId, t.menteeMemberId)
+			.where(sql`${t.endedAt} is null and ${t.focus} is null`),
 	],
 );
 

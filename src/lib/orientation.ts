@@ -12,8 +12,9 @@
  *
  * ## The no-unverifiable-ticks rule (in the header of `role-duties.ts`)
  *
- * Three of the four items are DERIVED from rows the club already keeps: a path
- * enrollment, a speaker slot, a non-speaker slot. Only Base Camp is a
+ * Four of the five items are DERIVED from rows the club already keeps: a path
+ * enrollment, a speaker slot, a non-speaker slot, an active new-member
+ * mentorship (#939). Only Base Camp is a
  * self-tick, and it may be one because nothing is suppressed by it: it reminds
  * nobody of anything and gates nothing, so a false tick costs only the member
  * who made it. Do not add a self-tick that hides a nudge someone else relies on.
@@ -26,7 +27,16 @@
  * member's only prompt to sign up again. Past and future slots in scheduled or
  * completed meetings both count ("schedule your Ice Breaker" is done the moment
  * one is on the calendar).
+ *
+ * ## Get a mentor (#939)
+ *
+ * The fifth item is DERIVED too: it ticks when the member has an ACTIVE
+ * mentorship (`ended_at` null) with focus `new_member`. An ended pairing and a
+ * pairing with any other focus count for nothing. Once ticked, the view carries
+ * the mentor's name and contact so the checklist can show who to talk to.
+ * Admins create pairings, so the item has no member action.
  */
+import { isNewMemberMentorship, type MentorshipFocus } from "#/lib/mentorship";
 
 /** The meeting statuses a slot can sit in (`meeting_status` in schema.ts). */
 export type OrientationMeetingStatus = "scheduled" | "cancelled" | "completed";
@@ -35,6 +45,23 @@ export type OrientationMeetingStatus = "scheduled" | "cancelled" | "completed";
 export interface OrientationSlotFact {
 	isSpeakerRole: boolean;
 	meetingStatus: OrientationMeetingStatus;
+}
+
+/** One mentorship in which this membership is the MENTEE. */
+export interface OrientationPairingFact {
+	focus: MentorshipFocus | null;
+	endedAt: Date | null;
+	mentorName: string;
+	/** Contact, visible to the mentee as to any club member (`getMemberProfile`). */
+	mentorEmail: string | null;
+	mentorPhone: string | null;
+}
+
+/** The mentor the "Get a mentor" item names once it is done. */
+export interface OrientationMentor {
+	name: string;
+	email: string | null;
+	phone: string | null;
 }
 
 /** Everything the checklist is derived from, for ONE membership. */
@@ -49,13 +76,16 @@ export interface OrientationFacts {
 	activePathCount: number;
 	/** Slots assigned to this membership, in any meeting of the club. */
 	slots: readonly OrientationSlotFact[];
+	/** Mentorships with this membership as mentee, active or ended (#939). */
+	menteePairings: readonly OrientationPairingFact[];
 }
 
 export type OrientationItemKey =
 	| "choose-path"
 	| "ice-breaker"
 	| "supporting-role"
-	| "base-camp";
+	| "base-camp"
+	| "get-a-mentor";
 
 export interface OrientationItem {
 	key: OrientationItemKey;
@@ -95,7 +125,23 @@ export function hasSetUpBaseCamp(facts: OrientationFacts): boolean {
 	return facts.basecampSetupAt !== null;
 }
 
-/** The four items, in the order the checklist shows them. */
+/**
+ * The member's active new-member mentors (#939), in the order the facts list
+ * them. Empty ⇒ the "Get a mentor" item is not done.
+ */
+export function newMemberMentors(facts: OrientationFacts): OrientationMentor[] {
+	return facts.menteePairings.filter(isNewMemberMentorship).map((p) => ({
+		name: p.mentorName,
+		email: p.mentorEmail,
+		phone: p.mentorPhone,
+	}));
+}
+
+export function hasNewMemberMentor(facts: OrientationFacts): boolean {
+	return newMemberMentors(facts).length > 0;
+}
+
+/** The five items, in the order the checklist shows them. */
 export function orientationItems(facts: OrientationFacts): OrientationItem[] {
 	return [
 		{
@@ -126,6 +172,13 @@ export function orientationItems(facts: OrientationFacts): OrientationItem[] {
 			done: hasSetUpBaseCamp(facts),
 			selfTick: true,
 		},
+		{
+			key: "get-a-mentor",
+			label: "Get a mentor",
+			hint: "Your VP Education pairs you with an experienced member.",
+			done: hasNewMemberMentor(facts),
+			selfTick: false,
+		},
 	];
 }
 
@@ -134,6 +187,8 @@ export interface OrientationView {
 	inOrientation: boolean;
 	dismissed: boolean;
 	items: OrientationItem[];
+	/** Active new-member mentors, for the "Get a mentor" item (#939). */
+	mentors: OrientationMentor[];
 	doneCount: number;
 	total: number;
 	/** Every item is done. */
@@ -152,6 +207,7 @@ export function orientationView(facts: OrientationFacts): OrientationView {
 		inOrientation,
 		dismissed,
 		items,
+		mentors: newMemberMentors(facts),
 		doneCount,
 		total: items.length,
 		complete,
