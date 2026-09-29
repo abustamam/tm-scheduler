@@ -30,6 +30,19 @@
  * hash on a same-call apply would be ceremony that proves nothing, and a
  * reader finding one would reasonably assume a preview step exists.
  *
+ * ## `edit_agenda` hashes without a page
+ *
+ * The third shape (#966). `edit_agenda` previews and applies in TWO calls in
+ * the same conversation: the first returns `{plan, planHash}` and writes
+ * nothing, the second passes the hash back, and the apply re-plans under the
+ * meeting's row lock and refuses as `PLAN_STALE` on a mismatch. There IS a
+ * window between the two calls — a human reads the plan in it — so the hash
+ * detects something real; there is no stored plan and no
+ * confirm page, because a run sheet is neither hard to see nor hard to undo.
+ * Its plan carries every row's before-and-after start time, which is why an
+ * unrelated agenda edit (or a new speaker lengthening the speeches) makes it
+ * stale: those change what the human was shown.
+ *
  * Canonical form, and why each rule:
  *   - Object keys SORTED. A plan is assembled from database rows and literal
  *     objects; the key order of neither is a fact about the plan.

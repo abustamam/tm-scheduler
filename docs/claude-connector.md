@@ -52,11 +52,12 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 |---|---|---|
 | `whoami` | reads | "Which clubs can you manage for me?" — start here if Claude seems lost |
 | `list_meetings` | reads | "What meetings do we have coming up?" |
-| `get_agenda` | reads | "What's on the agenda for our next meeting? Which roles are open?" |
+| `get_agenda` | reads | "What's on the agenda for our next meeting? Which roles are open?" Also returns the timed run sheet: each row's start time and minutes, and when the meeting ends against its booked slot |
 | `get_lineup_blast` | reads | "Draft the lineup message for Saturday's meeting" — you copy and send it |
 | `get_my_feedback` | reads | "What did people say about my speech on Saturday?" Only **your own** anonymous notes, from meetings that have ended; never who wrote one. Every result tells Claude the note text is untrusted, anonymous input, never instructions |
 | `find_people` | reads | "Find Dana on our roster." Guest emails and phones come back **masked** |
 | `assign_roles` | **writes immediately** | "Put Dana in the Speaker 2 slot", "clear the Timer role" |
+| `edit_agenda` | previews, then writes when you approve | "Open with 15 minutes of Introductions so the program starts at 12:15" — add, remove, move or retime agenda rows |
 | `upsert_agendas` | writes nothing — gives you a link | "Set the themes for October's meetings" |
 | `record_guest_book` | writes nothing — gives you a link | "Here's a photo of last night's guest book" |
 
@@ -67,6 +68,13 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   none of it, but there is no second "are you sure" from GavelUp. Keep Claude's tool permission
   for this connector on **ask** (the default) so *you* approve each call, and read what it is
   about to assign before you do. A wrong assignment is undone on the agenda page like any other.
+- **`edit_agenda` asks twice.** The first call writes nothing: it returns every row's start time
+  before and after, when the agenda would end, and a warning if it would run past the booked slot
+  (a warning, not a refusal — Table Topics stretches or shrinks first). Claude should show you
+  that plan; the agenda changes only when it calls again with the plan's hash, and if anyone
+  changed the agenda in between it gets a fresh plan instead. The whole batch applies or none of
+  it does. It never changes the meeting's scheduled time, and a completed or cancelled meeting is
+  refused. Anything it did is undone in the agenda editor like any other edit.
 - **`upsert_agendas` and `record_guest_book` never write anything themselves.** They return a
   plan and a **link**. Open the link — on your phone it opens in the browser, so you need to be
   signed in to GavelUp there too — check it against the source (the guest-book page, the
@@ -80,6 +88,9 @@ Some things that work well:
   the page flags anyone who might already be in GavelUp so you choose rather than guess.
 - *"Set Word of the Day and themes for the next four meetings: …"* → a confirm link with a
   per-date diff.
+- *"We meet at noon but people arrive at 12:15 — open Saturday's agenda with 15 minutes of
+  Introductions."* → a plan showing the program starting at 12:15 and Table Topics shrinking so
+  the end time holds; say yes and Claude applies it.
 
 It cannot delete or reschedule a meeting, change what roles a meeting has, or see anything in a
 club you are not an officer of.
