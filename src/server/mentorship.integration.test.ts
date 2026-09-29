@@ -659,6 +659,58 @@ describe.skipIf(!hasTestDb)("who reads what (#939)", () => {
 		expect(theirs?.mentees[0]?.member.email).toMatch(/^member-/);
 	});
 
+	const deactivate = (id: string) =>
+		testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, id));
+	const reactivate = (id: string) =>
+		testDb.update(members).set({ status: "active" }).where(eq(members.id, id));
+
+	it("a deactivated mentor's pairing is dormant on both dashboards, and back on reactivation", async () => {
+		const c = await pairedClub();
+		await deactivate(c.mentor);
+		expect((await logic.loadMyMentorships(c.memberId))?.mentors).toEqual([]);
+		expect((await logic.loadMyMentorships(c.mentor))?.mentees).toEqual([]);
+		// The row is untouched, so reactivating restores it with no data change.
+		expect((await pairingsIn(c.clubId))[0]?.endedAt).toBeNull();
+		await reactivate(c.mentor);
+		expect(
+			(await logic.loadMyMentorships(c.memberId))?.mentors.map(
+				(m) => m.member.id,
+			),
+		).toEqual([c.mentor]);
+	});
+
+	it("the club list drops a pairing with a deactivated mentor, and its mentee counts as unpaired", async () => {
+		const c = await pairedClub();
+		await deactivate(c.mentor);
+		const list = await logic.loadClubMentorships(c.clubId);
+		expect(list.active).toEqual([]);
+		expect(list.unpaired.map((u) => u.id)).toContain(c.memberId);
+		expect(list.unpaired.map((u) => u.id)).not.toContain(c.mentor);
+	});
+
+	it("re-focusing a pairing whose mentor is inactive is refused and changes nothing", async () => {
+		const c = await pairedClub();
+		await deactivate(c.mentor);
+		await expect(
+			logic.setMentorshipFocus({
+				clubId: c.clubId,
+				mentorshipId: c.pairingId,
+				focus: "contest",
+				actorMemberId: c.adminMemberId,
+			}),
+		).rejects.toThrow(MENTORSHIP_MEMBER_INACTIVE_MESSAGE);
+		expect((await pairingsIn(c.clubId))[0]?.focus).toBe("new_member");
+		expect(
+			(await mentorshipLogRows(c.clubId)).filter(
+				(r) =>
+					(r.detail as { mentorship: string }).mentorship === "focus_changed",
+			),
+		).toHaveLength(0);
+	});
+
 	it("a member who is neither party sees nothing of it", async () => {
 		const c = await pairedClub();
 		const mine = await logic.loadMyMentorships(c.other);

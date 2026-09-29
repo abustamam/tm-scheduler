@@ -1274,6 +1274,21 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			expect(rows).toHaveLength(0);
 		});
 
+		it("keeps willing_to_mentor when only the ABSORBED row said so", async () => {
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			await testDb
+				.update(members)
+				.set({ willingToMentor: true })
+				.where(eq(members.id, absorbedId));
+			await collapse(keeperId, absorbedId);
+			const [k] = await testDb
+				.select({ w: members.willingToMentor })
+				.from(members)
+				.where(eq(members.id, keeperId));
+			expect(k?.w).toBe(true);
+		});
+
 		it("re-points created_by from the absorbed membership to the keeper", async () => {
 			const keeperId = await addMembership({ name: "Keeper" });
 			const absorbedId = await addMembership({ name: "Absorbed" });

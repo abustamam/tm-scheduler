@@ -302,6 +302,9 @@ export async function endMentorship(input: {
 	actorMemberId: string | null;
 }): Promise<void> {
 	await db.transaction(async (tx) => {
+		// First, like create and set-focus, so every mentorship writer orders
+		// against `collapseMemberships` the same way.
+		await lockClubForWrite(tx, input.clubId);
 		const row = await lockActivePairing(tx, input.clubId, input.mentorshipId);
 		const endedAt = new Date();
 		await tx
@@ -337,6 +340,15 @@ export async function setMentorshipFocus(input: {
 		await db.transaction(async (tx) => {
 			await lockClubForWrite(tx, input.clubId);
 			const row = await lockActivePairing(tx, input.clubId, input.mentorshipId);
+			// Same check as a new pairing: both still in the club and ACTIVE. A
+			// pairing with a lapsed member is dormant (the reads hide it), and
+			// re-focusing it would be editing something nobody can see.
+			await assertPairable(
+				tx,
+				input.clubId,
+				row.mentorMemberId,
+				row.menteeMemberId,
+			);
 			await tx
 				.update(mentorships)
 				.set({ focus: input.focus, focusOther: focusOtherValue })
@@ -365,6 +377,17 @@ export async function setMentorshipFocus(input: {
 // ---------------------------------------------------------------------------
 
 const other = alias(members, "other_party");
+const selfParty = alias(members, "self_party");
+
+/**
+ * A pairing COUNTS (is shown, ticks "Get a mentor", keeps a mentee off the
+ * unpaired list) only while it is not ended AND both parties are ACTIVE
+ * members. Deactivating a member leaves the row alone, so reactivating them
+ * restores the pairing with no data change; until then it is dormant. The
+ * write side (`assertPairable`) refuses an inactive party for the same reason.
+ * Restated in SQL in each reader below and in `loadOrientationFacts`; the
+ * client-side statement is `isActivePairing` in `#/lib/mentorship`.
+ */
 
 /**
  * Active pairings with `membershipId` on one side, each carrying the OTHER
@@ -392,7 +415,15 @@ async function activePairingsFor(
 		})
 		.from(mentorships)
 		.innerJoin(other, eq(other.id, otherCol))
-		.where(and(eq(self, membershipId), isNull(mentorships.endedAt)))
+		.innerJoin(selfParty, eq(selfParty.id, self))
+		.where(
+			and(
+				eq(self, membershipId),
+				isNull(mentorships.endedAt),
+				eq(other.status, "active"),
+				eq(selfParty.status, "active"),
+			),
+		)
 		.orderBy(asc(mentorships.startedAt), asc(mentorships.id));
 	return rows.map((r) => ({
 		id: r.id,
@@ -487,7 +518,14 @@ export async function loadClubMentorships(
 			.from(mentorships)
 			.innerJoin(mentorM, eq(mentorM.id, mentorships.mentorMemberId))
 			.innerJoin(menteeM, eq(menteeM.id, mentorships.menteeMemberId))
-			.where(and(eq(mentorships.clubId, clubId), isNull(mentorships.endedAt)))
+			.where(
+				and(
+					eq(mentorships.clubId, clubId),
+					isNull(mentorships.endedAt),
+					eq(mentorM.status, "active"),
+					eq(menteeM.status, "active"),
+				),
+			)
 			.orderBy(asc(menteeM.name), asc(mentorM.name)),
 		db
 			.select({
@@ -501,13 +539,16 @@ export async function loadClubMentorships(
 					eq(members.clubId, clubId),
 					eq(members.status, "active"),
 					notExists(
+						// A mentee whose only mentor is inactive counts as unpaired.
 						db
 							.select({ one: sql`1` })
 							.from(mentorships)
+							.innerJoin(mentorM, eq(mentorM.id, mentorships.mentorMemberId))
 							.where(
 								and(
 									eq(mentorships.menteeMemberId, members.id),
 									isNull(mentorships.endedAt),
+									eq(mentorM.status, "active"),
 								),
 							),
 					),

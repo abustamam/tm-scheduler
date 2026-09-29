@@ -1,19 +1,23 @@
 import { Link } from "@tanstack/react-router";
-import { HeartHandshake, Loader2, Mail } from "lucide-react";
+import { HeartHandshake, Loader2 } from "lucide-react";
 import { useId, useState } from "react";
+import { MemberContactLinks } from "#/components/members/member-contact-links";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
-import { mailtoHref } from "#/lib/mailto";
 import {
 	MENTORSHIP_FOCUS_LABELS,
 	MENTORSHIP_FOCUS_OTHER_MAX,
 	MENTORSHIP_FOCUSES,
-	type MentorCandidate,
 	type MentorshipFocus,
 	mentorshipFocusText,
 } from "#/lib/mentorship";
+import type {
+	ClubMentorships,
+	MemberMentorships,
+	MentorshipRow,
+	MyMentorships,
+} from "#/server/mentorship";
 
 /**
  * Mentorship (#939): member-to-member pairings inside one club.
@@ -33,24 +37,11 @@ export const YOUR_MENTEES_HEADING = "Your mentees";
 export const MEMBER_MENTORING_HEADING = "Member mentoring";
 export const MENTORSHIP_ADMIN_HEADING = "Mentorship";
 
-/** A pairing as a party sees it: the OTHER party, with contact. */
-export interface MentorshipPartyRow {
-	id: string;
-	focus: MentorshipFocus | null;
-	focusOther: string | null;
-	member: {
-		id: string;
-		name: string;
-		email: string | null;
-		phone: string | null;
-	};
-}
-
-export interface MyMentorshipsView {
-	willingToMentor: boolean;
-	mentors: MentorshipPartyRow[];
-	mentees: MentorshipPartyRow[];
-}
+/** The server's payload shapes, under the names the components use. */
+export type MentorshipPartyRow = MentorshipRow;
+export type MyMentorshipsView = MyMentorships;
+export type MemberMentorshipsView = MemberMentorships;
+export type ClubMentoringView = ClubMentorships;
 
 const CARD =
 	"overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]";
@@ -76,22 +67,11 @@ function PartyLine({ row }: { row: MentorshipPartyRow }) {
 			</div>
 			{row.member.email || row.member.phone ? (
 				<div className="mt-0.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs">
-					{row.member.email ? (
-						<a
-							href={mailtoHref(row.member.email)}
-							data-slot="wa-email"
-							className="inline-flex items-center gap-1 text-primary hover:underline"
-						>
-							<Mail className="size-3" aria-hidden />
-							{row.member.email}
-						</a>
-					) : null}
-					{row.member.phone ? (
-						<WhatsAppPhoneLink
-							phone={row.member.phone}
-							name={row.member.name}
-						/>
-					) : null}
+					<MemberContactLinks
+						name={row.member.name}
+						email={row.member.email}
+						phone={row.member.phone}
+					/>
 				</div>
 			) : (
 				<div className="mt-0.5 text-xs text-[var(--sea-ink-soft)]">
@@ -182,18 +162,6 @@ export function MentorshipCard({
 			</div>
 		</section>
 	);
-}
-
-export interface ClubMentoringView {
-	active: {
-		id: string;
-		focus: MentorshipFocus | null;
-		focusOther: string | null;
-		mentor: { id: string; name: string };
-		mentee: { id: string; name: string };
-	}[];
-	unpaired: { id: string; name: string; inOrientation: boolean }[];
-	willing: { id: string; name: string }[];
 }
 
 function MemberLink({ id, name }: { id: string; name: string }) {
@@ -306,10 +274,6 @@ export function ClubMentoringCard({
 			</div>
 		</section>
 	);
-}
-
-export interface MemberMentorshipsView extends MyMentorshipsView {
-	candidates: MentorCandidate[];
 }
 
 export interface NewPairing {

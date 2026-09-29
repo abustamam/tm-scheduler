@@ -90,6 +90,7 @@ export async function loadOrientationFacts(
 		.select({
 			personId: members.personId,
 			clubId: members.clubId,
+			status: members.status,
 			startedAt: members.orientationStartedAt,
 			dismissedAt: members.orientationDismissedAt,
 			basecampSetupAt: members.basecampSetupAt,
@@ -137,7 +138,16 @@ export async function loadOrientationFacts(
 			})
 			.from(mentorships)
 			.innerJoin(mentor, eq(mentor.id, mentorships.mentorMemberId))
-			.where(eq(mentorships.menteeMemberId, membershipId))
+			// A pairing counts only while BOTH parties are active
+			// (`mentorship-logic.ts`); an inactive mentor's pairing is dormant
+			// and does not tick "Get a mentor". The mentee's own status is
+			// checked on `row` below.
+			.where(
+				and(
+					eq(mentorships.menteeMemberId, membershipId),
+					eq(mentor.status, "active"),
+				),
+			)
 			.orderBy(asc(mentorships.startedAt)),
 		loadClubDefaultCountryCode(row.clubId),
 	]);
@@ -148,7 +158,7 @@ export async function loadOrientationFacts(
 		basecampSetupAt: row.basecampSetupAt,
 		activePathCount: paths[0]?.n ?? 0,
 		slots,
-		menteePairings: pairings.map((p) => ({
+		menteePairings: (row.status === "active" ? pairings : []).map((p) => ({
 			...p,
 			mentorPhone: coalesceToE164(p.mentorPhone, cc),
 		})),

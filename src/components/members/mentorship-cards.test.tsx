@@ -65,6 +65,7 @@ const party = (
 	id: over.id ?? `p-${over.name ?? "x"}`,
 	focus: over.focus ?? "new_member",
 	focusOther: over.focusOther ?? null,
+	startedAt: new Date("2026-09-01T00:00:00Z"),
 	member: over.member ?? {
 		id: `m-${over.name ?? "x"}`,
 		name: over.name ?? "Maya Mentor",
@@ -167,6 +168,7 @@ describe("ClubMentoringCard, the admin's list (#939)", () => {
 				id: "p1",
 				focus: "contest",
 				focusOther: null,
+				startedAt: new Date("2026-09-01T00:00:00Z"),
 				mentor: { id: "m1", name: "Maya Mentor" },
 				mentee: { id: "m2", name: "Nia Newbie" },
 			},

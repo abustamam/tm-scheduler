@@ -323,6 +323,27 @@ describe.skipIf(!hasTestDb)("orientation facts and view (#940)", () => {
 		expect(view?.mentors[0]?.phone).toMatch(/^\+\d+/);
 	});
 
+	it("an active new_member pairing with a DEACTIVATED mentor does not tick Get a mentor (#939 review)", async () => {
+		const s = await seed();
+		await testDb.insert(mentorships).values({
+			clubId: s.clubId,
+			mentorMemberId: s.adminMemberId,
+			menteeMemberId: s.memberId,
+			focus: "new_member",
+		});
+		const done = async () =>
+			(await logic.getOrientation(s.memberId))?.items.find(
+				(i) => i.key === "get-a-mentor",
+			)?.done;
+		expect(await done()).toBe(true);
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, s.adminMemberId));
+		expect(await done()).toBe(false);
+		expect((await logic.getOrientation(s.memberId))?.mentors).toEqual([]);
+	});
+
 	it("a pairing where the member is the MENTOR does not tick their own Get a mentor", async () => {
 		const s = await seed();
 		await testDb.insert(mentorships).values({

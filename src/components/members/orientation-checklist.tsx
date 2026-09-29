@@ -1,9 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { Check, Loader2, Mail } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { useState } from "react";
+import { MemberContactLinks } from "#/components/members/member-contact-links";
 import { Button } from "#/components/ui/button";
-import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
-import { mailtoHref } from "#/lib/mailto";
 import {
 	BASE_CAMP_SECTION_HASH,
 	type OrientationItem,
@@ -161,17 +160,7 @@ function MentorContacts({ mentors }: { mentors: OrientationMentor[] }) {
 					<span className="font-semibold text-[var(--sea-ink)]">
 						Your mentor: {m.name}
 					</span>
-					{m.email ? (
-						<a
-							href={mailtoHref(m.email)}
-							data-slot="wa-email"
-							className="inline-flex items-center gap-1 text-primary hover:underline"
-						>
-							<Mail className="size-3" aria-hidden />
-							{m.email}
-						</a>
-					) : null}
-					{m.phone ? <WhatsAppPhoneLink phone={m.phone} name={m.name} /> : null}
+					<MemberContactLinks name={m.name} email={m.email} phone={m.phone} />
 				</li>
 			))}
 		</ul>

@@ -113,6 +113,9 @@ export async function collapseMemberships(
 			email: keeper.email ?? absorbed.email,
 			phone: keeper.phone ?? absorbed.phone,
 			preferredName: keeper.preferredName ?? absorbed.preferredName,
+			// #939: willing to mentor if EITHER row said so. The flag is the
+			// member's own statement, and one human said it on one of the two.
+			willingToMentor: keeper.willingToMentor || absorbed.willingToMentor,
 		})
 		.where(eq(members.id, keeperId));
 

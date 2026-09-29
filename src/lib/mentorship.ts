@@ -43,8 +43,12 @@ export function mentorshipFocusText(
 	return MENTORSHIP_FOCUS_LABELS[focus];
 }
 
-/** Active ⇔ not ended. The one statement of it. */
-export function isActivePairing(p: { endedAt: Date | string | null }): boolean {
+/**
+ * Active ⇔ not ended: the CLIENT-SIDE statement of it. The server restates it
+ * in SQL (`ended_at IS NULL`) in each reader, where a pairing must ALSO have
+ * both parties active to count (`mentorship-logic.ts`).
+ */
+export function isActivePairing(p: { endedAt: Date | null }): boolean {
 	return p.endedAt === null;
 }
 
@@ -55,7 +59,7 @@ export function isActivePairing(p: { endedAt: Date | string | null }): boolean {
  */
 export function isNewMemberMentorship(p: {
 	focus: MentorshipFocus | null;
-	endedAt: Date | string | null;
+	endedAt: Date | null;
 }): boolean {
 	return isActivePairing(p) && p.focus === "new_member";
 }
