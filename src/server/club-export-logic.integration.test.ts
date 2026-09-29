@@ -536,6 +536,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			type: "guest",
 			attended: "yes",
 			status: "present",
+			mode: null,
 		});
 		expect(f.rows).toContainEqual(
 			expect.objectContaining({
@@ -554,6 +555,8 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 				meeting_id: a.meetingEarlyId,
 				meeting_date: "2026-03-09",
 				speaker: "Member User",
+				member_or_guest_id: a.club.memberId,
+				speaker_type: "member",
 				title: `MINE${RUN} Speech`,
 				pathways_path: "Dynamic Leadership",
 				project: "Ice Breaker",
@@ -606,6 +609,9 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 				email: expect.stringContaining("@test.example"),
 				phone: "+14155550199",
 				stage: "prospect",
+				kind: "visitor",
+				home_club: null,
+				introduced_by_member_id: null,
 				first_visit: "2026-03-09",
 				visits: 2,
 			},

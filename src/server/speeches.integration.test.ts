@@ -262,7 +262,7 @@ describe.skipIf(!hasTestDb)("unscheduled speeches (ADR-0009 / #102)", () => {
 					clubId: seed.clubId,
 					archived: true,
 				}),
-			).rejects.toThrow(/owned by a member of this club/);
+			).rejects.toThrow("That speech doesn't belong to this club.");
 			await cleanup(otherClub.clubId, [
 				otherClub.adminUserId,
 				otherClub.memberUserId,

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lt, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	bcmProjectProgress,
@@ -683,7 +683,7 @@ async function fetchDeliveredWins(
 	pathIds: string[],
 ): Promise<WinRow[]> {
 	if (personIds.length === 0 || pathIds.length === 0) return [];
-	return db
+	const rows = await db
 		.select({
 			personId: speeches.personId,
 			projectId: pathwaysProjects.id,
@@ -700,12 +700,17 @@ async function fetchDeliveredWins(
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.where(
 			and(
+				// A guest's speech (#1046) never counts toward Pathways progress.
+				isNotNull(speeches.personId),
 				inArray(speeches.personId, personIds),
 				inArray(pathwaysProjects.pathId, pathIds),
 				ne(meetings.status, "cancelled"),
 				lt(meetings.scheduledAt, new Date()),
 			),
 		);
+	return rows.flatMap(({ personId, ...r }) =>
+		personId === null ? [] : [{ ...r, personId }],
+	);
 }
 
 interface CatalogRow {

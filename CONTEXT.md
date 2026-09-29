@@ -90,6 +90,17 @@ the nouns in `src/db/schema.ts`.
   guest-held slots render the name with a subtle "· Guest" marker and count as filled. Admin-only
   to assign (not on the public/TMOD view). A guest also carries a pipeline `stage` and, once
   promoted, a `converted_membership_id` — see **Guest pipeline**. See ADR-0013 / #151.
+- **Guest kind** — what sort of non-member a guest row is (`guests.kind`, `guest_kind` enum,
+  #1046). `visitor` (the default, and every guest that existed before the column did) is someone
+  checking the club out — the prospect the **Guest pipeline** exists for. `visiting_toastmaster`
+  and `guest_speaker` are Toastmasters from ANOTHER club, attending or speaking: guests here, but
+  never prospects. `home_club` is free text naming their own club, and `introduced_by_member_id`
+  the member who brought them (SET NULL when that member is deleted). A guest may OWN a
+  **Speech** (see there). The FK cascades (so deleting the club takes it), but deleting a guest
+  who owns a speech is REFUSED (`applyDeleteGuest`, `GUEST_HAS_SPEECHES_MESSAGE`): it is club
+  history, not a mistake. A guest's speeches stay guest-owned through convert-to-member and
+  link-to-member until the importer defines the policy (#1051). Storage only for now: imported
+  history (below) is where the non-visitor kinds first appear.
 - **Guest pipeline** — the VP-Membership funnel over the `guests` entity (ADR-0018 / #208):
   **capture → stage-tracked prospect list → convert-to-member**. A guest's **stage**
   (`guest_stage` enum) is `prospect → following_up → joined → lost`: new guests default
@@ -342,6 +353,22 @@ the nouns in `src/db/schema.ts`.
   "has this speaker actually named their speech?", shared by the write path (`normalizeSpeech`) and
   every reader, because a plain non-blank check reads the app's own placeholder as a finished
   speech. See ADR-0009 / #79 / #660.
+  **Exactly one owner** (#1046): a Person (`person_id`) OR a **Guest** (`guest_id`), held by the
+  `speeches_single_owner` CHECK. A guest's speech is a visiting Toastmaster's, from imported
+  history; it has a NULL `person_id`, so every reader that means "a Person's speeches" filters
+  `person_id IS NOT NULL` (or reaches speeches through a Person, which excludes it anyway). It never
+  counts toward Pathways progress, a member's speech log, a Person merge, or DCP, and it is not in
+  the reschedule pool. The club export lists it in `speeches.csv` with `speaker_type = guest`.
+- **Imported history** — a club's past records brought in from another tool (epic #1054; the
+  source today is `easy_speak`, the `import_source` enum). Two tables hold the bookkeeping, both
+  cascading from the club. `club_imports` keeps each uploaded bundle RAW for good (`bundle` jsonb,
+  `bundle_sha256` unique per club, `applied_at` NULL until applied), so an import can be re-read
+  without asking the club to export again. `import_refs` maps a source id to the row it became,
+  keyed `(club_id, source, kind, source_id)`, so a re-run UPDATES rather than duplicating;
+  `kind` is text validated by `IMPORT_REF_KINDS` (`src/lib/import-refs.ts`) rather than a pgEnum,
+  so a new kind needs no migration, and `target_id` is deliberately not a foreign key because it
+  points into a different table per kind. Applying one logs a single `history_imported` activity
+  row. `meeting_attendance.mode` (`in_person` / `online`, NULL = not recorded) arrived with it.
 - **Minutes** — the post-meeting *record of what actually happened*, distinct from the agenda
   (the plan). Not its own table: the `meetings` row is the header, and the record is the three
   child sets below (attendance, Table Topics speakers, awards). Admin-authored on the meeting

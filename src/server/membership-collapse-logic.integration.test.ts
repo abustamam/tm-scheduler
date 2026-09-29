@@ -535,6 +535,31 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(row?.invitedByMemberId).toBe(keeperId);
 	});
 
+	it("keeps a guest's introducer on the keeper (#1046)", async () => {
+		// Without the re-point, deleting the absorbed membership SETs NULL the
+		// introducer and the guest silently loses who brought them.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		const [guest] = await testDb
+			.insert(guests)
+			.values({
+				clubId: seed.clubId,
+				name: "Introduced Guest",
+				introducedByMemberId: absorbedId,
+			})
+			.returning({ id: guests.id });
+		if (!guest) throw new Error("Failed to insert guest");
+
+		await collapse(keeperId, absorbedId);
+
+		const [row] = await testDb
+			.select({ introducedBy: guests.introducedByMemberId })
+			.from(guests)
+			.where(eq(guests.id, guest.id));
+		expect(row).toBeDefined();
+		expect(row?.introducedBy).toBe(keeperId);
+	});
+
 	it("keeps the absorbed membership's feedback notes, on the keeper (#984)", async () => {
 		// The FK cascades, so without the re-point the merge DELETES these notes —
 		// a recipient loses what people wrote them. The drift-guard only proves
@@ -768,6 +793,9 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			// #529 — who owns a club action item.
 			"club_action_items.owner_member_id",
 			"guests.converted_membership_id",
+			// #1046 — the member who introduced a guest. Nullable attribution in
+			// no unique, so it re-points plainly.
+			"guests.introduced_by_member_id",
 			"activity_log.actor_member_id",
 			// #510 — digital voting. `meeting_votes.voter_member_id` carries a
 			// unique (session, voter), so it re-points via the delete-then-update

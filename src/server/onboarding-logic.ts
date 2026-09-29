@@ -8,7 +8,7 @@
 // module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). See `members-logic.ts` and
 // `server-modules.guard.test.ts`.
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -786,7 +786,10 @@ async function personsWithOtherClubHistory(
 		.selectDistinct({ personId: speeches.personId })
 		.from(speeches)
 		.innerJoin(roleSlots, eq(roleSlots.speechId, speeches.id))
-		.where(inArray(speeches.personId, personIds));
+		// A guest's speech (#1046) is no Person's history.
+		.where(
+			and(isNotNull(speeches.personId), inArray(speeches.personId, personIds)),
+		);
 	const credited = await tx
 		.selectDistinct({ personId: pathEnrollments.personId })
 		.from(pathLevelProgress)
@@ -813,7 +816,9 @@ async function personsWithOtherClubHistory(
 				sql`${projectCompletionMarks.markedByMemberId} is not null`,
 			),
 		);
-	return [...spoke, ...credited, ...marked].map((r) => r.personId);
+	return [...spoke, ...credited, ...marked].flatMap((r) =>
+		r.personId === null ? [] : [r.personId],
+	);
 }
 
 /** Drizzle wraps the driver's error in `cause`, so look a few levels down. */

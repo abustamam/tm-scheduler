@@ -1144,6 +1144,10 @@ export interface DeleteGuestInput {
 	actorMemberId: string | null;
 }
 
+/** `applyDeleteGuest` refuses a guest who owns a speech (#1046). */
+export const GUEST_HAS_SPEECHES_MESSAGE =
+	"This guest has speeches on record, so they can't be deleted — mark them lost instead.";
+
 export interface DeleteGuestResult {
 	ok: true;
 	/** Slots that were held by this guest and have been reset to Open. */
@@ -1168,6 +1172,13 @@ export interface DeleteGuestResult {
  *   they are the record of someone who, by the officer's own action, was never
  *   there. That is also why a real visitor should be marked `lost` rather than
  *   deleted; delete is for mistakes.
+ * - A guest who OWNS a speech (`speeches.guest_id`, #1046: a visiting
+ *   Toastmaster's speech from imported history) is REFUSED
+ *   ({@link GUEST_HAS_SPEECHES_MESSAGE}). The FK would cascade the speech away
+ *   with the row, and a speech on record is club history, not a mistake. The
+ *   check runs after the guest row is locked, in this transaction, so a speech
+ *   inserted concurrently is either seen or waits on the lock. (Deleting the
+ *   whole CLUB still cascades them; that is the FK, deliberately unchanged.)
  *
  * Everything runs in ONE transaction, and both reads that gate a write take the
  * write's own predicate with them — the concurrent writers here are not
@@ -1215,6 +1226,12 @@ export async function applyDeleteGuest(
 				"This guest is now a club member — remove them from the roster instead.",
 			);
 		}
+		const [spoke] = await tx
+			.select({ id: speeches.id })
+			.from(speeches)
+			.where(eq(speeches.guestId, input.guestId))
+			.limit(1);
+		if (spoke) throw new Error(GUEST_HAS_SPEECHES_MESSAGE);
 
 		const held = await tx
 			.select({ id: roleSlots.id })
