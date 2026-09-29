@@ -835,10 +835,12 @@ export const members = pgTable(
 		// orientation, so no insert site has to remember to. Migration 0102 adds
 		// the column WITHOUT a default and only then sets one, in two statements:
 		// a one-statement `ADD COLUMN … DEFAULT now()` stamps EVERY EXISTING row,
-		// which would put every veteran in orientation. Roster imports opt out
-		// with an explicit null (`import-members-logic.ts`): a Toastmasters
-		// export brings in long-standing members. An admin can start it later
-		// from the member page (`startOrientation`).
+		// which would put every veteran in orientation. Three inserts opt out
+		// with an explicit null: the roster CSV import (`import-members-logic.ts`)
+		// and a pasted bulk roster (`applyBulkImport` without
+		// `startOrientation: true`), which bring in long-standing members, and a
+		// new club's founding admin (`onboarding-logic.ts`). An admin can start
+		// it later from the member page (`startOrientation`).
 		orientationStartedAt: timestamp("orientation_started_at").defaultNow(),
 		// "I'm all set": hides the checklist for good. Written only by the member.
 		orientationDismissedAt: timestamp("orientation_dismissed_at"),

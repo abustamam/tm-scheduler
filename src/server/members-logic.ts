@@ -656,6 +656,13 @@ export const bulkImportSchema = z.object({
 			}),
 		)
 		.min(1),
+	// New-member orientation (#940, maintainer decision): only the one-row
+	// Quick add passes `true`. A pasted roster brings in existing members, so it
+	// sends nothing and every row lands with `orientation_started_at` null.
+	// OMITTED means null on purpose: a tab loaded before this deploy sends no
+	// flag, and failing that way never shows a veteran the checklist, while an
+	// admin can still start it from the member page.
+	startOrientation: z.boolean().optional(),
 });
 type BulkImportInput = z.infer<typeof bulkImportSchema> & RosterActor;
 
@@ -723,6 +730,11 @@ export async function applyBulkImport(
 					email,
 					phone,
 					clubRole: "member",
+					// Leave the column to its DEFAULT now() only when asked; see
+					// `startOrientation` on the schema above.
+					...(input.startOrientation === true
+						? {}
+						: { orientationStartedAt: null }),
 				})
 				.returning({ id: members.id });
 			if (!m) throw new Error("Failed to insert member.");

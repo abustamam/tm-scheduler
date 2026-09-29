@@ -175,14 +175,18 @@ the nouns in `src/db/schema.ts`.
   pure, in `src/lib/orientation.ts`, for mentorship (#939) and the VPE stalled view (#942) to reuse.
   A Membership is **in orientation** when `members.orientation_started_at` is set, and the
   checklist shows until every item is done or the member dismisses it ("I'm all set",
-  `orientation_dismissed_at`, permanent). **Who starts in it:** every Membership INSERTED after
-  migration 0102, through the column's `DEFAULT now()` (convert-to-member, add member, onboarding);
-  memberships that existed before it stay null, and so does a **roster import**, which sets an
-  explicit null because a Toastmasters export brings in long-standing members (maintainer decision).
-  Reusing an existing Membership (a convert that reactivates a lapsed one) inserts nothing and
-  keeps what it had. An **admin can start it** for any member from the member page, which also
-  clears an earlier dismissal. The member's tick and dismiss write only their OWN row, resolved
-  from the session; nobody can tick or dismiss for someone else.
+  `orientation_dismissed_at`, permanent). **Who starts in it** (maintainer decisions): a
+  Membership INSERTED after migration 0102 through the column's `DEFAULT now()` — convert-to-member
+  and the roster's one-row **Quick add** (which sends `startOrientation: true` to
+  `bulkImportMembers`). Everything else sets an explicit null: memberships that existed before
+  0102, a **roster CSV import** and a **pasted bulk roster** (both bring in long-standing members;
+  the bulk fn treats an OMITTED flag as null, so a stale tab fails safe), and the **founding admin**
+  a new club is provisioned with, chartered or not. Reusing an existing Membership (a convert that
+  reactivates a lapsed one) inserts nothing and keeps what it had. "Choose a path" counts only
+  LIVE (non-archived) enrollments. An **admin can start it** for any ACTIVE member from the member
+  page (logged as `member_edit`), and starting it again re-shows a checklist the member had
+  dismissed. The member's tick and dismiss write only their OWN row, resolved from the session;
+  nobody can tick or dismiss for someone else.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

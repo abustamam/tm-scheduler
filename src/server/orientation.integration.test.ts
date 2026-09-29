@@ -676,30 +676,58 @@ describe.skipIf(!hasTestDb)(
 			expect(m?.startedAt).toBeInstanceOf(Date);
 		});
 
-		it("ADD MEMBER does", async () => {
-			const s = await seed();
-			const { applyBulkImport } = await import("./members-logic");
-			const result = await applyBulkImport({
+		/** Rows through `applyBulkImport`, composed the way the server fn is:
+		 *  validator (`bulkImportSchema.parse`), then logic. */
+		async function bulkAdd(
+			s: Awaited<ReturnType<typeof seed>>,
+			names: string[],
+			extra: Record<string, unknown> = {},
+		) {
+			const { applyBulkImport, bulkImportSchema } = await import(
+				"./members-logic"
+			);
+			const input = bulkImportSchema.parse({
 				clubId: s.clubId,
-				actorMemberId: s.adminMemberId,
-				rows: [
-					{
-						name: `Added Member ${randomUUID()}`,
-						email: "",
-						phone: "",
-						office: "",
-					},
-				],
+				rows: names.map((name) => ({ name, email: "", phone: "", office: "" })),
+				...extra,
 			});
-			expect(result.insertedIds).toHaveLength(1);
-			const [m] = await testDb
+			const result = await applyBulkImport({
+				...input,
+				actorMemberId: s.adminMemberId,
+			});
+			expect(result.insertedIds).toHaveLength(names.length);
+			return testDb
 				.select({ startedAt: members.orientationStartedAt })
 				.from(members)
 				.where(inArray(members.id, result.insertedIds));
-			expect(m?.startedAt).toBeInstanceOf(Date);
+		}
+
+		it("QUICK ADD (one row, startOrientation: true) does", async () => {
+			const s = await seed();
+			const rows = await bulkAdd(s, [`Quick Add ${randomUUID()}`], {
+				startOrientation: true,
+			});
+			expect(rows[0]?.startedAt).toBeInstanceOf(Date);
 		});
 
-		it("ONBOARDING (the new club's first admin) does", async () => {
+		it("a PASTED ROSTER (startOrientation: false) does not (maintainer decision)", async () => {
+			const s = await seed();
+			const rows = await bulkAdd(
+				s,
+				[`Pasted A ${randomUUID()}`, `Pasted B ${randomUUID()}`],
+				{ startOrientation: false },
+			);
+			expect(rows).toHaveLength(2);
+			for (const r of rows) expect(r.startedAt).toBeNull();
+		});
+
+		it("a bulk add with the flag OMITTED (the paste dialog, or a pre-deploy tab) does not", async () => {
+			const s = await seed();
+			const rows = await bulkAdd(s, [`Omitted ${randomUUID()}`]);
+			expect(rows[0]?.startedAt).toBeNull();
+		});
+
+		it("ONBOARDING's founding admin does not (maintainer decision)", async () => {
 			const { createClubSchema, createClubWithAdmin } = await import(
 				"./onboarding-logic"
 			);
@@ -718,7 +746,7 @@ describe.skipIf(!hasTestDb)(
 				.from(members)
 				.where(eq(members.clubId, res.clubId));
 			expect(rows).toHaveLength(1);
-			expect(rows[0]?.startedAt).toBeInstanceOf(Date);
+			expect(rows[0]?.startedAt).toBeNull();
 		});
 	},
 );

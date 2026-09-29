@@ -1183,7 +1183,13 @@ function AddMemberDialog({
 		setBusy(true);
 		try {
 			const result = await bulkImportMembers({
-				data: { clubId, rows: [{ name, email, phone, office: "" }] },
+				data: {
+					clubId,
+					rows: [{ name, email, phone, office: "" }],
+					// A newly joined member: starts the first-weeks checklist (#940).
+					// The paste dialog below sends nothing, so a pasted roster does not.
+					startOrientation: true,
+				},
 			});
 			if (result.inserted === 1) {
 				toast.success(`Added ${name.trim()}.`);
