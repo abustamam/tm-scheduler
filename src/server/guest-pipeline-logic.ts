@@ -771,6 +771,12 @@ export interface PipelineGuestRow {
 	} | null;
 	/** DISTINCT non-cancelled meetings this guest has been invited to (#899). */
 	inviteCount: number;
+	/**
+	 * Those meetings' ids. `lastInvite` is the latest by `invitedAt`, so it
+	 * cannot say whether the guest is invited to the NEXT meeting — a guest
+	 * invited to Oct 3 and then Oct 10 has Oct 10 as `lastInvite`.
+	 */
+	invitedMeetingIds: string[];
 	createdAt: Date;
 }
 
@@ -1055,6 +1061,7 @@ export async function loadGuestPipeline(
 			heldSlotCount: Number(slotsByGuest.get(r.id)?.heldSlotCount ?? 0),
 			lastInvite: invitesByGuest.get(r.id)?.last ?? null,
 			inviteCount: invitesByGuest.get(r.id)?.meetings.size ?? 0,
+			invitedMeetingIds: [...(invitesByGuest.get(r.id)?.meetings ?? [])],
 			createdAt: r.createdAt,
 		};
 	});

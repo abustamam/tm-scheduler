@@ -435,9 +435,12 @@ function GuestInvite({
 			: !phone && !email
 				? "Add an email or phone to invite"
 				: null;
-	// Already invited to this very meeting: the badge on the left says so, and
-	// the control becomes a re-send rather than repeating the date as if new.
-	const alreadyInvited = !!next && guest.lastInvite?.meetingId === next.id;
+	// Already invited to this very meeting: the control becomes a re-send
+	// rather than repeating the date as if new. Read from every invited meeting,
+	// not `lastInvite`, which is only the latest-opened draft. A disabled control
+	// keeps the date so its reason ("Add an email or phone…") reads against it.
+	const alreadyInvited =
+		!!next && !reason && guest.invitedMeetingIds.includes(next.id);
 	const label = !next
 		? "Invite"
 		: alreadyInvited
@@ -541,7 +544,10 @@ function GuestRow({
 
 	return (
 		<div className="flex flex-col gap-3 border-b border-[var(--line)] px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
-			<div className="flex min-w-0 items-center gap-3">
+			{/* The identity side keeps a floor and the controls wrap instead. With
+			    the controls `shrink-0`, a laptop-width pane squeezed the name,
+			    contact and invite badge into a ~40px column, one word a line. */}
+			<div className="flex min-w-0 items-center gap-3 sm:w-60 sm:shrink-0">
 				<MemberAvatar
 					tone={toneFromSeed(guest.id)}
 					initials={initialsOf(guest.name)}
@@ -557,7 +563,7 @@ function GuestRow({
 							{invited.upcoming ? (
 								<span
 									data-slot="guest-invited-badge"
-									className="mr-0.5 inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 font-semibold text-[var(--palm)]"
+									className="mr-0.5 inline-block rounded-full border border-[var(--line)] bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)]"
 								>
 									{invited.lead}
 								</span>
@@ -616,7 +622,7 @@ function GuestRow({
 				</div>
 			</div>
 
-			<div className="flex shrink-0 flex-wrap items-center gap-1.5">
+			<div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:justify-end">
 				{invitable ? (
 					<GuestInvite
 						guest={guest}
