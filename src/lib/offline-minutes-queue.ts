@@ -10,6 +10,7 @@
 // bundle). `MinutesData` / `AttendanceStatus` / `AwardCategory` are imported
 // TYPE-ONLY from the server logic module, so they are erased at build time.
 import type {
+	AttendanceMode,
 	AttendanceStatus,
 	AwardCategory,
 	MinutesData,
@@ -37,6 +38,14 @@ export type MinutesOp =
 			queuedAt: number;
 			memberId: string;
 			status: AttendanceStatus;
+			/**
+			 * In the room or on the call (#1049). Optional, and NOT for tidiness: an
+			 * op persisted in a device's IndexedDB before #1049 has no such key, and
+			 * absent must replay as "leave the stored mode alone" rather than as a
+			 * value. Only ever sent with `status: "present"` — the server refuses a
+			 * mode on anything else, and clears it itself.
+			 */
+			mode?: AttendanceMode;
 	  }
 	| {
 			type: "addGuest";
@@ -48,6 +57,12 @@ export type MinutesOp =
 			name: string;
 			/** Present ⇒ new-guest create path; absent ⇒ existing `guestId`. */
 			newGuest?: NewGuestPayload;
+			/**
+			 * In the room or on the call (#1049). With one, an existing guest row's
+			 * mode is updated — roll mode's guest toggle is this op. Optional for the
+			 * reason `setAttendance.mode` is: ops queued before #1049 lack it.
+			 */
+			mode?: AttendanceMode;
 	  }
 	| {
 			type: "removeGuest";

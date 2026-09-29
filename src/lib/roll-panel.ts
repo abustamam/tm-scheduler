@@ -9,6 +9,12 @@
 // would be two functions wearing one name.
 
 import {
+	type AttendanceMode,
+	formatModeSplit,
+	type ModeSplit,
+	tallyModes,
+} from "#/lib/attendance-mode";
+import {
 	type PanelRole,
 	type PanelRowRole,
 	type PlanStatus,
@@ -31,6 +37,9 @@ export interface RollRow {
 	preferredName: string | null;
 	/** The RECORDED status, or null when nobody has recorded one. */
 	status: AttendanceStatus | null;
+	/** In the room or on the call (#1049). Only ever non-null on a `present`
+	 *  row, and null there too when it was not recorded — never guessed. */
+	mode: AttendanceMode | null;
 	/** Non-null only when `status` is null. Renders dashed; tapping it writes the
 	 *  real row. A row can never carry both — that is what makes a plan
 	 *  physically unmistakable for a record (D3, the guard against #548). */
@@ -92,11 +101,25 @@ export function buildRollPanel(input: {
 		preferredName?: string | null;
 		departed?: boolean;
 	}[];
-	attendance: { memberId: string; status: AttendanceStatus }[];
+	attendance: {
+		memberId: string;
+		status: AttendanceStatus;
+		mode?: AttendanceMode | null;
+	}[];
 	plan: { memberId: string; status: PlanStatus }[];
 	roleByMemberId: Readonly<Record<string, PanelRole>>;
-}): { rows: RollRow[]; counts: RollCounts; countsLine: string } {
+}): {
+	rows: RollRow[];
+	counts: RollCounts;
+	/** The PRESENT members' modes (#1049). Kept out of `counts`, whose shape is
+	 *  the four statuses and nothing else. */
+	modeSplit: ModeSplit;
+	countsLine: string;
+} {
 	const recorded = new Map(input.attendance.map((a) => [a.memberId, a.status]));
+	const recordedMode = new Map(
+		input.attendance.map((a) => [a.memberId, a.mode ?? null]),
+	);
 	const planned = new Map(input.plan.map((p) => [p.memberId, p.status]));
 
 	// Built from the ROSTER, never from the attendance rows: an inactive member is
@@ -119,6 +142,9 @@ export function buildRollPanel(input: {
 			preferredName: m.preferredName ?? null,
 			departed: m.departed ?? false,
 			status,
+			// Present rows only: a mode on any other row would be a stale value
+			// the server has already cleared (#1049, decision 4).
+			mode: status === "present" ? (recordedMode.get(m.id) ?? null) : null,
 			suggestion,
 			suggestionAssumed: suggestion !== null && effective.assumed,
 			role: roleRow(role),
@@ -138,9 +164,18 @@ export function buildRollPanel(input: {
 		unmarked: rows.filter((r) => r.status === null).length,
 	};
 
+	const modeSplit = tallyModes(
+		rows.filter((r) => r.status === "present").map((r) => r.mode),
+	);
+	// "12 present (10 + 2 online)" — Easy-Speak's split (#1049), inside the
+	// present segment it qualifies. With no mode recorded at all it is omitted,
+	// so a meeting recorded before #1049 reads exactly as it did.
+	const split = formatModeSplit(modeSplit);
+	const presentLabel = split ? `present (${split})` : "present";
+
 	const countsLine = (
 		[
-			[counts.present, "present"],
+			[counts.present, presentLabel],
 			[counts.absent, "absent"],
 			[counts.excused, "excused"],
 			[counts.unmarked, "unmarked"],
@@ -150,5 +185,5 @@ export function buildRollPanel(input: {
 		.map(([n, label]) => `${n} ${label}`)
 		.join(" · ");
 
-	return { rows, counts, countsLine };
+	return { rows, counts, modeSplit, countsLine };
 }

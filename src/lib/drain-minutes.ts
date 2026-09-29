@@ -15,7 +15,8 @@
 // op the server has already applied is routinely re-dispatched. Seven do so by
 // construction: `setAttendance` / `setAward` are `onConflictDoUpdate` upserts
 // (last-write-wins), `addGuest` / `addTableTopics` are `onConflictDoNothing` on a
-// client-supplied id, and `removeGuest` / `removeTableTopics` / `clearAward` are
+// client-supplied id (an `addGuest` carrying a `mode`, #1049, upserts that mode
+// instead — last-write-wins again), and `removeGuest` / `removeTableTopics` / `clearAward` are
 // deletes. `moveTableTopics` is the EXCEPTION and does not converge on its own:
 // `direction` is a relative swap on both sides, so a replay steps the row a
 // second position and the Table Topics speaking order in the saved minutes, the
@@ -41,7 +42,11 @@
 // match `MinutesOp`'s fields exactly — a plain `string` here would make the real
 // server-fns (whose params carry the narrower unions) fail to assign to
 // `MinutesServerFns` by parameter contravariance.
-import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
+import type {
+	AttendanceMode,
+	AttendanceStatus,
+	AwardCategory,
+} from "#/server/minutes-logic";
 import type { MinutesOp, NewGuestPayload } from "./offline-minutes-queue";
 
 /**
@@ -52,7 +57,12 @@ import type { MinutesOp, NewGuestPayload } from "./offline-minutes-queue";
  */
 export type MinutesServerFns = {
 	setAttendance: (args: {
-		data: { meetingId: string; memberId: string; status: AttendanceStatus };
+		data: {
+			meetingId: string;
+			memberId: string;
+			status: AttendanceStatus;
+			mode?: AttendanceMode;
+		};
 	}) => Promise<unknown>;
 	addGuest: (args: {
 		data: {
@@ -60,6 +70,7 @@ export type MinutesServerFns = {
 			id?: string;
 			guestId?: string;
 			newGuest?: NewGuestPayload;
+			mode?: AttendanceMode;
 		};
 	}) => Promise<unknown>;
 	removeGuest: (args: {
@@ -120,8 +131,16 @@ export async function dispatchOp(
 ): Promise<void> {
 	switch (op.type) {
 		case "setAttendance":
+			// `mode` forwarded as-is (#1049): `undefined` for an op queued before
+			// it existed, which the server reads as "leave the stored mode alone".
+			// An upsert either way, so the replay still converges.
 			await fns.setAttendance({
-				data: { meetingId, memberId: op.memberId, status: op.status },
+				data: {
+					meetingId,
+					memberId: op.memberId,
+					status: op.status,
+					...(op.mode === undefined ? {} : { mode: op.mode }),
+				},
 			});
 			return;
 
@@ -130,10 +149,23 @@ export async function dispatchOp(
 				// New-guest create: pass the client id so the server row matches the
 				// offline-derived guest and the replay is idempotent.
 				await fns.addGuest({
-					data: { meetingId, id: op.guestId, newGuest: op.newGuest },
+					data: {
+						meetingId,
+						id: op.guestId,
+						newGuest: op.newGuest,
+						...(op.mode === undefined ? {} : { mode: op.mode }),
+					},
 				});
 			} else {
-				await fns.addGuest({ data: { meetingId, guestId: op.guestId } });
+				// With a mode this is an upsert of the mode onto the row (#1049), so
+				// it converges on replay like the create does.
+				await fns.addGuest({
+					data: {
+						meetingId,
+						guestId: op.guestId,
+						...(op.mode === undefined ? {} : { mode: op.mode }),
+					},
+				});
 			}
 			return;
 

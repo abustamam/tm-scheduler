@@ -45,7 +45,14 @@ export function deriveMinutes(
 				// Server: upsert the member's presence. Members can't be added
 				// offline, so an unknown memberId is a no-op.
 				const member = draft.members.find((m) => m.memberId === op.memberId);
-				if (member) member.status = op.status;
+				if (member) {
+					member.status = op.status;
+					// #1049, mirroring `setMemberPresence`: anything but present
+					// clears the mode; a present op with no mode (queued before #1049)
+					// leaves whatever was there.
+					if (op.status !== "present") member.mode = null;
+					else if (op.mode !== undefined) member.mode = op.mode;
+				}
 				break;
 			}
 
@@ -53,14 +60,20 @@ export function deriveMinutes(
 				// Server: insert the guest attendance row (idempotent per guest). A
 				// guest that only held a role slot (fromRole) now has an explicit
 				// present row, so it becomes fromRole:false.
+				//
+				// #1049: with a `mode`, the server upserts it onto the row (the guest
+				// toggle); without one an existing row is untouched.
 				const existing = draft.guests.find((g) => g.guestId === op.guestId);
 				if (existing) {
 					existing.fromRole = false;
+					if (op.mode !== undefined) existing.mode = op.mode;
 				} else {
 					draft.guests.push({
 						guestId: op.guestId,
 						name: op.name,
 						fromRole: false,
+						// Carried only when recorded, the shape `loadMinutes` emits.
+						...(op.mode ? { mode: op.mode } : {}),
 					});
 				}
 				// loadMinutes returns guests sorted by name.

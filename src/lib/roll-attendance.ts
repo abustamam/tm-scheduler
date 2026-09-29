@@ -12,12 +12,22 @@
 // shared with the Minutes card. It lived here as a private copy of the Minutes
 // card's expression, under a comment promising the two "cannot disagree" — see
 // that module for what the copy cost.
-import type { AttendanceStatus, MinutesGuestRow } from "#/server/minutes-logic";
+import type {
+	AttendanceMode,
+	AttendanceStatus,
+	MinutesGuestRow,
+} from "#/server/minutes-logic";
 import type { buildPlanPanel } from "./attendance-panel";
 import { type ProjectionInput, projectMinutes } from "./project-minutes";
 
-/** One RECORDED attendance row, in the shape the panel's `attendance` prop takes. */
-export type RecordedAttendance = { memberId: string; status: AttendanceStatus };
+/** One RECORDED attendance row, in the shape the panel's `attendance` prop takes.
+ *  `mode` is carried only when one was recorded (#1049); absent = not recorded,
+ *  which covers NULL rows and a snapshot saved before the field existed. */
+export type RecordedAttendance = {
+	memberId: string;
+	status: AttendanceStatus;
+	mode?: AttendanceMode;
+};
 
 /** Exactly the panel's `roster` prop shape — DERIVED from the function it is
  *  handed to, never a second hand-listed `Omit`. It read
@@ -54,7 +64,15 @@ export function deriveRollAttendance(
 	const source = projectMinutes(input);
 	if (!source) return [];
 	return source.members.flatMap((m) =>
-		m.status === null ? [] : [{ memberId: m.memberId, status: m.status }],
+		m.status === null
+			? []
+			: [
+					{
+						memberId: m.memberId,
+						status: m.status,
+						...(m.mode ? { mode: m.mode } : {}),
+					},
+				],
 	);
 }
 

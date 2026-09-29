@@ -5,6 +5,7 @@ import {
 	AttendanceGuestsGroup,
 	type GuestEditCapability,
 } from "#/components/club/attendance-guests-group";
+import { AttendanceModeToggle } from "#/components/club/attendance-mode-toggle";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import {
 	SyncStatus,
@@ -19,6 +20,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu";
+import type { AttendanceMode } from "#/lib/attendance-mode";
 import {
 	buildPlanPanel,
 	type PanelMember,
@@ -757,6 +759,7 @@ function RollAttendanceRow({
 	pending,
 	busy,
 	onSetAttendance,
+	onSetMode,
 }: {
 	row: RollRow;
 	locked: boolean;
@@ -777,6 +780,9 @@ function RollAttendanceRow({
 	pending: boolean;
 	busy: boolean;
 	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
+	/** #1049 — in person / online, offered on a PRESENT row only. Undefined ⇒
+	 *  the caller wired no toggle, so none renders. */
+	onSetMode?: (memberId: string, mode: AttendanceMode) => void;
 }) {
 	return (
 		// The rail's row (v1.19.0.0, #594), SHARED as code rather than as a copied
@@ -824,6 +830,22 @@ function RollAttendanceRow({
 					onSetAttendance={onSetAttendance}
 				/>
 			</PanelActionLine>
+			{/* #1049. Its OWN right-aligned line under the chip, not a third item
+			 *  on the action line: the chip's `w-44` track plus two contact glyphs
+			 *  already fill most of a ~292px column, and squeezing the toggle in
+			 *  would move the chip off the rail's one right edge. Present rows only
+			 *  — someone absent or excused was in neither place, and the server
+			 *  clears the mode for them. Same disabled condition as the chip. */}
+			{row.status === "present" && onSetMode ? (
+				<div className="flex justify-end">
+					<AttendanceModeToggle
+						name={row.name}
+						mode={row.mode}
+						disabled={locked || pending || busy}
+						onChange={(mode) => onSetMode(row.id, mode)}
+					/>
+				</div>
+			) : null}
 		</PanelRow>
 	);
 }
@@ -857,12 +879,14 @@ export function MeetingAttendancePanel({
 	canClearRung = false,
 	onContacted,
 	onSetAttendance,
+	onSetMode,
 	guests,
 	clubGuests,
 	canViewMemberDetail = false,
 	guestEdit,
 	onAddGuest,
 	onRemoveGuest,
+	onSetGuestMode,
 	sync,
 }: {
 	mode: "plan" | "roll";
@@ -876,8 +900,13 @@ export function MeetingAttendancePanel({
 	 *  unrepresentable. */
 	roster: Parameters<typeof buildPlanPanel>[0]["roster"];
 	plan: { memberId: string; status: PlanStatus }[];
-	/** Roll mode only. Recorded rows; ignored in plan mode. */
-	attendance?: { memberId: string; status: AttendanceStatus }[];
+	/** Roll mode only. Recorded rows; ignored in plan mode. `mode` is carried
+	 *  when one was recorded (#1049) and drives the present rows' toggle. */
+	attendance?: {
+		memberId: string;
+		status: AttendanceStatus;
+		mode?: AttendanceMode | null;
+	}[];
 	/** Optimistic overrides from the route, keyed by member. A key present with
 	 *  value `null` means "optimistically cleared" — distinct from absent,
 	 *  which means "no override". */
@@ -962,11 +991,16 @@ export function MeetingAttendancePanel({
 	 */
 	canClearRung?: boolean;
 	onContacted: (memberId: string) => void | Promise<void>;
-	/** Roll mode only. Fired by a chip or a dashed suggestion. */
+	/** Roll mode only. Fired by a chip or a dashed suggestion. Which MODE a
+	 *  present write carries is the route's call (`presenceWriteMode`, #1049),
+	 *  because it holds the meeting's default and this panel does not. */
 	onSetAttendance?: (
 		memberId: string,
 		status: AttendanceStatus,
 	) => void | Promise<void>;
+	/** Roll mode only (#1049). The in person / online toggle on a PRESENT row.
+	 *  Omitted ⇒ no toggle renders. */
+	onSetMode?: (memberId: string, mode: AttendanceMode) => void | Promise<void>;
 	/** Roll mode only — the Guests group. Omitted (rather than defaulted to
 	 *  `[]`) so a caller that has not wired guests yet renders nothing, not an
 	 *  empty group. */
@@ -998,6 +1032,12 @@ export function MeetingAttendancePanel({
 		newGuest?: { name: string; email?: string; phone?: string };
 	}) => void | Promise<void>;
 	onRemoveGuest?: (guestId: string) => void | Promise<void>;
+	/** Roll mode only (#1049). A guest's in person / online toggle. Omitted ⇒
+	 *  the guests render with no toggle. */
+	onSetGuestMode?: (
+		guestId: string,
+		mode: AttendanceMode,
+	) => void | Promise<void>;
 	/**
 	 * Roll mode only. The offline write-queue's sync lifecycle, straight off the
 	 * meeting's ONE `useOfflineMinutes` instance (the route owns it — do not
@@ -1198,6 +1238,15 @@ export function MeetingAttendancePanel({
 		}
 	}
 
+	async function setMode(memberId: string, mode: AttendanceMode) {
+		setPendingId(memberId);
+		try {
+			await onSetMode?.(memberId, mode);
+		} finally {
+			setPendingId(null);
+		}
+	}
+
 	// Once the meeting is `completed`, nobody is being chased over a
 	// historical record — every row skips `NudgeButtons` entirely (see
 	// `RollAttendanceRow`) rather than rendering it with contact nulled out,
@@ -1291,6 +1340,7 @@ export function MeetingAttendancePanel({
 										pending={pendingId === row.id}
 										busy={busy}
 										onSetAttendance={setAttendance}
+										onSetMode={onSetMode ? setMode : undefined}
 									/>
 								))
 							: (planPanel?.rows ?? []).map((m) => (
@@ -1334,6 +1384,7 @@ export function MeetingAttendancePanel({
 							guestEdit={guestEdit}
 							onAddGuest={onAddGuest ?? (() => {})}
 							onRemoveGuest={onRemoveGuest ?? (() => {})}
+							onSetGuestMode={onSetGuestMode}
 						/>
 					) : null}
 				</CardContent>

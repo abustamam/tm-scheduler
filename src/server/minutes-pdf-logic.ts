@@ -33,6 +33,11 @@ import {
 // function has now had TWO cost/correctness defects found in it by review (a
 // full-input spread in #519, an astral-plane bypass in #522), so a second
 // `slice` written from scratch is exactly the wrong kind of duplication.
+import {
+	type AttendanceMode,
+	formatModeSplit,
+	minutesModeSplit,
+} from "#/lib/attendance-mode";
 import { cap } from "#/lib/cap";
 import { formatMeetingDate } from "#/lib/format";
 import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
@@ -194,10 +199,18 @@ function names(list: { name: string }[]): string {
  * attendance record, `status: null`, #218) are NEVER listed as absent: they
  * get their own "Unmarked" row and count, included only when at least one
  * member is unmarked so fully-recorded minutes render unchanged.
+ *
+ * In person / online (#1049): an "Attending" figure in Easy-Speak's format
+ * ("12 + 4 online") over everyone present, members and guests, is appended to
+ * the counts line ONLY when at least one mode was recorded. A meeting whose
+ * modes are all NULL — every meeting before #1049 — keeps its plain line, and
+ * an unrecorded mode is named as such rather than counted as in person.
  */
 export function buildAttendanceSection(minutes: {
-	members: Pick<MinutesData["members"][number], "name" | "status">[];
-	guests: { name: string }[];
+	members: (Pick<MinutesData["members"][number], "name" | "status"> & {
+		mode?: AttendanceMode | null;
+	})[];
+	guests: { name: string; mode?: AttendanceMode | null }[];
 	counts: MinutesData["counts"];
 }): { countsLine: string; rows: { label: string; names: string }[] } {
 	const byStatus = (status: AttendanceStatus | null) =>
@@ -207,6 +220,10 @@ export function buildAttendanceSection(minutes: {
 		`Present: ${present}   Absent: ${absent}   Excused: ${excused}   ` +
 		(unmarked > 0 ? `Unmarked: ${unmarked}   ` : "") +
 		`Guests: ${guests}`;
+	const split = formatModeSplit(minutesModeSplit(minutes));
+	const countsLineWithMode = split
+		? `${countsLine}   Attending: ${split}`
+		: countsLine;
 	const rows = [
 		{ label: "Present", names: names(byStatus("present")) },
 		{ label: "Excused", names: names(byStatus("excused")) },
@@ -216,7 +233,7 @@ export function buildAttendanceSection(minutes: {
 			: []),
 		{ label: "Guests", names: names(minutes.guests) },
 	];
-	return { countsLine, rows };
+	return { countsLine: countsLineWithMode, rows };
 }
 
 /**
