@@ -956,6 +956,100 @@ export const memberDues = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Charter dashboard (#943) — a CHARTERING club's own tracker of how close it is
+// to charter. Nothing here encodes Toastmasters International's charter rules:
+// the target is a club-editable number and the checklist is club-editable
+// steps, all self-reported. Shown only while `clubs.charter_status` is
+// `chartering`; once chartered the rows are KEPT and the dashboard is hidden.
+// Logic in `src/server/charter-logic.ts`.
+// ---------------------------------------------------------------------------
+
+// A charter helper's role. Keep in lockstep with CHARTER_HELPER_ROLES in
+// src/lib/charter-dashboard.ts (restated, not imported: this module may not
+// import zod-bearing modules; `charter-dashboard.test.ts` holds the two equal).
+export const charterHelperRoleEnum = pgEnum("charter_helper_role", [
+	"sponsor",
+	"club_mentor",
+]);
+
+// One row per club, created the first time the dashboard is opened (which is
+// also when the checklist is seeded). PK is `club_id`, like `club_logos`.
+export const clubCharter = pgTable(
+	"club_charter",
+	{
+		clubId: uuid("club_id")
+			.primaryKey()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// Paid members the club is aiming for. A club-editable target, not TI's
+		// rule; the default is the common figure and the page says to check.
+		membersNeeded: integer("members_needed").notNull().default(20),
+		// The dues period whose PAID members count toward the target (the club
+		// picks it, e.g. "Charter dues"). Deleting the period clears the pick.
+		duesPeriodId: uuid("dues_period_id").references(() => duesPeriods.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		check(
+			"club_charter_members_needed_check",
+			sql`${t.membersNeeded} between 1 and 1000`,
+		),
+	],
+);
+
+// The club's charter checklist: ordered, renameable, removable steps with an
+// optional done date (a calendar day, `YYYY-MM-DD`, so no zone shifts it).
+export const clubCharterSteps = pgTable(
+	"club_charter_steps",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		label: text("label").notNull(),
+		position: integer("position").notNull(),
+		doneAt: date("done_at", { mode: "string" }),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [index("club_charter_steps_club_idx").on(t.clubId, t.position)],
+);
+
+// Sponsors and club mentors. EITHER a link to a Person (who may also be a
+// member or officer of this club) OR a free-text contact for an outside helper.
+// `name` is also written when a Person is linked, as a snapshot: the link is
+// `ON DELETE SET NULL`, so a Person merged away or deleted leaves the helper
+// as a named free-text contact rather than wiping the row or failing the
+// delete on the CHECK below.
+export const clubCharterHelpers = pgTable(
+	"club_charter_helpers",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		role: charterHelperRoleEnum("role").notNull(),
+		personId: uuid("person_id").references(() => people.id, {
+			onDelete: "set null",
+		}),
+		name: text("name"),
+		email: text("email"),
+		phone: text("phone"),
+		homeClub: text("home_club"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("club_charter_helpers_club_idx").on(t.clubId),
+		// A helper names SOMEONE: a linked Person or a non-blank name.
+		check(
+			"club_charter_helpers_identity_check",
+			sql`${t.personId} is not null or (${t.name} is not null and btrim(${t.name}) <> '')`,
+		),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Distinguished Club Program (DCP) — the President's goal scoreboard
 // (#207 / ADR-0019). A per-club, per-program-year MANUAL scoreboard of the 10
 // standardized DCP goals. The goal *catalog* (labels + targets) is static code

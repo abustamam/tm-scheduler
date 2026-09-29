@@ -1,5 +1,9 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
+import {
+	CHARTER_DASHBOARD_COPY,
+	CharterProgress,
+} from "#/components/club/charter-dashboard";
 import { OnboardingChecklist } from "#/components/club/onboarding-checklist";
 import { PageContainer } from "#/components/page-container";
 import { effectiveAdminClub } from "#/lib/effective-admin";
@@ -10,6 +14,8 @@ import {
 	officerTaskTitle,
 } from "#/lib/officer-tasks";
 import { firstNameOf } from "#/lib/person-name";
+import { getCharterSummary } from "#/server/charter";
+import type { CharterSummary } from "#/server/charter-logic";
 import { getOnboardingChecklist } from "#/server/onboarding-checklist";
 
 export const Route = createFileRoute("/_authed/officers")({
@@ -30,17 +36,22 @@ export const Route = createFileRoute("/_authed/officers")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const checklist = await getOnboardingChecklist({
-			data: context.adminClub.clubId,
-		});
-		return { checklist };
+		const [checklist, charter] = await Promise.all([
+			getOnboardingChecklist({ data: context.adminClub.clubId }),
+			// The charter card (#943) is null for a chartered club, and a failure
+			// here must not blank the officer home, so it degrades to no card.
+			getCharterSummary({ data: { clubId: context.adminClub.clubId } }).catch(
+				() => null,
+			),
+		]);
+		return { checklist, charter };
 	},
 	component: OfficerHome,
 });
 
 function OfficerHome() {
 	const { authUser, officerPositions, adminClub } = Route.useRouteContext();
-	const { checklist } = Route.useLoaderData();
+	const { checklist, charter } = Route.useLoaderData();
 	const { common, sections } = buildOfficerHome([...officerPositions]);
 	const firstName = firstNameOf(authUser.name || authUser.email);
 
@@ -57,12 +68,46 @@ function OfficerHome() {
 
 			<OnboardingChecklist clubId={adminClub.clubId} status={checklist} />
 
+			{charter ? <CharterCard summary={charter} /> : null}
+
 			<TaskSection title="Everyday" tasks={common} />
 
 			{sections.map((s) => (
 				<TaskSection key={s.position} title={`As ${s.label}`} tasks={s.tasks} />
 			))}
 		</PageContainer>
+	);
+}
+
+/** Shown only while the club is chartering (#943); links to the dashboard. */
+function CharterCard({ summary }: { summary: CharterSummary }) {
+	return (
+		<Link
+			to="/admin/charter"
+			data-testid="charter-card"
+			className="group block space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] px-4 py-4 shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-all hover:border-[var(--lagoon-deep)]"
+		>
+			<div className="flex items-center gap-3">
+				<div className="min-w-0 flex-1">
+					<div className="text-sm font-bold text-[var(--sea-ink)]">
+						{CHARTER_DASHBOARD_COPY.title}
+					</div>
+					<div className="text-xs text-[var(--sea-ink-soft)]">
+						{summary.periodPicked
+							? `Paid members toward charter. Checklist: ${summary.stepsDone} of ${summary.stepsTotal} done.`
+							: CHARTER_DASHBOARD_COPY.pickPeriod}
+					</div>
+				</div>
+				<ChevronRight
+					className="size-4 shrink-0 text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-0.5 group-hover:opacity-100"
+					aria-hidden
+				/>
+			</div>
+			<CharterProgress
+				paid={summary.paidCount}
+				needed={summary.membersNeeded}
+			/>
+		</Link>
 	);
 }
 

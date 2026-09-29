@@ -15,6 +15,9 @@ vi.mock("#/server/onboarding-checklist", () => ({
 	getOnboardingChecklist: vi.fn(),
 }));
 
+// Same for the charter card's server fn (#943).
+vi.mock("#/server/charter", () => ({ getCharterSummary: vi.fn() }));
+
 import { Route } from "./officers";
 
 /** Minimal authed-shell context: the shape `effectiveAdminClub` reads. */

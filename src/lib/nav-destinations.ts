@@ -4,6 +4,7 @@ import {
 	CalendarPlus,
 	ClipboardCheck,
 	Compass,
+	Flag,
 	GraduationCap,
 	Grid3x3,
 	History,
@@ -202,6 +203,18 @@ export const NAV_DESTINATIONS = [
 		group: "setup",
 		grant: "officer",
 		icon: Settings,
+	},
+	{
+		// The charter dashboard (#943). Listed for every club: the nav knows
+		// nothing of charter status, and a chartered club's page still carries
+		// the official-requirements note. "officer" is the effective-admin test,
+		// the same people `requireClubAdminView` admits.
+		key: "charter",
+		to: "/admin/charter",
+		label: "Charter",
+		group: "setup",
+		grant: "officer",
+		icon: Flag,
 	},
 	{
 		key: "pathways-sync",

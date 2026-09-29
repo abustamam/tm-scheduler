@@ -158,6 +158,7 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 		url: () => "/superadmin/duplicate-people",
 	},
 	"/admin/action-items": { who: "admin", url: () => "/admin/action-items" },
+	"/admin/charter": { who: "admin", url: () => "/admin/charter" },
 	"/admin/club-settings": { who: "admin", url: () => "/admin/club-settings" },
 	"/admin/dcp": { who: "admin", url: () => "/admin/dcp" },
 	"/admin/dues": { who: "admin", url: () => "/admin/dues" },

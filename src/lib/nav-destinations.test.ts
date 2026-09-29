@@ -76,6 +76,7 @@ describe("visibleDestinations", () => {
 			"Recurring schedule",
 			"Meeting roles",
 			"Club settings",
+			"Charter",
 			"Pathways sync",
 		]);
 		expect(keysIn(OFFICE_HOLDER, "platform")).toEqual([]);
