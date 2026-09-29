@@ -213,6 +213,15 @@ function compareNames(a: string | null, b: string | null): number {
 	return a.localeCompare(b);
 }
 
+/** Which kind of row a member-XOR-guest reference names: "member", "guest",
+ *  or null when neither resolved in this club (a scoped LEFT JOIN missed). */
+function memberOrGuest(r: {
+	memberId: string | null;
+	guestId: string | null;
+}): "member" | "guest" | null {
+	return r.memberId ? "member" : r.guestId ? "guest" : null;
+}
+
 /** Sort by a date-ish key (nulls last), then by a name, locale-aware. */
 function byDateThenName<T>(
 	date: (r: T) => string | null,
@@ -736,7 +745,7 @@ export async function loadClubExport(
 					meeting_date: localDate(a.scheduledAt, tz),
 					name: a.memberName ?? a.guestName,
 					member_or_guest_id: a.memberId ?? a.guestId,
-					type: a.memberId ? "member" : a.guestId ? "guest" : null,
+					type: memberOrGuest(a),
 					attended: a.status === "present" ? "yes" : "no",
 					status: a.status,
 					mode: a.mode,
@@ -762,7 +771,7 @@ export async function loadClubExport(
 					meeting_date: localDate(s.scheduledAt, tz),
 					speaker: s.memberName ?? s.guestName,
 					member_or_guest_id: s.memberId ?? s.guestId,
-					speaker_type: s.memberId ? "member" : "guest",
+					speaker_type: memberOrGuest(s),
 					title: s.title,
 					pathways_path: s.pathwayPath,
 					project: s.projectName,

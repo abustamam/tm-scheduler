@@ -3784,6 +3784,8 @@ export const clubImports = pgTable(
 		source: importSourceEnum("source").notNull(),
 		bundle: jsonb("bundle").notNull(),
 		bundleSha256: text("bundle_sha256").notNull(),
+		// Not a FK, as the issue specifies: the raw bundle is kept for good, and an
+		// uploader's account being deleted must neither block that nor delete it.
 		uploadedByUserId: text("uploaded_by_user_id").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()

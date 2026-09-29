@@ -1168,6 +1168,9 @@ export interface DeleteGuestResult {
  *   they are the record of someone who, by the officer's own action, was never
  *   there. That is also why a real visitor should be marked `lost` rather than
  *   deleted; delete is for mistakes.
+ * - Speeches the guest OWNS (`speeches.guest_id`, #1046: a visiting
+ *   Toastmaster's speech from imported history) CASCADE with the row too, and a
+ *   slot that referenced one keeps no speech (`role_slots.speech_id` SET NULL).
  *
  * Everything runs in ONE transaction, and both reads that gate a write take the
  * write's own predicate with them — the concurrent writers here are not

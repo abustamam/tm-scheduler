@@ -52,6 +52,7 @@ const {
 	attachSpeechToOpenSlot,
 	GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE,
 	listUnscheduledSpeeches,
+	SPEECH_NOT_IN_CLUB_MESSAGE,
 	setSpeechArchived,
 } = await import("./speeches-logic");
 const { historyCounts, getMergePreview } = await import("./people-logic");
@@ -389,7 +390,7 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 					clubId: a.clubId,
 					archived: true,
 				}),
-			).rejects.toThrow("That speech isn't owned by a member of this club.");
+			).rejects.toThrow(SPEECH_NOT_IN_CLUB_MESSAGE);
 		});
 
 		it("attachSpeechToOpenSlot refuses a guest's speech and leaves the slot open", async () => {
@@ -565,6 +566,39 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 				.from(speeches)
 				.where(eq(speeches.id, g));
 			expect(left).toEqual([]);
+		});
+
+		// `personsWithOtherClubHistory` keeps a Person whose speech sits on a
+		// surviving slot. A guest's speech on ANOTHER club's slot survives the
+		// cascade and is exactly what that query reads, so it must not make
+		// anyone count as having other-club history.
+		it("deleteClubPermanently: another club's guest speech on a surviving slot keeps nobody", async () => {
+			const doomed = await seedClub();
+			extraClubIds.push(doomed.clubId);
+			extraUserIds.push(doomed.adminUserId, doomed.memberUserId);
+			const otherGuest = await makeGuest(b.clubId, { kind: "guest_speaker" });
+			const g = await guestSpeech(otherGuest);
+			await testDb.insert(roleSlots).values({
+				meetingId: b.meetingId,
+				roleDefinitionId: await speakerDef(b.clubId),
+				slotIndex: 4,
+				assignedGuestId: otherGuest,
+				speechId: g,
+				status: "confirmed",
+			});
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, doomed.clubId));
+
+			const res = await deleteClubPermanently(doomed.clubId, "Test Club");
+			expect(res).toMatchObject({ peopleDeleted: 2, peopleKept: 0 });
+			// The other club's guest speech is untouched.
+			const [kept] = await testDb
+				.select({ id: speeches.id, guestId: speeches.guestId })
+				.from(speeches)
+				.where(eq(speeches.id, g));
+			expect(kept).toEqual({ id: g, guestId: otherGuest });
 		});
 	});
 

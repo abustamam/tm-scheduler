@@ -56,6 +56,10 @@ export type UnscheduledSpeech = {
 	updatedAt: Date;
 };
 
+/** A speech owned by neither a member nor a guest of the club in question. */
+export const SPEECH_NOT_IN_CLUB_MESSAGE =
+	"That speech doesn't belong to this club.";
+
 /** A guest's speech (#1046) is owned by no Person, so it has no place in a
  *  Person's reschedule pool and no membership to assign a slot to. */
 export const GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE =
@@ -183,8 +187,8 @@ export async function listOpenSpeakerSlots(
 }
 
 /**
- * Archive or unarchive a speech. Validates the speech is owned by a member of
- * `clubId` so a club surface can't toggle another club's speeches. Bumps
+ * Archive or unarchive a speech. Validates the speech is owned by a member or
+ * a guest of `clubId` so a club surface can't toggle another club's speeches. Bumps
  * `updatedAt` so the row keeps its place in the recency ordering.
  */
 export async function setSpeechArchived(
@@ -200,34 +204,30 @@ export async function setSpeechArchived(
 
 	// Exactly one owner (#1046). A guest's speech belongs to the club the guest
 	// row does; a Person's speech to any club the Person is a member of.
-	const [owner] =
-		speech.personId === null
-			? await conn
-					.select({ id: guests.id })
-					.from(guests)
-					.where(
-						and(
-							// `speeches_single_owner` makes this non-null whenever
-							// person_id is null; `isNull` keeps a violation a miss.
-							speech.guestId === null
-								? isNull(guests.id)
-								: eq(guests.id, speech.guestId),
-							eq(guests.clubId, args.clubId),
-						),
-					)
-					.limit(1)
-			: await conn
-					.select({ id: members.id })
-					.from(members)
-					.where(
-						and(
-							eq(members.personId, speech.personId),
-							eq(members.clubId, args.clubId),
-						),
-					)
-					.limit(1);
+	let owner: { id: string } | undefined;
+	if (speech.personId !== null) {
+		[owner] = await conn
+			.select({ id: members.id })
+			.from(members)
+			.where(
+				and(
+					eq(members.personId, speech.personId),
+					eq(members.clubId, args.clubId),
+				),
+			)
+			.limit(1);
+	} else if (speech.guestId !== null) {
+		[owner] = await conn
+			.select({ id: guests.id })
+			.from(guests)
+			.where(and(eq(guests.id, speech.guestId), eq(guests.clubId, args.clubId)))
+			.limit(1);
+	} else {
+		// `speeches_single_owner` makes this unreachable; fail closed if it isn't.
+		throw new Error("That speech has no owner.");
+	}
 	if (!owner) {
-		throw new Error("That speech isn't owned by a member of this club.");
+		throw new Error(SPEECH_NOT_IN_CLUB_MESSAGE);
 	}
 
 	await conn
@@ -262,7 +262,6 @@ export async function attachSpeechToOpenSlot(
 	if (speech.personId === null) {
 		throw new Error(GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE);
 	}
-	const personId = speech.personId;
 
 	const [slot] = await conn
 		.select({
@@ -303,7 +302,7 @@ export async function attachSpeechToOpenSlot(
 		.from(members)
 		.where(
 			and(
-				eq(members.personId, personId),
+				eq(members.personId, speech.personId),
 				eq(members.clubId, slot.clubId),
 				eq(members.status, "active"),
 			),
