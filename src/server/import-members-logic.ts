@@ -432,7 +432,16 @@ export async function importPeopleAndMembers(
 			const [created] = await write("member", rowIndex, null, async (conn) =>
 				conn
 					.insert(members)
-					.values({ clubId, personId, ...md.values })
+					// Explicit null, overriding the column's DEFAULT now() (#940,
+					// maintainer decision): a roster import brings in long-standing
+					// members, who must not land in new-member orientation. An admin
+					// can still start it per member from the member page.
+					.values({
+						clubId,
+						personId,
+						...md.values,
+						orientationStartedAt: null,
+					})
 					.onConflictDoNothing({ target: [members.clubId, members.personId] })
 					.returning({ id: members.id }),
 			);

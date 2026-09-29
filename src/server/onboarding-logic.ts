@@ -440,6 +440,10 @@ export async function createClubWithAdmin(
 				email: input.adminEmail,
 				clubRole: "admin",
 				status: "active",
+				// The founding admin is setting the club up, not a new member
+				// finding their feet: no orientation checklist, chartered club or not
+				// (#940, maintainer decision). An admin can start it later.
+				orientationStartedAt: null,
 			})
 			.returning({ id: members.id });
 		if (!member) throw new Error("Failed to create the admin membership.");

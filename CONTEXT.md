@@ -165,6 +165,28 @@ the nouns in `src/db/schema.ts`.
   and with no activity row (#819).
   `guest-convert-privilege.integration.test.ts` pins all of it in the gate's own terms, including
   that coupling.
+- **Orientation** (#940) — a Membership's first-weeks checklist on the member's dashboard,
+  four items: **choose a path** (any live `path_enrollments` row for the Person), **schedule your
+  Ice Breaker** (any speaker slot assigned to the Membership), **take a supporting role** (any
+  non-speaker slot), and **set up Base Camp**. The first three are DERIVED from records the club
+  already keeps, past or future, and a slot in a **cancelled** meeting counts for nothing. Base
+  Camp is the one **self-tick** (`members.basecamp_setup_at`), allowed because nothing is
+  suppressed by it (the no-unverifiable-ticks rule, `src/lib/role-duties.ts`). The derivation is
+  pure, in `src/lib/orientation.ts`, for mentorship (#939) and the VPE stalled view (#942) to reuse.
+  A Membership is **in orientation** when `members.orientation_started_at` is set, and the
+  checklist shows until every item is done or the member dismisses it ("I'm all set",
+  `orientation_dismissed_at`, permanent). **Who starts in it** (maintainer decisions): a
+  Membership INSERTED after migration 0102 through the column's `DEFAULT now()` — convert-to-member
+  and the roster's one-row **Quick add** (which sends `startOrientation: true` to
+  `bulkImportMembers`). Everything else sets an explicit null: memberships that existed before
+  0102, a **roster CSV import** and a **pasted bulk roster** (both bring in long-standing members;
+  the bulk fn treats an OMITTED flag as null, so a stale tab fails safe), and the **founding admin**
+  a new club is provisioned with, chartered or not. Reusing an existing Membership (a convert that
+  reactivates a lapsed one) inserts nothing and keeps what it had. "Choose a path" counts only
+  LIVE (non-archived) enrollments. An **admin can start it** for any ACTIVE member from the member
+  page (logged as `member_edit`), and starting it again re-shows a checklist the member had
+  dismissed. The member's tick and dismiss write only their OWN row, resolved from the session;
+  nobody can tick or dismiss for someone else.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.
