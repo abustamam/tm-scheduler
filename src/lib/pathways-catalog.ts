@@ -622,6 +622,16 @@ function buildPath(p: PathReq): CatalogPath {
 
 export const PATHWAYS_CATALOG: CatalogPath[] = CLUB_PATHS.map(buildPath);
 
+/** The six current paths' course codes. `path-quiz.test.ts` holds this set
+ *  equal to the catalog's `status: "current"` rows. */
+export type CurrentCourseCode =
+	| "8700"
+	| "8701"
+	| "8704"
+	| "8706"
+	| "8707"
+	| "8711";
+
 /**
  * Our own one-line description of each CURRENT path, plus the address of
  * Toastmasters International's official page for it (#935). Read by the
@@ -636,16 +646,6 @@ export const PATHWAYS_CATALOG: CatalogPath[] = CLUB_PATHS.map(buildPath);
  * Legacy paths are deliberately absent: the quiz never suggests one, and
  * `path-quiz.test.ts` holds this map's keys equal to the current course codes.
  */
-/** The six current paths' course codes. `path-quiz.test.ts` holds this set
- *  equal to the catalog's `status: "current"` rows. */
-export type CurrentCourseCode =
-	| "8700"
-	| "8701"
-	| "8704"
-	| "8706"
-	| "8707"
-	| "8711";
-
 export interface CurrentPathGuide {
 	focus: string;
 	tiUrl: string;
