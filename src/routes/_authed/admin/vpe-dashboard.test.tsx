@@ -81,6 +81,8 @@ async function renderRoute(
 		// #709 added a fourth loader key; this file asserts nothing about it.
 		pairings: [],
 		proximity: extra.proximity ?? [],
+		// #942's section; this file asserts nothing about it.
+		orientation: [],
 		timezone: extra.timezone,
 		clubName: "Downtown Club",
 		clubId: "11111111-1111-4111-8111-111111111111",

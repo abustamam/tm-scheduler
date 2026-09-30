@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import type { LevelProgress } from "#/lib/level-proximity";
 import { buildNudge } from "#/lib/nudge";
+import type { OrientationItem } from "#/lib/orientation";
 import { detectPlatform } from "#/lib/platform";
 import type { RoleDuty } from "#/lib/role-duties";
 
@@ -42,6 +43,14 @@ export type NudgeButtonsProps = NudgeButtonsBase &
 				 *  the agenda?" Role-less; `shareUrl` is the next meeting's page. */
 				mode: "level";
 		  } & LevelProgress)
+		| {
+				/** A new member partway through orientation (#942): the draft names
+				 *  their next open checklist item. Role-less; `items` is the
+				 *  checklist as #940 derives it, `origin` builds the guide link. */
+				mode: "orientation";
+				items: readonly Pick<OrientationItem, "key" | "done">[];
+				origin: string;
+		  }
 		| {
 				mode: "confirm" | "recruit";
 				roleName: string;
@@ -147,7 +156,14 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 							projectNames: props.projectNames,
 							electivesToChoose: props.electivesToChoose,
 						}
-					: { ...common, mode: props.mode },
+					: props.mode === "orientation"
+						? {
+								...common,
+								mode: props.mode,
+								items: props.items,
+								origin: props.origin,
+							}
+						: { ...common, mode: props.mode },
 	);
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {
