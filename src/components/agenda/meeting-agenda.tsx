@@ -51,6 +51,7 @@ import {
 	type PersonalNudgeBase,
 	personalNudgeUrl,
 } from "#/lib/nudge";
+import { rolesGuideUrl } from "#/lib/role-guide";
 import { speechWindow, speechWindowInputError } from "#/lib/speech-window";
 import {
 	applyTemplateToMeeting,
@@ -818,6 +819,19 @@ export function MeetingAgenda({
 																		personalNudgeBase,
 																		holderMemberId,
 																	)
+																: null
+														}
+														// A GUEST holder's link instead (#933): the role's card
+														// on the public roles guide, with its Before/During
+														// steps, rather than the bare agenda. Null for a member,
+														// whose own page above carries the same guide.
+														guideUrl={
+															!holderMemberId && personalNudgeBase
+																? rolesGuideUrl({
+																		origin: personalNudgeBase.origin,
+																		clubId: personalNudgeBase.clubId,
+																		roleKey: slot.roleKey,
+																	})
 																: null
 														}
 														mode="confirm"

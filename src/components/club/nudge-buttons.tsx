@@ -75,6 +75,10 @@ type NudgeButtonsMeetingArm =
 			 *  Absent (a guest holder has no member identity) falls the draft
 			 *  back to `shareUrl`. */
 			personalUrl?: string | null;
+			/** The role's card on the public roles guide, from `rolesGuideUrl`
+			 *  (#933) — a GUEST holder's `confirm` link in place of the bare
+			 *  agenda. Ignored by `recruit`; `personalUrl` wins when set. */
+			guideUrl?: string | null;
 	  };
 
 /**
@@ -148,6 +152,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 					// names no role.
 					duties: props.duties,
 					personalUrl: props.personalUrl,
+					guideUrl: props.guideUrl,
 				}
 			: props.mode === "invite"
 				? {

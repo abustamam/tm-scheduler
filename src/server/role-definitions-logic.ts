@@ -95,18 +95,16 @@ export interface RoleDefinitionRow {
 	 * The role's stable identity (#368), for the roles guide's per-role anchor
 	 * (#933) — the fragment the guest `confirm` draft links to. Not sensitive:
 	 * a snake_case of a role name, the same string every agenda binds on.
-	 *
-	 * The three #933 fields are OPTIONAL on the type and `listRoleDefinitions`
-	 * always sets them — `PersonalMeetingView.meeting.hasTiming`'s shape, for
-	 * its reason: existing consumers and fixtures compile untouched, and an
-	 * absent value reads exactly as the NULL column does (no anchor, no guide
-	 * text, fall back to `description`).
+	 * `listRoleDefinitions` always sets it; optional so a caller's hand-built
+	 * row without one reads as a key-less role (no anchor).
 	 */
 	key?: string | null;
-	/** The "before the meeting" half of the role's guide (#933). */
-	beforeNotes?: string | null;
+	/** The "before the meeting" half of the role's guide (#933). NULL when
+	 *  the club has written nothing; every surface then falls back to
+	 *  `description`. */
+	beforeNotes: string | null;
 	/** The "during the meeting" half of the role's guide (#933). */
-	duringNotes?: string | null;
+	duringNotes: string | null;
 	/** Number of existing slots referencing this role (blocks deletion when > 0).
 	 *  `undefined` unless the caller asked for it — computing it costs an
 	 *  aggregate join over `role_slots`, which only the admin roles page needs.

@@ -145,12 +145,11 @@ export function PersonalMeetingBody({
 	canRepick: boolean;
 	/**
 	 * The club's roles guide (#933) — `getPublicClubRoles`, read by the route's
-	 * loader — from which each held role's Before/During text is matched.
-	 * Optional because absence reads exactly as an empty guide does: every
-	 * role shows its duties and nothing under them, and the loader always
-	 * passes it.
+	 * loader — from which each held role's Before/During text is matched. An
+	 * empty list (a failed guide read degrades to one) shows every role's
+	 * duties and nothing under them.
 	 */
-	roleGuides?: readonly RoleGuideSource[];
+	roleGuides: readonly RoleGuideSource[];
 }) {
 	const [pending, setPending] = useState<Pending>(null);
 	const busy = pending !== null;
@@ -444,7 +443,7 @@ export function PersonalMeetingBody({
 						});
 						// The guide text for this role (#933), AFTER the duties: the
 						// duties are what the member can act on, the guide is reading.
-						const guideSource = findRoleGuideSource(roleGuides ?? [], role);
+						const guideSource = findRoleGuideSource(roleGuides, role);
 						const sheet = roleSheetForKey(role.roleKey);
 						return (
 							<div

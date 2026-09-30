@@ -293,9 +293,25 @@ describe.skipIf(!hasTestDb)(
 				duringNotes: tmod.duringNotes,
 			});
 			expect(rows.some((r) => r.key === "other_secret")).toBe(false);
-			// Nothing new beyond the guide text: no counts on the public read.
-			expect(row).not.toHaveProperty("slotCount");
-			expect(row).not.toHaveProperty("agendaCount");
+			// The EXACT public shape: the pre-#933 fields plus `key` (the anchor)
+			// and the two guide halves, and nothing else — no counts, no people.
+			expect(Object.keys(row ?? {}).sort()).toEqual(
+				[
+					"id",
+					"name",
+					"category",
+					"defaultCount",
+					"sortOrder",
+					"isSpeakerRole",
+					"description",
+					"enabled",
+					"standing",
+					// new in #933:
+					"key",
+					"beforeNotes",
+					"duringNotes",
+				].sort(),
+			);
 
 			await testDb
 				.update(clubs)
