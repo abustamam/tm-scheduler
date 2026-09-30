@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // Same stub the panel's main suite needs: `GuestEditDialog` imports a server-fn
 // module that pulls `#/db` → `pg` at import time.
 vi.mock("#/server/guest-pipeline", () => ({ updateGuest: vi.fn() }));
+vi.mock("#/server/guests", () => ({
+	getGuestProfile: vi.fn().mockResolvedValue(null),
+	updateGuestProfile: vi.fn(),
+}));
 
 import { MeetingAttendancePanel } from "./meeting-attendance-panel";
 

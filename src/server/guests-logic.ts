@@ -3,11 +3,21 @@
 // Integration-testable by mocking `#/db`.
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, meetings, roleSlots } from "#/db/schema";
+import { guests, meetings, members, roleSlots } from "#/db/schema";
 import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
+import {
+	type BroughtCount,
+	countBroughtByMember,
+	GUEST_TEXT_MAX,
+	type GuestIntroducerRow,
+	type GuestProfileFields,
+	HOME_CLUB_TOO_LONG_MESSAGE,
+	normalizeHomeClub,
+} from "#/lib/guest-profile";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
 // Either the pooled client or a caller's transaction, so this can run inside a
@@ -185,5 +195,189 @@ export async function applyAssignGuestToSlot(
 		});
 
 		return { clubId: slot.clubId, guestId };
+	});
+}
+
+/** `applyUpdateGuestProfile` refuses an introducer who is not in the guest's club. */
+export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
+	"The member who introduced this guest must be on this club's roster.";
+
+/** `applyUpdateGuestProfile` refuses a joined guest as their own introducer. */
+export const GUEST_CANNOT_INTRODUCE_SELF_MESSAGE =
+	"A guest can't be recorded as having introduced themselves.";
+
+/** One member the "Introduced by" picker offers. */
+export interface IntroducerOption {
+	id: string;
+	name: string;
+	/** `inactive` members stay pickable — see `applyUpdateGuestProfile`. */
+	status: "active" | "inactive";
+}
+
+export interface GuestProfile extends GuestProfileFields {
+	roster: IntroducerOption[];
+}
+
+/**
+ * The introducer join, scoped to THIS club as well as to the id.
+ * `introduced_by_member_id` is a bare FK to `members`, which the database does
+ * not tie to the guest's club; the write path refuses a cross-club id, and
+ * every read joins through this so a row written some other way names NOBODY —
+ * neither its name nor its id reaches the client. Such a guest loads as "no
+ * introducer", which is also why saving them does not fail on an introducer
+ * the officer never saw.
+ */
+function introducerOfClub(clubId: string) {
+	return and(
+		eq(members.id, guests.introducedByMemberId),
+		eq(members.clubId, clubId),
+	);
+}
+
+/**
+ * What the guest edit dialog needs for the kind / home club / introducer fields
+ * (#1050): the stored three, read fresh each time the dialog opens, and the
+ * club's roster for the picker. Null when the guest is not in this club.
+ *
+ * The roster is EVERY membership row of this club, inactive included — the
+ * same set `applyUpdateGuestProfile` accepts and `loadLinkCandidates` offers.
+ */
+export async function loadGuestProfile(
+	clubId: string,
+	guestId: string,
+): Promise<GuestProfile | null> {
+	const [guest] = await db
+		.select({
+			kind: guests.kind,
+			homeClub: guests.homeClub,
+			introducedByMemberId: members.id,
+		})
+		.from(guests)
+		.leftJoin(members, introducerOfClub(clubId))
+		.where(and(eq(guests.id, guestId), eq(guests.clubId, clubId)))
+		.limit(1);
+	if (!guest) return null;
+	const roster = await db
+		.select({ id: members.id, name: members.name, status: members.status })
+		.from(members)
+		.where(eq(members.clubId, clubId))
+		.orderBy(asc(members.name));
+	return { ...guest, roster };
+}
+
+/** One guest's kind / home club / introducer, for VP Membership's rows. */
+export interface GuestProfileRow
+	extends GuestIntroducerRow,
+		GuestProfileFields {}
+
+/**
+ * Every guest's kind, home club and introducer in this club, plus the
+ * per-member "brought" counts (#1050) — derived from these same rows by
+ * `countBroughtByMember`, so the tally always matches what the page lists.
+ * The introducer (id AND name) comes through `introducerOfClub`.
+ */
+export async function loadGuestProfiles(clubId: string): Promise<{
+	rows: GuestProfileRow[];
+	brought: BroughtCount[];
+}> {
+	const rows = await db
+		.select({
+			guestId: guests.id,
+			kind: guests.kind,
+			homeClub: guests.homeClub,
+			introducedByMemberId: members.id,
+			introducedByName: members.name,
+		})
+		.from(guests)
+		.leftJoin(members, introducerOfClub(clubId))
+		.where(eq(guests.clubId, clubId));
+	return { rows, brought: countBroughtByMember(rows) };
+}
+
+/**
+ * Set a guest's kind, home club and introducer (#1050). Club-scoped; the
+ * caller gates on the club admin role, the same gate as every guest write.
+ *
+ * - `homeClub` goes through `normalizeHomeClub`: trimmed, blank is null, and
+ *   CLEARED for a Visitor (criterion 1's "invalid combination"). The length cap
+ *   is the schema's; it is re-checked here so a caller that skipped the schema
+ *   cannot write an unbounded value.
+ * - `introducedByMemberId` must be a membership of THIS club. The FK only says
+ *   the member exists somewhere; without this check an officer could record
+ *   another club's member as the introducer, and the VP Membership view would
+ *   then count a stranger's guests. "A member of this club" means any
+ *   membership row with this `club_id`, INACTIVE INCLUDED — the rule
+ *   `applyLinkGuestToMember` and its roster picker use. A former member who
+ *   brought a guest last year still brought them; history an import carries
+ *   in names people who have since lapsed. A guest's OWN converted membership
+ *   is refused: nobody brings themselves.
+ * - Null clears the introducer. Omitting it clears it too, like the contact
+ *   fields on `applyUpdateGuest`.
+ *
+ * ONE transaction, with the introducer's row read `FOR SHARE`: a member
+ * deleted between the check and the UPDATE would otherwise surface as a raw
+ * foreign-key violation, SQL and parameters included, in the officer's toast.
+ * The share lock makes a concurrent delete wait for this write (the FK then
+ * nulls the pointer, which is its job), and a delete that committed first is
+ * simply not found, so the refusal is always the message below.
+ *
+ * LOCK ORDER is member, then guest — the order a member DELETE takes them: it
+ * locks the member row, and `introduced_by_member_id`'s ON DELETE SET NULL then
+ * updates every guest row pointing at it. Locking the guest first and the
+ * member second is the opposite order and deadlocks against that delete
+ * (40P01), and a deadlock abort would put the raw driver error back in the
+ * toast. So the guest is read WITHOUT a lock, the member is taken FOR SHARE,
+ * and the guest row is locked last, by the UPDATE itself. The unlocked read
+ * only feeds the existence and self-introduction checks, and the UPDATE
+ * re-asserts the club.
+ */
+export async function applyUpdateGuestProfile(
+	input: UpdateGuestProfileInput,
+): Promise<{ ok: true }> {
+	const homeClub = normalizeHomeClub(input.kind, input.homeClub);
+	if (homeClub !== null && homeClub.length > GUEST_TEXT_MAX) {
+		throw new Error(HOME_CLUB_TOO_LONG_MESSAGE);
+	}
+	const introducedByMemberId = input.introducedByMemberId ?? null;
+
+	return db.transaction(async (tx) => {
+		const [guest] = await tx
+			.select({
+				id: guests.id,
+				convertedMembershipId: guests.convertedMembershipId,
+			})
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1);
+		if (!guest) throw new Error("Guest not found in this club.");
+
+		if (introducedByMemberId !== null) {
+			if (introducedByMemberId === guest.convertedMembershipId) {
+				throw new Error(GUEST_CANNOT_INTRODUCE_SELF_MESSAGE);
+			}
+			const [introducer] = await tx
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(
+						eq(members.id, introducedByMemberId),
+						eq(members.clubId, input.clubId),
+					),
+				)
+				.limit(1)
+				.for("share");
+			if (!introducer) throw new Error(INTRODUCER_NOT_IN_CLUB_MESSAGE);
+		}
+
+		await tx
+			.update(guests)
+			.set({
+				kind: input.kind,
+				homeClub,
+				introducedByMemberId,
+				updatedAt: new Date(),
+			})
+			.where(and(eq(guests.id, guest.id), eq(guests.clubId, input.clubId)));
+		return { ok: true as const };
 	});
 }

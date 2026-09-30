@@ -53,6 +53,7 @@ import {
 	isStrandedConvertedGuest,
 } from "#/lib/guest-convert";
 import { isInvitableStage } from "#/lib/guest-invite";
+import { type BroughtCount, guestKindCaption } from "#/lib/guest-profile";
 import { mailtoHref } from "#/lib/mailto";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
@@ -73,6 +74,7 @@ import {
 	undoGuestConversion,
 	unlinkGuestFromMember,
 } from "#/server/guest-pipeline";
+import { type GuestProfileRow, getGuestProfiles } from "#/server/guests";
 
 export const Route = createFileRoute("/_authed/admin/vp-membership")({
 	beforeLoad: ({ context }) => {
@@ -89,16 +91,21 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 				clubName: "",
 				clubSlug: null,
 				inviteContext: NO_INVITE_CONTEXT,
+				profiles: NO_PROFILES,
 				readOnly: false,
 			};
 		}
-		const [guests, resolved, inviteContext] = await Promise.all([
+		const [guests, resolved, inviteContext, profiles] = await Promise.all([
 			getGuestPipeline({ data: club.clubId }),
 			getClubByIdentifier({ data: club.clubId }),
 			getGuestInviteContext({ data: club.clubId }),
+			// Captions and counts are decoration on this page: a failed read
+			// degrades to none of them rather than taking the pipeline down.
+			getGuestProfiles({ data: club.clubId }).catch(() => NO_PROFILES),
 		]);
 		return {
 			guests,
+			profiles,
 			clubId: club.clubId,
 			clubName: club.name,
 			clubSlug: resolved?.slug ?? null,
@@ -117,6 +124,11 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 const NO_INVITE_CONTEXT: NextMeetingSummary = {
 	timezone: "UTC",
 	nextMeeting: null,
+};
+
+const NO_PROFILES: { rows: GuestProfileRow[]; brought: BroughtCount[] } = {
+	rows: [],
+	brought: [],
 };
 
 const STAGES: { id: GuestStage; label: string; blurb: string; tone: string }[] =
@@ -159,8 +171,17 @@ function toastError(err: unknown) {
 }
 
 function VpMembership() {
-	const { guests, clubId, clubName, clubSlug, inviteContext, readOnly } =
-		Route.useLoaderData();
+	const {
+		guests,
+		profiles,
+		clubId,
+		clubName,
+		clubSlug,
+		inviteContext,
+		readOnly,
+	} = Route.useLoaderData();
+	// Kind / home club / introducer per guest (#1050), keyed for the rows.
+	const profileById = new Map(profiles.rows.map((p) => [p.guestId, p]));
 	const router = useRouter();
 	const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -321,6 +342,7 @@ function VpMembership() {
 									<GuestRow
 										key={g.id}
 										guest={g}
+										profile={profileById.get(g.id) ?? null}
 										clubId={clubId}
 										busy={busyId === g.id}
 										onMove={move}
@@ -340,6 +362,8 @@ function VpMembership() {
 					);
 				})}
 			</div>
+
+			<BroughtBySection brought={profiles.brought} />
 
 			{/* Print: show only the QR tent, hide the app chrome + pipeline. */}
 			<style>{`
@@ -388,6 +412,42 @@ function Section({
 				{children}
 			</div>
 		</div>
+	);
+}
+
+/**
+ * "Visitors introduced" (#1050, Easy-Speak's report of the same name): each
+ * member who brought a guest, and how many. The counts come from the same rows
+ * each guest's "Brought by" line reads (`countBroughtByMember`), so they add up
+ * to exactly the guests shown with an introducer.
+ */
+function BroughtBySection({ brought }: { brought: BroughtCount[] }) {
+	const total = brought.reduce((n, b) => n + b.count, 0);
+	return (
+		<Section
+			title="Visitors introduced"
+			titleTone="text-[var(--sea-ink)]"
+			count={total}
+			subtitle="Who brought your guests — set it from a guest's Edit"
+		>
+			{brought.length === 0 ? (
+				<EmptyRow>No introductions recorded yet.</EmptyRow>
+			) : (
+				<ul data-slot="brought-by-counts">
+					{brought.map((b) => (
+						<li
+							key={b.memberId}
+							className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-2.5 text-sm last:border-b-0"
+						>
+							<span className="min-w-0 truncate font-semibold">{b.name}</span>
+							<span className="shrink-0 tabular-nums text-[var(--sea-ink-soft)]">
+								{b.count} guest{b.count === 1 ? "" : "s"}
+							</span>
+						</li>
+					))}
+				</ul>
+			)}
+		</Section>
 	);
 }
 
@@ -520,6 +580,7 @@ function GuestInvite({
 
 function GuestRow({
 	guest,
+	profile,
 	clubId,
 	busy,
 	onMove,
@@ -528,6 +589,8 @@ function GuestRow({
 	invite,
 }: {
 	guest: PipelineGuestRow;
+	/** Kind / home club / introducer (#1050); null if the read did not have it. */
+	profile: GuestProfileRow | null;
 	clubId: string;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
@@ -567,6 +630,10 @@ function GuestRow({
 	// gate tested, or `" a@b.com "` ships as `mailto: a@b.com `.
 	const hasPhone = (guest.phone ?? "").trim() !== "";
 	const email = (guest.email ?? "").trim();
+	const kindCaption = profile
+		? guestKindCaption(profile.kind, profile.homeClub)
+		: null;
+	const broughtBy = profile?.introducedByName ?? null;
 
 	return (
 		<div className="flex flex-col gap-3 border-b border-[var(--line)] px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
@@ -581,6 +648,14 @@ function GuestRow({
 				/>
 				<div className="min-w-0 leading-[1.3]">
 					<div className="truncate text-sm font-bold">{guest.name}</div>
+					{kindCaption ? (
+						<div
+							data-slot="guest-kind-caption"
+							className="truncate text-xs font-semibold text-[var(--palm)]"
+						>
+							{kindCaption}
+						</div>
+					) : null}
 					{invited ? (
 						<div
 							data-slot="guest-invite-history"
@@ -645,6 +720,14 @@ function GuestRow({
 						{visits}
 						{firstVisit ? ` · ${firstVisit}` : ""}
 					</div>
+					{broughtBy ? (
+						<div
+							data-slot="guest-brought-by"
+							className="truncate text-xs text-[var(--sea-ink-soft)]"
+						>
+							Brought by {broughtBy}
+						</div>
+					) : null}
 				</div>
 			</div>
 

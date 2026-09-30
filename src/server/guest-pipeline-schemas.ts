@@ -9,6 +9,11 @@
 // factory name. Keep that name out of this file, prose included — the check is
 // a raw substring scan, so even a mention in a comment opts the file back in.
 import { z } from "zod";
+import {
+	GUEST_KINDS,
+	GUEST_TEXT_MAX,
+	HOME_CLUB_TOO_LONG_MESSAGE,
+} from "#/lib/guest-profile";
 
 const uuid = z.string().uuid();
 
@@ -30,7 +35,7 @@ export const guestBookSchema = z.object({
 		.string()
 		.trim()
 		.min(1, "Please enter your name.")
-		.max(120, "That name is too long."),
+		.max(GUEST_TEXT_MAX, "That name is too long."),
 	email: z.string().trim().email().max(200).optional().or(z.literal("")),
 	phone: z.string().trim().max(40).optional().or(z.literal("")),
 });
@@ -53,3 +58,40 @@ export const recordGuestInviteSchema = z
 export type RecordGuestInviteSchemaInput = z.infer<
 	typeof recordGuestInviteSchema
 >;
+
+/**
+ * Set a guest's kind, home club and introducer (#1050). `.strict()` for the
+ * same reason as `recordGuestInviteSchema`: nothing here names an actor, and an
+ * unknown key should fail parsing rather than be dropped.
+ *
+ * `homeClub` is trimmed BEFORE the cap, so trailing spaces cannot push an
+ * otherwise-legal name over it. The cap applies only when the kind is not
+ * Visitor: a Visitor's home club is CLEARED (`normalizeHomeClub`), so refusing
+ * an over-long one would refuse a value that is about to be thrown away.
+ * `introducedByMemberId` is only shaped here — whether it names a member of
+ * THIS club is a database question, answered by `applyUpdateGuestProfile`.
+ */
+export const updateGuestProfileSchema = z
+	.object({
+		clubId: uuid,
+		guestId: uuid,
+		kind: z.enum(GUEST_KINDS),
+		homeClub: z.string().trim().nullable().optional(),
+		introducedByMemberId: uuid.nullable().optional(),
+	})
+	.strict()
+	.superRefine((d, ctx) => {
+		if (
+			d.kind !== "visitor" &&
+			d.homeClub != null &&
+			d.homeClub.length > GUEST_TEXT_MAX
+		) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["homeClub"],
+				message: HOME_CLUB_TOO_LONG_MESSAGE,
+			});
+		}
+	});
+
+export type UpdateGuestProfileInput = z.infer<typeof updateGuestProfileSchema>;

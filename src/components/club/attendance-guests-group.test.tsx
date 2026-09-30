@@ -20,6 +20,10 @@ const { updateGuest, toastSuccess, toastError, onSavedSpy } = vi.hoisted(
 	}),
 );
 vi.mock("#/server/guest-pipeline", () => ({ updateGuest }));
+vi.mock("#/server/guests", () => ({
+	getGuestProfile: vi.fn().mockResolvedValue(null),
+	updateGuestProfile: vi.fn(),
+}));
 vi.mock("sonner", () => ({
 	toast: { success: toastSuccess, error: toastError },
 }));
