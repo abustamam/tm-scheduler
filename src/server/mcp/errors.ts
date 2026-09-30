@@ -118,7 +118,7 @@ export type McpBlockingCode =
 	 * schema failure would reject a 60-line page because one address was misread,
 	 * which on a TRANSCRIPTION path is the wrong trade. It has to be caught
 	 * somewhere, though — a guest marked present becomes a default recipient of
-	 * the club's minutes email (`minutes-email-port-logic.ts:54`), and
+	 * the club's minutes email draft (`minutes-email-port-logic.ts:34`), and
 	 * `resolveMinutesRecipients` only checks that the string is non-empty.
 	 */
 	| "INVALID_EMAIL";

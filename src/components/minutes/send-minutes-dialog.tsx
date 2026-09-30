@@ -1,6 +1,5 @@
-import { useMutation } from "@tanstack/react-query";
-import { Mail, X } from "lucide-react";
-import { useState } from "react";
+import { Copy, Download, Mail, X } from "lucide-react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -16,7 +15,11 @@ import {
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
-import { sendMeetingMinutesEmail } from "#/server/minutes-email";
+import {
+	buildMinutesMailto,
+	MINUTES_MAILTO_WARN_LENGTH,
+	minutesBccList,
+} from "#/lib/minutes-mailto";
 import {
 	buildMinutesBody,
 	buildMinutesSubject,
@@ -28,15 +31,17 @@ export interface SendMinutesRecipient {
 }
 
 export interface SendMinutesDialogProps {
+	/** Unused since #903 (nothing is sent, so no server fn needs the club).
+	 *  Kept so the caller's props are unchanged. */
 	clubId: string;
 	meetingId: string;
 	clubName: string;
-	/** The meeting date (drives the default subject + attachment filename). */
+	/** The meeting date (drives the default subject + body). */
 	meetingDate: Date | string;
 	/**
 	 * Default recipients (active members + present guests WITH an email),
 	 * resolved by #152's Minutes tab (or the `getMinutesRecipients` server fn).
-	 * Shown as an editable to-list.
+	 * Shown as an editable list; every entry goes in the draft's bcc.
 	 */
 	initialRecipients: SendMinutesRecipient[];
 	/**
@@ -44,7 +49,7 @@ export interface SendMinutesDialogProps {
 	 * blocker. Purely informational.
 	 */
 	skipped?: { name: string }[];
-	/** Optional custom trigger; defaults to a "Send minutes" button. */
+	/** Optional custom trigger; defaults to an "Email the minutes" button. */
 	trigger?: React.ReactNode;
 }
 
@@ -53,15 +58,20 @@ function isEmailish(value: string): boolean {
 	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 }
 
+/** The guest copy of the minutes PDF: no club-internal action items (#529). */
+function guestCopyPdfHref(meetingId: string): string {
+	return `/api/meetings/${meetingId}/minutes/pdf?view=guests`;
+}
+
 /**
- * Admin-only "Send minutes" control (#165). Self-contained so #152's Minutes
- * tab can drop it in: it takes the resolved recipient list as a prop and, on
- * send, calls the admin-gated `sendMeetingMinutesEmail` server fn (which renders
- * the #152 PDF and attaches it). The parent is responsible for only rendering
- * this for admins — the server fn re-checks the admin role regardless.
+ * Admin-only "Email the minutes" control (#165, #903). GavelUp does not send
+ * the minutes: every message to a person is sent by a human. So this composes a
+ * DRAFT the officer opens in their own mail app — every recipient in bcc, their
+ * own subject and body — and hands them the guest copy of the PDF to attach.
+ * Nothing is written and there is no "sent" state; the app cannot know whether
+ * the officer pressed send.
  */
 export function SendMinutesDialog({
-	clubId,
 	meetingId,
 	clubName,
 	meetingDate,
@@ -80,18 +90,11 @@ export function SendMinutesDialog({
 	);
 	const [body, setBody] = useState(() => buildMinutesBody(clubName, date));
 
-	const sendMutation = useMutation({
-		mutationFn: () =>
-			sendMeetingMinutesEmail({
-				data: {
-					clubId,
-					meetingId,
-					recipients: recipients.map((r) => ({ name: r.name, email: r.email })),
-					subject: subject.trim() || undefined,
-					body,
-				},
-			}),
-	});
+	const mailto = useMemo(
+		() => buildMinutesMailto({ recipients, subject, body }),
+		[recipients, subject, body],
+	);
+	const longLink = mailto.length > MINUTES_MAILTO_WARN_LENGTH;
 
 	function removeRecipient(email: string) {
 		setRecipients((prev) => prev.filter((r) => r.email !== email));
@@ -112,21 +115,16 @@ export function SendMinutesDialog({
 		setNewEmail("");
 	}
 
-	async function handleSend() {
-		if (recipients.length === 0 || sendMutation.isPending) return;
+	async function copyAddresses() {
 		try {
-			const result = await sendMutation.mutateAsync();
-			const sentCount = result.sent.length;
+			await navigator.clipboard.writeText(minutesBccList(recipients));
 			toast.success(
-				sentCount === 1
-					? "Minutes sent to 1 recipient."
-					: `Minutes sent to ${sentCount} recipients.`,
+				recipients.length === 1
+					? "Copied 1 address."
+					: `Copied ${recipients.length} addresses.`,
 			);
-			setOpen(false);
-		} catch (err) {
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't send the minutes.",
-			);
+		} catch {
+			toast.error("Couldn't copy — your browser blocked clipboard access");
 		}
 	}
 
@@ -136,23 +134,37 @@ export function SendMinutesDialog({
 				{trigger ?? (
 					<Button type="button" variant="outline">
 						<Mail className="size-4" />
-						Send minutes
+						Email the minutes
 					</Button>
 				)}
 			</DialogTrigger>
 			<DialogContent className="sm:max-w-xl">
 				<DialogHeader>
-					<DialogTitle>Send minutes</DialogTitle>
+					<DialogTitle>Email the minutes</DialogTitle>
 					<DialogDescription>
-						Email the minutes PDF to the club. Remove anyone you don't want, or
-						add extra addresses.
+						You send this from your own email. Download the PDF, then open a
+						draft addressed to the club and attach it.
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="flex flex-col gap-4">
+					{/* Step 1 — the attachment */}
+					<div className="space-y-1.5">
+						<Button asChild variant="outline" size="sm">
+							<a href={guestCopyPdfHref(meetingId)} download>
+								<Download className="size-4" />
+								Download the guest copy (PDF)
+							</a>
+						</Button>
+						<p className="text-muted-foreground text-xs">
+							Attach this to your email. It leaves out the club's internal
+							action items, because guests are on the list.
+						</p>
+					</div>
+
 					{/* Recipients */}
 					<div className="space-y-2">
-						<Label>Recipients ({recipients.length})</Label>
+						<Label>Recipients, in Bcc ({recipients.length})</Label>
 						{recipients.length === 0 ? (
 							<p className="text-muted-foreground text-sm">
 								No recipients — add at least one address below.
@@ -246,22 +258,39 @@ export function SendMinutesDialog({
 							onChange={(e) => setBody(e.target.value)}
 							rows={5}
 						/>
-						<p className="text-muted-foreground text-xs">
-							The minutes PDF is attached automatically.
-						</p>
 					</div>
+
+					{longLink ? (
+						<output className="block rounded-md border border-border bg-muted px-3 py-2 text-sm">
+							Your list is long; if the draft opens without addresses, paste
+							them with Copy addresses.
+						</output>
+					) : null}
 				</div>
 
 				<DialogFooter showCloseButton>
 					<Button
 						type="button"
-						onClick={() => void handleSend()}
-						disabled={recipients.length === 0 || sendMutation.isPending}
+						variant="outline"
+						onClick={() => void copyAddresses()}
+						disabled={recipients.length === 0}
 					>
-						{sendMutation.isPending
-							? "Sending…"
-							: `Send to ${recipients.length}`}
+						<Copy className="size-4" />
+						Copy addresses
 					</Button>
+					{recipients.length === 0 ? (
+						<Button type="button" disabled>
+							<Mail className="size-4" />
+							Open email draft
+						</Button>
+					) : (
+						<Button asChild>
+							<a href={mailto}>
+								<Mail className="size-4" />
+								Open email draft
+							</a>
+						</Button>
+					)}
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>

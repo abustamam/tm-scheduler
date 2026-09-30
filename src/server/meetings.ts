@@ -130,8 +130,9 @@ const pastMeetingsInput = z.object({
  * for the anonymous visitor the strip fix is for.
  *
  * NOTE: the issue asked for a "minutes sent" flag per row. No such record
- * exists — `meetings` has no sent timestamp and `sendMeetingMinutesEmail` writes
- * none. The row reports `hasMinutes` (minutes actually recorded) instead.
+ * exists — `meetings` has no sent timestamp, and since #903 the officer sends
+ * the minutes from their own mail app, so the app cannot know. The row reports
+ * `hasMinutes` (minutes actually recorded) instead.
  */
 export const listPastMeetings = createServerFn({ method: "GET" })
 	.validator((input: unknown) => pastMeetingsInput.parse(input))

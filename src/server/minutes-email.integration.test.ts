@@ -1,99 +1,89 @@
 /**
- * DB-backed integration test for the minutes-email port's REAL method,
- * `loadHeader` (meetings + clubs are existing tables). The other two port
- * methods (renderMinutesPdf, loadRecipients) depend on #152 and are stubbed to
- * throw, so they are not exercised here — see minutes-email-port.ts. (Post-integration these methods are real; this suite still drives the send path with a mock port.)
+ * DB-backed test for what is left of the minutes email after #903: the DEFAULT
+ * recipient list the officer's draft starts from. GavelUp no longer sends the
+ * minutes, so there is no send path to drive here — the draft is built
+ * client-side (`#/lib/minutes-mailto`) and the attachment is the PDF route's
+ * guest copy (`minutes-pdf-route.integration.test.ts`).
  *
- * It also drives `sendMinutesEmail` end-to-end against the real header + a mock
- * PDF/recipients, capturing the sendEmail params, to prove recipient resolution
- * + attachment assembly work against a real meeting row.
- *
- * Run with:
- *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
- *     bunx vitest run src/server/minutes-email.integration.test.ts
+ * `loadRecipients` runs for real against the seeded rows, through the port the
+ * `getMinutesRecipients` server fn uses, with `#/db` pointed at the test db.
+ * Every seeded club-scoped row cascades from the club in `cleanup`.
  */
-import { eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, meetings } from "#/db/schema";
-import type { SendEmailParams } from "#/lib/email";
+import { guests, meetingAttendance, members } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
-import { type MinutesEmailPort, sendMinutesEmail } from "./minutes-email-logic";
 
-// The stub's loadHeader queries the shared `db` (production pool), so run it
-// against testDb instead by reproducing the same query here — mirrors how the
-// other integration tests replicate server-fn query logic with `testDb`.
-async function loadHeaderVia(meetingId: string) {
-	const [row] = await testDb
-		.select({ clubName: clubs.name, meetingDate: meetings.scheduledAt })
-		.from(meetings)
-		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
-		.where(eq(meetings.id, meetingId))
-		.limit(1);
-	if (!row) throw new Error("Meeting not found.");
-	return { clubName: row.clubName, meetingDate: row.meetingDate };
-}
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-describe.skipIf(!hasTestDb)(
-	"minutes-email integration (loadHeader + send)",
-	() => {
-		let seeded: SeededClub;
+const { createMinutesEmailPort } = await import("./minutes-email-port-logic");
+const { resolveMinutesRecipients } = await import("./minutes-email-logic");
 
-		beforeEach(async () => {
-			seeded = await seedClub();
+describe.skipIf(!hasTestDb)("minutes email default recipients (#903)", () => {
+	let seeded: SeededClub;
+	const run = randomUUID().slice(0, 8);
+
+	beforeEach(async () => {
+		seeded = await seedClub();
+	});
+
+	afterEach(async () => {
+		await cleanup(seeded.clubId, [seeded.adminUserId, seeded.memberUserId]);
+	});
+
+	async function addGuest(
+		name: string,
+		email: string | null,
+		status: "present" | "absent",
+	) {
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seeded.clubId, name, email })
+			.returning({ id: guests.id });
+		if (!g) throw new Error("guest insert failed");
+		await testDb.insert(meetingAttendance).values({
+			meetingId: seeded.meetingId,
+			guestId: g.id,
+			status,
 		});
+	}
 
-		afterEach(async () => {
-			await cleanup(seeded.clubId, [seeded.adminUserId, seeded.memberUserId]);
-			vi.restoreAllMocks();
+	it("is the active roster plus the guests marked present, split by email", async () => {
+		const lapsedPerson = await seedPerson({ name: `Lapsed ${run}` });
+		await testDb.insert(members).values({
+			clubId: seeded.clubId,
+			personId: lapsedPerson,
+			name: `Lapsed ${run}`,
+			email: `lapsed-${run}@test.example`,
+			clubRole: "member",
+			status: "inactive",
 		});
+		await addGuest(`Gwen ${run}`, `gwen-${run}@guest.example`, "present");
+		await addGuest(`Nomail ${run}`, null, "present");
+		await addGuest(`Absent ${run}`, `absent-${run}@guest.example`, "absent");
 
-		it("loadHeader returns the real club name + meeting date", async () => {
-			const header = await loadHeaderVia(seeded.meetingId);
-			expect(header.clubName).toBe("Test Club");
-			expect(header.meetingDate).toBeInstanceOf(Date);
-		});
+		const port = createMinutesEmailPort();
+		const loaded = await port.loadRecipients(seeded.meetingId);
+		const { recipients, skipped } = resolveMinutesRecipients(loaded);
 
-		it("resolves recipients + attaches the PDF for a real meeting", async () => {
-			const port: MinutesEmailPort = {
-				loadHeader: loadHeaderVia,
-				renderMinutesPdf: async () => new Uint8Array([9, 8, 7]),
-				loadRecipients: async () => ({
-					members: [
-						{ name: "Ada", email: "ada@example.com" },
-						{ name: "NoEmail", email: null },
-					],
-					presentGuests: [{ name: "Gwen", email: "gwen@example.com" }],
-				}),
-			};
-			const sendEmail = vi
-				.fn<(params: SendEmailParams) => Promise<void>>()
-				.mockResolvedValue();
+		expect(recipients.map((r) => r.email)).toEqual([
+			`admin-${seeded.adminUserId}@test.example`,
+			`member-${seeded.memberUserId}@test.example`,
+			`gwen-${run}@guest.example`,
+		]);
+		expect(skipped).toEqual([{ name: `Nomail ${run}` }]);
+	});
 
-			const result = await sendMinutesEmail(
-				port,
-				{ sendEmail },
-				{
-					meetingId: seeded.meetingId,
-				},
-			);
-
-			expect(result.sent.map((r) => r.email)).toEqual([
-				"ada@example.com",
-				"gwen@example.com",
-			]);
-			expect(result.skipped).toEqual([{ name: "NoEmail" }]);
-
-			const params = sendEmail.mock.calls[0][0];
-			expect(params.subject).toContain("Test Club — Minutes for");
-			expect(params.attachments?.[0].content).toBe(
-				Buffer.from(new Uint8Array([9, 8, 7])).toString("base64"),
-			);
-		});
-	},
-);
+	it("throws for a meeting that does not exist", async () => {
+		await expect(
+			createMinutesEmailPort().loadRecipients(randomUUID()),
+		).rejects.toThrow("Meeting not found.");
+	});
+});

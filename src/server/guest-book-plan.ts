@@ -339,9 +339,9 @@ export async function plan(
 		}
 
 		// A guest marked present becomes a DEFAULT RECIPIENT of this meeting's
-		// minutes email (`minutes-email-port-logic.ts:54`), and
+		// minutes email draft (`minutes-email-port-logic.ts:34`), and
 		// `resolveMinutesRecipients` only checks the string is non-empty before
-		// handing it to the mailer. Both other paths that write `guests.email`
+		// putting it in the officer's draft. Both other paths that write `guests.email`
 		// validate the format — the public guest book
 		// (`guest-pipeline-schemas.ts:33`) and the admin edit
 		// (`guest-pipeline.ts:85`) both use `z.string().trim().email()`. This one

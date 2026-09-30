@@ -15,12 +15,25 @@ import { renderMinutesPdf } from "#/server/minutes-pdf-logic";
  * (ADR-0014 / #152). Same visibility as the on-screen Minutes section: club
  * admins always; members only once the meeting is `completed`. Non-members get
  * 403. Generated server-side via `@react-pdf/renderer` (no Chromium).
+ *
+ * `?view=guests` serves the GUEST copy (#903), the one without the club's
+ * internal action items (#529), for the officer to attach to the minutes email
+ * they send themselves: that list includes guests, some self-registered through
+ * the public guest book. It sits behind the SAME gates, and needs no new
+ * permission, because the guest copy is a strict subset of the member copy. Any
+ * other `view` value, or none, is the member copy, exactly as before.
  */
 export const Route = createFileRoute("/api/meetings/$id/minutes/pdf")({
 	server: {
 		handlers: {
-			GET: async ({ params }) => {
+			GET: async ({ request, params }) => {
 				const meetingId = params.id;
+				// Exact match only: an unknown or mis-cased value falls back to the
+				// member copy, which is what this URL has always served.
+				const audience =
+					new URL(request.url).searchParams.get("view") === "guests"
+						? "guests"
+						: "members";
 				const sessionUser = await getSessionUser();
 				if (!sessionUser) {
 					return new Response("Sign in required.", { status: 401 });
@@ -52,7 +65,7 @@ export const Route = createFileRoute("/api/meetings/$id/minutes/pdf")({
 					return new Response("Minutes aren't available yet.", { status: 403 });
 				}
 
-				const pdf = await renderMinutesPdf(meetingId);
+				const pdf = await renderMinutesPdf(meetingId, audience);
 
 				// Build a friendly filename: "Minutes - <club> - <date>.pdf".
 				const [row] = await db
@@ -82,12 +95,15 @@ export const Route = createFileRoute("/api/meetings/$id/minutes/pdf")({
 				)} - ${date}`
 					.replace(/[^\w\-. ]+/g, "")
 					.trim();
+				// Appended AFTER the scrub above, which would strip the parentheses.
+				// A fixed string, so nothing user-supplied enters the header here.
+				const suffix = audience === "guests" ? " (guest copy)" : "";
 
 				return new Response(new Uint8Array(pdf), {
 					status: 200,
 					headers: {
 						"content-type": "application/pdf",
-						"content-disposition": `attachment; filename="${safe}.pdf"`,
+						"content-disposition": `attachment; filename="${safe}${suffix}.pdf"`,
 						"cache-control": "no-store",
 					},
 				});
