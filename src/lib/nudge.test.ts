@@ -14,6 +14,7 @@ import { dutiesForRole, personalMeetingHref } from "#/lib/role-duties";
 import {
 	buildNudge,
 	nextOrientationItem,
+	orientationNudgeAvailable,
 	outstandingDuties,
 	outstandingDutiesByMember,
 	personalNudgeUrl,
@@ -1065,5 +1066,83 @@ describe("buildNudge orientation mode (#942)", () => {
 		]);
 		expect(r.mailtoUrl).toMatch(/^mailto:j@x\.io\?subject=/);
 		expect(r.whatsappUrl).toContain("14155550123");
+	});
+});
+
+describe("orientation drafts without a next meeting (#942)", () => {
+	const ORDER: OrientationItemKey[] = [
+		"choose-path",
+		"ice-breaker",
+		"supporting-role",
+		"base-camp",
+		"get-a-mentor",
+	];
+	const openFrom = (open: OrientationItemKey | null) =>
+		ORDER.map((key) => ({
+			key,
+			done: open === null || ORDER.indexOf(key) < ORDER.indexOf(open),
+		}));
+	const draft = (
+		open: OrientationItemKey | null,
+		meeting: { meetingDate?: string | null; shareUrl?: string | null } = {},
+	) =>
+		buildNudge({
+			name: "Jane Doe",
+			email: "j@x.io",
+			mode: "orientation",
+			origin: "https://gavelup.app",
+			items: openFrom(open),
+			...meeting,
+		});
+
+	it.each<[OrientationItemKey | null, boolean]>([
+		["choose-path", true],
+		["ice-breaker", false],
+		["supporting-role", false],
+		["base-camp", true],
+		["get-a-mentor", true],
+		[null, false],
+	])("without a meeting, %s has a draft: %s", (open, available) => {
+		expect(orientationNudgeAvailable(openFrom(open), false)).toBe(available);
+		expect(orientationNudgeAvailable(openFrom(open), true)).toBe(true);
+	});
+
+	it.each<[OrientationItemKey, string]>([
+		[
+			"choose-path",
+			"Hi Jane, have you had a chance to pick your Pathways path yet? Here's a short guide to the paths: https://gavelup.app/resources/what-is-pathways",
+		],
+		[
+			"base-camp",
+			"Hi Jane, have you had a chance to set up Base Camp yet? Here's how: https://gavelup.app/resources/what-is-pathways#base-camp",
+		],
+		[
+			"get-a-mentor",
+			"Hi Jane, would you like me to pair you with a mentor? It's an experienced member who can help you through your first speeches.",
+		],
+	])("%s drafts the same message with no meeting", (open, message) => {
+		expect(draft(open).message).toBe(message);
+		expect(draft(open).message).not.toMatch(/meeting|undefined|null/i);
+	});
+
+	it.each<OrientationItemKey | null>([
+		"ice-breaker",
+		"supporting-role",
+		null,
+	])("%s never interpolates a missing meeting, even if a caller skips the check", (open) => {
+		const m = draft(open).message;
+		expect(m).not.toMatch(/undefined|null|https:\/\/gavelup\.app\/club/);
+		expect(m).not.toMatch(/Our next meeting is/);
+	});
+
+	it("treats a blank meeting as none", () => {
+		expect(
+			draft("ice-breaker", { meetingDate: " ", shareUrl: "" }).message,
+		).toBe(
+			"Hi Jane, would you like to schedule your Ice Breaker? Let me know and I'll find you a slot.",
+		);
+		expect(
+			draft(null, { meetingDate: "Thu, Oct 1", shareUrl: " " }).message,
+		).toBe("Hi Jane, how are your first weeks with us going?");
 	});
 });

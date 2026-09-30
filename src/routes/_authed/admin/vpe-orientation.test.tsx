@@ -36,13 +36,13 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-const LABELS: Record<OrientationItemKey, string> = {
-	"choose-path": "Choose a path",
-	"ice-breaker": "Schedule your Ice Breaker",
-	"supporting-role": "Take a supporting role",
-	"base-camp": "Set up Base Camp",
-	"get-a-mentor": "Get a mentor",
-};
+const KEYS: OrientationItemKey[] = [
+	"choose-path",
+	"ice-breaker",
+	"supporting-role",
+	"base-camp",
+	"get-a-mentor",
+];
 
 function row(
 	over: Partial<OrientationRosterRow> & { done?: OrientationItemKey[] } = {},
@@ -56,11 +56,7 @@ function row(
 		phone: "+15551234567",
 		startedAt: new Date("2026-09-20T00:00:00Z"),
 		days: 10,
-		items: (Object.keys(LABELS) as OrientationItemKey[]).map((key) => ({
-			key,
-			label: LABELS[key],
-			done: done.includes(key),
-		})),
+		items: KEYS.map((key) => ({ key, done: done.includes(key) })),
 		mentorNames: [],
 		...rest,
 	};
@@ -185,9 +181,49 @@ describe("VPE dashboard — New members in orientation (#942)", () => {
 		).toBeTruthy();
 	});
 
-	it("offers no draft without a next meeting", async () => {
-		await renderRoute([row()], null);
-		expect(screen.getByText("Nia Newcomer")).toBeTruthy();
+	it.each<[string, OrientationItemKey[], string]>([
+		[
+			"choose-path",
+			[],
+			"Hi Nia, have you had a chance to pick your Pathways path yet? Here's a short guide to the paths:",
+		],
+		[
+			"base-camp",
+			["choose-path", "ice-breaker", "supporting-role"],
+			"Hi Nia, have you had a chance to set up Base Camp yet? Here's how:",
+		],
+		[
+			"get-a-mentor",
+			["choose-path", "ice-breaker", "supporting-role", "base-camp"],
+			"Hi Nia, would you like me to pair you with a mentor?",
+		],
+	])("with no next meeting, still drafts %s, naming no meeting", async (_k, done, text) => {
+		await renderRoute([row({ done })], null);
+		const mail = await screen.findByLabelText("Email Nia Newcomer");
+		const body = decodeURIComponent(mail.getAttribute("href") ?? "");
+		expect(body).toContain(text);
+		expect(body).not.toMatch(/meeting/i);
+	});
+
+	it.each<[string, OrientationItemKey[]]>([
+		["ice-breaker", ["choose-path"]],
+		["supporting-role", ["choose-path", "ice-breaker"]],
+	])("with no next meeting, offers no %s draft", async (_k, done) => {
+		// A control row that DOES get a draft, so the absence below is read
+		// after the post-mount pass that renders drafts, not before it.
+		await renderRoute(
+			[
+				row({ done }),
+				row({ memberId: "c", name: "Control Cal", email: "cal@example.com" }),
+			],
+			null,
+		);
+		await screen.findByLabelText("Email Control Cal");
 		expect(screen.queryByLabelText("Email Nia Newcomer")).toBeNull();
+		expect(
+			screen.queryByLabelText(
+				"Message Nia Newcomer on WhatsApp, opens in a new tab",
+			),
+		).toBeNull();
 	});
 });

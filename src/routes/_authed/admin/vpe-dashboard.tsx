@@ -28,6 +28,7 @@ import {
 } from "#/lib/level-proximity";
 import { formatTenure } from "#/lib/members";
 import { signupUrlFor } from "#/lib/next-meeting-summary";
+import { orientationNudgeAvailable } from "#/lib/nudge";
 import {
 	isStalledInOrientation,
 	ORIENTATION_STALLED_AFTER_DAYS,
@@ -826,9 +827,12 @@ function OrientationRow({
 					) : null}
 				</div>
 				{/* The draft names the member's next open item. GavelUp drafts;
-				    the VPE sends from their own app (ADR-0028). No next meeting
-				    means no draft, as in "Close to a level". */}
-				{nudge && origin ? (
+				    the VPE sends from their own app (ADR-0028). With no next
+				    meeting the path, Base Camp and mentor drafts are still
+				    offered, without a meeting in them; the two slot items need
+				    one and get no draft. `origin` is empty on the server pass,
+				    so no link renders before mount. */}
+				{origin && orientationNudgeAvailable(row.items, nudge !== null) ? (
 					<NudgeButtons
 						mode="orientation"
 						iconOnly
@@ -836,8 +840,8 @@ function OrientationRow({
 						preferredName={row.preferredName}
 						phone={row.phone}
 						email={row.email}
-						meetingDate={nudge.meetingDate}
-						shareUrl={nudge.shareUrl}
+						meetingDate={nudge?.meetingDate}
+						shareUrl={nudge?.shareUrl}
 						items={row.items}
 						origin={origin}
 					/>
