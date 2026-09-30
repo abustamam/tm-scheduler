@@ -62,7 +62,7 @@ import {
 import { toE164 } from "#/lib/phone";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { loadNextMeetingSummary } from "./meetings-logic";
-import { loadOrientationFacts } from "./orientation-logic";
+import { loadOrientationFactsForMembers } from "./orientation-logic";
 import { pathwaysByMember } from "./pathways-read-logic";
 
 export type {
@@ -348,10 +348,10 @@ export async function loadLevelProximity(
  * The SQL only narrows the candidates (this club, active, started, not
  * dismissed). What counts as done, and so whether the checklist is complete,
  * is decided per member by #940's own `loadOrientationFacts` +
- * `orientationView`, the same pair the member's dashboard reads, so the ticks
- * here cannot disagree with the member's own checklist. That is one small
- * batch of reads per candidate; the candidates are only the members currently
- * in orientation, not the roster.
+ * `orientationView`, the same pair the member's dashboard reads (its batch
+ * form, `loadOrientationFactsForMembers`, which `loadOrientationFacts` is a
+ * one-id call to), so the ticks here cannot disagree with the member's own
+ * checklist. A fixed number of queries whatever the candidate count.
  *
  * Each row carries the member's contact for the VPE's nudge DRAFT (ADR-0028:
  * the VPE sends it from their own app; nothing here sends). Contact is PII,
@@ -385,31 +385,30 @@ export async function loadOrientationRoster(
 		loadClubDefaultCountryCode(clubId),
 	]);
 
-	const rows = await Promise.all(
-		candidates.map(async (c): Promise<OrientationRosterRow | null> => {
-			if (!c.startedAt) return null;
-			const facts = await loadOrientationFacts(c.memberId);
-			if (!facts) return null;
-			const view = orientationView(facts);
-			if (!view.visible) return null;
-			return {
-				memberId: c.memberId,
-				name: c.name,
-				preferredName: c.preferredName,
-				// Blank is no address: `buildNudge` would otherwise draft to "".
-				email: c.email?.trim() ? c.email : null,
-				phone: toE164(c.phone, countryCode),
-				startedAt: c.startedAt,
-				days: daysInOrientation(c.startedAt, now),
-				items: view.items.map(({ key, label, done }) => ({
-					key,
-					label,
-					done,
-				})),
-				mentorNames: view.mentors.map((m) => m.name),
-			};
-		}),
+	// ONE batch for every candidate: a fixed number of queries however many
+	// members have started orientation and never dismissed it (completed ones
+	// included, which is why the SQL above cannot bound the count).
+	const factsById = await loadOrientationFactsForMembers(
+		candidates.map((c) => c.memberId),
 	);
+	const rows = candidates.map((c): OrientationRosterRow | null => {
+		const facts = factsById.get(c.memberId);
+		if (!c.startedAt || !facts) return null;
+		const view = orientationView(facts);
+		if (!view.visible) return null;
+		return {
+			memberId: c.memberId,
+			name: c.name,
+			preferredName: c.preferredName,
+			// Blank is no address: `buildNudge` would otherwise draft to "".
+			email: c.email?.trim() ? c.email : null,
+			phone: toE164(c.phone, countryCode),
+			startedAt: c.startedAt,
+			days: daysInOrientation(c.startedAt, now),
+			items: view.items.map(({ key, done }) => ({ key, done })),
+			mentorNames: view.mentors.map((m) => m.name),
+		};
+	});
 	return rows
 		.filter((r): r is OrientationRosterRow => r !== null)
 		.sort(compareOrientationRows);

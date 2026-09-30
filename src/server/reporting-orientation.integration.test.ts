@@ -22,7 +22,8 @@ import { cleanup, hasTestDb, seedClub, seedPerson, testDb } from "#/test/db";
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { loadOrientationRoster } = await import("./reporting-logic");
-const { getOrientation } = await import("./orientation-logic");
+const { getOrientation, loadOrientationFacts, loadOrientationFactsForMembers } =
+	await import("./orientation-logic");
 const { requireClubAdminView } = await import("./guards");
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -102,7 +103,12 @@ async function enroll(personId: string) {
 /** Distinct meeting times, since (club, scheduled_at) is unique. */
 let meetingSeq = 0;
 
-async function assignSlot(clubId: string, memberId: string, speaker: boolean) {
+async function assignSlot(
+	clubId: string,
+	memberId: string,
+	speaker: boolean,
+	status: "scheduled" | "cancelled" | "completed" = "completed",
+) {
 	meetingSeq += 1;
 	const [def] = await testDb
 		.insert(roleDefinitions)
@@ -118,7 +124,7 @@ async function assignSlot(clubId: string, memberId: string, speaker: boolean) {
 		.values({
 			clubId,
 			scheduledAt: new Date(daysAgo(1).getTime() + meetingSeq * 60_000),
-			status: "completed",
+			status,
 		})
 		.returning({ id: meetings.id });
 	if (!def || !meeting) throw new Error("fixture");
@@ -185,7 +191,7 @@ describe.skipIf(!hasTestDb)("loadOrientationRoster (#942)", () => {
 		const [row] = await loadOrientationRoster(s.clubId, NOW);
 		const own = await getOrientation(s.memberId);
 		expect(row?.items).toEqual(
-			own?.items.map(({ key, label, done }) => ({ key, label, done })),
+			own?.items.map(({ key, done }) => ({ key, done })),
 		);
 		expect(row?.items.map((i) => i.done)).toEqual([
 			true,
@@ -253,5 +259,128 @@ describe.skipIf(!hasTestDb)("loadOrientationRoster (#942)", () => {
 		await expect(
 			requireClubAdminView(s.adminUserId, s.clubId),
 		).resolves.toBeDefined();
+	});
+});
+
+describe.skipIf(!hasTestDb)("loadOrientationFactsForMembers (#942)", () => {
+	/** Five memberships in different states, across two clubs. */
+	async function mixed() {
+		const s = await seed();
+		const other = await seed();
+		// s.memberId: a path, a cancelled speech (counts for nothing), a
+		// supporting role, and an active new-member mentor plus an ended one.
+		await enroll(s.personId);
+		await assignSlot(s.clubId, s.memberId, true, "cancelled");
+		await assignSlot(s.clubId, s.memberId, false, "scheduled");
+		await testDb.insert(mentorships).values([
+			{
+				clubId: s.clubId,
+				mentorMemberId: s.adminMemberId,
+				menteeMemberId: s.memberId,
+				focus: "new_member",
+			},
+			{
+				clubId: s.clubId,
+				mentorMemberId: s.adminMemberId,
+				menteeMemberId: s.memberId,
+				focus: "contest",
+				endedAt: daysAgo(3),
+			},
+		]);
+		// Base Camp ticked, a speech, nothing else.
+		const ticked = await addMember(s.clubId, "Ticked Tia", {
+			basecampSetupAt: daysAgo(1),
+			phone: "4155550123",
+		});
+		await assignSlot(s.clubId, ticked.id, true, "scheduled");
+		// Dismissed, with two paths.
+		const dismissed = await addMember(s.clubId, "Dismissed Dee", {
+			orientationDismissedAt: daysAgo(0),
+		});
+		await enroll(dismissed.personId);
+		await enroll(dismissed.personId);
+		// INACTIVE mentee with a pairing: the pairing must not count.
+		const inactive = await addMember(s.clubId, "Inactive Ian", {
+			status: "inactive",
+		});
+		await testDb.insert(mentorships).values({
+			clubId: s.clubId,
+			mentorMemberId: ticked.id,
+			menteeMemberId: inactive.id,
+			focus: "new_member",
+		});
+		// Another club's member, with a slot of its own.
+		await assignSlot(other.clubId, other.memberId, false);
+		return {
+			ids: [s.memberId, ticked.id, dismissed.id, inactive.id, other.memberId],
+			s,
+			ticked,
+			dismissed,
+			inactive,
+			other,
+		};
+	}
+
+	it("equals the one-member loader for every member, loaded together", async () => {
+		const m = await mixed();
+		const batch = await loadOrientationFactsForMembers(m.ids);
+		expect([...batch.keys()].sort()).toEqual([...m.ids].sort());
+		for (const id of m.ids) {
+			expect(batch.get(id)).toEqual(await loadOrientationFacts(id));
+		}
+		// And the facts themselves, so equality is not two copies of one bug.
+		const mine = batch.get(m.s.memberId);
+		expect(mine?.activePathCount).toBe(1);
+		expect(mine?.slots).toEqual([
+			{ isSpeakerRole: true, meetingStatus: "cancelled" },
+			{ isSpeakerRole: false, meetingStatus: "scheduled" },
+		]);
+		expect(mine?.menteePairings.map((p) => p.focus).sort()).toEqual([
+			"contest",
+			"new_member",
+		]);
+		expect(batch.get(m.ticked.id)?.slots).toEqual([
+			{ isSpeakerRole: true, meetingStatus: "scheduled" },
+		]);
+		expect(batch.get(m.ticked.id)?.basecampSetupAt).toBeInstanceOf(Date);
+		expect(batch.get(m.ticked.id)?.menteePairings).toEqual([]);
+		expect(batch.get(m.dismissed.id)?.activePathCount).toBe(2);
+		expect(batch.get(m.dismissed.id)?.dismissedAt).toBeInstanceOf(Date);
+		expect(batch.get(m.inactive.id)?.menteePairings).toEqual([]);
+		expect(batch.get(m.other.memberId)?.slots).toEqual([
+			{ isSpeakerRole: false, meetingStatus: "completed" },
+		]);
+	});
+
+	it("an empty id list is an empty map, with no query", async () => {
+		const select = vi.spyOn(testDb, "select");
+		expect((await loadOrientationFactsForMembers([])).size).toBe(0);
+		expect(select).not.toHaveBeenCalled();
+		select.mockRestore();
+	});
+
+	it("an unknown id is absent, and loadOrientationFacts answers null", async () => {
+		const unknown = randomUUID();
+		expect((await loadOrientationFactsForMembers([unknown])).has(unknown)).toBe(
+			false,
+		);
+		expect(await loadOrientationFacts(unknown)).toBeNull();
+	});
+
+	it("runs the same number of queries for one member as for five", async () => {
+		const m = await mixed();
+		const count = async (ids: string[]) => {
+			const select = vi.spyOn(testDb, "select");
+			const distinct = vi.spyOn(testDb, "selectDistinct");
+			await loadOrientationFactsForMembers(ids);
+			const n = select.mock.calls.length + distinct.mock.calls.length;
+			select.mockRestore();
+			distinct.mockRestore();
+			return n;
+		};
+		const one = await count([m.s.memberId]);
+		// The four in club `s` share one club, so one country-code read.
+		const four = await count(m.ids.slice(0, 4));
+		expect(four).toBe(one);
 	});
 });

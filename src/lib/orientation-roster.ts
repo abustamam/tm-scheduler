@@ -53,6 +53,12 @@ export const ORIENTATION_TICK_LABELS: Record<OrientationItemKey, string> = {
 	"get-a-mentor": "mentor",
 };
 
+/**
+ * One checklist item as the roster row and the orientation nudge read it: which
+ * item, and whether it is done. The label is `ORIENTATION_TICK_LABELS`'.
+ */
+export type OrientationTick = Pick<OrientationItem, "key" | "done">;
+
 /** One member in orientation, as the dashboard receives it. */
 export interface OrientationRosterRow {
 	memberId: string;
@@ -65,8 +71,8 @@ export interface OrientationRosterRow {
 	startedAt: Date;
 	/** `daysInOrientation(startedAt, now)`, computed once on the server. */
 	days: number;
-	/** `orientationView(facts).items`, in checklist order, unmodified. */
-	items: Pick<OrientationItem, "key" | "label" | "done">[];
+	/** `orientationView(facts).items`, in checklist order, key and done only. */
+	items: OrientationTick[];
 	/**
 	 * Active new-member mentors (`orientationView(facts).mentors`): the SAME
 	 * pairings that tick the "mentor" item, so the column and the tick agree.
