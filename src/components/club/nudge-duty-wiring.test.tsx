@@ -362,7 +362,7 @@ describe("the agenda slot card's confirm draft", () => {
 		expect(text).toContain("/club/mcf/meeting/2026-09-09/me?as=m9");
 	});
 
-	it("keeps a GUEST holder's draft on the public link, with no ?as= to seed", () => {
+	it("links a GUEST holder's draft to their role's roles-guide card, with no ?as= to seed", () => {
 		// A guest has no `members` row, so `assigneeId` is null — the same field
 		// the outreach callback turns on. The draft must keep its link rather
 		// than lose it.
@@ -374,7 +374,9 @@ describe("the agenda slot card's confirm draft", () => {
 		// The duty is still theirs to do — only the personal link is unavailable,
 		// so the draft falls back to the public agenda rather than losing its link.
 		expect(text).toContain("set the Word of the Day");
-		expect(text).toContain(`Confirm and do that here: ${SHARE_URL}`);
+		expect(text).toContain(
+			"Confirm and do that here: https://gavelup.app/club/mcf/roles-guide#grammarian",
+		);
 		// NOT `not.toContain("/me")` — the share URL itself contains "/meeting".
 		expect(text).not.toContain("/me?as=");
 	});
