@@ -5,9 +5,16 @@ import {
 	TIMER_ROLE_KEY,
 	TMOD_ROLE_KEY,
 } from "#/lib/meeting-roles";
+import {
+	type OrientationFacts,
+	type OrientationItemKey,
+	orientationItems,
+} from "#/lib/orientation";
 import { dutiesForRole, personalMeetingHref } from "#/lib/role-duties";
 import {
 	buildNudge,
+	nextOrientationItem,
+	orientationNudgeAvailable,
 	outstandingDuties,
 	outstandingDutiesByMember,
 	personalNudgeUrl,
@@ -947,5 +954,195 @@ describe("buildNudge level mode (#900)", () => {
 
 	it("asks about the agenda, never a speech", () => {
 		expect(buildNudge(level).message).not.toMatch(/speech/i);
+	});
+});
+
+describe("buildNudge orientation mode (#942)", () => {
+	const ORDER: OrientationItemKey[] = [
+		"choose-path",
+		"ice-breaker",
+		"supporting-role",
+		"base-camp",
+		"get-a-mentor",
+	];
+	/** The checklist with every item BEFORE `open` done, `open` and after not. */
+	const openFrom = (open: OrientationItemKey | null) =>
+		ORDER.map((key) => ({
+			key,
+			done: open === null || ORDER.indexOf(key) < ORDER.indexOf(open),
+		}));
+	const orientation = (items: { key: OrientationItemKey; done: boolean }[]) =>
+		buildNudge({
+			name: "Jane Doe",
+			email: "j@x.io",
+			phone: "+14155550123",
+			meetingDate: "Thu, Oct 1",
+			shareUrl: "https://gavelup.app/club/mcf/meeting/2026-10-01",
+			mode: "orientation",
+			origin: "https://gavelup.app",
+			items,
+		});
+
+	it("choose-path: asks about a path and links the Pathways guide", () => {
+		expect(orientation(openFrom("choose-path")).message).toBe(
+			"Hi Jane, have you had a chance to pick your Pathways path yet? Here's a short guide to the paths: https://gavelup.app/resources/what-is-pathways",
+		);
+	});
+
+	it("ice-breaker: links the next meeting's sign-up page", () => {
+		expect(orientation(openFrom("ice-breaker")).message).toBe(
+			"Hi Jane, would you like to schedule your Ice Breaker? Our next meeting is Thu, Oct 1, and you can sign up here: https://gavelup.app/club/mcf/meeting/2026-10-01",
+		);
+	});
+
+	it("supporting-role: asks about a supporting role at the next meeting", () => {
+		expect(orientation(openFrom("supporting-role")).message).toBe(
+			"Hi Jane, would you like to try a supporting role, like Timer or Ah-Counter, at our Thu, Oct 1 meeting? You can sign up here: https://gavelup.app/club/mcf/meeting/2026-10-01",
+		);
+	});
+
+	it("base-camp: links the guide's Base Camp section", () => {
+		expect(orientation(openFrom("base-camp")).message).toBe(
+			"Hi Jane, have you had a chance to set up Base Camp yet? Here's how: https://gavelup.app/resources/what-is-pathways#base-camp",
+		);
+	});
+
+	it("get-a-mentor: offers to pair them, since the VPE does the pairing", () => {
+		expect(orientation(openFrom("get-a-mentor")).message).toBe(
+			"Hi Jane, would you like me to pair you with a mentor? It's an experienced member who can help you through your first speeches.",
+		);
+	});
+
+	it("picks the FIRST open item in checklist order, not any open one", () => {
+		// Path done, Ice Breaker done, supporting role open, Base Camp done,
+		// mentor open: the draft is about the supporting role.
+		const items = ORDER.map((key) => ({
+			key,
+			done: key !== "supporting-role" && key !== "get-a-mentor",
+		}));
+		expect(nextOrientationItem(items)).toBe("supporting-role");
+		expect(orientation(items).message).toContain("supporting role");
+	});
+
+	it("with nothing open, a general check-in (the dashboard never lists this)", () => {
+		expect(nextOrientationItem(openFrom(null))).toBeNull();
+		expect(orientation(openFrom(null)).message).toBe(
+			"Hi Jane, how are your first weeks with us going? Our next meeting is Thu, Oct 1: https://gavelup.app/club/mcf/meeting/2026-10-01",
+		);
+	});
+
+	it("reads the checklist as #940 derives it", () => {
+		const facts: OrientationFacts = {
+			startedAt: new Date(),
+			dismissedAt: null,
+			basecampSetupAt: null,
+			activePathCount: 1,
+			slots: [{ isSpeakerRole: true, meetingStatus: "scheduled" }],
+			menteePairings: [],
+		};
+		expect(nextOrientationItem(orientationItems(facts))).toBe(
+			"supporting-role",
+		);
+	});
+
+	it.each<[OrientationItemKey | null, string]>([
+		["choose-path", "Choosing your Pathways path"],
+		["ice-breaker", "Your Ice Breaker"],
+		["supporting-role", "A supporting role"],
+		["base-camp", "Setting up Base Camp"],
+		["get-a-mentor", "A mentor for your first weeks"],
+		[null, "Your first weeks"],
+	])("subject for %s", (open, subject) => {
+		const url = new URL(orientation(openFrom(open)).mailtoUrl ?? "");
+		expect(url.searchParams.get("subject")).toBe(subject);
+	});
+
+	it("only DRAFTS: a message and two links the VPE opens, nothing sent", () => {
+		const r = orientation(openFrom("choose-path"));
+		expect(Object.keys(r).sort()).toEqual([
+			"mailtoUrl",
+			"message",
+			"whatsappUrl",
+		]);
+		expect(r.mailtoUrl).toMatch(/^mailto:j@x\.io\?subject=/);
+		expect(r.whatsappUrl).toContain("14155550123");
+	});
+});
+
+describe("orientation drafts without a next meeting (#942)", () => {
+	const ORDER: OrientationItemKey[] = [
+		"choose-path",
+		"ice-breaker",
+		"supporting-role",
+		"base-camp",
+		"get-a-mentor",
+	];
+	const openFrom = (open: OrientationItemKey | null) =>
+		ORDER.map((key) => ({
+			key,
+			done: open === null || ORDER.indexOf(key) < ORDER.indexOf(open),
+		}));
+	const draft = (
+		open: OrientationItemKey | null,
+		meeting: { meetingDate?: string | null; shareUrl?: string | null } = {},
+	) =>
+		buildNudge({
+			name: "Jane Doe",
+			email: "j@x.io",
+			mode: "orientation",
+			origin: "https://gavelup.app",
+			items: openFrom(open),
+			...meeting,
+		});
+
+	it.each<[OrientationItemKey | null, boolean]>([
+		["choose-path", true],
+		["ice-breaker", false],
+		["supporting-role", false],
+		["base-camp", true],
+		["get-a-mentor", true],
+		[null, false],
+	])("without a meeting, %s has a draft: %s", (open, available) => {
+		expect(orientationNudgeAvailable(openFrom(open), false)).toBe(available);
+		expect(orientationNudgeAvailable(openFrom(open), true)).toBe(true);
+	});
+
+	it.each<[OrientationItemKey, string]>([
+		[
+			"choose-path",
+			"Hi Jane, have you had a chance to pick your Pathways path yet? Here's a short guide to the paths: https://gavelup.app/resources/what-is-pathways",
+		],
+		[
+			"base-camp",
+			"Hi Jane, have you had a chance to set up Base Camp yet? Here's how: https://gavelup.app/resources/what-is-pathways#base-camp",
+		],
+		[
+			"get-a-mentor",
+			"Hi Jane, would you like me to pair you with a mentor? It's an experienced member who can help you through your first speeches.",
+		],
+	])("%s drafts the same message with no meeting", (open, message) => {
+		expect(draft(open).message).toBe(message);
+		expect(draft(open).message).not.toMatch(/meeting|undefined|null/i);
+	});
+
+	it.each<OrientationItemKey | null>([
+		"ice-breaker",
+		"supporting-role",
+		null,
+	])("%s never interpolates a missing meeting, even if a caller skips the check", (open) => {
+		const m = draft(open).message;
+		expect(m).not.toMatch(/undefined|null|https:\/\/gavelup\.app\/club/);
+		expect(m).not.toMatch(/Our next meeting is/);
+	});
+
+	it("treats a blank meeting as none", () => {
+		expect(
+			draft("ice-breaker", { meetingDate: " ", shareUrl: "" }).message,
+		).toBe(
+			"Hi Jane, would you like to schedule your Ice Breaker? Let me know and I'll find you a slot.",
+		);
+		expect(
+			draft(null, { meetingDate: "Thu, Oct 1", shareUrl: " " }).message,
+		).toBe("Hi Jane, how are your first weeks with us going?");
 	});
 });

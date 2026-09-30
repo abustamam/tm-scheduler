@@ -21,7 +21,7 @@
 // READS NEVER WRITE. The dashboard read admits a read-only impersonation
 // session (#1043's review found a GET seeding rows under one), so nothing
 // here inserts or updates on the read path.
-import { and, asc, count, eq, isNull } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -35,6 +35,8 @@ import {
 } from "#/db/schema";
 import {
 	type OrientationFacts,
+	type OrientationPairingFact,
+	type OrientationSlotFact,
 	type OrientationView,
 	orientationView,
 } from "#/lib/orientation";
@@ -81,13 +83,39 @@ export async function ownMembershipId(
 
 /**
  * The facts `orientationView` derives from, for one membership, or null when
- * the membership does not exist. Reads only.
+ * the membership does not exist. Reads only. A one-id call to
+ * `loadOrientationFactsForMembers`, so the member's own checklist and the VPE
+ * roster (#942) are loaded by the same code and cannot drift.
  */
 export async function loadOrientationFacts(
 	membershipId: string,
 ): Promise<OrientationFacts | null> {
-	const [row] = await db
+	const facts = await loadOrientationFactsForMembers([membershipId]);
+	return facts.get(membershipId) ?? null;
+}
+
+/** Deterministic order for the DISTINCT slot facts, whatever the plan does. */
+function compareSlotFacts(a: OrientationSlotFact, b: OrientationSlotFact) {
+	if (a.isSpeakerRole !== b.isSpeakerRole) return a.isSpeakerRole ? -1 : 1;
+	return a.meetingStatus.localeCompare(b.meetingStatus);
+}
+
+/**
+ * The same facts for MANY memberships, keyed by membership id, in a fixed
+ * number of queries whatever the count (#942): the members, then paths, slots
+ * and pairings with `inArray`, and each distinct club's country code once. An
+ * id that matches no membership is absent from the map. Reads only.
+ */
+export async function loadOrientationFactsForMembers(
+	membershipIds: readonly string[],
+): Promise<Map<string, OrientationFacts>> {
+	const out = new Map<string, OrientationFacts>();
+	const ids = [...new Set(membershipIds)];
+	if (ids.length === 0) return out;
+
+	const rows = await db
 		.select({
+			id: members.id,
 			personId: members.personId,
 			clubId: members.clubId,
 			status: members.status,
@@ -96,24 +124,29 @@ export async function loadOrientationFacts(
 			basecampSetupAt: members.basecampSetupAt,
 		})
 		.from(members)
-		.where(eq(members.id, membershipId))
-		.limit(1);
-	if (!row) return null;
+		.where(inArray(members.id, ids));
+	if (rows.length === 0) return out;
 
-	const [paths, slots, pairings, cc] = await Promise.all([
+	const personIds = [...new Set(rows.map((r) => r.personId))];
+	const clubIds = [...new Set(rows.map((r) => r.clubId))];
+
+	const [paths, slots, pairings, countryCodes] = await Promise.all([
 		db
-			.select({ n: count() })
+			.select({ personId: pathEnrollments.personId, n: count() })
 			.from(pathEnrollments)
 			.where(
 				and(
-					eq(pathEnrollments.personId, row.personId),
+					inArray(pathEnrollments.personId, personIds),
 					isNull(pathEnrollments.archivedAt),
 				),
-			),
-		// DISTINCT on the two facts the derivation reads, so a long-standing
-		// member's slot history is at most six rows here, not hundreds.
+			)
+			.groupBy(pathEnrollments.personId),
+		// DISTINCT on the two facts the derivation reads, per member, so a
+		// long-standing member's slot history is at most six rows here, not
+		// hundreds.
 		db
 			.selectDistinct({
+				memberId: roleSlots.assignedMemberId,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				meetingStatus: meetings.status,
 			})
@@ -123,13 +156,14 @@ export async function loadOrientationFacts(
 				roleDefinitions,
 				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 			)
-			.where(eq(roleSlots.assignedMemberId, membershipId)),
-		// "Get a mentor" (#939): every pairing with this membership as MENTEE,
-		// active or ended; `#/lib/orientation` decides which one counts. The
-		// mentor's contact is the same the mentee could already read on the
+			.where(inArray(roleSlots.assignedMemberId, ids)),
+		// "Get a mentor" (#939): every pairing with one of these memberships as
+		// MENTEE, active or ended; `#/lib/orientation` decides which one counts.
+		// The mentor's contact is the same the mentee could already read on the
 		// mentor's member page (`getMemberProfile`, club members only).
 		db
 			.select({
+				menteeMemberId: mentorships.menteeMemberId,
 				focus: mentorships.focus,
 				endedAt: mentorships.endedAt,
 				mentorName: mentor.name,
@@ -141,28 +175,55 @@ export async function loadOrientationFacts(
 			// A pairing counts only while BOTH parties are active
 			// (`mentorship-logic.ts`); an inactive mentor's pairing is dormant
 			// and does not tick "Get a mentor". The mentee's own status is
-			// checked on `row` below.
+			// checked per row below.
 			.where(
 				and(
-					eq(mentorships.menteeMemberId, membershipId),
+					inArray(mentorships.menteeMemberId, ids),
 					eq(mentor.status, "active"),
 				),
 			)
-			.orderBy(asc(mentorships.startedAt)),
-		loadClubDefaultCountryCode(row.clubId),
+			.orderBy(asc(mentorships.startedAt), asc(mentorships.id)),
+		Promise.all(
+			clubIds.map(
+				async (id) => [id, await loadClubDefaultCountryCode(id)] as const,
+			),
+		),
 	]);
 
-	return {
-		startedAt: row.startedAt,
-		dismissedAt: row.dismissedAt,
-		basecampSetupAt: row.basecampSetupAt,
-		activePathCount: paths[0]?.n ?? 0,
-		slots,
-		menteePairings: (row.status === "active" ? pairings : []).map((p) => ({
-			...p,
-			mentorPhone: coalesceToE164(p.mentorPhone, cc),
-		})),
-	};
+	const pathCount = new Map(paths.map((p) => [p.personId, p.n]));
+	const cc = new Map(countryCodes);
+	const slotsBy = new Map<string, OrientationSlotFact[]>();
+	for (const { memberId, ...slot } of slots) {
+		if (!memberId) continue;
+		const list = slotsBy.get(memberId) ?? [];
+		list.push(slot);
+		slotsBy.set(memberId, list);
+	}
+	const pairingsBy = new Map<string, OrientationPairingFact[]>();
+	for (const { menteeMemberId, ...p } of pairings) {
+		const list = pairingsBy.get(menteeMemberId) ?? [];
+		list.push(p);
+		pairingsBy.set(menteeMemberId, list);
+	}
+
+	for (const row of rows) {
+		const code = cc.get(row.clubId);
+		out.set(row.id, {
+			startedAt: row.startedAt,
+			dismissedAt: row.dismissedAt,
+			basecampSetupAt: row.basecampSetupAt,
+			activePathCount: pathCount.get(row.personId) ?? 0,
+			slots: (slotsBy.get(row.id) ?? []).sort(compareSlotFacts),
+			menteePairings: (row.status === "active"
+				? (pairingsBy.get(row.id) ?? [])
+				: []
+			).map((p) => ({
+				...p,
+				mentorPhone: coalesceToE164(p.mentorPhone, code),
+			})),
+		});
+	}
+	return out;
 }
 
 /** The checklist for one membership, or null when it does not exist. */

@@ -10,6 +10,12 @@ import {
 } from "#/lib/level-proximity";
 import { mailtoHref } from "#/lib/mailto";
 import type { RoleIdentity } from "#/lib/meeting-roles";
+import {
+	BASE_CAMP_SECTION_HASH,
+	type OrientationItemKey,
+	PATHWAYS_EXPLAINER_HREF,
+} from "#/lib/orientation";
+import type { OrientationTick } from "#/lib/orientation-roster";
 import { levelLabel } from "#/lib/pathways-catalog";
 import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
@@ -27,7 +33,8 @@ export type NudgeMode =
 	| "attendance"
 	| "arriving"
 	| "invite"
-	| "level";
+	| "level"
+	| "orientation";
 
 interface NudgeInputBase {
 	name: string;
@@ -88,6 +95,26 @@ export type NudgeInput =
 	// speeches. `shareUrl` is the next meeting's public page.
 	// The level is labelled by `levelLabel`, never "Level 6".
 	| (NudgeInputBase & { mode: "level" } & LevelProgress)
+	// A new member partway through the #940 checklist (#942). Role-less, its own
+	// constituent for the same reason. `items` is the checklist AS DERIVED
+	// (`orientationItems` / `orientationView(...).items`), never re-derived
+	// here: the draft names the first item still open, in checklist order, so
+	// it cannot ask about something the member's own checklist shows as done.
+	// `shareUrl` is the next meeting's public page (for the two slot items);
+	// `origin` builds the absolute link to the Pathways explainer.
+	//
+	// The ONE arm whose meeting is OPTIONAL: a club with no next meeting can
+	// still be asked about a path, Base Camp or a mentor, none of which needs
+	// one. The two slot items do, and `orientationNudgeAvailable` says when a
+	// draft exists at all; a blank value counts as absent.
+	| (Omit<NudgeInputBase, "meetingDate" | "shareUrl"> & {
+			mode: "orientation";
+			items: readonly OrientationTick[];
+			/** Absolute origin, e.g. `https://gavelup.app`. */
+			origin: string;
+			meetingDate?: string | null;
+			shareUrl?: string | null;
+	  })
 	| (NudgeInputBase & {
 			mode: "confirm" | "recruit";
 			/** The role being asked about. Role-specific asks stay on the slot
@@ -141,6 +168,9 @@ function messageFor(i: NudgeInput): string {
 		const n = i.projectsLeft;
 		return `Hi ${who}, you're ${plural(n, "project")} from finishing ${i.pathName} ${levelLabel(i.level)}${levelNamesSuffix(i)}. Want to get it on the agenda for ${i.meetingDate}? ${i.shareUrl}`;
 	}
+	if (i.mode === "orientation") {
+		return orientationMessage(i, who);
+	}
 	if (i.mode === "invite") {
 		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
 		return `Hi ${who}, it was great having you at ${i.clubName}. We meet again on ${i.meetingDate} at ${i.meetingTime}${where}. We'd love to see you there. Agenda: ${i.shareUrl}`;
@@ -178,6 +208,88 @@ function messageFor(i: NudgeInput): string {
 		? `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${link}`
 		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? You'd also need to ${dutyClauseList(owed)}. Info here: ${link}`;
 }
+
+/**
+ * The first checklist item still open, in the order the checklist lists them
+ * (#942), or null when every item is done. The ORDER is the input's, which is
+ * `orientationItems`' order: this picks, it never re-sorts.
+ */
+export function nextOrientationItem(
+	items: readonly OrientationTick[],
+): OrientationItemKey | null {
+	return items.find((item) => !item.done)?.key ?? null;
+}
+
+/** The items whose draft asks the member to sign up at a meeting. */
+const MEETING_ORIENTATION_ITEMS: ReadonlySet<OrientationItemKey> = new Set([
+	"ice-breaker",
+	"supporting-role",
+]);
+
+/**
+ * Whether an orientation draft exists for this checklist (#942). Always, when
+ * there is a next meeting; without one, only when the next open item is one
+ * that needs no meeting (path, Base Camp, mentor). The dashboard shows no
+ * draft otherwise: "sign up for your Ice Breaker" with nothing to sign up for
+ * is not a message worth sending.
+ */
+export function orientationNudgeAvailable(
+	items: readonly OrientationTick[],
+	hasMeeting: boolean,
+): boolean {
+	if (hasMeeting) return true;
+	const next = nextOrientationItem(items);
+	return next !== null && !MEETING_ORIENTATION_ITEMS.has(next);
+}
+
+type OrientationNudgeInput = Extract<NudgeInput, { mode: "orientation" }>;
+
+/**
+ * One draft per open item. The path and Base Camp drafts link the Pathways
+ * explainer (#941) rather than a meeting, because neither needs one; the two
+ * slot drafts link the next meeting's sign-up page. "Get a mentor" is paired by
+ * the VPE, so its draft offers rather than asks the member to do anything.
+ */
+function orientationMessage(i: OrientationNudgeInput, who: string): string {
+	const explainer = `${i.origin}${PATHWAYS_EXPLAINER_HREF}`;
+	// Both or neither: a date with no link (or the reverse) is no meeting to
+	// point at. Blank is absent, as for `personalUrl` above.
+	const meeting =
+		i.meetingDate?.trim() && i.shareUrl?.trim()
+			? { date: i.meetingDate, url: i.shareUrl }
+			: null;
+	switch (nextOrientationItem(i.items)) {
+		case "choose-path":
+			return `Hi ${who}, have you had a chance to pick your Pathways path yet? Here's a short guide to the paths: ${explainer}`;
+		// With no meeting the dashboard offers no draft for these two
+		// (`orientationNudgeAvailable`); the meeting-less wording is only so a
+		// caller that skips that check never drafts "our undefined meeting".
+		case "ice-breaker":
+			return meeting
+				? `Hi ${who}, would you like to schedule your Ice Breaker? Our next meeting is ${meeting.date}, and you can sign up here: ${meeting.url}`
+				: `Hi ${who}, would you like to schedule your Ice Breaker? Let me know and I'll find you a slot.`;
+		case "supporting-role":
+			return meeting
+				? `Hi ${who}, would you like to try a supporting role, like Timer or Ah-Counter, at our ${meeting.date} meeting? You can sign up here: ${meeting.url}`
+				: `Hi ${who}, would you like to try a supporting role, like Timer or Ah-Counter, at a coming meeting? Let me know and I'll find you one.`;
+		case "base-camp":
+			return `Hi ${who}, have you had a chance to set up Base Camp yet? Here's how: ${explainer}#${BASE_CAMP_SECTION_HASH}`;
+		case "get-a-mentor":
+			return `Hi ${who}, would you like me to pair you with a mentor? It's an experienced member who can help you through your first speeches.`;
+		case null:
+			return meeting
+				? `Hi ${who}, how are your first weeks with us going? Our next meeting is ${meeting.date}: ${meeting.url}`
+				: `Hi ${who}, how are your first weeks with us going?`;
+	}
+}
+
+const ORIENTATION_SUBJECTS: Record<OrientationItemKey, string> = {
+	"choose-path": "Choosing your Pathways path",
+	"ice-breaker": "Your Ice Breaker",
+	"supporting-role": "A supporting role",
+	"base-camp": "Setting up Base Camp",
+	"get-a-mentor": "A mentor for your first weeks",
+};
 
 /** "a", "a and b", "a, b and c". */
 function andList(items: readonly string[]): string {
@@ -361,6 +473,10 @@ export function personalNudgeUrl(
 function subjectFor(i: NudgeInput): string {
 	if (i.mode === "attendance") return `Are you coming? — ${i.meetingDate}`;
 	if (i.mode === "arriving") return `Are you on your way? — ${i.meetingDate}`;
+	if (i.mode === "orientation") {
+		const next = nextOrientationItem(i.items);
+		return next ? ORIENTATION_SUBJECTS[next] : "Your first weeks";
+	}
 	if (i.mode === "invite") {
 		return `See you at ${i.clubName} on ${i.meetingDate}?`;
 	}

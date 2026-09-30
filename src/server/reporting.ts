@@ -12,6 +12,7 @@ import {
 	loadAttendanceLapse,
 	loadEvaluatorPairings,
 	loadLevelProximity,
+	loadOrientationRoster,
 	loadOverdueMembers,
 	loadSpeakerRotation,
 } from "./reporting-logic";
@@ -90,4 +91,18 @@ export const getLevelProximity = createServerFn({ method: "GET" })
 		const user = await requireUser();
 		await requireClubAdminView(user.id, data.clubId);
 		return loadLevelProximity(data.clubId);
+	});
+
+/**
+ * "New members in orientation" (#942) — everyone working through the #940
+ * checklist, longest first. Admin-gated like its neighbours: it is per-member
+ * progress plus contact for the VPE's nudge draft, officer information only.
+ * The member's OWN checklist is read through `orientation.ts`, not here.
+ */
+export const getOrientationRoster = createServerFn({ method: "GET" })
+	.validator((input: unknown) => clubScoped.parse(input))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubAdminView(user.id, data.clubId);
+		return loadOrientationRoster(data.clubId);
 	});

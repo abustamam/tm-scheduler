@@ -89,6 +89,8 @@ async function renderRoute(pairings: EvaluatorPairingRow[]) {
 		pairings,
 		// #898's section; this file asserts nothing about it.
 		proximity: [],
+		// #942's section; this file asserts nothing about it.
+		orientation: [],
 		clubName: "Harbor City Speakers",
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);

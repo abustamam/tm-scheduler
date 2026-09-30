@@ -1,5 +1,5 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight, Circle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
@@ -28,11 +28,20 @@ import {
 } from "#/lib/level-proximity";
 import { formatTenure } from "#/lib/members";
 import { signupUrlFor } from "#/lib/next-meeting-summary";
+import { orientationNudgeAvailable } from "#/lib/nudge";
+import {
+	isStalledInOrientation,
+	ORIENTATION_STALLED_AFTER_DAYS,
+	ORIENTATION_TICK_LABELS,
+	type OrientationRosterRow,
+	orientationDayLabel,
+} from "#/lib/orientation-roster";
 import { cn } from "#/lib/utils";
 import {
 	getAttendanceLapse,
 	getEvaluatorPairings,
 	getLevelProximity,
+	getOrientationRoster,
 	getOverdueMembers,
 	getSpeakerRotation,
 } from "#/server/reporting";
@@ -57,6 +66,7 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 				lapse: [],
 				pairings: [],
 				proximity: [] as LevelProximityRow[],
+				orientation: [] as OrientationRosterRow[],
 				timezone: undefined as string | undefined,
 				clubName: "",
 				clubId: "",
@@ -64,19 +74,23 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 				nextMeeting: null as LevelNudgeMeeting | null,
 			};
 		}
-		const [rotation, overdue, lapse, pairings, proximity] = await Promise.all([
-			getSpeakerRotation({ data: { clubId: club.clubId } }),
-			getOverdueMembers({ data: { clubId: club.clubId } }),
-			getAttendanceLapse({ data: { clubId: club.clubId } }),
-			getEvaluatorPairings({ data: { clubId: club.clubId } }),
-			getLevelProximity({ data: { clubId: club.clubId } }),
-		]);
+		const [rotation, overdue, lapse, pairings, proximity, orientation] =
+			await Promise.all([
+				getSpeakerRotation({ data: { clubId: club.clubId } }),
+				getOverdueMembers({ data: { clubId: club.clubId } }),
+				getAttendanceLapse({ data: { clubId: club.clubId } }),
+				getEvaluatorPairings({ data: { clubId: club.clubId } }),
+				getLevelProximity({ data: { clubId: club.clubId } }),
+				getOrientationRoster({ data: { clubId: club.clubId } }),
+			]);
 		return {
 			rotation,
 			overdue,
 			lapse,
 			pairings,
 			proximity: proximity.rows,
+			// New members in orientation (#942), longest first.
+			orientation,
 			// The club's zone, for EVERY date on this page that names a day. The
 			// Booked marker passed none and printed the server's day, so a
 			// booking at 23:30 club time read as the next day (#898).
@@ -109,6 +123,7 @@ function VpeDashboard() {
 		lapse,
 		pairings,
 		proximity,
+		orientation,
 		timezone,
 		clubId,
 		clubSlug,
@@ -231,6 +246,30 @@ function VpeDashboard() {
 				) : (
 					lapsed.map((m) => (
 						<LapseRow key={m.memberId} member={m} timezone={timezone} />
+					))
+				)}
+			</Section>
+
+			{/* New members in orientation (#942). ABOVE "Overdue for a role" for
+			    the reason "Stopped attending" sits above it: onboarding a new
+			    member is the more time-sensitive job. A new member has usually
+			    held no role yet, so they would ALSO appear below as overdue, and
+			    this section is the one that says why. */}
+			<Section
+				id="new-members-in-orientation"
+				title="New members in orientation"
+				subtitle={`Everyone working through their first-weeks checklist — longest first. Past ${ORIENTATION_STALLED_AFTER_DAYS} days is highlighted.`}
+			>
+				{orientation.length === 0 ? (
+					<EmptyRow>No new members in orientation right now.</EmptyRow>
+				) : (
+					orientation.map((r) => (
+						<OrientationRow
+							key={r.memberId}
+							row={r}
+							nudge={nudge}
+							origin={origin}
+						/>
 					))
 				)}
 			</Section>
@@ -694,6 +733,117 @@ function ProximityRow({
 						projectsLeft={row.projectsLeft}
 						projectNames={row.projectNames}
 						electivesToChoose={row.electivesToChoose}
+					/>
+				) : null}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * One member in orientation (#942).
+ *
+ * `ProximityRow`'s shape: the member-page `<Link>` wraps only the avatar and
+ * the name, because the right-hand cell holds the nudge's draft links and an
+ * anchor inside an anchor swallows the click. The ticks and the mentor line sit
+ * under the name, indented to clear the avatar, and WRAP, so the row still says
+ * everything at 375px.
+ *
+ * "Stalled" (more than `ORIENTATION_STALLED_AFTER_DAYS` days) is said in TEXT
+ * as well as amber, for the reason `PairingRow` gives: colour alone carries
+ * nothing for a screen reader.
+ */
+function OrientationRow({
+	row,
+	nudge,
+	origin,
+}: {
+	row: OrientationRosterRow;
+	nudge: LevelNudgeContext | null;
+	origin: string;
+}) {
+	const stalled = isStalledInOrientation(row.days);
+	return (
+		<div
+			data-testid="orientation-row"
+			className="grid grid-cols-[1fr_auto] items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 last:border-b-0"
+		>
+			<div className="min-w-0">
+				<Link
+					to="/members/$id"
+					params={{ id: row.memberId }}
+					className="flex min-w-0 items-center gap-3"
+				>
+					<MemberAvatar
+						tone={toneFromSeed(row.memberId)}
+						initials={initialsOf(row.name)}
+						size={38}
+					/>
+					<span className="truncate text-sm font-bold">{row.name}</span>
+				</Link>
+				<ul className="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 pl-[50px] text-xs">
+					{row.items.map((item) => (
+						<li
+							key={item.key}
+							className={cn(
+								"inline-flex items-center gap-1",
+								item.done
+									? "text-[var(--lagoon-deep)]"
+									: "text-[var(--sea-ink-soft)]",
+							)}
+						>
+							{item.done ? (
+								<Check className="size-3" aria-hidden />
+							) : (
+								<Circle className="size-3" aria-hidden />
+							)}
+							{ORIENTATION_TICK_LABELS[item.key]}
+							<span className="sr-only">{item.done ? " done" : " to do"}</span>
+						</li>
+					))}
+				</ul>
+				<div className="pl-[50px] text-xs text-[var(--sea-ink-soft)]">
+					{row.mentorNames.length > 0
+						? `Mentor: ${row.mentorNames.join(", ")}`
+						: "No mentor"}
+				</div>
+			</div>
+			<div className="flex items-center gap-2 justify-self-end">
+				<div className="text-right text-sm">
+					<span
+						className={cn(
+							"font-bold whitespace-nowrap",
+							stalled
+								? "text-[var(--warning-strong)]"
+								: "text-[var(--sea-ink)]",
+						)}
+					>
+						{orientationDayLabel(row.days)}
+					</span>
+					{stalled ? (
+						<div className="text-xs font-bold whitespace-nowrap text-[var(--warning-strong)]">
+							Over {ORIENTATION_STALLED_AFTER_DAYS} days
+						</div>
+					) : null}
+				</div>
+				{/* The draft names the member's next open item. GavelUp drafts;
+				    the VPE sends from their own app (ADR-0028). With no next
+				    meeting the path, Base Camp and mentor drafts are still
+				    offered, without a meeting in them; the two slot items need
+				    one and get no draft. `origin` is empty on the server pass,
+				    so no link renders before mount. */}
+				{origin && orientationNudgeAvailable(row.items, nudge !== null) ? (
+					<NudgeButtons
+						mode="orientation"
+						iconOnly
+						name={row.name}
+						preferredName={row.preferredName}
+						phone={row.phone}
+						email={row.email}
+						meetingDate={nudge?.meetingDate}
+						shareUrl={nudge?.shareUrl}
+						items={row.items}
+						origin={origin}
 					/>
 				) : null}
 			</div>

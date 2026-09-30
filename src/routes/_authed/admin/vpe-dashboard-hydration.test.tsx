@@ -163,6 +163,8 @@ function page(sections: Sections, timezone: string | undefined) {
 		lapse: sections.lapse ?? [],
 		pairings: sections.pairings ?? [],
 		proximity: [],
+		// #942's section; this file asserts nothing about it.
+		orientation: [],
 		timezone,
 		clubName: "Downtown Club",
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return

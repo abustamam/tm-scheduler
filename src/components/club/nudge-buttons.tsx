@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import type { LevelProgress } from "#/lib/level-proximity";
 import { buildNudge } from "#/lib/nudge";
+import type { OrientationTick } from "#/lib/orientation-roster";
 import { detectPlatform } from "#/lib/platform";
 import type { RoleDuty } from "#/lib/role-duties";
 
@@ -13,8 +14,6 @@ interface NudgeButtonsBase {
 	preferredName?: string | null;
 	phone: string | null;
 	email: string | null;
-	meetingDate: string;
-	shareUrl: string;
 	/** Fired when the WhatsApp or Email draft link is tapped (auto-mark contacted). */
 	onContacted?: () => void;
 	/** Render glyphs with no text label. OPT-IN, because this component is shared
@@ -23,39 +22,60 @@ interface NudgeButtonsBase {
 	iconOnly?: boolean;
 }
 
+/** The meeting a draft asks about. Required on every arm but `orientation`. */
+interface NudgeButtonsMeeting {
+	meetingDate: string;
+	shareUrl: string;
+}
+
 /** Discriminated on `mode`, mirroring `NudgeInput` — a single shape with an
  *  optional `roleName` would let a `confirm`/`recruit` caller omit the field
  *  that mode's message interpolates, and draft "you're our undefined". */
 export type NudgeButtonsProps = NudgeButtonsBase &
 	(
-		| { mode: "attendance" | "arriving" }
 		| {
-				/** A guest invite to the next meeting (#899). Role-less, and never
-				 *  carries a personal link or a `join_url`. */
-				mode: "invite";
-				clubName: string;
-				meetingTime: string;
-				location?: string | null;
+				/** A new member partway through orientation (#942): the draft names
+				 *  their next open checklist item. Role-less; `items` is the
+				 *  checklist as #940 derives it, `origin` builds the guide link.
+				 *  The ONE arm whose meeting is optional: the path, Base Camp and
+				 *  mentor drafts need none (`orientationNudgeAvailable`). */
+				mode: "orientation";
+				items: readonly OrientationTick[];
+				origin: string;
+				meetingDate?: string | null;
+				shareUrl?: string | null;
 		  }
-		| ({
-				/** A member close to a Pathways level (#900): "want to get it on
-				 *  the agenda?" Role-less; `shareUrl` is the next meeting's page. */
-				mode: "level";
-		  } & LevelProgress)
-		| {
-				mode: "confirm" | "recruit";
-				roleName: string;
-				/** What the role still owes (#667), ALREADY filtered by the
-				 *  registry's `done` — the caller passes `outstandingDuties(...)`.
-				 *  On the role arm only, mirroring `NudgeInput`: a role-less draft
-				 *  has no duty to name. */
-				duties?: readonly RoleDuty[];
-				/** The recipient's own meeting page, from `personalNudgeUrl`.
-				 *  Absent (a guest holder has no member identity) falls the draft
-				 *  back to `shareUrl`. */
-				personalUrl?: string | null;
-		  }
+		| (NudgeButtonsMeeting & NudgeButtonsMeetingArm)
 	);
+
+type NudgeButtonsMeetingArm =
+	| { mode: "attendance" | "arriving" }
+	| {
+			/** A guest invite to the next meeting (#899). Role-less, and never
+			 *  carries a personal link or a `join_url`. */
+			mode: "invite";
+			clubName: string;
+			meetingTime: string;
+			location?: string | null;
+	  }
+	| ({
+			/** A member close to a Pathways level (#900): "want to get it on
+			 *  the agenda?" Role-less; `shareUrl` is the next meeting's page. */
+			mode: "level";
+	  } & LevelProgress)
+	| {
+			mode: "confirm" | "recruit";
+			roleName: string;
+			/** What the role still owes (#667), ALREADY filtered by the
+			 *  registry's `done` — the caller passes `outstandingDuties(...)`.
+			 *  On the role arm only, mirroring `NudgeInput`: a role-less draft
+			 *  has no duty to name. */
+			duties?: readonly RoleDuty[];
+			/** The recipient's own meeting page, from `personalNudgeUrl`.
+			 *  Absent (a guest holder has no member identity) falls the draft
+			 *  back to `shareUrl`. */
+			personalUrl?: string | null;
+	  };
 
 /**
  * WhatsApp/Email tap-to-nudge affordances (#37). Renders only the channels the
@@ -68,8 +88,6 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		preferredName,
 		phone,
 		email,
-		meetingDate,
-		shareUrl,
 		onContacted,
 		iconOnly = false,
 	} = props;
@@ -108,10 +126,10 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		preferredName,
 		phone,
 		email,
-		meetingDate,
-		shareUrl,
 		platform,
 	};
+	// The meeting rides each arm's own branch rather than `common`, because it is
+	// optional on `orientation` alone and `common` is shared by every arm.
 	// Branch on the ROLE-BEARING modes, not on the role-less ones: `attendance` and
 	// `arriving` both carry no `roleName`, so testing for one of them by name left
 	// the other falling into the branch that reads `props.roleName` — which does not
@@ -120,6 +138,8 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		props.mode === "confirm" || props.mode === "recruit"
 			? {
 					...common,
+					meetingDate: props.meetingDate,
+					shareUrl: props.shareUrl,
 					mode: props.mode,
 					roleName: props.roleName,
 					// Carried on the SAME branch as `roleName`, for the same reason:
@@ -132,6 +152,8 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 			: props.mode === "invite"
 				? {
 						...common,
+						meetingDate: props.meetingDate,
+						shareUrl: props.shareUrl,
 						mode: props.mode,
 						clubName: props.clubName,
 						meetingTime: props.meetingTime,
@@ -140,6 +162,8 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 				: props.mode === "level"
 					? {
 							...common,
+							meetingDate: props.meetingDate,
+							shareUrl: props.shareUrl,
 							mode: props.mode,
 							pathName: props.pathName,
 							level: props.level,
@@ -147,7 +171,21 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 							projectNames: props.projectNames,
 							electivesToChoose: props.electivesToChoose,
 						}
-					: { ...common, mode: props.mode },
+					: props.mode === "orientation"
+						? {
+								...common,
+								meetingDate: props.meetingDate,
+								shareUrl: props.shareUrl,
+								mode: props.mode,
+								items: props.items,
+								origin: props.origin,
+							}
+						: {
+								...common,
+								meetingDate: props.meetingDate,
+								shareUrl: props.shareUrl,
+								mode: props.mode,
+							},
 	);
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {
