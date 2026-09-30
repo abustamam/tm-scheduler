@@ -117,6 +117,16 @@ describe("/admin/roles guide fields (#933)", () => {
 		).toBe("Time everyone.");
 	});
 
+	it("caps both boxes at 4000 characters, the server's limit", async () => {
+		await renderRoles([TIMER]);
+		const c = within(card(TIMER.id));
+		for (const label of ["Before the meeting", "During the meeting"]) {
+			expect((c.getByLabelText(label) as HTMLTextAreaElement).maxLength).toBe(
+				4000,
+			);
+		}
+	});
+
 	it("saves a custom role's guide through updateClubRole", async () => {
 		await renderRoles([TIMER, CUSTOM]);
 		const c = within(card(CUSTOM.id));

@@ -2,9 +2,12 @@ import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ROLE_SHEETS } from "#/data/role-sheets";
 import {
+	blankToNull,
+	EMPTY_ROLE_GUIDE,
 	findRoleGuideSource,
 	hasGuideText,
 	meetingRoleSheetHref,
+	ROLE_GUIDE_NOTES_MAX,
 	roleGuide,
 	roleGuideAnchor,
 	roleSheetForKey,
@@ -178,5 +181,39 @@ describe("ROLE_TEMPLATE guide text (#933)", () => {
 		expect(Object.fromEntries(backfilled)).toEqual(
 			Object.fromEntries(expected),
 		);
+	});
+});
+
+describe("blankToNull", () => {
+	it("trims, and turns blank, whitespace and absent into null", () => {
+		expect(blankToNull("  Keep  ")).toBe("Keep");
+		expect(blankToNull(" \n\t ")).toBeNull();
+		expect(blankToNull("")).toBeNull();
+		expect(blankToNull(null)).toBeNull();
+		expect(blankToNull(undefined)).toBeNull();
+	});
+});
+
+describe("ROLE_GUIDE_NOTES_MAX", () => {
+	it("is an absolute 4000-character ceiling", () => {
+		expect(ROLE_GUIDE_NOTES_MAX).toBe(4000);
+	});
+
+	it("fits every default guide half with room to spare", () => {
+		for (const r of ROLE_TEMPLATE) {
+			expect(r.beforeNotes.length).toBeLessThan(ROLE_GUIDE_NOTES_MAX);
+			expect(r.duringNotes.length).toBeLessThan(ROLE_GUIDE_NOTES_MAX);
+		}
+	});
+});
+
+describe("EMPTY_ROLE_GUIDE", () => {
+	it("has no text at all", () => {
+		expect(EMPTY_ROLE_GUIDE).toEqual({
+			description: null,
+			before: null,
+			during: null,
+		});
+		expect(hasGuideText(EMPTY_ROLE_GUIDE)).toBe(false);
 	});
 });

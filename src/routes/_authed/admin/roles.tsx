@@ -16,6 +16,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { pairedRoleIds } from "#/lib/meeting-roles";
+import { ROLE_GUIDE_NOTES_MAX } from "#/lib/role-guide";
 import {
 	createClubRole,
 	deleteClubRole,
@@ -459,7 +460,7 @@ function RoleCard({
 								id={`before-${role.id}`}
 								name="beforeNotes"
 								rows={4}
-								maxLength={4000}
+								maxLength={ROLE_GUIDE_NOTES_MAX}
 								defaultValue={role.beforeNotes ?? ""}
 								className={textareaClass}
 								placeholder="How to prepare, one step per line. Leave blank to show just the description."
@@ -471,7 +472,7 @@ function RoleCard({
 								id={`during-${role.id}`}
 								name="duringNotes"
 								rows={4}
-								maxLength={4000}
+								maxLength={ROLE_GUIDE_NOTES_MAX}
 								defaultValue={role.duringNotes ?? ""}
 								className={textareaClass}
 								placeholder="What to do in the room, one step per line."

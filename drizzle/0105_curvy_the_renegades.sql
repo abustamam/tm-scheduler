@@ -3,7 +3,7 @@ ALTER TABLE "role_definitions" ADD COLUMN "during_notes" text;--> statement-brea
 -- #933 backfill: the standard roles' default guide text (ROLE_TEMPLATE in
 -- src/lib/role-template.ts), matched by role key and written into NULL fields
 -- ONLY, so a field a club has already written is never overwritten.
--- role-template-guide.test.ts holds this text equal to ROLE_TEMPLATE.
+-- src/lib/role-guide.test.ts holds this text equal to ROLE_TEMPLATE.
 UPDATE "role_definitions" SET "before_notes" = 'Choose a theme and add it to the meeting page, so the Grammarian can pick a Word of the Day to match.
 A few days out, check the agenda: every role filled, and each speaker''s title and time known.
 Write a short introduction for each speaker, and plan how you''ll tie the segments to your theme.' WHERE "key" = 'toastmaster_of_the_day' AND "before_notes" IS NULL;--> statement-breakpoint

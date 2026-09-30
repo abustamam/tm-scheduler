@@ -21,6 +21,11 @@ import {
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { MAX_ROLE_REPEAT_SLOTS } from "#/lib/meeting-template-limits";
 import { deriveRoleKey } from "#/lib/role-def-match";
+import {
+	blankToNull,
+	ROLE_GUIDE_NOTES_MAX,
+	type RoleGuideNotesPatch,
+} from "#/lib/role-guide";
 import { isReadableClub } from "./club-readable-logic";
 import { isUniqueViolation } from "./pg-errors";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
@@ -272,11 +277,6 @@ export async function loadPublicClubRoles(
 // (integration tests), not just through the schema.
 const descriptionField = z.string().nullable().optional();
 
-function normalizeDescription(value: string | null | undefined): string | null {
-	const trimmed = value?.trim();
-	return trimmed ? trimmed : null;
-}
-
 // The two guide halves (#933). Same blank-is-null rule as `description`, with
 // one difference that matters: an ABSENT field (`undefined`) leaves the column
 // untouched instead of clearing it. `description` predates any client that
@@ -284,19 +284,19 @@ function normalizeDescription(value: string | null | undefined): string | null {
 // posts the old payload — clearing on absence would wipe a club's guide text
 // on that tab's next ordinary save. Only an explicit value (blank → null)
 // writes.
-const guideNotesField = z.string().max(4000).nullable().optional();
+const guideNotesField = z
+	.string()
+	.max(ROLE_GUIDE_NOTES_MAX)
+	.nullable()
+	.optional();
 
-function guideNotesPatch(input: {
-	beforeNotes?: string | null;
-	duringNotes?: string | null;
-}): { beforeNotes?: string | null; duringNotes?: string | null } {
-	const patch: { beforeNotes?: string | null; duringNotes?: string | null } =
-		{};
+function guideNotesPatch(input: RoleGuideNotesPatch): RoleGuideNotesPatch {
+	const patch: RoleGuideNotesPatch = {};
 	if (input.beforeNotes !== undefined) {
-		patch.beforeNotes = normalizeDescription(input.beforeNotes);
+		patch.beforeNotes = blankToNull(input.beforeNotes);
 	}
 	if (input.duringNotes !== undefined) {
-		patch.duringNotes = normalizeDescription(input.duringNotes);
+		patch.duringNotes = blankToNull(input.duringNotes);
 	}
 	return patch;
 }
@@ -366,7 +366,7 @@ export async function applyRoleDefinitionCreate(input: CreateRoleInput) {
 				defaultCount: input.defaultCount,
 				sortOrder: maxSort + 1,
 				isSpeakerRole: input.isSpeakerRole ?? false,
-				description: normalizeDescription(input.description),
+				description: blankToNull(input.description),
 			})
 			.returning({ id: roleDefinitions.id });
 	} catch (err) {
@@ -414,7 +414,7 @@ export async function applyRoleDefinitionUpdate(input: UpdateRoleInput) {
 			category: input.category,
 			defaultCount: input.defaultCount,
 			isSpeakerRole: input.isSpeakerRole ?? false,
-			description: normalizeDescription(input.description),
+			description: blankToNull(input.description),
 			...guideNotesPatch(input),
 		})
 		.where(

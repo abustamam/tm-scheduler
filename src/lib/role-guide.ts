@@ -31,17 +31,42 @@ export interface RoleGuide {
 	during: string | null;
 }
 
-/** Blank or whitespace-only reads as absent, like `normalizeDescription`. */
-function text(value: string | null | undefined): string | null {
+/**
+ * Trimmed text, or null when blank or whitespace-only. The ONE blank-to-null
+ * rule for a role's free text — `description` and both guide halves — used
+ * both when a value is written (`role-definitions-logic.ts`) and when it is
+ * read here, so a cleared field disappears rather than rendering an empty box.
+ */
+export function blankToNull(value: string | null | undefined): string | null {
 	const trimmed = value?.trim();
 	return trimmed ? trimmed : null;
 }
 
+/**
+ * The longest a guide half may be. One constant for the server schema and the
+ * admin form's `maxLength`, so the two cannot disagree. Room for a dozen
+ * steps; the PUBLIC roles guide renders it, so it is bounded.
+ */
+export const ROLE_GUIDE_NOTES_MAX = 4000;
+
+/** The two guide halves as a write: `undefined` means "leave it alone". */
+export type RoleGuideNotesPatch = {
+	beforeNotes?: string | null;
+	duringNotes?: string | null;
+};
+
+/** The empty guide: nothing written for either half, and no description. */
+export const EMPTY_ROLE_GUIDE: RoleGuide = Object.freeze({
+	description: null,
+	before: null,
+	during: null,
+});
+
 export function roleGuide(source: RoleGuideSource): RoleGuide {
 	return {
-		description: text(source.description),
-		before: text(source.beforeNotes),
-		during: text(source.duringNotes),
+		description: blankToNull(source.description),
+		before: blankToNull(source.beforeNotes),
+		during: blankToNull(source.duringNotes),
 	};
 }
 

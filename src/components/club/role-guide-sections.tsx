@@ -113,15 +113,7 @@ function Collapsible({
 }
 
 /** A static half, for the reference page: a heading and its text. */
-function Static({
-	label,
-	children,
-}: {
-	label: string;
-	/** Accepted so both halves share one call shape; always open here. */
-	initiallyOpen?: boolean;
-	children: ReactNode;
-}) {
+function Static({ label, children }: { label: string; children: ReactNode }) {
 	return (
 		<div className="space-y-1">
 			<h4 className="text-xs font-semibold tracking-[0.04em] text-foreground uppercase">
@@ -151,7 +143,15 @@ export function RoleGuideSections({
 	/** Extra classes for the root, which is absent when nothing renders. */
 	className?: string;
 }) {
-	const Half = open ? Collapsible : Static;
+	// Collapsible on the personal page, static headings on the reference page.
+	const half = (label: string, initiallyOpen: boolean, body: ReactNode) =>
+		open ? (
+			<Collapsible label={label} initiallyOpen={initiallyOpen}>
+				{body}
+			</Collapsible>
+		) : (
+			<Static label={label}>{body}</Static>
+		);
 	if (!hasGuideText(guide)) {
 		// No empty headers: the description (if wanted and present) and the
 		// sheet, or nothing at all.
@@ -167,17 +167,23 @@ export function RoleGuideSections({
 	}
 	return (
 		<div className={`space-y-1 ${className}`}>
-			{guide.before ? (
-				<Half label="Before the meeting" initiallyOpen={open?.before ?? true}>
-					<GuideText text={guide.before} />
-				</Half>
-			) : null}
-			{guide.during ? (
-				<Half label="During the meeting" initiallyOpen={open?.during ?? true}>
-					<GuideText text={guide.during} />
-					{sheet ? <SheetLink sheet={sheet} /> : null}
-				</Half>
-			) : null}
+			{guide.before
+				? half(
+						"Before the meeting",
+						open?.before ?? true,
+						<GuideText text={guide.before} />,
+					)
+				: null}
+			{guide.during
+				? half(
+						"During the meeting",
+						open?.during ?? true,
+						<>
+							<GuideText text={guide.during} />
+							{sheet ? <SheetLink sheet={sheet} /> : null}
+						</>,
+					)
+				: null}
 			{/* A sheet with no During half still gets its link, after the guide. */}
 			{sheet && !guide.during ? <SheetLink sheet={sheet} /> : null}
 		</div>

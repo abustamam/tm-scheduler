@@ -1148,14 +1148,14 @@ describe("orientation drafts without a next meeting (#942)", () => {
 	});
 });
 
-describe("guest confirm links the role's guide card (#933)", () => {
+describe("guest confirm appends the role's guide card (#933)", () => {
 	const guide = rolesGuideUrl({
 		origin: "https://gavelup.app",
 		clubId: "mcf",
 		roleKey: TMOD_ROLE_KEY,
 	});
 
-	it("points a guest holder at roles-guide#<their role>", () => {
+	it("keeps the agenda link and appends the guide for a guest holder", () => {
 		const r = buildNudge({
 			...base,
 			roleName: "Toastmaster of the Day",
@@ -1168,12 +1168,13 @@ describe("guest confirm links the role's guide card (#933)", () => {
 			"https://gavelup.app/club/mcf/roles-guide#toastmaster-of-the-day",
 		);
 		expect(r.message).toBe(
-			`Hi Jane, just confirming you're our Toastmaster of the Day for the Thu, Jul 23 meeting. Details: ${guide}`,
+			`Hi Jane, just confirming you're our Toastmaster of the Day for the Thu, Jul 23 meeting. Details: ${base.shareUrl} Your role guide: ${guide}`,
 		);
+		expect(r.message).not.toContain("/me?as=");
 		expect(decodeURIComponent(r.mailtoUrl ?? "")).toContain(guide);
 	});
 
-	it("uses the guide in the duty-carrying template too", () => {
+	it("keeps the agenda as the place to do the duty, guide after it", () => {
 		const r = buildNudge({
 			...base,
 			roleName: "Toastmaster of the Day",
@@ -1184,29 +1185,36 @@ describe("guest confirm links the role's guide card (#933)", () => {
 			),
 			guideUrl: guide,
 		});
-		expect(r.message.endsWith(`here: ${guide}`)).toBe(true);
+		expect(
+			r.message.endsWith(
+				`Confirm and do that here: ${base.shareUrl} Your role guide: ${guide}`,
+			),
+		).toBe(true);
 	});
 
-	it("still links a member's own page when they have one", () => {
+	it("leaves a member's draft byte-identical when a guide is also passed", () => {
 		const own = "https://gavelup.app/club/mcf/meeting/abc/me?as=m1";
-		const r = buildNudge({
+		const without = buildNudge({ ...base, mode: "confirm", personalUrl: own });
+		const withGuide = buildNudge({
 			...base,
 			mode: "confirm",
 			personalUrl: own,
 			guideUrl: guide,
 		});
-		expect(r.message).toContain(own);
-		expect(r.message).not.toContain("roles-guide");
+		expect(withGuide.message).toBe(without.message);
+		expect(withGuide.message).not.toContain("roles-guide");
 	});
 
-	it("falls back to the agenda when the guide link is blank", () => {
-		const r = buildNudge({
+	it("is byte-identical to a guide-less draft when the guide link is blank", () => {
+		const plain = buildNudge({ ...base, mode: "confirm" });
+		const blank = buildNudge({
 			...base,
 			mode: "confirm",
 			personalUrl: "",
 			guideUrl: "",
 		});
-		expect(r.message.endsWith(`Details: ${base.shareUrl}`)).toBe(true);
+		expect(blank.message).toBe(plain.message);
+		expect(plain.message.endsWith(`Details: ${base.shareUrl}`)).toBe(true);
 	});
 
 	it("is ignored by a recruit draft, which asks about the meeting", () => {

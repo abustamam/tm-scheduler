@@ -30,7 +30,7 @@ export type RoleSeed = {
 	 *
 	 * DUPLICATED, deliberately, as the backfill in the migration that added the
 	 * columns — a migration is frozen SQL and cannot import this file.
-	 * `role-template-guide.test.ts` holds the two together.
+	 * `src/lib/role-guide.test.ts` holds the two together.
 	 */
 	beforeNotes: string;
 	duringNotes: string;

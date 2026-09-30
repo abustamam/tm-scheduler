@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 //
 // The agenda → NudgeButtons wiring for the `confirm` draft's link (#933):
-// a GUEST holder's draft links the role's card on the public roles guide
-// (`roles-guide#<key>`), a MEMBER holder's links their own `/me` page. The
+// a GUEST holder's draft keeps the agenda link and appends the role's card on
+// the public roles guide (`roles-guide#<key>`); a MEMBER holder's links their
+// own `/me` page and carries no guide line. The
 // builder is unit-tested in `nudge.test.ts`; this is the call site, which a
 // component tested only through its props cannot see.
 import { cleanup, render, screen } from "@testing-library/react";
@@ -116,7 +117,7 @@ function draftBody(): string {
 }
 
 describe("the confirm draft's link, by holder (#933)", () => {
-	it("a GUEST holder's draft links roles-guide#<their role>", () => {
+	it("a GUEST holder's draft keeps the agenda link and adds roles-guide#<their role>", () => {
 		renderAgenda([
 			slot({
 				assigneeId: null,
@@ -127,8 +128,9 @@ describe("the confirm draft's link, by holder (#933)", () => {
 			} as Partial<AgendaSlot>),
 		]);
 		const body = draftBody();
+		// The agenda stays the actionable link; the guide follows it.
 		expect(body).toContain(
-			"https://gavelup.app/club/downtown/roles-guide#toastmaster-of-the-day",
+			"Details: https://gavelup.app/club/downtown/meeting/2026-10-13 Your role guide: https://gavelup.app/club/downtown/roles-guide#toastmaster-of-the-day",
 		);
 		expect(body).not.toContain("/me?as=");
 	});

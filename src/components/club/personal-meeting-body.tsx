@@ -104,6 +104,7 @@ import {
 	ROLE_CONFIRM_PROMPT,
 } from "#/lib/role-duties";
 import {
+	EMPTY_ROLE_GUIDE,
 	findRoleGuideSource,
 	meetingRoleSheetHref,
 	type RoleGuideSource,
@@ -531,9 +532,7 @@ export function PersonalMeetingBody({
 									// renders nothing, not an empty ruled box.
 									className="mt-2 border-t border-[var(--line)] pt-2"
 									guide={
-										guideSource
-											? roleGuide(guideSource)
-											: { description: null, before: null, during: null }
+										guideSource ? roleGuide(guideSource) : EMPTY_ROLE_GUIDE
 									}
 									// The meeting-aware copy: club, date and speakers filled
 									// in. Keyed by the resolved uuid, which that route takes.

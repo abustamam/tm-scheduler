@@ -25,8 +25,12 @@ import { readSource } from "#/test/guard-source";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { applyRoleDefinitionUpdate, loadPublicClubRoles, listRoleDefinitions } =
-	await import("./role-definitions-logic");
+const {
+	applyRoleDefinitionUpdate,
+	loadPublicClubRoles,
+	listRoleDefinitions,
+	updateRoleSchema,
+} = await import("./role-definitions-logic");
 
 /** The one migration that adds the guide columns. */
 function guideMigrationPath(): string {
@@ -342,3 +346,26 @@ describe.skipIf(!hasTestDb)(
 		});
 	},
 );
+
+describe("the guide cap in the update schema", () => {
+	const base = {
+		clubId: randomUUID(),
+		roleId: randomUUID(),
+		name: "Timer",
+		category: "functionary",
+		defaultCount: 1,
+	};
+
+	it("accepts exactly 4000 characters and rejects 4001, for both halves", () => {
+		for (const field of ["beforeNotes", "duringNotes"] as const) {
+			expect(
+				updateRoleSchema.safeParse({ ...base, [field]: "x".repeat(4000) })
+					.success,
+			).toBe(true);
+			expect(
+				updateRoleSchema.safeParse({ ...base, [field]: "x".repeat(4001) })
+					.success,
+			).toBe(false);
+		}
+	});
+});
