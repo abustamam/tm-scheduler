@@ -1621,6 +1621,15 @@ export const roleDefinitions = pgTable(
 		slotsUnordered: boolean("slots_unordered").notNull().default(false),
 		// Human-readable responsibilities, shown before claiming + on the shared link.
 		description: text("description"),
+		// The role's "before and during the meeting" guide (#933): what to do to
+		// prepare, and what to do in the room. Informational prose, NOT checklist
+		// items — the duty registry (`role-duties.ts`) keeps its no-unverifiable-
+		// ticks rule. Seeded for the standard roles from `ROLE_TEMPLATE`, filled
+		// into NULL fields only for existing clubs (so nothing a club wrote is
+		// overwritten), and edited wherever `description` is. NULL for a custom
+		// role, where every surface falls back to `description`.
+		beforeNotes: text("before_notes"),
+		duringNotes: text("during_notes"),
 		// Whether new meetings generate slots for this role (#368). A "skeleton
 		// crew" club can turn OFF roles it doesn't run (e.g. Ah-Counter, Vote
 		// Counter) without deleting the definition — delete is unavailable once any

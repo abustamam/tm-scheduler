@@ -147,6 +147,19 @@ export type NudgeInput =
 			 * rather than losing its link.
 			 */
 			personalUrl?: string | null;
+			/**
+			 * The role's card on the public roles guide (#933) — build it with
+			 * `rolesGuideUrl` (`#/lib/role-guide`). The GUEST fallback for a
+			 * `confirm` draft: a guest holder has no `?as=` identity, so instead
+			 * of the bare agenda their draft links the Before/During guide for
+			 * the role they hold.
+			 *
+			 * Read by `confirm` only. A `recruit` draft asks someone who has not
+			 * said yes, and keeps linking the meeting they would be joining.
+			 * `personalUrl` wins when both are set: a member's own page carries
+			 * the same guide AND their duties. Blank counts as absent.
+			 */
+			guideUrl?: string | null;
 	  });
 
 export interface Nudge {
@@ -192,14 +205,17 @@ function messageFor(i: NudgeInput): string {
 	const link = i.personalUrl || i.shareUrl;
 	const owed = i.duties ?? [];
 	if (i.mode === "confirm") {
+		// Member → their own page; guest → the role's guide card (#933); neither
+		// → the agenda. `||` for the blank-is-absent reason above.
+		const confirmLink = i.personalUrl || i.guideUrl || i.shareUrl;
 		// TWO templates rather than one with an optional tail, because the
 		// no-duty draft has to stay BYTE-IDENTICAL to the one officers already
 		// send — five of the nine standard roles have no data-backed duty, so
 		// that is the common case, and it is the case an interpolated empty
 		// clause leaves reading "…meeting — you'll also need to . Details:".
 		return owed.length === 0
-			? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${link}`
-			: `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting — you'll also need to ${dutyClauseList(owed)}. Confirm and do that here: ${link}`;
+			? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${confirmLink}`
+			: `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting — you'll also need to ${dutyClauseList(owed)}. Confirm and do that here: ${confirmLink}`;
 	}
 	// "You'd", not "you'll": a recruit draft is asking, and stating what they
 	// WILL do to someone who has not said yes is the same presumption the

@@ -92,16 +92,28 @@ import {
 import { showWriteError } from "#/components/write-error-toast";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { listRoles } from "#/lib/list-roles";
-import { isMeetingLocked, isMeetingOver } from "#/lib/meeting-lifecycle";
+import {
+	isMeetingLocked,
+	isMeetingOver,
+	meetingPhase,
+} from "#/lib/meeting-lifecycle";
 import { parseMeetingKey } from "#/lib/meeting-url";
 import {
 	type DutyTarget,
 	dutiesForRole,
 	ROLE_CONFIRM_PROMPT,
 } from "#/lib/role-duties";
+import {
+	findRoleGuideSource,
+	meetingRoleSheetHref,
+	type RoleGuideSource,
+	roleGuide,
+	roleSheetForKey,
+} from "#/lib/role-guide";
 import { setPlannedAttendance } from "#/server/attendance-plan";
 import { markUnavailableReleasing } from "#/server/availability";
 import type { PersonalMeetingView } from "#/server/personal-meeting";
+import { guideOpenState, RoleGuideSections } from "./role-guide-sections";
 
 /** The scannable stamp above a heading — the club shell header's own recipe,
  *  and `roles-guide.tsx`'s for a group label. */
@@ -121,6 +133,7 @@ export function PersonalMeetingBody({
 	onChanged,
 	onNotYou,
 	canRepick,
+	roleGuides,
 }: {
 	view: PersonalMeetingView;
 	clubId: string;
@@ -130,6 +143,14 @@ export function PersonalMeetingBody({
 	/** False for a signed-in member, whose identity is the session and cannot be
 	 *  re-picked from here. */
 	canRepick: boolean;
+	/**
+	 * The club's roles guide (#933) — `getPublicClubRoles`, read by the route's
+	 * loader — from which each held role's Before/During text is matched.
+	 * Optional because absence reads exactly as an empty guide does: every
+	 * role shows its duties and nothing under them, and the loader always
+	 * passes it.
+	 */
+	roleGuides?: readonly RoleGuideSource[];
 }) {
 	const [pending, setPending] = useState<Pending>(null);
 	const busy = pending !== null;
@@ -185,13 +206,30 @@ export function PersonalMeetingBody({
 	// and a cancelled meeting is neither while its date is still in the future.
 	// Without it a cancelled-but-upcoming meeting kept offering answer buttons,
 	// which the render test below caught.
+	// ONE clock for this render, shared by the answer window below and the
+	// guide's expanded half (#933), so the two cannot straddle club-local
+	// midnight and disagree about which day it is.
+	const now = new Date();
 	const writesClosed =
 		cancelled ||
 		isMeetingOver({
 			status: view.meeting.status,
 			scheduledAt: view.meeting.scheduledAt,
 			timezone: view.club.timezone,
+			now,
 		});
+	// Which guide half starts open (#933 decision 4), off the repo's own
+	// `meetingPhase` — the meeting page's phase rule, not a new clock: "Before"
+	// ahead of the day, "During" on it, neither once it is over or cancelled.
+	const guideOpen = guideOpenState(
+		meetingPhase({
+			status: view.meeting.status,
+			scheduledAt: view.meeting.scheduledAt,
+			timezone: view.club.timezone,
+			now,
+		}),
+		cancelled,
+	);
 
 	// `view.meeting.id`, never the `meetingId` URL segment — the segment is a
 	// club-local date key and both writers validate a uuid.
@@ -404,6 +442,10 @@ export function PersonalMeetingBody({
 							roleName: role.roleName,
 							roleKey: role.roleKey,
 						});
+						// The guide text for this role (#933), AFTER the duties: the
+						// duties are what the member can act on, the guide is reading.
+						const guideSource = findRoleGuideSource(roleGuides ?? [], role);
+						const sheet = roleSheetForKey(role.roleKey);
 						return (
 							<div
 								key={role.slotId}
@@ -485,6 +527,28 @@ export function PersonalMeetingBody({
 										</li>
 									)}
 								</ul>
+								<RoleGuideSections
+									// On the root, not a wrapper: a role with nothing to show
+									// renders nothing, not an empty ruled box.
+									className="mt-2 border-t border-[var(--line)] pt-2"
+									guide={
+										guideSource
+											? roleGuide(guideSource)
+											: { description: null, before: null, during: null }
+									}
+									// The meeting-aware copy: club, date and speakers filled
+									// in. Keyed by the resolved uuid, which that route takes.
+									sheet={
+										sheet
+											? {
+													href: meetingRoleSheetHref(meetingUuid, sheet),
+													title: sheet.title,
+												}
+											: null
+									}
+									open={guideOpen}
+									showDescriptionFallback
+								/>
 							</div>
 						);
 					})}

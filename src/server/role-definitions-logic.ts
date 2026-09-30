@@ -91,6 +91,22 @@ export interface RoleDefinitionRow {
 	sortOrder: number;
 	isSpeakerRole: boolean;
 	description: string | null;
+	/**
+	 * The role's stable identity (#368), for the roles guide's per-role anchor
+	 * (#933) — the fragment the guest `confirm` draft links to. Not sensitive:
+	 * a snake_case of a role name, the same string every agenda binds on.
+	 *
+	 * The three #933 fields are OPTIONAL on the type and `listRoleDefinitions`
+	 * always sets them — `PersonalMeetingView.meeting.hasTiming`'s shape, for
+	 * its reason: existing consumers and fixtures compile untouched, and an
+	 * absent value reads exactly as the NULL column does (no anchor, no guide
+	 * text, fall back to `description`).
+	 */
+	key?: string | null;
+	/** The "before the meeting" half of the role's guide (#933). */
+	beforeNotes?: string | null;
+	/** The "during the meeting" half of the role's guide (#933). */
+	duringNotes?: string | null;
 	/** Number of existing slots referencing this role (blocks deletion when > 0).
 	 *  `undefined` unless the caller asked for it — computing it costs an
 	 *  aggregate join over `role_slots`, which only the admin roles page needs.
@@ -171,6 +187,9 @@ export async function listRoleDefinitions(
 		sortOrder: roleDefinitions.sortOrder,
 		isSpeakerRole: roleDefinitions.isSpeakerRole,
 		description: roleDefinitions.description,
+		key: roleDefinitions.key,
+		beforeNotes: roleDefinitions.beforeNotes,
+		duringNotes: roleDefinitions.duringNotes,
 		enabled: roleDefinitions.enabled,
 		standing: roleDefinitions.standing,
 	};
@@ -258,6 +277,30 @@ const descriptionField = z.string().nullable().optional();
 function normalizeDescription(value: string | null | undefined): string | null {
 	const trimmed = value?.trim();
 	return trimmed ? trimmed : null;
+}
+
+// The two guide halves (#933). Same blank-is-null rule as `description`, with
+// one difference that matters: an ABSENT field (`undefined`) leaves the column
+// untouched instead of clearing it. `description` predates any client that
+// could omit it; these two arrive on a deploy, and a tab opened before it
+// posts the old payload — clearing on absence would wipe a club's guide text
+// on that tab's next ordinary save. Only an explicit value (blank → null)
+// writes.
+const guideNotesField = z.string().max(4000).nullable().optional();
+
+function guideNotesPatch(input: {
+	beforeNotes?: string | null;
+	duringNotes?: string | null;
+}): { beforeNotes?: string | null; duringNotes?: string | null } {
+	const patch: { beforeNotes?: string | null; duringNotes?: string | null } =
+		{};
+	if (input.beforeNotes !== undefined) {
+		patch.beforeNotes = normalizeDescription(input.beforeNotes);
+	}
+	if (input.duringNotes !== undefined) {
+		patch.duringNotes = normalizeDescription(input.duringNotes);
+	}
+	return patch;
 }
 
 // `MAX_ROLE_REPEAT_SLOTS`, not a re-typed literal (#task-10 review): this
@@ -348,13 +391,17 @@ export const updateRoleSchema = z.object({
 	defaultCount: defaultCountField,
 	isSpeakerRole: z.boolean().optional(),
 	description: descriptionField,
+	beforeNotes: guideNotesField,
+	duringNotes: guideNotesField,
 });
 export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
 
 /** Edit an existing role's fields. Editing `defaultCount` only affects FUTURE
  *  generated meetings (via `generateSlotRows`); existing meetings' slots are
  *  unchanged. Description is read at display time, so edits go live everywhere
- *  (before-claim sheet + public shared link) immediately. The caller is
+ *  (before-claim sheet + public shared link) immediately. So are the two guide
+ *  halves (#933), which an omitted field leaves as they are — see
+ *  `guideNotesPatch`. The caller is
  *  responsible for the admin authorization check (see `updateClubRole`).
  *
  *  Deliberately does NOT touch `enabled` — see `applyRoleDefinitionSetEnabled`
@@ -370,6 +417,7 @@ export async function applyRoleDefinitionUpdate(input: UpdateRoleInput) {
 			defaultCount: input.defaultCount,
 			isSpeakerRole: input.isSpeakerRole ?? false,
 			description: normalizeDescription(input.description),
+			...guideNotesPatch(input),
 		})
 		.where(
 			and(

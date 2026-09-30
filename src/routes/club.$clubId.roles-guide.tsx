@@ -14,9 +14,20 @@
 // One data source for both: `getPublicClubRoles` (enabled-filtered) grouped by
 // the shared `groupRolesByCategory`, so the page a guest reads and the sheet
 // the club prints cannot drift in order or labelling.
+//
+// ## Before / During, and a stable anchor per role (#933)
+//
+// Each role shows its guide under its description, and its card carries
+// `id={roleGuideAnchor(key)}` (`#toastmaster-of-the-day`, `#ah-counter`) —
+// what the guest variant of the `confirm` nudge links to. The anchor is the
+// role's KEY, never its name, so a club renaming a role does not break a
+// draft already sent. What this page reads is `getPublicClubRoles`: enabled
+// roles, empty for an archived or unknown club, the same for every visitor,
+// signed in or not, from this club or another.
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Printer } from "lucide-react";
 import { BackLink } from "#/components/back-link";
+import { RoleGuideItem } from "#/components/club/role-guide-sections";
 import { groupRolesByCategory } from "#/lib/role-categories";
 import { getPublicClubRoles } from "#/server/role-definitions";
 
@@ -76,16 +87,7 @@ function RolesGuide() {
 						</h2>
 						<ul className="divide-y divide-[var(--line)] overflow-hidden rounded-xl border border-[var(--line)] bg-card">
 							{group.roles.map((r) => (
-								<li key={r.id} className="p-4">
-									<h3 className="font-medium text-foreground text-sm">
-										{r.name}
-									</h3>
-									{r.description ? (
-										<p className="mt-1 text-sm text-muted-foreground">
-											{r.description}
-										</p>
-									) : null}
-								</li>
+								<RoleGuideItem key={r.id} role={r} />
 							))}
 						</ul>
 					</section>
