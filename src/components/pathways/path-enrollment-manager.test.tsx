@@ -5,13 +5,16 @@
  * while every other path stays selectable. Nothing is added until the member
  * picks.
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PATH_QUIZ_HREF, QUIZ_HANDOFF_KEY } from "#/lib/path-quiz";
+import {
+	PATH_QUIZ_HREF,
+	PATH_QUIZ_LINK_LABEL,
+	QUIZ_HANDOFF_KEY,
+} from "#/lib/path-quiz";
 import type { EnrollablePath } from "#/server/path-enrollment";
+import { readSource } from "#/test/guard-source";
 import { PathEnrollmentManager } from "./path-enrollment-manager";
 
 const OPTIONS: EnrollablePath[] = [
@@ -76,7 +79,9 @@ describe("PathEnrollmentManager and the quiz", () => {
 		renderManager();
 		await userEvent.click(screen.getByRole("button", { name: /Add a path/ }));
 		expect(
-			screen.getByRole("link", { name: "Take the quiz" }).getAttribute("href"),
+			screen
+				.getByRole("link", { name: PATH_QUIZ_LINK_LABEL })
+				.getAttribute("href"),
 		).toBe(PATH_QUIZ_HREF);
 	});
 
@@ -131,6 +136,28 @@ describe("PathEnrollmentManager and the quiz", () => {
 		expect(sessionStorage.getItem(QUIZ_HANDOFF_KEY)).toBe("8711");
 	});
 
+	it("never marks a legacy row carrying a quiz code as suggested", async () => {
+		sessionStorage.setItem(QUIZ_HANDOFF_KEY, "8711");
+		const legacyHumor: EnrollablePath[] = [
+			...OPTIONS.filter((o) => o.courseCode !== "8711"),
+			{
+				id: "p-8711-legacy",
+				courseCode: "8711",
+				name: "Engaging Humor",
+				status: "legacy",
+			},
+		];
+		renderManager(legacyHumor, { acceptsQuizSuggestion: true });
+		await screen.findByText("Choose a path");
+		expect(screen.queryByText("Suggested by the quiz")).toBeNull();
+		expect(
+			screen.getAllByRole("button", { name: "Engaging Humor" }),
+		).toHaveLength(1);
+		expect(
+			groupOf("Legacy paths").getByRole("button", { name: "Engaging Humor" }),
+		).toBeTruthy();
+	});
+
 	it("opens nothing without a handoff", () => {
 		renderManager(OPTIONS, { acceptsQuizSuggestion: true });
 		expect(screen.queryByText("Choose a path")).toBeNull();
@@ -143,8 +170,9 @@ describe("PathEnrollmentManager and the quiz", () => {
  * the admin's member page does not.
  */
 describe("which surfaces accept the quiz handoff", () => {
-	const src = (file: string) =>
-		readFileSync(resolve(__dirname, "../../..", file), "utf8");
+	// Comment-blind (`#/test/guard-source`): a comment naming the prop must
+	// neither satisfy the dashboard check nor trip the member-page one.
+	const src = (file: string) => readSource(file);
 
 	it("the dashboard's picker accepts it", () => {
 		const dashboard = src("src/routes/_authed/dashboard.tsx");

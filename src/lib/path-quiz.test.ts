@@ -13,7 +13,11 @@ import {
 	suggestPaths,
 	takeQuizSuggestion,
 } from "./path-quiz";
-import { CURRENT_PATH_GUIDE, PATHWAYS_CATALOG } from "./pathways-catalog";
+import {
+	CURRENT_PATH_GUIDE,
+	isCurrentCourseCode,
+	PATHWAYS_CATALOG,
+} from "./pathways-catalog";
 
 const currentCodes = PATHWAYS_CATALOG.filter((p) => p.status === "current")
 	.map((p) => p.courseCode)
@@ -24,11 +28,11 @@ const legacyCodes = PATHWAYS_CATALOG.filter((p) => p.status === "legacy").map(
 
 /** For each question, the option weighing most toward `code` (first on a tie). */
 function answersFavouring(code: string): QuizAnswers {
+	const w = (o: { weights: object }) =>
+		(o.weights as Record<string, number | undefined>)[code] ?? 0;
 	return Object.fromEntries(
 		PATH_QUIZ.map((q) => {
-			const best = q.options.reduce((a, b) =>
-				(b.weights[code] ?? 0) > (a.weights[code] ?? 0) ? b : a,
-			);
+			const best = q.options.reduce((a, b) => (w(b) > w(a) ? b : a));
 			return [q.id, best.id];
 		}),
 	);
@@ -42,7 +46,9 @@ describe("CURRENT_PATH_GUIDE (catalog, #935)", () => {
 
 	it("gives each a focus line and TI's page for that path", () => {
 		for (const p of PATHWAYS_CATALOG.filter((x) => x.status === "current")) {
-			const guide = CURRENT_PATH_GUIDE[p.courseCode];
+			const guide = isCurrentCourseCode(p.courseCode)
+				? CURRENT_PATH_GUIDE[p.courseCode]
+				: undefined;
 			expect(guide?.focus.trim().length).toBeGreaterThan(20);
 			// TI's own path pages: pathways-overview/pathways-<name>-path.
 			const slug = p.name.toLowerCase().replace(/\s+/g, "-");
@@ -205,6 +211,17 @@ describe("the picker handoff", () => {
 		expect(sessionStorage.getItem(QUIZ_HANDOFF_KEY)).toBeNull();
 		sessionStorage.setItem(QUIZ_HANDOFF_KEY, "junk");
 		expect(takeQuizSuggestion()).toBeNull();
+	});
+
+	it.each([
+		"__proto__",
+		"constructor",
+		"toString",
+		"hasOwnProperty",
+	])("refuses the inherited key %s", (key) => {
+		sessionStorage.setItem(QUIZ_HANDOFF_KEY, key);
+		expect(takeQuizSuggestion()).toBeNull();
+		expect(isCurrentCourseCode(key)).toBe(false);
 	});
 
 	it("survives blocked storage", () => {

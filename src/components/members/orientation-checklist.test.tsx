@@ -14,18 +14,17 @@ import {
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MY_PATHWAYS_ANCHOR } from "#/lib/my-pathways-anchor";
 import {
 	type OrientationFacts,
 	orientationView,
 	PATHWAYS_EXPLAINER_HREF,
 } from "#/lib/orientation";
-import { PATH_QUIZ_HREF } from "#/lib/path-quiz";
+import { PATH_QUIZ_HREF, PATH_QUIZ_LINK_LABEL } from "#/lib/path-quiz";
 import {
-	MY_PATHWAYS_ANCHOR,
 	ORIENTATION_DISMISS_LABEL,
 	ORIENTATION_HEADING,
 	ORIENTATION_LEARN_LABEL,
-	ORIENTATION_QUIZ_LABEL,
 	OrientationChecklist,
 } from "./orientation-checklist";
 
@@ -164,7 +163,7 @@ describe("OrientationChecklist (#940)", () => {
 		await screen.findByText(ORIENTATION_HEADING);
 		const li = container.querySelector('li[data-item="choose-path"]');
 		const quiz = [...(li?.querySelectorAll("a") ?? [])].find(
-			(a) => a.textContent === ORIENTATION_QUIZ_LABEL,
+			(a) => a.textContent === PATH_QUIZ_LINK_LABEL,
 		);
 		expect(quiz?.getAttribute("href")).toBe(PATH_QUIZ_HREF);
 		cleanup();

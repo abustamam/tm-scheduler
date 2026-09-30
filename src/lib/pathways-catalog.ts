@@ -636,6 +636,16 @@ export const PATHWAYS_CATALOG: CatalogPath[] = CLUB_PATHS.map(buildPath);
  * Legacy paths are deliberately absent: the quiz never suggests one, and
  * `path-quiz.test.ts` holds this map's keys equal to the current course codes.
  */
+/** The six current paths' course codes. `path-quiz.test.ts` holds this set
+ *  equal to the catalog's `status: "current"` rows. */
+export type CurrentCourseCode =
+	| "8700"
+	| "8701"
+	| "8704"
+	| "8706"
+	| "8707"
+	| "8711";
+
 export interface CurrentPathGuide {
 	focus: string;
 	tiUrl: string;
@@ -643,7 +653,9 @@ export interface CurrentPathGuide {
 
 const TI_PATH_PAGE = "https://www.toastmasters.org/pathways-overview";
 
-export const CURRENT_PATH_GUIDE: Record<string, CurrentPathGuide> = {
+export const CURRENT_PATH_GUIDE: Readonly<
+	Record<CurrentCourseCode, CurrentPathGuide>
+> = {
 	"8701": {
 		focus:
 			"Building well-organised talks and delivering them with confidence, whatever the room.",
@@ -675,3 +687,9 @@ export const CURRENT_PATH_GUIDE: Record<string, CurrentPathGuide> = {
 		tiUrl: `${TI_PATH_PAGE}/pathways-persuasive-influence-path`,
 	},
 };
+
+/** Own keys only: `in` would also accept `__proto__`, `constructor` and the
+ *  rest of the prototype chain. */
+export function isCurrentCourseCode(code: string): code is CurrentCourseCode {
+	return Object.hasOwn(CURRENT_PATH_GUIDE, code);
+}

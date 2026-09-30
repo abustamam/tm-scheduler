@@ -1,4 +1,10 @@
-import { CURRENT_PATH_GUIDE, PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
+import { MY_PATHWAYS_ANCHOR } from "#/lib/my-pathways-anchor";
+import {
+	CURRENT_PATH_GUIDE,
+	type CurrentCourseCode,
+	isCurrentCourseCode,
+	PATHWAYS_CATALOG,
+} from "#/lib/pathways-catalog";
 
 /**
  * The path-selection quiz (#935): a short set of questions that SUGGESTS a
@@ -19,7 +25,7 @@ import { CURRENT_PATH_GUIDE, PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
  */
 
 /** Weight per current-path course code. */
-export type PathWeights = Readonly<Record<string, number>>;
+export type PathWeights = Readonly<Partial<Record<CurrentCourseCode, number>>>;
 
 export interface QuizOption {
 	id: string;
@@ -37,12 +43,12 @@ export interface QuizQuestion {
 export type QuizAnswers = Readonly<Record<string, string>>;
 
 // Course codes, named so the weights below read as paths, not numbers.
-const PRESENTATION = "8701";
-const MOTIVATION = "8700";
-const HUMOR = "8711";
-const LEADERSHIP = "8706";
-const VISION = "8704";
-const PERSUASION = "8707";
+const PRESENTATION: CurrentCourseCode = "8701";
+const MOTIVATION: CurrentCourseCode = "8700";
+const HUMOR: CurrentCourseCode = "8711";
+const LEADERSHIP: CurrentCourseCode = "8706";
+const VISION: CurrentCourseCode = "8704";
+const PERSUASION: CurrentCourseCode = "8707";
 
 export const PATH_QUIZ: readonly QuizQuestion[] = [
 	{
@@ -236,7 +242,7 @@ export const QUIZ_PATHS: readonly { courseCode: string; name: string }[] =
 	}));
 
 export interface PathSuggestion {
-	courseCode: string;
+	courseCode: CurrentCourseCode;
 	name: string;
 	focus: string;
 	tiUrl: string;
@@ -270,8 +276,8 @@ export function scorePathQuiz(answers: QuizAnswers): PathSuggestion[] {
 	}
 
 	return QUIZ_PATHS.flatMap((p, order) => {
+		if (!isCurrentCourseCode(p.courseCode)) return [];
 		const guide = CURRENT_PATH_GUIDE[p.courseCode];
-		if (!guide) return [];
 		const why = [...(reasons.get(p.courseCode) ?? [])]
 			// Stable sort: equal weights keep question order.
 			.sort((a, b) => b.weight - a.weight)
@@ -336,9 +342,11 @@ export function suggestionWhy(s: PathSuggestion): string {
 export const QUIZ_HANDOFF_KEY = "gavelup.pathQuizSuggestion";
 /** Where "Use this path" goes: the dashboard's My Pathways panel, whose
  *  picker is the one rendered with `acceptsQuizSuggestion`. */
-export const QUIZ_HANDOFF_HREF = "/dashboard#my-pathways";
+export const QUIZ_HANDOFF_HREF = `/dashboard#${MY_PATHWAYS_ANCHOR}`;
 /** The quiz page itself, linked from the picker and the Pathways explainer. */
 export const PATH_QUIZ_HREF = "/resources/which-path";
+/** The words every link to the quiz uses: the picker's and the checklist's. */
+export const PATH_QUIZ_LINK_LABEL = "Take the quiz";
 
 function sessionStore(): Storage | null {
 	try {
@@ -348,7 +356,7 @@ function sessionStore(): Storage | null {
 	}
 }
 
-export function stashQuizSuggestion(courseCode: string): void {
+export function stashQuizSuggestion(courseCode: CurrentCourseCode): void {
 	try {
 		sessionStore()?.setItem(QUIZ_HANDOFF_KEY, courseCode);
 	} catch {
@@ -357,12 +365,12 @@ export function stashQuizSuggestion(courseCode: string): void {
 }
 
 /** Read and clear the stashed suggestion. Only a current path is returned. */
-export function takeQuizSuggestion(): string | null {
+export function takeQuizSuggestion(): CurrentCourseCode | null {
 	try {
 		const store = sessionStore();
 		const code = store?.getItem(QUIZ_HANDOFF_KEY) ?? null;
 		store?.removeItem(QUIZ_HANDOFF_KEY);
-		return code && code in CURRENT_PATH_GUIDE ? code : null;
+		return code && isCurrentCourseCode(code) ? code : null;
 	} catch {
 		return null;
 	}

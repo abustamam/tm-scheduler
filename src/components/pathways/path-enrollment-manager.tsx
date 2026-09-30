@@ -9,7 +9,11 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "#/components/ui/dialog";
-import { PATH_QUIZ_HREF, takeQuizSuggestion } from "#/lib/path-quiz";
+import {
+	PATH_QUIZ_HREF,
+	PATH_QUIZ_LINK_LABEL,
+	takeQuizSuggestion,
+} from "#/lib/path-quiz";
 import type {
 	EnrollablePath,
 	MemberEnrollment,
@@ -62,7 +66,11 @@ export function PathEnrollmentManager({
 
 	const enrolledIds = new Set(enrollments.map((e) => e.pathId));
 	const available = options.filter((o) => !enrolledIds.has(o.id));
-	const suggested = available.find((o) => o.courseCode === suggestedCode);
+	// Current only: the quiz never suggests a legacy path, so a row carrying a
+	// quiz code but marked legacy stays in the legacy group, once, unmarked.
+	const suggested = available.find(
+		(o) => o.status === "current" && o.courseCode === suggestedCode,
+	);
 	const current = available.filter(
 		(o) => o.status === "current" && o !== suggested,
 	);
@@ -142,7 +150,7 @@ export function PathEnrollmentManager({
 						<DialogTitle>Choose a path</DialogTitle>
 					</DialogHeader>
 					<p className="text-sm">
-						Not sure? <a href={PATH_QUIZ_HREF}>Take the quiz</a> for a
+						Not sure? <a href={PATH_QUIZ_HREF}>{PATH_QUIZ_LINK_LABEL}</a> for a
 						suggestion.
 					</p>
 					{available.length === 0 ? (

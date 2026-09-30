@@ -3,6 +3,7 @@ import { Check, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { MemberContactLinks } from "#/components/members/member-contact-links";
 import { Button } from "#/components/ui/button";
+import { MY_PATHWAYS_ANCHOR } from "#/lib/my-pathways-anchor";
 import {
 	BASE_CAMP_SECTION_HASH,
 	type OrientationItem,
@@ -10,16 +11,11 @@ import {
 	type OrientationView,
 	PATHWAYS_EXPLAINER_SLUG,
 } from "#/lib/orientation";
-import { PATH_QUIZ_HREF } from "#/lib/path-quiz";
-
-/** The anchor the "Choose a path" item scrolls to: the dashboard's Pathways
- *  panel, where the path picker lives. */
-export const MY_PATHWAYS_ANCHOR = "my-pathways";
+import { PATH_QUIZ_HREF, PATH_QUIZ_LINK_LABEL } from "#/lib/path-quiz";
 
 export const ORIENTATION_HEADING = "Your first weeks";
 export const ORIENTATION_DISMISS_LABEL = "I'm all set";
 export const ORIENTATION_LEARN_LABEL = "Learn how Pathways works";
-export const ORIENTATION_QUIZ_LABEL = "Take the quiz";
 
 /**
  * New-member orientation (#940): the first-weeks checklist on the member's
@@ -201,7 +197,7 @@ function ItemAction({ item }: { item: OrientationItem }) {
 						Pick a path
 					</a>
 					<a href={PATH_QUIZ_HREF} className={ACTION_CLASS}>
-						{ORIENTATION_QUIZ_LABEL}
+						{PATH_QUIZ_LINK_LABEL}
 					</a>
 				</span>
 			);
