@@ -17,6 +17,7 @@
  * `renderMinutesPdf` is wrapped (not replaced) so a test can read the audience
  * the route asked for.
  */
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
 	afterAll,
@@ -35,6 +36,7 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
+import { isUninflated, readPdfContent } from "#/test/pdf-content";
 
 let sessionUserId: string | null = null;
 vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
@@ -88,12 +90,42 @@ function renderedAudience(): string | undefined {
 	return calls[0]?.[1];
 }
 
+/**
+ * The text a PDF shows, one line per `TJ` array. react-pdf writes the minutes
+ * in the standard Helvetica faces, so each glyph run is a hex string of
+ * WinAnsi bytes inside a `[<hex> kern <hex> ...] TJ` array; joining a run's hex
+ * chunks and decoding them as latin1 gives back the rendered line. Streams are
+ * inflated by `readPdfContent` (node:zlib, no new dependency). An uninflatable
+ * stream fails the test rather than reading as "text absent".
+ */
+function pdfText(bytes: Uint8Array): string {
+	const { streams } = readPdfContent(bytes);
+	const lines: string[] = [];
+	for (const stream of streams) {
+		if (isUninflated(stream)) continue; // fonts/images; asserted non-empty below
+		for (const [, arr] of stream.matchAll(/\[([^\]]*)\]\s*TJ/g)) {
+			const hex = [...(arr ?? "").matchAll(/<([0-9a-fA-F]*)>/g)]
+				.map((m) => m[1] ?? "")
+				.join("");
+			lines.push(Buffer.from(hex, "hex").toString("latin1"));
+		}
+	}
+	expect(
+		lines.length,
+		"no text runs found; the extractor has drifted",
+	).toBeGreaterThan(0);
+	return lines.join("\n");
+}
+
 async function setStatus(meetingId: string, status: "scheduled" | "completed") {
 	await testDb
 		.update(meetings)
 		.set({ status })
 		.where(eq(meetings.id, meetingId));
 }
+
+/** A club-internal action item, unique per run. */
+const ACTION_TOKEN = `ChaseLapsedMembers${randomUUID().slice(0, 8)}`;
 
 describe.skipIf(!hasTestDb)("GET /api/meetings/$id/minutes/pdf (#903)", () => {
 	let club: SeededClub;
@@ -110,14 +142,9 @@ describe.skipIf(!hasTestDb)("GET /api/meetings/$id/minutes/pdf (#903)", () => {
 			.update(clubs)
 			.set({ archivedAt: new Date() })
 			.where(eq(clubs.id, archived.clubId));
-		// Club business the guest copy must leave out. Enough rows that their
-		// absence moves the size of the PDF, since its text streams are compressed.
-		for (let i = 0; i < 20; i++) {
-			await createActionItem({
-				clubId: club.clubId,
-				text: `Something the club owes itself, number ${i}`,
-			});
-		}
+		// Club business the guest copy must leave out, as one unbroken token so a
+		// line wrap cannot split it in the rendered text.
+		await createActionItem({ clubId: club.clubId, text: ACTION_TOKEN });
 	});
 
 	afterAll(async () => {
@@ -148,19 +175,42 @@ describe.skipIf(!hasTestDb)("GET /api/meetings/$id/minutes/pdf (#903)", () => {
 		expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe("%PDF-");
 	});
 
-	it("the guest copy leaves out the member-only action items", async () => {
-		const member = new Uint8Array(
-			await (await download(club.meetingId, club.adminUserId)).arrayBuffer(),
+	it("the guest copy leaves out the member-only action items (read from the PDF's text)", async () => {
+		// THIS test holds the #529 property for the attachment path: the seeded
+		// action item is in the member copy's rendered text and absent from the
+		// guest copy's, read out of the bytes the route actually served.
+		const member = pdfText(
+			new Uint8Array(
+				await (await download(club.meetingId, club.adminUserId)).arrayBuffer(),
+			),
 		);
-		const guest = new Uint8Array(
-			await (
-				await download(club.meetingId, club.adminUserId, "?view=guests")
-			).arrayBuffer(),
+		const guest = pdfText(
+			new Uint8Array(
+				await (
+					await download(club.meetingId, club.adminUserId, "?view=guests")
+				).arrayBuffer(),
+			),
 		);
-		expect(new TextDecoder().decode(member.slice(0, 5))).toBe("%PDF-");
-		expect(new TextDecoder().decode(guest.slice(0, 5))).toBe("%PDF-");
-		// 20 rows of club business are in the member copy and not the guest one.
-		expect(guest.length).toBeLessThan(member.length);
+		// The control: the extractor can see the token at all.
+		expect(member).toContain(ACTION_TOKEN);
+		expect(member).toContain("Action Items");
+		// Same meeting, same club name — only the action items differ.
+		expect(guest).toContain("Test Club");
+		expect(guest).not.toContain(ACTION_TOKEN);
+		expect(guest).not.toContain("Action Items");
+	});
+
+	it("a completed member's guest copy has no action items either", async () => {
+		await setStatus(club.meetingId, "completed");
+		const text = pdfText(
+			new Uint8Array(
+				await (
+					await download(club.meetingId, club.memberUserId, "?view=guests")
+				).arrayBuffer(),
+			),
+		);
+		expect(text).toContain("Test Club");
+		expect(text).not.toContain(ACTION_TOKEN);
 	});
 
 	it("serves an active member the guest copy once the meeting is completed", async () => {

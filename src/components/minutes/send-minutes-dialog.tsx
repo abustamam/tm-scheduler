@@ -17,8 +17,10 @@ import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
 import {
 	buildMinutesMailto,
+	isSingleMailbox,
 	MINUTES_MAILTO_WARN_LENGTH,
 	minutesBccList,
+	partitionMinutesRecipients,
 } from "#/lib/minutes-mailto";
 import {
 	buildMinutesBody,
@@ -31,9 +33,6 @@ export interface SendMinutesRecipient {
 }
 
 export interface SendMinutesDialogProps {
-	/** Unused since #903 (nothing is sent, so no server fn needs the club).
-	 *  Kept so the caller's props are unchanged. */
-	clubId: string;
 	meetingId: string;
 	clubName: string;
 	/** The meeting date (drives the default subject + body). */
@@ -41,7 +40,8 @@ export interface SendMinutesDialogProps {
 	/**
 	 * Default recipients (active members + present guests WITH an email),
 	 * resolved by #152's Minutes tab (or the `getMinutesRecipients` server fn).
-	 * Shown as an editable list; every entry goes in the draft's bcc.
+	 * Shown as an editable list; every entry that is one valid mailbox goes in
+	 * the draft's bcc, and any that is not is listed as not included.
 	 */
 	initialRecipients: SendMinutesRecipient[];
 	/**
@@ -51,11 +51,6 @@ export interface SendMinutesDialogProps {
 	skipped?: { name: string }[];
 	/** Optional custom trigger; defaults to an "Email the minutes" button. */
 	trigger?: React.ReactNode;
-}
-
-function isEmailish(value: string): boolean {
-	const v = value.trim();
-	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 }
 
 /** The guest copy of the minutes PDF: no club-internal action items (#529). */
@@ -90,9 +85,17 @@ export function SendMinutesDialog({
 	);
 	const [body, setBody] = useState(() => buildMinutesBody(clubName, date));
 
+	// A stored address that is not exactly one mailbox (`a@x.org,b@evil.example`)
+	// would become an extra recipient once a mail client decodes it, so the
+	// builders leave it out — and the dialog lists it, never dropping it silently.
+	const { valid, invalid } = useMemo(
+		() => partitionMinutesRecipients(recipients),
+		[recipients],
+	);
+	const defaultSubject = buildMinutesSubject(clubName, date);
 	const mailto = useMemo(
-		() => buildMinutesMailto({ recipients, subject, body }),
-		[recipients, subject, body],
+		() => buildMinutesMailto({ recipients, subject, defaultSubject, body }),
+		[recipients, subject, defaultSubject, body],
 	);
 	const longLink = mailto.length > MINUTES_MAILTO_WARN_LENGTH;
 
@@ -102,7 +105,7 @@ export function SendMinutesDialog({
 
 	function addRecipient() {
 		const email = newEmail.trim();
-		if (!isEmailish(email)) {
+		if (!isSingleMailbox(email)) {
 			toast.error("Enter a valid email address.");
 			return;
 		}
@@ -119,9 +122,9 @@ export function SendMinutesDialog({
 		try {
 			await navigator.clipboard.writeText(minutesBccList(recipients));
 			toast.success(
-				recipients.length === 1
+				valid.length === 1
 					? "Copied 1 address."
-					: `Copied ${recipients.length} addresses.`,
+					: `Copied ${valid.length} addresses.`,
 			);
 		} catch {
 			toast.error("Couldn't copy — your browser blocked clipboard access");
@@ -164,7 +167,7 @@ export function SendMinutesDialog({
 
 					{/* Recipients */}
 					<div className="space-y-2">
-						<Label>Recipients, in Bcc ({recipients.length})</Label>
+						<Label>Recipients, in Bcc ({valid.length})</Label>
 						{recipients.length === 0 ? (
 							<p className="text-muted-foreground text-sm">
 								No recipients — add at least one address below.
@@ -239,6 +242,28 @@ export function SendMinutesDialog({
 						</div>
 					) : null}
 
+					{/* Not included — stored address is not one valid mailbox */}
+					{invalid.length > 0 ? (
+						<div className="space-y-1.5">
+							<Label className="text-destructive">
+								Not included: invalid address ({invalid.length})
+							</Label>
+							<ul className="flex flex-col gap-1 text-sm">
+								{invalid.map((r) => (
+									<li key={r.email}>
+										<span className="font-medium">{r.name}</span>{" "}
+										<span className="break-all text-muted-foreground">
+											{JSON.stringify(r.email)}
+										</span>
+									</li>
+								))}
+							</ul>
+							<p className="text-muted-foreground text-xs">
+								Fix the address on their record, or add a correct one above.
+							</p>
+						</div>
+					) : null}
+
 					{/* Subject */}
 					<div className="space-y-2">
 						<Label htmlFor="minutes-subject">Subject</Label>
@@ -273,12 +298,12 @@ export function SendMinutesDialog({
 						type="button"
 						variant="outline"
 						onClick={() => void copyAddresses()}
-						disabled={recipients.length === 0}
+						disabled={valid.length === 0}
 					>
 						<Copy className="size-4" />
 						Copy addresses
 					</Button>
-					{recipients.length === 0 ? (
+					{valid.length === 0 ? (
 						<Button type="button" disabled>
 							<Mail className="size-4" />
 							Open email draft

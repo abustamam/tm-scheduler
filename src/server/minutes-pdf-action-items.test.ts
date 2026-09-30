@@ -99,8 +99,9 @@ describe("minutes PDF action-item section (#529)", () => {
 	});
 
 	it("omits the whole block for the GUEST audience", () => {
-		// The minutes email attaches this PDF to every guest marked present, and a
-		// guest can add themselves through the public guest book with no session.
+		// The officer attaches the guest copy (`?view=guests` on the PDF route) to
+		// the minutes email they send to every guest marked present, and a guest
+		// can add themselves through the public guest book with no session.
 		const section = buildActionItemsSection(
 			items({
 				open: [row({ text: "Chase the lapsed members" })],

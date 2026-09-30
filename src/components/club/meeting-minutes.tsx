@@ -102,7 +102,7 @@ type MeetingMinutesProps = {
 	onMutated?: () => void | Promise<void>;
 	/**
 	 * Email-the-minutes context (#165), present only for admins on a completed
-	 * meeting. Null hides the "Send minutes" control (the PDF still downloads).
+	 * meeting. Null hides the "Email the minutes" control (the PDF still downloads).
 	 */
 	email?: {
 		clubId: string;
@@ -215,7 +215,6 @@ function MeetingMinutesView({
 					</Button>
 					{email ? (
 						<SendMinutesDialog
-							clubId={email.clubId}
 							meetingId={meetingId}
 							clubName={email.clubName}
 							meetingDate={email.meetingDate}

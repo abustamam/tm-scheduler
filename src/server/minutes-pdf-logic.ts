@@ -4,9 +4,9 @@
 // server-only (it touches `#/db` through the minutes logic) and is never
 // imported by a client route.
 //
-// `renderMinutesPdf(meetingId)` is a CONTRACT consumed by the email fast-follow
-// (#165): keep the name + signature (`(meetingId: string) => Promise<Uint8Array>`)
-// stable.
+// `renderMinutesPdf(meetingId, audience)` backs the PDF download route, whose
+// `?view=guests` copy is what the officer attaches to the minutes email they
+// send themselves (#903).
 //
 // Uses `React.createElement` rather than JSX because the contract fixes this
 // module at a `.ts` path (JSX requires `.tsx`).
@@ -306,14 +306,13 @@ export function buildTimingSection(minutes: {
  * topics, awards, and a compact program section (roles + speeches,
  * summary-level).
  *
- * `audience` decides whether the club's action items are included, and it
- * defaults to the narrow answer. The download route is gated on club
- * membership, but `createMinutesEmailPort` attaches these same bytes to the
- * minutes email, whose default recipient list includes every guest marked
- * present — and a guest can add themselves through `submitGuestBook`, which is
- * a public endpoint with no session. Action items are club-internal ("chase the
- * lapsed members", "drop the venue"), so the emailed copy asks for "guests" and
- * gets a PDF without them.
+ * `audience` decides whether the club's action items are included. The
+ * download route is gated on club membership, and serves the "guests" copy on
+ * `?view=guests` for the officer to attach to the minutes email they send
+ * (#903), whose default recipient list includes every guest marked present —
+ * and a guest can add themselves through `submitGuestBook`, which is a public
+ * endpoint with no session. Action items are club-internal ("chase the lapsed
+ * members", "drop the venue"), so that copy leaves them out.
  */
 export async function renderMinutesPdf(
 	meetingId: string,

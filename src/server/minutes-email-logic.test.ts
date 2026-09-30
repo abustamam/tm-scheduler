@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import * as logic from "./minutes-email-logic";
 import {
 	buildMinutesBody,
-	buildMinutesFilename,
 	buildMinutesSubject,
 	resolveMinutesRecipients,
 } from "./minutes-email-logic";
@@ -34,7 +33,7 @@ describe("resolveMinutesRecipients", () => {
 	});
 });
 
-describe("buildMinutesSubject / buildMinutesBody / buildMinutesFilename", () => {
+describe("buildMinutesSubject / buildMinutesBody", () => {
 	it("formats the subject with club name and date", () => {
 		const subject = buildMinutesSubject(
 			"Acme TM",
@@ -49,12 +48,6 @@ describe("buildMinutesSubject / buildMinutesBody / buildMinutesFilename", () => 
 		expect(body).toContain("minutes for Acme TM's meeting on");
 		expect(body).toMatch(/Thanks,\nAcme TM$/);
 	});
-
-	it("names the file minutes-<iso date>.pdf", () => {
-		expect(buildMinutesFilename(new Date("2026-07-10T18:00:00Z"))).toBe(
-			"minutes-2026-07-10.pdf",
-		);
-	});
 });
 
 // #903: GavelUp no longer sends the minutes. The officer does, from a draft.
@@ -64,7 +57,6 @@ describe("no send path (#903)", () => {
 	it("exports no send orchestration", () => {
 		expect(Object.keys(logic).sort()).toEqual([
 			"buildMinutesBody",
-			"buildMinutesFilename",
 			"buildMinutesSubject",
 			"resolveMinutesRecipients",
 		]);

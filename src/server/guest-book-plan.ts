@@ -339,7 +339,7 @@ export async function plan(
 		}
 
 		// A guest marked present becomes a DEFAULT RECIPIENT of this meeting's
-		// minutes email draft (`minutes-email-port-logic.ts:34`), and
+		// minutes email draft (`loadRecipients` in `minutes-email-port-logic.ts`), and
 		// `resolveMinutesRecipients` only checks the string is non-empty before
 		// putting it in the officer's draft. Both other paths that write `guests.email`
 		// validate the format — the public guest book

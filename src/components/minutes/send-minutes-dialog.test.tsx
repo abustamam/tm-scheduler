@@ -16,6 +16,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MINUTES_MAILTO_WARN_LENGTH } from "#/lib/minutes-mailto";
 import { readSource } from "#/test/guard-source";
+import { parseMailto } from "#/test/mailto-parse";
 import { SendMinutesDialog } from "./send-minutes-dialog";
 
 const MEETING_ID = "22222222-2222-4222-8222-222222222222";
@@ -41,7 +42,6 @@ function renderOpen(
 ) {
 	render(
 		<SendMinutesDialog
-			clubId="11111111-1111-4111-8111-111111111111"
 			meetingId={MEETING_ID}
 			clubName="Acme TM"
 			meetingDate={new Date("2026-07-10T18:00:00Z")}
@@ -59,14 +59,9 @@ const draftLink = () =>
 
 /** The draft's raw header section, split the way a mail client reads it. */
 function draftHeaders(): Map<string, string> {
-	const href = draftLink().getAttribute("href") ?? "";
-	expect(href.startsWith("mailto:?")).toBe(true);
-	return new Map(
-		href
-			.slice("mailto:?".length)
-			.split("&")
-			.map((p) => [p.slice(0, p.indexOf("=")), p.slice(p.indexOf("=") + 1)]),
-	);
+	const { to, headers } = parseMailto(draftLink().getAttribute("href") ?? "");
+	expect(to).toBe("");
+	return new Map(headers);
 }
 
 describe("SendMinutesDialog (#903)", () => {
@@ -114,13 +109,70 @@ describe("SendMinutesDialog (#903)", () => {
 		);
 	});
 
+	it("falls back to the default subject when the officer empties it", async () => {
+		await renderOpen();
+		await userEvent.clear(screen.getByLabelText("Subject"));
+		expect(decodeURIComponent(draftHeaders().get("subject") ?? "")).toContain(
+			"Acme TM — Minutes for",
+		);
+	});
+
+	it.each([
+		["comma", "a@x.org,b@evil.example"],
+		["semicolon", "a@x.org;b@evil.example"],
+	])("a stored address with a %s is left out of the draft AND the copy, and the officer is told", async (_label, stored) => {
+		const user = userEvent.setup();
+		render(
+			<SendMinutesDialog
+				meetingId={MEETING_ID}
+				clubName="Acme TM"
+				meetingDate="2026-07-10T18:00:00Z"
+				initialRecipients={[
+					{ name: "Ada", email: "ada@club.org" },
+					{ name: "Pat Pair", email: stored },
+				]}
+			/>,
+		);
+		await user.click(
+			screen.getByRole("button", { name: /email the minutes/i }),
+		);
+
+		expect(draftHeaders().get("bcc")).toBe("ada@club.org");
+		expect(draftLink().getAttribute("href")).not.toContain("evil");
+
+		// Told, by name and by the stored value.
+		expect(
+			screen.getByText(/not included: invalid address \(1\)/i),
+		).toBeTruthy();
+		expect(screen.getByText(JSON.stringify(stored))).toBeTruthy();
+		expect(screen.getByText(/recipients, in bcc \(1\)/i)).toBeTruthy();
+
+		await user.click(screen.getByRole("button", { name: /copy addresses/i }));
+		await waitFor(async () =>
+			expect(await navigator.clipboard.readText()).toBe("ada@club.org"),
+		);
+	});
+
+	it("refuses to add a typed address that is not one mailbox", async () => {
+		await renderOpen();
+		await userEvent.type(
+			screen.getByPlaceholderText(/add another address/i),
+			"x@club.org;y@evil.example{Enter}",
+		);
+		// Refused at the door: not on the list at all, so not even listed as
+		// "not included".
+		expect(screen.queryByText(/not included/i)).toBeNull();
+		expect(screen.queryByText("x@club.org;y@evil.example")).toBeNull();
+		expect(screen.getByText(/recipients, in bcc \(2\)/i)).toBeTruthy();
+		expect(draftHeaders().get("bcc")).toBe("ada@club.org,gwen@guest.example");
+	});
+
 	it("Copy addresses puts the comma-separated list on the clipboard", async () => {
 		// `setup()` installs a clipboard stub on navigator, so read it back
 		// through the same session rather than spying on an object it replaces.
 		const user = userEvent.setup();
 		render(
 			<SendMinutesDialog
-				clubId="11111111-1111-4111-8111-111111111111"
 				meetingId={MEETING_ID}
 				clubName="Acme TM"
 				meetingDate="2026-07-10T18:00:00Z"

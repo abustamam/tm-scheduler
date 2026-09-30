@@ -1,22 +1,12 @@
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const DEFAULT_FROM = "GavelUp <noreply@gavelup.app>";
 
-/** A single email attachment. `content` is the file bytes base64-encoded — the
- *  shape Resend's `attachments` field expects. */
-export interface EmailAttachment {
-	filename: string;
-	/** base64-encoded file content. */
-	content: string;
-}
-
 export interface SendEmailParams {
 	/** A single recipient or a list (Resend accepts either). */
 	to: string | string[];
 	subject: string;
 	html: string;
 	text: string;
-	/** Optional file attachments (e.g. a minutes PDF). Omit for plain mail. */
-	attachments?: EmailAttachment[];
 	/** Optional Reply-To address (sent as Resend's `reply_to`). Omit for none. */
 	replyTo?: string;
 	/**
@@ -34,15 +24,15 @@ export interface SendEmailParams {
  * (e.g. Better-Auth's sendMagicLink) rely on the throw surfacing a clean error.
  *
  * The transport seam is deliberately minimal; `from`-override can be added
- * non-breakingly when richer email lands. `attachments` (base64) pass straight
- * through to Resend's `attachments` field (#165 minutes PDF).
+ * non-breakingly when richer email lands. There is no attachment support: its
+ * only caller was the app-sent minutes email, which #903 removed (every message
+ * to a person is now sent by a human).
  */
 export async function sendEmail({
 	to,
 	subject,
 	html,
 	text,
-	attachments,
 	replyTo,
 	idempotencyKey,
 }: SendEmailParams): Promise<void> {
@@ -53,25 +43,18 @@ export async function sendEmail({
 	// Dev fallback: no provider configured. Log the email — the text body carries
 	// the magic-link URL, so local sign-in still works by copy-paste. This is the
 	// ONLY path that logs the link; when a provider is configured the URL (a
-	// bearer token) is never logged. Attachment count is noted (never the bytes).
+	// bearer token) is never logged.
 	if (!apiKey) {
-		const attachmentNote = attachments?.length
-			? ` attachments=${attachments.length} (${attachments.map((a) => a.filename).join(", ")})`
-			: "";
 		const replyToNote = replyTo ? ` reply_to=${replyTo}` : "";
 		console.log(
-			`\n[email:dev] to=${toLabel} subject=${subject}${replyToNote}${attachmentNote}\n${text}\n`,
+			`\n[email:dev] to=${toLabel} subject=${subject}${replyToNote}\n${text}\n`,
 		);
 		return;
 	}
 
-	// Only include `attachments` / `reply_to` in the body when present, so a
-	// send that uses neither produces a byte-identical request to before these
-	// fields existed.
+	// Only include `reply_to` in the body when present, so a send without one
+	// produces a byte-identical request to before the field existed.
 	const body: Record<string, unknown> = { from, to, subject, html, text };
-	if (attachments?.length) {
-		body.attachments = attachments;
-	}
 	if (replyTo) {
 		body.reply_to = replyTo;
 	}

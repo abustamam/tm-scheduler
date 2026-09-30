@@ -78,7 +78,7 @@ export function resolveMinutesRecipients(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Subject / body / filename builders — pure helpers.
+// Subject / body builders — the draft's defaults. Pure helpers.
 // ---------------------------------------------------------------------------
 
 /** `"<Club name> — Minutes for <formatted date>"`. */
@@ -96,10 +96,4 @@ export function buildMinutesBody(clubName: string, meetingDate: Date): string {
 		`Attached are the minutes for ${clubName}'s meeting on ${formatMeetingDate(meetingDate)}.\n\n` +
 		`Thanks,\n${clubName}`
 	);
-}
-
-/** `minutes-YYYY-MM-DD.pdf` (UTC date — stable across the reader's timezone). */
-export function buildMinutesFilename(meetingDate: Date): string {
-	const iso = meetingDate.toISOString().slice(0, 10);
-	return `minutes-${iso}.pdf`;
 }
