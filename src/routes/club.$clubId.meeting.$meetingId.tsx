@@ -61,6 +61,7 @@ import {
 	type AttendanceMode,
 	defaultAttendanceMode,
 	presenceWriteMode,
+	withMode,
 } from "#/lib/attendance-mode";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
@@ -1242,18 +1243,17 @@ function MeetingView() {
 		status: AttendanceStatus,
 		mode: AttendanceMode | undefined,
 	) {
-		const withMode = mode === undefined ? {} : { mode };
 		await offlineMinutes.mutate(
 			() =>
 				setAttendance({
-					data: { meetingId: meeting.id, memberId, status, ...withMode },
+					data: { meetingId: meeting.id, memberId, status, ...withMode(mode) },
 				}),
 			() => ({
 				type: "setAttendance",
 				...offlineMinutes.opMeta(),
 				memberId,
 				status,
-				...withMode,
+				...withMode(mode),
 			}),
 		);
 	}
@@ -1274,6 +1274,8 @@ function MeetingView() {
 	}) {
 		// #1049: adding a guest IS recording them present, so it carries the
 		// mode the toggle starts on — the same rule as a member's first Present.
+		// Insert-only on the server: a guest ALREADY present (re-picked, or a
+		// re-typed returning visitor the server dedupes) keeps their mode.
 		const mode = attendanceDefaultMode;
 		await offlineMinutes.mutate(
 			() =>
@@ -1298,7 +1300,8 @@ function MeetingView() {
 		);
 	}
 
-	// A guest's in person / online toggle (#1049). An `addGuest` WITH a mode,
+	// A guest's in person / online toggle (#1049). An `addGuest` with a mode AND
+	// `replaceMode` (the only add that may change an existing row's mode),
 	// which the server upserts onto the row — and, for a guest listed only
 	// because they hold a role, creates it (maintainer's decision 3). The name
 	// comes off the listed row first: a role-only guest need not be in
@@ -1308,13 +1311,17 @@ function MeetingView() {
 			rollGuests?.find((g) => g.guestId === guestId)?.name ??
 			guestName(guestId);
 		await offlineMinutes.mutate(
-			() => addMinutesGuest({ data: { meetingId: meeting.id, guestId, mode } }),
+			() =>
+				addMinutesGuest({
+					data: { meetingId: meeting.id, guestId, mode, replaceMode: true },
+				}),
 			() => ({
 				type: "addGuest",
 				...offlineMinutes.opMeta(),
 				guestId,
 				name,
 				mode,
+				replaceMode: true,
 			}),
 		);
 	}

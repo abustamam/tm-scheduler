@@ -21,6 +21,7 @@ import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import {
 	ATTENDANCE_MODE_LABELS,
+	ATTENDING_INCL_GUESTS_LABEL,
 	formatModeSplit,
 	minutesModeSplit,
 } from "#/lib/attendance-mode";
@@ -462,8 +463,7 @@ function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 				<Badge variant="secondary">{guests} guests</Badge>
 				{split ? (
 					<Badge variant="outline">
-						<span className="sr-only">Attending: </span>
-						{split}
+						{ATTENDING_INCL_GUESTS_LABEL}: {split}
 					</Badge>
 				) : null}
 			</div>

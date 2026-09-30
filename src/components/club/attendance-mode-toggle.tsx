@@ -3,7 +3,7 @@ import {
 	ATTENDANCE_MODES,
 	type AttendanceMode,
 } from "#/lib/attendance-mode";
-import { cn } from "#/lib/utils.ts";
+import { cn } from "#/lib/utils";
 
 /**
  * In person / online, for one person recorded present (#1049). A two-segment

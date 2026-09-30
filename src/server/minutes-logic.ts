@@ -41,7 +41,6 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { findGuestForContact } from "./guest-pipeline-logic";
 
 export type AttendanceStatus = "present" | "absent" | "excused";
-export type { AttendanceMode } from "#/lib/attendance-mode";
 export type AwardCategory =
 	| "best_speaker"
 	| "best_evaluator"
@@ -762,6 +761,7 @@ export async function setMemberPresence(input: {
 			target: [meetingAttendance.meetingId, meetingAttendance.memberId],
 			set: {
 				status: input.status,
+				// `null` (a clear) is written; only `undefined` leaves it alone.
 				...(mode === undefined ? {} : { mode }),
 				updatedAt: new Date(),
 			},
@@ -771,10 +771,15 @@ export async function setMemberPresence(input: {
 /**
  * Add a present guest (existing club guest or a new one). Idempotent per guest.
  *
- * `mode` (#1049): with one, an existing row's mode is UPDATED (that is how roll
- * mode's guest toggle writes, and how a `fromRole` guest — who has no row —
- * gets one); without one, an existing row is left exactly as it was, which is
- * the pre-#1049 `onConflictDoNothing` behaviour.
+ * `mode` (#1049) is written ONLY WHEN THIS CALL INSERTS THE ROW — adding a
+ * guest records them present with the meeting's default. When the guest is
+ * already present (re-picked by id, or a re-typed returning visitor whom
+ * `resolveGuestId` dedupes onto the same guest), the existing row is left
+ * exactly as it was: the default never overwrites a recorded mode (decision 1).
+ *
+ * `replaceMode: true` is the guest TOGGLE, and the only path that changes an
+ * existing row's mode. It still inserts for a `fromRole` guest, who has no row
+ * yet (decision 3).
  *
  * `id` (optional, #176 slice 2) is the client-supplied primary key for a NEW
  * guest row (the new-guest path only — ignored when an existing `guestId` is
@@ -788,6 +793,7 @@ export async function addGuestPresent(input: {
 	guestId?: string | null;
 	newGuest?: NewGuestInput;
 	mode?: AttendanceMode;
+	replaceMode?: boolean;
 }): Promise<{ guestId: string }> {
 	const clubId = await getMeetingClubId(input.meetingId);
 	return db.transaction(async (tx) => {
@@ -799,7 +805,7 @@ export async function addGuestPresent(input: {
 			mode: input.mode ?? null,
 		});
 		const target = [meetingAttendance.meetingId, meetingAttendance.guestId];
-		if (input.mode) {
+		if (input.replaceMode && input.mode !== undefined) {
 			await insert.onConflictDoUpdate({
 				target,
 				set: { mode: input.mode, updatedAt: new Date() },

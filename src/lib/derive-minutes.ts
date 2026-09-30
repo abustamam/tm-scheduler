@@ -12,6 +12,7 @@ import type {
 	MinutesData,
 	MinutesTableTopicsRow,
 } from "#/server/minutes-logic";
+import { withMode } from "./attendance-mode";
 import type { MinutesOp } from "./offline-minutes-queue";
 
 /**
@@ -61,19 +62,24 @@ export function deriveMinutes(
 				// guest that only held a role slot (fromRole) now has an explicit
 				// present row, so it becomes fromRole:false.
 				//
-				// #1049: with a `mode`, the server upserts it onto the row (the guest
-				// toggle); without one an existing row is untouched.
+				// #1049, mirroring `addGuestPresent`: the op's mode lands only where
+				// the server INSERTS — a new guest, or a `fromRole` guest with no row
+				// yet — or where the op is the toggle (`replaceMode`). A plain add on
+				// a guest already present never overwrites their recorded mode.
 				const existing = draft.guests.find((g) => g.guestId === op.guestId);
 				if (existing) {
+					const inserts = existing.fromRole;
 					existing.fromRole = false;
-					if (op.mode !== undefined) existing.mode = op.mode;
+					if (op.mode !== undefined && (inserts || op.replaceMode)) {
+						existing.mode = op.mode;
+					}
 				} else {
 					draft.guests.push({
 						guestId: op.guestId,
 						name: op.name,
 						fromRole: false,
 						// Carried only when recorded, the shape `loadMinutes` emits.
-						...(op.mode ? { mode: op.mode } : {}),
+						...withMode(op.mode),
 					});
 				}
 				// loadMinutes returns guests sorted by name.

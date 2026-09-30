@@ -145,7 +145,7 @@ describe("deriveMinutes — mode (#1049)", () => {
 		expect(member(d, "m-cy")?.mode).toBeUndefined();
 	});
 
-	it("a guest toggle on a role-only guest records the mode and an explicit row (decision 3)", () => {
+	it("a plain add of a role-only guest records the default — the server INSERTS their row (decision 3)", () => {
 		const d = deriveMinutes(makeSnapshot(), [
 			{
 				type: "addGuest",
@@ -158,6 +158,55 @@ describe("deriveMinutes — mode (#1049)", () => {
 		expect(d.guests).toEqual([
 			{ guestId: "g-rose", name: "Rose", fromRole: false, mode: "online" },
 		]);
+	});
+
+	it("a guest TOGGLE on a role-only guest records the mode too", () => {
+		const d = deriveMinutes(makeSnapshot(), [
+			{
+				type: "addGuest",
+				...meta(),
+				guestId: "g-rose",
+				name: "Rose",
+				mode: "in_person",
+				replaceMode: true,
+			},
+		]);
+		expect(d.guests[0]).toMatchObject({ fromRole: false, mode: "in_person" });
+	});
+
+	it("re-adding a guest already present with the default does NOT overwrite their mode", () => {
+		const snap = makeSnapshot();
+		snap.guests = [
+			{ guestId: "g-rose", name: "Rose", fromRole: false, mode: "online" },
+		];
+		const d = deriveMinutes(snap, [
+			{
+				type: "addGuest",
+				...meta(),
+				guestId: "g-rose",
+				name: "Rose",
+				mode: "in_person",
+			},
+		]);
+		expect(d.guests[0]?.mode).toBe("online");
+	});
+
+	it("a guest TOGGLE on a guest already present changes the mode", () => {
+		const snap = makeSnapshot();
+		snap.guests = [
+			{ guestId: "g-rose", name: "Rose", fromRole: false, mode: "online" },
+		];
+		const d = deriveMinutes(snap, [
+			{
+				type: "addGuest",
+				...meta(),
+				guestId: "g-rose",
+				name: "Rose",
+				mode: "in_person",
+				replaceMode: true,
+			},
+		]);
+		expect(d.guests[0]?.mode).toBe("in_person");
 	});
 
 	it("a mode-less addGuest on an already-listed guest leaves its mode alone", () => {
@@ -226,7 +275,6 @@ describe("roll seams carry the projected mode (#1049)", () => {
 		});
 		expect(panel.rows.find((r) => r.id === "m-bea")?.mode).toBe("online");
 		expect(panel.rows.find((r) => r.id === "m-cy")?.mode).toBeNull();
-		expect(panel.modeSplit).toEqual({ inPerson: 0, online: 1, unrecorded: 1 });
 		expect(panel.countsLine).toBe(
 			"2 present (1 online, 1 not recorded) · 1 unmarked",
 		);
@@ -282,7 +330,7 @@ describe("buildRollPanel counts line (#1049)", () => {
 	});
 
 	it("never shows a mode on a row that is not present", () => {
-		const { rows, modeSplit } = buildRollPanel({
+		const { rows, countsLine } = buildRollPanel({
 			roster,
 			// A stale mode on an absent row (the server clears it; a stale payload
 			// might not have) must not render or count.
@@ -291,7 +339,8 @@ describe("buildRollPanel counts line (#1049)", () => {
 			roleByMemberId: {},
 		});
 		expect(rows.find((r) => r.id === "a")?.mode).toBeNull();
-		expect(modeSplit).toEqual({ inPerson: 0, online: 0, unrecorded: 0 });
+		// No split at all: the absent row's stale mode is not counted.
+		expect(countsLine).toBe("1 absent · 2 unmarked");
 	});
 });
 
@@ -348,7 +397,7 @@ describe("dispatchOp — mode (#1049)", () => {
 		expect(arg?.data).not.toHaveProperty("mode");
 	});
 
-	it("forwards a guest toggle's mode on both addGuest paths", async () => {
+	it("forwards a guest add's mode on both addGuest paths, and a toggle's replaceMode", async () => {
 		const fns = fakeFns();
 		await dispatchOp(
 			{
@@ -382,6 +431,26 @@ describe("dispatchOp — mode (#1049)", () => {
 				id: "g-new",
 				newGuest: { name: "Ned" },
 				mode: "in_person",
+			},
+		});
+		await dispatchOp(
+			{
+				type: "addGuest",
+				...meta(),
+				guestId: "g-rose",
+				name: "Rose",
+				mode: "in_person",
+				replaceMode: true,
+			},
+			"meeting-1",
+			fns,
+		);
+		expect(fns.addGuest).toHaveBeenNthCalledWith(3, {
+			data: {
+				meetingId: "meeting-1",
+				guestId: "g-rose",
+				mode: "in_person",
+				replaceMode: true,
 			},
 		});
 	});

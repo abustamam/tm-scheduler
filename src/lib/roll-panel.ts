@@ -11,7 +11,6 @@
 import {
 	type AttendanceMode,
 	formatModeSplit,
-	type ModeSplit,
 	tallyModes,
 } from "#/lib/attendance-mode";
 import {
@@ -111,9 +110,6 @@ export function buildRollPanel(input: {
 }): {
 	rows: RollRow[];
 	counts: RollCounts;
-	/** The PRESENT members' modes (#1049). Kept out of `counts`, whose shape is
-	 *  the four statuses and nothing else. */
-	modeSplit: ModeSplit;
 	countsLine: string;
 } {
 	const recorded = new Map(input.attendance.map((a) => [a.memberId, a.status]));
@@ -164,6 +160,7 @@ export function buildRollPanel(input: {
 		unmarked: rows.filter((r) => r.status === null).length,
 	};
 
+	// The PRESENT MEMBERS' modes only — guests are not in this line at all.
 	const modeSplit = tallyModes(
 		rows.filter((r) => r.status === "present").map((r) => r.mode),
 	);
@@ -185,5 +182,5 @@ export function buildRollPanel(input: {
 		.map(([n, label]) => `${n} ${label}`)
 		.join(" · ");
 
-	return { rows, counts, modeSplit, countsLine };
+	return { rows, counts, countsLine };
 }

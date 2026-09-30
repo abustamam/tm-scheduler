@@ -34,6 +34,7 @@ import {
 // full-input spread in #519, an astral-plane bypass in #522), so a second
 // `slice` written from scratch is exactly the wrong kind of duplication.
 import {
+	ATTENDING_INCL_GUESTS_LABEL,
 	type AttendanceMode,
 	formatModeSplit,
 	minutesModeSplit,
@@ -200,7 +201,7 @@ function names(list: { name: string }[]): string {
  * get their own "Unmarked" row and count, included only when at least one
  * member is unmarked so fully-recorded minutes render unchanged.
  *
- * In person / online (#1049): an "Attending" figure in Easy-Speak's format
+ * In person / online (#1049): an "Attending incl. guests" figure in Easy-Speak's format
  * ("12 + 4 online") over everyone present, members and guests, is appended to
  * the counts line ONLY when at least one mode was recorded. A meeting whose
  * modes are all NULL — every meeting before #1049 — keeps its plain line, and
@@ -222,7 +223,7 @@ export function buildAttendanceSection(minutes: {
 		`Guests: ${guests}`;
 	const split = formatModeSplit(minutesModeSplit(minutes));
 	const countsLineWithMode = split
-		? `${countsLine}   Attending: ${split}`
+		? `${countsLine}   ${ATTENDING_INCL_GUESTS_LABEL}: ${split}`
 		: countsLine;
 	const rows = [
 		{ label: "Present", names: names(byStatus("present")) },

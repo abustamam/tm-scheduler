@@ -9,8 +9,8 @@
 // This file must NOT import `#/db` (that would drag `pg` into the client
 // bundle). `MinutesData` / `AttendanceStatus` / `AwardCategory` are imported
 // TYPE-ONLY from the server logic module, so they are erased at build time.
+import type { AttendanceMode } from "#/lib/attendance-mode";
 import type {
-	AttendanceMode,
 	AttendanceStatus,
 	AwardCategory,
 	MinutesData,
@@ -58,11 +58,14 @@ export type MinutesOp =
 			/** Present ⇒ new-guest create path; absent ⇒ existing `guestId`. */
 			newGuest?: NewGuestPayload;
 			/**
-			 * In the room or on the call (#1049). With one, an existing guest row's
-			 * mode is updated — roll mode's guest toggle is this op. Optional for the
-			 * reason `setAttendance.mode` is: ops queued before #1049 lack it.
+			 * In the room or on the call (#1049). Written only if the add INSERTS
+			 * the row — a guest already present keeps their recorded mode. Optional
+			 * for the reason `setAttendance.mode` is: ops queued before #1049 lack it.
 			 */
 			mode?: AttendanceMode;
+			/** True for roll mode's guest TOGGLE: the one addGuest that changes an
+			 *  existing row's mode (#1049). Absent on a plain add. */
+			replaceMode?: boolean;
 	  }
 	| {
 			type: "removeGuest";

@@ -7,13 +7,16 @@
 // nothing here guesses a value for it, and nothing backfills it. A NULL mode on
 // a present row is counted as present-with-no-mode, never as in person.
 
-/** Mirrors the `attendance_mode` enum in `src/db/schema.ts`. */
-export type AttendanceMode = "in_person" | "online";
+import type { AttendanceStatus } from "#/server/minutes-logic";
 
-export const ATTENDANCE_MODES: readonly AttendanceMode[] = [
-	"in_person",
-	"online",
-];
+/**
+ * The ONE list of modes: the type below, the server fns' zod enum and the
+ * toggle's segments all derive from it. Mirrors the `attendance_mode` pgEnum in
+ * `src/db/schema.ts`, which drizzle needs spelled out on its own.
+ */
+export const ATTENDANCE_MODES = ["in_person", "online"] as const;
+
+export type AttendanceMode = (typeof ATTENDANCE_MODES)[number];
 
 export const ATTENDANCE_MODE_LABELS: Record<AttendanceMode, string> = {
 	in_person: "In person",
@@ -47,10 +50,22 @@ export function defaultAttendanceMode(meeting: {
  * whatever is stored — and is distinct from an explicit value.
  */
 export function modeForStatus(
-	status: "present" | "absent" | "excused",
+	status: AttendanceStatus,
 	mode: AttendanceMode | undefined,
 ): AttendanceMode | null | undefined {
 	return status === "present" ? mode : null;
+}
+
+/**
+ * `{ mode }` when one was given, `{}` when not — for spreading into a write
+ * payload or a queued op. The ONE spelling of "an absent mode means leave the
+ * stored one alone": `undefined` is omitted, so it never reaches the wire as a
+ * key, and `null` is not accepted here at all.
+ */
+export function withMode(mode: AttendanceMode | undefined): {
+	mode?: AttendanceMode;
+} {
+	return mode === undefined ? {} : { mode };
 }
 
 /**
@@ -63,8 +78,8 @@ export function modeForStatus(
  * excused send none; the server clears the mode for them.
  */
 export function presenceWriteMode(input: {
-	status: "present" | "absent" | "excused";
-	currentStatus: "present" | "absent" | "excused" | null | undefined;
+	status: AttendanceStatus;
+	currentStatus: AttendanceStatus | null | undefined;
 	defaultMode: AttendanceMode;
 }): AttendanceMode | undefined {
 	return input.status === "present" && input.currentStatus !== "present"
@@ -108,6 +123,16 @@ export function minutesModeSplit(minutes: {
 		...minutes.guests.map((g) => g.mode),
 	]);
 }
+
+/**
+ * The label the minutes card and the PDF put before `formatModeSplit` over
+ * `minutesModeSplit`. VISIBLE and explicit about guests, because the figure
+ * beside it counts members AND guests while the "N present" beside that counts
+ * members only — unlabelled, "10 present" next to "9 + 3 online" does not add
+ * up (#1049 review). Roll mode's counts line does not use it: its split sits
+ * inside the members' own "present" segment and counts members only.
+ */
+export const ATTENDING_INCL_GUESTS_LABEL = "Attending incl. guests";
 
 /**
  * Easy-Speak's format: "12 + 4 online" (12 in the room, 4 on the call).

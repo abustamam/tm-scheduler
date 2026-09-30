@@ -131,7 +131,12 @@ describe.skipIf(!hasTestDb)("attendance mode authz (#1049)", () => {
 		currentUser.id = seed.memberUserId;
 		await expect(
 			addMinutesGuest({
-				data: { meetingId: seed.meetingId, guestId: g!.id, mode: "online" },
+				data: {
+					meetingId: seed.meetingId,
+					guestId: g!.id,
+					mode: "online",
+					replaceMode: true,
+				},
 			}),
 		).rejects.toThrow(NO_PERMISSION_MESSAGE);
 		const rows = await testDb

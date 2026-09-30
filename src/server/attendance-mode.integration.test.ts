@@ -194,9 +194,73 @@ describe.skipIf(!hasTestDb)("attendance mode (#1049)", () => {
 			meetingId: seed.meetingId,
 			guestId,
 			mode: "in_person",
+			replaceMode: true,
 		});
 		expect((await storedGuestMode(guestId))?.mode).toBe("in_person");
 		await addGuestPresent({ meetingId: seed.meetingId, guestId });
+		expect((await storedGuestMode(guestId))?.mode).toBe("in_person");
+	});
+
+	it("re-adding a guest already present BY ID keeps their recorded mode (decision 1)", async () => {
+		const guestId = await newGuest("Returning");
+		await addGuestPresent({
+			meetingId: seed.meetingId,
+			guestId,
+			mode: "online",
+		});
+		// The officer picks them again from the list; the add carries the
+		// meeting's default, which must not overwrite what was recorded.
+		await addGuestPresent({
+			meetingId: seed.meetingId,
+			guestId,
+			mode: "in_person",
+		});
+		expect((await storedGuestMode(guestId))?.mode).toBe("online");
+	});
+
+	it("re-typing a present visitor as a NEW guest dedupes and keeps their mode (decision 1)", async () => {
+		const email = `returning-${suffix}@test.example`;
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: `Rita ${suffix}`, email })
+			.returning({ id: guests.id });
+		await addGuestPresent({
+			meetingId: seed.meetingId,
+			guestId: g!.id,
+			mode: "online",
+		});
+		// Same person typed in again through "New guest": `resolveGuestId`
+		// matches the email (#773) and lands on the SAME guest row.
+		const { guestId } = await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: `Rita ${suffix}`, email },
+			mode: "in_person",
+		});
+		expect(guestId).toBe(g!.id);
+		expect((await storedGuestMode(g!.id))?.mode).toBe("online");
+	});
+
+	it("a role-only guest's plain ADD inserts their row with the default", async () => {
+		const guestId = await newGuest("Role Add");
+		const [rd] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: `Grammarian ${suffix}`,
+				category: "functionary",
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: rd!.id,
+			assignedGuestId: guestId,
+			status: "claimed",
+		});
+		await addGuestPresent({
+			meetingId: seed.meetingId,
+			guestId,
+			mode: "in_person",
+		});
 		expect((await storedGuestMode(guestId))?.mode).toBe("in_person");
 	});
 
@@ -226,6 +290,7 @@ describe.skipIf(!hasTestDb)("attendance mode (#1049)", () => {
 			meetingId: seed.meetingId,
 			guestId,
 			mode: "online",
+			replaceMode: true,
 		});
 		m = await loadMinutes(seed.meetingId);
 		expect(m.guests.find((g) => g.guestId === guestId)).toMatchObject({
@@ -265,7 +330,7 @@ describe.skipIf(!hasTestDb)("attendance mode (#1049)", () => {
 		expect(m.guests.find((g) => g.guestId === guestId)?.mode).toBe("in_person");
 		const { countsLine } = buildAttendanceSection(m);
 		expect(countsLine).toBe(
-			"Present: 2   Absent: 0   Excused: 0   Guests: 1   Attending: 1 + 1 online, 1 not recorded",
+			"Present: 2   Absent: 0   Excused: 0   Guests: 1   Attending incl. guests: 1 + 1 online, 1 not recorded",
 		);
 	});
 

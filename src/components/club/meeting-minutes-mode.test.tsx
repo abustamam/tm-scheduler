@@ -81,7 +81,9 @@ describe("MeetingMinutes attendance record — mode (#1049)", () => {
 				],
 			),
 		);
-		screen.getByText("1 + 1 online, 2 not recorded");
+		// VISIBLE and explicit that guests are in it — "2 present" (members)
+		// beside an unlabelled "1 + 1 online, 2 not recorded" does not add up.
+		screen.getByText("Attending incl. guests: 1 + 1 online, 2 not recorded");
 		screen.getByText("Present · Online");
 		// Ben's badge names no mode — nothing was recorded, nothing is guessed.
 		expect(screen.getAllByText("Present")).toHaveLength(1);

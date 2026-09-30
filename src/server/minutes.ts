@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import { isReadableClub } from "./club-readable-logic";
 import {
@@ -45,7 +46,7 @@ const attendanceStatus = z.enum(["present", "absent", "excused"]);
 // Mirrors the `attendance_mode` enum (#1046). Optional everywhere it appears: a
 // client (or a queued offline op) from before #1049 sends none, and none means
 // "leave the stored mode alone", never a default (see `setMemberPresence`).
-const attendanceMode = z.enum(["in_person", "online"]);
+const attendanceMode = z.enum(ATTENDANCE_MODES);
 const awardCategory = z.enum([
 	"best_speaker",
 	"best_evaluator",
@@ -147,9 +148,11 @@ const addGuestSchema = z
 		id: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
-		// #1049. With a mode, an existing guest row's mode is updated — the
-		// guest toggle in roll mode writes through here.
+		// #1049. `mode` alone is written only if this add INSERTS the row (a guest
+		// already present keeps theirs); `replaceMode: true` is roll mode's guest
+		// toggle, the one path that changes an existing row's mode.
 		mode: attendanceMode.optional(),
+		replaceMode: z.boolean().optional(),
 	})
 	.refine((d) => Boolean(d.guestId) || Boolean(d.newGuest), {
 		message: "Provide an existing guest or a new guest.",

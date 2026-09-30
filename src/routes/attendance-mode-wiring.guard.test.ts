@@ -63,13 +63,16 @@ describe("attendance mode route wiring (#1049)", () => {
 		expect(b).toContain("const mode = attendanceDefaultMode");
 		expect(b).toMatch(/addMinutesGuest\(\{ data: \{[^}]*mode \} \}\)/);
 		expect(b.match(/\bmode,\n/g)?.length).toBe(2);
+		// An ADD is insert-only: it must never claim to be the toggle, or the
+		// default overwrites a present guest's recorded mode (#1049 review).
+		expect(b).not.toContain("replaceMode");
 	});
 
 	it("writes a guest's toggle as an addGuest WITH the mode", () => {
 		const b = body("setRollGuestMode");
-		expect(b).toContain(
-			"addMinutesGuest({ data: { meetingId: meeting.id, guestId, mode } })",
+		expect(b).toMatch(
+			/addMinutesGuest\(\{\s*data: \{ meetingId: meeting\.id, guestId, mode, replaceMode: true \}/,
 		);
-		expect(b).toMatch(/type: "addGuest",[\s\S]*mode,/);
+		expect(b).toMatch(/type: "addGuest",[\s\S]*mode,\s*replaceMode: true,/);
 	});
 });

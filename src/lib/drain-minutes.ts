@@ -15,8 +15,8 @@
 // op the server has already applied is routinely re-dispatched. Seven do so by
 // construction: `setAttendance` / `setAward` are `onConflictDoUpdate` upserts
 // (last-write-wins), `addGuest` / `addTableTopics` are `onConflictDoNothing` on a
-// client-supplied id (an `addGuest` carrying a `mode`, #1049, upserts that mode
-// instead — last-write-wins again), and `removeGuest` / `removeTableTopics` / `clearAward` are
+// client-supplied id (an `addGuest` toggle, `replaceMode`, #1049, upserts its
+// mode instead — last-write-wins again), and `removeGuest` / `removeTableTopics` / `clearAward` are
 // deletes. `moveTableTopics` is the EXCEPTION and does not converge on its own:
 // `direction` is a relative swap on both sides, so a replay steps the row a
 // second position and the Table Topics speaking order in the saved minutes, the
@@ -42,11 +42,8 @@
 // match `MinutesOp`'s fields exactly — a plain `string` here would make the real
 // server-fns (whose params carry the narrower unions) fail to assign to
 // `MinutesServerFns` by parameter contravariance.
-import type {
-	AttendanceMode,
-	AttendanceStatus,
-	AwardCategory,
-} from "#/server/minutes-logic";
+import { type AttendanceMode, withMode } from "#/lib/attendance-mode";
+import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
 import type { MinutesOp, NewGuestPayload } from "./offline-minutes-queue";
 
 /**
@@ -71,6 +68,7 @@ export type MinutesServerFns = {
 			guestId?: string;
 			newGuest?: NewGuestPayload;
 			mode?: AttendanceMode;
+			replaceMode?: boolean;
 		};
 	}) => Promise<unknown>;
 	removeGuest: (args: {
@@ -139,7 +137,7 @@ export async function dispatchOp(
 					meetingId,
 					memberId: op.memberId,
 					status: op.status,
-					...(op.mode === undefined ? {} : { mode: op.mode }),
+					...withMode(op.mode),
 				},
 			});
 			return;
@@ -153,17 +151,18 @@ export async function dispatchOp(
 						meetingId,
 						id: op.guestId,
 						newGuest: op.newGuest,
-						...(op.mode === undefined ? {} : { mode: op.mode }),
+						...withMode(op.mode),
 					},
 				});
 			} else {
-				// With a mode this is an upsert of the mode onto the row (#1049), so
+				// A toggle (`replaceMode`) upserts the mode onto the row (#1049), so
 				// it converges on replay like the create does.
 				await fns.addGuest({
 					data: {
 						meetingId,
 						guestId: op.guestId,
-						...(op.mode === undefined ? {} : { mode: op.mode }),
+						...withMode(op.mode),
+						...(op.replaceMode ? { replaceMode: true } : {}),
 					},
 				});
 			}
