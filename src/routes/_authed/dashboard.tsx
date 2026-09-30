@@ -11,10 +11,7 @@ import {
 	ClubMentoringCard,
 	MentorshipCard,
 } from "#/components/members/mentorship-cards";
-import {
-	MY_PATHWAYS_ANCHOR,
-	OrientationChecklist,
-} from "#/components/members/orientation-checklist";
+import { OrientationChecklist } from "#/components/members/orientation-checklist";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
@@ -23,6 +20,7 @@ import { SpeechLogDate } from "#/components/speech-log-date";
 import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { effectiveAdminClubFor } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
+import { MY_PATHWAYS_ANCHOR } from "#/lib/my-pathways-anchor";
 import {
 	speechLogEvaluatorLabel,
 	validateSpeechLogSearch,
@@ -444,6 +442,8 @@ function Dashboard() {
 								options={pathOptions}
 								onAdd={(id) => mutatePath(addMyPath, id)}
 								onRemove={(id) => mutatePath(removeMyPath, id)}
+								// The path quiz's "Use this path" lands here (#935).
+								acceptsQuizSuggestion
 							/>
 						</div>
 					</div>

@@ -31,9 +31,10 @@ settle in over their first month or so, roughly in this order:
 
 ## Choosing a path {#choosing-a-path}
 
-When you join, a short assessment recommends paths based on what you want to work
-on. There's no wrong choice — every path builds core communication and
-leadership skills, and you can take more than one over time.
+Not sure where to start? [Take our short quiz](/resources/which-path): a few
+questions about what you want to work on, and it suggests a path or two. It's
+only a suggestion. There's no wrong choice — every path builds core
+communication and leadership skills, and you can take more than one over time.
 
 ## Setting up Base Camp {#base-camp}
 

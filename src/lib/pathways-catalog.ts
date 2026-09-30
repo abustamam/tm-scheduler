@@ -621,3 +621,75 @@ function buildPath(p: PathReq): CatalogPath {
 }
 
 export const PATHWAYS_CATALOG: CatalogPath[] = CLUB_PATHS.map(buildPath);
+
+/** The six current paths' course codes. `path-quiz.test.ts` holds this set
+ *  equal to the catalog's `status: "current"` rows. */
+export type CurrentCourseCode =
+	| "8700"
+	| "8701"
+	| "8704"
+	| "8706"
+	| "8707"
+	| "8711";
+
+/**
+ * Our own one-line description of each CURRENT path, plus the address of
+ * Toastmasters International's official page for it (#935). Read by the
+ * path-selection quiz (`src/lib/path-quiz.ts`, `/resources/which-path`).
+ *
+ * ORIGINAL PROSE (ADR-0024, #384). Each `focus` line was written from the path's
+ * NAME and its general theme only, never while reading TI's description of the
+ * path, and is not a paraphrase of it. Anyone editing a line holds the same
+ * rule: write from the name, not from TI's page. The `tiUrl` is how a member
+ * reads TI's own description, so we do not need to restate it.
+ *
+ * Legacy paths are deliberately absent: the quiz never suggests one, and
+ * `path-quiz.test.ts` holds this map's keys equal to the current course codes.
+ */
+export interface CurrentPathGuide {
+	focus: string;
+	tiUrl: string;
+}
+
+const TI_PATH_PAGE = "https://www.toastmasters.org/pathways-overview";
+
+export const CURRENT_PATH_GUIDE: Readonly<
+	Record<CurrentCourseCode, CurrentPathGuide>
+> = {
+	"8701": {
+		focus:
+			"Building well-organised talks and delivering them with confidence, whatever the room.",
+		tiUrl: `${TI_PATH_PAGE}/pathways-presentation-mastery-path`,
+	},
+	"8700": {
+		focus:
+			"Understanding what drives people, so you can encourage and energise the ones around you.",
+		tiUrl: `${TI_PATH_PAGE}/pathways-motivational-strategies-path`,
+	},
+	"8711": {
+		focus:
+			"Using humour and a light touch to connect with an audience and keep them with you.",
+		tiUrl: `${TI_PATH_PAGE}/pathways-engaging-humor-path`,
+	},
+	"8706": {
+		focus:
+			"Stepping up when a group needs direction, and leading people through change.",
+		tiUrl: `${TI_PATH_PAGE}/pathways-dynamic-leadership-path`,
+	},
+	"8704": {
+		focus:
+			"Shaping a big-picture idea and sharing it so that other people want to build it with you.",
+		tiUrl: `${TI_PATH_PAGE}/pathways-visionary-communication-path`,
+	},
+	"8707": {
+		focus:
+			"Making a case that wins people over, and holding steady when they push back.",
+		tiUrl: `${TI_PATH_PAGE}/pathways-persuasive-influence-path`,
+	},
+};
+
+/** Own keys only: `in` would also accept `__proto__`, `constructor` and the
+ *  rest of the prototype chain. */
+export function isCurrentCourseCode(code: string): code is CurrentCourseCode {
+	return Object.hasOwn(CURRENT_PATH_GUIDE, code);
+}

@@ -3,6 +3,7 @@ import { Check, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { MemberContactLinks } from "#/components/members/member-contact-links";
 import { Button } from "#/components/ui/button";
+import { MY_PATHWAYS_ANCHOR } from "#/lib/my-pathways-anchor";
 import {
 	BASE_CAMP_SECTION_HASH,
 	type OrientationItem,
@@ -10,10 +11,7 @@ import {
 	type OrientationView,
 	PATHWAYS_EXPLAINER_SLUG,
 } from "#/lib/orientation";
-
-/** The anchor the "Choose a path" item scrolls to: the dashboard's Pathways
- *  panel, where the path picker lives. */
-export const MY_PATHWAYS_ANCHOR = "my-pathways";
+import { PATH_QUIZ_HREF, PATH_QUIZ_LINK_LABEL } from "#/lib/path-quiz";
 
 export const ORIENTATION_HEADING = "Your first weeks";
 export const ORIENTATION_DISMISS_LABEL = "I'm all set";
@@ -190,11 +188,18 @@ const ACTION_CLASS = "shrink-0 text-xs font-semibold";
 function ItemAction({ item }: { item: OrientationItem }) {
 	switch (item.key) {
 		case "choose-path":
-			// The picker is the dashboard's own Pathways panel.
+			// The picker is the dashboard's own Pathways panel; the quiz (#935)
+			// is for the member who does not know which one yet. "Pick a path"
+			// stays first: it is the action, the quiz the help.
 			return (
-				<a href={`#${MY_PATHWAYS_ANCHOR}`} className={ACTION_CLASS}>
-					Pick a path
-				</a>
+				<span className="flex shrink-0 flex-col items-end gap-1">
+					<a href={`#${MY_PATHWAYS_ANCHOR}`} className={ACTION_CLASS}>
+						Pick a path
+					</a>
+					<a href={PATH_QUIZ_HREF} className={ACTION_CLASS}>
+						{PATH_QUIZ_LINK_LABEL}
+					</a>
+				</span>
 			);
 		case "ice-breaker":
 		case "supporting-role":

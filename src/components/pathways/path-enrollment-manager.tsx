@@ -1,5 +1,5 @@
 import { Loader2, Plus, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -9,6 +9,11 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "#/components/ui/dialog";
+import {
+	PATH_QUIZ_HREF,
+	PATH_QUIZ_LINK_LABEL,
+	takeQuizSuggestion,
+} from "#/lib/path-quiz";
 import type {
 	EnrollablePath,
 	MemberEnrollment,
@@ -21,24 +26,54 @@ import type {
  * self surface and the admin surface hit different endpoints (the self one needs
  * no club, since `path_enrollments` is person-level). This component only knows
  * how to render the list and ask for a change.
+ *
+ * The path quiz (#935) hands a suggestion over through sessionStorage
+ * (`takeQuizSuggestion`). With `acceptsQuizSuggestion` (the member's own
+ * dashboard, and only there) the picker takes it once, opens
+ * itself and lists that path first, marked. It is a mark, not a filter: every
+ * path stays selectable, and nothing is added until the member picks one.
  */
 export function PathEnrollmentManager({
 	enrollments,
 	options,
 	onAdd,
 	onRemove,
+	acceptsQuizSuggestion = false,
 }: {
 	enrollments: MemberEnrollment[];
 	options: EnrollablePath[];
 	onAdd: (pathId: string) => Promise<void>;
 	onRemove: (pathId: string) => Promise<void>;
+	/** The self surface only. The admin surface on a member page leaves it
+	 *  off, so a quiz the admin took for themselves never opens someone else's
+	 *  picker. */
+	acceptsQuizSuggestion?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const [busyId, setBusyId] = useState<string | null>(null);
+	const [suggestedCode, setSuggestedCode] = useState<string | null>(null);
+
+	// Waits for the options, so a suggestion is never consumed before there is
+	// a list to show it in.
+	useEffect(() => {
+		if (!acceptsQuizSuggestion) return;
+		if (options.length === 0) return;
+		const code = takeQuizSuggestion();
+		if (!code) return;
+		setSuggestedCode(code);
+		setOpen(true);
+	}, [options, acceptsQuizSuggestion]);
 
 	const enrolledIds = new Set(enrollments.map((e) => e.pathId));
 	const available = options.filter((o) => !enrolledIds.has(o.id));
-	const current = available.filter((o) => o.status === "current");
+	// Current only: the quiz never suggests a legacy path, so a row carrying a
+	// quiz code but marked legacy stays in the legacy group, once, unmarked.
+	const suggested = available.find(
+		(o) => o.status === "current" && o.courseCode === suggestedCode,
+	);
+	const current = available.filter(
+		(o) => o.status === "current" && o !== suggested,
+	);
 	const legacy = available.filter((o) => o.status === "legacy");
 
 	async function run(pathId: string, fn: (id: string) => Promise<void>) {
@@ -114,12 +149,24 @@ export function PathEnrollmentManager({
 					<DialogHeader>
 						<DialogTitle>Choose a path</DialogTitle>
 					</DialogHeader>
+					<p className="text-sm">
+						Not sure? <a href={PATH_QUIZ_HREF}>{PATH_QUIZ_LINK_LABEL}</a> for a
+						suggestion.
+					</p>
 					{available.length === 0 ? (
 						<p className="text-muted-foreground text-sm">
 							Every path is already listed.
 						</p>
 					) : (
 						<div className="flex flex-col gap-4">
+							{suggested ? (
+								<PathGroup
+									label="Suggested by the quiz"
+									paths={[suggested]}
+									busyId={busyId}
+									onPick={(id) => run(id, onAdd)}
+								/>
+							) : null}
 							<PathGroup
 								label="Current paths"
 								paths={current}
