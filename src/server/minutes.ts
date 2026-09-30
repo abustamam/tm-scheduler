@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import { isReadableClub } from "./club-readable-logic";
 import {
@@ -42,6 +43,10 @@ const newGuestSchema = z.object({
 });
 
 const attendanceStatus = z.enum(["present", "absent", "excused"]);
+// Mirrors the `attendance_mode` enum (#1046). Optional everywhere it appears: a
+// client (or a queued offline op) from before #1049 sends none, and none means
+// "leave the stored mode alone", never a default (see `setMemberPresence`).
+const attendanceMode = z.enum(ATTENDANCE_MODES);
 const awardCategory = z.enum([
 	"best_speaker",
 	"best_evaluator",
@@ -109,11 +114,19 @@ async function gateAdmin(meetingId: string): Promise<void> {
 	await requireClubRole(currentUser.id, clubId, ["admin"]);
 }
 
-const setPresenceSchema = z.object({
-	meetingId: uuid,
-	memberId: uuid,
-	status: attendanceStatus,
-});
+const setPresenceSchema = z
+	.object({
+		meetingId: uuid,
+		memberId: uuid,
+		status: attendanceStatus,
+		mode: attendanceMode.optional(),
+	})
+	// A mode on an absent/excused write is a contradiction — they were neither
+	// in the room nor on the call. Refused rather than silently dropped, so a
+	// client that sends one finds out (#1049). The logic clears it regardless.
+	.refine((d) => d.mode === undefined || d.status === "present", {
+		message: "Only a present attendee has an attendance mode.",
+	});
 
 /** Set a member's presence status. ADMIN-ONLY — stays this way after #510: a
  *  Ballot Counter has no business editing the roster's attendance. Capability
@@ -135,6 +148,11 @@ const addGuestSchema = z
 		id: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
+		// #1049. `mode` alone is written only if this add INSERTS the row (a guest
+		// already present keeps theirs); `replaceMode: true` is roll mode's guest
+		// toggle, the one path that changes an existing row's mode.
+		mode: attendanceMode.optional(),
+		replaceMode: z.boolean().optional(),
 	})
 	.refine((d) => Boolean(d.guestId) || Boolean(d.newGuest), {
 		message: "Provide an existing guest or a new guest.",

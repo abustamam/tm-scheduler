@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { AttendanceModeToggle } from "#/components/club/attendance-mode-toggle";
 import {
 	GuestEditDialog,
 	type GuestEditFields,
@@ -21,6 +22,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+import type { AttendanceMode } from "#/lib/attendance-mode";
 import type { MinutesGuestRow } from "#/server/minutes-logic";
 
 /**
@@ -82,6 +84,7 @@ export function AttendanceGuestsGroup({
 	guestEdit,
 	onAddGuest,
 	onRemoveGuest,
+	onSetGuestMode,
 }: {
 	guests: MinutesGuestRow[];
 	clubGuests: { id: string; name: string; stage?: string }[];
@@ -97,6 +100,12 @@ export function AttendanceGuestsGroup({
 		newGuest?: { name: string; email?: string; phone?: string };
 	}) => void;
 	onRemoveGuest: (guestId: string) => void;
+	/** #1049. The in person / online toggle on each guest. Adding a guest is
+	 *  recording them present, and the ROUTE records that add with the meeting's
+	 *  default mode, so this group never picks one. Omitted ⇒ no toggle.
+	 *  A `fromRole` guest has no attendance row, and pressing theirs creates
+	 *  one (maintainer's decision 3 on #1049). */
+	onSetGuestMode?: (guestId: string, mode: AttendanceMode) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const [search, setSearch] = useState("");
@@ -158,6 +167,15 @@ export function AttendanceGuestsGroup({
 						) : (
 							g.name
 						)}
+						{onSetGuestMode ? (
+							<AttendanceModeToggle
+								name={g.name}
+								mode={g.mode ?? null}
+								disabled={locked}
+								onChange={(mode) => onSetGuestMode(g.guestId, mode)}
+								className="bg-background"
+							/>
+						) : null}
 						{g.fromRole ? null : (
 							<button
 								type="button"

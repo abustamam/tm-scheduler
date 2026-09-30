@@ -57,6 +57,12 @@ import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
+import {
+	type AttendanceMode,
+	defaultAttendanceMode,
+	presenceWriteMode,
+	withMode,
+} from "#/lib/attendance-mode";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { ballotUrlFor } from "#/lib/digital-voting";
@@ -513,6 +519,14 @@ function MeetingView() {
 	// http(s) URL — see the render site in the header for why it is re-checked
 	// here rather than read straight off the row.
 	const joinUrl = normalizePresentationUrl(meeting.joinUrl);
+	// #1049. Where roll mode's in person / online toggle starts: online for an
+	// online-only meeting (join link, no location), in person otherwise. Read off
+	// the NORMALIZED link, so a stored value the header would refuse to render
+	// cannot make a meeting online-only either.
+	const attendanceDefaultMode = defaultAttendanceMode({
+		joinUrl,
+		location: meeting.location,
+	});
 	// Its own fact, not a step toward `over`: it drives the "already taken place"
 	// notice, which a manager (still editing) must not see.
 	const datePassed = meetingDatePassed(meeting.scheduledAt, timezone, now);
@@ -1206,14 +1220,40 @@ function MeetingView() {
 	// hook is what keeps one `draining` flag over one persisted queue; two would
 	// race it and replay a stale status over a newer one with no error.
 	async function writeAttendance(memberId: string, status: AttendanceStatus) {
+		// #1049: which mode, if any, rides this write — `presenceWriteMode` says
+		// why. Read against the PROJECTED rows, so an offline tap sees the status
+		// the officer is looking at, not the stale loader's.
+		const mode = presenceWriteMode({
+			status,
+			currentStatus: rollAttendance.find((a) => a.memberId === memberId)
+				?.status,
+			defaultMode: attendanceDefaultMode,
+		});
+		await writePresence(memberId, status, mode);
+	}
+
+	// The toggle on a present row (#1049). Same op, same server fn: a present
+	// write WITH a mode, which the server upserts.
+	async function writeAttendanceMode(memberId: string, mode: AttendanceMode) {
+		await writePresence(memberId, "present", mode);
+	}
+
+	async function writePresence(
+		memberId: string,
+		status: AttendanceStatus,
+		mode: AttendanceMode | undefined,
+	) {
 		await offlineMinutes.mutate(
 			() =>
-				setAttendance({ data: { meetingId: meeting.id, memberId, status } }),
+				setAttendance({
+					data: { meetingId: meeting.id, memberId, status, ...withMode(mode) },
+				}),
 			() => ({
 				type: "setAttendance",
 				...offlineMinutes.opMeta(),
 				memberId,
 				status,
+				...withMode(mode),
 			}),
 		);
 	}
@@ -1232,8 +1272,14 @@ function MeetingView() {
 		guestId?: string;
 		newGuest?: { name: string; email?: string; phone?: string };
 	}) {
+		// #1049: adding a guest IS recording them present, so it carries the
+		// mode the toggle starts on — the same rule as a member's first Present.
+		// Insert-only on the server: a guest ALREADY present (re-picked, or a
+		// re-typed returning visitor the server dedupes) keeps their mode.
+		const mode = attendanceDefaultMode;
 		await offlineMinutes.mutate(
-			() => addMinutesGuest({ data: { meetingId: meeting.id, ...payload } }),
+			() =>
+				addMinutesGuest({ data: { meetingId: meeting.id, ...payload, mode } }),
 			() =>
 				payload.newGuest
 					? {
@@ -1242,13 +1288,41 @@ function MeetingView() {
 							guestId: crypto.randomUUID(),
 							name: payload.newGuest.name,
 							newGuest: payload.newGuest,
+							mode,
 						}
 					: {
 							type: "addGuest",
 							...offlineMinutes.opMeta(),
 							guestId: payload.guestId as string,
 							name: guestName(payload.guestId as string),
+							mode,
 						},
+		);
+	}
+
+	// A guest's in person / online toggle (#1049). An `addGuest` with a mode AND
+	// `replaceMode` (the only add that may change an existing row's mode),
+	// which the server upserts onto the row — and, for a guest listed only
+	// because they hold a role, creates it (maintainer's decision 3). The name
+	// comes off the listed row first: a role-only guest need not be in
+	// `clubGuests`' picker list under the same name.
+	async function setRollGuestMode(guestId: string, mode: AttendanceMode) {
+		const name =
+			rollGuests?.find((g) => g.guestId === guestId)?.name ??
+			guestName(guestId);
+		await offlineMinutes.mutate(
+			() =>
+				addMinutesGuest({
+					data: { meetingId: meeting.id, guestId, mode, replaceMode: true },
+				}),
+			() => ({
+				type: "addGuest",
+				...offlineMinutes.opMeta(),
+				guestId,
+				name,
+				mode,
+				replaceMode: true,
+			}),
 		);
 	}
 
@@ -2197,8 +2271,10 @@ function MeetingView() {
 							onWriteRung={writeRung}
 							onContacted={markAsked}
 							onSetAttendance={writeAttendance}
+							onSetMode={writeAttendanceMode}
 							onAddGuest={addRollGuest}
 							onRemoveGuest={removeRollGuest}
+							onSetGuestMode={setRollGuestMode}
 							// The SAME hook instance the writes go through, never a second
 							// one (`use-offline-minutes-instance.guard.test.ts`). Roll mode
 							// is now the only surface that records attendance, so without

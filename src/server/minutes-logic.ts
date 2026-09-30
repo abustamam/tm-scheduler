@@ -22,6 +22,7 @@ import {
 	speeches,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { type AttendanceMode, modeForStatus } from "#/lib/attendance-mode";
 import {
 	ATTENDANCE_BEFORE_MEETING_MESSAGE,
 	meetingDateReached,
@@ -69,6 +70,15 @@ export interface MinutesMemberRow {
 	 */
 	status: AttendanceStatus | null;
 	/**
+	 * In the room or on the call (#1049). ABSENT (or `null`) when not recorded —
+	 * every row from before #1049, and any row that is not `present`;
+	 * `loadMinutes` omits the key rather than writing null. OPTIONAL on the
+	 * type for the reason `MinutesData.timings` is: the offline snapshot is an
+	 * unversioned `MinutesData` from an earlier deploy, so absent must read as
+	 * `null`, never as either value.
+	 */
+	mode?: AttendanceMode | null;
+	/**
 	 * Holds a role slot on this meeting. Informational only — it does NOT imply
 	 * presence and never pre-fills attendance (#218).
 	 */
@@ -84,6 +94,11 @@ export interface MinutesGuestRow {
 	 * attendance row behind such a guest, so the UI hides their remove button.
 	 */
 	fromRole: boolean;
+	/** In the room or on the call (#1049); `null`/absent = not recorded. A
+	 *  `fromRole` guest has no attendance row, so theirs is always `null` until
+	 *  an officer sets it (which creates the row). Optional — see
+	 *  `MinutesMemberRow.mode`. */
+	mode?: AttendanceMode | null;
 }
 
 export interface MinutesTableTopicsRow {
@@ -277,6 +292,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		.select({
 			memberId: meetingAttendance.memberId,
 			status: meetingAttendance.status,
+			mode: meetingAttendance.mode,
 			name: members.name,
 		})
 		.from(meetingAttendance)
@@ -326,6 +342,9 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			name: m.name,
 			// No saved record ⇒ unmarked (null). Never inferred from a role slot (#218).
 			status: saved?.status ?? null,
+			// Read as stored, and carried only when recorded: NULL is ABSENT on
+			// the row, never guessed (#1049).
+			...(saved?.mode ? { mode: saved.mode } : {}),
 			hasRole: roleMemberIds.has(m.id),
 		});
 	}
@@ -336,6 +355,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 				memberId: id,
 				name: r.name,
 				status: r.status,
+				...(r.mode ? { mode: r.mode } : {}),
 				hasRole: roleMemberIds.has(id),
 			});
 		}
@@ -346,7 +366,11 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 
 	// Saved guest attendance rows — the explicitly-present guests.
 	const savedGuestRows = await db
-		.select({ guestId: meetingAttendance.guestId, name: guests.name })
+		.select({
+			guestId: meetingAttendance.guestId,
+			name: guests.name,
+			mode: meetingAttendance.mode,
+		})
 		.from(meetingAttendance)
 		.innerJoin(guests, eq(guests.id, meetingAttendance.guestId))
 		.where(
@@ -395,6 +419,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			guestId: g.guestId as string,
 			name: g.name,
 			fromRole: false,
+			...(g.mode ? { mode: g.mode } : {}),
 		});
 	}
 	for (const [guestId, name] of roleGuests) {
@@ -705,29 +730,56 @@ export async function requireMemberInMeetingClub(
 	if (!row) throw new Error("Member not found in this club.");
 }
 
-/** Set (upsert) a member's presence for a meeting. */
+/**
+ * Set (upsert) a member's presence for a meeting.
+ *
+ * `mode` (#1049) is what roll mode's toggle showed when the officer recorded
+ * them present, or what they flipped it to. The stored value follows
+ * `modeForStatus`: anything but `present` CLEARS it to NULL, and a `present`
+ * write with no `mode` leaves the stored one alone — so a queued op from a
+ * client older than #1049 cannot erase a recorded mode on replay. Nothing here
+ * ever supplies a default: an omitted mode on a new row is NULL.
+ */
 export async function setMemberPresence(input: {
 	meetingId: string;
 	memberId: string;
 	status: AttendanceStatus;
+	mode?: AttendanceMode;
 }): Promise<void> {
 	const clubId = await getMeetingClubId(input.meetingId);
 	await requireMemberInMeetingClub(input.memberId, clubId);
+	const mode = modeForStatus(input.status, input.mode);
 	await db
 		.insert(meetingAttendance)
 		.values({
 			meetingId: input.meetingId,
 			memberId: input.memberId,
 			status: input.status,
+			mode: mode ?? null,
 		})
 		.onConflictDoUpdate({
 			target: [meetingAttendance.meetingId, meetingAttendance.memberId],
-			set: { status: input.status, updatedAt: new Date() },
+			set: {
+				status: input.status,
+				// `null` (a clear) is written; only `undefined` leaves it alone.
+				...(mode === undefined ? {} : { mode }),
+				updatedAt: new Date(),
+			},
 		});
 }
 
 /**
  * Add a present guest (existing club guest or a new one). Idempotent per guest.
+ *
+ * `mode` (#1049) is written ONLY WHEN THIS CALL INSERTS THE ROW — adding a
+ * guest records them present with the meeting's default. When the guest is
+ * already present (re-picked by id, or a re-typed returning visitor whom
+ * `resolveGuestId` dedupes onto the same guest), the existing row is left
+ * exactly as it was: the default never overwrites a recorded mode (decision 1).
+ *
+ * `replaceMode: true` is the guest TOGGLE, and the only path that changes an
+ * existing row's mode. It still inserts for a `fromRole` guest, who has no row
+ * yet (decision 3).
  *
  * `id` (optional, #176 slice 2) is the client-supplied primary key for a NEW
  * guest row (the new-guest path only — ignored when an existing `guestId` is
@@ -740,16 +792,27 @@ export async function addGuestPresent(input: {
 	id?: string;
 	guestId?: string | null;
 	newGuest?: NewGuestInput;
+	mode?: AttendanceMode;
+	replaceMode?: boolean;
 }): Promise<{ guestId: string }> {
 	const clubId = await getMeetingClubId(input.meetingId);
 	return db.transaction(async (tx) => {
 		const guestId = await resolveGuestId(tx, clubId, input, input.id);
-		await tx
-			.insert(meetingAttendance)
-			.values({ meetingId: input.meetingId, guestId, status: "present" })
-			.onConflictDoNothing({
-				target: [meetingAttendance.meetingId, meetingAttendance.guestId],
+		const insert = tx.insert(meetingAttendance).values({
+			meetingId: input.meetingId,
+			guestId,
+			status: "present",
+			mode: input.mode ?? null,
+		});
+		const target = [meetingAttendance.meetingId, meetingAttendance.guestId];
+		if (input.replaceMode && input.mode !== undefined) {
+			await insert.onConflictDoUpdate({
+				target,
+				set: { mode: input.mode, updatedAt: new Date() },
 			});
+		} else {
+			await insert.onConflictDoNothing({ target });
+		}
 		return { guestId };
 	});
 }

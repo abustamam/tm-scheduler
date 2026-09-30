@@ -19,6 +19,12 @@ import {
 import { Input } from "#/components/ui/input";
 import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
+import {
+	ATTENDANCE_MODE_LABELS,
+	ATTENDING_INCL_GUESTS_LABEL,
+	formatModeSplit,
+	minutesModeSplit,
+} from "#/lib/attendance-mode";
 import { formatCalendarDay } from "#/lib/format";
 import { projectMinutes } from "#/lib/project-minutes";
 import { formatElapsedSeconds, parseStopwatch } from "#/lib/timer-state";
@@ -438,9 +444,14 @@ function MeetingMinutesView({
  *
  * `unmarked` is NOT absent (#218): a member with no saved row reads "Unmarked",
  * matching how the minutes PDF renders the same member.
+ *
+ * In person / online (#1049) shows ONLY where it was recorded: the split badge
+ * is omitted when nobody present has a mode (every meeting before #1049 reads
+ * as it always did), and a row names its mode only when it has one.
  */
 function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 	const { present, absent, excused, unmarked, guests } = minutes.counts;
+	const split = formatModeSplit(minutesModeSplit(minutes));
 	return (
 		<section className="space-y-3">
 			<div className="flex flex-wrap items-center gap-2">
@@ -450,6 +461,11 @@ function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 				<Badge variant="outline">{absent} absent</Badge>
 				<Badge variant="outline">{unmarked} unmarked</Badge>
 				<Badge variant="secondary">{guests} guests</Badge>
+				{split ? (
+					<Badge variant="outline">
+						{ATTENDING_INCL_GUESTS_LABEL}: {split}
+					</Badge>
+				) : null}
 			</div>
 
 			<ul className="divide-y rounded-md border">
@@ -461,6 +477,9 @@ function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 						<span className="text-sm">{m.name}</span>
 						<Badge variant={m.status === "present" ? "secondary" : "outline"}>
 							{m.status ? STATUS_LABELS[m.status] : "Unmarked"}
+							{m.status === "present" && m.mode
+								? ` · ${ATTENDANCE_MODE_LABELS[m.mode]}`
+								: null}
 						</Badge>
 					</li>
 				))}
@@ -477,6 +496,7 @@ function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 					{minutes.guests.map((g) => (
 						<Badge key={g.guestId} variant="secondary">
 							{g.name}
+							{g.mode ? ` · ${ATTENDANCE_MODE_LABELS[g.mode]}` : null}
 						</Badge>
 					))}
 					{minutes.guests.length === 0 ? (
