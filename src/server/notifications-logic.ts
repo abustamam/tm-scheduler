@@ -39,7 +39,7 @@ export const DEFAULT_BATCH_LIMIT = 100;
 
 /**
  * Side-effecting deps, injected so the processing loop is unit-testable with a
- * mock transport and a fixed clock (mirrors `MinutesEmailDeps`). Production wires
+ * mock transport and a fixed clock. Production wires
  * the real Resend/console transport via `defaultNotificationDeps`.
  */
 export interface NotificationDeps {

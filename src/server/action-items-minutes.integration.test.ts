@@ -261,11 +261,12 @@ describe.skipIf(!hasTestDb)(
 
 		describe("the emailed PDF", () => {
 			it("is smaller for guests, because the action-item section is gone", async () => {
-				// End-to-end counterpart to `minutes-email-port-logic.test.ts`, which
-				// pins the ARGUMENT. This pins the CONSEQUENCE: that asking for the
-				// guest view actually removes the rows rather than merely being passed
-				// along and ignored. Compared by size rather than by extracting text,
-				// because a PDF's content streams are compressed.
+				// End-to-end counterpart to `minutes-pdf-route.integration.test.ts`,
+				// which pins that the route asks for the guest view on `?view=guests`
+				// (and that the seeded text is absent from it). This pins the size
+				// CONSEQUENCE at the renderer: asking for the guest view actually
+				// removes the rows rather than merely being passed along and ignored.
+				// The route test asserts on the extracted TEXT; this one on size.
 				const meetingId = await addMeeting(
 					new Date(Date.now() + 24 * 60 * 60 * 1000),
 					"scheduled",

@@ -1,45 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-// The minutes email attaches the SAME PDF the download route serves, and its
-// default recipient list includes every guest marked present at the meeting —
-// a list an anonymous visitor can add themselves to, because `submitGuestBook`
-// takes no session at all. Once the PDF started carrying club action items
-// (#529), that made an internal list ("chase the lapsed members", "drop the
-// venue") reachable by anyone who signed a guest book.
+// The port used to carry a `renderMinutesPdf` member that asked for the GUEST
+// view (#529), because GavelUp attached that PDF to an email whose default list
+// includes self-registered guests. Since #903 GavelUp sends nothing: the officer
+// downloads the guest copy from the PDF route (`?view=guests`, pinned in
+// `minutes-pdf-route.integration.test.ts`) and attaches it themselves. So the
+// port renders nothing, and the #529 argument now lives on that route.
 //
-// The fix is one argument, which is exactly the kind of thing a refactor drops
-// silently, so it is asserted here rather than left to review. The feature's own
-// public-surface guard enumerates ROUTES and structurally cannot see this path.
-
-const renderMinutesPdf = vi.fn(async () => new Uint8Array([1, 2, 3]));
+// `loadRecipients` itself is exercised against a real database in
+// `minutes-email.integration.test.ts`.
 
 vi.mock("#/db", () => ({ db: {} }));
-vi.mock("./minutes-pdf-logic", () => ({ renderMinutesPdf }));
 
 const { createMinutesEmailPort } = await import("./minutes-email-port-logic");
 
-describe("minutes email PDF audience (#529)", () => {
-	beforeEach(() => {
-		renderMinutesPdf.mockClear();
-	});
-
-	it("asks for the GUEST view of the PDF", async () => {
-		const port = createMinutesEmailPort();
-		await port.renderMinutesPdf("meeting-1");
-
-		expect(renderMinutesPdf).toHaveBeenCalledTimes(1);
-		expect(renderMinutesPdf).toHaveBeenCalledWith("meeting-1", "guests");
-	});
-
-	it("never asks for the members-only view on the email path", async () => {
-		// Pinned separately from the assertion above because the members view is
-		// also the DEFAULT: dropping the argument entirely leaves a call that still
-		// looks correct at the call site and quietly restores the leak.
-		const port = createMinutesEmailPort();
-		await port.renderMinutesPdf("meeting-1");
-
-		const call = renderMinutesPdf.mock.calls[0] as unknown as [string, string?];
-		expect(call?.[1]).toBeDefined();
-		expect(call?.[1]).not.toBe("members");
+describe("minutes email port (#903)", () => {
+	it("only loads recipients — it renders no PDF", () => {
+		expect(Object.keys(createMinutesEmailPort())).toEqual(["loadRecipients"]);
 	});
 });

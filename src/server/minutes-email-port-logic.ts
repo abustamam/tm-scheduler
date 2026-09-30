@@ -1,37 +1,17 @@
-// Concrete MinutesEmailPort — the integration seam between the email flow (#165)
-// and the minutes data/PDF (#152). It reuses #152's `renderMinutesPdf` (the SAME
-// server-side generator the PDF *download* uses, so the emailed file is
-// byte-identical — no second PDF path) and queries the active roster +
-// present-guest attendance rows for the default recipient list. Pure/DB logic
-// only (no createServerFn) so the Start compiler strips it from the client
-// bundle when imported by the minutes-email server-fn handlers.
+// Concrete MinutesEmailPort — the default recipient list for the minutes
+// email draft (#165, #903): the active roster + the guests marked present.
+// There is no PDF member any more: GavelUp does not send the minutes, so it
+// renders nothing to attach. The officer downloads the guest copy from
+// `GET /api/meetings/$id/minutes/pdf?view=guests` and attaches it themselves.
+// Pure/DB logic only (no createServerFn) so the Start compiler strips it from
+// the client bundle when imported by the minutes-email server-fn handler.
 import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { db } from "#/db";
-import {
-	clubs,
-	guests,
-	meetingAttendance,
-	meetings,
-	members,
-} from "#/db/schema";
+import { guests, meetingAttendance, meetings, members } from "#/db/schema";
 import type { MinutesEmailPort } from "./minutes-email-logic";
-import { renderMinutesPdf } from "./minutes-pdf-logic";
 
 export function createMinutesEmailPort(): MinutesEmailPort {
 	return {
-		// #152's real renderer, asked for the GUEST view.
-		//
-		// The emailed copy is not byte-identical to the member download any more,
-		// and that is the point: `loadRecipients` below puts every guest marked
-		// present on the default to-list, and a guest can add themselves through
-		// `submitGuestBook`, which takes no session at all. One PDF goes to that
-		// whole mixed list, so it must be the copy that carries no club-internal
-		// action items (#529). Members still see them on the meeting page and in
-		// the membership-gated download.
-		renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
-			return renderMinutesPdf(meetingId, "guests");
-		},
-
 		// Default recipients: every active roster member + every guest marked
 		// present at this meeting (ADR-0014). Emails may be null — the pure
 		// `resolveMinutesRecipients` splits those into `skipped`.
@@ -65,18 +45,6 @@ export function createMinutesEmailPort(): MinutesEmailPort {
 				.orderBy(asc(guests.name));
 
 			return { members: memberRows, presentGuests: guestRows };
-		},
-
-		// meetings + clubs are existing tables — no #152 dependency.
-		async loadHeader(meetingId: string) {
-			const [row] = await db
-				.select({ clubName: clubs.name, meetingDate: meetings.scheduledAt })
-				.from(meetings)
-				.innerJoin(clubs, eq(clubs.id, meetings.clubId))
-				.where(eq(meetings.id, meetingId))
-				.limit(1);
-			if (!row) throw new Error("Meeting not found.");
-			return { clubName: row.clubName, meetingDate: row.meetingDate };
 		},
 	};
 }
