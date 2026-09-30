@@ -1,5 +1,5 @@
 import { Loader2, Plus, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -9,6 +9,11 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "#/components/ui/dialog";
+import {
+	PATH_QUIZ_HREF,
+	QUIZ_HANDOFF_PATHNAME,
+	takeQuizSuggestion,
+} from "#/lib/path-quiz";
 import type {
 	EnrollablePath,
 	MemberEnrollment,
@@ -21,6 +26,11 @@ import type {
  * self surface and the admin surface hit different endpoints (the self one needs
  * no club, since `path_enrollments` is person-level). This component only knows
  * how to render the list and ask for a change.
+ *
+ * The path quiz (#935) hands a suggestion over through sessionStorage
+ * (`takeQuizSuggestion`). On the dashboard the picker takes it once, opens
+ * itself and lists that path first, marked. It is a mark, not a filter: every
+ * path stays selectable, and nothing is added until the member picks one.
  */
 export function PathEnrollmentManager({
 	enrollments,
@@ -35,10 +45,27 @@ export function PathEnrollmentManager({
 }) {
 	const [open, setOpen] = useState(false);
 	const [busyId, setBusyId] = useState<string | null>(null);
+	const [suggestedCode, setSuggestedCode] = useState<string | null>(null);
+
+	// Only on the member's own dashboard: the admin surface on a member page
+	// renders this same component, and a quiz the admin took for themselves must
+	// not open someone else's picker. Waits for the options, so a suggestion is
+	// never consumed before there is a list to show it in.
+	useEffect(() => {
+		if (options.length === 0) return;
+		if (window.location.pathname !== QUIZ_HANDOFF_PATHNAME) return;
+		const code = takeQuizSuggestion();
+		if (!code) return;
+		setSuggestedCode(code);
+		setOpen(true);
+	}, [options]);
 
 	const enrolledIds = new Set(enrollments.map((e) => e.pathId));
 	const available = options.filter((o) => !enrolledIds.has(o.id));
-	const current = available.filter((o) => o.status === "current");
+	const suggested = available.find((o) => o.courseCode === suggestedCode);
+	const current = available.filter(
+		(o) => o.status === "current" && o !== suggested,
+	);
 	const legacy = available.filter((o) => o.status === "legacy");
 
 	async function run(pathId: string, fn: (id: string) => Promise<void>) {
@@ -114,12 +141,24 @@ export function PathEnrollmentManager({
 					<DialogHeader>
 						<DialogTitle>Choose a path</DialogTitle>
 					</DialogHeader>
+					<p className="text-sm">
+						Not sure? <a href={PATH_QUIZ_HREF}>Take the quiz</a> for a
+						suggestion.
+					</p>
 					{available.length === 0 ? (
 						<p className="text-muted-foreground text-sm">
 							Every path is already listed.
 						</p>
 					) : (
 						<div className="flex flex-col gap-4">
+							{suggested ? (
+								<PathGroup
+									label="Suggested by the quiz"
+									paths={[suggested]}
+									busyId={busyId}
+									onPick={(id) => run(id, onAdd)}
+								/>
+							) : null}
 							<PathGroup
 								label="Current paths"
 								paths={current}

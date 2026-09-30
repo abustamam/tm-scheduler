@@ -20,6 +20,7 @@ import { Route as AboutRouteImport } from './routes/about'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ResourcesIndexRouteImport } from './routes/resources.index'
+import { Route as ResourcesWhichPathRouteImport } from './routes/resources.which-path'
 import { Route as ResourcesEvaluationResourcesRouteImport } from './routes/resources.evaluation-resources'
 import { Route as ResourcesSlugRouteImport } from './routes/resources.$slug'
 import { Route as OauthConsentRouteImport } from './routes/oauth.consent'
@@ -135,6 +136,11 @@ const IndexRoute = IndexRouteImport.update({
 const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
   id: '/resources/',
   path: '/resources/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResourcesWhichPathRoute = ResourcesWhichPathRouteImport.update({
+  id: '/resources/which-path',
+  path: '/resources/which-path',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResourcesEvaluationResourcesRoute =
@@ -492,6 +498,7 @@ export interface FileRoutesByFullPath {
   '/oauth/consent': typeof OauthConsentRoute
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
+  '/resources/which-path': typeof ResourcesWhichPathRoute
   '/resources/': typeof ResourcesIndexRoute
   '/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/admin/charter': typeof AuthedAdminCharterRoute
@@ -564,6 +571,7 @@ export interface FileRoutesByTo {
   '/oauth/consent': typeof OauthConsentRoute
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
+  '/resources/which-path': typeof ResourcesWhichPathRoute
   '/resources': typeof ResourcesIndexRoute
   '/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/admin/charter': typeof AuthedAdminCharterRoute
@@ -640,6 +648,7 @@ export interface FileRoutesById {
   '/oauth/consent': typeof OauthConsentRoute
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
+  '/resources/which-path': typeof ResourcesWhichPathRoute
   '/resources/': typeof ResourcesIndexRoute
   '/_authed/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/_authed/admin/charter': typeof AuthedAdminCharterRoute
@@ -716,6 +725,7 @@ export interface FileRouteTypes {
     | '/oauth/consent'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
+    | '/resources/which-path'
     | '/resources/'
     | '/admin/action-items'
     | '/admin/charter'
@@ -788,6 +798,7 @@ export interface FileRouteTypes {
     | '/oauth/consent'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
+    | '/resources/which-path'
     | '/resources'
     | '/admin/action-items'
     | '/admin/charter'
@@ -863,6 +874,7 @@ export interface FileRouteTypes {
     | '/oauth/consent'
     | '/resources/$slug'
     | '/resources/evaluation-resources'
+    | '/resources/which-path'
     | '/resources/'
     | '/_authed/admin/action-items'
     | '/_authed/admin/charter'
@@ -930,6 +942,7 @@ export interface RootRouteChildren {
   OauthConsentRoute: typeof OauthConsentRoute
   ResourcesSlugRoute: typeof ResourcesSlugRoute
   ResourcesEvaluationResourcesRoute: typeof ResourcesEvaluationResourcesRoute
+  ResourcesWhichPathRoute: typeof ResourcesWhichPathRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiPathwaysIngestRoute: typeof ApiPathwaysIngestRoute
@@ -1025,6 +1038,13 @@ declare module '@tanstack/react-router' {
       path: '/resources'
       fullPath: '/resources/'
       preLoaderRoute: typeof ResourcesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/resources/which-path': {
+      id: '/resources/which-path'
+      path: '/resources/which-path'
+      fullPath: '/resources/which-path'
+      preLoaderRoute: typeof ResourcesWhichPathRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/resources/evaluation-resources': {
@@ -1592,6 +1612,7 @@ const rootRouteChildren: RootRouteChildren = {
   OauthConsentRoute: OauthConsentRoute,
   ResourcesSlugRoute: ResourcesSlugRoute,
   ResourcesEvaluationResourcesRoute: ResourcesEvaluationResourcesRoute,
+  ResourcesWhichPathRoute: ResourcesWhichPathRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiPathwaysIngestRoute: ApiPathwaysIngestRoute,
