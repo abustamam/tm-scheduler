@@ -444,6 +444,8 @@ function Dashboard() {
 								options={pathOptions}
 								onAdd={(id) => mutatePath(addMyPath, id)}
 								onRemove={(id) => mutatePath(removeMyPath, id)}
+								// The path quiz's "Use this path" lands here (#935).
+								acceptsQuizSuggestion
 							/>
 						</div>
 					</div>

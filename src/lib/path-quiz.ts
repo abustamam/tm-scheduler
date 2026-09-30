@@ -334,9 +334,9 @@ export function suggestionWhy(s: PathSuggestion): string {
  * browser, and a blocked storage just means the picker opens unmarked.
  */
 export const QUIZ_HANDOFF_KEY = "gavelup.pathQuizSuggestion";
-/** Where "Use this path" goes: the dashboard's My Pathways panel. */
-export const QUIZ_HANDOFF_PATHNAME = "/dashboard";
-export const QUIZ_HANDOFF_HREF = `${QUIZ_HANDOFF_PATHNAME}#my-pathways`;
+/** Where "Use this path" goes: the dashboard's My Pathways panel, whose
+ *  picker is the one rendered with `acceptsQuizSuggestion`. */
+export const QUIZ_HANDOFF_HREF = "/dashboard#my-pathways";
 /** The quiz page itself, linked from the picker and the Pathways explainer. */
 export const PATH_QUIZ_HREF = "/resources/which-path";
 

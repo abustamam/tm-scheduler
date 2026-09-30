@@ -138,6 +138,10 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 		who: "signed-out",
 		url: () => "/resources/evaluation-resources",
 	},
+	"/resources/which-path": {
+		who: "signed-out",
+		url: () => "/resources/which-path",
+	},
 
 	"/account": { who: "admin", url: () => "/account" },
 	"/activity": { who: "admin", url: () => "/activity" },

@@ -10,6 +10,7 @@ import {
 	type OrientationView,
 	PATHWAYS_EXPLAINER_SLUG,
 } from "#/lib/orientation";
+import { PATH_QUIZ_HREF } from "#/lib/path-quiz";
 
 /** The anchor the "Choose a path" item scrolls to: the dashboard's Pathways
  *  panel, where the path picker lives. */
@@ -18,6 +19,7 @@ export const MY_PATHWAYS_ANCHOR = "my-pathways";
 export const ORIENTATION_HEADING = "Your first weeks";
 export const ORIENTATION_DISMISS_LABEL = "I'm all set";
 export const ORIENTATION_LEARN_LABEL = "Learn how Pathways works";
+export const ORIENTATION_QUIZ_LABEL = "Take the quiz";
 
 /**
  * New-member orientation (#940): the first-weeks checklist on the member's
@@ -190,11 +192,18 @@ const ACTION_CLASS = "shrink-0 text-xs font-semibold";
 function ItemAction({ item }: { item: OrientationItem }) {
 	switch (item.key) {
 		case "choose-path":
-			// The picker is the dashboard's own Pathways panel.
+			// The picker is the dashboard's own Pathways panel; the quiz (#935)
+			// is for the member who does not know which one yet. "Pick a path"
+			// stays first: it is the action, the quiz the help.
 			return (
-				<a href={`#${MY_PATHWAYS_ANCHOR}`} className={ACTION_CLASS}>
-					Pick a path
-				</a>
+				<span className="flex shrink-0 flex-col items-end gap-1">
+					<a href={`#${MY_PATHWAYS_ANCHOR}`} className={ACTION_CLASS}>
+						Pick a path
+					</a>
+					<a href={PATH_QUIZ_HREF} className={ACTION_CLASS}>
+						{ORIENTATION_QUIZ_LABEL}
+					</a>
+				</span>
 			);
 		case "ice-breaker":
 		case "supporting-role":

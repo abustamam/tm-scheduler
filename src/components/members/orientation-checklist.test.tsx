@@ -19,11 +19,13 @@ import {
 	orientationView,
 	PATHWAYS_EXPLAINER_HREF,
 } from "#/lib/orientation";
+import { PATH_QUIZ_HREF } from "#/lib/path-quiz";
 import {
 	MY_PATHWAYS_ANCHOR,
 	ORIENTATION_DISMISS_LABEL,
 	ORIENTATION_HEADING,
 	ORIENTATION_LEARN_LABEL,
+	ORIENTATION_QUIZ_LABEL,
 	OrientationChecklist,
 } from "./orientation-checklist";
 
@@ -155,6 +157,23 @@ describe("OrientationChecklist (#940)", () => {
 				.getByRole("link", { name: ORIENTATION_LEARN_LABEL })
 				.getAttribute("href"),
 		).toBe(PATHWAYS_EXPLAINER_HREF);
+	});
+
+	it("Choose a path also links to the path quiz (#935), until a path is chosen", async () => {
+		const { container } = await renderCard(facts());
+		await screen.findByText(ORIENTATION_HEADING);
+		const li = container.querySelector('li[data-item="choose-path"]');
+		const quiz = [...(li?.querySelectorAll("a") ?? [])].find(
+			(a) => a.textContent === ORIENTATION_QUIZ_LABEL,
+		);
+		expect(quiz?.getAttribute("href")).toBe(PATH_QUIZ_HREF);
+		cleanup();
+
+		const done = await renderCard(facts({ activePathCount: 1 }));
+		await screen.findByText(ORIENTATION_HEADING);
+		expect(
+			done.container.querySelector('li[data-item="choose-path"] a'),
+		).toBeNull();
 	});
 
 	it("Get a mentor has no action while undone, and names nobody", async () => {

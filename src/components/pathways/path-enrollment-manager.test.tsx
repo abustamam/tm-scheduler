@@ -5,6 +5,8 @@
  * while every other path stays selectable. Nothing is added until the member
  * picks.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -42,10 +44,12 @@ const OPTIONS: EnrollablePath[] = [
 afterEach(() => {
 	cleanup();
 	sessionStorage.clear();
-	window.history.replaceState(null, "", "/");
 });
 
-function renderManager(options = OPTIONS) {
+function renderManager(
+	options = OPTIONS,
+	{ acceptsQuizSuggestion }: { acceptsQuizSuggestion?: boolean } = {},
+) {
 	const onAdd = vi.fn(() => Promise.resolve());
 	const onRemove = vi.fn(() => Promise.resolve());
 	render(
@@ -54,6 +58,7 @@ function renderManager(options = OPTIONS) {
 			options={options}
 			onAdd={onAdd}
 			onRemove={onRemove}
+			acceptsQuizSuggestion={acceptsQuizSuggestion}
 		/>,
 	);
 	return { onAdd, onRemove };
@@ -75,10 +80,9 @@ describe("PathEnrollmentManager and the quiz", () => {
 		).toBe(PATH_QUIZ_HREF);
 	});
 
-	it("on the dashboard, opens with the suggested path marked and all others still listed", async () => {
-		window.history.replaceState(null, "", "/dashboard");
+	it("with acceptsQuizSuggestion (the dashboard), opens with the suggested path marked and all others still listed", async () => {
 		sessionStorage.setItem(QUIZ_HANDOFF_KEY, "8711");
-		const { onAdd } = renderManager();
+		const { onAdd } = renderManager(OPTIONS, { acceptsQuizSuggestion: true });
 
 		const suggested = await screen.findByText("Suggested by the quiz");
 		expect(suggested).toBeTruthy();
@@ -114,8 +118,7 @@ describe("PathEnrollmentManager and the quiz", () => {
 		expect(onAdd).toHaveBeenCalledWith("p-8707");
 	});
 
-	it("leaves the handoff alone off the dashboard (the admin's member page)", () => {
-		window.history.replaceState(null, "", "/members/abc");
+	it("without the prop (the admin's member page), ignores the handoff", () => {
 		sessionStorage.setItem(QUIZ_HANDOFF_KEY, "8711");
 		renderManager();
 		expect(screen.queryByText("Choose a path")).toBeNull();
@@ -123,15 +126,39 @@ describe("PathEnrollmentManager and the quiz", () => {
 	});
 
 	it("waits for the options before taking the handoff", () => {
-		window.history.replaceState(null, "", "/dashboard");
 		sessionStorage.setItem(QUIZ_HANDOFF_KEY, "8711");
-		renderManager([]);
+		renderManager([], { acceptsQuizSuggestion: true });
 		expect(sessionStorage.getItem(QUIZ_HANDOFF_KEY)).toBe("8711");
 	});
 
 	it("opens nothing without a handoff", () => {
-		window.history.replaceState(null, "", "/dashboard");
-		renderManager();
+		renderManager(OPTIONS, { acceptsQuizSuggestion: true });
 		expect(screen.queryByText("Choose a path")).toBeNull();
+	});
+});
+
+/**
+ * The prop is a gate a route has to pass, and a route cannot be mounted here,
+ * so the wiring is pinned in source: the member's own dashboard turns it on,
+ * the admin's member page does not.
+ */
+describe("which surfaces accept the quiz handoff", () => {
+	const src = (file: string) =>
+		readFileSync(resolve(__dirname, "../../..", file), "utf8");
+
+	it("the dashboard's picker accepts it", () => {
+		const dashboard = src("src/routes/_authed/dashboard.tsx");
+		const at = dashboard.indexOf("<PathEnrollmentManager");
+		const end = dashboard.indexOf("/>", at);
+		expect(at).toBeGreaterThan(-1);
+		expect(dashboard.slice(at, end)).toMatch(
+			/\bacceptsQuizSuggestion\b(?!\s*=\s*\{\s*false)/,
+		);
+	});
+
+	it("the admin member page's picker does not", () => {
+		const member = src("src/routes/_authed/members.$id.tsx");
+		expect(member).toContain("<PathEnrollmentManager");
+		expect(member).not.toMatch(/acceptsQuizSuggestion/);
 	});
 });

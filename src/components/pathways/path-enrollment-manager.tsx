@@ -9,11 +9,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "#/components/ui/dialog";
-import {
-	PATH_QUIZ_HREF,
-	QUIZ_HANDOFF_PATHNAME,
-	takeQuizSuggestion,
-} from "#/lib/path-quiz";
+import { PATH_QUIZ_HREF, takeQuizSuggestion } from "#/lib/path-quiz";
 import type {
 	EnrollablePath,
 	MemberEnrollment,
@@ -28,7 +24,8 @@ import type {
  * how to render the list and ask for a change.
  *
  * The path quiz (#935) hands a suggestion over through sessionStorage
- * (`takeQuizSuggestion`). On the dashboard the picker takes it once, opens
+ * (`takeQuizSuggestion`). With `acceptsQuizSuggestion` (the member's own
+ * dashboard, and only there) the picker takes it once, opens
  * itself and lists that path first, marked. It is a mark, not a filter: every
  * path stays selectable, and nothing is added until the member picks one.
  */
@@ -37,28 +34,31 @@ export function PathEnrollmentManager({
 	options,
 	onAdd,
 	onRemove,
+	acceptsQuizSuggestion = false,
 }: {
 	enrollments: MemberEnrollment[];
 	options: EnrollablePath[];
 	onAdd: (pathId: string) => Promise<void>;
 	onRemove: (pathId: string) => Promise<void>;
+	/** The self surface only. The admin surface on a member page leaves it
+	 *  off, so a quiz the admin took for themselves never opens someone else's
+	 *  picker. */
+	acceptsQuizSuggestion?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [suggestedCode, setSuggestedCode] = useState<string | null>(null);
 
-	// Only on the member's own dashboard: the admin surface on a member page
-	// renders this same component, and a quiz the admin took for themselves must
-	// not open someone else's picker. Waits for the options, so a suggestion is
-	// never consumed before there is a list to show it in.
+	// Waits for the options, so a suggestion is never consumed before there is
+	// a list to show it in.
 	useEffect(() => {
+		if (!acceptsQuizSuggestion) return;
 		if (options.length === 0) return;
-		if (window.location.pathname !== QUIZ_HANDOFF_PATHNAME) return;
 		const code = takeQuizSuggestion();
 		if (!code) return;
 		setSuggestedCode(code);
 		setOpen(true);
-	}, [options]);
+	}, [options, acceptsQuizSuggestion]);
 
 	const enrolledIds = new Set(enrollments.map((e) => e.pathId));
 	const available = options.filter((o) => !enrolledIds.has(o.id));
