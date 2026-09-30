@@ -4,7 +4,20 @@ import { z } from "zod";
 import { db } from "#/db";
 import { meetings, roleSlots } from "#/db/schema";
 import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
-import { applyAssignGuestToSlot, listClubGuests } from "./guests-logic";
+import { updateGuestProfileSchema } from "./guest-pipeline-schemas";
+import {
+	applyAssignGuestToSlot,
+	applyUpdateGuestProfile,
+	listClubGuests,
+	loadGuestProfile,
+	loadGuestProfiles,
+} from "./guests-logic";
+
+export type {
+	GuestProfile,
+	GuestProfileRow,
+	IntroducerOption,
+} from "./guests-logic";
 
 const uuid = z.string().uuid();
 
@@ -70,4 +83,46 @@ export const assignGuestSlot = createServerFn({ method: "POST" })
 			actorMemberId: membership.id,
 		});
 		return { ok: true as const };
+	});
+
+/**
+ * One guest's kind, home club and introducer, plus the roster for the
+ * "Introduced by" picker (#1050). Read fresh each time the guest edit dialog
+ * opens. AUTHED — the same read gate as `listGuests` / `getGuestPipeline`.
+ */
+export const getGuestProfile = createServerFn({ method: "GET" })
+	.validator((input: unknown) =>
+		z.object({ clubId: uuid, guestId: uuid }).strict().parse(input),
+	)
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubAdminView(currentUser.id, data.clubId);
+		return loadGuestProfile(data.clubId, data.guestId);
+	});
+
+/**
+ * Every guest's kind / home club / introducer, and each member's "brought"
+ * count, for VP Membership (#1050). AUTHED — the same read gate as
+ * `getGuestPipeline`, which the same page loads beside it.
+ */
+export const getGuestProfiles = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => {
+		const currentUser = await requireUser();
+		await requireClubAdminView(currentUser.id, clubId);
+		return loadGuestProfiles(clubId);
+	});
+
+/**
+ * Set a guest's kind, home club and introducer (#1050). AUTHED — admin-only,
+ * the same gate as `updateGuest` and every other guest write: a guest record is
+ * officer data. The introducer is checked against THIS club inside
+ * `applyUpdateGuestProfile`, not here.
+ */
+export const updateGuestProfile = createServerFn({ method: "POST" })
+	.validator((input: unknown) => updateGuestProfileSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return applyUpdateGuestProfile(data);
 	});

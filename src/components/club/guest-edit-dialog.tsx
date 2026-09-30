@@ -1,5 +1,5 @@
 import { useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import {
@@ -16,6 +16,34 @@ import { Label } from "#/components/ui/label";
 import { isStrandedConvertedGuest } from "#/lib/guest-convert";
 import { firstNameOf } from "#/lib/person-name";
 import { updateGuest } from "#/server/guest-pipeline";
+import {
+	GUEST_KIND_LABELS,
+	GUEST_KINDS,
+	GUEST_TEXT_MAX,
+	type GuestKind,
+} from "#/server/guest-pipeline-schemas";
+import {
+	type GuestProfile,
+	getGuestProfile,
+	updateGuestProfile,
+} from "#/server/guests";
+
+/** The native `<select>`s' look, matching `Input`. */
+const SELECT_CLASS =
+	"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs md:text-sm dark:bg-input/30";
+
+/**
+ * Where the kind / home club / introducer fields stand (#1050). They are read
+ * when the dialog OPENS rather than handed in by the caller: the meeting rail
+ * has no pipeline row to hand in, and a caller-supplied copy is exactly the
+ * stale-field hazard `onSaved` describes — reopen on a stale copy and save,
+ * and the previous edit is reverted. `failed` saves the name and contact and
+ * leaves these three alone; it never writes defaults over what is stored.
+ */
+type ProfileState =
+	| { status: "loading" }
+	| { status: "failed" }
+	| { status: "ready"; profile: GuestProfile };
 
 /**
  * Exactly what this form writes, and nothing else (#727).
@@ -67,7 +95,7 @@ export interface GuestEditFields {
 
 /**
  * Fix a guest's name and contact details (#364, lifted to a shared component in
- * #727). ONE dialog, two call sites: VP Membership's per-guest Edit button and
+ * #727), and since #1050 their kind, home club and who introduced them. ONE dialog, two call sites: VP Membership's per-guest Edit button and
  * the meeting page's attendance rail.
  *
  * Lifted rather than copied. The form wires four fields across three places that
@@ -127,6 +155,37 @@ export function GuestEditDialog({
 }) {
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
+	const [profileState, setProfileState] = useState<ProfileState>({
+		status: "loading",
+	});
+	const [kind, setKind] = useState<GuestKind>("visitor");
+	const [homeClub, setHomeClub] = useState("");
+	const [introducerId, setIntroducerId] = useState("");
+
+	// Fresh on every open, so a second edit starts from what the first saved.
+	useEffect(() => {
+		if (!open) return;
+		let cancelled = false;
+		setProfileState({ status: "loading" });
+		getGuestProfile({ data: { clubId, guestId: guest.id } })
+			.then((profile) => {
+				if (cancelled) return;
+				if (!profile) {
+					setProfileState({ status: "failed" });
+					return;
+				}
+				setKind(profile.kind);
+				setHomeClub(profile.homeClub ?? "");
+				setIntroducerId(profile.introducedByMemberId ?? "");
+				setProfileState({ status: "ready", profile });
+			})
+			.catch(() => {
+				if (!cancelled) setProfileState({ status: "failed" });
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [open, clubId, guest.id]);
 
 	// DERIVED here, not passed in — see `GuestEditFields.stage`. This guest has
 	// already been converted onto the roster, so the description says which
@@ -169,6 +228,23 @@ export function GuestEditDialog({
 						phone: String(form.get("phone") ?? "").trim() || null,
 					},
 				});
+				// The kind / home club / introducer, only once they were READ: a
+				// dialog that never loaded them has nothing true to write back. A
+				// second write rather than a field on `updateGuest`, because it has
+				// its own validation (the introducer must be on THIS club's roster)
+				// and both writes are idempotent, so a retry after a refusal here
+				// simply saves both again.
+				if (profileState.status === "ready") {
+					await updateGuestProfile({
+						data: {
+							clubId,
+							guestId: guest.id,
+							kind,
+							homeClub: kind === "visitor" ? null : homeClub.trim() || null,
+							introducedByMemberId: introducerId || null,
+						},
+					});
+				}
 			} catch (err) {
 				// The write itself. This is the user's error to see and act on —
 				// `applyUpdateGuest` refuses a phone/email that already belongs to
@@ -269,13 +345,86 @@ export function GuestEditDialog({
 							defaultValue={guest.phoneRaw ?? ""}
 						/>
 					</div>
+					{profileState.status === "ready" ? (
+						<>
+							<div className="space-y-2">
+								<Label htmlFor={`guest-kind-${guest.id}`}>Kind</Label>
+								<select
+									id={`guest-kind-${guest.id}`}
+									className={SELECT_CLASS}
+									value={kind}
+									onChange={(e) => setKind(e.target.value as GuestKind)}
+								>
+									{GUEST_KINDS.map((k) => (
+										<option key={k} value={k}>
+											{GUEST_KIND_LABELS[k]}
+										</option>
+									))}
+								</select>
+							</div>
+							{/* Only for a Toastmaster from elsewhere: a Visitor has no home
+							    club, and the server clears one if it is sent. */}
+							{kind === "visitor" ? null : (
+								<div className="space-y-2">
+									<Label htmlFor={`guest-home-club-${guest.id}`}>
+										Home club
+									</Label>
+									<Input
+										id={`guest-home-club-${guest.id}`}
+										value={homeClub}
+										onChange={(e) => setHomeClub(e.target.value)}
+										maxLength={GUEST_TEXT_MAX}
+										placeholder="e.g. Laguna Speakers #1234"
+									/>
+								</div>
+							)}
+							<div className="space-y-2">
+								<Label htmlFor={`guest-introducer-${guest.id}`}>
+									Introduced by
+								</Label>
+								<select
+									id={`guest-introducer-${guest.id}`}
+									className={SELECT_CLASS}
+									value={introducerId}
+									onChange={(e) => setIntroducerId(e.target.value)}
+								>
+									<option value="">Nobody recorded</option>
+									{profileState.profile.roster.map((m) => (
+										<option key={m.id} value={m.id}>
+											{m.status === "inactive"
+												? `${m.name} (inactive)`
+												: m.name}
+										</option>
+									))}
+								</select>
+							</div>
+						</>
+					) : profileState.status === "loading" ? (
+						<p
+							data-slot="guest-profile-loading"
+							className="text-xs text-[var(--sea-ink-soft)]"
+						>
+							Loading kind and introducer…
+						</p>
+					) : (
+						<p
+							data-slot="guest-profile-failed"
+							className="text-xs text-[var(--sea-ink-soft)]"
+						>
+							Couldn't load this guest's kind and introducer. Saving keeps them
+							as they are.
+						</p>
+					)}
 					<DialogFooter>
 						<DialogClose asChild>
 							<Button type="button" variant="outline" disabled={busy}>
 								Cancel
 							</Button>
 						</DialogClose>
-						<Button type="submit" disabled={busy}>
+						<Button
+							type="submit"
+							disabled={busy || profileState.status === "loading"}
+						>
 							{busy ? "Saving…" : "Save changes"}
 						</Button>
 					</DialogFooter>

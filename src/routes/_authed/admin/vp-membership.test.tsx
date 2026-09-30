@@ -67,6 +67,11 @@ vi.mock("#/server/guest-pipeline", () => ({
 vi.mock("#/server/clubs", () => ({
 	getClubByIdentifier: vi.fn(),
 }));
+vi.mock("#/server/guests", () => ({
+	getGuestProfile: vi.fn().mockResolvedValue(null),
+	getGuestProfiles: vi.fn().mockResolvedValue({ rows: [], brought: [] }),
+	updateGuestProfile: vi.fn(),
+}));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn() },
 }));

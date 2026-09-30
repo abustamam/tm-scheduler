@@ -26,6 +26,10 @@ import { renderUnderMemoryRouter } from "#/test/router-harness";
 // module pulls `#/db` → `pg` → `DATABASE_URL` at import time, unset under
 // jsdom. Stubbing it is what keeps this suite able to mount the panel at all.
 vi.mock("#/server/guest-pipeline", () => ({ updateGuest: vi.fn() }));
+vi.mock("#/server/guests", () => ({
+	getGuestProfile: vi.fn().mockResolvedValue(null),
+	updateGuestProfile: vi.fn(),
+}));
 
 import { MeetingAttendancePanel } from "./meeting-attendance-panel";
 

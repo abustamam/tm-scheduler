@@ -11,6 +11,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // Same stub the panel's own suite needs: the Guests group reaches the shared
 // `GuestEditDialog`, whose server-fn import pulls `#/db` at import time.
 vi.mock("#/server/guest-pipeline", () => ({ updateGuest: vi.fn() }));
+vi.mock("#/server/guests", () => ({
+	getGuestProfile: vi.fn().mockResolvedValue(null),
+	updateGuestProfile: vi.fn(),
+}));
 
 import { AttendanceGuestsGroup } from "./attendance-guests-group";
 import { AttendanceModeToggle } from "./attendance-mode-toggle";

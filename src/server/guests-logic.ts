@@ -3,11 +3,20 @@
 // Integration-testable by mocking `#/db`.
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, meetings, roleSlots } from "#/db/schema";
+import { guests, meetings, members, roleSlots } from "#/db/schema";
 import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import {
+	type BroughtCount,
+	countBroughtByMember,
+	GUEST_TEXT_MAX,
+	type GuestIntroducerRow,
+	type GuestKind,
+	normalizeHomeClub,
+	type UpdateGuestProfileInput,
+} from "./guest-pipeline-schemas";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
 // Either the pooled client or a caller's transaction, so this can run inside a
@@ -186,4 +195,158 @@ export async function applyAssignGuestToSlot(
 
 		return { clubId: slot.clubId, guestId };
 	});
+}
+
+/** `applyUpdateGuestProfile` refuses an introducer who is not in the guest's club. */
+export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
+	"The member who introduced this guest must be on this club's roster.";
+
+/** `applyUpdateGuestProfile` re-checks the home-club cap the schema applies. */
+export const HOME_CLUB_TOO_LONG_MESSAGE = "That club name is too long.";
+
+/** One member the "Introduced by" picker offers. */
+export interface IntroducerOption {
+	id: string;
+	name: string;
+	/** `inactive` members stay pickable — see `applyUpdateGuestProfile`. */
+	status: "active" | "inactive";
+}
+
+export interface GuestProfile {
+	kind: GuestKind;
+	homeClub: string | null;
+	introducedByMemberId: string | null;
+	roster: IntroducerOption[];
+}
+
+/**
+ * What the guest edit dialog needs for the kind / home club / introducer fields
+ * (#1050): the stored three, read fresh each time the dialog opens, and the
+ * club's roster for the picker. Null when the guest is not in this club.
+ *
+ * The roster is EVERY membership row of this club, inactive included — the
+ * same set `applyUpdateGuestProfile` accepts and `loadLinkCandidates` offers.
+ */
+export async function loadGuestProfile(
+	clubId: string,
+	guestId: string,
+): Promise<GuestProfile | null> {
+	const [guest] = await db
+		.select({
+			kind: guests.kind,
+			homeClub: guests.homeClub,
+			introducedByMemberId: guests.introducedByMemberId,
+		})
+		.from(guests)
+		.where(and(eq(guests.id, guestId), eq(guests.clubId, clubId)))
+		.limit(1);
+	if (!guest) return null;
+	const roster = await db
+		.select({ id: members.id, name: members.name, status: members.status })
+		.from(members)
+		.where(eq(members.clubId, clubId))
+		.orderBy(asc(members.name));
+	return { ...guest, roster };
+}
+
+/** One guest's kind / home club / introducer, for VP Membership's rows. */
+export interface GuestProfileRow extends GuestIntroducerRow {
+	kind: GuestKind;
+	homeClub: string | null;
+}
+
+/**
+ * Every guest's kind, home club and introducer in this club, plus the
+ * per-member "brought" counts (#1050) — derived from these same rows by
+ * `countBroughtByMember`, so the tally always matches what the page lists.
+ *
+ * The introducer's name comes from a join that is scoped to THIS club as well
+ * as to the id. `introduced_by_member_id` is a bare FK to `members`, which
+ * the database does not tie to the guest's club; the write path refuses a
+ * cross-club id, and this join is the read side of the same boundary, so a
+ * row written some other way names nobody rather than another club's member.
+ */
+export async function loadGuestProfiles(clubId: string): Promise<{
+	rows: GuestProfileRow[];
+	brought: BroughtCount[];
+}> {
+	const rows = await db
+		.select({
+			guestId: guests.id,
+			kind: guests.kind,
+			homeClub: guests.homeClub,
+			introducedByMemberId: guests.introducedByMemberId,
+			introducedByName: members.name,
+		})
+		.from(guests)
+		.leftJoin(
+			members,
+			and(
+				eq(members.id, guests.introducedByMemberId),
+				eq(members.clubId, clubId),
+			),
+		)
+		.where(eq(guests.clubId, clubId));
+	return { rows, brought: countBroughtByMember(rows) };
+}
+
+/**
+ * Set a guest's kind, home club and introducer (#1050). Club-scoped; the
+ * caller gates on the club admin role, the same gate as every guest write.
+ *
+ * - `homeClub` goes through `normalizeHomeClub`: trimmed, blank is null, and
+ *   CLEARED for a Visitor (criterion 1's "invalid combination"). The length cap
+ *   is the schema's; it is re-checked here so a caller that skipped the schema
+ *   cannot write an unbounded value.
+ * - `introducedByMemberId` must be a membership of THIS club. The FK only says
+ *   the member exists somewhere; without this check an officer could record
+ *   another club's member as the introducer, and the VP Membership view would
+ *   then count a stranger's guests. "A member of this club" means any
+ *   membership row with this `club_id`, INACTIVE INCLUDED — the rule
+ *   `applyLinkGuestToMember` and its roster picker use. A former member who
+ *   brought a guest last year still brought them; history an import carries
+ *   in names people who have since lapsed.
+ * - Null clears the introducer. Omitting it clears it too, like the contact
+ *   fields on `applyUpdateGuest`: the form always sends what it shows.
+ */
+export async function applyUpdateGuestProfile(
+	input: UpdateGuestProfileInput,
+): Promise<{ ok: true }> {
+	const homeClub = normalizeHomeClub(input.kind, input.homeClub);
+	if (homeClub !== null && homeClub.length > GUEST_TEXT_MAX) {
+		throw new Error(HOME_CLUB_TOO_LONG_MESSAGE);
+	}
+	const introducedByMemberId = input.introducedByMemberId ?? null;
+
+	const [guest] = await db
+		.select({ id: guests.id })
+		.from(guests)
+		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+		.limit(1);
+	if (!guest) throw new Error("Guest not found in this club.");
+
+	if (introducedByMemberId !== null) {
+		const [introducer] = await db
+			.select({ id: members.id })
+			.from(members)
+			.where(
+				and(
+					eq(members.id, introducedByMemberId),
+					eq(members.clubId, input.clubId),
+				),
+			)
+			.limit(1);
+		if (!introducer) throw new Error(INTRODUCER_NOT_IN_CLUB_MESSAGE);
+	}
+
+	await db
+		.update(guests)
+		.set({
+			kind: input.kind,
+			homeClub,
+			introducedByMemberId,
+			updatedAt: new Date(),
+		})
+		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)));
+	return { ok: true as const };
 }
