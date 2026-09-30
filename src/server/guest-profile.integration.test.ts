@@ -14,7 +14,7 @@
  * the handler still runs it.
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { guests, members, people } from "#/db/schema";
 import { HOME_CLUB_TOO_LONG_MESSAGE } from "#/lib/guest-profile";
@@ -163,6 +163,82 @@ describe.skipIf(!hasTestDb)(
 				kind: "visitor",
 				homeClub: null,
 			});
+		});
+
+		it("does not deadlock against a member delete that nulls this guest's introducer", async () => {
+			// The deadlock shape: the delete holds the member row, this write
+			// waits on it, and then the delete's ON DELETE SET NULL needs THIS
+			// guest's row. If the write had locked the guest first (the old
+			// order), the two would wait on each other and Postgres would abort
+			// one with 40P01. Member-then-guest means the delete finishes, and the
+			// write then finds the member gone and refuses cleanly.
+			const personId = await seedPerson({ name: `Departing ${run}` });
+			const [departing] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name: `Departing ${run}` })
+				.returning({ id: members.id });
+			if (!departing) throw new Error("failed to seed member");
+			// The guest already points at them, so the delete's SET NULL touches it.
+			await testDb
+				.update(guests)
+				.set({ introducedByMemberId: departing.id })
+				.where(eq(guests.id, guestId));
+
+			let release!: () => void;
+			const gate = new Promise<void>((r) => {
+				release = r;
+			});
+			let locked!: (pid: number) => void;
+			const pidReady = new Promise<number>((r) => {
+				locked = r;
+			});
+			try {
+				// Step 1 of the delete: hold the member row, as `delete` does first.
+				const deleter = testDb.transaction(async (tx) => {
+					const res = await tx.execute(sql`select pg_backend_pid() as pid`);
+					await tx
+						.select({ id: members.id })
+						.from(members)
+						.where(eq(members.id, departing.id))
+						.for("update");
+					locked(Number((res.rows[0] as { pid: number }).pid));
+					await gate;
+					// Step 2: the delete itself, whose SET NULL updates the guest.
+					await tx.delete(members).where(eq(members.id, departing.id));
+				});
+				deleter.catch(() => {});
+				const pid = await pidReady;
+
+				const write = applyUpdateGuestProfile({
+					clubId: seed.clubId,
+					guestId,
+					kind: "guest_speaker",
+					homeClub: "Elsewhere",
+					introducedByMemberId: departing.id,
+				});
+				write.catch(() => {});
+				// The write is parked on the member row, holding nothing on the guest.
+				await waitForLockWait("for share", pid);
+				release();
+
+				// The delete completes; had the write held the guest row, this is
+				// where one side would die with a deadlock.
+				await expect(deleter).resolves.toBeUndefined();
+				const outcome = await write.then(
+					() => "ok",
+					(e: unknown) => (e instanceof Error ? e.message : String(e)),
+				);
+				expect(outcome).not.toMatch(/deadlock/i);
+				expect(outcome).toBe(INTRODUCER_NOT_IN_CLUB_MESSAGE);
+				expect(await stored(guestId)).toEqual({
+					kind: "visitor",
+					homeClub: null,
+					introducedByMemberId: null,
+				});
+			} finally {
+				release();
+				await testDb.delete(people).where(eq(people.id, personId));
+			}
 		});
 
 		it("an introducer deleted mid-write is refused with the message, not a raw FK error", async () => {

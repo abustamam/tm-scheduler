@@ -320,6 +320,16 @@ export async function loadGuestProfiles(clubId: string): Promise<{
  * The share lock makes a concurrent delete wait for this write (the FK then
  * nulls the pointer, which is its job), and a delete that committed first is
  * simply not found, so the refusal is always the message below.
+ *
+ * LOCK ORDER is member, then guest — the order a member DELETE takes them: it
+ * locks the member row, and `introduced_by_member_id`'s ON DELETE SET NULL then
+ * updates every guest row pointing at it. Locking the guest first and the
+ * member second is the opposite order and deadlocks against that delete
+ * (40P01), and a deadlock abort would put the raw driver error back in the
+ * toast. So the guest is read WITHOUT a lock, the member is taken FOR SHARE,
+ * and the guest row is locked last, by the UPDATE itself. The unlocked read
+ * only feeds the existence and self-introduction checks, and the UPDATE
+ * re-asserts the club.
  */
 export async function applyUpdateGuestProfile(
 	input: UpdateGuestProfileInput,
@@ -338,8 +348,7 @@ export async function applyUpdateGuestProfile(
 			})
 			.from(guests)
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
-			.limit(1)
-			.for("update");
+			.limit(1);
 		if (!guest) throw new Error("Guest not found in this club.");
 
 		if (introducedByMemberId !== null) {
@@ -368,7 +377,7 @@ export async function applyUpdateGuestProfile(
 				introducedByMemberId,
 				updatedAt: new Date(),
 			})
-			.where(eq(guests.id, guest.id));
+			.where(and(eq(guests.id, guest.id), eq(guests.clubId, input.clubId)));
 		return { ok: true as const };
 	});
 }
