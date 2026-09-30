@@ -5,18 +5,19 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "#/db";
 import { guests, meetings, members, roleSlots } from "#/db/schema";
 import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
-import { toStoredPhone } from "#/lib/phone";
-import { logActivity } from "./activity";
-import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	type BroughtCount,
 	countBroughtByMember,
 	GUEST_TEXT_MAX,
 	type GuestIntroducerRow,
-	type GuestKind,
+	type GuestProfileFields,
+	HOME_CLUB_TOO_LONG_MESSAGE,
 	normalizeHomeClub,
-	type UpdateGuestProfileInput,
-} from "./guest-pipeline-schemas";
+} from "#/lib/guest-profile";
+import { toStoredPhone } from "#/lib/phone";
+import { logActivity } from "./activity";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
+import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
 // Either the pooled client or a caller's transaction, so this can run inside a
@@ -201,8 +202,9 @@ export async function applyAssignGuestToSlot(
 export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
 	"The member who introduced this guest must be on this club's roster.";
 
-/** `applyUpdateGuestProfile` re-checks the home-club cap the schema applies. */
-export const HOME_CLUB_TOO_LONG_MESSAGE = "That club name is too long.";
+/** `applyUpdateGuestProfile` refuses a joined guest as their own introducer. */
+export const GUEST_CANNOT_INTRODUCE_SELF_MESSAGE =
+	"A guest can't be recorded as having introduced themselves.";
 
 /** One member the "Introduced by" picker offers. */
 export interface IntroducerOption {
@@ -212,11 +214,24 @@ export interface IntroducerOption {
 	status: "active" | "inactive";
 }
 
-export interface GuestProfile {
-	kind: GuestKind;
-	homeClub: string | null;
-	introducedByMemberId: string | null;
+export interface GuestProfile extends GuestProfileFields {
 	roster: IntroducerOption[];
+}
+
+/**
+ * The introducer join, scoped to THIS club as well as to the id.
+ * `introduced_by_member_id` is a bare FK to `members`, which the database does
+ * not tie to the guest's club; the write path refuses a cross-club id, and
+ * every read joins through this so a row written some other way names NOBODY —
+ * neither its name nor its id reaches the client. Such a guest loads as "no
+ * introducer", which is also why saving them does not fail on an introducer
+ * the officer never saw.
+ */
+function introducerOfClub(clubId: string) {
+	return and(
+		eq(members.id, guests.introducedByMemberId),
+		eq(members.clubId, clubId),
+	);
 }
 
 /**
@@ -235,9 +250,10 @@ export async function loadGuestProfile(
 		.select({
 			kind: guests.kind,
 			homeClub: guests.homeClub,
-			introducedByMemberId: guests.introducedByMemberId,
+			introducedByMemberId: members.id,
 		})
 		.from(guests)
+		.leftJoin(members, introducerOfClub(clubId))
 		.where(and(eq(guests.id, guestId), eq(guests.clubId, clubId)))
 		.limit(1);
 	if (!guest) return null;
@@ -250,21 +266,15 @@ export async function loadGuestProfile(
 }
 
 /** One guest's kind / home club / introducer, for VP Membership's rows. */
-export interface GuestProfileRow extends GuestIntroducerRow {
-	kind: GuestKind;
-	homeClub: string | null;
-}
+export interface GuestProfileRow
+	extends GuestIntroducerRow,
+		GuestProfileFields {}
 
 /**
  * Every guest's kind, home club and introducer in this club, plus the
  * per-member "brought" counts (#1050) — derived from these same rows by
  * `countBroughtByMember`, so the tally always matches what the page lists.
- *
- * The introducer's name comes from a join that is scoped to THIS club as well
- * as to the id. `introduced_by_member_id` is a bare FK to `members`, which
- * the database does not tie to the guest's club; the write path refuses a
- * cross-club id, and this join is the read side of the same boundary, so a
- * row written some other way names nobody rather than another club's member.
+ * The introducer (id AND name) comes through `introducerOfClub`.
  */
 export async function loadGuestProfiles(clubId: string): Promise<{
 	rows: GuestProfileRow[];
@@ -275,17 +285,11 @@ export async function loadGuestProfiles(clubId: string): Promise<{
 			guestId: guests.id,
 			kind: guests.kind,
 			homeClub: guests.homeClub,
-			introducedByMemberId: guests.introducedByMemberId,
+			introducedByMemberId: members.id,
 			introducedByName: members.name,
 		})
 		.from(guests)
-		.leftJoin(
-			members,
-			and(
-				eq(members.id, guests.introducedByMemberId),
-				eq(members.clubId, clubId),
-			),
-		)
+		.leftJoin(members, introducerOfClub(clubId))
 		.where(eq(guests.clubId, clubId));
 	return { rows, brought: countBroughtByMember(rows) };
 }
@@ -305,9 +309,17 @@ export async function loadGuestProfiles(clubId: string): Promise<{
  *   membership row with this `club_id`, INACTIVE INCLUDED — the rule
  *   `applyLinkGuestToMember` and its roster picker use. A former member who
  *   brought a guest last year still brought them; history an import carries
- *   in names people who have since lapsed.
+ *   in names people who have since lapsed. A guest's OWN converted membership
+ *   is refused: nobody brings themselves.
  * - Null clears the introducer. Omitting it clears it too, like the contact
- *   fields on `applyUpdateGuest`: the form always sends what it shows.
+ *   fields on `applyUpdateGuest`.
+ *
+ * ONE transaction, with the introducer's row read `FOR SHARE`: a member
+ * deleted between the check and the UPDATE would otherwise surface as a raw
+ * foreign-key violation, SQL and parameters included, in the officer's toast.
+ * The share lock makes a concurrent delete wait for this write (the FK then
+ * nulls the pointer, which is its job), and a delete that committed first is
+ * simply not found, so the refusal is always the message below.
  */
 export async function applyUpdateGuestProfile(
 	input: UpdateGuestProfileInput,
@@ -318,35 +330,45 @@ export async function applyUpdateGuestProfile(
 	}
 	const introducedByMemberId = input.introducedByMemberId ?? null;
 
-	const [guest] = await db
-		.select({ id: guests.id })
-		.from(guests)
-		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
-		.limit(1);
-	if (!guest) throw new Error("Guest not found in this club.");
+	return db.transaction(async (tx) => {
+		const [guest] = await tx
+			.select({
+				id: guests.id,
+				convertedMembershipId: guests.convertedMembershipId,
+			})
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1)
+			.for("update");
+		if (!guest) throw new Error("Guest not found in this club.");
 
-	if (introducedByMemberId !== null) {
-		const [introducer] = await db
-			.select({ id: members.id })
-			.from(members)
-			.where(
-				and(
-					eq(members.id, introducedByMemberId),
-					eq(members.clubId, input.clubId),
-				),
-			)
-			.limit(1);
-		if (!introducer) throw new Error(INTRODUCER_NOT_IN_CLUB_MESSAGE);
-	}
+		if (introducedByMemberId !== null) {
+			if (introducedByMemberId === guest.convertedMembershipId) {
+				throw new Error(GUEST_CANNOT_INTRODUCE_SELF_MESSAGE);
+			}
+			const [introducer] = await tx
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(
+						eq(members.id, introducedByMemberId),
+						eq(members.clubId, input.clubId),
+					),
+				)
+				.limit(1)
+				.for("share");
+			if (!introducer) throw new Error(INTRODUCER_NOT_IN_CLUB_MESSAGE);
+		}
 
-	await db
-		.update(guests)
-		.set({
-			kind: input.kind,
-			homeClub,
-			introducedByMemberId,
-			updatedAt: new Date(),
-		})
-		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)));
-	return { ok: true as const };
+		await tx
+			.update(guests)
+			.set({
+				kind: input.kind,
+				homeClub,
+				introducedByMemberId,
+				updatedAt: new Date(),
+			})
+			.where(eq(guests.id, guest.id));
+		return { ok: true as const };
+	});
 }

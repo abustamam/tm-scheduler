@@ -1,20 +1,24 @@
 /**
  * The pure half of #1050: the input schema, the home-club rule, the caption,
  * and the per-member "brought" tally. The database half is
- * `guest-profile.integration.test.ts`.
+ * `src/server/guest-profile.integration.test.ts`.
  */
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { guestKindEnum } from "#/db/schema";
 import {
+	guestBookSchema,
+	updateGuestProfileSchema,
+} from "#/server/guest-pipeline-schemas";
+import {
 	countBroughtByMember,
 	GUEST_KINDS,
 	GUEST_TEXT_MAX,
-	guestBookSchema,
 	guestKindCaption,
+	HOME_CLUB_TOO_LONG_MESSAGE,
 	normalizeHomeClub,
-	updateGuestProfileSchema,
-} from "./guest-pipeline-schemas";
+	profileFieldsChanged,
+} from "./guest-profile";
 
 describe("GUEST_KINDS", () => {
 	it("is exactly the database enum's values, in order", () => {
@@ -57,7 +61,16 @@ describe("updateGuestProfileSchema", () => {
 				kind: "visiting_toastmaster",
 				homeClub: "x".repeat(121),
 			}),
-		).toThrow(/too long/i);
+		).toThrow(HOME_CLUB_TOO_LONG_MESSAGE);
+	});
+
+	it("does NOT refuse an over-long home club on a Visitor — it is about to be cleared", () => {
+		const parsed = updateGuestProfileSchema.parse({
+			...base,
+			kind: "visitor",
+			homeClub: "x".repeat(500),
+		});
+		expect(parsed.kind).toBe("visitor");
 	});
 
 	it("shares its cap with the guest-book name", () => {
@@ -140,5 +153,38 @@ describe("countBroughtByMember", () => {
 				{ guestId: "g1", introducedByMemberId: "x", introducedByName: null },
 			]),
 		).toEqual([]);
+	});
+});
+
+describe("profileFieldsChanged", () => {
+	const loaded = {
+		kind: "guest_speaker" as const,
+		homeClub: "Laguna",
+		introducedByMemberId: "m1",
+	};
+
+	it("is false when nothing changed, including whitespace-only home club edits", () => {
+		expect(profileFieldsChanged(loaded, { ...loaded })).toBe(false);
+		expect(
+			profileFieldsChanged(loaded, { ...loaded, homeClub: "  Laguna " }),
+		).toBe(false);
+		expect(
+			profileFieldsChanged(
+				{ kind: "visitor", homeClub: null, introducedByMemberId: null },
+				{ kind: "visitor", homeClub: null, introducedByMemberId: null },
+			),
+		).toBe(false);
+	});
+
+	it("is true when any one of the three changed", () => {
+		expect(
+			profileFieldsChanged(loaded, { ...loaded, kind: "visiting_toastmaster" }),
+		).toBe(true);
+		expect(profileFieldsChanged(loaded, { ...loaded, homeClub: "Other" })).toBe(
+			true,
+		);
+		expect(
+			profileFieldsChanged(loaded, { ...loaded, introducedByMemberId: null }),
+		).toBe(true);
 	});
 });

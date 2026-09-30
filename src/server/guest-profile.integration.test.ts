@@ -16,14 +16,17 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members } from "#/db/schema";
+import { guests, members, people } from "#/db/schema";
+import { HOME_CLUB_TOO_LONG_MESSAGE } from "#/lib/guest-profile";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	seedPerson,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -32,7 +35,7 @@ const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE, requireClubRole } =
 	await import("#/server/guards");
 const {
 	applyUpdateGuestProfile,
-	HOME_CLUB_TOO_LONG_MESSAGE,
+	GUEST_CANNOT_INTRODUCE_SELF_MESSAGE,
 	INTRODUCER_NOT_IN_CLUB_MESSAGE,
 	loadGuestProfile,
 	loadGuestProfiles,
@@ -147,6 +150,77 @@ describe.skipIf(!hasTestDb)(
 				kind: "visitor",
 				homeClub: null,
 			});
+		});
+
+		it("CLEARS, rather than refuses, an over-long home club on a Visitor", async () => {
+			await applyUpdateGuestProfile({
+				clubId: seed.clubId,
+				guestId,
+				kind: "visitor",
+				homeClub: "x".repeat(500),
+			});
+			expect(await stored(guestId)).toMatchObject({
+				kind: "visitor",
+				homeClub: null,
+			});
+		});
+
+		it("an introducer deleted mid-write is refused with the message, not a raw FK error", async () => {
+			// The member row is read FOR SHARE inside the write's transaction. A
+			// concurrent delete holding that row makes the check WAIT; once the
+			// delete commits the check finds nothing and refuses cleanly. Without
+			// the lock the check reads the row as still there and the UPDATE then
+			// dies on the foreign key, SQL and parameters in the officer's toast.
+			const personId = await seedPerson({ name: `Leaving ${run}` });
+			const [leaving] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name: `Leaving ${run}` })
+				.returning({ id: members.id });
+			if (!leaving) throw new Error("failed to seed member");
+			try {
+				const blocker = await openBlockingTx(async (tx) => {
+					await tx.delete(members).where(eq(members.id, leaving.id));
+				});
+				const write = applyUpdateGuestProfile({
+					clubId: seed.clubId,
+					guestId,
+					kind: "visitor",
+					introducedByMemberId: leaving.id,
+				});
+				write.catch(() => {});
+				await waitForLockWait("for share", blocker.pid);
+				await blocker.commit();
+				await expect(write).rejects.toThrow(INTRODUCER_NOT_IN_CLUB_MESSAGE);
+				expect((await stored(guestId))?.introducedByMemberId).toBeNull();
+			} finally {
+				// Its membership is gone, so `cleanup` cannot find this person.
+				await testDb.delete(people).where(eq(people.id, personId));
+			}
+		});
+
+		it("refuses a joined guest as their own introducer", async () => {
+			await testDb
+				.update(guests)
+				.set({ convertedMembershipId: seed.memberId, stage: "joined" })
+				.where(eq(guests.id, guestId));
+			await expect(
+				applyUpdateGuestProfile({
+					clubId: seed.clubId,
+					guestId,
+					kind: "visitor",
+					introducedByMemberId: seed.memberId,
+				}),
+			).rejects.toThrow(GUEST_CANNOT_INTRODUCE_SELF_MESSAGE);
+			// Anyone else on the roster is still fine.
+			await applyUpdateGuestProfile({
+				clubId: seed.clubId,
+				guestId,
+				kind: "visitor",
+				introducedByMemberId: seed.adminMemberId,
+			});
+			expect((await stored(guestId))?.introducedByMemberId).toBe(
+				seed.adminMemberId,
+			);
 		});
 
 		it("refuses a home club over the cap, and writes nothing", async () => {
@@ -311,10 +385,25 @@ describe.skipIf(!hasTestDb)(
 					.set({ introducedByMemberId: other.memberId })
 					.where(eq(guests.id, guestId));
 				const { rows, brought } = await loadGuestProfiles(seed.clubId);
-				expect(
-					rows.find((r) => r.guestId === guestId)?.introducedByName,
-				).toBeNull();
+				const row = rows.find((r) => r.guestId === guestId);
+				expect(row?.introducedByName).toBeNull();
+				// The id does not leak either: the client never learns another
+				// club's membership id.
+				expect(row?.introducedByMemberId).toBeNull();
 				expect(brought).toEqual([]);
+				// Nor through the dialog's read — which is also why such a guest
+				// loads as "no introducer" and saves without a refusal the officer
+				// could not explain.
+				const profile = await loadGuestProfile(seed.clubId, guestId);
+				expect(profile?.introducedByMemberId).toBeNull();
+				await applyUpdateGuestProfile({
+					clubId: seed.clubId,
+					guestId,
+					kind: profile?.kind ?? "visitor",
+					homeClub: profile?.homeClub ?? null,
+					introducedByMemberId: profile?.introducedByMemberId ?? null,
+				});
+				expect((await stored(guestId))?.introducedByMemberId).toBeNull();
 			});
 
 			it("returns only this club's guests", async () => {

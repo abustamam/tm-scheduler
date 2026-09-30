@@ -36,6 +36,7 @@ import {
 	CONVERT_REACTIVATED_MESSAGE,
 	type ConvertNotice,
 } from "#/lib/guest-convert";
+import type { BroughtCount } from "#/lib/guest-profile";
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	convertGuestToMember,
@@ -49,6 +50,7 @@ import {
 	undoGuestConversion,
 	unlinkGuestFromMember,
 } from "#/server/guest-pipeline";
+import type { GuestProfileRow } from "#/server/guests";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/guest-pipeline", () => ({
@@ -123,13 +125,21 @@ const NO_NEXT_MEETING: NextMeetingSummary = {
 	nextMeeting: null,
 };
 
+/** No kind / home club / introducer on anyone by default (#1050). */
+const NO_PROFILES: { rows: GuestProfileRow[]; brought: BroughtCount[] } = {
+	rows: [],
+	brought: [],
+};
+
 async function renderRoute(
 	guests: PipelineGuestRow[],
 	inviteContext: NextMeetingSummary = NO_NEXT_MEETING,
 	readOnly = false,
+	profiles = NO_PROFILES,
 ) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		guests,
+		profiles,
 		clubId: "22222222-2222-4222-8222-222222222222",
 		clubName: "Downtown Club",
 		clubSlug: "downtown",
@@ -174,6 +184,60 @@ function cardTextColumn(name: string): HTMLElement {
 	expect(column, `no text column around "${name}"`).toBeTruthy();
 	return column as HTMLElement;
 }
+
+describe("VP Membership — kind, Brought by and Visitors introduced (#1050)", () => {
+	const ADA = "11111111-1111-4111-8111-111111111111";
+	const BEN = "33333333-3333-4333-8333-333333333333";
+	const SAM = "44444444-4444-4444-8444-444444444444";
+
+	it("shows the kind caption and who brought each guest, and the per-member count", async () => {
+		await renderRoute(
+			[guestRow(), guestRow({ id: BEN, name: "Ben Visitor", email: null })],
+			NO_NEXT_MEETING,
+			false,
+			{
+				rows: [
+					{
+						guestId: ADA,
+						kind: "guest_speaker",
+						homeClub: "Laguna Speakers",
+						introducedByMemberId: SAM,
+						introducedByName: "Sam Officer",
+					},
+					{
+						guestId: BEN,
+						kind: "visitor",
+						homeClub: null,
+						introducedByMemberId: SAM,
+						introducedByName: "Sam Officer",
+					},
+				],
+				brought: [{ memberId: SAM, name: "Sam Officer", count: 2 }],
+			},
+		);
+		const ada = within(cardTextColumn("Ada Guest"));
+		expect(ada.getByText("Guest speaker, Laguna Speakers")).toBeTruthy();
+		expect(ada.getByText("Brought by Sam Officer")).toBeTruthy();
+		// A Visitor gets no caption, but still their introducer.
+		const ben = cardTextColumn("Ben Visitor");
+		expect(ben.querySelector('[data-slot="guest-kind-caption"]')).toBeNull();
+		expect(within(ben).getByText("Brought by Sam Officer")).toBeTruthy();
+
+		const counts = document.querySelector(
+			'[data-slot="brought-by-counts"]',
+		) as HTMLElement;
+		expect(counts).not.toBeNull();
+		expect(within(counts).getByText("Sam Officer")).toBeTruthy();
+		expect(within(counts).getByText("2 guests")).toBeTruthy();
+	});
+
+	it("says no introductions are recorded when nobody brought anyone", async () => {
+		await renderRoute([guestRow()]);
+		expect(screen.getByText("Visitors introduced")).toBeTruthy();
+		expect(screen.getByText("No introductions recorded yet.")).toBeTruthy();
+		expect(document.querySelector('[data-slot="guest-brought-by"]')).toBeNull();
+	});
+});
 
 describe("VP Membership guest card — contact line", () => {
 	it("links the phone to WhatsApp and separates it from the email", async () => {

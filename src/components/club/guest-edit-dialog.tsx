@@ -14,19 +14,27 @@ import {
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { isStrandedConvertedGuest } from "#/lib/guest-convert";
-import { firstNameOf } from "#/lib/person-name";
-import { updateGuest } from "#/server/guest-pipeline";
 import {
 	GUEST_KIND_LABELS,
 	GUEST_KINDS,
 	GUEST_TEXT_MAX,
 	type GuestKind,
-} from "#/server/guest-pipeline-schemas";
+	profileFieldsChanged,
+} from "#/lib/guest-profile";
+import { firstNameOf } from "#/lib/person-name";
+import { updateGuest } from "#/server/guest-pipeline";
 import {
 	type GuestProfile,
 	getGuestProfile,
 	updateGuestProfile,
 } from "#/server/guests";
+
+/**
+ * The toast when the name and contact saved but the profile write was refused;
+ * the refusal's own message follows it.
+ */
+export const PROFILE_NOT_SAVED_PREFIX =
+	"Name and contact saved. Kind, home club and introducer were NOT saved:";
 
 /** The native `<select>`s' look, matching `Input`. */
 const SELECT_CLASS =
@@ -37,8 +45,10 @@ const SELECT_CLASS =
  * when the dialog OPENS rather than handed in by the caller: the meeting rail
  * has no pipeline row to hand in, and a caller-supplied copy is exactly the
  * stale-field hazard `onSaved` describes — reopen on a stale copy and save,
- * and the previous edit is reverted. `failed` saves the name and contact and
- * leaves these three alone; it never writes defaults over what is stored.
+ * and the previous edit is reverted. A save made while `loading` or after
+ * `failed` saves the name and contact and leaves these three alone; it never
+ * writes defaults over what is stored, and a slow read never blocks the
+ * name/contact edit that worked before these fields existed.
  */
 type ProfileState =
 	| { status: "loading" }
@@ -209,10 +219,15 @@ export function GuestEditDialog({
 			toast.error("Name is required.");
 			return;
 		}
+		const current = {
+			kind,
+			homeClub: kind === "visitor" ? null : homeClub.trim() || null,
+			introducedByMemberId: introducerId || null,
+		};
 		setBusy(true);
 		try {
-			// TWO phases with SEPARATE failure handling, because they fail in
-			// different worlds. Wrapping both in one `try` — which this did — fires
+			// SEPARATE failure handling per phase, because they fail in different
+			// worlds. Wrapping them in one `try` — which this did — fires
 			// `toast.success` and then `toast.error` for a single action whenever the
 			// refresh rejects, over a write that has already COMMITTED, and leaves
 			// the dialog open with no indication which half went wrong.
@@ -228,23 +243,6 @@ export function GuestEditDialog({
 						phone: String(form.get("phone") ?? "").trim() || null,
 					},
 				});
-				// The kind / home club / introducer, only once they were READ: a
-				// dialog that never loaded them has nothing true to write back. A
-				// second write rather than a field on `updateGuest`, because it has
-				// its own validation (the introducer must be on THIS club's roster)
-				// and both writes are idempotent, so a retry after a refusal here
-				// simply saves both again.
-				if (profileState.status === "ready") {
-					await updateGuestProfile({
-						data: {
-							clubId,
-							guestId: guest.id,
-							kind,
-							homeClub: kind === "visitor" ? null : homeClub.trim() || null,
-							introducedByMemberId: introducerId || null,
-						},
-					});
-				}
 			} catch (err) {
 				// The write itself. This is the user's error to see and act on —
 				// `applyUpdateGuest` refuses a phone/email that already belongs to
@@ -255,8 +253,31 @@ export function GuestEditDialog({
 				);
 				return;
 			}
-			toast.success("Guest updated.");
-			// REFRESH FIRST, CLOSE LAST — both halves matter.
+			// The kind / home club / introducer: a SECOND write, only when they
+			// were read AND the officer changed one of them. Unchanged, it is
+			// skipped, so fixing a name typo cannot overwrite a kind or introducer
+			// another officer set since this dialog opened. A separate server fn
+			// because it has its own validation (the introducer must be on THIS
+			// club's roster); both writes are idempotent, so a retry resends both
+			// harmlessly.
+			let profileError: string | null = null;
+			if (
+				profileState.status === "ready" &&
+				profileFieldsChanged(profileState.profile, current)
+			) {
+				try {
+					await updateGuestProfile({
+						data: { clubId, guestId: guest.id, ...current },
+					});
+				} catch (err) {
+					profileError =
+						err instanceof Error ? err.message : "Something went wrong.";
+				}
+			}
+			// REFRESH FIRST, CLOSE LAST — both halves matter, and the refresh runs
+			// even when the profile write failed: the name and contact COMMITTED,
+			// and a view left stale here prefills the old values on the next open,
+			// where saving writes them back over the edit that landed.
 			//
 			// Refresh: `onSaved` covers a caller whose fields live outside the
 			// loaders (see its doc), `router.invalidate()` covers the loader-backed
@@ -276,9 +297,16 @@ export function GuestEditDialog({
 				// The write LANDED; this is a stale view, not a failed save, and
 				// saying "something went wrong" about a change that is in the database
 				// is the more damaging error of the two. Swallowed deliberately: the
-				// success toast already told the truth, and the next navigation or
+				// toast below already tells the truth, and the next navigation or
 				// refetch repairs the display.
 			}
+			if (profileError !== null) {
+				// Half saved, and the toast says which half. Stay OPEN on the profile
+				// fields so the officer can correct the one that was refused.
+				toast.error(`${PROFILE_NOT_SAVED_PREFIX} ${profileError}`);
+				return;
+			}
+			toast.success("Guest updated.");
 			onOpenChange(false);
 		} finally {
 			setBusy(false);
@@ -421,10 +449,7 @@ export function GuestEditDialog({
 								Cancel
 							</Button>
 						</DialogClose>
-						<Button
-							type="submit"
-							disabled={busy || profileState.status === "loading"}
-						>
+						<Button type="submit" disabled={busy}>
 							{busy ? "Saving…" : "Save changes"}
 						</Button>
 					</DialogFooter>

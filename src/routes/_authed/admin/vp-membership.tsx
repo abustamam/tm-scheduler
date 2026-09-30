@@ -53,6 +53,7 @@ import {
 	isStrandedConvertedGuest,
 } from "#/lib/guest-convert";
 import { isInvitableStage } from "#/lib/guest-invite";
+import { type BroughtCount, guestKindCaption } from "#/lib/guest-profile";
 import { mailtoHref } from "#/lib/mailto";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
@@ -73,10 +74,6 @@ import {
 	undoGuestConversion,
 	unlinkGuestFromMember,
 } from "#/server/guest-pipeline";
-import {
-	type BroughtCount,
-	guestKindCaption,
-} from "#/server/guest-pipeline-schemas";
 import { type GuestProfileRow, getGuestProfiles } from "#/server/guests";
 
 export const Route = createFileRoute("/_authed/admin/vp-membership")({
@@ -102,7 +99,9 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 			getGuestPipeline({ data: club.clubId }),
 			getClubByIdentifier({ data: club.clubId }),
 			getGuestInviteContext({ data: club.clubId }),
-			getGuestProfiles({ data: club.clubId }),
+			// Captions and counts are decoration on this page: a failed read
+			// degrades to none of them rather than taking the pipeline down.
+			getGuestProfiles({ data: club.clubId }).catch(() => NO_PROFILES),
 		]);
 		return {
 			guests,
@@ -174,9 +173,7 @@ function toastError(err: unknown) {
 function VpMembership() {
 	const {
 		guests,
-		// Defaulted for a caller that stubs the loader without it (the route's
-		// own render test does); the loader itself always returns it.
-		profiles = NO_PROFILES,
+		profiles,
 		clubId,
 		clubName,
 		clubSlug,
