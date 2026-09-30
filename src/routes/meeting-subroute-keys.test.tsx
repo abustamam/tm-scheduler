@@ -56,6 +56,9 @@ vi.mock("#/server/meeting-agenda-edit", () => ({
 vi.mock("#/server/personal-meeting", () => ({
 	getPublicPersonalMeetingView: vi.fn(),
 }));
+vi.mock("#/server/role-definitions", () => ({
+	getPublicClubRoles: vi.fn().mockResolvedValue([]),
+}));
 vi.mock("#/lib/club-route", () => ({ resolveClubOrRedirect: vi.fn() }));
 vi.mock("#/server/club-logo", () => ({ getClubLogoMeta: vi.fn() }));
 vi.mock("#/server/voting", () => ({

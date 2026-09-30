@@ -147,6 +147,20 @@ export type NudgeInput =
 			 * rather than losing its link.
 			 */
 			personalUrl?: string | null;
+			/**
+			 * The role's card on the public roles guide (#933) — build it with
+			 * `rolesGuideUrl` (`#/lib/role-guide`). A GUEST holder's `confirm`
+			 * draft keeps the agenda link exactly where it always was — that page
+			 * is where they confirm, record a speech title and see the time and
+			 * place, none of which the guide can do — and gains this as a second,
+			 * separately labelled link after it.
+			 *
+			 * Read by `confirm` only, and only when there is no `personalUrl`: a
+			 * member's own page already carries the guide, so a member's draft is
+			 * byte-identical with or without this. A `recruit` draft asks someone
+			 * who has not said yes and never carries it. Blank counts as absent.
+			 */
+			guideUrl?: string | null;
 	  });
 
 export interface Nudge {
@@ -192,14 +206,19 @@ function messageFor(i: NudgeInput): string {
 	const link = i.personalUrl || i.shareUrl;
 	const owed = i.duties ?? [];
 	if (i.mode === "confirm") {
+		// The guest arm (#933): no personal page, but a guide card. The draft
+		// keeps its actionable link and APPENDS the guide, so every other draft
+		// stays byte-identical. `||` for the blank-is-absent reason above.
+		const guide =
+			!i.personalUrl && i.guideUrl ? ` Your role guide: ${i.guideUrl}` : "";
 		// TWO templates rather than one with an optional tail, because the
 		// no-duty draft has to stay BYTE-IDENTICAL to the one officers already
 		// send — five of the nine standard roles have no data-backed duty, so
 		// that is the common case, and it is the case an interpolated empty
 		// clause leaves reading "…meeting — you'll also need to . Details:".
 		return owed.length === 0
-			? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${link}`
-			: `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting — you'll also need to ${dutyClauseList(owed)}. Confirm and do that here: ${link}`;
+			? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${link}${guide}`
+			: `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting — you'll also need to ${dutyClauseList(owed)}. Confirm and do that here: ${link}${guide}`;
 	}
 	// "You'd", not "you'll": a recruit draft is asking, and stating what they
 	// WILL do to someone who has not said yes is the same presumption the

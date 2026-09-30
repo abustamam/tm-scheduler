@@ -21,6 +21,11 @@ import {
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { MAX_ROLE_REPEAT_SLOTS } from "#/lib/meeting-template-limits";
 import { deriveRoleKey } from "#/lib/role-def-match";
+import {
+	blankToNull,
+	ROLE_GUIDE_NOTES_MAX,
+	type RoleGuideNotesPatch,
+} from "#/lib/role-guide";
 import { isReadableClub } from "./club-readable-logic";
 import { isUniqueViolation } from "./pg-errors";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
@@ -91,6 +96,20 @@ export interface RoleDefinitionRow {
 	sortOrder: number;
 	isSpeakerRole: boolean;
 	description: string | null;
+	/**
+	 * The role's stable identity (#368), for the roles guide's per-role anchor
+	 * (#933) — the fragment the guest `confirm` draft links to. Not sensitive:
+	 * a snake_case of a role name, the same string every agenda binds on.
+	 * `listRoleDefinitions` always sets it; optional so a caller's hand-built
+	 * row without one reads as a key-less role (no anchor).
+	 */
+	key?: string | null;
+	/** The "before the meeting" half of the role's guide (#933). NULL when
+	 *  the club has written nothing; every surface then falls back to
+	 *  `description`. */
+	beforeNotes: string | null;
+	/** The "during the meeting" half of the role's guide (#933). */
+	duringNotes: string | null;
 	/** Number of existing slots referencing this role (blocks deletion when > 0).
 	 *  `undefined` unless the caller asked for it — computing it costs an
 	 *  aggregate join over `role_slots`, which only the admin roles page needs.
@@ -171,6 +190,9 @@ export async function listRoleDefinitions(
 		sortOrder: roleDefinitions.sortOrder,
 		isSpeakerRole: roleDefinitions.isSpeakerRole,
 		description: roleDefinitions.description,
+		key: roleDefinitions.key,
+		beforeNotes: roleDefinitions.beforeNotes,
+		duringNotes: roleDefinitions.duringNotes,
 		enabled: roleDefinitions.enabled,
 		standing: roleDefinitions.standing,
 	};
@@ -255,9 +277,28 @@ export async function loadPublicClubRoles(
 // (integration tests), not just through the schema.
 const descriptionField = z.string().nullable().optional();
 
-function normalizeDescription(value: string | null | undefined): string | null {
-	const trimmed = value?.trim();
-	return trimmed ? trimmed : null;
+// The two guide halves (#933). Same blank-is-null rule as `description`, with
+// one difference that matters: an ABSENT field (`undefined`) leaves the column
+// untouched instead of clearing it. `description` predates any client that
+// could omit it; these two arrive on a deploy, and a tab opened before it
+// posts the old payload — clearing on absence would wipe a club's guide text
+// on that tab's next ordinary save. Only an explicit value (blank → null)
+// writes.
+const guideNotesField = z
+	.string()
+	.max(ROLE_GUIDE_NOTES_MAX)
+	.nullable()
+	.optional();
+
+function guideNotesPatch(input: RoleGuideNotesPatch): RoleGuideNotesPatch {
+	const patch: RoleGuideNotesPatch = {};
+	if (input.beforeNotes !== undefined) {
+		patch.beforeNotes = blankToNull(input.beforeNotes);
+	}
+	if (input.duringNotes !== undefined) {
+		patch.duringNotes = blankToNull(input.duringNotes);
+	}
+	return patch;
 }
 
 // `MAX_ROLE_REPEAT_SLOTS`, not a re-typed literal (#task-10 review): this
@@ -325,7 +366,7 @@ export async function applyRoleDefinitionCreate(input: CreateRoleInput) {
 				defaultCount: input.defaultCount,
 				sortOrder: maxSort + 1,
 				isSpeakerRole: input.isSpeakerRole ?? false,
-				description: normalizeDescription(input.description),
+				description: blankToNull(input.description),
 			})
 			.returning({ id: roleDefinitions.id });
 	} catch (err) {
@@ -348,13 +389,17 @@ export const updateRoleSchema = z.object({
 	defaultCount: defaultCountField,
 	isSpeakerRole: z.boolean().optional(),
 	description: descriptionField,
+	beforeNotes: guideNotesField,
+	duringNotes: guideNotesField,
 });
 export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
 
 /** Edit an existing role's fields. Editing `defaultCount` only affects FUTURE
  *  generated meetings (via `generateSlotRows`); existing meetings' slots are
  *  unchanged. Description is read at display time, so edits go live everywhere
- *  (before-claim sheet + public shared link) immediately. The caller is
+ *  (before-claim sheet + public shared link) immediately. So are the two guide
+ *  halves (#933), which an omitted field leaves as they are — see
+ *  `guideNotesPatch`. The caller is
  *  responsible for the admin authorization check (see `updateClubRole`).
  *
  *  Deliberately does NOT touch `enabled` — see `applyRoleDefinitionSetEnabled`
@@ -369,7 +414,8 @@ export async function applyRoleDefinitionUpdate(input: UpdateRoleInput) {
 			category: input.category,
 			defaultCount: input.defaultCount,
 			isSpeakerRole: input.isSpeakerRole ?? false,
-			description: normalizeDescription(input.description),
+			description: blankToNull(input.description),
+			...guideNotesPatch(input),
 		})
 		.where(
 			and(

@@ -134,6 +134,7 @@ async function renderBody(view: PersonalMeetingView, canRepick = true) {
 			onChanged={onChanged}
 			onNotYou={onNotYou}
 			canRepick={canRepick}
+			roleGuides={[]}
 		/>,
 	);
 	return { onChanged, onNotYou };

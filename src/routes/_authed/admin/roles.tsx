@@ -16,6 +16,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { pairedRoleIds } from "#/lib/meeting-roles";
+import { ROLE_GUIDE_NOTES_MAX } from "#/lib/role-guide";
 import {
 	createClubRole,
 	deleteClubRole,
@@ -147,11 +148,12 @@ function RolesManager() {
 					</h1>
 					<p className="text-sm text-muted-foreground">
 						The role template for {adminClub.name}. Descriptions show on the
-						sign-up sheet and the public shared agenda. Changing a role's
-						default count only affects meetings created afterwards — existing
-						meetings keep their slots. Not running a role yet? Disable it
-						instead of deleting it — it stays here, ready to turn back on, and
-						stops being offered elsewhere in the meantime.
+						sign-up sheet and the public shared agenda; each role's Before and
+						During guide shows on the member's own meeting page and the public
+						roles guide. Changing a role's default count only affects meetings
+						created afterwards — existing meetings keep their slots. Not running
+						a role yet? Disable it instead of deleting it — it stays here, ready
+						to turn back on, and stops being offered elsewhere in the meantime.
 					</p>
 				</div>
 				<Button
@@ -293,6 +295,11 @@ function RoleCard({
 					defaultCount: Number(form.get("defaultCount") ?? 1),
 					isSpeakerRole: form.get("isSpeakerRole") === "on",
 					description: String(form.get("description") ?? ""),
+					// Sent every save, blank included: a cleared box clears the
+					// field (#933). The server leaves an OMITTED field alone, which
+					// is for tabs opened before this form had these boxes.
+					beforeNotes: String(form.get("beforeNotes") ?? ""),
+					duringNotes: String(form.get("duringNotes") ?? ""),
 				},
 			});
 			toast.success(`Saved ${role.name}.`);
@@ -442,6 +449,35 @@ function RoleCard({
 							className={textareaClass}
 							placeholder="What this role does — shown on the sign-up sheet and shared agenda."
 						/>
+					</div>
+
+					{/* The role's guide (#933): shown on the member's own meeting page
+					    and on the public roles guide. One step per line. */}
+					<div className="grid gap-3 sm:grid-cols-2">
+						<div className="space-y-1.5">
+							<Label htmlFor={`before-${role.id}`}>Before the meeting</Label>
+							<textarea
+								id={`before-${role.id}`}
+								name="beforeNotes"
+								rows={4}
+								maxLength={ROLE_GUIDE_NOTES_MAX}
+								defaultValue={role.beforeNotes ?? ""}
+								className={textareaClass}
+								placeholder="How to prepare, one step per line. Leave blank to show just the description."
+							/>
+						</div>
+						<div className="space-y-1.5">
+							<Label htmlFor={`during-${role.id}`}>During the meeting</Label>
+							<textarea
+								id={`during-${role.id}`}
+								name="duringNotes"
+								rows={4}
+								maxLength={ROLE_GUIDE_NOTES_MAX}
+								defaultValue={role.duringNotes ?? ""}
+								className={textareaClass}
+								placeholder="What to do in the room, one step per line."
+							/>
+						</div>
 					</div>
 
 					<div className="flex flex-wrap items-center gap-4">

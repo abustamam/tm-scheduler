@@ -61,6 +61,12 @@ export const listClubRoles = createServerFn({ method: "GET" })
  *  it, and computing it would put an aggregate join over the multi-tenant
  *  `role_slots` table behind an unauthenticated hover.
  *
+ *  Since #933 each row also carries the role's `key` and its Before/During
+ *  guide (`beforeNotes` / `duringNotes`) — the roles guide renders them with a
+ *  per-key anchor, and the personal meeting page reads the same rows for the
+ *  roles a member holds. Club-written reference prose, like `description`,
+ *  and nothing else new: no counts, no people.
+ *
  *  Ungated as to SESSION, not as to ARCHIVE: an archived club yields `[]`. The
  *  gate lives in `loadPublicClubRoles` rather than in this handler, because a
  *  `createServerFn` body is unreachable from a test (#544). */
@@ -77,8 +83,9 @@ export const createClubRole = createServerFn({ method: "POST" })
 		return applyRoleDefinitionCreate(data);
 	});
 
-/** Edit an existing role's fields (name/category/count/speaker flag/description).
- *  AUTHED — requires admin. */
+/** Edit an existing role's fields (name/category/count/speaker flag/description,
+ *  and since #933 the Before/During guide). AUTHED — requires admin, the same
+ *  gate for every field: the guide is edited wherever `description` is. */
 export const updateClubRole = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updateRoleSchema.parse(input))
 	.handler(async ({ data }) => {

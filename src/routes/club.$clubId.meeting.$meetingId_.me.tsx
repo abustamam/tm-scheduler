@@ -48,9 +48,22 @@
 // meeting that does not exist, picked a name, and only THEN learned the link was
 // dead. So the loader checks the meeting first, through the same public,
 // archive-gated reader the duty pages beside this one use, and a miss renders
-// the same page they do. It returns nothing: the page's data still comes from
-// the query below, and the loader's payload is dehydrated into the document, so
-// shipping the agenda here would be a second copy nobody reads.
+// the same page they do. It returns no MEETING data: the page's data still
+// comes from the query below, and the loader's payload is dehydrated into the
+// document, so shipping the agenda here would be a second copy nobody reads.
+//
+// ## The role guide rides the loader (#933)
+//
+// What it does return is the club's roles guide — `getPublicClubRoles`, the
+// same rows `/club/$clubId/roles-guide` renders to anyone — so each role the
+// member holds can show its Before/During text under its duties. It is the
+// club's public reference prose, per CLUB rather than per member, so it needs
+// no identity and does not wait for one: it is read in parallel with the
+// existence check and matched to the held roles by key (name for a key-less
+// custom role) in the body. It reads the same for every viewer — signed out,
+// another club's member, anyone holding the link — and is empty for an
+// archived club, whose page is the not-found one anyway. A role the club has
+// since disabled is not in that list, so it shows its duties and no guide.
 //
 // ## No new authorization
 //
@@ -82,6 +95,7 @@ import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { resolveAsSeed, useCurrentMember } from "#/lib/member-identity";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
+import { getPublicClubRoles } from "#/server/role-definitions";
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId_/me")({
 	// Loose: a malformed `?as=` must fall through to the identity picker, never
@@ -96,12 +110,19 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId_/me")({
 		// No `meeting.clubId` comparison afterwards, unlike the duty pages: the
 		// resolver is already scoped to `clubUuid`, so a uuid from another club
 		// comes back "Meeting not found." and is caught here.
-		await getPublicMeetingByKey({
-			data: { clubId: context.clubUuid, key: params.meetingId },
-		}).catch((err) => {
-			if (isMeetingNotFoundError(err)) throw notFound();
-			throw err;
-		});
+		const [, roleGuides] = await Promise.all([
+			getPublicMeetingByKey({
+				data: { clubId: context.clubUuid, key: params.meetingId },
+			}).catch((err) => {
+				if (isMeetingNotFoundError(err)) throw notFound();
+				throw err;
+			}),
+			// Supplementary: a failed guide read must not take down the page
+			// whose job is the member's answer, so it degrades to "no guide" —
+			// each role then shows its duties and nothing under them.
+			getPublicClubRoles({ data: context.clubUuid }).catch(() => []),
+		]);
+		return { roleGuides };
 	},
 	// An existence check, so once per meeting is enough. Without this the
 	// `?as=` strip below — a REPLACE navigation to the same match — would pay
@@ -123,6 +144,7 @@ function PersonalMeetingRoute() {
 	// club UUID is context, not a second round trip.
 	const { clubUuid } = Route.useRouteContext();
 	const { as } = Route.useSearch();
+	const { roleGuides } = Route.useLoaderData();
 	const navigate = Route.useNavigate();
 	const queryClient = useQueryClient();
 
@@ -280,6 +302,7 @@ function PersonalMeetingRoute() {
 				onChanged={refresh}
 				onNotYou={promptIdentity}
 				canRepick={!sessionMember}
+				roleGuides={roleGuides}
 			/>
 		</PersonalMeetingShell>
 	);

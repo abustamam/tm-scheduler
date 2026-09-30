@@ -64,6 +64,8 @@ function role(over: Partial<RoleDefinitionRow> & { id: string; name: string }) {
 		sortOrder: 0,
 		isSpeakerRole: false,
 		description: null,
+		beforeNotes: null,
+		duringNotes: null,
 		enabled: true,
 		standing: true,
 		slotCount: 0,
