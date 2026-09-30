@@ -1,6 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
+	assertGeChangeAllowed,
+	isClubAgendaAdopted,
+} from "./club-agendas-logic";
+import {
 	getClubCharter,
 	markClubChartered,
 	markClubCharteredSchema,
@@ -58,23 +62,31 @@ export const updateClubProfile = createServerFn({ method: "POST" })
 		return applyClubProfileUpdate(data);
 	});
 
-/** The club's agenda run-of-show settings (#367) for the settings form.
- *  AUTHED — any active member of the club. */
+/** The club's agenda run-of-show settings (#367) for the settings form, plus
+ *  `adopted` (#910): whether the club runs its own default agenda, which locks
+ *  the General Evaluator checkbox. AUTHED — any active member of the club. */
 export const loadClubAgendaSettings = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubViewAccess(currentUser.id, clubId);
-		return getClubAgendaSettings(clubId);
+		const [settings, adopted] = await Promise.all([
+			getClubAgendaSettings(clubId),
+			isClubAgendaAdopted(clubId),
+		]);
+		return { ...settings, adopted };
 	});
 
 /** Choose who introduces the functionaries on the generated agenda (#367).
- *  AUTHED — requires admin club role. */
+ *  AUTHED — requires admin club role. A CHANGE to that choice is refused while
+ *  the club has a default agenda (#910, spec D5): it shapes only the standard
+ *  agenda, so the rule holds here and not only in the disabled checkbox. */
 export const updateClubAgendaSettings = createServerFn({ method: "POST" })
 	.validator((input: unknown) => clubAgendaSettingsSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		await assertGeChangeAllowed(data.clubId, data.geIntroducesFunctionaries);
 		return applyClubAgendaSettingsUpdate(data);
 	});
 

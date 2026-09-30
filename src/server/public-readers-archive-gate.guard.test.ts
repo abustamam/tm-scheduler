@@ -401,6 +401,26 @@ const REVIEWED_UNGATED: Record<string, string> = {
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	removeAgendaRoleFn:
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	// #910's Agendas page. Same shape as the block above, through the
+	// club-keyed sibling `requireClubTemplateEditor` (requireUser +
+	// assertClubNotArchived + requireClubRole(["admin"])), which the sweep
+	// cannot see through either. Checked the same way:
+	// `meeting-templates-authz.guard.test.ts` sweeps `club-agendas.ts` and reads
+	// these reason strings.
+	listClubAgendas:
+		"officer-gated + archive-gated inside requireClubTemplateEditor (#910)",
+	renameClubTemplate:
+		"officer-gated + archive-gated inside requireClubTemplateEditor (#910)",
+	duplicateClubTemplateFn:
+		"officer-gated + archive-gated inside requireClubTemplateEditor (#910)",
+	setClubTemplateEnabled:
+		"officer-gated + archive-gated inside requireClubTemplateEditor (#910)",
+	deleteClubTemplateFn:
+		"officer-gated + archive-gated inside requireClubTemplateEditor (#910)",
+	setClubDefaultTemplate:
+		"officer-gated + archive-gated inside requireClubTemplateEditor (#910)",
+	adoptStandardAgendaFn:
+		"officer-gated + archive-gated inside requireClubTemplateEditor (#910)",
 	getPacketContext:
 		"gated inside loadPacketContext via isReadableClubForMeeting (#589); returns an empty packet context for an archived club, so the picker offers nothing",
 	getVoteTally:

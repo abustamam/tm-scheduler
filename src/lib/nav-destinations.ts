@@ -3,6 +3,7 @@ import {
 	CalendarDays,
 	CalendarPlus,
 	ClipboardCheck,
+	ClipboardList,
 	Compass,
 	Flag,
 	GraduationCap,
@@ -195,6 +196,16 @@ export const NAV_DESTINATIONS = [
 		group: "setup",
 		grant: "officer",
 		icon: ListChecks,
+	},
+	{
+		// The club's own agendas and its default (#910). Between Meeting roles
+		// and Club settings: it is the other half of "how our meeting runs".
+		key: "agendas",
+		to: "/admin/agendas",
+		label: "Agendas",
+		group: "setup",
+		grant: "officer",
+		icon: ClipboardList,
 	},
 	{
 		key: "club-settings",

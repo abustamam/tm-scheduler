@@ -924,6 +924,26 @@ runs in the Dockerfile `CMD` after migrations, beside the Pathways catalog seede
 manual script until v1.23.0.0 and production was never seeded, so "Change meeting type" offered
 every club an empty picker for two releases.
 
+**Club template / Club default agenda** (#909, #910) — a **club template** is a
+`meeting_templates` row with `club_id` set and `meeting_id` NULL: the club's own agenda shape,
+saved from a meeting (#909's Save as club template) or made by adopting the standard agenda. It
+is never edited in place — there is no template editor (spec D14); an officer changes a meeting's
+agenda and saves it back. Applying one to a meeting COPIES it into that meeting's private row
+(D11), so nothing a club does to its templates later reaches a meeting already on one.
+The **club default agenda** is `clubs.default_template_id` (D6): the club template new meetings
+start on a private copy of, from every creation path (`generateMeetingSlots`). NULL means the
+club runs GavelUp's standard agenda, and **"adopted" means exactly `default_template_id IS NOT
+NULL`** (D13). Setting a default also moves each upcoming meeting still on the standard agenda —
+`template_id` NULL, or a materialised copy nobody changed (`agendaMatchesStandard`, because
+merely opening the editor materialises one) — but ONLY where that releases no claimed role and
+drops no speech (D12); every other meeting is named back to the officer, never silently changed.
+Adopting creates a club template from the standard agenda as it would materialise for the club
+that day and makes it the default in one step, and from then on standard-agenda improvements do
+not reach it (spec R1, said in the adopt dialog). While a default is set the "General Evaluator
+introduces the functionaries" setting is locked (D5): it shapes only the standard agenda. The FK
+cannot say "a club-owned row of THIS club", so every writer checks that in its own query
+(`club-agendas-logic.ts`). See `docs/superpowers/specs/2026-08-25-club-owned-agendas.md`.
+
 **Proven actor** — a member id that came from the caller's OWN active membership in the club being
 written to, resolved from a magic-link session. Its opposite is an **asserted** actor: a member id
 that arrived on the wire and was validated only as a real, active member of this club.

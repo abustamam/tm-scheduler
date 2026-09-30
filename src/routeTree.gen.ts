@@ -62,6 +62,7 @@ import { Route as AuthedAdminDuesRouteImport } from './routes/_authed/admin/dues
 import { Route as AuthedAdminDcpRouteImport } from './routes/_authed/admin/dcp'
 import { Route as AuthedAdminClubSettingsRouteImport } from './routes/_authed/admin/club-settings'
 import { Route as AuthedAdminCharterRouteImport } from './routes/_authed/admin/charter'
+import { Route as AuthedAdminAgendasRouteImport } from './routes/_authed/admin/agendas'
 import { Route as AuthedAdminActionItemsRouteImport } from './routes/_authed/admin/action-items'
 import { Route as ClubClubIdMeetingMeetingIdRouteImport } from './routes/club.$clubId.meeting.$meetingId'
 import { Route as ApiClubClubIdLogoRouteImport } from './routes/api/club.$clubId.logo'
@@ -350,6 +351,11 @@ const AuthedAdminCharterRoute = AuthedAdminCharterRouteImport.update({
   path: '/admin/charter',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedAdminAgendasRoute = AuthedAdminAgendasRouteImport.update({
+  id: '/admin/agendas',
+  path: '/admin/agendas',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedAdminActionItemsRoute = AuthedAdminActionItemsRouteImport.update({
   id: '/admin/action-items',
   path: '/admin/action-items',
@@ -501,6 +507,7 @@ export interface FileRoutesByFullPath {
   '/resources/which-path': typeof ResourcesWhichPathRoute
   '/resources/': typeof ResourcesIndexRoute
   '/admin/action-items': typeof AuthedAdminActionItemsRoute
+  '/admin/agendas': typeof AuthedAdminAgendasRoute
   '/admin/charter': typeof AuthedAdminCharterRoute
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/dcp': typeof AuthedAdminDcpRoute
@@ -574,6 +581,7 @@ export interface FileRoutesByTo {
   '/resources/which-path': typeof ResourcesWhichPathRoute
   '/resources': typeof ResourcesIndexRoute
   '/admin/action-items': typeof AuthedAdminActionItemsRoute
+  '/admin/agendas': typeof AuthedAdminAgendasRoute
   '/admin/charter': typeof AuthedAdminCharterRoute
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/dcp': typeof AuthedAdminDcpRoute
@@ -651,6 +659,7 @@ export interface FileRoutesById {
   '/resources/which-path': typeof ResourcesWhichPathRoute
   '/resources/': typeof ResourcesIndexRoute
   '/_authed/admin/action-items': typeof AuthedAdminActionItemsRoute
+  '/_authed/admin/agendas': typeof AuthedAdminAgendasRoute
   '/_authed/admin/charter': typeof AuthedAdminCharterRoute
   '/_authed/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/_authed/admin/dcp': typeof AuthedAdminDcpRoute
@@ -728,6 +737,7 @@ export interface FileRouteTypes {
     | '/resources/which-path'
     | '/resources/'
     | '/admin/action-items'
+    | '/admin/agendas'
     | '/admin/charter'
     | '/admin/club-settings'
     | '/admin/dcp'
@@ -801,6 +811,7 @@ export interface FileRouteTypes {
     | '/resources/which-path'
     | '/resources'
     | '/admin/action-items'
+    | '/admin/agendas'
     | '/admin/charter'
     | '/admin/club-settings'
     | '/admin/dcp'
@@ -877,6 +888,7 @@ export interface FileRouteTypes {
     | '/resources/which-path'
     | '/resources/'
     | '/_authed/admin/action-items'
+    | '/_authed/admin/agendas'
     | '/_authed/admin/charter'
     | '/_authed/admin/club-settings'
     | '/_authed/admin/dcp'
@@ -1334,6 +1346,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminCharterRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/admin/agendas': {
+      id: '/_authed/admin/agendas'
+      path: '/admin/agendas'
+      fullPath: '/admin/agendas'
+      preLoaderRoute: typeof AuthedAdminAgendasRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/admin/action-items': {
       id: '/_authed/admin/action-items'
       path: '/admin/action-items'
@@ -1510,6 +1529,7 @@ interface AuthedRouteChildren {
   AuthedScheduleRoute: typeof AuthedScheduleRoute
   AuthedSuperadminRoute: typeof AuthedSuperadminRouteWithChildren
   AuthedAdminActionItemsRoute: typeof AuthedAdminActionItemsRoute
+  AuthedAdminAgendasRoute: typeof AuthedAdminAgendasRoute
   AuthedAdminCharterRoute: typeof AuthedAdminCharterRoute
   AuthedAdminClubSettingsRoute: typeof AuthedAdminClubSettingsRoute
   AuthedAdminDcpRoute: typeof AuthedAdminDcpRoute
@@ -1540,6 +1560,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedScheduleRoute: AuthedScheduleRoute,
   AuthedSuperadminRoute: AuthedSuperadminRouteWithChildren,
   AuthedAdminActionItemsRoute: AuthedAdminActionItemsRoute,
+  AuthedAdminAgendasRoute: AuthedAdminAgendasRoute,
   AuthedAdminCharterRoute: AuthedAdminCharterRoute,
   AuthedAdminClubSettingsRoute: AuthedAdminClubSettingsRoute,
   AuthedAdminDcpRoute: AuthedAdminDcpRoute,

@@ -283,3 +283,114 @@ function qualifyRolesToken(beat: Beat): string {
 	if (group == null) return beat.detail;
 	return beat.detail.replaceAll("{roles}", `{roles:${group}}`);
 }
+
+// ---------------------------------------------------------------------------
+// "Still on the standard agenda" (#910)
+// ---------------------------------------------------------------------------
+
+/**
+ * The columns of a stored beat the comparator reads. Everything
+ * {@link TemplateBeatSeed} carries except `sortOrder`, which is not compared
+ * as a VALUE: the caller hands the beats over in `sort_order`, and the
+ * comparison is positional.
+ */
+export type ComparableBeat = Omit<TemplateBeatSeed, "sortOrder">;
+
+/** The two columns of a declared role the comparator reads. */
+export type ComparableRole = { key: string; defaultCount: number };
+
+/** A stored agenda, or the one the standard would produce, as compared. */
+export type ComparableAgenda = {
+	/** In `sort_order`. */
+	beats: readonly ComparableBeat[];
+	/** Any order; compared sorted by `key`. */
+	roles: readonly ComparableRole[];
+};
+
+/**
+ * Every beat column the comparison looks at. Listed rather than spread so a
+ * column added to the table later has to be decided about here: `id`,
+ * `template_id` and timestamps are the only columns deliberately left out.
+ */
+const COMPARED_BEAT_FIELDS = [
+	"kind",
+	"label",
+	"detail",
+	"minutes",
+	"roleKey",
+	"repeatsRoleKey",
+	"flex",
+	"handoff",
+	"clubGoverned",
+	"markGreen",
+	"markYellow",
+	"markRed",
+] as const satisfies readonly (keyof ComparableBeat)[];
+
+/** The three mark columns are `real` — FLOAT4 — so a stored mark reads back
+ *  rounded to single precision: a club's 2:20 Table Topics cap is 2.333…
+ *  minutes in the materialiser and 2.3333332538604736 out of Postgres.
+ *  Compared at the precision the column keeps, or every club with a window
+ *  that is not a whole half-minute would read as edited. */
+const FLOAT4_FIELDS: ReadonlySet<string> = new Set([
+	"markGreen",
+	"markYellow",
+	"markRed",
+]);
+
+function sameValue(field: string, a: unknown, b: unknown): boolean {
+	if (
+		FLOAT4_FIELDS.has(field) &&
+		typeof a === "number" &&
+		typeof b === "number"
+	)
+		return Math.fround(a) === Math.fround(b);
+	return a === b;
+}
+
+/**
+ * Whether a meeting's stored agenda is EXACTLY what the standard agenda would
+ * materialise for its club right now (#910).
+ *
+ * Exists because a private copy no longer implies an edit: merely opening the
+ * agenda editor materialises one (`loadAgendaDraft`). Setting a club default
+ * applies it to meetings still on the standard agenda, and without this every
+ * meeting an officer had so much as looked at would count as "kept its own
+ * edited agenda" and keep the old shape.
+ *
+ * `expected` must be computed NOW from the club's CURRENT settings and roles,
+ * never cached from when the copy was made. So a meeting opened last month,
+ * before the club renamed a role or changed its Table Topics window, reads as
+ * edited and is KEPT. That is the safe direction: the worst it costs is one
+ * meeting the officer re-applies by hand, where the other direction silently
+ * overwrites a real edit.
+ *
+ * Beats compared positionally, every column in `COMPARED_BEAT_FIELDS`; roles
+ * compared as a SET of `{key, defaultCount}`, sorted by key, so the order the
+ * declarations were written in does not matter.
+ *
+ * Pure and `#/db`-free, like the materialiser beside it, so every branch is a
+ * unit test.
+ */
+export function agendaMatchesStandard(
+	stored: ComparableAgenda,
+	expected: ComparableAgenda,
+): boolean {
+	if (stored.beats.length !== expected.beats.length) return false;
+	for (let i = 0; i < stored.beats.length; i++) {
+		const a = stored.beats[i] as ComparableBeat;
+		const b = expected.beats[i] as ComparableBeat;
+		for (const field of COMPARED_BEAT_FIELDS) {
+			if (!sameValue(field, a[field], b[field])) return false;
+		}
+	}
+	if (stored.roles.length !== expected.roles.length) return false;
+	const byKey = (x: ComparableRole, y: ComparableRole) =>
+		x.key < y.key ? -1 : x.key > y.key ? 1 : 0;
+	const a = [...stored.roles].sort(byKey);
+	const b = [...expected.roles].sort(byKey);
+	return a.every(
+		(role, i) =>
+			role.key === b[i]?.key && role.defaultCount === b[i]?.defaultCount,
+	);
+}

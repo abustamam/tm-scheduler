@@ -278,8 +278,14 @@ export function agendaEditable(status: string): boolean {
  * Split out of `materialiseForMeeting` (#966) so the connector's read path
  * can clock a never-edited meeting IN MEMORY with exactly the roles the copy
  * would be given, without writing the copy. A read only.
+ *
+ * Exported for #910: THE role build. Adopting the standard agenda declares
+ * its template's roles through this, and the "still on the standard agenda"
+ * comparison computes what a materialised copy SHOULD declare through this,
+ * so the three cannot come to disagree about what a standard agenda's roles
+ * are.
  */
-async function declaredRolesForSeeds(
+export async function declaredRolesForSeeds(
 	conn: DbOrTx,
 	clubId: string,
 	seeds: { roleKey: string | null; repeatsRoleKey: string | null }[],
@@ -339,6 +345,41 @@ async function declaredRolesForSeeds(
 			sortOrder: i,
 		};
 	});
+}
+
+/**
+ * The standard agenda as it would materialise for this club RIGHT NOW: the
+ * beats `materialiseRunOfShow` emits for the club's current GE variant and
+ * Table Topics window, and the roles `declaredRolesForSeeds` declares for them
+ * from the club's current role bank (#910).
+ *
+ * The same two calls `materialiseForMeeting` makes, from the same club
+ * columns, so a meeting whose copy was materialised and never touched compares
+ * equal to this (`agendaMatchesStandard`), and the template adoption writes is
+ * this. Null for a club id that matches no club.
+ */
+export async function standardAgendaForClub(
+	conn: DbOrTx,
+	clubId: string,
+): Promise<{
+	seeds: ReturnType<typeof materialiseRunOfShow>;
+	roles: Awaited<ReturnType<typeof declaredRolesForSeeds>>;
+} | null> {
+	const [club] = await conn
+		.select({
+			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
+		})
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (!club) return null;
+	const seeds = materialiseRunOfShow(club.geIntroducesFunctionaries, {
+		minSeconds: club.tableTopicsMinSeconds,
+		maxSeconds: club.tableTopicsMaxSeconds,
+	});
+	return { seeds, roles: await declaredRolesForSeeds(conn, clubId, seeds) };
 }
 
 /** What a write to a cancelled meeting's agenda is refused with. Exported so

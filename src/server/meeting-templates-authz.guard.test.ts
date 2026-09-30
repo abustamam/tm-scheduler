@@ -32,13 +32,25 @@
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
-/** Every module whose server fns gate through `requireMeetingTemplateEditor`.
- *  Adding one here is what enrolls it; the waiver cross-check below fails until
- *  you do. */
+/** Every module whose server fns gate through `requireMeetingTemplateEditor`
+ *  or its club-keyed sibling `requireClubTemplateEditor` (#910). Adding one
+ *  here is what enrolls it; the waiver cross-check below fails until you do. */
 const GATED_MODULES = [
 	"src/server/meeting-templates.ts",
 	"src/server/meeting-agenda-edit.ts",
+	"src/server/club-agendas.ts",
 ] as const;
+
+/** The shared helpers, each of which must keep all three gates (see the last
+ *  but three case below). */
+const HELPERS = [
+	"requireMeetingTemplateEditor",
+	"requireClubTemplateEditor",
+] as const;
+
+/** An AWAITED call to one of the helpers — a bare mention (an import, or the
+ *  name in a string) is not a gate. */
+const HELPER_CALL = new RegExp(`await\\s+(?:${HELPERS.join("|")})\\(`);
 
 const WAIVER_SOURCE = readSource(
 	"src/server/public-readers-archive-gate.guard.test.ts",
@@ -70,7 +82,8 @@ describe("meeting template and agenda-editor server fns", () => {
 		// the shape CLAUDE.md records as "a silently absent gate reads exactly
 		// like a passing one".
 		const found = allFns();
-		expect(found.length).toBeGreaterThanOrEqual(12);
+		// 12 before #910, and #910's module adds seven.
+		expect(found.length).toBeGreaterThanOrEqual(19);
 		for (const file of GATED_MODULES) {
 			expect(
 				found.filter((f) => f.file === file).length,
@@ -82,7 +95,7 @@ describe("meeting template and agenda-editor server fns", () => {
 	it("routes every fn through a gate that resolves a session", () => {
 		for (const fn of allFns()) {
 			const gated =
-				fn.body.includes("requireMeetingTemplateEditor") ||
+				HELPER_CALL.test(fn.body) ||
 				(fn.body.includes("requireUser") &&
 					fn.body.includes("requireClubRole"));
 			expect(gated, `ungated server fn: ${fn.file} ${fn.name}`).toBe(true);
@@ -92,9 +105,22 @@ describe("meeting template and agenda-editor server fns", () => {
 	it("asserts the club is not archived on every fn", () => {
 		for (const fn of allFns()) {
 			const gated =
-				fn.body.includes("requireMeetingTemplateEditor") ||
-				fn.body.includes("assertClubNotArchived");
+				HELPER_CALL.test(fn.body) || fn.body.includes("assertClubNotArchived");
 			expect(gated, `no archive gate: ${fn.file} ${fn.name}`).toBe(true);
+		}
+	});
+
+	it("gates every #910 fn on the club-keyed helper, the read included", () => {
+		// The Agendas page is a management page, so its READ is gated like its
+		// writes (the issue's "Read gate"). Asserted per fn rather than folded
+		// into the either/or above: a fn that fell back to a bare requireUser +
+		// requireClubRole would pass that case and skip the archive gate.
+		const agendaFns = fns(readSource("src/server/club-agendas.ts"));
+		expect(agendaFns.length).toBeGreaterThanOrEqual(7);
+		for (const fn of agendaFns) {
+			expect(fn.body, `club-agendas.ts ${fn.name}`).toMatch(
+				/await requireClubTemplateEditor\(data\.clubId\)/,
+			);
 		}
 	});
 
@@ -109,13 +135,14 @@ describe("meeting template and agenda-editor server fns", () => {
 		// a name that is not the one waived.
 		const claimed = [
 			...WAIVER_SOURCE.matchAll(
-				/^\t(\w+):[ \t]*\n?[ \t]*"officer-gated \+ archive-gated inside requireMeetingTemplateEditor/gm,
+				/^\t(\w+):[ \t]*\n?[ \t]*"officer-gated \+ archive-gated inside require(?:Meeting|Club)TemplateEditor/gm,
 			),
 		].map((m) => m[1]);
-		// Eleven today (two conversion fns, eight agenda-editor fns, and #909's
-		// save-as-club-template). Asserted as a floor so the count cannot
-		// silently collapse to zero and make the loop below vacuous.
-		expect(claimed.length).toBeGreaterThanOrEqual(11);
+		// Eighteen today: two conversion fns, eight agenda-editor fns, #909's
+		// save-as-club-template, and #910's seven Agendas fns. Asserted as a
+		// floor so the count cannot silently collapse to zero and make the loop
+		// below vacuous.
+		expect(claimed.length).toBeGreaterThanOrEqual(18);
 		const swept = new Set(allFns().map((f) => f.name));
 		for (const name of claimed) {
 			expect(
@@ -135,17 +162,24 @@ describe("meeting template and agenda-editor server fns", () => {
 		// it moved there when a second server-fn module (meeting-agenda-edit.ts)
 		// needed to import it too. Re-pointed rather than deleted.
 		const logicSource = readSource("src/server/meeting-templates-logic.ts");
-		const helper = logicSource
-			.slice(
-				logicSource.indexOf(
-					"export async function requireMeetingTemplateEditor",
-				),
-			)
-			.split("\n}")[0];
+		const helperBody = (name: string) => {
+			const at = logicSource.indexOf(`export async function ${name}(`);
+			expect(at, `${name} is not declared`).toBeGreaterThan(-1);
+			return logicSource.slice(at).split("\n}")[0] ?? "";
+		};
+		const helper = helperBody("requireMeetingTemplateEditor");
 		expect(helper).toContain("requireUser");
 		expect(helper).toContain("assertClubNotArchived");
 		expect(helper).toContain(
 			'requireClubRole(user.id, meeting.clubId, ["admin"])',
+		);
+		// #910's club-keyed sibling. The ROLE LIST is asserted, not just the
+		// call: a wider list would let any member manage the club's agendas.
+		const clubHelper = helperBody("requireClubTemplateEditor");
+		expect(clubHelper).toContain("await requireUser()");
+		expect(clubHelper).toContain("await assertClubNotArchived(clubId)");
+		expect(clubHelper).toContain(
+			'await requireClubRole(user.id, clubId, ["admin"])',
 		);
 	});
 

@@ -315,6 +315,39 @@ Per CLAUDE.md's coverage traps, the ceiling must be asserted as an **absolute** 
 picked by measuring the cost curve. `expect(x.length).toBeLessThanOrEqual(CAP)` passes for
 every value of CAP including one that reintroduces the problem.
 
+### D11–D14 — 622b's four questions, settled (maintainer, 2026-09-25; shipped in #910)
+
+622b shipped as #909 (Save as club template) and #910 (default, adopt, Agendas page).
+Shaping it asked four questions, Q1–Q4, recorded here as decisions.
+
+- **D11 — Applying a club template copies it.** Already true in code before #910:
+  `applyTemplateConversion` deep-copies any template into the meeting's private row
+  (`copyTemplateForMeeting`), club-owned or global. So "copy on apply" needed no work, and a
+  club's later change to its template never reaches a meeting already on it.
+- **D12 — Setting a default applies it only where nothing is released.** An upcoming meeting
+  still on the standard agenda takes the new default unless applying it would release a
+  claimed role or drop a speech. Those, and meetings with their own edited agenda (D4), are
+  named back in two groups. "Still on the standard agenda" includes a materialised copy nobody
+  changed, because opening the editor materialises one (`agendaMatchesStandard`, compared
+  against a materialisation computed NOW, so a copy made before the club changed a role reads
+  as edited and is kept). The no-release condition is re-checked under each meeting's own lock
+  (`refuseIfReleasing`), so a sign-up landing mid-loop is kept, not released.
+- **D13 — Adopting sets the default, and "adopted" means a default exists.** One action makes a
+  club template from the standard agenda and sets it as the club's default, with R1's notice
+  shown first. There is no separate "adopted" flag: `clubs.default_template_id IS NOT NULL` is
+  the definition, so clearing the default is un-adopting, and D5's checkbox reads the same
+  column.
+- **D14 — Club templates are edited through a meeting.** The Agendas page lists, renames,
+  duplicates, enables, deletes and sets the default; it has no editor. An officer opens a
+  meeting's agenda, changes it and saves it back as a club template (#909).
+
+One thing #910 found that this document did not say: the standard agenda's beats NAME only
+five role keys (Toastmaster, Speaker, Table Topics Master, General Evaluator, Evaluator). The
+functionaries are introduced through `{roles:…}` tokens, not bound rows, so a materialised
+copy DECLARES only those five roles. Adoption therefore also declares every other role the club
+runs (and gives a role the agenda names but the club does not run no places), so new meetings on
+an adopted default get the slots they got the day before.
+
 ---
 
 ## Review outcomes (plan-eng-review, 2026-08-25)
