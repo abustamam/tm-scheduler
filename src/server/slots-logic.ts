@@ -32,6 +32,7 @@ import {
 } from "./meeting-authz-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { loadMeetingShapeDefs, roleDefScope } from "./meeting-templates-logic";
+import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import { resolveProjectDisplay } from "./project-picker-logic";
 import { resolveWriteActorWithProof } from "./write-actor-logic";
 
@@ -1810,6 +1811,14 @@ export async function claimSlotCore(
 		proof?: WriteProof;
 	},
 ): Promise<{ clubId: string }> {
+	// The membership merge lock (#1035), SHARED on the member being given the
+	// role, before this transaction's first row lock. Without it a merge
+	// absorbing that membership could re-point the slots it saw, then have its
+	// DELETE set-null this claim's holder, leaving a slot `claimed` by nobody.
+	// Lock order: membership merge lock → (attendance lock) → row locks; see
+	// `membership-merge-lock.ts`. Refuses with `CLUB_BUSY_MESSAGE` when a merge
+	// absorbed the membership while this waited.
+	await lockMembershipsAgainstMerge(tx, [args.memberId]);
 	const [slot] = await tx
 		.select({
 			isSpeakerRole: roleDefinitions.isSpeakerRole,

@@ -38,6 +38,7 @@ import {
 } from "#/db/schema";
 import { earliestDate } from "#/lib/person-identity";
 import { lockClubForWrite } from "./club-write-lock";
+import { lockMembershipForMerge } from "./membership-merge-lock";
 
 /** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
@@ -79,6 +80,17 @@ export async function collapseMemberships(
 	// function did not have. This advisory lock is taken first by every writer
 	// that takes it, so it orders nothing new.
 	await lockClubForWrite(tx, clubId);
+	// The membership merge lock (#1035), EXCLUSIVE on the absorbed membership,
+	// after the club write lock and before the first row lock. The club lock
+	// does not cover an unsigned slot claim or an identified ballot cast, and
+	// either one landing after its re-point below and before the final DELETE
+	// was set-null'd by that DELETE: a slot claimed by nobody, a second counted
+	// ballot. Those writers take this lock SHARED before their first row lock,
+	// so each one either finished before this returns (and is re-pointed) or
+	// waits for this merge to commit and is refused. Lock order:
+	// club write lock → membership merge lock → row locks. `membership-merge-lock.ts`
+	// has the whole argument.
+	await lockMembershipForMerge(tx, absorbedId);
 	const rows = await tx
 		.select()
 		.from(members)
