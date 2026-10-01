@@ -282,13 +282,7 @@ const EXCLUDED: Record<string, string> = {
  * Each is still swept and must still mismatch, so a fixed one fails this file
  * until its entry is deleted.
  */
-/**
- * `stable: false` marks the one entry whose mismatch depends on the MACHINE
- * rather than the code: which ICU the server's Node and the browser each
- * ship. It is excused from the "still mismatches" check below, because it can
- * read clean on a runner whose two ICUs agree without anything being fixed.
- */
-const EXPECTED_MISMATCH: Record<string, { why: string; stable?: false }> = {
+const EXPECTED_MISMATCH: Record<string, { why: string }> = {
 	"/activity": {
 		why: "activity.tsx dayKey / line 161: formatMeetingDate with no zone, so the day heading is the runtime's day",
 	},
@@ -300,10 +294,6 @@ const EXPECTED_MISMATCH: Record<string, { why: string; stable?: false }> = {
 	},
 	"/superadmin/$clubId": {
 		why: "superadmin/$clubId.tsx module-level dateFmt: Intl.DateTimeFormat with no timeZone, the runtime's day",
-	},
-	"/admin/club-settings": {
-		why: "club-settings.tsx:646 zone option label: Intl shortOffset spells UTC+0 'GMT' in Node's ICU and 'GMT+0' in Chrome's. Not a zone or locale default; the static guard cannot see it",
-		stable: false,
 	},
 	"/admin/dues": {
 		why: "dues.tsx:481 paid date (and :265 due date): formatShortDate with no zone, the runtime's day",
@@ -723,7 +713,6 @@ describe("route hydration gate (#1000)", () => {
 
 		it("every EXPECTED_MISMATCH still mismatches (the list only shrinks)", () => {
 			const fixed = Object.entries(EXPECTED_MISMATCH)
-				.filter(([, e]) => e.stable !== false)
 				.map(([p]) => p)
 				.filter((p) => ONLY.length === 0 || ONLY.includes(p))
 				.filter((p) => (results.get(p)?.mismatches.length ?? 0) === 0);
