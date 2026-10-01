@@ -53,7 +53,10 @@ describe("Bun version pin (#995)", () => {
 	it("package.json pins an exact Bun version in packageManager", () => {
 		// An exact x.y.z: setup-bun would resolve a range or tag to whatever is
 		// newest, which is `latest` by another name.
-		expect(pkg.packageManager).toMatch(/^bun@\d+\.\d+\.\d+$/);
+		expect(
+			pinned,
+			`packageManager is ${JSON.stringify(pkg.packageManager)}`,
+		).toEqual(expect.any(String));
 	});
 
 	it("every setup-bun step reads the version from package.json", () => {

@@ -132,6 +132,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://test:test@localhost:5432/tm_test
     steps:
       - uses: actions/checkout@v5
+      # Bun version: see the comment on the `check` job's setup-bun step (#995).
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
@@ -163,6 +164,7 @@ jobs:
         working-directory: extension
     steps:
       - uses: actions/checkout@v5
+      # Bun version: see the comment on the `check` job's setup-bun step (#995).
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
