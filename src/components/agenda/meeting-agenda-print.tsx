@@ -81,21 +81,18 @@ function hasGuestCaption(text: string | null | undefined): text is string {
  * CI's DejaVu Sans. So these two rows print exactly the marker a Visitor's
  * does, and cost exactly what a Visitor's row costs whatever the font. The
  * caption itself prints, one line and ellipsized, in the roster on the same
- * sheet. It stays in the DOM here too, `display: none`, so the row's text is
- * still the full string the deck carries.
+ * sheet.
+ *
+ * Nothing is hidden: the row's text is exactly a Visitor's, in the DOM as on
+ * paper, so this is a stated difference from the deck rather than one a
+ * hidden copy of the caption papers over. `agenda-parity.test.ts` pins it to
+ * exactly these two rows — the deck string with the caption replaced by
+ * the marker — and keeps every other surface character-for-character.
  */
 function MarkerInPlaceOfCaption({ text }: { text: string }) {
 	const at = guestCaptionStart(text);
 	if (at < 0) return <>{text}</>;
-	return (
-		<>
-			{text.slice(0, at)}
-			<span data-guest-caption style={{ display: "none" }}>
-				{text.slice(at)}
-			</span>
-			{` · ${GUEST_MARKER}`}
-		</>
-	);
+	return <>{`${text.slice(0, at)} · ${GUEST_MARKER}`}</>;
 }
 
 export type AgendaHeader = {

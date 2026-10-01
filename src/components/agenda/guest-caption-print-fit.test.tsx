@@ -232,15 +232,20 @@ describe("guest caption print-fit harness availability", () => {
 });
 
 describe("the captioned fixture", () => {
-	it("carries the full caption into both the roster and the speaker's row", () => {
+	it("carries the full caption into the roster, and into the row where it fits", () => {
 		expect(CAPTIONED).toBe(`${GUEST} · Guest speaker, ${LONGEST_HOME_CLUB}`);
 		expect(LONGEST_HOME_CLUB.length).toBeGreaterThan(GUEST_TEXT_MAX - 5);
 		expect(UNDETECTED.length).toBe(CAPTIONED.length);
 		for (const layout of LAYOUTS) {
 			const html = sheetHtml(layout, CAPTIONED);
-			// The FULL string is in the markup — truncation is CSS only — in both
-			// the roster entry and the run-of-show row.
-			expect(html.split(LONGEST_HOME_CLUB).length - 1, layout).toBe(2);
+			// The FULL string is in the markup — truncation is CSS only. The
+			// roster carries it on every layout; the run-of-show row on editorial
+			// and spacious only, since grid and timing print a Visitor's marker
+			// there (`agenda-parity.test.ts` states that difference).
+			const rowCarries = layout === "editorial" || layout === "spacious";
+			expect(html.split(LONGEST_HOME_CLUB).length - 1, layout).toBe(
+				rowCarries ? 2 : 1,
+			);
 			expect(html, layout).toContain("text-overflow:ellipsis");
 			expect(sheetHtml(layout, UNDETECTED), layout).not.toContain(
 				"text-overflow:ellipsis",
