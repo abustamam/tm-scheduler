@@ -268,7 +268,7 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// A club set or cleared its default agenda (#910), directly or by adopting
 	// the standard agenda. ONE row per call, never one per meeting it applied
 	// to: `targetType: "club"`, `detail = { templateId, applied, keptEdited,
-	// keptSignups, failed }` where the four are COUNTS. `templateId: null` is a
+	// keptSignups, keptRoles, failed }` where the five are COUNTS. `templateId: null` is a
 	// clear, which touches no meeting and carries zeros.
 	"club_default_template_set",
 	// A club admin downloaded the club's data export (the `.zip` of CSVs,

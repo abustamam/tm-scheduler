@@ -113,6 +113,7 @@ describe("ClubAgendasPanel", () => {
 			applied: [],
 			keptEdited: [],
 			keptSignups: [],
+			keptRoles: [],
 			failed: [],
 		});
 		const onChanged = await renderPanel(
@@ -138,6 +139,7 @@ describe("ClubAgendasPanel", () => {
 			applied: [],
 			keptEdited: [],
 			keptSignups: [],
+			keptRoles: [],
 			failed: [],
 		});
 		await renderPanel(agendas());
@@ -194,6 +196,13 @@ describe("DefaultResultLists", () => {
 							roles: ["Ah-Counter"],
 						},
 					],
+					keptRoles: [
+						{
+							meetingId: "m-g",
+							scheduledAt: at("2026-11-10"),
+							roles: ["Timer"],
+						},
+					],
 					failed: [{ meetingId: "m-f", scheduledAt: at("2026-11-03") }],
 				}}
 			/>
@@ -207,6 +216,12 @@ describe("DefaultResultLists", () => {
 			),
 		).toBeTruthy();
 		expect(screen.getByText("(Ah-Counter)")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"Applying it would remove roles this meeting has; apply it from the meeting",
+			),
+		).toBeTruthy();
+		expect(screen.getByText("(Timer)")).toBeTruthy();
 		expect(
 			screen.getByText(
 				"Couldn't be changed. Try applying it from the meeting.",
@@ -226,6 +241,7 @@ describe("DefaultResultLists", () => {
 					applied: [],
 					keptEdited: [],
 					keptSignups: [],
+					keptRoles: [],
 					failed: [],
 				}}
 			/>

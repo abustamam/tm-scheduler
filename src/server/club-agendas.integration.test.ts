@@ -24,6 +24,7 @@ import {
 	meetingTemplates,
 	roleDefinitions,
 	roleSlots,
+	speeches,
 } from "#/db/schema";
 import { materialiseRunOfShow } from "#/lib/agenda-materialise";
 import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
@@ -61,7 +62,6 @@ vi.mock("#/lib/auth", () => ({
 const logic = await import("./club-agendas-logic");
 const {
 	adoptStandardAgenda,
-	adoptionRoles,
 	assertGeChangeAllowed,
 	CLUB_TEMPLATE_DISABLED_MESSAGE,
 	CLUB_TEMPLATE_GONE_MESSAGE,
@@ -230,8 +230,9 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 	 */
 	async function leanTemplate(
 		clubId = club.clubId,
-		opts: { enabled?: boolean; key?: string } = {},
+		opts: { enabled?: boolean; key?: string; drop?: string[] } = {},
 	) {
+		const drop = opts.drop ?? ["ah_counter"];
 		const [tpl] = await testDb
 			.insert(meetingTemplates)
 			.values({
@@ -244,11 +245,11 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 			.returning({ id: meetingTemplates.id });
 		if (!tpl) throw new Error("no template");
 		const seeds = materialiseRunOfShow(false, null)
-			.filter((s) => s.roleKey !== "ah_counter")
+			.filter((s) => !drop.includes(s.roleKey ?? ""))
 			.map((s, i) => ({ ...s, sortOrder: i, templateId: tpl.id }));
 		await testDb.insert(meetingTemplateBeats).values(seeds);
 		await testDb.insert(meetingTemplateRoles).values(
-			ROLE_TEMPLATE.filter((r) => r.key !== "ah_counter").map((r, i) => ({
+			ROLE_TEMPLATE.filter((r) => !drop.includes(r.key)).map((r, i) => ({
 				templateId: tpl.id,
 				key: r.key,
 				name: r.name,
@@ -303,6 +304,55 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 		return slot.id;
 	}
 
+	/** Give ONE meeting a slot for a non-standing club role (so no other
+	 *  meeting and no template has it), claimed by the seeded member or not. */
+	async function addSlot(
+		meetingId: string,
+		key: string,
+		name: string,
+		opts: { claimed: boolean },
+	) {
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				key,
+				name,
+				category: "functionary",
+				standing: false,
+			})
+			.onConflictDoNothing()
+			.returning({ id: roleDefinitions.id });
+		const defId =
+			def?.id ??
+			(
+				await testDb
+					.select({ id: roleDefinitions.id })
+					.from(roleDefinitions)
+					.where(
+						and(
+							eq(roleDefinitions.clubId, club.clubId),
+							eq(roleDefinitions.key, key),
+						),
+					)
+			)[0]?.id;
+		const [slot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId,
+				roleDefinitionId: defId as string,
+				...(opts.claimed
+					? {
+							assignedMemberId: club.memberId,
+							status: "claimed" as const,
+							claimedAt: new Date(),
+						}
+					: {}),
+			})
+			.returning({ id: roleSlots.id });
+		return slot?.id as string;
+	}
+
 	async function claimedCount(clubId = club.clubId) {
 		const rows = await testDb
 			.select({ id: roleSlots.id })
@@ -340,7 +390,7 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 			const a = await newMeeting(7); // never opened
 			const b = await newMeeting(14); // opened, not edited
 			const c = await newMeeting(21); // opened and edited
-			const d = await newMeeting(28); // standard, Ah-Counter claimed
+			const d = await newMeeting(28); // standard, plus a claimed role the default lacks
 			await loadAgendaDraft(b);
 			await loadAgendaDraft(c);
 			const cCopy = (await meetingRow(c)).templateId as string;
@@ -355,15 +405,20 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 				.update(meetingTemplateBeats)
 				.set({ label: "Our own opening" })
 				.where(eq(meetingTemplateBeats.id, firstBeat?.id as string));
-			const dSlot = await claim(d, "ah_counter");
+			// A role only D has (added to that one meeting), and a member in it.
+			const dSlot = await addSlot(d, "joke_master", "Joke Master", {
+				claimed: true,
+			});
 			const claimedBefore = await claimedCount();
+			const aSlots = await slotCounts(a);
 
-			const lean = await leanTemplate();
-			const result = await setDefault(lean);
+			// A default that carries every stock role, so A and B lose nothing.
+			const full = await leanTemplate(club.clubId, { drop: [] });
+			const result = await setDefault(full);
 
-			expect(await defaultOf()).toBe(lean);
-			await expectOnCopyOf(a, lean);
-			await expectOnCopyOf(b, lean);
+			expect(await defaultOf()).toBe(full);
+			await expectOnCopyOf(a, full);
+			await expectOnCopyOf(b, full);
 			// B's materialised copy was retired, not left orphaned.
 			expect(await templateRow(bCopy)).toBeUndefined();
 			expect((await meetingRow(c)).templateId).toBe(cCopy);
@@ -374,19 +429,61 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 				expect.objectContaining({ meetingId: c, onDefaultCopy: false }),
 			]);
 			expect(result.keptSignups).toEqual([
-				expect.objectContaining({ meetingId: d, roles: ["Ah-Counter"] }),
+				expect.objectContaining({ meetingId: d, roles: ["Joke Master"] }),
 			]);
+			expect(result.keptRoles).toEqual([]);
 			expect(result.failed).toEqual([]);
 
-			// Nothing released anywhere.
+			// Nothing released anywhere, and A kept every slot it had.
 			expect(await claimedCount()).toBe(claimedBefore);
 			const [held] = await testDb
 				.select({ member: roleSlots.assignedMemberId })
 				.from(roleSlots)
 				.where(eq(roleSlots.id, dSlot));
 			expect(held?.member).toBe(club.memberId);
-			// A and B now have the lean shape's slots: no Ah-Counter.
-			expect(await slotCounts(a)).toEqual(stockCounts(["ah_counter"]));
+			expect(await slotCounts(a)).toEqual(aSlots);
+		});
+
+		it("keeps a meeting whose conversion would remove an OPEN role, and names the role", async () => {
+			const a = await newMeeting(7);
+			const before = await slotCounts(a);
+			expect(before.timer).toBe(1);
+			const noTimer = await leanTemplate(club.clubId, { drop: ["timer"] });
+			const result = await setDefault(noTimer);
+			expect(result.applied).toEqual([]);
+			expect(result.keptSignups).toEqual([]);
+			expect(result.keptRoles).toEqual([
+				expect.objectContaining({ meetingId: a, roles: ["Timer"] }),
+			]);
+			expect((await meetingRow(a)).templateId).toBeNull();
+			expect(await slotCounts(a)).toEqual(before);
+		});
+
+		it("files a speech on an UNCLAIMED slot under sign-ups, and keeps it", async () => {
+			const a = await newMeeting(7);
+			const slot = await addSlot(a, "joke_master", "Joke Master", {
+				claimed: false,
+			});
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({ personId: club.personId, title: "Ice breaker" })
+				.returning({ id: speeches.id });
+			await testDb
+				.update(roleSlots)
+				.set({ speechId: speech?.id as string })
+				.where(eq(roleSlots.id, slot));
+			const result = await setDefault(
+				await leanTemplate(club.clubId, { drop: [] }),
+			);
+			expect(result.keptSignups).toEqual([
+				expect.objectContaining({ meetingId: a, roles: ["Joke Master"] }),
+			]);
+			expect(result.keptRoles).toEqual([]);
+			const [still] = await testDb
+				.select({ speechId: roleSlots.speechId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slot));
+			expect(still?.speechId).toBe(speech?.id);
 		});
 
 		it("reads a copy opened before the club changed a role as edited, and keeps it", async () => {
@@ -458,7 +555,7 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 
 		it("is safe to re-run: converted meetings read as already on a copy", async () => {
 			const a = await newMeeting(7);
-			const lean = await leanTemplate();
+			const lean = await leanTemplate(club.clubId, { drop: [] });
 			await setDefault(lean);
 			const copy = (await meetingRow(a)).templateId;
 			const again = await setDefault(lean);
@@ -477,10 +574,12 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 			expect(await defaultOf()).toBeNull();
 		});
 
-		it("logs one club_default_template_set row with the counts", async () => {
+		it("logs one club_default_template_set row per call, with the counts", async () => {
 			await newMeeting(7);
-			const lean = await leanTemplate();
-			await setDefault(lean);
+			const noTimer = await leanTemplate(club.clubId, { drop: ["timer"] });
+			const full = await leanTemplate(club.clubId, { drop: [] });
+			await setDefault(noTimer);
+			await setDefault(full);
 			const rows = await testDb
 				.select({ detail: activityLog.detail })
 				.from(activityLog)
@@ -489,15 +588,26 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 						eq(activityLog.clubId, club.clubId),
 						eq(activityLog.action, "club_default_template_set"),
 					),
-				);
-			expect(rows).toHaveLength(1);
-			expect(rows[0]?.detail).toEqual({
-				templateId: lean,
-				applied: 1,
-				keptEdited: 0,
-				keptSignups: 0,
-				failed: 0,
-			});
+				)
+				.orderBy(asc(activityLog.createdAt));
+			expect(rows.map((r) => r.detail)).toEqual([
+				{
+					templateId: noTimer,
+					applied: 0,
+					keptEdited: 0,
+					keptSignups: 0,
+					keptRoles: 1,
+					failed: 0,
+				},
+				{
+					templateId: full,
+					applied: 1,
+					keptEdited: 0,
+					keptSignups: 0,
+					keptRoles: 0,
+					failed: 0,
+				},
+			]);
 		});
 
 		it("refuses an archived club", async () => {
@@ -517,9 +627,10 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 	describe("clearing the default (AC3)", () => {
 		it("changes no meeting, and the next new meeting starts on the standard agenda", async () => {
 			const a = await newMeeting(7);
-			const lean = await leanTemplate();
+			const lean = await leanTemplate(club.clubId, { drop: [] });
 			await setDefault(lean);
 			const before = (await meetingRow(a)).templateId;
+			expect(before).not.toBeNull();
 
 			const result = await setDefault(null);
 
@@ -710,57 +821,6 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 			// the adopted template declares it), and adopting does not give its new
 			// meetings one.
 			expect((await slotCounts(fresh)).table_topics_master).toBeUndefined();
-		});
-	});
-
-	describe("adoptionRoles", () => {
-		const declared = [
-			{
-				key: "timer",
-				name: "Timer",
-				category: "functionary" as const,
-				defaultCount: 1,
-				isSpeakerRole: false,
-				slotsUnordered: false,
-				sortOrder: 0,
-			},
-		];
-		const bankRow = {
-			name: "x",
-			category: "functionary" as const,
-			defaultCount: 2,
-			isSpeakerRole: false,
-			slotsUnordered: false,
-			standing: true,
-			enabled: true,
-		};
-
-		it("keeps a role the club runs as declared", () => {
-			expect(adoptionRoles(declared, [{ ...bankRow, key: "timer" }])).toEqual(
-				declared,
-			);
-		});
-
-		it("declares a role the club does not run with no places", () => {
-			for (const row of [
-				{ ...bankRow, key: "timer", enabled: false },
-				{ ...bankRow, key: "timer", standing: false },
-			]) {
-				expect(adoptionRoles(declared, [row])[0]?.defaultCount).toBe(0);
-			}
-			expect(adoptionRoles(declared, [])[0]?.defaultCount).toBe(0);
-		});
-
-		it("appends a keyed role the club runs that no beat names, and skips a key-less one", () => {
-			const out = adoptionRoles(declared, [
-				{ ...bankRow, key: "timer" },
-				{ ...bankRow, key: "joke_master", name: "Joke Master" },
-				{ ...bankRow, key: null, name: "Legacy" },
-			]);
-			expect(out.map((r) => [r.key, r.defaultCount])).toEqual([
-				["timer", 1],
-				["joke_master", 2],
-			]);
 		});
 	});
 

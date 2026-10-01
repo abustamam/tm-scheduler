@@ -75,6 +75,7 @@ describe("visibleDestinations", () => {
 			"New meetings",
 			"Recurring schedule",
 			"Meeting roles",
+			"Agendas",
 			"Club settings",
 			"Charter",
 			"Pathways sync",

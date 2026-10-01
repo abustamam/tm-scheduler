@@ -44,6 +44,10 @@ import {
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
 import { deriveRoleKey, foldRoleName } from "#/lib/role-def-match";
+import {
+	type DeclaredStandardRole,
+	declareStandardRoles,
+} from "#/lib/standard-agenda-roles";
 import type { TableTopicsLimits } from "#/lib/table-topics-limits";
 import { logActivity } from "./activity";
 import { loadMeetingSlots } from "./meeting-slots-logic";
@@ -272,34 +276,27 @@ export function agendaEditable(status: string): boolean {
 
 /**
  * The `meeting_template_roles` declarations a materialised standard agenda
- * carries: one per role key its seeds name, sourced from the CLUB's own
- * definitions so a club that renamed a role keeps its word (#445).
+ * carries, sourced from the CLUB's own definitions so a club that renamed a
+ * role keeps its word (#445). WHICH roles is `declareStandardRoles`
+ * (`#/lib/standard-agenda-roles`): the keys the seeds name, plus every other
+ * role the club runs — widened in #910, because the standard beats name only
+ * five keys and a copy declaring just those left the functionaries off every
+ * meeting created from a template saved from it.
  *
  * Split out of `materialiseForMeeting` (#966) so the connector's read path
  * can clock a never-edited meeting IN MEMORY with exactly the roles the copy
  * would be given, without writing the copy. A read only.
  *
- * Exported for #910: THE role build. Adopting the standard agenda declares
- * its template's roles through this, and the "still on the standard agenda"
- * comparison computes what a materialised copy SHOULD declare through this,
- * so the three cannot come to disagree about what a standard agenda's roles
- * are.
+ * THE role build (#910): materialising a copy, the connector's in-memory
+ * read, adopting the standard agenda, and the "still on the standard agenda"
+ * comparison all declare roles through this, so none of them can come to
+ * disagree about what a standard agenda's roles are.
  */
 export async function declaredRolesForSeeds(
 	conn: DbOrTx,
 	clubId: string,
 	seeds: { roleKey: string | null; repeatsRoleKey: string | null }[],
-): Promise<
-	{
-		key: string;
-		name: string;
-		category: AgendaDraftRole["category"];
-		defaultCount: number;
-		isSpeakerRole: boolean;
-		slotsUnordered: boolean;
-		sortOrder: number;
-	}[]
-> {
+): Promise<DeclaredStandardRole[]> {
 	const namedKeys = [
 		...new Set(
 			seeds
@@ -307,8 +304,10 @@ export async function declaredRolesForSeeds(
 				.filter((key): key is string => key != null),
 		),
 	];
-	if (namedKeys.length === 0) return [];
-	const clubRoles = await conn
+	// The whole bank, not only the named keys: the rule also declares every
+	// other role the club runs. `role_definitions_club_key_unique` keeps the
+	// key lookup inside the rule unambiguous.
+	const bank = await conn
 		.select({
 			key: roleDefinitions.key,
 			name: roleDefinitions.name,
@@ -316,35 +315,13 @@ export async function declaredRolesForSeeds(
 			defaultCount: roleDefinitions.defaultCount,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			slotsUnordered: roleDefinitions.slotsUnordered,
+			standing: roleDefinitions.standing,
+			enabled: roleDefinitions.enabled,
 		})
 		.from(roleDefinitions)
-		// No `isNull(templateId)` beside these: 0083 pinned the column NULL
-		// with a CHECK, so it matched every row. `role_definitions_club_key_unique`
-		// is what keeps `byKey` below unambiguous.
-		.where(
-			and(
-				eq(roleDefinitions.clubId, clubId),
-				inArray(roleDefinitions.key, namedKeys),
-			),
-		);
-	const byKey = new Map(
-		clubRoles.flatMap((r) => (r.key == null ? [] : [[r.key, r] as const])),
-	);
-	return namedKeys.map((key, i) => {
-		const club = byKey.get(key);
-		return {
-			key,
-			// A key the club does not define falls back to the key itself
-			// rather than dropping the beat: the row still prints, owned by
-			// nobody, which is what an unstaffed role already does.
-			name: club?.name ?? key,
-			category: club?.category ?? ("functionary" as const),
-			defaultCount: club?.defaultCount ?? 1,
-			isSpeakerRole: club?.isSpeakerRole ?? false,
-			slotsUnordered: club?.slotsUnordered ?? false,
-			sortOrder: i,
-		};
-	});
+		.where(eq(roleDefinitions.clubId, clubId))
+		.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));
+	return declareStandardRoles(namedKeys, bank);
 }
 
 /**

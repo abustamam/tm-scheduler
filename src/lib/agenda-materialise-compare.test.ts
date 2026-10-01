@@ -101,6 +101,24 @@ describe("agendaMatchesStandard", () => {
 		expect(agendaMatchesStandard(then, standard(true))).toBe(false);
 	});
 
+	it("reads a copy materialised before the role build declared the functionaries as not standard (kept, the safe direction)", () => {
+		// Before #910 a materialised copy declared only the roles the beats name;
+		// the widened build also declares every other role the club runs. Such a
+		// copy is KEPT by Set default rather than converted.
+		const beatNamedOnly = storedCopyOf(standard());
+		const widenedNow: ComparableAgenda = {
+			...standard(),
+			roles: [
+				...ROLES,
+				{ key: "timer", defaultCount: 1 },
+				{ key: "ah_counter", defaultCount: 1 },
+				{ key: "grammarian", defaultCount: 1 },
+				{ key: "vote_counter", defaultCount: 1 },
+			],
+		};
+		expect(agendaMatchesStandard(beatNamedOnly, widenedNow)).toBe(false);
+	});
+
 	it("compares marks at the FLOAT4 precision the column stores", () => {
 		// A 2:20 Table Topics cap is 2.333… minutes when materialised and
 		// 2.3333332538604736 read back from a `real` column.

@@ -191,6 +191,11 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "club_template_saved":
 			summary = "saved the agenda as a club template";
 			break;
+		// #910 — the club's default agenda set, cleared, or adopted from the
+		// standard agenda. `detail` holds the template id and per-group counts.
+		case "club_default_template_set":
+			summary = "set the club's default agenda";
+			break;
 		// The club data export (#915): someone took a copy of every member's and
 		// guest's contact details. Without this case the feed shows the raw enum.
 		case "club_data_exported":

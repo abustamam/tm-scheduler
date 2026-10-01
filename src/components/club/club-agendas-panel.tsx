@@ -415,6 +415,7 @@ export function DefaultResultLists({
 		result.applied.length +
 		result.keptEdited.length +
 		result.keptSignups.length +
+		result.keptRoles.length +
 		result.failed.length;
 	if (total === 0) {
 		return (
@@ -446,6 +447,13 @@ export function DefaultResultLists({
 			<ResultGroup
 				title="Has sign-ups for roles the new default doesn't include; apply it from the meeting"
 				meetings={result.keptSignups}
+				clubId={clubId}
+				timezone={timezone}
+				note={(m) => m.roles.join(", ")}
+			/>
+			<ResultGroup
+				title="Applying it would remove roles this meeting has; apply it from the meeting"
+				meetings={result.keptRoles}
 				clubId={clubId}
 				timezone={timezone}
 				note={(m) => m.roles.join(", ")}

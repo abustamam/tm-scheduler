@@ -936,7 +936,10 @@ club runs GavelUp's standard agenda, and **"adopted" means exactly `default_temp
 NULL`** (D13). Setting a default also moves each upcoming meeting still on the standard agenda —
 `template_id` NULL, or a materialised copy nobody changed (`agendaMatchesStandard`, because
 merely opening the editor materialises one) — but ONLY where that releases no claimed role and
-drops no speech (D12); every other meeting is named back to the officer, never silently changed.
+drops no speech, and deletes no slot at all, open ones included (D12); every other meeting is
+named back to the officer, never silently changed. A materialised standard agenda declares every
+role the club runs, not only the five its beats name (`declareStandardRoles`), so a template saved
+from one keeps the functionaries.
 Adopting creates a club template from the standard agenda as it would materialise for the club
 that day and makes it the default in one step, and from then on standard-agenda improvements do
 not reach it (spec R1, said in the adopt dialog). While a default is set the "General Evaluator

@@ -31,7 +31,6 @@ import {
 	meetingTemplateBeats,
 	meetingTemplateRoles,
 	meetingTemplates,
-	roleDefinitions,
 } from "#/db/schema";
 import {
 	agendaMatchesStandard,
@@ -45,10 +44,7 @@ import {
 } from "#/lib/club-template-key";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
-import {
-	type declaredRolesForSeeds,
-	standardAgendaForClub,
-} from "./meeting-agenda-edit-logic";
+import { standardAgendaForClub } from "./meeting-agenda-edit-logic";
 import {
 	applyTemplateConversion,
 	CLUB_TEMPLATE_GONE_MESSAGE,
@@ -57,7 +53,9 @@ import {
 	nextClubTemplateKey,
 	planTemplateConversion,
 	releasesAnything,
+	removesAnything,
 	WouldReleaseError,
+	WouldRemoveError,
 } from "./meeting-templates-logic";
 
 export { CLUB_TEMPLATE_GONE_MESSAGE };
@@ -383,6 +381,10 @@ export type SetDefaultResult = {
 	/** Still standard, but applying would release a sign-up or drop a
 	 *  speech. `roles` names what the default does not include. */
 	keptSignups: (MeetingRef & { roles: string[] })[];
+	/** Still standard, and nobody would lose a role, but applying would
+	 *  DELETE a slot the meeting has — a role the default does not include,
+	 *  open today. `roles` names them. Never converted silently. */
+	keptRoles: (MeetingRef & { roles: string[] })[];
 	/** Something else went wrong on that one meeting; the loop went on. */
 	failed: MeetingRef[];
 };
@@ -394,6 +396,7 @@ function emptyResult(templateId: string | null): SetDefaultResult {
 		applied: [],
 		keptEdited: [],
 		keptSignups: [],
+		keptRoles: [],
 		failed: [],
 	};
 }
@@ -476,23 +479,12 @@ export async function setClubDefaultTemplate(input: {
  * adopting at once therefore make one template, and the second is refused.
  * Only after it commits does the meeting loop run, outside it.
  *
- * The template is the standard agenda as it would materialise for this club
- * NOW (`standardAgendaForClub`): the same beats, so day one prints the same
- * sheet (22 beats, 23 on the GE variant, plus the five bands), and the same
- * role build. Two adjustments to the ROLE list, both so new meetings get the
- * SLOTS they get today, which the standard path generates from the club's
- * standing, enabled roles rather than from any declaration:
- *
- *  - a role the agenda names but the club does not run (disabled, not
- *    standing, or absent) is declared with no places, so its row still prints
- *    — as it does today, owned by nobody — without a skeleton-crew club
- *    finding a slot for the Ah-Counter it switched off on every new meeting;
- *  - a role the club runs that the agenda never names (a club-invented one)
- *    is declared too, so adopting does not drop it from every new meeting.
- *
- * A role with no `key` (a legacy club-invented row from before #801) cannot be
- * declared — `meeting_template_roles.key` is NOT NULL — and new meetings on
- * the default do not get its slot.
+ * The template is the standard agenda exactly as it would materialise for
+ * this club NOW (`standardAgendaForClub`): the same beats, so day one prints
+ * the same sheet (22 beats, 23 on the GE variant, plus the five bands), and
+ * the same role build (`declaredRolesForSeeds`), which declares every role the
+ * club runs — so new meetings on the adopted default get the slots a standard
+ * meeting gets today, functionaries included.
  */
 export async function adoptStandardAgenda(input: {
 	clubId: string;
@@ -506,22 +498,6 @@ export async function adoptStandardAgenda(input: {
 		}
 		const standard = await standardAgendaForClub(tx, clubId);
 		if (!standard) throw new Error("Club not found.");
-
-		const bank = await tx
-			.select({
-				key: roleDefinitions.key,
-				name: roleDefinitions.name,
-				category: roleDefinitions.category,
-				defaultCount: roleDefinitions.defaultCount,
-				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				slotsUnordered: roleDefinitions.slotsUnordered,
-				standing: roleDefinitions.standing,
-				enabled: roleDefinitions.enabled,
-			})
-			.from(roleDefinitions)
-			.where(eq(roleDefinitions.clubId, clubId))
-			.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));
-		const roles = adoptionRoles(standard.roles, bank);
 
 		const key = await nextClubTemplateKey(tx, clubId, ADOPTED_TEMPLATE_KEY);
 		const [created] = await tx
@@ -542,10 +518,12 @@ export async function adoptStandardAgenda(input: {
 			.values(
 				standard.seeds.map((seed) => ({ ...seed, templateId: created.id })),
 			);
-		if (roles.length > 0) {
+		if (standard.roles.length > 0) {
 			await tx
 				.insert(meetingTemplateRoles)
-				.values(roles.map((role) => ({ ...role, templateId: created.id })));
+				.values(
+					standard.roles.map((role) => ({ ...role, templateId: created.id })),
+				);
 		}
 		await tx
 			.update(clubs)
@@ -558,57 +536,10 @@ export async function adoptStandardAgenda(input: {
 	return result;
 }
 
-type DeclaredRole = Awaited<ReturnType<typeof declaredRolesForSeeds>>[number];
-
-type BankRole = {
-	key: string | null;
-	name: string;
-	category: DeclaredRole["category"];
-	defaultCount: number;
-	isSpeakerRole: boolean;
-	slotsUnordered: boolean;
-	standing: boolean;
-	enabled: boolean;
-};
-
-/**
- * The role list an adopted template declares — see `adoptStandardAgenda`'s
- * docblock for the two adjustments and why. Pure; exported for its test.
- */
-export function adoptionRoles(
-	declared: readonly DeclaredRole[],
-	bank: readonly BankRole[],
-): DeclaredRole[] {
-	const runs = new Set(
-		bank.flatMap((b) =>
-			b.key != null && b.standing && b.enabled ? [b.key] : [],
-		),
-	);
-	const named = declared.map((role) =>
-		runs.has(role.key) ? role : { ...role, defaultCount: 0 },
-	);
-	const namedKeys = new Set(declared.map((r) => r.key));
-	const extras = bank.flatMap((b, i) =>
-		b.key != null && runs.has(b.key) && !namedKeys.has(b.key)
-			? [
-					{
-						key: b.key,
-						name: b.name,
-						category: b.category,
-						defaultCount: b.defaultCount,
-						isSpeakerRole: b.isSpeakerRole,
-						slotsUnordered: b.slotsUnordered,
-						sortOrder: declared.length + i,
-					},
-				]
-			: [],
-	);
-	return [...named, ...extras];
-}
-
 /**
  * Apply the default to each upcoming meeting still on the standard agenda,
- * where doing so releases no claimed slot and drops no speech (spec D4, Q2).
+ * where doing so deletes no slot at all — so releases no claimed role, drops
+ * no speech (spec D4, Q2), and takes no open role off the meeting (#910).
  *
  * Candidates: this club's `scheduled` meetings from now on, soonest first.
  * "Still on the standard agenda" is `template_id IS NULL`, or the meeting's
@@ -618,8 +549,9 @@ export function adoptionRoles(
  *
  * Per meeting, a pre-plan (`planTemplateConversion`) skips the obvious
  * releases cheaply; the conversion itself re-checks under the meeting's lock
- * (`refuseIfReleasing`) and a `WouldReleaseError` lands the meeting in
- * `keptSignups` too. Each conversion is its own transaction, so one meeting's
+ * (`refuseIfReleasing`, `refuseIfRemoving`): a `WouldReleaseError` lands the
+ * meeting in `keptSignups` and a `WouldRemoveError` in `keptRoles`, exactly
+ * as the pre-plan would have. Each conversion is its own transaction, so one meeting's
  * failure never undoes another's.
  */
 async function applyDefaultToUpcoming(
@@ -680,7 +612,11 @@ async function applyDefaultToUpcoming(
 			}
 			const plan = await planTemplateConversion(meeting.id, templateId);
 			if (releasesAnything(plan)) {
-				result.keptSignups.push({ ...ref, roles: roleNames(plan) });
+				result.keptSignups.push({ ...ref, roles: plan.releasedRoleNames });
+				continue;
+			}
+			if (removesAnything(plan)) {
+				result.keptRoles.push({ ...ref, roles: plan.removedRoleNames });
 				continue;
 			}
 			await applyTemplateConversion({
@@ -689,24 +625,23 @@ async function applyDefaultToUpcoming(
 				templateId,
 				actorMemberId: null,
 				refuseIfReleasing: true,
+				refuseIfRemoving: true,
 			});
 			result.applied.push(ref);
 		} catch (err) {
 			if (err instanceof WouldReleaseError) {
-				result.keptSignups.push({ ...ref, roles: roleNames(err.plan) });
+				result.keptSignups.push({
+					...ref,
+					roles: err.plan.releasedRoleNames,
+				});
+			} else if (err instanceof WouldRemoveError) {
+				result.keptRoles.push({ ...ref, roles: err.plan.removedRoleNames });
 			} else {
 				result.failed.push(ref);
 			}
 		}
 	}
 	return result;
-}
-
-/** The distinct role names a plan releases, in the order it lists them. */
-function roleNames(plan: {
-	releasedHolders: { roleName: string }[];
-}): string[] {
-	return [...new Set(plan.releasedHolders.map((h) => h.roleName))];
 }
 
 /**
@@ -774,6 +709,7 @@ async function logDefaultSet(
 			applied: result.applied.length,
 			keptEdited: result.keptEdited.length,
 			keptSignups: result.keptSignups.length,
+			keptRoles: result.keptRoles.length,
 			failed: result.failed.length,
 		},
 	});

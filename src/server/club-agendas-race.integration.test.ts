@@ -5,11 +5,12 @@
  * it. A member who claims a role in between must not be released by a bulk
  * action that promised never to release anyone, so the conversion re-checks
  * under its own meeting lock (`refuseIfReleasing`) and the loop files a refusal
- * under `keptSignups`.
+ * under `keptSignups`. Likewise a slot the default would DELETE, open or not
+ * (`refuseIfRemoving` → `keptRoles`).
  *
  * The window is a few milliseconds and cannot be hit on purpose, so the
- * PRE-PLAN is replaced with one that always reports "nothing released" — the
- * state a claim landing just after it leaves. What remains real is exactly the
+ * PRE-PLAN is replaced with one that always reports "nothing released or
+ * removed" — the state a change landing just after it leaves. What remains real is exactly the
  * part under test: the locked re-check, the typed refusal and the filing.
  */
 import { randomUUID } from "node:crypto";
@@ -42,12 +43,14 @@ vi.mock("./meeting-templates-logic", async (importOriginal) => ({
 		slotsWithSpeeches: 0,
 		slotsAdded: 0,
 		releasedHolders: [],
+		releasedRoleNames: [],
+		removedRoleNames: [],
 	}),
 }));
 
 const { setClubDefaultTemplate } = await import("./club-agendas-logic");
 
-describe.skipIf(!hasTestDb)("set default, sign-up race", () => {
+describe.skipIf(!hasTestDb)("set default, sign-up and removal race", () => {
 	let club: SeededClub;
 
 	beforeEach(async () => {
@@ -61,8 +64,81 @@ describe.skipIf(!hasTestDb)("set default, sign-up race", () => {
 			.values(ROLE_TEMPLATE.map((r) => ({ ...r, clubId: club.clubId })));
 	});
 
+	/** A club template: the standard beats and stock roles, minus one key. */
+	async function templateWithout(key: string) {
+		const [tpl] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: club.clubId,
+				meetingId: null,
+				key: `lean-${randomUUID().slice(0, 8)}`,
+				name: "Lean",
+			})
+			.returning({ id: meetingTemplates.id });
+		const templateId = tpl?.id as string;
+		await testDb.insert(meetingTemplateBeats).values(
+			materialiseRunOfShow(false, null)
+				.filter((s) => s.roleKey !== key)
+				.map((s, i) => ({ ...s, sortOrder: i, templateId })),
+		);
+		await testDb.insert(meetingTemplateRoles).values(
+			ROLE_TEMPLATE.filter((r) => r.key !== key).map((r, i) => ({
+				templateId,
+				key: r.key,
+				name: r.name,
+				category: r.category,
+				defaultCount: r.defaultCount,
+				sortOrder: i,
+			})),
+		);
+		return templateId;
+	}
+
 	afterEach(async () => {
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+	});
+
+	it("files a meeting whose locked plan would remove an OPEN role under keptRoles, and removes nothing", async () => {
+		// A standard meeting with an open Timer slot, and a default with no Timer.
+		const [m] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+			})
+			.returning({ id: meetings.id });
+		const meetingId = m?.id as string;
+		const [timer] = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, "timer"),
+				),
+			);
+		const [slot] = await testDb
+			.insert(roleSlots)
+			.values({ meetingId, roleDefinitionId: timer?.id as string })
+			.returning({ id: roleSlots.id });
+		const templateId = await templateWithout("timer");
+
+		const result = await setClubDefaultTemplate({
+			clubId: club.clubId,
+			templateId,
+			actorMemberId: null,
+		});
+
+		expect(result.applied).toEqual([]);
+		expect(result.failed).toEqual([]);
+		expect(result.keptRoles).toEqual([
+			expect.objectContaining({ meetingId, roles: ["Timer"] }),
+		]);
+		const still = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slot?.id as string));
+		expect(still).toHaveLength(1);
 	});
 
 	it("files a meeting whose locked plan releases someone under keptSignups, and releases nobody", async () => {
@@ -96,31 +172,7 @@ describe.skipIf(!hasTestDb)("set default, sign-up race", () => {
 			.returning({ id: roleSlots.id });
 
 		// A club template with no Ah-Counter.
-		const [tpl] = await testDb
-			.insert(meetingTemplates)
-			.values({
-				clubId: club.clubId,
-				meetingId: null,
-				key: `lean-${randomUUID().slice(0, 8)}`,
-				name: "Lean",
-			})
-			.returning({ id: meetingTemplates.id });
-		const templateId = tpl?.id as string;
-		await testDb.insert(meetingTemplateBeats).values(
-			materialiseRunOfShow(false, null)
-				.filter((s) => s.roleKey !== "ah_counter")
-				.map((s, i) => ({ ...s, sortOrder: i, templateId })),
-		);
-		await testDb.insert(meetingTemplateRoles).values(
-			ROLE_TEMPLATE.filter((r) => r.key !== "ah_counter").map((r, i) => ({
-				templateId,
-				key: r.key,
-				name: r.name,
-				category: r.category,
-				defaultCount: r.defaultCount,
-				sortOrder: i,
-			})),
-		);
+		const templateId = await templateWithout("ah_counter");
 
 		const result = await setClubDefaultTemplate({
 			clubId: club.clubId,

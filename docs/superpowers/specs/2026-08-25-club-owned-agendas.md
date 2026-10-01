@@ -344,9 +344,14 @@ Shaping it asked four questions, Q1–Q4, recorded here as decisions.
 One thing #910 found that this document did not say: the standard agenda's beats NAME only
 five role keys (Toastmaster, Speaker, Table Topics Master, General Evaluator, Evaluator). The
 functionaries are introduced through `{roles:…}` tokens, not bound rows, so a materialised
-copy DECLARES only those five roles. Adoption therefore also declares every other role the club
-runs (and gives a role the agenda names but the club does not run no places), so new meetings on
-an adopted default get the slots they got the day before.
+copy DECLARED only those five roles, and so did any club template saved from one — and a meeting
+created on such a template generates its slots from the declarations, so it lost every
+functionary. #910 widened the one role build (`declareStandardRoles`): it also declares every
+other role the club runs, and gives a role the agenda names but the club does not run no places.
+Materialising, the connector's in-memory read, adoption and the "still standard" comparison all
+go through it. A copy materialised before the widening now compares as not standard and is kept.
+Separately, setting a default never DELETES a slot, open or claimed: such a meeting is listed
+("applying it would remove roles this meeting has") rather than converted.
 
 ---
 

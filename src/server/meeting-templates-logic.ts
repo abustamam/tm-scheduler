@@ -892,6 +892,21 @@ export type ConversionPlan = {
 	releasedHolders: ReleasedHolder[];
 };
 
+/**
+ * A plan plus the role NAMES the club-default apply reports (#910). Kept off
+ * `ConversionPlan` itself, which is the apply dialog's wire type and whose
+ * callers need neither.
+ */
+export type ConversionPlanDetail = ConversionPlan & {
+	/** Distinct names of the roles whose slots the conversion takes from a
+	 *  person: held, or carrying a speech. A speech on an UNCLAIMED slot has
+	 *  no holder to list, so `releasedHolders` alone cannot name it. */
+	releasedRoleNames: string[];
+	/** Distinct names of the roles of EVERY slot the conversion deletes, open
+	 *  ones included. */
+	removedRoleNames: string[];
+};
+
 /** This meeting's slots, annotated with role name and assignee name. */
 async function loadSlotsForConversion(conn: DbOrTx, meetingId: string) {
 	return conn
@@ -986,7 +1001,7 @@ async function resolveConversionTargetRoles(
 function planConversion<T extends TargetRole>(
 	current: Awaited<ReturnType<typeof loadSlotsForConversion>>,
 	target: T[],
-): { plan: ConversionPlan; matched: Map<string, T> } {
+): { plan: ConversionPlanDetail; matched: Map<string, T> } {
 	const matched = matchRoleDefs(distinctRoleDefs(current), target);
 	return {
 		plan: summarize(
@@ -1002,9 +1017,12 @@ function summarize(
 	current: Awaited<ReturnType<typeof loadSlotsForConversion>>,
 	keepDefIds: Set<string>,
 	targetSlotCount: number,
-): ConversionPlan {
+): ConversionPlanDetail {
 	const doomed = current.filter((s) => !keepDefIds.has(s.roleDefinitionId));
 	const held = doomed.filter((s) => s.assignedMemberId || s.assignedGuestId);
+	const namesOf = (slots: typeof doomed) => [
+		...new Set(slots.map((s) => s.roleName)),
+	];
 	const kept = current.length - doomed.length;
 	return {
 		openSlotsRemoved: doomed.length - held.length,
@@ -1018,6 +1036,12 @@ function summarize(
 			name: s.memberName ?? s.guestName ?? "Someone",
 			roleName: s.roleName,
 		})),
+		releasedRoleNames: namesOf(
+			doomed.filter(
+				(s) => s.assignedMemberId || s.assignedGuestId || s.speechId !== null,
+			),
+		),
+		removedRoleNames: namesOf(doomed),
 	};
 }
 
@@ -1028,6 +1052,25 @@ export function releasesAnything(plan: ConversionPlan): boolean {
 	return plan.claimedSlotsReleased > 0 || plan.slotsWithSpeeches > 0;
 }
 
+/** Whether a conversion deletes any slot at all, claimed or open (#910). */
+export function removesAnything(plan: ConversionPlan): boolean {
+	return plan.openSlotsRemoved > 0 || plan.claimedSlotsReleased > 0;
+}
+
+/**
+ * A conversion refused by `refuseIfRemoving` (#910): the plan under the
+ * meeting's lock deletes a slot nobody holds. Carries the locked plan, whose
+ * `removedRoleNames` name the roles.
+ */
+export class WouldRemoveError extends Error {
+	readonly plan: ConversionPlanDetail;
+	constructor(plan: ConversionPlanDetail) {
+		super("Applying this agenda would remove a role this meeting has.");
+		this.name = "WouldRemoveError";
+		this.plan = plan;
+	}
+}
+
 /**
  * A conversion refused by `refuseIfReleasing` (#910): the plan under the
  * meeting's lock releases someone. Typed so the club-default apply can tell
@@ -1036,8 +1079,8 @@ export function releasesAnything(plan: ConversionPlan): boolean {
  * `releasedHolders` name the roles.
  */
 export class WouldReleaseError extends Error {
-	readonly plan: ConversionPlan;
-	constructor(plan: ConversionPlan) {
+	readonly plan: ConversionPlanDetail;
+	constructor(plan: ConversionPlanDetail) {
 		super("Applying this agenda would release a role someone holds.");
 		this.name = "WouldReleaseError";
 		this.plan = plan;
@@ -1069,7 +1112,7 @@ export class WouldReleaseError extends Error {
 export async function planTemplateConversion(
 	meetingId: string,
 	templateId: string | null,
-): Promise<ConversionPlan> {
+): Promise<ConversionPlanDetail> {
 	const [meeting] = await database
 		.select({ clubId: meetings.clubId })
 		.from(meetings)
@@ -1146,6 +1189,15 @@ export async function applyTemplateConversion(input: {
 	 * releases with a human instead.
 	 */
 	refuseIfReleasing?: boolean;
+	/**
+	 * Refuse, with a {@link WouldRemoveError} and before any write, when the
+	 * locked plan would DELETE any slot at all, open ones included (#910). The
+	 * club-default apply passes it: a default that lacks a role this meeting
+	 * has (a Timer, say) must not quietly take that role off the meeting even
+	 * when nobody holds it yet. Checked after `refuseIfReleasing`, so a
+	 * meeting that would lose a sign-up is reported as that.
+	 */
+	refuseIfRemoving?: boolean;
 }): Promise<ConversionPlan> {
 	const { meetingId, clubId, templateId, actorMemberId } = input;
 
@@ -1187,13 +1239,16 @@ export async function applyTemplateConversion(input: {
 		// The same derivation the preview runs — the SOURCE template's own
 		// declarations, which the copy below reproduces field for field — so
 		// "would release" here and the counts the apply returns are one answer.
-		if (input.refuseIfReleasing) {
+		if (input.refuseIfReleasing || input.refuseIfRemoving) {
 			const lockedPlan = planConversion(
 				await loadSlotsForConversion(tx, meetingId),
 				await resolveConversionTargetRoles(tx, clubId, templateId),
 			).plan;
-			if (releasesAnything(lockedPlan)) {
+			if (input.refuseIfReleasing && releasesAnything(lockedPlan)) {
 				throw new WouldReleaseError(lockedPlan);
+			}
+			if (input.refuseIfRemoving && removesAnything(lockedPlan)) {
+				throw new WouldRemoveError(lockedPlan);
 			}
 		}
 
