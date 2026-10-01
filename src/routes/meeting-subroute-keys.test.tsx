@@ -169,6 +169,10 @@ function runLoader(route: AnyRoute, meetingId: string, shell = false) {
 			pathname: `/club/downtown/meeting/${meetingId}`,
 			searchStr: "",
 		},
+		// The print route's `loaderDeps` (#1069). Every sibling loader ignores
+		// it; print redirects a URL naming no layout, and these cases are about
+		// resolving the meeting key, so they name one.
+		deps: { layoutMissing: false },
 	});
 }
 

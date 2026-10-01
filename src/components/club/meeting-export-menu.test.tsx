@@ -56,7 +56,8 @@ describe("MeetingExportMenu (#541 D2)", () => {
 		await openMenu();
 		const print = screen.getByRole("menuitem", { name: /print agenda/i });
 		expect(print.closest("a")?.getAttribute("href")).toBe(
-			"/club/downtown/meeting/2026-08-10/print?layout=grid",
+			// No layout (#1069): the print route opens the club's default.
+			"/club/downtown/meeting/2026-08-10/print",
 		);
 		const roles = screen.getByRole("menuitem", { name: /all role sheets/i });
 		expect(roles.closest("a")?.getAttribute("href")).toBe(

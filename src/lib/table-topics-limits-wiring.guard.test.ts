@@ -507,6 +507,8 @@ describe("table topics limits wiring (#443)", () => {
 			(s) => !s.startsWith("./") && !typeOnly.has(s as string),
 		);
 		expect(outsideDb.sort()).toEqual([
+			// The layout list behind the `agenda_print_layout` enum (#1069).
+			"../lib/agenda-layouts",
 			"../lib/table-topics-limits",
 			"drizzle-orm",
 			"drizzle-orm/pg-core",
@@ -528,6 +530,19 @@ describe("table topics limits wiring (#443)", () => {
 			valueImports,
 			"table-topics-limits must stay a leaf: only `import type`",
 		).toEqual([]);
+		// Same rule for the second `src/lib` module the schema reads (#1069):
+		// it reaches the startup bundles exactly as table-topics-limits does.
+		const layouts = readSource("src/lib/agenda-layouts.ts");
+		const layoutValueImports = [
+			...layouts.matchAll(/^import\s+(?!type\b)[\s\S]*?from\s+"([^"]+)"/gm),
+		].map((m) => m[1]);
+		expect(
+			layoutValueImports,
+			"agenda-layouts must stay a leaf: only `import type`",
+		).toEqual([]);
+		expect(layouts, "agenda-layouts: no bare side-effect import").not.toMatch(
+			/^import\s+"[^"]+";/m,
+		);
 	});
 
 	it("the templated deck states the club's rule, not the speech grace", () => {

@@ -135,6 +135,7 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 			tableTopicsMinSeconds: null,
 			tableTopicsMaxSeconds: null,
 			digitalVotingEnabled: true,
+			defaultPrintLayout: "grid",
 		});
 	});
 
@@ -151,6 +152,7 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 			tableTopicsMinSeconds: 60,
 			tableTopicsMaxSeconds: 150,
 			digitalVotingEnabled: true,
+			defaultPrintLayout: "grid",
 		});
 
 		// Clearing BACK to null is the half that fails if the update coalesces a
@@ -167,6 +169,7 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 			tableTopicsMinSeconds: null,
 			tableTopicsMaxSeconds: null,
 			digitalVotingEnabled: true,
+			defaultPrintLayout: "grid",
 		});
 	});
 
@@ -182,6 +185,7 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 			tableTopicsMinSeconds: null,
 			tableTopicsMaxSeconds: null,
 			digitalVotingEnabled: true,
+			defaultPrintLayout: "grid",
 		});
 
 		await applyClubAgendaSettingsUpdate({
@@ -195,6 +199,7 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 			tableTopicsMinSeconds: null,
 			tableTopicsMaxSeconds: null,
 			digitalVotingEnabled: true,
+			defaultPrintLayout: "grid",
 		});
 	});
 
@@ -222,6 +227,7 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 			tableTopicsMinSeconds: null,
 			tableTopicsMaxSeconds: null,
 			digitalVotingEnabled: true,
+			defaultPrintLayout: "grid",
 		});
 	});
 
