@@ -23,7 +23,6 @@ const memberFields = {
 	personId: members.personId,
 	name: members.name,
 	email: members.email,
-	phone: members.phone,
 	status: members.status,
 	clubRole: members.clubRole,
 	version: sql<string>`${members}.xmin::text`,

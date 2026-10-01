@@ -204,12 +204,11 @@ async function seedClub(opts: {
 	const insertedMembers = await db
 		.insert(members)
 		.values(
-			opts.roster.map((r, i) => ({
+			opts.roster.map((r) => ({
 				clubId: club.id,
 				personId: personByName.get(r.name)!,
 				name: r.name,
 				email: r.email,
-				phone: r.phone === undefined ? seedPhone(i) : r.phone,
 				status: r.status ?? "active",
 				joinedAt: r.joinedAt ?? joinedAgo(2),
 				clubRole: defaultClubRoleForOffices(

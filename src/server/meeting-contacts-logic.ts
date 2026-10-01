@@ -72,7 +72,7 @@ export async function loadRosterWithContact(
 				id: members.id,
 				name: members.name,
 				preferredName: memberGoesBy,
-				phone: members.phone,
+				phone: people.phone,
 				email: members.email,
 			})
 			.from(members)
@@ -106,7 +106,7 @@ export async function loadHolderContacts(
 		const rows = await db
 			.select({
 				id: members.id,
-				phone: members.phone,
+				phone: people.phone,
 				email: members.email,
 				preferredName: memberGoesBy,
 			})

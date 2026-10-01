@@ -26,7 +26,7 @@ import { and, asc, eq, inArray, isNull, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
-import { members, mentorships } from "#/db/schema";
+import { members, mentorships, people } from "#/db/schema";
 import {
 	MENTORSHIP_FOCUS_OTHER_MAX,
 	MENTORSHIP_FOCUSES,
@@ -378,6 +378,9 @@ export async function setMentorshipFocus(input: {
 
 const other = alias(members, "other_party");
 const selfParty = alias(members, "self_party");
+/** The other party's Person: their phone lives there, not on the membership
+ *  (#906). */
+const otherPerson = alias(people, "other_person");
 
 /**
  * A pairing COUNTS (is shown, ticks "Get a mentor", keeps a mentee off the
@@ -411,10 +414,11 @@ async function activePairingsFor(
 			otherId: other.id,
 			otherName: other.name,
 			otherEmail: other.email,
-			otherPhone: other.phone,
+			otherPhone: otherPerson.phone,
 		})
 		.from(mentorships)
 		.innerJoin(other, eq(other.id, otherCol))
+		.innerJoin(otherPerson, eq(otherPerson.id, other.personId))
 		.innerJoin(selfParty, eq(selfParty.id, self))
 		.where(
 			and(

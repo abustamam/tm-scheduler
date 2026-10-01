@@ -26,7 +26,8 @@ async function addMember(
 		preferredName?: string | null;
 	} = {},
 ): Promise<string> {
-	const personId = await seedPerson({ name });
+	// The phone is the Person's (#906).
+	const personId = await seedPerson({ name, phone: opts.phone ?? null });
 	const [row] = await testDb
 		.insert(members)
 		.values({
@@ -35,7 +36,6 @@ async function addMember(
 			name,
 			clubRole: "member",
 			status: opts.status ?? "active",
-			phone: opts.phone ?? null,
 			email: opts.email ?? null,
 			preferredName: opts.preferredName ?? null,
 		})
@@ -209,7 +209,10 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		// field to copy (CSV import, onboarding), so it is NULL — the Person's
 		// value has to carry the greeting. Resolved at READ so every creation
 		// path is covered at once.
-		const personId = await seedPerson({ name: "Abdul-Rasheed Bustamam" });
+		const personId = await seedPerson({
+			name: "Abdul-Rasheed Bustamam",
+			phone: "+14155550007",
+		});
 		await testDb
 			.update(people)
 			.set({ preferredName: "Rasheed" })
@@ -220,7 +223,6 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 				clubId: seeded.clubId,
 				personId,
 				name: "Abdul-Rasheed Bustamam",
-				phone: "+14155550007",
 				preferredName: null,
 			})
 			.returning({ id: members.id });
@@ -236,7 +238,10 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 
 	it("lets this club's goes-by name win over the Person's", async () => {
 		// A club that records a different name for the same human keeps its own.
-		const personId = await seedPerson({ name: "Robert Smith" });
+		const personId = await seedPerson({
+			name: "Robert Smith",
+			phone: "+14155550008",
+		});
 		await testDb
 			.update(people)
 			.set({ preferredName: "Bob" })
@@ -247,7 +252,6 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 				clubId: seeded.clubId,
 				personId,
 				name: "Robert Smith",
-				phone: "+14155550008",
 				preferredName: "Rob",
 			})
 			.returning({ id: members.id });

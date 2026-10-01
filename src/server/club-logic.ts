@@ -61,7 +61,8 @@ export async function loadClubMembers(
 				id: members.id,
 				name: members.name,
 				email: members.email,
-				phone: members.phone,
+				// A Person fact (#906): one number across every club that holds them.
+				phone: people.phone,
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
 				// the auth link lives on people.user_id, not the membership row.
 				userId: people.userId,
@@ -91,7 +92,7 @@ export async function loadClubMembers(
  *
  * Carries the phone TWICE, on purpose:
  *   - `phone` — coalesced for display, so the WhatsApp link is a full number.
- *   - `phoneRaw` — the `members.phone` column byte-for-byte, for the edit form.
+ *   - `phoneRaw` — the `people.phone` column byte-for-byte, for the edit form.
  *
  * One field cannot serve both, for two reasons of very different weight.
  *
@@ -130,7 +131,8 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 					string | null
 				>`coalesce(${members.preferredName}, ${people.preferredName})`,
 				email: members.email,
-				phone: members.phone,
+				// A Person fact (#906): one number across every club that holds them.
+				phone: people.phone,
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
 				// the auth link lives on people.user_id, not the membership row.
 				userId: people.userId,

@@ -39,6 +39,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	setMemberPhone,
 	testDb,
 } from "#/test/db";
 
@@ -88,8 +89,10 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 		.where(inArray(clubs.id, [club.clubId]));
 	await testDb
 		.update(members)
-		.set({ phone: "+14155550100", joinedAt: new Date("2024-01-15T00:00:00Z") })
+		.set({ joinedAt: new Date("2024-01-15T00:00:00Z") })
 		.where(inArray(members.id, [club.memberId]));
+	// The phone is the Person's (#906).
+	await setMemberPhone(club.memberId, "+14155550100");
 	// A guest converted to a member: `joined_at` is the INSTANT of conversion,
 	// 19:30 on 1 Feb in Chicago, which is already 2 Feb in UTC.
 	await testDb

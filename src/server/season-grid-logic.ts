@@ -5,6 +5,7 @@ import {
 	guests,
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	type slotStatusEnum,
@@ -279,9 +280,11 @@ export async function loadSeasonGrid(input: {
 			name: members.name,
 			status: members.status,
 			email: members.email,
-			phone: members.phone,
+			// A Person fact (#906), through the membership's own `person_id`.
+			phone: people.phone,
 		})
 		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
 		.where(eq(members.clubId, input.clubId))
 		.orderBy(asc(members.name));
 	// Coalesce phone to E.164 with the club default country code (#295) so the

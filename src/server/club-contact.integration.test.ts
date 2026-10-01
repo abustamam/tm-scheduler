@@ -18,6 +18,7 @@ import {
 	type SeededClub,
 	seedClub,
 	seedPerson,
+	setMemberPhone,
 	testDb,
 } from "#/test/db";
 
@@ -28,10 +29,7 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 	beforeEach(async () => {
 		seed = await seedClub();
 		// A row as stored BEFORE normalize-on-write (#295/#397).
-		await testDb
-			.update(members)
-			.set({ phone: "(415) 555-2671" })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, "(415) 555-2671");
 	});
 	afterEach(async () => {
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
@@ -60,10 +58,7 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 		// the guess is visibly not a number anyone typed, which is the point. The
 		// member profile is the only screen showing what is actually on file.
 		const { loadMemberProfile } = await import("#/server/club-logic");
-		await testDb
-			.update(members)
-			.set({ phone: "415-555-2671 x12" })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, "415-555-2671 x12");
 
 		const row = await loadMemberProfile(seed.clubId, seed.memberId);
 		expect(row?.phoneRaw).toBe("415-555-2671 x12");
@@ -76,10 +71,7 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 		// padded value is the one shape where a `phoneRaw` implemented as
 		// "coalesce, then undo" would diverge from the column.
 		const { loadMemberProfile } = await import("#/server/club-logic");
-		await testDb
-			.update(members)
-			.set({ phone: "  call the office  " })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, "  call the office  ");
 
 		expect(
 			(await loadMemberProfile(seed.clubId, seed.memberId))?.phoneRaw,
@@ -96,10 +88,7 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 			.update(clubs)
 			.set({ defaultCountryCode: "+44" })
 			.where(eq(clubs.id, seed.clubId));
-		await testDb
-			.update(members)
-			.set({ phone: "020 7946 0018" })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, "020 7946 0018");
 
 		const rows = await loadClubMembers(seed.clubId);
 		expect(rows.find((r) => r.id === seed.memberId)?.phone).toBe(
@@ -120,10 +109,7 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 		const { loadClubMembers, loadMemberProfile } = await import(
 			"#/server/club-logic"
 		);
-		await testDb
-			.update(members)
-			.set({ phone: "call the office" })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, "call the office");
 
 		const rows = await loadClubMembers(seed.clubId);
 		expect(rows.find((r) => r.id === seed.memberId)?.phone).toBe(
@@ -138,10 +124,7 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 		const { loadClubMembers, loadMemberProfile } = await import(
 			"#/server/club-logic"
 		);
-		await testDb
-			.update(members)
-			.set({ phone: null })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, null);
 
 		const rows = await loadClubMembers(seed.clubId);
 		expect(rows.find((r) => r.id === seed.memberId)?.phone).toBeNull();

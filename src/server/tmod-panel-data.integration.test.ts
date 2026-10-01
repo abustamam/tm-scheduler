@@ -25,6 +25,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	setMemberPhone,
 	testDb,
 } from "#/test/db";
 
@@ -72,10 +73,9 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 		// "test that cannot fail" trap CLAUDE.md lists. Set one here so the
 		// withheld cases below are bracketed by a positive case that proves a
 		// non-null phone really does flow through the authorized path.
-		await testDb
-			.update(members)
-			.set({ phone: "+12025550101" })
-			.where(eq(members.clubId, seed.clubId));
+		// The phone is the Person's (#906); every member of this club gets one.
+		await setMemberPhone(seed.memberId, "+12025550101");
+		await setMemberPhone(seed.adminMemberId, "+12025550101");
 		await setPlanStatus(testDb, {
 			memberId: seed.memberId,
 			meetingId: seed.meetingId,

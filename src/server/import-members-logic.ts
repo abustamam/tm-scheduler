@@ -8,7 +8,7 @@
  * non-blank email → new person), then upsert the Membership for (club, person).
  * People are global (club-less); memberships are the per-club roster row.
  */
-import { and, desc, eq, exists, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, isNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import { activityLog, members, people } from "#/db/schema";
@@ -221,8 +221,8 @@ export async function loadAddressHolders(
 /**
  * Import mapped CSV rows into `people` + `members` for one club. Returns counts.
  * People-level facts (canonical name/contact, original join date, Customer ID)
- * land on `people`; the per-club membership carries name/email/phone (fill-only)
- * and `joined_at`.
+ * land on `people` (a phone number is one of them, #906); the per-club
+ * membership carries name/email (fill-only) and `joined_at`.
  *
  * The per-row verdicts (which Person a row resolves to, insert vs. fill-only
  * update of the membership) come from the shared pure decisions in
@@ -345,18 +345,31 @@ export async function importPeopleAndMembers(
 			// right to: this call site read `.set(pdRest)` when the field was merely
 			// destructured away, and putting `email` back into that object would
 			// have restored the removed cross-club writer with every gate green.
-			await write("person", rowIndex, personId, async (conn) =>
-				conn
+			//
+			// The phone is a FILL, enforced in the statement (#906 review): the plan
+			// decided from a snapshot loaded at the start of the file, so writing
+			// `pd.set.phone` unconditionally would put the snapshot's value back over
+			// a number an officer set since. It writes only when the plan filled it,
+			// and only onto a Person whose phone is STILL null.
+			const phoneFilled = pd.set.phone !== current.phone;
+			await write("person", rowIndex, personId, async (conn) => {
+				const rows = await conn
 					.update(people)
 					.set({
 						customerId: pd.set.customerId,
 						name: pd.set.name,
-						phone: pd.set.phone,
 						originalJoinDate: pd.set.originalJoinDate,
 					})
 					.where(eq(people.id, personId))
-					.returning({ id: people.id }),
-			);
+					.returning({ id: people.id });
+				if (phoneFilled) {
+					await conn
+						.update(people)
+						.set({ phone: pd.set.phone })
+						.where(and(eq(people.id, personId), isNull(people.phone)));
+				}
+				return rows;
+			});
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
 			current.phone = pd.set.phone;
@@ -382,14 +395,13 @@ export async function importPeopleAndMembers(
 			stats.peopleCreated++;
 		}
 
-		// Membership: one row per (club, person). Fill-only name/email/phone so an
+		// Membership: one row per (club, person). Fill-only name/email so an
 		// in-app edit is never clobbered; joined_at is per-club and always set.
 		const [existingMember] = await conn
 			.select({
 				id: members.id,
 				name: members.name,
 				email: members.email,
-				phone: members.phone,
 			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)))
@@ -451,8 +463,8 @@ export async function importPeopleAndMembers(
 			} else {
 				// Lost the race. Reconcile against the winner's row exactly as the
 				// non-raced branch above would — re-classifying is the whole point.
-				// Taking only the id would silently drop this CSV row's name/email/
-				// phone while still reporting the member as "updated", and the
+				// Taking only the id would silently drop this CSV row's name/email
+				// while still reporting the member as "updated", and the
 				// overlapping-import case this branch exists for is precisely when
 				// the two admins' files do NOT carry identical data.
 				const [raced] = await conn
@@ -460,7 +472,6 @@ export async function importPeopleAndMembers(
 						id: members.id,
 						name: members.name,
 						email: members.email,
-						phone: members.phone,
 					})
 					.from(members)
 					.where(
