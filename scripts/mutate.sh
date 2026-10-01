@@ -74,6 +74,19 @@
 #      regression here cannot start a recursive whole-suite run), and so is a
 #      label that is an existing *.test.ts(x) file, which is the same shift with
 #      two or more test paths given.
+#
+#   7. The test database follows src/test/setup-env.ts: an exported
+#      TEST_DATABASE_URL, else the worktree's own database from
+#      .env.test.local, else the shared tm_test. This used to default straight
+#      to tm_test, which overrode the worktree's database (#1001): on #765 the
+#      suite passed 106/106 under vitest and every mutation run aborted with
+#      "baseline is already RED", because tm_test lacked the branch's new
+#      column. The URL is now resolved by applyWorktreeTestDb itself
+#      (src/test/worktree-test-db.ts, via `bun -e`), so the two cannot drift:
+#      a bash copy of its parser already had, on a `/` inside a query param.
+#      A present-but-rejected file and an exported-but-empty value are both
+#      refused rather than quietly running on tm_test or on nothing, and the
+#      database name is printed with the baseline and the RED-baseline error.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -118,6 +131,7 @@ command -v perl >/dev/null || die "perl not found"
 
 # Guard 5 — absolute paths, so the cd below cannot retarget them.
 abspath() { printf '%s/%s' "$(cd "$(dirname "$1")" && pwd)" "$(basename "$1")"; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FILE="$(abspath "$FILE")"
 TARGETS=()
 for t in "$@"; do
@@ -127,8 +141,35 @@ done
 
 cd "$(git rev-parse --show-toplevel)" || die "not in a git repo"
 
-: "${TEST_DATABASE_URL:=postgresql://dev:dev@localhost:5432/tm_test}"
+# Guard 7 — resolve the test database with setup-env.ts's own code, never a bash copy of it.
+db_name() { local u="${1%%\?*}"; u="${u%%#*}"; printf '%s' "${u##*/}"; }
+if [ -n "${TEST_DATABASE_URL+set}" ]; then
+	[ -n "$TEST_DATABASE_URL" ] \
+		|| die "TEST_DATABASE_URL is exported but EMPTY; unset it or give it a URL (an empty one skips every integration suite)."
+else
+	command -v bun >/dev/null || die "bun not found; it is needed to read .env.test.local"
+	# Exit 4: no file, so the shared tm_test. Exit 3: a file applyWorktreeTestDb rejected.
+	WT_RC=0
+	WT_URL="$(WTDB_MODULE="$SCRIPT_DIR/../src/test/worktree-test-db.ts" WTDB_ROOT="$PWD" bun -e '
+		const m = await import(process.env.WTDB_MODULE);
+		const { existsSync } = await import("node:fs");
+		const { join } = await import("node:path");
+		const root = process.env.WTDB_ROOT;
+		if (!existsSync(join(root, m.TEST_DB_FILE))) process.exit(4);
+		const url = m.applyWorktreeTestDb({}, root);
+		if (!url) process.exit(3);
+		process.stdout.write(url);
+	' 2>&1)" || WT_RC=$?
+	case "$WT_RC" in
+	0) TEST_DATABASE_URL="$WT_URL" ;;
+	4) TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" ;;
+	3) die ".env.test.local exists but names no worktree test database; re-run \`bun run worktree:setup\`." ;;
+	*) die "could not read .env.test.local through src/test/worktree-test-db.ts:
+$WT_URL" ;;
+	esac
+fi
 export TEST_DATABASE_URL   # or ~630 integration tests silently skip and read green
+TEST_DB_NAME="$(db_name "$TEST_DATABASE_URL")"
 # The summary parse below greps plain text; an ANSI code between "Tests" and
 # the count would read as "collected NO tests". Vitest 4 does not colour that
 # line today, even under CI=true or FORCE_COLOR=1, but nothing promises it.
@@ -161,8 +202,8 @@ BASE_TOTAL="$(total_count "$BASE_OUT")"
 	|| die "baseline collected NO tests — check the paths. Output:
 $(printf '%s' "$BASE_OUT" | tail -5)"
 [ -z "$(failed_count "$BASE_OUT")" ] \
-	|| die "baseline is already RED; fix that before mutating."
-printf 'baseline: %s tests pass\n' "$BASE_TOTAL"
+	|| die "baseline is already RED against test database $TEST_DB_NAME; fix that before mutating."
+printf 'baseline: %s tests pass (test database %s)\n' "$BASE_TOTAL" "$TEST_DB_NAME"
 
 # Guard 1 — restore from a copy, never `git checkout`.
 BACKUP="$(mktemp)"
