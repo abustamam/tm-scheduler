@@ -265,6 +265,12 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// looks like this meeting". `targetType: "meeting"` names the SOURCE meeting.
 	// `detail = { templateId, mode: "new" | "replace", sourceMeetingId }`
 	"club_template_saved",
+	// A club set or cleared its default agenda (#910), directly or by adopting
+	// the standard agenda. ONE row per call, never one per meeting it applied
+	// to: `targetType: "club"`, `detail = { templateId, applied, keptEdited,
+	// keptSignups, keptRoles, failed }` where the five are COUNTS. `templateId: null` is a
+	// clear, which touches no meeting and carries zeros.
+	"club_default_template_set",
 	// A club admin downloaded the club's data export (the `.zip` of CSVs,
 	// #915). Logged because the file is every member's and guest's contact
 	// details, so "who took a copy, and when" is a question the club has to be
@@ -423,6 +429,26 @@ export const clubs = pgTable(
 		geIntroducesFunctionaries: boolean("ge_introduces_functionaries")
 			.notNull()
 			.default(false),
+		// The club's DEFAULT AGENDA (#910, spec D6): the club-owned template every
+		// new meeting starts on a private copy of. NULL = the club runs GavelUp's
+		// standard agenda, and "adopted" means exactly `IS NOT NULL` (D13).
+		//
+		// On the club rather than as an `is_default` flag on the template, so
+		// "exactly one default" is true by construction and no partial unique
+		// index is needed (the `db:push` predicate trap CLAUDE.md records).
+		// ON DELETE SET NULL: deleting the default template puts the club back on
+		// the standard agenda instead of orphaning the pointer.
+		//
+		// THE FK CANNOT SAY "a club-owned row of THIS club". It would accept a
+		// global template, another club's template or a meeting's private copy.
+		// Every writer enforces the real rule in its own query, not in a prior
+		// select (`setClubDefaultTemplate` / `adoptStandardAgenda`,
+		// `club-agendas-logic.ts`), and the one reader that copies from it
+		// re-checks it under FOR SHARE (`insertMeetingWithSlots`).
+		defaultTemplateId: uuid("default_template_id").references(
+			(): AnyPgColumn => meetingTemplates.id,
+			{ onDelete: "set null" },
+		),
 		// Whether the club runs its award votes on phones (#770). FALSE turns
 		// digital voting off for EVERY meeting of the club: no ballot QR on any
 		// agenda or slide, no Ballot Counter console, and `voting-logic.ts`

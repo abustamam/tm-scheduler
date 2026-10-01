@@ -98,6 +98,13 @@ const ALLOWED: { file: string; kind: Write["kind"]; contains: string }[] = [
 		contains: "ROLE_TEMPLATE",
 	},
 	{ file: "src/db/seed.ts", kind: "values", contains: "ROLE_TEMPLATE" },
+	// Seeding — a STANDARD role minted back into a club that lacks it
+	// (`materializeTemplateRoles`, #910): the stock guide, by key.
+	{
+		file: "src/server/meeting-templates-logic.ts",
+		kind: "values",
+		contains: "beforeNotes: stock?.beforeNotes ?? null",
+	},
 ];
 
 /**
@@ -110,6 +117,7 @@ const TEMPLATE_READERS = new Set([
 	"src/server/onboarding-logic.ts", // seeding: new club
 	"src/db/seed.ts", // seeding: dev data
 	"scripts/import-agendas-logic.ts", // seeding: Vote Counter backfill
+	"src/server/meeting-templates-logic.ts", // seeding: a minted standard role (#910)
 ]);
 
 describe("role guide writers (#933)", () => {

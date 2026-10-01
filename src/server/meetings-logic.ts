@@ -10,7 +10,6 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
-import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { isMeetingLocked, meetingDateReached } from "#/lib/meeting-lifecycle";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
@@ -24,7 +23,7 @@ import {
 	loadRosterWithContact,
 	type RosterContact,
 } from "./meeting-contacts-logic";
-import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
+import { generateMeetingSlots } from "./meeting-create-logic";
 import {
 	freezeMeetingNumber,
 	resolveMeetingNumber,
@@ -235,17 +234,11 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 			})
 			.returning({ id: meetings.id });
 
-		const slotRows = generateSlotRows(defs, meeting.id);
-		if (slotRows.length > 0) {
-			const inserted = await tx.insert(roleSlots).values(slotRows).returning({
-				id: roleSlots.id,
-				roleDefinitionId: roleSlots.roleDefinitionId,
-				slotIndex: roleSlots.slotIndex,
-			});
-			// Same linking as the batch/top-up path (#512) — shared rather than
-			// reimplemented, so the two creation routes cannot drift.
-			await linkEvaluatorsToSpeakers(tx, inserted, defs);
-		}
+		// The SAME seam as the batch, top-up and MCP paths (#512, #910): the
+		// club default agenda when one is set, the club's roles otherwise, and
+		// the evaluator links either way — shared rather than reimplemented, so
+		// the creation routes cannot drift.
+		await generateMeetingSlots(tx, input.clubId, meeting.id, defs);
 		return { meetingId: meeting.id };
 	});
 }

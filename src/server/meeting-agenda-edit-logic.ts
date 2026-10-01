@@ -25,7 +25,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
-import { materialiseRunOfShow } from "#/lib/agenda-materialise";
+import { materialiseRunOfShow, privateCopyKey } from "#/lib/agenda-materialise";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import {
 	isClubGovernable,
@@ -44,6 +44,10 @@ import {
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
 import { deriveRoleKey, foldRoleName } from "#/lib/role-def-match";
+import {
+	type DeclaredStandardRole,
+	declareStandardRoles,
+} from "#/lib/standard-agenda-roles";
 import type { TableTopicsLimits } from "#/lib/table-topics-limits";
 import { logActivity } from "./activity";
 import { loadMeetingSlots } from "./meeting-slots-logic";
@@ -272,28 +276,27 @@ export function agendaEditable(status: string): boolean {
 
 /**
  * The `meeting_template_roles` declarations a materialised standard agenda
- * carries: one per role key its seeds name, sourced from the CLUB's own
- * definitions so a club that renamed a role keeps its word (#445).
+ * carries, sourced from the CLUB's own definitions so a club that renamed a
+ * role keeps its word (#445). WHICH roles is `declareStandardRoles`
+ * (`#/lib/standard-agenda-roles`): the keys the seeds name, plus every other
+ * role the club runs — widened in #910, because the standard beats name only
+ * five keys and a copy declaring just those left the functionaries off every
+ * meeting created from a template saved from it.
  *
  * Split out of `materialiseForMeeting` (#966) so the connector's read path
  * can clock a never-edited meeting IN MEMORY with exactly the roles the copy
  * would be given, without writing the copy. A read only.
+ *
+ * THE role build (#910): materialising a copy, the connector's in-memory
+ * read, adopting the standard agenda, and the "still on the standard agenda"
+ * comparison all declare roles through this, so none of them can come to
+ * disagree about what a standard agenda's roles are.
  */
-async function declaredRolesForSeeds(
+export async function declaredRolesForSeeds(
 	conn: DbOrTx,
 	clubId: string,
 	seeds: { roleKey: string | null; repeatsRoleKey: string | null }[],
-): Promise<
-	{
-		key: string;
-		name: string;
-		category: AgendaDraftRole["category"];
-		defaultCount: number;
-		isSpeakerRole: boolean;
-		slotsUnordered: boolean;
-		sortOrder: number;
-	}[]
-> {
+): Promise<DeclaredStandardRole[]> {
 	const namedKeys = [
 		...new Set(
 			seeds
@@ -301,8 +304,10 @@ async function declaredRolesForSeeds(
 				.filter((key): key is string => key != null),
 		),
 	];
-	if (namedKeys.length === 0) return [];
-	const clubRoles = await conn
+	// The whole bank, not only the named keys: the rule also declares every
+	// other role the club runs. `role_definitions_club_key_unique` keeps the
+	// key lookup inside the rule unambiguous.
+	const bank = await conn
 		.select({
 			key: roleDefinitions.key,
 			name: roleDefinitions.name,
@@ -310,34 +315,78 @@ async function declaredRolesForSeeds(
 			defaultCount: roleDefinitions.defaultCount,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			slotsUnordered: roleDefinitions.slotsUnordered,
+			standing: roleDefinitions.standing,
+			enabled: roleDefinitions.enabled,
 		})
 		.from(roleDefinitions)
-		// No `isNull(templateId)` beside these: 0083 pinned the column NULL
-		// with a CHECK, so it matched every row. `role_definitions_club_key_unique`
-		// is what keeps `byKey` below unambiguous.
-		.where(
-			and(
-				eq(roleDefinitions.clubId, clubId),
-				inArray(roleDefinitions.key, namedKeys),
-			),
-		);
-	const byKey = new Map(
-		clubRoles.flatMap((r) => (r.key == null ? [] : [[r.key, r] as const])),
+		.where(eq(roleDefinitions.clubId, clubId))
+		.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));
+	return declareStandardRoles(namedKeys, bank);
+}
+
+/** The standard agenda for a club: its rows and its declared roles. */
+export type StandardAgenda = {
+	seeds: ReturnType<typeof materialiseRunOfShow>;
+	roles: Awaited<ReturnType<typeof declaredRolesForSeeds>>;
+};
+
+/**
+ * THE standard-agenda derivation, from club settings the caller has already
+ * read: the beats `materialiseRunOfShow` emits for the club's GE variant and
+ * Table Topics window, and the roles `declaredRolesForSeeds` declares for them
+ * (#910).
+ *
+ * Every consumer goes through this one function — `materialiseForMeeting`
+ * (what an opened meeting's copy is written from), the #966 connector's
+ * in-memory read, adoption, and the set-default comparison
+ * (`agendaMatchesStandard`). That comparison is only correct while what is
+ * WRITTEN and what it is compared against are the same derivation, which is
+ * why there is no second copy of these two calls anywhere.
+ */
+export async function standardAgendaFrom(
+	conn: DbOrTx,
+	clubId: string,
+	settings: {
+		geIntroducesFunctionaries: boolean;
+		tableTopicsLimits: TableTopicsLimits | null;
+	},
+): Promise<StandardAgenda> {
+	// Both settings forwarded, never defaulted: the Table Topics window is
+	// SNAPSHOTTED into the rows (#443), so a dropped one freezes our window
+	// into the club's own agenda (`table-topics-limits-wiring.guard.test.ts`).
+	const { geIntroducesFunctionaries, tableTopicsLimits } = settings;
+	const seeds = materialiseRunOfShow(
+		geIntroducesFunctionaries,
+		tableTopicsLimits,
 	);
-	return namedKeys.map((key, i) => {
-		const club = byKey.get(key);
-		return {
-			key,
-			// A key the club does not define falls back to the key itself
-			// rather than dropping the beat: the row still prints, owned by
-			// nobody, which is what an unstaffed role already does.
-			name: club?.name ?? key,
-			category: club?.category ?? ("functionary" as const),
-			defaultCount: club?.defaultCount ?? 1,
-			isSpeakerRole: club?.isSpeakerRole ?? false,
-			slotsUnordered: club?.slotsUnordered ?? false,
-			sortOrder: i,
-		};
+	return { seeds, roles: await declaredRolesForSeeds(conn, clubId, seeds) };
+}
+
+/**
+ * The standard agenda as it would materialise for this club RIGHT NOW, read
+ * from the club's current settings (`standardAgendaFrom`). Null for a club id
+ * that matches no club.
+ */
+export async function standardAgendaForClub(
+	conn: DbOrTx,
+	clubId: string,
+): Promise<StandardAgenda | null> {
+	const [club] = await conn
+		.select({
+			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
+		})
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (!club) return null;
+	return standardAgendaFrom(conn, clubId, {
+		geIntroducesFunctionaries: club.geIntroducesFunctionaries,
+		tableTopicsLimits: {
+			minSeconds: club.tableTopicsMinSeconds,
+			maxSeconds: club.tableTopicsMaxSeconds,
+		},
 	});
 }
 
@@ -379,16 +428,16 @@ async function materialiseForMeeting(
 			.limit(1);
 		if (locked?.templateId) return locked.templateId;
 
-		const seeds = materialiseRunOfShow(
+		const { seeds, roles: declared } = await standardAgendaFrom(tx, clubId, {
 			geIntroducesFunctionaries,
 			tableTopicsLimits,
-		);
+		});
 		const [tpl] = await tx
 			.insert(meetingTemplates)
 			.values({
 				clubId,
 				meetingId,
-				key: `meeting-${meetingId}`,
+				key: privateCopyKey(meetingId),
 				name: "Standard meeting",
 			})
 			.returning({ id: meetingTemplates.id });
@@ -410,7 +459,6 @@ async function materialiseForMeeting(
 		// NOT `role_definitions`, which own the meeting's slots and are
 		// deliberately left alone: copying those would detach this meeting's
 		// slots from the club roster.
-		const declared = await declaredRolesForSeeds(tx, clubId, seeds);
 		if (declared.length > 0) {
 			await tx
 				.insert(meetingTemplateRoles)
@@ -711,16 +759,16 @@ export async function readAgendaSnapshot(
 	let roles: AgendaDraftRole[];
 	let privateCopy = false;
 	if (meeting.templateId === null) {
-		const seeds = materialiseRunOfShow(
-			meeting.geIntroducesFunctionaries,
+		const standard = await standardAgendaFrom(conn, meeting.clubId, {
+			geIntroducesFunctionaries: meeting.geIntroducesFunctionaries,
 			tableTopicsLimits,
-		);
-		rows = seeds.map((seed, i) => ({
+		});
+		rows = standard.seeds.map((seed, i) => ({
 			...seed,
 			id: derivedRowId(i),
 			sortOrder: i,
 		}));
-		roles = (await declaredRolesForSeeds(conn, meeting.clubId, seeds)).map(
+		roles = standard.roles.map(
 			({ key, name, category, defaultCount, isSpeakerRole }) => ({
 				key,
 				name,

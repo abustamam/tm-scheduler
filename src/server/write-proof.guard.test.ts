@@ -611,6 +611,10 @@ const SESSION_GATES: string[] = [
 	// Module-private to `minutes.ts`, and the only `gateAdmin` in the tree.
 	"gateAdmin",
 	"requireMeetingTemplateEditor",
+	// #910. The club-keyed sibling of the one above — same three gates, keyed on
+	// a club instead of a meeting, for the Agendas page's writes. Admitted on
+	// the same evidence: `DERIVED_GATES` checks it still calls `requireUser(`.
+	"requireClubTemplateEditor",
 	// #752. Admitted because it reads the session ITSELF and throws without one
 	// before delegating — `DERIVED_GATES` checks the READ and
 	// `DERIVED_GATE_REFUSALS` checks the THROW, which together are the whole
@@ -666,6 +670,11 @@ const DERIVED_GATES: { call: string; file: string; mustCall: string }[] = [
 	{ call: "gateAdmin", file: "minutes.ts", mustCall: "requireUser(" },
 	{
 		call: "requireMeetingTemplateEditor",
+		file: "meeting-templates-logic.ts",
+		mustCall: "requireUser(",
+	},
+	{
+		call: "requireClubTemplateEditor",
 		file: "meeting-templates-logic.ts",
 		mustCall: "requireUser(",
 	},

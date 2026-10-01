@@ -13,6 +13,7 @@ import {
 	pickSpeakerAndEvaluatorRoles,
 	type RoleDefLite,
 } from "#/lib/meeting-roles";
+import { startMeetingOnClubDefault } from "./meeting-templates-logic";
 
 /**
  * What this module needs from a role definition: enough to generate the slots
@@ -59,7 +60,8 @@ export interface NewMeeting {
 }
 
 /**
- * Insert one meeting (plus role slots from the club template) idempotently:
+ * Insert one meeting (plus its agenda and role slots, `generateMeetingSlots`)
+ * idempotently:
  * `ON CONFLICT (club_id, scheduled_at) DO NOTHING`. Returns the new meeting id,
  * or `null` when a meeting already occupied that exact instant (or a concurrent
  * writer won the race) — the unique `(club_id, scheduled_at)` index is the
@@ -95,16 +97,40 @@ export async function insertMeetingWithSlots(
 		.onConflictDoNothing()
 		.returning({ id: meetings.id });
 	if (!row) return null;
-	const slotRows = generateSlotRows(defs, row.id);
+	await generateMeetingSlots(conn, m.clubId, row.id, defs);
+	return row.id;
+}
+
+/**
+ * Give a just-inserted meeting its agenda and its role slots: THE seam every
+ * creation path shares (#910), so none of them can forget the club default.
+ *
+ * With a club default agenda set, the meeting starts on a private copy of it
+ * and its slots come from that copy's declared roles
+ * (`startMeetingOnClubDefault`). Without one, or when the default has gone
+ * since the pointer was read, the meeting is on the standard agenda and its
+ * slots come from `defs` — the club's bank, which every caller reads ONCE per
+ * batch and passes in, as before.
+ *
+ * Not self-transactional; run it in the transaction that inserted the meeting.
+ */
+export async function generateMeetingSlots(
+	conn: DbOrTx,
+	clubId: string,
+	meetingId: string,
+	defs: MeetingSlotDefs[],
+): Promise<void> {
+	const slotDefs =
+		(await startMeetingOnClubDefault(conn, clubId, meetingId)) ?? defs;
+	const slotRows = generateSlotRows(slotDefs, meetingId);
 	if (slotRows.length > 0) {
 		const inserted = await conn.insert(roleSlots).values(slotRows).returning({
 			id: roleSlots.id,
 			roleDefinitionId: roleSlots.roleDefinitionId,
 			slotIndex: roleSlots.slotIndex,
 		});
-		await linkEvaluatorsToSpeakers(conn, inserted, defs);
+		await linkEvaluatorsToSpeakers(conn, inserted, slotDefs);
 	}
-	return row.id;
 }
 
 /**

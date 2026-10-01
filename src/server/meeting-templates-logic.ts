@@ -22,6 +22,12 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
+import {
+	agendaMatchesStandard,
+	COMPARED_BEAT_FIELDS,
+	type ComparableAgenda,
+	privateCopyKey,
+} from "#/lib/agenda-materialise";
 import type {
 	TemplateBeatRow,
 	TemplateRoleRow,
@@ -43,6 +49,7 @@ import {
 	matchRoleDefs,
 	type RoleIdentity,
 } from "#/lib/role-def-match";
+import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
 import { assertClubNotArchived, requireClubRole, requireUser } from "./guards";
@@ -61,6 +68,10 @@ import { isDeadlock } from "./pg-errors";
 export type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/** The stock roles by key — what `materializeTemplateRoles` seeds a minted
+ *  standard role's guide from. */
+const STOCK_ROLE_BY_KEY = new Map(ROLE_TEMPLATE.map((r) => [r.key, r]));
 
 /** A template as the picker shows it. */
 export type MeetingTemplateSummary = {
@@ -108,6 +119,32 @@ export async function requireMeetingTemplateEditor(meetingId: string) {
 	await assertClubNotArchived(meeting.clubId);
 	const membership = await requireClubRole(user.id, meeting.clubId, ["admin"]);
 	return { clubId: meeting.clubId, membership };
+}
+
+/**
+ * Gate a CLUB-keyed agenda-template action (#910, spec R3): the caller must be
+ * signed in, the club must not be archived, and the caller must be an officer
+ * of it. The same three gates as `requireMeetingTemplateEditor`, in the same
+ * order, keyed on a club instead of a meeting — setting the club's default
+ * agenda, adopting the standard agenda and managing the Agendas page have no
+ * meeting to resolve a club from.
+ *
+ * The club id is caller-supplied, which is fine HERE because the role check is
+ * against that very id. What it does not cover is a TEMPLATE id: a
+ * template-keyed call must still resolve the template by `id AND club_id AND
+ * meeting_id IS NULL` inside its own write query, or a template id from
+ * another club is a cross-club write (the docblock on `listAvailableTemplates`
+ * cites #544 and #560 for that shape).
+ *
+ * Lives here, beside its sibling, for the reason that one gives: a value
+ * export from a server-fn module is what `server-modules.guard.test.ts`
+ * forbids.
+ */
+export async function requireClubTemplateEditor(clubId: string) {
+	const user = await requireUser();
+	await assertClubNotArchived(clubId);
+	const membership = await requireClubRole(user.id, clubId, ["admin"]);
+	return { user, membership };
 }
 
 /**
@@ -432,20 +469,40 @@ export async function materializeTemplateRoles(
 	await conn
 		.insert(roleDefinitions)
 		.values(
-			missing.map((r) => ({
-				clubId,
-				key: r.key,
-				name: r.name,
-				category: r.category,
-				defaultCount: r.defaultCount,
-				sortOrder: r.sortOrder,
-				isSpeakerRole: r.isSpeakerRole,
-				slotsUnordered: r.slotsUnordered,
-				description: r.description,
-				// Its own club's role from here on, but NOT part of the club's
-				// standard meeting shape.
-				standing: false,
-			})),
+			missing.map((r) => {
+				// A STANDARD role key minted back into a club that does not hold
+				// it (a club template or an adopted default declaring a Vote
+				// Counter to a club that predates that role, or deleted it) gets
+				// the role's guide (#933), the text a club creation seeds it with.
+				// Without this the minted row carried none, and every guide
+				// surface fell back to its one-line description. A club-invented
+				// key has no stock guide and stays NULL, as it would from
+				// /admin/roles.
+				//
+				// The stock NAME and description stand in only for the
+				// placeholders `declaredRolesForSeeds` writes when the club has no
+				// row for a key — the bare key as the name, and no description —
+				// so a declaration that names the role properly keeps its own
+				// words, and /admin/roles never lists a role called
+				// "vote_counter".
+				const stock = STOCK_ROLE_BY_KEY.get(r.key);
+				return {
+					clubId,
+					key: r.key,
+					name: stock && r.name === r.key ? stock.name : r.name,
+					category: r.category,
+					defaultCount: r.defaultCount,
+					sortOrder: r.sortOrder,
+					isSpeakerRole: r.isSpeakerRole,
+					slotsUnordered: r.slotsUnordered,
+					description: r.description ?? stock?.description ?? null,
+					beforeNotes: stock?.beforeNotes ?? null,
+					duringNotes: stock?.duringNotes ?? null,
+					// Its own club's role from here on, but NOT part of the club's
+					// standard meeting shape.
+					standing: false,
+				};
+			}),
 		)
 		// Two officers converting two meetings to the same template at once both
 		// read an empty bank for a key. `role_definitions_club_key_unique` settles
@@ -649,6 +706,92 @@ export async function copyTemplateForMeeting(
 }
 
 /**
+ * Put a JUST-INSERTED meeting on a private copy of its club's default agenda
+ * (#910), and return the role definitions its slots must be generated from —
+ * or null when the club has no usable default, in which case the caller
+ * generates from the club's own roles exactly as before.
+ *
+ * Every creation path reaches this through `generateMeetingSlots`
+ * (`meeting-create-logic.ts`): the recurrence top-up, batch create, the MCP
+ * agenda plan and manual create.
+ *
+ * The default is re-checked, not trusted: `clubs.default_template_id`'s FK
+ * cannot say "an enabled club-owned row of THIS club", so the template is
+ * resolved by all four predicates here, under FOR SHARE, in the caller's
+ * transaction. The lock is what makes a concurrent delete safe: the copy below
+ * reads roles and beats in two statements, and a delete committing between
+ * them would otherwise leave half an agenda. A delete that wins the race
+ * leaves this read with no row, and so does a template disabled or re-owned
+ * since the pointer was read — each is a quiet fall back to the standard
+ * agenda, never a throw, because the top-up runs on every authenticated page
+ * load and a meeting nobody asked for must not take a page down. Any OTHER
+ * error (a copy over the size cap, a lost connection) propagates as today.
+ *
+ * Writes the copy, the meeting's pointer, the meeting's length when the
+ * template carries one (as `applyTemplateConversion` does), and whatever bank
+ * roles `resolveMeetingRoleDefs` has to mint. Not self-transactional: run it
+ * inside the transaction that inserted the meeting.
+ */
+export async function startMeetingOnClubDefault(
+	conn: DbOrTx,
+	clubId: string,
+	meetingId: string,
+): Promise<DeclaredRoleDef[] | null> {
+	// FOR SHARE, not a plain read (#910). A set-default writes the pointer
+	// under FOR NO KEY UPDATE and then scans upcoming meetings; this meeting's
+	// own insert holds only KEY SHARE on the club, which does not conflict, so
+	// a plain read could see the OLD pointer while the setter's scan, already
+	// past, never sees this uncommitted meeting — and it would land on the
+	// standard agenda in no result list. Share conflicts with no key update:
+	// either this read waits and sees the new default, or the setter waits for
+	// this meeting to commit and then finds it. No creation path takes a
+	// stronger club-row lock later in its transaction, so this cannot be
+	// upgraded into a deadlock.
+	const [club] = await conn
+		.select({ defaultTemplateId: clubs.defaultTemplateId })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.for("share")
+		.limit(1);
+	const defaultId = club?.defaultTemplateId ?? null;
+	if (defaultId === null) return null;
+
+	const [usable] = await conn
+		.select({
+			id: meetingTemplates.id,
+			defaultLengthMinutes: meetingTemplates.defaultLengthMinutes,
+		})
+		.from(meetingTemplates)
+		.where(
+			and(
+				eq(meetingTemplates.id, defaultId),
+				eq(meetingTemplates.clubId, clubId),
+				isNull(meetingTemplates.meetingId),
+				eq(meetingTemplates.enabled, true),
+			),
+		)
+		.for("share")
+		.limit(1);
+	if (!usable) return null;
+
+	const copyId = await copyTemplateForMeeting(conn, {
+		sourceTemplateId: usable.id,
+		clubId,
+		meetingId,
+	});
+	await conn
+		.update(meetings)
+		.set({
+			templateId: copyId,
+			...(usable.defaultLengthMinutes != null
+				? { lengthMinutes: usable.defaultLengthMinutes }
+				: {}),
+		})
+		.where(eq(meetings.id, meetingId));
+	return resolveMeetingRoleDefs(conn, clubId, copyId);
+}
+
+/**
  * The role definitions a meeting's slots are generated from: the club's
  * STANDING, enabled bank roles when there is no template, the template's
  * declarations resolved onto the bank when there is.
@@ -766,6 +909,21 @@ export type ConversionPlan = {
 	releasedHolders: ReleasedHolder[];
 };
 
+/**
+ * A plan plus the role NAMES the club-default apply reports (#910). Kept off
+ * `ConversionPlan` itself, which is the apply dialog's wire type and whose
+ * callers need neither.
+ */
+export type ConversionPlanDetail = ConversionPlan & {
+	/** Distinct names of the roles whose slots the conversion takes from a
+	 *  person: held, or carrying a speech. A speech on an UNCLAIMED slot has
+	 *  no holder to list, so `releasedHolders` alone cannot name it. */
+	releasedRoleNames: string[];
+	/** Distinct names of the roles of EVERY slot the conversion deletes, open
+	 *  ones included. */
+	removedRoleNames: string[];
+};
+
 /** This meeting's slots, annotated with role name and assignee name. */
 async function loadSlotsForConversion(conn: DbOrTx, meetingId: string) {
 	return conn
@@ -860,7 +1018,7 @@ async function resolveConversionTargetRoles(
 function planConversion<T extends TargetRole>(
 	current: Awaited<ReturnType<typeof loadSlotsForConversion>>,
 	target: T[],
-): { plan: ConversionPlan; matched: Map<string, T> } {
+): { plan: ConversionPlanDetail; matched: Map<string, T> } {
 	const matched = matchRoleDefs(distinctRoleDefs(current), target);
 	return {
 		plan: summarize(
@@ -876,9 +1034,12 @@ function summarize(
 	current: Awaited<ReturnType<typeof loadSlotsForConversion>>,
 	keepDefIds: Set<string>,
 	targetSlotCount: number,
-): ConversionPlan {
+): ConversionPlanDetail {
 	const doomed = current.filter((s) => !keepDefIds.has(s.roleDefinitionId));
 	const held = doomed.filter((s) => s.assignedMemberId || s.assignedGuestId);
+	const namesOf = (slots: typeof doomed) => [
+		...new Set(slots.map((s) => s.roleName)),
+	];
 	const kept = current.length - doomed.length;
 	return {
 		openSlotsRemoved: doomed.length - held.length,
@@ -892,7 +1053,175 @@ function summarize(
 			name: s.memberName ?? s.guestName ?? "Someone",
 			roleName: s.roleName,
 		})),
+		releasedRoleNames: namesOf(
+			doomed.filter(
+				(s) => s.assignedMemberId || s.assignedGuestId || s.speechId !== null,
+			),
+		),
+		removedRoleNames: namesOf(doomed),
 	};
+}
+
+/** Whether a conversion takes anything away from a person: a claimed slot,
+ *  or a speech attached to a slot it removes. The club-default apply's one
+ *  condition (#910), stated once for its pre-plan and its locked re-check. */
+export function releasesAnything(plan: ConversionPlan): boolean {
+	return plan.claimedSlotsReleased > 0 || plan.slotsWithSpeeches > 0;
+}
+
+/** Why a club-default apply refused a meeting under its lock (#910). */
+export type ApplyPreconditionReason = "edited" | "superseded" | "archived";
+
+/**
+ * `expectStandard` failed under the lock: the meeting was edited, the default
+ * changed, or the club was archived since the loop looked. The loop files
+ * `edited` under keptEdited and stops on the other two.
+ */
+export class ApplyPreconditionError extends Error {
+	readonly reason: ApplyPreconditionReason;
+	constructor(reason: ApplyPreconditionReason) {
+		super(
+			reason === "archived"
+				? CLUB_ARCHIVED_MESSAGE
+				: reason === "superseded"
+					? "The club's default agenda changed while it was being applied."
+					: "This meeting's agenda changed while the default was being applied.",
+		);
+		this.name = "ApplyPreconditionError";
+		this.reason = reason;
+	}
+}
+
+/**
+ * `applyTemplateConversion`'s `expectStandard` re-check, run under the club
+ * write lock and the meeting lock. See that input's docblock.
+ *
+ * The meeting's own copy needs no lock of its own: every agenda-editor write
+ * goes through `ensureAgendaDraft`, which takes the MEETING row FOR UPDATE
+ * first, and the conversion holds that row FOR NO KEY UPDATE — so an in-flight
+ * edit has committed before this reads, or waits until the conversion is done.
+ */
+async function assertStillApplicable(
+	tx: DbOrTx,
+	input: {
+		meetingId: string;
+		clubId: string;
+		lockedTemplateId: string | null;
+		applyingTemplateId: string | null;
+		templateId: string | null;
+		standard: ComparableAgenda;
+	},
+): Promise<void> {
+	const [club] = await tx
+		.select({
+			archivedAt: clubs.archivedAt,
+			defaultTemplateId: clubs.defaultTemplateId,
+		})
+		.from(clubs)
+		.where(eq(clubs.id, input.clubId))
+		.limit(1);
+	if (!club || isClubArchived(club)) {
+		throw new ApplyPreconditionError("archived");
+	}
+	if (club.defaultTemplateId !== input.applyingTemplateId) {
+		throw new ApplyPreconditionError("superseded");
+	}
+	if (input.lockedTemplateId !== input.templateId) {
+		throw new ApplyPreconditionError("edited");
+	}
+	if (input.lockedTemplateId !== null) {
+		const copy = await loadComparableCopy(
+			tx,
+			input.meetingId,
+			input.lockedTemplateId,
+		);
+		if (
+			!copy ||
+			copy.key !== privateCopyKey(input.meetingId) ||
+			!agendaMatchesStandard(copy, input.standard)
+		) {
+			throw new ApplyPreconditionError("edited");
+		}
+	}
+}
+
+/** The beat columns `agendaMatchesStandard` compares, as a select — built
+ *  FROM the comparator's own field list, so the two cannot drift apart. */
+const COMPARED_BEAT_COLUMNS = Object.fromEntries(
+	COMPARED_BEAT_FIELDS.map((field) => [field, meetingTemplateBeats[field]]),
+) as {
+	[K in (typeof COMPARED_BEAT_FIELDS)[number]]: (typeof meetingTemplateBeats)[K];
+};
+
+/**
+ * A meeting's agenda as `agendaMatchesStandard` reads it, plus its key — or
+ * null when `templateId` is not that meeting's OWN private copy (a shared
+ * legacy pointer, or a global template), which is by definition not the
+ * standard agenda. Shared by the set-default loop's unlocked first look and
+ * the locked re-check, so both compare the same columns.
+ */
+export async function loadComparableCopy(
+	conn: DbOrTx,
+	meetingId: string,
+	templateId: string,
+): Promise<(ComparableAgenda & { key: string }) | null> {
+	const [row] = await conn
+		.select({
+			key: meetingTemplates.key,
+			meetingId: meetingTemplates.meetingId,
+		})
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, templateId))
+		.limit(1);
+	if (!row || row.meetingId !== meetingId) return null;
+	const beats = await conn
+		.select(COMPARED_BEAT_COLUMNS)
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, templateId))
+		.orderBy(asc(meetingTemplateBeats.sortOrder));
+	const roles = await conn
+		.select({
+			key: meetingTemplateRoles.key,
+			defaultCount: meetingTemplateRoles.defaultCount,
+		})
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, templateId));
+	return { key: row.key, beats, roles };
+}
+
+/** Whether a conversion deletes any slot at all, claimed or open (#910). */
+export function removesAnything(plan: ConversionPlan): boolean {
+	return plan.openSlotsRemoved > 0 || plan.claimedSlotsReleased > 0;
+}
+
+/**
+ * A conversion refused by `refuseIfRemoving` (#910): the plan under the
+ * meeting's lock deletes a slot nobody holds. Carries the locked plan, whose
+ * `removedRoleNames` name the roles.
+ */
+export class WouldRemoveError extends Error {
+	readonly plan: ConversionPlanDetail;
+	constructor(plan: ConversionPlanDetail) {
+		super("Applying this agenda would remove a role this meeting has.");
+		this.name = "WouldRemoveError";
+		this.plan = plan;
+	}
+}
+
+/**
+ * A conversion refused by `refuseIfReleasing` (#910): the plan under the
+ * meeting's lock releases someone. Typed so the club-default apply can tell
+ * "a member signed up since I planned" (file it under the sign-ups list) from
+ * every other failure (file it under failed). Carries the locked plan, whose
+ * `releasedHolders` name the roles.
+ */
+export class WouldReleaseError extends Error {
+	readonly plan: ConversionPlanDetail;
+	constructor(plan: ConversionPlanDetail) {
+		super("Applying this agenda would release a role someone holds.");
+		this.name = "WouldReleaseError";
+		this.plan = plan;
+	}
 }
 
 /**
@@ -920,7 +1249,7 @@ function summarize(
 export async function planTemplateConversion(
 	meetingId: string,
 	templateId: string | null,
-): Promise<ConversionPlan> {
+): Promise<ConversionPlanDetail> {
 	const [meeting] = await database
 		.select({ clubId: meetings.clubId })
 		.from(meetings)
@@ -984,6 +1313,52 @@ export async function applyTemplateConversion(input: {
 	clubId: string;
 	templateId: string | null;
 	actorMemberId: string | null;
+	/**
+	 * Refuse, with a {@link WouldReleaseError} and before ANY write, when the
+	 * plan computed under this conversion's own meeting lock would release a
+	 * claimed slot or drop a speech (#910).
+	 *
+	 * For the club-default apply, which may only convert a meeting where
+	 * nothing is released. Its own pre-plan (`planTemplateConversion`) runs
+	 * without the lock, so a member claiming a role between that plan and this
+	 * transaction would otherwise be released by a bulk action that promised
+	 * never to. Omitted by the officer's own apply dialog, which confirms the
+	 * releases with a human instead.
+	 */
+	refuseIfReleasing?: boolean;
+	/**
+	 * Refuse, with a {@link WouldRemoveError} and before any write, when the
+	 * locked plan would DELETE any slot at all, open ones included (#910). The
+	 * club-default apply passes it: a default that lacks a role this meeting
+	 * has (a Timer, say) must not quietly take that role off the meeting even
+	 * when nobody holds it yet. Checked after `refuseIfReleasing`, so a
+	 * meeting that would lose a sign-up is reported as that.
+	 */
+	refuseIfRemoving?: boolean;
+	/**
+	 * The club-default apply's own preconditions, re-checked UNDER this
+	 * conversion's locks (#910). Its loop decides "this meeting is still on the
+	 * standard agenda" and "this is still the club's default" before it gets
+	 * here, without a lock; an officer editing the meeting's agenda, a second
+	 * officer setting or clearing the default, or an archive, can all commit in
+	 * between. Any of those throws an {@link ApplyPreconditionError} before the
+	 * first write:
+	 *
+	 *  - `edited` — the meeting no longer points at `templateId` (the pointer
+	 *    the loop saw), or its own copy no longer equals `standard`;
+	 *  - `superseded` — `clubs.default_template_id` is no longer the template
+	 *    being applied;
+	 *  - `archived` — the club was archived.
+	 *
+	 * Passing it also takes the club write lock FIRST, before the meeting row,
+	 * because this conversion then reads the club row under the meeting lock:
+	 * the lock order `club-write-lock.ts` requires of every writer that touches
+	 * both, and what serialises this check against a concurrent set-default.
+	 */
+	expectStandard?: {
+		templateId: string | null;
+		standard: ComparableAgenda;
+	};
 }): Promise<ConversionPlan> {
 	const { meetingId, clubId, templateId, actorMemberId } = input;
 
@@ -1008,6 +1383,7 @@ export async function applyTemplateConversion(input: {
 	}
 
 	return database.transaction(async (tx) => {
+		if (input.expectStandard) await lockClubForWrite(tx, clubId);
 		// Lock before copying templates or reading slots: the conversion plan must
 		// include slot edits committed while we waited.
 		const meeting = await lockMeetingForSlotEdit(tx, meetingId);
@@ -1019,6 +1395,53 @@ export async function applyTemplateConversion(input: {
 		assertMeetingNotLocked(meeting.status);
 		if (meeting.status === "cancelled") {
 			throw new Error("A cancelled meeting cannot change its template.");
+		}
+
+		if (input.expectStandard) {
+			await assertStillApplicable(tx, {
+				meetingId,
+				clubId,
+				lockedTemplateId: meeting.templateId,
+				applyingTemplateId: templateId,
+				...input.expectStandard,
+			});
+		}
+
+		// The SOURCE template, share-locked under the meeting lock and BEFORE
+		// the refusal plan reads its roles. Without it, a #909 replace (which
+		// takes this row FOR UPDATE to swap the content) could commit between
+		// that read and the copy below: the check would approve one role set and
+		// the copy install another. With it, a replace waits for this
+		// conversion, or this conversion reads the replace's committed content
+		// in both places. `copyTemplateForMeeting` takes the same lock again
+		// later; it is re-entrant.
+		if (templateId !== null) {
+			const [source] = await tx
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(
+					and(eq(meetingTemplates.id, templateId), templateVisibleTo(clubId)),
+				)
+				.for("share")
+				.limit(1);
+			if (!source) throw new Error("That meeting template no longer exists.");
+		}
+
+		// The no-release re-check, UNDER the lock and before the first write.
+		// The same derivation the preview runs — the SOURCE template's own
+		// declarations, which the copy below reproduces field for field — so
+		// "would release" here and the counts the apply returns are one answer.
+		if (input.refuseIfReleasing || input.refuseIfRemoving) {
+			const lockedPlan = planConversion(
+				await loadSlotsForConversion(tx, meetingId),
+				await resolveConversionTargetRoles(tx, clubId, templateId),
+			).plan;
+			if (input.refuseIfReleasing && releasesAnything(lockedPlan)) {
+				throw new WouldReleaseError(lockedPlan);
+			}
+			if (input.refuseIfRemoving && removesAnything(lockedPlan)) {
+				throw new WouldRemoveError(lockedPlan);
+			}
 		}
 
 		// The meeting's CURRENT private template, if it has one — captured before
@@ -1093,6 +1516,18 @@ export async function applyTemplateConversion(input: {
 		// slots already point at, which is what makes the loop below a no-op.
 		const { plan, matched } = planConversion(current, defs);
 		const keepDefIds = new Set(matched.keys());
+
+		// Belt and braces for the two refusals: the FINAL plan, against the
+		// roles actually installed, before anything destructive. The source lock
+		// above should make it agree with the first check; if anything ever lets
+		// the two disagree, this transaction rolls back instead of releasing a
+		// member or deleting a role the caller promised to keep.
+		if (input.refuseIfReleasing && releasesAnything(plan)) {
+			throw new WouldReleaseError(plan);
+		}
+		if (input.refuseIfRemoving && removesAnything(plan)) {
+			throw new WouldRemoveError(plan);
+		}
 
 		// Re-point, do not tear down. A slot whose role the target set still
 		// declares is the SAME role — the officer re-picked the shape it already
@@ -1508,9 +1943,10 @@ async function saveInTransaction(
 
 			// Now the target, exclusively, before its content is swapped — the
 			// lock every copier's FOR SHARE waits on (`copyTemplateContent`).
-			// Club templates are never deleted and this club's saves serialise on
-			// the club locks above, so the row read unlocked a moment ago is
-			// still this club's; the predicate is repeated anyway.
+			// A club template is deleted only by `deleteClubTemplate` (#910),
+			// which takes the same club write lock first, so the row read
+			// unlocked a moment ago is still this club's; the predicate is
+			// repeated anyway.
 			await tx
 				.select({ id: meetingTemplates.id })
 				.from(meetingTemplates)

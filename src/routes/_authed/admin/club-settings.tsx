@@ -1,4 +1,9 @@
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	redirect,
+	useRouter,
+} from "@tanstack/react-router";
 import { Download, Loader2 } from "lucide-react";
 import {
 	type ChangeEvent,
@@ -15,6 +20,7 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { CONTACT_MAILTO } from "#/lib/brand";
+import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
 import { clubExportUrl, exportLinkAllowed } from "#/lib/club-export-url";
 import {
 	ALLOWED_LOGO_MIME_TYPES,
@@ -768,10 +774,29 @@ function ClubSettings() {
 						<input
 							type="checkbox"
 							checked={geIntroduces}
+							// Locked while the club runs its own default agenda (#910,
+							// spec D5): the setting shapes only the STANDARD agenda, so
+							// it would change nothing a meeting shows. The server refuses
+							// a change too (`updateClubAgendaSettings`); this is the
+							// explanation, not the rule.
+							disabled={agenda.adopted}
+							aria-describedby={agenda.adopted ? "ge-locked-note" : undefined}
 							onChange={(e) => setGeIntroduces(e.target.checked)}
 						/>
 						General Evaluator introduces the functionaries
 					</label>
+					{agenda.adopted ? (
+						<p id="ge-locked-note" className="text-xs text-muted-foreground">
+							{GE_LOCKED_MESSAGE}{" "}
+							<Link
+								to="/admin/agendas"
+								search={{ club: adminClub.clubId }}
+								className="font-medium underline"
+							>
+								Go to Agendas
+							</Link>
+						</p>
+					) : null}
 					<p className="text-xs text-muted-foreground">
 						Most clubs have the Toastmaster of the Day introduce the Timer,
 						Ah-Counter, Grammarian and Vote Counter at the top of the meeting,
