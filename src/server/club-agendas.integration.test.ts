@@ -714,6 +714,24 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 				// extra hand-off, `geOpeningHandoff`.
 				expect(beats).toHaveLength(rows);
 				expect(beats.filter((b) => b.handoff)).toHaveLength(handoffs);
+				// `geOpeningHandoff`, by its literal content: the Toastmaster's
+				// hand-off to the General Evaluator inside the OPENING band, which
+				// only the GE variant has (spec R5).
+				const speechesAt = beats.findIndex((b) => b.label === "SPEECHES");
+				const openingHandoffs = beats
+					.slice(0, speechesAt)
+					.filter((b) => b.handoff)
+					.map((b) => [b.label, b.detail]);
+				expect(openingHandoffs).toEqual(
+					ge
+						? [
+								[
+									"Toastmaster of the Day",
+									"Introduces the {role:general_evaluator}{names:general_evaluator}",
+								],
+							]
+						: [],
+				);
 				expect(
 					beats.filter((b) => b.kind === "section").map((b) => b.label),
 				).toEqual([
@@ -935,6 +953,34 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 				expect((await meetingRow(id)).templateId).toBeNull();
 				await testDb.delete(meetings).where(eq(meetings.id, id));
 			}
+		});
+
+		it("falls back to the standard agenda when the default is deleted mid top-up, and throws nothing (T1)", async () => {
+			const first = new Date(Date.now() + 3 * DAY);
+			await testDb.insert(clubMeetingRecurrence).values({
+				clubId: club.clubId,
+				mode: "interval",
+				weekday: first.getUTCDay(),
+				intervalWeeks: 1,
+				anchorDate: first.toISOString().slice(0, 10),
+				timeOfDay: "18:45",
+				keepAhead: 1,
+				enabled: true,
+			});
+			const blocker = await openBlockingTx(async (tx) => {
+				await tx.delete(meetingTemplates).where(eq(meetingTemplates.id, lean));
+			});
+			const toppingUp = ensureScheduleToppedUp(club.clubId, new Date());
+			await waitForLockWait("for share", blocker.pid);
+			await blocker.commit();
+			const { created } = await toppingUp;
+			expect(created).toBe(1);
+			const [m] = await testDb
+				.select({ id: meetings.id, templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.clubId, club.clubId));
+			expect(m?.templateId).toBeNull();
+			expect(await slotCounts(m?.id as string)).toEqual(stockCounts());
 		});
 
 		it("falls back when the default was disabled behind the pointer", async () => {

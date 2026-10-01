@@ -312,7 +312,7 @@ export type ComparableAgenda = {
  * column added to the table later has to be decided about here: `id`,
  * `template_id` and timestamps are the only columns deliberately left out.
  */
-const COMPARED_BEAT_FIELDS = [
+export const COMPARED_BEAT_FIELDS = [
 	"kind",
 	"label",
 	"detail",
@@ -326,6 +326,17 @@ const COMPARED_BEAT_FIELDS = [
 	"markYellow",
 	"markRed",
 ] as const satisfies readonly (keyof ComparableBeat)[];
+
+/**
+ * The `key` a meeting's MATERIALISED standard-agenda copy is written with
+ * (`materialiseForMeeting`). A private copy of anything else keeps its
+ * source's key, so this is how "a copy of the standard agenda" is told apart
+ * from "a copy of a template" (#910). One spelling, read by the writer and by
+ * the set-default comparison.
+ */
+export function privateCopyKey(meetingId: string): string {
+	return `meeting-${meetingId}`;
+}
 
 /** The three mark columns are `real` — FLOAT4 — so a stored mark reads back
  *  rounded to single precision: a club's 2:20 Table Topics cap is 2.333…

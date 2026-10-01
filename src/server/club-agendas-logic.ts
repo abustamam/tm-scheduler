@@ -35,6 +35,7 @@ import {
 import {
 	agendaMatchesStandard,
 	type ComparableAgenda,
+	privateCopyKey,
 } from "#/lib/agenda-materialise";
 import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
@@ -46,10 +47,12 @@ import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
 import { standardAgendaForClub } from "./meeting-agenda-edit-logic";
 import {
+	ApplyPreconditionError,
 	applyTemplateConversion,
 	CLUB_TEMPLATE_GONE_MESSAGE,
 	copyTemplateContent,
 	forkLegacyPointers,
+	loadComparableCopy,
 	nextClubTemplateKey,
 	planTemplateConversion,
 	releasesAnything,
@@ -588,7 +591,7 @@ async function applyDefaultToUpcoming(
 		roles: standard.roles,
 	};
 
-	for (const meeting of candidates) {
+	for (const [index, meeting] of candidates.entries()) {
 		const ref: MeetingRef = {
 			meetingId: meeting.id,
 			scheduledAt: meeting.scheduledAt,
@@ -597,11 +600,11 @@ async function applyDefaultToUpcoming(
 			const copy =
 				meeting.templateId === null
 					? null
-					: await loadOwnCopy(meeting.id, meeting.templateId);
+					: await loadComparableCopy(database, meeting.id, meeting.templateId);
 			const standardNow =
 				meeting.templateId === null ||
 				(copy !== null &&
-					copy.key === `meeting-${meeting.id}` &&
+					copy.key === privateCopyKey(meeting.id) &&
 					agendaMatchesStandard(copy, expected));
 			if (!standardNow) {
 				result.keptEdited.push({
@@ -626,9 +629,35 @@ async function applyDefaultToUpcoming(
 				actorMemberId: null,
 				refuseIfReleasing: true,
 				refuseIfRemoving: true,
+				// Re-checked under the lock: still the pointer we compared, still
+				// standard, still the club's default, club still open.
+				expectStandard: { templateId: meeting.templateId, standard: expected },
 			});
 			result.applied.push(ref);
 		} catch (err) {
+			if (err instanceof ApplyPreconditionError) {
+				if (err.reason === "edited") {
+					result.keptEdited.push({ ...ref, onDefaultCopy: false });
+					continue;
+				}
+				// The club was archived mid-loop: this meeting and every one
+				// after it is reported as failed and the loop stops — the gate
+				// every other write honours, seen as soon as it commits.
+				if (err.reason === "archived") {
+					for (const rest of candidates.slice(index)) {
+						result.failed.push({
+							meetingId: rest.id,
+							scheduledAt: rest.scheduledAt,
+						});
+					}
+					return result;
+				}
+				// Superseded: another officer set or cleared the default since
+				// this one did. Stop applying the stale default, and list the
+				// remaining meetings nowhere — they belong to the newer call's
+				// own result, which ran its own loop over them.
+				return result;
+			}
 			if (err instanceof WouldReleaseError) {
 				result.keptSignups.push({
 					...ref,
@@ -644,55 +673,7 @@ async function applyDefaultToUpcoming(
 	return result;
 }
 
-/**
- * A meeting's agenda as the comparator reads it, or null when `templateId` is
- * not that meeting's OWN private copy (a shared legacy pointer, or a global
- * contest template) — which is by definition not the standard agenda.
- */
-async function loadOwnCopy(
-	meetingId: string,
-	templateId: string,
-): Promise<(ComparableAgenda & { key: string }) | null> {
-	const [row] = await database
-		.select({
-			key: meetingTemplates.key,
-			meetingId: meetingTemplates.meetingId,
-		})
-		.from(meetingTemplates)
-		.where(eq(meetingTemplates.id, templateId))
-		.limit(1);
-	if (!row || row.meetingId !== meetingId) return null;
-	const [beats, roles] = await Promise.all([
-		database
-			.select({
-				kind: meetingTemplateBeats.kind,
-				label: meetingTemplateBeats.label,
-				detail: meetingTemplateBeats.detail,
-				minutes: meetingTemplateBeats.minutes,
-				roleKey: meetingTemplateBeats.roleKey,
-				repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
-				flex: meetingTemplateBeats.flex,
-				handoff: meetingTemplateBeats.handoff,
-				clubGoverned: meetingTemplateBeats.clubGoverned,
-				markGreen: meetingTemplateBeats.markGreen,
-				markYellow: meetingTemplateBeats.markYellow,
-				markRed: meetingTemplateBeats.markRed,
-			})
-			.from(meetingTemplateBeats)
-			.where(eq(meetingTemplateBeats.templateId, templateId))
-			.orderBy(asc(meetingTemplateBeats.sortOrder)),
-		database
-			.select({
-				key: meetingTemplateRoles.key,
-				defaultCount: meetingTemplateRoles.defaultCount,
-			})
-			.from(meetingTemplateRoles)
-			.where(eq(meetingTemplateRoles.templateId, templateId)),
-	]);
-	return { key: row.key, beats, roles };
-}
-
-/** One activity row per set-default or adoption, with the four counts. */
+/** One activity row per set-default or adoption, with the five counts. */
 async function logDefaultSet(
 	clubId: string,
 	actorMemberId: string | null,

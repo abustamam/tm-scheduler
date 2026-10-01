@@ -22,6 +22,12 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
+import {
+	agendaMatchesStandard,
+	COMPARED_BEAT_FIELDS,
+	type ComparableAgenda,
+	privateCopyKey,
+} from "#/lib/agenda-materialise";
 import type {
 	TemplateBeatRow,
 	TemplateRoleRow,
@@ -731,10 +737,21 @@ export async function startMeetingOnClubDefault(
 	clubId: string,
 	meetingId: string,
 ): Promise<DeclaredRoleDef[] | null> {
+	// FOR SHARE, not a plain read (#910). A set-default writes the pointer
+	// under FOR NO KEY UPDATE and then scans upcoming meetings; this meeting's
+	// own insert holds only KEY SHARE on the club, which does not conflict, so
+	// a plain read could see the OLD pointer while the setter's scan, already
+	// past, never sees this uncommitted meeting — and it would land on the
+	// standard agenda in no result list. Share conflicts with no key update:
+	// either this read waits and sees the new default, or the setter waits for
+	// this meeting to commit and then finds it. No creation path takes a
+	// stronger club-row lock later in its transaction, so this cannot be
+	// upgraded into a deadlock.
 	const [club] = await conn
 		.select({ defaultTemplateId: clubs.defaultTemplateId })
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
+		.for("share")
 		.limit(1);
 	const defaultId = club?.defaultTemplateId ?? null;
 	if (defaultId === null) return null;
@@ -1052,6 +1069,126 @@ export function releasesAnything(plan: ConversionPlan): boolean {
 	return plan.claimedSlotsReleased > 0 || plan.slotsWithSpeeches > 0;
 }
 
+/** Why a club-default apply refused a meeting under its lock (#910). */
+export type ApplyPreconditionReason = "edited" | "superseded" | "archived";
+
+/**
+ * `expectStandard` failed under the lock: the meeting was edited, the default
+ * changed, or the club was archived since the loop looked. The loop files
+ * `edited` under keptEdited and stops on the other two.
+ */
+export class ApplyPreconditionError extends Error {
+	readonly reason: ApplyPreconditionReason;
+	constructor(reason: ApplyPreconditionReason) {
+		super(
+			reason === "archived"
+				? CLUB_ARCHIVED_MESSAGE
+				: reason === "superseded"
+					? "The club's default agenda changed while it was being applied."
+					: "This meeting's agenda changed while the default was being applied.",
+		);
+		this.name = "ApplyPreconditionError";
+		this.reason = reason;
+	}
+}
+
+/**
+ * `applyTemplateConversion`'s `expectStandard` re-check, run under the club
+ * write lock and the meeting lock. See that input's docblock.
+ *
+ * The meeting's own copy needs no lock of its own: every agenda-editor write
+ * goes through `ensureAgendaDraft`, which takes the MEETING row FOR UPDATE
+ * first, and the conversion holds that row FOR NO KEY UPDATE — so an in-flight
+ * edit has committed before this reads, or waits until the conversion is done.
+ */
+async function assertStillApplicable(
+	tx: DbOrTx,
+	input: {
+		meetingId: string;
+		clubId: string;
+		lockedTemplateId: string | null;
+		applyingTemplateId: string | null;
+		templateId: string | null;
+		standard: ComparableAgenda;
+	},
+): Promise<void> {
+	const [club] = await tx
+		.select({
+			archivedAt: clubs.archivedAt,
+			defaultTemplateId: clubs.defaultTemplateId,
+		})
+		.from(clubs)
+		.where(eq(clubs.id, input.clubId))
+		.limit(1);
+	if (!club || isClubArchived(club)) {
+		throw new ApplyPreconditionError("archived");
+	}
+	if (club.defaultTemplateId !== input.applyingTemplateId) {
+		throw new ApplyPreconditionError("superseded");
+	}
+	if (input.lockedTemplateId !== input.templateId) {
+		throw new ApplyPreconditionError("edited");
+	}
+	if (input.lockedTemplateId !== null) {
+		const copy = await loadComparableCopy(
+			tx,
+			input.meetingId,
+			input.lockedTemplateId,
+		);
+		if (
+			!copy ||
+			copy.key !== privateCopyKey(input.meetingId) ||
+			!agendaMatchesStandard(copy, input.standard)
+		) {
+			throw new ApplyPreconditionError("edited");
+		}
+	}
+}
+
+/** The beat columns `agendaMatchesStandard` compares, as a select — built
+ *  FROM the comparator's own field list, so the two cannot drift apart. */
+const COMPARED_BEAT_COLUMNS = Object.fromEntries(
+	COMPARED_BEAT_FIELDS.map((field) => [field, meetingTemplateBeats[field]]),
+) as {
+	[K in (typeof COMPARED_BEAT_FIELDS)[number]]: (typeof meetingTemplateBeats)[K];
+};
+
+/**
+ * A meeting's agenda as `agendaMatchesStandard` reads it, plus its key — or
+ * null when `templateId` is not that meeting's OWN private copy (a shared
+ * legacy pointer, or a global template), which is by definition not the
+ * standard agenda. Shared by the set-default loop's unlocked first look and
+ * the locked re-check, so both compare the same columns.
+ */
+export async function loadComparableCopy(
+	conn: DbOrTx,
+	meetingId: string,
+	templateId: string,
+): Promise<(ComparableAgenda & { key: string }) | null> {
+	const [row] = await conn
+		.select({
+			key: meetingTemplates.key,
+			meetingId: meetingTemplates.meetingId,
+		})
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, templateId))
+		.limit(1);
+	if (!row || row.meetingId !== meetingId) return null;
+	const beats = await conn
+		.select(COMPARED_BEAT_COLUMNS)
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, templateId))
+		.orderBy(asc(meetingTemplateBeats.sortOrder));
+	const roles = await conn
+		.select({
+			key: meetingTemplateRoles.key,
+			defaultCount: meetingTemplateRoles.defaultCount,
+		})
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, templateId));
+	return { key: row.key, beats, roles };
+}
+
 /** Whether a conversion deletes any slot at all, claimed or open (#910). */
 export function removesAnything(plan: ConversionPlan): boolean {
 	return plan.openSlotsRemoved > 0 || plan.claimedSlotsReleased > 0;
@@ -1198,6 +1335,30 @@ export async function applyTemplateConversion(input: {
 	 * meeting that would lose a sign-up is reported as that.
 	 */
 	refuseIfRemoving?: boolean;
+	/**
+	 * The club-default apply's own preconditions, re-checked UNDER this
+	 * conversion's locks (#910). Its loop decides "this meeting is still on the
+	 * standard agenda" and "this is still the club's default" before it gets
+	 * here, without a lock; an officer editing the meeting's agenda, a second
+	 * officer setting or clearing the default, or an archive, can all commit in
+	 * between. Any of those throws an {@link ApplyPreconditionError} before the
+	 * first write:
+	 *
+	 *  - `edited` — the meeting no longer points at `templateId` (the pointer
+	 *    the loop saw), or its own copy no longer equals `standard`;
+	 *  - `superseded` — `clubs.default_template_id` is no longer the template
+	 *    being applied;
+	 *  - `archived` — the club was archived.
+	 *
+	 * Passing it also takes the club write lock FIRST, before the meeting row,
+	 * because this conversion then reads the club row under the meeting lock:
+	 * the lock order `club-write-lock.ts` requires of every writer that touches
+	 * both, and what serialises this check against a concurrent set-default.
+	 */
+	expectStandard?: {
+		templateId: string | null;
+		standard: ComparableAgenda;
+	};
 }): Promise<ConversionPlan> {
 	const { meetingId, clubId, templateId, actorMemberId } = input;
 
@@ -1222,6 +1383,7 @@ export async function applyTemplateConversion(input: {
 	}
 
 	return database.transaction(async (tx) => {
+		if (input.expectStandard) await lockClubForWrite(tx, clubId);
 		// Lock before copying templates or reading slots: the conversion plan must
 		// include slot edits committed while we waited.
 		const meeting = await lockMeetingForSlotEdit(tx, meetingId);
@@ -1233,6 +1395,36 @@ export async function applyTemplateConversion(input: {
 		assertMeetingNotLocked(meeting.status);
 		if (meeting.status === "cancelled") {
 			throw new Error("A cancelled meeting cannot change its template.");
+		}
+
+		if (input.expectStandard) {
+			await assertStillApplicable(tx, {
+				meetingId,
+				clubId,
+				lockedTemplateId: meeting.templateId,
+				applyingTemplateId: templateId,
+				...input.expectStandard,
+			});
+		}
+
+		// The SOURCE template, share-locked under the meeting lock and BEFORE
+		// the refusal plan reads its roles. Without it, a #909 replace (which
+		// takes this row FOR UPDATE to swap the content) could commit between
+		// that read and the copy below: the check would approve one role set and
+		// the copy install another. With it, a replace waits for this
+		// conversion, or this conversion reads the replace's committed content
+		// in both places. `copyTemplateForMeeting` takes the same lock again
+		// later; it is re-entrant.
+		if (templateId !== null) {
+			const [source] = await tx
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(
+					and(eq(meetingTemplates.id, templateId), templateVisibleTo(clubId)),
+				)
+				.for("share")
+				.limit(1);
+			if (!source) throw new Error("That meeting template no longer exists.");
 		}
 
 		// The no-release re-check, UNDER the lock and before the first write.
@@ -1324,6 +1516,18 @@ export async function applyTemplateConversion(input: {
 		// slots already point at, which is what makes the loop below a no-op.
 		const { plan, matched } = planConversion(current, defs);
 		const keepDefIds = new Set(matched.keys());
+
+		// Belt and braces for the two refusals: the FINAL plan, against the
+		// roles actually installed, before anything destructive. The source lock
+		// above should make it agree with the first check; if anything ever lets
+		// the two disagree, this transaction rolls back instead of releasing a
+		// member or deleting a role the caller promised to keep.
+		if (input.refuseIfReleasing && releasesAnything(plan)) {
+			throw new WouldReleaseError(plan);
+		}
+		if (input.refuseIfRemoving && removesAnything(plan)) {
+			throw new WouldRemoveError(plan);
+		}
 
 		// Re-point, do not tear down. A slot whose role the target set still
 		// declares is the SAME role — the officer re-picked the shape it already

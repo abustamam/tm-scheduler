@@ -25,7 +25,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
-import { materialiseRunOfShow } from "#/lib/agenda-materialise";
+import { materialiseRunOfShow, privateCopyKey } from "#/lib/agenda-materialise";
 import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import {
 	isClubGovernable,
@@ -324,24 +324,53 @@ export async function declaredRolesForSeeds(
 	return declareStandardRoles(namedKeys, bank);
 }
 
+/** The standard agenda for a club: its rows and its declared roles. */
+export type StandardAgenda = {
+	seeds: ReturnType<typeof materialiseRunOfShow>;
+	roles: Awaited<ReturnType<typeof declaredRolesForSeeds>>;
+};
+
 /**
- * The standard agenda as it would materialise for this club RIGHT NOW: the
- * beats `materialiseRunOfShow` emits for the club's current GE variant and
+ * THE standard-agenda derivation, from club settings the caller has already
+ * read: the beats `materialiseRunOfShow` emits for the club's GE variant and
  * Table Topics window, and the roles `declaredRolesForSeeds` declares for them
- * from the club's current role bank (#910).
+ * (#910).
  *
- * The same two calls `materialiseForMeeting` makes, from the same club
- * columns, so a meeting whose copy was materialised and never touched compares
- * equal to this (`agendaMatchesStandard`), and the template adoption writes is
- * this. Null for a club id that matches no club.
+ * Every consumer goes through this one function — `materialiseForMeeting`
+ * (what an opened meeting's copy is written from), the #966 connector's
+ * in-memory read, adoption, and the set-default comparison
+ * (`agendaMatchesStandard`). That comparison is only correct while what is
+ * WRITTEN and what it is compared against are the same derivation, which is
+ * why there is no second copy of these two calls anywhere.
+ */
+export async function standardAgendaFrom(
+	conn: DbOrTx,
+	clubId: string,
+	settings: {
+		geIntroducesFunctionaries: boolean;
+		tableTopicsLimits: TableTopicsLimits | null;
+	},
+): Promise<StandardAgenda> {
+	// Both settings forwarded, never defaulted: the Table Topics window is
+	// SNAPSHOTTED into the rows (#443), so a dropped one freezes our window
+	// into the club's own agenda (`table-topics-limits-wiring.guard.test.ts`).
+	const { geIntroducesFunctionaries, tableTopicsLimits } = settings;
+	const seeds = materialiseRunOfShow(
+		geIntroducesFunctionaries,
+		tableTopicsLimits,
+	);
+	return { seeds, roles: await declaredRolesForSeeds(conn, clubId, seeds) };
+}
+
+/**
+ * The standard agenda as it would materialise for this club RIGHT NOW, read
+ * from the club's current settings (`standardAgendaFrom`). Null for a club id
+ * that matches no club.
  */
 export async function standardAgendaForClub(
 	conn: DbOrTx,
 	clubId: string,
-): Promise<{
-	seeds: ReturnType<typeof materialiseRunOfShow>;
-	roles: Awaited<ReturnType<typeof declaredRolesForSeeds>>;
-} | null> {
+): Promise<StandardAgenda | null> {
 	const [club] = await conn
 		.select({
 			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
@@ -352,11 +381,13 @@ export async function standardAgendaForClub(
 		.where(eq(clubs.id, clubId))
 		.limit(1);
 	if (!club) return null;
-	const seeds = materialiseRunOfShow(club.geIntroducesFunctionaries, {
-		minSeconds: club.tableTopicsMinSeconds,
-		maxSeconds: club.tableTopicsMaxSeconds,
+	return standardAgendaFrom(conn, clubId, {
+		geIntroducesFunctionaries: club.geIntroducesFunctionaries,
+		tableTopicsLimits: {
+			minSeconds: club.tableTopicsMinSeconds,
+			maxSeconds: club.tableTopicsMaxSeconds,
+		},
 	});
-	return { seeds, roles: await declaredRolesForSeeds(conn, clubId, seeds) };
 }
 
 /** What a write to a cancelled meeting's agenda is refused with. Exported so
@@ -397,16 +428,16 @@ async function materialiseForMeeting(
 			.limit(1);
 		if (locked?.templateId) return locked.templateId;
 
-		const seeds = materialiseRunOfShow(
+		const { seeds, roles: declared } = await standardAgendaFrom(tx, clubId, {
 			geIntroducesFunctionaries,
 			tableTopicsLimits,
-		);
+		});
 		const [tpl] = await tx
 			.insert(meetingTemplates)
 			.values({
 				clubId,
 				meetingId,
-				key: `meeting-${meetingId}`,
+				key: privateCopyKey(meetingId),
 				name: "Standard meeting",
 			})
 			.returning({ id: meetingTemplates.id });
@@ -428,7 +459,6 @@ async function materialiseForMeeting(
 		// NOT `role_definitions`, which own the meeting's slots and are
 		// deliberately left alone: copying those would detach this meeting's
 		// slots from the club roster.
-		const declared = await declaredRolesForSeeds(tx, clubId, seeds);
 		if (declared.length > 0) {
 			await tx
 				.insert(meetingTemplateRoles)
@@ -729,16 +759,16 @@ export async function readAgendaSnapshot(
 	let roles: AgendaDraftRole[];
 	let privateCopy = false;
 	if (meeting.templateId === null) {
-		const seeds = materialiseRunOfShow(
-			meeting.geIntroducesFunctionaries,
+		const standard = await standardAgendaFrom(conn, meeting.clubId, {
+			geIntroducesFunctionaries: meeting.geIntroducesFunctionaries,
 			tableTopicsLimits,
-		);
-		rows = seeds.map((seed, i) => ({
+		});
+		rows = standard.seeds.map((seed, i) => ({
 			...seed,
 			id: derivedRowId(i),
 			sortOrder: i,
 		}));
-		roles = (await declaredRolesForSeeds(conn, meeting.clubId, seeds)).map(
+		roles = standard.roles.map(
 			({ key, name, category, defaultCount, isSpeakerRole }) => ({
 				key,
 				name,
