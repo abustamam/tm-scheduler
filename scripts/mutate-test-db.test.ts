@@ -37,6 +37,9 @@ const WT_URL =
 	"postgresql://dev:dev@127.0.0.1:5433/tm_test_wt_fixture_branch_0123abcd";
 const EXPORTED_URL = "postgresql://dev:dev@127.0.0.1:5433/tm_test_exported";
 const SHARED_URL = "postgresql://dev:dev@localhost:5432/tm_test";
+// setup preserves a query string, and parseTestDbFile reads the pathname, so a
+// `/` inside a parameter must not be mistaken for the database segment.
+const WT_URL_WITH_QUERY = `${WT_URL}?sslrootcert=/tmp/ca.pem`;
 
 const TARGET_SRC = "export const one = 1;\n";
 
@@ -101,6 +104,7 @@ describe("scripts/mutate.sh test database (#1001)", () => {
 		const r = mutate({ expect: EXPORTED_URL, exported: EXPORTED_URL });
 		expect(r.out).toContain("(test database tm_test_exported)");
 		expect(r.out).toContain("KILLED");
+		expect(r.code).toBe(0);
 		unchanged();
 	}, 120_000);
 
@@ -108,8 +112,32 @@ describe("scripts/mutate.sh test database (#1001)", () => {
 		const r = mutate({ expect: SHARED_URL });
 		expect(r.out).toContain("(test database tm_test)");
 		expect(r.out).toContain("KILLED");
+		expect(r.code).toBe(0);
 		unchanged();
 	}, 120_000);
+
+	it("accepts a URL whose query string carries a slash, and names the right database", () => {
+		writeFileSync(
+			join(repo, TEST_DB_FILE),
+			formatTestDbFile(WT_URL_WITH_QUERY),
+		);
+		const r = mutate({ expect: WT_URL_WITH_QUERY });
+		expect(r.out).toContain(
+			"(test database tm_test_wt_fixture_branch_0123abcd)",
+		);
+		expect(r.out).toContain("KILLED");
+		expect(r.code).toBe(0);
+		unchanged();
+	}, 120_000);
+
+	it("refuses an exported-but-empty TEST_DATABASE_URL rather than running on nothing or on tm_test", () => {
+		writeFileSync(join(repo, TEST_DB_FILE), formatTestDbFile(WT_URL));
+		const r = mutate({ expect: WT_URL, exported: "" });
+		expect(r.code).not.toBe(0);
+		expect(r.out).toContain("TEST_DATABASE_URL is exported but EMPTY");
+		expect(r.out).not.toContain("baseline:");
+		unchanged();
+	}, 30_000);
 
 	it("names the database in the RED-baseline error", () => {
 		writeFileSync(join(repo, TEST_DB_FILE), formatTestDbFile(WT_URL));
