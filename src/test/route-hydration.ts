@@ -56,6 +56,23 @@ export const DEFAULT_CLIENT: ClientRuntime = {
 };
 
 /**
+ * How long `HydrationBrowser.launch` waits for Chrome to come up (#1029).
+ *
+ * The FIRST Chrome on a fresh CI runner is slow, and the second is not. Over
+ * the 40 `hydration` jobs before #1029, the teardown test's first launch took
+ * ~1.2s or ~6-9s, with a tail at 12.0s and 14.7s; its second launch took
+ * ~0.5s every time. The old wait was 150 polls 100ms apart, ~15s, so the tail
+ * crossed it: both red runs threw "Chrome exposed no page target" at ~15.18s
+ * (read at first as vitest's 15s timeout, which the test does not use). The
+ * second launch in those runs took 8.8s and 13.2s, the first having been
+ * killed before finishing whatever one-time work a cold start does.
+ *
+ * Four times the worst launch measured. It costs nothing when Chrome is fine,
+ * and a Chrome that dies fails at once rather than waiting it out (`start`).
+ */
+export const CHROME_LAUNCH_TIMEOUT_MS = 60_000;
+
+/**
  * The instant both processes are moved to: 03:30 UTC on the 15th of the
  * current UTC month, or of the previous one if that is still ahead. At 03:30
  * UTC it is 20:30 the PREVIOUS day in Los Angeles and 22:30 in Chicago, so the
@@ -310,12 +327,18 @@ export class HydrationBrowser {
 	static async launch(
 		client: ClientRuntime,
 		clockOffsetMs: number,
+		opts: {
+			/** The browser binary. Defaults to `findChrome()`. */
+			bin?: string;
+			/** Budget for Chrome to come up. See `CHROME_LAUNCH_TIMEOUT_MS`. */
+			launchTimeoutMs?: number;
+		} = {},
 	): Promise<HydrationBrowser> {
-		const bin = findChrome();
+		const bin = opts.bin ?? findChrome();
 		if (!bin) throw new Error("no Chrome: see findChrome() / CHROME_PATH");
 		const b = new HydrationBrowser(client, clockOffsetMs);
 		try {
-			await b.start(bin);
+			await b.start(bin, opts.launchTimeoutMs ?? CHROME_LAUNCH_TIMEOUT_MS);
 		} catch (err) {
 			await b.close();
 			throw err;
@@ -323,14 +346,24 @@ export class HydrationBrowser {
 		return b;
 	}
 
-	private async start(bin: string) {
-		const port = await freePort();
+	/**
+	 * Spawn Chrome and attach to its page target, within ONE deadline.
+	 *
+	 * Chrome picks its own DevTools port (`--remote-debugging-port=0`) and says
+	 * which on stderr, so there is no window between choosing a free port and
+	 * Chrome binding it for another process to take. And a Chrome that EXITS
+	 * while starting fails the launch at once, with what it printed, instead of
+	 * being polled for until the deadline and reported as a missing page target.
+	 */
+	private async start(bin: string, launchTimeoutMs: number) {
+		const started = Date.now();
+		const deadline = started + launchTimeoutMs;
 		this.dir = mkdtempSync(join(tmpdir(), "route-hydration-chrome-"));
 		this.chrome = spawn(
 			bin,
 			[
 				"--headless=new",
-				`--remote-debugging-port=${port}`,
+				"--remote-debugging-port=0",
 				"--no-first-run",
 				"--no-default-browser-check",
 				"--no-sandbox",
@@ -348,27 +381,95 @@ export class HydrationBrowser {
 					TZ: this.client.timeZone,
 					LANG: `${this.client.locale.replace("-", "_")}.UTF-8`,
 				},
-				stdio: "ignore",
+				// stderr only: it is where Chrome announces its DevTools endpoint,
+				// and what a launch failure quotes.
+				stdio: ["ignore", "ignore", "pipe"],
 				// Its own process group, so teardown can kill the renderers too.
 				detached: true,
 			},
 		);
+		const chrome = this.chrome;
 
+		// Drained for the whole life of the process, so a chatty Chrome never
+		// blocks on a full pipe; only the tail is kept, for an error message.
+		let stderr = "";
+		chrome.stderr?.setEncoding("utf8");
+		chrome.stderr?.on("data", (chunk: string) => {
+			stderr = (stderr + chunk).slice(-4_000);
+		});
+		const fail = (why: string) =>
+			new Error(
+				`Chrome ${why} after ${Date.now() - started}ms (budget ${launchTimeoutMs}ms).` +
+					(stderr.trim()
+						? ` Its stderr:\n${stderr.trim()}`
+						: " It printed nothing."),
+			);
+		const exitedEarly = () =>
+			chrome.exitCode !== null || chrome.signalCode !== null;
+
+		// 1. The endpoint, from Chrome's own announcement.
+		const endpoint = await new Promise<URL>((done, reject) => {
+			const timer = setTimeout(
+				() => finish(fail("announced no DevTools endpoint")),
+				Math.max(0, deadline - Date.now()),
+			);
+			const onData = () => {
+				const m = /DevTools listening on (ws:\/\/\S+)/.exec(stderr);
+				if (m?.[1]) finish(new URL(m[1]));
+			};
+			// `exit` can arrive before the last of stderr does, and stderr is the
+			// whole point of the message: let it drain, briefly.
+			const onExit = () => {
+				const report = () =>
+					finish(
+						fail(
+							`exited while starting (code ${chrome.exitCode}, signal ${chrome.signalCode})`,
+						),
+					);
+				if (!chrome.stderr || chrome.stderr.readableEnded) return report();
+				const grace = setTimeout(report, 1_000);
+				chrome.stderr.once("end", () => {
+					clearTimeout(grace);
+					report();
+				});
+			};
+			const onError = (err: Error) =>
+				finish(fail(`could not be spawned (${err.message})`));
+			function finish(result: URL | Error) {
+				clearTimeout(timer);
+				chrome.stderr?.off("data", onData);
+				chrome.off("exit", onExit);
+				chrome.off("error", onError);
+				if (result instanceof URL) done(result);
+				else reject(result);
+			}
+			chrome.stderr?.on("data", onData);
+			chrome.once("exit", onExit);
+			chrome.once("error", onError);
+			if (exitedEarly()) onExit();
+		});
+
+		// 2. The page target, which can trail the endpoint by a moment.
 		let wsUrl: string | undefined;
-		for (let i = 0; i < 150 && !wsUrl; i++) {
+		while (!wsUrl) {
+			if (exitedEarly()) throw fail("exited before exposing a page target");
+			if (Date.now() >= deadline) throw fail("exposed no page target");
 			try {
-				const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+				const res = await fetch(`http://${endpoint.host}/json/list`, {
+					signal: AbortSignal.timeout(
+						Math.max(1, Math.min(5_000, deadline - Date.now())),
+					),
+				});
 				const targets = (await res.json()) as Array<{
 					type: string;
 					webSocketDebuggerUrl: string;
 				}>;
 				wsUrl = targets.find((t) => t.type === "page")?.webSocketDebuggerUrl;
 			} catch {
-				// still starting
+				// not answering yet
 			}
 			if (!wsUrl) await new Promise((r) => setTimeout(r, 100));
 		}
-		if (!wsUrl) throw new Error("Chrome exposed no page target");
 
 		this.ws = new WebSocket(wsUrl);
 		await new Promise((done, fail) => {
