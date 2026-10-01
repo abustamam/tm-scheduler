@@ -443,65 +443,74 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	it("mergeMembers re-points (not cascade-deletes) the absorbed member's officer_terms + member_dues", async () => {
 		const { applyMemberMerge } = await import("#/server/members-logic");
 		const keeper = seed.memberId;
-		const absorbed = await addMemberRow(seed.clubId, "Dupe Officer");
 
-		// The absorbed membership holds an OPEN office and a paid dues record —
-		// both are ON DELETE CASCADE on members, so the old (non-collapse) merge
-		// silently destroyed them when it deleted the absorbed row directly.
-		await testDb.insert(officerTerms).values({
-			membershipId: absorbed,
-			position: "treasurer",
-			termStart: new Date(),
-			termEnd: null,
-		});
-		const [period] = await testDb
-			.insert(duesPeriods)
-			.values({
-				clubId: seed.clubId,
-				label: "2026 renewal",
-				dueDate: new Date(),
-			})
-			.returning({ id: duesPeriods.id });
-		if (!period) throw new Error("Failed to insert dues period");
-		await testDb.insert(memberDues).values({
-			membershipId: absorbed,
-			duesPeriodId: period.id,
-			status: "paid",
-			amountCents: 5000,
-		});
-
-		await applyMemberMerge({
-			clubId: seed.clubId,
-			keeperId: keeper,
-			absorbedId: absorbed,
-			actorMemberId: keeper,
-		});
-
-		// Absorbed member row gone.
-		const bRows = await testDb
-			.select()
-			.from(members)
-			.where(eq(members.id, absorbed));
-		expect(bRows.length).toBe(0);
-
-		// The office survived and now references the keeper (previously
-		// cascade-deleted along with the absorbed member row).
-		//
-		// Scoped to THIS club through the membership: officer_terms has no
+		// A second club holding its own OPEN treasurer term for the whole test,
+		// seeded BEFORE the merge. It does two jobs. officer_terms has no
 		// club_id, and a dozen other integration files write treasurer terms
 		// into the same database while this one runs, so a query on `position`
-		// alone counted their rows too ("expected length 1, got 3"). The
-		// foreign club below holds its own open treasurer term for the whole
-		// assertion, so an unscoped query fails here every run rather than only
-		// when another file happens to overlap.
+		// alone counted their rows too ("expected length 1, got 3"); with this
+		// row present an unscoped query fails here every run rather than only
+		// when another file happens to overlap. And because it exists while the
+		// merge runs, the assertions below also prove the merge leaves another
+		// club's offices alone. Cleaned up in `finally` so a failure anywhere
+		// below does not leak it.
 		const foreign = await seedClub();
 		try {
+			const [foreignTerm] = await testDb
+				.insert(officerTerms)
+				.values({
+					membershipId: foreign.memberId,
+					position: "treasurer",
+					termStart: new Date(),
+					termEnd: null,
+				})
+				.returning({ id: officerTerms.id });
+			if (!foreignTerm) throw new Error("Failed to insert foreign term");
+
+			const absorbed = await addMemberRow(seed.clubId, "Dupe Officer");
+
+			// The absorbed membership holds an OPEN office and a paid dues record —
+			// both are ON DELETE CASCADE on members, so the old (non-collapse) merge
+			// silently destroyed them when it deleted the absorbed row directly.
 			await testDb.insert(officerTerms).values({
-				membershipId: foreign.memberId,
+				membershipId: absorbed,
 				position: "treasurer",
 				termStart: new Date(),
 				termEnd: null,
 			});
+			const [period] = await testDb
+				.insert(duesPeriods)
+				.values({
+					clubId: seed.clubId,
+					label: "2026 renewal",
+					dueDate: new Date(),
+				})
+				.returning({ id: duesPeriods.id });
+			if (!period) throw new Error("Failed to insert dues period");
+			await testDb.insert(memberDues).values({
+				membershipId: absorbed,
+				duesPeriodId: period.id,
+				status: "paid",
+				amountCents: 5000,
+			});
+
+			await applyMemberMerge({
+				clubId: seed.clubId,
+				keeperId: keeper,
+				absorbedId: absorbed,
+				actorMemberId: keeper,
+			});
+
+			// Absorbed member row gone.
+			const bRows = await testDb
+				.select()
+				.from(members)
+				.where(eq(members.id, absorbed));
+			expect(bRows.length).toBe(0);
+
+			// The office survived and now references the keeper (previously
+			// cascade-deleted along with the absorbed member row). Scoped to THIS
+			// club through the membership, since officer_terms has no club_id.
 			const terms = await testDb
 				.select({
 					membershipId: officerTerms.membershipId,
@@ -518,22 +527,35 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 			expect(terms).toHaveLength(1);
 			expect(terms[0]?.membershipId).toBe(keeper);
 			expect(terms[0]?.termEnd).toBeNull();
+
+			// The other club's office is untouched: still there, still on its own
+			// member, still open.
+			const foreignRows = await testDb
+				.select({
+					membershipId: officerTerms.membershipId,
+					termEnd: officerTerms.termEnd,
+				})
+				.from(officerTerms)
+				.where(eq(officerTerms.id, foreignTerm.id));
+			expect(foreignRows).toHaveLength(1);
+			expect(foreignRows[0]?.membershipId).toBe(foreign.memberId);
+			expect(foreignRows[0]?.termEnd).toBeNull();
+
+			// The dues row survived and now references the keeper. Already scoped:
+			// `period` is the dues period this test inserted for its own club.
+			const dues = await testDb
+				.select()
+				.from(memberDues)
+				.where(eq(memberDues.duesPeriodId, period.id));
+			expect(dues).toHaveLength(1);
+			expect(dues[0]?.membershipId).toBe(keeper);
+			expect(dues[0]?.amountCents).toBe(5000);
 		} finally {
 			await cleanup(foreign.clubId, [
 				foreign.adminUserId,
 				foreign.memberUserId,
 			]);
 		}
-
-		// The dues row survived and now references the keeper. Already scoped:
-		// `period` is the dues period this test inserted for its own club.
-		const dues = await testDb
-			.select()
-			.from(memberDues)
-			.where(eq(memberDues.duesPeriodId, period.id));
-		expect(dues).toHaveLength(1);
-		expect(dues[0]?.membershipId).toBe(keeper);
-		expect(dues[0]?.amountCents).toBe(5000);
 	});
 
 	it("mergeMembers rejects absorbing a signed-in (user-linked) member", async () => {
