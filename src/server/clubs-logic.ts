@@ -5,6 +5,7 @@ import { eq, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs } from "#/db/schema";
+import { AGENDA_LAYOUTS, type AgendaLayout } from "#/lib/agenda-layouts";
 import { isClubArchived } from "#/lib/club-archive";
 import {
 	CLUB_TIMEZONES,
@@ -69,6 +70,9 @@ export type ResolvedClub = {
 	timezone: string;
 	clubNumber: string | null;
 	archivedAt: Date | null;
+	/** The layout a bare `/…/print` redirects to (#1069). A display
+	 *  preference, not personal data, so it is safe on this public projection. */
+	defaultPrintLayout: AgendaLayout;
 };
 
 /**
@@ -95,6 +99,7 @@ export async function resolveClubByIdentifier(
 			timezone: clubs.timezone,
 			clubNumber: clubs.clubNumber,
 			archivedAt: clubs.archivedAt,
+			defaultPrintLayout: clubs.defaultPrintLayout,
 		})
 		.from(clubs)
 		.where(or(...conds));
@@ -275,6 +280,9 @@ export type ClubAgendaSettings = {
 	 *  it is a per-club switch the same settings form saves, and every meeting
 	 *  reads it live. See `isDigitalVotingOn`. */
 	digitalVotingEnabled: boolean;
+	/** The layout the printed agenda opens in when no `?layout` is given
+	 *  (#1069). Not run-of-show variance either; the same form saves it. */
+	defaultPrintLayout: AgendaLayout;
 };
 
 /** The standard Toastmasters flow — what a club gets unless it says otherwise.
@@ -284,6 +292,7 @@ export const DEFAULT_CLUB_AGENDA_SETTINGS: ClubAgendaSettings = {
 	tableTopicsMinSeconds: null,
 	tableTopicsMaxSeconds: null,
 	digitalVotingEnabled: true,
+	defaultPrintLayout: "grid",
 };
 
 /** Read a club's agenda settings. Falls back to the standard flow when the club
@@ -297,6 +306,7 @@ export async function getClubAgendaSettings(
 			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
 			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
 			digitalVotingEnabled: clubs.digitalVotingEnabled,
+			defaultPrintLayout: clubs.defaultPrintLayout,
 		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
@@ -321,6 +331,9 @@ export const clubAgendaSettingsSchema = z
 		// #770 deployed posts the three fields above and nothing else, and a
 		// required field here would turn every one of its saves into a refusal.
 		digitalVotingEnabled: z.boolean().optional(),
+		// #1069. Optional for the same reason: a tab loaded before this field
+		// existed must not reset the club's layout to anything when it saves.
+		defaultPrintLayout: z.enum(AGENDA_LAYOUTS).optional(),
 	})
 	// Ceiling, both-or-neither and ordering, from `refuseTableTopicsSeconds` —
 	// the ONE statement of those three rules (#679). #443 shared the SENTENCES
@@ -369,6 +382,9 @@ export async function applyClubAgendaSettingsUpdate(
 				...(input.digitalVotingEnabled === undefined
 					? {}
 					: { digitalVotingEnabled: input.digitalVotingEnabled }),
+				...(input.defaultPrintLayout === undefined
+					? {}
+					: { defaultPrintLayout: input.defaultPrintLayout }),
 			})
 			.where(eq(clubs.id, input.clubId))
 			.returning({ id: clubs.id });

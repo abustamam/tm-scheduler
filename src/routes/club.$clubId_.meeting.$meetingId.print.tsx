@@ -1,6 +1,11 @@
 // src/routes/club.$clubId_.meeting.$meetingId.print.tsx
 
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	notFound,
+	redirect,
+} from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
 	type AgendaExplainer,
@@ -22,6 +27,11 @@ import { MeetingNotFound } from "#/components/meeting-not-found";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
 import {
+	AGENDA_LAYOUT_LABELS,
+	AGENDA_LAYOUTS,
+	isAgendaLayout,
+} from "#/lib/agenda-layouts";
+import {
 	applyFlex,
 	flexBannerMessage,
 	resolveAgendaRows,
@@ -40,31 +50,49 @@ import { getPublicMeetingByKey } from "#/server/meetings";
 
 // One-page layouts lead: we prefer single-page agendas, and both one-pagers now
 // carry color-coded timing. The two-page Timing/Spacious layouts stay available.
-const LAYOUTS: { id: AgendaLayout; label: string }[] = [
-	{ id: "grid", label: "Grid" },
-	{ id: "editorial", label: "Editorial" },
-	{ id: "timing", label: "Timing" },
-	{ id: "spacious", label: "Spacious" },
-];
-const LAYOUT_IDS = LAYOUTS.map((l) => l.id);
+// Built from the one list (#1069), which owns that order.
+export const LAYOUTS: { id: AgendaLayout; label: string }[] =
+	AGENDA_LAYOUTS.map((id) => ({ id, label: AGENDA_LAYOUT_LABELS[id] }));
+
+/** The tab marker for the club's default layout (#1069). */
+export const CLUB_DEFAULT_LABEL = "Club default";
 
 export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 	{
 		validateSearch: (
 			search: Record<string, unknown>,
-		): { layout: AgendaLayout; chrome?: "none" } => {
-			const l = search.layout;
-			return {
-				layout: LAYOUT_IDS.includes(l as AgendaLayout)
-					? (l as AgendaLayout)
-					: "grid",
-				// `chrome=none` is the clean shareable view (#334): no layout selector,
-				// offline badge, or timing banner — just the agenda + a Print button.
-				chrome: search.chrome === "none" ? "none" : undefined,
-			};
-		},
-		loader: async ({ params, location }) => {
+		): { layout?: AgendaLayout; chrome?: "none" } => ({
+			// No default here (#1069). A missing, empty or unknown layout is
+			// `undefined`, and the LOADER redirects it to the club's own default,
+			// which only the loader can know. Defaulting here is what hard-coded
+			// every print to Grid.
+			layout: isAgendaLayout(search.layout) ? search.layout : undefined,
+			// `chrome=none` is the clean shareable view (#334): no layout selector,
+			// offline badge, or timing banner — just the agenda + a Print button.
+			chrome: search.chrome === "none" ? "none" : undefined,
+		}),
+		// Only WHETHER a layout is named, not which: switching tabs must not
+		// re-run the loader (it fetches the meeting), and nothing it returns
+		// depends on the layout shown.
+		loaderDeps: ({ search }) => ({
+			layoutMissing: search.layout === undefined,
+			chrome: search.chrome,
+		}),
+		loader: async ({ params, location, deps }) => {
 			const club = await resolveClubOrRedirect(params.clubId, location);
+			// No layout named ⇒ 307 to the club's default (#1069), so every
+			// rendered print page carries an explicit `?layout=`. The service
+			// worker depends on that: it primes a bare `/…/print`, follows this
+			// redirect and caches the page under the FINAL url (`public/sw.js`).
+			// After the club resolves, so an archived or unknown club is still a
+			// 404 rather than a redirect to one.
+			if (deps.layoutMissing) {
+				throw redirect({
+					to: "/club/$clubId/meeting/$meetingId/print",
+					params: { clubId: params.clubId, meetingId: params.meetingId },
+					search: { layout: club.defaultPrintLayout, chrome: deps.chrome },
+				});
+			}
 			// An unknown meeting key is a 404, not a 500: `getPublicMeetingByKey`
 			// signals it by throwing, and without this the visitor gets the error
 			// boundary instead of the router's not-found page. Same translation the
@@ -93,6 +121,8 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			return {
 				...inRoomMeetingPayload(data),
 				logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
+				// So the toolbar can mark the club's default tab (#1069).
+				defaultPrintLayout: club.defaultPrintLayout,
 			};
 		},
 		component: PrintAgenda,
@@ -136,7 +166,7 @@ function timeRange(startsAt: Date, endsAt: Date, timeZone: string): string {
 }
 
 function PrintAgenda() {
-	const { layout, chrome } = Route.useSearch();
+	const { layout: searchLayout, chrome } = Route.useSearch();
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
 	// Clean shareable view: hide the editing chrome, keep only the Print button.
 	const bare = chrome === "none";
@@ -165,7 +195,11 @@ function PrintAgenda() {
 		tableTopicsMaxSeconds,
 		template,
 		logoUrl,
+		defaultPrintLayout,
 	} = Route.useLoaderData();
+	// The loader redirects a missing layout, so `searchLayout` is set on every
+	// page that renders; the fallback is for the type, and it is the club's.
+	const layout = searchLayout ?? defaultPrintLayout;
 	// The meeting page "in the room" (#913), not the ballot: its strip leads with
 	// Vote while a category is open, so voting still costs one tap — and a club
 	// that votes on paper gets a code too, since the strip is more than Vote.
@@ -269,6 +303,14 @@ function PrintAgenda() {
 								}}
 							>
 								{l.label}
+								{l.id === defaultPrintLayout ? (
+									<span
+										data-testid="club-default-marker"
+										style={{ marginLeft: 6, fontSize: 11, fontWeight: 500 }}
+									>
+										{CLUB_DEFAULT_LABEL}
+									</span>
+								) : null}
 							</Link>
 						))}
 					</div>

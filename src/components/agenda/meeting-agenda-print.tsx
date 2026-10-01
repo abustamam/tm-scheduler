@@ -9,6 +9,7 @@
 import { QRCodeSVG } from "qrcode.react";
 import { type RosterEntry, rosterGridPositions } from "#/lib/agenda";
 import { groupByPresenter } from "#/lib/agenda-groups";
+import type { AgendaLayout } from "#/lib/agenda-layouts";
 import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
 import { introducedSuffix } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
@@ -40,7 +41,8 @@ import {
 	YELLOW,
 } from "./print-theme";
 
-export type AgendaLayout = "timing" | "spacious" | "editorial" | "grid";
+// Defined once, with the list it is built from (#1069).
+export type { AgendaLayout };
 
 export type AgendaHeader = {
 	clubName: string;

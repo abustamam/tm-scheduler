@@ -13,6 +13,14 @@
 // `clubLogoUrl` here is what actually proves the loader threads the resolved
 // club id and the logo's `updatedAt` into it correctly, since the other call
 // site can't (it mocks that function away).
+import {
+	createMemoryHistory,
+	createRootRoute,
+	createRouter,
+	isRedirect,
+	RouterProvider,
+} from "@tanstack/react-router";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
@@ -22,7 +30,10 @@ vi.mock("#/server/club-logo", () => ({ getClubLogoMeta: vi.fn() }));
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
-import { Route } from "./club.$clubId_.meeting.$meetingId.print";
+import {
+	CLUB_DEFAULT_LABEL,
+	Route,
+} from "./club.$clubId_.meeting.$meetingId.print";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -61,6 +72,9 @@ const location = {
 	pathname: "/club/downtown/meeting/2026-07-31/print",
 	searchStr: "",
 };
+/** `loaderDeps` for a URL that names a valid layout: the loader renders. */
+const NAMED_LAYOUT = { layoutMissing: false, chrome: undefined };
+
 // biome-ignore lint/suspicious/noExplicitAny: loader takes the full router ctx
 const runLoader = (ctx: any) => (Route.options.loader as any)(ctx);
 
@@ -77,6 +91,7 @@ describe("Print agenda route — loader logo wiring (#495)", () => {
 		const result = await runLoader({
 			params: { clubId: "downtown", meetingId: "2026-07-31" },
 			location,
+			deps: NAMED_LAYOUT,
 		});
 
 		expect(result.logoUrl).toBeNull();
@@ -95,6 +110,7 @@ describe("Print agenda route — loader logo wiring (#495)", () => {
 		const result = await runLoader({
 			params: { clubId: "downtown", meetingId: "2026-07-31" },
 			location,
+			deps: NAMED_LAYOUT,
 		});
 
 		expect(result.logoUrl).toBe(
@@ -117,8 +133,179 @@ describe("Print agenda route — loader logo wiring (#495)", () => {
 		await runLoader({
 			params: { clubId: "downtown", meetingId: "2026-07-31" },
 			location,
+			deps: NAMED_LAYOUT,
 		});
 
 		expect(getClubLogoMeta).toHaveBeenCalledWith({ data: { clubId: CLUB_ID } });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The club's default layout (#1069). A URL that names no valid layout is
+// redirected to the club's own default by the LOADER (only it knows the club),
+// so `validateSearch` must stop defaulting and the loader must redirect.
+// ---------------------------------------------------------------------------
+
+const validateSearch = (s: Record<string, unknown>) =>
+	// biome-ignore lint/suspicious/noExplicitAny: route option signatures
+	(Route.options.validateSearch as any)(s);
+const loaderDeps = (search: unknown) =>
+	// biome-ignore lint/suspicious/noExplicitAny: route option signatures
+	(Route.options.loaderDeps as any)({ search });
+
+/** Run the loader for a URL with the given (raw) search, the way the router
+ *  does: validate it, derive the deps, call the loader, and return what it
+ *  threw or returned. */
+async function loadWithSearch(rawSearch: Record<string, unknown>) {
+	const deps = loaderDeps(validateSearch(rawSearch));
+	try {
+		return {
+			result: await runLoader({
+				params: { clubId: "downtown", meetingId: "2026-07-31" },
+				location,
+				deps,
+			}),
+		};
+	} catch (thrown) {
+		return { thrown };
+	}
+}
+
+function mockClub(defaultPrintLayout: string) {
+	vi.mocked(resolveClubOrRedirect).mockResolvedValue({
+		id: CLUB_ID,
+		slug: "downtown",
+		defaultPrintLayout,
+		// biome-ignore lint/suspicious/noExplicitAny: partial club is enough
+	} as any);
+	// biome-ignore lint/suspicious/noExplicitAny: server-fn call signature
+	vi.mocked(getPublicMeetingByKey).mockResolvedValue(meetingData() as any);
+	vi.mocked(getClubLogoMeta).mockResolvedValue(null);
+}
+
+describe("Print agenda route — validateSearch no longer defaults (#1069)", () => {
+	it("keeps a valid layout", () => {
+		expect(validateSearch({ layout: "editorial" })).toEqual({
+			layout: "editorial",
+			chrome: undefined,
+		});
+	});
+
+	it("leaves a missing, empty or unknown layout undefined instead of grid", () => {
+		for (const raw of [
+			{},
+			{ layout: "" },
+			{ layout: "bogus" },
+			{ layout: 3 },
+		]) {
+			expect(validateSearch(raw).layout).toBeUndefined();
+		}
+	});
+
+	it("derives only WHETHER a layout is named, so switching tabs does not re-run the loader", () => {
+		expect(loaderDeps({ layout: "grid" })).toEqual(
+			loaderDeps({ layout: "timing" }),
+		);
+		expect(loaderDeps({ layout: undefined }).layoutMissing).toBe(true);
+	});
+});
+
+describe("Print agenda route — loader redirects to the club default (#1069)", () => {
+	it("a bare /…/print redirects (307) to ?layout=<the club's default>, before fetching the meeting", async () => {
+		mockClub("timing");
+		const { thrown } = await loadWithSearch({});
+		expect(isRedirect(thrown)).toBe(true);
+		// biome-ignore lint/suspicious/noExplicitAny: redirect options
+		const opts = (thrown as any).options;
+		expect(opts.to).toBe("/club/$clubId/meeting/$meetingId/print");
+		expect(opts.params).toEqual({
+			clubId: "downtown",
+			meetingId: "2026-07-31",
+		});
+		expect(opts.search).toEqual({ layout: "timing", chrome: undefined });
+		expect((thrown as Response).status).toBe(307);
+		expect(getPublicMeetingByKey).not.toHaveBeenCalled();
+	});
+
+	it("an unknown layout redirects to the club default too, and chrome=none survives", async () => {
+		mockClub("spacious");
+		const { thrown } = await loadWithSearch({
+			layout: "bogus",
+			chrome: "none",
+		});
+		expect(isRedirect(thrown)).toBe(true);
+		// biome-ignore lint/suspicious/noExplicitAny: redirect options
+		expect((thrown as any).options.search).toEqual({
+			layout: "spacious",
+			chrome: "none",
+		});
+	});
+
+	it("a valid layout renders without a redirect, whatever the club's default, and returns the default for the tab marker", async () => {
+		mockClub("timing");
+		const { result, thrown } = await loadWithSearch({ layout: "editorial" });
+		expect(thrown).toBeUndefined();
+		expect(result.defaultPrintLayout).toBe("timing");
+	});
+
+	it("an unknown club is still a not-found, not a redirect", async () => {
+		const notFoundError = new Error("not found");
+		vi.mocked(resolveClubOrRedirect).mockRejectedValue(notFoundError);
+		const { thrown } = await loadWithSearch({});
+		expect(thrown).toBe(notFoundError);
+	});
+});
+
+describe("Print agenda route — the Club default tab marker (#1069)", () => {
+	async function renderPrint(search: { layout?: string; chrome?: "none" }) {
+		vi.spyOn(Route, "useSearch").mockReturnValue(
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+			search as any,
+		);
+		vi.spyOn(Route, "useParams").mockReturnValue({
+			clubId: "downtown",
+			meetingId: "2026-07-31",
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+		} as any);
+		vi.spyOn(Route, "useLoaderData").mockReturnValue({
+			...meetingData(),
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
+			template: null,
+			logoUrl: null,
+			defaultPrintLayout: "timing",
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+		} as any);
+		const Component = Route.options.component as () => React.ReactElement;
+		const rootRoute = createRootRoute({ component: () => <Component /> });
+		const router = createRouter({
+			routeTree: rootRoute,
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		render(<RouterProvider router={router} />);
+		// The toolbar is what these cases read, so wait for IT rather than for
+		// the router to settle: under a full parallel run the router can still
+		// read "pending" at waitFor's 1s default with the page already drawn.
+		await waitFor(
+			() =>
+				expect(document.querySelector("[data-print-toolbar]")).not.toBeNull(),
+			{ timeout: 10_000 },
+		);
+	}
+
+	afterEach(cleanup);
+
+	it("marks the club default's tab, and only that tab", async () => {
+		await renderPrint({ layout: "grid" });
+		const markers = screen.getAllByText(CLUB_DEFAULT_LABEL);
+		expect(markers).toHaveLength(1);
+		expect(markers[0]?.closest("a")?.textContent).toBe(
+			`Timing${CLUB_DEFAULT_LABEL}`,
+		);
+	});
+
+	it("shows no marker under chrome=none, where there are no tabs", async () => {
+		await renderPrint({ layout: "grid", chrome: "none" });
+		expect(screen.queryByText(CLUB_DEFAULT_LABEL)).toBeNull();
 	});
 });

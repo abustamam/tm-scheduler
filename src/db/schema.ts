@@ -59,6 +59,7 @@ export {
 // The `tool` discriminator's vocabulary (#812). Type-only, so it contributes
 // nothing at runtime and drizzle-kit's schema read is unaffected — same
 // standing as the import above, and relative for the same reason.
+import { AGENDA_LAYOUTS } from "../lib/agenda-layouts";
 import type { McpPendingTool } from "../lib/pending-plan";
 import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";
 // user is re-exported above for Better-Auth; imported here for people.userId and
@@ -127,6 +128,12 @@ export const templateBeatKindEnum = pgEnum("template_beat_kind", [
 	"role",
 	"event",
 ]);
+// The printed agenda's layouts (#1069), from the one list in
+// `src/lib/agenda-layouts.ts`. Read by `clubs.default_print_layout`.
+export const agendaPrintLayoutEnum = pgEnum(
+	"agenda_print_layout",
+	AGENDA_LAYOUTS,
+);
 export const roleCategoryEnum = pgEnum("role_category", [
 	"leadership",
 	"speaker",
@@ -460,6 +467,14 @@ export const clubs = pgTable(
 		digitalVotingEnabled: boolean("digital_voting_enabled")
 			.notNull()
 			.default(true),
+		// The layout a bare `/…/print` opens in (#1069): the meeting page's
+		// "Print agenda" link carries no `?layout`, and the print route's loader
+		// redirects to `?layout=<this>`. A display preference, not personal data,
+		// so it rides the public club resolver. 'grid' is what every print opened
+		// in before the column existed, so existing clubs needed no backfill.
+		defaultPrintLayout: agendaPrintLayoutEnum("default_print_layout")
+			.notNull()
+			.default("grid"),
 		// The club's ONE marketing-blast template (#931): headline, intro,
 		// why-join bullets, call to action and per-channel toggles, which the
 		// Promote sheet fills in from a meeting to draft a WhatsApp message, an
