@@ -115,7 +115,6 @@ export interface ExistingMembershipRow {
 	personId: string;
 	name: string;
 	email: string | null;
-	phone: string | null;
 }
 
 /**
@@ -365,17 +364,22 @@ function personValues(row: MappedMember): PersonValues {
 	};
 }
 
-/** A contact field the fill-only update populates (was empty, now filled). */
+/**
+ * A contact field a fill-only update populates (was empty, now filled). `name`
+ * and `email` are the membership's; `phone` is the PERSON's (#906) — a phone
+ * number is a Person fact, so the only phone an import fills is `people.phone`,
+ * through {@link resolvePersonDecision}'s fill-only `set`.
+ */
 export interface FieldFill {
 	field: "name" | "email" | "phone";
 	to: string;
 }
 
-/** Membership-row column values written on insert / fill-only update. */
+/** Membership-row column values written on insert / fill-only update. No
+ *  phone: it lives on `people` only (#906). */
 export interface MembershipValues {
 	name: string;
 	email: string | null;
-	phone: string | null;
 	joinedAt: Date | null;
 }
 
@@ -392,7 +396,7 @@ export type MembershipDecision =
 /** Classify the per-club membership for a row (insert vs. fill-only update). */
 export function classifyMembership(
 	row: MappedMember,
-	existing: Pick<ExistingMembershipRow, "name" | "email" | "phone"> | undefined,
+	existing: Pick<ExistingMembershipRow, "name" | "email"> | undefined,
 ): MembershipDecision {
 	if (!existing) {
 		return {
@@ -400,7 +404,6 @@ export function classifyMembership(
 			values: {
 				name: row.name,
 				email: row.email,
-				phone: row.phone,
 				joinedAt: row.joinedAt,
 			},
 		};
@@ -413,16 +416,12 @@ export function classifyMembership(
 	if (isBlank(existing.email) && !isBlank(row.email) && row.email) {
 		fills.push({ field: "email", to: row.email });
 	}
-	if (isBlank(existing.phone) && !isBlank(row.phone) && row.phone) {
-		fills.push({ field: "phone", to: row.phone });
-	}
 
 	return {
 		kind: "update",
 		set: {
 			name: fillOnly(existing.name, row.name) ?? existing.name,
 			email: fillOnly(existing.email, row.email),
-			phone: fillOnly(existing.phone, row.phone),
 			joinedAt: row.joinedAt,
 		},
 		fills,
@@ -584,6 +583,12 @@ export function planImport(
 		let personId: string;
 		// The Person the address check is about, or null for a row creating one.
 		let subject: AddressHolder | null = null;
+		// The Person phone this row fills, for the preview note (#906). The phone
+		// is the Person's now, so the membership arm no longer reports it; the
+		// Person's own fill-only write is what the note has to describe — on
+		// EITHER membership arm, since a row can fill an existing Person's phone
+		// while inserting their membership in this club.
+		let personPhoneFill: FieldFill | null = null;
 		if (pd.kind === "customerId" || pd.kind === "email") {
 			const current = people.find((p) => p.id === pd.id);
 			if (!current) continue; // unreachable
@@ -595,6 +600,11 @@ export function planImport(
 			// what made the preview promise a diff the commit would not perform.
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
+			// Derived from the decision itself, read before the mirror below
+			// overwrites `current` — never a second copy of the fill-only rule.
+			if (pd.set.phone !== current.phone && pd.set.phone) {
+				personPhoneFill = { field: "phone", to: pd.set.phone };
+			}
 			current.phone = pd.set.phone;
 		} else {
 			personId = `__new_person_${synthCounter++}`;
@@ -632,14 +642,19 @@ export function planImport(
 				phone: row.phone,
 				joinedAt: isoOrNull(row.joinedAt),
 				action: "update",
-				note: withConflict(updateNote(md.fills, row.joinedAt), conflict),
+				note: withConflict(
+					updateNote(
+						personPhoneFill ? [...md.fills, personPhoneFill] : md.fills,
+						row.joinedAt,
+					),
+					conflict,
+				),
 			});
 			// Mirror the fill-only write so a later same-person row sees it.
 			membershipByPerson.set(personId, {
 				...existingMember,
 				name: md.set.name,
 				email: md.set.email,
-				phone: md.set.phone,
 			});
 		} else if (md.kind === "insert") {
 			summary.toInsert++;
@@ -652,7 +667,9 @@ export function planImport(
 				note: withConflict(
 					pd.kind === "ambiguous"
 						? "New — shares an email with another member; added separately"
-						: null,
+						: personPhoneFill
+							? updateNote([personPhoneFill], null)
+							: null,
 					conflict,
 				),
 			});
@@ -661,7 +678,6 @@ export function planImport(
 				personId,
 				name: md.values.name,
 				email: md.values.email,
-				phone: md.values.phone,
 			});
 		}
 	}

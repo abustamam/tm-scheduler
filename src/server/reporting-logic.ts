@@ -284,7 +284,7 @@ export async function loadLevelProximity(
 					memberId: members.id,
 					name: members.name,
 					email: members.email,
-					phone: members.phone,
+					phone: people.phone,
 					preferredName: memberGoesBy,
 				})
 				.from(members)
@@ -368,7 +368,7 @@ export async function loadOrientationRoster(
 				memberId: members.id,
 				name: members.name,
 				email: members.email,
-				phone: members.phone,
+				phone: people.phone,
 				preferredName: memberGoesBy,
 				startedAt: members.orientationStartedAt,
 			})

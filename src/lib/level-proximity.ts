@@ -53,7 +53,7 @@ export type LevelProgress = Pick<
 export interface LevelProximityContact {
 	/** The club's own `members.email`; a blank value is stored as null. */
 	email: string | null;
-	/** `members.phone` normalized by `toE164` with the club's country code. */
+	/** `people.phone` (#906) normalized by `toE164` with the club's country code. */
 	phone: string | null;
 	/** `coalesce(members.preferred_name, people.preferred_name)` (#486). */
 	preferredName: string | null;

@@ -811,6 +811,50 @@ export const peopleEmailBackup = pgTable("people_email_backup", {
 });
 
 // ---------------------------------------------------------------------------
+// What migration 0107 overwrote in `people.phone` (#906).
+//
+// TEMPORARY, and meant to be dropped, like `people_email_backup` above. 0107
+// makes `people.phone` the only phone column and drops `members.phone`, first
+// copying each Person's newest present membership phone onto the Person where
+// the digits differ or the Person has none. This holds the value each changed
+// Person had BEFORE that copy (null included, for a fill), so a rollback can put
+// it back. One snapshot, from one migration; nothing writes to it at runtime.
+// Drop it (schema + a migration) once a release has passed without incident.
+// ---------------------------------------------------------------------------
+
+export const peoplePhoneBackup = pgTable("people_phone_backup", {
+	// Deliberately NOT a foreign key, for the reason `people_email_backup` gives:
+	// a cascade would let `mergePeople` delete the undo along with the Person.
+	personId: uuid("person_id").primaryKey(),
+	// Nullable: a Person whose phone was null and got FILLED is a changed row
+	// too, and "it was null" is the value a rollback restores.
+	phone: text("phone"),
+	capturedAt: timestamp("captured_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// Every membership phone migration 0107 dropped with `members.phone` (#906).
+//
+// TEMPORARY, and meant to be dropped, like the two backups above. The backfill
+// keeps ONE number per Person — the newest membership's — so a correct number
+// on an older membership would otherwise be destroyed by the DROP. This holds
+// every membership phone that had at least one digit, as stored, so nothing the
+// drop removed is unrecoverable. One snapshot; nothing writes to it at runtime.
+// Drop it (schema + a migration) once a release has passed without incident.
+// ---------------------------------------------------------------------------
+
+export const membersPhoneBackup = pgTable("members_phone_backup", {
+	// Deliberately NOT foreign keys, for the reason `people_email_backup` gives:
+	// a cascade from a club, membership or Person delete (or a merge) would take
+	// the undo with it.
+	memberId: uuid("member_id").primaryKey(),
+	clubId: uuid("club_id"),
+	personId: uuid("person_id"),
+	phone: text("phone"),
+	capturedAt: timestamp("captured_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
 // Roster members (self-serve MVP — auth-decoupled identities).
 // The Membership: a Person's participation in one Club (one row per person per
 // club). Person-level facts live on `people`; this row holds the per-club facts.
@@ -830,15 +874,15 @@ export const members = pgTable(
 			.notNull()
 			.references(() => people.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
-		// AUTHORITATIVE for this club (#486), denormalized like `name`/`email`/
-		// `phone`. Null does NOT mean "no name recorded" — the read falls back to
+		// AUTHORITATIVE for this club (#486), denormalized like `name`/`email`.
+		// (A phone number is a Person fact and lives only on `people.phone`,
+		// #906.) Null does NOT mean "no name recorded" — the read falls back to
 		// `people.preferred_name` (COALESCE in `meeting-contacts-logic.ts`), which
 		// is what lets a member who set it in another club be greeted correctly
 		// here. Replication is one-way and one-shot: a membership edit seeds the
 		// Person when the Person has none. Nothing ever copies Person → membership.
 		preferredName: text("preferred_name"),
 		email: text("email"),
-		phone: text("phone"),
 		// Authorization role for this membership (ADR-0008 Phase B / #99). The auth
 		// path (guards.ts / auth-context.ts) resolves a signed-in user → Person
 		// (people.user_id) → their memberships, and reads this role per club. An

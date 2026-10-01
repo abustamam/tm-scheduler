@@ -90,7 +90,8 @@ async function addMember(
 	const name = opts.name ?? `Member ${randomUUID().slice(0, 8)}`;
 	const [person] = await testDb
 		.insert(people)
-		.values({ name })
+		// The phone is the Person's (#906).
+		.values({ name, phone: opts.phone ?? null })
 		.returning({ id: people.id });
 	if (!person) throw new Error("fixture");
 	const [m] = await testDb
@@ -100,7 +101,6 @@ async function addMember(
 			personId: person.id,
 			name,
 			email: `${randomUUID()}@test.example`,
-			phone: opts.phone ?? null,
 			status: opts.status ?? "active",
 			willingToMentor: opts.willing ?? false,
 		})

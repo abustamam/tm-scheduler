@@ -10,11 +10,12 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, guests, members, people } from "#/db/schema";
+import { clubs, guests, people } from "#/db/schema";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import {
 	cleanup,
 	hasTestDb,
+	memberPhone,
 	type SeededClub,
 	seedClub,
 	testDb,
@@ -54,10 +55,8 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			name: "Member User",
 			phone: "415-555-2671",
 		});
-		const [m] = await testDb
-			.select({ phone: members.phone })
-			.from(members)
-			.where(eq(members.id, club.memberId));
+		// The edit writes the Person (#906).
+		const m = { phone: await memberPhone(club.memberId) };
 		expect(m.phone).toBe("+14155552671");
 	});
 
@@ -69,14 +68,12 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			name: "Member User",
 			phone: "+44 20 7946 0958",
 		});
-		const [m] = await testDb
-			.select({ phone: members.phone })
-			.from(members)
-			.where(eq(members.id, club.memberId));
+		// The edit writes the Person (#906).
+		const m = { phone: await memberPhone(club.memberId) };
 		expect(m.phone).toBe("+442079460958");
 	});
 
-	it("bulk import stores E.164 on both the person and the membership", async () => {
+	it("bulk import stores E.164 on the person (the only phone column, #906)", async () => {
 		await applyBulkImport({
 			actorMemberId: null,
 			clubId: club.clubId,
@@ -88,12 +85,7 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			.select({ phone: people.phone })
 			.from(people)
 			.where(eq(people.name, "Bulk Person"));
-		const [m] = await testDb
-			.select({ phone: members.phone })
-			.from(members)
-			.where(eq(members.name, "Bulk Person"));
 		expect(p.phone).toBe("+14155552671");
-		expect(m.phone).toBe("+14155552671");
 	});
 
 	it("assigning a new guest to a slot stores the guest phone as E.164", async () => {
@@ -128,15 +120,10 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			.select({ phone: people.phone })
 			.from(people)
 			.where(eq(people.name, "Convert Guest"));
-		const [m] = await testDb
-			.select({ phone: members.phone })
-			.from(members)
-			.where(eq(members.name, "Convert Guest"));
 		expect(p.phone).toBe("+14155552671");
-		expect(m.phone).toBe("+14155552671");
 	});
 
-	it("CSV import stores E.164 on the person and membership", async () => {
+	it("CSV import stores E.164 on the person (the only phone column, #906)", async () => {
 		await importPeopleAndMembers(club.clubId, [
 			{
 				customerId: null,
@@ -153,12 +140,7 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			.select({ phone: people.phone })
 			.from(people)
 			.where(eq(people.name, "Csv Person"));
-		const [m] = await testDb
-			.select({ phone: members.phone })
-			.from(members)
-			.where(eq(members.name, "Csv Person"));
 		expect(p.phone).toBe("+14155552671");
-		expect(m.phone).toBe("+14155552671");
 	});
 
 	it("promotes a bare national number with the app default when the club has no country code (#397)", async () => {
@@ -170,10 +152,8 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			name: "Member User",
 			phone: "415-555-2671",
 		});
-		const [m] = await testDb
-			.select({ phone: members.phone })
-			.from(members)
-			.where(eq(members.id, club.memberId));
+		// The edit writes the Person (#906).
+		const m = { phone: await memberPhone(club.memberId) };
 		// Before #397 this stored `415-555-2671` as typed, so the same number typed
 		// with `+1` was a different value — and a different dedup key.
 		expect(m.phone).toBe(`${DEFAULT_COUNTRY_CODE}4155552671`);
@@ -188,10 +168,8 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			name: "Member User",
 			phone: "   ",
 		});
-		const [m] = await testDb
-			.select({ phone: members.phone })
-			.from(members)
-			.where(eq(members.id, club.memberId));
+		// The edit writes the Person (#906).
+		const m = { phone: await memberPhone(club.memberId) };
 		expect(m.phone).toBeNull();
 	});
 });

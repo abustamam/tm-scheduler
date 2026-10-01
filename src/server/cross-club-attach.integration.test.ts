@@ -151,7 +151,6 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				personId: p.id,
 				name,
 				email: over.rosterEmail ?? null,
-				phone: over.phone ?? null,
 				status: over.status ?? "active",
 			});
 		}

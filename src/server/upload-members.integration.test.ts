@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, members, people } from "#/db/schema";
-import { cleanup, hasTestDb, testDb } from "#/test/db";
+import { cleanup, hasTestDb, memberPhone, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -260,7 +260,6 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 			personId: person.id,
 			name: "Original",
 			email: "stored@x.io",
-			phone: null,
 		});
 
 		const text = csv([
@@ -276,7 +275,8 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 
 		const preview = await logic.previewMemberImport(clubId, text);
 		expect(preview.summary.toUpdate).toBe(1);
-		// Email already stored → NOT in the fill note; phone was empty → filled.
+		// Email already stored → NOT in the fill note; the PERSON's phone was
+		// empty → filled (#906: the phone is the Person's, not the membership's).
 		expect(preview.rows[0].note).toContain("Fills phone");
 		expect(preview.rows[0].note).not.toContain("email");
 		expect(preview.rows[0].note).toContain("Sets join date");
@@ -287,7 +287,8 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 			.from(members)
 			.where(eq(members.clubId, clubId));
 		expect(m.email).toBe("stored@x.io"); // fill-only preserved the edit
-		expect(m.phone).toBe("+15551234"); // empty field filled
+		// The Person's empty phone filled.
+		expect(await memberPhone(m.id)).toBe("+15551234");
 		expect(m.joinedAt).not.toBeNull(); // dates always win
 		expect(m.name).toBe("Original"); // fill-only kept the stored name
 	});

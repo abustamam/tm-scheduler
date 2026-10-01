@@ -521,10 +521,12 @@ export async function updateUnclaimedAdminEmail(
 	}
 
 	await db.transaction(async (tx) => {
-		await tx
-			.update(members)
-			.set({ email: input.email })
-			.where(eq(members.id, admin.memberId));
+		// LOCK ORDER: the Person, THEN the membership (#906) — the order
+		// `applyMemberEdit`, guest conversion and `mergePeople` take them in.
+		// Writing the membership first deadlocked against an edit of this admin.
+		// Still all-or-nothing: a Person that no longer matches throws before the
+		// membership is touched, and the throw rolls the transaction back.
+		//
 		// `isNull(people.userId)` in the STATEMENT, not only in the check above.
 		// The `admin.userId` read happens outside this transaction, so under READ
 		// COMMITTED a sign-in that binds the Person in between would leave a LINKED
@@ -541,6 +543,10 @@ export async function updateUnclaimedAdminEmail(
 				"This admin claimed their account while you were editing — their email can't be edited here.",
 			);
 		}
+		await tx
+			.update(members)
+			.set({ email: input.email })
+			.where(eq(members.id, admin.memberId));
 	});
 
 	// Did the repair actually repair anything? This console's whole job is to get
@@ -886,6 +892,32 @@ export async function deleteClubPermanently(
 		}
 
 		const personIds = await personsOfClub(tx, clubId);
+		// LOCK ORDER: the club's Persons BEFORE its memberships (#906). The
+		// `delete clubs` below cascades to every membership, so it takes the
+		// membership rows; locking the Persons after it was membership-then-Person,
+		// the reverse of `applyMemberEdit` (Person, then membership), and the two
+		// deadlocked. Id order matches the lock the delete takes again below.
+		//
+		// `NO KEY UPDATE`, not `UPDATE`: it conflicts with the edit's
+		// `FOR UPDATE`, which is the ordering needed, but NOT with the key-share
+		// lock a membership insert in ANOTHER club takes on the same Person. So
+		// such an insert can still commit, and the `FOR UPDATE` taken below still
+		// waits for it and then sees the membership and keeps the Person — the
+		// race `delete-club-permanently.integration.test.ts` pins. A plain
+		// `FOR UPDATE` here would instead block that insert until the Person was
+		// deleted out from under it.
+		//
+		// No new membership in THIS club can appear between `personsOfClub` and
+		// the cascade: inserting one takes a FOR KEY SHARE lock on its club row,
+		// which the club `FOR UPDATE` above already blocks.
+		if (personIds.length > 0) {
+			await tx
+				.select({ id: people.id })
+				.from(people)
+				.where(inArray(people.id, personIds))
+				.orderBy(asc(people.id))
+				.for("no key update");
+		}
 
 		await tx.delete(clubs).where(eq(clubs.id, clubId));
 

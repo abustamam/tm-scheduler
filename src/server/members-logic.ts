@@ -163,8 +163,8 @@ export const editSchema = z.object({
 	// What this member is actually called, when it isn't the first token of
 	// `name` (#486). Trimmed-empty is stored as NULL, not "" — a cleared input
 	// submits "" and `greetingName` must see "nobody told us", not a blank.
-	// OMITTING it clears it, same as `email`/`phone` above and UNLIKE
-	// `officerPositions` below (whose `undefined` means "leave untouched").
+	// OMITTING it clears it, same as `email` below and UNLIKE `phone` and
+	// `officerPositions` (whose `undefined` means "leave untouched").
 	// Capped because THIS field really can land on a Person other clubs share: its
 	// seed-up is guarded only on `people.preferred_name IS NULL`. `email` needs no
 	// such cap for that reason — since #756 it reaches `members.email` and nothing
@@ -172,6 +172,11 @@ export const editSchema = z.object({
 	// (#326/#630); it stays the ceiling for a person-level name here.
 	preferredName: z.string().trim().max(80).nullable().optional(),
 	email: z.string().trim().email().nullable().optional(),
+	// The PERSON's phone (#906), shared by every club that holds them. Omitted
+	// (`undefined`) means LEAVE IT ALONE — no write, no log entry — so a
+	// name-only save from a stale page cannot revert a number another club has
+	// since corrected. An explicit `null` (or a blank) clears it. The member
+	// page sends this key only when the field differs from what it loaded.
 	phone: z.string().trim().nullable().optional(),
 	// The full set of offices this membership should currently hold (#100). The
 	// membership's open officer terms are reconciled to exactly this set: offices
@@ -184,6 +189,10 @@ type EditInput = z.infer<typeof editSchema> & RosterActor;
 /**
  * Update a roster member's name/contact and reconcile their office set (#100);
  * logs member_edit with the office change.
+ *
+ * **The phone written here is `people.phone`** (#906): a phone number is a
+ * Person fact, so an edit in any club that holds the Person changes it in every
+ * club. It is not a credential, so there is no cross-club authority question.
  *
  * **The email written here is `members.email` and only that** — the club's own
  * contact record (#756). It used to also reconcile `people.email`, the identity
@@ -222,14 +231,36 @@ export async function applyMemberEdit(input: EditInput) {
 		// padded value no longer costs a member their sign-in — but it still reaches
 		// every screen that renders the roster, and the invite is sent to it raw.
 		email: input.email?.trim() || null,
-		phone: toStoredPhone(input.phone, cc),
 	};
+	// Person-level, written to `people` below rather than to the membership —
+	// and only when the caller sent one (`undefined` = leave it alone).
+	const phone =
+		input.phone === undefined ? undefined : toStoredPhone(input.phone, cc);
 	// Current offices before the edit — derived from open terms, for the log.
 	const beforeOffices = await currentOfficersFor(input.memberId);
 	await db.transaction(async (tx) => {
-		await tx.update(members).set(next).where(eq(members.id, input.memberId));
-		// The "goes by" name below is the ONLY person-level write this form still
-		// makes, and it is scoped by VALUE rather than by blast radius. That is
+		// LOCK ORDER: the Person, THEN the membership. Guest conversion
+		// (`applyConvertGuestToMember`) writes the Person (its phone fill and its
+		// goes-by seed) and then takes the membership `FOR UPDATE`; taking them
+		// here in the opposite order deadlocks the two (#906 review).
+		// `edit-convert-lock-order.integration.test.ts` drives both orders.
+		const [currentPerson] = await tx
+			.select({ phone: people.phone })
+			.from(people)
+			.where(eq(people.id, current.personId))
+			.for("update");
+		if (!currentPerson) throw new Error("Member's person not found.");
+		if (phone !== undefined) {
+			// The phone is the Person's (#906), so it goes to `people`, keyed by
+			// the membership's own `person_id` — never a membership row.
+			await tx
+				.update(people)
+				.set({ phone })
+				.where(eq(people.id, current.personId));
+		}
+		// The "goes by" name below is the only person-level write this form makes
+		// besides the phone above (which is a Person fact outright, #906), and it
+		// is scoped by VALUE rather than by blast radius. That is
 		// deliberate: `preferred_name` is a display fallback, so the worst a stale
 		// copy costs is a wrong greeting in another club, and one club overwriting
 		// another's answer is the only risk worth guarding. The email used to sit
@@ -267,6 +298,8 @@ export async function applyMemberEdit(input: EditInput) {
 					),
 				);
 		}
+		// The membership last — see LOCK ORDER above.
+		await tx.update(members).set(next).where(eq(members.id, input.memberId));
 		// Reconcile the office set only when the caller sent one (undefined = leave
 		// terms alone). Dedupe first so a repeated office can't open two terms.
 		if (input.officerPositions !== undefined) {
@@ -289,10 +322,15 @@ export async function applyMemberEdit(input: EditInput) {
 					name: current.name,
 					preferredName: current.preferredName,
 					email: current.email,
-					phone: current.phone,
+					// Logged only when the edit wrote it.
+					...(phone !== undefined ? { phone: currentPerson.phone } : {}),
 					officerPositions: beforeOffices,
 				},
-				after: { ...next, officerPositions: afterOffices },
+				after: {
+					...next,
+					...(phone !== undefined ? { phone } : {}),
+					officerPositions: afterOffices,
+				},
 			},
 		});
 	});
@@ -728,7 +766,6 @@ export async function applyBulkImport(
 					personId: person.id,
 					name,
 					email,
-					phone,
 					clubRole: "member",
 					// Leave the column to its DEFAULT now() only when asked; see
 					// `startOrientation` on the schema above.

@@ -42,9 +42,9 @@
  * that refers to a meeting carries `meeting_id` beside `meeting_date`, because
  * two meetings can share a date.
  *
- * Contact columns come from `members.email` / `members.phone`, the club's own
- * contact record and the copy the roster shows (#906 / #907 move them to
- * `people`; when that lands, this file moves with them).
+ * Contact columns are what the roster shows: the phone is `people.phone`, a
+ * Person fact shared by every club that holds them (#906); the email is still
+ * the club's own `members.email`, and moves to `people` with #907.
  */
 import { type AnyColumn, and, eq, isNotNull, max, or, sql } from "drizzle-orm";
 import { strToU8, zipSync } from "fflate";
@@ -322,7 +322,8 @@ export async function loadClubExport(
 					name: members.name,
 					preferredName: members.preferredName,
 					email: members.email,
-					phone: members.phone,
+					// A Person fact (#906), through the join below.
+					phone: people.phone,
 					status: members.status,
 					clubRole: members.clubRole,
 					joinedAt: members.joinedAt,

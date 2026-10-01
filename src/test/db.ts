@@ -52,6 +52,7 @@ export interface SeededClub {
 export async function seedPerson(overrides?: {
 	name?: string;
 	email?: string | null;
+	phone?: string | null;
 	customerId?: string | null;
 	userId?: string | null;
 }): Promise<string> {
@@ -60,12 +61,41 @@ export async function seedPerson(overrides?: {
 		.values({
 			name: overrides?.name ?? "Test Person",
 			email: overrides?.email ?? null,
+			phone: overrides?.phone ?? null,
 			customerId: overrides?.customerId ?? null,
 			userId: overrides?.userId ?? null,
 		})
 		.returning({ id: people.id });
 	if (!row) throw new Error("Failed to insert person");
 	return row.id;
+}
+
+/**
+ * Set a member's phone. A phone number is a Person fact (#906), so this writes
+ * `people.phone` for the membership's Person — there is no membership copy.
+ * Every club holding that Person sees the change, as in production.
+ */
+export async function setMemberPhone(
+	memberId: string,
+	phone: string | null,
+): Promise<void> {
+	const [m] = await testDb
+		.select({ personId: members.personId })
+		.from(members)
+		.where(eq(members.id, memberId));
+	if (!m) throw new Error(`setMemberPhone: no membership ${memberId}`);
+	await testDb.update(people).set({ phone }).where(eq(people.id, m.personId));
+}
+
+/** The Person phone behind a membership (#906), for assertions. */
+export async function memberPhone(memberId: string): Promise<string | null> {
+	const [row] = await testDb
+		.select({ phone: people.phone })
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(eq(members.id, memberId));
+	if (!row) throw new Error(`memberPhone: no membership ${memberId}`);
+	return row.phone;
 }
 
 /** Insert a minimal club fixture and return the ids. */

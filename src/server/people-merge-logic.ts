@@ -86,12 +86,22 @@ export async function mergePeople(
 ): Promise<MergePeopleResult> {
 	const parsed = mergePeopleSchema.parse(input);
 	return db.transaction(async (tx) => {
+		// Both Persons locked FIRST, in id order, before any membership is
+		// touched (#906 review). `applyMemberEdit` and guest conversion lock the
+		// Person and then the membership; a merge that re-pointed memberships
+		// first and wrote the Persons last deadlocked against them, and id order
+		// keeps two merges over one Person from deadlocking each other. The club
+		// write locks below still come before the first WRITE; no other holder
+		// of a club write lock locks a `people` row, so these two row locks
+		// ahead of it close no cycle through it.
 		const rows = await tx
 			.select()
 			.from(people)
 			.where(
 				inArray(people.id, [parsed.keeperPersonId, parsed.absorbedPersonId]),
-			);
+			)
+			.orderBy(people.id)
+			.for("update");
 		const keeper = rows.find((p) => p.id === parsed.keeperPersonId);
 		const absorbed = rows.find((p) => p.id === parsed.absorbedPersonId);
 		if (!keeper || !absorbed) throw new Error("Person not found.");
