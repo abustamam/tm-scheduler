@@ -112,8 +112,19 @@ const LAYOUTS: readonly AgendaLayout[] = [
  */
 const UNDETECTED = CAPTIONED.replace(" · Guest speaker", " · Guest-speaker");
 
+/** A home club with line breaks in it. The profile schema trims and bounds a
+ *  home club but keeps what is inside it, so this is a value an officer (or a
+ *  paste) can store — and a caption laid out with `white-space: pre` would
+ *  print every one of those lines. */
+const MULTILINE = assigneeDisplayName(
+	GUEST,
+	true,
+	guestKindCaption("guest_speaker", `${"A\n".repeat(50)}B`),
+) as string;
+
 const VARIANTS = {
 	captioned: CAPTIONED,
+	multiline: MULTILINE,
 	plain: `${GUEST} · Guest`,
 	control: UNDETECTED,
 } as const;
@@ -261,10 +272,11 @@ describe.skipIf(!hasChrome)(
 			// not enough: the caption must add nothing a wider face could tip over.
 			const m = measure();
 			for (const layout of LAYOUTS)
-				expect(
-					m[layout].captioned.map((x) => x.height),
-					layout,
-				).toEqual(m[layout].plain.map((x) => x.height));
+				for (const v of ["captioned", "multiline"] as const)
+					expect(
+						m[layout][v].map((x) => x.height),
+						`${layout} (${v})`,
+					).toEqual(m[layout].plain.map((x) => x.height));
 		});
 
 		it("runs nothing off the side of the sheet — the caption shrinks, not the paper", () => {

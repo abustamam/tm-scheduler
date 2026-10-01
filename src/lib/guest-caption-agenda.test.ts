@@ -60,6 +60,16 @@ describe("assigneeDisplayName with a guest caption", () => {
 			);
 	});
 
+	it("collapses a home club's line breaks to one line", () => {
+		expect(
+			assigneeDisplayName(
+				"Ben Carter",
+				true,
+				guestKindCaption("guest_speaker", "Downtown\n\tToastmasters\n#12"),
+			),
+		).toBe("Ben Carter · Guest speaker, Downtown Toastmasters #12");
+	});
+
 	it("ignores a caption on a member's slot, and an open slot stays open", () => {
 		expect(assigneeDisplayName("Ann Lee", false, SPEAKER_CAPTION)).toBe(
 			"Ann Lee",

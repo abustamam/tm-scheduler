@@ -151,7 +151,12 @@ export const GUEST_MARKER = "Guest";
  *  `guestCaption` (#1059) is the guest's kind caption from `guestKindCaption`
  *  ("Guest speaker, Downtown Toastmasters"), and takes the marker's place when
  *  present. It is null for a Visitor, so a Visitor reads exactly as before. It
- *  is read only for a guest: a caption on a member's slot is ignored. */
+ *  is read only for a guest: a caption on a member's slot is ignored.
+ *
+ *  Its whitespace is collapsed to single spaces. A home club is free text and
+ *  may carry line breaks; this string is one line on every surface, and the
+ *  print layouts hold it there with CSS that would otherwise print each break.
+ *  Done HERE, once, so print and deck still carry the identical string. */
 export function assigneeDisplayName(
 	name: string | null,
 	isGuest?: boolean,
@@ -159,7 +164,8 @@ export function assigneeDisplayName(
 ): string | null {
 	if (!name) return null;
 	if (!isGuest) return name;
-	return `${name} · ${guestCaption ?? GUEST_MARKER}`;
+	const caption = guestCaption?.replace(/\s+/g, " ").trim();
+	return `${name} · ${caption || GUEST_MARKER}`;
 }
 
 /** The separator-plus-label every caption `assigneeDisplayName` can append
