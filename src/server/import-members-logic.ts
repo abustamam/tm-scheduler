@@ -221,8 +221,8 @@ export async function loadAddressHolders(
 /**
  * Import mapped CSV rows into `people` + `members` for one club. Returns counts.
  * People-level facts (canonical name/contact, original join date, Customer ID)
- * land on `people`; the per-club membership carries name/email/phone (fill-only)
- * and `joined_at`.
+ * land on `people` (a phone number is one of them, #906); the per-club
+ * membership carries name/email (fill-only) and `joined_at`.
  *
  * The per-row verdicts (which Person a row resolves to, insert vs. fill-only
  * update of the membership) come from the shared pure decisions in
@@ -382,14 +382,13 @@ export async function importPeopleAndMembers(
 			stats.peopleCreated++;
 		}
 
-		// Membership: one row per (club, person). Fill-only name/email/phone so an
+		// Membership: one row per (club, person). Fill-only name/email so an
 		// in-app edit is never clobbered; joined_at is per-club and always set.
 		const [existingMember] = await conn
 			.select({
 				id: members.id,
 				name: members.name,
 				email: members.email,
-				phone: members.phone,
 			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)))
@@ -451,8 +450,8 @@ export async function importPeopleAndMembers(
 			} else {
 				// Lost the race. Reconcile against the winner's row exactly as the
 				// non-raced branch above would — re-classifying is the whole point.
-				// Taking only the id would silently drop this CSV row's name/email/
-				// phone while still reporting the member as "updated", and the
+				// Taking only the id would silently drop this CSV row's name/email
+				// while still reporting the member as "updated", and the
 				// overlapping-import case this branch exists for is precisely when
 				// the two admins' files do NOT carry identical data.
 				const [raced] = await conn
@@ -460,7 +459,6 @@ export async function importPeopleAndMembers(
 						id: members.id,
 						name: members.name,
 						email: members.email,
-						phone: members.phone,
 					})
 					.from(members)
 					.where(

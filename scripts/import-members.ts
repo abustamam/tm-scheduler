@@ -8,8 +8,8 @@
  * - Imports only PaidMember rows.
  * - Resolves each row to a Person by precedence: Customer ID → unambiguous
  *   non-blank email → new person (never on name). Then upserts the per-club
- *   membership. Person-level facts (name/contact/original join date/Customer ID)
- *   live on `people`; the membership carries name/email/phone (fill-only) and
+ *   membership. Person-level facts (name/phone/original join date/Customer ID)
+ *   live on `people`; the membership carries name/email (fill-only) and
  *   joined_at.
  * Idempotent. Bun auto-loads .env.local for DATABASE_URL.
  */

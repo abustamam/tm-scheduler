@@ -30,6 +30,7 @@ import {
 	members,
 	mentorships,
 	pathEnrollments,
+	people,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
@@ -47,6 +48,8 @@ import { requireMembership } from "./guards";
 
 /** The mentor's membership row, joined onto a mentorship (#939). */
 const mentor = alias(members, "mentor");
+/** The mentor's Person: their phone lives there, not on the membership (#906). */
+const mentorPerson = alias(people, "mentor_person");
 
 export const ORIENTATION_NOT_YOURS_MESSAGE =
 	"Only the member can tick their own orientation checklist.";
@@ -168,10 +171,11 @@ export async function loadOrientationFactsForMembers(
 				endedAt: mentorships.endedAt,
 				mentorName: mentor.name,
 				mentorEmail: mentor.email,
-				mentorPhone: mentor.phone,
+				mentorPhone: mentorPerson.phone,
 			})
 			.from(mentorships)
 			.innerJoin(mentor, eq(mentor.id, mentorships.mentorMemberId))
+			.innerJoin(mentorPerson, eq(mentorPerson.id, mentor.personId))
 			// A pairing counts only while BOTH parties are active
 			// (`mentorship-logic.ts`); an inactive mentor's pairing is dormant
 			// and does not tick "Get a mentor". The mentee's own status is

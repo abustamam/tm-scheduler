@@ -28,7 +28,13 @@ import {
 } from "#/db/schema";
 import { DEFAULT_CLUB_TIMEZONE } from "#/lib/club-timezone";
 import type { MappedMember } from "#/lib/members-csv";
-import { cleanup, hasTestDb, seedClub, testDb } from "#/test/db";
+import {
+	cleanup,
+	hasTestDb,
+	seedClub,
+	setMemberPhone,
+	testDb,
+} from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -284,10 +290,7 @@ describe.skipIf(!hasTestDb)("orientation facts and view (#940)", () => {
 
 	it("Get a mentor (#939): an ended new_member pairing and an active contest pairing do not tick it; an active new_member one does, with the mentor's contact", async () => {
 		const s = await seed();
-		await testDb
-			.update(members)
-			.set({ phone: "(555) 555-0100" })
-			.where(eq(members.id, s.adminMemberId));
+		await setMemberPhone(s.adminMemberId, "(555) 555-0100");
 		await testDb.insert(mentorships).values([
 			{
 				clubId: s.clubId,

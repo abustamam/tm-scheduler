@@ -15,13 +15,15 @@
  * means different things for old and new rows — which is #397 itself, one level
  * up. A returning guest whose row predates the fix would get a duplicate.
  *
- * - `members.phone` / `guests.phone`: normalized with THEIR club's country code
+ * - `guests.phone`: normalized with THEIR club's country code
  *   — the club's own setting, or `DEFAULT_COUNTRY_CODE` when it never set one
  *   (the same fallback `loadClubDefaultCountryCode` applies on write).
  * - `people.phone`: people are club-less (ADR-0008), so the app-wide
  *   `DEFAULT_COUNTRY_CODE` is what applies. Before #397 this pass left bare
  *   national numbers alone; it can't now, because the guest/member rows that
  *   convert-to-member dedups AGAINST are all E.164.
+ * - There is no `members.phone` pass: that column was dropped in #906, and a
+ *   member's phone is their Person's (`people.phone`, the pass above).
  *
  * The fallback is an assumption, and on a non-NANP club that never set a country
  * code it will be the wrong one. Check the dry-run output for `+1`-prefixed
@@ -36,7 +38,7 @@
  */
 import { eq, isNotNull } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, guests, members, people } from "#/db/schema";
+import { clubs, guests, people } from "#/db/schema";
 import { DEFAULT_COUNTRY_CODE, toStoredPhone } from "#/lib/phone";
 
 const APPLY = process.argv.includes("--apply");
@@ -122,20 +124,6 @@ async function main() {
 			if (APPLY) await update(row.id, next);
 		}
 	}
-
-	// members.phone — normalize with the member's club default.
-	const memberRows = await db
-		.select({ id: members.id, phone: members.phone, clubId: members.clubId })
-		.from(members)
-		.where(isNotNull(members.phone));
-	await backfill(
-		"member",
-		memberRows,
-		(r) =>
-			toStoredPhone(r.phone, clubCc.get(r.clubId ?? "") ?? DEFAULT_COUNTRY_CODE),
-		(id, next) =>
-			db.update(members).set({ phone: next }).where(eq(members.id, id)),
-	);
 
 	// guests.phone — normalize with the guest's club default.
 	const guestRows = await db

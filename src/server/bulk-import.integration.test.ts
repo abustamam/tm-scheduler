@@ -13,6 +13,7 @@ import { activityLog, members, officerTerms } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
+	memberPhone,
 	type SeededClub,
 	seedClub,
 	testDb,
@@ -60,7 +61,8 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 		// country code, so the app default applies. The pasted `1` is NANP's
 		// long-distance prefix, not a 12th digit, so it becomes the `+1` rather
 		// than being prepended to (`+119165968820`).
-		expect(alice.phone).toBe("+19165968820");
+		// On the Person (#906), the only phone column.
+		expect(await memberPhone(alice.id)).toBe("+19165968820");
 		// Pasted office text cannot grant access.
 		const aliceTerms = await testDb
 			.select({ position: officerTerms.position })
@@ -83,7 +85,7 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 			);
 		expect(bob.email).toBe("bob@club.org");
 		// Empty cells stored as NULL, not "".
-		expect(bob.phone).toBeNull();
+		expect(await memberPhone(bob.id)).toBeNull();
 		// No office pasted → no officer term opened.
 		const bobTerms = await testDb
 			.select()

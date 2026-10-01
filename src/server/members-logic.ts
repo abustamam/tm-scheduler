@@ -185,6 +185,10 @@ type EditInput = z.infer<typeof editSchema> & RosterActor;
  * Update a roster member's name/contact and reconcile their office set (#100);
  * logs member_edit with the office change.
  *
+ * **The phone written here is `people.phone`** (#906): a phone number is a
+ * Person fact, so an edit in any club that holds the Person changes it in every
+ * club. It is not a credential, so there is no cross-club authority question.
+ *
  * **The email written here is `members.email` and only that** — the club's own
  * contact record (#756). It used to also reconcile `people.email`, the identity
  * key, under a blast-radius guard; the club no longer owns that column at all,
@@ -205,6 +209,11 @@ export async function applyMemberEdit(input: EditInput) {
 			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
 		);
 	if (!current) throw new Error("Member not found.");
+	// The Person's phone, for the activity log's `before` (#906).
+	const [currentPerson] = await db
+		.select({ phone: people.phone })
+		.from(people)
+		.where(eq(people.id, current.personId));
 	// Standardize the phone to E.164 on write (#295), using the club default
 	// country code for numbers entered without one.
 	const cc = await loadClubDefaultCountryCode(input.clubId);
@@ -222,12 +231,19 @@ export async function applyMemberEdit(input: EditInput) {
 		// padded value no longer costs a member their sign-in — but it still reaches
 		// every screen that renders the roster, and the invite is sent to it raw.
 		email: input.email?.trim() || null,
-		phone: toStoredPhone(input.phone, cc),
 	};
+	// Person-level, written to `people` below rather than to the membership.
+	const phone = toStoredPhone(input.phone, cc);
 	// Current offices before the edit — derived from open terms, for the log.
 	const beforeOffices = await currentOfficersFor(input.memberId);
 	await db.transaction(async (tx) => {
 		await tx.update(members).set(next).where(eq(members.id, input.memberId));
+		// The phone is the Person's (#906), so it goes to `people`, keyed by the
+		// membership's own `person_id` — never a membership row.
+		await tx
+			.update(people)
+			.set({ phone })
+			.where(eq(people.id, current.personId));
 		// The "goes by" name below is the ONLY person-level write this form still
 		// makes, and it is scoped by VALUE rather than by blast radius. That is
 		// deliberate: `preferred_name` is a display fallback, so the worst a stale
@@ -289,10 +305,10 @@ export async function applyMemberEdit(input: EditInput) {
 					name: current.name,
 					preferredName: current.preferredName,
 					email: current.email,
-					phone: current.phone,
+					phone: currentPerson?.phone ?? null,
 					officerPositions: beforeOffices,
 				},
-				after: { ...next, officerPositions: afterOffices },
+				after: { ...next, phone, officerPositions: afterOffices },
 			},
 		});
 	});
@@ -728,7 +744,6 @@ export async function applyBulkImport(
 					personId: person.id,
 					name,
 					email,
-					phone,
 					clubRole: "member",
 					// Leave the column to its DEFAULT now() only when asked; see
 					// `startOrientation` on the schema above.

@@ -17,7 +17,14 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
-import { cleanup, hasTestDb, seedClub, seedPerson, testDb } from "#/test/db";
+import {
+	cleanup,
+	hasTestDb,
+	seedClub,
+	seedPerson,
+	setMemberPhone,
+	testDb,
+} from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -70,10 +77,14 @@ async function seed(startedDaysAgo = 3) {
 async function addMember(
 	clubId: string,
 	name: string,
-	over: Partial<typeof members.$inferInsert> & { startedDaysAgo?: number } = {},
+	over: Partial<typeof members.$inferInsert> & {
+		startedDaysAgo?: number;
+		/** The Person's phone (#906): a membership carries none. */
+		phone?: string | null;
+	} = {},
 ) {
-	const { startedDaysAgo = 1, ...rest } = over;
-	const personId = await seedPerson({ name });
+	const { startedDaysAgo = 1, phone, ...rest } = over;
+	const personId = await seedPerson({ name, phone });
 	const [row] = await testDb
 		.insert(members)
 		.values({
@@ -244,8 +255,9 @@ describe.skipIf(!hasTestDb)("loadOrientationRoster (#942)", () => {
 		const s = await seed();
 		await testDb
 			.update(members)
-			.set({ email: "  ", phone: "+14155550123" })
+			.set({ email: "  " })
 			.where(eq(members.id, s.memberId));
+		await setMemberPhone(s.memberId, "+14155550123");
 		const [row] = await loadOrientationRoster(s.clubId, NOW);
 		expect(row?.email).toBeNull();
 		expect(row?.phone).toBe("+14155550123");

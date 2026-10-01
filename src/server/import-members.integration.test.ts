@@ -488,10 +488,12 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.select({
 				id: members.id,
 				email: members.email,
-				phone: members.phone,
+				// The Person's (#906): the CSV phone lands there, not on the row.
+				phone: people.phone,
 				joinedAt: members.joinedAt,
 			})
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)));
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.id).toBe(winnerId);
@@ -529,11 +531,13 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		await running;
 
 		const [m] = await testDb
-			.select({ email: members.email, phone: members.phone })
+			.select({ email: members.email, phone: people.phone })
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)));
 		expect(m?.email).toBe("winner@x.io"); // not clobbered
-		expect(m?.phone).toBe("+15559990000"); // empty slot filled
+		// The Person's blank phone filled (#906), by the Person arm.
+		expect(m?.phone).toBe("+15559990000");
 	});
 
 	it("counts an unparseable non-blank position without opening a term", async () => {

@@ -1539,7 +1539,7 @@ export async function applyConvertGuestToMember(
 		// (#486) — it was true of the human, not of the guest row.
 		const preferredName = guest.preferredName?.trim() || null;
 		const email = guest.email?.trim() || null;
-		// Re-standardize to E.164 on the way into people/members (#295) — the guest
+		// Re-standardize to E.164 on the way into `people` (#295) — the guest
 		// row may predate normalize-on-write; the digits form (dedup) follows it.
 		const phone = toStoredPhone(guest.phone, cc);
 		const digits = normalizePhone(phone);
@@ -1653,15 +1653,28 @@ export async function applyConvertGuestToMember(
 			if (!p) throw new Error("Failed to create person.");
 			personId = p.id;
 			createdPerson = true;
-		} else if (preferredName) {
-			// Deduped onto an EXISTING Person: the insert above never ran, so seed
-			// the goes-by name here too or it is lost at the person level (#486).
-			// Guarded on NULL, same as the membership-edit seed-up — whatever this
-			// human already recorded in another club wins over a guest-book entry.
-			await tx
-				.update(people)
-				.set({ preferredName })
-				.where(and(eq(people.id, personId), isNull(people.preferredName)));
+		} else {
+			if (preferredName) {
+				// Deduped onto an EXISTING Person: the insert above never ran, so seed
+				// the goes-by name here too or it is lost at the person level (#486).
+				// Guarded on NULL, same as the membership-edit seed-up — whatever this
+				// human already recorded in another club wins over a guest-book entry.
+				await tx
+					.update(people)
+					.set({ preferredName })
+					.where(and(eq(people.id, personId), isNull(people.preferredName)));
+			}
+			if (phone) {
+				// The phone is the Person's (#906) — the membership no longer carries
+				// one — so a guest's number reaches an EXISTING Person only by FILLING
+				// a blank. Never an overwrite: the guest book is an anonymous form,
+				// and a number already on file was typed by an officer or an import
+				// in some club that holds this human.
+				await tx
+					.update(people)
+					.set({ phone })
+					.where(and(eq(people.id, personId), isNull(people.phone)));
+			}
 		}
 
 		// 2. Membership — reuse the person's existing one in this club, else create.
@@ -1869,7 +1882,6 @@ export async function applyConvertGuestToMember(
 					name,
 					preferredName,
 					email,
-					phone,
 					clubRole: "member",
 					status: "active",
 					joinedAt: new Date(),

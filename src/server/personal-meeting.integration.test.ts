@@ -47,6 +47,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	setMemberPhone,
 	testDb,
 } from "#/test/db";
 
@@ -211,10 +212,7 @@ describe.skipIf(!hasTestDb)("loadPublicPersonalMeetingView (#665)", () => {
 		// The seeded roster row HAS an email, so this can fail: a bare `select()`
 		// on `members` would ship it. Phone is set here for the same reason —
 		// asserting the absence of a column nothing populates proves nothing.
-		await testDb
-			.update(members)
-			.set({ phone: "+15551234567" })
-			.where(eq(members.id, s.memberId));
+		await setMemberPhone(s.memberId, "+15551234567");
 
 		const view = await viewOf(s, s.memberId);
 

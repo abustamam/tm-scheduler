@@ -114,9 +114,8 @@ describe("classifyMembership", () => {
 		);
 		expect(d.kind).toBe("update");
 		if (d.kind !== "update") throw new Error("expected update");
-		// Name + phone already present → untouched; empty email → filled.
+		// Name already present → untouched; empty email → filled.
 		expect(d.set.name).toBe("Stored Name");
-		expect(d.set.phone).toBe("+1");
 		expect(d.set.email).toBe("csv@x.io");
 		expect(d.fills.map((f) => f.field)).toEqual(["email"]);
 	});
@@ -126,7 +125,6 @@ describe("classifyMembership", () => {
 		const d = classifyMembership(row({ name: "X", joinedAt: joined }), {
 			name: "X",
 			email: "x@x.io",
-			phone: "+1",
 		});
 		if (d.kind !== "update") throw new Error("expected update");
 		expect(d.set.joinedAt).toBe(joined);
@@ -146,7 +144,7 @@ describe("planImport", () => {
 			},
 		];
 		const memberships: ExistingMembershipRow[] = [
-			{ id: "m1", personId: "p1", name: "Ada", email: "ada@x.io", phone: null },
+			{ id: "m1", personId: "p1", name: "Ada", email: "ada@x.io" },
 		];
 		const plan = planImport(
 			people,
@@ -196,7 +194,7 @@ describe("planImport", () => {
 			},
 		];
 		const memberships: ExistingMembershipRow[] = [
-			{ id: "m1", personId: "p1", name: "Ada", email: "ada@x.io", phone: "+1" },
+			{ id: "m1", personId: "p1", name: "Ada", email: "ada@x.io" },
 		];
 		const plan = planImport(
 			people,
@@ -426,7 +424,7 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 					...HERE,
 				},
 			],
-			[{ id: "m1", personId: "p1", name: "Ada", email: null, phone: null }],
+			[{ id: "m1", personId: "p1", name: "Ada", email: null }],
 			[row({ customerId: "PN-1", name: "Ada", email: "ada@x.io" })],
 			held("ada@x.io", "p1"),
 		);
@@ -453,7 +451,6 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 					personId: "p1",
 					name: "Ada",
 					email: "own@x.io",
-					phone: null,
 				},
 			],
 			[row({ customerId: "PN-1", name: "Ada", email: "taken@x.io" })],
@@ -624,13 +621,11 @@ describe("writtenAddress", () => {
 		const kept = classifyMembership(row({ name: "A", email: "new@x.io" }), {
 			name: "A",
 			email: "old@x.io",
-			phone: null,
 		});
 		expect(writtenAddress(kept)).toBeNull();
 		const filled = classifyMembership(row({ name: "A", email: "new@x.io" }), {
 			name: "A",
 			email: null,
-			phone: null,
 		});
 		expect(writtenAddress(filled)).toBe("new@x.io");
 		expect(

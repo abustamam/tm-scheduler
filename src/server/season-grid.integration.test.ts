@@ -9,7 +9,6 @@ import {
 	clubs,
 	meetingAttendancePlan,
 	meetings,
-	members,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
@@ -18,6 +17,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	setMemberPhone,
 	testDb,
 } from "#/test/db";
 
@@ -216,10 +216,7 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
 		// A row as it was stored BEFORE normalize-on-write (#295/#397): no country
 		// code. The club has no `default_country_code`, so `+1` applies.
-		await testDb
-			.update(members)
-			.set({ phone: "(415) 555-2671" })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, "(415) 555-2671");
 
 		const grid = await loadSeasonGrid({
 			clubId: seed.clubId,
@@ -239,10 +236,7 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 			.update(clubs)
 			.set({ defaultCountryCode: "+44" })
 			.where(eq(clubs.id, seed.clubId));
-		await testDb
-			.update(members)
-			.set({ phone: "020 7946 0018" })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, "020 7946 0018");
 
 		const grid = await loadSeasonGrid({
 			clubId: seed.clubId,
@@ -260,10 +254,7 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		// reachable stored value. `toE164` returns null for it; the payload must
 		// still carry the text, because `WhatsAppPhoneLink` renders a digit-less
 		// value as readable plain text instead of a dead link.
-		await testDb
-			.update(members)
-			.set({ phone: "call the office" })
-			.where(eq(members.id, seed.memberId));
+		await setMemberPhone(seed.memberId, "call the office");
 
 		const grid = await loadSeasonGrid({
 			clubId: seed.clubId,
