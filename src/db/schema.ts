@@ -56,9 +56,11 @@ export {
 // read by drizzle-kit outside the app's module resolution, where the
 // `package.json` `imports` alias is not guaranteed to resolve. Every other
 // import in this file is relative for the same reason.
-// The `tool` discriminator's vocabulary (#812). Type-only, so it contributes
-// nothing at runtime and drizzle-kit's schema read is unaffected — same
-// standing as the import above, and relative for the same reason.
+// The `tool` discriminator's vocabulary (#812) is the one TYPE-ONLY import
+// below, so it contributes nothing at runtime. `AGENDA_LAYOUTS` (#1069), the
+// values of the `agenda_print_layout` enum, is a VALUE import, with the same
+// standing as `table-topics-limits`: `agenda-layouts.ts` imports nothing at
+// all, and the same guard test holds it to that.
 import { AGENDA_LAYOUTS } from "../lib/agenda-layouts";
 import type { McpPendingTool } from "../lib/pending-plan";
 import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";

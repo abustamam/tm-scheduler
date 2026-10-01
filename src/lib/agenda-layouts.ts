@@ -40,6 +40,9 @@ export const AGENDA_LAYOUT_HINTS: Record<AgendaLayout, string> = {
 	spacious: "Two pages, larger type",
 };
 
+/** The print toolbar's marker on the club default's tab (#1069). */
+export const CLUB_DEFAULT_LABEL = "Club default";
+
 export function isAgendaLayout(value: unknown): value is AgendaLayout {
 	return (
 		typeof value === "string" &&

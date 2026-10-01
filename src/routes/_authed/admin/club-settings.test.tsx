@@ -64,6 +64,7 @@ import {
 	AGENDA_LAYOUT_HINTS,
 	AGENDA_LAYOUT_LABELS,
 	AGENDA_LAYOUTS,
+	type AgendaLayout,
 } from "#/lib/agenda-layouts";
 // NOT mocked, deliberately (#504). These are the SAME symbols the server
 // imports; a fixture sized against a local copy of the number would prove
@@ -107,7 +108,7 @@ function loaderData(
 		logoMeta?: { updatedAt: string } | null;
 		timezone?: string;
 		digitalVotingEnabled?: boolean;
-		defaultPrintLayout?: "grid" | "editorial" | "timing" | "spacious";
+		defaultPrintLayout?: AgendaLayout;
 	} = {},
 ) {
 	return {

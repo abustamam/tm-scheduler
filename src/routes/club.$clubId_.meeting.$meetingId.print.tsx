@@ -29,6 +29,7 @@ import { buildRosterEntries } from "#/lib/agenda";
 import {
 	AGENDA_LAYOUT_LABELS,
 	AGENDA_LAYOUTS,
+	CLUB_DEFAULT_LABEL,
 	isAgendaLayout,
 } from "#/lib/agenda-layouts";
 import {
@@ -54,9 +55,6 @@ import { getPublicMeetingByKey } from "#/server/meetings";
 export const LAYOUTS: { id: AgendaLayout; label: string }[] =
 	AGENDA_LAYOUTS.map((id) => ({ id, label: AGENDA_LAYOUT_LABELS[id] }));
 
-/** The tab marker for the club's default layout (#1069). */
-export const CLUB_DEFAULT_LABEL = "Club default";
-
 export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 	{
 		validateSearch: (
@@ -71,26 +69,40 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			// offline badge, or timing banner — just the agenda + a Print button.
 			chrome: search.chrome === "none" ? "none" : undefined,
 		}),
-		// Only WHETHER a layout is named, not which: switching tabs must not
-		// re-run the loader (it fetches the meeting), and nothing it returns
-		// depends on the layout shown.
-		loaderDeps: ({ search }) => ({
-			layoutMissing: search.layout === undefined,
-			chrome: search.chrome,
-		}),
-		loader: async ({ params, location, deps }) => {
+		// NO `loaderDeps`, deliberately (#1069 review). TanStack builds a match's
+		// id from the route, the path AND `JSON.stringify(loaderDeps)`, and SSR
+		// hydration finds the server's data by that id. Offline, the service
+		// worker answers a bare `/…/print` with the page it cached for
+		// `?layout=X` (its `ignoreSearch` fallback): a dep that differs between
+		// the two URLs gives the client a match the HTML has no data for, so the
+		// loader re-runs, needs the network, and the officer gets the error
+		// boundary instead of the agenda (#362). Search therefore stays out of
+		// the match id, and the redirect below reads `location.search`.
+		loader: async ({ params, location }) => {
 			const club = await resolveClubOrRedirect(params.clubId, location);
+			// The RAW parsed search, not the validated one: the loader is not
+			// handed that without `loaderDeps`. So the layout is re-checked here.
+			const search = (location.search ?? {}) as Record<string, unknown>;
+			const printedLayout = isAgendaLayout(search.layout)
+				? search.layout
+				: undefined;
 			// No layout named ⇒ 307 to the club's default (#1069), so every
 			// rendered print page carries an explicit `?layout=`. The service
 			// worker depends on that: it primes a bare `/…/print`, follows this
 			// redirect and caches the page under the FINAL url (`public/sw.js`).
 			// After the club resolves, so an archived or unknown club is still a
-			// 404 rather than a redirect to one.
-			if (deps.layoutMissing) {
+			// 404 rather than a redirect to one. The target is re-checked so a
+			// value the column should never hold cannot become a redirect loop.
+			if (printedLayout === undefined) {
 				throw redirect({
 					to: "/club/$clubId/meeting/$meetingId/print",
 					params: { clubId: params.clubId, meetingId: params.meetingId },
-					search: { layout: club.defaultPrintLayout, chrome: deps.chrome },
+					search: {
+						layout: isAgendaLayout(club.defaultPrintLayout)
+							? club.defaultPrintLayout
+							: "grid",
+						chrome: search.chrome === "none" ? "none" : undefined,
+					},
 				});
 			}
 			// An unknown meeting key is a 404, not a 500: `getPublicMeetingByKey`
@@ -123,6 +135,10 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 				logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
 				// So the toolbar can mark the club's default tab (#1069).
 				defaultPrintLayout: club.defaultPrintLayout,
+				// The layout this payload was RENDERED for. Read only when the URL
+				// names none, which is the offline case above: the cached HTML
+				// shows this layout, so drawing it is what hydrates cleanly.
+				printedLayout,
 			};
 		},
 		component: PrintAgenda,
@@ -196,10 +212,14 @@ function PrintAgenda() {
 		template,
 		logoUrl,
 		defaultPrintLayout,
+		printedLayout,
 	} = Route.useLoaderData();
-	// The loader redirects a missing layout, so `searchLayout` is set on every
-	// page that renders; the fallback is for the type, and it is the club's.
-	const layout = searchLayout ?? defaultPrintLayout;
+	// Online, the loader redirects a URL naming no layout, so `searchLayout` is
+	// set. Offline, a bare `/…/print` is answered from the page cached for
+	// `?layout=X` and hydrates against ITS data: draw the layout that HTML was
+	// rendered in, not the club default (which may since differ), or the first
+	// client render would disagree with the server's.
+	const layout = searchLayout ?? printedLayout;
 	// The meeting page "in the room" (#913), not the ballot: its strip leads with
 	// Vote while a category is open, so voting still costs one tap — and a club
 	// that votes on paper gets a code too, since the strip is more than Vote.
@@ -306,7 +326,15 @@ function PrintAgenda() {
 								{l.id === defaultPrintLayout ? (
 									<span
 										data-testid="club-default-marker"
-										style={{ marginLeft: 6, fontSize: 11, fontWeight: 500 }}
+										// Muted, as secondary text: it inherits the tab's colour
+										// (MUTED, or white on the active tab) at 0.85, which keeps
+										// 4.7:1 on the white toolbar and 9.3:1 on the active tab.
+										style={{
+											marginLeft: 6,
+											fontSize: 11,
+											fontWeight: 500,
+											opacity: 0.85,
+										}}
 									>
 										{CLUB_DEFAULT_LABEL}
 									</span>

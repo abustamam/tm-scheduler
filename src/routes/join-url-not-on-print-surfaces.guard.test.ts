@@ -409,10 +409,10 @@ const ctx = (segment: string) => ({
 		href: `/club/downtown/meeting/2026-07-31/${segment}`,
 		pathname: `/club/downtown/meeting/2026-07-31/${segment}`,
 		searchStr: "",
+		// The print route redirects a URL naming no layout (#1069) instead of
+		// returning a payload, so the payload half names one.
+		search: { layout: "grid" },
 	},
-	// The print route's `loaderDeps` (#1069): a URL naming no layout redirects
-	// instead of returning a payload, so the payload half names one.
-	deps: { layoutMissing: false },
 });
 
 const runLoader = ({ segment, route }: ArtifactRoute) =>
