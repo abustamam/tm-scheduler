@@ -72,6 +72,18 @@ describe("createSenderMeetingCap (#1038)", () => {
 		expect(c.take("203.0.113.9", M2, FAR, 0)).toBe(true);
 	});
 
+	it("shares one budget across the meeting id's letter case", () => {
+		const c = createSenderMeetingCap({ cap: 2 });
+		const id = "abcdef12-3456-4789-8abc-def123456789";
+		expect(c.take("a", id, FAR, 0)).toBe(true);
+		expect(c.take("a", id.toUpperCase(), FAR, 0)).toBe(true);
+		expect(c.take("a", id, FAR, 0)).toBe(false);
+		expect(c.take("a", id.toUpperCase(), FAR, 0)).toBe(false);
+		c.release("a", id.toUpperCase());
+		expect(c.take("a", id, FAR, 0)).toBe(true);
+		expect(c.size()).toBe(1);
+	});
+
 	it("gives a released slot back, and releasing an unknown pair is a no-op", () => {
 		const c = createSenderMeetingCap({ cap: 1 });
 		expect(c.take("a", M1, FAR, 0)).toBe(true);

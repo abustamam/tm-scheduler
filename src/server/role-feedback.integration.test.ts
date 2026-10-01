@@ -784,6 +784,24 @@ describe.skipIf(!hasTestDb)(
 			expect(stored).not.toContain(other);
 		});
 
+		it("counts an upper-cased meeting id against the same per-meeting budget (#1038 review)", async () => {
+			const s = await liveMeeting();
+			const ip = `203.0.113.9-${randomUUID()}`;
+			const far = Date.now() + 10 * DAY;
+			// Spend all but one slot under the lowercase id, in memory.
+			for (let i = 0; i < FEEDBACK_PER_ADDRESS_PER_MEETING_CAP - 1; i++) {
+				expect(
+					feedbackSenderMeetingCap.take(ip, s.meetingId.toLowerCase(), far),
+				).toBe(true);
+			}
+			const upper = { ...timerNote(s), meetingId: s.meetingId.toUpperCase() };
+			await leaveFeedbackLogic(upper, undefined, ip);
+			await expect(leaveFeedbackLogic(upper, undefined, ip)).rejects.toThrow(
+				FEEDBACK_SENDER_CAP_MESSAGE,
+			);
+			expect(await notesFor(s.meetingId)).toHaveLength(1);
+		});
+
 		it("gives the per-meeting slot back when the cap under the lock refuses (#1038)", async () => {
 			const s = await liveMeeting();
 			const ip = `203.0.113.8-${randomUUID()}`;

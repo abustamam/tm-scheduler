@@ -108,10 +108,13 @@ export function createSenderMeetingCap(opts: {
 	const salt = randomBytes(16);
 	const maxKeys = opts.maxKeys ?? 10_000;
 	const entries = new Map<string, { count: number; expiresAt: number }>();
+	// The meeting id is lowercased: the write path accepts either case and
+	// Postgres resolves both to one meeting, so a case-sensitive key would
+	// give one address a second budget for the same meeting.
 	const keyOf = (ip: string, meetingId: string) =>
 		createHash("sha256")
 			.update(salt)
-			.update(meetingId)
+			.update(meetingId.toLowerCase())
 			.update("\u0000")
 			.update(ip)
 			.digest("base64url");
