@@ -1,0 +1,2 @@
+CREATE TYPE "public"."agenda_print_layout" AS ENUM('grid', 'editorial', 'timing', 'spacious');--> statement-breakpoint
+ALTER TABLE "clubs" ADD COLUMN "default_print_layout" "agenda_print_layout" DEFAULT 'grid' NOT NULL;
