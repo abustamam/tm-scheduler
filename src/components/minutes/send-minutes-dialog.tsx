@@ -37,6 +37,8 @@ export interface SendMinutesDialogProps {
 	clubName: string;
 	/** The meeting date (drives the default subject + body). */
 	meetingDate: Date | string;
+	/** The club's zone, which `meetingDate`'s day is named in (#1017). */
+	timezone: string;
 	/**
 	 * Default recipients (active members + present guests WITH an email),
 	 * resolved by #152's Minutes tab (or the `getMinutesRecipients` server fn).
@@ -70,6 +72,7 @@ export function SendMinutesDialog({
 	meetingId,
 	clubName,
 	meetingDate,
+	timezone,
 	initialRecipients,
 	skipped = [],
 	trigger,
@@ -81,9 +84,11 @@ export function SendMinutesDialog({
 		useState<SendMinutesRecipient[]>(initialRecipients);
 	const [newEmail, setNewEmail] = useState("");
 	const [subject, setSubject] = useState(() =>
-		buildMinutesSubject(clubName, date),
+		buildMinutesSubject(clubName, date, timezone),
 	);
-	const [body, setBody] = useState(() => buildMinutesBody(clubName, date));
+	const [body, setBody] = useState(() =>
+		buildMinutesBody(clubName, date, timezone),
+	);
 
 	// A stored address that is not exactly one mailbox (`a@x.org,b@evil.example`)
 	// would become an extra recipient once a mail client decodes it, so the
@@ -92,7 +97,7 @@ export function SendMinutesDialog({
 		() => partitionMinutesRecipients(recipients),
 		[recipients],
 	);
-	const defaultSubject = buildMinutesSubject(clubName, date);
+	const defaultSubject = buildMinutesSubject(clubName, date, timezone);
 	const mailto = useMemo(
 		() => buildMinutesMailto({ recipients, subject, defaultSubject, body }),
 		[recipients, subject, defaultSubject, body],

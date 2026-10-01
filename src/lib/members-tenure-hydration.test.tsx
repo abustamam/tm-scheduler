@@ -60,9 +60,6 @@ function Legacy() {
 function InClubZone() {
 	return <span>{formatTenure(JOINED, { now: NOW, timeZone: CLUB_ZONE })}</span>;
 }
-function NoZone() {
-	return <span>{formatTenure(JOINED, { now: NOW })}</span>;
-}
 
 describe("formatTenure across a month boundary (#1017)", () => {
 	it("CONTROL: on the runtime's calendar, the two passes mismatch", () => {
@@ -78,12 +75,6 @@ describe("formatTenure across a month boundary (#1017)", () => {
 		expect(formatTenure(JOINED, { now: NOW, timeZone: CLUB_ZONE })).toBe(
 			"11 mo",
 		);
-	});
-
-	it("with no zone, counts in UTC whichever runtime renders", () => {
-		expect(hydrateAcrossRuntimes(<NoZone />, SERVER, BROWSER)).toEqual([]);
-		BROWSER();
-		expect(formatTenure(JOINED, { now: NOW })).toBe("1 yr");
 	});
 
 	it("reads `now` from the caller, not the process clock", () => {

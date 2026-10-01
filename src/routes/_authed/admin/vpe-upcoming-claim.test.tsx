@@ -116,6 +116,8 @@ async function renderRoute(data: {
 		proximity: [],
 		// #942's section; this file asserts nothing about it.
 		orientation: [],
+		// The instant the loader pins for tenure (#1017).
+		now: Date.parse("2026-09-15T12:00:00Z"),
 		clubName: "Harbor City Speakers",
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);

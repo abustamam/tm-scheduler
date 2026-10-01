@@ -38,12 +38,17 @@ describe("buildMinutesSubject / buildMinutesBody", () => {
 		const subject = buildMinutesSubject(
 			"Acme TM",
 			new Date("2026-07-10T18:00:00Z"),
+			"UTC",
 		);
 		expect(subject).toContain("Acme TM — Minutes for");
 	});
 
 	it("the default body names the club, for the officer's draft to edit", () => {
-		const body = buildMinutesBody("Acme TM", new Date("2026-07-10T18:00:00Z"));
+		const body = buildMinutesBody(
+			"Acme TM",
+			new Date("2026-07-10T18:00:00Z"),
+			"UTC",
+		);
 		expect(body).toMatch(/^Hi,\n\n/);
 		expect(body).toContain("minutes for Acme TM's meeting on");
 		expect(body).toMatch(/Thanks,\nAcme TM$/);

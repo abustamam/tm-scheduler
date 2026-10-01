@@ -73,9 +73,12 @@ export const Route = createFileRoute("/_authed/roster")({
 				openRoles: 0,
 				pathways: {},
 				formerPathwaysRequested: false,
+				// Nothing is dated without a club, so any fixed zone will do.
+				timezone: "UTC",
+				now: Date.now(),
 			};
 		}
-		const [members, upcoming, pathways] = await Promise.all([
+		const [members, upcoming, pathways, { timezone }] = await Promise.all([
 			listClubMembers({ data: clubId }),
 			listUpcomingMeetings({ data: clubId }),
 			// A request only: the server returns inactive members' paths just to an
@@ -83,12 +86,23 @@ export const Route = createFileRoute("/_authed/roster")({
 			listClubMemberPathways({
 				data: { clubId, includeFormer: deps.includeFormer },
 			}),
+			// Tenure is counted on the CLUB's calendar (#1017). Imported here, as
+			// club-settings imports its promo template, so the route module does
+			// not pull `#/server/clubs` (whose logic modules reach `#/db`) into
+			// everything that imports this page.
+			import("#/server/clubs").then(({ loadClubTimezoneSettings }) =>
+				loadClubTimezoneSettings({ data: clubId }),
+			),
 		]);
 		return {
 			members,
 			openRoles: upcoming[0]?.openSlots ?? 0,
 			pathways,
 			formerPathwaysRequested: deps.includeFormer,
+			timezone,
+			// Pinned here, not sampled while rendering, so the SSR pass and the
+			// hydration pass count tenure months from one instant (#1017).
+			now: Date.now(),
 		};
 	},
 	component: Roster,
@@ -193,8 +207,15 @@ function pathwayLabelFor(paths: PathViewModel[]): string | null {
 }
 
 function Roster() {
-	const { members, openRoles, pathways, formerPathwaysRequested } =
-		Route.useLoaderData();
+	const {
+		members,
+		openRoles,
+		pathways,
+		formerPathwaysRequested,
+		timezone,
+		now,
+	} = Route.useLoaderData();
+	const clock = { now: new Date(now), timeZone: timezone };
 	const { clubs, activeClubId, officerPositions, impersonating } =
 		Route.useRouteContext();
 	const clubId = activeClubId;
@@ -230,16 +251,15 @@ function Roster() {
 	const rows: RosterRow[] = members.map((m) => {
 		const joined = m.joinedAt ?? m.createdAt;
 		const pathwayWithheld = m.status === "inactive" && !showFormerPathways;
+		const tenure = formatTenure(joined, clock);
 		return {
 			id: m.id,
 			name: m.name,
 			initials: initialsOf(m.name),
 			tone: toneFromSeed(m.id),
 			tenure: m.officerPositions.length
-				? `${formatTenure(joined)} · ${m.officerPositions
-						.map(officerPositionLabel)
-						.join(", ")}`
-				: formatTenure(joined),
+				? `${tenure} · ${m.officerPositions.map(officerPositionLabel).join(", ")}`
+				: tenure,
 			speeches: m.speeches,
 			email: m.email,
 			phone: m.phone,

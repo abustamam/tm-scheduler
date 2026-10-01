@@ -33,6 +33,13 @@ vi.mock("#/server/account-invite", () => ({
 vi.mock("#/server/club", () => ({
 	listClubMembers: vi.fn(),
 }));
+// The loader reads the club's zone for tenure (#1017).
+vi.mock("#/server/clubs", () => ({
+	loadClubTimezoneSettings: vi.fn(async () => ({
+		timezone: "America/Chicago",
+		zones: [],
+	})),
+}));
 vi.mock("#/server/meetings", () => ({
 	listUpcomingMeetings: vi.fn(),
 }));
@@ -114,6 +121,9 @@ async function renderRoute(
 		openRoles: 0,
 		pathways: opts.pathways ?? {},
 		formerPathwaysRequested: opts.formerPathwaysRequested ?? false,
+		timezone: "UTC",
+		// The instant the loader pins for tenure (#1017).
+		now: Date.parse("2026-09-15T12:00:00Z"),
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 

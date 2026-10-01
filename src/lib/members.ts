@@ -22,16 +22,17 @@ function yearMonthIn(d: Date, timeZone: string): { y: number; m: number } {
  * printed different tenures and React threw the server markup away. On the 1st
  * of every month that was 00:00-08:00 UTC on every row of the VPE dashboard.
  *
- * Pass the club's zone and a `now` that both passes share (a loader-pinned
- * instant). Omitted, the zone is UTC: a fixed zone at least makes the server
- * and the browser agree, which the runtime's zone cannot.
+ * Both options are REQUIRED: the club's zone, and a `now` that both passes
+ * share (a loader-pinned instant). A `new Date()` sampled at render differs
+ * between SSR and hydration, so a render either side of midnight on the last
+ * day of a month counts a different number of months.
  */
 export function formatTenure(
 	joinedAt: Date | string,
-	options: { now?: Date; timeZone?: string } = {},
+	options: { now: Date; timeZone: string },
 ): string {
 	const j = typeof joinedAt === "string" ? new Date(joinedAt) : joinedAt;
-	const { now = new Date(), timeZone = "UTC" } = options;
+	const { now, timeZone } = options;
 	const a = yearMonthIn(j, timeZone);
 	const b = yearMonthIn(now, timeZone);
 	const months = (b.y - a.y) * 12 + (b.m - a.m);

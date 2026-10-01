@@ -686,11 +686,7 @@ const SANCTIONED: Record<string, string> = {
  * carries two entries, so fixing one of them is still a change this list has
  * to make. May only shrink.
  */
-const KNOWN: readonly string[] = [
-	// Built in `send-minutes-dialog.tsx`, which has no zone to pass yet (#1017).
-	"src/server/minutes-email-logic.ts: formatMeetingDate(meetingDate)",
-	"src/server/minutes-email-logic.ts: formatMeetingDate(meetingDate)",
-];
+const KNOWN: readonly string[] = [];
 
 function allZoneOffenders(): string[] {
 	const out: string[] = [];

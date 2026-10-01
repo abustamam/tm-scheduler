@@ -108,6 +108,8 @@ type MeetingMinutesProps = {
 		clubId: string;
 		clubName: string;
 		meetingDate: Date | string;
+		/** The club's zone, which the draft names the meeting's day in (#1017). */
+		timezone: string;
 		recipients: { name: string; email: string }[];
 		skipped: { name: string }[];
 	} | null;
@@ -218,6 +220,7 @@ function MeetingMinutesView({
 							meetingId={meetingId}
 							clubName={email.clubName}
 							meetingDate={email.meetingDate}
+							timezone={email.timezone}
 							initialRecipients={email.recipients}
 							skipped={email.skipped}
 						/>

@@ -1982,6 +1982,7 @@ function MeetingView() {
 												clubId: meeting.clubId,
 												clubName,
 												meetingDate: meeting.scheduledAt,
+												timezone,
 												recipients: minutesEmail.recipients,
 												skipped: minutesEmail.skipped,
 											}
