@@ -28,9 +28,16 @@ jobs:
       TEST_DATABASE_URL: postgresql://test:test@localhost:5432/tm_test
     steps:
       - uses: actions/checkout@v5
+      # Every job reads Bun's version from package.json's `packageManager`
+      # (#995), never `latest`: Bun 1.3.14 and 1.4.2 handle an empty `bun run`
+      # argument differently, so an unpinned runner passed locally and failed
+      # here, and a new Bun release could turn main red with no commit behind
+      # it. Upgrade deliberately by editing that one field. The path resolves
+      # against the repo root even in the `extension` job.
+      # bun-version-pin.guard.test.ts holds every setup-bun step to it.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - name: Lint & format
         run: bun run check
@@ -125,9 +132,10 @@ jobs:
       TEST_DATABASE_URL: postgresql://test:test@localhost:5432/tm_test
     steps:
       - uses: actions/checkout@v5
+      # Bun version: see the comment on the `check` job's setup-bun step (#995).
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - name: Apply migrations
         run: DATABASE_URL=$TEST_DATABASE_URL bun run db:migrate
@@ -156,9 +164,10 @@ jobs:
         working-directory: extension
     steps:
       - uses: actions/checkout@v5
+      # Bun version: see the comment on the `check` job's setup-bun step (#995).
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
       - run: bun install --frozen-lockfile
       # wxt prepare generates the .wxt/ types the tsconfig extends; run it
       # explicitly rather than relying on postinstall lifecycle behavior.
