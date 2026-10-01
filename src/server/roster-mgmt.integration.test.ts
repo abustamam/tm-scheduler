@@ -486,15 +486,47 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 
 		// The office survived and now references the keeper (previously
 		// cascade-deleted along with the absorbed member row).
-		const terms = await testDb
-			.select()
-			.from(officerTerms)
-			.where(eq(officerTerms.position, "treasurer"));
-		expect(terms).toHaveLength(1);
-		expect(terms[0]?.membershipId).toBe(keeper);
-		expect(terms[0]?.termEnd).toBeNull();
+		//
+		// Scoped to THIS club through the membership: officer_terms has no
+		// club_id, and a dozen other integration files write treasurer terms
+		// into the same database while this one runs, so a query on `position`
+		// alone counted their rows too ("expected length 1, got 3"). The
+		// foreign club below holds its own open treasurer term for the whole
+		// assertion, so an unscoped query fails here every run rather than only
+		// when another file happens to overlap.
+		const foreign = await seedClub();
+		try {
+			await testDb.insert(officerTerms).values({
+				membershipId: foreign.memberId,
+				position: "treasurer",
+				termStart: new Date(),
+				termEnd: null,
+			});
+			const terms = await testDb
+				.select({
+					membershipId: officerTerms.membershipId,
+					termEnd: officerTerms.termEnd,
+				})
+				.from(officerTerms)
+				.innerJoin(members, eq(members.id, officerTerms.membershipId))
+				.where(
+					and(
+						eq(members.clubId, seed.clubId),
+						eq(officerTerms.position, "treasurer"),
+					),
+				);
+			expect(terms).toHaveLength(1);
+			expect(terms[0]?.membershipId).toBe(keeper);
+			expect(terms[0]?.termEnd).toBeNull();
+		} finally {
+			await cleanup(foreign.clubId, [
+				foreign.adminUserId,
+				foreign.memberUserId,
+			]);
+		}
 
-		// The dues row survived and now references the keeper.
+		// The dues row survived and now references the keeper. Already scoped:
+		// `period` is the dues period this test inserted for its own club.
 		const dues = await testDb
 			.select()
 			.from(memberDues)
