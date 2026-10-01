@@ -37,6 +37,15 @@ async function openOffices(membershipId: string): Promise<string[]> {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+/**
+ * A per-run value for anything matched globally: `people.customer_id` is
+ * UNIQUE, people are club-less (so the club cascade does not remove them), and
+ * vitest runs files in parallel against one shared database. A fixed key that
+ * survives one interrupted run fails every later one (#991, CLAUDE.md).
+ */
+const runKey = (prefix: string): string =>
+	`${prefix}-${randomUUID().slice(0, 8)}`;
+
 /** Minimal mapped-CSV row builder (all fields default to null). */
 function row(over: Partial<MappedMember>): MappedMember {
 	return {
@@ -63,24 +72,30 @@ async function makeClub(): Promise<string> {
 describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 	let importPeopleAndMembers: typeof import("#/server/import-members-logic").importPeopleAndMembers;
 	const clubIds: string[] = [];
-	// People `releasedPerson` seeded. They hold no membership once released, so
-	// `cleanup`'s sweep (people of the club's members) only reaches one if a
-	// later step re-attached it. A case that fails or times out before then
-	// would otherwise leak a club-less row into every later run (#991).
-	const releasedPersonIds: string[] = [];
+	// People this suite inserts directly (`releasedPerson`). They hold no
+	// membership once released, so `cleanup`'s sweep (people of the club's
+	// members) only reaches one if a later step re-attached it. A case that
+	// fails or times out before then would otherwise leak a club-less row into
+	// every later run (#991).
+	const seededPersonIds: string[] = [];
 
 	beforeEach(async () => {
 		({ importPeopleAndMembers } = await import(
 			"#/server/import-members-logic"
 		));
 		clubIds.length = 0;
-		releasedPersonIds.length = 0;
+		seededPersonIds.length = 0;
 	});
 
 	afterEach(async () => {
-		for (const id of clubIds) await cleanup(id, []);
-		if (releasedPersonIds.length > 0) {
-			await testDb.delete(people).where(inArray(people.id, releasedPersonIds));
+		// `finally`: a throwing club cleanup must not skip the people delete, or
+		// the leak this exists to stop comes back.
+		try {
+			for (const id of clubIds) await cleanup(id, []);
+		} finally {
+			if (seededPersonIds.length > 0) {
+				await testDb.delete(people).where(inArray(people.id, seededPersonIds));
+			}
 		}
 	});
 
@@ -108,7 +123,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.values({ customerId, name })
 			.returning({ id: people.id });
 		const personId = person?.id ?? "";
-		releasedPersonIds.push(personId);
+		seededPersonIds.push(personId);
 		const [m] = await testDb
 			.insert(members)
 			.values({ clubId, personId, name })
@@ -124,8 +139,16 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 	it("creates one person + one membership per fresh row", async () => {
 		const clubId = await club();
 		const stats = await importPeopleAndMembers(clubId, [
-			row({ customerId: "PN-A", name: "Ada", email: "ada@x.io" }),
-			row({ customerId: "PN-B", name: "Bob", email: "bob@x.io" }),
+			row({
+				customerId: runKey("PN-A"),
+				name: "Ada",
+				email: `${runKey("ada")}@x.io`,
+			}),
+			row({
+				customerId: runKey("PN-B"),
+				name: "Bob",
+				email: `${runKey("bob")}@x.io`,
+			}),
 		]);
 		expect(stats.peopleCreated).toBe(2);
 		expect(stats.membersCreated).toBe(2);
@@ -140,7 +163,10 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 
 	it("is idempotent: re-import matches by Customer ID, no new people", async () => {
 		const clubId = await club();
-		const rows = [row({ customerId: "PN-A", name: "Ada", email: "ada@x.io" })];
+		const customerId = runKey("PN-A");
+		const rows = [
+			row({ customerId, name: "Ada", email: `${runKey("ada")}@x.io` }),
+		];
 		await importPeopleAndMembers(clubId, rows);
 		const second = await importPeopleAndMembers(clubId, rows);
 
@@ -152,7 +178,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const ppl = await testDb
 			.select()
 			.from(people)
-			.where(eq(people.customerId, "PN-A"));
+			.where(eq(people.customerId, customerId));
 		expect(ppl).toHaveLength(1);
 	});
 
@@ -166,12 +192,10 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// hand. The match is still case-insensitive: that is what reaches them.
 		const clubA = await club();
 		const clubB = await club();
-		const n = randomUUID().slice(0, 8);
-		await importPeopleAndMembers(clubA, [
-			row({ name: "Cy", email: `cy-${n}@x.io` }),
-		]);
+		const addr = `${runKey("cy")}@x.io`;
+		await importPeopleAndMembers(clubA, [row({ name: "Cy", email: addr })]);
 		const statsB = await importPeopleAndMembers(clubB, [
-			row({ name: "Cy", email: `CY-${n}@x.io` }),
+			row({ name: "Cy", email: addr.toUpperCase() }),
 		]);
 
 		expect(statsB.foreignSkipped).toBe(1);
@@ -182,7 +206,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const cyPeople = await testDb
 			.select()
 			.from(people)
-			.where(eq(people.email, `cy-${n}@x.io`));
+			.where(eq(people.email, addr));
 		expect(cyPeople).toHaveLength(1);
 		const memberships = await testDb
 			.select({ clubId: members.clubId })
@@ -194,9 +218,10 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 	it("never merges a shared email across distinct people", async () => {
 		const clubId = await club();
 		// Two spouses share one family email — both blank Customer ID.
+		const family = `${runKey("family")}@x.io`;
 		const stats = await importPeopleAndMembers(clubId, [
-			row({ name: "Pat", email: "family@x.io" }),
-			row({ name: "Sam", email: "family@x.io" }),
+			row({ name: "Pat", email: family }),
+			row({ name: "Sam", email: family }),
 		]);
 		// The shared email is detected up front, so BOTH rows become distinct
 		// people (never fused) — even though they arrive in the same batch.
@@ -206,7 +231,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const fam = await testDb
 			.select()
 			.from(people)
-			.where(eq(people.email, "family@x.io"));
+			.where(eq(people.email, family));
 		expect(fam).toHaveLength(2);
 		// Two distinct memberships too — neither person is dropped.
 		const famMembers = await testDb
@@ -227,19 +252,18 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// Per-run keys: vitest runs test FILES in parallel against one shared
 		// `tm_test`, `people.customer_id` is globally UNIQUE, and an unscoped
 		// select on `people` is order-dependent by construction (CLAUDE.md).
-		const n = randomUUID().slice(0, 8);
-		await importPeopleAndMembers(clubId, [
-			row({ customerId: `PN-EM-${n}`, name: "Em" }),
-		]);
+		const customerId = runKey("PN-EM");
+		const addr = `${runKey("em")}@x.io`;
+		await importPeopleAndMembers(clubId, [row({ customerId, name: "Em" })]);
 		const stats = await importPeopleAndMembers(clubId, [
-			row({ customerId: `PN-EM-${n}`, name: "Em", email: `em-${n}@x.io` }),
+			row({ customerId, name: "Em", email: addr }),
 		]);
 
 		expect(stats.peopleMatchedByCustomerId).toBe(1);
 		const [em] = await testDb
 			.select({ email: people.email })
 			.from(people)
-			.where(eq(people.customerId, `PN-EM-${n}`));
+			.where(eq(people.customerId, customerId));
 		expect(em?.email).toBeNull();
 		// The club's own contact record DID fill — that is the officer's to set,
 		// and it is the address the invite and the claim will both use.
@@ -247,7 +271,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.select({ email: members.email })
 			.from(members)
 			.where(eq(members.clubId, clubId));
-		expect(membership?.email).toBe(`em-${n}@x.io`);
+		expect(membership?.email).toBe(addr);
 	});
 
 	it("cannot re-key a Person the importing club does not hold", async () => {
@@ -262,22 +286,20 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// unable to sign in. The row counts below are that half.
 		const clubA = await club();
 		const clubB = await club();
-		const n = randomUUID().slice(0, 8);
-		await importPeopleAndMembers(clubA, [
-			row({ customerId: `PN-VIC-${n}`, name: "Vic" }),
-		]);
+		const customerId = runKey("PN-VIC");
+		await importPeopleAndMembers(clubA, [row({ customerId, name: "Vic" })]);
 		const stats = await importPeopleAndMembers(clubB, [
 			row({
-				customerId: `PN-VIC-${n}`,
+				customerId,
 				name: "Vic",
-				email: `attacker-${n}@x.io`,
+				email: `${runKey("attacker")}@x.io`,
 			}),
 		]);
 
 		const [vic] = await testDb
 			.select({ id: people.id, email: people.email })
 			.from(people)
-			.where(eq(people.customerId, `PN-VIC-${n}`));
+			.where(eq(people.customerId, customerId));
 		expect(vic?.email).toBeNull();
 		expect(stats.foreignSkipped).toBe(1);
 		const clubBRoster = await testDb
@@ -301,8 +323,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// recognising them — and the miss is not quiet, it adds a second Person AND
 		// a second roster row for the same human on every subsequent import.
 		const clubId = await club();
-		const n = randomUUID().slice(0, 8);
-		const addr = `fay-${n}@x.io`;
+		const addr = `${runKey("fay")}@x.io`;
 		await importPeopleAndMembers(clubId, [row({ name: "Fay", email: addr })]);
 		// Simulate the migration — scoped to THIS club's person by id. An unscoped
 		// `update(people)` on a shared `tm_test` takes another file's in-flight
@@ -337,8 +358,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// cross-club shape this whole change exists to close.
 		const clubA = await club();
 		const clubB = await club();
-		const n = randomUUID().slice(0, 8);
-		const addr = `gus-${n}@x.io`;
+		const addr = `${runKey("gus")}@x.io`;
 		await importPeopleAndMembers(clubA, [row({ name: "Gus", email: addr })]);
 		const [gus] = await testDb
 			.select({ personId: members.personId })
@@ -360,31 +380,29 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 
 	it("adopts a Customer ID onto a person first seen by email only", async () => {
 		const clubId = await club();
-		await importPeopleAndMembers(clubId, [
-			row({ name: "Di", email: "di@x.io" }),
-		]);
+		const customerId = runKey("PN-DI");
+		const addr = `${runKey("di")}@x.io`;
+		await importPeopleAndMembers(clubId, [row({ name: "Di", email: addr })]);
 		const stats = await importPeopleAndMembers(clubId, [
-			row({ customerId: "PN-DI", name: "Di", email: "di@x.io" }),
+			row({ customerId, name: "Di", email: addr }),
 		]);
 		expect(stats.peopleMatchedByEmail).toBe(1);
 		expect(stats.peopleCreated).toBe(0);
 
-		const di = await testDb
-			.select()
-			.from(people)
-			.where(eq(people.email, "di@x.io"));
+		const di = await testDb.select().from(people).where(eq(people.email, addr));
 		expect(di).toHaveLength(1);
-		expect(di[0].customerId).toBe("PN-DI");
+		expect(di[0].customerId).toBe(customerId);
 	});
 
 	it("moves original_join_date onto the person, not the membership", async () => {
 		const clubId = await club();
 		const ojd = new Date("2012-02-01T08:00:00Z");
+		const customerId = runKey("PN-J");
 		await importPeopleAndMembers(clubId, [
 			row({
-				customerId: "PN-J",
+				customerId,
 				name: "Jo",
-				email: "jo@x.io",
+				email: `${runKey("jo")}@x.io`,
 				joinedAt: new Date("2024-05-01T07:00:00Z"),
 				originalJoinDate: ojd,
 			}),
@@ -392,7 +410,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const [p] = await testDb
 			.select()
 			.from(people)
-			.where(eq(people.customerId, "PN-J"));
+			.where(eq(people.customerId, customerId));
 		expect(p.originalJoinDate?.getTime()).toBe(ojd.getTime());
 
 		const [m] = await testDb
@@ -407,7 +425,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const clubId = await club();
 		await importPeopleAndMembers(clubId, [
 			row({
-				customerId: "PN-OP",
+				customerId: runKey("PN-OP"),
 				name: "Ovi",
 				officerPosition: "vp_education",
 				currentPosition: "Club VP Education",
@@ -422,10 +440,11 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 
 	it("fill-only: never touches a membership that already holds an office", async () => {
 		const clubId = await club();
+		const customerId = runKey("PN-K");
 		// Import the roster without granting the CSV office.
 		await importPeopleAndMembers(clubId, [
 			row({
-				customerId: "PN-K",
+				customerId,
 				name: "Kai",
 				officerPosition: "president",
 				currentPosition: "Club President",
@@ -443,7 +462,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// Re-import still says president — must NOT touch the in-app office set.
 		const stats = await importPeopleAndMembers(clubId, [
 			row({
-				customerId: "PN-K",
+				customerId,
 				name: "Kai",
 				officerPosition: "president",
 				currentPosition: "Club President",
@@ -461,8 +480,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// writer inserts the membership and holds it uncommitted, so the import
 		// reads "no membership", then parks on the unique index.
 		const clubId = await club();
-		// Per-run key: `people.customer_id` is globally UNIQUE (#991).
-		const customerId = `PN-RACE-${randomUUID().slice(0, 8)}`;
+		const customerId = runKey("PN-RACE");
 		const personId = await releasedPerson(clubId, customerId, "Racing Member");
 
 		let winnerId = "";
@@ -519,8 +537,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// The recovery reconciles, but must not CLOBBER: fill-only means the row
 		// already present wins on any field it has.
 		const clubId = await club();
-		// Per-run key: `people.customer_id` is globally UNIQUE (#991).
-		const customerId = `PN-FILL-${randomUUID().slice(0, 8)}`;
+		const customerId = runKey("PN-FILL");
 		const personId = await releasedPerson(clubId, customerId, "Fill Only");
 
 		const winner = await openBlockingTx(async (tx) => {
@@ -558,7 +575,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const clubId = await club();
 		const stats = await importPeopleAndMembers(clubId, [
 			row({
-				customerId: "PN-W",
+				customerId: runKey("PN-W"),
 				name: "Web Master",
 				officerPosition: null,
 				currentPosition: "Webmaster",
