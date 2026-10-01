@@ -9,7 +9,7 @@
  *     bunx vitest run src/server/import-members.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, members, officerTerms, people } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
@@ -63,16 +63,25 @@ async function makeClub(): Promise<string> {
 describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 	let importPeopleAndMembers: typeof import("#/server/import-members-logic").importPeopleAndMembers;
 	const clubIds: string[] = [];
+	// People `releasedPerson` seeded. They hold no membership once released, so
+	// `cleanup`'s sweep (people of the club's members) only reaches one if a
+	// later step re-attached it. A case that fails or times out before then
+	// would otherwise leak a club-less row into every later run (#991).
+	const releasedPersonIds: string[] = [];
 
 	beforeEach(async () => {
 		({ importPeopleAndMembers } = await import(
 			"#/server/import-members-logic"
 		));
 		clubIds.length = 0;
+		releasedPersonIds.length = 0;
 	});
 
 	afterEach(async () => {
 		for (const id of clubIds) await cleanup(id, []);
+		if (releasedPersonIds.length > 0) {
+			await testDb.delete(people).where(inArray(people.id, releasedPersonIds));
+		}
 	});
 
 	async function club(): Promise<string> {
@@ -99,6 +108,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.values({ customerId, name })
 			.returning({ id: people.id });
 		const personId = person?.id ?? "";
+		releasedPersonIds.push(personId);
 		const [m] = await testDb
 			.insert(members)
 			.values({ clubId, personId, name })
@@ -451,7 +461,9 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// writer inserts the membership and holds it uncommitted, so the import
 		// reads "no membership", then parks on the unique index.
 		const clubId = await club();
-		const personId = await releasedPerson(clubId, "PN-RACE", "Racing Member");
+		// Per-run key: `people.customer_id` is globally UNIQUE (#991).
+		const customerId = `PN-RACE-${randomUUID().slice(0, 8)}`;
+		const personId = await releasedPerson(clubId, customerId, "Racing Member");
 
 		let winnerId = "";
 		const winner = await openBlockingTx(async (tx) => {
@@ -468,7 +480,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// which is exactly the trap CLAUDE.md warns about for guard-only code.
 		const running = importPeopleAndMembers(clubId, [
 			row({
-				customerId: "PN-RACE",
+				customerId,
 				name: "Racing Member",
 				email: "race@x.io",
 				phone: "5551230000",
@@ -507,7 +519,9 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		// The recovery reconciles, but must not CLOBBER: fill-only means the row
 		// already present wins on any field it has.
 		const clubId = await club();
-		const personId = await releasedPerson(clubId, "PN-FILL", "Fill Only");
+		// Per-run key: `people.customer_id` is globally UNIQUE (#991).
+		const customerId = `PN-FILL-${randomUUID().slice(0, 8)}`;
+		const personId = await releasedPerson(clubId, customerId, "Fill Only");
 
 		const winner = await openBlockingTx(async (tx) => {
 			await tx.insert(members).values({
@@ -520,7 +534,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 
 		const running = importPeopleAndMembers(clubId, [
 			row({
-				customerId: "PN-FILL",
+				customerId,
 				name: "Fill Only",
 				email: "csv@x.io",
 				phone: "5559990000",
