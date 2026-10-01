@@ -74,6 +74,16 @@
 #      regression here cannot start a recursive whole-suite run), and so is a
 #      label that is an existing *.test.ts(x) file, which is the same shift with
 #      two or more test paths given.
+#
+#   7. The test database follows src/test/setup-env.ts: an exported
+#      TEST_DATABASE_URL, else the worktree's own database from
+#      .env.test.local, else the shared tm_test. This used to default straight
+#      to tm_test, which overrode the worktree's database (#1001): on #765 the
+#      suite passed 106/106 under vitest and every mutation run aborted with
+#      "baseline is already RED", because tm_test lacked the branch's new
+#      column. The database name is now printed with the baseline and with
+#      that error, and an unreadable .env.test.local is refused rather than
+#      quietly falling back.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -127,8 +137,33 @@ done
 
 cd "$(git rev-parse --show-toplevel)" || die "not in a git repo"
 
+# Guard 7 — the test database. Precedence matches src/test/setup-env.ts:
+# an exported TEST_DATABASE_URL wins, then the worktree's own database in
+# .env.test.local (written by `bun run worktree:setup`, #980), and only then
+# the shared tm_test. Defaulting straight to tm_test (#1001) moved every
+# worktree's mutation run onto the shared database: on a branch with a schema
+# change the baseline read RED for no visible reason, and without one the
+# run silently collided with parallel worktrees again.
+TEST_DB_FILE=".env.test.local"
+TEST_DB_MARKER='# Written by `bun run worktree:setup` (#980). Dropped by `bun run worktree:teardown`.'
+if [ -z "${TEST_DATABASE_URL+set}" ] && [ -f "$TEST_DB_FILE" ]; then
+	# Same acceptance as parseTestDbFile: the marker on line 1, a URL line, and
+	# a database name setup could have created. Anything else is refused rather
+	# than falling back to tm_test, which is the silent shape this guards.
+	WT_URL=""
+	if [ "$(head -n 1 "$TEST_DB_FILE")" = "$TEST_DB_MARKER" ]; then
+		WT_URL="$(grep -m 1 '^TEST_DATABASE_URL=' "$TEST_DB_FILE" | cut -d= -f2- | tr -d '[:space:]' || true)"
+	fi
+	WT_NAME="${WT_URL##*/}"
+	WT_NAME="${WT_NAME%%\?*}"
+	printf '%s' "$WT_NAME" | grep -qE '^tm_test_wt_[a-z0-9_]+$' \
+		|| die "$TEST_DB_FILE exists but names no worktree test database; re-run \`bun run worktree:setup\`."
+	TEST_DATABASE_URL="$WT_URL"
+fi
 : "${TEST_DATABASE_URL:=postgresql://dev:dev@localhost:5432/tm_test}"
 export TEST_DATABASE_URL   # or ~630 integration tests silently skip and read green
+TEST_DB_NAME="${TEST_DATABASE_URL##*/}"
+TEST_DB_NAME="${TEST_DB_NAME%%\?*}"
 # The summary parse below greps plain text; an ANSI code between "Tests" and
 # the count would read as "collected NO tests". Vitest 4 does not colour that
 # line today, even under CI=true or FORCE_COLOR=1, but nothing promises it.
@@ -161,8 +196,8 @@ BASE_TOTAL="$(total_count "$BASE_OUT")"
 	|| die "baseline collected NO tests — check the paths. Output:
 $(printf '%s' "$BASE_OUT" | tail -5)"
 [ -z "$(failed_count "$BASE_OUT")" ] \
-	|| die "baseline is already RED; fix that before mutating."
-printf 'baseline: %s tests pass\n' "$BASE_TOTAL"
+	|| die "baseline is already RED against test database $TEST_DB_NAME; fix that before mutating."
+printf 'baseline: %s tests pass (test database %s)\n' "$BASE_TOTAL" "$TEST_DB_NAME"
 
 # Guard 1 — restore from a copy, never `git checkout`.
 BACKUP="$(mktemp)"
