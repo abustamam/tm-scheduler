@@ -57,6 +57,7 @@ import {
 	type AgendaAppliedSummary,
 	parseAgendaPayload,
 } from "#/server/agenda-plan-pending-schemas";
+import { lockClubForWrite } from "#/server/club-write-lock";
 import { McpError } from "#/server/mcp/errors";
 import { applyPendingPlanLocked } from "#/server/mcp-pending-apply";
 import { insertMeetingWithSlots } from "#/server/meeting-create-logic";
@@ -102,6 +103,22 @@ export async function applyAgendaPlan(
 			expired: AGENDA_EXPIRED_IN_LOCK_MESSAGE,
 		},
 		apply: async (tx, row) => {
+			// The club write lock (#925), before this body's first club or meeting
+			// row lock. This apply both CREATES meetings — whose agenda read takes
+			// the club row FOR SHARE (`startMeetingOnClubDefault`, #910) — and
+			// UPDATES existing ones (`applyMeetingMetaPatch` locks the meeting).
+			// A save-as-club-template locks a meeting and then the club row; with
+			// both orders in play, a plan holding the club SHARE and waiting on
+			// meeting M deadlocked against a save holding M and waiting on the
+			// club. Taking this lock first serialises the two per club, as every
+			// other writer that row-locks both already does.
+			//
+			// ADVISORY LOCK ORDER: the MCP apply lock (`mcp/lock.ts`, taken by
+			// `applyPendingPlanLocked` before this body runs) and THEN this one.
+			// Nothing takes the MCP lock after the club write lock, so the two
+			// are always acquired in that one order.
+			await lockClubForWrite(tx, input.club.clubId);
+
 			// PARSE, do not trust the column's compile-time type. This read happens
 			// inside the lock and its values reach `meetings` — a row written by a
 			// previous release across a deploy boundary must refuse here rather
