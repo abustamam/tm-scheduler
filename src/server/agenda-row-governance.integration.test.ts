@@ -21,6 +21,7 @@
  */
 import { readFileSync } from "node:fs";
 import { asc, eq, sql } from "drizzle-orm";
+import pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubs,
@@ -523,13 +524,28 @@ const ROLLBACK = Symbol("rollback");
  *
  * A transaction is the one way to keep the statement BYTE-IDENTICAL to what
  * ships while containing its blast radius: the reads happen inside, the throw
- * undoes the writes, and the sibling suites see nothing but a brief row lock.
- * Scoping the SQL instead would mean testing a statement this repo does not run.
+ * undoes the writes. Scoping the SQL instead would mean testing a statement
+ * this repo does not run.
+ *
+ * Rolling back hides the WRITES, not the LOCKS. While open, the transaction
+ * row-locks every matching beat in the database, other suites' included, and a
+ * sibling's club delete cascades through those same beats in its own order. Row
+ * locks taken one at a time from both ends are a cycle, and CI hit it as a
+ * 40P01 in another suite's cleanup (#1066). So the FIRST statement takes the
+ * whole table in SHARE ROW EXCLUSIVE: it waits for every open writer of the
+ * table to finish while this transaction holds nothing, and once granted no
+ * other transaction can hold a beat row lock until this one ends (nothing locks
+ * a beat except by writing it, and every write needs ROW EXCLUSIVE). Siblings
+ * that write beats meanwhile WAIT for the rollback; neither side can abort. A
+ * caller's own writes come after it, inside `read`, so they are covered too.
  */
 async function withBackfill<T>(read: (tx: TestTx) => Promise<T>): Promise<T> {
 	let out: T | undefined;
 	try {
 		await testDb.transaction(async (tx) => {
+			await tx.execute(
+				sql`LOCK TABLE "meeting_template_beats" IN SHARE ROW EXCLUSIVE MODE`,
+			);
 			await tx.execute(sql.raw(BACKFILL_SQL));
 			out = await read(tx);
 			throw ROLLBACK;
@@ -676,4 +692,127 @@ describe.skipIf(!hasTestDb)("the #683 backfill", () => {
 		// DIFFERENT row, or pick two — the state the unique index now refuses.
 		expect(orders).toEqual([0]);
 	});
+
+	it("cannot deadlock a concurrent cascade through the same beats (#1066)", async () => {
+		// The CI failure, replayed with a deterministic interleave. Connection C
+		// plays another suite's `cleanup()`: its club delete cascades through a
+		// template's beats one row at a time, inside one transaction.
+		//
+		//   1. C row-locks a beat the backfill does NOT match (Y).
+		//   2. The backfill runs. Unlocked, its UPDATE takes the matching beat (S)
+		//      and the caller's own write then waits on Y, which C holds.
+		//   3. C cascades on to S, which the backfill holds.
+		//
+		// The backfill's second lock comes from the caller's write rather than
+		// from the UPDATE's own scan, because the scan's row order is the
+		// planner's to choose and a test that relied on it would fail 1 run in N.
+		// Which statement takes the second lock does not matter to the cycle.
+		//
+		// Without the table lock that is a cycle and Postgres aborts one side with
+		// 40P01 after `deadlock_timeout`. With it, the backfill queues behind C at
+		// step 2 holding NOTHING, so C finishes, and only then does the backfill
+		// run. Both sides may wait; neither may abort.
+		//
+		// The park point is observed, not slept for: step 3 starts only once
+		// `pg_blocking_pids` says C is blocking someone, which is the backfill and
+		// nothing else (no other connection touches this suite's rows).
+		const id = await givenLegacyTemplate([
+			{ sortOrder: 0, roleKey: TTM, marks: [1, 1.75, 2.5] },
+			{ sortOrder: 1, roleKey: "evaluator" },
+		]);
+		const beats = await testDb
+			.select({
+				id: meetingTemplateBeats.id,
+				sortOrder: meetingTemplateBeats.sortOrder,
+			})
+			.from(meetingTemplateBeats)
+			.where(eq(meetingTemplateBeats.templateId, id));
+		const segment = beats.find((b) => b.sortOrder === 0)?.id;
+		const other = beats.find((b) => b.sortOrder === 1)?.id;
+		if (!segment || !other) throw new Error("legacy beats missing");
+
+		const c = new pg.Client({
+			connectionString: process.env.TEST_DATABASE_URL,
+		});
+		await c.connect();
+		let backfill: Promise<{ ok: number[] } | { err: unknown }> | undefined;
+		try {
+			await c.query("BEGIN");
+			// Bounds C: a regression that turns the cycle into an unbounded wait
+			// fails here instead of hanging the file.
+			await c.query("SET LOCAL lock_timeout = '10s'");
+			const cPid = (
+				await c.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+			).rows[0]?.pid;
+			await c.query(
+				'UPDATE "meeting_template_beats" SET "minutes" = "minutes" WHERE "id" = $1',
+				[other],
+			);
+
+			backfill = withBackfill(async (tx) => {
+				// A caller's own write inside the backfill transaction, as the
+				// idempotency case above makes.
+				await tx
+					.update(meetingTemplateBeats)
+					.set({ minutes: 2 })
+					.where(eq(meetingTemplateBeats.id, other));
+				return governedOrders(tx, id);
+			}).then(
+				(ok) => ({ ok }),
+				(err: unknown) => ({ err }),
+			);
+
+			await untilBlockedBy(cPid, 10_000);
+
+			const cErr = await c
+				.query('DELETE FROM "meeting_template_beats" WHERE "id" = $1', [
+					segment,
+				])
+				.then(
+					() => null,
+					(e: unknown) => e,
+				);
+			// Rolled back, not committed: this suite's rows stay for cleanup.
+			await c.query("ROLLBACK");
+			const result = await backfill;
+
+			expect(
+				{
+					cleanup: pgCode(cErr),
+					backfill: "err" in result ? pgCode(result.err) : null,
+				},
+				"neither side may be aborted",
+			).toEqual({ cleanup: null, backfill: null });
+			expect("ok" in result ? result.ok : undefined).toEqual([0]);
+		} finally {
+			await c.query("ROLLBACK").catch(() => {});
+			await c.end();
+			await backfill;
+		}
+	});
 });
+
+/** The SQLSTATE on a pg error, or on the pg error drizzle wraps as `cause`. */
+function pgCode(err: unknown): string | null {
+	if (!err) return null;
+	const e = err as { code?: unknown; cause?: { code?: unknown } };
+	const code = e.code ?? e.cause?.code;
+	return typeof code === "string" ? code : "unknown";
+}
+
+/** Resolve once some backend is waiting on a lock `pid` holds. Bounded, so a
+ *  backfill that never reaches the park point fails rather than hangs. */
+async function untilBlockedBy(pid: number | undefined, withinMs: number) {
+	if (pid === undefined) throw new Error("no backend pid for C");
+	const deadline = Date.now() + withinMs;
+	for (;;) {
+		const res = await testDb.execute<{ n: number }>(
+			sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE ${pid} = ANY(pg_blocking_pids(pid))`,
+		);
+		if ((res.rows[0]?.n ?? 0) > 0) return;
+		if (Date.now() > deadline) {
+			throw new Error(`nothing blocked on backend ${pid} within ${withinMs}ms`);
+		}
+		await new Promise((r) => setTimeout(r, 10));
+	}
+}
