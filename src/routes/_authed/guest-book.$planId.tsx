@@ -29,6 +29,7 @@ import type {
 	PendingEntryEdit,
 	PendingEntryField,
 } from "#/lib/guest-book-pending";
+import { loadClubTimezoneSettings } from "#/server/clubs";
 import {
 	applyGuestBookPendingPlan,
 	getGuestBookPendingPlan,
@@ -37,8 +38,18 @@ import {
 } from "#/server/guest-book-pending";
 
 export const Route = createFileRoute("/_authed/guest-book/$planId")({
-	loader: ({ params }) =>
-		getGuestBookPendingPlan({ data: { pendingId: params.planId } }),
+	loader: async ({ params }) => {
+		const view = await getGuestBookPendingPlan({
+			data: { pendingId: params.planId },
+		});
+		// Its dates are the CLUB's day (#1017): left to the runtime, the UTC
+		// server and the browser named different days.
+		const timezone =
+			"clubId" in view
+				? (await loadClubTimezoneSettings({ data: view.clubId })).timezone
+				: "UTC";
+		return { view, timezone };
+	},
 	component: GuestBookConfirm,
 });
 
@@ -63,7 +74,7 @@ function Shell({
 }
 
 function GuestBookConfirm() {
-	const initial = Route.useLoaderData();
+	const { view: initial, timezone } = Route.useLoaderData();
 	const [view, setView] = useState<PendingPlanView>(initial);
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [busy, setBusy] = useState(false);
@@ -148,8 +159,9 @@ function GuestBookConfirm() {
 		return (
 			<Shell title="Link expired">
 				<p className="text-sm text-[var(--sea-ink-soft)]">
-					This confirmation link expired on {formatMeetingDate(view.expiresAt)}.
-					Nothing was recorded — transcribe the page again to get a new link.
+					This confirmation link expired on{" "}
+					{formatMeetingDate(view.expiresAt, timezone)}. Nothing was recorded —
+					transcribe the page again to get a new link.
 				</p>
 			</Shell>
 		);
@@ -166,8 +178,8 @@ function GuestBookConfirm() {
 					    tombstone keeps its date, so this arm normally has one — but
 					    "the meeting of  in X" is the shape a bare interpolation
 					    would leave if it ever did not. */}
-					This page was recorded on {formatMeetingDate(view.appliedAt)}. The
-					visitors are on{" "}
+					This page was recorded on{" "}
+					{formatMeetingDate(view.appliedAt, timezone)}. The visitors are on{" "}
 					{view.meetingDate
 						? `the meeting of ${view.meetingDate}`
 						: "the meeting it was transcribed for"}{" "}

@@ -3,27 +3,29 @@ import { useState } from "react";
 import { Badge } from "#/components/ui/badge";
 import { Card, CardContent } from "#/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
+import { APP_LOCALE } from "#/lib/format";
 import { levelLabel, PATH_COMPLETION_LEVEL } from "#/lib/pathways-catalog";
 import { cn } from "#/lib/utils";
 import type { PathViewModel } from "#/server/pathways-read-logic";
 
-// Fixed locale (not the runtime default) so SSR and client render the same
-// string for `deliveredAt` — avoids adding to the known hydration warning
-// from locale-dependent date formatting on the member-detail route.
-const WIN_DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
-	month: "short",
-	year: "numeric",
-});
-
 /** Format a win's `deliveredAt`, tolerating either a `Date` or an ISO string
- * (server-fn boundaries can serialize dates to strings). */
+ * (server-fn boundaries can serialize dates to strings).
+ *
+ * A fixed locale AND a named zone, so SSR and the client render the same
+ * string (#708 for the locale, #1017 for the zone: a speech on the evening of
+ * the 31st is next month in UTC). */
 function formatWinDate(
 	deliveredAt: PathViewModel["wins"][number]["deliveredAt"],
+	timeZone: string,
 ) {
 	if (!deliveredAt) return null;
 	const d = deliveredAt instanceof Date ? deliveredAt : new Date(deliveredAt);
 	if (Number.isNaN(d.getTime())) return null;
-	return WIN_DATE_FORMAT.format(d);
+	return new Intl.DateTimeFormat(APP_LOCALE, {
+		month: "short",
+		year: "numeric",
+		timeZone,
+	}).format(d);
 }
 
 const RING_SIZE = 100;
@@ -141,10 +143,12 @@ function CurrentLevelBar({
  * here, and the union of both. */
 function YourWins({
 	wins,
+	timeZone,
 	onUnmark,
 	busyId,
 }: {
 	wins: PathViewModel["wins"];
+	timeZone: string;
 	onUnmark?: (projectId: string) => void;
 	busyId?: string | null;
 }) {
@@ -154,7 +158,7 @@ function YourWins({
 			<div className="font-medium text-foreground text-sm">Your wins</div>
 			<ul className="flex flex-col gap-2">
 				{wins.map((w, i) => {
-					const dateLabel = formatWinDate(w.deliveredAt);
+					const dateLabel = formatWinDate(w.deliveredAt, timeZone);
 					return (
 						<li
 							// biome-ignore lint/suspicious/noArrayIndexKey: wins have no stable id; name+level can repeat across levels in theory
@@ -365,11 +369,13 @@ function MarkableProject({
  * named wins and up-next layers. */
 function PathBlock({
 	path,
+	timeZone,
 	onMark,
 	onUnmark,
 	busyId,
 }: {
 	path: PathViewModel;
+	timeZone: string;
 	onMark?: (projectId: string) => void;
 	onUnmark?: (projectId: string) => void;
 	busyId?: string | null;
@@ -405,7 +411,12 @@ function PathBlock({
 					Camp only.
 				</div>
 			) : null}
-			<YourWins wins={path.wins} onUnmark={onUnmark} busyId={busyId} />
+			<YourWins
+				wins={path.wins}
+				timeZone={timeZone}
+				onUnmark={onUnmark}
+				busyId={busyId}
+			/>
 			{/* Gated on the working level, not on `complete` (#898): on a Base
 			    Camp path `complete` is about approval, which is a different
 			    question from whether anything is left. Series still owed show
@@ -435,11 +446,15 @@ function PathBlock({
  */
 export function PathwaysProgress({
 	paths,
+	timeZone = "UTC",
 	onMark,
 	onUnmark,
 	busyId,
 }: {
 	paths: PathViewModel[];
+	/** The zone a win's month is read in: the club's (#1017). Omitted, UTC — a
+	 *  fixed zone, so the server and browser at least agree. */
+	timeZone?: string;
 	/** Mark a project complete. Omit on read-only surfaces — the controls then
 	 *  simply aren't rendered (#419). */
 	onMark?: (projectId: string) => void;
@@ -473,6 +488,7 @@ export function PathwaysProgress({
 				<CardContent>
 					<PathBlock
 						path={paths[0]}
+						timeZone={timeZone}
 						onMark={onMark}
 						onUnmark={onUnmark}
 						busyId={busyId}
@@ -499,6 +515,7 @@ export function PathwaysProgress({
 						<TabsContent key={p.courseCode} value={p.courseCode}>
 							<PathBlock
 								path={p}
+								timeZone={timeZone}
 								onMark={onMark}
 								onUnmark={onUnmark}
 								busyId={busyId}

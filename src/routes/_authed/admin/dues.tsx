@@ -35,6 +35,7 @@ import {
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
 import { cn } from "#/lib/utils";
+import { loadClubTimezoneSettings } from "#/server/clubs";
 import {
 	createDuesPeriod,
 	deleteDuesPeriod,
@@ -66,21 +67,36 @@ export const Route = createFileRoute("/_authed/admin/dues")({
 				activePeriodId: null as string | null,
 				overdue: [] as OverdueDuesRow[],
 				initial: null as { rows: MemberDuesRow[]; totals: DuesTotals } | null,
+				timezone: "UTC",
 			};
 		}
-		const overview = await getDuesOverview({ data: { clubId: club.clubId } });
+		// A payment is an instant, dated on the CLUB's calendar (#1017): left to
+		// the runtime, the UTC server and the browser printed different days.
+		const [overview, { timezone }] = await Promise.all([
+			getDuesOverview({ data: { clubId: club.clubId } }),
+			loadClubTimezoneSettings({ data: club.clubId }),
+		]);
 		const initial = overview.activePeriodId
 			? await getDuesForPeriod({
 					data: { clubId: club.clubId, periodId: overview.activePeriodId },
 				})
 			: null;
-		return { clubId: club.clubId, ...overview, initial };
+		return { clubId: club.clubId, ...overview, initial, timezone };
 	},
 	component: DuesTracker,
 });
 
+/**
+ * A period's due date is a CALENDAR day, not an instant: the create form posts
+ * the `<input type="date">` value ("2026-04-01") and the server's
+ * `z.coerce.date()` stores it as UTC midnight. So it reads back in UTC. In the
+ * club's zone a US club would see every due date one day early; in the
+ * runtime's zone the server and browser disagreed (#1017).
+ */
+const DUE_DATE_ZONE = "UTC";
+
 function DuesTracker() {
-	const { clubId, periods, activePeriodId, overdue, initial } =
+	const { clubId, periods, activePeriodId, overdue, initial, timezone } =
 		Route.useLoaderData();
 	const router = useRouter();
 
@@ -262,7 +278,7 @@ function DuesTracker() {
 						>
 							{periods.map((p) => (
 								<option key={p.id} value={p.id}>
-									{p.label} · due {formatShortDate(p.dueDate)}
+									{p.label} · due {formatShortDate(p.dueDate, DUE_DATE_ZONE)}
 								</option>
 							))}
 						</select>
@@ -310,6 +326,7 @@ function DuesTracker() {
 								<MemberRow
 									key={row.membershipId}
 									row={row}
+									timezone={timezone}
 									onRecord={() => setRecordFor(row)}
 									onWaive={() => handleWaive(row)}
 									onUndo={() => handleUndo(row)}
@@ -456,11 +473,13 @@ function StatusBadge({ status }: { status: MemberDuesRow["status"] }) {
 
 function MemberRow({
 	row,
+	timezone,
 	onRecord,
 	onWaive,
 	onUndo,
 }: {
 	row: MemberDuesRow;
+	timezone: string;
 	onRecord: () => void;
 	onWaive: () => void;
 	onUndo: () => void;
@@ -478,7 +497,9 @@ function MemberRow({
 					<div className="text-xs text-[var(--sea-ink-soft)]">
 						{row.status === "paid"
 							? `${formatCents(row.amountCents)}${
-									row.paidAt ? ` · ${formatShortDate(row.paidAt)}` : ""
+									row.paidAt
+										? ` · ${formatShortDate(row.paidAt, timezone)}`
+										: ""
 								}`
 							: row.status === "waived"
 								? "Waived"

@@ -28,10 +28,21 @@ import {
 	applyAgendaPendingPlan,
 	getAgendaPendingPlan,
 } from "#/server/agenda-plan-pending";
+import { loadClubTimezoneSettings } from "#/server/clubs";
 
 export const Route = createFileRoute("/_authed/agenda-plan/$planId")({
-	loader: ({ params }) =>
-		getAgendaPendingPlan({ data: { pendingId: params.planId } }),
+	loader: async ({ params }) => {
+		const view = await getAgendaPendingPlan({
+			data: { pendingId: params.planId },
+		});
+		// Its dates are the CLUB's day (#1017): left to the runtime, the UTC
+		// server and the browser named different days.
+		const timezone =
+			"clubId" in view
+				? (await loadClubTimezoneSettings({ data: view.clubId })).timezone
+				: "UTC";
+		return { view, timezone };
+	},
 	component: AgendaPlanConfirm,
 });
 
@@ -56,7 +67,7 @@ function Shell({
 }
 
 function AgendaPlanConfirm() {
-	const initial = Route.useLoaderData();
+	const { view: initial, timezone } = Route.useLoaderData();
 	const [view, setView] = useState<AgendaPendingView>(initial);
 	const [busy, setBusy] = useState(false);
 
@@ -111,8 +122,9 @@ function AgendaPlanConfirm() {
 		return (
 			<Shell title="Link expired">
 				<p className="text-sm text-[var(--sea-ink-soft)]">
-					This confirmation link expired on {formatMeetingDate(view.expiresAt)}.
-					Nothing was saved — ask for the dates again to get a new link.
+					This confirmation link expired on{" "}
+					{formatMeetingDate(view.expiresAt, timezone)}. Nothing was saved — ask
+					for the dates again to get a new link.
 				</p>
 			</Shell>
 		);
@@ -122,8 +134,8 @@ function AgendaPlanConfirm() {
 		return (
 			<Shell title="Already saved">
 				<p className="text-sm text-[var(--sea-ink-soft)]">
-					These agendas were saved on {formatMeetingDate(view.appliedAt)} in{" "}
-					{view.clubName}.
+					These agendas were saved on{" "}
+					{formatMeetingDate(view.appliedAt, timezone)} in {view.clubName}.
 					{view.applied
 						? ` ${view.applied.created} meeting${
 								view.applied.created === 1 ? "" : "s"
