@@ -50,33 +50,48 @@ function statements(): string[] {
 }
 
 /** The two hand-written data statements: the capture, then the backfill. */
-function dataStatements(): { capture: string; backfill: string } {
+function dataStatements(): {
+	membersCapture: string;
+	capture: string;
+	backfill: string;
+} {
 	const all = statements();
+	const membersCapture = all.filter((s) =>
+		/^INSERT INTO "members_phone_backup"/.test(s),
+	);
 	const capture = all.filter((s) =>
 		/^INSERT INTO "people_phone_backup"/.test(s),
 	);
 	const backfill = all.filter((s) => /^UPDATE "people"/.test(s));
 	// Zero statements would pass every assertion below for the wrong reason —
 	// the seeded rows would simply keep what they were given.
+	expect(
+		membersCapture,
+		"0107 must carry its membership-phone capture",
+	).toHaveLength(1);
 	expect(capture, "0107 must carry its capture statement").toHaveLength(1);
 	expect(backfill, "0107 must carry its backfill statement").toHaveLength(1);
-	return { capture: capture[0] as string, backfill: backfill[0] as string };
+	return {
+		membersCapture: membersCapture[0] as string,
+		capture: capture[0] as string,
+		backfill: backfill[0] as string,
+	};
 }
 
-/** The order the file runs them in matters: capture BEFORE the overwrite,
- *  and both BEFORE the drop. */
+/** The order the file runs them in matters: the lock BEFORE anything reads
+ *  `members`, both captures BEFORE the overwrite, and all of it BEFORE the
+ *  drop. */
 function fileOrder(): string[] {
-	return statements().map((s) =>
-		/^CREATE TABLE/.test(s)
-			? "create"
-			: /^INSERT/.test(s)
-				? "capture"
-				: /^UPDATE/.test(s)
-					? "backfill"
-					: /^ALTER TABLE "members" DROP COLUMN "phone"/.test(s)
-						? "drop"
-						: `other: ${s.slice(0, 40)}`,
-	);
+	return statements().map((s) => {
+		if (/^LOCK TABLE "members" IN ACCESS EXCLUSIVE MODE;?$/.test(s))
+			return "lock";
+		if (/^CREATE TABLE/.test(s)) return "create";
+		if (/^INSERT INTO "members_phone_backup"/.test(s)) return "capture members";
+		if (/^INSERT INTO "people_phone_backup"/.test(s)) return "capture people";
+		if (/^UPDATE "people"/.test(s)) return "backfill";
+		if (/^ALTER TABLE "members" DROP COLUMN "phone"/.test(s)) return "drop";
+		return `other: ${s.slice(0, 40)}`;
+	});
 }
 
 const SCRATCH_DB = `tm_0107_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -188,14 +203,16 @@ describe.skipIf(!hasTestDb)("0107 moves the phone onto the Person", () => {
 
 	/** Just the capture and the backfill, so they can be run twice. */
 	async function runData(tx: Tx): Promise<void> {
-		const { capture, backfill } = dataStatements();
+		const { membersCapture, capture, backfill } = dataStatements();
+		await tx.execute(sql.raw(membersCapture));
 		await tx.execute(sql.raw(capture));
 		await tx.execute(sql.raw(backfill));
 	}
 
-	async function createBackupTable(tx: Tx): Promise<void> {
-		const create = statements().find((s) => /^CREATE TABLE/.test(s));
-		await tx.execute(sql.raw(create as string));
+	async function createBackupTables(tx: Tx): Promise<void> {
+		for (const create of statements().filter((s) => /^CREATE TABLE/.test(s))) {
+			await tx.execute(sql.raw(create));
+		}
 	}
 
 	async function seedPerson(tx: Tx, phone: string | null): Promise<string> {
@@ -239,8 +256,85 @@ describe.skipIf(!hasTestDb)("0107 moves the phone onto the Person", () => {
 		return r.rows;
 	}
 
-	it("runs capture, then backfill, then the drop — in that order", () => {
-		expect(fileOrder()).toEqual(["create", "capture", "backfill", "drop"]);
+	it("locks members first, then captures, backfills and drops — in that order", () => {
+		// The lock must be the FIRST statement: drizzle runs the file in one READ
+		// COMMITTED transaction while the old container still serves, so an edit
+		// between the capture and the DROP would otherwise escape the backup or
+		// be lost outright.
+		expect(fileOrder()).toEqual([
+			"lock",
+			"create",
+			"create",
+			"capture members",
+			"capture people",
+			"backfill",
+			"drop",
+		]);
+	});
+
+	it("backs up exactly the memberships whose phone has a digit, as stored", async () => {
+		await inRolledBackTx(async (tx) => {
+			const personId = await seedPerson(tx, null);
+			const newer = await seedMembership(
+				tx,
+				personId,
+				"+14155550201",
+				"2025-01-01",
+			);
+			// The older, losing membership: its number is NOT the one the Person
+			// keeps, which is exactly why it has to survive somewhere.
+			const older = await seedMembership(
+				tx,
+				personId,
+				"(415) 555-0202",
+				"2020-01-01",
+			);
+			const blank = await seedMembership(tx, personId, "   ", "2021-01-01");
+			const none = await seedMembership(tx, personId, null, "2022-01-01");
+			const words = await seedMembership(
+				tx,
+				personId,
+				"call the office",
+				"2023-01-01",
+			);
+
+			await runMigration(tx);
+
+			const r = await tx.execute<{
+				member_id: string;
+				person_id: string;
+				phone: string | null;
+			}>(
+				sql`select member_id, person_id, phone from members_phone_backup
+				    where member_id in (${newer}, ${older}, ${blank}, ${none}, ${words})`,
+			);
+			const byMember = (x: { member_id: string }, y: { member_id: string }) =>
+				x.member_id.localeCompare(y.member_id);
+			expect([...r.rows].sort(byMember)).toEqual(
+				[
+					{ member_id: older, person_id: personId, phone: "(415) 555-0202" },
+					{ member_id: newer, person_id: personId, phone: "+14155550201" },
+				].sort(byMember),
+			);
+			expect(await personPhone(tx, personId)).toBe("+14155550201");
+		});
+	});
+
+	it("documents current behaviour: a national number vs its E.164 form is overwritten", async () => {
+		// Not a formatting-only difference by this migration's rule: "4155550210"
+		// and "14155550210" are different digit strings, so the membership's
+		// value replaces the Person's and the old value is backed up. The PR's
+		// prod check counts these as `format_only` so the maintainer can decide
+		// from real numbers whether this case needs different handling.
+		await inRolledBackTx(async (tx) => {
+			const personId = await seedPerson(tx, "(415) 555-0210");
+			await seedMembership(tx, personId, "+14155550210", "2024-01-01");
+
+			await runMigration(tx);
+
+			expect(await personPhone(tx, personId)).toBe("+14155550210");
+			expect(await backup(tx, personId)).toEqual([{ phone: "(415) 555-0210" }]);
+		});
 	});
 
 	it("takes the membership's phone over a disagreeing Person phone, and backs the old one up", async () => {
@@ -373,7 +467,7 @@ describe.skipIf(!hasTestDb)("0107 moves the phone onto the Person", () => {
 			const personId = await seedPerson(tx, "+14155550101");
 			await seedMembership(tx, personId, "+14155550102", "2024-01-01");
 
-			await createBackupTable(tx);
+			await createBackupTables(tx);
 			await runData(tx);
 			// A re-run sees the digits agree: no second write, and the capture's
 			// ON CONFLICT keeps the PRE-migration snapshot rather than the new value.

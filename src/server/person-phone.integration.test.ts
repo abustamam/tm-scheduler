@@ -129,6 +129,73 @@ describe.skipIf(!hasTestDb)("people.phone is the one phone (#906)", () => {
 		expect(await memberPhone(b.memberId)).toBe(before);
 	});
 
+	it("an OMITTED phone leaves the Person's number alone — another club's correction survives", async () => {
+		// The stale-form case: club B corrects the shared number, then club A
+		// saves a NAME change from a page loaded before that. The form sends no
+		// phone key when the field is untouched, and the edit must not write.
+		const [inB] = await testDb
+			.insert(members)
+			.values({
+				clubId: b.clubId,
+				personId: a.personId,
+				name: "Member User",
+				clubRole: "member",
+				status: "active",
+			})
+			.returning({ id: members.id });
+		if (!inB) throw new Error("membership insert failed");
+		const corrected = uniquePhone();
+		await applyMemberEdit({
+			clubId: b.clubId,
+			memberId: inB.id,
+			actorMemberId: b.adminMemberId,
+			name: "Member User",
+			phone: corrected,
+		});
+
+		await applyMemberEdit({
+			clubId: a.clubId,
+			memberId: a.memberId,
+			actorMemberId: a.adminMemberId,
+			name: "Member Renamed",
+			email: await memberEmail(a.memberId),
+		});
+
+		expect(await memberPhone(a.memberId)).toBe(corrected);
+		const [log] = await testDb
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, a.clubId),
+					eq(activityLog.action, "member_edit"),
+				),
+			)
+			.orderBy(desc(activityLog.createdAt))
+			.limit(1);
+		const detail = log?.detail as {
+			before: Record<string, unknown>;
+			after: Record<string, unknown>;
+		};
+		expect(detail.before).not.toHaveProperty("phone");
+		expect(detail.after).not.toHaveProperty("phone");
+	});
+
+	it("an explicit null clears the Person's phone", async () => {
+		await setMemberPhone(a.memberId, uniquePhone());
+
+		await applyMemberEdit({
+			clubId: a.clubId,
+			memberId: a.memberId,
+			actorMemberId: a.adminMemberId,
+			name: "Member User",
+			email: await memberEmail(a.memberId),
+			phone: null,
+		});
+
+		expect(await memberPhone(a.memberId)).toBeNull();
+	});
+
 	it("logs the Person's phone before and after the edit", async () => {
 		const before = uniquePhone();
 		await setMemberPhone(a.memberId, before);

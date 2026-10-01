@@ -833,6 +833,28 @@ export const peoplePhoneBackup = pgTable("people_phone_backup", {
 });
 
 // ---------------------------------------------------------------------------
+// Every membership phone migration 0107 dropped with `members.phone` (#906).
+//
+// TEMPORARY, and meant to be dropped, like the two backups above. The backfill
+// keeps ONE number per Person — the newest membership's — so a correct number
+// on an older membership would otherwise be destroyed by the DROP. This holds
+// every membership phone that had at least one digit, as stored, so nothing the
+// drop removed is unrecoverable. One snapshot; nothing writes to it at runtime.
+// Drop it (schema + a migration) once a release has passed without incident.
+// ---------------------------------------------------------------------------
+
+export const membersPhoneBackup = pgTable("members_phone_backup", {
+	// Deliberately NOT foreign keys, for the reason `people_email_backup` gives:
+	// a cascade from a club, membership or Person delete (or a merge) would take
+	// the undo with it.
+	memberId: uuid("member_id").primaryKey(),
+	clubId: uuid("club_id"),
+	personId: uuid("person_id"),
+	phone: text("phone"),
+	capturedAt: timestamp("captured_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
 // Roster members (self-serve MVP — auth-decoupled identities).
 // The Membership: a Person's participation in one Club (one row per person per
 // club). Person-level facts live on `people`; this row holds the per-club facts.

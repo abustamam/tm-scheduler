@@ -8,7 +8,7 @@
  * non-blank email → new person), then upsert the Membership for (club, person).
  * People are global (club-less); memberships are the per-club roster row.
  */
-import { and, desc, eq, exists, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, isNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import { activityLog, members, people } from "#/db/schema";
@@ -345,18 +345,31 @@ export async function importPeopleAndMembers(
 			// right to: this call site read `.set(pdRest)` when the field was merely
 			// destructured away, and putting `email` back into that object would
 			// have restored the removed cross-club writer with every gate green.
-			await write("person", rowIndex, personId, async (conn) =>
-				conn
+			//
+			// The phone is a FILL, enforced in the statement (#906 review): the plan
+			// decided from a snapshot loaded at the start of the file, so writing
+			// `pd.set.phone` unconditionally would put the snapshot's value back over
+			// a number an officer set since. It writes only when the plan filled it,
+			// and only onto a Person whose phone is STILL null.
+			const phoneFilled = pd.set.phone !== current.phone;
+			await write("person", rowIndex, personId, async (conn) => {
+				const rows = await conn
 					.update(people)
 					.set({
 						customerId: pd.set.customerId,
 						name: pd.set.name,
-						phone: pd.set.phone,
 						originalJoinDate: pd.set.originalJoinDate,
 					})
 					.where(eq(people.id, personId))
-					.returning({ id: people.id }),
-			);
+					.returning({ id: people.id });
+				if (phoneFilled) {
+					await conn
+						.update(people)
+						.set({ phone: pd.set.phone })
+						.where(and(eq(people.id, personId), isNull(people.phone)));
+				}
+				return rows;
+			});
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
 			current.phone = pd.set.phone;

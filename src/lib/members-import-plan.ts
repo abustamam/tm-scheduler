@@ -584,8 +584,10 @@ export function planImport(
 		// The Person the address check is about, or null for a row creating one.
 		let subject: AddressHolder | null = null;
 		// The Person phone this row fills, for the preview note (#906). The phone
-		// is the Person's now, so a membership update no longer reports it; the
-		// Person's own fill-only write is what the note has to describe.
+		// is the Person's now, so the membership arm no longer reports it; the
+		// Person's own fill-only write is what the note has to describe — on
+		// EITHER membership arm, since a row can fill an existing Person's phone
+		// while inserting their membership in this club.
 		let personPhoneFill: FieldFill | null = null;
 		if (pd.kind === "customerId" || pd.kind === "email") {
 			const current = people.find((p) => p.id === pd.id);
@@ -598,8 +600,10 @@ export function planImport(
 			// what made the preview promise a diff the commit would not perform.
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
-			if (isBlank(current.phone) && row.phone && !isBlank(row.phone)) {
-				personPhoneFill = { field: "phone", to: row.phone };
+			// Derived from the decision itself, read before the mirror below
+			// overwrites `current` — never a second copy of the fill-only rule.
+			if (pd.set.phone !== current.phone && pd.set.phone) {
+				personPhoneFill = { field: "phone", to: pd.set.phone };
 			}
 			current.phone = pd.set.phone;
 		} else {
@@ -663,7 +667,9 @@ export function planImport(
 				note: withConflict(
 					pd.kind === "ambiguous"
 						? "New — shares an email with another member; added separately"
-						: null,
+						: personPhoneFill
+							? updateNote([personPhoneFill], null)
+							: null,
 					conflict,
 				),
 			});

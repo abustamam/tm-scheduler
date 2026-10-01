@@ -43,6 +43,7 @@ import { exportLinkAllowed } from "#/lib/club-export-url";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { APP_LOCALE, formatDayMonth, formatMeetingDate } from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
+import { phoneEditPayload } from "#/lib/member-edit-phone";
 import { formatTenure } from "#/lib/members";
 import {
 	OFFICER_POSITIONS,
@@ -774,7 +775,9 @@ function MemberActions({
 					name,
 					preferredName: String(form.get("preferredName") ?? "").trim() || null,
 					email: String(form.get("email") ?? "").trim() || null,
-					phone: String(form.get("phone") ?? "").trim() || null,
+					// Only when the officer changed it (#906): the phone is the
+					// Person's, so a stale prefill must not overwrite another club's.
+					...phoneEditPayload(String(form.get("phone") ?? ""), member.phoneRaw),
 					officerPositions,
 				},
 			});

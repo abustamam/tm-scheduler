@@ -805,7 +805,9 @@ describe.skipIf(!hasTestDb)("explicit CSV officer approval", () => {
 				officerPositions: [],
 			});
 			editing.catch(() => {});
-			await waitForLockWait('update "members"', pid);
+			// The edit takes the Person lock first (#906 lock order), so it parks
+			// on its `"people"` statement behind the grant, not on `members`.
+			await waitForLockWait('"people"', pid);
 		} finally {
 			release();
 			log.mockRestore();
