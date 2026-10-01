@@ -332,13 +332,23 @@ export class HydrationBrowser {
 			bin?: string;
 			/** Budget for Chrome to come up. See `CHROME_LAUNCH_TIMEOUT_MS`. */
 			launchTimeoutMs?: number;
+			/**
+			 * Told the process and its profile the moment Chrome is spawned, before
+			 * it has run a line: how a test observes cleanup without depending on
+			 * the child getting far enough to report anything itself.
+			 */
+			onSpawn?: (spawned: { pid: number | undefined; dir: string }) => void;
 		} = {},
 	): Promise<HydrationBrowser> {
 		const bin = opts.bin ?? findChrome();
 		if (!bin) throw new Error("no Chrome: see findChrome() / CHROME_PATH");
 		const b = new HydrationBrowser(client, clockOffsetMs);
 		try {
-			await b.start(bin, opts.launchTimeoutMs ?? CHROME_LAUNCH_TIMEOUT_MS);
+			await b.start(
+				bin,
+				opts.launchTimeoutMs ?? CHROME_LAUNCH_TIMEOUT_MS,
+				opts.onSpawn,
+			);
 		} catch (err) {
 			await b.close();
 			throw err;
@@ -355,7 +365,11 @@ export class HydrationBrowser {
 	 * while starting fails the launch at once, with what it printed, instead of
 	 * being polled for until the deadline and reported as a missing page target.
 	 */
-	private async start(bin: string, launchTimeoutMs: number) {
+	private async start(
+		bin: string,
+		launchTimeoutMs: number,
+		onSpawn?: (spawned: { pid: number | undefined; dir: string }) => void,
+	) {
 		const started = Date.now();
 		const deadline = started + launchTimeoutMs;
 		this.dir = mkdtempSync(join(tmpdir(), "route-hydration-chrome-"));
@@ -389,6 +403,7 @@ export class HydrationBrowser {
 			},
 		);
 		const chrome = this.chrome;
+		onSpawn?.({ pid: chrome.pid, dir: this.dir });
 
 		// Drained for the whole life of the process, so a chatty Chrome never
 		// blocks on a full pipe; only the tail is kept, for an error message.
@@ -413,9 +428,16 @@ export class HydrationBrowser {
 				() => finish(fail("announced no DevTools endpoint")),
 				Math.max(0, deadline - Date.now()),
 			);
+			// Only a COMPLETE line: the announcement can arrive split across
+			// chunks, and a prefix such as `ws://127.` is itself a valid match.
 			const onData = () => {
-				const m = /DevTools listening on (ws:\/\/\S+)/.exec(stderr);
-				if (m?.[1]) finish(new URL(m[1]));
+				const m = /DevTools listening on (ws:\/\/\S+)\r?\n/.exec(stderr);
+				if (!m?.[1]) return;
+				try {
+					finish(new URL(m[1]));
+				} catch {
+					finish(fail(`announced an unparseable endpoint (${m[1]})`));
+				}
 			};
 			// `exit` can arrive before the last of stderr does, and stderr is the
 			// whole point of the message: let it drain, briefly.

@@ -19,10 +19,11 @@ import {
 	chmodSync,
 	existsSync,
 	mkdtempSync,
-	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -106,54 +107,116 @@ describe("HydrationBrowser launch", () => {
 	const scratch = mkdtempSync(join(tmpdir(), "route-hydration-fake-chrome-"));
 	afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-	/** A shell script standing in for Chrome, recording the args it got. */
+	/** A shell script standing in for Chrome. */
 	function fakeChrome(name: string, body: string) {
 		const bin = join(scratch, name);
-		const args = join(scratch, `${name}.args`);
-		writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > '${args}'\n${body}\n`);
+		writeFileSync(bin, `#!/bin/sh\n${body}\n`);
 		chmodSync(bin, 0o755);
+		return bin;
+	}
+
+	/** What `onSpawn` reported, read back after the launch settles. */
+	function spawned() {
+		const seen: { pid?: number; dir?: string } = {};
 		return {
-			bin,
-			profile: () =>
-				readFileSync(args, "utf8")
-					.split("\n")
-					.find((a) => a.startsWith("--user-data-dir="))
-					?.slice("--user-data-dir=".length),
+			seen,
+			onSpawn: (s: { pid: number | undefined; dir: string }) => {
+				seen.pid = s.pid;
+				seen.dir = s.dir;
+			},
 		};
 	}
 
+	const isAlive = (pid: number) => {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	it("waits long enough for the slowest cold start CI has measured", () => {
+		// The worst first launch over the 40 \`hydration\` jobs before #1029 was
+		// 14.7s, and the old ~15s poll failed twice. An absolute floor, not one
+		// stated in terms of the budget: four times that worst case.
+		expect(CHROME_LAUNCH_TIMEOUT_MS).toBeGreaterThanOrEqual(4 * 14_700);
+		// And a ceiling: a Chrome that hangs instead of dying is waited out in
+		// full, so a budget of many minutes would stall the gate for that long.
+		expect(CHROME_LAUNCH_TIMEOUT_MS).toBeLessThanOrEqual(120_000);
+	});
+
 	it("fails at once, quoting stderr, when Chrome exits while starting", async () => {
-		const fake = fakeChrome(
+		const bin = fakeChrome(
 			"dies",
 			"echo 'cannot open shared object file: libnss3.so' >&2\nexit 127",
 		);
+		const { seen, onSpawn } = spawned();
 		const started = Date.now();
-		const launch = HydrationBrowser.launch(DEFAULT_CLIENT, 0, {
-			bin: fake.bin,
-		});
+		const launch = HydrationBrowser.launch(DEFAULT_CLIENT, 0, { bin, onSpawn });
 		await expect(launch).rejects.toThrow(/exited while starting \(code 127/);
 		await expect(launch).rejects.toThrow(/libnss3\.so/);
 		// The budget is a minute; a dead browser must not be waited out.
 		expect(Date.now() - started).toBeLessThan(5_000);
-		const profile = fake.profile();
-		expect(profile).toBeTruthy();
-		expect(existsSync(profile as string)).toBe(false);
+		expect(seen.dir).toBeTruthy();
+		expect(existsSync(seen.dir as string)).toBe(false);
 	});
 
 	it("gives up at its budget when Chrome never answers, and stops it", async () => {
-		const fake = fakeChrome("silent", "exec sleep 60");
+		const bin = fakeChrome("silent", "exec sleep 60");
+		const { seen, onSpawn } = spawned();
 		const started = Date.now();
 		await expect(
 			HydrationBrowser.launch(DEFAULT_CLIENT, 0, {
-				bin: fake.bin,
+				bin,
 				launchTimeoutMs: 300,
+				onSpawn,
 			}),
 		).rejects.toThrow(
 			/announced no DevTools endpoint after \d+ms \(budget 300ms\)\. It printed nothing\./,
 		);
-		expect(Date.now() - started).toBeLessThan(300 + CHROME_EXIT_WAIT_MS);
-		const profile = fake.profile();
-		expect(profile).toBeTruthy();
-		expect(existsSync(profile as string)).toBe(false);
+		// Killing a sleeping process group is immediate; nothing here should
+		// come near the teardown's own exit wait.
+		expect(Date.now() - started).toBeLessThan(3_000);
+		expect(seen.pid).toBeTypeOf("number");
+		expect(
+			isAlive(seen.pid as number),
+			"the hung Chrome was left running",
+		).toBe(false);
+		expect(seen.dir).toBeTruthy();
+		expect(existsSync(seen.dir as string)).toBe(false);
+	});
+
+	it("reads the endpoint only once its line is complete, however it is split", async () => {
+		// A stand-in DevTools server that only records what it is asked.
+		const requests: string[] = [];
+		const server = createServer((req, res) => {
+			requests.push(req.url ?? "");
+			res.setHeader("content-type", "application/json");
+			res.end("[]");
+		});
+		await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+		try {
+			const { port } = server.address() as AddressInfo;
+			// Split mid-host: \`ws://127.\` alone is a parseable URL, and the wrong one.
+			const bin = fakeChrome(
+				"split",
+				[
+					"printf 'DevTools listening on ws://127.' >&2",
+					"sleep 0.3",
+					`printf '0.0.1:${port}/devtools/browser/fake\\n' >&2`,
+					"exec sleep 60",
+				].join("\n"),
+			);
+			await expect(
+				HydrationBrowser.launch(DEFAULT_CLIENT, 0, {
+					bin,
+					launchTimeoutMs: 2_000,
+				}),
+			).rejects.toThrow(/exposed no page target/);
+			expect(requests).toContain("/json/list");
+		} finally {
+			await new Promise((r) => server.close(r));
+		}
 	});
 });
