@@ -48,6 +48,9 @@ export type AgendaSlot = {
 	assigneeName: string | null;
 	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
 	assigneeIsGuest?: boolean;
+	/** A non-visitor guest's kind caption (#1059), e.g. "Guest speaker,
+	 *  Downtown Toastmasters", rendered in the marker's place. */
+	assigneeGuestCaption?: string | null;
 	speechTitle: string | null;
 	projectLevel: string | null;
 	minMinutes: number | null;
@@ -58,14 +61,20 @@ export type AgendaSlot = {
 	evaluates: { speakerName: string | null } | null;
 };
 
-/** A slot's rendered assignee name (with the "· Guest" marker for guests, #151),
- *  or the OPEN placeholder when unassigned. */
+/** A slot's rendered assignee name (with the "· Guest" marker for guests, #151,
+ *  or a guest's kind caption in its place, #1059), or the OPEN placeholder when
+ *  unassigned. */
 export function assigneeDisplay(slot: {
 	assigneeName: string | null;
 	assigneeIsGuest?: boolean;
+	assigneeGuestCaption?: string | null;
 }): string {
 	return (
-		assigneeDisplayName(slot.assigneeName, slot.assigneeIsGuest) ?? OPEN_LABEL
+		assigneeDisplayName(
+			slot.assigneeName,
+			slot.assigneeIsGuest,
+			slot.assigneeGuestCaption,
+		) ?? OPEN_LABEL
 	);
 }
 
@@ -1741,7 +1750,13 @@ export function introducedNames(slots: AgendaSlot[], role: BeatRole): string[] {
 	);
 	return [...matching]
 		.sort((a, b) => a.slotIndex - b.slotIndex)
-		.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
+		.map((s) =>
+			assigneeDisplayName(
+				s.assigneeName,
+				s.assigneeIsGuest,
+				s.assigneeGuestCaption,
+			),
+		)
 		.filter((n): n is string => n != null);
 }
 
@@ -1792,7 +1807,13 @@ export function pairedEvaluatorNames(
 				matchesRole(s, EVALUATOR_ROLE.roleKey, EVALUATOR_ROLE.roleName),
 		)
 		.sort((a, b) => a.slotIndex - b.slotIndex)
-		.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
+		.map((s) =>
+			assigneeDisplayName(
+				s.assigneeName,
+				s.assigneeIsGuest,
+				s.assigneeGuestCaption,
+			),
+		)
 		.filter((n): n is string => n != null);
 }
 

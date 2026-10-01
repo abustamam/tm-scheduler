@@ -1,3 +1,4 @@
+import { GUEST_KIND_LABELS, GUEST_KINDS } from "./guest-profile";
 import { listRoles } from "./list-roles";
 
 /** A role definition's shape needed to generate slots. */
@@ -145,13 +146,46 @@ export type RosterEntry = {
 export const GUEST_MARKER = "Guest";
 
 /** Format an assignee's display name, appending the guest marker when the
- *  assignee is a non-member guest. Null name → null (caller shows "open"). */
+ *  assignee is a non-member guest. Null name → null (caller shows "open").
+ *
+ *  `guestCaption` (#1059) is the guest's kind caption from `guestKindCaption`
+ *  ("Guest speaker, Downtown Toastmasters"), and takes the marker's place when
+ *  present. It is null for a Visitor, so a Visitor reads exactly as before. It
+ *  is read only for a guest: a caption on a member's slot is ignored. */
 export function assigneeDisplayName(
 	name: string | null,
 	isGuest?: boolean,
+	guestCaption?: string | null,
 ): string | null {
 	if (!name) return null;
-	return isGuest ? `${name} · ${GUEST_MARKER}` : name;
+	if (!isGuest) return name;
+	return `${name} · ${guestCaption ?? GUEST_MARKER}`;
+}
+
+/** The separator-plus-label every caption `assigneeDisplayName` can append
+ *  starts with — " · Guest speaker", " · Visiting Toastmaster". A Visitor has
+ *  no caption, so the plain marker is not among them. */
+const CAPTION_OPENERS = GUEST_KINDS.filter((k) => k !== "visitor").map(
+	(k) => ` · ${GUEST_KIND_LABELS[k]}`,
+);
+
+/**
+ * Where a guest's kind caption (#1059) starts in a rendered name, or -1.
+ *
+ * For the print layouts, which keep the caption on ONE line and cut it off
+ * with an ellipsis rather than let a home club of up to `GUEST_TEXT_MAX`
+ * characters wrap the sheet onto a second page. That truncation is CSS only:
+ * the string itself is the one `assigneeDisplayName` built, so the printed
+ * agenda and the deck still carry the identical text (`agenda-parity.test.ts`).
+ * Read off the string, beside the formatter that writes it, because the rows
+ * reach the print layouts through two builders (the standard run of show and
+ * a club's template) and a flag on one of them would miss the other.
+ */
+export function guestCaptionStart(text: string): number {
+	let at = -1;
+	for (const opener of CAPTION_OPENERS)
+		at = Math.max(at, text.lastIndexOf(opener));
+	return at;
 }
 
 /** Minimal slot shape needed to order the meeting-roles roster. */
@@ -163,6 +197,9 @@ export type RosterSlot = {
 	assigneeName: string | null;
 	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
 	assigneeIsGuest?: boolean;
+	/** A non-visitor guest's kind caption (#1059), rendered in the marker's
+	 *  place. See `assigneeDisplayName`. */
+	assigneeGuestCaption?: string | null;
 	/** See `role_definitions.slots_unordered` (#624). The roster collapses such
 	 *  a role into one entry naming every holder; callers that omit the flag get
 	 *  one numbered entry per slot, as before. */
@@ -191,7 +228,13 @@ function collapsedRosterEntry(
 	group: readonly RosterSlot[],
 ): RosterEntry {
 	const names = group
-		.map((g) => assigneeDisplayName(g.assigneeName, g.assigneeIsGuest))
+		.map((g) =>
+			assigneeDisplayName(
+				g.assigneeName,
+				g.assigneeIsGuest,
+				g.assigneeGuestCaption,
+			),
+		)
 		.filter((n): n is string => n != null);
 	if (names.length === 0)
 		return { label: roleName, name: null, holderCount: 0 };
@@ -245,7 +288,11 @@ export function buildRosterEntries<T extends RosterSlot>(
 				slot: s,
 				entry: {
 					label: slotLabel(s, roleCounts),
-					name: assigneeDisplayName(s.assigneeName, s.assigneeIsGuest),
+					name: assigneeDisplayName(
+						s.assigneeName,
+						s.assigneeIsGuest,
+						s.assigneeGuestCaption,
+					),
 				},
 			});
 			continue;
