@@ -47,7 +47,10 @@ import {
 	TABLE_TOPICS_SPEAKER_LABEL,
 } from "#/lib/role-feedback-input";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
-import { feedbackIpLimiter } from "./feedback-rate-limit";
+import {
+	feedbackIpLimiter,
+	feedbackSenderMeetingCap,
+} from "./feedback-rate-limit";
 import { assertClubNotArchived } from "./guards";
 import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
 import type { DbOrTx } from "./meeting-templates-logic";
@@ -350,6 +353,10 @@ export const FEEDBACK_MEETING_CAP_MESSAGE =
 	"This meeting has received all the notes it can. Thank you for wanting to add one!";
 export const FEEDBACK_RATE_LIMIT_MESSAGE =
 	"You're sending notes quickly. Wait a minute and try again.";
+/** One address has sent its share of this meeting's notes (#1038). Worded for
+ *  a shared connection: on a venue's Wi-Fi it is the room, not one person. */
+export const FEEDBACK_SENDER_CAP_MESSAGE =
+	"This connection has sent all the notes it can for this meeting. Thank you for wanting to add one!";
 /** What a session-less caller sees for ANY failure that is not one of the
  *  refusals above: never a driver message, which names columns and values. */
 export const FEEDBACK_GENERIC_ERROR_MESSAGE =
@@ -374,6 +381,7 @@ const PUBLIC_FEEDBACK_MESSAGES: ReadonlySet<string> = new Set([
 	FEEDBACK_RECIPIENT_CAP_MESSAGE,
 	FEEDBACK_MEETING_CAP_MESSAGE,
 	FEEDBACK_RATE_LIMIT_MESSAGE,
+	FEEDBACK_SENDER_CAP_MESSAGE,
 	CLUB_ARCHIVED_MESSAGE,
 	CLUB_BUSY_MESSAGE,
 	"Club not found.",
@@ -500,7 +508,7 @@ async function admitNote(
 	conn: DbOrTx,
 	input: LeaveFeedbackInput,
 	at: Date,
-): Promise<AdmittedNote> {
+): Promise<AdmittedNote & { closesAt: Date }> {
 	const [meeting] = await conn
 		.select({
 			clubId: meetings.clubId,
@@ -515,7 +523,8 @@ async function admitNote(
 	if (meeting.status === "cancelled") {
 		throw new Error(FEEDBACK_CANCELLED_MESSAGE);
 	}
-	const state = feedbackWindowState(feedbackWindow(meeting, at), at);
+	const window = feedbackWindow(meeting, at);
+	const state = feedbackWindowState(window, at);
 	if (state === "notYet") throw new Error(FEEDBACK_NOT_OPEN_MESSAGE);
 	if (state === "closed") throw new Error(FEEDBACK_CLOSED_MESSAGE);
 
@@ -549,7 +558,7 @@ async function admitNote(
 	if ((counts?.meeting ?? 0) >= FEEDBACK_PER_MEETING_CAP) {
 		throw new Error(FEEDBACK_MEETING_CAP_MESSAGE);
 	}
-	return note;
+	return { ...note, closesAt: window.closesAt };
 }
 
 /**
@@ -565,6 +574,11 @@ async function admitNote(
  *     salted hash, never stored or logged), counted only for an attempt that
  *     would otherwise go on to take the lock. No address → not limited: one
  *     shared bucket for every header-less request would throttle the room.
+ *     Before it, the per-address PER-MEETING budget
+ *     (`feedbackSenderMeetingCap`, #1038, kept the same way): a slot is
+ *     reserved here, held until the meeting's window closes, and given back
+ *     if the attempt stores nothing — refused by the per-minute limiter, or
+ *     by anything in steps 4-5 — so only written notes spend it.
  *  4. In ONE transaction: the club write lock (`lockClubForWrite`, #925), then
  *     the club row (`FOR NO KEY UPDATE`, which the archiving `UPDATE` conflicts
  *     with), then the archive gate read UNDER that lock — so a club archived
@@ -631,8 +645,25 @@ async function leaveFeedbackUnmapped(
 
 	// The pre-check (step 3). Not the gate — step 4 is.
 	await assertClubNotArchived(clubId);
-	await admitNote(db, input, now());
-	if (clientIp && !feedbackIpLimiter.take(clientIp)) {
+	const at = now();
+	const { closesAt } = await admitNote(db, input, at);
+	if (
+		clientIp &&
+		!feedbackSenderMeetingCap.take(
+			clientIp,
+			input.meetingId,
+			closesAt.getTime(),
+			at.getTime(),
+		)
+	) {
+		throw new Error(FEEDBACK_SENDER_CAP_MESSAGE);
+	}
+	// Give the reserved slot back: this attempt stored no note.
+	const release = () => {
+		if (clientIp) feedbackSenderMeetingCap.release(clientIp, input.meetingId);
+	};
+	if (clientIp && !feedbackIpLimiter.take(clientIp, at.getTime())) {
+		release();
 		throw new Error(FEEDBACK_RATE_LIMIT_MESSAGE);
 	}
 
@@ -662,6 +693,7 @@ async function leaveFeedbackUnmapped(
 			return { ok: true as const };
 		});
 	} catch (err) {
+		release();
 		// Nothing was written (the transaction rolled back), so "try again" is
 		// the whole remedy; the original rides on `cause` for a SQLSTATE check.
 		if (isDeadlock(err)) throw new Error(CLUB_BUSY_MESSAGE, { cause: err });
