@@ -4367,15 +4367,27 @@ describe.skipIf(!hasTestDb)("guest invites (#899)", () => {
 		});
 
 		it("gives a same-day pair's earlier meeting its disambiguated key", async () => {
+			// Pin the seeded meeting to NOON club-local on its own club-local date
+			// (#1020). Its time comes from the wall clock, so offsetting from it
+			// crossed club-local midnight whenever the suite ran in the ten
+			// minutes before it, and the pair landed on two different dates.
+			const [club] = await testDb
+				.select({ timezone: clubs.timezone })
+				.from(clubs)
+				.where(eq(clubs.id, seed.clubId));
+			const tz = club!.timezone;
 			const [seeded] = await testDb
-				.select({ scheduledAt: meetings.scheduledAt })
-				.from(meetings)
-				.where(eq(meetings.id, seed.meetingId));
+				.update(meetings)
+				.set({
+					scheduledAt: sql`((date_trunc('day', ${meetings.scheduledAt} at time zone ${tz}::text) + interval '12 hours') at time zone ${tz}::text)`,
+				})
+				.where(eq(meetings.id, seed.meetingId))
+				.returning({ scheduledAt: meetings.scheduledAt });
 			const [second] = await testDb
 				.insert(meetings)
 				.values({
 					clubId: seed.clubId,
-					// Ten minutes after the seeded one: same club-local date.
+					// 12:10 club-local: the same club-local date at any wall-clock time.
 					scheduledAt: new Date(seeded!.scheduledAt.getTime() + 10 * 60_000),
 					status: "scheduled",
 				})
