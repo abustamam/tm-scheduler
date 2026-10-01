@@ -19,6 +19,12 @@ import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import {
+	AGENDA_LAYOUT_HINTS,
+	AGENDA_LAYOUT_LABELS,
+	AGENDA_LAYOUTS,
+	type AgendaLayout,
+} from "#/lib/agenda-layouts";
 import { CONTACT_MAILTO } from "#/lib/brand";
 import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
 import { clubExportUrl, exportLinkAllowed } from "#/lib/club-export-url";
@@ -342,6 +348,9 @@ function ClubSettings() {
 	const [digitalVoting, setDigitalVoting] = useState(
 		agenda.digitalVotingEnabled,
 	);
+	const [printLayout, setPrintLayout] = useState<AgendaLayout>(
+		agenda.defaultPrintLayout,
+	);
 	const [savingAgenda, setSavingAgenda] = useState(false);
 	// Held as the TEXT the admin typed, not as parsed seconds: a controlled
 	// number field that reformats mid-keystroke fights the person typing "2:30"
@@ -464,6 +473,7 @@ function ClubSettings() {
 					tableTopicsMinSeconds: result.minSeconds,
 					tableTopicsMaxSeconds: result.maxSeconds,
 					digitalVotingEnabled: digitalVoting,
+					defaultPrintLayout: printLayout,
 				},
 			});
 			toast.success("Agenda settings saved.");
@@ -821,6 +831,33 @@ function ClubSettings() {
 						off for a single meeting from that meeting's console.
 					</p>
 				</div>
+				<fieldset className="space-y-2 border-t border-[var(--line)] pt-4">
+					<legend className="float-left w-full text-sm font-medium">
+						Default print layout
+					</legend>
+					<p className="clear-left text-xs text-muted-foreground">
+						The layout "Print agenda" opens in, for everyone in the club. The
+						print page can still switch layouts, and a link you have already
+						shared keeps the layout it was copied with.
+					</p>
+					<div className="space-y-1.5">
+						{AGENDA_LAYOUTS.map((id) => (
+							<label key={id} className="flex items-center gap-2 text-sm">
+								<input
+									type="radio"
+									name="default-print-layout"
+									value={id}
+									checked={printLayout === id}
+									onChange={() => setPrintLayout(id)}
+								/>
+								<span className="font-medium">{AGENDA_LAYOUT_LABELS[id]}</span>{" "}
+								<span className="text-xs text-muted-foreground">
+									{AGENDA_LAYOUT_HINTS[id]}
+								</span>
+							</label>
+						))}
+					</div>
+				</fieldset>
 				<div className="space-y-2 border-t border-[var(--line)] pt-4">
 					<p className="text-sm font-medium">Table Topics speaking limits</p>
 					<p className="text-xs text-muted-foreground">

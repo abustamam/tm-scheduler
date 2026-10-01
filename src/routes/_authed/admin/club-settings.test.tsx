@@ -60,6 +60,12 @@ vi.mock("sonner", () => ({
 }));
 
 import { toast } from "sonner";
+import {
+	AGENDA_LAYOUT_HINTS,
+	AGENDA_LAYOUT_LABELS,
+	AGENDA_LAYOUTS,
+	type AgendaLayout,
+} from "#/lib/agenda-layouts";
 // NOT mocked, deliberately (#504). These are the SAME symbols the server
 // imports; a fixture sized against a local copy of the number would prove
 // nothing about whether the client and the server agree.
@@ -102,6 +108,7 @@ function loaderData(
 		logoMeta?: { updatedAt: string } | null;
 		timezone?: string;
 		digitalVotingEnabled?: boolean;
+		defaultPrintLayout?: AgendaLayout;
 	} = {},
 ) {
 	return {
@@ -118,6 +125,7 @@ function loaderData(
 			tableTopicsMinSeconds: null,
 			tableTopicsMaxSeconds: null,
 			digitalVotingEnabled: overrides.digitalVotingEnabled ?? true,
+			defaultPrintLayout: overrides.defaultPrintLayout ?? "grid",
 		},
 		logoMeta: overrides.logoMeta === undefined ? null : overrides.logoMeta,
 		timezone: {
@@ -888,6 +896,54 @@ describe("Club settings — digital voting (#770)", () => {
 		await waitFor(() =>
 			expect(clubs.updateClubAgendaSettings).toHaveBeenCalledWith({
 				data: expect.objectContaining({ digitalVotingEnabled: false }),
+			}),
+		);
+	});
+});
+
+describe("Club settings — default print layout (#1069)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+		vi.clearAllMocks();
+	});
+
+	function layoutRadio(label: string) {
+		return screen.getByRole("radio", {
+			name: new RegExp(`^${label}\\b`),
+		}) as HTMLInputElement;
+	}
+
+	it("offers the four layouts with their hints, and checks the club's stored one", async () => {
+		await renderRoute(loaderData({ defaultPrintLayout: "timing" }));
+		const group = screen.getByRole("group", { name: "Default print layout" });
+		const radios = Array.from(
+			group.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+		);
+		// The list and its order come from the shared module, not a local copy.
+		expect(radios.map((r) => r.value)).toEqual([...AGENDA_LAYOUTS]);
+		for (const id of AGENDA_LAYOUTS) {
+			const radio = layoutRadio(AGENDA_LAYOUT_LABELS[id]);
+			expect(radio.closest("label")?.textContent).toContain(
+				AGENDA_LAYOUT_HINTS[id],
+			);
+			expect(radio.checked).toBe(id === "timing");
+		}
+	});
+
+	it("saves the chosen layout with the agenda settings", async () => {
+		const clubs = await import("#/server/clubs");
+		vi.mocked(clubs.updateClubAgendaSettings).mockResolvedValue({ ok: true });
+		await renderRoute(loaderData({ defaultPrintLayout: "grid" }));
+
+		await userEvent.click(layoutRadio("Spacious"));
+		await userEvent.click(
+			screen.getByRole("button", { name: "Save agenda settings" }),
+		);
+
+		await waitFor(() =>
+			expect(clubs.updateClubAgendaSettings).toHaveBeenCalledWith({
+				data: expect.objectContaining({ defaultPrintLayout: "spacious" }),
 			}),
 		);
 	});

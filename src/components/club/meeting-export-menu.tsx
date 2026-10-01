@@ -43,7 +43,7 @@ export function MeetingExportMenu({
 	clubSlug,
 	meetingId,
 	dbMeetingId,
-	printLayout = "grid",
+	printLayout,
 	deck,
 	clubName,
 	wordOfTheDay,
@@ -54,6 +54,8 @@ export function MeetingExportMenu({
 	meetingId: string;
 	/** Database uuid — used by the per-meeting role-sheet PDF endpoints. */
 	dbMeetingId: string;
+	/** A layout to force. Omitted (the only caller today) ⇒ the link names no
+	 *  layout and the print route opens the club's default (#1069). */
 	printLayout?: AgendaLayout;
 	deck?: Slide[];
 	clubName?: string;
@@ -92,7 +94,7 @@ export function MeetingExportMenu({
 						<Link
 							to="/club/$clubId/meeting/$meetingId/print"
 							params={{ clubId: clubSlug, meetingId }}
-							search={{ layout: printLayout }}
+							search={printLayout ? { layout: printLayout } : {}}
 							target="_blank"
 							rel="noopener noreferrer"
 						>

@@ -168,6 +168,10 @@ function runLoader(route: AnyRoute, meetingId: string, shell = false) {
 			href: `/club/downtown/meeting/${meetingId}`,
 			pathname: `/club/downtown/meeting/${meetingId}`,
 			searchStr: "",
+			// The print route redirects a URL naming no layout (#1069), reading it
+			// off `location.search`. These cases are about resolving the meeting
+			// key, so they name one; every sibling loader ignores it.
+			search: { layout: "grid" },
 		},
 	});
 }

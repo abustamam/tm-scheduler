@@ -195,8 +195,9 @@ function meetingSurfaces(url) {
 async function primeSiblings(cache, url, requestedUrl) {
 	// Compared without the query string, because the surface list is built from
 	// bare paths while the request that triggered it may carry one: a reload of
-	// `/…/print?layout=grid` would otherwise not match `/…/print` and re-fetch
-	// the page the browser is in the middle of being served.
+	// `/…/print?layout=<the club's default>` would otherwise not match
+	// `/…/print` and re-fetch the page the browser is in the middle of being
+	// served.
 	const requested = `${requestedUrl.origin}${requestedUrl.pathname}`;
 	for (const href of meetingSurfaces(url)) {
 		if (href === requested) continue;
@@ -212,10 +213,11 @@ async function primeOne(cache, href) {
 		// Follow the redirect rather than refusing it, then judge the DESTINATION.
 		//
 		// `!response.redirected` was too blunt: `/…/print` legitimately 307s to
-		// `?layout=grid`, so refusing every redirect meant Print could never be
-		// primed. What actually distinguishes a captive portal is WHERE it lands —
-		// its login page is another origin, or a path that is not an offline route
-		// at all. Both fail this check; the Print redirect passes.
+		// `?layout=<the club's default>` (#1069), so refusing every redirect
+		// meant Print could never be primed. What actually distinguishes a
+		// captive portal is WHERE it lands — its login page is another origin, or
+		// a path that is not an offline route at all. Both fail this check; the
+		// Print redirect passes.
 		let finalUrl;
 		try {
 			finalUrl = new URL(response.url || href);
@@ -224,9 +226,9 @@ async function primeOne(cache, href) {
 		}
 		if (finalUrl.origin !== self.location.origin) return;
 		if (!isOfflineRoute(finalUrl)) return;
-		// Keyed by the FINAL url, so Print is stored as `?layout=grid` — which is
-		// what `networkFirst`'s `ignoreSearch` fallback then answers a bare
-		// `/…/print` request from.
+		// Keyed by the FINAL url, so Print is stored as
+		// `?layout=<the club's default>` — which is what `networkFirst`'s
+		// `ignoreSearch` fallback then answers a bare `/…/print` request from.
 		//
 		// A URL STRING as the key, not `new Request(...)`: the Cache API accepts
 		// either, and this file constructs no Request anywhere else, so the test
@@ -387,11 +389,12 @@ self.addEventListener("fetch", (event) => {
  *
  * Archiving a club is the takedown lever (ADR-0016 / ADR-0024) and #544 made an
  * archived club's public pages answer not-found — measured against a dev server:
- * the meeting page and `/…/present` return 404, `/…/print` 307s to `?layout=grid`
- * and that 404s, and `/api/club/:id/logo` 404s. Because `response.ok` was false,
- * the pre-archive entry was neither overwritten NOR evicted, so every offline
- * reload kept serving a complete agenda — assignee names, speech titles, Word of
- * the Day — from a club that had been taken down.
+ * the meeting page and `/…/present` return 404, `/…/print` 404s (the club
+ * resolves before the redirect to `?layout=<the club's default>`, #1069), and
+ * `/api/club/:id/logo` 404s. Because `response.ok` was false, the pre-archive
+ * entry was neither overwritten NOR evicted, so every offline reload kept
+ * serving a complete agenda — assignee names, speech titles, Word of the Day —
+ * from a club that had been taken down.
  *
  * NOTE this rests on an assumption no test in this repo can hold: that a
  * `notFound()` in a route loader keeps mapping to an HTTP 404. The sw tests inject
