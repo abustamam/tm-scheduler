@@ -8,6 +8,7 @@
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
 import {
+	GUEST_MARKER,
 	guestCaptionStart,
 	type RosterEntry,
 	rosterGridPositions,
@@ -69,30 +70,30 @@ function hasGuestCaption(text: string | null | undefined): text is string {
 }
 
 /**
- * `text` with its guest caption (if any) held to one line of at most
- * `maxWidth`, inline after the name — for a line the caption SHARES with other
- * copy, where making the whole element one line would cut off the name or the
- * detail instead. `pre` rather than `nowrap` so the caption's leading " · "
- * survives starting the inline block.
+ * `text` as a Visitor's would print — "Name · Guest" — on a line the name
+ * SHARES with other copy: the grid layout's "Who. Detail" paragraph and the
+ * timing layout's 150px Role column.
+ *
+ * There is no one-line box that is safe there. Text either side of an inline
+ * block flows around it, so a block wider than the word it replaces can always
+ * drop to a line of its own, and whether it does depends on the face's
+ * metrics: a 14em caption block fit on macOS and cost the grid one line on
+ * CI's DejaVu Sans. So these two rows print exactly the marker a Visitor's
+ * does, and cost exactly what a Visitor's row costs whatever the font. The
+ * caption itself prints, one line and ellipsized, in the roster on the same
+ * sheet. It stays in the DOM here too, `display: none`, so the row's text is
+ * still the full string the deck carries.
  */
-function InlineCaption({ text, maxWidth }: { text: string; maxWidth: string }) {
+function MarkerInPlaceOfCaption({ text }: { text: string }) {
 	const at = guestCaptionStart(text);
 	if (at < 0) return <>{text}</>;
 	return (
 		<>
 			{text.slice(0, at)}
-			<span
-				data-guest-caption
-				style={{
-					...CAPTION_ONE_LINE,
-					whiteSpace: "pre",
-					display: "inline-block",
-					maxWidth,
-					verticalAlign: "bottom",
-				}}
-			>
+			<span data-guest-caption style={{ display: "none" }}>
 				{text.slice(at)}
 			</span>
+			{` · ${GUEST_MARKER}`}
 		</>
 	);
 }
@@ -1501,7 +1502,7 @@ function GridLayout({
 								</div>
 								<div style={{ flex: 1, padding: "4px 12px 4px 8px" }}>
 									<span style={{ fontSize: 10.5, fontWeight: 700 }}>
-										<InlineCaption text={r.who} maxWidth="14em" />.
+										<MarkerInPlaceOfCaption text={r.who} />.
 									</span>{" "}
 									<span
 										style={{
@@ -2433,11 +2434,11 @@ function TimingLayout({
 											color: INK,
 										}}
 									>
-										<InlineCaption text={role} maxWidth="100%" />
+										<MarkerInPlaceOfCaption text={role} />
 										{name ? (
 											<span style={{ fontWeight: 600, color: MUTED }}>
 												{" · "}
-												<InlineCaption text={name} maxWidth="100%" />
+												<MarkerInPlaceOfCaption text={name} />
 											</span>
 										) : null}
 									</div>

@@ -168,9 +168,20 @@ function overflowProbe(sheets: readonly string[]): string {
 	</script>`;
 }
 
-let cached: Measured | null = null;
-function measure(): Measured {
-	if (cached) return cached;
+/**
+ * Wider type than this machine's, without needing CI's fonts. The zero-height
+ * claim has to hold for ANY face, and the first cut held only for the one it
+ * was measured in: an inline caption block that fit on macOS cost the grid one
+ * wrapped line on CI's DejaVu Sans, with every case here green on the Mac.
+ * Letter-spacing widens every run of text uniformly, which is the axis a
+ * different face moves, so measuring under it reproduces that failure locally.
+ */
+const WIDER_METRICS = "* { letter-spacing: 0.6px !important; }";
+
+const cached = new Map<string, Measured>();
+function measure(extraCss = ""): Measured {
+	const hit = cached.get(extraCss);
+	if (hit) return hit;
 	const variants = Object.keys(VARIANTS) as Variant[];
 	const parts = LAYOUTS.flatMap((layout) =>
 		variants.map((v) => ({ id: `${layout}-${v}`, layout, v })),
@@ -184,7 +195,7 @@ function measure(): Measured {
 			.join("") + overflowProbe(sheets);
 	const selectors = [...sheets, ...sheets.map((_, i) => `#ovf-${i}`)];
 	const heights = measuredHeights(
-		printableDocument(PRINT_PAGE_CSS, body),
+		printableDocument(PRINT_PAGE_CSS + extraCss, body),
 		selectors,
 	);
 	for (const [i, h] of heights.entries()) {
@@ -202,7 +213,7 @@ function measure(): Measured {
 		}));
 		at += n;
 	}
-	cached = out;
+	cached.set(extraCss, out);
 	return out;
 }
 
@@ -270,22 +281,27 @@ describe.skipIf(!hasChrome)(
 			// Editorial is ~19px from the cliff on CI's fonts (see
 			// `ballot-qr-print-fit.test.tsx`), so "still fits on this machine" is
 			// not enough: the caption must add nothing a wider face could tip over.
-			const m = measure();
-			for (const layout of LAYOUTS)
-				for (const v of ["captioned", "multiline"] as const)
-					expect(
-						m[layout][v].map((x) => x.height),
-						`${layout} (${v})`,
-					).toEqual(m[layout].plain.map((x) => x.height));
+			for (const css of ["", WIDER_METRICS]) {
+				const m = measure(css);
+				const face = css ? "wider metrics" : "this machine's face";
+				for (const layout of LAYOUTS)
+					for (const v of ["captioned", "multiline"] as const)
+						expect(
+							m[layout][v].map((x) => x.height),
+							`${layout} (${v}, ${face})`,
+						).toEqual(m[layout].plain.map((x) => x.height));
+			}
 		});
 
 		it("runs nothing off the side of the sheet — the caption shrinks, not the paper", () => {
-			const m = measure();
-			for (const layout of LAYOUTS)
-				expect(
-					m[layout].captioned.map((x) => x.overflowX),
-					layout,
-				).toEqual(m[layout].plain.map((x) => x.overflowX));
+			for (const css of ["", WIDER_METRICS]) {
+				const m = measure(css);
+				for (const layout of LAYOUTS)
+					expect(
+						m[layout].captioned.map((x) => x.overflowX),
+						`${layout}${css ? " (wider metrics)" : ""}`,
+					).toEqual(m[layout].plain.map((x) => x.overflowX));
+			}
 		});
 
 		it("flows without the one-line rule — the pre-fix control", () => {
