@@ -61,6 +61,18 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 export const MEMBERSHIP_MERGE_LOCK_NAMESPACE = 0x4d656d62;
 
 /**
+ * The text a membership id is hashed as. Lowercased, because the key is a hash
+ * of TEXT while the id is a `uuid`: Postgres resolves `ABC…` and `abc…` to the
+ * same membership, and the zod `uuid()` validators on the public claim and
+ * ballot endpoints accept either case unchanged. Hashing the raw input would
+ * give an uppercase id a different key from the merge's, and that writer would
+ * skip the lock entirely. Both halves go through this, so they always agree.
+ */
+export function membershipLockKey(memberId: string): string {
+	return memberId.toLowerCase();
+}
+
+/**
  * The merge's half: take the absorbed membership's lock EXCLUSIVE, so no
  * covered writer is mid-way through referencing it while the merge re-points,
  * and none can start until the merge commits. MUST be on a `tx`, before the
@@ -72,7 +84,7 @@ export async function lockMembershipForMerge(
 ): Promise<void> {
 	await takeAdvisoryLockWithin(
 		tx,
-		sql`select pg_advisory_xact_lock(${MEMBERSHIP_MERGE_LOCK_NAMESPACE}::int4, hashtext(${absorbedMemberId}))`,
+		sql`select pg_advisory_xact_lock(${MEMBERSHIP_MERGE_LOCK_NAMESPACE}::int4, hashtext(${membershipLockKey(absorbedMemberId)}))`,
 	);
 }
 
@@ -89,7 +101,11 @@ export async function lockMembershipsAgainstMerge(
 	memberIds: ReadonlyArray<string | null | undefined>,
 ): Promise<void> {
 	const ids = [
-		...new Set(memberIds.filter((id): id is string => Boolean(id))),
+		...new Set(
+			memberIds
+				.filter((id): id is string => Boolean(id))
+				.map(membershipLockKey),
+		),
 	].sort();
 	if (ids.length === 0) return;
 	for (const id of ids) {

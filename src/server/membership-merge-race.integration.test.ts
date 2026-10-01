@@ -47,6 +47,13 @@ const { claimSlotCore, reassignSlotCore } = await import("./slots-logic");
 const { castVote, openVote } = await import("./voting-logic");
 const { CLUB_BUSY_MESSAGE } = await import("./club-write-lock");
 
+/**
+ * Every merge and writer a test starts. A test that fails part-way leaves them
+ * parked behind its holds, so `afterEach` releases the holds and then waits for
+ * these to settle before it deletes the club out from under them.
+ */
+const inFlight: Promise<unknown>[] = [];
+
 /** Run the merge on its own connection; resolves its backend pid first. */
 function startMerge(clubId: string, keeperId: string, absorbedId: string) {
 	let gotPid!: (pid: number) => void;
@@ -59,7 +66,14 @@ function startMerge(clubId: string, keeperId: string, absorbedId: string) {
 		await collapseMemberships(tx, clubId, keeperId, absorbedId);
 	});
 	done.catch(() => {});
+	inFlight.push(done);
 	return { pid, done };
+}
+
+/** A writer under test, tracked so `afterEach` can wait for it to settle. */
+function track<T>(p: Promise<T>): Promise<T> {
+	inFlight.push(p);
+	return p;
 }
 
 /**
@@ -150,6 +164,8 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		afterEach(async () => {
+			for (const h of openHolds.splice(0)) await h.commit().catch(() => {});
+			await Promise.allSettled(inFlight.splice(0));
 			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 		});
 
@@ -165,24 +181,33 @@ describe.skipIf(!hasTestDb)(
 					.where(eq(roleSlots.id, seed.slotId))
 			)[0];
 
-		const claimAsAbsorbed = () =>
-			testDb.transaction((tx) =>
-				claimSlotCore(tx, {
-					slotId: seed.slotId,
-					memberId: absorbedId,
-					actorMemberId: absorbedId,
-					proof: "session",
-				}),
+		const claimAsAbsorbed = (memberId = absorbedId) =>
+			track(
+				testDb.transaction((tx) =>
+					claimSlotCore(tx, {
+						slotId: seed.slotId,
+						memberId,
+						actorMemberId: absorbedId,
+						proof: "session",
+					}),
+				),
 			);
 
 		describe("slot claim", () => {
-			it("a claim landing between the re-point and the DELETE never leaves a slot claimed by nobody", async () => {
+			it.each([
+				["", (id: string) => id],
+				// The ids are `uuid`s, so Postgres resolves either case to the same
+				// membership and the endpoints' validators pass both; the lock key
+				// is a hash of TEXT, so an uppercase id must still hash like the
+				// merge's lowercase one or it skips the lock.
+				[" (id sent in uppercase)", (id: string) => id.toUpperCase()],
+			] as const)("a claim landing between the re-point and the DELETE never leaves a slot claimed by nobody%s", async (_label, asSent) => {
 				const hold = await holdMembership(absorbedId);
 				const merge = startMerge(seed.clubId, keeperId, absorbedId);
 				// Past every re-point: the DELETE is the merge's last statement.
 				await waitForLockWait('delete from "members"', hold.pid);
 
-				const claim = claimAsAbsorbed();
+				const claim = claimAsAbsorbed(asSent(absorbedId));
 				const claimResult = outcome(claim);
 				await settledOrBlocked(claim, "pg_advisory", await merge.pid);
 
@@ -305,7 +330,14 @@ describe.skipIf(!hasTestDb)(
 					.from(meetingVotes)
 					.where(eq(meetingVotes.sessionId, sessionId));
 
-			it("a ballot landing between the re-point and the DELETE never becomes a second counted vote", async () => {
+			it.each([
+				["", (id: string) => id],
+				// The ids are `uuid`s, so Postgres resolves either case to the same
+				// membership and the endpoints' validators pass both; the lock key
+				// is a hash of TEXT, so an uppercase id must still hash like the
+				// merge's lowercase one or it skips the lock.
+				[" (id sent in uppercase)", (id: string) => id.toUpperCase()],
+			] as const)("a ballot landing between the re-point and the DELETE never becomes a second counted vote%s", async (_label, asSent) => {
 				// The keeper has voted already: the merge asserts the two rows were
 				// always one person, so one ballot must survive.
 				await castVote(ballotAs(keeperId, OTHER_PHONE));
@@ -314,7 +346,9 @@ describe.skipIf(!hasTestDb)(
 				const merge = startMerge(seed.clubId, keeperId, absorbedId);
 				await waitForLockWait('delete from "members"', hold.pid);
 
-				const cast = castVote(ballotAs(absorbedId, ABSORBED_PHONE));
+				const cast = track(
+					castVote(ballotAs(asSent(absorbedId), ABSORBED_PHONE)),
+				);
 				const castResult = outcome(cast);
 				await settledOrBlocked(cast, "pg_advisory", await merge.pid);
 
@@ -349,16 +383,18 @@ describe.skipIf(!hasTestDb)(
 				const merge = startMerge(seed.clubId, keeperId, absorbedId);
 				await waitForLockWait('delete from "members"', hold.pid);
 
-				const cast = castVote({
-					meetingId: seed.meetingId,
-					category: "best_speaker",
-					voter:
-						kind === "member"
-							? { kind: "member", id: seed.adminMemberId }
-							: { kind: "anonymous" },
-					candidate: { kind: "member", id: absorbedId },
-					deviceToken: ABSORBED_PHONE,
-				});
+				const cast = track(
+					castVote({
+						meetingId: seed.meetingId,
+						category: "best_speaker",
+						voter:
+							kind === "member"
+								? { kind: "member", id: seed.adminMemberId }
+								: { kind: "anonymous" },
+						candidate: { kind: "member", id: absorbedId },
+						deviceToken: ABSORBED_PHONE,
+					}),
+				);
 				const castResult = outcome(cast);
 				await settledOrBlocked(cast, "pg_advisory", await merge.pid);
 
@@ -399,7 +435,7 @@ describe.skipIf(!hasTestDb)(
 						sql`select 1 from meeting_vote_sessions where id = ${sessionId} for update`,
 					);
 				});
-				const cast = castVote(ballotAs(absorbedId, ABSORBED_PHONE));
+				const cast = track(castVote(ballotAs(absorbedId, ABSORBED_PHONE)));
 				cast.catch(() => {});
 				const castPid = await waitForLockWait(
 					'insert into "meeting_votes"',
