@@ -205,15 +205,19 @@ describe.skipIf(!hasTestDb)("loadAgendaDraft attachable roles", () => {
 		}
 	});
 
-	// A standard meeting materialises its agenda on READ, declaring the five
-	// keys its beats name as a `roleKey`. `timer`, `ah_counter`, `grammarian`
-	// and `vote_counter` are named all over the run of show in beat copy and in
-	// the `requiresAnyOf` / `fallbacks` gates, but never as a beat's own key —
-	// so before the picker they were absent from this panel with nothing
-	// looking broken.
-	it("reaches a role the materialised standard agenda never declares", async () => {
+	// A standard meeting materialises its agenda on READ. Since #910 the
+	// standard role build (`declareStandardRoles`) declares the keys its beats
+	// name PLUS every standing, enabled role the club runs, so a running
+	// Grammarian is declared and needs no picker. What the picker is for on a
+	// standard meeting is a NON-standing role: one the club keeps in its bank
+	// but does not run every week, which the build leaves undeclared.
+	it("reaches a non-standing role the materialised standard agenda does not declare", async () => {
 		await nameSeededRole("toastmaster_of_the_day", `Toastmaster ${RUN}`);
-		await giveBankRole({ key: "grammarian", name: `Grammarian ${RUN}` });
+		await giveBankRole({
+			key: "grammarian",
+			name: `Grammarian ${RUN}`,
+			standing: false,
+		});
 
 		const draft = await loadAgendaDraft(club.meetingId);
 		madeTemplates.push(draft?.templateId ?? "");

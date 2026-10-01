@@ -486,6 +486,27 @@ describe.skipIf(!hasTestDb)("club default agenda (#910)", () => {
 			expect(still?.speechId).toBe(speech?.id);
 		});
 
+		it("a freshly materialised copy declares a standing functionary the beats never name (Grammarian)", async () => {
+			const b = await newMeeting(7);
+			const draft = await loadAgendaDraft(b);
+			const grammarian = draft?.roles.find((r) => r.key === "grammarian");
+			const stock = ROLE_TEMPLATE.find((r) => r.key === "grammarian");
+			expect(grammarian?.defaultCount).toBe(stock?.defaultCount);
+			// And so does a club template saved from it, which is what keeps the
+			// functionaries on meetings created from that template.
+			const { templateId } = await saveMeetingAgendaAsClubTemplate({
+				mode: "new",
+				meetingId: b,
+				clubId: club.clubId,
+				actorMemberId: null,
+				name: "Saved with functionaries",
+				description: null,
+			});
+			expect((await rolesOf(templateId)).map((r) => r.key)).toContain(
+				"grammarian",
+			);
+		});
+
 		it("reads a copy opened before the club changed a role as edited, and keeps it", async () => {
 			const b = await newMeeting(7);
 			await loadAgendaDraft(b);
