@@ -12,6 +12,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
 import { CharterSettings } from "#/components/club/charter-settings";
@@ -299,12 +300,13 @@ const selectClass =
  * resolve (the two builds' alias tables differ — see `CLUB_TIMEZONES`); such an
  * option stays selectable, just without an offset.
  *
- * Exported only so the degraded paths are reachable from a test: both of them
- * depend on how the BROWSER's `Intl` answers, which cannot be provoked through
- * a rendered select without stubbing `Intl` for the whole render.
+ * Called only by `ZoneOptions`, and only once hydration has finished, so it
+ * always runs in the BROWSER: the server's tz data never reaches a label
+ * (#1030). Exported so its degraded paths are reachable from a test, since both
+ * depend on how the browser's `Intl` answers.
  */
 export function zoneLabel(zone: string): string {
-	const name = zone.replace(/_/g, " ");
+	const name = zoneName(zone);
 	try {
 		const offset = new Intl.DateTimeFormat("en-US", {
 			timeZone: zone,
@@ -316,6 +318,64 @@ export function zoneLabel(zone: string): string {
 	} catch {
 		return name;
 	}
+}
+
+/** The zone id as words, with no offset: all the server renders (#1030). */
+function zoneName(zone: string): string {
+	return zone.replace(/_/g, " ");
+}
+
+const noSubscription = () => () => {};
+
+/**
+ * The time-zone picker's `<option>` list, offsets added only AFTER hydration
+ * (#1030).
+ *
+ * An offset comes from tz data, and the server's Node and the admin's browser
+ * each ship their own. They disagree: Node's ICU spells UTC+0 `GMT` where
+ * Chrome spells it `GMT+0`, and on production the server put Africa/Casablanca
+ * and Africa/El Aaiun at GMT+0 while Chrome put them at GMT+1. So any offset in
+ * the SERVER's HTML is a hydration mismatch (React #418) on some pair of
+ * machines, and no spelling of the number can fix a disagreement about the
+ * number itself.
+ *
+ * The server render and the hydrating render therefore both print the bare zone
+ * name (`getServerSnapshot` is what React reads while hydrating), and React
+ * re-renders with the browser's offsets straight after. The browser's answer is
+ * the one worth showing anyway: it matches the clock the admin is reading. The
+ * stored value is the zone id either way.
+ *
+ * Exported so `club-settings-zone-hydration.test.tsx` can hydrate it under two
+ * disagreeing `Intl`s without mounting the whole route.
+ */
+export function ZoneOptions({ zones }: { zones: readonly string[] }) {
+	const hydrated = useSyncExternalStore(
+		noSubscription,
+		() => true,
+		() => false,
+	);
+	/**
+	 * Memoized because this component re-renders with its parent: it is not
+	 * wrapped in `memo`, and the route keeps the lead-time input and three
+	 * checkboxes as its own state, so every keystroke and toggle there renders
+	 * this again. Without the memo each one would rebuild ~420 labels, each
+	 * constructing an `Intl.DateTimeFormat` (~28ms measured). `zones` is loader
+	 * data and referentially stable, so the list is built twice per load: bare
+	 * names for hydration, then once with offsets.
+	 */
+	const options = useMemo(
+		() =>
+			zones.map((z) => ({
+				value: z,
+				label: hydrated ? zoneLabel(z) : zoneName(z),
+			})),
+		[zones, hydrated],
+	);
+	return options.map((o) => (
+		<option key={o.value} value={o.value}>
+			{o.label}
+		</option>
+	));
 }
 
 const PromoTemplateEditor = lazy(() =>
@@ -378,17 +438,6 @@ function ClubSettings() {
 		setTtRefusal((prev) => refusalAfterEdit(prev, field));
 	const [zone, setZone] = useState(timezone.timezone);
 	const [savingZone, setSavingZone] = useState(false);
-	/**
-	 * Memoized because this whole page is ONE component: the lead-time input and
-	 * three checkboxes are all controlled state here, so without this every
-	 * keystroke and every toggle would rebuild ~420 labels, each constructing an
-	 * `Intl.DateTimeFormat` (~28ms measured). `timezone.zones` is loader data and
-	 * referentially stable between renders, so the list is built once per load.
-	 */
-	const zoneOptions = useMemo(
-		() => timezone.zones.map((z) => ({ value: z, label: zoneLabel(z) })),
-		[timezone.zones],
-	);
 	const [logoFile, setLogoFile] = useState<File | null>(null);
 	const [logoAttested, setLogoAttested] = useState(false);
 	// Monotonic selection counter — see `onLogoFileChange`. A ref, not state: it
@@ -690,11 +739,7 @@ function ClubSettings() {
 						value={zone}
 						onChange={(e) => setZone(e.target.value)}
 					>
-						{zoneOptions.map((o) => (
-							<option key={o.value} value={o.value}>
-								{o.label}
-							</option>
-						))}
+						<ZoneOptions zones={timezone.zones} />
 					</select>
 					<p className="text-xs text-muted-foreground">
 						Meeting times won't change, but their dates might — dates are shown
