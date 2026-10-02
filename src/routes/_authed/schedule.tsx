@@ -118,7 +118,11 @@ function SeasonGridPage() {
 							key={m.id}
 							to="/club/$clubId/meeting/$meetingId"
 							params={{ clubId: clubKey, meetingId: m.id }}
-							className="text-muted-foreground line-through underline-offset-4 hover:underline"
+							// `decoration-current` so the strike is the text's own colour;
+							// no `hover:underline`, which REPLACES `line-through` (one
+							// `text-decoration-line`) and un-strikes the date on hover;
+							// `inline-flex min-h-6 items-center` for a 24px target.
+							className="inline-flex min-h-6 items-center text-muted-foreground line-through decoration-current hover:text-foreground"
 						>
 							{formatMeetingDate(m.scheduledAt, m.timezone)}
 						</Link>

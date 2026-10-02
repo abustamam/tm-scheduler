@@ -24,6 +24,9 @@ const PromoteSheet = lazy(() =>
 	import("./promote-sheet").then((m) => ({ default: m.PromoteSheet })),
 );
 
+/** The lifecycle writes a meeting page can have in flight (#1057). */
+export type LifecycleAction = "complete" | "reopen" | "cancel" | "restore";
+
 export type MeetingToolbarProps = {
 	phase: MeetingPhase;
 	clubSlug: string;
@@ -62,6 +65,11 @@ export type MeetingToolbarProps = {
 	canCancel?: boolean;
 	/** Opens the route's confirm; the write happens there. */
 	onCancel?: () => void;
+	/** WHICH lifecycle write is in flight (#1057). Every lifecycle button
+	 *  disables while `lifecycleBusy`, but only this one spins and carries
+	 *  `aria-busy` — Complete and Cancel used to share one spinner. Absent, the
+	 *  old behaviour: every busy button spins. */
+	busyAction?: LifecycleAction | null;
 };
 
 /**
@@ -98,11 +106,19 @@ export function MeetingToolbar({
 	cancelled = false,
 	canCancel = false,
 	onCancel,
+	busyAction,
 }: MeetingToolbarProps) {
 	// Spec D2 primary matrix: guests never get a primary; members get Present
 	// on meeting day; only officers get the completed-phase Minutes primary.
-	const presentIsPrimary = phase === "today" && (hasIdentity || canManage);
-	const minutesIsPrimary = showsMinutesPrimary(phase, canManage);
+	// Neither on a cancelled meeting (#1057): there is nothing to present and
+	// no minutes to take, and the phase primary is the one filled control in
+	// the row, so it would be the loudest thing on a page about a meeting that
+	// is not happening. The export menu hands Present back, as on any other day.
+	const presentIsPrimary =
+		!cancelled && phase === "today" && (hasIdentity || canManage);
+	const minutesIsPrimary = !cancelled && showsMinutesPrimary(phase, canManage);
+	const spins = (action: LifecycleAction) =>
+		lifecycleBusy && (busyAction == null || busyAction === action);
 	const [promoteOpen, setPromoteOpen] = useState(false);
 	// The officer edit group as a whole (#1057): nothing in it has a write the
 	// server would accept on a cancelled meeting, and a Promote draft for a
@@ -190,9 +206,9 @@ export function MeetingToolbar({
 					// signal the mutation is in flight, and `disabled` has already
 					// pulled the button out of the focus order. Matches the
 					// availability chip in MeetingPersonalStrip, which already does it.
-					aria-busy={lifecycleBusy}
+					aria-busy={spins("reopen")}
 				>
-					{lifecycleBusy ? (
+					{spins("reopen") ? (
 						<Loader2 className="size-4 animate-spin" />
 					) : (
 						<LockOpen className="size-4" />
@@ -212,9 +228,9 @@ export function MeetingToolbar({
 					variant="outline"
 					onClick={onComplete}
 					disabled={lifecycleBusy}
-					aria-busy={lifecycleBusy}
+					aria-busy={spins("complete")}
 				>
-					{lifecycleBusy ? (
+					{spins("complete") ? (
 						<Loader2 className="size-4 animate-spin" />
 					) : (
 						<CheckCircle2 className="size-4" />
@@ -232,9 +248,9 @@ export function MeetingToolbar({
 					variant="outline"
 					onClick={onCancel}
 					disabled={lifecycleBusy}
-					aria-busy={lifecycleBusy}
+					aria-busy={spins("cancel")}
 				>
-					{lifecycleBusy ? (
+					{spins("cancel") ? (
 						<Loader2 className="size-4 animate-spin" />
 					) : (
 						<CalendarX className="size-4" />

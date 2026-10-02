@@ -97,6 +97,66 @@ describe("Cancel meeting (#1057)", () => {
 		await renderToolbar({ lifecycleBusy: false });
 		expect(cancelButton()?.getAttribute("aria-busy")).not.toBe("true");
 	});
+
+	it("only the pressed control spins: Complete in flight leaves Cancel disabled but quiet (review of #1084, G)", async () => {
+		await renderToolbar({
+			phase: "today",
+			canComplete: true,
+			lifecycleBusy: true,
+			busyAction: "complete",
+		});
+		const complete = screen.getByRole("button", {
+			name: /complete meeting/i,
+		}) as HTMLButtonElement;
+		const cancel = cancelButton() as HTMLButtonElement;
+		// Both disabled: nothing else may start while a lifecycle write runs.
+		expect(complete.disabled).toBe(true);
+		expect(cancel.disabled).toBe(true);
+		// Only the one pressed says so, and only it carries the spinner.
+		expect(complete.getAttribute("aria-busy")).toBe("true");
+		expect(cancel.getAttribute("aria-busy")).not.toBe("true");
+		expect(complete.querySelector(".animate-spin")).not.toBeNull();
+		expect(cancel.querySelector(".animate-spin")).toBeNull();
+	});
+
+	it("…and the other way round: Cancel in flight leaves Complete quiet", async () => {
+		await renderToolbar({
+			phase: "today",
+			canComplete: true,
+			lifecycleBusy: true,
+			busyAction: "cancel",
+		});
+		const complete = screen.getByRole("button", { name: /complete meeting/i });
+		expect(cancelButton()?.getAttribute("aria-busy")).toBe("true");
+		expect(complete.getAttribute("aria-busy")).not.toBe("true");
+		expect(complete.querySelector(".animate-spin")).toBeNull();
+	});
+});
+
+describe("the phase primary on a cancelled meeting (review of #1084, G)", () => {
+	it.each([
+		{ phase: "today" as MeetingPhase, label: "Present on the day" },
+		{ phase: "completed" as MeetingPhase, label: "Minutes after it" },
+	])("no filled primary — $label", async ({ phase }) => {
+		await renderToolbar({
+			phase,
+			hasIdentity: true,
+			cancelled: true,
+			canCancel: false,
+		});
+		expect(screen.queryByTestId("toolbar-primary")).toBeNull();
+		expect(
+			document.querySelectorAll('[data-slot="button"][data-variant="default"]'),
+		).toHaveLength(0);
+	});
+
+	it.each([
+		"today",
+		"completed",
+	] as MeetingPhase[])("the control: the same %s phase, not cancelled, keeps its primary", async (phase) => {
+		await renderToolbar({ phase, hasIdentity: true, cancelled: false });
+		expect(screen.getByTestId("toolbar-primary")).toBeTruthy();
+	});
 });
 
 describe("a cancelled meeting's toolbar (#1057)", () => {

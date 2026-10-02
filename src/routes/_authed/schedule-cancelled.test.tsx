@@ -159,6 +159,15 @@ describe("the strip", () => {
 		// The uuid, never a date key: a bare-date URL skips a cancelled meeting.
 		expect(link?.getAttribute("href")).not.toContain("2026-10-03");
 		expect(link?.className).toContain("line-through");
+		// Review of #1084, G: the strike in the text's own colour, kept on hover
+		// (`hover:underline` sets the same `text-decoration-line` and would
+		// un-strike it), and a 24px target.
+		const classes = link?.className.split(/\s+/) ?? [];
+		expect(classes).toContain("decoration-current");
+		expect(classes).not.toContain("hover:underline");
+		expect(classes).toEqual(
+			expect.arrayContaining(["inline-flex", "min-h-6", "items-center"]),
+		);
 		expect(link?.textContent).toContain("Oct 3");
 	});
 

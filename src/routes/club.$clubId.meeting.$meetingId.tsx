@@ -37,7 +37,10 @@ import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
 import { MeetingRoomStrip } from "#/components/club/meeting-room-strip";
-import { MeetingToolbar } from "#/components/club/meeting-toolbar";
+import {
+	type LifecycleAction,
+	MeetingToolbar,
+} from "#/components/club/meeting-toolbar";
 import { OpenActionItems } from "#/components/club/open-action-items";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
 import { VoteCounterPanel } from "#/components/club/vote-counter-panel";
@@ -83,6 +86,7 @@ import {
 	holdersFromSlots,
 	isCancellationNoticeRequested,
 	isMeetingCancelled,
+	MEETING_ALREADY_CANCELLED_MESSAGE,
 	MEETING_CANCELLED_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
@@ -382,7 +386,12 @@ function MeetingView() {
 
 	const [addRoleOpen, setAddRoleOpen] = useState(false);
 	const [addRoleBusy, setAddRoleBusy] = useState(false);
-	const [lifecycleBusy, setLifecycleBusy] = useState(false);
+	// WHICH lifecycle write is in flight (#1057). Every lifecycle control
+	// disables while any one runs, but only the one pressed spins and carries
+	// `aria-busy` — Complete and Cancel used to share a single spinner.
+	const [lifecycleAction, setLifecycleAction] =
+		useState<LifecycleAction | null>(null);
+	const lifecycleBusy = lifecycleAction !== null;
 	// #320: an admin can preview the page as a non-admin member sees it.
 	const [previewAsMember, setPreviewAsMember] = useState(false);
 	const [lineupOpen, setLineupOpen] = useState(false);
@@ -1574,7 +1583,7 @@ function MeetingView() {
 	}
 
 	async function doComplete() {
-		setLifecycleBusy(true);
+		setLifecycleAction("complete");
 		try {
 			await completeMeeting({ data: { meetingId: meeting.id } });
 			toast.success("Meeting closed out and locked.");
@@ -1582,12 +1591,12 @@ function MeetingView() {
 		} catch (err) {
 			showWriteError(err, "Something went wrong.");
 		} finally {
-			setLifecycleBusy(false);
+			setLifecycleAction(null);
 		}
 	}
 
 	async function doReopen() {
-		setLifecycleBusy(true);
+		setLifecycleAction("reopen");
 		try {
 			await reopenMeeting({ data: { meetingId: meeting.id } });
 			toast.success("Meeting reopened for edits.");
@@ -1595,24 +1604,46 @@ function MeetingView() {
 		} catch (err) {
 			showWriteError(err, "Something went wrong.");
 		} finally {
-			setLifecycleBusy(false);
+			setLifecycleAction(null);
 		}
 	}
 
 	// Cancel (#1057), after the confirm. The officer stays on the page and the
 	// notice opens — by the uuid URL, because a bare-date key skips a cancelled
 	// meeting (`meeting-resolve-logic.ts`) and `router.invalidate()` on a date
-	// URL would 404 the page the officer is looking at. Same-URL case: the
-	// loader is re-run and the sheet opens in place.
+	// URL would 404 the page the officer is looking at. `replace`, so Back does
+	// not land on that dead date URL. Same-URL case: the loader is re-run and
+	// the sheet opens in place.
+	//
+	// "Already cancelled" is the SUCCESS path with a different sentence: another
+	// officer (or this one, in another tab) got there first, the meeting is in
+	// exactly the state that was asked for, and the officer still needs the
+	// notice. Compared by identity with the constant, never by substring.
 	async function doCancel() {
-		setLifecycleBusy(true);
+		setLifecycleAction("cancel");
 		try {
-			await cancelMeeting({ data: { meetingId: meeting.id } });
+			let alreadyCancelled = false;
+			try {
+				await cancelMeeting({ data: { meetingId: meeting.id } });
+			} catch (err) {
+				if (
+					!(err instanceof Error) ||
+					err.message !== MEETING_ALREADY_CANCELLED_MESSAGE
+				) {
+					throw err;
+				}
+				alreadyCancelled = true;
+			}
 			setCancelConfirmOpen(false);
-			toast.success("Meeting cancelled. Nothing has been sent.");
+			toast.success(
+				alreadyCancelled
+					? "This meeting was already cancelled. Nothing has been sent."
+					: "Meeting cancelled. Nothing has been sent.",
+			);
 			if (meetingKeyParam !== meeting.id) {
 				await router.navigate({
 					href: cancellationNoticeHref(clubId, meeting.id),
+					replace: true,
 				});
 			} else {
 				await router.invalidate();
@@ -1621,12 +1652,12 @@ function MeetingView() {
 		} catch (err) {
 			showWriteError(err, "Something went wrong.");
 		} finally {
-			setLifecycleBusy(false);
+			setLifecycleAction(null);
 		}
 	}
 
 	async function doRestore() {
-		setLifecycleBusy(true);
+		setLifecycleAction("restore");
 		try {
 			await restoreMeeting({ data: { meetingId: meeting.id } });
 			toast.success("Meeting restored. Everyone still has their role.");
@@ -1634,7 +1665,7 @@ function MeetingView() {
 		} catch (err) {
 			showWriteError(err, "Something went wrong.");
 		} finally {
-			setLifecycleBusy(false);
+			setLifecycleAction(null);
 		}
 	}
 
@@ -1804,8 +1835,8 @@ function MeetingView() {
 							aria-hidden
 						/>
 						<span>
-							<span className="font-semibold">Cancelled.</span>{" "}
-							{MEETING_CANCELLED_MESSAGE} Everyone keeps their role.
+							<span className="font-semibold">{MEETING_CANCELLED_MESSAGE}</span>{" "}
+							Everyone keeps their role.
 						</span>
 					</span>
 					{/* Officers only: the notice to copy, and Restore while the date
@@ -1827,9 +1858,9 @@ function MeetingView() {
 									variant="outline"
 									onClick={doRestore}
 									disabled={lifecycleBusy}
-									aria-busy={lifecycleBusy}
+									aria-busy={lifecycleAction === "restore"}
 								>
-									{lifecycleBusy ? (
+									{lifecycleAction === "restore" ? (
 										<Loader2 className="size-4 animate-spin" />
 									) : (
 										<RotateCcw className="size-4" aria-hidden />
@@ -1980,6 +2011,7 @@ function MeetingView() {
 					canComplete={canComplete}
 					hasAddableRoles={addableRoles.length > 0}
 					lifecycleBusy={lifecycleBusy}
+					busyAction={lifecycleAction}
 					onAddRole={() => setAddRoleOpen(true)}
 					onComplete={doComplete}
 					onReopen={doReopen}
@@ -1989,20 +2021,34 @@ function MeetingView() {
 				/>
 				{/* Cancel confirm (#1057). It states the three things an officer
 				    needs before saying yes: roles are kept, members stop seeing the
-				    meeting, nothing is sent. The write is `doCancel`. */}
-				<Dialog open={cancelConfirmOpen} onOpenChange={setCancelConfirmOpen}>
+				    meeting, nothing is sent — and, truthfully, how long a restore
+				    stays possible: `applyRestoreMeeting` refuses from the club-local
+				    day after. The write is `doCancel`. Not dismissable while it
+				    runs: closing it mid-write left the cancel landing anyway, with
+				    the officer believing they had backed out. */}
+				<Dialog
+					open={cancelConfirmOpen}
+					onOpenChange={(open) => {
+						if (!lifecycleBusy) setCancelConfirmOpen(open);
+					}}
+				>
 					<DialogContent>
 						<DialogHeader>
 							<DialogTitle>Cancel this meeting?</DialogTitle>
 							<DialogDescription>
-								Everyone keeps their role, so restoring it later loses nothing.
-								Members stop seeing it on the schedule and the sign-up sheet.
-								Nothing is sent — you get a notice to copy and share.
+								Everyone keeps their role, and you can restore it exactly as it
+								was until the end of the meeting's day. Members stop seeing it
+								on the schedule and the sign-up sheet. Nothing is sent — you get
+								a notice to copy and share.
 							</DialogDescription>
 						</DialogHeader>
 						<DialogFooter>
 							<DialogClose asChild>
-								<Button type="button" variant="outline">
+								<Button
+									type="button"
+									variant="outline"
+									disabled={lifecycleBusy}
+								>
 									Keep meeting
 								</Button>
 							</DialogClose>
@@ -2011,9 +2057,9 @@ function MeetingView() {
 								variant="destructive"
 								onClick={doCancel}
 								disabled={lifecycleBusy}
-								aria-busy={lifecycleBusy}
+								aria-busy={lifecycleAction === "cancel"}
 							>
-								{lifecycleBusy ? (
+								{lifecycleAction === "cancel" ? (
 									<Loader2 className="size-4 animate-spin" />
 								) : (
 									<CalendarX className="size-4" aria-hidden />
@@ -2190,7 +2236,10 @@ function MeetingView() {
 								// turn on together. Passing `over` here would hide the recorder
 								// for the whole of meeting day, which is when roll is taken.
 								meetingDayReached={canComplete}
-								canEdit={effectiveCanManage && minutes.canEdit}
+								// Read-only on a cancelled meeting (#1057): there are no
+								// minutes for a meeting that did not happen, and a stray
+								// edit would land in the record of one.
+								canEdit={effectiveCanManage && minutes.canEdit && !cancelled}
 								clubGuests={clubGuests}
 								offline={offlineMinutes}
 								email={

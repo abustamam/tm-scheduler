@@ -141,10 +141,62 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		expect(body).toContain(
 			"} else { await router.invalidate(); setNoticeOpen(true); }",
 		);
-		// Both arms: the navigation is the other half of the same `if`.
+		// Both arms: the navigation is the other half of the same `if`, and it
+		// REPLACES the history entry (review of #1084, G), so Back does not land
+		// on the dead date URL a cancelled meeting no longer answers to.
 		expect(body).toContain(
-			"if (meetingKeyParam !== meeting.id) { await router.navigate({ href: cancellationNoticeHref(clubId, meeting.id), }); }",
+			"if (meetingKeyParam !== meeting.id) { await router.navigate({ href: cancellationNoticeHref(clubId, meeting.id), replace: true, }); }",
 		);
+	});
+
+	it("doCancel treats 'already cancelled' as success, matched by identity with the constant (G)", () => {
+		// Another officer got there first: the meeting is in the state that was
+		// asked for, and this officer still needs the notice. Exactly that one
+		// refusal is swallowed; anything else is rethrown to `showWriteError`.
+		const body = handlerBody(src, "doCancel").replace(/\s+/g, " ");
+		expect(body).toContain(
+			"if ( !(err instanceof Error) || err.message !== MEETING_ALREADY_CANCELLED_MESSAGE ) { throw err; } alreadyCancelled = true;",
+		);
+		// The success path runs AFTER the inner try, for both outcomes.
+		expect(body.indexOf("alreadyCancelled = true;")).toBeLessThan(
+			body.indexOf("setCancelConfirmOpen(false);"),
+		);
+	});
+
+	it("the confirm cannot be dismissed while the write runs (G)", () => {
+		const flat = src.replace(/\s+/g, " ");
+		expect(flat).toContain(
+			"onOpenChange={(open) => { if (!lifecycleBusy) setCancelConfirmOpen(open); }}",
+		);
+		expect(src).toMatch(
+			/<Button\s+type="button"\s+variant="outline"\s+disabled=\{lifecycleBusy\}\s*>\s*Keep meeting/,
+		);
+		// And it tells the truth about how long a restore stays possible.
+		expect(flat).toContain("until the end of the meeting's day");
+		expect(flat).not.toContain("restoring it later loses nothing");
+	});
+
+	it("only the pressed lifecycle control spins: the route tracks WHICH write runs (G)", () => {
+		expect(src).toContain("const lifecycleBusy = lifecycleAction !== null;");
+		expect(src).toContain("busyAction={lifecycleAction}");
+		for (const action of ["complete", "reopen", "cancel", "restore"]) {
+			const fn = `do${action[0]?.toUpperCase()}${action.slice(1)}`;
+			const body = handlerBody(src, fn);
+			expect(body, fn).toContain(`setLifecycleAction("${action}");`);
+			expect(body, fn).toContain("setLifecycleAction(null);");
+		}
+		expect(src).toContain('aria-busy={lifecycleAction === "restore"}');
+		expect(src).toContain('aria-busy={lifecycleAction === "cancel"}');
+	});
+
+	it("the minutes card is read-only and the banner says it once on a cancelled meeting (G)", () => {
+		expect(src).toContain(
+			"canEdit={effectiveCanManage && minutes.canEdit && !cancelled}",
+		);
+		expect(src).toMatch(
+			/<span className="font-semibold">\s*\{MEETING_CANCELLED_MESSAGE\}\s*<\/span>\{" "\}\s*Everyone keeps their role\./,
+		);
+		expect(src).not.toContain("Cancelled.</span>");
 	});
 
 	it("doRestore re-runs the loader after the write", () => {
@@ -179,8 +231,10 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		// …and the sites the review named still read the derived key.
 		for (const site of [
 			"meetingId={urlKey}",
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: a literal of the route's own source
 			"sharePath={`/club/${clubId}/meeting/${urlKey}`}",
 			"{ clubKey: clubId, meetingKey: urlKey }",
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: a literal of the route's own source
 			"/meeting/${urlKey}`;",
 			"meetingKey: urlKey,",
 		]) {
