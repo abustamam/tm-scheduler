@@ -67,27 +67,29 @@ describe.skipIf(!hasTestDb)("rosterConflictFor complements the bind", () => {
 		return id;
 	}
 
-	async function newPerson(): Promise<string> {
+	async function newPerson(email: string | null = null): Promise<string> {
 		const [row] = await testDb
 			.insert(people)
-			.values({ name: "Matrix Person", email: null })
+			.values({ name: "Matrix Person", email })
 			.returning({ id: people.id });
 		if (!row) throw new Error("person insert failed");
 		personIds.push(row.id);
 		return row.id;
 	}
 
+	async function setEmail(personId: string, email: string | null) {
+		await testDb.update(people).set({ email }).where(eq(people.id, personId));
+	}
+
 	async function addMembership(opts: {
 		personId: string;
 		clubId?: string;
-		email: string | null;
 		status?: "active" | "inactive";
 	}): Promise<void> {
 		await testDb.insert(members).values({
 			clubId: opts.clubId ?? club.clubId,
 			personId: opts.personId,
 			name: "Matrix Person",
-			email: opts.email,
 			status: opts.status ?? "active",
 		});
 	}
@@ -105,91 +107,115 @@ describe.skipIf(!hasTestDb)("rosterConflictFor complements the bind", () => {
 	}
 
 	/**
-	 * Every roster shape the rule distinguishes. `expected` is what the explainer
-	 * must say; the bind must land exactly when it is null.
+	 * Every roster shape the rule distinguishes (#907). `expected` is what the
+	 * explainer must say; the bind must land exactly when it is null.
 	 */
 	const SHAPES: Array<{
 		name: string;
-		expected: "no_vouching_row" | "multiple_clubs" | "shared_address" | null;
+		expected: "no_vouching_row" | "shared_address" | null;
 		build: (personId: string, address: string) => Promise<void>;
 	}> = [
 		{
-			name: "one club, its row carries the address",
+			name: "one club, the Person carries the address",
 			expected: null,
-			build: async (personId, address) =>
-				addMembership({ personId, email: address }),
-		},
-		{
-			name: "one club, its row carries a DIFFERENT address",
-			expected: "no_vouching_row",
-			build: async (personId) =>
-				addMembership({ personId, email: `other-${randomUUID()}@t.example` }),
-		},
-		{
-			name: "one club, its row carries NO address",
-			expected: "no_vouching_row",
-			build: async (personId) => addMembership({ personId, email: null }),
-		},
-		{
-			name: "no memberships at all",
-			expected: "no_vouching_row",
-			build: async () => {},
-		},
-		{
-			name: "two clubs, both rows carry the address",
-			expected: "multiple_clubs",
 			build: async (personId, address) => {
-				await addMembership({ personId, email: address });
-				await addMembership({
-					personId,
-					clubId: await otherClub(),
-					email: address,
-				});
+				await setEmail(personId, address);
+				await addMembership({ personId });
 			},
 		},
 		{
-			name: "two clubs, the other row is INACTIVE",
-			expected: "multiple_clubs",
+			name: "the Person carries it padded and in another case",
+			expected: null,
 			build: async (personId, address) => {
-				await addMembership({ personId, email: address });
+				await setEmail(personId, `  ${address.toUpperCase()}\t`);
+				await addMembership({ personId });
+			},
+		},
+		{
+			name: "one club, the Person carries a DIFFERENT address",
+			expected: "no_vouching_row",
+			build: async (personId) => {
+				await setEmail(personId, `other-${randomUUID()}@t.example`);
+				await addMembership({ personId });
+			},
+		},
+		{
+			name: "one club, the Person carries NO address",
+			expected: "no_vouching_row",
+			build: async (personId) => addMembership({ personId }),
+		},
+		{
+			name: "the address, but no memberships at all",
+			expected: "no_vouching_row",
+			build: async (personId, address) => setEmail(personId, address),
+		},
+		{
+			name: "TWO clubs hold the Person (the arm #907 removed)",
+			expected: null,
+			build: async (personId, address) => {
+				await setEmail(personId, address);
+				await addMembership({ personId });
+				await addMembership({ personId, clubId: await otherClub() });
+			},
+		},
+		{
+			name: "only an INACTIVE membership, in an ARCHIVED club",
+			expected: null,
+			build: async (personId, address) => {
+				await setEmail(personId, address);
 				await addMembership({
 					personId,
-					clubId: await otherClub(),
-					email: null,
+					clubId: await otherClub(true),
 					status: "inactive",
 				});
 			},
 		},
 		{
-			name: "two clubs, the other club is ARCHIVED",
-			expected: "multiple_clubs",
+			name: "ANOTHER Person in this club carries the address",
+			expected: "shared_address",
 			build: async (personId, address) => {
-				await addMembership({ personId, email: address });
-				await addMembership({
-					personId,
-					clubId: await otherClub(true),
-					email: null,
-				});
+				await setEmail(personId, address);
+				await addMembership({ personId });
+				await addMembership({ personId: await newPerson(address) });
 			},
 		},
 		{
-			name: "one club, but ANOTHER Person carries the address",
+			name: "another, already-SIGNED-IN Person carries it",
 			expected: "shared_address",
 			build: async (personId, address) => {
-				await addMembership({ personId, email: address });
-				await addMembership({ personId: await newPerson(), email: address });
+				await setEmail(personId, address);
+				await addMembership({ personId });
+				const other = await newPerson(address);
+				await addMembership({ personId: other });
+				await testDb
+					.update(people)
+					.set({ userId: await seedUser(`bound-${randomUUID()}@t.example`) })
+					.where(eq(people.id, other));
 			},
 		},
 		{
-			name: "one club, another Person carries it in a DIFFERENT club",
+			// A leftover `applyMemberRemove` stripped of every membership: on no
+			// roster and nobody's account, so it vouches for nothing and must not
+			// lock the real member out (#907 review).
+			name: "another UNBOUND Person in NO club carries it",
+			expected: null,
+			build: async (personId, address) => {
+				await setEmail(personId, address);
+				await addMembership({ personId });
+				await newPerson(` ${address.toUpperCase()}`);
+			},
+		},
+		{
+			name: "another BOUND Person in NO club carries it",
 			expected: "shared_address",
 			build: async (personId, address) => {
-				await addMembership({ personId, email: address });
-				await addMembership({
-					personId: await newPerson(),
-					clubId: await otherClub(),
-					email: address,
-				});
+				await setEmail(personId, address);
+				await addMembership({ personId });
+				const other = await newPerson(address);
+				await testDb
+					.update(people)
+					.set({ userId: await seedUser(`bound2-${randomUUID()}@t.example`) })
+					.where(eq(people.id, other));
 			},
 		},
 	];
@@ -225,10 +251,6 @@ describe.skipIf(!hasTestDb)("rosterConflictFor complements the bind", () => {
 		// A new `RosterObstacle` member with no fixture would leave the complement
 		// unverified for exactly the case it was added to describe.
 		const covered = new Set(SHAPES.map((s) => s.expected).filter(Boolean));
-		expect([...covered].sort()).toEqual([
-			"multiple_clubs",
-			"no_vouching_row",
-			"shared_address",
-		]);
+		expect([...covered].sort()).toEqual(["no_vouching_row", "shared_address"]);
 	});
 });

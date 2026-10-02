@@ -352,7 +352,6 @@ async function seedFixture(nowMs: number): Promise<Fixture> {
 				clubId: club.id,
 				personId: personRows[i]?.id as string,
 				name: r.name,
-				email: r.email,
 				clubRole: r.key === "admin" ? ("admin" as const) : ("member" as const),
 				status: "active" as const,
 				joinedAt: new Date(nowMs - 400 * DAY),

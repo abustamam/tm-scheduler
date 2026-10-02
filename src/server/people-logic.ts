@@ -42,29 +42,21 @@ export async function findBestPersonByEmail(
 	const normalized = email.trim().toLowerCase();
 	if (!normalized) return null;
 
-	// Matches the person-level address OR any roster row's (#756). Migration 0076
-	// nulled `people.email` for everyone who has never signed in, so a
-	// person-level-only match here stopped recognising un-claimed members
-	// entirely — and this is create-club's "one human, one Person" rule, so the
-	// miss mints a duplicate Person for an admin who is already on another club's
-	// roster. That duplicate then makes the sign-in auto-link see TWO candidates
-	// for their address and refuse both, so the admin the superadmin just
-	// provisioned a club for could not sign into it.
+	// The Person's one address (#907). A miss here mints a duplicate Person for
+	// an admin who is already on another club's roster, and the duplicate then
+	// makes the sign-in auto-link see TWO candidates for their address and
+	// refuse both.
 	//
 	// Deliberately NOT club-scoped: this runs before the new club exists, and the
 	// whole point of Rule B is to find the human across every club.
 	const rows = await conn
-		.selectDistinct({
+		.select({
 			id: people.id,
 			userId: people.userId,
 			originalJoinDate: people.originalJoinDate,
 		})
 		.from(people)
-		.leftJoin(members, eq(members.personId, people.id))
-		.where(
-			sql`${normalizedEmail(people.email)} = ${normalized}
-			    or ${normalizedEmail(members.email)} = ${normalized}`,
-		);
+		.where(sql`${normalizedEmail(people.email)} = ${normalized}`);
 	if (rows.length === 0) return null;
 	if (rows.length === 1) return rows[0].id;
 
@@ -138,11 +130,8 @@ export interface DuplicateGroup {
  * Every group of 2+ Persons sharing a case-insensitive, non-blank email —
  * counting BOTH the person-level address and any roster row's (#756).
  *
- * The roster half is what keeps this tool able to find the pairs that matter.
- * Migration 0076 nulled `people.email` for everyone who has never signed in, so
- * a duplicate created after it has one row with a NULL person-level address and
- * one with a set one; grouping on `people.email` alone could see neither. That
- * is not cosmetic: the sign-in auto-link now REFUSES to bind when an address
+ * Grouped on `people.email`, the Person's one address (#907). That is not
+ * cosmetic: the sign-in auto-link REFUSES to bind when an address
  * resolves to two Persons, so this list is the only surface that can show a
  * superadmin why somebody cannot sign in, and `mergePeople` is the repair.
  */
@@ -153,11 +142,6 @@ export async function listDuplicatePeople(): Promise<DuplicateGroup[]> {
 			       lower(regexp_replace(p.email, '^[[:space:]]+|[[:space:]]+$', '', 'g')) as email
 			  from people p
 			 where p.email is not null and length(trim(p.email)) > 0
-			union
-			select m.person_id,
-			       lower(regexp_replace(m.email, '^[[:space:]]+|[[:space:]]+$', '', 'g')) as email
-			  from members m
-			 where m.email is not null and length(trim(m.email)) > 0
 		) addresses
 		group by email
 		having count(distinct person_id) > 1
@@ -181,24 +165,17 @@ export async function searchPeopleForMerge(
 	const trimmed = query.trim().toLowerCase();
 	if (trimmed.length < 2) return [];
 	const q = `%${trimmed}%`;
-	// Searches the ROSTER address too (#756). Migration 0076 nulled `people.email`
-	// for everyone who has never signed in, and `mergePeople` — which this search
-	// feeds — is the documented repair for a member the bind refuses as a shared
-	// address. Searching only the person-level column would leave that repair
-	// unable to find the very people it exists for.
 	const rows = await db
-		.selectDistinct({
+		.select({
 			id: people.id,
 			name: people.name,
 			email: people.email,
 			userId: people.userId,
 		})
 		.from(people)
-		.leftJoin(members, eq(members.personId, people.id))
 		.where(
 			sql`lower(${people.name}) like ${q}
-			    or ${normalizedEmail(people.email)} like ${q}
-			    or ${normalizedEmail(members.email)} like ${q}`,
+			    or ${normalizedEmail(people.email)} like ${q}`,
 		)
 		.orderBy(people.name, people.id)
 		.limit(25);
@@ -364,23 +341,18 @@ async function countMovingEnrollments(
 
 /** All Persons sharing a (lowercased) email, decorated for display. */
 async function peopleForEmail(email: string): Promise<DuplicatePerson[]> {
-	// Both columns, normalised the SAME WAY `listDuplicatePeople` groups them. An
-	// earlier cut trimmed the grouping key and not the lookup key, so a padded
-	// person-level address formed a group whose own member was then not found —
-	// the empty render this comment claims to prevent.
+	// Normalised the SAME WAY `listDuplicatePeople` groups them. An earlier cut
+	// trimmed the grouping key and not the lookup key, so a padded address
+	// formed a group whose own member was then not found.
 	const rows = await db
-		.selectDistinct({
+		.select({
 			id: people.id,
 			name: people.name,
 			email: people.email,
 			userId: people.userId,
 		})
 		.from(people)
-		.leftJoin(members, eq(members.personId, people.id))
-		.where(
-			sql`${normalizedEmail(people.email)} = ${email}
-			    or ${normalizedEmail(members.email)} = ${email}`,
-		)
+		.where(sql`${normalizedEmail(people.email)} = ${email}`)
 		.orderBy(people.name, people.id);
 	return decorate(rows);
 }

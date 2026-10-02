@@ -8,6 +8,12 @@ Status: Accepted
 > membership row, `club_memberships` is dropped, and `vpe` collapsed into
 > `admin`. Statements below that describe Phase B as pending are historical.
 
+> **Revisited (2026-10-02):** ADR-0029 (#906, #907) finishes the contact half.
+> The per-club copies `members.phone` and `members.email` are dropped; phone and
+> email live only on `people`, a club may correct an address only while it is
+> the Person's sole holder and nobody has signed in as them, and sign-in binds on
+> `people.email`.
+
 ## Context
 
 The roster `members` table is club-scoped: one row per person per club. Person-level facts —

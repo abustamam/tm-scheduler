@@ -66,7 +66,7 @@ async function makeMember(
 	createdPersonIds.push(personId);
 	const [row] = await testDb
 		.insert(members)
-		.values({ clubId, personId, name, email })
+		.values({ clubId, personId, name })
 		.returning({ id: members.id });
 	return { personId, memberId: row.id };
 }

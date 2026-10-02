@@ -108,7 +108,6 @@ export async function previewMemberImport(
 			id: members.id,
 			personId: members.personId,
 			name: members.name,
-			email: members.email,
 		})
 		.from(members)
 		.where(eq(members.clubId, clubId));

@@ -22,6 +22,7 @@ import {
 	hasTestDb,
 	seedClub,
 	seedPerson,
+	setMemberEmail,
 	setMemberPhone,
 	testDb,
 } from "#/test/db";
@@ -253,10 +254,7 @@ describe.skipIf(!hasTestDb)("loadOrientationRoster (#942)", () => {
 
 	it("carries contact for the draft, with a blank email as none", async () => {
 		const s = await seed();
-		await testDb
-			.update(members)
-			.set({ email: "  " })
-			.where(eq(members.id, s.memberId));
+		await setMemberEmail(s.memberId, "  ");
 		await setMemberPhone(s.memberId, "+14155550123");
 		const [row] = await loadOrientationRoster(s.clubId, NOW);
 		expect(row?.email).toBeNull();

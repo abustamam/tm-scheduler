@@ -734,30 +734,24 @@ export const people = pgTable(
 		// edit (guarded on NULL, so one club can't overwrite another's) and by
 		// merge/convert; read via COALESCE in `meeting-contacts-logic.ts`.
 		preferredName: text("preferred_name"),
-		// The VERIFIED identity address, plus the person-level dedupe key (#756).
-		// Two things it is NOT, both of which it used to be:
-		//  - it is NOT what binds an account. `linkPersonToUser` and
-		//    `claimPersonForUser` match `members.email` — the club's own contact
-		//    record — under a UNANIMITY rule across the clubs that hold the Person.
-		//    A club-scoped actor typing an address can therefore no longer decide
-		//    who a Person becomes, which is what made a typo a lockout and every
-		//    writer of this column a cross-club takeover.
-		//  - it is NOT club-editable. One thing a CLUB can reach UPDATEs it: the
-		//    bind, which reads the address off the `user` row ITSELF (a caller
-		//    cannot hand it one) and sets `user_id` in the same statement
-		//    (`account-link-logic.ts`). Three superadmin/operator waivers are named
-		//    in `person-email-writers.guard.test.ts` — "exactly one" would be the
-		//    kind of false-completeness claim this comment warns about below.
-		// It IS still written at INSERT, by the CSV importer, the guest-book
-		// conversion, the bulk paste and the create-club form, because a brand-new
-		// Person row is nobody's identity yet and this is the fallback dedupe key
-		// ADR-0008 leans on for "one human, one Person".
+		// The Person's ONE address (#907, ADR-0029): their contact address in
+		// every club that holds them, the person-level dedupe key, and the key a
+		// sign-in binds on (`rosterPermitsBind`, `account-link-logic.ts`). There
+		// is no per-club copy any more — `members.email` was dropped by #907.
 		//
-		// So the invariant is NARROWER than "every value here is verified", and
-		// stating it the loose way would be the false-completeness claim this repo
-		// has already been burned by: non-null on a LINKED Person means verified;
-		// on an unlinked one it is a typed hint. Nothing binds from it either way,
-		// which is the property that actually matters.
+		// Who may write it:
+		//  - the bind, which reads the address off the `user` row ITSELF and sets
+		//    `user_id` in the same statement;
+		//  - a club-side writer (the roster edit, the CSV importer's fill) ONLY
+		//    while nobody has signed in as this Person
+		//    AND that club is their sole holder — `isNull(people.userId)` and
+		//    `soleHoldingClub(clubId)` in the UPDATE's own WHERE;
+		//  - the superadmin/operator waivers.
+		// `person-email-writers.guard.test.ts` is the enumeration. A plain INSERT
+		// (a brand-new Person) carries it freely: a fresh row is nobody's yet.
+		//
+		// So non-null on a LINKED Person means verified; on an unlinked one it is
+		// what the one club that holds them typed.
 		email: text("email"),
 		phone: text("phone"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
@@ -804,9 +798,10 @@ export const people = pgTable(
 // TEMPORARY, and meant to be dropped. Inverting the ownership of that column
 // made every value written before the change un-trustworthy as an identity —
 // nobody had proved they owned any of them — so the migration nulls the ones on
-// un-claimed Persons. This table is the undo: the rollback plan is `revert the
-// PR` plus one UPDATE joining back through it, and it exists because a data
-// migration you cannot reverse is one you cannot deploy on a Friday.
+// un-claimed Persons. It was the undo for that change; since #907 made
+// `people.email` the sign-in key, restoring these unverified values onto
+// unbound Persons would hand out keys #756 judged untrustworthy, so the
+// restore script was deleted and this is a record only.
 //
 // Drop it (schema + a migration) once a release has passed without incident.
 // Deliberately NOT a general audit trail: it holds one snapshot, from one
@@ -872,6 +867,47 @@ export const membersPhoneBackup = pgTable("members_phone_backup", {
 });
 
 // ---------------------------------------------------------------------------
+// What migration 0109 overwrote in `people.email` (#907).
+//
+// TEMPORARY, and meant to be dropped, like the backups above. 0109 makes
+// `people.email` the only address column and drops `members.email`, first
+// giving each UNBOUND Person the one address its memberships agree on where it
+// differs (normalised) from what the Person had. This holds the value each
+// changed Person had BEFORE (null included, for a fill), so a rollback can put
+// it back — onto rows whose `user_id` is still null only, never over an address
+// a bind has since verified. One snapshot; nothing writes to it at runtime.
+// Drop it (schema + a migration) once a release has passed without incident.
+// ---------------------------------------------------------------------------
+
+export const peopleEmailBackup2 = pgTable("people_email_backup_2", {
+	// Deliberately NOT a foreign key, for the reason `people_email_backup` gives:
+	// a cascade would let `mergePeople` delete the undo along with the Person.
+	personId: uuid("person_id").primaryKey(),
+	// Nullable: a Person whose address was null and got FILLED is a changed row
+	// too, and "it was null" is the value a rollback restores.
+	email: text("email"),
+	capturedAt: timestamp("captured_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// Every membership address migration 0109 dropped with `members.email` (#907).
+//
+// TEMPORARY, like the backups above. The backfill keeps ONE address per Person
+// and leaves a Person whose memberships disagree untouched, so every per-club
+// address would otherwise be destroyed by the DROP. This holds each non-blank
+// one, as stored. One snapshot; nothing writes to it at runtime.
+// ---------------------------------------------------------------------------
+
+export const membersEmailBackup = pgTable("members_email_backup", {
+	// Deliberately NOT foreign keys, for the reason `people_email_backup` gives.
+	memberId: uuid("member_id").primaryKey(),
+	clubId: uuid("club_id"),
+	personId: uuid("person_id"),
+	email: text("email"),
+	capturedAt: timestamp("captured_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
 // Roster members (self-serve MVP — auth-decoupled identities).
 // The Membership: a Person's participation in one Club (one row per person per
 // club). Person-level facts live on `people`; this row holds the per-club facts.
@@ -891,15 +927,14 @@ export const members = pgTable(
 			.notNull()
 			.references(() => people.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
-		// AUTHORITATIVE for this club (#486), denormalized like `name`/`email`.
-		// (A phone number is a Person fact and lives only on `people.phone`,
-		// #906.) Null does NOT mean "no name recorded" — the read falls back to
+		// AUTHORITATIVE for this club (#486), denormalized like `name`.
+		// (Phone and email are Person facts and live only on `people`, #906 /
+		// #907.) Null does NOT mean "no name recorded" — the read falls back to
 		// `people.preferred_name` (COALESCE in `meeting-contacts-logic.ts`), which
 		// is what lets a member who set it in another club be greeted correctly
 		// here. Replication is one-way and one-shot: a membership edit seeds the
 		// Person when the Person has none. Nothing ever copies Person → membership.
 		preferredName: text("preferred_name"),
-		email: text("email"),
 		// Authorization role for this membership (ADR-0008 Phase B / #99). The auth
 		// path (guards.ts / auth-context.ts) resolves a signed-in user → Person
 		// (people.user_id) → their memberships, and reads this role per club. An

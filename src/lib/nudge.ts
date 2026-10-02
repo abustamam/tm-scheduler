@@ -529,9 +529,10 @@ export function buildNudge(input: NudgeInput): Nudge {
 		// swallowed this app's own `subject=` into the injected `body`, so the
 		// message that opened was neither private nor the one it claimed to be.
 		//
-		// Reachable: `members.email` has a free-text writer (`bulkImportSchema` is
-		// `z.string()`, no `.email()`), and `NudgeButtons` is fed that column via
-		// `slot.holderEmail` on the meeting agenda and the recruit picker.
+		// Reachable: `people.email` has a free-text writer (`bulkImportSchema` is
+		// `z.string()`, no `.email()`, and inserts it on a fresh Person), and
+		// `NudgeButtons` is fed that column via `slot.holderEmail` on the meeting
+		// agenda and the recruit picker.
 		//
 		// `mailtoHref` escapes `?`, `&` and `#` and leaves `@` alone, so the `?`
 		// that opens the header section below is the FIRST one in the URL — which

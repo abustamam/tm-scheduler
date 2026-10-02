@@ -174,7 +174,7 @@ async function addSignedInMember(
 	const personId = await seedPerson({ name, email, userId });
 	const [m] = await testDb
 		.insert(members)
-		.values({ clubId, personId, name, email })
+		.values({ clubId, personId, name })
 		.returning({ id: members.id });
 	if (!m) throw new Error("Failed to insert member");
 	return { memberId: m.id, userId };

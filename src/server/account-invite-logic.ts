@@ -1,13 +1,12 @@
-// Account-invite + "claim your name" DB logic (#266, re-keyed by #756), split
+// Account-invite + "claim your name" DB logic (#266, re-keyed by #756 and #907), split
 // out from the createServerFn wrappers in `account-invite.ts` so it is directly
 // integration-testable and its `#/db` → `pg` import never leaks into the client
 // bundle (the server-modules.guard.test.ts rule; see `members-logic.ts`).
 //
-// Both entry points read ONE address, `members.email` — the club's own contact
-// record. `people.email` is the verified identity address and is written only by
-// `bindVerifiedPerson`; nothing here treats it as a key, because every value it
-// can hold before a bind was typed by a club-scoped actor (the CSV importer, the
-// guest-book conversion, the create-club form) rather than proved by anybody.
+// Both entry points read ONE address, `people.email` — the Person's one address
+// (#907, ADR-0029). Before a bind it was typed by a club, but only by a club
+// that was the Person's sole holder at the time, so nothing a club that SHARES
+// the Person typed can steer where an invite goes or what a claim accepts.
 //
 // Two entry points:
 //  - `prepareMemberInvite` — the admin roster action (Part A). Resolves the
@@ -22,6 +21,7 @@
 //    else's identity — the verified address has to be on this membership, the
 //    Person has to be held by one club, and no other member may carry that
 //    address. Everything after the refused bind here is EXPLANATION.
+//    (The "held by one club" arm went away in #907; see `rosterPermitsBind`.)
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, people } from "#/db/schema";
@@ -59,20 +59,18 @@ export interface InvitePrep {
 
 /**
  * Admin roster invite (Part A). `memberId` must belong to `clubId`. The invite
- * targets the MEMBERSHIP's own email — the club's contact record, and the same
- * address `claimPersonForUser` will require — so acceptance provably links
- * exactly this Person and nothing else. Idempotent: an already-linked Person
+ * targets the Person's own `people.email` — the same address
+ * `claimPersonForUser` will require — so acceptance provably links exactly this
+ * Person and nothing else. Idempotent: an already-linked Person
  * returns `already_joined` (no resend); a membership with no email returns
  * `no_email` so the caller can ask the admin to add one first. When
  * `respectCooldown` is set (the bulk path passes it; the single explicit invite
  * omits it), a Person invited within `INVITE_COOLDOWN_MS` returns
  * `recently_invited` WITHOUT re-stamping `invited_at` or sending.
  *
- * It deliberately does NOT fall back to `people.email` (#756). The link has to
- * go where the claim will look, and a person-level address that the roster
- * disagrees with delivers a magic link that then refuses to bind — a silent
- * half-failure with nothing on screen to explain it. `no_email` puts the admin
- * on the one surface they own: add the address to the roster row, invite again.
+ * The link has to go where the claim will look, and there is now only one
+ * place to look (#907). `no_email` puts the admin on the surface they own: add
+ * the address on the member's page, invite again.
  *
  * **It asks the same question the bind will, BEFORE any link is sent**
  * (`roster_conflict`). The first cut of #756 did not, and the result was the
@@ -92,7 +90,6 @@ export async function prepareMemberInvite(input: {
 		.select({
 			id: members.id,
 			clubId: members.clubId,
-			email: members.email,
 			personId: members.personId,
 		})
 		.from(members)
@@ -106,6 +103,7 @@ export async function prepareMemberInvite(input: {
 		.select({
 			id: people.id,
 			userId: people.userId,
+			email: people.email,
 			invitedAt: people.invitedAt,
 		})
 		.from(people)
@@ -116,7 +114,7 @@ export async function prepareMemberInvite(input: {
 	// Already has an account — nothing to send (safe, idempotent).
 	if (person.userId) return { outcome: "already_joined" };
 
-	const email = member.email?.trim() || null;
+	const email = person.email?.trim() || null;
 	if (!email) return { outcome: "no_email" };
 
 	// Bulk cooldown: with a usable email but an invite stamped within the window,
@@ -177,24 +175,18 @@ export type ClaimOutcome =
  * for invite-accept AND the public claim). SECURITY — the whole point of this
  * function is that it stays safe on a public, honor-system surface. Linking
  * ALWAYS requires the verified sign-in email to match the MEMBERSHIP's on-file
- * address, so picking a name can never adopt someone else's identity:
+ * address (`people.email`, #907), so picking a name can never adopt someone
+ * else's identity:
  *   - `already_yours`  — the Person is already linked to THIS user (idempotent).
  *   - `already_other`  — linked to a DIFFERENT user: never reassigned (no theft).
- *   - `email_mismatch` — this roster row carries an address that isn't the one
+ *   - `email_mismatch` — this Person carries an address that isn't the one
  *                        the user just proved they own: not adopted.
- *   - `needs_invite`   — this roster row carries NO address: un-claimable on a
+ *   - `needs_invite`   — this Person carries NO address: un-claimable on a
  *                        public surface, never adopted under an arbitrary
  *                        verified address.
- *   - `roster_conflict`— the address is right for this row, but the ROSTER
- *                        disagrees with itself: another club holding this Person
- *                        has a different address (or none), or this address sits
- *                        on more than one member's row. See `rosterConflictFor`.
+ *   - `roster_conflict`— the address is right for this Person, but another
+ *                        Person carries it too. See `rosterConflictFor`.
  *   - `linked`         — bound.
- *
- * **`people.email` is not consulted at all.** It is written at Person CREATION
- * from values the importer, the guest book, the bulk paste or the create-club
- * form carried, so treating it as a claim key is treating a typed string as a
- * credential — which is the defect this whole change removes.
  *
  * The authorization lives in `bindVerifiedPerson`'s own WHERE. Everything after
  * the failed bind below is EXPLANATION, re-read for the human's benefit; nothing
@@ -209,7 +201,6 @@ export async function claimPersonForUser(input: {
 			id: members.id,
 			clubId: members.clubId,
 			personId: members.personId,
-			email: members.email,
 		})
 		.from(members)
 		.where(eq(members.id, input.memberId))
@@ -217,7 +208,7 @@ export async function claimPersonForUser(input: {
 	if (!member) return "not_found";
 
 	const [person] = await db
-		.select({ id: people.id, userId: people.userId })
+		.select({ id: people.id, userId: people.userId, email: people.email })
 		.from(people)
 		.where(eq(people.id, member.personId))
 		.limit(1);
@@ -227,11 +218,11 @@ export async function claimPersonForUser(input: {
 		return person.userId === input.userId ? "already_yours" : "already_other";
 	}
 
-	const onFileEmail = normalizeEmail(member.email);
+	const onFileEmail = normalizeEmail(person.email);
 	if (!onFileEmail) return "needs_invite";
 
 	// The signed-in account's email is the address the magic link proved ownership
-	// of — the only credential we trust. This row must carry exactly it.
+	// of — the only credential we trust. This Person must carry exactly it.
 	const verifiedEmail = await verifiedEmailFor(input.userId);
 	if (!verifiedEmail || onFileEmail !== verifiedEmail) return "email_mismatch";
 

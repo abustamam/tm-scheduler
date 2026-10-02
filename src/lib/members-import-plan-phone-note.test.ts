@@ -38,6 +38,7 @@ function person(over: Partial<ExistingPersonRow>): ExistingPersonRow {
 		name: "Ada",
 		phone: null,
 		heldBy: "this_club",
+		heldElsewhere: false,
 		linked: false,
 		...over,
 	};
@@ -47,7 +48,6 @@ const MEMBERSHIP: ExistingMembershipRow = {
 	id: "m1",
 	personId: "p1",
 	name: "Ada",
-	email: "ada@x.io",
 };
 
 describe("planImport's Person phone note (#906)", () => {

@@ -59,17 +59,23 @@ the nouns in `src/db/schema.ts`.
   in 14 zones, swept across all of them by `datetime-dst.test.ts`.
 - **Person** — a human (`people`), keyed by their Toastmasters Customer ID (`PN-…`, nullable;
   unique when present, with email as a fallback match key). Holds the facts that are the same
-  across *every* club a person belongs to: name, contact, `original_join_date` (first-ever TM
+  across *every* club a person belongs to: name, contact (phone and email live ONLY here —
+  ADR-0029; a membership carries no contact), `original_join_date` (first-ever TM
   join), `preferred_name` (what they go by — see **Goes-by name**), enrolled Pathways paths, and
   the optional link to their sign-in account (`user_id`).
   `user_id` is **not unique**: one account can link several Person rows (duplicates predate the
   #329 dedupe-on-write and are merged by hand), so resolving a signed-in user to a Person is a
   deliberate choice, not a lookup — see **Invariants**. See ADR-0008 / #64.
+  `people.email` is the Person's ONE address and the key a sign-in binds on (#907): a verified
+  address binds the one unbound Person whose own address it is, if any club holds them and no
+  other Person carries it — however many clubs hold them. A club may change it only while
+  nobody has signed in as that Person AND the club is their sole holder; after sign-in it is
+  theirs. See ADR-0029.
 - **Membership** — a Person's participation in one Club (`members`; one row per person per
   club). Holds the *per-club* facts: role (`club_role` — `admin`/`vpe`/`member`; only
   `admin`/`vpe` may create meetings), `joined_at` ("member of *this* club since"), office
-  (see #63), and status. This roster row is what meeting roles are claimed against. See
-  ADR-0008.
+  (see #63), and status. This roster row is what meeting roles are claimed against. It holds
+  no contact: phone and email are the Person's (ADR-0029). See ADR-0008.
 - **Goes-by name** (`preferred_name`, #486) — what a human is actually CALLED, when it isn't the
   first token of their stored `name`. Every intake path gives one full-name string (the
   Toastmasters export has a single `Name` column, in both "First Last" and "Last, First" shapes),

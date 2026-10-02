@@ -208,7 +208,6 @@ async function seedClub(opts: {
 				clubId: club.id,
 				personId: personByName.get(r.name)!,
 				name: r.name,
-				email: r.email,
 				status: r.status ?? "active",
 				joinedAt: r.joinedAt ?? joinedAgo(2),
 				clubRole: defaultClubRoleForOffices(

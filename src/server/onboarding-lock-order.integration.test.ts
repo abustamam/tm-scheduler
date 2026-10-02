@@ -59,7 +59,6 @@ async function clubWithUnclaimedAdmin(archived: boolean) {
 			clubId,
 			personId: person.id,
 			name: "Unclaimed Admin",
-			email,
 			clubRole: "admin",
 			status: "active",
 		})
@@ -136,12 +135,7 @@ describe.skipIf(!hasTestDb)(
 				.select({ email: people.email })
 				.from(people)
 				.where(eq(people.id, c.personId));
-			const [m] = await testDb
-				.select({ email: members.email })
-				.from(members)
-				.where(eq(members.id, c.memberId));
 			expect(p?.email).toBe(next);
-			expect(m?.email).toBe(next);
 		}, 20_000);
 
 		it("deleteClubPermanently racing an edit of one of its members does not deadlock", async () => {

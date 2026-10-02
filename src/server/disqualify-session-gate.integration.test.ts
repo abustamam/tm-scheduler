@@ -159,7 +159,6 @@ async function addSignedInMember(
 			clubId,
 			personId: personRow.id,
 			name,
-			email,
 			clubRole,
 			status: "active",
 		})

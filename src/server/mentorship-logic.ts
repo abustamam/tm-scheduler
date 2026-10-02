@@ -413,7 +413,7 @@ async function activePairingsFor(
 			startedAt: mentorships.startedAt,
 			otherId: other.id,
 			otherName: other.name,
-			otherEmail: other.email,
+			otherEmail: otherPerson.email,
 			otherPhone: otherPerson.phone,
 		})
 		.from(mentorships)

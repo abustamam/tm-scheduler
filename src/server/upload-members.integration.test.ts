@@ -14,7 +14,13 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, members, people } from "#/db/schema";
-import { cleanup, hasTestDb, memberPhone, testDb } from "#/test/db";
+import {
+	cleanup,
+	hasTestDb,
+	memberEmail,
+	memberPhone,
+	testDb,
+} from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -221,22 +227,16 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 		);
 	});
 
-	it("preview and commit agree after the person-level address was cleared", async () => {
-		// The state migration 0076 leaves un-claimed members in: `people.email` NULL,
-		// the roster row holding the address. BOTH sides had to widen their candidate
-		// query for that, and they load it from two different modules — so this pins
-		// the parity rather than either half's answer. A preview promising "1 update"
-		// over a commit that inserts a duplicate Person is worse than either being
-		// wrong alone: the VPE approves a diff that is not what runs.
+	it("preview and commit agree on a re-import matched by email (#907)", async () => {
+		// Both sides load their candidates from two different modules, so this
+		// pins the parity rather than either half's answer. A preview promising
+		// "1 update" over a commit that inserts a duplicate Person is worse than
+		// either being wrong alone: the VPE approves a diff that is not what runs.
 		const clubId = await club();
 		const text = csv([
 			{ Name: "Hal", Email: "hal@x.io", "Status (*)": "PaidMember" },
 		]);
 		await logic.commitMemberImport(clubId, text);
-		await testDb
-			.update(people)
-			.set({ email: null })
-			.where(eq(people.email, "hal@x.io"));
 
 		const preview = await logic.previewMemberImport(clubId, text);
 		const commit = await logic.commitMemberImport(clubId, text);
@@ -259,7 +259,6 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 			clubId,
 			personId: person.id,
 			name: "Original",
-			email: "stored@x.io",
 		});
 
 		const text = csv([
@@ -286,7 +285,7 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 			.select()
 			.from(members)
 			.where(eq(members.clubId, clubId));
-		expect(m.email).toBe("stored@x.io"); // fill-only preserved the edit
+		expect(await memberEmail(m.id)).toBe("stored@x.io"); // fill-only preserved the edit
 		// The Person's empty phone filled.
 		expect(await memberPhone(m.id)).toBe("+15551234");
 		expect(m.joinedAt).not.toBeNull(); // dates always win

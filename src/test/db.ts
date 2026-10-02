@@ -98,6 +98,35 @@ export async function memberPhone(memberId: string): Promise<string | null> {
 	return row.phone;
 }
 
+/**
+ * Set the email behind a membership. An address is a Person fact (#907), so a
+ * fixture that used to write `members.email` writes the Person's instead.
+ * A fixture helper, never shipped: it is the one waived test-side writer in
+ * `person-email-writers.guard.test.ts`.
+ */
+export async function setMemberEmail(
+	memberId: string,
+	email: string | null,
+): Promise<void> {
+	const [m] = await testDb
+		.select({ personId: members.personId })
+		.from(members)
+		.where(eq(members.id, memberId));
+	if (!m) throw new Error(`setMemberEmail: no membership ${memberId}`);
+	await testDb.update(people).set({ email }).where(eq(people.id, m.personId));
+}
+
+/** The Person email behind a membership (#907), for assertions. */
+export async function memberEmail(memberId: string): Promise<string | null> {
+	const [row] = await testDb
+		.select({ email: people.email })
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(eq(members.id, memberId));
+	if (!row) throw new Error(`memberEmail: no membership ${memberId}`);
+	return row.email;
+}
+
 /** Insert a minimal club fixture and return the ids. */
 export async function seedClub(): Promise<SeededClub> {
 	const clubId = randomUUID();
@@ -157,7 +186,6 @@ export async function seedClub(): Promise<SeededClub> {
 				clubId,
 				personId: adminPersonRow.id,
 				name: "Admin User",
-				email: `admin-${adminUserId}@test.example`,
 				clubRole: "admin",
 				status: "active",
 			},
@@ -165,7 +193,6 @@ export async function seedClub(): Promise<SeededClub> {
 				clubId,
 				personId: personRow.id,
 				name: "Member User",
-				email: `member-${memberUserId}@test.example`,
 				clubRole: "member",
 				status: "active",
 			},

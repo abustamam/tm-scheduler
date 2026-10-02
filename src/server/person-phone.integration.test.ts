@@ -54,8 +54,9 @@ async function addGuest(
 
 async function memberEmail(memberId: string): Promise<string> {
 	const [m] = await testDb
-		.select({ email: members.email })
+		.select({ email: people.email })
 		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
 		.where(eq(members.id, memberId));
 	if (!m?.email) throw new Error("seeded member has no email");
 	return m.email;
