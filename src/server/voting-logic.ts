@@ -564,6 +564,19 @@ export type BallotVoter = VoterRef | { kind: "anonymous" };
 export const ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE =
 	"Couldn't send that — refresh the page and tap your choice again.";
 
+/** `castVote`'s cancelled-meeting gate (#1057): the status as of this read,
+ *  refused with the member-facing sentence. An unknown meeting is left to
+ *  `getMeetingClubId` beside it, which already names that case. Declared here,
+ *  ABOVE `castVote`'s own doc comment, so that comment stays attached to it. */
+async function assertVoteMeetingNotCancelled(meetingId: string): Promise<void> {
+	const [row] = await db
+		.select({ status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (row) assertMeetingNotCancelled(row.status);
+}
+
 /**
  * Cast (or change) one ballot.
  *
@@ -625,18 +638,6 @@ export const ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE =
  * device alone, as one update-else-insert serialised per (session, device).
  * No uniqueness on the token: another device is another ballot.
  */
-/** `castVote`'s cancelled-meeting gate (#1057): the status as of this read,
- *  refused with the member-facing sentence. An unknown meeting is left to
- *  `getMeetingClubId` beside it, which already names that case. */
-async function assertVoteMeetingNotCancelled(meetingId: string): Promise<void> {
-	const [row] = await db
-		.select({ status: meetings.status })
-		.from(meetings)
-		.where(eq(meetings.id, meetingId))
-		.limit(1);
-	if (row) assertMeetingNotCancelled(row.status);
-}
-
 export async function castVote(input: {
 	meetingId: string;
 	category: AwardCategory;

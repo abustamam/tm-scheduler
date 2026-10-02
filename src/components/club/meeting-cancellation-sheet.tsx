@@ -11,7 +11,7 @@
 // its payload: the officer's slot rows carry each member holder's email, so
 // nothing is fetched, and a guest is named but gets no address.
 
-import { Copy, Loader2 } from "lucide-react";
+import { Copy } from "lucide-react";
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
@@ -45,7 +45,6 @@ export function MeetingCancellationSheet({
 	scheduledAt,
 	timezone,
 	holders,
-	busy = false,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -54,8 +53,6 @@ export function MeetingCancellationSheet({
 	timezone: string;
 	/** In agenda order, as the route derives them from its slot rows. */
 	holders: readonly CancellationHolder[];
-	/** True while the route is still re-loading after the cancel. */
-	busy?: boolean;
 }) {
 	const notice = useMemo(
 		() => buildCancellationNotice({ clubName, scheduledAt, timezone, holders }),
@@ -73,11 +70,6 @@ export function MeetingCancellationSheet({
 					</SheetDescription>
 				</SheetHeader>
 				<div className="space-y-4 px-4 pb-6">
-					{busy ? (
-						<p className="flex items-center gap-2 text-muted-foreground text-sm">
-							<Loader2 className="size-4 animate-spin" /> Loading…
-						</p>
-					) : null}
 					{notice.lines.length > 0 ? (
 						<ul
 							className="space-y-1 text-sm"

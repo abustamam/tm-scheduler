@@ -405,6 +405,13 @@ describe("formatActivity", () => {
 			formatActivity({ ...meetingBase, change: "digital_voting_enabled" })
 				.summary,
 		).toBe("turned digital voting back on for the meeting");
+		// #1057: the two lifecycle changes cancellation added.
+		expect(formatActivity({ ...meetingBase, change: "cancel" }).summary).toBe(
+			"cancelled the meeting",
+		);
+		expect(formatActivity({ ...meetingBase, change: "restore" }).summary).toBe(
+			"restored the meeting",
+		);
 		expect(formatActivity({ ...meetingBase, change: null }).summary).toBe(
 			"updated the meeting",
 		);

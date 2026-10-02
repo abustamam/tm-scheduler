@@ -155,7 +155,10 @@ export async function requirePublicLineupBlastAccess(
 
 /**
  * What the draft is built from, for one meeting, or null for an unknown
- * meeting or an archived club (one not-found shape for both).
+ * meeting or an archived club (one not-found shape for both). A CANCELLED
+ * meeting is neither: it throws `McpError("LOCKED", MEETING_CANCELLED_MESSAGE)`
+ * (#1057), so `get_lineup_blast` returns a code rather than INTERNAL and the
+ * browser's sheet shows the sentence.
  *
  * Reads slots through `loadMeetingSlots`, the ONE slot loader the meeting page,
  * the print route and `get_agenda` already share, so the draft lists exactly

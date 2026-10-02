@@ -2235,8 +2235,11 @@ export async function releaseSlotCore(
 	assertMeetingNotLocked(slot.meetingStatus);
 
 	// The meeting's status rides in the statement (#1057, `meetingNotCancelled`),
-	// as `reassignSlotCore`'s does: a clear drops `speech_id`, so a release on a
-	// cancelled meeting is the one write a restore could not undo.
+	// as `reassignSlotCore`'s does. A cancelled meeting keeps its assignments
+	// until it is restored, and a clear would take one away — dropping the
+	// holder and unlinking any speech, neither of which a restore brings back.
+	// It is one of several such writes (reassign, guest assignment and speech
+	// edits are refused too), not the only one.
 	const released = await conn
 		.update(roleSlots)
 		.set({

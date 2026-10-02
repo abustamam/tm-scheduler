@@ -14,7 +14,8 @@
  * a reworded sentence would silently turn a handled case into an unhandled one
  * with no test able to see it. So a tool makes its OWN check and throws the
  * code; it never inspects a message to decide what happened. The one sanctioned
- * exception is the archive and lock messages, which are exported constants
+ * exception is the archive, lock and cancellation messages (the last since
+ * #1057, `#/lib/meeting-cancellation-notice`), which are exported constants
  * precisely so a caller can compare against THEM rather than a copy — and even
  * those are compared by identity with the export, never by substring.
  *
@@ -33,6 +34,13 @@ export type McpErrorCode =
 	/** Zod issues, or a bad value; carries the entry index where there is one. */
 	| "VALIDATION"
 	| "ARCHIVED"
+	/**
+	 * The meeting no longer accepts the request: it is COMPLETED (the agenda
+	 * lock, #150) or CANCELLED (#1057, until `restore_meeting`). One code for
+	 * both, because a caller's next step is the same — not this meeting, as it
+	 * stands — and the MESSAGE tells them apart: the lock sentence or
+	 * `MEETING_CANCELLED_MESSAGE`.
+	 */
 	| "LOCKED"
 	/** Attendance before the meeting's club-local day has arrived. */
 	| "NOT_RECORDABLE"
@@ -74,7 +82,12 @@ export type McpBlockingCode =
 	| "AMBIGUOUS_GUEST"
 	| "INVALID_PHONE"
 	/**
-	 * The meeting is completed, so its agenda no longer accepts changes (#150).
+	 * The meeting's agenda no longer accepts changes, in either of two states:
+	 * COMPLETED (#150), or CANCELLED (#1057, until it is restored). The code is
+	 * shared and the MESSAGE tells them apart — `MEETING_LOCKED_BLOCKING_MESSAGE`
+	 * for a completed meeting, `MEETING_CANCELLED_MESSAGE` for a cancelled one —
+	 * so a caller reads the sentence, never infers the state from the code.
+	 * `assign_roles` raises both.
 	 *
 	 * The blocking item is the EXPLANATION, not the enforcement.
 	 * `reassignSlotCore` and `releaseSlotCore` each assert the lock again under

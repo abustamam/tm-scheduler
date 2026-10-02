@@ -157,6 +157,13 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 				case "digital_voting_enabled":
 					summary = "turned digital voting back on for the meeting";
 					break;
+				// #1057 — cancelling a meeting and putting it back.
+				case "cancel":
+					summary = "cancelled the meeting";
+					break;
+				case "restore":
+					summary = "restored the meeting";
+					break;
 				default:
 					summary = "updated the meeting";
 			}

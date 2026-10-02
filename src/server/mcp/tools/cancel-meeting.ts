@@ -18,13 +18,15 @@
  *
  * ## Refusals are compared by identity with the exported constants
  *
- * `errors.ts` forbids mapping by message TEXT and sanctions exactly one thing:
- * comparing against an exported constant, by identity. The seam throws plain
- * `Error`s carrying those constants, so each is caught and given the nearest
- * code the vocabulary has — `LOCKED` for a completed meeting (that IS the
- * lock), `VALIDATION` for a date that has passed or a meeting already
- * cancelled (the request is wrong for the meeting's state). Anything else is
- * rethrown and becomes `INTERNAL`, which is what an unexpected throw should be.
+ * `errors.ts` forbids mapping by message TEXT, with one sanctioned exception:
+ * the archive, lock and cancellation messages, which are exported constants so
+ * a caller can compare against THEM, by identity with the export and never by
+ * substring. The seam throws plain `Error`s carrying the cancellation
+ * constants, so each is caught and given the nearest code the vocabulary has —
+ * `LOCKED` for a completed meeting (that IS the lock), `VALIDATION` for a date
+ * that has passed or a meeting already cancelled (the request is wrong for the
+ * meeting's state). Anything else is rethrown and becomes `INTERNAL`, which is
+ * what an unexpected throw should be.
  */
 import { eq } from "drizzle-orm";
 import { z } from "zod";

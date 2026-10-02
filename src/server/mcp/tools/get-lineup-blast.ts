@@ -34,7 +34,9 @@ export const getLineupBlastTool: McpToolDefinition = {
 			"Draft a meeting's lineup message: every role in agenda order, marked " +
 			"confirmed, claimed (awaiting confirmation) or open, with a link to the " +
 			"public meeting page. Returns plain text (for WhatsApp) and HTML (for " +
-			"email). Read-only: nothing is sent; a person copies and sends it.",
+			"email). Read-only: nothing is sent; a person copies and sends it. A " +
+			"cancelled meeting has no lineup and is refused as LOCKED; " +
+			"cancel_meeting returns that meeting's cancellation notice instead.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {
