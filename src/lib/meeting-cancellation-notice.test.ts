@@ -10,7 +10,9 @@ import {
 	cancellationNoticeHref,
 	holdersFromSlots,
 	isCancellationNoticeRequested,
+	MEETING_CANCEL_PAST_MESSAGE,
 	MEETING_CANCELLED_MESSAGE,
+	meetingHasStarted,
 } from "./meeting-cancellation-notice";
 
 const AT = "2026-10-03T15:00:00Z";
@@ -146,6 +148,33 @@ describe("the notice flag on the uuid URL", () => {
 		expect(isCancellationNoticeRequested({ room: 1 })).toBe(false);
 		expect(isCancellationNoticeRequested({ notice: 0 })).toBe(false);
 		expect(isCancellationNoticeRequested({ notice: true })).toBe(false);
+	});
+});
+
+describe("meetingHasStarted (the cancel rule, maintainer's decision on #1084)", () => {
+	const start = new Date("2026-10-03T23:00:00Z");
+
+	it("is false before the start, and true at it and after it", () => {
+		expect(meetingHasStarted(start, new Date(start.getTime() - 1))).toBe(false);
+		expect(meetingHasStarted(start, start)).toBe(true);
+		expect(meetingHasStarted(start, new Date(start.getTime() + 1))).toBe(true);
+	});
+
+	it("reads an ISO string the same as a Date (the page hands it the payload's)", () => {
+		expect(meetingHasStarted(start.toISOString(), start)).toBe(true);
+		expect(
+			meetingHasStarted(start.toISOString(), new Date(start.getTime() - 1)),
+		).toBe(false);
+	});
+
+	it("ignores the day: started minutes ago is started, though the day is not over", () => {
+		expect(
+			meetingHasStarted(start, new Date(start.getTime() + 10 * 60_000)),
+		).toBe(true);
+	});
+
+	it("the refusal says the meeting has started, not that a date passed", () => {
+		expect(MEETING_CANCEL_PAST_MESSAGE).toMatch(/already started/);
 	});
 });
 

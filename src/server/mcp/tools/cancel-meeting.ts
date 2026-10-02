@@ -71,7 +71,7 @@ export const cancelMeetingTool: McpToolDefinition = {
 			"restore_meeting puts it back exactly as it was. Nothing is sent: the " +
 			"result includes a drafted notice naming the date and every role " +
 			"holder, for a person to copy and send. Refused for a completed " +
-			"meeting, a meeting whose date has passed, or one already cancelled.",
+			"meeting, a meeting that has already started, or one already cancelled.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {

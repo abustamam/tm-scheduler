@@ -75,7 +75,7 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   attendance, ballots, and the other write tools — until it is restored. It keeps every
   assignment, so `restore_meeting` puts it back exactly as it was, up to the end of the meeting's
   day (club time). Nothing is sent to anyone: `cancel_meeting` returns a drafted notice, and you
-  send it. A completed meeting, or one whose date has passed, is refused. Keep the tool
+  send it. A completed meeting, or one that has already started, cannot be cancelled. Keep the tool
   permission on **ask** for these too; a cancel by mistake is one `restore_meeting` away, or
   the Restore button on the meeting page.
 - **`edit_agenda` asks twice.** The first call writes nothing at all: it returns every row's start time

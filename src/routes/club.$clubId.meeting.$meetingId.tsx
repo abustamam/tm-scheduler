@@ -88,6 +88,7 @@ import {
 	isMeetingCancelled,
 	MEETING_ALREADY_CANCELLED_MESSAGE,
 	MEETING_CANCELLED_MESSAGE,
+	meetingHasStarted,
 } from "#/lib/meeting-cancellation-notice";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
@@ -594,12 +595,15 @@ function MeetingView() {
 	// #320: previewing-as-member drops management everywhere it gates admin UI.
 	const effectiveCanManage = canManage && !previewAsMember;
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone, now);
-	// Cancel is offered on a scheduled meeting that is not completed and whose
-	// club-local date has not passed (#1057) — today's included, which is the
-	// case the issue was filed from. Restore mirrors it on the cancelled side
-	// (`!datePassed`, in the banner). `applyCancelMeeting` re-decides both under
-	// the meeting lock; this only decides what to show.
-	const canCancel = !locked && !cancelled && !datePassed;
+	// Cancel is offered on a scheduled meeting that is not completed and has not
+	// STARTED (#1057; the maintainer's rule on #1084): a meeting later today is
+	// still cancellable, one that ran this evening is not. `meetingHasStarted`
+	// is the rule `applyCancelMeeting` refuses by, read off this render's frozen
+	// `now`, so Cancel goes once the meeting starts. Restore keeps the day rule
+	// (`!datePassed`, in the banner). The server re-decides under the meeting
+	// lock; this only decides what to show.
+	const canCancel =
+		!locked && !cancelled && !meetingHasStarted(meeting.scheduledAt, now);
 	// Spec D2: plan mode is the EXISTING phase, reusing the route's frozen clock.
 	// Roll mode (`today` / `completed`) shipped in v1.20.0.0 — see `panelMode`
 	// below — so this predicate gates the PLAN half only, NOT whether the panel

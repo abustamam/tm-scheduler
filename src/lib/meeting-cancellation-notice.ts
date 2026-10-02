@@ -27,8 +27,11 @@ export const MEETING_CANCELLED_MESSAGE = "This meeting is cancelled.";
 /** Cancel refusals, checked in this order; the first that applies wins. */
 export const MEETING_CANCEL_COMPLETED_MESSAGE =
 	"A completed meeting can't be cancelled. Reopen it first.";
+/** Named for the old rule (a passed date) and kept so: the MCP tool maps the
+ *  refusal by identity with this export, and the name is what it imports. The
+ *  rule it states is `meetingHasStarted`. */
 export const MEETING_CANCEL_PAST_MESSAGE =
-	"A meeting whose date has passed can't be cancelled.";
+	"A meeting that has already started can't be cancelled.";
 export const MEETING_ALREADY_CANCELLED_MESSAGE =
 	"This meeting is already cancelled.";
 
@@ -50,6 +53,27 @@ export const MEETING_REOPEN_NOT_COMPLETED_MESSAGE =
 /** True when the meeting is cancelled (skipped, assignments kept). */
 export function isMeetingCancelled(status: string): boolean {
 	return status === "cancelled";
+}
+
+/**
+ * Whether a meeting has STARTED: its scheduled instant is at or before `now`.
+ * The cancel rule (maintainer's decision on #1084): a meeting that has started
+ * cannot be cancelled, whether or not its club-local day has ended — one that
+ * already ran this evening is history, not a skip. A meeting later today that
+ * has not started yet still can be, which is the case #1057 was filed for.
+ *
+ * An INSTANT, not a day, and that is the difference from restore, which keeps
+ * the club-local day (`meetingDatePassed`): restoring puts back a meeting that
+ * was never held, and that stays possible until its day is over.
+ *
+ * Client-safe, so the meeting page hides Cancel by the same rule
+ * `applyCancelMeeting` refuses by, off the page's own frozen clock.
+ */
+export function meetingHasStarted(
+	scheduledAt: Date | string,
+	now: Date = new Date(),
+): boolean {
+	return new Date(scheduledAt).getTime() <= now.getTime();
 }
 
 /**

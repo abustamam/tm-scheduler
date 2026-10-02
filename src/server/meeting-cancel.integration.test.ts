@@ -220,15 +220,27 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			expect(await meetingEdits(club.clubId, club.meetingId)).toEqual([]);
 		});
 
-		it("today's meeting CAN be cancelled (club-local day granularity)", async () => {
-			// The same instant as the check's clock is the same club-local day in
-			// every zone, so this is "today" wherever the suite runs.
-			await setScheduledAt(club.meetingId, new Date());
+		it("a meeting that has not started yet can be cancelled, minutes before its start", async () => {
+			// The maintainer's rule on #1084: the boundary is the meeting's START,
+			// not its club-local day. The faked-clock cases below pin the instant
+			// itself and the cases either side of a day boundary.
+			await setScheduledAt(club.meetingId, new Date(Date.now() + 10 * 60_000));
 			await applyCancelMeeting({
 				meetingId: club.meetingId,
 				actorMemberId: club.adminMemberId,
 			});
 			expect(await meetingStatus(club.meetingId)).toBe("cancelled");
+		});
+
+		it("a meeting that started minutes ago is refused, though its day is not over", async () => {
+			await setScheduledAt(club.meetingId, new Date(Date.now() - 10 * 60_000));
+			await expect(
+				applyCancelMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				}),
+			).rejects.toThrow(MEETING_CANCEL_PAST_MESSAGE);
+			expect(await meetingStatus(club.meetingId)).toBe("scheduled");
 		});
 	});
 
@@ -245,7 +257,7 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			expect(await meetingStatus(club.meetingId)).toBe("completed");
 		});
 
-		it("refuses a meeting whose club-local date has passed", async () => {
+		it("refuses a meeting whose date has passed (it has long since started)", async () => {
 			await setScheduledAt(club.meetingId, new Date(Date.now() - 3 * DAY));
 			await expect(
 				applyCancelMeeting({
@@ -669,11 +681,11 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 		});
 
 		it("includes a cancelled meeting earlier today (still restorable)", async () => {
+			// Cancelled while it was still ahead, then its start passed: a meeting
+			// that has STARTED can no longer be cancelled, so the state is set
+			// directly rather than through `applyCancelMeeting`.
 			await setScheduledAt(club.meetingId, new Date());
-			await applyCancelMeeting({
-				meetingId: club.meetingId,
-				actorMemberId: club.adminMemberId,
-			});
+			await setStatus(club.meetingId, "cancelled");
 			// A moment ago is still today in the club's zone when `now` is the
 			// same clock, so the start-of-day floor admits it.
 			expect(
@@ -697,12 +709,13 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 
 		it("complete refuses today's cancelled meeting: it stays cancelled, unnumbered, with no completed row", async () => {
 			// Today, so the date rule would ADMIT it — the refusal must be the
-			// cancellation's and nothing else's.
-			await setScheduledAt(club.meetingId, new Date());
+			// cancellation's and nothing else's. Cancelled while it was still in
+			// the future, then moved to now: a started meeting cannot be cancelled.
 			await applyCancelMeeting({
 				meetingId: club.meetingId,
 				actorMemberId: club.adminMemberId,
 			});
+			await setScheduledAt(club.meetingId, new Date());
 			await expect(
 				applyCompleteMeeting({
 					meetingId: club.meetingId,
@@ -1115,7 +1128,7 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			expect(await meetingEdits(club.clubId, club.meetingId)).toEqual([]);
 		});
 
-		describe("the club-local day boundary (America/Chicago), under a faked clock", () => {
+		describe("the boundaries (America/Chicago), under a faked clock: cancel's start instant, restore's and the list's club-local day", () => {
 			// Only `Date` is faked: the pg pool's own timers must keep running.
 			afterEach(() => {
 				vi.useRealTimers();
@@ -1138,10 +1151,43 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 				).rejects.toThrow(MEETING_CANCEL_PAST_MESSAGE);
 			});
 
-			it("cancel admits a meeting from earlier TODAY locally, though it is YESTERDAY in UTC", async () => {
-				// 23:00Z on 2 Oct is 18:00 CDT on 2 Oct; the clock reads 23:30 CDT.
+			// Cancel's boundary is the START instant (maintainer, #1084), so the
+			// next three pin that instant and the cases either side of a day line.
+			it("cancel refuses a meeting that STARTED earlier today locally, though the day is not over", async () => {
+				// 23:00Z on 2 Oct is 18:00 CDT on 2 Oct; the clock reads 23:30 CDT,
+				// the same club-local day — which the old day rule would admit.
 				await setScheduledAt(club.meetingId, new Date("2026-10-02T23:00:00Z"));
 				at("2026-10-03T04:30:00Z");
+				await expect(
+					applyCancelMeeting({
+						meetingId: club.meetingId,
+						actorMemberId: club.adminMemberId,
+					}),
+				).rejects.toThrow(MEETING_CANCEL_PAST_MESSAGE);
+			});
+
+			it("cancel admits a meeting LATER today locally that is TOMORROW in UTC", async () => {
+				// 01:00Z on 4 Oct is 20:00 CDT on 3 Oct; the clock reads 10:00 CDT.
+				await setScheduledAt(club.meetingId, new Date("2026-10-04T01:00:00Z"));
+				at("2026-10-03T15:00:00Z");
+				await applyCancelMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				});
+				expect(await meetingStatus(club.meetingId)).toBe("cancelled");
+			});
+
+			it("cancel refuses at the start instant itself, and admits one millisecond before it", async () => {
+				const start = new Date("2026-10-03T23:00:00Z");
+				await setScheduledAt(club.meetingId, start);
+				at("2026-10-03T23:00:00.000Z");
+				await expect(
+					applyCancelMeeting({
+						meetingId: club.meetingId,
+						actorMemberId: club.adminMemberId,
+					}),
+				).rejects.toThrow(MEETING_CANCEL_PAST_MESSAGE);
+				vi.setSystemTime(new Date(start.getTime() - 1));
 				await applyCancelMeeting({
 					meetingId: club.meetingId,
 					actorMemberId: club.adminMemberId,

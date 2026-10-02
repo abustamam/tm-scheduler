@@ -404,7 +404,7 @@ describe.skipIf(!hasTestDb)("cancel_meeting / restore_meeting (#1057)", () => {
 	});
 
 	// Review of #1084, finding H: both tools' past-date branches.
-	it("cancel_meeting on a meeting whose date has passed is VALIDATION with the exact sentence", async () => {
+	it("cancel_meeting on a meeting that has already started is VALIDATION with the exact sentence", async () => {
 		await testDb
 			.update(meetings)
 			.set({ scheduledAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })

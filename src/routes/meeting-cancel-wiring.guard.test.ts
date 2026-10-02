@@ -66,16 +66,19 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		expect(src).toContain("onCancel={() => setCancelConfirmOpen(true)}");
 	});
 
-	it("derives `cancelled` from the status and `canCancel` from lock, cancel and the club-local day", () => {
+	it("derives `cancelled` from the status and `canCancel` from lock, cancel and the meeting's START", () => {
 		expect(src).toContain(
 			"const cancelled = isMeetingCancelled(meeting.status)",
 		);
 		expect(
-			src,
-			"Cancel must be withheld on a locked, already-cancelled or past meeting; " +
-				"`applyCancelMeeting` refuses all three, so a wider predicate here is a " +
-				"button that always fails.",
-		).toContain("const canCancel = !locked && !cancelled && !datePassed");
+			src.replace(/\s+/g, " "),
+			"Cancel must be withheld on a locked, already-cancelled or STARTED meeting " +
+				"(maintainer, #1084): `applyCancelMeeting` refuses all three by the same " +
+				"`meetingHasStarted`, so a wider predicate here is a button that always " +
+				"fails — and the frozen `now`, so it agrees with the rest of the render.",
+		).toContain(
+			"const canCancel = !locked && !cancelled && !meetingHasStarted(meeting.scheduledAt, now);",
+		);
 	});
 
 	it("the confirm's write and the banner's Restore call the two handlers, not each other", () => {

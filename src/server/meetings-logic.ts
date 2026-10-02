@@ -20,6 +20,7 @@ import {
 	MEETING_NOT_CANCELLED_MESSAGE,
 	MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
 	MEETING_RESTORE_PAST_MESSAGE,
+	meetingHasStarted,
 } from "#/lib/meeting-cancellation-notice";
 import {
 	isMeetingLocked,
@@ -800,11 +801,13 @@ export async function applyReopenMeeting(input: {
  * in its WHERE, and a claim that committed before this did is kept and appears
  * in the notice.
  *
- * Refusals, in this order; the first that applies wins. A completed meeting is
- * refused before its date is looked at, so a reopen-then-cancel is the path for
- * one that was closed out by mistake. The club-local DAY is the unit: today's
- * meeting can be cancelled, yesterday's cannot — the same `meetingDatePassed`
- * the agenda freeze reads.
+ * Refusals, in this order; the first that applies wins: completed, then
+ * started, then already cancelled. A completed meeting is refused before its
+ * time is looked at, so a reopen-then-cancel is the path for one that was
+ * closed out by mistake. The unit is the scheduled INSTANT (`meetingHasStarted`,
+ * the maintainer's rule on #1084): a meeting later today that has not started
+ * can be cancelled, one that has started cannot, even before its club-local day
+ * ends. Restore keeps the day rule; see `applyRestoreMeeting`.
  */
 export async function applyCancelMeeting(input: {
 	meetingId: string;
@@ -812,15 +815,12 @@ export async function applyCancelMeeting(input: {
 }) {
 	return db.transaction(async (tx) => {
 		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
-		const club = await tx.query.clubs.findFirst({
-			where: eq(clubs.id, meeting.clubId),
-			columns: { timezone: true },
-		});
-		if (!club) throw new Error("Club not found.");
 		if (isMeetingLocked(meeting.status)) {
 			throw new Error(MEETING_CANCEL_COMPLETED_MESSAGE);
 		}
-		if (meetingDatePassed(meeting.scheduledAt, club.timezone)) {
+		// Off the locked row and the server clock, so the answer holds for the
+		// whole write and no client's clock enters into it.
+		if (meetingHasStarted(meeting.scheduledAt)) {
 			throw new Error(MEETING_CANCEL_PAST_MESSAGE);
 		}
 		if (isMeetingCancelled(meeting.status)) {
