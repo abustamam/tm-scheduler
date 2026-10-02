@@ -224,6 +224,10 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 			throw new Error("Role not found.");
 		}
 		assertMeetingNotLocked(slot.meetingStatus);
+		// #1085. Beside the lock, for the lock's reason: the page hides this on a
+		// cancelled meeting, and a stale tab or a direct call should not be able
+		// to edit a meeting nobody can see.
+		assertMeetingNotCancelled(slot.meetingStatus);
 
 		// The actor is the resolved admin membership — never the client (#396).
 		const membership = await requireClubRole(currentUser.id, slot.clubId, [

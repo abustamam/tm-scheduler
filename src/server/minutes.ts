@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
+import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import { isReadableClub } from "./club-readable-logic";
 import {
@@ -107,6 +108,22 @@ export const getMinutes = createServerFn({ method: "GET" })
 		return { visible: true, canEdit, data, program };
 	});
 
+/**
+ * Refuse a minutes or roll write on a cancelled meeting (#1085). A cancelled
+ * meeting is hidden from every member and never happened, so it must not
+ * quietly gain a roll, guests, Table Topics speakers or awards from a stale
+ * tab, an offline replay or a direct call. AFTER each handler's caller gate, so
+ * an outsider is refused for who they are before learning the meeting's state,
+ * and BEFORE the date rule, so an officer is told the reason that will not go
+ * away by waiting. A read, not a lock: the window a cancel can commit inside is
+ * the one #1057 accepted for planned attendance.
+ */
+async function assertMinutesMeetingNotCancelled(
+	meetingId: string,
+): Promise<void> {
+	assertMeetingNotCancelled(await getMeetingStatus(meetingId));
+}
+
 /** Resolve the meeting's club and gate the caller to the club admin role. */
 async function gateAdmin(meetingId: string): Promise<void> {
 	const currentUser = await requireUser();
@@ -135,6 +152,7 @@ export const setAttendance = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setPresenceSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
+		await assertMinutesMeetingNotCancelled(data.meetingId);
 		await assertAttendanceRecordable(data.meetingId);
 		await setMemberPresence(data);
 		return { ok: true as const };
@@ -164,6 +182,7 @@ export const addMinutesGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => addGuestSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
+		await assertMinutesMeetingNotCancelled(data.meetingId);
 		await assertAttendanceRecordable(data.meetingId);
 		return addGuestPresent(data);
 	});
@@ -176,6 +195,7 @@ export const removeMinutesGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => removeGuestSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
+		await assertMinutesMeetingNotCancelled(data.meetingId);
 		await assertAttendanceRecordable(data.meetingId);
 		await removeGuestPresent(data);
 		return { ok: true as const };
@@ -214,6 +234,7 @@ export const addTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => addSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
+		await assertMinutesMeetingNotCancelled(data.meetingId);
 		return addTableTopicsSpeaker(data);
 	});
 
@@ -229,6 +250,7 @@ export const removeTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => removeSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
+		await assertMinutesMeetingNotCancelled(data.meetingId);
 		await removeTableTopicsSpeaker(data);
 		return { ok: true as const };
 	});
@@ -254,6 +276,7 @@ export const moveTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => moveSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
+		await assertMinutesMeetingNotCancelled(data.meetingId);
 		await moveTableTopicsSpeaker(data);
 		return { ok: true as const };
 	});
@@ -293,6 +316,7 @@ export const setMinutesAward = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setAwardSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
+		await assertMinutesMeetingNotCancelled(data.meetingId);
 		await setAward(data);
 		return { ok: true as const };
 	});
@@ -310,6 +334,7 @@ export const clearMinutesAward = createServerFn({ method: "POST" })
 	.validator((input: unknown) => clearAwardSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
+		await assertMinutesMeetingNotCancelled(data.meetingId);
 		await clearAward(data);
 		return { ok: true as const };
 	});
