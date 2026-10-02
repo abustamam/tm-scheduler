@@ -16,6 +16,11 @@
  * no logo has no red pixels, and a logo that is NOT a data URL is refused
  * rather than silently dropped — the export's whole reason for its guard.
  *
+ * A cancelled meeting's image is STAMPED (#1057): the downloaded PNG is shared
+ * on its own, away from the page that says the meeting is cancelled. Its ink
+ * (`FLYER_CANCELLED_INK`) is counted the same way, beside an unstamped control,
+ * and the stamped image's QR must still decode.
+ *
  * Same Chrome discovery and the same skip-locally / fail-in-CI rule as the
  * other browser-backed suites (`src/test/print-page-count.ts`).
  */
@@ -41,7 +46,11 @@ import {
 	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
 } from "#/test/print-page-count";
-import { FLYER_SQUARE_PX, MeetingFlyerSquare } from "./meeting-flyer";
+import {
+	FLYER_CANCELLED_INK,
+	FLYER_SQUARE_PX,
+	MeetingFlyerSquare,
+} from "./meeting-flyer";
 
 const ROOT = resolve(__dirname, "..", "..", "..");
 const chrome = findChrome();
@@ -113,13 +122,17 @@ beforeAll(async () => {
  * had finished, whatever the budget was (10s and 60s failed alike). Awaiting
  * the promise itself has no budget to outrun.
  */
-async function exportInChrome(logoSrc: string | null): Promise<string> {
+async function exportInChrome(
+	logoSrc: string | null,
+	cancelled = false,
+): Promise<string> {
 	if (!chrome) throw new Error("no chrome");
 	const markup = renderToStaticMarkup(
 		<MeetingFlyerSquare
 			content={content}
 			clubName="Downtown Speakers"
 			logoSrc={logoSrc}
+			cancelled={cancelled}
 		/>,
 	);
 	const html = `<!doctype html><html><head><meta charset="utf-8"></head>
@@ -315,6 +328,24 @@ function redPixels(png: PNG): number {
 	return n;
 }
 
+/** Pixels within a hair of `hex` — the cancelled stamp's ink. */
+function pixelsNear(png: PNG, hex: string, tolerance = 8): number {
+	const [r, g, b] = [1, 3, 5].map((i) =>
+		Number.parseInt(hex.slice(i, i + 2), 16),
+	) as [number, number, number];
+	let n = 0;
+	for (let i = 0; i < png.data.length; i += 4) {
+		if (
+			Math.abs((png.data[i] ?? 0) - r) <= tolerance &&
+			Math.abs((png.data[i + 1] ?? 0) - g) <= tolerance &&
+			Math.abs((png.data[i + 2] ?? 0) - b) <= tolerance
+		) {
+			n++;
+		}
+	}
+	return n;
+}
+
 describe("square flyer PNG harness availability", () => {
 	it("has a Chrome to run in (fails in CI rather than skipping)", () => {
 		if (!chrome && process.env.CI) {
@@ -346,6 +377,22 @@ describe.skipIf(!chrome)(
 		it("without a logo there is no red at all (control)", async () => {
 			const png = decode(await exportInChrome(null));
 			expect(redPixels(png)).toBe(0);
+		});
+
+		// #1057. The stamp's 8px border alone is ~15,000 pixels of its ink; the
+		// unstamped image below has none, so this cannot pass on stray pixels.
+		it("a cancelled meeting's image carries the stamp, and its QR still opens the page", async () => {
+			const png = decode(await exportInChrome(null, true));
+			expect(pixelsNear(png, FLYER_CANCELLED_INK)).toBeGreaterThan(5000);
+			const qr = jsQR(new Uint8ClampedArray(png.data), png.width, png.height);
+			expect(qr?.data).toBe(MEETING_URL);
+			// Not pure red: the stamp must never read as a logo here.
+			expect(redPixels(png)).toBe(0);
+		});
+
+		it("a live meeting's image has none of the stamp's ink (control)", async () => {
+			const png = decode(await exportInChrome(null));
+			expect(pixelsNear(png, FLYER_CANCELLED_INK)).toBe(0);
 		});
 
 		it("refuses a logo that is not inlined rather than dropping it", async () => {

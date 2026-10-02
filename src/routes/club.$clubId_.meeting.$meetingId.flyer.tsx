@@ -109,8 +109,8 @@ function FlyerPage() {
 	return (
 		<div>
 			{/* #1057: marked on screen and on the printed poster. The square
-			    image's PNG is rendered from its own element, so the download
-			    does not carry the watermark; the toolbar marker says so first. */}
+			    image's PNG is drawn from its own element, which the watermark is
+			    not inside, so the square carries its own stamp (`cancelled`). */}
 			{cancelled ? <CancelledWatermark /> : null}
 			<PrintToolbar
 				leading={cancelled ? <CancelledArtifactMarker /> : undefined}
@@ -157,6 +157,7 @@ function FlyerPage() {
 							logoUrl={logoUrl}
 							filename={`${club.slug}-flyer-${meeting.urlKey}.png`}
 							previewWidth={540}
+							cancelled={cancelled}
 						/>
 					</div>
 				</div>

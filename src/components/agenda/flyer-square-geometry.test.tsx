@@ -18,6 +18,11 @@
  *   `...TEXT_BLOCK_GIVES_WAY,` → `...{},` ...... KILLED (2 failed)
  *   `WebkitLineClamp: lines,` → `: 99,` ........ KILLED (1 failed)
  *
+ * A cancelled meeting's square is STAMPED (#1057), and the stamp must neither
+ * cover the QR or the disclaimer nor move them. It is out of flow inside the
+ * text block, which clips it; the last block below measures all of that at the
+ * caps, with a control that takes the containing block away and must overlap.
+ *
  * Same Chrome discovery and skip-locally / fail-in-CI rule as the other
  * browser-backed suites (`src/test/print-page-count.ts`).
  */
@@ -181,6 +186,60 @@ describe.skipIf(!chrome)(
 		it("with BOTH guards stripped the QR falls off the canvas (control)", () => {
 			const b = boxes(noGiveWay(noClamp(markup)), SELECTORS);
 			expect(inside(b["[data-flyer-qr]"] as Box)).toBe(false);
+		});
+	},
+);
+
+const overlaps = (a: Box, b: Box) =>
+	a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+const within = (inner: Box, outer: Box) =>
+	inner.top >= outer.top &&
+	inner.left >= outer.left &&
+	inner.bottom <= outer.bottom &&
+	inner.right <= outer.right;
+
+describe.skipIf(!chrome)(
+	"a cancelled square's stamp covers neither the QR nor the disclaimer (#1057)",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		const content = capped();
+		const live = renderToStaticMarkup(
+			<MeetingFlyerSquare content={content} clubName={prose(120)} />,
+		);
+		const stamped = renderToStaticMarkup(
+			<MeetingFlyerSquare content={content} clubName={prose(120)} cancelled />,
+		);
+		const STAMP = "[data-flyer-cancelled]";
+		const TEXT = "[data-flyer-text]";
+		const ALL = [...SELECTORS, STAMP, TEXT];
+
+		it("at the caps: the stamp is whole, inside the text block, clear of both", () => {
+			const b = boxes(stamped, ALL);
+			for (const s of SELECTORS) {
+				expect(inside(b[s] as Box), `${s} ${JSON.stringify(b[s])}`).toBe(true);
+			}
+			// Inside the box that clips it, so none of it is cut off either.
+			expect(
+				within(b[STAMP] as Box, b[TEXT] as Box),
+				`${JSON.stringify(b[STAMP])} in ${JSON.stringify(b[TEXT])}`,
+			).toBe(true);
+			for (const s of SELECTORS) {
+				expect(overlaps(b[STAMP] as Box, b[s] as Box), s).toBe(false);
+			}
+		});
+
+		it("the stamp moves nothing: the QR and the disclaimer sit where they do unstamped", () => {
+			const before = boxes(live, SELECTORS);
+			const after = boxes(stamped, SELECTORS);
+			for (const s of SELECTORS) expect(after[s], s).toEqual(before[s]);
+		});
+
+		it("without its containing block the stamp lands on the QR (control)", () => {
+			const stripped = stamped.replace("position:relative", "");
+			expect(stripped).not.toBe(stamped);
+			const b = boxes(stripped, ALL);
+			expect(overlaps(b[STAMP] as Box, b["[data-flyer-qr]"] as Box)).toBe(true);
 		});
 	},
 );
