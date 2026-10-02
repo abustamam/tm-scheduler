@@ -126,7 +126,15 @@ export function AttendanceGuestsGroup({
 					<Badge
 						key={g.guestId}
 						variant="secondary"
-						className="gap-1 py-1 pr-1 pl-2"
+						/* `max-w-full` (#1080 review): the badge is `w-fit shrink-0
+						 * whitespace-nowrap`, so without a ceiling it grows to its
+						 * content and, as one unwrappable item of the `flex-wrap` row,
+						 * overflows the attendance rail whole — measured at 436px in a
+						 * 290px rail with a 120-character home club, 399px for a long
+						 * name alone, and the card body grows a sideways scrollbar. The
+						 * ceiling is what lets the two `truncate` children below give
+						 * way; `attendance-guests-group-geometry.test.ts` measures it. */
+						className="max-w-full gap-1 py-1 pr-1 pl-2"
 					>
 						{guestEdit?.fields[g.guestId] ? (
 							/* The name IS the control (#727) — a VPM standing in front of a
@@ -155,17 +163,33 @@ export function AttendanceGuestsGroup({
 							 * phone mid-meeting, and a bare inline `<button>` is only as tall
 							 * as its `text-xs` line box (~16px). `min-h-` alone does nothing
 							 * to an inline box, so the display type is half the fix. It costs
-							 * no layout — the badge is already 24px tall for its sibling. */
+							 * no layout — the badge is already 24px tall for its sibling.
+							 *
+							 * `min-w-0` on the button and `truncate` on the visible span
+							 * (#1080 review): the badge is now capped at the rail's width,
+							 * so a name that does not fit must GIVE WAY rather than push the
+							 * toggle and the remove control past the badge's clipped edge
+							 * (measured: 28px and 44px over, unreachable). The span's
+							 * `truncate` alone is not enough — Chrome sizes a `<button>` to
+							 * its content whatever its child's overflow says, so without
+							 * `min-w-0` the button never shrinks and the same two controls
+							 * clip. The plain-text branch below needs only `truncate`. A
+							 * name only truncates once the caption beside it has given up
+							 * all of its own room (see the caption's `flex-1`). */
 							<button
 								type="button"
 								onClick={() => setEditingId(g.guestId)}
-								className="inline-flex min-h-6 items-center rounded-sm underline decoration-dotted underline-offset-2 hover:decoration-solid"
+								className="inline-flex min-h-6 min-w-0 items-center rounded-sm underline decoration-dotted underline-offset-2 hover:decoration-solid"
 							>
 								<span className="sr-only">Edit {g.name}'s details</span>
-								<span aria-hidden>{g.name}</span>
+								<span aria-hidden className="truncate">
+									{g.name}
+								</span>
 							</button>
 						) : (
-							g.name
+							<span className="truncate" title={g.name}>
+								{g.name}
+							</span>
 						)}
 						{g.caption ? (
 							/* The guest's kind caption (#1080) — "Guest speaker, Downtown
@@ -177,27 +201,33 @@ export function AttendanceGuestsGroup({
 							 * Visitor, and for a row from an offline snapshot saved before the
 							 * field existed, so both read exactly as before.
 							 *
-							 * BOUNDED. A home club runs to GUEST_TEXT_MAX (120) characters and
-							 * this badge is `whitespace-nowrap` by design, so an unbounded
-							 * caption would push the badge past the attendance rail — the
-							 * rail's version of the print-fit problem #1081 met. `max-w-48
-							 * truncate` caps it at 12rem with an ellipsis. `truncate` is what
-							 * makes the cap bite: it sets `overflow: hidden`, and a flex item's
-							 * `min-width: auto` resolves to 0 only when it is not
-							 * `overflow: visible`, so without it `max-w-48` on a flex child is
-							 * a box that grows past its own ceiling and satisfies every grep.
+							 * THE ITEM THAT GIVES WAY. A home club runs to GUEST_TEXT_MAX
+							 * (120) characters, this badge is `whitespace-nowrap` by design and
+							 * its width is capped at the rail's (`max-w-full` above), so
+							 * something inside has to yield, and it is this: `flex-1` is
+							 * `flex: 1 1 0%`, a basis of ZERO, so the caption contributes
+							 * nothing to the shrink phase and takes only what is left after
+							 * the name, the toggle and the remove control are content-sized —
+							 * 46px of a 797px caption on the 290px desktop rail with the
+							 * toggle present, 81px on a phone, the whole caption when it fits.
+							 * `truncate` ends it in an ellipsis; without it the text paints on
+							 * under the toggle (measured 622px of content in a 288px badge).
+							 * Not `shrink`-based: with a basis of `auto` the NAME shrinks in
+							 * proportion too, and measured 11px for a 72px name while this
+							 * caption kept 119. No `min-w-0`: `truncate` is `overflow: hidden`,
+							 * which already makes a flex item's `min-width: auto` zero, and
+							 * the class measured byte-identical with and without it. No
+							 * `max-w-48`: a cap on a `flex-1` child leaves dead space inside a
+							 * wide badge. The separator lives INSIDE the span so a caption cut
+							 * to nothing (a long name takes all the room) leaves no orphan dot.
 							 * `title` carries the full string for the hover. */
-							<>
-								<span aria-hidden className="text-muted-foreground">
-									·
-								</span>
-								<span
-									className="max-w-48 truncate font-normal text-muted-foreground"
-									title={g.caption}
-								>
-									{g.caption}
-								</span>
-							</>
+							<span
+								className="flex-1 truncate font-normal text-muted-foreground"
+								title={g.caption}
+							>
+								<span aria-hidden>· </span>
+								{g.caption}
+							</span>
 						) : null}
 						{onSetGuestMode ? (
 							<AttendanceModeToggle
