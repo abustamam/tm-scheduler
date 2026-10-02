@@ -173,6 +173,21 @@ describe.skipIf(!hasTestDb)("marketing blasts (#931)", () => {
 			expect(JSON.stringify(flyer)).not.toContain(ROOM);
 		});
 
+		// #1057: the route marks a cancelled meeting's flyer off this field, so
+		// it must be the row's own status, not a default.
+		it("carries the meeting's own status, cancelled included", async () => {
+			expect(
+				(await loadPublicFlyer(seed.clubId, seed.meetingId))?.meeting.status,
+			).toBe("scheduled");
+			await testDb
+				.update(meetings)
+				.set({ status: "cancelled" })
+				.where(eq(meetings.id, seed.meetingId));
+			const flyer = await loadPublicFlyer(seed.clubId, seed.meetingId);
+			expect(flyer?.meeting.id).toBe(seed.meetingId);
+			expect(flyer?.meeting.status).toBe("cancelled");
+		});
+
 		it("is null for an ARCHIVED club", async () => {
 			expect(await loadPublicFlyer(seed.clubId, seed.meetingId)).not.toBeNull();
 			await testDb

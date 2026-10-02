@@ -22,12 +22,8 @@ vi.mock("#/server/role-feedback", () => ({
 	getFeedbackTargetsPublic: vi.fn(),
 	leaveFeedback: vi.fn(),
 }));
-// #1057: when the targets reader answers null, the loader asks the public
-// meeting reader whether that is a CANCELLED meeting rather than a missing one.
-vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
 
 import { resolveClubOrRedirect } from "#/lib/club-route";
-import { getPublicMeetingByKey } from "#/server/meetings";
 import type { FeedbackTargetsPublic } from "#/server/role-feedback";
 import {
 	getFeedbackTargetsPublic,
@@ -127,10 +123,6 @@ afterEach(() => {
 describe("feedback route loader (#984)", () => {
 	it("404s when the server has no page for it (archived, unknown)", async () => {
 		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
-		// What the public reader really answers for an unknown or archived key.
-		vi.mocked(getPublicMeetingByKey).mockRejectedValue(
-			new Error("Meeting not found."),
-		);
 		await expect(runLoader()).rejects.toSatisfy(isNotFound);
 		expect(getFeedbackTargetsPublic).toHaveBeenCalledWith({
 			data: { clubId: CLUB_ID, meetingKey: "2026-10-03" },
@@ -139,13 +131,13 @@ describe("feedback route loader (#984)", () => {
 
 	// #1057, the maintainer's decision on #1084: a cancelled meeting is visible
 	// and says so, so its feedback link (the in-room strip's, a QR's) must not
-	// read "Meeting not found".
+	// read "Meeting not found". The targets reader itself says so, with the
+	// meeting's id and status only, so there is no second lookup to fail.
 	it("a CANCELLED meeting is not a 404: the loader says so, and passes no names", async () => {
-		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
-		vi.mocked(getPublicMeetingByKey).mockResolvedValue({
-			meeting: { id: MEETING_ID, clubId: CLUB_ID, status: "cancelled" },
-			// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
-		} as any);
+		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue({
+			meetingId: MEETING_ID,
+			status: "cancelled",
+		});
 		const result = await runLoader();
 		expect(result).toEqual({
 			cancelled: true,
@@ -153,33 +145,7 @@ describe("feedback route loader (#984)", () => {
 			clubNumber: "123456",
 			meetingId: MEETING_ID,
 		});
-		expect(getPublicMeetingByKey).toHaveBeenCalledWith({
-			data: { clubId: CLUB_ID, key: "2026-10-03" },
-		});
-	});
-
-	it("a meeting the targets reader refused that is NOT cancelled is still a 404", async () => {
-		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
-		vi.mocked(getPublicMeetingByKey).mockResolvedValue({
-			meeting: { id: MEETING_ID, clubId: CLUB_ID, status: "scheduled" },
-			// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
-		} as any);
-		await expect(runLoader()).rejects.toSatisfy(isNotFound);
-	});
-
-	it("another club's cancelled meeting is a 404, not this club's notice", async () => {
-		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
-		vi.mocked(getPublicMeetingByKey).mockResolvedValue({
-			meeting: { id: MEETING_ID, clubId: "other-club", status: "cancelled" },
-			// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
-		} as any);
-		await expect(runLoader()).rejects.toSatisfy(isNotFound);
-	});
-
-	it("a failed status lookup degrades to the 404 it was before, never a 500", async () => {
-		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
-		vi.mocked(getPublicMeetingByKey).mockRejectedValue(new Error("boom"));
-		await expect(runLoader()).rejects.toSatisfy(isNotFound);
+		expect(getFeedbackTargetsPublic).toHaveBeenCalledTimes(1);
 	});
 
 	it("passes the server's window state straight through", async () => {

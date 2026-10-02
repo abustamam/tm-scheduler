@@ -22,6 +22,7 @@
 // even NAME the field, comments included.
 
 import { z } from "zod";
+import type { meetingStatusEnum } from "#/db/schema";
 import { APP_LOCALE } from "#/lib/format";
 import { escapeHtml } from "#/lib/html-escape";
 
@@ -474,6 +475,10 @@ export function buildFlyerContent(
  * allowlist for the reason `IN_ROOM_MEETING_FIELDS` is one (#754): a column
  * added to `meetings` next year reaches no flyer until someone adds it here on
  * purpose.
+ *
+ * `status` is listed on purpose (#1057): a cancelled meeting's flyer is marked,
+ * and the mark is read off the SAME row the flyer is drawn from, so it can
+ * never disagree with it or fail open when a second lookup does.
  */
 export const FLYER_MEETING_FIELDS = [
 	"id",
@@ -485,19 +490,29 @@ export const FLYER_MEETING_FIELDS = [
 	"wordOfTheDay",
 	"meetingNumber",
 	"promoNote",
-] as const satisfies readonly (keyof PromoMeeting | "id")[];
+	"status",
+] as const satisfies readonly (keyof PublicFlyerMeeting)[];
 
 export type FlyerMeeting = PromoMeeting & { id: string };
 
+/** A meeting's lifecycle status, as the schema states it. */
+export type FlyerMeetingStatus = (typeof meetingStatusEnum.enumValues)[number];
+
+/** What the PUBLIC `/flyer` reader serves: a `FlyerMeeting` plus its status
+ *  (#1057). The Promote sheet's `FlyerMeeting`s carry no status. */
+export type PublicFlyerMeeting = FlyerMeeting & { status: FlyerMeetingStatus };
+
 /** `meeting` narrowed to `FLYER_MEETING_FIELDS`. */
-export function projectFlyerMeeting(meeting: FlyerMeeting): FlyerMeeting {
+export function projectFlyerMeeting(
+	meeting: PublicFlyerMeeting,
+): PublicFlyerMeeting {
 	const kept: Record<string, unknown> = {};
 	for (const field of FLYER_MEETING_FIELDS) {
 		if (Object.hasOwn(meeting, field)) {
 			kept[field] = (meeting as unknown as Record<string, unknown>)[field];
 		}
 	}
-	return kept as unknown as FlyerMeeting;
+	return kept as unknown as PublicFlyerMeeting;
 }
 
 function renderBullets(bullets: string[], values: PromoValues): string[] {

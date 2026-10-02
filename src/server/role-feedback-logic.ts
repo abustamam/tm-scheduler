@@ -216,6 +216,19 @@ export interface FeedbackTargetsPublic {
 	roleOptions: { roleDefinitionId: string; name: string }[];
 }
 
+/**
+ * What the public feedback reader answers for a CANCELLED meeting (#1057): the
+ * meeting's id and status and nothing else. A cancelled meeting is visible and
+ * says so (the maintainer's decision on #1084), so the page must tell it apart
+ * from a key that names nothing — from this one answer, off the same row, with
+ * no second lookup. No names, no window, no roles: a cancelled meeting takes no
+ * notes, so the page has nothing to offer.
+ */
+export interface FeedbackMeetingCancelled {
+	meetingId: string;
+	status: "cancelled";
+}
+
 /** One "At this meeting" row, with what the role picker needs (#1021). */
 export interface PublicFeedbackTarget extends FeedbackTarget {
 	recipientMemberId: string;
@@ -242,7 +255,8 @@ const serializeWindow = (
  * What the public feedback page shows: the meeting, its window, and who a note
  * can be left for. Archive-gated through `resolvePublicMeetingKey`, so an
  * archived club answers exactly like a key that never existed: `null`. A
- * cancelled meeting is `null` too — it has no feedback page.
+ * cancelled meeting answers `FeedbackMeetingCancelled` — its id and status
+ * only — so the page can say it is cancelled instead of "not found" (#1057).
  *
  * Exposes display names, role labels, member ids, an active flag and the
  * club's enabled role names, and NOTHING else: no contact, no attendance.
@@ -263,7 +277,7 @@ export async function loadFeedbackTargetsPublic(
 	clubId: string,
 	meetingKey: string,
 	now: Date = new Date(),
-): Promise<FeedbackTargetsPublic | null> {
+): Promise<FeedbackTargetsPublic | FeedbackMeetingCancelled | null> {
 	const meetingId = await resolvePublicMeetingKey(clubId, meetingKey);
 	if (!meetingId) return null;
 	const [row] = await db
@@ -280,7 +294,10 @@ export async function loadFeedbackTargetsPublic(
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	if (!row || row.status === "cancelled") return null;
+	if (!row) return null;
+	if (row.status === "cancelled") {
+		return { meetingId: row.id, status: "cancelled" };
+	}
 	const [targets, active, roleOptions] = await Promise.all([
 		loadResolvedTargets(db, meetingId),
 		db

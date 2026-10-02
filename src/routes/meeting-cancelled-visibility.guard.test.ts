@@ -2,14 +2,18 @@
 // link can land on (#1057; the maintainer's decision on #1084).
 //
 // Route wiring pins for the halves no behavioural test can reach: the present
-// and flyer routes have no route test that mounts them, the four personal duty
-// editors mount only under a router context with a mocked `#/db`, and the
-// agenda editor's copy is chosen inside a component tested through its props.
-// Each pin names an expression that is same-typed with a plausible wrong one
-// (a dropped `cancelled ?`, a check placed AFTER the identity gate), and silent
-// when wrong: the page renders, it just presents a cancelled meeting as live.
+// route has no route test that mounts it, the four personal duty editors mount
+// only under a router context with a mocked `#/db`, and the agenda editor's
+// copy is chosen inside a component tested through its props. Each pin names
+// an expression that is same-typed with a plausible wrong one (a dropped
+// `cancelled ?`, a check placed AFTER the identity gate), and silent when
+// wrong: the page renders, it just presents a cancelled meeting as live.
 //
-// COMMENT-BLIND (`readSource`): every assertion is "must BE present".
+// Two READERS, one per assertion class (`src/test/guard-source.ts`): "must BE
+// present" reads comment-blind (`readSource`), so a comment naming the
+// expression cannot satisfy it; "must be ABSENT" reads raw, so stripping can
+// never erase the offending call from the text searched.
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -17,6 +21,7 @@ import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
 const route = (name: string) => readSource(resolve(ROUTES, name));
+const rawRoute = (name: string) => readFileSync(resolve(ROUTES, name), "utf8");
 const flat = (src: string) => src.replace(/\s+/g, " ");
 
 describe("the main meeting page says cancelled to EVERYONE (#1057)", () => {
@@ -43,11 +48,23 @@ describe("officer artifacts mark a cancelled meeting (#1057)", () => {
 		});
 	}
 
-	it("the flyer reads it only when both readers named the SAME meeting", () => {
+	it("the flyer reads it off its OWN projected meeting", () => {
 		expect(flat(route("club.$clubId_.meeting.$meetingId.flyer.tsx"))).toContain(
-			'cancelled: detail?.meeting?.id === data.meeting.id && detail.meeting.status === "cancelled",',
+			"cancelled: isMeetingCancelled(meeting.status),",
 		);
 	});
+
+	// A second status lookup beside a page's own reader is what Codex found
+	// failing OPEN on the flyer: when it failed, a cancelled meeting printed as
+	// a live invitation. Each page now reads the status off its own payload.
+	for (const file of [
+		"club.$clubId_.meeting.$meetingId.flyer.tsx",
+		"club.$clubId_.meeting.$meetingId.feedback.tsx",
+	]) {
+		it(`${file} asks no second reader for the status`, () => {
+			expect(rawRoute(file)).not.toContain("getPublicMeetingByKey");
+		});
+	}
 
 	for (const file of [
 		"club.$clubId_.meeting.$meetingId.print.tsx",

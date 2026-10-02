@@ -13,7 +13,9 @@
 //
 // The loader's payload is narrowed to `FLYER_MEETING_FIELDS` before it is
 // dehydrated into the page (#754's lesson: what is SHIPPED, not only what is
-// painted). The #731/#754 guard runs this loader and sweeps this file.
+// painted). The #731/#754 guard runs this loader and sweeps this file. The
+// server fn's own response is narrowed at its seam (`loadPublicFlyer`), since
+// on a client-side navigation that response reaches the browser too.
 
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -32,13 +34,13 @@ import {
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	buildFlyerContent,
 	projectFlyerMeeting,
 	promoValues,
 } from "#/lib/promo-template";
-import { getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicFlyer } from "#/server/promo";
 
 type FlyerLayout = "letter" | "square";
@@ -54,21 +56,14 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 			const club = await resolveClubOrRedirect(params.clubId, location);
 			// Null for an unknown key or an archived club; a thrown "Meeting not
 			// found." is translated the same way every meeting sub-route does.
-			// #1057: the flyer's own payload carries no status, so the public
-			// meeting reader is asked for it in parallel — read for the boolean
-			// below and nothing else, so none of its payload is dehydrated here.
-			const [data, detail] = await Promise.all([
-				getPublicFlyer({
-					data: { clubId: club.id, key: params.meetingId },
-				}).catch((err) => {
-					if (isMeetingNotFoundError(err)) throw notFound();
-					throw err;
-				}),
-				getPublicMeetingByKey({
-					data: { clubId: club.id, key: params.meetingId },
-				}).catch(() => null),
-			]);
+			const data = await getPublicFlyer({
+				data: { clubId: club.id, key: params.meetingId },
+			}).catch((err) => {
+				if (isMeetingNotFoundError(err)) throw notFound();
+				throw err;
+			});
 			if (!data) throw notFound();
+			const meeting = projectFlyerMeeting(data.meeting);
 			return {
 				club: {
 					name: data.club.name,
@@ -76,13 +71,11 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 					timezone: data.club.timezone,
 				},
 				template: data.template,
-				meeting: projectFlyerMeeting(data.meeting),
+				meeting,
 				logoUrl: data.logoUrl,
-				// Only when both readers named the SAME meeting, so a key the two
-				// resolved differently can never mark the wrong flyer.
-				cancelled:
-					detail?.meeting?.id === data.meeting.id &&
-					detail.meeting.status === "cancelled",
+				// #1057: off the flyer's OWN row, carried through the allowlist, so
+				// there is no second lookup to fail open or to name another meeting.
+				cancelled: isMeetingCancelled(meeting.status),
 			};
 		},
 		component: FlyerPage,

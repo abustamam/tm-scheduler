@@ -23,7 +23,6 @@ import {
 	GENERAL_FEEDBACK_LABEL,
 	TABLE_TOPICS_SPEAKER_LABEL,
 } from "#/lib/role-feedback-input";
-import { getPublicMeetingByKey } from "#/server/meetings";
 import {
 	type FeedbackRoleChoice,
 	type FeedbackTargetsPublic,
@@ -41,38 +40,26 @@ export const Route = createFileRoute(
 )({
 	loader: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
-		// null for an archived club, an unknown key or a cancelled meeting — all
-		// the same not-found to a visitor.
-		// The reader answers null rather than throwing, but a "Meeting not
-		// found." is translated too, like every sibling sub-route (#877).
+		// null for an archived club or an unknown key — the same not-found to a
+		// visitor. The reader answers null rather than throwing, but a "Meeting
+		// not found." is translated too, like every sibling sub-route (#877).
 		const data = await getFeedbackTargetsPublic({
 			data: { clubId: club.id, meetingKey: params.meetingId },
 		}).catch((err) => {
 			if (isMeetingNotFoundError(err)) throw notFound();
 			throw err;
 		});
-		if (!data) {
-			// #1057: a cancelled meeting is VISIBLE and says so (the maintainer's
-			// decision on #1084), so it is not a not-found. The targets reader
-			// answers null for it as it does for an unknown key or an archived
-			// club, so the public meeting reader tells them apart — archive-gated
-			// the same way, and only ever read for its status here. Nothing it
-			// returns is passed to the page.
-			const detail = await getPublicMeetingByKey({
-				data: { clubId: club.id, key: params.meetingId },
-			}).catch(() => null);
-			if (
-				detail?.meeting?.clubId === club.id &&
-				detail.meeting.status === "cancelled"
-			) {
-				return {
-					cancelled: true as const,
-					clubName: club.name,
-					clubNumber: club.clubNumber,
-					meetingId: detail.meeting.id,
-				};
-			}
-			throw notFound();
+		if (!data) throw notFound();
+		// #1057: a cancelled meeting is VISIBLE and says so (the maintainer's
+		// decision on #1084), so it is not a not-found. The same reader says so,
+		// off the same row, with the meeting's id and status and nothing else.
+		if ("status" in data) {
+			return {
+				cancelled: true as const,
+				clubName: club.name,
+				clubNumber: club.clubNumber,
+				meetingId: data.meetingId,
+			};
 		}
 		// The server decided the state on ITS clock; the visitor's clock may be
 		// wrong, and must not choose between "not yet" and "closed".

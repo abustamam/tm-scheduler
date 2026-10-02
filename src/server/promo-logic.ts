@@ -17,6 +17,7 @@ import {
 	type PromoClub,
 	type PromoTemplate,
 	type PromoTemplateState,
+	type PublicFlyerMeeting,
 	resolvePromoTemplate,
 	resolvePromoTemplateState,
 } from "#/lib/promo-template";
@@ -225,7 +226,8 @@ export async function loadPromoContext(
 export interface PublicFlyer {
 	club: PromoClub;
 	template: PromoTemplate;
-	meeting: FlyerMeeting;
+	/** Carries the meeting's `status` (#1057), read off the same row. */
+	meeting: PublicFlyerMeeting;
 	logoUrl: string | null;
 }
 
@@ -234,8 +236,9 @@ export interface PublicFlyer {
  * (`resolvePublicMeetingKey` → `isReadableClub`; the `Public` in this name is
  * the convention every gated seam here follows)
  * and for a key naming no meeting of this club. A cancelled meeting is still
- * served, like every other meeting surface — the officer is the one who
- * decides not to hand it out.
+ * served, like every other meeting surface, and says so: its `status` comes off
+ * the SAME row as everything else here (#1057), so the route's "Cancelled" mark
+ * cannot fail open on a second lookup that failed or named another meeting.
  */
 export async function loadPublicFlyer(
 	clubId: string,
@@ -248,7 +251,7 @@ export async function loadPublicFlyer(
 	const club = await loadClub(clubId);
 	if (!club) return null;
 	const [row] = await db
-		.select(PROMO_COLUMNS)
+		.select({ ...PROMO_COLUMNS, status: meetings.status })
 		.from(meetings)
 		.where(and(eq(meetings.id, meetingId), eq(meetings.clubId, clubId)))
 		.limit(1);
@@ -257,7 +260,10 @@ export async function loadPublicFlyer(
 	return {
 		club: { name: club.name, slug: club.slug, timezone: club.timezone },
 		template: resolvePromoTemplate(club.promoTemplate),
-		meeting: await toFlyerMeeting(row, club.timezone),
+		meeting: {
+			...(await toFlyerMeeting(row, club.timezone)),
+			status: row.status,
+		},
 		logoUrl: clubLogoUrl(clubId, logoMeta?.updatedAt),
 	};
 }

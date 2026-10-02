@@ -7,6 +7,7 @@ import {
 	type DeleteFeedbackResult,
 	deleteMyFeedbackNote,
 	type FeedbackForUser,
+	type FeedbackMeetingCancelled,
 	type FeedbackTargetsPublic,
 	leaveFeedbackLogic,
 	loadFeedbackForUser,
@@ -19,6 +20,7 @@ import {
 export type {
 	DeleteFeedbackResult,
 	FeedbackForUser,
+	FeedbackMeetingCancelled,
 	FeedbackMeetingGroup,
 	FeedbackNote,
 	FeedbackRoleChoice,
@@ -39,12 +41,15 @@ const targetsInput = z.object({
  * The public feedback page's data (#984): the meeting, its window, and the
  * members a note may be left for. No session. Archive-gated inside
  * `loadFeedbackTargetsPublic` (via `resolvePublicMeetingKey`), which returns
- * null for an archived club, an unknown key or a cancelled meeting.
+ * null for an archived club or an unknown key, and only the meeting's id and
+ * status for a cancelled meeting (#1057).
  */
 export const getFeedbackTargetsPublic = createServerFn({ method: "GET" })
 	.validator((input: unknown) => targetsInput.parse(input))
 	.handler(
-		async ({ data }): Promise<FeedbackTargetsPublic | null> =>
+		async ({
+			data,
+		}): Promise<FeedbackTargetsPublic | FeedbackMeetingCancelled | null> =>
 			loadFeedbackTargetsPublic(data.clubId, data.meetingKey),
 	);
 
