@@ -300,9 +300,9 @@ function errMessage(err: unknown) {
 
 function MeetingView() {
 	// `meetingKeyParam` is the key the URL actually carries (a club-local date
-	// or the uuid); `urlKey` below is the canonical one the server resolved.
-	// `doCancel` compares the former to `meeting.id` to know whether the page
-	// is already on the uuid URL (#1057).
+	// or the uuid); `canonicalUrlKey` below is the one the server resolved, and
+	// `urlKey` the one this page links with. `doCancel` compares the first to
+	// `meeting.id` to know whether the page is already on the uuid URL (#1057).
 	const { clubId, meetingId: meetingKeyParam } = Route.useParams();
 	const { clubUuid, effectiveMemberId, authCtx, shell } =
 		Route.useRouteContext();
@@ -331,7 +331,7 @@ function MeetingView() {
 		minutesEmail,
 		meetingNumber,
 		nextMeetingAt,
-		urlKey,
+		urlKey: canonicalUrlKey,
 		geIntroducesFunctionaries,
 		template,
 		templateKey,
@@ -339,6 +339,17 @@ function MeetingView() {
 		digitalVoting,
 		clubDigitalVotingEnabled,
 	} = Route.useLoaderData();
+	// The key every link on this page is built from: Share, Present and the
+	// export menu, the ballot QR, the nudge drafts and the feedback link. The
+	// server's canonical key is a bare club-local date, and a date key SKIPS a
+	// cancelled meeting (`meeting-resolve-logic.ts`) — so on a cancelled meeting
+	// every one of those links resolved to nothing, or to the other meeting that
+	// day (#1057). The uuid is the one key that reaches a cancelled meeting.
+	// Derived HERE, under the name the call sites already use, so each of them
+	// follows with no edit of its own.
+	const urlKey = isMeetingCancelled(meeting.status)
+		? meeting.id
+		: canonicalUrlKey;
 	const router = useRouter();
 	const search = Route.useSearch();
 	const online = useOnlineStatus();

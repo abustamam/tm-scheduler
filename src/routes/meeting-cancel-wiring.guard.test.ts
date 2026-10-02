@@ -159,6 +159,35 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		).toContain("await router.invalidate();");
 	});
 
+	it("on a cancelled meeting every link is built from the uuid (review of #1084, C)", () => {
+		// The canonical key is a bare club-local date, and a date key skips a
+		// cancelled meeting — so Share, Present, export, the ballot QR, the nudge
+		// drafts and the feedback link all 404'd from the cancelled page.
+		const flat = src.replace(/\s+/g, " ");
+		expect(src).toContain("urlKey: canonicalUrlKey,");
+		expect(flat).toContain(
+			"const urlKey = isMeetingCancelled(meeting.status) ? meeting.id : canonicalUrlKey;",
+		);
+		// The derivation is the ONLY reader of the canonical key, so no call site
+		// can bypass it: the destructure binds it, the derivation reads it, and
+		// nothing else names it (comment-blind, so prose does not count).
+		expect(
+			src.split("canonicalUrlKey").length - 1,
+			"a link built from `canonicalUrlKey` directly skips the cancelled " +
+				"meeting's uuid and 404s on exactly the page that needs it.",
+		).toBe(2);
+		// …and the sites the review named still read the derived key.
+		for (const site of [
+			"meetingId={urlKey}",
+			"sharePath={`/club/${clubId}/meeting/${urlKey}`}",
+			"{ clubKey: clubId, meetingKey: urlKey }",
+			"/meeting/${urlKey}`;",
+			"meetingKey: urlKey,",
+		]) {
+			expect(src, site).toContain(site);
+		}
+	});
+
 	it("the in-room strip is withheld on a cancelled meeting", () => {
 		expect(
 			src,
