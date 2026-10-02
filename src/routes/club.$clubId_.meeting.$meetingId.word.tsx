@@ -34,6 +34,10 @@ import {
 	SANS,
 } from "#/components/agenda/print-theme";
 import { WordOfTheDayPoster } from "#/components/agenda/word-of-the-day-poster";
+import {
+	CancelledArtifactMarker,
+	CancelledWatermark,
+} from "#/components/club/cancelled-meeting-notice";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { clubLogoUrl } from "#/lib/club-logo-url";
@@ -71,6 +75,8 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/word")({
 		return {
 			...inRoomMeetingPayload(data),
 			logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
+			// #1057: a cancelled meeting's poster is marked, on screen and paper.
+			cancelled: data.meeting.status === "cancelled",
 		};
 	},
 	component: WordPoster,
@@ -97,7 +103,8 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/word")({
 
 function WordPoster() {
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
-	const { meeting, timezone, clubName, logoUrl } = Route.useLoaderData();
+	const { meeting, timezone, clubName, logoUrl, cancelled } =
+		Route.useLoaderData();
 
 	const word = meeting.wordOfTheDay;
 
@@ -134,6 +141,8 @@ function WordPoster() {
 					}
 				`}</style>
 				<div style={emptyWrapStyle}>
+					{/* #1057: "not set yet" is not the reason for a cancelled meeting. */}
+					{cancelled ? <CancelledArtifactMarker /> : null}
 					{/* The only content on the page, so it is the page's heading. */}
 					<h1 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>
 						No Word of the Day set for this meeting yet.
@@ -162,7 +171,12 @@ function WordPoster() {
 
 	return (
 		<div>
-			<PrintToolbar>
+			{/* #1057: marked on screen and on paper; the fixed watermark is never
+			    in the poster's flow, so its fit is untouched. */}
+			{cancelled ? <CancelledWatermark /> : null}
+			<PrintToolbar
+				leading={cancelled ? <CancelledArtifactMarker /> : undefined}
+			>
 				<PrintButton />
 			</PrintToolbar>
 			<style>{printPageCss("landscape")}</style>

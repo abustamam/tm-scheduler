@@ -174,16 +174,40 @@ describe("ballot route loader — digital voting switch (#770)", () => {
 	}
 });
 
+describe("ballot route loader — a cancelled meeting (#1057)", () => {
+	for (const status of ["cancelled", "scheduled"] as const) {
+		it(`passes cancelled=${status === "cancelled"} for a ${status} meeting`, async () => {
+			mockClub();
+			vi.mocked(getPublicMeetingByKey).mockResolvedValue({
+				meeting: { id: MEETING_ID, clubId: CLUB_ID, status },
+				digitalVoting: true,
+				// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
+			} as any);
+			await expect(
+				runLoader({
+					params: { clubId: "downtown", meetingId: "2026-01-01" },
+					location,
+				}),
+			).resolves.toMatchObject({ cancelled: status === "cancelled" });
+		});
+	}
+});
+
 /** Render the ballot PAGE (not just its loader) with a stubbed payload. */
-async function renderVotePage(digitalVoting: boolean) {
+async function renderVotePage(digitalVoting: boolean, cancelled = false) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		clubId: CLUB_ID,
 		clubName: "Downtown Toastmasters",
 		clubNumber: "123456",
 		meetingId: MEETING_ID,
 		digitalVoting,
+		cancelled,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
+	vi.spyOn(Route, "useParams").mockReturnValue({
+		clubId: "downtown",
+		meetingId: "2026-01-01",
+	} as never);
 	const Component = Route.options.component as () => React.ReactElement;
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const rootRoute = createRootRoute({
@@ -265,6 +289,39 @@ describe("ballot page — digital voting off (#770)", () => {
 			screen.queryByText("Digital voting is off for this meeting"),
 		).toBeNull();
 		expect(await screen.findByText("No vote is open right now")).toBeTruthy();
+	});
+});
+
+// #1057, the maintainer's decision on #1084: the printed ballot QR reaches a
+// cancelled meeting now, and must say so rather than offer a ballot.
+describe("ballot page — a cancelled meeting (#1057)", () => {
+	afterEach(() => {
+		cleanup();
+		localStorage.clear();
+		vi.restoreAllMocks();
+	});
+
+	it("says it is cancelled and mounts NO ballot, even with digital voting on", async () => {
+		vi.mocked(getBallot).mockResolvedValue(NOTHING_OPEN);
+		await renderVotePage(true, true);
+
+		const notice = screen.getByTestId("cancelled-meeting-notice");
+		expect(notice.textContent).toContain("This meeting is cancelled.");
+		expect(notice.textContent).toContain("There's no vote");
+		expect(notice.querySelector("a")?.getAttribute("href")).toBe(
+			`/club/downtown/meeting/${MEETING_ID}`,
+		);
+		// No ballot: it would show any category cancelling left open.
+		expect(getBallot).not.toHaveBeenCalled();
+		expect(screen.queryByText("No vote is open right now")).toBeNull();
+	});
+
+	it("takes precedence over the digital-voting-off notice", async () => {
+		await renderVotePage(false, true);
+		expect(screen.getByTestId("cancelled-meeting-notice")).toBeTruthy();
+		expect(
+			screen.queryByText("Digital voting is off for this meeting"),
+		).toBeNull();
 	});
 });
 

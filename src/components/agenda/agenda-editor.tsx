@@ -346,9 +346,15 @@ export function AgendaEditor({
 	return (
 		<div className="flex flex-col gap-6">
 			{!editable ? (
-				<p className="rounded-md border border-dashed p-3 text-muted-foreground text-sm">
-					This meeting's agenda is read-only now — it already happened, or was
-					cancelled.
+				<p
+					data-testid="agenda-read-only"
+					className="rounded-md border border-dashed p-3 text-muted-foreground text-sm"
+				>
+					{/* #1057: a cancelled meeting says so, not "already happened",
+					    which it did not. `draft.cancelled` is the server's answer. */}
+					{draft.cancelled === true
+						? "This meeting is cancelled, so its agenda is read-only."
+						: "This meeting's agenda is read-only now — it already happened."}
 				</p>
 			) : null}
 

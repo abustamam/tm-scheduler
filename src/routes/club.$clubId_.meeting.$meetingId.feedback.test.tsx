@@ -22,8 +22,12 @@ vi.mock("#/server/role-feedback", () => ({
 	getFeedbackTargetsPublic: vi.fn(),
 	leaveFeedback: vi.fn(),
 }));
+// #1057: when the targets reader answers null, the loader asks the public
+// meeting reader whether that is a CANCELLED meeting rather than a missing one.
+vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
 
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { getPublicMeetingByKey } from "#/server/meetings";
 import type { FeedbackTargetsPublic } from "#/server/role-feedback";
 import {
 	getFeedbackTargetsPublic,
@@ -121,12 +125,61 @@ afterEach(() => {
 });
 
 describe("feedback route loader (#984)", () => {
-	it("404s when the server has no page for it (archived, cancelled, unknown)", async () => {
+	it("404s when the server has no page for it (archived, unknown)", async () => {
 		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
+		// What the public reader really answers for an unknown or archived key.
+		vi.mocked(getPublicMeetingByKey).mockRejectedValue(
+			new Error("Meeting not found."),
+		);
 		await expect(runLoader()).rejects.toSatisfy(isNotFound);
 		expect(getFeedbackTargetsPublic).toHaveBeenCalledWith({
 			data: { clubId: CLUB_ID, meetingKey: "2026-10-03" },
 		});
+	});
+
+	// #1057, the maintainer's decision on #1084: a cancelled meeting is visible
+	// and says so, so its feedback link (the in-room strip's, a QR's) must not
+	// read "Meeting not found".
+	it("a CANCELLED meeting is not a 404: the loader says so, and passes no names", async () => {
+		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
+		vi.mocked(getPublicMeetingByKey).mockResolvedValue({
+			meeting: { id: MEETING_ID, clubId: CLUB_ID, status: "cancelled" },
+			// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
+		} as any);
+		const result = await runLoader();
+		expect(result).toEqual({
+			cancelled: true,
+			clubName: "Downtown Toastmasters",
+			clubNumber: "123456",
+			meetingId: MEETING_ID,
+		});
+		expect(getPublicMeetingByKey).toHaveBeenCalledWith({
+			data: { clubId: CLUB_ID, key: "2026-10-03" },
+		});
+	});
+
+	it("a meeting the targets reader refused that is NOT cancelled is still a 404", async () => {
+		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
+		vi.mocked(getPublicMeetingByKey).mockResolvedValue({
+			meeting: { id: MEETING_ID, clubId: CLUB_ID, status: "scheduled" },
+			// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
+		} as any);
+		await expect(runLoader()).rejects.toSatisfy(isNotFound);
+	});
+
+	it("another club's cancelled meeting is a 404, not this club's notice", async () => {
+		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
+		vi.mocked(getPublicMeetingByKey).mockResolvedValue({
+			meeting: { id: MEETING_ID, clubId: "other-club", status: "cancelled" },
+			// biome-ignore lint/suspicious/noExplicitAny: partial detail is enough
+		} as any);
+		await expect(runLoader()).rejects.toSatisfy(isNotFound);
+	});
+
+	it("a failed status lookup degrades to the 404 it was before, never a 500", async () => {
+		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
+		vi.mocked(getPublicMeetingByKey).mockRejectedValue(new Error("boom"));
+		await expect(runLoader()).rejects.toSatisfy(isNotFound);
 	});
 
 	it("passes the server's window state straight through", async () => {
@@ -195,6 +248,36 @@ async function renderPage(
 	render(<RouterProvider router={router} />);
 	await waitFor(() => expect(router.state.status).toBe("idle"));
 }
+
+describe("feedback page on a cancelled meeting (#1057)", () => {
+	it("says the meeting is cancelled, links to it by uuid, and lists nobody", async () => {
+		vi.spyOn(Route, "useLoaderData").mockReturnValue({
+			cancelled: true,
+			clubName: "Downtown Toastmasters",
+			clubNumber: "123456",
+			meetingId: MEETING_ID,
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+		} as any);
+		vi.spyOn(Route, "useParams").mockReturnValue(params as never);
+		const Component = Route.options.component as () => React.ReactElement;
+		const rootRoute = createRootRoute({ component: () => <Component /> });
+		const router = createRouter({
+			routeTree: rootRoute,
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		render(<RouterProvider router={router} />);
+		await waitFor(() => expect(router.state.status).toBe("idle"));
+
+		const notice = await screen.findByTestId("cancelled-meeting-notice");
+		expect(notice.textContent).toContain("This meeting is cancelled.");
+		expect(notice.querySelector("a")?.getAttribute("href")).toBe(
+			`/club/downtown/meeting/${MEETING_ID}`,
+		);
+		// No names, no form: nobody is written to on a cancelled meeting.
+		expect(screen.queryByRole("button", { name: /Pat Lee/ })).toBeNull();
+		expect(screen.queryByRole("textbox")).toBeNull();
+	});
+});
 
 describe("feedback page (#984)", () => {
 	it("lists each target as a card with name and role", async () => {

@@ -566,8 +566,10 @@ function MeetingView() {
 	const inRoom = isInRoom(search) && phase === "today" && !cancelled;
 	// Anonymous role feedback (#984): offered from the meeting's start until
 	// three days after its scheduled end, off the same frozen `now`. The server
-	// re-checks the window on every write, so this only decides the link.
-	const feedbackOpen = feedbackWindow(meeting, now).canWrite;
+	// re-checks the window on every write, so this only decides the link. Never
+	// on a cancelled meeting (#1057): `leaveFeedbackLogic` refuses every note on
+	// one, and the feedback page says it is cancelled rather than listing names.
+	const feedbackOpen = !cancelled && feedbackWindow(meeting, now).canWrite;
 	const holdsRole = myId !== null && slots.some((s) => s.assigneeId === myId);
 	// #731. Null unless the club set a join link AND it still normalizes to an
 	// http(s) URL — see the render site in the header for why it is re-checked

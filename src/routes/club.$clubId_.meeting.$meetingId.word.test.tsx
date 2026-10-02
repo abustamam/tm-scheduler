@@ -173,6 +173,34 @@ describe("Word of the Day poster route — no-word branch", () => {
 	});
 });
 
+// #1057, the maintainer's decision on #1084: an officer opening a cancelled
+// meeting's poster is told so on screen, and a printed one says so on paper.
+describe("Word of the Day poster route — a cancelled meeting", () => {
+	it("marks the poster on screen and on paper", async () => {
+		await renderRoute(Object.assign(loaderData(), { cancelled: true }));
+		expect(screen.getByTestId("cancelled-artifact-marker")).toBeTruthy();
+		const watermark = screen.getByTestId("cancelled-watermark");
+		expect(watermark.textContent).toBe("CANCELLED");
+		// Fixed, so it never enters the poster's flow or its fit.
+		expect(watermark.style.position).toBe("fixed");
+		// The poster itself is still there to read.
+		expect(screen.getByText("Ephemeral")).toBeTruthy();
+	});
+
+	it("says so on the no-word page too, rather than only 'not set yet'", async () => {
+		await renderRoute(
+			Object.assign(loaderData({ wordOfTheDay: null }), { cancelled: true }),
+		);
+		expect(screen.getByTestId("cancelled-artifact-marker")).toBeTruthy();
+	});
+
+	it("the control: a scheduled meeting's poster carries neither", async () => {
+		await renderRoute(Object.assign(loaderData(), { cancelled: false }));
+		expect(screen.queryByTestId("cancelled-artifact-marker")).toBeNull();
+		expect(screen.queryByTestId("cancelled-watermark")).toBeNull();
+	});
+});
+
 describe("Word of the Day poster route — poster branch", () => {
 	it("renders the poster with the meeting's word, definition, and example", async () => {
 		await renderRoute(loaderData());
@@ -312,6 +340,28 @@ describe("Word of the Day poster route — loader", () => {
 		expect(getPublicMeetingByKey).toHaveBeenCalledWith({
 			data: { clubId: CLUB_ID, key: "2026-07-31" },
 		});
+	});
+
+	it.each([
+		["cancelled", true],
+		["scheduled", false],
+	] as const)("passes cancelled=%s's flag (%s) for the page (#1057)", async (status, expected) => {
+		vi.mocked(resolveClubOrRedirect).mockResolvedValue({
+			id: CLUB_ID,
+			slug: "downtown",
+			// biome-ignore lint/suspicious/noExplicitAny: partial club is enough
+		} as any);
+		const data = loaderData();
+		vi.mocked(getPublicMeetingByKey).mockResolvedValue({
+			...data,
+			meeting: { ...data.meeting, status },
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn call signature
+		} as any);
+		const result = await runLoader({
+			params: { clubId: "downtown", meetingId: "2026-07-31" },
+			location,
+		});
+		expect(result.cancelled).toBe(expected);
 	});
 
 	// A meeting key that resolves under a different club must not render that

@@ -45,10 +45,12 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useCallback } from "react";
+import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-notice";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { PersonalThemeEditor } from "#/components/club/personal-meeting-editors";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { Button } from "#/components/ui/button";
+import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { getMeetingByKey, getPublicMeetingByKey } from "#/server/meetings";
@@ -109,6 +111,12 @@ function PersonalThemeRoute() {
 			search: { as: undefined },
 		});
 	}, [queryClient, clubUuid, clubId, meetingId, navigate]);
+
+	// #1057: a cancelled meeting's theme is not set from here. Read-only, and
+	// it says so, ahead of the identity gate.
+	if (isMeetingCancelled(meeting.status)) {
+		return <CancelledMeetingNotice clubId={clubId} meetingId={meeting.id} />;
+	}
 
 	if (!myId) {
 		return <NeedsIdentity onPick={promptIdentity} />;

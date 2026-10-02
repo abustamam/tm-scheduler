@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
 import { useNextMeetingRefresh } from "#/components/agenda/use-next-meeting-refresh";
+import { CancelledWatermark } from "#/components/club/cancelled-meeting-notice";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
@@ -51,6 +52,8 @@ export const Route = createFileRoute(
 		return {
 			...inRoomMeetingPayload(data),
 			logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
+			// #1057: a cancelled meeting's deck is marked across every slide.
+			cancelled: data.meeting.status === "cancelled",
 		};
 	},
 	component: PresentPage,
@@ -146,23 +149,28 @@ function PresentPage() {
 				geIntroducesFunctionaries: data.geIntroducesFunctionaries,
 				ballotUrl,
 			});
+	// The watermark is FIXED, so it sits over whichever slide is showing and
+	// the deck's own layout and fit are untouched (#1057).
 	return (
-		<MeetingPresent
-			deck={deck}
-			clubName={data.clubName}
-			// The real DB id, not the pretty URL key above — `getVoteParticipation`
-			// keys on it (#510), matching the Ballot Counter console's own query.
-			meetingId={data.meeting.id}
-			// Rendered inside the deck's top-right chrome instead of floating over
-			// the slide (#361); the offline banner still pins itself top-center.
-			offlineBadge={<OfflineBadge id={meetingId} />}
-			onExit={() =>
-				navigate({
-					to: "/club/$clubId/meeting/$meetingId",
-					params: { clubId, meetingId },
-				})
-			}
-		/>
+		<>
+			{data.cancelled ? <CancelledWatermark /> : null}
+			<MeetingPresent
+				deck={deck}
+				clubName={data.clubName}
+				// The real DB id, not the pretty URL key above — `getVoteParticipation`
+				// keys on it (#510), matching the Ballot Counter console's own query.
+				meetingId={data.meeting.id}
+				// Rendered inside the deck's top-right chrome instead of floating over
+				// the slide (#361); the offline banner still pins itself top-center.
+				offlineBadge={<OfflineBadge id={meetingId} />}
+				onExit={() =>
+					navigate({
+						to: "/club/$clubId/meeting/$meetingId",
+						params: { clubId, meetingId },
+					})
+				}
+			/>
+		</>
 	);
 }
 

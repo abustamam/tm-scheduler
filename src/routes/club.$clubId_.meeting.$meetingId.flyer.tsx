@@ -25,6 +25,10 @@ import {
 	PrintToolbar,
 } from "#/components/agenda/print-theme";
 import { flyerTabStyle } from "#/components/agenda/print-toolbar-styles";
+import {
+	CancelledArtifactMarker,
+	CancelledWatermark,
+} from "#/components/club/cancelled-meeting-notice";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { resolveClubOrRedirect } from "#/lib/club-route";
@@ -34,6 +38,7 @@ import {
 	projectFlyerMeeting,
 	promoValues,
 } from "#/lib/promo-template";
+import { getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicFlyer } from "#/server/promo";
 
 type FlyerLayout = "letter" | "square";
@@ -49,12 +54,20 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 			const club = await resolveClubOrRedirect(params.clubId, location);
 			// Null for an unknown key or an archived club; a thrown "Meeting not
 			// found." is translated the same way every meeting sub-route does.
-			const data = await getPublicFlyer({
-				data: { clubId: club.id, key: params.meetingId },
-			}).catch((err) => {
-				if (isMeetingNotFoundError(err)) throw notFound();
-				throw err;
-			});
+			// #1057: the flyer's own payload carries no status, so the public
+			// meeting reader is asked for it in parallel — read for the boolean
+			// below and nothing else, so none of its payload is dehydrated here.
+			const [data, detail] = await Promise.all([
+				getPublicFlyer({
+					data: { clubId: club.id, key: params.meetingId },
+				}).catch((err) => {
+					if (isMeetingNotFoundError(err)) throw notFound();
+					throw err;
+				}),
+				getPublicMeetingByKey({
+					data: { clubId: club.id, key: params.meetingId },
+				}).catch(() => null),
+			]);
 			if (!data) throw notFound();
 			return {
 				club: {
@@ -65,6 +78,11 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 				template: data.template,
 				meeting: projectFlyerMeeting(data.meeting),
 				logoUrl: data.logoUrl,
+				// Only when both readers named the SAME meeting, so a key the two
+				// resolved differently can never mark the wrong flyer.
+				cancelled:
+					detail?.meeting?.id === data.meeting.id &&
+					detail.meeting.status === "cancelled",
 			};
 		},
 		component: FlyerPage,
@@ -85,7 +103,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 function FlyerPage() {
 	const { clubId, meetingId } = Route.useParams();
 	const { layout } = Route.useSearch();
-	const { club, template, meeting, logoUrl } = Route.useLoaderData();
+	const { club, template, meeting, logoUrl, cancelled } = Route.useLoaderData();
 	// The QR and the links need an absolute URL, and the server does not know
 	// the origin the visitor used — learned after mount, like `/print`.
 	const [origin, setOrigin] = useState("");
@@ -97,7 +115,13 @@ function FlyerPage() {
 
 	return (
 		<div>
-			<PrintToolbar>
+			{/* #1057: marked on screen and on the printed poster. The square
+			    image's PNG is rendered from its own element, so the download
+			    does not carry the watermark; the toolbar marker says so first. */}
+			{cancelled ? <CancelledWatermark /> : null}
+			<PrintToolbar
+				leading={cancelled ? <CancelledArtifactMarker /> : undefined}
+			>
 				<Link
 					to="/club/$clubId/meeting/$meetingId/flyer"
 					params={{ clubId, meetingId }}
