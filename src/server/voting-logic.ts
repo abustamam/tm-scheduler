@@ -1651,12 +1651,18 @@ function joinInTransaction(
 		// the link check, the cap count, the inserts — runs only after this
 		// resolves, so two concurrent joins for the same meeting can never both
 		// observe "room for one more" and both write.
-		await tx
-			.select({ id: meetings.id })
+		const [lockedMeeting] = await tx
+			.select({ id: meetings.id, status: meetings.status })
 			.from(meetings)
 			.where(eq(meetings.id, input.meetingId))
 			.limit(1)
 			.for("update");
+		// #1057, read off the row the lock above returned, and before anything
+		// is looked up or minted. This path is public and writes a visitor's
+		// name, and cancelling does not close vote sessions (a restore must lose
+		// nothing) — so without this a cancelled meeting with an open category
+		// kept minting `guests` rows for a ballot nobody can cast.
+		if (lockedMeeting) assertMeetingNotCancelled(lockedMeeting.status);
 		// #770, under the lock above and before any name is looked up or
 		// minted: a refused join must leave no `guests` row behind.
 		await assertDigitalVotingOnTx(tx, input.meetingId);

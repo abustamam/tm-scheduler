@@ -23,6 +23,7 @@ import {
 	guests,
 	meetingAttendancePlan,
 	meetings,
+	meetingVoteSessions,
 	members,
 	people,
 	roleDefinitions,
@@ -69,7 +70,7 @@ const { applyMemberRemove, applySetMemberStatus } = await import(
 const { SELF_SERVICE_RUNGS, clearPlanStatus, setPlanStatus } = await import(
 	"./attendance-plan-logic"
 );
-const { castVote } = await import("./voting-logic");
+const { castVote, joinBallotAsGuest } = await import("./voting-logic");
 const { loadPublicLineupBlastData } = await import("./lineup-blast-logic");
 const { loadMeetingSlots } = await import("./meeting-slots-logic");
 const { ensureScheduleToppedUp } = await import("./schedule-topup-logic");
@@ -834,6 +835,40 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			expect(
 				(await meetingEdits(club.clubId, club.meetingId)).map((e) => e.change),
 			).toEqual(["completed", "reopened"]);
+		});
+	});
+
+	// Review of #1084, finding E: `joinBallotAsGuest` is public and mints a
+	// `guests` row carrying a visitor's name. Cancelling does not close vote
+	// sessions (a restore must lose nothing), so the join stayed open.
+	describe("joining the ballot as a guest on a cancelled meeting", () => {
+		async function guestsNamed(name: string) {
+			return testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(and(eq(guests.clubId, club.clubId), eq(guests.name, name)));
+		}
+
+		it("is refused, and no guest row is minted, even with a vote open", async () => {
+			await testDb
+				.insert(meetingVoteSessions)
+				.values({ meetingId: club.meetingId, category: "best_speaker" });
+			await applyCancelMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+			await expect(
+				joinBallotAsGuest({ meetingId: club.meetingId, name: "Walk-in Wendy" }),
+			).rejects.toThrow(MEETING_CANCELLED_MESSAGE);
+			expect(await guestsNamed("Walk-in Wendy")).toEqual([]);
+		});
+
+		it("the control: on the scheduled meeting the same join mints the guest", async () => {
+			const joined = await joinBallotAsGuest({
+				meetingId: club.meetingId,
+				name: "Walk-in Wendy",
+			});
+			expect(await guestsNamed("Walk-in Wendy")).toEqual([{ id: joined.id }]);
 		});
 	});
 
