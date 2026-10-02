@@ -664,6 +664,12 @@ export async function applyMeetingDigitalVoting(input: {
 	actorMemberId: string | null;
 }): Promise<void> {
 	await db.transaction(async (tx) => {
+		// #1085. Under the meeting row's lock, the one `applyCancelMeeting` takes,
+		// so a cancel and this switch serialise and the status read here is the
+		// status the write lands on. No completed-lock check, as before: a
+		// completed meeting's switch stays writable, unchanged by #1085.
+		const locked = await lockMeetingForSlotEdit(tx, input.meetingId);
+		assertMeetingNotCancelled(locked.status);
 		const [meeting] = await tx
 			.update(meetings)
 			.set({ digitalVotingDisabled: input.disabled })

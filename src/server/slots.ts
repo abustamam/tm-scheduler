@@ -229,6 +229,12 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 		const membership = await requireClubRole(currentUser.id, slot.clubId, [
 			"admin",
 		]);
+		// #1085. The page hides this on a cancelled meeting, and a stale tab or a
+		// direct call should not be able to edit a meeting nobody can see. AFTER
+		// the role gate, unlike the lock above (which predates it): a cancelled
+		// meeting is hidden from members, so a caller outside the club must be
+		// refused for who they are, not told the meeting is cancelled.
+		assertMeetingNotCancelled(slot.meetingStatus);
 
 		return db.transaction(async (tx) => {
 			// Conditional UPDATE: only flips 'confirmed' → 'claimed'.
