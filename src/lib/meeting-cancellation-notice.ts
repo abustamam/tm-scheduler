@@ -37,6 +37,16 @@ export const MEETING_RESTORE_PAST_MESSAGE =
 	"A meeting whose date has passed can't be restored.";
 export const MEETING_NOT_CANCELLED_MESSAGE = "This meeting isn't cancelled.";
 
+/**
+ * Reopen's refusal for anything that is not `completed` (#1057). Reopen sets
+ * `scheduled` unconditionally, so before this a cancelled meeting could be
+ * "reopened" around restore's day rule. Here rather than beside the lock copy
+ * in `meeting-lifecycle.ts` because cancellation is what made it reachable,
+ * and because the sentence's job is to point at Restore.
+ */
+export const MEETING_REOPEN_NOT_COMPLETED_MESSAGE =
+	"Only a completed meeting can be reopened. A cancelled meeting is put back with Restore.";
+
 /** True when the meeting is cancelled (skipped, assignments kept). */
 export function isMeetingCancelled(status: string): boolean {
 	return status === "cancelled";

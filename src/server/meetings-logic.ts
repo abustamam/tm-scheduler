@@ -12,11 +12,13 @@ import {
 } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
+	assertMeetingNotCancelled,
 	isMeetingCancelled,
 	MEETING_ALREADY_CANCELLED_MESSAGE,
 	MEETING_CANCEL_COMPLETED_MESSAGE,
 	MEETING_CANCEL_PAST_MESSAGE,
 	MEETING_NOT_CANCELLED_MESSAGE,
+	MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
 	MEETING_RESTORE_PAST_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
 import {
@@ -689,26 +691,33 @@ export async function applyMeetingDigitalVoting(input: {
  * past (in the club timezone) so an upcoming meeting can't be locked by
  * accident. Idempotent-ish: re-completing an already-completed meeting is a
  * no-op update. Speech-delivered derivation is unchanged (date-based, ADR-0009).
+ *
+ * Under `lockMeetingForSlotEdit`, and every decision is read off the locked row
+ * (#1057). Before cancellation was reachable this read the row outside any
+ * transaction and decided nothing from its status, which was harmless while
+ * `scheduled` and `completed` were the only two states. With `cancelled` in
+ * play that shape completed a cancelled meeting from a stale tab — and then
+ * `freezeMeetingNumber` stamped a number onto a meeting that never happened.
+ * So a cancelled meeting is refused FIRST, ahead of the date rule, with the
+ * sentence every other write on it says; Restore is the way back.
  */
 export async function applyCompleteMeeting(input: {
 	meetingId: string;
 	actorMemberId: string | null;
 }) {
-	const meeting = await db.query.meetings.findFirst({
-		where: eq(meetings.id, input.meetingId),
-	});
-	if (!meeting) throw new Error("Meeting not found.");
-	const club = await db.query.clubs.findFirst({
-		where: eq(clubs.id, meeting.clubId),
-	});
-	if (!club) throw new Error("Club not found.");
-	if (!meetingDateReached(meeting.scheduledAt, club.timezone)) {
-		throw new Error(
-			"You can only complete a meeting on or after its scheduled date.",
-		);
-	}
-
-	await db.transaction(async (tx) => {
+	const meeting = await db.transaction(async (tx) => {
+		const locked = await lockMeetingForSlotEdit(tx, input.meetingId);
+		const club = await tx.query.clubs.findFirst({
+			where: eq(clubs.id, locked.clubId),
+			columns: { timezone: true },
+		});
+		if (!club) throw new Error("Club not found.");
+		assertMeetingNotCancelled(locked.status);
+		if (!meetingDateReached(locked.scheduledAt, club.timezone)) {
+			throw new Error(
+				"You can only complete a meeting on or after its scheduled date.",
+			);
+		}
 		await tx
 			.update(meetings)
 			.set({ status: "completed" })
@@ -719,13 +728,14 @@ export async function applyCompleteMeeting(input: {
 		// `closeVote`, which asserts the lock this very statement is applying.
 		await closeAllVotesTx(tx, input.meetingId);
 		await logActivity(tx, {
-			clubId: meeting.clubId,
+			clubId: locked.clubId,
 			actorMemberId: input.actorMemberId,
 			action: "meeting_edit",
 			targetType: "meeting",
 			targetId: input.meetingId,
 			detail: { change: "completed" },
 		});
+		return locked;
 	});
 
 	// The meeting is history now, so its number stops being provisional and is
@@ -741,17 +751,23 @@ export async function applyCompleteMeeting(input: {
  * Reopen a completed meeting back to `scheduled` so an admin can amend it, then
  * complete it again (#150). No date guard — reopen is available any time,
  * admin-only.
+ *
+ * Under `lockMeetingForSlotEdit`, and refused unless the locked row is
+ * `completed` (#1057). Reopen sets `scheduled` whatever it finds, so without
+ * this it was a second way back from `cancelled` — one that skipped restore's
+ * own day rule, putting a past cancelled meeting back on the calendar and
+ * logging it as `reopened`. The sentence names Restore, because the officer who
+ * reaches it is almost always looking at a cancelled meeting.
  */
 export async function applyReopenMeeting(input: {
 	meetingId: string;
 	actorMemberId: string | null;
 }) {
-	const meeting = await db.query.meetings.findFirst({
-		where: eq(meetings.id, input.meetingId),
-	});
-	if (!meeting) throw new Error("Meeting not found.");
-
-	await db.transaction(async (tx) => {
+	return db.transaction(async (tx) => {
+		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+		if (!isMeetingLocked(meeting.status)) {
+			throw new Error(MEETING_REOPEN_NOT_COMPLETED_MESSAGE);
+		}
 		await tx
 			.update(meetings)
 			.set({ status: "scheduled" })
@@ -764,9 +780,8 @@ export async function applyReopenMeeting(input: {
 			targetId: input.meetingId,
 			detail: { change: "reopened" },
 		});
+		return { clubId: meeting.clubId };
 	});
-
-	return { clubId: meeting.clubId };
 }
 
 /**
@@ -775,9 +790,11 @@ export async function applyReopenMeeting(input: {
  * copyable notice instead of the app sending anything (ADR-0028).
  *
  * Under `lockMeetingForSlotEdit` — FOR NO KEY UPDATE on the meeting row, the
- * lock every slot-shape edit and the other status writers already take. Two
- * officers cancelling at once serialise on it, and the second re-reads
- * `cancelled` from the row the first committed. A member's claim does NOT take
+ * lock every slot-shape edit takes, and since #1057 every status writer too:
+ * restore beside this, and complete and reopen above. Two officers cancelling
+ * at once serialise on it, and the second re-reads `cancelled` from the row the
+ * first committed; a stale tab's Complete waits behind a cancel and then
+ * refuses it. A member's claim does NOT take
  * this lock (it holds the slot row, not the meeting), so it is refused by its
  * own statement instead: `claimSlotCore`'s UPDATE carries the meeting's status
  * in its WHERE, and a claim that committed before this did is kept and appears

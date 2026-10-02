@@ -15,7 +15,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/meeting-cancel.integration.test.ts
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -35,20 +35,28 @@ import {
 	MEETING_CANCEL_PAST_MESSAGE,
 	MEETING_CANCELLED_MESSAGE,
 	MEETING_NOT_CANCELLED_MESSAGE,
+	MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
 	MEETING_RESTORE_PAST_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { applyCancelMeeting, applyRestoreMeeting, loadCancelledMeetings } =
-	await import("./meetings-logic");
+const {
+	applyCancelMeeting,
+	applyCompleteMeeting,
+	applyReopenMeeting,
+	applyRestoreMeeting,
+	loadCancelledMeetings,
+} = await import("./meetings-logic");
 const { claimSlotCore, reassignSlotCore, releaseSlotCore } = await import(
 	"./slots-logic"
 );
@@ -665,6 +673,162 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			expect(
 				(await loadCancelledMeetings(club.clubId)).map((r) => r.id),
 			).toEqual([club.meetingId]);
+		});
+	});
+
+	// Review of #1084, finding A: the two status writers that predate
+	// cancellation decided nothing from the status they found. A stale tab's
+	// Complete closed out a cancelled meeting (and froze a number onto it), and
+	// Reopen put a past cancelled meeting back around restore's day rule.
+	describe("complete and reopen respect cancellation", () => {
+		async function meetingNumber(meetingId: string) {
+			const row = await testDb.query.meetings.findFirst({
+				where: eq(meetings.id, meetingId),
+				columns: { meetingNumber: true },
+			});
+			return row?.meetingNumber;
+		}
+
+		it("complete refuses today's cancelled meeting: it stays cancelled, unnumbered, with no completed row", async () => {
+			// Today, so the date rule would ADMIT it — the refusal must be the
+			// cancellation's and nothing else's.
+			await setScheduledAt(club.meetingId, new Date());
+			await applyCancelMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+			await expect(
+				applyCompleteMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				}),
+			).rejects.toThrow(MEETING_CANCELLED_MESSAGE);
+			expect(await meetingStatus(club.meetingId)).toBe("cancelled");
+			expect(await meetingNumber(club.meetingId)).toBeNull();
+			expect(
+				(await meetingEdits(club.clubId, club.meetingId)).map((e) => e.change),
+			).toEqual(["cancel"]);
+		});
+
+		it("reopen refuses a cancelled future meeting and points at Restore", async () => {
+			await applyCancelMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+			await expect(
+				applyReopenMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				}),
+			).rejects.toThrow(MEETING_REOPEN_NOT_COMPLETED_MESSAGE);
+			expect(MEETING_REOPEN_NOT_COMPLETED_MESSAGE).toMatch(/Restore/);
+			expect(await meetingStatus(club.meetingId)).toBe("cancelled");
+		});
+
+		it("reopen refuses a PAST cancelled meeting, so restore's day rule is not bypassed", async () => {
+			await applyCancelMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+			await setScheduledAt(club.meetingId, new Date(Date.now() - 3 * DAY));
+			await expect(
+				applyReopenMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				}),
+			).rejects.toThrow(MEETING_REOPEN_NOT_COMPLETED_MESSAGE);
+			expect(await meetingStatus(club.meetingId)).toBe("cancelled");
+			expect(
+				(await meetingEdits(club.clubId, club.meetingId)).map((e) => e.change),
+			).toEqual(["cancel"]);
+		});
+
+		it("reopen refuses a meeting that is merely scheduled, writing nothing", async () => {
+			await expect(
+				applyReopenMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				}),
+			).rejects.toThrow(MEETING_REOPEN_NOT_COMPLETED_MESSAGE);
+			expect(await meetingStatus(club.meetingId)).toBe("scheduled");
+			expect(await meetingEdits(club.clubId, club.meetingId)).toEqual([]);
+		});
+
+		it("a Complete racing a cancel waits on the meeting lock, then refuses the cancelled row", async () => {
+			// The reproduced bug, as an interleaving rather than a sequence: a
+			// cancel holding the meeting row with its status already written and
+			// not yet committed, and a stale tab's Complete arriving underneath it.
+			// A serial test cannot tell a locked read from an unlocked one — both
+			// see `cancelled` once the cancel has committed. Here the unlocked read
+			// sees `scheduled`, its UPDATE parks behind the row and then lands, and
+			// the meeting ends up `completed`.
+			await setScheduledAt(club.meetingId, new Date());
+			const cancel = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from meetings where id = ${club.meetingId} for no key update`,
+				);
+				await tx
+					.update(meetings)
+					.set({ status: "cancelled" })
+					.where(eq(meetings.id, club.meetingId));
+			});
+			const completing = applyCompleteMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			}).catch((e: unknown) => e);
+			await waitForLockWait('"meetings"', cancel.pid);
+			await cancel.commit();
+			const result = await completing;
+			expect(result).toBeInstanceOf(Error);
+			expect((result as Error).message).toBe(MEETING_CANCELLED_MESSAGE);
+			expect(await meetingStatus(club.meetingId)).toBe("cancelled");
+		});
+
+		it("a Reopen racing a cancel waits on the meeting lock, then refuses the cancelled row", async () => {
+			// A completed meeting that another officer reopens and cancels while
+			// this Reopen is in flight. Unlocked, this Reopen reads `completed`,
+			// passes its check, parks its UPDATE behind the row and then writes
+			// `scheduled` over the cancel — restore's day rule bypassed again.
+			await setScheduledAt(club.meetingId, new Date(Date.now() - DAY));
+			await setStatus(club.meetingId, "completed");
+			const cancel = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from meetings where id = ${club.meetingId} for no key update`,
+				);
+				await tx
+					.update(meetings)
+					.set({ status: "cancelled" })
+					.where(eq(meetings.id, club.meetingId));
+			});
+			const reopening = applyReopenMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			}).catch((e: unknown) => e);
+			await waitForLockWait('"meetings"', cancel.pid);
+			await cancel.commit();
+			const result = await reopening;
+			expect(result).toBeInstanceOf(Error);
+			expect((result as Error).message).toBe(
+				MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
+			);
+			expect(await meetingStatus(club.meetingId)).toBe("cancelled");
+		});
+
+		it("the control: complete then reopen still work on their normal states", async () => {
+			await setScheduledAt(club.meetingId, new Date(Date.now() - DAY));
+			await applyCompleteMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+			expect(await meetingStatus(club.meetingId)).toBe("completed");
+			await applyReopenMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+			expect(await meetingStatus(club.meetingId)).toBe("scheduled");
+			expect(
+				(await meetingEdits(club.clubId, club.meetingId)).map((e) => e.change),
+			).toEqual(["completed", "reopened"]);
 		});
 	});
 });
