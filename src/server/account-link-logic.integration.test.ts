@@ -501,6 +501,12 @@ describe.skipIf(!hasTestDb)(
 					.values({ name: "Second Holder", email })
 					.returning({ id: people.id });
 				otherId = row?.id ?? "";
+				// On a roster, so it counts as a holder (a leftover would not).
+				await tx.insert(members).values({
+					clubId: club.clubId,
+					personId: otherId,
+					name: "Second Holder",
+				});
 			});
 			await writer.commit();
 			personIds.push(otherId);

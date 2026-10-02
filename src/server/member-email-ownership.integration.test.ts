@@ -358,6 +358,45 @@ describe.skipIf(!hasTestDb)("member email ownership (#907)", () => {
 			}
 		});
 
+		it("a removed member's leftover Person does not lock them out when another club re-adds them", async () => {
+			// Alice is removed from club A; `applyMemberRemove` deletes her roster
+			// row and leaves her Person, still carrying alice@. Club B bulk-pastes
+			// her as a fresh Person. Her sign-in must bind club B's Person — the
+			// leftover is on no roster and nobody's account, so it vouches for
+			// nothing and is no ambiguity.
+			const { applyMemberRemove, applyBulkImport } = await import(
+				"./members-logic"
+			);
+			const alice = `alice-${randomUUID()}@test.example`;
+			const left = await seedMember({ email: alice, name: "Alice Left" });
+			orphanPersonIds.push(left.personId);
+			await applyMemberRemove({
+				actorMemberId: null,
+				clubId: club.clubId,
+				memberId: left.memberId,
+			});
+			const clubB = await seedClub();
+			extraClubs.push(clubB);
+			const pasted = await applyBulkImport({
+				actorMemberId: null,
+				clubId: clubB.clubId,
+				rows: [{ name: "Alice Again", email: alice, phone: "", office: "" }],
+			});
+			const [fresh] = await testDb
+				.select({ personId: members.personId })
+				.from(members)
+				.where(eq(members.id, pasted.insertedIds[0] ?? ""));
+			if (!fresh) throw new Error("bulk paste missing");
+			const userId = await seedUser(alice);
+
+			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([
+				fresh.personId,
+			]);
+			expect(await rosterConflictFor(left.personId, alice)).toBe(
+				"no_vouching_row",
+			);
+		});
+
 		it("does not bind a Person no club holds, whatever their address", async () => {
 			const addr = `orphan-${randomUUID()}@test.example`;
 			const personId = await seedPerson({ name: "Orphan", email: addr });

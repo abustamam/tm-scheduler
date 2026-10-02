@@ -194,12 +194,28 @@ describe.skipIf(!hasTestDb)("rosterConflictFor complements the bind", () => {
 			},
 		},
 		{
-			name: "another Person in NO club carries it",
-			expected: "shared_address",
+			// A leftover `applyMemberRemove` stripped of every membership: on no
+			// roster and nobody's account, so it vouches for nothing and must not
+			// lock the real member out (#907 review).
+			name: "another UNBOUND Person in NO club carries it",
+			expected: null,
 			build: async (personId, address) => {
 				await setEmail(personId, address);
 				await addMembership({ personId });
 				await newPerson(` ${address.toUpperCase()}`);
+			},
+		},
+		{
+			name: "another BOUND Person in NO club carries it",
+			expected: "shared_address",
+			build: async (personId, address) => {
+				await setEmail(personId, address);
+				await addMembership({ personId });
+				const other = await newPerson(address);
+				await testDb
+					.update(people)
+					.set({ userId: await seedUser(`bound2-${randomUUID()}@t.example`) })
+					.where(eq(people.id, other));
 			},
 		},
 	];

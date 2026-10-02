@@ -16,9 +16,11 @@ import {
 	countDistinct,
 	eq,
 	exists,
+	isNotNull,
 	isNull,
 	ne,
 	notExists,
+	or,
 	type SQL,
 	sql,
 } from "drizzle-orm";
@@ -61,6 +63,29 @@ const otherPeople = alias(people, "other_people");
  *  lose its qualifier and compare a column to itself (#802). */
 const holding = alias(members, "holding_member");
 const vouching = alias(members, "vouching_member");
+const otherHolding = alias(members, "other_holding_member");
+
+/**
+ * Does this Person COUNT as a holder of an address, for ambiguity? Only when it
+ * is somebody: bound to an account, or on at least one roster (#907 review).
+ * A leftover `applyMemberRemove` stripped of every membership is on no roster
+ * and nobody's account; it vouches for nothing, and counting it locked a
+ * removed-then-re-added member out of their own sign-in.
+ *
+ * `table` is `people` or an alias of it; the membership subquery is over its
+ * own alias, so it always renders qualified.
+ */
+function countsAsHolder(table: { id: AnyPgColumn; userId: AnyPgColumn }): SQL {
+	return or(
+		isNotNull(table.userId),
+		exists(
+			db
+				.select({ one: sql`1` })
+				.from(otherHolding)
+				.where(eq(otherHolding.personId, table.id)),
+		),
+	) as SQL;
+}
 
 /**
  * **The identity rule, as one SQL predicate** (#907, replacing #756's roster
@@ -69,8 +94,10 @@ const vouching = alias(members, "vouching_member");
  *
  *  1. **It is their address** — `people.email` normalises to `address`.
  *  2. **A club vouches** — the Person holds at least one membership.
- *  3. **The address is theirs alone** — no OTHER Person, bound or not, carries
- *     it.
+ *  3. **The address is theirs alone** — no OTHER Person carries it who is
+ *     somebody: bound to an account, or on at least one roster. A leftover with
+ *     neither (`applyMemberRemove` strips the roster row and keeps the Person)
+ *     vouches for nothing and must not lock the real member out.
  *
  * (`user_id IS NULL` is the fourth arm; it lives beside this in the bind's own
  * WHERE, because the explainer below answers a different question for a Person
@@ -109,7 +136,7 @@ function rosterPermitsBind(address: string): SQL {
 				.from(vouching)
 				.where(eq(vouching.personId, people.id)),
 		),
-		// 3. Nobody else carries the address.
+		// 3. Nobody else who counts carries the address.
 		notExists(
 			db
 				.select({ one: sql`1` })
@@ -118,6 +145,7 @@ function rosterPermitsBind(address: string): SQL {
 					and(
 						ne(otherPeople.id, people.id),
 						sql`${normalizedEmail(otherPeople.email)} = ${address}`,
+						countsAsHolder(otherPeople),
 					),
 				),
 		),
@@ -297,18 +325,25 @@ export async function rosterConflictFor(
 			and(
 				ne(people.id, personId),
 				sql`${normalizedEmail(people.email)} = ${norm}`,
+				countsAsHolder(people),
 			),
 		)
 		.limit(1);
 	return others.length > 0 ? "shared_address" : null;
 }
 
-/** The DISTINCT Persons whose own address is this one, linked or not. */
+/** The DISTINCT Persons whose own address is this one and who count as a
+ *  holder (`countsAsHolder`), linked or not. */
 async function peopleMatching(address: string): Promise<string[]> {
 	const rows = await db
 		.select({ id: people.id })
 		.from(people)
-		.where(sql`${normalizedEmail(people.email)} = ${address}`);
+		.where(
+			and(
+				sql`${normalizedEmail(people.email)} = ${address}`,
+				countsAsHolder(people),
+			),
+		);
 	return rows.map((r) => r.id);
 }
 
