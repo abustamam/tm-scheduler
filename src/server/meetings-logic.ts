@@ -10,8 +10,20 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
-import { zonedWallTimeToUtc } from "#/lib/datetime";
-import { isMeetingLocked, meetingDateReached } from "#/lib/meeting-lifecycle";
+import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
+import {
+	isMeetingCancelled,
+	MEETING_ALREADY_CANCELLED_MESSAGE,
+	MEETING_CANCEL_COMPLETED_MESSAGE,
+	MEETING_CANCEL_PAST_MESSAGE,
+	MEETING_NOT_CANCELLED_MESSAGE,
+	MEETING_RESTORE_PAST_MESSAGE,
+} from "#/lib/meeting-cancellation-notice";
+import {
+	isMeetingLocked,
+	meetingDatePassed,
+	meetingDateReached,
+} from "#/lib/meeting-lifecycle";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
 import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic";
@@ -28,6 +40,7 @@ import {
 	freezeMeetingNumber,
 	resolveMeetingNumber,
 } from "./meeting-number-logic";
+import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 import { loadPublicClubRoster } from "./members-logic";
 import { closeAllVotesTx } from "./voting-logic";
@@ -754,6 +767,150 @@ export async function applyReopenMeeting(input: {
 	});
 
 	return { clubId: meeting.clubId };
+}
+
+/**
+ * Cancel (skip) a meeting (#1057): `status = cancelled`, and every `role_slots`
+ * row left exactly as it is, so a restore loses nothing. Officers get a
+ * copyable notice instead of the app sending anything (ADR-0028).
+ *
+ * Under `lockMeetingForSlotEdit` — FOR NO KEY UPDATE on the meeting row, the
+ * lock every slot-shape edit and the other status writers already take. Two
+ * officers cancelling at once serialise on it, and the second re-reads
+ * `cancelled` from the row the first committed. A member's claim does NOT take
+ * this lock (it holds the slot row, not the meeting), so it is refused by its
+ * own statement instead: `claimSlotCore`'s UPDATE carries the meeting's status
+ * in its WHERE, and a claim that committed before this did is kept and appears
+ * in the notice.
+ *
+ * Refusals, in this order; the first that applies wins. A completed meeting is
+ * refused before its date is looked at, so a reopen-then-cancel is the path for
+ * one that was closed out by mistake. The club-local DAY is the unit: today's
+ * meeting can be cancelled, yesterday's cannot — the same `meetingDatePassed`
+ * the agenda freeze reads.
+ */
+export async function applyCancelMeeting(input: {
+	meetingId: string;
+	actorMemberId: string | null;
+}) {
+	return db.transaction(async (tx) => {
+		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+		const club = await tx.query.clubs.findFirst({
+			where: eq(clubs.id, meeting.clubId),
+			columns: { timezone: true },
+		});
+		if (!club) throw new Error("Club not found.");
+		if (isMeetingLocked(meeting.status)) {
+			throw new Error(MEETING_CANCEL_COMPLETED_MESSAGE);
+		}
+		if (meetingDatePassed(meeting.scheduledAt, club.timezone)) {
+			throw new Error(MEETING_CANCEL_PAST_MESSAGE);
+		}
+		if (isMeetingCancelled(meeting.status)) {
+			throw new Error(MEETING_ALREADY_CANCELLED_MESSAGE);
+		}
+		await tx
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, input.meetingId));
+		await logActivity(tx, {
+			clubId: meeting.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: { change: "cancel" },
+		});
+		return { clubId: meeting.clubId };
+	});
+}
+
+/**
+ * Put a cancelled meeting back on the calendar (#1057): `status = scheduled`,
+ * with the assignments exactly as they were when it was cancelled. Same lock
+ * as the cancel, same day rule: a cancelled meeting whose date has passed
+ * stays cancelled. Restore cannot collide with a later top-up — a cancelled
+ * row reserves its date (`schedule-topup-logic.ts`) — though the club may end
+ * up one meeting over keep-ahead, which is harmless and can itself be
+ * cancelled.
+ */
+export async function applyRestoreMeeting(input: {
+	meetingId: string;
+	actorMemberId: string | null;
+}) {
+	return db.transaction(async (tx) => {
+		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+		const club = await tx.query.clubs.findFirst({
+			where: eq(clubs.id, meeting.clubId),
+			columns: { timezone: true },
+		});
+		if (!club) throw new Error("Club not found.");
+		if (meetingDatePassed(meeting.scheduledAt, club.timezone)) {
+			throw new Error(MEETING_RESTORE_PAST_MESSAGE);
+		}
+		if (!isMeetingCancelled(meeting.status)) {
+			throw new Error(MEETING_NOT_CANCELLED_MESSAGE);
+		}
+		await tx
+			.update(meetings)
+			.set({ status: "scheduled" })
+			.where(eq(meetings.id, input.meetingId));
+		await logActivity(tx, {
+			clubId: meeting.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: { change: "restore" },
+		});
+		return { clubId: meeting.clubId };
+	});
+}
+
+/** A cancelled meeting an officer can still find from the schedule (#1057). */
+export interface CancelledMeetingRow {
+	id: string;
+	/** ISO instant. */
+	scheduledAt: string;
+	timezone: string;
+}
+
+/**
+ * The club's cancelled meetings from the start of the current club-local day
+ * onward, oldest first (#1057). Every other reader hides a cancelled meeting,
+ * and a bare-date URL skips it, so without this list an officer who cancelled
+ * one by mistake has no way back to it. Officer-only by its CALLER's gate
+ * (`listCancelledMeetings`); the member view and every other reader are
+ * unchanged. Today's cancelled meeting is included because it is still
+ * restorable — the same day rule `applyRestoreMeeting` applies.
+ */
+export async function loadCancelledMeetings(
+	clubId: string,
+	now: Date = new Date(),
+): Promise<CancelledMeetingRow[]> {
+	const club = await db.query.clubs.findFirst({
+		where: eq(clubs.id, clubId),
+		columns: { timezone: true },
+	});
+	const timezone = club?.timezone ?? "UTC";
+	const today = utcToZonedWallTime(now, timezone).slice(0, 10);
+	const startOfToday = zonedWallTimeToUtc(`${today}T00:00`, timezone);
+	const rows = await db
+		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				eq(meetings.status, "cancelled"),
+				gte(meetings.scheduledAt, startOfToday),
+			),
+		)
+		.orderBy(asc(meetings.scheduledAt));
+	return rows.map((r) => ({
+		id: r.id,
+		scheduledAt: r.scheduledAt.toISOString(),
+		timezone,
+	}));
 }
 
 /** Test seam for the meeting payload. `loadMeetingDetail` lives in the

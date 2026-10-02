@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import {
+	CalendarX,
 	CheckCircle2,
 	ClipboardList,
 	Loader2,
@@ -51,6 +52,16 @@ export type MeetingToolbarProps = {
 	onAddRole: () => void;
 	onComplete: () => void;
 	onReopen: () => void;
+	/** The meeting is cancelled (#1057): the officer edit group and Promote
+	 *  go, because every write they lead to is refused server-side; share
+	 *  and export stay. Restore lives in the route's banner, not here. */
+	cancelled?: boolean;
+	/** The route's answer to "may this meeting be cancelled now": an officer
+	 *  on a scheduled meeting that is not completed and whose club-local
+	 *  date has not passed. The server re-decides under the meeting lock. */
+	canCancel?: boolean;
+	/** Opens the route's confirm; the write happens there. */
+	onCancel?: () => void;
 };
 
 /**
@@ -80,12 +91,23 @@ export function MeetingToolbar({
 	onAddRole,
 	onComplete,
 	onReopen,
+	// Optional with defaults, unlike `wordOfTheDay` above, and the trade is
+	// named: a dropped prop here HIDES Cancel rather than showing a wrong
+	// state, and `meeting-cancel-wiring.guard.test.ts` pins the route's
+	// wiring of all three, which is the half a prop default cannot see.
+	cancelled = false,
+	canCancel = false,
+	onCancel,
 }: MeetingToolbarProps) {
 	// Spec D2 primary matrix: guests never get a primary; members get Present
 	// on meeting day; only officers get the completed-phase Minutes primary.
 	const presentIsPrimary = phase === "today" && (hasIdentity || canManage);
 	const minutesIsPrimary = showsMinutesPrimary(phase, canManage);
 	const [promoteOpen, setPromoteOpen] = useState(false);
+	// The officer edit group as a whole (#1057): nothing in it has a write the
+	// server would accept on a cancelled meeting, and a Promote draft for a
+	// meeting that is not happening is a flyer nobody should post.
+	const canEdit = canManage && !cancelled;
 	return (
 		<div className="flex flex-wrap items-center gap-2 pt-1">
 			{presentIsPrimary ? (
@@ -133,7 +155,7 @@ export function MeetingToolbar({
 			{/* Promote (#931): admin only — `canManage` is the effective-admin
 			    answer, the same rule `requireClubRole(…, ["admin"])` states on the
 			    server. Drafts only; nothing is sent from here. */}
-			{canManage ? (
+			{canEdit ? (
 				<Button
 					size="sm"
 					variant="outline"
@@ -143,7 +165,7 @@ export function MeetingToolbar({
 					Promote
 				</Button>
 			) : null}
-			{canManage && promoteOpen ? (
+			{canEdit && promoteOpen ? (
 				<Suspense fallback={null}>
 					<PromoteSheet
 						open={promoteOpen}
@@ -152,7 +174,7 @@ export function MeetingToolbar({
 					/>
 				</Suspense>
 			) : null}
-			{canManage && !locked && hasAddableRoles ? (
+			{canEdit && !locked && hasAddableRoles ? (
 				<Button size="sm" variant="outline" onClick={onAddRole}>
 					+ Add role
 				</Button>
@@ -178,7 +200,7 @@ export function MeetingToolbar({
 					Reopen meeting
 				</Button>
 			) : null}
-			{canManage && !locked && canComplete ? (
+			{canEdit && !locked && canComplete ? (
 				// `outline`, like every other button in this group: the phase primary
 				// is the ONLY filled control in the row (D2). Left at the default
 				// (filled) variant, an officer on meeting day saw TWO identically
@@ -198,6 +220,26 @@ export function MeetingToolbar({
 						<CheckCircle2 className="size-4" />
 					)}
 					Complete meeting
+				</Button>
+			) : null}
+			{canEdit && !locked && canCancel ? (
+				// Cancel (#1057): beside Complete, same weight, same busy signal.
+				// It opens the route's confirm rather than writing — the confirm
+				// states what cancelling keeps (every role), what it hides (the
+				// meeting, for members) and what it sends (nothing).
+				<Button
+					size="sm"
+					variant="outline"
+					onClick={onCancel}
+					disabled={lifecycleBusy}
+					aria-busy={lifecycleBusy}
+				>
+					{lifecycleBusy ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						<CalendarX className="size-4" />
+					)}
+					Cancel meeting
 				</Button>
 			) : null}
 		</div>

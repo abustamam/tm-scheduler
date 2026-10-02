@@ -191,6 +191,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		};
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
 			"assign_roles",
+			"cancel_meeting",
 			"edit_agenda",
 			"find_people",
 			"get_agenda",
@@ -198,6 +199,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_my_feedback",
 			"list_meetings",
 			"record_guest_book",
+			"restore_meeting",
 			"upsert_agendas",
 			"whoami",
 		]);
@@ -524,6 +526,13 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					{ op: "add", label: "Introductions", minutes: 15, at: "start" },
 				],
 			}),
+			// #1057. LAST, after `assign_roles` has put the contact-bearing guest on
+			// a slot: the cancel's result carries a drafted notice that names every
+			// role holder, so this is the one tool in the sweep whose text is BUILT
+			// from a guest row. It must name the guest and never the address. The
+			// restore follows so the meeting is back as the cases after this expect.
+			toolsCall("cancel_meeting", { meetingId: seed.meetingId }),
+			toolsCall("restore_meeting", { meetingId: seed.meetingId }),
 		];
 		for (const call of calls) {
 			const { raw } = await readToolResult(

@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, notFound, useRouter } from "@tanstack/react-router";
 import {
 	CalendarDays,
+	CalendarX,
 	ClipboardList,
 	Clock,
 	Eye,
@@ -9,6 +10,7 @@ import {
 	Loader2,
 	Lock,
 	MapPin,
+	RotateCcw,
 	Sparkles,
 	Video,
 	WifiOff,
@@ -29,6 +31,7 @@ import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { LineupBlastSheet } from "#/components/club/lineup-blast-sheet";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
+import { MeetingCancellationSheet } from "#/components/club/meeting-cancellation-sheet";
 import { MeetingFeedbackLink } from "#/components/club/meeting-feedback-link";
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
@@ -44,6 +47,7 @@ import {
 	Dialog,
 	DialogClose,
 	DialogContent,
+	DialogDescription,
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
@@ -74,6 +78,13 @@ import {
 } from "#/lib/format";
 import { buildHeldRoleLabels } from "#/lib/held-role-labels";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
+import {
+	cancellationNoticeHref,
+	holdersFromSlots,
+	isCancellationNoticeRequested,
+	isMeetingCancelled,
+	MEETING_CANCELLED_MESSAGE,
+} from "#/lib/meeting-cancellation-notice";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	isInRoom,
@@ -83,6 +94,7 @@ import {
 import {
 	isMeetingLocked,
 	isMeetingOver,
+	lockedViewer,
 	MEETING_LOCKED_MESSAGE,
 	meetingDatePassed,
 	meetingDateReached,
@@ -110,6 +122,7 @@ import { getClubLogoMeta } from "#/server/club-logo";
 import { getGuestPipeline } from "#/server/guest-pipeline";
 import { getLineupBlastAccess } from "#/server/lineup-blast";
 import {
+	cancelMeeting,
 	completeMeeting,
 	getMeetingByKey,
 	getPublicMeetingByKey,
@@ -117,6 +130,7 @@ import {
 	listPastMeetings,
 	listUpcomingMeetings,
 	reopenMeeting,
+	restoreMeeting,
 	setMeetingDigitalVoting,
 } from "#/server/meetings";
 import { listMembers } from "#/server/members";
@@ -285,7 +299,11 @@ function errMessage(err: unknown) {
 }
 
 function MeetingView() {
-	const { clubId } = Route.useParams();
+	// `meetingKeyParam` is the key the URL actually carries (a club-local date
+	// or the uuid); `urlKey` below is the canonical one the server resolved.
+	// `doCancel` compares the former to `meeting.id` to know whether the page
+	// is already on the uuid URL (#1057).
+	const { clubId, meetingId: meetingKeyParam } = Route.useParams();
 	const { clubUuid, effectiveMemberId, authCtx, shell } =
 		Route.useRouteContext();
 	const {
@@ -357,6 +375,11 @@ function MeetingView() {
 	// #320: an admin can preview the page as a non-admin member sees it.
 	const [previewAsMember, setPreviewAsMember] = useState(false);
 	const [lineupOpen, setLineupOpen] = useState(false);
+	// Cancel (#1057): the confirm before the write, and the notice sheet after
+	// it. Two flags because the sheet outlives the confirm — it opens on arrival
+	// too, when the URL carries `?notice=1` (see `doCancel`).
+	const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+	const [noticeOpen, setNoticeOpen] = useState(false);
 	// Ballot Counter console (#510 Task 10) — its own Table Topics edits, kept
 	// separate from `MeetingMinutes`'s offline queue: the console is reachable
 	// even when `minutes.visible` is false (a non-admin Vote Counter on a
@@ -506,6 +529,11 @@ function MeetingView() {
 		now,
 	});
 	const locked = isMeetingLocked(meeting.status);
+	// Cancelled (#1057): its own axis beside `locked`. A cancelled meeting is
+	// not completed and not over, but every member-facing write on it is
+	// refused server-side, so the page hides the claim, attendance and vote
+	// controls and shows the banner; the server refusal is the real bound.
+	const cancelled = isMeetingCancelled(meeting.status);
 	// The in-room strip (#913): the QR's flag AND meeting day, off the same
 	// frozen `phase` as everything else — so it cannot disappear mid-visit at
 	// club-local midnight. Any other day, `?room=1` renders the normal page.
@@ -541,6 +569,12 @@ function MeetingView() {
 	// #320: previewing-as-member drops management everywhere it gates admin UI.
 	const effectiveCanManage = canManage && !previewAsMember;
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone, now);
+	// Cancel is offered on a scheduled meeting that is not completed and whose
+	// club-local date has not passed (#1057) — today's included, which is the
+	// case the issue was filed from. Restore mirrors it on the cancelled side
+	// (`!datePassed`, in the banner). `applyCancelMeeting` re-decides both under
+	// the meeting lock; this only decides what to show.
+	const canCancel = !locked && !cancelled && !datePassed;
 	// Spec D2: plan mode is the EXISTING phase, reusing the route's frozen clock.
 	// Roll mode (`today` / `completed`) shipped in v1.20.0.0 — see `panelMode`
 	// below — so this predicate gates the PLAN half only, NOT whether the panel
@@ -569,8 +603,12 @@ function MeetingView() {
 			}),
 		enabled: !effectiveCanManage && !previewAsMember && (isSignedIn || isTmod),
 	});
+	// Never on a cancelled meeting (#1057): there is no lineup to blast, and the
+	// loader refuses the draft with `MEETING_CANCELLED_MESSAGE` anyway.
 	const canLineupBlast =
-		effectiveCanManage || (!previewAsMember && lineupAccess?.allowed === true);
+		!cancelled &&
+		(effectiveCanManage ||
+			(!previewAsMember && lineupAccess?.allowed === true));
 	const showPlanPanel = runsThisMeeting && phase === "upcoming";
 	// An officer already has `plan` on the payload; only the non-officer TMOD
 	// needs the extra round trip, and only while the panel is actually shown.
@@ -590,7 +628,10 @@ function MeetingView() {
 	// disagree about who may record attendance. The Toastmaster gap is
 	// deliberate and filed as a follow-up rather than solved here.
 	const showRollPanel = effectiveCanManage && minutes.canEdit;
-	const showPanel = panelMode === "plan" ? showPlanPanel : showRollPanel;
+	// Neither half on a cancelled meeting (#1057): the plan ladder's writes are
+	// refused, and there is no roll to call.
+	const showPanel =
+		!cancelled && (panelMode === "plan" ? showPlanPanel : showRollPanel);
 	// Recorded rows ONLY, projected through the SAME offline queue the writes go
 	// into (#176). Online this is just the loader's rows — the server stays the
 	// source of truth and the chip moves on the refetch `offlineMinutes.mutate`
@@ -634,7 +675,7 @@ function MeetingView() {
 	// One viewer for all audiences: an admin keeps editing a past-but-open meeting
 	// until Complete; a member/anon agenda freezes once the date passes; a locked
 	// meeting is read-only for everyone. (Pure — unit-tested in Task 1.)
-	const viewer = resolveMeetingViewer({
+	const resolvedViewer = resolveMeetingViewer({
 		status: meeting.status,
 		scheduledAt: meeting.scheduledAt,
 		timezone,
@@ -645,6 +686,25 @@ function MeetingView() {
 		isSignedIn,
 		now,
 	});
+	// A cancelled meeting is read-only for everyone (#1057), officers included:
+	// every claim, assignment and availability write the viewer could enable is
+	// refused server-side, so the capabilities go the way the lock takes them.
+	// `lockedViewer` keeps the identity, so "mine" still highlights.
+	const viewer = cancelled ? lockedViewer(resolvedViewer) : resolvedViewer;
+	// The notice's holders (#1057), from the SAME slot rows the agenda renders,
+	// in agenda order. An officer's rows carry each member holder's address
+	// (`holderEmail`, null on the public payload), a guest is named only.
+	const cancellationHolders = useMemo(() => holdersFromSlots(slots), [slots]);
+	// Arriving with `?notice=1` (#1057): `doCancel` moves a bare-date URL to the
+	// uuid URL after the write, and this is how the sheet opens on the far side.
+	// Officers only, on a meeting that is actually cancelled — a stale link on
+	// a restored meeting opens nothing.
+	const noticeRequested = isCancellationNoticeRequested(search);
+	useEffect(() => {
+		if (noticeRequested && cancelled && effectiveCanManage) {
+			setNoticeOpen(true);
+		}
+	}, [noticeRequested, cancelled, effectiveCanManage]);
 
 	// Roster for the assign picker: a manager already has it (with contact) from
 	// the loader; a non-admin TMOD (public or signed-in) fetches the plain member
@@ -1523,6 +1583,45 @@ function MeetingView() {
 		}
 	}
 
+	// Cancel (#1057), after the confirm. The officer stays on the page and the
+	// notice opens — by the uuid URL, because a bare-date key skips a cancelled
+	// meeting (`meeting-resolve-logic.ts`) and `router.invalidate()` on a date
+	// URL would 404 the page the officer is looking at. Same-URL case: the
+	// loader is re-run and the sheet opens in place.
+	async function doCancel() {
+		setLifecycleBusy(true);
+		try {
+			await cancelMeeting({ data: { meetingId: meeting.id } });
+			setCancelConfirmOpen(false);
+			toast.success("Meeting cancelled. Nothing has been sent.");
+			if (meetingKeyParam !== meeting.id) {
+				await router.navigate({
+					href: cancellationNoticeHref(clubId, meeting.id),
+				});
+			} else {
+				await router.invalidate();
+				setNoticeOpen(true);
+			}
+		} catch (err) {
+			showWriteError(err, "Something went wrong.");
+		} finally {
+			setLifecycleBusy(false);
+		}
+	}
+
+	async function doRestore() {
+		setLifecycleBusy(true);
+		try {
+			await restoreMeeting({ data: { meetingId: meeting.id } });
+			toast.success("Meeting restored. Everyone still has their role.");
+			await router.invalidate();
+		} catch (err) {
+			showWriteError(err, "Something went wrong.");
+		} finally {
+			setLifecycleBusy(false);
+		}
+	}
+
 	// Ballot Counter console handlers (#510 Task 10). These call the SAME
 	// server fns the minutes-edit UI uses (`addTableTopics` / `removeTableTopics`
 	// / `moveTableTopics` / `setMinutesAward` / `clearMinutesAward`) — there is
@@ -1675,7 +1774,57 @@ function MeetingView() {
 					connection.
 				</div>
 			) : null}
-			{locked ? (
+			{cancelled ? (
+				// FIRST in the chain (#1057): a cancelled meeting is never locked,
+				// but a past one would otherwise show members "already taken place",
+				// which is not what happened to it.
+				<div
+					data-testid="cancelled-banner"
+					className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium"
+				>
+					<span className="flex items-center gap-2">
+						<CalendarX
+							className="size-4 shrink-0 text-destructive"
+							aria-hidden
+						/>
+						<span>
+							<span className="font-semibold">Cancelled.</span>{" "}
+							{MEETING_CANCELLED_MESSAGE} Everyone keeps their role.
+						</span>
+					</span>
+					{/* Officers only: the notice to copy, and Restore while the date
+					    has not passed. A past cancelled meeting shows the banner alone;
+					    `applyRestoreMeeting` refuses it anyway. */}
+					{effectiveCanManage ? (
+						<span className="flex flex-wrap gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() => setNoticeOpen(true)}
+							>
+								<ClipboardList className="size-4" aria-hidden />
+								View notice
+							</Button>
+							{!datePassed ? (
+								<Button
+									size="sm"
+									variant="outline"
+									onClick={doRestore}
+									disabled={lifecycleBusy}
+									aria-busy={lifecycleBusy}
+								>
+									{lifecycleBusy ? (
+										<Loader2 className="size-4 animate-spin" />
+									) : (
+										<RotateCcw className="size-4" aria-hidden />
+									)}
+									Restore
+								</Button>
+							) : null}
+						</span>
+					) : null}
+				</div>
+			) : locked ? (
 				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
 					<Lock className="size-4" aria-hidden />
 					{MEETING_LOCKED_MESSAGE}
@@ -1818,7 +1967,59 @@ function MeetingView() {
 					onAddRole={() => setAddRoleOpen(true)}
 					onComplete={doComplete}
 					onReopen={doReopen}
+					cancelled={cancelled}
+					canCancel={canCancel}
+					onCancel={() => setCancelConfirmOpen(true)}
 				/>
+				{/* Cancel confirm (#1057). It states the three things an officer
+				    needs before saying yes: roles are kept, members stop seeing the
+				    meeting, nothing is sent. The write is `doCancel`. */}
+				<Dialog open={cancelConfirmOpen} onOpenChange={setCancelConfirmOpen}>
+					<DialogContent>
+						<DialogHeader>
+							<DialogTitle>Cancel this meeting?</DialogTitle>
+							<DialogDescription>
+								Everyone keeps their role, so restoring it later loses nothing.
+								Members stop seeing it on the schedule and the sign-up sheet.
+								Nothing is sent — you get a notice to copy and share.
+							</DialogDescription>
+						</DialogHeader>
+						<DialogFooter>
+							<DialogClose asChild>
+								<Button type="button" variant="outline">
+									Keep meeting
+								</Button>
+							</DialogClose>
+							<Button
+								type="button"
+								variant="destructive"
+								onClick={doCancel}
+								disabled={lifecycleBusy}
+								aria-busy={lifecycleBusy}
+							>
+								{lifecycleBusy ? (
+									<Loader2 className="size-4 animate-spin" />
+								) : (
+									<CalendarX className="size-4" aria-hidden />
+								)}
+								Cancel meeting
+							</Button>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
+				{/* The notice (#1057): officers, on a cancelled meeting. Mounted only
+				    while open so the sheet reads the slot rows as they are after the
+				    loader re-ran, not as they were when the confirm was clicked. */}
+				{effectiveCanManage && cancelled && noticeOpen ? (
+					<MeetingCancellationSheet
+						open={noticeOpen}
+						onOpenChange={setNoticeOpen}
+						clubName={clubName}
+						scheduledAt={meeting.scheduledAt}
+						timezone={timezone}
+						holders={cancellationHolders}
+					/>
+				) : null}
 				{canLineupBlast ? (
 					<div className="flex flex-wrap items-center gap-2 pt-1">
 						<Button
@@ -2016,7 +2217,10 @@ function MeetingView() {
 						</section>
 					) : null}
 
-					{isVoteCounter || effectiveCanManage ? (
+					{/* Never on a cancelled meeting (#1057): `castVote` refuses every
+					    ballot on it, and a console for a vote nobody can cast invites
+					    the Vote Counter to open one. */}
+					{(isVoteCounter || effectiveCanManage) && !cancelled ? (
 						<section className="space-y-4 rounded-xl border border-border bg-card p-4">
 							<div>
 								<h2 className="font-display font-semibold text-lg">

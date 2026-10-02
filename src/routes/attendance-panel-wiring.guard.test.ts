@@ -554,8 +554,12 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// Toastmaster has no rows to render and no write that would land. Rendering
 		// roll mode for them is a panel of buttons that only error.
 		const flat = src.replace(/\s+/g, " ");
+		// `!cancelled &&` since #1057: neither half of the rail renders on a
+		// cancelled meeting (the plan ladder's writes are refused, and there is
+		// no roll to call). The mode split inside the parentheses is what this
+		// case is about and is unchanged.
 		expect(flat).toContain(
-			'const showPanel = panelMode === "plan" ? showPlanPanel : showRollPanel;',
+			'const showPanel = !cancelled && (panelMode === "plan" ? showPlanPanel : showRollPanel);',
 		);
 		expect(flat).toContain(
 			"const showRollPanel = effectiveCanManage && minutes.canEdit;",
