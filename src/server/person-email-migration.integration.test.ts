@@ -47,41 +47,40 @@ function statements(): string[] {
 		.filter((s) => s.length > 0);
 }
 
-/** The hand-written data statements: both captures, then the backfill. */
+/** The hand-written data statements, in file order: the membership capture,
+ *  the two Person captures (fill, then clear), the backfill, then the clear. */
 function dataStatements(): string[] {
 	const all = statements();
-	const membersCapture = all.filter((s) =>
-		/^INSERT INTO "members_email_backup"/.test(s),
-	);
-	const capture = all.filter((s) =>
-		/^INSERT INTO "people_email_backup_2"/.test(s),
-	);
-	const backfill = all.filter((s) => /^UPDATE "people"/.test(s));
+	const data = all.filter((s) => /^(INSERT INTO|UPDATE) /.test(s));
 	// Zero statements would pass every assertion below for the wrong reason —
 	// the seeded rows would simply keep what they were given.
-	expect(membersCapture, "0109 must capture membership addresses").toHaveLength(
-		1,
-	);
-	expect(capture, "0109 must capture the Persons it changes").toHaveLength(1);
-	expect(backfill, "0109 must carry its backfill").toHaveLength(1);
-	return [
-		membersCapture[0] as string,
-		capture[0] as string,
-		backfill[0] as string,
-	];
+	expect(
+		data.map(kindOf),
+		"0109 must carry its captures, its backfill and its clear, in order",
+	).toEqual([
+		"capture members",
+		"capture people",
+		"capture people",
+		"backfill",
+		"clear",
+	]);
+	return data;
+}
+
+function kindOf(s: string): string {
+	if (/^LOCK TABLE "members" IN ACCESS EXCLUSIVE MODE;?$/.test(s))
+		return "lock";
+	if (/^CREATE TABLE/.test(s)) return "create";
+	if (/^INSERT INTO "members_email_backup"/.test(s)) return "capture members";
+	if (/^INSERT INTO "people_email_backup_2"/.test(s)) return "capture people";
+	if (/^UPDATE "people" p\s+SET "email" = NULL/.test(s)) return "clear";
+	if (/^UPDATE "people"/.test(s)) return "backfill";
+	if (/^ALTER TABLE "members" DROP COLUMN "email"/.test(s)) return "drop";
+	return `other: ${s.slice(0, 40)}`;
 }
 
 function fileOrder(): string[] {
-	return statements().map((s) => {
-		if (/^LOCK TABLE "members" IN ACCESS EXCLUSIVE MODE;?$/.test(s))
-			return "lock";
-		if (/^CREATE TABLE/.test(s)) return "create";
-		if (/^INSERT INTO "members_email_backup"/.test(s)) return "capture members";
-		if (/^INSERT INTO "people_email_backup_2"/.test(s)) return "capture people";
-		if (/^UPDATE "people"/.test(s)) return "backfill";
-		if (/^ALTER TABLE "members" DROP COLUMN "email"/.test(s)) return "drop";
-		return `other: ${s.slice(0, 40)}`;
-	});
+	return statements().map(kindOf);
 }
 
 const SCRATCH_DB = `tm_0109_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -254,7 +253,9 @@ describe.skipIf(!hasTestDb)("0109 moves the email onto the Person", () => {
 			"create",
 			"capture members",
 			"capture people",
+			"capture people",
 			"backfill",
+			"clear",
 			"drop",
 		]);
 	});
@@ -307,16 +308,49 @@ describe.skipIf(!hasTestDb)("0109 moves the email onto the Person", () => {
 		});
 	});
 
-	it("a multi-club Person whose memberships DISAGREE is unchanged", async () => {
+	it("an unbound Person whose memberships DISAGREE loses its unvouched address, backed up", async () => {
+		// `people.email` is the bind key after #907, and nothing ever vouched for
+		// this value: no single club address agrees with it.
 		await inRolledBackTx(async (tx) => {
-			const personId = await seedPerson(tx, "kept@test.example");
+			const personId = await seedPerson(tx, "stale@test.example");
 			await seedMembership(tx, personId, "one@test.example", "2023-01-01");
 			await seedMembership(tx, personId, "two@test.example", "2024-01-01");
 
 			await runMigration(tx);
 
-			expect(await personEmail(tx, personId)).toBe("kept@test.example");
-			expect(await backup(tx, personId)).toEqual([]);
+			expect(await personEmail(tx, personId)).toBeNull();
+			expect(await backup(tx, personId)).toEqual([
+				{ email: "stale@test.example" },
+			]);
+		});
+	});
+
+	it("an unbound Person with NO memberships loses its address, backed up", async () => {
+		await inRolledBackTx(async (tx) => {
+			const personId = await seedPerson(tx, "leftover@test.example");
+
+			await runMigration(tx);
+
+			expect(await personEmail(tx, personId)).toBeNull();
+			expect(await backup(tx, personId)).toEqual([
+				{ email: "leftover@test.example" },
+			]);
+		});
+	});
+
+	it("a BOUND Person keeps its address with no memberships, or disagreeing ones", async () => {
+		await inRolledBackTx(async (tx) => {
+			const lone = await seedPerson(tx, "lone@test.example", { bound: true });
+			const torn = await seedPerson(tx, "torn@test.example", { bound: true });
+			await seedMembership(tx, torn, "a@test.example", "2023-01-01");
+			await seedMembership(tx, torn, "b@test.example", "2024-01-01");
+
+			await runMigration(tx);
+
+			expect(await personEmail(tx, lone)).toBe("lone@test.example");
+			expect(await personEmail(tx, torn)).toBe("torn@test.example");
+			expect(await backup(tx, lone)).toEqual([]);
+			expect(await backup(tx, torn)).toEqual([]);
 		});
 	});
 
@@ -332,7 +366,7 @@ describe.skipIf(!hasTestDb)("0109 moves the email onto the Person", () => {
 		});
 	});
 
-	it("no address on any membership leaves the Person alone, never writing null", async () => {
+	it("no address on any membership clears an UNBOUND Person's unvouched one, backed up", async () => {
 		await inRolledBackTx(async (tx) => {
 			const personId = await seedPerson(tx, "mine@test.example");
 			await seedMembership(tx, personId, null, "2024-01-01");
@@ -340,7 +374,21 @@ describe.skipIf(!hasTestDb)("0109 moves the email onto the Person", () => {
 
 			await runMigration(tx);
 
-			expect(await personEmail(tx, personId)).toBe("mine@test.example");
+			expect(await personEmail(tx, personId)).toBeNull();
+			expect(await backup(tx, personId)).toEqual([
+				{ email: "mine@test.example" },
+			]);
+		});
+	});
+
+	it("an unbound Person with no address and none on file is not a change", async () => {
+		await inRolledBackTx(async (tx) => {
+			const personId = await seedPerson(tx, null);
+			await seedMembership(tx, personId, null, "2024-01-01");
+
+			await runMigration(tx);
+
+			expect(await personEmail(tx, personId)).toBeNull();
 			expect(await backup(tx, personId)).toEqual([]);
 		});
 	});
@@ -426,12 +474,17 @@ describe.skipIf(!hasTestDb)("0109 moves the email onto the Person", () => {
 			)) {
 				await tx.execute(sql.raw(create));
 			}
+			const cleared = await seedPerson(tx, "cleared@test.example");
 			for (const s of dataStatements()) await tx.execute(sql.raw(s));
 			for (const s of dataStatements()) await tx.execute(sql.raw(s));
 
 			expect(await personEmail(tx, personId)).toBe("second@test.example");
 			expect(await backup(tx, personId)).toEqual([
 				{ email: "first@test.example" },
+			]);
+			expect(await personEmail(tx, cleared)).toBeNull();
+			expect(await backup(tx, cleared)).toEqual([
+				{ email: "cleared@test.example" },
 			]);
 		});
 	});

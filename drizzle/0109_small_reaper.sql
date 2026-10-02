@@ -15,26 +15,31 @@
 --    `user_id IS NULL` is re-checked against the committed row, so it skips
 --    it (at worst leaving a harmless extra row in the backup).
 --
--- Then, before the DROP, each UNBOUND Person (`user_id IS NULL`) takes the one
--- address its memberships agree on:
+-- Then, before the DROP, each UNBOUND Person (`user_id IS NULL`) is given the
+-- one address its memberships agree on, or none:
 --   - the distinct normalised non-empty `members.email` values across ALL its
 --     memberships (null and blank are absent; normalised = whitespace-trimmed,
 --     lower-cased, the spelling `normalizedEmail` uses);
 --   - EXACTLY ONE distinct value → the Person takes it, as the NEWEST such
---     membership's trimmed text (`created_at DESC, id DESC`);
---   - zero → untouched; two or more → untouched (a superadmin reconciles them;
---     the PR lists them — production had none on 2026-09-25).
--- A BOUND Person keeps `people.email`: it is the address a magic link proved.
--- A Person is CHANGED only when its normalised address differs from the chosen
--- one, so a case- or whitespace-only difference writes nothing and backs up
+--     membership's trimmed text (`created_at DESC, id DESC`), written only when
+--     it differs (normalised) from what the Person had;
+--   - zero (no memberships, or none with an address) or two or more → the
+--     Person's address is CLEARED to null (#907 review). `people.email` is the
+--     key a sign-in binds on from here on, and under #756 nothing ever vouched
+--     for an unbound Person's copy: the typical case is an officer who cleared
+--     a wrong or shared address from `members.email` while the stale copy
+--     stayed on the Person. Keeping it would let that address bind.
+-- A BOUND Person keeps `people.email` in every case: it is the address a magic
+-- link proved. A case- or whitespace-only difference writes nothing and backs up
 -- nothing. Two Persons may end up with one normalised address; the bind then
 -- refuses both and `listDuplicatePeople` shows the pair for a manual merge.
 --
 -- TWO undo tables, both with no foreign keys:
 --   `members_email_backup`   — every non-blank membership address, as stored.
 --   `people_email_backup_2`  — the old value of every Person the backfill
---     rewrites (null included, for a fill). The capture and the backfill carry
---     the SAME predicate, so it holds exactly the rows the backfill changes.
+--     rewrites (null included, for a fill) or the clear empties. Each capture
+--     carries the SAME predicate as the write it precedes, so it holds exactly
+--     the rows those two writes change.
 -- Every data statement is idempotent. `src/server/person-email-migration.integration.test.ts`
 -- runs these exact statements, so a regenerated file that lost them fails there.
 -- `bun run db:generate` reproduces only the two CREATE TABLEs and the DROP.
@@ -87,6 +92,19 @@ WHERE p."user_id" IS NULL
 	AND lower(regexp_replace(coalesce(p."email", ''), '^[[:space:]]+|[[:space:]]+$', '', 'g'))
 		<> lower(chosen."email")
 ON CONFLICT ("person_id") DO NOTHING;--> statement-breakpoint
+-- 2b. Every UNBOUND Person the clear below is about to empty, before it does.
+INSERT INTO "people_email_backup_2" ("person_id", "email")
+SELECT p."id", p."email"
+FROM "people" p
+WHERE p."user_id" IS NULL
+	AND p."email" IS NOT NULL
+	AND (
+		SELECT count(DISTINCT lower(regexp_replace(m."email", '^[[:space:]]+|[[:space:]]+$', '', 'g')))
+		FROM "members" m
+		WHERE m."person_id" = p."id"
+			AND regexp_replace(coalesce(m."email", ''), '^[[:space:]]+|[[:space:]]+$', '', 'g') <> ''
+	) <> 1
+ON CONFLICT ("person_id") DO NOTHING;--> statement-breakpoint
 -- 3. Backfill, with the capture's predicate.
 UPDATE "people" p
 SET "email" = chosen."email"
@@ -107,4 +125,16 @@ WHERE chosen."person_id" = p."id"
 	AND p."user_id" IS NULL
 	AND lower(regexp_replace(coalesce(p."email", ''), '^[[:space:]]+|[[:space:]]+$', '', 'g'))
 		<> lower(chosen."email");--> statement-breakpoint
+-- 4. Clear, with 2b's predicate: an unbound Person with no single agreed
+--    membership address has nothing that vouches for the address it holds.
+UPDATE "people" p
+SET "email" = NULL
+WHERE p."user_id" IS NULL
+	AND p."email" IS NOT NULL
+	AND (
+		SELECT count(DISTINCT lower(regexp_replace(m."email", '^[[:space:]]+|[[:space:]]+$', '', 'g')))
+		FROM "members" m
+		WHERE m."person_id" = p."id"
+			AND regexp_replace(coalesce(m."email", ''), '^[[:space:]]+|[[:space:]]+$', '', 'g') <> ''
+	) <> 1;--> statement-breakpoint
 ALTER TABLE "members" DROP COLUMN "email";
