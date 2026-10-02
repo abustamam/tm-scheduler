@@ -49,11 +49,16 @@ const {
 	FEEDBACK_BAD_TEXT_MESSAGE,
 	FEEDBACK_GENERIC_ERROR_MESSAGE,
 	FEEDBACK_RATE_LIMIT_MESSAGE,
+	FEEDBACK_SENDER_CAP_MESSAGE,
 	GENERAL_FEEDBACK_LABEL,
 	publicFeedbackError,
 } = await import("#/server/role-feedback-logic");
 const { lockClubForWrite } = await import("#/server/club-write-lock");
-const { FEEDBACK_IP_LIMIT } = await import("#/server/feedback-rate-limit");
+const {
+	FEEDBACK_IP_LIMIT,
+	FEEDBACK_PER_ADDRESS_PER_MEETING_CAP,
+	feedbackSenderMeetingCap,
+} = await import("#/server/feedback-rate-limit");
 const { FEEDBACK_PER_MEETING_CAP, FEEDBACK_PER_RECIPIENT_CAP } = await import(
 	"#/lib/feedback-window"
 );
@@ -717,6 +722,104 @@ describe.skipIf(!hasTestDb)(
 				`other-${randomUUID()}`,
 			);
 			expect(await notesFor(s.meetingId)).toHaveLength(FEEDBACK_IP_LIMIT + 1);
+		});
+
+		it("caps one address at FEEDBACK_PER_ADDRESS_PER_MEETING_CAP notes per meeting; a second address still sends (#1038)", async () => {
+			const s = await liveMeeting();
+			const cap = FEEDBACK_PER_ADDRESS_PER_MEETING_CAP;
+			// The meeting cap must not be what refuses, and recipients enough
+			// that the per-recipient cap never fires first.
+			expect(cap + 1).toBeLessThan(FEEDBACK_PER_MEETING_CAP);
+			const recipients = Math.ceil((cap + 2) / FEEDBACK_PER_RECIPIENT_CAP);
+			const speakers: string[] = [];
+			for (let r = 0; r < recipients; r++) {
+				const memberId = await addMember(s.clubId, `Speaker ${r}`);
+				const [tt] = await testDb
+					.insert(tableTopicsSpeakers)
+					.values({ meetingId: s.meetingId, memberId, sortOrder: r })
+					.returning({ id: tableTopicsSpeakers.id });
+				speakers.push(tt?.id as string);
+			}
+			const note = (i: number) => ({
+				meetingId: s.meetingId,
+				target: {
+					kind: "tableTopics" as const,
+					id: speakers[i % speakers.length] as string,
+				},
+				wentWell: `n${i}`,
+			});
+
+			// The per-minute limiter reads the injected clock too, so step a
+			// minute after every FEEDBACK_IP_LIMIT notes, well inside the window.
+			const base = Date.now();
+			const ip = `203.0.113.7-${randomUUID()}`;
+			let minute = 0;
+			const at = () => new Date(base + minute * MIN);
+			for (let i = 0; i < cap; i++) {
+				if (i > 0 && i % FEEDBACK_IP_LIMIT === 0) {
+					// A per-minute refusal first: it stores nothing, so it must not
+					// spend a slot of the per-meeting budget either.
+					await expect(leaveFeedbackLogic(note(i), at, ip)).rejects.toThrow(
+						FEEDBACK_RATE_LIMIT_MESSAGE,
+					);
+					minute++;
+				}
+				await leaveFeedbackLogic(note(i), at, ip);
+			}
+			expect(await notesFor(s.meetingId)).toHaveLength(cap);
+
+			minute++;
+			await expect(leaveFeedbackLogic(note(cap), at, ip)).rejects.toThrow(
+				FEEDBACK_SENDER_CAP_MESSAGE,
+			);
+			expect(await notesFor(s.meetingId)).toHaveLength(cap);
+
+			const other = `other-${randomUUID()}`;
+			await leaveFeedbackLogic(note(cap + 1), at, other);
+			const rows = await notesFor(s.meetingId);
+			expect(rows).toHaveLength(cap + 1);
+			// Nothing stored holds either address.
+			const stored = JSON.stringify(rows);
+			expect(stored).not.toContain(ip);
+			expect(stored).not.toContain(other);
+		});
+
+		it("counts an upper-cased meeting id against the same per-meeting budget (#1038 review)", async () => {
+			const s = await liveMeeting();
+			const ip = `203.0.113.9-${randomUUID()}`;
+			const far = Date.now() + 10 * DAY;
+			// Spend all but one slot under the lowercase id, in memory.
+			for (let i = 0; i < FEEDBACK_PER_ADDRESS_PER_MEETING_CAP - 1; i++) {
+				expect(
+					feedbackSenderMeetingCap.take(ip, s.meetingId.toLowerCase(), far),
+				).toBe(true);
+			}
+			const upper = { ...timerNote(s), meetingId: s.meetingId.toUpperCase() };
+			await leaveFeedbackLogic(upper, undefined, ip);
+			await expect(leaveFeedbackLogic(upper, undefined, ip)).rejects.toThrow(
+				FEEDBACK_SENDER_CAP_MESSAGE,
+			);
+			expect(await notesFor(s.meetingId)).toHaveLength(1);
+		});
+
+		it("gives the per-meeting slot back when the cap under the lock refuses (#1038)", async () => {
+			const s = await liveMeeting();
+			const ip = `203.0.113.8-${randomUUID()}`;
+			// 25 at once at one recipient: all pass the pre-check, 5 are refused
+			// under the lock by the recipient cap and store nothing.
+			const results = await Promise.allSettled(
+				Array.from({ length: 25 }, (_, i) =>
+					leaveFeedbackLogic(timerNote(s, `note ${i}`), undefined, ip),
+				),
+			);
+			const stored = results.filter((r) => r.status === "fulfilled").length;
+			expect(stored).toBe(FEEDBACK_PER_RECIPIENT_CAP);
+			// So exactly the stored notes were spent: probe the process's own
+			// budget for the rest.
+			const far = Date.now() + 10 * DAY;
+			let left = 0;
+			while (feedbackSenderMeetingCap.take(ip, s.meetingId, far)) left++;
+			expect(left).toBe(FEEDBACK_PER_ADDRESS_PER_MEETING_CAP - stored);
 		});
 
 		it("does not count an attempt the pre-check refused against the address", async () => {
