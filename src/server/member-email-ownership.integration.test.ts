@@ -38,7 +38,7 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { applyMemberEdit } = await import("./members-logic");
+const { applyMemberEdit, editSchema } = await import("./members-logic");
 const { bindVerifiedPerson, linkPersonToUser, rosterConflictFor } =
 	await import("./account-link-logic");
 const { loadUserClubMemberships } = await import("./auth-context-logic");
@@ -265,6 +265,23 @@ describe.skipIf(!hasTestDb)("member email ownership (#907)", () => {
 			expect(await personEmail(multi.personId)).toBe(shared);
 		});
 
+		it("a BLANK email through the validator clears the address", async () => {
+			const { memberId, personId } = await seedMember({
+				email: `blank-${randomUUID()}@test.example`,
+			});
+
+			const parsed = editSchema.parse({
+				clubId: club.clubId,
+				memberId,
+				name: "Recon Person",
+				email: "   ",
+			});
+			expect(parsed.email).toBeNull();
+			await applyMemberEdit({ ...parsed, actorMemberId: null });
+
+			expect(await personEmail(personId)).toBeNull();
+		});
+
 		it("an OMITTED email leaves the Person's address alone", async () => {
 			const addr = `kept-${randomUUID()}@test.example`;
 			const { memberId, personId } = await seedMember({ email: addr });
@@ -273,6 +290,24 @@ describe.skipIf(!hasTestDb)("member email ownership (#907)", () => {
 
 			expect(res.emailRefused).toBeNull();
 			expect(await personEmail(personId)).toBe(addr);
+		});
+
+		it("repairs a stored address carrying a NBSP that JS trim hides (#907 review)", async () => {
+			// JS `.trim()` strips U+00A0 and SQL `[[:space:]]` does not, so a skip on
+			// NORMALISED equality reported success while the bind kept failing.
+			const clean = `nbsp-${randomUUID()}@test.example`;
+			const { memberId, personId } = await seedMember({
+				email: `${clean}\u00A0`,
+			});
+
+			const res = await edit(memberId, clean);
+
+			expect(res.emailRefused).toBeNull();
+			expect(await personEmail(personId)).toBe(clean);
+			const userId = await seedUser(clean);
+			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([
+				personId,
+			]);
 		});
 
 		it("trims the address before it is stored", async () => {

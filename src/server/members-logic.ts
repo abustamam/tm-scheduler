@@ -180,8 +180,12 @@ export const editSchema = z.object({
 	// The PERSON's address (#907, ADR-0029). Omitted means leave it alone; `null`
 	// (or a blank) clears it. Written only while nobody has signed in as this
 	// Person AND this club is their sole holder — otherwise the rest of the
-	// edit saves and the response names the refusal (`emailRefused`).
-	email: z.string().trim().email().nullable().optional(),
+	// edit saves and the response names the refusal (`emailRefused`). A blank
+	// is turned into `null` BEFORE `.email()`, which would otherwise reject it.
+	email: z.preprocess(
+		(v) => (typeof v === "string" && v.trim() === "" ? null : v),
+		z.string().trim().email().nullable().optional(),
+	),
 	// The PERSON's phone (#906), shared by every club that holds them. Omitted
 	// (`undefined`) means LEAVE IT ALONE — no write, no log entry — so a
 	// name-only save from a stale page cannot revert a number another club has
@@ -279,13 +283,14 @@ export async function applyMemberEdit(input: EditInput) {
 				.set({ phone })
 				.where(eq(people.id, current.personId));
 		}
-		// The email (#907): only when it actually CHANGES. A case- or
-		// whitespace-only difference is the same address, so it is left out of
-		// the write entirely — never refused and never logged.
-		if (
-			email !== undefined &&
-			normalizeEmail(email) !== normalizeEmail(currentPerson.email)
-		) {
+		// The email (#907): written whenever the stored STRING differs, so an
+		// officer can repair a stored address carrying a NBSP or U+FEFF — JS
+		// `.trim()` hides those and SQL `[[:space:]]` does not, so comparing
+		// normalised values reported success while the bind kept failing. A
+		// refusal is only REPORTED when the address actually differs
+		// (normalised): a case- or whitespace-only difference on a bound or
+		// shared Person is the same address, never refused and never logged.
+		if (email !== undefined && email !== currentPerson.email) {
 			const written = await tx
 				.update(people)
 				.set({ email })
@@ -299,7 +304,9 @@ export async function applyMemberEdit(input: EditInput) {
 				.returning({ id: people.id });
 			if (written.length > 0) {
 				emailChange = { before: currentPerson.email, after: email };
-			} else {
+			} else if (
+				normalizeEmail(email) !== normalizeEmail(currentPerson.email)
+			) {
 				emailRefused =
 					(await emailWriteRefusalFor(current.personId, input.clubId, tx)) ??
 					"multi_club";

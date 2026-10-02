@@ -305,6 +305,32 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(after?.email).toBeNull();
 	});
 
+	it("fills a BLANK (empty or whitespace) address, as the preview promises (#907 review)", async () => {
+		const clubId = await club();
+		for (const blank of ["", "   "]) {
+			const cid = runKey("PN-BLANK");
+			const addr = `${runKey("blank")}@x.io`;
+			await importPeopleAndMembers(clubId, [
+				row({ customerId: cid, name: "Blank" }),
+			]);
+			await testDb
+				.update(people)
+				.set({ email: blank })
+				.where(eq(people.customerId, cid));
+
+			const stats = await importPeopleAndMembers(clubId, [
+				row({ customerId: cid, name: "Blank", email: addr }),
+			]);
+
+			expect(stats.emailNotWritten, `blank ${JSON.stringify(blank)}`).toBe(0);
+			const [p] = await testDb
+				.select({ email: people.email })
+				.from(people)
+				.where(eq(people.customerId, cid));
+			expect(p?.email, `blank ${JSON.stringify(blank)}`).toBe(addr);
+		}
+	});
+
 	it("does not write a new address onto a BOUND or MULTI-CLUB Person, and reports the row (#907)", async () => {
 		const clubId = await club();
 		const other = await club();

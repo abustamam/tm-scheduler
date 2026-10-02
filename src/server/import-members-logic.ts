@@ -484,7 +484,7 @@ export async function importPeopleAndMembers(
 		// The address fill (#907, ADR-0029), AFTER the membership: a Person this
 		// club last released is held by nobody until the row above lands, and
 		// the statement's own predicate is what decides. A FILL (the address is
-		// still null), onto a Person nobody has bound, whom this club alone
+		// still blank), onto a Person nobody has bound, whom this club alone
 		// holds — all three in the WHERE, because the plan decided from a
 		// snapshot loaded at the start of the file. A raced refusal is counted
 		// like a planned one.
@@ -500,7 +500,10 @@ export async function importPeopleAndMembers(
 					.where(
 						and(
 							eq(people.id, personId),
-							isNull(people.email),
+							// BLANK, as the planner's `emailDecision` means it: null, empty
+							// or whitespace — `isNull` alone skipped a fill the preview
+							// promised for "" (#907 review).
+							sql`coalesce(${normalizedEmail(people.email)}, '') = ''`,
 							isNull(people.userId),
 							soleHoldingClub(clubId),
 						),
