@@ -18,17 +18,22 @@ import {
 	activityLog,
 	apiTokens,
 	clubs,
+	guests,
 	meetings,
 	members,
 	officerTerms,
 	people,
+	roleDefinitions,
 	roleSlots,
+	speeches,
 	user,
 } from "#/db/schema";
+import { MEETING_LOCKED_BLOCKING_MESSAGE } from "#/lib/assign-roles-plan";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	MEETING_ALREADY_CANCELLED_MESSAGE,
 	MEETING_CANCEL_COMPLETED_MESSAGE,
+	MEETING_CANCELLED_MESSAGE,
 	MEETING_NOT_CANCELLED_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
 import {
@@ -45,6 +50,7 @@ const { cancelMeetingTool } = await import("#/server/mcp/tools/cancel-meeting");
 const { restoreMeetingTool } = await import(
 	"#/server/mcp/tools/restore-meeting"
 );
+const { assignRolesTool } = await import("#/server/mcp/tools/assign-roles");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { McpError } = await import("#/server/mcp/errors");
 
@@ -281,5 +287,117 @@ describe.skipIf(!hasTestDb)("cancel_meeting / restore_meeting (#1057)", () => {
 
 	it("an unknown meeting is NOT_FOUND before any write", async () => {
 		await expectMcpError(cancel(adminToken, randomUUID()), "NOT_FOUND");
+	});
+
+	it("assign_roles on a cancelled meeting is BLOCKED for every kind, and changes nothing (review of #1084)", async () => {
+		// One assignment of EACH kind: a member onto the open Timer slot, a guest
+		// onto a second Timer slot, and a clear of a speaker slot the member holds
+		// with a linked speech — the clear being the write a restore could not
+		// undo, since it drops `speech_id`.
+		const [secondSlot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: seed.roleDefinitionId,
+				slotIndex: 1,
+				status: "open",
+			})
+			.returning({ id: roleSlots.id });
+		const [speakerRole] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+			})
+			.returning({ id: roleDefinitions.id });
+		const [speech] = await testDb
+			.insert(speeches)
+			.values({ personId: seed.personId, title: "Ice Breaker" })
+			.returning({ id: speeches.id });
+		if (!secondSlot || !speakerRole || !speech) {
+			throw new Error("fixture insert failed");
+		}
+		const [speakerSlot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: speakerRole.id,
+				status: "claimed",
+				assignedMemberId: seed.memberId,
+				speechId: speech.id,
+			})
+			.returning({ id: roleSlots.id });
+		const [guest] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Visiting Vera" })
+			.returning({ id: guests.id });
+		if (!speakerSlot || !guest) throw new Error("fixture insert failed");
+
+		const rows = () =>
+			testDb
+				.select({
+					id: roleSlots.id,
+					status: roleSlots.status,
+					assignedMemberId: roleSlots.assignedMemberId,
+					assignedGuestId: roleSlots.assignedGuestId,
+					speechId: roleSlots.speechId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.meetingId, seed.meetingId))
+				.orderBy(roleSlots.id);
+		const assignments = [
+			{ slotId: seed.slotId, memberId: seed.memberId },
+			{ slotId: secondSlot.id, guestId: guest.id },
+			{ slotId: speakerSlot.id, clear: true },
+		];
+
+		await cancel(adminToken);
+		const before = await rows();
+
+		const err = await assignRolesTool
+			.handler(
+				{ meetingId: seed.meetingId, assignments },
+				{ rawToken: adminToken },
+			)
+			.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(McpError);
+		const blocked = err as InstanceType<typeof McpError> & {
+			detail?: { blocking?: { code: string; message: string }[] };
+		};
+		expect(blocked.code).toBe("BLOCKED");
+		const items = blocked.detail?.blocking ?? [];
+		// The existing code, the cancelled sentence — and NOT the completed
+		// meeting's sentence, which would send the officer to Reopen.
+		expect(items).toContainEqual({
+			code: "MEETING_LOCKED",
+			message: MEETING_CANCELLED_MESSAGE,
+		});
+		expect(items.map((i) => i.message)).not.toContain(
+			MEETING_LOCKED_BLOCKING_MESSAGE,
+		);
+		// Every row, every column, including the speech the clear would drop.
+		expect(await rows()).toEqual(before);
+		expect(before.find((r) => r.id === speakerSlot.id)?.speechId).toBe(
+			speech.id,
+		);
+
+		// The control: the same batch is valid, and applies once restored — so
+		// the block above was the cancellation and nothing else about it.
+		await restore(adminToken);
+		const applied = (await assignRolesTool.handler(
+			{ meetingId: seed.meetingId, assignments },
+			{ rawToken: adminToken },
+		)) as { applied: boolean };
+		expect(applied.applied).toBe(true);
+		const after = await rows();
+		expect(after.find((r) => r.id === seed.slotId)?.assignedMemberId).toBe(
+			seed.memberId,
+		);
+		expect(after.find((r) => r.id === secondSlot.id)?.assignedGuestId).toBe(
+			guest.id,
+		);
+		expect(after.find((r) => r.id === speakerSlot.id)?.status).toBe("open");
 	});
 });

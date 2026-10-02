@@ -14,11 +14,13 @@ import {
 	HOME_CLUB_TOO_LONG_MESSAGE,
 	normalizeHomeClub,
 } from "#/lib/guest-profile";
+import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import { meetingNotCancelled } from "./slots-logic";
 
 // Either the pooled client or a caller's transaction, so this can run inside a
 // batch that is already holding row locks.
@@ -174,7 +176,15 @@ export async function applyAssignGuestToSlot(
 
 		// Mutual exclusivity: setting a guest clears the member assignee and any
 		// Person-owned speech (a guest speaker slot just shows the name — ADR-0009).
-		await tx
+		//
+		// The meeting's status rides in the statement (#1057, `meetingNotCancelled`
+		// from `slots-logic`, the same predicate the three slot writers there
+		// carry): a cancelled meeting keeps its assignments until restored, and
+		// this write drops a speech a restore could not bring back. The slot read
+		// above took no row lock, so a zero-row result is not proof of WHICH
+		// predicate failed; the status is re-read for the sentence, and a slot
+		// that vanished meanwhile gets the not-found answer it would have got.
+		const assigned = await tx
 			.update(roleSlots)
 			.set({
 				assignedGuestId: guestId,
@@ -183,7 +193,18 @@ export async function applyAssignGuestToSlot(
 				status: "claimed",
 				claimedAt: new Date(),
 			})
-			.where(eq(roleSlots.id, slot.id));
+			.where(and(eq(roleSlots.id, slot.id), meetingNotCancelled(tx)))
+			.returning({ id: roleSlots.id });
+		if (assigned.length === 0) {
+			const [status] = await tx
+				.select({ status: meetings.status })
+				.from(roleSlots)
+				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+				.where(eq(roleSlots.id, slot.id))
+				.limit(1);
+			if (status) assertMeetingNotCancelled(status.status);
+			throw new Error("Role not found.");
+		}
 
 		await logActivity(tx, {
 			clubId: slot.clubId,

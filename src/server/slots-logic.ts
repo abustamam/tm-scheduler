@@ -106,8 +106,12 @@ async function clubRoles(
  * locked row's newest version but re-runs the subquery under the statement's
  * original snapshot. Closing that window means waiting on the meeting row,
  * which is a new lock on every claim, and #1057 declined it.
+ *
+ * Exported for `applyAssignGuestToSlot` (`guests-logic.ts`), the one slot
+ * writer outside this module, so the four writes that can change who holds a
+ * role on a cancelled meeting carry the same predicate.
  */
-function meetingNotCancelled(conn: DbOrTx) {
+export function meetingNotCancelled(conn: DbOrTx) {
 	return exists(
 		conn
 			.select({ one: sql`1` })
@@ -2227,7 +2231,10 @@ export async function releaseSlotCore(
 	await assertClubNotArchived(slot.clubId, conn);
 	assertMeetingNotLocked(slot.meetingStatus);
 
-	await conn
+	// The meeting's status rides in the statement (#1057, `meetingNotCancelled`),
+	// as `reassignSlotCore`'s does: a clear drops `speech_id`, so a release on a
+	// cancelled meeting is the one write a restore could not undo.
+	const released = await conn
 		.update(roleSlots)
 		.set({
 			assignedMemberId: null,
@@ -2236,7 +2243,13 @@ export async function releaseSlotCore(
 			claimedAt: null,
 			speechId: null,
 		})
-		.where(eq(roleSlots.id, slot.id));
+		.where(and(eq(roleSlots.id, slot.id), meetingNotCancelled(conn)))
+		.returning({ id: roleSlots.id });
+	if (released.length === 0) {
+		// The slot row is locked FOR UPDATE by this transaction and exists, so
+		// the only predicate that can have failed is the meeting's.
+		throw new Error(MEETING_CANCELLED_MESSAGE);
+	}
 
 	await logActivity(conn, {
 		clubId: slot.clubId,

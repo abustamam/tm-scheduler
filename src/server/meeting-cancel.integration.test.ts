@@ -20,9 +20,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	clubMeetingRecurrence,
+	guests,
 	meetingAttendancePlan,
 	meetings,
+	roleDefinitions,
 	roleSlots,
+	speeches,
 } from "#/db/schema";
 import {
 	buildCancellationNotice,
@@ -46,7 +49,10 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { applyCancelMeeting, applyRestoreMeeting, loadCancelledMeetings } =
 	await import("./meetings-logic");
-const { claimSlotCore, reassignSlotCore } = await import("./slots-logic");
+const { claimSlotCore, reassignSlotCore, releaseSlotCore } = await import(
+	"./slots-logic"
+);
+const { applyAssignGuestToSlot } = await import("./guests-logic");
 const { SELF_SERVICE_RUNGS, clearPlanStatus, setPlanStatus } = await import(
 	"./attendance-plan-logic"
 );
@@ -432,6 +438,70 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 				MEETING_CANCELLED_MESSAGE,
 			);
 			expect((err as InstanceType<typeof McpError>).code).toBe("LOCKED");
+		});
+
+		it("refuses a release / clear, keeping the holder AND the speech (review of #1084)", async () => {
+			// A clear is the one write a restore could not undo: it drops
+			// `speech_id`, and re-claiming mints a new speech row (ADR-0009). A
+			// speaker slot held by the member with a linked speech, on the already
+			// cancelled meeting, so "kept" is a claim about both columns.
+			const [speakerRole] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: club.clubId,
+					name: "Speaker",
+					category: "speaker",
+					isSpeakerRole: true,
+				})
+				.returning({ id: roleDefinitions.id });
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({ personId: club.personId, title: "Ice Breaker" })
+				.returning({ id: speeches.id });
+			if (!speakerRole || !speech) throw new Error("fixture insert failed");
+			const [held] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: club.meetingId,
+					roleDefinitionId: speakerRole.id,
+					status: "claimed",
+					assignedMemberId: club.memberId,
+					speechId: speech.id,
+				})
+				.returning({ id: roleSlots.id });
+			if (!held) throw new Error("fixture insert failed");
+
+			await expect(
+				releaseSlotCore(testDb, {
+					slotId: held.id,
+					actorMemberId: club.adminMemberId,
+				}),
+			).rejects.toThrow(MEETING_CANCELLED_MESSAGE);
+			const row = (await slotRows(club.meetingId)).find(
+				(s) => s.id === held.id,
+			);
+			expect(row?.status).toBe("claimed");
+			expect(row?.assignedMemberId).toBe(club.memberId);
+			expect(row?.speechId).toBe(speech.id);
+		});
+
+		it("refuses a guest assignment, and the slot is unchanged (review of #1084)", async () => {
+			const [guest] = await testDb
+				.insert(guests)
+				.values({ clubId: club.clubId, name: "Visiting Vera" })
+				.returning({ id: guests.id });
+			if (!guest) throw new Error("fixture insert failed");
+			await expect(
+				applyAssignGuestToSlot({
+					slotId: club.slotId,
+					guestId: guest.id,
+					actorMemberId: club.adminMemberId,
+				}),
+			).rejects.toThrow(MEETING_CANCELLED_MESSAGE);
+			const [slot] = await slotRows(club.meetingId);
+			expect(slot?.status).toBe("open");
+			expect(slot?.assignedGuestId).toBeNull();
+			expect(slot?.assignedMemberId).toBeNull();
 		});
 
 		it("accepts the same claim again once the meeting is restored", async () => {

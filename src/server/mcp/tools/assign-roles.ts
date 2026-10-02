@@ -59,6 +59,10 @@ import {
 	planLine,
 } from "#/lib/assign-roles-plan";
 import { MAX_ROLE_ASSIGNMENTS } from "#/lib/mcp-limits";
+import {
+	isMeetingCancelled,
+	MEETING_CANCELLED_MESSAGE,
+} from "#/lib/meeting-cancellation-notice";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import { applyAssignGuestToSlot } from "#/server/guests-logic";
 import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
@@ -176,6 +180,23 @@ export const assignRolesTool: McpToolDefinition = {
 				blocking.push({
 					code: "MEETING_LOCKED",
 					message: MEETING_LOCKED_BLOCKING_MESSAGE,
+				});
+			}
+			// A cancelled meeting (#1057) keeps every assignment until it is
+			// restored, so all three kinds are refused here — under the SAME lock
+			// the cancel takes, which is what makes this the answer for the whole
+			// batch rather than a check a concurrent cancel can slip past. The three
+			// seams below refuse too, in their own statements, but a seam throws a
+			// plain Error that the tool layer reports as INTERNAL; this item is the
+			// explanation, the seams are the enforcement (the #809 split). The
+			// existing code with the cancelled sentence as its message, rather than
+			// a code of its own: the lineup loader already pairs `LOCKED` with this
+			// sentence, and a new blocking code means `errors.ts` and
+			// `blocking-codes.guard.test.ts` moving together for one caller.
+			if (isMeetingCancelled(meeting.status)) {
+				blocking.push({
+					code: "MEETING_LOCKED",
+					message: MEETING_CANCELLED_MESSAGE,
 				});
 			}
 
