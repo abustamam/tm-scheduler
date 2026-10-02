@@ -1,10 +1,11 @@
 /**
  * Guest conversion and the Person's address (#907, ADR-0029).
  *
- * A guest converted onto an EXISTING Person (matched by phone and name — a
- * Person matched by email already carries it) may fill that Person's address
- * only when it is blank, nobody has signed in as them, and the converting club
- * is their sole holder. Everything else leaves the address exactly as it was.
+ * A guest converted onto an EXISTING Person never writes that Person's
+ * address — not even a blank one. The guest book is an anonymous public form,
+ * and `people.email` is the key a sign-in binds on, so a fill would let anyone
+ * who knows a member's name and phone take their account. Only a FRESH Person
+ * created by the conversion carries the guest's address.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
@@ -109,14 +110,19 @@ describe.skipIf(!hasTestDb)(
 			return row?.email ?? null;
 		}
 
-		it("fills a blank address on an unbound Person this club alone holds", async () => {
+		it("never writes a guest-book address onto an EXISTING Person, even a blank one", async () => {
+			// The guest book is an anonymous public form. A visitor who signs it
+			// with a member's name and phone and THEIR OWN email would otherwise
+			// have that address filled onto the member's Person on conversion —
+			// the key a sign-in binds on — and could then take the member's
+			// account, club role included, with one magic link.
 			const p = await rosterPerson({ email: null });
 			const addr = `guest-${n}@test.example`;
 
 			const res = await convert(p.name, p.phone, addr);
 
 			expect(res.personId).toBe(p.personId);
-			expect(await emailOf(p.personId)).toBe(addr);
+			expect(await emailOf(p.personId)).toBeNull();
 		});
 
 		it("never overwrites an address already on file", async () => {

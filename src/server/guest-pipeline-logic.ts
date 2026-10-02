@@ -55,11 +55,7 @@ import {
 	DEFAULT_COUNTRY_CODE,
 	toStoredPhone,
 } from "#/lib/phone";
-import {
-	normalizedEmail,
-	rosterConflictFor,
-	soleHoldingClub,
-} from "./account-link-logic";
+import { normalizedEmail, rosterConflictFor } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
@@ -1497,8 +1493,8 @@ export async function applyConvertGuestToMember(
 	input: ConvertGuestInput,
 ): Promise<ConvertGuestResult> {
 	const cc = await loadClubDefaultCountryCode(input.clubId);
-	// The Person this convert wrote an address onto (a fresh one, or a blank it
-	// filled), for the shared-address check after commit (see the end).
+	// The FRESH Person this convert created with an address, for the
+	// shared-address check after commit (see the end).
 	let written: { personId: string; email: string } | null = null;
 
 	const result = await db.transaction(async (tx) => {
@@ -1662,27 +1658,12 @@ export async function applyConvertGuestToMember(
 					.set({ phone })
 					.where(and(eq(people.id, personId), isNull(people.phone)));
 			}
-			if (email) {
-				// The address is the Person's (#907, ADR-0029). A guest's address
-				// reaches an EXISTING Person only by FILLING a blank, and only while
-				// nobody has signed in as them and this club is their sole holder —
-				// all in the statement, so a bind or a second club landing first
-				// leaves it untouched. A Person matched by email already carries it;
-				// this is the phone-matched arm.
-				const filled = await tx
-					.update(people)
-					.set({ email })
-					.where(
-						and(
-							eq(people.id, personId),
-							isNull(people.email),
-							isNull(people.userId),
-							soleHoldingClub(input.clubId),
-						),
-					)
-					.returning({ id: people.id });
-				if (filled.length > 0) written = { personId, email };
-			}
+			// NO email write here, deliberately (#907 review). The guest book is an
+			// anonymous public form, so a visitor signing it with a member's name
+			// and phone and THEIR OWN address would — through a fill — put that
+			// address on the member's Person, which is the key a sign-in binds on,
+			// and take the account with one magic link. A matched Person keeps the
+			// address it has; an officer sets one on the member page.
 		}
 
 		// 2. Membership — reuse the person's existing one in this club, else create.

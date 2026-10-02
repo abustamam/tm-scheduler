@@ -4,8 +4,8 @@
  *
  * Since #907 (ADR-0029) the column is the Person's ONE address and the key a
  * sign-in binds on. Its writers are: the bind (which writes only an address a
- * magic link just proved); the club-side writers — the roster edit, the CSV
- * importer's fill, the guest-convert fill — each of which may write ONLY while
+ * magic link just proved); the club-side writers — the roster edit and the CSV
+ * importer's fill — each of which may write ONLY while
  * nobody has signed in as the Person (`isNull(people.userId)`) and the club is
  * their sole holder (`soleHoldingClub(...)`), BOTH in the UPDATE's own WHERE;
  * and the superadmin/operator waivers. The history below is why it is
@@ -82,14 +82,6 @@ const WAIVERS: Record<
 		fn: "importPeopleAndMembers",
 		sites: 1,
 		reason: "CSV fill of a blank address, unbound sole-holder Persons only",
-		requiresUnlinkedGuard: true,
-		requiresSoleHolder: true,
-	},
-	// Guest conversion onto an EXISTING Person fills a blank address (#907).
-	"server/guest-pipeline-logic.ts": {
-		fn: "applyConvertGuestToMember",
-		sites: 1,
-		reason: "guest-convert fill of a blank address, unbound sole-holder only",
 		requiresUnlinkedGuard: true,
 		requiresSoleHolder: true,
 	},
