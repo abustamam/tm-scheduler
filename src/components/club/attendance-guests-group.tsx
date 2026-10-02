@@ -167,6 +167,38 @@ export function AttendanceGuestsGroup({
 						) : (
 							g.name
 						)}
+						{g.caption ? (
+							/* The guest's kind caption (#1080) — "Guest speaker, Downtown
+							 * Toastmasters" — beside the name, so the rail describes a guest
+							 * the way the agenda does (#1059). The string is `loadMinutes`'s,
+							 * already one line; nothing is formatted here. OUTSIDE the name
+							 * control above: that control's accessible name is the PERSON,
+							 * and a club's name is not part of who to tap. Absent for a
+							 * Visitor, and for a row from an offline snapshot saved before the
+							 * field existed, so both read exactly as before.
+							 *
+							 * BOUNDED. A home club runs to GUEST_TEXT_MAX (120) characters and
+							 * this badge is `whitespace-nowrap` by design, so an unbounded
+							 * caption would push the badge past the attendance rail — the
+							 * rail's version of the print-fit problem #1081 met. `max-w-48
+							 * truncate` caps it at 12rem with an ellipsis. `truncate` is what
+							 * makes the cap bite: it sets `overflow: hidden`, and a flex item's
+							 * `min-width: auto` resolves to 0 only when it is not
+							 * `overflow: visible`, so without it `max-w-48` on a flex child is
+							 * a box that grows past its own ceiling and satisfies every grep.
+							 * `title` carries the full string for the hover. */
+							<>
+								<span aria-hidden className="text-muted-foreground">
+									·
+								</span>
+								<span
+									className="max-w-48 truncate font-normal text-muted-foreground"
+									title={g.caption}
+								>
+									{g.caption}
+								</span>
+							</>
+						) : null}
 						{onSetGuestMode ? (
 							<AttendanceModeToggle
 								name={g.name}

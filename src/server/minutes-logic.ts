@@ -23,6 +23,7 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { type AttendanceMode, modeForStatus } from "#/lib/attendance-mode";
+import { type GuestKind, guestKindCaption } from "#/lib/guest-profile";
 import {
 	ATTENDANCE_BEFORE_MEETING_MESSAGE,
 	meetingDateReached,
@@ -99,6 +100,17 @@ export interface MinutesGuestRow {
 	 *  an officer sets it (which creates the row). Optional — see
 	 *  `MinutesMemberRow.mode`. */
 	mode?: AttendanceMode | null;
+	/**
+	 * The guest's kind caption (#1080) — "Guest speaker, Downtown Toastmasters"
+	 * — from `guestKindCaption`, the one formatter the agenda uses (#1059), so
+	 * the roll-mode Guests group and the agenda describe a guest alike. Held to
+	 * ONE line here (see `oneLineGuestCaption`), so every reader gets the same
+	 * string. A Visitor has no caption, and `loadMinutes` OMITS the key rather
+	 * than writing null, the way it does `mode`. Optional for the reason `mode`
+	 * is: the offline snapshot is an unversioned `MinutesData` from an earlier
+	 * deploy, and a row without the key must render with no caption.
+	 */
+	caption?: string | null;
 }
 
 export interface MinutesTableTopicsRow {
@@ -269,6 +281,26 @@ export async function getMeetingStatus(
 }
 
 /**
+ * `MinutesGuestRow.caption` (#1080): `guestKindCaption` held to one line.
+ *
+ * NOT a second formatter — the words are `guestKindCaption`'s, and only the
+ * whitespace is touched. A home club is free text and may carry line breaks
+ * (#1081), and this string sits inside a badge that is one line by design; the
+ * agenda collapses the same way in `assigneeDisplayName` (`#/lib/agenda`).
+ * Done HERE, where the row is built, so the rail, the offline snapshot and
+ * anything else reading the row get the identical string. Null for a Visitor,
+ * and for a caption that collapses to nothing.
+ */
+function oneLineGuestCaption(
+	kind: GuestKind | null,
+	homeClub: string | null,
+): string | null {
+	if (kind == null) return null;
+	const caption = guestKindCaption(kind, homeClub)?.replace(/\s+/g, " ").trim();
+	return caption || null;
+}
+
+/**
  * Load a meeting's minutes: the active-member roster each with a presence
  * status (the saved attendance row, or `null` — "unmarked" — when none exists;
  * holding a role slot never infers presence, #218), the present guests
@@ -316,6 +348,10 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			memberId: roleSlots.assignedMemberId,
 			guestId: roleSlots.assignedGuestId,
 			guestName: guests.name,
+			// A guest holder's kind and home club (#1046), read only to build
+			// the row's `caption` (#1080) and never carried on it.
+			guestKind: guests.kind,
+			guestHomeClub: guests.homeClub,
 			category: roleDefinitions.category,
 		})
 		.from(roleSlots)
@@ -328,9 +364,16 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 	const roleMemberIds = new Set(
 		slotRows.map((r) => r.memberId).filter((x): x is string => x != null),
 	);
-	const roleGuests = new Map<string, string>();
+	const roleGuests = new Map<
+		string,
+		{ name: string; caption: string | null }
+	>();
 	for (const r of slotRows) {
-		if (r.guestId) roleGuests.set(r.guestId, r.guestName ?? "Guest");
+		if (r.guestId)
+			roleGuests.set(r.guestId, {
+				name: r.guestName ?? "Guest",
+				caption: oneLineGuestCaption(r.guestKind, r.guestHomeClub),
+			});
 	}
 
 	// Build the member attendance list: active roster ∪ any snapshotted member.
@@ -370,6 +413,9 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			guestId: meetingAttendance.guestId,
 			name: guests.name,
 			mode: meetingAttendance.mode,
+			// Read only to build `caption` (#1080); not carried on the row.
+			kind: guests.kind,
+			homeClub: guests.homeClub,
 		})
 		.from(meetingAttendance)
 		.innerJoin(guests, eq(guests.id, meetingAttendance.guestId))
@@ -391,6 +437,10 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			name: sql<string | null>`coalesce(${ttMember.name}, ${ttGuest.name})`,
 			topic: tableTopicsSpeakers.topic,
 			sortOrder: tableTopicsSpeakers.sortOrder,
+			// A guest speaker's kind and home club, read only for the Guests
+			// group's `caption` (#1080); `MinutesTableTopicsRow` does not carry them.
+			guestKind: ttGuest.kind,
+			guestHomeClub: ttGuest.homeClub,
 		})
 		.from(tableTopicsSpeakers)
 		.leftJoin(ttMember, eq(ttMember.id, tableTopicsSpeakers.memberId))
@@ -406,6 +456,14 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		topic: r.topic,
 		sortOrder: r.sortOrder,
 	}));
+	const ttGuestCaptions = new Map<string, string | null>();
+	for (const r of ttRows) {
+		if (r.guestId)
+			ttGuestCaptions.set(
+				r.guestId,
+				oneLineGuestCaption(r.guestKind, r.guestHomeClub),
+			);
+	}
 
 	// Present guests: saved attendance rows ∪ guests who TOOK PART — holding a
 	// role slot, or speaking at Table Topics (#374). A guest who only spoke at
@@ -413,26 +471,39 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 	// is flagged `fromRole` (the UI hides the remove button: the slot/topics row
 	// is what lists them, so there is no attendance row to remove) and an explicit
 	// attendance row always wins.
+	//
+	// `caption` (#1080) is carried only when the guest HAS one — a Visitor's key
+	// is absent, never null — the way `mode` is, so a row for a Visitor is
+	// byte-identical to the one this emitted before the field existed.
 	const guestRows = new Map<string, MinutesGuestRow>();
 	for (const g of savedGuestRows) {
+		const caption = oneLineGuestCaption(g.kind, g.homeClub);
 		guestRows.set(g.guestId as string, {
 			guestId: g.guestId as string,
 			name: g.name,
 			fromRole: false,
 			...(g.mode ? { mode: g.mode } : {}),
+			...(caption ? { caption } : {}),
 		});
 	}
-	for (const [guestId, name] of roleGuests) {
+	for (const [guestId, { name, caption }] of roleGuests) {
 		if (!guestRows.has(guestId)) {
-			guestRows.set(guestId, { guestId, name, fromRole: true });
+			guestRows.set(guestId, {
+				guestId,
+				name,
+				fromRole: true,
+				...(caption ? { caption } : {}),
+			});
 		}
 	}
 	for (const t of ttList) {
 		if (t.guestId && !guestRows.has(t.guestId)) {
+			const caption = ttGuestCaptions.get(t.guestId) ?? null;
 			guestRows.set(t.guestId, {
 				guestId: t.guestId,
 				name: t.name,
 				fromRole: true,
+				...(caption ? { caption } : {}),
 			});
 		}
 	}
