@@ -7,7 +7,13 @@
 // the client bundle when imported by the minutes-email server-fn handler.
 import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, meetingAttendance, meetings, members } from "#/db/schema";
+import {
+	guests,
+	meetingAttendance,
+	meetings,
+	members,
+	people,
+} from "#/db/schema";
 import type { MinutesEmailPort } from "./minutes-email-logic";
 
 export function createMinutesEmailPort(): MinutesEmailPort {
@@ -24,8 +30,9 @@ export function createMinutesEmailPort(): MinutesEmailPort {
 			if (!meeting) throw new Error("Meeting not found.");
 
 			const memberRows = await db
-				.select({ name: members.name, email: members.email })
+				.select({ name: members.name, email: people.email })
 				.from(members)
+				.innerJoin(people, eq(people.id, members.personId))
 				.where(
 					and(eq(members.clubId, meeting.clubId), eq(members.status, "active")),
 				)

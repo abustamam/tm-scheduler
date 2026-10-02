@@ -1,17 +1,19 @@
-// Account-linking DB logic (#188, re-keyed by #756), split out from the
+// Account-linking DB logic (#188, re-keyed by #756 and again by #907), split out from the
 // Better-Auth config in `src/lib/auth.ts` so it is directly integration-testable.
 // Kept in a `*-logic.ts` module (never client-imported) so its `#/db` → `pg`
 // import stays server-side; see `members-logic.ts` for the pattern and the
 // `server-modules.guard.test.ts` rationale.
 //
-// This module owns the whole identity-binding rule: the one WRITER of
-// `people.email` (`bindVerifiedPerson`, which carries the rule in its own WHERE)
-// and the read that EXPLAINS a refusal to a human (`rosterConflictFor`, which is
-// that rule's exact complement). Every other module imports these rather than
+// This module owns the whole identity-binding rule: the bind
+// (`bindVerifiedPerson`, which carries the rule in its own WHERE), the read that
+// EXPLAINS a refusal to a human (`rosterConflictFor`, which is that rule's exact
+// complement), and the predicate every club-side writer of `people.email` must
+// carry (`soleHoldingClub`, ADR-0029). Every other module imports these rather than
 // restating them — the enumeration, not the predicate, is the thing that kept
 // being wrong when four writers each carried their own copy of a guard (#755).
 import {
 	and,
+	countDistinct,
 	eq,
 	exists,
 	isNull,
@@ -20,7 +22,7 @@ import {
 	type SQL,
 	sql,
 } from "drizzle-orm";
-import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import { members, people, user } from "#/db/schema";
 
@@ -52,72 +54,145 @@ export function normalizeEmail(
 	return value?.trim().toLowerCase() || null;
 }
 
+/** A second, aliased handle on `people`, for the "any OTHER Person" arm. */
+const otherPeople = alias(people, "other_people");
+/** Aliased `members` for the correlated subqueries below. An alias always
+ *  renders qualified; a bare table inside a hand-written `sql` subquery can
+ *  lose its qualifier and compare a column to itself (#802). */
+const holding = alias(members, "holding_member");
+const vouching = alias(members, "vouching_member");
+
 /**
- * **The identity rule, as one SQL predicate.** Three arms, each correlated on
- * `people.id` rather than a JS literal so Postgres evaluates them as SubPlans
- * against the row being updated instead of hoisting them into InitPlans that run
- * on every sign-in (measured: 18.9ms → 0.7ms for an already-linked user, who
- * otherwise pays the whole cost for an UPDATE matching 0 rows).
+ * **The identity rule, as one SQL predicate** (#907, replacing #756's roster
+ * vouch). Each arm correlated on `people.id` rather than a JS literal so
+ * Postgres evaluates them against the row being updated.
  *
- *  1. **Somebody vouches** — a membership of this Person carries `address`.
- *  2. **Exactly one club holds them** — `count(distinct club_id) = 1`.
- *  3. **The address is theirs alone** — no OTHER Person's membership carries it.
+ *  1. **It is their address** — `people.email` normalises to `address`.
+ *  2. **A club vouches** — the Person holds at least one membership.
+ *  3. **The address is theirs alone** — no OTHER Person, bound or not, carries
+ *     it.
  *
- * **Every membership counts: no status filter, no archived filter.** That is the
- * scar from the cut this replaces. A "unanimity among the clubs that hold them"
- * rule scoped the dissenting set to ACTIVE rows in unarchived clubs, which left
- * a Person whose memberships had all lapsed with NO dissenters — so a club admin
- * who attached them (the CSV importer matches Customer ID globally, with no club
- * scope) supplied the only vouching row themselves and took the Person, along
- * with their speeches, Pathways progress, and any membership that later
- * reactivated. Narrowing the set was the whole of that bug.
+ * (`user_id IS NULL` is the fourth arm; it lives beside this in the bind's own
+ * WHERE, because the explainer below answers a different question for a Person
+ * that is already linked.)
  *
- * Arm 1 is load-bearing on its own: without it the two NOT EXISTS arms are
- * vacuously true for a Person with no memberships, so any address at all would
- * bind them. `applyMemberRemove` and undoing a guest conversion both leave such
- * rows behind.
+ * **Why the old "exactly one club holds them" arm is gone.** It existed because
+ * the vouch was a per-club `members.email` that any club holding the Person
+ * could type, so two clubs could disagree. The address is now ONE column on the
+ * Person, and a club-side writer may set it only while it is that Person's SOLE
+ * holder and nobody has bound it (`soleHoldingClub` + `isNull(people.userId)`,
+ * in every such write's own WHERE). A second club therefore cannot re-key a
+ * Person it shares, so a multi-club member can sign in by email again. The
+ * exceptions are the bind itself and the superadmin repairs.
  *
- * Arm 3 is the household case. One address on two roster rows is an ambiguity
- * the app cannot resolve — picking a name is a claim, not proof, and both
- * spouses read the same inbox. It lives in the WRITE rather than only in the
- * sign-in resolver, because the explicit claim reaches the same bind by a
- * different route.
+ * **Every membership counts for arm 2: no status filter, no archived filter.**
+ * A lapsed member is still somebody a club vouched for.
  *
- * **What this rule costs, stated rather than hidden:** a member two clubs
- * genuinely hold cannot bind by any route until one membership is removed, and a
- * club admin who attaches an arbitrary Person to their own club can put them in
- * that state. Both are recorded in CODING_STANDARDS under "Still open"; the fix
- * for the second is to gate the attach, which is its own change.
+ * Arm 2 is load-bearing on its own: `applyMemberRemove` and undoing a guest
+ * conversion both leave Persons with no membership behind, and an address on
+ * such a row is nobody's vouch.
+ *
+ * Arm 3 is the household case. One address on two Persons is an ambiguity the
+ * app cannot resolve — picking a name is a claim, not proof, and both spouses
+ * read the same inbox (ADR-0008: never auto-merge on a shared email). It counts
+ * an already-LINKED other Person too: a typed copy of somebody's sign-in address
+ * must not bind a second Person to the same inbox.
  */
 function rosterPermitsBind(address: string): SQL {
 	return and(
-		// 1. Somebody vouches.
+		// 1. It is their address.
+		sql`${normalizedEmail(people.email)} = ${address}`,
+		// 2. A club vouches.
 		exists(
 			db
 				.select({ one: sql`1` })
-				.from(members)
-				.where(
-					and(
-						eq(members.personId, people.id),
-						sql`${normalizedEmail(members.email)} = ${address}`,
-					),
-				),
+				.from(vouching)
+				.where(eq(vouching.personId, people.id)),
 		),
-		// 2. Exactly one club holds them.
-		sql`(select count(distinct ${members.clubId}) from ${members} where ${members.personId} = ${people.id}) = 1`,
 		// 3. Nobody else carries the address.
 		notExists(
 			db
 				.select({ one: sql`1` })
-				.from(members)
+				.from(otherPeople)
 				.where(
 					and(
-						ne(members.personId, people.id),
-						sql`${normalizedEmail(members.email)} = ${address}`,
+						ne(otherPeople.id, people.id),
+						sql`${normalizedEmail(otherPeople.email)} = ${address}`,
 					),
 				),
 		),
 	) as SQL;
+}
+
+/**
+ * **Who on a club's side may write an existing Person's `people.email`** (#907):
+ * the club is the Person's SOLE holder. Two arms, both correlated on
+ * `people.id`, for use INSIDE an `update(people)`'s WHERE:
+ *
+ *  - exactly one distinct club holds a membership of this Person, and
+ *  - that club is `clubId`.
+ *
+ * It is deliberately NOT the whole rule. Every club-side write site must also
+ * carry `isNull(people.userId)` in the same statement — once somebody has signed
+ * in, the address is theirs — and `person-email-writers.guard.test.ts` holds
+ * each waived writer to BOTH tokens, separately, so neither can be dropped
+ * without a red test. Being in the statement is what makes a bind that lands
+ * between a form's load and its save a no-op rather than an overwrite.
+ *
+ * Accepted residual (ADR-0029): a second club attaching a membership in the same
+ * instant is not serialised against the writer's Person lock. That attach can
+ * only have matched the Person by its current address or Customer ID.
+ */
+export function soleHoldingClub(clubId: string): SQL {
+	return and(
+		sql`(${db
+			.select({ n: countDistinct(holding.clubId) })
+			.from(holding)
+			.where(eq(holding.personId, people.id))}) = 1`,
+		exists(
+			db
+				.select({ one: sql`1` })
+				.from(vouching)
+				.where(
+					and(eq(vouching.personId, people.id), eq(vouching.clubId, clubId)),
+				),
+		),
+	) as SQL;
+}
+
+/** Why a club-side writer may not change a Person's address. */
+export type EmailWriteRefusal =
+	/** Somebody has signed in as this Person; the address is theirs. */
+	| "bound"
+	/** Another club holds this Person too (or this club does not hold them). */
+	| "multi_club";
+
+/**
+ * The READ form of `isNull(people.userId) AND soleHoldingClub(clubId)`, for
+ * explaining a refusal and for rendering the field read-only. Never the gate:
+ * that lives in each writer's own WHERE.
+ *
+ * @returns null when `clubId` may write the address, else why not.
+ */
+export async function emailWriteRefusalFor(
+	personId: string,
+	clubId: string,
+	executor: Pick<typeof db, "select" | "selectDistinct"> = db,
+): Promise<EmailWriteRefusal | null> {
+	const [row] = await executor
+		.select({ userId: people.userId })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	if (!row) return "multi_club";
+	if (row.userId) return "bound";
+	const clubs = await executor
+		.selectDistinct({ clubId: members.clubId })
+		.from(members)
+		.where(eq(members.personId, personId));
+	return clubs.length === 1 && clubs[0]?.clubId === clubId
+		? null
+		: "multi_club";
 }
 
 /**
@@ -131,8 +206,8 @@ function rosterPermitsBind(address: string): SQL {
  *     from the caller, so no call site can label a typed string "verified".
  *   - **It carries the whole rule in its own WHERE** — `user_id IS NULL` plus
  *     `rosterPermitsBind` — rather than trusting a SELECT the caller ran first.
- *     What remains is the READ COMMITTED phantom: a membership committed after
- *     this statement's snapshot is invisible to it.
+ *     What remains is the READ COMMITTED phantom: a row committed after this
+ *     statement's snapshot is invisible to it.
  *
  * @returns whether the bind landed. `false` covers every refusal, so a caller
  * that needs to tell a human WHY asks `rosterConflictFor` — this predicate's
@@ -171,11 +246,9 @@ export async function verifiedEmailFor(userId: string): Promise<string | null> {
 
 /** Why a bind for an address would be refused by the ROSTER. */
 export type RosterObstacle =
-	/** No membership of this Person carries the address. */
+	/** The Person's own address is not this one, or no club holds them. */
 	| "no_vouching_row"
-	/** More than one club holds this Person. */
-	| "multiple_clubs"
-	/** Another Person's roster row carries the same address. */
+	/** Another Person carries the same address. */
 	| "shared_address";
 
 /**
@@ -190,6 +263,9 @@ export type RosterObstacle =
  * inside the code written to delete it. `roster-obstacle.guard.test.ts` pins the
  * two against each other.
  *
+ * Like the predicate, it says nothing about `user_id`: a caller that needs to
+ * know whether the Person is already linked reads that itself.
+ *
  * @returns the first obstacle found, or null when the bind would be permitted.
  */
 export async function rosterConflictFor(
@@ -199,37 +275,41 @@ export async function rosterConflictFor(
 	const norm = normalizeEmail(address);
 	if (!norm) return "no_vouching_row";
 
-	const [counts] = await db
-		.select({
-			vouching: sql<number>`count(*) filter (where ${normalizedEmail(members.email)} = ${norm})::int`,
-			clubs: sql<number>`count(distinct ${members.clubId})::int`,
-		})
+	const [person] = await db
+		.select({ email: people.email })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	// `normalizeEmail` is the JS spelling of `normalizedEmail`; the residual
+	// between them (NBSP, U+FEFF) fails closed here as it does in the bind.
+	if (normalizeEmail(person?.email) !== norm) return "no_vouching_row";
+	const [membership] = await db
+		.select({ id: members.id })
 		.from(members)
-		.where(eq(members.personId, personId));
-
-	if ((counts?.vouching ?? 0) === 0) return "no_vouching_row";
-	if ((counts?.clubs ?? 0) !== 1) return "multiple_clubs";
+		.where(eq(members.personId, personId))
+		.limit(1);
+	if (!membership) return "no_vouching_row";
 
 	const others = await db
-		.select({ personId: members.personId })
-		.from(members)
+		.select({ id: people.id })
+		.from(people)
 		.where(
 			and(
-				ne(members.personId, personId),
-				sql`${normalizedEmail(members.email)} = ${norm}`,
+				ne(people.id, personId),
+				sql`${normalizedEmail(people.email)} = ${norm}`,
 			),
 		)
 		.limit(1);
 	return others.length > 0 ? "shared_address" : null;
 }
 
-/** The DISTINCT Persons any roster row carries this address for. */
+/** The DISTINCT Persons whose own address is this one, linked or not. */
 async function peopleMatching(address: string): Promise<string[]> {
 	const rows = await db
-		.selectDistinct({ personId: members.personId })
-		.from(members)
-		.where(sql`${normalizedEmail(members.email)} = ${address}`);
-	return rows.map((r) => r.personId);
+		.select({ id: people.id })
+		.from(people)
+		.where(sql`${normalizedEmail(people.email)} = ${address}`);
+	return rows.map((r) => r.id);
 }
 
 /**
@@ -241,12 +321,12 @@ async function peopleMatching(address: string): Promise<string[]> {
  * provisioned before or after the account links on the next sign-in either way,
  * and an already-linked Person is never touched.
  *
- * **The match key is `members.email`, the club's own contact record — NOT
- * `people.email` (#756).** `people.email` is written at Person CREATION by the
- * CSV importer, the guest-book conversion, the bulk paste and the create-club
- * form, always from a value a club-scoped actor typed, so it is a dedupe hint
- * and never a credential. Matching on it is what let a mistyped address lock a
- * member out with no UI able to repair it (THR Speaking Club, 2026-09-12).
+ * **The match key is `people.email`, the Person's one address (#907).** Before
+ * a bind it was typed by a club, but only by a club that was the Person's sole
+ * holder at the time (`soleHoldingClub`), so a club that shares a Person can
+ * never re-key them. A typo is repairable from the roster edit form until the
+ * member signs in — which is what used to lock members out with no UI able to
+ * help (THR Speaking Club, 2026-09-12).
  *
  * The candidate count requires **exactly one Person**, counting already-LINKED
  * ones. That is not an oversight: filtering them out let the second spouse

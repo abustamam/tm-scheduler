@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, members, officerTerms, people } from "#/db/schema";
+import { clubs, members, officerTerms, people, user } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
 import {
 	cleanup,
@@ -241,13 +241,9 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(famMembers).toHaveLength(2);
 	});
 
-	it("never seeds people.email onto a MATCHED person, even in its own club", async () => {
-		// `people.email` is the verified identity address (#756): only a bind
-		// against a magic-link-proved address writes it. A CSV is a file an officer
-		// uploaded, so it fills the club's contact record and stops there. Person
-		// CREATION still carries the address — a fresh row is nobody's identity yet,
-		// and the column is the dedupe key ADR-0008 relies on — but a row that
-		// already exists is left alone.
+	it("fills a matched, single-club, unbound Person's blank address (#907)", async () => {
+		// The address is the Person's, and the importing club is their only
+		// holder and nobody has signed in, so the fill-only rule applies.
 		const clubId = await club();
 		// Per-run keys: vitest runs test FILES in parallel against one shared
 		// `tm_test`, `people.customer_id` is globally UNIQUE, and an unscoped
@@ -260,18 +256,117 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		]);
 
 		expect(stats.peopleMatchedByCustomerId).toBe(1);
+		expect(stats.emailNotWritten).toBe(0);
 		const [em] = await testDb
 			.select({ email: people.email })
 			.from(people)
 			.where(eq(people.customerId, customerId));
-		expect(em?.email).toBeNull();
-		// The club's own contact record DID fill — that is the officer's to set,
-		// and it is the address the invite and the claim will both use.
-		const [membership] = await testDb
-			.select({ email: members.email })
-			.from(members)
-			.where(eq(members.clubId, clubId));
-		expect(membership?.email).toBe(addr);
+		expect(em?.email).toBe(addr);
+	});
+
+	it("re-checks the sole holder IN the fill's statement, not from the file's snapshot (#907)", async () => {
+		// The plan decides from a snapshot loaded at the start of the file. A
+		// second club attaching the Person after that must make the fill a no-op,
+		// which only the UPDATE's own WHERE can see. Driven through the `write`
+		// hook: the attach lands just before this row's membership write.
+		const clubId = await club();
+		const other = await club();
+		const cid = runKey("PN-RACE");
+		await importPeopleAndMembers(clubId, [
+			row({ customerId: cid, name: "Race" }),
+		]);
+		const [p] = await testDb
+			.select({ id: people.id })
+			.from(people)
+			.where(eq(people.customerId, cid));
+		if (!p) throw new Error("seeded person missing");
+
+		const stats = await importPeopleAndMembers(
+			clubId,
+			[row({ customerId: cid, name: "Race", email: `${runKey("race")}@x.io` })],
+			{
+				write: async (kind, _rowIndex, _id, work) => {
+					if (kind === "member") {
+						await testDb
+							.insert(members)
+							.values({ clubId: other, personId: p.id, name: "Race" })
+							.onConflictDoNothing();
+					}
+					return work(testDb);
+				},
+			},
+		);
+
+		expect(stats.emailNotWritten).toBe(1);
+		const [after] = await testDb
+			.select({ email: people.email })
+			.from(people)
+			.where(eq(people.id, p.id));
+		expect(after?.email).toBeNull();
+	});
+
+	it("does not write a new address onto a BOUND or MULTI-CLUB Person, and reports the row (#907)", async () => {
+		const clubId = await club();
+		const other = await club();
+		const boundCid = runKey("PN-BND");
+		const sharedCid = runKey("PN-SHR");
+		const keptBound = `${runKey("bound")}@x.io`;
+		await importPeopleAndMembers(clubId, [
+			row({ customerId: boundCid, name: "Bound", email: keptBound }),
+			row({ customerId: sharedCid, name: "Shared" }),
+		]);
+		const [bound] = await testDb
+			.select({ id: people.id })
+			.from(people)
+			.where(eq(people.customerId, boundCid));
+		const [shared] = await testDb
+			.select({ id: people.id })
+			.from(people)
+			.where(eq(people.customerId, sharedCid));
+		if (!bound || !shared) throw new Error("seeded people missing");
+		const userId = randomUUID();
+		await testDb.insert(user).values({
+			id: userId,
+			name: "Bound",
+			email: keptBound,
+			emailVerified: true,
+		});
+		try {
+			await testDb
+				.update(people)
+				.set({ userId })
+				.where(eq(people.id, bound.id));
+			await testDb
+				.insert(members)
+				.values({ clubId: other, personId: shared.id, name: "Shared" });
+
+			const stats = await importPeopleAndMembers(clubId, [
+				row({
+					customerId: boundCid,
+					name: "Bound",
+					email: `${runKey("new")}@x.io`,
+				}),
+				row({
+					customerId: sharedCid,
+					name: "Shared",
+					email: `${runKey("new2")}@x.io`,
+				}),
+			]);
+
+			expect(stats.emailNotWritten).toBe(2);
+			const after = await testDb
+				.select({ id: people.id, email: people.email })
+				.from(people)
+				.where(inArray(people.id, [bound.id, shared.id]));
+			expect(after.find((p) => p.id === bound.id)?.email).toBe(keptBound);
+			expect(after.find((p) => p.id === shared.id)?.email).toBeNull();
+		} finally {
+			await testDb
+				.update(people)
+				.set({ userId: null })
+				.where(eq(people.id, bound.id));
+			await testDb.delete(user).where(eq(user.id, userId));
+		}
 	});
 
 	it("cannot re-key a Person the importing club does not hold", async () => {
@@ -316,66 +411,21 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(vicMemberships).toEqual([{ clubId: clubA }]);
 	});
 
-	it("re-matches a member whose person-level address was cleared", async () => {
-		// The state migration 0076 leaves every un-claimed member in: `people.email`
-		// NULL, the club's roster row holding the address. A Person with no Customer
-		// ID is matched by EMAIL, so a person-level-only candidate list stops
-		// recognising them — and the miss is not quiet, it adds a second Person AND
-		// a second roster row for the same human on every subsequent import.
-		const clubId = await club();
-		const addr = `${runKey("fay")}@x.io`;
-		await importPeopleAndMembers(clubId, [row({ name: "Fay", email: addr })]);
-		// Simulate the migration — scoped to THIS club's person by id. An unscoped
-		// `update(people)` on a shared `tm_test` takes another file's in-flight
-		// rows, which is the hazard CLAUDE.md names by name.
-		const [fay] = await testDb
-			.select({ personId: members.personId })
-			.from(members)
-			.where(eq(members.clubId, clubId));
-		if (!fay) throw new Error("seeded member missing");
-		await testDb
-			.update(people)
-			.set({ email: null })
-			.where(eq(people.id, fay.personId));
-
-		const stats = await importPeopleAndMembers(clubId, [
-			row({ name: "Fay", email: addr }),
-		]);
-
-		expect(stats.peopleCreated).toBe(0);
-		expect(stats.peopleMatchedByEmail).toBe(1);
-		const roster = await testDb
-			.select({ id: members.id })
-			.from(members)
-			.where(eq(members.clubId, clubId));
-		expect(roster, "a duplicate roster row for the same human").toHaveLength(1);
-	});
-
-	it("does not match on ANOTHER club's roster address", async () => {
-		// The candidate list is global, so widening it to membership addresses has
-		// to stay scoped to the importing club — otherwise a CSV could reach a
-		// Person through a contact record some other club typed, which is the
-		// cross-club shape this whole change exists to close.
+	it("refuses a row whose address is ANOTHER club's member's (#907)", async () => {
+		// One address per Person since #907, so the email arm matches globally —
+		// onto a Person another club holds, which is `foreign` (#759), never a
+		// second Person for the same human.
 		const clubA = await club();
 		const clubB = await club();
 		const addr = `${runKey("gus")}@x.io`;
 		await importPeopleAndMembers(clubA, [row({ name: "Gus", email: addr })]);
-		const [gus] = await testDb
-			.select({ personId: members.personId })
-			.from(members)
-			.where(eq(members.clubId, clubA));
-		if (!gus) throw new Error("seeded member missing");
-		await testDb
-			.update(people)
-			.set({ email: null })
-			.where(eq(people.id, gus.personId));
 
 		const stats = await importPeopleAndMembers(clubB, [
 			row({ name: "Gus", email: addr }),
 		]);
 
-		expect(stats.peopleCreated).toBe(1);
-		expect(stats.peopleMatchedByEmail).toBe(0);
+		expect(stats.foreignSkipped).toBe(1);
+		expect(stats.peopleCreated).toBe(0);
 	});
 
 	it("adopts a Customer ID onto a person first seen by email only", async () => {
@@ -517,8 +567,8 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const rows = await testDb
 			.select({
 				id: members.id,
-				email: members.email,
-				// The Person's (#906): the CSV phone lands there, not on the row.
+				// The Person's (#906, #907): the CSV phone and email land there.
+				email: people.email,
 				phone: people.phone,
 				joinedAt: members.joinedAt,
 			})
@@ -540,12 +590,16 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const customerId = runKey("PN-FILL");
 		const personId = await releasedPerson(clubId, customerId, "Fill Only");
 
+		// The address is the Person's (#907); the winner's is already on file.
+		await testDb
+			.update(people)
+			.set({ email: "winner@x.io" })
+			.where(eq(people.id, personId));
 		const winner = await openBlockingTx(async (tx) => {
 			await tx.insert(members).values({
 				clubId,
 				personId,
 				name: "Fill Only",
-				email: "winner@x.io",
 			});
 		});
 
@@ -562,7 +616,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		await running;
 
 		const [m] = await testDb
-			.select({ email: members.email, phone: people.phone })
+			.select({ email: people.email, phone: people.phone })
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)));

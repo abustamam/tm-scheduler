@@ -98,7 +98,6 @@ describe.skipIf(!hasTestDb)(
 					clubId: b.clubId,
 					personId: a.personId,
 					name: "Member User",
-					email: `member-${a.memberUserId}@test.example`,
 					clubRole: "member",
 					status: "active",
 				});

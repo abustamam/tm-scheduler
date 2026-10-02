@@ -32,15 +32,23 @@
  *     bunx vitest run src/server/person-email-clear-migration.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+	copyFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "#/db/schema";
-import { clubs, members, people, peopleEmailBackup, user } from "#/db/schema";
+import { clubs, people, peopleEmailBackup, user } from "#/db/schema";
 import { hasTestDb } from "#/test/db";
 
 const MIGRATION = resolve(process.cwd(), "drizzle/0076_bored_meltdown.sql");
@@ -110,6 +118,31 @@ function urlFor(database: string): string {
 
 let pool: pg.Pool;
 let scratchDb: ReturnType<typeof drizzle<typeof schema>>;
+let upTo0108: string;
+
+/**
+ * A copy of `drizzle/` whose journal stops at 0108, so `members.email` — which
+ * 0076 reads and 0109 (#907) drops — still exists in the scratch database.
+ */
+function migrationsBefore0109(): string {
+	const dir = mkdtempSync(join(tmpdir(), "tm-0076-"));
+	mkdirSync(join(dir, "meta"));
+	const journal = JSON.parse(
+		readFileSync(resolve(process.cwd(), "drizzle/meta/_journal.json"), "utf8"),
+	) as { entries: Array<{ idx: number; tag: string }> };
+	const entries = journal.entries.filter((e) => e.idx < 109);
+	for (const e of entries) {
+		copyFileSync(
+			resolve(process.cwd(), `drizzle/${e.tag}.sql`),
+			join(dir, `${e.tag}.sql`),
+		);
+	}
+	writeFileSync(
+		join(dir, "meta", "_journal.json"),
+		JSON.stringify({ ...journal, entries }),
+	);
+	return dir;
+}
 
 class Rollback extends Error {}
 
@@ -163,9 +196,11 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 
 		pool = new pg.Pool({ connectionString: urlFor(SCRATCH_DB) });
 		scratchDb = drizzle(pool, { schema });
-		// The real runner, on the real files — so a migration that cannot apply
-		// fails here and not on a Railway deploy.
-		await migrate(scratchDb, { migrationsFolder: "drizzle" });
+		// The real runner, on the real files up to 0108 — so a migration that
+		// cannot apply fails here and not on a Railway deploy. Not past it: 0109
+		// (#907) drops the `members.email` this migration reads.
+		upTo0108 = migrationsBefore0109();
+		await migrate(scratchDb, { migrationsFolder: upTo0108 });
 
 		clubId = randomUUID();
 		await scratchDb
@@ -175,6 +210,7 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 
 	afterAll(async () => {
 		await pool?.end();
+		if (upTo0108) rmSync(upTo0108, { recursive: true, force: true });
 		const admin = new pg.Client({
 			connectionString: process.env.TEST_DATABASE_URL,
 		});
@@ -231,12 +267,12 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 			.values({ name: "Migration Person", email: opts.personEmail, userId })
 			.returning({ id: people.id });
 		if (!person) throw new Error("person insert failed");
-		await tx.insert(members).values({
-			clubId,
-			personId: person.id,
-			name: "Migration Person",
-			email: opts.memberEmail,
-		});
+		// Raw SQL: `members.email` is gone from the schema since #907, but it
+		// exists in this scratch database (migrated to 0108).
+		await tx.execute(
+			sql`insert into members (club_id, person_id, name, email)
+			    values (${clubId}, ${person.id}, 'Migration Person', ${opts.memberEmail})`,
+		);
 		return person.id;
 	}
 

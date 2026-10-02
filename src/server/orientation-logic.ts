@@ -170,7 +170,7 @@ export async function loadOrientationFactsForMembers(
 				focus: mentorships.focus,
 				endedAt: mentorships.endedAt,
 				mentorName: mentor.name,
-				mentorEmail: mentor.email,
+				mentorEmail: mentorPerson.email,
 				mentorPhone: mentorPerson.phone,
 			})
 			.from(mentorships)

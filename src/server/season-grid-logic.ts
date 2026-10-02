@@ -279,7 +279,7 @@ export async function loadSeasonGrid(input: {
 			id: members.id,
 			name: members.name,
 			status: members.status,
-			email: members.email,
+			email: people.email,
 			// A Person fact (#906), through the membership's own `person_id`.
 			phone: people.phone,
 		})

@@ -935,7 +935,6 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 					clubId: big.clubId,
 					personId: p.id,
 					name: `Big Member ${i}`,
-					email: `big-${i}-${randomUUID()}@test.example`,
 				})),
 			)
 			.returning({ id: members.id });

@@ -1815,59 +1815,21 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(p?.preferredName).toBe("Bob");
 		});
 
-		it("dedupes onto a member whose person-level address 0076 cleared", async () => {
-			// The post-#756 shape, and the one migration 0076 leaves every un-claimed
-			// member in: `people.email` NULL, the address on the club's roster row.
-			// A person-level-only match stopped seeing them, and the failure is loud
-			// in the data rather than on screen — a second Person AND a second roster
-			// row for the same human, in the same club, invisible to
-			// `listDuplicatePeople` because one of the pair has a NULL email.
-			const email = `post0076-${randomUUID()}@example.com`;
-			const [existing] = await testDb
-				.insert(people)
-				.values({ name: "Roberta Smith", email: null })
-				.returning({ id: people.id });
-			if (!existing) throw new Error("person insert failed");
-			await testDb.insert(members).values({
-				clubId: seed.clubId,
-				personId: existing.id,
-				name: "Roberta Smith",
-				email,
-			});
-
-			const guestId = await seedGuest(seed.clubId, "Roberta Smith");
-			await applyUpdateGuest({
-				clubId: seed.clubId,
-				guestId,
-				name: "Roberta Smith",
-				email,
-			});
-			const res = await applyConvertGuestToMember({
-				clubId: seed.clubId,
-				guestId,
-				actorMemberId: seed.adminMemberId,
-			});
-
-			expect(res.personId).toBe(existing.id);
-		});
-
-		it("does not match on ANOTHER club's roster address", async () => {
-			// Widening the key has to stay club-scoped, or a conversion could reach a
-			// Person through a contact record some other club typed — the cross-club
-			// shape the rest of #756 closes.
+		it("does not match on ANOTHER club's member's address", async () => {
+			// The email arm is club-scoped (#759), so a conversion cannot reach a
+			// Person only another club holds through their address.
 			const email = `otherclub-${randomUUID()}@example.com`;
 			const other = await seedClub();
 			try {
 				const [existing] = await testDb
 					.insert(people)
-					.values({ name: "Elsewhere Person", email: null })
+					.values({ name: "Elsewhere Person", email })
 					.returning({ id: people.id });
 				if (!existing) throw new Error("person insert failed");
 				await testDb.insert(members).values({
 					clubId: other.clubId,
 					personId: existing.id,
 					name: "Elsewhere Person",
-					email,
 				});
 
 				const guestId = await seedGuest(seed.clubId, "Elsewhere Person");
@@ -2594,7 +2556,6 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 						clubId: seed.clubId,
 						personId: person?.id ?? "",
 						name: "Sitting Officer",
-						email,
 						status: "active",
 						clubRole: "member",
 					})

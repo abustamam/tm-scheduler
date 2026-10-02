@@ -1,6 +1,15 @@
 /**
- * Source guard: **one writer of `people.email`, and it writes only an address a
- * magic link just proved.**
+ * Source guard: **every writer of `people.email` is named, and each one that a
+ * club can reach carries its authority in the statement itself.**
+ *
+ * Since #907 (ADR-0029) the column is the Person's ONE address and the key a
+ * sign-in binds on. Its writers are: the bind (which writes only an address a
+ * magic link just proved); the club-side writers — the roster edit, the CSV
+ * importer's fill, the guest-convert fill — each of which may write ONLY while
+ * nobody has signed in as the Person (`isNull(people.userId)`) and the club is
+ * their sole holder (`soleHoldingClub(...)`), BOTH in the UPDATE's own WHERE;
+ * and the superadmin/operator waivers. The history below is why it is
+ * enforced by SHAPE.
  *
  * This replaces the enumeration `person-email-guard.guard.test.ts` held (#755).
  * That test existed because four different club-reachable paths wrote the
@@ -55,13 +64,47 @@ const WAIVERS: Record<
 		reason: string;
 		/** Its UPDATE must carry `isNull(people.userId)` in the statement itself. */
 		requiresUnlinkedGuard?: boolean;
+		/** A CLUB-side writer (#907): its UPDATE must also carry the sole-holder
+		 *  predicate, `soleHoldingClub(...)`, in the statement itself. */
+		requiresSoleHolder?: boolean;
 	}
 > = {
+	// The officer's typo repair (#907). Club-reachable, so both predicates.
+	"server/members-logic.ts": {
+		fn: "applyMemberEdit",
+		sites: 1,
+		reason: "roster edit, unbound sole-holder Persons only",
+		requiresUnlinkedGuard: true,
+		requiresSoleHolder: true,
+	},
+	// The CSV importer's fill-only address (#907). Club-reachable.
+	"server/import-members-logic.ts": {
+		fn: "importPeopleAndMembers",
+		sites: 1,
+		reason: "CSV fill of a blank address, unbound sole-holder Persons only",
+		requiresUnlinkedGuard: true,
+		requiresSoleHolder: true,
+	},
+	// Guest conversion onto an EXISTING Person fills a blank address (#907).
+	"server/guest-pipeline-logic.ts": {
+		fn: "applyConvertGuestToMember",
+		sites: 1,
+		reason: "guest-convert fill of a blank address, unbound sole-holder only",
+		requiresUnlinkedGuard: true,
+		requiresSoleHolder: true,
+	},
+	// A test fixture helper: never shipped, never reachable from the app. It
+	// stands in for every fixture that used to write `members.email`.
+	"test/db.ts": {
+		fn: "setMemberEmail",
+		sites: 1,
+		reason: "test fixture helper, not shipped",
+	},
 	// The console repair for a club's FIRST admin, before anyone has signed in —
-	// the bootstrap case, where no verified address exists yet. It writes the
-	// membership row alongside, and carries `isNull(people.userId)` in the same
-	// statement so a sign-in mid-edit cannot leave a linked Person holding a
-	// typed address.
+	// the bootstrap case, where no verified address exists yet. It carries
+	// `isNull(people.userId)` in the same statement so a sign-in mid-edit cannot
+	// leave a linked Person holding a typed address. NOT held to the sole-holder
+	// rule: a superadmin is the one person who may repair a shared Person.
 	"server/onboarding-logic.ts": {
 		fn: "updateUnclaimedAdminEmail",
 		sites: 1,
@@ -241,6 +284,21 @@ function emailWriteSites(source: string): string[] {
 }
 
 /**
+ * The `update(people)` statements in `source` whose inline SET writes `email`,
+ * comments stripped — what the per-waiver predicate checks read.
+ */
+function emailWriteStatements(source: string): string[] {
+	const src = withoutComments(source);
+	const out: string[] = [];
+	for (const m of src.matchAll(/\.update\(\s*people\s*\)([\s\S]*?);/g)) {
+		const body = m[1] ?? "";
+		const set = /\.set\(\s*(\{[\s\S]*?\})/.exec(body)?.[1] ?? "";
+		if (/\bemail\b/.test(set)) out.push(body);
+	}
+	return out;
+}
+
+/**
  * The matcher, against source it has never seen. A guard test that cannot be
  * shown to fail is a guard test nobody can trust, and this family has been wrong
  * in BOTH directions already: a file-level ancestor passed while a writer sat
@@ -405,7 +463,7 @@ describe("people.email writers (verified identity address)", () => {
 		expect(sources().length).toBeGreaterThan(50);
 	});
 
-	it("is written in exactly one place outside the superadmin waivers", () => {
+	it("is written only by the bind and the named waivers", () => {
 		const offenders: string[] = [];
 		for (const { key, text } of sources()) {
 			if (WAIVERS[key] || key === BINDER_FILE) continue;
@@ -413,12 +471,10 @@ describe("people.email writers (verified identity address)", () => {
 		}
 		expect(
 			offenders,
-			`These files write people.email. Since #756 the column is the VERIFIED ` +
-				`identity address: the only thing that may write it is the bind in ` +
-				`${BINDER_FILE}, using an address a magic link just proved. A CSV, a ` +
-				`roster form, an invite button and a guest book all carry values ` +
-				`somebody TYPED — route the change to members.email (the club's ` +
-				`contact record) instead, or add a superadmin-only waiver with a reason.`,
+			`These files write people.email, the Person's one address and the key a ` +
+				`sign-in binds on (#907). Every writer is named in WAIVERS; a club-side ` +
+				`one must carry isNull(people.userId) AND soleHoldingClub(clubId) in ` +
+				`its UPDATE's own WHERE. Add a waiver with a reason, or do not write it.`,
 		).toEqual([]);
 	});
 
@@ -505,17 +561,32 @@ describe("people.email writers (verified identity address)", () => {
 				`${key} now has more people.email write sites than its waiver allows`,
 			).toHaveLength(waiver.sites);
 
-			if (waiver.requiresUnlinkedGuard) {
-				// The span between `.update(people)` and the end of the statement.
-				const stmt =
-					/\.update\(\s*people\s*\)([\s\S]*?);/.exec(
-						withoutComments(text ?? ""),
-					)?.[1] ?? "";
+			// Every email-writing statement in the file, not merely the first
+			// `update(people)` — `applyMemberEdit` writes the phone and the goes-by
+			// name to the same table, and checking the first statement would check
+			// the wrong one.
+			const stmts = emailWriteStatements(text ?? "");
+			if (waiver.requiresUnlinkedGuard || waiver.requiresSoleHolder) {
 				expect(
-					stmt,
-					`${key}'s people.email write must carry isNull(people.userId) in the STATEMENT — ` +
-						`a check outside the transaction is a TOCTOU, and no behavioural test can reach it`,
-				).toMatch(/isNull\(\s*people\.userId\s*\)/);
+					stmts,
+					`${key}: no readable people.email UPDATE to check`,
+				).toHaveLength(waiver.sites);
+			}
+			for (const stmt of stmts) {
+				if (waiver.requiresUnlinkedGuard) {
+					expect(
+						stmt,
+						`${key}'s people.email write must carry isNull(people.userId) in the STATEMENT — ` +
+							`a check outside the transaction is a TOCTOU, and no behavioural test can reach it`,
+					).toMatch(/isNull\(\s*people\.userId\s*\)/);
+				}
+				if (waiver.requiresSoleHolder) {
+					expect(
+						stmt,
+						`${key}'s people.email write must carry soleHoldingClub(...) in the STATEMENT — ` +
+							`a club may change an address only while it is the Person's sole holder (#907)`,
+					).toMatch(/soleHoldingClub\(/);
+				}
 			}
 		}
 	});

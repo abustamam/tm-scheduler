@@ -22,7 +22,11 @@ import {
 	writtenAddress,
 } from "#/lib/members-import-plan";
 import { toStoredPhone } from "#/lib/phone";
-import { normalizedEmail, normalizeEmail } from "./account-link-logic";
+import {
+	normalizedEmail,
+	normalizeEmail,
+	soleHoldingClub,
+} from "./account-link-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 export type ImportConnection =
 	| typeof db
@@ -50,9 +54,12 @@ export interface ImportStats {
 	 *  no Person, membership or officer term written. Its own count,
 	 *  never folded into `skippedBlankName`. */
 	foreignSkipped: number;
-	/** Rows imported whose written address another Person's roster row already
-	 *  carries, in any club. Reported, not refused (#759). */
+	/** Rows imported whose written address another Person already carries, in
+	 *  any club. Reported, not refused (#759). */
 	addressConflicts: number;
+	/** Rows whose address was NOT written to the Person they matched: that
+	 *  Person has signed in, or another club holds them too (#907). */
+	emailNotWritten: number;
 	/** Rows whose "Current Position" was non-blank but unparseable (left null,
 	 *  logged as a warning — like the ambiguous-name skip). */
 	unparseablePosition: number;
@@ -67,17 +74,7 @@ export interface ImportStats {
  * on the two sides is the one way the VPE's approved diff can stop matching what
  * actually runs. It lives here, in one exported function, for that reason.
  *
- * The match address is `people.email` FALLING BACK to this club's own roster
- * address (#756). `people.email` is the verified identity address now and is
- * NULL for everyone who has not signed in — migration 0076 cleared the rest — so
- * a person-level-only list stops recognising a member who has no Customer ID.
- * The miss is not quiet: it adds a second Person AND a second roster row for the
- * same human, on every subsequent import.
- *
- * The fallback is scoped to the IMPORTING club by the join condition,
- * deliberately. A contact record another club typed must not be reachable from
- * this CSV — that is the cross-club shape the rest of #756 closes. Person-level
- * addresses stay global, as they always were.
+ * The match address is `people.email`, the Person's one address (#907).
  *
  * The candidate SET stays global too, and that is deliberate: a Customer-ID or
  * person-level match onto a Person only ANOTHER club holds is refused by the
@@ -94,10 +91,9 @@ export async function loadPersonCandidates(
 	clubId: string,
 	conn: ImportConnection = db,
 ): Promise<ExistingPersonRow[]> {
-	// A correlated EXISTS over an ALIASED `members`, not a second unscoped join.
-	// Unscoping the join above would re-globalise `coalesce(people.email,
-	// members.email)` — the thing #756 scoped — and fan the row out, which is
-	// exactly the property the plain `select` below relies on NOT happening.
+	// A correlated EXISTS over an ALIASED `members`, not a second unscoped join:
+	// an unscoped join would fan the row out, which is exactly the property the
+	// plain `select` below relies on NOT happening.
 	const elsewhere = alias(members, "held_elsewhere");
 	const heldElsewhere = exists(
 		conn
@@ -136,7 +132,7 @@ export async function loadPersonCandidates(
 		.select({
 			id: people.id,
 			customerId: people.customerId,
-			email: sql<string | null>`coalesce(${people.email}, ${members.email})`,
+			email: people.email,
 			name: people.name,
 			phone: people.phone,
 			userId: people.userId,
@@ -161,6 +157,7 @@ export async function loadPersonCandidates(
 	return rows.map(
 		({ userId, heldHere, heldElsewhere, releasedHere, ...p }) => ({
 			...p,
+			heldElsewhere,
 			heldBy: heldHere
 				? "this_club"
 				: heldElsewhere
@@ -174,8 +171,7 @@ export async function loadPersonCandidates(
 }
 
 /**
- * For each address, the DISTINCT Persons whose roster rows carry it, in ANY
- * club (#759) — the snapshot `addressConflictFor` reads, loaded once per import
+ * For each address, the DISTINCT Persons who carry it, in ANY club (#759) — the snapshot `addressConflictFor` reads, loaded once per import
  * by BOTH the committing writer and the preview.
  *
  * Global and unfiltered by status or archive on purpose: it mirrors arm 3 of
@@ -198,17 +194,16 @@ export async function loadAddressHolders(
 	if (wanted.length === 0) return holders;
 	// `sql.param`, not a bare array: the template expands a JS array into one
 	// bind per element, and a large file would run past the protocol's limit.
-	// Joined to `people` for `user_id`: whether a holder is already bound to an
-	// account decides whether this address can still lock them out.
-	const address = normalizedEmail(members.email);
+	// `user_id`: whether a holder is already bound to an account decides
+	// whether this address can still lock them out.
+	const address = normalizedEmail(people.email);
 	const rows = await conn
-		.selectDistinct({
+		.select({
 			address: sql<string>`${address}`,
-			personId: members.personId,
+			personId: people.id,
 			userId: people.userId,
 		})
-		.from(members)
-		.innerJoin(people, eq(people.id, members.personId))
+		.from(people)
 		.where(sql`${address} = any(${sql.param(wanted)}::text[])`);
 	for (const r of rows) {
 		const list = holders.get(r.address) ?? [];
@@ -221,8 +216,8 @@ export async function loadAddressHolders(
 /**
  * Import mapped CSV rows into `people` + `members` for one club. Returns counts.
  * People-level facts (canonical name/contact, original join date, Customer ID)
- * land on `people` (a phone number is one of them, #906); the per-club
- * membership carries name/email (fill-only) and `joined_at`.
+ * land on `people` (phone, #906, and email, #907, are among them); the per-club
+ * membership carries name (fill-only) and `joined_at`.
  *
  * The per-row verdicts (which Person a row resolves to, insert vs. fill-only
  * update of the membership) come from the shared pure decisions in
@@ -277,6 +272,7 @@ export async function importPeopleAndMembers(
 		skippedBlankName: 0,
 		foreignSkipped: 0,
 		addressConflicts: 0,
+		emailNotWritten: 0,
 		unparseablePosition: 0,
 		skippedOfficerAssignments: 0,
 	};
@@ -326,20 +322,9 @@ export async function importPeopleAndMembers(
 			// Person-level fill-only name/phone; adopt a Customer ID when we finally
 			// have one; always refresh the original join date from the CSV.
 			//
-			// `email` is absent from `MatchedPersonValues` by TYPE (#756), not by a
-			// destructure here — a destructure left the shared PLANNER still
-			// computing the field and mirroring it into its own candidate list, so
-			// the preview and this writer disagreed inside one batch. Matching on
-			// Customer ID or on a person-level address is GLOBAL, so this row can
-			// resolve to a Person no club holds that THIS club last removed (one
-			// another club holds, or any other orphan, is `foreign` and never gets
-			// here, #759 / #855) — and a CSV is a file an officer
-			// uploaded, not an address anyone proved they own. The address fills the
-			// MEMBERSHIP's contact record below instead, which is the column the
-			// invite and the claim both read. A Person CREATED by this import still
-			// carries it (the `insert` arm below): a fresh row is nobody's identity
-			// yet, and `people.email` remains the dedupe key ADR-0008 leans on.
-			// Spelled out field by field rather than `.set(pd.set)`. A SET whose
+			// `email` is absent from `MatchedPersonValues` by TYPE (#756): the
+			// address is its own decision (`pd.email`, #907) and its own guarded
+			// statement, after the membership below. Spelled out field by field rather than `.set(pd.set)`. A SET whose
 			// argument is an identifier cannot be checked by scanning, so
 			// `person-email-writers.guard.test.ts` refuses one outright — and it is
 			// right to: this call site read `.set(pdRest)` when the field was merely
@@ -373,6 +358,7 @@ export async function importPeopleAndMembers(
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
 			current.phone = pd.set.phone;
+			if (pd.email.kind === "refused") stats.emailNotWritten++;
 		} else {
 			if (pd.kind === "ambiguous") stats.ambiguous++;
 			const [created] = await write("person", rowIndex, null, async (conn) =>
@@ -390,18 +376,18 @@ export async function importPeopleAndMembers(
 				// for the same new person in this file must resolve to it, not be
 				// refused as foreign.
 				heldBy: "this_club",
+				heldElsewhere: false,
 				linked: false,
 			});
 			stats.peopleCreated++;
 		}
 
-		// Membership: one row per (club, person). Fill-only name/email so an
-		// in-app edit is never clobbered; joined_at is per-club and always set.
+		// Membership: one row per (club, person). Fill-only name so an in-app
+		// edit is never clobbered; joined_at is per-club and always set.
 		const [existingMember] = await conn
 			.select({
 				id: members.id,
 				name: members.name,
-				email: members.email,
 			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)))
@@ -415,7 +401,7 @@ export async function importPeopleAndMembers(
 			checkWrittenAddress(
 				addressHolders,
 				writtenInFile,
-				writtenAddress(md),
+				writtenAddress(pd),
 				subject,
 				personId,
 				pd.kind === "ambiguous",
@@ -463,7 +449,7 @@ export async function importPeopleAndMembers(
 			} else {
 				// Lost the race. Reconcile against the winner's row exactly as the
 				// non-raced branch above would — re-classifying is the whole point.
-				// Taking only the id would silently drop this CSV row's name/email
+				// Taking only the id would silently drop this CSV row's name
 				// while still reporting the member as "updated", and the
 				// overlapping-import case this branch exists for is precisely when
 				// the two admins' files do NOT carry identical data.
@@ -471,7 +457,6 @@ export async function importPeopleAndMembers(
 					.select({
 						id: members.id,
 						name: members.name,
-						email: members.email,
 					})
 					.from(members)
 					.where(
@@ -494,6 +479,40 @@ export async function importPeopleAndMembers(
 			}
 		} else {
 			continue; // unreachable — update ⟺ existingMember present
+		}
+
+		// The address fill (#907, ADR-0029), AFTER the membership: a Person this
+		// club last released is held by nobody until the row above lands, and
+		// the statement's own predicate is what decides. A FILL (the address is
+		// still null), onto a Person nobody has bound, whom this club alone
+		// holds — all three in the WHERE, because the plan decided from a
+		// snapshot loaded at the start of the file. A raced refusal is counted
+		// like a planned one.
+		if (
+			(pd.kind === "customerId" || pd.kind === "email") &&
+			pd.email.kind === "fill"
+		) {
+			const to = pd.email.to;
+			const filled = await write("person", rowIndex, personId, async (conn) =>
+				conn
+					.update(people)
+					.set({ email: to })
+					.where(
+						and(
+							eq(people.id, personId),
+							isNull(people.email),
+							isNull(people.userId),
+							soleHoldingClub(clubId),
+						),
+					)
+					.returning({ id: people.id }),
+			);
+			const current = existing.find((p) => p.id === personId);
+			if (filled.length > 0) {
+				if (current) current.email = to;
+			} else {
+				stats.emailNotWritten++;
+			}
 		}
 
 		if (row.officerPosition) stats.skippedOfficerAssignments++;

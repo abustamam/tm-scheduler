@@ -47,9 +47,9 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		return id;
 	}
 
-	/** Insert a (person, membership) pair in the seeded club. `email` sets both the
-	 *  person and membership email; pass `memberEmail` to set the membership email
-	 *  independently (e.g. the VPE-edited case where only `members.email` is set). */
+	/** Insert a (person, membership) pair in the seeded club. The address is the
+	 *  Person's (#907); `memberEmail`, when given, wins over `email` — kept so
+	 *  the older cases below read as they did when it was a per-club column. */
 	async function seedMember(opts: {
 		email?: string | null;
 		memberEmail?: string | null;
@@ -60,7 +60,9 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 			.insert(people)
 			.values({
 				name: "Picked Person",
-				email: opts.email ?? null,
+				email:
+					(opts.memberEmail !== undefined ? opts.memberEmail : opts.email) ??
+					null,
 				userId: opts.userId ?? null,
 			})
 			.returning({ id: people.id });
@@ -71,9 +73,6 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 				clubId: club.clubId,
 				personId: person.id,
 				name: "Picked Person",
-				email:
-					(opts.memberEmail !== undefined ? opts.memberEmail : opts.email) ??
-					null,
 				clubRole: opts.clubRole ?? "member",
 			})
 			.returning({ id: members.id });
@@ -109,7 +108,7 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 
 	it("refuses an emailless Person on the public claim — never adopts under an arbitrary address (#266 takeover fix)", async () => {
 		const { claimPersonForUser } = await import("./account-invite-logic");
-		// No email on the person OR the membership → un-claimable by anyone.
+		// No email on the Person → un-claimable by anyone.
 		const { memberId, personId } = await seedMember({
 			email: null,
 			memberEmail: null,
@@ -122,13 +121,9 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		expect(row?.email).toBeNull(); // email NOT overwritten (no lockout)
 	});
 
-	it("links via the membership email when the person has none, and stamps it onto the Person (VPE-edited case)", async () => {
+	it("links on the Person's address and stamps the verified form onto it", async () => {
 		const { claimPersonForUser } = await import("./account-invite-logic");
 		const email = `edited-${randomUUID()}@test.example`;
-		// people.email null but members.email set — since #756 this is the ORDINARY
-		// shape of an un-claimed member, not an edge case: migration 0076 cleared the
-		// column for everyone who has never signed in, and nothing a club does
-		// refills it. The claim is what puts a verified address there.
 		const { memberId, personId } = await seedMember({
 			email: null,
 			memberEmail: email,
@@ -142,7 +137,7 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		expect(row?.email?.toLowerCase()).toBe(email.toLowerCase());
 	});
 
-	it("refuses when the membership email does not match the verified address", async () => {
+	it("refuses when the Person's email does not match the verified address", async () => {
 		const { claimPersonForUser } = await import("./account-invite-logic");
 		const { memberId, personId } = await seedMember({
 			email: null,
@@ -221,146 +216,41 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		expect((await personRow(personId))?.invitedAt).toBeInstanceOf(Date);
 	});
 
-	it("prepareMemberInvite sends to the membership email and does NOT seed the Person", async () => {
+	it("prepareMemberInvite sends to the PERSON's address (#907)", async () => {
 		const { prepareMemberInvite } = await import("./account-invite-logic");
-		// The invite used to copy `members.email` up onto `people.email`, which made
-		// it the second admin-reachable writer of the identity key: an officer whose
-		// person-level write the roster form refused could press Invite one row over
-		// and complete the same retarget. There is nothing to guard now — the button
-		// sends a magic link and writes no identity at all.
-		const { memberId, personId } = await seedMember({
-			email: null,
-			memberEmail: `membership-${randomUUID()}@test.example`,
-		});
+		const addr = `person-${randomUUID()}@test.example`;
+		const { memberId } = await seedMember({ email: addr });
 
 		const prep = await prepareMemberInvite({ clubId: club.clubId, memberId });
 
 		expect(prep.outcome).toBe("ready");
-		expect((await personRow(personId))?.email).toBeNull();
+		expect(prep.email).toBe(addr);
 	});
 
-	it("prepareMemberInvite sends to the membership address, not the Person's", async () => {
-		const { prepareMemberInvite } = await import("./account-invite-logic");
-		// `members.email` is the club's contact record AND the claim key, so the
-		// link has to go where the claim will look. Sending to a stale person-level
-		// value delivers a magic link that then refuses to bind — the silent
-		// half-failure this change exists to remove.
-		const { memberId } = await seedMember({
-			email: `stale-person-${randomUUID()}@test.example`,
-			memberEmail: `roster-${randomUUID()}@test.example`,
-		});
-
-		const prep = await prepareMemberInvite({ clubId: club.clubId, memberId });
-
-		expect(prep.outcome).toBe("ready");
-		expect(prep.email).toMatch(/^roster-/);
-	});
-
-	it("prepareMemberInvite returns no_email when only the PERSON carries one", async () => {
-		// Deliberate, and the reason the migration clears the column: an address
-		// nobody verified is not something to mail a sign-in link to. The admin adds
-		// it to the roster row — the one surface they own — and invites again.
-		const { prepareMemberInvite } = await import("./account-invite-logic");
-		const { memberId } = await seedMember({
-			email: `person-only-${randomUUID()}@test.example`,
-			memberEmail: null,
-		});
-
-		expect(
-			(await prepareMemberInvite({ clubId: club.clubId, memberId })).outcome,
-		).toBe("no_email");
-	});
-
-	it("prepareMemberInvite refuses when another club's roster disagrees", async () => {
-		// The dead end this PR's first cut shipped: the invite reported `ready`, the
-		// magic link went out, Better-Auth minted a real account, and the claim then
-		// refused — the admin saw "Invite sent." forever and the member bounced. The
-		// invite now asks the same question the bind will, BEFORE a link is sent.
-		const { prepareMemberInvite } = await import("./account-invite-logic");
-		const other = await seedClub();
-		try {
-			const mine = `mine-${randomUUID()}@test.example`;
-			const { memberId, personId } = await seedMember({
-				email: null,
-				memberEmail: mine,
-			});
-			await testDb.insert(members).values({
-				clubId: other.clubId,
-				personId,
-				name: "Picked Person",
-				email: `theirs-${randomUUID()}@test.example`,
-			});
-
-			expect(
-				(await prepareMemberInvite({ clubId: club.clubId, memberId })).outcome,
-			).toBe("roster_conflict");
-			// And no invite was stamped, so the roster does not show them as invited.
-			expect((await personRow(personId))?.invitedAt).toBeNull();
-		} finally {
-			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
-		}
-	});
-
-	it("a DUAL-CLUB member is refused BEFORE a link is sent, with the reason", async () => {
-		// The conservative rule's cost, asserted rather than discovered. A member
-		// two clubs hold cannot bind by any route until one membership is removed
-		// — that is the status quo before #756 and what the issue specified. What
-		// IS new is that the officer finds out at the point of action instead of
-		// after the member bounces: no link goes out, no account is minted, and
-		// `obstacle` names which of the three problems it is.
-		//
-		// A "unanimity across the clubs" rule that would have let this member in
-		// was written and reviewed out: it had to scope the dissenting set to
-		// ACTIVE rows, which handed an attacker a Person whose memberships had all
-		// lapsed. See `rosterPermitsBind`.
-		const { prepareMemberInvite } = await import("./account-invite-logic");
+	it("a DUAL-CLUB member is invited and claims, now that two clubs no longer block a bind (#907)", async () => {
+		// Before #907 a member two clubs held could not bind by any route, so the
+		// invite refused with `multiple_clubs`. The address is now ONE column on
+		// the Person that only a sole-holding club may write, so a second club
+		// cannot re-key them — and the arm is gone.
+		const { prepareMemberInvite, claimPersonForUser } = await import(
+			"./account-invite-logic"
+		);
 		const other = await seedClub();
 		try {
 			const shared = `dual-${randomUUID()}@test.example`;
-			const { memberId, personId } = await seedMember({
-				email: null,
-				memberEmail: shared,
-			});
+			const { memberId, personId } = await seedMember({ email: shared });
 			await testDb.insert(members).values({
 				clubId: other.clubId,
 				personId,
 				name: "Picked Person",
-				email: shared,
 			});
 
 			const prep = await prepareMemberInvite({ clubId: club.clubId, memberId });
-			expect(prep.outcome).toBe("roster_conflict");
-			expect(prep.obstacle).toBe("multiple_clubs");
-			expect((await personRow(personId))?.invitedAt).toBeNull();
-		} finally {
-			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
-		}
-	});
+			expect(prep.outcome).toBe("ready");
+			expect(prep.email).toBe(shared);
 
-	it("a DUAL-CLUB member's claim is refused for the same reason", async () => {
-		// The claim and the invite must agree — they ask the same predicate, and
-		// the whole point of `rosterConflictFor` being the bind's exact complement
-		// is that no surface can say "ready" where another says "refused".
-		const { claimPersonForUser } = await import("./account-invite-logic");
-		const other = await seedClub();
-		try {
-			const shared = `dual-claim-${randomUUID()}@test.example`;
-			const { memberId, personId } = await seedMember({
-				email: null,
-				memberEmail: shared,
-			});
-			await testDb.insert(members).values({
-				clubId: other.clubId,
-				personId,
-				name: "Picked Person",
-				email: shared,
-			});
 			const userId = await seedUser(shared);
-
-			expect(await claimPersonForUser({ memberId, userId })).toBe(
-				"roster_conflict",
-			);
-			expect((await personRow(personId))?.userId).toBeNull();
+			expect(await claimPersonForUser({ memberId, userId })).toBe("linked");
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 		}
@@ -374,16 +264,10 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		// the refusal, which is precisely when the message matters most.
 		const { claimPersonForUser } = await import("./account-invite-logic");
 		const addr = `no-vouch-${randomUUID()}@test.example`;
-		const { memberId, personId } = await seedMember({
-			email: null,
-			memberEmail: addr,
-		});
+		const { memberId, personId } = await seedMember({ email: addr });
 		const userId = await seedUser(addr);
-		// Take the address off the roster row between the match and the bind.
-		await testDb
-			.update(members)
-			.set({ email: null })
-			.where(eq(members.id, memberId));
+		// A second Person comes to carry the same address before the bind.
+		await seedMember({ email: addr });
 
 		const outcome = await claimPersonForUser({ memberId, userId });
 
@@ -410,162 +294,58 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 	});
 
 	it("an officer cannot take over a Person another club also holds (#755 regression)", async () => {
-		// The takeover #755 chased across four writers, re-run against the model
-		// that removed the writers instead of guarding them. An officer of club A
-		// types their own address onto their own membership row — the one column
-		// they legitimately own — for a human club B also has on its roster, then
-		// signs in. Neither half may give them the Person: the invite writes no
-		// identity, and the claim refuses because two clubs hold them.
-		const { prepareMemberInvite } = await import("./account-invite-logic");
+		// The takeover #755 chased, re-run against #907's model. An officer of
+		// club A types their OWN address onto a human club B also holds, then
+		// signs in. The roster edit refuses the address (`multi_club`), so the
+		// Person never carries it, and neither binding path gives it to them.
+		const { prepareMemberInvite, claimPersonForUser } = await import(
+			"./account-invite-logic"
+		);
+		const { linkPersonToUser } = await import("./account-link-logic");
+		const { applyMemberEdit } = await import("./members-logic");
 		const other = await seedClub();
 		try {
-			const [person] = await testDb
-				.insert(people)
-				.values({ name: "Shared Person", email: null })
-				.returning({ id: people.id });
-			if (!person) throw new Error("person insert failed");
-			const attacker = `attacker-${randomUUID()}@test.example`;
-			const [member] = await testDb
-				.insert(members)
-				.values({
-					clubId: club.clubId,
-					personId: person.id,
-					name: "Shared Person",
-					email: attacker,
-				})
-				.returning({ id: members.id });
-			if (!member) throw new Error("member insert failed");
-			// The SAME human on another club's roster (ADR-0008: one Person row).
-			await testDb.insert(members).values({
-				clubId: other.clubId,
-				personId: person.id,
-				name: "Shared Person",
-				email: null,
-			});
-
-			const prep = await prepareMemberInvite({
-				clubId: club.clubId,
-				memberId: member.id,
-			});
-
-			// The invite is REFUSED, and this expectation is the review finding
-			// itself: an earlier cut asserted `ready` here, reasoning that sending to
-			// this club's own address was this club's business. It is not, once the
-			// claim will refuse — the link mints a real account that then cannot be
-			// used, the row shows "invited" forever, and nothing names the reason.
-			expect(prep.outcome).toBe("roster_conflict");
-			expect((await personRow(person.id))?.email).toBeNull();
-			expect((await personRow(person.id))?.invitedAt).toBeNull();
-
-			// But the column assertion above is NOT the property that matters, and an
-			// earlier cut of this test stopped there — it passed while the takeover
-			// still completed one step later. Drive it to the outcome, on BOTH paths
-			// that can bind a Person: the officer signs in on the address they typed
-			// and must end up holding nothing.
-			const { claimPersonForUser } = await import("./account-invite-logic");
-			const { linkPersonToUser } = await import("./account-link-logic");
-			const attackerUserId = await seedUser(attacker);
-
-			// Sign-in auto-link — the path that now does the binding.
-			expect((await linkPersonToUser(attackerUserId)).linkedPersonIds).toEqual(
-				[],
-			);
-			// And the explicit claim, which they reach by picking the name.
-			expect(
-				await claimPersonForUser({
-					memberId: member.id,
-					userId: attackerUserId,
-				}),
-			).toBe("roster_conflict");
-			expect((await personRow(person.id))?.userId).toBeNull();
-			expect((await personRow(person.id))?.email).toBeNull();
-		} finally {
-			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
-		}
-	});
-
-	it("a shared Person with no person-level address is not claimable at all", async () => {
-		// The same rule from the public claim surface directly, with no invite in
-		// the story: `members.email` is a column any officer of any of this Person's
-		// clubs can set to anything, so it cannot be the key that binds an account
-		// to a Person more than one club holds. Single-club Persons keep the
-		// fallback — that is the ordinary "the VPE gave me an email" path, asserted
-		// by the sibling test above.
-		const other = await seedClub();
-		try {
-			const [person] = await testDb
-				.insert(people)
-				.values({ name: "Shared Person", email: null })
-				.returning({ id: people.id });
-			if (!person) throw new Error("person insert failed");
-			const typed = `typed-${randomUUID()}@test.example`;
-			const [member] = await testDb
-				.insert(members)
-				.values({
-					clubId: club.clubId,
-					personId: person.id,
-					name: "Shared Person",
-					email: typed,
-				})
-				.returning({ id: members.id });
-			if (!member) throw new Error("member insert failed");
-			await testDb.insert(members).values({
-				clubId: other.clubId,
-				personId: person.id,
-				name: "Shared Person",
-				email: null,
-			});
-			const { claimPersonForUser } = await import("./account-invite-logic");
-			const userId = await seedUser(typed);
-
-			expect(await claimPersonForUser({ memberId: member.id, userId })).toBe(
-				"roster_conflict",
-			);
-			expect((await personRow(person.id))?.userId).toBeNull();
-		} finally {
-			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
-		}
-	});
-
-	it("a shared Person is not claimable even when the PERSON carries the address", async () => {
-		// The sibling above pins the NULL case, which is the state the migration
-		// leaves behind. This one pins the other half of the same rule: a
-		// person-level address is not a credential either — the CSV importer, the
-		// guest-book conversion and the create-club form all write it from a value
-		// somebody typed — so it cannot rescue a bind the club count refuses.
-		const { claimPersonForUser } = await import("./account-invite-logic");
-		const other = await seedClub();
-		try {
-			const typed = `typed-${randomUUID()}@test.example`;
-			const { memberId, personId } = await seedMember({ email: typed });
+			const { memberId, personId } = await seedMember({ email: null });
 			await testDb.insert(members).values({
 				clubId: other.clubId,
 				personId,
 				name: "Picked Person",
-				email: null,
 			});
-			const userId = await seedUser(typed);
+			const attacker = `attacker-${randomUUID()}@test.example`;
 
-			expect(await claimPersonForUser({ memberId, userId })).toBe(
-				"roster_conflict",
+			const edit = await applyMemberEdit({
+				actorMemberId: null,
+				clubId: club.clubId,
+				memberId,
+				name: "Picked Person",
+				email: attacker,
+			});
+			expect(edit.emailRefused).toBe("multi_club");
+			expect((await personRow(personId))?.email).toBeNull();
+
+			expect(
+				(await prepareMemberInvite({ clubId: club.clubId, memberId })).outcome,
+			).toBe("no_email");
+
+			const attackerUserId = await seedUser(attacker);
+			expect((await linkPersonToUser(attackerUserId)).linkedPersonIds).toEqual(
+				[],
 			);
+			expect(
+				await claimPersonForUser({ memberId, userId: attackerUserId }),
+			).toBe("needs_invite");
 			expect((await personRow(personId))?.userId).toBeNull();
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 		}
 	});
 
-	it("does not claim from a person-level address when the roster disagrees", async () => {
-		// `people.email` is no longer a claim key at all. A stale person-level value
-		// — the typo the importer first created the row under, say — must not let
-		// somebody bind a membership the club has since re-pointed elsewhere.
+	it("claimPersonForUser fails on an address that is not the Person's own (#907)", async () => {
 		const { claimPersonForUser } = await import("./account-invite-logic");
-		const stale = `stale-${randomUUID()}@test.example`;
 		const { memberId, personId } = await seedMember({
-			email: stale,
-			memberEmail: `roster-${randomUUID()}@test.example`,
+			email: `mine-${randomUUID()}@test.example`,
 		});
-		const userId = await seedUser(stale);
+		const userId = await seedUser(`someone-${randomUUID()}@test.example`);
 
 		expect(await claimPersonForUser({ memberId, userId })).toBe(
 			"email_mismatch",

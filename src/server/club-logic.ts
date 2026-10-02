@@ -60,7 +60,8 @@ export async function loadClubMembers(
 			.select({
 				id: members.id,
 				name: members.name,
-				email: members.email,
+				// A Person fact (#907): one address across every club that holds them.
+				email: people.email,
 				// A Person fact (#906): one number across every club that holds them.
 				phone: people.phone,
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
@@ -130,7 +131,8 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 				preferredName: sql<
 					string | null
 				>`coalesce(${members.preferredName}, ${people.preferredName})`,
-				email: members.email,
+				// A Person fact (#907): one address across every club that holds them.
+				email: people.email,
 				// A Person fact (#906): one number across every club that holds them.
 				phone: people.phone,
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):

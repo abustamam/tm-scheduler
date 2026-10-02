@@ -26,8 +26,12 @@ async function addMember(
 		preferredName?: string | null;
 	} = {},
 ): Promise<string> {
-	// The phone is the Person's (#906).
-	const personId = await seedPerson({ name, phone: opts.phone ?? null });
+	// Phone (#906) and email (#907) are the Person's.
+	const personId = await seedPerson({
+		name,
+		phone: opts.phone ?? null,
+		email: opts.email ?? null,
+	});
 	const [row] = await testDb
 		.insert(members)
 		.values({
@@ -36,7 +40,6 @@ async function addMember(
 			name,
 			clubRole: "member",
 			status: opts.status ?? "active",
-			email: opts.email ?? null,
 			preferredName: opts.preferredName ?? null,
 		})
 		.returning({ id: members.id });

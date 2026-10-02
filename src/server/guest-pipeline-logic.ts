@@ -55,7 +55,11 @@ import {
 	DEFAULT_COUNTRY_CODE,
 	toStoredPhone,
 } from "#/lib/phone";
-import { normalizedEmail, rosterConflictFor } from "./account-link-logic";
+import {
+	normalizedEmail,
+	rosterConflictFor,
+	soleHoldingClub,
+} from "./account-link-logic";
 import { logActivity } from "./activity";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
@@ -1493,8 +1497,8 @@ export async function applyConvertGuestToMember(
 	input: ConvertGuestInput,
 ): Promise<ConvertGuestResult> {
 	const cc = await loadClubDefaultCountryCode(input.clubId);
-	// The roster row this convert CREATED and the address it wrote there, for
-	// the shared-address check after commit (see the end of this function).
+	// The Person this convert wrote an address onto (a fresh one, or a blank it
+	// filled), for the shared-address check after commit (see the end).
 	let written: { personId: string; email: string } | null = null;
 
 	const result = await db.transaction(async (tx) => {
@@ -1574,27 +1578,12 @@ export async function applyConvertGuestToMember(
 			// household fusion #488 fixes for phone numbers, just on the key this
 			// change promoted to go first. The CSV importer already honours this
 			// (its `ambiguous` stat); the convert path did not.
-			// Matches the person-level address OR THIS CLUB's roster record for them
-			// (#756). Migration 0076 nulled `people.email` for everyone who has never
-			// signed in, so a person-level-only match stopped recognising essentially
-			// the whole roster — and the miss is not quiet: converting a guest who is
-			// already a member then mints a SECOND Person and a second roster row for
-			// the same human, in the same club. Worse, the pair is invisible to
-			// `listDuplicatePeople` unless it coalesces the same way, because one
-			// row's `people.email` is NULL.
-			//
-			// BOTH halves match only a Person THIS club already holds (#759), and
-			// that is the INNER join's doing. A club-scoped LEFT join (what this was)
-			// scopes the `members.email` half and nothing else: `people.email` is
-			// global, so the OR matched a Person in any club. Without it, a guest
-			// typed with a stranger's address attached that stranger's Person to
-			// this club, and a Person two clubs hold cannot bind an account by any
-			// route (`rosterPermitsBind`): the convert denied them sign-in from a
-			// club neither they nor their officers can see. A Person no club holds
-			// is refused too — attaching one would make this club's roster row the
-			// only vouching row for their account. A refused match falls through to
-			// the fresh-Person arm below, which is safe here as it is not in the
-			// importer: a guest carries no Customer ID to collide with.
+			// Matches the Person's one address (#907), and only a Person THIS club
+			// already holds (#759) — that is the INNER join's doing. Without it a
+			// guest typed with a stranger's address attached that stranger's Person
+			// to this club. A Person no club holds is refused too. A refused match
+			// falls through to the fresh-Person arm below, which is safe here as it
+			// is not in the importer: a guest carries no Customer ID to collide with.
 			const candidates = await tx
 				.selectDistinct({ id: people.id, createdAt: people.createdAt })
 				.from(people)
@@ -1605,10 +1594,7 @@ export async function applyConvertGuestToMember(
 						eq(members.clubId, input.clubId),
 					),
 				)
-				.where(
-					sql`${normalizedEmail(people.email)} = ${email.toLowerCase()}
-					    or ${normalizedEmail(members.email)} = ${email.toLowerCase()}`,
-				)
+				.where(sql`${normalizedEmail(people.email)} = ${email.toLowerCase()}`)
 				.orderBy(...order)
 				.limit(2);
 			if (candidates.length === 1) personId = candidates[0]?.id ?? null;
@@ -1653,6 +1639,7 @@ export async function applyConvertGuestToMember(
 			if (!p) throw new Error("Failed to create person.");
 			personId = p.id;
 			createdPerson = true;
+			if (email) written = { personId, email };
 		} else {
 			if (preferredName) {
 				// Deduped onto an EXISTING Person: the insert above never ran, so seed
@@ -1674,6 +1661,27 @@ export async function applyConvertGuestToMember(
 					.update(people)
 					.set({ phone })
 					.where(and(eq(people.id, personId), isNull(people.phone)));
+			}
+			if (email) {
+				// The address is the Person's (#907, ADR-0029). A guest's address
+				// reaches an EXISTING Person only by FILLING a blank, and only while
+				// nobody has signed in as them and this club is their sole holder —
+				// all in the statement, so a bind or a second club landing first
+				// leaves it untouched. A Person matched by email already carries it;
+				// this is the phone-matched arm.
+				const filled = await tx
+					.update(people)
+					.set({ email })
+					.where(
+						and(
+							eq(people.id, personId),
+							isNull(people.email),
+							isNull(people.userId),
+							soleHoldingClub(input.clubId),
+						),
+					)
+					.returning({ id: people.id });
+				if (filled.length > 0) written = { personId, email };
 			}
 		}
 
@@ -1881,7 +1889,6 @@ export async function applyConvertGuestToMember(
 					personId,
 					name,
 					preferredName,
-					email,
 					clubRole: "member",
 					status: "active",
 					joinedAt: new Date(),
@@ -1893,7 +1900,6 @@ export async function applyConvertGuestToMember(
 			if (m) {
 				membershipId = m.id;
 				createdMembership = true;
-				if (email) written = { personId, email };
 			} else {
 				// The conflict branch: a concurrent convert won and created this row.
 				// It is not ours, so `createdMembership` stays false and an undo will
@@ -2023,11 +2029,9 @@ export async function applyConvertGuestToMember(
 	// answers `no_vouching_row` — which the narrowing below discards, leaving the
 	// conflict silently unreported on exactly the path it exists for.
 	//
-	// Only a roster row this convert CREATED is checked. Reuse writes no address,
-	// so any obstacle there predates it, and a fresh Person is never linked.
-	// Narrowed to `shared_address`: the other two arms are properties of the
-	// subject's own memberships, and `multiple_clubs` is what the club-scoped
-	// dedup above now prevents a convert from creating.
+	// Only an address this convert WROTE is checked; any other obstacle
+	// predates it. Narrowed to `shared_address`: the other arm is a property of
+	// the subject itself.
 	const probe = written as { personId: string; email: string } | null;
 	if (probe) {
 		// The convert has COMMITTED by now. A failure here must not surface as a

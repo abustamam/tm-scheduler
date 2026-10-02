@@ -283,7 +283,7 @@ export async function loadLevelProximity(
 				.select({
 					memberId: members.id,
 					name: members.name,
-					email: members.email,
+					email: people.email,
 					phone: people.phone,
 					preferredName: memberGoesBy,
 				})
@@ -367,7 +367,7 @@ export async function loadOrientationRoster(
 			.select({
 				memberId: members.id,
 				name: members.name,
-				email: members.email,
+				email: people.email,
 				phone: people.phone,
 				preferredName: memberGoesBy,
 				startedAt: members.orientationStartedAt,

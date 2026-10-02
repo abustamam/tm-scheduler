@@ -194,7 +194,6 @@ describe.skipIf(!hasTestDb)("superadmin impersonation (integration)", () => {
 			clubId: seeded.clubId,
 			personId: person,
 			name: "Super Member",
-			email: `super-member-${su.id}@test.example`,
 			clubRole: "member",
 			status: "active",
 		});

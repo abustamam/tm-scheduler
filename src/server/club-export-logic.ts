@@ -43,8 +43,8 @@
  * two meetings can share a date.
  *
  * Contact columns are what the roster shows: the phone is `people.phone`, a
- * Person fact shared by every club that holds them (#906); the email is still
- * the club's own `members.email`, and moves to `people` with #907.
+ * Person fact shared by every club that holds them (#906), and so is the email,
+ * `people.email` (#907).
  */
 import { type AnyColumn, and, eq, isNotNull, max, or, sql } from "drizzle-orm";
 import { strToU8, zipSync } from "fflate";
@@ -321,7 +321,7 @@ export async function loadClubExport(
 					id: members.id,
 					name: members.name,
 					preferredName: members.preferredName,
-					email: members.email,
+					email: people.email,
 					// A Person fact (#906), through the join below.
 					phone: people.phone,
 					status: members.status,

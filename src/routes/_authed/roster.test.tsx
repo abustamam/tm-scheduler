@@ -433,6 +433,7 @@ describe("CSV officer approvals", () => {
 				toSkip: 0,
 				foreignSkipped: 0,
 				addressConflicts: 0,
+				emailNotWritten: 0,
 				peopleCreated: 1,
 				peopleMatched: 0,
 				ambiguous: 0,
@@ -477,6 +478,7 @@ describe("CSV officer approvals", () => {
 				skippedBlankName: 0,
 				foreignSkipped: 0,
 				addressConflicts: 0,
+				emailNotWritten: 0,
 				unparseablePosition: 0,
 				skippedOfficerAssignments: select === true ? 0 : 1,
 			},
@@ -551,6 +553,7 @@ describe("CSV import preview — cross-club counts (#759)", () => {
 			summary: {
 				toInsert: 1,
 				toUpdate: 0,
+				emailNotWritten: 0,
 				peopleCreated: 1,
 				peopleMatched: 0,
 				ambiguous: 0,

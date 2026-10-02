@@ -56,12 +56,14 @@ describe.skipIf(!hasTestDb)("minutes email default recipients (#903)", () => {
 	}
 
 	it("is the active roster plus the guests marked present, split by email", async () => {
-		const lapsedPerson = await seedPerson({ name: `Lapsed ${run}` });
+		const lapsedPerson = await seedPerson({
+			name: `Lapsed ${run}`,
+			email: `lapsed-${run}@test.example`,
+		});
 		await testDb.insert(members).values({
 			clubId: seeded.clubId,
 			personId: lapsedPerson,
 			name: `Lapsed ${run}`,
-			email: `lapsed-${run}@test.example`,
 			clubRole: "member",
 			status: "inactive",
 		});

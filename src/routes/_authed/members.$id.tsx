@@ -727,6 +727,16 @@ function UnscheduledSpeeches({
 	);
 }
 
+/** Why an officer could not change a member's email (#907, ADR-0029). */
+function emailRefusedCopy(
+	reason: "bound" | "multi_club",
+	name: string,
+): string {
+	return reason === "bound"
+		? `This is ${name}'s sign-in address. Only they can change it.`
+		: `${name} is also on another club's roster, so their email can't be changed here. Contact GavelUp support.`;
+}
+
 type ProfileMember = {
 	id: string;
 	name: string;
@@ -798,23 +808,25 @@ function MemberActions({
 					memberId: member.id,
 					name,
 					preferredName: String(form.get("preferredName") ?? "").trim() || null,
-					email: String(form.get("email") ?? "").trim() || null,
+					// A bound member's address is theirs (#907): the field is read-only
+					// and not sent at all, so a save cannot even ask to change it.
+					...(isLinkedAccount
+						? {}
+						: { email: String(form.get("email") ?? "").trim() || null }),
 					// Only when the officer changed it (#906): the phone is the
 					// Person's, so a stale prefill must not overwrite another club's.
 					...phoneEditPayload(String(form.get("phone") ?? ""), member.phoneRaw),
 					officerPositions,
 				},
 			});
-			// The save always LANDS — `members.email` is the club's own column. What
-			// it can do is leave the member unable to sign in, and in one case leave
-			// SOMEONE ELSE unable to: an address another active member already
-			// carries makes the roster ambiguous and refuses both of them, on a
-			// screen that shows no sign of the other person.
-			//
-			// `null` is the ordinary case. The old `personEmailSynced` signal this
-			// replaces was three-state and both falsy values meant different things;
-			// this one is an obstacle or nothing.
-			if (res.rosterConflict) {
+			// The rest of the edit always LANDS. The email is the Person's (#907):
+			// it is refused when another club holds them too (or they signed in
+			// since this page loaded), and the officer is told why. Otherwise the
+			// save can still leave the member — or SOMEONE ELSE — unable to sign in:
+			// an address another member already carries refuses both of them.
+			if (res.emailRefused) {
+				toast.warning(emailRefusedCopy(res.emailRefused, member.name));
+			} else if (res.rosterConflict) {
 				toast.warning(ROSTER_CONFLICT_COPY[res.rosterConflict]);
 			} else {
 				toast.success("Member updated.");
@@ -917,20 +929,18 @@ function MemberActions({
 								defaultValue={member.email ?? ""}
 								placeholder="name@example.com"
 								aria-describedby="edit-email-hint"
+								readOnly={isLinkedAccount}
 							/>
-							{/* The one place the app says what this field is for. The save
-							    used to warn when it could not move the member's SIGN-IN
-							    address; #756 makes that impossible rather than reportable,
-							    so the "and then re-invite" half has to be said HERE, on the
-							    screen where a typo is actually corrected, or it is said
-							    nowhere. */}
+							{/* The one place the app says what this field is (#907): the
+							    member's own address in every club, and what they sign in
+							    with. Once they have signed in it is theirs. */}
 							<p
 								id="edit-email-hint"
 								className="text-xs text-[var(--sea-ink-soft)]"
 							>
-								The club's contact address, and where an account invite is sent.
-								If they haven't joined yet, send a fresh invite after changing
-								it.
+								{isLinkedAccount
+									? emailRefusedCopy("bound", member.name)
+									: "Their sign-in address, and where an account invite is sent. Every club they belong to shares it."}
 							</p>
 						</div>
 						<div className="space-y-2">

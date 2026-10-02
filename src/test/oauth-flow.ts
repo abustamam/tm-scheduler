@@ -329,7 +329,6 @@ export async function joinClub(
 			clubId,
 			personId: person.id,
 			name: "OAuth Test User",
-			email,
 			clubRole,
 			status: "active",
 		})
