@@ -22,6 +22,7 @@
  */
 import { and, asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { user } from "#/db/auth-schema";
 import {
 	guests,
 	meetingAttendance,
@@ -81,6 +82,9 @@ const {
 	updateWordOfTheDay,
 } = await import("./meetings");
 const { confirmSlot, unconfirmSlot } = await import("./slots");
+const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
+	"./guards"
+);
 const {
 	addMinutesGuest,
 	addTableTopics,
@@ -458,6 +462,45 @@ describe.skipIf(!hasTestDb)(
 				signIn(c.as);
 				await attempt(() => c.act(seed));
 				expect(await c.read(seed)).not.toEqual(before);
+			});
+		});
+
+		describe("unconfirmSlot refuses a non-admin for who they are, not for the cancel", () => {
+			// A cancelled meeting is hidden from members, so the cancellation must
+			// not be what tells a caller outside the club (or a plain member) that
+			// it exists and was cancelled. The role gate answers first.
+			let outsiderId: string | null = null;
+
+			afterEach(async () => {
+				if (outsiderId)
+					await testDb.delete(user).where(eq(user.id, outsiderId));
+				outsiderId = null;
+			});
+
+			it("a signed-in user outside the club hears they are not a member", async () => {
+				outsiderId = `outsider-${crypto.randomUUID()}`;
+				await testDb.insert(user).values({
+					id: outsiderId,
+					name: "Outsider",
+					email: `${outsiderId}@test.example`,
+				});
+				await setSlot(seed, "confirmed");
+				await setStatus("cancelled");
+				sessionUserId = outsiderId;
+				await expect(
+					attempt(() => unconfirmSlot({ data: { slotId: seed.slotId } })),
+				).rejects.toThrow(exact(NOT_A_MEMBER_MESSAGE));
+				expect(await slotRow(seed)).toEqual({ status: "confirmed" });
+			});
+
+			it("a plain member hears they lack permission", async () => {
+				await setSlot(seed, "confirmed");
+				await setStatus("cancelled");
+				sessionUserId = seed.memberUserId;
+				await expect(
+					attempt(() => unconfirmSlot({ data: { slotId: seed.slotId } })),
+				).rejects.toThrow(exact(NO_PERMISSION_MESSAGE));
+				expect(await slotRow(seed)).toEqual({ status: "confirmed" });
 			});
 		});
 
