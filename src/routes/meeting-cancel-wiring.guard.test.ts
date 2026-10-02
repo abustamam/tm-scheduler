@@ -36,6 +36,27 @@ function declarationAfter(src: string, marker: string): string {
 	return src.slice(at, next === -1 ? undefined : next);
 }
 
+/**
+ * One of the route component's inner handlers, sliced to its own body: from
+ * `async function <name>()` to the next function declared at the same depth
+ * (one tab in). The `release-slot-seam.guard.test.ts` pattern, for the reason
+ * it gives: a pin on the whole file is satisfied by the SAME call in a
+ * neighbouring handler, so "doRestore re-runs the loader" passes on
+ * `doReopen`'s `router.invalidate()` with doRestore's deleted.
+ */
+function handlerBody(src: string, name: string): string {
+	const start = src.indexOf(`\tasync function ${name}()`);
+	expect(start, `no ${name} handler in the meeting route`).toBeGreaterThan(-1);
+	const rest = src.slice(start + 1);
+	const next = rest.search(/\n\t(?:async )?function /);
+	const body = next === -1 ? rest : rest.slice(0, next);
+	// The vacuity floor: an over-short slice passes a negative for nothing and
+	// an over-long one lends a neighbour's call to this handler.
+	expect(body.length).toBeGreaterThan(100);
+	expect(body.split("async function ").length - 1).toBe(1);
+	return body;
+}
+
 describe("meeting route: cancel wiring (#1057)", () => {
 	const src = readSource(ROUTE);
 
@@ -109,6 +130,43 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		expect(src).toContain("isCancellationNoticeRequested(search)");
 		expect(src).toContain(
 			"if (noticeRequested && cancelled && effectiveCanManage) {",
+		);
+	});
+
+	it("on the uuid URL already, doCancel re-runs the loader and opens the notice in place", () => {
+		// Sliced to doCancel's OWN body (review of #1084): the file-wide pins
+		// above are satisfied with the else branch deleted, and an officer who
+		// cancels from a uuid URL is then left on a stale page with no notice.
+		const body = handlerBody(src, "doCancel").replace(/\s+/g, " ");
+		expect(body).toContain(
+			"} else { await router.invalidate(); setNoticeOpen(true); }",
+		);
+		// Both arms: the navigation is the other half of the same `if`.
+		expect(body).toContain(
+			"if (meetingKeyParam !== meeting.id) { await router.navigate({ href: cancellationNoticeHref(clubId, meeting.id), }); }",
+		);
+	});
+
+	it("doRestore re-runs the loader after the write", () => {
+		const body = handlerBody(src, "doRestore").replace(/\s+/g, " ");
+		expect(body).toContain(
+			"await restoreMeeting({ data: { meetingId: meeting.id } }); toast.success(",
+		);
+		expect(
+			body,
+			"without the invalidate the banner, the toolbar and the agenda keep " +
+				"showing the meeting as cancelled after a successful restore.",
+		).toContain("await router.invalidate();");
+	});
+
+	it("the in-room strip is withheld on a cancelled meeting", () => {
+		expect(
+			src,
+			"the strip's Vote link appears whenever a category is open, and " +
+				"cancelling does not close vote sessions — so without `!cancelled` a " +
+				"scanned QR on today's cancelled meeting offers a Vote castVote refuses.",
+		).toContain(
+			'const inRoom = isInRoom(search) && phase === "today" && !cancelled;',
 		);
 	});
 

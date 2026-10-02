@@ -537,7 +537,12 @@ function MeetingView() {
 	// The in-room strip (#913): the QR's flag AND meeting day, off the same
 	// frozen `phase` as everything else — so it cannot disappear mid-visit at
 	// club-local midnight. Any other day, `?room=1` renders the normal page.
-	const inRoom = isInRoom(search) && phase === "today";
+	// Never on a cancelled meeting (#1057): everything in the strip — Vote,
+	// what I'm doing today, the guest book, feedback — is for a meeting that is
+	// happening, and cancelling does not close vote sessions (a restore must
+	// lose nothing), so without this a scanned QR on today's cancelled meeting
+	// offered a Vote that `castVote` then refused.
+	const inRoom = isInRoom(search) && phase === "today" && !cancelled;
 	// Anonymous role feedback (#984): offered from the meeting's start until
 	// three days after its scheduled end, off the same frozen `now`. The server
 	// re-checks the window on every write, so this only decides the link.
