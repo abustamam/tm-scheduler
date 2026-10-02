@@ -225,8 +225,9 @@ export async function emailWriteRefusalFor(
 
 /**
  * Bind a Person to a signed-in account and stamp the VERIFIED address onto it.
- * **The only writer of `people.email` outside the superadmin/operator waivers**
- * (`person-email-writers.guard.test.ts` is the enumeration).
+ * The one writer of `people.email` that writes a VERIFIED address; every other
+ * writer is a named waiver in `person-email-writers.guard.test.ts` (the club-side
+ * ones held to `isNull(people.userId)` AND `soleHoldingClub`, ADR-0029).
  *
  * Two properties make the name honest rather than aspirational, and both were
  * review findings against earlier cuts:

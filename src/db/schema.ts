@@ -742,8 +742,8 @@ export const people = pgTable(
 		// Who may write it:
 		//  - the bind, which reads the address off the `user` row ITSELF and sets
 		//    `user_id` in the same statement;
-		//  - a club-side writer (the roster edit, the CSV importer's fill, the
-		//    guest-convert fill) ONLY while nobody has signed in as this Person
+		//  - a club-side writer (the roster edit, the CSV importer's fill) ONLY
+		//    while nobody has signed in as this Person
 		//    AND that club is their sole holder — `isNull(people.userId)` and
 		//    `soleHoldingClub(clubId)` in the UPDATE's own WHERE;
 		//  - the superadmin/operator waivers.
@@ -798,9 +798,10 @@ export const people = pgTable(
 // TEMPORARY, and meant to be dropped. Inverting the ownership of that column
 // made every value written before the change un-trustworthy as an identity —
 // nobody had proved they owned any of them — so the migration nulls the ones on
-// un-claimed Persons. This table is the undo: the rollback plan is `revert the
-// PR` plus one UPDATE joining back through it, and it exists because a data
-// migration you cannot reverse is one you cannot deploy on a Friday.
+// un-claimed Persons. It was the undo for that change; since #907 made
+// `people.email` the sign-in key, restoring these unverified values onto
+// unbound Persons would hand out keys #756 judged untrustworthy, so the
+// restore script was deleted and this is a record only.
 //
 // Drop it (schema + a migration) once a release has passed without incident.
 // Deliberately NOT a general audit trail: it holds one snapshot, from one

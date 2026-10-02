@@ -32,7 +32,7 @@ after sign-in it is theirs.
 | Person state | Officer roster edit | CSV import / bulk paste | Guest convert (matched Person) | Sign-in bind |
 |---|---|---|---|---|
 | Bound (`user_id` set) | refused, field read-only | not written, row reported | not written | n/a |
-| Unbound, held only by the writing club | allowed (typo repair) | fill-only | fill blank only | writes the verified address |
+| Unbound, held only by the writing club | allowed (typo repair) | fill-only | **not written** | writes the verified address |
 | Unbound, held by 2+ clubs | refused; a superadmin fixes it | not written, row reported | not written | writes the verified address |
 
 Every club-side writer carries BOTH predicates in its UPDATE's own WHERE —
@@ -41,6 +41,13 @@ distinct club holds a membership of the Person, and it is this one). Being in th
 is what makes a bind landing between a form's load and its save a no-op rather than an
 overwrite. `person-email-writers.guard.test.ts` names every writer and holds each club-side
 one to both tokens. The officer edit also locks the Person row (`FOR UPDATE`) first.
+
+**Guest conversion never writes an EXISTING Person's address** — a deliberate deviation
+from #907's spec, which asked for a blank-only fill. The guest book is an anonymous public
+form: a visitor signing it with a member's name and phone and their own address would have
+had that address filled onto the member's Person, and could then take the account (club role
+included) with one magic link. Only a FRESH Person created by the conversion carries the
+guest's address.
 
 The superadmin first-admin repair (`updateUnclaimedAdminEmail`) keeps its own waiver with
 `isNull(people.userId)` only: the operator is the one person who may repair a Person several
@@ -51,7 +58,9 @@ clubs share. A plain INSERT of a brand-new Person carries an address freely.
 1. the Person's own `people.email` normalises to it;
 2. `people.user_id IS NULL`;
 3. the Person holds at least one membership (a club vouches);
-4. no OTHER Person, bound or not, carries it.
+4. no OTHER Person carries it that counts as a holder — bound to an account, or holding at
+   least one membership. A leftover `applyMemberRemove` stripped of every membership vouches
+   for nothing and must not lock the real member out when another club re-adds them.
 
 `rosterConflictFor` is its exact complement, and `roster-obstacle.guard.test.ts` holds the
 two together over a matrix of roster shapes.
@@ -79,8 +88,11 @@ never-auto-merge-on-a-shared-email.
   undo) is re-attachable by the club that last removed them (#855); that club is then the sole
   holder and may set the address. That was equally true of the `members.email` vouch.
 - Migration 0109 backfills each unbound Person from the one address its memberships agree on,
-  snapshots every change in `people_email_backup_2` and every dropped membership address in
-  `members_email_backup`, and drops the column. A rollback restores `people.email` only where
+  and CLEARS the address of every unbound Person whose memberships agree on none (no
+  memberships, none with an address, or 2+ distinct), because nothing ever vouched for that
+  copy. It snapshots every change in `people_email_backup_2` and every dropped membership
+  address in `members_email_backup`, then drops the column. `scripts/rollback-0076.ts` is
+  deleted: restoring #756's pre-migration addresses would now write unverified sign-in keys. A rollback restores `people.email` only where
   `user_id` is still null: an address a bind has since verified is never overwritten.
 
 Supersedes #756's split of the address into a verified `people.email` and a per-club

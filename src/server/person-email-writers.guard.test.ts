@@ -120,15 +120,6 @@ const WAIVERS: Record<
 		sites: 1,
 		reason: "superadmin merge, fill-only on the keeper",
 	},
-	// The 0076 rollback. Not reachable from the app at all — an operator runs it
-	// by hand, after reverting the code, to put back exactly what the migration
-	// captured. Its own predicates (`user_id IS NULL AND email IS NULL`) keep it
-	// from touching an address either the bind or a superadmin repair has set.
-	"../scripts/rollback-0076.ts": {
-		fn: "main",
-		sites: 1,
-		reason: "operator-run 0076 rollback, restores the captured snapshot",
-	},
 };
 
 /** Every `.ts` source under `ROOTS`, recursively, excluding tests. */

@@ -73,40 +73,6 @@ function dataStatements(): string[] {
 	return statements;
 }
 
-const ROLLBACK_SCRIPT = resolve(process.cwd(), "scripts/rollback-0076.ts");
-
-/**
- * The rollback statement, READ OUT OF `scripts/rollback-0076.ts` rather than
- * copied here.
- *
- * An earlier cut hand-typed it and claimed in this very comment to be "keeping
- * the script in step" — nothing read the script, so editing a predicate there
- * left every test below green while the only artifact that runs during an
- * incident quietly changed meaning. All three predicates matter; the
- * `email IS NULL` one is the least obvious and has its own test.
- */
-function restoreStatement(): string {
-	const text = readFileSync(ROLLBACK_SCRIPT, "utf8");
-	// The apply-path statement: the UPDATE inside the `sql` template, not the one
-	// quoted in the header comment (which is psql-escaped).
-	const stmt = /sql`(\s*UPDATE "people" p SET[\s\S]*?)`/.exec(text)?.[1];
-	expect(
-		stmt,
-		"scripts/rollback-0076.ts no longer carries a readable UPDATE statement",
-	).toBeTruthy();
-	const sqlText = stmt as string;
-	// Cheap belt: the three predicates, named, so a drift that still parses fails
-	// with a message rather than a mystery.
-	for (const predicate of [
-		/b\."person_id"/,
-		/p\."user_id" IS NULL/i,
-		/p\."email" IS NULL/i,
-	]) {
-		expect(sqlText, `the rollback lost ${predicate}`).toMatch(predicate);
-	}
-	return sqlText;
-}
-
 /** This suite's own database name, on the same server as `TEST_DATABASE_URL`. */
 const SCRATCH_DB = `tm_0076_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
@@ -330,49 +296,6 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 				.from(peopleEmailBackup)
 				.where(eq(peopleEmailBackup.personId, personId));
 			expect(saved?.email).toBe(addr);
-		});
-	});
-
-	it("restores exactly what it cleared, from the backup table", async () => {
-		// The rollback is `scripts/rollback-0076.ts`, and this is its statement. An
-		// untested restore is a restore you find out about during the incident.
-		await inRolledBackTx(async (tx) => {
-			const addr = `restore-${randomUUID()}@test.example`;
-			const personId = await seedInTx(tx, {
-				personEmail: addr,
-				memberEmail: addr,
-			});
-
-			await runMigration(tx);
-			await tx.execute(sql.raw(restoreStatement()));
-
-			expect(await personEmail(tx, personId)).toBe(addr);
-		});
-	});
-
-	it("the restore does not clobber a repair made after the migration", async () => {
-		// `updateUnclaimedAdminEmail` and `mergePeople`'s keeper fill both write
-		// `people.email` on an UNCLAIMED Person, so `user_id IS NULL` does not
-		// protect their work — only `email IS NULL` does. Without that arm the
-		// rollback undoes an operator's repair during the very incident that
-		// triggered it.
-		await inRolledBackTx(async (tx) => {
-			const cleared = `cleared-${randomUUID()}@test.example`;
-			const repaired = `repaired-${randomUUID()}@test.example`;
-			const personId = await seedInTx(tx, {
-				personEmail: cleared,
-				memberEmail: cleared,
-			});
-
-			await runMigration(tx);
-			// The superadmin fixes them up post-deploy.
-			await tx
-				.update(people)
-				.set({ email: repaired })
-				.where(eq(people.id, personId));
-			await tx.execute(sql.raw(restoreStatement()));
-
-			expect(await personEmail(tx, personId)).toBe(repaired);
 		});
 	});
 
