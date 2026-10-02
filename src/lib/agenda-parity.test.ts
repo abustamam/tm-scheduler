@@ -11,8 +11,18 @@
 // and the two sequences must be equal for every point of the
 // `geIntroducesFunctionaries` × role-set matrix.
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { assigneeDisplayName } from "./agenda";
+import {
+	type AgendaLayout,
+	MeetingAgendaPrint,
+} from "#/components/agenda/meeting-agenda-print";
+import {
+	assigneeDisplayName,
+	buildRosterEntries,
+	GUEST_MARKER,
+} from "./agenda";
 import type {
 	AgendaRow,
 	AgendaSlot,
@@ -33,6 +43,7 @@ import {
 	type MeetingForDeck,
 	type Slide,
 } from "./agenda-slides";
+import { buildTimeline } from "./agenda-timing";
 
 /** A segment of the meeting that BOTH renderings are expected to show. */
 type Section =
@@ -1534,4 +1545,115 @@ describe("speech-slot time agreement — deck ⇄ run sheet (#394)", () => {
 			}
 		});
 	}
+});
+
+// ---------------------------------------------------------------------------
+// A guest's kind caption, print ⇄ deck (#1059)
+// ---------------------------------------------------------------------------
+
+/**
+ * The ONE stated difference between print and deck.
+ *
+ * Since #1059 a guest holding a role reads "Name · Guest speaker, <home club>".
+ * The deck shows that string whole. So does every print surface, EXCEPT the
+ * run-of-show rows of the grid and timing layouts: there the name shares its
+ * line with other copy, no one-line box is safe across font metrics (see
+ * `MarkerInPlaceOfCaption` in `meeting-agenda-print.tsx`), and the row prints a
+ * Visitor's "Name · Guest" instead — in the DOM as on paper, nothing hidden.
+ *
+ * Stated exactly rather than loosened: on those two rows the printed holder is
+ * the deck's string with the caption replaced by the marker, and everywhere
+ * else — the editorial and spacious rows, and the roster on all four layouts —
+ * it is the deck's string character for character.
+ */
+describe("guest caption — print ⇄ deck (#1059)", () => {
+	const CAPTION = "Guest speaker, Downtown Toastmasters";
+	const guestSpeaker: AgendaSlot = {
+		...speaker2,
+		assigneeName: "Ben Carter",
+		assigneeIsGuest: true,
+		assigneeGuestCaption: CAPTION,
+	};
+	const slots = FULL.map((s) => (s.id === speaker2.id ? guestSpeaker : s));
+	const config: RunOfShowConfig = { geIntroducesFunctionaries: false };
+
+	const deckSpeaker = (() => {
+		const speech = buildSlideDeck({
+			meeting,
+			club,
+			slots,
+			ballotUrl: BALLOT_URL,
+			...config,
+		}).filter((s) => s.kind === "speech");
+		const last = speech[speech.length - 1];
+		return last?.kind === "speech" ? last.speaker : null;
+	})();
+
+	/** The page's text, tags stripped — what a reader of the sheet sees, and
+	 *  what a hidden copy of the caption would still contribute. */
+	function printedText(layout: AgendaLayout): string {
+		const rows = buildTimeline(
+			expandRunSheet(slots, buildRunOfShow(config)),
+			meeting.scheduledAt,
+			club.timezone,
+		);
+		const html = renderToStaticMarkup(
+			createElement(MeetingAgendaPrint, {
+				layout,
+				header: {
+					clubName: club.name,
+					logoUrl: null,
+					clubNumber: null,
+					district: null,
+					mission: null,
+					meetingSchedule: null,
+					dateLong: "Thursday, June 25, 2026",
+					dateShort: "Thu · Jun 25, 2026",
+					timeRange: "6:45 – 7:45 PM",
+					theme: null,
+					wordOfTheDay: null,
+					location: null,
+					announcements: null,
+					meetingNumber: null,
+				},
+				// The fixtures' categories are the roster's four, typed as the
+				// run sheet's wider `string`.
+				roles: buildRosterEntries(
+					slots as Parameters<typeof buildRosterEntries>[0],
+				),
+				officers: [],
+				explainers: [],
+				rows,
+			}),
+		);
+		return html
+			.replace(/<[^>]+>/g, "")
+			.replace(/&amp;/g, "&")
+			.replace(/&quot;/g, '"')
+			.replace(/&#x27;/g, "'");
+	}
+
+	it("projects the whole caption on the deck", () => {
+		expect(deckSpeaker).toBe(`Ben Carter · ${CAPTION}`);
+	});
+
+	const deck = `Ben Carter · ${CAPTION}`;
+	const marker = deck.replace(` · ${CAPTION}`, ` · ${GUEST_MARKER}`);
+
+	for (const layout of ["editorial", "spacious"] as const)
+		it(`${layout}: the run-of-show row prints the deck's string exactly`, () => {
+			expect(printedText(layout)).toContain(`Speaker 2 · ${deck}`);
+		});
+
+	for (const layout of ["grid", "timing"] as const)
+		it(`${layout}: the run-of-show row prints the deck's string with the caption replaced by "${GUEST_MARKER}"`, () => {
+			const text = printedText(layout);
+			expect(text).toContain(`Speaker 2 · ${marker}`);
+			expect(text).not.toContain(`Speaker 2 · ${deck}`);
+		});
+
+	for (const layout of ["editorial", "spacious", "grid", "timing"] as const)
+		it(`${layout}: the roster prints the deck's string exactly`, () => {
+			expect(printedText(layout)).toContain(`Speaker 2${deck}`);
+		});
 });

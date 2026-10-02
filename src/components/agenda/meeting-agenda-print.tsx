@@ -7,7 +7,12 @@
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
-import { type RosterEntry, rosterGridPositions } from "#/lib/agenda";
+import {
+	GUEST_MARKER,
+	guestCaptionStart,
+	type RosterEntry,
+	rosterGridPositions,
+} from "#/lib/agenda";
 import { groupByPresenter } from "#/lib/agenda-groups";
 import type { AgendaLayout } from "#/lib/agenda-layouts";
 import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
@@ -43,6 +48,52 @@ import {
 
 // Defined once, with the list it is built from (#1069).
 export type { AgendaLayout };
+
+/**
+ * A guest's kind caption on a printed sheet (#1059): ONE line, cut off with an
+ * ellipsis. A home club is free text up to `GUEST_TEXT_MAX` characters, and on
+ * a sheet `FitPage` scales, every wrapped line is paid for in type size and
+ * the last few push the agenda past `MIN_FIT_SCALE` onto a second page. CSS
+ * only — the text in the DOM is the full string, the same one the deck shows.
+ * `guest-caption-print-fit.test.tsx` measures every layout at the longest home
+ * club, beside a control with this rule stripped that flows.
+ */
+const CAPTION_ONE_LINE: React.CSSProperties = {
+	minWidth: 0,
+	overflow: "hidden",
+	whiteSpace: "nowrap",
+	textOverflow: "ellipsis",
+};
+
+function hasGuestCaption(text: string | null | undefined): text is string {
+	return text != null && guestCaptionStart(text) >= 0;
+}
+
+/**
+ * `text` as a Visitor's would print — "Name · Guest" — on a line the name
+ * SHARES with other copy: the grid layout's "Who. Detail" paragraph and the
+ * timing layout's 150px Role column.
+ *
+ * There is no one-line box that is safe there. Text either side of an inline
+ * block flows around it, so a block wider than the word it replaces can always
+ * drop to a line of its own, and whether it does depends on the face's
+ * metrics: a 14em caption block fit on macOS and cost the grid one line on
+ * CI's DejaVu Sans. So these two rows print exactly the marker a Visitor's
+ * does, and cost exactly what a Visitor's row costs whatever the font. The
+ * caption itself prints, one line and ellipsized, in the roster on the same
+ * sheet.
+ *
+ * Nothing is hidden: the row's text is exactly a Visitor's, in the DOM as on
+ * paper, so this is a stated difference from the deck rather than one a
+ * hidden copy of the caption papers over. `agenda-parity.test.ts` pins it to
+ * exactly these two rows — the deck string with the caption replaced by
+ * the marker — and keeps every other surface character-for-character.
+ */
+function MarkerInPlaceOfCaption({ text }: { text: string }) {
+	const at = guestCaptionStart(text);
+	if (at < 0) return <>{text}</>;
+	return <>{`${text.slice(0, at)} · ${GUEST_MARKER}`}</>;
+}
 
 export type AgendaHeader = {
 	clubName: string;
@@ -343,6 +394,11 @@ function RolesRoster({
 									: "1px solid rgba(23,58,64,.09)",
 							background: boxed && pos.col === 1 ? "#fafdfb" : undefined,
 							gridColumn: pos.wide ? "1 / -1" : undefined,
+							// A `1fr` track's floor is its items' min-content, and a
+							// one-line caption's min-content is the whole caption: without
+							// this the column widens to fit it and squeezes its neighbour.
+							...((hasGuestCaption(r.name) ||
+								r.holders?.some(hasGuestCaption)) && { minWidth: 0 }),
 						}}
 					>
 						<span
@@ -380,7 +436,11 @@ function RolesRoster({
 								}}
 							>
 								{r.holders.map((h) => (
-									<span data-roster-holder key={h}>
+									<span
+										data-roster-holder
+										key={h}
+										style={hasGuestCaption(h) ? CAPTION_ONE_LINE : undefined}
+									>
 										{h}
 									</span>
 								))}
@@ -394,6 +454,7 @@ function RolesRoster({
 									// ragged-left against the right edge like every other
 									// name in the column, clear of the label.
 									...(pos.wide && { textAlign: "right", paddingLeft: 16 }),
+									...(hasGuestCaption(r.name) && CAPTION_ONE_LINE),
 								}}
 							>
 								{r.name}
@@ -608,7 +669,9 @@ function HandoffBand({
 					}}
 				/>
 			</span>
-			<span>{row.who}</span>
+			<span style={hasGuestCaption(row.who) ? CAPTION_ONE_LINE : undefined}>
+				{row.who}
+			</span>
 			<span style={{ flex: "none", opacity: 0.55 }}>{" · "}</span>
 			{/* One span, not two: the names are a continuation of the same sentence
 			    ("Introduces the speakers — Jagpal & Rehanna"), so they must wrap and
@@ -807,7 +870,18 @@ function RunNarrative({
 							<div data-row-time={lead.time} style={stamp}>
 								{lead.time}
 							</div>
-							<div style={{ flex: 1, fontSize: type.name, fontWeight: 700 }}>
+							<div
+								style={{
+									flex: 1,
+									fontSize: type.name,
+									fontWeight: 700,
+									// Same reason as the roster entry's: a flex item's floor is
+									// its min-content, which a one-line caption makes the whole
+									// caption.
+									...((hasGuestCaption(g.who) ||
+										lead.holders?.some(hasGuestCaption)) && { minWidth: 0 }),
+								}}
+							>
 								{/* A list of SEVERAL holders gets its own line; one stays
 								    inline. `who` is `Role · Name`, so a four-name list ran
 								    the timing marks off behind the last surname and wrapped
@@ -828,14 +902,40 @@ function RunNarrative({
 								    off them. They let the suite assert WHICH line the marks
 								    landed on, which is the whole content of this fix and is
 								    invisible to a text-only query. */}
-								<div data-row-title>
-									{multiHolder(lead) ? (lead.roleLabel ?? g.who) : g.who}
-									<RowMarks
-										row={lead}
-										timingColors={timingColors}
-										size={lg ? 11 : 10}
-									/>
-								</div>
+								{(() => {
+									const title = multiHolder(lead)
+										? (lead.roleLabel ?? g.who)
+										: g.who;
+									const marks = (
+										<RowMarks
+											row={lead}
+											timingColors={timingColors}
+											size={lg ? 11 : 10}
+										/>
+									);
+									// A captioned guest's title is one line: the name stays,
+									// the caption gives way, the marks keep their place.
+									if (!hasGuestCaption(title))
+										return (
+											<div data-row-title>
+												{title}
+												{marks}
+											</div>
+										);
+									return (
+										<div
+											data-row-title
+											style={{ display: "flex", alignItems: "baseline" }}
+										>
+											<span style={{ ...CAPTION_ONE_LINE, flex: "0 1 auto" }}>
+												{title}
+											</span>
+											<span style={{ flex: "none", whiteSpace: "pre" }}>
+												{marks}
+											</span>
+										</div>
+									);
+								})()}
 								{multiHolder(lead) ? (
 									// Two to a row, matching the roles grid above: joined as
 									// prose the same list wrapped mid-sentence and read as a
@@ -854,7 +954,13 @@ function RunNarrative({
 										}}
 									>
 										{(lead.holders ?? []).map((h) => (
-											<span data-row-holder key={h}>
+											<span
+												data-row-holder
+												key={h}
+												style={
+													hasGuestCaption(h) ? CAPTION_ONE_LINE : undefined
+												}
+											>
 												{h}
 											</span>
 										))}
@@ -1393,7 +1499,7 @@ function GridLayout({
 								</div>
 								<div style={{ flex: 1, padding: "4px 12px 4px 8px" }}>
 									<span style={{ fontSize: 10.5, fontWeight: 700 }}>
-										{r.who}.
+										<MarkerInPlaceOfCaption text={r.who} />.
 									</span>{" "}
 									<span
 										style={{
@@ -2325,11 +2431,11 @@ function TimingLayout({
 											color: INK,
 										}}
 									>
-										{role}
+										<MarkerInPlaceOfCaption text={role} />
 										{name ? (
 											<span style={{ fontWeight: 600, color: MUTED }}>
 												{" · "}
-												{name}
+												<MarkerInPlaceOfCaption text={name} />
 											</span>
 										) : null}
 									</div>

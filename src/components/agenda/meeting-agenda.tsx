@@ -656,7 +656,16 @@ export function MeetingAgenda({
 													{slot.assigneeName ? (
 														<p className="text-sm text-muted-foreground">
 															{slot.assigneeName}
-															{slot.assigneeIsGuest ? (
+															{/* A non-visitor guest's kind caption (#1059),
+															    "Guest speaker, Downtown Toastmasters", in the
+															    badge's place. Sentence case rather than the
+															    badge's small caps: a club's name is not a tag. */}
+															{slot.assigneeIsGuest &&
+															slot.assigneeGuestCaption ? (
+																<span className="ml-1 rounded bg-muted px-1 text-xs font-medium text-muted-foreground">
+																	{slot.assigneeGuestCaption}
+																</span>
+															) : slot.assigneeIsGuest ? (
 																<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 																	Guest
 																</span>
