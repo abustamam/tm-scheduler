@@ -1,7 +1,7 @@
 // Speaker-slot management DB logic, split out from `slots.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, eq, gt, inArray, isNull, ne } from "drizzle-orm";
+import { and, eq, exists, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -10,6 +10,10 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import {
+	assertMeetingNotCancelled,
+	MEETING_CANCELLED_MESSAGE,
+} from "#/lib/meeting-cancellation-notice";
 import {
 	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
@@ -83,6 +87,62 @@ async function clubRoles(
 		speakerEnabled: enabledOf(picked.speakerRoleId),
 		evaluatorEnabled: enabledOf(picked.evaluatorRoleId),
 	};
+}
+
+/**
+ * The cancelled-meeting guard as a predicate on a `role_slots` write's own WHERE
+ * (#1057): true while the slot's meeting is not `cancelled`.
+ *
+ * In the STATEMENT rather than a check before it, because a check reads a row
+ * and a statement reads the row as of its own start: a cancel committed between
+ * the two is invisible to the check and visible here. A correlated subquery on
+ * a DIFFERENT table from the one being updated, so `"meetings"."id" =
+ * "role_slots"."meeting_id"` names two relations — the self-correlation trap
+ * `drizzle-sql-subquery-drops-qualifiers` records cannot arise.
+ * `meeting-cancel.integration.test.ts` pins the rendered SQL anyway ("renders a
+ * qualified correlation"), and its two-meeting cases pin the behaviour: with a
+ * scheduled sibling beside a cancelled meeting, only the slot's OWN meeting
+ * decides.
+ *
+ * What this cannot see: a cancel that commits while the statement is parked
+ * behind another writer's lock on the slot row. READ COMMITTED re-checks the
+ * locked row's newest version but re-runs the subquery under the statement's
+ * original snapshot. Closing that window means waiting on the meeting row,
+ * which is a new lock on every claim, and #1057 declined it.
+ *
+ * Exported for `applyAssignGuestToSlot` (`guests-logic.ts`), the one slot
+ * writer outside this module, so the four writes that can change who holds a
+ * role on a cancelled meeting carry the same predicate.
+ */
+export function meetingNotCancelled(conn: DbOrTx) {
+	return exists(
+		conn
+			.select({ one: sql`1` })
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.id, roleSlots.meetingId),
+					ne(meetings.status, "cancelled"),
+				),
+			),
+	);
+}
+
+/** Re-read the meeting's status on the caller's connection and refuse a
+ *  cancelled one with the member-facing sentence. The post-statement half of
+ *  `meetingNotCancelled`: a zero-row UPDATE says nothing about WHY, and the
+ *  member's next step differs between "someone beat you to it" and "there is
+ *  no meeting". */
+async function assertMeetingNotCancelledOn(
+	conn: DbOrTx,
+	meetingId: string,
+): Promise<void> {
+	const [row] = await conn
+		.select({ status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (row) assertMeetingNotCancelled(row.status);
 }
 
 /** Next 0-based slotIndex for a (meeting, role) pair. */
@@ -1864,7 +1924,10 @@ export async function claimSlotCore(
 		}
 	}
 
-	// Conditional UPDATE is the race guard: only one claim can flip 'open'.
+	// Conditional UPDATE is the race guard: only one claim can flip 'open'. The
+	// meeting's status rides in the SAME statement (#1057, `meetingNotCancelled`)
+	// rather than in a check above it, so a cancel that committed before this
+	// statement started is refused here whatever the row read above said.
 	const updated = await tx
 		.update(roleSlots)
 		.set({
@@ -1873,10 +1936,19 @@ export async function claimSlotCore(
 			status: "claimed",
 			claimedAt: new Date(),
 		})
-		.where(and(eq(roleSlots.id, args.slotId), eq(roleSlots.status, "open")))
+		.where(
+			and(
+				eq(roleSlots.id, args.slotId),
+				eq(roleSlots.status, "open"),
+				meetingNotCancelled(tx),
+			),
+		)
 		.returning({ id: roleSlots.id });
 
 	if (updated.length === 0) {
+		// Two causes return no row: the slot was claimed first, or the meeting
+		// was cancelled. Tell them apart, because the member's next step differs.
+		await assertMeetingNotCancelledOn(tx, slot.meetingId);
 		throw new Error("Sorry — this role was just claimed by someone else.");
 	}
 
@@ -2026,15 +2098,25 @@ export async function reassignSlotCore(
 		: null;
 	const toPerson = slot.isSpeakerRole ? await personOf(args.memberId) : null;
 
-	// New holder hasn't been confirmed → back to "claimed".
-	await tx
+	// New holder hasn't been confirmed → back to "claimed". The meeting's
+	// status rides in the statement (#1057, `meetingNotCancelled`): the row
+	// above was read under the slot's lock, but a cancel takes the MEETING's
+	// lock, which this transaction never waits on, so a cancel committed between
+	// that read and this write is seen here and nowhere else.
+	const reassigned = await tx
 		.update(roleSlots)
 		.set({
 			assignedMemberId: args.memberId,
 			assignedGuestId: null,
 			status: "claimed",
 		})
-		.where(eq(roleSlots.id, args.slotId));
+		.where(and(eq(roleSlots.id, args.slotId), meetingNotCancelled(tx)))
+		.returning({ id: roleSlots.id });
+	if (reassigned.length === 0) {
+		// The slot row is locked FOR UPDATE by this transaction and exists, so
+		// the only predicate that can have failed is the meeting's.
+		throw new Error(MEETING_CANCELLED_MESSAGE);
+	}
 
 	await markComingOnSelfClaim(tx, {
 		memberId: args.memberId,
@@ -2152,7 +2234,13 @@ export async function releaseSlotCore(
 	await assertClubNotArchived(slot.clubId, conn);
 	assertMeetingNotLocked(slot.meetingStatus);
 
-	await conn
+	// The meeting's status rides in the statement (#1057, `meetingNotCancelled`),
+	// as `reassignSlotCore`'s does. A cancelled meeting keeps its assignments
+	// until it is restored, and a clear would take one away — dropping the
+	// holder and unlinking any speech, neither of which a restore brings back.
+	// It is one of several such writes (reassign, guest assignment and speech
+	// edits are refused too), not the only one.
+	const released = await conn
 		.update(roleSlots)
 		.set({
 			assignedMemberId: null,
@@ -2161,7 +2249,13 @@ export async function releaseSlotCore(
 			claimedAt: null,
 			speechId: null,
 		})
-		.where(eq(roleSlots.id, slot.id));
+		.where(and(eq(roleSlots.id, slot.id), meetingNotCancelled(conn)))
+		.returning({ id: roleSlots.id });
+	if (released.length === 0) {
+		// The slot row is locked FOR UPDATE by this transaction and exists, so
+		// the only predicate that can have failed is the meeting's.
+		throw new Error(MEETING_CANCELLED_MESSAGE);
+	}
 
 	await logActivity(conn, {
 		clubId: slot.clubId,

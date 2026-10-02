@@ -3,6 +3,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { Check, ChevronLeft, MessageSquareHeart } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
+import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-notice";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
@@ -39,10 +40,9 @@ export const Route = createFileRoute(
 )({
 	loader: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
-		// null for an archived club, an unknown key or a cancelled meeting — all
-		// the same not-found to a visitor.
-		// The reader answers null rather than throwing, but a "Meeting not
-		// found." is translated too, like every sibling sub-route (#877).
+		// null for an archived club or an unknown key — the same not-found to a
+		// visitor. The reader answers null rather than throwing, but a "Meeting
+		// not found." is translated too, like every sibling sub-route (#877).
 		const data = await getFeedbackTargetsPublic({
 			data: { clubId: club.id, meetingKey: params.meetingId },
 		}).catch((err) => {
@@ -50,6 +50,17 @@ export const Route = createFileRoute(
 			throw err;
 		});
 		if (!data) throw notFound();
+		// #1057: a cancelled meeting is VISIBLE and says so (the maintainer's
+		// decision on #1084), so it is not a not-found. The same reader says so,
+		// off the same row, with the meeting's id and status and nothing else.
+		if ("status" in data) {
+			return {
+				cancelled: true as const,
+				clubName: club.name,
+				clubNumber: club.clubNumber,
+				meetingId: data.meetingId,
+			};
+		}
 		// The server decided the state on ITS clock; the visitor's clock may be
 		// wrong, and must not choose between "not yet" and "closed".
 		const state = data.window.state;
@@ -203,9 +214,62 @@ function writeSent(meetingId: string, keys: string[]): void {
 	}
 }
 
+/** The loader's open-meeting branch, stated rather than derived: deriving it
+ *  from `Route` is circular (the route names this page as its component). */
+interface OpenFeedbackData {
+	clubName: string;
+	clubNumber: string | null;
+	meeting: FeedbackTargetsPublic["meeting"];
+	targets: FeedbackTargetsPublic["targets"];
+	others: FeedbackTargetsPublic["others"];
+	roleOptions: FeedbackTargetsPublic["roleOptions"];
+	state: FeedbackTargetsPublic["window"]["state"];
+}
+
 function FeedbackPage() {
+	const data = Route.useLoaderData();
+	if ("cancelled" in data && data.cancelled) {
+		return <FeedbackCancelled {...data} />;
+	}
+	return <FeedbackOpen data={data as OpenFeedbackData} />;
+}
+
+/** A cancelled meeting (#1057): there is nobody to write to, so the page says
+ *  why instead of listing names. */
+function FeedbackCancelled({
+	clubName,
+	clubNumber,
+	meetingId,
+}: {
+	clubName: string;
+	clubNumber: string | null;
+	meetingId: string;
+}) {
+	const { clubId } = Route.useParams();
+	return (
+		<div className="flex min-h-svh w-full flex-col bg-background">
+			<header className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 md:px-6">
+				<BrandMark size="sm" />
+				<span className="min-w-0 flex-1 truncate text-right text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
+					{clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
+				</span>
+				<ThemeToggle compact />
+			</header>
+			<main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-5 py-10">
+				<CancelledMeetingNotice
+					clubId={clubId}
+					meetingId={meetingId}
+					detail="There's no feedback to leave for a cancelled meeting."
+				/>
+			</main>
+			<PublicFooter />
+		</div>
+	);
+}
+
+function FeedbackOpen({ data }: { data: OpenFeedbackData }) {
 	const { clubName, clubNumber, meeting, targets, others, roleOptions, state } =
-		Route.useLoaderData();
+		data;
 	const [selected, setSelected] = useState<Recipient | null>(null);
 	const [query, setQuery] = useState("");
 	// Read after mount, so the server render and the first client render agree.

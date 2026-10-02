@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
+import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
@@ -32,7 +32,10 @@ export async function resolvePublicMeetingKey(
  * Resolve a `$meetingId` URL segment (club-local date / date-HHmm / uuid) to a
  * meeting id, scoped to `clubId`. Returns null when nothing matches — including a
  * uuid that belongs to a different club (so callers get not-found, not a leak).
- * A bare-date double-header resolves to the earliest meeting that local day.
+ * A bare-date double-header resolves to the earliest meeting that local day,
+ * preferring a live one over a cancelled one; a day whose only meetings are
+ * cancelled resolves to the earliest of THOSE (#1084), so a link issued before
+ * the cancel still reaches the meeting and its "Cancelled" banner.
  *
  * Carries NO archive check: the authed callers are already gated by
  * `requireMembership`, and public callers must come through
@@ -71,7 +74,24 @@ export async function resolveMeetingKey(
 		return row?.id ?? null;
 	}
 
-	// date kind → earliest meeting within the club-local day.
+	// date kind → earliest LIVE meeting within the club-local day; failing that,
+	// the earliest CANCELLED one (maintainer's decision on #1084).
+	//
+	// Every link issued before a cancel carries this bare-date key — the
+	// confirm nudges, the lineup blast's promo link, the printed `?room=1` and
+	// ballot QRs, the previous deck's next-meeting QR — and they all showed
+	// "Meeting not found" once the meeting was cancelled. A cancelled meeting is
+	// now VISIBLE, read-only, and says so, so the key has to reach it.
+	//
+	// A live meeting on the same day still wins (the collision case is tabled
+	// by the maintainer): the key keeps naming the meeting that is happening,
+	// and the cancelled one stays reachable by its uuid, which is what the page
+	// builds its own links from. One statement, ordering live before cancelled
+	// and then by time, so the fallback costs no second round trip.
+	//
+	// Writers are unaffected: each takes a uuid, or reaches a cancelled meeting
+	// only to meet the refusal it already had (see `meetingNotCancelled`, the
+	// plan seam, `castVote`, `agendaEditable`, `leaveFeedbackLogic`).
 	const { start, end } = localDayRange(parsed.date, tz);
 	const [row] = await db
 		.select({ id: meetings.id })
@@ -81,10 +101,9 @@ export async function resolveMeetingKey(
 				eq(meetings.clubId, clubId),
 				gte(meetings.scheduledAt, start),
 				lt(meetings.scheduledAt, end),
-				ne(meetings.status, "cancelled"),
 			),
 		)
-		.orderBy(asc(meetings.scheduledAt))
+		.orderBy(sql`(${meetings.status} = 'cancelled')`, asc(meetings.scheduledAt))
 		.limit(1);
 	return row?.id ?? null;
 }

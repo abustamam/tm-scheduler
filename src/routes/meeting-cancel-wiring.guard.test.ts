@@ -1,0 +1,345 @@
+// Route→component wiring pins for cancelling a meeting (#1057).
+//
+// Same mechanism and same reason as `meeting-chrome-wiring.guard.test.ts`:
+// `club.$clubId.meeting.$meetingId.tsx` cannot render in jsdom (loader + server
+// fns), so nothing behavioural observes the expressions at its call sites. The
+// toolbar, the sheet and the builder are each tested THROUGH their props, and a
+// component tested through its props cannot see a wrong prop (#319). Every pin
+// below is a prop or a predicate that is same-typed with a plausible wrong
+// expression, and silent when wrong — the page renders, it just lets a member
+// write to a meeting the server will refuse, or never offers the officer the
+// way back.
+//
+// The toolbar's three cancel props are OPTIONAL with defaults (unlike
+// `wordOfTheDay`, which is required for exactly the drift this guards), so a
+// route that dropped one would hide Cancel for every officer with typecheck
+// and the toolbar suite green. This file is the half a prop default cannot see.
+//
+// COMMENT-BLIND (`readSource`): every assertion is of the "must BE present"
+// form and this header quotes several of the patterns it checks for.
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
+
+const ROUTES = dirname(fileURLToPath(import.meta.url));
+const ROUTE = resolve(ROUTES, "club.$clubId.meeting.$meetingId.tsx");
+const TOOLBAR = resolve(ROUTES, "../components/club/meeting-toolbar.tsx");
+const SCHEDULE = resolve(ROUTES, "_authed/schedule.tsx");
+const MEETINGS_FNS = resolve(ROUTES, "../server/meetings.ts");
+
+/** The source between a marker and the next top-level `export const`. */
+function declarationAfter(src: string, marker: string): string {
+	const at = src.indexOf(marker);
+	expect(at, `expected ${marker} in source`).toBeGreaterThan(-1);
+	const next = src.indexOf("\nexport const ", at + marker.length);
+	return src.slice(at, next === -1 ? undefined : next);
+}
+
+/**
+ * One of the route component's inner handlers, sliced to its own body: from
+ * `async function <name>()` to the next function declared at the same depth
+ * (one tab in). The `release-slot-seam.guard.test.ts` pattern, for the reason
+ * it gives: a pin on the whole file is satisfied by the SAME call in a
+ * neighbouring handler, so "doRestore re-runs the loader" passes on
+ * `doReopen`'s `router.invalidate()` with doRestore's deleted.
+ */
+function handlerBody(src: string, name: string): string {
+	const start = src.indexOf(`\tasync function ${name}()`);
+	expect(start, `no ${name} handler in the meeting route`).toBeGreaterThan(-1);
+	const rest = src.slice(start + 1);
+	const next = rest.search(/\n\t(?:async )?function /);
+	const body = next === -1 ? rest : rest.slice(0, next);
+	// The vacuity floor: an over-short slice passes a negative for nothing and
+	// an over-long one lends a neighbour's call to this handler.
+	expect(body.length).toBeGreaterThan(100);
+	expect(body.split("async function ").length - 1).toBe(1);
+	return body;
+}
+
+describe("meeting route: cancel wiring (#1057)", () => {
+	const src = readSource(ROUTE);
+
+	it("hands the toolbar all three cancel props, from the route's own derivations", () => {
+		expect(src).toContain("cancelled={cancelled}");
+		expect(src).toContain("canCancel={canCancel}");
+		expect(src).toContain("onCancel={() => setCancelConfirmOpen(true)}");
+	});
+
+	it("derives `cancelled` from the status and `canCancel` from lock, cancel and the meeting's START", () => {
+		expect(src).toContain(
+			"const cancelled = isMeetingCancelled(meeting.status)",
+		);
+		expect(
+			src.replace(/\s+/g, " "),
+			"Cancel must be withheld on a locked, already-cancelled or STARTED meeting " +
+				"(maintainer, #1084): `applyCancelMeeting` refuses all three by the same " +
+				"`meetingHasStarted`, so a wider predicate here is a button that always " +
+				"fails — and the frozen `now`, so it agrees with the rest of the render.",
+		).toContain(
+			"const canCancel = !locked && !cancelled && !meetingHasStarted(meeting.scheduledAt, now);",
+		);
+	});
+
+	it("the confirm's write and the banner's Restore call the two handlers, not each other", () => {
+		expect(src).toContain("onClick={doCancel}");
+		expect(src).toContain("onClick={doRestore}");
+		expect(src).toContain(
+			"await cancelMeeting({ data: { meetingId: meeting.id } })",
+		);
+		expect(src).toContain(
+			"await restoreMeeting({ data: { meetingId: meeting.id } })",
+		);
+	});
+
+	it("locks the viewer on a cancelled meeting, after the shared resolver", () => {
+		expect(
+			src,
+			"a cancelled meeting must be read-only for everyone: " +
+				"`lockedViewer` over the resolved viewer, so claim / assign / availability " +
+				"controls go the way the lock takes them.",
+		).toContain(
+			"const viewer = cancelled ? lockedViewer(resolvedViewer) : resolvedViewer",
+		);
+	});
+
+	it("hides the attendance rail, the lineup blast and the ballot console on a cancelled meeting", () => {
+		expect(src).toContain('!cancelled && (panelMode === "plan"');
+		expect(src).toContain("!cancelled &&\n\t\t(effectiveCanManage ||");
+		expect(src).toContain(
+			"(isVoteCounter || effectiveCanManage) && !cancelled ?",
+		);
+	});
+
+	it("the banner comes FIRST in the status chain and carries the officer controls", () => {
+		const banner = src.indexOf('data-testid="cancelled-banner"');
+		const lockedBanner = src.indexOf("{MEETING_LOCKED_MESSAGE}");
+		expect(banner).toBeGreaterThan(-1);
+		expect(
+			banner,
+			"the cancelled banner must precede the locked / already-taken-place arms, " +
+				"or a past cancelled meeting tells members it took place.",
+		).toBeLessThan(lockedBanner);
+		const bannerSrc = src.slice(banner, lockedBanner);
+		expect(bannerSrc).toContain("{effectiveCanManage ? (");
+		expect(bannerSrc).toContain("View notice");
+		expect(bannerSrc).toContain("{!datePassed ? (");
+		expect(bannerSrc).toContain("Restore");
+	});
+
+	it("moves a bare-date URL to the uuid URL after cancelling, and opens the notice on arrival", () => {
+		expect(src).toContain("if (meetingKeyParam !== meeting.id) {");
+		expect(src).toContain("cancellationNoticeHref(clubId, meeting.id)");
+		expect(src).toContain("isCancellationNoticeRequested(search)");
+		expect(src).toContain(
+			"if (noticeRequested && cancelled && effectiveCanManage) {",
+		);
+	});
+
+	it("on the uuid URL already, doCancel re-runs the loader and opens the notice in place", () => {
+		// Sliced to doCancel's OWN body (review of #1084): the file-wide pins
+		// above are satisfied with the else branch deleted, and an officer who
+		// cancels from a uuid URL is then left on a stale page with no notice.
+		const body = handlerBody(src, "doCancel").replace(/\s+/g, " ");
+		expect(body).toContain(
+			"} else { await router.invalidate(); setNoticeOpen(true); }",
+		);
+		// Both arms: the navigation is the other half of the same `if`, and it
+		// REPLACES the history entry (review of #1084, G), so Back does not land
+		// on the dead date URL a cancelled meeting no longer answers to.
+		expect(body).toContain(
+			"if (meetingKeyParam !== meeting.id) { await router.navigate({ href: cancellationNoticeHref(clubId, meeting.id), replace: true, }); }",
+		);
+	});
+
+	it("doCancel treats 'already cancelled' as success, matched by identity with the constant (G)", () => {
+		// Another officer got there first: the meeting is in the state that was
+		// asked for, and this officer still needs the notice. Exactly that one
+		// refusal is swallowed; anything else is rethrown to `showWriteError`.
+		const body = handlerBody(src, "doCancel").replace(/\s+/g, " ");
+		expect(body).toContain(
+			"if ( !(err instanceof Error) || err.message !== MEETING_ALREADY_CANCELLED_MESSAGE ) { throw err; } alreadyCancelled = true;",
+		);
+		// The success path runs AFTER the inner try, for both outcomes.
+		expect(body.indexOf("alreadyCancelled = true;")).toBeLessThan(
+			body.indexOf("setCancelConfirmOpen(false);"),
+		);
+	});
+
+	it("the confirm cannot be dismissed while the write runs (G)", () => {
+		const flat = src.replace(/\s+/g, " ");
+		expect(flat).toContain(
+			"onOpenChange={(open) => { if (!lifecycleBusy) setCancelConfirmOpen(open); }}",
+		);
+		expect(src).toMatch(
+			/<Button\s+type="button"\s+variant="outline"\s+disabled=\{lifecycleBusy\}\s*>\s*Keep meeting/,
+		);
+		// And it tells the truth about how long a restore stays possible.
+		expect(flat).toContain("until the end of the meeting's day");
+		expect(flat).not.toContain("restoring it later loses nothing");
+	});
+
+	it("only the pressed lifecycle control spins: the route tracks WHICH write runs (G)", () => {
+		expect(src).toContain("const lifecycleBusy = lifecycleAction !== null;");
+		expect(src).toContain("busyAction={lifecycleAction}");
+		for (const action of ["complete", "reopen", "cancel", "restore"]) {
+			const fn = `do${action[0]?.toUpperCase()}${action.slice(1)}`;
+			const body = handlerBody(src, fn);
+			expect(body, fn).toContain(`setLifecycleAction("${action}");`);
+			expect(body, fn).toContain("setLifecycleAction(null);");
+		}
+		expect(src).toContain('aria-busy={lifecycleAction === "restore"}');
+		expect(src).toContain('aria-busy={lifecycleAction === "cancel"}');
+	});
+
+	it("the minutes card is read-only and the banner says it once on a cancelled meeting (G)", () => {
+		expect(src).toContain(
+			"canEdit={effectiveCanManage && minutes.canEdit && !cancelled}",
+		);
+		expect(src).toMatch(
+			/<span className="font-semibold">\s*\{MEETING_CANCELLED_MESSAGE\}\s*<\/span>\{" "\}\s*Everyone keeps their role\./,
+		);
+		expect(src).not.toContain("Cancelled.</span>");
+	});
+
+	it("doRestore re-runs the loader after the write", () => {
+		const body = handlerBody(src, "doRestore").replace(/\s+/g, " ");
+		expect(body).toContain(
+			"await restoreMeeting({ data: { meetingId: meeting.id } }); toast.success(",
+		);
+		expect(
+			body,
+			"without the invalidate the banner, the toolbar and the agenda keep " +
+				"showing the meeting as cancelled after a successful restore.",
+		).toContain("await router.invalidate();");
+	});
+
+	it("on a cancelled meeting every link is built from the uuid (review of #1084, C)", () => {
+		// The canonical key is a bare club-local date, and a date key skips a
+		// cancelled meeting — so Share, Present, export, the ballot QR, the nudge
+		// drafts and the feedback link all 404'd from the cancelled page.
+		const flat = src.replace(/\s+/g, " ");
+		expect(src).toContain("urlKey: canonicalUrlKey,");
+		expect(flat).toContain(
+			"const urlKey = isMeetingCancelled(meeting.status) ? meeting.id : canonicalUrlKey;",
+		);
+		// The derivation is the ONLY reader of the canonical key, so no call site
+		// can bypass it: the destructure binds it, the derivation reads it, and
+		// nothing else names it (comment-blind, so prose does not count).
+		expect(
+			src.split("canonicalUrlKey").length - 1,
+			"a link built from `canonicalUrlKey` directly skips the cancelled " +
+				"meeting's uuid and 404s on exactly the page that needs it.",
+		).toBe(2);
+		// …and the sites the review named still read the derived key.
+		for (const site of [
+			"meetingId={urlKey}",
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: a literal of the route's own source
+			"sharePath={`/club/${clubId}/meeting/${urlKey}`}",
+			"{ clubKey: clubId, meetingKey: urlKey }",
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: a literal of the route's own source
+			"/meeting/${urlKey}`;",
+			"meetingKey: urlKey,",
+		]) {
+			expect(src, site).toContain(site);
+		}
+	});
+
+	it("the in-room strip is withheld on a cancelled meeting", () => {
+		expect(
+			src,
+			"the strip's Vote link appears whenever a category is open, and " +
+				"cancelling does not close vote sessions — so without `!cancelled` a " +
+				"scanned QR on today's cancelled meeting offers a Vote castVote refuses.",
+		).toContain(
+			'const inRoom = isInRoom(search) && phase === "today" && !cancelled;',
+		);
+	});
+
+	it("builds the notice's holders from the agenda's own slot rows", () => {
+		expect(src).toContain("holdersFromSlots(slots)");
+		expect(src).toContain("holders={cancellationHolders}");
+		expect(src).toContain("{effectiveCanManage && cancelled && noticeOpen ? (");
+	});
+});
+
+describe("toolbar: the cancel axis (#1057)", () => {
+	const src = readSource(TOOLBAR);
+
+	it("the edit group and Promote key off `canManage && !cancelled`", () => {
+		expect(src).toContain("const canEdit = canManage && !cancelled");
+		expect(src).toContain("{canEdit ? (");
+		expect(src).toContain("{canEdit && !locked && hasAddableRoles ? (");
+		expect(src).toContain("{canEdit && !locked && canComplete ? (");
+	});
+
+	it("Cancel is gated on the route's `canCancel` beside the lock", () => {
+		expect(src).toContain("{canEdit && !locked && canCancel ? (");
+	});
+});
+
+describe("schedule: the officer-only cancelled list (#1057)", () => {
+	it("the loader asks only for an effective admin", () => {
+		const schedule = readSource(SCHEDULE);
+		expect(schedule).toContain("effectiveAdminClub(context)");
+		expect(schedule).toContain(
+			"? listCancelledMeetings({ data: { clubId } }).catch(() => none)",
+		);
+		expect(schedule).toContain(
+			"{canManageOthers && cancelled.length > 0 && clubKey ? (",
+		);
+	});
+});
+
+/**
+ * Every gate #1057 added, AWAITED. Each is an async function that throws to
+ * refuse, so an un-awaited call is a floating promise that refuses nothing —
+ * and every presence check (`toContain("requireClubRole(")`) stays green on
+ * it. Review of #1084 (F) found the read's gate exposed to exactly that, so
+ * these pin the `await` together with the call, per gate.
+ */
+describe("the new gates are awaited (#1057, review of #1084 F)", () => {
+	const fns = readSource(MEETINGS_FNS);
+
+	for (const name of ["cancelMeeting", "restoreMeeting"]) {
+		it(`${name} awaits the session and requireClubRole(…, ["admin"])`, () => {
+			const decl = declarationAfter(
+				fns,
+				`export const ${name} = createServerFn`,
+			);
+			expect(decl).toMatch(/const currentUser = await requireUser\(\);/);
+			expect(
+				decl,
+				`${name} is a WRITE: requireClubRole(…, ["admin"]) admits an admin and a ` +
+					"member with an open office, and refuses an archived club.",
+			).toMatch(
+				/const membership = await requireClubRole\(currentUser\.id, row\.clubId, \[\s*"admin",?\s*\]\);/,
+			);
+		});
+	}
+
+	it("listCancelledMeetings awaits requireClubAdminView — the READ gate, not the write gate", () => {
+		const decl = declarationAfter(
+			fns,
+			"export const listCancelledMeetings = createServerFn",
+		);
+		expect(decl).toContain('createServerFn({ method: "GET" })');
+		expect(decl).toMatch(/const currentUser = await requireUser\(\);/);
+		expect(
+			decl,
+			"a GET gated by requireClubRole refuses a superadmin's read-only " +
+				"impersonation outright and marks a read-write one's read as a write; " +
+				"requireClubAdminView is the admin-only READ gate.",
+		).toMatch(/await requireClubAdminView\(currentUser\.id, data\.clubId\);/);
+		expect(decl).not.toContain("requireClubRole(");
+	});
+
+	it("both MCP tools await their token gate", () => {
+		for (const tool of ["cancel-meeting.ts", "restore-meeting.ts"]) {
+			const src = readSource(resolve(ROUTES, "../server/mcp/tools", tool));
+			expect(src, tool).toMatch(
+				/const \{ club \} = await authorizeTokenForMeeting\(ctx, args\.meetingId\);/,
+			);
+		}
+	});
+});

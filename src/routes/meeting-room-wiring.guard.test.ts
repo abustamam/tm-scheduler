@@ -25,9 +25,13 @@ describe("the meeting route wires the in-room strip (#913)", () => {
 
 	it("shows the strip only on meeting day, off the route's one frozen phase", () => {
 		// Both conjuncts: the flag alone would put the strip on an agenda someone
-		// kept in a bag and scanned a week later (AC1).
+		// kept in a bag and scanned a week later (AC1). The third, `!cancelled`
+		// (#1057), keeps the strip off today's CANCELLED meeting: cancelling does
+		// not close vote sessions, so without it a scanned QR offered a Vote that
+		// `castVote` then refused. `meeting-cancel-wiring.guard.test.ts` pins the
+		// same line for that reason; this case is about the first two.
 		expect(source).toMatch(
-			/const inRoom = isInRoom\(search\) && phase === "today";/,
+			/const inRoom = isInRoom\(search\) && phase === "today" && !cancelled;/,
 		);
 		expect(source).toMatch(/<MeetingRoomStrip\s+visible=\{inRoom\}/);
 	});

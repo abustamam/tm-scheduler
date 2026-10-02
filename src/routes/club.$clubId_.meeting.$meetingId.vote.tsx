@@ -9,6 +9,7 @@ import {
 	BallotOff,
 	type VoterIdentity,
 } from "#/components/club/ballot";
+import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-notice";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
@@ -56,6 +57,12 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 			meetingId: detail.meeting.id,
 			// #770 — off means no ballot, just the notice.
 			digitalVoting: detail.digitalVoting,
+			// #1057 — the printed ballot QR carries a bare-date key, which now
+			// reaches a cancelled meeting (the maintainer's decision on #1084), so
+			// the page must say it is cancelled rather than offer a ballot that
+			// `castVote` would refuse. Cancelling does not close vote sessions, so
+			// the ballot itself would otherwise still show an open category.
+			cancelled: detail.meeting.status === "cancelled",
 		};
 	},
 	component: VotePage,
@@ -177,8 +184,10 @@ function useSessionVoter(meetingId: string): {
 }
 
 function VotePage() {
-	const { clubId, clubName, clubNumber, meetingId, digitalVoting } =
+	const { clubId, clubName, clubNumber, meetingId, digitalVoting, cancelled } =
 		Route.useLoaderData();
+	// The club's URL segment, for the notice's link back to the meeting.
+	const { clubId: clubKey } = Route.useParams();
 	const session = useSessionVoter(meetingId);
 	const [voter, setVoter] = useState<VoterIdentity | null>(() => {
 		const stored = readVoter(meetingId);
@@ -200,7 +209,15 @@ function VotePage() {
 			</header>
 
 			<main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-6 px-5 py-10">
-				{!digitalVoting ? (
+				{/* FIRST (#1057): a cancelled meeting has no vote, whatever the
+				    switch says and whoever is holding the phone. */}
+				{cancelled ? (
+					<CancelledMeetingNotice
+						clubId={clubKey}
+						meetingId={meetingId}
+						detail="There's no vote for a cancelled meeting."
+					/>
+				) : !digitalVoting ? (
 					<BallotOff clubName={clubName} />
 				) : session.pending ? (
 					<output className="flex items-center justify-center gap-2 text-sm text-muted-foreground">

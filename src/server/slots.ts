@@ -9,6 +9,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
 import { logActivity } from "./activity";
 import {
 	assertClubNotArchived,
@@ -355,6 +356,11 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		// row pins in this file, and it outlives a change to that gate.
 		await assertClubNotArchived(slot.clubId);
 		assertMeetingNotLocked(slot.meetingStatus);
+		// #1057. A cancelled meeting keeps every assignment until restored, and a
+		// blank input here UNLINKS the speech (`editSlotSpeech`), which a restore
+		// cannot bring back — on a page that is read-only, so the holder could not
+		// put it right either. Beside the lock check, for the lock's reason.
+		assertMeetingNotCancelled(slot.meetingStatus);
 		if (!slot.isSpeakerRole) {
 			throw new Error("Only speaker roles have speech details.");
 		}

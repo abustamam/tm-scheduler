@@ -47,6 +47,13 @@ export const FLYER_SQUARE_QR_PX = 300;
 /** What the QR says under it. */
 export const FLYER_QR_CAPTION = "Scan for details";
 
+/** The square's "Cancelled" stamp (#1057): the words, and the ink. The ink is
+ *  deliberately NOT pure red — `flyer-square-png.test.tsx` counts pure-red
+ *  pixels as the test logo's, so a pure-red stamp would read as a logo. */
+export const FLYER_CANCELLED_LABEL = "Cancelled";
+export const FLYER_CANCELLED_DETAIL = "This meeting is not happening";
+export const FLYER_CANCELLED_INK = "#b91c1c";
+
 function whenLine(c: FlyerContent): string {
 	return [c.date, c.time].filter(Boolean).join(" · ");
 }
@@ -236,6 +243,44 @@ export function MeetingFlyerLetter({
 	);
 }
 
+/** The square's "Cancelled" stamp (#1057), centred over the text block and
+ *  tilted like a rubber stamp. Out of flow; see `MeetingFlyerSquare`. */
+function CancelledStamp() {
+	return (
+		<div
+			data-flyer-cancelled=""
+			style={{
+				position: "absolute",
+				top: "50%",
+				left: "50%",
+				transform: "translate(-50%, -50%) rotate(-10deg)",
+				border: `8px solid ${FLYER_CANCELLED_INK}`,
+				borderRadius: 16,
+				background: "rgba(255, 255, 255, 0.9)",
+				color: FLYER_CANCELLED_INK,
+				padding: "12px 40px 16px",
+				whiteSpace: "nowrap",
+				textAlign: "center",
+			}}
+		>
+			<div
+				style={{
+					fontSize: 96,
+					fontWeight: 900,
+					lineHeight: 1,
+					letterSpacing: ".08em",
+					textTransform: "uppercase",
+				}}
+			>
+				{FLYER_CANCELLED_LABEL}
+			</div>
+			<div style={{ fontSize: 30, fontWeight: 800, marginTop: 8 }}>
+				{FLYER_CANCELLED_DETAIL}
+			</div>
+		</div>
+	);
+}
+
 /**
  * The square's text block takes only the space the QR and the disclaimer leave
  * it, and clips the rest. `minHeight: 0` is what lets a flex item shrink below
@@ -271,15 +316,27 @@ const TEXT_BLOCK_GIVES_WAY: React.CSSProperties = {
  * rather than a clipped half-line — but that is cosmetic; the clamps alone do
  * NOT keep the QR on the canvas at the caps. `flyer-square-geometry.test.tsx`
  * measures both boxes in Chrome with every field at its cap.
+ *
+ * ## A cancelled meeting's square says so (#1057)
+ *
+ * The image is downloaded and shared on its own, away from the page's
+ * watermark and toolbar marker, so `cancelled` stamps it INSIDE the exported
+ * box. The stamp is absolutely positioned within the text block, which is its
+ * containing block (`position: relative`) and clips it (`overflow: hidden`): it
+ * takes no space in the layout, so the QR and the disclaimer sit exactly where
+ * they would without it, and it cannot reach either of them.
  */
 export function MeetingFlyerSquare({
 	content,
 	clubName,
 	logoSrc = null,
+	cancelled = false,
 }: {
 	content: FlyerContent;
 	clubName: string;
 	logoSrc?: string | null;
+	/** Stamp the image "Cancelled" (#1057). */
+	cancelled?: boolean;
 }) {
 	const when = whenLine(content);
 	return (
@@ -308,8 +365,12 @@ export function MeetingFlyerSquare({
 					display: "flex",
 					flexDirection: "column",
 					alignItems: "center",
+					// The cancelled stamp's containing block, so the clip above
+					// keeps it inside this block (#1057).
+					position: "relative",
 				}}
 			>
+				{cancelled ? <CancelledStamp /> : null}
 				<div
 					style={{
 						display: "flex",

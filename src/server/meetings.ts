@@ -33,6 +33,7 @@ import {
 import {
 	canManageClub,
 	getSessionUser,
+	requireClubAdminView,
 	requireClubRole,
 	requireClubViewAccess,
 	requireMeetingAgendaEditor,
@@ -57,13 +58,16 @@ import {
 } from "./meeting-templates-logic";
 import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
 import {
+	applyCancelMeeting,
 	applyCompleteMeeting,
 	applyCreateMeeting,
 	applyMeetingDigitalVoting,
 	applyMeetingMetaPatch,
 	applyReopenMeeting,
+	applyRestoreMeeting,
 	applyTableTopicsNotesUpdate,
 	applyWordOfTheDayUpdate,
+	loadCancelledMeetings,
 	loadPublicUpcomingMeetings,
 	loadTmodPanelData,
 } from "./meetings-logic";
@@ -75,6 +79,11 @@ import { listRoleDefinitions } from "./role-definitions-logic";
 import { indexRoleRecency, loadRoleRecency } from "./role-recency-logic";
 
 const uuid = z.string().uuid();
+
+// Re-exported so the schedule route can type its loader without importing a
+// `*-logic.ts` module (server-modules guard: a server-fn module may export
+// `createServerFn`s and TYPES, and client code imports only from here).
+export type { CancelledMeetingRow } from "./meetings-logic";
 
 /** Upcoming, non-cancelled meetings for a club, each with an open-slot count.
  *  PUBLIC — no session required, but NOT ungated: an archived club yields `[]`.
@@ -882,4 +891,68 @@ export const reopenMeeting = createServerFn({ method: "POST" })
 			meetingId: data.meetingId,
 			actorMemberId: membership.id,
 		});
+	});
+
+/** Cancel (skip) a meeting (#1057): `status = cancelled`, assignments kept.
+ *  The same gate as `completeMeeting` — `requireClubRole(…, ["admin"])` admits
+ *  an admin and a member with an open office, and refuses an archived club
+ *  through `requireMembership`. The date and status rules are
+ *  `applyCancelMeeting`'s, under the meeting lock. AUTHED. */
+export const cancelMeeting = createServerFn({ method: "POST" })
+	.validator((input: unknown) => lifecycleSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const [row] = await db
+			.select({ clubId: meetings.clubId })
+			.from(meetings)
+			.where(eq(meetings.id, data.meetingId))
+			.limit(1);
+		if (!row) throw new Error("Meeting not found.");
+		const membership = await requireClubRole(currentUser.id, row.clubId, [
+			"admin",
+		]);
+		return applyCancelMeeting({
+			meetingId: data.meetingId,
+			actorMemberId: membership.id,
+		});
+	});
+
+/** Put a cancelled meeting back to `scheduled` (#1057), assignments as they
+ *  were. Same gate as `cancelMeeting`. AUTHED. */
+export const restoreMeeting = createServerFn({ method: "POST" })
+	.validator((input: unknown) => lifecycleSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const [row] = await db
+			.select({ clubId: meetings.clubId })
+			.from(meetings)
+			.where(eq(meetings.id, data.meetingId))
+			.limit(1);
+		if (!row) throw new Error("Meeting not found.");
+		const membership = await requireClubRole(currentUser.id, row.clubId, [
+			"admin",
+		]);
+		return applyRestoreMeeting({
+			meetingId: data.meetingId,
+			actorMemberId: membership.id,
+		});
+	});
+
+const cancelledMeetingsSchema = z.object({ clubId: uuid });
+
+/** The club's cancelled meetings from today onward (#1057), so an officer can
+ *  find one again from the schedule and restore it. Admins and members with an
+ *  open office only, so a plain member's schedule never names one. AUTHED.
+ *
+ *  `requireClubAdminView`, the gate for admin-only READS — not the
+ *  `requireClubRole(…, ["admin"])` the cancel itself takes. The two admit the
+ *  same club officers; they differ on a superadmin's impersonation, where the
+ *  write gate refuses a read-only session outright and marks a read-write
+ *  one's request as a write. This is a read. */
+export const listCancelledMeetings = createServerFn({ method: "GET" })
+	.validator((input: unknown) => cancelledMeetingsSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubAdminView(currentUser.id, data.clubId);
+		return loadCancelledMeetings(data.clubId);
 	});

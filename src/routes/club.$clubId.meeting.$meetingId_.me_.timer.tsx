@@ -44,12 +44,14 @@
 // `recordTiming`, for the same reason the markup lives there: a route module is
 // untestable by construction.
 import { createFileRoute, notFound } from "@tanstack/react-router";
+import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-notice";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingTimer } from "#/components/club/meeting-timer";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { Button } from "#/components/ui/button";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { formatMeetingDate } from "#/lib/format";
+import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { findTimerSlot, findTmodSlot } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
@@ -132,6 +134,12 @@ function PersonalTimerRoute() {
 		(canManage ||
 			myId === (findTimerSlot(slots)?.assigneeId ?? null) ||
 			myId === (findTmodSlot(slots)?.assigneeId ?? null));
+
+	// #1057: a cancelled meeting has nothing to time. Read-only, and it says
+	// so, ahead of the identity gate — a visitor needs no name to be told.
+	if (isMeetingCancelled(meeting.status)) {
+		return <CancelledMeetingNotice clubId={clubId} meetingId={meeting.id} />;
+	}
 
 	if (!myId) {
 		return <NeedsIdentity onPick={promptIdentity} />;

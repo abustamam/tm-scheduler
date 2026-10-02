@@ -3,8 +3,10 @@ import type { db } from "#/db";
 import {
 	type attendancePlanStatusEnum,
 	meetingAttendancePlan,
+	meetings,
 	members,
 } from "#/db/schema";
+import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
 import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { takeAdvisoryLockWithin } from "./club-write-lock";
@@ -238,6 +240,35 @@ export type SetPlanStatusArgs = SetPlanStatusCommon &
 	);
 
 /**
+ * Refuse a plan write on a cancelled meeting (#1057), with the one sentence
+ * every member-facing write says. Here in the seam rather than in its dozen
+ * callers, for the reason the seam exists: one place where "may this row
+ * change" is true or false.
+ *
+ * Read through the CALLER's handle, so a writer inside a transaction compares
+ * against its own view, and as its own statement, so a cancel committed
+ * before it is seen. There is no lock to re-read behind — these writes take an
+ * advisory lock on the member, never the meeting row — and the INSERT below is
+ * an upsert whose insert arm cannot carry a predicate without rebuilding it as
+ * an INSERT … SELECT. A cancel that commits between this read and that write
+ * is the window #1057 accepted when it declined a new lock; the plan row it
+ * leaves is harmless, since every reader of a cancelled meeting's plan is a
+ * reader of a meeting that no longer happens. A meeting that does not exist is
+ * left to the FK: this gate answers one question only.
+ */
+async function assertPlanMeetingNotCancelled(
+	database: DbOrTx,
+	meetingId: string,
+): Promise<void> {
+	const [row] = await database
+		.select({ status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (row) assertMeetingNotCancelled(row.status);
+}
+
+/**
  * THE only module that reads or writes `meeting_attendance_plan`, apart from the
  * membership merge (`membership-collapse-logic.ts`), which re-points `member_id`
  * in raw SQL and is waived by name in `attendance-plan-store.guard.test.ts`.
@@ -269,6 +300,7 @@ export async function setPlanStatus(
 	if (!args.onlyIfAbsent && args.proof === "asserted" && !args.demoteFrom) {
 		throw new Error(ASSERTED_OVERWRITE_MESSAGE);
 	}
+	await assertPlanMeetingNotCancelled(database, args.meetingId);
 	const values = {
 		memberId: args.memberId,
 		meetingId: args.meetingId,
@@ -391,6 +423,7 @@ export async function clearPlanStatus(
 		onlyFrom: readonly AttendancePlanStatus[];
 	},
 ): Promise<{ ok: true; cleared: boolean }> {
+	await assertPlanMeetingNotCancelled(database, args.meetingId);
 	const removed = await database
 		.delete(meetingAttendancePlan)
 		.where(

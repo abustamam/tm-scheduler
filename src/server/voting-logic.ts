@@ -34,6 +34,7 @@ import {
 	isDigitalVotingOn,
 } from "#/lib/digital-voting";
 import { disqualificationReasonSchema } from "#/lib/disqualification";
+import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
 import {
 	WRITE_IN_LIMITS,
 	writeInKey,
@@ -563,6 +564,19 @@ export type BallotVoter = VoterRef | { kind: "anonymous" };
 export const ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE =
 	"Couldn't send that — refresh the page and tap your choice again.";
 
+/** `castVote`'s cancelled-meeting gate (#1057): the status as of this read,
+ *  refused with the member-facing sentence. An unknown meeting is left to
+ *  `getMeetingClubId` beside it, which already names that case. Declared here,
+ *  ABOVE `castVote`'s own doc comment, so that comment stays attached to it. */
+async function assertVoteMeetingNotCancelled(meetingId: string): Promise<void> {
+	const [row] = await db
+		.select({ status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (row) assertMeetingNotCancelled(row.status);
+}
+
 /**
  * Cast (or change) one ballot.
  *
@@ -645,6 +659,15 @@ export async function castVote(input: {
 	// candidate eligibility, because the derivations that answer it read the
 	// roster this club is supposed to have stopped exposing.
 	await assertClubNotArchived(clubId);
+	// #1057, before the switch and before eligibility for the same reason: a
+	// ballot on a cancelled meeting is refused whatever else is true of it, and
+	// with its own sentence. A plain re-read rather than a lock. Cancelling does
+	// NOT close vote sessions (a restore must lose nothing), so the session
+	// `FOR SHARE` the INSERT below holds cannot see it, and the window between
+	// this read and that write is the one #1057 accepted when it declined a
+	// new lock — a ballot slipping in there counts toward a meeting that no
+	// longer happens, which every reader of its tally already hides.
+	await assertVoteMeetingNotCancelled(input.meetingId);
 	// #770, before eligibility for the same reason as the archive gate above.
 	// Not locked: the atomic INSERT below already refuses a session that a
 	// switch-off has closed (the switch-off closes every open session in its own
@@ -1629,12 +1652,18 @@ function joinInTransaction(
 		// the link check, the cap count, the inserts — runs only after this
 		// resolves, so two concurrent joins for the same meeting can never both
 		// observe "room for one more" and both write.
-		await tx
-			.select({ id: meetings.id })
+		const [lockedMeeting] = await tx
+			.select({ id: meetings.id, status: meetings.status })
 			.from(meetings)
 			.where(eq(meetings.id, input.meetingId))
 			.limit(1)
 			.for("update");
+		// #1057, read off the row the lock above returned, and before anything
+		// is looked up or minted. This path is public and writes a visitor's
+		// name, and cancelling does not close vote sessions (a restore must lose
+		// nothing) — so without this a cancelled meeting with an open category
+		// kept minting `guests` rows for a ballot nobody can cast.
+		if (lockedMeeting) assertMeetingNotCancelled(lockedMeeting.status);
 		// #770, under the lock above and before any name is looked up or
 		// minted: a refused join must leave no `guests` row behind.
 		await assertDigitalVotingOnTx(tx, input.meetingId);

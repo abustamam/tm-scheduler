@@ -23,6 +23,10 @@ import {
 	AGENDA_TAB_ACTIVE_STYLE,
 	AGENDA_TAB_STYLE,
 } from "#/components/agenda/print-toolbar-styles";
+import {
+	CancelledArtifactMarker,
+	CancelledWatermark,
+} from "#/components/club/cancelled-meeting-notice";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
@@ -133,6 +137,10 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			return {
 				...inRoomMeetingPayload(data),
 				logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
+				// #1057: a cancelled meeting's agenda is marked, on screen and on
+				// paper, rather than printed as if it were happening. A boolean
+				// beside the projection, so the allowlist above stays as it is.
+				cancelled: data.meeting.status === "cancelled",
 				// So the toolbar can mark the club's default tab (#1069).
 				defaultPrintLayout: club.defaultPrintLayout,
 				// The layout this payload was RENDERED for. Read only when the URL
@@ -213,6 +221,7 @@ function PrintAgenda() {
 		logoUrl,
 		defaultPrintLayout,
 		printedLayout,
+		cancelled,
 	} = Route.useLoaderData();
 	// Online, the loader redirects a URL naming no layout, so `searchLayout` is
 	// set. Offline, a bare `/…/print` is answered from the page cached for
@@ -308,7 +317,12 @@ function PrintAgenda() {
 
 	return (
 		<div>
-			<PrintToolbar>
+			{/* #1057: marked on screen (the toolbar) and on paper (the fixed
+			    watermark, which no layout measures). */}
+			{cancelled ? <CancelledWatermark /> : null}
+			<PrintToolbar
+				leading={cancelled ? <CancelledArtifactMarker /> : undefined}
+			>
 				{bare ? null : (
 					<div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
 						{LAYOUTS.map((l) => (

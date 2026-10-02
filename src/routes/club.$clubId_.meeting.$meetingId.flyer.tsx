@@ -13,7 +13,9 @@
 //
 // The loader's payload is narrowed to `FLYER_MEETING_FIELDS` before it is
 // dehydrated into the page (#754's lesson: what is SHIPPED, not only what is
-// painted). The #731/#754 guard runs this loader and sweeps this file.
+// painted). The #731/#754 guard runs this loader and sweeps this file. The
+// server fn's own response is narrowed at its seam (`loadPublicFlyer`), since
+// on a client-side navigation that response reaches the browser too.
 
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -25,9 +27,14 @@ import {
 	PrintToolbar,
 } from "#/components/agenda/print-theme";
 import { flyerTabStyle } from "#/components/agenda/print-toolbar-styles";
+import {
+	CancelledArtifactMarker,
+	CancelledWatermark,
+} from "#/components/club/cancelled-meeting-notice";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	buildFlyerContent,
@@ -56,6 +63,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 				throw err;
 			});
 			if (!data) throw notFound();
+			const meeting = projectFlyerMeeting(data.meeting);
 			return {
 				club: {
 					name: data.club.name,
@@ -63,8 +71,11 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 					timezone: data.club.timezone,
 				},
 				template: data.template,
-				meeting: projectFlyerMeeting(data.meeting),
+				meeting,
 				logoUrl: data.logoUrl,
+				// #1057: off the flyer's OWN row, carried through the allowlist, so
+				// there is no second lookup to fail open or to name another meeting.
+				cancelled: isMeetingCancelled(meeting.status),
 			};
 		},
 		component: FlyerPage,
@@ -85,7 +96,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/flyer")(
 function FlyerPage() {
 	const { clubId, meetingId } = Route.useParams();
 	const { layout } = Route.useSearch();
-	const { club, template, meeting, logoUrl } = Route.useLoaderData();
+	const { club, template, meeting, logoUrl, cancelled } = Route.useLoaderData();
 	// The QR and the links need an absolute URL, and the server does not know
 	// the origin the visitor used — learned after mount, like `/print`.
 	const [origin, setOrigin] = useState("");
@@ -97,7 +108,13 @@ function FlyerPage() {
 
 	return (
 		<div>
-			<PrintToolbar>
+			{/* #1057: marked on screen and on the printed poster. The square
+			    image's PNG is drawn from its own element, which the watermark is
+			    not inside, so the square carries its own stamp (`cancelled`). */}
+			{cancelled ? <CancelledWatermark /> : null}
+			<PrintToolbar
+				leading={cancelled ? <CancelledArtifactMarker /> : undefined}
+			>
 				<Link
 					to="/club/$clubId/meeting/$meetingId/flyer"
 					params={{ clubId, meetingId }}
@@ -140,6 +157,7 @@ function FlyerPage() {
 							logoUrl={logoUrl}
 							filename={`${club.slug}-flyer-${meeting.urlKey}.png`}
 							previewWidth={540}
+							cancelled={cancelled}
 						/>
 					</div>
 				</div>

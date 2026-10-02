@@ -191,6 +191,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		};
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
 			"assign_roles",
+			"cancel_meeting",
 			"edit_agenda",
 			"find_people",
 			"get_agenda",
@@ -198,6 +199,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_my_feedback",
 			"list_meetings",
 			"record_guest_book",
+			"restore_meeting",
 			"upsert_agendas",
 			"whoami",
 		]);
@@ -524,11 +526,20 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					{ op: "add", label: "Introductions", minutes: 15, at: "start" },
 				],
 			}),
+			// #1057. LAST, after `assign_roles` has put the contact-bearing guest on
+			// a slot: the cancel's result carries a drafted notice that names every
+			// role holder, so this is the one tool in the sweep whose text is BUILT
+			// from a guest row. It must name the guest and never the address. The
+			// restore follows so the meeting is back as the cases after this expect.
+			toolsCall("cancel_meeting", { meetingId: seed.meetingId }),
+			toolsCall("restore_meeting", { meetingId: seed.meetingId }),
 		];
+		const rawByTool = new Map<string, string>();
 		for (const call of calls) {
 			const { raw } = await readToolResult(
 				await handleMcpRequest(mcpRequest(call, { token: adminToken })),
 			);
+			rawByTool.set(call.params.name, raw);
 			expect(raw, `${call.params.name} leaked a raw email`).not.toContain(
 				email,
 			);
@@ -536,6 +547,16 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				"5551234567",
 			);
 		}
+
+		// The positive half for `cancel_meeting` (review of #1084, H): its notice
+		// is BUILT from the slot holders, and `assign_roles` above put this guest
+		// on a slot — so the sweep must see the guest's NAME there. Without it, a
+		// notice that named nobody (or a tool that returned nothing) would pass
+		// the no-contact assertions above for the wrong reason.
+		expect(
+			rawByTool.get("cancel_meeting"),
+			"cancel_meeting's notice must name the guest holding a role",
+		).toContain("Contactful Guest");
 
 		// DERIVED completeness, the `mcp-authz.guard.test.ts` pattern: a
 		// hand-written list cannot fail for the case it exists to catch. #809

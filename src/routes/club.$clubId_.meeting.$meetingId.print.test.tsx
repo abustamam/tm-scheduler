@@ -79,6 +79,35 @@ const location = {
 // biome-ignore lint/suspicious/noExplicitAny: loader takes the full router ctx
 const runLoader = (ctx: any) => (Route.options.loader as any)(ctx);
 
+// #1057, the maintainer's decision on #1084: a cancelled meeting's agenda is
+// marked rather than printed as if it were happening. The flag rides BESIDE the
+// in-room projection, so that allowlist is unchanged.
+describe("Print agenda route — a cancelled meeting's flag (#1057)", () => {
+	it.each([
+		["cancelled", true],
+		["scheduled", false],
+	] as const)("a %s meeting loads with cancelled=%s", async (status, expected) => {
+		vi.mocked(resolveClubOrRedirect).mockResolvedValue({
+			id: CLUB_ID,
+			// biome-ignore lint/suspicious/noExplicitAny: partial club is enough
+		} as any);
+		const data = meetingData();
+		vi.mocked(getPublicMeetingByKey).mockResolvedValue({
+			...data,
+			meeting: { ...data.meeting, status },
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn call signature
+		} as any);
+		vi.mocked(getClubLogoMeta).mockResolvedValue(null);
+		const result = await runLoader({
+			params: { clubId: "downtown", meetingId: "2026-07-31" },
+			location,
+		});
+		expect(result.cancelled).toBe(expected);
+		// The status is read, never shipped on the projected meeting.
+		expect(result.meeting.status).toBeUndefined();
+	});
+});
+
 describe("Print agenda route — loader logo wiring (#495)", () => {
 	it("returns a null logoUrl when the club has no logo", async () => {
 		vi.mocked(resolveClubOrRedirect).mockResolvedValue({

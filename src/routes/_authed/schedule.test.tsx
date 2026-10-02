@@ -23,6 +23,12 @@ const { getSeasonGrid } = vi.hoisted(() => ({
 	getSeasonGrid: vi.fn(async (_: unknown) => ({}) as SeasonGridData),
 }));
 vi.mock("#/server/season-grid", () => ({ getSeasonGrid }));
+// The route imports `listCancelledMeetings` from the meetings server-fn module
+// (#1057), which reaches `#/db` on import like the three below. The cases here
+// are about `?past=`; `schedule-cancelled.test.tsx` is where the strip is.
+vi.mock("#/server/meetings", () => ({
+	listCancelledMeetings: vi.fn(async () => []),
+}));
 vi.mock("#/server/slots", () => ({ claimSlot: vi.fn(), releaseSlot: vi.fn() }));
 vi.mock("#/server/availability", () => ({
 	clearAvailability: vi.fn(),
@@ -93,7 +99,11 @@ describe("the loader", () => {
 	};
 	const loaderDeps = Route.options.loaderDeps as unknown as LoaderDeps;
 	const loader = Route.options.loader as unknown as (o: {
-		context: { activeClubId: string | null };
+		context: {
+			activeClubId: string | null;
+			clubs: never[];
+			officerPositions: never[];
+		};
 		deps: ReturnType<LoaderDeps>;
 	}) => Promise<unknown>;
 
@@ -105,7 +115,10 @@ describe("the loader", () => {
 	])("%s asks the server for pastCount %i", async (qs, expected) => {
 		const deps = loaderDeps({ search: fromUrl(qs) });
 		expect(deps.past).toBe(expected);
-		await loader({ context: { activeClubId: "club-1" }, deps });
+		await loader({
+			context: { activeClubId: "club-1", clubs: [], officerPositions: [] },
+			deps,
+		});
 		expect(getSeasonGrid).toHaveBeenCalledWith({
 			data: { clubId: "club-1", count: 8, pastCount: expected },
 		});
@@ -149,6 +162,7 @@ async function renderPage(search: ReturnType<ValidateSearch>) {
 	const navigate = vi.fn();
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		data: gridData,
+		cancelled: [],
 	} as never);
 	vi.spyOn(Route, "useSearch").mockReturnValue(search as never);
 	vi.spyOn(Route, "useRouteContext").mockReturnValue({

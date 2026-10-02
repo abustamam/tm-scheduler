@@ -116,6 +116,76 @@ describe.skipIf(!hasTestDb)("resolveMeetingKey", () => {
 		expect(await resolveMeetingKey(seed.clubId, "2026-07-21")).toBe(active.id);
 	});
 
+	// Maintainer's decision on #1084: a cancelled meeting is visible, read-only,
+	// and says so, so the bare-date key every link issued before the cancel
+	// carries has to reach it — when nothing live shares the day.
+	it("falls back to a cancelled meeting when it is the only one that day", async () => {
+		const { resolveMeetingKey, resolvePublicMeetingKey } = await import(
+			"#/server/meeting-resolve-logic"
+		);
+		const [cancelled] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date("2026-07-21T23:45:00Z"), // 18:45 local
+				status: "cancelled",
+			})
+			.returning({ id: meetings.id });
+		expect(await resolveMeetingKey(seed.clubId, "2026-07-21")).toBe(
+			cancelled.id,
+		);
+		// The public seam the meeting page and every sub-route reads through.
+		expect(await resolvePublicMeetingKey(seed.clubId, "2026-07-21")).toBe(
+			cancelled.id,
+		);
+	});
+
+	it("falls back to the EARLIEST cancelled meeting when a day has only cancelled ones", async () => {
+		const { resolveMeetingKey } = await import(
+			"#/server/meeting-resolve-logic"
+		);
+		const [early] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date("2026-07-21T23:00:00Z"), // 18:00 local
+				status: "cancelled",
+			})
+			.returning({ id: meetings.id });
+		await testDb.insert(meetings).values({
+			clubId: seed.clubId,
+			scheduledAt: new Date("2026-07-22T01:00:00Z"), // 20:00 local, same day
+			status: "cancelled",
+		});
+		expect(await resolveMeetingKey(seed.clubId, "2026-07-21")).toBe(early.id);
+	});
+
+	it("prefers a live meeting even when it is LATER than a cancelled one that day", async () => {
+		// The collision rule the maintainer tabled, stated from the other side:
+		// order is live-first, THEN time, so an earlier cancelled meeting cannot
+		// win on time alone.
+		const { resolveMeetingKey } = await import(
+			"#/server/meeting-resolve-logic"
+		);
+		await testDb.insert(meetings).values({
+			clubId: seed.clubId,
+			scheduledAt: new Date("2026-07-21T22:00:00Z"), // 17:00 local, cancelled
+			status: "cancelled",
+		});
+		const [completed] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date("2026-07-22T02:00:00Z"), // 21:00 local
+				status: "completed",
+			})
+			.returning({ id: meetings.id });
+		// `completed` is live for this purpose: only `cancelled` is demoted.
+		expect(await resolveMeetingKey(seed.clubId, "2026-07-21")).toBe(
+			completed.id,
+		);
+	});
+
 	it("returns null for an unknown key or a uuid from another club", async () => {
 		const { resolveMeetingKey } = await import(
 			"#/server/meeting-resolve-logic"

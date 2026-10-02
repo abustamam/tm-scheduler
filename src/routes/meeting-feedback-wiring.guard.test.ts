@@ -18,8 +18,10 @@ const source = readSource("src/routes/club.$clubId.meeting.$meetingId.tsx");
 
 describe("the meeting route wires the feedback link (#984)", () => {
 	it("derives feedbackOpen from feedbackWindow off the route's one frozen clock", () => {
+		// `!cancelled &&` since #1057: no feedback link on a cancelled meeting,
+		// whose notes `leaveFeedbackLogic` refuses. The window half is unchanged.
 		expect(source).toMatch(
-			/const feedbackOpen = feedbackWindow\(meeting, now\)\.canWrite;/,
+			/const feedbackOpen = !cancelled && feedbackWindow\(meeting, now\)\.canWrite;/,
 		);
 	});
 

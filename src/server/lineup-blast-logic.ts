@@ -27,9 +27,14 @@ import {
 	type LineupBlastData,
 	mayDraftLineupBlast,
 } from "#/lib/lineup-blast";
+import {
+	isMeetingCancelled,
+	MEETING_CANCELLED_MESSAGE,
+} from "#/lib/meeting-cancellation-notice";
 import { appBaseUrl } from "#/lib/unsubscribe-token";
 import { isReadableClubForMeeting } from "./club-readable-logic";
 import { getActiveImpersonation } from "./impersonation-logic";
+import { McpError } from "./mcp/errors";
 import {
 	loadTmodMemberId,
 	resolveSelfAssertGrant,
@@ -150,7 +155,10 @@ export async function requirePublicLineupBlastAccess(
 
 /**
  * What the draft is built from, for one meeting, or null for an unknown
- * meeting or an archived club (one not-found shape for both).
+ * meeting or an archived club (one not-found shape for both). A CANCELLED
+ * meeting is neither: it throws `McpError("LOCKED", MEETING_CANCELLED_MESSAGE)`
+ * (#1057), so `get_lineup_blast` returns a code rather than INTERNAL and the
+ * browser's sheet shows the sentence.
  *
  * Reads slots through `loadMeetingSlots`, the ONE slot loader the meeting page,
  * the print route and `get_agenda` already share, so the draft lists exactly
@@ -172,6 +180,7 @@ export async function loadPublicLineupBlastData(
 			meetingId: meetings.id,
 			clubId: meetings.clubId,
 			scheduledAt: meetings.scheduledAt,
+			status: meetings.status,
 			clubName: clubs.name,
 			slug: clubs.slug,
 			timezone: clubs.timezone,
@@ -181,6 +190,19 @@ export async function loadPublicLineupBlastData(
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
 	if (!row) return null;
+	// A cancelled meeting has no lineup to blast (#1057), and the refusal is the
+	// member-facing sentence rather than `null`: `null` means "unknown or taken
+	// down" to both callers, and the officer who is told the generic refusal
+	// would go looking for a permission problem that is not there.
+	//
+	// An `McpError`, not a bare `Error`, because `get_lineup_blast` calls this
+	// directly and `toMcpError` replaces any other throw with INTERNAL — the
+	// caller would learn that it failed and nothing about why. The code is the
+	// nearest the vocabulary has: the meeting no longer accepts the request.
+	// The browser's `getLineupBlast` rethrows it and the sheet reads `.message`.
+	if (isMeetingCancelled(row.status)) {
+		throw new McpError("LOCKED", MEETING_CANCELLED_MESSAGE);
+	}
 
 	const [urlKey, slots] = await Promise.all([
 		resolveMeetingUrlKey(row.clubId, row.scheduledAt, row.timezone),

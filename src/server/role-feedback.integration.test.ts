@@ -30,7 +30,10 @@ import {
 	seedPerson,
 	testDb,
 } from "#/test/db";
-import type { FeedbackRoleChoice } from "./role-feedback-logic";
+import type {
+	FeedbackRoleChoice,
+	FeedbackTargetsPublic,
+} from "./role-feedback-logic";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -54,6 +57,19 @@ const {
 	publicFeedbackError,
 } = await import("#/server/role-feedback-logic");
 const { lockClubForWrite } = await import("#/server/club-write-lock");
+
+/** The reader's answer for a LIVE meeting, narrowed to the targets shape:
+ *  every case that reads targets or a window is about one, so a cancelled
+ *  answer there (#1057) is a failure, not something to read past. */
+async function liveTargets(
+	...args: Parameters<typeof loadFeedbackTargetsPublic>
+): Promise<FeedbackTargetsPublic | null> {
+	const res = await loadFeedbackTargetsPublic(...args);
+	if (res && "status" in res) {
+		throw new Error(`expected a live meeting, got ${JSON.stringify(res)}`);
+	}
+	return res;
+}
 const {
 	FEEDBACK_IP_LIMIT,
 	FEEDBACK_PER_ADDRESS_PER_MEETING_CAP,
@@ -412,7 +428,7 @@ describe.skipIf(!hasTestDb)("loadFeedbackTargetsPublic (#984)", () => {
 			{ meetingId: s.meetingId, guestId: g?.id, sortOrder: 1 },
 		]);
 
-		const res = await loadFeedbackTargetsPublic(s.clubId, s.meetingId);
+		const res = await liveTargets(s.clubId, s.meetingId);
 		expect(res?.window.canWrite).toBe(true);
 		expect(
 			res?.targets.map((t) => [t.kind, t.memberName, t.roleLabel]),
@@ -445,7 +461,7 @@ describe.skipIf(!hasTestDb)("loadFeedbackTargetsPublic (#984)", () => {
 		}
 	});
 
-	it("returns null for an archived club, a cancelled meeting and an unknown key", async () => {
+	it("returns null for an archived club and an unknown key", async () => {
 		const s = await liveMeeting();
 		expect(
 			await loadFeedbackTargetsPublic(s.clubId, s.meetingId),
@@ -453,20 +469,38 @@ describe.skipIf(!hasTestDb)("loadFeedbackTargetsPublic (#984)", () => {
 		expect(await loadFeedbackTargetsPublic(s.clubId, randomUUID())).toBeNull();
 
 		await testDb
-			.update(meetings)
-			.set({ status: "cancelled" })
-			.where(eq(meetings.id, s.meetingId));
-		expect(await loadFeedbackTargetsPublic(s.clubId, s.meetingId)).toBeNull();
-
-		await testDb
-			.update(meetings)
-			.set({ status: "scheduled" })
-			.where(eq(meetings.id, s.meetingId));
-		await testDb
 			.update(clubs)
 			.set({ archivedAt: new Date() })
 			.where(eq(clubs.id, s.clubId));
 		expect(await loadFeedbackTargetsPublic(s.clubId, s.meetingId)).toBeNull();
+
+		// The archive wins over the cancelled answer below: an archived club's
+		// cancelled meeting is as absent as any other of its meetings.
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, s.meetingId));
+		expect(await loadFeedbackTargetsPublic(s.clubId, s.meetingId)).toBeNull();
+	});
+
+	// #1057: a cancelled meeting is visible and says so, so the page needs to
+	// tell it from a key naming nothing — from this answer alone, and with
+	// nothing in it but the id and the status (no names, no window, no roles).
+	it("answers a cancelled meeting with its id and status and nothing else", async () => {
+		const s = await liveMeeting();
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, s.meetingId));
+		expect(
+			await loadFeedbackTargetsPublic(s.clubId, s.meetingId),
+		).toStrictEqual({ meetingId: s.meetingId, status: "cancelled" });
+
+		// Club-scoped like every other answer: another club's key names nothing.
+		const other = await liveMeeting();
+		expect(
+			await loadFeedbackTargetsPublic(other.clubId, s.meetingId),
+		).toBeNull();
 	});
 
 	it("reports the window's state, closed and not yet open", async () => {
@@ -475,9 +509,9 @@ describe.skipIf(!hasTestDb)("loadFeedbackTargetsPublic (#984)", () => {
 			.update(meetings)
 			.set({ scheduledAt: new Date(Date.now() + DAY) })
 			.where(eq(meetings.id, s.meetingId));
-		const early = await loadFeedbackTargetsPublic(s.clubId, s.meetingId);
+		const early = await liveTargets(s.clubId, s.meetingId);
 		expect(early?.window.canWrite).toBe(false);
-		const late = await loadFeedbackTargetsPublic(
+		const late = await liveTargets(
 			s.clubId,
 			s.meetingId,
 			new Date(Date.now() + 10 * DAY),
@@ -1244,7 +1278,7 @@ describe.skipIf(!hasTestDb)(
 			await addMember(s.clubId, "Lapsed Lee", undefined, {
 				status: "inactive",
 			});
-			const res = await loadFeedbackTargetsPublic(s.clubId, s.meetingId);
+			const res = await liveTargets(s.clubId, s.meetingId);
 			// The member holds Timer, so they are in targets and not in others.
 			expect(res?.targets.map((t) => t.recipientMemberId)).toEqual([
 				s.memberId,
@@ -1273,7 +1307,7 @@ describe.skipIf(!hasTestDb)(
 				.insert(tableTopicsSpeakers)
 				.values({ meetingId: s.meetingId, memberId: s.adminMemberId })
 				.returning({ id: tableTopicsSpeakers.id });
-			const res = await loadFeedbackTargetsPublic(s.clubId, s.meetingId);
+			const res = await liveTargets(s.clubId, s.meetingId);
 			expect(res?.targets).toEqual([
 				{
 					kind: "slot",
@@ -1313,7 +1347,7 @@ describe.skipIf(!hasTestDb)(
 				enabled: false,
 			});
 			// seedClub's Timer sits at the default sort_order 0.
-			const res = await loadFeedbackTargetsPublic(s.clubId, s.meetingId);
+			const res = await liveTargets(s.clubId, s.meetingId);
 			expect(res?.roleOptions).toEqual([
 				{ roleDefinitionId: s.roleDefinitionId, name: "Timer" },
 				{ roleDefinitionId: gram, name: "Grammarian" },

@@ -55,7 +55,9 @@ export const getAgendaTool: McpToolDefinition = {
 			"are what role assignment takes. `runSheet` is the timed agenda: each " +
 			"row's id, kind, label, minutes, start time and flex range, and when " +
 			"it ends against the booked slot (`overByMinutes`, positive is over). " +
-			"Row ids from there are what edit_agenda takes.",
+			"Row ids from there are what edit_agenda takes. A `status` of " +
+			'"cancelled" means every write tool refuses this meeting until ' +
+			"restore_meeting puts it back.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {

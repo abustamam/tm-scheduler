@@ -121,12 +121,31 @@ afterEach(() => {
 });
 
 describe("feedback route loader (#984)", () => {
-	it("404s when the server has no page for it (archived, cancelled, unknown)", async () => {
+	it("404s when the server has no page for it (archived, unknown)", async () => {
 		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue(null);
 		await expect(runLoader()).rejects.toSatisfy(isNotFound);
 		expect(getFeedbackTargetsPublic).toHaveBeenCalledWith({
 			data: { clubId: CLUB_ID, meetingKey: "2026-10-03" },
 		});
+	});
+
+	// #1057, the maintainer's decision on #1084: a cancelled meeting is visible
+	// and says so, so its feedback link (the in-room strip's, a QR's) must not
+	// read "Meeting not found". The targets reader itself says so, with the
+	// meeting's id and status only, so there is no second lookup to fail.
+	it("a CANCELLED meeting is not a 404: the loader says so, and passes no names", async () => {
+		vi.mocked(getFeedbackTargetsPublic).mockResolvedValue({
+			meetingId: MEETING_ID,
+			status: "cancelled",
+		});
+		const result = await runLoader();
+		expect(result).toEqual({
+			cancelled: true,
+			clubName: "Downtown Toastmasters",
+			clubNumber: "123456",
+			meetingId: MEETING_ID,
+		});
+		expect(getFeedbackTargetsPublic).toHaveBeenCalledTimes(1);
 	});
 
 	it("passes the server's window state straight through", async () => {
@@ -195,6 +214,36 @@ async function renderPage(
 	render(<RouterProvider router={router} />);
 	await waitFor(() => expect(router.state.status).toBe("idle"));
 }
+
+describe("feedback page on a cancelled meeting (#1057)", () => {
+	it("says the meeting is cancelled, links to it by uuid, and lists nobody", async () => {
+		vi.spyOn(Route, "useLoaderData").mockReturnValue({
+			cancelled: true,
+			clubName: "Downtown Toastmasters",
+			clubNumber: "123456",
+			meetingId: MEETING_ID,
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+		} as any);
+		vi.spyOn(Route, "useParams").mockReturnValue(params as never);
+		const Component = Route.options.component as () => React.ReactElement;
+		const rootRoute = createRootRoute({ component: () => <Component /> });
+		const router = createRouter({
+			routeTree: rootRoute,
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		render(<RouterProvider router={router} />);
+		await waitFor(() => expect(router.state.status).toBe("idle"));
+
+		const notice = await screen.findByTestId("cancelled-meeting-notice");
+		expect(notice.textContent).toContain("This meeting is cancelled.");
+		expect(notice.querySelector("a")?.getAttribute("href")).toBe(
+			`/club/downtown/meeting/${MEETING_ID}`,
+		);
+		// No names, no form: nobody is written to on a cancelled meeting.
+		expect(screen.queryByRole("button", { name: /Pat Lee/ })).toBeNull();
+		expect(screen.queryByRole("textbox")).toBeNull();
+	});
+});
 
 describe("feedback page (#984)", () => {
 	it("lists each target as a card with name and role", async () => {

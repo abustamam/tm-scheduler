@@ -52,6 +52,7 @@ export function FlyerSquareExport({
 	logoUrl,
 	filename,
 	previewWidth = 320,
+	cancelled = false,
 }: {
 	content: FlyerContent;
 	clubName: string;
@@ -59,6 +60,9 @@ export function FlyerSquareExport({
 	logoUrl: string | null;
 	filename: string;
 	previewWidth?: number;
+	/** A cancelled meeting's image is stamped "Cancelled" — in the EXPORTED
+	 *  box, since the download leaves the page's own markers behind (#1057). */
+	cancelled?: boolean;
 }) {
 	const exportRef = useRef<HTMLDivElement>(null);
 	const logo = useInlinedLogo(logoUrl);
@@ -109,6 +113,7 @@ export function FlyerSquareExport({
 						content={content}
 						clubName={clubName}
 						logoSrc={logo.src ?? logoUrl}
+						cancelled={cancelled}
 					/>
 				</div>
 			</div>
@@ -126,6 +131,7 @@ export function FlyerSquareExport({
 					content={content}
 					clubName={clubName}
 					logoSrc={logo.src}
+					cancelled={cancelled}
 				/>
 			</div>
 			<Button

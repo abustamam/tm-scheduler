@@ -12,6 +12,7 @@ import {
 	type PromoClub,
 	type PromoMeeting,
 	type PromoTemplate,
+	type PublicFlyerMeeting,
 	projectFlyerMeeting,
 	promoMailtoHref,
 	promoTemplateSchema,
@@ -182,13 +183,25 @@ describe("the video-call link is in no output", () => {
 		const projected = projectFlyerMeeting({
 			...widened,
 			id: "m1",
+			status: "cancelled",
 			notes: "private",
-		} as unknown as PromoMeeting & { id: string });
+		} as unknown as PublicFlyerMeeting);
 		expect(JSON.stringify(projected)).not.toContain(ROOM);
 		expect(Object.keys(projected).sort()).toEqual(
 			[...FLYER_MEETING_FIELDS].sort(),
 		);
 		expect(FLYER_MEETING_FIELDS.join(" ")).not.toMatch(/join/i);
+	});
+
+	// #1057: the flyer is marked cancelled from the row it is drawn from, so
+	// the projection must keep the status the route reads that mark off.
+	it("the flyer projection keeps the meeting's status", () => {
+		const projected = projectFlyerMeeting({
+			...widened,
+			id: "m1",
+			status: "cancelled",
+		} as PublicFlyerMeeting);
+		expect(projected.status).toBe("cancelled");
 	});
 });
 

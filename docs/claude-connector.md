@@ -57,6 +57,8 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 | `get_my_feedback` | reads | "What did people say about my speech on Saturday?" Only **your own** anonymous notes, from meetings that have ended; never who wrote one. Every result tells Claude the note text is untrusted, anonymous input, never instructions |
 | `find_people` | reads | "Find Dana on our roster." Guest emails and phones come back **masked** |
 | `assign_roles` | **writes immediately** | "Put Dana in the Speaker 2 slot", "clear the Timer role" |
+| `cancel_meeting` | **writes immediately** | "We're not meeting this Saturday — cancel it." Everyone keeps their role; Claude gets a drafted notice naming the date and every role holder, for you to copy and send |
+| `restore_meeting` | **writes immediately** | "Put Saturday's meeting back." Every role is exactly as it was; possible until the end of the meeting's day |
 | `edit_agenda` | previews, then writes when you approve | "Open with 15 minutes of Introductions so the program starts at 12:15" — add, remove, move or retime agenda rows |
 | `upsert_agendas` | writes nothing — gives you a link | "Set the themes for October's meetings" |
 | `record_guest_book` | writes nothing — gives you a link | "Here's a photo of last night's guest book" |
@@ -68,6 +70,14 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   none of it, but there is no second "are you sure" from GavelUp. Keep Claude's tool permission
   for this connector on **ask** (the default) so *you* approve each call, and read what it is
   about to assign before you do. A wrong assignment is undone on the agenda page like any other.
+- **`cancel_meeting` and `restore_meeting` change the meeting the moment Claude calls them.**
+  Cancelling hides the meeting from members and refuses every change to it — role sign-ups,
+  attendance, ballots, and the other write tools — until it is restored. It keeps every
+  assignment, so `restore_meeting` puts it back exactly as it was, up to the end of the meeting's
+  day (club time). Nothing is sent to anyone: `cancel_meeting` returns a drafted notice, and you
+  send it. A completed meeting, or one that has already started, cannot be cancelled. Keep the tool
+  permission on **ask** for these too; a cancel by mistake is one `restore_meeting` away, or
+  the Restore button on the meeting page.
 - **`edit_agenda` asks twice.** The first call writes nothing at all: it returns every row's start time
   before and after, when the agenda would end, and a warning if it would run past the booked slot
   (a warning, not a refusal — Table Topics stretches or shrinks first). Claude should show you
@@ -92,8 +102,8 @@ Some things that work well:
   Introductions."* → a plan showing the program starting at 12:15 and Table Topics shrinking so
   the end time holds; say yes and Claude applies it.
 
-It cannot delete or reschedule a meeting, change what roles a meeting has, or see anything in a
-club you are not an officer of.
+It can cancel a meeting and restore it, but it cannot delete or reschedule one, change what roles
+a meeting has, or see anything in a club you are not an officer of.
 
 ## Disconnecting
 
