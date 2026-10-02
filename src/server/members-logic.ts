@@ -381,9 +381,11 @@ type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
  *  sign-up / roster / season / picker views and can't claim or be assigned new
  *  roles, but their past role history is preserved (never deleted) and
  *  reactivating restores them everywhere. Logs member_edit with the status
- *  before/after. On an active→inactive transition their UPCOMING, non-cancelled
- *  role slots are released (mirrors applyMemberRemove); past slots are left
- *  untouched.
+ *  before/after. On an active→inactive transition their UPCOMING role slots are
+ *  released (mirrors applyMemberRemove); past slots are left untouched.
+ *  "Upcoming" includes a CANCELLED future meeting (#1057): cancelling keeps its
+ *  assignments so a restore loses nothing, so a slot left held here would come
+ *  back on the live agenda in the name of someone no longer active.
  *
  *  **"Restores them everywhere" is true HERE and deliberately NOT true of the
  *  other reactivation path.** There are two, and they mean different things
@@ -433,7 +435,11 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			.set({ status: input.status })
 			.where(eq(members.id, input.memberId));
 		// Free up their upcoming roles so the VPE can re-fill them; past slots
-		// stay assigned (history preserved).
+		// stay assigned (history preserved). No status filter, a cancelled
+		// future meeting included (#1057): its slots survive the cancel by design,
+		// and a restore must not hand the role back to an inactive member. This
+		// is its own UPDATE rather than `releaseSlotCore`, so the cancelled
+		// meeting's write guard does not apply to it — on purpose.
 		if (deactivating) {
 			const upcoming = await tx
 				.select({ id: roleSlots.id })
@@ -443,7 +449,6 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 					and(
 						eq(roleSlots.assignedMemberId, input.memberId),
 						gte(meetings.scheduledAt, new Date()),
-						ne(meetings.status, "cancelled"),
 					),
 				);
 			for (const s of upcoming) {
@@ -601,8 +606,11 @@ export const removeSchema = z.object({
 });
 type RemoveInput = z.infer<typeof removeSchema> & RosterActor;
 
-/** Remove a member: release their upcoming, non-cancelled slots (logged) then
- *  delete them (availability cascades). A user-linked member can't be removed. */
+/** Remove a member: release their upcoming slots (logged) then delete them
+ *  (availability cascades). A user-linked member can't be removed. "Upcoming"
+ *  includes a CANCELLED future meeting (#1057): a slot left there would be
+ *  `claimed` by nobody once the FK nulls the holder — unclaimable, per
+ *  `membership-merge-lock.ts` — and a restore would put it on the live agenda. */
 export async function applyMemberRemove(input: RemoveInput) {
 	const [member] = await db
 		.select()
@@ -617,6 +625,8 @@ export async function applyMemberRemove(input: RemoveInput) {
 	}
 
 	await db.transaction(async (tx) => {
+		// No status filter: a cancelled future meeting's slots are released too
+		// (#1057, see the docblock).
 		const upcoming = await tx
 			.select({ id: roleSlots.id })
 			.from(roleSlots)
@@ -625,7 +635,6 @@ export async function applyMemberRemove(input: RemoveInput) {
 				and(
 					eq(roleSlots.assignedMemberId, input.memberId),
 					gte(meetings.scheduledAt, new Date()),
-					ne(meetings.status, "cancelled"),
 				),
 			);
 		for (const s of upcoming) {

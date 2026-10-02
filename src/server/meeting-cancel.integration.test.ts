@@ -23,6 +23,8 @@ import {
 	guests,
 	meetingAttendancePlan,
 	meetings,
+	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -61,6 +63,9 @@ const { claimSlotCore, reassignSlotCore, releaseSlotCore } = await import(
 	"./slots-logic"
 );
 const { applyAssignGuestToSlot } = await import("./guests-logic");
+const { applyMemberRemove, applySetMemberStatus } = await import(
+	"./members-logic"
+);
 const { SELF_SERVICE_RUNGS, clearPlanStatus, setPlanStatus } = await import(
 	"./attendance-plan-logic"
 );
@@ -829,6 +834,106 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			expect(
 				(await meetingEdits(club.clubId, club.meetingId)).map((e) => e.change),
 			).toEqual(["completed", "reopened"]);
+		});
+	});
+
+	// Review of #1084, finding B: deactivating or removing a member released
+	// their upcoming slots EXCEPT on a cancelled meeting, so a restore handed
+	// the role back to someone inactive — or, after a removal, put a slot
+	// `claimed` by nobody (the FK nulls the holder) on the live agenda.
+	describe("a member leaving while a meeting is cancelled", () => {
+		/** A roster member with no sign-in account, so removal is allowed. */
+		async function seedNoAccountMember(name: string): Promise<string> {
+			const [person] = await testDb
+				.insert(people)
+				.values({ name })
+				.returning({ id: people.id });
+			if (!person) throw new Error("fixture insert failed");
+			const [member] = await testDb
+				.insert(members)
+				.values({
+					clubId: club.clubId,
+					personId: person.id,
+					name,
+					clubRole: "member",
+					status: "active",
+				})
+				.returning({ id: members.id });
+			if (!member) throw new Error("fixture insert failed");
+			return member.id;
+		}
+
+		async function holdSeededSlot(memberId: string) {
+			await testDb
+				.update(roleSlots)
+				.set({
+					status: "claimed",
+					assignedMemberId: memberId,
+					claimedAt: new Date(),
+				})
+				.where(eq(roleSlots.id, club.slotId));
+		}
+
+		/** After a restore, the freed slot takes a new holder. */
+		async function expectClaimableAfterRestore() {
+			await applyRestoreMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+			await testDb.transaction((tx) =>
+				claimSlotCore(tx, {
+					slotId: club.slotId,
+					memberId: club.memberId,
+					actorMemberId: club.memberId,
+					proof: "session",
+				}),
+			);
+			const [slot] = await slotRows(club.meetingId);
+			expect(slot?.status).toBe("claimed");
+			expect(slot?.assignedMemberId).toBe(club.memberId);
+		}
+
+		it("deactivation frees the slot on a cancelled future meeting, and a restore finds it open", async () => {
+			const leaver = await seedNoAccountMember("Leaving Lee");
+			await holdSeededSlot(leaver);
+			await applyCancelMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+
+			await applySetMemberStatus({
+				clubId: club.clubId,
+				memberId: leaver,
+				status: "inactive",
+				actorMemberId: club.adminMemberId,
+			});
+
+			const [slot] = await slotRows(club.meetingId);
+			expect(slot?.status).toBe("open");
+			expect(slot?.assignedMemberId).toBeNull();
+			await expectClaimableAfterRestore();
+		});
+
+		it("removal frees the slot on a cancelled future meeting, never leaving it claimed by nobody", async () => {
+			const leaver = await seedNoAccountMember("Removed Ray");
+			await holdSeededSlot(leaver);
+			await applyCancelMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			});
+
+			await applyMemberRemove({
+				clubId: club.clubId,
+				memberId: leaver,
+				actorMemberId: club.adminMemberId,
+			});
+
+			// `open`, not `claimed` with a null holder — the shape the FK would
+			// leave if the release skipped this slot, which nothing can claim.
+			const [slot] = await slotRows(club.meetingId);
+			expect(slot?.status).toBe("open");
+			expect(slot?.assignedMemberId).toBeNull();
+			await expectClaimableAfterRestore();
 		});
 	});
 });
