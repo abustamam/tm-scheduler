@@ -33,8 +33,10 @@ import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	MEETING_ALREADY_CANCELLED_MESSAGE,
 	MEETING_CANCEL_COMPLETED_MESSAGE,
+	MEETING_CANCEL_PAST_MESSAGE,
 	MEETING_CANCELLED_MESSAGE,
 	MEETING_NOT_CANCELLED_MESSAGE,
+	MEETING_RESTORE_PAST_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
 import {
 	cleanup,
@@ -399,5 +401,33 @@ describe.skipIf(!hasTestDb)("cancel_meeting / restore_meeting (#1057)", () => {
 			guest.id,
 		);
 		expect(after.find((r) => r.id === speakerSlot.id)?.status).toBe("open");
+	});
+
+	// Review of #1084, finding H: both tools' past-date branches.
+	it("cancel_meeting on a meeting whose date has passed is VALIDATION with the exact sentence", async () => {
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
+			.where(eq(meetings.id, seed.meetingId));
+		await expectMcpError(
+			cancel(adminToken),
+			"VALIDATION",
+			MEETING_CANCEL_PAST_MESSAGE,
+		);
+		expect(await status()).toBe("scheduled");
+	});
+
+	it("restore_meeting on a cancelled meeting whose date has passed is VALIDATION with the exact sentence", async () => {
+		await cancel(adminToken);
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
+			.where(eq(meetings.id, seed.meetingId));
+		await expectMcpError(
+			restore(adminToken),
+			"VALIDATION",
+			MEETING_RESTORE_PAST_MESSAGE,
+		);
+		expect(await status()).toBe("cancelled");
 	});
 });

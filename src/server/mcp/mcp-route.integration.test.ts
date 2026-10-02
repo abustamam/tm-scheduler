@@ -534,10 +534,12 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("cancel_meeting", { meetingId: seed.meetingId }),
 			toolsCall("restore_meeting", { meetingId: seed.meetingId }),
 		];
+		const rawByTool = new Map<string, string>();
 		for (const call of calls) {
 			const { raw } = await readToolResult(
 				await handleMcpRequest(mcpRequest(call, { token: adminToken })),
 			);
+			rawByTool.set(call.params.name, raw);
 			expect(raw, `${call.params.name} leaked a raw email`).not.toContain(
 				email,
 			);
@@ -545,6 +547,16 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				"5551234567",
 			);
 		}
+
+		// The positive half for `cancel_meeting` (review of #1084, H): its notice
+		// is BUILT from the slot holders, and `assign_roles` above put this guest
+		// on a slot — so the sweep must see the guest's NAME there. Without it, a
+		// notice that named nobody (or a tool that returned nothing) would pass
+		// the no-contact assertions above for the wrong reason.
+		expect(
+			rawByTool.get("cancel_meeting"),
+			"cancel_meeting's notice must name the guest holding a role",
+		).toContain("Contactful Guest");
 
 		// DERIVED completeness, the `mcp-authz.guard.test.ts` pattern: a
 		// hand-written list cannot fail for the case it exists to catch. #809

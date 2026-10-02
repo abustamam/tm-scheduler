@@ -971,4 +971,234 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			await expectClaimableAfterRestore();
 		});
 	});
+
+	// Review of #1084, finding H: the cases the review found missing.
+	describe("the cases the review found missing", () => {
+		it("restore answers PAST before NOT CANCELLED: a scheduled meeting whose date has passed", async () => {
+			await setScheduledAt(club.meetingId, new Date(Date.now() - 3 * DAY));
+			await expect(
+				applyRestoreMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				}),
+			).rejects.toThrow(MEETING_RESTORE_PAST_MESSAGE);
+		});
+
+		it("a second club's cancelled meeting is absent from this club's list", async () => {
+			const other = await seedClub();
+			try {
+				await applyCancelMeeting({
+					meetingId: other.meetingId,
+					actorMemberId: other.adminMemberId,
+				});
+				await applyCancelMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				});
+				expect(
+					(await loadCancelledMeetings(club.clubId)).map((r) => r.id),
+				).toEqual([club.meetingId]);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		describe("meetingNotCancelled reads the slot's OWN meeting", () => {
+			let siblingSlotId: string;
+
+			beforeEach(async () => {
+				// A scheduled sibling in the same club, with its own open slot. With
+				// it present, a predicate that has lost its correlation (any
+				// non-cancelled meeting satisfies it) admits a claim on the cancelled
+				// meeting, and one widened to the club (no cancelled meeting in it)
+				// refuses the sibling's.
+				const [sibling] = await testDb
+					.insert(meetings)
+					.values({
+						clubId: club.clubId,
+						scheduledAt: new Date(Date.now() + 14 * DAY),
+						status: "scheduled",
+					})
+					.returning({ id: meetings.id });
+				if (!sibling) throw new Error("fixture insert failed");
+				const [slot] = await testDb
+					.insert(roleSlots)
+					.values({
+						meetingId: sibling.id,
+						roleDefinitionId: club.roleDefinitionId,
+						status: "open",
+					})
+					.returning({ id: roleSlots.id });
+				if (!slot) throw new Error("fixture insert failed");
+				siblingSlotId = slot.id;
+				await applyCancelMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				});
+			});
+
+			/** On someone's BEHALF, so the plan seam (which refuses a cancelled
+			 *  meeting with the same sentence) is never reached and the claim
+			 *  statement's own predicate is the only thing deciding. */
+			function claimOnBehalf(slotId: string) {
+				return testDb.transaction((tx) =>
+					claimSlotCore(tx, {
+						slotId,
+						memberId: club.memberId,
+						actorMemberId: club.adminMemberId,
+						proof: "session",
+					}),
+				);
+			}
+
+			it("refuses the cancelled meeting's slot with a scheduled sibling beside it", async () => {
+				await expect(claimOnBehalf(club.slotId)).rejects.toThrow(
+					MEETING_CANCELLED_MESSAGE,
+				);
+			});
+
+			it("admits the sibling's slot with a cancelled meeting beside it", async () => {
+				await claimOnBehalf(siblingSlotId);
+				const [row] = await testDb
+					.select({ assignedMemberId: roleSlots.assignedMemberId })
+					.from(roleSlots)
+					.where(eq(roleSlots.id, siblingSlotId));
+				expect(row?.assignedMemberId).toBe(club.memberId);
+			});
+		});
+
+		it("two concurrent cancels: one fulfils, one is refused, one activity row", async () => {
+			const results = await Promise.allSettled([
+				applyCancelMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				}),
+				applyCancelMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				}),
+			]);
+			expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+			const refused = results.filter(
+				(r): r is PromiseRejectedResult => r.status === "rejected",
+			);
+			expect(refused).toHaveLength(1);
+			expect((refused[0]?.reason as Error).message).toBe(
+				MEETING_ALREADY_CANCELLED_MESSAGE,
+			);
+			expect(await meetingEdits(club.clubId, club.meetingId)).toHaveLength(1);
+		});
+
+		it("a cancel racing a cancel waits on the meeting lock, then refuses the cancelled row", async () => {
+			// The concurrent pair above usually interleaves the way the lock
+			// forces, so it cannot tell a lock from luck. This holds the first
+			// cancel open with its status written: unlocked, the second reads
+			// `scheduled` and succeeds too, logging a second cancel.
+			const first = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from meetings where id = ${club.meetingId} for no key update`,
+				);
+				await tx
+					.update(meetings)
+					.set({ status: "cancelled" })
+					.where(eq(meetings.id, club.meetingId));
+			});
+			const second = applyCancelMeeting({
+				meetingId: club.meetingId,
+				actorMemberId: club.adminMemberId,
+			}).catch((e: unknown) => e);
+			await waitForLockWait('"meetings"', first.pid);
+			await first.commit();
+			const result = await second;
+			expect(result).toBeInstanceOf(Error);
+			expect((result as Error).message).toBe(MEETING_ALREADY_CANCELLED_MESSAGE);
+			expect(await meetingEdits(club.clubId, club.meetingId)).toEqual([]);
+		});
+
+		describe("the club-local day boundary (America/Chicago), under a faked clock", () => {
+			// Only `Date` is faked: the pg pool's own timers must keep running.
+			afterEach(() => {
+				vi.useRealTimers();
+			});
+
+			function at(iso: string) {
+				vi.useFakeTimers({ toFake: ["Date"] });
+				vi.setSystemTime(new Date(iso));
+			}
+
+			it("cancel refuses a meeting from YESTERDAY evening locally, though it is TODAY in UTC", async () => {
+				// 01:00Z on 3 Oct is 20:00 CDT on 2 Oct: yesterday for the club.
+				await setScheduledAt(club.meetingId, new Date("2026-10-03T01:00:00Z"));
+				at("2026-10-03T15:00:00Z");
+				await expect(
+					applyCancelMeeting({
+						meetingId: club.meetingId,
+						actorMemberId: club.adminMemberId,
+					}),
+				).rejects.toThrow(MEETING_CANCEL_PAST_MESSAGE);
+			});
+
+			it("cancel admits a meeting from earlier TODAY locally, though it is YESTERDAY in UTC", async () => {
+				// 23:00Z on 2 Oct is 18:00 CDT on 2 Oct; the clock reads 23:30 CDT.
+				await setScheduledAt(club.meetingId, new Date("2026-10-02T23:00:00Z"));
+				at("2026-10-03T04:30:00Z");
+				await applyCancelMeeting({
+					meetingId: club.meetingId,
+					actorMemberId: club.adminMemberId,
+				});
+				expect(await meetingStatus(club.meetingId)).toBe("cancelled");
+			});
+
+			it("restore refuses a meeting from yesterday evening locally, though it is today in UTC", async () => {
+				await setScheduledAt(club.meetingId, new Date("2026-10-03T01:00:00Z"));
+				await setStatus(club.meetingId, "cancelled");
+				at("2026-10-03T15:00:00Z");
+				await expect(
+					applyRestoreMeeting({
+						meetingId: club.meetingId,
+						actorMemberId: club.adminMemberId,
+					}),
+				).rejects.toThrow(MEETING_RESTORE_PAST_MESSAGE);
+			});
+
+			it("the cancelled list's floor is the start of the CLUB's day, not UTC's", async () => {
+				// The clock reads 23:30 CDT on 2 Oct (04:30Z on 3 Oct). A meeting
+				// at 18:00 CDT today is listed; one at 23:00 CDT yesterday is not.
+				// A UTC floor (00:00Z on 3 Oct) would drop today's as well.
+				await setScheduledAt(club.meetingId, new Date("2026-10-02T23:00:00Z"));
+				await setStatus(club.meetingId, "cancelled");
+				const [yesterday] = await testDb
+					.insert(meetings)
+					.values({
+						clubId: club.clubId,
+						scheduledAt: new Date("2026-10-02T04:00:00Z"),
+						status: "cancelled",
+					})
+					.returning({ id: meetings.id });
+				if (!yesterday) throw new Error("fixture insert failed");
+				at("2026-10-03T04:30:00Z");
+				expect(
+					(await loadCancelledMeetings(club.clubId)).map((r) => r.id),
+				).toEqual([club.meetingId]);
+			});
+		});
+	});
+});
+
+// The rendered SQL `meetingNotCancelled` produces, which `slots-logic.ts`'s
+// comment cites. A hand-written correlated subquery can come out unqualified
+// and resolve both sides against its OWN table, matching every row
+// (`drizzle-sql-subquery-drops-qualifiers`). No database: `toSQL()` renders.
+describe("meetingNotCancelled renders a qualified correlation", () => {
+	it("names role_slots on one side and meetings on the other", async () => {
+		const { meetingNotCancelled } = await import("./slots-logic");
+		const { sql: rendered } = testDb
+			.update(roleSlots)
+			.set({ status: "claimed" })
+			.where(and(eq(roleSlots.id, "x"), meetingNotCancelled(testDb)))
+			.toSQL();
+		expect(rendered).toContain(
+			'exists (select 1 from "meetings" where ("meetings"."id" = "role_slots"."meeting_id" and "meetings"."status" <> $',
+		);
+	});
 });

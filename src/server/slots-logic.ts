@@ -98,8 +98,11 @@ async function clubRoles(
  * the two is invisible to the check and visible here. A correlated subquery on
  * a DIFFERENT table from the one being updated, so `"meetings"."id" =
  * "role_slots"."meeting_id"` names two relations — the self-correlation trap
- * `drizzle-sql-subquery-drops-qualifiers` records cannot arise. The test beside
- * it pins the rendered SQL anyway.
+ * `drizzle-sql-subquery-drops-qualifiers` records cannot arise.
+ * `meeting-cancel.integration.test.ts` pins the rendered SQL anyway ("renders a
+ * qualified correlation"), and its two-meeting cases pin the behaviour: with a
+ * scheduled sibling beside a cancelled meeting, only the slot's OWN meeting
+ * decides.
  *
  * What this cannot see: a cancel that commits while the statement is parked
  * behind another writer's lock on the slot row. READ COMMITTED re-checks the
