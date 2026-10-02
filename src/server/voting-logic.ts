@@ -52,6 +52,7 @@ import {
 import { isReadableClubForMeeting } from "./club-readable-logic";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { assertClubNotArchived } from "./guards";
+import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import {
 	AWARD_CATEGORIES,
 	type AwardCategory,
@@ -752,77 +753,89 @@ export async function castVote(input: {
 	// and `updatedAt` are selected too, computed in SQL, in the SAME order as the
 	// `meetingVotes` column definitions. This does not weaken the atomicity: it is
 	// still one INSERT ... SELECT ... WHERE statement.
-	const inserted = await db
-		.insert(meetingVotes)
-		.select(
-			db
-				.select({
-					id: sql<string>`gen_random_uuid()`.as("id"),
-					sessionId: meetingVoteSessions.id,
-					voterMemberId: sql<string | null>`${voterMemberId}::uuid`.as(
-						"voter_member_id",
-					),
-					voterGuestId: sql<string | null>`${voterGuestId}::uuid`.as(
-						"voter_guest_id",
-					),
-					candidateMemberId: sql<string | null>`${candidateMemberId}::uuid`.as(
-						"candidate_member_id",
-					),
-					candidateGuestId: sql<string | null>`${candidateGuestId}::uuid`.as(
-						"candidate_guest_id",
-					),
-					// Position matters: drizzle's `.insert().select()` requires the
-					// selected keys to match the table's columns exactly, in order.
-					candidateWriteIn: sql<string | null>`${writeIn}::text`.as(
-						"candidate_write_in",
-					),
-					deviceToken: sql<string | null>`${deviceToken}::text`.as(
-						"device_token",
-					),
-					// This arm always names a voter, so never an anonymous ballot.
-					anonymous: sql<boolean>`false`.as("anonymous"),
-					createdAt: sql<Date>`now()`.as("created_at"),
-					updatedAt: sql<Date>`now()`.as("updated_at"),
-				})
-				.from(meetingVoteSessions)
-				.where(
-					and(
-						eq(meetingVoteSessions.meetingId, input.meetingId),
-						eq(meetingVoteSessions.category, input.category),
-						isNull(meetingVoteSessions.closedAt),
-					),
-				)
-				.for("share"),
-		)
-		.onConflictDoUpdate({
-			target: voterMemberId
-				? [meetingVotes.sessionId, meetingVotes.voterMemberId]
-				: [meetingVotes.sessionId, meetingVotes.voterGuestId],
-			set: {
-				candidateMemberId,
-				candidateGuestId,
-				// Cleared on every change, not just when setting one — otherwise a
-				// voter switching FROM a write-in TO a roster name would leave both
-				// columns set and trip the at-most-one check.
-				candidateWriteIn: writeIn,
-				updatedAt: new Date(),
-				// `deviceToken` is deliberately NOT here: the device that cast the
-				// vote stays its owner, even when a session changes it.
-			},
-			// The device check. Omitted only for the voting member's own session;
-			// otherwise the conflicting row updates only when it was cast from
-			// this same token. A NULL token (a pre-deploy row, or a stale tab)
-			// matches nothing, so an explicit `false` rather than `= NULL`.
-			...(ownSession
-				? {}
-				: {
-						setWhere:
-							deviceToken !== null
-								? eq(meetingVotes.deviceToken, deviceToken)
-								: sql`false`,
-					}),
-		})
-		.returning({ id: meetingVotes.id });
+	//
+	// In a transaction since #1035, for one reason: the membership merge lock,
+	// SHARED on the voter and the candidate, before the session `FOR SHARE`.
+	// Without it a merge absorbing the voter could re-point the ballots it saw,
+	// then have its DELETE set-null this one's voter, leaving an identified
+	// ballot with nobody behind it counted beside the keeper's own. Lock order:
+	// membership merge lock → session FOR SHARE → the voter's FK lock; see
+	// `membership-merge-lock.ts`. A voter absorbed while this waited is refused
+	// with `CLUB_BUSY_MESSAGE`. The INSERT itself is the same single statement.
+	const inserted = await db.transaction(async (tx) => {
+		await lockMembershipsAgainstMerge(tx, [voterMemberId, candidateMemberId]);
+		return tx
+			.insert(meetingVotes)
+			.select(
+				tx
+					.select({
+						id: sql<string>`gen_random_uuid()`.as("id"),
+						sessionId: meetingVoteSessions.id,
+						voterMemberId: sql<string | null>`${voterMemberId}::uuid`.as(
+							"voter_member_id",
+						),
+						voterGuestId: sql<string | null>`${voterGuestId}::uuid`.as(
+							"voter_guest_id",
+						),
+						candidateMemberId: sql<
+							string | null
+						>`${candidateMemberId}::uuid`.as("candidate_member_id"),
+						candidateGuestId: sql<string | null>`${candidateGuestId}::uuid`.as(
+							"candidate_guest_id",
+						),
+						// Position matters: drizzle's `.insert().select()` requires the
+						// selected keys to match the table's columns exactly, in order.
+						candidateWriteIn: sql<string | null>`${writeIn}::text`.as(
+							"candidate_write_in",
+						),
+						deviceToken: sql<string | null>`${deviceToken}::text`.as(
+							"device_token",
+						),
+						// This arm always names a voter, so never an anonymous ballot.
+						anonymous: sql<boolean>`false`.as("anonymous"),
+						createdAt: sql<Date>`now()`.as("created_at"),
+						updatedAt: sql<Date>`now()`.as("updated_at"),
+					})
+					.from(meetingVoteSessions)
+					.where(
+						and(
+							eq(meetingVoteSessions.meetingId, input.meetingId),
+							eq(meetingVoteSessions.category, input.category),
+							isNull(meetingVoteSessions.closedAt),
+						),
+					)
+					.for("share"),
+			)
+			.onConflictDoUpdate({
+				target: voterMemberId
+					? [meetingVotes.sessionId, meetingVotes.voterMemberId]
+					: [meetingVotes.sessionId, meetingVotes.voterGuestId],
+				set: {
+					candidateMemberId,
+					candidateGuestId,
+					// Cleared on every change, not just when setting one — otherwise a
+					// voter switching FROM a write-in TO a roster name would leave both
+					// columns set and trip the at-most-one check.
+					candidateWriteIn: writeIn,
+					updatedAt: new Date(),
+					// `deviceToken` is deliberately NOT here: the device that cast the
+					// vote stays its owner, even when a session changes it.
+				},
+				// The device check. Omitted only for the voting member's own session;
+				// otherwise the conflicting row updates only when it was cast from
+				// this same token. A NULL token (a pre-deploy row, or a stale tab)
+				// matches nothing, so an explicit `false` rather than `= NULL`.
+				...(ownSession
+					? {}
+					: {
+							setWhere:
+								deviceToken !== null
+									? eq(meetingVotes.deviceToken, deviceToken)
+									: sql`false`,
+						}),
+			})
+			.returning({ id: meetingVotes.id });
+	});
 
 	if (inserted.length === 0) {
 		// Two causes return no row: no open session (the INSERT's SELECT found
@@ -899,6 +912,10 @@ async function castAnonymousVote(input: {
 	// second ballot. `submitVote` already refuses this; this is the boundary.
 	if (!deviceToken) throw new Error(ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE);
 	await db.transaction(async (tx) => {
+		// The membership merge lock (#1035), SHARED on the candidate, before the
+		// session FOR SHARE — the identified arm's order, for its reason: a merge
+		// absorbing the candidate must not set-null this ballot's choice.
+		await lockMembershipsAgainstMerge(tx, [input.candidate.memberId]);
 		const [session] = await tx
 			.select({ id: meetingVoteSessions.id })
 			.from(meetingVoteSessions)
