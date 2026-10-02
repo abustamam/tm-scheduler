@@ -11,6 +11,7 @@ import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { APP_LOCALE } from "#/lib/format";
 import { navDestination } from "#/lib/nav-destinations";
+import { loadClubTimezoneSettings } from "#/server/clubs";
 import {
 	generateSyncToken,
 	getSyncTokens,
@@ -23,11 +24,16 @@ export const Route = createFileRoute("/_authed/admin/sync-tokens")({
 		if (!adminClub) throw redirect({ to: "/dashboard" });
 		return { adminClub };
 	},
+	// A club token's last use is dated on the CLUB's calendar, like every other
+	// club date (#1017), not on whichever runtime renders it.
+	loader: ({ context }) =>
+		loadClubTimezoneSettings({ data: context.adminClub.clubId }),
 	component: SyncTokens,
 });
 
 function SyncTokens() {
 	const { adminClub } = Route.useRouteContext();
+	const { timezone } = Route.useLoaderData();
 	const clubId = adminClub.clubId;
 	const qc = useQueryClient();
 
@@ -145,7 +151,7 @@ function SyncTokens() {
 										{t.revokedAt
 											? "· revoked"
 											: t.lastUsedAt
-												? `· last used ${new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)}`
+												? `· last used ${new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE, { timeZone: timezone })}`
 												: "· never used"}
 									</span>
 								</div>

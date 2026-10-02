@@ -45,6 +45,7 @@ function renderOpen(
 			meetingId={MEETING_ID}
 			clubName="Acme TM"
 			meetingDate={new Date("2026-07-10T18:00:00Z")}
+			timezone="UTC"
 			initialRecipients={recipients}
 			skipped={[{ name: "Nomail Ned" }]}
 		/>,
@@ -127,6 +128,7 @@ describe("SendMinutesDialog (#903)", () => {
 				meetingId={MEETING_ID}
 				clubName="Acme TM"
 				meetingDate="2026-07-10T18:00:00Z"
+				timezone="UTC"
 				initialRecipients={[
 					{ name: "Ada", email: "ada@club.org" },
 					{ name: "Pat Pair", email: stored },
@@ -176,6 +178,7 @@ describe("SendMinutesDialog (#903)", () => {
 				meetingId={MEETING_ID}
 				clubName="Acme TM"
 				meetingDate="2026-07-10T18:00:00Z"
+				timezone="UTC"
 				initialRecipients={[
 					{ name: "Ada", email: "ada@club.org" },
 					{ name: "Gwen", email: "gwen@guest.example" },

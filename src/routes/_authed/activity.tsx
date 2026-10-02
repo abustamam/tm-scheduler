@@ -6,32 +6,39 @@ import { formatActivity } from "#/lib/activity-format";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { listActivity } from "#/server/activity-feed";
 import { listClubMembers } from "#/server/club";
+import { loadClubTimezoneSettings } from "#/server/clubs";
 import { listUpcomingMeetings } from "#/server/meetings";
 
 export const Route = createFileRoute("/_authed/activity")({
 	loader: async ({ context }) => {
 		const clubId = context.activeClubId;
 		if (!clubId) {
-			return { activity: [], meetings: [], members: [] };
+			// Nothing is dated without a club, so any fixed zone will do.
+			return { activity: [], meetings: [], members: [], timezone: "UTC" };
 		}
-		const [activity, meetings, members] = await Promise.all([
+		const [activity, meetings, members, { timezone }] = await Promise.all([
 			listActivity({ data: { clubId } }),
 			listUpcomingMeetings({ data: clubId }),
 			listClubMembers({ data: clubId }),
+			// Every date on this page is the CLUB's day (#1017). Left to the
+			// runtime, the UTC server and the browser bucketed an evening's
+			// entries under different day headings and React threw the server
+			// markup away.
+			loadClubTimezoneSettings({ data: clubId }),
 		]);
-		return { activity, meetings, members };
+		return { activity, meetings, members, timezone };
 	},
 	component: ActivityLog,
 });
 
 const ALL = "all";
 
-function dayKey(value: Date | string) {
-	return formatMeetingDate(value);
+function dayKey(value: Date | string, timeZone: string) {
+	return formatMeetingDate(value, timeZone);
 }
 
 function ActivityLog() {
-	const { activity, meetings, members } = Route.useLoaderData();
+	const { activity, meetings, members, timezone } = Route.useLoaderData();
 	const { activeClubId } = Route.useRouteContext();
 	const clubId = activeClubId;
 
@@ -58,7 +65,7 @@ function ActivityLog() {
 	// Group entries into consecutive day buckets (rows are already newest-first).
 	const groups: { day: string; rows: typeof entries }[] = [];
 	for (const entry of entries) {
-		const day = dayKey(entry.createdAt);
+		const day = dayKey(entry.createdAt, timezone);
 		const last = groups[groups.length - 1];
 		if (last && last.day === day) {
 			last.rows.push(entry);
@@ -158,12 +165,15 @@ function ActivityLog() {
 											{entry.meetingScheduledAt ? (
 												<div className="mt-0.5 text-xs text-[var(--sea-ink-soft)]">
 													Meeting ·{" "}
-													{formatMeetingDate(entry.meetingScheduledAt)}
+													{formatMeetingDate(
+														entry.meetingScheduledAt,
+														timezone,
+													)}
 												</div>
 											) : null}
 										</div>
 										<time className="shrink-0 text-xs font-medium text-[var(--sea-ink-soft)]">
-											{formatMeetingTime(entry.createdAt)}
+											{formatMeetingTime(entry.createdAt, timezone)}
 										</time>
 									</div>
 								);

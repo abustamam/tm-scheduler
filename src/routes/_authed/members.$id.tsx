@@ -115,6 +115,8 @@ export const Route = createFileRoute("/_authed/members/$id")({
 				orientation: null as OrientationView | null,
 				mentorship: null as MemberMentorshipsView | null,
 				now: Date.now(),
+				// Nothing is dated without a club, so any fixed zone will do.
+				timezone: "UTC",
 			};
 		}
 		const [
@@ -124,6 +126,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 			enrollments,
 			orientation,
 			mentorship,
+			{ timezone },
 		] = await Promise.all([
 			getMemberProfile({
 				data: {
@@ -150,6 +153,15 @@ export const Route = createFileRoute("/_authed/members/$id")({
 			getMemberMentorships({ data: { clubId, memberId: params.id } }).catch(
 				() => null,
 			),
+			// Every date and the tenure on this page are the CLUB's calendar
+			// (#1017). Left to the runtime, the UTC server and the browser printed
+			// different days, and across a month boundary different tenures.
+			// Imported here, as club-settings imports its promo template, so the
+			// route module does not pull `#/server/clubs` (whose logic modules
+			// reach `#/db`) into everything that imports this page.
+			import("#/server/clubs").then(({ loadClubTimezoneSettings }) =>
+				loadClubTimezoneSettings({ data: clubId }),
+			),
 		]);
 		return {
 			...profile,
@@ -159,6 +171,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 			enrollments,
 			orientation,
 			mentorship,
+			timezone,
 			// Pinned in the loader, not sampled while rendering: one value is
 			// dehydrated with the loader data, so the SSR pass and the hydration
 			// pass classify every speech-log row identically. See #656 / #608.
@@ -168,10 +181,11 @@ export const Route = createFileRoute("/_authed/members/$id")({
 	component: MemberDetail,
 });
 
-function joinedLabel(value: Date | string) {
+function joinedLabel(value: Date | string, timeZone: string) {
 	return new Intl.DateTimeFormat(APP_LOCALE, {
 		month: "short",
 		year: "numeric",
+		timeZone,
 	}).format(new Date(value));
 }
 
@@ -211,6 +225,7 @@ function MemberDetail() {
 		orientation,
 		mentorship,
 		now,
+		timezone,
 	} = Route.useLoaderData();
 	const { activeClubId, clubs, officerPositions, impersonating } =
 		Route.useRouteContext();
@@ -244,11 +259,16 @@ function MemberDetail() {
 
 	// Identity, speech log, roles served and Pathways progress are all real.
 	const joined = member.joinedAt ?? member.createdAt;
+	// The loader's `now`, not the render's: both passes count the same months.
+	const tenureText = formatTenure(joined, {
+		now: new Date(now),
+		timeZone: timezone,
+	});
 	const tenure = member.officerPositions.length
-		? `${formatTenure(joined)} · ${member.officerPositions
+		? `${tenureText} · ${member.officerPositions
 				.map(officerPositionLabel)
 				.join(", ")}`
-		: formatTenure(joined);
+		: tenureText;
 	// Holding any open officer term makes this membership an effective admin
 	// (#202 / #270): the club-admin guard treats any office as admin. Surface
 	// that here — this is display only; the authorization model is unchanged.
@@ -272,7 +292,7 @@ function MemberDetail() {
 					</h1>
 					<div className="mt-1.5 flex flex-wrap items-center gap-2.5">
 						<span className="text-sm text-[var(--sea-ink-soft)]">
-							{tenure} · joined {joinedLabel(joined)}
+							{tenure} · joined {joinedLabel(joined, timezone)}
 						</span>
 						{holdsOffice ? (
 							<Badge
@@ -352,7 +372,7 @@ function MemberDetail() {
 						</p>
 					) : (
 						speechLog.map((l) => {
-							const { day, mon } = formatDayMonth(l.scheduledAt);
+							const { day, mon } = formatDayMonth(l.scheduledAt, timezone);
 							const state = speechScheduleState({
 								scheduledAt: l.scheduledAt,
 								now,
@@ -435,6 +455,7 @@ function MemberDetail() {
 							speeches={unscheduledSpeeches}
 							openSlots={openSpeakerSlots}
 							clubId={clubId}
+							timezone={timezone}
 						/>
 					) : null}
 
@@ -476,9 +497,10 @@ function MemberDetail() {
 						clubId={clubId}
 						memberId={member.id}
 						pathways={pathways}
+						timezone={timezone}
 					/>
 				) : (
-					<PathwaysProgress paths={pathways} />
+					<PathwaysProgress paths={pathways} timeZone={timezone} />
 				)}
 				{/* Admin-only here. A member manages their OWN paths from the
 				    dashboard, which needs no club context; this surface exists so a
@@ -523,10 +545,12 @@ function UnscheduledSpeeches({
 	speeches,
 	openSlots,
 	clubId,
+	timezone,
 }: {
 	speeches: UnscheduledSpeechRow[];
 	openSlots: OpenSlotRow[];
 	clubId: string;
+	timezone: string;
 }) {
 	const router = useRouter();
 	const [busyId, setBusyId] = useState<string | null>(null);
@@ -676,7 +700,7 @@ function UnscheduledSpeeches({
 								>
 									<span className="min-w-0">
 										<span className="block truncate text-sm font-semibold">
-											{formatMeetingDate(slot.scheduledAt)}
+											{formatMeetingDate(slot.scheduledAt, timezone)}
 										</span>
 										<span className="block truncate text-xs text-[var(--sea-ink-soft)]">
 											{slot.roleName}
@@ -1299,10 +1323,12 @@ function MemberProgressPanel({
 	clubId,
 	memberId,
 	pathways,
+	timezone,
 }: {
 	clubId: string;
 	memberId: string;
 	pathways: PathViewModel[];
+	timezone: string;
 }) {
 	const router = useRouter();
 	const [busyId, setBusyId] = useState<string | null>(null);
@@ -1327,6 +1353,7 @@ function MemberProgressPanel({
 	return (
 		<PathwaysProgress
 			paths={pathways}
+			timeZone={timezone}
 			onMark={(id) => mutate(markMemberProject, id)}
 			onUnmark={(id) => mutate(unmarkMemberProject, id)}
 			busyId={busyId}

@@ -84,6 +84,8 @@ async function renderRoute(
 		// #942's section; this file asserts nothing about it.
 		orientation: [],
 		timezone: extra.timezone,
+		// The instant the loader pins for tenure (#1017).
+		now: Date.parse("2026-09-15T12:00:00Z"),
 		clubName: "Downtown Club",
 		clubId: "11111111-1111-4111-8111-111111111111",
 		clubSlug: "downtown",

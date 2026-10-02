@@ -81,19 +81,28 @@ export function resolveMinutesRecipients(input: {
 // Subject / body builders — the draft's defaults. Pure helpers.
 // ---------------------------------------------------------------------------
 
-/** `"<Club name> — Minutes for <formatted date>"`. */
+/** `"<Club name> — Minutes for <formatted date>"`.
+ *
+ * Both builders name the meeting's day in the CLUB's zone (#1017). They run in
+ * the officer's browser, so with no zone an evening meeting in Los Angeles,
+ * drafted from Tokyo, was the next day's minutes. */
 export function buildMinutesSubject(
 	clubName: string,
 	meetingDate: Date,
+	timeZone: string,
 ): string {
-	return `${clubName} — Minutes for ${formatMeetingDate(meetingDate)}`;
+	return `${clubName} — Minutes for ${formatMeetingDate(meetingDate, timeZone)}`;
 }
 
 /** A short default body (plain text). The officer edits it in the dialog. */
-export function buildMinutesBody(clubName: string, meetingDate: Date): string {
+export function buildMinutesBody(
+	clubName: string,
+	meetingDate: Date,
+	timeZone: string,
+): string {
 	return (
 		`Hi,\n\n` +
-		`Attached are the minutes for ${clubName}'s meeting on ${formatMeetingDate(meetingDate)}.\n\n` +
+		`Attached are the minutes for ${clubName}'s meeting on ${formatMeetingDate(meetingDate, timeZone)}.\n\n` +
 		`Thanks,\n${clubName}`
 	);
 }

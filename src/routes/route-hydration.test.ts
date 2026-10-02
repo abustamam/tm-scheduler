@@ -270,9 +270,9 @@ const EXCLUDED: Record<string, string> = {
 	"/oauth/consent":
 		"renders only for a query the OAuth provider SIGNS; an unsigned one is refused before any page renders",
 	"/agenda-plan/$planId":
-		"needs a pending plan minted by the MCP connector (mcp_pending_plans), which this fixture does not create. Its two dates are runtime-zone KNOWN entries in format-locale.guard.test.ts",
+		"needs a pending plan minted by the MCP connector (mcp_pending_plans), which this fixture does not create. Its two dates are named in the club's zone (#1017)",
 	"/guest-book/$planId":
-		"needs a pending plan minted by the MCP connector (mcp_pending_plans), which this fixture does not create. Its two dates are runtime-zone KNOWN entries in format-locale.guard.test.ts",
+		"needs a pending plan minted by the MCP connector (mcp_pending_plans), which this fixture does not create. Its two dates are named in the club's zone (#1017)",
 };
 
 /**
@@ -281,24 +281,11 @@ const EXCLUDED: Record<string, string> = {
  * Keyed by full path; the value is the site and the runtime input it reads.
  * Each is still swept and must still mismatch, so a fixed one fails this file
  * until its entry is deleted.
+ *
+ * Empty since #1017 fixed the last five. Kept, not deleted, so a route a
+ * maintainer decides to land broken has somewhere to be written down.
  */
-const EXPECTED_MISMATCH: Record<string, { why: string }> = {
-	"/activity": {
-		why: "activity.tsx dayKey / line 161: formatMeetingDate with no zone, so the day heading is the runtime's day",
-	},
-	"/members/$id": {
-		why: "members.$id.tsx:341 speech-log badge: formatDayMonth(l.scheduledAt) with no zone, the runtime's day number",
-	},
-	"/superadmin/": {
-		why: "superadmin/index.tsx module-level dateFmt: Intl.DateTimeFormat with no timeZone, the runtime's day",
-	},
-	"/superadmin/$clubId": {
-		why: "superadmin/$clubId.tsx module-level dateFmt: Intl.DateTimeFormat with no timeZone, the runtime's day",
-	},
-	"/admin/dues": {
-		why: "dues.tsx:481 paid date (and :265 due date): formatShortDate with no zone, the runtime's day",
-	},
-};
+const EXPECTED_MISMATCH: Record<string, { why: string }> = {};
 
 const CLUB_ZONE = "America/Chicago";
 const DAY = 24 * 60 * 60 * 1000;

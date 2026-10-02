@@ -73,6 +73,7 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			orientation,
 			mentorship,
 			clubMentoring,
+			timezone,
 		] = await Promise.all([
 			listMyCommitments(),
 			// Always WITH an input: no input is the pre-#681 stale-tab call, which
@@ -100,6 +101,19 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			clubId && effectiveAdminClubFor(context, clubId)
 				? listClubMentorships({ data: { clubId } }).catch(() => null)
 				: Promise.resolve(null),
+			// The active club's zone, for the month on each Pathways win (#1017).
+			// Imported here, as club-settings imports its promo template, so the
+			// route module does not pull `#/server/clubs` into everything that
+			// imports this page. Caught like the cards above: a failed read falls
+			// back to UTC, which the server and the browser at least agree on.
+			clubId
+				? import("#/server/clubs")
+						.then(({ loadClubTimezoneSettings }) =>
+							loadClubTimezoneSettings({ data: clubId }),
+						)
+						.then((settings) => settings.timezone)
+						.catch(() => "UTC")
+				: Promise.resolve("UTC"),
 		]);
 		// Unreachable with an input sent; narrowed so the type is one shape.
 		const { speeches, speechLogTruncated } = Array.isArray(speechLog)
@@ -117,6 +131,7 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			orientation,
 			mentorship,
 			clubMentoring,
+			timezone,
 			// The instant the speech log is read against, pinned HERE rather than
 			// sampled while rendering. One value is dehydrated with the loader data,
 			// so the SSR pass and the hydration pass classify every row identically
@@ -152,6 +167,7 @@ function Dashboard() {
 		mentorship,
 		clubMentoring,
 		now,
+		timezone,
 	} = Route.useLoaderData();
 	const router = useRouter();
 	const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
@@ -432,6 +448,7 @@ function Dashboard() {
 						<h2 className="mb-2.5 px-0.5 text-sm font-bold">My Pathways</h2>
 						<PathwaysProgress
 							paths={pathways}
+							timeZone={timezone}
 							onMark={(id) => mutateMark(markMyProject, id)}
 							onUnmark={(id) => mutateMark(unmarkMyProject, id)}
 							busyId={busyProjectId}

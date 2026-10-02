@@ -33,10 +33,15 @@ export const Route = createFileRoute("/_authed/superadmin/$clubId")({
 	component: ClubDetail,
 });
 
+// Pinned to UTC (#1017). With no zone this printed the RUNTIME's day, so the
+// UTC server and a browser in Tokyo disagreed and React threw the server markup
+// away. UTC rather than the club's zone because the platform console's club
+// detail carries no zone, and the list and the detail must date one club alike.
 const dateFmt = new Intl.DateTimeFormat("en-US", {
 	year: "numeric",
 	month: "short",
 	day: "numeric",
+	timeZone: "UTC",
 });
 
 function ClubDetail() {

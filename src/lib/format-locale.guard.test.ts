@@ -667,6 +667,16 @@ const SANCTIONED: Record<string, string> = {
 	// formatting it in that same zone is what round-trips the date.
 	"src/components/club/personal-meeting-body.tsx: formatMeetingDate(local)":
 		"a Date constructed in the runtime's own zone",
+	// The three below are fetched by `useQuery` with no loader prefetch, which
+	// never runs during SSR, so the server renders none of them. And none is a
+	// club's date: a personal token's or a connected app's last use, and the
+	// viewer's own last offline visit, are the VIEWER's day (#1017).
+	"src/components/api-tokens-section.tsx: new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)":
+		"client-only (useQuery, no SSR prefetch); the viewer's own day",
+	"src/components/connected-apps-section.tsx: new Date(app.approvedAt).toLocaleDateString(APP_LOCALE)":
+		"client-only (useQuery, no SSR prefetch); the viewer's own day",
+	"src/lib/offline-status.ts: new Date(ts).toLocaleDateString(APP_LOCALE, {":
+		"called with a localStorage timestamp after mount, or from client-only connected-apps",
 };
 
 /**
@@ -676,30 +686,7 @@ const SANCTIONED: Record<string, string> = {
  * carries two entries, so fixing one of them is still a change this list has
  * to make. May only shrink.
  */
-const KNOWN: readonly string[] = [
-	"src/components/api-tokens-section.tsx: new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)",
-	"src/components/connected-apps-section.tsx: new Date(app.approvedAt).toLocaleDateString(APP_LOCALE)",
-	'src/components/pathways/pathways-progress.tsx: new Intl.DateTimeFormat("en-US", {',
-	"src/lib/offline-status.ts: new Date(ts).toLocaleDateString(APP_LOCALE, {",
-	"src/routes/_authed/activity.tsx: formatMeetingDate(value)",
-	"src/routes/_authed/activity.tsx: formatMeetingDate(entry.meetingScheduledAt)",
-	"src/routes/_authed/activity.tsx: formatMeetingTime(entry.createdAt)",
-	"src/routes/_authed/admin/dues.tsx: formatShortDate(p.dueDate)",
-	"src/routes/_authed/admin/dues.tsx: formatShortDate(row.paidAt)",
-	"src/routes/_authed/admin/sync-tokens.tsx: new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)",
-	"src/routes/_authed/agenda-plan.$planId.tsx: formatMeetingDate(view.expiresAt)",
-	"src/routes/_authed/agenda-plan.$planId.tsx: formatMeetingDate(view.appliedAt)",
-	"src/routes/_authed/guest-book.$planId.tsx: formatMeetingDate(view.expiresAt)",
-	"src/routes/_authed/guest-book.$planId.tsx: formatMeetingDate(view.appliedAt)",
-	"src/routes/_authed/members.$id.tsx: new Intl.DateTimeFormat(APP_LOCALE, {",
-	"src/routes/_authed/members.$id.tsx: formatDayMonth(l.scheduledAt)",
-	"src/routes/_authed/members.$id.tsx: formatMeetingDate(slot.scheduledAt)",
-	'src/routes/_authed/superadmin/$clubId.tsx: new Intl.DateTimeFormat("en-US", {',
-	'src/routes/_authed/superadmin/index.tsx: new Intl.DateTimeFormat("en-US", {',
-	"src/server/minutes-email-logic.ts: formatMeetingDate(meetingDate)",
-	"src/server/minutes-email-logic.ts: formatMeetingDate(meetingDate)",
-	"src/server/notifications-logic.ts: formatMeetingDate(row.meetingScheduledAt)",
-];
+const KNOWN: readonly string[] = [];
 
 function allZoneOffenders(): string[] {
 	const out: string[] = [];

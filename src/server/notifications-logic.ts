@@ -68,6 +68,8 @@ export interface DueNotification {
 	recipientName: string;
 	roleName: string;
 	clubName: string;
+	/** The club's zone, which the meeting's date is named in (#1017). */
+	clubTimezone: string;
 	meetingScheduledAt: Date;
 	/** The meeting's video-call join link, or null (#731). The reminder is the
 	 *  one place the link reaches a member who is NOT looking at the app, which
@@ -118,6 +120,10 @@ export function buildNotificationEmail(row: {
 	recipientName: string;
 	roleName: string;
 	clubName: string;
+	/** The club's zone (#1017). This runs on the UTC server, so with no zone an
+	 *  evening meeting in the Americas was named as the NEXT day. Optional only
+	 *  so a builder test can omit it; the drain always passes the club's. */
+	clubTimezone?: string;
 	meetingScheduledAt: Date;
 	/** The meeting's video-call join link, or null/absent (#731). Emitted in BOTH
 	 *  bodies when set, and mentioned in neither when not. */
@@ -126,7 +132,7 @@ export function buildNotificationEmail(row: {
 	 *  reminder email carries it (deliverability + etiquette). */
 	unsubscribeUrl: string;
 }): NotificationEmailContent {
-	const when = formatMeetingDate(row.meetingScheduledAt);
+	const when = formatMeetingDate(row.meetingScheduledAt, row.clubTimezone);
 	const subject = `Reminder: you're ${row.roleName} at ${row.clubName} on ${when}`;
 
 	// #731. The link goes in BOTH halves, not just the HTML one: the plain-text
@@ -257,6 +263,7 @@ export async function selectDueNotifications(
 				recipientName: user.name,
 				roleName: roleDefinitions.name,
 				clubName: clubs.name,
+				clubTimezone: clubs.timezone,
 				meetingScheduledAt: meetings.scheduledAt,
 				joinUrl: meetings.joinUrl,
 				expectedAssignedMemberId: notifications.assignedMemberId,
@@ -398,7 +405,15 @@ async function markStale(id: string, now: Date): Promise<void> {
  * still-`scheduled` meeting. A NULL member reference is not a role reminder
  * (#271 rows) and is always considered current.
  */
-export function isRoleReminderStale(row: DueNotification): boolean {
+export function isRoleReminderStale(
+	row: Pick<
+		DueNotification,
+		| "expectedAssignedMemberId"
+		| "currentAssignedMemberId"
+		| "slotStatus"
+		| "meetingStatus"
+	>,
+): boolean {
 	if (row.expectedAssignedMemberId === null) return false;
 	return (
 		row.currentAssignedMemberId !== row.expectedAssignedMemberId ||

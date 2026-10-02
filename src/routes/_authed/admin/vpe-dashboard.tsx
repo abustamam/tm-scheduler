@@ -68,6 +68,7 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 				proximity: [] as LevelProximityRow[],
 				orientation: [] as OrientationRosterRow[],
 				timezone: undefined as string | undefined,
+				now: Date.now(),
 				clubName: "",
 				clubId: "",
 				clubSlug: null as string | null,
@@ -95,6 +96,11 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 			// Booked marker passed none and printed the server's day, so a
 			// booking at 23:30 club time read as the next day (#898).
 			timezone: proximity.timezone as string | undefined,
+			// Pinned here, not sampled while rendering, so the SSR pass and the
+			// hydration pass count tenure months from one instant (#1017). A
+			// render-time `new Date()` either side of midnight on a month's last
+			// day printed "11 mo" on the server and "1 yr" in the browser.
+			now: Date.now(),
 			clubName: club.name,
 			// For the "Close to a level" nudge draft (#900): the next meeting's
 			// public page. Slim summary only, never a `join_url`.
@@ -125,10 +131,17 @@ function VpeDashboard() {
 		proximity,
 		orientation,
 		timezone,
+		now,
 		clubId,
 		clubSlug,
 		nextMeeting,
 	} = Route.useLoaderData();
+	// Every row's tenure, counted on the club's calendar from the loader's
+	// instant (#1017). The no-club branch has no zone and renders no rows.
+	const clock: TenureClock = {
+		now: new Date(now),
+		timeZone: timezone ?? "UTC",
+	};
 
 	// The next meeting's PUBLIC agenda, for the level nudge draft (#900). The
 	// origin exists only in the browser, and `signupUrlFor` is null until it
@@ -245,7 +258,12 @@ function VpeDashboard() {
 					<EmptyRow>Nobody has dropped off the radar. 🎉</EmptyRow>
 				) : (
 					lapsed.map((m) => (
-						<LapseRow key={m.memberId} member={m} timezone={timezone} />
+						<LapseRow
+							key={m.memberId}
+							member={m}
+							timezone={timezone}
+							clock={clock}
+						/>
 					))
 				)}
 			</Section>
@@ -283,7 +301,12 @@ function VpeDashboard() {
 					<EmptyRow>Everyone has had a role recently. 🎉</EmptyRow>
 				) : (
 					overdueMembers.map((m) => (
-						<OverdueRow key={m.memberId} member={m} timezone={timezone} />
+						<OverdueRow
+							key={m.memberId}
+							member={m}
+							timezone={timezone}
+							clock={clock}
+						/>
 					))
 				)}
 			</Section>
@@ -330,6 +353,7 @@ function VpeDashboard() {
 							row={r}
 							rank={i + 1}
 							timezone={timezone}
+							clock={clock}
 						/>
 					))
 				)}
@@ -350,7 +374,12 @@ function VpeDashboard() {
 					<EmptyRow>No evaluations recorded yet.</EmptyRow>
 				) : (
 					pairings.map((p) => (
-						<PairingRow key={p.memberId} row={p} timezone={timezone} />
+						<PairingRow
+							key={p.memberId}
+							row={p}
+							timezone={timezone}
+							clock={clock}
+						/>
 					))
 				)}
 			</Section>
@@ -401,17 +430,23 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 	);
 }
 
+/** What a tenure is counted against: the loader's instant, on the club's
+ *  calendar (#1017). */
+type TenureClock = { now: Date; timeZone: string };
+
 /** Shared avatar + name + tenure identity cell, linking to the member profile. */
 function MemberIdentity({
 	memberId,
 	name,
 	joinedAt,
+	clock,
 	bookedAt,
 	timezone,
 }: {
 	memberId: string;
 	name: string;
 	joinedAt: Date | string | null;
+	clock: TenureClock;
 	/** #543 — omitted by callers that have no upcoming-claim data (LapseRow). */
 	/** The date the Booked marker shows; which slots count is the caller's call. */
 	bookedAt?: Date | string;
@@ -432,7 +467,7 @@ function MemberIdentity({
 					{bookedAt ? <BookedPill at={bookedAt} timezone={timezone} /> : null}
 				</div>
 				<div className="text-xs text-[var(--sea-ink-soft)]">
-					{joinedAt ? formatTenure(joinedAt) : "Tenure unknown"}
+					{joinedAt ? formatTenure(joinedAt, clock) : "Tenure unknown"}
 				</div>
 				{bookedAt ? <BookedLine at={bookedAt} timezone={timezone} /> : null}
 			</div>
@@ -504,9 +539,11 @@ const ROW_CLASS =
 function OverdueRow({
 	member,
 	timezone,
+	clock,
 }: {
 	member: OverdueMemberRow;
 	timezone?: string;
+	clock: TenureClock;
 }) {
 	const wait =
 		member.daysSinceLastRole === null
@@ -526,6 +563,7 @@ function OverdueRow({
 				memberId={member.memberId}
 				name={member.name}
 				joinedAt={member.joinedAt}
+				clock={clock}
 				bookedAt={member.upcomingRoleAt}
 				timezone={timezone}
 			/>
@@ -545,9 +583,11 @@ function OverdueRow({
 function LapseRow({
 	member,
 	timezone,
+	clock,
 }: {
 	member: AttendanceLapseRow;
 	timezone: string | undefined;
+	clock: TenureClock;
 }) {
 	// The rate is CONTEXT beside the streak, not a substitute for it — an
 	// officer wants to know whether this is someone who was always patchy or
@@ -573,6 +613,7 @@ function LapseRow({
 				memberId={member.memberId}
 				name={member.name}
 				joinedAt={member.joinedAt}
+				clock={clock}
 			/>
 			<div className="text-sm">
 				<span className="font-bold text-[var(--warning-strong)]">
@@ -591,10 +632,12 @@ function RotationRow({
 	row,
 	rank,
 	timezone,
+	clock,
 }: {
 	row: SpeakerRotationRow;
 	rank: number;
 	timezone?: string;
+	clock: TenureClock;
 }) {
 	const pathway = pathwaySummary(row);
 	return (
@@ -615,6 +658,7 @@ function RotationRow({
 				memberId={row.memberId}
 				name={row.name}
 				joinedAt={row.joinedAt}
+				clock={clock}
 				bookedAt={row.upcomingSpeakerAt}
 				timezone={timezone}
 			/>
@@ -864,9 +908,11 @@ function OrientationRow({
 function PairingRow({
 	row,
 	timezone,
+	clock,
 }: {
 	row: EvaluatorPairingRow;
 	timezone: string | undefined;
+	clock: TenureClock;
 }) {
 	return (
 		<Link
@@ -879,6 +925,7 @@ function PairingRow({
 					memberId={row.memberId}
 					name={row.name}
 					joinedAt={row.joinedAt}
+					clock={clock}
 				/>
 				{/* Indented to clear the 38px avatar plus its 12px gap, so the chips
 				    line up under the name rather than under the picture. */}
