@@ -222,7 +222,7 @@ describe("toolbar: the cancel axis (#1057)", () => {
 });
 
 describe("schedule: the officer-only cancelled list (#1057)", () => {
-	it("the loader asks only for an effective admin, and the server fn re-asks with the cancel's own gate", () => {
+	it("the loader asks only for an effective admin", () => {
 		const schedule = readSource(SCHEDULE);
 		expect(schedule).toContain("effectiveAdminClub(context)");
 		expect(schedule).toContain(
@@ -231,24 +231,58 @@ describe("schedule: the officer-only cancelled list (#1057)", () => {
 		expect(schedule).toContain(
 			"{canManageOthers && cancelled.length > 0 && clubKey ? (",
 		);
+	});
+});
 
-		const fns = readSource(MEETINGS_FNS);
-		for (const name of [
-			"cancelMeeting",
-			"restoreMeeting",
-			"listCancelledMeetings",
-		]) {
+/**
+ * Every gate #1057 added, AWAITED. Each is an async function that throws to
+ * refuse, so an un-awaited call is a floating promise that refuses nothing —
+ * and every presence check (`toContain("requireClubRole(")`) stays green on
+ * it. Review of #1084 (F) found the read's gate exposed to exactly that, so
+ * these pin the `await` together with the call, per gate.
+ */
+describe("the new gates are awaited (#1057, review of #1084 F)", () => {
+	const fns = readSource(MEETINGS_FNS);
+
+	for (const name of ["cancelMeeting", "restoreMeeting"]) {
+		it(`${name} awaits the session and requireClubRole(…, ["admin"])`, () => {
 			const decl = declarationAfter(
 				fns,
 				`export const ${name} = createServerFn`,
 			);
+			expect(decl).toMatch(/const currentUser = await requireUser\(\);/);
 			expect(
 				decl,
-				`${name} must gate on requireClubRole(…, ["admin"]) — the rule that admits ` +
-					"an admin and a member with an open office, and refuses an archived club.",
-			).toContain("requireClubRole(currentUser.id, ");
-			// `["admin"]` however the formatter wraps it.
-			expect(decl).toMatch(/\[\s*"admin",?\s*\]/);
+				`${name} is a WRITE: requireClubRole(…, ["admin"]) admits an admin and a ` +
+					"member with an open office, and refuses an archived club.",
+			).toMatch(
+				/const membership = await requireClubRole\(currentUser\.id, row\.clubId, \[\s*"admin",?\s*\]\);/,
+			);
+		});
+	}
+
+	it("listCancelledMeetings awaits requireClubAdminView — the READ gate, not the write gate", () => {
+		const decl = declarationAfter(
+			fns,
+			"export const listCancelledMeetings = createServerFn",
+		);
+		expect(decl).toContain('createServerFn({ method: "GET" })');
+		expect(decl).toMatch(/const currentUser = await requireUser\(\);/);
+		expect(
+			decl,
+			"a GET gated by requireClubRole refuses a superadmin's read-only " +
+				"impersonation outright and marks a read-write one's read as a write; " +
+				"requireClubAdminView is the admin-only READ gate.",
+		).toMatch(/await requireClubAdminView\(currentUser\.id, data\.clubId\);/);
+		expect(decl).not.toContain("requireClubRole(");
+	});
+
+	it("both MCP tools await their token gate", () => {
+		for (const tool of ["cancel-meeting.ts", "restore-meeting.ts"]) {
+			const src = readSource(resolve(ROUTES, "../server/mcp/tools", tool));
+			expect(src, tool).toMatch(
+				/const \{ club \} = await authorizeTokenForMeeting\(ctx, args\.meetingId\);/,
+			);
 		}
 	});
 });

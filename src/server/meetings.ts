@@ -33,6 +33,7 @@ import {
 import {
 	canManageClub,
 	getSessionUser,
+	requireClubAdminView,
 	requireClubRole,
 	requireClubViewAccess,
 	requireMeetingAgendaEditor,
@@ -941,12 +942,17 @@ const cancelledMeetingsSchema = z.object({ clubId: uuid });
 
 /** The club's cancelled meetings from today onward (#1057), so an officer can
  *  find one again from the schedule and restore it. Admins and members with an
- *  open office only — the same `requireClubRole(…, ["admin"])` the cancel
- *  itself takes — so a plain member's schedule never names one. AUTHED. */
+ *  open office only, so a plain member's schedule never names one. AUTHED.
+ *
+ *  `requireClubAdminView`, the gate for admin-only READS — not the
+ *  `requireClubRole(…, ["admin"])` the cancel itself takes. The two admit the
+ *  same club officers; they differ on a superadmin's impersonation, where the
+ *  write gate refuses a read-only session outright and marks a read-write
+ *  one's request as a write. This is a read. */
 export const listCancelledMeetings = createServerFn({ method: "GET" })
 	.validator((input: unknown) => cancelledMeetingsSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		await requireClubAdminView(currentUser.id, data.clubId);
 		return loadCancelledMeetings(data.clubId);
 	});
