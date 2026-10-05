@@ -41,11 +41,13 @@ import { roleDefinitions } from "#/db/schema";
 import {
 	AGENDA_APPLIED_WHILE_OPEN_MESSAGE,
 	AGENDA_EXPIRED_IN_LOCK_MESSAGE,
+	AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE,
 	AGENDA_MEETING_LOCKED_IN_LOCK_MESSAGE,
 	AGENDA_STILL_BLOCKED_MESSAGE,
 	AGENDA_UNREADABLE_MESSAGE,
 } from "#/lib/agenda-upsert";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
+import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import { UPSERT_AGENDAS_TOOL } from "#/lib/pending-plan";
 import { logActivity } from "#/server/activity";
 import {
@@ -58,7 +60,11 @@ import {
 	parseAgendaPayload,
 } from "#/server/agenda-plan-pending-schemas";
 import { lockClubForWrite } from "#/server/club-write-lock";
-import { McpError } from "#/server/mcp/errors";
+import {
+	type McpBlockingCode,
+	type McpBlockingItem,
+	McpError,
+} from "#/server/mcp/errors";
 import { applyPendingPlanLocked } from "#/server/mcp-pending-apply";
 import { insertMeetingWithSlots } from "#/server/meeting-create-logic";
 import { applyMeetingMetaPatch } from "#/server/meetings-logic";
@@ -83,6 +89,18 @@ export interface ApplyAgendaPlanResult extends AgendaAppliedSummary {
 	unchanged: number;
 }
 
+/**
+ * The in-lock refusal for a blocking item that appeared during the wait, in
+ * PRECEDENCE order: the first code present picks the sentence. A meeting that
+ * completed or was cancelled during the wait each get a sentence only this path
+ * says, so a test can tell the in-lock refusal from the plan-time one. The
+ * completed lock comes first; anything else gets `AGENDA_STILL_BLOCKED_MESSAGE`.
+ */
+const IN_LOCK_SENTENCES: readonly (readonly [McpBlockingCode, string])[] = [
+	["MEETING_LOCKED", AGENDA_MEETING_LOCKED_IN_LOCK_MESSAGE],
+	["MEETING_CANCELLED", AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE],
+];
+
 export async function applyAgendaPlan(
 	input: ApplyAgendaPlanInput,
 ): Promise<ApplyAgendaPlanResult> {
@@ -106,7 +124,8 @@ export async function applyAgendaPlan(
 			// The club write lock (#925), before this body's first club or meeting
 			// row lock. This apply both CREATES meetings — whose agenda read takes
 			// the club row FOR SHARE (`startMeetingOnClubDefault`, #910) — and
-			// UPDATES existing ones (`applyMeetingMetaPatch` locks the meeting).
+			// UPDATES existing ones (`applyMeetingMetaPatch`'s UPDATE takes the
+			// meeting's row lock).
 			// A save-as-club-template locks a meeting and then the club row; with
 			// both orders in play, a plan holding the club SHARE and waiting on
 			// meeting M deadlocked against a save holding M and waiting on the
@@ -145,14 +164,11 @@ export async function applyAgendaPlan(
 			// specific explanation; a hash mismatch is a generic one, and the
 			// specific one should win when both are true.
 			if (blocking.length > 0) {
-				const locked = blocking.some((b) => b.code === "MEETING_LOCKED");
-				throw new McpError(
-					"BLOCKED",
-					locked
-						? AGENDA_MEETING_LOCKED_IN_LOCK_MESSAGE
-						: AGENDA_STILL_BLOCKED_MESSAGE,
-					{ blocking },
-				);
+				const sentence =
+					IN_LOCK_SENTENCES.find(([code]) =>
+						blocking.some((b) => b.code === code),
+					)?.[1] ?? AGENDA_STILL_BLOCKED_MESSAGE;
+				throw new McpError("BLOCKED", sentence, { blocking });
 			}
 
 			const freshHash = agendaPlanHash({
@@ -263,17 +279,44 @@ export async function applyAgendaPlan(
 				// clearing a Word of the Day it was never asked about (AC8).
 				const patch: Record<string, string | null> = {};
 				for (const change of line.changes) patch[change.field] = change.to;
-				await applyMeetingMetaPatch(
-					{
-						meetingId: line.meetingId,
-						actorMemberId: input.actorMemberId,
-						...patch,
-					},
-					// `tx`, never `db`: this transaction already holds the club's
-					// advisory lock, and a write on a second pooled connection would
-					// neither be covered by it nor roll back with the batch.
-					tx,
-				);
+				try {
+					await applyMeetingMetaPatch(
+						{
+							meetingId: line.meetingId,
+							actorMemberId: input.actorMemberId,
+							...patch,
+						},
+						// `tx`, never `db`: this transaction already holds the club's
+						// advisory lock, and a write on a second pooled connection would
+						// neither be covered by it nor roll back with the batch.
+						tx,
+					);
+				} catch (err) {
+					// The club write lock does not exclude a cancel: `applyCancelMeeting`
+					// locks only the meeting row. So a cancel can commit AFTER the
+					// re-plan above and before this UPDATE, which then refuses it
+					// (#1088). Report that as the same BLOCKED result the re-plan
+					// gives, rather than as a thrown error the page cannot render; the
+					// throw rolls back everything this batch already wrote. Compared by
+					// identity with the exported sentence, never by substring.
+					if (
+						err instanceof Error &&
+						err.message === MEETING_CANCELLED_MESSAGE
+					) {
+						const item: McpBlockingItem = {
+							code: "MEETING_CANCELLED",
+							entryIndex: line.index,
+							message: MEETING_CANCELLED_MESSAGE,
+							detail: { date: line.date, meetingId: line.meetingId },
+						};
+						throw new McpError(
+							"BLOCKED",
+							AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE,
+							{ blocking: [item] },
+						);
+					}
+					throw err;
+				}
 				updatedMeetingIds.push(line.meetingId);
 				dates.push(line.date);
 			}

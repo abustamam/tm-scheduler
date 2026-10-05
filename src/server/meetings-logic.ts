@@ -385,6 +385,52 @@ const TABLE_TOPICS_TEXT_FIELDS = [
 	"tableTopicsNotes",
 ] as const satisfies readonly (typeof META_TEXT_FIELDS)[number][];
 
+/**
+ * The UPDATE both meta writers issue, refusing a CANCELLED meeting atomically
+ * (#1088).
+ *
+ * Neither writer locks the meeting before reading it, so the status they read
+ * can be stale by the time they write. The condition lives in the UPDATE's own
+ * WHERE, and that is what makes it hold: the UPDATE takes the meeting's row
+ * lock, the same row `applyCancelMeeting` locks, so a cancel in flight makes it
+ * wait, and under READ COMMITTED Postgres re-checks the WHERE against the row
+ * the cancel committed. A cancel committed first, or committed while this
+ * waited, matches no row. No explicit lock is taken up front: the
+ * `upsert_agendas` apply already holds the club write lock around this, and an
+ * extra meeting-row lock taken earlier would change lock order on that path.
+ *
+ * Matching no row is decided by reading the row again, not assumed: a meeting
+ * deleted in the same window (the recurrence rule's reconcile deletes untouched
+ * shells) matches no row too, and that is not-found, not cancelled.
+ */
+async function updateMeetingUnlessCancelled(
+	tx: DbOrTx,
+	meetingId: string,
+	next: Partial<typeof meetings.$inferInsert>,
+): Promise<void> {
+	const written = await tx
+		.update(meetings)
+		.set(next)
+		.where(and(eq(meetings.id, meetingId), ne(meetings.status, "cancelled")))
+		.returning({ id: meetings.id });
+	if (written.length > 0) return;
+	const [row] = await tx
+		.select({ status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId));
+	if (!row) throw new Error("Meeting not found.");
+	assertMeetingNotCancelled(row.status);
+	// Reachable, narrowly: a cancel commits before the UPDATE above (so it matched
+	// no row), then a restore commits before the re-read (READ COMMITTED takes a
+	// fresh snapshot per statement), so the re-read sees the meeting scheduled.
+	// `applyRestoreMeeting` takes only the meeting-row lock, and this function
+	// holds none on that row because its UPDATE matched nothing. It needs two
+	// officer actions inside a window of milliseconds, nothing has been written,
+	// and the save can simply be retried — so it fails loudly rather than being
+	// mapped to anything more specific.
+	throw new Error("The meeting changed while saving. Try again.");
+}
+
 /** Update a meeting's meta (incl. reschedule) and log a `meeting_edit`.
  *  Omitted fields are left alone — see `MeetingMetaPatchInput`.
  *
@@ -505,11 +551,21 @@ export async function applyMeetingMetaPatch(
 	// An empty patch is a save with nothing in it — a `set` with no keys is a
 	// drizzle error, and an audit entry naming no change is noise. Reachable from
 	// the dialog now that an unchanged resubmit drops out above.
+	//
+	// A cancelled meeting refuses even this (#1088): "saved" on a meeting hidden
+	// from every member is a success the caller should not be told. With no
+	// UPDATE to make conditional, the status this function read is the only one
+	// there is to check.
 	const changed = Object.keys(next) as (keyof typeof next)[];
-	if (changed.length === 0) return { clubId: meeting.clubId };
+	if (changed.length === 0) {
+		assertMeetingNotCancelled(meeting.status);
+		return { clubId: meeting.clubId };
+	}
 
 	await conn.transaction(async (tx) => {
-		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));
+		// Refuses a cancelled meeting in the UPDATE itself (#1088) — see
+		// `updateMeetingUnlessCancelled`. Throws before the `meeting_edit` below.
+		await updateMeetingUnlessCancelled(tx, input.meetingId, next);
 		// `before` mirrors `after` key for key, and both name only what actually
 		// MOVED (unchanged keys were dropped above) — so the entry reads as the
 		// diff it is rather than eleven columns of which two changed.
@@ -621,11 +677,17 @@ async function applyNarrowTextPatch<
 	const changed = Object.keys(next) as (keyof typeof next)[];
 	// A `set` with no keys is a drizzle error, and an audit entry naming no change
 	// is noise. Reachable: the editor sends only what was edited, so pressing Save
-	// having typed nothing sends nothing.
-	if (changed.length === 0) return { clubId: meeting.clubId };
+	// having typed nothing sends nothing. A cancelled meeting refuses even this,
+	// as the general patch does (#1088).
+	if (changed.length === 0) {
+		assertMeetingNotCancelled(meeting.status);
+		return { clubId: meeting.clubId };
+	}
 
 	await db.transaction(async (tx) => {
-		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));
+		// The resolvers in front of this refuse a cancelled meeting only on an
+		// unlocked read; this is the refusal that holds (#1088).
+		await updateMeetingUnlessCancelled(tx, input.meetingId, next);
 		// `before` mirrors `after` key for key, and both name only what moved.
 		const before: Record<string, unknown> = {};
 		for (const key of changed)

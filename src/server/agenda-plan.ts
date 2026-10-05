@@ -77,6 +77,10 @@ import {
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { planHash } from "#/lib/mcp-plan";
 import {
+	isMeetingCancelled,
+	MEETING_CANCELLED_MESSAGE,
+} from "#/lib/meeting-cancellation-notice";
+import {
 	isMeetingLocked,
 	MEETING_LOCKED_BLOCKING_MESSAGE,
 } from "#/lib/meeting-lifecycle";
@@ -95,21 +99,13 @@ type Conn =
  * different weekday. A special meeting on another day is legitimate (#808), so
  * this is said and not refused.
  *
- * `meeting_cancelled` — the date names a cancelled meeting. It still occupies
- * its calendar date (cancellation is the skip mechanism, see
- * `schedule-topup-logic.ts`), so this really is the meeting the caller means;
- * they should just know which one they are editing.
- *
  * `time_ignored` — the entry named a time and the meeting already exists at a
  * different one. Moving a meeting is a reschedule with its own authorization
  * (ADR-0010) and is out of scope for this tool, so the time is dropped — said
  * out loud rather than discarded silently, which is the rule `DUPLICATE_SLOT`
  * states for `assign_roles`.
  */
-export type AgendaWarning =
-	| "weekday_mismatch"
-	| "meeting_cancelled"
-	| "time_ignored";
+export type AgendaWarning = "weekday_mismatch" | "time_ignored";
 
 interface AgendaLineBase {
 	/** Index into the call's own `meetings` array. */
@@ -150,9 +146,9 @@ export type AgendaPlanLine = AgendaCreateLine | AgendaUpdateLine;
  * number and fail an outstanding link as stale for a reason that has nothing to
  * do with it.
  *
- * `warnings` is therefore INSIDE, deliberately. `meeting_cancelled` is read
- * from live state like the numbers are, but it is a fact about a meeting this
- * plan names by date — so a reader who was shown "this meeting is cancelled",
+ * `warnings` is therefore INSIDE, deliberately. `time_ignored` is read from
+ * live state like the numbers are, but it is a fact about a meeting this plan
+ * names by date — so a reader who was shown "keeping the time it already has",
  * or was not, should look again before it is written. Same rule, different
  * side of it, as `GuestBookPlan`.
  */
@@ -364,7 +360,22 @@ export async function plan(
 			continue;
 		}
 
-		if (existing.status === "cancelled") warnings.push("meeting_cancelled");
+		// A cancelled meeting still occupies its date (cancellation is the skip
+		// mechanism, see `schedule-topup-logic.ts`), so the date names it — and it
+		// is REFUSED, not edited with a warning (#1088): it is hidden from every
+		// member, and #1085 refuses the same edit from the browser. Enforced twice
+		// like the lock above: here so the page explains it, and again by the
+		// apply's in-lock re-plan, with `AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE`.
+		// `applyMeetingMetaPatch` refuses it a third time in its own UPDATE.
+		if (isMeetingCancelled(existing.status)) {
+			blocking.push({
+				code: "MEETING_CANCELLED",
+				entryIndex: index,
+				message: MEETING_CANCELLED_MESSAGE,
+				detail: { date: entry.date, meetingId: existing.id },
+			});
+			continue;
+		}
 
 		const time = utcToZonedWallTime(existing.scheduledAt, club.timezone).slice(
 			11,

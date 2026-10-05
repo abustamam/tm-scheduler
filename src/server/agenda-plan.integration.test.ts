@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubMeetingRecurrence, clubs, meetings } from "#/db/schema";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
+import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import {
 	cleanup,
 	hasTestDb,
@@ -205,13 +206,24 @@ describe.skipIf(!hasTestDb)("the agenda planner", () => {
 			expect(line.warnings).toContain("time_ignored");
 		});
 
-		it("warns on a cancelled meeting, which still occupies its date", async () => {
-			await seedMeeting(TUESDAY, "19:00", { status: "cancelled" });
+		it("blocks a cancelled meeting, which still occupies its date (#1088)", async () => {
+			const meetingId = await seedMeeting(TUESDAY, "19:00", {
+				status: "cancelled",
+			});
 			const { plan: p, blocking } = await plan(testDb, club, [
 				{ date: TUESDAY, theme: "Harvest" },
 			]);
-			expect(blocking).toStrictEqual([]);
-			expect(p.lines[0]?.warnings).toContain("meeting_cancelled");
+			// An UPDATE line is never planned, and never a create either: the
+			// cancelled meeting still holds the date.
+			expect(p.lines).toStrictEqual([]);
+			expect(blocking).toStrictEqual([
+				{
+					code: "MEETING_CANCELLED",
+					entryIndex: 0,
+					message: MEETING_CANCELLED_MESSAGE,
+					detail: { date: TUESDAY, meetingId },
+				},
+			]);
 		});
 
 		it("reports a provisional meeting number ALONGSIDE the plan, never inside it", async () => {

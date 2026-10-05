@@ -229,6 +229,18 @@ export function agendaPlanConfirmUrl(
 export const AGENDA_MEETING_LOCKED_IN_LOCK_MESSAGE =
 	"That meeting was completed while this page was open, so its agenda no longer accepts changes.";
 
+/**
+ * What the LOCKED re-check says when a meeting was CANCELLED between the page
+ * rendering and the click (#1088).
+ *
+ * The plan-time sentence is `MEETING_CANCELLED_MESSAGE`
+ * (`#/lib/meeting-cancellation-notice`); this one differs from it for the reason
+ * `AGENDA_MEETING_LOCKED_IN_LOCK_MESSAGE` differs from its plan-time twin, and
+ * from that one too, so a cancellation is never reported as a completion.
+ */
+export const AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE =
+	"That meeting was cancelled while this page was open, so its agenda no longer accepts changes.";
+
 /** The in-lock refusal for any OTHER blocking item that appeared during the wait. */
 export const AGENDA_STILL_BLOCKED_MESSAGE =
 	"Some dates still need attention before these agendas can be saved.";
