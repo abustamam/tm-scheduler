@@ -21,15 +21,18 @@ import { Route } from "./unsubscribe";
 afterEach(cleanup);
 
 /**
- * ANY string literal — single, double or backtick quoted — whose content starts
- * with a `server/` module path, through either alias (`#/`, `@/`) or a relative
- * path, whatever surrounds it. Matching the literal rather than the import
- * syntax means no spelling of an import (static, side-effect, dynamic, a
- * template literal, a comment inside `import(…)`) slips past. It also fails a
- * commented-out server import, which is acceptable here: this page is static
- * and has no reason to name a server module at all.
+ * Matches a quote character (`'`, `"` or a backtick) followed by a run of
+ * non-quote, non-space characters in which `server/` is a whole path segment:
+ * either right after the quote or right after a `/`. So `"#/server/x"`,
+ * `"@/server/x"`, `"../server/x"` and `"../../src/server/x"` all match, inside
+ * any import syntax or none; `"#/lib/observer/x"` does not. It is a check on
+ * string literals in the source text, nothing more: a server import spelled
+ * some other way (an alias that does not put `server` in the path, a string
+ * built at runtime) is not caught. A commented-out server path also matches,
+ * which is acceptable here: this page is static and has no reason to name a
+ * server module at all.
  */
-const SERVER_IMPORT = /["'`](?:#\/|@\/|(?:\.\.?\/)+)server\//;
+const SERVER_IMPORT = /["'`](?:[^"'`\s]*\/)?server\//;
 
 /** Mount the route's component at `url` under a memory router. */
 async function mountAt(url: string) {
@@ -87,11 +90,16 @@ describe("/unsubscribe (static since #902)", () => {
 		"const m = await import('../server/clubs');",
 		"const m = await import(`#/server/clubs`);",
 		'const m = await import(/* lazy */ "#/server/clubs");',
+		'import { x } from "../../src/server/clubs";',
 	])("SERVER_IMPORT recognises %s", (line) => {
 		expect(line).toMatch(SERVER_IMPORT);
 	});
 
 	it("SERVER_IMPORT leaves a non-server import alone", () => {
 		expect('import { x } from "#/lib/brand";').not.toMatch(SERVER_IMPORT);
+	});
+
+	it("SERVER_IMPORT does not count a segment that merely ends in server", () => {
+		expect('import { x } from "#/lib/observer/x";').not.toMatch(SERVER_IMPORT);
 	});
 });
