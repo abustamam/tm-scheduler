@@ -8,6 +8,8 @@ import { authClient } from "#/lib/auth-client";
 import {
 	emailChangeOutcomeMessage,
 	MEMBER_EMAIL_REQUEST_PATH,
+	NEEDS_MERGE_MESSAGE,
+	RATE_LIMITED_MESSAGE,
 } from "#/lib/member-email-change";
 import { getSignInEmailState } from "#/server/account-email";
 
@@ -40,7 +42,7 @@ export function SignInEmailSection({ outcome }: { outcome?: string }) {
 			if (error) {
 				throw new Error(
 					error.status === 429
-						? "Too many requests, try again later."
+						? RATE_LIMITED_MESSAGE
 						: (error.message ?? "Couldn't send the link."),
 				);
 			}
@@ -130,6 +132,10 @@ export function SignInEmailSection({ outcome }: { outcome?: string }) {
 								</p>
 							) : null}
 						</form>
+					) : state.data?.needsMerge ? (
+						<p className="text-sm text-muted-foreground">
+							{NEEDS_MERGE_MESSAGE}
+						</p>
 					) : null}
 				</>
 			)}

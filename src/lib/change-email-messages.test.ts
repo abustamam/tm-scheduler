@@ -52,7 +52,7 @@ describe("change-of-address emails", () => {
 describe("emailChangeOutcomeMessage", () => {
 	it("reports a landed change as success and every refusal as an error", () => {
 		expect(emailChangeOutcomeMessage("changed")?.tone).toBe("success");
-		for (const o of ["stale", "in_use", "unbound", "expired"]) {
+		for (const o of ["stale", "in_use", "unbound", "needs_merge", "expired"]) {
 			expect(emailChangeOutcomeMessage(o)?.tone).toBe("error");
 		}
 	});
@@ -60,5 +60,7 @@ describe("emailChangeOutcomeMessage", () => {
 	it("says nothing for an absent or unknown value", () => {
 		expect(emailChangeOutcomeMessage(undefined)).toBeNull();
 		expect(emailChangeOutcomeMessage("<script>")).toBeNull();
+		// Not fooled by a prototype key.
+		expect(emailChangeOutcomeMessage("toString")).toBeNull();
 	});
 });

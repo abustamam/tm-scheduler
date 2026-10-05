@@ -1,6 +1,6 @@
 /**
  * A member changes their own sign-in address (#1091, ADR-0030), as a small
- * Better Auth plugin: two endpoints under `/api/auth`, and nothing else.
+ * Better Auth plugin: three endpoints under `/api/auth`, and nothing else.
  *
  * Why not Better Auth's own `user.changeEmail` (left DISABLED in `auth.ts`):
  *  - its link names the OLD address, not the account, and its verify finds the
@@ -11,16 +11,26 @@
  *  - its silent "existing user" no-op sends nothing, where decision 3 wants the
  *    new inbox told the address is in use;
  *  - it needs `emailVerification.sendVerificationEmail`, which also arms
- *    Better Auth's public `/send-verification-email` sender.
+ *    Better Auth's public `/send-verification-email` sender;
+ *  - its verify is a GET that changes the address, which a mail scanner that
+ *    prefetches links would trigger.
  *
  * Why a plugin rather than a server fn: the request path goes through Better
  * Auth's own rate limiter (decision 7) and its origin check, and signs its link
  * with the auth secret.
  *
- * The link is a one-hour HS256 JWT naming `{userId, from, to}` and a `purpose`
- * no other token signed with this secret carries. Requesting again does not
- * cancel an earlier link; but once ANY change lands, a link whose `from` is no
- * longer the account's address is dead (`confirmEmailChange`).
+ * The three endpoints:
+ *  - `POST /member-email/request` (session): mint and send the link.
+ *  - `GET /member-email/confirm?token=` : a PAGE naming the new address, with
+ *    one button. It changes NOTHING, so a link scanner's prefetch is harmless.
+ *  - `POST /member-email/apply` (form, `token`): the button. Same-origin only,
+ *    checked here whether or not a cookie came with it. The only path that
+ *    runs `confirmEmailChange`.
+ *
+ * The link is a one-hour HS256 JWT naming `{userId, from, to, issuedAtMs}` and
+ * a `purpose` no other token signed with this secret carries. Requesting again
+ * does not cancel an earlier link; once ANY change lands, every link minted
+ * before it is dead (`confirmEmailChange`).
  *
  * All the DB work is `#/server/account-email-change-logic`.
  */
@@ -28,15 +38,22 @@ import type { BetterAuthPlugin } from "better-auth";
 import {
 	APIError,
 	createAuthEndpoint,
+	createAuthMiddleware,
 	sessionMiddleware,
 } from "better-auth/api";
 import { signJWT, verifyJWT } from "better-auth/crypto";
 import * as z from "zod";
-import { CHANGE_EMAIL_LINK_EXPIRY_SECONDS } from "#/lib/magic-link-email";
+import { escapeHtml } from "#/lib/html-escape";
 import {
+	EMAIL_CHANGE_LINK_LIFETIME_SECONDS,
+	EMAIL_CHANGE_REQUEST_WINDOW_SECONDS,
+	EMAIL_CHANGE_REQUESTS_PER_WINDOW,
 	type EmailChangeOutcome,
+	MEMBER_EMAIL_APPLY_PATH,
 	MEMBER_EMAIL_CONFIRM_PATH,
 	MEMBER_EMAIL_REQUEST_PATH,
+	NEEDS_MERGE_MESSAGE,
+	RATE_LIMITED_MESSAGE,
 } from "#/lib/member-email-change";
 import {
 	confirmEmailChange,
@@ -47,11 +64,11 @@ import {
 /** Per client address, through Better Auth's limiter (decision 7). The
  *  per-ACCOUNT cap is `takeEmailChangeRequestSlot`, because this limiter keys
  *  on address and path only. */
-export const MEMBER_EMAIL_REQUEST_RATE_LIMIT = { window: 60 * 60, max: 3 };
+export const MEMBER_EMAIL_REQUEST_RATE_LIMIT = {
+	window: EMAIL_CHANGE_REQUEST_WINDOW_SECONDS,
+	max: EMAIL_CHANGE_REQUESTS_PER_WINDOW,
+};
 
-export { MEMBER_EMAIL_CONFIRM_PATH, MEMBER_EMAIL_REQUEST_PATH };
-
-export const RATE_LIMITED_MESSAGE = "Too many requests, try again later.";
 export const UNBOUND_MESSAGE =
 	"Your account isn't linked to a club member, so there is no address to change here. Sign in with the other address instead.";
 
@@ -62,13 +79,14 @@ const claimSchema = z.object({
 	userId: z.string().min(1),
 	from: z.string().min(1),
 	to: z.string().min(1),
+	issuedAtMs: z.number().int().positive(),
 });
 
 /** Sign a change claim into the confirm link's token. */
 export async function signEmailChangeToken(
 	claim: EmailChangeClaim,
 	secret: string,
-	expiresIn: number = CHANGE_EMAIL_LINK_EXPIRY_SECONDS,
+	expiresIn: number = EMAIL_CHANGE_LINK_LIFETIME_SECONDS,
 ): Promise<string> {
 	return signJWT({ purpose: TOKEN_PURPOSE, ...claim }, secret, expiresIn);
 }
@@ -81,14 +99,79 @@ export async function readEmailChangeToken(
 	const payload = await verifyJWT(token, secret);
 	const parsed = claimSchema.safeParse(payload);
 	if (!parsed.success) return null;
-	const { userId, from, to } = parsed.data;
-	return { userId, from, to };
+	const { userId, from, to, issuedAtMs } = parsed.data;
+	return { userId, from, to, issuedAtMs };
 }
 
-/** Where a clicked link lands: Account settings, with the outcome. */
+/** Where an applied link lands: Account settings, with the outcome. */
 export function confirmRedirect(outcome: EmailChangeOutcome): string {
 	return `/account?emailChange=${encodeURIComponent(outcome)}`;
 }
+
+/** Headers for the confirm page: never cached, never framed. */
+const PAGE_HEADERS = {
+	"content-type": "text/html; charset=utf-8",
+	"cache-control": "no-store",
+	"content-security-policy":
+		"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+	"x-frame-options": "DENY",
+	"referrer-policy": "same-origin",
+};
+
+/**
+ * The confirm page. Every interpolated value is escaped: the address came from
+ * a member's typing, and the token from a URL anyone can edit (a forged one
+ * fails at the POST, but its text still lands in this markup).
+ */
+export function confirmPageHtml(input: {
+	applyUrl: string;
+	token: string;
+	to: string;
+}): string {
+	const to = escapeHtml(input.to);
+	return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Confirm your new sign-in address · GavelUp</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <main style="max-width:480px;margin:0 auto;padding:32px 16px;">
+      <h1 style="font-size:20px;color:#18181b;margin:0 0 16px;">Confirm your new sign-in address</h1>
+      <p style="font-size:15px;line-height:1.5;color:#3f3f46;margin:0 0 24px;word-break:break-all;">
+        Change your GavelUp sign-in address to <strong>${to}</strong>?
+      </p>
+      <form method="post" action="${escapeHtml(input.applyUrl)}">
+        <input type="hidden" name="token" value="${escapeHtml(input.token)}" />
+        <button type="submit" style="background:#18181b;color:#ffffff;border:0;font-size:15px;font-weight:600;padding:12px 20px;border-radius:8px;cursor:pointer;">
+          Confirm this address
+        </button>
+      </form>
+      <p style="font-size:13px;line-height:1.5;color:#a1a1aa;margin:24px 0 0;">
+        If you didn't ask for this, close this page. Nothing changes until you confirm.
+      </p>
+    </main>
+  </body>
+</html>`;
+}
+
+/**
+ * Same-origin only, cookie or not. Better Auth's global check validates the
+ * Origin only when a cookie comes with the request, and this POST is meant to
+ * work from a phone with no session — so it checks for itself: an Origin that
+ * is one of the auth instance's trusted origins, or refused.
+ */
+const sameOriginOnly = createAuthMiddleware(async (ctx) => {
+	const origin = ctx.request?.headers.get("origin") ?? null;
+	if (
+		!origin ||
+		origin === "null" ||
+		!ctx.context.isTrustedOrigin(origin, { allowRelativePaths: false })
+	) {
+		throw new APIError("FORBIDDEN", { message: "Invalid origin" });
+	}
+});
 
 export function memberEmailChange() {
 	return {
@@ -120,6 +203,8 @@ export function memberEmailChange() {
 							return ctx.json({ status: true });
 						case "unbound":
 							throw new APIError("FORBIDDEN", { message: UNBOUND_MESSAGE });
+						case "needs_merge":
+							throw new APIError("CONFLICT", { message: NEEDS_MERGE_MESSAGE });
 						case "rate_limited":
 							throw new APIError("TOO_MANY_REQUESTS", {
 								message: RATE_LIMITED_MESSAGE,
@@ -135,7 +220,8 @@ export function memberEmailChange() {
 					}
 				},
 			),
-			confirmMemberEmailChange: createAuthEndpoint(
+			// GET: a page, never a write (#1091 review, F2).
+			showMemberEmailConfirm: createAuthEndpoint(
 				MEMBER_EMAIL_CONFIRM_PATH,
 				{
 					method: "GET",
@@ -144,6 +230,35 @@ export function memberEmailChange() {
 				async (ctx) => {
 					const claim = await readEmailChangeToken(
 						ctx.query.token,
+						ctx.context.secret,
+					);
+					if (!claim) throw ctx.redirect(confirmRedirect("expired"));
+					return new Response(
+						confirmPageHtml({
+							applyUrl: `${ctx.context.baseURL}${MEMBER_EMAIL_APPLY_PATH}`,
+							token: ctx.query.token,
+							to: claim.to,
+						}),
+						{ status: 200, headers: PAGE_HEADERS },
+					);
+				},
+			),
+			// POST: the page's button, and the only writer.
+			applyMemberEmailChange: createAuthEndpoint(
+				MEMBER_EMAIL_APPLY_PATH,
+				{
+					method: "POST",
+					body: z.object({ token: z.string().max(4096) }),
+					use: [sameOriginOnly],
+					// A plain HTML form posts urlencoded; Better Auth's router
+					// accepts only JSON unless an endpoint says otherwise.
+					metadata: {
+						allowedMediaTypes: ["application/x-www-form-urlencoded"],
+					},
+				},
+				async (ctx) => {
+					const claim = await readEmailChangeToken(
+						ctx.body.token,
 						ctx.context.secret,
 					);
 					if (!claim) throw ctx.redirect(confirmRedirect("expired"));

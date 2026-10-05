@@ -15,7 +15,10 @@ const { getSignInEmailState, $fetch } = vi.hoisted(() => ({
 vi.mock("#/server/account-email", () => ({ getSignInEmailState }));
 vi.mock("#/lib/auth-client", () => ({ authClient: { $fetch } }));
 
-import { MEMBER_EMAIL_REQUEST_PATH } from "#/lib/member-email-change";
+import {
+	MEMBER_EMAIL_REQUEST_PATH,
+	NEEDS_MERGE_MESSAGE,
+} from "#/lib/member-email-change";
 import { SignInEmailSection } from "./sign-in-email-section";
 
 afterEach(() => {
@@ -52,6 +55,17 @@ describe("SignInEmailSection", () => {
 		expect(await screen.findByText("lone@example.com")).toBeTruthy();
 		expect(screen.queryByLabelText("New address")).toBeNull();
 		expect(screen.queryByRole("button", { name: /send link/i })).toBeNull();
+	});
+
+	it("tells an account bound to two Persons why there is no control", async () => {
+		getSignInEmailState.mockResolvedValue({
+			email: "dup@example.com",
+			canChange: false,
+			needsMerge: true,
+		});
+		renderSection();
+		expect(await screen.findByText(NEEDS_MERGE_MESSAGE)).toBeTruthy();
+		expect(screen.queryByLabelText("New address")).toBeNull();
 	});
 
 	it("posts the typed address and says to check the new inbox", async () => {

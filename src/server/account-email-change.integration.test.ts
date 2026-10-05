@@ -1,7 +1,8 @@
 /**
  * A member changes their own sign-in address (#1091, ADR-0030), end to end
  * through the REAL `auth.handler`: a magic-link session cookie, the request
- * POST, the link the new inbox receives, and the GET that link opens.
+ * POST, the link the new inbox receives, the GET page that link opens (which
+ * changes nothing), and the POST its button sends.
  *
  * `sendEmail` is mocked so every message is observable: which inbox got what,
  * and in which order relative to the confirm.
@@ -11,7 +12,7 @@
  *     bunx vitest run src/server/account-email-change.integration.test.ts
  */
 import { randomBytes, randomUUID } from "node:crypto";
-import { and, eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like, sql } from "drizzle-orm";
 import {
 	afterAll,
 	beforeAll,
@@ -39,10 +40,20 @@ const oauth = await import("#/test/oauth-flow");
 const { sendEmail } = await import("#/lib/email");
 const { signEmailChangeToken } = await import("#/lib/change-email-plugin");
 const { signJWT } = await import("better-auth/crypto");
-const { MEMBER_EMAIL_REQUEST_PATH, MEMBER_EMAIL_CONFIRM_PATH } = await import(
-	"#/lib/member-email-change"
-);
-const { signInEmailStateFor } = await import("./account-email-change-logic");
+const {
+	MEMBER_EMAIL_APPLY_PATH,
+	MEMBER_EMAIL_CONFIRM_PATH,
+	MEMBER_EMAIL_REQUEST_PATH,
+	NEEDS_MERGE_MESSAGE,
+	RATE_LIMITED_MESSAGE,
+} = await import("#/lib/member-email-change");
+const {
+	EMAIL_CHANGE_LOCK_NAMESPACE,
+	requestEmailChange,
+	signInEmailStateFor,
+	takeEmailChangeRequestSlot,
+} = await import("./account-email-change-logic");
+const { statementsDuring } = await import("#/test/query-spy");
 
 type Loaded = Awaited<ReturnType<typeof oauth.loadAuthForTest>>;
 type Sent = { to: string; subject: string; text: string };
@@ -132,10 +143,40 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 		return url;
 	}
 
-	function open(url: string): Promise<Response> {
+	/** What a mail scanner or a browser does with the link: a bare GET. */
+	function getPage(url: string): Promise<Response> {
 		return loaded.handler(
 			new Request(url, { headers: { "x-real-ip": freshIp() } }),
 		);
+	}
+
+	/** The confirm page's button: a form POST of the token. */
+	function apply(
+		token: string,
+		headers: Record<string, string> = { origin: oauth.TEST_ORIGIN },
+	): Promise<Response> {
+		return loaded.handler(
+			new Request(`${oauth.TEST_ISSUER}${MEMBER_EMAIL_APPLY_PATH}`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/x-www-form-urlencoded",
+					"x-real-ip": freshIp(),
+					...headers,
+				},
+				body: new URLSearchParams({ token }).toString(),
+			}),
+		);
+	}
+
+	function tokenOf(url: string): string {
+		return new URL(url).searchParams.get("token") ?? "";
+	}
+
+	/** A member clicking the link and then the page's button. */
+	async function open(url: string): Promise<Response> {
+		const page = await getPage(url);
+		if (page.status !== 200) return page;
+		return apply(tokenOf(url));
 	}
 
 	function outcome(res: Response): string | null {
@@ -159,12 +200,14 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			...clubs.flatMap((c) => [c.adminUserId, c.memberUserId]),
 			...extraUserIds,
 		];
-		await testDb.delete(verification).where(
-			inArray(
-				verification.identifier,
-				ids.map((id) => `change-email-request:${id}`),
-			),
-		);
+		await testDb
+			.delete(verification)
+			.where(
+				inArray(verification.identifier, [
+					...ids.map((id) => `change-email-request:${id}`),
+					...ids.map((id) => `change-email-landed:${id}`),
+				]),
+			);
 		for (const c of [...clubs].reverse()) {
 			await cleanup(c.clubId, [c.adminUserId, c.memberUserId]);
 		}
@@ -460,6 +503,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			userId: club.memberUserId,
 			from: old ?? "",
 			to: addr("forged"),
+			issuedAtMs: Date.now(),
 		};
 		const forged = await signEmailChangeToken(claim, "not-the-secret");
 		const expired = await signEmailChangeToken(claim, secret, -60);
@@ -471,6 +515,8 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 				`${oauth.TEST_ISSUER}${MEMBER_EMAIL_CONFIRM_PATH}?token=${encodeURIComponent(token)}`,
 			);
 			expect(outcome(res)).toBe("expired");
+			// …and posted straight at the button's endpoint, past the page.
+			expect(outcome(await apply(token))).toBe("expired");
 		}
 		expect(await emailOf(club.memberUserId)).toBe(old);
 	});
@@ -499,6 +545,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			expect(await signInEmailStateFor(loneId)).toEqual({
 				email: loneEmail,
 				canChange: false,
+				needsMerge: false,
 			});
 			sent.mockClear();
 			const res = await requestChange(cookie, addr("lone-next"));
@@ -571,10 +618,49 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			sent.mockClear();
 			const fourth = await requestChange(cookie, addr("cap3"), freshIp());
 			expect(fourth.status).toBe(429);
-			expect((await fourth.json()).message).toBe(
-				"Too many requests, try again later.",
-			);
+			expect((await fourth.json()).message).toBe(RATE_LIMITED_MESSAGE);
 			expect(mails()).toEqual([]);
+		});
+
+		it("holds the per-account cap under concurrent requests", async () => {
+			// Ten at once from ten addresses: without the per-account lock, the
+			// count-then-insert lets several read "2" and all insert.
+			const club = await freshClub();
+			const cookie = await cookieFor(club.memberUserId);
+			const statuses = await Promise.all(
+				Array.from({ length: 10 }, (_, i) =>
+					requestChange(cookie, addr(`par${i}`), freshIp()).then(
+						(r) => r.status,
+					),
+				),
+			);
+			expect(statuses.filter((s) => s === 200)).toHaveLength(3);
+			expect(statuses.filter((s) => s === 429)).toHaveLength(7);
+		});
+
+		it("takes the per-account lock before counting", async () => {
+			// Deterministic half of the concurrency proof: while another
+			// transaction holds this account's lock, a slot-take must WAIT.
+			const club = await freshClub();
+			const holder = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select pg_advisory_xact_lock(${EMAIL_CHANGE_LOCK_NAMESPACE}::int4, hashtext(${club.memberUserId}))`,
+				);
+			});
+			const taking = takeEmailChangeRequestSlot(club.memberUserId);
+			await waitForLockWait("pg_advisory_xact_lock", holder.pid);
+			await holder.commit();
+			expect(await taking).toBe(true);
+		});
+
+		it("grants exactly three slots to a burst of twenty", async () => {
+			const club = await freshClub();
+			const granted = await Promise.all(
+				Array.from({ length: 20 }, () =>
+					takeEmailChangeRequestSlot(club.memberUserId),
+				),
+			);
+			expect(granted.filter(Boolean)).toHaveLength(3);
 		});
 
 		it("refuses the fourth request in an hour from one client address, across accounts", async () => {
@@ -593,6 +679,210 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			}
 			expect(statuses).toEqual([200, 200, 200, 429]);
 		});
+	});
+
+	describe("the link is a page; only its button writes (#1091 review)", () => {
+		it("a GET of the link changes nothing and names the new address", async () => {
+			const club = await freshClub();
+			const cookie = await cookieFor(club.memberUserId);
+			const old = await emailOf(club.memberUserId);
+			const next = addr("prefetch");
+			await requestChange(cookie, next);
+			const link = linkSentTo(next);
+			sent.mockClear();
+
+			const page = await getPage(link);
+			expect(page.status).toBe(200);
+			expect(page.headers.get("content-type")).toMatch(/text\/html/);
+			expect(page.headers.get("cache-control")).toBe("no-store");
+			const html = await page.text();
+			expect(html).toContain(next);
+			expect(html).toContain('method="post"');
+			// A scanner fetching it twice changes nothing either.
+			await getPage(link);
+			expect(await emailOf(club.memberUserId)).toBe(old);
+			expect(await personEmail(club.personId)).toBe(old);
+			expect(mails()).toEqual([]);
+
+			expect(outcome(await apply(tokenOf(link)))).toBe("changed");
+			expect(await emailOf(club.memberUserId)).toBe(next);
+		});
+
+		it("escapes the address it shows", async () => {
+			const club = await freshClub();
+			const old = await emailOf(club.memberUserId);
+			const token = await signEmailChangeToken(
+				{
+					userId: club.memberUserId,
+					from: old ?? "",
+					to: `<script>x</script>@evil.example`,
+					issuedAtMs: Date.now(),
+				},
+				secret,
+			);
+			const html = await (
+				await getPage(
+					`${oauth.TEST_ISSUER}${MEMBER_EMAIL_CONFIRM_PATH}?token=${encodeURIComponent(token)}`,
+				)
+			).text();
+			expect(html).not.toContain("<script>");
+			expect(html).toContain("&lt;script&gt;");
+		});
+
+		it("refuses the button's POST from another origin, or with none", async () => {
+			const club = await freshClub();
+			const cookie = await cookieFor(club.memberUserId);
+			const old = await emailOf(club.memberUserId);
+			const next = addr("csrf");
+			await requestChange(cookie, next);
+			const token = tokenOf(linkSentTo(next));
+
+			const attempts: Record<string, string>[] = [
+				{ origin: "https://evil.example" },
+				{ origin: "null" },
+				{},
+				// A session cookie does not make a cross-origin POST acceptable.
+				{ origin: "https://evil.example", cookie },
+			];
+			for (const headers of attempts) {
+				const res = await apply(token, headers);
+				expect(res.status).toBe(403);
+			}
+			expect(await emailOf(club.memberUserId)).toBe(old);
+			expect(outcome(await apply(token))).toBe("changed");
+		});
+	});
+
+	it("a link replayed after the address went A to B and back to A is dead", async () => {
+		const club = await freshClub();
+		const cookie = await cookieFor(club.memberUserId);
+		const a = (await emailOf(club.memberUserId)) ?? "";
+		const b = addr("aba");
+		await requestChange(cookie, b);
+		const aToB = linkSentTo(b);
+		expect(outcome(await open(aToB))).toBe("changed");
+
+		addresses.add(a);
+		await requestChange(cookie, a);
+		expect(outcome(await open(linkSentTo(a)))).toBe("changed");
+		expect(await emailOf(club.memberUserId)).toBe(a);
+
+		sent.mockClear();
+		// The account is on A again, which is the old link's `from`: only the
+		// landing marker can tell this link is from before.
+		expect(outcome(await apply(tokenOf(aToB)))).toBe("stale");
+		expect(await emailOf(club.memberUserId)).toBe(a);
+		expect(mails()).toEqual([]);
+	});
+
+	describe("an account bound to two or more Persons (#1091 review)", () => {
+		async function bindSecondPerson(club: SeededClub): Promise<void> {
+			const [p] = await testDb
+				.insert(people)
+				.values({
+					name: "Duplicate",
+					email: await emailOf(club.memberUserId),
+					userId: club.memberUserId,
+				})
+				.returning({ id: people.id });
+			if (p) extraPersonIds.push(p.id);
+		}
+
+		it("gets no control, and the request is refused with a merge message", async () => {
+			const club = await freshClub();
+			await bindSecondPerson(club);
+			expect(await signInEmailStateFor(club.memberUserId)).toMatchObject({
+				canChange: false,
+				needsMerge: true,
+			});
+			const cookie = await cookieFor(club.memberUserId);
+			sent.mockClear();
+			const res = await requestChange(cookie, addr("dup"));
+			expect(res.status).toBe(409);
+			expect((await res.json()).message).toBe(NEEDS_MERGE_MESSAGE);
+			expect(mails()).toEqual([]);
+		});
+
+		it("is refused at confirm when a second Person was bound after the request", async () => {
+			const club = await freshClub();
+			const cookie = await cookieFor(club.memberUserId);
+			const old = await emailOf(club.memberUserId);
+			const next = addr("dup-late");
+			await requestChange(cookie, next);
+			const link = linkSentTo(next);
+			await bindSecondPerson(club);
+			sent.mockClear();
+			expect(outcome(await open(link))).toBe("needs_merge");
+			expect(await emailOf(club.memberUserId)).toBe(old);
+			expect(await personEmail(club.personId)).toBe(old);
+			expect(mails()).toEqual([]);
+		});
+	});
+
+	describe("a holder stored with Unicode spaces still blocks (#1091 review)", () => {
+		it("a rostered Person stored as the address plus a NBSP", async () => {
+			const club = await freshClub();
+			const taken = addr("nbsp");
+			const [p] = await testDb
+				.insert(people)
+				.values({ name: "Padded", email: `${taken} ` })
+				.returning({ id: people.id });
+			if (!p) throw new Error("no person");
+			await testDb.insert(members).values({
+				clubId: club.clubId,
+				personId: p.id,
+				name: "Padded",
+				clubRole: "member",
+				status: "active",
+			});
+			const cookie = await cookieFor(club.memberUserId);
+			sent.mockClear();
+			await requestChange(cookie, taken);
+			expect(mails().find((m) => m.to === taken)?.subject).toBe(
+				"This address is already in use on GavelUp",
+			);
+		});
+
+		it("an account stored as a BOM plus the address", async () => {
+			const club = await freshClub();
+			const taken = addr("bom");
+			const id = randomUUID();
+			extraUserIds.push(id);
+			await testDb.insert(user).values({
+				id,
+				name: "Padded",
+				email: `﻿${taken}`,
+				emailVerified: true,
+			});
+			const cookie = await cookieFor(club.memberUserId);
+			sent.mockClear();
+			await requestChange(cookie, taken);
+			expect(mails().find((m) => m.to === taken)?.subject).toBe(
+				"This address is already in use on GavelUp",
+			);
+		});
+	});
+
+	it("does the same work whichever email the request sends (#1091 review)", async () => {
+		const club = await freshClub();
+		const other = await freshClub();
+		const taken = (await emailOf(other.adminUserId)) ?? "";
+		const mintLink = vi.fn(async () => "https://link.example/x");
+		const statements = await statementsDuring(() =>
+			requestEmailChange({
+				userId: club.memberUserId,
+				newEmail: taken,
+				mintLink,
+			}),
+		);
+		// A link is minted even though the in-use email carries none…
+		expect(mintLink).toHaveBeenCalledTimes(1);
+		// …and both collision arms ran, though the first already answered.
+		const collisionReads = statements.filter((q) =>
+			q.includes("regexp_replace"),
+		);
+		expect(collisionReads.some((q) => /from "user"/.test(q))).toBe(true);
+		expect(collisionReads.some((q) => /from "people"/.test(q))).toBe(true);
 	});
 
 	it("writes one activity entry in every club that holds the member", async () => {

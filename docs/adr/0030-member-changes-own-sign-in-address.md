@@ -24,9 +24,12 @@ decisions in #1091 are the contract. In short:
    the new address is clicked. The old address does not approve, because the usual reason to
    change is that the old inbox is lost. After a confirmed change, and only then, it gets
    "your GavelUp sign-in address was changed to …; if this wasn't you, contact support."
-2. **Only an account bound to a Person** gets the control, and the endpoint refuses the rest.
-   The confirm moves `user.email` and that Person's `people.email` in one transaction. An
-   account with no Person signs in with the other address instead.
+2. **Only an account bound to exactly one Person** gets the control, and the endpoint refuses
+   the rest. The confirm moves `user.email` and that Person's `people.email` in one transaction.
+   An account with no Person signs in with the other address instead. An account bound to two
+   or more Persons (`people.user_id` is not unique; such duplicates predate #329) is refused at
+   request time and again under lock at confirm, with "ask your club officer or GavelUp support
+   to merge your records": which record's address to move is a merge decision, not ours.
 3. **Collision: the same answer every time, the real answer in the new inbox.** A new
    address is refused when another `user` row carries it, or another Person carries it who
    counts as a holder (bound, or on a roster). That is the bind's own `countsAsHolder`, reused
@@ -34,7 +37,12 @@ decisions in #1091 are the contract. In short:
    never create the ambiguity the bind refuses. The requester always sees "check the new
    address"; the new inbox gets either the link or "this address is already in use". The
    check runs at request time AND again inside the confirm transaction, with the `user.email`
-   unique constraint as the backstop for a race.
+   unique constraint as the backstop for a race. For this question only, a STORED address is
+   trimmed of the Unicode spaces JS `.trim()` strips as well as the POSIX class (NBSP, U+FEFF
+   and the rest, plus U+200B): `normalizedEmail`'s narrower trim fails closed for the bind but
+   would fail OPEN here, letting a holder stored as the address plus a NBSP be overtaken. Both
+   arms run on every request, and a link is minted whichever email is sent, so the response
+   time does not say which.
 4. **Sessions, OAuth grants and `tmk_` tokens are untouched.** They key off the user id. A
    change is not a security reset.
 5. **Superadmin follows the address at once.** `reconcileSuperadminFlag` runs inside the
@@ -44,13 +52,34 @@ decisions in #1091 are the contract. In short:
    address and path and cannot express "per account", so the per-account count is expiring
    rows in Better Auth's existing `verification` table (`change-email-request:<userId>`,
    holding no address, under a per-account advisory lock). No migration.
-7. **Links live one hour** and name `{userId, from, to}`. Requesting again does not cancel an
-   earlier link. But once any change lands, a link whose `from` is no longer the account's
-   address is dead, including the link that just landed. There is no pending-change table:
-   the pending change lives only in the signed link.
+7. **Links live one hour** and name `{userId, from, to, issuedAtMs}`. Requesting again does
+   not cancel an earlier link. Once any change lands, every link minted before it is dead,
+   including the link that just landed and including one whose `from` the account has since
+   returned to (A→B, then B→A, must not let the old A→B link work again). How: the confirm
+   transaction records the landing instant in Better Auth's existing `verification` table
+   (`change-email-landed:<userId>`, one row, replaced at each landing, expiring a link
+   lifetime later), under the account row lock; a link is applied only if it was minted
+   strictly after that instant. The marker holds a timestamp, never an address, so there is
+   still no pending-change table: the pending change lives only in the signed link.
 8. **Audit.** One `member_edit` entry in every club that holds the member, the member as
    actor, `{before: {email}, after: {email}}` in the detail. Reusing the action needs no
    migration.
+
+**The link opens a page; only its button writes.** A GET of the link renders a confirm page
+naming the new address and changes nothing. Its button POSTs the token to
+`/member-email/apply`, the only path that runs the confirm. Mail providers and corporate link
+scanners prefetch GETs, so a GET that changed the address would apply every change the moment
+the mail arrived, defeating "the change happens when the link is clicked". The POST must carry
+an `Origin` that is one of the auth instance's trusted origins, checked by the endpoint itself:
+Better Auth's global check only validates the origin when a cookie comes with the request, and
+this POST is meant to work from a phone with no session. The page is `no-store`, cannot be
+framed, and escapes every value it shows.
+
+**The bind re-reads the address in its own statement.** `bindVerifiedPerson` reads the
+account's address and then runs its UPDATE; a change confirmed in between would let it stamp
+the OLD address onto a second Person and bind it, past a household arm the change itself
+moved. The UPDATE now also requires that the account still signs in with that address. This
+is not a change to the bind rule, only the same in-statement atomicity its other arms have.
 
 **The writer.** `confirmEmailChange` (`src/server/account-email-change-logic.ts`) is a named
 waiver in `person-email-writers.guard.test.ts`, held to `eq(people.userId, …)` in its UPDATE's
@@ -75,8 +104,9 @@ the built-in flow cannot hold this ADR's rules:
 - it needs `emailVerification.sendVerificationEmail`, which also arms Better Auth's public
   `/send-verification-email` sender.
 
-Being a plugin keeps what the built-in flow did offer: Better Auth's limiter and origin check
-on the request, and a link signed with the auth secret. The token carries a `purpose` claim
+Its verify is also a state-changing GET, which a link scanner would trigger (above). Being a
+plugin keeps what the built-in flow did offer: Better Auth's limiter and origin check on the
+request, and a link signed with the auth secret. The token carries a `purpose` claim
 no other token signed with that secret has, so neither flow's tokens are accepted by the
 other.
 

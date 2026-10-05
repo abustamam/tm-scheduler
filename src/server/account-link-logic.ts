@@ -64,6 +64,9 @@ const otherPeople = alias(people, "other_people");
 const holding = alias(members, "holding_member");
 const vouching = alias(members, "vouching_member");
 const otherHolding = alias(members, "other_holding_member");
+/** The binding account, re-read INSIDE the bind's own statement (#1091
+ *  review). Aliased so it always renders qualified (#802). */
+const bindingAccount = alias(user, "binding_account");
 
 /**
  * Does this Person COUNT as a holder of an address, for ambiguity? Only when it
@@ -257,6 +260,23 @@ export async function bindVerifiedPerson(input: {
 				eq(people.id, input.personId),
 				isNull(people.userId),
 				rosterPermitsBind(verified),
+				// The account STILL signs in with `verified` (#1091 review). It was
+				// read above, outside this statement; a change of sign-in address
+				// confirmed in between would otherwise let the bind stamp the OLD
+				// address — one the account no longer holds — onto this Person and
+				// bind it, past the household arm that the change itself moved.
+				// Not a new rule: the same atomicity every guard here already has.
+				exists(
+					db
+						.select({ one: sql`1` })
+						.from(bindingAccount)
+						.where(
+							and(
+								eq(bindingAccount.id, input.userId),
+								sql`${normalizedEmail(bindingAccount.email)} = ${verified}`,
+							),
+						),
+				),
 			),
 		)
 		.returning({ id: people.id });
@@ -334,6 +354,25 @@ export async function rosterConflictFor(
 }
 
 /**
+ * Every space a stored address may carry at either end, for the COLLISION
+ * question only (#1091 review): the POSIX class `normalizedEmail` trims, plus
+ * the Unicode spaces JS `.trim()` also strips (NBSP, U+1680, U+2000–U+200A,
+ * U+2028/9, U+202F, U+205F, U+3000, U+FEFF) and the zero-width space U+200B.
+ *
+ * `normalizedEmail` leaves those, which fails CLOSED for the bind (it is
+ * documented there) but OPEN here: a holder stored as `victim@x.com` plus a
+ * NBSP would not block a change TO `victim@x.com`. The bind rule is untouched;
+ * only "is this address somebody else's" reads through this.
+ */
+const HELD_ADDRESS_EDGE_SPACE =
+	"^[[:space:]\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+|[[:space:]\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+$";
+
+/** A stored address, normalised for the collision question. */
+function heldAddress(column: AnyPgColumn): SQL {
+	return sql`lower(regexp_replace(${column}, ${HELD_ADDRESS_EDGE_SPACE}, '', 'g'))`;
+}
+
+/**
  * **Is this address already somebody else's?** (#1091, ADR-0030) The question a
  * member changing their own sign-in address must get "no" to, asked at request
  * time and again inside the confirm transaction.
@@ -357,29 +396,29 @@ export async function addressHeldByAnother(
 	userId: string,
 	executor: Pick<typeof db, "select"> = db,
 ): Promise<boolean> {
-	const otherUser = await executor
-		.select({ id: user.id })
-		.from(user)
-		.where(
-			and(
-				ne(user.id, userId),
-				sql`${normalizedEmail(user.email)} = ${address}`,
-			),
-		)
-		.limit(1);
-	if (otherUser.length > 0) return true;
-	const otherPerson = await executor
-		.select({ id: people.id })
-		.from(people)
-		.where(
-			and(
-				or(isNull(people.userId), ne(people.userId, userId)),
-				sql`${normalizedEmail(people.email)} = ${address}`,
-				countsAsHolder(people),
-			),
-		)
-		.limit(1);
-	return otherPerson.length > 0;
+	// BOTH arms run every time (#1091 review): the request path answers the
+	// same whichever arm hits, so it must also take the same time.
+	const [otherUser, otherPerson] = await Promise.all([
+		executor
+			.select({ id: user.id })
+			.from(user)
+			.where(
+				and(ne(user.id, userId), sql`${heldAddress(user.email)} = ${address}`),
+			)
+			.limit(1),
+		executor
+			.select({ id: people.id })
+			.from(people)
+			.where(
+				and(
+					or(isNull(people.userId), ne(people.userId, userId)),
+					sql`${heldAddress(people.email)} = ${address}`,
+					countsAsHolder(people),
+				),
+			)
+			.limit(1),
+	]);
+	return otherUser.length > 0 || otherPerson.length > 0;
 }
 
 /** The DISTINCT Persons whose own address is this one and who count as a

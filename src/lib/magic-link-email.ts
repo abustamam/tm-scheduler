@@ -1,4 +1,8 @@
 import { escapeHtml } from "#/lib/html-escape";
+import {
+	ADDRESS_IN_USE_SENTENCE,
+	EMAIL_CHANGE_LINK_LIFETIME_SECONDS,
+} from "#/lib/member-email-change";
 
 // Single source of truth for the magic-link TTL: src/lib/auth.ts imports this
 // for the magicLink `expiresIn`, and the email copy below derives its wording
@@ -115,8 +119,12 @@ export function buildInviteEmail(
 // because its holder just asked. None carries club content.
 // ---------------------------------------------------------------------------
 
-/** How long a change-of-address link lives: one hour (decision 7). */
-export const CHANGE_EMAIL_LINK_EXPIRY_SECONDS = 60 * 60;
+/** How long a change-of-address link lives (decision 7); its one home is
+ *  `#/lib/member-email-change`. */
+export const CHANGE_EMAIL_LINK_EXPIRY_SECONDS =
+	EMAIL_CHANGE_LINK_LIFETIME_SECONDS;
+const CHANGE_LINK_HOURS = CHANGE_EMAIL_LINK_EXPIRY_SECONDS / 3600;
+const CHANGE_LINK_LIFETIME_PHRASE = `${CHANGE_LINK_HOURS} hour${CHANGE_LINK_HOURS === 1 ? "" : "s"}`;
 
 /** One shell for the three change emails, so their markup cannot drift. */
 function changeEmailShell(heading: string, bodyHtml: string): string {
@@ -150,7 +158,7 @@ export function buildChangeEmailVerificationEmail(
 		"",
 		url,
 		"",
-		"This link expires in 1 hour. If you didn't ask for this, you can safely ignore this email.",
+		`This link expires in ${CHANGE_LINK_LIFETIME_PHRASE}. If you didn't ask for this, you can safely ignore this email.`,
 	].join("\n");
 	const safeAddress = escapeHtml(newAddress);
 	const html = changeEmailShell(
@@ -166,7 +174,7 @@ export function buildChangeEmailVerificationEmail(
         <a href="${url}" style="color:#3f3f46;word-break:break-all;">${url}</a>
       </p>
       <p style="font-size:13px;line-height:1.5;color:#a1a1aa;margin:24px 0 0;">
-        This link expires in 1 hour. If you didn't ask for this, you can safely ignore this email.
+        This link expires in ${CHANGE_LINK_LIFETIME_PHRASE}. If you didn't ask for this, you can safely ignore this email.
       </p>`,
 	);
 	return { subject, html, text };
@@ -179,8 +187,7 @@ export function buildChangeEmailVerificationEmail(
  */
 export function buildAddressInUseEmail(newAddress: string): MagicLinkEmail {
 	const subject = "This address is already in use on GavelUp";
-	const sentence =
-		"This address is already in use on GavelUp, so it can't be added to another account. Ask your club officer or GavelUp support to merge them.";
+	const sentence = ADDRESS_IN_USE_SENTENCE;
 	const text = [
 		"This address is already in use on GavelUp",
 		"",
