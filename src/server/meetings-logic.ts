@@ -420,8 +420,14 @@ async function updateMeetingUnlessCancelled(
 		.where(eq(meetings.id, meetingId));
 	if (!row) throw new Error("Meeting not found.");
 	assertMeetingNotCancelled(row.status);
-	// Unreachable while `status` is the only condition above; a loud failure
-	// rather than a silent success if a second condition is ever added.
+	// Reachable, narrowly: a cancel commits before the UPDATE above (so it matched
+	// no row), then a restore commits before the re-read (READ COMMITTED takes a
+	// fresh snapshot per statement), so the re-read sees the meeting scheduled.
+	// `applyRestoreMeeting` takes only the meeting-row lock, and this function
+	// holds none on that row because its UPDATE matched nothing. It needs two
+	// officer actions inside a window of milliseconds, nothing has been written,
+	// and the save can simply be retried — so it fails loudly rather than being
+	// mapped to anything more specific.
 	throw new Error("The meeting changed while saving. Try again.");
 }
 
