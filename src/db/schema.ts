@@ -64,8 +64,8 @@ export {
 import { AGENDA_LAYOUTS } from "../lib/agenda-layouts";
 import type { McpPendingTool } from "../lib/pending-plan";
 import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";
-// user is re-exported above for Better-Auth; imported here for people.userId and
-// notifications foreign keys (the person-level auth link — ADR-0008 Phase B).
+// user is re-exported above for Better-Auth; imported here for the people.userId
+// foreign key (the person-level auth link — ADR-0008 Phase B).
 import { user } from "./auth-schema";
 
 // drizzle-orm 0.45.1 has no built-in `bytea` type and the repo has no prior
@@ -412,21 +412,6 @@ export const clubs = pgTable(
 		// the cap can never leave a stale DQ number behind it.
 		tableTopicsMinSeconds: integer("table_topics_min_seconds"),
 		tableTopicsMaxSeconds: integer("table_topics_max_seconds"),
-		// Club-level reminder settings (#274 — the reminders control layer). Two
-		// scalar knobs the admin/VP-Education sets on /admin/club-settings; the role-
-		// reminder producer (#272) reads them. `reminder_enabled` gates whether the
-		// club sends role reminders at all; `reminder_lead_time_days` is how many days
-		// before a meeting to remind slot holders. Both non-null. `reminder_enabled`
-		// defaults FALSE — role reminders are opt-in per club (soft launch): a club
-		// turns them on from /admin/club-settings once ready, and the 0036 migration
-		// flips every existing club off. `reminder_lead_time_days` defaults 3. Modeled
-		// as columns on `clubs` (like `default_meeting_minutes`), not a 1:1 table: they
-		// are two scalars with universal defaults, unlike the multi-field,
-		// check-constrained `club_meeting_recurrence`.
-		reminderEnabled: boolean("reminder_enabled").notNull().default(false),
-		reminderLeadTimeDays: integer("reminder_lead_time_days")
-			.notNull()
-			.default(3),
 		// The one axis of per-club variance in the generated run-of-show (#367).
 		// FALSE (the default, and the standard Toastmasters flow) means the
 		// Toastmaster of the Day introduces the functionaries at the top of the
@@ -768,23 +753,14 @@ export const people = pgTable(
 		// "invited, not joined"; `user_id` set = "joined" (supersedes the invite).
 		// Never cleared — a linked account (`user_id`) makes it moot.
 		invitedAt: timestamp("invited_at"),
-		// Reminder-email opt-out (#274 — the reminders control layer, member level).
-		// Keyed per Person, so it governs this human's inbox GLOBALLY across every club
-		// they belong to (a reminder is a self-regarding nudge about a role they
-		// claimed — one preference per person, not per membership). Default false =
-		// opted IN: members receive reminders unless they turn them off (the product
-		// decision, matching #272). Flipped from /me (member settings) or the no-auth
-		// one-click /unsubscribe link every reminder email carries.
-		reminderOptOut: boolean("reminder_opt_out").notNull().default(false),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
 	(t) => [
 		// Postgres does NOT auto-index a foreign-key referencing column, and
 		// EVERY signed-in-user resolution starts from `where(eq(people.userId, …))`
-		// — resolveUserPersonId, userPersonIds, userMemberIds (#437) and
-		// getReminderOptOutForUser, the last two on the /dashboard and /me SSR
-		// loaders. Without this each was a sequential scan of a table that grows
-		// with total app adoption rather than with one club's size. #437 also
+		// — resolveUserPersonId, userPersonIds and userMemberIds (#437), the last
+		// on the /dashboard and /me SSR loaders. Without this each was a
+		// sequential scan of a table that grows with total app adoption rather than with one club's size. #437 also
 		// (correctly) dropped a `.limit(1)` that had been letting the executor
 		// abort that scan early, which made the index load-bearing rather than
 		// merely nice. #474.
@@ -3177,60 +3153,6 @@ export const impersonationSessions = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Notifications — the reminder delivery queue. A row is DUE when
-// `send_at <= now()` AND `sent_at IS NULL`; the in-process poller (#271,
-// `src/server/reminder-poller.ts`) claims and delivers due rows exactly once.
-// Producers (#272 role reminders / #274 preferences) enqueue rows; this table
-// carries the retry/error bookkeeping the poller needs.
-// ---------------------------------------------------------------------------
-
-export const notifications = pgTable(
-	"notifications",
-	{
-		id: uuid("id").defaultRandom().primaryKey(),
-		userId: text("user_id")
-			.notNull()
-			.references(() => user.id, { onDelete: "cascade" }),
-		slotId: uuid("slot_id")
-			.notNull()
-			.references(() => roleSlots.id, { onDelete: "cascade" }),
-		// The membership the role reminder is FOR — the assignee holding the slot at
-		// enqueue time (#272). Two jobs: (1) it is the dedup key alongside `slot_id`
-		// (one reminder per member per slot — see the partial unique index below),
-		// and (2) the send-time staleness re-validation compares it against the
-		// slot's CURRENT `assigned_member_id`: if the slot was reassigned/released or
-		// the meeting is no longer scheduled, the poller suppresses the row instead
-		// of mailing a stale reminder. NULL for non-role-assignment rows (e.g. the
-		// #271 delivery-foundation tests), which are never re-validated. On member
-		// delete → cascade: a reminder about a removed member is meaningless.
-		assignedMemberId: uuid("assigned_member_id").references(() => members.id, {
-			onDelete: "cascade",
-		}),
-		type: text("type").notNull(),
-		channel: text("channel").notNull(),
-		sendAt: timestamp("send_at", { withTimezone: true }).notNull(),
-		sentAt: timestamp("sent_at", { withTimezone: true }),
-		// Delivery bookkeeping (#271). `attempts` is the optimistic-lock token the
-		// poller bumps to claim a row before sending (at-most-once under concurrent
-		// ticks); once it reaches the max the row is abandoned. `last_attempted_at`
-		// paces retries (backoff) and `last_error` records the most recent failure.
-		attempts: integer("attempts").notNull().default(0),
-		lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }),
-		lastError: text("last_error"),
-	},
-	(t) => [
-		// Idempotent enqueue (#272): at most one reminder per (slot, member). The
-		// producer inserts with ON CONFLICT DO NOTHING against this arbiter, so a
-		// re-run (every poller tick) never creates a duplicate. Partial (WHERE
-		// assigned_member_id IS NOT NULL) so the many #271 rows with a NULL member
-		// reference are unconstrained and never collide.
-		uniqueIndex("notifications_slot_member_unique")
-			.on(t.slotId, t.assignedMemberId)
-			.where(sql`${t.assignedMemberId} is not null`),
-	],
-);
-
-// ---------------------------------------------------------------------------
 // Club action items (#529) — things the CLUB must do, standing until resolved.
 //
 // NOT officer-meeting minutes, and deliberately NOT owned by a meeting. An
@@ -3473,8 +3395,8 @@ export const accessRequests = pgTable(
 		// email exists; delivery is the poller's (ADR-0023) and is recorded in
 		// the `notify_*` columns below. False = over the cap: saved, never mailed.
 		notified: boolean("notified").notNull().default(false),
-		// Delivery bookkeeping, same shape as `notifications` (#271): `attempts`
-		// is the optimistic-lock token the poller bumps to claim a send, and
+		// Delivery bookkeeping (the shape the removed `notifications` queue used,
+		// #271): `attempts` is the optimistic-lock token the poller bumps to claim a send, and
 		// `last_attempted_at` paces the bounded retry.
 		notifySentAt: timestamp("notify_sent_at", { withTimezone: true }),
 		notifyAttempts: integer("notify_attempts").notNull().default(0),
@@ -3501,7 +3423,7 @@ export const accessRequests = pgTable(
  * address resubmitting just after midnight) cannot use up the day's only alert
  * and silence a later flood. `window_key` is `<day>:<reason>`; a trip that
  * finds its row only bumps `trips`. Delivered by the poller with the same
- * bookkeeping as `notifications`.
+ * bookkeeping as `access_requests`.
  */
 export const accessRequestAlerts = pgTable("access_request_alerts", {
 	id: uuid("id").primaryKey().defaultRandom(),
@@ -3801,17 +3723,6 @@ export const speechesRelations = relations(speeches, ({ one, many }) => ({
 	project: one(pathwaysProjects, {
 		fields: [speeches.projectId],
 		references: [pathwaysProjects.id],
-	}),
-}));
-
-export const notificationsRelations = relations(notifications, ({ one }) => ({
-	user: one(user, {
-		fields: [notifications.userId],
-		references: [user.id],
-	}),
-	slot: one(roleSlots, {
-		fields: [notifications.slotId],
-		references: [roleSlots.id],
 	}),
 }));
 

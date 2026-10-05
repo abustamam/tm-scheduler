@@ -31,7 +31,7 @@ import {
 	MAX_SEND_ATTEMPTS,
 	type NotificationDeps,
 	RETRY_BACKOFF_MS,
-} from "./notifications-logic";
+} from "./mail-delivery";
 
 export type AccessRequestLimits = {
 	/** A form submitted sooner than this after it opened is a bot. */
@@ -256,8 +256,8 @@ export async function submitAccessRequestLogic(
 }
 
 // ---------------------------------------------------------------------------
-// Delivery (the poller, ADR-0023). Same claim / backoff / bounded-retry shape
-// as `processDueNotifications`, and the same two constants.
+// Delivery (the poller, ADR-0023). A claim / backoff / bounded-retry loop on
+// the two constants in `mail-delivery.ts`.
 // ---------------------------------------------------------------------------
 
 export type AccessRequestDeliveryResult = {

@@ -24,10 +24,10 @@
  * ## `notes` and `reminders` are deliberately excluded
  *
  * `applyMeetingMetaPatch` owns them and this tool does not offer them.
- * `reminders` feeds the reminder poller, which SENDS EMAIL to members — an LLM
- * proposing changes to what lands in someone's inbox is a different risk class
- * from proposing a theme — and `notes` is internal prose that renders on printed
- * agendas. See `AGENDA_META_FIELDS`.
+ * `reminders` is the Announcements field (#349), the club's own words printed on
+ * the agenda and projected on the slides — an LLM drafting that is a different
+ * risk class from proposing a theme — and `notes` is internal prose that renders
+ * on printed agendas. See `AGENDA_META_FIELDS`.
  *
  * ## The top-up runs ONCE, before planning, outside any transaction
  *
@@ -45,8 +45,8 @@ import { z } from "zod";
 import { db } from "#/db";
 import { mcpPendingPlans } from "#/db/schema";
 import { agendaPlanConfirmUrl } from "#/lib/agenda-upsert";
+import { appBaseUrl } from "#/lib/app-base-url";
 import { pendingPlanExpiresAt, UPSERT_AGENDAS_TOOL } from "#/lib/pending-plan";
-import { appBaseUrl } from "#/lib/unsubscribe-token";
 import { agendaPlanHash, agendaPlanSummary, plan } from "#/server/agenda-plan";
 import { agendaEntriesSchema } from "#/server/agenda-plan-pending-schemas";
 import { ensureScheduleToppedUp } from "#/server/schedule-topup-logic";

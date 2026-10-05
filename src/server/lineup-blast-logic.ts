@@ -22,6 +22,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings, members, people } from "#/db/schema";
+import { appBaseUrl } from "#/lib/app-base-url";
 import {
 	LINEUP_BLAST_REFUSED_MESSAGE,
 	type LineupBlastData,
@@ -31,7 +32,6 @@ import {
 	isMeetingCancelled,
 	MEETING_CANCELLED_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
-import { appBaseUrl } from "#/lib/unsubscribe-token";
 import { isReadableClubForMeeting } from "./club-readable-logic";
 import { getActiveImpersonation } from "./impersonation-logic";
 import { McpError } from "./mcp/errors";

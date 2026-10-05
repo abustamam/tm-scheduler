@@ -28,7 +28,6 @@ import {
 	memberDues,
 	members,
 	mentorships,
-	notifications,
 	officerTerms,
 	officerTrainingRecords,
 	projectCompletionMarks,
@@ -220,20 +219,6 @@ export async function collapseMemberships(
 		.update(meetingAwards)
 		.set({ memberId: keeperId })
 		.where(eq(meetingAwards.memberId, absorbedId));
-
-	// 6. notifications.assigned_member_id — partial unique (slot, member) where
-	//    member is not null. Drop the absorbed dup for a slot the keeper is
-	//    already queued on, then re-point.
-	await tx.execute(sql`
-		DELETE FROM notifications
-		WHERE assigned_member_id = ${absorbedId}
-			AND slot_id IN (
-				SELECT slot_id FROM notifications WHERE assigned_member_id = ${keeperId}
-			)`);
-	await tx
-		.update(notifications)
-		.set({ assignedMemberId: keeperId })
-		.where(eq(notifications.assignedMemberId, absorbedId));
 
 	// 7. role_slots.assigned_member_id — no member-unique; re-point all.
 	await tx

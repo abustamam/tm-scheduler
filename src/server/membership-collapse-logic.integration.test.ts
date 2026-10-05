@@ -7,8 +7,8 @@
  *   1. Data-loss fix: an OPEN officer_term + a member_dues row on the absorbed
  *      membership are RE-POINTED (not cascade-deleted) to the keeper.
  *   2. Reconcile: club_role/status/joined_at/email are folded correctly.
- *   3. Collision (unique-constraint) tests: availability + dues, attendance,
- *      and notifications — collapse succeeds, exactly one survivor each.
+ *   3. Collision (unique-constraint) tests: availability + dues and
+ *      attendance — collapse succeeds, exactly one survivor each.
  *   4. Officer-term dedup: two OPEN terms for one position collapse to the
  *      earliest-started one.
  *   5. Happy-path re-point: role_slots, meeting_awards (distinct category),
@@ -40,7 +40,6 @@ import {
 	memberDues,
 	members,
 	mentorships,
-	notifications,
 	officerTerms,
 	officerTrainingRecords,
 	roleFeedbackNotes,
@@ -424,52 +423,6 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(absorbedRows).toHaveLength(0);
 	});
 
-	it("survives a same-slot notifications collision", async () => {
-		const keeperId = await addMembership({ name: "Keeper" });
-		const absorbedId = await addMembership({ name: "Absorbed" });
-
-		// Both queued a reminder for the SAME slot (partial unique on
-		// slot_id, assigned_member_id where member is not null).
-		const sendAt = new Date(Date.now() + DAY);
-		await testDb.insert(notifications).values([
-			{
-				userId: seed.adminUserId,
-				slotId: seed.slotId,
-				assignedMemberId: keeperId,
-				type: "role_reminder",
-				channel: "email",
-				sendAt,
-			},
-			{
-				userId: seed.memberUserId,
-				slotId: seed.slotId,
-				assignedMemberId: absorbedId,
-				type: "role_reminder",
-				channel: "email",
-				sendAt,
-			},
-		]);
-
-		await expect(collapse(keeperId, absorbedId)).resolves.toBeUndefined();
-
-		// Exactly one notification remains for (slot, keeper); none for absorbed.
-		const keeperNotifs = await testDb
-			.select()
-			.from(notifications)
-			.where(
-				and(
-					eq(notifications.assignedMemberId, keeperId),
-					eq(notifications.slotId, seed.slotId),
-				),
-			);
-		expect(keeperNotifs).toHaveLength(1);
-		const absorbedNotifs = await testDb
-			.select()
-			.from(notifications)
-			.where(eq(notifications.assignedMemberId, absorbedId));
-		expect(absorbedNotifs).toHaveLength(0);
-	});
-
 	it("re-points an action item's owner to the keeper", async () => {
 		// The FK drift-guard below proves this FK is DECLARED as handled; it
 		// cannot prove the re-point actually runs. Verified by mutation: deleting
@@ -781,7 +734,6 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			// missing from it.
 			"meeting_attendance_plan.member_id",
 			"meeting_awards.member_id",
-			"notifications.assigned_member_id",
 			// #419 — attribution for a manual completion mark.
 			"project_completion_marks.marked_by_member_id",
 			"role_slots.assigned_member_id",

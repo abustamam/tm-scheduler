@@ -159,9 +159,10 @@ export interface DevServer {
  * Start `vite dev` under a UTC, en-US runtime whose clock is moved by
  * `clockOffsetMs`, against `databaseUrl`.
  *
- * `DISABLE_REMINDER_POLLER`: the dev server boots the in-process notification
- * poller, and against the shared test database it would deliver OTHER suites'
- * queued notifications out from under them.
+ * `DISABLE_REMINDER_POLLER`: the dev server boots the in-process poller, and
+ * against the shared test database it would deliver OTHER suites' queued
+ * access-request mail out from under them. (The flag stops delivery only; the
+ * retention sweeps still run, see `reminder-poller.ts`.)
  */
 export async function startDevServer(opts: {
 	databaseUrl: string;

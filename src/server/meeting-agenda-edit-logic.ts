@@ -2325,10 +2325,8 @@ async function resolveHeldSlotsForRole(
  * Who a role removal would release, WITHOUT removing anything. PURE READ —
  * the same rule `planTemplateConversion` follows: showing an officer what a
  * change would do must not itself change anything. The dialog leads with
- * names because a released holder cannot be told afterwards: `notifications
- * .slot_id` is NOT NULL and ON DELETE CASCADE to `role_slots`, so a row
- * enqueued against a slot the same transaction deletes is destroyed before
- * the poller could ever see it.
+ * names because the app never tells a released holder itself (ADR-0028): the
+ * officer must, and only before the slot is gone can they see who to tell.
  */
 export async function planRoleRemoval(input: {
 	meetingId: string;

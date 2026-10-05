@@ -69,10 +69,6 @@ import {
 	updateClubProfile,
 	updateClubTimezone,
 } from "#/server/clubs";
-import {
-	loadClubReminderSettings,
-	updateClubReminderSettings,
-} from "#/server/notification-prefs";
 
 // Client-side pre-checks only — fast feedback before the upload round-trip.
 // The server (`src/server/club-logo-logic.ts`) is the authoritative check: the
@@ -220,25 +216,23 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const [profile, reminders, agenda, logoMeta, timezone, charter] =
-			await Promise.all([
-				getClubProfileSettings({ data: context.adminClub.clubId }),
-				loadClubReminderSettings({ data: context.adminClub.clubId }),
-				loadClubAgendaSettings({ data: context.adminClub.clubId }),
-				// Degrades to "no logo" rather than blanking the whole settings page,
-				// matching the five public logo loaders, which already catch. It
-				// matters across a rolling deploy: a server fn's URL is derived from
-				// file+name, not content, so a tab left open across #504's POST->GET
-				// flip keeps POSTing to a URL that now answers 405.
-				getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }).catch(
-					() => null,
-				),
-				loadClubTimezoneSettings({ data: context.adminClub.clubId }),
-				// Charter status (#944). Non-fatal like the logo: a failed read hides
-				// the Charter section rather than blanking the settings page, which
-				// is also what a tab loaded before this fn existed gets.
-				loadClubCharter({ data: context.adminClub.clubId }).catch(() => null),
-			]);
+		const [profile, agenda, logoMeta, timezone, charter] = await Promise.all([
+			getClubProfileSettings({ data: context.adminClub.clubId }),
+			loadClubAgendaSettings({ data: context.adminClub.clubId }),
+			// Degrades to "no logo" rather than blanking the whole settings page,
+			// matching the five public logo loaders, which already catch. It
+			// matters across a rolling deploy: a server fn's URL is derived from
+			// file+name, not content, so a tab left open across #504's POST->GET
+			// flip keeps POSTing to a URL that now answers 405.
+			getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }).catch(
+				() => null,
+			),
+			loadClubTimezoneSettings({ data: context.adminClub.clubId }),
+			// Charter status (#944). Non-fatal like the logo: a failed read hides
+			// the Charter section rather than blanking the settings page, which
+			// is also what a tab loaded before this fn existed gets.
+			loadClubCharter({ data: context.adminClub.clubId }).catch(() => null),
+		]);
 		// The blast template (#931). Imported here rather than at the top so the
 		// promo module stays out of this page's first chunk; the editor that
 		// reads it is lazy for the same reason. Non-fatal, like the logo above:
@@ -251,7 +245,6 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 			.catch(() => null);
 		return {
 			profile,
-			reminders,
 			agenda,
 			logoMeta,
 			timezone,
@@ -386,22 +379,10 @@ const PromoTemplateEditor = lazy(() =>
 
 function ClubSettings() {
 	const { adminClub, impersonating } = Route.useRouteContext();
-	const {
-		profile,
-		reminders,
-		agenda,
-		logoMeta,
-		timezone,
-		promoTemplate,
-		charter,
-	} = Route.useLoaderData();
+	const { profile, agenda, logoMeta, timezone, promoTemplate, charter } =
+		Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
-	const [remindersEnabled, setRemindersEnabled] = useState(reminders.enabled);
-	const [leadTimeDays, setLeadTimeDays] = useState(
-		String(reminders.leadTimeDays),
-	);
-	const [savingReminders, setSavingReminders] = useState(false);
 	const [geIntroduces, setGeIntroduces] = useState(
 		agenda.geIntroducesFunctionaries,
 	);
@@ -471,31 +452,6 @@ function ClubSettings() {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {
 			setSubmitting(false);
-		}
-	}
-
-	async function onSaveReminders(e: React.FormEvent<HTMLFormElement>) {
-		e.preventDefault();
-		const days = Number.parseInt(leadTimeDays, 10);
-		if (!Number.isFinite(days) || days < 0 || days > 60) {
-			toast.error("Lead time must be a whole number of days (0–60).");
-			return;
-		}
-		setSavingReminders(true);
-		try {
-			await updateClubReminderSettings({
-				data: {
-					clubId: adminClub.clubId,
-					enabled: remindersEnabled,
-					leadTimeDays: days,
-				},
-			});
-			toast.success("Reminder settings saved.");
-			await router.invalidate();
-		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
-		} finally {
-			setSavingReminders(false);
 		}
 	}
 
@@ -760,55 +716,6 @@ function ClubSettings() {
 						<Loader2 className="size-4 animate-spin" />
 					) : (
 						"Save time zone"
-					)}
-				</Button>
-			</form>
-
-			<div className="pt-2">
-				<h2 className="font-display text-xl font-semibold tracking-[-0.01em]">
-					Role reminders
-				</h2>
-				<p className="text-sm text-muted-foreground">
-					Email members a reminder before a meeting when they're signed up for a
-					role. Members can opt out individually. Off by club here disables role
-					reminders entirely.
-				</p>
-			</div>
-
-			<form onSubmit={onSaveReminders} className="max-w-xl space-y-4">
-				<label className="flex items-center gap-2 text-sm font-medium">
-					<input
-						type="checkbox"
-						checked={remindersEnabled}
-						onChange={(e) => setRemindersEnabled(e.target.checked)}
-					/>
-					Send role reminders for this club
-				</label>
-				<div className="space-y-2">
-					<Label htmlFor="leadTimeDays">
-						Lead time (days before the meeting)
-					</Label>
-					<Input
-						id="leadTimeDays"
-						name="leadTimeDays"
-						type="number"
-						min={0}
-						max={60}
-						inputMode="numeric"
-						value={leadTimeDays}
-						onChange={(e) => setLeadTimeDays(e.target.value)}
-						disabled={!remindersEnabled}
-						className="max-w-[10rem]"
-					/>
-					<p className="text-xs text-muted-foreground">
-						e.g. 3 = remind members three days before the meeting.
-					</p>
-				</div>
-				<Button type="submit" disabled={savingReminders} className="w-full">
-					{savingReminders ? (
-						<Loader2 className="size-4 animate-spin" />
-					) : (
-						"Save reminder settings"
 					)}
 				</Button>
 			</form>

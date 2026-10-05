@@ -190,9 +190,9 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 		 * Reproduced before the fix: PREVIEW said `claimedSlotsReleased: 0` (the
 		 * source-scoped defs matched the slots' own ids, so everything "kept"),
 		 * the dialog rendered "No one has claimed a role yet", and the APPLY then
-		 * reported 1 released and wiped the claim. A released holder cannot be
-		 * notified — `notifications.slot_id` cascades from the slot the same
-		 * transaction deletes — so the dialog was the only warning, and it lied.
+		 * reported 1 released and wiped the claim. The app never tells a released
+		 * holder itself (ADR-0028), so the dialog was the officer's only warning
+		 * of whom to tell, and it lied.
 		 *
 		 * Asserted as preview-EQUALS-apply, not as two literals, because that
 		 * equality is the property the dialog exists to provide.

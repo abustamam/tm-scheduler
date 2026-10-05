@@ -32,12 +32,10 @@
  * ## This guard IS the admin boundary for the reads
  *
  * The WRITES are admin-gated server-side (`club-settings-authz.guard.test.ts`
- * pins that). The four loader READS are not: `getClubProfileSettings`,
- * `loadClubReminderSettings`, `loadClubAgendaSettings` and
- * `loadClubTimezoneSettings` all gate on `requireClubViewAccess`, which is
- * member-level, and `loadClubReminderSettings`'s docblock says so outright —
- * "any member with view access (the route itself is admin-gated)". So a viewer
- * this guard admits in error sees the club's real settings, not an error page.
+ * pins that). The loader READS are not: `getClubProfileSettings`,
+ * `loadClubAgendaSettings` and `loadClubTimezoneSettings` all gate on
+ * `requireClubViewAccess`, which is member-level. So a viewer this guard admits
+ * in error sees the club's real settings, not an error page.
  * That is why the office arm is club-scoped in `effectiveAdminClubFor` and why
  * the two cases below that turn a member away are the load-bearing ones.
  */
@@ -53,10 +51,6 @@ vi.mock("#/server/clubs", () => ({
 	updateClubAgendaSettings: vi.fn(),
 	updateClubProfile: vi.fn(),
 	updateClubTimezone: vi.fn(),
-}));
-vi.mock("#/server/notification-prefs", () => ({
-	loadClubReminderSettings: vi.fn(),
-	updateClubReminderSettings: vi.fn(),
 }));
 vi.mock("#/server/club-logo", () => ({
 	getClubLogoMeta: vi.fn(),

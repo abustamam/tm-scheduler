@@ -1712,11 +1712,11 @@ function RolesPanel({
 	}
 
 	/**
-	 * Removing a role releases its slots, and a released holder cannot be
-	 * notified afterwards (`notifications.slot_id` cascades away with the slot
-	 * before the poller can see it) — so this leads with names, exactly like
-	 * `MeetingTemplateDialog`, and only asks for a SECOND confirm when someone
-	 * is actually affected. Nothing claimed → one click removes it.
+	 * Removing a role releases its slots, and the app never tells a released
+	 * holder itself (ADR-0028: a human sends every message) — the officer must,
+	 * and only before the slot is gone can they see who to tell. So this leads
+	 * with names, exactly like `MeetingTemplateDialog`, and only asks for a
+	 * SECOND confirm when someone is actually affected. Nothing claimed → one click removes it.
 	 */
 	async function startRemove(role: AgendaDraftRole) {
 		setPhase({ kind: "checking", role });

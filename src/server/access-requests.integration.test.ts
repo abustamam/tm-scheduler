@@ -52,7 +52,7 @@ import {
 	MAX_SEND_ATTEMPTS,
 	type NotificationDeps,
 	RETRY_BACKOFF_MS,
-} from "./notifications-logic";
+} from "./mail-delivery";
 
 const RUN = randomUUID();
 const RUN_DOMAIN = `run-${RUN}.test`;

@@ -5,8 +5,9 @@ import { applyWorktreeTestDb } from "./worktree-test-db";
 // (vitest does not load it) or on CI exporting them. Real env values always win
 // (`??=` only fills an UNSET var), so this never masks a configured secret.
 //
-// Needed by the reminder unsubscribe token (#274): `buildUnsubscribeUrl` signs
-// with BETTER_AUTH_SECRET, exercised transitively by the reminder-delivery tests.
+// Needed by `#/lib/auth`, which tests reach transitively: Better Auth signs with
+// BETTER_AUTH_SECRET, and `mcp()` validates BETTER_AUTH_URL at construction
+// (#842). `appBaseUrl()` (`src/lib/app-base-url.ts`) also reads the URL.
 process.env.BETTER_AUTH_SECRET ??= "test-better-auth-secret";
 process.env.BETTER_AUTH_URL ??= "http://localhost:3000";
 

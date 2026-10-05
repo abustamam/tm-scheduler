@@ -3,9 +3,6 @@
 /**
  * Escape a value for an HTML text node or a quoted attribute: `&`, `<`, `>`,
  * `"` and `'`.
- *
- * `notifications-logic.ts` keeps its own copy on purpose: it escapes no `'`,
- * so switching it here would change the bytes of every role reminder it sends.
  */
 export function escapeHtml(value: string): string {
 	return value

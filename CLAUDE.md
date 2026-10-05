@@ -476,10 +476,12 @@ and the club role sheets, HTML and PDF), digital voting (`meeting_vote_sessions`
 `officer_training_records`, #531 — the record behind DCP goal 9; the periods
 table is a SPARSE override of TI's own window dates, so **row absent = the
 default**, see `CONTEXT.md`'s **Club Officer Training (COT)** entry),
-notifications (drained by an in-process poller, ADR-0023), and access requests
+and access requests
 (`access_requests` / `access_request_alerts`, #866 — the public request-access form's rows and
-its per-reason daily alerts; club-less, delivered by the same poller, and deleted after 180 days by
-its sweep). Better-Auth's tables
+its per-reason daily alerts; club-less, delivered to the maintainer by the in-process poller,
+ADR-0023, and deleted after 180 days by its sweep). Nothing queues mail to a member: the
+`notifications` table and role reminders were removed under ADR-0028, **humans send every
+message** (#902). Better-Auth's tables
 live in `src/db/auth-schema.ts` — hand-maintained, and since #842 that file also carries the
 eight OAuth tables (`jwks` + seven from `@better-auth/mcp`). **Adding a Better Auth plugin
 means adding its tables there AND re-exporting them from `schema.ts`**: the Drizzle adapter

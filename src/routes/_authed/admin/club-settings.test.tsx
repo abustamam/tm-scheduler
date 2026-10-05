@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // Component tests for the "Club logo" section of club-settings.tsx (#495 Lane
-// C). The rest of the route (profile / reminders / agenda cards) is
+// C). The rest of the route (profile / agenda cards) is
 // unchanged; these tests cover only what the new section adds: the
 // attestation checkbox gating the submit button, the "Remove logo" button's
 // existence gate, the client-side pre-checks (type, bytes and — since #504 —
@@ -39,10 +39,6 @@ vi.mock("#/server/clubs", () => ({
 	updateClubAgendaSettings: vi.fn(),
 	updateClubProfile: vi.fn(),
 	updateClubTimezone: vi.fn(),
-}));
-vi.mock("#/server/notification-prefs", () => ({
-	loadClubReminderSettings: vi.fn(),
-	updateClubReminderSettings: vi.fn(),
 }));
 vi.mock("#/server/club-logo", () => ({
 	getClubLogoMeta: vi.fn(),
@@ -119,7 +115,6 @@ function loaderData(
 			meetingSchedule: "",
 			defaultCountryCode: "",
 		},
-		reminders: { enabled: true, leadTimeDays: 3 },
 		agenda: {
 			geIntroducesFunctionaries: false,
 			tableTopicsMinSeconds: null,
@@ -946,5 +941,18 @@ describe("Club settings — default print layout (#1069)", () => {
 				data: expect.objectContaining({ defaultPrintLayout: "spacious" }),
 			}),
 		);
+	});
+});
+
+describe("Club settings — no role reminders card (#902, ADR-0028)", () => {
+	it("offers no reminder setting, because GavelUp sends no reminders", async () => {
+		await renderRoute(loaderData());
+		// The page rendered (its other cards are there) …
+		expect(
+			screen.getByRole("heading", { level: 2, name: "Meeting agenda" }),
+		).toBeTruthy();
+		// … and nothing on it is about reminder emails.
+		expect(screen.queryByText(/reminder/i)).toBeNull();
+		expect(screen.queryByLabelText(/lead time/i)).toBeNull();
 	});
 });

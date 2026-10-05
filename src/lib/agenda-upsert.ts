@@ -14,7 +14,7 @@
  * `node:` builtin and no database module. That is why `agendaPlanConfirmUrl`
  * takes the origin as an argument rather than reading `BETTER_AUTH_URL` here —
  * the server passes `appBaseUrl()`, whose fallback stays declared in exactly one
- * place (`src/lib/unsubscribe-token.ts`). Same rule, same reason, as
+ * place (`src/lib/app-base-url.ts`). Same rule, same reason, as
  * `src/lib/guest-book-pending.ts`.
  */
 
@@ -31,12 +31,15 @@
  * four readers, and the confirm table was hardcoding its own copy at the time.
  *
  * `notes` and `reminders` are deliberately absent although
- * `applyMeetingMetaPatch` owns them. `reminders` feeds the reminder poller,
- * which SENDS EMAIL to members — an LLM proposing changes to what lands in
- * someone's inbox is a different risk class from proposing a theme — and
- * `notes` is internal prose that renders on printed agendas. Neither is worth
- * the blast radius on this tool's first release (#808). Do not add them without
- * reopening that decision.
+ * `applyMeetingMetaPatch` owns them. `reminders` is the Announcements field
+ * (#349): free prose printed on the agenda and projected on the slides, the
+ * club's own words to its members and guests — an LLM drafting that across a
+ * season is a different risk class from proposing a theme — and `notes` is
+ * internal prose that renders on printed agendas. (An earlier version of this
+ * sentence said `reminders` fed the reminder poller and sent email; it never
+ * did, and the poller sends no reminders at all since ADR-0028.) Neither is
+ * worth the blast radius on this tool's first release (#808). Do not add them
+ * without reopening that decision.
  *
  * `location` is here and `time` is not: both come from the club's recurrence
  * rule on a create, but `location` is ordinary meta a later call may also change

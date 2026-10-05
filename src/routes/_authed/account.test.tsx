@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 //
-// #912 moved the account-level controls — reminder emails, personal access
-// tokens, connected apps — off "My roles" (`/me`) onto Account settings
-// (`/account`). These tests render both routes' components with the REAL
+// #912 moved the account-level controls — personal access tokens, connected
+// apps — off "My roles" (`/me`) onto Account settings (`/account`). The
+// reminder-email toggle that moved with them is gone (#902, ADR-0028): GavelUp
+// sends no reminders, so neither page may offer one. These tests render both routes' components with the REAL
 // sections and only their server fns mocked, so each section's own visibility
 // rule (tokens: server-side eligibility, #773; connected apps: everyone, #851)
 // is what decides what shows, exactly as on the deployed page.
@@ -28,10 +29,6 @@ vi.mock("#/server/api-tokens", () => ({
 vi.mock("#/server/oauth-grants", () => ({
 	getConnectedApps,
 	disconnectConnectedApp: vi.fn(),
-}));
-vi.mock("#/server/notification-prefs", () => ({
-	getMyReminderOptOut: vi.fn(),
-	setMyReminderOptOut: vi.fn(),
 }));
 vi.mock("#/server/meetings", () => ({
 	listMyCommitments: vi.fn(),
@@ -69,25 +66,22 @@ async function renderWithQuery(
 async function renderAccount(opts: { eligible: boolean }) {
 	getApiTokenState.mockResolvedValue({ eligible: opts.eligible, tokens: [] });
 	getConnectedApps.mockResolvedValue([]);
-	vi.spyOn(AccountRoute, "useLoaderData").mockReturnValue({
-		reminderOptOut: false,
-		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
-	} as any);
 	return renderWithQuery(
 		AccountRoute.options.component as () => React.ReactElement,
 	);
 }
 
 describe("/account (#912)", () => {
-	it("gives an officer Account settings with reminders, tokens and connected apps", async () => {
+	it("gives an officer Account settings with tokens and connected apps", async () => {
 		await renderAccount({ eligible: true });
 
 		expect(
 			screen.getByRole("heading", { level: 1, name: "Account settings" }),
 		).toBeTruthy();
-		expect(screen.getByText("Reminder emails")).toBeTruthy();
 		expect(await screen.findByText("Personal access tokens")).toBeTruthy();
 		expect(await screen.findByText("Connected apps")).toBeTruthy();
+		// No reminder toggle (#902): there are no reminder emails to opt out of.
+		expect(screen.queryByText(/reminder/i)).toBeNull();
 	});
 
 	it("gives a plain member connected apps but no tokens section", async () => {
@@ -100,7 +94,7 @@ describe("/account (#912)", () => {
 			expect(qc.getQueryState(["api-tokens"])?.status).toBe("success"),
 		);
 		expect(screen.queryByText("Personal access tokens")).toBeNull();
-		expect(screen.getByText("Reminder emails")).toBeTruthy();
+		expect(screen.queryByText(/reminder/i)).toBeNull();
 	});
 });
 
@@ -124,10 +118,11 @@ describe("/me after #912", () => {
 		const pointer = screen.getByRole("link", { name: "Account settings" });
 		expect(pointer.getAttribute("href")).toBe("/account");
 		expect(pointer.closest("p")?.textContent).toBe(
-			"Reminder emails, API tokens and connected apps have moved to Account settings.",
+			"API tokens and connected apps have moved to Account settings.",
 		);
 
-		expect(screen.queryByText("Reminder emails")).toBeNull();
+		// #902: /me no longer mentions reminder emails anywhere.
+		expect(screen.queryByText(/reminder/i)).toBeNull();
 		expect(screen.queryByText("Personal access tokens")).toBeNull();
 		expect(screen.queryByText("Connected apps")).toBeNull();
 		// Not merely hidden: the sections are not mounted, so /me asks for
