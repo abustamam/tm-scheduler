@@ -71,12 +71,14 @@ decisions in #1091 are the contract. In short:
    address, so there is still no pending-change table: the pending change lives only in the
    signed link.
 
-   **Both identifiers are keyed by `HMAC-SHA256(auth secret, user id)`, never the bare user
-   id.** Better Auth's magic-link verify consumes (deletes) whatever `verification` row its
-   `token` query names, before checking it is a magic link, and needs no session. A name an
-   outsider can build from a user id is therefore a row anyone can delete: deleting the
-   generation row resets it to 0 and reopens the A→B→A replay, and deleting the request rows
-   one at a time bypasses the per-account cap. The magic-link plugin's `storeToken` is left
+   **Both identifiers are `<kind>:<HMAC-SHA256(auth secret, "<kind>:<user id>")>`, never the
+   bare user id**, where `<kind>` is `change-email-request` or `change-email-generation`.
+   Better Auth's magic-link verify, given a `token` query naming an identifier, consumes the
+   newest `verification` row with that identifier and then deletes EVERY row with it, before
+   checking it is a magic link, and needs no session. A name an outsider can build from a user
+   id is therefore a set of rows anyone can delete: deleting the generation row resets it to 0
+   and reopens the A→B→A replay, and one request deletes all of an account's request rows,
+   clearing the per-account cap. The magic-link plugin's `storeToken` is left
    as it is; the fix is that this flow's names cannot be built without the secret. Rotating
    the secret orphans the rows, so the count and the generation read as fresh; that revives
    nothing, because rotation also invalidates every link signed with the old secret.

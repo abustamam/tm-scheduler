@@ -11,7 +11,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/account-email-change.integration.test.ts
  */
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { and, eq, inArray, like, sql } from "drizzle-orm";
 import {
 	afterAll,
@@ -660,11 +660,12 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 
 	describe("rows an outsider can name (#1091 review, fix round 3)", () => {
 		/**
-		 * Better Auth's magic-link verify CONSUMES (deletes) whatever
-		 * `verification` row its `token` names, before validating it. So any
-		 * row whose identifier can be guessed from a user id can be deleted by
-		 * anyone, with no session. These drive that real endpoint with the
-		 * identifier an attacker could build from the user id alone.
+		 * Better Auth's magic-link verify consumes the newest `verification`
+		 * row its `token` names and deletes every other row with that
+		 * identifier, before validating it. So any identifier that can be
+		 * guessed from a user id can be cleared by anyone, with no session.
+		 * These drive that real endpoint with the identifier an attacker could
+		 * build from the user id alone.
 		 */
 		function consumeByName(identifier: string): Promise<Response> {
 			return loaded.handler(
@@ -703,6 +704,34 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 
 			expect(outcome(await open(aToB))).toBe("stale");
 			expect(await emailOf(club.memberUserId)).toBe(a);
+		});
+
+		it("names each row by HMAC-SHA256 under the auth secret, kind-prefixed", async () => {
+			// Recomputed independently here, so a key swapped for any constant
+			// (or a kind dropped from the input) goes red.
+			const userId = randomUUID();
+			for (const [kind, name] of [
+				["change-email-request", emailChangeRequestIdentifier(userId, secret)],
+				[
+					"change-email-generation",
+					emailChangeGenerationIdentifier(userId, secret),
+				],
+			] as const) {
+				const expected = createHmac("sha256", secret)
+					.update(`${kind}:${userId}`)
+					.digest("base64url");
+				expect(name).toBe(`${kind}:${expected}`);
+			}
+		});
+
+		it("names the same account's rows differently under a different secret", () => {
+			const userId = randomUUID();
+			expect(emailChangeRequestIdentifier(userId, "secret-one")).not.toBe(
+				emailChangeRequestIdentifier(userId, "secret-two"),
+			);
+			expect(emailChangeGenerationIdentifier(userId, "secret-one")).not.toBe(
+				emailChangeGenerationIdentifier(userId, "secret-two"),
+			);
 		});
 
 		it("cannot clear the per-account request count", async () => {

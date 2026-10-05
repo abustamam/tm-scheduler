@@ -40,12 +40,13 @@ import { isUniqueViolation } from "./pg-errors";
  * an HMAC of the user id under the auth secret, never the user id itself
  * (#1091 review, fix round 3).
  *
- * Why. Better Auth's magic-link verify CONSUMES (deletes) the `verification`
- * row its `token` query names, before checking it is a magic link. So any row
- * whose identifier an outsider can build — `…:<userId>` — is deletable by
- * anyone, with no session: the per-account request count (cap bypassed) and
- * the change generation (back to 0, reviving a replayed link). An HMAC under
- * the secret cannot be built without it.
+ * Why. Better Auth's magic-link verify, given a `token` naming an identifier,
+ * consumes the newest `verification` row with it and then deletes EVERY row
+ * with it, before checking it is a magic link. So any identifier an outsider
+ * can build — `…:<userId>` — is deletable by anyone, with no session: the
+ * per-account request count (cap cleared in one request) and the change
+ * generation (back to 0, reviving a replayed link). An HMAC under the secret
+ * cannot be built without it. The HMAC input is `"<kind>:<userId>"`.
  *
  * `secret` is the auth instance's (`ctx.context.secret`), threaded in by the
  * plugin. Rotating it orphans these rows, so the count and the generation read
